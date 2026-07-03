@@ -42,13 +42,17 @@ export class AnthropicClient implements LlmClient {
   }
 
   async complete(req: LlmRequest): Promise<LlmResponse> {
-    const resp = await this.client.messages.create({
+    const params: Anthropic.MessageCreateParamsNonStreaming = {
       model: req.model,
       max_tokens: req.maxTokens,
       system: req.system,
-      thinking: { type: 'adaptive' },
       messages: req.messages.map((m) => ({ role: m.role, content: m.content })),
-    });
+    };
+    // Adaptive thinking is a 4.6+ feature; Haiku-class models reject it.
+    if (!/haiku/i.test(req.model)) {
+      params.thinking = { type: 'adaptive' };
+    }
+    const resp = await this.client.messages.create(params);
 
     const text = resp.content
       .filter((b): b is Anthropic.TextBlock => b.type === 'text')

@@ -62,6 +62,6 @@ export const S2_SCHEMA: AnySchema = {
     verbatims: { type: 'array', minItems: 1, items: { type: 'string' } },
     exclusions: { type: 'array', items: { type: 'string' } },
     awareness_stage: { type: 'string', enum: [...SCHWARTZ_AWARENESS_STAGES] },
-    channels: { type: 'array', items: { type: 'string' } },
+    channels: { type: 'array', minItems: 1, items: { type: 'string' } },
   },
 };

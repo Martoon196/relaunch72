@@ -1,9 +1,16 @@
 import type { Intake, QAIssue } from '../types.js';
+import { normalizeText } from '../util/text.js';
 
 /**
  * Banned-phrase list v1 — verbatim from Pipeline Spec v1.0 (Global QA
  * principle 3; grows from beta). Per-customer additions come from H3.never_use.
- * Applied per-stage from S1 onward (decisions.md D-003).
+ *
+ * Scope (decisions.md D-003/D-015): the GLOBAL list applies from S1 onward;
+ * H3 never-words bind the customer's VOICE (S3+ copy stages) — analysis docs
+ * opt out via `includeCustomerWords: false`. Text inside double quotes is the
+ * customer's own words (verbatim-quoting is REQUIRED by other QA rules), so
+ * callers can exempt it via `stripQuotedText` / `excludePathPrefixes` rather
+ * than park a run for faithfully quoting a customer who said "seamless".
  */
 export const GLOBAL_BANNED_PHRASES = [
   "in today's fast-paced world",
@@ -23,7 +30,13 @@ function customerBannedWords(intake: Intake): string[] {
   if (typeof never !== 'string') return [];
   return never
     .split(/[,;\n]+/)
-    .map((w) => w.trim().toLowerCase())
+    .map((w) =>
+      normalizeText(w)
+        .replace(/\(.*?\)/g, '') // "(except when quoting)" style annotations
+        .replace(/^["']+|["']+$/g, '')
+        .trim()
+        .toLowerCase(),
+    )
     .filter((w) => w.length > 1);
 }
 
@@ -37,38 +50,49 @@ function* walkStrings(value: unknown, path: string): Generator<[string, string]>
   }
 }
 
+/**
+ * Word-ish matcher tolerant of the typography models actually emit: hyphen vs
+ * space vs dash between tokens ("game changer"), curly quotes (normalized
+ * upstream), suffixes ("game-changers", "elevated"). Leading boundary only —
+ * "seamless" must not fire inside "seamstress", but suffixes still match.
+ */
 function phraseRegex(phrase: string): RegExp {
-  const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // Word boundaries so "seamless" doesn't fire inside "seamstress", but
-  // "game-changer" still matches "game-changers".
-  return new RegExp(`\\b${escaped}`, 'i');
+  const tokens = phrase
+    .toLowerCase()
+    .split(/[\s-]+/)
+    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return new RegExp(`\\b${tokens.join('[\\s\\-]+')}`, 'i');
 }
 
-/**
- * Scan every string in a stage output for banned phrases. The global generic-
- * phrase list always applies. H3 never-words apply only where the caller opts
- * in — they bind the customer's VOICE (S3+ copy stages), not analysis documents
- * like the S1 audit / S2 ICP, which may legitimately mention e.g. "cheap"
- * competitors (decisions.md D-003).
- */
-export function scanBannedPhrases(
-  output: unknown,
-  intake: Intake,
-  opts: { includeCustomerWords?: boolean } = {},
-): QAIssue[] {
+export interface BannedScanOpts {
+  /** Include the customer's H3 never-words (default true; S1/S2 pass false). */
+  includeCustomerWords?: boolean;
+  /** Remove double-quoted spans before matching — quoted customer words are exempt. */
+  stripQuotedText?: boolean;
+  /** Skip output paths entirely (e.g. S2's `verbatims`, which are raw customer words). */
+  excludePathPrefixes?: string[];
+}
+
+export function scanBannedPhrases(output: unknown, intake: Intake, opts: BannedScanOpts = {}): QAIssue[] {
   const issues: QAIssue[] = [];
   const banned = [
     ...GLOBAL_BANNED_PHRASES,
     ...(opts.includeCustomerWords === false ? [] : customerBannedWords(intake)),
   ];
   const regexes = banned.map((p) => [p, phraseRegex(p)] as const);
+  const excluded = opts.excludePathPrefixes ?? [];
 
   for (const [path, text] of walkStrings(output, '')) {
+    if (excluded.some((prefix) => path === prefix || path.startsWith(`${prefix}[`) || path.startsWith(`${prefix}.`))) {
+      continue;
+    }
+    let subject = normalizeText(text);
+    if (opts.stripQuotedText) subject = subject.replace(/"[^"]*"/g, ' ');
     for (const [phrase, re] of regexes) {
-      if (re.test(text)) {
+      if (re.test(subject)) {
         issues.push({
           check: 'banned_phrase',
-          message: `banned phrase "${phrase}" found at ${path} — rewrite without it`,
+          message: `banned phrase "${phrase}" found at ${path} — rewrite without it (customer quotes inside double quotes are exempt)`,
         });
       }
     }

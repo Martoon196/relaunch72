@@ -105,6 +105,7 @@ export async function runStage(
 
     const attemptRec: StageAttempt = {
       attempt,
+      started_at: new Date(started).toISOString(),
       raw_output_file: rawFile,
       tokens_in: resp.tokensIn,
       tokens_out: resp.tokensOut,

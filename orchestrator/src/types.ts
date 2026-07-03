@@ -30,6 +30,7 @@ export interface S0Result {
 
 export interface StageAttempt {
   attempt: number;
+  started_at: string;
   raw_output_file: string;
   tokens_in: number;
   tokens_out: number;

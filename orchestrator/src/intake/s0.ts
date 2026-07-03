@@ -62,6 +62,9 @@ function checkMultiSelect(spec: FieldSpec, value: FieldValue, issues: S0FieldIss
   if (spec.maxSelections && values.length > spec.maxSelections) {
     issues.push(issue(spec, `pick at most ${spec.maxSelections} (got ${values.length})`));
   }
+  if (new Set(values).size !== values.length) {
+    issues.push(issue(spec, 'duplicate selections — each option can only be picked once'));
+  }
   if (spec.options && !spec.allowOther) {
     for (const v of values) {
       if (!spec.options.includes(v)) {
@@ -87,6 +90,11 @@ function checkSliders(spec: FieldSpec, value: FieldValue, issues: S0FieldIssue[]
     issues.push(issue(spec, 'expected the three voice sliders'));
     return;
   }
+  for (const key of Object.keys(value)) {
+    if (!(spec.sliderKeys ?? []).includes(key)) {
+      issues.push(issue(spec, `unexpected slider "${key}" (allowed: ${(spec.sliderKeys ?? []).join(', ')})`));
+    }
+  }
   for (const key of spec.sliderKeys ?? []) {
     const v = (value as Record<string, unknown>)[key];
     if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 5) {
@@ -98,6 +106,14 @@ function checkSliders(spec: FieldSpec, value: FieldValue, issues: S0FieldIssue[]
 function checkUrlList(spec: FieldSpec, value: FieldValue, issues: S0FieldIssue[]): void {
   if (!Array.isArray(value) || value.some((v) => typeof v !== 'string' || !v.trim())) {
     issues.push(issue(spec, 'expected a list of links'));
+    return;
+  }
+  for (const v of value as string[]) {
+    // Loose link shape: something.something, no whitespace. Real URL parsing
+    // is the form vendor's job (M3); this catches prose pasted into A3.
+    if (/\s/.test(v.trim()) || !/\S\.\S/.test(v)) {
+      issues.push(issue(spec, `"${v}" doesn't look like a link`));
+    }
   }
 }
 
@@ -109,6 +125,10 @@ function checkTwoBox(spec: FieldSpec, value: FieldValue, issues: S0FieldIssue[])
   for (const key of Object.keys(value)) {
     if (!(spec.boxKeys ?? []).includes(key)) {
       issues.push(issue(spec, `unexpected key "${key}" (allowed: ${(spec.boxKeys ?? []).join(', ')})`));
+    } else if (typeof (value as Record<string, unknown>)[key] !== 'string') {
+      // A malformed H3 would otherwise silently disable the customer's
+      // banned-word list downstream (qa/banned.ts requires a string).
+      issues.push(issue(spec, `box "${key}" must be text`));
     }
   }
 }
@@ -117,8 +137,10 @@ export function runS0(intake: Intake): S0Result {
   const issues: S0FieldIssue[] = [];
 
   // Unknown field IDs are a contract violation from the intake webhook side.
+  // Exceptions: underscore-prefixed metadata, and the final-screen consent
+  // checkbox (part of the spec's form, not of A1–H4 — wired up in M3).
   for (const id of Object.keys(intake)) {
-    if (id.startsWith('_')) continue; // metadata keys like _fixture_notice
+    if (id.startsWith('_') || id === 'consent') continue;
     if (!FIELD_BY_ID.has(id)) {
       issues.push({ field: id, label: '(unknown)', reason: 'not a Deep Intake v1.0 field ID' });
     }

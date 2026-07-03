@@ -221,7 +221,7 @@ export const INTAKE_FIELDS: FieldSpec[] = [
     feeds: 'positioning, offer anchoring',
   },
   {
-    id: 'E5', section: 'E', label: 'Any marketing you admire?', kind: 'text', required: false,
+    id: 'E5', section: 'E', label: "Any marketing you admire? — theirs or anyone's, links welcome", kind: 'text', required: false,
     feeds: 'voice + creative taste calibration',
   },
 

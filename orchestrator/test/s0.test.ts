@@ -65,6 +65,33 @@ test('S0 flags unknown field IDs (contract violation)', () => {
   assert.ok(result.issues.some((i) => i.field === 'Z9'));
 });
 
+test('S0 rejects duplicate multi-select values (F5 twice-Facebook is one platform)', () => {
+  const result = runS0(validIntake({ F5: ['Facebook', 'Facebook'] }));
+  assert.ok(result.issues.some((i) => i.field === 'F5' && i.reason.includes('duplicate')));
+});
+
+test('S0 rejects non-text H3 box values (would silently disable the banned-word list)', () => {
+  const result = runS0(validIntake({ H3: { never_use: ['cheap', 'guru'], must_use: 'certified' } }));
+  assert.ok(result.issues.some((i) => i.field === 'H3' && i.reason.includes('must be text')));
+});
+
+test('S0 rejects unexpected slider keys', () => {
+  const result = runS0(
+    validIntake({ H1: { formal_casual: 3, playful_straight: 3, bold_understated: 3, sarcasm: 5 } }),
+  );
+  assert.ok(result.issues.some((i) => i.field === 'H1' && i.reason.includes('unexpected slider')));
+});
+
+test('S0 rejects prose pasted into the A3 link list', () => {
+  const result = runS0(validIntake({ A3: ['we are mostly on facebook these days'] }));
+  assert.ok(result.issues.some((i) => i.field === 'A3'));
+});
+
+test('S0 allows the final-screen consent key without flagging it unknown', () => {
+  const result = runS0(validIntake({ consent: true }));
+  assert.equal(result.accepted, true);
+});
+
 test('S0 accepts B2 provided as a currency string', () => {
   const result = runS0(validIntake({ B2: '£1,250' }));
   assert.equal(result.accepted, true);

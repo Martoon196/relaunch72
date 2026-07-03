@@ -76,3 +76,27 @@ declared inputs — no stage reads intake or prior output it doesn't need (spec:
 Deployment target question (Vercel serverless vs Railway worker) is deferred: a full S1–S10 run
 is ~10 sequential model calls over several minutes, which will exceed serverless request limits —
 expect a Railway (or similar) worker proposal at the M2 gate. Nothing in M1 couples to either.
+
+**D-014 · Adversarial review outcomes (43 findings triaged): fixes, accepted residuals, rejections.**
+A five-dimension adversarial review (spec fidelity ×2, correctness, QA-bypass, fixtures/rules) ran
+against the M1 slice. Fixed: banned-phrase scan now typography-tolerant (curly quotes,
+hyphen/space variants, zero-width chars); £k/£m shorthand and NBSP-split thousands parse as their
+real magnitude; the no-invented-numbers rule now covers top_3_leaks/quick_wins/narrative and
+allows intake-echoed figures, period lengths ("90 days") and year mentions; S1 evidence can't be
+gamed by trivial full-value quotes or one snippet reused six times (≥3 distinct spans required);
+S2 verbatims must be distinct, ≥15 chars, ≥3 words; channel matching requires token-subset (not
+single-token overlap); exclusions must be substantive; JSON extraction is balanced-brace and
+string-aware; S0 validates H3 box types, slider keys, link shape, duplicate selections, and
+whitelists the consent key; E5 label restored to canonical text; S1 prompt no longer references
+C8 (not in its input contract; prompt → v1.0.1); Haiku-class models don't get adaptive thinking.
+Accepted residuals (human gate is the backstop, revisit after LS-18): spelled-out numbers
+("twelve thousand"), %-figures ≤100, deliberately planted multipliers in leak arithmetic,
+adversarial homoglyphs, placeholder-similarity misses on genuinely-similar honest businesses.
+Rejected findings are recorded in the review artifacts (session transcript).
+
+**D-015 · Customer's own words are exempt from the banned-phrase lint.**
+The verbatim-quoting QA and the banned-word lint can collide: a customer whose C2 review says
+"seamless" must be quotable without parking the run. Resolution: S2's `verbatims` array is exempt
+wholesale, and double-quoted spans inside any S1/S2 text are stripped before the scan — the ban
+applies to generated prose, not to quoted customer language. A model could theoretically hide
+banned prose inside quotes; the human gate reviews all quoted material anyway.

@@ -130,6 +130,90 @@ test('qaS2 rejects channels the customer never selected in C7', () => {
   assert.ok(issues.some((i) => i.check === 's2.channel_not_from_c7'));
 });
 
+test('qaS1 accepts period lengths and intake-echoed figures in leak estimates', () => {
+  const out = validS1();
+  out.scores[0]!.leak_cost_estimate = '£1,700 (= 2 lost landlords × £850) recovered inside a 90-day window';
+  out.scores[1]!.leak_cost_estimate = 'the £400 wasted on the flopped magazine ad vs £850 average sale';
+  assert.deepEqual(qaS1(out, intake), []);
+});
+
+test('qaS1 catches k-shorthand invented numbers (£29k must not pass as 29)', () => {
+  const out = validS1();
+  out.scores[0]!.leak_cost_estimate = 'roughly £29k/mo slipping away';
+  const issues = qaS1(out, intake);
+  assert.ok(issues.some((i) => i.check === 's1.leak_number_invented' && i.message.includes('29,000')));
+});
+
+test('qaS1 catches invented figures in top_3_leaks and narrative, not just estimates', () => {
+  const out = validS1();
+  out.top_3_leaks[0] = 'They are losing £5,000 every month to competitors nobody has heard of.';
+  const issues = qaS1(out, intake);
+  assert.ok(issues.some((i) => i.check === 's1.number_invented'));
+});
+
+test('qaS1 rejects the same quote reused as evidence for every category', () => {
+  const out = validS1();
+  for (const s of out.scores) {
+    s.evidence = 'They said (A2): "rewire and certify older houses for landlords" which proves everything.';
+  }
+  const issues = qaS1(out, intake);
+  assert.ok(issues.some((i) => i.check === 's1.evidence_repetitive'));
+});
+
+test('qaS1 rejects trivial full-value quotes ("850") as evidence', () => {
+  const out = validS1();
+  out.scores[0]!.evidence = 'Their average sale is (B2): "850" so visibility must be poor.';
+  const issues = qaS1(out, intake);
+  assert.ok(issues.some((i) => i.check === 's1.evidence_not_verbatim'));
+});
+
+test('qaS2 accepts a verbatim wrapped in quotation marks by the model', () => {
+  const out = validS2();
+  out.verbatims[0] = '"the first electrician who actually turned up when he said he would"';
+  assert.deepEqual(qaS2(out, intake), []);
+});
+
+test('qaS2 rejects duplicated verbatims (distinct quotes required)', () => {
+  const out = validS2();
+  out.verbatims = [out.verbatims[0] as string, out.verbatims[0] as string];
+  const issues = qaS2(out, intake);
+  assert.ok(issues.some((i) => i.check === 's2.verbatims_too_few'));
+});
+
+test('qaS2 exempts double-quoted customer words from the banned scan, but not generated prose', () => {
+  const quoted = validS2();
+  quoted.profile_narrative += ' One customer called the process "totally seamless" in their review.';
+  assert.deepEqual(qaS2(quoted, intake), []);
+
+  const prose = validS2();
+  prose.profile_narrative += ' We make the whole journey seamless for them.';
+  const issues = qaS2(prose, intake);
+  assert.ok(issues.some((i) => i.check === 'banned_phrase'));
+});
+
+test('qaS2 rejects channels that only share a generic token with C7', () => {
+  const out = validS2();
+  out.channels = ['LinkedIn search']; // customer picked "Google search"
+  const issues = qaS2(out, intake);
+  assert.ok(issues.some((i) => i.check === 's2.channel_not_from_c7'));
+});
+
+test('qaS2 rejects placeholder exclusions like "n/a"', () => {
+  const out = validS2();
+  out.exclusions = ['n/a'];
+  const issues = qaS2(out, intake);
+  assert.ok(issues.some((i) => i.check === 's2.exclusions_empty'));
+});
+
+test('banned phrase scan survives typography: curly apostrophe and un-hyphenated variants', () => {
+  const issues = scanBannedPhrases(
+    { a: 'In today’s fast-paced world, this is a real game changer.' },
+    validIntake({ H3: null }),
+  );
+  assert.ok(issues.some((i) => i.message.includes("in today's fast-paced world")));
+  assert.ok(issues.some((i) => i.message.includes('game-changer')));
+});
+
 test('qaS2 does NOT enforce H3 never-words on analysis docs (they bind S3+ copy)', () => {
   const out = validS2();
   out.objections = ['The cheap certificate mills undercut on price']; // "cheap" is in H3.never_use

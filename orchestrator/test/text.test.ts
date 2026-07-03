@@ -53,6 +53,18 @@ test('extractNumbers handles currency commas and percents', () => {
   );
 });
 
+test('extractNumbers expands k/m shorthand and NBSP-split thousands', () => {
+  const k = extractNumbers('£12k of losses');
+  assert.deepEqual(k.map((n) => n.value), [12000]);
+  const m = extractNumbers('a £1.5m business');
+  assert.deepEqual(m.map((n) => n.value), [1500000]);
+  const nbsp = extractNumbers('£12 345 total');
+  assert.deepEqual(nbsp.map((n) => n.value), [12345]);
+  // "/mo" must not be read as an m-suffix
+  const mo = extractNumbers('14 new customers/mo');
+  assert.deepEqual(mo.map((n) => n.value), [14]);
+});
+
 test('similarityRatio is high for near-identical strings', () => {
   assert.ok(similarityRatio('hello world', 'hello world!') > 0.9);
   assert.ok(similarityRatio('hello world', 'completely different text') < 0.5);

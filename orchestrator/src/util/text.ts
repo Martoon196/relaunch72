@@ -12,6 +12,7 @@ export function wordCount(s: string): number {
 export function normalizeText(s: string): string {
   return s
     .normalize('NFC')
+    .replace(/[​‌‍﻿]/g, '') // zero-width chars can't hide words
     .replace(/[‘’‚‛]/g, "'")
     .replace(/[“”„‟]/g, '"')
     .replace(/…/g, '...')
@@ -103,17 +104,36 @@ export interface ExtractedNumber {
   value: number;
   percent: boolean;
   raw: string;
+  /** Up to 3 chars preceding the number (currency detection). */
+  before: string;
+  /** Up to 16 chars following the number (unit/period detection). */
+  after: string;
 }
 
-/** Pull numeric tokens out of prose like "£2,400/mo (= 2 lost jobs × £1,200)". */
+/**
+ * Pull numeric tokens out of prose like "£2,400/mo (= 2 lost jobs × £1,200)".
+ * Handles thousands groups split by NBSP/thin space ("12 345"), and k/m
+ * shorthand ("£12k" is 12,000 — it must not slip the invented-number gate
+ * disguised as a small 12).
+ */
 export function extractNumbers(s: string): ExtractedNumber[] {
+  const joined = s.replace(/(\d)[   ](?=\d{3}\b)/g, '$1');
   const out: ExtractedNumber[] = [];
-  const re = /(\d[\d,]*(?:\.\d+)?)(\s*%)?/g;
+  const re = /(\d[\d,]*(?:\.\d+)?)(\s*%|[km]\b)?/gi;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(s)) !== null) {
-    const raw = m[1] as string;
-    const value = Number(raw.replace(/,/g, ''));
-    if (Number.isFinite(value)) out.push({ value, percent: Boolean(m[2]), raw: m[0] });
+  while ((m = re.exec(joined)) !== null) {
+    let value = Number((m[1] as string).replace(/,/g, ''));
+    if (!Number.isFinite(value)) continue;
+    const suffix = (m[2] ?? '').trim().toLowerCase();
+    if (suffix === 'k') value *= 1_000;
+    else if (suffix === 'm') value *= 1_000_000;
+    out.push({
+      value,
+      percent: suffix === '%',
+      raw: m[0],
+      before: joined.slice(Math.max(0, m.index - 3), m.index),
+      after: joined.slice(m.index + m[0].length, m.index + m[0].length + 16),
+    });
   }
   return out;
 }

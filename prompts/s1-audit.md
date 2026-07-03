@@ -1,5 +1,5 @@
 ---
-version: 1.0.0
+version: 1.0.1
 stage: S1
 model: claude-sonnet-4-6
 date: 2026-07-03
@@ -12,7 +12,7 @@ A scorecard across exactly six categories, in this order of thinking (output ord
 
 1. **visibility** — can the right people find them at all? (F1 inventory, A3 presence, A5 local footprint)
 2. **message clarity** — would a stranger instantly get what they do and for whom? (A2, E3 vs what their marketing actually says)
-3. **conversion path** — when someone is interested, is there a clean route to becoming a customer? (F1, B4, C8)
+3. **conversion path** — when someone is interested, is there a clean route to becoming a customer? (F1, B4, F4)
 4. **follow-up** — what happens to enquiries, past customers, and the email list? (F1, F2, F4)
 5. **proof** — is their real reputation visible in their marketing? (what F1/F4 imply about where proof lives today)
 6. **offer strength** — is what they sell packaged and priced to be chosen? (implied by B1/B2, E4, and how they described the business)
