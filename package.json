@@ -1,0 +1,17 @@
+{
+  "name": "relaunch72",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Relaunch72 — AI-powered done-for-you marketing system. Monorepo: orchestrator, prompts, site, admin.",
+  "workspaces": [
+    "orchestrator"
+  ],
+  "scripts": {
+    "pipeline": "npm run --workspace orchestrator pipeline --",
+    "test": "npm run --workspace orchestrator test",
+    "typecheck": "npm run --workspace orchestrator typecheck"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,18 @@
+# Secrets — never commit env files (hard rule #4)
+.env
+.env.*
+!.env.example
+
+# Dependencies / build
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Pipeline run outputs (customer data lives here in production — never commit).
+# Fixture demo runs for a gate review can be force-added deliberately.
+runs/*
+!runs/.gitkeep
+
+# OS / editor noise
+.DS_Store
+*.log
