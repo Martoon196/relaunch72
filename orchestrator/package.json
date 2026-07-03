@@ -1,0 +1,22 @@
+{
+  "name": "@relaunch72/orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Relaunch72 pipeline orchestrator — S0 intake gate, stages S1+, QA layer, run manifests, CLI",
+  "scripts": {
+    "pipeline": "tsx src/cli.ts",
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0",
+    "ajv": "^8.17.1",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
