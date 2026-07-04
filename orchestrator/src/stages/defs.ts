@@ -30,7 +30,7 @@ export const STAGES: Record<string, StageDef> = {
     priorStages: [],
     schema: S1_SCHEMA,
     qa: (output, intake) => qaS1(output, intake),
-    maxTokens: 8192,
+    maxTokens: 16000,
   },
   S2: {
     id: 'S2',
@@ -40,6 +40,6 @@ export const STAGES: Record<string, StageDef> = {
     priorStages: [], // per spec, S2 consumes intake only — not S1 (decisions.md D-012)
     schema: S2_SCHEMA,
     qa: (output, intake) => qaS2(output, intake),
-    maxTokens: 8192,
+    maxTokens: 16000,
   },
 };
