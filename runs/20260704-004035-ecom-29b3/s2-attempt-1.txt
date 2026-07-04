@@ -1,0 +1,34 @@
+{
+  "profile_narrative": "She's up before six, lead in hand, checking the street for other dogs before she steps off the kerb. Alfie — a two-year-old lurcher she adopted knowing he was anxious — goes rigid at the sight of a spaniel fifty metres away, and she's learned to choreograph the whole morning around that. At the park she keeps moving, keeps her voice low, tries not to catch anyone's eye while he presses into her legs. The judging is probably mostly in her head. Probably.\n\nShe's done the reading. She's done the behaviourist — twice, at £180 a session. She has a kitchen drawer that rattles with plug-ins, sprays, and a crinkled Amazon bag she can't quite bring herself to throw away. October used to be fine. Now she builds the month around when she thinks the local displays will be, checks the community Facebook group for warning posts, and starts dreading it sometime around mid-September.\n\nThen she sees a reel — a dog called Bramble, flat out on a bed, chest rising slowly through what sounds like a nearby display. She watches it twice. She is sceptical. She has been here before. But she screenshots it anyway and opens the website at lunch.\n\nShe won't buy straight away. She'll read the size guide twice, trying to work out whether it'll fit a chest that isn't quite greyhound and isn't quite anything else, look for a return policy, search the rescue Facebook group for anyone who's tried it. She finds the note about introducing the coat gradually before any trigger event happens. That's what moves her — someone who understands you can't just strap it on cold and hope for the best.\n\nWhen it works — when it actually works — she won't just be relieved. She'll fold the coat up carefully the next morning and feel, for the first time in a long time, like she hasn't let him down. Then she'll write about it in the group without being asked, tagging the three other people with lurchers who've asked her what she did.",
+  "demographics": "Women in their early-to-mid 30s, UK-based, typically semi-urban or commuter-belt — Bristol edges, market towns, suburban postcodes. Hybrid or office-based employment. Adopted a rescue dog with a known anxiety history, often a sighthound type such as a lurcher or whippet cross, or a staffie cross — builds that don't fit standard sizing. Earns enough to spend £50+ on a specialist product but has been stung before by spending on things that failed. Shops online, active in rescue and dog-owner Facebook communities, inclined to share finds with their group once trust is earned.",
+  "situation": "Owns an anxious rescue dog — usually a non-standard build that doesn't fit off-the-shelf sizing — that struggles badly with fireworks, thunderstorms, and sudden loud noise. Has already spent considerably on calming products (pheromone plug-ins, sprays, a cheap Amazon pressure wrap, multiple behaviourist sessions) that produced little or no lasting result. Now structures daily walks and the annual calendar around the dog's triggers. Carries a background guilt that she has somehow failed a dog she chose to give a home to.",
+  "trigger_events": [
+    "A bad bonfire night — the dog shaking or hiding for hours while she watched and could do nothing",
+    "A thunderstorm that arrived without warning and wrecked an evening at home",
+    "A walk that ended with the dog flat on the pavement refusing to move while strangers stared",
+    "A vet appointment where anxiety medication was first raised or an existing prescription was increased"
+  ],
+  "objections": [
+    "£58 feels hard to justify when a near-identical coat is £14 on Amazon — and she's already bought that one",
+    "Her dog's chest is an odd shape — will this actually fit a lurcher or whippet cross rather than a standard breed?",
+    "She's already spent a lot on things that didn't work: plug-ins, sprays, a behaviourist, the cheap wrap. What makes this different?"
+  ],
+  "desires_surface": "A calming coat that visibly reduces her rescue dog's distress during fireworks season and loud-noise events without requiring a vet prescription",
+  "desires_deep": "Her evenings back in October and November — being able to sit on the sofa without one eye on the window, stop building the whole annual calendar around fireworks displays, and finally let go of the low-level guilt that she has somehow failed the dog she chose to rescue",
+  "verbatims": [
+    "First bonfire night in three years where Willow slept instead of shaking herself sick. I actually cried a bit folding the coat up the next morning. Worth every penny.",
+    "honestly didnt expect much, we've got a drawer full of 'calming' stuff that did nothing. The den bed is the first thing Ted has ever chosen to get into on his own. He takes himself off to it now when the bins get collected.",
+    "Ordered Tuesday, arrived Thursday with a handwritten note on how to introduce the coat slowly. Nobody does that anymore. Fits his weird whippet chest perfectly too."
+  ],
+  "exclusions": [
+    "Buyers who strap the coat on cold at a fireworks display expecting an instant fix, then return it muddy with a one-star review",
+    "Anyone who reads a scared dog as naughty or dominant and believes the answer is a firmer hand rather than support"
+  ],
+  "awareness_stage": "solution aware",
+  "channels": [
+    "Instagram",
+    "FB groups",
+    "Google search",
+    "rescue charity newsletters"
+  ]
+}

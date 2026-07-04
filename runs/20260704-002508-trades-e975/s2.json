@@ -1,0 +1,36 @@
+{
+  "profile_narrative": "It starts on a Tuesday evening. The socket in the back bedroom has had a brown shadow round the face plate for three weeks — longer if she's being honest with herself. She's Googling \"is a brown socket dangerous\" at quarter past eleven while her husband has been telling himself he'll take a look at the weekend. They bought the house off an elderly couple fourteen months ago; the survey mentioned the electrics but there was so much else to deal with after the move.\n\nShe rings round on her lunch break. She's not after the cheapest quote — there was a fella off a Facebook group who did something with a light fitting before and she'd rather forget that. What she's actually shopping for is someone who finds the real problem and fixes it, who doesn't disappear once the floor's up. She asks every electrician the same two things: how long will it take and how much mess will it make.\n\nWhen she hears the words \"original rubber cabling\" and \"this board should have gone ten years ago,\" her stomach drops — not from surprise, but from knowing she already half-knew. The sickening part isn't the cost. It's the realisation that the kids have been sleeping six feet from it for over a year.\n\nWhat she's really buying isn't a new consumer unit. It's the first night she goes to bed without lying there listening for something. That faint warm-plastic smell she's been half-noticing for months stops being something she can push away.\n\nShe'll have passed the number to a neighbour before the invoice has even cleared.",
+  "demographics": "Couples in their mid-40s, both in full-time work, living in pre-war or early post-war housing across Wakefield, Horbury, Dewsbury and roughly 25 minutes around Ossett. Typically bought the property recently from an older owner, carrying a mortgage that leaves little slack. Spending around £850, more for a full rewire.",
+  "situation": "Owner-occupiers in 1930s–1950s semis who have known for months that the electrics needed attention but have been living with it — often because money was stretched after purchase, or because one partner kept saying they'd look at it. A visible warning sign has finally made ignoring it impossible. They have usually already had one unhelpful experience — a brother-in-law who poked around, an odd-job man from Facebook who taped something back together — and that failed attempt is part of why they are now ringing a qualified electrician rather than trying another shortcut.",
+  "trigger_events": [
+    "A socket or switch shows scorch marks or browning round the edges, often in a child's bedroom",
+    "A persistent smell of warm plastic or faint burning that can't be located",
+    "Lights flickering on a circuit that never used to flicker",
+    "A letting agent or insurer suddenly requiring an EICR certificate before renewal",
+    "Watching a news report or TV programme about a house fire and recognising their own house in the description"
+  ],
+  "objections": [
+    "Someone's mate's mate will do it for half the price — the case for qualified, insured work isn't obvious until something has already gone wrong",
+    "A rewire means floors up, dust through the whole house, living on a building site for weeks",
+    "Suspicion that the electrician is finding or inventing extra work to push the price up — 'does he actually NEED to do all this'"
+  ],
+  "desires_surface": "Get the electrics properly assessed and fixed, understand what's actually wrong, and get a straight price with no surprises",
+  "desires_deep": "To stop being the person who has known there's something dangerous in the walls and done nothing about it — to end the specific dread of a fire starting in the kids' room overnight because a warning sign was ignored for too long",
+  "verbatims": [
+    "Dan found live wires behind our bathroom wall that the last electrician had just plastered over. I honestly felt sick. He stayed till gone 9 making it safe and never charged a penny extra. First night in months I haven't laid there smelling imaginary burning.",
+    "mate the new board is unreal, looks like a spaceship next to the death trap you ripped out. karen has finally stopped going round unplugging everything before bed lol",
+    "Thought a full rewire meant living on a building site for a month. Done in six days and they hoovered up better than my cleaner does. Mum's booked in for hers next."
+  ],
+  "exclusions": [
+    "Property developers wanting sign-off on electrical work their own unqualified labourer has already done",
+    "Anyone who opens with 'it's only a five-minute job' — they've decided what's wrong before anyone has looked",
+    "Landlords who want to negotiate on a C1 danger code rather than have it made safe"
+  ],
+  "awareness_stage": "solution aware",
+  "channels": [
+    "FB groups",
+    "Google search",
+    "local/offline",
+    "letting agents' contractor lists"
+  ]
+}

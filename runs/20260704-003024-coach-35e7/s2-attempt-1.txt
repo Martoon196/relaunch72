@@ -1,0 +1,34 @@
+{
+  "profile_narrative": "He's probably been team lead for three to six months when you hear from him. The promotion felt good — the pay bump, the title, the validation — but somewhere between the first performance review he has to give and the third Slack message from his skip-level asking how the team is settling in, it stopped feeling good. He's still doing some of the coding because it's the only part of the job he trusts himself to do well.\n\nThe 1am Google search isn't 'management coaching UK.' It's something more specific and more desperate — something like 'am I a bad manager or is my team just difficult' — because he doesn't want to be the kind of person who needs coaching, and he especially doesn't want his company to know he's struggling. Engineers don't do this sort of thing. Or so he'd have told you six months ago.\n\nWhat he says he wants is a toolkit. Some frameworks. A way to run 1:1s without rehearsing them in the shower beforehand. He wants to stop dreading Monday and stop feeling like he conned someone into giving him this role.\n\nWhat he's actually buying is harder to say out loud: permission to stop performing competence he doesn't feel yet, to admit the panic is real, and to learn the job imperfectly — in front of the people he now manages — without that confirming he was never supposed to be here. He's done the company's new-manager e-learning module. He asked his own manager, who turned out to have never been trained either. He bought three books. He's read half of one. He tried therapy, which helped with the 2am dread but didn't touch the actual Tuesday-morning job.\n\nWhen the coaching lands, he doesn't walk away with a framework. He walks away with a line he'll think about every single day, and the ability to have a genuinely difficult conversation without feeling sick afterward.",
+  "demographics": "Early-to-mid 30s, senior individual contributor recently promoted into a first management role at a mid-size tech company — fintech, SaaS, or similar — based anywhere in the UK, working almost entirely remotely. Earns enough that £1,800 stings but is not out of reach; likely expenses some or all of it after committing. Too junior for executive coaching to be handed to them, too senior to be given proper onboarding to management.",
+  "situation": "Three to six months into their first team-lead role with no formal management training. Technically still excellent — probably the best engineer on the team — and quietly using that as cover for how badly the management part is going. Has tried every obvious self-help route already: management books left unfinished, a generic company e-learning module, advice from their own untrained manager, possibly a spell of therapy. None of it touched the specific fear of the Tuesday-morning job. Will pay out of pocket before admitting to the company they need help.",
+  "trigger_events": [
+    "Their strongest or most valued engineer hands in their notice, often after a 1:1 the new manager thought went fine",
+    "Freezing or going blank in a skip-level meeting and realising they had nothing useful to say about their own team",
+    "A first-ever performance or disciplinary conversation visibly goes off the rails",
+    "Their partner — who has been watching them quietly unravel for months — says something direct about how miserable they have been since the promotion"
+  ],
+  "objections": [
+    "£1,800 is a real and immediate number when the company hasn't agreed to fund it — they need to believe it isn't a waste before they'll risk asking to expense it",
+    "Coaching sounds like a hustle-culture, soft-skills, Myers-Briggs thing — engineers are allergic to that register and will close the tab at the first whiff of it",
+    "They are already drowning; adding six sessions to a calendar that is already breaking them feels impossible, even though the drowning is exactly the reason to go"
+  ],
+  "desires_surface": "Stop dreading Monday mornings; run 1:1s and hard conversations without rehearsing them first; get the team to perform without having to do everything themselves",
+  "desires_deep": "Permission to stop performing competence they don't feel yet — to admit out loud that the panic is real, learn the new job imperfectly and in public, without that being proof they were never supposed to have the role in the first place",
+  "verbatims": [
+    "honestly before our sessions I was rehearsing my own standups in the shower. Six weeks in I ran a genuinely difficult conversation without feeling sick, and the weird thing is my team seem to like me MORE now I've stopped pretending to have all the answers.",
+    "You said 'your job isn't to be the best engineer in the room anymore, it's to make the room better' and I think about that line every single day. Best money I've spent on my career and my company paid half lol",
+    "I cried a bit after session two. In a good way. Nobody had ever told me the panic was normal."
+  ],
+  "exclusions": [
+    "Managers who want the coach to diagnose or fix a difficult team member rather than examining their own behaviour",
+    "People who have already decided to let someone go and are looking for a professional-sounding script to manage the exit",
+    "Very senior executives who arrive sceptical and spend the session arguing against the value of coaching rather than doing any of the work"
+  ],
+  "awareness_stage": "solution aware",
+  "channels": [
+    "LinkedIn",
+    "Google search",
+    "engineering Slack communities"
+  ]
+}
