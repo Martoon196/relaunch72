@@ -10,6 +10,8 @@
 
 import type { Intake } from '../types.js';
 import { normalizeText } from '../util/text.js';
+import { customerMustWords, customerNeverWords, GLOBAL_BANNED_PHRASES } from '../qa/banned.js';
+import { G2_HOURS_CAP } from '../qa/checks.js';
 import type { LlmClient, LlmRequest, LlmResponse } from './client.js';
 
 function fieldText(intake: Intake, id: string): string {
@@ -96,6 +98,99 @@ function mockS2(intake: Intake, breakVerbatims: boolean): unknown {
   return base;
 }
 
+function mockS3(intake: Intake): unknown {
+  const h1 = (intake.H1 ?? {}) as Record<string, number>;
+  return {
+    positioning_statement: `For the buyer described in the profile, ${fieldText(intake, 'A1')} is the one that does what it says (E3): "${snippet(intake, 'E3', 50)}".`,
+    message_pillars: [
+      `We show, not tell: "${snippet(intake, 'E3', 40)}" backs every claim.`,
+      `We know exactly why people leave (E2): "${snippet(intake, 'E2', 40)}" — and answer it head-on.`,
+      `The job underneath the job (C3): "${snippet(intake, 'C3', 40)}" is what we actually sell.`,
+    ],
+    differentiators: [
+      `Their own words (E3): "${snippet(intake, 'E3', 50)}" — that is the wedge.`,
+      `Where rivals win (E2): "${snippet(intake, 'E2', 50)}" — we flip that weakness into the pitch.`,
+    ],
+    value_props: [
+      `The problem handled by someone who explains it plainly: "${snippet(intake, 'C3', 30)}".`,
+      'One point of contact from first call to finished job.',
+      'A clear price before work starts, held afterwards.',
+    ],
+    voice: {
+      sliders: {
+        formal_casual: h1.formal_casual ?? 3,
+        playful_straight: h1.playful_straight ?? 3,
+        bold_understated: h1.bold_understated ?? 3,
+      },
+      tone_rules: [
+        'Short sentences. One idea per sentence.',
+        'Say the price plainly; never apologise for it.',
+        'Write like the C2 reviews sound — concrete, first-person, no adjectives doing the work of evidence.',
+      ],
+      banned_words: [...GLOBAL_BANNED_PHRASES, ...customerNeverWords(intake)],
+      must_words: customerMustWords(intake),
+    },
+    elevator_pitch: `${fieldText(intake, 'A1')} sorts the real problem, shows the proof, and makes the next step obvious.`,
+  };
+}
+
+function mockS4(intake: Intake): unknown {
+  const b2 = Math.max(num(intake, 'B2'), 1);
+  return {
+    current_stack_read: `What they sell today (D1): "${snippet(intake, 'D1', 60)}" — while the profit actually sits with (D2): "${snippet(intake, 'D2', 40)}". The stack below leans into that.`,
+    recommended_stack: [
+      {
+        name: 'Entry: the front-door job',
+        price: Math.max(Math.round(b2 * 0.4), 1),
+        role: 'entry',
+        rationale: `Opens the relationship on what already gets bought first (D2): "${snippet(intake, 'D2', 40)}".`,
+      },
+      {
+        name: 'Core: the main engagement',
+        price: b2,
+        role: 'core',
+        rationale: `Their stated line-up (D1): "${snippet(intake, 'D1', 40)}" priced at today's average sale.`,
+      },
+    ],
+    lead_offer: `Lead with the entry offer — it matches how buyers arrive and what they already ask for (D2): "${snippet(intake, 'D2', 30)}".`,
+    pricing_moves: [`Name the core offer properly and anchor it against the premium option (D1): "${snippet(intake, 'D1', 30)}".`],
+    risk_reversal_options: [
+      'If the work is not right, we come back and put it right at no extra charge until it is.',
+      'A written scope before any money changes hands; miss the agreed scope and the difference is refunded.',
+    ],
+    category_note: 'Framed as a specialist fix for the problem underneath, not a line-item commodity to be price-shopped.',
+  };
+}
+
+function mockS5(intake: Intake): unknown {
+  const g2 = typeof intake.G2 === 'string' ? intake.G2 : '';
+  const cap = G2_HOURS_CAP[g2] ?? 5;
+  const c7 = Array.isArray(intake.C7) ? (intake.C7 as string[]) : ['Google search'];
+  const channels = c7.slice(0, 2);
+  const goal = snippet(intake, 'G1', 40);
+  const b3 = num(intake, 'B3');
+  const phase = (days: string, theme: string) => ({
+    days,
+    theme,
+    actions: channels.map((channel) => ({
+      action: `One concrete, finishable task on ${channel} that moves the goal this week.`,
+      hours: 1,
+      channel,
+      depends_on: '',
+    })),
+  });
+  return {
+    north_star: `Goal as written (G1): "${goal}" — from a baseline of ${b3} new customers a month.`,
+    phases: [
+      phase('Days 1–30', `Plug the audit's leaks so "${goal}" becomes reachable.`),
+      phase('Days 31–90', `Double down on what already works toward "${goal}".`),
+    ],
+    channel_priorities: channels,
+    do_not_do: ['No spending on new advertising experiments until the leaks named in the audit are fixed.'],
+    weekly_hours_total: Math.min(cap, 2),
+  };
+}
+
 export class MockClient implements LlmClient {
   readonly mode = 'mock' as const;
 
@@ -114,7 +209,17 @@ export class MockClient implements LlmClient {
     let payload: unknown;
     if (stage === 'S1') payload = mockS1(this.intake);
     else if (stage === 'S2') payload = mockS2(this.intake, shouldFail);
+    else if (stage === 'S3') payload = mockS3(this.intake);
+    else if (stage === 'S4') payload = mockS4(this.intake);
+    else if (stage === 'S5') payload = mockS5(this.intake);
     else throw new Error(`MockClient: no generator for stage ${stage}`);
+
+    if (shouldFail && stage !== 'S1' && stage !== 'S2') {
+      // Generic failure injection for later stages: drop the first key.
+      const broken = { ...(payload as Record<string, unknown>) };
+      delete broken[Object.keys(broken)[0] as string];
+      payload = broken;
+    }
 
     if (stage === 'S1' && shouldFail) {
       const broken = JSON.parse(JSON.stringify(payload)) as { scores: Array<Record<string, unknown>> };

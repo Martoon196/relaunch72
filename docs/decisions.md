@@ -100,3 +100,16 @@ The verbatim-quoting QA and the banned-word lint can collide: a customer whose C
 wholesale, and double-quoted spans inside any S1/S2 text are stripped before the scan — the ban
 applies to generated prose, not to quoted customer language. A model could theoretically hide
 banned prose inside quotes; the human gate reviews all quoted material anyway.
+
+## 2026-07-04 · M2 backbone
+
+**D-016 · S3–S5 shipped as v0.9.0 drafts, to be re-based on founder skill sources.**
+Message Spine + Voiceprint (S3), Offer Stack Blueprint (S4) and Relaunch Roadmap (S5) are built
+from the Pipeline Spec contracts plus craft; prompts carry version 0.9.0 until the owned skills
+(core-message, offer-architect, roadmap notes) are pasted into the Notion "M2 skill sources" page
+and ported in own-IP language (LS-5/LS-13) — then they graduate to 1.0.0. Mechanical
+interpretations, all revisitable: differentiators are strings that must contain a double-quoted
+E2/E3 verbatim; S4 recommendations cite D-fields by ID or quote; a >10× B2 price needs a
+substantial rationale; risk reversals are scanned against outcome-promise patterns; G2 band caps
+map to {<2:2, 2–5:5, 5–10:10, 10+:40} hours (hard fail); S5 self-consistency forbids actions on
+channels in the plan's own do_not_do. H3 never-words bind from S3 onward (the voice starts here).

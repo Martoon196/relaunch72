@@ -10,7 +10,7 @@
 import type { Intake, QAIssue } from '../types.js';
 import { SCHWARTZ_AWARENESS_STAGES } from '../intake/spec.js';
 import { extractNumbers, extractQuotedSpans, normalizeText, wordCount } from '../util/text.js';
-import { scanBannedPhrases } from './banned.js';
+import { customerMustWords, customerNeverWords, GLOBAL_BANNED_PHRASES, phraseRegex, scanBannedPhrases } from './banned.js';
 
 export const S1_CATEGORIES = [
   'visibility',
@@ -330,5 +330,244 @@ export function qaS2(output: unknown, intake: Intake): QAIssue[] {
       excludePathPrefixes: ['verbatims'],
     }),
   );
+  return issues;
+}
+
+// ─── S3 · Core message & voice guide ────────────────────────────────────────
+
+export const S3_INPUT_FIELDS = ['A2', 'A4', 'E2', 'E3', 'E4', 'H1', 'H2', 'H3', 'C2', 'C3'];
+
+interface S3Output {
+  positioning_statement: string;
+  message_pillars: string[];
+  differentiators: string[];
+  value_props: string[];
+  voice: {
+    sliders: Record<string, number>;
+    tone_rules: string[];
+    banned_words: string[];
+    must_words: string[];
+  };
+  elevator_pitch: string;
+}
+
+const MAX_PITCH_WORDS = 60;
+
+export function qaS3(output: unknown, intake: Intake): QAIssue[] {
+  const issues: QAIssue[] = [];
+  const out = output as S3Output;
+  const eFields = haystack(intake, ['E2', 'E3']);
+
+  // Every differentiator must trace to E2/E3 content — quote the owner's words.
+  for (const d of out.differentiators) {
+    if (findVerbatimSpan(d, eFields) === null) {
+      issues.push({
+        check: 's3.differentiator_untraced',
+        message: `differentiator "${d.slice(0, 60)}…" does not quote the owner's own E2/E3 words — every differentiator must include a double-quoted exact snippet from E2 or E3`,
+      });
+    }
+  }
+
+  // banned_words must merge the global list + the customer's H3 never-words.
+  const declared = new Set(out.voice.banned_words.map((w) => normalizeText(w).toLowerCase()));
+  const required = [...GLOBAL_BANNED_PHRASES.map((p) => p.toLowerCase()), ...customerNeverWords(intake)];
+  const missing = required.filter((w) => !declared.has(w));
+  if (missing.length > 0) {
+    issues.push({
+      check: 's3.banned_words_incomplete',
+      message: `voice.banned_words must include the global generic-phrase list AND the customer's H3 never-words — missing: ${missing.join(', ')}`,
+    });
+  }
+
+  // must_words must carry the customer's H3 must-words through.
+  const declaredMust = new Set(out.voice.must_words.map((w) => normalizeText(w).toLowerCase()));
+  const missingMust = customerMustWords(intake).filter((w) => !declaredMust.has(w));
+  if (missingMust.length > 0) {
+    issues.push({
+      check: 's3.must_words_incomplete',
+      message: `voice.must_words must include the customer's H3 must-use words — missing: ${missingMust.join(', ')}`,
+    });
+  }
+
+  // Sliders are the customer's own H1 settings — echoed, not reinvented.
+  const h1 = intake.H1;
+  if (h1 && typeof h1 === 'object' && !Array.isArray(h1)) {
+    for (const [key, v] of Object.entries(h1 as Record<string, unknown>)) {
+      if (typeof v === 'number' && out.voice.sliders[key] !== v) {
+        issues.push({
+          check: 's3.sliders_mismatch',
+          message: `voice.sliders.${key} is ${out.voice.sliders[key]} but the customer set ${v} in H1 — echo their setting exactly`,
+        });
+      }
+    }
+  }
+
+  if (wordCount(out.elevator_pitch) > MAX_PITCH_WORDS) {
+    issues.push({
+      check: 's3.pitch_too_long',
+      message: `elevator_pitch is ${wordCount(out.elevator_pitch)} words — the spec caps it at ${MAX_PITCH_WORDS}`,
+    });
+  }
+  // The pitch must not contain any banned word — global, H3, or its own list.
+  const pitchNorm = normalizeText(out.elevator_pitch);
+  for (const phrase of new Set([...required, ...declared])) {
+    if (phraseRegex(phrase).test(pitchNorm)) {
+      issues.push({ check: 's3.pitch_contains_banned', message: `elevator_pitch contains banned word/phrase "${phrase}"` });
+    }
+  }
+
+  // S3 IS the voice — customer never-words bind from here on. The banned_words
+  // array itself is exempt (it exists to list them).
+  issues.push(
+    ...scanBannedPhrases(output, intake, {
+      includeCustomerWords: true,
+      stripQuotedText: true,
+      excludePathPrefixes: ['voice.banned_words'],
+    }),
+  );
+  return issues;
+}
+
+// ─── S4 · Offer architecture ────────────────────────────────────────────────
+
+export const S4_INPUT_FIELDS = ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'B2', 'B6'];
+
+interface S4Output {
+  current_stack_read: string;
+  recommended_stack: Array<{ name: string; price: number; role: string; rationale: string }>;
+  lead_offer: string;
+  pricing_moves: string[];
+  risk_reversal_options: string[];
+  category_note: string;
+}
+
+const OUTCOME_PROMISE_PATTERNS = [
+  /guarantee[ds]?\s+(?:\w+\s+){0,2}(results?|revenue|income|profits?|growth|sales|leads|customers|bookings|rankings?)/i,
+  /\b(?:double|triple|quadruple|[0-9]+x)\s+your\b/i,
+  /\byou(?:'ll| will)\s+(?:make|earn|get|gain|add)\b[^.]{0,40}[£$€]\s?\d/i,
+  /\bresults?\s+(?:are\s+)?guaranteed\b/i,
+];
+
+export function qaS4(output: unknown, intake: Intake): QAIssue[] {
+  const issues: QAIssue[] = [];
+  const out = output as S4Output;
+  const b2 = intakeNumber(intake, 'B2');
+  const dFields = haystack(intake, ['D1', 'D2', 'D3', 'D4', 'D5', 'D6']);
+
+  for (const item of out.recommended_stack) {
+    // Sanity bound vs B2/E4: no 10× jumps without an explicit rationale.
+    if (b2 > 0 && item.price > 10 * b2 && item.rationale.length < 100) {
+      issues.push({
+        check: 's4.price_unjustified',
+        message: `"${item.name}" at ${item.price} is more than 10× the current average sale (B2 = ${b2}) — either bring it into range or give a substantial explicit rationale for the jump`,
+      });
+    }
+    // Every recommendation cites a D-field — by ID or by quoting it.
+    const citesId = /\bD[1-6]\b/.test(item.rationale);
+    const citesQuote = findVerbatimSpan(item.rationale, dFields) !== null;
+    if (!citesId && !citesQuote) {
+      issues.push({
+        check: 's4.recommendation_uncited',
+        message: `rationale for "${item.name}" must cite the intake's offer answers — reference the field ID (e.g. "(D2)") or quote the owner's exact words from D1–D6`,
+      });
+    }
+  }
+
+  for (const rr of out.risk_reversal_options) {
+    for (const re of OUTCOME_PROMISE_PATTERNS) {
+      if (re.test(rr)) {
+        issues.push({
+          check: 's4.risk_reversal_promises_outcome',
+          message: `risk reversal "${rr.slice(0, 70)}…" promises a business outcome — risk reversals may only promise what the owner controls (redo, refund, extra work), never results`,
+        });
+        break;
+      }
+    }
+  }
+
+  issues.push(...scanBannedPhrases(output, intake, { includeCustomerWords: false, stripQuotedText: true }));
+  return issues;
+}
+
+// ─── S5 · 90-day growth plan ────────────────────────────────────────────────
+
+export const S5_INPUT_FIELDS = ['G1', 'G2', 'G3', 'G4', 'B5', 'C7', 'F3', 'F4', 'D5'];
+
+interface S5Output {
+  north_star: string;
+  phases: Array<{ days: string; theme: string; actions: Array<{ action: string; hours: number; channel: string; depends_on: string }> }>;
+  channel_priorities: string[];
+  do_not_do: string[];
+  weekly_hours_total: number;
+}
+
+/** Upper bound of each G2 band — the plan must fit the owner's life (hard fail). */
+export const G2_HOURS_CAP: Record<string, number> = { '<2': 2, '2–5': 5, '5–10': 10, '10+': 40 };
+
+function tokensOf(s: string): Set<string> {
+  return new Set(
+    normalizeText(s)
+      .toLowerCase()
+      .split(/[^a-z0-9£]+/)
+      .filter((t) => t.length > 3),
+  );
+}
+
+export function qaS5(output: unknown, intake: Intake): QAIssue[] {
+  const issues: QAIssue[] = [];
+  const out = output as S5Output;
+
+  const g2 = typeof intake.G2 === 'string' ? intake.G2 : '';
+  const cap = G2_HOURS_CAP[g2];
+  if (cap !== undefined && out.weekly_hours_total > cap) {
+    issues.push({
+      check: 's5.hours_exceed_g2',
+      message: `weekly_hours_total is ${out.weekly_hours_total} but the owner said they can give "${g2}" hours/week (G2) — the plan MUST fit inside ${cap} hours; a plan the owner can't run is a failed plan`,
+    });
+  }
+
+  // North star must restate G1, with a number.
+  const g1 = typeof intake.G1 === 'string' ? intake.G1 : '';
+  const g1Overlap = [...tokensOf(out.north_star)].filter((t) => tokensOf(g1).has(t)).length;
+  if (!/\d/.test(out.north_star) || g1Overlap < 1) {
+    issues.push({
+      check: 's5.north_star_not_g1',
+      message: `north_star must restate the owner's own 90-day goal (G1: "${g1}") and put a number on it`,
+    });
+  }
+
+  // Self-consistency: no action may run on a channel the plan itself forbids.
+  for (const phase of out.phases) {
+    for (const action of phase.actions) {
+      const ct = tokensOf(action.channel);
+      const clash = out.do_not_do.find((d) => [...tokensOf(d)].some((t) => ct.has(t)));
+      if (clash) {
+        issues.push({
+          check: 's5.action_on_forbidden_channel',
+          message: `action "${action.action.slice(0, 50)}…" uses channel "${action.channel}" which collides with the plan's own do_not_do entry "${clash.slice(0, 50)}…"`,
+        });
+      }
+    }
+  }
+
+  // Channel priorities come from C7 (+ what F4 shows already works).
+  const c7 = Array.isArray(intake.C7) ? (intake.C7 as string[]) : [];
+  const provenText = tokensOf([intake.F4, intake.F1].map((v) => (Array.isArray(v) ? v.join(' ') : String(v ?? ''))).join(' '));
+  for (const ch of out.channel_priorities) {
+    const fromC7 = c7.length > 0 && c7.some((entry) => {
+      const et = tokensOf(entry);
+      const ct = tokensOf(ch);
+      return [...ct].every((t) => et.has(t)) || [...et].every((t) => ct.has(t));
+    });
+    const fromProven = [...tokensOf(ch)].some((t) => provenText.has(t));
+    if (!fromC7 && !fromProven) {
+      issues.push({
+        check: 's5.channel_priority_unsourced',
+        message: `channel priority "${ch}" doesn't correspond to where the customers hang out (C7) or what has already worked (F4/F1) — priorities must come from those`,
+      });
+    }
+  }
+
+  issues.push(...scanBannedPhrases(output, intake, { includeCustomerWords: false, stripQuotedText: true }));
   return issues;
 }

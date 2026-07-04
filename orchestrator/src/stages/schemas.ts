@@ -35,6 +35,107 @@ export const S1_SCHEMA: AnySchema = {
   },
 };
 
+export const S3_SCHEMA: AnySchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['positioning_statement', 'message_pillars', 'differentiators', 'value_props', 'voice', 'elevator_pitch'],
+  properties: {
+    positioning_statement: { type: 'string', minLength: 40 },
+    message_pillars: { type: 'array', minItems: 3, maxItems: 3, items: { type: 'string', minLength: 15 } },
+    differentiators: { type: 'array', minItems: 2, items: { type: 'string', minLength: 20 } },
+    value_props: { type: 'array', minItems: 3, items: { type: 'string', minLength: 15 } },
+    voice: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['sliders', 'tone_rules', 'banned_words', 'must_words'],
+      properties: {
+        sliders: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['formal_casual', 'playful_straight', 'bold_understated'],
+          properties: {
+            formal_casual: { type: 'integer', minimum: 1, maximum: 5 },
+            playful_straight: { type: 'integer', minimum: 1, maximum: 5 },
+            bold_understated: { type: 'integer', minimum: 1, maximum: 5 },
+          },
+        },
+        tone_rules: { type: 'array', minItems: 3, items: { type: 'string', minLength: 10 } },
+        banned_words: { type: 'array', minItems: 8, items: { type: 'string' } },
+        must_words: { type: 'array', items: { type: 'string' } },
+      },
+    },
+    elevator_pitch: { type: 'string', minLength: 30 },
+  },
+};
+
+export const S4_SCHEMA: AnySchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['current_stack_read', 'recommended_stack', 'lead_offer', 'pricing_moves', 'risk_reversal_options', 'category_note'],
+  properties: {
+    current_stack_read: { type: 'string', minLength: 80 },
+    recommended_stack: {
+      type: 'array',
+      minItems: 2,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['name', 'price', 'role', 'rationale'],
+        properties: {
+          name: { type: 'string', minLength: 3 },
+          price: { type: 'number', exclusiveMinimum: 0 },
+          role: { type: 'string', enum: ['entry', 'core', 'premium'] },
+          rationale: { type: 'string', minLength: 40 },
+        },
+      },
+    },
+    lead_offer: { type: 'string', minLength: 30 },
+    pricing_moves: { type: 'array', minItems: 1, items: { type: 'string', minLength: 20 } },
+    risk_reversal_options: { type: 'array', minItems: 2, maxItems: 2, items: { type: 'string', minLength: 30 } },
+    category_note: { type: 'string', minLength: 30 },
+  },
+};
+
+export const S5_SCHEMA: AnySchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['north_star', 'phases', 'channel_priorities', 'do_not_do', 'weekly_hours_total'],
+  properties: {
+    north_star: { type: 'string', minLength: 20 },
+    phases: {
+      type: 'array',
+      minItems: 2,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['days', 'theme', 'actions'],
+        properties: {
+          days: { type: 'string', minLength: 3 },
+          theme: { type: 'string', minLength: 10 },
+          actions: {
+            type: 'array',
+            minItems: 2,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['action', 'hours', 'channel', 'depends_on'],
+              properties: {
+                action: { type: 'string', minLength: 15 },
+                hours: { type: 'number', minimum: 0 },
+                channel: { type: 'string', minLength: 2 },
+                depends_on: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+    },
+    channel_priorities: { type: 'array', minItems: 2, items: { type: 'string', minLength: 2 } },
+    do_not_do: { type: 'array', minItems: 1, items: { type: 'string', minLength: 10 } },
+    weekly_hours_total: { type: 'number', exclusiveMinimum: 0 },
+  },
+};
+
 export const S2_SCHEMA: AnySchema = {
   type: 'object',
   additionalProperties: false,

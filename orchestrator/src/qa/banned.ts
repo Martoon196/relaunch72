@@ -23,6 +23,21 @@ export const GLOBAL_BANNED_PHRASES = [
   'elevate',
 ] as const;
 
+export function customerNeverWords(intake: Intake): string[] {
+  return customerBannedWords(intake);
+}
+
+export function customerMustWords(intake: Intake): string[] {
+  const h3 = intake.H3;
+  if (!h3 || typeof h3 !== 'object' || Array.isArray(h3)) return [];
+  const must = (h3 as Record<string, unknown>).must_use;
+  if (typeof must !== 'string') return [];
+  return must
+    .split(/[,;\n]+/)
+    .map((w) => normalizeText(w).replace(/^["']+|["']+$/g, '').trim().toLowerCase())
+    .filter((w) => w.length > 1);
+}
+
 function customerBannedWords(intake: Intake): string[] {
   const h3 = intake.H3;
   if (!h3 || typeof h3 !== 'object' || Array.isArray(h3)) return [];
@@ -56,7 +71,7 @@ function* walkStrings(value: unknown, path: string): Generator<[string, string]>
  * upstream), suffixes ("game-changers", "elevated"). Leading boundary only —
  * "seamless" must not fire inside "seamstress", but suffixes still match.
  */
-function phraseRegex(phrase: string): RegExp {
+export function phraseRegex(phrase: string): RegExp {
   const tokens = phrase
     .toLowerCase()
     .split(/[\s-]+/)
