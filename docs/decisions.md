@@ -113,3 +113,9 @@ E2/E3 verbatim; S4 recommendations cite D-fields by ID or quote; a >10× B2 pric
 substantial rationale; risk reversals are scanned against outcome-promise patterns; G2 band caps
 map to {<2:2, 2–5:5, 5–10:10, 10+:40} hours (hard fail); S5 self-consistency forbids actions on
 channels in the plan's own do_not_do. H3 never-words bind from S3 onward (the voice starts here).
+
+**D-017 · Founder ratifications (2026-07-04): Lexicon v1, Offer Spec v1.1, HTML→PDF doc generation.**
+Lexicon adopted as `orchestrator/src/lexicon.ts` (display layer only; internal IDs stay canonical).
+Doc generation is HTML→PDF (templates in git, rendered headless-Chromium; no Google Cloud
+account/OAuth dependency) — Google Docs API rejected for account/ops friction, revisit only if
+customers demand editable Docs.
