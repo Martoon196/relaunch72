@@ -57,3 +57,16 @@ test('runStage parks after a second failure (retry policy: one retry, then human
   assert.ok(record.flags.some((f) => f.includes('parked for human queue')));
   assert.equal(record.output_file, null);
 });
+
+test('runStage parks IMMEDIATELY on a fatal (no-invention) QA issue — no retry', async () => {
+  const runDir = tmpRunDir();
+  const fatalDef = {
+    ...STAGES.S2!,
+    qa: () => [{ check: 'no_invention.fabricated_testimonial', message: 'invented quote', fatal: true }],
+  };
+  const { record, output } = await runStage(fatalDef, intake, {}, { runDir, client: new MockClient(intake) });
+  assert.equal(record.status, 'parked');
+  assert.equal(record.attempts.length, 1, 'fatal issues must not trigger the retry');
+  assert.equal(output, null);
+  assert.ok(record.flags.some((f) => f.includes('no_invention') && f.includes('NO retry')));
+});

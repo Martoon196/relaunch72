@@ -141,6 +141,15 @@ export async function runStage(
         if (attemptRec.qa_issues.length === 0) {
           output = parsed.value;
         }
+        // No-invention violations never get a retry — a model that fabricates
+        // proof doesn't get a second chance to fabricate more convincingly.
+        const fatal = attemptRec.qa_issues.filter((i) => i.fatal);
+        if (fatal.length > 0) {
+          record.flags.push(
+            `no_invention violation — parked immediately, NO retry (global QA rule 2): ${fatal.map((i) => i.check).join('; ')}`,
+          );
+          return { record, output: null };
+        }
       }
     }
 

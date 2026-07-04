@@ -12,6 +12,12 @@ export interface QAIssue {
   check: string;
   /** Human/critique-facing description of exactly what failed. */
   message: string;
+  /**
+   * No-invention violations (fabricated testimonials/stats/credentials) are
+   * fatal: the run parks for the human queue IMMEDIATELY, with no retry
+   * (Pipeline Spec, Global QA principle 2).
+   */
+  fatal?: boolean;
 }
 
 export interface S0FieldIssue {

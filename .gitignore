@@ -16,3 +16,7 @@ runs/*
 # OS / editor noise
 .DS_Store
 *.log
+
+# Licensed third-party skill source material (DigitalMarketer) — working notes only,
+# must NEVER enter git history. Ports are rewritten own-IP (LS-5).
+.sources/
