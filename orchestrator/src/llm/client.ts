@@ -42,7 +42,7 @@ export class AnthropicClient implements LlmClient {
   }
 
   async complete(req: LlmRequest): Promise<LlmResponse> {
-    const params: Anthropic.MessageCreateParamsNonStreaming = {
+    const params: Anthropic.MessageCreateParams = {
       model: req.model,
       max_tokens: req.maxTokens,
       system: req.system,
@@ -52,7 +52,11 @@ export class AnthropicClient implements LlmClient {
     if (!/haiku/i.test(req.model)) {
       params.thinking = { type: 'adaptive' };
     }
-    const resp = await this.client.messages.create(params);
+    // Streamed transport, collected to one message: the SDK requires
+    // streaming above ~8 minutes of potential generation (32k budget), and
+    // long thinking turns were breaking non-streaming calls. The runner's
+    // contract is unchanged — it still sees the complete final message.
+    const resp = await this.client.messages.stream(params).finalMessage();
 
     const text = resp.content
       .filter((b): b is Anthropic.TextBlock => b.type === 'text')
