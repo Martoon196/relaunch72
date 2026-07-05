@@ -98,7 +98,8 @@ function inventedNumbers(
   const bases = [b2, b3, b2 * b3, ...(arithmeticBases ?? [])].filter((b) => b > 0);
 
   const bad: number[] = [];
-  for (const { value, percent, raw, before, after } of numbers) {
+  for (const num of numbers) {
+    const { value, percent, raw, before, after } = num;
     if (percent) {
       if (value > 100) bad.push(value);
       continue;
@@ -116,6 +117,22 @@ function inventedNumbers(
         }
       }
       if (ok) break;
+    }
+    // Visible addition (arithmetic-base stages only): "£640 (£600 leaflets +
+    // £40 boost, F3)" — the value is the sum of two other numbers in the SAME
+    // string that are each intake-echoed or small counts.
+    if (!ok && arithmeticBases) {
+      const addends = numbers.filter((o) => o !== num && !o.percent && (o.value <= SMALL_NUMBER_MAX || intakeNumbers.has(o.value)));
+      outer: for (let i = 0; i < addends.length; i++) {
+        for (let j = i + 1; j < addends.length; j++) {
+          const a = addends[i] as { value: number };
+          const b = addends[j] as { value: number };
+          if (Math.abs(a.value + b.value - value) <= Math.max(1, 0.01 * value)) {
+            ok = true;
+            break outer;
+          }
+        }
+      }
     }
     if (!ok) bad.push(value);
   }

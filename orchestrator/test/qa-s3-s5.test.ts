@@ -182,3 +182,16 @@ test('qaS1 still rejects a figure with no visible derivation', async () => {
   out.scores[0]!.leak_cost_estimate = '£123,456/mo based on industry benchmarks';
   assert.ok(qaS1(out, intake).some((i) => i.check === 's1.leak_number_invented'));
 });
+
+test('qaS1 accepts a visible sum of two intake-stated figures', async () => {
+  // helpers F3 states £400; B2 is 850 — "£1,250 = £400 + £850" is visible working
+  const out = (await mockOutput('S1')) as { scores: Array<{ leak_cost_estimate: string }> };
+  out.scores[0]!.leak_cost_estimate = '£1,250 already burned (= the £400 magazine ad from F3 plus one lost £850 average job, B2).';
+  assert.ok(!qaS1(out, intake).some((i) => i.check === 's1.leak_number_invented'));
+});
+
+test('qaS1 rejects a sum whose addends are not intake-stated', async () => {
+  const out = (await mockOutput('S1')) as { scores: Array<{ leak_cost_estimate: string }> };
+  out.scores[0]!.leak_cost_estimate = 'Roughly £999 gone (= £700 in lost work plus £299 in wasted spend).';
+  assert.ok(qaS1(out, intake).some((i) => i.check === 's1.leak_number_invented'));
+});

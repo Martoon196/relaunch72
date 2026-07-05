@@ -198,3 +198,13 @@ so the coach model's honest "2 × £300 = £600" (F3 states £300) was rejected 
 set, so visible working on any customer-stated figure passes. Copy stages (S6–S8) deliberately do
 NOT get arithmetic bases — prices there must be exact echoes (S10 cross-doc price check guards the
 gap regardless).
+
+**D-021a · Addendum: streaming transport; visible sums.**
+The SDK requires streaming above ~8 minutes of potential generation, so at max_tokens 32000 the
+client now uses `messages.stream(...).finalMessage()` (supersedes D-011's non-streaming choice;
+the runner contract is unchanged). Second live lesson from the same trades run: "£640 (= £600
+leaflets + £40 boost, F3)" is visible ADDITION of intake-stated figures — the rule now accepts a
+value equal to the sum of two other numbers in the same string when each addend is intake-echoed
+or a small count (arithmetic-base stages only; copy stages stay echo-only). With all fixes live,
+the trades S1 passed on its retry — the run then stopped only because the API account ran out of
+credits. Gate blocked on founder topping up.
