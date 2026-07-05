@@ -161,3 +161,16 @@ M2 gate:
 Residual gaps unchanged in kind from D-014 (spelled-out numbers, quote-free fabricated proof like
 "our clients rave", urgency theatre without figures) — prompts ban them explicitly; the S10 gate
 and the human queue remain the backstop.
+
+**D-019 · S10 is deterministic: lint flags for the strategist gate, never auto-retries.**
+S10 (assembly & strategist gate) makes no LLM call, so its findings can't be fixed by
+retry-with-critique — they queue for the human with the bundle. Checks: global banned-phrase
+re-scan per stage voice scope; S3's own `voice.banned_words` additions bind S6–S8 (per-stage QA
+only covered S7); currency amounts in S6–S8 must be S4 recommended prices or intake-stated prices
+(S5/S9 excluded — their QA permits visible B2/B3 arithmetic this scan can't distinguish);
+positioning-echo is a conservative zero-overlap detector on stopword-filtered tokens (only a doc
+sharing NOT ONE distinctive token with S3's positioning+pillars flags); at least one promo email
+must name a stack offer (offer NAMES only — lead_offer prose would make token overlap trivially
+true). Assembly writes `bundle.json` + `review.md` (sign-off checklist, all stage flags, retry
+warnings) into the run dir; manifest gains `s10`. The compliance line shipped on the bundle is
+DRAFT v0 — founder ratifies exact wording at LS-15 before anything reaches a real customer.

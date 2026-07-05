@@ -24,6 +24,7 @@ export function createRun(source: string, mode: 'live' | 'mock', through: string
     status: 'running',
     s0: null,
     stages: [],
+    s10: null,
     totals: { tokens_in: 0, tokens_out: 0, cost_usd: 0 },
     environment: { node: process.version, orchestrator_version: ORCHESTRATOR_VERSION },
   };

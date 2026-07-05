@@ -160,12 +160,12 @@ test('qaS4 FATALLY fails an invented benchmark figure', async () => {
 
 test('qaS5 fails a phase theme that never mentions the goal', async () => {
   const out = (await mockOutput('S5')) as { phases: Array<{ theme: string }> };
-  out.phases[0].theme = 'Sharpen the foundations and tidy the basics.';
+  out.phases[0]!.theme = 'Sharpen the foundations and tidy the basics.';
   assert.ok(qaS5(out, intake).some((i) => i.check === 's5.phase_theme_off_goal'));
 });
 
 test('qaS5 FATALLY fails an invented reach estimate', async () => {
   const out = (await mockOutput('S5')) as { phases: Array<{ actions: Array<{ action: string }> }> };
-  out.phases[0].actions[0].action = 'Post twice on the group page to reach 4,000 local people.';
+  out.phases[0]!.actions[0]!.action = 'Post twice on the group page to reach 4,000 local people.';
   assert.ok(qaS5(out, intake).some((i) => i.check === 's5.number_invented' && i.fatal === true));
 });

@@ -16,6 +16,7 @@ import type { Intake, RunManifest } from './types.js';
 import { runS0 } from './intake/s0.js';
 import { STAGES, STAGE_ORDER } from './stages/defs.js';
 import { runStage } from './stages/runner.js';
+import { runS10 } from './stages/s10.js';
 import { createRun, writeManifest } from './runs/manifest.js';
 import { AnthropicClient, type LlmClient } from './llm/client.js';
 import { MockClient } from './llm/mock.js';
@@ -125,6 +126,15 @@ async function main(): Promise<number> {
     }
     prior[stageId] = output;
     if (stageId === args.through) break;
+  }
+
+  // ── S10 · assembly & strategist gate — runs only over a full stack ──────
+  if (args.through === 'S9') {
+    const s10 = runS10(intake, prior, manifest, runDir);
+    manifest.s10 = s10;
+    console.log(
+      `  S10 assembled ${s10.package_file} + ${s10.review_file}: ${s10.issues.length} lint issue(s) — ${s10.status}`,
+    );
   }
 
   manifest.status = 'completed';

@@ -309,7 +309,7 @@ function mockS7(intake: Intake): unknown {
   const a1 = fieldText(intake, 'A1');
   const v0 = mockS2Verbatims(intake)[0] ?? '';
 
-  const email = (topic: string, i: number, withQuote = false) => ({
+  const email = (topic: string, i: number, opts: { withQuote?: boolean; withOffer?: boolean } = {}) => ({
     subject_variants: [
       `A straight answer on ${topic}`,
       `The short version of ${topic}`,
@@ -319,7 +319,8 @@ function mockS7(intake: Intake): unknown {
     body:
       `Hi {{first_name}},\n\nA quick note about ${topic}. The short version: the work gets agreed in writing, ` +
       'the price is set before anything starts, and questions get straight answers. That is how it runs here, and it is why people come back.' +
-      (withQuote && v0 ? ` One customer put it like this: "${v0}".` : '') +
+      (opts.withQuote && v0 ? ` One customer put it like this: "${v0}".` : '') +
+      (opts.withOffer ? ` The place to start is "${MOCK_ENTRY_NAME}" — the lowest-friction way in.` : '') +
       `\n\nWhen you are ready, the next step takes two minutes:\n\n{{link}}\n\nSpeak soon,\nThe team at ${a1}`,
     cta: 'Read the two-minute version',
   });
@@ -333,11 +334,11 @@ function mockS7(intake: Intake): unknown {
       'how this works', 'the problem underneath the problem', 'what makes this different',
       'what customers actually say', 'one useful thing you can do today', 'the questions everyone asks',
       'an invitation when you are ready',
-    ].map((topic, i) => email(topic, i, i === 3)),
+    ].map((topic, i) => email(topic, i, { withQuote: i === 3 })),
     promo_seq: [
       'the case for sorting it now', 'what waiting actually costs', 'proof from people like you',
       'the questions holding you back', 'the last note in this series',
-    ].map((topic, i) => email(topic, i + 7, i === 2)),
+    ].map((topic, i) => email(topic, i + 7, { withQuote: i === 2, withOffer: i === 0 || i === 4 })),
     list_warmup_note: {
       list_status: listStatus,
       note: `Read from F2: "${f2Quote}" — status set from the customer's own description; the warm-up email is included only when the list is cold.`,

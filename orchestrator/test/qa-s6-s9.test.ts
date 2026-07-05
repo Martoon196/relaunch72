@@ -36,35 +36,35 @@ test('qaS6 passes a grounded website pack (via mock)', async () => {
 
 test('qaS6 FATALLY fails a quoted passage no input ever said', async () => {
   const out = (await mockOutput('S6')) as unknown as S6Shape;
-  out.home.sections[0].body += ' As one client told us: "this quote was never said by anyone at all".';
+  out.home.sections[0]!.body += ' As one client told us: "this quote was never said by anyone at all".';
   const issues = qaS6(out, intake, prior);
   assert.ok(issues.some((i) => i.check === 's6.quote_fabricated' && i.fatal === true));
 });
 
 test('qaS6 FATALLY fails an invented percentage and an invented figure', async () => {
   const out = (await mockOutput('S6')) as unknown as S6Shape;
-  out.home.sections[0].body += ' Nine out of ten is not enough: 97% of customers agree.';
-  out.sales_page.sections[0].body += ' Join over 5,000 happy customers.';
+  out.home.sections[0]!.body += ' Nine out of ten is not enough: 97% of customers agree.';
+  out.sales_page.sections[0]!.body += ' Join over 5,000 happy customers.';
   const issues = qaS6(out, intake, prior);
   assert.equal(issues.filter((i) => i.check === 's6.number_invented' && i.fatal === true).length, 2);
 });
 
 test('qaS6 FATALLY fails credential words no input supports', async () => {
   const out = (await mockOutput('S6')) as unknown as S6Shape;
-  out.home.sections[0].body += ' An award-winning, top-rated team.';
+  out.home.sections[0]!.body += ' An award-winning, top-rated team.';
   const issues = qaS6(out, intake, prior);
   assert.ok(issues.some((i) => i.check === 's6.proof_word_unsupported' && i.fatal === true));
 });
 
 test('qaS6 fails two heroes opening from the same angle', async () => {
   const out = (await mockOutput('S6')) as unknown as S6Shape;
-  out.home.hero_variants[1].angle = out.home.hero_variants[0].angle;
+  out.home.hero_variants[1]!.angle = out.home.hero_variants[0]!.angle;
   assert.ok(qaS6(out, intake, prior).some((i) => i.check === 's6.hero_angles_same'));
 });
 
 test('qaS6 fails a generic call to action', async () => {
   const out = (await mockOutput('S6')) as unknown as S6Shape;
-  out.home.sections[0].cta = 'Learn more';
+  out.home.sections[0]!.cta = 'Learn more';
   assert.ok(qaS6(out, intake, prior).some((i) => i.check === 's6.cta_generic'));
 });
 
@@ -79,30 +79,30 @@ test('qaS7 passes a grounded email pack (via mock)', async () => {
 
 test('qaS7 fails a body without exactly one {{link}}', async () => {
   const out = (await mockOutput('S7')) as unknown as S7Shape;
-  out.welcome_seq[0].body = out.welcome_seq[0].body.replace('{{link}}', 'just reply to this email');
-  out.welcome_seq[1].body += '\n\n{{link}}';
+  out.welcome_seq[0]!.body = out.welcome_seq[0]!.body.replace('{{link}}', 'just reply to this email');
+  out.welcome_seq[1]!.body += '\n\n{{link}}';
   const issues = qaS7(out, intake, prior);
   assert.equal(issues.filter((i) => i.check === 's7.cta_count').length, 2);
 });
 
 test('qaS7 fails three subject lines sharing a hook category', async () => {
   const out = (await mockOutput('S7')) as unknown as S7Shape;
-  const cat = out.welcome_seq[0].subject_variants[0].hook_category;
-  for (const v of out.welcome_seq[0].subject_variants) v.hook_category = cat;
+  const cat = out.welcome_seq[0]!.subject_variants[0]!.hook_category;
+  for (const v of out.welcome_seq[0]!.subject_variants) v.hook_category = cat;
   assert.ok(qaS7(out, intake, prior).some((i) => i.check === 's7.hook_categories_not_distinct'));
 });
 
 test('qaS7 fails literal URLs and unknown merge tokens', async () => {
   const out = (await mockOutput('S7')) as unknown as S7Shape;
-  out.welcome_seq[0].body += ' Or visit https://example.com and use {{company_name}}.';
+  out.welcome_seq[0]!.body += ' Or visit https://example.com and use {{company_name}}.';
   const issues = qaS7(out, intake, prior);
   assert.ok(issues.filter((i) => i.check === 's7.url_or_unknown_token').length >= 2);
 });
 
 test('qaS7 FATALLY fails a fabricated quote and an invented percentage', async () => {
   const out = (await mockOutput('S7')) as unknown as S7Shape;
-  out.welcome_seq[0].body += ' As Sarah from Leeds put it: "absolutely transformed everything for our family".';
-  out.welcome_seq[1].body += ' Readers see a 45% lift on average.';
+  out.welcome_seq[0]!.body += ' As Sarah from Leeds put it: "absolutely transformed everything for our family".';
+  out.welcome_seq[1]!.body += ' Readers see a 45% lift on average.';
   const issues = qaS7(out, intake, prior);
   assert.ok(issues.some((i) => i.check === 's7.invented_quote' && i.fatal === true));
   assert.ok(issues.some((i) => i.check === 's7.invented_percentage' && i.fatal === true));
@@ -133,8 +133,8 @@ test('qaS8 fails platforms that are not the F5 picks', async () => {
 
 test('qaS8 fails a duplicated day and a format foreign to its platform', async () => {
   const out = (await mockOutput('S8')) as unknown as S8Shape;
-  out.posts[1].day = 1;
-  out.posts[0].format = 'reel'; // post 0 runs on Facebook
+  out.posts[1]!.day = 1;
+  out.posts[0]!.format = 'reel'; // post 0 runs on Facebook
   const issues = qaS8(out, intake, prior);
   assert.ok(issues.some((i) => i.check === 's8.days_incomplete'));
   assert.ok(issues.some((i) => i.check === 's8.format_invalid_for_platform'));
@@ -149,8 +149,8 @@ test('qaS8 fails a month where one pillar dominates', async () => {
 
 test('qaS8 FATALLY fails invented stats and fabricated quotes in posts', async () => {
   const out = (await mockOutput('S8')) as unknown as S8Shape;
-  out.posts[0].body += ' Over 5,000 jobs completed.';
-  out.posts[2].body += ' One follower wrote: "the best decision our business ever made, hands down".';
+  out.posts[0]!.body += ' Over 5,000 jobs completed.';
+  out.posts[2]!.body += ' One follower wrote: "the best decision our business ever made, hands down".';
   const issues = qaS8(out, intake, prior);
   assert.ok(issues.some((i) => i.check === 's8.invented_numbers' && i.fatal === true));
   assert.ok(issues.some((i) => i.check === 's8.invented_quote' && i.fatal === true));
@@ -169,7 +169,7 @@ test('qaS9 passes a grounded one-pager (via mock)', async () => {
 
 test('qaS9 FATALLY fails a table figure absent from its declared source', async () => {
   const out = (await mockOutput('S9')) as unknown as S9Shape;
-  out.numbers_table[0].value = '£9,999';
+  out.numbers_table[0]!.value = '£9,999';
   const issues = qaS9(out, intake, prior);
   assert.ok(issues.some((i) => i.check === 's9.table_number_untraced' && i.fatal === true));
 });

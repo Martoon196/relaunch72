@@ -36,7 +36,7 @@ function intakeNumber(intake: Intake, id: string): number {
 }
 
 /** Normalized values of the fields a stage consumed — the haystack for verbatim checks. */
-function haystack(intake: Intake, fieldIds: string[]): string[] {
+export function haystack(intake: Intake, fieldIds: string[]): string[] {
   return fieldIds
     .map((id) => normalizeText(fieldAsString(intake[id])))
     .filter((s) => s.length > 0);
@@ -109,7 +109,7 @@ function inventedNumbers(text: string, b2: number, b3: number, intakeNumbers: Re
 }
 
 /** Every number literally present in the consumed intake fields (fact-echo allowance). */
-function intakeNumberSet(fields: string[]): ReadonlySet<number> {
+export function intakeNumberSet(fields: string[]): ReadonlySet<number> {
   const set = new Set<number>();
   for (const f of fields) {
     for (const n of extractNumbers(f)) set.add(n.value);
@@ -693,7 +693,7 @@ interface S5Output {
 /** Upper bound of each G2 band — the plan must fit the owner's life (hard fail). */
 export const G2_HOURS_CAP: Record<string, number> = { '<2': 2, '2–5': 5, '5–10': 10, '10+': 40 };
 
-function tokensOf(s: string): Set<string> {
+export function tokensOf(s: string): Set<string> {
   return new Set(
     normalizeText(s)
       .toLowerCase()
@@ -965,8 +965,10 @@ export function qaS6(output: unknown, intake: Intake, prior: Record<string, unkn
     }
   }
 
-  // At least one CTA names the S4 lead offer or a stack offer by name.
-  const offerTokens = tokensOf([s4?.lead_offer ?? '', ...(s4?.recommended_stack ?? []).map((o) => o.name)].join(' '));
+  // At least one CTA names a stack offer by name. Tokens come from the offer
+  // NAMES only — lead_offer prose would drag in function words ("what",
+  // "they") that make the overlap trivially true.
+  const offerTokens = tokensOf((s4?.recommended_stack ?? []).map((o) => o.name).join(' '));
   if (offerTokens.size > 0 && !allCtas.some((cta) => [...tokensOf(cta)].some((t) => offerTokens.has(t)))) {
     issues.push({
       check: 's6.cta_offer_unnamed',

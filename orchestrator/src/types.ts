@@ -62,6 +62,16 @@ export interface StageRecord {
   flags: string[];
 }
 
+/** S10 assembly & strategist gate — global lint + package, no LLM call. */
+export interface S10Result {
+  /** Cross-doc lint findings — strategist-gate flags, never auto-retried. */
+  issues: QAIssue[];
+  package_file: string | null;
+  review_file: string | null;
+  status: 'awaiting_signoff';
+  assembled_at: string;
+}
+
 export interface RunManifest {
   run_id: string;
   /** Fixture name or input path this run was fed from. */
@@ -73,6 +83,8 @@ export interface RunManifest {
   status: 'running' | 'completed' | 'nudge_required' | 'parked' | 'error';
   s0: S0Result | null;
   stages: StageRecord[];
+  /** Present only when the run reached S9 and assembly ran. */
+  s10: S10Result | null;
   totals: { tokens_in: number; tokens_out: number; cost_usd: number };
   environment: { node: string; orchestrator_version: string };
 }
