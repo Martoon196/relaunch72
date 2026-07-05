@@ -71,7 +71,9 @@ function findVerbatimSpan(text: string, fields: string[]): string | null {
  */
 const SMALL_NUMBER_MAX = 31; // counts and day-multipliers pass on their own
 const IMPLICIT_MULTIPLIERS = [1, 12, 52];
-const PERIOD_AFTER = /^\s*-?\s*(day|week|month|year|yr|wk|mo)s?\b/i;
+// Durations are period lengths, not statistics — hours/minutes join
+// days/weeks so "48-hour turnaround" doesn't park a run (≤366 bound applies).
+const PERIOD_AFTER = /^\s*-?\s*(day|week|month|year|yr|wk|mo|hour|hr|minute|min|second|sec)s?\b/i;
 
 function inventedNumbers(text: string, b2: number, b3: number, intakeNumbers: ReadonlySet<number>): number[] {
   const numbers = extractNumbers(text);

@@ -174,3 +174,16 @@ must name a stack offer (offer NAMES only — lead_offer prose would make token 
 true). Assembly writes `bundle.json` + `review.md` (sign-off checklist, all stage flags, retry
 warnings) into the run dir; manifest gains `s10`. The compliance line shipped on the bundle is
 DRAFT v0 — founder ratifies exact wording at LS-15 before anything reaches a real customer.
+
+**D-020 · Doc generation shipped: shared brand tokens, per-deliverable HTML templates, Chromium PDF.**
+`orchestrator/src/docs/` renders a completed run to branded documents: `brand.ts` (tokens —
+dark-premium ink, electric accent, grotesk headlines; the seed for LS-9), `templates.ts` (layout +
+nine per-deliverable renderers + bundle index; every string HTML-escaped; compliance line in every
+footer; mock runs carry a visible not-for-delivery notice), `render.ts`/`npm run render`
+(HTML always; `--pdf` via the pre-installed Chromium through playwright-core, path overridable with
+`RELAUNCH72_CHROMIUM`). Rendering is deliberately decoupled from the pipeline — fix a template,
+re-render, nothing re-generates. LS-15's card said "Gamma or Google Docs API"; built to the
+founder-ratified D-017 (HTML→PDF) instead. Currency symbol in the S4 template defaults to £ —
+parameterise when a non-UK beta customer appears. Also: PERIOD_AFTER now treats hours/minutes/
+seconds as period lengths (a real "48-hour turnaround" claim must not park a run; ≤366 bound and
+the human gate still apply).
