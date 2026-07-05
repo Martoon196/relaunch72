@@ -202,3 +202,26 @@ test('qaS1 accepts visible division in leak arithmetic', async () => {
   out.scores[0]!.leak_cost_estimate = 'Losing one agent removes approximately £1,488/mo (= 7 jobs ÷ 4 agents × £850 average sale, B2).';
   assert.ok(!qaS1(out, intake).some((i) => i.check === 's1.leak_number_invented'));
 });
+
+test('H3 free-text parsing: quoted phrases, contractions, commentary, negated quotes', async () => {
+  const { customerMustWords, customerNeverWords } = await import('../src/qa/banned.js');
+  const coachy = validIntake({
+    H3: {
+      never_use: "empower, rockstar, 'crushing it', journey (as a noun), anything with a rocket emoji",
+      must_use: "drowning, the deep end, 'the job you were actually promoted into' — and clients are engineers, never 'leaders'",
+    },
+  });
+  const never = customerNeverWords(coachy);
+  assert.ok(never.includes('crushing it'));
+  assert.ok(never.includes('journey'));
+  assert.ok(!never.some((w) => w.includes('rocket emoji')), 'instructions are not enforceable words');
+  const must = customerMustWords(coachy);
+  assert.ok(must.includes('the job you were actually promoted into'));
+  assert.ok(must.includes('drowning'));
+  assert.ok(!must.includes('leaders'), "never 'X' inside a must list is an instruction about X");
+  assert.ok(!must.some((w) => w.includes('promoted into" - and')), 'no mangled fragments');
+
+  const ecomy = validIntake({ H3: { never_use: "'stubborn'", must_use: "settle, 'your dog isn't broken'" } });
+  assert.ok(customerMustWords(ecomy).includes("your dog isn't broken"), 'contraction inside quotes survives');
+  assert.ok(customerNeverWords(ecomy).includes('stubborn'));
+});

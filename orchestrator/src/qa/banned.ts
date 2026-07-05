@@ -1,5 +1,5 @@
 import type { Intake, QAIssue } from '../types.js';
-import { normalizeText } from '../util/text.js';
+import { normalizeText, wordCount } from '../util/text.js';
 
 /**
  * Banned-phrase list v1 — verbatim from Pipeline Spec v1.0 (Global QA
@@ -24,35 +24,63 @@ export const GLOBAL_BANNED_PHRASES = [
 ] as const;
 
 export function customerNeverWords(intake: Intake): string[] {
-  return customerBannedWords(intake);
+  return parseWordList(h3Field(intake, 'never_use'), { skipNegatedQuotes: false });
 }
 
 export function customerMustWords(intake: Intake): string[] {
-  const h3 = intake.H3;
-  if (!h3 || typeof h3 !== 'object' || Array.isArray(h3)) return [];
-  const must = (h3 as Record<string, unknown>).must_use;
-  if (typeof must !== 'string') return [];
-  return must
-    .split(/[,;\n]+/)
-    .map((w) => normalizeText(w).replace(/^["']+|["']+$/g, '').trim().toLowerCase())
-    .filter((w) => w.length > 1);
+  // In a MUST list, "never 'X'" is an instruction about X, not a word to require.
+  return parseWordList(h3Field(intake, 'must_use'), { skipNegatedQuotes: true });
 }
 
-function customerBannedWords(intake: Intake): string[] {
+function h3Field(intake: Intake, key: string): string {
   const h3 = intake.H3;
-  if (!h3 || typeof h3 !== 'object' || Array.isArray(h3)) return [];
-  const never = (h3 as Record<string, unknown>).never_use;
-  if (typeof never !== 'string') return [];
-  return never
-    .split(/[,;\n]+/)
-    .map((w) =>
-      normalizeText(w)
-        .replace(/\(.*?\)/g, '') // "(except when quoting)" style annotations
-        .replace(/^["']+|["']+$/g, '')
-        .trim()
-        .toLowerCase(),
-    )
-    .filter((w) => w.length > 1);
+  if (!h3 || typeof h3 !== 'object' || Array.isArray(h3)) return '';
+  const v = (h3 as Record<string, unknown>)[key];
+  return typeof v === 'string' ? v : '';
+}
+
+const MAX_WORDLIST_ENTRY_WORDS = 4; // longer segments are instructions, not vocabulary
+
+/**
+ * H3 fields are free text, not clean CSV: customers quote phrases, add
+ * dash-commentary and full-sentence instructions ("and call it a fuse board
+ * not a consumer unit when talking to homeowners"). Quoted phrases are exact
+ * entries; unquoted comma-segments count only when they look like vocabulary
+ * (≤4 words, not an instruction). Dropped commentary still reaches the model
+ * verbatim via the raw H3 in the stage input — this parser only decides what
+ * QA mechanically ENFORCES; the human gate reads the raw field regardless.
+ */
+function parseWordList(raw: string, opts: { skipNegatedQuotes: boolean }): string[] {
+  if (!raw) return [];
+  const entries: string[] = [];
+  let remainder = '';
+  let last = 0;
+  for (const m of raw.matchAll(/(['"])((?:(?!\1).)+?)\1/g)) {
+    const start = m.index ?? 0;
+    const end = start + m[0].length;
+    // Quote marks must sit at token boundaries on both sides — otherwise it's
+    // an apostrophe inside a word ("we're", "isn't"), left for segment logic.
+    const boundaryBefore = start === 0 || /[\s,,;.:(—–-]/.test(raw[start - 1] ?? '');
+    const boundaryAfter = end === raw.length || /[\s,;.:!?)—–-]/.test(raw[end] ?? '');
+    if (!boundaryBefore || !boundaryAfter) continue;
+    const negated = /\b(?:never|not|no)\s*$/i.test(raw.slice(Math.max(0, start - 12), start));
+    if (!negated || !opts.skipNegatedQuotes) entries.push(m[2] ?? '');
+    remainder += `${raw.slice(last, start)} `;
+    last = end;
+  }
+  remainder += raw.slice(last);
+
+  for (const seg of remainder.replace(/\(.*?\)/g, '').split(/[,;.\n]+/)) {
+    const s = normalizeText(seg)
+      .replace(/^["']+|["']+$/g, '')
+      .replace(/^[\s—–-]*(?:and|or|also|plus)\s+/i, '')
+      .trim();
+    if (!s) continue;
+    if (/^(?:never|don'?t|avoid|no)\b/i.test(s)) continue; // instruction, not a word
+    if (wordCount(s) > MAX_WORDLIST_ENTRY_WORDS) continue; // commentary, not a word
+    entries.push(s);
+  }
+  return [...new Set(entries.map((w) => normalizeText(w).trim().toLowerCase()).filter((w) => w.length > 1))];
 }
 
 /** Yield every string leaf of an output object as [path, value]. */
@@ -93,7 +121,7 @@ export function scanBannedPhrases(output: unknown, intake: Intake, opts: BannedS
   const issues: QAIssue[] = [];
   const banned = [
     ...GLOBAL_BANNED_PHRASES,
-    ...(opts.includeCustomerWords === false ? [] : customerBannedWords(intake)),
+    ...(opts.includeCustomerWords === false ? [] : customerNeverWords(intake)),
   ];
   const regexes = banned.map((p) => [p, phraseRegex(p)] as const);
   const excluded = opts.excludePathPrefixes ?? [];

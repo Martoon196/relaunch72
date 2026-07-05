@@ -208,3 +208,16 @@ value equal to the sum of two other numbers in the same string when each addend 
 or a small count (arithmetic-base stages only; copy stages stay echo-only). With all fixes live,
 the trades S1 passed on its retry — the run then stopped only because the API account ran out of
 credits. Gate blocked on founder topping up.
+
+**D-022 · H3 word lists are parsed as free text, not CSV (gate lesson #3).**
+The coach gate run parked at S3 because H3.must_use contains commentary ("… — and clients are
+engineers, never 'leaders'") and the comma-split parser turned the fragments into required
+must-words. New parser (banned.ts): quoted phrases are exact entries (token-boundary-aware, so
+contractions like "isn't" inside quotes survive); "never 'X'" inside a MUST list is an instruction
+about X, not a word to require; unquoted segments count only when ≤4 words and not
+instruction-shaped ("go easy on exclamation marks" is guidance, not vocabulary). Dropped commentary
+still reaches the model verbatim in the raw H3 input and the human gate reads the raw field — the
+parser only decides what QA mechanically enforces. Also from this gate attempt: visible division
+joined the leak-arithmetic grammar ("7 ÷ 4 × £850 ≈ £1,488"), with every derived multiplier
+required to involve a count visible in the same string (12×12-style implicit products would
+blanket the number line — caught by tests before shipping).
