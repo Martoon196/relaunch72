@@ -195,3 +195,10 @@ test('qaS1 rejects a sum whose addends are not intake-stated', async () => {
   out.scores[0]!.leak_cost_estimate = 'Roughly £999 gone (= £700 in lost work plus £299 in wasted spend).';
   assert.ok(qaS1(out, intake).some((i) => i.check === 's1.leak_number_invented'));
 });
+
+test('qaS1 accepts visible division in leak arithmetic', async () => {
+  // the live trades model wrote exactly this shape: 7 ÷ 4 × £850 ≈ £1,488
+  const out = (await mockOutput('S1')) as { scores: Array<{ leak_cost_estimate: string }> };
+  out.scores[0]!.leak_cost_estimate = 'Losing one agent removes approximately £1,488/mo (= 7 jobs ÷ 4 agents × £850 average sale, B2).';
+  assert.ok(!qaS1(out, intake).some((i) => i.check === 's1.leak_number_invented'));
+});

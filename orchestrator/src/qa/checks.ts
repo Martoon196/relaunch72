@@ -91,9 +91,15 @@ function inventedNumbers(
   const numbers = extractNumbers(text);
   const smalls = numbers.filter((n) => !n.percent && n.value > 0 && n.value <= SMALL_NUMBER_MAX).map((n) => n.value);
 
+  // Every derived multiplier must involve a count VISIBLE in the string —
+  // implicit×implicit products (12×12=144) would blanket the number line.
   const multipliers = new Set<number>([...IMPLICIT_MULTIPLIERS, ...smalls]);
   for (const a of smalls) {
-    for (const b of [...smalls, ...IMPLICIT_MULTIPLIERS]) multipliers.add(a * b); // "2 jobs × 12 months"
+    for (const b of [...smalls, ...IMPLICIT_MULTIPLIERS]) {
+      multipliers.add(a * b); // "2 jobs × 12 months"
+      if (b > 0) multipliers.add(a / b); // "7 jobs ÷ 4 agents × £850" — visible division
+      if (a > 0) multipliers.add(b / a);
+    }
   }
   const bases = [b2, b3, b2 * b3, ...(arithmeticBases ?? [])].filter((b) => b > 0);
 
