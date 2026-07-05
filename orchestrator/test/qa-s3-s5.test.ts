@@ -100,3 +100,72 @@ test('qaS5 fails a channel priority sourced from neither C7 nor F4/F1', async ()
   out.channel_priorities = ['TikTok'];
   assert.ok(qaS5(out, intake).some((i) => i.check === 's5.channel_priority_unsourced'));
 });
+
+// ── Rebase additions (prompts v1.0.0): voice guardrail, contrast, ladders,
+// and the fatal no-invention checks on the copy stages ──────────────────────
+
+test('qaS3 fails when no tone rule is the "Sounds like X, not Y" guardrail', async () => {
+  const out = (await mockOutput('S3')) as { voice: { tone_rules: string[] } };
+  out.voice.tone_rules = out.voice.tone_rules.filter((r) => !/sounds like/i.test(r));
+  assert.ok(qaS3(out, intake).some((i) => i.check === 's3.voice_guardrail_missing'));
+});
+
+test('qaS3 fails a positioning statement with no contrast', async () => {
+  const out = (await mockOutput('S3')) as { positioning_statement: string };
+  out.positioning_statement = 'For landlords across the area, this is the business that does what it says and shows the proof.';
+  assert.ok(qaS3(out, intake).some((i) => i.check === 's3.positioning_no_contrast'));
+});
+
+test('qaS3 FATALLY fails an invented figure in message copy', async () => {
+  const out = (await mockOutput('S3')) as { message_pillars: string[] };
+  out.message_pillars[0] += ' Trusted by over 500 landlords.';
+  assert.ok(qaS3(out, intake).some((i) => i.check === 's3.number_invented' && i.fatal === true));
+});
+
+test('qaS4 marks an outcome-promising risk reversal FATAL', async () => {
+  const out = (await mockOutput('S4')) as { risk_reversal_options: string[] };
+  out.risk_reversal_options[0] = 'We guarantee results within the first month or your money back in full.';
+  assert.ok(qaS4(out, intake).some((i) => i.check === 's4.risk_reversal_promises_outcome' && i.fatal === true));
+});
+
+test('qaS4 fails a lead offer that names no stack rung', async () => {
+  const out = (await mockOutput('S4')) as { lead_offer: string };
+  out.lead_offer = 'Lead with something small and low-risk that matches how buyers arrive (D2).';
+  assert.ok(qaS4(out, intake).some((i) => i.check === 's4.lead_offer_not_in_stack'));
+});
+
+test('qaS4 fails a ladder whose prices do not ascend', async () => {
+  const out = (await mockOutput('S4')) as { recommended_stack: Array<{ price: number; role: string }> };
+  const entry = out.recommended_stack.find((i) => i.role === 'entry');
+  const core = out.recommended_stack.find((i) => i.role === 'core');
+  assert.ok(entry && core);
+  entry.price = core.price + 100;
+  assert.ok(qaS4(out, intake).some((i) => i.check === 's4.ladder_not_ascending'));
+});
+
+test('qaS4 fails an uncited pricing move and an unquoted stack read', async () => {
+  const out = (await mockOutput('S4')) as { pricing_moves: string[]; current_stack_read: string };
+  out.pricing_moves[1] = 'Offer three ways in at different price points so more buyers can start.';
+  out.current_stack_read = 'One real offer with everything else ad hoc; the ladder below builds the missing rungs around what already sells well today.';
+  const issues = qaS4(out, intake);
+  assert.ok(issues.some((i) => i.check === 's4.pricing_move_uncited'));
+  assert.ok(issues.some((i) => i.check === 's4.current_stack_unquoted'));
+});
+
+test('qaS4 FATALLY fails an invented benchmark figure', async () => {
+  const out = (await mockOutput('S4')) as { category_note: string };
+  out.category_note += ' Comparable specialists charge £7,500 for this.';
+  assert.ok(qaS4(out, intake).some((i) => i.check === 's4.number_invented' && i.fatal === true));
+});
+
+test('qaS5 fails a phase theme that never mentions the goal', async () => {
+  const out = (await mockOutput('S5')) as { phases: Array<{ theme: string }> };
+  out.phases[0].theme = 'Sharpen the foundations and tidy the basics.';
+  assert.ok(qaS5(out, intake).some((i) => i.check === 's5.phase_theme_off_goal'));
+});
+
+test('qaS5 FATALLY fails an invented reach estimate', async () => {
+  const out = (await mockOutput('S5')) as { phases: Array<{ actions: Array<{ action: string }> }> };
+  out.phases[0].actions[0].action = 'Post twice on the group page to reach 4,000 local people.';
+  assert.ok(qaS5(out, intake).some((i) => i.check === 's5.number_invented' && i.fatal === true));
+});

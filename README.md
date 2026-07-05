@@ -20,19 +20,19 @@ code mirrors them, never redefines them.
 | `/admin`        | Admin QA queue (M3)                                               |
 | `/docs`         | Decision log and engineering docs                                 |
 
-## Quick start (M1 vertical slice)
+## Quick start
 
 ```bash
 npm install
 cp .env.example .env       # add ANTHROPIC_API_KEY for live runs
-npm run pipeline -- --fixture trades --through S2
+npm run pipeline -- --fixture trades            # full nine-deliverable stack
 ```
 
 Flags:
 
 - `--fixture <trades|coach|ecom>` — pick a dummy intake from `/fixtures`
 - `--input <path.json>` — run an arbitrary intake file instead of a fixture
-- `--through <S0|S1|S2>` — stop after this stage (default `S2`)
+- `--through <S0…S9>` — stop after this stage (default `S9`, the full stack)
 - `--mock` — run against a deterministic mock model (no API key, no cost; exercises
   schema validation, QA checks, retry and manifest mechanics; **never** a substitute
   for a real quality review)

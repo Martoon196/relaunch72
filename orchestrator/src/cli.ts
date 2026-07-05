@@ -28,7 +28,7 @@ interface CliArgs {
 }
 
 function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { through: 'S2', mock: false };
+  const args: CliArgs = { through: 'S9', mock: false }; // default: the full nine-deliverable stack
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--fixture') args.fixture = argv[++i];
@@ -36,7 +36,7 @@ function parseArgs(argv: string[]): CliArgs {
     else if (a === '--through') args.through = (argv[++i] ?? '').toUpperCase();
     else if (a === '--mock') args.mock = true;
     else if (a === '--help' || a === '-h') {
-      console.log('Usage: npm run pipeline -- --fixture <trades|coach|ecom> [--through S0|S1|S2] [--mock]');
+      console.log('Usage: npm run pipeline -- --fixture <trades|coach|ecom> [--through S0…S9, default S9] [--mock]');
       process.exit(0);
     } else {
       throw new Error(`Unknown argument: ${a}`);

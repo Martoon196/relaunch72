@@ -119,3 +119,45 @@ Lexicon adopted as `orchestrator/src/lexicon.ts` (display layer only; internal I
 Doc generation is HTML→PDF (templates in git, rendered headless-Chromium; no Google Cloud
 account/OAuth dependency) — Google Docs API rejected for account/ops friction, revisit only if
 customers demand editable Docs.
+
+## 2026-07-05 · S3–S9 skill-port integration
+
+**D-018 · S3/S4/S5 prompts graduated to v1.0.0; S6–S9 shipped; per-stage no-invention checks are FATAL.**
+The owned-skill port (LS-5/LS-13) landed: S3–S5 prompts re-based on the licensed method sources in
+own-IP language (D-016's condition met — 0.9.0 → 1.0.0), S6–S9 written fresh. Every stage now has
+a fatal no-invention path (`QAIssue.fatal` → park immediately, NO retry): S3 message copy, S4
+prose + outcome-promising risk reversals (upgraded to fatal — that text ships into S6 guarantee
+blocks), S5 plan figures, S6 quotes/numbers/credential-words, S7 quotes/numbers/percentages, S8
+quotes/numbers, S9 table tracing + prose figures. Notable interpretations, all revisitable at the
+M2 gate:
+- **Cross-stage haystacks.** S6–S9 QA traces quotes and figures against the *full prior-stage
+  outputs* (first stages to use the runner's `prior` argument). S6 quotes may come only from S2
+  verbatims + consumed intake (E1–E4, A1, A5); S7 from S2/S3/S4 + F2/A1; S8 from C2 + S2/S3/S5
+  (S3's banned_words leaves excluded so a banned phrase can't launder itself in as "sourced").
+- **Stricter-than-S1 number rules where the surface is sales copy.** S6: no bare-year carve-out
+  (a year in web copy reads as a founding/credential claim; S6 doesn't consume A4) and no
+  B2/B3 arithmetic path; percentages must be input-echoed (bare "100%" tolerated as puffery).
+  S7: *every* percentage must be input-echoed — %-stats are the classic fabricated proof in email.
+- **S5 phase labels.** "Days 31–90" is a calendar position, not a projection — numbers ≤366 pass
+  in `phases[].days` only (the draft rule would have parked every real plan).
+- **S8 platform matching** is exact normalized string equality against F5 (closed enum) — NOT the
+  C7 alias matcher, whose `x → twitter` rewrite breaks on the platform "X". Single F5 pick ⇒
+  platform_a = platform_b. Per-platform format pairing lives in `S8_PLATFORM_FORMATS` (checks.ts)
+  and must stay in sync with the prompt's format lists.
+- **S7 shape elaborations**: subject_variants carry `{subject, hook_category}` (10-value own-IP
+  enum) so "3 distinct hooks" is a Set-size check; `list_warmup_note` is
+  `{list_status, note, reintro_email}` so "F2-cold ⇒ warm-up email present" is mechanical. Merge
+  tokens fixed at `{{first_name}}`/`{{link}}`; exactly one `{{link}}` per body = "one CTA".
+  F2 staleness heuristic is one-way (never/years/6+ months force `cold`; empty forces `none`).
+- **S9 table tracing**: every `numbers_table` row declares its source (B1–B6, G1, S1–S5) and every
+  figure in `value` must literally appear in that source (extractNumbers normalizes commas/£/k).
+  G1 kept in the source enum (it's in S9's In list; its figure is guaranteed restated in S5).
+  Horizon rule: forward spans > 92 days and annualisation markers fail (non-fatal).
+- **Voice-scope**: H3 never-words now bind S4 (offer names flow into customer-facing copy) and the
+  copy stages S6–S8; S9 deliberately stays global-list-only (bank-manager register, not brand voice).
+- **Schema tightenings** (S4): recommended_stack ≤4, pricing_moves 2–6, category_note ≥60 chars,
+  prices strictly ascending entry→core→premium with ≥1 entry + ≥1 core (QA, not schema).
+- **CLI default** `--through` is now S9 — a run is the full stack unless narrowed.
+Residual gaps unchanged in kind from D-014 (spelled-out numbers, quote-free fabricated proof like
+"our clients rave", urgency theatre without figures) — prompts ban them explicitly; the S10 gate
+and the human queue remain the backstop.

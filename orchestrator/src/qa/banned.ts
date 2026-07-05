@@ -55,7 +55,8 @@ function customerBannedWords(intake: Intake): string[] {
     .filter((w) => w.length > 1);
 }
 
-function* walkStrings(value: unknown, path: string): Generator<[string, string]> {
+/** Yield every string leaf of an output object as [path, value]. */
+export function* walkStrings(value: unknown, path: string): Generator<[string, string]> {
   if (typeof value === 'string') {
     yield [path, value];
   } else if (Array.isArray(value)) {

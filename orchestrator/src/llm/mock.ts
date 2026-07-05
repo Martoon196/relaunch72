@@ -101,7 +101,7 @@ function mockS2(intake: Intake, breakVerbatims: boolean): unknown {
 function mockS3(intake: Intake): unknown {
   const h1 = (intake.H1 ?? {}) as Record<string, number>;
   return {
-    positioning_statement: `For the buyer described in the profile, ${fieldText(intake, 'A1')} is the one that does what it says (E3): "${snippet(intake, 'E3', 50)}".`,
+    positioning_statement: `For the buyer described in the profile, ${fieldText(intake, 'A1')} is the one that does what it says (E3): "${snippet(intake, 'E3', 50)}" — not the usual alternative buyers settle for.`,
     message_pillars: [
       `We show, not tell: "${snippet(intake, 'E3', 40)}" backs every claim.`,
       `We know exactly why people leave (E2): "${snippet(intake, 'E2', 40)}" — and answer it head-on.`,
@@ -126,6 +126,7 @@ function mockS3(intake: Intake): unknown {
         'Short sentences. One idea per sentence.',
         'Say the price plainly; never apologise for it.',
         'Write like the C2 reviews sound — concrete, first-person, no adjectives doing the work of evidence.',
+        'Sounds like the owner explaining the work across the counter, not a corporate brochure.',
       ],
       banned_words: [...GLOBAL_BANNED_PHRASES, ...customerNeverWords(intake)],
       must_words: customerMustWords(intake),
@@ -134,26 +135,32 @@ function mockS3(intake: Intake): unknown {
   };
 }
 
+const MOCK_ENTRY_NAME = 'Entry: the front-door job';
+const MOCK_CORE_NAME = 'Core: the main engagement';
+
 function mockS4(intake: Intake): unknown {
-  const b2 = Math.max(num(intake, 'B2'), 1);
+  const b2 = Math.max(num(intake, 'B2'), 2);
   return {
     current_stack_read: `What they sell today (D1): "${snippet(intake, 'D1', 60)}" — while the profit actually sits with (D2): "${snippet(intake, 'D2', 40)}". The stack below leans into that.`,
     recommended_stack: [
       {
-        name: 'Entry: the front-door job',
+        name: MOCK_ENTRY_NAME,
         price: Math.max(Math.round(b2 * 0.4), 1),
         role: 'entry',
         rationale: `Opens the relationship on what already gets bought first (D2): "${snippet(intake, 'D2', 40)}".`,
       },
       {
-        name: 'Core: the main engagement',
+        name: MOCK_CORE_NAME,
         price: b2,
         role: 'core',
         rationale: `Their stated line-up (D1): "${snippet(intake, 'D1', 40)}" priced at today's average sale.`,
       },
     ],
-    lead_offer: `Lead with the entry offer — it matches how buyers arrive and what they already ask for (D2): "${snippet(intake, 'D2', 30)}".`,
-    pricing_moves: [`Name the core offer properly and anchor it against the premium option (D1): "${snippet(intake, 'D1', 30)}".`],
+    lead_offer: `Lead with "${MOCK_ENTRY_NAME}" — it matches how buyers arrive and what they already ask for (D2): "${snippet(intake, 'D2', 30)}".`,
+    pricing_moves: [
+      `Name the core offer properly and anchor it against the premium option (D1): "${snippet(intake, 'D1', 30)}".`,
+      'Take a small deposit at booking with the balance due on completion, in line with the average sale (B2).',
+    ],
     risk_reversal_options: [
       'If the work is not right, we come back and put it right at no extra charge until it is.',
       'A written scope before any money changes hands; miss the agreed scope and the difference is refunded.',
@@ -191,6 +198,229 @@ function mockS5(intake: Intake): unknown {
   };
 }
 
+// ─── S6–S9: copy stages. Mock copy quotes ONLY provable inputs (S2 verbatims,
+// consumed intake fields, C2) — the cross-stage no-invention checks are
+// exercised for real, not bypassed.
+
+/** The same S2 verbatims the mock pipeline produced — S6 quotes them. */
+function mockS2Verbatims(intake: Intake): string[] {
+  const s2 = mockS2(intake, false) as { verbatims: string[] };
+  return s2.verbatims;
+}
+
+function mockS6(intake: Intake): unknown {
+  const v = mockS2Verbatims(intake);
+  const q = (i: number) => `"${v[i % v.length]}"`;
+  const offer = MOCK_ENTRY_NAME;
+  const a1 = fieldText(intake, 'A1');
+  return {
+    home: {
+      hero_variants: [
+        {
+          angle: 'problem-first',
+          headline: 'Stop patching the same problem and get it handled properly',
+          subhead: 'The work agreed in writing, priced before it starts, and explained in plain terms from the first call.',
+          cta: 'Ask for a fixed written quote',
+        },
+        {
+          angle: 'evidence-first',
+          headline: 'The work speaks for itself, in real customer words',
+          subhead: `Straight from a customer: ${q(0)} — that is the standard every job is held to.`,
+          cta: 'See what customers actually say',
+        },
+      ],
+      sections: [
+        {
+          id: 'benefits',
+          head: 'What you get',
+          body: `The work done properly, explained without jargon, and priced in writing before anything starts. One customer put it like this: ${q(0)} — nothing polished, just how it went.`,
+          cta: 'Ask for a plain-terms quote today',
+        },
+        {
+          id: 'proof',
+          head: 'What customers say',
+          body: `${q(0)} ${q(1)} Real customers, quoted word for word — nothing paraphrased, nothing invented.`,
+        },
+        {
+          id: 'objections',
+          head: 'Wondering if it is worth it',
+          body: 'Fair question. The price is agreed up front, the scope goes in writing, and if something is not right it gets put right. No surprises, no pressure, and no decision needed today.',
+          cta: 'Get your questions answered first',
+        },
+        {
+          id: 'next-steps',
+          head: 'How it works',
+          body: 'Three steps: get in touch, agree the scope and the price in writing, then the work is scheduled for a time that suits. Nothing starts until you have said yes to both.',
+        },
+      ],
+    },
+    about: {
+      head: 'Who you are dealing with',
+      body:
+        `${a1} is a working business serving ${fieldText(intake, 'A5')}. In the owner's words: "${snippet(intake, 'E3', 60)}". ` +
+        'The promise is straightforward: do the work properly, explain it in plain terms, and stand behind it afterwards. ' +
+        'No scripts and no runaround — the person you speak to is the person responsible for the work being right. ' +
+        'If anything is unclear, ask; questions get straight answers before any money changes hands.',
+    },
+    sales_page: {
+      head: 'A straightforward way to get this sorted',
+      subhead: 'What it costs, what you get, and what happens if it is not right.',
+      sections: [
+        {
+          id: 'problem',
+          head: 'The situation',
+          body: 'Things have drifted: the last attempt did not stick, the problem keeps coming back, and every month it waits costs time and patience. It does not need another quick patch — it needs doing properly once.',
+        },
+        {
+          id: 'offer',
+          head: 'What is on the table',
+          body: `The way in is the ${offer} — the lowest-friction way to see how this business works. The core engagement carries the main work, priced plainly and agreed before anything begins.`,
+        },
+        {
+          id: 'proof',
+          head: 'In their words',
+          body: `${q(1)} That is a real customer, quoted exactly. The proof of the work lives in what people say once it is finished, not in slogans.`,
+        },
+        {
+          id: 'objections',
+          head: 'Been let down before',
+          body: 'Then the answer is simple: scope in writing, price agreed first, and a record of what was done. Ask anything you like before you commit to a single thing.',
+        },
+        {
+          id: 'guarantee',
+          head: 'If it is not right',
+          body: 'If the work is not right, we come back and put it right at no extra charge until it is. That is the promise, in writing, on every single job.',
+        },
+      ],
+      final_cta: `Claim your ${offer} slot this week`,
+    },
+  };
+}
+
+const MOCK_HOOK_CATEGORIES = [
+  'direct_benefit', 'open_loop', 'deal_announcement', 'deadline', 'personal_voice',
+  'results_evidence', 'story_tease', 'how_to', 'direct_command', 'reflective_question',
+];
+
+/** Mirrors qaS7's F2 staleness heuristic so mock and check agree. */
+const MOCK_F2_STALE = /\bnever\b|\byears?\b|\blast year\b|\b(?:[6-9]|1[0-9]|2[0-9]|3[0-6])\s*months?\b/i;
+
+function mockS7(intake: Intake): unknown {
+  const a1 = fieldText(intake, 'A1');
+  const v0 = mockS2Verbatims(intake)[0] ?? '';
+
+  const email = (topic: string, i: number, withQuote = false) => ({
+    subject_variants: [
+      `A straight answer on ${topic}`,
+      `The short version of ${topic}`,
+      `Worth two minutes: ${topic}`,
+    ].map((subject, k) => ({ subject, hook_category: MOCK_HOOK_CATEGORIES[(i + k * 3) % 10] })),
+    preview: 'One useful thing you can read in under a minute — no fluff.',
+    body:
+      `Hi {{first_name}},\n\nA quick note about ${topic}. The short version: the work gets agreed in writing, ` +
+      'the price is set before anything starts, and questions get straight answers. That is how it runs here, and it is why people come back.' +
+      (withQuote && v0 ? ` One customer put it like this: "${v0}".` : '') +
+      `\n\nWhen you are ready, the next step takes two minutes:\n\n{{link}}\n\nSpeak soon,\nThe team at ${a1}`,
+    cta: 'Read the two-minute version',
+  });
+
+  const f2 = normalizeText(fieldText(intake, 'F2'));
+  const listStatus = f2.length === 0 ? 'none' : MOCK_F2_STALE.test(f2) ? 'cold' : 'warm';
+  const f2Quote = f2.slice(0, 80).replace(/\s+\S*$/, '');
+
+  return {
+    welcome_seq: [
+      'how this works', 'the problem underneath the problem', 'what makes this different',
+      'what customers actually say', 'one useful thing you can do today', 'the questions everyone asks',
+      'an invitation when you are ready',
+    ].map((topic, i) => email(topic, i, i === 3)),
+    promo_seq: [
+      'the case for sorting it now', 'what waiting actually costs', 'proof from people like you',
+      'the questions holding you back', 'the last note in this series',
+    ].map((topic, i) => email(topic, i + 7, i === 2)),
+    list_warmup_note: {
+      list_status: listStatus,
+      note: `Read from F2: "${f2Quote}" — status set from the customer's own description; the warm-up email is included only when the list is cold.`,
+      reintro_email: listStatus === 'cold' ? email('a fresh start for this list', 2) : null,
+    },
+  };
+}
+
+// Keep in sync with S8_PLATFORM_FORMATS in qa/checks.ts (first native format per platform).
+const MOCK_PLATFORM_FORMAT: Record<string, string> = {
+  'facebook': 'text post',
+  'instagram': 'reel',
+  'linkedin': 'text post',
+  'tiktok': 'talking-head video',
+  'x': 'single post',
+  'youtube shorts': 'talking-head short',
+  'google business profile': 'update post',
+};
+
+function mockS8(intake: Intake): unknown {
+  const f5 = Array.isArray(intake.F5) && intake.F5.length > 0 ? (intake.F5 as string[]) : ['Facebook'];
+  const platformA = f5[0] as string;
+  const platformB = f5[1] ?? platformA;
+  const c2 = normalizeText(fieldText(intake, 'C2'));
+
+  // Three distinct C2 slices, word-trimmed — the "proof" lane quotes these.
+  const sliceAt = (start: number) => c2.slice(start, Math.min(start + 60, c2.length)).trim().replace(/\s+\S*$/, '');
+  const slices = [0, Math.floor(c2.length / 3), Math.floor((2 * c2.length) / 3)]
+    .map(sliceAt)
+    .filter((s) => s.length >= 12);
+  while (slices.length > 0 && slices.length < 3) slices.push(slices[0] as string);
+
+  const pillarSeq = ['teach', 'proof', 'inside look', 'conversation', 'offer'];
+  let proofIdx = 0;
+  const posts = Array.from({ length: 30 }, (_, i) => {
+    const day = i + 1;
+    const platform = day % 2 === 1 ? platformA : platformB;
+    const pillar = pillarSeq[i % pillarSeq.length];
+    const isProof = pillar === 'proof' && slices.length > 0;
+    const quote = (isProof ? slices[proofIdx++ % slices.length] : '') ?? '';
+    return {
+      day,
+      platform,
+      format: MOCK_PLATFORM_FORMAT[normalizeText(platform).toLowerCase()] ?? 'text post',
+      hook: `Day ${day}: one thing worth knowing before you buy`,
+      body: isProof
+        ? `A customer put it like this: "${quote}" — real words, quoted exactly as written, with nothing added.`
+        : `A short, useful note for ${platform}: what good work looks like in practice, how it is priced, and what to check before you say yes to anyone.`,
+      cta: 'Send a message to book your slot',
+      pillar,
+    };
+  });
+
+  return { platform_a: platformA, platform_b: platformB, posts };
+}
+
+function mockS9(intake: Intake): unknown {
+  const b2 = Math.max(num(intake, 'B2'), 2);
+  const b3 = num(intake, 'B3');
+  const a1 = fieldText(intake, 'A1');
+  return {
+    snapshot:
+      `${a1} sells what the intake describes, at an average sale of £${b2.toLocaleString('en-GB')} (B2), ` +
+      `winning ${b3} new customers in a typical month (B3). The relaunch points that engine at the one goal the owner named, using the channels that already produce work.`,
+    market:
+      'The buyers are the people described in the profile: they arrive with a specific problem, compare a small number of alternatives, ' +
+      'and choose on trust and clarity rather than price alone. The plan speaks to them in the words they already use, in the places they already look.',
+    offer:
+      `The ladder starts with an entry step and carries the main work in the core engagement at £${b2.toLocaleString('en-GB')}. ` +
+      'Each option promises only what the owner controls: redo the work, or refund what was paid.',
+    goals_90d: `In the owner's words (G1): "${snippet(intake, 'G1', 60)}" — the next 90 days are measured against that goal and nothing longer.`,
+    plan_summary:
+      'The first weeks fix the leaks the audit found; the rest doubles down on the channels that have already produced work. ' +
+      'The busiest week fits inside the hours the owner said they have, and every action names its channel and its purpose.',
+    numbers_table: [
+      { label: 'Average sale value', value: `£${b2.toLocaleString('en-GB')}`, source: 'B2' },
+      { label: 'New customers per month', value: String(b3), source: 'B3' },
+      { label: 'Recommended core price', value: `£${b2.toLocaleString('en-GB')}`, source: 'S4' },
+      { label: 'Baseline in the plan', value: String(b3), source: 'S5' },
+    ],
+  };
+}
+
 export class MockClient implements LlmClient {
   readonly mode = 'mock' as const;
 
@@ -212,6 +442,10 @@ export class MockClient implements LlmClient {
     else if (stage === 'S3') payload = mockS3(this.intake);
     else if (stage === 'S4') payload = mockS4(this.intake);
     else if (stage === 'S5') payload = mockS5(this.intake);
+    else if (stage === 'S6') payload = mockS6(this.intake);
+    else if (stage === 'S7') payload = mockS7(this.intake);
+    else if (stage === 'S8') payload = mockS8(this.intake);
+    else if (stage === 'S9') payload = mockS9(this.intake);
     else throw new Error(`MockClient: no generator for stage ${stage}`);
 
     if (shouldFail && stage !== 'S1' && stage !== 'S2') {

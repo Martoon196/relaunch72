@@ -1,10 +1,14 @@
 import type { AnySchema } from 'ajv';
 import type { Intake, QAIssue } from '../types.js';
 import {
-  qaS1, qaS2, qaS3, qaS4, qaS5,
+  qaS1, qaS2, qaS3, qaS4, qaS5, qaS6, qaS7, qaS8, qaS9,
   S1_INPUT_FIELDS, S2_INPUT_FIELDS, S3_INPUT_FIELDS, S4_INPUT_FIELDS, S5_INPUT_FIELDS,
+  S6_INPUT_FIELDS, S7_INPUT_FIELDS, S8_INPUT_FIELDS, S9_INPUT_FIELDS,
 } from '../qa/checks.js';
-import { S1_SCHEMA, S2_SCHEMA, S3_SCHEMA, S4_SCHEMA, S5_SCHEMA } from './schemas.js';
+import {
+  S1_SCHEMA, S2_SCHEMA, S3_SCHEMA, S4_SCHEMA, S5_SCHEMA,
+  S6_SCHEMA, S7_SCHEMA, S8_SCHEMA, S9_SCHEMA,
+} from './schemas.js';
 
 export interface StageDef {
   id: string;
@@ -22,7 +26,7 @@ export interface StageDef {
   maxTokens: number;
 }
 
-export const STAGE_ORDER = ['S1', 'S2', 'S3', 'S4', 'S5'] as const; // S6–S10 land next in M2
+export const STAGE_ORDER = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9'] as const; // S10 assembly runs after, over the full set
 
 export const STAGES: Record<string, StageDef> = {
   S1: {
@@ -73,6 +77,49 @@ export const STAGES: Record<string, StageDef> = {
     priorStages: ['S1', 'S2', 'S3', 'S4'],
     schema: S5_SCHEMA,
     qa: (output, intake) => qaS5(output, intake),
+    maxTokens: 16000,
+  },
+  // S6–S9 are the first stages whose QA reads prior-stage outputs — the
+  // cross-stage no-invention haystacks trace quotes and figures back to what
+  // earlier stages actually said.
+  S6: {
+    id: 'S6',
+    name: 'Website copy pack',
+    promptFile: 's6-website.md',
+    inputFields: S6_INPUT_FIELDS,
+    priorStages: ['S2', 'S3', 'S4'],
+    schema: S6_SCHEMA,
+    qa: (output, intake, prior) => qaS6(output, intake, prior),
+    maxTokens: 20000, // three pages of copy — the largest text deliverable so far
+  },
+  S7: {
+    id: 'S7',
+    name: 'Email pack',
+    promptFile: 's7-emails.md',
+    inputFields: S7_INPUT_FIELDS,
+    priorStages: ['S2', 'S3', 'S4'],
+    schema: S7_SCHEMA,
+    qa: (output, intake, prior) => qaS7(output, intake, prior),
+    maxTokens: 20000, // 12–13 full emails
+  },
+  S8: {
+    id: 'S8',
+    name: '30 days of social content',
+    promptFile: 's8-social.md',
+    inputFields: S8_INPUT_FIELDS,
+    priorStages: ['S2', 'S3', 'S5'],
+    schema: S8_SCHEMA,
+    qa: (output, intake, prior) => qaS8(output, intake, prior),
+    maxTokens: 20000, // 30 posts
+  },
+  S9: {
+    id: 'S9',
+    name: 'One-page business plan',
+    promptFile: 's9-oneplan.md',
+    inputFields: S9_INPUT_FIELDS,
+    priorStages: ['S1', 'S2', 'S3', 'S4', 'S5'],
+    schema: S9_SCHEMA,
+    qa: (output, intake, prior) => qaS9(output, intake, prior),
     maxTokens: 16000,
   },
 };
