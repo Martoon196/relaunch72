@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { qaS3, qaS4, qaS5 } from '../src/qa/checks.js';
+import { qaS1, qaS3, qaS4, qaS5 } from '../src/qa/checks.js';
 import { MockClient } from '../src/llm/mock.js';
 import { extractJson } from '../src/llm/json.js';
 import { validIntake } from './helpers.js';
@@ -168,4 +168,17 @@ test('qaS5 FATALLY fails an invented reach estimate', async () => {
   const out = (await mockOutput('S5')) as { phases: Array<{ actions: Array<{ action: string }> }> };
   out.phases[0]!.actions[0]!.action = 'Post twice on the group page to reach 4,000 local people.';
   assert.ok(qaS5(out, intake).some((i) => i.check === 's5.number_invented' && i.fatal === true));
+});
+
+test('qaS1 accepts visible arithmetic on an intake-stated number beyond B2/B3', async () => {
+  // helpers intake F3 states "£400" — "2 × £400 = £800" is visible working, not invention
+  const out = (await mockOutput('S1')) as { scores: Array<{ leak_cost_estimate: string }> };
+  out.scores[0]!.leak_cost_estimate = 'Roughly £800/quarter (= 2 wasted ad spends × £400, the magazine ad cost from F3).';
+  assert.ok(!qaS1(out, intake).some((i) => i.check === 's1.leak_number_invented'));
+});
+
+test('qaS1 still rejects a figure with no visible derivation', async () => {
+  const out = (await mockOutput('S1')) as { scores: Array<{ leak_cost_estimate: string }> };
+  out.scores[0]!.leak_cost_estimate = '£123,456/mo based on industry benchmarks';
+  assert.ok(qaS1(out, intake).some((i) => i.check === 's1.leak_number_invented'));
 });

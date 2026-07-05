@@ -37,7 +37,7 @@ export const STAGES: Record<string, StageDef> = {
     priorStages: [],
     schema: S1_SCHEMA,
     qa: (output, intake) => qaS1(output, intake),
-    maxTokens: 16000,
+    maxTokens: 32000, // adaptive thinking shares this budget — headroom prevents attempt-1 truncation (M2 gate lesson)
   },
   S2: {
     id: 'S2',
@@ -47,7 +47,7 @@ export const STAGES: Record<string, StageDef> = {
     priorStages: [], // per spec, S2 consumes intake only — not S1 (decisions.md D-012)
     schema: S2_SCHEMA,
     qa: (output, intake) => qaS2(output, intake),
-    maxTokens: 16000,
+    maxTokens: 32000, // adaptive thinking shares this budget — headroom prevents attempt-1 truncation (M2 gate lesson)
   },
   S3: {
     id: 'S3',
@@ -57,7 +57,7 @@ export const STAGES: Record<string, StageDef> = {
     priorStages: ['S2'],
     schema: S3_SCHEMA,
     qa: (output, intake) => qaS3(output, intake),
-    maxTokens: 16000,
+    maxTokens: 32000, // adaptive thinking shares this budget — headroom prevents attempt-1 truncation (M2 gate lesson)
   },
   S4: {
     id: 'S4',
@@ -67,7 +67,7 @@ export const STAGES: Record<string, StageDef> = {
     priorStages: ['S2', 'S3'],
     schema: S4_SCHEMA,
     qa: (output, intake) => qaS4(output, intake),
-    maxTokens: 16000,
+    maxTokens: 32000, // adaptive thinking shares this budget — headroom prevents attempt-1 truncation (M2 gate lesson)
   },
   S5: {
     id: 'S5',
@@ -77,7 +77,7 @@ export const STAGES: Record<string, StageDef> = {
     priorStages: ['S1', 'S2', 'S3', 'S4'],
     schema: S5_SCHEMA,
     qa: (output, intake) => qaS5(output, intake),
-    maxTokens: 16000,
+    maxTokens: 32000, // adaptive thinking shares this budget — headroom prevents attempt-1 truncation (M2 gate lesson)
   },
   // S6–S9 are the first stages whose QA reads prior-stage outputs — the
   // cross-stage no-invention haystacks trace quotes and figures back to what
@@ -90,7 +90,7 @@ export const STAGES: Record<string, StageDef> = {
     priorStages: ['S2', 'S3', 'S4'],
     schema: S6_SCHEMA,
     qa: (output, intake, prior) => qaS6(output, intake, prior),
-    maxTokens: 20000, // three pages of copy — the largest text deliverable so far
+    maxTokens: 32000, // three pages of copy — the largest text deliverable so far
   },
   S7: {
     id: 'S7',
@@ -100,7 +100,7 @@ export const STAGES: Record<string, StageDef> = {
     priorStages: ['S2', 'S3', 'S4'],
     schema: S7_SCHEMA,
     qa: (output, intake, prior) => qaS7(output, intake, prior),
-    maxTokens: 20000, // 12–13 full emails
+    maxTokens: 32000, // 12–13 full emails
   },
   S8: {
     id: 'S8',
@@ -110,7 +110,7 @@ export const STAGES: Record<string, StageDef> = {
     priorStages: ['S2', 'S3', 'S5'],
     schema: S8_SCHEMA,
     qa: (output, intake, prior) => qaS8(output, intake, prior),
-    maxTokens: 20000, // 30 posts
+    maxTokens: 32000, // 30 posts
   },
   S9: {
     id: 'S9',
@@ -120,6 +120,6 @@ export const STAGES: Record<string, StageDef> = {
     priorStages: ['S1', 'S2', 'S3', 'S4', 'S5'],
     schema: S9_SCHEMA,
     qa: (output, intake, prior) => qaS9(output, intake, prior),
-    maxTokens: 16000,
+    maxTokens: 32000, // adaptive thinking shares this budget — headroom prevents attempt-1 truncation (M2 gate lesson)
   },
 };

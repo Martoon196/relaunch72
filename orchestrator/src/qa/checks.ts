@@ -75,7 +75,19 @@ const IMPLICIT_MULTIPLIERS = [1, 12, 52];
 // days/weeks so "48-hour turnaround" doesn't park a run (≤366 bound applies).
 const PERIOD_AFTER = /^\s*-?\s*(day|week|month|year|yr|wk|mo|hour|hr|minute|min|second|sec)s?\b/i;
 
-function inventedNumbers(text: string, b2: number, b3: number, intakeNumbers: ReadonlySet<number>): number[] {
+function inventedNumbers(
+  text: string,
+  b2: number,
+  b3: number,
+  intakeNumbers: ReadonlySet<number>,
+  /**
+   * Additional arithmetic bases beyond B2/B3 — qaS1 passes the intake-echoed
+   * numbers so "2 people at £300 (F3) = £600" is visible arithmetic, not
+   * invention. Copy stages (S6–S8) deliberately do NOT: prices there must be
+   * exact echoes, never derivations.
+   */
+  arithmeticBases?: ReadonlySet<number>,
+): number[] {
   const numbers = extractNumbers(text);
   const smalls = numbers.filter((n) => !n.percent && n.value > 0 && n.value <= SMALL_NUMBER_MAX).map((n) => n.value);
 
@@ -83,7 +95,7 @@ function inventedNumbers(text: string, b2: number, b3: number, intakeNumbers: Re
   for (const a of smalls) {
     for (const b of [...smalls, ...IMPLICIT_MULTIPLIERS]) multipliers.add(a * b); // "2 jobs × 12 months"
   }
-  const bases = [b2, b3, b2 * b3].filter((b) => b > 0);
+  const bases = [b2, b3, b2 * b3, ...(arithmeticBases ?? [])].filter((b) => b > 0);
 
   const bad: number[] = [];
   for (const { value, percent, raw, before, after } of numbers) {
@@ -200,7 +212,7 @@ export function qaS1(output: unknown, intake: Intake): QAIssue[] {
     } else {
       matchedSpans.add(span);
     }
-    for (const value of inventedNumbers(score.leak_cost_estimate, b2, b3, intakeNumbers)) {
+    for (const value of inventedNumbers(score.leak_cost_estimate, b2, b3, intakeNumbers, intakeNumbers)) {
       issues.push({
         check: 's1.leak_number_invented',
         message: `leak estimate for "${score.category}" contains ${value.toLocaleString('en-GB')}, which is not derived from B2 (£${b2}) or B3 (${b3}) via arithmetic shown in the estimate itself — show the working using only those inputs, e.g. "£${(2 * b2).toLocaleString('en-GB')}/mo (= 2 lost customers × £${b2.toLocaleString('en-GB')} average sale)"`,
@@ -225,7 +237,7 @@ export function qaS1(output: unknown, intake: Intake): QAIssue[] {
   ];
   for (const [section, texts] of proseSections) {
     for (const text of texts) {
-      for (const value of inventedNumbers(text, b2, b3, intakeNumbers)) {
+      for (const value of inventedNumbers(text, b2, b3, intakeNumbers, intakeNumbers)) {
         issues.push({
           check: 's1.number_invented',
           message: `${section} contains the figure ${value.toLocaleString('en-GB')}, which does not appear in the intake and is not derived from B2/B3 — remove it or show the derivation`,

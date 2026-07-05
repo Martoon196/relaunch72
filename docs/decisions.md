@@ -187,3 +187,14 @@ founder-ratified D-017 (HTML→PDF) instead. Currency symbol in the S4 template 
 parameterise when a non-UK beta customer appears. Also: PERIOD_AFTER now treats hours/minutes/
 seconds as period lengths (a real "48-hour turnaround" claim must not park a run; ≤366 bound and
 the human gate still apply).
+
+**D-021 · First live full-stack attempt taught two lessons (2026-07-05).**
+Trades and coach parked at S1 on the first M2-gate attempt. Post-mortem: (1) attempt 1 hit the
+16k max_tokens cap — adaptive thinking shares the output budget and live thinking ran long, so the
+one retry was spent on a truncation critique instead of a QA critique. All stages now run at
+max_tokens 32000 (a cap, not a spend). (2) The leak-arithmetic rule only accepted B2/B3 as bases,
+so the coach model's honest "2 × £300 = £600" (F3 states £300) was rejected as invented.
+`inventedNumbers` now takes explicit extra arithmetic bases; qaS1 passes the intake-echoed number
+set, so visible working on any customer-stated figure passes. Copy stages (S6–S8) deliberately do
+NOT get arithmetic bases — prices there must be exact echoes (S10 cross-doc price check guards the
+gap regardless).
