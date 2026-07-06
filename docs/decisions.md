@@ -292,3 +292,16 @@ LlmRequest → client) at 32k, giving the whole budget to output. S1–S5 and S9
 (they reason). Also added `pipeline --resume runs/<id>` (D-nearby): a parked run reloads its passed
 stages' outputs as prior and continues from where it stopped — no re-running the backbone to retry a
 late stage, and the operational primitive for the strategist's targeted re-runs at S10.
+
+**D-027 · Quote-provenance checks are retryable too; double quotes reserved for real testimony (S7 prompt v1.0.1).**
+Live trades S7 (thinking-off, generated cleanly) parked FATAL on s7.invented_quote: the model wrapped
+rhetorical OBJECTIONS it was rebutting in double quotes ("Someone else will do it cheaper", "What if
+you find something expensive?") — not fabricated testimonials, but the check can't tell a made-up
+customer quote from a rhetorical aside by form. Fix, two parts: (1) s6.quote_fabricated,
+s7.invented_quote and s8.invented_quote are now RETRYABLE (a critique — "that quote isn't real
+testimony" — fixes the formatting slip; persistent fabrication still parks after the retry, and the
+human gate is the final backstop). (2) The S7 prompt (→ v1.0.1) now explicitly reserves double quotes
+for real customer words and forbids quoting objections/worries/rhetorical questions/myths. Extends
+D-025: the whole no-invention family (numbers + quotes) is retryable; only unsupported credential
+words (proof_word_unsupported) and outcome-promise guarantees (risk_reversal_promises_outcome) stay
+FATAL, because those words have no legitimate non-fabrication use.

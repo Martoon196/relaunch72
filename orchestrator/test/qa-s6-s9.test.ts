@@ -38,7 +38,7 @@ test('qaS6 FATALLY fails a quoted passage no input ever said', async () => {
   const out = (await mockOutput('S6')) as unknown as S6Shape;
   out.home.sections[0]!.body += ' As one client told us: "this quote was never said by anyone at all".';
   const issues = qaS6(out, intake, prior);
-  assert.ok(issues.some((i) => i.check === 's6.quote_fabricated' && i.fatal === true));
+  assert.ok(issues.some((i) => i.check === 's6.quote_fabricated'));
 });
 
 test('qaS6 flags an invented percentage and figure (retryable)', async () => {
@@ -104,7 +104,7 @@ test('qaS7 fabricated quote (fatal) and invented percentage (retryable)', async 
   out.welcome_seq[0]!.body += ' As Sarah from Leeds put it: "absolutely transformed everything for our family".';
   out.welcome_seq[1]!.body += ' Readers see a 45% lift on average.';
   const issues = qaS7(out, intake, prior);
-  assert.ok(issues.some((i) => i.check === 's7.invented_quote' && i.fatal === true));
+  assert.ok(issues.some((i) => i.check === 's7.invented_quote'));
   assert.ok(issues.some((i) => i.check === 's7.invented_percentage'));
 });
 
@@ -153,7 +153,7 @@ test('qaS8 flags invented stats (retryable) and fabricated quotes (fatal)', asyn
   out.posts[2]!.body += ' One follower wrote: "the best decision our business ever made, hands down".';
   const issues = qaS8(out, intake, prior);
   assert.ok(issues.some((i) => i.check === 's8.invented_numbers'));
-  assert.ok(issues.some((i) => i.check === 's8.invented_quote' && i.fatal === true));
+  assert.ok(issues.some((i) => i.check === 's8.invented_quote'));
 });
 
 interface S9Shape {

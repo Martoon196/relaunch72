@@ -227,25 +227,33 @@ test('qaS1 accepts evidence whose quote adds a trailing period the source lacks'
   fu.evidence = '(F2) "no list. keep meaning to collect emails but i never get round to it." That expiry re-contact is being ignored.';
   assert.ok(!qaS1(out, iv).some((i) => i.check === 's1.evidence_not_verbatim' && i.message.includes('follow-up')));
 });
-test('qaS6 still FATALLY parks a fabricated quote even with edge tolerance', async () => {
+test('qaS6 still flags a fabricated quote even with edge tolerance', async () => {
   const p = await priors();
   const out = (await mock('S6')) as { about: { body: string } };
   out.about.body += ' A client raved: "this is the best decision our whole family ever made".';
-  assert.ok(qaS6(out, intake, p).some((i) => i.check === 's6.quote_fabricated' && i.fatal === true));
+  assert.ok(qaS6(out, intake, p).some((i) => i.check === 's6.quote_fabricated'));
 });
 
-// ── no-invention policy: numbers retryable, fabricated proof fatal ──────────
-test('invented numbers are retryable, fabricated quotes/credentials/outcomes are fatal', async () => {
+// ── no-invention policy: numbers & quotes retryable, unsupported credentials
+// and outcome promises stay fatal ──────────────────────────────────────────
+test('invented numbers/quotes are retryable; unsupported credentials/outcomes are fatal', async () => {
   const p = await priors();
   // an invented number gets the one retry (not fatal) — the model removes it
   const n = (await mock('S4')) as { category_note: string };
   n.category_note += ' Rivals quoted £4,317 last week.';
   const numIssues = qaS4(n, intake, p).filter((i) => i.check === 's4.number_invented');
   assert.ok(numIssues.length > 0 && numIssues.every((i) => i.fatal !== true));
-  // a fabricated testimonial / credential / outcome promise stays fatal
+  // a fabricated testimonial is caught, and retryable (a rhetorical-quote slip
+  // fixes on the critique; persistent fabrication still parks after retry)
   const q = (await mock('S6')) as { about: { body: string } };
   q.about.body += ' A buyer said: "the most life-changing service we have ever paid for".';
-  assert.ok(qaS6(q, intake, p).some((i) => i.check === 's6.quote_fabricated' && i.fatal === true));
+  const qIssues = qaS6(q, intake, p).filter((i) => i.check === 's6.quote_fabricated');
+  assert.ok(qIssues.length > 0 && qIssues.every((i) => i.fatal !== true));
+  // unsupported credential words and outcome-promise guarantees stay FATAL —
+  // they have no legitimate non-fabrication use
+  const c = (await mock('S6')) as { about: { body: string } };
+  c.about.body += ' Our award-winning, certified team leads the field.';
+  assert.ok(qaS6(c, intake, p).some((i) => i.check === 's6.proof_word_unsupported' && i.fatal === true));
   const o = (await mock('S4')) as { risk_reversal_options: string[] };
   o.risk_reversal_options[0] = 'We guarantee results or your money back.';
   assert.ok(qaS4(o, intake, p).some((i) => i.check === 's4.risk_reversal_promises_outcome' && i.fatal === true));

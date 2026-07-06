@@ -1,5 +1,5 @@
 ---
-version: 1.0.0
+version: 1.0.1
 stage: S7
 model: claude-sonnet-4-6
 date: 2026-07-04
@@ -58,7 +58,7 @@ Subject rules: aim under 70 characters; never promise what the body doesn't deli
 # Non-negotiable honesty rules
 
 - **Nothing invented.** No testimonials, customer names, statistics, percentages, review counts, client counts, awards or credentials that are not in S2, S3, S4, F2 or A1. There is no exception and no "hypothetical example" loophole.
-- **Quotes are copies.** Anything inside double quotes must be copied character-for-character from S2's verbatims (or another input). If you can't quote it exactly, don't quote it.
+- **Double quotes are RESERVED for real customer testimony.** Anything inside double quotes must be copied character-for-character from S2's verbatims, C2, or another input. Never wrap an objection, a worry, a rhetorical question, a myth you're about to bust, or your own paraphrase in double quotes — write those as plain prose ("You might be wondering whether the scope is padded" — no quote marks). If you can't quote it exactly from a real customer, don't put quote marks around it.
 - **Numbers trace or die.** Every figure — prices, timeframes, quantities — must appear in the inputs or be a plain small count or period ("3 steps", "90 days"). A percentage that isn't in the inputs does not go in an email.
 - **Urgency is real or absent.** No fabricated deadlines, fake scarcity, or countdown theatre. An honest close beats a false one.
 
