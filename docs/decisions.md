@@ -281,3 +281,14 @@ and outcome-promise guarantees (risk_reversal_promises_outcome). The no-fabricat
 intact — a persistent invented number still fails QA and parks after its retry; it just gets the one
 retry the spec promises. Supersedes the blanket-fatal number stance in D-018. Locked by a
 policy-assertion test.
+
+**D-026 · Adaptive thinking OFF for the large copy stages (S6/S7/S8); + a `--resume` CLI.**
+Live trades reached S1–S6 PASS, then S7 (12+ emails) returned an EMPTY response: with adaptive
+thinking on a large structured deliverable, the model spends the whole token budget reasoning and
+hits max_tokens before emitting any JSON — raising the ceiling to 64k made it worse (more room to
+think, still no output). The hard reasoning is already done in S1–S5; S6/S7/S8 render decided
+strategy into a big document. So those three stages now run with `thinking: false` (StageDef flag →
+LlmRequest → client) at 32k, giving the whole budget to output. S1–S5 and S9 keep adaptive thinking
+(they reason). Also added `pipeline --resume runs/<id>` (D-nearby): a parked run reloads its passed
+stages' outputs as prior and continues from where it stopped — no re-running the backbone to retry a
+late stage, and the operational primitive for the strategist's targeted re-runs at S10.

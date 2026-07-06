@@ -96,6 +96,7 @@ export async function runStage(
       maxTokens: def.maxTokens,
       system: prompt.body,
       messages,
+      thinking: def.thinking,
       meta: { stage: def.id, attempt },
     });
 

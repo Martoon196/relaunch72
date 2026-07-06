@@ -10,6 +10,8 @@ export interface LlmRequest {
   maxTokens: number;
   system: string;
   messages: LlmMessage[];
+  /** Adaptive thinking (default on). Large copy stages pass false — see StageDef.thinking. */
+  thinking?: boolean;
   /** Runner metadata (used by the mock client; ignored by the real one). */
   meta?: { stage: string; attempt: number };
 }
@@ -48,8 +50,10 @@ export class AnthropicClient implements LlmClient {
       system: req.system,
       messages: req.messages.map((m) => ({ role: m.role, content: m.content })),
     };
-    // Adaptive thinking is a 4.6+ feature; Haiku-class models reject it.
-    if (!/haiku/i.test(req.model)) {
+    // Adaptive thinking is a 4.6+ feature; Haiku-class models reject it, and
+    // large output-only stages disable it (req.thinking === false) so the token
+    // budget goes to the deliverable, not to reasoning it doesn't need.
+    if (!/haiku/i.test(req.model) && req.thinking !== false) {
       params.thinking = { type: 'adaptive' };
     }
     // Streamed transport, collected to one message: the SDK requires

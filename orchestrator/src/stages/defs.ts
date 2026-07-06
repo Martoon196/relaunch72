@@ -24,6 +24,14 @@ export interface StageDef {
   schema: AnySchema;
   qa: (output: unknown, intake: Intake, prior: Record<string, unknown>) => QAIssue[];
   maxTokens: number;
+  /**
+   * Adaptive thinking (default on). The large copy stages (S6/S7/S8) turn it
+   * OFF: they render already-decided strategy (S1–S5) into a big structured
+   * document, and adaptive thinking on 12 emails / 30 posts consumes the whole
+   * token budget on reasoning and truncates the JSON before it's emitted. The
+   * hard reasoning is upstream; these stages just need output room.
+   */
+  thinking?: boolean;
 }
 
 export const STAGE_ORDER = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9'] as const; // S10 assembly runs after, over the full set
@@ -90,7 +98,8 @@ export const STAGES: Record<string, StageDef> = {
     priorStages: ['S2', 'S3', 'S4'],
     schema: S6_SCHEMA,
     qa: (output, intake, prior) => qaS6(output, intake, prior),
-    maxTokens: 64000, // three pages of copy — adaptive thinking shares the budget
+    maxTokens: 32000, // three pages of copy; thinking off so all budget is output
+    thinking: false,
   },
   S7: {
     id: 'S7',
@@ -100,7 +109,8 @@ export const STAGES: Record<string, StageDef> = {
     priorStages: ['S2', 'S3', 'S4'],
     schema: S7_SCHEMA,
     qa: (output, intake, prior) => qaS7(output, intake, prior),
-    maxTokens: 64000, // 12–13 full emails — adaptive thinking shares the budget
+    maxTokens: 32000, // 12–13 full emails; thinking off so all budget is output
+    thinking: false,
   },
   S8: {
     id: 'S8',
@@ -110,7 +120,8 @@ export const STAGES: Record<string, StageDef> = {
     priorStages: ['S2', 'S3', 'S5'],
     schema: S8_SCHEMA,
     qa: (output, intake, prior) => qaS8(output, intake, prior),
-    maxTokens: 64000, // 30 posts — adaptive thinking shares the budget
+    maxTokens: 32000, // 30 posts; thinking off so all budget is output
+    thinking: false,
   },
   S9: {
     id: 'S9',
