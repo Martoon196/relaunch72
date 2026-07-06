@@ -872,16 +872,25 @@ export function qaS5(output: unknown, intake: Intake, prior: Record<string, unkn
   }
 
   // Self-consistency: no action may run on a channel the plan itself forbids.
-  // Flag only when the action's channel is WHOLLY inside a do_not_do entry
-  // (every channel token present) — a single shared platform token must not
-  // collide "Facebook groups" (an action) with "paid Facebook boosts" (banned).
+  // do_not_do entries are verbose prose that often mention a platform in an
+  // ALLOWED context ("paid boosts flopped — organic posts to local groups are
+  // proven"), so a bare platform/generic token is not a reliable collision.
+  // Flag only when the action channel and a do_not_do entry share a TACTIC
+  // token — a specific method (magazine, leaflet, paid, boost), not a platform
+  // name or a generic word. This catches "don't do magazine ads" + a magazine
+  // action, while never colliding organic "FB groups" with a paid-boost ban.
+  const CHANNEL_GENERIC = new Set([
+    'facebook', 'instagram', 'twitter', 'tiktok', 'youtube', 'linkedin', 'google', 'group', 'social',
+    'post', 'online', 'offline', 'local', 'page', 'profile', 'search', 'video', 'content', 'website',
+    'site', 'reel', 'story', 'feed', 'channel', 'platform', 'account', 'listing', 'business', 'email',
+  ]);
   for (const phase of out.phases) {
     for (const action of phase.actions) {
-      const ct = tokensOf(action.channel);
+      const ct = new Set([...tokensOf(action.channel)].map(stemToken).filter((t) => !CHANNEL_GENERIC.has(t)));
       if (ct.size === 0) continue;
       const clash = out.do_not_do.find((d) => {
         const dTokens = new Set([...tokensOf(d)].map(stemToken));
-        return [...ct].every((t) => dTokens.has(stemToken(t)));
+        return [...ct].some((t) => dTokens.has(t));
       });
       if (clash) {
         issues.push({

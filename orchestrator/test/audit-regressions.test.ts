@@ -203,3 +203,17 @@ test('qaS9 accepts an expanded revenue band and a spelled-out goal', async () =>
   assert.ok(!has(issues, 's9.number_invented'));
   assert.ok(!has(issues, 's9.goal_not_g1'));
 });
+
+// ── S5 forbidden-channel: verbose do_not_do that endorses the channel ───────
+test('qaS5 does not flag an organic channel a verbose do_not_do actually endorses', async () => {
+  const p = await priors();
+  const out = (await mock('S5')) as { phases: Array<{ actions: Array<{ channel: string }> }>; do_not_do: string[] };
+  // A real S5 do_not_do paragraph: bans PAID boosts, endorses organic groups.
+  out.do_not_do = ['Paid social boosts on any platform: a £40 paid boost returned noise. Organic posts to local groups are already proven to pull enquiries at no cost — every social action here is organic only.'];
+  out.phases[0]!.actions[0]!.channel = 'FB groups';
+  assert.ok(!has(qaS5(out, intake, p), 's5.action_on_forbidden_channel'));
+  // …but reusing the actual banned tactic still flags.
+  out.do_not_do = ['No more local magazine advertising — it flopped last year.'];
+  out.phases[0]!.actions[0]!.channel = 'local magazine advert';
+  assert.ok(has(qaS5(out, intake, p), 's5.action_on_forbidden_channel'));
+});
