@@ -1,0 +1,99 @@
+{
+  "home": {
+    "hero_variants": [
+      {
+        "angle": "problem-first",
+        "headline": "The drawer is full. Your dog is still shaking. There is one more thing to try.",
+        "subhead": "Steady Hound makes rescue-tested settle kit for anxious dogs with odd-shaped builds — sized to actually stay on, shipped with a handwritten guide on introducing things slowly, and backed by a 60-night return. UK-wide delivery from Wiltshire.",
+        "cta": "See the Settle Coat — £58 with a 60-night return"
+      },
+      {
+        "angle": "evidence-first",
+        "headline": "Every product is tested on twelve genuinely anxious rescue dogs. The failures are published.",
+        "subhead": "If your dog has a whippet chest, a staffie build, or a history that makes new things hard — Steady Hound kit was designed for him. Not for the Labrador on the packaging. Delivered UK-wide, with a handwritten guide in every box.",
+        "cta": "Read how the Settle Coat is made — then decide"
+      }
+    ],
+    "sections": [
+      {
+        "id": "benefits",
+        "head": "Your evenings in October. A weekend away you can actually book. Permission to stop blaming yourself.",
+        "body": "That is what this kit is really for. Not just a coat that stays on — though it does — but the thing underneath: watching television without one eye on the window, not dreading November before it arrives, and quietly knowing you have done everything you can for a dog who came to you already carrying something. When the coat works, the relief is not small. Neither is the thing you get back.",
+        "cta": "See the Settle Coat — and what comes in the box"
+      },
+      {
+        "id": "how-it-works",
+        "head": "Rescue-tested before it reaches your door. Introduced slowly when it does.",
+        "body": "Every product goes through a trial panel of twelve genuinely anxious rescue dogs before it goes on sale. The fail rate is published — the Slow-Down Feeder took three redesigns, and that is stated plainly on the product page. So by the time the coat reaches your door, it has already been through the versions that didn't work. You don't have to be the one who finds them. Inside every box: a handwritten guide on how to introduce the coat slowly, because your dog needs to come to new things at his own pace, not yours.",
+        "cta": "See the full Calm Kit — coat, den bed, and feeder together"
+      },
+      {
+        "id": "proof",
+        "head": "What rescue dog owners say, after the drawer and the diffuser and the two sessions with the behaviourist.",
+        "body": "\"First bonfire night in three years where Willow slept instead of shaking herself sick. I actually cried a bit folding the coat up the next morning. Worth every penny.\"\n\n\"honestly didnt expect much, we've got a drawer full of 'calming' stuff that did nothing. The den bed is the first thing Ted has ever chosen to get into on his own. He takes himself off to it now when the bins get collected.\"\n\n\"Ordered Tuesday, arrived Thursday with a handwritten note on how to introduce the coat slowly. Nobody does that anymore. Fits his weird whippet chest perfectly too.\"\n\nThese are the people who had already tried everything. They are why this business exists."
+      },
+      {
+        "id": "objections",
+        "head": "Yes, it costs more than the one on Amazon. Here is exactly what that buys.",
+        "body": "The £14 wrap slid off in forty seconds. That is not a guess — it is what the people who are now writing those words above had already been through. The difference at Steady Hound is not a story about craftsmanship or heritage. It is concrete: twelve rescue dogs tested the coat before it was sold, the fail rate is recorded, and the sizing was built for whippet chests and barrel-chested staffies — not for a dog who already fits everything. If the coat is not right for your dog's build within 60 nights, return it for a full refund. No explanation required. You have spent enough money on things that didn't work. This should not feel like another gamble.",
+        "cta": "Start with the Settle Coat — £58, free Intro Treat Pouches included, 60-night return"
+      },
+      {
+        "id": "who-its-for",
+        "head": "This kit is for a specific kind of dog owner. You will know within two sentences if it is you.",
+        "body": "You adopted a rescue dog who came with something already in him. You have done the work — the walks at dawn, the behaviourist sessions, the pile of calming sprays and diffusers and wraps that live in a drawer now. You are not looking for an overnight fix and you do not believe in them anymore. You want something built for a dog with a history, sized for his actual shape, and introduced slowly enough that he might actually accept it. If that is your situation, Steady Hound was made for it. If you are expecting to strap a coat on cold at a fireworks display and have a calm dog by the second bang, this is not the right fit — and it is better to say so plainly."
+      },
+      {
+        "id": "service-area",
+        "head": "Shipped UK-wide. Next-day to most of the mainland.",
+        "body": "Steady Hound is based in Malmesbury, Wiltshire — a spare room that became a warehouse. Orders ship UK-wide, with next-day delivery available to most of the mainland. Every parcel goes out with a handwritten intro guide, because the guide matters as much as the product. If you have a question before you order or after the coat arrives, the founder answers the DMs. Not a support ticket system. Her."
+      }
+    ]
+  },
+  "about": {
+    "head": "Why this kit exists, and why it is made the way it is.",
+    "body": "The business started from a specific frustration: every calming product for dogs seemed to be designed for the dog on the packaging, which was never the dog the owner actually had. A lurcher. A staffie cross. A whippet with the kind of chest that defeats every coat built for something rounder. And underneath the fit problem, a deeper one — almost everything in this category makes the same promise and delivers the same drawer of things that didn't work.\n\nSteady Hound operates from Malmesbury, Wiltshire, and ships UK-wide. The products are not made in a hurry. Every item goes through a trial panel of twelve genuinely anxious rescue dogs before it is offered for sale. The Slow-Down Feeder took three redesigns. That is published, not buried — because a buyer who has already spent money on two behaviourist sessions and a pheromone diffuser deserves to know what survived before she spends again.\n\nThe sizing exists for the same reason. Sizing videos for odd-shaped rescues were not an afterthought. They were the point. A coat that slides off in forty seconds does not help the dog; it helps the return rate of whoever made it.\n\nEvery box ships with a handwritten guide on how to introduce the coat slowly, because a dog who has been shaking himself sick through bonfire night for three years is not a dog who needs a coat strapped on cold at a loud event. He is a dog who needs slow. The guide knows that already.\n\nThe DMs are answered by the founder. That is not a positioning claim. It is just the way the business is run, and it matters when someone messages at 10pm on the 5th of November because the dog is still not settled.\n\nYour dog isn't broken. He has just never had something built for dogs like him."
+  },
+  "sales_page": {
+    "head": "The Settle Coat — rescue-tested settle kit for anxious dogs who've never been the right shape for anything else.",
+    "subhead": "£58. Sized for odd builds. Tested on twelve genuinely anxious rescues. Shipped with a handwritten introduction guide. 60-night return, no explanation required.",
+    "sections": [
+      {
+        "id": "problem",
+        "head": "You have already done everything a reasonable person does. The drawer is the proof.",
+        "body": "The diffuser that made the hallway smell odd. The wrap from Amazon that he wriggled out of in forty seconds. The behaviourist sessions where you did the homework faithfully and saw no lasting change. You set your alarm for 6am so the walk finishes before the neighbourhood wakes up, before someone else's dog comes around a corner. You have quietly stopped booking weekends away. October arrives and the dread arrives with it.\n\nThis is not a failure of effort. It is a failure of what has been available to you. Most calming products are designed for a generic dog and a moment of panic — not for a rescue with a history, not for a lurcher chest or a staffie build, and not for an owner who already knows that nothing that promises instant calm is going to keep that promise.\n\nThe cost of staying here is not just the money already spent. It is another November. Another 5th of November where you sit on the floor next to a dog who cannot settle and you cannot help.",
+        "cta": "See what the Settle Coat is and how it is made"
+      },
+      {
+        "id": "offer",
+        "head": "The Settle Coat — £58. This is what comes in the parcel.",
+        "body": "The Settle Coat is a pressure wrap cut for the builds that defeat everything else — whippet chests, barrel-chested staffies, the lurcher shapes that sit outside every sizing chart. It ships at £58. In the same parcel: one pack of Intro Treat Pouches (long-lasting chews for coat introduction sessions) at no extra charge, and a handwritten guide on how to introduce the coat slowly. Not a leaflet. A handwritten note, because the guide is as important as the coat.\n\nBefore the coat was sold, it went through a trial panel of twelve genuinely anxious rescue dogs. The fail rate is published. This version is the one that survived the versions that didn't.\n\nThe 60-night return policy means that if the coat is not right for your dog's build within 60 nights of receiving it, you return it for a full refund. No explanation required. Returns that come back muddy are washed and donated to Otterbourne Rescue — nothing is binned.\n\nThe Settle Coat is the beginning. When it works, the Den Bed and Slow-Down Feeder become the natural next step — and a coat purchase counts as credit toward the full Calm Kit (£165).",
+        "cta": "Order the Settle Coat — £58, Intro Treat Pouches included, 60-night return"
+      },
+      {
+        "id": "proof",
+        "head": "Three owners. All of them had the drawer.",
+        "body": "\"First bonfire night in three years where Willow slept instead of shaking herself sick. I actually cried a bit folding the coat up the next morning. Worth every penny.\"\n\nWillow's owner had been through the diffusers, the wraps, and the alarm set for 6am. That is the kind of relief worth taking seriously.\n\n\"honestly didnt expect much, we've got a drawer full of 'calming' stuff that did nothing. The den bed is the first thing Ted has ever chosen to get into on his own. He takes himself off to it now when the bins get collected.\"\n\nTed took himself to the den bed. Nobody put him there. That is the measure.\n\n\"Ordered Tuesday, arrived Thursday with a handwritten note on how to introduce the coat slowly. Nobody does that anymore. Fits his weird whippet chest perfectly too.\"\n\nThe whippet chest that defeats every other coat. The note that already knows the dog needs slow. Both of those things matter, and both were deliberate.",
+        "cta": "See the Settle Coat and how it was built"
+      },
+      {
+        "id": "objections",
+        "head": "The three things that are probably in your head right now, answered plainly.",
+        "body": "First: the price. £58 against a £14 Amazon wrap is a real comparison and it deserves a real answer. The £14 wrap is built for a generic dog, not tested on a genuinely anxious rescue, and has no sizing work behind it for odd builds. When it slides off in forty seconds — and it does — the £14 is gone and the dog is still shaking. At £58, backed by a 60-night return and a trial record from twelve rescue dogs, the arithmetic is different. You have already spent more than this on things that did not work.\n\nSecond: the fit. The coat was cut specifically for the builds that defeat everything else — whippet chests, staffie barrels, the lurcher shapes that no standard sizing accommodates. Sizing videos for odd-shaped rescues exist on the product page before you order. If the coat still does not fit within 60 nights, return it for a full refund.\n\nThird: whether this one will be different. That is the hardest one, and no copy on a webpage can answer it completely. What is available: twelve genuinely anxious rescue dogs tested the coat, the failures during development are published, and the founder answers the DMs. If the coat does not work within 60 nights, the money comes back. That is what can honestly be said.",
+        "cta": "Order the Settle Coat — 60-night return, no explanation required"
+      },
+      {
+        "id": "guarantee",
+        "head": "60 nights. If it is not right for your dog, the money comes back.",
+        "body": "The 60-night return policy is straightforward: if within 60 nights you decide the Settle Coat is not right for your dog, return it for a full refund. No explanation required. Returns that come back muddy are washed and donated to Otterbourne Rescue — nothing is binned, and the policy can be offered without conditions attached to the coat's condition.\n\nThis is not a guarantee that the coat will calm your dog. No product can promise that, and any that does is not being straight with you. What this is: a concrete answer to the question of whether this is another gamble you cannot afford. If the coat is not right for your dog's build, or if you decide within 60 nights that it is not the right fit, return it. That is the promise."
+      },
+      {
+        "id": "next-step",
+        "head": "When the coat works: the Calm Kit is what comes next.",
+        "body": "The Settle Coat opens the door. The Den Bed and Slow-Down Feeder are where the dogs who do best end up — because the coat helps him settle during a trigger, the bed gives him somewhere to decompress between events, and the feeder slows down a stress-eater at mealtimes. The three products bought separately come to £201. As the Calm Kit, they are £165 — a £36 saving, and the reviews from people who bought the whole system are the best ones.\n\nA Settle Coat purchase counts as credit toward the Calm Kit. When you are ready to add the bed and feeder, you pay £107 — the £58 you already spent is not dead money, it is the first step.\n\nThe Full Settle System (Calm Kit plus Intro Treat Pouches) is available at £175 for buyers who want everything in the first parcel, including the chews for coat introduction sessions. All individual prices are shown alongside the kit on the product page so the comparison is plain.",
+        "cta": "Start with the Settle Coat — £58 — and see the Calm Kit when you are ready"
+      }
+    ],
+    "final_cta": "Order the Settle Coat — £58, Intro Treat Pouches included, 60-night return. Your dog isn't broken. He has just never had something built for dogs like him."
+  }
+}

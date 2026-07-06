@@ -1,0 +1,137 @@
+{
+  "north_star": "Get the Calm Kit bundle onto 25% of all orders before fireworks season opens in October — up from 11% now, within 90 days.",
+  "phases": [
+    {
+      "days": "Days 1–30",
+      "theme": "Stop the leaks — build the Calm Kit order path, restart the email list, and redirect wasted budget so every warm visitor lands on a page that sells the bundle",
+      "actions": [
+        {
+          "action": "Pause all Google Shopping campaigns today. The thumbnail strips the rescue-panel story at the exact point of price comparison and no budget increase fixes a format mismatch. Note the freed monthly spend to redirect toward a paid Reel boost in Phase 3.",
+          "hours": 0.25,
+          "channel": "Paid ads",
+          "depends_on": ""
+        },
+        {
+          "action": "Build a dedicated Calm Kit page on your website. Open with the 12-rescue-panel story and the feeder's three-redesign detail. Display individual prices — coat £58, bed £119, feeder £24, total £201 separately — alongside the kit price of £165 so the £36 saving is concrete rather than implied. Include the 60-night return policy in the same view. Swap your Instagram bio link to this page before anything else goes live.",
+          "hours": 3,
+          "channel": "Website",
+          "depends_on": ""
+        },
+        {
+          "action": "Send one broadcast email to your 2,400 subscribers this week. Open with two sentences on what fireworks season means for an anxious dog. Include a real photo of Bramble in the coat. Keep it under 250 words. Link directly to the new Calm Kit page — not the homepage. This list has had one email since June; this repairs that before the highest-intent period of the year.",
+          "hours": 2,
+          "channel": "Email",
+          "depends_on": "Build a dedicated Calm Kit page"
+        },
+        {
+          "action": "Open your 5-part welcome email series and check whether any email names the Calm Kit by name, shows the kit price arithmetic (coat £58 + bed £119 + feeder £24 = £201 separately vs £165 as the kit), and links to the bundle page. If not, update the most natural email in the sequence — likely email 3 or 4 — to do all three. Your welcome series already triples bundle conversion; it should send people to the right page.",
+          "hours": 1,
+          "channel": "Email",
+          "depends_on": "Build a dedicated Calm Kit page"
+        },
+        {
+          "action": "Add two sentences to each individual product page for the coat, bed, and feeder: the kit price arithmetic and a link to the Calm Kit page. Write the block once, then copy and paste it to each page — do not rewrite it three times.",
+          "hours": 1,
+          "channel": "Website",
+          "depends_on": "Build a dedicated Calm Kit page"
+        },
+        {
+          "action": "Find the 2 existing Bramble Reels that drove the most first orders — check your DM history or order notes for any direct references to a specific video. Rewrite each caption to end with one line: 'The full Calm Kit — coat, bed, and feeder — is linked in bio.' Re-share each to Stories. No new filming needed.",
+          "hours": 1.5,
+          "channel": "Instagram",
+          "depends_on": "Build a dedicated Calm Kit page"
+        }
+      ]
+    },
+    {
+      "days": "Days 31–60",
+      "theme": "Drive bundle-aware traffic — weekly Reels and fortnightly emails build Calm Kit recognition before the Den Bed launches and fireworks season opens",
+      "actions": [
+        {
+          "action": "Film and post a Reel showing Bramble with all three Calm Kit products in frame — coat on, den bed in the corner, feeder on the mat. Under 60 seconds, no script needed. Caption: 'This is what the whole system looks like. Coat for triggers. Bed for decompressing after. Feeder to slow down a stress-eater. All three are in the Calm Kit — linked in bio.'",
+          "hours": 2,
+          "channel": "Instagram",
+          "depends_on": "Build a dedicated Calm Kit page"
+        },
+        {
+          "action": "Send your second broadcast email built around the Small-dog Den Bed launch. Under 250 words. Include the kit price arithmetic — coat £58, bed £119, feeder £24 = £201 separately, £165 as the Calm Kit — and link to the bundle page. This re-establishes the fortnightly cadence you have already identified as needing to restart before October.",
+          "hours": 1.5,
+          "channel": "Email",
+          "depends_on": ""
+        },
+        {
+          "action": "Film and post the Small-dog Den Bed launch Reel — show Bramble choosing to go into the den bed on her own. Caption with the date and: 'She takes herself off to it now when things feel like too much. The Den Bed is part of the Calm Kit — linked in bio.' Check the Den Bed is in stock and ready to ship before you film, not after.",
+          "hours": 2,
+          "channel": "Instagram",
+          "depends_on": ""
+        },
+        {
+          "action": "Post a genuine, helpful message in 2 rescue Facebook groups you already belong to. Share 3 or 4 concrete steps for introducing an anxiety coat slowly to a rescue dog — this content is already in your handwritten guide, so you are not writing from scratch. Mention Steady Hound and link to the Calm Kit page only where group rules explicitly allow. Write as a rescue owner, not a retailer.",
+          "hours": 1,
+          "channel": "FB groups",
+          "depends_on": ""
+        },
+        {
+          "action": "Email 2 or 3 rescue charity newsletters your buyers use. Under 200 words: one Bramble photo, a sentence on who the Calm Kit is for, and an offer to write a short 'introducing the coat slowly' piece for their next issue at no charge in exchange for a mention. Concrete value to their readers, not a product pitch.",
+          "hours": 1,
+          "channel": "Rescue charity newsletters",
+          "depends_on": ""
+        },
+        {
+          "action": "Send your third broadcast email — open with a real customer DM or verbatim review (use their exact words, not a paraphrase). Close with the Calm Kit link and the price arithmetic. Reusing an existing customer's own words keeps writing time under an hour and is more credible than any copy you draft from scratch.",
+          "hours": 1,
+          "channel": "Email",
+          "depends_on": ""
+        }
+      ]
+    },
+    {
+      "days": "Days 61–90",
+      "theme": "Convert at peak — the fireworks-season email sequence and a boosted Reel reach every warm contact before bonfire night with a clear path to buying the Calm Kit",
+      "actions": [
+        {
+          "action": "Write all three fireworks-season emails in one sitting and schedule them before Phase 3 begins. Email 1 on Day 62: Bramble's own fireworks story, Calm Kit link, price arithmetic. Email 2 on Day 69: one verbatim customer review about the first bonfire night that worked, plus the kit link. Email 3 on Day 76: 'Order by [date] to arrive before 5 November' — fill in the exact date from your courier's lead times before scheduling; do not leave it as a placeholder. Under 250 words each.",
+          "hours": 3,
+          "channel": "Email",
+          "depends_on": ""
+        },
+        {
+          "action": "Before the email sequence sends, check your packing capacity at 25% Calm Kit attach rate. Take your current monthly order count, multiply by 25%, and confirm that number of kit orders per week is manageable when bonfire night volume stacks on top. Your intake flags capacity as a stretch and your partner is on full-time packing from August — if the numbers do not add up, add a low-stock message to the bundle page and cap kit inventory at what you can actually fulfill rather than overselling into your peak.",
+          "hours": 1,
+          "channel": "Operations",
+          "depends_on": "Write all three fireworks-season emails"
+        },
+        {
+          "action": "Pick the single Reel from Phase 2 with the most saves or shares. Boost it on Instagram using most of your monthly budget for the two weeks running into bonfire night. Before spending anything, confirm your Instagram bio link still points to the Calm Kit page. Use Instagram's suggested similar-audience setting as a starting point — no manual targeting required.",
+          "hours": 0.5,
+          "channel": "Instagram",
+          "depends_on": "Calm Kit system Reel from Phase 2"
+        },
+        {
+          "action": "Film one short Reel in the final week of October — Bramble settled during a loud noise, no staging needed. Caption: 'October. Still in the coat.' Under 30 seconds. Post it the same day you film it. Real-time proof lands hardest when your buyer's dread about bonfire night is already building.",
+          "hours": 1.5,
+          "channel": "Instagram",
+          "depends_on": ""
+        },
+        {
+          "action": "Post once more in the same rescue Facebook groups from Phase 2 — a fireworks-week post written as a rescue owner: what Bramble's routine looks like the week before bonfire night, 3 or 4 concrete steps. Link to the Calm Kit page at the end where group rules allow.",
+          "hours": 0.5,
+          "channel": "FB groups",
+          "depends_on": "Rescue Facebook groups post from Phase 2"
+        }
+      ]
+    }
+  ],
+  "channel_priorities": [
+    "Email — 2,400 opted-in subscribers and a welcome series that already triples bundle conversion rate; the fastest, lowest-cost path to more Calm Kit orders",
+    "Instagram Reels — the proven first-order driver for this business via Bramble content; double down on what is already working rather than testing anything new",
+    "Facebook groups — rescue owner communities where your buyers already research purchases, trust peer recommendations over brand posts, and make decisions before they visit your website",
+    "Rescue charity newsletters — direct access to high-intent rescue adopters who match the buyer profile exactly; costs only writing time and reaches people your current channels do not"
+  ],
+  "do_not_do": [
+    "No Google Shopping ads: the thumbnail format makes your £58 Settle Coat visually identical to a £14 Amazon lookalike and strips the rescue-panel story — the only thing that justifies the price difference — at the exact moment of comparison. You spent the equivalent of a full month at the top of your G3 range testing this over two months and got no measurable return.",
+    "No craft fairs: the Cirencester fair sold two feeders to the wrong crowd. A general craft fair audience does not contain enough rescue dog owners with anxious dogs to justify a day away from the business, especially during a 90-day window that ends at fireworks season.",
+    "No giveaways with large general pet accounts: your last collaboration brought 900 followers who bought nothing. Follower count does not predict purchase when the audience has not self-selected around an anxious dog problem. Any future collaboration must be rescue-specific and its audience must be verified before you commit time or product."
+  ],
+  "weekly_hours_total": 6
+}

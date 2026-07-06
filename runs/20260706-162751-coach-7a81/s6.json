@@ -1,0 +1,97 @@
+{
+  "home": {
+    "hero_variants": [
+      {
+        "angle": "problem-first",
+        "headline": "You were promoted because you were the best engineer in the room. Nobody told you that job is over.",
+        "subhead": "Deep End Coaching works with software engineers across the UK who are quietly drowning in their first management role — the 1:1s, the difficult conversations, the 2am certainty they've been found out. Nine years as an actual engineering manager means you get the job explained from the inside, not a slide deck of frameworks.",
+        "cta": "Book a Lifeboat session — 90 minutes on the specific problem in front of you, £250"
+      },
+      {
+        "angle": "evidence-first",
+        "headline": "Six weeks in, engineers run difficult conversations without feeling sick — and their teams trust them more for it.",
+        "subhead": "That is what learning the job you were actually promoted into looks like. Deep End Coaching works with engineers turned managers across the UK — by Zoom, or once a quarter in person near Temple Meads, Bristol. The work is built from nine years inside the engineering manager role, not from HR or L&D.",
+        "cta": "See how the work runs — start with a £250 Lifeboat session"
+      }
+    ],
+    "sections": [
+      {
+        "id": "who-its-for",
+        "head": "You are not failing. You are doing a different job with no instructions.",
+        "body": "You were promoted because you were good at engineering. Nobody ran you through what the role actually requires — the 1:1s that go sideways, the skip-level meeting where you freeze, the strongest person on your team going quiet in a way that could mean anything. You have tried the management books. You have done the e-learning module. You have taken the advice from your own manager, who was never trained either. None of it was wrong. None of it was enough. This is for engineers in that gap — usually somewhere between three months and a year in — who need someone who has been there to say plainly what the job is and how to do it.",
+        "cta": "Book a Lifeboat session — 90 minutes on the problem you have right now, £250"
+      },
+      {
+        "id": "benefits",
+        "head": "What changes, and when.",
+        "body": "First: you stop rehearsing. The standups, the difficult conversation you have been putting off, the feedback you have been softening until it means nothing — you run them without feeling sick. Second: the 2am panic gets quieter. Not because someone told you to be confident, but because someone who has done the job confirmed the panic was normal and showed you the trajectory through it. Third: your team responds differently. Not because you changed a technique, but because you stopped performing a competence you did not yet have. That change is visible to the people you manage, and they trust you more for it.",
+        "cta": "Start with the Lifeboat — one session, one problem, £250"
+      },
+      {
+        "id": "proof",
+        "head": "In the words of engineers who came through the deep end.",
+        "body": "\"honestly before our sessions I was rehearsing my own standups in the shower. Six weeks in I ran a genuinely difficult conversation without feeling sick, and the weird thing is my team seem to like me MORE now I've stopped pretending to have all the answers.\"\n\n\"You said 'your job isn't to be the best engineer in the room anymore, it's to make the room better' and I think about that line every single day. Best money I've spent on my career and my company paid half lol\"\n\n\"I cried a bit after session two. In a good way. Nobody had ever told me the panic was normal.\""
+      },
+      {
+        "id": "how-it-works",
+        "head": "Three rungs. Start wherever you are.",
+        "body": "The Lifeboat (£250, 90 minutes) is for one specific fire — a resignation you did not see coming, a skip-level meeting that went badly, a direct report who has stopped talking. You book it, you bring the problem, you leave with something you can use before Monday. If the session changes how you think about the work and you want to go deeper, the £250 credits toward the Deep End 1:1 package if you book within 60 days. The Deep End 1:1 (£1,800, six sessions) is the full programme — the job you were actually promoted into, worked through properly over time, with someone who has done it. For teams and companies, there is a Corporate Cohort and Workshop at £8,900, which includes the half-day workshop exclusively."
+      },
+      {
+        "id": "objections",
+        "head": "If something is stopping you, it is probably one of these.",
+        "body": "On price: £1,800 is a real number. Most people who come to the Deep End 1:1 have a company L&D budget they have not yet claimed, partly because claiming it would mean admitting they are struggling. The Lifeboat session at £250 is the way to find out whether this is the kind of support worth pointing a company budget at. On coaching being woo: fair. Most of it is. The differentiator is nine years actually running engineering teams — redundancy conversations, late ships, the stairwell moments. Engineers can tell within ten minutes whether the person across from them has been in the room or not, and it changes how honest they are willing to be. On time: this does not add to an already packed calendar. It replaces the two hours a week you are currently spending making things worse by half-guessing. On frameworks: there are none. You will not leave with a laminated model. You will leave knowing what to do in the specific situation you brought."
+      },
+      {
+        "id": "service-area",
+        "head": "Bristol-based. Almost entirely on Zoom. UK-wide plus Dublin.",
+        "body": "The work is about 90% Zoom — clients in Leeds, Manchester, London, Dublin, and most places in between. If you are in Bristol or can get to Temple Meads, there is one in-person workshop a quarter at a co-working space nearby. Geography is not the constraint. Calendar space is. If you are looking at this because something specific happened recently, sooner is better than later.",
+        "cta": "Check availability and book a Lifeboat session — £250, 90 minutes, one real problem"
+      }
+    ]
+  },
+  "about": {
+    "head": "I have been the one crying in the stairwell. That is why this works.",
+    "body": "I spent nine years as an engineering manager — not adjacent to it, not coaching people through it from a background in HR or L&D, but actually doing it. I ran the redundancy conversations. I shipped late and had to explain why. I sat in skip-level meetings where I said nothing useful for four minutes and felt it for days. I was the one who Googled things at 1am that I could not ask anyone at work.\n\nWhen I started coaching engineers through this transition, the thing that surprised me was not how different everyone's situation was. It was how identical the 2am thought is. The specific certainty that you were the wrong choice. That everyone is about to find out. That the best engineer on the team has, somehow, turned out to be a rubbish manager.\n\nThat thought is not evidence. It is a known feature of this transition, and every engineer who has moved through it started from exactly where you are now.\n\nMost leadership coaches came up through HR or L&D. They have read the same books you have. Engineers can smell the difference inside ten minutes — the vocabulary shifts, the frameworks appear, the person across from you has never shipped late or been the one who had to tell someone their role no longer exists. It changes how honest you are willing to be. If you cannot be honest, the work does not work.\n\nDeep End Coaching is based in Bristol. The work happens mostly on Zoom, with clients across the UK and in Dublin. One in-person workshop a quarter near Temple Meads, for the engineers who want to be in a room with other people doing the same job.\n\nIf you are in the deep end, this is what the work looks like."
+  },
+  "sales_page": {
+    "head": "The Lifeboat Session",
+    "subhead": "90 minutes on the specific problem in front of you. £250. For engineers who need help today, not a three-month commitment.",
+    "sections": [
+      {
+        "id": "problem",
+        "head": "Something happened. And you need to talk to someone who has been there.",
+        "body": "Maybe your strongest engineer handed in their notice and you cannot honestly say you saw it coming. Maybe you froze in a skip-level meeting and said nothing useful for four minutes. Maybe a direct report is going quiet in a way that could mean anything, and you are trying to decide whether to address it or wait. Maybe you ran a 1:1 last week that is still replaying in your head.\n\nYou have tried the obvious things. The management books. The company e-learning module that took 90 minutes and taught you nothing you could use the following morning. The advice from your own manager, who was never trained either and defaulted to something that sounded like wisdom but gave you nothing to do next.\n\nYou are not failing. You are doing a job nobody prepared you for, with no instructions, and one specific thing has just made that impossible to ignore. The Lifeboat session is for that moment.",
+        "cta": "Book your Lifeboat session — £250, 90 minutes, one real problem"
+      },
+      {
+        "id": "offer",
+        "head": "What the Lifeboat session is: one problem, 90 minutes, £250.",
+        "body": "You bring one specific situation. Not your development plan. Not a list of everything that is going wrong. One thing — the conversation you have been putting off, the direct report you cannot read, the meeting you need to prepare for, the decision you cannot make alone.\n\nThe 90 minutes is structured work. You leave with something concrete — not a framework, not a set of reflection questions, but a clear understanding of what is happening in the situation you brought and what to do about it before Monday.\n\nThe session is by Zoom. If you are in Bristol and want to come in person, there may be availability near Temple Meads — ask when you book.\n\nThe price is £250. If you finish the session and want to go deeper — into the Deep End 1:1 programme — the £250 credits toward it if you book within 60 days. That is stated here, not pitched at you during the session.\n\nThis is engineering management supervision: the experienced second opinion that other professions treat as standard and that engineering managers have never been offered.",
+        "cta": "Book the Lifeboat — £250, available by Zoom across the UK"
+      },
+      {
+        "id": "proof",
+        "head": "What engineers say after the work.",
+        "body": "\"I cried a bit after session two. In a good way. Nobody had ever told me the panic was normal.\"\n\nThat is from someone who booked a Lifeboat session because a direct report had gone quiet, and came back for the full programme because of what happened in those 90 minutes.\n\n\"You said 'your job isn't to be the best engineer in the room anymore, it's to make the room better' and I think about that line every single day. Best money I've spent on my career and my company paid half lol\"\n\nThe Lifeboat is often the first session. The company L&D budget — the one you have not yet claimed because claiming it would require explaining why you need it — is often how the deeper work gets funded. You do not have to figure that out before you book."
+      },
+      {
+        "id": "objections",
+        "head": "The things that might be stopping you, answered plainly.",
+        "body": "£250 when the company has not offered to pay. That is a real number to spend personally. It is also the number where your engineering instinct can evaluate the spend before committing to anything larger. If the session is useful, you now have personal proof to point at a company training budget. If it is not, you have spent £250 and you do not owe anything else.\n\nCoaching is woo. Most of it is. The question is whether the person across from you has run the conversations you are trying to run, or whether they have read about them. Nine years as an actual engineering manager — redundancy conversations, late ships, the stairwell — is either relevant or it is not. Engineers tend to know within ten minutes.\n\nYou do not have time. 90 minutes is a 1:1 you ran badly last week plus the shower rehearsal before it. The session does not add to your calendar. It replaces the slow-motion cost of getting this wrong.\n\nYou will just get a framework. You will not. You will get someone who has been in the specific type of situation you describe and can tell you what it usually looks like from the inside and what actually helps."
+      },
+      {
+        "id": "guarantee",
+        "head": "What happens if it does not fit.",
+        "body": "The Lifeboat is a single session. If you come with one problem and leave without something useful, say so. That conversation is part of the work.\n\nIf you move on to the Deep End 1:1 — six sessions at £1,800 — there is a specific commitment in place: after session two, if the work is not fitting your situation, the value of the remaining four sessions is refunded. Six sessions at £1,800 means the refund would be £1,200, returned without a lengthy conversation about it. This commitment already exists and is stated here because it should be — not because it has been needed often, but because a significant personal spend with no exit is a different decision from a significant personal spend with one.",
+        "cta": "Book the Lifeboat session — £250, 90 minutes, one problem"
+      },
+      {
+        "id": "who-its-not-for",
+        "head": "This is not for everyone. Worth saying clearly.",
+        "body": "The Lifeboat and the deeper work are not useful if you have already decided a direct report needs to go and you want help building the paper trail. That is a different problem and this is not the right place for it.\n\nThey are also not useful if your working assumption is that the team is the problem and your job is to fix them. The work here starts with your own behaviour and your own role in what is happening. That is not a comfortable frame for everyone, and it is better to know that before you spend £250.\n\nIf you are a senior leader who books sessions and spends them explaining at length why this kind of work does not work, this is not for you either. The engineers who get something from this come in willing to be honest. That is the only prerequisite."
+      }
+    ],
+    "final_cta": "Book your Lifeboat session — £250, 90 minutes by Zoom, on the specific problem you have right now. If you want to talk through whether it is the right fit first, send a message and you will get a plain answer."
+  }
+}

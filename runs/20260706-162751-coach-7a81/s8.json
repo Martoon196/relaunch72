@@ -1,0 +1,276 @@
+{
+  "platform_a": "LinkedIn",
+  "platform_b": "YouTube Shorts",
+  "posts": [
+    {
+      "day": 1,
+      "platform": "LinkedIn",
+      "format": "text post",
+      "hook": "Nobody told you it was a different job. That's not a metaphor — it's the actual problem.",
+      "body": "You were the best engineer on the team. That's why they promoted you.\n\nAnd now you're six weeks in, rehearsing what to say before your own standups, and the 1:1s feel like minefields.\n\nHere's what I've watched happen to almost every engineer who makes this move:\n\nThey assume the skills that got them promoted are the skills the new job needs. They're not. Writing code is a solo act. Managing people is not.\n\nThe job you were actually promoted into has different problems. Different measures of success. A completely different relationship with being wrong.\n\nThe panic you feel at 2am — the certainty you've been found out — that's not evidence you were the wrong choice. It's a known feature of this transition. Every engineer who has moved through it started from exactly where you are.\n\nThe ones who come out the other side aren't the ones who waited for it to click. They're the ones who got permission to learn the new job out loud instead of pretending they already knew it.\n\nIf that sounds like where you are right now, the September 1:1 waitlist is open.",
+      "cta": "Join the September 1:1 waitlist — link in the first comment.",
+      "pillar": "offer"
+    },
+    {
+      "day": 2,
+      "platform": "YouTube Shorts",
+      "format": "talking-head short",
+      "hook": "If you're rehearsing what to say before your own standups, this is for you.",
+      "body": "[Scene: direct to camera, plain background, no graphics]\n\nIf you're rehearsing what to say before your own standups — I want you to know that's not a you problem. That's what the engineer-to-manager transition actually feels like for most people.\n\nYou spent years getting good at a job where the feedback loop was fast. You wrote the code. It worked or it didn't. You fixed it.\n\nManagement doesn't work like that. The feedback is slow, ambiguous, and sometimes it comes in the form of your strongest engineer going quiet in meetings.\n\nAnd nobody told you it was going to feel like this. Because nobody told you it was a different job.\n\nI spent nine years as an engineering manager. I've had the redundancy conversations. I've shipped late. I've been the one in the stairwell.\n\nThe panic is normal. The good news is it has a known trajectory.\n\nIf you want to know what that looks like — more on that in the next video.",
+      "cta": "Subscribe so you don't miss the next one.",
+      "pillar": "teach"
+    },
+    {
+      "day": 3,
+      "platform": "LinkedIn",
+      "format": "text post",
+      "hook": "The 1:1 that went badly quiet. You've been replaying it ever since.",
+      "body": "You know the one.\n\nYou asked how things were going. They said 'fine.' The silence that followed was a different kind of silence than you expected. And you did not know how to fill it without making it worse.\n\nSo you talked about sprint velocity.\n\nAfterwards you sat with the feeling that something had gone wrong in that room and you didn't have the language for what it was or how to fix it.\n\nHere's what I'd say to you:\n\nThat conversation didn't fail because you're a bad manager. It failed because nobody taught you what a 1:1 is actually for.\n\nIt isn't a status update. It isn't a performance check. It's the one place your direct report should be able to say the thing they're not saying in standup.\n\nYour job in the room is to make it easier for them to speak than to stay quiet. That's a learnable skill. It has nothing to do with being the best engineer in the room.\n\nI've watched engineers run that exact conversation badly in week two of our work together and run it well in week six. The gap isn't talent. It's knowing what you're actually trying to do.",
+      "cta": "Reply and tell me: what's the hardest part of your 1:1s right now?",
+      "pillar": "teach"
+    },
+    {
+      "day": 4,
+      "platform": "YouTube Shorts",
+      "format": "how-to short",
+      "hook": "How to give feedback to an engineer when you don't want to make it weird.",
+      "body": "[Scene: direct to camera, conversational, no slides]\n\nGiving feedback as a new engineering manager is uncomfortable. Here's why, and what to do about it.\n\nStep one: name the behaviour, not the person. 'The PR had no tests and it blocked the release' lands differently than 'you're not being careful enough.' One is a fact. One is a verdict.\n\nStep two: say it close to when it happened. Feedback stored up for a quarter review has lost most of its usefulness.\n\nStep three: ask before you advise. 'What happened from your side?' before 'here's what you should do next time.' You will learn something almost every time you do this, and the conversation changes.\n\nStep four: make it normal. If feedback only arrives when something went wrong, your team will dread it. If it's a regular part of how the team works — brief, specific, both directions — it stops being a big deal.\n\nNone of this requires a framework. It requires practice and someone to tell you when it landed and when it didn't.\n\nThat's most of what I do with engineers in the first four weeks.",
+      "cta": "If this was useful, share it with a new engineering manager in your network.",
+      "pillar": "teach"
+    },
+    {
+      "day": 5,
+      "platform": "LinkedIn",
+      "format": "text post",
+      "hook": "One client told me he cried after session two. He wanted me to say that clearly.",
+      "body": "From a recent review, the exact words:\n\n\"I cried a bit after session two. In a good way. Nobody had ever told me the panic was normal.\"\n\nI've been coaching engineers through this transition for a while now. That line still stays with me.\n\nNot because it's dramatic. Because of what it says about how alone engineers feel in those first months.\n\nThey're carrying the 2am certainty they've been found out. They're replaying conversations that went wrong. They're watching their strongest engineer go quiet and not knowing what to do about it.\n\nAnd they haven't told anyone, because asking for help feels like holding up a sign that reads: the best engineer on the team turned out to be a rubbish manager.\n\nThe panic is a known feature of this transition. It's not evidence you were the wrong choice.\n\nThat's the thing nobody tells you. And it turns out that hearing it — really hearing it, from someone who has been in that room — changes something.\n\nIf you're in those first months right now, the September 1:1 waitlist is open. Link in the comments.",
+      "cta": "Join the September 1:1 waitlist — link in the comments.",
+      "pillar": "proof"
+    },
+    {
+      "day": 6,
+      "platform": "YouTube Shorts",
+      "format": "talking-head short",
+      "hook": "Your job isn't to be the best engineer in the room anymore.",
+      "body": "[Scene: direct to camera, calm and direct]\n\nThe thing that got you promoted is the thing that's now getting in your way.\n\nWhen you were an individual contributor, being the most technically capable person in the room was the job. Being right was how you added value.\n\nAs a manager, being right all the time makes you slower. It makes your team more dependent. It stops them from building the judgment they need.\n\nSomewhere in a session a few months ago, I said something to a client that he texted me back later. His words: \"your job isn't to be the best engineer in the room anymore, it's to make the room better.\"\n\nHe said he thinks about it every single day.\n\nThat shift — from solving the problem yourself to building the conditions where your team can solve it — that's the job you were actually promoted into.\n\nIt doesn't happen automatically. Most engineers spend months waiting for it to click. It doesn't click on its own.\n\nMore on what actually helps in the next video.",
+      "cta": "Subscribe — I post for engineers navigating this transition.",
+      "pillar": "proof"
+    },
+    {
+      "day": 7,
+      "platform": "LinkedIn",
+      "format": "poll",
+      "hook": "When you first became a manager, what did you actually do with the panic?",
+      "body": "The 2am certainty you've been found out. The replaying of 1:1s that went wrong. The sense that everyone else seems to know something you don't.\n\nWhen it hit you — what did you actually do with it?\n\nVoting is anonymous. I'm genuinely curious where most people land.",
+      "cta": "Vote below — and if you want to say more, I'm reading the comments.",
+      "pillar": "conversation"
+    },
+    {
+      "day": 8,
+      "platform": "YouTube Shorts",
+      "format": "before-after short",
+      "hook": "Six weeks of coaching. Here's what actually changed — in a client's own words.",
+      "body": "[Scene: direct to camera]\n\nI want to read you something a client emailed me after six weeks of working together. His words exactly:\n\n\"honestly before our sessions I was rehearsing my own standups in the shower. Six weeks in I ran a genuinely difficult conversation without feeling sick, and the weird thing is my team seem to like me MORE now I've stopped pretending to have all the answers.\"\n\nThe before: rehearsing what to say before your own standup. Dreading the 1:1s. Watching your strongest engineer go quiet and not knowing what to do about it.\n\nThe after: running a difficult conversation without feeling sick. And the team trusting you more once you stopped performing a confidence you didn't yet have.\n\nThat's not a transformation. That's what happens when someone learns the job they were actually promoted into instead of waiting for it to click on its own.\n\nIf you're currently in the before — the September 1:1 waitlist is open. Link in the description.",
+      "cta": "September 1:1 waitlist link is in the description.",
+      "pillar": "proof"
+    },
+    {
+      "day": 9,
+      "platform": "LinkedIn",
+      "format": "text post",
+      "hook": "The management book you're 40% through is not going to help you by Monday.",
+      "body": "I know because almost every engineer I work with has one.\n\nUsually it's about radical candor, or first-time managers, or some version of the same material. It's a good book. They just can't finish it because they're already underwater.\n\nAnd the problem isn't that the book is wrong. The problem is that reading about a difficult conversation and having one are completely different things.\n\nThe e-learning module your company made you do covered SMART goals and took 90 minutes. You left it knowing nothing you could use the following morning.\n\nYour own manager — when you finally asked — told you to 'just be yourself.' You are still deciding if that was wisdom or nothing.\n\nThis is why I coach engineers in real time, through the actual problems in front of them.\n\nNot with a framework. Not with a slide deck. With the specific 1:1 that went badly, the direct report who's gone quiet, the skip-level meeting coming up on Thursday.\n\nNine years as an engineering manager means I've been in most of those rooms. Engineers can tell within ten minutes, and it changes how honest they're willing to be.\n\nIf you've been waiting for the book to click — it won't. The September waitlist is open.",
+      "cta": "September 1:1 waitlist — link in the first comment.",
+      "pillar": "offer"
+    },
+    {
+      "day": 10,
+      "platform": "YouTube Shorts",
+      "format": "how-to short",
+      "hook": "How to handle a skip-level meeting when you haven't had one before.",
+      "body": "[Scene: direct to camera, slightly leaning forward — this matters to them]\n\nA skip-level is when your manager's manager meets with your team directly, without you in the room. Or sometimes with you in the room and the pressure is on to say something useful.\n\nEither way — if you haven't been through one as a manager, here's what to know.\n\nFirst: your team will be asked how you're doing. This is normal. It's not a trap. Stop treating it like one.\n\nSecond: if you're in the room, don't perform. The impulse is to prove you have it under control. That impulse is visible and it works against you. Say what you actually know. Say clearly what you're still figuring out.\n\nThird: brief your team beforehand — not to coach their answers, but so they're not blindsided. One sentence. 'Sarah from the leadership team is meeting with you on Thursday to hear how things are going on the team.' That's it.\n\nFourth: after the skip-level, ask your manager what came out of it. Don't wait to be told. Asking is what managers who are on top of things do.\n\nThe engineers I coach who freeze in skip-levels aren't freezing because they're bad at their job. They're freezing because they've never been told what the room is actually for.",
+      "cta": "If this helped — share it with someone heading into their first skip-level.",
+      "pillar": "teach"
+    },
+    {
+      "day": 11,
+      "platform": "LinkedIn",
+      "format": "text post",
+      "hook": "What does your company actually owe you when they promote you into management?",
+      "body": "I'm asking seriously.\n\nBecause most engineers I work with got an email, maybe a conversation, and a calendar full of 1:1s starting Monday. No model for what the role actually requires. No one explaining what they were being asked to stop doing and start doing instead.\n\nSome got a 90-minute e-learning module about SMART goals. That's the full offering.\n\nAnd then the company is surprised — six months later — when their best engineer has a team that's starting to lose people.\n\nI think companies owe new managers more than they typically give. I also think waiting for the company to fix it is a slow way to get through the deep end.\n\nThe engineers who move through this transition fastest are the ones who decide, at some point, that learning the job they were actually promoted into is their own problem to solve — and go solve it.\n\nWhat did your company give you when they promoted you? I'm curious where people actually land on this.",
+      "cta": "Tell me in the comments — what did you actually get when they made you a manager?",
+      "pillar": "conversation"
+    },
+    {
+      "day": 12,
+      "platform": "YouTube Shorts",
+      "format": "talking-head short",
+      "hook": "Nine years as an engineering manager. Here's the one thing I'd tell myself in month one.",
+      "body": "[Scene: direct to camera, no frills]\n\nIf I could go back to month one as an engineering manager and say one thing to myself, it would be this:\n\nThe job you just moved into is not a promotion of the old job. It is a different job. Completely.\n\nI spent the first few months of that role trying to be the best engineer in the room while also managing the room. You can't do both. And trying to do both means you're doing neither particularly well.\n\nThe skills that got me promoted — deep technical knowledge, moving fast, being right — those skills are not the job anymore. The job is making the room better. Building the conditions where other people can be right.\n\nThat shift is uncomfortable. It takes longer than you think it should. The 2am certainty that you've been found out is not evidence you were the wrong choice — it's what the transition feels like for almost everyone.\n\nI didn't know that in month one. I wish I had.\n\nIf you're in month one right now — or month six and still waiting for it to click — subscribe. I post for engineers in exactly this spot.",
+      "cta": "Subscribe — more for engineers navigating the deep end.",
+      "pillar": "inside look"
+    },
+    {
+      "day": 13,
+      "platform": "LinkedIn",
+      "format": "text post",
+      "hook": "\"Best money I've spent on my career and my company paid half.\"",
+      "body": "That's a direct quote — a client texted it to me after we wrapped, and said I could use it.\n\nThe full line was: \"Best money I've spent on my career and my company paid half lol.\"\n\nThe second part matters almost as much as the first.\n\nMost engineers who come to me are paying out of their own pocket because asking their company for coaching support feels like holding up a sign that says they're struggling. So they sit with the 2am panic and don't tell anyone.\n\nBut a lot of companies have L&D or training budgets that go unclaimed every year — partly because people don't know they exist, partly because claiming them requires admitting something feels hard.\n\nIf you're an engineer who's just been promoted and your company has an L&D budget — this is something you can claim. Coaching for a new manager is exactly what that budget is for.\n\nThe September 1:1 waitlist is open. I can send you a one-paragraph summary of what we'd cover if you want to use it as a budget request.",
+      "cta": "Message me if you want the one-paragraph summary for your L&D request.",
+      "pillar": "offer"
+    },
+    {
+      "day": 14,
+      "platform": "YouTube Shorts",
+      "format": "how-to short",
+      "hook": "What to do in the first 30 days as an engineering manager — practically.",
+      "body": "[Scene: direct to camera, brisk and grounded]\n\nThirty days in as an engineering manager. Here's what I'd actually focus on.\n\nWeek one: don't change anything. Seriously. Observe. Ask more questions than you answer. Your strongest instinct will be to fix things. Resist it.\n\nWeek two: do a proper 1:1 with everyone on the team. Not a status update — a listening session. What's working for them, what's frustrating them, what they need from you that they're not getting. Write down what they say.\n\nWeek three: pick one thing from those conversations that you can actually change. Not a big thing. A small, visible one. Do it. Tell them you did it because they said it.\n\nWeek four: have the conversation you've been putting off. You know the one. The direct report who's going quiet, the tension you've been talking around. Bring it up. You don't need a script. You need to name it.\n\nNone of this will feel comfortable. Comfortable is not the standard. Moving in the right direction is the standard.\n\nIf you want more specific help with what week four looks like — the link to the September waitlist is in the description.",
+      "cta": "September 1:1 waitlist link is in the description.",
+      "pillar": "teach"
+    },
+    {
+      "day": 15,
+      "platform": "LinkedIn",
+      "format": "text post",
+      "hook": "The moment a client sent me a line that stayed with me for weeks.",
+      "body": "He was six weeks into our work together when he emailed me. The exact words:\n\n\"honestly before our sessions I was rehearsing my own standups in the shower. Six weeks in I ran a genuinely difficult conversation without feeling sick, and the weird thing is my team seem to like me MORE now I've stopped pretending to have all the answers.\"\n\nThe part I keep coming back to: his team liked him more once he stopped performing.\n\nEngineers who've just been promoted often believe the job requires projecting certainty at all times. That admitting you're figuring something out is weakness. That vulnerability is unprofessional.\n\nThe teams I've watched respond best to their new managers aren't responding to certainty. They're responding to honesty. To a manager who says 'I don't know, let me find out' and then actually finds out.\n\nYou don't have to have all the answers. You have to make the room better.\n\nThose are different things.",
+      "cta": "If this landed — share it with someone who's in their first year of managing.",
+      "pillar": "proof"
+    },
+    {
+      "day": 16,
+      "platform": "YouTube Shorts",
+      "format": "talking-head short",
+      "hook": "The 2am panic is not evidence you were the wrong choice.",
+      "body": "[Scene: direct to camera, quiet and deliberate]\n\nI want to say something plainly.\n\nThe 2am certainty that you've been found out — that everyone is about to realise you have no idea what you're doing as a manager — that feeling is not evidence you were the wrong choice.\n\nIt is a known feature of the engineer-to-manager transition. Almost every engineer who has made this move has been in that place at 2am.\n\nThe ones who didn't make it through aren't the ones who felt the panic. They're the ones who waited for it to stop on its own. It doesn't stop on its own. It gets quieter when you learn the job you were actually promoted into — not the one the e-learning module described, but the real one.\n\nThe 1:1s. The difficult conversations. The moment your strongest engineer goes quiet and you have to decide what to do about it.\n\nNine years in that role means I've been through most of what you're facing. And the thing I'd want you to know — the thing nobody told me in month one — is that the panic was normal.\n\nThat's it. That's the whole thing.",
+      "cta": "Subscribe if you want more of this. I post for engineers in the deep end.",
+      "pillar": "inside look"
+    },
+    {
+      "day": 17,
+      "platform": "LinkedIn",
+      "format": "text post",
+      "hook": "Has your company ever offered you management training that was actually useful?",
+      "body": "I'm not asking rhetorically. I'm genuinely curious.\n\nBecause the engineers I work with have almost universally had the same experience: a 90-minute e-learning module that covered SMART goals and told them nothing they could use the following morning. Or a piece of advice from their own manager, who was never trained either, that boiled down to 'just be yourself.'\n\nThe gap between what companies offer new engineering managers and what the job actually requires is, in my experience, significant.\n\nBut I know I'm looking at a particular slice of this. There are companies doing this well.\n\nIf you had useful management support when you were first promoted — what did it look like? I want to know what good actually looks like in the wild.",
+      "cta": "Tell me in the comments — I'm reading everything.",
+      "pillar": "conversation"
+    },
+    {
+      "day": 18,
+      "platform": "YouTube Shorts",
+      "format": "how-to short",
+      "hook": "How to handle a direct report who's going quiet in meetings.",
+      "body": "[Scene: direct to camera, direct and practical]\n\nYour strongest engineer has stopped contributing in standups. They answer questions with one word. In 1:1s they say everything's fine.\n\nHere's what not to do: don't wait. Don't tell yourself it's a phase. Don't give them more technical challenges hoping it fixes it.\n\nHere's what I'd actually do.\n\nStep one: name it in the 1:1 — directly and without cushioning it. 'I've noticed you've been quieter in the last couple of weeks. What's going on?' Not 'are you okay?' — too easy to deflect. Name the specific thing you observed.\n\nStep two: stop talking. This is harder than it sounds. After you ask, wait. The silence is uncomfortable. Sit in it.\n\nStep three: listen to what they say without immediately problem-solving it. Whatever comes up — a frustration, a concern about the team, something about the work — hear it before you fix it.\n\nStep four: follow up. Not in three weeks. In three days. 'I've been thinking about what you said. Here's what I want to do about it.'\n\nThe engineers who go quiet are almost always telling you something before they decide to tell someone else. Your job is to be easier to tell than the alternative.",
+      "cta": "Share this with a new engineering manager who needs to hear it.",
+      "pillar": "teach"
+    },
+    {
+      "day": 19,
+      "platform": "LinkedIn",
+      "format": "text post",
+      "hook": "What I actually do in session one with a new engineering manager.",
+      "body": "Not a framework. Not a diagnostic. Not an icebreaker.\n\nWe talk about the specific thing that's happening right now. The 1:1 that went wrong last week. The direct report who's been quiet. The thing they typed into their phone at 1am that they haven't said out loud to anyone.\n\nBecause that's usually the real starting point — the thing they've been carrying alone because asking for help feels like holding up a sign that the promotion was a mistake.\n\nThe first job in session one is to confirm that the thing they're experiencing has a name. That the panic is normal. That the certainty they've been found out is a known feature of this transition, not evidence they were the wrong choice.\n\nOnce that's landed — and it usually takes less time than people expect — we can look at the actual problems in front of them. The difficult conversations they've been avoiding. The standups they've been rehearsing. The direct report whose notice might be coming and they can feel it.\n\nNine years in the engineering manager role means I've been in most of those problems. Engineers can tell within ten minutes. It changes how honest they're willing to be.\n\nThe September 1:1 waitlist is open. Eight weeks is enough time to stop dreading the next 1:1.",
+      "cta": "September 1:1 waitlist — link in the first comment.",
+      "pillar": "inside look"
+    },
+    {
+      "day": 20,
+      "platform": "YouTube Shorts",
+      "format": "voiceover demo short",
+      "hook": "This is what the engineer-to-manager transition actually feels like from the inside.",
+      "body": "[Scene: slow pan across a blank notebook, a laptop screen showing a calendar full of 1:1s, a Slack channel with unread messages — voiceover throughout]\n\nYou've been promoted six weeks. Maybe eight.\n\nYou're still writing code because at least code does what you tell it to.\n\nThe 1:1s feel like minefields. You're rehearsing what to say before your own standups. Your strongest engineer has started going quiet and you know what that silence probably means.\n\nAt 1am you've typed something like 'am I a bad manager or is my team just difficult' into your phone. You haven't sent it to anyone.\n\n[Scene: cut to direct camera]\n\nThis is what the deep end feels like. And it is normal. Not 'it will be fine eventually' normal — known, documented, experienced by almost every engineer who has made this move.\n\nThe ones who come out the other side fastest aren't the ones who waited. They're the ones who found someone who had been in that role — really been in it, not studied it — and learned the job they were actually promoted into.\n\nThat's what I do.\n\nLink in the description if you want to know more.",
+      "cta": "September 1:1 waitlist — link in the description.",
+      "pillar": "offer"
+    },
+    {
+      "day": 21,
+      "platform": "LinkedIn",
+      "format": "text post",
+      "hook": "The skip-level meeting where I said nothing useful for four minutes. Here's what I learned.",
+      "body": "I've been in the stairwell.\n\nI mean that literally. Early in my time as an engineering manager, there was a skip-level where the VP asked me a question about my team's velocity and why it had dropped. I knew the answer. I knew what had gone wrong and what we were doing about it.\n\nAnd I froze. I talked around it for four minutes without saying anything useful. Then I went and stood in the stairwell afterwards and felt like the worst manager in the building.\n\nHere's what I know now that I didn't know then:\n\nI wasn't prepared because I didn't know what prepared looked like in that room. I thought the job was to perform certainty — to project control. It isn't. The job is to know what's true, say it clearly, and be honest about what you're still working on.\n\nManagers who are honest about what they're working on build more trust than ones who perform omniscience. Even when 'what they're working on' is a team that's struggling.\n\nThe skip-level freeze is almost universal in the first year. The engineers I coach aren't freezing because they're bad managers. They're freezing because nobody showed them what that room was actually for.\n\nIf you've frozen in a skip-level — or you've got one coming that you're already dreading — I'm happy to talk through it.",
+      "cta": "Message me directly, or join the September waitlist — link in comments.",
+      "pillar": "inside look"
+    },
+    {
+      "day": 22,
+      "platform": "YouTube Shorts",
+      "format": "talking-head short",
+      "hook": "Why engineers make the transition harder than it needs to be.",
+      "body": "[Scene: direct to camera, slightly wry but direct]\n\nEngineers are, professionally, very good at not admitting they don't know something.\n\nIt's a reasonable survival strategy when you're an individual contributor. Uncertainty in a code review costs you credibility. Being wrong in a production incident costs you trust.\n\nBut in management, that same instinct — project certainty, don't show the gap, wait until you know before you speak — makes everything slower and harder.\n\nThe engineers I work with who move through this transition fastest are not the most technically capable ones. They're the ones who, at some point, decide that learning the job out loud is better than waiting to already know it.\n\nAdmitting to a direct report that you don't have the answer and you're going to find out is not weakness. It's what managing people actually looks like.\n\nYour team already knows you're figuring it out. They knew before you did. What they're waiting to see is whether you'll admit it.\n\nWhen you do — something shifts. One client put it plainly: the weird thing was his team seemed to like him more once he stopped pretending to have all the answers.\n\nThat's the move. And it's available to you right now.",
+      "cta": "Subscribe — I post for engineers navigating this transition.",
+      "pillar": "conversation"
+    },
+    {
+      "day": 23,
+      "platform": "LinkedIn",
+      "format": "text post",
+      "hook": "What's the thing you typed into your phone at 1am that you haven't said out loud to anyone?",
+      "body": "I'm asking because I know what it usually is.\n\nSomething like: am I a bad manager, or is my team just difficult.\n\nOr: how is it possible that I was completely fine six months ago and now I don't know how to do my job.\n\nOr: if my strongest engineer leaves, I genuinely don't know what I'll do.\n\nYou haven't sent it to anyone because you're not sure what you're looking for. Reassurance, maybe. Or just confirmation that someone else has felt this exact shape of thing.\n\nI'm not going to pretend a LinkedIn post fixes that. But I'll say: the 2am certainty you've been found out is a known condition. Every engineer who has moved from hands-on to managing people has been in some version of that feeling.\n\nThe ones who come out the other side aren't the ones who felt it less. They're the ones who said it out loud to someone who could confirm it had a trajectory — and then got on with learning the actual job.\n\nIf the 1am thought sounds familiar — I'm here.",
+      "cta": "Reply here, or message me directly. Either is fine.",
+      "pillar": "conversation"
+    },
+    {
+      "day": 24,
+      "platform": "YouTube Shorts",
+      "format": "before-after short",
+      "hook": "He was rehearsing standups in the shower. Six weeks later, something shifted.",
+      "body": "[Scene: direct to camera, unhurried]\n\nI want to share the exact words a client emailed me, because they describe the shift better than any summary I could give.\n\nHe wrote: \"honestly before our sessions I was rehearsing my own standups in the shower. Six weeks in I ran a genuinely difficult conversation without feeling sick, and the weird thing is my team seem to like me MORE now I've stopped pretending to have all the answers.\"\n\nThe before is familiar to most engineers who've just been promoted: the rehearsed standups, the dread before each 1:1, the sense that everyone can see you're figuring it out.\n\nThe after isn't a confidence boost. It's something more specific than that. He ran a difficult conversation without feeling sick. His team responded better to a manager who stopped performing certainty.\n\nThat shift took six weeks. Not six months. Not waiting for it to click.\n\nSix weeks of working on the job he was actually promoted into.\n\nIf you're in the before right now — the September 1:1 waitlist is in the description.",
+      "cta": "September 1:1 waitlist — link in the description.",
+      "pillar": "proof"
+    },
+    {
+      "day": 25,
+      "platform": "LinkedIn",
+      "format": "text post",
+      "hook": "For L&D managers at UK tech and fintech companies: your newly promoted engineers are already struggling.",
+      "body": "They're not going to tell you. Not yet.\n\nThey were promoted because they were the strongest engineer on the team. Admitting that the new job is harder than they expected feels, to them, like admitting the promotion was a mistake. So they're sitting with it.\n\nThe cost of that silence shows up in a few months: a direct report who hands in notice, a team that's visibly less productive, an engineering manager who's thinking about going back to individual contribution.\n\nI work with engineering managers through 1:1 coaching, and I run small cohorts for companies that want to support newly promoted engineers at scale.\n\nThe cohort format is built for teams of engineers going through the same transition at roughly the same time — promotion season, performance review cycles, new team structures. It's practical, specific, and designed by someone who spent nine years in the engineering manager role.\n\nIf your company is promoting engineers after this round of performance reviews and you want a conversation about what support could look like — I'm easy to reach.\n\nDirect message or email both work.",
+      "cta": "Message me directly to talk about cohort options for your team.",
+      "pillar": "offer"
+    },
+    {
+      "day": 26,
+      "platform": "YouTube Shorts",
+      "format": "how-to short",
+      "hook": "How to run a 1:1 that's actually useful — for both of you.",
+      "body": "[Scene: direct to camera, practical and grounded]\n\nMost new engineering managers run 1:1s like status updates. Here's how to make them useful instead.\n\nFirst: the agenda is theirs, not yours. Before the meeting, send them a prompt — 'What do you want to cover this week?' — and build the conversation around what comes back. If nothing comes back, that's information.\n\nSecond: start with what's going well. Not as a warm-up, but genuinely. What has actually worked this week? Spend two minutes there. It calibrates the conversation.\n\nThird: ask the question behind the question. 'How's the sprint going?' usually means 'how are you going?' Ask both. They're different.\n\nFourth: have one thing you're going to follow up on by the next 1:1. Not a list. One thing. Do it. Tell them you did it.\n\nFifth: end with a direct question — 'Is there anything I could be doing differently for you?' You will get non-answers at first. Keep asking. The answers come.\n\nNone of this is complicated. What makes it hard is doing it consistently, through the weeks when it feels pointless or awkward, until it becomes the thing your team counts on.\n\nThat's the job.",
+      "cta": "Subscribe — I post practical help for new engineering managers every week.",
+      "pillar": "teach"
+    },
+    {
+      "day": 27,
+      "platform": "LinkedIn",
+      "format": "text post",
+      "hook": "What engineers tell me in session one that they haven't said to anyone else.",
+      "body": "They don't say it immediately. Usually it comes out about twenty minutes in.\n\nSome version of: I don't know how to do this job. And nobody told me it was a different job.\n\nThat's the thing sitting underneath all of it — underneath the difficult conversations they've been avoiding, the direct reports going quiet, the 1:1s they've been dreading.\n\nThey were promoted because they were excellent at something. And now they're doing something completely different, with no model for what it requires, and they're trying to look like they have it under control because asking for help feels like admitting the promotion was wrong.\n\nOne client put it plainly in an email after our sessions. The exact words:\n\n\"honestly before our sessions I was rehearsing my own standups in the shower. Six weeks in I ran a genuinely difficult conversation without feeling sick, and the weird thing is my team seem to like me MORE now I've stopped pretending to have all the answers.\"\n\nThe thing he'd been carrying — the performance of certainty — was the very thing making the job harder.\n\nWhen he put it down, the work got easier. The team got better. The 2am panic got quieter.\n\nThat's what learning the job you were actually promoted into looks like.",
+      "cta": "If this is where you are — message me, or join the September waitlist. Link in comments.",
+      "pillar": "inside look"
+    },
+    {
+      "day": 28,
+      "platform": "YouTube Shorts",
+      "format": "talking-head short",
+      "hook": "This is why your company's management training didn't work.",
+      "body": "[Scene: direct to camera, clear and direct]\n\nNot because management training is useless. Because the kind most companies offer doesn't touch the real problem.\n\nThe 90-minute e-learning module about SMART goals tells you nothing you can use on Monday. The book about radical candor is good, but you haven't finished it because you're already drowning.\n\nThe real problem isn't that you lack a framework. The problem is that nobody told you the job changed.\n\nThe skills that got you promoted — technical depth, speed, being right — those aren't the core skills of the new job. The new job is 1:1s, difficult conversations, reading the silence of a direct report who's going quiet, and not falling apart in a skip-level when someone asks you something you weren't expecting.\n\nThose are learnable. But you learn them by doing them, not by reading about them or watching a module.\n\nWhat actually works is working through the real problems in front of you, with someone who has been in those rooms — not someone who studied them.\n\nNine years as an engineering manager. Engineers can tell within ten minutes. Link in the description if you want to see what that looks like.",
+      "cta": "September 1:1 waitlist — link in the description.",
+      "pillar": "offer"
+    },
+    {
+      "day": 29,
+      "platform": "LinkedIn",
+      "format": "text post",
+      "hook": "Engineers promoted into management after this year's performance reviews: this is for you.",
+      "body": "Somewhere this month, someone heard on a Friday that they were now a manager. They face their team on Monday with no model for what the job actually requires.\n\nIf that's you — or if it's someone in your network — here's what I'd want you to know.\n\nThe panic is normal. Not 'it will pass' normal. Known, documented, experienced by nearly every engineer who has made this move. The 2am certainty that you've been found out is not evidence you were the wrong choice.\n\nThe job you've just been given is different from the job you were doing. The skills that got you promoted — being the best engineer in the room — are not the skills the new job runs on. That's not a criticism. It's just a thing nobody tells you.\n\nYou don't have to figure this out by finishing the management book or waiting for the e-learning to land. You can learn the job you were actually promoted into, out loud, with someone who has been in that role and remembers what the deep end feels like.\n\nThe September 1:1 waitlist has a few spots remaining. I close it when it reaches ten names.\n\nIf your company has an L&D budget and you haven't claimed it — this is what it's for.",
+      "cta": "Join the September 1:1 waitlist — link in the first comment.",
+      "pillar": "offer"
+    },
+    {
+      "day": 30,
+      "platform": "YouTube Shorts",
+      "format": "talking-head short",
+      "hook": "If you've been watching these videos and thinking 'this is exactly where I am' — here's what to do next.",
+      "body": "[Scene: direct to camera, unhurried]\n\nIf you've been watching these videos and recognising yourself — the rehearsed standups, the 1:1s that feel like minefields, the 2am certainty that you've been found out — then you already know the problem.\n\nThe question is what you do with it.\n\nMost engineers do one of two things. They wait, hoping it clicks on its own. Or they buy another book and get 40% through it.\n\nNeither works quickly. Waiting is slow. Reading about difficult conversations is not the same as having one with someone in the room who can tell you what landed and what didn't.\n\nI coach engineers through the job they were actually promoted into. Not with a framework. With the specific 1:1 that went wrong, the direct report who's gone quiet, the skip-level that's coming.\n\nNine years as an engineering manager. Engineers can tell within ten minutes.\n\nOne client wrote to me after six weeks: \"I cried a bit after session two. In a good way. Nobody had ever told me the panic was normal.\"\n\nThe September 1:1 waitlist is in the description. It has a few spots left.\n\nIf the panic is already real — that's the right time to start.",
+      "cta": "September 1:1 waitlist — link in the description. Join before it closes.",
+      "pillar": "offer"
+    }
+  ]
+}

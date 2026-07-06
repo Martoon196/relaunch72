@@ -1,0 +1,416 @@
+{
+  "run_id": "20260706-162751-coach-7a81",
+  "source": "coach",
+  "mode": "live",
+  "through": "S9",
+  "created_at": "2026-07-06T16:27:51.556Z",
+  "finished_at": "2026-07-06T17:10:42.638Z",
+  "status": "completed",
+  "s0": {
+    "accepted": true,
+    "action": "accept",
+    "issues": [],
+    "checked_at": "2026-07-06T16:27:51.566Z"
+  },
+  "stages": [
+    {
+      "stage": "S1",
+      "status": "passed",
+      "prompt_file": "s1-audit.md",
+      "prompt_version": "1.0.1",
+      "prompt_sha256": "c06cb78160a1a9f831a7c579785c4b81ad0ad9ad72d2613deecf87d135f7123c",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T16:27:51.596Z",
+          "raw_output_file": "s1-attempt-1.txt",
+          "tokens_in": 2275,
+          "tokens_out": 13304,
+          "duration_ms": 237500,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": [
+            {
+              "check": "s1.evidence_not_verbatim",
+              "message": "evidence for \"visibility\" must quote the customer's exact words: include at least one double-quoted snippet (≥12 chars, copied character-for-character) from the intake fields you were given"
+            },
+            {
+              "check": "s1.evidence_not_verbatim",
+              "message": "evidence for \"message clarity\" must quote the customer's exact words: include at least one double-quoted snippet (≥12 chars, copied character-for-character) from the intake fields you were given"
+            },
+            {
+              "check": "s1.evidence_not_verbatim",
+              "message": "evidence for \"conversion path\" must quote the customer's exact words: include at least one double-quoted snippet (≥12 chars, copied character-for-character) from the intake fields you were given"
+            },
+            {
+              "check": "s1.evidence_not_verbatim",
+              "message": "evidence for \"follow-up\" must quote the customer's exact words: include at least one double-quoted snippet (≥12 chars, copied character-for-character) from the intake fields you were given"
+            },
+            {
+              "check": "s1.evidence_not_verbatim",
+              "message": "evidence for \"proof\" must quote the customer's exact words: include at least one double-quoted snippet (≥12 chars, copied character-for-character) from the intake fields you were given"
+            },
+            {
+              "check": "s1.evidence_not_verbatim",
+              "message": "evidence for \"offer strength\" must quote the customer's exact words: include at least one double-quoted snippet (≥12 chars, copied character-for-character) from the intake fields you were given"
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "started_at": "2026-07-06T16:31:49.104Z",
+          "raw_output_file": "s1-attempt-2.txt",
+          "tokens_in": 5097,
+          "tokens_out": 17347,
+          "duration_ms": 227889,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.481881,
+      "output_file": "s1.json",
+      "flags": []
+    },
+    {
+      "stage": "S2",
+      "status": "passed",
+      "prompt_file": "s2-icp.md",
+      "prompt_version": "1.0.0",
+      "prompt_sha256": "75a4d76d83b2b0d4ffc88be725164c489c417da3e50587892d54c0fdf5c58a9b",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T16:35:37.003Z",
+          "raw_output_file": "s2-attempt-1.txt",
+          "tokens_in": 2297,
+          "tokens_out": 4685,
+          "duration_ms": 78121,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.077166,
+      "output_file": "s2.json",
+      "flags": []
+    },
+    {
+      "stage": "S3",
+      "status": "passed",
+      "prompt_file": "s3-message.md",
+      "prompt_version": "1.0.0",
+      "prompt_sha256": "6052925afca83f0d905f4e6273e8aadbb585f88b252157a039a74e6a83981ae7",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T16:36:55.133Z",
+          "raw_output_file": "s3-attempt-1.txt",
+          "tokens_in": 4074,
+          "tokens_out": 11730,
+          "duration_ms": 203864,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": [
+            {
+              "check": "s3.pitch_too_long",
+              "message": "elevator_pitch is 61 words — the spec caps it at 60"
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "started_at": "2026-07-06T16:40:19.005Z",
+          "raw_output_file": "s3-attempt-2.txt",
+          "tokens_in": 5646,
+          "tokens_out": 3618,
+          "duration_ms": 34812,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.25938,
+      "output_file": "s3.json",
+      "flags": []
+    },
+    {
+      "stage": "S4",
+      "status": "passed",
+      "prompt_file": "s4-offer.md",
+      "prompt_version": "1.0.0",
+      "prompt_sha256": "5f59506e9e0c34a26c0e3997d2f71f0c4d0034e6cc6d4be0208d3310ea8f9ed0",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T16:40:53.826Z",
+          "raw_output_file": "s4-attempt-1.txt",
+          "tokens_in": 5330,
+          "tokens_out": 17484,
+          "duration_ms": 299974,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": [
+            {
+              "check": "s4.current_stack_unquoted",
+              "message": "current_stack_read must quote the owner: include at least one double-quoted snippet (≥12 chars, copied character-for-character) from D1, D2 or D3"
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "started_at": "2026-07-06T16:45:53.807Z",
+          "raw_output_file": "s4-attempt-2.txt",
+          "tokens_in": 7204,
+          "tokens_out": 2486,
+          "duration_ms": 26611,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.337152,
+      "output_file": "s4.json",
+      "flags": []
+    },
+    {
+      "stage": "S5",
+      "status": "passed",
+      "prompt_file": "s5-roadmap.md",
+      "prompt_version": "1.0.0",
+      "prompt_sha256": "4096a7dd876e6dea7abfc7d7e9144e4f6637f16a3861025f73122115aa68ac29",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T16:46:20.426Z",
+          "raw_output_file": "s5-attempt-1.txt",
+          "tokens_in": 9021,
+          "tokens_out": 21204,
+          "duration_ms": 370153,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.345123,
+      "output_file": "s5.json",
+      "flags": []
+    },
+    {
+      "stage": "S6",
+      "status": "passed",
+      "prompt_file": "s6-website.md",
+      "prompt_version": "1.0.0",
+      "prompt_sha256": "f3d9d0a7f0af14a223d12934b5b8132cb5b67f08ac3ba0830be8a68f3e8f5eb1",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T16:52:30.595Z",
+          "raw_output_file": "s6-attempt-1.txt",
+          "tokens_in": 7940,
+          "tokens_out": 3614,
+          "duration_ms": 83476,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": [
+            {
+              "check": "s6.quote_fabricated",
+              "message": "quoted passage at home.hero_variants[1].headline (\"I ran a genuinely difficult conversation without feeling sic…\") is not copied from the S2 verbatims or the intake fields this stage consumes — a fabricated quotation parks the run",
+              "fatal": false
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "started_at": "2026-07-06T16:53:54.084Z",
+          "raw_output_file": "s6-attempt-2.txt",
+          "tokens_in": 11647,
+          "tokens_out": 3786,
+          "duration_ms": 79844,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.169761,
+      "output_file": "s6.json",
+      "flags": []
+    },
+    {
+      "stage": "S7",
+      "status": "passed",
+      "prompt_file": "s7-emails.md",
+      "prompt_version": "1.0.1",
+      "prompt_sha256": "197e270a4254067726e130637e3d1c97ecfee78375040da988497a356fdaca07",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T16:55:13.948Z",
+          "raw_output_file": "s7-attempt-1.txt",
+          "tokens_in": 7651,
+          "tokens_out": 6388,
+          "duration_ms": 131415,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": [
+            {
+              "check": "s7.s3_banned_word",
+              "message": "S3 voice.banned_words entry \"hustle\" found at welcome_seq[5].body — the voice guide binds every email"
+            },
+            {
+              "check": "s7.invented_quote",
+              "message": "quoted passage at welcome_seq[2].body (\"I statements.…\") is not copied from S2/S3/S4, F2, A1 or the customer reviews (C2) — a fabricated testimonial or quote parks the run",
+              "fatal": false
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "started_at": "2026-07-06T16:57:25.393Z",
+          "raw_output_file": "s7-attempt-2.txt",
+          "tokens_in": 14174,
+          "tokens_out": 6367,
+          "duration_ms": 128520,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.25680000000000003,
+      "output_file": "s7.json",
+      "flags": []
+    },
+    {
+      "stage": "S8",
+      "status": "passed",
+      "prompt_file": "s8-social.md",
+      "prompt_version": "1.0.1",
+      "prompt_sha256": "cc41954ac4e4bcdff2d253fe188c989aa68f3449a52115e930d5ff739a4ef3ad",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T16:59:33.944Z",
+          "raw_output_file": "s8-attempt-1.txt",
+          "tokens_in": 8128,
+          "tokens_out": 10686,
+          "duration_ms": 216874,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": [
+            {
+              "check": "s8.pillar_distribution",
+              "message": "pillar \"teach\" has 10 of 30 posts — no lane above 9 (30%)"
+            },
+            {
+              "check": "s8.c2_verbatim_posts",
+              "message": "day 8 is a \"proof\" post but carries no double-quoted exact C2 customer words — proof posts quote the customer, character-for-character"
+            },
+            {
+              "check": "s8.c2_verbatim_posts",
+              "message": "day 24 is a \"proof\" post but carries no double-quoted exact C2 customer words — proof posts quote the customer, character-for-character"
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "started_at": "2026-07-06T17:03:10.831Z",
+          "raw_output_file": "s8-attempt-2.txt",
+          "tokens_in": 18975,
+          "tokens_out": 10635,
+          "duration_ms": 222093,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.40112400000000004,
+      "output_file": "s8.json",
+      "flags": []
+    },
+    {
+      "stage": "S9",
+      "status": "passed",
+      "prompt_file": "s9-oneplan.md",
+      "prompt_version": "1.0.0",
+      "prompt_sha256": "fa70ca2f09a1f544c68f3a466fdf467ee19d847c38e7fbf30626a2199f08ec4a",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T17:06:52.941Z",
+          "raw_output_file": "s9-attempt-1.txt",
+          "tokens_in": 11603,
+          "tokens_out": 14575,
+          "duration_ms": 208495,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": [
+            {
+              "check": "s9.horizon_exceeded",
+              "message": "market: annualisation language found — projections beyond 90 days don't belong on this page"
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "started_at": "2026-07-06T17:10:21.445Z",
+          "raw_output_file": "s9-attempt-2.txt",
+          "tokens_in": 12694,
+          "tokens_out": 1602,
+          "duration_ms": 21124,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.315546,
+      "output_file": "s9.json",
+      "flags": []
+    }
+  ],
+  "s10": {
+    "issues": [
+      {
+        "check": "s10.s3_banned_word",
+        "message": "S8.posts[7].body: contains \"transformation\", which S3's voice guide bans — the voice list binds every copy deliverable"
+      },
+      {
+        "check": "s10.s3_banned_word",
+        "message": "S8.posts[24].body: contains \"scale\", which S3's voice guide bans — the voice list binds every copy deliverable"
+      },
+      {
+        "check": "s10.price_conflict",
+        "message": "S6.sales_page.sections[4].body: quotes a price of 1,200, that is neither an S4 recommended price nor a price the intake states — every price in the pack must agree with the Offer Stack"
+      },
+      {
+        "check": "s10.price_conflict",
+        "message": "S7.promo_seq[3].body: quotes a price of 1,200 that is neither an S4 recommended price nor a price the intake states — every price in the pack must agree with the Offer Stack"
+      },
+      {
+        "check": "s10.price_conflict",
+        "message": "S7.promo_seq[4].body: quotes a price of 1,200 that is neither an S4 recommended price nor a price the intake states — every price in the pack must agree with the Offer Stack"
+      }
+    ],
+    "package_file": "bundle.json",
+    "review_file": "review.md",
+    "status": "awaiting_signoff",
+    "assembled_at": "2026-07-06T17:10:42.638Z"
+  },
+  "totals": {
+    "tokens_in": 133756,
+    "tokens_out": 149511,
+    "cost_usd": 2.6439
+  },
+  "environment": {
+    "node": "v22.22.2",
+    "orchestrator_version": "0.1.0"
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "positioning_statement": "For the rescue dog owner who has already spent a drawer's worth of money on calming products that didn't work — who dreads October, wrestles a whippet into a coat built for a Labrador, and quietly suspects she is somehow failing her dog — this is anxiety kit built on a different promise. Every product is road-tested on a panel of twelve genuinely anxious rescues before it goes on sale, with the fail rate published; the feeder took three redesigns, and they say so. Instead of a Prime delivery that arrives tomorrow and slides off in forty seconds, you get kit sized for your actual dog's build, a handwritten guide on how to introduce it slowly, and someone who answers your DMs themselves. Premium because this is your last attempt, not your first — and because your dog isn't broken, he has just never had something built for dogs like him.",
+  "message_pillars": [
+    "The person buying this kit isn't really shopping for a coat — she's trying to get her evenings in October back, to book a weekend away without dreading it, and to stop quietly believing she has somehow failed the dog she chose.",
+    "Every product is tested on twelve genuinely anxious rescue dogs and the fail rate is published — so when the coat reaches your door, it has already been through the versions that didn't work, and you don't have to be.",
+    "When it works, she folds the coat up the next morning with something between relief and disbelief — and then opens her phone to tell her rescue group, unprompted, that this one is actually different."
+  ],
+  "differentiators": [
+    "Rescue-tested with published failures, not just a pass mark (E3): \"Every product goes through a trial panel of twelve genuinely anxious rescue dogs before launch, and we publish the fail rate — the feeder took three redesigns and we say so.\"",
+    "Fit, guidance, and a real person at the other end (E3): \"Sizing videos for odd-shaped rescues, a handwritten intro guide in every box, and I answer the DMs myself.\""
+  ],
+  "value_props": [
+    "Instead of a £14 Amazon wrap that slides off a whippet chest in forty seconds, you get a coat sized against odd builds and tested on genuinely anxious dogs before it was ever sold.",
+    "Instead of another product that promised calm and lives in the drawer, you get kit with a published trial record — including the redesigns that failed — so you know exactly what survived to reach you.",
+    "Instead of figuring out alone how to introduce something new to a nervous dog, you get a handwritten guide in the box that already knows your dog needs slow, and a founder who answers the DMs when it matters."
+  ],
+  "voice": {
+    "sliders": {
+      "formal_casual": 4,
+      "playful_straight": 2,
+      "bold_understated": 3
+    },
+    "tone_rules": [
+      "Keep most sentences under 20 words. A longer sentence earns its length by carrying a specific, concrete detail — not a general claim. Write as you would explain something to a worried person at a kitchen table, not as you would fill a product listing.",
+      "No clinical or marketing jargon. 'Anxiety management solution' becomes 'something that actually helps him settle.' 'Calming protocol' becomes 'how to introduce it.' Test every word: would a worried dog owner find it reassuring, or distancing? Use the plain, kind register of a vet behaviourist's handout.",
+      "Own the premium price without apology or inflation. Say what it buys in concrete terms — twelve rescue dogs tested it, the failures are published, the coat fits his actual build. Never hedge with 'yes it's more expensive but', and never run a discount without a reason that genuinely serves the buyer.",
+      "Warmth is not levity. You can be wry about the industry's failures — the drawer, the diffuser that made the hallway smell odd and did nothing — never about a dog's fear or the person who has been carrying it. A frightened dog is not a hook.",
+      "Sounds like a vet behaviourist who also owns a rescue and remembers exactly which drawer you mean, not a sponsored post written by someone who has never met a frightened dog."
+    ],
+    "banned_words": [
+      "in today's fast-paced world",
+      "unlock your potential",
+      "take your business to the next level",
+      "we pride ourselves",
+      "look no further",
+      "game-changer",
+      "seamless",
+      "elevate",
+      "fur baby",
+      "pawrents",
+      "doggo",
+      "stubborn",
+      "naughty",
+      "fix your dog",
+      "solution",
+      "transform",
+      "journey",
+      "innovative",
+      "amazing",
+      "incredible",
+      "instant calm",
+      "miracle",
+      "magic",
+      "premium quality",
+      "world-class",
+      "next level",
+      "anxiety solution",
+      "calming protocol",
+      "results-driven"
+    ],
+    "must_words": [
+      "settle",
+      "decompress",
+      "rescue-tested",
+      "your dog isn't broken",
+      "drawer",
+      "handwritten",
+      "odd-shaped",
+      "slowly",
+      "chose",
+      "shaking",
+      "worth every penny"
+    ]
+  },
+  "elevator_pitch": "Anxious rescue dogs get kit road-tested on twelve real nervous rescues — and the failures are published. Every coat is sized for odd builds, every box ships with a handwritten guide on introducing things slowly, and the founder answers the DMs. So instead of another drawer of things that didn't work, you get your evenings in October back."
+}

@@ -1,0 +1,36 @@
+{
+  "profile_narrative": "He has been team lead for six weeks — maybe eight — and he is still writing code because at least code does what he tells it to. The 1:1s feel like minefields. He rehearses what to say in the shower before standups. His strongest engineer has started going quiet, and he knows what that silence probably means. It is 1am and he has typed something like 'am I a bad manager or is my team just difficult' into his phone because he needs someone, somewhere, to have written something that matches the specific shape of this feeling.\n\nHe has three management books. He has read 40% of one. His company's new-manager e-learning module covered SMART goals, took 90 minutes, and told him nothing he could use the following morning. He tried his own line manager, who was never trained either and defaulted to 'just be yourself.' He cannot decide if that is wisdom or nothing.\n\nHe will not ask HR about coaching. Partly because he is not sure it is not woo. Mostly because asking feels like holding up a sign that reads: the best engineer on the team turned out to be a rubbish manager. Six months ago people came to him with the hard problems. He cannot square that version of himself with the one who froze in last week's skip-level meeting and said nothing useful for four minutes.\n\nWhat he wants to say out loud — and has not — is that he does not know how to do this job and nobody told him it was a different job. He wants someone who has seen this exact person before to confirm that the 2am certainty he has been found out is a known condition with a known trajectory. That the panic is normal. That learning it out loud, in front of someone, is allowed.",
+  "demographics": "Early 30s, senior software engineer recently promoted to team lead at a mid-size tech or fintech company somewhere in the UK. Works almost entirely on Zoom so geography is loose — Leeds, Dublin, Manchester, it does not matter. Earns enough that £1,800 is painful but survivable, and works somewhere with an L&D or training budget he has not yet claimed, either because he did not know it existed or because claiming it would require admitting he is struggling.",
+  "situation": "Promoted into management within the last three to twelve months with no formal preparation and no clear model of what the role actually requires. Still technically hands-on — and privately proud of it — which is delaying the identity shift the job demands. Has already tried the obvious self-directed fixes: management books he does not finish, a company e-learning module that taught him nothing, advice from his own manager who was never trained either. Is managing at least one direct report who may already be disengaged. Has not told his employer he needs support, and is paying out of his own pocket partly because embarrassment is a more powerful force than the cost.",
+  "trigger_events": [
+    "A first or early 1:1 goes badly off the rails — silence, visible frustration from the direct report, or a conversation he replays for days afterwards",
+    "His strongest or most trusted engineer hands in their notice and he cannot honestly say he saw it coming",
+    "He freezes or fumbles visibly in a skip-level meeting with senior leadership and cannot recover in the room",
+    "His partner points out, carefully, that he has been miserable or absent since the promotion",
+    "A direct report raises a complaint or goes around him to his own manager"
+  ],
+  "objections": [
+    "£1,800 is a real number when the company has not offered to pay — even knowing he could expense part of it later, committing to it himself feels like a significant ask",
+    "Engineering instinct: coaching smells of hustle-culture LinkedIn content and motivational posters, not of something a technically serious person does",
+    "He is already underwater — adding six hours of sessions to a calendar already packed with 1:1s, standups, and actual code review feels like it will tip him over",
+    "Worry that a coach will hand him a laminated framework and call it done, the same way the e-learning module did"
+  ],
+  "desires_surface": "Concrete techniques for having difficult conversations, giving feedback that lands, and keeping a team functioning — things he can use before next Monday.",
+  "desires_deep": "Permission to stop performing a competence he does not yet have. The specific relief of hearing from someone experienced that the 2am impostor panic is a normal feature of this transition, not evidence he was the wrong choice — and that he is allowed to learn to manage out loud instead of pretending he already knows how.",
+  "verbatims": [
+    "honestly before our sessions I was rehearsing my own standups in the shower. Six weeks in I ran a genuinely difficult conversation without feeling sick, and the weird thing is my team seem to like me MORE now I've stopped pretending to have all the answers.",
+    "You said 'your job isn't to be the best engineer in the room anymore, it's to make the room better' and I think about that line every single day. Best money I've spent on my career and my company paid half lol",
+    "I cried a bit after session two. In a good way. Nobody had ever told me the panic was normal."
+  ],
+  "exclusions": [
+    "Someone who has already decided a direct report needs to go and wants help building the paper trail — they want a script to manage someone out, not to examine their own part in it",
+    "Anyone whose instinct is to fix the team rather than look at their own behaviour and role first",
+    "Very senior leaders who book a session and spend it explaining, at length, why coaching does not work"
+  ],
+  "awareness_stage": "solution aware",
+  "channels": [
+    "LinkedIn",
+    "Google search",
+    "engineering Slack communities"
+  ]
+}

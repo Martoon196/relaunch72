@@ -1,0 +1,59 @@
+{
+  "snapshot": "Steady Hound is a UK e-commerce brand selling calming kit for anxious rescue dogs — a pressure coat, a den bed, a slow feeder, and treat pouches, shipped UK mainland. Revenue runs almost entirely through one channel: Instagram Reels featuring Bramble, the owner's noise-phobic collie cross, drive first orders; repeat customers return for the bed and pouches. The business has real foundations — 150 new customers a month without meaningful paid support and a repeat rate above 60%. The audit also found three plain problems: all discovery depends on one channel, a 2,400-subscriber email list has had one broadcast since mid-June, and £300 per month in Google Shopping spend is producing no measurable return.",
+  "market": "The buyer is a woman in her mid-thirties, hybrid worker on a commuter belt, who adopted an anxious rescue dog and has already spent on things that did not work — a cheap Amazon wrap, a pheromone diffuser, two behaviourist sessions at £180 each. She starts looking after a bad bonfire night or a walk that ends badly. She researches before buying: reads the about page, checks the returns policy, and searches the product name in rescue Facebook groups she already trusts. She chooses Steady Hound when she finds the rescue-panel story — twelve dogs, published fail rates, odd-build sizing — and a handwritten guide that already knows her dog needs to come to new things slowly.",
+  "offer": "Three rungs. Entry: the Settle Coat at £58 — the natural first purchase for a buyer arriving off a Reel. Core: the Calm Kit at £165 — coat, Den Bed, and Slow-Down Feeder sold together against an individual total of £201, making the £36 saving concrete. Premium: the Full Settle System at £175 — the Calm Kit plus Intro Treat Pouches (£9.50), everything in one parcel. Currently 11% of orders include the Calm Kit; the 90-day goal is 25%.",
+  "goals_90d": "By day 90, the Calm Kit bundle represents 25% of all orders, up from 11% now. Progress will be tracked as the bundle's share of total weekly orders through the fireworks-season run-up. The measure is a proportion — not a unit count — so it holds whether overall order volume rises or stays flat. Nothing beyond day 90 is in scope here.",
+  "plan_summary": "Three phases over 90 days, six hours per week committed. Days 1–30: stop the leaks — build a dedicated Calm Kit page, send the first broadcast email to 2,400 subscribers since mid-June, update the five-part welcome series to link to the bundle page, and pause Google Shopping spend. Days 31–60: build bundle recognition — weekly Reels and fortnightly email broadcasts, posts in rescue Facebook groups the owner already belongs to, and outreach to rescue charity newsletters at no cost. Days 61–90: convert at peak — three scheduled fireworks-season emails, a boosted Reel in the fortnight before bonfire night, and a real-time Bramble Reel in the final week of October. Email is prioritised because 2,400 opted-in subscribers and a welcome series that already triples bundle conversion rate are the fastest path to more Calm Kit orders. Instagram Reels are prioritised because they are the proven first-order driver. Google Shopping is not restarted.",
+  "numbers_table": [
+    {
+      "label": "Monthly revenue range",
+      "value": "£3–10k",
+      "source": "B1"
+    },
+    {
+      "label": "Average sale value",
+      "value": "£52",
+      "source": "B2"
+    },
+    {
+      "label": "New customers per month",
+      "value": "150",
+      "source": "B3"
+    },
+    {
+      "label": "Repeat customer rate",
+      "value": "60%+",
+      "source": "B6"
+    },
+    {
+      "label": "Current Calm Kit order share",
+      "value": "11% of orders",
+      "source": "G1"
+    },
+    {
+      "label": "Calm Kit 90-day target",
+      "value": "25% of all orders",
+      "source": "S5"
+    },
+    {
+      "label": "Entry offer: Settle Coat",
+      "value": "£58",
+      "source": "S4"
+    },
+    {
+      "label": "Core offer: Calm Kit",
+      "value": "£165",
+      "source": "S4"
+    },
+    {
+      "label": "Email list size",
+      "value": "2,400 subscribers",
+      "source": "S1"
+    },
+    {
+      "label": "Weekly owner hours committed",
+      "value": "6",
+      "source": "S5"
+    }
+  ]
+}

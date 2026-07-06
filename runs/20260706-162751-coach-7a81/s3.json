@@ -1,0 +1,85 @@
+{
+  "positioning_statement": "For software engineers who've just been promoted into management and are quietly drowning — not because they were the wrong choice, but because nobody told them it was a different job — this is coaching built from nine years inside the actual engineering manager role. The real problem is not delegation frameworks: it is the 2am certainty that everyone is about to find them out. Instead of doing what most engineers do — waiting, hoping it clicks on its own — they get permission to learn the job they were actually promoted into, out loud, with someone who has run the redundancy conversations, shipped late, and been the one crying in the stairwell. Most coaches came up through HR or L&D. Engineers can smell the difference inside ten minutes, and it changes how honest they are willing to be. This is premium coaching: the investment reflects the depth of the work, not a slide deck of frameworks.",
+  "message_pillars": [
+    "The 2am certainty you have been found out is not evidence you are failing — it is a known feature of the engineer-to-manager transition, and every engineer who has moved through it started from exactly where you are now.",
+    "Nine years as an actual engineering manager — redundancy conversations, late ships, the stairwell moments — means the work is built from the inside out, not delivered by someone who came up through HR or L&D and has never been the one who shipped late.",
+    "Six weeks in, engineers run difficult conversations without feeling sick and their teams respond better to someone who has stopped pretending to have all the answers: that is what doing the job you were actually promoted into looks like."
+  ],
+  "differentiators": [
+    "Nine years inside the actual engineering manager role, not a coaching background from HR or L&D (E3): \"I was an engineering manager for nine years — I've actually done the job, run the redundancy conversations, shipped late, been the one crying in the stairwell. Most leadership coaches came up through HR or L&D. Engineers can smell the difference inside ten minutes, and it changes how honest they're willing to be.\"",
+    "Not built for corporate volume or swagger — deliberately and openly positioned away from both (E2): \"Ledgerline takes the corporate deals because they have a sales team and I have a Notion page. Individuals I mostly lose to doing nothing — they wait, hoping it clicks on its own. Marcus gets the ones who want swagger; I am not that, on purpose.\""
+  ],
+  "value_props": [
+    "Instead of rehearsing what to say before your own standups, you run difficult conversations without feeling sick — and your team starts to trust you more once you have stopped performing a confidence you do not yet have.",
+    "Instead of waiting for it to click on its own while the 2am panic gets louder, you get permission to learn the job out loud with someone who can confirm the certainty you have been found out is a known condition with a known trajectory.",
+    "Instead of a laminated framework from someone who has never shipped late or sat in that stairwell, you get the job you were actually promoted into explained by someone who has done it for nine years and still remembers what the deep end feels like."
+  ],
+  "voice": {
+    "sliders": {
+      "formal_casual": 4,
+      "playful_straight": 3,
+      "bold_understated": 4
+    },
+    "tone_rules": [
+      "Keep sentences short when landing emotional truth. The target register is C2's 'Nobody had ever told me the panic was normal' — plain statement, no cushioning, no clause-stacking. Maximum two clauses for any sentence that is carrying real weight. Long sentences are for context; short sentences are for the thing that matters.",
+      "Name the hard thing first, then let the relief follow from the specificity of what is on offer. Do not open with optimism or manufactured urgency. H2's Elena could deliver awful news so plainly you almost thanked her for it — that is the editorial standard. When price comes up, state it plainly and move on: premium is a position, not something to hedge or apologise for.",
+      "Engineering vocabulary — 1:1s, standups, skip-level, code review, shipping late — is used naturally because the engineers reading this use it. Coaching and HR register — psychological safety, unpack, facilitate, holistic, safe space — is not used at all. Per E3, engineers can detect the difference inside ten minutes and it determines how honest they are willing to be. One word from the wrong register undoes the trust the rest of the copy built.",
+      "Sounds like Elena — the CTO who delivers awful news so plainly you almost thank her for it — not a leadership development consultant who came up through L&D and speaks in competency frameworks."
+    ],
+    "banned_words": [
+      "in today's fast-paced world",
+      "unlock your potential",
+      "take your business to the next level",
+      "we pride ourselves",
+      "look no further",
+      "game-changer",
+      "seamless",
+      "elevate",
+      "empower",
+      "rockstar",
+      "10x",
+      "thought leader",
+      "crushing it",
+      "journey",
+      "🚀",
+      "leaders",
+      "leverage",
+      "synergy",
+      "impactful",
+      "authentic",
+      "hustle",
+      "mindset shift",
+      "paradigm",
+      "unpack",
+      "safe space",
+      "transformation",
+      "level up",
+      "high-performance",
+      "inspiring",
+      "psychological safety",
+      "holistic",
+      "scale",
+      "ecosystem",
+      "pivot",
+      "growth mindset",
+      "facilitate"
+    ],
+    "must_words": [
+      "drowning",
+      "the deep end",
+      "the job you were actually promoted into",
+      "engineers",
+      "standups",
+      "1:1s",
+      "panic was normal",
+      "make the room better",
+      "skip-level",
+      "rehearsing",
+      "difficult conversation",
+      "found out",
+      "shipped late",
+      "the stairwell"
+    ]
+  },
+  "elevator_pitch": "Most engineers promoted to management spend months drowning, waiting for it to click. I coach them through the job they were actually promoted into — the 1:1s, the difficult conversations, the 2am certainty they've been found out. Nine years as an engineering manager means engineers can tell within ten minutes, and it changes how honest they're willing to be."
+}

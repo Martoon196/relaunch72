@@ -1,0 +1,122 @@
+{
+  "north_star": "Sign two corporate cohort contracts by 30 September and bring the 1:1 waitlist back to ten names — both inside the next 90 days. Two contracts, each at £6,500 cohort plus £2,400 workshop = £8,900 per contract, £17,800 combined in new revenue. Ten waitlist names means the next 1:1 intake is already spoken for before it opens.",
+  "phases": [
+    {
+      "days": "Days 1–30",
+      "theme": "Plug the gaps blocking the waitlist and corporate contracts: add the CTA, publish the proof, open the corporate conversations",
+      "actions": [
+        {
+          "action": "Add one sentence to the footer of every newsletter from this point forward: 'If you have just been promoted into management and the panic is already real, join the September 1:1 waitlist here: [link].' Set up a Google Form or Mailchimp signup page as the destination before the next issue goes out. Done when the sentence is live in the next sent issue.",
+          "hours": 0.75,
+          "channel": "Email / Newsletter",
+          "depends_on": ""
+        },
+        {
+          "action": "Email six past 1:1 clients with this exact ask: 'I am collecting two sentences from a handful of past clients — what the problem was when we started, and what is different now. Goes on the website with your name, or anonymously if you prefer.' Done when you have at least three responses with written permission to publish them.",
+          "hours": 0.75,
+          "channel": "Email",
+          "depends_on": ""
+        },
+        {
+          "action": "Paste the client responses verbatim under a 'What clients say' heading on the homepage — plain text only, no design work. If your website platform requires a developer to edit the homepage, publish them on a free Carrd page and link to it from the homepage instead. Done when three or more testimonials are live at a URL you can send to a prospect.",
+          "hours": 1,
+          "channel": "Website",
+          "depends_on": "Email six past clients for testimonials"
+        },
+        {
+          "action": "Write one reusable paragraph — your podcast pitch — built around the nine-years-as-EM story: the redundancy conversations, the stairwell moment, what engineers discover in session one that the company e-learning module never covered. Include The Standup Log result (four clients in a fortnight) as the one-line credential. Send it, personalized with each show's name, to three engineering-leadership or new-manager podcast shows that have not featured you before. Done when three pitches are sent.",
+          "hours": 1.5,
+          "channel": "Email",
+          "depends_on": ""
+        },
+        {
+          "action": "Email the L&D contact or HR lead at every company that has previously commissioned a cohort with you — assumes you have their direct contact details from those engagements, confirm this before spending time here. Message: 'Engineers promoted after this summer's performance reviews will need support by Q4. I am confirming two October cohort starts — is [Company] interested in a conversation this month?' Done when every past corporate contact has received this email.",
+          "hours": 0.75,
+          "channel": "Email",
+          "depends_on": ""
+        }
+      ]
+    },
+    {
+      "days": "Days 31–60",
+      "theme": "Reach waitlist candidates and corporate contracts through borrowed audiences and warm referrals — no new audiences to build from scratch, no ads",
+      "actions": [
+        {
+          "action": "Send the podcast pitch from Phase 1 to three more engineering-leadership or new-manager shows, each personalized with the show's name and one specific episode you could follow. Done when six shows total have received a pitch (three from Phase 1, three here).",
+          "hours": 1.5,
+          "channel": "Email",
+          "depends_on": "Send podcast pitch to three shows"
+        },
+        {
+          "action": "Email all past 1:1 clients a one-paragraph referral ask: 'The September waitlist is open — ten spots, kept to people who come recommended. If anyone in your network just got promoted and is already struggling, one line from you pointing them to this link is enough: [waitlist form].' Done when the email is sent.",
+          "hours": 0.5,
+          "channel": "Email",
+          "depends_on": ""
+        },
+        {
+          "action": "Write and publish two LinkedIn text posts, spaced two weeks apart. Each opens with one verbatim client quote from Phase 1 — the shower-rehearsal line or the 2am panic line — then two or three sentences of context, then the waitlist link. No carousel, no slides. Done when both posts are published.",
+          "hours": 1.5,
+          "channel": "LinkedIn",
+          "depends_on": "Email six past clients for testimonials"
+        },
+        {
+          "action": "Send five LinkedIn direct messages to L&D managers or engineering directors at mid-size UK tech or fintech companies you are not already in contact with. Three sentences each: name the September promotion season, describe the cohort format in one line, offer a fifteen-minute call. Assumes your LinkedIn account has enough second-degree connections in this space to identify five relevant people — check your connection list before spending time here. Done when five messages are sent and logged.",
+          "hours": 1.5,
+          "channel": "LinkedIn",
+          "depends_on": ""
+        }
+      ]
+    },
+    {
+      "days": "Days 61–90",
+      "theme": "Convert the September promotion peak into signed contracts and waitlist names — follow up on everything open, close what is closable",
+      "actions": [
+        {
+          "action": "Write and send one newsletter issue in the first week of September about the post-review promotion moment: the engineer who hears on a Friday they are a manager now and faces the team on Monday with no model for what the job actually is. End with both the waitlist link and a 'my company is interested in a cohort' enquiry link. This replaces one regular Tuesday issue, not an extra one. Done when the issue is sent.",
+          "hours": 1.5,
+          "channel": "Email / Newsletter",
+          "depends_on": "Add CTA to newsletter footer"
+        },
+        {
+          "action": "Send one follow-up email to every corporate contact from Phase 1 who has not yet responded: 'I am confirming the two October cohort starts this week — is [Company] still an option for one of them?' Done when every non-responder has received this message.",
+          "hours": 0.5,
+          "channel": "Email",
+          "depends_on": "Email past corporate contacts about October cohorts"
+        },
+        {
+          "action": "Reply to each Phase 2 LinkedIn DM target who has not responded — one additional sentence added to the same thread. Done when all five threads have a follow-up.",
+          "hours": 0.25,
+          "channel": "LinkedIn",
+          "depends_on": "Send LinkedIn DMs to L&D managers"
+        },
+        {
+          "action": "If any podcast from Phases 1 or 2 has confirmed a recording date, agree the brief with the host and note your two through-lines: the engineer who discovers the panic is a known condition with a known trajectory, and the job they were actually promoted into versus the one the e-learning module described. No slides or prep deck needed. If no bookings have come through yet, send three more pitches to shows not yet contacted. Done when either an episode is confirmed or three new pitches are sent.",
+          "hours": 1,
+          "channel": "Email",
+          "depends_on": "Send podcast pitch to three shows"
+        },
+        {
+          "action": "In the final week of September, check the waitlist count. If it has reached eight names but not ten, send a short standalone email to the newsletter list: 'Two spots left on the September waitlist — I am closing it on Friday.' A named deadline moves the last two sign-ups. Assumes your form or email platform shows the current submission count — verify this before planning to use it.",
+          "hours": 0.5,
+          "channel": "Email / Newsletter",
+          "depends_on": "Add CTA to newsletter footer"
+        }
+      ]
+    }
+  ],
+  "channel_priorities": [
+    "Email and newsletter first — 1,400 subscribers at 48% open rate is the strongest asset in the business and the proven path to 1:1 bookings (F4). One added sentence starts moving the waitlist immediately.",
+    "Referrals from past clients second — 70% of bookings arrive this way (F4). A deliberate referral ask costs one email and is the single highest-converting action in the plan.",
+    "Podcast guest appearances third — one appearance on The Standup Log produced four clients in a fortnight (F4). The channel is proven and has not been used since. Every new show pitched is a borrowed audience of engineers and L&D buyers this business has not yet reached.",
+    "LinkedIn text posts and direct messages fourth — engineers and L&D buyers use LinkedIn (C7), text posts cost nothing, and DMs to L&D contacts are the most direct route to corporate contracts without a sales team. Ads excluded: £300 produced zero bookings (F3).",
+    "Engineering Slack communities fifth — engineers use them (C7) and there is no track record here yet. Treat as a future test only after the four channels above are producing results."
+  ],
+  "do_not_do": [
+    "No Instagram content of any kind — six months of carousels produced 11 likes, almost all from other coaches, and zero bookings (F3). The target buyer is not on that platform and the time cost per post is unsustainable for a solo operator.",
+    "No paid LinkedIn advertising — £300 in LinkedIn ads produced clicks and zero bookings (F3). The gap is in the proof and the call to action on the page people land on, not in traffic volume. Fix the page before buying the traffic.",
+    "No webinars or live online events — nine signups and four attendees, including one personal connection, confirmed this format does not convert for this business at this stage (F3).",
+    "No full website rewrite in August — this has been planned and abandoned every August for three years (G4). The plan makes two targeted text edits only: a testimonials section and a waitlist CTA. Everything else on the site stays as it is until both goals are signed.",
+    "No time spent building a new social media following — borrowed audiences outperform owned ones at this scale: one podcast appearance brought four clients in a fortnight while six months of original content built nothing (F4, F3). Pitch existing audiences; do not grow new ones."
+  ],
+  "weekly_hours_total": 3
+}

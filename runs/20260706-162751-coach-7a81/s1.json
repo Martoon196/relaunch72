@@ -1,0 +1,51 @@
+{
+  "scores": [
+    {
+      "category": "visibility",
+      "grade_1to10": 4,
+      "evidence": "Three channels are listed (F1): website, email list, SEO — but none appear in the 'what works' answer (F4). The most active public channel produces nothing actionable: (B4): \"LinkedIn posts get lovely comments and roughly zero bookings.\" The single outbound discovery spike came from one podcast appearance: (F4): \"one guest spot on The Standup Log podcast brought four clients in a fortnight\" — not repeated since. SEO is listed as a channel but no organic-search enquiry appears anywhere in the intake. Cold discovery is almost entirely absent; the business runs on referral gravity.",
+      "leak_cost_estimate": "The proven podcast channel produced 4 clients × £1,800 (B2) = £7,200 from one appearance. With no systematic pitch to further podcast audiences, that channel is dormant at no stated cost to activate."
+    },
+    {
+      "category": "message clarity",
+      "grade_1to10": 7,
+      "evidence": "The niche statement is precise and arresting: (A2): \"I coach software engineers who've just been made managers and are quietly drowning — I help them stop doing everyone else's job and start doing their own.\" The differentiation is grounded in lived experience: (E3): \"I was an engineering manager for nine years — I've actually done the job, run the redundancy conversations, shipped late, been the one crying in the stairwell.\" Both are strong. The concern is execution: this clarity is not translating into bookings from public channels. LinkedIn engagement produces compliments but no bookings, suggesting the message resonates but a call to action is absent.",
+      "leak_cost_estimate": "If the A2/E3 clarity were matched by a direct CTA in the newsletter and on LinkedIn, converting 1 additional enquiry per month, that is 1 × £1,800 (B2) = £1,800/mo in currently recoverable revenue."
+    },
+    {
+      "category": "conversion path",
+      "grade_1to10": 3,
+      "evidence": "The intake contains the sharpest self-diagnosis in the document: (E2): \"Ledgerline takes the corporate deals because they have a sales team and I have a Notion page.\" For anyone arriving cold via SEO, LinkedIn, or the newsletter, no booking link, discovery call process, or enquiry workflow is described. (F4): \"people book after lurking for eight months\" — the path to becoming a client is waiting, not navigating. The 70% referral rate masks how thin the conversion path is for everyone who arrives without a personal introduction.",
+      "leak_cost_estimate": "At 4 new clients/month (B3) almost entirely via referral, converting even 1 cold-channel prospect per month via a clear CTA = 1 × £1,800 (B2) = £1,800/mo currently absent from the funnel."
+    },
+    {
+      "category": "follow-up",
+      "grade_1to10": 5,
+      "evidence": "The newsletter is a real and under-leveraged asset: (F2): \"About 1,400 subscribers. I email most Tuesdays — skipped three weeks in May when the cohort work stacked up and felt guilty the entire time. Opens hover around 48%, which people tell me is good?\" It is genuinely good — well above typical. But no welcome sequence, re-engagement flow, or past-client check-in is described anywhere in the intake. Referrals happen organically: (F4): \"Referrals from past clients, full stop\" — with no mechanism to make them more deliberate or frequent.",
+      "leak_cost_estimate": "One deliberate referral-prompt email per quarter to past clients, if it produced 1 additional booking, = 1 × £1,800 (B2) = £1,800/quarter (£7,200/year). Currently that mechanism does not exist."
+    },
+    {
+      "category": "proof",
+      "grade_1to10": 3,
+      "evidence": "The referral rate confirms results are real: (F4): \"Referrals from past clients, full stop — probably 70% of bookings.\" Clients are clearly getting value and telling others. But that proof is entirely private. No testimonials, case studies, or client outcomes are mentioned anywhere in the intake — not on the website, not in the newsletter, not on LinkedIn. A cold prospect evaluating a £1,800 coaching investment who was not personally referred has nothing visible to trust. The practitioner story is compelling — (E3): \"been the one crying in the stairwell\" — but no client outcome sits alongside it.",
+      "leak_cost_estimate": "If visible testimonials converted 1 additional cold prospect per month who currently hesitates and leaves, that is 1 × £1,800 (B2) = £1,800/mo. The proof exists in clients' heads and costs nothing to capture."
+    },
+    {
+      "category": "offer strength",
+      "grade_1to10": 6,
+      "evidence": "Positioning is deliberately premium (E4) with a £1,800 average sale (B2) and a clearly dominant product: (B4): \"Almost all of it is the 1:1 packages.\" The practitioner USP is grounded in a real differentiator: (E3): \"Most leadership coaches came up through HR or L&D. Engineers can smell the difference inside ten minutes, and it changes how honest they're willing to be.\" The gap is in packaging: a B1 range of £3–10k against a £1,800 average suggests the offer tiers are not clearly named or marketed. The quarterly in-person workshop (A5) reads as an operational fact rather than a named product with a price and a stated outcome.",
+      "leak_cost_estimate": "The quarterly workshop (A5) is unpriced and unmarketed in the intake. If it converted 1 attendee per quarter to a full 1:1 package, that is 1 × £1,800 (B2) = £1,800/quarter (£7,200/year) from a channel currently generating no described bookings."
+    }
+  ],
+  "top_3_leaks": [
+    "The podcast channel is proven and has not been repeated: one appearance on The Standup Log produced 4 clients × £1,800 (B2) = £7,200 from a single conversation, yet no further podcast pitches appear anywhere in the intake. Every engineering-leadership or new-manager podcast that has not featured Priya is a warm audience she has not reached, at zero cost to pitch.",
+    "Seventy percent of bookings come from referrals (F4) but the proof behind those referrals is invisible publicly — no testimonials on the website, no client outcomes in the newsletter, nothing on LinkedIn. A cold prospect landing anywhere in the funnel has nothing visible to trust. Converting 1 additional cold prospect per month is worth 1 × £1,800 (B2) = £1,800/mo.",
+    "The newsletter has 1,400 subscribers at 48% open rate and no described call to action — people book after lurking for eight months (F4) not because they need that long, but because nobody has told them how or when to take the next step. Shortening the lurk window for even 1 subscriber per month = 1 × £1,800 (B2) = £1,800/mo in deferred revenue."
+  ],
+  "quick_wins": [
+    "Before the next Tuesday newsletter goes out, add one line at the bottom with a booking link — something close to: 'If you have just been promoted into management and it is already not what you expected, here is how to book a 30-minute call with me.' One sentence, one link, no launch required.",
+    "Email five past clients today and ask for two sentences each: what the problem was before they worked with you, and what changed after. Tell them it will go on the website. Take the responses verbatim, with permission, and paste them onto the homepage before the week is out.",
+    "Write a one-paragraph guest-pitch email this week built around the nine-years-as-EM story — the redundancy conversations, the stairwell moment — and send it to three engineering-leadership or new-manager podcast hosts before Friday. The Standup Log appearance proved the channel converts; this costs one hour."
+  ],
+  "narrative_summary": "Priya, the foundation here is genuinely strong. A 1,400-subscriber newsletter where nearly half the list opens every email is an asset most coaches would trade a lot for. A referral engine delivering 70% of your bookings means past clients trust you enough to stake their professional reputation on recommending you. And the positioning you wrote in two lines — engineers quietly drowning after promotion, you helping them stop doing everyone else's job — is sharper than most coaching businesses manage across an entire website.\n\nThe problem is not the product. It is that everything good about Deep End Coaching is invisible to anyone who has not been personally sent to you.\n\nA cold prospect who lands on your site finds no visible evidence that anyone has ever been helped. Your newsletter readers are engaged but nobody has told them how to book, so they wait eight months. LinkedIn gets warm comments and zero clients. Meanwhile, one podcast conversation produced four clients and you have not done it again.\n\nThis week, three things cost you nothing but an hour each: put a booking link at the bottom of every newsletter, collect five testimonials from past clients and post them on the homepage, and pitch three podcast shows built around the nine-years-in-the-job story. The business you have built on word of mouth is real — the task now is making it visible to the engineers your past clients have not met yet."
+}

@@ -1,0 +1,239 @@
+{
+  "welcome_seq": [
+    {
+      "subject_variants": [
+        {
+          "subject": "You're in — here's what happens next",
+          "hook_category": "direct_benefit"
+        },
+        {
+          "subject": "The email I wish someone had sent me six weeks in",
+          "hook_category": "personal_voice"
+        },
+        {
+          "subject": "What these emails are actually for",
+          "hook_category": "open_loop"
+        }
+      ],
+      "preview": "One thing you can use before Monday, and what to expect from here.",
+      "body": "Hi {{first_name}},\n\nWelcome to the list.\n\nI'm going to keep this short because you probably have a standup in an hour and a 1:1 you're not quite ready for after that.\n\nHere's what you'll get from these emails: honest, direct thinking about the engineer-to-manager transition — the stuff nobody puts in the e-learning module. No frameworks named after animals. No LinkedIn motivational content. Just the actual job.\n\nOne thing you can use today: stop preparing what you're going to say in your next 1:1 and instead write down one question you genuinely don't know the answer to about the person you're managing. Ask that instead. It's slower. It works better.\n\nOver the next few days I'll get into the deeper stuff — why the panic at 2am is not what you think it is, what nine years inside the engineering manager role taught me that HR training never could, and what it looks like when engineers stop pretending to have all the answers.\n\nReply and tell me where you are right now. First week? First month? Is your strongest engineer already going quiet?\n\nI read every reply.\n\nP.S. If at any point these emails aren't for you, unsubscribe at the bottom. No hard feelings.",
+      "cta": "Reply and tell me where you are in the transition — I read every one."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "Nobody told you it was a different job",
+          "hook_category": "reflective_question"
+        },
+        {
+          "subject": "The thing under the thing you're actually struggling with",
+          "hook_category": "open_loop"
+        },
+        {
+          "subject": "Why the management books aren't helping",
+          "hook_category": "story_tease"
+        }
+      ],
+      "preview": "It's not that you're bad at this. It's that you're doing a job nobody explained.",
+      "body": "Hi {{first_name}},\n\nYou got promoted because you were the best engineer in the room.\n\nThen someone changed the job description without telling you, handed you a 90-minute e-learning module about SMART goals, and called it preparation.\n\nThe 1:1s feel like minefields. You're rehearsing what to say before your own standups. Your strongest engineer has started going quiet and you know what that silence probably means.\n\nSo you've read 40% of a management book. You've asked your own manager, who was never trained either and said something like just be yourself. You've typed something into your phone at 1am that you'd rather not admit to.\n\nHere's the thing: none of that is evidence you're failing.\n\nIt's evidence you're doing a job nobody explained — and you're trying to do it alone, at speed, while still writing code because at least code does what you tell it to.\n\nThe problem underneath all of it isn't delegation or feedback frameworks or any of the surface things.\n\nIt's that you don't yet know whether the 2am certainty you've been found out is a real signal or just the deep end.\n\nTomorrow I'll tell you what I think it is.\n\nP.S. The strongest engineers I've worked with all started here. Every single one.",
+      "cta": "Reply if this landed — I want to know what specifically is keeping you up."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "Why engineers can tell within ten minutes",
+          "hook_category": "open_loop"
+        },
+        {
+          "subject": "I've been in the stairwell. That's why this is different.",
+          "hook_category": "personal_voice"
+        },
+        {
+          "subject": "What nine years inside the role actually teaches you",
+          "hook_category": "direct_benefit"
+        }
+      ],
+      "preview": "Most support for engineering managers smells wrong. There's a reason — and a reason this doesn't.",
+      "body": "Hi {{first_name}},\n\nYou already know what bad support for engineering managers looks like.\n\nIt's the laminated framework. The workshop that covers communication techniques you could have googled. The coach who came up through HR or L&D and talks about competency development in a way that makes you want to close the laptop.\n\nEngineers detect the difference inside ten minutes. It's not snobbery — it's pattern matching. You can tell whether someone has actually been the one who shipped late, had the redundancy conversation, stood in the stairwell afterwards and held it together long enough to get back to the team.\n\nI was an engineering manager for nine years. I've done all of those things. I still remember what the deep end feels like from the inside, not from a case study.\n\nThat's what Deep End Coaching is built from.\n\nNot a slide deck. Not a framework someone learned in a training room. The actual job, explained by someone who has done it — including the parts that don't go in the LinkedIn posts.\n\nMost coaches came up through HR or L&D. The work I do came up through standups and skip-level meetings and difficult conversations I had to run before I felt ready.\n\nYour job isn't to be the best engineer in the room anymore. It's to make the room better.\n\nSomeone told me that once. I'll tell you more about where it came from tomorrow.",
+      "cta": "Reply and tell me what kind of support you've already tried — I'm curious what's landed and what hasn't."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "\"I cried a bit after session two. In a good way.\"",
+          "hook_category": "results_evidence"
+        },
+        {
+          "subject": "What engineers say after six weeks in",
+          "hook_category": "story_tease"
+        },
+        {
+          "subject": "The line one engineer thinks about every single day",
+          "hook_category": "open_loop"
+        }
+      ],
+      "preview": "Real words from engineers who started exactly where you are now.",
+      "body": "Hi {{first_name}},\n\nI want to let someone else do the talking today.\n\nThis is from an engineer six weeks into the work:\n\n\"Honestly before our sessions I was rehearsing my own standups in the shower. Six weeks in I ran a genuinely difficult conversation without feeling sick, and the weird thing is my team seem to like me MORE now I've stopped pretending to have all the answers.\"\n\nAnd this, from someone who'd been carrying a particular line around:\n\n\"You said 'your job isn't to be the best engineer in the room anymore, it's to make the room better' and I think about that line every single day. Best money I've spent on my career and my company paid half lol\"\n\nAnd this one. This is the one I come back to most often:\n\n\"I cried a bit after session two. In a good way. Nobody had ever told me the panic was normal.\"\n\nThat last one. Nobody had told them. Not their line manager. Not HR. Not the e-learning module.\n\nThe panic was normal. It just needed someone to say it plainly.\n\nIf you're sitting with that same panic — the 2am certainty you've been found out, the silence from a direct report you can't quite read — you're not broken. You're in the deep end.\n\nTomorrow I'll give you something concrete to work with.",
+      "cta": "Reply and tell me if any of those lines hit close to home — it helps me know what to send you next."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "How to run a difficult conversation without feeling sick",
+          "hook_category": "how_to"
+        },
+        {
+          "subject": "One thing to do before your next hard 1:1",
+          "hook_category": "direct_benefit"
+        },
+        {
+          "subject": "The thing that changes how your team sees you",
+          "hook_category": "open_loop"
+        }
+      ],
+      "preview": "Something practical you can use before the end of the week.",
+      "body": "Hi {{first_name}},\n\nPractical one today.\n\nThe biggest thing engineers get wrong in difficult conversations is walking in with a verdict already written.\n\nYou've rehearsed the thing you're going to say. You've decided what the situation means. You go in to deliver the message — and the person on the other side can feel that before you've finished your first sentence. The conversation closes down.\n\nHere's what to do instead.\n\nWalk in with one question you genuinely can't answer. Not a question you already know the answer to. Not a leading question designed to bring them around to your view. An actual gap: something about their situation, their experience of the team, what's making the work hard for them right now.\n\nAsk it. Then stop talking.\n\nThis feels counterintuitive because you've been the person who solves problems by thinking harder. A difficult conversation is not that kind of problem. It's an information problem. You don't have enough of it yet.\n\nThe engineers who stop drowning in 1:1s are the ones who realise their job is to make the room better — and that starts with understanding what's actually in the room.\n\nSlow down. Ask the question. Let the silence do some of the work.\n\nYou'll be better at that conversation than you think.",
+      "cta": "Reply and tell me what difficult conversation is on your calendar this week — I'll send you a follow-up thought."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "The honest answers to what's stopping you",
+          "hook_category": "direct_benefit"
+        },
+        {
+          "subject": "Is this just motivational posters on a Zoom call?",
+          "hook_category": "reflective_question"
+        },
+        {
+          "subject": "The objection I hear most, answered straight",
+          "hook_category": "personal_voice"
+        }
+      ],
+      "preview": "The four things that hold engineers back — and what I actually think about each one.",
+      "body": "Hi {{first_name}},\n\nI want to take the objections head-on today, because they're real and they deserve straight answers.\n\n£1,800 is a real number when the company hasn't offered to pay. Yes. It is. The Lifeboat session is £250 and exists precisely because not every engineer is ready to commit to the full programme out of pocket. It also tells you within 90 minutes whether this is the kind of support that fits — before you've spent the bigger number. And most engineers I work with have an L&D budget they haven't claimed yet, because claiming it would require admitting they need help.\n\nThis smells like motivational-poster content dressed up as something serious. That test exists for a reason. Nine years inside the actual engineering manager role — not an HR or L&D background — is why the work feels different. You'll know within ten minutes. I'd rather you know sooner.\n\nYou're already underwater and can't add six more hours. Six sessions over three months. One hour every two weeks. The engineers I work with almost always say it's the one hour that makes the other hours work better — including the standups and the 1:1s that are currently costing you energy they shouldn't.\n\nWhat if it's just another laminated framework? It isn't. But I can't prove that in an email. The Lifeboat session exists so you can find out without committing the full amount first.\n\nTomorrow I'll tell you exactly what the next step looks like.",
+      "cta": "Reply with the objection that's most live for you right now — I'll give you the straight version."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "The job you were actually promoted into — and how to start doing it",
+          "hook_category": "direct_benefit"
+        },
+        {
+          "subject": "One session. 90 minutes. £250.",
+          "hook_category": "direct_command"
+        },
+        {
+          "subject": "There's a door in. Here's where it is.",
+          "hook_category": "open_loop"
+        }
+      ],
+      "preview": "The Lifeboat session: what it is, what happens in it, and who it's for.",
+      "body": "Hi {{first_name}},\n\nWe've been in each other's inboxes for a week now.\n\nSo here's the straightforward version of what's on offer.\n\nThe Lifeboat session is 90 minutes, £250. It exists for engineers who have one specific fire right now — a direct report who's gone quiet, a skip-level fumble they're still replaying, a difficult conversation they can't figure out how to start.\n\nIt's not a taster. It's a working session. You bring the real problem. We work on it.\n\nAt the end of it you'll know two things: what to do about the specific situation you walked in with, and whether the deeper work — the Deep End 1:1 programme — is the right next step for you.\n\nIf you book the Deep End 1:1 within 60 days of your Lifeboat session, the £250 credits toward it. It's not a bait-and-switch. It's a way of making the first step low-stakes and the second step smaller than it first looks.\n\nAnd the Deep End 1:1 carries a straight guarantee: after session two, if the work isn't fitting your specific situation, I refund the remaining four sessions. That commitment already exists. I just think you should know it before you decide.\n\nIf any of the last seven emails felt like they were written for someone in your exact situation — they were.\n\nThe Lifeboat is the door in.\n\n{{link}}\n\nP.S. You can also just reply here. I'll answer.",
+      "cta": "Book the Lifeboat session — 90 minutes, your real problem, £250 — at {{link}}."
+    }
+  ],
+  "promo_seq": [
+    {
+      "subject_variants": [
+        {
+          "subject": "The moment it usually tips",
+          "hook_category": "story_tease"
+        },
+        {
+          "subject": "What the quiet engineer is probably thinking",
+          "hook_category": "open_loop"
+        },
+        {
+          "subject": "The trigger you recognise — and what changes after it",
+          "hook_category": "reflective_question"
+        }
+      ],
+      "preview": "There's a specific moment when engineers know they need more than a management book.",
+      "body": "Hi {{first_name}},\n\nThere's usually a moment.\n\nNot a slow dawning. An actual moment.\n\nMaybe your strongest engineer hands in their notice and you cannot honestly say you saw it coming. Maybe you freeze in a skip-level and say nothing useful for four minutes while senior leadership waits. Maybe your partner says, carefully, that you've been somewhere else since the promotion.\n\nMaybe it's just 1am and you've typed something into your phone that you'd rather not admit to.\n\nThat moment is the one the Lifeboat session is built for.\n\nNot for engineers who have it mostly figured out and want to optimise. For engineers who are drowning right now, in a specific fire, and need 90 minutes with someone who has been there — not 12 weeks of a programme that starts in six weeks.\n\n90 minutes. £250. Your actual problem, not a hypothetical one.\n\nThe Lifeboat is the fastest door into the job you were actually promoted into. It is also, for most engineers who do it, the thing that confirms whether the deeper work is worth it.\n\nIf you're in that moment right now — or you can feel it coming — this is what the session is for.\n\n{{link}}",
+      "cta": "Book the Lifeboat session at {{link}} and bring the real problem."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "What staying stuck in the deep end actually costs",
+          "hook_category": "reflective_question"
+        },
+        {
+          "subject": "The engineer who waits for it to click on its own",
+          "hook_category": "story_tease"
+        },
+        {
+          "subject": "The longer the panic goes on, the more it takes",
+          "hook_category": "open_loop"
+        }
+      ],
+      "preview": "Waiting is a decision. Here's what it's costing and what changes instead.",
+      "body": "Hi {{first_name}},\n\nMost engineers who find their way to Deep End Coaching have been waiting.\n\nWaiting for it to click on its own. Waiting until they feel more established. Waiting until they're sure they need it — as if needing it isn't already clear from the fact that they're rehearsing their own standups in the shower.\n\nHere's what waiting looks like from the outside:\n\nThe strongest engineer on the team goes quiet. Then quieter. Then gone. The skip-level meeting where they say nothing useful cements a version of them in senior leadership's mind that takes months to undo. The 1:1s stay minefields because nobody has ever shown them a different approach — not a framework, an approach.\n\nNone of this is inevitable. But it compounds.\n\nThe engineers who stop drowning are the ones who decide that learning the job out loud, in front of someone, is allowed. That the 2am panic isn't evidence they were the wrong choice. That they don't have to perform a confidence they don't yet have until the performance collapses.\n\nThe Lifeboat session is 90 minutes and £250. It's built for the specific fire you have right now, and it tells you within that session whether the deeper work fits.\n\nIf you've been waiting — this is what you've been waiting for permission to do.\n\n{{link}}",
+      "cta": "Book the Lifeboat at {{link}} — 90 minutes on your specific situation, £250."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "\"Nobody had ever told me the panic was normal\"",
+          "hook_category": "results_evidence"
+        },
+        {
+          "subject": "What six weeks of this work actually looks like",
+          "hook_category": "direct_benefit"
+        },
+        {
+          "subject": "The line that stayed with an engineer for over a year",
+          "hook_category": "story_tease"
+        }
+      ],
+      "preview": "Real words. And exactly what the Lifeboat session includes — nothing more, nothing less.",
+      "body": "Hi {{first_name}},\n\nI want to be clear about what the Lifeboat session actually is.\n\n90 minutes, one-to-one. You bring the specific situation — the 1:1 that went sideways, the direct report who's gone quiet, the difficult conversation you've been putting off. We work on it. You leave with something concrete.\n\nThat's it. No follow-up sales call baked in. No framework handout.\n\nHere's what engineers have said after the work:\n\n\"Honestly before our sessions I was rehearsing my own standups in the shower. Six weeks in I ran a genuinely difficult conversation without feeling sick, and the weird thing is my team seem to like me MORE now I've stopped pretending to have all the answers.\"\n\n\"You said 'your job isn't to be the best engineer in the room anymore, it's to make the room better' and I think about that line every single day. Best money I've spent on my career and my company paid half lol\"\n\n\"I cried a bit after session two. In a good way. Nobody had ever told me the panic was normal.\"\n\nThose are the words of engineers who started where you are now.\n\nThe Lifeboat is £250. If you book the Deep End 1:1 within 60 days, that £250 credits toward it.\n\nThe Deep End 1:1 carries a guarantee: after session two, if the work isn't fitting, I refund the remaining four sessions. No negotiation required.\n\nThis is what the job you were actually promoted into looks like when someone explains it from the inside.\n\n{{link}}",
+      "cta": "Book the Lifeboat session at {{link}} — £250, your real situation, 90 minutes."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "The objections, answered one more time",
+          "hook_category": "personal_voice"
+        },
+        {
+          "subject": "What if the money is wasted? (The straight answer)",
+          "hook_category": "reflective_question"
+        },
+        {
+          "subject": "The guarantee that already existed — and should have been on the website",
+          "hook_category": "open_loop"
+        }
+      ],
+      "preview": "The hesitations that quietly stall a booking — addressed directly.",
+      "body": "Hi {{first_name}},\n\nI want to take the remaining hesitations seriously.\n\nThe money. £250 for the Lifeboat is below the level where engineering instinct starts doing the risk calculation seriously. It's also a paid audition — within 90 minutes you'll know whether this is the inside-the-job kind of support or the laminated-framework kind. If you move to the Deep End 1:1 within 60 days, the £250 comes off the price. The first session becomes a deposit, not a dead end.\n\nThe wasted commitment risk. The Deep End 1:1 is six sessions over roughly three months. After session two, if the work isn't fitting your specific situation, I refund the value of the remaining four sessions. That's £1,200 back, no conversation required. This commitment has existed since I started. It removes the calculation about what happens if you're wrong before that calculation quietly stalls the decision.\n\nThe calendar. One hour every two weeks. The engineers I work with consistently say it's the hour that makes the other hours work better — the standups, the 1:1s, the skip-level prep that currently costs more energy than it should.\n\nThe engineering instinct that this is woo dressed up as something serious. That test exists for a reason. Nine years inside the actual engineering manager role means you'll know within ten minutes whether it passes. The Lifeboat is how you find out before you've committed to more.\n\nIf one of those was the thing holding you back — now you have the straight answer.\n\n{{link}}",
+      "cta": "Book the Lifeboat session at {{link}} and find out within 90 minutes whether this is the right fit."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "What you get and why now is the right time",
+          "hook_category": "direct_benefit"
+        },
+        {
+          "subject": "The plain version: here's what's on offer",
+          "hook_category": "personal_voice"
+        },
+        {
+          "subject": "Last email in this run — then I'll leave it with you",
+          "hook_category": "direct_command"
+        }
+      ],
+      "preview": "A plain summary of what the Lifeboat is, what it leads to, and what to do if you're ready.",
+      "body": "Hi {{first_name}},\n\nThis is the last email in this run. Then I'll leave it with you.\n\nHere's the plain version.\n\nThe Lifeboat session is 90 minutes, £250. You bring the specific fire — the engineer who's gone quiet, the skip-level you're dreading, the difficult conversation you've been putting off. We work on it together. You leave with something concrete you can use before Monday.\n\nIf you book the Deep End 1:1 within 60 days, the £250 credits toward the £1,800. The first step becomes a deposit on the next one.\n\nThe Deep End 1:1 is six sessions over roughly three months with a straightforward guarantee: after session two, if the work isn't fitting, I refund the remaining four sessions — £1,200 back, no negotiation.\n\nNine years inside the actual engineering manager role. Not an HR background. Not a slide deck. The job you were actually promoted into, explained by someone who has done it — including the parts that don't go in the posts.\n\nThe engineers who do this work stop drowning. They run difficult conversations without feeling sick. Their teams respond differently when they stop pretending to have all the answers.\n\nIf that's where you are right now — in the deep end, waiting for the panic to be normal — this is the door.\n\n{{link}}\n\nP.S. You can also just reply here if you have a question before booking. I'll answer.",
+      "cta": "Book the Lifeboat session at {{link}} — £250, 90 minutes, your real problem."
+    }
+  ],
+  "list_warmup_note": {
+    "list_status": "warm",
+    "note": "The list has 1,400 subscribers and is emailed most Tuesdays, with only a three-week gap in May. A 48% open rate confirms the list is active and the sender is recognised by the audience. This is a warm list — no re-introduction email is needed. Run the welcome sequence for all new subscribers from the day they join, and move straight into the promo sequence or a fresh content run for the existing list.",
+    "reintro_email": null
+  }
+}

@@ -1,0 +1,100 @@
+{
+  "bundle": "Your Relaunch Stack",
+  "run_id": "20260706-162751-coach-7a81",
+  "source": "coach",
+  "mode": "live",
+  "business": "Deep End Coaching",
+  "assembled_at": "2026-07-06T17:10:42.638Z",
+  "deliverables": [
+    {
+      "stage": "S1",
+      "name": "Relaunch Scorecard",
+      "file": "s1.json",
+      "prompt_version": "1.0.1",
+      "model": "claude-sonnet-4-6"
+    },
+    {
+      "stage": "S2",
+      "name": "True Buyer Profile",
+      "file": "s2.json",
+      "prompt_version": "1.0.0",
+      "model": "claude-sonnet-4-6"
+    },
+    {
+      "stage": "S3",
+      "name": "Message Spine + Voiceprint",
+      "file": "s3.json",
+      "prompt_version": "1.0.0",
+      "model": "claude-sonnet-4-6"
+    },
+    {
+      "stage": "S4",
+      "name": "Offer Stack Blueprint",
+      "file": "s4.json",
+      "prompt_version": "1.0.0",
+      "model": "claude-sonnet-4-6"
+    },
+    {
+      "stage": "S5",
+      "name": "Relaunch Roadmap",
+      "file": "s5.json",
+      "prompt_version": "1.0.0",
+      "model": "claude-sonnet-4-6"
+    },
+    {
+      "stage": "S6",
+      "name": "Shopfront Pack",
+      "file": "s6.json",
+      "prompt_version": "1.0.0",
+      "model": "claude-sonnet-4-6"
+    },
+    {
+      "stage": "S7",
+      "name": "Follow-Up Engine",
+      "file": "s7.json",
+      "prompt_version": "1.0.1",
+      "model": "claude-sonnet-4-6"
+    },
+    {
+      "stage": "S8",
+      "name": "30-Day Content Engine",
+      "file": "s8.json",
+      "prompt_version": "1.0.1",
+      "model": "claude-sonnet-4-6"
+    },
+    {
+      "stage": "S9",
+      "name": "Relaunch On A Page",
+      "file": "s9.json",
+      "prompt_version": "1.0.0",
+      "model": "claude-sonnet-4-6"
+    }
+  ],
+  "qa": {
+    "stage_flags": {},
+    "s10_issues": [
+      {
+        "check": "s10.s3_banned_word",
+        "message": "S8.posts[7].body: contains \"transformation\", which S3's voice guide bans — the voice list binds every copy deliverable"
+      },
+      {
+        "check": "s10.s3_banned_word",
+        "message": "S8.posts[24].body: contains \"scale\", which S3's voice guide bans — the voice list binds every copy deliverable"
+      },
+      {
+        "check": "s10.price_conflict",
+        "message": "S6.sales_page.sections[4].body: quotes a price of 1,200, that is neither an S4 recommended price nor a price the intake states — every price in the pack must agree with the Offer Stack"
+      },
+      {
+        "check": "s10.price_conflict",
+        "message": "S7.promo_seq[3].body: quotes a price of 1,200 that is neither an S4 recommended price nor a price the intake states — every price in the pack must agree with the Offer Stack"
+      },
+      {
+        "check": "s10.price_conflict",
+        "message": "S7.promo_seq[4].body: quotes a price of 1,200 that is neither an S4 recommended price nor a price the intake states — every price in the pack must agree with the Offer Stack"
+      }
+    ]
+  },
+  "compliance_line": "This pack is marketing material prepared from information you provided. It contains no promise of revenue, results or outcomes — what you earn depends on your market, your offer and your follow-through. Review everything before publishing; you are responsible for claims made in your own name.",
+  "status": "awaiting_signoff"
+}

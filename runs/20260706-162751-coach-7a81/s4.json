@@ -1,0 +1,36 @@
+{
+  "current_stack_read": "Four offers, no deliberate sequence. The Lifeboat fills a crisis and stops — nothing points the person who just bought it toward what to do next. The Deep End 1:1 is \"the work I actually love\" (D2) but it sits alongside the cohort at nearly eight times the price with no bridge between them. The half-day workshop has no lane of its own: D1 notes it is \"usually sold alongside a cohort,\" which means it exists as a pricing afterthought rather than a rung in its own right. Meanwhile, \"Cohorts are the most profitable by a mile\" (D2) and the stated direction (D3) is more of them — yet there is no path from the offer a stranger meets first to the offer that makes the most money. The income is made in cohorts and the 1:1; what gets bought first is a £250 Lifeboat that currently leads nowhere.",
+  "recommended_stack": [
+    {
+      "name": "Lifeboat",
+      "price": 250,
+      "role": "entry",
+      "rationale": "Already 'the easiest sell — people book them straight off one newsletter issue' (D2). At £250, the price sits well below the B2 average of £1,800, under the objection threshold where a buyer paying personally begins weighing financial risk seriously. It matches D1's own description of its purpose exactly: 'for one specific fire.' It also functions as a paid audition: an engineer who finishes this session and knows it is not woo has a personal reason to move to the Deep End 1:1 — especially once the £250 is credited toward it."
+    },
+    {
+      "name": "Deep End 1:1",
+      "price": 1800,
+      "role": "core",
+      "rationale": "\"The 1:1 package sits in the middle and is the work I actually love\" (D2). At £1,800 it equals B2 exactly, confirming it is already the main revenue event for individual clients. A buyer who paid personally for the Lifeboat and found it useful can now point to a company L&D budget they have not yet claimed — the Lifeboat converts private embarrassment into personal proof before anyone else is asked to pay for it (D2, D3)."
+    },
+    {
+      "name": "Corporate Cohort & Workshop",
+      "price": 8900,
+      "role": "premium",
+      "rationale": "D1 lists the cohort at £6,500 and the workshop at £2,400, noting the workshop is \"usually sold alongside a cohort.\" Combining them into one purchase removes a second negotiation and reflects what already happens: £6,500 + £2,400 = £8,900. D3 states the company pays without blinking. Capacity is a stretch (D5), so one corporate booking at £8,900 replaces several individual clients in calendar terms, protecting income without needing volume growth. At 4.9 times B2 this sits well within a corporate L&D budget and well under the ten-times threshold."
+    }
+  ],
+  "lead_offer": "The Lifeboat session opens the relationship. The S2 buyer arrives at a specific crisis — a resignation, a skip-level fumble, a direct report who has gone quiet — and needs help with that problem today, not a three-month commitment. At £250 and 90 minutes it sits below the threshold where engineering instinct starts interrogating the spend. It is also a paid audition: the engineer discovers within that session whether this is the inside-the-job kind of support or the laminated-framework kind. If it is the former, the move to the Deep End 1:1 follows naturally — and with the Lifeboat fee credited toward it, the financial step is smaller than it first appears.",
+  "pricing_moves": [
+    "Credit the £250 Lifeboat fee against the Deep End 1:1 if the client books within 60 days of their session. State this on the booking confirmation, not as a sales pitch during the session itself. At 60%+ margin (B6) the cost to absorb is negligible; the effect is that the first purchase becomes a deposit on the next one rather than a dead end (D2: \"Lifeboat sessions are the easiest sell — £250, low stakes\").",
+    "Display the Corporate Cohort & Workshop (£8,900) alongside the Deep End 1:1 (£1,800) on the services page. The corporate price makes the individual price read as accessible — the buyer weighing £1,800 against nothing now weighs it against £8,900. No change to what is sold; a change to what it is sold next to (B2, D3).",
+    "Fold the half-day workshop exclusively into the Corporate Cohort & Workshop rung — remove it as a standalone line item. D1 already says it is \"usually sold alongside a cohort\"; making it exclusive to that rung means the premium offer delivers something the core offer structurally cannot, rather than simply being more expensive (D1).",
+    "Offer the Corporate Cohort & Workshop in two payments: 50% on signing, 50% at the start of session five of eight. This reduces the single-invoice size inside a company's approval process without changing what is delivered or when. At 60%+ gross margin (B6) the owner can run the first four sessions before the second payment arrives without financial exposure (D1, B6).",
+    "Publish the existing two-session refund commitment as a named, visible guarantee on the Deep End 1:1 booking page. D4 states it directly: \"It should be on the website; it is instead in my head.\" Putting it at the point of purchase removes the objection that six sessions is a significant personal commitment with no exit, before that objection quietly stalls a booking."
+  ],
+  "risk_reversal_options": [
+    "For the Deep End 1:1: after session two, if the work is not fitting the client's specific situation, the owner refunds the value of the remaining four sessions. Six sessions at £1,800 means £300 per session; four sessions remaining is £1,200 returned, no conversation required. This commitment already exists — D4: \"If someone doesn't find it useful after the first two sessions, I refund everything except those two\" — and has been taken up once in four years. Publishing it costs nothing and removes the calculation about what happens if the money is wasted before it stalls the booking decision.",
+    "For the Corporate Cohort & Workshop: if the group reports after session two that the format is not working for their specific team, the owner runs one replacement session at a different structure before the programme continues — at no extra charge. This promises more of the owner's time, not a business outcome, and is deliverable within existing capacity (D5) because the replacement session substitutes for a scheduled slot rather than adding one to an already stretched calendar."
+  ],
+  "category_note": "Stop describing this as coaching — the word sits too close to motivational-poster LinkedIn content and paper frameworks, which is exactly what engineers are trying to rule out in the first ten minutes. Call it engineering management supervision: the structured, experienced second opinion that other professions treat as standard infrastructure and that engineering managers — quietly drowning in the deep end — have never been offered. That frame makes the Lifeboat a professional consultation, the Deep End 1:1 a supervised apprenticeship in the job they were actually promoted into, and the Corporate Cohort & Workshop a group debrief for managers who have all been winging it alone. The prices make sense in that frame — not as discretionary personal development spend, but as the cost of having someone in your corner who has been in the stairwell."
+}

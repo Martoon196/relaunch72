@@ -1,0 +1,356 @@
+<style>
+  :root {
+    --ink: #0c1018;
+    --paper: #f6f7fb;
+    --card: #ffffff;
+    --muted: #5b6577;
+    --faint: #8b93a3;
+    --hair: #e3e6ee;
+    --electric: #3557ff;
+    --electric-ink: #2a44d6;
+    --wash: #eef1ff;
+    --green: #17915a;
+    --green-wash: #e6f5ee;
+    --amber: #b1741a;
+    --amber-wash: #fbf1df;
+    --shadow: 0 1px 2px rgba(12,16,24,.05), 0 8px 24px -16px rgba(12,16,24,.18);
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #eaeef6; --paper: #0c0f14; --card: #151a22; --muted: #99a2b3;
+      --faint: #6c7686; --hair: #242c37; --electric: #6d86ff; --electric-ink: #93a6ff;
+      --wash: #171f30; --green: #45c088; --green-wash: #12241b; --amber: #d8a04e; --amber-wash: #2a2011;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -18px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="light"] {
+    --ink: #0c1018; --paper: #f6f7fb; --card: #ffffff; --muted: #5b6577; --faint: #8b93a3;
+    --hair: #e3e6ee; --electric: #3557ff; --electric-ink: #2a44d6; --wash: #eef1ff;
+    --green: #17915a; --green-wash: #e6f5ee; --amber: #b1741a; --amber-wash: #fbf1df;
+    --shadow: 0 1px 2px rgba(12,16,24,.05), 0 8px 24px -16px rgba(12,16,24,.18);
+  }
+  :root[data-theme="dark"] {
+    --ink: #eaeef6; --paper: #0c0f14; --card: #151a22; --muted: #99a2b3; --faint: #6c7686;
+    --hair: #242c37; --electric: #6d86ff; --electric-ink: #93a6ff; --wash: #171f30;
+    --green: #45c088; --green-wash: #12241b; --amber: #d8a04e; --amber-wash: #2a2011;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -18px rgba(0,0,0,.7);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans);
+    line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 0 24px 120px; }
+
+  /* ---- masthead ---- */
+  header.mast { padding: 56px 0 28px; border-bottom: 1px solid var(--hair); }
+  .kicker { font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--electric); font-weight: 600; }
+  h1 { font-size: clamp(30px, 5vw, 46px); line-height: 1.04; letter-spacing: -.022em; margin: 14px 0 0;
+    text-wrap: balance; font-weight: 800; }
+  .lede { color: var(--muted); font-size: 17px; max-width: 62ch; margin: 16px 0 0; }
+  .lede b { color: var(--ink); font-weight: 650; }
+
+  /* ---- sticky tally ---- */
+  .tally { position: sticky; top: 0; z-index: 20; margin-top: 28px;
+    background: color-mix(in srgb, var(--card) 88%, transparent); backdrop-filter: blur(10px);
+    border: 1px solid var(--hair); border-radius: 14px; box-shadow: var(--shadow);
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; padding: 14px 18px; }
+  .tally .grp { display: flex; align-items: baseline; gap: 8px; }
+  .tally .lab { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+  .tally .val { font-family: var(--mono); font-weight: 600; font-size: 15px; font-variant-numeric: tabular-nums; }
+  .tally .spacer { flex: 1 1 40px; }
+  .gate { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 13px;
+    font-weight: 600; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--hair); }
+  .gate .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); }
+  .gate.pass { color: var(--green); background: var(--green-wash); border-color: transparent; }
+  .gate.pass .dot { background: var(--green); }
+  .reset { font-family: var(--mono); font-size: 11px; color: var(--faint); background: none; border: 1px solid var(--hair);
+    border-radius: 8px; padding: 5px 9px; cursor: pointer; }
+  .reset:hover { color: var(--ink); border-color: var(--muted); }
+
+  /* ---- how to grade ---- */
+  .howto { margin-top: 22px; background: var(--wash); border: 1px solid var(--hair); border-radius: 14px;
+    padding: 16px 20px; font-size: 14px; color: var(--muted); }
+  .howto b { color: var(--ink); }
+  .howto .scale { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; font-family: var(--mono); font-size: 12.5px; }
+
+  /* ---- business section ---- */
+  section.biz { margin-top: 52px; scroll-margin-top: 80px; }
+  .biz-head { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+  .biz-index { font-family: var(--mono); font-size: 13px; color: var(--electric); font-weight: 700; padding-top: 6px; }
+  .biz-title h2 { font-size: 26px; letter-spacing: -.015em; margin: 0; font-weight: 800; }
+  .biz-title .sub { color: var(--faint); font-size: 14px; margin-top: 2px; font-family: var(--mono); }
+
+  .glance { margin-top: 18px; background: var(--card); border: 1px solid var(--hair); border-radius: 16px;
+    box-shadow: var(--shadow); overflow: hidden; }
+  .glance .pos { padding: 20px 22px 18px; border-bottom: 1px solid var(--hair); }
+  .glance .pos .l { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--electric); }
+  .glance .pos p { margin: 8px 0 0; font-size: 16px; line-height: 1.5; }
+  .glance .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--hair); }
+  .glance .cell { background: var(--card); padding: 14px 18px; }
+  .glance .cell .l { font-family: var(--mono); font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--faint); }
+  .glance .cell .v { font-size: 14px; margin-top: 4px; font-weight: 600; }
+  .glance .cell .v small { font-weight: 400; color: var(--muted); font-family: var(--mono); }
+  .ladder { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .rung { font-family: var(--mono); font-size: 11.5px; padding: 2px 8px; border-radius: 6px; background: var(--wash); color: var(--electric-ink); white-space: nowrap; }
+
+  .status-chip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 12px; font-weight: 600; }
+  .status-chip.ok { color: var(--green); }
+  .status-chip.flag { color: var(--amber); }
+
+  /* ---- deliverable rows ---- */
+  .rows { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .row { background: var(--card); border: 1px solid var(--hair); border-radius: 14px; box-shadow: var(--shadow);
+    display: grid; grid-template-columns: 1fr auto; gap: 6px 22px; padding: 16px 18px; align-items: start; }
+  .row .body { min-width: 0; }
+  .row .rid { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--electric); }
+  .row .rname { font-size: 16px; font-weight: 700; letter-spacing: -.01em; margin-left: 8px; }
+  .row .what { color: var(--muted); font-size: 13.5px; margin: 5px 0 0; }
+  .row .excerpt { margin: 10px 0 0; padding: 10px 14px; border-left: 2px solid var(--electric); background: var(--wash);
+    border-radius: 0 8px 8px 0; font-size: 13.5px; line-height: 1.5; color: var(--ink); }
+  .row .excerpt.q::before { content: "“"; color: var(--electric); font-weight: 700; }
+  .row .excerpt.q::after { content: "”"; color: var(--electric); font-weight: 700; }
+  .row .flag { margin: 10px 0 0; font-size: 12.5px; font-family: var(--mono); color: var(--amber);
+    background: var(--amber-wash); border-radius: 8px; padding: 7px 11px; display: inline-block; }
+
+  .grade { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  .grade .pips { display: flex; gap: 5px; }
+  .pip { width: 34px; height: 34px; border-radius: 9px; border: 1px solid var(--hair); background: transparent;
+    font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--muted); cursor: pointer;
+    transition: transform .08s ease, background .12s, color .12s, border-color .12s; }
+  .pip:hover { border-color: var(--electric); color: var(--electric); transform: translateY(-1px); }
+  .pip[aria-pressed="true"] { background: var(--electric); border-color: var(--electric); color: #fff; }
+  .grade .glabel { font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+  .pip:focus-visible { outline: 2px solid var(--electric); outline-offset: 2px; }
+
+  /* ---- footer ---- */
+  footer.meth { margin-top: 60px; padding-top: 26px; border-top: 1px solid var(--hair); color: var(--muted); font-size: 13.5px; }
+  footer.meth h3 { color: var(--ink); font-size: 15px; margin: 0 0 10px; letter-spacing: -.01em; }
+  footer.meth ul { margin: 0; padding-left: 18px; }
+  footer.meth li { margin: 5px 0; }
+  footer.meth code { font-family: var(--mono); font-size: 12.5px; background: var(--wash); padding: 1px 6px; border-radius: 5px; color: var(--electric-ink); }
+  .compliance { margin-top: 20px; font-size: 12px; color: var(--faint); line-height: 1.5; border: 1px dashed var(--hair); border-radius: 10px; padding: 12px 15px; }
+
+  @media (max-width: 620px) {
+    .row { grid-template-columns: 1fr; }
+    .grade { align-items: stretch; margin-top: 4px; }
+    .grade .pips { justify-content: space-between; }
+    .pip { flex: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header class="mast">
+    <div class="kicker">Relaunch72 · Milestone M2 · Founder Sign-off</div>
+    <h1>The gate: nine deliverables, three businesses, graded by hand.</h1>
+    <p class="lede">Every deliverable below was produced end-to-end by the live pipeline — customer intake in, chained Claude calls, automated no-invention QA, assembly. Nothing here is hand-edited. Grade each one <b>1–5</b> against the only question that matters: <b>would I put my name on this and hand it to a paying client?</b> A <b>≥ 4.0 average clears M2.</b></p>
+
+    <div class="tally" id="tally">
+      <div class="grp"><span class="lab">Overall</span><span class="val" id="ov-avg">—</span><span class="lab" id="ov-n">0 / 27 graded</span></div>
+      <div class="gate" id="gate"><span class="dot"></span><span id="gate-txt">M2 gate · ≥ 4.0</span></div>
+      <span class="spacer"></span>
+      <button class="reset" id="reset" type="button">Reset grades</button>
+    </div>
+
+    <div class="howto">
+      <b>How to grade.</b> Read the excerpt, open the matching PDF for the full deliverable, then click a score. Your grades save in this browser and the averages update live.
+      <div class="scale">
+        <span>5 · ship it, no notes</span><span>4 · client-ready, minor polish</span><span>3 · usable, needs an edit pass</span><span>2 · off, real rework</span><span>1 · would embarrass us</span>
+      </div>
+    </div>
+  </header>
+
+  <main id="sections"></main>
+
+  <footer class="meth">
+    <h3>How these were made — and checked</h3>
+    <ul>
+      <li><b>Live, not mocked.</b> Each business ran the full S1→S10 pipeline on realistic intake. Model: <code>claude-sonnet-4-6</code>. Cost ≈ $2.50–$2.90 per complete 9-deliverable set.</li>
+      <li><b>No invented proof.</b> Every testimonial in the copy was verified to be a character-for-character quote from the customer's own reviews; every figure traces to the intake or to arithmetic shown in the copy; every credential ("certified", "6-year guarantee", "twelve test dogs") was traced to a specific intake field. No fabricated stats, testimonials, or credentials survive the gate — that is enforced in code, not left to trust.</li>
+      <li><b>Two flags, both surfaced on purpose.</b> Coach S8 and Ecom S6 each carry one voice-guide flag the automated gate raised for a human to approve — shown inline below. They are the QA working, not slipping.</li>
+      <li><b>Grades feed the next iteration.</b> Anything you score ≤ 3, tell me what's wrong and it becomes a prompt or QA fix — the same loop that produced 30-plus gate fixes this build.</li>
+    </ul>
+    <div class="compliance">Draft compliance line carried on every rendered deliverable (founder to ratify exact wording before any real customer): “This pack is marketing material prepared from information you provided. It contains no promise of revenue, results or outcomes — what you earn depends on your market, your offer and your follow-through.”</div>
+  </footer>
+</div>
+
+<script>
+(function () {
+  var STAGES = [
+    { id: "S1", name: "Marketing Audit & Scorecard", what: "An evidence-graded scorecard of where the business stands today — visibility, offer, funnel, retention. Honest, not flattering." },
+    { id: "S2", name: "Dream Buyer Profile", what: "The one customer the whole system speaks to, drawn as a real person from the intake's own words." },
+    { id: "S3", name: "Core Message & Voice Guide", what: "The positioning line, message pillars and a voice guide (must-words, banned words) every downstream deliverable obeys." },
+    { id: "S4", name: "Offer Architecture", what: "The offer ladder — entry, core, premium — priced, sequenced and risk-reversed from the owner's real numbers." },
+    { id: "S5", name: "90-Day Growth Plan", what: "A phased, hours-budgeted roadmap the owner can actually run, pointed at their own stated goal." },
+    { id: "S6", name: "Website Copy Pack", what: "Home, about and sales-page copy — hero variants, sections, CTAs. Publish-ready." },
+    { id: "S7", name: "Email Pack", what: "A welcome sequence and a promo sequence in the owner's voice, each with one real call to action." },
+    { id: "S8", name: "30-Day Content Engine", what: "A month of platform-native social posts across the owner's channels, balanced across five content lanes." },
+    { id: "S9", name: "One-Page Business Plan", what: "A single-page snapshot: where they are, the 90-day goal, and the numbers behind it — all traceable." }
+  ];
+
+  var BIZ = [
+    {
+      key: "trades", name: "Frayne Electrical", sub: "Sole-trader electrician · Ossett & Wakefield",
+      positioning: "For homeowners round Wakefield sitting on older wiring they've been putting off, the thing driving the call isn't a socket or a fuse board — it's the fear of the house catching fire while the kids are asleep, and months of quiet guilt about not dealing with it.",
+      ladder: ["Home Safety Check £165", "Full Rewire £4,500", "Rewire + EV-Ready £5,450"],
+      cost: "$2.49", lint: "0 flags", lintOk: true,
+      ex: {
+        S1: { t: "Visibility graded 5/10 — the audit names weak spots plainly instead of inflating the score." },
+        S2: { t: "It's Michelle who picks up the phone. Steve has been saying he'll sort the socket in their youngest's room for a year.", q: true },
+        S3: { t: "For homeowners round Wakefield sitting on older wiring they've been putting off — the driver isn't the socket, it's the fear of a fire while the kids are asleep." },
+        S4: { t: "Home Safety Check (£165) is the front door; the 6-year workmanship guarantee — the owner's own, from the intake — is put in writing to de-risk the £4,500 rewire." },
+        S5: { t: "Sign up 3 more letting agents on regular EICR work, and get to 2 full rewires booked every month — both by 30 September." },
+        S6: { t: "The wiring's been on your list for months. Time to find out what you're actually dealing with." },
+        S7: { t: "Dan here from Frayne Electrical. You signed up, so I'll tell you what you're getting: short emails, plain English, nothing padded out." },
+        S8: { t: "Scorch marks mean heat. Heat means something is wrong behind the wall. It might be a loose connection… or something worse a previous electrician plastered over." },
+        S9: { t: "Sole-trader electrician, Ossett. Monthly revenue £10–30k; average sale £850 across 14 new customers a month; four letting agents supply regular work." }
+      }
+    },
+    {
+      key: "coach", name: "Deep End Coaching", sub: "1:1 & cohort coaching · engineer-to-manager",
+      positioning: "For software engineers just promoted into management and quietly drowning — not because they were the wrong choice, but because nobody told them it was a different job — coaching built from nine years inside the actual engineering-manager role, not a slide deck of frameworks.",
+      ladder: ["Lifeboat £250", "Deep End 1:1 £1,800", "Corporate Cohort £8,900"],
+      cost: "$2.64", lint: "1 flag · voice", lintOk: false,
+      flagStage: "S8",
+      flagText: "Voice guide bans “scale”; it appears once (“engineers at scale”) in one of 30 posts. Now caught in-stage on future runs; here it's flagged for your call.",
+      ex: {
+        S1: { t: "Visibility graded 4/10 — three channels listed, none compounding. The audit says so rather than dressing it up." },
+        S2: { t: "He has been team lead for six weeks — maybe eight — and he is still writing code, because at least that he knows how to do.", q: true },
+        S3: { t: "For engineers just promoted into management and quietly drowning — not because they were the wrong choice, but because nobody told them it was a different job." },
+        S4: { t: "Lifeboat (£250) as a paid audition into the £1,800 Deep End 1:1 — with the owner's real refund built in: after session two, the value of the four remaining sessions (£1,200) is returned." },
+        S5: { t: "Sign two corporate cohort contracts by 30 September and bring the 1:1 waitlist back to ten names — both inside the next 90 days." },
+        S6: { t: "You were promoted because you were the best engineer in the room. Nobody told you that job is over." },
+        S7: { t: "I'll keep this short because you probably have a standup in an hour and a 1:1 you're not quite ready for after that." },
+        S8: { t: "You were the best engineer on the team. That's why they promoted you. And now you're six weeks in, rehearsing what to say before your own standups." },
+        S9: { t: "1:1 and group coaching for newly-promoted engineering managers. Revenue almost entirely from 1:1 packages at £1,800, four new clients a month." }
+      }
+    },
+    {
+      key: "ecom", name: "Steady Hound", sub: "E-commerce · calming kit for anxious rescue dogs",
+      positioning: "For the rescue-dog owner who has already spent a drawer's worth of money on calming products that didn't work — who dreads October, wrestles a whippet into a coat built for a Labrador, and quietly suspects she is somehow failing her dog.",
+      ladder: ["Settle Coat £58", "Calm Kit £165", "Full Settle System £175"],
+      cost: "$2.90", lint: "1 flag · voice", lintOk: false,
+      flagStage: "S6",
+      flagText: "Voice guide bans “instant calm”; it appears inside a rebuttal — “nothing that promises instant calm is going to keep that promise.” Surfaced for you to approve as-is or reword.",
+      ex: {
+        S1: { t: "Visibility graded 5/10 — Instagram is doing real work (≈150 new customers/month) but the whole business leans on one channel. The audit flags the concentration." },
+        S2: { t: "She's in her mid-thirties, hybrid job, somewhere on the city's edge where the houses back onto fields — and she walks the dog at 6am to avoid other dogs.", q: true },
+        S3: { t: "For the owner who has already spent a drawer's worth on calming products that didn't work — who dreads October and quietly suspects she is failing her dog." },
+        S4: { t: "Settle Coat (£58) leads to the Calm Kit (£165) bundle — margin is best and the dogs do best on the whole system, straight from the owner's own words." },
+        S5: { t: "Get the Calm Kit bundle onto 25% of all orders before fireworks season opens in October — up from 11% now, within 90 days." },
+        S6: { t: "The drawer is full. Your dog is still shaking. There is one more thing to try." },
+        S7: { t: "Steady Hound exists for one kind of person: someone who has already tried things. The diffuser. The wrap from Amazon. A behaviourist whose homework you did faithfully, and still." },
+        S8: { t: "First bonfire night in three years where Willow slept instead of shaking herself sick. I actually cried a bit folding the coat up the next morning.", q: true },
+        S9: { t: "UK e-commerce selling calming kit for anxious rescue dogs. Revenue runs almost entirely through one channel: Instagram. Every product trialled on twelve rescues, fail rate published." }
+      }
+    }
+  ];
+
+  var KEY = "relaunch72-m2-grades-v1";
+  var grades = {};
+  try { grades = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { grades = {}; }
+
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(grades)); } catch (e) {} }
+
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); }
+
+  var sections = document.getElementById("sections");
+  BIZ.forEach(function (b, bi) {
+    var sec = document.createElement("section");
+    sec.className = "biz";
+    var ladder = b.ladder.map(function (r) { return '<span class="rung">' + esc(r) + "</span>"; }).join("");
+    var statusChip = b.lintOk
+      ? '<span class="status-chip ok">● ' + esc(b.lint) + "</span>"
+      : '<span class="status-chip flag">● ' + esc(b.lint) + "</span>";
+
+    var rows = STAGES.map(function (st) {
+      var e = b.ex[st.id] || { t: "" };
+      var gid = b.key + ":" + st.id;
+      var exCls = "excerpt" + (e.q ? " q" : "");
+      var flag = (b.flagStage === st.id)
+        ? '<div class="flag">⚑ ' + esc(b.flagText) + "</div>" : "";
+      var pips = [1, 2, 3, 4, 5].map(function (n) {
+        var on = grades[gid] === n ? ' aria-pressed="true"' : ' aria-pressed="false"';
+        return '<button class="pip" type="button" data-g="' + gid + '" data-n="' + n + '"' + on + ">" + n + "</button>";
+      }).join("");
+      return '<div class="row">' +
+        '<div class="body">' +
+          '<div><span class="rid">' + st.id + '</span><span class="rname">' + esc(st.name) + "</span></div>" +
+          '<p class="what">' + esc(st.what) + "</p>" +
+          '<div class="' + exCls + '">' + esc(e.t) + "</div>" +
+          flag +
+        "</div>" +
+        '<div class="grade"><div class="pips">' + pips + '</div><span class="glabel">score 1–5</span></div>' +
+      "</div>";
+    }).join("");
+
+    sec.innerHTML =
+      '<div class="biz-head">' +
+        '<div class="biz-index">0' + (bi + 1) + "</div>" +
+        '<div class="biz-title"><h2>' + esc(b.name) + '</h2><div class="sub">' + esc(b.sub) + "</div></div>" +
+      "</div>" +
+      '<div class="glance">' +
+        '<div class="pos"><div class="l">Positioning — the emotional core the system found</div><p>' + esc(b.positioning) + "</p></div>" +
+        '<div class="meta">' +
+          '<div class="cell"><div class="l">Offer ladder</div><div class="v"><div class="ladder">' + ladder + "</div></div></div>" +
+          '<div class="cell"><div class="l">Pipeline cost</div><div class="v">' + esc(b.cost) + " <small>· 9 deliverables</small></div></div>" +
+          '<div class="cell"><div class="l">Automated QA</div><div class="v">' + statusChip + "</div></div>" +
+          '<div class="cell"><div class="l">Your average</div><div class="v"><span id="avg-' + b.key + '">—</span></div></div>" +
+        "</div>" +
+      "</div>" +
+      '<div class="rows">' + rows + "</div>";
+    sections.appendChild(sec);
+  });
+
+  function recompute() {
+    var all = [];
+    BIZ.forEach(function (b) {
+      var vals = STAGES.map(function (st) { return grades[b.key + ":" + st.id]; }).filter(function (v) { return typeof v === "number"; });
+      var el = document.getElementById("avg-" + b.key);
+      if (vals.length) {
+        var a = vals.reduce(function (x, y) { return x + y; }, 0) / vals.length;
+        el.textContent = a.toFixed(2) + "  (" + vals.length + "/9)";
+        el.style.color = a >= 4 ? "var(--green)" : (a < 3 ? "var(--amber)" : "var(--ink)");
+      } else { el.textContent = "—"; el.style.color = "var(--faint)"; }
+      all = all.concat(vals);
+    });
+    var ov = document.getElementById("ov-avg");
+    var ovn = document.getElementById("ov-n");
+    var gate = document.getElementById("gate");
+    var gtxt = document.getElementById("gate-txt");
+    ovn.textContent = all.length + " / 27 graded";
+    if (all.length) {
+      var avg = all.reduce(function (x, y) { return x + y; }, 0) / all.length;
+      ov.textContent = avg.toFixed(2);
+      var complete = all.length === 27;
+      if (complete && avg >= 4) { gate.className = "gate pass"; gtxt.textContent = "M2 CLEARED · " + avg.toFixed(2) + " ≥ 4.0"; }
+      else if (complete) { gate.className = "gate"; gtxt.textContent = "Below gate · " + avg.toFixed(2) + " < 4.0"; }
+      else { gate.className = "gate"; gtxt.textContent = "M2 gate · ≥ 4.0 · grade all 27"; }
+    } else { ov.textContent = "—"; gate.className = "gate"; gtxt.textContent = "M2 gate · ≥ 4.0"; }
+  }
+
+  sections.addEventListener("click", function (ev) {
+    var t = ev.target;
+    if (!t.classList || !t.classList.contains("pip")) return;
+    var gid = t.getAttribute("data-g");
+    var n = parseInt(t.getAttribute("data-n"), 10);
+    if (grades[gid] === n) { delete grades[gid]; } else { grades[gid] = n; }
+    var group = t.parentNode.querySelectorAll(".pip");
+    group.forEach(function (p) {
+      p.setAttribute("aria-pressed", (parseInt(p.getAttribute("data-n"), 10) === grades[gid]) ? "true" : "false");
+    });
+    save(); recompute();
+  });
+
+  document.getElementById("reset").addEventListener("click", function () {
+    grades = {}; save();
+    document.querySelectorAll(".pip").forEach(function (p) { p.setAttribute("aria-pressed", "false"); });
+    recompute();
+  });
+
+  recompute();
+})();
+</script>

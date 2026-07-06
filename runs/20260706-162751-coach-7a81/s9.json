@@ -1,0 +1,69 @@
+{
+  "snapshot": "Deep End Coaching offers one-to-one and group coaching for software engineers newly promoted into management. Revenue comes almost entirely from 1:1 packages at an average of £1,800, with four new clients a month arriving mostly through referrals. Current revenue range is £3–10k. Marketing spend is under £200. The S1 audit found real strengths: clear positioning, a 1,400-subscriber newsletter at 48% open rate, and a referral engine producing roughly 70% of bookings. The weaknesses are also real: no visible client proof on the website, no call to action in any channel, a thin conversion path for cold prospects, and a podcast channel proven to convert that has not been used since a single appearance.",
+  "market": "The buyer is a senior software engineer, early 30s, recently promoted to team lead with no formal preparation. The trigger is a specific crisis: a 1:1 that goes badly, a direct report who goes quiet, or a skip-level meeting where they freeze. They are typically paying out of their own pocket, though an unclaimed L&D budget often exists. They choose Deep End Coaching because the coach spent nine years as an actual engineering manager — not from HR or L&D. Engineers detect the difference within ten minutes, and it determines how honest they are willing to be.",
+  "offer": "Three offers. Entry point: the Lifeboat, a 90-minute session at £250 for one specific problem. Core offer: the Deep End 1:1 at £1,800, a six-session package and the source of almost all current revenue; the £250 Lifeboat fee credits toward this if the client books within 60 days. Premium offer: the Corporate Cohort & Workshop at £8,900, combining an eight-session group cohort (£6,500) with a half-day workshop (£2,400); the company pays. A two-session exit clause on the 1:1 exists — if the work is not fitting after session two, the remaining sessions are refunded — but it is not currently published anywhere.",
+  "goals_90d": "By 30 September: two corporate cohort contracts signed, each at £8,900, totalling £17,800 in new revenue; and the 1:1 waitlist at ten names, so the next individual intake opens already spoken for. Both targets are measurable without interpretation: two signed contracts in hand, and a waitlist form at ten submissions. This plan runs to day 90 and does not extend beyond it.",
+  "plan_summary": "Three hours per week, three phases. Days 1–30: add a waitlist CTA to the newsletter footer, collect and publish three client testimonials, pitch three podcast shows, and email past corporate contacts about October cohort starts. Days 31–60: pitch three more podcast shows, send a referral ask to all past 1:1 clients, publish two LinkedIn posts built around client quotes, and send five LinkedIn DMs to L&D managers. Days 61–90: send one newsletter issue timed to the September promotion season, follow up every open thread, and push the waitlist to ten with a deadline prompt if needed. Channel order: newsletter first (1,400 subscribers, 48% open rate, the proven booking path), past-client referrals second (70% of bookings), podcast appearances third (four clients from one Standup Log appearance), LinkedIn fourth. No ads, no Instagram, no webinars.",
+  "numbers_table": [
+    {
+      "label": "Revenue range (monthly)",
+      "value": "£3–10k",
+      "source": "B1"
+    },
+    {
+      "label": "Average sale value",
+      "value": "£1,800",
+      "source": "B2"
+    },
+    {
+      "label": "New clients per month",
+      "value": "4",
+      "source": "B3"
+    },
+    {
+      "label": "Monthly marketing spend",
+      "value": "<£200",
+      "source": "B5"
+    },
+    {
+      "label": "Gross margin",
+      "value": "60%+",
+      "source": "B6"
+    },
+    {
+      "label": "Entry offer price (Lifeboat)",
+      "value": "£250",
+      "source": "S4"
+    },
+    {
+      "label": "Core offer price (Deep End 1:1)",
+      "value": "£1,800",
+      "source": "S4"
+    },
+    {
+      "label": "Premium offer (Corp. Cohort & Workshop)",
+      "value": "£8,900",
+      "source": "S4"
+    },
+    {
+      "label": "90-day revenue goal",
+      "value": "£17,800",
+      "source": "S5"
+    },
+    {
+      "label": "1:1 waitlist target by day 90",
+      "value": "Ten names",
+      "source": "G1"
+    },
+    {
+      "label": "Newsletter subscriber count",
+      "value": "1,400",
+      "source": "S1"
+    },
+    {
+      "label": "Owner weekly hours committed",
+      "value": "3",
+      "source": "S5"
+    }
+  ]
+}

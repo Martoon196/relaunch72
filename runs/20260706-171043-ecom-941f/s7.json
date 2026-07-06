@@ -1,0 +1,257 @@
+{
+  "welcome_seq": [
+    {
+      "subject_variants": [
+        {
+          "subject": "Welcome — here's what you'll get from Steady Hound",
+          "hook_category": "direct_benefit"
+        },
+        {
+          "subject": "You found the page. Here's what happens next.",
+          "hook_category": "personal_voice"
+        },
+        {
+          "subject": "Why a dog called Bramble started all of this",
+          "hook_category": "story_tease"
+        }
+      ],
+      "preview": "Not a newsletter full of tips you already know. Something more specific than that.",
+      "body": "Hi {{first_name}},\n\nGlad you're here.\n\nSteady Hound exists for one kind of person: someone who has already tried things. The diffuser. The wrap from Amazon. Possibly a behaviourist whose homework you did faithfully, and still.\n\nIf that's you, these emails are for you.\n\nOver the next week, I'm going to tell you how Steady Hound works, why the kit is built the way it is, and what makes it different from the drawer of things that promised calm and didn't deliver it. I'll also give you something useful in most of these — not filler, just the kind of thing I'd tell you if you'd messaged me.\n\nToday's useful thing: the single most common mistake people make when introducing an anxiety wrap is putting it on during a trigger event. Start on a quiet Tuesday morning instead. Let him sniff it. Leave it on the sofa. The slow introduction matters more than the coat itself.\n\nMore on that in the days ahead.\n\nP.S. If you want to know what the Steady Hound kit actually is before the week is out, you can look now — I won't be offended. But if you're a reader first, stay with me.",
+      "cta": "Reply and tell me one thing about your dog — I read every one."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "The problem underneath the problem",
+          "hook_category": "open_loop"
+        },
+        {
+          "subject": "It's not October you're dreading, is it",
+          "hook_category": "reflective_question"
+        },
+        {
+          "subject": "She stopped booking weekends away. Here's why.",
+          "hook_category": "story_tease"
+        }
+      ],
+      "preview": "She reorganised her whole life around a dog who was struggling. Maybe you recognise this.",
+      "body": "Hi {{first_name}},\n\nMost people who find Steady Hound will tell you they're looking for something to help with fireworks.\n\nAnd they are. But that's not really it.\n\nWhat they're actually carrying is the pre-dawn alarm so they can walk before the neighbourhood wakes up. The weekends away they stopped trying to book. The quiet, grinding belief that they are somehow failing the dog they chose to bring home.\n\nYour dog isn't broken. He's not poorly trained or difficult. He came with a history — two years before you, in some cases more — and he's doing the only thing he knows how to do when the world gets loud and strange.\n\nThe trouble is that nothing built for standard dogs, sold in standard pet shops, accounts for any of that.\n\nNot the one-size wrap built for a Labrador that won't sit right on a whippet chest. Not the pheromone diffuser that made the hallway smell odd and did nothing. Not the behaviourist whose methods worked in the session and nowhere else.\n\nWhat would it mean to get your evenings back this October? To stop building the dread before it even arrives?\n\nThat's what I'm actually making things for.",
+      "cta": "Reply and tell me what October usually looks like in your house — I'm genuinely asking."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "Why Steady Hound does things differently",
+          "hook_category": "direct_benefit"
+        },
+        {
+          "subject": "The feeder took three redesigns. We say so.",
+          "hook_category": "personal_voice"
+        },
+        {
+          "subject": "What rescue-tested actually means",
+          "hook_category": "how_to"
+        }
+      ],
+      "preview": "Twelve genuinely anxious rescue dogs. And the fail rate is published.",
+      "body": "Hi {{first_name}},\n\nHere's the thing about a lot of anxiety kit: it gets tested on cooperative dogs in good conditions, passed, and shipped.\n\nSteady Hound doesn't work like that.\n\nEvery product goes through a trial panel of twelve genuinely anxious rescue dogs before it goes on sale. Odd-shaped builds, dogs with history, dogs that wriggle and pace and cannot decompress in a strange environment. And the fail rate is published — the Slow-Down Feeder took three redesigns, and I say so on the listing.\n\nThat matters because you are not the first person to put this through its paces. By the time it reaches your door, it has already been through the versions that didn't work. You don't have to be the one who finds out the hard way.\n\nThe other thing that's different: every box ships with a handwritten note on how to introduce the coat slowly. Because I know — from twelve dogs and from the DMs I answer myself — that the introduction matters as much as the product.\n\nSizing videos for odd-shaped rescues. A real person at the other end.\n\nNot a customer service department. Me.\n\nP.S. The feeder redesign story is on the website if you want to read it.",
+      "cta": "Reply with any question you have about fit, builds, or whether this works for your specific dog."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "What people say when it actually works",
+          "hook_category": "results_evidence"
+        },
+        {
+          "subject": "Ted takes himself off to it now",
+          "hook_category": "story_tease"
+        },
+        {
+          "subject": "First bonfire night in three years where Willow slept",
+          "hook_category": "open_loop"
+        }
+      ],
+      "preview": "A few words from people who had the same drawer you have. In their own words.",
+      "body": "Hi {{first_name}},\n\nI'm going to let other people talk today.\n\nThis is what someone wrote after their first bonfire night with the Settle Coat:\n\n\"First bonfire night in three years where Willow slept instead of shaking herself sick. I actually cried a bit folding the coat up the next morning. Worth every penny.\"\n\nAnd this, about the Den Bed:\n\n\"honestly didnt expect much, we've got a drawer full of 'calming' stuff that did nothing. The den bed is the first thing Ted has ever chosen to get into on his own. He takes himself off to it now when the bins get collected.\"\n\nAnd this one, about the delivery itself:\n\n\"Ordered Tuesday, arrived Thursday with a handwritten note on how to introduce the coat slowly. Nobody does that anymore. Fits his weird whippet chest perfectly too.\"\n\nI'm not sharing these to tell you this will definitely work for your dog. I don't know your dog yet.\n\nI'm sharing them because these are people who had the drawer. Who had done the maths on everything they'd already spent. And something shifted.\n\nThat's what I'm trying to build toward.\n\nP.S. If you have a whippet, lurcher, or staffie cross with an odd chest, the sizing guide is worth a look before you do anything else.",
+      "cta": "Reply and tell me your dog's breed — I can point you toward the right fit from here."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "How to introduce a new coat to a nervous dog",
+          "hook_category": "how_to"
+        },
+        {
+          "subject": "The slow introduction: what it looks like in practice",
+          "hook_category": "direct_benefit"
+        },
+        {
+          "subject": "Don't put it on at a fireworks display",
+          "hook_category": "personal_voice"
+        }
+      ],
+      "preview": "Most people do this backwards. Here's the order that actually helps a nervous dog settle.",
+      "body": "Hi {{first_name}},\n\nToday I want to give you something you can use right now, whether you have Steady Hound kit or not.\n\nHow to introduce something new to a dog that struggles with change:\n\nDay one: leave it on the floor where he can sniff it in his own time. No pressure, no coaxing. Just there.\n\nDay two: put it near his bed, or near where he eats. Let it become ordinary before it becomes worn.\n\nDay three onwards: try it on for sixty seconds during something good — a calm moment after a walk, just before a meal. Take it off before he's had a chance to mind it.\n\nIncrease the time slowly, always ending before discomfort.\n\nThis is what the handwritten note in every Steady Hound box says, and it works for anything new — a coat, a bed, a feeder. The introduction done slowly is more than half the battle.\n\nA dog who approaches something on his own terms and finds it fine is a different animal to a dog who was strapped into it cold and decided before he started that it was something to tolerate or escape.\n\nYour dog isn't broken. He just needs the chance to come to things in his own time.\n\nP.S. Firework season is closer than it feels. The slow introduction takes two to three weeks to do properly — there's still time, but not a lot of it.",
+      "cta": "Reply if you have questions about where to start with your specific dog — I'll give you a straight answer."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "The questions I get asked before people order",
+          "hook_category": "open_loop"
+        },
+        {
+          "subject": "Is £58 worth it when the Amazon one is £14?",
+          "hook_category": "reflective_question"
+        },
+        {
+          "subject": "The honest answers to the hard questions",
+          "hook_category": "personal_voice"
+        }
+      ],
+      "preview": "The fit question. The price question. The drawer-full-of-things-that-didn't-work question.",
+      "body": "Hi {{first_name}},\n\nLet me take the hesitations one at a time, because they're fair.\n\nThe price. At £58, the Settle Coat costs more than the Amazon wrap. What it doesn't do is slide off a whippet chest in forty seconds. It's been through twelve anxious rescue dogs — including odd-shaped ones — before it went on sale, and the return rate tells its own story. It also comes with a 60-night return policy. If it doesn't work for your dog, you send it back. That's the whole deal.\n\nThe fit. Sizing for non-standard builds is the reason the coat exists. There are sizing videos for lurchers, whippets, and staffie crosses because those are the dogs that never fit anything off the shelf. That's not marketing — it's why the product needed making.\n\nThe drawer. I know exactly which drawer you mean. If you've spent money on things that promised calm and didn't deliver it, you have every right to be sceptical. The only honest answer is: we publish the fail rate so you can see what the coat went through before it reached you. The version that arrived took the versions that didn't work. You don't have to fund the trial.\n\nIf you're still not sure, reply and tell me what's stopping you. I'll give you a straight answer, not a sales script.",
+      "cta": "Reply with your hesitation — I'll answer it directly, not with a discount code."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "The natural next step, if you want it",
+          "hook_category": "direct_benefit"
+        },
+        {
+          "subject": "This is the Settle Coat. Here's what it does.",
+          "hook_category": "direct_command"
+        },
+        {
+          "subject": "Before October arrives: a straightforward invitation",
+          "hook_category": "deal_announcement"
+        }
+      ],
+      "preview": "One week of emails. One offer. Here's what it is and what it costs.",
+      "body": "Hi {{first_name}},\n\nYou've been with me all week. Thank you for that.\n\nI want to be straight with you about what's on offer.\n\nThe Steady Hound Settle Coat is £58. It's cut for odd-shaped rescues — whippet chests, lurcher frames, barrel-chested staffies — and it has been through a rescue-tested trial of twelve genuinely anxious dogs before it went on sale. Every coat ships with a handwritten guide on how to introduce it slowly, and a pack of Intro Treat Pouches to help you do it. The 60-night return policy means that if it doesn't suit your dog, it comes back, no explanation needed.\n\nIf it works — and I believe it will, because of the work that's gone into making it fit and making it last — the Den Bed and the Slow-Down Feeder become the natural next conversation. Buyers who have everything together tell me their dogs do best with the whole system. But the coat is where most people start, and it's the right place to start.\n\nOctober is coming. The slow introduction takes a few weeks done properly. There is still time.\n\nIf you're ready, the link below takes you to the Settle Coat page.\n\nP.S. If you want the full Calm Kit — coat, Den Bed, and Slow-Down Feeder together at £165 — it's on the same page. The individual prices are listed alongside so the saving is clear.",
+      "cta": "Get the Settle Coat at {{link}} — rescue-tested, 60-night return, handwritten guide in the box."
+    }
+  ],
+  "promo_seq": [
+    {
+      "subject_variants": [
+        {
+          "subject": "The moment she went looking for the page",
+          "hook_category": "story_tease"
+        },
+        {
+          "subject": "A reel. A dog asleep. And then the search.",
+          "hook_category": "open_loop"
+        },
+        {
+          "subject": "What changes when the coat actually fits",
+          "hook_category": "direct_benefit"
+        }
+      ],
+      "preview": "She watched it twice before she went looking. Here's what the Settle Coat actually changes.",
+      "body": "Hi {{first_name}},\n\nShe was scrolling. A reel stopped her — a dog called Bramble, asleep through a thunderstorm.\n\nShe watched it twice. Then she went looking for the page.\n\nThat's usually how it starts. Not with a deliberate search for an anxiety wrap. With a moment of: what if that were possible.\n\nMaybe your moment was a bonfire night where your dog shook and panted and nothing settled him. Maybe it was a walk that ended with him flat on the pavement while strangers slowed to look. Maybe it was a vet visit where the word medication came up again and you left feeling worse than when you went in.\n\nThe Steady Hound Settle Coat doesn't promise an overnight fix. What it does is give your dog something sized for his actual build, tested on twelve genuinely anxious rescue dogs before it was ever sold, and introduced at the pace he needs — slowly, on his own terms.\n\nFor dogs like his, that changes things.\n\nNot the coat strapped on cold at a display. The coat left on the sofa on a Tuesday, sniffed, accepted, worn for sixty seconds before a meal, and by the time October arrives — familiar.\n\nThat's what the Settle Coat is for. And that's what this week of emails is about.",
+      "cta": "See the Settle Coat at {{link}} — sized for odd builds, rescue-tested, 60-night return."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "What staying stuck through October actually costs",
+          "hook_category": "reflective_question"
+        },
+        {
+          "subject": "The pre-dawn alarm. The weekends she stopped booking.",
+          "hook_category": "personal_voice"
+        },
+        {
+          "subject": "The maths on another October like the last one",
+          "hook_category": "direct_benefit"
+        }
+      ],
+      "preview": "Not just fireworks. The whole quiet reorganisation of a life around a dog who's struggling.",
+      "body": "Hi {{first_name}},\n\nLet's be honest about what another October like the last one looks like.\n\nThe alarm at 6am so you're out before the neighbourhood wakes up. The walk that ends with him flat to the pavement, strangers slowing down. The evening where you sit with one eye on the window and one on him, waiting for the bang.\n\nThen firework season proper: the shaking, the panting, the thing that got tried last year that did nothing, the drawer that keeps getting things added to it.\n\nAnd underneath all of that, the quieter thing. The weekend away you didn't book because you couldn't face the logistics. The slow belief that you're failing a dog you chose.\n\nYour dog isn't broken. But that doesn't mean staying stuck costs nothing.\n\nThe Settle Coat is £58 — less than one of those behaviourist sessions that gave you homework done faithfully and no lasting change. It ships with a handwritten guide already written for dogs who need things introduced slowly, and a 60-night return policy that means the financial risk sits with me, not you.\n\nIf you want the full system — the coat, the Den Bed, the Slow-Down Feeder, everything your dog needs to decompress before and between trigger events — the Calm Kit brings all three together at £165, against £201 if you bought each piece separately.\n\nThe slow introduction takes a few weeks. October is coming.",
+      "cta": "Start with the Settle Coat at {{link}} — or see the full Calm Kit on the same page."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "What the Calm Kit actually includes",
+          "hook_category": "direct_benefit"
+        },
+        {
+          "subject": "First bonfire night in three years where Willow slept",
+          "hook_category": "results_evidence"
+        },
+        {
+          "subject": "The feeder took three redesigns — here's what survived",
+          "hook_category": "personal_voice"
+        }
+      ],
+      "preview": "Here's what's in the kit, what it costs, and what people who have it say.",
+      "body": "Hi {{first_name}},\n\nToday I want to be concrete about what you actually get.\n\nThe Calm Kit is the Settle Coat (£58), the Den Bed (£119), and the Slow-Down Feeder (£24), together for £165. Individually those come to £201 — the £36 saving is shown on the listing so you can see the arithmetic clearly.\n\nThe coat is sized for odd-shaped rescues and tested on twelve genuinely anxious dogs. The Den Bed is a hooded cave bed in three sizes — machine-washable outer, built so your dog can decompress between trigger events on his own terms. The Slow-Down Feeder took three redesigns. I say so on the listing.\n\nHere's what people say when they have it:\n\n\"First bonfire night in three years where Willow slept instead of shaking herself sick. I actually cried a bit folding the coat up the next morning. Worth every penny.\"\n\n\"honestly didnt expect much, we've got a drawer full of 'calming' stuff that did nothing. The den bed is the first thing Ted has ever chosen to get into on his own. He takes himself off to it now when the bins get collected.\"\n\n\"Ordered Tuesday, arrived Thursday with a handwritten note on how to introduce the coat slowly. Nobody does that anymore. Fits his weird whippet chest perfectly too.\"\n\nThese are people who had the drawer. The slow introduction is already written into the box.",
+      "cta": "See the full Calm Kit at {{link}} — coat, bed, feeder, and the numbers laid out plainly."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "The part where I tell you about the return policy",
+          "hook_category": "personal_voice"
+        },
+        {
+          "subject": "What happens if it doesn't work for your dog",
+          "hook_category": "open_loop"
+        },
+        {
+          "subject": "How the 60-night return actually works",
+          "hook_category": "how_to"
+        }
+      ],
+      "preview": "The financial risk is mine, not yours. Here's exactly how that works.",
+      "body": "Hi {{first_name}},\n\nI want to talk about what happens if this doesn't work for your dog.\n\nThe Settle Coat comes with a 60-night open return. If within 60 nights you decide it's not right — it doesn't fit, it doesn't help him settle, you change your mind entirely — you send it back and I refund you in full. No explanation required.\n\nThe same policy covers the full Calm Kit. Coat, Den Bed, Slow-Down Feeder: if any piece of it isn't right for your dog within 60 nights, return the whole kit for a full refund. What comes back muddy gets washed and donated to Otterbourne Rescue. Nothing gets binned.\n\nOn the Den Bed: if you order the wrong size for your dog's build, I'll send the correct size with a pre-paid returns label for the original. One action — no charge for the swap.\n\nI can offer this without wincing because I made the kit for dogs that genuinely need it, sized it for odd builds, and tested it on twelve anxious rescues before it went on sale. I believe in the fail rate being published rather than hidden. I think that's the only honest way to sell something to someone who has already spent money on things that didn't work.\n\nThe risk is mine. Sixty nights is a proper test.\n\nP.S. If you want a two-part payment on the Calm Kit — half on order, half before dispatch — reply and I'll set that up for you.",
+      "cta": "Get the Calm Kit at {{link}} — 60-night full return, size swap included on the Den Bed."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "What you get, what it costs, and a straight reason to act now",
+          "hook_category": "direct_benefit"
+        },
+        {
+          "subject": "October. The slow introduction. There is still time.",
+          "hook_category": "direct_command"
+        },
+        {
+          "subject": "Last email: here's the plain version",
+          "hook_category": "personal_voice"
+        }
+      ],
+      "preview": "No pressure. Just the facts, the price, and what October looks like if you start now.",
+      "body": "Hi {{first_name}},\n\nThis is the last email in this run. I'll keep it plain.\n\nThe Settle Coat is £58. Rescue-tested, sized for odd-shaped builds, 60-night open return, handwritten guide in the box, Intro Treat Pouches included. If you want one piece of kit that has genuinely been through the work before it reached you, this is it.\n\nThe Calm Kit is £165. That's the coat, the Den Bed, and the Slow-Down Feeder together — £36 less than buying each piece on its own. For dogs who do best with the whole system: somewhere to decompress, something to settle into during a trigger, a feeder that slows down a stress-eater at mealtimes. If you've already decided, this is probably the right starting point.\n\nThe Full Settle System is £175 and adds a pack of Intro Treat Pouches to the kit — everything you need for the slow introduction in one parcel.\n\nThe reason to act now is not a countdown clock. It's this: the slow introduction takes a few weeks done properly, and bonfire night is not far off. You don't need to be rushed. But there is a window, and it's open.\n\nYour dog isn't broken. He has just never had something built for dogs like him.\n\nP.S. If you have a question about fit, about whether this is right for your specific dog, or about the two-part payment option on the Calm Kit — reply. I answer the DMs myself.",
+      "cta": "Get the Settle Coat or the full Calm Kit at {{link}} — 60-night return, slow-introduction guide included."
+    }
+  ],
+  "list_warmup_note": {
+    "list_status": "cold",
+    "note": "F2 shows 2,400 subscribers and a last send in mid-June — roughly three months ago at the time of this build, which sits right at the cold threshold, and the owner's own note that fortnightly aim has slipped to monthly confirms the gap is real. I'm calling this cold. The reintro email below should go out before either sequence fires, giving subscribers a clear reminder of who Steady Hound is and an honest way off the list before the welcome run starts. Once the reintro is out and a few days have passed, the welcome sequence fires for any new subscriber from that point; the promo sequence follows the welcome run for anyone who has been through it. For existing subscribers who skipped the welcome run, the owner can send the promo sequence directly after the reintro settles.",
+    "reintro_email": {
+      "subject_variants": [
+        {
+          "subject": "We haven't spoken in a while — here's what's changed",
+          "hook_category": "personal_voice"
+        },
+        {
+          "subject": "A quick note before I start emailing again",
+          "hook_category": "open_loop"
+        },
+        {
+          "subject": "Steady Hound: a re-introduction",
+          "hook_category": "direct_benefit"
+        }
+      ],
+      "preview": "It's been a few months. Here's who I am, what I make, and what's coming.",
+      "body": "Hi {{first_name}},\n\nIt's been a while. Mid-June was the last time I was in your inbox, and I know that's longer than I'd planned.\n\nBefore I start sending again properly, I want to remind you who I am and give you a clean way out if you'd rather not hear from me.\n\nI'm the person behind Steady Hound. I make anxiety kit for rescue dogs — a Settle Coat sized for odd-shaped builds like whippets and lurchers, a Den Bed that gives a nervous dog somewhere to decompress on his own terms, and a Slow-Down Feeder that took three redesigns before I was happy with it. Every product is tested on twelve genuinely anxious rescue dogs before it goes on sale, and I publish the fail rate. I answer the DMs myself.\n\nWith bonfire season coming, I'm going to be sending more regularly for the next few weeks — useful things, honest things, and yes, some emails about what's on offer. I'd love you to stay.\n\nBut if you signed up a while ago and this isn't for you anymore, the unsubscribe link is below and I mean it kindly. No hard feelings at all.\n\nFor those staying: thank you. More soon.\n\nP.S. If you have an anxious rescue dog and October is already on your mind, reply and tell me about your dog. I'm glad to help.",
+      "cta": "Reply and tell me about your dog — or stay tuned and I'll be back shortly with something useful."
+    }
+  }
+}

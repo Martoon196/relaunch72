@@ -1,0 +1,347 @@
+{
+  "run_id": "20260706-171043-ecom-941f",
+  "source": "ecom",
+  "mode": "live",
+  "through": "S9",
+  "created_at": "2026-07-06T17:10:43.501Z",
+  "finished_at": "2026-07-06T19:22:28.475Z",
+  "status": "completed",
+  "s0": {
+    "accepted": true,
+    "action": "accept",
+    "issues": [],
+    "checked_at": "2026-07-06T17:10:43.511Z"
+  },
+  "stages": [
+    {
+      "stage": "S1",
+      "status": "passed",
+      "prompt_file": "s1-audit.md",
+      "prompt_version": "1.0.1",
+      "prompt_sha256": "c06cb78160a1a9f831a7c579785c4b81ad0ad9ad72d2613deecf87d135f7123c",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T17:10:43.543Z",
+          "raw_output_file": "s1-attempt-1.txt",
+          "tokens_in": 2237,
+          "tokens_out": 18535,
+          "duration_ms": 354579,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": [
+            {
+              "check": "s1.leak_number_invented",
+              "message": "leak estimate for \"message clarity\" contains 300, which is not derived from B2 (£52) or B3 (150) via arithmetic shown in the estimate itself — show the working using only those inputs, e.g. \"£104/mo (= 2 lost customers × £52 average sale)\""
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "started_at": "2026-07-06T17:16:38.146Z",
+          "raw_output_file": "s1-attempt-2.txt",
+          "tokens_in": 5154,
+          "tokens_out": 3445,
+          "duration_ms": 55029,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.351873,
+      "output_file": "s1.json",
+      "flags": []
+    },
+    {
+      "stage": "S2",
+      "status": "passed",
+      "prompt_file": "s2-icp.md",
+      "prompt_version": "1.0.0",
+      "prompt_sha256": "75a4d76d83b2b0d4ffc88be725164c489c417da3e50587892d54c0fdf5c58a9b",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T17:17:33.189Z",
+          "raw_output_file": "s2-attempt-1.txt",
+          "tokens_in": 2261,
+          "tokens_out": 4594,
+          "duration_ms": 73478,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.075693,
+      "output_file": "s2.json",
+      "flags": []
+    },
+    {
+      "stage": "S3",
+      "status": "passed",
+      "prompt_file": "s3-message.md",
+      "prompt_version": "1.0.0",
+      "prompt_sha256": "6052925afca83f0d905f4e6273e8aadbb585f88b252157a039a74e6a83981ae7",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T17:18:46.675Z",
+          "raw_output_file": "s3-attempt-1.txt",
+          "tokens_in": 3873,
+          "tokens_out": 9104,
+          "duration_ms": 141737,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.148179,
+      "output_file": "s3.json",
+      "flags": []
+    },
+    {
+      "stage": "S4",
+      "status": "passed",
+      "prompt_file": "s4-offer.md",
+      "prompt_version": "1.0.0",
+      "prompt_sha256": "5f59506e9e0c34a26c0e3997d2f71f0c4d0034e6cc6d4be0208d3310ea8f9ed0",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T17:21:08.424Z",
+          "raw_output_file": "s4-attempt-1.txt",
+          "tokens_in": 5013,
+          "tokens_out": 30888,
+          "duration_ms": 554596,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": [
+            {
+              "check": "s4.current_stack_unquoted",
+              "message": "current_stack_read must quote the owner: include at least one double-quoted snippet (≥12 chars, copied character-for-character) from D1, D2 or D3"
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "started_at": "2026-07-06T17:30:23.028Z",
+          "raw_output_file": "s4-attempt-2.txt",
+          "tokens_in": 7162,
+          "tokens_out": 2772,
+          "duration_ms": 29185,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.5414249999999999,
+      "output_file": "s4.json",
+      "flags": []
+    },
+    {
+      "stage": "S5",
+      "status": "passed",
+      "prompt_file": "s5-roadmap.md",
+      "prompt_version": "1.0.1",
+      "prompt_sha256": "96c05f7fb89d98572b51e85241c3f0488ccba173e2008f7f0fec67cc9a1b2d22",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T18:48:20.207Z",
+          "raw_output_file": "s5-attempt-1.txt",
+          "tokens_in": 9678,
+          "tokens_out": 32000,
+          "duration_ms": 575796,
+          "stop_reason": "max_tokens",
+          "schema_errors": [
+            "response truncated (hit max_tokens) — output must be complete JSON",
+            "no parseable JSON object found in model output"
+          ],
+          "qa_issues": []
+        },
+        {
+          "attempt": 2,
+          "started_at": "2026-07-06T18:57:56.003Z",
+          "raw_output_file": "s5-attempt-2.txt",
+          "tokens_in": 9818,
+          "tokens_out": 25475,
+          "duration_ms": 444234,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.9206129999999999,
+      "output_file": "s5.json",
+      "flags": []
+    },
+    {
+      "stage": "S6",
+      "status": "passed",
+      "prompt_file": "s6-website.md",
+      "prompt_version": "1.0.0",
+      "prompt_sha256": "f3d9d0a7f0af14a223d12934b5b8132cb5b67f08ac3ba0830be8a68f3e8f5eb1",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T19:05:20.261Z",
+          "raw_output_file": "s6-attempt-1.txt",
+          "tokens_in": 7884,
+          "tokens_out": 3825,
+          "duration_ms": 87602,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.081027,
+      "output_file": "s6.json",
+      "flags": []
+    },
+    {
+      "stage": "S7",
+      "status": "passed",
+      "prompt_file": "s7-emails.md",
+      "prompt_version": "1.0.1",
+      "prompt_sha256": "197e270a4254067726e130637e3d1c97ecfee78375040da988497a356fdaca07",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T19:06:47.891Z",
+          "raw_output_file": "s7-attempt-1.txt",
+          "tokens_in": 7602,
+          "tokens_out": 6846,
+          "duration_ms": 141406,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": [
+            {
+              "check": "s7.hook_categories_not_distinct",
+              "message": "welcome_seq[3]: the 3 subject_variants must use 3 DIFFERENT hook categories"
+            },
+            {
+              "check": "s7.hook_categories_not_distinct",
+              "message": "promo_seq[2]: the 3 subject_variants must use 3 DIFFERENT hook categories"
+            },
+            {
+              "check": "s7.invented_quote",
+              "message": "quoted passage at welcome_seq[3].body (\"Honestly didn't expect much, we've got a drawer full of 'cal…\") is not copied from S2/S3/S4, F2, A1 or the customer reviews (C2) — a fabricated testimonial or quote parks the run",
+              "fatal": false
+            },
+            {
+              "check": "s7.invented_quote",
+              "message": "quoted passage at promo_seq[2].body (\"Honestly didn't expect much, we've got a drawer full of 'cal…\") is not copied from S2/S3/S4, F2, A1 or the customer reviews (C2) — a fabricated testimonial or quote parks the run",
+              "fatal": false
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "started_at": "2026-07-06T19:09:09.316Z",
+          "raw_output_file": "s7-attempt-2.txt",
+          "tokens_in": 14706,
+          "tokens_out": 7055,
+          "duration_ms": 148691,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.275439,
+      "output_file": "s7.json",
+      "flags": []
+    },
+    {
+      "stage": "S8",
+      "status": "passed",
+      "prompt_file": "s8-social.md",
+      "prompt_version": "1.0.1",
+      "prompt_sha256": "cc41954ac4e4bcdff2d253fe188c989aa68f3449a52115e930d5ff739a4ef3ad",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T19:11:38.028Z",
+          "raw_output_file": "s8-attempt-1.txt",
+          "tokens_in": 8012,
+          "tokens_out": 8628,
+          "duration_ms": 188076,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": [
+            {
+              "check": "s8.invented_quote",
+              "message": "day 4 body: quoted passage (\"a drawer full of calming stuff that did nothing.…\") is not a substring of C2 or a prior-stage document — a fabricated testimonial parks the run",
+              "fatal": false
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "started_at": "2026-07-06T19:14:46.126Z",
+          "raw_output_file": "s8-attempt-2.txt",
+          "tokens_in": 16723,
+          "tokens_out": 8631,
+          "duration_ms": 188060,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.33309,
+      "output_file": "s8.json",
+      "flags": []
+    },
+    {
+      "stage": "S9",
+      "status": "passed",
+      "prompt_file": "s9-oneplan.md",
+      "prompt_version": "1.0.0",
+      "prompt_sha256": "fa70ca2f09a1f544c68f3a466fdf467ee19d847c38e7fbf30626a2199f08ec4a",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T19:17:54.206Z",
+          "raw_output_file": "s9-attempt-1.txt",
+          "tokens_in": 12335,
+          "tokens_out": 17942,
+          "duration_ms": 274232,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.306135,
+      "output_file": "s9.json",
+      "flags": []
+    }
+  ],
+  "s10": {
+    "issues": [
+      {
+        "check": "s10.s3_banned_word",
+        "message": "S6.sales_page.sections[0].body: contains \"instant calm\", which S3's voice guide bans — the voice list binds every copy deliverable"
+      }
+    ],
+    "package_file": "bundle.json",
+    "review_file": "review.md",
+    "status": "awaiting_signoff",
+    "assembled_at": "2026-07-06T19:22:28.474Z"
+  },
+  "totals": {
+    "tokens_in": 112458,
+    "tokens_out": 179740,
+    "cost_usd": 3.0335
+  },
+  "environment": {
+    "node": "v22.22.2",
+    "orchestrator_version": "0.1.0"
+  }
+}
