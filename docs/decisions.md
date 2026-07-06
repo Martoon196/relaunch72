@@ -266,3 +266,18 @@ invented_quote, quote_fabricated) now strip leading/trailing punctuation and quo
 span before matching. Internal wording must still match exactly, so a fabricated testimonial still
 parks — only edge punctuation drift is forgiven. This fixes the whole quote-check family (S1
 evidence, S3 differentiator, S4 citations, S6–S8 provenance) in one place.
+
+**D-025 · No-invention retry policy: invented NUMBERS are retryable; fabricated PROOF is fatal.**
+Live trades S4 parked with no retry when the model used a rhetorical invented figure ("whoever
+quoted £180 on a Facebook group") — the check correctly caught an invented number, but FATAL-no-retry
+was disproportionate: a one-line critique ("£180 isn't in the intake") reliably makes the model
+delete it, and S1's own leak-number check was ALREADY retryable, so the pipeline was internally
+inconsistent. Resolution: the numeric no-invention checks (s3/s4/s5/s6/s7/s8/s9 number_invented,
+invented_number/numbers/percentage, s9 table tracing) are now RETRYABLE — one critique-retry, then
+park — matching S1 and the Pipeline Spec's retry policy. The FATAL-no-retry reservation (Global QA
+principle 2) stays for FABRICATED PROOF, where a second attempt is dangerous: fabricated quotes/
+testimonials (quote_fabricated, invented_quote), unsupported credential words (proof_word_unsupported)
+and outcome-promise guarantees (risk_reversal_promises_outcome). The no-fabrication guarantee is
+intact — a persistent invented number still fails QA and parks after its retry; it just gets the one
+retry the spec promises. Supersedes the blanket-fatal number stance in D-018. Locked by a
+policy-assertion test.

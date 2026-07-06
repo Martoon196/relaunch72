@@ -116,11 +116,11 @@ test('qaS3 fails a positioning statement with no contrast', async () => {
   assert.ok(qaS3(out, intake).some((i) => i.check === 's3.positioning_no_contrast'));
 });
 
-test('qaS3 FATALLY fails an invented figure in message copy', async () => {
+test('qaS3 flags an invented figure in message copy (retryable)', async () => {
   const out = (await mockOutput('S3')) as { message_pillars: string[] };
   // 837 appears nowhere in the intake — a fabricated credential.
   out.message_pillars[0] += ' Trusted by over 837 landlords.';
-  assert.ok(qaS3(out, intake).some((i) => i.check === 's3.number_invented' && i.fatal === true));
+  assert.ok(qaS3(out, intake).some((i) => i.check === 's3.number_invented'));
 });
 
 test('qaS3 accepts a real intake price cited in positioning', async () => {
@@ -163,7 +163,7 @@ test('qaS4 fails an uncited pricing move and an unquoted stack read', async () =
 test('qaS4 FATALLY fails an invented benchmark figure', async () => {
   const out = (await mockOutput('S4')) as { category_note: string };
   out.category_note += ' Comparable specialists charge £7,500 for this.';
-  assert.ok(qaS4(out, intake).some((i) => i.check === 's4.number_invented' && i.fatal === true));
+  assert.ok(qaS4(out, intake).some((i) => i.check === 's4.number_invented'));
 });
 
 test('qaS5 fails a phase theme that never mentions the goal', async () => {
@@ -175,7 +175,7 @@ test('qaS5 fails a phase theme that never mentions the goal', async () => {
 test('qaS5 FATALLY fails an invented reach estimate', async () => {
   const out = (await mockOutput('S5')) as { phases: Array<{ actions: Array<{ action: string }> }> };
   out.phases[0]!.actions[0]!.action = 'Post twice on the group page to reach 4,000 local people.';
-  assert.ok(qaS5(out, intake).some((i) => i.check === 's5.number_invented' && i.fatal === true));
+  assert.ok(qaS5(out, intake).some((i) => i.check === 's5.number_invented'));
 });
 
 test('qaS1 accepts visible arithmetic on an intake-stated number beyond B2/B3', async () => {

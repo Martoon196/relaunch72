@@ -233,3 +233,20 @@ test('qaS6 still FATALLY parks a fabricated quote even with edge tolerance', asy
   out.about.body += ' A client raved: "this is the best decision our whole family ever made".';
   assert.ok(qaS6(out, intake, p).some((i) => i.check === 's6.quote_fabricated' && i.fatal === true));
 });
+
+// ── no-invention policy: numbers retryable, fabricated proof fatal ──────────
+test('invented numbers are retryable, fabricated quotes/credentials/outcomes are fatal', async () => {
+  const p = await priors();
+  // an invented number gets the one retry (not fatal) — the model removes it
+  const n = (await mock('S4')) as { category_note: string };
+  n.category_note += ' Rivals quoted £4,317 last week.';
+  const numIssues = qaS4(n, intake, p).filter((i) => i.check === 's4.number_invented');
+  assert.ok(numIssues.length > 0 && numIssues.every((i) => i.fatal !== true));
+  // a fabricated testimonial / credential / outcome promise stays fatal
+  const q = (await mock('S6')) as { about: { body: string } };
+  q.about.body += ' A buyer said: "the most life-changing service we have ever paid for".';
+  assert.ok(qaS6(q, intake, p).some((i) => i.check === 's6.quote_fabricated' && i.fatal === true));
+  const o = (await mock('S4')) as { risk_reversal_options: string[] };
+  o.risk_reversal_options[0] = 'We guarantee results or your money back.';
+  assert.ok(qaS4(o, intake, p).some((i) => i.check === 's4.risk_reversal_promises_outcome' && i.fatal === true));
+});

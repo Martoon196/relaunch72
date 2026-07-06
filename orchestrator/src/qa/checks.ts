@@ -623,7 +623,7 @@ export function qaS3(output: unknown, intake: Intake, prior: Record<string, unkn
         issues.push({
           check: 's3.number_invented',
           message: `${surface} contains the figure ${value.toLocaleString('en-GB')}, which appears nowhere in the customer's intake or the buyer profile — a fabricated stat or credential in message copy parks the run`,
-          fatal: true,
+          fatal: false,
         });
       }
     }
@@ -822,7 +822,7 @@ export function qaS4(output: unknown, intake: Intake, prior: Record<string, unkn
         issues.push({
           check: 's4.number_invented',
           message: `${surface} contains the figure ${value.toLocaleString('en-GB')}, which is not an intake fact, a recommended price, or visible arithmetic over those — no market data, competitor prices, conversion rates or benchmarks`,
-          fatal: true,
+          fatal: false,
         });
       }
     }
@@ -971,7 +971,7 @@ export function qaS5(output: unknown, intake: Intake, prior: Record<string, unkn
       issues.push({
         check: 's5.number_invented',
         message: `${path} contains the figure ${value.toLocaleString('en-GB')}, which appears nowhere in the intake or the prior stages and shows no arithmetic in the same string — a fabricated projection parks the run`,
-        fatal: true,
+        fatal: false,
       });
     }
   }
@@ -1067,7 +1067,7 @@ export function qaS6(output: unknown, intake: Intake, prior: Record<string, unkn
       issues.push({
         check: 's6.number_invented',
         message: `${path} contains the figure ${value.toLocaleString('en-GB')}, which is not a real intake/prior number nor visible arithmetic over them — no invented stats, counts or claims in website copy`,
-        fatal: true,
+        fatal: false,
       });
     }
   }
@@ -1364,7 +1364,7 @@ export function qaS7(output: unknown, intake: Intake, prior: Record<string, unkn
       issues.push({
         check: 's7.invented_number',
         message: `${path} contains the figure ${value.toLocaleString('en-GB')}, which is no real intake/prior number nor visible arithmetic — invented stats, counts or discounts park the run`,
-        fatal: true,
+        fatal: false,
       });
     }
     for (const n of extractNumbers(normalizeText(text))) {
@@ -1372,7 +1372,7 @@ export function qaS7(output: unknown, intake: Intake, prior: Record<string, unkn
         issues.push({
           check: 's7.invented_percentage',
           message: `${path} contains ${n.value}%, which does not appear in any input — every percentage in email copy must be a literal echo`,
-          fatal: true,
+          fatal: false,
         });
       }
     }
@@ -1569,7 +1569,7 @@ export function qaS8(output: unknown, intake: Intake, prior: Record<string, unkn
       issues.push({
         check: 's8.invented_numbers',
         message: `day ${post.day} contains the figure ${value.toLocaleString('en-GB')}, which appears nowhere in the intake or prior stages — fabricated stats park the run`,
-        fatal: true,
+        fatal: false,
       });
     }
   }
@@ -1640,7 +1640,7 @@ export function qaS9(output: unknown, intake: Intake, prior: Record<string, unkn
           issues.push({
             check: 's9.table_number_untraced',
             message: `numbers_table row "${row.label}": value "${row.value}" contains ${n.value.toLocaleString('en-GB')}, which appears in neither the declared source ${row.source} nor anywhere else in the intake or prior stages — every figure must trace to a real source`,
-            fatal: true,
+            fatal: false,
           });
         }
       }
@@ -1649,7 +1649,7 @@ export function qaS9(output: unknown, intake: Intake, prior: Record<string, unkn
       issues.push({
         check: 's9.table_value_not_echo',
         message: `numbers_table row "${row.label}": value "${row.value}" is not an echo of the declared source ${row.source}`,
-        fatal: true,
+        fatal: false,
       });
     }
   }
@@ -1670,7 +1670,7 @@ export function qaS9(output: unknown, intake: Intake, prior: Record<string, unkn
       issues.push({
         check: 's9.number_invented',
         message: `${section} contains the figure ${value.toLocaleString('en-GB')}, which traces to no intake field or stage output and shows no arithmetic — remove it or show the derivation`,
-        fatal: true,
+        fatal: false,
       });
     }
   }

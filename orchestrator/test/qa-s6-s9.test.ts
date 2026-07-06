@@ -41,12 +41,12 @@ test('qaS6 FATALLY fails a quoted passage no input ever said', async () => {
   assert.ok(issues.some((i) => i.check === 's6.quote_fabricated' && i.fatal === true));
 });
 
-test('qaS6 FATALLY fails an invented percentage and an invented figure', async () => {
+test('qaS6 flags an invented percentage and figure (retryable)', async () => {
   const out = (await mockOutput('S6')) as unknown as S6Shape;
   out.home.sections[0]!.body += ' Nine out of ten is not enough: 97% of customers agree.';
   out.sales_page.sections[0]!.body += ' Join over 5,000 happy customers.';
   const issues = qaS6(out, intake, prior);
-  assert.equal(issues.filter((i) => i.check === 's6.number_invented' && i.fatal === true).length, 2);
+  assert.equal(issues.filter((i) => i.check === 's6.number_invented').length, 2);
 });
 
 test('qaS6 FATALLY fails credential words no input supports', async () => {
@@ -99,13 +99,13 @@ test('qaS7 fails literal URLs and unknown merge tokens', async () => {
   assert.ok(issues.filter((i) => i.check === 's7.url_or_unknown_token').length >= 2);
 });
 
-test('qaS7 FATALLY fails a fabricated quote and an invented percentage', async () => {
+test('qaS7 fabricated quote (fatal) and invented percentage (retryable)', async () => {
   const out = (await mockOutput('S7')) as unknown as S7Shape;
   out.welcome_seq[0]!.body += ' As Sarah from Leeds put it: "absolutely transformed everything for our family".';
   out.welcome_seq[1]!.body += ' Readers see a 45% lift on average.';
   const issues = qaS7(out, intake, prior);
   assert.ok(issues.some((i) => i.check === 's7.invented_quote' && i.fatal === true));
-  assert.ok(issues.some((i) => i.check === 's7.invented_percentage' && i.fatal === true));
+  assert.ok(issues.some((i) => i.check === 's7.invented_percentage'));
 });
 
 test('qaS7 fails a cold list without the warm-up email', async () => {
@@ -147,12 +147,12 @@ test('qaS8 fails a month where one pillar dominates', async () => {
   assert.ok(issues.some((i) => i.check === 's8.pillar_distribution'));
 });
 
-test('qaS8 FATALLY fails invented stats and fabricated quotes in posts', async () => {
+test('qaS8 flags invented stats (retryable) and fabricated quotes (fatal)', async () => {
   const out = (await mockOutput('S8')) as unknown as S8Shape;
   out.posts[0]!.body += ' Over 5,000 jobs completed.';
   out.posts[2]!.body += ' One follower wrote: "the best decision our business ever made, hands down".';
   const issues = qaS8(out, intake, prior);
-  assert.ok(issues.some((i) => i.check === 's8.invented_numbers' && i.fatal === true));
+  assert.ok(issues.some((i) => i.check === 's8.invented_numbers'));
   assert.ok(issues.some((i) => i.check === 's8.invented_quote' && i.fatal === true));
 });
 
@@ -167,18 +167,18 @@ test('qaS9 passes a grounded one-pager (via mock)', async () => {
   assert.deepEqual(qaS9(await mockOutput('S9'), intake, prior), []);
 });
 
-test('qaS9 FATALLY fails a table figure absent from its declared source', async () => {
+test('qaS9 flags a table figure absent from its source (retryable)', async () => {
   const out = (await mockOutput('S9')) as unknown as S9Shape;
   out.numbers_table[0]!.value = '£9,999';
   const issues = qaS9(out, intake, prior);
-  assert.ok(issues.some((i) => i.check === 's9.table_number_untraced' && i.fatal === true));
+  assert.ok(issues.some((i) => i.check === 's9.table_number_untraced'));
 });
 
-test('qaS9 FATALLY fails an invented figure in prose', async () => {
+test('qaS9 flags an invented figure in prose (retryable)', async () => {
   const out = (await mockOutput('S9')) as unknown as S9Shape;
   out.snapshot += ' The local market is worth £450,000 a year to a business like this.';
   const issues = qaS9(out, intake, prior);
-  assert.ok(issues.some((i) => i.check === 's9.number_invented' && i.fatal === true));
+  assert.ok(issues.some((i) => i.check === 's9.number_invented'));
 });
 
 test('qaS9 fails projections beyond the 90-day horizon', async () => {
