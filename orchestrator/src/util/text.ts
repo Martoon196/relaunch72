@@ -135,5 +135,20 @@ export function extractNumbers(s: string): ExtractedNumber[] {
       after: joined.slice(m.index + m[0].length, m.index + m[0].length + 16),
     });
   }
+  // Band shorthand: in "£10–30k" the k scales only the high operand, so the
+  // low bound's true magnitude (10,000) is missing — an honest expansion
+  // ("£10,000") then reads as an invented number. Emit the scaled low bound
+  // too (only when the low operand carries no suffix of its own).
+  const rangeRe = /(\d[\d,]*(?:\.\d+)?)\s*(?:-|–|—|to)\s*(\d[\d,]*(?:\.\d+)?)([km])\b/gi;
+  let r: RegExpExecArray | null;
+  while ((r = rangeRe.exec(joined)) !== null) {
+    const low = Number((r[1] as string).replace(/,/g, ''));
+    const mult = (r[3] as string).toLowerCase() === 'k' ? 1_000 : 1_000_000;
+    if (!Number.isFinite(low)) continue;
+    const scaled = low * mult;
+    if (!out.some((n) => n.value === scaled)) {
+      out.push({ value: scaled, percent: false, raw: `${r[1]}${r[3]}`, before: '', after: '' });
+    }
+  }
   return out;
 }

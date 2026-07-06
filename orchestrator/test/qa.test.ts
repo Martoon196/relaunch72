@@ -229,9 +229,15 @@ test('banned phrase scan catches global list and H3 never-words anywhere in the 
   assert.ok(issues.some((i) => i.message.includes('guru')));
 });
 
-test('banned phrase scan does not fire inside larger words', () => {
-  const issues = scanBannedPhrases({ a: 'The seamstress elevated her craft' }, validIntake({ H3: null }));
-  // "seamless" must not match "seamstress"; "elevate" DOES match "elevated" (word-prefix by design)
-  assert.equal(issues.some((i) => i.message.includes('seamless')), false);
-  assert.ok(issues.some((i) => i.message.includes('elevate')));
+test('banned phrase scan does not fire inside honest derived words', () => {
+  // Single real-word bans get a trailing boundary: 'seamless' must not match
+  // 'seamstress'/'seamlessly', 'elevate' must not match 'elevated'/'elevation'
+  // (an "elevated fire risk" is honest prose, not the marketing cliché).
+  const clean = scanBannedPhrases({ a: 'The seamstress noticed an elevated fire risk and worked seamlessly' }, validIntake({ H3: null }));
+  assert.equal(clean.some((i) => i.message.includes('seamless')), false);
+  assert.equal(clean.some((i) => i.message.includes('elevate')), false);
+  // …but the standalone imperative cliché still fires.
+  const dirty = scanBannedPhrases({ a: 'We elevate your brand with a seamless experience' }, validIntake({ H3: null }));
+  assert.ok(dirty.some((i) => i.message.includes('elevate')));
+  assert.ok(dirty.some((i) => i.message.includes('seamless')));
 });

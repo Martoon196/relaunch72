@@ -56,7 +56,7 @@ export const STAGES: Record<string, StageDef> = {
     inputFields: S3_INPUT_FIELDS,
     priorStages: ['S2'],
     schema: S3_SCHEMA,
-    qa: (output, intake) => qaS3(output, intake),
+    qa: (output, intake, prior) => qaS3(output, intake, prior),
     maxTokens: 32000, // adaptive thinking shares this budget — headroom prevents attempt-1 truncation (M2 gate lesson)
   },
   S4: {
@@ -66,7 +66,7 @@ export const STAGES: Record<string, StageDef> = {
     inputFields: S4_INPUT_FIELDS,
     priorStages: ['S2', 'S3'],
     schema: S4_SCHEMA,
-    qa: (output, intake) => qaS4(output, intake),
+    qa: (output, intake, prior) => qaS4(output, intake, prior),
     maxTokens: 32000, // adaptive thinking shares this budget — headroom prevents attempt-1 truncation (M2 gate lesson)
   },
   S5: {
@@ -76,7 +76,7 @@ export const STAGES: Record<string, StageDef> = {
     inputFields: S5_INPUT_FIELDS,
     priorStages: ['S1', 'S2', 'S3', 'S4'],
     schema: S5_SCHEMA,
-    qa: (output, intake) => qaS5(output, intake),
+    qa: (output, intake, prior) => qaS5(output, intake, prior),
     maxTokens: 32000, // adaptive thinking shares this budget — headroom prevents attempt-1 truncation (M2 gate lesson)
   },
   // S6–S9 are the first stages whose QA reads prior-stage outputs — the

@@ -77,6 +77,7 @@ function parseWordList(raw: string, opts: { skipNegatedQuotes: boolean }): strin
       .trim();
     if (!s) continue;
     if (/^(?:never|don'?t|avoid|no)\b/i.test(s)) continue; // instruction, not a word
+    if (/\b(?:are|is|be|was|were|being|been|call|use|say|treat)\b/i.test(s)) continue; // subject-verb clause = instruction ("clients are engineers")
     if (wordCount(s) > MAX_WORDLIST_ENTRY_WORDS) continue; // commentary, not a word
     entries.push(s);
   }
@@ -105,6 +106,13 @@ export function phraseRegex(phrase: string): RegExp {
     .toLowerCase()
     .split(/[\s-]+/)
     .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  // A single real word gets a TRAILING boundary (+ simple plural) so it doesn't
+  // fire inside honest derived words: "elevate" must not match "elevated"/
+  // "elevation", "seamless" must not match "seamlessly". Multi-token phrases
+  // ("game-changer") keep the suffix-lenient join so "game-changers" still hits.
+  if (tokens.length === 1) {
+    return new RegExp(`\\b${tokens[0]}(?:s|es)?\\b`, 'i');
+  }
   return new RegExp(`\\b${tokens.join('[\\s\\-]+')}`, 'i');
 }
 
@@ -126,6 +134,14 @@ export function scanBannedPhrases(output: unknown, intake: Intake, opts: BannedS
   const regexes = banned.map((p) => [p, phraseRegex(p)] as const);
   const excluded = opts.excludePathPrefixes ?? [];
 
+  // A hit immediately preceded by a negator is a rebuttal, not the cliché —
+  // "a scared dog isn't naughty or stubborn" is the exact on-brand framing a
+  // pet-calm business exists to make, even though it bans 'naughty'/'stubborn'.
+  // A negator anywhere earlier in the same clause (no clause punctuation
+  // between) suppresses the hit, so "isn't being naughty or stubborn" clears
+  // BOTH words, not just the one right after the negator.
+  const NEGATOR_BEFORE = /\b(?:not|never|no|isn'?t|aren'?t|wasn'?t|weren'?t|won'?t|don'?t|doesn'?t|didn'?t|without|avoid)\b[^.?!;:]{0,30}$/i;
+
   for (const [path, text] of walkStrings(output, '')) {
     if (excluded.some((prefix) => path === prefix || path.startsWith(`${prefix}[`) || path.startsWith(`${prefix}.`))) {
       continue;
@@ -133,11 +149,15 @@ export function scanBannedPhrases(output: unknown, intake: Intake, opts: BannedS
     let subject = normalizeText(text);
     if (opts.stripQuotedText) subject = subject.replace(/"[^"]*"/g, ' ');
     for (const [phrase, re] of regexes) {
-      if (re.test(subject)) {
+      const g = new RegExp(re.source, 'ig');
+      let m: RegExpExecArray | null;
+      while ((m = g.exec(subject)) !== null) {
+        if (NEGATOR_BEFORE.test(subject.slice(Math.max(0, m.index - 24), m.index))) continue;
         issues.push({
           check: 'banned_phrase',
-          message: `banned phrase "${phrase}" found at ${path} — rewrite without it (customer quotes inside double quotes are exempt)`,
+          message: `banned phrase "${phrase}" found at ${path} — rewrite without it (customer quotes inside double quotes are exempt; negated rebuttals are allowed)`,
         });
+        break; // one issue per phrase per field is enough
       }
     }
   }

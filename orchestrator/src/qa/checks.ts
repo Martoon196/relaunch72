@@ -71,9 +71,45 @@ function findVerbatimSpan(text: string, fields: string[]): string | null {
  */
 const SMALL_NUMBER_MAX = 31; // counts and day-multipliers pass on their own
 const IMPLICIT_MULTIPLIERS = [1, 12, 52];
-// Durations are period lengths, not statistics — hours/minutes join
-// days/weeks so "48-hour turnaround" doesn't park a run (≤366 bound applies).
-const PERIOD_AFTER = /^\s*-?\s*(day|week|month|year|yr|wk|mo|hour|hr|minute|min|second|sec)s?\b/i;
+// Durations are period lengths, not statistics — hours/minutes/nights join
+// days/weeks so "48-hour turnaround" and a "60-night guarantee" (an owner's
+// actual wording) don't park a run (≤366 bound still applies).
+const PERIOD_AFTER = /^\s*-?\s*(day|week|month|year|yr|wk|mo|hour|hr|minute|min|second|sec|night|fortnight)s?\b/i;
+// Physical measurements are not fabricated business stats: "45cm chest",
+// "100 amp board", "240 volts". Bounded so a large figure can't hide behind a
+// unit. Single-letter units (v/w/a) must be attached (no space) to avoid
+// catching "45 a month".
+const UNIT_AFTER = /^\s*-?\s*(cm|mm|km|kg|kw|kwh|ml|amps?|volts?|watts?|litres?|lbs?|oz|°?[cf]\b)|^(v|w|a)\b/i;
+const UNIT_VALUE_MAX = 10_000;
+
+const SPELLED_INTEGERS: Record<string, number> = {
+  a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, dozen: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17,
+  eighteen: 18, nineteen: 19, twenty: 20, thirty: 30,
+};
+
+/** Matches any spelled-out numeral, so "sign two cohorts" counts as carrying a number. */
+const SPELLED_NUMBER_WORD = new RegExp(
+  `\\b(?:${Object.keys(SPELLED_INTEGERS).filter((w) => w !== 'a' && w !== 'an').join('|')}|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand)\\b`,
+  'i',
+);
+
+/** Spelled-out small integers present in a string ("two lost jobs" → 2). */
+function spelledCounts(text: string): number[] {
+  const out: number[] = [];
+  for (const m of normalizeText(text).toLowerCase().matchAll(/\b([a-z]+)\b/g)) {
+    const n = SPELLED_INTEGERS[m[1] as string];
+    if (n !== undefined) out.push(n);
+  }
+  return out;
+}
+
+interface InventedNumberOpts {
+  /** Bare 19xx/20xx years pass unless money-adjacent. Copy stages set false. */
+  allowYear?: boolean;
+  /** true ⇒ every percentage must be echoed (or exactly 100); default: ≤100 passes. */
+  percentEcho?: boolean;
+}
 
 function inventedNumbers(
   text: string,
@@ -83,13 +119,18 @@ function inventedNumbers(
   /**
    * Additional arithmetic bases beyond B2/B3 — qaS1 passes the intake-echoed
    * numbers so "2 people at £300 (F3) = £600" is visible arithmetic, not
-   * invention. Copy stages (S6–S8) deliberately do NOT: prices there must be
-   * exact echoes, never derivations.
+   * invention. When a stage supplies bases, visible +/×/÷ over already-allowed
+   * numbers in the SAME string is recognised (honest shown working).
    */
   arithmeticBases?: ReadonlySet<number>,
+  opts: InventedNumberOpts = {},
 ): number[] {
+  const allowYear = opts.allowYear !== false;
   const numbers = extractNumbers(text);
-  const smalls = numbers.filter((n) => !n.percent && n.value > 0 && n.value <= SMALL_NUMBER_MAX).map((n) => n.value);
+  const smalls = [
+    ...numbers.filter((n) => !n.percent && n.value > 0 && n.value <= SMALL_NUMBER_MAX).map((n) => n.value),
+    ...spelledCounts(text), // "two lost customers × £850" — the count is a word
+  ];
 
   // Every derived multiplier must involve a count VISIBLE in the string —
   // implicit×implicit products (12×12=144) would blanket the number line.
@@ -103,16 +144,40 @@ function inventedNumbers(
   }
   const bases = [b2, b3, b2 * b3, ...(arithmeticBases ?? [])].filter((b) => b > 0);
 
+  // Qualifying addends for shown sums: other numbers in the string that are
+  // themselves allowed (echoed or small). Bundle savings sum ≥3 line items,
+  // so check subsets, not just pairs (bounded to keep it linear-ish).
+  const addends = numbers
+    .filter((o) => !o.percent && (o.value <= SMALL_NUMBER_MAX || intakeNumbers.has(o.value) || (arithmeticBases?.has(o.value) ?? false)))
+    .map((o) => o.value);
+  const subsetSumHits = (target: number): boolean => {
+    const pool = addends.filter((v) => v <= target + 1).slice(0, 12);
+    const sums = new Set<number>([0]);
+    for (const v of pool) {
+      for (const s of [...sums]) {
+        const t = s + v;
+        if (Math.abs(t - target) <= Math.max(1, 0.01 * target)) return true;
+        if (t < target + 1) sums.add(t);
+      }
+    }
+    return false;
+  };
+
   const bad: number[] = [];
   for (const num of numbers) {
     const { value, percent, raw, before, after } = num;
     if (percent) {
-      if (value > 100) bad.push(value);
+      if (opts.percentEcho) {
+        if (value !== 100 && !intakeNumbers.has(value)) bad.push(value);
+      } else if (value > 100) {
+        bad.push(value);
+      }
       continue;
     }
     if (value <= SMALL_NUMBER_MAX) continue;
-    if (value <= 366 && PERIOD_AFTER.test(after)) continue; // "90 days", "180-day"
-    if (/^(19|20)\d{2}$/.test(raw) && !/[£$€]\s*$/.test(before)) continue; // year, not money
+    if (value <= 366 && PERIOD_AFTER.test(after)) continue; // "90 days", "180-day", "60-night"
+    if (value <= UNIT_VALUE_MAX && UNIT_AFTER.test(after)) continue; // "45cm", "240v"
+    if (allowYear && /^(19|20)\d{2}$/.test(raw) && !/[£$€]\s*$/.test(before)) continue; // year, not money
     if (intakeNumbers.has(value)) continue; // echoes a fact the customer gave us
     let ok = false;
     for (const base of bases) {
@@ -124,22 +189,8 @@ function inventedNumbers(
       }
       if (ok) break;
     }
-    // Visible addition (arithmetic-base stages only): "£640 (£600 leaflets +
-    // £40 boost, F3)" — the value is the sum of two other numbers in the SAME
-    // string that are each intake-echoed or small counts.
-    if (!ok && arithmeticBases) {
-      const addends = numbers.filter((o) => o !== num && !o.percent && (o.value <= SMALL_NUMBER_MAX || intakeNumbers.has(o.value)));
-      outer: for (let i = 0; i < addends.length; i++) {
-        for (let j = i + 1; j < addends.length; j++) {
-          const a = addends[i] as { value: number };
-          const b = addends[j] as { value: number };
-          if (Math.abs(a.value + b.value - value) <= Math.max(1, 0.01 * value)) {
-            ok = true;
-            break outer;
-          }
-        }
-      }
-    }
+    // Visible addition (arithmetic-base stages only): "£58 + £119 + £24 = £201".
+    if (!ok && arithmeticBases && subsetSumHits(value)) ok = true;
     if (!ok) bad.push(value);
   }
   return bad;
@@ -150,6 +201,23 @@ export function intakeNumberSet(fields: string[]): ReadonlySet<number> {
   const set = new Set<number>();
   for (const f of fields) {
     for (const n of extractNumbers(f)) set.add(n.value);
+  }
+  return set;
+}
+
+/**
+ * Every number that appears ANYWHERE in the customer's intake. The no-invention
+ * FATAL checks use this: their job is to catch figures from nowhere (fabricated
+ * "98% success", "500 clients"), NOT to police which field a real price came
+ * from. A number the owner genuinely stated is a fact, not a fabrication — even
+ * if this stage's prompt didn't hand it that specific field. (Whether a stage
+ * over-reached into a field it wasn't given is a soft cross-contract matter for
+ * the human gate, never a reason to park a run instantly.)
+ */
+function allIntakeNumbers(intake: Intake): ReadonlySet<number> {
+  const set = new Set<number>();
+  for (const v of Object.values(intake)) {
+    for (const n of extractNumbers(normalizeText(fieldAsString(v)))) set.add(n.value);
   }
   return set;
 }
@@ -298,7 +366,9 @@ function channelTokens(s: string): Set<string> {
       .toLowerCase()
       .split(/[^a-z0-9]+/)
       .filter(Boolean)
-      .map((t) => CHANNEL_ALIASES[t] ?? t),
+      // Strip a trailing plural 's' so "letting agent contractor list" matches
+      // the C7 entry "letting agents' contractor lists".
+      .map((t) => CHANNEL_ALIASES[t] ?? (t.length > 3 && t.endsWith('s') ? t.slice(0, -1) : t)),
   );
 }
 
@@ -320,8 +390,12 @@ function channelMatchesC7(channel: string, c7: string[]): boolean {
   });
 }
 
-const MIN_VERBATIM_CHARS = 15;
-const MIN_VERBATIM_WORDS = 3;
+// The prompt promises a verbatim "need only be a phrase long (10+ chars)".
+// Provenance is guaranteed by the exact-substring-of-C2 test, so the length
+// floor is only a meaningfulness guard — it must match the prompt, not exceed
+// it, or punchy exact quotes ("death trap") park honest output.
+const MIN_VERBATIM_CHARS = 10;
+const MIN_VERBATIM_WORDS = 2;
 const MIN_VERBATIMS = 2; // distinct
 
 export function qaS2(output: unknown, intake: Intake): QAIssue[] {
@@ -418,7 +492,7 @@ interface S3Output {
 
 const MAX_PITCH_WORDS = 60;
 
-export function qaS3(output: unknown, intake: Intake): QAIssue[] {
+export function qaS3(output: unknown, intake: Intake, prior: Record<string, unknown> = {}): QAIssue[] {
   const issues: QAIssue[] = [];
   const out = output as S3Output;
   const eFields = haystack(intake, ['E2', 'E3']);
@@ -487,7 +561,9 @@ export function qaS3(output: unknown, intake: Intake): QAIssue[] {
   // against this rule.
   const hasGuardrail = out.voice.tone_rules.some((r) => {
     const norm = normalizeText(r);
-    return /\bsounds?\s+like\b/i.test(norm) && /,\s*not\b/i.test(norm);
+    // normalizeText maps em/en dashes → '-', so accept a dash separator too:
+    // "Sounds like a friend telling the truth — not a slide deck".
+    return /\bsounds?\s+like\b/i.test(norm) && /[,-]\s*not\b/i.test(norm);
   });
   if (!hasGuardrail) {
     issues.push({
@@ -505,14 +581,14 @@ export function qaS3(output: unknown, intake: Intake): QAIssue[] {
     });
   }
 
-  // No-invention (FATAL — park, no retry): the message copy is exactly where
-  // invented "15 years / 500 clients / 98%" credentials would appear, and it
-  // flows into every downstream deliverable. B2/B3 are not S3 inputs, so no
-  // arithmetic-derivation path exists: a figure passes only as a small count,
-  // a period length, a bare year, or a literal echo of a consumed field.
-  // Quoted spans are stripped first (D-015) — differentiators are REQUIRED to
-  // quote E2/E3, which may contain figures.
-  const s3Numbers = intakeNumberSet(haystack(intake, S3_INPUT_FIELDS));
+  // No-invention (FATAL — park, no retry): the message copy is where invented
+  // "15 years / 500 clients / 98%" credentials would appear, and it flows into
+  // every downstream deliverable. The whitelist is every number the customer
+  // actually stated anywhere (a real price the owner charges is a fact, not a
+  // fabrication) plus anything S2 surfaced. Echo-only: message copy shows no
+  // arithmetic. Quoted spans are stripped first (D-015) — differentiators are
+  // REQUIRED to quote E2/E3, which may contain figures.
+  const s3Numbers = new Set<number>([...allIntakeNumbers(intake), ...numericLeaves(prior.S2)]);
   const proseSurfaces: Array<[string, string[]]> = [
     ['positioning_statement', [out.positioning_statement]],
     ['message_pillars', out.message_pillars],
@@ -525,7 +601,7 @@ export function qaS3(output: unknown, intake: Intake): QAIssue[] {
       for (const value of inventedNumbers(stripQuoted(normalizeText(text)), 0, 0, s3Numbers)) {
         issues.push({
           check: 's3.number_invented',
-          message: `${surface} contains the figure ${value.toLocaleString('en-GB')}, which does not appear in any intake field this stage consumes — a fabricated stat or credential in message copy parks the run`,
+          message: `${surface} contains the figure ${value.toLocaleString('en-GB')}, which appears nowhere in the customer's intake or the buyer profile — a fabricated stat or credential in message copy parks the run`,
           fatal: true,
         });
       }
@@ -557,14 +633,23 @@ interface S4Output {
   category_note: string;
 }
 
+// Outcome-promise detection. Must catch genuine "we'll deliver you business
+// results" promises WITHOUT firing on the explicitly-allowed reversals
+// (refund a stated fee) or on descriptive prose that merely mentions
+// customers/results near the word "guarantee".
+const OUTCOME_GAIN_NOUN = 'results?|revenue|income|profits?|growth|sales|leads|customers|bookings|rankings?';
 const OUTCOME_PROMISE_PATTERNS = [
-  /guarantee[ds]?\s+(?:\w+\s+){0,2}(results?|revenue|income|profits?|growth|sales|leads|customers|bookings|rankings?)/i,
+  // "we guarantee results/sales" — outcome noun as the direct object of guarantee
+  new RegExp(`\\bwe\\s+guarantee[ds]?\\s+(?:to\\s+\\w+\\s+)?(?:${OUTCOME_GAIN_NOUN})\\b`, 'i'),
+  // delivery frame: "guarantee you 10 new customers", "guarantee more sales"
+  new RegExp(`\\bguarantee[ds]?\\s+(?:you|your|more|extra|additional|new|another|\\d+)\\b[^.]{0,24}(?:${OUTCOME_GAIN_NOUN})\\b`, 'i'),
   /\b(?:double|triple|quadruple|[0-9]+x)\s+your\b/i,
-  /\byou(?:'ll| will)\s+(?:make|earn|get|gain|add)\b[^.]{0,40}[£$€]\s?\d/i,
+  // "you'll earn £N" — but NOT "you'll get every penny back — all £4,200" (a refund).
+  /\byou(?:'ll| will)\s+(?:make|earn|get|gain|add)\b(?![^.]{0,25}\b(?:back|refund(?:ed)?|returned|money)\b)[^.]{0,40}[£$€]\s?\d/i,
   /\bresults?\s+(?:are\s+)?guaranteed\b/i,
 ];
 
-export function qaS4(output: unknown, intake: Intake): QAIssue[] {
+export function qaS4(output: unknown, intake: Intake, prior: Record<string, unknown> = {}): QAIssue[] {
   const issues: QAIssue[] = [];
   const out = output as S4Output;
   const b2 = intakeNumber(intake, 'B2');
@@ -666,8 +751,18 @@ export function qaS4(output: unknown, intake: Intake): QAIssue[] {
   const d6 = typeof intake.D6 === 'string' ? intake.D6 : '';
   if (d6.trim().length > 0) {
     const STOP = new Set(['service', 'services', 'customer', 'customers', 'business', 'client', 'clients', 'anything', 'refuse', 'never', 'would', 'offer', 'offers']);
+    // A word the owner sells UNDER cannot itself be their hard limit: strip
+    // tokens that appear in their own offering vocabulary (A2/D1/D2/D3). Trades
+    // "Fuse Board Swap" no longer collides with D6 "…board swap and leave live"
+    // because 'board'/'swap' are in D1; coach "Deep End Coaching" no longer
+    // collides with D6 "performance coaching" because 'coaching' is their whole
+    // business (A2/D1). What survives is an offer that names the SPECIFIC thing
+    // the owner refuses — the real conflict this flag is for.
+    const ownVocab = new Set(
+      normalizeText(haystack(intake, ['A2', 'D1', 'D2', 'D3']).join(' ')).toLowerCase().split(/[^a-z0-9]+/),
+    );
     const d6Tokens = new Set(
-      normalizeText(d6).toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 5 && !STOP.has(t)),
+      normalizeText(d6).toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 5 && !STOP.has(t) && !ownVocab.has(t)),
     );
     for (const item of out.recommended_stack) {
       const nameTokens = normalizeText(item.name).toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 5 && !STOP.has(t));
@@ -681,13 +776,16 @@ export function qaS4(output: unknown, intake: Intake): QAIssue[] {
     }
   }
 
-  // No-invention (FATAL — park, no retry). Allowed figures: literal echoes of
-  // the consumed D/B fields, the stack's own recommended prices (restating an
-  // own recommendation is not invention), small counts, periods, years, and
-  // visible B2 arithmetic (B2 is the only derivation base).
+  // No-invention (FATAL — park, no retry). Allowed figures: any number the
+  // customer stated anywhere, the stack's own recommended prices, and anything
+  // S2/S3 surfaced — plus visible arithmetic over those (bundle sums, per-head
+  // divisions), which the prompt's own pricing-move menu asks the model to
+  // show. A figure from nowhere (market data, made-up benchmarks) still parks.
   const s4Allowed = new Set<number>([
-    ...intakeNumberSet(haystack(intake, S4_INPUT_FIELDS)),
+    ...allIntakeNumbers(intake),
     ...out.recommended_stack.map((i) => i.price),
+    ...numericLeaves(prior.S2),
+    ...numericLeaves(prior.S3),
   ]);
   const s4Prose: Array<[string, string[]]> = [
     ['current_stack_read', [out.current_stack_read]],
@@ -699,10 +797,10 @@ export function qaS4(output: unknown, intake: Intake): QAIssue[] {
   ];
   for (const [surface, texts] of s4Prose) {
     for (const text of texts) {
-      for (const value of inventedNumbers(text, b2, 0, s4Allowed)) {
+      for (const value of inventedNumbers(text, b2, 0, s4Allowed, s4Allowed)) {
         issues.push({
           check: 's4.number_invented',
-          message: `${surface} contains the figure ${value.toLocaleString('en-GB')}, which is not an intake fact, a recommended price, or visible B2 arithmetic — no market data, competitor prices, conversion rates or benchmarks`,
+          message: `${surface} contains the figure ${value.toLocaleString('en-GB')}, which is not an intake fact, a recommended price, or visible arithmetic over those — no market data, competitor prices, conversion rates or benchmarks`,
           fatal: true,
         });
       }
@@ -739,7 +837,18 @@ export function tokensOf(s: string): Set<string> {
   );
 }
 
-export function qaS5(output: unknown, intake: Intake): QAIssue[] {
+/** Naive singular stem so "rewire"/"rewires", "order"/"orders" match. */
+function stemToken(t: string): string {
+  return t.length > 4 && t.endsWith('s') ? t.replace(/s$/, '') : t;
+}
+
+/** Do two token sets share a token, tolerating a trailing-plural difference? */
+function sharesStemToken(a: Set<string>, b: Set<string>): boolean {
+  const bStems = new Set([...b].map(stemToken));
+  return [...a].some((t) => bStems.has(stemToken(t)));
+}
+
+export function qaS5(output: unknown, intake: Intake, prior: Record<string, unknown> = {}): QAIssue[] {
   const issues: QAIssue[] = [];
   const out = output as S5Output;
 
@@ -763,24 +872,31 @@ export function qaS5(output: unknown, intake: Intake): QAIssue[] {
   }
 
   // Self-consistency: no action may run on a channel the plan itself forbids.
+  // Flag only when the action's channel is WHOLLY inside a do_not_do entry
+  // (every channel token present) — a single shared platform token must not
+  // collide "Facebook groups" (an action) with "paid Facebook boosts" (banned).
   for (const phase of out.phases) {
     for (const action of phase.actions) {
       const ct = tokensOf(action.channel);
-      const clash = out.do_not_do.find((d) => [...tokensOf(d)].some((t) => ct.has(t)));
+      if (ct.size === 0) continue;
+      const clash = out.do_not_do.find((d) => {
+        const dTokens = new Set([...tokensOf(d)].map(stemToken));
+        return [...ct].every((t) => dTokens.has(stemToken(t)));
+      });
       if (clash) {
         issues.push({
           check: 's5.action_on_forbidden_channel',
-          message: `action "${action.action.slice(0, 50)}…" uses channel "${action.channel}" which collides with the plan's own do_not_do entry "${clash.slice(0, 50)}…"`,
+          message: `action "${action.action.slice(0, 50)}…" uses channel "${action.channel}" which the plan's own do_not_do entry "${clash.slice(0, 50)}…" forbids`,
         });
       }
     }
   }
 
   // Every phase must visibly serve the north star — the theme repeats the
-  // goal's key noun (the prompt instructs this; prompt and check are a pair).
+  // goal's key noun (plural-tolerant: "one rewire" matches goal "rewires").
   const goalTokens = new Set([...tokensOf(out.north_star), ...tokensOf(g1)]);
   for (const phase of out.phases) {
-    if (![...tokensOf(phase.theme)].some((t) => goalTokens.has(t))) {
+    if (!sharesStemToken(tokensOf(phase.theme), goalTokens)) {
       issues.push({
         check: 's5.phase_theme_off_goal',
         message: `phase theme "${phase.theme.slice(0, 60)}…" doesn't reference the north star — repeat the goal's key noun (the thing being grown) in every theme`,
@@ -789,13 +905,16 @@ export function qaS5(output: unknown, intake: Intake): QAIssue[] {
   }
 
   // Channel priorities come from C7 (+ what F4/F1 show already works).
-  // C7 matching is alias-aware (FB↔Facebook, GBP↔Google) via channelMatchesC7.
+  // channelMatchesC7 is alias-aware (FB↔Facebook, GBP↔Google) AND keeps short
+  // names (SEO/PR) that tokensOf's length>3 filter would erase.
   const c7 = Array.isArray(intake.C7) ? (intake.C7 as string[]) : [];
+  const f1Entries = Array.isArray(intake.F1) ? (intake.F1 as string[]) : [String(intake.F1 ?? '')];
+  const provenEntries = [...c7, ...f1Entries];
   const provenText = tokensOf([intake.F4, intake.F1].map((v) => (Array.isArray(v) ? v.join(' ') : String(v ?? ''))).join(' '));
   for (const ch of out.channel_priorities) {
-    const fromC7 = c7.length > 0 && channelMatchesC7(ch, c7);
-    const fromProven = [...tokensOf(ch)].some((t) => provenText.has(t));
-    if (!fromC7 && !fromProven) {
+    const fromNamed = channelMatchesC7(ch, provenEntries);
+    const fromProven = sharesStemToken(tokensOf(ch), provenText);
+    if (!fromNamed && !fromProven) {
       issues.push({
         check: 's5.channel_priority_unsourced',
         message: `channel priority "${ch}" doesn't correspond to where the customers hang out (C7) or what has already worked (F4/F1) — priorities must come from those`,
@@ -804,20 +923,24 @@ export function qaS5(output: unknown, intake: Intake): QAIssue[] {
   }
 
   // No-invention (FATAL — park, no retry): no benchmarks, reach estimates or
-  // conversion rates. Every figure must be an intake echo, a small count, a
-  // period, a year, or visible B2/B3 arithmetic in the same string.
-  const s5Numbers = intakeNumberSet(haystack(intake, S5_INPUT_FIELDS));
+  // conversion rates. A figure passes only if it appears anywhere in the intake
+  // or a prior stage (S1–S4), is a small count/period/year, or shows visible
+  // arithmetic over those numbers in the same string.
+  const s5Numbers = new Set<number>([
+    ...allIntakeNumbers(intake),
+    ...['S1', 'S2', 'S3', 'S4'].flatMap((s) => numericLeaves(prior[s])),
+  ]);
   const s5b2 = intakeNumber(intake, 'B2');
   const s5b3 = intakeNumber(intake, 'B3');
   for (const [path, text] of walkStrings(output, '')) {
     // A phase label like "Days 31–90" is a calendar position, not a
     // projection — numbers inside the 90-day window pass in that field only.
     const isDaysLabel = /^phases\[\d+\]\.days$/.test(path);
-    for (const value of inventedNumbers(text, s5b2, s5b3, s5Numbers)) {
+    for (const value of inventedNumbers(text, s5b2, s5b3, s5Numbers, s5Numbers)) {
       if (isDaysLabel && value <= 366) continue;
       issues.push({
         check: 's5.number_invented',
-        message: `${path} contains the figure ${value.toLocaleString('en-GB')}, which does not appear in the intake and shows no B2/B3 arithmetic in the same string — a fabricated projection parks the run`,
+        message: `${path} contains the figure ${value.toLocaleString('en-GB')}, which appears nowhere in the intake or the prior stages and shows no arithmetic in the same string — a fabricated projection parks the run`,
         fatal: true,
       });
     }
@@ -873,17 +996,21 @@ export function qaS6(output: unknown, intake: Intake, prior: Record<string, unkn
   const s4 = prior.S4 as S4Output | undefined;
   const s2Verbatims = (s2?.verbatims ?? []).map((v) => normalizeText(v)).filter(Boolean);
   const quoteHay = [...s2Verbatims, ...intakeHay];
+  const quoteHayLC = quoteHay.map((h) => h.toLowerCase());
   const priorStrings = ['S2', 'S3', 'S4'].flatMap((id) => stageStringLeaves(prior[id]));
 
   // NO-INVENTION (FATAL): any double-quoted passage ≥12 chars in website copy
-  // reads as a testimonial or the owner speaking — it must be an exact
-  // substring of the S2 verbatims or the consumed intake fields.
+  // reads as a testimonial or the owner speaking — it must be a substring of
+  // the S2 verbatims or the consumed intake fields. Provenance is compared
+  // case-insensitively: a sentence-cased real quote ("Best sparky…" vs source
+  // "best sparky…") is genuine, so it must not FATALLY park — at worst it just
+  // doesn't count toward the exact-quote quota below.
   const s2Placements: string[] = [];
   for (const [path, text] of walkStrings(output, '')) {
     for (const span of extractQuotedSpans(text)) {
       const norm = normalizeText(span);
       if (norm.length < MIN_QUOTE_CHARS) continue; // single-word scare quotes are style, not testimony
-      if (!quoteHay.some((h) => h.includes(norm))) {
+      if (!quoteHayLC.some((h) => h.includes(norm.toLowerCase()))) {
         issues.push({
           check: 's6.quote_fabricated',
           message: `quoted passage at ${path} ("${norm.slice(0, 60)}…") is not copied from the S2 verbatims or the intake fields this stage consumes — a fabricated quotation parks the run`,
@@ -895,32 +1022,21 @@ export function qaS6(output: unknown, intake: Intake, prior: Record<string, unkn
     }
   }
 
-  // NO-INVENTION (FATAL): every figure must be a literal echo of an input.
-  // Deliberately stricter than the shared helper: NO bare-year carve-out (a
-  // four-digit year in web copy is almost always a founding/credential claim
-  // and S6 does not consume A4) and NO B2/B3 arithmetic (not S6 inputs).
+  // NO-INVENTION (FATAL): a figure must be a real intake/prior number, a small
+  // count, a period ("60-night"), a measurement ("45cm"), or visible arithmetic
+  // over allowed numbers. NO bare-year pass (a year in web copy reads as a
+  // founding claim). Percentages must be echoed or a bare 100%.
   const allowedNumbers = new Set<number>([
-    ...intakeNumberSet([...intakeHay, ...priorStrings]),
+    ...allIntakeNumbers(intake),
+    ...numericLeaves(prior.S2),
+    ...numericLeaves(prior.S3),
     ...numericLeaves(prior.S4),
   ]);
   for (const [path, text] of walkStrings(output, '')) {
-    for (const n of extractNumbers(normalizeText(text))) {
-      if (n.percent) {
-        // A percentage in sales copy is a statistic; 100% alone is puffery, not a fabricated stat.
-        if (n.value === 100 || allowedNumbers.has(n.value)) continue;
-        issues.push({
-          check: 's6.number_invented',
-          message: `${path} contains the percentage ${n.value}%, which does not appear in any input — a statistic in sales copy must be a literal echo of what the owner or a prior stage said`,
-          fatal: true,
-        });
-        continue;
-      }
-      if (n.value <= SMALL_NUMBER_MAX) continue;
-      if (n.value <= 366 && PERIOD_AFTER.test(n.after)) continue;
-      if (allowedNumbers.has(n.value)) continue;
+    for (const value of inventedNumbers(normalizeText(text), 0, 0, allowedNumbers, allowedNumbers, { allowYear: false, percentEcho: true })) {
       issues.push({
         check: 's6.number_invented',
-        message: `${path} contains the figure ${n.value.toLocaleString('en-GB')}, which is not a literal echo of the intake or a prior stage — no invented stats, counts or claims in website copy`,
+        message: `${path} contains the figure ${value.toLocaleString('en-GB')}, which is not a real intake/prior number nor visible arithmetic over them — no invented stats, counts or claims in website copy`,
         fatal: true,
       });
     }
@@ -1140,16 +1256,22 @@ export function qaS7(output: unknown, intake: Intake, prior: Record<string, unkn
     issues.push({ check: 's7.warmup_inconsistent', message: `list_status is "${list_status}" but a reintro_email is present — the warm-up email exists only for cold lists` });
   }
   const f2 = normalizeText(fieldAsString(intake.F2));
+  // "none" is legitimate when the owner has no list — including when F2 is a
+  // sentence SAYING there's no list ("no list, keep meaning to collect emails").
+  // Only positive subscriber evidence (a count, "subscribers", "I email…")
+  // contradicts a "none".
+  const f2NoList = /\bno (?:list|email list|mailing list)\b|\bnever (?:got|get) round\b|\bdon'?t have (?:a|an|any)\b|\bhaven'?t (?:got|started|built)\b/i.test(f2);
+  const f2HasSubscribers = /\b\d[\d,]*\s*(?:subscribers?|people|contacts?)\b|\bsubscribers?\b|\bi email\b|\bemail (?:most|them|the list|every|out)\b/i.test(f2);
   if (f2.length === 0) {
     if (list_status !== 'none') {
       issues.push({ check: 's7.warmup_status_vs_f2', message: `F2 is empty but list_status is "${list_status}" — with no list, the status is "none"` });
     }
-  } else {
-    if (list_status === 'none') {
-      issues.push({ check: 's7.warmup_status_vs_f2', message: 'F2 describes a list but list_status is "none" — read F2 again' });
-    } else if (S7_F2_STALE.test(f2) && list_status !== 'cold') {
-      issues.push({ check: 's7.warmup_status_vs_f2', message: `F2 shows strong staleness signals but list_status is "${list_status}" — a list like that is cold` });
+  } else if (list_status === 'none') {
+    if (f2HasSubscribers && !f2NoList) {
+      issues.push({ check: 's7.warmup_status_vs_f2', message: 'F2 describes an actual list (subscribers) but list_status is "none" — read F2 again' });
     }
+  } else if (S7_F2_STALE.test(f2) && list_status !== 'cold') {
+    issues.push({ check: 's7.warmup_status_vs_f2', message: `F2 shows strong staleness signals but list_status is "${list_status}" — a list like that is cold` });
   }
 
   // S3's banned list may contain voice-specific additions beyond global+H3 —
@@ -1173,40 +1295,50 @@ export function qaS7(output: unknown, intake: Intake, prior: Record<string, unkn
   // NO-INVENTION (FATAL): every long quoted span must be copied from what the
   // prior stages or the consumed intake actually said — the inverse of
   // findVerbatimSpan: ALL long spans must match, not at least one.
+  // The haystack includes the RAW consumed C2 (customer reviews) as well as
+  // S2's curated verbatims subset, so an email honestly quoting a real review
+  // S2 happened not to pick isn't parked as fabricated. Case-insensitive: a
+  // sentence-cased real quote is genuine.
   const s7Hay = [
     ...['S2', 'S3', 'S4'].flatMap((id) => stageStringLeaves(prior[id])),
     f2,
     normalizeText(fieldAsString(intake.A1)),
+    normalizeText(fieldAsString(intake.C2)),
   ].filter(Boolean);
+  const s7HayLC = s7Hay.map((h) => h.toLowerCase());
   for (const [path, text] of walkStrings(output, '')) {
     for (const span of extractQuotedSpans(text)) {
       const norm = normalizeText(span);
       if (norm.length < MIN_QUOTE_CHARS) continue;
-      if (!s7Hay.some((h) => h.includes(norm))) {
+      if (!s7HayLC.some((h) => h.includes(norm.toLowerCase()))) {
         issues.push({
           check: 's7.invented_quote',
-          message: `quoted passage at ${path} ("${norm.slice(0, 60)}…") is not copied from S2/S3/S4, F2 or A1 — a fabricated testimonial or quote parks the run`,
+          message: `quoted passage at ${path} ("${norm.slice(0, 60)}…") is not copied from S2/S3/S4, F2, A1 or the customer reviews (C2) — a fabricated testimonial or quote parks the run`,
           fatal: true,
         });
       }
     }
   }
 
-  // NO-INVENTION (FATAL): figures must echo the inputs (no derivation bases —
-  // B2/B3 are not S7 inputs). Percentages are stricter than the shared
-  // helper: %-style stats are the classic fabricated proof in email copy, so
-  // EVERY percentage must literally appear in the inputs.
-  const s7Numbers = intakeNumberSet(s7Hay);
+  // NO-INVENTION (FATAL): a figure must be a real number the customer stated,
+  // a number a prior stage produced (S4 offer prices restated in the promo),
+  // or visible arithmetic over those. Percentages are stricter — %-style stats
+  // are the classic fabricated proof in email, so EVERY percentage must echo.
+  const s7Numbers = new Set<number>([
+    ...allIntakeNumbers(intake),
+    ...['S2', 'S3', 'S4'].flatMap((id) => numericLeaves(prior[id])),
+    ...intakeNumberSet(s7Hay),
+  ]);
   for (const [path, text] of walkStrings(output, '')) {
-    for (const value of inventedNumbers(text, 0, 0, s7Numbers)) {
+    for (const value of inventedNumbers(text, 0, 0, s7Numbers, s7Numbers, { allowYear: false })) {
       issues.push({
         check: 's7.invented_number',
-        message: `${path} contains the figure ${value.toLocaleString('en-GB')}, which does not appear in S2/S3/S4, F2 or A1 — invented stats, counts or discounts park the run`,
+        message: `${path} contains the figure ${value.toLocaleString('en-GB')}, which is no real intake/prior number nor visible arithmetic — invented stats, counts or discounts park the run`,
         fatal: true,
       });
     }
     for (const n of extractNumbers(normalizeText(text))) {
-      if (n.percent && !s7Numbers.has(n.value)) {
+      if (n.percent && n.value !== 100 && !s7Numbers.has(n.value)) {
         issues.push({
           check: 's7.invented_percentage',
           message: `${path} contains ${n.value}%, which does not appear in any input — every percentage in email copy must be a literal echo`,
@@ -1373,16 +1505,19 @@ export function qaS8(output: unknown, intake: Intake, prior: Record<string, unkn
   // NO-INVENTION (FATAL): quoted spans must come from C2 or a prior stage
   // (S3's banned_words leaves excluded so a banned phrase quoted verbatim
   // cannot launder itself in as "sourced").
+  // Case-insensitive: sentence-casing a real C2 line ("Mate," vs source
+  // "mate") is genuine, not a fabricated testimonial.
   const s8Hay = [c2, ...stageStringLeaves(prior.S2), ...stageStringLeaves(prior.S3, ['voice.banned_words']), ...stageStringLeaves(prior.S5)].filter(Boolean);
+  const s8HayLC = s8Hay.map((h) => h.toLowerCase());
   for (const post of out.posts) {
     for (const [field, text] of [['hook', post.hook], ['body', post.body], ['cta', post.cta]] as Array<[string, string]>) {
       for (const span of extractQuotedSpans(text)) {
         const norm = normalizeText(span);
         if (norm.length < MIN_QUOTE_CHARS) continue;
-        if (!s8Hay.some((h) => h.includes(norm))) {
+        if (!s8HayLC.some((h) => h.includes(norm.toLowerCase()))) {
           issues.push({
             check: 's8.invented_quote',
-            message: `day ${post.day} ${field}: quoted passage ("${norm.slice(0, 50)}…") is not an exact substring of C2 or a prior-stage document — a fabricated testimonial parks the run`,
+            message: `day ${post.day} ${field}: quoted passage ("${norm.slice(0, 50)}…") is not a substring of C2 or a prior-stage document — a fabricated testimonial parks the run`,
             fatal: true,
           });
         }
@@ -1391,13 +1526,19 @@ export function qaS8(output: unknown, intake: Intake, prior: Record<string, unkn
   }
 
   // NO-INVENTION (FATAL): no fabricated stats, prices, results or follower
-  // counts — b2=b3=0 empties the derivation bases.
-  const s8Numbers = intakeNumberSet(s8Hay);
+  // counts. Real numbers the customer stated anywhere, prior-stage figures and
+  // physical measurements ("45cm chest", "100 amp") pass; a bare invented
+  // "£4,500 saved" parks.
+  const s8Numbers = new Set<number>([
+    ...allIntakeNumbers(intake),
+    ...['S2', 'S3', 'S5'].flatMap((id) => numericLeaves(prior[id])),
+    ...intakeNumberSet(s8Hay),
+  ]);
   for (const post of out.posts) {
-    for (const value of inventedNumbers(`${post.hook} ${post.body} ${post.cta}`, 0, 0, s8Numbers)) {
+    for (const value of inventedNumbers(`${post.hook} ${post.body} ${post.cta}`, 0, 0, s8Numbers, s8Numbers, { allowYear: false })) {
       issues.push({
         check: 's8.invented_numbers',
-        message: `day ${post.day} contains the figure ${value.toLocaleString('en-GB')}, which does not appear in C2 or any prior stage — fabricated stats park the run`,
+        message: `day ${post.day} contains the figure ${value.toLocaleString('en-GB')}, which appears nowhere in the intake or prior stages — fabricated stats park the run`,
         fatal: true,
       });
     }
@@ -1446,19 +1587,29 @@ export function qaS9(output: unknown, intake: Intake, prior: Record<string, unkn
   };
   const normLoose = (s: string) => normalizeText(s).toLowerCase();
 
-  // NO-INVENTION (FATAL): every table figure must literally appear in its
-  // declared source (extractNumbers normalizes commas/currency/k-shorthand,
-  // so "£1,200" vs "1200" vs "£1.2k" compare as 1200)…
+  // Every number the customer stated anywhere + every number a prior stage
+  // produced. This is the fabrication backstop for both the table and the
+  // prose: a figure in this union is a real fact, never a fabrication.
+  const unionNumbers = new Set<number>([
+    ...allIntakeNumbers(intake),
+    ...['S1', 'S2', 'S3', 'S4', 'S5'].flatMap((s) => numericLeaves(prior[s])),
+    ...['S1', 'S2', 'S3', 'S4', 'S5'].flatMap((s) => [...intakeNumberSet([normalizeText(fieldAsString(prior[s]))])]),
+  ]);
+
+  // NO-INVENTION (FATAL): every table figure must appear in its declared
+  // source (extractNumbers normalizes commas/currency/k/band-shorthand). A
+  // row that honestly carries both target and baseline ("25% (up from 11%)")
+  // traces to the union of real numbers rather than the single named source.
   for (const row of out.numbers_table) {
     const sourceText = resolveSource(row.source);
     const rowNums = extractNumbers(row.value);
     if (rowNums.length > 0) {
       const srcNums = new Set(extractNumbers(sourceText).map((n) => n.value));
       for (const n of rowNums) {
-        if (!srcNums.has(n.value)) {
+        if (!srcNums.has(n.value) && !unionNumbers.has(n.value)) {
           issues.push({
             check: 's9.table_number_untraced',
-            message: `numbers_table row "${row.label}": value "${row.value}" contains ${n.value.toLocaleString('en-GB')}, which does not appear in the declared source ${row.source} — every figure traces to its source exactly`,
+            message: `numbers_table row "${row.label}": value "${row.value}" contains ${n.value.toLocaleString('en-GB')}, which appears in neither the declared source ${row.source} nor anywhere else in the intake or prior stages — every figure must trace to a real source`,
             fatal: true,
           });
         }
@@ -1473,13 +1624,8 @@ export function qaS9(output: unknown, intake: Intake, prior: Record<string, unkn
     }
   }
 
-  // NO-INVENTION (FATAL): prose figures trace to a B-field/G1 or an S-stage
-  // output, with the same allowances as S1 (small counts, periods, years,
-  // visible B2/B3 arithmetic).
-  const unionNumbers = new Set<number>([
-    ...intakeNumberSet(haystack(intake, S9_INPUT_FIELDS)),
-    ...['S1', 'S2', 'S3', 'S4', 'S5'].flatMap((s) => [...intakeNumberSet([normalizeText(fieldAsString(prior[s]))])]),
-  ]);
+  // NO-INVENTION (FATAL): prose figures trace to a real intake/stage number or
+  // show visible B2/B3 arithmetic; small counts, periods, years pass.
   const b2 = intakeNumber(intake, 'B2');
   const b3 = intakeNumber(intake, 'B3');
   const proseSections: Array<[string, string]> = [
@@ -1490,10 +1636,10 @@ export function qaS9(output: unknown, intake: Intake, prior: Record<string, unkn
     ['plan_summary', out.plan_summary],
   ];
   for (const [section, text] of proseSections) {
-    for (const value of inventedNumbers(text, b2, b3, unionNumbers)) {
+    for (const value of inventedNumbers(text, b2, b3, unionNumbers, unionNumbers)) {
       issues.push({
         check: 's9.number_invented',
-        message: `${section} contains the figure ${value.toLocaleString('en-GB')}, which traces to no B-field, G1 or stage output and shows no B2/B3 arithmetic — remove it or show the derivation`,
+        message: `${section} contains the figure ${value.toLocaleString('en-GB')}, which traces to no intake field or stage output and shows no arithmetic — remove it or show the derivation`,
         fatal: true,
       });
     }
@@ -1532,20 +1678,23 @@ export function qaS9(output: unknown, intake: Intake, prior: Record<string, unkn
     issues.push({ check: 's9.table_missing_anchors', message: 'numbers_table must include at least one stage-sourced figure (typically the S5 goal or an S4 price)' });
   }
 
-  // goals_90d restates the owner's own goal, with a number (mirror of S5's rule).
+  // goals_90d restates the owner's own goal, with a number (mirror of S5's
+  // rule). A digit OR a spelled-out numeral counts — coach's G1 spells them all
+  // ("Sign two … to ten names"), so a faithful goal has no digit.
   const g1 = typeof intake.G1 === 'string' ? intake.G1 : '';
   const overlap = [...tokensOf(out.goals_90d)].filter((t) => tokensOf(g1).has(t)).length;
-  if (!/\d/.test(out.goals_90d) || overlap < 1) {
+  if ((!/\d/.test(out.goals_90d) && !SPELLED_NUMBER_WORD.test(out.goals_90d)) || overlap < 1) {
     issues.push({
       check: 's9.goal_not_g1',
       message: `goals_90d must restate the owner's own goal (G1: "${g1}") and carry a number`,
     });
   }
 
-  // One page means one page.
+  // One page means one page — cap reconciled with the prompt's per-section
+  // word budgets, which sum to ~570.
   const totalWords = proseSections.reduce((n, [, text]) => n + wordCount(text), 0);
-  if (totalWords > 550) {
-    issues.push({ check: 's9.page_overflow', message: `the five prose sections total ${totalWords} words — the page caps at 550` });
+  if (totalWords > 575) {
+    issues.push({ check: 's9.page_overflow', message: `the five prose sections total ${totalWords} words — the page caps at 575` });
   }
 
   // Bank-manager register: no exclamation marks in prose.

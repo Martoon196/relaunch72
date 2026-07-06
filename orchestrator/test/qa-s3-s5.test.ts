@@ -118,8 +118,16 @@ test('qaS3 fails a positioning statement with no contrast', async () => {
 
 test('qaS3 FATALLY fails an invented figure in message copy', async () => {
   const out = (await mockOutput('S3')) as { message_pillars: string[] };
-  out.message_pillars[0] += ' Trusted by over 500 landlords.';
+  // 837 appears nowhere in the intake — a fabricated credential.
+  out.message_pillars[0] += ' Trusted by over 837 landlords.';
   assert.ok(qaS3(out, intake).some((i) => i.check === 's3.number_invented' && i.fatal === true));
+});
+
+test('qaS3 accepts a real intake price cited in positioning', async () => {
+  // helpers intake B2 = 850 — a real figure the owner stated; not a fabrication.
+  const out = (await mockOutput('S3')) as { positioning_statement: string };
+  out.positioning_statement += ' A full rewire runs around £850, not the £99 certificate mills.';
+  assert.ok(!qaS3(out, intake).some((i) => i.check === 's3.number_invented'));
 });
 
 test('qaS4 marks an outcome-promising risk reversal FATAL', async () => {

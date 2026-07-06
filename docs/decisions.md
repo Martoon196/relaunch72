@@ -221,3 +221,39 @@ parser only decides what QA mechanically enforces. Also from this gate attempt: 
 joined the leak-arithmetic grammar ("7 ÷ 4 × £850 ≈ £1,488"), with every derived multiplier
 required to involve a count visible in the same string (12×12-style implicit products would
 blanket the number line — caught by tests before shipping).
+
+**D-023 · Pre-gate adversarial QA audit: 34 false-positives fixed before spending on live runs (2026-07-06).**
+A 10-agent workflow probed every stage's QA against honest fixture output and confirmed (via probes)
+34 false-positives — 11 FATAL — where the fence rejected legitimate, spec-following output. Root
+cause of the fatal cluster: **the no-invention number gates were blind to the numbers the prompt
+hands the model.** Unifying fix: a FATAL invented-number check's job is catching figures from
+nowhere (fabricated "98%", "500 clients"), NOT policing which field a real price came from — so
+every number gate now whitelists `allIntakeNumbers(intake)` (every figure the customer stated
+anywhere) ∪ prior-stage numeric leaves ∪ visible arithmetic over those. A real owner price can no
+longer fatally park a run; a figure from nowhere still parks. Specific fixes:
+- **Shared number grammar** (`inventedNumbers`): multi-term subset-sum addition ("£58+£119+£24=£201"),
+  visible division ("£6,500÷5=£1,300"), spelled-out multipliers ("two … × £850"); `night/fortnight`
+  added to period units; a physical-measurement carve-out ("45cm", "240v"); `allowYear`/`percentEcho`
+  options so S6/S7/S8 route through the one engine instead of hand-rolled loops.
+- **`extractNumbers`**: a range's k/m suffix now scales the low bound too ("£10–30k" → 10000 & 30000),
+  fixing S1/S9 fatal parks on an honestly-expanded revenue band.
+- **Outcome-promise patterns**: refunds that name the amount ("you'll get every penny back — all
+  £4,200") and descriptive prose ("a guarantee our customers can point to") no longer fire; genuine
+  "we guarantee results" / "guarantee you 10 customers" still do.
+- **`phraseRegex`**: single real-word bans get a trailing boundary — "elevate" no longer fires in
+  "elevated"/"elevation", "seamless" not in "seamlessly"; multi-word phrases keep suffix leniency.
+- **Banned scan**: a negator earlier in the clause suppresses the hit, so on-brand rebuttals ("a
+  scared dog isn't naughty or stubborn") pass while the plain claim still flags.
+- **`parseWordList`**: subject-verb instruction fragments ("clients are engineers") are no longer
+  mis-parsed as required must-words.
+- **S2**: verbatim floor lowered to the prompt's 10 chars / 2 words (provenance is already proven by
+  the exact-C2-substring test); channel matching is plural-tolerant.
+- **S3**: voice guardrail accepts a dash before "not"; number whitelist widened (above).
+- **S4**: `d6_conflict` drops tokens from the owner's own vocabulary (A2/D1/D2/D3), so an instructed
+  name like "Fuse Board Swap" no longer collides with a D6 that mentions "board".
+- **S5**: qaS5 now receives prior outputs (sees S4 prices); forbidden-channel uses subset (not any
+  shared token); phase themes and channel priorities are plural/short-name tolerant.
+- **S6/S7/S8**: quote-provenance FATAL checks compare case-insensitively (a sentence-cased real quote
+  isn't a fabrication); S7 quote haystack includes raw C2; S7 warmup no longer reads "no list" as a
+  list; S9 table figures trace to the union of sources; S9 goal accepts spelled numerals; page cap
+  reconciled to 575. All 34 encoded as both-directions regression tests. 142 tests passing.
