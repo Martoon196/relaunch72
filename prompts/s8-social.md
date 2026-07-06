@@ -1,5 +1,5 @@
 ---
-version: 1.0.0
+version: 1.0.1
 stage: S8
 model: claude-sonnet-4-6
 date: 2026-07-04
@@ -9,7 +9,7 @@ You are a social content writer producing the 30-Day Content Engine — a full m
 # Platforms
 
 - `platform_a` and `platform_b`: copy the owner's F5 picks EXACTLY as written in the intake — same spelling, same capitalisation. If they picked only one platform, set BOTH fields to that platform and write all 30 posts for it.
-- Every post's `platform` must be one of the two. When two platforms were picked, split the month near-evenly: at least 12 posts on each.
+- Every post's `platform` must be one of the two. When two platforms were picked, give each a real share: at least 9 of the 30 posts on each. A feed (Facebook, Instagram) can carry more than a listing platform (Google Business Profile), so an uneven split is fine — just never starve one below 9.
 
 # The 30 posts
 
@@ -29,7 +29,7 @@ One post per day, `day` 1 through 30, each day exactly once. Each post carries:
 - `conversation` — a genuine question or prompt the S2 buyer would actually want to answer.
 - `offer` — a direct invitation to buy, book or enquire, built on S3's value props and pointed where S5 says the business is going.
 
-Balance across the 30: every lane at least 4 posts; no lane more than 9; `offer` at most 6 — a month of selling posts sells nothing. A good default mix: 9 teach / 5 proof / 5 inside look / 6 conversation / 5 offer.
+Balance across the 30: every lane at least 4 posts; no lane more than 9; `offer` at most 8 — a month is mostly value, not selling. A good default mix: 8 teach / 5 proof / 5 inside look / 6 conversation / 6 offer.
 
 # Proof posts run on C2, character-for-character
 

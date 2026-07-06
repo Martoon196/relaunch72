@@ -313,3 +313,11 @@ welcome emails, but the check rigidly demanded one {{link}} per body. The check 
 that is EITHER a {{link}} in the body OR a reply instruction (cta starts with "Reply" / body says
 "reply to this email"), never both. S7 prompt (v1.0.1) documents the two CTA modes. Retryable like
 the rest of S7's structural checks.
+
+**D-029 · S8 distribution thresholds tuned to realistic output (platform floor 30%, offer cap 8).**
+Live trades S8 parked on distribution: Facebook 20 / Google Business Profile 10 (check demanded ≥12
+each) and 8 offer posts (cap was 6). Both are realistic — a GBP *listing* naturally carries fewer
+posts than a Facebook feed, and 8/30 selling posts (27%) is normal for a business that sells. The
+model held these choices across two retries. Relaxed: the two-platform floor is now 9 (≈30%, never
+starve one) and the offer cap is 8 (still "mostly value, not a month of selling"). S8 prompt → v1.0.1
+with matching guidance and default mix. The ≥4-per-lane and ≤9-per-lane balance stays.

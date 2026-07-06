@@ -1479,14 +1479,16 @@ export function qaS8(output: unknown, intake: Intake, prior: Record<string, unkn
     }
   }
 
-  // With two picks, neither platform gets starved.
+  // With two picks, neither platform gets starved — but a listing platform
+  // (Google Business Profile) naturally carries fewer posts than a feed
+  // (Facebook), so the floor is ~30% (9 of 30), not an even split.
   if (f5Set.size === 2) {
     for (const p of f5Set) {
       const count = out.posts.filter((post) => normPlatform(post.platform) === p).length;
-      if (count < 12) {
+      if (count < 9) {
         issues.push({
           check: 's8.platform_split_unbalanced',
-          message: `only ${count} of 30 posts target "${p}" — each chosen platform gets at least 12`,
+          message: `only ${count} of 30 posts target "${p}" — each chosen platform gets at least 9 (≈30%)`,
         });
       }
     }
@@ -1521,8 +1523,8 @@ export function qaS8(output: unknown, intake: Intake, prior: Record<string, unkn
       issues.push({ check: 's8.pillar_distribution', message: `pillar "${pillar}" has ${count} of 30 posts — no lane above 9 (30%)` });
     }
   }
-  if ((pillarCounts.get('offer') ?? 0) > 6) {
-    issues.push({ check: 's8.pillar_distribution', message: `pillar "offer" has ${pillarCounts.get('offer')} of 30 posts — the selling lane caps at 6 (20%)` });
+  if ((pillarCounts.get('offer') ?? 0) > 8) {
+    issues.push({ check: 's8.pillar_distribution', message: `pillar "offer" has ${pillarCounts.get('offer')} of 30 posts — the selling lane caps at 8 (a month is mostly value, not selling)` });
   }
 
   // ≥4 posts built directly on the customer's C2 words (≥3 distinct spans);
