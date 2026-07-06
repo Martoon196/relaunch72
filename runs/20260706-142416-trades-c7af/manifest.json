@@ -1,0 +1,315 @@
+{
+  "run_id": "20260706-142416-trades-c7af",
+  "source": "trades",
+  "mode": "live",
+  "through": "S9",
+  "created_at": "2026-07-06T14:24:16.095Z",
+  "finished_at": "2026-07-06T16:26:02.289Z",
+  "status": "completed",
+  "s0": {
+    "accepted": true,
+    "action": "accept",
+    "issues": [],
+    "checked_at": "2026-07-06T14:24:16.105Z"
+  },
+  "stages": [
+    {
+      "stage": "S1",
+      "status": "passed",
+      "prompt_file": "s1-audit.md",
+      "prompt_version": "1.0.1",
+      "prompt_sha256": "c06cb78160a1a9f831a7c579785c4b81ad0ad9ad72d2613deecf87d135f7123c",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T14:24:16.140Z",
+          "raw_output_file": "s1-attempt-1.txt",
+          "tokens_in": 2209,
+          "tokens_out": 15328,
+          "duration_ms": 264350,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.236547,
+      "output_file": "s1.json",
+      "flags": []
+    },
+    {
+      "stage": "S2",
+      "status": "passed",
+      "prompt_file": "s2-icp.md",
+      "prompt_version": "1.0.0",
+      "prompt_sha256": "75a4d76d83b2b0d4ffc88be725164c489c417da3e50587892d54c0fdf5c58a9b",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T14:28:40.505Z",
+          "raw_output_file": "s2-attempt-1.txt",
+          "tokens_in": 2281,
+          "tokens_out": 4809,
+          "duration_ms": 77747,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.078978,
+      "output_file": "s2.json",
+      "flags": []
+    },
+    {
+      "stage": "S3",
+      "status": "passed",
+      "prompt_file": "s3-message.md",
+      "prompt_version": "1.0.0",
+      "prompt_sha256": "6052925afca83f0d905f4e6273e8aadbb585f88b252157a039a74e6a83981ae7",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T14:29:58.261Z",
+          "raw_output_file": "s3-attempt-1.txt",
+          "tokens_in": 4019,
+          "tokens_out": 11494,
+          "duration_ms": 175403,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.184467,
+      "output_file": "s3.json",
+      "flags": []
+    },
+    {
+      "stage": "S4",
+      "status": "passed",
+      "prompt_file": "s4-offer.md",
+      "prompt_version": "1.0.0",
+      "prompt_sha256": "5f59506e9e0c34a26c0e3997d2f71f0c4d0034e6cc6d4be0208d3310ea8f9ed0",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T14:32:53.676Z",
+          "raw_output_file": "s4-attempt-1.txt",
+          "tokens_in": 5103,
+          "tokens_out": 20056,
+          "duration_ms": 342043,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": [
+            {
+              "check": "s4.pricing_move_uncited",
+              "message": "pricing move \"Name the 'what can honestly wait' section as a written line …\" must name its basis — cite a field ID (D1–D6, B2 or B6) or quote the owner's exact words from D1–D6"
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "started_at": "2026-07-06T14:38:35.726Z",
+          "raw_output_file": "s4-attempt-2.txt",
+          "tokens_in": 7445,
+          "tokens_out": 3097,
+          "duration_ms": 42056,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.38493900000000003,
+      "output_file": "s4.json",
+      "flags": []
+    },
+    {
+      "stage": "S5",
+      "status": "passed",
+      "prompt_file": "s5-roadmap.md",
+      "prompt_version": "1.0.0",
+      "prompt_sha256": "4096a7dd876e6dea7abfc7d7e9144e4f6637f16a3861025f73122115aa68ac29",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T14:39:17.792Z",
+          "raw_output_file": "s5-attempt-1.txt",
+          "tokens_in": 9357,
+          "tokens_out": 19926,
+          "duration_ms": 330544,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": [
+            {
+              "check": "s5.number_invented",
+              "message": "phases[0].actions[0].action contains the figure 250, which appears nowhere in the intake or the prior stages and shows no arithmetic in the same string — a fabricated projection parks the run",
+              "fatal": false
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "started_at": "2026-07-06T14:44:48.357Z",
+          "raw_output_file": "s5-attempt-2.txt",
+          "tokens_in": 12063,
+          "tokens_out": 2776,
+          "duration_ms": 40572,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.40479,
+      "output_file": "s5.json",
+      "flags": []
+    },
+    {
+      "stage": "S6",
+      "status": "passed",
+      "prompt_file": "s6-website.md",
+      "prompt_version": "1.0.0",
+      "prompt_sha256": "f3d9d0a7f0af14a223d12934b5b8132cb5b67f08ac3ba0830be8a68f3e8f5eb1",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T14:45:28.944Z",
+          "raw_output_file": "s6-attempt-1.txt",
+          "tokens_in": 8234,
+          "tokens_out": 27859,
+          "duration_ms": 460497,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": [
+            {
+              "check": "s6.number_invented",
+              "message": "home.sections[4].body contains the figure 1,950, which is not a real intake/prior number nor visible arithmetic over them — no invented stats, counts or claims in website copy",
+              "fatal": false
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "started_at": "2026-07-06T14:53:09.453Z",
+          "raw_output_file": "s6-attempt-2.txt",
+          "tokens_in": 11455,
+          "tokens_out": 3932,
+          "duration_ms": 55020,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.535932,
+      "output_file": "s6.json",
+      "flags": []
+    },
+    {
+      "stage": "S7",
+      "status": "passed",
+      "prompt_file": "s7-emails.md",
+      "prompt_version": "1.0.1",
+      "prompt_sha256": "197e270a4254067726e130637e3d1c97ecfee78375040da988497a356fdaca07",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T16:07:55.621Z",
+          "raw_output_file": "s7-attempt-1.txt",
+          "tokens_in": 7921,
+          "tokens_out": 6093,
+          "duration_ms": 124480,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": [
+            {
+              "check": "s7.hook_categories_not_distinct",
+              "message": "promo_seq[4]: the 3 subject_variants must use 3 DIFFERENT hook categories"
+            }
+          ]
+        },
+        {
+          "attempt": 2,
+          "started_at": "2026-07-06T16:10:00.135Z",
+          "raw_output_file": "s7-attempt-2.txt",
+          "tokens_in": 14079,
+          "tokens_out": 6098,
+          "duration_ms": 122257,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.248865,
+      "output_file": "s7.json",
+      "flags": []
+    },
+    {
+      "stage": "S8",
+      "status": "passed",
+      "prompt_file": "s8-social.md",
+      "prompt_version": "1.0.1",
+      "prompt_sha256": "cc41954ac4e4bcdff2d253fe188c989aa68f3449a52115e930d5ff739a4ef3ad",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T16:19:54.115Z",
+          "raw_output_file": "s8-attempt-1.txt",
+          "tokens_in": 8041,
+          "tokens_out": 7541,
+          "duration_ms": 145739,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.137238,
+      "output_file": "s8.json",
+      "flags": []
+    },
+    {
+      "stage": "S9",
+      "status": "passed",
+      "prompt_file": "s9-oneplan.md",
+      "prompt_version": "1.0.0",
+      "prompt_sha256": "fa70ca2f09a1f544c68f3a466fdf467ee19d847c38e7fbf30626a2199f08ec4a",
+      "model": "claude-sonnet-4-6",
+      "attempts": [
+        {
+          "attempt": 1,
+          "started_at": "2026-07-06T16:22:19.877Z",
+          "raw_output_file": "s9-attempt-1.txt",
+          "tokens_in": 11999,
+          "tokens_out": 16114,
+          "duration_ms": 222362,
+          "stop_reason": "end_turn",
+          "schema_errors": [],
+          "qa_issues": []
+        }
+      ],
+      "cost_usd": 0.277707,
+      "output_file": "s9.json",
+      "flags": []
+    }
+  ],
+  "s10": {
+    "issues": [],
+    "package_file": "bundle.json",
+    "review_file": "review.md",
+    "status": "awaiting_signoff",
+    "assembled_at": "2026-07-06T16:26:02.289Z"
+  },
+  "totals": {
+    "tokens_in": 104206,
+    "tokens_out": 145123,
+    "cost_usd": 2.4895
+  },
+  "environment": {
+    "node": "v22.22.2",
+    "orchestrator_version": "0.1.0"
+  }
+}

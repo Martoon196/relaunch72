@@ -1,0 +1,72 @@
+{
+  "positioning_statement": "For homeowners round Wakefield sitting on older wiring they've been putting off dealing with, the thing driving the call isn't really a socket or a fuse board — it's the fear of the house catching fire while the kids are asleep, and months of quiet guilt about not sorting it sooner. Dan is a certified electrician who photographs everything, puts the findings in writing — what's dangerous, what's wrong, and what can honestly wait — and agrees a fixed price before any work starts. He turns up when he said he would and leaves the place tidy. Instead of a cheaper quote from someone who hasn't visited the job and won't tell you what they've missed, you get an honest account of your house's electrics and the night's sleep that comes with it.",
+  "message_pillars": [
+    "Nobody rings about a socket — they ring because they've been lying awake smelling something that might not be there, scared of what they've been ignoring; that's the job this business exists to fix.",
+    "The report tells you what's dangerous, what needs doing, and — the part nobody else round here offers — what can honestly wait a few years, because a quote you can trust is worth more than one that's just cheaper.",
+    "The job is done when the house is certified safe, everything is in writing, the fuse board is sorted, and you sleep through the night without running a mental check of every socket."
+  ],
+  "differentiators": [
+    "Honest written scope covering what can wait, not just what's billable (E3): \"i photograph everything and send a plain english report with the cert — what's dangerous, what's wrong, and what can honestly wait a few years. nobody else round here does the 'what can wait' bit and it's why people trust the quote\" — unlike a verbal rundown and a maximum-scope estimate, every job gets documented evidence and a straight answer about what can stay as-is.",
+    "Reliability as a stated fact, not a promise (E3): \"i turn up when i said i would, which shouldn't be a selling point in this trade but apparently it is\" — booked is booked; no rescheduled mornings, no vague arrival windows, no chasing.",
+    "Quotes follow a site visit, not a price off the top of someone's head (E2): \"PJM on price, every time it's a straight quote-off on a fuse board with no site visit\" — Dan quotes after actually looking at the job, so the fixed price is real and not a low number that grows once the ceiling is open."
+  ],
+  "value_props": [
+    "Instead of a price over the phone from someone who hasn't looked at the job, you get a fixed price agreed in writing after Dan has actually seen what's there — no extras that appear once the work is under way.",
+    "Instead of a maximum-scope estimate that leaves you wondering what's genuine and what's padding, you get a plain-English breakdown of what's dangerous, what's wrong, and what can honestly wait — so the quote makes sense and the bill matches it.",
+    "Instead of living in a house where you go round unplugging things before bed, you get the first night in months where you don't have to think about it — safe house, certified fuse board, tidy finish."
+  ],
+  "voice": {
+    "sliders": {
+      "formal_casual": 4,
+      "playful_straight": 4,
+      "bold_understated": 3
+    },
+    "tone_rules": [
+      "Keep sentences short and direct — aim for under 20 words. If a sentence needs a second clause, make it earn its place. Use active voice throughout: say who does what.",
+      "No trade jargon when writing for homeowners: say fuse board not consumer unit, say dangerous not non-compliant, say wiring not electrical installation. If a technical term is unavoidable, explain it in the same sentence in plain language.",
+      "Price is stated plainly and never dressed up. Fixed price is a fact, not a reassurance. Never use 'investment', 'competitive', or 'affordable' as a substitute for a straight answer about cost.",
+      "Humour, when it appears at all, is incidental and deadpan — the way real customers write it ('looks like a spaceship next to the death trap you ripped out'). One dry observation is enough; no exclamation marks. Pushing harder than that kills it.",
+      "Voice guardrail: Sounds like a straight-talking tradesman explaining the job at your kitchen table, not a contractor filling in a quote template."
+    ],
+    "banned_words": [
+      "in today's fast-paced world",
+      "unlock your potential",
+      "take your business to the next level",
+      "we pride ourselves",
+      "look no further",
+      "game-changer",
+      "seamless",
+      "elevate",
+      "passionate",
+      "journey",
+      "solutions",
+      "your trusted local electrician",
+      "smiley faces",
+      "consumer unit",
+      "bespoke",
+      "peace of mind",
+      "stress-free",
+      "hassle-free",
+      "affordable",
+      "competitive rates",
+      "no job too small",
+      "going above and beyond",
+      "investment",
+      "rest assured",
+      "committed to",
+      "professional"
+    ],
+    "must_words": [
+      "certified",
+      "in writing",
+      "fixed price",
+      "tidy",
+      "fuse board",
+      "plain English",
+      "safe",
+      "dangerous",
+      "photographs"
+    ]
+  },
+  "elevator_pitch": "Old houses round Wakefield hide things — live wires behind bathroom tiles, fuse boards quietly overdue. Dan photographs everything, writes up what's dangerous, what's wrong, and what can honestly wait, then fixes it at a fixed price agreed in writing. He turns up when he says he will. Certified work. Tidy finish. The first night you stop lying awake."
+}

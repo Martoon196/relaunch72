@@ -1,0 +1,64 @@
+{
+  "snapshot": "Frayne Electrical is a sole-trader electrician based in Ossett, covering Wakefield, Horbury, and Dewsbury. Monthly revenue is £10–30k; average sale is £850 across 14 new customers per month. Four letting agents supply roughly half the month's work — EICRs and remedial jobs — before any marketing is needed. The rest comes from neighbours and returning customers. Gross margin is 30–60%. Strengths: Google reviews past 50 measurably moved inbound calls; before-and-after fuse board photos get shared in local Facebook groups at no cost. Weaknesses: no email list despite years of EICR completions, no call-to-action on the website, and a service that is meaningfully more detailed than competitors' — plain-English written reports naming what can honestly wait — described nowhere in the marketing.",
+  "market": "The homeowner buyer is typically a couple in their mid-40s, living in a 1930s or 1950s semi across Wakefield, Horbury, and Dewsbury. The call comes when something forces the issue: a scorch mark near a child's bedroom, a smell of warm plastic, or a surveyor's warning resurfacing months later. They are solution-aware — already searched Google and posted in local Facebook groups. They choose Frayne because the written report names what is dangerous, what needs fixing, and what can honestly wait, which directly answers their suspicion that the scope is being invented. Letting agents choose on reliability and a stated volume rate.",
+  "offer": "Three-rung stack. Entry: Home Safety Check (EICR) at £165 for homeowners — site visit, photographs, plain-English written report covering what is dangerous, what is wrong, and what can honestly wait. Letting agents on volume: £140 per certificate. The £165 fee is deducted from any rewire booked within 60 days of the report. Core: Full House Rewire at £4,500 — fixed price in writing, 6-year workmanship guarantee stated on the quote. Premium: Full House Rewire with EV Charger Ready at £5,450 — rewire and charger completed in a single week, one booking. All prices are fixed and stated in writing before any work starts.",
+  "goals_90d": "By 30 September: 3 additional letting agents signed onto regular EICR and remedial work, and 2 full rewires booked per month. Both are measurable: signed agent agreements in hand and a diary showing 2 September rewires confirmed. The current 4 agents already fill half the working month; 3 more extend that base at no acquisition cost. Two rewires booked at £4,500 each is the benchmark, not pipeline.",
+  "plan_summary": "Three phases, 3.5 hours per week. Days 1–30: rewrite the Google Business Profile description, add a click-to-call button and Home Safety Check line to the website homepage, open the EICR Renewal Tracker spreadsheet, and post before-and-after fuse board photos into Ossett Community and Wakefield Recommendations Facebook groups. Days 31–60: ask the 4 current letting agents for referrals by name, write and send a one-page outreach letter to named agents with the £140 volume rate stated, continue fortnightly posts, and request a Google review after each rewire. Days 61–90: follow up by phone with non-responding agents, update the written rewire quote template with the 'what can wait' deliverable and 6-year guarantee, and populate the EICR Renewal Tracker from past job records. Letting agents and Google are prioritised — both already produce work at zero spend. No paid advertising this window.",
+  "numbers_table": [
+    {
+      "label": "Monthly revenue",
+      "value": "£10–30k",
+      "source": "B1"
+    },
+    {
+      "label": "Average sale value",
+      "value": "£850",
+      "source": "B2"
+    },
+    {
+      "label": "New customers per month",
+      "value": "14",
+      "source": "B3"
+    },
+    {
+      "label": "Monthly marketing spend",
+      "value": "<£200",
+      "source": "B5"
+    },
+    {
+      "label": "Gross margin",
+      "value": "30–60%",
+      "source": "B6"
+    },
+    {
+      "label": "90-day targets (by 30 September)",
+      "value": "3 new letting agents; 2 rewires/month",
+      "source": "G1"
+    },
+    {
+      "label": "Home Safety Check — entry offer price",
+      "value": "£165",
+      "source": "S4"
+    },
+    {
+      "label": "Letting agent EICR volume rate",
+      "value": "£140",
+      "source": "S4"
+    },
+    {
+      "label": "Full House Rewire — core offer price",
+      "value": "£4,500",
+      "source": "S4"
+    },
+    {
+      "label": "Full House Rewire with EV Charger Ready",
+      "value": "£5,450",
+      "source": "S4"
+    },
+    {
+      "label": "Weekly hours committed to plan",
+      "value": "3.5 hours/week",
+      "source": "S5"
+    }
+  ]
+}

@@ -1,0 +1,239 @@
+{
+  "welcome_seq": [
+    {
+      "subject_variants": [
+        {
+          "subject": "Welcome — here's what to expect from me",
+          "hook_category": "personal_voice"
+        },
+        {
+          "subject": "What you'll get from these emails",
+          "hook_category": "direct_benefit"
+        },
+        {
+          "subject": "One thing worth knowing about older house wiring",
+          "hook_category": "open_loop"
+        }
+      ],
+      "preview": "A quick note on who I am and why I'm in your inbox — plus one thing you can do today.",
+      "body": "Hi {{first_name}},\n\nDan here from Frayne Electrical.\n\nYou signed up, so I'll tell you what you're getting: short emails, plain English, nothing padded out.\n\nI work mostly on older houses round Wakefield, Horbury and Ossett. 1930s and 1950s semis, mainly. The ones where the surveyor flagged the electrics as dated and the owners filed that warning away under 'sort it later.'\n\nThat's what these emails are about — not selling you something every other day, but giving you a straight read on what's worth worrying about, what can genuinely wait, and how to tell the difference.\n\nThe one useful thing for today: if you have a fuse board that still uses old-style rewirable fuses — the kind with thin wire threaded through a ceramic block — take a photo of it and send it to me. I'll tell you whether it needs replacing or whether it can sit a while longer. No obligation, no quote attached.\n\nP.S. If at any point these emails aren't useful, unsubscribe at the bottom. No hard feelings.",
+      "cta": "Reply with your fuse board photo and I'll give you a straight answer within 24 hours."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "It's not really about the socket, is it",
+          "hook_category": "reflective_question"
+        },
+        {
+          "subject": "The smell you can't quite locate",
+          "hook_category": "story_tease"
+        },
+        {
+          "subject": "What's actually keeping you up at 3am",
+          "hook_category": "open_loop"
+        }
+      ],
+      "preview": "The socket is the excuse to ring. This is what's really sitting underneath it.",
+      "body": "Hi {{first_name}},\n\nMost people don't ring an electrician because they want an electrician.\n\nThey ring because there's a socket that's gone brown near a child's bedroom, or a faint smell of warm plastic they can't quite place, or lights that flicker and then don't — and they've been mentally cataloguing it for weeks, running through the house in their head at 3am before they can let themselves sleep.\n\nThe socket is just the thing that finally tips them into picking up the phone.\n\nThe real problem is the guilt that sits underneath it. Most older houses were bought with a survey that flagged the electrics as dated. Most people told themselves they'd deal with it. Then life happened, and later kept moving.\n\nI see this in almost every house I walk into in Horbury or Wakefield or Dewsbury. The wiring issue is real. But the thing the person at the door actually needs is someone to walk them through what's there — clearly, in writing — and tell them the truth about how serious it is.\n\nThat's most of the job, honestly. The physical work comes second.\n\nTomorrow I'll tell you what makes the difference between a straight answer and one that's just bigger than it needs to be.",
+      "cta": "Reply and tell me — how long has whatever you're noticing been there? I read every reply."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "Why I write down what can wait",
+          "hook_category": "personal_voice"
+        },
+        {
+          "subject": "The part of the report nobody else puts in writing",
+          "hook_category": "direct_benefit"
+        },
+        {
+          "subject": "How to spot a quote you can actually trust",
+          "hook_category": "how_to"
+        }
+      ],
+      "preview": "There's one thing I do on every job that seems to surprise people. It probably shouldn't.",
+      "body": "Hi {{first_name}},\n\nHere's something that shouldn't be unusual but apparently is.\n\nWhen I inspect a house, I photograph everything. Then I write up the findings in plain English — what's dangerous, what's wrong, and what can honestly wait a few years.\n\nThat last part is the one that surprises people.\n\nMost reports tell you what needs doing. They don't tell you what can sit. That matters, because if you don't know what can wait, you have no way to judge whether a quote is honest or just large.\n\nI put it in writing because a fixed price is only worth something if the scope behind it is clear. If I say the job is £X and the report names exactly what that covers — and what it doesn't cover because it doesn't need covering yet — then you can hold me to it. That's the deal.\n\nI also turn up when I said I would. I know that shouldn't be a selling point in this trade, but apparently it is.\n\nNo vague arrival windows. Booked is booked.\n\nNone of this is complicated. It's just what the job looks like when it's done right.",
+      "cta": "Reply if you've got a question about what a proper electrical inspection covers — happy to answer."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "What a customer said after the first night",
+          "hook_category": "results_evidence"
+        },
+        {
+          "subject": "The live wires behind the bathroom wall",
+          "hook_category": "story_tease"
+        },
+        {
+          "subject": "What happened when we opened up the old wiring",
+          "hook_category": "open_loop"
+        }
+      ],
+      "preview": "I'll let the people I've worked for say this one. Their words, not mine.",
+      "body": "Hi {{first_name}},\n\nI don't normally lead with what customers say, but this one is worth reading in full.\n\n\"Dan found live wires behind our bathroom wall that the last electrician had just plastered over. I honestly felt sick. He stayed till gone 9 making it safe and never charged a penny extra. First night in months I haven't laid there smelling imaginary burning.\"\n\nThat's a real message. Not a stat, not a case study dressed up — someone's actual words after the job was done.\n\nThe live wires behind the wall are more common than people think in older houses. Someone's had a go at something, it's gone wrong, and the quickest fix has been to cover it over and hope. That doesn't make it safe. It makes it someone else's problem until it isn't.\n\nWhen I find something like that I document it, explain it in plain English on the spot, and sort it before I leave. The fixed price stays the same.\n\nAnother one, from a different job:\n\n\"Thought a full rewire meant living on a building site for a month. Done in six days and they hoovered up better than my cleaner does. Mum's booked in for hers next.\"\n\nThe mess and disruption worry is the one I hear most often. I'll address that directly in tomorrow's email.",
+      "cta": "Reply if anything in those messages sounds familiar — I'm happy to talk through what you're dealing with."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "How to check your fuse board yourself in five minutes",
+          "hook_category": "how_to"
+        },
+        {
+          "subject": "Three things in older houses that are worth checking today",
+          "hook_category": "direct_benefit"
+        },
+        {
+          "subject": "What to look for before you ring anyone",
+          "hook_category": "open_loop"
+        }
+      ],
+      "preview": "A few things you can check yourself right now — no tools, no qualifications needed.",
+      "body": "Hi {{first_name}},\n\nYou don't need me to tell you whether some things are worth acting on. Here are three you can check yourself.\n\nOne: Open your fuse board and look at what's inside. If you see old ceramic fuses with thin wire threaded through them rather than modern circuit breakers, that fuse board is overdue. It won't trip properly in a fault — it'll let the current keep running. That matters on older wiring.\n\nTwo: Look at the sockets in any room where you can smell warm plastic or where you've had a flickering light. Discolouration — brown, scorched, yellowed around the face — means heat has been building somewhere behind the wall. That is not a cosmetic issue.\n\nThree: Think about the date you moved in. If the wiring has never been inspected in writing since you bought the house, you don't actually know what's in the walls. A survey warning is not an inspection. It's a flag that someone else should look.\n\nNone of those checks take more than five minutes. What you do with what you find is a different question.\n\nIf any of the three applies to your house, the honest next step is a certified inspection — photographs, plain English report, fixed price, in writing.\n\nThat's exactly what the Home Safety Check from Frayne Electrical is. I'll tell you more about it tomorrow.",
+      "cta": "Reply with what you found — even just describing it — and I'll tell you how urgent it looks."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "The three worries I hear most — answered straight",
+          "hook_category": "direct_benefit"
+        },
+        {
+          "subject": "Is the electrician making work that isn't there?",
+          "hook_category": "reflective_question"
+        },
+        {
+          "subject": "The rewire disruption worry — here's what actually happens",
+          "hook_category": "open_loop"
+        }
+      ],
+      "preview": "The hesitations people have before booking — I'd rather deal with them directly than leave them sitting there.",
+      "body": "Hi {{first_name}},\n\nThree things come up in almost every first conversation. I'd rather deal with them directly.\n\nFirst: Is the scope genuine or inflated? This is the one people don't always say out loud but are absolutely thinking. My answer is the written report. When I name what can honestly wait — as a line item, in plain English — you can see what I'm not billing for. That's the check. No written scope means no accountability.\n\nSecond: Will the house be a building site for weeks? A full rewire in a standard semi takes around six days. We work room by room, we protect what we can, and we clean up properly each day. One customer put it plainly: they said their mum booked hers after seeing the result. That's not a selling line — it's just what a tidy finish looks like.\n\nThird: There is always someone cheaper. Yes. There is also always someone who quotes on a fuse board without visiting the house, gives you a low number, and then finds reasons for extras once the ceiling is open. A fixed price agreed in writing after Dan has actually seen the job is a different thing from a quote over the phone. It is not the same product at a higher price.\n\nIf you have a different worry I haven't covered, reply and ask. Straightforward questions get straightforward answers.",
+      "cta": "Reply with whatever's stopping you from booking — I'll answer it honestly."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "The Home Safety Check — what it is and what it costs",
+          "hook_category": "direct_benefit"
+        },
+        {
+          "subject": "Ready to find out what's actually in your walls?",
+          "hook_category": "reflective_question"
+        },
+        {
+          "subject": "The logical next step for your house",
+          "hook_category": "personal_voice"
+        }
+      ],
+      "preview": "If you've been putting off getting the wiring looked at, this is the lowest-friction way to start.",
+      "body": "Hi {{first_name}},\n\nThis is the last email in this run, so I'll be direct.\n\nIf your house is a 1930s or 1950s semi, the electrics have probably never had a certified inspection in writing. A survey warning is not an inspection. Your own sense that something isn't right is not an inspection.\n\nThe Home Safety Check from Frayne Electrical is £165. Here is what you get:\n\nDan visits the property, photographs everything, and writes up the findings in plain English — what's dangerous, what's wrong, and what can honestly wait a few years. You receive a certified written report. You get a straight answer about the actual state of your house's wiring, not a verbal rundown and a maximum-scope estimate.\n\nIf the report shows a full rewire is needed and you book one within 60 days of the report being issued, the £165 comes off the rewire price. The inspection becomes the first step of the job, not a sunk cost.\n\nIf the report shows things can wait, that's what it will say — in writing.\n\nThis is not a sales pitch with a countdown timer. It's a fixed-price job with a clear scope. If it sounds like the right next step, the link below takes you to the booking page.\n\nP.S. If you've replied to any of these emails and I haven't got back to you yet — I will. I read them all.",
+      "cta": "Book your Home Safety Check at {{link}} — £165, certified, in writing, tidy finish."
+    }
+  ],
+  "promo_seq": [
+    {
+      "subject_variants": [
+        {
+          "subject": "The moment people actually decide to ring",
+          "hook_category": "story_tease"
+        },
+        {
+          "subject": "What changes when you finally know what's in the walls",
+          "hook_category": "open_loop"
+        },
+        {
+          "subject": "The Home Safety Check — here's what triggers it",
+          "hook_category": "personal_voice"
+        }
+      ],
+      "preview": "There's a specific moment — usually at 3am — when putting it off stops being an option.",
+      "body": "Hi {{first_name}},\n\nMost people don't book an electrical inspection because they suddenly decide it's a good idea.\n\nThey book it because something tips them over. A socket that's gone brown. A smell they can't locate. Lights that have been flickering for three weeks. Or they lie awake one more time running through the list of every plug in the house and decide they're done doing that.\n\nThat trigger moment is almost always about the kids. The thought that the house could catch fire while everyone's asleep, and that you knew something was off and didn't sort it.\n\nThe Home Safety Check from Frayne Electrical exists specifically for that moment.\n\nDan visits your house — typically a 1930s or 1950s semi in the Wakefield area — photographs the wiring, and writes up in plain English what's dangerous, what's wrong, and what can honestly wait. You get a certified written report. You get a fixed price agreed before any work starts.\n\nYou get a straight answer about what's actually in your walls.\n\nFor most people, that's the thing they've been delaying for months. The inspection doesn't create the problem — it tells you whether the problem is real, and how serious it is.\n\nNext email I'll talk about what staying in the dark actually costs.",
+      "cta": "Book the Home Safety Check at {{link}} — £165, certified, in writing."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "What ignoring it for another six months actually costs",
+          "hook_category": "reflective_question"
+        },
+        {
+          "subject": "The thing nobody says about leaving old wiring alone",
+          "hook_category": "open_loop"
+        },
+        {
+          "subject": "Putting it off: the honest accounting",
+          "hook_category": "personal_voice"
+        }
+      ],
+      "preview": "Not just money. The other cost of not knowing what's behind your walls.",
+      "body": "Hi {{first_name}},\n\nLeaving old wiring unexamined isn't free. It just moves the cost somewhere else.\n\nThere's the obvious one: a fault that develops further and becomes more expensive to fix. Wiring in a 1930s house doesn't improve with age.\n\nThen there's the insurance question. Some policies ask about the age and condition of the electrical installation. If you've never had a certified inspection, you may be assuming coverage you don't have.\n\nAnd then there's the one nobody really talks about: the running mental overhead. The socket you're half-watching. The smell you keep telling yourself is probably nothing. The habit of going round before bed checking what's switched off.\n\nThat's not a small thing. It sits there quietly every day.\n\nThe Home Safety Check from Frayne Electrical costs £165. Dan visits, photographs everything, and produces a certified written report in plain English — what's dangerous, what's wrong, and what can honestly wait.\n\nIf the report shows a full rewire is the right call and you book one within 60 days of receiving the report, the £165 comes off the rewire price.\n\nIf the report shows things can sit, it will say that in writing.\n\nEither way, you know. And knowing is what ends the 3am inventory.\n\nBook through the link below.",
+      "cta": "Book the Home Safety Check at {{link}} and get a straight answer about your house's wiring."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "What you actually get for £165",
+          "hook_category": "direct_benefit"
+        },
+        {
+          "subject": "Live wires behind the bathroom wall — a real one",
+          "hook_category": "results_evidence"
+        },
+        {
+          "subject": "The report, the photographs, and the six-year guarantee",
+          "hook_category": "open_loop"
+        }
+      ],
+      "preview": "Everything the Home Safety Check includes — and what real customers have said after having it done.",
+      "body": "Hi {{first_name}},\n\nHere is exactly what the Home Safety Check from Frayne Electrical includes.\n\nDan visits your property and photographs the wiring throughout. He writes up the findings in plain English: what's dangerous, what's wrong, and what can honestly wait a few years. You receive a certified written report. The price is £165, fixed, agreed in writing before anything starts.\n\nIf the report leads to a full rewire and you book within 60 days, the £165 comes off the rewire price.\n\nIf a full rewire is booked, it comes with a 6-year workmanship guarantee written onto the quote — a named, signed term. Any notifiable work that doesn't pass its certification inspection is redone at no extra charge until it is certified and lodged.\n\nOn what that looks like in practice, I'll let someone else say it:\n\n\"Dan found live wires behind our bathroom wall that the last electrician had just plastered over. I honestly felt sick. He stayed till gone 9 making it safe and never charged a penny extra. First night in months I haven't laid there smelling imaginary burning.\"\n\nAnd another:\n\n\"Thought a full rewire meant living on a building site for a month. Done in six days and they hoovered up better than my cleaner does. Mum's booked in for hers next.\"\n\nThat's the job. Certified. In writing. Tidy finish.\n\nBook below.",
+      "cta": "See what's in your walls — book the Home Safety Check at {{link}} for £165."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "The worry that the work isn't genuine — addressed",
+          "hook_category": "personal_voice"
+        },
+        {
+          "subject": "What happens if the report misses something?",
+          "hook_category": "reflective_question"
+        },
+        {
+          "subject": "How the guarantee works — in plain English",
+          "hook_category": "how_to"
+        }
+      ],
+      "preview": "The hesitations about booking an inspection — I'd rather deal with these directly than leave them unanswered.",
+      "body": "Hi {{first_name}},\n\nTwo things come up when people are deciding whether to book.\n\nThe first: is the scope real, or is the electrician finding work to fill a diary? The written report answers that. When it names what can honestly wait — as a stated deliverable, not a verbal bonus on the day — you have something to check against. If I say something can wait, I've written it down. You've got it.\n\nThe second: what if the inspection misses something?\n\nIf the written report from the Home Safety Check misses a dangerous or potentially dangerous fault that any other Part P registered electrician identifies within 90 days, Dan returns to the property and re-inspects at no charge, then issues a corrected written report. That is a written commitment, not a verbal one.\n\nOn a full rewire, the 6-year workmanship guarantee is written onto the quote as a named, signed term. Any notifiable work that doesn't pass certification is redone until it does — no extra charge.\n\nNone of that is complicated. It's just what the job looks like when the person doing it is prepared to put their name to it.\n\nThe fixed price is £165 for the Home Safety Check. Agreed in writing before Dan sets foot in your house.\n\nIf you have a different hesitation I haven't covered here, reply and ask. I'll answer it straight.",
+      "cta": "Book the Home Safety Check at {{link}} — or reply with whatever's stopping you."
+    },
+    {
+      "subject_variants": [
+        {
+          "subject": "A plain summary of what you get and what it costs",
+          "hook_category": "direct_benefit"
+        },
+        {
+          "subject": "Last email on this — here's where things stand",
+          "hook_category": "personal_voice"
+        },
+        {
+          "subject": "Still wondering whether the wiring in your house is safe?",
+          "hook_category": "reflective_question"
+        }
+      ],
+      "preview": "No pressure, no countdown. Just a straight summary of the offer before I move on.",
+      "body": "Hi {{first_name}},\n\nThis is the last email in this run about the Home Safety Check. I'll keep it short.\n\nHere is what you get:\n\nDan visits your property, photographs the wiring, and writes up the findings in plain English. Certified written report covering what's dangerous, what's wrong, and what can honestly wait. Fixed price of £165, agreed in writing before any work starts.\n\nIf the report leads to a full rewire and you book within 60 days of receiving it, the £165 comes off the rewire price.\n\nIf a rewire is the right call, it comes with a 6-year workmanship guarantee written onto the quote. Any notifiable work that doesn't pass its certification inspection is redone at no charge until it does.\n\nIf the report shows things can sit a few more years, it says that in writing.\n\nThere's no deadline on this offer — the price is £165 and the scope is what I've described. What I can tell you honestly is that older houses don't wait. The wiring in a 1930s semi is the same age whether you book this week or in six months.\n\nIf you're ready, the link below takes you to the booking page.\n\nIf you've got a question first, reply and I'll answer it.\n\nP.S. That's all on this one from me. Future emails will be useful and short — nothing like this run.",
+      "cta": "Book your Home Safety Check at {{link}} — £165, certified, in writing, tidy finish."
+    }
+  ],
+  "list_warmup_note": {
+    "list_status": "none",
+    "note": "F2 shows no email list exists. The owner has been meaning to collect emails from EICR certificates but hasn't built a process for it yet. Because there is no list, there is no re-introduction email to send and no warmup issue to manage. The welcome sequence should start firing automatically as soon as a subscriber capture mechanism is in place — a simple sign-up form on the website or a manual add after each EICR job would be enough to start. The EICR certificate workflow the owner already mentioned is the natural collection point: a short note at the bottom of every certificate with a sign-up link is a low-friction way to begin building a list from customers who already trust the work.",
+    "reintro_email": null
+  }
+}

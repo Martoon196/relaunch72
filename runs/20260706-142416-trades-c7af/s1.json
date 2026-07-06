@@ -1,0 +1,51 @@
+{
+  "scores": [
+    {
+      "category": "visibility",
+      "grade_1to10": 5,
+      "evidence": "The channel footprint (F1) — website, Google Business Profile, and Facebook-Instagram — is correctly chosen for a local electrician in Ossett. The GBP is demonstrably working: (F4) \"once i got past 50 of them the phone noticeably picked up\" is direct evidence of local search traction, not an assumption. Coverage area is clearly defined (A5). But the intake contains no mention of organic search rankings, no local directory presence (Checkatrade, Rated People, Trustatrader), and marketing spend (B5) is \"<£200\" per month — making this a passive rather than active visibility setup. Instagram's contribution to actual enquiries is unstated.",
+      "leak_cost_estimate": "£1,700/mo — 2 enquiries/month lost to weak organic website presence × £850 average sale (B2)"
+    },
+    {
+      "category": "message clarity",
+      "grade_1to10": 4,
+      "evidence": "When asked directly, the pitch is sharp (A2): \"i rewire old houses and swap out dodgy fuse boards round Wakefield for people who want it done properly the first time.\" The differentiator is equally plain-spoken (E3): \"nobody else round here does the 'what can wait' bit and it's why people trust the quote.\" Both lines are specific, local, and credible. The problem is that nothing in the intake confirms either phrase — or anything close to it — appears on the website, the GBP description, or any marketing copy. This clarity lives in conversation, not in marketing.",
+      "leak_cost_estimate": "£1,700/mo — 2 visitors/month who leave the website without enquiring because the copy is generic × £850 average sale (B2)"
+    },
+    {
+      "category": "conversion path",
+      "grade_1to10": 4,
+      "evidence": "The B4 picture is striking: \"4 letting agents send me all their EICRs and remedial work, thats half the month gone before the phone even rings\" — meaning half the revenue bypasses any conversion path entirely. The other half arrives via neighbours and returning customers, again bypassing the website. No mention anywhere of a quote form, a click-to-call button, or any deliberate mechanism to turn a website visit into an enquiry. F3 confirms both paid experiments failed — \"pile of likes from accounts on the other side of the world, zero jobs\" — which typically indicates a broken post-click path, not a bad ad.",
+      "leak_cost_estimate": "£1,700/mo — 2 motivated visitors/month who don't enquire due to no clear CTA on site × £850 average sale (B2)"
+    },
+    {
+      "category": "follow-up",
+      "grade_1to10": 2,
+      "evidence": "The gap here is stated directly. F2: \"no list. keep meaning to collect emails off the EICR certificates but i never get round to it.\" The only returning-customer behaviour described in B4 is \"old customers ringing back years later\" — entirely self-initiated, no prompt from Frayne's side. Rental EICRs are legally required every five years, meaning a significant number of past EICR customers are, right now, approaching renewal with no contact from the electrician who did the last one. This is a predictable, recurring pipeline that currently does not exist.",
+      "leak_cost_estimate": "£1,700/mo — 2 past customers/month who book a competitor at renewal instead of being reminded by Frayne × £850 average sale (B2)"
+    },
+    {
+      "category": "proof",
+      "grade_1to10": 6,
+      "evidence": "This is the strongest area of the business. F4 provides two direct proof-performance links: Google reviews drove a measurable uptick — \"once i got past 50 of them the phone noticeably picked up\" — and content is generating organic reach without any spend: \"before and after photos of fuse boards get shared round the local facebook groups more than anything else i post.\" Both are working. The gap is deployment: the intake contains no mention of reviews or photos appearing on the website, in quote follow-ups, or anywhere else in the decision journey beyond Google and Facebook.",
+      "leak_cost_estimate": "£850/mo — 1 undecided visitor/month who doesn't enquire because reviews aren't visible on-site × £850 average sale (B2)"
+    },
+    {
+      "category": "offer strength",
+      "grade_1to10": 3,
+      "evidence": "Pricing is described as (E4) \"similar\" to the market. On a direct comparison, Frayne loses: (E2) \"PJM on price, every time it's a straight quote-off on a fuse board with no site visit.\" Yet the service being delivered is not similar — (E3) \"i photograph everything and send a plain english report with the cert — what's dangerous, what's wrong, and what can honestly wait a few years\" is a materially different product. It is not named, packaged, tiered, or described anywhere in the marketing. A customer comparing quotes sees two numbers. The electrician who does site visits and writes honest plain-English reports looks identical to the one who doesn't.",
+      "leak_cost_estimate": "£1,700/mo — 2 quote-offs lost per month to PJM on price alone × £850 average sale (B2)"
+    }
+  ],
+  "top_3_leaks": [
+    "No email contact list from EICR certificates: years of completed jobs — at 14 new customers/month over 6–10 years — have left no re-engagement mechanism at all. Rental EICRs expire every five years; those customers are approaching renewal now with no reminder from Frayne. Recovering just 2 lapsed customers per month equals £1,700/mo in revenue that currently goes to whoever appears on Google when the time comes.",
+    "The 'what can wait' differentiator is invisible in all marketing: Frayne is losing fuse board quote-offs to PJM Electrics on price because the customer sees two numbers, not two different products. The plain-English report with honest advisory notes (E3) is a genuinely distinctive local offer that justifies not being the cheapest — but only if the customer knows about it before they make a decision, and right now nothing in the marketing tells them.",
+    "The website conversion path is unknown and probably broken: both paid experiments in F3 — £600 for 5,000 leaflets (one irrelevant call) and £40 Facebook boost (zero jobs) — returned nothing, which usually points to the path from click to enquiry being absent rather than the reach being wrong. With Google reviews already driving inbound calls unprompted, a working website CTA could add meaningful volume at zero extra ad spend."
+  ],
+  "quick_wins": [
+    "Rewrite the Google Business Profile description this week using the exact language already in A2 and E3 — for example: 'We rewire old houses and replace consumer units across Wakefield, Horbury and Dewsbury. Every EICR report tells you plainly what's dangerous, what needs fixing now, and what can honestly wait a few years. We turn up when we said we would.' Takes 15 minutes, costs nothing, and puts the real differentiator where undecided customers will actually read it.",
+    "Open a Google Sheet today labelled 'EICR follow-up list' with five columns: customer name, email from the certificate, property address, certificate date, and follow-up due date (certificate date plus 4 years and 9 months). Log every certificate completed from this week forward. This is the email list — it just needs someone to start filling it in, starting with this week's jobs.",
+    "Post one before-and-after fuse board photo this week directly into the Ossett Community Facebook group and the Wakefield Recommendations group — not only the Frayne Electrical page. Suggested caption: 'Consumer unit swap in Horbury last week — old board on the left, new board on the right. If yours looks like the left photo, happy to give a free honest quote with no obligation.' No budget, no boosting, and this content is already proven to get shared (F4)."
+  ],
+  "narrative_summary": "Frayne Electrical has the foundation that most electricians can't buy: a genuine reason to choose them (a plain-English report that tells people what can honestly wait), a Google review count that has already been proven to move the phone, and four letting agents who trust the work enough to hand over their entire EICR portfolio. Half the month is filled before it starts. That's not luck — that's years of turning up and doing the job properly.\n\nThe leaks are almost entirely in what happens around the work, not in the work itself. The biggest one is the EICR certificates sitting with email addresses on them and no mechanism to ever use those contacts again. Rental EICRs expire every five years — those customers are approaching renewal right now with no reminder from the person who did the last one. When the time comes, they'll ring whoever appears on Google first. The second leak is that the thing that makes this business actually different — the honest 'what can wait' section of every report — doesn't appear anywhere in the marketing. So on a fuse board quote-off, it looks like two identical services at two prices, and PJM wins because they're £100 less. Frayne shouldn't be in that fight at all; the offer is genuinely different, it just needs to be visible before the customer makes up their mind. The third leak is the website: it exists, but both paid experiments came back empty, which usually means the path from visit to enquiry is broken or absent.\n\nNone of this requires budget. It requires an hour this week and one new habit."
+}

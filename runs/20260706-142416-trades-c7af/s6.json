@@ -1,0 +1,97 @@
+{
+  "home": {
+    "hero_variants": [
+      {
+        "angle": "problem-first",
+        "headline": "The wiring's been on your list for months. Time to find out what you're actually dealing with.",
+        "subhead": "Frayne Electrical covers Wakefield, Horbury, Dewsbury and the surrounding area. Dan visits your house, photographs the wiring, and writes up in plain English what's dangerous, what's wrong, and what can honestly wait. Fixed price agreed in writing before any work starts.",
+        "cta": "Book your Home Safety Check — Dan visits and writes up the full picture for £165"
+      },
+      {
+        "angle": "evidence-first",
+        "headline": "Six days. Certified safe. Left tidier than they found it. That's what a proper job looks like.",
+        "subhead": "Frayne Electrical is based in Ossett and covers Wakefield, Horbury and Dewsbury. Dan photographs everything, writes a plain-English report on what's dangerous, what's wrong, and what can honestly wait, then agrees a fixed price in writing. He turns up when he said he would.",
+        "cta": "Book your Home Safety Check — get the written truth about your electrics for £165"
+      }
+    ],
+    "sections": [
+      {
+        "id": "benefits",
+        "head": "What you actually walk away with",
+        "body": "A certified, documented electrical installation. A written report in plain English — what's dangerous, what's wrong, and what can honestly wait a few years. A fixed price that was agreed before any work started, and didn't change. Photographs of everything Dan found and everything he fixed. A tidy finish. And the first night in a long time you stop running a mental check of every socket in the house before you can sleep.",
+        "cta": "Book your Home Safety Check — the written starting point, £165"
+      },
+      {
+        "id": "how-it-works",
+        "head": "Three steps, nothing hidden",
+        "body": "First, Dan visits your house for the Home Safety Check. He photographs the wiring, the fuse board, and anything your original survey flagged. He looks at what the previous work left behind. Then you get the written report: what's dangerous, what's wrong, and what can honestly wait. If work is needed, you get a fixed price in writing before anything starts. Book the job. Dan turns up on the day he said he would. The job is done. The place is left tidy.",
+        "cta": "Start with the Home Safety Check — £165, and if a rewire follows, the £165 comes off the total"
+      },
+      {
+        "id": "proof",
+        "head": "What people say when the job is done",
+        "body": "\"Dan found live wires behind our bathroom wall that the last electrician had just plastered over. I honestly felt sick. He stayed till gone 9 making it safe and never charged a penny extra. First night in months I haven't laid there smelling imaginary burning.\"\n\n\"mate the new board is unreal, looks like a spaceship next to the death trap you ripped out. karen has finally stopped going round unplugging everything before bed lol\""
+      },
+      {
+        "id": "objections",
+        "head": "The things people wonder before they ring",
+        "body": "Someone else quoted less. That quote was made up before anyone had seen your house — a number off the top of someone's head with no site visit is not a fixed price, it's a starting point that grows once the ceiling is open. Dan quotes after a visit. The fixed price is real. On scope: the written report names what can honestly wait, not just what's billable. If something doesn't need doing now, that goes in writing too. On mess: every job is tidied up properly when it's finished.",
+        "cta": "Ring or send a message — Dan will tell you straight if the job is right for him"
+      },
+      {
+        "id": "who-its-for",
+        "head": "Right for you if your house is older and the electrics have been nagging at you",
+        "body": "Most of the work is in older semis — pre-war and post-war houses that came with vague survey warnings about dated electrics. The kind where the surveyor wrote 'dated electrics, recommend further investigation' and everyone filed it away under 'sort later.' If that note has been sitting on your desk, or you've noticed a socket that looks wrong, or the lights flicker and don't resolve themselves, that's what the Home Safety Check is designed for. You find out exactly what's there. In writing. Before anything is spent on the fix."
+      },
+      {
+        "id": "service-area",
+        "head": "Based in Ossett. Covering Wakefield, Horbury, Dewsbury and roughly 25 minutes around.",
+        "body": "Frayne Electrical works across the Wakefield district — Ossett, Horbury, Wakefield city, Dewsbury and the towns in between. For a full rewire, Dan will travel out to the Barnsley edge. For smaller jobs, if you're within about 25 minutes of Ossett you're in the area. Not sure whether you're covered? Send a message with your postcode and Dan will confirm."
+      }
+    ]
+  },
+  "about": {
+    "head": "Why the written report tells you what can wait — not just what needs doing",
+    "body": "Old houses round here hide things. Live wires behind bathroom tiles. Fuse boards that should have been replaced years ago, still running a family home. Sockets sitting brown and warm behind a piece of furniture. The surveyor caught a glimpse and wrote 'dated electrics' in the report. Then life happened.\n\nWhen I started doing this, I noticed something. Homeowners weren't just worried about the job — they were worried about me. Was I making work? Was the scope invented? Was there a cheaper way I wasn't mentioning because it didn't suit me?\n\nSo I changed what I write up after a visit. The report doesn't just list what's dangerous and what needs doing. It lists what can honestly wait a few years. In plain English, with photographs, on paper you can show someone else. It takes longer to put together. But it's the reason people trust the quote — because a report that tells you what you don't need to spend money on right now is clearly not a report designed to inflate your bill.\n\nI'm based in Ossett. I cover Wakefield, Horbury, Dewsbury and out to about 25 minutes. I photograph everything. I agree a fixed price in writing before work starts. I turn up when I said I would. None of that should be unusual in this trade. Apparently, it still is."
+  },
+  "sales_page": {
+    "head": "Home Safety Check — £165",
+    "subhead": "Dan visits your house in Wakefield, Horbury, Dewsbury or the surrounding area, photographs the wiring, and writes up in plain English what's dangerous, what's wrong, and what can honestly wait. Fixed price. Certified. All in writing.",
+    "sections": [
+      {
+        "id": "problem",
+        "head": "You already know something isn't right. You just don't know how wrong.",
+        "body": "The survey said 'dated electrics' and you told yourself you'd deal with it. That was months ago. Now there's a socket you've been ignoring — brown around the edges, or warm to the touch. Maybe it's lights in one room that flicker and don't resolve themselves. Maybe it's a smell you can't fully locate and keep telling yourself isn't there.\n\nThe fear underneath all of this is specific: the house catching fire. Especially at night. Especially near where the kids sleep. You're not catastrophising — older houses do have wiring that fails. The question is whether yours does, and how badly.\n\nRight now you don't know. That's the part that keeps you awake. The Home Safety Check exists to answer that question — not to sell you a job that isn't there, but to tell you exactly what is."
+      },
+      {
+        "id": "offer",
+        "head": "The Home Safety Check — what it is, what it costs, and what you get",
+        "body": "The Home Safety Check is an electrical installation condition report carried out by Dan at your property. The price is £165, fixed and agreed in writing in advance.\n\nOn the day: Dan visits, photographs the wiring and the fuse board, checks any switches and sockets of concern, and looks at whatever your original survey flagged.\n\nWhat you receive: a plain-English written report in three clear sections. What is dangerous and needs immediate attention. What is wrong and should be fixed. And the part nobody else round here includes — what can honestly wait a few years. Every finding is specific. Photographs are included. The report is certified.\n\nThe price is £165 and it does not change on the day.\n\nIf you go on to book a Full House Rewire or Full House Rewire with EV Charger Ready within 60 days of the report being issued, the £165 is deducted from the job price.",
+        "cta": "Book your Home Safety Check — £165, everything in writing"
+      },
+      {
+        "id": "proof",
+        "head": "What it looks like when the job is done properly",
+        "body": "\"Dan found live wires behind our bathroom wall that the last electrician had just plastered over. I honestly felt sick. He stayed till gone 9 making it safe and never charged a penny extra. First night in months I haven't laid there smelling imaginary burning.\"\n\nThat's what the Home Safety Check is there to find — wiring a previous tradesman hid rather than fixed. The written report named it. The work was agreed in writing. Then it was sorted.\n\n\"Thought a full rewire meant living on a building site for a month. Done in six days and they hoovered up better than my cleaner does. Mum's booked in for hers next.\""
+      },
+      {
+        "id": "objections",
+        "head": "The questions worth asking before you book",
+        "body": "Is there a cheaper option? Probably. A quote over the phone, no site visit, a number made up before anyone has looked at your house. That price tends to grow once the work is under way and the full picture appears. Dan quotes after seeing what's actually there. The fixed price is real, and it is agreed in writing before work starts.\n\nWill the scope be invented? The written report includes what can honestly wait. If a circuit is fine, that goes in writing. If a fault is minor and can sit for a couple of years, that goes in writing too. You can take the report to any other Part P registered electrician and ask them to check it.\n\nHow much disruption? The Home Safety Check is a visit and a report — no building work that day. If a full rewire follows, the job is planned around your house, the place is left tidy at the end of each day, and the work is done in days rather than weeks.",
+        "cta": "Book your Home Safety Check — Dan visits and writes up exactly what he finds for £165"
+      },
+      {
+        "id": "guarantee",
+        "head": "If the report misses something dangerous, Dan returns and reinspects at no charge",
+        "body": "On the Home Safety Check: if the written report misses a dangerous or potentially dangerous fault that a subsequent inspection by any other Part P registered electrician identifies within 90 days, Dan returns to the property and reinspects at no charge, then issues a corrected written report. This is a promise of his own action — returning and reinspecting — not a guarantee of any particular outcome.\n\nOn a Full House Rewire or Full House Rewire with EV Charger Ready: the 6-year workmanship guarantee is written onto the quote as a named, signed term. Any notifiable work that does not pass its Building Regulations certification inspection is redone by Dan at no extra charge until it is certified and lodged."
+      },
+      {
+        "id": "next-steps",
+        "head": "What comes after the report: the Full House Rewire",
+        "body": "If the Home Safety Check confirms the house needs rewiring, two options are on the table — both at a fixed price agreed in writing before work starts.\n\nThe Full House Rewire is £4,500. The fuse board is replaced, circuits are run properly, all notifiable work is certified and lodged, and the 6-year workmanship guarantee is written onto the quote.\n\nThe Full House Rewire with EV Charger Ready is £5,450. The EV charger is fitted in the same week as the rewire — one booking, one week of disruption, wiring and charging sorted in a single job.\n\nBook either rewire within 60 days of your written Home Safety Check report and the £165 is deducted from the total.",
+        "cta": "Book your Home Safety Check — find out what's there, in writing, for £165"
+      }
+    ],
+    "final_cta": "Book your Home Safety Check — Dan visits your house, photographs the wiring, and writes up in plain English what's dangerous, what's wrong, and what can honestly wait. Fixed price, £165. Covering Wakefield, Horbury, Dewsbury and the surrounding area."
+  }
+}

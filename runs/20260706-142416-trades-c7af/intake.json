@@ -1,0 +1,71 @@
+{
+  "_fixture_notice": "FICTIONAL test data — invented business and invented customer quotes for pipeline development; never use as marketing proof.",
+  "A1": "Frayne Electrical",
+  "A2": "i rewire old houses and swap out dodgy fuse boards round Wakefield for people who want it done properly the first time",
+  "A3": [
+    "https://frayne-electrical.example",
+    "https://facebook.example/frayneelectrical",
+    "https://instagram.example/frayne_electrical"
+  ],
+  "A4": "6–10",
+  "A5": "Based in Ossett, cover Wakefield, Horbury, Dewsbury, out to about 25 minutes drive. Will go to the Barnsley edge for a full rewire, not for a socket.",
+  "A6": "local service or trades",
+  "A7": "2–5",
+  "B1": "£10–30k",
+  "B2": 850,
+  "B3": 14,
+  "B4": "4 letting agents send me all their EICRs and remedial work, thats half the month gone before the phone even rings. the rest is people whose neighbour i've done, or old customers ringing back years later",
+  "B5": "<£200",
+  "B6": "30–60%",
+  "C1": "Steve and Michelle, both mid 40s, bought a 1930s semi in Horbury last year off an elderly couple. Two kids, both working full time, mortgage up to the eyeballs. Survey said 'electrics dated' and they ignored it until a socket in the kids' room went brown round the edges. Michelle does the ringing round, Steve pretends he'll sort it himself for about a month first. They don't want the cheapest quote, they want to never have to think about it again. Left me a belter of a review and got me two more jobs on their street.",
+  "C2": "google review —\n\"Dan found live wires behind our bathroom wall that the last electrician had just plastered over. I honestly felt sick. He stayed till gone 9 making it safe and never charged a penny extra. First night in months I haven't laid there smelling imaginary burning.\"\n\ntext off a customer —\n\"mate the new board is unreal, looks like a spaceship next to the death trap you ripped out. karen has finally stopped going round unplugging everything before bed lol\"\n\n\"Thought a full rewire meant living on a building site for a month. Done in six days and they hoovered up better than my cleaner does. Mum's booked in for hers next.\"",
+  "C3": "nobody rings me because a socket's stopped working, not really. they're scared of the house catching fire while the kids are asleep, and they feel stupid for having ignored it so long. what i'm actually selling is being able to stop noticing that warm plastic smell",
+  "C4": "flickering lights, a scorched smell off a plug, or a letting agent or insurer suddenly demanding an EICR certificate. now and again they've just watched something about a house fire on the news and it's tipped them over",
+  "C5": "price — there's always someone's mate's mate who'll do it for beer money. the mess of a rewire, floors up, dust everywhere. and 'does he actually NEED to do all this or is he inventing work' — you can see them thinking it",
+  "C6": "developers doing quick flips who want me to sign off work their own labourer did. anyone who opens with 'it's only a 5 minute job' — it never is. and landlords who argue about a C1 code on a report, i'm not negotiating on danger",
+  "C7": [
+    "FB groups",
+    "Google search",
+    "local/offline",
+    "letting agents' contractor lists"
+  ],
+  "C8": "an odd-job fella off a facebook group, or the brother-in-law who 'knows a bit about electrics'. sometimes a youtube video and a multimeter from the market. that bodge is usually the reason i'm stood there",
+  "D1": "full rewire, 3-bed terrace or semi — £4,200 to £4,800 depending on floors. consumer unit swap £595. EICR £165, £140 for the letting agents on volume. EV charger supplied and fitted £950. fault finding £75 first hour then £45. small stuff, extra sockets and lights, £120 minimum really or it's not worth the van",
+  "D2": "EV chargers are the best margin by a mile. EICRs are the easiest sell because the agents legally have to have them — no persuading needed",
+  "D3": "more full rewires. big ticket, i can plan a whole week around one, and the before and after photos of the old wiring win me the next three jobs on that street",
+  "D4": "6 year workmanship guarantee on rewires, and everything notifiable gets certified and lodged properly. i put the guarantee in writing on the quote which seems to surprise people",
+  "D5": "a stretch",
+  "D6": "won't sign off anyone else's work, ever. won't do a board swap and leave known dangerous circuits live because the customer 'will sort it later'. and i don't touch solar, not my trade",
+  "E1": "Calder Volt Ltd (caldervolt.example) — big outfit, 6 vans. Sparkwright Electrical over in Dewsbury. and a one-man band called PJM Electrics who prices £100 under everybody on everything",
+  "E2": "PJM on price, every time it's a straight quote-off on a fuse board with no site visit. and Calder Volt take the landlord portfolios because they can put two vans on it and start monday when i'm booked three weeks out",
+  "E3": "i photograph everything and send a plain english report with the cert — what's dangerous, what's wrong, and what can honestly wait a few years. nobody else round here does the 'what can wait' bit and it's why people trust the quote. also i turn up when i said i would, which shouldn't be a selling point in this trade but apparently it is",
+  "E4": "similar",
+  "E5": "there's a roofing firm up near Leeds that just posts a short drone video of every finished roof. no talking, no music trying too hard, just the work. i rate that",
+  "F1": [
+    "website",
+    "Google Business Profile",
+    "Facebook-Instagram"
+  ],
+  "F2": "no list. keep meaning to collect emails off the EICR certificates but i never get round to it",
+  "F3": "paid £600 for a leaflet drop, 5,000 leaflets round Ossett and Horbury. one phone call, and it was a plumber asking who did the printing. also boosted a facebook post for £40 — pile of likes from accounts on the other side of the world, zero jobs",
+  "F4": "the letting agents, neighbours seeing the van outside for a week, and google reviews — once i got past 50 of them the phone noticeably picked up. before and after photos of fuse boards get shared round the local facebook groups more than anything else i post",
+  "F5": [
+    "Facebook",
+    "Google Business Profile"
+  ],
+  "G1": "sign up 3 more letting agents on regular EICR and remedial work, and get to 2 full rewires booked every month by end of September",
+  "G2": "2–5",
+  "G3": "£200–500",
+  "G4": "Callum finishes his apprenticeship in November. i want enough steady booked work by then to keep him on full time rather than lose him to one of the big firms",
+  "H1": {
+    "formal_casual": 4,
+    "playful_straight": 4,
+    "bold_understated": 3
+  },
+  "H2": "there's a welding channel on youtube, fella just shows the job and says straight out when he's cocked something up — that honesty. and my mate's fishing tackle shop sends a newsletter that reads exactly like he talks over the counter",
+  "H3": {
+    "never_use": "passionate, journey, solutions, 'your trusted local electrician', smiley faces, and go easy on exclamation marks",
+    "must_use": "certified, in writing, fixed price, tidy. and call it a fuse board not a consumer unit when we're talking to homeowners"
+  },
+  "H4": "i type replies from the van at 9pm so keep anything you need from me short. don't make me sound like a website. the agent work pays the bills but the rewires are what i want Frayne Electrical known for"
+}

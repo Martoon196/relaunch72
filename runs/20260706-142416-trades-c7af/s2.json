@@ -1,0 +1,36 @@
+{
+  "profile_narrative": "It's Michelle who picks up the phone. Steve has been saying he'll sort the socket in their youngest's room for about a month — but it's brown around the edges now, and she's been lying awake at night smelling something that might not even be there. They bought the 1930s semi in Horbury off an elderly couple; the surveyor flagged the electrics as dated, they told themselves they'd deal with it later. Later is here.\n\nShe searches Google, puts a post in a local Facebook group. She's looked at a couple of names, maybe asked a neighbour on the street. She's not chasing the cheapest — she already half-suspects whoever they get will find something a previous person has bodged, because that's been the pattern so far. She's thinking about the odd-job fella who came last time and almost certainly made it worse. What she wants, more than anything, is to stop noticing that warm plastic smell. To stop doing the mental inventory of every plug socket in the house before she can sleep. To have someone come in, tell her exactly what the situation is — even if it's worse than she feared — fix it properly, and leave the place cleaner than they found it.\n\nWhen Dan turns up, she's watching closely in those first few minutes. Does he actually know what he's looking for, or is he guessing? Is he making work that isn't there, or is the work genuinely there? She needs to believe he's telling her the truth. If she does, she'll book the job, pay a fair price without flinching, leave a review that brings him three more jobs on the same street, and have him back to sort something else before the year is out. The relief she's buying isn't a certificate on the wall. It's the first night in months she doesn't lie there smelling imaginary burning.",
+  "demographics": "Couples in their mid-40s, both in full-time work, living in 1930s to 1950s semi-detached houses across Wakefield, Horbury, Dewsbury and within roughly 25 minutes of Ossett. Children still at home, mortgage stretched. Average job spend around £850.",
+  "situation": "Recently bought — or long-owned — an older semi that came with vague survey warnings about dated electrics that got filed away under 'sort later.' One partner, typically the woman, has been quietly monitoring a developing problem while the other insists he'll handle it himself. That self-fix phase usually ends with nothing fixed and occasionally a new problem. They have often already had a cheap or informal electrician — a Facebook odd-job man, a brother-in-law who knows a bit — and the suspicion that the previous work was not done right is already sitting in the room before Dan arrives.",
+  "trigger_events": [
+    "A socket or switch shows scorch marks or brown discolouration, often near a child's bedroom",
+    "A persistent smell of warm plastic or faint burning that the homeowner cannot fully locate",
+    "Flickering lights that refuse to resolve themselves",
+    "A letting agent or insurer suddenly demands an EICR certificate before a policy renewal or new tenancy",
+    "A news story about a house fire tips them from 'aware but delaying' into actually ringing round"
+  ],
+  "objections": [
+    "Price — there is always someone's mate's mate who will do it for less, and that comparison arrives before Dan even quotes",
+    "The mess and disruption of a rewire: floors up, dust everywhere, the house as a building site for weeks",
+    "Suspicion that the electrician is finding or inflating the scope of work to increase the bill — they sit there quietly wondering whether all of this is actually necessary"
+  ],
+  "desires_surface": "Get the dodgy socket or ageing wiring properly fixed by a qualified electrician, receive a clear bill of health on the electrics, and not have to think about it again.",
+  "desires_deep": "Stop lying awake at 3am running a mental check of every plug in the house. The fear underneath is specific: the house catching fire while the kids are asleep, compounded by guilt at having ignored the warning signs for months. What they are actually buying is permission to stop noticing the smell of warm plastic — the moment that worry gets to leave the building.",
+  "verbatims": [
+    "Dan found live wires behind our bathroom wall that the last electrician had just plastered over. I honestly felt sick. He stayed till gone 9 making it safe and never charged a penny extra. First night in months I haven't laid there smelling imaginary burning.",
+    "mate the new board is unreal, looks like a spaceship next to the death trap you ripped out. karen has finally stopped going round unplugging everything before bed lol",
+    "Thought a full rewire meant living on a building site for a month. Done in six days and they hoovered up better than my cleaner does. Mum's booked in for hers next."
+  ],
+  "exclusions": [
+    "Property developers wanting a qualified electrician to sign off work their own labourer carried out",
+    "Anyone who opens the call with 'it's only a five-minute job' and then resists any finding that says otherwise",
+    "Landlords who want to negotiate on a C1 code in an EICR report rather than fix the dangerous fault"
+  ],
+  "awareness_stage": "solution aware",
+  "channels": [
+    "FB groups",
+    "Google search",
+    "local/offline",
+    "letting agents' contractor lists"
+  ]
+}

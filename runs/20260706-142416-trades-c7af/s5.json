@@ -1,0 +1,113 @@
+{
+  "north_star": "Sign up 3 more letting agents on regular EICR and remedial work, and get to 2 full rewires booked every month — both by 30 September.",
+  "phases": [
+    {
+      "days": "Days 1–30",
+      "theme": "Fix the visible path so letting agents and rewire customers can find Frayne Electrical, read the real offer, and take a next step",
+      "actions": [
+        {
+          "action": "Rewrite the Google Business Profile description using the language you already use when explaining the job at someone's kitchen table: who you are, the Wakefield and Horbury area, that every report tells clients what is dangerous, what is wrong, and what can honestly wait, and that the fixed price is agreed in writing before any work starts. One draft, one read-back, one paste. Keep it long enough to cover those four points and short enough to read in under a minute. Done when the new description is live on the GBP.",
+          "hours": 1,
+          "channel": "Google search",
+          "depends_on": ""
+        },
+        {
+          "action": "Add two things to the current website homepage: a click-to-call phone number visible at the top of the page, and a short line that reads 'Book a Home Safety Check — fixed price agreed in writing, we photograph everything.' Edit the existing homepage only — no new pages needed. Assumes the website is on a platform you can edit yourself (WordPress, Wix, Squarespace, or similar); if it is not, enable the 'Call now' button in the Google Business Profile dashboard instead, which is free and takes 10 minutes. Check the result on a mobile phone before marking this done.",
+          "hours": 1.5,
+          "channel": "Google search",
+          "depends_on": ""
+        },
+        {
+          "action": "Open a Google Sheet, name it 'EICR Renewal Tracker', and add five column headers: Customer Name, Email from Certificate, Property Address, Certificate Date, Follow-Up Due (certificate date plus 4 years 9 months). Log every EICR completed from this week forward within 48 hours of issuing the certificate — 5 minutes per job from here on. Done when the sheet exists and the first real entry is in it.",
+          "hours": 0.5,
+          "channel": "local/offline",
+          "depends_on": ""
+        },
+        {
+          "action": "Post one before-and-after fuse board photo directly into the Ossett Community Facebook group and the Wakefield Recommendations group — not only the Frayne Electrical page. Caption should cover what the old board looked like, what replaced it, the approximate area, and a plain offer of a free honest quote for anyone whose board looks similar. No boosting. Post a second time before Day 30, two to three weeks after the first. Reply to every comment and direct message the same day. Done when both posts are live.",
+          "hours": 1,
+          "channel": "FB groups",
+          "depends_on": ""
+        }
+      ]
+    },
+    {
+      "days": "Days 31–60",
+      "theme": "Actively pursue 3 more letting agents and keep the rewire enquiry pipeline moving",
+      "actions": [
+        {
+          "action": "Contact each of the 4 current letting agents — by phone or in person on a job visit — and ask one question: 'Is there another local agent you think would value the same arrangement on EICRs?' Note every name they give. Budget 10 to 15 minutes per agent: 4 agents is 1 hour at most. Done when all 4 have been asked and any agent names are written down.",
+          "hours": 1,
+          "channel": "letting agents' contractor lists",
+          "depends_on": ""
+        },
+        {
+          "action": "Write a one-page outreach letter to send to the named agents from the referral asks above, plus any local letting agents not currently on the books. Structure: one sentence on who you are and where you work; one sentence on what the EICR service delivers (photographs, plain-English report, certificate lodged the same week); the volume rate of £140 per certificate, which is taken directly from D1; an offer to take a trial job or meet for 15 minutes. Write once — print or email to every agent on the list. Read it aloud before sending: if any sentence sounds like a brochure rather than a straight conversation, rewrite it. Done when the letter passes the read-aloud test.",
+          "hours": 1.5,
+          "channel": "letting agents' contractor lists",
+          "depends_on": "Contact each of the 4 current letting agents and ask for referrals"
+        },
+        {
+          "action": "Send or hand-deliver the outreach letter to each agent on the list. Follow every delivery with one phone call within 5 working days to check it arrived and ask if they want to talk. Cap the total list at the number of follow-up calls you can make in one week — do not send more letters than that. Done when every letter has been sent and every follow-up call has been made or attempted once.",
+          "hours": 1,
+          "channel": "letting agents' contractor lists",
+          "depends_on": "Write the one-page letting agent outreach letter"
+        },
+        {
+          "action": "After completing each rewire or large fuse board job this phase, ask the customer in person to leave a Google review. Say it plainly: 'We rely on Google reviews for new work — if you search Frayne Electrical Ossett it should come straight up. Takes about a minute.' One ask per job, nothing more. Google reviews past 50 already proved they move the phone (F4); this keeps that number climbing without spending anything.",
+          "hours": 0.5,
+          "channel": "Google search",
+          "depends_on": ""
+        },
+        {
+          "action": "Post two more before-and-after fuse board or rewire photos in local Facebook groups — Ossett Community, Wakefield Recommendations, or any active local recommendations group in the Wakefield area. One post per fortnight. No boosting. Reply to every comment and direct message the same day. Done when both posts are live.",
+          "hours": 1,
+          "channel": "FB groups",
+          "depends_on": ""
+        }
+      ]
+    },
+    {
+      "days": "Days 61–90",
+      "theme": "Convert letting agent conversations into signed agreements and rewire enquiries into booked rewires",
+      "actions": [
+        {
+          "action": "Follow up by phone with every agent who received a letter in Phase 2 but has not replied. One call each, capped at 10 minutes. Goal is a yes to a conversation, an agreement to send a trial job, or a clear no. Any agent who does not respond after this second contact comes off the active list — the hours are needed elsewhere. Done when every outstanding agent has been called and logged as active or removed.",
+          "hours": 1,
+          "channel": "letting agents' contractor lists",
+          "depends_on": "Send or hand-deliver the outreach letter and make follow-up calls"
+        },
+        {
+          "action": "Update the written rewire quote template to include three items as named, stated deliverables — not verbal additions on the day: (1) the 'what can honestly wait' section listed alongside the photographs and written report; (2) a line confirming that the £165 Home Safety Check fee is deducted from the rewire price if the rewire is booked within 60 days of the report being issued, with the £165 figure taken directly from D1; (3) the 6-year workmanship guarantee, written and signed on the quote, which Dan already uses per D4. Assumes a written quote template already exists — if quotes are currently verbal or sent by text, write a one-page template this week. Done when the updated template is used on the next rewire quote.",
+          "hours": 1,
+          "channel": "local/offline",
+          "depends_on": ""
+        },
+        {
+          "action": "Post two more before-and-after photos in local Facebook groups, maintaining the fortnightly rhythm from earlier phases. By Day 90 there will be six posts across the 90 days. If an earlier post generated significant comments or shares, use the same job for a follow-up — what the customer said, or how long the job took — rather than creating new content from scratch. Done when both posts are live.",
+          "hours": 1,
+          "channel": "FB groups",
+          "depends_on": ""
+        },
+        {
+          "action": "Review the EICR Renewal Tracker sheet. Using old job sheets, invoices, or memory, identify past customers whose five-year EICR renewal date falls within the next 12 months and add them to the sheet. No contact is needed yet — the goal this phase is a populated list so those renewals do not go to whoever appears on Google first when the time comes. Done when the sheet has been reviewed and all identifiable past customers with upcoming renewals are logged.",
+          "hours": 0.5,
+          "channel": "local/offline",
+          "depends_on": "Set up the EICR Renewal Tracker Google Sheet in Phase 1"
+        }
+      ]
+    }
+  ],
+  "channel_priorities": [
+    "Letting agents' contractor lists — referrals from the existing 4 agents are the fastest route to the 3 new agents in the north star; this channel already produced the current letting agent base (F4) and costs nothing to activate beyond a phone call",
+    "Google search — reviews past 50 already proved they move the phone (F4); the GBP description rewrite and ongoing review asks protect and build on that traction at zero cost",
+    "FB groups — before-and-after fuse board photos are the only organic content proven to get shared in local groups (F4); posts go directly into Ossett Community and Wakefield Recommendations, not only the Frayne Electrical page",
+    "Local/offline — neighbours seeing the van outside during a full rewire week already generate enquiries without any additional action (F4); every rewire booked is a passive advertisement on that street for the duration of the job"
+  ],
+  "do_not_do": [
+    "No leaflet drops: £600 on 5,000 leaflets across Ossett and Horbury produced one call from a plumber asking who did the printing (F3). The format does not convert for this trade in this area and the entire G3 budget would be gone in a single run.",
+    "No paid social boosts: £40 boosting a Facebook post produced zero jobs and likes from accounts outside the coverage area entirely (F3). Organic posts in the right local groups already get shared without any spend — boosting adds cost without adding the right audience.",
+    "No new advertising channels during this 90-day window: Google, local Facebook groups, and direct letting agent outreach all have headroom that has not yet been used; introducing a new channel such as Checkatrade, Rated People, or print advertising spends hours on variables that cannot be measured against the north-star targets before September."
+  ],
+  "weekly_hours_total": 3.5
+}
