@@ -72,6 +72,21 @@ export interface S10Result {
   assembled_at: string;
 }
 
+export type SignoffDecision = 'approved' | 'sent_back';
+
+/** The human QA gate's recorded verdict on an assembled pack (LS-19). */
+export interface Signoff {
+  decision: SignoffDecision;
+  /** Who signed off (defaults to the founder). */
+  by: string;
+  at: string;
+  run_id: string;
+  /** On approval: every QA flag the founder saw and accepted (audit trail). */
+  acknowledged_flags?: string[];
+  /** On send-back: which stages to redo and the strategist note that drives the re-run. */
+  send_back?: { stages: string[]; notes: string };
+}
+
 export interface RunManifest {
   run_id: string;
   /** Fixture name or input path this run was fed from. */

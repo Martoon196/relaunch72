@@ -9,7 +9,8 @@
     "test": "node --import tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "render": "tsx src/docs/cli.ts",
-    "intake:build": "tsx src/intake/build-form.ts"
+    "intake:build": "tsx src/intake/build-form.ts",
+    "signoff": "tsx src/signoff/cli.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
