@@ -25,13 +25,15 @@ import { BUNDLE_NAME, deliverableName } from '../lexicon.js';
 /**
  * Compliance line rendered on every delivered document and the portal page
  * (hard rule #5; Offer Spec: "No income/outcome guarantees — compliance +
- * honesty"). DRAFT v0 — founder ratifies exact wording at LS-15 (doc
- * templates) before anything ships to a real customer.
+ * honesty"). Ratified by the founder (2026-07-06): conservative, covers the
+ * three bases that matter — marketing material not advice, no outcome
+ * guarantee, customer owns the accuracy/legality of what they publish.
  */
 export const COMPLIANCE_LINE =
-  'This pack is marketing material prepared from information you provided. It contains no promise of revenue, ' +
-  'results or outcomes — what you earn depends on your market, your offer and your follow-through. ' +
-  'Review everything before publishing; you are responsible for claims made in your own name.';
+  'This document is marketing material prepared by Relaunch72 from information you provided. It is not legal, ' +
+  'financial or professional advice, and it contains no guarantee of revenue, results or outcomes — what you ' +
+  'achieve depends on your market, your offer and your own follow-through. Before you publish anything, review ' +
+  'it and make sure any claim made in your name is accurate, substantiated and lawful; that responsibility is yours.';
 
 /** The same voice scope each stage's own QA used (D-003/D-015/D-018). */
 const STAGE_SCAN_OPTS: Record<string, BannedScanOpts> = {
