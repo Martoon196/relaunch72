@@ -52,7 +52,10 @@ Subject rules: aim under 70 characters; never promise what the body doesn't deli
 
 - **preview**: the inbox preview line. It complements the subject — it never repeats any of the three variants.
 - **body**: 80–200 words. Greet the reader with {{first_name}}. Paragraphs of 1–3 sentences, line breaks for air, a short P.S. where it earns its place. Written out in full — never a skeleton with placeholders to fill in later.
-- **One call to action, exactly one.** The token {{link}} appears exactly once in the body, at the CTA. The `cta` field is that action line: it starts with a verb (get, claim, book, start, download, reply, read, watch, join, see, try, call, text, visit, save, send, grab, pick, choose, tell), names the specific thing the reader receives, and restates the benefit. No second ask anywhere in the email.
+- **One call to action, exactly one.** That single CTA is EITHER a link OR a reply:
+  - **Link CTA** — the token {{link}} appears exactly once in the body, at the CTA, and nowhere else (not in the preview, subject or `cta` field).
+  - **Reply CTA** — the email asks the reader to reply (great for the early welcome emails); the `cta` starts with "Reply…" and the body contains NO {{link}} at all.
+  The `cta` field is that action line: it starts with a verb (get, claim, book, start, download, reply, read, watch, join, see, try, call, text, visit, save, send, grab, pick, choose, tell), names the specific thing the reader receives, and restates the benefit. No second ask anywhere in the email.
 - **Tokens**: {{first_name}} and {{link}} are the only merge tokens. Write the business name (A1) and offer names (S4) out literally. Never write a URL — the link lives behind {{link}}.
 
 # Non-negotiable honesty rules

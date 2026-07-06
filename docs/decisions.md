@@ -305,3 +305,11 @@ for real customer words and forbids quoting objections/worries/rhetorical questi
 D-025: the whole no-invention family (numbers + quotes) is retryable; only unsupported credential
 words (proof_word_unsupported) and outcome-promise guarantees (risk_reversal_promises_outcome) stay
 FATAL, because those words have no legitimate non-fabrication use.
+
+**D-028 · S7 CTA can be a link OR a reply (not every email needs {{link}}).**
+Live trades S7 parked on s7.cta_count: 6 of 12 emails used reply-based CTAs ("Reply and tell me
+what's going on") with no {{link}} — high-engagement, deliverability-friendly, exactly right for
+welcome emails, but the check rigidly demanded one {{link}} per body. The check now accepts one CTA
+that is EITHER a {{link}} in the body OR a reply instruction (cta starts with "Reply" / body says
+"reply to this email"), never both. S7 prompt (v1.0.1) documents the two CTA modes. Retryable like
+the rest of S7's structural checks.
