@@ -60,6 +60,34 @@ test('s10Lint enforces S3 voice additions across the copy stages', () => {
   assert.ok(s10Lint(intake, out).some((i) => i.check === 's10.s3_banned_word' && i.message.includes('S8')));
 });
 
+test('s10Lint accepts a copy price S4 stated in prose (derived refund / per-session math)', () => {
+  const out = clone();
+  // A figure S4 derived and stated — a refund on a multi-session package —
+  // that is not a recommended_stack headline price. S4's own gate passed it,
+  // so the copy may restate it without tripping price_conflict.
+  const s4 = out.S4 as { pricing_moves: string[] };
+  s4.pricing_moves.push('Five sessions at £850 means the refund on the remaining three would be £4,173.');
+  const s6 = out.S6 as { home: { sections: Array<{ body: string }> } };
+  s6.home.sections[0]!.body += ' If it does not fit after session two, you get £4,173 back.';
+  assert.ok(!s10Lint(intake, out).some((i) => i.check === 's10.price_conflict'));
+});
+
+test('s10Lint still flags a copy price present in no S4 figure or intake number', () => {
+  const out = clone();
+  const s6 = out.S6 as { home: { sections: Array<{ body: string }> } };
+  s6.home.sections[0]!.body += ' Yours today for just £6,829.';
+  assert.ok(s10Lint(intake, out).some((i) => i.check === 's10.price_conflict'));
+});
+
+test('s10Lint does not flag a banned voice word used in a negated rebuttal', () => {
+  const out = clone();
+  const s3 = out.S3 as { voice: { banned_words: string[] } };
+  s3.voice.banned_words.push('transformation');
+  const s8 = out.S8 as { posts: Array<{ body: string }> };
+  s8.posts[0]!.body += " That's not a transformation — just the job done properly.";
+  assert.ok(!s10Lint(intake, out).some((i) => i.check === 's10.s3_banned_word'));
+});
+
 test('s10Lint flags a one-pager that never echoes the positioning', () => {
   const out = clone();
   const s9 = out.S9 as { snapshot: string; market: string; offer: string };

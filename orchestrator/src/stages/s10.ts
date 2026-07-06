@@ -16,7 +16,7 @@ import path from 'node:path';
 import type { Intake, QAIssue, RunManifest, S10Result } from '../types.js';
 import { normalizeText, extractNumbers } from '../util/text.js';
 import {
-  GLOBAL_BANNED_PHRASES, customerNeverWords, phraseRegex, scanBannedPhrases, walkStrings,
+  GLOBAL_BANNED_PHRASES, bannedHits, customerNeverWords, scanBannedPhrases, walkStrings,
   type BannedScanOpts,
 } from '../qa/banned.js';
 import { haystack, intakeNumberSet, tokensOf } from '../qa/checks.js';
@@ -123,15 +123,12 @@ export function s10Lint(intake: Intake, outputs: Record<string, unknown>): QAIss
       .filter((w) => w.length > 1 && !alreadyCovered.has(w));
     for (const stage of ['S6', 'S7', 'S8']) {
       if (!(stage in outputs)) continue;
-      for (const phrase of extras) {
-        const re = phraseRegex(phrase);
-        for (const [p, text] of walkStrings(outputs[stage], '')) {
-          if (re.test(stripQuoted(normalizeText(text)))) {
-            issues.push({
-              check: 's10.s3_banned_word',
-              message: `${stage}.${p}: contains "${phrase}", which S3's voice guide bans — the voice list binds every copy deliverable`,
-            });
-          }
+      for (const [p, text] of walkStrings(outputs[stage], '')) {
+        for (const phrase of bannedHits(text, extras, true)) {
+          issues.push({
+            check: 's10.s3_banned_word',
+            message: `${stage}.${p}: contains "${phrase}", which S3's voice guide bans — the voice list binds every copy deliverable`,
+          });
         }
       }
     }
@@ -142,9 +139,22 @@ export function s10Lint(intake: Intake, outputs: Record<string, unknown>): QAIss
   // states. S5/S9 are excluded — their own QA permits visible B2/B3
   // arithmetic, which this scan cannot distinguish from a rogue price.
   if (s4) {
+    // S4-produced currency figures — a refund on a multi-session package
+    // (£1,800 over six sessions ⇒ £1,200 for the four remaining), a per-session
+    // rate, a payment-plan instalment. S4 stated these and its own no-invention
+    // gate passed them, so they are grounded prices the copy legitimately
+    // restates, not rogue numbers. Only £-tagged S4 figures count, so an
+    // incidental "nine years" in S4 prose never launders a bad price in.
+    const s4CurrencyFigures: number[] = [];
+    for (const [, text] of walkStrings(outputs.S4, '')) {
+      for (const n of extractNumbers(normalizeText(text))) {
+        if (/[£$€]\s*$/.test(n.before)) s4CurrencyFigures.push(n.value);
+      }
+    }
     const legalPrices = new Set<number>([
       ...s4.recommended_stack.map((i) => i.price),
       ...intakeNumberSet(haystack(intake, ['B1', 'B2', 'B3', 'B6', 'D1', 'D2', 'D3', 'G1', 'G3'])),
+      ...s4CurrencyFigures,
     ]);
     for (const stage of ['S6', 'S7', 'S8']) {
       if (!(stage in outputs)) continue;

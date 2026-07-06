@@ -125,40 +125,57 @@ export interface BannedScanOpts {
   excludePathPrefixes?: string[];
 }
 
+// A hit immediately preceded by a negator is a rebuttal, not the cliché —
+// "a scared dog isn't naughty or stubborn" is the exact on-brand framing a
+// pet-calm business exists to make, even though it bans 'naughty'/'stubborn';
+// "that's not a transformation" is a coach actively distancing from the hustle
+// word they banned. A negator anywhere earlier in the same clause (no clause
+// punctuation between) suppresses the hit, so "isn't being naughty or stubborn"
+// clears BOTH words, not just the one right after the negator.
+export const NEGATOR_BEFORE = /\b(?:not|never|no|isn'?t|aren'?t|wasn'?t|weren'?t|won'?t|don'?t|doesn'?t|didn'?t|without|avoid)\b[^.?!;:]{0,30}$/i;
+
+/**
+ * Return the phrases from `phrases` that appear in `text` as a real use — a
+ * word-boundary match (phraseRegex) that is NOT a negated rebuttal. Quoted
+ * spans are stripped when `stripQuoted` so faithfully quoting a customer who
+ * said a banned word is exempt. This is the single matcher behind every
+ * voice-ban check (the global scan and the per-stage S3 voice-list bindings),
+ * so S3's model-added bans get the same negator + suffix treatment as the
+ * global list rather than a cruder substring test.
+ */
+export function bannedHits(text: string, phrases: Iterable<string>, stripQuoted = false): string[] {
+  let subject = normalizeText(text);
+  if (stripQuoted) subject = subject.replace(/"[^"]*"/g, ' ');
+  const hits: string[] = [];
+  for (const phrase of phrases) {
+    const g = new RegExp(phraseRegex(phrase).source, 'ig');
+    let m: RegExpExecArray | null;
+    while ((m = g.exec(subject)) !== null) {
+      if (NEGATOR_BEFORE.test(subject.slice(Math.max(0, m.index - 24), m.index))) continue;
+      hits.push(phrase);
+      break; // one hit per phrase per field is enough
+    }
+  }
+  return hits;
+}
+
 export function scanBannedPhrases(output: unknown, intake: Intake, opts: BannedScanOpts = {}): QAIssue[] {
   const issues: QAIssue[] = [];
   const banned = [
     ...GLOBAL_BANNED_PHRASES,
     ...(opts.includeCustomerWords === false ? [] : customerNeverWords(intake)),
   ];
-  const regexes = banned.map((p) => [p, phraseRegex(p)] as const);
   const excluded = opts.excludePathPrefixes ?? [];
-
-  // A hit immediately preceded by a negator is a rebuttal, not the cliché —
-  // "a scared dog isn't naughty or stubborn" is the exact on-brand framing a
-  // pet-calm business exists to make, even though it bans 'naughty'/'stubborn'.
-  // A negator anywhere earlier in the same clause (no clause punctuation
-  // between) suppresses the hit, so "isn't being naughty or stubborn" clears
-  // BOTH words, not just the one right after the negator.
-  const NEGATOR_BEFORE = /\b(?:not|never|no|isn'?t|aren'?t|wasn'?t|weren'?t|won'?t|don'?t|doesn'?t|didn'?t|without|avoid)\b[^.?!;:]{0,30}$/i;
 
   for (const [path, text] of walkStrings(output, '')) {
     if (excluded.some((prefix) => path === prefix || path.startsWith(`${prefix}[`) || path.startsWith(`${prefix}.`))) {
       continue;
     }
-    let subject = normalizeText(text);
-    if (opts.stripQuotedText) subject = subject.replace(/"[^"]*"/g, ' ');
-    for (const [phrase, re] of regexes) {
-      const g = new RegExp(re.source, 'ig');
-      let m: RegExpExecArray | null;
-      while ((m = g.exec(subject)) !== null) {
-        if (NEGATOR_BEFORE.test(subject.slice(Math.max(0, m.index - 24), m.index))) continue;
-        issues.push({
-          check: 'banned_phrase',
-          message: `banned phrase "${phrase}" found at ${path} — rewrite without it (customer quotes inside double quotes are exempt; negated rebuttals are allowed)`,
-        });
-        break; // one issue per phrase per field is enough
-      }
+    for (const phrase of bannedHits(text, banned, opts.stripQuotedText === true)) {
+      issues.push({
+        check: 'banned_phrase',
+        message: `banned phrase "${phrase}" found at ${path} — rewrite without it (customer quotes inside double quotes are exempt; negated rebuttals are allowed)`,
+      });
     }
   }
   return issues;

@@ -10,7 +10,7 @@
 import type { Intake, QAIssue } from '../types.js';
 import { SCHWARTZ_AWARENESS_STAGES } from '../intake/spec.js';
 import { extractNumbers, extractQuotedSpans, normalizeText, wordCount } from '../util/text.js';
-import { customerMustWords, customerNeverWords, GLOBAL_BANNED_PHRASES, phraseRegex, scanBannedPhrases, walkStrings } from './banned.js';
+import { bannedHits, customerMustWords, customerNeverWords, GLOBAL_BANNED_PHRASES, phraseRegex, scanBannedPhrases, walkStrings } from './banned.js';
 
 export const S1_CATEGORIES = [
   'visibility',
@@ -1330,12 +1330,9 @@ export function qaS7(output: unknown, intake: Intake, prior: Record<string, unkn
   const s3Extra = (s3?.voice.banned_words ?? [])
     .map((w) => normalizeText(w).toLowerCase())
     .filter((w) => w.length > 1 && !alreadyCovered.has(w));
-  for (const phrase of s3Extra) {
-    const re = phraseRegex(phrase);
-    for (const [path, text] of walkStrings(output, '')) {
-      if (re.test(stripQuoted(normalizeText(text)))) {
-        issues.push({ check: 's7.s3_banned_word', message: `S3 voice.banned_words entry "${phrase}" found at ${path} — the voice guide binds every email` });
-      }
+  for (const [path, text] of walkStrings(output, '')) {
+    for (const phrase of bannedHits(text, s3Extra, true)) {
+      issues.push({ check: 's7.s3_banned_word', message: `S3 voice.banned_words entry "${phrase}" found at ${path} — the voice guide binds every email` });
     }
   }
 
@@ -1595,6 +1592,24 @@ export function qaS8(output: unknown, intake: Intake, prior: Record<string, unkn
 
   // Voice-bound copy stage (S3+): H3 never-words apply; quoted C2 material exempt.
   issues.push(...scanBannedPhrases(output, intake, { includeCustomerWords: true, stripQuotedText: true }));
+
+  // S3's banned list may carry voice-specific additions beyond global+H3 (the
+  // coach who bans "transformation"/"scale"). The 30-post pack must obey the
+  // whole list too — mirrors qaS7's s3_banned_word so S8 gets a retryable
+  // in-stage catch rather than only tripping the terminal S10 lint.
+  const s3 = prior.S3 as S3Output | undefined;
+  const s8Covered = new Set([
+    ...GLOBAL_BANNED_PHRASES.map((p) => p.toLowerCase()),
+    ...customerNeverWords(intake),
+  ]);
+  const s8Extra = (s3?.voice.banned_words ?? [])
+    .map((w) => normalizeText(w).toLowerCase())
+    .filter((w) => w.length > 1 && !s8Covered.has(w));
+  for (const [path, text] of walkStrings(output, '')) {
+    for (const phrase of bannedHits(text, s8Extra, true)) {
+      issues.push({ check: 's8.s3_banned_word', message: `S3 voice.banned_words entry "${phrase}" found at ${path} — the voice guide binds every post` });
+    }
+  }
   return issues;
 }
 

@@ -165,6 +165,22 @@ test('qaS8 fails a month where one pillar dominates', async () => {
   assert.ok(issues.some((i) => i.check === 's8.pillar_distribution'));
 });
 
+test('qaS8 enforces S3 voice-list additions across the 30 posts (retryable)', async () => {
+  const out = (await mockOutput('S8')) as unknown as S8Shape;
+  const localPrior = JSON.parse(JSON.stringify(prior)) as Record<string, unknown>;
+  (localPrior.S3 as { voice: { banned_words: string[] } }).voice.banned_words.push('synergy');
+  out.posts[0]!.body += ' Pure synergy across the whole team.';
+  assert.ok(qaS8(out, intake, localPrior).some((i) => i.check === 's8.s3_banned_word'));
+});
+
+test('qaS8 does not flag an S3 voice word used in a negated rebuttal', async () => {
+  const out = (await mockOutput('S8')) as unknown as S8Shape;
+  const localPrior = JSON.parse(JSON.stringify(prior)) as Record<string, unknown>;
+  (localPrior.S3 as { voice: { banned_words: string[] } }).voice.banned_words.push('transformation');
+  out.posts[0]!.body += " That's not a transformation, just the job done properly.";
+  assert.ok(!qaS8(out, intake, localPrior).some((i) => i.check === 's8.s3_banned_word'));
+});
+
 test('qaS8 flags invented stats (retryable) and fabricated quotes (fatal)', async () => {
   const out = (await mockOutput('S8')) as unknown as S8Shape;
   out.posts[0]!.body += ' Over 5,000 jobs completed.';

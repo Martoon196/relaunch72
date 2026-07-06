@@ -321,3 +321,30 @@ posts than a Facebook feed, and 8/30 selling posts (27%) is normal for a busines
 model held these choices across two retries. Relaxed: the two-platform floor is now 9 (≈30%, never
 starve one) and the offer cap is 8 (still "mostly value, not a month of selling"). S8 prompt → v1.0.1
 with matching guidance and default mix. The ≥4-per-lane and ≤9-per-lane balance stays.
+
+**D-030 · s10.price_conflict recognises S4-derived currency figures (not just headline prices).**
+Live coach S10 raised 3× price_conflict on £1,200 in the guarantee copy (S6 sales page, S7 promo
+emails). It was NOT a rogue price: the intake states the refund policy verbatim (D4 — "I refund
+everything except those two"), S4 designed it into risk_reversal_options with the arithmetic shown
+("Six sessions at £1,800 means £300 per session; four remaining is £1,200 returned"), and S6/S7
+carry it forward showing the maths. The per-stage S6/S7 number gates (inventedNumbers, which allows
+visible arithmetic + prior figures) correctly passed it; only the stricter s10 currency scan, whose
+legal set was just recommended_stack headline prices, flagged it. Fix: the legal-price set now also
+includes every £-tagged figure S4 stated in its own prose (refunds, per-session rates, payment-plan
+instalments) — S4's no-invention gate already validated those, so a currency figure S4 produced is a
+grounded price the copy may restate, not an invention. Only £-tagged S4 figures count, so an
+incidental "nine years" in S4 prose can never launder a bad price into the copy. A price present in
+no S4 figure and no intake number still flags.
+
+**D-031 · qaS8 gains the s3_banned_word check qaS7 already had; voice-ban checks honour negation.**
+Live coach S10 also raised 2× s3_banned_word ("transformation", "scale") on S8 posts. Two findings:
+(1) qaS7 enforces S3's model-added voice bans per-stage (s7.s3_banned_word) but qaS8 did NOT — the
+30-post pack, the highest-volume copy deliverable, only met S3's extra bans at the terminal, non-
+retryable S10 lint. Added s8.s3_banned_word (retryable) so S8 gets an in-stage critique-retry to
+rewrite, mirroring S7. (2) "transformation" was used in a negated rebuttal ("That's not a
+transformation — just the job done properly"), the coach actively distancing from the hustle word
+they banned — exactly the on-brand framing scanBannedPhrases already exempts for the global/H3 list
+via NEGATOR_BEFORE. The three s3_banned_word sites (s7, new s8, s10) previously used a cruder
+phraseRegex.test with no negation handling; all three now route through a single shared matcher
+(bannedHits) so voice-list bans get the same negator + suffix treatment as the global list. "scale"
+in "engineers at scale" is un-negated and correctly still flags — now caught retryably in S8.
