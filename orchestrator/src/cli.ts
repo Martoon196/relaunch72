@@ -24,6 +24,7 @@ import { MockClient } from './llm/mock.js';
 interface CliArgs {
   fixture?: string;
   input?: string;
+  resume?: string;
   through: string;
   mock: boolean;
 }
@@ -34,16 +35,17 @@ function parseArgs(argv: string[]): CliArgs {
     const a = argv[i];
     if (a === '--fixture') args.fixture = argv[++i];
     else if (a === '--input') args.input = argv[++i];
+    else if (a === '--resume') args.resume = argv[++i];
     else if (a === '--through') args.through = (argv[++i] ?? '').toUpperCase();
     else if (a === '--mock') args.mock = true;
     else if (a === '--help' || a === '-h') {
-      console.log('Usage: npm run pipeline -- --fixture <trades|coach|ecom> [--through S0…S9, default S9] [--mock]');
+      console.log('Usage: npm run pipeline -- (--fixture <trades|coach|ecom> | --resume runs/<id>) [--through S0…S9, default S9] [--mock]');
       process.exit(0);
     } else {
       throw new Error(`Unknown argument: ${a}`);
     }
   }
-  if (!args.fixture && !args.input) throw new Error('Provide --fixture <name> or --input <path.json>');
+  if (!args.fixture && !args.input && !args.resume) throw new Error('Provide --fixture <name>, --input <path.json>, or --resume <run dir>');
   if (args.fixture && args.input) throw new Error('Use either --fixture or --input, not both');
   if (!['S0', ...STAGE_ORDER].includes(args.through)) {
     throw new Error(`--through must be one of S0, ${STAGE_ORDER.join(', ')}`);
@@ -78,39 +80,64 @@ function printStageLine(manifest: RunManifest): void {
 
 async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
-  const { intake, source } = loadIntake(args);
 
-  const { runDir, manifest } = createRun(source, args.mock ? 'mock' : 'live', args.through);
-  fs.writeFileSync(path.join(runDir, 'intake.json'), JSON.stringify(intake, null, 2), 'utf8');
-  console.log(`Run ${manifest.run_id}`);
-  console.log(`  dir: ${runDir}`);
+  // ── Resume: reuse a parked run's dir, intake and already-passed stages ──
+  const prior: Record<string, unknown> = {};
+  let runDir: string;
+  let manifest: RunManifest;
+  let intake: Intake;
 
-  // ── S0 · intake QA gate — nothing runs downstream until accepted ────────
-  const s0 = runS0(intake);
-  manifest.s0 = s0;
-  fs.writeFileSync(path.join(runDir, 's0.json'), JSON.stringify(s0, null, 2), 'utf8');
-  console.log(`  S0  ${s0.accepted ? 'ACCEPTED' : 'REJECTED → nudge'} (${s0.issues.length} issue${s0.issues.length === 1 ? '' : 's'})`);
-  if (!s0.accepted) {
-    for (const i of s0.issues) console.log(`      · ${i.field}: ${i.reason}`);
-    manifest.status = 'nudge_required';
-    manifest.finished_at = new Date().toISOString();
-    writeManifest(runDir, manifest);
-    return 2;
-  }
-  if (args.through === 'S0') {
-    manifest.status = 'completed';
-    manifest.finished_at = new Date().toISOString();
-    writeManifest(runDir, manifest);
-    return 0;
+  if (args.resume) {
+    runDir = path.resolve(args.resume);
+    manifest = JSON.parse(fs.readFileSync(path.join(runDir, 'manifest.json'), 'utf8')) as RunManifest;
+    intake = JSON.parse(fs.readFileSync(path.join(runDir, 'intake.json'), 'utf8')) as Intake;
+    // Keep only the passed stage records; preload their outputs as prior.
+    manifest.stages = manifest.stages.filter((s) => s.status === 'passed' && s.output_file);
+    for (const s of manifest.stages) {
+      prior[s.stage] = JSON.parse(fs.readFileSync(path.join(runDir, s.output_file as string), 'utf8'));
+    }
+    manifest.status = 'running';
+    manifest.finished_at = null;
+    console.log(`Resuming ${manifest.run_id}`);
+    console.log(`  dir: ${runDir}`);
+    console.log(`  already passed: ${manifest.stages.map((s) => s.stage).join(', ') || '(none)'}`);
+  } else {
+    const loaded = loadIntake(args);
+    intake = loaded.intake;
+    const created = createRun(loaded.source, args.mock ? 'mock' : 'live', args.through);
+    runDir = created.runDir;
+    manifest = created.manifest;
+    fs.writeFileSync(path.join(runDir, 'intake.json'), JSON.stringify(intake, null, 2), 'utf8');
+    console.log(`Run ${manifest.run_id}`);
+    console.log(`  dir: ${runDir}`);
+
+    // ── S0 · intake QA gate — nothing runs downstream until accepted ──────
+    const s0 = runS0(intake);
+    manifest.s0 = s0;
+    fs.writeFileSync(path.join(runDir, 's0.json'), JSON.stringify(s0, null, 2), 'utf8');
+    console.log(`  S0  ${s0.accepted ? 'ACCEPTED' : 'REJECTED → nudge'} (${s0.issues.length} issue${s0.issues.length === 1 ? '' : 's'})`);
+    if (!s0.accepted) {
+      for (const i of s0.issues) console.log(`      · ${i.field}: ${i.reason}`);
+      manifest.status = 'nudge_required';
+      manifest.finished_at = new Date().toISOString();
+      writeManifest(runDir, manifest);
+      return 2;
+    }
+    if (args.through === 'S0') {
+      manifest.status = 'completed';
+      manifest.finished_at = new Date().toISOString();
+      writeManifest(runDir, manifest);
+      return 0;
+    }
   }
 
   const client: LlmClient = args.mock ? new MockClient(intake) : new AnthropicClient();
 
-  // ── S1 → S2 sequentially; a parked stage parks the whole run ────────────
-  const prior: Record<string, unknown> = {};
+  // ── S1 → S9 sequentially; a parked stage parks the whole run ────────────
   for (const stageId of STAGE_ORDER) {
     const def = STAGES[stageId];
     if (!def) throw new Error(`No stage definition for ${stageId}`);
+    if (prior[stageId]) continue; // resume: already passed, skip
     console.log(`  ${stageId}  running (${def.name})…`);
     const { record, output } = await runStage(def, intake, prior, { runDir, client });
     manifest.stages.push(record);

@@ -90,7 +90,7 @@ export const STAGES: Record<string, StageDef> = {
     priorStages: ['S2', 'S3', 'S4'],
     schema: S6_SCHEMA,
     qa: (output, intake, prior) => qaS6(output, intake, prior),
-    maxTokens: 32000, // three pages of copy — the largest text deliverable so far
+    maxTokens: 64000, // three pages of copy — adaptive thinking shares the budget
   },
   S7: {
     id: 'S7',
@@ -100,7 +100,7 @@ export const STAGES: Record<string, StageDef> = {
     priorStages: ['S2', 'S3', 'S4'],
     schema: S7_SCHEMA,
     qa: (output, intake, prior) => qaS7(output, intake, prior),
-    maxTokens: 32000, // 12–13 full emails
+    maxTokens: 64000, // 12–13 full emails — adaptive thinking shares the budget
   },
   S8: {
     id: 'S8',
@@ -110,7 +110,7 @@ export const STAGES: Record<string, StageDef> = {
     priorStages: ['S2', 'S3', 'S5'],
     schema: S8_SCHEMA,
     qa: (output, intake, prior) => qaS8(output, intake, prior),
-    maxTokens: 32000, // 30 posts
+    maxTokens: 64000, // 30 posts — adaptive thinking shares the budget
   },
   S9: {
     id: 'S9',
