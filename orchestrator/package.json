@@ -8,7 +8,8 @@
     "pipeline": "tsx src/cli.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "render": "tsx src/docs/cli.ts"
+    "render": "tsx src/docs/cli.ts",
+    "intake:build": "tsx src/intake/build-form.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
