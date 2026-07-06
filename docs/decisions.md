@@ -348,3 +348,18 @@ via NEGATOR_BEFORE. The three s3_banned_word sites (s7, new s8, s10) previously 
 phraseRegex.test with no negation handling; all three now route through a single shared matcher
 (bannedHits) so voice-list bans get the same negator + suffix treatment as the global list. "scale"
 in "engineers at scale" is un-negated and correctly still flags — now caught retryably in S8.
+
+**D-032 · S5 spend recommendations must name G3 figures or speak directionally — no minted amounts.**
+Live ecom S5 parked (twice) on s5.number_invented: the plan advised "using £100 to £150 of your
+£200–500 budget" to boost a Reel. £200–500 is the real G3 budget (grounded), but £100 and £150 are
+figures the customer never stated and the model minted them as a spend sub-range. The gate is right
+to block this — hard rule #1, and the no-invention number gate deliberately can't tell a spend
+allocation from a fabricated revenue projection, so a blanket "any £ ≤ budget ceiling" allowance
+would be unsafe. The gate's arithmetic only accepts figures built from visible integer operands
+(counts ≤31 / spelled integers) × B2/B3/intake bases, so "half of £200 = £100" would still fail
+("half" is a word, 0.5 isn't a derivable multiplier). The reliable fix is behavioural: S5 prompt
+(v1.0.1) now tells the model to name the G3 budget figure itself ("your £200–500 budget") or use
+directional language ("most of your budget", "a small test spend, well under your ceiling") and never
+mint a bare new pound amount — the owner picks the exact figure, the plan picks the move. Revenue math
+from B2/B3 still shows its arithmetic inline as before. Prompt-only; no gate change. Resumed ecom from
+S5 with the fixed prompt.
