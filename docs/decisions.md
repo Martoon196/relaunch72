@@ -394,3 +394,15 @@ from overpromise better than the matcher can — so the s10 strategist gate surf
 approval is the correct behaviour, not a bug. Known follow-up (logged, not rushed): qaS6 lacks the
 in-stage s3_banned_word check S7/S8 have — a real consistency gap, but fixing it well depends on the
 same negator nuance, so it waits for a considered pass rather than a time-pressured change.
+
+**D-035 · Deep Intake form built self-hosted, generated from the field spec (not Tally/Fillout).**
+LS-11 specced "Tally or Fillout." Built self-hosted instead: (1) both are third-party accounts I can't
+create without asking (hard rule #3), and the founder said to keep momentum; (2) a self-hosted form has
+zero external side-effects, no per-response cost, and full control; (3) rendering it from the canonical
+INTAKE_FIELDS spec (orchestrator/src/intake/form.ts) means the customer form and the pipeline's A1–H4
+input contract are the SAME source — they cannot drift, which a separate Tally build cannot guarantee.
+Client validation mirrors runS0 (required/conditional/min-words/option/placeholder-echo); S0 stays the
+server authority. Self-contained single HTML (npm run intake:build → site/intake/index.html), branded,
+save-and-resume, `--endpoint` for an optional webhook POST. Verified end-to-end in headless Chromium:
+a real intake validates clean and passes runS0. Founder to confirm self-hosted vs porting to Tally; the
+Stripe-gated link + webhook receiver + nudge email are Phase-5 automation, tracked separately.
