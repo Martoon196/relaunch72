@@ -379,3 +379,18 @@ subtraction path: a figure passes if a LARGER allowed operand shown in the same 
 figure, is a subset-sum of the shown parts — additive-only, can only rescue a genuine remainder, never
 a free-floating number (regression-tested both directions). Verified against the real parked S5 output
 (now clean) + 157 unit tests. Resumed ecom again.
+
+**D-034 · Ecom "instant calm" s10 flag kept as a strategist-gate item, not auto-scrubbed.**
+Ecom completed with one s10.s3_banned_word flag: "instant calm" (an S3-banned overpromise for a
+calming-kit brand) in the S6 sales page. In context it is a REBUTTAL — "…not for an owner who already
+knows that nothing that promises instant calm is going to keep that promise" — the brand naming and
+rejecting the exact overpromise it bans. Honest, on-brand copy. It flagged only because NEGATOR_BEFORE
+lists no/not/never/without but not "nothing". Deliberately NOT broadening the negator: "nothing" is
+ambiguous — "nothing that promises X keeps it" (rebuttal, suppress) vs "nothing beats X" (endorsement,
+must NOT suppress) — and NEGATOR_BEFORE is shared by every banned-word scan, so adding it risks global
+false negatives (letting a real overpromise through). For brand-defining words a business defines
+itself AGAINST, the strongest copy often names the rejected concept, and a human distinguishes rebuttal
+from overpromise better than the matcher can — so the s10 strategist gate surfacing it for founder
+approval is the correct behaviour, not a bug. Known follow-up (logged, not rushed): qaS6 lacks the
+in-stage s3_banned_word check S7/S8 have — a real consistency gap, but fixing it well depends on the
+same negator nuance, so it waits for a considered pass rather than a time-pressured change.
