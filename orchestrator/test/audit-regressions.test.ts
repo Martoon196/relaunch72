@@ -250,3 +250,16 @@ test('invented numbers are retryable, fabricated quotes/credentials/outcomes are
   o.risk_reversal_options[0] = 'We guarantee results or your money back.';
   assert.ok(qaS4(o, intake, p).some((i) => i.check === 's4.risk_reversal_promises_outcome' && i.fatal === true));
 });
+
+// ── S5 forbidden-channel: verbose ban that endorses an organic channel ──────
+test('qaS5 ignores a verbose do_not_do that names the endorsed organic channel', async () => {
+  const p = await priors();
+  const out = (await mock('S5')) as { phases: Array<{ actions: Array<{ channel: string }> }>; do_not_do: string[] };
+  out.do_not_do = ['Paid Google Ads or paid directory advertising spend: no budget should go to paid search. The free Google Business Profile organic listing is already the proven channel (F4); no paid channel has worked (F3).'];
+  out.phases[0]!.actions[0]!.channel = 'Google Business Profile';
+  assert.ok(!has(qaS5(out, intake, p), 's5.action_on_forbidden_channel'));
+  // a terse ban of the very tactic still flags
+  out.do_not_do = ['No more local magazine adverts — flopped last year.'];
+  out.phases[0]!.actions[0]!.channel = 'local magazine advert';
+  assert.ok(has(qaS5(out, intake, p), 's5.action_on_forbidden_channel'));
+});

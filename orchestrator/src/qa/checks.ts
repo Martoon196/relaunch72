@@ -904,12 +904,20 @@ export function qaS5(output: unknown, intake: Intake, prior: Record<string, unkn
     'facebook', 'instagram', 'twitter', 'tiktok', 'youtube', 'linkedin', 'google', 'group', 'social',
     'post', 'online', 'offline', 'local', 'page', 'profile', 'search', 'video', 'content', 'website',
     'site', 'reel', 'story', 'feed', 'channel', 'platform', 'account', 'listing', 'business', 'email',
-  ]);
+  ].map(stemToken));
+  // Only terse do_not_do entries are treated as channel bans. Verbose entries
+  // are explanatory paragraphs that routinely NAME the endorsed organic channel
+  // ("…the free Google Business Profile listing is the proven channel; no paid
+  // channel has worked…") — matching an action against that prose flags the very
+  // channel the plan recommends. Terse bans ("No more magazine ads") are
+  // unambiguous; long rationales are left to the human gate.
+  const terseBans = out.do_not_do.filter((d) => wordCount(d) <= 12);
   for (const phase of out.phases) {
     for (const action of phase.actions) {
-      const ct = new Set([...tokensOf(action.channel)].map(stemToken).filter((t) => !CHANNEL_GENERIC.has(t)));
+      // Filter generic platform words on the RAW token, then stem for matching.
+      const ct = new Set([...tokensOf(action.channel)].filter((t) => !CHANNEL_GENERIC.has(stemToken(t))).map(stemToken));
       if (ct.size === 0) continue;
-      const clash = out.do_not_do.find((d) => {
+      const clash = terseBans.find((d) => {
         const dTokens = new Set([...tokensOf(d)].map(stemToken));
         return [...ct].some((t) => dTokens.has(t));
       });
