@@ -1237,24 +1237,26 @@ export function qaS7(output: unknown, intake: Intake, prior: Record<string, unkn
       });
     }
 
-    // One CTA per email. That CTA is EITHER a {{link}} in the body OR a
-    // reply-to instruction (legitimate, high-engagement for welcome/nurture
-    // emails) — not both, not neither.
-    const linkCount = email.body.split('{{link}}').length - 1;
+    // One CTA per email = one action/destination. {{link}} is a single merge
+    // token (one URL), so however many times it appears in the body+cta it is
+    // still ONE destination — that's the real "one CTA" rule. The CTA is EITHER
+    // a link ({{link}} present) OR a reply instruction (no link), never both.
+    // {{link}} must not sit in the preview or a subject — those render no link.
+    const bodyLinks = email.body.split('{{link}}').length - 1;
+    const ctaLinks = email.cta.split('{{link}}').length - 1;
+    const totalLinks = bodyLinks + ctaLinks;
     const isReplyCta = /^(?:reply|hit reply|just reply)\b/i.test(email.cta.trim()) || /\breply to (?:this|the) email\b/i.test(email.body);
-    if (isReplyCta) {
-      if (linkCount >= 1) {
-        issues.push({ check: 's7.cta_count', message: `${where}: this is a reply-CTA email but the body also has a {{link}} — one CTA per email, so drop the link or switch to a link CTA` });
-      }
-    } else if (linkCount === 0) {
-      issues.push({ check: 's7.cta_count', message: `${where}: body has no {{link}} token and the CTA is not a reply — a link-CTA email needs exactly one {{link}} in the body` });
-    } else if (linkCount >= 2) {
-      issues.push({ check: 's7.cta_count', message: `${where}: body has ${linkCount} {{link}} tokens — one CTA per email, exactly` });
-    }
-    for (const [field, text] of [['preview', email.preview], ['cta', email.cta], ...email.subject_variants.map((v, i) => [`subject_variants[${i}]`, v.subject])] as Array<[string, string]>) {
+    for (const [field, text] of [['preview', email.preview], ...email.subject_variants.map((v, i) => [`subject_variants[${i}]`, v.subject])] as Array<[string, string]>) {
       if (text.includes('{{link}}')) {
-        issues.push({ check: 's7.cta_count', message: `${where}.${field}: {{link}} belongs in the body only` });
+        issues.push({ check: 's7.cta_count', message: `${where}.${field}: {{link}} belongs in the body or the cta line, never the preview or subject` });
       }
+    }
+    if (isReplyCta) {
+      if (totalLinks >= 1) {
+        issues.push({ check: 's7.cta_count', message: `${where}: this is a reply-CTA email but it also carries a {{link}} — one CTA per email, so pick reply OR link, not both` });
+      }
+    } else if (totalLinks === 0) {
+      issues.push({ check: 's7.cta_count', message: `${where}: no {{link}} and no reply CTA — a link-CTA email needs the {{link}} token in the body or the cta line` });
     }
 
     if (!S7_CTA_VERBS.test(email.cta.trim())) {

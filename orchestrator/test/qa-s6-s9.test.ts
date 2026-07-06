@@ -77,12 +77,23 @@ test('qaS7 passes a grounded email pack (via mock)', async () => {
   assert.deepEqual(qaS7(await mockOutput('S7'), intake, prior), []);
 });
 
-test('qaS7 fails a link-CTA email with zero or multiple {{link}} tokens', async () => {
+test('qaS7 fails a link-CTA email with no {{link}} at all', async () => {
   const out = (await mockOutput('S7')) as unknown as S7Shape;
   out.welcome_seq[0]!.body = out.welcome_seq[0]!.body.replace('{{link}}', 'click below'); // link-CTA, now 0 links
-  out.welcome_seq[1]!.body += '\n\n{{link}}'; // now 2 links
   const issues = qaS7(out, intake, prior);
-  assert.equal(issues.filter((i) => i.check === 's7.cta_count').length, 2);
+  assert.ok(issues.some((i) => i.check === 's7.cta_count' && i.message.includes('welcome_seq[0]')));
+});
+
+test('qaS7 accepts {{link}} in both body and cta line (one destination)', async () => {
+  const out = (await mockOutput('S7')) as unknown as S7Shape;
+  out.welcome_seq[1]!.cta = 'Book your slot at {{link}}'; // link in cta AND body = one destination
+  assert.ok(!qaS7(out, intake, prior).some((i) => i.check === 's7.cta_count' && i.message.includes('welcome_seq[1]')));
+});
+
+test('qaS7 still flags {{link}} in a subject or preview', async () => {
+  const out = (await mockOutput('S7')) as unknown as S7Shape;
+  out.welcome_seq[0]!.subject_variants[0]!.subject = 'Grab it here {{link}}';
+  assert.ok(qaS7(out, intake, prior).some((i) => i.check === 's7.cta_count' && i.message.includes('subject')));
 });
 
 test('qaS7 accepts a reply-CTA email with no {{link}}', async () => {
