@@ -217,3 +217,19 @@ test('qaS5 does not flag an organic channel a verbose do_not_do actually endorse
   out.phases[0]!.actions[0]!.channel = 'local magazine advert';
   assert.ok(has(qaS5(out, intake, p), 's5.action_on_forbidden_channel'));
 });
+
+// ── near-verbatim quotes: trailing punctuation tolerated (S1 evidence etc.) ──
+test('qaS1 accepts evidence whose quote adds a trailing period the source lacks', async () => {
+  const iv = validIntake({ F2: 'no list. keep meaning to collect emails but i never get round to it' });
+  const out = (await mock('S1')) as { scores: Array<{ category: string; evidence: string }> };
+  const fu = out.scores.find((s) => s.category === 'follow-up')!;
+  // model quotes F2 faithfully but ends the sentence with a period F2 doesn't have
+  fu.evidence = '(F2) "no list. keep meaning to collect emails but i never get round to it." That expiry re-contact is being ignored.';
+  assert.ok(!qaS1(out, iv).some((i) => i.check === 's1.evidence_not_verbatim' && i.message.includes('follow-up')));
+});
+test('qaS6 still FATALLY parks a fabricated quote even with edge tolerance', async () => {
+  const p = await priors();
+  const out = (await mock('S6')) as { about: { body: string } };
+  out.about.body += ' A client raved: "this is the best decision our whole family ever made".';
+  assert.ok(qaS6(out, intake, p).some((i) => i.check === 's6.quote_fabricated' && i.fatal === true));
+});

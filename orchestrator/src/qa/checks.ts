@@ -45,13 +45,34 @@ export function haystack(intake: Intake, fieldIds: string[]): string[] {
 const MIN_QUOTE_CHARS = 12;
 const MIN_FULL_VALUE_CHARS = 6; // quoting "14" or "850" as "evidence" is not evidence
 
-/** First double-quoted span in `text` that is an exact substring of a consumed field, or null. */
+/**
+ * Strip leading/trailing punctuation and quote marks from a quoted span. A
+ * model quoting a customer faithfully routinely adds a closing "." the source
+ * didn't have ("…never get round to it." vs F2 "…never get round to it") — the
+ * words are exact, only the sentence-final punctuation differs. Stripping the
+ * EDGES only keeps the anti-fabrication guarantee intact (internal wording must
+ * still match) while not parking an honest near-verbatim quote.
+ */
+function coreQuote(norm: string): string {
+  return norm.replace(/^["'“”‘’.,;:!?()\s—–-]+|["'“”‘’.,;:!?()\s—–-]+$/g, '');
+}
+
+/** Does a quoted span (edge-punctuation tolerant) trace to any haystack field? */
+function quoteTracesTo(span: string, fieldsLC: string[]): boolean {
+  const norm = normalizeText(span).toLowerCase();
+  const core = coreQuote(norm);
+  if (core.length < MIN_QUOTE_CHARS) return false;
+  return fieldsLC.some((f) => f.includes(norm) || f.includes(core));
+}
+
+/** First double-quoted span in `text` that is a substring of a consumed field, or null. */
 function findVerbatimSpan(text: string, fields: string[]): string | null {
   for (const span of extractQuotedSpans(text)) {
     const norm = normalizeText(span);
     if (!norm) continue;
-    const fullValueMatch = norm.length >= MIN_FULL_VALUE_CHARS && fields.some((f) => f === norm);
-    const substringMatch = norm.length >= MIN_QUOTE_CHARS && fields.some((f) => f.includes(norm));
+    const core = coreQuote(norm);
+    const fullValueMatch = norm.length >= MIN_FULL_VALUE_CHARS && fields.some((f) => f === norm || f === core);
+    const substringMatch = core.length >= MIN_QUOTE_CHARS && fields.some((f) => f.includes(norm) || f.includes(core));
     if (fullValueMatch || substringMatch) return norm;
   }
   return null;
@@ -1019,7 +1040,7 @@ export function qaS6(output: unknown, intake: Intake, prior: Record<string, unkn
     for (const span of extractQuotedSpans(text)) {
       const norm = normalizeText(span);
       if (norm.length < MIN_QUOTE_CHARS) continue; // single-word scare quotes are style, not testimony
-      if (!quoteHayLC.some((h) => h.includes(norm.toLowerCase()))) {
+      if (!quoteTracesTo(span, quoteHayLC)) {
         issues.push({
           check: 's6.quote_fabricated',
           message: `quoted passage at ${path} ("${norm.slice(0, 60)}…") is not copied from the S2 verbatims or the intake fields this stage consumes — a fabricated quotation parks the run`,
@@ -1319,7 +1340,7 @@ export function qaS7(output: unknown, intake: Intake, prior: Record<string, unkn
     for (const span of extractQuotedSpans(text)) {
       const norm = normalizeText(span);
       if (norm.length < MIN_QUOTE_CHARS) continue;
-      if (!s7HayLC.some((h) => h.includes(norm.toLowerCase()))) {
+      if (!quoteTracesTo(span, s7HayLC)) {
         issues.push({
           check: 's7.invented_quote',
           message: `quoted passage at ${path} ("${norm.slice(0, 60)}…") is not copied from S2/S3/S4, F2, A1 or the customer reviews (C2) — a fabricated testimonial or quote parks the run`,
@@ -1523,7 +1544,7 @@ export function qaS8(output: unknown, intake: Intake, prior: Record<string, unkn
       for (const span of extractQuotedSpans(text)) {
         const norm = normalizeText(span);
         if (norm.length < MIN_QUOTE_CHARS) continue;
-        if (!s8HayLC.some((h) => h.includes(norm.toLowerCase()))) {
+        if (!quoteTracesTo(span, s8HayLC)) {
           issues.push({
             check: 's8.invented_quote',
             message: `day ${post.day} ${field}: quoted passage ("${norm.slice(0, 50)}…") is not a substring of C2 or a prior-stage document — a fabricated testimonial parks the run`,

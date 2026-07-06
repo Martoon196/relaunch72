@@ -257,3 +257,12 @@ longer fatally park a run; a figure from nowhere still parks. Specific fixes:
   isn't a fabrication); S7 quote haystack includes raw C2; S7 warmup no longer reads "no list" as a
   list; S9 table figures trace to the union of sources; S9 goal accepts spelled numerals; page cap
   reconciled to 575. All 34 encoded as both-directions regression tests. 142 tests passing.
+
+**D-024 · Quote checks tolerate edge punctuation (near-verbatim fix).**
+Live trades S1 parked when the model quoted F2 faithfully but added a sentence-final "." the source
+lacks ("…never get round to it." vs "…never get round to it") — the byte-exact substring test
+rejected an honest quote. `findVerbatimSpan` and the FATAL quote-provenance checks (s6/s7/s8
+invented_quote, quote_fabricated) now strip leading/trailing punctuation and quote marks from a
+span before matching. Internal wording must still match exactly, so a fabricated testimonial still
+parks — only edge punctuation drift is forgiven. This fixes the whole quote-check family (S1
+evidence, S3 differentiator, S4 citations, S6–S8 provenance) in one place.
