@@ -212,6 +212,18 @@ function inventedNumbers(
     }
     // Visible addition (arithmetic-base stages only): "£58 + £119 + £24 = £201".
     if (!ok && arithmeticBases && subsetSumHits(value)) ok = true;
+    // Visible subtraction (arithmetic-base stages only): "£165 total − £58 paid
+    // = £107 left". Allowed only when a LARGER operand M that is itself allowed
+    // is shown in the string and (M − value) is a subset-sum of the shown parts
+    // — i.e. the remainder of a real total, not a free-floating figure.
+    if (!ok && arithmeticBases) {
+      const isAllowedOperand = (v: number) =>
+        v <= SMALL_NUMBER_MAX || intakeNumbers.has(v) || (arithmeticBases?.has(v) ?? false);
+      for (const m of numbers) {
+        if (m.percent || m.value <= value || !isAllowedOperand(m.value)) continue;
+        if (subsetSumHits(m.value - value)) { ok = true; break; }
+      }
+    }
     if (!ok) bad.push(value);
   }
   return bad;
@@ -967,6 +979,11 @@ export function qaS5(output: unknown, intake: Intake, prior: Record<string, unkn
   const s5Numbers = new Set<number>([
     ...allIntakeNumbers(intake),
     ...['S1', 'S2', 'S3', 'S4'].flatMap((s) => numericLeaves(prior[s])),
+    // Numbers a prior stage stated in its PROSE, not just its numeric fields —
+    // S4 computes upsell math in text ("she pays £107 (£165 − £58)"), and the
+    // plan legitimately restates it. Without this, an S4-computed figure reads
+    // as invented. Mirrors qaS9's number union (S6–S9 already do this).
+    ...['S1', 'S2', 'S3', 'S4'].flatMap((s) => [...intakeNumberSet([normalizeText(fieldAsString(prior[s]))])]),
   ]);
   const s5b2 = intakeNumber(intake, 'B2');
   const s5b3 = intakeNumber(intake, 'B3');

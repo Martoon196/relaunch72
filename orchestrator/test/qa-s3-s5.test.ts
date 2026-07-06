@@ -101,6 +101,38 @@ test('qaS5 fails a channel priority sourced from neither C7 nor F4/F1', async ()
   assert.ok(qaS5(out, intake).some((i) => i.check === 's5.channel_priority_unsourced'));
 });
 
+test('qaS5 accepts a figure a prior stage stated in its prose, but flags a bare invented one', async () => {
+  const prior = { S4: await mockOutput('S4') };
+  // A number S4 computes in prose (not a numeric field) — the plan may restate it.
+  (prior.S4 as { category_note: string }).category_note += ' Net of the deposit she pays £777 in total.';
+  const grounded = (await mockOutput('S5')) as { phases: Array<{ actions: Array<{ action: string }> }> };
+  grounded.phases[0]!.actions[0]!.action += ' Reference the £777 balance from the offer stack.';
+  assert.ok(!qaS5(grounded, intake, prior).some((i) => i.check === 's5.number_invented' && i.message.includes('777')));
+
+  const invented = (await mockOutput('S5')) as { phases: Array<{ actions: Array<{ action: string }> }> };
+  invented.phases[0]!.actions[0]!.action += ' Expect £6,912 in new revenue this month.';
+  assert.ok(qaS5(invented, intake, prior).some((i) => i.check === 's5.number_invented' && i.message.includes('6,912')));
+});
+
+test('qaS5 accepts a visible subtraction remainder but flags the same figure bare', async () => {
+  const prior = { S4: await mockOutput('S4') };
+  const s4 = prior.S4 as { recommended_stack: Array<{ price: number }> };
+  const hi = s4.recommended_stack[1]!.price;
+  const lo = s4.recommended_stack[0]!.price;
+  const diff = hi - lo;
+  const d = diff.toLocaleString('en-GB');
+
+  // Shown as a real remainder of a total → passes.
+  const shown = (await mockOutput('S5')) as { phases: Array<{ actions: Array<{ action: string }> }> };
+  shown.phases[0]!.actions[0]!.action += ` Your £${hi} plan minus the £${lo} you already paid leaves £${diff}.`;
+  assert.ok(!qaS5(shown, intake, prior).some((i) => i.check === 's5.number_invented' && i.message.includes(d)));
+
+  // The same figure free-floating, no operands to derive it → flagged.
+  const bare = (await mockOutput('S5')) as { phases: Array<{ actions: Array<{ action: string }> }> };
+  bare.phases[0]!.actions[0]!.action += ` Set aside £${diff} this month.`;
+  assert.ok(qaS5(bare, intake, prior).some((i) => i.check === 's5.number_invented' && i.message.includes(d)));
+});
+
 // ── Rebase additions (prompts v1.0.0): voice guardrail, contrast, ladders,
 // and the fatal no-invention checks on the copy stages ──────────────────────
 

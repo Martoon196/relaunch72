@@ -363,3 +363,19 @@ directional language ("most of your budget", "a small test spend, well under you
 mint a bare new pound amount — the owner picks the exact figure, the plan picks the move. Revenue math
 from B2/B3 still shows its arithmetic inline as before. Prompt-only; no gate change. Resumed ecom from
 S5 with the fixed prompt.
+
+**D-033 · S5 number gate: include prior-stage PROSE figures + accept visible subtraction.**
+Ecom S5 (resumed with D-032's prompt fix — the spend behaviour was now correct, "put most of your
+monthly budget behind…") parked again, this time on the figure £107 in a coat→kit upsell email:
+"the bed and feeder bring the total to £165, so there is £107 left to complete the kit." £107 is
+grounded twice over: S4 explicitly computed it ("she pays £107 (£165 − £58)"), and it is visible
+subtraction of two real prices (£165 Calm Kit − £58 Settle Coat, both from D1/D3). Two gate gaps:
+(1) s5Numbers only pulled prior stages' NUMERIC fields (numericLeaves), not figures a prior stage
+stated in its PROSE — so S4's computed £107 was invisible to it. Fixed by also unioning
+intakeNumberSet over each prior stage's stringified text, exactly as qaS9 already did (S6–S9 had this;
+S5 was missed). (2) inventedNumbers' arithmetic did ×, ÷ and additive subset-sum but not subtraction,
+so "£165 − £58 = £107 left" (a real remainder shown in the copy) read as invented. Added a visible-
+subtraction path: a figure passes if a LARGER allowed operand shown in the same string, minus the
+figure, is a subset-sum of the shown parts — additive-only, can only rescue a genuine remainder, never
+a free-floating number (regression-tested both directions). Verified against the real parked S5 output
+(now clean) + 157 unit tests. Resumed ecom again.
