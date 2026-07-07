@@ -16,11 +16,12 @@ import { fileURLToPath } from 'node:url';
 import type { Intake } from '../types.js';
 import { loadStripeConfig } from './config.js';
 import { fileOrderStore } from './orders.js';
-import { createApp } from './app.js';
+import { createApp, type MarketingHooks } from './app.js';
 import { makeStripe } from './stripe-client.js';
 import type { StripeLike } from './stripe.js';
 import { ensureCatalogPrices, type StripeCatalogLike } from './catalog.js';
 import type { StripeConfig } from './config.js';
+import { makeBrevo } from '../email/brevo.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ORCH_ROOT = path.resolve(HERE, '../..');
@@ -63,6 +64,23 @@ async function ensurePrices(stripe: StripeLike, cfg: StripeConfig): Promise<void
   }
 }
 
+/**
+ * Build the Brevo marketing hooks from env, or undefined if Brevo isn't set.
+ * BREVO_LIST_LEADS / BREVO_LIST_CUSTOMERS are the numeric Brevo list IDs whose
+ * automations run the nurture / onboarding sequences.
+ */
+function makeMarketing(): MarketingHooks | undefined {
+  const key = process.env.BREVO_API_KEY?.trim();
+  if (!key) return undefined;
+  const brevo = makeBrevo(key);
+  const leads = Number(process.env.BREVO_LIST_LEADS) || undefined;
+  const customers = Number(process.env.BREVO_LIST_CUSTOMERS) || undefined;
+  return {
+    onLead: (email, firstName) => brevo.upsertContact({ email, firstName, listIds: leads ? [leads] : [], attributes: { SOURCE: 'scorecard' } }),
+    onCustomer: (order) => brevo.upsertContact({ email: order.email!, listIds: customers ? [customers] : [], attributes: { TIER: order.tier, R72_STATUS: order.status } }),
+  };
+}
+
 function main(): void {
   const cfg = loadStripeConfig();
   // Start regardless of config so the host's health check passes; checkout/webhook
@@ -73,7 +91,8 @@ function main(): void {
   const stripe = cfg.secretKey ? (makeStripe(cfg.secretKey) as unknown as StripeLike) : unconfiguredStripe();
   const orders = fileOrderStore(cfg.ordersFile);
   const kickPipeline = createKick(path.join(cfg.dataDir, 'intakes'));
-  const app = createApp({ stripe, cfg, orders, kickPipeline, now: () => new Date().toISOString() });
+  const marketing = makeMarketing();
+  const app = createApp({ stripe, cfg, orders, kickPipeline, now: () => new Date().toISOString(), marketing });
   http.createServer((req, res) => { void app(req, res); }).listen(cfg.port, () => {
     const mode = !cfg.secretKey ? 'UNCONFIGURED' : cfg.liveMode ? 'LIVE ⚠️' : 'TEST';
     console.log(`Relaunch72 payments server on :${cfg.port} — ${mode} mode`);

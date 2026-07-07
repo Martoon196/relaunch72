@@ -201,3 +201,37 @@ test('CORS: an origin NOT on the allowlist gets no allow-origin header', async (
   assert.equal(r.statusCode, 200);
   assert.equal(r._headers['access-control-allow-origin'], undefined);
 });
+
+// ─── marketing (Brevo) hooks ─────────────────────────────────────────────────
+test('POST /api/subscribe calls onLead and reports synced', async () => {
+  const leads: Array<{ email: string; firstName?: string }> = [];
+  const { handler } = app({ marketing: { onLead: async (email, firstName) => { leads.push({ email, firstName }); } } });
+  const r = res();
+  await handler(req('POST', '/api/subscribe', JSON.stringify({ email: 'lead@x.com', firstName: 'Jo' })), r);
+  assert.equal(r.statusCode, 200);
+  assert.deepEqual(JSON.parse(r._body), { ok: true, synced: true });
+  assert.deepEqual(leads, [{ email: 'lead@x.com', firstName: 'Jo' }]);
+});
+
+test('POST /api/subscribe 400s a bad email and 200s (unsynced) when marketing is off', async () => {
+  const bad = res();
+  await app().handler(req('POST', '/api/subscribe', JSON.stringify({ email: 'nope' })), bad);
+  assert.equal(bad.statusCode, 400);
+
+  const off = res(); // no marketing dep configured
+  await app().handler(req('POST', '/api/subscribe', JSON.stringify({ email: 'lead@x.com' })), off);
+  assert.equal(off.statusCode, 200);
+  assert.equal(JSON.parse(off._body).synced, false);
+});
+
+test('webhook syncs a paying customer via onCustomer', async () => {
+  const customers: string[] = [];
+  const { handler } = app({ marketing: { onCustomer: async (o) => { customers.push(o.email ?? ''); } } });
+  const ev = JSON.stringify({ type: 'checkout.session.completed', data: { object: { id: 'cs_m', metadata: { tier: 'core' }, customer_details: { email: 'buyer@x.com' } } } });
+  const r = res();
+  await handler(req('POST', '/api/stripe/webhook', ev, { 'stripe-signature': 'good' }), r);
+  assert.equal(r.statusCode, 200);
+  // onCustomer is fire-and-forget; let the microtask run before asserting.
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(customers, ['buyer@x.com']);
+});

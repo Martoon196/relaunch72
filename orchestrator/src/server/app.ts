@@ -3,16 +3,25 @@
  * without a socket, a key, or the pipeline. Routes:
  *   GET  /health               — liveness + test/live mode
  *   POST /api/checkout         — { tier, bump? } → { url } (Stripe Checkout Session)
- *   POST /api/stripe/webhook   — verify signature, record the paid order
+ *   POST /api/stripe/webhook   — verify signature, record the paid order, sync customer
  *   POST /api/intake           — S0-gate a submitted intake; on accept, kick the build
+ *   POST /api/subscribe        — capture a lead (scorecard) into the Brevo nurture list
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { StripeConfig } from './config.js';
-import type { OrderStore } from './orders.js';
+import type { OrderStore, Order } from './orders.js';
 import { createCheckoutSession, verifyEvent, orderFromEvent, CheckoutError, type StripeLike } from './stripe.js';
 import { runS0 } from '../intake/s0.js';
 import type { Intake } from '../types.js';
+
+/** Optional marketing sync (Brevo). Both are no-ops when Brevo isn't configured. */
+export interface MarketingHooks {
+  /** A new lead (e.g. scorecard signup) — add to the nurture list. */
+  onLead?(email: string, firstName?: string): Promise<void>;
+  /** A new paying customer — add to the onboarding list. */
+  onCustomer?(order: Order): Promise<void>;
+}
 
 export interface AppDeps {
   stripe: StripeLike;
@@ -21,6 +30,8 @@ export interface AppDeps {
   /** Persist the accepted intake and start the pipeline; returns a run reference. */
   kickPipeline: (intake: Intake, sessionId: string | null) => string;
   now: () => string;
+  /** Optional Brevo marketing sync; absent = marketing not wired (routes still 200). */
+  marketing?: MarketingHooks;
 }
 
 function send(res: ServerResponse, code: number, body: unknown): void {
@@ -87,8 +98,27 @@ export function createApp(deps: AppDeps) {
           return send(res, 400, { error: 'invalid signature' });
         }
         const order = orderFromEvent(event, deps.now());
-        if (order) deps.orders.record(order);
+        if (order) {
+          deps.orders.record(order);
+          // Onboarding sync — fire-and-forget so a marketing hiccup never fails the
+          // webhook (Stripe would retry an error and the order's already recorded).
+          if (order.email && deps.marketing?.onCustomer) {
+            void deps.marketing.onCustomer(order).catch((e) => console.warn(`marketing onCustomer failed: ${(e as Error).message}`));
+          }
+        }
         return send(res, 200, { received: true });
+      }
+
+      if (route === 'POST /api/subscribe') {
+        const body = JSON.parse((await readBody(req)).toString() || '{}') as { email?: string; firstName?: string };
+        const email = (body.email ?? '').trim();
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return send(res, 400, { error: 'a valid email is required' });
+        let synced = false;
+        if (deps.marketing?.onLead) {
+          try { await deps.marketing.onLead(email, body.firstName?.trim() || undefined); synced = true; }
+          catch (e) { console.warn(`marketing onLead failed: ${(e as Error).message}`); }
+        }
+        return send(res, 200, { ok: true, synced });
       }
 
       if (route === 'POST /api/intake') {

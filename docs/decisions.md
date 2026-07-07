@@ -491,3 +491,17 @@ Sender/reply-to via EMAIL_FROM/EMAIL_REPLY_TO (default hello@relaunch72.com; nee
 domain before real sends work). Verified: 199 tests (4 new — field mapping, invalid-recipient refusal, fake-client
 contract), typecheck clean. Real Postmark send can only be exercised where egress allows api.postmarkapp.com + a
 token exists. Brevo marketing sync is the next piece.
+
+**D-042 · Brevo marketing sync wired — scorecard leads + paid customers into list-triggered automations.**
+Second half of #30. The nurture/onboarding *sequences* live as automations in Brevo's UI; the code's job is to
+push each contact into the right list so those automations fire. Added src/email/brevo.ts: BrevoLike + contactBody
+(pure, validates email, updateEnabled:true so it upserts rather than erroring on an existing contact) + makeBrevo
+(proxy-aware node:https). Two trigger points, both optional (AppDeps.marketing — absent = marketing off, routes
+still 200 so nothing breaks): (1) POST /api/subscribe → onLead → leads list; the scorecard's existing SUBSCRIBE_URL
+seam now points at it (relaunch72.com origin already on the CORS allowlist). (2) the Stripe webhook → onCustomer →
+customers list, fire-and-forget after the order is recorded so a Brevo hiccup never fails the webhook (Stripe would
+retry otherwise). index.ts builds the hooks from BREVO_API_KEY + BREVO_LIST_LEADS/CUSTOMERS. Verified: 206 tests
+(7 new — contactBody mapping/validation, subscribe route synced/unsynced/400, webhook onCustomer), typecheck clean,
+and a real boot + /api/subscribe over HTTP (200 synced:false with marketing off, 400 on a bad email). Live Brevo
+calls need a key + egress to api.brevo.com. Remaining for #30: convert the nurture/onboarding copy £→$ and a setup
+runbook.

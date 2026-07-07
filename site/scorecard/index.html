@@ -86,8 +86,8 @@
 /* ===================== CONFIG ===================== */
 /* SEAM 2: the $97 autopsy checkout. Relative so it works on github.io/relaunch72/ and relaunch72.com. */
 var AUTOPSY_URL = "../autopsy/";
-/* SEAM 1: set to the payments server's /api/subscribe (or an ESP endpoint). Empty = capture stays local only. */
-var SUBSCRIBE_URL = "";
+/* SEAM 1: the payments server's /api/subscribe — captures the lead into Brevo (nurture list). */
+var SUBSCRIBE_URL = "https://relaunch72-payments.onrender.com/api/subscribe";
 
 /* Stores the lead locally and POSTs it when a subscribe endpoint is configured.
    Receives { email, answers, leakCount }. The UI proceeds regardless. */
