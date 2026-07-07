@@ -31,7 +31,7 @@ function snippet(intake: Intake, id: string, maxLen = 80): string {
 
 function num(intake: Intake, id: string): number {
   const v = intake[id];
-  const n = typeof v === 'string' ? Number(v.replace(/[£$,\s]/g, '')) : Number(v);
+  const n = typeof v === 'string' ? Number(v.replace(/[$$,\s]/g, '')) : Number(v);
   return Number.isFinite(n) ? n : 0;
 }
 
@@ -46,7 +46,7 @@ function mockS1(intake: Intake): unknown {
       category,
       grade_1to10: 3 + (i % 4),
       evidence: `The intake states (${evidenceFields[i]}): "${snippet(intake, evidenceFields[i] as string)}" — which shows where ${category} stands today.`,
-      leak_cost_estimate: `£${(2 * b2).toLocaleString('en-GB')}/mo (= 2 lost customers × £${b2.toLocaleString('en-GB')} average sale, baseline ${b3} new customers/mo)`,
+      leak_cost_estimate: `$${(2 * b2).toLocaleString('en-GB')}/mo (= 2 lost customers × $${b2.toLocaleString('en-GB')} average sale, baseline ${b3} new customers/mo)`,
     })),
     top_3_leaks: [
       `Follow-up gap: "${snippet(intake, 'F3', 60)}" cost real money with nothing captured for retargeting.`,
@@ -79,7 +79,7 @@ function mockS2(intake: Intake, breakVerbatims: boolean): unknown {
   const base = {
     profile_narrative:
       `Meet the buyer behind this business. ${fieldText(intake, 'C1')} They live around ${fieldText(intake, 'A5')} and their moment of need looks like this: ${fieldText(intake, 'C4')} What they are really paying for: ${fieldText(intake, 'C3')}`,
-    demographics: `Based in or near ${fieldText(intake, 'A5')}; typical spend around £${num(intake, 'B2').toLocaleString('en-GB')} per purchase.`,
+    demographics: `Based in or near ${fieldText(intake, 'A5')}; typical spend around $${num(intake, 'B2').toLocaleString('en-GB')} per purchase.`,
     situation: fieldText(intake, 'C1'),
     trigger_events: [fieldText(intake, 'C4')],
     objections: fieldText(intake, 'C5').split(/[\n;]+/).map((s) => s.trim()).filter(Boolean),
@@ -401,22 +401,22 @@ function mockS9(intake: Intake): unknown {
   const a1 = fieldText(intake, 'A1');
   return {
     snapshot:
-      `${a1} sells what the intake describes, at an average sale of £${b2.toLocaleString('en-GB')} (B2), ` +
+      `${a1} sells what the intake describes, at an average sale of $${b2.toLocaleString('en-GB')} (B2), ` +
       `winning ${b3} new customers in a typical month (B3). The relaunch points that engine at the one goal the owner named, using the channels that already produce work.`,
     market:
       'The buyers are the people described in the profile: they arrive with a specific problem, compare a small number of alternatives, ' +
       'and choose on trust and clarity rather than price alone. The plan speaks to them in the words they already use, in the places they already look.',
     offer:
-      `The ladder starts with an entry step and carries the main work in the core engagement at £${b2.toLocaleString('en-GB')}. ` +
+      `The ladder starts with an entry step and carries the main work in the core engagement at $${b2.toLocaleString('en-GB')}. ` +
       'Each option promises only what the owner controls: redo the work, or refund what was paid.',
     goals_90d: `In the owner's words (G1): "${snippet(intake, 'G1', 60)}" — the next 90 days are measured against that goal and nothing longer.`,
     plan_summary:
       'The first weeks fix the leaks the audit found; the rest doubles down on the channels that have already produced work. ' +
       'The busiest week fits inside the hours the owner said they have, and every action names its channel and its purpose.',
     numbers_table: [
-      { label: 'Average sale value', value: `£${b2.toLocaleString('en-GB')}`, source: 'B2' },
+      { label: 'Average sale value', value: `$${b2.toLocaleString('en-GB')}`, source: 'B2' },
       { label: 'New customers per month', value: String(b3), source: 'B3' },
-      { label: 'Recommended core price', value: `£${b2.toLocaleString('en-GB')}`, source: 'S4' },
+      { label: 'Recommended core price', value: `$${b2.toLocaleString('en-GB')}`, source: 'S4' },
       { label: 'Baseline in the plan', value: String(b3), source: 'S5' },
     ],
   };
@@ -462,7 +462,7 @@ export class MockClient implements LlmClient {
       broken.scores[0] = {
         ...broken.scores[0],
         evidence: 'The business clearly has visibility problems in its market.',
-        leak_cost_estimate: '£123,456/mo based on industry benchmarks',
+        leak_cost_estimate: '$123,456/mo based on industry benchmarks',
       };
       payload = broken;
     }

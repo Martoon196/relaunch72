@@ -518,3 +518,16 @@ Net #30 state: all email CODE done + tested (Postmark transactional send, Brevo 
 scorecard wired) — 206 tests; the remaining work is founder ESP account setup (keys, domain verify, build the two
 Brevo automations), documented in the runbook. No real email sent from here (no tokens + egress-blocked + hard
 rule #3).
+
+**D-044 · Whole product standardized on USD — site anchors, intake bands, fixtures, mock.**
+Founder: "do the whole thing in dollars, the US is a bigger market and brits will feel like they've won on the
+exchange rate." Finished the £→$ job the funnel-copy commit started: (1) live site — the last £3–5k / £3k agency
+anchors on index/autopsy/upgrade/intake → $. (2) intake spec — the three select band lists (B1 revenue, B5 spend,
+G3 budget) £→$, and the intake headline; rebuilt site/intake/index.html from the spec (editing the built HTML alone
+would revert on the next `intake:build`). Because S0 validates a select value against its options, this also
+required updating the three fixtures + the validIntake test helper to the new $ bands (numbers unchanged, so QA
+numeric-provenance is unaffected). (3) mock generator → $ so mock-mode/demo output is USD too. DELIBERATELY LEFT in
+£: the number-strip regex `[£$,\s]` (strips both — defensive), extractNumbers/QA and their tests (the parser is
+multi-currency on purpose; a customer may still paste a £ figure), and code-comment examples. Verified: typecheck
+clean, 206 tests green (the 4 S0 failures from stale £ bands fixed), site grep shows zero displayed £, intake bands
+render as $. Only the customer-facing surfaces + their test data moved; the parser stays currency-agnostic.

@@ -93,7 +93,7 @@ export const INTAKE_FIELDS: FieldSpec[] = [
   // ── Section B — The numbers (6) ─────────────────────────────────────────
   {
     id: 'B1', section: 'B', label: 'Current monthly revenue', kind: 'select', required: true,
-    options: ['<£1k', '£1–3k', '£3–10k', '£10–30k', '£30k+'],
+    options: ['<$1k', '$1–3k', '$3–10k', '$10–30k', '$30k+'],
     feeds: 'audit, plan ambition level',
   },
   {
@@ -113,7 +113,7 @@ export const INTAKE_FIELDS: FieldSpec[] = [
   },
   {
     id: 'B5', section: 'B', label: 'Current monthly marketing spend', kind: 'select', required: false,
-    options: ['£0', '<£200', '£200–1k', '£1k+'],
+    options: ['$0', '<$200', '$200–1k', '$1k+'],
     feeds: 'plan channel mix',
   },
   {
@@ -270,7 +270,7 @@ export const INTAKE_FIELDS: FieldSpec[] = [
   {
     id: 'G3', section: 'G', label: 'Monthly budget you could commit if the plan justified it',
     kind: 'select', required: false,
-    options: ['£0', '<£200', '£200–500', '£500–1.5k', '£1.5k+'],
+    options: ['$0', '<$200', '$200–500', '$500–1.5k', '$1.5k+'],
     feeds: 'plan channel mix',
   },
   {

@@ -362,7 +362,7 @@ const CLIENT = String.raw`
     app.innerHTML='<div class="wrap intro">'+
       '<div class="kicker">Relaunch72 · Deep Intake</div>'+
       (state.tier && TIER_NAMES[state.tier] ? '<div class="time" style="margin-top:10px">Plan: <b style="color:var(--electric)">'+TIER_NAMES[state.tier]+'</b></div>' : '')+
-      '<h1>The discovery day an agency charges £3k for — done in your own words.</h1>'+
+      '<h1>The discovery day an agency charges $3k for — done in your own words.</h1>'+
       '<p class="lede">This is the single most important thing you’ll do in this process. <b>Generic answers in, generic marketing out.</b> Specific, honest ones give us the fuel to build you a relaunch that actually sounds like you.</p>'+
       '<div class="card">'+
         '<p class="time">⏱ 40–50 minutes · save-and-resume on · your answers stay in this browser until you send them</p>'+
