@@ -13,6 +13,9 @@ dist/
 runs/*
 !runs/.gitkeep
 
+# Payments backend data — paid orders + submitted customer intakes (PII). Never commit.
+data/
+
 # OS / editor noise
 .DS_Store
 *.log

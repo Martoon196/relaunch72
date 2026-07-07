@@ -406,3 +406,17 @@ server authority. Self-contained single HTML (npm run intake:build → site/inta
 save-and-resume, `--endpoint` for an optional webhook POST. Verified end-to-end in headless Chromium:
 a real intake validates clean and passes runS0. Founder to confirm self-hosted vs porting to Tally; the
 Stripe-gated link + webhook receiver + nudge email are Phase-5 automation, tracked separately.
+
+**D-036 · Stripe payments backend — DI'd, env-only secrets, test-mode-derived-from-key.**
+Built the real automated payments flow (orchestrator/src/server): POST /api/checkout creates a Stripe
+Checkout Session; POST /api/stripe/webhook verifies the signature and records the paid order to
+data/orders.jsonl; POST /api/intake runs the S0 gate and, on accept, spawns the pipeline detached so
+payment→intake→build is hands-off. Design choices: (1) the SDK is behind a structural StripeLike
+interface injected into all logic, so every route/path tests with a fake client and NO key (10 tests)
+— the real `stripe` import lives only in index.ts. (2) liveMode is DERIVED from the key prefix
+(sk_live_ vs sk_test_), so a test key can never accidentally run as live (hard rule #2). (3) every
+secret + Price ID comes from env (.env.example documents them); the server refuses to start without a
+key; data/ (orders + submitted intakes = PII) is git-ignored (hard rule #4). Frontend checkout gained
+an apiBase seam: set it and checkout POSTs to the backend; leave it empty and it falls back to Payment
+Links, then the dev walk-through. No account, key, or Stripe call needed to build/test — the founder
+adds a test key + creates the four products to switch it on. Boot + /health + /api/checkout smoke-verified.

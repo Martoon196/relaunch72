@@ -11,13 +11,15 @@
     "render": "tsx src/docs/cli.ts",
     "intake:build": "tsx src/intake/build-form.ts",
     "signoff": "tsx src/signoff/cli.ts",
-    "deliver": "tsx src/deliver/cli.ts"
+    "deliver": "tsx src/deliver/cli.ts",
+    "serve": "tsx src/server/index.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
     "ajv": "^8.17.1",
     "dotenv": "^16.4.5",
-    "playwright-core": "^1.61.1"
+    "playwright-core": "^1.61.1",
+    "stripe": "^22.3.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

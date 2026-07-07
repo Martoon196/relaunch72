@@ -32,9 +32,24 @@ landing (index.html)  →  checkout.html?tier=X  →  Stripe Payment Link  →  
 
 4. **Test it** with Stripe's test card `4242 4242 4242 4242`, any future expiry/CVC. You should land on the intake with the tier + session in the URL.
 
-## The pipeline-kick webhook (automation phase — separate task)
+## Option B — the backend (recommended, auto-starts the build)
 
-Payment Links alone collect money and hand the buyer to the intake. To **auto-start the build on payment**, add a Stripe webhook (`checkout.session.completed`) → a small receiver that records the paid session and, on accepted intake, runs the pipeline (`npm run pipeline -- --input <intake>.json`). That receiver is the automation-glue task; the frontend is already wired for it (the session id flows through).
+A small payments server is built and tested (`orchestrator/src/server/`, `npm run serve`). It does the whole automated flow:
+
+- `POST /api/checkout` → creates a Stripe **Checkout Session** for the tier → returns the URL.
+- `POST /api/stripe/webhook` → verifies the signature, records the paid order (`data/orders.jsonl`).
+- `POST /api/intake` → runs the S0 gate on a submitted intake; on accept, **spawns the pipeline** and marks the order building. (Point the intake form's `--endpoint` at `<apiBase>/api/intake`.)
+
+**Go-live (test mode):**
+1. Create the four products in Stripe (test mode) and copy their **Price IDs**.
+2. Fill `orchestrator/.env` from `.env.example`: `STRIPE_SECRET_KEY` (sk_test_…), `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_AUTOPSY/CORE/CORE_BUMP/PRO`, `PUBLIC_BASE_URL`.
+3. `npm run serve` (refuses to start without a key; `liveMode` is derived from the key prefix, so a test key can never run as live).
+4. In `site/checkout-config.js`, set `apiBase` to the server URL. Checkout now creates real (test) Sessions.
+5. Point Stripe's webhook at `<apiBase>/api/stripe/webhook`; test with `stripe listen --forward-to`.
+
+Everything here is env-driven — **no secret ever touches git or the frontend**. `data/` (orders + intakes = PII) is git-ignored.
+
+*(Payment Links, Option A above, remain the no-backend path — but they don't auto-start the build; that's what the server is for.)*
 
 ## What stays manual until then
 

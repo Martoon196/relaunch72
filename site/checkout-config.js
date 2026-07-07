@@ -11,7 +11,12 @@
  * See PAYMENTS.md for the full walkthrough incl. the pipeline-kick webhook.
  */
 window.RELAUNCH72_CHECKOUT = {
-  // Stripe TEST-mode Payment Link URLs. Empty = not wired yet.
+  // OPTION A — Backend (recommended, auto-starts the build on payment):
+  // point this at the payments server (npm run serve). When set, checkout POSTs
+  // /api/checkout to create a Stripe Checkout Session. Empty = use Payment Links.
+  apiBase: '',   // e.g. 'https://api.relaunch72.com'  or  'http://localhost:4242'
+
+  // OPTION B — Stripe TEST-mode Payment Link URLs (no backend). Empty = not wired.
   paymentLinks: {
     autopsy: '',   // Marketing Autopsy — $97
     core: '',      // Relaunch72 Core — $997

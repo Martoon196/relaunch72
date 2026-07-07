@@ -111,21 +111,32 @@
   var bump=document.getElementById('bump'); if(bump) bump.addEventListener('change',render);
   render();
 
-  document.getElementById('pay').addEventListener('click', function(){
-    var key = (tier==='core' && withBump()) ? 'core_bump' : tier;
-    var link = (cfg.paymentLinks||{})[key];
-    if(link){
-      // Real Stripe Payment Link. Its success URL returns to intake/?tier&session={CHECKOUT_SESSION_ID}.
-      window.location.href = link;
-      return;
-    }
-    // Not wired yet — honest state + a dev path so the flow is walkable now.
+  function showNotLive(extra){
     var params = 'tier='+tier + (withBump()?'&bump=1':'') + '&dev=1';
     document.getElementById('notlive').innerHTML =
-      '<div class="notlive"><b>Card payment isn’t live yet.</b> Stripe test-mode payment links drop straight into <code>checkout-config.js</code> — no code change. '+
+      '<div class="notlive"><b>Card payment isn’t live yet.</b> '+(extra?extra+' ':'')+
+      'Set <code>apiBase</code> (the payments server) or Stripe test-mode payment links in <code>checkout-config.js</code> — no code change. '+
       'For now you can walk the rest of the flow: '+
       '<a class="devlink" href="'+(cfg.successPath||'intake/')+'?'+params+'">Continue to the intake (dev preview) →</a></div>';
     document.getElementById('notlive').scrollIntoView({behavior:'smooth',block:'center'});
+  }
+  document.getElementById('pay').addEventListener('click', function(){
+    var btn = document.getElementById('pay');
+    // Option A — backend Checkout Session (auto-starts the build after payment).
+    if(cfg.apiBase){
+      btn.textContent='One sec…'; btn.disabled=true;
+      fetch(cfg.apiBase.replace(/\/$/,'')+'/api/checkout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({tier:tier,bump:withBump()})})
+        .then(function(r){return r.json();})
+        .then(function(d){ if(d&&d.url){ window.location.href=d.url; } else { btn.textContent='Continue to secure payment →'; btn.disabled=false; showNotLive(d&&d.error?('Server: '+d.error+'.'):''); } })
+        .catch(function(){ btn.textContent='Continue to secure payment →'; btn.disabled=false; showNotLive('Couldn’t reach the payments server.'); });
+      return;
+    }
+    // Option B — Stripe Payment Link.
+    var key = (tier==='core' && withBump()) ? 'core_bump' : tier;
+    var link = (cfg.paymentLinks||{})[key];
+    if(link){ window.location.href = link; return; }
+    // Nothing wired — honest state + dev walk-through.
+    showNotLive('');
   });
 })();
 </script>
