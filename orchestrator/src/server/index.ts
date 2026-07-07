@@ -34,7 +34,11 @@ function createKick(intakeDir: string) {
     const ref = `${sessionId ?? 'intake'}-${Date.now()}`;
     const file = path.join(intakeDir, `${ref}.json`);
     fs.writeFileSync(file, JSON.stringify(intake, null, 2), 'utf8');
-    const child = spawn('npx', ['tsx', CLI, '--input', file], { cwd: ORCH_ROOT, detached: true, stdio: 'ignore' });
+    console.log(`▶ Intake accepted — kicking pipeline for ${ref}`);
+    // inherit stdout/stderr so the build's progress + errors show in the host logs
+    // (was 'ignore', which made every build invisible).
+    const child = spawn('npx', ['tsx', CLI, '--input', file], { cwd: ORCH_ROOT, detached: true, stdio: ['ignore', 'inherit', 'inherit'] });
+    child.on('exit', (code) => console.log(`■ Pipeline for ${ref} exited (code ${code ?? 'null'})`));
     child.unref();
     return file;
   };
