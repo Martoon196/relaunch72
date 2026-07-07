@@ -14,8 +14,8 @@ window.RELAUNCH72_CHECKOUT = {
   // OPTION A — Backend (recommended, auto-starts the build on payment):
   // point this at the payments server (npm run serve). When set, checkout POSTs
   // /api/checkout to create a Stripe Checkout Session. Empty = use Payment Links.
-  // Paste your Render service URL here once deployed (see docs/deploy-render.md).
-  apiBase: '',   // e.g. 'https://relaunch72-payments.onrender.com'
+  // Live Render payments API (see docs/deploy-render.md). Checkout POSTs /api/checkout here.
+  apiBase: 'https://relaunch72-payments.onrender.com',
 
   // OPTION B — Stripe TEST-mode Payment Link URLs (no backend). Empty = not wired.
   paymentLinks: {
