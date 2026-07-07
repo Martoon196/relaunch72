@@ -12,7 +12,7 @@
   Integration seams (search "SEAM"):
    1. captureEmail() — stores the lead + POSTs to SUBSCRIBE_URL when set
       (point it at the payments server's /api/subscribe, or an ESP).
-   2. AUTOPSY_URL    — the £97 autopsy checkout (wired to checkout.html?tier=autopsy).
+   2. AUTOPSY_URL    — the $97 autopsy checkout (wired to checkout.html?tier=autopsy).
 -->
 <style>
   :root{
@@ -84,8 +84,8 @@
 
 <script>
 /* ===================== CONFIG ===================== */
-/* SEAM 2: the £97 autopsy checkout. Relative so it works on github.io/relaunch72/ and relaunch72.com. */
-var AUTOPSY_URL = "../checkout.html?tier=autopsy";
+/* SEAM 2: the $97 autopsy checkout. Relative so it works on github.io/relaunch72/ and relaunch72.com. */
+var AUTOPSY_URL = "../autopsy/";
 /* SEAM 1: set to the payments server's /api/subscribe (or an ESP endpoint). Empty = capture stays local only. */
 var SUBSCRIBE_URL = "";
 
@@ -200,8 +200,8 @@ function captureEmail(payload){
       green.forEach(function(k){ h+='<div class="mini" style="border-left:2px solid var(--green);">'+esc(LEAK[k][0].replace(/^Your |^You’re |^You /,''))+' — holding up</div>'; });
     }
     h+='<div class="cta-box"><h2>This shows where. Not how much.</h2>'+
-       '<p>The Marketing Autopsy takes these seven questions to forensic depth on your actual numbers — graded, no punches pulled — so you see exactly what’s leaving and what a fix takes. £97, and it credits in full against a full relaunch within 14 days.</p>'+
-       '<button class="btn" id="cta">Get the full autopsy — £97 →</button></div>';
+       '<p>The Marketing Autopsy takes these seven questions to forensic depth on your actual numbers — graded, no punches pulled — so you see exactly what’s leaving and what a fix takes. $97, and it credits in full against a full relaunch within 14 days.</p>'+
+       '<button class="btn" id="cta">Get the full autopsy — $97 →</button></div>';
     stage.innerHTML=h;
     document.getElementById('cta').onclick=function(){
       window.location.href=AUTOPSY_URL;

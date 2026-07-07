@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Claim your relaunch — Relaunch72</title>
+<meta name="robots" content="noindex" />
+<meta name="description" content="Your autopsy named the leaks. A full Relaunch72 fixes every one — and your $97 credits off, so it starts at $900, not $997." />
+<style>
+  :root{
+    --ink:#0c1018;--paper:#f6f7fb;--card:#fff;--muted:#586173;--faint:#8b93a3;--hair:#e4e7ee;
+    --electric:#3557ff;--electric-ink:#2a44d6;--wash:#eef1ff;--green:#17915a;--amber:#b1741a;
+    --hero-bg:#0c1018;--hero-ink:#f3f5fb;--hero-muted:#a3adc2;--hero-hair:#242c3a;--hero-accent:#7d92ff;
+    --shadow:0 1px 2px rgba(12,16,24,.05),0 14px 40px -22px rgba(12,16,24,.28);
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","Roboto Mono",Menlo,monospace;
+  }
+  @media (prefers-color-scheme:dark){:root{--ink:#e9edf6;--paper:#090b0f;--card:#12161d;--muted:#98a2b4;--faint:#6b7484;--hair:#222a35;--electric:#6d86ff;--electric-ink:#93a6ff;--wash:#141b2a;--hero-bg:#0f141b;--hero-ink:#eef1f8;--hero-muted:#9aa4b8;--hero-hair:#28313f;--hero-accent:#8fa2ff;--shadow:0 1px 2px rgba(0,0,0,.4),0 16px 44px -24px rgba(0,0,0,.8)}}
+  :root[data-theme="light"]{--ink:#0c1018;--paper:#f6f7fb;--card:#fff;--muted:#586173;--faint:#8b93a3;--hair:#e4e7ee;--electric:#3557ff;--electric-ink:#2a44d6;--wash:#eef1ff}
+  :root[data-theme="dark"]{--ink:#e9edf6;--paper:#090b0f;--card:#12161d;--muted:#98a2b4;--faint:#6b7484;--hair:#222a35;--electric:#6d86ff;--electric-ink:#93a6ff;--wash:#141b2a}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:760px;margin:0 auto;padding:0 24px}
+  a{color:inherit}
+  h1,h2{letter-spacing:-.02em;text-wrap:balance;margin:0}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--electric);font-weight:600}
+  .btn{display:inline-block;font:inherit;font-weight:650;font-size:17px;text-decoration:none;border-radius:12px;padding:16px 28px;cursor:pointer;border:none;background:var(--electric);color:#fff;transition:transform .08s,filter .14s}
+  .btn:hover{filter:brightness(1.07)}.btn:active{transform:translateY(1px)}
+  .btn:focus-visible{outline:2px solid var(--electric);outline-offset:3px}
+  nav{border-bottom:1px solid var(--hair)}
+  nav .wrap{display:flex;align-items:center;justify-content:space-between;height:60px;max-width:960px}
+  .mark{font-weight:800;font-size:18px;letter-spacing:-.02em;text-decoration:none}.mark b{color:var(--electric)}
+  .hero{background:var(--hero-bg);color:var(--hero-ink);border-bottom:1px solid var(--hero-hair)}
+  .hero .wrap{padding:64px 24px 56px}
+  .hero .eyebrow{color:var(--hero-accent)}
+  .hero h1{color:var(--hero-ink);font-size:clamp(30px,5.2vw,46px);line-height:1.06;font-weight:800;margin-top:16px}
+  .hero p{color:var(--hero-muted);font-size:clamp(17px,2.2vw,20px);max-width:60ch;margin:20px 0 0}
+  .hero .cta-row{margin-top:30px}
+  .hero .micro{font-family:var(--mono);font-size:13px;color:var(--hero-muted);margin-top:18px;display:flex;flex-wrap:wrap;gap:6px 16px}
+  .hero .micro b{color:var(--hero-ink)}
+  section{padding:44px 0;border-bottom:1px solid var(--hair)}
+  h2{font-size:clamp(22px,3.4vw,30px);font-weight:800;line-height:1.12}
+  section p{font-size:17px;color:var(--muted);max-width:64ch;margin:14px 0 0}
+  section p b{color:var(--ink)}
+  .credit{font-family:var(--mono);font-weight:700;font-size:clamp(20px,3vw,26px);color:var(--electric-ink);background:var(--wash);border:1px solid var(--hair);border-radius:14px;padding:16px 20px;margin-top:20px;text-align:center}
+  .credit .strike{color:var(--faint);text-decoration:line-through;font-weight:500}
+  ul.ticks{list-style:none;padding:0;margin:18px 0 0;display:flex;flex-direction:column;gap:9px}
+  ul.ticks li{font-size:15.5px;color:var(--muted);padding-left:26px;position:relative}
+  ul.ticks li::before{content:"→";position:absolute;left:0;color:var(--electric);font-weight:700}
+  ul.ticks li b{color:var(--ink)}
+  .cta-block{margin-top:26px}
+  .why{background:var(--wash);border:1px solid var(--hair);border-radius:16px;padding:22px;margin-top:8px}
+  .sig{margin-top:12px;font-weight:700;color:var(--ink)}
+  .reasons{display:flex;flex-direction:column;gap:14px;margin-top:18px}
+  .reason{border-left:3px solid var(--electric);padding:4px 0 4px 16px}
+  .reason.no{border-left-color:var(--amber)}
+  .reason b{color:var(--ink)}
+  .reason p{margin:6px 0 0;font-size:15.5px}
+  details{border-bottom:1px solid var(--hair)}
+  details summary{cursor:pointer;list-style:none;padding:16px 0;font-weight:700;font-size:16px;display:flex;justify-content:space-between;gap:14px}
+  details summary::-webkit-details-marker{display:none}
+  details summary::after{content:"+";font-family:var(--mono);color:var(--electric);font-size:20px;transition:transform .2s}
+  details[open] summary::after{transform:rotate(45deg)}
+  details .a{color:var(--muted);font-size:15.5px;padding:0 0 16px;max-width:66ch}
+  .close{text-align:center;padding:64px 0;border-bottom:none}
+  footer{padding:28px 0;color:var(--faint);font-size:12.5px;text-align:center;line-height:1.6}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<nav><div class="wrap"><a class="mark" href="../">Relaunch<b>72</b></a></div></nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">Your autopsy is done · your $97 is waiting to credit</div>
+    <h1>You've seen where you're leaking. Here's the 72 hours that plugs it.</h1>
+    <p>Your autopsy named the leaks. A full Relaunch72 fixes every one of them — and your $97 comes straight off the price, so it starts at $900, not $997.</p>
+    <div class="cta-row"><a class="btn" href="../checkout.html?tier=core">Claim my relaunch → $900 after credit</a></div>
+    <div class="micro"><span>Your <b>$97 credit</b> expires 14 days after your autopsy</span><span>·</span><span><b>20</b>/week</span><span>·</span><span><b>Human</b> signed-off</span></div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section>
+    <h2>You already know it's not the work. It's the marketing.</h2>
+    <p>That was the whole point of the autopsy — to stop guessing and see it in black and white. And now you have. The leaks are named, graded, and sitting in front of you. No more "something feels off." You know exactly what's off, and roughly what it's costing you.</p>
+    <p>So the only question left is the one you bought the autopsy to answer: <b>fix it, or keep paying for it?</b></p>
+  </section>
+
+  <section>
+    <h2>What the autopsy diagnosed, the relaunch rebuilds</h2>
+    <p>Your autopsy was the X-ray. The relaunch is the treatment — and it doesn't patch one leak, it rebuilds the whole marketing department around the business you've already built. Everything a marketing department would hand you, rebuilt from your real answers, human signed-off, delivered in 72 hours:</p>
+    <ul class="ticks">
+      <li><b>Marketing audit and scorecard</b> — the full version of what your autopsy started</li>
+      <li><b>Dream buyer profile</b> — the exact customer who pays you best, in detail</li>
+      <li><b>Core message and voice guide</b> — in your customers' words, not a template</li>
+      <li><b>Offer architecture</b> — package and price so choosing you is the obvious move</li>
+      <li><b>90-day growth plan</b> — sized to the hours you actually have</li>
+      <li><b>Website copy pack</b> — home, about and sales page, ready to paste</li>
+      <li><b>12 ready-to-send emails</b> — a welcome series and a promotion</li>
+      <li><b>30 days of social content</b> — for the platforms your customers are on</li>
+      <li><b>One-page business plan</b> — bank-and-partner ready</li>
+    </ul>
+    <p>Nine deliverables. Every leak your autopsy found, closed.</p>
+  </section>
+
+  <section>
+    <h2>The $97 you've already spent is the $97 you save</h2>
+    <p>Here's the part that makes this a smaller decision than it looks. You've already paid $97 for the autopsy. Claim your relaunch within 14 days and <b>that $97 credits in full</b>.</p>
+    <div class="credit"><span class="strike">$997</span> &nbsp;→&nbsp; $900 <span style="font-weight:500;color:var(--muted)">after your credit</span></div>
+    <p>You're not spending $997 on top of what you paid. You're spending $900 more to fix everything the $97 diagnosed. Put another way: the diagnosis was free. You just prepaid a slice of the fix.</p>
+    <div class="cta-block"><a class="btn" href="../checkout.html?tier=core">Claim my relaunch → $900 after credit</a></div>
+  </section>
+
+  <section>
+    <h2>Why 72 hours, not six weeks</h2>
+    <p>An agency would fix this for £3–5k a month and a six-week discovery phase — and you'd be handing them the same 45 questions you've already answered for us. A cheap AI tool would hand you generic mush in an afternoon, which is exactly the problem your autopsy just diagnosed.</p>
+    <p>We sit in the middle, deliberately. Your intake is already half-built from the autopsy. Ten specialist passes engineer the generic out at every stage. A human signs off the lot before it reaches you. That's why it's 72 hours instead of six weeks, and $900 instead of £3–5k a month.</p>
+  </section>
+
+  <section>
+    <h2>The promise that comes with it</h2>
+    <div class="why">
+      <p style="margin-top:0"><b>It ships in 72 hours</b> of your accepted intake. If we're late, your revision round becomes unlimited until you're happy, on us.</p>
+      <p><b>It doesn't read generic</b> — that's the whole reason you're here, so that's the one we stake the money on. If the hero assets read generic after your included revision round, a strategist rewrites them by hand. If you still think they read generic after that, you keep the audit and the scorecard, and we refund the rest.</p>
+      <div class="sig">— Martin Howard, founder, Relaunch72</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Two honest reasons to move now, and one not to</h2>
+    <div class="reasons">
+      <div class="reason"><b>Move now because your credit expires.</b><p>The $97 credits back for 14 days after your autopsy. After that, the relaunch is full price. That's not a fake countdown — it's just how the credit works.</p></div>
+      <div class="reason"><b>Move now because slots are first paid, first built.</b><p>A human signs off every relaunch, so we cap it at 20 a week. When the week's slots are gone, you're in the next week's queue. Claiming now claims your place.</p></div>
+      <div class="reason no"><b>Don't move if the autopsy convinced you the leaks aren't worth fixing.</b><p>Genuinely — if $900 to close every gap you just saw doesn't clear the maths for your business, don't. The autopsy was still the most honest read on your marketing you'll get anywhere, and it was worth the $97 on its own.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Questions you're right to ask</h2>
+    <div style="margin-top:14px">
+      <details><summary>I already answered questions for the autopsy — do I start over?</summary><div class="a">No. Your autopsy intake carries straight into the relaunch and gives us a head start. You'll add depth on a few areas the full build needs, but you're topping up, not starting again.</div></details>
+      <details><summary>What if the relaunch reads generic like the AI stuff I've seen?</summary><div class="a">Then it gets rewritten by hand — that's the guarantee above, in writing. And you've already seen it doesn't: the autopsy was a sample of exactly the thinking that goes into the full build.</div></details>
+      <details><summary>Can I do it myself off the back of the autopsy?</summary><div class="a">You can, and if you'd genuinely rather, do — the autopsy's yours to keep. Most operators find that knowing where the leaks are and having 72 hours to rebuild nine deliverables by hand are very different things. That gap is what the relaunch is.</div></details>
+      <details><summary>Why $900 and not cheaper, given I've paid $97?</summary><div class="a">$900 is the $997 relaunch minus your $97 credit. It's the full nine-deliverable department output, human signed-off — a fifth of what an agency charges for the discovery phase alone, by Friday.</div></details>
+    </div>
+  </section>
+
+  <section class="close">
+    <h2>The leaks are real and they're costing you. This is the 72 hours that ends it.</h2>
+    <div class="cta-block"><a class="btn" href="../checkout.html?tier=core">Claim my relaunch → $900 after credit</a></div>
+  </section>
+</main>
+
+<footer><div class="wrap">Relaunch72 · AI-assisted, human signed-off · Results depend on your business and execution — no earnings claims · Not financial or legal advice. Your $97 credit applies to a $997 Core relaunch claimed within 14 days of your autopsy.</div></footer>
+</body>
+</html>

@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>The Marketing Autopsy — Relaunch72</title>
+<meta name="description" content="Seven forensic questions on your actual business, graded, no punches pulled — the most honest read on your marketing you'll get anywhere. $97, credits back in full if you relaunch." />
+<style>
+  :root{
+    --ink:#0c1018;--paper:#f6f7fb;--card:#fff;--muted:#586173;--faint:#8b93a3;--hair:#e4e7ee;
+    --electric:#3557ff;--electric-ink:#2a44d6;--wash:#eef1ff;--green:#17915a;--amber:#b1741a;
+    --hero-bg:#0c1018;--hero-ink:#f3f5fb;--hero-muted:#a3adc2;--hero-hair:#242c3a;--hero-accent:#7d92ff;
+    --shadow:0 1px 2px rgba(12,16,24,.05),0 14px 40px -22px rgba(12,16,24,.28);
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","Roboto Mono",Menlo,monospace;
+  }
+  @media (prefers-color-scheme:dark){:root{--ink:#e9edf6;--paper:#090b0f;--card:#12161d;--muted:#98a2b4;--faint:#6b7484;--hair:#222a35;--electric:#6d86ff;--electric-ink:#93a6ff;--wash:#141b2a;--hero-bg:#0f141b;--hero-ink:#eef1f8;--hero-muted:#9aa4b8;--hero-hair:#28313f;--hero-accent:#8fa2ff;--shadow:0 1px 2px rgba(0,0,0,.4),0 16px 44px -24px rgba(0,0,0,.8)}}
+  :root[data-theme="light"]{--ink:#0c1018;--paper:#f6f7fb;--card:#fff;--muted:#586173;--faint:#8b93a3;--hair:#e4e7ee;--electric:#3557ff;--electric-ink:#2a44d6;--wash:#eef1ff}
+  :root[data-theme="dark"]{--ink:#e9edf6;--paper:#090b0f;--card:#12161d;--muted:#98a2b4;--faint:#6b7484;--hair:#222a35;--electric:#6d86ff;--electric-ink:#93a6ff;--wash:#141b2a}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:760px;margin:0 auto;padding:0 24px}
+  a{color:inherit}
+  h1,h2{letter-spacing:-.02em;text-wrap:balance;margin:0}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--electric);font-weight:600}
+  .btn{display:inline-block;font:inherit;font-weight:650;font-size:17px;text-decoration:none;border-radius:12px;padding:16px 28px;cursor:pointer;border:none;background:var(--electric);color:#fff;transition:transform .08s,filter .14s}
+  .btn:hover{filter:brightness(1.07)}.btn:active{transform:translateY(1px)}
+  .btn:focus-visible{outline:2px solid var(--electric);outline-offset:3px}
+  nav{border-bottom:1px solid var(--hair)}
+  nav .wrap{display:flex;align-items:center;justify-content:space-between;height:60px;max-width:960px}
+  .mark{font-weight:800;font-size:18px;letter-spacing:-.02em;text-decoration:none}.mark b{color:var(--electric)}
+  .back{font-family:var(--mono);font-size:12.5px;color:var(--faint);text-decoration:none}.back:hover{color:var(--ink)}
+
+  .hero{background:var(--hero-bg);color:var(--hero-ink);border-bottom:1px solid var(--hero-hair)}
+  .hero .wrap{padding:64px 24px 56px}
+  .hero .eyebrow{color:var(--hero-accent)}
+  .hero h1{color:var(--hero-ink);font-size:clamp(30px,5.2vw,46px);line-height:1.06;font-weight:800;margin-top:16px}
+  .hero p{color:var(--hero-muted);font-size:clamp(17px,2.2vw,20px);max-width:60ch;margin:20px 0 0}
+  .hero .cta-row{margin-top:30px}
+  .hero .micro{font-family:var(--mono);font-size:13px;color:var(--hero-muted);margin-top:18px;display:flex;flex-wrap:wrap;gap:6px 16px}
+  .hero .micro b{color:var(--hero-ink)}
+
+  section{padding:44px 0;border-bottom:1px solid var(--hair)}
+  h2{font-size:clamp(22px,3.4vw,30px);font-weight:800;line-height:1.12}
+  section p{font-size:17px;color:var(--muted);max-width:64ch;margin:14px 0 0}
+  section p b{color:var(--ink)}
+  ul.ticks{list-style:none;padding:0;margin:18px 0 0;display:flex;flex-direction:column;gap:10px}
+  ul.ticks li{font-size:16px;color:var(--muted);padding-left:26px;position:relative}
+  ul.ticks li::before{content:"→";position:absolute;left:0;color:var(--electric);font-weight:700}
+  ul.ticks li b{color:var(--ink)}
+  .cta-block{margin-top:26px}
+  .why{background:var(--wash);border:1px solid var(--hair);border-radius:16px;padding:22px;margin-top:8px}
+  .sig{margin-top:12px;font-weight:700;color:var(--ink)}
+  details{border-bottom:1px solid var(--hair)}
+  details summary{cursor:pointer;list-style:none;padding:16px 0;font-weight:700;font-size:16px;display:flex;justify-content:space-between;gap:14px}
+  details summary::-webkit-details-marker{display:none}
+  details summary::after{content:"+";font-family:var(--mono);color:var(--electric);font-size:20px;transition:transform .2s}
+  details[open] summary::after{transform:rotate(45deg)}
+  details .a{color:var(--muted);font-size:15.5px;padding:0 0 16px;max-width:66ch}
+  .close{text-align:center;padding:64px 0;border-bottom:none}
+  .close h2{max-width:20ch;margin:0 auto}
+  footer{padding:28px 0;color:var(--faint);font-size:12.5px;text-align:center;line-height:1.6}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<nav><div class="wrap"><a class="mark" href="../">Relaunch<b>72</b></a><a class="back" href="../">← home</a></div></nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">The Marketing Autopsy · $97 · credits back to $0</div>
+    <h1>You can feel the marketing's off. This tells you exactly where — and what it's costing you.</h1>
+    <p>Seven forensic questions on your actual business, graded, no punches pulled. The most honest read on your marketing you'll get anywhere — for less than a decent dinner, and it credits back in full if you go on to relaunch.</p>
+    <div class="cta-row"><a class="btn" href="../checkout.html?tier=autopsy">Get the autopsy → $97</a></div>
+    <div class="micro"><span><b>20</b> relaunches a week</span><span>·</span><span><b>Human</b> signed-off</span><span>·</span><span><b>Credits back</b> within 14 days</span></div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section>
+    <h2>You've built something real. You just can't tell why it isn't landing.</h2>
+    <p>Six years of graft. Customers who rave about you. Work you're proud of. And marketing you're slightly embarrassed by — a website you'd rather not send people to, a list you've never emailed, a presence that makes you look smaller than you are.</p>
+    <p>You know it's costing you. You just can't see <b>where</b>, or <b>how much</b>. The leaks are invisible from the inside — you're too close to your own business to see it the way a stranger does. And the stranger is the one deciding whether to ring you or the loud bloke down the road.</p>
+    <p>That not-knowing is the expensive bit. You can't fix a leak you can't find.</p>
+  </section>
+
+  <section>
+    <h2>The Autopsy finds them. All of them.</h2>
+    <p>Seven questions — the sharp end of the same 45 an agency charges a full discovery day for. Run forensically on <b>your</b> numbers, <b>your</b> customers' words, <b>your</b> actual competitive position. Not a template. Not a generic scan that says the same thing to everyone.</p>
+    <ul class="ticks">
+      <li><b>Every leak, graded</b> — red, amber, green — so you're not guessing which ones matter</li>
+      <li><b>The two costing you most right now</b>, named specifically, with why</li>
+      <li><b>What the money's actually walking out the door for</b> — the jobs you never hear about</li>
+      <li><b>What a fix looks like</b> — so you know what you'd be signing up for before you sign up for anything</li>
+    </ul>
+    <p>No call to sit through. No pitch. Pay, answer, get the forensic read back.</p>
+  </section>
+
+  <section>
+    <h2>Why $97 — and why it credits back to nothing</h2>
+    <p>Straight answer, because you're right to ask.</p>
+    <p><b>$97</b> is low enough that finding out what's wrong isn't a decision you have to agonise over — and high enough that you'll actually do the questions properly, which is the whole point. A free audit gets skimmed. A paid one gets answered honestly.</p>
+    <p><b>It credits back in full against a full Relaunch72 within 14 days.</b> So if the autopsy convinces you to rebuild the lot, the $97 comes straight off — it's cost you nothing. And if it doesn't, you've still got the most honest read on your marketing you'll find anywhere, and you owe us nothing further.</p>
+    <p>That's the deal. $97 to find out, free if you fix it, no strings if you don't.</p>
+    <div class="cta-block"><a class="btn" href="../checkout.html?tier=autopsy">Get the autopsy → $97, credits back</a></div>
+  </section>
+
+  <section>
+    <h2>Who signs it off</h2>
+    <div class="why">
+      <p style="margin-top:0">Every autopsy — like every relaunch — carries Martin Howard's sign-off. Not a support ticket. Not a bot generating the same report for everyone. A human reading your business and telling you the truth about it. If it reads generic, it doesn't ship.</p>
+      <div class="sig">— Martin Howard, founder, Relaunch72</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Straight answers</h2>
+    <div style="margin-top:14px">
+      <details><summary>Is this just ChatGPT with extra steps?</summary><div class="a">No. A tool hands everyone the same generic mush — which is the exact problem you're paying to diagnose. The autopsy is seven deliberate questions run on your specifics, then read by a human before it reaches you. The human gate is the whole difference.</div></details>
+      <details><summary>What if my answers are rubbish?</summary><div class="a">Then we tell you — thin answers get flagged, not quietly built on. The autopsy is only as sharp as what you put in, so we'd rather bounce a weak answer back than hand you a weak read.</div></details>
+      <details><summary>$97 for seven questions — really?</summary><div class="a">For seven <b>forensic</b> questions, graded, on your actual business, read by a human, that credit back to zero if you relaunch. An agency charges £3–5k and six weeks for the discovery phase alone. This is the sharp end of that, for $97, by return.</div></details>
+      <details><summary>What happens after?</summary><div class="a">You get your read. If it points to a full rebuild and you want one, the $97 credits against it and you claim a relaunch slot. If it doesn't, nothing — no follow-up hard sell, no call you have to dodge.</div></details>
+    </div>
+  </section>
+
+  <section class="close">
+    <div class="eyebrow" style="margin-bottom:12px">The leaks are there whether you look or not</div>
+    <h2>Turn "something's off" into "here's exactly what, and what it costs."</h2>
+    <p style="margin-left:auto;margin-right:auto">Every month you don't know where you're leaking, you're paying for it — in jobs you never hear about, customers who judged the shopfront and rang someone else. And if you fix it, the $97 was free.</p>
+    <div class="cta-block"><a class="btn" href="../checkout.html?tier=autopsy">Get the autopsy → $97, credits back within 14 days</a></div>
+  </section>
+</main>
+
+<footer><div class="wrap">Relaunch72 · AI-assisted, human signed-off · Results depend on your business and execution — no earnings claims · Not financial or legal advice.</div></footer>
+</body>
+</html>
