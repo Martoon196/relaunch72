@@ -44,7 +44,7 @@ That's the Marketing Autopsy.
 
 The same seven questions, taken to forensic depth on your actual numbers. Graded. No punches pulled. You'll see exactly where the money's leaving and what it'd take to stop it — before you spend a penny on fixing anything.
 
-**£97. And it credits in full against a full Relaunch72 within 14 days** — so if you go on to relaunch, the autopsy costs you nothing.
+**$97. And it credits in full against a full Relaunch72 within 14 days** — so if you go on to relaunch, the autopsy costs you nothing.
 
 **[Get the full autopsy →]**
 
@@ -55,7 +55,7 @@ The same seven questions, taken to forensic depth on your actual numbers. Graded
 
 # PART 2 — SUBSCRIBER NURTURE SEQUENCE (Scorecard → Autopsy)
 
-*5 emails. Runs after scorecard opt-in, no purchase. Job: warm to the £97 autopsy. DM Excite-stage subscriber map, brand voice. Each has subject options, preview text, full body, PS.*
+*5 emails. Runs after scorecard opt-in, no purchase. Job: warm to the $97 autopsy. DM Excite-stage subscriber map, brand voice. Each has subject options, preview text, full body, PS.*
 
 ---
 
@@ -85,7 +85,7 @@ More soon.
 
 **— The Relaunch72 team**
 
-*PS — Your scorecard shows where you leak. If you want to know how much it's costing you, that's the Marketing Autopsy. £97, credits back in full if you go on to relaunch. No rush — I'll explain properly before I ask.*
+*PS — Your scorecard shows where you leak. If you want to know how much it's costing you, that's the Marketing Autopsy. $97, credits back in full if you go on to relaunch. No rush — I'll explain properly before I ask.*
 
 ---
 
@@ -141,7 +141,7 @@ Go run the test. It's uncomfortable and it's worth it.
 
 **— The Relaunch72 team**
 
-*PS — The autopsy runs this test and six others on your actual business, graded, so you're not guessing which leaks matter most. £97, credits back if you relaunch. But do the free version first — it'll show you why the paid one's worth it.*
+*PS — The autopsy runs this test and six others on your actual business, graded, so you're not guessing which leaks matter most. $97, credits back if you relaunch. But do the free version first — it'll show you why the paid one's worth it.*
 
 ---
 
@@ -155,7 +155,7 @@ Go run the test. It's uncomfortable and it's worth it.
 
 ---
 
-An agency would fix your marketing for £3–5k a month and a six-week discovery phase. A cheap AI tool would hand you the same generic mush it hands everyone, today, for pennies. Both leave you stuck: one's too slow and dear, the other's worthless.
+An agency would fix your marketing for $3–5k a month and a six-week discovery phase. A cheap AI tool would hand you the same generic mush it hands everyone, today, for pennies. Both leave you stuck: one's too slow and dear, the other's worthless.
 
 Here's the thing sitting in the middle, and how it actually works.
 
@@ -169,7 +169,7 @@ That's the mechanism. No magic, no hype. Just the generic engineered out at ever
 
 **— The Relaunch72 team**
 
-*PS — Tomorrow I'll show you the fastest way to find out what all this would actually do for your business, without committing to the full relaunch. It's the £97 autopsy — and it credits back in full if you go on to relaunch within 14 days.*
+*PS — Tomorrow I'll show you the fastest way to find out what all this would actually do for your business, without committing to the full relaunch. It's the $97 autopsy — and it credits back in full if you go on to relaunch within 14 days.*
 
 ---
 
@@ -177,7 +177,7 @@ That's the mechanism. No magic, no hype. Just the generic engineered out at ever
 **Send:** Day 8
 **Subject options:**
 - Want to know how much those leaks are costing you?
-- The £97 that credits back to £0
+- The $97 that credits back to $0
 - Your autopsy, then decide
 **Preview:** Forensic read. No commitment to the rest.
 
@@ -189,11 +189,11 @@ That's the Marketing Autopsy.
 
 The same seven questions from your scorecard, taken to forensic depth on your actual numbers. Graded, no punches pulled. You'll see exactly where the money's leaving, which leaks matter most, and what a fix looks like — before you commit to anything bigger.
 
-**It's £97. And here's the part that makes it a no-brainer: it credits in full against a Relaunch72 within 14 days.** So if you go on to relaunch, the autopsy is free. If you don't, you've still got the most honest read on your marketing you'll get anywhere, for less than a decent dinner.
+**It's $97. And here's the part that makes it a no-brainer: it credits in full against a Relaunch72 within 14 days.** So if you go on to relaunch, the autopsy is free. If you don't, you've still got the most honest read on your marketing you'll get anywhere, for less than a decent dinner.
 
 No call to book. No pitch to sit through. Pay, answer, get the forensic version back.
 
-**[Get the autopsy — £97, credits back →]**
+**[Get the autopsy — $97, credits back →]**
 
 And if you're not ready — genuinely no pressure. I'll keep sending things worth reading. The offer's here when you are.
 
@@ -206,7 +206,7 @@ And if you're not ready — genuinely no pressure. I'll keep sending things wort
 
 # PART 3 — BUYER ONBOARDING SEQUENCE (Core purchase → delivery → ascension)
 
-*5 emails. Runs after £997 Core purchase. Job: prevent remorse pre-delivery (they've paid on faith, seen nothing), get the intake done, deliver the win, bridge to ascension. DM Excite-stage buyer map.*
+*5 emails. Runs after $997 Core purchase. Job: prevent remorse pre-delivery (they've paid on faith, seen nothing), get the intake done, deliver the win, bridge to ascension. DM Excite-stage buyer map.*
 
 ---
 
@@ -346,15 +346,15 @@ Most operators don't stop at the relaunch. Here's what they reach for next — p
 
 **1. Keep it loud — 90-Day Content Engine**
 Your relaunch includes 30 days of content. This carries it to 90 — 60 more days of social, 12 more emails — so month two doesn't go quiet the moment you've built momentum.
-→ **£197 one-time**, or **£69/month × 3**
+→ **$197 one-time**, or **$69/month × 3**
 
 **2. Get the flagship pages perfect — Strategist Polish**
 A strategist takes your homepage and sales page and rewrites them line by line, by hand. For when "good" isn't enough on the two pages that carry the most weight.
-→ **£347 one-time**
+→ **$347 one-time**
 
 **3. Go Pro — the full strategy session**
-The 90-minute strategy session, an implementation roadmap, and 30 days of support. A hand on the wheel from here. You've already paid £997 toward Pro, so this is just the upgrade:
-→ **£1,500** — this week only, since it's tied to your relaunch being fresh.
+The 90-minute strategy session, an implementation roadmap, and 30 days of support. A hand on the wheel from here. You've already paid $997 toward Pro, so this is just the upgrade:
+→ **$1,500** — this week only, since it's tied to your relaunch being fresh.
 
 No pressure on any of it. The relaunch stands on its own — that's what you paid for and that's what you've got. These are just the rungs, if you want them.
 
@@ -365,19 +365,19 @@ No pressure on any of it. The relaunch stands on its own — that's what you pai
 ---
 ---
 
-# PART 4 — THE £97 AUTOPSY SALES PAGE
+# PART 4 — THE $97 AUTOPSY SALES PAGE
 
-*The tripwire page. Cold traffic's primary CTA and where the nurture sequence points. Job: convert a skeptic into a £97 buyer. Framework: PAS into reason-why into risk-reversed CTA. Awareness stage: problem/solution-aware. Brand voice, Martin as sign-off proof.*
+*The tripwire page. Cold traffic's primary CTA and where the nurture sequence points. Job: convert a skeptic into a $97 buyer. Framework: PAS into reason-why into risk-reversed CTA. Awareness stage: problem/solution-aware. Brand voice, Martin as sign-off proof.*
 
 ---
 
-**[EYEBROW]** THE MARKETING AUTOPSY · £97 · CREDITS BACK TO £0
+**[EYEBROW]** THE MARKETING AUTOPSY · $97 · CREDITS BACK TO $0
 
 # You can feel the marketing's off. This tells you exactly where — and what it's costing you.
 
 Seven forensic questions on your actual business, graded, no punches pulled. The most honest read on your marketing you'll get anywhere — for less than a decent dinner, and it credits back in full if you go on to relaunch.
 
-**[Get the autopsy → £97]**
+**[Get the autopsy → $97]**
 
 *20 relaunches a week · Human signed-off · Credits back within 14 days*
 
@@ -408,17 +408,17 @@ No call to sit through. No pitch. Pay, answer, get the forensic read back.
 
 ---
 
-### Why £97 — and why it credits back to nothing
+### Why $97 — and why it credits back to nothing
 
 Straight answer, because you're right to ask.
 
-**£97** is low enough that finding out what's wrong isn't a decision you have to agonise over — and high enough that you'll actually do the questions properly, which is the whole point. A free audit gets skimmed. A paid one gets answered honestly.
+**$97** is low enough that finding out what's wrong isn't a decision you have to agonise over — and high enough that you'll actually do the questions properly, which is the whole point. A free audit gets skimmed. A paid one gets answered honestly.
 
-**It credits back in full against a full Relaunch72 within 14 days.** So if the autopsy convinces you to rebuild the lot, the £97 comes straight off — it's cost you nothing. And if it doesn't, you've still got the most honest read on your marketing you'll find anywhere, and you owe us nothing further.
+**It credits back in full against a full Relaunch72 within 14 days.** So if the autopsy convinces you to rebuild the lot, the $97 comes straight off — it's cost you nothing. And if it doesn't, you've still got the most honest read on your marketing you'll find anywhere, and you owe us nothing further.
 
-That's the deal. £97 to find out, free if you fix it, no strings if you don't.
+That's the deal. $97 to find out, free if you fix it, no strings if you don't.
 
-**[Get the autopsy → £97, credits back]**
+**[Get the autopsy → $97, credits back]**
 
 ---
 
@@ -438,19 +438,19 @@ No. A tool hands everyone the same generic mush — which is the exact problem y
 **What if my answers are rubbish?**
 Then we tell you — thin answers get flagged, not quietly built on. The autopsy is only as sharp as what you put in, so we'd rather bounce a weak answer back than hand you a weak read.
 
-**£97 for seven questions — really?**
-For seven *forensic* questions, graded, on your actual business, read by a human, that credit back to zero if you relaunch. An agency charges £3–5k and six weeks for the discovery phase alone. This is the sharp end of that, for £97, by return.
+**$97 for seven questions — really?**
+For seven *forensic* questions, graded, on your actual business, read by a human, that credit back to zero if you relaunch. An agency charges $3–5k and six weeks for the discovery phase alone. This is the sharp end of that, for $97, by return.
 
 **What happens after?**
-You get your read. If it points to a full rebuild and you want one, the £97 credits against it and you claim a relaunch slot. If it doesn't, nothing — no follow-up hard sell, no call you have to dodge.
+You get your read. If it points to a full rebuild and you want one, the $97 credits against it and you claim a relaunch slot. If it doesn't, nothing — no follow-up hard sell, no call you have to dodge.
 
 ---
 
 ### The leaks are there whether you look or not.
 
-Every month you don't know where you're leaking, you're paying for it — in jobs you never hear about, customers who judged the shopfront and rang someone else. £97 turns "something's off" into "here's exactly what, and here's what it costs." And if you fix it, the £97 was free.
+Every month you don't know where you're leaking, you're paying for it — in jobs you never hear about, customers who judged the shopfront and rang someone else. $97 turns "something's off" into "here's exactly what, and here's what it costs." And if you fix it, the $97 was free.
 
-**[Get the autopsy → £97, credits back within 14 days]**
+**[Get the autopsy → $97, credits back within 14 days]**
 
 *Relaunch72 · AI-assisted, human signed-off · Results depend on your business and execution — no earnings claims · Not financial or legal advice*
 
@@ -464,8 +464,8 @@ Every month you don't know where you're leaking, you're paying for it — in job
 | Scorecard result | Problem-agitate, personalised | Diagnostic → bridge | The "can't tell how much" gap that sells the autopsy | Needs real leak-labels dropped into [brackets] |
 | Nurture 1–5 | Problem→mechanism→proof→invitation | DM Excite subscriber | Email 2 (loud bloke) + Email 3 (5-sec test, pure value) | No case studies to cite — mechanism carries the proof load until beta results exist |
 | Onboarding 1–5 | Reassure→win→deliver→ascend | DM Excite buyer | Email 4 (delivery) + Email 5 timed to peak trust | Email 2 assumes intake friction — cut it if your intake completion is already high |
-| Autopsy page | PAS → reason-why → risk-reversed CTA | PAS | The "credits back to £0" logic + honest "why £97" | Same proof gap — Martin sign-off is the only trust asset; strengthen the moment you have one beta result |
+| Autopsy page | PAS → reason-why → risk-reversed CTA | PAS | The "credits back to $0" logic + honest "why $97" | Same proof gap — Martin sign-off is the only trust asset; strengthen the moment you have one beta result |
 
 **The one honest through-line:** every asset works *around* the proof gap rather than closing it. Mechanism, the human gate, the credit-back risk reversal, and Martin's sign-off are carrying the weight that testimonials normally would. The day you have one real Founding-beta result — a name, a before/after, a number — it drops into: nurture Email 4, onboarding Email 4, and the autopsy page's empty proof slot. That single result will lift this whole pack more than any copy tweak. Build for it.
 
-**Prices in [Rung 5 / ascension]:** £197 / £347 / £1,500 and the monthly splits are architecture, not gospel — sense-check against your delivery cost and margin before they go live.
+**Prices in [Rung 5 / ascension]:** $197 / $347 / $1,500 and the monthly splits are architecture, not gospel — sense-check against your delivery cost and margin before they go live.

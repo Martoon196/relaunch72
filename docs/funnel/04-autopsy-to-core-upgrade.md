@@ -1,18 +1,18 @@
 # Relaunch72 — Autopsy → Core Upgrade Page
 
-*Shown to someone who has bought the £97 autopsy and received their forensic read. Job: convert them from £97 diagnosis to £997 full relaunch, using the credit-back as the lever. This is the warmest audience you have — they've paid, they've seen your thinking on their business, the leaks are named. Framework: the autopsy result IS the sales argument. Awareness stage: most-aware. Brand voice, Martin sign-off, real scarcity.*
+*Shown to someone who has bought the $97 autopsy and received their forensic read. Job: convert them from $97 diagnosis to $997 full relaunch, using the credit-back as the lever. This is the warmest audience you have — they've paid, they've seen your thinking on their business, the leaks are named. Framework: the autopsy result IS the sales argument. Awareness stage: most-aware. Brand voice, Martin sign-off, real scarcity.*
 
 ---
 
-**[EYEBROW]** YOUR AUTOPSY IS DONE · YOUR £97 IS WAITING TO CREDIT
+**[EYEBROW]** YOUR AUTOPSY IS DONE · YOUR $97 IS WAITING TO CREDIT
 
 # You've seen where you're leaking. Here's the 72 hours that plugs it.
 
-Your autopsy named the leaks. A full Relaunch72 fixes every one of them — and your £97 comes straight off the price, so it starts at £900, not £997.
+Your autopsy named the leaks. A full Relaunch72 fixes every one of them — and your $97 comes straight off the price, so it starts at $900, not $997.
 
-**[Claim my relaunch → £900 after credit]**
+**[Claim my relaunch → $900 after credit]**
 
-*Your £97 credit expires 14 days after your autopsy · 20 relaunches a week · human signed-off*
+*Your $97 credit expires 14 days after your autopsy · 20 relaunches a week · human signed-off*
 
 ---
 
@@ -44,23 +44,23 @@ Nine deliverables. Every leak your autopsy found, closed.
 
 ---
 
-### The £97 you've already spent is the £97 you save
+### The $97 you've already spent is the $97 you save
 
 Here's the part that makes this a smaller decision than it looks.
 
-You've already paid £97 for the autopsy. Claim your relaunch within 14 days and **that £97 credits in full** — the relaunch is £900, not £997. You're not spending £997 on top of what you paid. You're spending £900 more to fix everything the £97 diagnosed.
+You've already paid $97 for the autopsy. Claim your relaunch within 14 days and **that $97 credits in full** — the relaunch is $900, not $997. You're not spending $997 on top of what you paid. You're spending $900 more to fix everything the $97 diagnosed.
 
 Put another way: the diagnosis was free. You just prepaid a slice of the fix.
 
-**[Claim my relaunch → £900 after credit]**
+**[Claim my relaunch → $900 after credit]**
 
 ---
 
 ### Why 72 hours, not six weeks
 
-An agency would fix this for £3–5k a month and a six-week discovery phase — and you'd be handing them the same 45 questions you've already answered for us. A cheap AI tool would hand you generic mush in an afternoon, which is exactly the problem your autopsy just diagnosed.
+An agency would fix this for $3–5k a month and a six-week discovery phase — and you'd be handing them the same 45 questions you've already answered for us. A cheap AI tool would hand you generic mush in an afternoon, which is exactly the problem your autopsy just diagnosed.
 
-We sit in the middle, deliberately. Your intake is already half-built from the autopsy. Ten specialist passes engineer the generic out at every stage. A human signs off the lot before it reaches you. That's why it's 72 hours instead of six weeks, and £900 instead of £3–5k a month.
+We sit in the middle, deliberately. Your intake is already half-built from the autopsy. Ten specialist passes engineer the generic out at every stage. A human signs off the lot before it reaches you. That's why it's 72 hours instead of six weeks, and $900 instead of $3–5k a month.
 
 ---
 
@@ -78,17 +78,17 @@ You've already seen the quality of our thinking on your business — that's what
 
 ### Two honest reasons to move now, and one not to
 
-**Move now because your credit expires.** The £97 credits back for 14 days after your autopsy. After that, the relaunch is full price. That's not a fake countdown — it's just how the credit works.
+**Move now because your credit expires.** The $97 credits back for 14 days after your autopsy. After that, the relaunch is full price. That's not a fake countdown — it's just how the credit works.
 
 **Move now because slots are first paid, first built.** A human signs off every relaunch, so we cap it at 20 a week. When the week's slots are gone, you're in the next week's queue. Claiming now claims your place.
 
-**Don't move if the autopsy convinced you the leaks aren't worth fixing.** Genuinely — if £900 to close every gap you just saw doesn't clear the maths for your business, don't. The autopsy was still the most honest read on your marketing you'll get anywhere, and it was worth the £97 on its own.
+**Don't move if the autopsy convinced you the leaks aren't worth fixing.** Genuinely — if $900 to close every gap you just saw doesn't clear the maths for your business, don't. The autopsy was still the most honest read on your marketing you'll get anywhere, and it was worth the $97 on its own.
 
 But if the leaks are real and they're costing you — this is the 72 hours that ends it.
 
-**[Claim my relaunch → £900 after credit]**
+**[Claim my relaunch → $900 after credit]**
 
-*Your £97 credit expires 14 days after your autopsy · 20 relaunches a week · human signed-off*
+*Your $97 credit expires 14 days after your autopsy · 20 relaunches a week · human signed-off*
 
 ---
 
@@ -103,8 +103,8 @@ Then it gets rewritten by hand — that's the guarantee above, in writing. And y
 **Can I do it myself off the back of the autopsy?**
 You can, and if you'd genuinely rather, do — the autopsy's yours to keep. Most operators find that knowing where the leaks are and having 72 hours to rebuild nine deliverables by hand are very different things. That gap is what the relaunch is.
 
-**Why £900 and not cheaper, given I've paid £97?**
-£900 is the £997 relaunch minus your £97 credit. It's the full nine-deliverable department output, human signed-off — a fifth of what an agency charges for the discovery phase alone, by Friday.
+**Why $900 and not cheaper, given I've paid $97?**
+$900 is the $997 relaunch minus your $97 credit. It's the full nine-deliverable department output, human signed-off — a fifth of what an agency charges for the discovery phase alone, by Friday.
 
 ---
 
@@ -114,10 +114,10 @@ You can, and if you'd genuinely rather, do — the autopsy's yours to keep. Most
 
 **Framework:** not PAS — they're already agitated and solution-aware. This is closer to a *reason-why close*: name the decision, remove the friction (credit), stack the reasons to act (expiry + scarcity), reverse the risk, invite.
 
-**Strongest element:** "the diagnosis was free, you prepaid a slice of the fix" — reframes £997 as £900-on-top-of-sunk-cost, which is a genuinely smaller decision psychologically.
+**Strongest element:** "the diagnosis was free, you prepaid a slice of the fix" — reframes $997 as $900-on-top-of-sunk-cost, which is a genuinely smaller decision psychologically.
 
 **Weakest → flagged:** the "don't move if..." reverse-close is a deliberate risk. It builds trust with skeptical operators (you're not desperate) but a nervier marketer might cut it. I've left it in because it fits the brand's whole "not-for-you-if" posture from the landing page — but it's the one block to A/B test.
 
 **Trigger:** real scarcity (14-day credit expiry + 20/week cap), both genuine, neither manufactured. Loss-aversion on the credit ("expires") does the heavy lifting.
 
-**One thing to confirm:** the £900 figure assumes the £97 credits against the £997 Core. If your credit terms differ (e.g. credits against Pro too, or a different window), the numbers need adjusting throughout — they're load-bearing on this page.
+**One thing to confirm:** the $900 figure assumes the $97 credits against the $997 Core. If your credit terms differ (e.g. credits against Pro too, or a different window), the numbers need adjusting throughout — they're load-bearing on this page.

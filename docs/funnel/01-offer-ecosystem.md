@@ -75,7 +75,7 @@
 
 > Your scorecard shows where you're leaking. It doesn't show *how much*, or *how to plug it*.
 >
-> That's the £97 Marketing Autopsy — the same seven questions taken to forensic depth on your actual numbers, graded, no punches pulled. And the £97 credits in full against a Relaunch72 Core within 14 days.
+> That's the $97 Marketing Autopsy — the same seven questions taken to forensic depth on your actual numbers, graded, no punches pulled. And the $97 credits in full against a Relaunch72 Core within 14 days.
 >
 > **[See the full autopsy →]**
 
@@ -99,20 +99,20 @@ COLD TRAFFIC (ad / organic / referral)
 [ NURTURE ]      Subscriber sequence (Rung 6) warms non-buyers
         │        toward the autopsy
         ▼
-[ TRIPWIRE ]     £97 Marketing Autopsy — the decisive low-risk yes
+[ TRIPWIRE ]     $97 Marketing Autopsy — the decisive low-risk yes
         │        Credits in full to Core within 14 days
         ▼
-[ CORE ]         £997 Relaunch72 Core  +  £147 content bump (order bump)
+[ CORE ]         $997 Relaunch72 Core  +  $147 content bump (order bump)
         │        Nine deliverables, 72hr, human sign-off
         ▼
-[ ANCHOR ]       £2,497 Pro — present, mainly anchoring Core until proof lands
+[ ANCHOR ]       $2,497 Pro — present, mainly anchoring Core until proof lands
 ```
 
 **Key sequencing decisions:**
 
-1. **Autopsy becomes the primary CTA for cold traffic**, not Core. A skeptic won't jump to £997 from an unverifiable founder — but £97 to see the quality of *your thinking on their business* is an easy yes, and it credits back. Core stops being a cold ask and becomes a warm upgrade.
-2. **The £147 content bump stays as an order bump at Core checkout** — correctly placed already. "Want month two handled too while we're in here?"
-3. **Pro is honestly an anchor right now.** It makes £997 look like the sensible middle. It'll become a real revenue line once Founding-beta results exist — not before.
+1. **Autopsy becomes the primary CTA for cold traffic**, not Core. A skeptic won't jump to $997 from an unverifiable founder — but $97 to see the quality of *your thinking on their business* is an easy yes, and it credits back. Core stops being a cold ask and becomes a warm upgrade.
+2. **The $147 content bump stays as an order bump at Core checkout** — correctly placed already. "Want month two handled too while we're in here?"
+3. **Pro is honestly an anchor right now.** It makes $997 look like the sensible middle. It'll become a real revenue line once Founding-beta results exist — not before.
 4. **The scorecard result page and the autopsy page both carry the new guarantee** — proof-of-confidence substitutes for proof-of-results at launch.
 
 ---
@@ -131,12 +131,12 @@ COLD TRAFFIC (ad / organic / referral)
 >
 > Since we're already in there, you can bolt on the **90-Day Content Engine** now — 60 more days of social and 12 more emails, so month two doesn't go quiet — at the founding rate:
 >
-> - **One-time: £147** *(this page only — it's £297 if you come back for it later)*
-> - **Or £59/month × 3** *(same thing, spread — starts when your relaunch lands)*
+> - **One-time: $147** *(this page only — it's $297 if you come back for it later)*
+> - **Or $59/month × 3** *(same thing, spread — starts when your relaunch lands)*
 >
 > **[Yes — keep month two loud →]**    **[No thanks, just the relaunch →]**
 
-**Why both price options:** one-time captures the decisive buyer at peak enthusiasm; pay-monthly captures the cash-flow-sensitive operator (a lot of real ones). Monthly totals *more* (£177 vs £147) — you're financing them, that costs you. One-time discount is genuinely time-boxed to this page, not evergreen.
+**Why both price options:** one-time captures the decisive buyer at peak enthusiasm; pay-monthly captures the cash-flow-sensitive operator (a lot of real ones). Monthly totals *more* ($177 vs $147) — you're financing them, that costs you. One-time discount is genuinely time-boxed to this page, not evergreen.
 
 **Audit:** On-brand ✓, one job ✓ (single bolt-on, not a stack), real price logic ✓, doesn't pattern-match to slop-merchant upselling ✓.
 
@@ -156,17 +156,17 @@ Delivered as the final email of the buyer onboarding sequence + an on-screen off
 >
 > **1. Keep it loud — 90-Day Content Engine**
 > If you didn't bolt it on at checkout: 60 more days of social, 12 more emails. So the 30 days we built you doesn't fall off a cliff.
-> → **£197 one-time** or **£69/month × 3**
+> → **$197 one-time** or **$69/month × 3**
 >
 > **2. Get the hero assets rewritten by hand — Strategist Polish**
 > A strategist takes your homepage and sales page and rewrites them line by line, by hand. For operators who want the flagship pages perfect, not just good.
-> → **£347 one-time**
+> → **$347 one-time**
 >
 > **3. Go Pro — the full strategy session**
 > The 90-minute session, implementation roadmap, and 30 days of support. For operators who want a hand on the wheel from here.
-> → **£1,500** *(you've already paid £997 toward Pro — this is the upgrade price, this week only)*
+> → **$1,500** *(you've already paid $997 toward Pro — this is the upgrade price, this week only)*
 
-**Key mechanic — the Pro upgrade path:** buyers who took Core can upgrade to Pro at the *difference* (£1,500 not £2,497), time-boxed to the delivery week. This is where Pro finally earns real revenue — from *warm, impressed buyers*, not cold skeptics.
+**Key mechanic — the Pro upgrade path:** buyers who took Core can upgrade to Pro at the *difference* ($1,500 not $2,497), time-boxed to the delivery week. This is where Pro finally earns real revenue — from *warm, impressed buyers*, not cold skeptics.
 
 **Audit:** Timed to actual peak-trust window ✓ (not the faith-based T+0), each path does distinct work ✓, one-time + monthly on path 1 ✓, upgrade-at-difference is strong choice architecture ✓.
 
@@ -178,7 +178,7 @@ Two audiences, opposite directions: **non-buyers get pushed *down* the ladder; b
 
 ### 6a. Subscriber nurture (lead magnet → autopsy) — 5 emails
 
-Runs after someone takes the scorecard but doesn't buy. Job: warm them to the £97 autopsy. *(DM Excite-stage subscriber map, Relaunch72 voice. Full bodies below in brief — full drafts on request.)*
+Runs after someone takes the scorecard but doesn't buy. Job: warm them to the $97 autopsy. *(DM Excite-stage subscriber map, Relaunch72 voice. Full bodies below in brief — full drafts on request.)*
 
 | # | Send | Job | Subject (lead option) |
 |---|---|---|---|
@@ -186,7 +186,7 @@ Runs after someone takes the scorecard but doesn't buy. Job: warm them to the £
 | 2 | Day 2 | The story — why "signed off by a human" exists | *The loud bloke down the road isn't better than you* |
 | 3 | Day 4 | Teach — one generic-marketing fix they can do today | *The 5-second test your homepage is probably failing* |
 | 4 | Day 6 | Proof / mechanism — how generic gets engineered out | *Ten specialist passes, one human gate. Here's why* |
-| 5 | Day 8 | The invitation — the £97 autopsy, credits to Core | *Want to know how much those leaks are costing you?* |
+| 5 | Day 8 | The invitation — the $97 autopsy, credits to Core | *Want to know how much those leaks are costing you?* |
 
 ### 6b. Buyer onboarding (Core purchase → delivery → ascension) — 5 emails
 
@@ -205,8 +205,8 @@ Runs after Core purchase. Job: prevent remorse pre-delivery, deliver the win, br
 | Audience | Where they stalled | Push them… | To |
 |---|---|---|---|
 | Visited page, didn't opt in | Cold, no email | **Down** | The free scorecard (lowest-friction entry) |
-| Took scorecard, didn't buy autopsy | Warm, has email | **Down/across** | The £97 autopsy (nurture 6a does the heavy lifting) |
-| Bought autopsy, didn't take Core | Hot buyer, single purchase | **Up** | Core — "your £97 is credited, 14-day clock ticking" |
+| Took scorecard, didn't buy autopsy | Warm, has email | **Down/across** | The $97 autopsy (nurture 6a does the heavy lifting) |
+| Bought autopsy, didn't take Core | Hot buyer, single purchase | **Up** | Core — "your $97 is credited, 14-day clock ticking" |
 | Bought Core | Buyer | **Up** | Delivery-moment ascension (Rung 5), never cold ads |
 
 **The one rule:** never remarket a *buyer* with cold acquisition ads. They're past that — they get ascension, not re-acquisition.
@@ -217,7 +217,7 @@ Runs after Core purchase. Job: prevent remorse pre-delivery, deliver the win, br
 
 **Deliberately not built yet.** Continuity on a 20/week human-gated model is a *capacity* decision before it's an offer decision. Building a subscription now splits focus while your real bottleneck is proof, not monetisation.
 
-**Where it'll plug in when the time comes:** the £69/month content-engine path (Rung 5, path 1) is already the seed. Post-beta, that becomes a standing monthly retainer — "keep the marketing loud every month, human-checked" — and the delivery-moment ascension is its natural entry point. Note it, move on.
+**Where it'll plug in when the time comes:** the $69/month content-engine path (Rung 5, path 1) is already the seed. Post-beta, that becomes a standing monthly retainer — "keep the marketing loud every month, human-checked" — and the delivery-moment ascension is its natural entry point. Note it, move on.
 
 ---
 
@@ -234,20 +234,20 @@ Runs after Core purchase. Job: prevent remorse pre-delivery, deliver the win, br
           [NURTURE 6a: 5 emails]
                     │
                     ▼
-          [TRIPWIRE: £97 Autopsy]  ──credits £97──┐
+          [TRIPWIRE: $97 Autopsy]  ──credits $97──┐
                     │                             │
                     ▼                             ▼
-          [CORE: £997]  +  [BUMP: £147 order bump]
+          [CORE: $997]  +  [BUMP: $147 order bump]
                     │
-          [OTO 4: month-two bolt-on, £147 / £59×3]
+          [OTO 4: month-two bolt-on, $147 / $59×3]
                     │
           [ONBOARDING 6b: 5 emails ending at delivery]
                     │
                     ▼  T+72 — WORK LANDS — peak trust
           [ASCENSION 5: three paths]
-             ├─ Content Engine  £197 / £69×3
-             ├─ Strategist Polish  £347
-             └─ Pro upgrade  £1,500 (diff from Core)
+             ├─ Content Engine  $197 / $69×3
+             ├─ Strategist Polish  $347
+             └─ Pro upgrade  $1,500 (diff from Core)
                     │
                     ▼
           [CONTINUITY: parked → phase two retainer]

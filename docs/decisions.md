@@ -505,3 +505,16 @@ retry otherwise). index.ts builds the hooks from BREVO_API_KEY + BREVO_LIST_LEAD
 and a real boot + /api/subscribe over HTTP (200 synced:false with marketing off, 400 on a bad email). Live Brevo
 calls need a key + egress to api.brevo.com. Remaining for #30: convert the nurture/onboarding copy £→$ and a setup
 runbook.
+
+**D-043 · Funnel email copy converted £→$; email setup runbook written; #30 complete.**
+Closed out #30. (1) Converted all funnel source copy (01/02/04) £→$ 1:1 — 112 replacements — so the email
+sequences are load-ready and consistent with the live site + Stripe catalog ($97/$997/$147/$2,497, credit → $900).
+The agency anchor went £3–5k → $3–5k for full currency consistency; NOTE the live autopsy/upgrade *pages* still
+show a £3–5k anchor (deliberately kept earlier) — flagged to the founder to flip if they want site+email to match,
+not changed unilaterally (live outward-facing). (2) Wrote docs/email-setup.md: the account-side runbook mirroring
+deploy-render.md — Postmark server + domain verification + token + the `deliver --send` flow; Brevo key + two lists
++ building the nurture/onboarding automations from the pack; which trigger fires which sync; a go-live checklist.
+Net #30 state: all email CODE done + tested (Postmark transactional send, Brevo lead/customer sync, /api/subscribe,
+scorecard wired) — 206 tests; the remaining work is founder ESP account setup (keys, domain verify, build the two
+Brevo automations), documented in the runbook. No real email sent from here (no tokens + egress-blocked + hard
+rule #3).
