@@ -13,11 +13,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import Stripe from 'stripe';
 import type { Intake } from '../types.js';
 import { loadStripeConfig } from './config.js';
 import { fileOrderStore } from './orders.js';
 import { createApp } from './app.js';
+import { makeStripe } from './stripe-client.js';
 import type { StripeLike } from './stripe.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -41,7 +41,7 @@ function main(): void {
     console.error('STRIPE_SECRET_KEY is not set. Add a TEST key (sk_test_…) to .env — see .env.example. Refusing to start.');
     process.exit(1);
   }
-  const stripe = new Stripe(cfg.secretKey) as unknown as StripeLike;
+  const stripe = makeStripe(cfg.secretKey) as unknown as StripeLike;
   const orders = fileOrderStore(cfg.ordersFile);
   const app = createApp({ stripe, cfg, orders, kickPipeline, now: () => new Date().toISOString() });
   http.createServer((req, res) => { void app(req, res); }).listen(cfg.port, () => {

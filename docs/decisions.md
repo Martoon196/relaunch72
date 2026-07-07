@@ -420,3 +420,16 @@ key; data/ (orders + submitted intakes = PII) is git-ignored (hard rule #4). Fro
 an apiBase seam: set it and checkout POSTs to the backend; leave it empty and it falls back to Payment
 Links, then the dev walk-through. No account, key, or Stripe call needed to build/test — the founder
 adds a test key + creates the four products to switch it on. Boot + /health + /api/checkout smoke-verified.
+
+**D-037 · Stripe egress is blocked in the CCR sandbox; client made proxy-aware; setup runs where Stripe is reachable.**
+Wired the founder's TEST secret key into .env (git-ignored) and ran `npm run stripe:setup` — it fails
+because this session's egress proxy denies api.stripe.com (curl CONNECT → 403; the proxy README: a 403
+is an org egress-policy denial — report it, do not route around it). The allowlist covers Anthropic +
+package registries only. So the payments backend can't touch Stripe from inside the sandbox. Not a code
+bug: 189 tests pass and the design is sound. Two fixes for the founder: (a) allow api.stripe.com in this
+environment's network policy (Claude Code env settings), then re-run setup here; or (b) run `stripe:setup`
++ `serve` where Stripe is reachable (local machine / the eventual host) — which is the natural home for a
+payments server anyway. Made the Stripe client proxy-aware (makeStripe reads HTTPS_PROXY via
+https-proxy-agent) so it works the moment the host is allowlisted and doesn't silently bypass a proxy.
+Security: the test keys were pasted in chat — advise rotating them before go-live (test keys can't move
+real money, so low risk).

@@ -10,10 +10,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import Stripe from 'stripe';
 import { REPO_ROOT } from '../paths.js';
 import '../config.js'; // side-effect: loads .env
 import { provisionCatalog, type StripeCatalogLike } from './catalog.js';
+import { makeStripe } from './stripe-client.js';
 import { TIER_PRICE_ENV } from './config.js';
 
 /** Set KEY=value in an .env file, replacing an existing line or appending. */
@@ -37,7 +37,7 @@ async function main(): Promise<void> {
     console.error('That is a LIVE key. Use a TEST key (sk_test_…) — Relaunch72 stays in test mode until you go live.');
     process.exit(1);
   }
-  const stripe = new Stripe(key) as unknown as StripeCatalogLike;
+  const stripe = makeStripe(key) as unknown as StripeCatalogLike;
   console.log('Provisioning the Relaunch72 catalog in Stripe (test mode)…');
   const { priceIds, created, reused } = await provisionCatalog(stripe, 'usd', (m) => console.log('  ' + m));
 
