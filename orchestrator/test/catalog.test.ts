@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { provisionCatalog, CATALOG, type StripeCatalogLike } from '../src/server/catalog.js';
+import { provisionCatalog, ensureCatalogPrices, CATALOG, type StripeCatalogLike } from '../src/server/catalog.js';
 import { upsertEnv } from '../src/server/setup.js';
 
 function fakeCatalogStripe(existing: Record<string, string> = {}): StripeCatalogLike {
@@ -35,6 +35,26 @@ test('provisionCatalog is idempotent — reuses existing prices by lookup_key', 
   assert.ok(r.reused.includes('core') && r.reused.includes('pro'));
   assert.ok(r.created.includes('autopsy') && r.created.includes('core_bump'));
   assert.equal(r.created.length, 2);
+});
+
+test('ensureCatalogPrices auto-provisions when no price IDs are supplied', async () => {
+  const r = await ensureCatalogPrices(fakeCatalogStripe(), { autopsy: '', core: '', core_bump: '', pro: '' });
+  assert.equal(r.provisioned, true);
+  assert.equal(r.created.length, 4);
+  for (const c of CATALOG) assert.ok(r.priceIds[c.key], `${c.key} resolved`);
+});
+
+test('ensureCatalogPrices respects manually-set price IDs — no Stripe calls', async () => {
+  let called = false;
+  const spy: StripeCatalogLike = {
+    products: { create: async () => { called = true; return { id: 'x' }; } },
+    prices: { create: async () => { called = true; return { id: 'x' }; }, list: async () => { called = true; return { data: [] }; } },
+  };
+  const provided = { autopsy: 'price_a', core: 'price_c', core_bump: 'price_cb', pro: 'price_p' };
+  const r = await ensureCatalogPrices(spy, provided);
+  assert.equal(r.provisioned, false);
+  assert.equal(called, false, 'no Stripe calls when IDs are already set');
+  assert.deepEqual(r.priceIds, provided);
 });
 
 test('upsertEnv replaces an existing key and appends a new one', () => {

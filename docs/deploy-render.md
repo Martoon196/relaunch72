@@ -51,48 +51,30 @@ The first deploy comes up **green before you've added any secrets** — the serv
 in "UNCONFIGURED" mode, `/health` returns `{"configured":false}`, and checkout returns a
 polite 503 until step 3. That's expected: it deploys first, you add the key after.
 
-## Step 2 — Provision the Stripe prices
+## Step 2 — Paste the two keys into Render
 
-The four products need to exist in Stripe with stable `lookup_key`s. One command does it,
-idempotently (safe to re-run):
+Render service → **Environment** → **Add Environment Variable** for each:
 
-```bash
-# locally, with your TEST secret key in .env (STRIPE_SECRET_KEY=sk_test_…)
-npm run stripe:setup
+| Key | Value | Where to get it |
+|---|---|---|
+| `STRIPE_SECRET_KEY` | your `sk_test_…` key | Stripe → flip **Test mode** on → Developers → API keys → reveal Secret key |
+| `ANTHROPIC_API_KEY` | your Anthropic key | console.anthropic.com → API keys |
+
+`PUBLIC_BASE_URL` (=`https://relaunch72.com`) and `NODE_VERSION` are already set by the
+blueprint. **You do not set any price IDs** — the four prices auto-create from your key on
+first boot (idempotent; safe on every restart). Save → Render redeploys.
+
+Check **Logs** for:
 ```
-
-It prints — and writes into `.env` — the four price IDs:
-
+Relaunch72 payments server on :10000 — TEST mode
+  created autopsy → price_…  ($97.00)
+  … (four lines)
+Catalog ready — 4 created, 0 reused.
 ```
-STRIPE_PRICE_AUTOPSY=price_…
-STRIPE_PRICE_CORE=price_…
-STRIPE_PRICE_CORE_BUMP=price_…
-STRIPE_PRICE_PRO=price_…
-```
+Then hit `https://<your-service>.onrender.com/health` → `{"ok":true,"mode":"test","configured":true}`.
 
-(If you'd rather not run it locally, use Render's **Shell** tab on the service and run the
-same command there once the env has the secret key.)
-
-## Step 3 — Paste the secrets into Render
-
-Render service → **Environment**. Add these (the blueprint already lists them as
-"sync:false", i.e. waiting for values):
-
-| Key | Value |
-|---|---|
-| `STRIPE_SECRET_KEY` | your `sk_test_…` key |
-| `STRIPE_PRICE_AUTOPSY` | from step 2 |
-| `STRIPE_PRICE_CORE` | from step 2 |
-| `STRIPE_PRICE_CORE_BUMP` | from step 2 |
-| `STRIPE_PRICE_PRO` | from step 2 |
-| `ANTHROPIC_API_KEY` | so the kicked pipeline can run stages |
-| `STRIPE_WEBHOOK_SECRET` | set in step 4 |
-
-`PUBLIC_BASE_URL` is already `https://relaunch72.com` from the blueprint.
-
-Save → Render redeploys. Check **Logs** for:
-`Relaunch72 payments server on :10000 — TEST mode`. Then hit
-`https://<your-service>.onrender.com/health` → `{"ok":true,"mode":"test"}`.
+(Prefer to pin exact prices instead? Set `STRIPE_PRICE_AUTOPSY/CORE/CORE_BUMP/PRO` — if any
+is set, auto-provision steps aside and uses yours.)
 
 ## Step 4 — Register the Stripe webhook
 

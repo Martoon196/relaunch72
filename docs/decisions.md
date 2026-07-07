@@ -464,3 +464,17 @@ and confirmed the fix. 193 tests (1 new), typecheck clean. autoDeploy:true means
 redeploy, which should now go green; the founder then pastes secrets (step 3 of the runbook). Diagnosed without
 Render log access — inferred from the deploy model; if a green redeploy still fails it's a different cause
 (build/install) and needs the actual logs.
+
+**D-040 · Prices auto-provision from the key on boot — founder sets zero STRIPE_PRICE_* vars.**
+The founder picked "auto-create from my key" over running stripe:setup or hand-making four products — matches
+their standing preference ("I give the key and you do the wizardry"). Added `ensureCatalogPrices(stripe, provided)`
+to catalog.ts: if any STRIPE_PRICE_* is set it's the manual path (returned unchanged, no Stripe calls); otherwise
+it calls the existing idempotent `provisionCatalog` and returns the created/reused IDs. index.ts calls it once,
+AFTER the server is listening (so a slow/failed Stripe call can't block /health), and mutates cfg.priceIds in
+place (the handler sees it by reference). Failure is caught + warned, server stays up. Net effect on Render: the
+only required secrets are STRIPE_SECRET_KEY, ANTHROPIC_API_KEY, and (after the URL exists) STRIPE_WEBHOOK_SECRET
+— no price IDs. Blueprint + runbook + .env.example updated to make STRIPE_PRICE_* optional. Verified: 195 tests
+(2 new — auto-provisions when empty; no Stripe calls when IDs supplied), typecheck clean, and a real boot with
+the test key — TEST mode, provision attempted, failed gracefully on the sandbox's Stripe egress block (403 →
+"Invalid JSON received from the Stripe API", the D-037 wall), /health stayed 200. On Render (Stripe reachable)
+the same path creates the four prices. Live provisioning can only be verified where egress allows Stripe.

@@ -29,19 +29,21 @@ services:
       # ---- secrets: paste these in the Render dashboard (never in git) ----
       - key: STRIPE_SECRET_KEY        # sk_test_…  (sk_live_… only at go-live)
         sync: false
-      - key: STRIPE_WEBHOOK_SECRET    # whsec_… from the Stripe webhook you register
-        sync: false
-      - key: STRIPE_PRICE_AUTOPSY     # price_… printed by `npm run stripe:setup`
-        sync: false
-      - key: STRIPE_PRICE_CORE
-        sync: false
-      - key: STRIPE_PRICE_CORE_BUMP
-        sync: false
-      - key: STRIPE_PRICE_PRO
-        sync: false
       - key: ANTHROPIC_API_KEY        # so the auto-kicked pipeline can run stages
         sync: false
+      - key: STRIPE_WEBHOOK_SECRET    # whsec_… from the Stripe webhook you register (add after 1st deploy)
+        sync: false
       # ---- optional ----
+      # The four prices auto-create from STRIPE_SECRET_KEY on boot (idempotent),
+      # so STRIPE_PRICE_* are NOT needed. Set them only to pin specific prices:
+      # - key: STRIPE_PRICE_AUTOPSY
+      #   sync: false
+      # - key: STRIPE_PRICE_CORE
+      #   sync: false
+      # - key: STRIPE_PRICE_CORE_BUMP
+      #   sync: false
+      # - key: STRIPE_PRICE_PRO
+      #   sync: false
       # - key: ALLOWED_ORIGINS        # extra browser origins, comma-separated.
       #   sync: false                 #   relaunch72.com + martoon196.github.io are built in.
       # - key: DATA_DIR               # set to /var/data ONLY if you add a disk below.

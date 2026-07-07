@@ -19,6 +19,8 @@ import { fileOrderStore } from './orders.js';
 import { createApp } from './app.js';
 import { makeStripe } from './stripe-client.js';
 import type { StripeLike } from './stripe.js';
+import { ensureCatalogPrices, type StripeCatalogLike } from './catalog.js';
+import type { StripeConfig } from './config.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ORCH_ROOT = path.resolve(HERE, '../..');
@@ -43,6 +45,24 @@ function unconfiguredStripe(): StripeLike {
   return { checkout: { sessions: { create: nope } }, webhooks: { constructEvent: nope } };
 }
 
+/**
+ * Fill any unset price IDs by provisioning the catalog from the key — so the
+ * founder sets only STRIPE_SECRET_KEY, no STRIPE_PRICE_* vars. Runs after the
+ * server is already listening so a slow/failed Stripe call never blocks /health.
+ */
+async function ensurePrices(stripe: StripeLike, cfg: StripeConfig): Promise<void> {
+  try {
+    const { priceIds, provisioned, created, reused } = await ensureCatalogPrices(
+      stripe as unknown as StripeCatalogLike, cfg.priceIds, 'usd', (m) => console.log('  ' + m));
+    if (provisioned) {
+      Object.assign(cfg.priceIds, priceIds);
+      console.log(`Catalog ready — ${created.length} created, ${reused.length} reused.`);
+    }
+  } catch (e) {
+    console.warn(`⚠  Stripe price auto-provision failed: ${(e as Error).message}. Checkout will 400 until it succeeds — restart the service, or set STRIPE_PRICE_* manually.`);
+  }
+}
+
 function main(): void {
   const cfg = loadStripeConfig();
   // Start regardless of config so the host's health check passes; checkout/webhook
@@ -57,8 +77,8 @@ function main(): void {
   http.createServer((req, res) => { void app(req, res); }).listen(cfg.port, () => {
     const mode = !cfg.secretKey ? 'UNCONFIGURED' : cfg.liveMode ? 'LIVE ⚠️' : 'TEST';
     console.log(`Relaunch72 payments server on :${cfg.port} — ${mode} mode`);
-    const missing = Object.entries(cfg.priceIds).filter(([, v]) => !v).map(([k]) => k);
-    if (cfg.secretKey && missing.length) console.log(`  (price ids not yet set: ${missing.join(', ')} — checkout for those tiers will 400 until configured)`);
+    // With a key but no manual price IDs, provision the catalog now (idempotent).
+    if (cfg.secretKey) void ensurePrices(stripe, cfg);
   });
 }
 

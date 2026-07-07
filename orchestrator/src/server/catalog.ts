@@ -68,3 +68,23 @@ export async function provisionCatalog(
   }
   return { priceIds, created, reused };
 }
+
+/**
+ * Resolve the price IDs the server should run with. If ANY are already supplied
+ * (STRIPE_PRICE_* set manually), that's treated as the manual path — returned
+ * unchanged, no Stripe calls. Otherwise the catalog is provisioned from the key
+ * and the created/reused IDs returned. Lets the founder set only the secret key
+ * and have the four prices appear on boot. Provisioning errors propagate.
+ */
+export async function ensureCatalogPrices(
+  stripe: StripeCatalogLike,
+  provided: Record<string, string>,
+  currency = 'usd',
+  log: (m: string) => void = () => {},
+): Promise<ProvisionResult & { provisioned: boolean }> {
+  if (Object.values(provided).some(Boolean)) {
+    return { priceIds: { ...provided }, created: [], reused: [], provisioned: false };
+  }
+  const r = await provisionCatalog(stripe, currency, log);
+  return { ...r, provisioned: true };
+}
