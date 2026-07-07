@@ -478,3 +478,16 @@ only required secrets are STRIPE_SECRET_KEY, ANTHROPIC_API_KEY, and (after the U
 the test key — TEST mode, provision attempted, failed gracefully on the sandbox's Stripe egress block (403 →
 "Invalid JSON received from the Stripe API", the D-037 wall), /health stayed 200. On Render (Stripe reachable)
 the same path creates the four prices. Live provisioning can only be verified where egress allows Stripe.
+
+**D-041 · Postmark transactional send wired into delivery — opt-in via --send, dry-run by default.**
+Founder chose Postmark for transactional email (Brevo for marketing). The delivery module was pure builders
+(buildDeliveryEmail/buildEml) with no send. Added src/email/postmark.ts: PostmarkLike interface + deliveryMessage
+(pure mapper, validates the recipient and refuses a malformed address) + makePostmark (real client over node:https,
+proxy-aware like makeStripe). Wired into `deliver` behind a new `--send` flag: default stays a dry-run (writes
+email.txt/.eml, sends nothing); --send requires POSTMARK_SERVER_TOKEN + --to and attaches the branded PDFs if they
+fit an 8MB budget (Postmark caps ~10MB). --send is the founder's explicit "email this real person" intent — hard
+rule #3 (ask before emailing a real address) is respected: nothing autonomous, and I ran no real send from here.
+Sender/reply-to via EMAIL_FROM/EMAIL_REPLY_TO (default hello@relaunch72.com; needs a verified Postmark sender
+domain before real sends work). Verified: 199 tests (4 new — field mapping, invalid-recipient refusal, fake-client
+contract), typecheck clean. Real Postmark send can only be exercised where egress allows api.postmarkapp.com + a
+token exists. Brevo marketing sync is the next piece.
