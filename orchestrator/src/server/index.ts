@@ -23,16 +23,18 @@ import type { StripeLike } from './stripe.js';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ORCH_ROOT = path.resolve(HERE, '../..');
 const CLI = path.join(ORCH_ROOT, 'src', 'cli.ts');
-const INTAKE_DIR = path.resolve(ORCH_ROOT, '..', 'data', 'intakes');
 
-function kickPipeline(intake: Intake, sessionId: string | null): string {
-  fs.mkdirSync(INTAKE_DIR, { recursive: true });
-  const ref = `${sessionId ?? 'intake'}-${Date.now()}`;
-  const file = path.join(INTAKE_DIR, `${ref}.json`);
-  fs.writeFileSync(file, JSON.stringify(intake, null, 2), 'utf8');
-  const child = spawn('npx', ['tsx', CLI, '--input', file], { cwd: ORCH_ROOT, detached: true, stdio: 'ignore' });
-  child.unref();
-  return file;
+/** Persist the accepted intake under `dataDir` and spawn the build detached. */
+function createKick(intakeDir: string) {
+  return function kickPipeline(intake: Intake, sessionId: string | null): string {
+    fs.mkdirSync(intakeDir, { recursive: true });
+    const ref = `${sessionId ?? 'intake'}-${Date.now()}`;
+    const file = path.join(intakeDir, `${ref}.json`);
+    fs.writeFileSync(file, JSON.stringify(intake, null, 2), 'utf8');
+    const child = spawn('npx', ['tsx', CLI, '--input', file], { cwd: ORCH_ROOT, detached: true, stdio: 'ignore' });
+    child.unref();
+    return file;
+  };
 }
 
 function main(): void {
@@ -43,6 +45,7 @@ function main(): void {
   }
   const stripe = makeStripe(cfg.secretKey) as unknown as StripeLike;
   const orders = fileOrderStore(cfg.ordersFile);
+  const kickPipeline = createKick(path.join(cfg.dataDir, 'intakes'));
   const app = createApp({ stripe, cfg, orders, kickPipeline, now: () => new Date().toISOString() });
   http.createServer((req, res) => { void app(req, res); }).listen(cfg.port, () => {
     console.log(`Relaunch72 payments server on :${cfg.port} — ${cfg.liveMode ? 'LIVE ⚠️' : 'TEST'} mode`);

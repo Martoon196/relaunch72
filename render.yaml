@@ -1,0 +1,61 @@
+# Relaunch72 payments API — Render Blueprint.
+# In Render: New + → Blueprint → connect this repo → pick branch
+# `claude/relaunch72-architecture-1fi7qd`. Render reads this file and creates the
+# service; you then paste the secret env vars (marked sync:false) in the dashboard.
+#
+# It's an npm workspaces monorepo, so we build from the repo root (the lockfile
+# lives here) and start the orchestrator workspace's `serve` script.
+#
+# TEST MODE by default (hard rule #2): with an sk_test_… key the server logs
+# "TEST mode" and no real money can move. Going live = swap in sk_live_… keys.
+services:
+  - type: web
+    name: relaunch72-payments
+    runtime: node
+    region: frankfurt          # closest to the UK; change if you prefer
+    plan: free                 # free sleeps after 15 min idle (see NOTES). Upgrade to
+                               # `starter` for an always-on instance + a persistent disk.
+    branch: claude/relaunch72-architecture-1fi7qd
+    buildCommand: npm install
+    startCommand: npm run serve
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # The SITE origin Stripe returns to after payment (not this API's URL).
+      - key: PUBLIC_BASE_URL
+        value: https://relaunch72.com
+      # ---- secrets: paste these in the Render dashboard (never in git) ----
+      - key: STRIPE_SECRET_KEY        # sk_test_…  (sk_live_… only at go-live)
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET    # whsec_… from the Stripe webhook you register
+        sync: false
+      - key: STRIPE_PRICE_AUTOPSY     # price_… printed by `npm run stripe:setup`
+        sync: false
+      - key: STRIPE_PRICE_CORE
+        sync: false
+      - key: STRIPE_PRICE_CORE_BUMP
+        sync: false
+      - key: STRIPE_PRICE_PRO
+        sync: false
+      - key: ANTHROPIC_API_KEY        # so the auto-kicked pipeline can run stages
+        sync: false
+      # ---- optional ----
+      # - key: ALLOWED_ORIGINS        # extra browser origins, comma-separated.
+      #   sync: false                 #   relaunch72.com + martoon196.github.io are built in.
+      # - key: DATA_DIR               # set to /var/data ONLY if you add a disk below.
+      #   value: /var/data
+
+# NOTES
+# • Free plan sleeps when idle: the first request after a nap is slow, and a build
+#   kicked by the pipeline can be interrupted. Fine for playing with test payments;
+#   for real orders upgrade to `starter` and uncomment the disk + DATA_DIR above:
+#
+#   disk:
+#     name: r72-data
+#     mountPath: /var/data
+#     sizeGB: 1
+#
+# • Orders/intakes are written to disk. Without a persistent disk they reset on each
+#   redeploy — expected on free, solved by the disk above.

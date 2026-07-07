@@ -21,11 +21,11 @@
     "dotenv": "^16.4.5",
     "https-proxy-agent": "^9.1.0",
     "playwright-core": "^1.61.1",
-    "stripe": "^22.3.0"
+    "stripe": "^22.3.0",
+    "tsx": "^4.19.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }
 }

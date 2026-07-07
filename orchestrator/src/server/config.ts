@@ -25,13 +25,28 @@ export interface StripeConfig {
   publicBaseUrl: string;
   port: number;
   liveMode: boolean;
+  dataDir: string;
   ordersFile: string;
+  /** Browser origins allowed to call the API (the site is a different host). */
+  allowedOrigins: string[];
 }
+
+/** Origins the funnel is served from — the site, not the API. Overridable via env. */
+const DEFAULT_ORIGINS = [
+  'https://relaunch72.com',
+  'https://www.relaunch72.com',
+  'https://martoon196.github.io',
+  'http://localhost:8080',
+  'http://localhost:4242',
+];
 
 export function loadStripeConfig(env: NodeJS.ProcessEnv = process.env): StripeConfig {
   const priceIds: Record<string, string> = {};
   for (const [tier, key] of Object.entries(TIER_PRICE_ENV)) priceIds[tier] = env[key]?.trim() ?? '';
   const secretKey = env.STRIPE_SECRET_KEY?.trim() ?? '';
+  // DATA_DIR lets a Render persistent disk hold orders/intakes across redeploys.
+  const dataDir = env.DATA_DIR?.trim() || path.join(REPO_ROOT, 'data');
+  const extraOrigins = (env.ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
   return {
     secretKey,
     webhookSecret: env.STRIPE_WEBHOOK_SECRET?.trim() ?? '',
@@ -39,7 +54,9 @@ export function loadStripeConfig(env: NodeJS.ProcessEnv = process.env): StripeCo
     publicBaseUrl: (env.PUBLIC_BASE_URL?.trim() || 'http://localhost:8080').replace(/\/$/, ''),
     port: Number(env.PORT ?? 4242),
     liveMode: /^sk_live_/.test(secretKey),
-    ordersFile: path.join(REPO_ROOT, 'data', 'orders.jsonl'),
+    dataDir,
+    ordersFile: path.join(dataDir, 'orders.jsonl'),
+    allowedOrigins: [...new Set([...DEFAULT_ORIGINS, ...extraOrigins])],
   };
 }
 

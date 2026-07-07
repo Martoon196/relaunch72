@@ -433,3 +433,20 @@ payments server anyway. Made the Stripe client proxy-aware (makeStripe reads HTT
 https-proxy-agent) so it works the moment the host is allowlisted and doesn't silently bypass a proxy.
 Security: the test keys were pasted in chat — advise rotating them before go-live (test keys can't move
 real money, so low risk).
+
+**D-038 · Payments API made Render-deployable: CORS added, workspace-aware blueprint, data dir configurable.**
+The static funnel is on Pages but can't take a card; the payments server needs a Node host, and the founder
+chose Render (same platform as their Property Predator). Four changes made it deployable: (1) **CORS** — the
+site (relaunch72.com) calls the API cross-origin, which the browser blocks without it; added an allowlist
+(relaunch72.com, www, martoon196.github.io, localhost) echoed per-request via setHeader, an OPTIONS preflight
+→ 204, `Vary: Origin`, and a disallowed origin gets no allow-origin header. Extensible via `ALLOWED_ORIGINS`.
+(2) **Monorepo build** — it's an npm workspaces repo (lockfile at root), so `render.yaml` builds from the
+repo root (`npm install`) and starts the workspace (`npm run serve`, delegator added to root package.json);
+`tsx` moved devDeps→deps since the server runs on it and spawns `npx tsx` for the pipeline; lockfile resynced.
+(3) **DATA_DIR** — orders/intakes dir is now env-configurable so a Render persistent disk can hold them across
+redeploys (free tier is ephemeral + sleeps; documented the Starter+disk upgrade). (4) **Runbook** —
+docs/deploy-render.md walks the dashboard/account steps (Blueprint, stripe:setup for price IDs, secrets,
+webhook registration, apiBase wiring, test-card loop) + the go-live switch. Verified: typecheck clean, 192
+tests (3 new CORS), and a real boot — /health 200 in TEST mode, preflight 204 with headers, evil origin gets
+nothing. Blueprint defaults to test-mode + free plan; no money moves and nothing deploys until the founder
+connects the repo in Render.

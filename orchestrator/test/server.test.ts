@@ -16,7 +16,9 @@ function cfg(over: Partial<StripeConfig> = {}): StripeConfig {
     secretKey: 'sk_test_x', webhookSecret: 'whsec_x',
     priceIds: { autopsy: 'price_a', core: 'price_c', core_bump: 'price_cb', pro: 'price_p' },
     publicBaseUrl: 'https://relaunch72.test', port: 4242, liveMode: false,
+    dataDir: os.tmpdir(),
     ordersFile: path.join(os.tmpdir(), `r72-orders-${process.pid}-${Math.round(performance.now())}.jsonl`),
+    allowedOrigins: ['https://relaunch72.com', 'http://localhost:8080'],
     ...over,
   };
 }
@@ -80,11 +82,15 @@ function req(method: string, url: string, body = '', headers: Record<string, str
   const r = Readable.from([Buffer.from(body)]) as unknown as IncomingMessage;
   return Object.assign(r, { method, url, headers });
 }
-function res(): ServerResponse & { statusCode: number; _body: string } {
-  const r = { statusCode: 0, _body: '' } as { statusCode: number; _body: string; writeHead: (c: number) => unknown; end: (b?: string) => unknown };
+function res(): ServerResponse & { statusCode: number; _body: string; _headers: Record<string, string> } {
+  const r = { statusCode: 0, _body: '', _headers: {} as Record<string, string> } as {
+    statusCode: number; _body: string; _headers: Record<string, string>;
+    setHeader: (k: string, v: string) => unknown; writeHead: (c: number) => unknown; end: (b?: string) => unknown;
+  };
+  r.setHeader = (k: string, v: string) => { r._headers[k.toLowerCase()] = v; return r; };
   r.writeHead = (c: number) => { r.statusCode = c; return r; };
   r.end = (b?: string) => { r._body = b ?? ''; return r; };
-  return r as unknown as ServerResponse & { statusCode: number; _body: string };
+  return r as unknown as ServerResponse & { statusCode: number; _body: string; _headers: Record<string, string> };
 }
 function memStore(): OrderStore & { data: Map<string, Order> } {
   const data = new Map<string, Order>();
@@ -153,4 +159,29 @@ test('POST /api/intake accepts a full intake and kicks the build; nudges a thin 
   const b = JSON.parse(r2._body);
   assert.equal(b.accepted, false);
   assert.ok(Array.isArray(b.issues) && b.issues.length > 0);
+});
+
+// ─── CORS (the site calls this API cross-origin) ─────────────────────────────
+test('CORS: an allowed Origin is echoed back on a real response', async () => {
+  const { handler } = app(); const r = res();
+  await handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'core' }), { origin: 'https://relaunch72.com' }), r);
+  assert.equal(r.statusCode, 200);
+  assert.equal(r._headers['access-control-allow-origin'], 'https://relaunch72.com');
+  assert.equal(r._headers['vary'], 'Origin');
+});
+
+test('CORS: an OPTIONS preflight from an allowed origin returns 204 with the headers', async () => {
+  const { handler } = app(); const r = res();
+  await handler(req('OPTIONS', '/api/checkout', '', { origin: 'https://relaunch72.com' }), r);
+  assert.equal(r.statusCode, 204);
+  assert.equal(r._headers['access-control-allow-origin'], 'https://relaunch72.com');
+  assert.match(String(r._headers['access-control-allow-methods']), /POST/);
+  assert.match(String(r._headers['access-control-allow-headers']), /content-type/);
+});
+
+test('CORS: an origin NOT on the allowlist gets no allow-origin header', async () => {
+  const { handler } = app(); const r = res();
+  await handler(req('GET', '/health', '', { origin: 'https://evil.example' }), r);
+  assert.equal(r.statusCode, 200);
+  assert.equal(r._headers['access-control-allow-origin'], undefined);
 });

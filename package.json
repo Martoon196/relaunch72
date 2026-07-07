@@ -9,7 +9,9 @@
   "scripts": {
     "pipeline": "npm run --workspace orchestrator pipeline --",
     "test": "npm run --workspace orchestrator test",
-    "typecheck": "npm run --workspace orchestrator typecheck"
+    "typecheck": "npm run --workspace orchestrator typecheck",
+    "serve": "npm run --workspace orchestrator serve",
+    "stripe:setup": "npm run --workspace orchestrator stripe:setup"
   },
   "engines": {
     "node": ">=20"

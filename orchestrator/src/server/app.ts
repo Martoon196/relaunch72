@@ -29,6 +29,22 @@ function send(res: ServerResponse, code: number, body: unknown): void {
   res.end(s);
 }
 
+/**
+ * Echo the request Origin back only if it's on the allowlist — the browser
+ * blocks the site's cross-origin fetch to this API without it. Headers are set
+ * via setHeader so they survive the later writeHead in send().
+ */
+function applyCors(req: IncomingMessage, res: ServerResponse, allowed: string[]): void {
+  const origin = req.headers.origin;
+  res.setHeader('Vary', 'Origin');
+  if (origin && allowed.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'content-type');
+    res.setHeader('Access-Control-Max-Age', '86400');
+  }
+}
+
 function readBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -42,7 +58,11 @@ export function createApp(deps: AppDeps) {
   return async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const route = `${req.method} ${url.pathname}`;
+    applyCors(req, res, deps.cfg.allowedOrigins);
     try {
+      // CORS preflight: the browser asks before the real POST from the site.
+      if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
       if (route === 'GET /health') {
         return send(res, 200, { ok: true, mode: deps.cfg.liveMode ? 'live' : 'test' });
       }
