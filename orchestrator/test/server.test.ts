@@ -108,11 +108,27 @@ function app(over: Partial<Parameters<typeof createApp>[0]> = {}) {
   return { handler, created, kicks, store };
 }
 
-test('GET /health reports test mode', async () => {
+test('GET /health reports test mode + configured', async () => {
   const { handler } = app(); const r = res();
   await handler(req('GET', '/health'), r);
   assert.equal(r.statusCode, 200);
-  assert.deepEqual(JSON.parse(r._body), { ok: true, mode: 'test' });
+  assert.deepEqual(JSON.parse(r._body), { ok: true, mode: 'test', configured: true });
+});
+
+test('with no key: /health is up but unconfigured, and checkout/webhook 503 (deploys green)', async () => {
+  const { handler } = app({ cfg: cfg({ secretKey: '' }) });
+  const h = res();
+  await handler(req('GET', '/health'), h);
+  assert.equal(h.statusCode, 200);
+  assert.equal(JSON.parse(h._body).configured, false);
+
+  const c = res();
+  await handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'core' })), c);
+  assert.equal(c.statusCode, 503);
+
+  const w = res();
+  await handler(req('POST', '/api/stripe/webhook', '{}', { 'stripe-signature': 'good' }), w);
+  assert.equal(w.statusCode, 503);
 });
 
 test('POST /api/checkout returns a Stripe URL', async () => {

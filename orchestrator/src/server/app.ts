@@ -64,16 +64,21 @@ export function createApp(deps: AppDeps) {
       if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
       if (route === 'GET /health') {
-        return send(res, 200, { ok: true, mode: deps.cfg.liveMode ? 'live' : 'test' });
+        // Always 200 so the host's health check passes even before secrets are set.
+        return send(res, 200, { ok: true, mode: deps.cfg.liveMode ? 'live' : 'test', configured: !!deps.cfg.secretKey });
       }
 
+      // Stripe-backed routes degrade to 503 until a key is configured, rather than
+      // crashing the process — so the service deploys green and you add secrets after.
       if (route === 'POST /api/checkout') {
+        if (!deps.cfg.secretKey) return send(res, 503, { error: 'payments not configured yet' });
         const body = JSON.parse((await readBody(req)).toString() || '{}') as { tier?: string; bump?: boolean };
         const { url: checkoutUrl } = await createCheckoutSession(deps.stripe, deps.cfg, { tier: body.tier ?? '', bump: !!body.bump });
         return send(res, 200, { url: checkoutUrl });
       }
 
       if (route === 'POST /api/stripe/webhook') {
+        if (!deps.cfg.secretKey) return send(res, 503, { error: 'payments not configured yet' });
         const raw = await readBody(req);
         let event;
         try {

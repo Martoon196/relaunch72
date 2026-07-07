@@ -47,6 +47,10 @@ poking at test payments, but a build kicked while it's asleep can be interrupted
 data resets on redeploy. For real orders, switch the service to **Starter** and add a
 persistent disk (the commented block at the bottom of `render.yaml`).
 
+The first deploy comes up **green before you've added any secrets** — the service starts
+in "UNCONFIGURED" mode, `/health` returns `{"configured":false}`, and checkout returns a
+polite 503 until step 3. That's expected: it deploys first, you add the key after.
+
 ## Step 2 — Provision the Stripe prices
 
 The four products need to exist in Stripe with stable `lookup_key`s. One command does it,

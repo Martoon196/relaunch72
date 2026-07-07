@@ -450,3 +450,17 @@ webhook registration, apiBase wiring, test-card loop) + the go-live switch. Veri
 tests (3 new CORS), and a real boot — /health 200 in TEST mode, preflight 204 with headers, evil origin gets
 nothing. Blueprint defaults to test-mode + free plan; no money moves and nothing deploys until the founder
 connects the repo in Render.
+
+**D-039 · Server starts UNCONFIGURED instead of crashing when no Stripe key is set (fix: first Render deploy failed).**
+The founder connected the repo and Render's first Blueprint deploy failed. Cause: the server called
+`process.exit(1)` when STRIPE_SECRET_KEY was absent — but on a first Blueprint deploy the sync:false secrets
+are still blank, so the process quit before the health check could pass. Crash-on-missing-config is hostile to
+the cloud deploy model (the service must bind the port + answer /health to be considered healthy). Fix: start
+regardless — /health always 200 and now reports `configured: <bool>`; checkout + webhook return 503 "payments
+not configured yet" until a key exists (a never-called Stripe stub stands in so the empty-key SDK constructor
+can't throw); boot logs "UNCONFIGURED mode". No safety loss: no payment can be processed without a key, exactly
+as before. Reproduced the failure locally (empty key → clean boot, /health 200 configured:false, checkout 503)
+and confirmed the fix. 193 tests (1 new), typecheck clean. autoDeploy:true means pushing this triggers Render's
+redeploy, which should now go green; the founder then pastes secrets (step 3 of the runbook). Diagnosed without
+Render log access — inferred from the deploy model; if a green redeploy still fails it's a different cause
+(build/install) and needs the actual logs.

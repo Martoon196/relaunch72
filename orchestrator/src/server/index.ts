@@ -37,20 +37,28 @@ function createKick(intakeDir: string) {
   };
 }
 
+/** A never-called Stripe stand-in for when no key is set — routes 503 before touching it. */
+function unconfiguredStripe(): StripeLike {
+  const nope = (): never => { throw new Error('Stripe not configured'); };
+  return { checkout: { sessions: { create: nope } }, webhooks: { constructEvent: nope } };
+}
+
 function main(): void {
   const cfg = loadStripeConfig();
+  // Start regardless of config so the host's health check passes; checkout/webhook
+  // return 503 until a key is added. Crash-on-missing-secret breaks cloud deploys.
   if (!cfg.secretKey) {
-    console.error('STRIPE_SECRET_KEY is not set. Add a TEST key (sk_test_…) to .env — see .env.example. Refusing to start.');
-    process.exit(1);
+    console.warn('⚠  STRIPE_SECRET_KEY not set — starting UNCONFIGURED: /health is up, but checkout & webhook 503 until you add a key (see docs/deploy-render.md).');
   }
-  const stripe = makeStripe(cfg.secretKey) as unknown as StripeLike;
+  const stripe = cfg.secretKey ? (makeStripe(cfg.secretKey) as unknown as StripeLike) : unconfiguredStripe();
   const orders = fileOrderStore(cfg.ordersFile);
   const kickPipeline = createKick(path.join(cfg.dataDir, 'intakes'));
   const app = createApp({ stripe, cfg, orders, kickPipeline, now: () => new Date().toISOString() });
   http.createServer((req, res) => { void app(req, res); }).listen(cfg.port, () => {
-    console.log(`Relaunch72 payments server on :${cfg.port} — ${cfg.liveMode ? 'LIVE ⚠️' : 'TEST'} mode`);
+    const mode = !cfg.secretKey ? 'UNCONFIGURED' : cfg.liveMode ? 'LIVE ⚠️' : 'TEST';
+    console.log(`Relaunch72 payments server on :${cfg.port} — ${mode} mode`);
     const missing = Object.entries(cfg.priceIds).filter(([, v]) => !v).map(([k]) => k);
-    if (missing.length) console.log(`  (price ids not yet set: ${missing.join(', ')} — checkout for those tiers will 400 until configured)`);
+    if (cfg.secretKey && missing.length) console.log(`  (price ids not yet set: ${missing.join(', ')} — checkout for those tiers will 400 until configured)`);
   });
 }
 
