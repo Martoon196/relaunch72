@@ -203,6 +203,25 @@
     '</div>';
   }
 
+  // Re-hydrate the form from a previously-downloaded intake JSON (the flat payload),
+  // so a customer who got a downloaded copy never re-types 45 fields.
+  function loadFromFile(file){
+    var reader=new FileReader();
+    reader.onload=function(){
+      var parsed; try{ parsed=JSON.parse(reader.result); }catch(e){ parsed=null; }
+      if(!parsed||typeof parsed!=="object"){ alert("That file doesn’t look like a Relaunch72 intake. Pick the .json the form downloaded for you."); return; }
+      var loaded=0;
+      FIELDS.forEach(function(f){ if(parsed[f.id]!=null && parsed[f.id]!==""){ state.answers[f.id]=parsed[f.id]; loaded++; } });
+      if("consent" in parsed) state.answers.consent=!!parsed.consent;
+      if(parsed._tier) state.tier=parsed._tier;
+      if(parsed._stripe_session) state.session=parsed._stripe_session;
+      if(!loaded){ alert("Couldn’t find any answers in that file."); return; }
+      save();
+      renderReview();
+    };
+    reader.readAsText(file);
+  }
+
   function renderIntro(){
     app.innerHTML='<div class="wrap intro">'+
       '<div class="kicker">Relaunch72 · Deep Intake</div>'+
@@ -217,10 +236,15 @@
           '<li>We’ll flag any thin answers before you send, so nothing weak reaches the build.</li>'+
         '</ul>'+
         '<div class="row"><button class="btn" id="start">Start the intake →</button>'+(answeredCount()?'<span class="time">'+answeredCount()+' answers saved</span>':'')+'</div>'+
+        '<p class="foot" style="margin-top:14px">Already filled this in and got a downloaded copy? '+
+          '<a href="#" id="resume-trigger" style="color:var(--electric);font-weight:600;text-decoration:none">Load it and skip to Send →</a>'+
+          '<input type="file" id="resume" accept="application/json,.json" style="display:none"/></p>'+
       '</div>'+
       '<p class="foot">Your 72-hour clock starts only when we accept your completed intake — not before.</p>'+
     '</div>';
     document.getElementById("start").onclick=function(){ go(0); };
+    var rf=document.getElementById("resume"), rt=document.getElementById("resume-trigger");
+    if(rt&&rf){ rt.onclick=function(e){ e.preventDefault(); rf.click(); }; rf.onchange=function(){ if(rf.files&&rf.files[0]) loadFromFile(rf.files[0]); }; }
   }
 
   function renderSection(i){

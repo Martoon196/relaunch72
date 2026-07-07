@@ -560,3 +560,12 @@ intake POST from relaunch72.com hits the API's CORS allowlist + OPTIONS prefligh
 clean, 206 tests (intake-form test still green), rebuilt form boots in headless Chromium with zero JS errors. The
 live POST itself can only be exercised from an allowed origin (egress-blocked here), so the founder confirms by
 re-submitting on relaunch72.com — no download, a success screen, and a pipeline kick in the Render logs.
+
+**D-047 · Intake form gains "load a saved copy" — never re-type 45 fields after a fallback download.**
+Founder filled the whole intake, got the fallback JSON download, and faced re-typing everything. The downloaded file
+IS the flat payload, so it round-trips: added loadFromFile() + a "Already filled this in and got a downloaded copy?
+Load it and skip to Send →" affordance on the intro (hidden file input). It reads the JSON, pours each A1–H4 value
+back into state.answers, restores consent/_tier/_stripe_session, saves, and jumps straight to Review & Send. Verified
+in headless Chromium: picking a saved intake JSON lands on "Review & send" with answers restored and Send enabled,
+zero JS errors. Also future-proofs the network-error fallback (the downloaded copy is now recoverable). Typecheck
+clean, 206 tests, form rebuilt.
