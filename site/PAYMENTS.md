@@ -40,12 +40,12 @@ A small payments server is built and tested (`orchestrator/src/server/`, `npm ru
 - `POST /api/stripe/webhook` → verifies the signature, records the paid order (`data/orders.jsonl`).
 - `POST /api/intake` → runs the S0 gate on a submitted intake; on accept, **spawns the pipeline** and marks the order building. (Point the intake form's `--endpoint` at `<apiBase>/api/intake`.)
 
-**Go-live (test mode):**
-1. Create the four products in Stripe (test mode) and copy their **Price IDs**.
-2. Fill `orchestrator/.env` from `.env.example`: `STRIPE_SECRET_KEY` (sk_test_…), `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_AUTOPSY/CORE/CORE_BUMP/PRO`, `PUBLIC_BASE_URL`.
-3. `npm run serve` (refuses to start without a key; `liveMode` is derived from the key prefix, so a test key can never run as live).
-4. In `site/checkout-config.js`, set `apiBase` to the server URL. Checkout now creates real (test) Sessions.
-5. Point Stripe's webhook at `<apiBase>/api/stripe/webhook`; test with `stripe listen --forward-to`.
+**Go-live (test mode) — just give the key, the setup does the rest:**
+1. Put your **TEST secret key** in the repo-root `.env`: `STRIPE_SECRET_KEY=sk_test_…` (Stripe → Developers → API keys). *That's the only thing you create by hand.*
+2. `npm run stripe:setup` — **creates the four products + prices in your Stripe account via the API and writes the Price IDs into `.env` for you.** Idempotent (stable `lookup_key`s), so re-running never duplicates. Refuses a live key.
+3. `npm run serve` (refuses to start keyless; `liveMode` is derived from the key prefix, so a test key can never run as live).
+4. Set `apiBase` in `site/checkout-config.js` to the server URL. Checkout now creates real (test) Sessions.
+5. For the auto-build webhook: add `STRIPE_WEBHOOK_SECRET`, point Stripe's webhook at `<apiBase>/api/stripe/webhook` (`stripe listen --forward-to` for local). Test end-to-end with card `4242 4242 4242 4242`.
 
 Everything here is env-driven — **no secret ever touches git or the frontend**. `data/` (orders + intakes = PII) is git-ignored.
 

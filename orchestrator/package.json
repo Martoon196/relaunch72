@@ -12,7 +12,8 @@
     "intake:build": "tsx src/intake/build-form.ts",
     "signoff": "tsx src/signoff/cli.ts",
     "deliver": "tsx src/deliver/cli.ts",
-    "serve": "tsx src/server/index.ts"
+    "serve": "tsx src/server/index.ts",
+    "stripe:setup": "tsx src/server/setup.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
