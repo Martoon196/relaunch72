@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>The Generic Test — Relaunch72</title>
+<meta name="description" content="A seven-question marketing diagnostic that scores where your business is leaking customers. Free, two minutes." />
+<!--
+  RELAUNCH72 — THE GENERIC SCORECARD (lead magnet)
+  Standalone, dependency-free. Lives at /scorecard/.
+  Brand-matched to the Relaunch72 site (electric #3557ff, ink #0c1018).
+  Integration seams (search "SEAM"):
+   1. captureEmail() — stores the lead + POSTs to SUBSCRIBE_URL when set
+      (point it at the payments server's /api/subscribe, or an ESP).
+   2. AUTOPSY_URL    — the £97 autopsy checkout (wired to checkout.html?tier=autopsy).
+-->
+<style>
+  :root{
+    --ink:#0c1018; --ink-2:#1b2436; --paper:#ffffff; --card:#f7f8fb;
+    --line:#e4e7ee; --text:#141a26; --muted:#5b6577; --blue:#3557ff;
+    --blue-bg:#eef1ff; --red:#c23b46; --red-bg:#fbecec; --amber:#b1741a; --green:#17915a;
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:#eef0f4;font-family:var(--sans);color:var(--text);padding:2rem 1rem;}
+  .wrap{max-width:640px;margin:0 auto;}
+  .shell{border:1px solid var(--line);border-radius:14px;background:var(--paper);overflow:hidden;box-shadow:0 1px 3px rgba(11,18,32,.06);}
+  .head{background:var(--ink);padding:1.6rem 1.6rem 1.35rem;}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:#7d92ff;text-transform:uppercase;margin-bottom:10px;}
+  .head h1{font-size:22px;font-weight:700;color:#f4f5f8;line-height:1.3;margin:0;letter-spacing:-.01em;}
+  .head p{font-size:14px;color:#9aa7c2;margin:8px 0 0;line-height:1.6;}
+  .track{height:3px;background:var(--ink-2);}
+  .fill{height:3px;width:0;background:var(--blue);transition:width .3s;}
+  .stage{padding:1.6rem;}
+  .qnum{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.1em;margin-bottom:14px;}
+  .qtext{font-size:17px;font-weight:650;color:var(--text);line-height:1.45;margin-bottom:18px;}
+  .opts{display:flex;flex-direction:column;gap:8px;}
+  .opt{text-align:left;padding:13px 15px;border:1px solid var(--line);border-radius:8px;background:var(--card);font-size:15px;color:var(--text);cursor:pointer;line-height:1.4;transition:all .15s;font-family:inherit;}
+  .opt:hover{border-color:var(--blue);background:#fff;}
+  .opt:focus-visible{outline:2px solid var(--blue);outline-offset:2px;}
+  .back{margin-top:16px;background:none;border:none;color:var(--muted);font-size:13px;cursor:pointer;padding:4px 0;font-family:inherit;}
+  .gate{text-align:center;padding:.5rem 0;}
+  .lockdot{width:52px;height:52px;border-radius:50%;background:var(--blue-bg);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:24px;}
+  .gate h2{font-size:19px;font-weight:700;color:var(--text);margin:0 0 8px;}
+  .gate .sub{font-size:14px;color:var(--muted);line-height:1.6;max-width:420px;margin:0 auto 20px;}
+  .form{display:flex;flex-direction:column;gap:8px;max-width:340px;margin:0 auto;}
+  input[type=email]{width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:8px;font-size:15px;font-family:inherit;}
+  input[type=email]:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-bg);}
+  .err{font-size:12px;color:var(--red);min-height:16px;text-align:left;}
+  .btn{background:var(--blue);color:#fff;border:none;border-radius:8px;padding:12px;font-size:15px;font-weight:650;cursor:pointer;font-family:inherit;}
+  .btn:hover{filter:brightness(1.07);}
+  .fine{font-size:11px;color:var(--muted);margin-top:14px;}
+  .rnum{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.1em;margin-bottom:12px;}
+  .rtitle{font-size:22px;font-weight:700;color:var(--text);line-height:1.3;margin-bottom:6px;letter-spacing:-.01em;}
+  .rlead{font-size:14px;color:var(--muted);line-height:1.6;margin-bottom:22px;}
+  .seclabel{font-family:var(--mono);font-size:11px;letter-spacing:.08em;margin-bottom:10px;}
+  .leak{border-left:3px solid var(--red);background:var(--red-bg);padding:12px 14px;margin-bottom:10px;border-radius:0 8px 8px 0;}
+  .leak h3{font-size:15px;font-weight:650;color:var(--text);margin:0 0 4px;}
+  .leak p{font-size:13px;color:var(--muted);line-height:1.55;margin:0;}
+  .mini{font-size:13px;color:var(--muted);padding-left:12px;margin-bottom:6px;}
+  .cta-box{margin-top:24px;padding:18px;background:var(--ink);border-radius:12px;}
+  .cta-box h2{font-size:16px;font-weight:700;color:#f4f5f8;margin:0 0 8px;}
+  .cta-box p{font-size:13px;color:#9aa7c2;line-height:1.6;margin:0 0 14px;}
+  .cta-box .btn{width:100%;}
+  .foot{font-family:var(--mono);font-size:10px;color:var(--muted);text-align:center;margin-top:10px;letter-spacing:.04em;}
+  .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h2 class="sr">The Generic Test — a seven-question marketing diagnostic that scores where a business is leaking customers.</h2>
+  <div class="shell">
+    <div class="head">
+      <div class="eyebrow">The generic test · 7 questions</div>
+      <h1>Is your marketing written by nobody, for nobody?</h1>
+      <p>Seven questions an agency charges a discovery day for. Answer honestly — the leaks are invisible from the inside.</p>
+    </div>
+    <div class="track"><div class="fill" id="bar"></div></div>
+    <div class="stage" id="stage"></div>
+  </div>
+  <div class="foot">20 relaunches a week · human signed-off</div>
+</div>
+
+<script>
+/* ===================== CONFIG ===================== */
+/* SEAM 2: the £97 autopsy checkout. Relative so it works on github.io/relaunch72/ and relaunch72.com. */
+var AUTOPSY_URL = "../checkout.html?tier=autopsy";
+/* SEAM 1: set to the payments server's /api/subscribe (or an ESP endpoint). Empty = capture stays local only. */
+var SUBSCRIBE_URL = "";
+
+/* Stores the lead locally and POSTs it when a subscribe endpoint is configured.
+   Receives { email, answers, leakCount }. The UI proceeds regardless. */
+function captureEmail(payload){
+  try{ localStorage.setItem("r72_scorecard_lead", JSON.stringify(payload)); }catch(e){}
+  if(SUBSCRIBE_URL){
+    return fetch(SUBSCRIBE_URL, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload) }).catch(function(){});
+  }
+  return Promise.resolve();
+}
+/* ================================================== */
+
+(function(){
+  var Q = [
+    {k:'clarity', t:'When a stranger lands on your homepage, can they tell in 5 seconds what you do and who it’s for?',
+      a:[['Instantly — it’s the first thing they see',0],['Roughly, if they read a bit',1],['Honestly, probably not',2]]},
+    {k:'diff', t:'If someone read your website and your closest competitor’s, could they tell which of you does better work?',
+      a:[['Yes — we clearly stand apart',0],['Maybe — we sound fairly similar',1],['No — we sound the same',2]]},
+    {k:'list', t:'When did you last email your customer list — and did it sound like you or like a template?',
+      a:[['Recently, and it sounded like us',0],['A while ago, or it sounded generic',1],['Never emailed it / don’t really have one',2]]},
+    {k:'buyer', t:'Can you name, in one sentence, the exact customer who pays you best — beyond “small businesses”?',
+      a:[['Yes — I know exactly who',0],['Sort of — a rough type',1],['Not really — we take who comes',2]]},
+    {k:'voice', t:'Does your marketing use your customers’ actual words, or the words you’d use about yourself?',
+      a:[['Their words — we’ve listened',0],['A mix',1],['Our words — how we describe ourselves',2]]},
+    {k:'invisible', t:'If someone searched for what you do, judged your presence, and rang a competitor — would you ever know?',
+      a:[['We track where enquiries come from',0],['Partly — it’s patchy',1],['No — we’d never know',2]]},
+    {k:'proof', t:'Is your best work — the stuff you’re proudest of — actually visible where a buyer would look?',
+      a:[['Yes — front and centre',0],['Some of it, buried',1],['No — it’s basically invisible',2]]}
+  ];
+
+  var LEAK = {
+    clarity:['Your homepage fails the 5-second test','A stranger can’t tell fast enough what you do and who it’s for. Every visitor decides in five seconds — right now that decision isn’t landing your way.'],
+    diff:['You sound like everyone else','Read beside your competitor, nothing marks you as the better choice. Same words, same claims — so the buyer picks on price or proximity, not quality.'],
+    list:['Your list is a dead asset','A list you don’t email, or email generically, is money sat idle. Your warmest audience is the cheapest to sell to — and you’re not.'],
+    buyer:['You’re marketing to everyone, so no one','Without one exact best-fit customer, the message gets watered down to fit all of them — and lands with none of them.'],
+    voice:['You talk about yourself, not to them','“Bespoke solutions tailored to your needs” is how you talk. “We fix what your last one couldn’t” is how they talk. One gets remembered.'],
+    invisible:['You’re losing work you never hear about','The most expensive leak: customers who searched, judged the shopfront, and rang someone worse — and you’ll never know it happened.'],
+    proof:['Your best work is invisible','You’re proud of the work. A buyer looking right now can’t see it. The gap between what you built and what shows is the gap they judge you on.']
+  };
+
+  var stage=document.getElementById('stage'), bar=document.getElementById('bar');
+  var i=0, ans={};
+  function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+
+  function renderQ(){
+    bar.style.width=((i)/Q.length*100)+'%';
+    var q=Q[i];
+    var h='<div class="qnum">QUESTION '+(i+1)+' OF '+Q.length+'</div>';
+    h+='<div class="qtext">'+esc(q.t)+'</div><div class="opts">';
+    q.a.forEach(function(opt){ h+='<button class="opt" data-v="'+opt[1]+'">'+esc(opt[0])+'</button>'; });
+    h+='</div>';
+    if(i>0) h+='<button class="back" id="back">← back</button>';
+    stage.innerHTML=h;
+    Array.prototype.forEach.call(stage.querySelectorAll('.opt'),function(b){
+      b.onclick=function(){ ans[Q[i].k]=parseInt(b.getAttribute('data-v'),10); i++; i<Q.length?renderQ():renderGate(); };
+    });
+    var bk=document.getElementById('back'); if(bk) bk.onclick=function(){ i--; renderQ(); };
+  }
+
+  function renderGate(){
+    bar.style.width='100%';
+    stage.innerHTML=
+      '<div class="gate">'+
+      '<div class="lockdot">🔒</div>'+
+      '<h2>Your scorecard’s ready.</h2>'+
+      '<div class="sub">Where should we send a copy? You’ll see your result on-screen straight away.</div>'+
+      '<div class="form">'+
+      '<input id="email" type="email" placeholder="name@yourbusiness.co.uk" />'+
+      '<div class="err" id="err"></div>'+
+      '<button class="btn" id="go">See my result →</button>'+
+      '</div>'+
+      '<div class="fine">No spam. Unsubscribe whenever. We’ll send a few things worth reading.</div>'+
+      '</div>';
+    var go=document.getElementById('go'), em=document.getElementById('email'), err=document.getElementById('err');
+    function submit(){
+      var v=(em.value||'').trim();
+      if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)){ err.textContent='Enter a valid email so we can send your copy.'; return; }
+      var leakCount=Object.keys(ans).filter(function(k){return ans[k]>0;}).length;
+      try{ captureEmail({email:v, answers:ans, leakCount:leakCount}); }catch(e){ console.error(e); }
+      renderResult();
+    }
+    go.onclick=submit;
+    em.onkeydown=function(e){ if(e.key==='Enter') submit(); };
+    em.focus();
+  }
+
+  function renderResult(){
+    var leaks=[]; Object.keys(ans).forEach(function(k){ if(ans[k]>0) leaks.push([k,ans[k]]); });
+    leaks.sort(function(a,b){return b[1]-a[1];});
+    var count=leaks.length;
+    var worst=leaks.filter(function(l){return l[1]===2;});
+    var amber=leaks.filter(function(l){return l[1]===1;});
+    var green=Object.keys(ans).filter(function(k){return ans[k]===0;});
+    var top=(worst.length?worst:amber).slice(0,2);
+
+    var h='<div class="rnum">YOUR GENERIC TEST RESULT</div>';
+    h+='<div class="rtitle">You’re leaking customers in '+count+' of 7 places.</div>';
+    h+='<div class="rlead">Not a scare number — the count of places a stranger could decide you’re the same as everyone else, and ring someone worse.</div>';
+    if(top.length){
+      h+='<div class="seclabel" style="color:#a32d2d;">'+(worst.length?'COSTING YOU MOST RIGHT NOW':'YOUR BIGGEST GAPS')+'</div>';
+      top.forEach(function(l){ h+='<div class="leak"><h3>'+esc(LEAK[l[0]][0])+'</h3><p>'+esc(LEAK[l[0]][1])+'</p></div>'; });
+    }
+    var rest=leaks.filter(function(l){return top.indexOf(l)===-1;});
+    if(rest.length){
+      h+='<div class="seclabel" style="color:#854f0b;margin-top:18px;">ALSO LEAKING</div>';
+      rest.forEach(function(l){ h+='<div class="mini" style="border-left:2px solid var(--amber);">'+esc(LEAK[l[0]][0])+'</div>'; });
+    }
+    if(green.length){
+      h+='<div class="seclabel" style="color:#3b6d11;margin-top:18px;">ACTUALLY WORKING</div>';
+      green.forEach(function(k){ h+='<div class="mini" style="border-left:2px solid var(--green);">'+esc(LEAK[k][0].replace(/^Your |^You’re |^You /,''))+' — holding up</div>'; });
+    }
+    h+='<div class="cta-box"><h2>This shows where. Not how much.</h2>'+
+       '<p>The Marketing Autopsy takes these seven questions to forensic depth on your actual numbers — graded, no punches pulled — so you see exactly what’s leaving and what a fix takes. £97, and it credits in full against a full relaunch within 14 days.</p>'+
+       '<button class="btn" id="cta">Get the full autopsy — £97 →</button></div>';
+    stage.innerHTML=h;
+    document.getElementById('cta').onclick=function(){
+      window.location.href=AUTOPSY_URL;
+    };
+  }
+
+  renderQ();
+})();
+</script>
+</body>
+</html>
