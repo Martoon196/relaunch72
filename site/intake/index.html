@@ -107,6 +107,13 @@
   var state = load();          // { answers:{}, step:0 }
   var app = document.getElementById("app");
 
+  // Purchase context carried from checkout (Stripe Payment Link success URL).
+  var URLP = new URLSearchParams(location.search);
+  var TIER = (URLP.get("tier") || "").toLowerCase();
+  var SESSION = URLP.get("session") || "";
+  var TIER_NAMES = { autopsy: "Marketing Autopsy", core: "Relaunch72 Core", pro: "Relaunch72 Pro" };
+  if (TIER || SESSION) { state.tier = TIER || state.tier; state.session = SESSION || state.session; save(); }
+
   function load(){ try{ return JSON.parse(localStorage.getItem(KEY)) || {answers:{},step:0}; }catch(e){ return {answers:{},step:0}; } }
   function save(){ try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){} }
   function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];}); }
@@ -149,6 +156,8 @@
     });
     out.consent = !!state.answers.consent;
     out._generated_by = "relaunch72-deep-intake-form";
+    if (state.tier) out._tier = state.tier;
+    if (state.session) out._stripe_session = state.session;
     return out;
   }
 
@@ -197,6 +206,7 @@
   function renderIntro(){
     app.innerHTML='<div class="wrap intro">'+
       '<div class="kicker">Relaunch72 · Deep Intake</div>'+
+      (state.tier && TIER_NAMES[state.tier] ? '<div class="time" style="margin-top:10px">Plan: <b style="color:var(--electric)">'+TIER_NAMES[state.tier]+'</b></div>' : '')+
       '<h1>The discovery day an agency charges £3k for — done in your own words.</h1>'+
       '<p class="lede">This is the single most important thing you’ll do in this process. <b>Generic answers in, generic marketing out.</b> Specific, honest ones give us the fuel to build you a relaunch that actually sounds like you.</p>'+
       '<div class="card">'+
