@@ -546,3 +546,17 @@ zero console errors. Per the spec, driving traffic (ads/social/bio) + analytics 
 build. Brevo lead-capture path is code-complete + tested but DORMANT until the founder sets BREVO_API_KEY +
 BREVO_LIST_LEADS in Render and builds+activates the nurture automation in Brevo (docs/email-setup.md) — I can't
 verify a live Brevo automation from here (no key, no Brevo access).
+
+**D-046 · Intake form now POSTs to the live backend (was download-only); submit UX rewritten.**
+Founder completed a test intake and it just downloaded a JSON file — because the form's submitEndpoint was null,
+so it fell back to the local-download safety net and never reached the backend. The payment→intake→pipeline loop
+was silently broken. Fix: (1) build-form.ts now defaults submitEndpoint to the live API
+(https://relaunch72-payments.onrender.com/api/intake), overridable with --endpoint; rebuilt site/intake/index.html.
+(2) Rewrote submit(): it POSTs the intake, then on accepted → clean "that's the hard part done" screen (no more
+mystery download); on accepted:false → renders the S0 issues with a "back to my answers" button; on network error →
+falls back to downloading the JSON with an "email it to hello@" message so nothing's lost. The forced download on
+every submit is gone (bad UX for a real customer); download is now fallback-only. Cross-origin is covered — the
+intake POST from relaunch72.com hits the API's CORS allowlist + OPTIONS preflight (D-038). Verified: typecheck
+clean, 206 tests (intake-form test still green), rebuilt form boots in headless Chromium with zero JS errors. The
+live POST itself can only be exercised from an allowed origin (egress-blocked here), so the founder confirms by
+re-submitting on relaunch72.com — no download, a success screen, and a pipeline kick in the Render logs.

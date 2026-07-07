@@ -464,7 +464,7 @@ const CLIENT = String.raw`
       '<label class="consent"><input type="checkbox" id="consent" '+(consentOk?'checked':'')+'/><span>I confirm my answers are accurate. I understand my marketing pack is produced with AI assistance and a human review before delivery, and that my data is handled per the privacy policy.</span></label>'+
       '<div class="nav"><button class="btn ghost" id="back">← Back to sections</button>'+
         '<button class="btn" id="send" '+((allErrs.length||!consentOk)?'disabled':'')+'>Send my intake →</button></div>'+
-      '<div class="foot">Sending downloads your answers as a file and (if configured) submits them to Relaunch72.</div></div>';
+      '<div class="foot">Sending submits your answers to Relaunch72 — your 72-hour clock starts the moment we accept them.</div></div>';
     document.getElementById("back").onclick=function(){ go(SECTIONS.length-1); };
     document.getElementById("consent").onchange=function(e){ state.answers.consent=e.target.checked; save(); renderReview(); };
     app.querySelectorAll("[data-jump]").forEach(function(li){ li.onclick=function(){ var sid=li.getAttribute("data-jump"); go(SECTIONS.map(function(s){return s.id;}).indexOf(sid)); }; });
@@ -473,14 +473,49 @@ const CLIENT = String.raw`
 
   function submit(){
     var data=payload();
+    var send=document.getElementById("send");
+    if(SPEC.submitEndpoint){
+      if(send){ send.disabled=true; send.textContent="Sending…"; }
+      fetch(SPEC.submitEndpoint,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)})
+        .then(function(r){ return r.json().catch(function(){ return {}; }); })
+        .then(function(res){
+          if(res&&res.accepted===false){ renderRejected(res.issues||[]); return; }
+          try{ localStorage.removeItem(KEY); }catch(e){}
+          renderDone();
+        })
+        .catch(function(){ downloadCopy(data); });
+    } else {
+      // No backend wired (dev/preview) — keep a local copy so nothing is lost.
+      downloadCopy(data);
+      try{ localStorage.removeItem(KEY); }catch(e){}
+    }
+  }
+
+  function renderDone(){
+    app.innerHTML='<div class="wrap done"><div class="tick">✓</div><h1>That’s the hard part done.</h1>'+
+      '<p class="lede">Your intake is in. We review it (usually within a few hours) and your 72-hour build clock starts the moment we accept it. Keep an eye on your inbox.</p>'+
+      '<p class="foot" style="margin-top:24px">You can close this tab.</p></div>';
+  }
+
+  function renderRejected(issues){
+    var lis=(issues||[]).map(function(x){
+      var label=(x&&x.label)?x.label:((x&&x.field)?x.field:"An answer"); var reason=(x&&x.reason)?x.reason:String(x);
+      return '<li><b>'+esc(label)+((x&&x.field)?' ('+esc(x.field)+')':'')+'</b> — '+esc(reason)+'</li>';
+    }).join("");
+    app.innerHTML='<div class="wrap"><div class="sec-head"><div class="n">Almost there</div><h2>A couple of answers need a little more before we can accept it</h2></div>'+
+      '<div class="nudge"><ul>'+lis+'</ul></div>'+
+      '<p class="lede">Nothing’s lost — go back, firm those up, and send again.</p>'+
+      '<div class="nav"><button class="btn" id="reback">← Back to my answers</button></div></div>';
+    document.getElementById("reback").onclick=function(){ go(SECTIONS.length-1); };
+  }
+
+  function downloadCopy(data){
     var name=(data.A1||"intake").toString().toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")||"intake";
     var blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
     var url=URL.createObjectURL(blob), a=document.createElement("a"); a.href=url; a.download=name+"-intake.json"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-    if(SPEC.submitEndpoint){ try{ fetch(SPEC.submitEndpoint,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}); }catch(e){} }
-    app.innerHTML='<div class="wrap done"><div class="tick">✓</div><h1>That’s the hard part done.</h1>'+
-      '<p class="lede">Your intake is saved. We review it (usually within a few hours) and your 72-hour build clock starts the moment we accept it. Keep an eye on your inbox.</p>'+
-      '<p class="foot" style="margin-top:24px">A copy downloaded to your device. You can close this tab.</p></div>';
-    try{ localStorage.removeItem(KEY); }catch(e){}
+    app.innerHTML='<div class="wrap done"><div class="tick">✓</div><h1>Answers saved to your device.</h1>'+
+      '<p class="lede">We couldn’t reach the server just now, so your answers downloaded as a file. Email it to <b>hello@relaunch72.com</b> and we’ll pick it straight up — nothing’s lost.</p>'+
+      '<p class="foot" style="margin-top:24px">You can close this tab.</p></div>';
   }
 
   // boot
