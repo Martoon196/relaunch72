@@ -531,3 +531,18 @@ numeric-provenance is unaffected). (3) mock generator → $ so mock-mode/demo ou
 multi-currency on purpose; a customer may still paste a £ figure), and code-comment examples. Verified: typecheck
 clean, 206 tests green (the 4 S0 failures from stale £ bands fixed), site grep shows zero displayed £, intake bands
 render as $. Only the customer-facing surfaces + their test data moved; the parser stays currency-agnostic.
+
+**D-045 · Scorecard split into a framing landing page + the quiz; soft homepage fallback added.**
+Founder supplied a funnel spec (05-scorecard-landing-funnel.md): a cold-traffic landing page must sit IN FRONT of
+the bare quiz. Built it: (1) the quiz moved to /scorecard/test/ (only change: AUTOPSY_URL ../autopsy/ → ../../autopsy/,
+one level deeper; SUBSCRIBE_URL is absolute so untouched). (2) /scorecard/ is now the framing landing page from the
+spec's Part A copy, in the site design system (dark hero, #3557ff, theme-aware), problem-first, one CTA target only
+(three "Start the Generic Test →" buttons, all → test/), a what-you-get/don't block, an FAQ, and the compliance
+footer. No competing links/nav (funnel step, not a homepage) — the wordmark is plain text, not a link. (3) Homepage
+final CTA gained the softest rung beneath the autopsy line: "Not ready to spend? Take the free 2-minute Generic Test
+→" → /scorecard/, deliberately quieter (faint underlined, not electric-bold). Verified end-to-end in headless
+Chromium: landing renders + CTA resolves to test/, quiz runs all 7 Qs → email gate → result → "$97 autopsy" CTA,
+zero console errors. Per the spec, driving traffic (ads/social/bio) + analytics are a SEPARATE later job, not this
+build. Brevo lead-capture path is code-complete + tested but DORMANT until the founder sets BREVO_API_KEY +
+BREVO_LIST_LEADS in Render and builds+activates the nurture automation in Brevo (docs/email-setup.md) — I can't
+verify a live Brevo automation from here (no key, no Brevo access).

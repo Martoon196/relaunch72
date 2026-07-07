@@ -142,6 +142,10 @@
   .close .cta-row{display:flex;flex-direction:column;align-items:center;gap:12px;margin-top:28px}
   .close .sub-cta{font-size:14px;color:var(--faint)}
   .close .sub-cta a{color:var(--electric-ink);text-decoration:none;font-weight:600}
+  /* softest rung on the ladder — quieter than the autopsy line by design */
+  .close .soft-cta{font-size:12.5px;color:var(--faint);opacity:.72}
+  .close .soft-cta a{color:var(--faint);text-decoration:underline;text-underline-offset:2px;font-weight:500}
+  .close .soft-cta a:hover{color:var(--ink)}
 
   /* footer */
   footer{border-top:1px solid var(--hair);padding:34px 0;color:var(--faint);font-size:13px}
@@ -339,6 +343,7 @@
       <div class="cta-row">
         <a class="btn big" href="checkout.html?tier=core">Start my 72-hour relaunch</a>
         <span class="sub-cta">Not sure? <a href="autopsy/">Get the $97 autopsy first.</a></span>
+        <span class="soft-cta">Not ready to spend? <a href="scorecard/">Take the free 2-minute Generic Test →</a></span>
       </div>
     </div>
   </section>
