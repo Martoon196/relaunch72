@@ -569,3 +569,17 @@ back into state.answers, restores consent/_tier/_stripe_session, saves, and jump
 in headless Chromium: picking a saved intake JSON lands on "Review & send" with answers restored and Send enabled,
 zero JS errors. Also future-proofs the network-error fallback (the downloaded copy is now recoverable). Typecheck
 clean, 206 tests, form rebuilt.
+
+**D-048 · S3 parked on a real intake (differentiator paraphrased, not quoted) → S3 to Opus 4.8 + firmer prompt.**
+First live paid run (the founder's Prop Invest intake — real, substantive answers) ran S0✓ S1✓ S2✓ then PARKED at S3
+on `s3.differentiator_untraced`: the no-invention gate requires every differentiator to embed a phrase copied
+character-for-character from E2/E3, and claude-sonnet-4-6 paraphrased inside the quotes twice (also tripped a 61-vs-60
+word pitch cap on attempt 1, self-fixed on attempt 2). Exit code 3 = parked, not crashed — the QA doing its job on a
+live run (the whole no-invention promise, firing). Diagnosed from the manifest.json (via Render Shell). Fix, surgical
+(S1/S2 passed, left alone): (1) S3 prompt header model claude-sonnet-4-6 → **claude-opus-4-8** — strongest model,
+far better at literal copy + self-checking; other stages unchanged. (2) Strengthened the differentiator instruction:
+forbids paraphrase/synonym-swap/ellipsis inside the quotes and adds a pre-output self-verify that each quoted span is
+an exact substring of E2/E3; bumped S3 1.0.0 → 1.0.1. Did NOT loosen the matcher — the gate is correct; the model
+was the weak link. 206 tests green. Next paid re-run should clear S3; if it still parks it's a check near-miss and
+we'll get the exact quote then. Also surfaced: a parked run has nowhere for the founder to see it → the sign-off/
+review page is the real next build. Full run so far cost ~$0.46 (S1–S3); Opus on S3 adds a little.
