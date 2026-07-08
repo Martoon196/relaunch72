@@ -1,7 +1,7 @@
 import type { AnySchema } from 'ajv';
 import type { Intake, QAIssue } from '../types.js';
 import {
-  qaS1, qaS2, qaS3, qaS4, qaS5, qaS6, qaS7, qaS8, qaS9,
+  qaS1, qaS2, qaS3, qaS4, qaS5, qaS6, qaS7, qaS8, qaS9, normalizeS3,
   S1_INPUT_FIELDS, S2_INPUT_FIELDS, S3_INPUT_FIELDS, S4_INPUT_FIELDS, S5_INPUT_FIELDS,
   S6_INPUT_FIELDS, S7_INPUT_FIELDS, S8_INPUT_FIELDS, S9_INPUT_FIELDS,
 } from '../qa/checks.js';
@@ -23,6 +23,12 @@ export interface StageDef {
   priorStages: string[];
   schema: AnySchema;
   qa: (output: unknown, intake: Intake, prior: Record<string, unknown>) => QAIssue[];
+  /**
+   * Optional post-parse transform applied to schema-valid output before QA and
+   * before save — for injecting facts the system owns (e.g. S3's banned/must
+   * words + sliders) rather than trusting the model to reproduce them exactly.
+   */
+  normalize?: (output: unknown, intake: Intake) => unknown;
   maxTokens: number;
   /**
    * Adaptive thinking (default on). The large copy stages (S6/S7/S8) turn it
@@ -65,6 +71,7 @@ export const STAGES: Record<string, StageDef> = {
     priorStages: ['S2'],
     schema: S3_SCHEMA,
     qa: (output, intake, prior) => qaS3(output, intake, prior),
+    normalize: normalizeS3, // inject the global+H3 banned words, H3 must-words, exact H1 sliders
     maxTokens: 32000, // adaptive thinking shares this budget — headroom prevents attempt-1 truncation (M2 gate lesson)
   },
   S4: {

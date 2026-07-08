@@ -138,9 +138,12 @@ export async function runStage(
       }
       // QA only runs on schema-valid output — its checks assume the shape.
       if (valid) {
-        attemptRec.qa_issues = def.qa(parsed.value, intake, prior);
+        // Inject system-owned facts (e.g. S3 banned/must words + sliders) before
+        // QA + save, so mechanical completeness passes by construction.
+        const finalized = def.normalize ? def.normalize(parsed.value, intake) : parsed.value;
+        attemptRec.qa_issues = def.qa(finalized, intake, prior);
         if (attemptRec.qa_issues.length === 0) {
-          output = parsed.value;
+          output = finalized;
         }
         // No-invention violations never get a retry — a model that fabricates
         // proof doesn't get a second chance to fabricate more convincingly.

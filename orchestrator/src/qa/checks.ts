@@ -653,6 +653,36 @@ export function qaS3(output: unknown, intake: Intake, prior: Record<string, unkn
   return issues;
 }
 
+/**
+ * Guarantee the three mechanical completeness requirements of S3's voice guide
+ * by construction — the system owns these facts, so it injects them rather than
+ * relying on the model to reproduce a fixed list exactly (which parked a live
+ * run on s3.banned_words_incomplete). Faithful, not invention: banned_words
+ * gains the global generic-phrase list + the customer's own H3 never-words;
+ * must_words gains their H3 must-words; sliders are forced to the exact H1
+ * settings. Runs on schema-valid output, before QA and before save.
+ */
+export function normalizeS3(output: unknown, intake: Intake): unknown {
+  const out = output as S3Output;
+  if (!out?.voice) return output;
+  const seen = new Set(out.voice.banned_words.map((w) => normalizeText(w).toLowerCase()));
+  for (const p of [...GLOBAL_BANNED_PHRASES, ...customerNeverWords(intake)]) {
+    const key = normalizeText(p).toLowerCase();
+    if (key && !seen.has(key)) { out.voice.banned_words.push(p); seen.add(key); }
+  }
+  const seenMust = new Set(out.voice.must_words.map((w) => normalizeText(w).toLowerCase()));
+  for (const w of customerMustWords(intake)) {
+    if (w && !seenMust.has(w)) { out.voice.must_words.push(w); seenMust.add(w); }
+  }
+  const h1 = intake.H1;
+  if (h1 && typeof h1 === 'object' && !Array.isArray(h1)) {
+    for (const [k, v] of Object.entries(h1 as Record<string, unknown>)) {
+      if (typeof v === 'number') out.voice.sliders[k] = v;
+    }
+  }
+  return out;
+}
+
 // ─── S4 · Offer architecture ────────────────────────────────────────────────
 
 export const S4_INPUT_FIELDS = ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'B2', 'B6'];

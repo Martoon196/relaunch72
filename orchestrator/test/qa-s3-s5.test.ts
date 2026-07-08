@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { qaS1, qaS3, qaS4, qaS5 } from '../src/qa/checks.js';
+import { qaS1, qaS3, qaS4, qaS5, normalizeS3 } from '../src/qa/checks.js';
 import { MockClient } from '../src/llm/mock.js';
 import { extractJson } from '../src/llm/json.js';
 import { validIntake } from './helpers.js';
@@ -23,6 +23,16 @@ test('qaS3 fails a differentiator that does not quote E2/E3', async () => {
   const out = (await mockOutput('S3')) as { differentiators: string[] };
   out.differentiators[0] = 'They are simply much better at customer service than everyone else around.';
   assert.ok(qaS3(out, intake).some((i) => i.check === 's3.differentiator_untraced'));
+});
+
+test('normalizeS3 re-injects banned/must words + sliders so those checks pass by construction', async () => {
+  const out = (await mockOutput('S3')) as { voice: { banned_words: string[]; must_words: string[]; sliders: Record<string, number> } };
+  out.voice.banned_words = []; out.voice.must_words = []; out.voice.sliders = {}; // model omits the mechanical lists
+  const fixed = normalizeS3(out, intake);
+  const issues = qaS3(fixed, intake).map((i) => i.check);
+  assert.ok(!issues.includes('s3.banned_words_incomplete'), 'banned_words injected');
+  assert.ok(!issues.includes('s3.must_words_incomplete'), 'must_words injected');
+  assert.ok(!issues.includes('s3.sliders_mismatch'), 'sliders forced to H1');
 });
 
 test('qaS3 fails when H3 never-words are missing from banned_words', async () => {

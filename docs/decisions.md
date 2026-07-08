@@ -598,3 +598,16 @@ ADMIN_PASSWORD is set. Verified: 214 tests (8 new — session, store, router flo
 dashboard lists the run/order → detail shows the park reason → deliverable renders). Next: view a full assembled pack
 + trigger delivery from admin, then the persistent disk, then Phase B (customer portal). To go live the founder sets
 ADMIN_PASSWORD/SESSION_SECRET on Render + adds the disk with RELAUNCH72_RUNS_DIR/DATA_DIR.
+
+**D-050 · S3 mechanical completeness (banned/must words, sliders) injected by the system, not demanded of the model.**
+Second S3 park on the founder's live intake — this time s3.banned_words_incomplete (the Opus fix from D-048 cleared
+differentiator_untraced; progress). Three S3 checks are DETERMINISTIC: voice.banned_words must contain the global
+generic-phrase list + the customer's H3 never-words; voice.must_words must contain their H3 must-words; voice.sliders
+must equal their H1 settings. The system owns all three sources, so demanding the model reproduce a fixed list exactly
+is fragile and needlessly parks real runs. Fix: added a `normalize` hook to StageDef (runs on schema-valid output,
+before QA + save) and `normalizeS3` — it unions the global+H3 banned words, adds the H3 must-words, and forces sliders
+to the exact H1 values. Faithful (the customer's own intake data + a fixed list), not invention. Those three checks
+now pass by construction; the remaining S3 checks (differentiator quote, pitch length/bans, positioning contrast,
+voice guardrail, no-invented-numbers) stay model-dependent — genuine content Opus handles. 215 tests (1 new:
+normalizeS3 re-injects so the checks pass). This is the general pattern for future stages: system-owned completeness
+is injected, judgement is left to the model.
