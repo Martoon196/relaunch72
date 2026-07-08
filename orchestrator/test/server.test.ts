@@ -19,6 +19,7 @@ function cfg(over: Partial<StripeConfig> = {}): StripeConfig {
     dataDir: os.tmpdir(),
     ordersFile: path.join(os.tmpdir(), `r72-orders-${process.pid}-${Math.round(performance.now())}.jsonl`),
     allowedOrigins: ['https://relaunch72.com', 'http://localhost:8080'],
+    adminPassword: '', sessionSecret: 'test-secret',
     ...over,
   };
 }

@@ -9,4 +9,6 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(here, '..', '..');
 export const PROMPTS_DIR = path.join(REPO_ROOT, 'prompts');
 export const FIXTURES_DIR = path.join(REPO_ROOT, 'fixtures');
-export const RUNS_DIR = path.join(REPO_ROOT, 'runs');
+// Where run output lives. Override with RELAUNCH72_RUNS_DIR to point at a mounted
+// disk (e.g. /var/data/runs on Render) so builds survive redeploys.
+export const RUNS_DIR = process.env.RELAUNCH72_RUNS_DIR?.trim() || path.join(REPO_ROOT, 'runs');

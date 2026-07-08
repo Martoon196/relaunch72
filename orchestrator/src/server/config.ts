@@ -29,6 +29,9 @@ export interface StripeConfig {
   ordersFile: string;
   /** Browser origins allowed to call the API (the site is a different host). */
   allowedOrigins: string[];
+  /** Admin control room: password gate + cookie-signing secret. Empty = /admin disabled. */
+  adminPassword: string;
+  sessionSecret: string;
 }
 
 /** Origins the funnel is served from — the site, not the API. Overridable via env. */
@@ -57,6 +60,9 @@ export function loadStripeConfig(env: NodeJS.ProcessEnv = process.env): StripeCo
     dataDir,
     ordersFile: path.join(dataDir, 'orders.jsonl'),
     allowedOrigins: [...new Set([...DEFAULT_ORIGINS, ...extraOrigins])],
+    adminPassword: env.ADMIN_PASSWORD?.trim() ?? '',
+    // Falls back to the webhook secret so a signing key always exists; set SESSION_SECRET for a dedicated one.
+    sessionSecret: env.SESSION_SECRET?.trim() || env.STRIPE_WEBHOOK_SECRET?.trim() || 'r72-dev-session-secret',
   };
 }
 

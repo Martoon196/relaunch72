@@ -14,6 +14,7 @@ import type { OrderStore, Order } from './orders.js';
 import { createCheckoutSession, verifyEvent, orderFromEvent, CheckoutError, type StripeLike } from './stripe.js';
 import { runS0 } from '../intake/s0.js';
 import type { Intake } from '../types.js';
+import { handleAdmin } from './admin/router.js';
 
 /** Optional marketing sync (Brevo). Both are no-ops when Brevo isn't configured. */
 export interface MarketingHooks {
@@ -69,6 +70,15 @@ export function createApp(deps: AppDeps) {
   return async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const route = `${req.method} ${url.pathname}`;
+
+    // The admin control room is same-origin, browser-navigated HTML — handled
+    // before the CORS/API layer, with its own auth gate.
+    if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
+      try { await handleAdmin(req, res, deps.cfg); }
+      catch (e) { if (!res.headersSent) send(res, 500, { error: (e as Error).message }); }
+      return;
+    }
+
     applyCors(req, res, deps.cfg.allowedOrigins);
     try {
       // CORS preflight: the browser asks before the real POST from the site.

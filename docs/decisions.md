@@ -583,3 +583,18 @@ an exact substring of E2/E3; bumped S3 1.0.0 → 1.0.1. Did NOT loosen the match
 was the weak link. 206 tests green. Next paid re-run should clear S3; if it still parks it's a check near-miss and
 we'll get the exact quote then. Also surfaced: a parked run has nowhere for the founder to see it → the sign-off/
 review page is the real next build. Full run so far cost ~$0.46 (S1–S3); Opus on S3 adds a little.
+
+**D-049 · Phase A part 1: /admin control room (auth + runs/orders + pack view + sign-off) built on the payments app.**
+Founder's platform vision (accounts, portal, admin, affiliates) starts with the admin — it fixes the exact gap hit on
+the first live run (no way to see/manage a build) and lays the auth foundation the portal/affiliates reuse. Built as
+same-origin routes on the Render app (where the data + logic live), not the static site. Pieces: RUNS_DIR made
+env-configurable (RELAUNCH72_RUNS_DIR) so builds land on a persistent disk; a signed-cookie session (HMAC over an
+expiry, 12h, HttpOnly/SameSite=Lax/Secure) + constant-time password check (single ADMIN_PASSWORD — real user
+accounts arrive with the Phase B/C DB); a read model over the on-disk run artifacts (manifest/bundle/intake/signoff +
+orders.jsonl); server-rendered dark control-room UI; routes /admin (dashboard: runs + orders), /admin/run/:id (stages,
+park reason, in-browser deliverable viewer), POST /admin/run/:id/signoff (reuses the pipeline's approve/sendBack →
+writes signoff.json → unlocks delivery). Path-traversal guarded (run-id + stage regex). Enabled only when
+ADMIN_PASSWORD is set. Verified: 214 tests (8 new — session, store, router flows) + a real HTTP smoke (login gate →
+dashboard lists the run/order → detail shows the park reason → deliverable renders). Next: view a full assembled pack
++ trigger delivery from admin, then the persistent disk, then Phase B (customer portal). To go live the founder sets
+ADMIN_PASSWORD/SESSION_SECRET on Render + adds the disk with RELAUNCH72_RUNS_DIR/DATA_DIR.
