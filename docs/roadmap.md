@@ -97,3 +97,24 @@ all inside the customer's Relaunch72 login area.
 This reframes **Phase D** (recurring AI manager) as **the 72-Day Package**, and adds an ecosystem arm:
 our own content + ads + traffic engines (compete with / absorb the digitalwomble-type tools), built
 in-house on our own IP. Sequence unchanged: land the first paid pack → portal → the 72-Day Package.
+
+---
+
+## Competitive intel + steals — Digital Womble "Traffic Quality Optimiser"
+
+**What it is:** AI bulk SEO-metadata tool. Free page audit → rewrites titles/meta for search intent →
+ships a CMS-import-ready file (WP/Shopify/Webflow/Ghost/Magento/…). £97/≤1,000 pages, tiered up,
+agency-targeted ("run across every client site"), one-off, explicitly no subscription.
+
+**Steals (worth building):**
+- **Import-ready CMS delivery** — their real innovation. Deliver our website/content as import files
+  per CMS ("optimised Monday, live Tuesday"), not just docs. Upgrades the whole pack's delivery UX.
+- **SEO-metadata layer on S6** — add search-intent titles + meta descriptions (classified buy/compare/
+  learn) to the website deliverable. We already generate the page copy from the real message/ICP, so we
+  deliver "rank AND convert" for real — the half they only claim.
+- **Agency ICP** — target agencies relaunching multiple client brands (their angle: run across every site).
+
+**Their weaknesses = our openings:** metadata-only (found, not converting — we own convert); one-off,
+no recurring (SEO decays → fits the 72-day cycle they're missing); one tile of the stack (we're the board).
+Verdict: not a competitor — a capability we absorb. (Sibling tools noted: daily-indexing, content-strategy,
+GEO Visibility Audit — same suite; screenshots pending to complete the teardown.)
