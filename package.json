@@ -9,6 +9,7 @@
   "scripts": {
     "pipeline": "npm run --workspace orchestrator pipeline --",
     "content": "npm run --workspace orchestrator content --",
+    "social": "npm run --workspace orchestrator social --",
     "test": "npm run --workspace orchestrator test",
     "typecheck": "npm run --workspace orchestrator typecheck",
     "serve": "npm run --workspace orchestrator serve",

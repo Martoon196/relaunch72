@@ -1968,3 +1968,93 @@ export function qaContentCluster(output: unknown, intake: Intake, prior: Record<
   issues.push(...scanBannedPhrases(output, intake, { includeCustomerWords: true, stripQuotedText: true }));
   return issues;
 }
+
+// ─── AI Socials Manager · per-post pre-publish guard ─────────────────────────
+// A post composed from S8 (which already passed qaS8) can still be edited by a
+// human before it auto-publishes. qaSocialPost is the final no-invention gate on
+// the exact text that will hit the customer's account: figures trace or it's
+// FATAL, quoted testimony is a real S2 verbatim or it's FATAL, banned/never
+// words are caught, and the post fits the platform's hard character limit.
+
+export interface SocialPostCheck {
+  platform: string;
+  text: string;
+  day?: number;
+}
+
+// Hard caps that cause a publish to be rejected/truncated by the network.
+export const PLATFORM_CHAR_LIMITS: Record<string, number> = {
+  'x': 280,
+  'bluesky': 300,
+  'threads': 500,
+  'pinterest': 500,
+  'youtube shorts': 1000,
+  'google business profile': 1500,
+  'instagram': 2200,
+  'tiktok': 2200,
+  'linkedin': 3000,
+  'facebook': 5000,
+};
+
+export function qaSocialPost(post: SocialPostCheck, intake: Intake, prior: Record<string, unknown> = {}): QAIssue[] {
+  const issues: QAIssue[] = [];
+  const text = post.text ?? '';
+  const platformLC = normalizeText(post.platform).toLowerCase();
+  const label = post.day ? `day ${post.day} (${post.platform})` : post.platform;
+
+  if (normalizeText(text).length === 0) {
+    issues.push({ check: 'social.empty', message: `${label}: post text is empty — nothing to publish` });
+    return issues; // nothing else to check
+  }
+
+  if (!S8_PLATFORMS.some((p) => normalizeText(p).toLowerCase() === platformLC)) {
+    issues.push({ check: 'social.platform_unknown', message: `${label}: "${post.platform}" is not a supported platform` });
+  }
+
+  const cap = PLATFORM_CHAR_LIMITS[platformLC];
+  if (cap && text.length > cap) {
+    issues.push({
+      check: 'social.too_long',
+      message: `${label}: ${text.length} characters exceeds the ${cap}-char limit for ${post.platform} — it would be rejected or truncated on publish`,
+    });
+  }
+
+  // NO-INVENTION (FATAL): a figure in an auto-publishing post must trace to a
+  // real intake/prior number or be visible arithmetic. No bare years, echoed %.
+  const allowedNumbers = new Set<number>([
+    ...allIntakeNumbers(intake),
+    ...numericLeaves(prior.S2),
+    ...numericLeaves(prior.S3),
+    ...numericLeaves(prior.S8),
+  ]);
+  for (const value of inventedNumbers(normalizeText(text), 0, 0, allowedNumbers, allowedNumbers, { allowYear: false, percentEcho: true })) {
+    issues.push({
+      check: 'social.number_invented',
+      message: `${label}: figure ${value.toLocaleString('en-GB')} is not a real intake/prior number nor visible arithmetic — a post that auto-publishes ships no invented stats`,
+      fatal: true,
+    });
+  }
+
+  // NO-INVENTION (FATAL): any double-quoted testimony must be a real S2 verbatim
+  // or a consumed intake field.
+  const s2 = prior.S2 as { verbatims?: string[] } | undefined;
+  const quoteHayLC = [
+    ...(s2?.verbatims ?? []).map((v) => normalizeText(v)),
+    ...haystack(intake, ['C2', 'A2', 'E2', 'E3', 'C3']),
+  ].map((h) => h.toLowerCase());
+  for (const span of extractQuotedSpans(text)) {
+    const norm = normalizeText(span);
+    if (norm.length < MIN_QUOTE_CHARS) continue;
+    if (!quoteTracesTo(span, quoteHayLC)) {
+      issues.push({
+        check: 'social.quote_fabricated',
+        message: `${label}: quoted passage ("${norm.slice(0, 50)}…") is not copied from the S2 verbatims or the intake — no fabricated testimony in an auto-published post`,
+        fatal: true,
+      });
+    }
+  }
+
+  // Banned marketing-speak + the customer's H3 never-words (real quotes exempt).
+  issues.push(...scanBannedPhrases({ text }, intake, { includeCustomerWords: true, stripQuotedText: true }));
+  return issues;
+}

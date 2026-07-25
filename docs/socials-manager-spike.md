@@ -6,9 +6,16 @@ the no-invention QA + informed-consent gate — by **renting** a social API rath
 than building a social-media-management platform. Makes the Phase D "AI Social
 Manager" north star (decisions D-051) concrete.
 
-**Status:** scoped, not started. Behind the first paid pack. Most of it is
-mock-able at zero external cost; only the final real-account test needs a paid
-vendor account (founder-gated).
+**Status:** mock-able core **built + tested** (`orchestrator/src/social/`,
+`npm run social`, 9 tests, proven end-to-end in mock mode). Remaining: the live
+Ayrshare proof (real account, cost-per-post) + the written go/no-go — both
+founder-gated on a paid key. Behind the first paid pack.
+
+**Built so far:** the `SocialPublisher` interface + `MockPublisher` +
+`AyrsharedPublisher` (live, key-guarded); `buildSchedule` (S8 → dated posts);
+`qaSocialPost` (pre-publish no-invention guard); the `npm run social` CLI (writes
+`social-plan.json`). A dry run over a mock S8 pack schedules all 30 posts with a
+clean QA pass and £0 cost.
 
 ## The question the spike answers
 
