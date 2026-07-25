@@ -422,6 +422,119 @@ function mockS9(intake: Intake): unknown {
   };
 }
 
+// ─── Content-cluster engine (CC) ────────────────────────────────────────────
+// A deterministic 7-article cluster derived from the intake, built to pass every
+// qaContentCluster check by construction: no digits (so no "invented" numbers),
+// no H3 never-words, quotes only from the real S2 verbatims, unique slugs,
+// distinct fan-out queries, pillar↔supporting interlinks, one money page.
+
+/** Field text with digits and the customer's H3 never-words removed, trimmed. */
+function ccClean(intake: Intake, id: string, maxLen = 70): string {
+  let s = normalizeText(fieldText(intake, id)).replace(/[0-9]+/g, ' ');
+  for (const w of customerNeverWords(intake)) {
+    s = s.replace(new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'ig'), ' ');
+  }
+  s = s.replace(/\s+/g, ' ').trim();
+  if (s.length > maxLen) s = s.slice(0, maxLen).replace(/\s+\S*$/, '').trim();
+  return s;
+}
+
+function mockContentCluster(intake: Intake): unknown {
+  const a6 = ccClean(intake, 'A6', 50) || 'this service';   // business type — always in CC haystack (grounding anchor)
+  const kind = a6;
+  const v0 = mockS2Verbatims(intake)[0] ?? '';               // a real, traceable customer verbatim
+  const moneySlug = '/get-started';
+
+  // (slug, distinct fan-out query, intent, grounding seed field, anchor text)
+  const specs: Array<[string, string, 'buy' | 'compare' | 'learn', string, string]> = [
+    ['what-it-is', 'what it is and who it is for', 'learn', 'C3', 'see how this works'],
+    ['how-to-choose', 'how to choose the right provider', 'compare', 'E1', 'compare your options'],
+    ['what-it-costs', 'what it costs and what drives the price', 'buy', 'C4', 'get a straight quote'],
+    ['before-you-start', 'what to check before you start', 'learn', 'C1', 'start the right way'],
+    ['questions-to-ask', 'the questions worth asking first', 'compare', 'C4', 'ask us anything first'],
+    ['getting-started', 'how to get started the simple way', 'buy', 'A2', 'take the first step'],
+  ];
+  const pillarSlug = 'the-complete-guide';
+
+  const supporting = specs.map(([slug, query, intent, seed, anchor], i) => {
+    const seedText = ccClean(intake, seed, 60) || kind;
+    return {
+      role: 'supporting',
+      slug,
+      working_title: `${query.charAt(0).toUpperCase()}${query.slice(1)} — for ${kind}`.slice(0, 118),
+      target_query: query,
+      search_intent: intent,
+      angle: `Answers ${query} the way this business would, grounded in what the owner told us: ${seedText}.`.slice(0, 390),
+      outline: [
+        'The short answer first',
+        `What ${query} really means here`,
+        `How it applies to ${kind}`,
+        'What to do next',
+      ],
+      key_points: [
+        `Rooted in the owner's own words about the buyer: ${seedText}.`,
+        `Written for ${kind}, in the voice the message guide sets — plain and specific.`,
+        i === 0 ? `A real customer put it like this: "${v0}".` : 'Every claim here traces back to the intake, nothing invented.',
+      ],
+      snippet_answer: `The short answer to ${query}: it depends on your situation, but for ${kind} the honest starting point is to look at what the owner already knows about the buyer and work from there.`.slice(0, 480),
+      faqs: [
+        { q: `Is this relevant to ${kind}?`, a: `Yes — it is written specifically for ${kind}, using the owner's own description of the work and the buyer.` },
+        { q: 'How long does it take?', a: 'It varies with your situation; the guide walks through what changes the timeline and how to plan for it.' },
+        { q: 'What should I have ready?', a: `The basics about your own ${kind} and what you want the reader to do next — the article explains the rest.` },
+      ],
+      internal_links: [pillarSlug],
+      money_page_anchor: anchor,
+      meta_title: `${query.charAt(0).toUpperCase()}${query.slice(1)}`.slice(0, 62),
+      meta_description: `A plain-English answer for ${kind} on ${query}, grounded in the owner's own words — no fluff, nothing invented.`.slice(0, 158),
+    };
+  });
+
+  const pillarSeed = ccClean(intake, 'C3', 60) || kind;
+  const pillar = {
+    role: 'pillar',
+    slug: pillarSlug,
+    working_title: `The complete guide for ${kind}`.slice(0, 118),
+    target_query: `everything to know about ${kind}`,
+    search_intent: 'learn',
+    angle: `The cornerstone piece the whole cluster points back to, built from the owner's positioning and what the buyer is really after: ${pillarSeed}.`.slice(0, 390),
+    outline: [
+      'What this really comes down to',
+      `Who this is for in ${kind}`,
+      'The questions everyone asks',
+      'How to choose well',
+      'The first step to take',
+    ],
+    key_points: [
+      `The subject this business should own, drawn from the owner's own words: ${pillarSeed}.`,
+      `Links out to every supporting article so the reader can go deeper on ${kind}.`,
+      'A cornerstone that only makes claims the owner could defend line by line.',
+    ],
+    snippet_answer: `For ${kind}, the whole subject comes down to matching what the owner already does well to what the buyer is actually looking for, then making the next step obvious. Everything else is detail.`.slice(0, 480),
+    faqs: [
+      { q: `Where should I start with ${kind}?`, a: 'Start with the pillar, then follow the links to the specific question closest to your situation.' },
+      { q: 'Is any of this made up?', a: 'No — every point traces to the owner\'s intake; anything that could not be verified was left out.' },
+      { q: 'What do I do after reading?', a: 'Take the one next step the page points to — it is the same destination every article leads to.' },
+    ],
+    internal_links: supporting.map((s) => s.slug),
+    money_page_anchor: 'take the next step',
+    meta_title: `The complete guide for ${kind}`.slice(0, 62),
+    meta_description: `The cornerstone guide for ${kind}: what matters, who it is for, and the one next step — grounded in the owner's own words.`.slice(0, 158),
+  };
+
+  return {
+    topic: `${kind}: the essentials`.slice(0, 118),
+    money_page: {
+      slug: moneySlug,
+      purpose: `The one page every article sends the reader to — where they take the next step with this ${kind} business.`.slice(0, 198),
+      default_anchor: 'take the next step',
+    },
+    pillar,
+    supporting,
+    provenance_note:
+      'Every figure and quote in this cluster traces to the customer\'s own intake and dream-buyer profile. Anything that could not be verified was left out rather than invented.',
+  };
+}
+
 export class MockClient implements LlmClient {
   readonly mode = 'mock' as const;
 
@@ -447,6 +560,7 @@ export class MockClient implements LlmClient {
     else if (stage === 'S7') payload = mockS7(this.intake);
     else if (stage === 'S8') payload = mockS8(this.intake);
     else if (stage === 'S9') payload = mockS9(this.intake);
+    else if (stage === 'CC') payload = mockContentCluster(this.intake);
     else throw new Error(`MockClient: no generator for stage ${stage}`);
 
     if (shouldFail && stage !== 'S1' && stage !== 'S2') {

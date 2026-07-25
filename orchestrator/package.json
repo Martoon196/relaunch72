@@ -6,6 +6,7 @@
   "description": "Relaunch72 pipeline orchestrator — S0 intake gate, stages S1+, QA layer, run manifests, CLI",
   "scripts": {
     "pipeline": "tsx src/cli.ts",
+    "content": "tsx src/content/cli.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "render": "tsx src/docs/cli.ts",

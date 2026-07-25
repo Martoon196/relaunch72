@@ -352,3 +352,86 @@ export const S9_SCHEMA: AnySchema = {
     },
   },
 };
+
+// ─── Content-cluster engine (CC) ─────────────────────────────────────────────
+// A topical-authority cluster: one pillar + six supporting articles, all
+// interlinked and each linking to one conversion ("money") page. Generated FROM
+// a completed relaunch's S2 (dream-buyer) + S3 (message & voice), so the topics
+// are chosen by strategy — not a keyword you hand a generic tool. Article briefs
+// (outline + key points + a citation-ready snippet + FAQs + SEO metadata), not
+// full drafts: the unit a human or a later stage expands, and the unit our
+// no-invention QA can actually verify. Own IP — inspired-by-concepts only.
+
+const CC_FAQ = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['q', 'a'],
+  properties: {
+    q: { type: 'string', minLength: 8, maxLength: 160 },
+    a: { type: 'string', minLength: 20, maxLength: 600 },
+  },
+} as const;
+
+function ccArticle(role: 'pillar' | 'supporting', outlineMin: number): AnySchema {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: [
+      'role', 'slug', 'working_title', 'target_query', 'search_intent', 'angle',
+      'outline', 'key_points', 'snippet_answer', 'faqs', 'internal_links',
+      'money_page_anchor', 'meta_title', 'meta_description',
+    ],
+    properties: {
+      role: { type: 'string', enum: [role] },
+      // kebab-case url slug; unique across the cluster (QA enforces uniqueness).
+      slug: { type: 'string', pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$', minLength: 3, maxLength: 80 },
+      working_title: { type: 'string', minLength: 10, maxLength: 120 },
+      // The fan-out query this article owns — a real sub-question a buyer/AI asks.
+      target_query: { type: 'string', minLength: 6, maxLength: 120 },
+      search_intent: { type: 'string', enum: ['buy', 'compare', 'learn'] },
+      // The take, grounded in an S3 message pillar / positioning (QA checks grounding).
+      angle: { type: 'string', minLength: 20, maxLength: 400 },
+      outline: { type: 'array', minItems: outlineMin, maxItems: 12, items: { type: 'string', minLength: 6, maxLength: 140 } },
+      key_points: { type: 'array', minItems: 3, maxItems: 12, items: { type: 'string', minLength: 15, maxLength: 400 } },
+      // Featured-snippet / AI-citation-ready answer block — kept concise (QA caps words).
+      snippet_answer: { type: 'string', minLength: 40, maxLength: 500 },
+      faqs: { type: 'array', minItems: 3, maxItems: 8, items: CC_FAQ },
+      // Slugs of other articles in this cluster this one links to.
+      internal_links: { type: 'array', minItems: 1, maxItems: 12, items: { type: 'string', pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$' } },
+      // Anchor text for the contextual link to the one money page.
+      money_page_anchor: { type: 'string', minLength: 3, maxLength: 80 },
+      // SEO metadata — length bounds are the SERP display limits.
+      meta_title: { type: 'string', minLength: 10, maxLength: 65 },
+      meta_description: { type: 'string', minLength: 40, maxLength: 160 },
+    },
+  };
+}
+
+export const CONTENT_CLUSTER_SUPPORTING = 6; // v1 cluster size: 1 pillar + 6 supporting = 7 articles
+
+export const CONTENT_CLUSTER_SCHEMA: AnySchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['topic', 'money_page', 'pillar', 'supporting', 'provenance_note'],
+  properties: {
+    topic: { type: 'string', minLength: 3, maxLength: 120 },
+    money_page: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['slug', 'purpose', 'default_anchor'],
+      properties: {
+        slug: { type: 'string', minLength: 1, maxLength: 80 },
+        purpose: { type: 'string', minLength: 10, maxLength: 200 },
+        default_anchor: { type: 'string', minLength: 3, maxLength: 80 },
+      },
+    },
+    pillar: ccArticle('pillar', 5),
+    supporting: {
+      type: 'array',
+      minItems: CONTENT_CLUSTER_SUPPORTING,
+      maxItems: CONTENT_CLUSTER_SUPPORTING,
+      items: ccArticle('supporting', 4),
+    },
+    provenance_note: { type: 'string', minLength: 20, maxLength: 600 },
+  },
+};

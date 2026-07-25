@@ -1820,3 +1820,151 @@ export function qaS9(output: unknown, intake: Intake, prior: Record<string, unkn
   issues.push(...scanBannedPhrases(output, intake, { includeCustomerWords: false, stripQuotedText: true }));
   return issues;
 }
+
+// ─── Content-cluster engine (CC) · no-invention QA ───────────────────────────
+// Same bar as the pipeline: nothing is invented. Every figure traces to the
+// intake or to S2/S3; any double-quoted testimony traces to a real customer
+// verbatim or a consumed field; no banned marketing-speak. Plus the structural
+// discipline that makes a cluster a topical-authority cluster and not seven
+// stray posts: unique slugs, distinct fan-out queries, every supporting article
+// links back to the pillar and the pillar hubs to all of them, every article
+// links to the one money page, and the citation-ready snippet stays snippet-sized.
+
+// Fields the topic + voice are grounded in (drawn from the same intake the
+// pipeline consumed). Used only to build the provenance haystack.
+export const CC_INPUT_FIELDS = ['A1', 'A6', 'C2', 'C3', 'C4', 'C7', 'E1', 'E2', 'E3', 'G1'];
+
+interface CCArticle {
+  role: string;
+  slug: string;
+  working_title: string;
+  target_query: string;
+  search_intent: string;
+  angle: string;
+  outline: string[];
+  key_points: string[];
+  snippet_answer: string;
+  faqs: { q: string; a: string }[];
+  internal_links: string[];
+  money_page_anchor: string;
+  meta_title: string;
+  meta_description: string;
+}
+interface CCOutput {
+  topic: string;
+  money_page: { slug: string; purpose: string; default_anchor: string };
+  pillar: CCArticle;
+  supporting: CCArticle[];
+  provenance_note: string;
+}
+
+const CC_SNIPPET_WORD_CAP = 60; // a featured-snippet / AI-citation answer must stay quotable
+
+export function qaContentCluster(output: unknown, intake: Intake, prior: Record<string, unknown> = {}): QAIssue[] {
+  const issues: QAIssue[] = [];
+  const out = output as CCOutput;
+  const articles: CCArticle[] = [out.pillar, ...out.supporting];
+
+  const intakeHay = haystack(intake, CC_INPUT_FIELDS);
+  const s2 = prior.S2 as { verbatims?: string[] } | undefined;
+  const s2Verbatims = (s2?.verbatims ?? []).map((v) => normalizeText(v)).filter(Boolean);
+  const quoteHayLC = [...s2Verbatims, ...intakeHay].map((h) => h.toLowerCase());
+  const groundHay = [...intakeHay, ...stageStringLeaves(prior.S2), ...stageStringLeaves(prior.S3)]
+    .map((h) => h.toLowerCase());
+
+  // NO-INVENTION (FATAL): every figure must be a real intake/prior number, a
+  // small count, a period/measurement, or visible arithmetic over them. No bare
+  // years (a year in an article reads as a founding/statistic claim); percentages
+  // must be echoed or a bare 100%. This is the check a "live Google Ads data"
+  // generator cannot pass — our stats trace or they are not printed.
+  const allowedNumbers = new Set<number>([
+    ...allIntakeNumbers(intake),
+    ...numericLeaves(prior.S2),
+    ...numericLeaves(prior.S3),
+  ]);
+  for (const [path, text] of walkStrings(output, '')) {
+    for (const value of inventedNumbers(normalizeText(text), 0, 0, allowedNumbers, allowedNumbers, { allowYear: false, percentEcho: true })) {
+      issues.push({
+        check: 'cc.number_invented',
+        message: `${path} contains the figure ${value.toLocaleString('en-GB')}, which is not a real intake/prior number nor visible arithmetic over them — content ships no invented stats, volumes or counts (verified or omitted)`,
+        fatal: true,
+      });
+    }
+  }
+
+  // NO-INVENTION: any double-quoted passage ≥12 chars reads as a customer/owner
+  // quote and must be copied from an S2 verbatim or a consumed intake field.
+  for (const [path, text] of walkStrings(output, '')) {
+    for (const span of extractQuotedSpans(text)) {
+      const norm = normalizeText(span);
+      if (norm.length < MIN_QUOTE_CHARS) continue;
+      if (!quoteTracesTo(span, quoteHayLC)) {
+        issues.push({
+          check: 'cc.quote_fabricated',
+          message: `quoted passage at ${path} ("${norm.slice(0, 60)}…") is not copied from the S2 verbatims or the intake — a fabricated quotation parks the run`,
+          fatal: true,
+        });
+      }
+    }
+  }
+
+  // Unique slugs — internal linking is meaningless if two articles share one.
+  const slugs = articles.map((a) => a.slug);
+  const dupeSlugs = slugs.filter((s, i) => slugs.indexOf(s) !== i);
+  if (dupeSlugs.length > 0) {
+    issues.push({ check: 'cc.slug_duplicate', message: `duplicate article slug(s): ${[...new Set(dupeSlugs)].join(', ')} — every article needs a unique slug` });
+  }
+  const slugSet = new Set(slugs);
+
+  // Distinct fan-out queries — a cluster whose articles chase the same query
+  // cannibalises itself. Compare normalised.
+  const queries = articles.map((a) => normalizeText(a.target_query).toLowerCase());
+  const dupeQueries = queries.filter((q, i) => queries.indexOf(q) !== i);
+  if (dupeQueries.length > 0) {
+    issues.push({ check: 'cc.query_duplicate', message: `articles share the fan-out query "${dupeQueries[0]}" — each of the ${articles.length} articles must target a distinct sub-question` });
+  }
+
+  // Interlink discipline: pillar hubs to every supporting article; every
+  // supporting article links back to the pillar. That back-link is the topical-
+  // authority signal.
+  const pillarSlug = out.pillar.slug;
+  for (const s of out.supporting) {
+    if (!s.internal_links.includes(pillarSlug)) {
+      issues.push({ check: 'cc.pillar_backlink_missing', message: `supporting article "${s.slug}" does not link back to the pillar "${pillarSlug}" — every supporting article must` });
+    }
+  }
+  const missingHub = out.supporting.filter((s) => !out.pillar.internal_links.includes(s.slug)).map((s) => s.slug);
+  if (missingHub.length > 0) {
+    issues.push({ check: 'cc.pillar_hub_incomplete', message: `the pillar does not link to supporting article(s): ${missingHub.join(', ')} — the pillar must hub to all six` });
+  }
+  // Every internal link must resolve to a real slug in the cluster.
+  for (const a of articles) {
+    for (const link of a.internal_links) {
+      if (link !== a.slug && !slugSet.has(link)) {
+        issues.push({ check: 'cc.internal_link_dangling', message: `article "${a.slug}" links to "${link}", which is not an article in this cluster` });
+      }
+    }
+  }
+
+  // Grounding: each article's angle+key_points must share substance with the
+  // strategy (S2/S3) or the intake — a low bar that catches an invented topic
+  // untethered from the actual business, without false-parking real briefs.
+  for (const a of articles) {
+    const artTokens = tokensOf(`${a.angle} ${a.key_points.join(' ')}`);
+    const grounded = [...artTokens].some((t) => t.length >= 4 && groundHay.some((h) => h.includes(t)));
+    if (!grounded) {
+      issues.push({ check: 'cc.angle_ungrounded', message: `article "${a.slug}" shares no vocabulary with the buyer profile, message guide or intake — its angle must come from the strategy, not thin air` });
+    }
+  }
+
+  // Citation-ready snippet must stay snippet-sized (featured-snippet / AI answer).
+  for (const a of articles) {
+    if (wordCount(a.snippet_answer) > CC_SNIPPET_WORD_CAP) {
+      issues.push({ check: 'cc.snippet_too_long', message: `article "${a.slug}" snippet_answer is ${wordCount(a.snippet_answer)} words — keep it ≤${CC_SNIPPET_WORD_CAP} so it can win a featured snippet / AI citation` });
+    }
+  }
+
+  // Banned marketing-speak (H3 never-words bind); real quotes inside "" are exempt.
+  issues.push(...scanBannedPhrases(output, intake, { includeCustomerWords: true, stripQuotedText: true }));
+  return issues;
+}

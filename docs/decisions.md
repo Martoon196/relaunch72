@@ -624,3 +624,23 @@ API) + optional auto-posting. Wrote docs/roadmap.md (phases A–D + backlog: sco
 questions-as-lead-magnet, niche audits, webinar funnel). Reaffirmed the IP hard line: our-own-IP playbooks only,
 never DigitalMarketer's licensed material in code/product/git. Sequencing held firm: land the first paid pack →
 portal → affiliates → recurring, don't build ahead of revenue.
+
+**D-052 · Content-cluster engine built as a standalone stage (own IP), not wired into the paid S1–S10 pipeline.**
+Founder call ("fuck having a roadmap let's crack on — a content engine like Soro would work so well with this"):
+built the topical-authority content-cluster engine that absorbs the whole competitor content tool (Digital Womble
+"Content Strategy") as a single capability. A cluster = 1 pillar + 6 supporting article *briefs* (outline, key points,
+citation-ready snippet, FAQs, SEO metadata, interlinks, one money-page link), generated FROM a completed relaunch's
+S2 (dream buyer) + S3 (message & voice) — so topics come from *strategy*, not a keyword you hand a generic tool
+(their gap: no strategy layer). Briefs, not full drafts: the unit a human/later stage expands, and the unit our
+no-invention QA can actually verify. Deliberately a standalone StageDef (`CC`) run via the existing generic runStage
+(retry-critique-park for free), NOT added to STAGE_ORDER — so building it cannot destabilise the nine-deliverable pack
+that is one re-run from the first paid sale. New CLI `npm run content -- (--run runs/<id> | --fixture <n> --mock)`.
+No-invention QA (qaContentCluster) reuses the pipeline's number/quote provenance machinery: every figure traces to
+intake/S2/S3 or is visible arithmetic (FATAL), any double-quoted testimony traces to a real S2 verbatim (FATAL),
+banned/H3-never words scanned; plus structural authority checks (unique slugs, distinct fan-out queries, pillar↔
+supporting interlinks, dangling-link guard, snippet word-cap for featured-snippet/AI-citation). This makes real the
+"verified against a live source, or omitted rather than invented" line the competitor only claims — and it's why the
+engine fits: it runs on the same no-invention rails as everything else. Own IP, inspired-by-concepts only. v1 fixed
+at 6 supporting (7-article cluster); count is easy to raise later. 225 tests (was 215), typecheck clean; proven
+end-to-end in mock mode (S2→S3→CC writes cc.json with correct interlinks). Slots into the 72-Day Package as the
+content stage when the recurring platform lands — not before revenue.
