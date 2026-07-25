@@ -12,6 +12,7 @@
     "social": "npm run --workspace orchestrator social --",
     "keyword": "npm run --workspace orchestrator keyword --",
     "ads": "npm run --workspace orchestrator ads --",
+    "manager": "npm run --workspace orchestrator manager --",
     "test": "npm run --workspace orchestrator test",
     "typecheck": "npm run --workspace orchestrator typecheck",
     "serve": "npm run --workspace orchestrator serve",

@@ -147,3 +147,31 @@ offer with the first paid one-off pack → stand up the GHL-backed MVP slice →
 onboard a handful of recurring clients → deepen the rails and dashboards.** Don't
 build the full owned CRM until GHL's ceiling actually blocks us — it probably
 won't for a long time.
+
+---
+
+## Update (26 Jul) — founder input reshapes the fork, and the Orchestrator is built
+
+**GHL is clunky.** Founder has used it and finds the UX cluttered — and that's the
+product, not a version (it's a decade-old everything-app). The distinction I
+under-weighted: **whether clients see GHL's UI.** So the fork is now:
+
+- ~~Clients live in GHL's white-label UI~~ — ruled out; they'd inherit the clunk.
+- **GHL headless** — its API as an invisible backend (messaging, CRM data,
+  rebilling); clients log into *our* clean portal. Keeps the plumbing win, kills
+  the clunk. Dependency remains.
+- **Own portal + thin CRM + atomic rails** (Twilio / SendGrid / Stripe) — most
+  control, cleanest UX, no GHL. We build only the focused slice we need (contacts,
+  pipeline, timeline, messaging, the AI rails, billing) — not the whole GHL
+  kitchen sink. Positions us as **the anti-GHL: clean, AI-first.** Most upfront
+  build; best long-term fit given the UX bar.
+
+Recommendation shifts toward **headless-GHL (fast) or own-portal (clean)** — both
+put clients in *our* UI. Still a founder call; logged P0.
+
+**The Orchestrator is built (mock-first).** `orchestrator/src/manager/` — the
+per-tenant "manager": given the client roster and a date, it computes which rails
+are due (daily / weekly / monthly cadence) and dispatches them through an injected
+runner (mock today, live rail-wiring next). `npm run manager -- --date <d> --mock`.
+This is the piece that's true on **every** platform path, so it was safe to build
+now — it turns the five capability CLIs into a scheduled, multi-tenant service.
