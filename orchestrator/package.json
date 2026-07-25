@@ -8,6 +8,7 @@
     "pipeline": "tsx src/cli.ts",
     "content": "tsx src/content/cli.ts",
     "social": "tsx src/social/cli.ts",
+    "keyword": "tsx src/keyword/cli.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "render": "tsx src/docs/cli.ts",
