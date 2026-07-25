@@ -184,3 +184,13 @@ wired into the manager: each due action ensures the client's GHL sub-account
 a SaaS-Pro token (GHL_API_TOKEN + GHL_AGENCY_ID). Building the seam keeps the
 build-vs-buy decision open at zero cost — if we go GHL, it's ready; if we go
 own-portal, the same `ghlRunner` shape becomes a `portalRunner`.
+
+**Whole package wired end-to-end (mock, £0).** The manager's **rail runner**
+(`orchestrator/src/manager/rail-runner.ts`) makes a tick actually DRIVE the rails
+per tenant, then push each result into GHL: `content_cluster` generates a real
+Soro cluster, `keyword_refresh` prices its queries, `social_batch` schedules the
+S8 posts, `ads_refresh` produces paused ad drafts — each pushed into the client's
+(mock) GHL sub-account. One command runs the entire platform:
+`npm run manager -- --tenants <file> --date <d> --rails --mock`. Every stage is
+mock and £0; live keys (Anthropic, the rail APIs, a GHL token) light the same
+flow up for real with no rewrite. The vapourware platform is complete.

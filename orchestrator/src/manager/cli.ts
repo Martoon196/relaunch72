@@ -15,21 +15,23 @@ import path from 'node:path';
 import '../config.js';
 import type { Tenant } from './types.js';
 import { runTick, ghlRunner, type ActionRunner } from './engine.js';
+import { railRunner } from './rail-runner.js';
 import { MockGhlClient } from '../ghl/mock.js';
 import { GhlLiveClient } from '../ghl/live.js';
 
-interface CliArgs { tenants?: string; date?: string; mock: boolean; ghl: boolean }
+interface CliArgs { tenants?: string; date?: string; mock: boolean; ghl: boolean; rails: boolean }
 
 function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { mock: false, ghl: false };
+  const args: CliArgs = { mock: false, ghl: false, rails: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--tenants') args.tenants = argv[++i];
     else if (a === '--date') args.date = argv[++i];
     else if (a === '--mock') args.mock = true;
     else if (a === '--ghl') args.ghl = true;
+    else if (a === '--rails') args.rails = true;
     else if (a === '--help' || a === '-h') {
-      console.log('Usage: npm run manager -- --date YYYY-MM-DD [--tenants <file.json>] [--ghl] [--mock]');
+      console.log('Usage: npm run manager -- --date YYYY-MM-DD [--tenants <file.json>] [--rails] [--ghl] [--mock]');
       process.exit(0);
     } else throw new Error(`Unknown argument: ${a}`);
   }
@@ -58,17 +60,20 @@ async function main(): Promise<number> {
     ? (JSON.parse(fs.readFileSync(path.resolve(args.tenants), 'utf8')) as Tenant[])
     : DEMO_ROSTER;
 
-  // Pick the runner. --ghl dispatches through GoHighLevel (MockGhlClient under
-  // --mock, the live GHL client otherwise); plain --mock is the log-only runner.
+  // Pick the runner:
+  //   --rails : the whole package — run each rail per tenant, push into GHL.
+  //   --ghl   : dispatch the seam through GHL (no real rail work).
+  //   --mock  : log-only plan.
   let runner: ActionRunner | undefined;
-  if (args.ghl) {
+  if (args.rails) {
+    const ghl = args.mock ? new MockGhlClient() : new GhlLiveClient();
+    runner = railRunner(ghl, { mock: args.mock });
+  } else if (args.ghl) {
     runner = ghlRunner(args.mock ? new MockGhlClient() : new GhlLiveClient());
   } else if (args.mock) {
     runner = undefined; // engine default = mockRunner
   } else {
-    // The live rail runner (wiring each action to its own rail per tenant) is
-    // the next step; today live ticks go via --ghl. Fail loud, don't pretend.
-    throw new Error('No live rail runner yet — use --mock (log plan) or --ghl (push via GoHighLevel). See decisions D-057.');
+    throw new Error('Pick a runner: --mock (log plan), --ghl (push seam), or --rails (run the rails + push). See decisions D-057/D-059.');
   }
 
   const result = await runTick(tenants, args.date as string, runner);
