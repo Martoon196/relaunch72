@@ -194,3 +194,15 @@ S8 posts, `ads_refresh` produces paused ad drafts — each pushed into the clien
 `npm run manager -- --tenants <file> --date <d> --rails --mock`. Every stage is
 mock and £0; live keys (Anthropic, the rail APIs, a GHL token) light the same
 flow up for real with no rewrite. The vapourware platform is complete.
+
+**Decision landed (26 Jul): build our own portal (Option A / own-portal).** No GHL
+— clients log into our own clean UI. The `orchestrator/src/ghl/` adapter stays as
+dormant scaffolding (harmless; a future integration option), but the platform is
+ours. First slice built: the **thin CRM core** (`orchestrator/src/crm/`) — a
+swappable `CrmStore` (`MemoryCrmStore` + `JsonCrmStore` now, a DB later) with
+tenants, contacts, a pipeline and an activity timeline, plus `ingestTick` that
+turns each manager rail-run into a timeline entry. Deliberately *thin* — the
+focused slice we need, not GHL's kitchen sink. Portal build order: CRM core (done)
+→ multi-tenant client auth + portal HTTP → brand-brain view + account connections
+→ manager feeds the live activity timeline → messaging rails (Twilio + SendGrid/
+Brevo, mock-first) → subscription billing (Stripe subs) → dashboards.
