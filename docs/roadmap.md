@@ -171,3 +171,45 @@ shows illustrative +245%/£56k numbers with no named customer — a soft spot we
 (no fabricated proof, ever; we win by earning the [PROOF SLOT]). Verdict: not a competitor — the
 content-cluster + GEO engine becomes **a stage inside the 72-Day Package**, and their dogfood-your-own-
 method acquisition play is the one idea worth adopting wholesale.
+
+---
+
+## Competitive intel + steals — Digital Womble "Daily Indexing" + the whole-suite read
+
+Two more pages (Daily Indexing; Traffic Quality Optimiser now shipped & live) complete the teardown of
+the full four-tool suite. Daily Indexing is the one to study closely — it's their **only recurring product**,
+and recurring is our whole thesis.
+
+**The single best idea on any of their pages — the honesty section ("What we can promise, and what we
+cannot"):** they guarantee only what they *control* (daily submission to Google/Bing/IndexNow) and openly
+**refuse to promise** what they can't (that Google actually indexes every page) — "anyone telling you they
+can guarantee indexation is either confused or lying." This is **our no-invention DNA applied to marketing
+claims**, and it builds *more* trust than a hypey guarantee. **Steal:** add an honest promise/limits block
+to Relaunch72 — we promise a complete, verified, ready-to-run relaunch (message, offer, nine deliverables,
+every number and quote traced to the customer's own words); we do **not** promise you go viral or hit a
+revenue figure — anyone who does is selling smoke. Differentiates us from every hype competitor.
+
+**Other steals:**
+- **Honest social proof done right** — "47+ users now indexing daily. First customer already seeing
+  results." They don't fabricate big numbers either. Confirms our hard rule is a *selling strength*, not a
+  handicap — lean into "early, honest, verified" rather than faking traction.
+- **The recurring shape (template for the 72-Day Package):** "runs daily, forever, emails you monthly";
+  onboarding is "three steps, one of which is optional — there is no step four, nothing to install, nothing
+  to log into." Set-and-forget cadence + a recurring report is exactly how the 72-Day Package should *feel*.
+- **Frictionless one-off vs logged-in recurring — the right architectural split.** Their transactional
+  tools have *no login* ("nothing to log into"); their content/recurring products have login + per-Brand
+  memory. Mirrors our plan: keep the one-off pack low-friction, reserve accounts for the recurring package.
+- **White-label reseller channel** — every page pushes "set it up for a client once, bill it monthly, it
+  becomes margin" + explicit white-label ("run this service under your own brand with your own invoicing").
+  A **stronger Phase C than referral-only affiliates**: agencies reselling Relaunch72 under their own brand.
+
+**The whole suite, decoded:** 2 free diagnostics (GEO Visibility Audit, AI Visibility Checker — "are you
+cited by ChatGPT/Perplexity/Gemini/Copilot?") feed 2 paid fixers (Content Strategy £48–98, Traffic Quality
+£97 one-off); only Daily Indexing (£29/mo) recurs. Free-diagnostic→paid-fix is the same scorecard→autopsy
+funnel we already run. **AI-citation (GEO) is the wind every one of their tools sails** — reinforces adding
+a citation-ready formatting layer to our content/website deliverables, and a free "are you cited by AI?"
+check as a possible second funnel entry (backlog — don't build ahead of the first paid pack).
+
+**The seam, restated:** their business is **transactional + one small sticky utility**. It has no strategy
+layer and no relaunch cadence. Both gaps are precisely what Relaunch72 leads with. Verdict unchanged across
+all four tools: not competitors — capabilities and plays we absorb into the 72-Day Package.
