@@ -74,3 +74,26 @@ Phase D is a *short hop* once the portal exists — not a from-scratch build. Do
 Any "social media manager" / marketing playbook we build is **our own IP**, written from scratch and
 inspired-by-concepts only. Licensed third-party material (e.g. DigitalMarketer) never enters the code,
 the product, or git. Same rigour, our IP — it protects the business legally.
+
+---
+
+## Positioning — own the stack, the 72-Day Package (crystallised)
+
+**Stance: take over, not take part.** No partnerships with tools we don't control. Every adjacent
+AI marketing tool (content engines, ad engines, SEO/indexing/traffic tools like digitalwomble) is
+something we out-build and absorb into the ecosystem. We already own the hard part — the conversion
+engine + a no-invention quality bar competitors don't have. Extend outward from there: our own
+content engine, our own ad-creative + campaign engine, our own traffic play — all in-house, all AI,
+all inside the customer's Relaunch72 login area.
+
+**The model — 72 hours in, every 72 days forever:**
+- **72 hours** = the door-opener (one-off pack, fast). Becomes the trial.
+- **The 72-Day Package** = the business. ~5 cycles/year, each a mini-relaunch driven by the customer's
+  live metrics: refreshed message/offer, new content batch (social/email/website), ads. Recurring
+  revenue + a cadence that IS the brand — "every 72 days" can't be copied without copying us.
+- **Moat:** it all lives in the login area; leaving = their marketing rots again in 72 days. One
+  customer gets message + copy + content + traffic + ads, rebuilt every cycle by our AI, forever.
+
+This reframes **Phase D** (recurring AI manager) as **the 72-Day Package**, and adds an ecosystem arm:
+our own content + ads + traffic engines (compete with / absorb the digitalwomble-type tools), built
+in-house on our own IP. Sequence unchanged: land the first paid pack → portal → the 72-Day Package.
