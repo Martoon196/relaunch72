@@ -175,3 +175,12 @@ are due (daily / weekly / monthly cadence) and dispatches them through an inject
 runner (mock today, live rail-wiring next). `npm run manager -- --date <d> --mock`.
 This is the piece that's true on **every** platform path, so it was safe to build
 now — it turns the five capability CLIs into a scheduled, multi-tenant service.
+
+**GHL adapter scaffolded (mock-first).** `orchestrator/src/ghl/` — a `GhlClient`
+seam (`MockGhlClient` + key-guarded `GhlLiveClient` on API v2) with a `ghlRunner`
+wired into the manager: each due action ensures the client's GHL sub-account
+(find-or-create) and pushes its artifact (pack / cluster / social / ad). Runs at
+£0 via `npm run manager -- --date <d> --ghl --mock`; the live client activates on
+a SaaS-Pro token (GHL_API_TOKEN + GHL_AGENCY_ID). Building the seam keeps the
+build-vs-buy decision open at zero cost — if we go GHL, it's ready; if we go
+own-portal, the same `ghlRunner` shape becomes a `portalRunner`.

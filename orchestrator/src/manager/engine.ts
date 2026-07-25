@@ -7,8 +7,9 @@
  * next step and drops in without touching this engine.
  */
 
-import type { ActivityEntry, DueAction, Tenant } from './types.js';
+import type { ActivityEntry, DueAction, RailAction, Tenant } from './types.js';
 import { dueActions } from './schedule.js';
+import type { GhlArtifact, GhlClient } from '../ghl/types.js';
 
 export type ActionRunner = (tenant: Tenant, action: DueAction) => Promise<ActivityEntry>;
 
@@ -20,6 +21,37 @@ export const mockRunner: ActionRunner = async (tenant, action) => ({
   status: 'ok',
   note: `mock: would run ${action.action} (${action.cadence}) for ${tenant.name}`,
 });
+
+/** How each rail action lands as a GHL artifact pushed into the client's sub-account. */
+const ARTIFACT_FOR: Record<RailAction, GhlArtifact> = {
+  content_cluster: { type: 'content_cluster', title: 'Content cluster (Soro)' },
+  social_batch: { type: 'social_post', title: 'Scheduled social batch' },
+  keyword_refresh: { type: 'note', title: 'Keyword report' },
+  ads_refresh: { type: 'ad_campaign', title: 'Ad campaign (paused drafts)' },
+};
+
+/**
+ * Runner that dispatches each due action through GoHighLevel: ensure the client's
+ * sub-account exists, then push the artifact for that action. Works with either a
+ * MockGhlClient (£0) or the live GHL client (SaaS-Pro token). The rails' own
+ * generation (Soro/social/ads) is wired in behind this as a follow-on; this is
+ * the seam that proves the manager → GHL path end to end.
+ */
+export function ghlRunner(ghl: GhlClient): ActionRunner {
+  return async (tenant, action) => {
+    const loc = await ghl.ensureLocation({ id: tenant.id, name: tenant.name });
+    const artifact = ARTIFACT_FOR[action.action];
+    const res = await ghl.pushArtifact(loc.locationId, artifact);
+    const pushed = res.artifactId ? `${artifact.type} → ${loc.locationId} (${res.artifactId})` : `${artifact.type} NOT pushed (GHL not fully configured)`;
+    return {
+      tenantId: tenant.id,
+      action: action.action,
+      at: action.dueDate,
+      status: res.artifactId ? 'ok' : 'skipped',
+      note: `ghl[${ghl.mode}]: ${pushed}${loc.created ? ' [new sub-account]' : ''}`,
+    };
+  };
+}
 
 export interface TickResult {
   date: string;
