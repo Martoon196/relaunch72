@@ -611,3 +611,16 @@ now pass by construction; the remaining S3 checks (differentiator quote, pitch l
 voice guardrail, no-invented-numbers) stay model-dependent — genuine content Opus handles. 215 tests (1 new:
 normalizeS3 re-injects so the checks pass). This is the general pattern for future stages: system-owned completeness
 is injected, judgement is left to the model.
+
+**D-051 · Product roadmap captured: one-off → recurring "AI Social Manager" platform (Phase D north star).**
+Founder's vision crystallised: evolve Relaunch72 from a one-off DFY pack into a recurring, multi-tenant AI marketing
+manager where each customer logs in, an AI manages their marketing continuously from a stored brand profile, they see
+their metrics, and it all lives in the portal (cancel = lose it — retention moat + recurring revenue). Answered the
+key doubt ("would the AI go wild across different people?"): no — multi-tenant, the model is called per-customer with
+only that customer's data loaded, no memory between calls; it's what the pipeline already does (one run = one
+customer), just stored + scheduled. Convergence: this IS the platform already being built — Phase B portal = the login
+area, the pipeline = the engine, pipeline-on-a-schedule = the manager; biggest new piece is real metrics (Meta Graph
+API) + optional auto-posting. Wrote docs/roadmap.md (phases A–D + backlog: scored-checklist scorecard upgrade,
+questions-as-lead-magnet, niche audits, webinar funnel). Reaffirmed the IP hard line: our-own-IP playbooks only,
+never DigitalMarketer's licensed material in code/product/git. Sequencing held firm: land the first paid pack →
+portal → affiliates → recurring, don't build ahead of revenue.
