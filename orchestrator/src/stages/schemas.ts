@@ -435,3 +435,65 @@ export const CONTENT_CLUSTER_SCHEMA: AnySchema = {
     provenance_note: { type: 'string', minLength: 20, maxLength: 600 },
   },
 };
+
+// ─── Paid-ads campaign generator (AD) ────────────────────────────────────────
+// Generates ad campaigns from the strategy (S2 buyer + S3 message/voice + S4
+// offer). Own IP. The creative side is the real white-label opportunity (bidding
+// is automated by Advantage+/Performance Max); we produce copy + angles +
+// audience suggestions + a creative brief, to be pushed as PAUSED drafts the
+// customer approves — never auto-spend. Char caps are the tightest cross-network
+// limits (Google RSA headline ≤30, description ≤90) so the copy is valid on
+// Meta and Google both.
+
+const AD_CTAS = [
+  'Learn More', 'Get Quote', 'Book Now', 'Contact Us', 'Sign Up',
+  'Get Offer', 'Shop Now', 'Subscribe', 'Send Message', 'Call Now',
+] as const;
+
+const AD_SET_SCHEMA: AnySchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['angle', 'primary_texts', 'headlines', 'descriptions', 'cta', 'creative_brief', 'landing_target'],
+  properties: {
+    // The take, grounded in an S3 message pillar (QA checks grounding).
+    angle: { type: 'string', minLength: 20, maxLength: 300 },
+    // Meta primary text (body). Recommended ~125 chars; room allowed.
+    primary_texts: { type: 'array', minItems: 1, maxItems: 3, items: { type: 'string', minLength: 20, maxLength: 600 } },
+    // Google RSA-safe headlines (≤30 chars → valid on Meta too).
+    headlines: { type: 'array', minItems: 3, maxItems: 8, items: { type: 'string', minLength: 3, maxLength: 30 } },
+    // Google RSA descriptions (≤90 chars).
+    descriptions: { type: 'array', minItems: 2, maxItems: 4, items: { type: 'string', minLength: 10, maxLength: 90 } },
+    cta: { type: 'string', enum: [...AD_CTAS] },
+    // What the image/video should show — the brief for the design/video step.
+    creative_brief: { type: 'string', minLength: 20, maxLength: 400 },
+    // The money page / offer this ad set drives to.
+    landing_target: { type: 'string', minLength: 3, maxLength: 120 },
+  },
+};
+
+export const AD_CAMPAIGN_SCHEMA: AnySchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['objective', 'platforms', 'audience', 'ad_sets', 'provenance_note'],
+  properties: {
+    objective: { type: 'string', enum: ['leads', 'traffic', 'sales', 'awareness', 'calls'] },
+    platforms: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 5,
+      items: { type: 'string', enum: ['meta', 'google search', 'google pmax', 'tiktok', 'linkedin'] },
+    },
+    audience: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['who', 'signals', 'exclusions'],
+      properties: {
+        who: { type: 'string', minLength: 20, maxLength: 400 }, // from S2 dream buyer
+        signals: { type: 'array', minItems: 1, maxItems: 12, items: { type: 'string', minLength: 3, maxLength: 80 } }, // interest/keyword suggestions
+        exclusions: { type: 'array', minItems: 0, maxItems: 12, items: { type: 'string', minLength: 3, maxLength: 80 } },
+      },
+    },
+    ad_sets: { type: 'array', minItems: 2, maxItems: 4, items: AD_SET_SCHEMA },
+    provenance_note: { type: 'string', minLength: 20, maxLength: 600 },
+  },
+};

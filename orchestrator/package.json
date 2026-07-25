@@ -9,6 +9,7 @@
     "content": "tsx src/content/cli.ts",
     "social": "tsx src/social/cli.ts",
     "keyword": "tsx src/keyword/cli.ts",
+    "ads": "tsx src/ads/cli.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "render": "tsx src/docs/cli.ts",

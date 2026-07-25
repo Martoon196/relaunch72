@@ -535,6 +535,53 @@ function mockContentCluster(intake: Intake): unknown {
   };
 }
 
+// ─── Paid-ads campaign (AD) ──────────────────────────────────────────────────
+// A deterministic 3-angle campaign built to pass qaAdCampaign: no digits (no
+// invented numbers), no never-words, no outcome promises, headlines ≤30 chars,
+// descriptions ≤90, quotes only from real S2 verbatims, angles grounded in
+// intake vocabulary.
+
+function mockAdCampaign(intake: Intake): unknown {
+  const kind = ccClean(intake, 'A6', 40) || 'this service';
+  const problem = ccClean(intake, 'C3', 50) || kind;
+  const c7 = Array.isArray(intake.C7) ? (intake.C7 as string[]) : [];
+  const usesGoogle = c7.some((c) => /google|search/i.test(c));
+  const v0 = mockS2Verbatims(intake)[0] ?? '';
+  const offer = MOCK_ENTRY_NAME;
+
+  const adSet = (angle: string, seed: string, cta: string) => ({
+    angle: `${angle} — grounded in the owner's own words: ${ccClean(intake, seed, 50) || kind}.`.slice(0, 290),
+    primary_texts: [
+      `Sorting ${kind} without the runaround: agreed in writing, explained in plain terms, priced before anything starts.`.slice(0, 590),
+    ],
+    headlines: ['Sorted properly, first time', 'Priced before we start', 'Plain answers, no jargon'].map((h) => h.slice(0, 30)),
+    descriptions: [
+      'Agreed in writing, explained in plain terms.',
+      'The work handled by someone who shows up.',
+    ].map((d) => d.slice(0, 90)),
+    cta,
+    creative_brief: `On-brand photo of the real work for ${kind}; plain caption, no stock-photo gloss, no on-screen stats.`.slice(0, 390),
+    landing_target: offer,
+  });
+
+  return {
+    objective: 'leads',
+    platforms: usesGoogle ? ['meta', 'google search'] : ['meta'],
+    audience: {
+      who: `The buyer from the profile: they arrive at ${kind} with a specific problem — ${problem} — and choose on trust and clarity.`.slice(0, 390),
+      signals: [kind, 'local intent', 'recent life trigger'].map((s) => s.slice(0, 80)),
+      exclusions: (ccClean(intake, 'C6', 60) || 'bargain-hunters').split(/[,;]+/).map((s) => s.trim()).filter(Boolean).slice(0, 6).map((s) => s.slice(0, 80)),
+    },
+    ad_sets: [
+      adSet('The problem underneath the job', 'C3', 'Get Quote'),
+      adSet('Why this business, in their words', 'E3', 'Learn More'),
+      { ...adSet('Real customers say it best', 'C3', 'Book Now'), primary_texts: [`A real customer put it like this: "${v0}". That is the standard every job is held to.`.slice(0, 590)] },
+    ],
+    provenance_note:
+      "Every figure and quote traces to the customer's own intake and strategy. Nothing unverifiable was invented, and no outcome is guaranteed.",
+  };
+}
+
 export class MockClient implements LlmClient {
   readonly mode = 'mock' as const;
 
@@ -561,6 +608,7 @@ export class MockClient implements LlmClient {
     else if (stage === 'S8') payload = mockS8(this.intake);
     else if (stage === 'S9') payload = mockS9(this.intake);
     else if (stage === 'CC') payload = mockContentCluster(this.intake);
+    else if (stage === 'AD') payload = mockAdCampaign(this.intake);
     else throw new Error(`MockClient: no generator for stage ${stage}`);
 
     if (shouldFail && stage !== 'S1' && stage !== 'S2') {

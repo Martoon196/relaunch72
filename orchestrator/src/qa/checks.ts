@@ -2058,3 +2058,104 @@ export function qaSocialPost(post: SocialPostCheck, intake: Intake, prior: Recor
   issues.push(...scanBannedPhrases({ text }, intake, { includeCustomerWords: true, stripQuotedText: true }));
   return issues;
 }
+
+// ─── Paid-ads campaign (AD) · no-invention + ad-policy QA ────────────────────
+// Ad copy is the highest-stakes place a fabrication can appear: it auto-spends
+// money and it must pass Meta/Google policy (both ban unsubstantiated claims and
+// guaranteed outcomes). So the bar is the pipeline's, plus an outcome-promise
+// ban across every headline/body/description: figures trace or FATAL, quotes are
+// real or FATAL, no banned/never words, no "guaranteed results / double your X",
+// headlines/descriptions inside network char limits, angle grounded in strategy.
+
+export const AD_INPUT_FIELDS = ['A1', 'C3', 'C5', 'C6', 'C7', 'E2', 'E3', 'D1', 'D2', 'B2'];
+
+interface AdSet {
+  angle: string;
+  primary_texts: string[];
+  headlines: string[];
+  descriptions: string[];
+  cta: string;
+  creative_brief: string;
+  landing_target: string;
+}
+interface AdCampaign {
+  objective: string;
+  platforms: string[];
+  audience: { who: string; signals: string[]; exclusions: string[] };
+  ad_sets: AdSet[];
+  provenance_note: string;
+}
+
+export const AD_HEADLINE_MAX = 30; // Google RSA headline (also Meta-safe)
+export const AD_DESCRIPTION_MAX = 90; // Google RSA description
+
+export function qaAdCampaign(output: unknown, intake: Intake, prior: Record<string, unknown> = {}): QAIssue[] {
+  const issues: QAIssue[] = [];
+  const out = output as AdCampaign;
+
+  const intakeHay = haystack(intake, AD_INPUT_FIELDS);
+  const s2 = prior.S2 as { verbatims?: string[] } | undefined;
+  const s2Verbatims = (s2?.verbatims ?? []).map((v) => normalizeText(v)).filter(Boolean);
+  const quoteHayLC = [...s2Verbatims, ...intakeHay].map((h) => h.toLowerCase());
+  const groundHay = [...intakeHay, ...stageStringLeaves(prior.S2), ...stageStringLeaves(prior.S3), ...stageStringLeaves(prior.S4)]
+    .map((h) => h.toLowerCase());
+
+  // NO-INVENTION (FATAL): figures trace to intake/prior or visible arithmetic.
+  const allowedNumbers = new Set<number>([
+    ...allIntakeNumbers(intake),
+    ...numericLeaves(prior.S2),
+    ...numericLeaves(prior.S3),
+    ...numericLeaves(prior.S4),
+  ]);
+  for (const [path, text] of walkStrings(output, '')) {
+    for (const value of inventedNumbers(normalizeText(text), 0, 0, allowedNumbers, allowedNumbers, { allowYear: false, percentEcho: true })) {
+      issues.push({
+        check: 'ad.number_invented',
+        message: `${path} contains the figure ${value.toLocaleString('en-GB')}, not a real intake/prior number nor visible arithmetic — ad copy that spends money ships no invented stats`,
+        fatal: true,
+      });
+    }
+  }
+
+  // NO-INVENTION (FATAL): quoted testimony traces to an S2 verbatim / intake.
+  for (const [path, text] of walkStrings(output, '')) {
+    for (const span of extractQuotedSpans(text)) {
+      const norm = normalizeText(span);
+      if (norm.length < MIN_QUOTE_CHARS) continue;
+      if (!quoteTracesTo(span, quoteHayLC)) {
+        issues.push({ check: 'ad.quote_fabricated', message: `quoted passage at ${path} ("${norm.slice(0, 50)}…") is not a real customer verbatim`, fatal: true });
+      }
+    }
+  }
+
+  // AD POLICY: no guaranteed-outcome / "double your revenue" promises anywhere in
+  // the ad copy (banned by Meta & Google, and by our own promise-only-what-you-
+  // control rule). Checked on the copy fields, not audience/brief prose.
+  const copy = out.ad_sets.flatMap((s) => [...(s.headlines ?? []), ...(s.primary_texts ?? []), ...(s.descriptions ?? [])]);
+  for (const line of copy) {
+    for (const re of OUTCOME_PROMISE_PATTERNS) {
+      if (re.test(line)) {
+        issues.push({ check: 'ad.outcome_promised', message: `ad copy "${line.slice(0, 60)}…" promises an outcome — ads may only claim what the owner controls; guaranteed-results copy is rejected by Meta/Google and by us` });
+        break;
+      }
+    }
+  }
+
+  // Structural: headline/description char limits (belt-and-braces over schema).
+  out.ad_sets.forEach((set, i) => {
+    for (const h of set.headlines ?? []) {
+      if (h.length > AD_HEADLINE_MAX) issues.push({ check: 'ad.headline_too_long', message: `ad_sets[${i}] headline "${h}" is ${h.length} chars (>${AD_HEADLINE_MAX}) — it would be rejected` });
+    }
+    for (const d of set.descriptions ?? []) {
+      if (d.length > AD_DESCRIPTION_MAX) issues.push({ check: 'ad.description_too_long', message: `ad_sets[${i}] description is ${d.length} chars (>${AD_DESCRIPTION_MAX})` });
+    }
+    // Each ad set's angle must be grounded in the strategy, not invented.
+    const tokens = tokensOf(`${set.angle} ${(set.primary_texts ?? []).join(' ')}`);
+    const grounded = [...tokens].some((t) => t.length >= 4 && groundHay.some((h) => h.includes(t)));
+    if (!grounded) issues.push({ check: 'ad.angle_ungrounded', message: `ad_sets[${i}] angle shares no vocabulary with the buyer profile, message guide or offer — it must come from the strategy` });
+  });
+
+  // Banned marketing-speak + H3 never-words (real quotes exempt).
+  issues.push(...scanBannedPhrases(output, intake, { includeCustomerWords: true, stripQuotedText: true }));
+  return issues;
+}
