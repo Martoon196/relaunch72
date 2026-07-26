@@ -218,3 +218,14 @@ can log into and wires `runTick`. Mounted in `server/app.ts` (optional dep) +
 dashboard → POST /portal/run records a manager run. Demo login:
 owner@frayne-electrical.co.uk. Next: real per-subscriber provisioning (a tenant +
 generated run dir on checkout) and the live rail runner behind `runTick`.
+
+**On-signup provisioning wired (26 Jul).** `portal/accounts.ts` (email→tenant,
+SHA-256 hashed passwords, persisted) + `portal/provision.ts::provisionTenant`
+turn an accepted intake into a working login: generate the customer's brand brain
+into their own run dir, create their CRM tenant + account with a temp password,
+record the first run. Fired fire-and-forget from `/api/intake` via a new
+`onIntakeAccepted(intake, email)` app hook (email from the Stripe order, or an
+`_email` field), so provisioning never blocks or fails the intake. Proven live:
+a fresh intake → background provisioning → the issued password logs the new
+client into their own dashboard with their own generated content. Temp password
+is logged today; emailing it (Postmark, already wired) is the small next step.

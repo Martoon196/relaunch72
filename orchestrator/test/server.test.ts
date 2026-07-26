@@ -178,6 +178,21 @@ test('POST /api/intake accepts a full intake and kicks the build; nudges a thin 
   assert.ok(Array.isArray(b.issues) && b.issues.length > 0);
 });
 
+test('an accepted intake fires onIntakeAccepted with the order email (portal provisioning)', async () => {
+  const seen: Array<{ email: string | null; name: unknown }> = [];
+  const { handler, store } = app({ onIntakeAccepted: (intake, email) => seen.push({ email, name: intake.A1 }) });
+  store.record({ session_id: 'cs_p', tier: 'core', bump: false, email: 'buyer@client.co', amount_total: null, currency: null, status: 'paid_awaiting_intake', paid_at: 'T' });
+
+  const good = { ...validIntake(), _stripe_session: 'cs_p', consent: true };
+  await handler(req('POST', '/api/intake', JSON.stringify(good)), res());
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0]!.email, 'buyer@client.co');
+
+  // A rejected (thin) intake must NOT provision.
+  await handler(req('POST', '/api/intake', JSON.stringify({ A1: 'X' })), res());
+  assert.equal(seen.length, 1);
+});
+
 // ─── CORS (the site calls this API cross-origin) ─────────────────────────────
 test('CORS: an allowed Origin is echoed back on a real response', async () => {
   const { handler } = app(); const r = res();

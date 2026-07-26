@@ -36,6 +36,8 @@ export interface AppDeps {
   marketing?: MarketingHooks;
   /** Optional client portal; absent = /portal 404s (payments still work). */
   portal?: PortalDeps;
+  /** Fired (fire-and-forget) when an intake is accepted — provisions the portal login. */
+  onIntakeAccepted?: (intake: Intake, email: string | null) => void;
 }
 
 function send(res: ServerResponse, code: number, body: unknown): void {
@@ -150,6 +152,11 @@ export function createApp(deps: AppDeps) {
         const sessionId = typeof intake._stripe_session === 'string' ? intake._stripe_session : null;
         const runRef = deps.kickPipeline(intake, sessionId);
         if (sessionId) deps.orders.update(sessionId, { status: 'building', run_dir: runRef, updated_at: deps.now() });
+        // Provision the client's portal login in the background (never fails the intake).
+        if (deps.onIntakeAccepted) {
+          const email = (sessionId ? deps.orders.find(sessionId)?.email : null) ?? (typeof intake._email === 'string' ? intake._email : null);
+          try { deps.onIntakeAccepted(intake, email); } catch (e) { console.warn(`onIntakeAccepted failed: ${(e as Error).message}`); }
+        }
         return send(res, 200, { accepted: true, building: true, run: runRef });
       }
 

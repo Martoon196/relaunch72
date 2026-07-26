@@ -99,9 +99,9 @@ async function main(): Promise<void> {
   const marketing = makeMarketing();
 
   // Client portal — optional; a failure here must never stop the payments server.
-  let portal;
+  let bundle;
   try {
-    portal = await buildPortalDeps({
+    bundle = await buildPortalDeps({
       dataDir: cfg.dataDir,
       sessionSecret: cfg.sessionSecret,
       secure: cfg.publicBaseUrl.startsWith('https'),
@@ -114,7 +114,17 @@ async function main(): Promise<void> {
     console.warn(`⚠  Client portal not mounted: ${(e as Error).message}`);
   }
 
-  const app = createApp({ stripe, cfg, orders, kickPipeline, now: () => new Date().toISOString(), marketing, portal });
+  // On an accepted intake, provision that customer's portal login in the background.
+  const onIntakeAccepted = bundle
+    ? (intake: Intake, email: string | null): void => {
+        if (!email) return;
+        void bundle!.provision({ email, name: String(intake.A1 ?? 'Your business'), intake })
+          .then((r) => console.log(`▶ Portal login ${r.existing ? 'exists' : 'provisioned'} for ${r.email}${r.existing ? '' : ` — temp password: ${r.password}`}${r.generated ? '' : ' [brand brain deferred]'}`))
+          .catch((err) => console.warn(`Portal provision failed for ${email}: ${(err as Error).message}`));
+      }
+    : undefined;
+
+  const app = createApp({ stripe, cfg, orders, kickPipeline, now: () => new Date().toISOString(), marketing, portal: bundle?.portal, onIntakeAccepted });
   http.createServer((req, res) => { void app(req, res); }).listen(cfg.port, () => {
     const mode = !cfg.secretKey ? 'UNCONFIGURED' : cfg.liveMode ? 'LIVE ⚠️' : 'TEST';
     console.log(`Relaunch72 payments server on :${cfg.port} — ${mode} mode`);
