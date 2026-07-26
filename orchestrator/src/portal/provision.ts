@@ -6,27 +6,17 @@
  * running, log-in-able app today.
  */
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { JsonCrmStore } from '../crm/store.js';
-import { ingestTick } from '../crm/ingest.js';
 import { makeDashboard } from './data.js';
 import { passwordOk } from './session.js';
+import { generateBrandBrain, runTickReal } from './run.js';
+import { FIXTURES_DIR } from '../paths.js';
+import type { Intake } from '../types.js';
 import type { PortalDeps } from './router.js';
-import type { ActivityEntry } from '../manager/types.js';
 
 interface Creds { tenantId: string; password: string }
-
-/** A manager run recorded to the CRM (mock — labelled in the UI). */
-async function recordRun(store: JsonCrmStore, tenantId: string): Promise<number> {
-  const at = new Date().toISOString();
-  const tick: ActivityEntry[] = [
-    { tenantId, action: 'content_cluster', at, status: 'ok', note: 'Generated this week’s content cluster' },
-    { tenantId, action: 'keyword_refresh', at, status: 'ok', note: 'Re-priced fan-out queries by search volume' },
-    { tenantId, action: 'social_batch', at, status: 'ok', note: 'Scheduled the next 30 social posts' },
-    { tenantId, action: 'ads_refresh', at, status: 'ok', note: 'Prepared 2 ad drafts (paused, awaiting your yes)' },
-  ];
-  return ingestTick(store, tick);
-}
 
 export interface PortalConfig {
   dataDir: string;
@@ -46,7 +36,20 @@ export async function buildPortalDeps(cfg: PortalConfig): Promise<PortalDeps> {
 
   // Seed the demo tenant once (idempotent — only if the store is empty).
   if ((await store.listTenants()).length === 0) {
-    await store.upsertTenant({ id: 't-frayne', name: 'Frayne Electrical', runDir: cfg.demoRunDir });
+    // Generate a real brand brain + artifacts so the dashboard shows genuine
+    // (mock) output. If it fails, still seed the tenant so login works.
+    let runDir = cfg.demoRunDir;
+    if (!runDir) {
+      runDir = path.join(cfg.dataDir, 'portal-runs', 't-frayne');
+      try {
+        const intake = JSON.parse(fs.readFileSync(path.join(FIXTURES_DIR, 'trades.json'), 'utf8')) as Intake;
+        await generateBrandBrain(intake, runDir);
+      } catch (e) {
+        console.warn(`⚠  Demo brand brain not generated (${(e as Error).message}); seeding CRM only.`);
+        runDir = undefined;
+      }
+    }
+    await store.upsertTenant({ id: 't-frayne', name: 'Frayne Electrical', runDir });
     const a = await store.addContact('t-frayne', { name: 'Priya Nair', email: 'priya@nairlets.example' });
     await store.addContact('t-frayne', { name: 'Tom Fielding', phone: '07700 900112' });
     const c = await store.addContact('t-frayne', { name: 'Marsh Property Ltd', email: 'ops@marshprop.example' });
@@ -54,7 +57,7 @@ export async function buildPortalDeps(cfg: PortalConfig): Promise<PortalDeps> {
     await store.moveContact(a.id, 'contacted');
     await store.moveContact(c.id, 'qualified');
     await store.moveContact(w.id, 'won');
-    await recordRun(store, 't-frayne');
+    await runTickReal(store, 't-frayne'); // record the first run to the timeline
   }
 
   return {
@@ -65,6 +68,6 @@ export async function buildPortalDeps(cfg: PortalConfig): Promise<PortalDeps> {
       return c && passwordOk(pw, c.password) ? c.tenantId : null;
     },
     dashboard: makeDashboard(store, (t) => t.runDir),
-    runTick: async (tid) => recordRun(store, tid),
+    runTick: async (tid) => runTickReal(store, tid),
   };
 }
