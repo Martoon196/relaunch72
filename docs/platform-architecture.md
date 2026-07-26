@@ -206,3 +206,15 @@ focused slice we need, not GHL's kitchen sink. Portal build order: CRM core (don
 → multi-tenant client auth + portal HTTP → brand-brain view + account connections
 → manager feeds the live activity timeline → messaging rails (Twilio + SendGrid/
 Brevo, mock-first) → subscription billing (Stripe subs) → dashboards.
+
+**Portal wired (26 Jul): it's a running app.** `orchestrator/src/portal/` mounts a
+multi-tenant client login + dashboard into the existing server, backed by the CRM
+core. Signed per-tenant session cookie (`portal/session.ts`); server-rendered
+login + dashboard (`views.ts`) driven by real data (`data.ts` — CRM view + brand
+brain from S3 + generated artifacts from the run dir); `router.ts` gates every
+`/portal` route behind the tenant session; `provision.ts` seeds a demo tenant you
+can log into and wires `runTick`. Mounted in `server/app.ts` (optional dep) +
+`server/index.ts`. Proven over real HTTP: GET /portal → login redirect → cookie →
+dashboard → POST /portal/run records a manager run. Demo login:
+owner@frayne-electrical.co.uk. Next: real per-subscriber provisioning (a tenant +
+generated run dir on checkout) and the live rail runner behind `runTick`.

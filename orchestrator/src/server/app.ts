@@ -15,6 +15,7 @@ import { createCheckoutSession, verifyEvent, orderFromEvent, CheckoutError, type
 import { runS0 } from '../intake/s0.js';
 import type { Intake } from '../types.js';
 import { handleAdmin } from './admin/router.js';
+import { handlePortal, type PortalDeps } from '../portal/router.js';
 
 /** Optional marketing sync (Brevo). Both are no-ops when Brevo isn't configured. */
 export interface MarketingHooks {
@@ -33,6 +34,8 @@ export interface AppDeps {
   now: () => string;
   /** Optional Brevo marketing sync; absent = marketing not wired (routes still 200). */
   marketing?: MarketingHooks;
+  /** Optional client portal; absent = /portal 404s (payments still work). */
+  portal?: PortalDeps;
 }
 
 function send(res: ServerResponse, code: number, body: unknown): void {
@@ -75,6 +78,15 @@ export function createApp(deps: AppDeps) {
     // before the CORS/API layer, with its own auth gate.
     if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
       try { await handleAdmin(req, res, deps.cfg); }
+      catch (e) { if (!res.headersSent) send(res, 500, { error: (e as Error).message }); }
+      return;
+    }
+
+    // The client portal — same-origin, browser-navigated HTML, its own tenant
+    // auth gate. Only mounted when portal deps are provided.
+    if (url.pathname === '/portal' || url.pathname.startsWith('/portal/')) {
+      if (!deps.portal) { send(res, 404, { error: 'portal not enabled' }); return; }
+      try { await handlePortal(req, res, deps.portal); }
       catch (e) { if (!res.headersSent) send(res, 500, { error: (e as Error).message }); }
       return;
     }

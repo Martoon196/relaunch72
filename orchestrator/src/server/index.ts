@@ -22,6 +22,7 @@ import type { StripeLike } from './stripe.js';
 import { ensureCatalogPrices, type StripeCatalogLike } from './catalog.js';
 import type { StripeConfig } from './config.js';
 import { makeBrevo } from '../email/brevo.js';
+import { buildPortalDeps } from '../portal/provision.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ORCH_ROOT = path.resolve(HERE, '../..');
@@ -85,7 +86,7 @@ function makeMarketing(): MarketingHooks | undefined {
   };
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const cfg = loadStripeConfig();
   // Start regardless of config so the host's health check passes; checkout/webhook
   // return 503 until a key is added. Crash-on-missing-secret breaks cloud deploys.
@@ -96,7 +97,24 @@ function main(): void {
   const orders = fileOrderStore(cfg.ordersFile);
   const kickPipeline = createKick(path.join(cfg.dataDir, 'intakes'));
   const marketing = makeMarketing();
-  const app = createApp({ stripe, cfg, orders, kickPipeline, now: () => new Date().toISOString(), marketing });
+
+  // Client portal — optional; a failure here must never stop the payments server.
+  let portal;
+  try {
+    portal = await buildPortalDeps({
+      dataDir: cfg.dataDir,
+      sessionSecret: cfg.sessionSecret,
+      secure: cfg.publicBaseUrl.startsWith('https'),
+      demoEmail: process.env.PORTAL_DEMO_EMAIL?.trim(),
+      demoPassword: process.env.PORTAL_DEMO_PASSWORD?.trim(),
+      demoRunDir: process.env.PORTAL_DEMO_RUNDIR?.trim(),
+    });
+    console.log(`Client portal mounted at /portal — demo login: ${process.env.PORTAL_DEMO_EMAIL?.trim() || 'owner@frayne-electrical.co.uk'}`);
+  } catch (e) {
+    console.warn(`⚠  Client portal not mounted: ${(e as Error).message}`);
+  }
+
+  const app = createApp({ stripe, cfg, orders, kickPipeline, now: () => new Date().toISOString(), marketing, portal });
   http.createServer((req, res) => { void app(req, res); }).listen(cfg.port, () => {
     const mode = !cfg.secretKey ? 'UNCONFIGURED' : cfg.liveMode ? 'LIVE ⚠️' : 'TEST';
     console.log(`Relaunch72 payments server on :${cfg.port} — ${mode} mode`);
@@ -105,4 +123,4 @@ function main(): void {
   });
 }
 
-main();
+main().catch((e) => { console.error(`Fatal: ${(e as Error).message}`); process.exit(1); });
