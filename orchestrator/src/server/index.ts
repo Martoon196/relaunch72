@@ -23,6 +23,8 @@ import { ensureCatalogPrices, type StripeCatalogLike } from './catalog.js';
 import type { StripeConfig } from './config.js';
 import { makeBrevo } from '../email/brevo.js';
 import { buildPortalDeps } from '../portal/provision.js';
+import { loginEmail } from '../portal/emails.js';
+import { makePostmark } from '../email/postmark.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ORCH_ROOT = path.resolve(HERE, '../..');
@@ -98,6 +100,17 @@ async function main(): Promise<void> {
   const kickPipeline = createKick(path.join(cfg.dataDir, 'intakes'));
   const marketing = makeMarketing();
 
+  // Email the login on a new signup, if Postmark is configured (else just log it).
+  const postmarkToken = process.env.POSTMARK_SERVER_TOKEN?.trim();
+  const portalUrl = `${cfg.publicBaseUrl}/portal`;
+  const onProvisioned = postmarkToken
+    ? async (r: import('../portal/provision.js').ProvisionResult): Promise<void> => {
+        const msg = loginEmail({ to: r.email, tenantName: r.name, loginEmail: r.email, password: r.password, portalUrl, from: process.env.EMAIL_FROM?.trim() });
+        const sent = await makePostmark(postmarkToken).send(msg);
+        console.log(`✉  Login email sent to ${r.email} (id ${sent.messageId})`);
+      }
+    : undefined;
+
   // Client portal — optional; a failure here must never stop the payments server.
   let bundle;
   try {
@@ -108,6 +121,7 @@ async function main(): Promise<void> {
       demoEmail: process.env.PORTAL_DEMO_EMAIL?.trim(),
       demoPassword: process.env.PORTAL_DEMO_PASSWORD?.trim(),
       demoRunDir: process.env.PORTAL_DEMO_RUNDIR?.trim(),
+      onProvisioned,
     });
     console.log(`Client portal mounted at /portal — demo login: ${process.env.PORTAL_DEMO_EMAIL?.trim() || 'owner@frayne-electrical.co.uk'}`);
   } catch (e) {

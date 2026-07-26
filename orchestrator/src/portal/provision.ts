@@ -23,6 +23,7 @@ export interface ProvisionArgs {
 }
 export interface ProvisionResult {
   tenantId: string;
+  name: string;
   email: string;
   /** The generated temp password (deliver to the customer; not stored in clear). */
   password: string;
@@ -54,7 +55,7 @@ export async function provisionTenant(
   const tenantId = tenantIdFor(args.name, email);
 
   if (await accounts.has(email)) {
-    return { tenantId, email, password: '', generated: fs.existsSync(path.join(dataDir, 'portal-runs', tenantId, 's3.json')), existing: true };
+    return { tenantId, name: args.name, email, password: '', generated: fs.existsSync(path.join(dataDir, 'portal-runs', tenantId, 's3.json')), existing: true };
   }
 
   let runDir: string | undefined = path.join(dataDir, 'portal-runs', tenantId);
@@ -70,7 +71,7 @@ export async function provisionTenant(
   const password = tempPassword();
   await accounts.create(email, tenantId, password);
   if (generated) await runTickReal(store, tenantId); // record the first run to the timeline
-  return { tenantId, email, password, generated, existing: false };
+  return { tenantId, name: args.name, email, password, generated, existing: false };
 }
 
 export interface PortalConfig {
@@ -80,6 +81,8 @@ export interface PortalConfig {
   demoEmail?: string;
   demoPassword?: string;
   demoRunDir?: string;
+  /** Called after a NEW tenant is provisioned (e.g. email the login). Never blocks provisioning. */
+  onProvisioned?: (result: ProvisionResult) => Promise<void>;
 }
 
 export interface PortalBundle {
@@ -124,5 +127,13 @@ export async function buildPortalDeps(cfg: PortalConfig): Promise<PortalBundle> 
     dashboard: makeDashboard(store, (t) => t.runDir),
     runTick: (tid) => runTickReal(store, tid),
   };
-  return { portal, provision: (args) => provisionTenant(store, accounts, cfg.dataDir, args) };
+  const provision = async (args: ProvisionArgs): Promise<ProvisionResult> => {
+    const result = await provisionTenant(store, accounts, cfg.dataDir, args);
+    if (!result.existing && result.password && cfg.onProvisioned) {
+      try { await cfg.onProvisioned(result); }
+      catch (e) { console.warn(`onProvisioned failed for ${result.email}: ${(e as Error).message}`); }
+    }
+    return result;
+  };
+  return { portal, provision };
 }
