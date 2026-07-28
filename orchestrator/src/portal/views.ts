@@ -5,6 +5,7 @@
  */
 
 import type { DashboardData } from './data.js';
+import type { BillingView } from './billing.js';
 import { PIPELINE_STAGES } from '../crm/types.js';
 
 function esc(s: unknown): string {
@@ -50,6 +51,18 @@ const STYLE = `
   .chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}.chips span{font-size:.8rem;background:var(--raised);border:1px solid var(--line);border-radius:7px;padding:5px 10px}
   .runbtn{border:0;border-radius:10px;background:var(--amber);color:#141d2a;padding:10px 15px;font-weight:700;font-size:.88rem;cursor:pointer;font-family:var(--sans)}
   .quote{font-size:.84rem;color:var(--muted);border-left:2px solid var(--amber);padding-left:11px;font-style:italic}
+  .stat{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:.7rem;letter-spacing:.05em;text-transform:uppercase;padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:var(--raised)}
+  .stat .dot{width:7px;height:7px;border-radius:999px;background:var(--faint)}
+  .stat.ok{color:var(--won);border-color:var(--won)}.stat.ok .dot{background:var(--won)}
+  .stat.warn{color:var(--amber);border-color:var(--amber)}.stat.warn .dot{background:var(--amber)}
+  .stat.off{color:var(--faint)}
+  .plans{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:6px 0 4px}@media(max-width:760px){.plans{grid-template-columns:1fr}}
+  .plan{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:18px;display:flex;flex-direction:column}
+  .plan.cur{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber)}
+  .plan h4{margin:0 0 2px;font-size:1rem}.plan .price{font-family:var(--mono);font-size:1.3rem;font-weight:700;color:var(--amber);margin:6px 0}
+  .plan p{color:var(--muted);font-size:.85rem;margin:0 0 16px;flex:1}
+  .plan .cur-tag{font-family:var(--mono);font-size:.6rem;letter-spacing:.08em;color:var(--amber);text-transform:uppercase}
+  .note{font-size:.85rem;color:var(--muted);background:var(--amber-soft);border:1px solid var(--amber);border-radius:10px;padding:10px 13px;margin:0 0 18px}
 `;
 
 export function loginPage(error?: string): string {
@@ -66,7 +79,65 @@ export function loginPage(error?: string): string {
 
 const STAGE_ICON: Record<string, string> = { rail_run: '✦', stage_changed: '→', contact_created: '+', message_sent: '✉', note: '•' };
 
-export function dashboardPage(d: DashboardData): string {
+/** Map a billing status to a label + severity class for the status pill. */
+function billingStat(b: BillingView): { cls: string; label: string } {
+  if (b.active) return { cls: 'ok', label: b.status === 'trialing' ? 'Trialing' : 'Active' };
+  if (b.status === 'past_due' || b.status === 'unpaid') return { cls: 'warn', label: 'Payment due' };
+  if (b.status === 'canceled') return { cls: 'off', label: 'Canceled' };
+  if (b.status === 'none') return { cls: 'off', label: 'No plan' };
+  return { cls: 'off', label: b.status.replace(/_/g, ' ') };
+}
+
+/** Compact billing card for the dashboard aside. */
+function billingCard(b: BillingView): string {
+  const s = billingStat(b);
+  const renew = b.active && b.currentPeriodEnd ? `<div class="t" style="margin-top:8px;font-family:var(--mono);font-size:.66rem;color:var(--faint)">renews ${esc(b.currentPeriodEnd.slice(0, 10))}</div>` : '';
+  return `<div class="box"><h3>Your plan</h3><div class="s">subscription</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+      <div style="font-weight:650;font-size:.92rem">${esc(b.planName ?? 'Not subscribed')}</div>
+      <span class="stat ${s.cls}"><span class="dot"></span>${esc(s.label)}</span>
+    </div>${renew}
+    <a href="/portal/billing" style="display:inline-block;margin-top:12px;font-family:var(--mono);font-size:.72rem;color:var(--amber)">${b.active ? 'Manage plan' : 'See plans'} →</a>
+  </div>`;
+}
+
+export function billingPage(tenantName: string, b: BillingView, opts: { canManage?: boolean; notice?: string } = {}): string {
+  const s = billingStat(b);
+  const notice = opts.notice ? `<div class="note">${esc(opts.notice)}</div>` : '';
+  const renew = b.active && b.currentPeriodEnd ? ` · renews ${esc(b.currentPeriodEnd.slice(0, 10))}` : '';
+  const manage = opts.canManage && b.customerId
+    ? `<form method="post" action="/portal/manage" style="margin:0"><button class="btn" style="background:var(--raised);color:var(--text);font-weight:550">Manage billing →</button></form>` : '';
+
+  const plans = b.options.map((o) => {
+    const current = b.active && b.planKey === o.key;
+    const cta = current
+      ? `<div class="cur-tag">✓ Your current plan</div>`
+      : `<form method="post" action="/portal/subscribe" style="margin:0"><input type="hidden" name="plan" value="${esc(o.key)}"><button class="btn" style="width:100%" type="submit">${b.active ? 'Switch to this' : 'Subscribe'} →</button></form>`;
+    return `<div class="plan${current ? ' cur' : ''}"><h4>${esc(o.name)}</h4><div class="price">${esc(o.priceLabel)}</div><p>${esc(o.description)}</p>${cta}</div>`;
+  }).join('');
+
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Relaunch72 — Billing</title><style>${STYLE}</style></head><body>
+  <div class="wrap">
+    <div class="top"><div style="display:flex;align-items:center;gap:12px"><div class="logo">🚀 <b>RELAUNCH72</b></div><span class="pill">BILLING</span></div>
+      <a href="/portal" style="font-family:var(--mono);font-size:.75rem;color:var(--amber)">← dashboard</a></div>
+
+    <div class="hello"><div><h1>Your subscription</h1><p>Your plan keeps your AI marketing manager running every month — on brand, nothing invented.</p></div></div>
+    ${notice}
+    <div class="box"><h3>Current plan</h3><div class="s">status</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div><div style="font-weight:700;font-size:1.05rem">${esc(b.planName ?? 'Not subscribed yet')}</div>
+          <div style="color:var(--muted);font-size:.86rem;margin-top:2px">${esc(s.label)}${renew}</div></div>
+        <div style="display:flex;align-items:center;gap:10px"><span class="stat ${s.cls}"><span class="dot"></span>${esc(s.label)}</span>${manage}</div>
+      </div>
+    </div>
+
+    <div class="box"><h3>${b.active ? 'Change your plan' : 'Choose a plan'}</h3><div class="s">billed monthly · cancel anytime</div>
+      <div class="plans">${plans}</div>
+    </div>
+  </div></body></html>`;
+}
+
+export function dashboardPage(d: DashboardData, billing?: BillingView): string {
   const won = d.pipeline.won ?? 0;
   const posts = d.artifacts.post ? 30 : 0;
   const articles = d.artifacts.cluster?.articles.length ?? 0;
@@ -105,6 +176,7 @@ export function dashboardPage(d: DashboardData): string {
         <div class="box"><h3>Contacts</h3><div class="s">synced from your enquiries</div><table><thead><tr><th>Name</th><th>Reach</th><th>Stage</th></tr></thead><tbody>${contacts}</tbody></table></div>
       </main>
       <aside>
+        ${billing ? billingCard(billing) : ''}
         <div class="box"><h3>Activity</h3><div class="s">what your AI did · newest first</div>${feed}</div>
         ${brand}
       </aside>

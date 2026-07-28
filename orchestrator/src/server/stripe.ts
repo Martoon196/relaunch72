@@ -12,6 +12,8 @@ import type { Order } from './orders.js';
 export interface StripeLike {
   checkout: { sessions: { create(params: Record<string, unknown>): Promise<{ id: string; url: string | null }> } };
   webhooks: { constructEvent(payload: string | Buffer, sig: string, secret: string): StripeEvent };
+  /** Present on the real client; used for the "manage billing" customer portal. */
+  billingPortal?: { sessions: { create(params: Record<string, unknown>): Promise<{ url: string | null }> } };
 }
 
 export interface StripeEvent {
@@ -83,6 +85,17 @@ export async function createSubscriptionCheckout(
   });
   if (!session.url) throw new CheckoutError('Stripe returned a session with no URL');
   return { url: session.url };
+}
+
+/** A Stripe billing-portal session URL, so an existing customer can change or cancel their plan. */
+export async function createBillingPortalUrl(stripe: StripeLike, cfg: StripeConfig, customerId: string): Promise<string> {
+  if (!stripe.billingPortal) throw new CheckoutError('billing portal not available');
+  const session = await stripe.billingPortal.sessions.create({
+    customer: customerId,
+    return_url: `${cfg.publicBaseUrl}/portal/billing`,
+  });
+  if (!session.url) throw new CheckoutError('Stripe returned a billing-portal session with no URL');
+  return session.url;
 }
 
 /** Verify the webhook signature and return the parsed event (throws on a bad sig). */

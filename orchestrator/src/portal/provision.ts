@@ -11,10 +11,12 @@ import crypto from 'node:crypto';
 import { JsonCrmStore } from '../crm/store.js';
 import { JsonAccountStore, type AccountStore } from './accounts.js';
 import { makeDashboard } from './data.js';
+import { makeBilling } from './billing.js';
 import { generateBrandBrain, runTickReal } from './run.js';
 import { FIXTURES_DIR } from '../paths.js';
 import type { Intake } from '../types.js';
 import type { PortalDeps } from './router.js';
+import type { SubscriptionStore } from '../server/subscriptions.js';
 
 export interface ProvisionArgs {
   email: string;
@@ -83,6 +85,14 @@ export interface PortalConfig {
   demoRunDir?: string;
   /** Called after a NEW tenant is provisioned (e.g. email the login). Never blocks provisioning. */
   onProvisioned?: (result: ProvisionResult) => Promise<void>;
+  /** Subscription store to drive the portal billing screen; absent = billing UI off. */
+  subscriptions?: SubscriptionStore;
+  /** Start a plan checkout (wired to Stripe in index.ts); returns the URL to redirect to. */
+  subscribeUrl?: (plan: string, email: string | null) => Promise<string>;
+  /** Open the Stripe billing portal for an existing customer; returns the URL. */
+  manageUrl?: (customerId: string) => Promise<string>;
+  /** When true, "Run this week" requires an active subscription (default false — demo runs). */
+  billingEnforced?: boolean;
 }
 
 export interface PortalBundle {
@@ -120,12 +130,20 @@ export async function buildPortalDeps(cfg: PortalConfig): Promise<PortalBundle> 
     if (!(await accounts.has(email))) await accounts.create(email, 't-frayne', cfg.demoPassword ?? 'relaunch72');
   }
 
+  const billing = cfg.subscriptions
+    ? makeBilling(cfg.subscriptions, async (tid) => (await accounts.findByTenant(tid))?.email ?? null)
+    : undefined;
+
   const portal: PortalDeps = {
     sessionSecret: cfg.sessionSecret,
     secure: cfg.secure,
     login: (e, pw) => accounts.verify(e, pw),
     dashboard: makeDashboard(store, (t) => t.runDir),
     runTick: (tid) => runTickReal(store, tid),
+    billing,
+    subscribeUrl: cfg.subscribeUrl,
+    manageUrl: cfg.manageUrl,
+    billingEnforced: cfg.billingEnforced,
   };
   const provision = async (args: ProvisionArgs): Promise<ProvisionResult> => {
     const result = await provisionTenant(store, accounts, cfg.dataDir, args);

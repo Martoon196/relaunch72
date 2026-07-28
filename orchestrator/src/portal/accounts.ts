@@ -20,6 +20,8 @@ export interface AccountStore {
   verify(email: string, password: string): Promise<string | null>;
   has(email: string): Promise<boolean>;
   findByEmail(email: string): Promise<Account | null>;
+  /** The account owning a tenant (to resolve a tenant's email for billing). */
+  findByTenant(tenantId: string): Promise<Account | null>;
 }
 
 function hash(password: string): string {
@@ -43,6 +45,10 @@ export class JsonAccountStore implements AccountStore {
   async findByEmail(email: string): Promise<Account | null> {
     const e = email.trim().toLowerCase();
     return this.accounts.find((a) => a.email === e) ?? null;
+  }
+
+  async findByTenant(tenantId: string): Promise<Account | null> {
+    return this.accounts.find((a) => a.tenantId === tenantId) ?? null;
   }
 
   async has(email: string): Promise<boolean> {

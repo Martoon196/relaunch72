@@ -19,7 +19,7 @@ import { fileOrderStore } from './orders.js';
 import { fileSubscriptionStore } from './subscriptions.js';
 import { createApp, type MarketingHooks } from './app.js';
 import { makeStripe } from './stripe-client.js';
-import type { StripeLike } from './stripe.js';
+import { createSubscriptionCheckout, createBillingPortalUrl, type StripeLike } from './stripe.js';
 import { ensureCatalogPrices, ensurePlanPrices, type StripeCatalogLike } from './catalog.js';
 import type { StripeConfig } from './config.js';
 import { makeBrevo } from '../email/brevo.js';
@@ -123,6 +123,16 @@ async function main(): Promise<void> {
       }
     : undefined;
 
+  // Billing UI wiring — checkout + manage-portal URLs, only when a key is present.
+  const subscribeUrl = cfg.secretKey
+    ? async (plan: string, email: string | null): Promise<string> => (await createSubscriptionCheckout(stripe, cfg, { plan, email: email ?? undefined })).url
+    : undefined;
+  const manageUrl = cfg.secretKey
+    ? async (customerId: string): Promise<string> => createBillingPortalUrl(stripe, cfg, customerId)
+    : undefined;
+  // Enforce an active subscription before "Run this week" only if explicitly turned on.
+  const billingEnforced = /^(1|true|yes)$/i.test(process.env.BILLING_ENFORCED?.trim() ?? '');
+
   // Client portal — optional; a failure here must never stop the payments server.
   let bundle;
   try {
@@ -134,6 +144,10 @@ async function main(): Promise<void> {
       demoPassword: process.env.PORTAL_DEMO_PASSWORD?.trim(),
       demoRunDir: process.env.PORTAL_DEMO_RUNDIR?.trim(),
       onProvisioned,
+      subscriptions,
+      subscribeUrl,
+      manageUrl,
+      billingEnforced,
     });
     console.log(`Client portal mounted at /portal — demo login: ${process.env.PORTAL_DEMO_EMAIL?.trim() || 'owner@frayne-electrical.co.uk'}`);
   } catch (e) {
