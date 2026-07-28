@@ -8,6 +8,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createCheckoutSession, priceKeyFor, orderFromEvent, CheckoutError, type StripeLike, type StripeEvent } from '../src/server/stripe.js';
 import { loadStripeConfig, type StripeConfig } from '../src/server/config.js';
 import { fileOrderStore, type Order, type OrderStore } from '../src/server/orders.js';
+import { memorySubscriptionStore } from '../src/server/subscriptions.js';
 import { createApp } from '../src/server/app.js';
 import { validIntake } from './helpers.js';
 
@@ -15,9 +16,11 @@ function cfg(over: Partial<StripeConfig> = {}): StripeConfig {
   return {
     secretKey: 'sk_test_x', webhookSecret: 'whsec_x',
     priceIds: { autopsy: 'price_a', core: 'price_c', core_bump: 'price_cb', pro: 'price_p' },
+    planIds: { platform_starter: 'price_ps', platform_growth: 'price_pg', platform_pro: 'price_pp' },
     publicBaseUrl: 'https://relaunch72.test', port: 4242, liveMode: false,
     dataDir: os.tmpdir(),
     ordersFile: path.join(os.tmpdir(), `r72-orders-${process.pid}-${Math.round(performance.now())}.jsonl`),
+    subscriptionsFile: path.join(os.tmpdir(), `r72-subs-${process.pid}-${Math.round(performance.now())}.jsonl`),
     allowedOrigins: ['https://relaunch72.com', 'http://localhost:8080'],
     adminPassword: '', sessionSecret: 'test-secret',
     ...over,
@@ -238,6 +241,46 @@ test('POST /api/subscribe 400s a bad email and 200s (unsynced) when marketing is
   await app().handler(req('POST', '/api/subscribe', JSON.stringify({ email: 'lead@x.com' })), off);
   assert.equal(off.statusCode, 200);
   assert.equal(JSON.parse(off._body).synced, false);
+});
+
+// ─── subscriptions (recurring billing) ───────────────────────────────────────
+test('POST /api/subscription returns a subscription-mode Stripe URL', async () => {
+  const { handler, created } = app();
+  const r = res();
+  await handler(req('POST', '/api/subscription', JSON.stringify({ plan: 'platform_growth', email: 'buyer@co.uk' })), r);
+  assert.equal(r.statusCode, 200);
+  assert.match(JSON.parse(r._body).url, /pay\.stripe\.test/);
+  assert.equal(created[0]!.mode, 'subscription');
+});
+
+test('POST /api/subscription 400s an unknown plan', async () => {
+  const { handler } = app(); const r = res();
+  await handler(req('POST', '/api/subscription', JSON.stringify({ plan: 'bogus' })), r);
+  assert.equal(r.statusCode, 400);
+});
+
+test('webhook records a subscription lifecycle event when a store is wired', async () => {
+  const subs = memorySubscriptionStore();
+  const { handler } = app({ subscriptions: subs });
+  const ev = JSON.stringify({ type: 'customer.subscription.created', data: { object: {
+    id: 'sub_hook', customer: 'cus_1', status: 'active',
+    items: { data: [{ price: { id: 'price_pg' } }] }, metadata: { email: 'boss@acme.co' },
+  } } });
+  const r = res();
+  await handler(req('POST', '/api/stripe/webhook', ev, { 'stripe-signature': 'good' }), r);
+  assert.equal(r.statusCode, 200);
+  assert.equal(subs.find('sub_hook')?.status, 'active');
+  assert.equal(subs.find('sub_hook')?.plan, 'platform_growth'); // resolved via cfg.planIds
+  assert.equal(subs.findByEmail('boss@acme.co')?.subscription_id, 'sub_hook');
+});
+
+test('webhook without a subscription store still records the order (subscriptions optional)', async () => {
+  const { handler, store } = app(); // no subscriptions dep
+  const ev = JSON.stringify({ type: 'checkout.session.completed', data: { object: { id: 'cs_ns', metadata: { tier: 'core' } } } });
+  const r = res();
+  await handler(req('POST', '/api/stripe/webhook', ev, { 'stripe-signature': 'good' }), r);
+  assert.equal(r.statusCode, 200);
+  assert.equal(store.data.get('cs_ns')?.tier, 'core');
 });
 
 test('webhook syncs a paying customer via onCustomer', async () => {

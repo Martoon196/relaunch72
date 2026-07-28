@@ -16,10 +16,11 @@ import { fileURLToPath } from 'node:url';
 import type { Intake } from '../types.js';
 import { loadStripeConfig } from './config.js';
 import { fileOrderStore } from './orders.js';
+import { fileSubscriptionStore } from './subscriptions.js';
 import { createApp, type MarketingHooks } from './app.js';
 import { makeStripe } from './stripe-client.js';
 import type { StripeLike } from './stripe.js';
-import { ensureCatalogPrices, type StripeCatalogLike } from './catalog.js';
+import { ensureCatalogPrices, ensurePlanPrices, type StripeCatalogLike } from './catalog.js';
 import type { StripeConfig } from './config.js';
 import { makeBrevo } from '../email/brevo.js';
 import { buildPortalDeps } from '../portal/provision.js';
@@ -69,6 +70,16 @@ async function ensurePrices(stripe: StripeLike, cfg: StripeConfig): Promise<void
   } catch (e) {
     console.warn(`⚠  Stripe price auto-provision failed: ${(e as Error).message}. Checkout will 400 until it succeeds — restart the service, or set STRIPE_PRICE_* manually.`);
   }
+  try {
+    const { priceIds, provisioned, created, reused } = await ensurePlanPrices(
+      stripe as unknown as StripeCatalogLike, cfg.planIds, 'usd', (m) => console.log('  ' + m));
+    if (provisioned) {
+      Object.assign(cfg.planIds, priceIds);
+      console.log(`Plans ready — ${created.length} created, ${reused.length} reused.`);
+    }
+  } catch (e) {
+    console.warn(`⚠  Stripe plan auto-provision failed: ${(e as Error).message}. Subscription checkout will 400 until it succeeds — restart the service, or set STRIPE_PLAN_* manually.`);
+  }
 }
 
 /**
@@ -97,6 +108,7 @@ async function main(): Promise<void> {
   }
   const stripe = cfg.secretKey ? (makeStripe(cfg.secretKey) as unknown as StripeLike) : unconfiguredStripe();
   const orders = fileOrderStore(cfg.ordersFile);
+  const subscriptions = fileSubscriptionStore(cfg.subscriptionsFile);
   const kickPipeline = createKick(path.join(cfg.dataDir, 'intakes'));
   const marketing = makeMarketing();
 
@@ -138,7 +150,7 @@ async function main(): Promise<void> {
       }
     : undefined;
 
-  const app = createApp({ stripe, cfg, orders, kickPipeline, now: () => new Date().toISOString(), marketing, portal: bundle?.portal, onIntakeAccepted });
+  const app = createApp({ stripe, cfg, orders, subscriptions, kickPipeline, now: () => new Date().toISOString(), marketing, portal: bundle?.portal, onIntakeAccepted });
   http.createServer((req, res) => { void app(req, res); }).listen(cfg.port, () => {
     const mode = !cfg.secretKey ? 'UNCONFIGURED' : cfg.liveMode ? 'LIVE ⚠️' : 'TEST';
     console.log(`Relaunch72 payments server on :${cfg.port} — ${mode} mode`);

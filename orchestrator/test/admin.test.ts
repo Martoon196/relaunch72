@@ -12,8 +12,9 @@ import type { StripeConfig } from '../src/server/config.js';
 
 function cfg(over: Partial<StripeConfig> = {}): StripeConfig {
   return {
-    secretKey: 'sk_test_x', webhookSecret: 'wh', priceIds: {}, publicBaseUrl: 'https://relaunch72.test', port: 0,
+    secretKey: 'sk_test_x', webhookSecret: 'wh', priceIds: {}, planIds: {}, publicBaseUrl: 'https://relaunch72.test', port: 0,
     liveMode: false, dataDir: os.tmpdir(), ordersFile: path.join(os.tmpdir(), `r72-adm-orders-${Math.round(performance.now())}.jsonl`),
+    subscriptionsFile: path.join(os.tmpdir(), `r72-adm-subs-${Math.round(performance.now())}.jsonl`),
     allowedOrigins: [], adminPassword: 'hunter2', sessionSecret: 's3cr3t', ...over,
   };
 }

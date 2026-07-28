@@ -11,7 +11,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { StripeConfig } from './config.js';
 import type { OrderStore, Order } from './orders.js';
-import { createCheckoutSession, verifyEvent, orderFromEvent, CheckoutError, type StripeLike } from './stripe.js';
+import { createCheckoutSession, createSubscriptionCheckout, verifyEvent, orderFromEvent, CheckoutError, type StripeLike } from './stripe.js';
+import { subscriptionFromEvent, planResolver, type SubscriptionStore } from './subscriptions.js';
 import { runS0 } from '../intake/s0.js';
 import type { Intake } from '../types.js';
 import { handleAdmin } from './admin/router.js';
@@ -38,6 +39,8 @@ export interface AppDeps {
   portal?: PortalDeps;
   /** Fired (fire-and-forget) when an intake is accepted — provisions the portal login. */
   onIntakeAccepted?: (intake: Intake, email: string | null) => void;
+  /** Optional recurring-subscription store; absent = subscription events are ignored. */
+  subscriptions?: SubscriptionStore;
 }
 
 function send(res: ServerResponse, code: number, body: unknown): void {
@@ -112,6 +115,14 @@ export function createApp(deps: AppDeps) {
         return send(res, 200, { url: checkoutUrl });
       }
 
+      // Recurring platform subscription checkout (mode:'subscription').
+      if (route === 'POST /api/subscription') {
+        if (!deps.cfg.secretKey) return send(res, 503, { error: 'payments not configured yet' });
+        const body = JSON.parse((await readBody(req)).toString() || '{}') as { plan?: string; email?: string };
+        const { url: checkoutUrl } = await createSubscriptionCheckout(deps.stripe, deps.cfg, { plan: body.plan ?? '', email: body.email?.trim() || undefined });
+        return send(res, 200, { url: checkoutUrl });
+      }
+
       if (route === 'POST /api/stripe/webhook') {
         if (!deps.cfg.secretKey) return send(res, 503, { error: 'payments not configured yet' });
         const raw = await readBody(req);
@@ -129,6 +140,11 @@ export function createApp(deps: AppDeps) {
           if (order.email && deps.marketing?.onCustomer) {
             void deps.marketing.onCustomer(order).catch((e) => console.warn(`marketing onCustomer failed: ${(e as Error).message}`));
           }
+        }
+        // Recurring-subscription lifecycle (created/updated/deleted, invoice paid/failed).
+        if (deps.subscriptions) {
+          const sub = subscriptionFromEvent(event, deps.now(), planResolver(deps.cfg.planIds));
+          if (sub) deps.subscriptions.record(sub);
         }
         return send(res, 200, { received: true });
       }

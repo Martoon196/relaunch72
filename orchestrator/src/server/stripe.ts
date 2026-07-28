@@ -5,7 +5,7 @@
  */
 
 import type { StripeConfig } from './config.js';
-import { TIER_PRICE_ENV } from './config.js';
+import { TIER_PRICE_ENV, PLAN_PRICE_ENV } from './config.js';
 import type { Order } from './orders.js';
 
 /** The slice of the Stripe SDK we touch. The real client is structurally assignable. */
@@ -46,6 +46,40 @@ export async function createCheckoutSession(
     success_url: `${cfg.publicBaseUrl}/intake/?tier=${encodeURIComponent(req.tier)}&session={CHECKOUT_SESSION_ID}`,
     cancel_url: `${cfg.publicBaseUrl}/checkout.html?tier=${encodeURIComponent(req.tier)}`,
     metadata: { tier: req.tier, bump: req.bump ? '1' : '0' },
+  });
+  if (!session.url) throw new CheckoutError('Stripe returned a session with no URL');
+  return { url: session.url };
+}
+
+export interface SubscriptionCheckoutRequest { plan: string; email?: string }
+
+/**
+ * A recurring-subscription Checkout Session (mode:'subscription'). Stamps the
+ * plan + email onto `subscription_data.metadata` so the later
+ * customer.subscription.* webhooks can resolve which account and plan they are.
+ */
+export async function createSubscriptionCheckout(
+  stripe: StripeLike,
+  cfg: StripeConfig,
+  req: SubscriptionCheckoutRequest,
+): Promise<{ url: string }> {
+  if (!req.plan || !(req.plan in cfg.planIds)) {
+    throw new CheckoutError(`unknown plan "${req.plan}"`);
+  }
+  const price = cfg.planIds[req.plan];
+  if (!price) throw new CheckoutError(`no Stripe price configured for plan "${req.plan}" — set ${PLAN_PRICE_ENV[req.plan]} in env`);
+  const email = req.email?.trim();
+  const subMeta: Record<string, string> = { plan: req.plan };
+  if (email) subMeta.email = email;
+
+  const session = await stripe.checkout.sessions.create({
+    mode: 'subscription',
+    line_items: [{ price, quantity: 1 }],
+    ...(email ? { customer_email: email } : {}),
+    success_url: `${cfg.publicBaseUrl}/portal?plan=${encodeURIComponent(req.plan)}&session={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${cfg.publicBaseUrl}/pricing.html?plan=${encodeURIComponent(req.plan)}`,
+    subscription_data: { metadata: subMeta },
+    metadata: { plan: req.plan },
   });
   if (!session.url) throw new CheckoutError('Stripe returned a session with no URL');
   return { url: session.url };

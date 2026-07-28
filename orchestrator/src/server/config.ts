@@ -18,15 +18,26 @@ export const TIER_PRICE_ENV: Record<string, string> = {
   pro: 'STRIPE_PRICE_PRO',
 };
 
+/** Recurring platform plans → the env var holding that plan's Stripe Price ID. */
+export const PLAN_PRICE_ENV: Record<string, string> = {
+  platform_starter: 'STRIPE_PLAN_STARTER',
+  platform_growth: 'STRIPE_PLAN_GROWTH',
+  platform_pro: 'STRIPE_PLAN_PRO',
+};
+
 export interface StripeConfig {
   secretKey: string;
   webhookSecret: string;
   priceIds: Record<string, string>;
+  /** Recurring platform plan price IDs (plan key → Stripe Price ID). */
+  planIds: Record<string, string>;
   publicBaseUrl: string;
   port: number;
   liveMode: boolean;
   dataDir: string;
   ordersFile: string;
+  /** Where subscription state is journalled (parallel to ordersFile). */
+  subscriptionsFile: string;
   /** Browser origins allowed to call the API (the site is a different host). */
   allowedOrigins: string[];
   /** Admin control room: password gate + cookie-signing secret. Empty = /admin disabled. */
@@ -46,6 +57,8 @@ const DEFAULT_ORIGINS = [
 export function loadStripeConfig(env: NodeJS.ProcessEnv = process.env): StripeConfig {
   const priceIds: Record<string, string> = {};
   for (const [tier, key] of Object.entries(TIER_PRICE_ENV)) priceIds[tier] = env[key]?.trim() ?? '';
+  const planIds: Record<string, string> = {};
+  for (const [plan, key] of Object.entries(PLAN_PRICE_ENV)) planIds[plan] = env[key]?.trim() ?? '';
   const secretKey = env.STRIPE_SECRET_KEY?.trim() ?? '';
   // DATA_DIR lets a Render persistent disk hold orders/intakes across redeploys.
   const dataDir = env.DATA_DIR?.trim() || path.join(REPO_ROOT, 'data');
@@ -54,11 +67,13 @@ export function loadStripeConfig(env: NodeJS.ProcessEnv = process.env): StripeCo
     secretKey,
     webhookSecret: env.STRIPE_WEBHOOK_SECRET?.trim() ?? '',
     priceIds,
+    planIds,
     publicBaseUrl: (env.PUBLIC_BASE_URL?.trim() || 'http://localhost:8080').replace(/\/$/, ''),
     port: Number(env.PORT ?? 4242),
     liveMode: /^sk_live_/.test(secretKey),
     dataDir,
     ordersFile: path.join(dataDir, 'orders.jsonl'),
+    subscriptionsFile: path.join(dataDir, 'subscriptions.jsonl'),
     allowedOrigins: [...new Set([...DEFAULT_ORIGINS, ...extraOrigins])],
     adminPassword: env.ADMIN_PASSWORD?.trim() ?? '',
     // Falls back to the webhook secret so a signing key always exists; set SESSION_SECRET for a dedicated one.
