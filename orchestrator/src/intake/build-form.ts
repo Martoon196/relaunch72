@@ -1,7 +1,7 @@
 /**
  * Build the self-hosted Deep Intake form (LS-11) from the canonical field spec.
  *
- *   npm run intake:build                       # → site/intake/index.html (POSTs to the live API)
+ *   npm run intake:build                       # → site/intake/index.html (POSTs to the private test API)
  *   npm run intake:build -- --endpoint <url>   # override the submit endpoint
  *
  * The output is one self-contained HTML file (no build step, no external calls)
@@ -13,7 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderIntakeForm } from './form.js';
 
-/** Where a submitted intake is POSTed by default — the live payments API's /api/intake. */
+/** Where a submitted intake is POSTed by default — the private test service's /api/intake. */
 const DEFAULT_ENDPOINT = 'https://relaunch72-payments.onrender.com/api/intake';
 
 function parseEndpoint(argv: string[]): string | undefined {

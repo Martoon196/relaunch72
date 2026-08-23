@@ -19,7 +19,6 @@ import { runStage } from '../stages/runner.js';
 import { CONTENT_CLUSTER_STAGE } from '../content/stage.js';
 import { AD_STAGE } from '../ads/stage.js';
 import { buildSchedule, type S8Output } from '../social/schedule.js';
-import { MockPublisher } from '../social/mock.js';
 import { MockKeywordProvider } from '../keyword/mock.js';
 import { MockClient } from '../llm/mock.js';
 import { AnthropicClient, type LlmClient } from '../llm/client.js';
@@ -52,7 +51,7 @@ async function runRail(
       const { output } = await runStage(CONTENT_CLUSTER_STAGE, intake, prior, { runDir, client });
       if (!output) return { skip: 'cluster parked by QA' };
       const cl = output as { topic: string; supporting: unknown[] };
-      return { artifact: { type: 'content_cluster', title: `Cluster: ${cl.topic}`, payload: output }, detail: `${cl.supporting.length + 1} articles` };
+      return { artifact: { type: 'content_cluster', title: `Content-cluster draft: ${cl.topic}`, payload: output }, detail: `${cl.supporting.length + 1} article briefs drafted` };
     }
     case 'ads_refresh': {
       if (!['s2.json', 's3.json', 's4.json'].every((f) => has(runDir, f))) return { skip: 'needs S2 + S3 + S4' };
@@ -60,33 +59,31 @@ async function runRail(
       const { output } = await runStage(AD_STAGE, intake, prior, { runDir, client });
       if (!output) return { skip: 'campaign parked by QA' };
       const camp = output as { platforms: string[]; ad_sets: unknown[] };
-      const publisher = new MockPublisherAds();
-      const drafts = await Promise.all(camp.platforms.map((p) => publisher.draft(p, camp.ad_sets.length)));
-      return { artifact: { type: 'ad_campaign', title: 'Ad campaign (paused drafts)', payload: output }, detail: `${drafts.length} platform(s), all paused` };
+      return {
+        artifact: { type: 'ad_campaign', title: 'Simulated ad-campaign draft — not created or published', payload: output },
+        detail: `simulated ad drafts for ${camp.platforms.length} platform(s); no ad account changed`,
+      };
     }
     case 'social_batch': {
       if (!has(runDir, 's8.json')) return { skip: 'needs S8 (social pack)' };
       const s8 = readJson<S8Output>(path.join(runDir, 's8.json'));
       const planned = buildSchedule(s8, { startDate: action.dueDate });
-      const publisher = new MockPublisher();
-      // Schedule the next post as the day's batch (demo scope).
-      const next = planned[0];
-      if (next) await publisher.schedule(next);
-      return { artifact: { type: 'social_post', title: 'Social batch scheduled', payload: { count: planned.length } }, detail: `${planned.length} posts scheduled` };
+      return {
+        artifact: { type: 'social_post', title: 'Social schedule draft — not scheduled', payload: { count: planned.length, posts: planned } },
+        detail: `${planned.length}-post schedule drafted; no post was scheduled or published`,
+      };
     }
     case 'keyword_refresh': {
       if (!has(runDir, 'cc.json')) return { skip: 'needs a cc.json cluster (run content first)' };
       const cluster = readJson<{ pillar: { target_query: string }; supporting: { target_query: string }[] }>(path.join(runDir, 'cc.json'));
       const queries = [cluster.pillar.target_query, ...cluster.supporting.map((s) => s.target_query)];
       const metrics = await new MockKeywordProvider().metrics(queries);
-      return { artifact: { type: 'note', title: 'Keyword report', payload: metrics }, detail: `${metrics.length} queries priced` };
+      return {
+        artifact: { type: 'note', title: 'Simulated keyword estimates — not live search data', payload: { mode: 'simulated', metrics } },
+        detail: `simulated planning estimates for ${metrics.length} queries; not live search-volume data`,
+      };
     }
   }
-}
-
-/** Tiny inline paused-draft helper so we don't import the ads publisher's file just for a count. */
-class MockPublisherAds {
-  async draft(platform: string, adSets: number): Promise<{ platform: string; adSets: number }> { return { platform, adSets }; }
 }
 
 export function railRunner(ghl: GhlClient, opts: { mock: boolean }): ActionRunner {
@@ -107,7 +104,16 @@ export function railRunner(ghl: GhlClient, opts: { mock: boolean }): ActionRunne
 
     const loc = await ghl.ensureLocation({ id: tenant.id, name: tenant.name });
     const push = await ghl.pushArtifact(loc.locationId, result.artifact);
-    const pushed = push.artifactId ? `→ ${loc.locationId} (${push.artifactId})` : '→ GHL not fully configured';
-    return entry(action, push.artifactId ? 'ok' : 'skipped', `${action.action}: ${result.detail} ${pushed}${loc.created ? ' [new sub-account]' : ''}`);
+    if (opts.mock || ghl.mode === 'mock') {
+      return entry(
+        action,
+        'skipped',
+        `simulation only: ${action.action}: ${result.detail}; mock GHL record ${push.artifactId || 'not created'}; no external account changed`,
+      );
+    }
+    const pushed = push.artifactId
+      ? `draft/note recorded in GHL ${loc.locationId} (${push.artifactId}); nothing was published`
+      : 'draft/note not recorded because GHL is not fully configured';
+    return entry(action, push.artifactId ? 'ok' : 'skipped', `${action.action}: ${result.detail}; ${pushed}${loc.created ? ' [new sub-account]' : ''}`);
   };
 }

@@ -1,56 +1,41 @@
-# Payments — going live with Stripe
+# Payments status — private test sandbox only
 
-The whole funnel is built **Stripe-ready**. Turning on real payments is a paste job, not a code change. **Stay in Stripe TEST mode until we deliberately go live** (hard rule: Stripe stays test-mode until "go live").
+Relaunch72 is wired to exercise the funnel with Stripe **test mode**. It is not
+ready for real money. A live or unknown Stripe key enters `LIVE LOCKED` mode and
+cannot create checkout.
 
-## The flow
+## Supported test flow
 
+```text
+checkout.html → backend /api/checkout → Stripe test Checkout
+              → signed webhook records the paid test order
+              → intake submits the returned Session
+              → paid entitlement is claimed once → mock build
 ```
-landing (index.html)  →  checkout.html?tier=X  →  Stripe Payment Link  →  intake/?tier=X&session=…  →  pipeline
-```
 
-`checkout.html` reads the tier, shows the order summary + Core order-bump, and sends the buyer to the Stripe Payment Link for that tier. Until a link is set it shows an honest "not live yet" state with a dev path straight to the intake, so the flow is fully walkable now.
+The public Render test service requires a private 24+ character
+`SANDBOX_ACCESS_TOKEN`. The founder enters it in the checkout prompt; the browser
+keeps it in `sessionStorage` and sends it to checkout and intake as a header. Never
+put the code in this repository or frontend configuration.
 
-## Go-live steps (≈15 min, all in the Stripe dashboard, TEST mode)
+The deployed test service forces mock builds and caps concurrency, so a public
+test card cannot spend Anthropic credits. Public Brevo capture and recurring plan
+checkout remain disabled.
 
-1. **Create four Payment Links** (Products → Payment Links), test mode:
-   | Key | Product | Price |
-   |-----|---------|-------|
-   | `autopsy` | Marketing Autopsy | $97 |
-   | `core` | Relaunch72 Core | $997 |
-   | `core_bump` | Relaunch72 Core + 90-day content engine | $1,144 |
-   | `pro` | Relaunch72 Pro | $2,497 |
+Use [the Render sandbox guide](../docs/deploy-render.md) for setup and readiness
+checks.
 
-   (2 × $549 for Core is a Stripe **instalment**/subscription option on the same product — configure on the link if you want it offered.)
+## Unsupported legacy path: Stripe Payment Links
 
-2. **Set each link's success URL** to:
-   ```
-   https://<your-domain>/intake/?tier=<key>&session={CHECKOUT_SESSION_ID}
-   ```
-   Stripe substitutes the real session id. The intake form captures it as `_stripe_session` in the payload for reconciliation.
+Do not paste standalone Payment Links into the site. They do not create the
+server-side checkout provenance and verified paid-order state required by
+`/api/intake`; installment/subscription links also do not represent a one-off Core
+entitlement. The frontend intentionally ignores the old Payment Link option.
 
-3. **Paste the link URLs** into `site/checkout-config.js` → `paymentLinks`, and flip `liveMode: true`. Done — checkout now takes real (test) cards.
+## Live-money prerequisites
 
-4. **Test it** with Stripe's test card `4242 4242 4242 4242`, any future expiry/CVC. You should land on the intake with the tier + session in the URL.
-
-## Option B — the backend (recommended, auto-starts the build)
-
-A small payments server is built and tested (`orchestrator/src/server/`, `npm run serve`). It does the whole automated flow:
-
-- `POST /api/checkout` → creates a Stripe **Checkout Session** for the tier → returns the URL.
-- `POST /api/stripe/webhook` → verifies the signature, records the paid order (`data/orders.jsonl`).
-- `POST /api/intake` → runs the S0 gate on a submitted intake; on accept, **spawns the pipeline** and marks the order building. (Point the intake form's `--endpoint` at `<apiBase>/api/intake`.)
-
-**Go-live (test mode) — just give the key, the setup does the rest:**
-1. Put your **TEST secret key** in the repo-root `.env`: `STRIPE_SECRET_KEY=sk_test_…` (Stripe → Developers → API keys). *That's the only thing you create by hand.*
-2. `npm run stripe:setup` — **creates the four products + prices in your Stripe account via the API and writes the Price IDs into `.env` for you.** Idempotent (stable `lookup_key`s), so re-running never duplicates. Refuses a live key.
-3. `npm run serve` (refuses to start keyless; `liveMode` is derived from the key prefix, so a test key can never run as live).
-4. Set `apiBase` in `site/checkout-config.js` to the server URL. Checkout now creates real (test) Sessions.
-5. For the auto-build webhook: add `STRIPE_WEBHOOK_SECRET`, point Stripe's webhook at `<apiBase>/api/stripe/webhook` (`stripe listen --forward-to` for local). Test end-to-end with card `4242 4242 4242 4242`.
-
-Everything here is env-driven — **no secret ever touches git or the frontend**. `data/` (orders + intakes = PII) is git-ignored.
-
-*(Payment Links, Option A above, remain the no-backend path — but they don't auto-start the build; that's what the server is for.)*
-
-## What stays manual until then
-
-Concierge-free but human-gated: buyer pays → fills intake → **you** run the pipeline, review at the sign-off gate (`npm run signoff`), and send the delivery pack (`npm run deliver`). Nothing here needs an account beyond Stripe.
+Going live is not a key swap. Before the lock can be reviewed, the product needs
+the PostgreSQL commercial ledger, server-created checkout intents, exact price and
+amount validation, transactional webhook/idempotency handling, durable job/outbox
+workers, fulfilment tests, monitoring/backups and an explicit founder go-live
+decision. See `docs/codex-handoff/15-POSTGRES-CRM-FOUNDATION.md`.

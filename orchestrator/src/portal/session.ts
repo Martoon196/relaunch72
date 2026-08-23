@@ -8,6 +8,66 @@ import crypto from 'node:crypto';
 
 export const PORTAL_COOKIE = 'r72_portal';
 export const PORTAL_TTL_MS = 1000 * 60 * 60 * 24 * 14; // 14 days
+const PORTAL_SESSION_CONTEXT = 'relaunch72/session/portal/v1\u0000';
+
+interface LoginAttempt {
+  failures: number;
+  windowStartedAt: number;
+  blockedUntil: number;
+}
+
+/**
+ * A small process-local guard against password spraying. It deliberately lives
+ * behind an interface in PortalDeps so a shared Redis/database limiter can
+ * replace it when the portal runs on more than one server instance.
+ */
+export class InMemoryLoginThrottle {
+  private readonly attempts = new Map<string, LoginAttempt>();
+
+  constructor(
+    private readonly maxFailures = 5,
+    private readonly windowMs = 15 * 60 * 1000,
+    private readonly blockMs = 15 * 60 * 1000,
+    private readonly maxEntries = 10_000,
+  ) {}
+
+  check(key: string, now: number): { allowed: boolean; retryAfterSeconds: number } {
+    const attempt = this.attempts.get(key);
+    if (!attempt) return { allowed: true, retryAfterSeconds: 0 };
+    if (attempt.blockedUntil > now) {
+      return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((attempt.blockedUntil - now) / 1000)) };
+    }
+    if (now - attempt.windowStartedAt >= this.windowMs) this.attempts.delete(key);
+    return { allowed: true, retryAfterSeconds: 0 };
+  }
+
+  failure(key: string, now: number): void {
+    let attempt = this.attempts.get(key);
+    if (!attempt || now - attempt.windowStartedAt >= this.windowMs) {
+      if (!attempt && this.attempts.size >= this.maxEntries) {
+        for (const [candidate, value] of this.attempts) {
+          if (value.blockedUntil <= now && now - value.windowStartedAt >= this.windowMs) this.attempts.delete(candidate);
+        }
+        // Active unique identifiers can otherwise make the map grow forever.
+        // Evict insertion-order oldest entries until the hard bound has room.
+        while (this.attempts.size >= this.maxEntries) {
+          const oldest = this.attempts.keys().next().value as string | undefined;
+          if (!oldest) break;
+          this.attempts.delete(oldest);
+        }
+      }
+      attempt = { failures: 0, windowStartedAt: now, blockedUntil: 0 };
+      this.attempts.set(key, attempt);
+    }
+    attempt.failures += 1;
+    if (attempt.failures >= this.maxFailures) attempt.blockedUntil = now + this.blockMs;
+
+  }
+
+  success(key: string): void {
+    this.attempts.delete(key);
+  }
+}
 
 /** Constant-time password check (hash both sides to a fixed length first). */
 export function passwordOk(provided: string, expected: string): boolean {
@@ -19,8 +79,8 @@ export function passwordOk(provided: string, expected: string): boolean {
 
 /** Sign `<payload>.<hmac>`; payload carries the tenant id + expiry. */
 export function signTenant(secret: string, tenantId: string, now: number, ttlMs = PORTAL_TTL_MS): string {
-  const payload = Buffer.from(JSON.stringify({ tid: tenantId, exp: now + ttlMs })).toString('base64url');
-  const mac = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+  const payload = Buffer.from(JSON.stringify({ v: 1, aud: 'portal', tid: tenantId, exp: now + ttlMs })).toString('base64url');
+  const mac = crypto.createHmac('sha256', secret).update(PORTAL_SESSION_CONTEXT).update(payload).digest('base64url');
   return `${payload}.${mac}`;
 }
 
@@ -31,13 +91,22 @@ export function verifyTenant(secret: string, token: string | undefined, now: num
   if (dot <= 0) return null;
   const payload = token.slice(0, dot);
   const mac = token.slice(dot + 1);
-  const expected = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+  const expected = crypto.createHmac('sha256', secret).update(PORTAL_SESSION_CONTEXT).update(payload).digest('base64url');
   const macBuf = Buffer.from(mac);
   const expBuf = Buffer.from(expected);
   if (macBuf.length !== expBuf.length || !crypto.timingSafeEqual(macBuf, expBuf)) return null;
   try {
-    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { tid?: string; exp?: number };
-    if (typeof parsed.exp === 'number' && parsed.exp > now && typeof parsed.tid === 'string') return parsed.tid;
+    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Record<string, unknown>;
+    const keys = Object.keys(parsed).sort().join(',');
+    if (keys === 'aud,exp,tid,v'
+      && parsed.v === 1
+      && parsed.aud === 'portal'
+      && typeof parsed.exp === 'number'
+      && Number.isFinite(parsed.exp)
+      && parsed.exp > now
+      && typeof parsed.tid === 'string'
+      && parsed.tid.length > 0
+      && parsed.tid.length <= 256) return parsed.tid;
     return null;
   } catch {
     return null;

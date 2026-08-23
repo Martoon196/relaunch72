@@ -13,7 +13,7 @@ import { provisionPlans, PLANS, type StripeCatalogLike } from '../src/server/cat
 import { loadStripeConfig, type StripeConfig } from '../src/server/config.js';
 
 function cfg(over: Partial<StripeConfig> = {}): StripeConfig {
-  return { ...loadStripeConfig({} as NodeJS.ProcessEnv), secretKey: 'sk_test_x', planIds: { platform_starter: 'price_ps', platform_growth: 'price_pg', platform_pro: 'price_pp' }, publicBaseUrl: 'https://relaunch72.test', ...over };
+  return { ...loadStripeConfig({} as NodeJS.ProcessEnv), secretKey: 'sk_test_x', keyMode: 'test', planIds: { platform_starter: 'price_ps', platform_growth: 'price_pg', platform_pro: 'price_pp' }, publicBaseUrl: 'https://relaunch72.test', ...over };
 }
 function fakeStripe(created: Array<Record<string, unknown>>): StripeLike {
   return {

@@ -1,8 +1,8 @@
 /**
  * Bridge the manager's tick output into the CRM timeline: each rail run the
- * manager performs for a tenant becomes an activity on that tenant's record, so
- * the portal shows a live feed of what the AI did — "generated a content
- * cluster", "scheduled 30 posts", "loaded paused ad drafts".
+ * manager actually performs for a tenant becomes an activity on that tenant's
+ * record. Simulated/skipped actions are deliberately excluded so dry-run plans
+ * cannot become customer-facing success claims.
  */
 
 import type { ActivityEntry, RailAction } from '../manager/types.js';

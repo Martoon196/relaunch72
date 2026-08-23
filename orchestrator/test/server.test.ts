@@ -7,17 +7,23 @@ import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createCheckoutSession, priceKeyFor, orderFromEvent, CheckoutError, type StripeLike, type StripeEvent } from '../src/server/stripe.js';
 import { loadStripeConfig, type StripeConfig } from '../src/server/config.js';
-import { fileOrderStore, type Order, type OrderStore } from '../src/server/orders.js';
+import {
+  fileOrderStore, fileWebhookReceiptStore, memoryWebhookReceiptStore,
+  type Order, type OrderStore,
+} from '../src/server/orders.js';
 import { memorySubscriptionStore } from '../src/server/subscriptions.js';
 import { createApp } from '../src/server/app.js';
 import { validIntake } from './helpers.js';
 
 function cfg(over: Partial<StripeConfig> = {}): StripeConfig {
   return {
-    secretKey: 'sk_test_x', webhookSecret: 'whsec_x',
+    secretKey: 'sk_test_x', keyMode: 'test', webhookSecret: 'whsec_x',
     priceIds: { autopsy: 'price_a', core: 'price_c', core_bump: 'price_cb', pro: 'price_p' },
     planIds: { platform_starter: 'price_ps', platform_growth: 'price_pg', platform_pro: 'price_pp' },
-    publicBaseUrl: 'https://relaunch72.test', port: 4242, liveMode: false,
+    platformSubscriptionsEnabled: false,
+    sandboxAccessToken: '',
+    publicLeadCaptureEnabled: true,
+    publicBaseUrl: 'https://relaunch72.test', host: '127.0.0.1', port: 4242, liveMode: false,
     dataDir: os.tmpdir(),
     ordersFile: path.join(os.tmpdir(), `r72-orders-${process.pid}-${Math.round(performance.now())}.jsonl`),
     subscriptionsFile: path.join(os.tmpdir(), `r72-subs-${process.pid}-${Math.round(performance.now())}.jsonl`),
@@ -54,11 +60,13 @@ test('createCheckoutSession builds the right Stripe params and returns the URL',
 
 test('createCheckoutSession refuses an unknown or unconfigured tier', async () => {
   await assert.rejects(() => createCheckoutSession(fakeStripe([]), cfg(), { tier: 'nope' }), CheckoutError);
+  await assert.rejects(() => createCheckoutSession(fakeStripe([]), cfg(), { tier: 'core_bump' }), CheckoutError);
+  await assert.rejects(() => createCheckoutSession(fakeStripe([]), cfg(), { tier: 'pro', bump: true }), CheckoutError);
   await assert.rejects(() => createCheckoutSession(fakeStripe([]), cfg({ priceIds: { core: '' } }), { tier: 'core' }), CheckoutError);
 });
 
 test('orderFromEvent maps a completed checkout; ignores other events', () => {
-  const ev: StripeEvent = { type: 'checkout.session.completed', data: { object: { id: 'cs_1', amount_total: 99700, currency: 'usd', metadata: { tier: 'core', bump: '1' }, customer_details: { email: 'a@b.com' } } } };
+  const ev: StripeEvent = { type: 'checkout.session.completed', data: { object: { id: 'cs_1', mode: 'payment', payment_status: 'paid', amount_total: 99700, currency: 'usd', metadata: { tier: 'core', bump: '1' }, customer_details: { email: 'a@b.com' } } } };
   const o = orderFromEvent(ev, 'T')!;
   assert.equal(o.session_id, 'cs_1');
   assert.equal(o.tier, 'core');
@@ -66,6 +74,16 @@ test('orderFromEvent maps a completed checkout; ignores other events', () => {
   assert.equal(o.email, 'a@b.com');
   assert.equal(o.status, 'paid_awaiting_intake');
   assert.equal(orderFromEvent({ type: 'payment_intent.created' }, 'T'), null);
+});
+
+test('orderFromEvent refuses unpaid and subscription-mode Checkout Sessions', () => {
+  const session = { id: 'cs_1', mode: 'payment', payment_status: 'paid', metadata: { tier: 'core' } };
+  assert.equal(orderFromEvent({ type: 'checkout.session.completed', data: { object: { ...session, payment_status: 'unpaid' } } }, 'T'), null);
+  assert.equal(orderFromEvent({ type: 'checkout.session.completed', data: { object: { ...session, mode: 'subscription' } } }, 'T'), null);
+  assert.equal(orderFromEvent({ type: 'checkout.session.completed', data: { object: { ...session, id: '' } } }, 'T'), null);
+  assert.equal(orderFromEvent({ type: 'checkout.session.completed', data: { object: { ...session, metadata: {} } } }, 'T'), null);
+  assert.equal(orderFromEvent({ type: 'checkout.session.completed', data: { object: { ...session, metadata: { tier: 'mystery' } } } }, 'T'), null);
+  assert.equal(orderFromEvent({ type: 'checkout.session.completed', data: { object: { ...session, metadata: { tier: 'pro', bump: '1' } } } }, 'T'), null);
 });
 
 test('fileOrderStore records, finds, and updates by session', () => {
@@ -78,6 +96,17 @@ test('fileOrderStore records, finds, and updates by session', () => {
   assert.equal(store.find('cs_9')?.status, 'building');
   assert.equal(store.find('cs_9')?.run_dir, '/runs/x');
   assert.equal(store.find('nope'), null);
+  fs.rmSync(f, { force: true });
+});
+
+test('fileWebhookReceiptStore persists event replay receipts across reopen', () => {
+  const f = path.join(os.tmpdir(), `r72-webhooks-${process.pid}-${Math.round(performance.now())}.jsonl`);
+  const first = fileWebhookReceiptStore(f);
+  assert.equal(first.has('evt_1'), false);
+  assert.equal(first.record({ event_id: 'evt_1', type: 'checkout.session.completed', processed_at: 'T' }), true);
+  assert.equal(fileWebhookReceiptStore(f).has('evt_1'), true);
+  assert.equal(fileWebhookReceiptStore(f).record({ event_id: 'evt_1', type: 'checkout.session.completed', processed_at: 'T2' }), false);
+  assert.equal(fs.readFileSync(f, 'utf8').trim().split('\n').length, 1);
   fs.rmSync(f, { force: true });
 });
 
@@ -96,27 +125,44 @@ function res(): ServerResponse & { statusCode: number; _body: string; _headers: 
   r.end = (b?: string) => { r._body = b ?? ''; return r; };
   return r as unknown as ServerResponse & { statusCode: number; _body: string; _headers: Record<string, string> };
 }
-function memStore(): OrderStore & { data: Map<string, Order> } {
+function memStore(): OrderStore & { data: Map<string, Order>; records: Order[] } {
   const data = new Map<string, Order>();
-  return { data, record: (o) => { data.set(o.session_id, o); }, find: (id) => data.get(id) ?? null, update: (id, p) => { const c = data.get(id); if (!c) return null; const n = { ...c, ...p }; data.set(id, n); return n; } };
+  const records: Order[] = [];
+  return { data, records, record: (o) => { records.push(o); data.set(o.session_id, o); }, find: (id) => data.get(id) ?? null, update: (id, p) => { const c = data.get(id); if (!c) return null; const n = { ...c, ...p }; data.set(id, n); return n; } };
 }
 function app(over: Partial<Parameters<typeof createApp>[0]> = {}) {
   const created: Array<Record<string, unknown>> = [];
-  const kicks: Array<{ session: string | null }> = [];
+  const kicks: Array<{ session: string; product: string; through: string }> = [];
+  const kickedIntakes: Array<Record<string, unknown>> = [];
   const store = memStore();
+  const webhookReceipts = memoryWebhookReceiptStore();
   const handler = createApp({
     stripe: fakeStripe(created), cfg: cfg(), orders: store,
-    kickPipeline: (_i, session) => { kicks.push({ session }); return '/runs/kicked'; },
-    now: () => 'T', ...over,
+    kickPipeline: (_i, order, entitlement) => {
+      kickedIntakes.push(_i);
+      kicks.push({ session: order.session_id, product: entitlement.product, through: entitlement.through });
+      return '/runs/kicked';
+    },
+    now: () => 'T', webhookReceipts, ...over,
   });
-  return { handler, created, kicks, store };
+  return { handler, created, kicks, kickedIntakes, store, webhookReceipts };
 }
 
 test('GET /health reports test mode + configured', async () => {
   const { handler } = app(); const r = res();
   await handler(req('GET', '/health'), r);
   assert.equal(r.statusCode, 200);
-  assert.deepEqual(JSON.parse(r._body), { ok: true, mode: 'test', configured: true });
+  assert.deepEqual(JSON.parse(r._body), {
+    ok: true,
+    mode: 'test',
+    configured: true,
+    accepting_checkout: true,
+    blockers: [],
+    accepting_subscriptions: false,
+    subscription_blockers: ['recurring platform subscriptions are preview-only and not accepting payment'],
+    accepting_public_leads: false,
+    build_mode: 'live',
+  });
 });
 
 test('with no key: /health is up but unconfigured, and checkout/webhook 503 (deploys green)', async () => {
@@ -149,15 +195,167 @@ test('POST /api/checkout 400s an unknown tier', async () => {
 });
 
 test('POST /api/stripe/webhook records the order on a good signature, 400s a bad one', async () => {
-  const { handler, store } = app(); const r = res();
-  const ev = JSON.stringify({ type: 'checkout.session.completed', data: { object: { id: 'cs_hook', metadata: { tier: 'pro' } } } });
+  const { handler, store, webhookReceipts } = app(); const r = res();
+  const ev = JSON.stringify({ id: 'evt_hook', type: 'checkout.session.completed', data: { object: { id: 'cs_hook', mode: 'payment', payment_status: 'paid', metadata: { tier: 'pro' } } } });
   await handler(req('POST', '/api/stripe/webhook', ev, { 'stripe-signature': 'good' }), r);
   assert.equal(r.statusCode, 200);
   assert.equal(store.data.get('cs_hook')?.tier, 'pro');
+  assert.equal(webhookReceipts.has('evt_hook'), true);
 
   const r2 = res();
   await handler(req('POST', '/api/stripe/webhook', ev, { 'stripe-signature': 'bad' }), r2);
   assert.equal(r2.statusCode, 400);
+});
+
+test('API request bodies are bounded before parsing or side effects', async () => {
+  const { handler, created } = app();
+  const tooLarge = JSON.stringify({ tier: 'core', padding: 'x'.repeat(70 * 1024) });
+  const r = res();
+  await handler(req('POST', '/api/checkout', tooLarge, { 'content-length': String(Buffer.byteLength(tooLarge)) }), r);
+  assert.equal(r.statusCode, 413);
+  assert.equal(created.length, 0);
+});
+
+test('a deployed test sandbox requires its private access code on checkout and intake', async () => {
+  const token = 'private-founder-sandbox-code-123';
+  const productionTest = cfg({ production: true, sandboxAccessToken: token });
+  const { handler, created, store, kicks } = app({ cfg: productionTest });
+
+  const missing = res();
+  await handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'core' })), missing);
+  assert.equal(missing.statusCode, 401);
+  assert.equal(created.length, 0);
+
+  const wrong = res();
+  await handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'core' }), { 'x-relaunch72-sandbox-token': 'wrong' }), wrong);
+  assert.equal(wrong.statusCode, 401);
+  assert.equal(created.length, 0);
+
+  const allowed = res();
+  await handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'core' }), { 'x-relaunch72-sandbox-token': token }), allowed);
+  assert.equal(allowed.statusCode, 200);
+  assert.equal(created.length, 1);
+
+  store.record({ session_id: 'cs_private', tier: 'core', bump: false, email: 'founder@x.co', amount_total: 99700, currency: 'usd', status: 'paid_awaiting_intake', paid_at: 'T' });
+  const intake = res();
+  await handler(req('POST', '/api/intake', JSON.stringify({ ...validIntake(), consent: true, _stripe_session: 'cs_private' })), intake);
+  assert.equal(intake.statusCode, 401);
+  assert.equal(kicks.length, 0);
+  assert.equal(store.find('cs_private')?.status, 'paid_awaiting_intake');
+});
+
+test('production test readiness fails closed when the private sandbox code is absent or weak', async () => {
+  const { handler } = app({ cfg: cfg({ production: true, sandboxAccessToken: 'short' }) });
+  const r = res();
+  await handler(req('GET', '/health'), r);
+  const health = JSON.parse(r._body);
+  assert.equal(health.accepting_checkout, false);
+  assert.match(health.blockers.join(' '), /SANDBOX_ACCESS_TOKEN/);
+});
+
+test('health and checkout fail closed when any advertised one-off price is missing', async () => {
+  const partial = cfg({ priceIds: { autopsy: 'price_a', core: 'price_c', core_bump: '', pro: '' } });
+  const { handler, created } = app({ cfg: partial });
+  const h = res();
+  await handler(req('GET', '/health'), h);
+  const health = JSON.parse(h._body);
+  assert.equal(health.accepting_checkout, false);
+  assert.match(health.blockers.join(' '), /core_bump, pro/);
+
+  const c = res();
+  await handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'autopsy' })), c);
+  assert.equal(c.statusCode, 503);
+  assert.equal(created.length, 0);
+});
+
+test('subscription checkout requires both explicit opt-in and the complete recurring catalogue', async () => {
+  const disabled = app();
+  const d = res();
+  await disabled.handler(req('POST', '/api/subscription', JSON.stringify({ plan: 'platform_starter' })), d);
+  assert.equal(d.statusCode, 503);
+  assert.equal(disabled.created.length, 0);
+
+  const partial = app({ cfg: cfg({
+    platformSubscriptionsEnabled: true,
+    planIds: { platform_starter: 'price_ps', platform_growth: '', platform_pro: '' },
+  }) });
+  const p = res();
+  await partial.handler(req('POST', '/api/subscription', JSON.stringify({ plan: 'platform_starter' })), p);
+  assert.equal(p.statusCode, 503);
+  assert.match(JSON.parse(p._body).blockers.join(' '), /platform_growth, platform_pro/);
+  assert.equal(partial.created.length, 0);
+});
+
+test('POST /api/checkout accepts the Core bump only as the literal boolean true', async () => {
+  const { handler, created } = app();
+  const response = res();
+  await handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'core', bump: 'false' })), response);
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(created[0]!.line_items, [{ price: 'price_c', quantity: 1 }]);
+  assert.deepEqual(created[0]!.metadata, { tier: 'core', bump: '0' });
+});
+
+test('checkout readiness blocks missing webhook configuration and every live Stripe key', async () => {
+  const noWebhook = app({ cfg: cfg({ webhookSecret: '' }) });
+  const missing = res();
+  await noWebhook.handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'core' })), missing);
+  assert.equal(missing.statusCode, 503);
+  assert.match(missing._body, /webhook secret/i);
+
+  const live = app({ cfg: cfg({ secretKey: 'rk_live_money', keyMode: 'live', liveMode: true }) });
+  const locked = res();
+  await live.handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'core' })), locked);
+  assert.equal(locked.statusCode, 503);
+  assert.match(locked._body, /live checkout is locked/i);
+  live.store.record({ session_id: 'cs_live_external', tier: 'core', bump: false, email: null, amount_total: 99700, currency: 'gbp', status: 'paid_awaiting_intake', paid_at: 'T' });
+  const liveIntake = res();
+  await live.handler(req('POST', '/api/intake', JSON.stringify({ ...validIntake(), _stripe_session: 'cs_live_external', consent: true })), liveIntake);
+  assert.equal(liveIntake.statusCode, 503, 'an external live Payment Link cannot bypass the build lock');
+  assert.equal(live.store.find('cs_live_external')?.status, 'paid_awaiting_intake');
+
+  const unknown = app({ cfg: cfg({ secretKey: 'future_money_key', keyMode: 'unknown', liveMode: false }) });
+  const unrecognised = res();
+  await unknown.handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'core' })), unrecognised);
+  assert.equal(unrecognised.statusCode, 503);
+  assert.match(unrecognised._body, /not recognised/i);
+});
+
+test('POST /api/stripe/webhook acknowledges a replay without repeating side effects', async () => {
+  const { handler, store } = app();
+  const ev = JSON.stringify({ id: 'evt_replay', type: 'checkout.session.completed', data: { object: { id: 'cs_replay', mode: 'payment', payment_status: 'paid', metadata: { tier: 'core' } } } });
+  await handler(req('POST', '/api/stripe/webhook', ev, { 'stripe-signature': 'good' }), res());
+  const replay = res();
+  await handler(req('POST', '/api/stripe/webhook', ev, { 'stripe-signature': 'good' }), replay);
+  assert.equal(replay.statusCode, 200);
+  assert.deepEqual(JSON.parse(replay._body), { received: true, replayed: true });
+  assert.equal(store.records.length, 1);
+});
+
+test('a distinct webhook event cannot regress an already-claimed order or sync a test customer', async () => {
+  const customers: string[] = [];
+  const { handler, store } = app({ marketing: { onCustomer: async (order) => { customers.push(order.session_id); } } });
+  const paid = (eventId: string) => JSON.stringify({ id: eventId, type: 'checkout.session.completed', data: { object: {
+    id: 'cs_monotonic', mode: 'payment', payment_status: 'paid', amount_total: 99700, currency: 'usd',
+    metadata: { tier: 'core', bump: '0' }, customer_details: { email: 'buyer@x.co' },
+  } } });
+
+  await handler(req('POST', '/api/stripe/webhook', paid('evt_first'), { 'stripe-signature': 'good' }), res());
+  store.update('cs_monotonic', { status: 'building', run_dir: '/runs/already-started' });
+  await handler(req('POST', '/api/stripe/webhook', paid('evt_distinct_duplicate'), { 'stripe-signature': 'good' }), res());
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(store.find('cs_monotonic')?.status, 'building');
+  assert.equal(store.find('cs_monotonic')?.run_dir, '/runs/already-started');
+  assert.deepEqual(customers, []);
+});
+
+test('POST /api/stripe/webhook rejects a verified payload without an event id', async () => {
+  const { handler, store } = app();
+  const ev = JSON.stringify({ type: 'checkout.session.completed', data: { object: { id: 'cs_no_event', mode: 'payment', payment_status: 'paid' } } });
+  const r = res();
+  await handler(req('POST', '/api/stripe/webhook', ev, { 'stripe-signature': 'good' }), r);
+  assert.equal(r.statusCode, 400);
+  assert.equal(store.records.length, 0);
 });
 
 test('POST /api/intake accepts a full intake and kicks the build; nudges a thin one', async () => {
@@ -172,6 +370,13 @@ test('POST /api/intake accepts a full intake and kicks the build; nudges a thin 
   assert.equal(kicks[0]!.session, 'cs_paid');
   assert.equal(store.data.get('cs_paid')?.status, 'building');
 
+  const replay = res();
+  await handler(req('POST', '/api/intake', JSON.stringify(good)), replay);
+  assert.equal(replay.statusCode, 200);
+  assert.equal(JSON.parse(replay._body).duplicate, true);
+  assert.equal(JSON.parse(replay._body).run, '/runs/kicked');
+  assert.equal(kicks.length, 1, 'a repeated intake must not start another build');
+
   const thin = { A1: 'X' }; // missing almost everything
   const r2 = res();
   await handler(req('POST', '/api/intake', JSON.stringify(thin)), r2);
@@ -179,6 +384,82 @@ test('POST /api/intake accepts a full intake and kicks the build; nudges a thin 
   const b = JSON.parse(r2._body);
   assert.equal(b.accepted, false);
   assert.ok(Array.isArray(b.issues) && b.issues.length > 0);
+});
+
+test('POST /api/intake refuses a valid intake without an unconsumed paid order', async () => {
+  const provisioned: string[] = [];
+  const { handler, kicks, store } = app({ onIntakeAccepted: (_intake, email) => provisioned.push(email ?? '') });
+  const good = { ...validIntake(), consent: true };
+
+  const noSession = res();
+  await handler(req('POST', '/api/intake', JSON.stringify(good)), noSession);
+  assert.equal(noSession.statusCode, 402);
+
+  const unknown = res();
+  await handler(req('POST', '/api/intake', JSON.stringify({ ...good, _stripe_session: 'cs_unknown' })), unknown);
+  assert.equal(unknown.statusCode, 402);
+
+  store.record({ session_id: 'cs_used', tier: 'core', bump: false, email: 'buyer@x.co', amount_total: null, currency: null, status: 'nudge_returned', paid_at: 'T' });
+  const used = res();
+  await handler(req('POST', '/api/intake', JSON.stringify({ ...good, _stripe_session: 'cs_used' })), used);
+  assert.equal(used.statusCode, 409);
+  assert.equal(kicks.length, 0);
+  assert.equal(provisioned.length, 0);
+});
+
+test('POST /api/intake enforces the acknowledgement server-side before claiming payment', async () => {
+  const { handler, store, kicks } = app();
+  store.record({ session_id: 'cs_consent', tier: 'core', bump: false, email: 'buyer@x.co', amount_total: 99700, currency: 'usd', status: 'paid_awaiting_intake', paid_at: 'T' });
+  const r = res();
+  await handler(req('POST', '/api/intake', JSON.stringify({ ...validIntake(), _stripe_session: 'cs_consent', consent: false })), r);
+  assert.equal(r.statusCode, 200);
+  const body = JSON.parse(r._body);
+  assert.equal(body.accepted, false);
+  assert.equal(body.issues[0].field, 'consent');
+  assert.equal(store.find('cs_consent')?.status, 'paid_awaiting_intake');
+  assert.equal(kicks.length, 0);
+});
+
+test('POST /api/intake restores the paid entitlement after a synchronous launch failure', async () => {
+  const store = memStore();
+  store.record({ session_id: 'cs_retry', tier: 'core', bump: false, email: null, amount_total: null, currency: null, status: 'paid_awaiting_intake', paid_at: 'T' });
+  const { handler } = app({ orders: store, kickPipeline: () => { throw new Error('launch failed'); } });
+  const r = res();
+  await handler(req('POST', '/api/intake', JSON.stringify({ ...validIntake(), _stripe_session: 'cs_retry', consent: true })), r);
+  assert.equal(r.statusCode, 500);
+  assert.equal(store.find('cs_retry')?.status, 'paid_awaiting_intake');
+});
+
+test('paid product metadata controls build scope and Autopsy never provisions a full portal', async () => {
+  const provisioned: Array<string | null> = [];
+  const { handler, store, kicks } = app({ onIntakeAccepted: (_intake, email) => provisioned.push(email) });
+  store.record({ session_id: 'cs_autopsy', tier: 'autopsy', bump: false, email: 'audit@client.co', amount_total: 9700, currency: 'usd', status: 'paid_awaiting_intake', paid_at: 'T' });
+
+  const response = res();
+  await handler(req('POST', '/api/intake', JSON.stringify({ ...validIntake(), _stripe_session: 'cs_autopsy', consent: true })), response);
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(kicks, [{ session: 'cs_autopsy', product: 'autopsy', through: 'S1' }]);
+  assert.deepEqual(provisioned, [], 'Autopsy does not include the full client portal');
+});
+
+test('Core bump receives the full S1-S9 build and preserves its fulfilment product', async () => {
+  const { handler, store, kicks } = app();
+  store.record({ session_id: 'cs_bump', tier: 'core', bump: true, email: 'core@client.co', amount_total: 114400, currency: 'usd', status: 'paid_awaiting_intake', paid_at: 'T' });
+  const response = res();
+  await handler(req('POST', '/api/intake', JSON.stringify({ ...validIntake(), _stripe_session: 'cs_bump', consent: true })), response);
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(kicks, [{ session: 'cs_bump', product: 'core_bump', through: 'S9' }]);
+});
+
+test('an unknown legacy order product is not allowed to start a build', async () => {
+  const { handler, store, kicks } = app();
+  store.record({ session_id: 'cs_unknown_tier', tier: 'mystery', bump: false, email: null, amount_total: 1, currency: 'usd', status: 'paid_awaiting_intake', paid_at: 'T' });
+  const response = res();
+  await handler(req('POST', '/api/intake', JSON.stringify({ ...validIntake(), _stripe_session: 'cs_unknown_tier', consent: true })), response);
+  assert.equal(response.statusCode, 409);
+  assert.equal(store.find('cs_unknown_tier')?.status, 'paid_awaiting_intake');
+  assert.deepEqual(kicks, []);
 });
 
 test('an accepted intake fires onIntakeAccepted with the order email (portal provisioning)', async () => {
@@ -191,9 +472,56 @@ test('an accepted intake fires onIntakeAccepted with the order email (portal pro
   assert.equal(seen.length, 1);
   assert.equal(seen[0]!.email, 'buyer@client.co');
 
+  // A repeated accepted intake returns the existing run and must NOT provision again.
+  await handler(req('POST', '/api/intake', JSON.stringify(good)), res());
+  assert.equal(seen.length, 1);
+
   // A rejected (thin) intake must NOT provision.
   await handler(req('POST', '/api/intake', JSON.stringify({ A1: 'X' })), res());
   assert.equal(seen.length, 1);
+});
+
+test('portal provisioning never trusts a caller-supplied intake email', async () => {
+  const seen: Array<string | null> = [];
+  const { handler, store } = app({ onIntakeAccepted: (_intake, email) => seen.push(email) });
+  store.record({ session_id: 'cs_no_email', tier: 'core', bump: false, email: null, amount_total: null, currency: null, status: 'paid_awaiting_intake', paid_at: 'T' });
+
+  const body = { ...validIntake(), _stripe_session: 'cs_no_email', _email: 'attacker@example.com', consent: true };
+  const response = res();
+  await handler(req('POST', '/api/intake', JSON.stringify(body)), response);
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(seen, [null]);
+});
+
+test('accepted intake strips checkout capabilities and non-contract fields before every side effect', async () => {
+  const provisioned: Array<Record<string, unknown>> = [];
+  const { handler, store, kickedIntakes } = app({ onIntakeAccepted: (intake) => provisioned.push(intake) });
+  store.record({ session_id: 'cs_sanitized', tier: 'core', bump: false, email: 'verified@client.co', amount_total: 99700, currency: 'usd', status: 'paid_awaiting_intake', paid_at: 'T' });
+  const body = {
+    ...validIntake(),
+    consent: true,
+    _stripe_session: 'cs_sanitized',
+    _tier: 'pro',
+    _generated_by: 'caller-controlled',
+    _email: 'attacker@example.com',
+    extra_junk: 'must not persist',
+  };
+
+  const response = res();
+  await handler(req('POST', '/api/intake', JSON.stringify(body)), response);
+  assert.equal(response.statusCode, 200);
+  assert.equal(kickedIntakes.length, 1);
+  assert.equal(provisioned.length, 1);
+  for (const safe of [kickedIntakes[0]!, provisioned[0]!]) {
+    assert.equal(safe.A1, validIntake().A1);
+    assert.equal(safe.consent, true);
+    assert.equal('_stripe_session' in safe, false);
+    assert.equal('_tier' in safe, false);
+    assert.equal('_generated_by' in safe, false);
+    assert.equal('_email' in safe, false);
+    assert.equal('extra_junk' in safe, false);
+  }
 });
 
 // ─── CORS (the site calls this API cross-origin) ─────────────────────────────
@@ -232,20 +560,20 @@ test('POST /api/subscribe calls onLead and reports synced', async () => {
   assert.deepEqual(leads, [{ email: 'lead@x.com', firstName: 'Jo' }]);
 });
 
-test('POST /api/subscribe 400s a bad email and 200s (unsynced) when marketing is off', async () => {
+test('POST /api/subscribe 400s a bad email when enabled and 503s when delivery is off', async () => {
   const bad = res();
-  await app().handler(req('POST', '/api/subscribe', JSON.stringify({ email: 'nope' })), bad);
+  await app({ marketing: { onLead: async () => undefined } }).handler(req('POST', '/api/subscribe', JSON.stringify({ email: 'nope' })), bad);
   assert.equal(bad.statusCode, 400);
 
   const off = res(); // no marketing dep configured
   await app().handler(req('POST', '/api/subscribe', JSON.stringify({ email: 'lead@x.com' })), off);
-  assert.equal(off.statusCode, 200);
+  assert.equal(off.statusCode, 503);
   assert.equal(JSON.parse(off._body).synced, false);
 });
 
 // ─── subscriptions (recurring billing) ───────────────────────────────────────
 test('POST /api/subscription returns a subscription-mode Stripe URL', async () => {
-  const { handler, created } = app();
+  const { handler, created } = app({ cfg: cfg({ platformSubscriptionsEnabled: true }) });
   const r = res();
   await handler(req('POST', '/api/subscription', JSON.stringify({ plan: 'platform_growth', email: 'buyer@co.uk' })), r);
   assert.equal(r.statusCode, 200);
@@ -254,7 +582,7 @@ test('POST /api/subscription returns a subscription-mode Stripe URL', async () =
 });
 
 test('POST /api/subscription 400s an unknown plan', async () => {
-  const { handler } = app(); const r = res();
+  const { handler } = app({ cfg: cfg({ platformSubscriptionsEnabled: true }) }); const r = res();
   await handler(req('POST', '/api/subscription', JSON.stringify({ plan: 'bogus' })), r);
   assert.equal(r.statusCode, 400);
 });
@@ -262,7 +590,7 @@ test('POST /api/subscription 400s an unknown plan', async () => {
 test('webhook records a subscription lifecycle event when a store is wired', async () => {
   const subs = memorySubscriptionStore();
   const { handler } = app({ subscriptions: subs });
-  const ev = JSON.stringify({ type: 'customer.subscription.created', data: { object: {
+  const ev = JSON.stringify({ id: 'evt_sub_hook', type: 'customer.subscription.created', data: { object: {
     id: 'sub_hook', customer: 'cus_1', status: 'active',
     items: { data: [{ price: { id: 'price_pg' } }] }, metadata: { email: 'boss@acme.co' },
   } } });
@@ -276,21 +604,44 @@ test('webhook records a subscription lifecycle event when a store is wired', asy
 
 test('webhook without a subscription store still records the order (subscriptions optional)', async () => {
   const { handler, store } = app(); // no subscriptions dep
-  const ev = JSON.stringify({ type: 'checkout.session.completed', data: { object: { id: 'cs_ns', metadata: { tier: 'core' } } } });
+  const ev = JSON.stringify({ id: 'evt_ns', type: 'checkout.session.completed', data: { object: { id: 'cs_ns', mode: 'payment', payment_status: 'paid', metadata: { tier: 'core' } } } });
   const r = res();
   await handler(req('POST', '/api/stripe/webhook', ev, { 'stripe-signature': 'good' }), r);
   assert.equal(r.statusCode, 200);
   assert.equal(store.data.get('cs_ns')?.tier, 'core');
 });
 
-test('webhook syncs a paying customer via onCustomer', async () => {
+test('test-mode webhook never syncs an arbitrary checkout email to customer marketing', async () => {
   const customers: string[] = [];
   const { handler } = app({ marketing: { onCustomer: async (o) => { customers.push(o.email ?? ''); } } });
-  const ev = JSON.stringify({ type: 'checkout.session.completed', data: { object: { id: 'cs_m', metadata: { tier: 'core' }, customer_details: { email: 'buyer@x.com' } } } });
+  const ev = JSON.stringify({ id: 'evt_m', type: 'checkout.session.completed', data: { object: { id: 'cs_m', mode: 'payment', payment_status: 'paid', metadata: { tier: 'core' }, customer_details: { email: 'buyer@x.com' } } } });
   const r = res();
   await handler(req('POST', '/api/stripe/webhook', ev, { 'stripe-signature': 'good' }), r);
   assert.equal(r.statusCode, 200);
-  // onCustomer is fire-and-forget; let the microtask run before asserting.
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(customers, ['buyer@x.com']);
+  assert.deepEqual(customers, []);
+});
+
+test('live and unknown Stripe webhooks are acknowledged but quarantined without side effects', async () => {
+  for (const lockedCfg of [
+    cfg({ secretKey: 'sk_live_money', keyMode: 'live', liveMode: true }),
+    cfg({ secretKey: 'future_money_key', keyMode: 'unknown', liveMode: false }),
+  ]) {
+    const customers: string[] = [];
+    const subs = memorySubscriptionStore();
+    const { handler, store, webhookReceipts } = app({
+      cfg: lockedCfg,
+      subscriptions: subs,
+      marketing: { onCustomer: async (o) => { customers.push(o.email ?? ''); } },
+    });
+    const ev = JSON.stringify({ id: `evt_locked_${lockedCfg.keyMode}`, type: 'checkout.session.completed', data: { object: {
+      id: `cs_locked_${lockedCfg.keyMode}`, mode: 'payment', payment_status: 'paid', metadata: { tier: 'core' }, customer_details: { email: 'victim@example.com' },
+    } } });
+    const r = res();
+    await handler(req('POST', '/api/stripe/webhook', ev, { 'stripe-signature': 'good' }), r);
+    assert.equal(r.statusCode, 200);
+    assert.equal(JSON.parse(r._body).quarantined, true);
+    assert.equal(store.records.length, 0);
+    assert.equal(customers.length, 0);
+    assert.equal(webhookReceipts.has(`evt_locked_${lockedCfg.keyMode}`), true);
+  }
 });

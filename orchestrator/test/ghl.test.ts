@@ -33,10 +33,11 @@ test('ghlRunner ensures the sub-account and pushes an artifact per due action', 
   // 2026-08-03 is a Monday → daily social + weekly cluster both due.
   const res = await runTick(roster, '2026-08-03', ghlRunner(ghl));
   assert.equal(res.entries.length, 2);
-  assert.ok(res.entries.every((e) => e.status === 'ok'));
+  assert.ok(res.entries.every((e) => e.status === 'skipped'), 'mock GHL work must not be recorded as live success');
   // Location created once, reused for the second action.
   assert.equal(ghl.locations.size, 1);
   assert.equal(ghl.artifacts.length, 2);
-  assert.match(res.entries[0]!.note ?? '', /ghl\[mock\]/);
-  assert.match(res.entries.find((e) => e.action === 'content_cluster')!.note ?? '', /content_cluster → ghl-loc-a/);
+  assert.match(res.entries[0]!.note ?? '', /simulation only.*ghl\[mock\]/i);
+  assert.match(res.entries[0]!.note ?? '', /nothing was scheduled or published/i);
+  assert.match(res.entries.find((e) => e.action === 'content_cluster')!.note ?? '', /content_cluster draft record → ghl-loc-a/);
 });

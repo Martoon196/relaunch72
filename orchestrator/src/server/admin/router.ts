@@ -15,12 +15,23 @@ import {
 import { listRuns, getRunDetail, readDeliverable, listOrders } from './store.js';
 import { loginPage, dashboardPage, runDetailPage, renderDeliverable } from './views.js';
 import { approve, sendBack, SignoffError, bundleStatusFor, type BundleLike } from '../../signoff/signoff.js';
+import { InMemoryLoginThrottle } from '../../portal/session.js';
 
 const RUN_ID = /^[A-Za-z0-9._-]+$/;
+const DEFAULT_ADMIN_LOGIN_THROTTLE = new InMemoryLoginThrottle();
 
-function sendHtml(res: ServerResponse, code: number, body: string, cookie?: string): void {
-  const headers: Record<string, string> = { 'content-type': 'text/html; charset=utf-8', 'content-length': String(Buffer.byteLength(body)) };
+function sendHtml(res: ServerResponse, code: number, body: string, cookie?: string, extra: Record<string, string> = {}): void {
+  const headers: Record<string, string> = {
+    'content-type': 'text/html; charset=utf-8',
+    'content-length': String(Buffer.byteLength(body)),
+    'cache-control': 'no-store',
+    'referrer-policy': 'no-referrer',
+    'x-content-type-options': 'nosniff',
+    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    'permissions-policy': 'camera=(), microphone=(), geolocation=()',
+  };
   if (cookie) headers['set-cookie'] = cookie;
+  Object.assign(headers, extra);
   res.writeHead(code, headers);
   res.end(body);
 }
@@ -33,18 +44,43 @@ function redirect(res: ServerResponse, to: string, cookie?: string): void {
 function readForm(req: IncomingMessage): Promise<Record<string, string>> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
-    req.on('data', (c: Buffer) => chunks.push(c));
+    let size = 0;
+    let settled = false;
+    const finish = (value: Record<string, string>): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    req.on('data', (c: Buffer) => {
+      size += c.length;
+      if (size > 64 * 1024) { chunks.length = 0; finish({}); return; }
+      if (!settled) chunks.push(c);
+    });
     req.on('end', () => {
+      if (settled) return;
       const out: Record<string, string> = {};
       new URLSearchParams(Buffer.concat(chunks).toString('utf8')).forEach((v, k) => { out[k] = v; });
-      resolve(out);
+      finish(out);
     });
-    req.on('error', () => resolve({}));
+    req.on('error', () => finish({}));
   });
 }
 
+function loginSource(req: IncomingMessage): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  return (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim()
+    || req.socket?.remoteAddress
+    || 'unknown';
+}
+
 /** Handle a request under /admin. Returns nothing — always writes a response. */
-export async function handleAdmin(req: IncomingMessage, res: ServerResponse, cfg: StripeConfig, runsDir: string = RUNS_DIR): Promise<void> {
+export async function handleAdmin(
+  req: IncomingMessage,
+  res: ServerResponse,
+  cfg: StripeConfig,
+  runsDir: string = RUNS_DIR,
+  loginThrottle: Pick<InMemoryLoginThrottle, 'check' | 'failure' | 'success'> = DEFAULT_ADMIN_LOGIN_THROTTLE,
+): Promise<void> {
   if (!cfg.adminPassword) { sendHtml(res, 404, '<h1>Admin is disabled</h1><p>Set ADMIN_PASSWORD to enable the control room.</p>'); return; }
 
   const url = new URL(req.url ?? '/', 'http://localhost');
@@ -57,10 +93,20 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, cfg
   // ── login / logout (no auth required) ──
   if (p === '/admin/login' && method === 'GET') { sendHtml(res, 200, loginPage()); return; }
   if (p === '/admin/login' && method === 'POST') {
+    const throttleKey = `source:${loginSource(req)}`;
+    const throttle = loginThrottle.check(throttleKey, now);
+    if (!throttle.allowed) {
+      sendHtml(res, 429, loginPage('Too many login attempts. Try again later.'), undefined, {
+        'retry-after': String(throttle.retryAfterSeconds),
+      });
+      return;
+    }
     const form = await readForm(req);
     if (passwordOk(form.password ?? '', cfg.adminPassword)) {
+      loginThrottle.success(throttleKey);
       redirect(res, '/admin', sessionCookie(signSession(cfg.sessionSecret, now), secure));
     } else {
+      loginThrottle.failure(throttleKey, now);
       sendHtml(res, 401, loginPage('Wrong password.'));
     }
     return;

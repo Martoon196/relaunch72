@@ -14,8 +14,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { Intake } from '../types.js';
-import { loadStripeConfig } from './config.js';
-import { fileOrderStore } from './orders.js';
+import { loadStripeConfig, portalProvisioningEnabled } from './config.js';
+import { fileOrderStore, type Order } from './orders.js';
 import { fileSubscriptionStore } from './subscriptions.js';
 import { createApp, type MarketingHooks } from './app.js';
 import { makeStripe } from './stripe-client.js';
@@ -26,23 +26,46 @@ import { makeBrevo } from '../email/brevo.js';
 import { buildPortalDeps } from '../portal/provision.js';
 import { loginEmail } from '../portal/emails.js';
 import { makePostmark } from '../email/postmark.js';
+import type { BuildEntitlement } from './entitlements.js';
+import { customerOutboundMessagingEnabled, runtimeSafetyPolicy, subscriptionCheckoutBlockers } from './readiness.js';
+import { canonicalIntake } from '../intake/canonical.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ORCH_ROOT = path.resolve(HERE, '../..');
 const CLI = path.join(ORCH_ROOT, 'src', 'cli.ts');
 
-/** Persist the accepted intake under `dataDir` and spawn the build detached. */
-function createKick(intakeDir: string) {
-  return function kickPipeline(intake: Intake, sessionId: string | null): string {
+/** Persist the accepted intake + immutable paid scope, then spawn the build. */
+function createKick(intakeDir: string, opts: { mockOnly: boolean; maxConcurrent: number }) {
+  let activeBuilds = 0;
+  return function kickPipeline(intake: Intake, order: Order, entitlement: BuildEntitlement): string {
+    if (activeBuilds >= opts.maxConcurrent) throw new Error('test build concurrency limit reached; try again after a current build finishes');
+    const safeIntake = canonicalIntake(intake);
     fs.mkdirSync(intakeDir, { recursive: true });
-    const ref = `${sessionId ?? 'intake'}-${Date.now()}`;
+    const ref = `${order.session_id}-${Date.now()}`;
     const file = path.join(intakeDir, `${ref}.json`);
-    fs.writeFileSync(file, JSON.stringify(intake, null, 2), 'utf8');
-    console.log(`▶ Intake accepted — kicking pipeline for ${ref}`);
+    fs.writeFileSync(file, JSON.stringify(safeIntake, null, 2), 'utf8');
+    const jobFile = path.join(intakeDir, `${ref}.job.json`);
+    fs.writeFileSync(jobFile, JSON.stringify({
+      version: 1,
+      created_at: new Date().toISOString(),
+      stripe_session_id: order.session_id,
+      product: entitlement.product,
+      through: entitlement.through,
+      portal_access: entitlement.portalAccess,
+      manual_fulfilment: entitlement.manualFulfilment,
+      execution_mode: opts.mockOnly ? 'mock' : 'live',
+      intake_file: file,
+    }, null, 2), 'utf8');
+    console.log(`▶ Intake accepted — kicking ${opts.mockOnly ? 'MOCK ' : ''}${entitlement.product} pipeline through ${entitlement.through} for ${ref}`);
     // inherit stdout/stderr so the build's progress + errors show in the host logs
     // (was 'ignore', which made every build invisible).
-    const child = spawn('npx', ['tsx', CLI, '--input', file], { cwd: ORCH_ROOT, detached: true, stdio: ['ignore', 'inherit', 'inherit'] });
-    child.on('exit', (code) => console.log(`■ Pipeline for ${ref} exited (code ${code ?? 'null'})`));
+    activeBuilds += 1;
+    const args = ['tsx', CLI, '--input', file, '--through', entitlement.through, ...(opts.mockOnly ? ['--mock'] : [])];
+    const child = spawn('npx', args, { cwd: ORCH_ROOT, detached: true, stdio: ['ignore', 'inherit', 'inherit'] });
+    let released = false;
+    const release = (): void => { if (!released) { released = true; activeBuilds -= 1; } };
+    child.on('error', (error) => { release(); console.error(`■ Pipeline for ${ref} failed to start: ${error.message}`); });
+    child.on('exit', (code) => { release(); console.log(`■ Pipeline for ${ref} exited (code ${code ?? 'null'})`); });
     child.unref();
     return file;
   };
@@ -68,17 +91,19 @@ async function ensurePrices(stripe: StripeLike, cfg: StripeConfig): Promise<void
       console.log(`Catalog ready — ${created.length} created, ${reused.length} reused.`);
     }
   } catch (e) {
-    console.warn(`⚠  Stripe price auto-provision failed: ${(e as Error).message}. Checkout will 400 until it succeeds — restart the service, or set STRIPE_PRICE_* manually.`);
+    console.warn(`⚠  Stripe price auto-provision failed: ${(e as Error).message}. Checkout will remain unavailable (503) until it succeeds — restart the service, or set STRIPE_PRICE_* manually.`);
   }
-  try {
-    const { priceIds, provisioned, created, reused } = await ensurePlanPrices(
-      stripe as unknown as StripeCatalogLike, cfg.planIds, 'usd', (m) => console.log('  ' + m));
-    if (provisioned) {
-      Object.assign(cfg.planIds, priceIds);
-      console.log(`Plans ready — ${created.length} created, ${reused.length} reused.`);
+  if (cfg.platformSubscriptionsEnabled) {
+    try {
+      const { priceIds, provisioned, created, reused } = await ensurePlanPrices(
+        stripe as unknown as StripeCatalogLike, cfg.planIds, 'usd', (m) => console.log('  ' + m));
+      if (provisioned) {
+        Object.assign(cfg.planIds, priceIds);
+        console.log(`Preview plans ready — ${created.length} created, ${reused.length} reused.`);
+      }
+    } catch (e) {
+      console.warn(`⚠  Stripe plan auto-provision failed: ${(e as Error).message}. Subscription checkout will stay unavailable.`);
     }
-  } catch (e) {
-    console.warn(`⚠  Stripe plan auto-provision failed: ${(e as Error).message}. Subscription checkout will 400 until it succeeds — restart the service, or set STRIPE_PLAN_* manually.`);
   }
 }
 
@@ -109,67 +134,100 @@ async function main(): Promise<void> {
   const stripe = cfg.secretKey ? (makeStripe(cfg.secretKey) as unknown as StripeLike) : unconfiguredStripe();
   const orders = fileOrderStore(cfg.ordersFile);
   const subscriptions = fileSubscriptionStore(cfg.subscriptionsFile);
-  const kickPipeline = createKick(path.join(cfg.dataDir, 'intakes'));
-  const marketing = makeMarketing();
+  const runtimePolicy = runtimeSafetyPolicy(cfg);
+  const forceMockBuilds = runtimePolicy.forceMockBuilds;
+  const maxConcurrent = runtimePolicy.maxConcurrentBuilds;
+  const kickPipeline = createKick(path.join(cfg.dataDir, 'intakes'), { mockOnly: forceMockBuilds, maxConcurrent });
+  // Stripe test-mode addresses are arbitrary input, not verified customers.
+  // Keep every real outbound rail locked until live checkout provenance is
+  // durable; this currently disables Brevo and Postmark in the sandbox.
+  const allowCustomerOutbound = customerOutboundMessagingEnabled(cfg);
+  const marketing = allowCustomerOutbound ? makeMarketing() : undefined;
+  if (!allowCustomerOutbound && (process.env.BREVO_API_KEY?.trim() || process.env.POSTMARK_SERVER_TOKEN?.trim())) {
+    console.warn('⚠  Customer outbound messaging is locked in this payment mode; configured Brevo/Postmark credentials will not be used.');
+  }
 
-  // Email the login on a new signup, if Postmark is configured (else just log it).
-  const postmarkToken = process.env.POSTMARK_SERVER_TOKEN?.trim();
-  const portalUrl = `${cfg.publicBaseUrl}/portal`;
-  const onProvisioned = postmarkToken
+  // Email a one-time account setup link on a new signup. Setup credentials are
+  // never written to logs, including when Postmark is not configured.
+  const postmarkToken = allowCustomerOutbound ? process.env.POSTMARK_SERVER_TOKEN?.trim() : undefined;
+  // PUBLIC_BASE_URL is the separately hosted funnel/Stripe return origin. The
+  // setup link must instead point at the service/domain that actually mounts /portal.
+  const portalBaseUrl = process.env.PORTAL_BASE_URL?.trim() || (!cfg.production ? cfg.publicBaseUrl : undefined);
+  const canAutoProvisionPortal = portalProvisioningEnabled(Boolean(cfg.production), postmarkToken, portalBaseUrl);
+  if (!canAutoProvisionPortal) {
+    console.warn('⚠  Portal auto-provisioning disabled: POSTMARK_SERVER_TOKEN and PORTAL_BASE_URL are required to deliver valid one-time setup links in production.');
+  }
+  const onProvisioned = postmarkToken && portalBaseUrl
     ? async (r: import('../portal/provision.js').ProvisionResult): Promise<void> => {
-        const msg = loginEmail({ to: r.email, tenantName: r.name, loginEmail: r.email, password: r.password, portalUrl, from: process.env.EMAIL_FROM?.trim() });
+        const setupUrl = new URL('/portal/setup', portalBaseUrl!);
+        setupUrl.searchParams.set('token', r.setupToken);
+        const msg = loginEmail({ to: r.email, tenantName: r.name, setupUrl: setupUrl.toString(), generated: r.generated, from: process.env.EMAIL_FROM?.trim() });
         const sent = await makePostmark(postmarkToken).send(msg);
-        console.log(`✉  Login email sent to ${r.email} (id ${sent.messageId})`);
+        console.log(`✉  Account setup email sent to ${r.email} (id ${sent.messageId})`);
       }
     : undefined;
 
-  // Billing UI wiring — checkout + manage-portal URLs, only when a key is present.
-  const subscribeUrl = cfg.secretKey
+  // Billing UI uses exactly the same readiness gate as /api/subscription. The
+  // default is a non-purchasable plan preview while the platform is unfinished.
+  const subscriptionBlockers = subscriptionCheckoutBlockers(cfg);
+  const subscribeUrl = subscriptionBlockers.length === 0
     ? async (plan: string, email: string | null): Promise<string> => (await createSubscriptionCheckout(stripe, cfg, { plan, email: email ?? undefined })).url
     : undefined;
-  const manageUrl = cfg.secretKey
+  if (subscriptionBlockers.length) console.warn(`⚠  Platform subscription checkout disabled: ${subscriptionBlockers.join('; ')}`);
+  const manageUrl = cfg.keyMode === 'test'
     ? async (customerId: string): Promise<string> => createBillingPortalUrl(stripe, cfg, customerId)
     : undefined;
   // Enforce an active subscription before "Run this week" only if explicitly turned on.
   const billingEnforced = /^(1|true|yes)$/i.test(process.env.BILLING_ENFORCED?.trim() ?? '');
 
   // Client portal — optional; a failure here must never stop the payments server.
+  const allowDemoSeed = runtimePolicy.allowDemoSeed;
   let bundle;
   try {
     bundle = await buildPortalDeps({
       dataDir: cfg.dataDir,
       sessionSecret: cfg.sessionSecret,
-      secure: cfg.publicBaseUrl.startsWith('https'),
+      secure: Boolean(cfg.production) || Boolean(portalBaseUrl?.startsWith('https://')),
       demoEmail: process.env.PORTAL_DEMO_EMAIL?.trim(),
       demoPassword: process.env.PORTAL_DEMO_PASSWORD?.trim(),
       demoRunDir: process.env.PORTAL_DEMO_RUNDIR?.trim(),
+      allowDemoSeed,
       onProvisioned,
+      requireSetupDelivery: Boolean(cfg.production),
       subscriptions,
       subscribeUrl,
       manageUrl,
       billingEnforced,
     });
-    console.log(`Client portal mounted at /portal — demo login: ${process.env.PORTAL_DEMO_EMAIL?.trim() || 'owner@frayne-electrical.co.uk'}`);
+    console.log(cfg.production
+      ? 'Client portal mounted at /portal — production demo seeding disabled.'
+      : allowDemoSeed
+        ? `Client portal mounted at /portal — explicit development demo: ${process.env.PORTAL_DEMO_EMAIL?.trim() || 'owner@frayne-electrical.co.uk'}`
+        : 'Client portal mounted at /portal — development demo seeding disabled.');
   } catch (e) {
     console.warn(`⚠  Client portal not mounted: ${(e as Error).message}`);
   }
 
   // On an accepted intake, provision that customer's portal login in the background.
-  const onIntakeAccepted = bundle
+  const onIntakeAccepted = bundle && canAutoProvisionPortal
     ? (intake: Intake, email: string | null): void => {
         if (!email) return;
         void bundle!.provision({ email, name: String(intake.A1 ?? 'Your business'), intake })
-          .then((r) => console.log(`▶ Portal login ${r.existing ? 'exists' : 'provisioned'} for ${r.email}${r.existing ? '' : ` — temp password: ${r.password}`}${r.generated ? '' : ' [brand brain deferred]'}`))
+          .then((r) => console.log(`▶ Portal account ${r.existing ? 'exists' : 'provisioned'} for ${r.email}${r.generated ? '' : ' [brand brain deferred]'}${!r.existing && !postmarkToken ? ' [development only: setup email not delivered]' : ''}`))
           .catch((err) => console.warn(`Portal provision failed for ${email}: ${(err as Error).message}`));
       }
     : undefined;
 
-  const app = createApp({ stripe, cfg, orders, subscriptions, kickPipeline, now: () => new Date().toISOString(), marketing, portal: bundle?.portal, onIntakeAccepted });
-  http.createServer((req, res) => { void app(req, res); }).listen(cfg.port, () => {
-    const mode = !cfg.secretKey ? 'UNCONFIGURED' : cfg.liveMode ? 'LIVE ⚠️' : 'TEST';
-    console.log(`Relaunch72 payments server on :${cfg.port} — ${mode} mode`);
-    // With a key but no manual price IDs, provision the catalog now (idempotent).
-    if (cfg.secretKey) void ensurePrices(stripe, cfg);
+  const buildBlockers = forceMockBuilds || process.env.ANTHROPIC_API_KEY?.trim() ? [] : ['Anthropic build key is not configured'];
+  const app = createApp({ stripe, cfg, orders, subscriptions, kickPipeline, buildBlockers, buildMode: forceMockBuilds ? 'mock' : 'live', now: () => new Date().toISOString(), marketing, portal: bundle?.portal, onIntakeAccepted });
+  http.createServer((req, res) => { void app(req, res); }).listen(cfg.port, cfg.host, () => {
+    const mode = cfg.keyMode === 'live' ? 'LIVE LOCKED ⚠️' : cfg.keyMode.toUpperCase();
+    console.log(`Relaunch72 payments server on ${cfg.host}:${cfg.port} — ${mode} mode`);
+    // Automatic catalog writes are test-mode only. Live Stripe remains entirely
+    // untouched until the durable platform is ready and the founder explicitly
+    // runs the catalog setup workflow.
+    if (cfg.keyMode === 'test') void ensurePrices(stripe, cfg);
+    else if (cfg.keyMode === 'live') console.warn('⚠  Live Stripe catalog provisioning is locked; no products or prices were changed.');
   });
 }
 

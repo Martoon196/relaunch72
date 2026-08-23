@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { handlePortal, type PortalDeps } from '../src/portal/router.js';
-import { signTenant, PORTAL_COOKIE } from '../src/portal/session.js';
+import { signTenant, PORTAL_COOKIE, InMemoryLoginThrottle } from '../src/portal/session.js';
 import type { DashboardData } from '../src/portal/data.js';
 import type { BillingView } from '../src/portal/billing.js';
 
@@ -80,9 +80,58 @@ test('POST /portal/login with bad credentials 401s and re-shows the form', async
   assert.match(res.body, /Wrong email or password/);
 });
 
+test('one-time setup chooses a password, signs in and rejects an already-used token', async () => {
+  const seen: Array<{ token: string; password: string; now: number }> = [];
+  let available = true;
+  const d = deps({
+    completeSetup: async (token, password, now) => {
+      seen.push({ token, password, now });
+      if (!available || token !== 'one-use') return null;
+      available = false;
+      return 't1';
+    },
+  });
+  const page = await call('GET', '/portal/setup?token=one-use', d);
+  assert.equal(page.statusCode, 200);
+  assert.match(page.body, /Choose your password/);
+  assert.equal(page.headers['cache-control'], 'no-store');
+
+  const first = await call('POST', '/portal/setup', d, { body: 'token=one-use&password=a-secure-password&confirm=a-secure-password' });
+  assert.equal(first.statusCode, 302);
+  assert.equal(first.headers.location, '/portal');
+  assert.match(first.headers['set-cookie'] ?? '', new RegExp(PORTAL_COOKIE + '='));
+  assert.deepEqual(seen[0], { token: 'one-use', password: 'a-secure-password', now: 1_000_000 });
+
+  const reused = await call('POST', '/portal/setup', d, { body: 'token=one-use&password=a-secure-password&confirm=a-secure-password' });
+  assert.equal(reused.statusCode, 400);
+  assert.match(reused.body, /expired or has already been used/i);
+});
+
+test('login throttles repeated failures without revealing whether an account exists', async () => {
+  const d = deps({ loginThrottle: new InMemoryLoginThrottle(2, 60_000, 60_000) });
+  assert.equal((await call('POST', '/portal/login', d, { body: 'email=owner%40frayne.co&password=bad' })).statusCode, 401);
+  assert.equal((await call('POST', '/portal/login', d, { body: 'email=owner%40frayne.co&password=bad' })).statusCode, 401);
+  const blocked = await call('POST', '/portal/login', d, { body: 'email=owner%40frayne.co&password=good' });
+  assert.equal(blocked.statusCode, 429);
+  assert.equal(blocked.headers['retry-after'], '60');
+  assert.match(blocked.body, /Too many login attempts/i);
+});
+
+test('login throttle enforces a hard identifier cap under unique-key spraying', () => {
+  const throttle = new InMemoryLoginThrottle(1, 60_000, 60_000, 2);
+  throttle.failure('one', 1_000);
+  throttle.failure('two', 1_000);
+  throttle.failure('three', 1_000); // evicts insertion-order oldest to stay bounded
+  assert.equal(throttle.check('one', 1_000).allowed, true);
+  assert.equal(throttle.check('two', 1_000).allowed, false);
+  assert.equal(throttle.check('three', 1_000).allowed, false);
+});
+
 test('GET /portal with a valid session renders that tenant’s dashboard', async () => {
   const res = await call('GET', '/portal', deps(), { cookie: cookieFor('t1') });
   assert.equal(res.statusCode, 200);
+  assert.equal(res.headers['cache-control'], 'no-store');
+  assert.match(res.headers['content-security-policy'] ?? '', /frame-ancestors 'none'/);
   assert.match(res.body, /Frayne Electrical/);
   assert.match(res.body, /Priya Nair/);
 });
@@ -112,9 +161,10 @@ test('the dashboard shows a billing card when a billing resolver is wired', asyn
 test('GET /portal/billing renders the plans screen', async () => {
   const res = await call('GET', '/portal/billing', deps({ billing: async () => billingView() }), { cookie: cookieFor('t1') });
   assert.equal(res.statusCode, 200);
-  assert.match(res.body, /Choose a plan/);
+  assert.match(res.body, /Planned tiers/);
   assert.match(res.body, /\$299\/mo/);
-  assert.match(res.body, /action="\/portal\/subscribe"/);
+  assert.doesNotMatch(res.body, /action="\/portal\/subscribe"/);
+  assert.match(res.body, /Checkout paused/);
 });
 
 test('GET /portal/billing 404s when billing is not enabled', async () => {
@@ -140,6 +190,18 @@ test('POST /portal/subscribe redirects back with an error when checkout throws',
   const res = await call('POST', '/portal/subscribe', d, { cookie: cookieFor('t1'), body: 'plan=nope' });
   assert.equal(res.statusCode, 302);
   assert.equal(res.headers.location, '/portal/billing?error=1');
+});
+
+test('POST /portal/subscribe never creates a second subscription for an active customer', async () => {
+  let checkouts = 0;
+  const d = deps({
+    billing: async () => billingView({ status: 'active', active: true, customerId: 'cus_existing' }),
+    subscribeUrl: async () => { checkouts++; return 'https://pay.stripe.test/should-not-happen'; },
+  });
+  const res = await call('POST', '/portal/subscribe', d, { cookie: cookieFor('t1'), body: 'plan=platform_pro' });
+  assert.equal(res.statusCode, 302);
+  assert.equal(res.headers.location, '/portal/billing?active=1');
+  assert.equal(checkouts, 0);
 });
 
 test('POST /portal/manage opens the Stripe billing portal for the customer', async () => {

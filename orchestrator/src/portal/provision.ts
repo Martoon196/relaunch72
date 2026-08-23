@@ -10,6 +10,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { JsonCrmStore } from '../crm/store.js';
 import { JsonAccountStore, type AccountStore } from './accounts.js';
+import { InMemoryLoginThrottle } from './session.js';
 import { makeDashboard } from './data.js';
 import { makeBilling } from './billing.js';
 import { generateBrandBrain, runTickReal } from './run.js';
@@ -17,6 +18,7 @@ import { FIXTURES_DIR } from '../paths.js';
 import type { Intake } from '../types.js';
 import type { PortalDeps } from './router.js';
 import type { SubscriptionStore } from '../server/subscriptions.js';
+import { canonicalIntake } from '../intake/canonical.js';
 
 export interface ProvisionArgs {
   email: string;
@@ -27,8 +29,9 @@ export interface ProvisionResult {
   tenantId: string;
   name: string;
   email: string;
-  /** The generated temp password (deliver to the customer; not stored in clear). */
-  password: string;
+  /** One-use, high-entropy setup token. Deliver it only in the setup email. */
+  setupToken: string;
+  setupExpiresAt: string;
   /** True if the brand brain generated; false = login works, artifacts deferred. */
   generated: boolean;
   /** True if this email already had an account (no new tenant created). */
@@ -42,8 +45,8 @@ function tenantIdFor(name: string, email: string): string {
   const h = crypto.createHash('sha256').update(email.toLowerCase()).digest('hex').slice(0, 6);
   return `t-${slug(name)}-${h}`;
 }
-function tempPassword(): string {
-  return crypto.randomBytes(9).toString('base64url'); // 12 url-safe chars
+function setupToken(): string {
+  return crypto.randomBytes(32).toString('base64url');
 }
 
 /** Turn a signup into a working portal login with a generated brand brain. */
@@ -56,24 +59,36 @@ export async function provisionTenant(
   const email = args.email.trim().toLowerCase();
   const tenantId = tenantIdFor(args.name, email);
 
-  if (await accounts.has(email)) {
-    return { tenantId, name: args.name, email, password: '', generated: fs.existsSync(path.join(dataDir, 'portal-runs', tenantId, 's3.json')), existing: true };
+  const existingAccount = await accounts.findByEmail(email);
+  if (existingAccount) {
+    const existingTenant = await store.getTenant(existingAccount.tenantId);
+    const existingRunDir = existingTenant?.runDir ?? path.join(dataDir, 'portal-runs', existingAccount.tenantId);
+    return {
+      tenantId: existingAccount.tenantId,
+      name: existingTenant?.name ?? args.name,
+      email,
+      setupToken: '',
+      setupExpiresAt: '',
+      generated: fs.existsSync(path.join(existingRunDir, 's3.json')),
+      existing: true,
+    };
   }
 
   let runDir: string | undefined = path.join(dataDir, 'portal-runs', tenantId);
   let generated = true;
   try {
-    await generateBrandBrain(args.intake, runDir);
+    await generateBrandBrain(canonicalIntake(args.intake), runDir);
   } catch {
     generated = false;
     runDir = undefined; // login still works; the dashboard shows the CRM only
   }
 
   await store.upsertTenant({ id: tenantId, name: args.name, runDir });
-  const password = tempPassword();
-  await accounts.create(email, tenantId, password);
+  const token = setupToken();
+  const setupExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  await accounts.createPending(email, tenantId, token, setupExpiresAt);
   if (generated) await runTickReal(store, tenantId); // record the first run to the timeline
-  return { tenantId, name: args.name, email, password, generated, existing: false };
+  return { tenantId, name: args.name, email, setupToken: token, setupExpiresAt, generated, existing: false };
 }
 
 export interface PortalConfig {
@@ -83,8 +98,12 @@ export interface PortalConfig {
   demoEmail?: string;
   demoPassword?: string;
   demoRunDir?: string;
-  /** Called after a NEW tenant is provisioned (e.g. email the login). Never blocks provisioning. */
+  /** Development/test fixture only. Production wiring must set this false. */
+  allowDemoSeed?: boolean;
+  /** Called after a NEW tenant is provisioned (e.g. deliver its setup link). */
   onProvisioned?: (result: ProvisionResult) => Promise<void>;
+  /** Roll back a pending login and reject provisioning if setup delivery fails. */
+  requireSetupDelivery?: boolean;
   /** Subscription store to drive the portal billing screen; absent = billing UI off. */
   subscriptions?: SubscriptionStore;
   /** Start a plan checkout (wired to Stripe in index.ts); returns the URL to redirect to. */
@@ -104,8 +123,8 @@ export async function buildPortalDeps(cfg: PortalConfig): Promise<PortalBundle> 
   const store = new JsonCrmStore(path.join(cfg.dataDir, 'portal-crm.json'));
   const accounts = new JsonAccountStore(path.join(cfg.dataDir, 'portal-accounts.json'));
 
-  // Seed the demo tenant + its account once (only if there are no tenants yet).
-  if ((await store.listTenants()).length === 0) {
+  // Seed the demo tenant only in explicitly allowed development/test contexts.
+  if (cfg.allowDemoSeed === true && (await store.listTenants()).length === 0) {
     const email = (cfg.demoEmail ?? 'owner@frayne-electrical.co.uk').toLowerCase();
     let runDir = cfg.demoRunDir;
     if (!runDir) {
@@ -138,6 +157,8 @@ export async function buildPortalDeps(cfg: PortalConfig): Promise<PortalBundle> 
     sessionSecret: cfg.sessionSecret,
     secure: cfg.secure,
     login: (e, pw) => accounts.verify(e, pw),
+    completeSetup: (token, password, now) => accounts.completeSetup(token, password, now),
+    loginThrottle: new InMemoryLoginThrottle(),
     dashboard: makeDashboard(store, (t) => t.runDir),
     runTick: (tid) => runTickReal(store, tid),
     billing,
@@ -147,9 +168,15 @@ export async function buildPortalDeps(cfg: PortalConfig): Promise<PortalBundle> 
   };
   const provision = async (args: ProvisionArgs): Promise<ProvisionResult> => {
     const result = await provisionTenant(store, accounts, cfg.dataDir, args);
-    if (!result.existing && result.password && cfg.onProvisioned) {
+    if (!result.existing && result.setupToken && cfg.onProvisioned) {
       try { await cfg.onProvisioned(result); }
-      catch (e) { console.warn(`onProvisioned failed for ${result.email}: ${(e as Error).message}`); }
+      catch (e) {
+        if (cfg.requireSetupDelivery) {
+          await accounts.discardPending(result.email, result.setupToken);
+          throw new Error(`account setup delivery failed for ${result.email}: ${(e as Error).message}`);
+        }
+        console.warn(`onProvisioned failed for ${result.email}: ${(e as Error).message}`);
+      }
     }
     return result;
   };

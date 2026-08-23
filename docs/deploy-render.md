@@ -1,119 +1,138 @@
-# Deploying the payments API to Render
+# Deploying the Relaunch72 test payments API to Render
 
-The static funnel (landing, scorecard, autopsy, checkout, intake) is already live on
-GitHub Pages at **relaunch72.com**. That's just HTML — it can't take a card. This guide
-stands up the **payments API** (`orchestrator/src/server`) on Render so checkout creates
-a real Stripe Checkout Session and auto-kicks the build on payment.
+This blueprint creates a **test-only sandbox** for the static funnel at
+`relaunch72.com`. It can exercise Stripe test checkout, verified webhooks, paid
+entitlement claiming, intake QA and the current pipeline.
 
-Everything below is **TEST MODE** (hard rule #2). No real money moves until you swap in
-`sk_live_…` keys — see the last section.
+It is deliberately **not a live-money deployment guide**. Live and unknown Stripe
+keys activate hardened mode and checkout remains locked until the PostgreSQL
+durable-job foundation is implemented and verified.
 
-Boundaries: the code + blueprint are done. The steps here are the dashboard/account
-actions only you can do (Render account, Stripe account, DNS). None of them are code.
+## Current boundary
 
----
-
-## What you're building
-
-```
- relaunch72.com                    relaunch72-payments.onrender.com          Stripe
- (GitHub Pages, static)            (Render, this API)
- ───────────────────               ────────────────────────────             ──────
- checkout.html  ── POST /api/checkout ─────────────────────────►  create Checkout Session
-                ◄──────────── { url } ──────────────────────────
-        │  redirect to Stripe-hosted payment page ───────────────────────►  card entry
-        ▼
- intake/ (after pay) ── POST /api/intake ──►  S0 gate ─► kick pipeline (S1–S10)
-                                    ▲
- Stripe ── POST /api/stripe/webhook ┘  (checkout.session.completed → record order)
+```text
+ relaunch72.com                 Render test service                  Stripe test mode
+ checkout ── POST /api/checkout ──────────────────────────────────► Checkout Session
+          ◄──────────────────── verified test URL ─────────────────
+ intake ── POST /api/intake ──► paid-order claim ──► S0 ──► test build process
+                                      ▲
+ Stripe ── signed webhook ────────────┘
 ```
 
-`PUBLIC_BASE_URL` is the **site** (`https://relaunch72.com`) — that's where Stripe sends
-the customer back after payment, *not* the API's own URL.
+The current build process is detached and file-backed. That is useful for test
+work, but it is not a durable production queue. A process restart can interrupt it.
 
----
+`PUBLIC_BASE_URL` is the static site origin Stripe returns to. Automatic customer
+portal provisioning and outbound email are deliberately outside this sandbox.
 
-## Step 1 — Create the service on Render
+## 1. Create the test service
 
-1. Render dashboard → **New +** → **Blueprint**.
-2. Connect the GitHub repo `Martoon196/relaunch72`.
-3. When it asks for a branch, pick **`claude/relaunch72-architecture-1fi7qd`** (that's where
-   the code lives).
-4. Render reads `render.yaml` and proposes a web service called **relaunch72-payments**.
-   Approve it. It builds from the repo root (`npm install`) and starts with `npm run serve`.
+1. In Render, choose **New + → Blueprint**.
+2. Connect `Martoon196/relaunch72`.
+3. Select branch **`codex/relaunch72-platform-foundation`**.
+4. Review the `relaunch72-payments` service from `render.yaml`.
+5. Before the first production-mode boot, supply a dedicated random
+   `SESSION_SECRET` of at least 32 characters. The server intentionally refuses
+   to start without it when `NODE_ENV=production`.
 
-Plan: the blueprint defaults to **free**. Free sleeps after 15 min idle — fine for
-poking at test payments, but a build kicked while it's asleep can be interrupted, and
-data resets on redeploy. For real orders, switch the service to **Starter** and add a
-persistent disk (the commented block at the bottom of `render.yaml`).
+The free instance and its ephemeral filesystem are suitable only for this test
+sandbox. Do not use them for real orders.
 
-The first deploy comes up **green before you've added any secrets** — the service starts
-in "UNCONFIGURED" mode, `/health` returns `{"configured":false}`, and checkout returns a
-polite 503 until step 3. That's expected: it deploys first, you add the key after.
+## 2. Start unconfigured and inspect readiness
 
-## Step 2 — Paste the two keys into Render
+The server can start without Stripe or Anthropic once `SESSION_SECRET` is valid.
+`GET /health` stays HTTP 200 for host liveness, but reports explicit blockers and
+`accepting_checkout:false` until every checkout dependency is present.
 
-Render service → **Environment** → **Add Environment Variable** for each:
+This distinction matters: a green Render health check means “the process is
+alive”, not “Relaunch72 is ready to charge or fulfil”.
 
-| Key | Value | Where to get it |
+## 3. Configure the complete Stripe test path
+
+Add these environment variables:
+
+| Key | Required for | Value |
 |---|---|---|
-| `STRIPE_SECRET_KEY` | your `sk_test_…` key | Stripe → flip **Test mode** on → Developers → API keys → reveal Secret key |
-| `ANTHROPIC_API_KEY` | your Anthropic key | console.anthropic.com → API keys |
+| `STRIPE_SECRET_KEY` | Test checkout | A Stripe `sk_test_…` or `rk_test_…` key |
+| `STRIPE_WEBHOOK_SECRET` | Verified fulfilment | The test endpoint's `whsec_…` secret |
+| `SESSION_SECRET` | Admin and portal cookies | Dedicated random value, 32+ characters |
+| `SANDBOX_ACCESS_TOKEN` | Private browser access | Dedicated random value, 24+ characters |
 
-`PUBLIC_BASE_URL` (=`https://relaunch72.com`) and `NODE_VERSION` are already set by the
-blueprint. **You do not set any price IDs** — the four prices auto-create from your key on
-first boot (idempotent; safe on every restart). Save → Render redeploys.
+The production test sandbox forces `build_mode:mock` and caps concurrent builds,
+so it does not spend Anthropic credits. `ANTHROPIC_API_KEY` is only needed for a
+deliberately run private/local live-model build; it never makes live Stripe safe.
 
-Check **Logs** for:
+Register the test webhook at:
+
+```text
+https://<your-service>.onrender.com/api/stripe/webhook
 ```
-Relaunch72 payments server on :10000 — TEST mode
-  created autopsy → price_…  ($97.00)
-  … (four lines)
-Catalog ready — 4 created, 0 reused.
+
+Subscribe it to `checkout.session.completed`. Subscription lifecycle events can
+remain disabled because recurring platform checkout is preview-only.
+
+When all four one-off price IDs are blank, test mode may create the complete test
+catalogue automatically. If you pin prices manually, set **all four**:
+
+- `STRIPE_PRICE_AUTOPSY`
+- `STRIPE_PRICE_CORE`
+- `STRIPE_PRICE_CORE_BUMP`
+- `STRIPE_PRICE_PRO`
+
+A partial catalogue is fail-closed: health remains not ready and no checkout is
+created. Automatic catalogue writes never run against a live Stripe key.
+
+Recurring plans remain non-purchasable with:
+
+```text
+PLATFORM_SUBSCRIPTIONS_ENABLED=false
 ```
-Then hit `https://<your-service>.onrender.com/health` → `{"ok":true,"mode":"test","configured":true}`.
 
-(Prefer to pin exact prices instead? Set `STRIPE_PRICE_AUTOPSY/CORE/CORE_BUMP/PRO` — if any
-is set, auto-provision steps aside and uses yours.)
+Public Brevo capture also remains off with `PUBLIC_LEAD_CAPTURE_ENABLED=false`.
+Do not enable it until consent/double-opt-in and shared abuse controls exist.
 
-## Step 4 — Register the Stripe webhook
+## 4. Keep customer outbound messaging locked
 
-1. Stripe (TEST mode) → **Developers → Webhooks → Add endpoint**.
-2. Endpoint URL: `https://<your-service>.onrender.com/api/stripe/webhook`
-3. Events: `checkout.session.completed`.
-4. Copy the **Signing secret** (`whsec_…`) → paste as `STRIPE_WEBHOOK_SECRET` in Render → redeploy.
+Do not add Brevo or Postmark credentials to the Render test service. A Stripe test
+buyer can enter any email address; that is sandbox input, not a verified customer.
+The server therefore does not sync test payers to marketing lists, send setup
+emails, or automatically provision customer portal accounts. Portal onboarding
+will be integration-tested after the durable server-created checkout-intent model
+can prove which workspace and recipient a live purchase belongs to.
 
-## Step 5 — Point the site at the API
+## 5. Point the static test funnel at the service
 
-Edit `site/checkout-config.js`, set `apiBase` to your Render URL:
+In `site/checkout-config.js`, set:
 
 ```js
 apiBase: 'https://relaunch72-payments.onrender.com',
 ```
 
-Commit + push → GitHub Pages redeploys the site. Checkout now POSTs to the live API.
+Publish the static site only after `/health` reports `accepting_checkout:true` and
+`build_mode:mock`. The first checkout attempt asks for the founder-only sandbox
+code and keeps it only for that browser tab/session. Use a Stripe test card and
+confirm all of the following:
 
-## Step 6 — Test the whole loop
+1. Checkout creates a test-mode hosted session.
+2. The signed webhook records one paid order.
+3. A replayed webhook does not duplicate it.
+4. Intake without that paid session is refused.
+5. Valid intake claims it once and a browser retry returns the existing run.
+6. Autopsy stops at its paid scope and never provisions the full portal.
 
-On relaunch72.com, go through checkout for any tier and pay with a Stripe **test card**:
+## Live-money gate
 
-```
-4242 4242 4242 4242   ·   any future expiry   ·   any CVC   ·   any postcode
-```
+Swapping in an `sk_live_…` key does **not** enable payments. It produces a
+`LIVE LOCKED` service and leaves checkout unavailable by design.
 
-You should: land on the intake with `?session=cs_test_…`, see the order recorded (Render
-logs / `data/orders.jsonl`), and — on a complete intake — see the pipeline kick.
+Before changing that lock, Relaunch72 still needs:
 
----
+- PostgreSQL tenancy, orders, CRM records and immutable entitlements;
+- transactional webhook idempotency and entitlement claiming;
+- a durable jobs/outbox worker with retry and recovery;
+- complete fulfilment tests for every advertised tier;
+- verified discount/credit rules and subscription lifecycle behaviour;
+- a persistent paid host, monitoring, backups and an operator runbook;
+- an explicit founder go-live decision after a live-readiness review.
 
-## Going live (later — not now)
-
-When you're ready to take real money (hard rule #2 + #3 — this is the "go live" switch):
-
-1. **Rotate** the test keys you pasted in chat, then create fresh **live** keys.
-2. Re-run `npm run stripe:setup` against the **live** key to make live prices.
-3. Swap Render's env to the `sk_live_…` key + live price IDs + a **live** webhook secret.
-4. The server logs `LIVE ⚠️` instead of `TEST` — that's your confirmation.
-5. Upgrade to a paid plan + disk so orders persist.
-
-Until every one of those is done, it stays test mode and no card is ever really charged.
+Until that work is complete, use test keys only.

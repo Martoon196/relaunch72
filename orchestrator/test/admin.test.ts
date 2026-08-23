@@ -8,11 +8,12 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { passwordOk, signSession, verifySession, parseCookies, SESSION_COOKIE } from '../src/server/admin/session.js';
 import { listRuns, getRunDetail, readDeliverable, listOrders } from '../src/server/admin/store.js';
 import { handleAdmin } from '../src/server/admin/router.js';
+import { InMemoryLoginThrottle, signTenant } from '../src/portal/session.js';
 import type { StripeConfig } from '../src/server/config.js';
 
 function cfg(over: Partial<StripeConfig> = {}): StripeConfig {
   return {
-    secretKey: 'sk_test_x', webhookSecret: 'wh', priceIds: {}, planIds: {}, publicBaseUrl: 'https://relaunch72.test', port: 0,
+    secretKey: 'sk_test_x', keyMode: 'test', webhookSecret: 'wh', priceIds: {}, planIds: {}, platformSubscriptionsEnabled: false, sandboxAccessToken: '', publicLeadCaptureEnabled: false, publicBaseUrl: 'https://relaunch72.test', host: '127.0.0.1', port: 0,
     liveMode: false, dataDir: os.tmpdir(), ordersFile: path.join(os.tmpdir(), `r72-adm-orders-${Math.round(performance.now())}.jsonl`),
     subscriptionsFile: path.join(os.tmpdir(), `r72-adm-subs-${Math.round(performance.now())}.jsonl`),
     allowedOrigins: [], adminPassword: 'hunter2', sessionSecret: 's3cr3t', ...over,
@@ -111,6 +112,16 @@ test('unauthed /admin redirects to login; login page renders', async () => {
   assert.equal(r.statusCode, 302); assert.equal(r.headers.location, '/admin/login');
   const l = res(); await handleAdmin(req('GET', '/admin/login'), l, cfg(), makeRuns());
   assert.equal(l.statusCode, 200); assert.match(l.body, /Admin/);
+  assert.equal(l.headers['cache-control'], 'no-store');
+  assert.match(l.headers['content-security-policy'] ?? '', /frame-ancestors 'none'/);
+});
+test('a valid portal session copied into the admin cookie is rejected', async () => {
+  const c = cfg();
+  const customerToken = signTenant(c.sessionSecret, 'tenant-customer', Date.now());
+  const r = res();
+  await handleAdmin(req('GET', '/admin', { cookie: `${SESSION_COOKIE}=${customerToken}` }), r, c, makeRuns());
+  assert.equal(r.statusCode, 302);
+  assert.equal(r.headers.location, '/admin/login');
 });
 test('login: wrong password 401, right password sets a session cookie', async () => {
   const bad = res(); await handleAdmin(req('POST', '/admin/login', { body: 'password=nope' }), bad, cfg(), makeRuns());
@@ -118,6 +129,19 @@ test('login: wrong password 401, right password sets a session cookie', async ()
   const ok = res(); await handleAdmin(req('POST', '/admin/login', { body: 'password=hunter2' }), ok, cfg(), makeRuns());
   assert.equal(ok.statusCode, 302); assert.equal(ok.headers.location, '/admin');
   assert.match(String(ok.headers['set-cookie']), new RegExp(SESSION_COOKIE + '='));
+});
+test('admin login throttles repeated failures by source', async () => {
+  const throttle = new InMemoryLoginThrottle(2, 60_000, 60_000);
+  const c = cfg();
+  for (let i = 0; i < 2; i++) {
+    const bad = res();
+    await handleAdmin(req('POST', '/admin/login', { body: 'password=nope' }), bad, c, makeRuns(), throttle);
+    assert.equal(bad.statusCode, 401);
+  }
+  const blocked = res();
+  await handleAdmin(req('POST', '/admin/login', { body: 'password=hunter2' }), blocked, c, makeRuns(), throttle);
+  assert.equal(blocked.statusCode, 429);
+  assert.equal(blocked.headers['retry-after'], '60');
 });
 test('authed dashboard lists runs; run detail renders; sign-off writes signoff.json', async () => {
   const dir = makeRuns();

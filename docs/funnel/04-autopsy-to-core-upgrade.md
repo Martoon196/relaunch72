@@ -1,5 +1,11 @@
 # Relaunch72 — Autopsy → Core Upgrade Page
 
+> **Historical upgrade draft — do not publish verbatim.** There is no automatic
+> 14-day eligibility or $900 checkout yet. Current public upgrade CTAs request
+> manual order verification and do not enter the standard $997 Core checkout. A
+> future discounted link must be customer-bound, single-use and expire; never
+> issue a generic shareable $900 Payment Link.
+
 *Shown to someone who has bought the $97 autopsy and received their forensic read. Job: convert them from $97 diagnosis to $997 full relaunch, using the credit-back as the lever. This is the warmest audience you have — they've paid, they've seen your thinking on their business, the leaks are named. Framework: the autopsy result IS the sales argument. Awareness stage: most-aware. Brand voice, Martin sign-off, real scarcity.*
 
 ---

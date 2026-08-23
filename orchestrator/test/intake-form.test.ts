@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { renderIntakeForm } from '../src/intake/form.js';
 import { INTAKE_FIELDS } from '../src/intake/spec.js';
 
@@ -54,5 +55,32 @@ test('form ships all eight sections and the consent gate', () => {
   const spec = embeddedSpec();
   assert.deepEqual(spec.sections.map((s) => s.id), ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']);
   assert.match(html, /id="consent"/);
-  assert.match(html, /72-hour/);
+  assert.match(html, /no live delivery clock or customer fulfilment/i);
+  assert.match(html, /Sandbox test accepted/i);
+});
+
+test('wired form shows success only after an HTTP-ok explicit acceptance', () => {
+  const wired = renderIntakeForm({ submitEndpoint: 'https://api.example.test/api/intake' });
+  assert.match(wired, /result\.ok&&res\.accepted===true/);
+  assert.match(wired, /Your intake has not been accepted yet/);
+  assert.match(wired, /Nothing has been cleared/);
+  assert.doesNotMatch(wired, /if\(res&&res\.accepted===false\).*renderDone/s);
+});
+
+test('checkout entitlement stays tab-scoped, is scrubbed from the URL, and is never downloaded', () => {
+  assert.match(html, /sessionStorage\.setItem\(SESSION_KEY,URL_SESSION\)/);
+  assert.match(html, /history\.replaceState/);
+  assert.doesNotMatch(html, /state\.session/);
+  assert.match(html, /if\("session" in saved\)\{ delete saved\.session; localStorage\.setItem\(KEY,JSON\.stringify\(saved\)\); \}/);
+  assert.match(html, /var backup=\{\}/);
+  assert.match(html, /JSON\.stringify\(backup,null,2\)/);
+  assert.doesNotMatch(html, /if\(parsed\._stripe_session\)/);
+  assert.match(html, /x-relaunch72-sandbox-token/);
+  assert.match(html, /Private Relaunch72 test access code/);
+});
+
+test('checked-in intake page exactly matches the canonical renderer across platform line endings', () => {
+  const checkedIn = readFileSync(new URL('../../site/intake/index.html', import.meta.url), 'utf8');
+  const deployed = renderIntakeForm({ submitEndpoint: 'https://relaunch72-payments.onrender.com/api/intake' });
+  assert.equal(checkedIn.replace(/\r\n/g, '\n'), deployed.replace(/\r\n/g, '\n'));
 });

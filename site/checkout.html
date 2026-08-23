@@ -59,7 +59,9 @@
   </div>
 
   <h1 id="h1">Confirm your relaunch</h1>
-  <p class="sub">Pay once. Then the 45-minute intake — and your 72-hour clock starts the moment we accept it.</p>
+  <p class="sub">Private sandbox: test the payment-to-intake control flow without placing a customer order.</p>
+
+  <div class="notlive" id="sandbox-notice"><b>Test transaction → mock output only.</b> Stripe test mode does not start a live delivery clock, include human sign-off, or create a customer fulfilment obligation.</div>
 
   <div class="order">
     <div class="head"><span class="name" id="o-name">—</span><span class="price" id="o-price">—</span></div>
@@ -71,14 +73,14 @@
     <div class="total"><span>Total today</span><span class="amt" id="o-total">—</span></div>
   </div>
 
-  <button class="pay" id="pay">Continue to secure payment →</button>
+  <button class="pay" id="pay">Continue to Stripe test payment →</button>
   <div class="trust">
-    <span><b>72-hour</b> ship guarantee</span>
-    <span><b>Human</b> sign-off</span>
-    <span><b>One</b> revision included</span>
+    <span><b>Private</b> access code</span>
+    <span><b>Stripe</b> test card only</span>
+    <span><b>Mock</b> build only</span>
   </div>
   <div id="notlive"></div>
-  <div class="stripe-note">Payments are processed securely by Stripe. Test mode until launch.</div>
+  <div class="stripe-note">No live card charge. No live customer sale.</div>
 </div>
 
 <script src="checkout-config.js"></script>
@@ -86,17 +88,18 @@
 (function(){
   var TIERS = {
     autopsy: { name:'Marketing Autopsy', price:97, bump:false,
-      incl:['The marketing audit & scorecard — where you’re leaking customers','Every dollar credits against Core within 14 days'] },
+      incl:['Mock preview of the marketing audit and scorecard','Proposed Core-credit policy is not operational in this sandbox'] },
     core: { name:'Relaunch72 Core', price:997, bump:true,
-      incl:['All nine deliverables, delivered in 72 hours','Human strategist sign-off on every line','One full revision round included'] },
+      incl:['Mock preview of the nine-deliverable workflow','No human sign-off or revision fulfilment in this sandbox'] },
     pro: { name:'Relaunch72 Pro', price:2497, bump:false,
-      incl:['Everything in Core','90-minute strategy session','Hero assets rewritten by hand','Implementation roadmap + 30 days of support'] },
+      incl:['Mock preview of the Pro workflow','No strategy session, hand rewrite or support fulfilment in this sandbox'] },
   };
   function qp(k){ return new URLSearchParams(location.search).get(k); }
   var tier = (qp('tier')||'core').toLowerCase();
   if(!TIERS[tier]) tier='core';
   var t = TIERS[tier];
   var cfg = window.RELAUNCH72_CHECKOUT || { paymentLinks:{}, successPath:'intake/' };
+  var ACCESS_KEY = 'relaunch72-sandbox-access-v1';
   function money(n){ return '$'+n.toLocaleString('en-US'); }
 
   document.getElementById('h1').textContent = tier==='autopsy' ? 'Get your marketing autopsy' : 'Confirm your relaunch';
@@ -115,28 +118,37 @@
     var params = 'tier='+tier + (withBump()?'&bump=1':'') + '&dev=1';
     document.getElementById('notlive').innerHTML =
       '<div class="notlive"><b>Card payment isn’t live yet.</b> '+(extra?extra+' ':'')+
-      'Set <code>apiBase</code> (the payments server) or Stripe test-mode payment links in <code>checkout-config.js</code> — no code change. '+
+      'The private test sandbox must be configured and ready before this checkout can run. '+
       'For now you can walk the rest of the flow: '+
       '<a class="devlink" href="'+(cfg.successPath||'intake/')+'?'+params+'">Continue to the intake (dev preview) →</a></div>';
     document.getElementById('notlive').scrollIntoView({behavior:'smooth',block:'center'});
   }
-  document.getElementById('pay').addEventListener('click', function(){
+  function accessCode(){ try{return sessionStorage.getItem(ACCESS_KEY)||'';}catch(e){return '';} }
+  function resetButton(){ var btn=document.getElementById('pay'); btn.textContent='Continue to Stripe test payment →'; btn.disabled=false; }
+  function startCheckout(code,prompted){
     var btn = document.getElementById('pay');
-    // Option A — backend Checkout Session (auto-starts the build after payment).
-    if(cfg.apiBase){
-      btn.textContent='One sec…'; btn.disabled=true;
-      fetch(cfg.apiBase.replace(/\/$/,'')+'/api/checkout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({tier:tier,bump:withBump()})})
-        .then(function(r){return r.json();})
-        .then(function(d){ if(d&&d.url){ window.location.href=d.url; } else { btn.textContent='Continue to secure payment →'; btn.disabled=false; showNotLive(d&&d.error?('Server: '+d.error+'.'):''); } })
-        .catch(function(){ btn.textContent='Continue to secure payment →'; btn.disabled=false; showNotLive('Couldn’t reach the payments server.'); });
-      return;
-    }
-    // Option B — Stripe Payment Link.
-    var key = (tier==='core' && withBump()) ? 'core_bump' : tier;
-    var link = (cfg.paymentLinks||{})[key];
-    if(link){ window.location.href = link; return; }
-    // Nothing wired — honest state + dev walk-through.
-    showNotLive('');
+    var headers={'content-type':'application/json'};
+    if(code) headers['x-relaunch72-sandbox-token']=code;
+    btn.textContent='One sec…'; btn.disabled=true;
+    fetch(cfg.apiBase.replace(/\/$/,'')+'/api/checkout',{method:'POST',headers:headers,body:JSON.stringify({tier:tier,bump:withBump()})})
+      .then(function(r){return r.json().catch(function(){return {};}).then(function(body){return {status:r.status,body:body};});})
+      .then(function(result){
+        var d=result.body||{};
+        if(result.status===401&&!prompted){
+          var entered=window.prompt('Private Relaunch72 test access code');
+          if(entered&&entered.trim()){
+            try{sessionStorage.setItem(ACCESS_KEY,entered.trim());}catch(e){}
+            return startCheckout(entered.trim(),true);
+          }
+        }
+        if(d.url){ window.location.href=d.url; return; }
+        resetButton(); showNotLive(d.error?('Server: '+d.error+'.'):'');
+      })
+      .catch(function(){ resetButton(); showNotLive('Couldn’t reach the payments server.'); });
+  }
+  document.getElementById('pay').addEventListener('click', function(){
+    if(!cfg.apiBase){ showNotLive(''); return; }
+    startCheckout(accessCode(),false);
   });
 })();
 </script>

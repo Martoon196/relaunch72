@@ -101,9 +101,12 @@ function billingCard(b: BillingView): string {
   </div>`;
 }
 
-export function billingPage(tenantName: string, b: BillingView, opts: { canManage?: boolean; notice?: string } = {}): string {
+export function billingPage(tenantName: string, b: BillingView, opts: { canManage?: boolean; canSubscribe?: boolean; notice?: string } = {}): string {
   const s = billingStat(b);
-  const notice = opts.notice ? `<div class="note">${esc(opts.notice)}</div>` : '';
+  const previewNotice = opts.canSubscribe === true
+    ? ''
+    : '<div class="note">Plan preview only — recurring checkout is paused while the durable platform and connected delivery services are completed.</div>';
+  const notice = `${opts.notice ? `<div class="note">${esc(opts.notice)}</div>` : ''}${previewNotice}`;
   const renew = b.active && b.currentPeriodEnd ? ` · renews ${esc(b.currentPeriodEnd.slice(0, 10))}` : '';
   const manage = opts.canManage && b.customerId
     ? `<form method="post" action="/portal/manage" style="margin:0"><button class="btn" style="background:var(--raised);color:var(--text);font-weight:550">Manage billing →</button></form>` : '';
@@ -112,7 +115,11 @@ export function billingPage(tenantName: string, b: BillingView, opts: { canManag
     const current = b.active && b.planKey === o.key;
     const cta = current
       ? `<div class="cur-tag">✓ Your current plan</div>`
-      : `<form method="post" action="/portal/subscribe" style="margin:0"><input type="hidden" name="plan" value="${esc(o.key)}"><button class="btn" style="width:100%" type="submit">${b.active ? 'Switch to this' : 'Subscribe'} →</button></form>`;
+      : b.active
+        ? '<div class="cur-tag">Use Manage billing</div>'
+      : opts.canSubscribe === true
+        ? `<form method="post" action="/portal/subscribe" style="margin:0"><input type="hidden" name="plan" value="${esc(o.key)}"><button class="btn" style="width:100%" type="submit">${b.active ? 'Switch to this' : 'Subscribe'} →</button></form>`
+        : '<div class="cur-tag">Checkout paused</div>';
     return `<div class="plan${current ? ' cur' : ''}"><h4>${esc(o.name)}</h4><div class="price">${esc(o.priceLabel)}</div><p>${esc(o.description)}</p>${cta}</div>`;
   }).join('');
 
@@ -121,7 +128,7 @@ export function billingPage(tenantName: string, b: BillingView, opts: { canManag
     <div class="top"><div style="display:flex;align-items:center;gap:12px"><div class="logo">🚀 <b>RELAUNCH72</b></div><span class="pill">BILLING</span></div>
       <a href="/portal" style="font-family:var(--mono);font-size:.75rem;color:var(--amber)">← dashboard</a></div>
 
-    <div class="hello"><div><h1>Your subscription</h1><p>Your plan keeps your AI marketing manager running every month — on brand, nothing invented.</p></div></div>
+    <div class="hello"><div><h1>Your subscription</h1><p>${opts.canSubscribe === true ? 'Choose or manage a recurring plan.' : 'Review the planned recurring tiers. They are not available to purchase yet.'}</p></div></div>
     ${notice}
     <div class="box"><h3>Current plan</h3><div class="s">status</div>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
@@ -131,7 +138,7 @@ export function billingPage(tenantName: string, b: BillingView, opts: { canManag
       </div>
     </div>
 
-    <div class="box"><h3>${b.active ? 'Change your plan' : 'Choose a plan'}</h3><div class="s">billed monthly · cancel anytime</div>
+    <div class="box"><h3>${opts.canSubscribe === true ? (b.active ? 'Change your plan' : 'Choose a plan') : 'Planned tiers'}</h3><div class="s">${opts.canSubscribe === true ? 'billed monthly · cancel anytime' : 'preview pricing · no checkout'}</div>
       <div class="plans">${plans}</div>
     </div>
   </div></body></html>`;
@@ -139,17 +146,17 @@ export function billingPage(tenantName: string, b: BillingView, opts: { canManag
 
 export function dashboardPage(d: DashboardData, billing?: BillingView): string {
   const won = d.pipeline.won ?? 0;
-  const posts = d.artifacts.post ? 30 : 0;
-  const articles = d.artifacts.cluster?.articles.length ?? 0;
-  const ads = d.artifacts.ad ? 2 : 0;
+  const socialDraftSamples = d.artifacts.post ? 1 : 0;
+  const articleBriefs = d.artifacts.cluster?.articles.length ?? 0;
+  const adSetDrafts = d.artifacts.ad ? 1 : 0;
 
   const pipe = PIPELINE_STAGES.map((st) => `<div class="st"><div class="c">${d.pipeline[st] ?? 0}</div><div class="l">${st}</div></div>`).join('');
   const contacts = d.contacts.map((c) => `<tr><td>${esc(c.name)}</td><td class="mono" style="color:var(--muted)">${esc(c.email ?? c.phone ?? '—')}</td><td><span class="badge">${esc(c.stage)}</span></td></tr>`).join('') || '<tr><td colspan="3" style="color:var(--muted)">No contacts yet.</td></tr>';
-  const feed = d.activity.slice(0, 14).map((a) => `<div class="ev"><div class="i ${a.kind === 'rail_run' ? '' : 'sys'}">${STAGE_ICON[a.kind] ?? '•'}</div><div><div class="s">${esc(a.summary)}</div><div class="t">${esc(a.at.slice(0, 10))}</div></div></div>`).join('') || '<p style="color:var(--muted);font-size:.85rem">No activity yet — hit “Run this week”.</p>';
+  const feed = d.activity.slice(0, 14).map((a) => `<div class="ev"><div class="i ${a.kind === 'rail_run' ? '' : 'sys'}">${STAGE_ICON[a.kind] ?? '•'}</div><div><div class="s">${esc(a.summary)}</div><div class="t">${esc(a.at.slice(0, 10))}</div></div></div>`).join('') || '<p style="color:var(--muted);font-size:.85rem">No activity yet — generate this week’s drafts when the brand brain is ready.</p>';
 
-  const cluster = d.artifacts.cluster ? `<div class="box"><h3>This week's content cluster</h3><div class="s">topic · ${esc(d.artifacts.cluster.topic)}</div>${d.artifacts.cluster.articles.map((a) => `<div class="row"><span class="it">${esc(a.role === 'pillar' ? 'pillar' : a.intent)}</span><span>${esc(a.title)}</span></div>`).join('')}</div>` : '';
-  const keywords = d.artifacts.keywords ? `<div class="box"><h3>Keyword report</h3><div class="s">ranked by search volume</div>${d.artifacts.keywords.map((k) => `<div class="kw"><span>${esc(k.query)}</span><span class="v">${k.volume?.toLocaleString('en-GB') ?? '—'}</span></div>`).join('')}</div>` : '';
-  const ad = d.artifacts.ad ? `<div class="box"><h3>Ad set · paused draft</h3><div class="chips">${d.artifacts.ad.headlines.map((h) => `<span>${esc(h)}</span>`).join('')}</div><p style="color:var(--muted);font-size:.86rem;margin:0 0 8px">${esc(d.artifacts.ad.primary)}</p></div>` : '';
+  const cluster = d.artifacts.cluster ? `<div class="box"><h3>This week's content-cluster draft</h3><div class="s">article briefs · topic · ${esc(d.artifacts.cluster.topic)} · not published</div>${d.artifacts.cluster.articles.map((a) => `<div class="row"><span class="it">${esc(a.role === 'pillar' ? 'pillar' : a.intent)}</span><span>${esc(a.title)}</span></div>`).join('')}</div>` : '';
+  const keywords = d.artifacts.keywords ? `<div class="box"><h3>Simulated keyword estimates</h3><div class="s">mock planning data · not live search volumes</div>${d.artifacts.keywords.map((k) => `<div class="kw"><span>${esc(k.query)}</span><span class="v">~${k.volume?.toLocaleString('en-GB') ?? '—'}</span></div>`).join('')}</div>` : '';
+  const ad = d.artifacts.ad ? `<div class="box"><h3>Simulated ad-set draft · paused</h3><div class="s">planning preview · not published</div><div class="chips">${d.artifacts.ad.headlines.map((h) => `<span>${esc(h)}</span>`).join('')}</div><p style="color:var(--muted);font-size:.86rem;margin:0 0 8px">${esc(d.artifacts.ad.primary)}</p></div>` : '';
 
   const brand = d.brand ? `<div class="box"><h3>Your brand brain</h3><div class="s">the strategy every task is built from</div>${d.brand.positioning ? `<p class="quote">${esc(d.brand.positioning)}</p>` : ''}${d.brand.pillars.length ? `<div style="margin:12px 0 6px;font-family:var(--mono);font-size:.64rem;letter-spacing:.06em;color:var(--faint);text-transform:uppercase">Message pillars</div>${d.brand.pillars.map((p, i) => `<div class="row" style="border:0;padding:5px 0"><span class="mono" style="color:var(--amber)">${i + 1}</span><span>${esc(p)}</span></div>`).join('')}` : ''}</div>` : '';
 
@@ -159,25 +166,25 @@ export function dashboardPage(d: DashboardData, billing?: BillingView): string {
       <div style="display:flex;align-items:center;gap:10px"><div style="text-align:right;font-weight:650;font-size:.9rem">${esc(d.tenant.name)}</div>
       <form method="post" action="/portal/logout" style="margin:0"><button class="btn" style="background:var(--raised);color:var(--text);font-weight:550;padding:7px 12px">Sign out</button></form></div></div>
 
-    <div class="hello"><div><h1>Hi, ${esc(d.tenant.name)}.</h1><p>Your AI marketing manager keeps your marketing running — on brand, nothing invented.</p></div>
-      <form method="post" action="/portal/run" style="margin:0"><button class="runbtn" type="submit">▶ Run this week's marketing</button></form></div>
+    <div class="hello"><div><h1>Hi, ${esc(d.tenant.name)}.</h1><p>Your AI marketing manager prepares on-brand drafts for review — nothing here is presented as published.</p></div>
+      <form method="post" action="/portal/run" style="margin:0"><button class="runbtn" type="submit">▶ Generate this week's drafts</button></form></div>
 
     <div class="kpis">
       <div class="kpi"><div class="n">${d.contacts.length}</div><div class="l">contacts · ${won} won</div></div>
-      <div class="kpi"><div class="n">${articles}</div><div class="l">articles written</div></div>
-      <div class="kpi"><div class="n">${posts}</div><div class="l">posts scheduled</div></div>
-      <div class="kpi"><div class="n">${ads}</div><div class="l">ad drafts (paused)</div></div>
+      <div class="kpi"><div class="n">${articleBriefs}</div><div class="l">article briefs drafted</div></div>
+      <div class="kpi"><div class="n">${socialDraftSamples}</div><div class="l">social draft samples</div></div>
+      <div class="kpi"><div class="n">${adSetDrafts}</div><div class="l">ad-set drafts (paused)</div></div>
     </div>
 
     <div class="grid">
       <main>
         <div class="box"><h3>Your pipeline</h3><div class="s">contacts by stage</div><div class="pipe">${pipe}</div></div>
         ${cluster}${keywords}${ad}
-        <div class="box"><h3>Contacts</h3><div class="s">synced from your enquiries</div><table><thead><tr><th>Name</th><th>Reach</th><th>Stage</th></tr></thead><tbody>${contacts}</tbody></table></div>
+        <div class="box"><h3>Contacts</h3><div class="s">stored in this workspace</div><table><thead><tr><th>Name</th><th>Reach</th><th>Stage</th></tr></thead><tbody>${contacts}</tbody></table></div>
       </main>
       <aside>
         ${billing ? billingCard(billing) : ''}
-        <div class="box"><h3>Activity</h3><div class="s">what your AI did · newest first</div>${feed}</div>
+        <div class="box"><h3>Activity</h3><div class="s">recorded operations · newest first</div>${feed}</div>
         ${brand}
       </aside>
     </div>

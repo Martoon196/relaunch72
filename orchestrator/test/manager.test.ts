@@ -42,7 +42,8 @@ test('runTick runs each due action through the mock runner', async () => {
   const res = await runTick(roster, MONDAY);
   assert.equal(res.due, 2);
   assert.equal(res.entries.length, 2);
-  assert.ok(res.entries.every((e) => e.status === 'ok'));
+  assert.ok(res.entries.every((e) => e.status === 'skipped'));
+  assert.ok(res.entries.every((e) => /simulation only.*no external action occurred/i.test(e.note ?? '')));
 });
 
 test('runTick captures a failing runner as a failed entry, not a crash', async () => {
@@ -55,6 +56,7 @@ test('runTick captures a failing runner as a failed entry, not a crash', async (
 
 test('mockRunner is deterministic and names the action + tenant', async () => {
   const e = await mockRunner(roster[0]!, { tenantId: 'a', action: 'social_batch', cadence: 'daily', dueDate: MONDAY });
-  assert.equal(e.status, 'ok');
+  assert.equal(e.status, 'skipped');
   assert.match(e.note ?? '', /social_batch/);
+  assert.match(e.note ?? '', /no external action occurred/i);
 });

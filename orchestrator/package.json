@@ -11,7 +11,7 @@
     "keyword": "tsx src/keyword/cli.ts",
     "ads": "tsx src/ads/cli.ts",
     "manager": "tsx src/manager/cli.ts",
-    "test": "node --import tsx --test test/*.test.ts",
+    "test": "node --import ./test/windows-node24-shim.mjs --import tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "render": "tsx src/docs/cli.ts",
     "intake:build": "tsx src/intake/build-form.ts",

@@ -4,13 +4,14 @@ The prior artifact ("Inside Relaunch72") is a **founder/marketing briefing**. Th
 
 ## Capability classification
 
-### Production-live (real code path, runs in prod, real external effect, tested)
-- **HTTP server + routing + CORS + `/health`** (`src/server/app.ts`, `index.ts`). Deploys green unconfigured.
-- **Stripe checkout (one-off + subscription) + signed webhook recording** — real Stripe client wired (`src/server/stripe.ts`, `subscriptions.ts`); logic tested against a fake. Real charging needs live keys (test-mode by default).
+### Implemented runtime surfaces (not approved for live money)
+- **HTTP server + routing + CORS + `/health`** (`src/server/app.ts`, `index.ts`). Liveness stays up while readiness reports explicit blockers.
+- **Stripe one-off checkout + signed webhook recording** — real Stripe client wired and handler-tested, but deployed use is a private, mock-only test sandbox. Live/unknown keys are hard-locked until PostgreSQL durable jobs and commercial provenance exist.
+- **Recurring subscription scaffolding** — event projection and checkout builders exist, but checkout is preview-only, defaults disabled and remains commercially unsafe until workspace/price/customer binding and ordered event handling are implemented.
 - **Admin control room** — password auth, list runs/orders, view pack, human sign-off (`src/server/admin/*`, `src/signoff/*`).
 - **Client portal** — per-tenant auth, dashboard, billing screen (`src/portal/*`), tested via handler doubles.
 - **Transactional email** — real Postmark HTTP client (`src/email/postmark.ts`); login email path wired (`src/portal/emails.ts`).
-- **Persistence** — file stores work (`crm/store.ts`, `orders.ts`, `subscriptions.ts`, `portal/accounts.ts`). *Caveat: not durable on the current Render free plan (no disk).*
+- **Persistence** — file stores work (`crm/store.ts`, `orders.ts`, `subscriptions.ts`, `portal/accounts.ts`). They are not transactional across processes; even a persistent disk does not make them live-money safe.
 
 ### Implemented but mocked (runs at £0; a live adapter exists but is UNPROVEN)
 - **AI generation** — pipeline S1–S10 + brand brain run on `MockClient` by default; `AnthropicClient` is real but the portal/manager default to mock (`src/portal/run.ts`, `src/manager/rail-runner.ts:98`).
@@ -22,7 +23,7 @@ The prior artifact ("Inside Relaunch72") is a **founder/marketing briefing**. Th
 - **Billing lifecycle** — state captured; no dunning, no cancel-consequence, no proration, no usage limits (`06-BILLING-AND-PROVISIONING.md`).
 - **Human approval** — the 72h pack only; ongoing rail output has no approval gate (`05`, `04`).
 - **Audit trail** — CRM activities + run manifests; not an immutable event log (`04`).
-- **Lead capture** — `/api/subscribe` + `/api/intake` exist but **do not create CRM contacts** (`03`).
+- **Lead capture** — `/api/subscribe` + `/api/intake` exist but **do not create CRM contacts** (`03`); unauthenticated Brevo capture now defaults disabled pending consent/double-opt-in and abuse controls.
 - **Data durability** — works locally; resets on redeploy without a Render disk (`render.yaml`).
 
 ### Interface / adapter present but UNPROVEN live
@@ -49,10 +50,10 @@ The briefing's hero stat says **"7 platform layers live"**; its own "What we've 
 **Overstated.** What exists is a **strategy + content generator with a thin CRM**: it can *generate* content clusters, keyword reports and ad drafts (on mock by default), and hold contacts/pipeline/timeline. A marketing department also *sends* (no SMS/WhatsApp, email is send-only with no sequences), *publishes* (no proven live social/ads), *converses* (no messages/inbox), *books* (no appointments), and *measures* (no analytics). Those are absent. Fair description: "an AI marketing **content & strategy engine** with a thin CRM and a client portal."
 
 ### "End-to-end"
-**True for the mocked loop, not for real-world effects.** Intake → provision → brand-brain generation → login email → portal dashboard → subscribe is wired and proven (DI tests + a manual curl smoke). But every external effect in that loop is mock or test-mode (mock LLM, no live publish, test Stripe). So "end-to-end" = the *control flow* is complete; the *value delivery to real channels* is not yet exercised.
+**True for a private mocked one-off loop, not for real-world effects.** Access-code-protected test checkout → signed webhook → paid entitlement → canonical intake → mock build is handler-tested. Portal provisioning is still a separate post-accept side effect, and recurring subscribe is deliberately preview-locked. So "end-to-end" means the safe test control flow exists; real charging and value delivery to live channels do not.
 
 ### "£0 to run"
-**True and verified.** Mock adapters + in-memory/file stores + no paid API calls; the suite runs and the server boots with no keys. Two honest caveats: (a) £0 == mock == not real output; (b) hosting itself isn't free in a real deployment (Render), and £0 durability needs a paid disk.
+**True for the private sandbox.** Its deployed test build mode is forced to mock and capped, so a public Stripe test card cannot spend Anthropic credits. Two honest caveats: (a) £0 == mock == not real output; (b) hosting and production-grade persistence are not free.
 
 ### "One key switches any rail live"
 **Structurally supported, not proven.** The mock/live interface split is real, so swapping requires no interface change. But **no live rail is tested or verified against its API**, Meta is incomplete, and the portal/manager hard-code the mock LLM in places — so flipping a key today does **not** yield a verified working live rail without further work. This is an architectural intention with real scaffolding, not a proven capability (`04`).
@@ -61,16 +62,16 @@ The briefing's hero stat says **"7 platform layers live"**; its own "What we've 
 **Not true as stated.** There is **no scheduler** — the manager runs only when a human invokes the CLI (`npm run manager …`) or clicks the portal Run button. It has no cron/worker/queue and no persisted last-run memory (calendar-only cadence). Accurate framing: "a manager you can run on demand," not one that runs itself (`04`).
 
 ### "Nothing invented, ever"
-**True for generated deliverable copy; not a global guarantee.** The no-invention QA robustly blocks invented numbers and fabricated quotes in pipeline/rail **content** (fatal park, no retry — tested, `05`). It does **not** govern: the **dashboard's own KPIs** (hard-coded `posts=30`/`ads=2` and mock keyword volumes in `src/portal/views.ts`/`run.ts`), any **future AI CRM replies** (not routed through the QA), or the **truthfulness of client-supplied statements** (trusted verbatim). "Ever" overreaches; "no invented numbers or quotes in generated deliverables" is exact.
+**True for generated deliverable copy; not a global guarantee.** The no-invention QA robustly blocks invented numbers and fabricated quotes in pipeline/rail **content** (fatal park, no retry — tested, `05`). It does **not** govern: the dashboard's clearly labelled **mock/simulated metrics** derived from draft artifacts, any **future AI CRM replies** (not routed through the QA), or the **truthfulness of client-supplied statements** (trusted verbatim). "Ever" overreaches; "no invented numbers or quotes in generated deliverables" is exact.
 
-### "316 tests, all green"
-**Verified true** (measured: 316 pass, after `npm ci`). But it is a count, not coverage: **no test crosses a real HTTP socket, no cross-tenant isolation test, no webhook idempotency/replay test** (`07`). Strong on evidence/QA and pure logic; thin on integration, isolation, and lifecycle.
+### Test status
+**Current measured state: 374 tests pass through the repository's normal `npm test` command**, plus TypeScript type-check and dependency audit. The suite now covers webhook replay/quarantine, entitlement reuse, strict tier scope, session audience separation, sandbox outbound-message locks, private access and truthful mock states. It is still a count, not production proof: no test crosses a real provider account, file claims are not multi-replica transactions, and the current thin CRM has no database/RLS isolation model.
 
 ---
 
 ## What is proven vs unproven — one-line summary
-- **Proven:** the architecture, the no-invention QA on content, the pipeline mechanics, the payment/subscription *state capture*, the portal auth + provisioning control-flow — all at £0 on mocks, with 316 green unit/handler tests.
-- **Unproven:** every live external integration (LLM in prod, keyword/social/ads/GHL, real charging), durability under load/redeploys, tenant isolation under attack, webhook idempotency, and the entire "send/publish/measure/converse" half of a marketing platform (much of which is not built at all).
+- **Proven:** the architecture, no-invention content QA, pipeline mechanics, private test-payment control flow, hardened file-backed portal auth and truthful mock surfaces — all on mocks/handler tests.
+- **Unproven or intentionally locked:** every live external integration, real charging, commercial checkout provenance, multi-process durability/tenant isolation, durable fulfilment and the "send/publish/measure/converse" half of a marketing platform.
 
 ## Suggested audit priorities (derived)
 1. Tenant isolation model + a real DB with row-level scoping and migrations (replaces flat files).

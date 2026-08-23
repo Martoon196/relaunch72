@@ -9,6 +9,7 @@ import crypto from 'node:crypto';
 
 export const SESSION_COOKIE = 'r72_admin';
 export const SESSION_TTL_MS = 1000 * 60 * 60 * 12; // 12 hours
+const ADMIN_SESSION_CONTEXT = 'relaunch72/session/admin/v1\u0000';
 
 /** Constant-time password comparison (hash both to a fixed length first). */
 export function passwordOk(provided: string, expected: string): boolean {
@@ -20,8 +21,8 @@ export function passwordOk(provided: string, expected: string): boolean {
 
 /** Sign a session token `<payload>.<hmac>`; payload carries the expiry. */
 export function signSession(secret: string, now: number, ttlMs = SESSION_TTL_MS): string {
-  const payload = Buffer.from(JSON.stringify({ exp: now + ttlMs })).toString('base64url');
-  const mac = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+  const payload = Buffer.from(JSON.stringify({ v: 1, aud: 'admin', exp: now + ttlMs })).toString('base64url');
+  const mac = crypto.createHmac('sha256', secret).update(ADMIN_SESSION_CONTEXT).update(payload).digest('base64url');
   return `${payload}.${mac}`;
 }
 
@@ -32,13 +33,19 @@ export function verifySession(secret: string, token: string | undefined, now: nu
   if (dot <= 0) return false;
   const payload = token.slice(0, dot);
   const mac = token.slice(dot + 1);
-  const expected = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+  const expected = crypto.createHmac('sha256', secret).update(ADMIN_SESSION_CONTEXT).update(payload).digest('base64url');
   const macBuf = Buffer.from(mac);
   const expBuf = Buffer.from(expected);
   if (macBuf.length !== expBuf.length || !crypto.timingSafeEqual(macBuf, expBuf)) return false;
   try {
-    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { exp?: number };
-    return typeof parsed.exp === 'number' && parsed.exp > now;
+    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Record<string, unknown>;
+    const keys = Object.keys(parsed).sort().join(',');
+    return keys === 'aud,exp,v'
+      && parsed.v === 1
+      && parsed.aud === 'admin'
+      && typeof parsed.exp === 'number'
+      && Number.isFinite(parsed.exp)
+      && parsed.exp > now;
   } catch {
     return false;
   }
