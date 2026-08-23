@@ -11,26 +11,32 @@
     "keyword": "tsx src/keyword/cli.ts",
     "ads": "tsx src/ads/cli.ts",
     "manager": "tsx src/manager/cli.ts",
-    "test": "node --import ./test/windows-node24-shim.mjs --import tsx --test test/*.test.ts",
+    "test": "node --import ./test/windows-node24-shim.mjs --import tsx --test test/*.test.ts test/db/*.test.ts",
+    "test:db": "node --import ./test/windows-node24-shim.mjs --import tsx --test test/db/*.test.ts",
+    "test:db:integration": "node --import ./test/windows-node24-shim.mjs --import tsx --test --test-concurrency=1 test/db/require-integration.ts",
     "typecheck": "tsc --noEmit",
     "render": "tsx src/docs/cli.ts",
     "intake:build": "tsx src/intake/build-form.ts",
     "signoff": "tsx src/signoff/cli.ts",
     "deliver": "tsx src/deliver/cli.ts",
     "serve": "tsx src/server/index.ts",
-    "stripe:setup": "tsx src/server/setup.ts"
+    "stripe:setup": "tsx src/server/setup.ts",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:check": "tsx src/db/migrate.ts --check"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
     "ajv": "^8.17.1",
     "dotenv": "^16.4.5",
     "https-proxy-agent": "^9.1.0",
+    "pg": "^8.23.0",
     "playwright-core": "^1.61.1",
     "stripe": "^22.3.0",
     "tsx": "^4.19.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/pg": "^8.23.1",
     "typescript": "^5.7.0"
   }
 }

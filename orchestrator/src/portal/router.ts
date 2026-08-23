@@ -8,7 +8,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { parseCookies } from '../server/admin/session.js';
 import { PORTAL_COOKIE, signTenant, verifyTenant, portalCookie, clearPortalCookie } from './session.js';
 import type { InMemoryLoginThrottle } from './session.js';
-import { loginPage, dashboardPage, billingPage } from './views.js';
+import { accountSetupPage, loginPage, dashboardPage, billingPage } from './views.js';
 import type { DashboardData } from './data.js';
 import type { BillingView } from './billing.js';
 
@@ -50,26 +50,6 @@ function sendHtml(res: ServerResponse, code: number, body: string, cookie?: stri
   Object.assign(headers, extra);
   res.writeHead(code, headers);
   res.end(body);
-}
-
-function esc(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
-}
-
-function setupPage(token: string, error?: string): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
-    `<meta name="referrer" content="no-referrer"><title>Set up your Relaunch72 account</title>` +
-    `<style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#f4f6f8;color:#1f2836;margin:0;padding:40px 18px}` +
-    `.card{max-width:440px;margin:8vh auto;background:#fff;border:1px solid #dfe4ea;border-radius:14px;padding:30px;box-shadow:0 12px 32px #26354a14}` +
-    `h1{font-size:25px;margin:0 0 8px}p{color:#5c6a7e;line-height:1.5}.err{color:#a32727}label{display:block;font-weight:650;margin:18px 0 7px}` +
-    `input{box-sizing:border-box;width:100%;padding:11px;border:1px solid #bac3ce;border-radius:8px;font-size:16px}` +
-    `button{width:100%;margin-top:22px;padding:12px;border:0;border-radius:8px;background:#c9791a;color:#fff;font-size:16px;font-weight:700}</style></head>` +
-    `<body><main class="card"><h1>Choose your password</h1><p>Use at least 12 characters. This private setup link works once.</p>` +
-    (error ? `<p class="err" role="alert">${esc(error)}</p>` : '') +
-    `<form method="post" action="/portal/setup"><input type="hidden" name="token" value="${esc(token)}">` +
-    `<label for="password">Password</label><input id="password" name="password" type="password" minlength="12" maxlength="1024" autocomplete="new-password" required>` +
-    `<label for="confirm">Confirm password</label><input id="confirm" name="confirm" type="password" minlength="12" maxlength="1024" autocomplete="new-password" required>` +
-    `<button type="submit">Set password and continue</button></form></main></body></html>`;
 }
 
 function loginKeys(req: IncomingMessage, email: string): string[] {
@@ -121,25 +101,25 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   if (p === '/portal/setup' && method === 'GET') {
     const token = url.searchParams.get('token') ?? '';
     const error = token ? undefined : 'This setup link is incomplete. Contact support.';
-    return sendHtml(res, token ? 200 : 400, setupPage(token, error), undefined, {
+    return sendHtml(res, token ? 200 : 400, accountSetupPage(token, error), undefined, {
       'cache-control': 'no-store',
       'referrer-policy': 'no-referrer',
     });
   }
   if (p === '/portal/setup' && method === 'POST') {
-    if (!deps.completeSetup) return sendHtml(res, 404, setupPage('', 'Account setup is not enabled.'));
+    if (!deps.completeSetup) return sendHtml(res, 404, accountSetupPage('', 'Account setup is not enabled.'));
     const form = await readForm(req);
     const token = form.token ?? '';
     const password = form.password ?? '';
     if (password.length < 12 || password.length > 1_024) {
-      return sendHtml(res, 400, setupPage(token, 'Use a password between 12 and 1,024 characters.'), undefined, { 'cache-control': 'no-store' });
+      return sendHtml(res, 400, accountSetupPage(token, 'Use a password between 12 and 1,024 characters.'), undefined, { 'cache-control': 'no-store' });
     }
     if (password !== (form.confirm ?? '')) {
-      return sendHtml(res, 400, setupPage(token, 'Those passwords do not match.'), undefined, { 'cache-control': 'no-store' });
+      return sendHtml(res, 400, accountSetupPage(token, 'Those passwords do not match.'), undefined, { 'cache-control': 'no-store' });
     }
     const tid = await deps.completeSetup(token, password, now);
     if (!tid) {
-      return sendHtml(res, 400, setupPage('', 'This setup link has expired or has already been used. Contact support.'), undefined, { 'cache-control': 'no-store' });
+      return sendHtml(res, 400, accountSetupPage('', 'This setup link has expired or has already been used. Contact support.'), undefined, { 'cache-control': 'no-store' });
     }
     return redirect(res, '/portal', portalCookie(signTenant(deps.sessionSecret, tid, now), deps.secure));
   }
