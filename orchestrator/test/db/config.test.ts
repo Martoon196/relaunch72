@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DATABASE_ROLES, loadDatabaseConfig } from '../../src/db/config.js';
-import { createCrmCommandDatabasePool, createDatabasePool } from '../../src/db/pool.js';
+import { createCrmCommandDatabasePool, createDatabasePool, createIdentityCommandDatabasePool } from '../../src/db/pool.js';
 
 test('database config uses generic DATABASE_URL only for local development', () => {
   const config = loadDatabaseConfig('web', {
@@ -76,6 +76,33 @@ test('CRM commands have a dedicated verified role URL and pool identity', async 
   }, { onBackgroundError: () => undefined });
   assert.equal(pool.options.application_name, 'relaunch72-crm-command');
   assert.equal(pool.options.max, 2);
+  assert.equal(typeof pool.options.verify, 'function');
+  await pool.end();
+});
+
+test('portal login and session commands use their own verified identity role', async () => {
+  assert.ok(DATABASE_ROLES.includes('identityCommand'));
+  assert.throws(
+    () => loadDatabaseConfig('identityCommand', {
+      NODE_ENV: 'production',
+      DATABASE_IDENTITY_COMMAND_URL: 'postgresql://r72_web:secret@database.example/relaunch72?sslmode=require',
+    }),
+    /must authenticate as the least-privilege r72_identity_command role/,
+  );
+  const config = loadDatabaseConfig('identityCommand', {
+    NODE_ENV: 'production',
+    DATABASE_IDENTITY_COMMAND_URL: 'postgresql://r72_identity_command:secret@database.example/relaunch72?sslmode=require',
+    DATABASE_IDENTITY_COMMAND_POOL_MAX: '3',
+  });
+  assert.equal(config.sourceEnv, 'DATABASE_IDENTITY_COMMAND_URL');
+  assert.equal(config.applicationName, 'relaunch72-identity-command');
+  assert.equal(config.expectedDatabaseUser, 'r72_identity_command');
+  assert.equal(config.maxConnections, 3);
+
+  const pool = createIdentityCommandDatabasePool({
+    DATABASE_IDENTITY_COMMAND_URL: 'postgresql://r72_identity_command:secret@localhost/relaunch72_test?sslmode=disable',
+  }, { onBackgroundError: () => undefined });
+  assert.equal(pool.options.application_name, 'relaunch72-identity-command');
   assert.equal(typeof pool.options.verify, 'function');
   await pool.end();
 });

@@ -29,6 +29,7 @@ import { makePostmark } from '../email/postmark.js';
 import type { BuildEntitlement } from './entitlements.js';
 import { customerOutboundMessagingEnabled, runtimeSafetyPolicy, subscriptionCheckoutBlockers } from './readiness.js';
 import { canonicalIntake } from '../intake/canonical.js';
+import { buildPgPortalPlatform, postgresPortalEnabled, type PgPortalPlatform } from '../portal/postgres-platform.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ORCH_ROOT = path.resolve(HERE, '../..');
@@ -180,10 +181,26 @@ async function main(): Promise<void> {
   // Enforce an active subscription before "Run this week" only if explicitly turned on.
   const billingEnforced = /^(1|true|yes)$/i.test(process.env.BILLING_ENFORCED?.trim() ?? '');
 
+  const requirePostgresPortal = postgresPortalEnabled(process.env);
+  let postgresPortal: PgPortalPlatform | undefined;
+  if (requirePostgresPortal) {
+    try {
+      postgresPortal = await buildPgPortalPlatform(process.env);
+      console.log('PostgreSQL portal identity and CRM contracts are current and ready.');
+    } catch (error) {
+      // No legacy-cookie fallback in requested database mode. Payments may stay
+      // live for liveness, but the customer portal is deliberately not mounted.
+      console.warn(`⚠  PostgreSQL portal unavailable; portal remains unmounted (${(error as Error).name || 'readiness error'}). See protected service logs for the readiness failure.`);
+    }
+  }
+
   // Client portal — optional; a failure here must never stop the payments server.
   const allowDemoSeed = runtimePolicy.allowDemoSeed;
   let bundle;
   try {
+    if (requirePostgresPortal && !postgresPortal) {
+      throw new Error('required PostgreSQL portal services did not pass readiness');
+    }
     bundle = await buildPortalDeps({
       dataDir: cfg.dataDir,
       sessionSecret: cfg.sessionSecret,
@@ -198,6 +215,8 @@ async function main(): Promise<void> {
       subscribeUrl,
       manageUrl,
       billingEnforced,
+      auth: postgresPortal?.auth,
+      crm: postgresPortal?.crm,
     });
     console.log(cfg.production
       ? 'Client portal mounted at /portal — production demo seeding disabled.'
@@ -205,11 +224,18 @@ async function main(): Promise<void> {
         ? `Client portal mounted at /portal — explicit development demo: ${process.env.PORTAL_DEMO_EMAIL?.trim() || 'owner@frayne-electrical.co.uk'}`
         : 'Client portal mounted at /portal — development demo seeding disabled.');
   } catch (e) {
+    if (postgresPortal) {
+      await postgresPortal.close();
+      postgresPortal = undefined;
+    }
     console.warn(`⚠  Client portal not mounted: ${(e as Error).message}`);
   }
 
   // On an accepted intake, provision that customer's portal login in the background.
-  const onIntakeAccepted = bundle && canAutoProvisionPortal
+  if (requirePostgresPortal && canAutoProvisionPortal) {
+    console.warn('⚠  Automatic portal onboarding remains locked in PostgreSQL mode until canonical database provisioning and setup-token consumption are atomic.');
+  }
+  const onIntakeAccepted = bundle && canAutoProvisionPortal && !requirePostgresPortal
     ? (intake: Intake, email: string | null): void => {
         if (!email) return;
         void bundle!.provision({ email, name: String(intake.A1 ?? 'Your business'), intake })
@@ -219,8 +245,26 @@ async function main(): Promise<void> {
     : undefined;
 
   const buildBlockers = forceMockBuilds || process.env.ANTHROPIC_API_KEY?.trim() ? [] : ['Anthropic build key is not configured'];
-  const app = createApp({ stripe, cfg, orders, subscriptions, kickPipeline, buildBlockers, buildMode: forceMockBuilds ? 'mock' : 'live', now: () => new Date().toISOString(), marketing, portal: bundle?.portal, onIntakeAccepted });
-  http.createServer((req, res) => { void app(req, res); }).listen(cfg.port, cfg.host, () => {
+  const app = createApp({
+    stripe,
+    cfg,
+    orders,
+    subscriptions,
+    kickPipeline,
+    buildBlockers,
+    buildMode: forceMockBuilds ? 'mock' : 'live',
+    now: () => new Date().toISOString(),
+    marketing,
+    portal: bundle?.portal,
+    portalBlockers: bundle
+      ? undefined
+      : [requirePostgresPortal
+          ? 'required PostgreSQL portal services did not pass readiness'
+          : 'client portal dependencies did not compose'],
+    onIntakeAccepted,
+  });
+  const server = http.createServer((req, res) => { void app(req, res); });
+  server.listen(cfg.port, cfg.host, () => {
     const mode = cfg.keyMode === 'live' ? 'LIVE LOCKED ⚠️' : cfg.keyMode.toUpperCase();
     console.log(`Relaunch72 payments server on ${cfg.host}:${cfg.port} — ${mode} mode`);
     // Automatic catalog writes are test-mode only. Live Stripe remains entirely
@@ -229,6 +273,24 @@ async function main(): Promise<void> {
     if (cfg.keyMode === 'test') void ensurePrices(stripe, cfg);
     else if (cfg.keyMode === 'live') console.warn('⚠  Live Stripe catalog provisioning is locked; no products or prices were changed.');
   });
+
+  let shuttingDown = false;
+  const shutdown = async (signal: string): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`Received ${signal}; draining HTTP requests and closing database pools.`);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      });
+      await postgresPortal?.close();
+    } catch (error) {
+      process.exitCode = 1;
+      console.error(`Shutdown failed: ${(error as Error).name || 'Error'}`);
+    }
+  };
+  process.once('SIGINT', () => { void shutdown('SIGINT'); });
+  process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
 }
 
 main().catch((e) => { console.error(`Fatal: ${(e as Error).message}`); process.exit(1); });

@@ -6,6 +6,7 @@ import test from 'node:test';
 const migration1Url = new URL('../../src/db/migrations/0001_extensions_roles.sql', import.meta.url);
 const migration2Url = new URL('../../src/db/migrations/0002_identity_workspaces.sql', import.meta.url);
 const migration3Url = new URL('../../src/db/migrations/0003_crm_first_loop.sql', import.meta.url);
+const migration4Url = new URL('../../src/db/migrations/0004_portal_sessions.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -288,4 +289,81 @@ test('0003 seeds an idempotent default sales pipeline and ordered semantic stage
     assert.match(sql, stage);
   }
   assert.match(sql, /ON CONFLICT DO NOTHING/);
+});
+
+test('0004 creates an isolated identity command role with function-only authority', async () => {
+  const sql = normalise(await readFile(migration4Url, 'utf8'));
+  assert.match(sql, /ALTER ROLE r72_identity_command LOGIN [^;]* NOBYPASSRLS NOINHERIT/);
+  assert.match(sql, /REVOKE r72_owner, r72_security_definer FROM r72_identity_command/);
+  assert.match(sql, /Unsafe identity role membership/);
+  assert.match(sql, /Unsafe identity role grant/);
+  assert.match(sql, /parent\.rolname = 'r72_identity_command' AND member\.rolname <> current_user/);
+  assert.match(sql, /Unsafe privileged role membership/);
+  assert.match(sql, /Unsafe privileged role grant/);
+  assert.match(sql, /parent\.rolname = 'r72_owner' AND member\.rolname <> current_user/);
+  assert.match(sql, /parent\.rolname = 'r72_security_definer' AND member\.rolname <> 'r72_owner'/);
+  assert.match(sql, /REVOKE ALL ON ALL TABLES IN SCHEMA app FROM r72_identity_command/);
+  assert.doesNotMatch(sql, /GRANT (?:SELECT|INSERT|UPDATE|DELETE)[^;]* TO r72_identity_command/);
+  for (const fn of [
+    'portal_login_credential',
+    'create_portal_session',
+    'revoke_portal_session',
+    'upgrade_portal_password_hash',
+  ]) {
+    assert.match(sql, new RegExp(`GRANT EXECUTE ON FUNCTION app_private\\.${fn}\\(`));
+  }
+  assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.(?:resolve_portal_session|lock_active_portal_session|active_portal_session)[^;]* TO r72_identity_command/);
+});
+
+test('0004 makes login credentials pre-context but session issuance compare-and-swap safe', async () => {
+  const sql = normalise(await readFile(migration4Url, 'utf8'));
+  assert.match(sql, /CREATE FUNCTION app_private\.portal_login_credential\(p_email text\)/);
+  assert.match(sql, /person\.status = 'active' AND person\.password_hash IS NOT NULL/);
+  assert.match(sql, /app_private\.has_active_workspace_membership\(person\.id, candidate\.workspace_id\)/);
+  assert.match(sql, /candidate_workspace\.legacy_tenant_key IS NOT NULL/);
+  assert.match(sql, /candidate_workspace\.legacy_tenant_key = btrim\(candidate_workspace\.legacy_tenant_key\)/);
+  assert.match(sql, /pg_catalog\.lower\(person\.email::text\) = pg_catalog\.lower\(pg_catalog\.btrim\(p_email\)\)/);
+  assert.match(sql, /RETURNS TABLE \( user_id uuid, user_email text, password_hash text/);
+  assert.match(sql, /CREATE FUNCTION app_private\.create_portal_session\( p_user_id uuid, p_workspace_id uuid, p_expected_password_hash text/);
+  assert.match(sql, /person\.password_hash = p_expected_password_hash/);
+  assert.match(sql, /FOR SHARE OF person, membership, workspace, organization/);
+  assert.match(sql, /RETURN QUERY SELECT created_session_id, p_user_id, selected_user_email, p_workspace_id/);
+  assert.match(sql, /FOR SHARE OF source_membership/);
+  assert.match(sql, /GRANT UPDATE \(updated_at\) ON app\.organizations, app\.workspaces, app\.organization_memberships, app\.workspace_memberships TO r72_security_definer/);
+  for (const table of ['organizations', 'workspaces', 'organization_memberships', 'workspace_memberships']) {
+    assert.match(sql, new RegExp(`CREATE POLICY ${table}_security_lock ON app\\.${table} FOR UPDATE TO r72_security_definer USING \\(true\\) WITH CHECK \\(true\\)`));
+  }
+  assert.match(sql, /octet_length\(p_token_hash\) <> 32/);
+  assert.match(sql, /statement_timestamp\(\) \+ interval '14 days'/);
+  assert.match(sql, /INSERT INTO app\.user_sessions/);
+  assert.match(sql, /CREATE FUNCTION app_private\.upgrade_portal_password_hash/);
+  assert.match(sql, /p_expected_hash IS NULL OR p_replacement_hash IS NULL/);
+  assert.match(sql, /person\.password_hash = p_expected_hash/);
+});
+
+test('0004 revalidates portal sessions inside read and command transactions', async () => {
+  const sql = normalise(await readFile(migration4Url, 'utf8'));
+  assert.match(sql, /CREATE FUNCTION app_private\.resolve_portal_session\(p_token_hash bytea\)/);
+  assert.match(sql, /JOIN app\.users AS person ON person\.id = resolved\.user_id AND person\.status = 'active'/);
+  assert.match(sql, /SELECT resolved\.session_id, resolved\.user_id, person\.email::text/);
+  assert.match(sql, /CREATE FUNCTION app_private\.lock_active_portal_session/);
+  assert.match(sql, /session\.token_hash = p_token_hash/);
+  assert.match(sql, /session\.user_id = p_user_id/);
+  assert.match(sql, /session\.selected_workspace_id = p_workspace_id/);
+  assert.match(sql, /session\.revoked_at IS NULL/);
+  assert.match(sql, /session\.expires_at > statement_timestamp\(\)/);
+  assert.match(sql, /FOR SHARE OF session/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.lock_active_portal_session\(bytea, uuid, uuid\) TO r72_crm_command/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.active_portal_session\(bytea, uuid, uuid\) TO r72_web/);
+  assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.lock_active_portal_session[^;]* TO r72_web/);
+});
+
+test('0004 exposes an exact read-only migration ledger without exposing its table', async () => {
+  const sql = normalise(await readFile(migration4Url, 'utf8'));
+  assert.match(sql, /CREATE FUNCTION app_private\.runtime_schema_migrations\(\)/);
+  assert.match(sql, /SECURITY DEFINER SET search_path = pg_catalog/);
+  assert.match(sql, /FROM app_private\.schema_migrations/);
+  assert.match(sql, /REVOKE ALL ON FUNCTION app_private\.runtime_schema_migrations\(\) FROM PUBLIC/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.runtime_schema_migrations\(\) TO r72_web/);
+  assert.doesNotMatch(sql, /GRANT SELECT ON app_private\.schema_migrations TO r72_web/);
 });

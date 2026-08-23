@@ -15,6 +15,10 @@ messages, publishing, or any external provider effect.
   checkout.
 - Portal reads use `DATABASE_WEB_URL` / `r72_web`. That role can read CRM rows
   allowed by forced RLS but has no CRM table mutation grant or write policy.
+- Portal password login, opaque-session issuance/revocation and imported-hash
+  upgrades use `DATABASE_IDENTITY_COMMAND_URL` / `r72_identity_command`. It has
+  no table privileges and can execute only the audited authentication functions
+  from migration `0004`.
 - CRM command handlers use the separate `createCrmCommandDatabasePool` factory,
   `DATABASE_CRM_COMMAND_URL`, and `r72_crm_command`. The role is `NOINHERIT`,
   cannot assume an owner/security role, and is the only user-facing runtime
@@ -36,4 +40,14 @@ white-label organisations, isolated workspaces, sourced/revocable memberships,
 opaque sessions, and hashed single-use identity tokens. Migration `0003` adds
 the new command role plus the first CRM loop, without changing the issued
 `0001`/`0002` checksums, and keeps the web/read pool physically separate from
-its command/write pool.
+its command/write pool. Migration `0004` adds the isolated identity-command
+role, opaque portal session functions, in-transaction session guards and a safe
+runtime migration-ledger function without changing any issued migration.
+
+The server composes the PostgreSQL portal only when
+`PORTAL_POSTGRES_ENABLED=true`. It then requires exact web, identity-command and
+CRM-command URLs, verifies `current_user` for every pool and compares the safe
+runtime ledger with the bundled migration checksums. Any failure leaves the
+portal unmounted; requested PostgreSQL mode never falls back to legacy signed
+cookies or JSON CRM. Canonical provisioning and one-time account setup are not
+implemented yet, so this gate must remain false for customer traffic.

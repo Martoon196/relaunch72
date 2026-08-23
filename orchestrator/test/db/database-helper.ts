@@ -5,8 +5,15 @@ import { createDatabasePool } from '../../src/db/pool.js';
 
 const TEST_NAME_PATTERN = /(?:^|[_-])test(?:$|[_-])/i;
 type ScopedTestRole = 'r72_web' | 'r72_crm_command' | 'r72_worker';
+type UnscopedTestRole = 'r72_web' | 'r72_identity_command' | 'r72_crm_command' | 'r72_worker';
 
 const TEST_ROLES = new Set<ScopedTestRole>(['r72_web', 'r72_crm_command', 'r72_worker']);
+const UNSCOPED_TEST_ROLES = new Set<UnscopedTestRole>([
+  'r72_web',
+  'r72_identity_command',
+  'r72_crm_command',
+  'r72_worker',
+]);
 
 export function testDatabaseSkipReason(): string | false {
   return process.env.TEST_DATABASE_URL?.trim()
@@ -95,10 +102,11 @@ export async function scopedQuery<T extends QueryResultRow = QueryResultRow>(
 
 export async function roleQuery<T extends QueryResultRow = QueryResultRow>(
   pool: Pool,
-  role: 'r72_web',
+  role: UnscopedTestRole,
   sql: string,
   values: unknown[] = [],
 ): Promise<T[]> {
+  if (!UNSCOPED_TEST_ROLES.has(role)) throw new Error('Unsupported integration-test role');
   const client = await pool.connect();
   try {
     await client.query('BEGIN');

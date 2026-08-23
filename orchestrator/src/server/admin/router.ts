@@ -79,7 +79,7 @@ export async function handleAdmin(
   res: ServerResponse,
   cfg: StripeConfig,
   runsDir: string = RUNS_DIR,
-  loginThrottle: Pick<InMemoryLoginThrottle, 'check' | 'failure' | 'success'> = DEFAULT_ADMIN_LOGIN_THROTTLE,
+  loginThrottle: Pick<InMemoryLoginThrottle, 'reserve' | 'failure' | 'success'> = DEFAULT_ADMIN_LOGIN_THROTTLE,
 ): Promise<void> {
   if (!cfg.adminPassword) { sendHtml(res, 404, '<h1>Admin is disabled</h1><p>Set ADMIN_PASSWORD to enable the control room.</p>'); return; }
 
@@ -94,7 +94,7 @@ export async function handleAdmin(
   if (p === '/admin/login' && method === 'GET') { sendHtml(res, 200, loginPage()); return; }
   if (p === '/admin/login' && method === 'POST') {
     const throttleKey = `source:${loginSource(req)}`;
-    const throttle = loginThrottle.check(throttleKey, now);
+    const throttle = loginThrottle.reserve(throttleKey, now);
     if (!throttle.allowed) {
       sendHtml(res, 429, loginPage('Too many login attempts. Try again later.'), undefined, {
         'retry-after': String(throttle.retryAfterSeconds),

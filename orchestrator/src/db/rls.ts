@@ -5,6 +5,8 @@ export interface DatabaseRequestContext {
   workspaceId: string;
   userId?: string;
   requestId: string;
+  /** Exact opaque portal token hash, revalidated in the domain transaction. */
+  portalSessionTokenHash?: Buffer;
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -30,12 +32,20 @@ export function validateDatabaseContext(context: DatabaseRequestContext): void {
   if (!REQUEST_ID_PATTERN.test(context.requestId)) {
     throw new Error('Database context requestId must be 1-128 printable ASCII characters');
   }
+  if (context.portalSessionTokenHash !== undefined
+      && (!Buffer.isBuffer(context.portalSessionTokenHash) || context.portalSessionTokenHash.length !== 32)) {
+    throw new Error('Database context portalSessionTokenHash must be a 32-byte Buffer when supplied');
+  }
+  if (context.portalSessionTokenHash !== undefined && context.actorKind !== 'user') {
+    throw new Error('Only a user database context may carry a portal session hash');
+  }
 }
 
 export function requestDatabaseContext(input: {
   workspaceId: string;
   userId: string;
   requestId: string;
+  portalSessionTokenHash?: Buffer;
 }): DatabaseRequestContext {
   return { ...input, actorKind: 'user' };
 }

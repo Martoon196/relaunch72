@@ -7,7 +7,9 @@
 > [16-MODULAR-PRODUCT-UX.md](./16-MODULAR-PRODUCT-UX.md),
 > [17-WHITE-LABEL-PROVIDER-MATRIX.md](./17-WHITE-LABEL-PROVIDER-MATRIX.md),
 > [18-LAUNCH-COST-MODEL.md](./18-LAUNCH-COST-MODEL.md), and
-> [19-CRM-FIRST-LOOP-STATUS.md](./19-CRM-FIRST-LOOP-STATUS.md) before relying on
+> [19-CRM-FIRST-LOOP-STATUS.md](./19-CRM-FIRST-LOOP-STATUS.md), then the current
+> [20-POSTGRES-PORTAL-CUTOVER-SLICE.md](./20-POSTGRES-PORTAL-CUTOVER-SLICE.md)
+> before relying on
 > historical statements such as “no database” or the old test count.
 
 > Prepared for an external coding agent performing a full CRM + architecture audit.

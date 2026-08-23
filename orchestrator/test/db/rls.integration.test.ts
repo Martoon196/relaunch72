@@ -23,12 +23,15 @@ test('real PostgreSQL proves identity and CRM RLS, same-workspace FKs, append-on
   const organizationB = randomUUID();
   const workspaceA = randomUUID();
   const workspaceB = randomUUID();
+  const workspaceUnbridged = randomUUID();
   const userA = randomUUID();
   const userB = randomUUID();
   const viewerA = randomUUID();
   const salesA = randomUUID();
   const tokenHash = createHash('sha256').update(randomBytes(32)).digest();
   const csrfHash = createHash('sha256').update(randomBytes(32)).digest();
+  const storedPasswordHash = createHash('sha256').update('integration-password').digest('hex');
+  const legacyTenantKey = 'integration-workspace-a';
 
   try {
     await resetIdentityTables(pool);
@@ -38,7 +41,10 @@ test('real PostgreSQL proves identity and CRM RLS, same-workspace FKs, append-on
        JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
        JOIN pg_catalog.pg_roles AS parent ON parent.oid = membership.roleid
        WHERE member.rolname = ANY ($1::text[])`,
-      [['r72_security_definer', 'r72_web', 'r72_crm_command', 'r72_public', 'r72_worker', 'r72_webhook', 'r72_readonly']],
+      [[
+        'r72_security_definer', 'r72_web', 'r72_identity_command', 'r72_crm_command',
+        'r72_public', 'r72_worker', 'r72_webhook', 'r72_readonly',
+      ]],
     );
     assert.deepEqual(unsafeMemberships.rows, []);
     const unsafeCommandGrants = await pool.query<{ member: string }>(
@@ -57,17 +63,19 @@ test('real PostgreSQL proves identity and CRM RLS, same-workspace FKs, append-on
         [organizationA, organizationB],
       );
       await client.query(
-        `INSERT INTO app.users (id, email, status, email_verified_at)
-         VALUES ($1, 'owner-a@example.test', 'active', clock_timestamp()),
-                ($2, 'owner-b@example.test', 'active', clock_timestamp()),
-                ($3, 'viewer-a@example.test', 'active', clock_timestamp()),
-                ($4, 'sales-a@example.test', 'active', clock_timestamp())`,
-        [userA, userB, viewerA, salesA],
+        `INSERT INTO app.users (id, email, password_hash, status, email_verified_at)
+         VALUES ($1, 'Owner-A@Example.Test', $5, 'active', clock_timestamp()),
+                ($2, 'owner-b@example.test', NULL, 'active', clock_timestamp()),
+                ($3, 'viewer-a@example.test', NULL, 'active', clock_timestamp()),
+                ($4, 'sales-a@example.test', NULL, 'active', clock_timestamp())`,
+        [userA, userB, viewerA, salesA, storedPasswordHash],
       );
       await client.query(
-        `INSERT INTO app.workspaces (id, organization_id, name, slug)
-         VALUES ($1, $2, 'Workspace A', 'workspace-a'), ($3, $4, 'Workspace B', 'workspace-b')`,
-        [workspaceA, organizationA, workspaceB, organizationB],
+        `INSERT INTO app.workspaces (id, organization_id, legacy_tenant_key, name, slug)
+         VALUES ($1, $2, $5, 'Workspace A', 'workspace-a'),
+                ($3, $4, NULL, 'Workspace B', 'workspace-b'),
+                ($6, $2, NULL, 'Unbridged priority workspace', 'workspace-unbridged')`,
+        [workspaceA, organizationA, workspaceB, organizationB, legacyTenantKey, workspaceUnbridged],
       );
       await client.query(
         `INSERT INTO app.organization_memberships (organization_id, user_id, role, status)
@@ -80,16 +88,69 @@ test('real PostgreSQL proves identity and CRM RLS, same-workspace FKs, append-on
          VALUES ($1, $2, $3, 'owner', 'active', $2),
                 ($4, $5, $6, 'owner', 'active', NULL),
                 ($1, $2, $7, 'viewer', 'active', NULL),
-                ($1, $2, $8, 'sales', 'active', NULL)`,
-        [workspaceA, organizationA, userA, workspaceB, organizationB, userB, viewerA, salesA],
-      );
-      await client.query(
-        `INSERT INTO app.user_sessions
-           (token_hash, csrf_secret_hash, user_id, selected_workspace_id, expires_at)
-         VALUES ($1, $2, $3, $4, clock_timestamp() + interval '1 hour')`,
-        [tokenHash, csrfHash, userA, workspaceA],
+                ($1, $2, $8, 'sales', 'active', NULL),
+                ($9, $2, $3, 'owner', 'active', $2)`,
+        [
+          workspaceA, organizationA, userA, workspaceB, organizationB, userB,
+          viewerA, salesA, workspaceUnbridged,
+        ],
       );
     });
+
+    const credential = await roleQuery<{
+      user_id: string;
+      user_email: string;
+      password_hash: string;
+      selected_workspace_id: string;
+      legacy_tenant_key: string;
+    }>(
+      pool,
+      'r72_identity_command',
+      `SELECT user_id, user_email, password_hash, selected_workspace_id, legacy_tenant_key
+       FROM app_private.portal_login_credential($1)`,
+      [' owner-a@example.test '],
+    );
+    assert.deepEqual(credential, [{
+      user_id: userA,
+      user_email: 'Owner-A@Example.Test',
+      password_hash: storedPasswordHash,
+      selected_workspace_id: workspaceA,
+      legacy_tenant_key: legacyTenantKey,
+    }], 'login skips a higher-ranked membership until it has a valid legacy bridge');
+
+    const issued = await roleQuery<{
+      user_id: string;
+      user_email: string;
+      selected_workspace_id: string;
+      legacy_tenant_key: string;
+    }>(
+      pool,
+      'r72_identity_command',
+      `SELECT user_id, user_email, selected_workspace_id, legacy_tenant_key
+       FROM app_private.create_portal_session($1, $2, $3, $4, $5, NULL, NULL)`,
+      [userA, workspaceA, storedPasswordHash, tokenHash, csrfHash],
+    );
+    assert.deepEqual(issued, [{
+      user_id: userA,
+      user_email: 'Owner-A@Example.Test',
+      selected_workspace_id: workspaceA,
+      legacy_tenant_key: legacyTenantKey,
+    }]);
+    await expectPostgresError(
+      roleQuery(pool, 'r72_identity_command', 'SELECT token_hash FROM app.user_sessions'),
+      '42501',
+    );
+    await expectPostgresError(
+      roleQuery(pool, 'r72_web', 'SELECT * FROM app_private.portal_login_credential($1)', ['owner-a@example.test']),
+      '42501',
+    );
+    const nullUpgrade = await roleQuery<{ upgraded: boolean }>(
+      pool,
+      'r72_identity_command',
+      'SELECT app_private.upgrade_portal_password_hash($1, $2, $3) AS upgraded',
+      [userA, storedPasswordHash, null],
+    );
+    assert.deepEqual(nullUpgrade, [{ upgraded: false }]);
 
     const visibleA = await scopedQuery<{ id: string }>(
       pool,
@@ -519,6 +580,32 @@ test('real PostgreSQL proves identity and CRM RLS, same-workspace FKs, append-on
       [tokenHash],
     );
     assert.deepEqual(resolved, [{ user_id: userA, selected_workspace_id: workspaceA }]);
+    const portalResolved = await roleQuery<{
+      user_id: string;
+      user_email: string;
+      selected_workspace_id: string;
+      legacy_tenant_key: string;
+    }>(
+      pool,
+      'r72_web',
+      `SELECT user_id, user_email, selected_workspace_id, legacy_tenant_key
+       FROM app_private.resolve_portal_session($1)`,
+      [tokenHash],
+    );
+    assert.deepEqual(portalResolved, [{
+      user_id: userA,
+      user_email: 'Owner-A@Example.Test',
+      selected_workspace_id: workspaceA,
+      legacy_tenant_key: legacyTenantKey,
+    }]);
+    const commandSessionActive = await scopedQuery<{ active: boolean }>(
+      pool,
+      'r72_crm_command',
+      { workspaceId: workspaceA, userId: userA },
+      'SELECT app_private.lock_active_portal_session($1, $2, $3) AS active',
+      [tokenHash, userA, workspaceA],
+    );
+    assert.deepEqual(commandSessionActive, [{ active: true }]);
     await expectPostgresError(
       roleQuery(pool, 'r72_web', 'SELECT token_hash FROM app.user_sessions'),
       '42501',

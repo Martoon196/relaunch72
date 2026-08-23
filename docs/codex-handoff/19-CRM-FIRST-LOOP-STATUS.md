@@ -51,21 +51,20 @@ or provider action is triggered.
 
 ## What is not runtime-live yet
 
-The current deployed/legacy portal authenticates against JSON account files and
-issues a signed tenant cookie. The durable identity model expects an opaque token
-whose SHA-256 hash exists in `app.user_sessions`, linked to a UUID user and
-workspace membership.
+The currently deployed/legacy portal authenticates against JSON account files
+and issues a signed tenant cookie. The local branch now also supports opaque
+database sessions and a fail-closed PostgreSQL portal composition, but only
+behind the explicit off-by-default `PORTAL_POSTGRES_ENABLED` gate. In that mode,
+legacy signed cookies are rejected and every CRM transaction revalidates the
+hashed session against its UUID user/workspace membership.
 
-Those are intentionally **not treated as interchangeable**. The PostgreSQL CRM
-adapter hashes an opaque browser token and calls the safe
-`app_private.resolve_session(bytea)` function, but the existing legacy login does
-not create that session row. The production server therefore does not compose
-the PostgreSQL CRM service yet, and the CRM navigation remains visibly locked in
-the current portal runtime.
-
-This is a release blocker, not a cosmetic TODO. Wiring the adapter to the legacy
-cookie without a real user/workspace mapping would turn a signed tenant string
-into an unsafe identity shortcut.
+Those two modes remain intentionally **not interchangeable**. PostgreSQL mode
+currently works only for a correctly migrated, pre-provisioned identity graph;
+automatic onboarding and one-time setup are locked because their canonical
+database commands do not exist yet. The gate must therefore stay off for
+customer traffic. Read
+[20-POSTGRES-PORTAL-CUTOVER-SLICE.md](./20-POSTGRES-PORTAL-CUTOVER-SLICE.md)
+for the exact current boundary.
 
 ## Required cutover before a pilot
 
@@ -73,10 +72,13 @@ into an unsafe identity shortcut.
    each accepted account, and atomically seed its default sales pipeline and
    stages. Migration `0003` seeds workspaces that already exist; future
    workspace creation does not yet have that canonical provisioning command.
-2. Replace or bridge legacy login with opaque database sessions; store only token
-   hashes and rotate/revoke them normally.
-3. Compose verified `r72_web` and `r72_crm_command` pools at server boot only
-   after an exact migration-readiness check.
+2. Complete the new opaque database-session seam with atomic setup-token
+   consumption and first-session issuance. Runtime sessions now store only token
+   hashes and revoke normally, but PostgreSQL account setup is intentionally not
+   implemented.
+3. Keep the new verified `r72_web`, `r72_identity_command` and
+   `r72_crm_command` pool composition off until all remaining gates pass. Exact
+   migration readiness and no-fallback behavior are implemented.
 4. Import/reconcile legacy JSON contacts with an explicit report; do not silently
    merge on display name.
 5. Run `npm run test:db:integration` against an explicitly disposable PostgreSQL
@@ -111,4 +113,6 @@ read-only membership and the create → move → complete service boundary.
 It is not evidence that PostgreSQL itself accepted the migration on this machine:
 there is no local PostgreSQL/Docker runtime and no disposable
 `TEST_DATABASE_URL`. That one integration test remains an explicit, visible skip
-until the required test database is supplied.
+until the required test database is supplied. The final ordinary branch run
+reports **511 passing tests, zero failures and one truthful skip**; TypeScript
+typechecking also passes.

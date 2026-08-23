@@ -60,3 +60,11 @@ export function createCrmCommandDatabasePool(
 ): Pool {
   return createDatabasePool(loadDatabaseConfig('crmCommand', env), hooks);
 }
+
+/** Isolated pre-context identity pool; it can execute audited auth functions only. */
+export function createIdentityCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('identityCommand', env), hooks);
+}

@@ -18,6 +18,7 @@ import { FIXTURES_DIR } from '../paths.js';
 import type { Intake } from '../types.js';
 import type { PortalDeps } from './router.js';
 import type { PortalCrmService } from './crm-service.js';
+import type { PortalAuthService } from './auth-service.js';
 import type { SubscriptionStore } from '../server/subscriptions.js';
 import { canonicalIntake } from '../intake/canonical.js';
 
@@ -115,6 +116,8 @@ export interface PortalConfig {
   billingEnforced?: boolean;
   /** Optional durable CRM composition; the legacy JSON portal remains valid without it. */
   crm?: PortalCrmService;
+  /** Optional database-backed opaque login/session composition. */
+  auth?: PortalAuthService;
 }
 
 export interface PortalBundle {
@@ -163,12 +166,21 @@ export async function buildPortalDeps(cfg: PortalConfig): Promise<PortalBundle> 
     completeSetup: (token, password, now) => accounts.completeSetup(token, password, now),
     loginThrottle: new InMemoryLoginThrottle(),
     dashboard: makeDashboard(store, (t) => t.runDir),
+    verifyLegacyBridge: async (tenantId, userEmail) => {
+      const email = userEmail.trim().toLowerCase();
+      const [tenantAccount, emailAccount] = await Promise.all([
+        accounts.findByTenant(tenantId),
+        accounts.findByEmail(email),
+      ]);
+      return tenantAccount?.email === email && emailAccount?.tenantId === tenantId;
+    },
     runTick: (tid) => runTickReal(store, tid),
     billing,
     subscribeUrl: cfg.subscribeUrl,
     manageUrl: cfg.manageUrl,
     billingEnforced: cfg.billingEnforced,
     crm: cfg.crm,
+    auth: cfg.auth,
   };
   const provision = async (args: ProvisionArgs): Promise<ProvisionResult> => {
     const result = await provisionTenant(store, accounts, cfg.dataDir, args);

@@ -95,6 +95,8 @@ test('contacts body is a labelled CRM page with a real create-lead POST form', (
   assert.match(html, /<nav class="crm-subnav" aria-label="CRM sections">/);
   assert.match(html, /href="\/portal\/crm\/contacts" aria-current="page"/);
   assert.match(html, /<section class="crm-panel" aria-labelledby="crm-contacts-title">/);
+  assert.match(html, /href="#crm-create-lead">Create a lead<\/a>/);
+  assert.match(html, /id="crm-create-lead" aria-labelledby="crm-create-lead-title"/);
   assert.match(html, /<table class="crm-table"><caption>Contacts saved in Northstar Property<\/caption>/);
   assert.match(html, /<th scope="col">Contact<\/th>/);
   assert.match(html, /data-label="Primary reach"/);
@@ -106,6 +108,7 @@ test('contacts body is a labelled CRM page with a real create-lead POST form', (
   assert.match(html, /name="stage_id" required/);
   assert.match(html, /name="_csrf" value="csrf&lt;&amp;&quot;token"/);
   assert.match(html, /name="command_key" value="create:lead-001"/);
+  assert.match(html, /Europe\/London workspace time/);
   assert.match(html, />Create lead in CRM<\/button>/);
   assert.match(html, /does not send a message, schedule content or notify the contact/);
   assert.doesNotMatch(html, /Published successfully|Message sent|Contact notified/i);
@@ -151,7 +154,8 @@ test('create-lead validation errors are linked, announced and preserve safe valu
   assert.match(html, /class="crm-notice error" role="alert"/);
   assert.match(html, /class="crm-error-summary" role="alert" tabindex="-1"/);
   assert.match(html, /href="#crm-lead-email">Email address: Enter a valid email address\.<\/a>/);
-  assert.match(html, /id="crm-lead-email"[^>]*aria-invalid="true" aria-describedby="crm-lead-email-error"/);
+  assert.match(html, /id="crm-lead-email"[^>]*aria-invalid="true" aria-describedby="crm-lead-email-error" autofocus/);
+  assert.doesNotMatch(html, /id="crm-lead-phone"[^>]*autofocus/);
   assert.match(html, /id="crm-lead-email-error">Enter a valid email address\.<\/p>/);
   assert.match(html, /value="Avery &amp; Co"/);
   assert.match(html, /value="not-an-email"/);
@@ -186,8 +190,28 @@ test('viewer snapshots render CRM data without mutation forms', () => {
   assert.match(pipeline, /Read-only access · stage changes are unavailable/);
   assert.match(tasks, /Read-only access · task changes are unavailable/);
   assert.doesNotMatch(contacts, /<form class="crm-form"/);
+  assert.doesNotMatch(contacts, /href="#crm-create-lead"/);
   assert.doesNotMatch(pipeline, /<form class="crm-move-form"/);
   assert.doesNotMatch(tasks, /<form class="crm-complete-form"/);
+});
+
+test('empty CRM states respect workspace permissions', () => {
+  const base = snapshot();
+  const writable = renderCrmContactsBody(snapshot({ contacts: [] }), {
+    csrfToken: 'csrf-token', createLeadCommandKey: 'create-lead',
+  });
+  const readOnlySnapshot = snapshot({
+    workspace: { ...base.workspace, canWrite: false }, contacts: [], stages: [], opportunities: [],
+  });
+  const readOnlyContacts = renderCrmContactsBody(readOnlySnapshot, {
+    csrfToken: 'csrf-token', createLeadCommandKey: 'create-lead',
+  });
+  const readOnlyPipeline = renderCrmPipelineBody(readOnlySnapshot, { csrfToken: 'csrf-token' });
+
+  assert.match(writable, /Use the create lead form to add the first private CRM record/);
+  assert.match(readOnlyContacts, /Ask a workspace owner or sales user to add the first lead/);
+  assert.doesNotMatch(readOnlyContacts, /Use the create lead form/);
+  assert.match(readOnlyPipeline, /Ask a workspace owner or administrator to finish the pipeline setup/);
 });
 
 test('pipeline uses accessible server-rendered move forms with concurrency and CSRF fields', () => {
@@ -217,7 +241,7 @@ test('pipeline uses accessible server-rendered move forms with concurrency and C
   assert.match(html, /href="\/portal\/crm\/opportunities" aria-current="page"/);
   assert.match(html, /class="crm-notice conflict" role="alert"/);
   assert.match(html, /We did not overwrite the saved stage/);
-  assert.match(html, /<div class="crm-board" aria-label="Opportunity stages">/);
+  assert.match(html, /<div class="crm-board" role="region" tabindex="0" aria-label="Opportunity stages" aria-describedby="crm-board-keyboard-help">/);
   assert.match(html, /Stage needs review/);
   assert.match(html, /Second &lt;deal&gt;/);
   assert.match(html, /action="\/portal\/crm\/opportunities\/opportunity%2Fwith%20path%3Fbits\/stage"/);
@@ -229,7 +253,8 @@ test('pipeline uses accessible server-rendered move forms with concurrency and C
   assert.match(html, /name="expected_version" value="4"/);
   assert.match(html, /<time datetime="2026-09-30">30 Sept 2026<\/time>/);
   assert.match(html, /no contact is notified/);
-  assert.match(html, /does not pretend to support drag and drop/);
+  assert.match(html, /focus the board and use arrow keys/);
+  assert.match(html, /there is no pretend drag and drop/);
   assert.doesNotMatch(html, /\sdraggable=|ondrag|onclick=|role="button"/i);
   assert.doesNotMatch(html, /Stage updated successfully|Contact notified/i);
 });
@@ -324,4 +349,6 @@ test('CRM bodies use responsive and forced-colour hooks without scripted fake in
     assert.doesNotMatch(html, /<script|javascript:|onclick=|onchange=|\sdraggable=/i);
     assert.doesNotMatch(html, /href="#"/);
   }
+  assert.doesNotMatch(contacts, /\.crm-create-panel\{order:-1\}/);
+  assert.match(pipeline, /\.crm-board\{grid-auto-columns:minmax\(270px,82vw\)\}/);
 });

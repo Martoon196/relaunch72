@@ -9,6 +9,7 @@ import {
   type CrmWorkspaceReadSnapshot,
 } from '../crm-pg/index.js';
 import { requestDatabaseContext, type DatabaseRequestContext } from '../db/rls.js';
+import { InactivePortalSessionError } from '../db/transaction.js';
 import type {
   CrmTimelineItemView,
   CrmWorkspaceSnapshot,
@@ -204,6 +205,9 @@ function positiveVersion(value: string): number | null {
 }
 
 function commandOutcome(error: unknown): PortalCrmMutationOutcome {
+  if (error instanceof InactivePortalSessionError) {
+    return { ok: false, kind: 'forbidden', message: 'This portal session is no longer active.' };
+  }
   if (!(error instanceof CrmCommandError)) {
     return { ok: false, kind: 'unavailable', message: 'The CRM could not safely save that change. No external action was triggered.' };
   }
@@ -232,7 +236,11 @@ export class PgPortalCrmService implements PortalCrmService {
 
   private async context(identity: PortalCrmRequestIdentity): Promise<DatabaseRequestContext | null> {
     const principal = await this.dependencies.principalResolver.resolve(identity.sessionToken);
-    return principal ? requestDatabaseContext({ ...principal, requestId: identity.requestId }) : null;
+    return principal ? requestDatabaseContext({
+      ...principal,
+      requestId: identity.requestId,
+      portalSessionTokenHash: createHash('sha256').update(identity.sessionToken).digest(),
+    }) : null;
   }
 
   private async commandWorkspace(context: DatabaseRequestContext): Promise<CrmWorkspaceReadSnapshot['workspace']> {
@@ -247,7 +255,12 @@ export class PgPortalCrmService implements PortalCrmService {
   async snapshot(identity: PortalCrmRequestIdentity): Promise<CrmWorkspaceSnapshot | null> {
     const context = await this.context(identity);
     if (!context) return null;
-    return mapSnapshot(await this.dependencies.readService.loadWorkspaceSnapshot(context), this.nextCommandKey);
+    try {
+      return mapSnapshot(await this.dependencies.readService.loadWorkspaceSnapshot(context), this.nextCommandKey);
+    } catch (error) {
+      if (error instanceof InactivePortalSessionError) return null;
+      throw error;
+    }
   }
 
   async createLead(identity: PortalCrmRequestIdentity, input: PortalCreateLeadInput): Promise<PortalCrmMutationOutcome> {

@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { signSession, verifySession } from '../src/server/admin/session.js';
-import { portalCsrfToken, signTenant, verifyPortalCsrf, verifyTenant } from '../src/portal/session.js';
+import {
+  portalCsrfToken,
+  portalLoginCsrfCookie,
+  portalLoginCsrfToken,
+  signTenant,
+  verifyPortalCsrf,
+  verifyPortalLoginCsrf,
+  verifyTenant,
+} from '../src/portal/session.js';
 
 test('admin and portal session tokens are cryptographically domain-separated', () => {
   const secret = 'one-shared-secret-is-still-safe-with-domain-separation';
@@ -13,6 +21,18 @@ test('admin and portal session tokens are cryptographically domain-separated', (
   assert.equal(verifyTenant(secret, portal, now + 1), 'tenant-1');
   assert.equal(verifySession(secret, portal, now + 1), false, 'a customer token can never become an admin token');
   assert.equal(verifyTenant(secret, admin, now + 1), null, 'an admin token is not a tenant identity');
+});
+
+test('pre-authentication login CSRF uses a signed double-submit token and strict cookie', () => {
+  const secret = 'login-csrf-domain-secret';
+  const token = portalLoginCsrfToken(secret);
+  assert.match(token, /^[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}$/);
+  assert.equal(verifyPortalLoginCsrf(secret, token, token), true);
+  assert.equal(verifyPortalLoginCsrf('wrong-secret', token, token), false);
+  assert.equal(verifyPortalLoginCsrf(secret, token, `${token}x`), false);
+  assert.equal(verifyPortalLoginCsrf(secret, undefined, token), false);
+  const cookie = portalLoginCsrfCookie(token, true);
+  assert.match(cookie, /HttpOnly; SameSite=Strict; Path=\/portal\/login; Max-Age=600; Secure$/);
 });
 
 test('session payloads carry explicit version and audience claims', () => {

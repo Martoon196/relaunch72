@@ -71,7 +71,7 @@ async function loadAppliedMigrations(client: PoolClient): Promise<Map<string, st
   return new Map(rows.rows.map((row) => [row.filename, row.checksum]));
 }
 
-function validateAppliedState(
+export function validateAppliedState(
   migrations: SqlMigration[],
   applied: Map<string, string>,
 ): void {

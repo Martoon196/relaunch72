@@ -209,6 +209,7 @@ test('a missing CRM mapping never destroys the still-valid legacy portal login',
   };
   const res = await call('GET', '/portal/crm/contacts', deps(crm));
   assert.equal(res.statusCode, 403);
-  assert.match(res.body, /portal login is still active/);
+  assert.match(res.body, /no longer has access to the durable CRM workspace/);
+  assert.match(res.body, /Skip to main content/);
   assert.equal(res.headers['set-cookie'], undefined);
 });

@@ -9,6 +9,8 @@ export const PLATFORM_CAPABILITIES = [
   'crm.contacts.write',
   'crm.pipeline.read',
   'crm.pipeline.write',
+  'crm.tasks.read',
+  'crm.tasks.write',
   'content.drafts.read',
   'content.drafts.generate',
   'social.publish',

@@ -37,7 +37,7 @@ test('available modules surface missing setup and explicit disablement truthfull
 });
 
 test('a module cannot look ready while a declared dependency is unavailable', () => {
-  const capabilities = new Set<PlatformCapability>(['crm.contacts.read', 'crm.pipeline.read']);
+  const capabilities = new Set<PlatformCapability>(['crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read']);
   const crm = platformModules.resolve({ capabilities }).find((module) => module.id === 'crm');
   assert.equal(crm?.state, 'setup_required');
   assert.deepEqual(crm?.missingCapabilities, []);

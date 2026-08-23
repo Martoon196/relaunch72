@@ -3,6 +3,7 @@ import '../config.js';
 export const DATABASE_ROLES = [
   'migrator',
   'web',
+  'identityCommand',
   'crmCommand',
   'worker',
   'webhook',
@@ -16,6 +17,7 @@ export type DatabaseSslMode = 'disable' | 'require' | 'verify-full';
 const ROLE_URL_ENV: Record<DatabaseRole, string> = {
   migrator: 'DATABASE_MIGRATOR_URL',
   web: 'DATABASE_WEB_URL',
+  identityCommand: 'DATABASE_IDENTITY_COMMAND_URL',
   crmCommand: 'DATABASE_CRM_COMMAND_URL',
   worker: 'DATABASE_WORKER_URL',
   webhook: 'DATABASE_WEBHOOK_URL',
@@ -25,6 +27,7 @@ const ROLE_URL_ENV: Record<DatabaseRole, string> = {
 
 const EXPECTED_RUNTIME_USER: Partial<Record<DatabaseRole, string>> = {
   web: 'r72_web',
+  identityCommand: 'r72_identity_command',
   crmCommand: 'r72_crm_command',
   worker: 'r72_worker',
   webhook: 'r72_webhook',
@@ -140,7 +143,9 @@ export function loadDatabaseConfig(
 
   const rolePoolKey = role === 'crmCommand'
     ? 'DATABASE_CRM_COMMAND_POOL_MAX'
-    : `DATABASE_${role.toUpperCase()}_POOL_MAX`;
+    : role === 'identityCommand'
+      ? 'DATABASE_IDENTITY_COMMAND_POOL_MAX'
+      : `DATABASE_${role.toUpperCase()}_POOL_MAX`;
   return {
     role,
     connectionString: url.toString(),
@@ -176,7 +181,11 @@ export function loadDatabaseConfig(
       600_000,
       'DATABASE_STATEMENT_TIMEOUT_MS',
     ),
-    applicationName: role === 'crmCommand' ? 'relaunch72-crm-command' : `relaunch72-${role}`,
+    applicationName: role === 'crmCommand'
+      ? 'relaunch72-crm-command'
+      : role === 'identityCommand'
+        ? 'relaunch72-identity-command'
+        : `relaunch72-${role}`,
     expectedDatabaseUser: enforceRuntimeIdentity ? expectedDatabaseUser : undefined,
   };
 }

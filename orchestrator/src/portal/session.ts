@@ -7,12 +7,16 @@
 import crypto from 'node:crypto';
 
 export const PORTAL_COOKIE = 'r72_portal';
+export const PORTAL_LOGIN_CSRF_COOKIE = 'r72_login_csrf';
 export const PORTAL_TTL_MS = 1000 * 60 * 60 * 24 * 14; // 14 days
 const PORTAL_SESSION_CONTEXT = 'relaunch72/session/portal/v1\u0000';
 const PORTAL_CSRF_CONTEXT = 'relaunch72/csrf/portal/v1\u0000';
+const PORTAL_LOGIN_CSRF_CONTEXT = 'relaunch72/csrf/portal-login/v1\u0000';
+const BASE64URL_32_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 interface LoginAttempt {
   failures: number;
+  pending: number;
   windowStartedAt: number;
   blockedUntil: number;
 }
@@ -38,28 +42,66 @@ export class InMemoryLoginThrottle {
     if (attempt.blockedUntil > now) {
       return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((attempt.blockedUntil - now) / 1000)) };
     }
-    if (now - attempt.windowStartedAt >= this.windowMs) this.attempts.delete(key);
+    if (now - attempt.windowStartedAt >= this.windowMs && attempt.pending === 0) {
+      this.attempts.delete(key);
+      return { allowed: true, retryAfterSeconds: 0 };
+    }
+    if (attempt.failures + attempt.pending >= this.maxFailures) {
+      return { allowed: false, retryAfterSeconds: 1 };
+    }
     return { allowed: true, retryAfterSeconds: 0 };
+  }
+
+  /** Atomically reserve one bounded password-verification slot. */
+  reserve(key: string, now: number): { allowed: boolean; retryAfterSeconds: number } {
+    const status = this.check(key, now);
+    if (!status.allowed) return status;
+    let attempt = this.attempts.get(key);
+    if (!attempt) {
+      if (this.attempts.size >= this.maxEntries) this.evict(now);
+      if (this.attempts.size >= this.maxEntries) {
+        return { allowed: false, retryAfterSeconds: 1 };
+      }
+      attempt = { failures: 0, pending: 0, windowStartedAt: now, blockedUntil: 0 };
+      this.attempts.set(key, attempt);
+    }
+    attempt.pending += 1;
+    return { allowed: true, retryAfterSeconds: 0 };
+  }
+
+  /** Release a reservation when verification could not produce an auth result. */
+  release(key: string): void {
+    const attempt = this.attempts.get(key);
+    if (!attempt) return;
+    attempt.pending = Math.max(0, attempt.pending - 1);
+    if (attempt.pending === 0 && attempt.failures === 0 && attempt.blockedUntil === 0) {
+      this.attempts.delete(key);
+    }
+  }
+
+  private evict(now: number): void {
+    for (const [candidate, value] of this.attempts) {
+      if (value.pending === 0 && value.blockedUntil <= now && now - value.windowStartedAt >= this.windowMs) {
+        this.attempts.delete(candidate);
+      }
+    }
+    // Never evict an in-flight reservation; if every entry is live, reserve()
+    // will keep the existing hard bound by declining to create another key.
+    for (const [candidate, value] of this.attempts) {
+      if (this.attempts.size < this.maxEntries) break;
+      if (value.pending === 0) this.attempts.delete(candidate);
+    }
   }
 
   failure(key: string, now: number): void {
     let attempt = this.attempts.get(key);
-    if (!attempt || now - attempt.windowStartedAt >= this.windowMs) {
-      if (!attempt && this.attempts.size >= this.maxEntries) {
-        for (const [candidate, value] of this.attempts) {
-          if (value.blockedUntil <= now && now - value.windowStartedAt >= this.windowMs) this.attempts.delete(candidate);
-        }
-        // Active unique identifiers can otherwise make the map grow forever.
-        // Evict insertion-order oldest entries until the hard bound has room.
-        while (this.attempts.size >= this.maxEntries) {
-          const oldest = this.attempts.keys().next().value as string | undefined;
-          if (!oldest) break;
-          this.attempts.delete(oldest);
-        }
-      }
-      attempt = { failures: 0, windowStartedAt: now, blockedUntil: 0 };
+    if (!attempt || (now - attempt.windowStartedAt >= this.windowMs && attempt.pending === 0)) {
+      if (!attempt && this.attempts.size >= this.maxEntries) this.evict(now);
+      if (!attempt && this.attempts.size >= this.maxEntries) return;
+      attempt = { failures: 0, pending: 0, windowStartedAt: now, blockedUntil: 0 };
       this.attempts.set(key, attempt);
     }
+    attempt.pending = Math.max(0, attempt.pending - 1);
     attempt.failures += 1;
     if (attempt.failures >= this.maxFailures) attempt.blockedUntil = now + this.blockMs;
 
@@ -130,6 +172,50 @@ export function verifyPortalCsrf(secret: string, sessionToken: string, supplied:
   const expectedBuffer = Buffer.from(expected);
   return suppliedBuffer.length === expectedBuffer.length
     && crypto.timingSafeEqual(suppliedBuffer, expectedBuffer);
+}
+
+/** Signed double-submit token for the pre-authentication login form. */
+export function portalLoginCsrfToken(secret: string): string {
+  if (!secret) return '';
+  const nonce = crypto.randomBytes(32).toString('base64url');
+  const mac = crypto.createHmac('sha256', secret)
+    .update(PORTAL_LOGIN_CSRF_CONTEXT)
+    .update(nonce)
+    .digest('base64url');
+  return `${nonce}.${mac}`;
+}
+
+export function verifyPortalLoginCsrf(
+  secret: string,
+  cookieToken: string | undefined,
+  supplied: string | undefined,
+): boolean {
+  if (!secret || !cookieToken || !supplied || cookieToken.length !== supplied.length) return false;
+  const cookieBuffer = Buffer.from(cookieToken);
+  const suppliedBuffer = Buffer.from(supplied);
+  if (!crypto.timingSafeEqual(cookieBuffer, suppliedBuffer)) return false;
+  const [nonce, mac, extra] = cookieToken.split('.');
+  if (extra !== undefined || !nonce || !mac
+      || !BASE64URL_32_PATTERN.test(nonce) || !BASE64URL_32_PATTERN.test(mac)) return false;
+  const expected = crypto.createHmac('sha256', secret)
+    .update(PORTAL_LOGIN_CSRF_CONTEXT)
+    .update(nonce)
+    .digest('base64url');
+  const actualMac = Buffer.from(mac);
+  const expectedMac = Buffer.from(expected);
+  return actualMac.length === expectedMac.length && crypto.timingSafeEqual(actualMac, expectedMac);
+}
+
+export function portalLoginCsrfCookie(token: string, secure: boolean): string {
+  const bits = [
+    `${PORTAL_LOGIN_CSRF_COOKIE}=${token}`,
+    'HttpOnly',
+    'SameSite=Strict',
+    'Path=/portal/login',
+    'Max-Age=600',
+  ];
+  if (secure) bits.push('Secure');
+  return bits.join('; ');
 }
 
 export function portalCookie(token: string, secure: boolean, maxAgeSec = PORTAL_TTL_MS / 1000): string {

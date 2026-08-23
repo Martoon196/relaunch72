@@ -42,6 +42,8 @@ export interface AppDeps {
   marketing?: MarketingHooks;
   /** Optional client portal; absent = /portal 404s (payments still work). */
   portal?: PortalDeps;
+  /** Safe operator-facing reasons the optional portal could not be mounted. */
+  portalBlockers?: string[];
   /** Fired (fire-and-forget) when an intake is accepted — provisions the portal login. */
   onIntakeAccepted?: (intake: Intake, email: string | null) => void;
   /** Optional recurring-subscription store; absent = subscription events are ignored. */
@@ -127,6 +129,19 @@ function readBody(req: IncomingMessage, maxBytes = 64 * 1024): Promise<Buffer> {
   });
 }
 
+function sendPortalUnavailable(res: ServerResponse): void {
+  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Relaunch72 — Workspace unavailable</title><style>body{margin:0;background:#f4f6f8;color:#16202e;font:16px/1.55 system-ui,sans-serif}main{min-height:100vh;display:grid;place-items:center;padding:24px}.card{max-width:560px;background:#fff;border:1px solid #dce2e9;border-radius:18px;padding:32px;box-shadow:0 14px 40px rgba(22,32,46,.08)}.mark{display:inline-grid;place-items:center;width:42px;height:42px;border-radius:12px;background:#16202e;color:#fff;font-weight:850}h1{font-size:1.65rem;line-height:1.2;margin:22px 0 10px}p{color:#596575;margin:0 0 18px}a{color:#9b5e06;font-weight:750}</style></head><body><main><section class="card" aria-labelledby="portal-status-title"><span class="mark" aria-hidden="true">R72</span><h1 id="portal-status-title">Your workspace is temporarily unavailable.</h1><p>The secure portal did not pass its startup checks. No legacy fallback was used and no customer action was processed.</p><a href="/portal">Try the workspace again</a></section></main></body></html>`;
+  res.writeHead(503, {
+    'content-type': 'text/html; charset=utf-8',
+    'content-length': String(Buffer.byteLength(body)),
+    'cache-control': 'no-store',
+    'retry-after': '30',
+    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+    'x-content-type-options': 'nosniff',
+  });
+  res.end(body);
+}
+
 function sandboxAccessRequired(cfg: StripeConfig): boolean {
   return Boolean(cfg.production) && classifyStripeKey(cfg.secretKey) === 'test';
 }
@@ -164,7 +179,11 @@ export function createApp(deps: AppDeps) {
     // The client portal — same-origin, browser-navigated HTML, its own tenant
     // auth gate. Only mounted when portal deps are provided.
     if (url.pathname === '/portal' || url.pathname.startsWith('/portal/')) {
-      if (!deps.portal) { send(res, 404, { error: 'portal not enabled' }); return; }
+      if (!deps.portal) {
+        if (deps.portalBlockers?.length) sendPortalUnavailable(res);
+        else send(res, 404, { error: 'portal not enabled' });
+        return;
+      }
       try { await handlePortal(req, res, deps.portal); }
       catch (e) { if (!res.headersSent) send(res, 500, { error: (e as Error).message }); }
       return;
@@ -190,6 +209,8 @@ export function createApp(deps: AppDeps) {
           subscription_blockers: subscriptionBlockers,
           accepting_public_leads: deps.cfg.publicLeadCaptureEnabled === true && Boolean(deps.marketing?.onLead),
           build_mode: deps.buildMode ?? 'live',
+          portal_ready: Boolean(deps.portal),
+          portal_blockers: deps.portal ? [] : [...(deps.portalBlockers ?? ['client portal is not mounted'])],
         });
       }
 

@@ -58,6 +58,8 @@ test('portal shell provides native keyboard navigation and responsive landmarks'
   assert.match(html, /\.field input:focus-visible\{outline:3px solid Highlight\}/);
   assert.doesNotMatch(html, /\.field input:focus\{[^}]*outline:0/);
   assert.match(html, /<nav class="mobile-nav" aria-label="Mobile navigation" style="--mobile-nav-count:3">/);
+  assert.match(PORTAL_STYLE, /bottom:calc\(10px \+ env\(safe-area-inset-bottom\)\)/);
+  assert.match(PORTAL_STYLE, /min-height:56px/);
   assert.match(html, /\.command-popover\{position:fixed;top:70px;left:18px;right:18px;width:auto/);
   assert.match(html, /Workspace settings<small>.*Setup/s);
   assert.match(html, /class="nav-item nav-locked"[^>]*aria-disabled="true"[^>]*>.*CRM.*Setup/s);
@@ -153,10 +155,13 @@ test('malformed persisted keyword volumes cannot execute markup or custom method
 });
 
 test('login and billing keep the same accessible premium shell semantics', () => {
-  const login = loginPage('Wrong email or password.');
+  const login = loginPage('Wrong email or password.', 'owner@example.test', 'signed-login-csrf');
   assert.match(login, /role="alert"/);
   assert.match(login, /autocomplete="username"/);
   assert.match(login, /autocomplete="current-password"/);
+  assert.match(login, /name="_login_csrf" value="signed-login-csrf"/);
+  assert.match(login, /value="owner@example.test"/);
+  assert.match(login, /CRM workspace/);
   assert.match(login, /Private sandbox · secure session · no public publishing/);
 
   const setup = accountSetupPage('one-use-token', 'Those passwords do not match.');

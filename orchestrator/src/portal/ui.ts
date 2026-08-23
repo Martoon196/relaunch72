@@ -97,7 +97,7 @@ export const PORTAL_STYLE = `
   .mobile-nav{display:none}
 
   @media(max-width:1120px){.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.module-preview-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.dashboard-grid{grid-template-columns:minmax(0,1.5fr) minmax(260px,.8fr)}}
-  @media(max-width:880px){.sidebar{display:none}.workspace{margin-left:0}.topbar{height:62px;padding:0 18px}.mobile-brand{display:flex;align-items:center;gap:8px}.mobile-brand .brand-mark{width:30px;height:30px;border-radius:8px;font-size:.63rem}.mobile-brand strong{font-size:.72rem;letter-spacing:.07em}.quick-menu{width:auto;margin-left:auto}.quick-menu summary{width:40px;padding:0;justify-content:center}.quick-menu summary span,.quick-menu summary kbd{display:none}.command-popover{position:fixed;top:70px;left:18px;right:18px;width:auto;max-height:calc(100vh - 90px);overflow:auto}.main{padding:25px 18px 92px}.dashboard-grid{grid-template-columns:1fr}.module-preview-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.mobile-nav{display:grid;grid-template-columns:repeat(var(--mobile-nav-count),minmax(0,1fr));position:fixed;z-index:25;inset:auto 10px 10px;background:rgba(16,24,39,.96);backdrop-filter:blur(14px);border:1px solid var(--nav-line);border-radius:15px;padding:5px;box-shadow:0 18px 42px rgba(16,24,39,.28)}.mobile-nav a{display:flex;min-height:52px;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:#9aa8bb;font-size:.55rem;font-weight:700;border-radius:10px}.mobile-nav a[aria-current="page"],.mobile-nav a:active{color:#fff;background:rgba(237,156,36,.13)}.mobile-nav .icon{width:16px;height:16px}.auth-shell{grid-template-columns:1fr}.auth-story{display:none}}
+  @media(max-width:880px){.sidebar{display:none}.workspace{margin-left:0}.topbar{height:62px;padding:0 18px}.mobile-brand{display:flex;align-items:center;gap:8px}.mobile-brand .brand-mark{width:30px;height:30px;border-radius:8px;font-size:.63rem}.mobile-brand strong{font-size:.72rem;letter-spacing:.07em}.quick-menu{width:auto;margin-left:auto}.quick-menu summary{width:40px;padding:0;justify-content:center}.quick-menu summary span,.quick-menu summary kbd{display:none}.command-popover{position:fixed;top:70px;left:18px;right:18px;width:auto;max-height:calc(100vh - 90px);overflow:auto}.main{padding:25px 18px calc(102px + env(safe-area-inset-bottom))}.dashboard-grid{grid-template-columns:1fr}.module-preview-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.mobile-nav{display:grid;grid-template-columns:repeat(var(--mobile-nav-count),minmax(0,1fr));position:fixed;z-index:25;left:10px;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));background:rgba(16,24,39,.96);backdrop-filter:blur(14px);border:1px solid var(--nav-line);border-radius:15px;padding:5px;box-shadow:0 18px 42px rgba(16,24,39,.28)}.mobile-nav a{display:flex;min-height:56px;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:#9aa8bb;font-size:.66rem;font-weight:700;border-radius:10px}.mobile-nav a[aria-current="page"],.mobile-nav a:active{color:#fff;background:rgba(237,156,36,.13)}.mobile-nav .icon{width:17px;height:17px}.auth-shell{grid-template-columns:1fr}.auth-story{display:none}}
   @media(max-width:640px){html{scroll-padding-top:74px}.page-heading{display:block}.page-heading-actions{margin-top:17px}.page-heading-actions form,.page-heading-actions .button{width:100%}.run-helper{text-align:left}.metric-grid{gap:9px}.metric{padding:14px}.pipeline{grid-template-columns:repeat(2,minmax(0,1fr))}.pipeline .stage:last-child{grid-column:1/-1}.content-grid{grid-template-columns:1fr}.draft-card.wide{grid-column:auto}.module-preview-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.plans{grid-template-columns:1fr}.panel-head{padding:16px 15px 12px}.panel-body{padding:0 15px 15px}.data-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}.data-table,.data-table tbody,.data-table tr,.data-table td{display:block;width:100%}.data-table tr{padding:10px 0;border-bottom:1px solid var(--line)}.data-table tr:last-child{border-bottom:0}.data-table td{display:grid;grid-template-columns:78px 1fr;gap:9px;border:0;padding:4px 0}.data-table td::before{content:attr(data-label);color:var(--faint);font:700 .56rem var(--mono);letter-spacing:.05em;text-transform:uppercase}.auth-panel{padding:28px 20px}.auth-brand{margin-bottom:34px}}
   @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}.button:hover{transform:none}}
   @media(forced-colors:active){.brand-mark,.button,.status-badge,.pill,.status,.stage-badge{forced-color-adjust:none}.nav-item[aria-current="page"]{outline:2px solid Highlight}.field input:focus-visible{outline:3px solid Highlight}.stage::after{background:CanvasText}.skip-link{border:1px solid ButtonText}}
@@ -117,6 +117,8 @@ interface AppShellOptions {
   crmAvailable?: boolean;
   /** Changes truth labels only; it never unlocks a capability. */
   mode?: 'sandbox' | 'crm';
+  /** Session-bound synchronizer token for shell-level authenticated forms. */
+  csrfToken?: string;
 }
 
 function workspaceInitial(name: string): string {
@@ -137,6 +139,7 @@ export function appShell(opts: AppShellOptions): string {
   if (opts.crmAvailable) {
     capabilities.add('crm.contacts.read');
     capabilities.add('crm.pipeline.read');
+    capabilities.add('crm.tasks.read');
   }
   if (opts.billingAvailable) capabilities.add('billing.read');
   const resolvedModules = platformModules.navigation({ capabilities });
@@ -160,6 +163,9 @@ export function appShell(opts: AppShellOptions): string {
   const quickPlanned = plannedPortalModules.map((module) => `<span class="command-link locked" role="link" aria-disabled="true">${portalModuleIcon(module.id)}${escapeHtml(module.label)}<small>${icon('lock')}Planned</small></span>`).join('');
   const mobileModules = workingModules.filter((module) => module.state === 'ready' || module.state === 'preview');
   const mobileNav = mobileModules.map((module) => `<a href="${escapeHtml(module.route!)}"${isCurrent(module.id) ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}${escapeHtml(module.shortLabel)}</a>`).join('');
+  const csrfField = opts.csrfToken
+    ? `<input type="hidden" name="_csrf" value="${escapeHtml(opts.csrfToken)}">`
+    : '';
   return `${pageHead(opts.title)}<body><a class="skip-link" href="#main-content">Skip to main content</a>
   <div class="app-shell">
     <aside class="sidebar" aria-label="Workspace navigation">
@@ -188,7 +194,7 @@ export function appShell(opts: AppShellOptions): string {
             ${quickPlanned}
           </nav>
         </details>
-        <div class="top-actions"><span class="status-badge"><span class="dot"></span>${crmMode ? 'CRM records' : 'Mock workspace'}</span><form method="post" action="/portal/logout"><button class="top-icon-button" type="submit" aria-label="Sign out" title="Sign out">${icon('logout')}</button></form></div>
+        <div class="top-actions"><span class="status-badge"><span class="dot"></span>${crmMode ? 'CRM records' : 'Mock workspace'}</span><form method="post" action="/portal/logout">${csrfField}<button class="top-icon-button" type="submit" aria-label="Sign out" title="Sign out">${icon('logout')}</button></form></div>
       </header>
       <main class="main" id="main-content" tabindex="-1">${opts.body}</main>
     </div>

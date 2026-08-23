@@ -118,10 +118,16 @@ function req(method: string, url: string, body = '', headers: Record<string, str
 function res(): ServerResponse & { statusCode: number; _body: string; _headers: Record<string, string> } {
   const r = { statusCode: 0, _body: '', _headers: {} as Record<string, string> } as {
     statusCode: number; _body: string; _headers: Record<string, string>;
-    setHeader: (k: string, v: string) => unknown; writeHead: (c: number) => unknown; end: (b?: string) => unknown;
+    setHeader: (k: string, v: string) => unknown;
+    writeHead: (c: number, headers?: Record<string, string>) => unknown;
+    end: (b?: string) => unknown;
   };
   r.setHeader = (k: string, v: string) => { r._headers[k.toLowerCase()] = v; return r; };
-  r.writeHead = (c: number) => { r.statusCode = c; return r; };
+  r.writeHead = (c: number, headers = {}) => {
+    r.statusCode = c;
+    for (const [key, value] of Object.entries(headers)) r._headers[key.toLowerCase()] = value;
+    return r;
+  };
   r.end = (b?: string) => { r._body = b ?? ''; return r; };
   return r as unknown as ServerResponse & { statusCode: number; _body: string; _headers: Record<string, string> };
 }
@@ -162,7 +168,25 @@ test('GET /health reports test mode + configured', async () => {
     subscription_blockers: ['recurring platform subscriptions are preview-only and not accepting payment'],
     accepting_public_leads: false,
     build_mode: 'live',
+    portal_ready: false,
+    portal_blockers: ['client portal is not mounted'],
   });
+});
+
+test('a required but unmounted portal returns a branded 503 and explicit health blocker', async () => {
+  const { handler } = app({ portalBlockers: ['required PostgreSQL portal services did not pass readiness'] });
+  const portal = res();
+  await handler(req('GET', '/portal'), portal);
+  assert.equal(portal.statusCode, 503);
+  assert.match(portal._headers['content-type'] ?? '', /text\/html/);
+  assert.match(portal._body, /temporarily unavailable/);
+  assert.doesNotMatch(portal._body, /PostgreSQL|database|credential/i);
+
+  const health = res();
+  await handler(req('GET', '/health'), health);
+  const status = JSON.parse(health._body) as Record<string, unknown>;
+  assert.equal(status.portal_ready, false);
+  assert.deepEqual(status.portal_blockers, ['required PostgreSQL portal services did not pass readiness']);
 });
 
 test('with no key: /health is up but unconfigured, and checkout/webhook 503 (deploys green)', async () => {

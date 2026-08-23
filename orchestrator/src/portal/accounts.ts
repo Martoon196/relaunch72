@@ -18,6 +18,9 @@ const SCRYPT_P = 1;
 const SCRYPT_KEY_LENGTH = 32;
 const SCRYPT_MAXMEM = 64 * 1024 * 1024;
 const LEGACY_SHA256 = /^[a-f0-9]{64}$/i;
+// Fixed non-credential work factor used when an account/hash is absent or
+// malformed, so login timing does not become a cheap email-enumeration oracle.
+const DUMMY_SCRYPT_HASH = 'scrypt$v1$16384,8,1$cmVsYXVuY2g3Mi1kdW1teSE$Y7Oitgu565adLUmSlFbA8WqgV7OGWtnQkb689EpLUts';
 
 export interface Account {
   email: string;
@@ -94,6 +97,33 @@ async function passwordMatches(encoded: string, password: string): Promise<boole
   } catch {
     return false;
   }
+}
+
+export interface StoredPasswordVerification {
+  matches: boolean;
+  /** True only for a matching original unsalted SHA-256 credential. */
+  needsUpgrade: boolean;
+}
+
+/** Verify either the current scrypt format or the one-time legacy import format. */
+export async function verifyStoredPassword(
+  encoded: string | null | undefined,
+  password: string,
+): Promise<StoredPasswordVerification> {
+  if (encoded?.startsWith('scrypt$')) {
+    return { matches: await passwordMatches(encoded, password), needsUpgrade: false };
+  }
+  if (encoded && LEGACY_SHA256.test(encoded)) {
+    const matches = Boolean(password) && safeEqualHex(legacyHash(password), encoded);
+    // Legacy SHA-256 comparison is intentionally followed by the same bounded
+    // scrypt work used for an absent account. Imported accounts must not be a
+    // cheap timing oracle (or a cheap remote password-guess path) before their
+    // first successful compare-and-swap upgrade.
+    await passwordMatches(DUMMY_SCRYPT_HASH, password || '');
+    return { matches, needsUpgrade: matches };
+  }
+  await passwordMatches(DUMMY_SCRYPT_HASH, password || '');
+  return { matches: false, needsUpgrade: false };
 }
 
 export class JsonAccountStore implements AccountStore {
@@ -225,16 +255,12 @@ export class JsonAccountStore implements AccountStore {
 
   async verify(email: string, password: string): Promise<string | null> {
     const account = await this.findByEmail(email);
-    if (!account?.passHash || !password) return null;
-
-    if (account.passHash.startsWith('scrypt$')) {
-      return await passwordMatches(account.passHash, password) ? account.tenantId : null;
+    const verified = await verifyStoredPassword(account?.passHash, password);
+    if (!account || !verified.matches) return null;
+    if (verified.needsUpgrade) {
+      account.passHash = await hashPassword(password);
+      this.persist();
     }
-
-    // Migration bridge for rows written by the original implementation.
-    if (!LEGACY_SHA256.test(account.passHash) || !safeEqualHex(legacyHash(password), account.passHash)) return null;
-    account.passHash = await hashPassword(password);
-    this.persist();
     return account.tenantId;
   }
 }

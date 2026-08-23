@@ -2,13 +2,23 @@
 
 **Status:** planning model, not purchasing authority or a financial forecast.
 **Verified:** 2026-08-24 against the official public prices linked below and the fuller evidence record in [17-WHITE-LABEL-PROVIDER-MATRIX.md](./17-WHITE-LABEL-PROVIDER-MATRIX.md).
-**Currency rule:** vendor list prices remain in their published currency. GBP totals for infrastructure are planning allowances, not live exchange-rate conversions. Tax, VAT and foreign-exchange movement are excluded.
+**Currency rule:** vendor list prices remain in their published currency. For
+reproducible reserves only, this model uses a deliberately rounded planning rate
+of **$1 = £0.80** and **€1 = £0.90**; it is not a live quote. GBP infrastructure
+totals are planning allowances. Tax, VAT and foreign-exchange movement are
+excluded.
 
 ---
 
 ## 1. The honest answer
 
 The Relaunch72 core can launch cheaply. The expensive categories are high-volume SMS, partner-resold WhatsApp, broad social listening and a customer-visible automation canvas.
+
+The application licence itself costs **£0**: Relaunch72 owns its CRM, shell,
+permissions, recipes and canonical records. Codex/ChatGPT plugins can help us
+build and operate the product, but they are not white-label modules that can be
+embedded in or resold as the customer product. Runtime services still require
+their own API, SaaS, open-source or commercial licence.
 
 The first pilot should therefore use invisible, usage-priced rails:
 
@@ -22,6 +32,14 @@ The first pilot should therefore use invisible, usage-priced rails:
 
 That combination has a public fixed vendor floor of roughly **$10/month** before usage: Nylas is $10/month for five connected calendar accounts, while the selected entry tiers for the other rails have no normal monthly platform minimum. Our application/database/storage/monitoring allowance is the larger early fixed cost.
 
+For a lower-operations managed pilot, a concrete public-price reference stack
+is Railway Pro ($20 minimum including usage credit), a typical Neon Launch
+database ($15), Postmark Platform ($18), Whereby Embedded Build ($9.99), and R2
+inside its free allowance. That is about **$63/month before booking, AI,
+telecoms and tax**, or about **$73/month** after the Nylas production minimum.
+This is a budgeting reference, not a commitment to those exact providers; the
+cheaper Daily/SES combination in the preferred rail stack remains valid.
+
 Do not market the live service as “£0 to run.” The mock stack can run at negligible marginal vendor cost; a secure, backed-up, observable customer service cannot.
 
 ---
@@ -30,17 +48,23 @@ Do not market the live service as “£0 to run.” The mock stack can run at ne
 
 | Rail | Public price used | Cost behaviour | Source |
 |---|---:|---|---|
+| Application runtime | Railway Pro has a $20/month minimum that counts toward resource usage | Fixed minimum plus compute, memory, storage and egress usage | [Railway pricing](https://docs.railway.com/pricing) |
+| Managed PostgreSQL | Neon Launch publishes $0.106/CU-hour and $0.35/GB-month, with $15/month shown as typical spend | Usage; workload, branches, storage and retention determine the real bill | [Neon pricing](https://neon.com/pricing) |
+| Object storage | Cloudflare R2 includes 10 GB-month standard storage, then $0.015/GB-month; internet egress is free | Storage plus operation classes | [R2 pricing](https://developers.cloudflare.com/r2/pricing/) |
 | Social pilot | First 2 connected accounts $0; accounts 3–10 $6 each/month; 11–100 $3; 101+ $1 | Per connected social account, with separate X pass-through calls | [Zernio pricing](https://zernio.com/pricing) |
 | WhatsApp transport | $0.005 per message plus Meta template-message fees | Per message; customer WABA/onboarding and Meta charges remain separate | [Twilio WhatsApp pricing](https://www.twilio.com/en-us/whatsapp/pricing) |
 | Embedded video | First 10,000 participant-minutes/month $0 | Usage after the free allowance; recording/streaming can add cost | [Daily pricing](https://www.daily.co/pricing/video-sdk/) |
-| Transactional email | $0.10 per 1,000 outbound emails on SES à la carte | Usage, attachments and optional dedicated IP/support excluded | [Amazon SES pricing](https://aws.amazon.com/ses/pricing/) |
+| Managed video alternative | Whereby Embedded Build is $9.99/month with 2,000 participant-minutes; overage is $0.004/minute | Fixed floor plus participant minutes and optional recording/streaming | [Whereby Embedded pricing](https://whereby.com/information/embedded/pricing) |
+| Transactional email | $0.10 per 1,000 outbound emails on SES à la carte; new accounts may initially enter the $0.16/1,000 Essentials plan until switched | Usage, attachments and optional dedicated IP/support excluded | [Amazon SES pricing](https://aws.amazon.com/ses/pricing/) |
+| Managed email alternative | Postmark Platform is $18/month for 10,000 emails, then $1.20/1,000 | Fixed floor plus volume; dedicated IP and longer retention can add cost | [Postmark pricing](https://postmarkapp.com/pricing/) |
 | UK SMS | Starts at $0.0372 per outbound segment; listed carrier routes can be higher | Per segment, not per conversation; long/Unicode messages can consume several segments | [Plivo UK pricing](https://www.plivo.com/sms/pricing/gb/) |
 | Booking | $10/month including 5 connected accounts; then $1.50/account/month | A grant that existed during the month can be billable for that month | [Nylas pricing](https://www.nylas.com/pricing/) |
+| UK subscription collection | Stripe standard UK cards: 1.5% + 20p; Stripe Billing pay-as-you-go: 0.7% of recurring billing volume | Per successful payment plus billing volume; other cards, disputes and FX cost more | [Stripe UK payments](https://stripe.com/gb/pricing) · [Stripe Billing](https://stripe.com/gb/billing/pricing) |
 | Default AI text | Claude Sonnet 4.6: $3 per million input tokens and $15 per million output tokens | Usage; prompt caching and eligible batch work can reduce it | [Anthropic Sonnet](https://www.anthropic.com/claude/sonnet) · [official list prices](https://www-cdn.anthropic.com/files/4zrzovbb/website/3684c2faafb97418665782cea0001f439f74b1d2.pdf) |
 | AI image/video/transcription | GPT Image 2 is token-metered; Sora 2 720p is $0.10/second standard; mini transcription is estimated at $0.003/minute | Media generation must be a credit/add-on, not unlimited base usage | [OpenAI API pricing](https://platform.openai.com/pricing) |
 | Broad listening | Brand24 Business $599/month on annual billing plus $99/month API add-on | High fixed floor; monthly Business billing is higher | [Brand24 pricing](https://brand24.com/prices/) · [API](https://brand24.com/social-listening-api/) |
 | Self-hosted social fallback | Mixpost Enterprise $1,199 once for one business/domain | One-off licence plus hosting, upgrades, network apps and on-call work | [Mixpost pricing](https://mixpost.app/pricing) |
-| Partner WhatsApp fallback | 360dialog Growth begins at €500/month; Premium is €1,000/month, plus channel/Meta charges | Fixed partner floor plus per-number and Meta usage | [360dialog partners](https://360dialog.com/partners) |
+| Partner WhatsApp fallback | 360dialog advertises Starter at €250/month, Growth at €500 and Premium at €1,000, plus channel/Meta charges | Fixed partner floor plus per-number and Meta usage; feature/volume limits depend on the exact partner order | [360dialog partners](https://360dialog.com/partners) |
 | Durable workflow upgrade | Temporal Cloud Essentials starts at $100/month | Fixed allowance plus actions/storage | [Temporal pricing](https://temporal.io/pricing) |
 | Embedded visual automation | Activepieces Embed starts at $36,000/year | Commercial embedded licence, not a normal cloud-plan shortcut | [Activepieces pricing](https://www.activepieces.com/pricing) |
 
@@ -121,9 +145,13 @@ Assumptions:
 
 Calculated public rail costs:
 
+The SES calculations below assume the selectable à-la-carte rate, not the newer
+Essentials plan that a fresh account may receive by default.
+
 - Zernio: 8 accounts × $6 plus 20 accounts × $3 = **$108/month**;
 - Nylas: $10 plus 5 additional accounts × $1.50 = **$17.50/month**;
-- SES: 50 × $0.10 = **$5/month**;
+- SES: **$5/month** after selecting à la carte, or **$8/month** on the newer
+  Essentials default;
 - Sonnet text: 10 × $2.25 = **$22.50/month** at the baseline allowance, or **$105/month** at the heavy reserve;
 - illustrated rail/AI total before WhatsApp, SMS, X and video overage: **about $153–$236/month**;
 - core platform allowance: **£100–£300/month**.
@@ -132,6 +160,11 @@ Calculated public rail costs:
 listening.** At ten customers, this can remain well below the revenue from even
 a modest £79–£149 base plan. Telecom usage and human support—not the
 database—are the main margin risks.
+
+Across the full indicative £79–£249 product range, ten monthly UK-card
+subscriptions add roughly **£19–£57/month** in Stripe Payments + Billing fees. That is not included
+in the operating total above because it scales with revenue rather than platform
+load.
 
 ### 4.3 Growing service — fifty customers
 
@@ -147,7 +180,7 @@ Calculated public rail costs:
 
 - Zernio: 8 × $6 + 90 × $3 + 50 × $1 = **$368/month**;
 - Nylas: $10 + 45 × $1.50 = **$77.50/month**;
-- SES: 250 × $0.10 = **$25/month**;
+- SES: **$25/month** after selecting à la carte, or **$40/month** on Essentials;
 - Sonnet text: 50 × $2.25 = **$112.50/month** at the baseline allowance, or **$525/month** at the heavy reserve;
 - illustrated rail/AI total before WhatsApp, SMS, X, video overage and listening: **about $583–$996/month**;
 - core platform allowance: **£250–£750/month**.
@@ -156,6 +189,10 @@ Calculated public rail costs:
 listening.** This remains economically attractive, but a new provider's
 unusually low rate card must not be treated as permanent. Product pricing should
 survive a move to a dearer managed social provider.
+
+Fifty monthly UK-card subscriptions at £79–£249 would add roughly
+**£97–£284/month** in Stripe Payments + Billing fees, before failed payments,
+international cards, disputes or FX.
 
 ---
 
@@ -197,7 +234,7 @@ Policy:
 - pass through or buffer Meta charges;
 - keep WABA and number ownership with the customer wherever possible;
 - move to direct Meta Cloud API only after the Tech Provider/app-review burden is justified;
-- do not enter a €500–€1,000 partner plan merely to make the roadmap look complete.
+- do not enter a €250–€1,000 partner plan merely to make the roadmap look complete.
 
 ### Broad social listening
 
@@ -237,6 +274,21 @@ The final selling prices require founder positioning and a real support-cost tes
 | Broad listening | From £249/month or custom | Activated only when the underlying API contract and project economics work |
 
 These are planning bands, not published offers. They preserve room for support, payment fees, VAT, provider price changes and a managed-provider migration.
+
+### Cash reserve, not just expected spend
+
+The scenario totals above are the expected operating range. The bank balance
+should carry more headroom than the expected invoice:
+
+| Stage | Expected operating range | Sensible monthly cash reserve |
+|---|---:|---:|
+| Private pilot | £75–£250 | **£250–£300** |
+| Around 10 customers | £250–£650 before heavy telecom | **£400–£900** including modest messaging and payment fees |
+| Around 50 customers | £700–£1,500 before heavy telecom | **£900–£2,000** including modest messaging and payment fees |
+
+These reserves still exclude founder/engineering salaries, contracted support,
+legal/privacy work, VAT and paid acquisition. A broad Brand24 listening module
+adds roughly **$698/month** at its current Business-plus-API public floor.
 
 ---
 

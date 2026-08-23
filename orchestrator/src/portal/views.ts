@@ -33,7 +33,24 @@ export function accountSetupPage(token: string, error?: string): string {
   </body></html>`;
 }
 
-export function loginPage(error?: string): string {
+export function accountSetupUnavailablePage(message = 'Account setup is not open yet. Ask the Relaunch72 team to provision pilot access.'): string {
+  return `${pageHead('Relaunch72 — Account setup')}<body>
+    <main class="auth-shell">
+      <section class="auth-panel" aria-labelledby="setup-title">
+        <div class="auth-card">
+          <a class="auth-brand" href="/portal/login" aria-label="Relaunch72 sign in"><span class="brand-mark">R72</span><strong>RELAUNCH72</strong></a>
+          <h1 id="setup-title">Setup is currently paused.</h1>
+          <div class="auth-error" role="status">${icon('lock')}<span>${esc(message)}</span></div>
+          <a class="button auth-button" href="/portal/login">Return to sign in ${icon('chevron')}</a>
+          <p class="auth-foot">No password or account change has been made.</p>
+        </div>
+      </section>
+      <aside class="auth-story" aria-label="Account security"><div class="auth-story-inner"><div class="auth-kicker">Pilot access</div><h2>Deliberate setup.<br>Clean access.</h2><p>New workspaces stay locked until identity, CRM data and the private dashboard are provisioned together.</p><div class="auth-modules"><span>Least-privilege access</span><span>Workspace isolation</span><span>No silent fallback</span></div></div></aside>
+    </main>
+  </body></html>`;
+}
+
+export function loginPage(error?: string, email = '', loginCsrfToken = ''): string {
   return `${pageHead('Relaunch72 — Sign in')}<body>
     <main class="auth-shell">
       <section class="auth-panel" aria-labelledby="login-title">
@@ -43,7 +60,8 @@ export function loginPage(error?: string): string {
           <p class="auth-lead">Sign in to your private marketing workspace.</p>
           ${error ? `<div class="auth-error" role="alert">${icon('lock')}<span>${esc(error)}</span></div>` : ''}
           <form method="post" action="/portal/login">
-            <div class="field"><label for="email">Email address</label><input id="email" name="email" type="email" inputmode="email" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus></div>
+            <input type="hidden" name="_login_csrf" value="${esc(loginCsrfToken)}">
+            <div class="field"><label for="email">Email address</label><input id="email" name="email" type="email" inputmode="email" autocomplete="username" autocapitalize="none" spellcheck="false" value="${esc(email)}" required autofocus></div>
             <div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required></div>
             <button class="button auth-button" type="submit">Sign in securely ${icon('chevron')}</button>
           </form>
@@ -51,8 +69,8 @@ export function loginPage(error?: string): string {
         </div>
       </section>
       <aside class="auth-story" aria-label="Product preview">
-        <div class="auth-story-inner"><div class="auth-kicker">Your marketing command centre</div><h2>Clear work.<br>Calm control.</h2><p>Review your read-only contact and pipeline snapshot alongside generated drafts. Channel publishing remains safely locked until each integration is production-ready.</p>
-          <div class="auth-modules" aria-label="Workspace modules"><span>CRM snapshot · preview</span><span>Content drafts</span><span class="planned">Social · planned</span><span class="planned">WhatsApp · planned</span><span class="planned">Listening · planned</span></div>
+        <div class="auth-story-inner"><div class="auth-kicker">Your marketing command centre</div><h2>Clear work.<br>Calm control.</h2><p>Work your contacts, opportunities and tasks alongside generated drafts. Channel publishing remains safely locked until each integration is production-ready.</p>
+          <div class="auth-modules" aria-label="Workspace modules"><span>CRM workspace</span><span>Content drafts</span><span class="planned">Social · planned</span><span class="planned">WhatsApp · planned</span><span class="planned">Listening · planned</span></div>
         </div>
       </aside>
     </main>
@@ -80,13 +98,14 @@ function billingCard(billing: BillingView): string {
   </section>`;
 }
 
-export function billingPage(tenantName: string, billing: BillingView, opts: { canManage?: boolean; canSubscribe?: boolean; notice?: string; crmAvailable?: boolean } = {}): string {
+export function billingPage(tenantName: string, billing: BillingView, opts: { canManage?: boolean; canSubscribe?: boolean; notice?: string; crmAvailable?: boolean; csrfToken?: string } = {}): string {
   const state = billingStat(billing);
   const previewNotice = opts.canSubscribe === true ? '' : `<div class="notice" role="note">${icon('lock')}<span><strong>Plan preview only.</strong> Recurring checkout is paused while the durable platform and connected delivery services are completed.</span></div>`;
   const notice = opts.notice ? `<div class="notice" role="status">${icon('activity')}<span>${esc(opts.notice)}</span></div>` : '';
   const renewal = billing.active && billing.currentPeriodEnd ? ` · renews ${esc(billing.currentPeriodEnd.slice(0, 10))}` : '';
+  const csrfField = opts.csrfToken ? `<input type="hidden" name="_csrf" value="${esc(opts.csrfToken)}">` : '';
   const manage = opts.canManage && billing.customerId
-    ? `<form method="post" action="/portal/manage"><button class="button secondary" type="submit">Manage billing ${icon('chevron')}</button></form>` : '';
+    ? `<form method="post" action="/portal/manage">${csrfField}<button class="button secondary" type="submit">Manage billing ${icon('chevron')}</button></form>` : '';
 
   const plans = billing.options.map((option) => {
     const current = billing.active && billing.planKey === option.key;
@@ -95,7 +114,7 @@ export function billingPage(tenantName: string, billing: BillingView, opts: { ca
       : billing.active
         ? '<div class="current-plan-tag">Use Manage billing</div>'
         : opts.canSubscribe === true
-          ? `<form method="post" action="/portal/subscribe"><input type="hidden" name="plan" value="${esc(option.key)}"><button class="button" style="width:100%" type="submit">Subscribe →</button></form>`
+          ? `<form method="post" action="/portal/subscribe">${csrfField}<input type="hidden" name="plan" value="${esc(option.key)}"><button class="button" style="width:100%" type="submit">Subscribe →</button></form>`
           : `<div class="current-plan-tag">${icon('lock')} Checkout paused</div>`;
     return `<article class="plan${current ? ' current' : ''}"><h3>${esc(option.name)}</h3><div class="plan-price">${esc(option.priceLabel)}</div><p class="plan-description">${esc(option.description)}</p>${callToAction}</article>`;
   }).join('');
@@ -107,7 +126,7 @@ export function billingPage(tenantName: string, billing: BillingView, opts: { ca
       <section class="panel" aria-labelledby="plans-title"><div class="panel-head"><div><h2 id="plans-title">${opts.canSubscribe === true ? (billing.active ? 'Change your plan' : 'Choose a plan') : 'Planned tiers'}</h2><p class="panel-subtitle">${opts.canSubscribe === true ? 'Billed monthly · cancel anytime' : 'Preview pricing · no checkout'}</p></div></div><div class="panel-body"><div class="plans">${plans}</div></div></section>
     </div>`;
 
-  return appShell({ title: 'Relaunch72 — Billing', tenantName, active: 'billing', billingAvailable: true, crmAvailable: opts.crmAvailable, body });
+  return appShell({ title: 'Relaunch72 — Billing', tenantName, active: 'billing', billingAvailable: true, crmAvailable: opts.crmAvailable, csrfToken: opts.csrfToken, body });
 }
 
 function pipelinePanel(data: DashboardData): string {
@@ -169,13 +188,14 @@ function expansionModules(): string {
   return `<section class="module-preview" aria-labelledby="expansion-title"><div class="panel-head" style="padding-left:0;padding-right:0"><div><h2 id="expansion-title">Expansion modules</h2><p class="panel-subtitle">Designed into the platform boundary · not available in this sandbox</p></div></div><div class="module-preview-grid">${plannedPortalModules.map((module) => `<article class="module-card"><div class="module-card-top">${portalModuleIcon(module.id)}<span class="lock-label">${icon('lock')}Planned</span></div><h3>${esc(module.label)}</h3><p>${esc(module.description)}</p></article>`).join('')}</div></section>`;
 }
 
-export function dashboardPage(data: DashboardData, billing?: BillingView, opts: { crmAvailable?: boolean } = {}): string {
+export function dashboardPage(data: DashboardData, billing?: BillingView, opts: { crmAvailable?: boolean; csrfToken?: string } = {}): string {
   const won = data.pipeline.won ?? 0;
   const socialDraftSamples = data.artifacts.post ? 1 : 0;
   const articleBriefs = data.artifacts.cluster?.articles.length ?? 0;
   const adSetDrafts = data.artifacts.ad ? 1 : 0;
 
-  const body = `<header class="page-heading"><div><div class="eyebrow">${icon('overview')}Workspace overview</div><h1>Good to see you, ${esc(data.tenant.name)}.</h1><p>A focused view of your read-only contact and pipeline snapshot alongside reviewable mock drafts. Nothing shown here is presented as scheduled or published.</p></div><div class="page-heading-actions"><div><form method="post" action="/portal/run"><button class="button" type="submit" aria-describedby="run-mode-note">${icon('sparkles')}Generate draft set</button></form><div class="run-helper" id="run-mode-note">Mock generation · review only</div></div></div></header>
+  const csrfField = opts.csrfToken ? `<input type="hidden" name="_csrf" value="${esc(opts.csrfToken)}">` : '';
+  const body = `<header class="page-heading"><div><div class="eyebrow">${icon('overview')}Workspace overview</div><h1>Good to see you, ${esc(data.tenant.name)}.</h1><p>A focused view of your read-only contact and pipeline snapshot alongside reviewable mock drafts. Nothing shown here is presented as scheduled or published.</p></div><div class="page-heading-actions"><div><form method="post" action="/portal/run">${csrfField}<button class="button" type="submit" aria-describedby="run-mode-note">${icon('sparkles')}Generate draft set</button></form><div class="run-helper" id="run-mode-note">Mock generation · review only</div></div></div></header>
     <section class="metric-grid" id="analytics" aria-label="Workspace summary">
       <article class="metric"><div class="metric-head"><span class="metric-icon">${icon('contacts')}</span><span class="metric-context">CRM preview</span></div><div class="n">${data.contacts.length}</div><div class="l">contacts · ${won} won</div></article>
       <article class="metric"><div class="metric-head"><span class="metric-icon">${icon('content')}</span><span class="metric-context">Draft only</span></div><div class="n">${articleBriefs}</div><div class="l">article briefs drafted</div></article>
@@ -185,5 +205,5 @@ export function dashboardPage(data: DashboardData, billing?: BillingView, opts: 
     <div class="dashboard-grid"><div class="stack">${pipelinePanel(data)}${contentPanel(data)}${contactsPanel(data)}</div><aside class="stack" aria-label="Workspace context">${billing ? billingCard(billing) : ''}${activityPanel(data)}${brandPanel(data)}</aside></div>
     ${expansionModules()}`;
 
-  return appShell({ title: `Relaunch72 — ${data.tenant.name}`, tenantName: data.tenant.name, active: 'overview', billingAvailable: !!billing, crmAvailable: opts.crmAvailable, body });
+  return appShell({ title: `Relaunch72 — ${data.tenant.name}`, tenantName: data.tenant.name, active: 'overview', billingAvailable: !!billing, crmAvailable: opts.crmAvailable, csrfToken: opts.csrfToken, body });
 }
