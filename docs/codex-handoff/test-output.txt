@@ -1,0 +1,1910 @@
+
+> @relaunch72/orchestrator@0.1.0 test
+> node --import tsx --test test/*.test.ts
+
+TAP version 13
+# Subtest: passwordOk is exact + constant-time-safe
+ok 1 - passwordOk is exact + constant-time-safe
+  ---
+  duration_ms: 1.156031
+  type: 'test'
+  ...
+# Subtest: signSession/verifySession: valid, tampered, expired
+ok 2 - signSession/verifySession: valid, tampered, expired
+  ---
+  duration_ms: 0.645864
+  type: 'test'
+  ...
+# Subtest: parseCookies splits a header
+ok 3 - parseCookies splits a header
+  ---
+  duration_ms: 1.429045
+  type: 'test'
+  ...
+# Subtest: store reads runs, detail, deliverables, orders
+ok 4 - store reads runs, detail, deliverables, orders
+  ---
+  duration_ms: 11.315985
+  type: 'test'
+  ...
+# Subtest: admin disabled without a password
+ok 5 - admin disabled without a password
+  ---
+  duration_ms: 1.636269
+  type: 'test'
+  ...
+# Subtest: unauthed /admin redirects to login; login page renders
+ok 6 - unauthed /admin redirects to login; login page renders
+  ---
+  duration_ms: 2.198023
+  type: 'test'
+  ...
+# Subtest: login: wrong password 401, right password sets a session cookie
+ok 7 - login: wrong password 401, right password sets a session cookie
+  ---
+  duration_ms: 4.388021
+  type: 'test'
+  ...
+# Subtest: authed dashboard lists runs; run detail renders; sign-off writes signoff.json
+ok 8 - authed dashboard lists runs; run detail renders; sign-off writes signoff.json
+  ---
+  duration_ms: 3.815645
+  type: 'test'
+  ...
+# Subtest: qaAdCampaign passes a grounded, in-limit mock campaign
+ok 9 - qaAdCampaign passes a grounded, in-limit mock campaign
+  ---
+  duration_ms: 29.439575
+  type: 'test'
+  ...
+# Subtest: mock campaign has 2–4 grounded ad sets and headlines within the limit
+ok 10 - mock campaign has 2–4 grounded ad sets and headlines within the limit
+  ---
+  duration_ms: 0.601229
+  type: 'test'
+  ...
+# Subtest: ad.number_invented (FATAL) fires on a fabricated stat in ad copy
+ok 11 - ad.number_invented (FATAL) fires on a fabricated stat in ad copy
+  ---
+  duration_ms: 4.899796
+  type: 'test'
+  ...
+# Subtest: ad.outcome_promised fires on a guaranteed-results headline
+ok 12 - ad.outcome_promised fires on a guaranteed-results headline
+  ---
+  duration_ms: 3.315035
+  type: 'test'
+  ...
+# Subtest: ad.headline_too_long fires past the 30-char cap
+ok 13 - ad.headline_too_long fires past the 30-char cap
+  ---
+  duration_ms: 3.974742
+  type: 'test'
+  ...
+# Subtest: ad.quote_fabricated (FATAL) fires on a made-up testimonial
+ok 14 - ad.quote_fabricated (FATAL) fires on a made-up testimonial
+  ---
+  duration_ms: 2.997836
+  type: 'test'
+  ...
+# Subtest: MockAdsPublisher creates paused drafts only, and records them
+ok 15 - MockAdsPublisher creates paused drafts only, and records them
+  ---
+  duration_ms: 0.70875
+  type: 'test'
+  ...
+# Subtest: extractNumbers scales a band low bound: "£10–30k" → 10000 & 30000
+ok 16 - extractNumbers scales a band low bound: "£10–30k" → 10000 & 30000
+  ---
+  duration_ms: 1.720987
+  type: 'test'
+  ...
+# Subtest: phraseRegex: single word gets a trailing boundary
+ok 17 - phraseRegex: single word gets a trailing boundary
+  ---
+  duration_ms: 0.564509
+  type: 'test'
+  ...
+# Subtest: banned scan allows a negated H3 rebuttal, still flags the plain claim
+ok 18 - banned scan allows a negated H3 rebuttal, still flags the plain claim
+  ---
+  duration_ms: 3.044337
+  type: 'test'
+  ...
+# Subtest: customerMustWords drops a subject-verb instruction clause
+ok 19 - customerMustWords drops a subject-verb instruction clause
+  ---
+  duration_ms: 0.547279
+  type: 'test'
+  ...
+# Subtest: qaS1 accepts a spelled-out multiplier in leak arithmetic
+ok 20 - qaS1 accepts a spelled-out multiplier in leak arithmetic
+  ---
+  duration_ms: 21.892746
+  type: 'test'
+  ...
+# Subtest: qaS2 accepts a punchy 10-char exact C2 quote
+ok 21 - qaS2 accepts a punchy 10-char exact C2 quote
+  ---
+  duration_ms: 0.751969
+  type: 'test'
+  ...
+# Subtest: qaS2 accepts a singular reword of a multi-word C7 entry
+ok 22 - qaS2 accepts a singular reword of a multi-word C7 entry
+  ---
+  duration_ms: 0.596695
+  type: 'test'
+  ...
+# Subtest: qaS3 accepts a dash-form voice guardrail
+ok 23 - qaS3 accepts a dash-form voice guardrail
+  ---
+  duration_ms: 3.414021
+  type: 'test'
+  ...
+# Subtest: qaS4 allows a refund that names the amount, parks a real earnings promise
+ok 24 - qaS4 allows a refund that names the amount, parks a real earnings promise
+  ---
+  duration_ms: 11.909387
+  type: 'test'
+  ...
+# Subtest: qaS4 accepts shown bundle addition and per-head division
+ok 25 - qaS4 accepts shown bundle addition and per-head division
+  ---
+  duration_ms: 4.152876
+  type: 'test'
+  ...
+# Subtest: qaS4 does not flag an offer named from the owner vocabulary
+ok 26 - qaS4 does not flag an offer named from the owner vocabulary
+  ---
+  duration_ms: 1.996747
+  type: 'test'
+  ...
+# Subtest: qaS5 accepts a north star naming a real offer price (from S4)
+ok 27 - qaS5 accepts a north star naming a real offer price (from S4)
+  ---
+  duration_ms: 3.762126
+  type: 'test'
+  ...
+# Subtest: qaS5 does not flag an organic action that only shares a platform word with a paid ban
+ok 28 - qaS5 does not flag an organic action that only shares a platform word with a paid ban
+  ---
+  duration_ms: 2.289279
+  type: 'test'
+  ...
+# Subtest: qaS5 accepts a phase theme that pluralises the goal noun
+ok 29 - qaS5 accepts a phase theme that pluralises the goal noun
+  ---
+  duration_ms: 2.487058
+  type: 'test'
+  ...
+# Subtest: qaS6 accepts a night-length guarantee and a shown per-session price
+ok 30 - qaS6 accepts a night-length guarantee and a shown per-session price
+  ---
+  duration_ms: 7.249687
+  type: 'test'
+  ...
+# Subtest: qaS7 accepts an S4 price restated and a real C2 quote in email copy
+ok 31 - qaS7 accepts an S4 price restated and a real C2 quote in email copy
+  ---
+  duration_ms: 10.261459
+  type: 'test'
+  ...
+# Subtest: qaS7 allows list_status none when F2 says there is no list
+ok 32 - qaS7 allows list_status none when F2 says there is no list
+  ---
+  duration_ms: 11.724488
+  type: 'test'
+  ...
+# Subtest: qaS8 accepts a physical measurement and a sentence-cased C2 quote
+ok 33 - qaS8 accepts a physical measurement and a sentence-cased C2 quote
+  ---
+  duration_ms: 24.254753
+  type: 'test'
+  ...
+# Subtest: qaS9 accepts an expanded revenue band and a spelled-out goal
+ok 34 - qaS9 accepts an expanded revenue band and a spelled-out goal
+  ---
+  duration_ms: 3.755244
+  type: 'test'
+  ...
+# Subtest: qaS5 does not flag an organic channel a verbose do_not_do actually endorses
+ok 35 - qaS5 does not flag an organic channel a verbose do_not_do actually endorses
+  ---
+  duration_ms: 4.109415
+  type: 'test'
+  ...
+# Subtest: qaS1 accepts evidence whose quote adds a trailing period the source lacks
+ok 36 - qaS1 accepts evidence whose quote adds a trailing period the source lacks
+  ---
+  duration_ms: 1.527947
+  type: 'test'
+  ...
+# Subtest: qaS6 still flags a fabricated quote even with edge tolerance
+ok 37 - qaS6 still flags a fabricated quote even with edge tolerance
+  ---
+  duration_ms: 3.516938
+  type: 'test'
+  ...
+# Subtest: invented numbers/quotes are retryable; unsupported credentials/outcomes are fatal
+ok 38 - invented numbers/quotes are retryable; unsupported credentials/outcomes are fatal
+  ---
+  duration_ms: 10.198906
+  type: 'test'
+  ...
+# Subtest: qaS5 ignores a verbose do_not_do that names the endorsed organic channel
+ok 39 - qaS5 ignores a verbose do_not_do that names the endorsed organic channel
+  ---
+  duration_ms: 3.480694
+  type: 'test'
+  ...
+# Subtest: contactBody maps a contact to the Brevo /v3/contacts body
+ok 40 - contactBody maps a contact to the Brevo /v3/contacts body
+  ---
+  duration_ms: 2.059112
+  type: 'test'
+  ...
+# Subtest: contactBody defaults listIds to [] and omits FIRSTNAME when absent
+ok 41 - contactBody defaults listIds to [] and omits FIRSTNAME when absent
+  ---
+  duration_ms: 0.21241
+  type: 'test'
+  ...
+# Subtest: contactBody refuses an invalid email
+ok 42 - contactBody refuses an invalid email
+  ---
+  duration_ms: 4.256983
+  type: 'test'
+  ...
+# Subtest: a BrevoLike client receives the upsert
+ok 43 - a BrevoLike client receives the upsert
+  ---
+  duration_ms: 0.325883
+  type: 'test'
+  ...
+# Subtest: provisionCatalog creates all four when none exist
+ok 44 - provisionCatalog creates all four when none exist
+  ---
+  duration_ms: 2.33859
+  type: 'test'
+  ...
+# Subtest: provisionCatalog is idempotent — reuses existing prices by lookup_key
+ok 45 - provisionCatalog is idempotent — reuses existing prices by lookup_key
+  ---
+  duration_ms: 0.443383
+  type: 'test'
+  ...
+# Subtest: ensureCatalogPrices auto-provisions when no price IDs are supplied
+ok 46 - ensureCatalogPrices auto-provisions when no price IDs are supplied
+  ---
+  duration_ms: 0.346468
+  type: 'test'
+  ...
+# Subtest: ensureCatalogPrices respects manually-set price IDs — no Stripe calls
+ok 47 - ensureCatalogPrices respects manually-set price IDs — no Stripe calls
+  ---
+  duration_ms: 0.253278
+  type: 'test'
+  ...
+# Subtest: upsertEnv replaces an existing key and appends a new one
+ok 48 - upsertEnv replaces an existing key and appends a new one
+  ---
+  duration_ms: 1.340408
+  type: 'test'
+  ...
+# Subtest: qaContentCluster passes a grounded, interlinked mock cluster
+ok 49 - qaContentCluster passes a grounded, interlinked mock cluster
+  ---
+  duration_ms: 39.245187
+  type: 'test'
+  ...
+# Subtest: mock cluster is 1 pillar + 6 supporting with unique slugs and distinct queries
+ok 50 - mock cluster is 1 pillar + 6 supporting with unique slugs and distinct queries
+  ---
+  duration_ms: 1.104785
+  type: 'test'
+  ...
+# Subtest: cc.number_invented (FATAL) fires on a fabricated statistic
+ok 51 - cc.number_invented (FATAL) fires on a fabricated statistic
+  ---
+  duration_ms: 12.530429
+  type: 'test'
+  ...
+# Subtest: cc.quote_fabricated (FATAL) fires on a quote no customer said
+ok 52 - cc.quote_fabricated (FATAL) fires on a quote no customer said
+  ---
+  duration_ms: 15.302813
+  type: 'test'
+  ...
+# Subtest: cc.pillar_backlink_missing fires when a supporting article drops the pillar link
+ok 53 - cc.pillar_backlink_missing fires when a supporting article drops the pillar link
+  ---
+  duration_ms: 9.083522
+  type: 'test'
+  ...
+# Subtest: cc.pillar_hub_incomplete fires when the pillar stops linking to a supporting article
+ok 54 - cc.pillar_hub_incomplete fires when the pillar stops linking to a supporting article
+  ---
+  duration_ms: 8.03993
+  type: 'test'
+  ...
+# Subtest: cc.query_duplicate fires when two articles chase the same fan-out query
+ok 55 - cc.query_duplicate fires when two articles chase the same fan-out query
+  ---
+  duration_ms: 8.970969
+  type: 'test'
+  ...
+# Subtest: cc.internal_link_dangling fires on a link to a non-existent article
+ok 56 - cc.internal_link_dangling fires on a link to a non-existent article
+  ---
+  duration_ms: 13.081214
+  type: 'test'
+  ...
+# Subtest: cc.snippet_too_long fires when the citation block overflows
+ok 57 - cc.snippet_too_long fires when the citation block overflows
+  ---
+  duration_ms: 8.665586
+  type: 'test'
+  ...
+# Subtest: banned phrase (H3 never-word) is caught in cluster copy
+ok 58 - banned phrase (H3 never-word) is caught in cluster copy
+  ---
+  duration_ms: 7.639467
+  type: 'test'
+  ...
+# Subtest: a tenant, its contacts, pipeline counts and timeline
+ok 59 - a tenant, its contacts, pipeline counts and timeline
+  ---
+  duration_ms: 8.838812
+  type: 'test'
+  ...
+# Subtest: adding a contact to a missing tenant is a clear error
+ok 60 - adding a contact to a missing tenant is a clear error
+  ---
+  duration_ms: 0.472332
+  type: 'test'
+  ...
+# Subtest: ingestTick turns manager rail runs into timeline activities (skips skipped)
+ok 61 - ingestTick turns manager rail runs into timeline activities (skips skipped)
+  ---
+  duration_ms: 0.32167
+  type: 'test'
+  ...
+# Subtest: JsonCrmStore persists across instances
+ok 62 - JsonCrmStore persists across instances
+  ---
+  duration_ms: 0.853468
+  type: 'test'
+  ...
+# Subtest: delivery email names the business, greets by first name, lists the deliverables
+ok 63 - delivery email names the business, greets by first name, lists the deliverables
+  ---
+  duration_ms: 0.981193
+  type: 'test'
+  ...
+# Subtest: delivery email carries the compliance line and makes no outcome promise
+ok 64 - delivery email carries the compliance line and makes no outcome promise
+  ---
+  duration_ms: 0.301415
+  type: 'test'
+  ...
+# Subtest: email falls back to a neutral greeting with no first name
+ok 65 - email falls back to a neutral greeting with no first name
+  ---
+  duration_ms: 0.158138
+  type: 'test'
+  ...
+# Subtest: buildEml produces valid headers and a {{customer_email}} placeholder when no recipient
+ok 66 - buildEml produces valid headers and a {{customer_email}} placeholder when no recipient
+  ---
+  duration_ms: 0.342718
+  type: 'test'
+  ...
+# Subtest: buildEml uses the supplied recipient
+ok 67 - buildEml uses the supplied recipient
+  ---
+  duration_ms: 0.153803
+  type: 'test'
+  ...
+# Subtest: attachmentList covers the index plus every stage PDF
+ok 68 - attachmentList covers the index plus every stage PDF
+  ---
+  duration_ms: 1.352068
+  type: 'test'
+  ...
+# Subtest: deliveryMessage maps a delivery email to a Postmark transactional message
+ok 69 - deliveryMessage maps a delivery email to a Postmark transactional message
+  ---
+  duration_ms: 0.843637
+  type: 'test'
+  ...
+# Subtest: deliveryMessage honours from / replyTo / attachments
+ok 70 - deliveryMessage honours from / replyTo / attachments
+  ---
+  duration_ms: 0.271855
+  type: 'test'
+  ...
+# Subtest: deliveryMessage refuses an invalid or empty recipient (no accidental sends)
+ok 71 - deliveryMessage refuses an invalid or empty recipient (no accidental sends)
+  ---
+  duration_ms: 0.531445
+  type: 'test'
+  ...
+# Subtest: a PostmarkLike client receives exactly the built message
+ok 72 - a PostmarkLike client receives exactly the built message
+  ---
+  duration_ms: 0.204946
+  type: 'test'
+  ...
+# Subtest: all three fixtures exist and pass the S0 intake gate
+ok 73 - all three fixtures exist and pass the S0 intake gate
+  ---
+  duration_ms: 21.044945
+  type: 'test'
+  ...
+# Subtest: MockGhlClient creates a location once per tenant (find-or-create)
+ok 74 - MockGhlClient creates a location once per tenant (find-or-create)
+  ---
+  duration_ms: 0.807607
+  type: 'test'
+  ...
+# Subtest: MockGhlClient records pushed artifacts with deterministic ids
+ok 75 - MockGhlClient records pushed artifacts with deterministic ids
+  ---
+  duration_ms: 0.186859
+  type: 'test'
+  ...
+# Subtest: ghlRunner ensures the sub-account and pushes an artifact per due action
+ok 76 - ghlRunner ensures the sub-account and pushes an artifact per due action
+  ---
+  duration_ms: 0.606067
+  type: 'test'
+  ...
+# Subtest: form embeds every one of the 45 A1–H4 fields, in contract order
+ok 77 - form embeds every one of the 45 A1–H4 fields, in contract order
+  ---
+  duration_ms: 2.190625
+  type: 'test'
+  ...
+# Subtest: form field kinds, required flags and options mirror the canonical spec (no drift)
+ok 78 - form field kinds, required flags and options mirror the canonical spec (no drift)
+  ---
+  duration_ms: 0.618249
+  type: 'test'
+  ...
+# Subtest: every field carries customer-facing "why we ask" microcopy
+ok 79 - every field carries customer-facing "why we ask" microcopy
+  ---
+  duration_ms: 0.272894
+  type: 'test'
+  ...
+# Subtest: sliders and two-box fields carry their sub-keys for the payload contract
+ok 80 - sliders and two-box fields carry their sub-keys for the payload contract
+  ---
+  duration_ms: 0.2773
+  type: 'test'
+  ...
+# Subtest: form ships all eight sections and the consent gate
+ok 81 - form ships all eight sections and the consent gate
+  ---
+  duration_ms: 0.353855
+  type: 'test'
+  ...
+# Subtest: extractJson parses a bare JSON object
+ok 82 - extractJson parses a bare JSON object
+  ---
+  duration_ms: 1.923476
+  type: 'test'
+  ...
+# Subtest: extractJson parses fenced JSON
+ok 83 - extractJson parses fenced JSON
+  ---
+  duration_ms: 0.34162
+  type: 'test'
+  ...
+# Subtest: extractJson tolerates trailing prose after the object
+ok 84 - extractJson tolerates trailing prose after the object
+  ---
+  duration_ms: 0.228407
+  type: 'test'
+  ...
+# Subtest: extractJson tolerates leading prose that itself contains braces
+ok 85 - extractJson tolerates leading prose that itself contains braces
+  ---
+  duration_ms: 0.261826
+  type: 'test'
+  ...
+# Subtest: extractJson handles braces and fences inside string values
+ok 86 - extractJson handles braces and fences inside string values
+  ---
+  duration_ms: 0.193939
+  type: 'test'
+  ...
+# Subtest: extractJson reports an error for non-JSON output
+ok 87 - extractJson reports an error for non-JSON output
+  ---
+  duration_ms: 0.20053
+  type: 'test'
+  ...
+# Subtest: MockKeywordProvider returns one metric per keyword, labelled mock
+ok 88 - MockKeywordProvider returns one metric per keyword, labelled mock
+  ---
+  duration_ms: 1.24091
+  type: 'test'
+  ...
+# Subtest: MockKeywordProvider is deterministic (stable across calls)
+ok 89 - MockKeywordProvider is deterministic (stable across calls)
+  ---
+  duration_ms: 1.30471
+  type: 'test'
+  ...
+# Subtest: MockKeywordProvider distinguishes different keywords
+ok 90 - MockKeywordProvider distinguishes different keywords
+  ---
+  duration_ms: 0.219847
+  type: 'test'
+  ...
+# Subtest: isCadenceDue: daily always, weekly on Monday, monthly on the 1st
+ok 91 - isCadenceDue: daily always, weekly on Monday, monthly on the 1st
+  ---
+  duration_ms: 0.937297
+  type: 'test'
+  ...
+# Subtest: isCadenceDue throws on a bad date
+ok 92 - isCadenceDue throws on a bad date
+  ---
+  duration_ms: 0.504992
+  type: 'test'
+  ...
+# Subtest: dueActions picks only what fires on the date
+ok 93 - dueActions picks only what fires on the date
+  ---
+  duration_ms: 1.611691
+  type: 'test'
+  ...
+# Subtest: runTick runs each due action through the mock runner
+ok 94 - runTick runs each due action through the mock runner
+  ---
+  duration_ms: 0.354225
+  type: 'test'
+  ...
+# Subtest: runTick captures a failing runner as a failed entry, not a crash
+ok 95 - runTick captures a failing runner as a failed entry, not a crash
+  ---
+  duration_ms: 0.255755
+  type: 'test'
+  ...
+# Subtest: mockRunner is deterministic and names the action + tenant
+ok 96 - mockRunner is deterministic and names the action + tenant
+  ---
+  duration_ms: 0.153058
+  type: 'test'
+  ...
+# Subtest: accounts: create + verify (right vs wrong password), case-insensitive email
+ok 97 - accounts: create + verify (right vs wrong password), case-insensitive email
+  ---
+  duration_ms: 1.508377
+  type: 'test'
+  ...
+# Subtest: accounts persist across instances (JSON file)
+ok 98 - accounts persist across instances (JSON file)
+  ---
+  duration_ms: 0.430909
+  type: 'test'
+  ...
+# Subtest: provisionTenant creates a working login with a generated brand brain
+ok 99 - provisionTenant creates a working login with a generated brand brain
+  ---
+  duration_ms: 250.333505
+  type: 'test'
+  ...
+# Subtest: provisionTenant is idempotent per email (no duplicate account)
+ok 100 - provisionTenant is idempotent per email (no duplicate account)
+  ---
+  duration_ms: 50.772731
+  type: 'test'
+  ...
+# Subtest: planOptions exposes every plan with a price label
+ok 101 - planOptions exposes every plan with a price label
+  ---
+  duration_ms: 1.022452
+  type: 'test'
+  ...
+# Subtest: makeBilling resolves an active subscription for a tenant via email
+ok 102 - makeBilling resolves an active subscription for a tenant via email
+  ---
+  duration_ms: 0.548798
+  type: 'test'
+  ...
+# Subtest: makeBilling returns status none for a tenant with no subscription
+ok 103 - makeBilling returns status none for a tenant with no subscription
+  ---
+  duration_ms: 0.242847
+  type: 'test'
+  ...
+# Subtest: makeBilling handles a tenant with no email (no account) gracefully
+ok 104 - makeBilling handles a tenant with no email (no account) gracefully
+  ---
+  duration_ms: 0.21252
+  type: 'test'
+  ...
+# Subtest: billingPage marks the current plan and shows a manage button only when allowed
+ok 105 - billingPage marks the current plan and shows a manage button only when allowed
+  ---
+  duration_ms: 0.698574
+  type: 'test'
+  ...
+# Subtest: billingPage on no plan shows subscribe CTAs and an optional notice
+ok 106 - billingPage on no plan shows subscribe CTAs and an optional notice
+  ---
+  duration_ms: 0.477395
+  type: 'test'
+  ...
+# Subtest: loginEmail builds a valid message carrying the password + portal link
+ok 107 - loginEmail builds a valid message carrying the password + portal link
+  ---
+  duration_ms: 1.137946
+  type: 'test'
+  ...
+# Subtest: loginEmail refuses an invalid recipient
+ok 108 - loginEmail refuses an invalid recipient
+  ---
+  duration_ms: 0.50135
+  type: 'test'
+  ...
+# Subtest: provision fires onProvisioned once for a new signup, never for a repeat
+ok 109 - provision fires onProvisioned once for a new signup, never for a repeat
+  ---
+  duration_ms: 261.361364
+  type: 'test'
+  ...
+# Subtest: generateBrandBrain writes the full brand brain + artifacts
+ok 110 - generateBrandBrain writes the full brand brain + artifacts
+  ---
+  duration_ms: 217.673479
+  type: 'test'
+  ...
+# Subtest: runTickReal regenerates content/keyword/ads and records the run to the timeline
+ok 111 - runTickReal regenerates content/keyword/ads and records the run to the timeline
+  ---
+  duration_ms: 63.25154
+  type: 'test'
+  ...
+# Subtest: runTickReal falls back to a simulated run when the tenant has no brand brain
+ok 112 - runTickReal falls back to a simulated run when the tenant has no brand brain
+  ---
+  duration_ms: 0.289268
+  type: 'test'
+  ...
+# Subtest: GET /portal without a session redirects to login
+ok 113 - GET /portal without a session redirects to login
+  ---
+  duration_ms: 1.603866
+  type: 'test'
+  ...
+# Subtest: POST /portal/login with good credentials sets a cookie and redirects
+ok 114 - POST /portal/login with good credentials sets a cookie and redirects
+  ---
+  duration_ms: 1.126405
+  type: 'test'
+  ...
+# Subtest: POST /portal/login with bad credentials 401s and re-shows the form
+ok 115 - POST /portal/login with bad credentials 401s and re-shows the form
+  ---
+  duration_ms: 0.475705
+  type: 'test'
+  ...
+# Subtest: GET /portal with a valid session renders that tenant’s dashboard
+ok 116 - GET /portal with a valid session renders that tenant’s dashboard
+  ---
+  duration_ms: 0.689845
+  type: 'test'
+  ...
+# Subtest: POST /portal/run runs the manager and redirects back
+ok 117 - POST /portal/run runs the manager and redirects back
+  ---
+  duration_ms: 0.40709
+  type: 'test'
+  ...
+# Subtest: a forged/expired cookie is treated as logged out
+ok 118 - a forged/expired cookie is treated as logged out
+  ---
+  duration_ms: 0.185822
+  type: 'test'
+  ...
+# Subtest: the dashboard shows a billing card when a billing resolver is wired
+ok 119 - the dashboard shows a billing card when a billing resolver is wired
+  ---
+  duration_ms: 0.64563
+  type: 'test'
+  ...
+# Subtest: GET /portal/billing renders the plans screen
+ok 120 - GET /portal/billing renders the plans screen
+  ---
+  duration_ms: 0.624912
+  type: 'test'
+  ...
+# Subtest: GET /portal/billing 404s when billing is not enabled
+ok 121 - GET /portal/billing 404s when billing is not enabled
+  ---
+  duration_ms: 0.563961
+  type: 'test'
+  ...
+# Subtest: POST /portal/subscribe starts checkout and redirects to the Stripe URL
+ok 122 - POST /portal/subscribe starts checkout and redirects to the Stripe URL
+  ---
+  duration_ms: 1.841132
+  type: 'test'
+  ...
+# Subtest: POST /portal/subscribe redirects back with an error when checkout throws
+ok 123 - POST /portal/subscribe redirects back with an error when checkout throws
+  ---
+  duration_ms: 0.425887
+  type: 'test'
+  ...
+# Subtest: POST /portal/manage opens the Stripe billing portal for the customer
+ok 124 - POST /portal/manage opens the Stripe billing portal for the customer
+  ---
+  duration_ms: 0.383483
+  type: 'test'
+  ...
+# Subtest: POST /portal/run is soft by default — runs even without an active subscription
+ok 125 - POST /portal/run is soft by default — runs even without an active subscription
+  ---
+  duration_ms: 0.24575
+  type: 'test'
+  ...
+# Subtest: POST /portal/run is gated to /portal/billing when enforcement is on and the sub is inactive
+ok 126 - POST /portal/run is gated to /portal/billing when enforcement is on and the sub is inactive
+  ---
+  duration_ms: 0.345636
+  type: 'test'
+  ...
+# Subtest: POST /portal/run under enforcement runs for an active subscriber
+ok 127 - POST /portal/run under enforcement runs for an active subscriber
+  ---
+  duration_ms: 0.455354
+  type: 'test'
+  ...
+# Subtest: qaS3 passes a grounded message guide (via mock)
+ok 128 - qaS3 passes a grounded message guide (via mock)
+  ---
+  duration_ms: 10.963301
+  type: 'test'
+  ...
+# Subtest: qaS3 fails a differentiator that does not quote E2/E3
+ok 129 - qaS3 fails a differentiator that does not quote E2/E3
+  ---
+  duration_ms: 1.99006
+  type: 'test'
+  ...
+# Subtest: normalizeS3 re-injects banned/must words + sliders so those checks pass by construction
+ok 130 - normalizeS3 re-injects banned/must words + sliders so those checks pass by construction
+  ---
+  duration_ms: 1.864384
+  type: 'test'
+  ...
+# Subtest: qaS3 fails when H3 never-words are missing from banned_words
+ok 131 - qaS3 fails when H3 never-words are missing from banned_words
+  ---
+  duration_ms: 2.678366
+  type: 'test'
+  ...
+# Subtest: qaS3 fails a 61+ word elevator pitch and a banned word inside it
+ok 132 - qaS3 fails a 61+ word elevator pitch and a banned word inside it
+  ---
+  duration_ms: 2.93786
+  type: 'test'
+  ...
+# Subtest: qaS3 fails sliders that contradict H1
+ok 133 - qaS3 fails sliders that contradict H1
+  ---
+  duration_ms: 1.513435
+  type: 'test'
+  ...
+# Subtest: qaS4 passes a grounded offer stack (via mock)
+ok 134 - qaS4 passes a grounded offer stack (via mock)
+  ---
+  duration_ms: 4.671686
+  type: 'test'
+  ...
+# Subtest: qaS4 fails a rationale that cites nothing from the D-fields
+ok 135 - qaS4 fails a rationale that cites nothing from the D-fields
+  ---
+  duration_ms: 2.04736
+  type: 'test'
+  ...
+# Subtest: qaS4 fails an unexplained 10x price jump
+ok 136 - qaS4 fails an unexplained 10x price jump
+  ---
+  duration_ms: 1.9177
+  type: 'test'
+  ...
+# Subtest: qaS4 fails a risk reversal that promises outcomes
+ok 137 - qaS4 fails a risk reversal that promises outcomes
+  ---
+  duration_ms: 2.48172
+  type: 'test'
+  ...
+# Subtest: qaS5 passes a plan that fits the owner (via mock)
+ok 138 - qaS5 passes a plan that fits the owner (via mock)
+  ---
+  duration_ms: 2.281742
+  type: 'test'
+  ...
+# Subtest: qaS5 hard-fails hours beyond the G2 band
+ok 139 - qaS5 hard-fails hours beyond the G2 band
+  ---
+  duration_ms: 1.580689
+  type: 'test'
+  ...
+# Subtest: qaS5 fails an action on a channel the plan itself forbids
+ok 140 - qaS5 fails an action on a channel the plan itself forbids
+  ---
+  duration_ms: 1.454583
+  type: 'test'
+  ...
+# Subtest: qaS5 fails a north star without a number or without G1 grounding
+ok 141 - qaS5 fails a north star without a number or without G1 grounding
+  ---
+  duration_ms: 1.600881
+  type: 'test'
+  ...
+# Subtest: qaS5 fails a channel priority sourced from neither C7 nor F4/F1
+ok 142 - qaS5 fails a channel priority sourced from neither C7 nor F4/F1
+  ---
+  duration_ms: 1.619502
+  type: 'test'
+  ...
+# Subtest: qaS5 accepts a figure a prior stage stated in its prose, but flags a bare invented one
+ok 143 - qaS5 accepts a figure a prior stage stated in its prose, but flags a bare invented one
+  ---
+  duration_ms: 17.496649
+  type: 'test'
+  ...
+# Subtest: qaS5 accepts a visible subtraction remainder but flags the same figure bare
+ok 144 - qaS5 accepts a visible subtraction remainder but flags the same figure bare
+  ---
+  duration_ms: 2.867916
+  type: 'test'
+  ...
+# Subtest: qaS3 fails when no tone rule is the "Sounds like X, not Y" guardrail
+ok 145 - qaS3 fails when no tone rule is the "Sounds like X, not Y" guardrail
+  ---
+  duration_ms: 3.353541
+  type: 'test'
+  ...
+# Subtest: qaS3 fails a positioning statement with no contrast
+ok 146 - qaS3 fails a positioning statement with no contrast
+  ---
+  duration_ms: 1.269663
+  type: 'test'
+  ...
+# Subtest: qaS3 flags an invented figure in message copy (retryable)
+ok 147 - qaS3 flags an invented figure in message copy (retryable)
+  ---
+  duration_ms: 1.271472
+  type: 'test'
+  ...
+# Subtest: qaS3 accepts a real intake price cited in positioning
+ok 148 - qaS3 accepts a real intake price cited in positioning
+  ---
+  duration_ms: 1.51195
+  type: 'test'
+  ...
+# Subtest: qaS4 marks an outcome-promising risk reversal FATAL
+ok 149 - qaS4 marks an outcome-promising risk reversal FATAL
+  ---
+  duration_ms: 2.764271
+  type: 'test'
+  ...
+# Subtest: qaS4 fails a lead offer that names no stack rung
+ok 150 - qaS4 fails a lead offer that names no stack rung
+  ---
+  duration_ms: 1.037075
+  type: 'test'
+  ...
+# Subtest: qaS4 fails a ladder whose prices do not ascend
+ok 151 - qaS4 fails a ladder whose prices do not ascend
+  ---
+  duration_ms: 1.167967
+  type: 'test'
+  ...
+# Subtest: qaS4 fails an uncited pricing move and an unquoted stack read
+ok 152 - qaS4 fails an uncited pricing move and an unquoted stack read
+  ---
+  duration_ms: 1.930532
+  type: 'test'
+  ...
+# Subtest: qaS4 FATALLY fails an invented benchmark figure
+ok 153 - qaS4 FATALLY fails an invented benchmark figure
+  ---
+  duration_ms: 1.181851
+  type: 'test'
+  ...
+# Subtest: qaS5 fails a phase theme that never mentions the goal
+ok 154 - qaS5 fails a phase theme that never mentions the goal
+  ---
+  duration_ms: 1.351883
+  type: 'test'
+  ...
+# Subtest: qaS5 FATALLY fails an invented reach estimate
+ok 155 - qaS5 FATALLY fails an invented reach estimate
+  ---
+  duration_ms: 1.730813
+  type: 'test'
+  ...
+# Subtest: qaS1 accepts visible arithmetic on an intake-stated number beyond B2/B3
+ok 156 - qaS1 accepts visible arithmetic on an intake-stated number beyond B2/B3
+  ---
+  duration_ms: 2.144871
+  type: 'test'
+  ...
+# Subtest: qaS1 still rejects a figure with no visible derivation
+ok 157 - qaS1 still rejects a figure with no visible derivation
+  ---
+  duration_ms: 1.50556
+  type: 'test'
+  ...
+# Subtest: qaS1 accepts a visible sum of two intake-stated figures
+ok 158 - qaS1 accepts a visible sum of two intake-stated figures
+  ---
+  duration_ms: 1.305387
+  type: 'test'
+  ...
+# Subtest: qaS1 rejects a sum whose addends are not intake-stated
+ok 159 - qaS1 rejects a sum whose addends are not intake-stated
+  ---
+  duration_ms: 1.293848
+  type: 'test'
+  ...
+# Subtest: qaS1 accepts visible division in leak arithmetic
+ok 160 - qaS1 accepts visible division in leak arithmetic
+  ---
+  duration_ms: 1.15429
+  type: 'test'
+  ...
+# Subtest: H3 free-text parsing: quoted phrases, contractions, commentary, negated quotes
+ok 161 - H3 free-text parsing: quoted phrases, contractions, commentary, negated quotes
+  ---
+  duration_ms: 21.390841
+  type: 'test'
+  ...
+# Subtest: qaS6 passes a grounded website pack (via mock)
+ok 162 - qaS6 passes a grounded website pack (via mock)
+  ---
+  duration_ms: 16.190117
+  type: 'test'
+  ...
+# Subtest: qaS6 FATALLY fails a quoted passage no input ever said
+ok 163 - qaS6 FATALLY fails a quoted passage no input ever said
+  ---
+  duration_ms: 2.938324
+  type: 'test'
+  ...
+# Subtest: qaS6 flags an invented percentage and figure (retryable)
+ok 164 - qaS6 flags an invented percentage and figure (retryable)
+  ---
+  duration_ms: 5.155219
+  type: 'test'
+  ...
+# Subtest: qaS6 FATALLY fails credential words no input supports
+ok 165 - qaS6 FATALLY fails credential words no input supports
+  ---
+  duration_ms: 3.536013
+  type: 'test'
+  ...
+# Subtest: qaS6 fails two heroes opening from the same angle
+ok 166 - qaS6 fails two heroes opening from the same angle
+  ---
+  duration_ms: 4.105671
+  type: 'test'
+  ...
+# Subtest: qaS6 fails a generic call to action
+ok 167 - qaS6 fails a generic call to action
+  ---
+  duration_ms: 5.424004
+  type: 'test'
+  ...
+# Subtest: qaS7 passes a grounded email pack (via mock)
+ok 168 - qaS7 passes a grounded email pack (via mock)
+  ---
+  duration_ms: 13.097066
+  type: 'test'
+  ...
+# Subtest: qaS7 fails a link-CTA email with no {{link}} at all
+ok 169 - qaS7 fails a link-CTA email with no {{link}} at all
+  ---
+  duration_ms: 7.339365
+  type: 'test'
+  ...
+# Subtest: qaS7 accepts {{link}} in both body and cta line (one destination)
+ok 170 - qaS7 accepts {{link}} in both body and cta line (one destination)
+  ---
+  duration_ms: 6.966593
+  type: 'test'
+  ...
+# Subtest: qaS7 still flags {{link}} in a subject or preview
+ok 171 - qaS7 still flags {{link}} in a subject or preview
+  ---
+  duration_ms: 5.630551
+  type: 'test'
+  ...
+# Subtest: qaS7 accepts a reply-CTA email with no {{link}}
+ok 172 - qaS7 accepts a reply-CTA email with no {{link}}
+  ---
+  duration_ms: 5.800891
+  type: 'test'
+  ...
+# Subtest: qaS7 fails three subject lines sharing a hook category
+ok 173 - qaS7 fails three subject lines sharing a hook category
+  ---
+  duration_ms: 5.643143
+  type: 'test'
+  ...
+# Subtest: qaS7 fails literal URLs and unknown merge tokens
+ok 174 - qaS7 fails literal URLs and unknown merge tokens
+  ---
+  duration_ms: 9.956881
+  type: 'test'
+  ...
+# Subtest: qaS7 fabricated quote (fatal) and invented percentage (retryable)
+ok 175 - qaS7 fabricated quote (fatal) and invented percentage (retryable)
+  ---
+  duration_ms: 6.84063
+  type: 'test'
+  ...
+# Subtest: qaS7 fails a cold list without the warm-up email
+ok 176 - qaS7 fails a cold list without the warm-up email
+  ---
+  duration_ms: 5.357513
+  type: 'test'
+  ...
+# Subtest: qaS8 passes a grounded content month (via mock)
+ok 177 - qaS8 passes a grounded content month (via mock)
+  ---
+  duration_ms: 6.900932
+  type: 'test'
+  ...
+# Subtest: qaS8 fails platforms that are not the F5 picks
+ok 178 - qaS8 fails platforms that are not the F5 picks
+  ---
+  duration_ms: 5.4774
+  type: 'test'
+  ...
+# Subtest: qaS8 fails a duplicated day and a format foreign to its platform
+ok 179 - qaS8 fails a duplicated day and a format foreign to its platform
+  ---
+  duration_ms: 5.40787
+  type: 'test'
+  ...
+# Subtest: qaS8 fails a month where one pillar dominates
+ok 180 - qaS8 fails a month where one pillar dominates
+  ---
+  duration_ms: 5.14659
+  type: 'test'
+  ...
+# Subtest: qaS8 enforces S3 voice-list additions across the 30 posts (retryable)
+ok 181 - qaS8 enforces S3 voice-list additions across the 30 posts (retryable)
+  ---
+  duration_ms: 5.891058
+  type: 'test'
+  ...
+# Subtest: qaS8 does not flag an S3 voice word used in a negated rebuttal
+ok 182 - qaS8 does not flag an S3 voice word used in a negated rebuttal
+  ---
+  duration_ms: 10.927031
+  type: 'test'
+  ...
+# Subtest: qaS8 flags invented stats (retryable) and fabricated quotes (fatal)
+ok 183 - qaS8 flags invented stats (retryable) and fabricated quotes (fatal)
+  ---
+  duration_ms: 12.007612
+  type: 'test'
+  ...
+# Subtest: qaS9 passes a grounded one-pager (via mock)
+ok 184 - qaS9 passes a grounded one-pager (via mock)
+  ---
+  duration_ms: 3.048289
+  type: 'test'
+  ...
+# Subtest: qaS9 flags a table figure absent from its source (retryable)
+ok 185 - qaS9 flags a table figure absent from its source (retryable)
+  ---
+  duration_ms: 9.939989
+  type: 'test'
+  ...
+# Subtest: qaS9 flags an invented figure in prose (retryable)
+ok 186 - qaS9 flags an invented figure in prose (retryable)
+  ---
+  duration_ms: 1.790713
+  type: 'test'
+  ...
+# Subtest: qaS9 fails projections beyond the 90-day horizon
+ok 187 - qaS9 fails projections beyond the 90-day horizon
+  ---
+  duration_ms: 1.660942
+  type: 'test'
+  ...
+# Subtest: qaS9 fails a table missing its commercial anchors
+ok 188 - qaS9 fails a table missing its commercial anchors
+  ---
+  duration_ms: 6.157821
+  type: 'test'
+  ...
+# Subtest: qaS9 fails goals that abandon the owner’s G1 wording
+ok 189 - qaS9 fails goals that abandon the owner’s G1 wording
+  ---
+  duration_ms: 1.901874
+  type: 'test'
+  ...
+# Subtest: qaS1 passes a well-grounded audit
+ok 190 - qaS1 passes a well-grounded audit
+  ---
+  duration_ms: 7.554664
+  type: 'test'
+  ...
+# Subtest: qaS1 fails evidence without a verbatim quote
+ok 191 - qaS1 fails evidence without a verbatim quote
+  ---
+  duration_ms: 2.381067
+  type: 'test'
+  ...
+# Subtest: qaS1 fails evidence quoting words that are NOT in the intake
+ok 192 - qaS1 fails evidence quoting words that are NOT in the intake
+  ---
+  duration_ms: 1.026238
+  type: 'test'
+  ...
+# Subtest: qaS1 fails invented leak numbers
+ok 193 - qaS1 fails invented leak numbers
+  ---
+  duration_ms: 16.090168
+  type: 'test'
+  ...
+# Subtest: qaS1 accepts leak numbers derived from B2/B3 with commas and annualisation
+ok 194 - qaS1 accepts leak numbers derived from B2/B3 with commas and annualisation
+  ---
+  duration_ms: 3.037289
+  type: 'test'
+  ...
+# Subtest: qaS2 passes a grounded profile
+ok 195 - qaS2 passes a grounded profile
+  ---
+  duration_ms: 1.411536
+  type: 'test'
+  ...
+# Subtest: qaS2 hard-fails a paraphrased verbatim (fact-echo)
+ok 196 - qaS2 hard-fails a paraphrased verbatim (fact-echo)
+  ---
+  duration_ms: 0.812028
+  type: 'test'
+  ...
+# Subtest: qaS2 accepts verbatims differing only in smart quotes/whitespace
+ok 197 - qaS2 accepts verbatims differing only in smart quotes/whitespace
+  ---
+  duration_ms: 1.197433
+  type: 'test'
+  ...
+# Subtest: qaS2 requires at least two verbatims
+ok 198 - qaS2 requires at least two verbatims
+  ---
+  duration_ms: 0.746273
+  type: 'test'
+  ...
+# Subtest: qaS2 rejects an awareness stage outside the Schwartz five
+ok 199 - qaS2 rejects an awareness stage outside the Schwartz five
+  ---
+  duration_ms: 0.951769
+  type: 'test'
+  ...
+# Subtest: qaS2 accepts hyphen/case variants of a valid awareness stage
+ok 200 - qaS2 accepts hyphen/case variants of a valid awareness stage
+  ---
+  duration_ms: 0.634654
+  type: 'test'
+  ...
+# Subtest: qaS2 requires non-empty exclusions
+ok 201 - qaS2 requires non-empty exclusions
+  ---
+  duration_ms: 0.492701
+  type: 'test'
+  ...
+# Subtest: qaS2 rejects channels the customer never selected in C7
+ok 202 - qaS2 rejects channels the customer never selected in C7
+  ---
+  duration_ms: 0.504938
+  type: 'test'
+  ...
+# Subtest: qaS1 accepts period lengths and intake-echoed figures in leak estimates
+ok 203 - qaS1 accepts period lengths and intake-echoed figures in leak estimates
+  ---
+  duration_ms: 1.218784
+  type: 'test'
+  ...
+# Subtest: qaS1 catches k-shorthand invented numbers (£29k must not pass as 29)
+ok 204 - qaS1 catches k-shorthand invented numbers (£29k must not pass as 29)
+  ---
+  duration_ms: 1.374674
+  type: 'test'
+  ...
+# Subtest: qaS1 catches invented figures in top_3_leaks and narrative, not just estimates
+ok 205 - qaS1 catches invented figures in top_3_leaks and narrative, not just estimates
+  ---
+  duration_ms: 1.307485
+  type: 'test'
+  ...
+# Subtest: qaS1 rejects the same quote reused as evidence for every category
+ok 206 - qaS1 rejects the same quote reused as evidence for every category
+  ---
+  duration_ms: 1.150608
+  type: 'test'
+  ...
+# Subtest: qaS1 rejects trivial full-value quotes ("850") as evidence
+ok 207 - qaS1 rejects trivial full-value quotes ("850") as evidence
+  ---
+  duration_ms: 1.510242
+  type: 'test'
+  ...
+# Subtest: qaS2 accepts a verbatim wrapped in quotation marks by the model
+ok 208 - qaS2 accepts a verbatim wrapped in quotation marks by the model
+  ---
+  duration_ms: 0.482427
+  type: 'test'
+  ...
+# Subtest: qaS2 rejects duplicated verbatims (distinct quotes required)
+ok 209 - qaS2 rejects duplicated verbatims (distinct quotes required)
+  ---
+  duration_ms: 2.940193
+  type: 'test'
+  ...
+# Subtest: qaS2 exempts double-quoted customer words from the banned scan, but not generated prose
+ok 210 - qaS2 exempts double-quoted customer words from the banned scan, but not generated prose
+  ---
+  duration_ms: 1.414437
+  type: 'test'
+  ...
+# Subtest: qaS2 rejects channels that only share a generic token with C7
+ok 211 - qaS2 rejects channels that only share a generic token with C7
+  ---
+  duration_ms: 0.455675
+  type: 'test'
+  ...
+# Subtest: qaS2 rejects placeholder exclusions like "n/a"
+ok 212 - qaS2 rejects placeholder exclusions like "n/a"
+  ---
+  duration_ms: 0.486924
+  type: 'test'
+  ...
+# Subtest: banned phrase scan survives typography: curly apostrophe and un-hyphenated variants
+ok 213 - banned phrase scan survives typography: curly apostrophe and un-hyphenated variants
+  ---
+  duration_ms: 0.472613
+  type: 'test'
+  ...
+# Subtest: qaS2 does NOT enforce H3 never-words on analysis docs (they bind S3+ copy)
+ok 214 - qaS2 does NOT enforce H3 never-words on analysis docs (they bind S3+ copy)
+  ---
+  duration_ms: 0.517357
+  type: 'test'
+  ...
+# Subtest: banned phrase scan catches global list and H3 never-words anywhere in the output
+ok 215 - banned phrase scan catches global list and H3 never-words anywhere in the output
+  ---
+  duration_ms: 1.045575
+  type: 'test'
+  ...
+# Subtest: banned phrase scan does not fire inside honest derived words
+ok 216 - banned phrase scan does not fire inside honest derived words
+  ---
+  duration_ms: 0.297454
+  type: 'test'
+  ...
+# Subtest: railRunner generates a Soro cluster and pushes it into the GHL sub-account
+ok 217 - railRunner generates a Soro cluster and pushes it into the GHL sub-account
+  ---
+  duration_ms: 94.512683
+  type: 'test'
+  ...
+# Subtest: railRunner keyword_refresh reads the cluster and pushes a report
+ok 218 - railRunner keyword_refresh reads the cluster and pushes a report
+  ---
+  duration_ms: 17.124375
+  type: 'test'
+  ...
+# Subtest: railRunner skips (does not crash) when the tenant has no brand brain
+ok 219 - railRunner skips (does not crash) when the tenant has no brand brain
+  ---
+  duration_ms: 0.2287
+  type: 'test'
+  ...
+# Subtest: railRunner keyword_refresh skips cleanly when there is no cluster yet
+ok 220 - railRunner keyword_refresh skips cleanly when there is no cluster yet
+  ---
+  duration_ms: 7.726461
+  type: 'test'
+  ...
+# Subtest: runStage passes cleanly on first attempt with a healthy mock
+ok 221 - runStage passes cleanly on first attempt with a healthy mock
+  ---
+  duration_ms: 52.629185
+  type: 'test'
+  ...
+# Subtest: runStage retries once with critique after a failing first attempt, then passes
+ok 222 - runStage retries once with critique after a failing first attempt, then passes
+  ---
+  duration_ms: 1.980857
+  type: 'test'
+  ...
+# Subtest: runStage QA-fails an S1 with invented numbers and no verbatim, then recovers on retry
+ok 223 - runStage QA-fails an S1 with invented numbers and no verbatim, then recovers on retry
+  ---
+  duration_ms: 15.007201
+  type: 'test'
+  ...
+# Subtest: runStage parks after a second failure (retry policy: one retry, then human queue)
+ok 224 - runStage parks after a second failure (retry policy: one retry, then human queue)
+  ---
+  duration_ms: 1.509836
+  type: 'test'
+  ...
+# Subtest: runStage parks IMMEDIATELY on a fatal (no-invention) QA issue — no retry
+ok 225 - runStage parks IMMEDIATELY on a fatal (no-invention) QA issue — no retry
+  ---
+  duration_ms: 1.140212
+  type: 'test'
+  ...
+# Subtest: S0 accepts a fully valid intake
+ok 226 - S0 accepts a fully valid intake
+  ---
+  duration_ms: 14.728096
+  type: 'test'
+  ...
+# Subtest: S0 rejects missing required fields
+ok 227 - S0 rejects missing required fields
+  ---
+  duration_ms: 2.467731
+  type: 'test'
+  ...
+# Subtest: S0 enforces min-word thresholds
+ok 228 - S0 enforces min-word thresholds
+  ---
+  duration_ms: 2.062646
+  type: 'test'
+  ...
+# Subtest: S0 rejects placeholder echoes
+ok 229 - S0 rejects placeholder echoes
+  ---
+  duration_ms: 3.327829
+  type: 'test'
+  ...
+# Subtest: S0 validates select options exactly
+ok 230 - S0 validates select options exactly
+  ---
+  duration_ms: 2.219736
+  type: 'test'
+  ...
+# Subtest: S0 enforces F5 max two platforms
+ok 231 - S0 enforces F5 max two platforms
+  ---
+  duration_ms: 2.305035
+  type: 'test'
+  ...
+# Subtest: S0 requires F2 only when F1 includes the email list
+ok 232 - S0 requires F2 only when F1 includes the email list
+  ---
+  duration_ms: 3.817661
+  type: 'test'
+  ...
+# Subtest: S0 validates voice sliders range
+ok 233 - S0 validates voice sliders range
+  ---
+  duration_ms: 2.000992
+  type: 'test'
+  ...
+# Subtest: S0 flags unknown field IDs (contract violation)
+ok 234 - S0 flags unknown field IDs (contract violation)
+  ---
+  duration_ms: 2.22537
+  type: 'test'
+  ...
+# Subtest: S0 rejects duplicate multi-select values (F5 twice-Facebook is one platform)
+ok 235 - S0 rejects duplicate multi-select values (F5 twice-Facebook is one platform)
+  ---
+  duration_ms: 2.324474
+  type: 'test'
+  ...
+# Subtest: S0 rejects non-text H3 box values (would silently disable the banned-word list)
+ok 236 - S0 rejects non-text H3 box values (would silently disable the banned-word list)
+  ---
+  duration_ms: 3.042842
+  type: 'test'
+  ...
+# Subtest: S0 rejects unexpected slider keys
+ok 237 - S0 rejects unexpected slider keys
+  ---
+  duration_ms: 1.959141
+  type: 'test'
+  ...
+# Subtest: S0 rejects prose pasted into the A3 link list
+ok 238 - S0 rejects prose pasted into the A3 link list
+  ---
+  duration_ms: 1.917808
+  type: 'test'
+  ...
+# Subtest: S0 allows the final-screen consent key without flagging it unknown
+ok 239 - S0 allows the final-screen consent key without flagging it unknown
+  ---
+  duration_ms: 1.823955
+  type: 'test'
+  ...
+# Subtest: S0 accepts B2 provided as a currency string
+ok 240 - S0 accepts B2 provided as a currency string
+  ---
+  duration_ms: 1.957805
+  type: 'test'
+  ...
+# Subtest: s10Lint passes a consistent full stack (via mock)
+ok 241 - s10Lint passes a consistent full stack (via mock)
+  ---
+  duration_ms: 29.679915
+  type: 'test'
+  ...
+# Subtest: s10Lint flags a price in copy that agrees with neither S4 nor the intake
+ok 242 - s10Lint flags a price in copy that agrees with neither S4 nor the intake
+  ---
+  duration_ms: 18.960364
+  type: 'test'
+  ...
+# Subtest: s10Lint accepts a copy price that matches an S4 recommended price
+ok 243 - s10Lint accepts a copy price that matches an S4 recommended price
+  ---
+  duration_ms: 11.392294
+  type: 'test'
+  ...
+# Subtest: s10Lint enforces S3 voice additions across the copy stages
+ok 244 - s10Lint enforces S3 voice additions across the copy stages
+  ---
+  duration_ms: 11.749991
+  type: 'test'
+  ...
+# Subtest: s10Lint accepts a copy price S4 stated in prose (derived refund / per-session math)
+ok 245 - s10Lint accepts a copy price S4 stated in prose (derived refund / per-session math)
+  ---
+  duration_ms: 21.47126
+  type: 'test'
+  ...
+# Subtest: s10Lint still flags a copy price present in no S4 figure or intake number
+ok 246 - s10Lint still flags a copy price present in no S4 figure or intake number
+  ---
+  duration_ms: 11.015474
+  type: 'test'
+  ...
+# Subtest: s10Lint does not flag a banned voice word used in a negated rebuttal
+ok 247 - s10Lint does not flag a banned voice word used in a negated rebuttal
+  ---
+  duration_ms: 11.197127
+  type: 'test'
+  ...
+# Subtest: s10Lint flags a one-pager that never echoes the positioning
+ok 248 - s10Lint flags a one-pager that never echoes the positioning
+  ---
+  duration_ms: 15.872818
+  type: 'test'
+  ...
+# Subtest: s10Lint flags a promo sequence that never names a stack offer
+ok 249 - s10Lint flags a promo sequence that never names a stack offer
+  ---
+  duration_ms: 10.452973
+  type: 'test'
+  ...
+# Subtest: s10Lint re-runs the banned-phrase scan over the shipped set
+ok 250 - s10Lint re-runs the banned-phrase scan over the shipped set
+  ---
+  duration_ms: 11.449161
+  type: 'test'
+  ...
+# Subtest: priceKeyFor: core + bump collapses to core_bump; others map 1:1
+ok 251 - priceKeyFor: core + bump collapses to core_bump; others map 1:1
+  ---
+  duration_ms: 0.998459
+  type: 'test'
+  ...
+# Subtest: createCheckoutSession builds the right Stripe params and returns the URL
+ok 252 - createCheckoutSession builds the right Stripe params and returns the URL
+  ---
+  duration_ms: 3.485713
+  type: 'test'
+  ...
+# Subtest: createCheckoutSession refuses an unknown or unconfigured tier
+ok 253 - createCheckoutSession refuses an unknown or unconfigured tier
+  ---
+  duration_ms: 0.63252
+  type: 'test'
+  ...
+# Subtest: orderFromEvent maps a completed checkout; ignores other events
+ok 254 - orderFromEvent maps a completed checkout; ignores other events
+  ---
+  duration_ms: 0.19882
+  type: 'test'
+  ...
+# Subtest: fileOrderStore records, finds, and updates by session
+ok 255 - fileOrderStore records, finds, and updates by session
+  ---
+  duration_ms: 1.096447
+  type: 'test'
+  ...
+# Subtest: GET /health reports test mode + configured
+ok 256 - GET /health reports test mode + configured
+  ---
+  duration_ms: 0.808478
+  type: 'test'
+  ...
+# Subtest: with no key: /health is up but unconfigured, and checkout/webhook 503 (deploys green)
+ok 257 - with no key: /health is up but unconfigured, and checkout/webhook 503 (deploys green)
+  ---
+  duration_ms: 0.474164
+  type: 'test'
+  ...
+# Subtest: POST /api/checkout returns a Stripe URL
+ok 258 - POST /api/checkout returns a Stripe URL
+  ---
+  duration_ms: 1.742956
+  type: 'test'
+  ...
+# Subtest: POST /api/checkout 400s an unknown tier
+ok 259 - POST /api/checkout 400s an unknown tier
+  ---
+  duration_ms: 1.332734
+  type: 'test'
+  ...
+# Subtest: POST /api/stripe/webhook records the order on a good signature, 400s a bad one
+ok 260 - POST /api/stripe/webhook records the order on a good signature, 400s a bad one
+  ---
+  duration_ms: 1.336688
+  type: 'test'
+  ...
+# Subtest: POST /api/intake accepts a full intake and kicks the build; nudges a thin one
+ok 261 - POST /api/intake accepts a full intake and kicks the build; nudges a thin one
+  ---
+  duration_ms: 13.972013
+  type: 'test'
+  ...
+# Subtest: an accepted intake fires onIntakeAccepted with the order email (portal provisioning)
+ok 262 - an accepted intake fires onIntakeAccepted with the order email (portal provisioning)
+  ---
+  duration_ms: 6.115757
+  type: 'test'
+  ...
+# Subtest: CORS: an allowed Origin is echoed back on a real response
+ok 263 - CORS: an allowed Origin is echoed back on a real response
+  ---
+  duration_ms: 1.177629
+  type: 'test'
+  ...
+# Subtest: CORS: an OPTIONS preflight from an allowed origin returns 204 with the headers
+ok 264 - CORS: an OPTIONS preflight from an allowed origin returns 204 with the headers
+  ---
+  duration_ms: 0.409706
+  type: 'test'
+  ...
+# Subtest: CORS: an origin NOT on the allowlist gets no allow-origin header
+ok 265 - CORS: an origin NOT on the allowlist gets no allow-origin header
+  ---
+  duration_ms: 0.247337
+  type: 'test'
+  ...
+# Subtest: POST /api/subscribe calls onLead and reports synced
+ok 266 - POST /api/subscribe calls onLead and reports synced
+  ---
+  duration_ms: 1.289575
+  type: 'test'
+  ...
+# Subtest: POST /api/subscribe 400s a bad email and 200s (unsynced) when marketing is off
+ok 267 - POST /api/subscribe 400s a bad email and 200s (unsynced) when marketing is off
+  ---
+  duration_ms: 1.904505
+  type: 'test'
+  ...
+# Subtest: POST /api/subscription returns a subscription-mode Stripe URL
+ok 268 - POST /api/subscription returns a subscription-mode Stripe URL
+  ---
+  duration_ms: 0.975263
+  type: 'test'
+  ...
+# Subtest: POST /api/subscription 400s an unknown plan
+ok 269 - POST /api/subscription 400s an unknown plan
+  ---
+  duration_ms: 0.6708
+  type: 'test'
+  ...
+# Subtest: webhook records a subscription lifecycle event when a store is wired
+ok 270 - webhook records a subscription lifecycle event when a store is wired
+  ---
+  duration_ms: 1.029237
+  type: 'test'
+  ...
+# Subtest: webhook without a subscription store still records the order (subscriptions optional)
+ok 271 - webhook without a subscription store still records the order (subscriptions optional)
+  ---
+  duration_ms: 0.710696
+  type: 'test'
+  ...
+# Subtest: webhook syncs a paying customer via onCustomer
+ok 272 - webhook syncs a paying customer via onCustomer
+  ---
+  duration_ms: 12.463903
+  type: 'test'
+  ...
+# Subtest: allFlags flattens stage flags and s10 issues into one list
+ok 273 - allFlags flattens stage flags and s10 issues into one list
+  ---
+  duration_ms: 1.139117
+  type: 'test'
+  ...
+# Subtest: approve records every QA flag the founder acknowledged
+ok 274 - approve records every QA flag the founder acknowledged
+  ---
+  duration_ms: 0.26914
+  type: 'test'
+  ...
+# Subtest: approve refuses a mock run unless forced
+ok 275 - approve refuses a mock run unless forced
+  ---
+  duration_ms: 1.426797
+  type: 'test'
+  ...
+# Subtest: send-back requires a note
+ok 276 - send-back requires a note
+  ---
+  duration_ms: 0.267472
+  type: 'test'
+  ...
+# Subtest: send-back rejects a stage the pack does not have
+ok 277 - send-back rejects a stage the pack does not have
+  ---
+  duration_ms: 0.307565
+  type: 'test'
+  ...
+# Subtest: send-back records upper-cased stages and the note
+ok 278 - send-back records upper-cased stages and the note
+  ---
+  duration_ms: 1.297965
+  type: 'test'
+  ...
+# Subtest: bundleStatusFor maps the decision to the pack status
+ok 279 - bundleStatusFor maps the decision to the pack status
+  ---
+  duration_ms: 0.107043
+  type: 'test'
+  ...
+# Subtest: summarize surfaces deliverables and flags for the reviewer
+ok 280 - summarize surfaces deliverables and flags for the reviewer
+  ---
+  duration_ms: 2.920197
+  type: 'test'
+  ...
+# Subtest: qaSocialPost passes a clean, in-limit post
+ok 281 - qaSocialPost passes a clean, in-limit post
+  ---
+  duration_ms: 22.502816
+  type: 'test'
+  ...
+# Subtest: qaSocialPost FATALs an invented statistic in an auto-publishing post
+ok 282 - qaSocialPost FATALs an invented statistic in an auto-publishing post
+  ---
+  duration_ms: 2.122909
+  type: 'test'
+  ...
+# Subtest: qaSocialPost FATALs a fabricated customer quote
+ok 283 - qaSocialPost FATALs a fabricated customer quote
+  ---
+  duration_ms: 1.219289
+  type: 'test'
+  ...
+# Subtest: qaSocialPost flags a post over the platform character limit
+ok 284 - qaSocialPost flags a post over the platform character limit
+  ---
+  duration_ms: 1.517601
+  type: 'test'
+  ...
+# Subtest: qaSocialPost catches an H3 never-word in a post
+ok 285 - qaSocialPost catches an H3 never-word in a post
+  ---
+  duration_ms: 2.658978
+  type: 'test'
+  ...
+# Subtest: buildSchedule dates day N at startDate + (N-1) days
+ok 286 - buildSchedule dates day N at startDate + (N-1) days
+  ---
+  duration_ms: 0.682664
+  type: 'test'
+  ...
+# Subtest: buildSchedule composes hook + body + cta and filters by platform
+ok 287 - buildSchedule composes hook + body + cta and filters by platform
+  ---
+  duration_ms: 0.333116
+  type: 'test'
+  ...
+# Subtest: buildSchedule rejects a bad start date
+ok 288 - buildSchedule rejects a bad start date
+  ---
+  duration_ms: 0.390379
+  type: 'test'
+  ...
+# Subtest: MockPublisher schedules deterministically and records posts
+ok 289 - MockPublisher schedules deterministically and records posts
+  ---
+  duration_ms: 0.536767
+  type: 'test'
+  ...
+# Subtest: subscriptionFromEvent maps a created subscription with plan, period end and email
+ok 290 - subscriptionFromEvent maps a created subscription with plan, period end and email
+  ---
+  duration_ms: 1.456346
+  type: 'test'
+  ...
+# Subtest: subscriptionFromEvent keeps the raw price id when no plan resolver matches
+ok 291 - subscriptionFromEvent keeps the raw price id when no plan resolver matches
+  ---
+  duration_ms: 0.233758
+  type: 'test'
+  ...
+# Subtest: subscriptionFromEvent reads current_period_end off the item (newer API shape)
+ok 292 - subscriptionFromEvent reads current_period_end off the item (newer API shape)
+  ---
+  duration_ms: 0.133489
+  type: 'test'
+  ...
+# Subtest: subscriptionFromEvent maps a deleted subscription as canceled
+ok 293 - subscriptionFromEvent maps a deleted subscription as canceled
+  ---
+  duration_ms: 0.111622
+  type: 'test'
+  ...
+# Subtest: subscriptionFromEvent: invoice.paid → active, invoice.payment_failed → past_due, linked by subscription id
+ok 294 - subscriptionFromEvent: invoice.paid → active, invoice.payment_failed → past_due, linked by subscription id
+  ---
+  duration_ms: 0.153578
+  type: 'test'
+  ...
+# Subtest: subscriptionFromEvent reads the newer invoice.parent subscription link
+ok 295 - subscriptionFromEvent reads the newer invoice.parent subscription link
+  ---
+  duration_ms: 0.104283
+  type: 'test'
+  ...
+# Subtest: subscriptionFromEvent returns null for a one-off invoice and for unrelated events
+ok 296 - subscriptionFromEvent returns null for a one-off invoice and for unrelated events
+  ---
+  duration_ms: 0.09625
+  type: 'test'
+  ...
+# Subtest: unknown Stripe statuses normalise to incomplete (never crash)
+ok 297 - unknown Stripe statuses normalise to incomplete (never crash)
+  ---
+  duration_ms: 0.136645
+  type: 'test'
+  ...
+# Subtest: isActive is true only for active/trialing
+ok 298 - isActive is true only for active/trialing
+  ---
+  duration_ms: 0.293152
+  type: 'test'
+  ...
+# Subtest: memory store: upsert-merge keeps the plan/period a thinner invoice event lacks
+ok 299 - memory store: upsert-merge keeps the plan/period a thinner invoice event lacks
+  ---
+  duration_ms: 0.483065
+  type: 'test'
+  ...
+# Subtest: memory store: findByEmail is case-insensitive and returns the newest
+ok 300 - memory store: findByEmail is case-insensitive and returns the newest
+  ---
+  duration_ms: 0.225478
+  type: 'test'
+  ...
+# Subtest: file store: upsert-merge keeps the plan/period a thinner invoice event lacks
+ok 301 - file store: upsert-merge keeps the plan/period a thinner invoice event lacks
+  ---
+  duration_ms: 2.479899
+  type: 'test'
+  ...
+# Subtest: file store: findByEmail is case-insensitive and returns the newest
+ok 302 - file store: findByEmail is case-insensitive and returns the newest
+  ---
+  duration_ms: 0.883774
+  type: 'test'
+  ...
+# Subtest: file store survives a reopen (persists across processes)
+ok 303 - file store survives a reopen (persists across processes)
+  ---
+  duration_ms: 0.833433
+  type: 'test'
+  ...
+# Subtest: createSubscriptionCheckout builds a subscription-mode session with plan/email metadata
+ok 304 - createSubscriptionCheckout builds a subscription-mode session with plan/email metadata
+  ---
+  duration_ms: 1.855292
+  type: 'test'
+  ...
+# Subtest: createSubscriptionCheckout omits customer_email when none is given
+ok 305 - createSubscriptionCheckout omits customer_email when none is given
+  ---
+  duration_ms: 0.259798
+  type: 'test'
+  ...
+# Subtest: createSubscriptionCheckout refuses an unknown or unconfigured plan
+ok 306 - createSubscriptionCheckout refuses an unknown or unconfigured plan
+  ---
+  duration_ms: 0.761008
+  type: 'test'
+  ...
+# Subtest: provisionPlans creates recurring monthly prices, one per plan
+ok 307 - provisionPlans creates recurring monthly prices, one per plan
+  ---
+  duration_ms: 0.769555
+  type: 'test'
+  ...
+# Subtest: provisionPlans reuses an existing price by lookup_key (idempotent)
+ok 308 - provisionPlans reuses an existing price by lookup_key (idempotent)
+  ---
+  duration_ms: 0.196062
+  type: 'test'
+  ...
+# Subtest: wordCount counts words across whitespace
+ok 309 - wordCount counts words across whitespace
+  ---
+  duration_ms: 0.97728
+  type: 'test'
+  ...
+# Subtest: normalizeText maps curly quotes and collapses whitespace, preserves case
+ok 310 - normalizeText maps curly quotes and collapses whitespace, preserves case
+  ---
+  duration_ms: 0.48296
+  type: 'test'
+  ...
+# Subtest: extractQuotedSpans finds straight and curly double quotes, ignores single
+ok 311 - extractQuotedSpans finds straight and curly double quotes, ignores single
+  ---
+  duration_ms: 1.346037
+  type: 'test'
+  ...
+# Subtest: isPlaceholderEcho catches exact and near-copies
+ok 312 - isPlaceholderEcho catches exact and near-copies
+  ---
+  duration_ms: 0.408035
+  type: 'test'
+  ...
+# Subtest: isPlaceholderEcho does NOT fire on a genuine answer in the same trade
+ok 313 - isPlaceholderEcho does NOT fire on a genuine answer in the same trade
+  ---
+  duration_ms: 1.231137
+  type: 'test'
+  ...
+# Subtest: extractNumbers handles currency commas and percents
+ok 314 - extractNumbers handles currency commas and percents
+  ---
+  duration_ms: 0.677463
+  type: 'test'
+  ...
+# Subtest: extractNumbers expands k/m shorthand and NBSP-split thousands
+ok 315 - extractNumbers expands k/m shorthand and NBSP-split thousands
+  ---
+  duration_ms: 0.389117
+  type: 'test'
+  ...
+# Subtest: similarityRatio is high for near-identical strings
+ok 316 - similarityRatio is high for near-identical strings
+  ---
+  duration_ms: 0.374728
+  type: 'test'
+  ...
+1..316
+# tests 316
+# suites 0
+# pass 316
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 4471.352959

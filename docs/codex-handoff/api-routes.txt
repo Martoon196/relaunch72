@@ -1,0 +1,37 @@
+Relaunch72 — HTTP routes (raw grep). Single Node http server: orchestrator/src/server/index.ts
+→ createApp handler in server/app.ts, which mounts /admin (admin/router.ts) and /portal (portal/router.ts) before the JSON API.
+Generated b1f601d.
+
+=== JSON API + mount points — server/app.ts ===
+app.ts:5: *   POST /api/checkout         — { tier, bump? } → { url } (Stripe Checkout Session)
+app.ts:6: *   POST /api/stripe/webhook   — verify signature, record the paid order, sync customer
+app.ts:7: *   POST /api/intake           — S0-gate a submitted intake; on accept, kick the build
+app.ts:8: *   POST /api/subscribe        — capture a lead (scorecard) into the Brevo nurture list
+app.ts:84:    if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
+app.ts:92:    if (url.pathname === '/portal' || url.pathname.startsWith('/portal/')) {
+app.ts:104:      if (route === 'GET /health') {
+app.ts:111:      if (route === 'POST /api/checkout') {
+app.ts:119:      if (route === 'POST /api/subscription') {
+app.ts:126:      if (route === 'POST /api/stripe/webhook') {
+app.ts:152:      if (route === 'POST /api/subscribe') {
+app.ts:164:      if (route === 'POST /api/intake') {
+
+=== Admin routes — server/admin/router.ts ===
+admin/router.ts:58:  if (p === '/admin/login' && method === 'GET') { sendHtml(res, 200, loginPage()); return; }
+admin/router.ts:59:  if (p === '/admin/login' && method === 'POST') {
+admin/router.ts:68:  if (p === '/admin/logout' && method === 'POST') { redirect(res, '/admin/login', clearCookie(secure)); return; }
+admin/router.ts:73:  if (p === '/admin' && method === 'GET') {
+admin/router.ts:78:  const runMatch = p.match(/^\/admin\/run\/([^/]+)$/);
+admin/router.ts:79:  if (runMatch && method === 'GET') {
+admin/router.ts:90:  const signoffMatch = p.match(/^\/admin\/run\/([^/]+)\/signoff$/);
+admin/router.ts:91:  if (signoffMatch && method === 'POST') {
+
+=== Portal routes — portal/router.ts ===
+portal/router.ts:68:  if (p === '/portal/login' && method === 'GET') {
+portal/router.ts:72:  if (p === '/portal/login' && method === 'POST') {
+portal/router.ts:78:  if (p === '/portal/logout' && method === 'POST') {
+portal/router.ts:85:  if (p === '/portal' && method === 'GET') {
+portal/router.ts:92:  if (p === '/portal/billing' && method === 'GET') {
+portal/router.ts:102:  if (p === '/portal/subscribe' && method === 'POST') {
+portal/router.ts:115:  if (p === '/portal/manage' && method === 'POST') {
+portal/router.ts:127:  if (p === '/portal/run' && method === 'POST') {

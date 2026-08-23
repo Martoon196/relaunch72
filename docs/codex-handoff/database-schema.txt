@@ -1,0 +1,212 @@
+Relaunch72 — DATA MODEL (there is NO SQL/NoSQL database; persistence is JSON / JSONL files on disk,
+typed by TypeScript interfaces. 'Schema' = these interfaces + the file each store writes to.
+No migrations exist (see 02-DATA-AND-TENANCY.md). Generated b1f601d.
+
+############################################################
+# CRM model — orchestrator/src/crm/types.ts (whole file)
+############################################################
+/**
+ * Thin CRM core — the spine of our own platform (decision D-060: build our own
+ * portal + thin CRM + atomic rails, no GHL). Deliberately *thin*: contacts, a
+ * pipeline, and an activity timeline per tenant — not GHL's kitchen sink. The
+ * store is swappable (memory / JSON now, a real DB later) so this starts at £0
+ * and grows into the live portal without a rewrite.
+ */
+
+export type Channel = 'email' | 'sms' | 'whatsapp' | 'social' | 'ads' | 'system';
+
+export type ActivityKind = 'contact_created' | 'stage_changed' | 'message_sent' | 'rail_run' | 'note';
+
+export const PIPELINE_STAGES = ['lead', 'contacted', 'qualified', 'won', 'lost'] as const;
+export type PipelineStage = (typeof PIPELINE_STAGES)[number];
+
+export interface Tenant {
+  id: string;
+  name: string;
+  /** The client's brand brain (intake → S2/S3 …) lives in this run dir. */
+  runDir?: string;
+  createdAt: string;
+}
+
+export interface Contact {
+  id: string;
+  tenantId: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  stage: PipelineStage;
+  createdAt: string;
+}
+
+export interface Activity {
+  id: string;
+  tenantId: string;
+  at: string;
+  kind: ActivityKind;
+  channel: Channel;
+  summary: string;
+  contactId?: string;
+}
+
+export interface TenantView {
+  tenant: Tenant;
+  contacts: Contact[];
+  /** Count of contacts in each pipeline stage. */
+  pipeline: Record<PipelineStage, number>;
+  /** Most-recent-first. */
+  activity: Activity[];
+}
+
+############################################################
+# CRM store interface + in-memory State — orchestrator/src/crm/store.ts (lines 12-43)
+#   Persisted by JsonCrmStore to a single JSON file (portal-crm.json).
+############################################################
+export interface NewContact {
+  name: string;
+  email?: string;
+  phone?: string;
+  stage?: PipelineStage;
+}
+
+export interface CrmStore {
+  upsertTenant(t: { id: string; name: string; runDir?: string }): Promise<Tenant>;
+  getTenant(id: string): Promise<Tenant | null>;
+  listTenants(): Promise<Tenant[]>;
+  addContact(tenantId: string, c: NewContact): Promise<Contact>;
+  moveContact(contactId: string, stage: PipelineStage): Promise<Contact>;
+  addActivity(a: Omit<Activity, 'id'>): Promise<Activity>;
+  tenantView(tenantId: string): Promise<TenantView>;
+}
+
+interface State {
+  tenants: Tenant[];
+  contacts: Contact[];
+  activities: Activity[];
+  contactSeq: number;
+  activitySeq: number;
+}
+
+function emptyState(): State {
+  return { tenants: [], contacts: [], activities: [], contactSeq: 0, activitySeq: 0 };
+}
+
+function emptyPipeline(): Record<PipelineStage, number> {
+  return Object.fromEntries(PIPELINE_STAGES.map((s) => [s, 0])) as Record<PipelineStage, number>;
+}
+
+############################################################
+# Portal accounts (login table) — orchestrator/src/portal/accounts.ts (lines 11-23)
+#   Persisted by JsonAccountStore to portal-accounts.json.
+############################################################
+export interface Account {
+  email: string;
+  tenantId: string;
+  passHash: string;
+}
+
+export interface AccountStore {
+  create(email: string, tenantId: string, password: string): Promise<Account>;
+  /** Return the tenant id iff the password matches, else null. */
+  verify(email: string, password: string): Promise<string | null>;
+  has(email: string): Promise<boolean>;
+  findByEmail(email: string): Promise<Account | null>;
+  /** The account owning a tenant (to resolve a tenant's email for billing). */
+
+############################################################
+# Orders — orchestrator/src/server/orders.ts (lines 10-30)
+#   Persisted as JSONL append log (orders.jsonl); last record per session_id wins.
+############################################################
+export type OrderStatus = 'paid_awaiting_intake' | 'building' | 'nudge_returned';
+
+export interface Order {
+  session_id: string;
+  tier: string;
+  bump: boolean;
+  email: string | null;
+  amount_total: number | null;
+  currency: string | null;
+  status: OrderStatus;
+  paid_at: string;
+  run_dir?: string;
+  updated_at?: string;
+}
+
+export interface OrderStore {
+  record(order: Order): void;
+  find(sessionId: string): Order | null;
+  update(sessionId: string, patch: Partial<Order>): Order | null;
+}
+
+
+############################################################
+# Subscriptions — orchestrator/src/server/subscriptions.ts (lines 20-55)
+#   Persisted as JSONL append log (subscriptions.jsonl); last record per subscription_id wins.
+############################################################
+
+const KNOWN_STATUSES: readonly SubscriptionStatus[] = [
+  'trialing', 'active', 'past_due', 'canceled', 'unpaid', 'incomplete', 'incomplete_expired', 'paused',
+];
+
+/** Statuses that unlock the platform — an active or trialing subscription. */
+const ACTIVE_STATUSES = new Set<SubscriptionStatus>(['active', 'trialing']);
+
+export interface Subscription {
+  subscription_id: string;
+  customer_id: string | null;
+  email: string | null;
+  /** Internal plan key (e.g. 'platform_growth') if resolvable, else the price id. */
+  plan: string | null;
+  status: SubscriptionStatus;
+  /** ISO timestamp the current paid period ends, if known. */
+  current_period_end: string | null;
+  updated_at: string;
+}
+
+/** True when the subscription entitles its owner to the platform right now. */
+export function isActive(sub: Subscription | null | undefined): boolean {
+  return !!sub && ACTIVE_STATUSES.has(sub.status);
+}
+
+export interface SubscriptionStore {
+  /** Upsert-merge by subscription id; returns the stored (merged) record. */
+  record(sub: Subscription): Subscription;
+  find(subscriptionId: string): Subscription | null;
+  /** Most-recently-updated subscription for an email (case-insensitive), if any. */
+  findByEmail(email: string): Subscription | null;
+  list(): Subscription[];
+}
+
+// ─── event → subscription mapping ────────────────────────────────────────────
+
+
+############################################################
+# Catalog (Stripe products/prices, code-defined) — orchestrator/src/server/catalog.ts (lines 8-35)
+############################################################
+export interface CatalogItem {
+  key: string;        // internal tier/bump key (matches checkout + STRIPE_PRICE_* env)
+  lookupKey: string;  // stable Stripe price lookup_key for idempotency
+  name: string;
+  description: string;
+  amount: number;     // cents (USD)
+}
+
+export const CATALOG: CatalogItem[] = [
+  { key: 'autopsy',   lookupKey: 'r72_autopsy',   name: 'Relaunch72 — Marketing Autopsy',          description: 'The marketing audit & scorecard. Credits against Core within 14 days.', amount: 9700 },
+  { key: 'core',      lookupKey: 'r72_core',      name: 'Relaunch72 — Core',                       description: 'All nine deliverables in 72 hours, human signed-off, one revision included.', amount: 99700 },
+  { key: 'core_bump', lookupKey: 'r72_core_bump', name: 'Relaunch72 — Core + 90-Day Content Engine', description: 'Core plus 60 more days of social and 12 more emails.', amount: 114400 },
+  { key: 'pro',       lookupKey: 'r72_pro',       name: 'Relaunch72 — Pro',                         description: 'Core plus a strategy session, hand-written hero assets, roadmap and 30 days of support.', amount: 249700 },
+];
+
+export interface PlanItem extends CatalogItem {
+  interval: 'month' | 'year'; // recurring cadence
+}
+
+/**
+ * The recurring marketing-platform plans — the £-a-month subscription that turns
+ * a one-off pack into an ongoing "we are your marketing platform" relationship.
+ * Placeholder pricing the founder edits; these amounts are never shown to a
+ * customer as a quote (they exist only to create Stripe recurring prices).
+ */
+export const PLANS: PlanItem[] = [
+  { key: 'platform_starter', lookupKey: 'r72_platform_starter', name: 'Relaunch72 Platform — Starter', description: 'Your AI marketing manager: a fresh content cluster, keyword research and ad drafts every month.', amount: 14900, interval: 'month' },
+  { key: 'platform_growth',  lookupKey: 'r72_platform_growth',  name: 'Relaunch72 Platform — Growth',  description: 'Starter plus scheduled social publishing and a live campaign each month.',              amount: 29900, interval: 'month' },
