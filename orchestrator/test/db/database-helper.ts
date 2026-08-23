@@ -4,7 +4,9 @@ import { runMigrations } from '../../src/db/migrate.js';
 import { createDatabasePool } from '../../src/db/pool.js';
 
 const TEST_NAME_PATTERN = /(?:^|[_-])test(?:$|[_-])/i;
-const TEST_ROLES = new Set(['r72_web', 'r72_worker']);
+type ScopedTestRole = 'r72_web' | 'r72_crm_command' | 'r72_worker';
+
+const TEST_ROLES = new Set<ScopedTestRole>(['r72_web', 'r72_crm_command', 'r72_worker']);
 
 export function testDatabaseSkipReason(): string | false {
   return process.env.TEST_DATABASE_URL?.trim()
@@ -62,7 +64,7 @@ export async function ownerQuery<T extends QueryResultRow = QueryResultRow>(
 
 export async function scopedQuery<T extends QueryResultRow = QueryResultRow>(
   pool: Pool,
-  role: 'r72_web' | 'r72_worker',
+  role: ScopedTestRole,
   context: { workspaceId: string; userId?: string; requestId?: string },
   sql: string,
   values: unknown[] = [],
@@ -78,7 +80,7 @@ export async function scopedQuery<T extends QueryResultRow = QueryResultRow>(
          set_config('app.workspace_id', $2, true),
          set_config('app.actor_kind', $3, true),
          set_config('app.request_id', $4, true)`,
-      [context.userId ?? '', context.workspaceId, role === 'r72_web' ? 'user' : 'worker', context.requestId ?? 'integration-test'],
+      [context.userId ?? '', context.workspaceId, role === 'r72_worker' ? 'worker' : 'user', context.requestId ?? 'integration-test'],
     );
     const result = await client.query<T>(sql, values);
     await client.query('COMMIT');

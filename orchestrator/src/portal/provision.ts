@@ -17,6 +17,7 @@ import { generateBrandBrain, runTickReal } from './run.js';
 import { FIXTURES_DIR } from '../paths.js';
 import type { Intake } from '../types.js';
 import type { PortalDeps } from './router.js';
+import type { PortalCrmService } from './crm-service.js';
 import type { SubscriptionStore } from '../server/subscriptions.js';
 import { canonicalIntake } from '../intake/canonical.js';
 
@@ -112,6 +113,8 @@ export interface PortalConfig {
   manageUrl?: (customerId: string) => Promise<string>;
   /** When true, "Run this week" requires an active subscription (default false — demo runs). */
   billingEnforced?: boolean;
+  /** Optional durable CRM composition; the legacy JSON portal remains valid without it. */
+  crm?: PortalCrmService;
 }
 
 export interface PortalBundle {
@@ -165,6 +168,7 @@ export async function buildPortalDeps(cfg: PortalConfig): Promise<PortalBundle> 
     subscribeUrl: cfg.subscribeUrl,
     manageUrl: cfg.manageUrl,
     billingEnforced: cfg.billingEnforced,
+    crm: cfg.crm,
   };
   const provision = async (args: ProvisionArgs): Promise<ProvisionResult> => {
     const result = await provisionTenant(store, accounts, cfg.dataDir, args);

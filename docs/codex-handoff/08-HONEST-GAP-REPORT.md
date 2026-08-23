@@ -1,5 +1,12 @@
 # 08 — HONEST GAP REPORT
 
+> **Engineering update — 2026-08-24:** this report is an intentionally retained
+> pre-foundation baseline. The database/RLS foundation and a first PostgreSQL CRM
+> loop now exist locally, so the “not built” and test-count statements below are
+> historical. The current, deliberately unsmoothed status—including the portal
+> identity cutover that still blocks runtime activation—is in
+> [19-CRM-FIRST-LOOP-STATUS.md](./19-CRM-FIRST-LOOP-STATUS.md).
+
 The prior artifact ("Inside Relaunch72") is a **founder/marketing briefing**. This file reconciles it against the code. Nothing below contradicts that the engineering is genuinely well-structured and tested — the point is to separate *proven-in-production* from *works-on-mock* from *not-built*, so the audit starts from reality.
 
 ## Capability classification

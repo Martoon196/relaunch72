@@ -9,6 +9,7 @@ import crypto from 'node:crypto';
 export const PORTAL_COOKIE = 'r72_portal';
 export const PORTAL_TTL_MS = 1000 * 60 * 60 * 24 * 14; // 14 days
 const PORTAL_SESSION_CONTEXT = 'relaunch72/session/portal/v1\u0000';
+const PORTAL_CSRF_CONTEXT = 'relaunch72/csrf/portal/v1\u0000';
 
 interface LoginAttempt {
   failures: number;
@@ -111,6 +112,24 @@ export function verifyTenant(secret: string, token: string | undefined, now: num
   } catch {
     return null;
   }
+}
+
+/** Bind a synchronizer token to one signed portal session without exposing it in the cookie. */
+export function portalCsrfToken(secret: string, sessionToken: string): string {
+  if (!secret || !sessionToken) return '';
+  return crypto.createHmac('sha256', secret)
+    .update(PORTAL_CSRF_CONTEXT)
+    .update(sessionToken)
+    .digest('base64url');
+}
+
+export function verifyPortalCsrf(secret: string, sessionToken: string, supplied: string | undefined): boolean {
+  if (!supplied) return false;
+  const expected = portalCsrfToken(secret, sessionToken);
+  const suppliedBuffer = Buffer.from(supplied);
+  const expectedBuffer = Buffer.from(expected);
+  return suppliedBuffer.length === expectedBuffer.length
+    && crypto.timingSafeEqual(suppliedBuffer, expectedBuffer);
 }
 
 export function portalCookie(token: string, secure: boolean, maxAgeSec = PORTAL_TTL_MS / 1000): string {

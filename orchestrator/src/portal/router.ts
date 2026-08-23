@@ -5,10 +5,29 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { parseCookies } from '../server/admin/session.js';
-import { PORTAL_COOKIE, signTenant, verifyTenant, portalCookie, clearPortalCookie } from './session.js';
+import { PORTAL_COOKIE, signTenant, verifyTenant, portalCookie, clearPortalCookie, portalCsrfToken, verifyPortalCsrf } from './session.js';
 import type { InMemoryLoginThrottle } from './session.js';
 import { accountSetupPage, loginPage, dashboardPage, billingPage } from './views.js';
+import { appShell } from './ui.js';
+import {
+  CRM_PORTAL_ROUTES,
+  renderCrmContactsBody,
+  renderCrmPipelineBody,
+  renderCrmTasksBody,
+  type CreateLeadFormState,
+  type CrmNotice,
+  type CrmWorkspaceSnapshot,
+} from './crm-views.js';
+import {
+  crmNoticeFromQuery,
+  crmNoticeToken,
+  type PortalCrmMutationOutcome,
+  type PortalCrmNoticeCode,
+  type PortalCrmRequestIdentity,
+  type PortalCrmService,
+} from './crm-service.js';
 import type { DashboardData } from './data.js';
 import type { BillingView } from './billing.js';
 
@@ -33,7 +52,10 @@ export interface PortalDeps {
   manageUrl?(customerId: string): Promise<string>;
   /** When true, "Run this week" requires an active subscription. Default false (£0 demo runs). */
   billingEnforced?: boolean;
+  /** Durable CRM application boundary. Absent means the CRM remains visibly locked. */
+  crm?: PortalCrmService;
   now?: () => number;
+  requestId?: () => string;
 }
 
 function sendHtml(res: ServerResponse, code: number, body: string, cookie?: string, extra: Record<string, string> = {}): void {
@@ -89,13 +111,66 @@ function readForm(req: IncomingMessage): Promise<Record<string, string>> {
   });
 }
 
+function crmPage(
+  snapshot: CrmWorkspaceSnapshot,
+  body: string,
+  deps: PortalDeps,
+): string {
+  return appShell({
+    title: `Relaunch72 CRM — ${snapshot.workspace.name}`,
+    tenantName: snapshot.workspace.name,
+    active: 'crm',
+    billingAvailable: !!deps.billing,
+    crmAvailable: true,
+    mode: 'crm',
+    body,
+  });
+}
+
+function crmIdentity(sessionToken: string, tenantId: string, deps: PortalDeps): PortalCrmRequestIdentity {
+  return {
+    sessionToken,
+    legacyTenantId: tenantId,
+    requestId: deps.requestId ? deps.requestId() : randomUUID(),
+  };
+}
+
+function crmRedirect(
+  res: ServerResponse,
+  route: string,
+  deps: PortalDeps,
+  sessionToken: string,
+  code: PortalCrmNoticeCode,
+): void {
+  const token = crmNoticeToken(deps.sessionSecret, sessionToken, code);
+  redirect(res, `${route}?notice=${encodeURIComponent(token)}`);
+}
+
+function outcomeNotice(outcome: PortalCrmMutationOutcome): CrmNotice {
+  if (outcome.ok) {
+    return { kind: 'success', title: 'Saved', message: 'The CRM change was saved.' };
+  }
+  return {
+    kind: outcome.kind === 'conflict' ? 'conflict' : outcome.kind === 'validation' ? 'error' : 'error',
+    title: outcome.kind === 'forbidden' ? 'Read-only access'
+      : outcome.kind === 'unavailable' ? 'CRM temporarily unavailable'
+        : outcome.kind === 'not_found' ? 'Record not found'
+          : outcome.kind === 'conflict' ? 'Record changed'
+            : 'Check the lead details',
+    message: outcome.message,
+  };
+}
+
+const CRM_OBJECT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 /** Handle a request under /portal. Always writes a response. */
 export async function handlePortal(req: IncomingMessage, res: ServerResponse, deps: PortalDeps): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const p = url.pathname.replace(/\/+$/, '') || '/portal';
   const method = req.method ?? 'GET';
   const now = deps.now ? deps.now() : Date.now();
-  const tenantId = verifyTenant(deps.sessionSecret, parseCookies(req.headers.cookie)[PORTAL_COOKIE], now);
+  const sessionToken = parseCookies(req.headers.cookie)[PORTAL_COOKIE] ?? '';
+  const tenantId = verifyTenant(deps.sessionSecret, sessionToken, now);
 
   // ── one-time account setup / login / logout (no auth) ──
   if (p === '/portal/setup' && method === 'GET') {
@@ -152,11 +227,149 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   // ── everything below requires a tenant session ──
   if (!tenantId) return redirect(res, '/portal/login');
 
+  // ── durable CRM: real service only; no fake fallback data ──
+  if (p === '/portal/crm' && method === 'GET') {
+    return deps.crm
+      ? redirect(res, CRM_PORTAL_ROUTES.contacts)
+      : sendHtml(res, 404, '<h1>CRM not connected</h1><p><a href="/portal">← dashboard</a></p>');
+  }
+
+  const isCrmRoute = p.startsWith('/portal/crm/');
+  if (isCrmRoute && !deps.crm) {
+    return sendHtml(res, 404, '<h1>CRM not connected</h1><p><a href="/portal">← dashboard</a></p>');
+  }
+
+  if (deps.crm && method === 'GET' && [CRM_PORTAL_ROUTES.contacts, CRM_PORTAL_ROUTES.pipeline, CRM_PORTAL_ROUTES.tasks].includes(p as never)) {
+    const identity = crmIdentity(sessionToken, tenantId, deps);
+    try {
+      const snapshot = await deps.crm.snapshot(identity);
+      if (!snapshot) return sendHtml(res, 403, '<h1>CRM workspace not available</h1><p>Your portal login is still active. <a href="/portal">Return to the dashboard</a>.</p>');
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      const notice = crmNoticeFromQuery(url.searchParams, deps.sessionSecret, sessionToken);
+      const body = p === CRM_PORTAL_ROUTES.contacts
+        ? renderCrmContactsBody(snapshot, { csrfToken, createLeadCommandKey: randomUUID(), notice })
+        : p === CRM_PORTAL_ROUTES.pipeline
+          ? renderCrmPipelineBody(snapshot, { csrfToken, notice })
+          : renderCrmTasksBody(snapshot, {
+            csrfToken,
+            notice,
+            filter: url.searchParams.get('status') === 'all' || url.searchParams.get('status') === 'completed'
+              ? url.searchParams.get('status') as 'all' | 'completed'
+              : 'open',
+          });
+      return sendHtml(res, 200, crmPage(snapshot, body, deps));
+    } catch {
+      return sendHtml(res, 503, '<h1>CRM temporarily unavailable</h1><p>No change was made. <a href="/portal">Return to the dashboard</a>.</p>');
+    }
+  }
+
+  if (deps.crm && p === CRM_PORTAL_ROUTES.createLead && method === 'POST') {
+    const form = await readForm(req);
+    if (!verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return sendHtml(res, 403, '<h1>Refresh needed</h1><p>The secure form token was invalid. No change was made.</p>');
+    }
+    const identity = crmIdentity(sessionToken, tenantId, deps);
+    const input = {
+      commandKey: form.command_key ?? '',
+      displayName: form.display_name ?? '',
+      companyName: form.company_name ?? '',
+      email: form.email ?? '',
+      phone: form.phone ?? '',
+      opportunityTitle: form.opportunity_title ?? '',
+      stageId: form.stage_id ?? '',
+      taskTitle: form.task_title ?? '',
+      taskDueAt: form.task_due_at ?? '',
+    };
+    try {
+      const outcome = await deps.crm.createLead(identity, input);
+      if (outcome.ok) {
+        return crmRedirect(res, CRM_PORTAL_ROUTES.contacts, deps, sessionToken, outcome.disposition === 'replayed' ? 'replayed' : 'created');
+      }
+      if (outcome.kind === 'conflict') return crmRedirect(res, CRM_PORTAL_ROUTES.contacts, deps, sessionToken, 'conflict');
+      if (outcome.kind === 'not_found') return crmRedirect(res, CRM_PORTAL_ROUTES.contacts, deps, sessionToken, 'missing');
+
+      const snapshot = await deps.crm.snapshot(identity);
+      if (!snapshot) return sendHtml(res, 403, '<h1>CRM workspace not available</h1><p>Your portal login is still active. <a href="/portal">Return to the dashboard</a>.</p>');
+      const state: CreateLeadFormState = {
+        values: {
+          displayName: input.displayName,
+          companyName: input.companyName,
+          email: input.email,
+          phone: input.phone,
+          opportunityTitle: input.opportunityTitle,
+          stageId: input.stageId,
+          taskTitle: input.taskTitle,
+          taskDueAt: input.taskDueAt,
+        },
+        fieldErrors: outcome.kind === 'validation' ? outcome.fieldErrors : undefined,
+      };
+      const commandKey = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(input.commandKey)
+        ? input.commandKey : randomUUID();
+      const body = renderCrmContactsBody(snapshot, {
+        csrfToken: portalCsrfToken(deps.sessionSecret, sessionToken),
+        createLeadCommandKey: commandKey,
+        form: state,
+        notice: outcomeNotice(outcome),
+      });
+      const status = outcome.kind === 'forbidden' ? 403 : outcome.kind === 'unavailable' ? 503 : 400;
+      return sendHtml(res, status, crmPage(snapshot, body, deps));
+    } catch {
+      return sendHtml(res, 503, '<h1>CRM temporarily unavailable</h1><p>No lead was saved. Try again after refreshing the page.</p>');
+    }
+  }
+
+  const moveMatch = /^\/portal\/crm\/opportunities\/([^/]+)\/stage$/.exec(p);
+  if (deps.crm && moveMatch && method === 'POST') {
+    if (!CRM_OBJECT_ID.test(moveMatch[1]!)) return sendHtml(res, 404, '<h1>Opportunity not found</h1>');
+    const form = await readForm(req);
+    if (!verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return sendHtml(res, 403, '<h1>Refresh needed</h1><p>The secure form token was invalid. No change was made.</p>');
+    }
+    try {
+      const outcome = await deps.crm.moveOpportunity(crmIdentity(sessionToken, tenantId, deps), {
+        commandKey: form.command_key ?? '',
+        opportunityId: moveMatch[1]!,
+        targetStageId: form.target_stage_id ?? '',
+        expectedRowVersion: form.expected_version ?? '',
+      });
+      if (outcome.ok) return crmRedirect(res, CRM_PORTAL_ROUTES.pipeline, deps, sessionToken, outcome.disposition === 'replayed' ? 'replayed' : 'moved');
+      if (outcome.kind === 'conflict') return crmRedirect(res, CRM_PORTAL_ROUTES.pipeline, deps, sessionToken, 'conflict');
+      if (outcome.kind === 'not_found') return crmRedirect(res, CRM_PORTAL_ROUTES.pipeline, deps, sessionToken, 'missing');
+      return sendHtml(res, outcome.kind === 'forbidden' ? 403 : outcome.kind === 'unavailable' ? 503 : 400,
+        `<h1>Stage was not changed</h1><p>${outcome.kind === 'validation' ? 'Check the submitted values and refresh the pipeline.' : 'No change was made.'}</p>`);
+    } catch {
+      return sendHtml(res, 503, '<h1>CRM temporarily unavailable</h1><p>The stage was not changed.</p>');
+    }
+  }
+
+  const completeMatch = /^\/portal\/crm\/tasks\/([^/]+)\/complete$/.exec(p);
+  if (deps.crm && completeMatch && method === 'POST') {
+    if (!CRM_OBJECT_ID.test(completeMatch[1]!)) return sendHtml(res, 404, '<h1>Task not found</h1>');
+    const form = await readForm(req);
+    if (!verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return sendHtml(res, 403, '<h1>Refresh needed</h1><p>The secure form token was invalid. No change was made.</p>');
+    }
+    try {
+      const outcome = await deps.crm.completeTask(crmIdentity(sessionToken, tenantId, deps), {
+        commandKey: form.command_key ?? '',
+        taskId: completeMatch[1]!,
+        expectedRowVersion: form.expected_version ?? '',
+      });
+      if (outcome.ok) return crmRedirect(res, CRM_PORTAL_ROUTES.tasks, deps, sessionToken, outcome.disposition === 'replayed' ? 'replayed' : 'completed');
+      if (outcome.kind === 'conflict') return crmRedirect(res, CRM_PORTAL_ROUTES.tasks, deps, sessionToken, 'conflict');
+      if (outcome.kind === 'not_found') return crmRedirect(res, CRM_PORTAL_ROUTES.tasks, deps, sessionToken, 'missing');
+      return sendHtml(res, outcome.kind === 'forbidden' ? 403 : outcome.kind === 'unavailable' ? 503 : 400,
+        `<h1>Task was not completed</h1><p>${outcome.kind === 'validation' ? 'Check the submitted values and refresh the task list.' : 'No change was made.'}</p>`);
+    } catch {
+      return sendHtml(res, 503, '<h1>CRM temporarily unavailable</h1><p>The task was not changed.</p>');
+    }
+  }
+
   if (p === '/portal' && method === 'GET') {
     const data = await deps.dashboard(tenantId);
     if (!data) return redirect(res, '/portal/login', clearPortalCookie(deps.secure)); // stale session
     const billing = deps.billing ? await deps.billing(tenantId) : null;
-    return sendHtml(res, 200, dashboardPage(data, billing ?? undefined));
+    return sendHtml(res, 200, dashboardPage(data, billing ?? undefined, { crmAvailable: !!deps.crm }));
   }
 
   if (p === '/portal/billing' && method === 'GET') {
@@ -170,6 +383,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     return sendHtml(res, 200, billingPage(data?.tenant.name ?? 'Your business', billing, {
       canManage: !!deps.manageUrl,
       canSubscribe: !!deps.subscribeUrl,
+      crmAvailable: !!deps.crm,
       notice,
     }));
   }

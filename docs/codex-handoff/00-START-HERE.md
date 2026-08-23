@@ -1,5 +1,15 @@
 # 00 — START HERE (Relaunch72 audit handoff)
 
+> **Engineering update — 2026-08-24:** this file preserves the original audit
+> baseline below. PostgreSQL/RLS, a modular platform shell and the first durable
+> CRM loop have since been implemented on the local Codex branch. Start with
+> [15-POSTGRES-CRM-FOUNDATION.md](./15-POSTGRES-CRM-FOUNDATION.md),
+> [16-MODULAR-PRODUCT-UX.md](./16-MODULAR-PRODUCT-UX.md),
+> [17-WHITE-LABEL-PROVIDER-MATRIX.md](./17-WHITE-LABEL-PROVIDER-MATRIX.md),
+> [18-LAUNCH-COST-MODEL.md](./18-LAUNCH-COST-MODEL.md), and
+> [19-CRM-FIRST-LOOP-STATUS.md](./19-CRM-FIRST-LOOP-STATUS.md) before relying on
+> historical statements such as “no database” or the old test count.
+
 > Prepared for an external coding agent performing a full CRM + architecture audit.
 > **Documentation only** — no code, deps, or config were changed to produce this pack
 > (one exception, called out below: `npm ci` was run to restore already-locked deps so

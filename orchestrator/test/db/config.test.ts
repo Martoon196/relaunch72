@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { loadDatabaseConfig } from '../../src/db/config.js';
-import { createDatabasePool } from '../../src/db/pool.js';
+import { DATABASE_ROLES, loadDatabaseConfig } from '../../src/db/config.js';
+import { createCrmCommandDatabasePool, createDatabasePool } from '../../src/db/pool.js';
 
 test('database config uses generic DATABASE_URL only for local development', () => {
   const config = loadDatabaseConfig('web', {
@@ -47,6 +47,37 @@ test('production requires the exact role URL and encrypted transport', () => {
     }),
     /must authenticate as the least-privilege r72_web role/,
   );
+});
+
+test('CRM commands have a dedicated verified role URL and pool identity', async () => {
+  assert.ok(DATABASE_ROLES.includes('crmCommand'));
+  assert.throws(
+    () => loadDatabaseConfig('crmCommand', {
+      NODE_ENV: 'production',
+      DATABASE_CRM_COMMAND_URL: 'postgresql://r72_web:secret@database.example/relaunch72?sslmode=require',
+    }),
+    /must authenticate as the least-privilege r72_crm_command role/,
+  );
+
+  const config = loadDatabaseConfig('crmCommand', {
+    NODE_ENV: 'production',
+    DATABASE_CRM_COMMAND_URL: 'postgresql://r72_crm_command:secret@database.example/relaunch72?sslmode=require',
+    DATABASE_CRM_COMMAND_POOL_MAX: '4',
+  });
+  assert.equal(config.sourceEnv, 'DATABASE_CRM_COMMAND_URL');
+  assert.equal(config.expectedDatabaseUser, 'r72_crm_command');
+  assert.equal(config.applicationName, 'relaunch72-crm-command');
+  assert.equal(config.maxConnections, 4);
+
+  const pool = createCrmCommandDatabasePool({
+    NODE_ENV: 'development',
+    DATABASE_CRM_COMMAND_URL: 'postgresql://r72_crm_command:secret@localhost/relaunch72_test?sslmode=disable',
+    DATABASE_CRM_COMMAND_POOL_MAX: '2',
+  }, { onBackgroundError: () => undefined });
+  assert.equal(pool.options.application_name, 'relaunch72-crm-command');
+  assert.equal(pool.options.max, 2);
+  assert.equal(typeof pool.options.verify, 'function');
+  await pool.end();
 });
 
 test('database config rejects malformed URLs and dangerous numeric settings without leaking secrets', () => {

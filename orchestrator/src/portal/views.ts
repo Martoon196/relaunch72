@@ -80,7 +80,7 @@ function billingCard(billing: BillingView): string {
   </section>`;
 }
 
-export function billingPage(tenantName: string, billing: BillingView, opts: { canManage?: boolean; canSubscribe?: boolean; notice?: string } = {}): string {
+export function billingPage(tenantName: string, billing: BillingView, opts: { canManage?: boolean; canSubscribe?: boolean; notice?: string; crmAvailable?: boolean } = {}): string {
   const state = billingStat(billing);
   const previewNotice = opts.canSubscribe === true ? '' : `<div class="notice" role="note">${icon('lock')}<span><strong>Plan preview only.</strong> Recurring checkout is paused while the durable platform and connected delivery services are completed.</span></div>`;
   const notice = opts.notice ? `<div class="notice" role="status">${icon('activity')}<span>${esc(opts.notice)}</span></div>` : '';
@@ -107,7 +107,7 @@ export function billingPage(tenantName: string, billing: BillingView, opts: { ca
       <section class="panel" aria-labelledby="plans-title"><div class="panel-head"><div><h2 id="plans-title">${opts.canSubscribe === true ? (billing.active ? 'Change your plan' : 'Choose a plan') : 'Planned tiers'}</h2><p class="panel-subtitle">${opts.canSubscribe === true ? 'Billed monthly · cancel anytime' : 'Preview pricing · no checkout'}</p></div></div><div class="panel-body"><div class="plans">${plans}</div></div></section>
     </div>`;
 
-  return appShell({ title: 'Relaunch72 — Billing', tenantName, active: 'billing', billingAvailable: true, body });
+  return appShell({ title: 'Relaunch72 — Billing', tenantName, active: 'billing', billingAvailable: true, crmAvailable: opts.crmAvailable, body });
 }
 
 function pipelinePanel(data: DashboardData): string {
@@ -169,7 +169,7 @@ function expansionModules(): string {
   return `<section class="module-preview" aria-labelledby="expansion-title"><div class="panel-head" style="padding-left:0;padding-right:0"><div><h2 id="expansion-title">Expansion modules</h2><p class="panel-subtitle">Designed into the platform boundary · not available in this sandbox</p></div></div><div class="module-preview-grid">${plannedPortalModules.map((module) => `<article class="module-card"><div class="module-card-top">${portalModuleIcon(module.id)}<span class="lock-label">${icon('lock')}Planned</span></div><h3>${esc(module.label)}</h3><p>${esc(module.description)}</p></article>`).join('')}</div></section>`;
 }
 
-export function dashboardPage(data: DashboardData, billing?: BillingView): string {
+export function dashboardPage(data: DashboardData, billing?: BillingView, opts: { crmAvailable?: boolean } = {}): string {
   const won = data.pipeline.won ?? 0;
   const socialDraftSamples = data.artifacts.post ? 1 : 0;
   const articleBriefs = data.artifacts.cluster?.articles.length ?? 0;
@@ -185,5 +185,5 @@ export function dashboardPage(data: DashboardData, billing?: BillingView): strin
     <div class="dashboard-grid"><div class="stack">${pipelinePanel(data)}${contentPanel(data)}${contactsPanel(data)}</div><aside class="stack" aria-label="Workspace context">${billing ? billingCard(billing) : ''}${activityPanel(data)}${brandPanel(data)}</aside></div>
     ${expansionModules()}`;
 
-  return appShell({ title: `Relaunch72 — ${data.tenant.name}`, tenantName: data.tenant.name, active: 'overview', billingAvailable: !!billing, body });
+  return appShell({ title: `Relaunch72 — ${data.tenant.name}`, tenantName: data.tenant.name, active: 'overview', billingAvailable: !!billing, crmAvailable: opts.crmAvailable, body });
 }

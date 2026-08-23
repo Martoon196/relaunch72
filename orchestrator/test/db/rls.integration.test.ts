@@ -14,7 +14,7 @@ import {
 
 const skip = testDatabaseSkipReason();
 
-test('real PostgreSQL proves two-workspace RLS, same-workspace FKs, and immediate session revocation', {
+test('real PostgreSQL proves identity and CRM RLS, same-workspace FKs, append-only facts, and immediate revocation', {
   skip,
   timeout: 90_000,
 }, async () => {
@@ -25,6 +25,8 @@ test('real PostgreSQL proves two-workspace RLS, same-workspace FKs, and immediat
   const workspaceB = randomUUID();
   const userA = randomUUID();
   const userB = randomUUID();
+  const viewerA = randomUUID();
+  const salesA = randomUUID();
   const tokenHash = createHash('sha256').update(randomBytes(32)).digest();
   const csrfHash = createHash('sha256').update(randomBytes(32)).digest();
 
@@ -36,9 +38,18 @@ test('real PostgreSQL proves two-workspace RLS, same-workspace FKs, and immediat
        JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
        JOIN pg_catalog.pg_roles AS parent ON parent.oid = membership.roleid
        WHERE member.rolname = ANY ($1::text[])`,
-      [['r72_security_definer', 'r72_web', 'r72_public', 'r72_worker', 'r72_webhook', 'r72_readonly']],
+      [['r72_security_definer', 'r72_web', 'r72_crm_command', 'r72_public', 'r72_worker', 'r72_webhook', 'r72_readonly']],
     );
     assert.deepEqual(unsafeMemberships.rows, []);
+    const unsafeCommandGrants = await pool.query<{ member: string }>(
+      `SELECT member.rolname AS member
+       FROM pg_catalog.pg_auth_members AS membership
+       JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
+       JOIN pg_catalog.pg_roles AS parent ON parent.oid = membership.roleid
+       WHERE parent.rolname = 'r72_crm_command'
+         AND member.rolname <> current_user`,
+    );
+    assert.deepEqual(unsafeCommandGrants.rows, []);
     await withOwnerClient(pool, async (client) => {
       await client.query(
         `INSERT INTO app.organizations (id, name, slug, kind)
@@ -48,8 +59,10 @@ test('real PostgreSQL proves two-workspace RLS, same-workspace FKs, and immediat
       await client.query(
         `INSERT INTO app.users (id, email, status, email_verified_at)
          VALUES ($1, 'owner-a@example.test', 'active', clock_timestamp()),
-                ($2, 'owner-b@example.test', 'active', clock_timestamp())`,
-        [userA, userB],
+                ($2, 'owner-b@example.test', 'active', clock_timestamp()),
+                ($3, 'viewer-a@example.test', 'active', clock_timestamp()),
+                ($4, 'sales-a@example.test', 'active', clock_timestamp())`,
+        [userA, userB, viewerA, salesA],
       );
       await client.query(
         `INSERT INTO app.workspaces (id, organization_id, name, slug)
@@ -64,8 +77,11 @@ test('real PostgreSQL proves two-workspace RLS, same-workspace FKs, and immediat
       await client.query(
         `INSERT INTO app.workspace_memberships
            (workspace_id, organization_id, user_id, role, status, source_organization_id)
-         VALUES ($1, $2, $3, 'owner', 'active', $2), ($4, $5, $6, 'owner', 'active', NULL)`,
-        [workspaceA, organizationA, userA, workspaceB, organizationB, userB],
+         VALUES ($1, $2, $3, 'owner', 'active', $2),
+                ($4, $5, $6, 'owner', 'active', NULL),
+                ($1, $2, $7, 'viewer', 'active', NULL),
+                ($1, $2, $8, 'sales', 'active', NULL)`,
+        [workspaceA, organizationA, userA, workspaceB, organizationB, userB, viewerA, salesA],
       );
       await client.query(
         `INSERT INTO app.user_sessions
@@ -108,6 +124,341 @@ test('real PostgreSQL proves two-workspace RLS, same-workspace FKs, and immediat
       'SELECT id FROM app.workspaces ORDER BY id',
     );
     assert.deepEqual(workerVisible.map((row) => row.id), [workspaceA]);
+
+    const pipelineA = randomUUID();
+    const pipelineB = randomUUID();
+    const openStageA = randomUUID();
+    const wonStageA = randomUUID();
+    const openStageB = randomUUID();
+    const contactA = randomUUID();
+    const contactB = randomUUID();
+    const opportunityA = randomUUID();
+    const taskA = randomUUID();
+    const historyA = randomUUID();
+    const activityA = randomUUID();
+    const outboxA = randomUUID();
+    const receiptA = randomUUID();
+
+    await withOwnerClient(pool, async (client) => {
+      await client.query(
+        `INSERT INTO app.pipelines (id, workspace_id, name, slug, is_default)
+         VALUES ($1, $2, 'Sales A', 'sales-a', true),
+                ($3, $4, 'Sales B', 'sales-b', true)`,
+        [pipelineA, workspaceA, pipelineB, workspaceB],
+      );
+      await client.query(
+        `INSERT INTO app.pipeline_stages
+           (id, workspace_id, pipeline_id, name, slug, position, stage_type, is_terminal)
+         VALUES ($1, $2, $3, 'Open', 'open', 1, 'open', false),
+                ($4, $2, $3, 'Won', 'won', 2, 'won', true),
+                ($5, $6, $7, 'Open', 'open', 1, 'open', false)`,
+        [openStageA, workspaceA, pipelineA, wonStageA, openStageB, workspaceB, pipelineB],
+      );
+    });
+
+    const salesStage = await scopedQuery<{ id: string; pipeline_id: string; status: string }>(
+      pool,
+      'r72_crm_command',
+      { workspaceId: workspaceA, userId: salesA },
+      'SELECT id, pipeline_id, status FROM app_private.lock_active_default_pipeline_stage($1, $2)',
+      [openStageA, pipelineA],
+    );
+    assert.deepEqual(salesStage, [{ id: openStageA, pipeline_id: pipelineA, status: 'open' }]);
+    const viewerStage = await scopedQuery<{ id: string }>(
+      pool,
+      'r72_crm_command',
+      { workspaceId: workspaceA, userId: viewerA },
+      'SELECT id FROM app_private.lock_active_default_pipeline_stage($1, $2)',
+      [openStageA, pipelineA],
+    );
+    assert.deepEqual(viewerStage, []);
+
+    // The portal's ordinary web connection is physically read-only for CRM.
+    await expectPostgresError(
+      scopedQuery(
+        pool,
+        'r72_web',
+        { workspaceId: workspaceA, userId: userA },
+        `INSERT INTO app.contacts
+           (id, workspace_id, display_name, owner_user_id, source)
+         VALUES ($1, $2, 'Web bypass attempt', $3, 'integration-test')`,
+        [contactA, workspaceA, userA],
+      ),
+      '42501',
+    );
+    await scopedQuery(
+      pool,
+      'r72_crm_command',
+      { workspaceId: workspaceA, userId: userA },
+      `INSERT INTO app.contacts
+         (id, workspace_id, display_name, owner_user_id, source)
+       VALUES ($1, $2, 'Lead A', $3, 'integration-test')`,
+      [contactA, workspaceA, userA],
+    );
+    await scopedQuery(
+      pool,
+      'r72_crm_command',
+      { workspaceId: workspaceB, userId: userB },
+      `INSERT INTO app.contacts
+         (id, workspace_id, display_name, owner_user_id, source)
+       VALUES ($1, $2, 'Lead B', $3, 'integration-test')`,
+      [contactB, workspaceB, userB],
+    );
+
+    const contactRowsA = await scopedQuery<{ id: string }>(
+      pool,
+      'r72_web',
+      { workspaceId: workspaceA, userId: userA },
+      'SELECT id FROM app.contacts ORDER BY id',
+    );
+    assert.deepEqual(contactRowsA, [{ id: contactA }]);
+    const commandRowsA = await scopedQuery<{ id: string }>(
+      pool,
+      'r72_crm_command',
+      { workspaceId: workspaceA, userId: userA },
+      'SELECT id FROM app.contacts ORDER BY id',
+    );
+    assert.deepEqual(commandRowsA, [{ id: contactA }]);
+    const contactRowsViewer = await scopedQuery<{ id: string }>(
+      pool,
+      'r72_web',
+      { workspaceId: workspaceA, userId: viewerA },
+      'SELECT id FROM app.contacts ORDER BY id',
+    );
+    assert.deepEqual(contactRowsViewer, [{ id: contactA }]);
+
+    await expectPostgresError(
+      scopedQuery(
+        pool,
+        'r72_crm_command',
+        { workspaceId: workspaceA, userId: userA },
+        `INSERT INTO app.contacts (workspace_id, display_name)
+         VALUES ($1, 'Cross-tenant injection')`,
+        [workspaceB],
+      ),
+      '42501',
+    );
+    await expectPostgresError(
+      scopedQuery(
+        pool,
+        'r72_crm_command',
+        { workspaceId: workspaceA, userId: viewerA },
+        `INSERT INTO app.contacts (workspace_id, display_name)
+         VALUES ($1, 'Viewer write')`,
+        [workspaceA],
+      ),
+      '42501',
+    );
+    const viewerUpdated = await scopedQuery<{ id: string }>(
+      pool,
+      'r72_crm_command',
+      { workspaceId: workspaceA, userId: viewerA },
+      `UPDATE app.contacts
+       SET display_name = 'Viewer rewrite', row_version = row_version + 1,
+           updated_at = clock_timestamp()
+       WHERE id = $1
+       RETURNING id`,
+      [contactA],
+    );
+    assert.deepEqual(viewerUpdated, []);
+    await expectPostgresError(
+      scopedQuery(
+        pool,
+        'r72_crm_command',
+        { workspaceId: workspaceA, userId: viewerA },
+        `INSERT INTO app.pipelines (workspace_id, name, slug)
+         VALUES ($1, 'Viewer pipeline', 'viewer-pipeline')`,
+        [workspaceA],
+      ),
+      '42501',
+    );
+
+    // Composite foreign keys reject cross-workspace references even through
+    // the migration owner, proving correctness does not depend on RLS alone.
+    await expectPostgresError(
+      ownerQuery(
+        pool,
+        `INSERT INTO app.contact_points
+           (workspace_id, contact_id, kind, value, normalized_value)
+         VALUES ($1, $2, 'email', 'cross@example.test', 'cross@example.test')`,
+        [workspaceA, contactB],
+      ),
+      '23503',
+    );
+
+    await scopedQuery(
+      pool,
+      'r72_crm_command',
+      { workspaceId: workspaceA, userId: userA },
+      `INSERT INTO app.opportunities
+         (id, workspace_id, contact_id, pipeline_id, stage_id, name, status, owner_user_id)
+       VALUES ($1, $2, $3, $4, $5, 'Lead A opportunity', 'open', $6)`,
+      [opportunityA, workspaceA, contactA, pipelineA, openStageA, userA],
+    );
+    await expectPostgresError(
+      ownerQuery(
+        pool,
+        `INSERT INTO app.opportunities
+           (workspace_id, contact_id, pipeline_id, stage_id, name, status)
+         VALUES ($1, $2, $3, $4, 'Cross-stage opportunity', 'open')`,
+        [workspaceA, contactA, pipelineA, openStageB],
+      ),
+      '23503',
+    );
+    await expectPostgresError(
+      ownerQuery(
+        pool,
+        `INSERT INTO app.opportunities
+           (workspace_id, contact_id, pipeline_id, stage_id, name, status, closed_at)
+         VALUES ($1, $2, $3, $4, 'Wrong semantic stage', 'won', clock_timestamp())`,
+        [workspaceA, contactA, pipelineA, openStageA],
+      ),
+      '23503',
+    );
+    await expectPostgresError(
+      ownerQuery(
+        pool,
+        `INSERT INTO app.opportunities
+           (workspace_id, contact_id, pipeline_id, stage_id, name, status, closed_at)
+         VALUES ($1, $2, $3, $4, 'Open but closed', 'open', clock_timestamp())`,
+        [workspaceA, contactA, pipelineA, openStageA],
+      ),
+      '23514',
+    );
+    await scopedQuery(
+      pool,
+      'r72_crm_command',
+      { workspaceId: workspaceA, userId: userA },
+      `INSERT INTO app.tasks
+         (id, workspace_id, contact_id, opportunity_id, title, assignee_user_id)
+       VALUES ($1, $2, $3, $4, 'Follow up', $5)`,
+      [taskA, workspaceA, contactA, opportunityA, userA],
+    );
+    await expectPostgresError(
+      scopedQuery(
+        pool,
+        'r72_crm_command',
+        { workspaceId: workspaceA, userId: userA },
+        `UPDATE app.tasks
+         SET status = 'completed', completed_by_user_id = $1,
+             row_version = row_version + 1, updated_at = clock_timestamp()
+         WHERE id = $2`,
+        [userA, taskA],
+      ),
+      '23514',
+    );
+    const completedTask = await scopedQuery<{ status: string; row_version: string }>(
+      pool,
+      'r72_crm_command',
+      { workspaceId: workspaceA, userId: userA },
+      `UPDATE app.tasks
+       SET status = 'completed', completed_at = clock_timestamp(),
+           completed_by_user_id = $1, row_version = row_version + 1,
+           updated_at = clock_timestamp()
+       WHERE id = $2 AND row_version = 1
+       RETURNING status, row_version::text`,
+      [userA, taskA],
+    );
+    assert.deepEqual(completedTask, [{ status: 'completed', row_version: '2' }]);
+
+    await scopedQuery(
+      pool,
+      'r72_crm_command',
+      { workspaceId: workspaceA, userId: userA },
+      `INSERT INTO app.opportunity_stage_history
+         (id, workspace_id, pipeline_id, opportunity_id, to_stage_id,
+          actor_kind, changed_by_user_id, request_id)
+       VALUES ($1, $2, $3, $4, $5, 'user', $6, 'crm-create')`,
+      [historyA, workspaceA, pipelineA, opportunityA, openStageA, userA],
+    );
+    await scopedQuery(
+      pool,
+      'r72_crm_command',
+      { workspaceId: workspaceA, userId: userA },
+      `INSERT INTO app.activities
+         (id, workspace_id, contact_id, opportunity_id, activity_type, channel,
+          actor_kind, actor_user_id, subject, request_id)
+       VALUES ($1, $2, $3, $4, 'crm.contact.created', 'crm',
+               'user', $5, 'Lead created', 'crm-create')`,
+      [activityA, workspaceA, contactA, opportunityA, userA],
+    );
+    await scopedQuery(
+      pool,
+      'r72_crm_command',
+      { workspaceId: workspaceA, userId: userA },
+      `INSERT INTO app.outbox_events
+         (id, workspace_id, aggregate_type, aggregate_id, event_type,
+          idempotency_key, payload, request_id)
+       VALUES ($1, $2, 'contact', $3, 'crm.contact.created',
+               'crm-create-outbox', '{"version":1}'::jsonb, 'crm-create')`,
+      [outboxA, workspaceA, contactA],
+    );
+
+    await scopedQuery(
+      pool,
+      'r72_crm_command',
+      { workspaceId: workspaceA, userId: userA },
+      `INSERT INTO app.command_receipts
+         (id, workspace_id, command_name, idempotency_key, request_id,
+          actor_user_id, payload_hash)
+       VALUES ($1, $2, 'crm.createLead', 'integration-receipt',
+               'integration-test', $3, digest('receipt-payload', 'sha256'))`,
+      [receiptA, workspaceA, userA],
+    );
+    const completedReceipt = await scopedQuery<{ status: string }>(
+      pool,
+      'r72_crm_command',
+      { workspaceId: workspaceA, userId: userA },
+      `UPDATE app.command_receipts
+       SET status = 'succeeded', result = '{"ok":true}'::jsonb,
+           response_status = 200, completed_at = clock_timestamp()
+       WHERE id = $1
+       RETURNING status`,
+      [receiptA],
+    );
+    assert.deepEqual(completedReceipt, [{ status: 'succeeded' }]);
+    await expectPostgresError(
+      scopedQuery(
+        pool,
+        'r72_web',
+        { workspaceId: workspaceA, userId: userA },
+        'SELECT id FROM app.command_receipts WHERE id = $1',
+        [receiptA],
+      ),
+      '42501',
+    );
+
+    // These facts are append-only even for the dedicated command identity.
+    await expectPostgresError(
+      scopedQuery(
+        pool,
+        'r72_crm_command',
+        { workspaceId: workspaceA, userId: userA },
+        `UPDATE app.opportunity_stage_history SET note = 'rewritten' WHERE id = $1`,
+        [historyA],
+      ),
+      '42501',
+    );
+    await expectPostgresError(
+      scopedQuery(
+        pool,
+        'r72_crm_command',
+        { workspaceId: workspaceA, userId: userA },
+        `UPDATE app.activities SET subject = 'rewritten' WHERE id = $1`,
+        [activityA],
+      ),
+      '42501',
+    );
+    await expectPostgresError(
+      scopedQuery(
+        pool,
+        'r72_crm_command',
+        { workspaceId: workspaceA, userId: userA },
+        `DELETE FROM app.outbox_events WHERE id = $1`,
+        [outboxA],
+      ),
+      '42501',
+    );
 
     // Invitation mutation is deliberately behind an audited command boundary;
     // the ordinary web role cannot write invitation rows directly.

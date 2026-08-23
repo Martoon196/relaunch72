@@ -57,12 +57,19 @@ test('portal shell provides native keyboard navigation and responsive landmarks'
   assert.match(html, /@media\(forced-colors:active\)/);
   assert.match(html, /\.field input:focus-visible\{outline:3px solid Highlight\}/);
   assert.doesNotMatch(html, /\.field input:focus\{[^}]*outline:0/);
-  assert.match(html, /<nav class="mobile-nav" aria-label="Mobile navigation" style="--mobile-nav-count:4">/);
+  assert.match(html, /<nav class="mobile-nav" aria-label="Mobile navigation" style="--mobile-nav-count:3">/);
   assert.match(html, /\.command-popover\{position:fixed;top:70px;left:18px;right:18px;width:auto/);
   assert.match(html, /Workspace settings<small>.*Setup/s);
-  assert.match(html, /href="\/portal#crm"[^>]*>.*CRM<\/a>/s);
+  assert.match(html, /class="nav-item nav-locked"[^>]*aria-disabled="true"[^>]*>.*CRM.*Setup/s);
+  assert.doesNotMatch(html, /href="\/portal\/crm\/contacts"/);
   assert.match(html, /href="\/portal" aria-current="page"/);
   assert.doesNotMatch(html, /href="\/portal\/billing"/);
+});
+
+test('portal shell advertises the real CRM route only when its service is connected', () => {
+  const html = dashboardPage(dashboard(), undefined, { crmAvailable: true });
+  assert.match(html, /href="\/portal\/crm\/contacts"[^>]*>.*CRM<\/a>/s);
+  assert.match(html, /<nav class="mobile-nav" aria-label="Mobile navigation" style="--mobile-nav-count:4">/);
 });
 
 test('small semantic text tokens retain WCAG AA contrast on their surfaces', () => {

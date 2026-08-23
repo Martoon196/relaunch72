@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { signSession, verifySession } from '../src/server/admin/session.js';
-import { signTenant, verifyTenant } from '../src/portal/session.js';
+import { portalCsrfToken, signTenant, verifyPortalCsrf, verifyTenant } from '../src/portal/session.js';
 
 test('admin and portal session tokens are cryptographically domain-separated', () => {
   const secret = 'one-shared-secret-is-still-safe-with-domain-separation';
@@ -19,4 +19,18 @@ test('session payloads carry explicit version and audience claims', () => {
   const decode = (token: string): Record<string, unknown> => JSON.parse(Buffer.from(token.split('.')[0]!, 'base64url').toString('utf8')) as Record<string, unknown>;
   assert.deepEqual(decode(signSession('secret', 1)), { v: 1, aud: 'admin', exp: 1 + 12 * 60 * 60 * 1000 });
   assert.deepEqual(decode(signTenant('secret', 'tenant-1', 1)), { v: 1, aud: 'portal', tid: 'tenant-1', exp: 1 + 14 * 24 * 60 * 60 * 1000 });
+});
+
+test('portal CSRF tokens are session-bound and verified in constant-length form', () => {
+  const secret = 'session-domain-secret';
+  const firstSession = signTenant(secret, 'tenant-1', 1_000);
+  const secondSession = signTenant(secret, 'tenant-2', 1_000);
+  const token = portalCsrfToken(secret, firstSession);
+
+  assert.ok(token.length >= 40);
+  assert.equal(verifyPortalCsrf(secret, firstSession, token), true);
+  assert.equal(verifyPortalCsrf(secret, secondSession, token), false);
+  assert.equal(verifyPortalCsrf('wrong-secret', firstSession, token), false);
+  assert.equal(verifyPortalCsrf(secret, firstSession, undefined), false);
+  assert.equal(verifyPortalCsrf(secret, firstSession, `${token}x`), false);
 });

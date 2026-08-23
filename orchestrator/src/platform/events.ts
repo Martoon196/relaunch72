@@ -1,6 +1,8 @@
 export const PLATFORM_EVENT_TYPES = [
   'crm.contact.created',
+  'crm.lead.created',
   'crm.opportunity.stage_changed',
+  'crm.task.completed',
   'content.draft.created',
   'content.approval.requested',
   'social.publish.requested',

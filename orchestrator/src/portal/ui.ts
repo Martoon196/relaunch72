@@ -7,7 +7,7 @@
 import { CORE_PLATFORM_MODULES, platformModules, type PlatformModuleId, type PlatformModuleManifest } from '../platform/modules.js';
 import type { PlatformCapability } from '../platform/capabilities.js';
 
-export type PortalSection = 'overview' | 'billing';
+export type PortalSection = 'overview' | 'crm' | 'billing';
 
 export function escapeHtml(value: unknown): string {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -113,6 +113,10 @@ interface AppShellOptions {
   active: PortalSection;
   body: string;
   billingAvailable?: boolean;
+  /** Only advertise CRM routes when a real workspace service is wired. */
+  crmAvailable?: boolean;
+  /** Changes truth labels only; it never unlocks a capability. */
+  mode?: 'sandbox' | 'crm';
 }
 
 function workspaceInitial(name: string): string {
@@ -126,15 +130,21 @@ function plannedNav(module: PlatformModuleManifest): string {
 
 export function appShell(opts: AppShellOptions): string {
   const tenant = escapeHtml(opts.tenantName);
+  const crmMode = opts.mode === 'crm';
   const capabilities = new Set<PlatformCapability>([
-    'workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read',
-    'content.drafts.read', 'analytics.read',
+    'workspace.overview.read', 'content.drafts.read', 'analytics.read',
   ]);
+  if (opts.crmAvailable) {
+    capabilities.add('crm.contacts.read');
+    capabilities.add('crm.pipeline.read');
+  }
   if (opts.billingAvailable) capabilities.add('billing.read');
   const resolvedModules = platformModules.navigation({ capabilities });
   const workingModules = resolvedModules.filter((module) => module.state !== 'planned' && module.route);
   const isCurrent = (id: PlatformModuleId): boolean =>
-    (opts.active === 'overview' && id === 'overview') || (opts.active === 'billing' && id === 'settings');
+    (opts.active === 'overview' && id === 'overview')
+    || (opts.active === 'crm' && id === 'crm')
+    || (opts.active === 'billing' && id === 'settings');
   const workingNav = workingModules.map((module) => {
     const current = isCurrent(module.id);
     const stateLabel = module.state === 'preview' ? 'Preview' : module.state === 'setup_required' ? 'Setup' : '';
@@ -164,7 +174,7 @@ export function appShell(opts: AppShellOptions): string {
         <div class="nav-label">Expansion modules</div>
         ${plannedPortalModules.map(plannedNav).join('')}
       </nav>
-      <div class="sidebar-foot"><div class="sandbox-note"><span class="sandbox-dot"></span><span><strong>Private sandbox</strong>Mock generation only · no publishing</span></div></div>
+      <div class="sidebar-foot"><div class="sandbox-note"><span class="sandbox-dot"></span><span><strong>${crmMode ? 'Private CRM' : 'Private sandbox'}</strong>${crmMode ? 'Saved workspace records · provider effects locked' : 'Mock generation only · no publishing'}</span></div></div>
     </aside>
     <div class="workspace">
       <header class="topbar">
@@ -178,7 +188,7 @@ export function appShell(opts: AppShellOptions): string {
             ${quickPlanned}
           </nav>
         </details>
-        <div class="top-actions"><span class="status-badge"><span class="dot"></span>Mock workspace</span><form method="post" action="/portal/logout"><button class="top-icon-button" type="submit" aria-label="Sign out" title="Sign out">${icon('logout')}</button></form></div>
+        <div class="top-actions"><span class="status-badge"><span class="dot"></span>${crmMode ? 'CRM records' : 'Mock workspace'}</span><form method="post" action="/portal/logout"><button class="top-icon-button" type="submit" aria-label="Sign out" title="Sign out">${icon('logout')}</button></form></div>
       </header>
       <main class="main" id="main-content" tabindex="-1">${opts.body}</main>
     </div>

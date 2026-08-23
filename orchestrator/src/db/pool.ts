@@ -1,5 +1,5 @@
 import { Pool, type PoolConfig } from 'pg';
-import type { DatabaseConfig } from './config.js';
+import { loadDatabaseConfig, type DatabaseConfig } from './config.js';
 
 export interface DatabasePoolHooks {
   onBackgroundError?: (error: Error) => void;
@@ -47,4 +47,16 @@ export function createDatabasePool(
     console.error(`[database:${config.role}] idle client error (${error.name})`);
   }));
   return pool;
+}
+
+/**
+ * Create the isolated pool used by CRM command handlers. Keeping this factory
+ * separate prevents the portal read pool from being accidentally reused for a
+ * mutation path; production also verifies `current_user = r72_crm_command`.
+ */
+export function createCrmCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('crmCommand', env), hooks);
 }
