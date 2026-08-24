@@ -53,9 +53,12 @@ messages, publishing, or any external provider effect.
   identity allowed to mutate CRM state, append history/activity/outbox facts,
   or claim command receipts. Permissions and active membership are still
   checked by forced RLS for every statement.
-- The migrator needs permission to create roles and extensions. Migrations never
-  contain passwords; provision runtime role passwords or managed identities in
-  the hosting secret/control plane.
+- The migrator needs permission to create roles and extensions, but does not
+  need true PostgreSQL superuser authority. Role bootstraps rely on safe
+  `CREATE ROLE` defaults and audit every protected capability instead of trying
+  to alter superuser-only attributes. Migrations never contain passwords;
+  provision runtime role passwords or managed identities in the hosting
+  secret/control plane.
 - The ordinary suite skips the real PostgreSQL test when no database is
   configured. `npm run test:db:integration` is intentionally stricter: it
   fails unless `TEST_DATABASE_URL` names an explicitly disposable database
@@ -68,21 +71,31 @@ messages, publishing, or any external provider effect.
 Migrations `0001` and `0002` establish role separation, forced RLS, global users,
 white-label organisations, isolated workspaces, sourced/revocable memberships,
 opaque sessions, and hashed single-use identity tokens. Migration `0003` adds
-the new command role plus the first CRM loop, without changing the issued
-`0001`/`0002` checksums, and keeps the web/read pool physically separate from
-its command/write pool. Migration `0004` adds the isolated identity-command
-role, opaque portal session functions, in-transaction session guards and a safe
-runtime migration-ledger function without changing any issued migration.
-Migration `0005` removes the temporary JSON tenant key from effective
-PostgreSQL authentication and returns only canonical user/workspace identity.
-Migration `0006` adds the function-only provisioning role, atomic native
-workspace creation and atomic setup-token consumption plus first-session
-issuance. Migration `0007` removes ambient object-creation permission in the
-shared `public` schema. Migration `0008` adds function-only setup-delivery and
-reissue roles, encrypted delivery jobs, idempotent reissue receipts, fenced
-claim/lease/ack/fail commands, terminal ciphertext erasure and the cheap setup
-reservation required before scrypt. Existing migration files remain
-forward-only and checksum-immutable.
+the new command role plus the first CRM loop and keeps the web/read pool
+physically separate from its command/write pool. Migration `0004` adds the
+isolated identity-command role, opaque portal session functions, in-transaction
+session guards and a safe runtime migration-ledger function. Migration `0005`
+removes the temporary JSON tenant key from effective PostgreSQL authentication
+and returns only canonical user/workspace identity. Migration `0006` adds the
+function-only provisioning role, atomic native workspace creation and atomic
+setup-token consumption plus first-session issuance. Migration `0007` removes
+ambient object-creation permission in the shared `public` schema. Migration
+`0008` adds function-only setup-delivery and reissue roles, encrypted delivery
+jobs, idempotent reissue receipts, fenced claim/lease/ack/fail commands,
+terminal ciphertext erasure and the cheap setup reservation required before
+scrypt. Migration `0009` stabilises session timestamp defaults and grants the
+security definer one inert column-level capability required for row locking.
+Migration `0010` recreates delivery lease renewal with portable PostgreSQL
+`LEAST` syntax. Migration `0011` makes lifecycle creation/update defaults
+statement-stable wherever a same-row chronology constraint compares them with
+an explicitly supplied lifecycle timestamp; event/outbox fact clocks retain
+their original paired ordering.
+
+Before the first successful managed-PostgreSQL application, the pre-launch role
+bootstraps in `0001`, `0003`, `0004`, `0006` and `0008` were amended to support
+Neon's non-superuser project owner; `0002` remained unchanged. The successfully
+proven `0001`–`0011` ledger is now the checksum baseline. Any later database
+change must be a new forward migration.
 
 The always-on PostgreSQL portal and sensitive onboarding process are composed
 separately:
@@ -110,8 +123,10 @@ email link—and erases encrypted fields when a delivery becomes delivered,
 superseded or dead-lettered. Retired decrypt keys must remain configured until
 startup readiness reports that no claimable row needs them.
 
-Automatic PostgreSQL onboarding remains locked. Keep it out of customer traffic
-until `npm run test:db:integration` passes against a disposable real PostgreSQL
-project/branch, the provider dispatcher is deliberately implemented and tested,
-edge/access logs redact the initial `?token=` query, and the remaining launch
-runbooks and checkout-provenance gate are approved.
+`npm run test:db:integration` passed **2/2** against a disposable direct Neon
+database on 2026-08-24, including RLS/revocation and atomic onboarding/setup.
+Automatic PostgreSQL onboarding nevertheless remains locked. Keep it out of
+customer traffic until the provider dispatcher is deliberately implemented and
+tested, edge/access logs redact the initial `?token=` query, paid-checkout
+provenance is database-native, the operational runbooks are approved, and the
+real-browser acceptance pass is complete.

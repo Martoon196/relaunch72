@@ -12,11 +12,23 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'r72_identity_command'
   ) THEN
-    CREATE ROLE r72_identity_command;
+    CREATE ROLE r72_identity_command LOGIN NOINHERIT;
   END IF;
 
-  ALTER ROLE r72_identity_command
-    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_roles
+    WHERE rolname = 'r72_identity_command'
+      AND rolcanlogin
+      AND NOT rolinherit
+      AND NOT rolsuper
+      AND NOT rolcreatedb
+      AND NOT rolcreaterole
+      AND NOT rolreplication
+      AND NOT rolbypassrls
+  ) THEN
+    RAISE EXCEPTION 'Unsafe role attributes: r72_identity_command does not match the required capability shape';
+  END IF;
 
   REVOKE r72_owner, r72_security_definer FROM r72_identity_command;
   REVOKE r72_identity_command
@@ -66,15 +78,20 @@ BEGIN
       privileged_member, privileged_parent;
   END IF;
 
-  -- Only the migrator may assume r72_owner, and only r72_owner may assume the
-  -- security-definer role. An arbitrary LOGIN member would bypass functions.
+  -- The trusted migrator may assume both privileged roles; managed PostgreSQL
+  -- can automatically grant a role creator membership in the role it creates.
+  -- Apart from that migrator, only r72_owner may assume the security definer.
+  -- Any arbitrary LOGIN member would bypass the function boundary.
   SELECT member.rolname, parent.rolname
     INTO privileged_member, privileged_parent
   FROM pg_catalog.pg_auth_members AS membership
   JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
   JOIN pg_catalog.pg_roles AS parent ON parent.oid = membership.roleid
   WHERE (parent.rolname = 'r72_owner' AND member.rolname <> current_user)
-     OR (parent.rolname = 'r72_security_definer' AND member.rolname <> 'r72_owner')
+     OR (
+       parent.rolname = 'r72_security_definer'
+       AND member.rolname NOT IN ('r72_owner', current_user)
+     )
   LIMIT 1;
 
   IF privileged_member IS NOT NULL THEN

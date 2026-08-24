@@ -5,31 +5,45 @@
 DO $roles$
 DECLARE
   role_name text;
+  expected_login boolean;
   unexpected_member text;
   unexpected_parent text;
 BEGIN
-  FOREACH role_name IN ARRAY ARRAY[
-    'r72_onboarding_definer',
-    'r72_setup_delivery_definer',
-    'r72_setup_delivery_command',
-    'r72_setup_reissue_command'
-  ]
+  FOR role_name, expected_login IN
+    SELECT required_role.role_name, required_role.expected_login
+    FROM (VALUES
+      ('r72_onboarding_definer', false),
+      ('r72_setup_delivery_definer', false),
+      ('r72_setup_delivery_command', true),
+      ('r72_setup_reissue_command', true)
+    ) AS required_role(role_name, expected_login)
   LOOP
     IF NOT EXISTS (
       SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = role_name
     ) THEN
-      EXECUTE format('CREATE ROLE %I', role_name);
+      EXECUTE format(
+        'CREATE ROLE %I %s NOINHERIT',
+        role_name,
+        CASE WHEN expected_login THEN 'LOGIN' ELSE 'NOLOGIN' END
+      );
+    END IF;
+
+    IF NOT EXISTS (
+      SELECT 1
+      FROM pg_catalog.pg_roles
+      WHERE rolname = role_name
+        AND rolcanlogin = expected_login
+        AND NOT rolinherit
+        AND NOT rolsuper
+        AND NOT rolcreatedb
+        AND NOT rolcreaterole
+        AND NOT rolreplication
+        AND NOT rolbypassrls
+    ) THEN
+      RAISE EXCEPTION 'Unsafe role attributes: % does not match the required capability shape',
+        role_name;
     END IF;
   END LOOP;
-
-  ALTER ROLE r72_onboarding_definer
-    NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
-  ALTER ROLE r72_setup_delivery_definer
-    NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
-  ALTER ROLE r72_setup_delivery_command
-    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
-  ALTER ROLE r72_setup_reissue_command
-    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
 
   REVOKE r72_owner, r72_security_definer, r72_onboarding_definer,
     r72_setup_delivery_definer

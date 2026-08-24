@@ -7,8 +7,10 @@
 
 **Measured:** 2026-08-24 on the local Codex branch.
 **Activation:** off by default and operator-gated.
-**External effects:** none. No database was created, migrated or contacted; no
-deployment, push, purchase, message or provider action occurred.
+**External effects at this historical checkpoint:** none. The later current
+proof described in handoffs 21 and 22 migrated and reset only the explicitly
+disposable Neon test database; no production/customer database, deployment,
+push, purchase, message or provider action occurred.
 
 ---
 
@@ -115,7 +117,12 @@ If any check fails after the gate was requested, the PostgreSQL portal remains
 unmounted. The server does not downgrade to legacy signed cookies or JSON CRM.
 The gate defaults to false.
 
-## Still blocked before a customer pilot
+## Historical gates at this checkpoint
+
+The list below records what was still blocked when this superseded slice was
+measured. Canonical provisioning, account setup and real PostgreSQL proof were
+subsequently implemented and proved in handoffs 21 and 22; the founder also
+confirmed there is no legacy customer dataset to import.
 
 The following remain non-negotiable:
 
@@ -163,20 +170,25 @@ The ordinary TypeScript suite covers:
   post-login bridge preflight, branded readiness failure and premium
   error/empty/read-only UX.
 
-The final ordinary run on this branch reports **511 passing tests, zero failures
-and one explicit PostgreSQL integration skip**. TypeScript typechecking passes.
+At the time of this superseded checkpoint, the ordinary run reported **511
+passing tests, zero failures and one explicit PostgreSQL integration skip**.
+TypeScript typechecking passed. This is historical evidence, not the current
+branch total.
 
-`npm run test:db:integration` remains the hard evidence gate. It deliberately
-fails when no explicitly disposable test database is supplied; the ordinary
-suite reports that integration test as skipped rather than pretending it ran.
+At this checkpoint, `npm run test:db:integration` remained the hard evidence
+gate. That gate was subsequently satisfied against the explicitly disposable
+direct-Neon database: migrations `0001`–`0011` and both database integration
+tests passed. The current complete suite reports **577 passed, zero failed and
+zero skipped**; see handoffs 21 and 22.
 
-## Next executable slice
+## Historical next slice — now completed
 
-The next migration/application slice should be canonical provisioning plus
-single-use account setup, followed by a dry-run legacy importer. Only after a
-real PostgreSQL run proves setup → login → CRM read/create/move/complete →
-logout → old-token rejection for owner, sales and viewer should
-`PORTAL_POSTGRES_ENABLED` be considered for a private pilot.
+Canonical provisioning and single-use account setup were the next proposed
+slice here. They are now implemented and proved against disposable Neon; no
+legacy importer is required because no legacy customer data exists. Automatic
+onboarding remains locked on the provider dispatcher, paid-checkout provenance,
+edge token-log redaction, operational controls and real-browser acceptance
+listed in the current handoffs.
 
 Provider work remains separate. Social, WhatsApp, webinar, email and automation
 rails connect through the outbox/capability boundary and do not need to be

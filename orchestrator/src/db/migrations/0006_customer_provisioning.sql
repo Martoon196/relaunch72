@@ -12,11 +12,23 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'r72_provisioning_command'
   ) THEN
-    CREATE ROLE r72_provisioning_command;
+    CREATE ROLE r72_provisioning_command LOGIN NOINHERIT;
   END IF;
 
-  ALTER ROLE r72_provisioning_command
-    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_roles
+    WHERE rolname = 'r72_provisioning_command'
+      AND rolcanlogin
+      AND NOT rolinherit
+      AND NOT rolsuper
+      AND NOT rolcreatedb
+      AND NOT rolcreaterole
+      AND NOT rolreplication
+      AND NOT rolbypassrls
+  ) THEN
+    RAISE EXCEPTION 'Unsafe role attributes: r72_provisioning_command does not match the required capability shape';
+  END IF;
 
   REVOKE r72_owner, r72_security_definer FROM r72_provisioning_command;
   REVOKE r72_provisioning_command
@@ -72,7 +84,10 @@ BEGIN
   JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
   JOIN pg_catalog.pg_roles AS parent ON parent.oid = membership.roleid
   WHERE (parent.rolname = 'r72_owner' AND member.rolname <> current_user)
-     OR (parent.rolname = 'r72_security_definer' AND member.rolname <> 'r72_owner')
+     OR (
+       parent.rolname = 'r72_security_definer'
+       AND member.rolname NOT IN ('r72_owner', current_user)
+     )
   LIMIT 1;
 
   IF privileged_member IS NOT NULL THEN

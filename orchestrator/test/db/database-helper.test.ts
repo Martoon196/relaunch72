@@ -10,7 +10,7 @@ const safeUrl = 'postgresql://owner:secret@ep-disposable.neon.tech/relaunch72_te
 test('destructive database proof requires both a test-named database and explicit branch reset confirmation', () => {
   assert.doesNotThrow(() => assertDisposableTestDatabase(safeUrl, DISPOSABLE_BRANCH_CONFIRMATION));
   assert.throws(
-    () => assertDisposableTestDatabase(safeUrl, undefined),
+    () => assertDisposableTestDatabase(safeUrl, ''),
     /isolated disposable branch\/project/,
   );
   assert.throws(

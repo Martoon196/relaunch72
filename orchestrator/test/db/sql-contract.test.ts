@@ -12,6 +12,9 @@ const migration5Url = new URL('../../src/db/migrations/0005_canonical_portal_ide
 const migration6Url = new URL('../../src/db/migrations/0006_customer_provisioning.sql', import.meta.url);
 const migration7Url = new URL('../../src/db/migrations/0007_public_schema_hardening.sql', import.meta.url);
 const migration8Url = new URL('../../src/db/migrations/0008_setup_delivery_recovery.sql', import.meta.url);
+const migration9Url = new URL('../../src/db/migrations/0009_neon_integration_repairs.sql', import.meta.url);
+const migration10Url = new URL('../../src/db/migrations/0010_delivery_lease_portability.sql', import.meta.url);
+const migration11Url = new URL('../../src/db/migrations/0011_stable_chronology_defaults.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -24,13 +27,19 @@ test('0001 creates hardened roles, extensions, private ledger, and context helpe
   for (const role of ['r72_owner', 'r72_security_definer', 'r72_web', 'r72_public', 'r72_worker', 'r72_webhook', 'r72_readonly']) {
     assert.match(sql, new RegExp(`'${role}'`));
   }
-  assert.match(sql, /ALTER ROLE r72_security_definer NOLOGIN [^;]* NOBYPASSRLS/);
-  for (const role of ['r72_web', 'r72_public', 'r72_worker', 'r72_webhook', 'r72_readonly']) {
-    assert.match(sql, new RegExp(`ALTER ROLE ${role} LOGIN [^;]* NOBYPASSRLS`));
+  for (const role of ['r72_owner', 'r72_security_definer']) {
+    assert.match(sql, new RegExp(`\('${role}', false, true\)`));
   }
+  for (const role of ['r72_web', 'r72_public', 'r72_worker', 'r72_webhook', 'r72_readonly']) {
+    assert.match(sql, new RegExp(`\('${role}', true, false\)`));
+  }
+  assert.match(sql, /'CREATE ROLE %I %s %s'/);
+  assert.match(sql, /rolcanlogin = expected_login AND rolinherit = expected_inherit AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls/);
+  assert.match(sql, /Unsafe role attributes/);
   assert.match(sql, /REVOKE r72_owner, r72_security_definer FROM r72_web, r72_public, r72_worker, r72_webhook, r72_readonly/);
   assert.match(sql, /FROM pg_catalog\.pg_auth_members AS membership/);
   assert.match(sql, /Unsafe role membership/);
+  assert.match(sql, /CREATE SCHEMA IF NOT EXISTS app AUTHORIZATION r72_owner; CREATE SCHEMA IF NOT EXISTS app_private AUTHORIZATION r72_owner; SET LOCAL ROLE r72_owner/);
   assert.match(sql, /CREATE TABLE app_private\.schema_migrations/);
   assert.match(sql, /checksum text NOT NULL CHECK \(checksum ~ '\^\[0-9a-f\]\{64\}\$'\)/);
   assert.match(sql, /CREATE TABLE app_private\.workspace_table_registry/);
@@ -137,12 +146,27 @@ test('security-definer helpers have fixed search paths, private execution, and n
   assert.doesNotMatch(sql, /CREATE POLICY user_sessions_[^;]* TO r72_web/);
 });
 
-test('issued 0001 and 0002 migration bytes remain checksum-immutable', async () => {
+test('pre-launch 0001 role bootstrap and issued 0002 bytes remain checksum-pinned', async () => {
   const digest = (source: string): string => createHash('sha256')
     .update(source.replace(/\r\n/g, '\n'))
     .digest('hex');
-  assert.equal(digest(await readFile(migration1Url, 'utf8')), 'e65d289e3f1ab03bb083839e7d76601094bcea39a26438f4da49ab8460260b99');
+  assert.equal(digest(await readFile(migration1Url, 'utf8')), '188dff7a4c51034e197c3166e8170c1b77c2e1a48c088bb213c6a1258021ba6d');
   assert.equal(digest(await readFile(migration2Url, 'utf8')), '6e231cdf96281cdd246e01a7780a2ddb0bdfe7465a955167b071b911d89378ed');
+});
+
+test('role bootstraps never ALTER protected attributes that managed Postgres cannot change', async () => {
+  const sources = await Promise.all([
+    migration1Url,
+    migration3Url,
+    migration4Url,
+    migration6Url,
+    migration8Url,
+  ].map((url) => readFile(url, 'utf8')));
+  const sql = normalise(sources.join('\n'));
+  assert.doesNotMatch(
+    sql,
+    /ALTER ROLE [^;]*\b(?:SUPERUSER|NOSUPERUSER|CREATEDB|NOCREATEDB|CREATEROLE|NOCREATEROLE|REPLICATION|NOREPLICATION|BYPASSRLS|NOBYPASSRLS)\b/,
+  );
 });
 
 test('0003 creates and registers the complete workspace-scoped CRM first loop behind forced RLS', async () => {
@@ -170,10 +194,11 @@ test('0003 creates and registers the complete workspace-scoped CRM first loop be
   assert.match(sql, /FOREACH table_name IN ARRAY ARRAY\[ 'contacts', 'contact_points', 'pipelines', 'pipeline_stages', 'opportunities', 'opportunity_stage_history', 'tasks', 'activities', 'command_receipts', 'outbox_events' \]/);
 });
 
-test('0003 bootstraps and audits the isolated CRM command role without rewriting issued migrations', async () => {
+test('0003 bootstraps and audits the isolated CRM command role', async () => {
   const sql = normalise(await readFile(migration3Url, 'utf8'));
-  assert.match(sql, /CREATE ROLE r72_crm_command/);
-  assert.match(sql, /ALTER ROLE r72_crm_command LOGIN [^;]* NOBYPASSRLS NOINHERIT/);
+  assert.match(sql, /CREATE ROLE r72_crm_command LOGIN NOINHERIT/);
+  assert.match(sql, /rolname = 'r72_crm_command' AND rolcanlogin AND NOT rolinherit AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls/);
+  assert.match(sql, /Unsafe role attributes: r72_crm_command/);
   assert.match(sql, /REVOKE r72_owner, r72_security_definer FROM r72_crm_command/);
   assert.match(sql, /REVOKE r72_crm_command FROM r72_web, r72_public, r72_worker, r72_webhook, r72_readonly/);
   assert.match(sql, /Unsafe CRM command role membership/);
@@ -298,7 +323,9 @@ test('0003 seeds an idempotent default sales pipeline and ordered semantic stage
 
 test('0004 creates an isolated identity command role with function-only authority', async () => {
   const sql = normalise(await readFile(migration4Url, 'utf8'));
-  assert.match(sql, /ALTER ROLE r72_identity_command LOGIN [^;]* NOBYPASSRLS NOINHERIT/);
+  assert.match(sql, /CREATE ROLE r72_identity_command LOGIN NOINHERIT/);
+  assert.match(sql, /rolname = 'r72_identity_command' AND rolcanlogin AND NOT rolinherit AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls/);
+  assert.match(sql, /Unsafe role attributes: r72_identity_command/);
   assert.match(sql, /REVOKE r72_owner, r72_security_definer FROM r72_identity_command/);
   assert.match(sql, /Unsafe identity role membership/);
   assert.match(sql, /Unsafe identity role grant/);
@@ -306,7 +333,7 @@ test('0004 creates an isolated identity command role with function-only authorit
   assert.match(sql, /Unsafe privileged role membership/);
   assert.match(sql, /Unsafe privileged role grant/);
   assert.match(sql, /parent\.rolname = 'r72_owner' AND member\.rolname <> current_user/);
-  assert.match(sql, /parent\.rolname = 'r72_security_definer' AND member\.rolname <> 'r72_owner'/);
+  assert.match(sql, /parent\.rolname = 'r72_security_definer' AND member\.rolname NOT IN \('r72_owner', current_user\)/);
   assert.match(sql, /REVOKE ALL ON ALL TABLES IN SCHEMA app FROM r72_identity_command/);
   assert.doesNotMatch(sql, /GRANT (?:SELECT|INSERT|UPDATE|DELETE)[^;]* TO r72_identity_command/);
   for (const fn of [
@@ -426,24 +453,90 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums native identity through durable setup delivery', async () => {
+test('bundled migration discovery orders and checksums native identity through managed-Postgres repairs', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-4);
+  const tail = migrations.slice(-7);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0005_canonical_portal_identity.sql', version: 5 },
     { filename: '0006_customer_provisioning.sql', version: 6 },
     { filename: '0007_public_schema_hardening.sql', version: 7 },
     { filename: '0008_setup_delivery_recovery.sql', version: 8 },
+    { filename: '0009_neon_integration_repairs.sql', version: 9 },
+    { filename: '0010_delivery_lease_portability.sql', version: 10 },
+    { filename: '0011_stable_chronology_defaults.sql', version: 11 },
   ]);
   const sources = [
     (await readFile(migration5Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration6Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration8Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration9Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration10Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration11Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
   }
+});
+
+test('0009 stabilises session defaults and grants only the claim-lock capability', async () => {
+  const foundation = normalise(await readFile(migration2Url, 'utf8'));
+  const sql = normalise(await readFile(migration9Url, 'utf8'));
+  assert.match(foundation, /CHECK \(expires_at > created_at\)/);
+  assert.match(foundation, /CHECK \(last_seen_at >= created_at\)/);
+  assert.match(sql, /SET LOCAL ROLE r72_owner/);
+  assert.match(sql, /ALTER TABLE app\.user_sessions ALTER COLUMN last_seen_at SET DEFAULT statement_timestamp\(\), ALTER COLUMN created_at SET DEFAULT statement_timestamp\(\)/);
+  assert.doesNotMatch(sql, /DROP CONSTRAINT/);
+  assert.match(sql, /GRANT UPDATE \(created_at\) ON app_private\.account_setup_claims TO r72_security_definer/);
+  assert.doesNotMatch(sql, /GRANT UPDATE ON app_private\.account_setup_claims/);
+});
+
+test('0010 repairs lease renewal without weakening its function boundary', async () => {
+  const sql = normalise(await readFile(migration10Url, 'utf8'));
+  assert.match(sql, /CREATE OR REPLACE FUNCTION app_private\.renew_account_setup_delivery_lease\(/);
+  assert.match(sql, /SECURITY DEFINER SET search_path = pg_catalog/);
+  assert.match(sql, /SET lease_expires_at = least\(/);
+  assert.doesNotMatch(sql, /pg_catalog\.least/);
+  assert.match(sql, /REVOKE CREATE ON SCHEMA app_private FROM r72_setup_delivery_definer/);
+  assert.match(sql, /REVOKE ALL ON FUNCTION app_private\.renew_account_setup_delivery_lease\( uuid, bytea, integer \) FROM PUBLIC/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.renew_account_setup_delivery_lease\( uuid, bytea, integer \) TO r72_setup_delivery_command/);
+});
+
+test('0011 makes lifecycle chronology deterministic without inverting event facts', async () => {
+  const crm = normalise(await readFile(migration3Url, 'utf8'));
+  const sql = normalise(await readFile(migration11Url, 'utf8'));
+  const stableColumns: Readonly<Record<string, readonly string[]>> = {
+    'app.organizations': ['created_at', 'updated_at'],
+    'app.users': ['created_at', 'updated_at'],
+    'app.organization_branding': ['created_at', 'updated_at'],
+    'app.workspaces': ['created_at', 'updated_at'],
+    'app.organization_domains': ['created_at', 'updated_at'],
+    'app.organization_memberships': ['granted_at', 'updated_at'],
+    'app.workspace_memberships': ['granted_at', 'updated_at'],
+    'app.membership_invitations': ['created_at', 'updated_at'],
+    'app.identity_action_tokens': ['created_at'],
+    'app.contacts': ['created_at', 'updated_at'],
+    'app.contact_points': ['created_at', 'updated_at'],
+    'app.pipelines': ['created_at', 'updated_at'],
+    'app.pipeline_stages': ['created_at', 'updated_at'],
+    'app.opportunities': ['created_at', 'updated_at'],
+    'app.tasks': ['created_at', 'updated_at'],
+    'app.command_receipts': ['created_at'],
+    'app_private.account_setup_deliveries': ['created_at', 'updated_at'],
+    'app_private.account_setup_claims': ['created_at'],
+  };
+  for (const [table, columns] of Object.entries(stableColumns)) {
+    for (const column of columns) {
+      assert.match(
+        sql,
+        new RegExp(`ALTER TABLE ${table.replace('.', '\\.')}[^;]*ALTER COLUMN ${column} SET DEFAULT statement_timestamp\\(\\)`),
+      );
+    }
+  }
+  assert.match(crm, /CHECK \(closed_at IS NULL OR closed_at >= created_at\)/);
+  assert.match(crm, /CHECK \(completed_at IS NULL OR completed_at >= created_at\)/);
+  assert.doesNotMatch(sql, /ALTER TABLE app\.(?:activities|outbox_events|user_sessions)/);
+  assert.doesNotMatch(sql, /DROP CONSTRAINT/);
 });
 
 test('0007 removes ambient public-schema object creation from every application role', async () => {
@@ -462,13 +555,15 @@ test('0007 removes ambient public-schema object creation from every application 
 
 test('0006 isolates native provisioning behind one function-only runtime role', async () => {
   const sql = normalise(await readFile(migration6Url, 'utf8'));
-  assert.match(sql, /CREATE ROLE r72_provisioning_command/);
-  assert.match(sql, /ALTER ROLE r72_provisioning_command LOGIN [^;]* NOBYPASSRLS NOINHERIT/);
+  assert.match(sql, /CREATE ROLE r72_provisioning_command LOGIN NOINHERIT/);
+  assert.match(sql, /rolname = 'r72_provisioning_command' AND rolcanlogin AND NOT rolinherit AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls/);
+  assert.match(sql, /Unsafe role attributes: r72_provisioning_command/);
   assert.match(sql, /REVOKE r72_owner, r72_security_definer FROM r72_provisioning_command/);
   assert.match(sql, /Unsafe provisioning role membership/);
   assert.match(sql, /Unsafe provisioning role grant/);
   assert.match(sql, /Unsafe privileged role membership/);
   assert.match(sql, /Unsafe privileged role grant/);
+  assert.match(sql, /parent\.rolname = 'r72_security_definer' AND member\.rolname NOT IN \('r72_owner', current_user\)/);
   assert.match(sql, /REVOKE ALL ON ALL TABLES IN SCHEMA app FROM r72_provisioning_command/);
   assert.match(sql, /REVOKE ALL ON ALL TABLES IN SCHEMA app_private FROM r72_provisioning_command/);
   assert.match(sql, /REVOKE ALL ON ALL FUNCTIONS IN SCHEMA app_private FROM r72_provisioning_command/);
@@ -571,10 +666,13 @@ test('0008 separates onboarding, setup delivery, reissue, and identity capabilit
   ]) {
     assert.match(sql, new RegExp(`'${role}'`));
   }
-  assert.match(sql, /ALTER ROLE r72_onboarding_definer NOLOGIN [^;]* NOBYPASSRLS NOINHERIT/);
-  assert.match(sql, /ALTER ROLE r72_setup_delivery_definer NOLOGIN [^;]* NOBYPASSRLS NOINHERIT/);
-  assert.match(sql, /ALTER ROLE r72_setup_delivery_command LOGIN [^;]* NOBYPASSRLS NOINHERIT/);
-  assert.match(sql, /ALTER ROLE r72_setup_reissue_command LOGIN [^;]* NOBYPASSRLS NOINHERIT/);
+  assert.match(sql, /\('r72_onboarding_definer', false\)/);
+  assert.match(sql, /\('r72_setup_delivery_definer', false\)/);
+  assert.match(sql, /\('r72_setup_delivery_command', true\)/);
+  assert.match(sql, /\('r72_setup_reissue_command', true\)/);
+  assert.match(sql, /'CREATE ROLE %I %s NOINHERIT'/);
+  assert.match(sql, /rolcanlogin = expected_login AND NOT rolinherit AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls/);
+  assert.match(sql, /Unsafe role attributes/);
   const allDeliveryRoles = 'r72_onboarding_definer, r72_setup_delivery_definer, r72_setup_delivery_command, r72_setup_reissue_command';
   assert.ok(sql.includes(`REVOKE ALL ON ALL TABLES IN SCHEMA app FROM ${allDeliveryRoles}`));
   assert.ok(sql.includes(`REVOKE ALL ON ALL TABLES IN SCHEMA app_private FROM ${allDeliveryRoles}`));

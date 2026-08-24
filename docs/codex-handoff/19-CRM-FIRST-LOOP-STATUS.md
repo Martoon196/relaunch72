@@ -1,8 +1,9 @@
 # 19 — CRM FIRST LOOP STATUS
 
 **Measured:** 2026-08-24 on the local Codex branch.  
-**External effects:** none. No deployment, push, provider activation, purchase,
-message, social post, webinar or live database was created.
+**External effects:** only the explicitly disposable Neon test database was
+migrated and reset. No production database or customer data, deployment, push,
+provider activation, purchase, message, social post or webinar was touched.
 
 ---
 
@@ -30,7 +31,9 @@ or provider action is triggered.
   append-only pending outbox.
 - Every workspace-bearing table has forced row-level security and same-workspace
   foreign keys.
-- Issued migrations `0001` and `0002` remain byte/checksum-immutable.
+- `0001` was amended before its first successful managed-PostgreSQL application
+  so its role bootstrap works without true superuser authority; `0002` remained
+  unchanged. The proven `0001`–`0011` ledger is now the immutable baseline.
 - `r72_web` can read visible CRM records but cannot mutate CRM tables.
 - `r72_crm_command` is a separate `LOGIN NOINHERIT` identity and the only
   user-facing runtime role with CRM mutation grants. It cannot assume an owner
@@ -59,34 +62,31 @@ legacy signed cookies are rejected and every CRM transaction revalidates the
 hashed session against its UUID user/workspace membership.
 
 Those two modes remain intentionally **not interchangeable**. PostgreSQL mode
-currently works only for a correctly migrated, pre-provisioned identity graph;
-automatic onboarding and one-time setup are locked because their canonical
-database commands do not exist yet. The gate must therefore stay off for
-customer traffic. Read
-[20-POSTGRES-PORTAL-CUTOVER-SLICE.md](./20-POSTGRES-PORTAL-CUTOVER-SLICE.md)
-for the exact current boundary.
+now includes canonical organization/workspace/owner provisioning, default Sales
+pipeline creation, one-time setup consumption and first opaque-session issuance.
+Those paths passed the disposable Neon proof, but the customer gate remains off
+until the delivery/provider and operational gates below are complete. Read
+[21-NATIVE-CUSTOMER-ONBOARDING.md](./21-NATIVE-CUSTOMER-ONBOARDING.md) and
+[22-DURABLE-SETUP-DELIVERY.md](./22-DURABLE-SETUP-DELIVERY.md) for the exact
+current boundary.
 
-## Required cutover before a pilot
+## Remaining cutover before a pilot
 
-1. Provision canonical organization, workspace, user and membership rows for
-   each accepted account, and atomically seed its default sales pipeline and
-   stages. Migration `0003` seeds workspaces that already exist; future
-   workspace creation does not yet have that canonical provisioning command.
-2. Complete the new opaque database-session seam with atomic setup-token
-   consumption and first-session issuance. Runtime sessions now store only token
-   hashes and revoke normally, but PostgreSQL account setup is intentionally not
-   implemented.
-3. Keep the new verified `r72_web`, `r72_identity_command` and
-   `r72_crm_command` pool composition off until all remaining gates pass. Exact
-   migration readiness and no-fallback behavior are implemented.
-4. Import/reconcile legacy JSON contacts with an explicit report; do not silently
-   merge on display name.
-5. Run `npm run test:db:integration` against an explicitly disposable PostgreSQL
-   database and retain the result. The ordinary suite honestly skips this test
-   when `TEST_DATABASE_URL` is absent.
-6. Perform a browser acceptance pass for owner, sales and viewer roles before
-   enabling the CRM capability in a customer workspace.
-7. Add page-specific cursor pagination before a workspace has meaningful data
+Canonical provisioning, atomic setup/session issuance and the destructive
+disposable-Neon proof are complete. No legacy import is required because the
+founder confirmed there is no legacy customer data.
+
+1. Keep the verified PostgreSQL pool composition off until all remaining gates
+   pass; exact migration readiness and no-fallback behavior are implemented.
+2. Implement and test the transactional setup-email dispatcher without logging
+   recipient addresses, decrypted setup URLs, raw setup tokens or raw leases.
+3. Make paid-checkout provenance and the fulfilment claim database-native before
+   any public purchase can trigger onboarding.
+4. Redact the initial `?token=` query at every edge, proxy and application-log
+   layer, and complete restore, alerting, key-rotation and distributed abuse-
+   control runbooks.
+5. Perform a real-browser acceptance pass for owner, sales and viewer roles.
+6. Add page-specific cursor pagination before a workspace has meaningful data
    volume. The pilot snapshot is intentionally simple and caps its timeline,
    but contacts, opportunities and tasks are not yet paginated.
 
@@ -105,14 +105,15 @@ replaceability are in
 
 ## Verification boundary
 
-The TypeScript suite covers the schema contracts, migration immutability, RLS
+The TypeScript suite covers the schema contracts, migration checksums, RLS
 intent, isolated command-pool configuration, command transactions, read-model
 validation, server-rendered UX, router/CSRF/notice behavior, timezone handling,
 read-only membership and the create → move → complete service boundary.
 
-It is not evidence that PostgreSQL itself accepted the migration on this machine:
-there is no local PostgreSQL/Docker runtime and no disposable
-`TEST_DATABASE_URL`. That one integration test remains an explicit, visible skip
-until the required test database is supplied. The final ordinary branch run
-reports **511 passing tests, zero failures and one truthful skip**; TypeScript
-typechecking also passes.
+The dedicated destructive command passed **2 tests, 0 failures and 0 skips**
+against a disposable direct Neon database. It proved real PostgreSQL migration,
+RLS, same-workspace foreign keys, append-only facts, immediate revocation,
+atomic provisioning, setup reservation/consumption and first-session issuance.
+The final sequential complete suite, including both real-Neon tests, reports
+**577 passing tests, 0 failures and 0 skips**. TypeScript typechecking also
+passes.

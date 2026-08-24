@@ -2,8 +2,9 @@
 
 **Measured:** 2026-08-24 on the local Codex branch.
 **Activation:** off by default and not approved for customer traffic.
-**External effects:** none. No database, deployment, push, purchase, email,
-provider account or production record was touched.
+**External effects:** only the explicitly disposable Neon test database was
+migrated and reset. No production database or customer data, deployment, push,
+purchase, email, provider account or customer record was touched.
 
 ## Decision
 
@@ -153,17 +154,34 @@ trusted by default; a deployment may add source throttling only through an
 authenticated trusted-proxy resolver. A multi-instance launch still needs an
 explicit shared/distributed throttle policy.
 
-## Proof boundary
+## Proven database boundary
 
-The complete local run after the final fixes reported 571 passing tests, zero
-failures and two truthfully skipped real-PostgreSQL tests (573 total).
-TypeScript typechecking passed. Static SQL contracts, crypto/service tests and
-portal routing tests cover the intended shape; they are not evidence that a
-real PostgreSQL server compiled migration `0008` or enforced its
-role/RLS/concurrency semantics.
+On 2026-08-24, `npm run test:db:integration` passed **2 tests, 0 failures and
+0 skips** against the disposable direct Neon database. PostgreSQL applied and
+verified the complete `0001`–`0011` ledger. The proof exercised tenant RLS,
+same-workspace foreign keys, append-only facts, immediate membership/session
+revocation, provisioning replay, changed-payload rejection, default pipeline
+shape, encrypted delivery creation, lease fencing, ack/fail/redaction,
+email-bound idempotent reissue, cheap setup reservation, single-use consumption,
+activation/session issuance, wrong-role denial, token-collision rollback and
+native null-legacy login/session resolution.
 
-The remaining database proof requires one direct owner/admin connection to a
-fresh isolated Neon branch or project in `TEST_DATABASE_URL`. The database name
+The first managed run also exposed portability defects that static contracts did
+not: protected role attributes cannot be altered by Neon's project owner,
+session `clock_timestamp()` defaults could invert by microseconds, `FOR UPDATE`
+needed a minimum column-level privilege, PostgreSQL's special `LEAST` syntax
+cannot be schema-qualified, and volatile lifecycle defaults could cross by
+microseconds. The role bootstraps were corrected before their first successful
+application; forward migrations `0009`–`0011` repair the runtime issues and the
+full chronology-default class. A clean rerun passed both real-database tests.
+
+The final sequential complete suite includes those live tests and reports
+**577 passed, 0 failed and 0 skipped**.
+
+## Reproducing the proof safely
+
+Use one direct owner/admin connection to a fresh isolated Neon branch or project
+in `TEST_DATABASE_URL`. The database name
 must contain a standalone `test` segment and
 `TEST_DATABASE_RESET_CONFIRM=reset-disposable-branch` must be explicitly set.
 The suite truncates application tables and migrations create/alter roles across
@@ -175,27 +193,24 @@ are rejected. Run:
 npm run test:db:integration
 ```
 
-That command must prove provisioning replay, changed-payload rejection, default
-pipeline shape, encrypted delivery creation, delivery lease fencing,
-ack/fail/redaction, email-bound idempotent reissue, setup reservation and
-consumption, activation/session issuance, wrong-role denial, token collision
-rollback and native null-legacy login/session resolution. It has not yet passed
-against Neon. This database proof is necessary but not sufficient to open the
-customer gate.
+That database proof is necessary but not sufficient to open the customer gate.
 
 ## After database proof
 
 The next launch work is deliberately narrower than “build all of GHL”:
 
-1. an explicitly operated and tested transactional-email dispatcher around the
+1. provision passwords or managed identities for every runtime `LOGIN` role in
+   the hosting secret/control plane, then supply and preflight each exact
+   role-specific database URL; migrations intentionally create no credentials;
+2. an explicitly operated and tested transactional-email dispatcher around the
    durable claim/lease/ack/fail service;
-2. database-native paid order/checkout provenance and atomic fulfilment claim;
-3. distributed login/setup abuse controls for multi-instance deployment, plus
+3. database-native paid order/checkout provenance and atomic fulfilment claim;
+4. distributed login/setup abuse controls for multi-instance deployment, plus
    restore, key-rotation and alert runbooks;
-4. an explicit existing-owner/repeat-purchase workspace policy;
-5. edge/access-log redaction for the initial setup-link query;
-6. real browser acceptance for owner, sales and viewer;
-7. provider modules through the existing capability/outbox boundary—social,
+5. an explicit existing-owner/repeat-purchase workspace policy;
+6. edge/access-log redaction for the initial setup-link query;
+7. real browser acceptance for owner, sales and viewer;
+8. provider modules through the existing capability/outbox boundary—social,
    listening, WhatsApp, webinar and automation are bolt-ons, not identity or CRM
    rewrites.
 

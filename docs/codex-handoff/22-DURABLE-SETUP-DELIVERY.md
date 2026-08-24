@@ -3,8 +3,10 @@
 **Measured:** 2026-08-24 on the local Codex branch.
 
 **Activation:** automatic PostgreSQL onboarding is locked.
-**External effects:** none. Platform construction does not start a worker or
-call Postmark (or any other provider).
+**External effects:** only the explicitly disposable Neon test database was
+migrated and reset. Platform construction does not start a worker or call
+Postmark (or any other provider); no production/customer database, deployment,
+push, purchase or provider send was touched.
 
 ## What this slice changes
 
@@ -172,28 +174,28 @@ startup instead of silently dead-lettering customer access.
 
 ## Proof and launch gates
 
-The complete local run after the final fixes reported 571 passing tests, zero
-failures and two skipped real-PostgreSQL tests (573 total); typechecking and
-diff-checking passed.
-Those tests exercise static SQL contracts, encryption/tamper handling, service
-fencing, portal setup-cookie/CSRF behavior and fail-closed composition. They do
-not prove that Neon compiled migration `0008` or enforced its roles,
-transactions, triggers and concurrency.
+On 2026-08-24, the disposable direct-Neon run passed **2 tests, 0 failures and
+0 skips**. PostgreSQL applied the complete `0001`–`0011` ledger and proved the
+delivery/reissue roles, atomic provisioning, lease fencing, terminal erasure,
+reissue/setup races, setup reservation/consumption and first-session issuance.
+Migration `0009` contains the forward session-clock and minimum row-lock
+privilege repairs surfaced by the managed run; `0010` contains the portable
+lease-renewal repair; `0011` closes the remaining volatile lifecycle-default
+class without weakening chronology constraints. The final sequential complete
+suite reports **577 passed, 0 failed and 0 skipped**. Static contracts,
+typechecking and diff-checking also pass.
 
 Before customer activation:
 
-1. run `npm run test:db:integration` against a brand-new disposable direct Neon
-   database URL, with a database name containing a standalone `test` segment and
-   `TEST_DATABASE_RESET_CONFIRM=reset-disposable-branch`;
-2. confirm the new delivery/reissue roles, atomic provisioning, lease fencing,
-   terminal erasure, reissue/setup races and setup reservation on real
-   PostgreSQL;
-3. implement and test the provider dispatcher without logging recipient,
+1. provision passwords or managed identities for every runtime `LOGIN` role in
+   the hosting secret/control plane, then supply and preflight each exact
+   role-specific database URL; migrations intentionally create no credentials;
+2. implement and test the provider dispatcher without logging recipient,
    decrypted URL, raw setup token or raw lease;
-4. redact `?token=` at every ingress/access-log layer;
-5. complete paid-order provenance/fulfilment, restore/alert/key-rotation and
+3. redact `?token=` at every ingress/access-log layer;
+4. complete paid-order provenance/fulfilment, restore/alert/key-rotation and
    multi-instance abuse-control runbooks; and
-6. run real-browser owner acceptance.
+5. run real-browser owner acceptance.
 
-The disposable Neon proof has not yet passed, no provider send has been
-performed, and automatic PostgreSQL onboarding remains locked.
+The disposable Neon proof passed 2/2. No provider send has been performed, and
+automatic PostgreSQL onboarding remains locked on the remaining gates above.

@@ -1445,6 +1445,7 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
     }], 'a recipient mismatch rolls back without installing any credential or job');
     const reissued = (await setupRuntimeQuery<{
       setup_action_token_id: string;
+      setup_expires_at: Date;
       setup_delivery_id: string;
       setup_delivery_generation: number;
       created_now: boolean;
@@ -1452,6 +1453,7 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
     assert.equal(reissued.setup_delivery_id, reissuedDeliveryId);
     assert.equal(reissued.setup_delivery_generation, 2);
     assert.equal(reissued.created_now, true);
+    assert.ok(reissued.setup_expires_at instanceof Date);
 
     assert.deepEqual(await setupRuntimeQuery<{ acknowledged: boolean }>(
       pool,
@@ -1479,12 +1481,14 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
     reissueReplay[10] = randomBytes(96);
     const replayedReissue = (await setupRuntimeQuery<{
       setup_action_token_id: string;
+      setup_expires_at: Date;
       setup_delivery_id: string;
       setup_delivery_generation: number;
       created_now: boolean;
     }>(pool, 'r72_setup_reissue_command', reissueSql, reissueReplay))[0]!;
     assert.deepEqual(replayedReissue, {
       setup_action_token_id: reissued.setup_action_token_id,
+      setup_expires_at: reissued.setup_expires_at,
       setup_delivery_id: reissued.setup_delivery_id,
       setup_delivery_generation: 2,
       created_now: false,

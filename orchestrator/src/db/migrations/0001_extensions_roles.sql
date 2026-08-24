@@ -7,32 +7,59 @@ CREATE EXTENSION IF NOT EXISTS citext;
 DO $roles$
 DECLARE
   role_name text;
+  expected_login boolean;
+  expected_inherit boolean;
   unexpected_member text;
   unexpected_parent text;
 BEGIN
-  FOREACH role_name IN ARRAY ARRAY[
-    'r72_owner',
-    'r72_security_definer',
-    'r72_web',
-    'r72_public',
-    'r72_worker',
-    'r72_webhook',
-    'r72_readonly'
-  ]
+  FOR role_name, expected_login, expected_inherit IN
+    SELECT required_role.role_name, required_role.expected_login,
+      required_role.expected_inherit
+    FROM (VALUES
+      ('r72_owner', false, true),
+      ('r72_security_definer', false, true),
+      ('r72_web', true, false),
+      ('r72_public', true, false),
+      ('r72_worker', true, false),
+      ('r72_webhook', true, false),
+      ('r72_readonly', true, false)
+    ) AS required_role(role_name, expected_login, expected_inherit)
   LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = role_name) THEN
-      EXECUTE format('CREATE ROLE %I', role_name);
+      -- CREATE ROLE's protected-attribute defaults are deliberately safe:
+      -- NOSUPERUSER, NOCREATEDB, NOCREATEROLE, NOREPLICATION and
+      -- NOBYPASSRLS. Do not restate those defaults in ALTER ROLE: managed
+      -- Postgres administrators such as Neon are not PostgreSQL superusers.
+      EXECUTE format(
+        'CREATE ROLE %I %s %s',
+        role_name,
+        CASE WHEN expected_login THEN 'LOGIN' ELSE 'NOLOGIN' END,
+        CASE WHEN expected_inherit THEN 'INHERIT' ELSE 'NOINHERIT' END
+      );
+    END IF;
+
+    -- Existing roles are accepted only when their complete capability shape
+    -- already matches this migration. Unsafe attributes fail closed; changing
+    -- protected role attributes requires a real PostgreSQL superuser and is
+    -- intentionally outside application migration authority.
+    IF NOT EXISTS (
+      SELECT 1
+      FROM pg_catalog.pg_roles
+      WHERE rolname = role_name
+        AND rolcanlogin = expected_login
+        AND rolinherit = expected_inherit
+        AND NOT rolsuper
+        AND NOT rolcreatedb
+        AND NOT rolcreaterole
+        AND NOT rolreplication
+        AND NOT rolbypassrls
+    ) THEN
+      RAISE EXCEPTION 'Unsafe role attributes: % does not match the required capability shape',
+        role_name;
     END IF;
   END LOOP;
 
-  -- Passwords/login grants are deployment secrets, never migration content.
-  ALTER ROLE r72_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-  ALTER ROLE r72_security_definer NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-  ALTER ROLE r72_web LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
-  ALTER ROLE r72_public LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
-  ALTER ROLE r72_worker LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
-  ALTER ROLE r72_webhook LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
-  ALTER ROLE r72_readonly LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
+  -- Passwords are deployment secrets, never migration content.
 
   -- NOINHERIT still permits SET ROLE. Strip any known privileged memberships
   -- from runtime identities, then abort if a pre-provisioned role carries any
@@ -73,10 +100,15 @@ BEGIN
 END
 $roles$;
 
-SET LOCAL ROLE r72_owner;
-
+-- Creating a schema requires CREATE on the database. Managed Postgres grants
+-- that capability to the database owner session, not to a newly-created
+-- no-login application owner. Create the empty schemas as the migrator while
+-- assigning their ownership explicitly, then drop into the least-privilege
+-- object owner for every object inside them.
 CREATE SCHEMA IF NOT EXISTS app AUTHORIZATION r72_owner;
 CREATE SCHEMA IF NOT EXISTS app_private AUTHORIZATION r72_owner;
+
+SET LOCAL ROLE r72_owner;
 
 REVOKE ALL ON SCHEMA app FROM PUBLIC;
 REVOKE ALL ON SCHEMA app_private FROM PUBLIC;

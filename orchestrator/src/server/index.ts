@@ -248,7 +248,7 @@ async function main(): Promise<void> {
 
   // On an accepted intake, provision that customer's portal login in the background.
   if (requirePostgresPortal && canAutoProvisionPortal) {
-    console.warn('⚠  Automatic PostgreSQL onboarding remains locked pending real-database proof plus durable setup-email delivery/reissue and shared setup abuse controls.');
+    console.warn('⚠  Automatic PostgreSQL onboarding remains locked pending exact runtime-role credentials/URLs, paid-checkout provenance, an operated setup-email dispatcher, edge token-log redaction and shared abuse controls.');
   }
   const onIntakeAccepted = bundle && canAutoProvisionPortal && !requirePostgresPortal
     ? (intake: Intake, order: Order): void => {

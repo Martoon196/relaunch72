@@ -2,9 +2,8 @@
 -- trustworthy activity/history facts, idempotent command receipts and an
 -- immutable transactional outbox. There are deliberately no provider effects.
 
--- 0001/0002 are already checksum-issued foundation migrations. Bootstrap the
--- new command identity here so databases already at 0002 can upgrade without
--- rewriting migration history, while fresh installs follow the same path.
+-- Bootstrap the CRM command identity in the first migration that needs it so
+-- fresh installs and pre-launch disposable databases follow the same path.
 DO $crm_command_role$
 DECLARE
   unexpected_parent text;
@@ -13,11 +12,23 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'r72_crm_command'
   ) THEN
-    CREATE ROLE r72_crm_command;
+    CREATE ROLE r72_crm_command LOGIN NOINHERIT;
   END IF;
 
-  ALTER ROLE r72_crm_command
-    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_roles
+    WHERE rolname = 'r72_crm_command'
+      AND rolcanlogin
+      AND NOT rolinherit
+      AND NOT rolsuper
+      AND NOT rolcreatedb
+      AND NOT rolcreaterole
+      AND NOT rolreplication
+      AND NOT rolbypassrls
+  ) THEN
+    RAISE EXCEPTION 'Unsafe role attributes: r72_crm_command does not match the required capability shape';
+  END IF;
 
   -- The command identity must never inherit or SET ROLE into an owner. Known
   -- dangerous memberships are stripped before the generic audit below.

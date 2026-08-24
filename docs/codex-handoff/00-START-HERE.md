@@ -15,6 +15,10 @@
 > before relying on
 > historical statements such as “no database” or the old test count.
 
+> **Current database proof:** migrations `0001`–`0011` passed both destructive
+> integration tests against an explicitly disposable direct Neon database. No
+> production database, customer data, deployment or provider was touched.
+
 > Prepared for an external coding agent performing a full CRM + architecture audit.
 > **Documentation only** — no code, deps, or config were changed to produce this pack
 > (one exception, called out below: `npm ci` was run to restore already-locked deps so
