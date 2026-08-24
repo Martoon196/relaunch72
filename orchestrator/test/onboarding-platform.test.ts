@@ -11,6 +11,8 @@ function validEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     NODE_ENV: 'development',
     DATABASE_WEB_URL: `postgresql://r72_web:secret@localhost/${database}`,
+    DATABASE_PUBLIC_URL: `postgresql://r72_public:secret@localhost/${database}`,
+    DATABASE_WEBHOOK_URL: `postgresql://r72_webhook:secret@localhost/${database}`,
     DATABASE_PROVISIONING_COMMAND_URL: `postgresql://r72_provisioning_command:secret@localhost/${database}`,
     DATABASE_SETUP_DELIVERY_COMMAND_URL: `postgresql://r72_setup_delivery_command:secret@localhost/${database}`,
     DATABASE_SETUP_REISSUE_COMMAND_URL: `postgresql://r72_setup_reissue_command:secret@localhost/${database}`,
@@ -65,18 +67,20 @@ test('native onboarding composes exact isolated identities and closes transient 
 
   assert.deepEqual(fake.states.map((state) => state.role), [
     'web',
+    'public',
+    'webhook',
     'provisioningCommand',
     'setupDeliveryCommand',
     'setupReissueCommand',
   ]);
   assert.deepEqual(schemaPools, ['web']);
   assert.equal(fake.states[0]!.ends, 1, 'readiness-only web pool closes before return');
-  assert.ok(platform.provisioning);
+  assert.ok(platform.checkout);
   assert.ok(platform.setupDelivery);
 
   await platform.close();
   await platform.close();
-  assert.deepEqual(fake.states.map((state) => state.ends), [1, 1, 1, 1]);
+  assert.deepEqual(fake.states.map((state) => state.ends), [1, 1, 1, 1, 1, 1]);
 });
 
 test('native onboarding rejects generic or wrong database identities before connecting', async () => {
@@ -110,7 +114,7 @@ test('native onboarding closes every pool when a historical decryption key is un
     }),
     /key is unavailable: retired-key/,
   );
-  assert.deepEqual(fake.states.map((state) => state.ends), [1, 1, 1, 1]);
+  assert.deepEqual(fake.states.map((state) => state.ends), [1, 1, 1, 1, 1, 1]);
 });
 
 test('native onboarding closes the transient web pool when schema readiness fails', async () => {

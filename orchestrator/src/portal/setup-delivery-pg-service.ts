@@ -13,6 +13,7 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const KEY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
 const ERROR_CODE_PATTERN = /^[a-z0-9][a-z0-9._:-]{0,99}$/;
+const PROVIDER_REFERENCE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$/;
 const AAD_PREFIX = Buffer.from('r72/setup-link/v1', 'utf8');
 
 export interface SetupDeliveryPayload {
@@ -44,6 +45,20 @@ export class MissingSetupDeliveryKeyError extends Error {
     super(`Account setup delivery key is unavailable: ${keyId}`);
     this.name = 'MissingSetupDeliveryKeyError';
     this.keyId = keyId;
+  }
+}
+
+/**
+ * Safe readiness failure for a leased payload that cannot be authenticated or
+ * validated. It is intentionally not auto-settled: wrong key bytes or portal
+ * configuration drift are indistinguishable from poison ciphertext.
+ */
+export class UnreadableSetupDeliveryError extends Error {
+  readonly code = 'delivery_payload_unreadable';
+
+  constructor() {
+    super('Account setup delivery payload requires operator recovery');
+    this.name = 'UnreadableSetupDeliveryError';
   }
 }
 
@@ -295,6 +310,23 @@ export interface ReissueSetupDeliveryResult {
   createdNow: boolean;
 }
 
+export interface SetupDeliveryProviderAcceptance {
+  providerId: string;
+  providerReferenceId: string;
+  providerAcceptedAt: string | Date;
+}
+
+export interface AcknowledgedSetupDelivery {
+  deliveredAt: string;
+  providerId: string;
+  providerReferenceId: string;
+}
+
+export interface PermanentlyRejectedSetupDelivery {
+  state: 'dead_letter';
+  settledAt: string;
+}
+
 function validateSetupUrl(value: string): URL {
   let url: URL;
   try {
@@ -435,22 +467,12 @@ export class PgSetupDeliveryService {
       // A missing rotation key is a readiness/alert condition: do not mutate
       // or dead-letter those jobs. Their bounded lease expires for a corrected
       // worker. Authenticated-payload corruption is different; no job is
-      // returned to a provider, and every row in this claimed batch is moved
-      // back to bounded retry immediately rather than stranded until timeout.
+      // returned to a provider. Do not mutate or erase an unreadable payload:
+      // wrong bytes for a configured key ID and setup-origin drift are
+      // indistinguishable from ciphertext poison. The worker treats this as a
+      // fatal readiness block and requires operator recovery/restart.
       if (error instanceof MissingSetupDeliveryKeyError) throw error;
-      const retryAt = new Date(Date.now() + 60_000);
-      const releases = await Promise.allSettled(result.rows.map(async (row) => {
-        const deliveryId = canonicalUuid(row.delivery_id);
-        if (!deliveryId) return null;
-        return this.fail(deliveryId, leaseToken, 'payload_batch_rejected', retryAt);
-      }));
-      const releaseErrors = releases
-        .filter((release): release is PromiseRejectedResult => release.status === 'rejected')
-        .map((release) => release.reason);
-      if (releaseErrors.length > 0) {
-        throw new AggregateError([error, ...releaseErrors], 'Setup delivery payload rejection and retry release both failed');
-      }
-      throw error;
+      throw new UnreadableSetupDeliveryError();
     }
   }
 
@@ -471,17 +493,93 @@ export class PgSetupDeliveryService {
     return canonicalIsoDate(result.rows[0]!.lease_expires_at, 'lease expiry');
   }
 
-  async acknowledge(deliveryIdInput: string, leaseToken: string): Promise<boolean> {
+  /**
+   * The legacy unattributed acknowledgement path is deliberately disabled.
+   * A provider acceptance is not durable until its safe reconciliation
+   * reference is written under the same live lease.
+   */
+  async acknowledge(_deliveryIdInput: string, _leaseToken: string): Promise<never> {
+    throw new Error('setup delivery acknowledgement requires provider acceptance details');
+  }
+
+  async acknowledgeAcceptance(
+    deliveryIdInput: string,
+    leaseToken: string,
+    acceptance: SetupDeliveryProviderAcceptance,
+  ): Promise<AcknowledgedSetupDelivery | null> {
     const deliveryId = canonicalUuid(deliveryIdInput);
-    if (!deliveryId || !TOKEN_PATTERN.test(leaseToken)) {
-      throw new Error('invalid setup delivery acknowledgement input');
+    const providerId = acceptance.providerId?.trim();
+    const providerReferenceId = acceptance.providerReferenceId?.trim();
+    if (!deliveryId
+        || !TOKEN_PATTERN.test(leaseToken)
+        || providerId !== acceptance.providerId
+        || !/^[a-z0-9][a-z0-9._:-]{0,49}$/.test(providerId)
+        || providerReferenceId !== acceptance.providerReferenceId
+        || !PROVIDER_REFERENCE_PATTERN.test(providerReferenceId)) {
+      throw new Error('invalid setup delivery provider acceptance input');
     }
-    const result = await this.dependencies.deliveryCommandPool.query<{ acknowledged: boolean }>(
-      `/* portal.setup-delivery.acknowledge */
-       SELECT app_private.acknowledge_account_setup_delivery($1, $2) AS acknowledged`,
-      [deliveryId, sha256(leaseToken)],
+    const providerAcceptedAt = canonicalIsoDate(acceptance.providerAcceptedAt, 'providerAcceptedAt');
+    const result = await this.dependencies.deliveryCommandPool.query<{
+      delivered_at: string | Date;
+      provider_id: string;
+      provider_reference_id: string;
+    }>(
+      `/* portal.setup-delivery.acknowledge-acceptance */
+       SELECT delivered_at, provider_id, provider_reference_id
+       FROM app_private.acknowledge_account_setup_delivery_acceptance(
+         $1, $2, $3, $4, $5
+       )`,
+      [
+        deliveryId,
+        sha256(leaseToken),
+        providerId,
+        providerReferenceId,
+        providerAcceptedAt,
+      ],
     );
-    return result.rows.length === 1 && result.rows[0]!.acknowledged === true;
+    if (result.rows.length === 0) return null;
+    if (result.rows.length !== 1) {
+      throw new Error('Setup delivery provider acknowledgement returned multiple rows');
+    }
+    const row = result.rows[0]!;
+    if (row.provider_id !== providerId || row.provider_reference_id !== providerReferenceId) {
+      throw new Error('Setup delivery provider acknowledgement returned mismatched reconciliation data');
+    }
+    return Object.freeze({
+      deliveredAt: canonicalIsoDate(row.delivered_at, 'delivery acceptance time'),
+      providerId: row.provider_id,
+      providerReferenceId: row.provider_reference_id,
+    });
+  }
+
+  async rejectPermanently(
+    deliveryIdInput: string,
+    leaseToken: string,
+    errorCode: string,
+  ): Promise<PermanentlyRejectedSetupDelivery | null> {
+    const deliveryId = canonicalUuid(deliveryIdInput);
+    if (!deliveryId
+        || !TOKEN_PATTERN.test(leaseToken)
+        || errorCode !== errorCode.trim()
+        || !ERROR_CODE_PATTERN.test(errorCode)) {
+      throw new Error('invalid permanent setup delivery rejection input');
+    }
+    const result = await this.dependencies.deliveryCommandPool.query<{
+      dead_lettered_at: string | Date;
+    }>(
+      `/* portal.setup-delivery.reject-permanently */
+       SELECT dead_lettered_at
+       FROM app_private.reject_account_setup_delivery_permanently($1, $2, $3)`,
+      [deliveryId, sha256(leaseToken), errorCode],
+    );
+    if (result.rows.length === 0) return null;
+    if (result.rows.length !== 1) {
+      throw new Error('Permanent setup delivery rejection returned multiple rows');
+    }
+    return Object.freeze({
+      state: 'dead_letter' as const,
+      settledAt: canonicalIsoDate(result.rows[0]!.dead_lettered_at, 'delivery dead-letter time'),
+    });
   }
 
   async fail(

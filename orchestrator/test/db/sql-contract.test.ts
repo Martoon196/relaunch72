@@ -15,6 +15,8 @@ const migration8Url = new URL('../../src/db/migrations/0008_setup_delivery_recov
 const migration9Url = new URL('../../src/db/migrations/0009_neon_integration_repairs.sql', import.meta.url);
 const migration10Url = new URL('../../src/db/migrations/0010_delivery_lease_portability.sql', import.meta.url);
 const migration11Url = new URL('../../src/db/migrations/0011_stable_chronology_defaults.sql', import.meta.url);
+const migration12Url = new URL('../../src/db/migrations/0012_paid_checkout_provenance.sql', import.meta.url);
+const migration13Url = new URL('../../src/db/migrations/0013_setup_delivery_provider_settlement.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -453,9 +455,9 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums native identity through managed-Postgres repairs', async () => {
+test('bundled migration discovery orders and checksums native identity through commerce and delivery settlement', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-7);
+  const tail = migrations.slice(-9);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0005_canonical_portal_identity.sql', version: 5 },
     { filename: '0006_customer_provisioning.sql', version: 6 },
@@ -464,6 +466,8 @@ test('bundled migration discovery orders and checksums native identity through m
     { filename: '0009_neon_integration_repairs.sql', version: 9 },
     { filename: '0010_delivery_lease_portability.sql', version: 10 },
     { filename: '0011_stable_chronology_defaults.sql', version: 11 },
+    { filename: '0012_paid_checkout_provenance.sql', version: 12 },
+    { filename: '0013_setup_delivery_provider_settlement.sql', version: 13 },
   ]);
   const sources = [
     (await readFile(migration5Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -473,6 +477,8 @@ test('bundled migration discovery orders and checksums native identity through m
     (await readFile(migration9Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration10Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration11Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration12Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration13Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
@@ -537,6 +543,227 @@ test('0011 makes lifecycle chronology deterministic without inverting event fact
   assert.match(crm, /CHECK \(completed_at IS NULL OR completed_at >= created_at\)/);
   assert.doesNotMatch(sql, /ALTER TABLE app\.(?:activities|outbox_events|user_sessions)/);
   assert.doesNotMatch(sql, /DROP CONSTRAINT/);
+});
+
+test('0012 creates an isolated private paid-checkout ledger with hash-only claims', async () => {
+  const sql = normalise(await readFile(migration12Url, 'utf8'));
+  const tables = [...sql.matchAll(/CREATE TABLE app_private\.([a-z_]+) \(/g)]
+    .map((match) => match[1]!);
+  assert.deepEqual(tables, [
+    'checkout_intents',
+    'order_claim_grants',
+    'stripe_checkout_events',
+    'platform_orders',
+  ]);
+
+  assert.match(sql, /CREATE ROLE r72_commerce_definer NOLOGIN NOINHERIT/);
+  assert.match(sql, /rolname = 'r72_commerce_definer' AND NOT rolcanlogin AND NOT rolinherit AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls/);
+  assert.match(sql, /Unsafe commerce role membership/);
+  assert.match(sql, /Unsafe commerce role grant/);
+  assert.doesNotMatch(
+    sql,
+    /ALTER ROLE [^;]*\b(?:SUPERUSER|NOSUPERUSER|CREATEDB|NOCREATEDB|CREATEROLE|NOCREATEROLE|REPLICATION|NOREPLICATION|BYPASSRLS|NOBYPASSRLS)\b/,
+  );
+
+  const claimTable = /CREATE TABLE app_private\.order_claim_grants \((.*?)\);/.exec(sql)?.[1];
+  assert.ok(claimTable);
+  assert.match(claimTable, /token_hash bytea NOT NULL UNIQUE CHECK \(octet_length\(token_hash\) = 32\)/);
+  assert.doesNotMatch(claimTable, /raw_token|claim_token|token_value|token_plaintext/);
+
+  for (const table of ['checkout_intents', 'order_claim_grants', 'stripe_checkout_events', 'platform_orders']) {
+    const definition = new RegExp(`CREATE TABLE app_private\\.${table} \\((.*?)\\);`).exec(sql)?.[1];
+    assert.ok(definition);
+    assert.match(definition, /DEFAULT statement_timestamp\(\)/);
+  }
+  assert.match(sql, /FOREIGN KEY \(organization_id, workspace_id\) REFERENCES app\.workspaces \(organization_id, id\)/);
+  assert.match(sql, /FOREIGN KEY \(workspace_id, owner_user_id\) REFERENCES app\.workspace_memberships \(workspace_id, user_id\)/);
+  assert.match(sql, /CHECK \(provisioned_at IS NULL OR provisioned_at >= created_at\)/);
+  assert.doesNotMatch(sql, /paid_at <= created_at/);
+});
+
+test('0012 begins and binds one-off Checkout with exact immutable commercial facts', async () => {
+  const sql = normalise(await readFile(migration12Url, 'utf8'));
+  const begin = /CREATE FUNCTION app_private\.begin_one_off_checkout\((.*?)END \$function\$;/.exec(sql)?.[1];
+  const bind = /CREATE FUNCTION app_private\.bind_one_off_checkout_session\((.*?)END \$function\$;/.exec(sql)?.[1];
+  assert.ok(begin);
+  assert.ok(bind);
+
+  assert.match(sql, /expected_mode text NOT NULL DEFAULT 'payment' CHECK \(expected_mode = 'payment'\)/);
+  assert.match(sql, /product_key = 'autopsy' AND through_stage = 'S1' AND NOT portal_access/);
+  assert.match(sql, /product_key IN \('core', 'core_bump', 'pro'\) AND through_stage = 'S9' AND portal_access/);
+  for (const binding of [
+    'normalized_product_key',
+    'p_entitlement_version',
+    'p_through_stage',
+    'p_portal_access',
+    'normalized_price_id',
+    'p_expected_amount_minor',
+    'normalized_currency',
+    "'payment'",
+    'p_expected_livemode',
+    "pg_catalog.encode(p_order_claim_hash, 'hex')",
+  ]) {
+    assert.ok(begin.includes(binding), `begin request hash binds ${binding}`);
+  }
+  assert.match(begin, /pg_catalog\.pg_advisory_xact_lock\( pg_catalog\.hashtextextended\(normalized_request_key, 7200012\) \)/);
+  assert.match(begin, /created_expires_at timestamptz := pg_catalog\.date_trunc\('second', statement_timestamp\(\)\) \+ interval '1 hour'/);
+  assert.match(begin, /existing_request_hash <> stable_request_hash/);
+  assert.match(begin, /checkout idempotency key was reused with different input/);
+  assert.match(begin, /INSERT INTO app_private\.order_claim_grants \( checkout_intent_id, token_hash, expires_at \)/);
+  assert.match(begin, /RETURN QUERY SELECT existing_intent_id, existing_provider_key, existing_expires_at, existing_session_id, false/);
+
+  assert.match(bind, /FROM app_private\.checkout_intents AS intent WHERE intent\.id = p_checkout_intent_id FOR UPDATE/);
+  assert.match(bind, /selected_provider_key <> normalized_provider_key/);
+  assert.match(bind, /checkout intent is already bound to a different Stripe Session/);
+  assert.match(bind, /selected_status <> 'created' OR selected_expires_at <= statement_timestamp\(\)/);
+  assert.match(bind, /SET stripe_session_id = normalized_session_id, status = 'session_created', updated_at = statement_timestamp\(\)/);
+});
+
+test('0012 records signed Checkout completion idempotently and rejects commercial mismatches', async () => {
+  const sql = normalise(await readFile(migration12Url, 'utf8'));
+  const webhook = /CREATE FUNCTION app_private\.record_paid_checkout_completed\((.*?)END \$function\$;/.exec(sql)?.[1];
+  assert.ok(webhook);
+
+  assert.match(webhook, /INSERT INTO app_private\.stripe_checkout_events/);
+  assert.match(webhook, /ON CONFLICT \(event_id\) DO NOTHING/);
+  assert.match(webhook, /existing_payload_sha256 <> p_payload_sha256 OR existing_event_type <> normalized_event_type/);
+  assert.match(webhook, /Stripe event id was replayed with different signed payload bytes/);
+  for (const rejection of [
+    'unsupported_event_type',
+    'unknown_checkout_intent',
+    'checkout_completed_after_expiry',
+    'metadata_schema_mismatch',
+    'client_reference_mismatch',
+    'checkout_session_unbound',
+    'checkout_session_mismatch',
+    'checkout_intent_state_mismatch',
+    'checkout_mode_mismatch',
+    'checkout_not_paid',
+    'checkout_livemode_mismatch',
+    'checkout_price_mismatch',
+    'checkout_line_item_count_mismatch',
+    'checkout_quantity_mismatch',
+    'checkout_amount_mismatch',
+    'checkout_currency_mismatch',
+    'payment_intent_missing',
+    'payment_intent_conflict',
+    'checkout_completion_conflict',
+  ]) {
+    assert.ok(webhook.includes(`'${rejection}'`), `webhook rejects ${rejection}`);
+  }
+  assert.match(webhook, /p_provider_created_at > selected_expires_at/);
+  assert.match(webhook, /p_line_item_count IS DISTINCT FROM 1/);
+  assert.match(webhook, /receipt_email_is_valid := p_receipt_email IS NOT NULL AND length\(normalized_receipt_email\) BETWEEN 3 AND 320/);
+  assert.match(webhook, /CASE WHEN receipt_email_is_valid THEN 'awaiting_intake' ELSE 'blocked' END/);
+  assert.match(webhook, /CASE WHEN receipt_email_is_valid THEN NULL ELSE 'missing_or_invalid_receipt_email' END/);
+  assert.match(webhook, /SET status = 'completed', completed_at = statement_timestamp\(\), updated_at = statement_timestamp\(\)/);
+  assert.doesNotMatch(webhook, /provision_customer_workspace/);
+});
+
+test('0012 atomically consumes a paid portal claim through native provisioning', async () => {
+  const sql = normalise(await readFile(migration12Url, 'utf8'));
+  const authorize = /CREATE FUNCTION app_private\.authorize_paid_portal_fulfilment\((.*?)\$function\$;/.exec(sql)?.[1];
+  const fulfil = /CREATE FUNCTION app_private\.fulfil_paid_portal_checkout_with_setup_delivery\((.*?)END \$function\$;/.exec(sql)?.[1];
+  assert.ok(authorize);
+  assert.ok(fulfil);
+
+  assert.match(authorize, /claim\.token_hash = p_order_claim_hash/);
+  assert.match(authorize, /intent\.status = 'completed' AND platform_order\.financial_status = 'paid' AND platform_order\.portal_access/);
+  assert.match(authorize, /platform_order\.fulfilment_status = 'awaiting_intake' AND claim\.consumed_at IS NULL AND claim\.expires_at > statement_timestamp\(\)/);
+
+  const intentLock = fulfil.indexOf('FROM app_private.checkout_intents AS intent');
+  const orderLock = fulfil.indexOf('FROM app_private.platform_orders AS platform_order', intentLock);
+  const claimLock = fulfil.indexOf('FROM app_private.order_claim_grants AS claim', orderLock);
+  const replayBranch = fulfil.indexOf("IF selected_fulfilment_status = 'provisioned' THEN", claimLock);
+  const recipientValidation = fulfil.indexOf('IF p_recipient_email_hash IS NULL', replayBranch);
+  const nativeProvision = fulfil.indexOf('FROM app_private.provision_customer_workspace_with_setup_delivery(', claimLock);
+  const claimConsume = fulfil.indexOf('UPDATE app_private.order_claim_grants AS claim', nativeProvision);
+  const orderLink = fulfil.indexOf('UPDATE app_private.platform_orders AS platform_order', claimConsume);
+  assert.ok(intentLock >= 0 && intentLock < orderLock && orderLock < claimLock
+    && claimLock < replayBranch && replayBranch < recipientValidation
+    && recipientValidation < nativeProvision && nativeProvision < claimConsume && claimConsume < orderLink);
+  assert.match(fulfil, /JOIN app_private\.account_setup_deliveries AS delivery ON delivery\.id = existing_setup_delivery_id AND delivery\.action_token_id = action_token\.id/);
+  assert.match(fulfil, /RETURN QUERY SELECT existing_organization_id, existing_workspace_id, existing_owner_user_id, existing_setup_action_token_id, existing_setup_expires_at, existing_setup_delivery_id, existing_setup_delivery_generation, false/);
+  assert.match(fulfil, /p_recipient_email_hash <> public\.digest\( pg_catalog\.convert_to\(pg_catalog\.lower\(selected_receipt_email\), 'UTF8'\), 'sha256' \)/);
+  assert.match(fulfil, /FROM app_private\.provision_customer_workspace_with_setup_delivery\( normalized_session_id,[^;]+selected_receipt_email/);
+  assert.match(fulfil, /SET consumed_at = statement_timestamp\(\)/);
+  assert.match(fulfil, /SET fulfilment_status = 'provisioned', organization_id = provisioned_organization_id, workspace_id = provisioned_workspace_id, owner_user_id = provisioned_owner_user_id, setup_action_token_id = provisioned_setup_action_token_id, setup_delivery_id = provisioned_setup_delivery_id, provisioned_at = statement_timestamp\(\), updated_at = statement_timestamp\(\)/);
+});
+
+test('0012 exposes function capabilities without runtime table or inner-provisioning bypass', async () => {
+  const sql = normalise(await readFile(migration12Url, 'utf8'));
+  const securityDefinerCount = (sql.match(/SECURITY DEFINER/g) ?? []).length;
+  const fixedPathCount = (sql.match(/SET search_path = pg_catalog/g) ?? []).length;
+  assert.equal(securityDefinerCount, 5);
+  assert.equal(fixedPathCount, securityDefinerCount);
+
+  for (const table of ['checkout_intents', 'order_claim_grants', 'stripe_checkout_events', 'platform_orders']) {
+    assert.doesNotMatch(
+      sql,
+      new RegExp(`GRANT [^;]*app_private\\.${table}[^;]* TO r72_(?:web|public|worker|webhook|readonly|crm_command|identity_command|provisioning_command|setup_delivery_command|setup_reissue_command)`),
+    );
+  }
+  for (const helper of [
+    'begin_one_off_checkout',
+    'bind_one_off_checkout_session',
+    'record_paid_checkout_completed',
+    'authorize_paid_portal_fulfilment',
+    'fulfil_paid_portal_checkout_with_setup_delivery',
+  ]) {
+    assert.match(sql, new RegExp(`REVOKE ALL ON FUNCTION app_private\\.${helper}\\([^;]+\\) FROM PUBLIC`));
+  }
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.begin_one_off_checkout\([^;]+\) TO r72_public/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.bind_one_off_checkout_session\([^;]+\) TO r72_public/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.record_paid_checkout_completed\([^;]+\) TO r72_webhook/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.authorize_paid_portal_fulfilment\([^;]+\) TO r72_provisioning_command/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.fulfil_paid_portal_checkout_with_setup_delivery\([^;]+\) TO r72_provisioning_command/);
+  assert.match(sql, /REVOKE ALL ON FUNCTION app_private\.provision_customer_workspace_with_setup_delivery\([^;]+\) FROM r72_provisioning_command/);
+  assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.provision_customer_workspace_with_setup_delivery\([^;]+\) TO r72_provisioning_command/);
+});
+
+test('0013 records provider acceptance as an all-or-nothing delivered fact', async () => {
+  const sql = normalise(await readFile(migration13Url, 'utf8'));
+  for (const column of [
+    'provider_id text',
+    'provider_reference_id text',
+    'provider_accepted_at timestamptz',
+    'acceptance_recorded_at timestamptz',
+  ]) {
+    assert.match(sql, new RegExp(`ADD COLUMN ${column}`));
+  }
+  assert.match(sql, /state = 'delivered' AND provider_id IS NOT NULL AND provider_reference_id IS NOT NULL AND provider_accepted_at IS NOT NULL AND acceptance_recorded_at IS NOT NULL/);
+  assert.match(sql, /provider_id IS NULL AND provider_reference_id IS NULL AND provider_accepted_at IS NULL AND acceptance_recorded_at IS NULL/);
+  assert.match(sql, /provider_reference_id ~ '\^\[A-Za-z0-9\]\[A-Za-z0-9\._:-\]\{0,254\}\$'/);
+  assert.match(sql, /delivered_at = acceptance_recorded_at/);
+  assert.match(sql, /provider_accepted_at >= created_at - interval '5 minutes'/);
+  assert.match(sql, /provider_accepted_at <= acceptance_recorded_at \+ interval '5 minutes'/);
+  assert.match(sql, /CREATE UNIQUE INDEX account_setup_deliveries_provider_reference_uq ON app_private\.account_setup_deliveries \(provider_id, provider_reference_id\) WHERE provider_id IS NOT NULL AND provider_reference_id IS NOT NULL/);
+});
+
+test('0013 caps initial leases and settles accepted or permanent provider outcomes under the live hash fence', async () => {
+  const sql = normalise(await readFile(migration13Url, 'utf8'));
+  assert.match(sql, /lease_expires_at = least\( statement_timestamp\(\) \+ pg_catalog\.make_interval\(secs => p_lease_seconds\), candidates\.setup_expires_at \)/);
+  assert.match(sql, /CREATE FUNCTION app_private\.acknowledge_account_setup_delivery_acceptance/);
+  assert.match(sql, /SET state = 'delivered', encryption_iv = NULL, encrypted_payload = NULL, authentication_tag = NULL, lease_token_hash = NULL, lease_expires_at = NULL, provider_id = normalized_provider_id, provider_reference_id = normalized_provider_reference, provider_accepted_at = p_provider_accepted_at, acceptance_recorded_at = statement_timestamp\(\), delivered_at = statement_timestamp\(\)/);
+  assert.match(sql, /delivery\.state = 'leased' AND delivery\.superseded_at IS NULL AND delivery\.lease_token_hash = p_lease_token_hash AND delivery\.lease_expires_at > statement_timestamp\(\)/);
+  assert.match(sql, /p_provider_accepted_at >= delivery\.created_at - interval '5 minutes'/);
+  assert.doesNotMatch(sql, /p_provider_accepted_at < statement_timestamp\(\) - interval/);
+  assert.match(sql, /CREATE FUNCTION app_private\.reject_account_setup_delivery_permanently/);
+  assert.match(sql, /SET state = 'dead_letter', encryption_iv = NULL, encrypted_payload = NULL, authentication_tag = NULL, lease_token_hash = NULL, lease_expires_at = NULL, last_error_code = normalized_error_code, dead_lettered_at = statement_timestamp\(\)/);
+});
+
+test('0013 removes unattributed acknowledgement and grants only exact settlement functions', async () => {
+  const sql = normalise(await readFile(migration13Url, 'utf8'));
+  assert.match(sql, /REVOKE ALL ON FUNCTION app_private\.acknowledge_account_setup_delivery\(uuid, bytea\) FROM r72_setup_delivery_command/);
+  for (const signature of [
+    'acknowledge_account_setup_delivery_acceptance\\( uuid, bytea, text, text, timestamptz \\)',
+    'reject_account_setup_delivery_permanently\\( uuid, bytea, text \\)',
+  ]) {
+    assert.match(sql, new RegExp(`REVOKE ALL ON FUNCTION app_private\\.${signature} FROM PUBLIC`));
+    assert.match(sql, new RegExp(`GRANT EXECUTE ON FUNCTION app_private\\.${signature} TO r72_setup_delivery_command`));
+  }
+  assert.match(sql, /LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog/g);
+  assert.match(sql, /REVOKE CREATE ON SCHEMA app_private FROM r72_setup_delivery_definer/);
 });
 
 test('0007 removes ambient public-schema object creation from every application role', async () => {

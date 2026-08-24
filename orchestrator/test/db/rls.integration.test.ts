@@ -58,6 +58,56 @@ async function provisioningQuery<T extends QueryResultRow = QueryResultRow>(
   }
 }
 
+/**
+ * Exercise the legacy inner provisioning primitive as its NOLOGIN owner.
+ * Runtime code must never use this seam: migration 0012 deliberately revokes
+ * the direct grant from r72_provisioning_command.
+ */
+async function onboardingDefinerQuery<T extends QueryResultRow = QueryResultRow>(
+  pool: Pool,
+  sql: string,
+  values: unknown[] = [],
+): Promise<T[]> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SET LOCAL ROLE r72_onboarding_definer');
+    const result = await client.query<T>(sql, values);
+    await client.query('COMMIT');
+    return result.rows;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+type CommerceRuntimeRole = 'r72_public' | 'r72_webhook' | 'r72_provisioning_command';
+
+/** Exercise each commerce function through the exact production command role. */
+async function commerceRuntimeQuery<T extends QueryResultRow = QueryResultRow>(
+  pool: Pool,
+  role: CommerceRuntimeRole,
+  sql: string,
+  values: unknown[] = [],
+): Promise<T[]> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SET LOCAL ROLE ${role}`);
+    await client.query("SET LOCAL lock_timeout = '5s'");
+    const result = await client.query<T>(sql, values);
+    await client.query('COMMIT');
+    return result.rows;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 type SetupRuntimeRole = 'r72_setup_delivery_command' | 'r72_setup_reissue_command';
 
 async function setupRuntimeQuery<T extends QueryResultRow = QueryResultRow>(
@@ -836,7 +886,7 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
       '42501',
     );
 
-    const first = await provisioningQuery<ProvisionedCustomerRow>(
+    const first = await onboardingDefinerQuery<ProvisionedCustomerRow>(
       pool,
       provisionCustomerSql,
       provisioningInput,
@@ -850,7 +900,7 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
     replayInput[7] = replayTokenHash;
     replayInput[12] = randomUUID();
     replayInput[16] = randomBytes(96);
-    const replay = await provisioningQuery<ProvisionedCustomerRow>(
+    const replay = await onboardingDefinerQuery<ProvisionedCustomerRow>(
       pool,
       provisionCustomerSql,
       replayInput,
@@ -878,7 +928,7 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
     const changedInput = [...provisioningInput];
     changedInput[3] = 'Changed workspace name';
     await expectPostgresError(
-      provisioningQuery(pool, provisionCustomerSql, changedInput),
+      onboardingDefinerQuery(pool, provisionCustomerSql, changedInput),
       '22023',
     );
 
@@ -1077,7 +1127,7 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
       randomBytes(16),
     ];
     await expectPostgresError(
-      provisioningQuery(pool, provisionCustomerSql, collisionInput),
+      onboardingDefinerQuery(pool, provisionCustomerSql, collisionInput),
       '23505',
     );
     const collisionRollback = await ownerQuery<{ organizations: number; receipts: number; deliveries: number }>(
@@ -1121,13 +1171,308 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
     );
     assert.equal(claimedDelivery[0]!.attempt_count, 1);
 
-    const acknowledged = await setupRuntimeQuery<{ acknowledged: boolean }>(
+    await expectPostgresError(
+      setupRuntimeQuery(
+        pool,
+        'r72_setup_delivery_command',
+        `SELECT app_private.acknowledge_account_setup_delivery($1, $2)`,
+        [provisioned.setup_delivery_id, leaseTokenHash],
+      ),
+      '42501',
+    );
+    const providerAcceptedAt = new Date();
+    const acknowledged = await setupRuntimeQuery<{
+      delivered_at: Date;
+      provider_id: string;
+      provider_reference_id: string;
+    }>(
       pool,
       'r72_setup_delivery_command',
-      `SELECT app_private.acknowledge_account_setup_delivery($1, $2) AS acknowledged`,
-      [provisioned.setup_delivery_id, leaseTokenHash],
+      `SELECT delivered_at, provider_id, provider_reference_id
+       FROM app_private.acknowledge_account_setup_delivery_acceptance(
+         $1, $2, $3, $4, $5
+       )`,
+      [
+        provisioned.setup_delivery_id,
+        leaseTokenHash,
+        'memory',
+        'memory_integration_acceptance',
+        providerAcceptedAt,
+      ],
     );
-    assert.deepEqual(acknowledged, [{ acknowledged: true }]);
+    assert.equal(acknowledged.length, 1);
+    assert.ok(acknowledged[0]!.delivered_at instanceof Date);
+    assert.equal(acknowledged[0]!.provider_id, 'memory');
+    assert.equal(acknowledged[0]!.provider_reference_id, 'memory_integration_acceptance');
+
+    const persistedAcceptance = await ownerQuery<{
+      state: string;
+      provider_id: string;
+      provider_reference_id: string;
+      provider_accepted_at: Date;
+      acceptance_recorded_at: Date;
+      delivered_at: Date;
+      payload_erased: boolean;
+      lease_erased: boolean;
+    }>(
+      pool,
+      `SELECT state, provider_id, provider_reference_id,
+              provider_accepted_at, acceptance_recorded_at, delivered_at,
+              encrypted_payload IS NULL AS payload_erased,
+              lease_token_hash IS NULL AND lease_expires_at IS NULL AS lease_erased
+       FROM app_private.account_setup_deliveries
+       WHERE id = $1`,
+      [provisioned.setup_delivery_id],
+    );
+    assert.deepEqual(persistedAcceptance, [{
+      state: 'delivered',
+      provider_id: 'memory',
+      provider_reference_id: 'memory_integration_acceptance',
+      provider_accepted_at: providerAcceptedAt,
+      acceptance_recorded_at: acknowledged[0]!.delivered_at,
+      delivered_at: acknowledged[0]!.delivered_at,
+      payload_erased: true,
+      lease_erased: true,
+    }]);
+
+    const poisonSuffix = randomUUID().replaceAll('-', '').slice(0, 12);
+    const poisonEmail = `poison-${poisonSuffix}@example.test`;
+    const poisonDeliveryPayload = randomBytes(96);
+    const poisonProvisioned = (await onboardingDefinerQuery<ProvisionedCustomerRow>(
+      pool,
+      provisionCustomerSql,
+      [
+        `poison-${poisonSuffix}`,
+        'Poison Settlement Customer',
+        `poison-${poisonSuffix}`,
+        'Poison Settlement Workspace',
+        `poison-workspace-${poisonSuffix}`,
+        poisonEmail,
+        'Poison Settlement Owner',
+        createHash('sha256').update(randomBytes(32)).digest(),
+        createHash('sha256').update(poisonEmail).digest(),
+        'Europe/London',
+        'en-GB',
+        'GBP',
+        randomUUID(),
+        1,
+        'integration-key-v1',
+        randomBytes(12),
+        poisonDeliveryPayload,
+        randomBytes(16),
+      ],
+    ))[0]!;
+    const poisonLeaseHash = createHash('sha256').update(randomBytes(32)).digest();
+    const poisonClaim = await setupRuntimeQuery<{ delivery_id: string }>(
+      pool,
+      'r72_setup_delivery_command',
+      claimDeliverySql,
+      [poisonLeaseHash, 1, 60],
+    );
+    assert.deepEqual(poisonClaim.map((row) => row.delivery_id), [poisonProvisioned.setup_delivery_id]);
+
+    await expectPostgresError(
+      roleQuery(
+        pool,
+        'r72_web',
+        `SELECT * FROM app_private.acknowledge_account_setup_delivery_acceptance(
+          $1, $2, $3, $4, $5
+        )`,
+        [
+          poisonProvisioned.setup_delivery_id,
+          poisonLeaseHash,
+          'memory',
+          'unauthorized_acceptance',
+          new Date(),
+        ],
+      ),
+      '42501',
+    );
+    await expectPostgresError(
+      roleQuery(
+        pool,
+        'r72_identity_command',
+        `SELECT * FROM app_private.reject_account_setup_delivery_permanently(
+          $1, $2, $3
+        )`,
+        [poisonProvisioned.setup_delivery_id, poisonLeaseHash, 'unauthorized_rejection'],
+      ),
+      '42501',
+    );
+    await expectPostgresError(
+      setupRuntimeQuery(
+        pool,
+        'r72_setup_delivery_command',
+        `SELECT * FROM app_private.acknowledge_account_setup_delivery_acceptance(
+          $1, $2, $3, $4, $5
+        )`,
+        [
+          poisonProvisioned.setup_delivery_id,
+          poisonLeaseHash,
+          'memory\npoison',
+          'poison_reference',
+          new Date(),
+        ],
+      ),
+      '22023',
+    );
+    assert.deepEqual(await setupRuntimeQuery(
+      pool,
+      'r72_setup_delivery_command',
+      `SELECT dead_lettered_at
+       FROM app_private.reject_account_setup_delivery_permanently($1, $2, $3)`,
+      [
+        poisonProvisioned.setup_delivery_id,
+        createHash('sha256').update(randomBytes(32)).digest(),
+        'provider_recipient_rejected',
+      ],
+    ), [], 'a poison worker cannot settle another lease');
+
+    const poisonBeforeSettlement = await ownerQuery<{
+      state: string;
+      payload_preserved: boolean;
+      provider_id: string | null;
+    }>(
+      pool,
+      `SELECT state,
+              encrypted_payload = $2::bytea AS payload_preserved,
+              provider_id
+       FROM app_private.account_setup_deliveries
+       WHERE id = $1`,
+      [poisonProvisioned.setup_delivery_id, poisonDeliveryPayload],
+    );
+    assert.deepEqual(poisonBeforeSettlement, [{
+      state: 'leased',
+      payload_preserved: true,
+      provider_id: null,
+    }]);
+
+    const permanentlyRejected = await setupRuntimeQuery<{ dead_lettered_at: Date }>(
+      pool,
+      'r72_setup_delivery_command',
+      `SELECT dead_lettered_at
+       FROM app_private.reject_account_setup_delivery_permanently($1, $2, $3)`,
+      [poisonProvisioned.setup_delivery_id, poisonLeaseHash, 'provider_recipient_rejected'],
+    );
+    assert.equal(permanentlyRejected.length, 1);
+    assert.ok(permanentlyRejected[0]!.dead_lettered_at instanceof Date);
+
+    const poisonAfterSettlement = await ownerQuery<{
+      state: string;
+      payload_erased: boolean;
+      lease_erased: boolean;
+      last_error_code: string;
+      dead_lettered_at: Date;
+      provider_id: string | null;
+      provider_reference_id: string | null;
+    }>(
+      pool,
+      `SELECT state,
+              encrypted_payload IS NULL AS payload_erased,
+              lease_token_hash IS NULL AND lease_expires_at IS NULL AS lease_erased,
+              last_error_code, dead_lettered_at, provider_id, provider_reference_id
+       FROM app_private.account_setup_deliveries
+       WHERE id = $1`,
+      [poisonProvisioned.setup_delivery_id],
+    );
+    assert.deepEqual(poisonAfterSettlement, [{
+      state: 'dead_letter',
+      payload_erased: true,
+      lease_erased: true,
+      last_error_code: 'provider_recipient_rejected',
+      dead_lettered_at: permanentlyRejected[0]!.dead_lettered_at,
+      provider_id: null,
+      provider_reference_id: null,
+    }]);
+
+    const outageSuffix = randomUUID().replaceAll('-', '').slice(0, 12);
+    const outageEmail = `outage-${outageSuffix}@example.test`;
+    const outageProvisioned = (await onboardingDefinerQuery<ProvisionedCustomerRow>(
+      pool,
+      provisionCustomerSql,
+      [
+        `outage-${outageSuffix}`,
+        'Delayed Acceptance Customer',
+        `outage-${outageSuffix}`,
+        'Delayed Acceptance Workspace',
+        `outage-workspace-${outageSuffix}`,
+        outageEmail,
+        'Delayed Acceptance Owner',
+        createHash('sha256').update(randomBytes(32)).digest(),
+        createHash('sha256').update(outageEmail).digest(),
+        'Europe/London',
+        'en-GB',
+        'GBP',
+        randomUUID(),
+        1,
+        'integration-key-v1',
+        randomBytes(12),
+        randomBytes(96),
+        randomBytes(16),
+      ],
+    ))[0]!;
+    const outageTimeline = await ownerQuery<{ provider_accepted_at: Date }>(
+      pool,
+      `UPDATE app_private.account_setup_deliveries
+       SET created_at = statement_timestamp() - interval '30 minutes',
+           updated_at = statement_timestamp() - interval '30 minutes',
+           available_at = statement_timestamp() - interval '30 minutes'
+       WHERE id = $1
+       RETURNING created_at + interval '10 minutes' AS provider_accepted_at`,
+      [outageProvisioned.setup_delivery_id],
+    );
+    const delayedProviderAcceptedAt = outageTimeline[0]!.provider_accepted_at;
+    const outageLeaseHash = createHash('sha256').update(randomBytes(32)).digest();
+    const outageClaim = await setupRuntimeQuery<{ delivery_id: string }>(
+      pool,
+      'r72_setup_delivery_command',
+      claimDeliverySql,
+      [outageLeaseHash, 1, 60],
+    );
+    assert.deepEqual(outageClaim.map((row) => row.delivery_id), [outageProvisioned.setup_delivery_id]);
+    const delayedAcceptance = await setupRuntimeQuery<{
+      delivered_at: Date;
+      provider_id: string;
+      provider_reference_id: string;
+    }>(
+      pool,
+      'r72_setup_delivery_command',
+      `SELECT delivered_at, provider_id, provider_reference_id
+       FROM app_private.acknowledge_account_setup_delivery_acceptance(
+         $1, $2, $3, $4, $5
+       )`,
+      [
+        outageProvisioned.setup_delivery_id,
+        outageLeaseHash,
+        'memory',
+        'memory_delayed_database_settlement',
+        delayedProviderAcceptedAt,
+      ],
+    );
+    assert.equal(delayedAcceptance.length, 1);
+    assert.ok(delayedAcceptance[0]!.delivered_at instanceof Date);
+    assert.equal(delayedAcceptance[0]!.provider_id, 'memory');
+    assert.equal(
+      delayedAcceptance[0]!.provider_reference_id,
+      'memory_delayed_database_settlement',
+    );
+    assert.deepEqual(await ownerQuery<{
+      state: string;
+      provider_accepted_at: Date;
+      acceptance_recorded_after_outage: boolean;
+    }>(
+      pool,
+      `SELECT state, provider_accepted_at,
+              acceptance_recorded_at > provider_accepted_at + interval '10 minutes'
+                AS acceptance_recorded_after_outage
+       FROM app_private.account_setup_deliveries
+       WHERE id = $1`,
+      [outageProvisioned.setup_delivery_id],
+    ), [{
+      state: 'delivered',
+      provider_accepted_at: delayedProviderAcceptedAt,
+      acceptance_recorded_after_outage: true,
+    }], 'a provider acceptance survives a database outage longer than ten minutes');
 
     const invalidTokenHash = createHash('sha256').update(randomBytes(32)).digest();
     const invalidClaimHash = createHash('sha256').update(randomBytes(32)).digest();
@@ -1295,7 +1640,7 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
       randomBytes(96),
       randomBytes(16),
     ];
-    const raceProvisioned = (await provisioningQuery<ProvisionedCustomerRow>(
+    const raceProvisioned = (await onboardingDefinerQuery<ProvisionedCustomerRow>(
       pool,
       provisionCustomerSql,
       raceProvisioningInput,
@@ -1455,12 +1800,25 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
     assert.equal(reissued.created_now, true);
     assert.ok(reissued.setup_expires_at instanceof Date);
 
-    assert.deepEqual(await setupRuntimeQuery<{ acknowledged: boolean }>(
+    assert.deepEqual(await setupRuntimeQuery<{
+      delivered_at: Date;
+      provider_id: string;
+      provider_reference_id: string;
+    }>(
       pool,
       'r72_setup_delivery_command',
-      `SELECT app_private.acknowledge_account_setup_delivery($1, $2) AS acknowledged`,
-      [raceProvisioned.setup_delivery_id, staleLeaseHash],
-    ), [{ acknowledged: false }], 'reissue fences a stale delivery worker');
+      `SELECT delivered_at, provider_id, provider_reference_id
+       FROM app_private.acknowledge_account_setup_delivery_acceptance(
+         $1, $2, $3, $4, $5
+       )`,
+      [
+        raceProvisioned.setup_delivery_id,
+        staleLeaseHash,
+        'memory',
+        'memory_stale_acceptance',
+        new Date(),
+      ],
+    ), [], 'reissue fences a stale delivery worker');
     assert.deepEqual(await roleQuery(
       pool,
       'r72_identity_command',
@@ -1605,7 +1963,7 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
     const expiredSuffix = randomUUID().replaceAll('-', '').slice(0, 12);
     const expiredEmail = `expired-${expiredSuffix}@example.test`;
     const expiredTokenHash = createHash('sha256').update(randomBytes(32)).digest();
-    const expiredProvisioned = (await provisioningQuery<ProvisionedCustomerRow>(
+    const expiredProvisioned = (await onboardingDefinerQuery<ProvisionedCustomerRow>(
       pool,
       provisionCustomerSql,
       [
@@ -1680,6 +2038,747 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
       last_error_code: 'setup_token_expired',
     }]);
   } finally {
+    await resetIdentityTables(pool);
+    await pool.end();
+  }
+});
+
+test('real PostgreSQL proves paid Checkout provenance, claim-bound fulfilment, and runtime privilege fences', {
+  skip,
+  timeout: 120_000,
+}, async () => {
+  const pool = await openTestDatabase();
+  const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+  const requestKey = `paid-checkout-${suffix}`;
+  const stripeSessionId = `cs_test_${suffix}`;
+  const stripePriceId = `price_core_${suffix}`;
+  const receiptEmail = `paid-${suffix}@example.test`;
+  const orderClaimHash = createHash('sha256').update(randomBytes(32)).digest();
+  const wrongOrderClaimHash = createHash('sha256').update(randomBytes(32)).digest();
+  const amountMinor = 7_200;
+
+  const beginCheckoutSql = `
+    SELECT checkout_intent_id, provider_idempotency_key, intent_expires_at,
+           stripe_session_id, created_now
+    FROM app_private.begin_one_off_checkout(
+      $1::text, $2::text, $3::smallint, $4::text, $5::boolean,
+      $6::text, $7::bigint, $8::text, $9::boolean, $10::bytea
+    )`;
+  const bindCheckoutSql = `
+    SELECT checkout_intent_id, stripe_session_id, bound_now
+    FROM app_private.bind_one_off_checkout_session($1::uuid, $2::text, $3::text)`;
+  const recordPaidCheckoutSql = `
+    SELECT event_disposition, order_id, replayed
+    FROM app_private.record_paid_checkout_completed(
+      $1::text, $2::text, $3::bytea, $4::timestamptz,
+      $5::boolean, $6::boolean, $7::uuid, $8::uuid, $9::smallint,
+      $10::text, $11::text, $12::text, $13::text,
+      $14::integer, $15::integer, $16::bigint, $17::text,
+      $18::text, $19::text, $20::text
+    )`;
+  const authorizePaidFulfilmentSql = `
+    SELECT order_id, product_key, receipt_email, fulfilment_status,
+           organization_id, workspace_id, owner_user_id,
+           setup_action_token_id, setup_delivery_id
+    FROM app_private.authorize_paid_portal_fulfilment($1::text, $2::bytea)`;
+  const fulfilPaidCheckoutSql = `
+    SELECT organization_id, workspace_id, owner_user_id,
+           setup_action_token_id, setup_expires_at, setup_delivery_id,
+           setup_delivery_generation, created_now
+    FROM app_private.fulfil_paid_portal_checkout_with_setup_delivery(
+      $1::text, $2::bytea, $3::text, $4::text, $5::text, $6::text,
+      $7::text, $8::bytea, $9::bytea, $10::text, $11::text, $12::text,
+      $13::uuid, $14::smallint, $15::text, $16::bytea, $17::bytea,
+      $18::bytea
+    )`;
+
+  interface BegunCheckoutRow extends QueryResultRow {
+    checkout_intent_id: string;
+    provider_idempotency_key: string;
+    intent_expires_at: Date;
+    stripe_session_id: string | null;
+    created_now: boolean;
+  }
+  interface RecordedCheckoutRow extends QueryResultRow {
+    event_disposition: string;
+    order_id: string | null;
+    replayed: boolean;
+  }
+
+  try {
+    await resetIdentityTables(pool);
+    await ownerQuery(pool, 'TRUNCATE app_private.checkout_intents CASCADE');
+
+    const unsafeCommerceMemberships = await pool.query<{ member: string; parent: string }>(
+      `SELECT member.rolname AS member, parent.rolname AS parent
+       FROM pg_catalog.pg_auth_members AS membership
+       JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
+       JOIN pg_catalog.pg_roles AS parent ON parent.oid = membership.roleid
+       WHERE member.rolname = 'r72_commerce_definer'
+          OR (
+            parent.rolname = 'r72_commerce_definer'
+            AND member.rolname NOT IN ('r72_owner', current_user)
+          )`,
+    );
+    assert.deepEqual(unsafeCommerceMemberships.rows, []);
+
+    const beginInput: unknown[] = [
+      requestKey,
+      'core',
+      1,
+      'S9',
+      true,
+      stripePriceId,
+      amountMinor,
+      'gbp',
+      false,
+      orderClaimHash,
+    ];
+    await expectPostgresError(
+      commerceRuntimeQuery(pool, 'r72_webhook', beginCheckoutSql, beginInput),
+      '42501',
+    );
+    await expectPostgresError(
+      commerceRuntimeQuery(pool, 'r72_public', 'SELECT id FROM app_private.checkout_intents'),
+      '42501',
+    );
+
+    const begun = await commerceRuntimeQuery<BegunCheckoutRow>(
+      pool,
+      'r72_public',
+      beginCheckoutSql,
+      beginInput,
+    );
+    assert.equal(begun.length, 1);
+    assert.equal(begun[0]!.created_now, true);
+    assert.equal(begun[0]!.stripe_session_id, null);
+    assert.ok(begun[0]!.intent_expires_at instanceof Date);
+    assert.match(begun[0]!.provider_idempotency_key, /^r72-checkout-v1:/);
+    const checkoutIntentId = begun[0]!.checkout_intent_id;
+    const providerIdempotencyKey = begun[0]!.provider_idempotency_key;
+
+    const replayedBegin = await commerceRuntimeQuery<BegunCheckoutRow>(
+      pool,
+      'r72_public',
+      beginCheckoutSql,
+      beginInput,
+    );
+    assert.deepEqual(replayedBegin, [{
+      ...begun[0]!,
+      created_now: false,
+    }]);
+    const changedBeginInput = [...beginInput];
+    changedBeginInput[6] = amountMinor + 1;
+    await expectPostgresError(
+      commerceRuntimeQuery(pool, 'r72_public', beginCheckoutSql, changedBeginInput),
+      '22023',
+    );
+
+    assert.deepEqual(await commerceRuntimeQuery(
+      pool,
+      'r72_public',
+      bindCheckoutSql,
+      [checkoutIntentId, `${providerIdempotencyKey}-wrong`, stripeSessionId],
+    ), []);
+    const bound = await commerceRuntimeQuery<{
+      checkout_intent_id: string;
+      stripe_session_id: string;
+      bound_now: boolean;
+    }>(
+      pool,
+      'r72_public',
+      bindCheckoutSql,
+      [checkoutIntentId, providerIdempotencyKey, stripeSessionId],
+    );
+    assert.deepEqual(bound, [{
+      checkout_intent_id: checkoutIntentId,
+      stripe_session_id: stripeSessionId,
+      bound_now: true,
+    }]);
+    assert.deepEqual(await commerceRuntimeQuery(
+      pool,
+      'r72_public',
+      bindCheckoutSql,
+      [checkoutIntentId, providerIdempotencyKey, stripeSessionId],
+    ), [{
+      checkout_intent_id: checkoutIntentId,
+      stripe_session_id: stripeSessionId,
+      bound_now: false,
+    }]);
+    await expectPostgresError(
+      commerceRuntimeQuery(
+        pool,
+        'r72_public',
+        bindCheckoutSql,
+        [checkoutIntentId, providerIdempotencyKey, `${stripeSessionId}_other`],
+      ),
+      '22023',
+    );
+
+    const exactIntent = await ownerQuery<{
+      request_idempotency_key: string;
+      product_key: string;
+      entitlement_version: number;
+      through_stage: string;
+      portal_access: boolean;
+      expected_price_id: string;
+      expected_amount_minor: string;
+      expected_currency: string;
+      expected_mode: string;
+      expected_livemode: boolean;
+      stripe_session_id: string;
+      status: string;
+      request_hash_bytes: number;
+      claim_hash_hex: string;
+      claim_unconsumed: boolean;
+    }>(
+      pool,
+      `SELECT intent.request_idempotency_key, intent.product_key,
+              intent.entitlement_version, intent.through_stage,
+              intent.portal_access, intent.expected_price_id,
+              intent.expected_amount_minor::text, intent.expected_currency,
+              intent.expected_mode, intent.expected_livemode,
+              intent.stripe_session_id, intent.status,
+              octet_length(intent.request_hash) AS request_hash_bytes,
+              encode(claim.token_hash, 'hex') AS claim_hash_hex,
+              claim.consumed_at IS NULL AS claim_unconsumed
+       FROM app_private.checkout_intents AS intent
+       JOIN app_private.order_claim_grants AS claim
+         ON claim.checkout_intent_id = intent.id
+       WHERE intent.id = $1`,
+      [checkoutIntentId],
+    );
+    assert.deepEqual(exactIntent, [{
+      request_idempotency_key: requestKey,
+      product_key: 'core',
+      entitlement_version: 1,
+      through_stage: 'S9',
+      portal_access: true,
+      expected_price_id: stripePriceId,
+      expected_amount_minor: String(amountMinor),
+      expected_currency: 'gbp',
+      expected_mode: 'payment',
+      expected_livemode: false,
+      stripe_session_id: stripeSessionId,
+      status: 'session_created',
+      request_hash_bytes: 32,
+      claim_hash_hex: orderClaimHash.toString('hex'),
+      claim_unconsumed: true,
+    }]);
+
+    const providerCreatedAt = new Date();
+    const paidEventInput: unknown[] = [
+      `evt_paid_${suffix}`,
+      'checkout.session.completed',
+      createHash('sha256').update(randomBytes(64)).digest(),
+      providerCreatedAt,
+      false,
+      false,
+      checkoutIntentId,
+      checkoutIntentId,
+      1,
+      stripeSessionId,
+      'payment',
+      'paid',
+      stripePriceId,
+      1,
+      1,
+      amountMinor,
+      'gbp',
+      `pi_paid_${suffix}`,
+      `cus_paid_${suffix}`,
+      receiptEmail,
+    ];
+    const tamperedPriceInput = [...paidEventInput];
+    tamperedPriceInput[0] = `evt_tampered_price_${suffix}`;
+    tamperedPriceInput[2] = createHash('sha256').update(randomBytes(64)).digest();
+    tamperedPriceInput[12] = `${stripePriceId}_poison`;
+    assert.deepEqual(await commerceRuntimeQuery<RecordedCheckoutRow>(
+      pool,
+      'r72_webhook',
+      recordPaidCheckoutSql,
+      tamperedPriceInput,
+    ), [{ event_disposition: 'rejected', order_id: null, replayed: false }]);
+
+    const tamperedAmountInput = [...paidEventInput];
+    tamperedAmountInput[0] = `evt_tampered_amount_${suffix}`;
+    tamperedAmountInput[2] = createHash('sha256').update(randomBytes(64)).digest();
+    tamperedAmountInput[15] = amountMinor + 100;
+    assert.deepEqual(await commerceRuntimeQuery<RecordedCheckoutRow>(
+      pool,
+      'r72_webhook',
+      recordPaidCheckoutSql,
+      tamperedAmountInput,
+    ), [{ event_disposition: 'rejected', order_id: null, replayed: false }]);
+    const rejectedEvents = await ownerQuery<{
+      event_id: string;
+      disposition: string;
+      reason_code: string;
+    }>(
+      pool,
+      `SELECT event_id, disposition, reason_code
+       FROM app_private.stripe_checkout_events
+       WHERE event_id = ANY ($1::text[])
+       ORDER BY event_id`,
+      [[`evt_tampered_amount_${suffix}`, `evt_tampered_price_${suffix}`]],
+    );
+    assert.deepEqual(rejectedEvents, [
+      {
+        event_id: `evt_tampered_amount_${suffix}`,
+        disposition: 'rejected',
+        reason_code: 'checkout_amount_mismatch',
+      },
+      {
+        event_id: `evt_tampered_price_${suffix}`,
+        disposition: 'rejected',
+        reason_code: 'checkout_price_mismatch',
+      },
+    ]);
+    assert.deepEqual(await ownerQuery(
+      pool,
+      'SELECT id FROM app_private.platform_orders WHERE checkout_intent_id = $1',
+      [checkoutIntentId],
+    ), []);
+
+    await expectPostgresError(
+      commerceRuntimeQuery(pool, 'r72_public', recordPaidCheckoutSql, paidEventInput),
+      '42501',
+    );
+    await expectPostgresError(
+      commerceRuntimeQuery(pool, 'r72_webhook', 'SELECT id FROM app_private.platform_orders'),
+      '42501',
+    );
+    const paid = await commerceRuntimeQuery<RecordedCheckoutRow>(
+      pool,
+      'r72_webhook',
+      recordPaidCheckoutSql,
+      paidEventInput,
+    );
+    assert.equal(paid.length, 1);
+    assert.equal(paid[0]!.event_disposition, 'processed');
+    assert.equal(paid[0]!.replayed, false);
+    assert.ok(paid[0]!.order_id);
+    const paidOrderId = paid[0]!.order_id!;
+    assert.deepEqual(await commerceRuntimeQuery<RecordedCheckoutRow>(
+      pool,
+      'r72_webhook',
+      recordPaidCheckoutSql,
+      paidEventInput,
+    ), [{ event_disposition: 'processed', order_id: paidOrderId, replayed: true }]);
+    const changedEventDigestReplay = [...paidEventInput];
+    changedEventDigestReplay[2] = createHash('sha256').update(randomBytes(64)).digest();
+    await expectPostgresError(
+      commerceRuntimeQuery(
+        pool,
+        'r72_webhook',
+        recordPaidCheckoutSql,
+        changedEventDigestReplay,
+      ),
+      '22000',
+    );
+
+    const blockedClaimHash = createHash('sha256').update(randomBytes(32)).digest();
+    const blockedBegin = (await commerceRuntimeQuery<BegunCheckoutRow>(
+      pool,
+      'r72_public',
+      beginCheckoutSql,
+      [
+        `blocked-checkout-${suffix}`,
+        'core',
+        1,
+        'S9',
+        true,
+        stripePriceId,
+        amountMinor,
+        'gbp',
+        false,
+        blockedClaimHash,
+      ],
+    ))[0]!;
+    const blockedSessionId = `cs_test_blocked_${suffix}`;
+    assert.equal((await commerceRuntimeQuery<{
+      bound_now: boolean;
+    }>(
+      pool,
+      'r72_public',
+      bindCheckoutSql,
+      [blockedBegin.checkout_intent_id, blockedBegin.provider_idempotency_key, blockedSessionId],
+    ))[0]!.bound_now, true);
+    const blockedPaid = await commerceRuntimeQuery<RecordedCheckoutRow>(
+      pool,
+      'r72_webhook',
+      recordPaidCheckoutSql,
+      [
+        `evt_blocked_${suffix}`,
+        'checkout.session.completed',
+        createHash('sha256').update(randomBytes(64)).digest(),
+        new Date(),
+        false,
+        false,
+        blockedBegin.checkout_intent_id,
+        blockedBegin.checkout_intent_id,
+        1,
+        blockedSessionId,
+        'payment',
+        'paid',
+        stripePriceId,
+        1,
+        1,
+        amountMinor,
+        'gbp',
+        `pi_blocked_${suffix}`,
+        null,
+        'not-an-email',
+      ],
+    );
+    assert.equal(blockedPaid[0]!.event_disposition, 'processed');
+    assert.ok(blockedPaid[0]!.order_id);
+    assert.deepEqual(await ownerQuery<{
+      financial_status: string;
+      fulfilment_status: string;
+      block_reason: string;
+      receipt_email: string | null;
+    }>(
+      pool,
+      `SELECT financial_status, fulfilment_status, block_reason,
+              receipt_email::text
+       FROM app_private.platform_orders
+       WHERE id = $1`,
+      [blockedPaid[0]!.order_id],
+    ), [{
+      financial_status: 'paid',
+      fulfilment_status: 'blocked',
+      block_reason: 'missing_or_invalid_receipt_email',
+      receipt_email: null,
+    }]);
+    assert.deepEqual(await commerceRuntimeQuery(
+      pool,
+      'r72_provisioning_command',
+      authorizePaidFulfilmentSql,
+      [blockedSessionId, blockedClaimHash],
+    ), [], 'a financially paid order with no verified email remains blocked');
+
+    assert.deepEqual(await commerceRuntimeQuery(
+      pool,
+      'r72_provisioning_command',
+      authorizePaidFulfilmentSql,
+      [stripeSessionId, wrongOrderClaimHash],
+    ), [], 'the Stripe Session id is not itself fulfilment authority');
+    const authorized = await commerceRuntimeQuery<{
+      order_id: string;
+      product_key: string;
+      receipt_email: string;
+      fulfilment_status: string;
+      organization_id: string | null;
+      workspace_id: string | null;
+      owner_user_id: string | null;
+      setup_action_token_id: string | null;
+      setup_delivery_id: string | null;
+    }>(
+      pool,
+      'r72_provisioning_command',
+      authorizePaidFulfilmentSql,
+      [stripeSessionId, orderClaimHash],
+    );
+    assert.deepEqual(authorized, [{
+      order_id: paidOrderId,
+      product_key: 'core',
+      receipt_email: receiptEmail,
+      fulfilment_status: 'awaiting_intake',
+      organization_id: null,
+      workspace_id: null,
+      owner_user_id: null,
+      setup_action_token_id: null,
+      setup_delivery_id: null,
+    }]);
+    await expectPostgresError(
+      commerceRuntimeQuery(
+        pool,
+        'r72_public',
+        authorizePaidFulfilmentSql,
+        [stripeSessionId, orderClaimHash],
+      ),
+      '42501',
+    );
+
+    const organizationSlug = `paid-${suffix}`;
+    const workspaceSlug = `paid-workspace-${suffix}`;
+    const setupTokenHash = createHash('sha256').update(randomBytes(32)).digest();
+    const recipientEmailHash = createHash('sha256').update(receiptEmail).digest();
+    const paidDeliveryId = randomUUID();
+    const deliveryIv = randomBytes(12);
+    const encryptedDelivery = randomBytes(96);
+    const deliveryTag = randomBytes(16);
+    const fulfilInput: unknown[] = [
+      stripeSessionId,
+      orderClaimHash,
+      'Paid Customer',
+      organizationSlug,
+      'Paid Customer Sales',
+      workspaceSlug,
+      'Paid Owner',
+      setupTokenHash,
+      recipientEmailHash,
+      'Europe/London',
+      'en-GB',
+      'GBP',
+      paidDeliveryId,
+      1,
+      'integration-key-v1',
+      deliveryIv,
+      encryptedDelivery,
+      deliveryTag,
+    ];
+    const directInnerInput: unknown[] = [
+      stripeSessionId,
+      'Paid Customer',
+      organizationSlug,
+      'Paid Customer Sales',
+      workspaceSlug,
+      receiptEmail,
+      'Paid Owner',
+      setupTokenHash,
+      recipientEmailHash,
+      'Europe/London',
+      'en-GB',
+      'GBP',
+      paidDeliveryId,
+      1,
+      'integration-key-v1',
+      deliveryIv,
+      encryptedDelivery,
+      deliveryTag,
+    ];
+    await expectPostgresError(
+      provisioningQuery(pool, provisionCustomerSql, directInnerInput),
+      '42501',
+    );
+    await expectPostgresError(
+      commerceRuntimeQuery(pool, 'r72_webhook', fulfilPaidCheckoutSql, fulfilInput),
+      '42501',
+    );
+    const wrongClaimFulfilInput = [...fulfilInput];
+    wrongClaimFulfilInput[1] = wrongOrderClaimHash;
+    assert.deepEqual(await commerceRuntimeQuery(
+      pool,
+      'r72_provisioning_command',
+      fulfilPaidCheckoutSql,
+      wrongClaimFulfilInput,
+    ), []);
+
+    const wrongRecipientFulfilInput = [...fulfilInput];
+    wrongRecipientFulfilInput[8] = createHash('sha256').update('poison@example.test').digest();
+    await expectPostgresError(
+      commerceRuntimeQuery(
+        pool,
+        'r72_provisioning_command',
+        fulfilPaidCheckoutSql,
+        wrongRecipientFulfilInput,
+      ),
+      '22023',
+    );
+    assert.deepEqual(await ownerQuery<{
+      fulfilment_status: string;
+      claim_unconsumed: boolean;
+      organizations: number;
+    }>(
+      pool,
+      `SELECT platform_order.fulfilment_status,
+              claim.consumed_at IS NULL AS claim_unconsumed,
+              (SELECT count(*)::int FROM app.organizations WHERE slug = $2) AS organizations
+       FROM app_private.platform_orders AS platform_order
+       JOIN app_private.order_claim_grants AS claim
+         ON claim.checkout_intent_id = platform_order.checkout_intent_id
+       WHERE platform_order.id = $1`,
+      [paidOrderId, organizationSlug],
+    ), [{
+      fulfilment_status: 'awaiting_intake',
+      claim_unconsumed: true,
+      organizations: 0,
+    }], 'a failed paid fulfilment consumes nothing and links nothing');
+
+    const [firstFulfilment, concurrentReplay] = await Promise.all([
+      commerceRuntimeQuery<ProvisionedCustomerRow>(
+        pool,
+        'r72_provisioning_command',
+        fulfilPaidCheckoutSql,
+        fulfilInput,
+      ),
+      commerceRuntimeQuery<ProvisionedCustomerRow>(
+        pool,
+        'r72_provisioning_command',
+        fulfilPaidCheckoutSql,
+        fulfilInput,
+      ),
+    ]);
+    assert.equal(firstFulfilment.length, 1);
+    assert.equal(concurrentReplay.length, 1);
+    assert.deepEqual(
+      [firstFulfilment[0]!.created_now, concurrentReplay[0]!.created_now].sort(),
+      [false, true],
+      'one transaction provisions and the contender receives the canonical replay',
+    );
+    const provisioned = firstFulfilment[0]!.created_now
+      ? firstFulfilment[0]!
+      : concurrentReplay[0]!;
+    const replayed = firstFulfilment[0]!.created_now
+      ? concurrentReplay[0]!
+      : firstFulfilment[0]!;
+    assert.deepEqual({
+      organization_id: replayed.organization_id,
+      workspace_id: replayed.workspace_id,
+      owner_user_id: replayed.owner_user_id,
+      setup_action_token_id: replayed.setup_action_token_id,
+      setup_expires_at: replayed.setup_expires_at,
+      setup_delivery_id: replayed.setup_delivery_id,
+      setup_delivery_generation: replayed.setup_delivery_generation,
+    }, {
+      organization_id: provisioned.organization_id,
+      workspace_id: provisioned.workspace_id,
+      owner_user_id: provisioned.owner_user_id,
+      setup_action_token_id: provisioned.setup_action_token_id,
+      setup_expires_at: provisioned.setup_expires_at,
+      setup_delivery_id: provisioned.setup_delivery_id,
+      setup_delivery_generation: provisioned.setup_delivery_generation,
+    });
+
+    const changedReplayInput = [...fulfilInput];
+    changedReplayInput[2] = 'Ignored Replay Customer';
+    changedReplayInput[3] = `ignored-${suffix}`;
+    changedReplayInput[7] = createHash('sha256').update(randomBytes(32)).digest();
+    changedReplayInput[12] = randomUUID();
+    changedReplayInput[16] = randomBytes(96);
+    const canonicalReplay = (await commerceRuntimeQuery<ProvisionedCustomerRow>(
+      pool,
+      'r72_provisioning_command',
+      fulfilPaidCheckoutSql,
+      changedReplayInput,
+    ))[0]!;
+    assert.equal(canonicalReplay.created_now, false);
+    assert.deepEqual({
+      organization_id: canonicalReplay.organization_id,
+      workspace_id: canonicalReplay.workspace_id,
+      owner_user_id: canonicalReplay.owner_user_id,
+      setup_action_token_id: canonicalReplay.setup_action_token_id,
+      setup_expires_at: canonicalReplay.setup_expires_at,
+      setup_delivery_id: canonicalReplay.setup_delivery_id,
+      setup_delivery_generation: canonicalReplay.setup_delivery_generation,
+    }, {
+      organization_id: provisioned.organization_id,
+      workspace_id: provisioned.workspace_id,
+      owner_user_id: provisioned.owner_user_id,
+      setup_action_token_id: provisioned.setup_action_token_id,
+      setup_expires_at: provisioned.setup_expires_at,
+      setup_delivery_id: provisioned.setup_delivery_id,
+      setup_delivery_generation: provisioned.setup_delivery_generation,
+    });
+
+    const settledOrder = await ownerQuery<{
+      financial_status: string;
+      fulfilment_status: string;
+      receipt_email: string;
+      organization_id: string;
+      workspace_id: string;
+      owner_user_id: string;
+      setup_action_token_id: string;
+      setup_delivery_id: string;
+      claim_consumed: boolean;
+      provisioning_receipt_key: string;
+      setup_delivery_state: string;
+    }>(
+      pool,
+      `SELECT platform_order.financial_status,
+              platform_order.fulfilment_status,
+              platform_order.receipt_email::text,
+              platform_order.organization_id,
+              platform_order.workspace_id,
+              platform_order.owner_user_id,
+              platform_order.setup_action_token_id,
+              platform_order.setup_delivery_id,
+              claim.consumed_at IS NOT NULL AS claim_consumed,
+              receipt.idempotency_key AS provisioning_receipt_key,
+              delivery.state AS setup_delivery_state
+       FROM app_private.platform_orders AS platform_order
+       JOIN app_private.order_claim_grants AS claim
+         ON claim.checkout_intent_id = platform_order.checkout_intent_id
+       JOIN app_private.customer_provisioning_receipts AS receipt
+         ON receipt.organization_id = platform_order.organization_id
+        AND receipt.workspace_id = platform_order.workspace_id
+        AND receipt.owner_user_id = platform_order.owner_user_id
+       JOIN app_private.account_setup_deliveries AS delivery
+         ON delivery.id = platform_order.setup_delivery_id
+       WHERE platform_order.id = $1`,
+      [paidOrderId],
+    );
+    assert.deepEqual(settledOrder, [{
+      financial_status: 'paid',
+      fulfilment_status: 'provisioned',
+      receipt_email: receiptEmail,
+      organization_id: provisioned.organization_id,
+      workspace_id: provisioned.workspace_id,
+      owner_user_id: provisioned.owner_user_id,
+      setup_action_token_id: provisioned.setup_action_token_id,
+      setup_delivery_id: provisioned.setup_delivery_id,
+      claim_consumed: true,
+      provisioning_receipt_key: stripeSessionId,
+      setup_delivery_state: 'pending',
+    }]);
+    assert.deepEqual(await commerceRuntimeQuery(
+      pool,
+      'r72_provisioning_command',
+      authorizePaidFulfilmentSql,
+      [stripeSessionId, wrongOrderClaimHash],
+    ), []);
+    const authorizedReplay = await commerceRuntimeQuery<{
+      order_id: string;
+      product_key: string;
+      receipt_email: string;
+      fulfilment_status: string;
+      organization_id: string;
+      workspace_id: string;
+      owner_user_id: string;
+      setup_action_token_id: string;
+      setup_delivery_id: string;
+    }>(
+      pool,
+      'r72_provisioning_command',
+      authorizePaidFulfilmentSql,
+      [stripeSessionId, orderClaimHash],
+    );
+    assert.deepEqual(authorizedReplay, [{
+      order_id: paidOrderId,
+      product_key: 'core',
+      receipt_email: receiptEmail,
+      fulfilment_status: 'provisioned',
+      organization_id: provisioned.organization_id,
+      workspace_id: provisioned.workspace_id,
+      owner_user_id: provisioned.owner_user_id,
+      setup_action_token_id: provisioned.setup_action_token_id,
+      setup_delivery_id: provisioned.setup_delivery_id,
+    }]);
+
+    await ownerQuery(
+      pool,
+      `UPDATE app_private.order_claim_grants
+          SET created_at = statement_timestamp() - interval '2 days',
+              expires_at = statement_timestamp() - interval '1 day'
+        WHERE checkout_intent_id = $1`,
+      [checkoutIntentId],
+    );
+    assert.deepEqual(await commerceRuntimeQuery(
+      pool,
+      'r72_provisioning_command',
+      authorizePaidFulfilmentSql,
+      [stripeSessionId, orderClaimHash],
+    ), [], 'a consumed claim loses replay authority when its bounded grant expires');
+    assert.deepEqual(await commerceRuntimeQuery(
+      pool,
+      'r72_provisioning_command',
+      fulfilPaidCheckoutSql,
+      changedReplayInput,
+    ), [], 'the atomic fulfilment command also denies an expired replay claim');
+  } finally {
+    await ownerQuery(pool, 'TRUNCATE app_private.checkout_intents CASCADE');
     await resetIdentityTables(pool);
     await pool.end();
   }

@@ -170,7 +170,7 @@ test('claim stays single-row so a corrupt or unavailable-key job cannot strand a
   );
 });
 
-test('authenticated payload corruption returns no provider work and releases the batch to retry', async () => {
+test('authenticated payload corruption blocks for operator recovery without erasing the row', async () => {
   const ring = keyring();
   const producer = new PgSetupDeliveryService({
     deliveryCommandPool: unusedPool(),
@@ -204,10 +204,7 @@ test('authenticated payload corruption returns no provider work and releases the
           lease_expires_at: '2030-01-01T00:01:00.000Z',
         }] } as never;
       }
-      return { rows: [{
-        delivery_state: 'retry',
-        available_at: '2030-01-01T00:02:00.000Z',
-      }] } as never;
+      throw new Error('no settlement query is allowed for unreadable ciphertext');
     },
   } as unknown as Pick<Pool, 'query'>;
   const worker = new PgSetupDeliveryService({
@@ -216,11 +213,55 @@ test('authenticated payload corruption returns no provider work and releases the
     setupUrl: 'https://portal.example.test/portal/setup',
     createLeaseToken: () => LEASE_TOKEN,
   });
-  await assert.rejects(() => worker.claim(), /authentication failed/);
-  assert.equal(calls.length, 2);
-  assert.match(calls[1]!.text, /fail_account_setup_delivery/);
-  assert.equal(calls[1]!.values[2], 'payload_batch_rejected');
+  await assert.rejects(() => worker.claim(), /requires operator recovery/);
+  assert.equal(calls.length, 1);
   assert.equal(calls.flatMap((call) => call.values).includes(LEASE_TOKEN), false);
+});
+
+test('wrong bytes under a known key id block without destroying recoverable ciphertext', async () => {
+  const producer = new PgSetupDeliveryService({
+    deliveryCommandPool: unusedPool(),
+    keyring: keyring(),
+    setupUrl: 'https://portal.example.test/portal/setup',
+    createSetupToken: () => SETUP_TOKEN,
+    createDeliveryId: () => IDS.delivery,
+    createIv: () => IV,
+  });
+  const encrypted = producer.prepare('owner@example.test');
+  const wrongKeyring = new SetupDeliveryKeyring({
+    activeKeyId: encrypted.encryptionKeyId,
+    keys: { [encrypted.encryptionKeyId]: Buffer.alloc(32, 8) },
+  });
+  let queryCount = 0;
+  const pool = {
+    query: async () => {
+      queryCount += 1;
+      return { rows: [{
+        delivery_id: encrypted.deliveryId,
+        user_id: IDS.user,
+        workspace_id: IDS.workspace,
+        action_token_id: IDS.action,
+        payload_version: encrypted.payloadVersion,
+        encryption_key_id: encrypted.encryptionKeyId,
+        encryption_iv: encrypted.encryptionIv,
+        encrypted_payload: encrypted.encryptedPayload,
+        authentication_tag: encrypted.authenticationTag,
+        recipient_email_hash: encrypted.recipientEmailHash,
+        aad_context: setupDeliveryAad(encrypted.deliveryId),
+        attempt_count: 1,
+        lease_expires_at: '2030-01-01T00:01:00.000Z',
+      }] } as never;
+    },
+  } as unknown as Pick<Pool, 'query'>;
+  const worker = new PgSetupDeliveryService({
+    deliveryCommandPool: pool,
+    keyring: wrongKeyring,
+    setupUrl: 'https://portal.example.test/portal/setup',
+    createLeaseToken: () => LEASE_TOKEN,
+  });
+
+  await assert.rejects(() => worker.claim(), /requires operator recovery/);
+  assert.equal(queryCount, 1, 'no destructive settlement query follows a possible key-configuration fault');
 });
 
 test('claim binds the encrypted recipient to the database-authoritative email hash', async () => {
@@ -233,7 +274,7 @@ test('claim binds the encrypted recipient to the database-authoritative email ha
     createDeliveryId: () => IDS.delivery,
     createIv: () => IV,
   }).prepare('owner@example.test');
-  let failures = 0;
+  let unexpectedQueries = 0;
   const pool = {
     query: async (text: string) => {
       if (text.includes('.claim_account_setup_deliveries')) {
@@ -253,8 +294,8 @@ test('claim binds the encrypted recipient to the database-authoritative email ha
           lease_expires_at: '2030-01-01T00:01:00.000Z',
         }] } as never;
       }
-      failures += 1;
-      return { rows: [{ delivery_state: 'retry', available_at: '2030-01-01T00:02:00.000Z' }] } as never;
+      unexpectedQueries += 1;
+      throw new Error('no settlement query is allowed for unreadable ciphertext');
     },
   } as unknown as Pick<Pool, 'query'>;
   const worker = new PgSetupDeliveryService({
@@ -264,8 +305,8 @@ test('claim binds the encrypted recipient to the database-authoritative email ha
     createLeaseToken: () => LEASE_TOKEN,
   });
 
-  await assert.rejects(() => worker.claim(), /recipient does not match database authority/);
-  assert.equal(failures, 1, 'the fenced row is returned to retry without provider work');
+  await assert.rejects(() => worker.claim(), /requires operator recovery/);
+  assert.equal(unexpectedQueries, 0, 'the unreadable row remains recoverable under its bounded lease');
 });
 
 test('decrypted setup URL must retain the configured portal origin', async () => {
@@ -278,7 +319,7 @@ test('decrypted setup URL must retain the configured portal origin', async () =>
     createDeliveryId: () => IDS.delivery,
     createIv: () => IV,
   }).prepare('owner@example.test');
-  let failures = 0;
+  let unexpectedQueries = 0;
   const pool = {
     query: async (text: string) => {
       if (text.includes('.claim_account_setup_deliveries')) {
@@ -298,8 +339,8 @@ test('decrypted setup URL must retain the configured portal origin', async () =>
           lease_expires_at: '2030-01-01T00:01:00.000Z',
         }] } as never;
       }
-      failures += 1;
-      return { rows: [{ delivery_state: 'retry', available_at: '2030-01-01T00:02:00.000Z' }] } as never;
+      unexpectedQueries += 1;
+      throw new Error('no settlement query is allowed for setup-origin drift');
     },
   } as unknown as Pick<Pool, 'query'>;
   const worker = new PgSetupDeliveryService({
@@ -308,11 +349,11 @@ test('decrypted setup URL must retain the configured portal origin', async () =>
     setupUrl: 'https://portal.example.test/portal/setup',
     createLeaseToken: () => LEASE_TOKEN,
   });
-  await assert.rejects(() => worker.claim(), /does not match the configured portal/);
-  assert.equal(failures, 1);
+  await assert.rejects(() => worker.claim(), /requires operator recovery/);
+  assert.equal(unexpectedQueries, 0);
 });
 
-test('ack, renewal and retry commands fence with a hash and never pass the raw lease', async () => {
+test('provider settlement, renewal and retry commands fence with a hash and never pass the raw lease', async () => {
   const calls: Array<{ text: string; values: unknown[] }> = [];
   const pool = {
     query: async (text: string, values?: unknown[]) => {
@@ -320,8 +361,15 @@ test('ack, renewal and retry commands fence with a hash and never pass the raw l
       if (text.includes('.renew_account_setup_delivery_lease')) {
         return { rows: [{ lease_expires_at: '2030-01-01T00:02:00.000Z' }] } as never;
       }
-      if (text.includes('.acknowledge_account_setup_delivery')) {
-        return { rows: [{ acknowledged: true }] } as never;
+      if (text.includes('.acknowledge_account_setup_delivery_acceptance')) {
+        return { rows: [{
+          delivered_at: '2030-01-01T00:02:30.000Z',
+          provider_id: 'fake',
+          provider_reference_id: 'msg-safe-123',
+        }] } as never;
+      }
+      if (text.includes('.reject_account_setup_delivery_permanently')) {
+        return { rows: [{ dead_lettered_at: '2030-01-01T00:02:45.000Z' }] } as never;
       }
       return { rows: [{ delivery_state: 'retry', available_at: '2030-01-01T00:03:00.000Z' }] } as never;
     },
@@ -332,7 +380,26 @@ test('ack, renewal and retry commands fence with a hash and never pass the raw l
     setupUrl: 'https://portal.example.test/portal/setup',
   });
   assert.equal(await service.renew(IDS.delivery, LEASE_TOKEN, 60), '2030-01-01T00:02:00.000Z');
-  assert.equal(await service.acknowledge(IDS.delivery, LEASE_TOKEN), true);
+  await assert.rejects(
+    () => service.acknowledge(IDS.delivery, LEASE_TOKEN),
+    /requires provider acceptance details/,
+  );
+  assert.deepEqual(
+    await service.acknowledgeAcceptance(IDS.delivery, LEASE_TOKEN, {
+      providerId: 'fake',
+      providerReferenceId: 'msg-safe-123',
+      providerAcceptedAt: '2030-01-01T00:02:20.000Z',
+    }),
+    {
+      deliveredAt: '2030-01-01T00:02:30.000Z',
+      providerId: 'fake',
+      providerReferenceId: 'msg-safe-123',
+    },
+  );
+  assert.deepEqual(
+    await service.rejectPermanently(IDS.delivery, LEASE_TOKEN, 'invalid_recipient'),
+    { state: 'dead_letter', settledAt: '2030-01-01T00:02:45.000Z' },
+  );
   assert.deepEqual(
     await service.fail(IDS.delivery, LEASE_TOKEN, 'provider_unavailable', '2030-01-01T00:03:00.000Z'),
     { state: 'retry', availableAt: '2030-01-01T00:03:00.000Z' },

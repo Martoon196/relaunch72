@@ -118,6 +118,12 @@ function validateInput(input: NativeCustomerProvisioningInput): {
 }
 
 /**
+ * Legacy adapter for exercising the inner native-provisioning primitive in
+ * isolation. Migration 0012 revokes runtime execution from
+ * r72_provisioning_command; production activation must use
+ * PgPaidCheckoutService.fulfilPaidPortal(), which binds this work to a paid
+ * order claim. This class is deliberately not composed by the platform.
+ *
  * Calls one SECURITY DEFINER transaction that creates the complete native
  * customer boundary and its encrypted delivery job. No raw setup credential is
  * returned: provider failure or process exit can be recovered by claiming the

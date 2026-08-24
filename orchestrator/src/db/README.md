@@ -25,22 +25,32 @@ messages, publishing, or any external provider effect.
   process-wide scrypt worker ceiling, and finally consumes that exact claim in
   the activation/session transaction. Invalid-token floods therefore cannot
   queue unbounded password work.
-- Atomic customer creation uses `DATABASE_PROVISIONING_COMMAND_URL` /
-  `r72_provisioning_command`. It has no table privileges and can execute only
-  `provision_customer_workspace_with_setup_delivery`, which creates an
-  organization, native workspace, pending owner, active owner memberships,
-  hashed 24-hour setup credential, default Sales pipeline and encrypted durable
-  delivery job in one transaction. The verified Stripe Checkout Session id is
-  the intended idempotency key. The adapter returns canonical IDs and delivery
-  metadata, never the raw setup credential.
+- Paid customer activation uses three isolated command identities.
+  `DATABASE_PUBLIC_URL` / `r72_public` can create and bind a private Checkout
+  intent but cannot record payment or read its tables. `DATABASE_WEBHOOK_URL` /
+  `r72_webhook` can reconcile a signature-verified Stripe event to that exact
+  intent. `DATABASE_PROVISIONING_COMMAND_URL` /
+  `r72_provisioning_command` can authorize and fulfil only a paid portal order
+  presented with its 256-bit browser claim. Fulfilment creates the organization,
+  native workspace, pending owner, active owner memberships, hashed 24-hour
+  setup credential, default Sales pipeline and encrypted durable delivery job
+  in the same transaction that consumes the claim and links the paid order.
+  None of these roles has table privileges. Direct runtime execution of the
+  inner provisioning primitive is revoked; its adapter remains only as an
+  uncomposed legacy/test primitive.
 - Setup delivery uses `DATABASE_SETUP_DELIVERY_COMMAND_URL` /
   `r72_setup_delivery_command`. This function-only identity can inspect required
-  encryption-key IDs and perform bounded claim, lease renewal, acknowledgement
-  and retry/dead-letter transitions. Lease credentials are generated in the
-  process and only their hashes enter PostgreSQL. The contract is at-least-once:
-  a provider acceptance followed by a crash before acknowledgement can cause a
-  retry, so the delivery UUID is also exposed as the stable provider idempotency
-  key where a provider supports one.
+  encryption-key IDs and perform bounded claim, lease renewal,
+  provider-acceptance settlement and retry/permanent-rejection transitions.
+  Lease credentials are generated in the process and only their hashes enter
+  PostgreSQL. Successful settlement requires an opaque provider ID/reference
+  and provider-acceptance timestamp under the live lease fence; only then is
+  ciphertext erased. The database state named `delivered` currently means
+  **provider-accepted handoff**, not confirmed inbox delivery. Delivered,
+  bounced and complained webhook states remain future provider work. The
+  contract is at-least-once: a provider acceptance followed by a crash before
+  database settlement can cause a retry. The delivery UUID is a stable
+  correlation key, but no provider-independent exactly-once claim is made.
 - Trusted setup reissue uses `DATABASE_SETUP_REISSUE_COMMAND_URL` /
   `r72_setup_reissue_command`. The function-only command is idempotent,
   restricted to a still-pending active owner, and binds the supplied recipient
@@ -89,7 +99,13 @@ Migration `0010` recreates delivery lease renewal with portable PostgreSQL
 `LEAST` syntax. Migration `0011` makes lifecycle creation/update defaults
 statement-stable wherever a same-row chronology constraint compares them with
 an explicitly supplied lifecycle timestamp; event/outbox fact clocks retain
-their original paired ordering.
+their original paired ordering. Migration `0012` adds private Checkout intents,
+hash-only order claims, signed-event replay evidence, canonical paid orders and
+an atomic claim-bound fulfilment wrapper while removing direct runtime access to
+the inner provisioning primitive. Migration `0013` persists provider acceptance
+evidence, makes unattributed acknowledgement unavailable to the worker, caps the
+initial lease to setup-token expiry and adds an explicit fenced permanent
+provider-rejection command.
 
 Before the first successful managed-PostgreSQL application, the pre-launch role
 bootstraps in `0001`, `0003`, `0004`, `0006` and `0008` were amended to support
@@ -109,12 +125,15 @@ separately:
   never falls back to legacy signed cookies or JSON CRM.
 - `buildPgOnboardingPlatform(...)` is an explicit, separate composition. It
   uses `DATABASE_WEB_URL` only for startup ledger readiness, then closes that
-  pool and retains exact provisioning, delivery and reissue role pools. It also
-  fails closed unless `PORTAL_BASE_URL` is a bare HTTPS origin (loopback HTTP is
-  allowed only in development), `SETUP_DELIVERY_ACTIVE_KEY_ID` names an active
-  key, and `SETUP_DELIVERY_KEYS_JSON` contains canonical base64url-encoded
-  32-byte AES keys for every still-claimable delivery generation. Construction
-  calls no provider and starts no worker.
+  pool and retains exact public-checkout, webhook, claim-bound provisioning,
+  delivery and reissue role pools. It returns a composed
+  `PgPaidCheckoutService` plus `PgSetupDeliveryService`; it does not expose the
+  unrestricted inner provisioning adapter. It also fails closed unless
+  `PORTAL_BASE_URL` is a bare HTTPS origin (loopback HTTP is allowed only in
+  development), `SETUP_DELIVERY_ACTIVE_KEY_ID` names an active key, and
+  `SETUP_DELIVERY_KEYS_JSON` contains canonical base64url-encoded 32-byte AES
+  keys for every still-claimable delivery generation. Construction calls no
+  provider and starts no worker.
 
 The application encrypts the canonical recipient and full `/portal/setup`
 link with AES-256-GCM before the database call. PostgreSQL stores the setup-token
@@ -123,10 +142,18 @@ email link—and erases encrypted fields when a delivery becomes delivered,
 superseded or dead-lettered. Retired decrypt keys must remain configured until
 startup readiness reports that no claimable row needs them.
 
-`npm run test:db:integration` passed **2/2** against a disposable direct Neon
-database on 2026-08-24, including RLS/revocation and atomic onboarding/setup.
-Automatic PostgreSQL onboarding nevertheless remains locked. Keep it out of
-customer traffic until the provider dispatcher is deliberately implemented and
-tested, edge/access logs redact the initial `?token=` query, paid-checkout
-provenance is database-native, the operational runbooks are approved, and the
-real-browser acceptance pass is complete.
+`npm run test:db:integration` passed **3/3** against a freshly reset disposable
+direct Neon database on 2026-08-24. The proof covers RLS/revocation, atomic
+onboarding/setup, exact paid-Checkout reconciliation, changed-byte event replay
+rejection, claim-bound concurrent fulfilment, claim expiry, provider acceptance
+evidence and runtime privilege fences across the `0001`–`0013` ledger.
+The final sequential repository suite, including those real database tests,
+passed **610/610 with 0 failures and 0 skips**.
+Automatic PostgreSQL onboarding nevertheless remains locked. The detached
+Checkout/dispatcher modules are not wired into `server/app.ts`, no real email
+provider adapter exists, and no worker starts automatically. Keep this path out
+of customer traffic until route/browser storage wiring is explicitly enabled,
+a real provider adapter and supervisor are operated, ingress logs redact the
+initial `?token=` query, distributed abuse controls and operational
+restore/key/alert runbooks are approved, repeat-purchase policy is defined, and
+real-browser acceptance is complete.
