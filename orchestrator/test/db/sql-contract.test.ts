@@ -2,11 +2,15 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { discoverMigrations } from '../../src/db/migrate.js';
 
 const migration1Url = new URL('../../src/db/migrations/0001_extensions_roles.sql', import.meta.url);
 const migration2Url = new URL('../../src/db/migrations/0002_identity_workspaces.sql', import.meta.url);
 const migration3Url = new URL('../../src/db/migrations/0003_crm_first_loop.sql', import.meta.url);
 const migration4Url = new URL('../../src/db/migrations/0004_portal_sessions.sql', import.meta.url);
+const migration5Url = new URL('../../src/db/migrations/0005_canonical_portal_identity.sql', import.meta.url);
+const migration6Url = new URL('../../src/db/migrations/0006_customer_provisioning.sql', import.meta.url);
+const migration7Url = new URL('../../src/db/migrations/0007_public_schema_hardening.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -366,4 +370,192 @@ test('0004 exposes an exact read-only migration ledger without exposing its tabl
   assert.match(sql, /REVOKE ALL ON FUNCTION app_private\.runtime_schema_migrations\(\) FROM PUBLIC/);
   assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.runtime_schema_migrations\(\) TO r72_web/);
   assert.doesNotMatch(sql, /GRANT SELECT ON app_private\.schema_migrations TO r72_web/);
+});
+
+test('0005 recreates effective portal authentication under the non-login function owner', async () => {
+  const sql = normalise(await readFile(migration5Url, 'utf8'));
+  assert.match(sql, /SET LOCAL ROLE r72_owner; GRANT CREATE ON SCHEMA app_private TO r72_security_definer; SET LOCAL ROLE r72_security_definer/);
+  for (const signature of [
+    'portal_login_credential\\(text\\)',
+    'create_portal_session\\(uuid, uuid, text, bytea, bytea, bytea, bytea\\)',
+    'resolve_portal_session\\(bytea\\)',
+    'upgrade_portal_password_hash\\(uuid, text, text\\)',
+  ]) {
+    assert.match(sql, new RegExp(`DROP FUNCTION app_private\\.${signature}`));
+  }
+  assert.equal((sql.match(/CREATE FUNCTION app_private\./g) ?? []).length, 3);
+  assert.equal((sql.match(/SECURITY DEFINER SET search_path = pg_catalog/g) ?? []).length, 3);
+  assert.doesNotMatch(sql, /CREATE FUNCTION app_private\.upgrade_portal_password_hash/);
+  assert.match(sql, /CREATE FUNCTION app_private\.resolve_portal_session\(p_token_hash bytea\)[^;]+\$function\$; SET LOCAL ROLE r72_owner; REVOKE CREATE ON SCHEMA app_private FROM r72_security_definer/);
+});
+
+test('0005 removes the JSON tenant bridge and returns canonical identity columns only', async () => {
+  const sql = normalise(await readFile(migration5Url, 'utf8'));
+  assert.doesNotMatch(sql, /legacy_tenant_key/);
+  assert.match(sql, /CREATE FUNCTION app_private\.portal_login_credential\(p_email text\) RETURNS TABLE \( user_id uuid, user_email text, password_hash text, selected_workspace_id uuid \)/);
+  assert.match(sql, /CREATE FUNCTION app_private\.create_portal_session\([^;]+RETURNS TABLE \( session_id uuid, user_id uuid, user_email text, selected_workspace_id uuid, expires_at timestamptz \)/);
+  assert.match(sql, /CREATE FUNCTION app_private\.resolve_portal_session\(p_token_hash bytea\) RETURNS TABLE \( session_id uuid, user_id uuid, user_email text, selected_workspace_id uuid \)/);
+  assert.match(sql, /SELECT resolved\.session_id, resolved\.user_id, person\.email::text, resolved\.selected_workspace_id FROM app_private\.resolve_session\(p_token_hash\) AS resolved/);
+});
+
+test('0005 preserves active membership checks, lifecycle locks, and least-privilege grants', async () => {
+  const sql = normalise(await readFile(migration5Url, 'utf8'));
+  assert.match(sql, /candidate\.status = 'active'/);
+  assert.match(sql, /app_private\.has_active_workspace_membership\(person\.id, candidate\.workspace_id\)/);
+  assert.match(sql, /person\.status = 'active' AND person\.password_hash IS NOT NULL/);
+  for (const predicate of [
+    /person\.status = 'active'/,
+    /membership\.status = 'active'/,
+    /workspace\.status = 'active'/,
+    /organization\.status = 'active'/,
+  ]) {
+    assert.match(sql, predicate);
+  }
+  assert.match(sql, /person\.password_hash = p_expected_password_hash/);
+  assert.match(sql, /FOR SHARE OF person, membership, workspace, organization/);
+  assert.match(sql, /selected_source_organization_id IS NOT NULL/);
+  assert.match(sql, /source_membership\.status = 'active' FOR SHARE OF source_membership/);
+  assert.match(sql, /RAISE EXCEPTION 'portal identity source membership is not active' USING ERRCODE = '42501'/);
+
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.portal_login_credential\(text\) TO r72_identity_command/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.create_portal_session\(uuid, uuid, text, bytea, bytea, bytea, bytea\) TO r72_identity_command/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.resolve_portal_session\(bytea\) TO r72_web/);
+  assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.resolve_portal_session\(bytea\) TO r72_identity_command/);
+  assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.(?:portal_login_credential|create_portal_session)[^;]+ TO r72_web/);
+  assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
+});
+
+test('bundled migration discovery orders and checksums native identity, provisioning, then hardening', async () => {
+  const migrations = await discoverMigrations();
+  const tail = migrations.slice(-3);
+  assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
+    { filename: '0005_canonical_portal_identity.sql', version: 5 },
+    { filename: '0006_customer_provisioning.sql', version: 6 },
+    { filename: '0007_public_schema_hardening.sql', version: 7 },
+  ]);
+  const sources = [
+    (await readFile(migration5Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration6Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
+  ];
+  for (const [index, migration] of tail.entries()) {
+    assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
+  }
+});
+
+test('0007 removes ambient public-schema object creation from every application role', async () => {
+  const sql = normalise(await readFile(migration7Url, 'utf8'));
+  assert.match(sql, /REVOKE CREATE ON SCHEMA public FROM PUBLIC/);
+  for (const role of [
+    'r72_owner', 'r72_security_definer', 'r72_web', 'r72_public',
+    'r72_worker', 'r72_webhook', 'r72_readonly', 'r72_crm_command',
+    'r72_identity_command', 'r72_provisioning_command',
+  ]) {
+    assert.match(sql, new RegExp(`(?:FROM|,) ${role}(?:,|;)`));
+  }
+  assert.doesNotMatch(sql, /REVOKE USAGE ON SCHEMA public/);
+  assert.doesNotMatch(sql, /DROP (?:EXTENSION|SCHEMA)/);
+});
+
+test('0006 isolates native provisioning behind one function-only runtime role', async () => {
+  const sql = normalise(await readFile(migration6Url, 'utf8'));
+  assert.match(sql, /CREATE ROLE r72_provisioning_command/);
+  assert.match(sql, /ALTER ROLE r72_provisioning_command LOGIN [^;]* NOBYPASSRLS NOINHERIT/);
+  assert.match(sql, /REVOKE r72_owner, r72_security_definer FROM r72_provisioning_command/);
+  assert.match(sql, /Unsafe provisioning role membership/);
+  assert.match(sql, /Unsafe provisioning role grant/);
+  assert.match(sql, /Unsafe privileged role membership/);
+  assert.match(sql, /Unsafe privileged role grant/);
+  assert.match(sql, /REVOKE ALL ON ALL TABLES IN SCHEMA app FROM r72_provisioning_command/);
+  assert.match(sql, /REVOKE ALL ON ALL TABLES IN SCHEMA app_private FROM r72_provisioning_command/);
+  assert.match(sql, /REVOKE ALL ON ALL FUNCTIONS IN SCHEMA app_private FROM r72_provisioning_command/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.provision_customer_workspace\([^;]+\) TO r72_provisioning_command/);
+  assert.doesNotMatch(sql, /GRANT (?:SELECT|INSERT|UPDATE|DELETE)[^;]* TO r72_provisioning_command/);
+  assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.complete_native_account_setup\([^;]+\) TO r72_provisioning_command/);
+});
+
+test('0006 binds setup credentials to one workspace and keeps idempotency state private', async () => {
+  const sql = normalise(await readFile(migration6Url, 'utf8'));
+  assert.match(sql, /ALTER TABLE app\.identity_action_tokens ADD COLUMN workspace_id uuid/);
+  assert.match(sql, /FOREIGN KEY \(workspace_id, user_id\) REFERENCES app\.workspace_memberships \(workspace_id, user_id\) ON DELETE CASCADE/);
+  assert.match(sql, /CHECK \(purpose <> 'account_setup' OR workspace_id IS NOT NULL\)/);
+  assert.match(sql, /CREATE INDEX identity_action_tokens_workspace_active_idx ON app\.identity_action_tokens \(workspace_id, user_id, purpose, expires_at\) WHERE consumed_at IS NULL AND revoked_at IS NULL/);
+  assert.match(sql, /CREATE UNIQUE INDEX identity_action_tokens_one_active_setup_uq ON app\.identity_action_tokens \(user_id\) WHERE purpose = 'account_setup' AND consumed_at IS NULL AND revoked_at IS NULL/);
+  assert.match(sql, /VALUES \('app', 'identity_action_tokens', 'workspace_id'\)/);
+
+  const receipt = /CREATE TABLE app_private\.customer_provisioning_receipts \((.*?)\);/.exec(sql)?.[1];
+  assert.ok(receipt);
+  assert.match(receipt, /idempotency_key text PRIMARY KEY/);
+  assert.match(receipt, /request_hash bytea NOT NULL CHECK \(octet_length\(request_hash\) = 32\)/);
+  assert.match(receipt, /organization_id uuid NOT NULL UNIQUE REFERENCES app\.organizations/);
+  assert.match(receipt, /workspace_id uuid NOT NULL UNIQUE REFERENCES app\.workspaces/);
+  assert.match(receipt, /setup_token_id uuid NOT NULL UNIQUE/);
+  assert.doesNotMatch(receipt, /REFERENCES app\.identity_action_tokens/);
+  assert.doesNotMatch(receipt, /token_hash|raw_token|token_value/);
+  assert.match(sql, /REVOKE ALL ON app_private\.customer_provisioning_receipts FROM PUBLIC/);
+  assert.doesNotMatch(sql, /GRANT [^;]*app_private\.customer_provisioning_receipts[^;]* TO r72_(?:web|public|worker|webhook|readonly|crm_command|identity_command|provisioning_command)/);
+});
+
+test('0006 provisions the entire first workspace atomically and replays only a stable receipt', async () => {
+  const sql = normalise(await readFile(migration6Url, 'utf8'));
+  assert.match(sql, /CREATE FUNCTION app_private\.provision_customer_workspace\(/);
+  assert.match(sql, /SECURITY DEFINER SET search_path = pg_catalog/);
+  assert.match(sql, /pg_advisory_xact_lock\( pg_catalog\.hashtextextended\(normalized_idempotency_key, 7200006\) \)/);
+  assert.match(sql, /customer provisioning idempotency key was reused with different input/);
+  assert.match(sql, /customer provisioning idempotency key was reused with different input' USING ERRCODE = '22023'/);
+  assert.match(sql, /RETURN QUERY SELECT existing_organization_id, existing_workspace_id, existing_owner_user_id, existing_setup_token_id, existing_setup_expires_at, false/);
+
+  const stableHash = /stable_request_hash := public\.digest\((.*?)\);/.exec(sql)?.[1];
+  assert.ok(stableHash);
+  assert.match(stableHash, /normalized_organization_name/);
+  assert.match(stableHash, /normalized_workspace_slug/);
+  assert.match(stableHash, /normalized_owner_email/);
+  assert.doesNotMatch(stableHash, /p_setup_token_hash/);
+
+  assert.match(sql, /INSERT INTO app\.organizations \(name, slug, kind\)/);
+  assert.match(sql, /INSERT INTO app\.users \(email, display_name\)/);
+  assert.match(sql, /INSERT INTO app\.workspaces/);
+  assert.match(sql, /FROM pg_catalog\.pg_timezone_names AS timezone WHERE timezone\.name = normalized_timezone/);
+  assert.match(sql, /INSERT INTO app\.organization_memberships/);
+  assert.match(sql, /INSERT INTO app\.workspace_memberships/);
+  assert.match(sql, /INSERT INTO app\.identity_action_tokens/);
+  assert.match(sql, /created_setup_expires_at timestamptz := statement_timestamp\(\) \+ interval '24 hours'/);
+  assert.match(sql, /'account_setup', p_setup_token_hash, created_setup_expires_at/);
+  assert.match(sql, /INSERT INTO app\.pipelines \(workspace_id, name, slug, is_default\) VALUES \(created_workspace_id, 'Sales', 'sales', true\)/);
+  for (const stage of [
+    /'New lead', 'new-lead', 1, 'open', false/,
+    /'Qualified', 'qualified', 2, 'open', false/,
+    /'Proposal', 'proposal', 3, 'open', false/,
+    /'Won', 'won', 4, 'won', true/,
+    /'Lost', 'lost', 5, 'lost', true/,
+  ]) {
+    assert.match(sql, stage);
+  }
+  assert.match(sql, /RETURN QUERY SELECT created_organization_id, created_workspace_id, created_owner_user_id, created_setup_token_id, created_setup_expires_at, true/);
+  assert.doesNotMatch(sql, /p_setup_token(?!_(?:hash|id))/);
+});
+
+test('0006 consumes setup once, activates the owner, and issues the first opaque session atomically', async () => {
+  const sql = normalise(await readFile(migration6Url, 'utf8'));
+  assert.match(sql, /CREATE FUNCTION app_private\.complete_native_account_setup\(/);
+  assert.match(sql, /p_password_hash !~ '\^scrypt\\\$v1\\\$16384,8,1\\\$\[A-Za-z0-9_-\]\{22\}\\\$\[A-Za-z0-9_-\]\{43\}\$'/);
+  assert.match(sql, /action_token\.token_hash = p_setup_token_hash/);
+  assert.match(sql, /action_token\.workspace_id INTO selected_action_token_id, selected_user_id, selected_user_email, selected_setup_workspace_id/);
+  assert.match(sql, /action_token\.purpose = 'account_setup'/);
+  assert.match(sql, /action_token\.consumed_at IS NULL/);
+  assert.match(sql, /action_token\.revoked_at IS NULL/);
+  assert.match(sql, /action_token\.expires_at > statement_timestamp\(\)/);
+  assert.match(sql, /person\.status = 'pending' AND person\.password_hash IS NULL/);
+  assert.match(sql, /membership\.status = 'active' AND membership\.role = 'owner'/);
+  assert.match(sql, /organization_membership\.status = 'active' AND organization_membership\.role = 'owner'/);
+  assert.match(sql, /FOR UPDATE OF action_token, person, membership, workspace, tenant_organization, organization_membership/);
+  assert.doesNotMatch(sql, /RAISE EXCEPTION 'invalid (?:native account setup input|or expired native account setup token)'/);
+  assert.match(sql, /SET password_hash = p_password_hash, email_verified_at = statement_timestamp\(\), status = 'active'/);
+  assert.match(sql, /SET consumed_at = statement_timestamp\(\) WHERE action_token\.id = selected_action_token_id/);
+  assert.match(sql, /SET revoked_at = statement_timestamp\(\) WHERE peer_token\.user_id = selected_user_id AND peer_token\.purpose = 'account_setup'/);
+  assert.match(sql, /INSERT INTO app\.user_sessions/);
+  assert.match(sql, /selected_user_id, selected_setup_workspace_id, selected_expires_at/);
+  assert.match(sql, /statement_timestamp\(\) \+ interval '14 days'/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.complete_native_account_setup\([^;]+\) TO r72_identity_command/);
+  assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.provision_customer_workspace\([^;]+\) TO r72_identity_command/);
 });

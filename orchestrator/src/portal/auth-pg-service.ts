@@ -17,7 +17,6 @@ interface CredentialRow extends QueryResultRow {
   user_email: string;
   password_hash: string;
   selected_workspace_id: string;
-  legacy_tenant_key: string;
 }
 
 interface SessionRow extends QueryResultRow {
@@ -25,7 +24,6 @@ interface SessionRow extends QueryResultRow {
   user_id: string;
   user_email: string;
   selected_workspace_id: string;
-  legacy_tenant_key: string;
   expires_at?: string | Date;
 }
 
@@ -40,12 +38,6 @@ function metadataHash(value: string | undefined): Buffer | null {
 
 function canonicalUuid(value: unknown): string | null {
   return typeof value === 'string' && UUID_PATTERN.test(value) ? value.toLowerCase() : null;
-}
-
-function legacyTenantKey(value: unknown): string | null {
-  return typeof value === 'string' && value.length > 0 && value.length <= 256 && value === value.trim()
-    ? value
-    : null;
 }
 
 function canonicalEmail(value: unknown): string | null {
@@ -76,18 +68,18 @@ export class PgPortalAuthService implements PortalAuthService {
     if (!OPAQUE_SESSION_PATTERN.test(sessionToken)) return null;
     const result = await this.dependencies.readPool.query<SessionRow>(
       `/* portal.auth.resolve-session */
-       SELECT session_id, user_id, user_email, selected_workspace_id, legacy_tenant_key
+       SELECT session_id, user_id, user_email, selected_workspace_id
        FROM app_private.resolve_portal_session($1)`,
       [sha256(sessionToken)],
     );
     if (result.rows.length === 0) return null;
     if (result.rows.length !== 1) throw new Error('Portal session resolved more than once');
+    const sessionId = canonicalUuid(result.rows[0]?.session_id);
     const userId = canonicalUuid(result.rows[0]?.user_id);
     const userEmail = canonicalEmail(result.rows[0]?.user_email);
     const workspaceId = canonicalUuid(result.rows[0]?.selected_workspace_id);
-    const tenantId = legacyTenantKey(result.rows[0]?.legacy_tenant_key);
-    if (!userId || !userEmail || !workspaceId || !tenantId) throw new Error('Portal session returned invalid identity data');
-    return Object.freeze({ sessionToken, userId, userEmail, workspaceId, legacyTenantId: tenantId });
+    if (!sessionId || !userId || !userEmail || !workspaceId) throw new Error('Portal session returned invalid identity data');
+    return Object.freeze({ sessionToken, userId, userEmail, workspaceId });
   }
 
   async login(
@@ -106,7 +98,7 @@ export class PgPortalAuthService implements PortalAuthService {
     if (validInput) {
       const result = await this.dependencies.commandPool.query<CredentialRow>(
         `/* portal.auth.login-credential */
-         SELECT user_id, user_email, password_hash, selected_workspace_id, legacy_tenant_key
+         SELECT user_id, user_email, password_hash, selected_workspace_id
          FROM app_private.portal_login_credential($1)`,
         [normalizedEmail],
       );
@@ -114,26 +106,20 @@ export class PgPortalAuthService implements PortalAuthService {
       credential = result.rows[0];
     }
 
-    const verified = await verifyStoredPassword(credential?.password_hash, password);
+    // PostgreSQL is a clean canonical store: imported unsalted hashes are not
+    // accepted here. Passing an absent hash keeps the bounded dummy-scrypt path
+    // for unknown accounts and every non-current credential format.
+    const currentPasswordHash = typeof credential?.password_hash === 'string'
+      && credential.password_hash.startsWith('scrypt$v1$')
+      ? credential.password_hash
+      : undefined;
+    const verified = await verifyStoredPassword(currentPasswordHash, password);
     if (!credential || !verified.matches) return null;
     const userId = canonicalUuid(credential.user_id);
     const userEmail = canonicalEmail(credential.user_email);
     const workspaceId = canonicalUuid(credential.selected_workspace_id);
-    const tenantId = legacyTenantKey(credential.legacy_tenant_key);
-    if (!userId || userEmail !== normalizedEmail || !workspaceId || !tenantId || typeof credential.password_hash !== 'string') {
+    if (!userId || userEmail !== normalizedEmail || !workspaceId || currentPasswordHash !== credential.password_hash) {
       throw new Error('Portal login credential returned invalid identity data');
-    }
-
-    let expectedPasswordHash = credential.password_hash;
-    if (verified.needsUpgrade) {
-      const replacement = await hashPassword(password);
-      const upgraded = await this.dependencies.commandPool.query<{ upgraded: boolean }>(
-        `/* portal.auth.upgrade-password */
-         SELECT app_private.upgrade_portal_password_hash($1, $2, $3) AS upgraded`,
-        [userId, expectedPasswordHash, replacement],
-      );
-      if (upgraded.rows[0]?.upgraded !== true) return null;
-      expectedPasswordHash = replacement;
     }
 
     const sessionToken = rawOpaqueSession();
@@ -142,12 +128,12 @@ export class PgPortalAuthService implements PortalAuthService {
     try {
       created = await this.dependencies.commandPool.query<SessionRow>(
         `/* portal.auth.create-session */
-         SELECT session_id, user_id, user_email, selected_workspace_id, legacy_tenant_key, expires_at
+         SELECT session_id, user_id, user_email, selected_workspace_id, expires_at
          FROM app_private.create_portal_session($1, $2, $3, $4, $5, $6, $7)`,
         [
           userId,
           workspaceId,
-          expectedPasswordHash,
+          currentPasswordHash,
           sha256(sessionToken),
           sha256(csrfSecret),
           metadataHash(context.ipAddress),
@@ -162,15 +148,14 @@ export class PgPortalAuthService implements PortalAuthService {
     }
     if (created.rows.length !== 1) throw new Error('Portal login did not create exactly one session');
     const row = created.rows[0]!;
+    const returnedSessionId = canonicalUuid(row.session_id);
     const returnedUserId = canonicalUuid(row.user_id);
     const returnedUserEmail = canonicalEmail(row.user_email);
     const returnedWorkspaceId = canonicalUuid(row.selected_workspace_id);
-    const returnedTenantId = legacyTenantKey(row.legacy_tenant_key);
     const expiresAt = row.expires_at instanceof Date ? row.expires_at.toISOString() : row.expires_at;
     const expiry = typeof expiresAt === 'string' ? Date.parse(expiresAt) : Number.NaN;
-    if (returnedUserId !== userId || returnedUserEmail !== userEmail
-        || returnedWorkspaceId !== workspaceId || returnedTenantId !== tenantId
-        || !Number.isFinite(expiry) || expiry <= context.now) {
+    if (!returnedSessionId || returnedUserId !== userId || returnedUserEmail !== userEmail
+        || returnedWorkspaceId !== workspaceId || !Number.isFinite(expiry) || expiry <= context.now) {
       throw new Error('Portal login created an invalid session');
     }
     return Object.freeze({
@@ -178,7 +163,63 @@ export class PgPortalAuthService implements PortalAuthService {
       userId,
       userEmail,
       workspaceId,
-      legacyTenantId: tenantId,
+      expiresAt: new Date(expiry).toISOString(),
+    });
+  }
+
+  async completeSetup(
+    setupToken: string,
+    password: string,
+    context: PortalAuthRequestContext,
+  ): Promise<PortalAuthenticatedSession | null> {
+    if (!OPAQUE_SESSION_PATTERN.test(setupToken) || password.length < 12 || password.length > 1_024) {
+      return null;
+    }
+
+    const passwordHash = await hashPassword(password);
+    const sessionToken = rawOpaqueSession();
+    const csrfSecret = randomBytes(32);
+    let completed;
+    try {
+      completed = await this.dependencies.commandPool.query<SessionRow>(
+        `/* portal.auth.complete-setup */
+         SELECT session_id, user_id, user_email, selected_workspace_id, expires_at
+         FROM app_private.complete_native_account_setup($1, $2, $3, $4, $5, $6)`,
+        [
+          sha256(setupToken),
+          passwordHash,
+          sha256(sessionToken),
+          sha256(csrfSecret),
+          metadataHash(context.ipAddress),
+          metadataHash(context.userAgent),
+        ],
+      );
+    } catch (error) {
+      // A concurrent token claim or membership/workspace suspension is an
+      // invalid setup attempt, not an application error to expose.
+      if (isAuthorizationRace(error)) return null;
+      throw error;
+    }
+    if (completed.rows.length === 0) return null;
+    if (completed.rows.length !== 1) throw new Error('Portal setup completed more than once');
+
+    const row = completed.rows[0]!;
+    const sessionId = canonicalUuid(row.session_id);
+    const userId = canonicalUuid(row.user_id);
+    const userEmail = canonicalEmail(row.user_email);
+    const workspaceId = canonicalUuid(row.selected_workspace_id);
+    const expiresAt = row.expires_at instanceof Date ? row.expires_at.toISOString() : row.expires_at;
+    const expiry = typeof expiresAt === 'string' ? Date.parse(expiresAt) : Number.NaN;
+    if (!sessionId || !userId || !userEmail || !workspaceId
+        || !Number.isFinite(expiry) || expiry <= context.now) {
+      throw new Error('Portal setup returned invalid session data');
+    }
+
+    return Object.freeze({
+      sessionToken,
+      userId,
+      userEmail,
+      workspaceId,
       expiresAt: new Date(expiry).toISOString(),
     });
   }

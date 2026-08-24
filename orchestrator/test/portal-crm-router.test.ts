@@ -72,6 +72,7 @@ class FakeCrm implements PortalCrmService {
 
 function deps(crm?: PortalCrmService): PortalDeps {
   return {
+    kind: 'legacy',
     sessionSecret: SECRET,
     secure: false,
     now: () => NOW,
@@ -139,7 +140,8 @@ test('real CRM pages render through the authenticated service boundary and task 
   assert.doesNotMatch(contacts.body, /Mock workspace/);
   assert.match(contacts.body, /href="\/portal\/crm\/contacts" aria-current="page"/);
   assert.equal(crm.identities[0]?.sessionToken, sessionToken);
-  assert.equal(crm.identities[0]?.legacyTenantId, 'legacy-t1');
+  assert.equal(crm.identities[0]?.requestId, 'request-crm-router');
+  assert.deepEqual(Object.keys(crm.identities[0]!).sort(), ['requestId', 'sessionToken']);
 
   const open = await call('GET', '/portal/crm/tasks?status=open', deps(crm));
   assert.match(open.body, /Call Avery/);

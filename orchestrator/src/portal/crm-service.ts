@@ -8,7 +8,6 @@ import type { CrmNotice, CrmWorkspaceSnapshot, CreateLeadField } from './crm-vie
  */
 export interface PortalCrmRequestIdentity {
   sessionToken: string;
-  legacyTenantId: string;
   requestId: string;
 }
 

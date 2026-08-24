@@ -24,3 +24,15 @@ test('PostgreSQL portal cutover never reuses a generic development database iden
     /requires DATABASE_WEB_URL authenticated as r72_web/,
   );
 });
+
+test('PostgreSQL portal cutover requires the isolated provisioning identity too', async () => {
+  await assert.rejects(
+    () => buildPgPortalPlatform({
+      NODE_ENV: 'development',
+      DATABASE_WEB_URL: 'postgresql://r72_web:secret@localhost/relaunch72_test?sslmode=disable',
+      DATABASE_IDENTITY_COMMAND_URL: 'postgresql://r72_identity_command:secret@localhost/relaunch72_test?sslmode=disable',
+      DATABASE_CRM_COMMAND_URL: 'postgresql://r72_crm_command:secret@localhost/relaunch72_test?sslmode=disable',
+    }),
+    /DATABASE_PROVISIONING_COMMAND_URL is required/,
+  );
+});

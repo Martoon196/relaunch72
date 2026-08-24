@@ -23,7 +23,8 @@ import { createSubscriptionCheckout, createBillingPortalUrl, type StripeLike } f
 import { ensureCatalogPrices, ensurePlanPrices, type StripeCatalogLike } from './catalog.js';
 import type { StripeConfig } from './config.js';
 import { makeBrevo } from '../email/brevo.js';
-import { buildPortalDeps } from '../portal/provision.js';
+import { buildPortalDeps, buildPostgresPortalDeps, type PortalBundle } from '../portal/provision.js';
+import type { PortalDeps } from '../portal/router.js';
 import { loginEmail } from '../portal/emails.js';
 import { makePostmark } from '../email/postmark.js';
 import type { BuildEntitlement } from './entitlements.js';
@@ -196,33 +197,47 @@ async function main(): Promise<void> {
 
   // Client portal — optional; a failure here must never stop the payments server.
   const allowDemoSeed = runtimePolicy.allowDemoSeed;
-  let bundle;
+  let bundle: PortalBundle | undefined;
+  let portal: PortalDeps | undefined;
   try {
     if (requirePostgresPortal && !postgresPortal) {
       throw new Error('required PostgreSQL portal services did not pass readiness');
     }
-    bundle = await buildPortalDeps({
-      dataDir: cfg.dataDir,
-      sessionSecret: cfg.sessionSecret,
-      secure: Boolean(cfg.production) || Boolean(portalBaseUrl?.startsWith('https://')),
-      demoEmail: process.env.PORTAL_DEMO_EMAIL?.trim(),
-      demoPassword: process.env.PORTAL_DEMO_PASSWORD?.trim(),
-      demoRunDir: process.env.PORTAL_DEMO_RUNDIR?.trim(),
-      allowDemoSeed,
-      onProvisioned,
-      requireSetupDelivery: Boolean(cfg.production),
-      subscriptions,
-      subscribeUrl,
-      manageUrl,
-      billingEnforced,
-      auth: postgresPortal?.auth,
-      crm: postgresPortal?.crm,
-    });
-    console.log(cfg.production
-      ? 'Client portal mounted at /portal — production demo seeding disabled.'
-      : allowDemoSeed
-        ? `Client portal mounted at /portal — explicit development demo: ${process.env.PORTAL_DEMO_EMAIL?.trim() || 'owner@frayne-electrical.co.uk'}`
-        : 'Client portal mounted at /portal — development demo seeding disabled.');
+    const securePortalCookie = Boolean(cfg.production) || Boolean(portalBaseUrl?.startsWith('https://'));
+    if (postgresPortal) {
+      portal = buildPostgresPortalDeps({
+        sessionSecret: cfg.sessionSecret,
+        secure: securePortalCookie,
+        auth: postgresPortal.auth,
+        crm: postgresPortal.crm,
+      });
+      console.log('Canonical PostgreSQL client portal mounted at /portal; JSON portal stores are not composed.');
+    } else {
+      if (cfg.production) {
+        throw new Error('production portal requires PostgreSQL mode; the legacy JSON portal is local-development only');
+      }
+      bundle = await buildPortalDeps({
+        dataDir: cfg.dataDir,
+        sessionSecret: cfg.sessionSecret,
+        secure: securePortalCookie,
+        demoEmail: process.env.PORTAL_DEMO_EMAIL?.trim(),
+        demoPassword: process.env.PORTAL_DEMO_PASSWORD?.trim(),
+        demoRunDir: process.env.PORTAL_DEMO_RUNDIR?.trim(),
+        allowDemoSeed,
+        onProvisioned,
+        requireSetupDelivery: Boolean(cfg.production),
+        subscriptions,
+        subscribeUrl,
+        manageUrl,
+        billingEnforced,
+      });
+      portal = bundle.portal;
+      console.log(cfg.production
+        ? 'Legacy JSON client portal mounted at /portal — production demo seeding disabled.'
+        : allowDemoSeed
+          ? `Legacy JSON client portal mounted at /portal — explicit development demo: ${process.env.PORTAL_DEMO_EMAIL?.trim() || 'owner@frayne-electrical.co.uk'}`
+          : 'Legacy JSON client portal mounted at /portal — development demo seeding disabled.');
+    }
   } catch (e) {
     if (postgresPortal) {
       await postgresPortal.close();
@@ -233,10 +248,11 @@ async function main(): Promise<void> {
 
   // On an accepted intake, provision that customer's portal login in the background.
   if (requirePostgresPortal && canAutoProvisionPortal) {
-    console.warn('⚠  Automatic portal onboarding remains locked in PostgreSQL mode until canonical database provisioning and setup-token consumption are atomic.');
+    console.warn('⚠  Automatic PostgreSQL onboarding remains locked pending real-database proof plus durable setup-email delivery/reissue and shared setup abuse controls.');
   }
   const onIntakeAccepted = bundle && canAutoProvisionPortal && !requirePostgresPortal
-    ? (intake: Intake, email: string | null): void => {
+    ? (intake: Intake, order: Order): void => {
+        const email = order.email;
         if (!email) return;
         void bundle!.provision({ email, name: String(intake.A1 ?? 'Your business'), intake })
           .then((r) => console.log(`▶ Portal account ${r.existing ? 'exists' : 'provisioned'} for ${r.email}${r.generated ? '' : ' [brand brain deferred]'}${!r.existing && !postmarkToken ? ' [development only: setup email not delivered]' : ''}`))
@@ -255,8 +271,8 @@ async function main(): Promise<void> {
     buildMode: forceMockBuilds ? 'mock' : 'live',
     now: () => new Date().toISOString(),
     marketing,
-    portal: bundle?.portal,
-    portalBlockers: bundle
+    portal,
+    portalBlockers: portal
       ? undefined
       : [requirePostgresPortal
           ? 'required PostgreSQL portal services did not pass readiness'

@@ -4,6 +4,7 @@ export const DATABASE_ROLES = [
   'migrator',
   'web',
   'identityCommand',
+  'provisioningCommand',
   'crmCommand',
   'worker',
   'webhook',
@@ -18,6 +19,7 @@ const ROLE_URL_ENV: Record<DatabaseRole, string> = {
   migrator: 'DATABASE_MIGRATOR_URL',
   web: 'DATABASE_WEB_URL',
   identityCommand: 'DATABASE_IDENTITY_COMMAND_URL',
+  provisioningCommand: 'DATABASE_PROVISIONING_COMMAND_URL',
   crmCommand: 'DATABASE_CRM_COMMAND_URL',
   worker: 'DATABASE_WORKER_URL',
   webhook: 'DATABASE_WEBHOOK_URL',
@@ -28,6 +30,7 @@ const ROLE_URL_ENV: Record<DatabaseRole, string> = {
 const EXPECTED_RUNTIME_USER: Partial<Record<DatabaseRole, string>> = {
   web: 'r72_web',
   identityCommand: 'r72_identity_command',
+  provisioningCommand: 'r72_provisioning_command',
   crmCommand: 'r72_crm_command',
   worker: 'r72_worker',
   webhook: 'r72_webhook',
@@ -43,6 +46,8 @@ export interface DatabaseConfig {
   production: boolean;
   sslMode: DatabaseSslMode;
   sslCa?: string;
+  /** Ask node-postgres to use SCRAM-SHA-256-PLUS when the server offers it. */
+  enableChannelBinding: boolean;
   maxConnections: number;
   connectionTimeoutMs: number;
   idleTimeoutMs: number;
@@ -114,6 +119,9 @@ export function loadDatabaseConfig(
   if (!url.hostname || !url.username || url.pathname === '/' || !url.pathname) {
     throw new Error(`${sourceEnv} must include a host, database, and database user`);
   }
+  if (role === 'migrator' && /-pooler\./i.test(url.hostname)) {
+    throw new Error(`${sourceEnv} must use a direct, non-pooled connection for migrations`);
+  }
   const expectedDatabaseUser = EXPECTED_RUNTIME_USER[role];
   const enforceRuntimeIdentity = Boolean(expectedDatabaseUser) && (production || Boolean(roleUrl));
   if (enforceRuntimeIdentity && decodeURIComponent(url.username) !== expectedDatabaseUser) {
@@ -123,7 +131,7 @@ export function loadDatabaseConfig(
   // pg's connection-string parser can silently override a separately supplied
   // TLS object. Resolve sslmode here, then remove it so pool.ts is authoritative.
   const urlSslMode = url.searchParams.get('sslmode') ?? undefined;
-  const allowedConnectionOptions = new Set(['sslmode', 'sslnegotiation']);
+  const allowedConnectionOptions = new Set(['sslmode', 'sslnegotiation', 'channel_binding']);
   for (const key of url.searchParams.keys()) {
     if (!allowedConnectionOptions.has(key)) {
       throw new Error(`${sourceEnv} contains unsupported connection option: ${key}`);
@@ -133,16 +141,26 @@ export function loadDatabaseConfig(
     env.DATABASE_SSL_MODE ?? urlSslMode,
     defaultSslMode(url, production),
   );
+  const channelBinding = url.searchParams.get('channel_binding');
+  if (channelBinding !== null && channelBinding !== 'require') {
+    throw new Error(`${sourceEnv} channel_binding must be require when specified`);
+  }
   url.searchParams.delete('sslmode');
+  url.searchParams.delete('channel_binding');
   if (production && sslMode === 'disable') {
     throw new Error('DATABASE_SSL_MODE=disable is forbidden in production');
   }
   if (url.searchParams.get('sslnegotiation') === 'direct' && sslMode === 'disable') {
     throw new Error(`${sourceEnv} cannot use direct TLS negotiation when TLS is disabled`);
   }
+  if (channelBinding === 'require' && sslMode === 'disable') {
+    throw new Error(`${sourceEnv} cannot require channel binding when TLS is disabled`);
+  }
 
   const rolePoolKey = role === 'crmCommand'
     ? 'DATABASE_CRM_COMMAND_POOL_MAX'
+    : role === 'provisioningCommand'
+      ? 'DATABASE_PROVISIONING_COMMAND_POOL_MAX'
     : role === 'identityCommand'
       ? 'DATABASE_IDENTITY_COMMAND_POOL_MAX'
       : `DATABASE_${role.toUpperCase()}_POOL_MAX`;
@@ -153,6 +171,7 @@ export function loadDatabaseConfig(
     production,
     sslMode,
     sslCa: env.DATABASE_SSL_CA?.replace(/\\n/g, '\n').trim() || undefined,
+    enableChannelBinding: channelBinding === 'require',
     maxConnections: parseBoundedInteger(
       env[rolePoolKey] ?? env.DATABASE_POOL_MAX,
       role === 'worker' ? 10 : 5,
@@ -183,6 +202,8 @@ export function loadDatabaseConfig(
     ),
     applicationName: role === 'crmCommand'
       ? 'relaunch72-crm-command'
+      : role === 'provisioningCommand'
+        ? 'relaunch72-provisioning-command'
       : role === 'identityCommand'
         ? 'relaunch72-identity-command'
         : `relaunch72-${role}`,

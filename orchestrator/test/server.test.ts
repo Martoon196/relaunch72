@@ -412,7 +412,7 @@ test('POST /api/intake accepts a full intake and kicks the build; nudges a thin 
 
 test('POST /api/intake refuses a valid intake without an unconsumed paid order', async () => {
   const provisioned: string[] = [];
-  const { handler, kicks, store } = app({ onIntakeAccepted: (_intake, email) => provisioned.push(email ?? '') });
+  const { handler, kicks, store } = app({ onIntakeAccepted: (_intake, order) => { provisioned.push(order.email ?? ''); } });
   const good = { ...validIntake(), consent: true };
 
   const noSession = res();
@@ -456,7 +456,7 @@ test('POST /api/intake restores the paid entitlement after a synchronous launch 
 
 test('paid product metadata controls build scope and Autopsy never provisions a full portal', async () => {
   const provisioned: Array<string | null> = [];
-  const { handler, store, kicks } = app({ onIntakeAccepted: (_intake, email) => provisioned.push(email) });
+  const { handler, store, kicks } = app({ onIntakeAccepted: (_intake, order) => { provisioned.push(order.email); } });
   store.record({ session_id: 'cs_autopsy', tier: 'autopsy', bump: false, email: 'audit@client.co', amount_total: 9700, currency: 'usd', status: 'paid_awaiting_intake', paid_at: 'T' });
 
   const response = res();
@@ -486,14 +486,23 @@ test('an unknown legacy order product is not allowed to start a build', async ()
   assert.deepEqual(kicks, []);
 });
 
-test('an accepted intake fires onIntakeAccepted with the order email (portal provisioning)', async () => {
-  const seen: Array<{ email: string | null; name: unknown }> = [];
-  const { handler, store } = app({ onIntakeAccepted: (intake, email) => seen.push({ email, name: intake.A1 }) });
+test('an accepted intake fires onIntakeAccepted with the verified order authority', async () => {
+  const seen: Array<{ sessionId: string; email: string | null; name: unknown }> = [];
+  const { handler, store } = app({
+    onIntakeAccepted: (intake, order) => {
+      seen.push({
+        sessionId: order.session_id,
+        email: order.email,
+        name: intake.A1,
+      });
+    },
+  });
   store.record({ session_id: 'cs_p', tier: 'core', bump: false, email: 'buyer@client.co', amount_total: null, currency: null, status: 'paid_awaiting_intake', paid_at: 'T' });
 
   const good = { ...validIntake(), _stripe_session: 'cs_p', consent: true };
   await handler(req('POST', '/api/intake', JSON.stringify(good)), res());
   assert.equal(seen.length, 1);
+  assert.equal(seen[0]!.sessionId, 'cs_p');
   assert.equal(seen[0]!.email, 'buyer@client.co');
 
   // A repeated accepted intake returns the existing run and must NOT provision again.
@@ -507,7 +516,7 @@ test('an accepted intake fires onIntakeAccepted with the order email (portal pro
 
 test('portal provisioning never trusts a caller-supplied intake email', async () => {
   const seen: Array<string | null> = [];
-  const { handler, store } = app({ onIntakeAccepted: (_intake, email) => seen.push(email) });
+  const { handler, store } = app({ onIntakeAccepted: (_intake, order) => { seen.push(order.email); } });
   store.record({ session_id: 'cs_no_email', tier: 'core', bump: false, email: null, amount_total: null, currency: null, status: 'paid_awaiting_intake', paid_at: 'T' });
 
   const body = { ...validIntake(), _stripe_session: 'cs_no_email', _email: 'attacker@example.com', consent: true };
@@ -520,7 +529,7 @@ test('portal provisioning never trusts a caller-supplied intake email', async ()
 
 test('accepted intake strips checkout capabilities and non-contract fields before every side effect', async () => {
   const provisioned: Array<Record<string, unknown>> = [];
-  const { handler, store, kickedIntakes } = app({ onIntakeAccepted: (intake) => provisioned.push(intake) });
+  const { handler, store, kickedIntakes } = app({ onIntakeAccepted: (intake) => { provisioned.push(intake); } });
   store.record({ session_id: 'cs_sanitized', tier: 'core', bump: false, email: 'verified@client.co', amount_total: 99700, currency: 'usd', status: 'paid_awaiting_intake', paid_at: 'T' });
   const body = {
     ...validIntake(),

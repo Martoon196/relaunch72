@@ -7,12 +7,10 @@ export interface PortalAuthRequestContext {
 
 export interface PortalSessionIdentity {
   sessionToken: string;
-  userId?: string;
-  workspaceId?: string;
-  /** Canonical database identity used to attest the temporary JSON bridge. */
+  /** Canonical PostgreSQL identity; browser-supplied workspace ids are never authority. */
+  userId: string;
+  workspaceId: string;
   userEmail: string;
-  /** Temporary bridge into the file-backed dashboard/artifact read model. */
-  legacyTenantId: string;
 }
 
 export interface PortalAuthenticatedSession extends PortalSessionIdentity {

@@ -4,11 +4,37 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loginEmail } from '../src/portal/emails.js';
-import { buildPortalDeps } from '../src/portal/provision.js';
+import { buildPortalDeps, buildPostgresPortalDeps } from '../src/portal/provision.js';
 import type { ProvisionResult } from '../src/portal/provision.js';
 import { validIntake } from './helpers.js';
 import { JsonCrmStore } from '../src/crm/store.js';
 import { JsonAccountStore } from '../src/portal/accounts.js';
+import type { PortalAuthService } from '../src/portal/auth-service.js';
+import type { PortalCrmService } from '../src/portal/crm-service.js';
+
+test('PostgreSQL portal composition has no JSON dashboard, login or campaign dependency', () => {
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+  const crm: PortalCrmService = {
+    snapshot: async () => null,
+    createLead: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+    moveOpportunity: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+    completeTask: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+  };
+
+  const portal = buildPostgresPortalDeps({ sessionSecret: 'secret', secure: true, auth, crm });
+
+  assert.equal(portal.kind, 'postgres');
+  assert.equal(portal.auth, auth);
+  assert.equal(portal.crm, crm);
+  assert.equal('login' in portal, false);
+  assert.equal('dashboard' in portal, false);
+  assert.equal('runTick' in portal, false);
+  assert.equal('billing' in portal, false);
+});
 
 test('loginEmail builds a truthful generated-draft message carrying a one-time setup link, not a password', () => {
   const m = loginEmail({ to: 'a@b.co', tenantName: 'Acme Ltd', setupUrl: 'https://r72.test/portal/setup?token=one-use', generated: true });

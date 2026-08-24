@@ -1,7 +1,7 @@
 /**
- * The client portal — routes + the tenant auth gate. Everything under /portal
- * requires a valid tenant session except the login routes. Dependency-injected
- * (store + login + dashboard + runTick) so it tests without a socket.
+ * The client portal — routes + the auth gate. Everything under /portal requires
+ * a valid session except account actions. A discriminated dependency boundary
+ * keeps canonical PostgreSQL workspaces separate from the local JSON demo.
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -42,21 +42,26 @@ import {
 } from './crm-service.js';
 import type { DashboardData } from './data.js';
 import type { BillingView } from './billing.js';
-import type { PortalAuthRequestContext, PortalAuthService } from './auth-service.js';
+import type { PortalAuthRequestContext, PortalAuthService, PortalSessionIdentity } from './auth-service.js';
 
-export interface PortalDeps {
+interface PortalCommonDeps {
   sessionSecret: string;
   secure: boolean;
+  /** Process-local login limiter; replace with a shared implementation at multi-instance scale. */
+  loginThrottle?: Pick<InMemoryLoginThrottle, 'reserve' | 'release' | 'failure' | 'success'>;
+  now?: () => number;
+  requestId?: () => string;
+}
+
+/** Explicit local-demo mode. This is the only mode allowed to touch JSON stores. */
+export interface LegacyPortalDeps extends PortalCommonDeps {
+  kind: 'legacy';
   /** Email + password → tenant id, or null if the credentials don't match. */
   login(email: string, password: string): Promise<string | null>;
   /** Consume a new customer's one-time setup token and set their password. */
   completeSetup?(token: string, password: string, now: number): Promise<string | null>;
-  /** Process-local login limiter; replace with a shared implementation at multi-instance scale. */
-  loginThrottle?: Pick<InMemoryLoginThrottle, 'reserve' | 'release' | 'failure' | 'success'>;
   /** Assemble the dashboard for a tenant (CRM + brand + artifacts), or null. */
   dashboard(tenantId: string): Promise<DashboardData | null>;
-  /** Prove the temporary JSON tenant belongs to the exact database identity. */
-  verifyLegacyBridge?(tenantId: string, userEmail: string): Promise<boolean>;
   /** Run this period's marketing for a tenant (mock); returns how many tasks ran. */
   runTick(tenantId: string): Promise<number>;
   /** Resolve a tenant's billing status + plan options; absent = billing UI off. */
@@ -69,11 +74,16 @@ export interface PortalDeps {
   billingEnforced?: boolean;
   /** Durable CRM application boundary. Absent means the CRM remains visibly locked. */
   crm?: PortalCrmService;
-  /** Opaque database session boundary. When present, legacy signed sessions are rejected. */
-  auth?: PortalAuthService;
-  now?: () => number;
-  requestId?: () => string;
 }
+
+/** Canonical PostgreSQL mode. No legacy tenant id or JSON dependency exists here. */
+export interface PostgresPortalDeps extends PortalCommonDeps {
+  kind: 'postgres';
+  auth: PortalAuthService;
+  crm: PortalCrmService;
+}
+
+export type PortalDeps = LegacyPortalDeps | PostgresPortalDeps;
 
 function sendHtml(res: ServerResponse, code: number, body: string, cookie?: string, extra: Record<string, string> = {}): void {
   const headers: Record<string, string> = {
@@ -167,7 +177,7 @@ function crmPage(
     title: `Relaunch72 CRM — ${snapshot.workspace.name}`,
     tenantName: snapshot.workspace.name,
     active: 'crm',
-    billingAvailable: !!deps.billing,
+    billingAvailable: deps.kind === 'legacy' && !!deps.billing,
     crmAvailable: true,
     mode: 'crm',
     csrfToken,
@@ -195,7 +205,7 @@ function portalStatusPage(
     title: `Relaunch72 — ${options.title}`,
     tenantName: 'Your workspace',
     active: options.active ?? 'overview',
-    billingAvailable: !!deps.billing,
+    billingAvailable: deps.kind === 'legacy' && !!deps.billing,
     crmAvailable: options.crmAvailable ?? !!deps.crm,
     mode: options.active === 'crm' ? 'crm' : 'sandbox',
     csrfToken: portalCsrfToken(deps.sessionSecret, sessionToken),
@@ -203,10 +213,9 @@ function portalStatusPage(
   });
 }
 
-function crmIdentity(sessionToken: string, tenantId: string, deps: PortalDeps): PortalCrmRequestIdentity {
+function crmIdentity(sessionToken: string, deps: PortalDeps): PortalCrmRequestIdentity {
   return {
     sessionToken,
-    legacyTenantId: tenantId,
     requestId: deps.requestId ? deps.requestId() : randomUUID(),
   };
 }
@@ -246,8 +255,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   const method = req.method ?? 'GET';
   const now = deps.now ? deps.now() : Date.now();
   const sessionToken = parseCookies(req.headers.cookie)[PORTAL_COOKIE] ?? '';
+  const portalHome = deps.kind === 'postgres' ? CRM_PORTAL_ROUTES.contacts : '/portal';
   let tenantId: string | null = null;
-  let bridgeUnavailable = false;
+  let portalIdentity: PortalSessionIdentity | null = null;
   // Public account actions must remain usable when a stale cookie exists and
   // the identity store is unavailable. Login/setup establish a new session;
   // logout validates its cookie-bound CSRF token without resolving first.
@@ -256,13 +266,8 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     || (p === '/portal/logout' && method === 'POST');
   if (sessionToken && !skipSessionResolution) {
     try {
-      if (deps.auth) {
-        const identity = await deps.auth.resolve(sessionToken, now);
-        if (identity) {
-          bridgeUnavailable = !deps.verifyLegacyBridge
-            || !(await deps.verifyLegacyBridge(identity.legacyTenantId, identity.userEmail));
-          if (!bridgeUnavailable) tenantId = identity.legacyTenantId;
-        }
+      if (deps.kind === 'postgres') {
+        portalIdentity = await deps.auth.resolve(sessionToken, now);
       } else {
         tenantId = verifyTenant(deps.sessionSecret, sessionToken, now);
       }
@@ -273,7 +278,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
 
   // ── one-time account setup / login / logout (no auth) ──
   if (p === '/portal/setup' && method === 'GET') {
-    const setupEnabled = deps.auth ? Boolean(deps.auth.completeSetup) : Boolean(deps.completeSetup);
+    const setupEnabled = deps.kind === 'postgres'
+      ? Boolean(deps.auth.completeSetup)
+      : Boolean(deps.completeSetup);
     if (!setupEnabled) {
       return sendHtml(res, 503, accountSetupUnavailablePage(), undefined, {
         'cache-control': 'no-store',
@@ -288,8 +295,8 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     });
   }
   if (p === '/portal/setup' && method === 'POST') {
-    const setup = deps.auth?.completeSetup ?? deps.completeSetup;
-    if (!setup || (deps.auth && !deps.auth.completeSetup)) {
+    const setup = deps.kind === 'postgres' ? deps.auth.completeSetup : deps.completeSetup;
+    if (!setup) {
       return sendHtml(res, 503, accountSetupUnavailablePage());
     }
     const form = await readForm(req);
@@ -303,7 +310,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
     let completed;
     try {
-      completed = deps.auth
+      completed = deps.kind === 'postgres'
         ? await deps.auth.completeSetup!(token, password, authRequestContext(req, now))
         : await deps.completeSetup!(token, password, now);
     } catch {
@@ -315,12 +322,12 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     const completedToken = typeof completed === 'string'
       ? signTenant(deps.sessionSecret, completed, now)
       : completed.sessionToken;
-    return redirect(res, '/portal', portalCookie(completedToken, deps.secure));
+    return redirect(res, portalHome, portalCookie(completedToken, deps.secure));
   }
   if (p === '/portal/login' && method === 'GET') {
-    if (tenantId) return redirect(res, '/portal');
+    if (tenantId || portalIdentity) return redirect(res, portalHome);
     const reason = url.searchParams.get('reason');
-    const message = bridgeUnavailable || reason === 'workspace-unavailable'
+    const message = reason === 'workspace-unavailable'
       ? 'Your sign-in is valid, but this workspace is not ready in the new portal yet. Contact support.'
       : reason === 'session-ended'
         ? 'Your secure session ended. Sign in again to continue.'
@@ -348,7 +355,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
     let authenticated;
     try {
-      authenticated = deps.auth
+      authenticated = deps.kind === 'postgres'
         ? await deps.auth.login(email, form.password ?? '', authRequestContext(req, now))
         : await deps.login(email, form.password ?? '');
     } catch {
@@ -360,36 +367,10 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       return sendLoginPage(res, 401, deps, 'Wrong email or password.', email);
     }
     for (const key of keys) deps.loginThrottle?.success(key);
-    const authenticatedTenantId = typeof authenticated === 'string'
-      ? authenticated
-      : authenticated.legacyTenantId;
-    let bridgeReady = false;
-    try {
-      const dashboard = await deps.dashboard(authenticatedTenantId);
-      const bridgeOwned = typeof authenticated === 'string'
-        ? true
-        : Boolean(deps.verifyLegacyBridge)
-          && await deps.verifyLegacyBridge!(authenticatedTenantId, authenticated.userEmail);
-      bridgeReady = bridgeOwned && dashboard?.tenant.id === authenticatedTenantId;
-    } catch {
-      bridgeReady = false;
-    }
-    if (!bridgeReady) {
-      if (deps.auth && typeof authenticated !== 'string') {
-        try { await deps.auth.revoke(authenticated.sessionToken); } catch { /* the cookie was never issued */ }
-      }
-      return sendLoginPage(
-        res,
-        503,
-        deps,
-        'Your account is valid, but its workspace bridge is not ready. Contact support.',
-        email,
-      );
-    }
     const authenticatedToken = typeof authenticated === 'string'
       ? signTenant(deps.sessionSecret, authenticated, now)
       : authenticated.sessionToken;
-    return redirect(res, '/portal', portalCookie(authenticatedToken, deps.secure));
+    return redirect(res, portalHome, portalCookie(authenticatedToken, deps.secure));
   }
   if (p === '/portal/logout' && method === 'POST') {
     const form = await readForm(req);
@@ -398,7 +379,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         title: 'Refresh needed', message: 'The secure form token was invalid. You are still signed in.',
       }));
     }
-    if (deps.auth && sessionToken) {
+    if (deps.kind === 'postgres' && sessionToken) {
       try {
         await deps.auth.revoke(sessionToken);
       } catch {
@@ -412,15 +393,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   }
 
   // ── everything below requires a tenant session ──
-  if (!tenantId && bridgeUnavailable) {
-    return sendLoginPage(
-      res,
-      503,
-      deps,
-      'Your sign-in is valid, but its workspace bridge is not ready. Contact support.',
-    );
-  }
-  if (!tenantId) return redirect(
+  if (!tenantId && !portalIdentity) return redirect(
     res,
     sessionToken ? '/portal/login?reason=session-ended' : '/portal/login',
     sessionToken ? clearPortalCookie(deps.secure) : undefined,
@@ -443,7 +416,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   }
 
   if (deps.crm && method === 'GET' && [CRM_PORTAL_ROUTES.contacts, CRM_PORTAL_ROUTES.pipeline, CRM_PORTAL_ROUTES.tasks].includes(p as never)) {
-    const identity = crmIdentity(sessionToken, tenantId, deps);
+    const identity = crmIdentity(sessionToken, deps);
     try {
       const snapshot = await deps.crm.snapshot(identity);
       if (!snapshot) return sendHtml(res, 403, portalStatusPage(deps, sessionToken, {
@@ -477,7 +450,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         title: 'Refresh needed', message: 'The secure form token was invalid. No change was made.', active: 'crm', backHref: CRM_PORTAL_ROUTES.contacts, backLabel: 'Return to contacts',
       }));
     }
-    const identity = crmIdentity(sessionToken, tenantId, deps);
+    const identity = crmIdentity(sessionToken, deps);
     const input = {
       commandKey: form.command_key ?? '',
       displayName: form.display_name ?? '',
@@ -544,7 +517,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       }));
     }
     try {
-      const outcome = await deps.crm.moveOpportunity(crmIdentity(sessionToken, tenantId, deps), {
+      const outcome = await deps.crm.moveOpportunity(crmIdentity(sessionToken, deps), {
         commandKey: form.command_key ?? '',
         opportunityId: moveMatch[1]!,
         targetStageId: form.target_stage_id ?? '',
@@ -578,7 +551,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       }));
     }
     try {
-      const outcome = await deps.crm.completeTask(crmIdentity(sessionToken, tenantId, deps), {
+      const outcome = await deps.crm.completeTask(crmIdentity(sessionToken, deps), {
         commandKey: form.command_key ?? '',
         taskId: completeMatch[1]!,
         expectedRowVersion: form.expected_version ?? '',
@@ -598,6 +571,21 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       }));
     }
   }
+
+  if (deps.kind === 'postgres') {
+    if (p === '/portal' && method === 'GET') return redirect(res, CRM_PORTAL_ROUTES.contacts);
+    return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+      title: 'Not available',
+      message: 'That legacy portal feature is not part of this PostgreSQL workspace.',
+      active: 'crm',
+      backHref: CRM_PORTAL_ROUTES.contacts,
+      backLabel: 'Return to CRM',
+    }));
+  }
+
+  // The PostgreSQL branch returned above, so only the explicit local-demo
+  // composition can reach JSON dashboards, billing and mock campaign runs.
+  if (!tenantId) return redirect(res, '/portal/login?reason=session-ended', clearPortalCookie(deps.secure));
 
   if (p === '/portal' && method === 'GET') {
     const data = await deps.dashboard(tenantId);

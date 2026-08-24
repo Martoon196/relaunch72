@@ -8,7 +8,6 @@ import { PgPortalAuthService } from '../src/portal/auth-pg-service.js';
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const WORKSPACE_ID = '22222222-2222-4222-8222-222222222222';
 const SESSION_ID = '33333333-3333-4333-8333-333333333333';
-const TENANT_ID = 'legacy-northstar';
 const USER_EMAIL = 'owner@example.test';
 const NOW = Date.parse('2026-08-24T10:00:00.000Z');
 
@@ -30,12 +29,13 @@ test('PostgreSQL portal resolution accepts only a 32-byte opaque token and sends
   const service = new PgPortalAuthService({
     readPool: pool((call) => {
       calls.push(call);
-      return result([{ session_id: SESSION_ID, user_id: USER_ID, user_email: USER_EMAIL, selected_workspace_id: WORKSPACE_ID, legacy_tenant_key: TENANT_ID }]);
+      return result([{ session_id: SESSION_ID, user_id: USER_ID, user_email: USER_EMAIL, selected_workspace_id: WORKSPACE_ID }]);
     }),
     commandPool: pool(() => result([])),
   });
   const resolved = await service.resolve(token, NOW);
-  assert.equal(resolved?.legacyTenantId, TENANT_ID);
+  assert.equal(resolved?.userId, USER_ID);
+  assert.equal(resolved?.workspaceId, WORKSPACE_ID);
   assert.equal(resolved?.userEmail, USER_EMAIL);
   assert.equal(resolved?.sessionToken, token);
   assert.match(calls[0]!.sql, /resolve_portal_session/);
@@ -45,15 +45,14 @@ test('PostgreSQL portal resolution accepts only a 32-byte opaque token and sends
   assert.equal(calls.length, 1, 'legacy-shaped tokens never reach PostgreSQL');
 });
 
-test('PostgreSQL portal resolution rejects padded legacy tenant bridges', async () => {
+test('PostgreSQL portal resolution rejects invalid canonical identity data', async () => {
   const token = Buffer.alloc(32, 5).toString('base64url');
   const service = new PgPortalAuthService({
     readPool: pool(() => result([{
       session_id: SESSION_ID,
       user_id: USER_ID,
       user_email: USER_EMAIL,
-      selected_workspace_id: WORKSPACE_ID,
-      legacy_tenant_key: ` ${TENANT_ID}`,
+      selected_workspace_id: 'not-a-workspace-uuid',
     }])),
     commandPool: pool(() => result([])),
   });
@@ -67,7 +66,7 @@ test('password login creates one opaque session bound to the compare-and-swap cr
   const commandPool = pool((call) => {
     calls.push(call);
     if (call.sql.includes('login-credential')) {
-      return result([{ user_id: USER_ID, user_email: USER_EMAIL, password_hash: storedHash, selected_workspace_id: WORKSPACE_ID, legacy_tenant_key: TENANT_ID }]);
+      return result([{ user_id: USER_ID, user_email: USER_EMAIL, password_hash: storedHash, selected_workspace_id: WORKSPACE_ID }]);
     }
     if (call.sql.includes('create-session')) {
       return result([{
@@ -75,7 +74,6 @@ test('password login creates one opaque session bound to the compare-and-swap cr
         user_id: USER_ID,
         user_email: USER_EMAIL,
         selected_workspace_id: WORKSPACE_ID,
-        legacy_tenant_key: TENANT_ID,
         expires_at: new Date(NOW + 14 * 24 * 60 * 60 * 1000).toISOString(),
       }]);
     }
@@ -86,7 +84,8 @@ test('password login creates one opaque session bound to the compare-and-swap cr
     now: NOW, ipAddress: '127.0.0.1', userAgent: 'R72 test browser',
   });
   assert.match(session?.sessionToken ?? '', /^[A-Za-z0-9_-]{43}$/);
-  assert.equal(session?.legacyTenantId, TENANT_ID);
+  assert.equal(session?.userId, USER_ID);
+  assert.equal(session?.workspaceId, WORKSPACE_ID);
   assert.equal(session?.userEmail, USER_EMAIL);
   assert.deepEqual(calls[0]!.values, ['owner@example.test']);
   const create = calls.find((call) => call.sql.includes('create-session'))!;
@@ -101,7 +100,7 @@ test('password login creates one opaque session bound to the compare-and-swap cr
 test('unknown and wrong-password login never creates a session', async () => {
   const storedHash = await hashPassword('the-right-password');
   for (const credential of [undefined, {
-    user_id: USER_ID, user_email: 'nobody@example.test', password_hash: storedHash, selected_workspace_id: WORKSPACE_ID, legacy_tenant_key: TENANT_ID,
+    user_id: USER_ID, user_email: 'nobody@example.test', password_hash: storedHash, selected_workspace_id: WORKSPACE_ID,
   }]) {
     const calls: Call[] = [];
     const service = new PgPortalAuthService({
@@ -117,7 +116,7 @@ test('unknown and wrong-password login never creates a session', async () => {
   }
 });
 
-test('legacy password upgrade must win its compare-and-swap before session issuance', async () => {
+test('PostgreSQL login rejects legacy password hashes without upgrade or session issuance', async () => {
   const password = 'legacy-password';
   const legacyHash = createHash('sha256').update(password).digest('hex');
   const calls: Call[] = [];
@@ -126,25 +125,71 @@ test('legacy password upgrade must win its compare-and-swap before session issua
     commandPool: pool((call) => {
       calls.push(call);
       if (call.sql.includes('login-credential')) {
-        return result([{ user_id: USER_ID, user_email: 'legacy@example.test', password_hash: legacyHash, selected_workspace_id: WORKSPACE_ID, legacy_tenant_key: TENANT_ID }]);
-      }
-      if (call.sql.includes('upgrade-password')) return result([{ upgraded: true }]);
-      if (call.sql.includes('create-session')) {
-        return result([{
-          session_id: SESSION_ID, user_id: USER_ID, selected_workspace_id: WORKSPACE_ID,
-          user_email: 'legacy@example.test', legacy_tenant_key: TENANT_ID,
-          expires_at: new Date(NOW + 60_000).toISOString(),
-        }]);
+        return result([{ user_id: USER_ID, user_email: 'legacy@example.test', password_hash: legacyHash, selected_workspace_id: WORKSPACE_ID }]);
       }
       throw new Error(`unexpected SQL: ${call.sql}`);
     }),
   });
-  assert.ok(await service.login('legacy@example.test', password, { now: NOW }));
-  const upgrade = calls.find((call) => call.sql.includes('upgrade-password'))!;
-  const replacement = upgrade.values?.[2];
-  assert.equal(upgrade.values?.[1], legacyHash);
-  assert.match(String(replacement), /^scrypt\$v1\$/);
-  assert.equal(calls.find((call) => call.sql.includes('create-session'))!.values?.[2], replacement);
+  assert.equal(await service.login('legacy@example.test', password, { now: NOW }), null);
+  assert.equal(calls.some((call) => call.sql.includes('upgrade-password')), false);
+  assert.equal(calls.some((call) => call.sql.includes('create-session')), false);
+});
+
+test('account setup atomically consumes a hashed one-use token and returns a canonical session', async () => {
+  const setupToken = Buffer.alloc(32, 7).toString('base64url');
+  const password = 'a-new-canonical-password';
+  const calls: Call[] = [];
+  let attempts = 0;
+  const service = new PgPortalAuthService({
+    readPool: pool(() => result([])),
+    commandPool: pool((call) => {
+      calls.push(call);
+      if (!call.sql.includes('complete-setup')) throw new Error(`unexpected SQL: ${call.sql}`);
+      attempts += 1;
+      if (attempts > 1) return result([]);
+      return result([{
+        session_id: SESSION_ID,
+        user_id: USER_ID,
+        user_email: USER_EMAIL,
+        selected_workspace_id: WORKSPACE_ID,
+        expires_at: new Date(NOW + 14 * 24 * 60 * 60 * 1000).toISOString(),
+      }]);
+    }),
+  });
+
+  const completed = await service.completeSetup(setupToken, password, {
+    now: NOW, ipAddress: '127.0.0.1', userAgent: 'R72 setup browser',
+  });
+  assert.equal(completed?.userId, USER_ID);
+  assert.equal(completed?.workspaceId, WORKSPACE_ID);
+  assert.equal(completed?.userEmail, USER_EMAIL);
+  assert.match(completed?.sessionToken ?? '', /^[A-Za-z0-9_-]{43}$/);
+
+  const first = calls[0]!;
+  assert.match(first.sql, /complete_native_account_setup\(\$1, \$2, \$3, \$4, \$5, \$6\)/);
+  assert.deepEqual(first.values?.[0], createHash('sha256').update(setupToken).digest());
+  assert.match(String(first.values?.[1]), /^scrypt\$v1\$/);
+  assert.ok(Buffer.isBuffer(first.values?.[2]) && (first.values?.[2] as Buffer).length === 32);
+  assert.ok(Buffer.isBuffer(first.values?.[3]) && (first.values?.[3] as Buffer).length === 32);
+  assert.deepEqual(first.values?.[4], createHash('sha256').update('127.0.0.1').digest());
+  assert.deepEqual(first.values?.[5], createHash('sha256').update('R72 setup browser').digest());
+  assert.equal(Array.from(first.values ?? []).includes(setupToken), false, 'raw setup token is never a SQL parameter');
+  assert.equal(Array.from(first.values ?? []).includes(password), false, 'raw password is never a SQL parameter');
+  assert.equal(Array.from(first.values ?? []).includes(completed!.sessionToken), false, 'raw session token is never a SQL parameter');
+
+  assert.equal(await service.completeSetup(setupToken, 'a-second-canonical-password', { now: NOW }), null);
+  assert.equal(calls.length, 2, 'the consumed-token zero-row result is treated as an invalid setup attempt');
+});
+
+test('invalid account setup input never reaches PostgreSQL', async () => {
+  let calls = 0;
+  const service = new PgPortalAuthService({
+    readPool: pool(() => result([])),
+    commandPool: pool(() => { calls += 1; return result([]); }),
+  });
+  assert.equal(await service.completeSetup('not-a-token', 'a-valid-long-password', { now: NOW }), null);
+  assert.equal(await service.completeSetup(Buffer.alloc(32, 8).toString('base64url'), 'too-short', { now: NOW }), null);
+  assert.equal(calls, 0);
 });
 
 test('a password or membership race fails as invalid login and revocation hashes the cookie', async () => {
@@ -156,7 +201,7 @@ test('a password or membership race fails as invalid login and revocation hashes
     commandPool: pool((call) => {
       calls.push(call);
       if (call.sql.includes('login-credential')) {
-        return result([{ user_id: USER_ID, user_email: USER_EMAIL, password_hash: storedHash, selected_workspace_id: WORKSPACE_ID, legacy_tenant_key: TENANT_ID }]);
+        return result([{ user_id: USER_ID, user_email: USER_EMAIL, password_hash: storedHash, selected_workspace_id: WORKSPACE_ID }]);
       }
       if (call.sql.includes('create-session')) throw Object.assign(new Error('revoked'), { code: '42501' });
       if (call.sql.includes('revoke-session')) return result([{ revoked: true }]);

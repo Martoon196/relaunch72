@@ -26,6 +26,7 @@ export function createDatabasePool(
     idleTimeoutMillis: config.idleTimeoutMs,
     statement_timeout: config.statementTimeoutMs,
     ssl: tlsConfig(config),
+    enableChannelBinding: config.enableChannelBinding,
     allowExitOnIdle: !config.production,
     verify: config.expectedDatabaseUser
       ? (client, done) => {
@@ -67,4 +68,12 @@ export function createIdentityCommandDatabasePool(
   hooks: DatabasePoolHooks = {},
 ): Pool {
   return createDatabasePool(loadDatabaseConfig('identityCommand', env), hooks);
+}
+
+/** Isolated pre-context customer-provisioning pool; it has function execution only. */
+export function createProvisioningCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('provisioningCommand', env), hooks);
 }

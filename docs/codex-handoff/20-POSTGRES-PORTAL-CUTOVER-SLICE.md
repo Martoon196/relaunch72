@@ -1,5 +1,10 @@
 # 20 — POSTGRESQL PORTAL CUTOVER SLICE
 
+> **Superseded for current implementation status:** this is the measured
+> pre-onboarding slice. The legacy-import premise was subsequently removed by
+> the founder because no legacy customer data exists. Continue with
+> [21-NATIVE-CUSTOMER-ONBOARDING.md](./21-NATIVE-CUSTOMER-ONBOARDING.md).
+
 **Measured:** 2026-08-24 on the local Codex branch.
 **Activation:** off by default and operator-gated.
 **External effects:** none. No database was created, migrated or contacted; no

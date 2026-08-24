@@ -1,8 +1,7 @@
 /**
- * Boot-time wiring for the client portal: a persisted CRM store, an account
- * (login) store, a seeded demo tenant you can log into, and — the new bit — a
- * `provision` function that turns a real signup (an accepted intake + email) into
- * a working portal login with its own generated brand brain. Mock-first, £0.
+ * Portal composition boundaries. The legacy builder below is an explicit local
+ * development/demo path backed by JSON. The PostgreSQL builder composes only
+ * canonical auth + CRM services and never constructs those stores.
  */
 
 import fs from 'node:fs';
@@ -16,7 +15,7 @@ import { makeBilling } from './billing.js';
 import { generateBrandBrain, runTickReal } from './run.js';
 import { FIXTURES_DIR } from '../paths.js';
 import type { Intake } from '../types.js';
-import type { PortalDeps } from './router.js';
+import type { LegacyPortalDeps, PostgresPortalDeps } from './router.js';
 import type { PortalCrmService } from './crm-service.js';
 import type { PortalAuthService } from './auth-service.js';
 import type { SubscriptionStore } from '../server/subscriptions.js';
@@ -114,15 +113,37 @@ export interface PortalConfig {
   manageUrl?: (customerId: string) => Promise<string>;
   /** When true, "Run this week" requires an active subscription (default false — demo runs). */
   billingEnforced?: boolean;
-  /** Optional durable CRM composition; the legacy JSON portal remains valid without it. */
-  crm?: PortalCrmService;
-  /** Optional database-backed opaque login/session composition. */
-  auth?: PortalAuthService;
 }
 
 export interface PortalBundle {
-  portal: PortalDeps;
+  portal: LegacyPortalDeps;
   provision: (args: ProvisionArgs) => Promise<ProvisionResult>;
+}
+
+export interface PostgresPortalConfig {
+  sessionSecret: string;
+  secure: boolean;
+  auth: PortalAuthService;
+  crm: PortalCrmService;
+  now?: () => number;
+  requestId?: () => string;
+}
+
+/**
+ * Compose the canonical portal without constructing a JSON account, CRM or
+ * billing store. PostgreSQL readiness is owned by buildPgPortalPlatform.
+ */
+export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPortalDeps {
+  return {
+    kind: 'postgres',
+    sessionSecret: cfg.sessionSecret,
+    secure: cfg.secure,
+    loginThrottle: new InMemoryLoginThrottle(),
+    auth: cfg.auth,
+    crm: cfg.crm,
+    now: cfg.now,
+    requestId: cfg.requestId,
+  };
 }
 
 export async function buildPortalDeps(cfg: PortalConfig): Promise<PortalBundle> {
@@ -159,28 +180,19 @@ export async function buildPortalDeps(cfg: PortalConfig): Promise<PortalBundle> 
     ? makeBilling(cfg.subscriptions, async (tid) => (await accounts.findByTenant(tid))?.email ?? null)
     : undefined;
 
-  const portal: PortalDeps = {
+  const portal: LegacyPortalDeps = {
+    kind: 'legacy',
     sessionSecret: cfg.sessionSecret,
     secure: cfg.secure,
     login: (e, pw) => accounts.verify(e, pw),
     completeSetup: (token, password, now) => accounts.completeSetup(token, password, now),
     loginThrottle: new InMemoryLoginThrottle(),
     dashboard: makeDashboard(store, (t) => t.runDir),
-    verifyLegacyBridge: async (tenantId, userEmail) => {
-      const email = userEmail.trim().toLowerCase();
-      const [tenantAccount, emailAccount] = await Promise.all([
-        accounts.findByTenant(tenantId),
-        accounts.findByEmail(email),
-      ]);
-      return tenantAccount?.email === email && emailAccount?.tenantId === tenantId;
-    },
     runTick: (tid) => runTickReal(store, tid),
     billing,
     subscribeUrl: cfg.subscribeUrl,
     manageUrl: cfg.manageUrl,
     billingEnforced: cfg.billingEnforced,
-    crm: cfg.crm,
-    auth: cfg.auth,
   };
   const provision = async (args: ProvisionArgs): Promise<ProvisionResult> => {
     const result = await provisionTenant(store, accounts, cfg.dataDir, args);

@@ -44,8 +44,12 @@ export interface AppDeps {
   portal?: PortalDeps;
   /** Safe operator-facing reasons the optional portal could not be mounted. */
   portalBlockers?: string[];
-  /** Fired (fire-and-forget) when an intake is accepted — provisions the portal login. */
-  onIntakeAccepted?: (intake: Intake, email: string | null) => void;
+  /**
+   * Fired (fire-and-forget) after a paid intake is claimed. The verified order,
+   * especially its Stripe Session id, is the provisioning authority and
+   * idempotency key; caller-controlled intake fields are never account authority.
+   */
+  onIntakeAccepted?: (intake: Intake, order: Order) => void | Promise<void>;
   /** Optional recurring-subscription store; absent = subscription events are ignored. */
   subscriptions?: SubscriptionStore;
   /**
@@ -367,7 +371,12 @@ export function createApp(deps: AppDeps) {
           // Identity comes from Stripe's verified checkout event, never from a
           // caller-controlled intake field. A missing receipt email defers portal
           // provisioning instead of risking an account for the wrong person.
-          try { deps.onIntakeAccepted(intake, claimed.email); } catch (e) { console.warn(`onIntakeAccepted failed: ${(e as Error).message}`); }
+          try {
+            void Promise.resolve(deps.onIntakeAccepted(intake, claimed))
+              .catch((e: unknown) => console.warn(`onIntakeAccepted failed: ${(e as Error).message}`));
+          } catch (e) {
+            console.warn(`onIntakeAccepted failed: ${(e as Error).message}`);
+          }
         }
         return send(res, 200, { accepted: true, building: true, run: runRef });
       }

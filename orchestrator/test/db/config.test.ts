@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { DATABASE_ROLES, loadDatabaseConfig } from '../../src/db/config.js';
-import { createCrmCommandDatabasePool, createDatabasePool, createIdentityCommandDatabasePool } from '../../src/db/pool.js';
+import {
+  createCrmCommandDatabasePool,
+  createDatabasePool,
+  createIdentityCommandDatabasePool,
+  createProvisioningCommandDatabasePool,
+} from '../../src/db/pool.js';
 
 test('database config uses generic DATABASE_URL only for local development', () => {
   const config = loadDatabaseConfig('web', {
@@ -107,6 +112,33 @@ test('portal login and session commands use their own verified identity role', a
   await pool.end();
 });
 
+test('native customer provisioning has a dedicated verified function-only role', async () => {
+  assert.ok(DATABASE_ROLES.includes('provisioningCommand'));
+  assert.throws(
+    () => loadDatabaseConfig('provisioningCommand', {
+      NODE_ENV: 'production',
+      DATABASE_PROVISIONING_COMMAND_URL: 'postgresql://r72_web:secret@database.example/relaunch72?sslmode=require',
+    }),
+    /must authenticate as the least-privilege r72_provisioning_command role/,
+  );
+  const config = loadDatabaseConfig('provisioningCommand', {
+    NODE_ENV: 'production',
+    DATABASE_PROVISIONING_COMMAND_URL: 'postgresql://r72_provisioning_command:secret@database.example/relaunch72?sslmode=require',
+    DATABASE_PROVISIONING_COMMAND_POOL_MAX: '2',
+  });
+  assert.equal(config.sourceEnv, 'DATABASE_PROVISIONING_COMMAND_URL');
+  assert.equal(config.applicationName, 'relaunch72-provisioning-command');
+  assert.equal(config.expectedDatabaseUser, 'r72_provisioning_command');
+  assert.equal(config.maxConnections, 2);
+
+  const pool = createProvisioningCommandDatabasePool({
+    DATABASE_PROVISIONING_COMMAND_URL: 'postgresql://r72_provisioning_command:secret@localhost/relaunch72_test?sslmode=disable',
+  }, { onBackgroundError: () => undefined });
+  assert.equal(pool.options.application_name, 'relaunch72-provisioning-command');
+  assert.equal(typeof pool.options.verify, 'function');
+  await pool.end();
+});
+
 test('database config rejects malformed URLs and dangerous numeric settings without leaking secrets', () => {
   const secret = 'never-print-this-password';
   for (const env of [
@@ -122,6 +154,33 @@ test('database config rejects malformed URLs and dangerous numeric settings with
       (error: unknown) => error instanceof Error && !error.message.includes(secret),
     );
   }
+});
+
+test('Neon direct URLs retain verified TLS and enable channel binding safely', async () => {
+  const config = loadDatabaseConfig('migrator', {
+    DATABASE_MIGRATOR_URL: 'postgresql://owner:secret@ep-example.eu-central-1.aws.neon.tech/relaunch72_test?sslmode=verify-full&channel_binding=require',
+  });
+  assert.equal(config.sslMode, 'verify-full');
+  assert.equal(config.enableChannelBinding, true);
+  assert.doesNotMatch(config.connectionString, /channel_binding|sslmode/);
+
+  const pool = createDatabasePool(config, { onBackgroundError: () => undefined });
+  assert.equal(pool.options.enableChannelBinding, true);
+  assert.deepEqual(pool.options.ssl, { rejectUnauthorized: true });
+  await pool.end();
+
+  assert.throws(
+    () => loadDatabaseConfig('migrator', {
+      DATABASE_MIGRATOR_URL: 'postgresql://owner:secret@localhost/relaunch72_test?sslmode=disable&channel_binding=require',
+    }),
+    /cannot require channel binding when TLS is disabled/,
+  );
+  assert.throws(
+    () => loadDatabaseConfig('migrator', {
+      DATABASE_MIGRATOR_URL: 'postgresql://owner:secret@ep-example-pooler.eu-central-1.aws.neon.tech/relaunch72_test?sslmode=verify-full&channel_binding=require',
+    }),
+    /direct, non-pooled connection/,
+  );
 });
 
 test('pool factory carries bounded connection and TLS settings without connecting', async () => {

@@ -4,6 +4,7 @@ import { runMigrations } from '../../src/db/migrate.js';
 import { createDatabasePool } from '../../src/db/pool.js';
 
 const TEST_NAME_PATTERN = /(?:^|[_-])test(?:$|[_-])/i;
+export const DISPOSABLE_BRANCH_CONFIRMATION = 'reset-disposable-branch';
 type ScopedTestRole = 'r72_web' | 'r72_crm_command' | 'r72_worker';
 type UnscopedTestRole = 'r72_web' | 'r72_identity_command' | 'r72_crm_command' | 'r72_worker';
 
@@ -21,7 +22,10 @@ export function testDatabaseSkipReason(): string | false {
     : 'TEST_DATABASE_URL is not set; PostgreSQL integration test is opt-in';
 }
 
-export function assertDisposableTestDatabase(rawUrl: string): void {
+export function assertDisposableTestDatabase(
+  rawUrl: string,
+  branchConfirmation = process.env.TEST_DATABASE_RESET_CONFIRM?.trim(),
+): void {
   let url: URL;
   try {
     url = new URL(rawUrl);
@@ -31,6 +35,12 @@ export function assertDisposableTestDatabase(rawUrl: string): void {
   const database = decodeURIComponent(url.pathname.replace(/^\//, ''));
   if (!TEST_NAME_PATTERN.test(database) || /^(?:postgres|template0|template1)$/i.test(database)) {
     throw new Error('TEST_DATABASE_URL database name must contain a standalone test segment');
+  }
+  if (branchConfirmation !== DISPOSABLE_BRANCH_CONFIRMATION) {
+    throw new Error(
+      `TEST_DATABASE_RESET_CONFIRM must equal ${DISPOSABLE_BRANCH_CONFIRMATION}; `
+      + 'the test must run on an isolated disposable branch/project because PostgreSQL role changes are branch-wide',
+    );
   }
 }
 

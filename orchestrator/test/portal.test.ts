@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { handlePortal, type PortalDeps } from '../src/portal/router.js';
+import {
+  handlePortal,
+  type LegacyPortalDeps,
+  type PortalDeps,
+  type PostgresPortalDeps,
+} from '../src/portal/router.js';
 import {
   signTenant,
   PORTAL_COOKIE,
@@ -13,6 +18,7 @@ import {
 import type { DashboardData } from '../src/portal/data.js';
 import type { BillingView } from '../src/portal/billing.js';
 import type { PortalAuthService } from '../src/portal/auth-service.js';
+import type { PortalCrmService } from '../src/portal/crm-service.js';
 
 function billingView(over: Partial<BillingView> = {}): BillingView {
   return {
@@ -24,6 +30,8 @@ function billingView(over: Partial<BillingView> = {}): BillingView {
 }
 
 const SECRET = 'test-secret';
+const USER_ID = '11111111-1111-4111-8111-111111111111';
+const WORKSPACE_ID = '22222222-2222-4222-8222-222222222222';
 
 const demoData: DashboardData = {
   tenant: { id: 't1', name: 'Frayne Electrical', createdAt: '2026-07-26T00:00:00Z' },
@@ -33,16 +41,35 @@ const demoData: DashboardData = {
   artifacts: {},
 };
 
-function deps(over: Partial<PortalDeps> = {}): PortalDeps {
+function deps(over: Partial<LegacyPortalDeps> = {}): LegacyPortalDeps {
   return {
     sessionSecret: SECRET,
     secure: false,
     now: () => 1_000_000,
     login: async (email, pw) => (email === 'owner@frayne.co' && pw === 'good' ? 't1' : null),
     dashboard: async (tid) => (tid === 't1' ? demoData : null),
-    verifyLegacyBridge: async (tenantId, userEmail) => tenantId === 't1' && userEmail === 'owner@frayne.co',
     runTick: async () => 4,
     ...over,
+    kind: 'legacy',
+  };
+}
+
+const crm: PortalCrmService = {
+  snapshot: async () => null,
+  createLead: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+  moveOpportunity: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+  completeTask: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+};
+
+function postgresDeps(auth: PortalAuthService, over: Partial<PostgresPortalDeps> = {}): PostgresPortalDeps {
+  return {
+    sessionSecret: SECRET,
+    secure: false,
+    now: () => 1_000_000,
+    auth,
+    crm,
+    ...over,
+    kind: 'postgres',
   };
 }
 
@@ -108,16 +135,17 @@ test('database auth issues opaque cookies and never accepts a legacy signed tena
   const opaque = Buffer.alloc(32, 5).toString('base64url');
   const auth: PortalAuthService = {
     resolve: async (token) => token === opaque
-      ? { sessionToken: token, userId: '11111111-1111-4111-8111-111111111111', userEmail: 'owner@frayne.co', workspaceId: '22222222-2222-4222-8222-222222222222', legacyTenantId: 't1' }
+      ? { sessionToken: token, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID }
       : null,
     login: async (email, password) => email === 'owner@frayne.co' && password === 'good'
-      ? { sessionToken: opaque, userEmail: 'owner@frayne.co', legacyTenantId: 't1' }
+      ? { sessionToken: opaque, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID }
       : null,
     revoke: async () => undefined,
   };
-  const d = deps({ auth, login: async () => 'must-not-be-used' });
+  const d = postgresDeps(auth);
   const login = await call('POST', '/portal/login', d, loginPost({ email: 'owner@frayne.co', password: 'good' }));
   assert.equal(login.statusCode, 302);
+  assert.equal(login.headers.location, '/portal/crm/contacts');
   assert.match(login.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}(?:;|$)`));
   assert.doesNotMatch(login.headers['set-cookie'] ?? '', /\./, 'opaque database cookie is not a signed tenant payload');
 
@@ -125,44 +153,38 @@ test('database auth issues opaque cookies and never accepts a legacy signed tena
   assert.equal(legacy.statusCode, 302);
   assert.equal(legacy.headers.location, '/portal/login?reason=session-ended');
   const accepted = await call('GET', '/portal', d, { cookie: `${PORTAL_COOKIE}=${opaque}` });
-  assert.equal(accepted.statusCode, 200);
+  assert.equal(accepted.statusCode, 302);
+  assert.equal(accepted.headers.location, '/portal/crm/contacts');
 });
 
-test('database sessions re-attest legacy tenant ownership on every request', async () => {
+test('database sessions use canonical workspace identity without a legacy bridge', async () => {
   const opaque = Buffer.alloc(32, 11).toString('base64url');
   const auth: PortalAuthService = {
     resolve: async (token) => token === opaque ? {
       sessionToken: token,
+      userId: USER_ID,
       userEmail: 'owner@frayne.co',
-      legacyTenantId: 'foreign-tenant',
+      workspaceId: WORKSPACE_ID,
     } : null,
     login: async () => null,
     revoke: async () => undefined,
   };
-  let dashboardCalls = 0;
-  const res = await call('GET', '/portal', deps({
-    auth,
-    dashboard: async () => { dashboardCalls += 1; return demoData; },
-  }), { cookie: `${PORTAL_COOKIE}=${opaque}` });
+  const res = await call('GET', '/portal', postgresDeps(auth), {
+    cookie: `${PORTAL_COOKIE}=${opaque}`,
+  });
 
-  assert.equal(res.statusCode, 503);
-  assert.match(res.body, /workspace bridge is not ready/i);
-  assert.equal(dashboardCalls, 0);
+  assert.equal(res.statusCode, 302);
+  assert.equal(res.headers.location, '/portal/crm/contacts');
 });
 
 test('database auth failure never downgrades to legacy login', async () => {
-  let legacyCalls = 0;
   const auth: PortalAuthService = {
     resolve: async () => null,
     login: async () => { throw new Error('database unavailable'); },
     revoke: async () => undefined,
   };
-  const res = await call('POST', '/portal/login', deps({
-    auth,
-    login: async () => { legacyCalls += 1; return 't1'; },
-  }), loginPost({ email: 'owner@frayne.co', password: 'good' }));
+  const res = await call('POST', '/portal/login', postgresDeps(auth), loginPost({ email: 'owner@frayne.co', password: 'good' }));
   assert.equal(res.statusCode, 503);
-  assert.equal(legacyCalls, 0);
   assert.match(res.body, /temporarily unavailable/);
 });
 
@@ -171,10 +193,10 @@ test('a stale cookie cannot block a fresh database login or account setup page',
   let resolveCalls = 0;
   const auth: PortalAuthService = {
     resolve: async () => { resolveCalls += 1; throw new Error('identity store unavailable'); },
-    login: async () => ({ sessionToken: opaque, userEmail: 'owner@frayne.co', legacyTenantId: 't1' }),
+    login: async () => ({ sessionToken: opaque, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID }),
     revoke: async () => undefined,
   };
-  const d = deps({ auth });
+  const d = postgresDeps(auth);
   const staleCookie = `${PORTAL_COOKIE}=${Buffer.alloc(32, 8).toString('base64url')}`;
 
   const login = await call('POST', '/portal/login', d, {
@@ -217,6 +239,34 @@ test('one-time setup chooses a password, signs in and rejects an already-used to
   assert.match(reused.body, /expired or has already been used/i);
 });
 
+test('database account setup issues its canonical session and enters the CRM', async () => {
+  const opaque = Buffer.alloc(32, 12).toString('base64url');
+  const seen: Array<{ token: string; password: string; now: number }> = [];
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => null,
+    completeSetup: async (token, password, context) => {
+      seen.push({ token, password, now: context.now });
+      return token === 'one-use'
+        ? { sessionToken: opaque, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID }
+        : null;
+    },
+    revoke: async () => undefined,
+  };
+  const d = postgresDeps(auth);
+
+  const page = await call('GET', '/portal/setup?token=one-use', d);
+  assert.equal(page.statusCode, 200);
+  const completed = await call('POST', '/portal/setup', d, {
+    body: 'token=one-use&password=a-secure-password&confirm=a-secure-password',
+  });
+
+  assert.equal(completed.statusCode, 302);
+  assert.equal(completed.headers.location, '/portal/crm/contacts');
+  assert.match(completed.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}(?:;|$)`));
+  assert.deepEqual(seen, [{ token: 'one-use', password: 'a-secure-password', now: 1_000_000 }]);
+});
+
 test('login throttles repeated failures without revealing whether an account exists', async () => {
   const d = deps({ loginThrottle: new InMemoryLoginThrottle(2, 60_000, 60_000) });
   assert.equal((await call('POST', '/portal/login', d, loginPost({ email: 'owner@frayne.co', password: 'bad' }))).statusCode, 401);
@@ -236,49 +286,19 @@ test('login rejects a cross-site form post without its signed pre-authentication
   assert.match(res.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_LOGIN_CSRF_COOKIE}=`));
 });
 
-test('database login revokes an unissued session when its dashboard bridge is absent', async () => {
+test('database login does not preflight a JSON dashboard before issuing its session', async () => {
   const opaque = Buffer.alloc(32, 6).toString('base64url');
   const revoked: string[] = [];
   const auth: PortalAuthService = {
     resolve: async () => null,
-    login: async () => ({ sessionToken: opaque, userEmail: 'owner@frayne.co', legacyTenantId: 'missing-bridge' }),
+    login: async () => ({ sessionToken: opaque, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID }),
     revoke: async (token) => { revoked.push(token); },
   };
-  const res = await call('POST', '/portal/login', deps({
-    auth,
-    dashboard: async () => null,
-  }), loginPost({ email: 'owner@frayne.co', password: 'good' }));
-  assert.equal(res.statusCode, 503);
-  assert.deepEqual(revoked, [opaque]);
-  assert.match(res.body, /workspace bridge is not ready/);
-  assert.doesNotMatch(res.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}`));
-});
-
-test('database login rejects a valid dashboard owned by another legacy account', async () => {
-  const opaque = Buffer.alloc(32, 10).toString('base64url');
-  const revoked: string[] = [];
-  const auth: PortalAuthService = {
-    resolve: async () => null,
-    login: async () => ({
-      sessionToken: opaque,
-      userEmail: 'owner@frayne.co',
-      legacyTenantId: 'foreign-tenant',
-    }),
-    revoke: async (token) => { revoked.push(token); },
-  };
-  const foreignDashboard: DashboardData = {
-    ...demoData,
-    tenant: { ...demoData.tenant, id: 'foreign-tenant' },
-  };
-  const res = await call('POST', '/portal/login', deps({
-    auth,
-    dashboard: async () => foreignDashboard,
-  }), loginPost({ email: 'owner@frayne.co', password: 'good' }));
-
-  assert.equal(res.statusCode, 503);
-  assert.deepEqual(revoked, [opaque]);
-  assert.match(res.body, /workspace bridge is not ready/);
-  assert.doesNotMatch(res.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}`));
+  const res = await call('POST', '/portal/login', postgresDeps(auth), loginPost({ email: 'owner@frayne.co', password: 'good' }));
+  assert.equal(res.statusCode, 302);
+  assert.equal(res.headers.location, '/portal/crm/contacts');
+  assert.deepEqual(revoked, []);
+  assert.match(res.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}`));
 });
 
 test('login throttle enforces a hard identifier cap under unique-key spraying', () => {
@@ -396,12 +416,17 @@ test('database logout revokes the exact opaque session before clearing its cooki
   const opaque = Buffer.alloc(32, 6).toString('base64url');
   const revoked: string[] = [];
   const auth: PortalAuthService = {
-    resolve: async (token) => token === opaque ? { sessionToken: token, userEmail: 'owner@frayne.co', legacyTenantId: 't1' } : null,
+    resolve: async (token) => token === opaque ? {
+      sessionToken: token,
+      userId: USER_ID,
+      userEmail: 'owner@frayne.co',
+      workspaceId: WORKSPACE_ID,
+    } : null,
     login: async () => null,
     revoke: async (token) => { revoked.push(token); },
   };
   const body = new URLSearchParams({ _csrf: portalCsrfToken(SECRET, opaque) }).toString();
-  const res = await call('POST', '/portal/logout', deps({ auth }), {
+  const res = await call('POST', '/portal/logout', postgresDeps(auth), {
     cookie: `${PORTAL_COOKIE}=${opaque}`,
     body,
   });
@@ -420,7 +445,7 @@ test('database logout reports revocation failure and keeps the browser session',
     revoke: async () => { revokeCalls += 1; throw new Error('identity store unavailable'); },
   };
   const body = new URLSearchParams({ _csrf: portalCsrfToken(SECRET, opaque) }).toString();
-  const res = await call('POST', '/portal/logout', deps({ auth }), {
+  const res = await call('POST', '/portal/logout', postgresDeps(auth), {
     cookie: `${PORTAL_COOKIE}=${opaque}`,
     body,
   });

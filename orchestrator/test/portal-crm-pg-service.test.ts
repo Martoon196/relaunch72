@@ -51,7 +51,7 @@ function readSnapshot(canWrite = true): CrmWorkspaceReadSnapshot {
 }
 
 function identity() {
-  return { sessionToken: 'opaque-session-token', legacyTenantId: 'legacy-t1', requestId: 'portal-crm-request' };
+  return { sessionToken: 'opaque-session-token', requestId: 'portal-crm-request' };
 }
 
 test('PostgreSQL principal resolver sends only a SHA-256 token hash to the safe session function', async () => {
