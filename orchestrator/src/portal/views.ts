@@ -9,7 +9,7 @@ import type { BillingView } from './billing.js';
 import { PIPELINE_STAGES, type PipelineStage } from '../crm/types.js';
 import { appShell, escapeHtml as esc, icon, pageHead, plannedPortalModules, portalModuleIcon } from './ui.js';
 
-export function accountSetupPage(token: string, error?: string): string {
+export function accountSetupPage(setupCsrfToken: string, error?: string): string {
   return `${pageHead('Relaunch72 — Set up your account')}<body>
     <main class="auth-shell">
       <section class="auth-panel" aria-labelledby="setup-title">
@@ -19,7 +19,7 @@ export function accountSetupPage(token: string, error?: string): string {
           <p class="auth-lead">Use at least 12 characters. This private setup link works once.</p>
           ${error ? `<div class="auth-error" role="alert">${icon('lock')}<span>${esc(error)}</span></div>` : ''}
           <form method="post" action="/portal/setup">
-            <input type="hidden" name="token" value="${esc(token)}">
+            <input type="hidden" name="_setup_csrf" value="${esc(setupCsrfToken)}">
             <div class="field"><label for="password">Password</label><input id="password" name="password" type="password" minlength="12" maxlength="1024" autocomplete="new-password" aria-describedby="password-hint" required autofocus></div>
             <p class="auth-foot" id="password-hint" style="text-align:left;margin:-7px 0 15px">12–1,024 characters · a password manager is recommended</p>
             <div class="field"><label for="confirm">Confirm password</label><input id="confirm" name="confirm" type="password" minlength="12" maxlength="1024" autocomplete="new-password" required></div>

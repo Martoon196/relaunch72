@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { createHash } from 'node:crypto';
 import {
   handlePortal,
   type LegacyPortalDeps,
@@ -11,7 +12,11 @@ import {
   signTenant,
   PORTAL_COOKIE,
   PORTAL_LOGIN_CSRF_COOKIE,
+  PORTAL_SETUP_COOKIE,
+  PORTAL_SETUP_CLOCK_SKEW_MS,
+  PORTAL_SETUP_TTL_SECONDS,
   InMemoryLoginThrottle,
+  InMemorySetupThrottle,
   portalCsrfToken,
   portalLoginCsrfToken,
 } from '../src/portal/session.js';
@@ -74,23 +79,44 @@ function postgresDeps(auth: PortalAuthService, over: Partial<PostgresPortalDeps>
 }
 
 // Minimal req/res doubles for the node http handler.
-function mkReq(method: string, url: string, opts: { cookie?: string; body?: string } = {}) {
-  const req = new EventEmitter() as EventEmitter & { method: string; url: string; headers: Record<string, string> };
+interface RequestOptions {
+  cookie?: string;
+  body?: string;
+  remoteAddress?: string;
+  forwardedFor?: string;
+}
+
+function mkReq(method: string, url: string, opts: RequestOptions = {}) {
+  const req = new EventEmitter() as EventEmitter & {
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    socket: { remoteAddress?: string };
+  };
   req.method = method;
   req.url = url;
   req.headers = {};
+  req.socket = { remoteAddress: opts.remoteAddress };
   if (opts.cookie) req.headers.cookie = opts.cookie;
+  if (opts.forwardedFor) req.headers['x-forwarded-for'] = opts.forwardedFor;
   queueMicrotask(() => { if (opts.body) req.emit('data', Buffer.from(opts.body)); req.emit('end'); });
   return req;
 }
 function mkRes() {
   const res = { statusCode: 0, headers: {} as Record<string, string>, body: '',
     setHeader(k: string, v: string) { this.headers[k.toLowerCase()] = v; },
-    writeHead(code: number, headers?: Record<string, string>) { this.statusCode = code; if (headers) for (const k in headers) this.headers[k.toLowerCase()] = headers[k]!; return this; },
+    writeHead(code: number, headers?: Record<string, string | string[]>) {
+      this.statusCode = code;
+      if (headers) for (const k in headers) {
+        const value = headers[k]!;
+        this.headers[k.toLowerCase()] = Array.isArray(value) ? value.join('\n') : value;
+      }
+      return this;
+    },
     end(b?: string) { if (b) this.body = b; } };
   return res;
 }
-async function call(method: string, url: string, d: PortalDeps, opts: { cookie?: string; body?: string } = {}) {
+async function call(method: string, url: string, d: PortalDeps, opts: RequestOptions = {}) {
   const res = mkRes();
   await handlePortal(mkReq(method, url, opts) as never, res as never, d);
   return res;
@@ -111,6 +137,39 @@ const loginPost = (
     body: new URLSearchParams({ _login_csrf: token, ...values }).toString(),
   };
 };
+
+const SETUP_TOKEN = Buffer.alloc(32, 23).toString('base64url');
+
+function responseCookie(headers: Record<string, string>, name: string): string {
+  const match = new RegExp(`(?:^|\\n)${name}=([^;]*)`).exec(headers['set-cookie'] ?? '');
+  assert.ok(match?.[1], `response did not set ${name}`);
+  return `${name}=${match[1]}`;
+}
+
+async function beginSetup(d: PortalDeps, token = SETUP_TOKEN, opts: RequestOptions = {}): Promise<{ cookie: string; csrf: string }> {
+  const exchange = await call('GET', `/portal/setup?token=${encodeURIComponent(token)}`, d, opts);
+  assert.equal(exchange.statusCode, 303);
+  assert.equal(exchange.headers.location, '/portal/setup');
+  assert.equal(exchange.headers['cache-control'], 'no-store');
+  assert.equal(exchange.headers['referrer-policy'], 'no-referrer');
+  assert.equal(exchange.body, '');
+  const cookie = responseCookie(exchange.headers, PORTAL_SETUP_COOKIE);
+  const page = await call('GET', '/portal/setup', d, { ...opts, cookie });
+  assert.equal(page.statusCode, 200);
+  assert.doesNotMatch(page.body, new RegExp(token));
+  assert.doesNotMatch(page.body, /name="token"/);
+  const csrf = /name="_setup_csrf" value="([A-Za-z0-9_-]{43})"/.exec(page.body)?.[1];
+  assert.ok(csrf, 'setup page did not contain its cookie-bound CSRF value');
+  return { cookie, csrf };
+}
+
+function setupPost(flow: { cookie: string; csrf: string }, values: Record<string, string>, opts: RequestOptions = {}): RequestOptions {
+  return {
+    ...opts,
+    cookie: flow.cookie,
+    body: new URLSearchParams({ _setup_csrf: flow.csrf, ...values }).toString(),
+  };
+}
 
 test('GET /portal without a session redirects to login', async () => {
   const res = await call('GET', '/portal', deps());
@@ -205,7 +264,10 @@ test('a stale cookie cannot block a fresh database login or account setup page',
   assert.equal(login.statusCode, 302);
   assert.match(login.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}(?:;|$)`));
 
-  const setup = await call('GET', '/portal/setup?token=one-use-token', d, { cookie: staleCookie });
+  const exchange = await call('GET', `/portal/setup?token=${SETUP_TOKEN}`, d, { cookie: staleCookie });
+  assert.equal(exchange.statusCode, 303, 'the sensitive query is cleaned even while setup is paused');
+  const setupCookie = responseCookie(exchange.headers, PORTAL_SETUP_COOKIE);
+  const setup = await call('GET', '/portal/setup', d, { cookie: `${staleCookie}; ${setupCookie}` });
   assert.equal(setup.statusCode, 503);
   assert.match(setup.body, /Setup is currently paused/);
   assert.doesNotMatch(setup.body, /name="password"/);
@@ -216,27 +278,31 @@ test('one-time setup chooses a password, signs in and rejects an already-used to
   const seen: Array<{ token: string; password: string; now: number }> = [];
   let available = true;
   const d = deps({
+    setupThrottle: new InMemorySetupThrottle(),
     completeSetup: async (token, password, now) => {
       seen.push({ token, password, now });
-      if (!available || token !== 'one-use') return null;
+      if (!available || token !== SETUP_TOKEN) return null;
       available = false;
       return 't1';
     },
   });
-  const page = await call('GET', '/portal/setup?token=one-use', d);
-  assert.equal(page.statusCode, 200);
-  assert.match(page.body, /Choose your password/);
-  assert.equal(page.headers['cache-control'], 'no-store');
+  const flow = await beginSetup(d);
 
-  const first = await call('POST', '/portal/setup', d, { body: 'token=one-use&password=a-secure-password&confirm=a-secure-password' });
-  assert.equal(first.statusCode, 302);
+  const first = await call('POST', '/portal/setup', d, setupPost(flow, {
+    password: 'a-secure-password', confirm: 'a-secure-password',
+  }));
+  assert.equal(first.statusCode, 303);
   assert.equal(first.headers.location, '/portal');
   assert.match(first.headers['set-cookie'] ?? '', new RegExp(PORTAL_COOKIE + '='));
-  assert.deepEqual(seen[0], { token: 'one-use', password: 'a-secure-password', now: 1_000_000 });
+  assert.match(first.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_SETUP_COOKIE}=.*Max-Age=0`));
+  assert.deepEqual(seen[0], { token: SETUP_TOKEN, password: 'a-secure-password', now: 1_000_000 });
 
-  const reused = await call('POST', '/portal/setup', d, { body: 'token=one-use&password=a-secure-password&confirm=a-secure-password' });
+  const reused = await call('POST', '/portal/setup', d, setupPost(flow, {
+    password: 'a-secure-password', confirm: 'a-secure-password',
+  }));
   assert.equal(reused.statusCode, 400);
-  assert.match(reused.body, /expired or has already been used/i);
+  assert.match(reused.body, /invalid, expired or has already been used/i);
+  assert.doesNotMatch(reused.body, new RegExp(SETUP_TOKEN));
 });
 
 test('database account setup issues its canonical session and enters the CRM', async () => {
@@ -247,24 +313,239 @@ test('database account setup issues its canonical session and enters the CRM', a
     login: async () => null,
     completeSetup: async (token, password, context) => {
       seen.push({ token, password, now: context.now });
-      return token === 'one-use'
+      return token === SETUP_TOKEN
         ? { sessionToken: opaque, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID }
         : null;
     },
     revoke: async () => undefined,
   };
-  const d = postgresDeps(auth);
+  const d = postgresDeps(auth, { setupThrottle: new InMemorySetupThrottle() });
 
-  const page = await call('GET', '/portal/setup?token=one-use', d);
-  assert.equal(page.statusCode, 200);
-  const completed = await call('POST', '/portal/setup', d, {
-    body: 'token=one-use&password=a-secure-password&confirm=a-secure-password',
-  });
+  const flow = await beginSetup(d);
+  const completed = await call('POST', '/portal/setup', d, setupPost(flow, {
+    password: 'a-secure-password', confirm: 'a-secure-password',
+  }));
 
-  assert.equal(completed.statusCode, 302);
+  assert.equal(completed.statusCode, 303);
   assert.equal(completed.headers.location, '/portal/crm/contacts');
   assert.match(completed.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}(?:;|$)`));
-  assert.deepEqual(seen, [{ token: 'one-use', password: 'a-secure-password', now: 1_000_000 }]);
+  assert.deepEqual(seen, [{ token: SETUP_TOKEN, password: 'a-secure-password', now: 1_000_000 }]);
+});
+
+test('setup query cleanup removes the capability from later HTML and binds POST to an encrypted HttpOnly cookie', async () => {
+  let setupCalls = 0;
+  const d = deps({
+    secure: true,
+    setupThrottle: new InMemorySetupThrottle(),
+    completeSetup: async () => { setupCalls += 1; return null; },
+  });
+  const exchange = await call('GET', `/portal/setup?token=${SETUP_TOKEN}`, d);
+  assert.equal(exchange.statusCode, 303);
+  assert.match(exchange.headers['set-cookie'] ?? '', new RegExp(`^${PORTAL_SETUP_COOKIE}=[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+;`));
+  assert.doesNotMatch(exchange.headers['set-cookie'] ?? '', new RegExp(SETUP_TOKEN));
+  assert.match(exchange.headers['set-cookie'] ?? '', /HttpOnly/);
+  assert.match(exchange.headers['set-cookie'] ?? '', /SameSite=Lax/, 'email-origin top-level GETs must survive the clean 303');
+  assert.match(exchange.headers['set-cookie'] ?? '', /Path=\/portal\/setup/);
+  assert.match(exchange.headers['set-cookie'] ?? '', /Max-Age=600/);
+  assert.match(exchange.headers['set-cookie'] ?? '', /Secure/);
+
+  const issuedCookie = responseCookie(exchange.headers, PORTAL_SETUP_COOKIE);
+  const encryptedParts = issuedCookie.slice(PORTAL_SETUP_COOKIE.length + 1).split('.');
+  encryptedParts[1] = `${encryptedParts[1]![0] === 'A' ? 'B' : 'A'}${encryptedParts[1]!.slice(1)}`;
+  const tampered = await call('GET', '/portal/setup', d, {
+    cookie: `${PORTAL_SETUP_COOKIE}=${encryptedParts.join('.')}`,
+  });
+  assert.equal(tampered.statusCode, 400, 'AEAD rejects ciphertext tampering');
+  assert.doesNotMatch(tampered.body, new RegExp(SETUP_TOKEN));
+
+  const flow = await beginSetup(d);
+  const withoutCsrf = await call('POST', '/portal/setup', d, {
+    cookie: flow.cookie,
+    body: new URLSearchParams({ password: 'a-secure-password', confirm: 'a-secure-password' }).toString(),
+  });
+  assert.equal(withoutCsrf.statusCode, 403);
+  assert.equal(setupCalls, 0);
+  assert.match(withoutCsrf.body, /invalid, expired or has already been used/i);
+  assert.doesNotMatch(withoutCsrf.body, new RegExp(SETUP_TOKEN));
+  assert.equal(withoutCsrf.headers['set-cookie'], undefined, 'a cross-site POST cannot clear the Strict setup cookie');
+});
+
+test('setup cookie lifetime is authenticated, skew-tolerant and enforced server-side', async () => {
+  let now = 1_000_000;
+  const issuedAt = now;
+  const d = deps({
+    now: () => now,
+    completeSetup: async () => null,
+  });
+  const exchange = await call('GET', `/portal/setup?token=${SETUP_TOKEN}`, d);
+  const cookie = responseCookie(exchange.headers, PORTAL_SETUP_COOKIE);
+  now = issuedAt - PORTAL_SETUP_CLOCK_SKEW_MS;
+  assert.equal((await call('GET', '/portal/setup', d, { cookie })).statusCode, 200, 'one minute of issuer clock lead is tolerated');
+  now = issuedAt - PORTAL_SETUP_CLOCK_SKEW_MS - 1;
+  assert.equal((await call('GET', '/portal/setup', d, { cookie })).statusCode, 400, 'larger future issuance is rejected');
+  now = issuedAt + PORTAL_SETUP_TTL_SECONDS * 1000 + 1;
+  const expired = await call('GET', '/portal/setup', d, { cookie });
+  assert.equal(expired.statusCode, 400);
+  assert.match(expired.body, /invalid, expired or has already been used/i);
+  assert.doesNotMatch(expired.body, new RegExp(SETUP_TOKEN));
+  assert.match(expired.headers['set-cookie'] ?? '', /Max-Age=0/);
+});
+
+test('malformed and forged setup capabilities fail generically without entering the setup service', async () => {
+  let setupCalls = 0;
+  const d = deps({ completeSetup: async () => { setupCalls += 1; return null; } });
+  const malformed = '<script>raw-capability</script>';
+  const badLink = await call('GET', `/portal/setup?token=${encodeURIComponent(malformed)}`, d);
+  assert.equal(badLink.statusCode, 400);
+  assert.match(badLink.body, /invalid, expired or has already been used/i);
+  assert.doesNotMatch(badLink.body, /raw-capability/);
+
+  const forged = await call('GET', '/portal/setup', d, {
+    cookie: `${PORTAL_SETUP_COOKIE}=${SETUP_TOKEN}.${Buffer.alloc(32, 9).toString('base64url')}`,
+  });
+  assert.equal(forged.statusCode, 400);
+  assert.match(forged.body, /invalid, expired or has already been used/i);
+  assert.doesNotMatch(forged.body, new RegExp(SETUP_TOKEN));
+  assert.equal(setupCalls, 0);
+});
+
+test('setup throttle retains only direct-source and token hashes, ignoring spoofable proxy headers', async () => {
+  const reserved: string[] = [];
+  const failed: string[] = [];
+  const throttle = {
+    reserve(key: string) { reserved.push(key); return { allowed: true, retryAfterSeconds: 0 }; },
+    release() {},
+    failure(key: string) { failed.push(key); },
+    success() {},
+  };
+  const d = deps({
+    setupThrottle: throttle,
+    trustedClientAddress: (req) => req.socket.remoteAddress,
+    completeSetup: async () => null,
+  });
+  const flow = await beginSetup(d, SETUP_TOKEN, { remoteAddress: '10.0.0.7', forwardedFor: '203.0.113.99' });
+  const response = await call('POST', '/portal/setup', d, setupPost(flow, {
+    password: 'a-secure-password', confirm: 'a-secure-password',
+  }, { remoteAddress: '10.0.0.7', forwardedFor: '198.51.100.4' }));
+  assert.equal(response.statusCode, 400);
+  const directSourceHash = createHash('sha256')
+    .update('relaunch72/setup-source/v1\u0000')
+    .update('10.0.0.7')
+    .digest('hex');
+  const tokenHash = createHash('sha256').update(SETUP_TOKEN).digest('hex');
+  assert.deepEqual(reserved, [`setup-source:${directSourceHash}`, `setup-token:${tokenHash}`]);
+  assert.deepEqual(failed, reserved);
+  assert.equal(reserved.some((key) => key.includes(SETUP_TOKEN) || key.includes('203.0.113.99') || key.includes('198.51.100.4')), false);
+});
+
+test('setup throttles both token reuse across sources and source spraying across random tokens', async () => {
+  const tokenA = Buffer.alloc(32, 31).toString('base64url');
+  const tokenB = Buffer.alloc(32, 32).toString('base64url');
+  const tokenC = Buffer.alloc(32, 33).toString('base64url');
+  let tokenAttempts = 0;
+  const tokenDeps = deps({
+    setupThrottle: new InMemorySetupThrottle(1, 60_000, 60_000),
+    completeSetup: async () => { tokenAttempts += 1; return null; },
+  });
+  const firstTokenFlow = await beginSetup(tokenDeps, tokenA, { remoteAddress: '10.0.0.1' });
+  assert.equal((await call('POST', '/portal/setup', tokenDeps, setupPost(firstTokenFlow, {
+    password: 'a-secure-password', confirm: 'a-secure-password',
+  }, { remoteAddress: '10.0.0.1' }))).statusCode, 400);
+  const secondTokenFlow = await beginSetup(tokenDeps, tokenA, { remoteAddress: '10.0.0.2' });
+  const tokenBlocked = await call('POST', '/portal/setup', tokenDeps, setupPost(secondTokenFlow, {
+    password: 'a-secure-password', confirm: 'a-secure-password',
+  }, { remoteAddress: '10.0.0.2' }));
+  assert.equal(tokenBlocked.statusCode, 429);
+  assert.match(tokenBlocked.body, /invalid, expired or has already been used/i);
+  assert.equal(tokenAttempts, 1);
+
+  let sourceAttempts = 0;
+  const sourceDeps = deps({
+    setupThrottle: new InMemorySetupThrottle(1, 60_000, 60_000),
+    trustedClientAddress: (req) => req.socket.remoteAddress,
+    completeSetup: async () => { sourceAttempts += 1; return null; },
+  });
+  const firstSourceFlow = await beginSetup(sourceDeps, tokenB, { remoteAddress: '10.0.0.3' });
+  assert.equal((await call('POST', '/portal/setup', sourceDeps, setupPost(firstSourceFlow, {
+    password: 'a-secure-password', confirm: 'a-secure-password',
+  }, { remoteAddress: '10.0.0.3' }))).statusCode, 400);
+  const secondSourceFlow = await beginSetup(sourceDeps, tokenC, { remoteAddress: '10.0.0.3' });
+  const sourceBlocked = await call('POST', '/portal/setup', sourceDeps, setupPost(secondSourceFlow, {
+    password: 'a-secure-password', confirm: 'a-secure-password',
+  }, { remoteAddress: '10.0.0.3' }));
+  assert.equal(sourceBlocked.statusCode, 429);
+  assert.equal(sourceAttempts, 1);
+});
+
+test('setup throttle bounds identifiers without letting random idle fingerprints lock every link', () => {
+  const throttle = new InMemorySetupThrottle(1, 60_000, 60_000, 2);
+  assert.equal(throttle.reserve('one', 1_000).allowed, true);
+  throttle.failure('one', 1_000);
+  assert.equal(throttle.reserve('two', 1_000).allowed, true);
+  throttle.failure('two', 1_000);
+  assert.equal(throttle.reserve('three', 1_000).allowed, true, 'oldest idle fingerprint is evicted');
+  assert.equal(throttle.check('one', 1_000).allowed, true);
+  assert.equal(throttle.check('two', 1_000).allowed, false);
+
+  const pending = new InMemorySetupThrottle(3, 60_000, 60_000, 2);
+  assert.equal(pending.reserve('one', 1_000).allowed, true);
+  assert.equal(pending.reserve('two', 1_000).allowed, true);
+  assert.equal(pending.reserve('three', 1_000).allowed, false, 'in-flight entries are never evicted');
+});
+
+test('default proxy peers cannot source-block unrelated setup tokens without an explicit resolver', async () => {
+  const tokenA = Buffer.alloc(32, 41).toString('base64url');
+  const tokenB = Buffer.alloc(32, 42).toString('base64url');
+  let attempts = 0;
+  const d = deps({
+    setupThrottle: new InMemorySetupThrottle(1, 60_000, 60_000),
+    completeSetup: async () => { attempts += 1; return null; },
+  });
+  for (const token of [tokenA, tokenB]) {
+    const flow = await beginSetup(d, token, { remoteAddress: '10.0.0.99' });
+    const response = await call('POST', '/portal/setup', d, setupPost(flow, {
+      password: 'a-secure-password', confirm: 'a-secure-password',
+    }, { remoteAddress: '10.0.0.99', forwardedFor: '203.0.113.7' }));
+    assert.equal(response.statusCode, 400);
+  }
+  assert.equal(attempts, 2, 'the shared socket peer was deliberately omitted from throttle keys');
+});
+
+test('setup releases throttle reservations on service errors so capacity is never stranded', async () => {
+  let attempts = 0;
+  const d = deps({
+    setupThrottle: new InMemorySetupThrottle(1, 60_000, 60_000),
+    completeSetup: async () => { attempts += 1; throw new Error('identity store unavailable'); },
+  });
+  const flow = await beginSetup(d);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await call('POST', '/portal/setup', d, setupPost(flow, {
+      password: 'a-secure-password', confirm: 'a-secure-password',
+    }));
+    assert.equal(response.statusCode, 503);
+    assert.doesNotMatch(response.body, new RegExp(SETUP_TOKEN));
+  }
+  assert.equal(attempts, 2);
+});
+
+test('setup bounds concurrent expensive attempts before the setup service starts', async () => {
+  let openGate!: () => void;
+  const gate = new Promise<void>((resolve) => { openGate = resolve; });
+  let attempts = 0;
+  const d = deps({
+    setupThrottle: new InMemorySetupThrottle(2, 60_000, 60_000),
+    completeSetup: async () => { attempts += 1; await gate; return null; },
+  });
+  const flow = await beginSetup(d);
+  const body = { password: 'a-secure-password', confirm: 'a-secure-password' };
+  const first = call('POST', '/portal/setup', d, setupPost(flow, body));
+  const second = call('POST', '/portal/setup', d, setupPost(flow, body));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const third = await call('POST', '/portal/setup', d, setupPost(flow, body));
+  assert.equal(third.statusCode, 429);
+  assert.equal(attempts, 2);
+  openGate();
+  assert.deepEqual((await Promise.all([first, second])).map((response) => response.statusCode), [400, 400]);
 });
 
 test('login throttles repeated failures without revealing whether an account exists', async () => {
@@ -275,6 +556,43 @@ test('login throttles repeated failures without revealing whether an account exi
   assert.equal(blocked.statusCode, 429);
   assert.equal(blocked.headers['retry-after'], '60');
   assert.match(blocked.body, /Too many login attempts/i);
+});
+
+test('login source blocking is enabled only by an explicit trusted-address policy', async () => {
+  let defaultAttempts = 0;
+  const defaultDeps = deps({
+    loginThrottle: new InMemoryLoginThrottle(1, 60_000, 60_000),
+    login: async () => { defaultAttempts += 1; return null; },
+  });
+  for (const email of ['first@example.test', 'second@example.test']) {
+    const response = await call('POST', '/portal/login', defaultDeps, {
+      ...loginPost({ email, password: 'wrong-password' }),
+      remoteAddress: '10.0.0.99',
+      forwardedFor: '203.0.113.8',
+    });
+    assert.equal(response.statusCode, 401);
+  }
+  assert.equal(defaultAttempts, 2, 'a shared proxy peer was omitted without a trusted resolver');
+
+  let trustedAttempts = 0;
+  const trustedDeps = deps({
+    loginThrottle: new InMemoryLoginThrottle(1, 60_000, 60_000),
+    trustedClientAddress: (req) => req.socket.remoteAddress,
+    login: async () => { trustedAttempts += 1; return null; },
+  });
+  const first = await call('POST', '/portal/login', trustedDeps, {
+    ...loginPost({ email: 'first@example.test', password: 'wrong-password' }),
+    remoteAddress: '10.0.0.5',
+    forwardedFor: '203.0.113.10',
+  });
+  const second = await call('POST', '/portal/login', trustedDeps, {
+    ...loginPost({ email: 'second@example.test', password: 'wrong-password' }),
+    remoteAddress: '10.0.0.5',
+    forwardedFor: '198.51.100.11',
+  });
+  assert.equal(first.statusCode, 401);
+  assert.equal(second.statusCode, 429);
+  assert.equal(trustedAttempts, 1);
 });
 
 test('login rejects a cross-site form post without its signed pre-authentication token', async () => {

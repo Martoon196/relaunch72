@@ -11,6 +11,7 @@ const migration4Url = new URL('../../src/db/migrations/0004_portal_sessions.sql'
 const migration5Url = new URL('../../src/db/migrations/0005_canonical_portal_identity.sql', import.meta.url);
 const migration6Url = new URL('../../src/db/migrations/0006_customer_provisioning.sql', import.meta.url);
 const migration7Url = new URL('../../src/db/migrations/0007_public_schema_hardening.sql', import.meta.url);
+const migration8Url = new URL('../../src/db/migrations/0008_setup_delivery_recovery.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -425,18 +426,20 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums native identity, provisioning, then hardening', async () => {
+test('bundled migration discovery orders and checksums native identity through durable setup delivery', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-3);
+  const tail = migrations.slice(-4);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0005_canonical_portal_identity.sql', version: 5 },
     { filename: '0006_customer_provisioning.sql', version: 6 },
     { filename: '0007_public_schema_hardening.sql', version: 7 },
+    { filename: '0008_setup_delivery_recovery.sql', version: 8 },
   ]);
   const sources = [
     (await readFile(migration5Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration6Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration8Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
@@ -558,4 +561,154 @@ test('0006 consumes setup once, activates the owner, and issues the first opaque
   assert.match(sql, /statement_timestamp\(\) \+ interval '14 days'/);
   assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.complete_native_account_setup\([^;]+\) TO r72_identity_command/);
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.provision_customer_workspace\([^;]+\) TO r72_identity_command/);
+});
+
+test('0008 separates onboarding, setup delivery, reissue, and identity capabilities', async () => {
+  const sql = normalise(await readFile(migration8Url, 'utf8'));
+  for (const role of [
+    'r72_onboarding_definer', 'r72_setup_delivery_definer',
+    'r72_setup_delivery_command', 'r72_setup_reissue_command',
+  ]) {
+    assert.match(sql, new RegExp(`'${role}'`));
+  }
+  assert.match(sql, /ALTER ROLE r72_onboarding_definer NOLOGIN [^;]* NOBYPASSRLS NOINHERIT/);
+  assert.match(sql, /ALTER ROLE r72_setup_delivery_definer NOLOGIN [^;]* NOBYPASSRLS NOINHERIT/);
+  assert.match(sql, /ALTER ROLE r72_setup_delivery_command LOGIN [^;]* NOBYPASSRLS NOINHERIT/);
+  assert.match(sql, /ALTER ROLE r72_setup_reissue_command LOGIN [^;]* NOBYPASSRLS NOINHERIT/);
+  const allDeliveryRoles = 'r72_onboarding_definer, r72_setup_delivery_definer, r72_setup_delivery_command, r72_setup_reissue_command';
+  assert.ok(sql.includes(`REVOKE ALL ON ALL TABLES IN SCHEMA app FROM ${allDeliveryRoles}`));
+  assert.ok(sql.includes(`REVOKE ALL ON ALL TABLES IN SCHEMA app_private FROM ${allDeliveryRoles}`));
+  assert.ok(sql.includes(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA app_private FROM ${allDeliveryRoles}`));
+  assert.ok(sql.includes(`REVOKE CREATE ON SCHEMA public FROM ${allDeliveryRoles}`));
+  assert.doesNotMatch(sql, /GRANT (?:SELECT|INSERT|UPDATE|DELETE)[^;]* TO r72_setup_(?:delivery|reissue)_command/);
+
+  const createGrant = sql.indexOf('GRANT CREATE ON SCHEMA app_private TO r72_onboarding_definer');
+  const ownershipTransfer = sql.indexOf('ALTER FUNCTION app_private.provision_customer_workspace');
+  assert.ok(createGrant >= 0 && createGrant < ownershipTransfer, 'target definer can own the existing function');
+  assert.match(sql, /ALTER FUNCTION app_private\.provision_customer_workspace\([^;]+\) OWNER TO r72_onboarding_definer/);
+  assert.match(sql, /REVOKE INSERT ON app\.organizations,[^;]+ FROM r72_security_definer/);
+  assert.match(sql, /REVOKE ALL ON app_private\.customer_provisioning_receipts FROM r72_security_definer/);
+  assert.match(sql, /REVOKE ALL ON FUNCTION app_private\.provision_customer_workspace\([^;]+\) FROM r72_provisioning_command/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.provision_customer_workspace_with_setup_delivery\([^;]+\) TO r72_provisioning_command/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.reissue_native_account_setup\([^;]+\) TO r72_setup_reissue_command/);
+  assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.reissue_native_account_setup\([^;]+\) TO r72_(?:provisioning|identity|setup_delivery)_command/);
+});
+
+test('0008 stores only authenticated ciphertext and hash-only setup credentials', async () => {
+  const sql = normalise(await readFile(migration8Url, 'utf8'));
+  const table = /CREATE TABLE app_private\.account_setup_deliveries \((.*?)\);/.exec(sql)?.[1];
+  assert.ok(table);
+  for (const field of [
+    /recipient_email_hash bytea NOT NULL CHECK \(octet_length\(recipient_email_hash\) = 32\)/,
+    /payload_version smallint NOT NULL CHECK \(payload_version = 1\)/,
+    /encryption_key_id text NOT NULL/,
+    /encryption_iv bytea/,
+    /encrypted_payload bytea/,
+    /authentication_tag bytea/,
+    /lease_token_hash bytea/,
+  ]) assert.match(table, field);
+  assert.doesNotMatch(table, /raw|setup_token(?!_id)|recipient_email text|setup_url/);
+  assert.match(table, /state IN \('pending', 'leased', 'retry'\) AND encryption_iv IS NOT NULL AND encrypted_payload IS NOT NULL AND authentication_tag IS NOT NULL/);
+  assert.match(table, /state IN \('delivered', 'superseded', 'dead_letter'\) AND encryption_iv IS NULL AND encrypted_payload IS NULL AND authentication_tag IS NULL/);
+  assert.match(table, /\(state = 'superseded'\) = \(superseded_at IS NOT NULL\)/);
+  assert.match(sql, /pg_catalog\.convert_to\('r72\/setup-link\/v1', 'UTF8'\) \|\| pg_catalog\.decode\('00', 'hex'\) \|\| pg_catalog\.convert_to\(pg_catalog\.lower\(claimed\.id::text\), 'UTF8'\)/);
+  assert.doesNotMatch(sql, /RETURNS TABLE \([^)]*token_hash/);
+  assert.doesNotMatch(sql, /p_(?:raw_)?setup_token(?!_hash)/);
+});
+
+test('0008 makes provisioning plus encrypted delivery atomic and replay-stable', async () => {
+  const sql = normalise(await readFile(migration8Url, 'utf8'));
+  const body = /CREATE FUNCTION app_private\.provision_customer_workspace_with_setup_delivery\((.*?)\$function\$;/.exec(sql)?.[1];
+  assert.ok(body);
+  assert.match(body, /FROM app_private\.provision_customer_workspace\(/);
+  assert.match(body, /IF selected_created_now THEN INSERT INTO app_private\.account_setup_deliveries/);
+  assert.match(body, /ELSE SELECT delivery\.id, delivery\.generation/);
+  assert.match(body, /provisioned customer has no durable setup delivery; use trusted reissue/);
+  assert.match(body, /p_recipient_email_hash <> public\.digest/);
+  assert.doesNotMatch(body, /UPDATE app_private\.account_setup_deliveries[^;]*encrypted_payload = p_encrypted_payload/);
+  assert.match(sql, /CREATE TRIGGER identity_action_tokens_redact_setup_delivery AFTER UPDATE OF consumed_at, revoked_at ON app\.identity_action_tokens/);
+  assert.match(sql, /TG_OP <> 'UPDATE' OR TG_TABLE_SCHEMA <> 'app' OR TG_TABLE_NAME <> 'identity_action_tokens'/);
+  assert.match(sql, /delivery\.state IN \('pending', 'leased', 'retry'\) AND delivery\.superseded_at IS NULL/);
+  assert.match(sql, /REVOKE ALL ON FUNCTION app_private\.redact_terminal_account_setup_delivery\(\) FROM PUBLIC/);
+});
+
+test('0008 reissue is idempotent, email-bound, serialized, and appends a new generation', async () => {
+  const sql = normalise(await readFile(migration8Url, 'utf8'));
+  const body = /CREATE FUNCTION app_private\.reissue_native_account_setup\((.*?)\$function\$;/.exec(sql)?.[1];
+  assert.ok(body);
+  const receiptHash = /stable_request_hash := public\.digest\((.*?)\);/.exec(body)?.[1];
+  assert.ok(receiptHash);
+  for (const binding of ['p_workspace_id', 'p_user_id', 'normalized_operator_request', 'p_recipient_email_hash']) {
+    assert.match(receiptHash, new RegExp(binding));
+  }
+  assert.match(body, /public\.digest\( pg_catalog\.convert_to\(pg_catalog\.lower\(person\.email::text\), 'UTF8'\), 'sha256' \) = p_recipient_email_hash/);
+  assert.match(body, /setup reissue idempotency key was reused with different input/);
+  const userLock = body.indexOf('FROM app.users AS person');
+  const membershipLock = body.indexOf('FROM app.workspace_memberships AS workspace_membership', userLock);
+  const workspaceLock = body.indexOf('FROM app.workspaces AS workspace', membershipLock);
+  const organizationLock = body.indexOf('FROM app.organizations AS organization', workspaceLock);
+  const organizationMembershipLock = body.indexOf('FROM app.organization_memberships AS organization_membership', organizationLock);
+  const tokenLock = body.indexOf('PERFORM action_token.id');
+  const claimDelete = body.indexOf('DELETE FROM app_private.account_setup_claims');
+  const revoke = body.indexOf('UPDATE app.identity_action_tokens AS action_token SET revoked_at');
+  assert.ok(userLock >= 0 && userLock < membershipLock
+    && membershipLock < workspaceLock && workspaceLock < organizationLock
+    && organizationLock < organizationMembershipLock
+    && organizationMembershipLock < tokenLock
+    && tokenLock < claimDelete && claimDelete < revoke);
+  assert.match(body, /coalesce\(pg_catalog\.max\(delivery\.generation\), 0\) \+ 1/);
+  assert.match(body, /INSERT INTO app_private\.account_setup_deliveries/);
+  assert.match(body, /RETURN QUERY SELECT existing_action_token_id,[^;]+ false/);
+});
+
+test('0008 delivery claims are bounded, fenced, retryable, and erase terminal secrets', async () => {
+  const sql = normalise(await readFile(migration8Url, 'utf8'));
+  assert.match(sql, /CREATE FUNCTION app_private\.claim_account_setup_deliveries\(/);
+  assert.match(sql, /p_batch_size NOT BETWEEN 1 AND 25/);
+  assert.match(sql, /authentication_tag bytea, recipient_email_hash bytea, aad_context bytea/);
+  assert.match(sql, /FOR UPDATE OF delivery SKIP LOCKED LIMIT 25/);
+  assert.match(sql, /FOR UPDATE OF delivery SKIP LOCKED LIMIT p_batch_size/);
+  assert.match(sql, /action_token\.consumed_at IS NULL AND action_token\.revoked_at IS NULL AND action_token\.expires_at > statement_timestamp\(\)/);
+  assert.match(sql, /attempt_count = delivery\.attempt_count \+ 1/);
+  assert.match(sql, /delivery\.attempt_count >= 8/);
+  assert.match(sql, /state = 'dead_letter'/);
+  assert.match(sql, /CREATE FUNCTION app_private\.renew_account_setup_delivery_lease\(/);
+  assert.match(sql, /CREATE FUNCTION app_private\.acknowledge_account_setup_delivery\(/);
+  assert.match(sql, /CREATE FUNCTION app_private\.fail_account_setup_delivery\(/);
+  assert.match(sql, /delivery\.lease_token_hash = p_lease_token_hash AND delivery\.lease_expires_at > statement_timestamp\(\)/);
+  assert.match(sql, /SET state = 'delivered', encryption_iv = NULL, encrypted_payload = NULL, authentication_tag = NULL/);
+  assert.match(sql, /normalized_error_code !~ '\^\[a-z0-9\]\[a-z0-9\._:-\]\{0,99\}\$'/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.claim_account_setup_deliveries\([^;]+\) TO r72_setup_delivery_command/);
+  assert.match(sql, /CREATE FUNCTION app_private\.required_account_setup_delivery_key_ids\(\)[^;]+JOIN app\.identity_action_tokens AS action_token[^;]+JOIN app\.users AS person/);
+});
+
+test('0008 reserves valid setup hashes before scrypt and requires a live source-bound fence', async () => {
+  const sql = normalise(await readFile(migration8Url, 'utf8'));
+  const reserve = /CREATE FUNCTION app_private\.reserve_native_account_setup\((.*?)\$function\$;/.exec(sql)?.[1];
+  const complete = /CREATE FUNCTION app_private\.complete_native_account_setup\((.*?)\$function\$;/.exec(sql)?.[1];
+  assert.ok(reserve);
+  assert.ok(complete);
+  assert.match(reserve, /p_setup_token_hash bytea, p_claim_hash bytea, p_source_hash bytea/);
+  assert.match(reserve, /created_claim_expires_at timestamptz := statement_timestamp\(\) \+ interval '2 minutes'/);
+  const cheapLookup = reserve.indexOf('WHERE action_token.token_hash = p_setup_token_hash');
+  const passwordLock = reserve.indexOf('FROM app.users AS person');
+  assert.ok(cheapLookup >= 0 && cheapLookup < passwordLock, 'invalid tokens stop at the indexed lookup');
+  assert.match(reserve, /INSERT INTO app_private\.account_setup_claims/);
+  assert.match(sql, /DROP FUNCTION app_private\.complete_native_account_setup\( bytea, text, bytea, bytea, bytea, bytea \)/);
+  assert.match(complete, /p_setup_token_hash bytea, p_setup_claim_hash bytea, p_source_hash bytea, p_password_hash text/);
+  assert.match(complete, /claim\.claim_hash = p_setup_claim_hash AND claim\.source_hash = p_source_hash AND claim\.expires_at > statement_timestamp\(\)/);
+  const userLock = complete.indexOf('FROM app.users AS person');
+  const membershipLock = complete.indexOf('FROM app.workspace_memberships AS membership', userLock);
+  const workspaceLock = complete.indexOf('FROM app.workspaces AS workspace', membershipLock);
+  const organizationLock = complete.indexOf('FROM app.organizations AS organization', workspaceLock);
+  const organizationMembershipLock = complete.indexOf('FROM app.organization_memberships AS organization_membership', organizationLock);
+  const tokenLock = complete.indexOf('SELECT action_token.id, action_token.workspace_id', organizationMembershipLock);
+  const claimLock = complete.indexOf('FROM app_private.account_setup_claims AS claim');
+  assert.ok(userLock >= 0 && userLock < membershipLock
+    && membershipLock < workspaceLock && workspaceLock < organizationLock
+    && organizationLock < organizationMembershipLock
+    && organizationMembershipLock < tokenLock && tokenLock < claimLock);
+  assert.match(complete, /DELETE FROM app_private\.account_setup_claims AS claim WHERE claim\.user_id = locked_user_id/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.reserve_native_account_setup\( bytea, bytea, bytea \) TO r72_identity_command/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.complete_native_account_setup\( bytea, bytea, bytea, text, bytea, bytea, bytea, bytea \) TO r72_identity_command/);
 });

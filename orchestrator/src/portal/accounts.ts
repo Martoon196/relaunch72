@@ -22,6 +22,51 @@ const LEGACY_SHA256 = /^[a-f0-9]{64}$/i;
 // malformed, so login timing does not become a cheap email-enumeration oracle.
 const DUMMY_SCRYPT_HASH = 'scrypt$v1$16384,8,1$cmVsYXVuY2g3Mi1kdW1teSE$Y7Oitgu565adLUmSlFbA8WqgV7OGWtnQkb689EpLUts';
 
+/**
+ * All portal password hashing and verification crosses this process-wide
+ * boundary. Node's default worker pool has four threads, so admitting more
+ * simultaneous scrypt jobs only grows memory pressure and an implicit queue.
+ * Extra work fails closed instead of retaining an unbounded waiter list.
+ */
+export class PortalScryptCapacityError extends Error {
+  readonly code = 'PORTAL_SCRYPT_CAPACITY';
+
+  constructor() {
+    super('Portal password work is temporarily at capacity');
+    this.name = 'PortalScryptCapacityError';
+  }
+}
+
+export interface PortalScryptWorkLimiter {
+  run<T>(work: () => Promise<T>): Promise<T>;
+}
+
+export class PortalScryptLimiter implements PortalScryptWorkLimiter {
+  private active = 0;
+
+  constructor(private readonly maxConcurrent = 4) {
+    if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 64) {
+      throw new Error('Portal scrypt concurrency must be an integer between 1 and 64');
+    }
+  }
+
+  get inFlight(): number {
+    return this.active;
+  }
+
+  async run<T>(work: () => Promise<T>): Promise<T> {
+    if (this.active >= this.maxConcurrent) throw new PortalScryptCapacityError();
+    this.active += 1;
+    try {
+      return await work();
+    } finally {
+      this.active -= 1;
+    }
+  }
+}
+
+const PROCESS_WIDE_PORTAL_SCRYPT_LIMITER = new PortalScryptLimiter();
+
 export interface Account {
   email: string;
   tenantId: string;
@@ -63,38 +108,75 @@ function safeEqualHex(a: string, b: string): boolean {
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
-function deriveScrypt(password: string, salt: Buffer, n: number, r: number, p: number): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
+function deriveScrypt(
+  password: string,
+  salt: Buffer,
+  n: number,
+  r: number,
+  p: number,
+  limiter: PortalScryptWorkLimiter,
+): Promise<Buffer> {
+  return limiter.run(() => new Promise((resolve, reject) => {
     crypto.scrypt(password, salt, SCRYPT_KEY_LENGTH, { N: n, r, p, maxmem: SCRYPT_MAXMEM }, (error, key) => {
       if (error) reject(error);
       else resolve(key);
     });
-  });
+  }));
 }
 
 /** Versioned format: scrypt$v1$N,r,p$base64url(salt)$base64url(key). */
-export async function hashPassword(password: string): Promise<string> {
+export async function hashPassword(
+  password: string,
+  limiter: PortalScryptWorkLimiter = PROCESS_WIDE_PORTAL_SCRYPT_LIMITER,
+): Promise<string> {
   const salt = crypto.randomBytes(16);
-  const key = await deriveScrypt(password, salt, SCRYPT_N, SCRYPT_R, SCRYPT_P);
+  const key = await deriveScrypt(password, salt, SCRYPT_N, SCRYPT_R, SCRYPT_P, limiter);
   return `scrypt$${SCRYPT_VERSION}$${SCRYPT_N},${SCRYPT_R},${SCRYPT_P}$${salt.toString('base64url')}$${key.toString('base64url')}`;
 }
 
-async function passwordMatches(encoded: string, password: string): Promise<boolean> {
+interface ParsedScryptCredential {
+  salt: Buffer;
+  expected: Buffer;
+  n: number;
+  r: number;
+  p: number;
+}
+
+function parseScryptCredential(encoded: string): ParsedScryptCredential | null {
   const parts = encoded.split('$');
-  if (parts.length !== 5 || parts[0] !== 'scrypt' || parts[1] !== SCRYPT_VERSION) return false;
+  if (parts.length !== 5 || parts[0] !== 'scrypt' || parts[1] !== SCRYPT_VERSION) return null;
   const params = parts[2]!.split(',').map(Number);
-  if (params.length !== 3) return false;
+  if (params.length !== 3) return null;
   const [n, r, p] = params;
   // Bound parameters before feeding persisted data into scrypt. This prevents a
   // corrupted or edited JSON row from causing unbounded CPU/memory work.
-  if (!n || !r || !p || n < 16_384 || n > 262_144 || (n & (n - 1)) !== 0 || r > 32 || p > 8) return false;
+  if (!n || !r || !p || n < 16_384 || n > 262_144 || (n & (n - 1)) !== 0 || r > 32 || p > 8) return null;
+  const salt = Buffer.from(parts[3]!, 'base64url');
+  const expected = Buffer.from(parts[4]!, 'base64url');
+  if (salt.length < 16 || expected.length !== SCRYPT_KEY_LENGTH) return null;
+  return { salt, expected, n, r, p };
+}
+
+async function passwordMatches(
+  encoded: string,
+  password: string,
+  limiter: PortalScryptWorkLimiter,
+): Promise<boolean> {
+  const parsed = parseScryptCredential(encoded);
+  if (!parsed) {
+    // A corrupt scrypt-shaped row must cost the same bounded dummy work as an
+    // absent account; otherwise storage corruption becomes an email oracle.
+    if (encoded === DUMMY_SCRYPT_HASH) return false;
+    return passwordMatches(DUMMY_SCRYPT_HASH, password, limiter);
+  }
   try {
-    const salt = Buffer.from(parts[3]!, 'base64url');
-    const expected = Buffer.from(parts[4]!, 'base64url');
-    if (salt.length < 16 || expected.length !== SCRYPT_KEY_LENGTH) return false;
-    const actual = await deriveScrypt(password, salt, n, r, p);
-    return crypto.timingSafeEqual(actual, expected);
-  } catch {
+    const actual = await deriveScrypt(password, parsed.salt, parsed.n, parsed.r, parsed.p, limiter);
+    return crypto.timingSafeEqual(actual, parsed.expected);
+  } catch (error) {
+    // Capacity has the same public response for present and absent accounts,
+    // but must reach the router so its throttle reservation is released rather
+    // than being recorded as a bad password.
+    if (error instanceof PortalScryptCapacityError) throw error;
     return false;
   }
 }
@@ -109,9 +191,10 @@ export interface StoredPasswordVerification {
 export async function verifyStoredPassword(
   encoded: string | null | undefined,
   password: string,
+  limiter: PortalScryptWorkLimiter = PROCESS_WIDE_PORTAL_SCRYPT_LIMITER,
 ): Promise<StoredPasswordVerification> {
   if (encoded?.startsWith('scrypt$')) {
-    return { matches: await passwordMatches(encoded, password), needsUpgrade: false };
+    return { matches: await passwordMatches(encoded, password, limiter), needsUpgrade: false };
   }
   if (encoded && LEGACY_SHA256.test(encoded)) {
     const matches = Boolean(password) && safeEqualHex(legacyHash(password), encoded);
@@ -119,10 +202,10 @@ export async function verifyStoredPassword(
     // scrypt work used for an absent account. Imported accounts must not be a
     // cheap timing oracle (or a cheap remote password-guess path) before their
     // first successful compare-and-swap upgrade.
-    await passwordMatches(DUMMY_SCRYPT_HASH, password || '');
+    await passwordMatches(DUMMY_SCRYPT_HASH, password || '', limiter);
     return { matches, needsUpgrade: matches };
   }
-  await passwordMatches(DUMMY_SCRYPT_HASH, password || '');
+  await passwordMatches(DUMMY_SCRYPT_HASH, password || '', limiter);
   return { matches: false, needsUpgrade: false };
 }
 

@@ -25,11 +25,17 @@ test('PostgreSQL portal composition has no JSON dashboard, login or campaign dep
     completeTask: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
   };
 
-  const portal = buildPostgresPortalDeps({ sessionSecret: 'secret', secure: true, auth, crm });
+  const trustedClientAddress = (req: Parameters<NonNullable<ReturnType<typeof buildPostgresPortalDeps>['trustedClientAddress']>>[0]) => req.socket.remoteAddress;
+  const portal = buildPostgresPortalDeps({
+    sessionSecret: 'secret', secure: true, auth, crm, trustedClientAddress,
+  });
+  const safeDefault = buildPostgresPortalDeps({ sessionSecret: 'secret', secure: true, auth, crm });
 
   assert.equal(portal.kind, 'postgres');
   assert.equal(portal.auth, auth);
   assert.equal(portal.crm, crm);
+  assert.equal(portal.trustedClientAddress, trustedClientAddress);
+  assert.equal(safeDefault.trustedClientAddress, undefined, 'no socket or proxy inference is configured implicitly');
   assert.equal('login' in portal, false);
   assert.equal('dashboard' in portal, false);
   assert.equal('runTick' in portal, false);

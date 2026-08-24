@@ -1,9 +1,9 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import type { Pool, QueryResultRow } from 'pg';
+import type { PgSetupDeliveryService } from './setup-delivery-pg-service.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const SETUP_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 export interface NativeCustomerProvisioningInput {
   /** Trusted payment/order authority. A browser value must never be used here. */
@@ -23,9 +23,9 @@ export interface NativeCustomerProvisioningResult {
   ownerUserId: string;
   setupActionTokenId: string;
   setupExpiresAt: string;
+  setupDeliveryId: string;
+  setupDeliveryGeneration: number;
   createdNow: boolean;
-  /** Present only for the transaction that stored this token's hash. */
-  setupToken: string | null;
 }
 
 interface ProvisioningRow extends QueryResultRow {
@@ -34,17 +34,18 @@ interface ProvisioningRow extends QueryResultRow {
   owner_user_id: string;
   setup_action_token_id: string;
   setup_expires_at: string | Date;
+  setup_delivery_id: string;
+  setup_delivery_generation: number;
   created_now: boolean;
 }
 
 export interface PgCustomerProvisioningDependencies {
   commandPool: Pick<Pool, 'query'>;
-  /** Test seam. Production uses a cryptographically random 256-bit token. */
-  createSetupToken?: () => string;
-}
-
-function sha256(value: string): Buffer {
-  return createHash('sha256').update(value).digest();
+  /**
+   * Required by provision(). Kept optional only so the read-only portal can be
+   * composed independently of the separately configured onboarding worker.
+   */
+  setupDelivery?: Pick<PgSetupDeliveryService, 'prepare'>;
 }
 
 function canonicalUuid(value: unknown): string | null {
@@ -118,25 +119,29 @@ function validateInput(input: NativeCustomerProvisioningInput): {
 
 /**
  * Calls one SECURITY DEFINER transaction that creates the complete native
- * customer boundary. The raw setup credential exists only in this process and
- * is returned only when its hash was inserted by this exact call.
+ * customer boundary and its encrypted delivery job. No raw setup credential is
+ * returned: provider failure or process exit can be recovered by claiming the
+ * durable delivery row.
  */
 export class PgCustomerProvisioningService {
   constructor(private readonly dependencies: PgCustomerProvisioningDependencies) {}
 
   async provision(input: NativeCustomerProvisioningInput): Promise<NativeCustomerProvisioningResult> {
     const canonical = validateInput(input);
-    const setupToken = (this.dependencies.createSetupToken ?? (() => randomBytes(32).toString('base64url')))();
-    if (!SETUP_TOKEN_PATTERN.test(setupToken)) {
-      throw new Error('setup token generator must return exactly 256 bits encoded as base64url');
+    const setupDelivery = this.dependencies.setupDelivery;
+    if (!setupDelivery) {
+      throw new Error('Native customer provisioning requires durable setup delivery configuration');
     }
+    const encryptedDelivery = setupDelivery.prepare(canonical.ownerEmail);
 
     const result = await this.dependencies.commandPool.query<ProvisioningRow>(
       `/* portal.provision.native-customer */
        SELECT organization_id, workspace_id, owner_user_id,
-              setup_action_token_id, setup_expires_at, created_now
-       FROM app_private.provision_customer_workspace(
-         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+              setup_action_token_id, setup_expires_at, setup_delivery_id,
+              setup_delivery_generation, created_now
+       FROM app_private.provision_customer_workspace_with_setup_delivery(
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+         $13, $14, $15, $16, $17, $18
        )`,
       [
         canonical.idempotencyKey,
@@ -146,10 +151,17 @@ export class PgCustomerProvisioningService {
         canonical.workspaceSlug,
         canonical.ownerEmail,
         canonical.ownerDisplayName,
-        sha256(setupToken),
+        encryptedDelivery.setupTokenHash,
+        encryptedDelivery.recipientEmailHash,
         canonical.timezone,
         canonical.locale,
         canonical.currency,
+        encryptedDelivery.deliveryId,
+        encryptedDelivery.payloadVersion,
+        encryptedDelivery.encryptionKeyId,
+        encryptedDelivery.encryptionIv,
+        encryptedDelivery.encryptedPayload,
+        encryptedDelivery.authenticationTag,
       ],
     );
     if (result.rows.length !== 1) throw new Error('Customer provisioning did not return exactly one result');
@@ -158,12 +170,16 @@ export class PgCustomerProvisioningService {
     const workspaceId = canonicalUuid(row.workspace_id);
     const ownerUserId = canonicalUuid(row.owner_user_id);
     const setupActionTokenId = canonicalUuid(row.setup_action_token_id);
+    const setupDeliveryId = canonicalUuid(row.setup_delivery_id);
     const rawExpiry = row.setup_expires_at instanceof Date
       ? row.setup_expires_at.toISOString()
       : row.setup_expires_at;
     const expiry = typeof rawExpiry === 'string' ? Date.parse(rawExpiry) : Number.NaN;
     if (!organizationId || !workspaceId || !ownerUserId || !setupActionTokenId
-        || !Number.isFinite(expiry) || typeof row.created_now !== 'boolean') {
+        || !setupDeliveryId || !Number.isFinite(expiry)
+        || !Number.isInteger(row.setup_delivery_generation)
+        || row.setup_delivery_generation < 1
+        || typeof row.created_now !== 'boolean') {
       throw new Error('Customer provisioning returned invalid canonical data');
     }
     return Object.freeze({
@@ -172,8 +188,9 @@ export class PgCustomerProvisioningService {
       ownerUserId,
       setupActionTokenId,
       setupExpiresAt: new Date(expiry).toISOString(),
+      setupDeliveryId,
+      setupDeliveryGeneration: row.setup_delivery_generation,
       createdNow: row.created_now,
-      setupToken: row.created_now ? setupToken : null,
     });
   }
 }

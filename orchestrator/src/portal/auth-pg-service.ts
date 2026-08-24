@@ -1,6 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { Pool, QueryResultRow } from 'pg';
-import { hashPassword, verifyStoredPassword } from './accounts.js';
+import {
+  hashPassword,
+  verifyStoredPassword,
+  type PortalScryptWorkLimiter,
+} from './accounts.js';
 import type {
   PortalAuthenticatedSession,
   PortalAuthRequestContext,
@@ -27,6 +31,10 @@ interface SessionRow extends QueryResultRow {
   expires_at?: string | Date;
 }
 
+interface SetupClaimRow extends QueryResultRow {
+  claim_expires_at: string | Date;
+}
+
 function sha256(value: string | Buffer): Buffer {
   return createHash('sha256').update(value).digest();
 }
@@ -34,6 +42,14 @@ function sha256(value: string | Buffer): Buffer {
 function metadataHash(value: string | undefined): Buffer | null {
   if (!value) return null;
   return sha256(value.slice(0, 4_096));
+}
+
+function setupSourceHash(value: string | undefined): Buffer {
+  const normalized = value?.trim().slice(0, 256) || 'unavailable';
+  return createHash('sha256')
+    .update('relaunch72/setup-source/v1\u0000')
+    .update(normalized)
+    .digest();
 }
 
 function canonicalUuid(value: unknown): string | null {
@@ -58,6 +74,8 @@ function isAuthorizationRace(error: unknown): boolean {
 export interface PgPortalAuthDependencies {
   readPool: Pick<Pool, 'query'>;
   commandPool: Pick<Pool, 'query'>;
+  /** Test seam; production omits this and uses the process-wide limiter. */
+  scryptLimiter?: PortalScryptWorkLimiter;
 }
 
 /** PostgreSQL-backed password login plus revocable opaque browser sessions. */
@@ -113,7 +131,11 @@ export class PgPortalAuthService implements PortalAuthService {
       && credential.password_hash.startsWith('scrypt$v1$')
       ? credential.password_hash
       : undefined;
-    const verified = await verifyStoredPassword(currentPasswordHash, password);
+    const verified = await verifyStoredPassword(
+      currentPasswordHash,
+      password,
+      this.dependencies.scryptLimiter,
+    );
     if (!credential || !verified.matches) return null;
     const userId = canonicalUuid(credential.user_id);
     const userEmail = canonicalEmail(credential.user_email);
@@ -176,52 +198,121 @@ export class PgPortalAuthService implements PortalAuthService {
       return null;
     }
 
-    const passwordHash = await hashPassword(password);
-    const sessionToken = rawOpaqueSession();
-    const csrfSecret = randomBytes(32);
-    let completed;
+    const setupTokenHash = sha256(setupToken);
+    const claimHash = sha256(randomBytes(32));
+    const sourceHash = setupSourceHash(context.ipAddress);
+    let reserved;
     try {
-      completed = await this.dependencies.commandPool.query<SessionRow>(
-        `/* portal.auth.complete-setup */
-         SELECT session_id, user_id, user_email, selected_workspace_id, expires_at
-         FROM app_private.complete_native_account_setup($1, $2, $3, $4, $5, $6)`,
+      reserved = await this.dependencies.commandPool.query<SetupClaimRow>(
+        `/* portal.auth.reserve-setup */
+         SELECT claim_expires_at
+         FROM app_private.reserve_native_account_setup($1, $2, $3)`,
         [
-          sha256(setupToken),
-          passwordHash,
-          sha256(sessionToken),
-          sha256(csrfSecret),
-          metadataHash(context.ipAddress),
-          metadataHash(context.userAgent),
+          setupTokenHash,
+          claimHash,
+          sourceHash,
         ],
       );
     } catch (error) {
-      // A concurrent token claim or membership/workspace suspension is an
-      // invalid setup attempt, not an application error to expose.
       if (isAuthorizationRace(error)) return null;
       throw error;
     }
-    if (completed.rows.length === 0) return null;
-    if (completed.rows.length !== 1) throw new Error('Portal setup completed more than once');
-
-    const row = completed.rows[0]!;
-    const sessionId = canonicalUuid(row.session_id);
-    const userId = canonicalUuid(row.user_id);
-    const userEmail = canonicalEmail(row.user_email);
-    const workspaceId = canonicalUuid(row.selected_workspace_id);
-    const expiresAt = row.expires_at instanceof Date ? row.expires_at.toISOString() : row.expires_at;
-    const expiry = typeof expiresAt === 'string' ? Date.parse(expiresAt) : Number.NaN;
-    if (!sessionId || !userId || !userEmail || !workspaceId
-        || !Number.isFinite(expiry) || expiry <= context.now) {
-      throw new Error('Portal setup returned invalid session data');
+    if (reserved.rows.length === 0) return null;
+    if (reserved.rows.length !== 1) {
+      await this.releaseSetupClaim(setupTokenHash, claimHash, sourceHash);
+      throw new Error('Portal setup token reserved more than once');
+    }
+    const claimExpiryValue = reserved.rows[0]?.claim_expires_at;
+    const claimExpiryText = claimExpiryValue instanceof Date ? claimExpiryValue.toISOString() : claimExpiryValue;
+    const claimExpiry = typeof claimExpiryText === 'string' ? Date.parse(claimExpiryText) : Number.NaN;
+    if (!Number.isFinite(claimExpiry) || claimExpiry <= context.now) {
+      await this.releaseSetupClaim(setupTokenHash, claimHash, sourceHash);
+      throw new Error('Portal setup reservation returned invalid expiry data');
     }
 
-    return Object.freeze({
-      sessionToken,
-      userId,
-      userEmail,
-      workspaceId,
-      expiresAt: new Date(expiry).toISOString(),
-    });
+    let claimConsumed = false;
+    let operationError: unknown;
+    try {
+      const passwordHash = await hashPassword(
+        password,
+        this.dependencies.scryptLimiter,
+      );
+      const sessionToken = rawOpaqueSession();
+      const csrfSecret = randomBytes(32);
+      let completed;
+      try {
+        completed = await this.dependencies.commandPool.query<SessionRow>(
+          `/* portal.auth.complete-setup */
+           SELECT session_id, user_id, user_email, selected_workspace_id, expires_at
+           FROM app_private.complete_native_account_setup($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [
+            setupTokenHash,
+            claimHash,
+            sourceHash,
+            passwordHash,
+            sha256(sessionToken),
+            sha256(csrfSecret),
+            metadataHash(context.ipAddress),
+            metadataHash(context.userAgent),
+          ],
+        );
+      } catch (error) {
+        // A concurrent token claim or membership/workspace suspension is an
+        // invalid setup attempt, not an application error to expose.
+        if (isAuthorizationRace(error)) return null;
+        throw error;
+      }
+      if (completed.rows.length === 0) return null;
+      if (completed.rows.length !== 1) throw new Error('Portal setup completed more than once');
+      // A one-row return means the SQL command consumed both token and claim.
+      // Never issue a separate release after that atomic success.
+      claimConsumed = true;
+
+      const row = completed.rows[0]!;
+      const sessionId = canonicalUuid(row.session_id);
+      const userId = canonicalUuid(row.user_id);
+      const userEmail = canonicalEmail(row.user_email);
+      const workspaceId = canonicalUuid(row.selected_workspace_id);
+      const expiresAt = row.expires_at instanceof Date ? row.expires_at.toISOString() : row.expires_at;
+      const expiry = typeof expiresAt === 'string' ? Date.parse(expiresAt) : Number.NaN;
+      if (!sessionId || !userId || !userEmail || !workspaceId
+          || !Number.isFinite(expiry) || expiry <= context.now) {
+        throw new Error('Portal setup returned invalid session data');
+      }
+
+      return Object.freeze({
+        sessionToken,
+        userId,
+        userEmail,
+        workspaceId,
+        expiresAt: new Date(expiry).toISOString(),
+      });
+    } catch (error) {
+      operationError = error;
+      throw error;
+    } finally {
+      if (!claimConsumed) {
+        try {
+          await this.releaseSetupClaim(setupTokenHash, claimHash, sourceHash);
+        } catch (releaseError) {
+          // A release failure is itself an availability failure unless another
+          // error is already propagating. Never mask the original cause.
+          if (operationError === undefined) throw releaseError;
+        }
+      }
+    }
+  }
+
+  private async releaseSetupClaim(
+    setupTokenHash: Buffer,
+    claimHash: Buffer,
+    sourceHash: Buffer,
+  ): Promise<void> {
+    await this.dependencies.commandPool.query(
+      `/* portal.auth.release-setup */
+       SELECT app_private.release_native_account_setup_claim($1, $2, $3) AS released`,
+      [setupTokenHash, claimHash, sourceHash],
+    );
   }
 
   async revoke(sessionToken: string): Promise<void> {

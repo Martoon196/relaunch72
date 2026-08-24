@@ -4,12 +4,10 @@ import { loadDatabaseConfig, type DatabaseConfig } from '../db/config.js';
 import { assertRuntimeSchemaCurrent } from '../db/runtime-readiness.js';
 import { PgPortalAuthService } from './auth-pg-service.js';
 import { createPgPortalCrmService, type PgPortalCrmService } from './crm-pg-service.js';
-import { PgCustomerProvisioningService } from './provisioning-pg-service.js';
 
 export interface PgPortalPlatform {
   auth: PgPortalAuthService;
   crm: PgPortalCrmService;
-  provisioning: PgCustomerProvisioningService;
   close(): Promise<void>;
 }
 
@@ -32,9 +30,10 @@ export function postgresPortalEnabled(env: NodeJS.ProcessEnv = process.env): boo
 }
 
 /**
- * Compose the portal only after all four least-privilege identities connect
+ * Compose the portal only after its three least-privilege identities connect
  * and the web identity proves the exact bundled migration ledger. Any partial
- * construction is closed before the error escapes.
+ * construction is closed before the error escapes. Sensitive provisioning and
+ * setup delivery are composed separately by buildPgOnboardingPlatform.
  */
 export async function buildPgPortalPlatform(
   env: NodeJS.ProcessEnv = process.env,
@@ -53,11 +52,6 @@ export async function buildPgPortalPlatform(
       'DATABASE_IDENTITY_COMMAND_URL',
       'r72_identity_command',
     );
-    const provisioningConfig = requireCutoverIdentity(
-      loadDatabaseConfig('provisioningCommand', env),
-      'DATABASE_PROVISIONING_COMMAND_URL',
-      'r72_provisioning_command',
-    );
     const commandConfig = requireCutoverIdentity(
       loadDatabaseConfig('crmCommand', env),
       'DATABASE_CRM_COMMAND_URL',
@@ -68,8 +62,6 @@ export async function buildPgPortalPlatform(
     pools.push(webPool);
     const identityPool = createDatabasePool(identityConfig);
     pools.push(identityPool);
-    const provisioningPool = createDatabasePool(provisioningConfig);
-    pools.push(provisioningPool);
     const commandPool = createDatabasePool(commandConfig);
     pools.push(commandPool);
 
@@ -77,7 +69,6 @@ export async function buildPgPortalPlatform(
     // Force role verification now instead of on the first customer's request.
     await Promise.all([
       identityPool.query('/* portal.identity-role-readiness */ SELECT 1'),
-      provisioningPool.query('/* portal.provisioning-role-readiness */ SELECT 1'),
       commandPool.query('/* portal.crm-command-role-readiness */ SELECT 1'),
     ]);
 
@@ -85,7 +76,6 @@ export async function buildPgPortalPlatform(
     return {
       auth: new PgPortalAuthService({ readPool: webPool, commandPool: identityPool }),
       crm: createPgPortalCrmService({ webPool, commandPool }),
-      provisioning: new PgCustomerProvisioningService({ commandPool: provisioningPool }),
       async close(): Promise<void> {
         if (closed) return;
         closed = true;

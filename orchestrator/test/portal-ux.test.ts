@@ -164,9 +164,12 @@ test('login and billing keep the same accessible premium shell semantics', () =>
   assert.match(login, /CRM workspace/);
   assert.match(login, /Private sandbox · secure session · no public publishing/);
 
-  const setup = accountSetupPage('one-use-token', 'Those passwords do not match.');
+  const setupCsrf = Buffer.alloc(32, 7).toString('base64url');
+  const setup = accountSetupPage(setupCsrf, 'Those passwords do not match.');
   assert.match(setup, /role="alert"/);
-  assert.match(setup, /name="token" value="one-use-token"/);
+  assert.match(setup, new RegExp(`name="_setup_csrf" value="${setupCsrf}"`));
+  assert.doesNotMatch(setup, /name="token"/);
+  assert.doesNotMatch(setup, /one-use-token/);
   assert.match(setup, /autocomplete="new-password"/);
   assert.match(setup, /Private one-time setup · the link cannot be reused/);
 

@@ -5,20 +5,28 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { parseCookies } from '../server/admin/session.js';
 import {
   PORTAL_COOKIE,
   PORTAL_LOGIN_CSRF_COOKIE,
+  PORTAL_SETUP_COOKIE,
   signTenant,
   verifyTenant,
   portalCookie,
   clearPortalCookie,
+  portalSetupCookie,
+  clearPortalSetupCookie,
+  portalSetupCsrfToken,
+  verifyPortalSetupCookie,
+  verifyPortalSetupCsrf,
+  isPortalSetupToken,
   portalCsrfToken,
   verifyPortalCsrf,
   portalLoginCsrfToken,
   portalLoginCsrfCookie,
   verifyPortalLoginCsrf,
+  InMemorySetupThrottle,
 } from './session.js';
 import type { InMemoryLoginThrottle } from './session.js';
 import { accountSetupPage, accountSetupUnavailablePage, loginPage, dashboardPage, billingPage } from './views.js';
@@ -49,6 +57,14 @@ interface PortalCommonDeps {
   secure: boolean;
   /** Process-local login limiter; replace with a shared implementation at multi-instance scale. */
   loginThrottle?: Pick<InMemoryLoginThrottle, 'reserve' | 'release' | 'failure' | 'success'>;
+  /** Process-local setup limiter; keys are hashed source and token fingerprints only. */
+  setupThrottle?: Pick<InMemorySetupThrottle, 'reserve' | 'release' | 'failure' | 'success'>;
+  /**
+   * Optional deployment-owned client address policy. It may inspect proxy
+   * headers only after the deployment has authenticated its trusted proxy.
+   * Without it, no shared socket/proxy address is used for source blocking.
+   */
+  trustedClientAddress?: (req: IncomingMessage) => string | undefined;
   now?: () => number;
   requestId?: () => string;
 }
@@ -85,8 +101,11 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
 
 export type PortalDeps = LegacyPortalDeps | PostgresPortalDeps;
 
-function sendHtml(res: ServerResponse, code: number, body: string, cookie?: string, extra: Record<string, string> = {}): void {
-  const headers: Record<string, string> = {
+const DEFAULT_SETUP_THROTTLE = new InMemorySetupThrottle();
+const SETUP_FAILURE_MESSAGE = 'This setup link is invalid, expired or has already been used. Contact support.';
+
+function sendHtml(res: ServerResponse, code: number, body: string, cookie?: string | string[], extra: Record<string, string> = {}): void {
+  const headers: Record<string, string | string[]> = {
     'content-type': 'text/html; charset=utf-8',
     'content-length': String(Buffer.byteLength(body)),
     'cache-control': 'no-store',
@@ -119,27 +138,62 @@ function sendLoginPage(
   );
 }
 
-function loginKeys(req: IncomingMessage, email: string): string[] {
-  const forwarded = req.headers['x-forwarded-for'];
-  const firstForwarded = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim();
-  const remote = firstForwarded || req.socket?.remoteAddress || 'unknown';
-  return [`account:${email || 'unknown'}`, `source:${remote}`];
+function resolvedTrustedClientAddress(req: IncomingMessage, deps: PortalDeps): string | undefined {
+  if (!deps.trustedClientAddress) return undefined;
+  try {
+    const candidate = deps.trustedClientAddress(req)?.trim();
+    return candidate ? candidate.slice(0, 256) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
-function authRequestContext(req: IncomingMessage, now: number): PortalAuthRequestContext {
+function sourceFingerprint(source: string): string {
+  return createHash('sha256')
+    .update('relaunch72/setup-source/v1\u0000')
+    .update(source)
+    .digest('hex');
+}
+
+function loginKeys(req: IncomingMessage, email: string, deps: PortalDeps): string[] {
+  const accountHash = createHash('sha256')
+    .update('relaunch72/login-account/v1\u0000')
+    .update(email || 'unknown')
+    .digest('hex');
+  const keys = [`account:${accountHash}`];
+  const source = resolvedTrustedClientAddress(req, deps);
+  if (source) keys.push(`source:${sourceFingerprint(source)}`);
+  return keys;
+}
+
+function setupKeys(req: IncomingMessage, setupToken: string, deps: PortalDeps): string[] {
+  const tokenHash = createHash('sha256').update(setupToken).digest('hex');
+  const keys = [`setup-token:${tokenHash}`];
+  const source = resolvedTrustedClientAddress(req, deps);
+  if (source) keys.unshift(`setup-source:${sourceFingerprint(source)}`);
+  return keys;
+}
+
+function authRequestContext(req: IncomingMessage, now: number, deps: PortalDeps): PortalAuthRequestContext {
   const userAgent = Array.isArray(req.headers['user-agent'])
     ? req.headers['user-agent'][0]
     : req.headers['user-agent'];
   return {
     now,
-    ipAddress: req.socket?.remoteAddress?.slice(0, 256),
+    ipAddress: resolvedTrustedClientAddress(req, deps),
     userAgent: userAgent?.slice(0, 4_096),
   };
 }
-function redirect(res: ServerResponse, to: string, cookie?: string): void {
-  const headers: Record<string, string> = { location: to };
+function redirect(
+  res: ServerResponse,
+  to: string,
+  cookie?: string | string[],
+  code = 302,
+  extra: Record<string, string> = {},
+): void {
+  const headers: Record<string, string | string[]> = { location: to, ...extra };
   if (cookie) headers['set-cookie'] = cookie;
-  res.writeHead(302, headers);
+  res.writeHead(code, headers);
   res.end();
 }
 function readForm(req: IncomingMessage): Promise<Record<string, string>> {
@@ -254,7 +308,8 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   const p = url.pathname.replace(/\/+$/, '') || '/portal';
   const method = req.method ?? 'GET';
   const now = deps.now ? deps.now() : Date.now();
-  const sessionToken = parseCookies(req.headers.cookie)[PORTAL_COOKIE] ?? '';
+  const requestCookies = parseCookies(req.headers.cookie);
+  const sessionToken = requestCookies[PORTAL_COOKIE] ?? '';
   const portalHome = deps.kind === 'postgres' ? CRM_PORTAL_ROUTES.contacts : '/portal';
   let tenantId: string | null = null;
   let portalIdentity: PortalSessionIdentity | null = null;
@@ -278,6 +333,23 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
 
   // ── one-time account setup / login / logout (no auth) ──
   if (p === '/portal/setup' && method === 'GET') {
+    const linkedToken = url.searchParams.get('token');
+    if (linkedToken !== null) {
+      if (!isPortalSetupToken(linkedToken)) {
+        return sendHtml(res, 400, accountSetupUnavailablePage(SETUP_FAILURE_MESSAGE), clearPortalSetupCookie(deps.secure), {
+          'cache-control': 'no-store',
+          'referrer-policy': 'no-referrer',
+        });
+      }
+      // Move the capability out of subsequent URLs/HTML into an authenticated,
+      // encrypted ten-minute HttpOnly cookie. The emailed URL remains usable
+      // until database completion/reissue, and its first edge request still
+      // requires query-string redaction in deployment logging.
+      return redirect(res, '/portal/setup', portalSetupCookie(deps.sessionSecret, linkedToken, deps.secure, now), 303, {
+        'cache-control': 'no-store',
+        'referrer-policy': 'no-referrer',
+      });
+    }
     const setupEnabled = deps.kind === 'postgres'
       ? Boolean(deps.auth.completeSetup)
       : Boolean(deps.completeSetup);
@@ -287,9 +359,15 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         'referrer-policy': 'no-referrer',
       });
     }
-    const token = url.searchParams.get('token') ?? '';
-    const error = token ? undefined : 'This setup link is incomplete. Contact support.';
-    return sendHtml(res, token ? 200 : 400, accountSetupPage(token, error), undefined, {
+    const setupCookieValue = requestCookies[PORTAL_SETUP_COOKIE];
+    const setupToken = verifyPortalSetupCookie(deps.sessionSecret, setupCookieValue, now);
+    if (!setupToken || !setupCookieValue) {
+      return sendHtml(res, 400, accountSetupUnavailablePage(SETUP_FAILURE_MESSAGE), clearPortalSetupCookie(deps.secure), {
+        'cache-control': 'no-store',
+        'referrer-policy': 'no-referrer',
+      });
+    }
+    return sendHtml(res, 200, accountSetupPage(portalSetupCsrfToken(deps.sessionSecret, setupCookieValue, now)), undefined, {
       'cache-control': 'no-store',
       'referrer-policy': 'no-referrer',
     });
@@ -300,29 +378,62 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       return sendHtml(res, 503, accountSetupUnavailablePage());
     }
     const form = await readForm(req);
-    const token = form.token ?? '';
+    const setupCookieValue = requestCookies[PORTAL_SETUP_COOKIE];
+    const token = verifyPortalSetupCookie(deps.sessionSecret, setupCookieValue, now);
+    if (!token || !setupCookieValue
+        || !verifyPortalSetupCsrf(deps.sessionSecret, setupCookieValue, form._setup_csrf, now)) {
+      // Do not clear a browser's setup cookie from a cross-site POST that did
+      // not carry its Strict cookie/CSRF value. The underlying link can still
+      // be revisited; terminal database invalidity is cleared below.
+      return sendHtml(res, 403, accountSetupUnavailablePage(SETUP_FAILURE_MESSAGE), undefined, {
+        'cache-control': 'no-store',
+        'referrer-policy': 'no-referrer',
+      });
+    }
+    const setupCsrf = portalSetupCsrfToken(deps.sessionSecret, setupCookieValue, now);
     const password = form.password ?? '';
     if (password.length < 12 || password.length > 1_024) {
-      return sendHtml(res, 400, accountSetupPage(token, 'Use a password between 12 and 1,024 characters.'), undefined, { 'cache-control': 'no-store' });
+      return sendHtml(res, 400, accountSetupPage(setupCsrf, 'Use a password between 12 and 1,024 characters.'), undefined, { 'cache-control': 'no-store' });
     }
     if (password !== (form.confirm ?? '')) {
-      return sendHtml(res, 400, accountSetupPage(token, 'Those passwords do not match.'), undefined, { 'cache-control': 'no-store' });
+      return sendHtml(res, 400, accountSetupPage(setupCsrf, 'Those passwords do not match.'), undefined, { 'cache-control': 'no-store' });
+    }
+    const throttle = deps.setupThrottle ?? DEFAULT_SETUP_THROTTLE;
+    const keys = setupKeys(req, token, deps);
+    const reservations: string[] = [];
+    for (const key of keys) {
+      const status = throttle.reserve(key, now);
+      if (!status.allowed) {
+        for (const reserved of reservations) throttle.release(reserved);
+        return sendHtml(res, 429, accountSetupUnavailablePage(SETUP_FAILURE_MESSAGE), undefined, {
+          'cache-control': 'no-store',
+          'referrer-policy': 'no-referrer',
+          'retry-after': String(status.retryAfterSeconds),
+        });
+      }
+      reservations.push(key);
     }
     let completed;
     try {
       completed = deps.kind === 'postgres'
-        ? await deps.auth.completeSetup!(token, password, authRequestContext(req, now))
+        ? await deps.auth.completeSetup!(token, password, authRequestContext(req, now, deps))
         : await deps.completeSetup!(token, password, now);
     } catch {
-      return sendHtml(res, 503, accountSetupPage(token, 'Secure account setup is temporarily unavailable. Try again shortly.'), undefined, { 'cache-control': 'no-store' });
+      for (const key of reservations) throttle.release(key);
+      return sendHtml(res, 503, accountSetupPage(setupCsrf, 'Secure account setup is temporarily unavailable. Try again shortly.'), undefined, { 'cache-control': 'no-store' });
     }
     if (!completed) {
-      return sendHtml(res, 400, accountSetupUnavailablePage('This setup link has expired or has already been used. Contact support.'), undefined, { 'cache-control': 'no-store' });
+      for (const key of reservations) throttle.failure(key, now);
+      return sendHtml(res, 400, accountSetupUnavailablePage(SETUP_FAILURE_MESSAGE), clearPortalSetupCookie(deps.secure), { 'cache-control': 'no-store' });
     }
+    for (const key of reservations) throttle.success(key);
     const completedToken = typeof completed === 'string'
       ? signTenant(deps.sessionSecret, completed, now)
       : completed.sessionToken;
-    return redirect(res, portalHome, portalCookie(completedToken, deps.secure));
+    return redirect(res, portalHome, [
+      portalCookie(completedToken, deps.secure),
+      clearPortalSetupCookie(deps.secure),
+    ], 303);
   }
   if (p === '/portal/login' && method === 'GET') {
     if (tenantId || portalIdentity) return redirect(res, portalHome);
@@ -341,7 +452,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     if (!verifyPortalLoginCsrf(deps.sessionSecret, loginCsrfCookieToken, form._login_csrf)) {
       return sendLoginPage(res, 403, deps, 'Refresh the sign-in page and try again.', email);
     }
-    const keys = loginKeys(req, email);
+    const keys = loginKeys(req, email, deps);
     const reservations: string[] = [];
     for (const key of keys) {
       const throttle = deps.loginThrottle?.reserve(key, now);
@@ -356,7 +467,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     let authenticated;
     try {
       authenticated = deps.kind === 'postgres'
-        ? await deps.auth.login(email, form.password ?? '', authRequestContext(req, now))
+        ? await deps.auth.login(email, form.password ?? '', authRequestContext(req, now, deps))
         : await deps.login(email, form.password ?? '');
     } catch {
       for (const key of reservations) deps.loginThrottle?.release(key);

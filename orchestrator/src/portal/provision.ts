@@ -125,6 +125,8 @@ export interface PostgresPortalConfig {
   secure: boolean;
   auth: PortalAuthService;
   crm: PortalCrmService;
+  /** Explicit authenticated-proxy client address policy; omitted by default. */
+  trustedClientAddress?: PostgresPortalDeps['trustedClientAddress'];
   now?: () => number;
   requestId?: () => string;
 }
@@ -141,6 +143,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     loginThrottle: new InMemoryLoginThrottle(),
     auth: cfg.auth,
     crm: cfg.crm,
+    trustedClientAddress: cfg.trustedClientAddress,
     now: cfg.now,
     requestId: cfg.requestId,
   };

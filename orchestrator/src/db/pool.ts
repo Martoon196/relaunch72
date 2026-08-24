@@ -77,3 +77,19 @@ export function createProvisioningCommandDatabasePool(
 ): Pool {
   return createDatabasePool(loadDatabaseConfig('provisioningCommand', env), hooks);
 }
+
+/** Function-only queue-claim pool for encrypted account-setup deliveries. */
+export function createSetupDeliveryCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('setupDeliveryCommand', env), hooks);
+}
+
+/** Function-only trusted/operator pool for issuing replacement setup links. */
+export function createSetupReissueCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('setupReissueCommand', env), hooks);
+}

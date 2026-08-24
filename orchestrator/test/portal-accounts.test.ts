@@ -4,10 +4,73 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { JsonAccountStore } from '../src/portal/accounts.js';
+import {
+  hashPassword,
+  JsonAccountStore,
+  PortalScryptCapacityError,
+  PortalScryptLimiter,
+  verifyStoredPassword,
+  type PortalScryptWorkLimiter,
+} from '../src/portal/accounts.js';
 import { provisionTenant } from '../src/portal/provision.js';
 import { JsonCrmStore } from '../src/crm/store.js';
 import { validIntake } from './helpers.js';
+
+test('portal scrypt limiter fails fast at capacity and releases after success or error', async () => {
+  const limiter = new PortalScryptLimiter(1);
+  let openGate!: () => void;
+  const gate = new Promise<void>((resolve) => { openGate = resolve; });
+  const active = limiter.run(async () => { await gate; return 'finished'; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(limiter.inFlight, 1);
+  await assert.rejects(
+    limiter.run(async () => 'must-not-run'),
+    (error: unknown) => error instanceof PortalScryptCapacityError
+      && error.code === 'PORTAL_SCRYPT_CAPACITY',
+  );
+  assert.equal(limiter.inFlight, 1, 'a rejected admission never consumes or releases the active permit');
+  openGate();
+  assert.equal(await active, 'finished');
+  assert.equal(limiter.inFlight, 0);
+
+  await assert.rejects(limiter.run(async () => { throw new Error('work failed'); }), /work failed/);
+  assert.equal(limiter.inFlight, 0, 'a throwing worker releases its permit');
+  assert.equal(await limiter.run(async () => 'recovered'), 'recovered');
+});
+
+test('hashing and present/absent verification all cross the same limiter boundary', async () => {
+  let runs = 0;
+  const trackingLimiter: PortalScryptWorkLimiter = {
+    async run<T>(work: () => Promise<T>): Promise<T> {
+      runs += 1;
+      return work();
+    },
+  };
+  const stored = await hashPassword('tracked-password', trackingLimiter);
+  assert.equal((await verifyStoredPassword(stored, 'tracked-password', trackingLimiter)).matches, true);
+  assert.equal((await verifyStoredPassword(undefined, 'tracked-password', trackingLimiter)).matches, false);
+  assert.equal((await verifyStoredPassword('scrypt$v1$broken', 'tracked-password', trackingLimiter)).matches, false);
+  assert.equal(runs, 4, 'setup hash, real login, absent login and corrupt-row login each acquire exactly once');
+});
+
+test('scrypt saturation is identical for present and absent login identities', async () => {
+  const stored = await hashPassword('right-password');
+  const limiter = new PortalScryptLimiter(1);
+  let openGate!: () => void;
+  const gate = new Promise<void>((resolve) => { openGate = resolve; });
+  const active = limiter.run(async () => gate);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const outcomes = await Promise.allSettled([
+    verifyStoredPassword(stored, 'wrong-password', limiter),
+    verifyStoredPassword(undefined, 'wrong-password', limiter),
+  ]);
+  assert.deepEqual(outcomes.map((outcome) => outcome.status), ['rejected', 'rejected']);
+  for (const outcome of outcomes) {
+    assert.ok(outcome.status === 'rejected' && outcome.reason instanceof PortalScryptCapacityError);
+  }
+  openGate();
+  await active;
+});
 
 test('accounts: create + verify (right vs wrong password), case-insensitive email', async () => {
   const acc = new JsonAccountStore(); // in-memory

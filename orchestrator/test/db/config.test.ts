@@ -6,6 +6,8 @@ import {
   createDatabasePool,
   createIdentityCommandDatabasePool,
   createProvisioningCommandDatabasePool,
+  createSetupDeliveryCommandDatabasePool,
+  createSetupReissueCommandDatabasePool,
 } from '../../src/db/pool.js';
 
 test('database config uses generic DATABASE_URL only for local development', () => {
@@ -137,6 +139,55 @@ test('native customer provisioning has a dedicated verified function-only role',
   assert.equal(pool.options.application_name, 'relaunch72-provisioning-command');
   assert.equal(typeof pool.options.verify, 'function');
   await pool.end();
+});
+
+test('setup delivery and operator reissue use separate verified function-only identities', async () => {
+  const cases = [
+    {
+      role: 'setupDeliveryCommand' as const,
+      envName: 'DATABASE_SETUP_DELIVERY_COMMAND_URL',
+      poolName: 'DATABASE_SETUP_DELIVERY_COMMAND_POOL_MAX',
+      databaseUser: 'r72_setup_delivery_command',
+      applicationName: 'relaunch72-setup-delivery-command',
+      createPool: createSetupDeliveryCommandDatabasePool,
+    },
+    {
+      role: 'setupReissueCommand' as const,
+      envName: 'DATABASE_SETUP_REISSUE_COMMAND_URL',
+      poolName: 'DATABASE_SETUP_REISSUE_COMMAND_POOL_MAX',
+      databaseUser: 'r72_setup_reissue_command',
+      applicationName: 'relaunch72-setup-reissue-command',
+      createPool: createSetupReissueCommandDatabasePool,
+    },
+  ];
+
+  for (const item of cases) {
+    assert.ok(DATABASE_ROLES.includes(item.role));
+    assert.throws(
+      () => loadDatabaseConfig(item.role, {
+        NODE_ENV: 'production',
+        [item.envName]: 'postgresql://r72_worker:secret@database.example/relaunch72?sslmode=require',
+      }),
+      new RegExp(`must authenticate as the least-privilege ${item.databaseUser} role`),
+    );
+
+    const config = loadDatabaseConfig(item.role, {
+      NODE_ENV: 'production',
+      [item.envName]: `postgresql://${item.databaseUser}:secret@database.example/relaunch72?sslmode=require`,
+      [item.poolName]: '2',
+    });
+    assert.equal(config.sourceEnv, item.envName);
+    assert.equal(config.expectedDatabaseUser, item.databaseUser);
+    assert.equal(config.applicationName, item.applicationName);
+    assert.equal(config.maxConnections, 2);
+
+    const pool = item.createPool({
+      [item.envName]: `postgresql://${item.databaseUser}:secret@localhost/relaunch72_test?sslmode=disable`,
+    }, { onBackgroundError: () => undefined });
+    assert.equal(pool.options.application_name, item.applicationName);
+    assert.equal(typeof pool.options.verify, 'function');
+    await pool.end();
+  }
 });
 
 test('database config rejects malformed URLs and dangerous numeric settings without leaking secrets', () => {

@@ -22,15 +22,19 @@ interface ProvisionedCustomerRow extends QueryResultRow {
   owner_user_id: string;
   setup_action_token_id: string;
   setup_expires_at: Date;
+  setup_delivery_id: string;
+  setup_delivery_generation: number;
   created_now: boolean;
 }
 
 const provisionCustomerSql = `
   SELECT organization_id, workspace_id, owner_user_id,
-         setup_action_token_id, setup_expires_at, created_now
-  FROM app_private.provision_customer_workspace(
+         setup_action_token_id, setup_expires_at, setup_delivery_id,
+         setup_delivery_generation, created_now
+  FROM app_private.provision_customer_workspace_with_setup_delivery(
     $1::text, $2::text, $3::text, $4::text, $5::text, $6::text,
-    $7::text, $8::bytea, $9::text, $10::text, $11::text
+    $7::text, $8::bytea, $9::bytea, $10::text, $11::text, $12::text,
+    $13::uuid, $14::smallint, $15::text, $16::bytea, $17::bytea, $18::bytea
   )`;
 
 /** Exercise the exact function-only runtime role without broadening shared helpers. */
@@ -43,6 +47,30 @@ async function provisioningQuery<T extends QueryResultRow = QueryResultRow>(
   try {
     await client.query('BEGIN');
     await client.query('SET LOCAL ROLE r72_provisioning_command');
+    const result = await client.query<T>(sql, values);
+    await client.query('COMMIT');
+    return result.rows;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+type SetupRuntimeRole = 'r72_setup_delivery_command' | 'r72_setup_reissue_command';
+
+async function setupRuntimeQuery<T extends QueryResultRow = QueryResultRow>(
+  pool: Pool,
+  role: SetupRuntimeRole,
+  sql: string,
+  values: unknown[] = [],
+): Promise<T[]> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SET LOCAL ROLE ${role}`);
+    await client.query("SET LOCAL lock_timeout = '5s'");
     const result = await client.query<T>(sql, values);
     await client.query('COMMIT');
     return result.rows;
@@ -699,7 +727,12 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
   const ownerEmail = `owner-${suffix}@example.test`;
   const setupToken = randomBytes(32);
   const setupTokenHash = createHash('sha256').update(setupToken).digest();
+  const recipientEmailHash = createHash('sha256').update(ownerEmail).digest();
   const replayTokenHash = createHash('sha256').update(randomBytes(32)).digest();
+  const deliveryId = randomUUID();
+  const deliveryIv = randomBytes(12);
+  const encryptedDelivery = randomBytes(96);
+  const deliveryTag = randomBytes(16);
   const provisioningInput: unknown[] = [
     idempotencyKey,
     'Native Customer',
@@ -709,15 +742,41 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
     ownerEmail,
     'Native Owner',
     setupTokenHash,
+    recipientEmailHash,
     'Europe/London',
     'en-GB',
     'GBP',
+    deliveryId,
+    1,
+    'integration-key-v1',
+    deliveryIv,
+    encryptedDelivery,
+    deliveryTag,
   ];
+  const bareProvisioningInput = [
+    ...provisioningInput.slice(0, 8),
+    ...provisioningInput.slice(9, 12),
+  ];
+  const reserveSetupSql = `
+    SELECT claim_expires_at
+    FROM app_private.reserve_native_account_setup($1::bytea, $2::bytea, $3::bytea)`;
+  const releaseSetupSql = `
+    SELECT app_private.release_native_account_setup_claim(
+      $1::bytea, $2::bytea, $3::bytea
+    ) AS released`;
   const completeSetupSql = `
     SELECT session_id, user_id, user_email, selected_workspace_id, expires_at
     FROM app_private.complete_native_account_setup(
-      $1::bytea, $2::text, $3::bytea, $4::bytea, $5::bytea, $6::bytea
+      $1::bytea, $2::bytea, $3::bytea, $4::text,
+      $5::bytea, $6::bytea, $7::bytea, $8::bytea
     )`;
+  const claimDeliverySql = `
+    SELECT delivery_id, user_id, workspace_id, action_token_id,
+           payload_version, encryption_key_id, encryption_iv,
+           encrypted_payload, authentication_tag, recipient_email_hash,
+           aad_context,
+           attempt_count, lease_expires_at
+    FROM app_private.claim_account_setup_deliveries($1::bytea, $2::integer, $3::integer)`;
 
   try {
     await resetIdentityTables(pool);
@@ -732,12 +791,48 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
     );
     assert.deepEqual(unsafeProvisioningMemberships.rows, []);
 
+    const unsafeSetupDeliveryMemberships = await pool.query<{ member: string; parent: string }>(
+      `SELECT member.rolname AS member, parent.rolname AS parent
+       FROM pg_catalog.pg_auth_members AS membership
+       JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
+       JOIN pg_catalog.pg_roles AS parent ON parent.oid = membership.roleid
+       WHERE member.rolname = ANY ($1::text[])
+          OR (parent.rolname = ANY ($2::text[]) AND member.rolname <> current_user
+            AND NOT (member.rolname = 'r72_owner' AND parent.rolname = ANY ($3::text[])))`,
+      [[
+        'r72_onboarding_definer', 'r72_setup_delivery_definer',
+        'r72_setup_delivery_command', 'r72_setup_reissue_command',
+      ], [
+        'r72_setup_delivery_command', 'r72_setup_reissue_command',
+        'r72_onboarding_definer', 'r72_setup_delivery_definer',
+      ], ['r72_onboarding_definer', 'r72_setup_delivery_definer']],
+    );
+    assert.deepEqual(unsafeSetupDeliveryMemberships.rows, []);
+
     await expectPostgresError(
       roleQuery(pool, 'r72_identity_command', provisionCustomerSql, provisioningInput),
       '42501',
     );
     await expectPostgresError(
       provisioningQuery(pool, 'SELECT id FROM app.organizations'),
+      '42501',
+    );
+    await expectPostgresError(
+      setupRuntimeQuery(pool, 'r72_setup_delivery_command', 'SELECT id FROM app_private.account_setup_deliveries'),
+      '42501',
+    );
+    await expectPostgresError(
+      setupRuntimeQuery(pool, 'r72_setup_reissue_command', 'SELECT id FROM app.users'),
+      '42501',
+    );
+    await expectPostgresError(
+      provisioningQuery(
+        pool,
+        `SELECT * FROM app_private.provision_customer_workspace(
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+        )`,
+        bareProvisioningInput,
+      ),
       '42501',
     );
 
@@ -753,6 +848,8 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
 
     const replayInput = [...provisioningInput];
     replayInput[7] = replayTokenHash;
+    replayInput[12] = randomUUID();
+    replayInput[16] = randomBytes(96);
     const replay = await provisioningQuery<ProvisionedCustomerRow>(
       pool,
       provisionCustomerSql,
@@ -764,6 +861,8 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
       ownerUserId: row.owner_user_id,
       setupTokenId: row.setup_action_token_id,
       setupExpiresAt: row.setup_expires_at.toISOString(),
+      setupDeliveryId: row.setup_delivery_id,
+      setupDeliveryGeneration: row.setup_delivery_generation,
       createdNow: row.created_now,
     })), [{
       organizationId: provisioned.organization_id,
@@ -771,6 +870,8 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
       ownerUserId: provisioned.owner_user_id,
       setupTokenId: provisioned.setup_action_token_id,
       setupExpiresAt: provisioned.setup_expires_at.toISOString(),
+      setupDeliveryId: provisioned.setup_delivery_id,
+      setupDeliveryGeneration: 1,
       createdNow: false,
     }]);
 
@@ -789,6 +890,7 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
       workspace_memberships: number;
       setup_tokens: number;
       receipts: number;
+      setup_deliveries: number;
       pipelines: number;
       stages: number;
     }>(
@@ -801,6 +903,7 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
          (SELECT count(*)::int FROM app.workspace_memberships) AS workspace_memberships,
          (SELECT count(*)::int FROM app.identity_action_tokens WHERE purpose = 'account_setup') AS setup_tokens,
          (SELECT count(*)::int FROM app_private.customer_provisioning_receipts) AS receipts,
+         (SELECT count(*)::int FROM app_private.account_setup_deliveries) AS setup_deliveries,
          (SELECT count(*)::int FROM app.pipelines) AS pipelines,
          (SELECT count(*)::int FROM app.pipeline_stages) AS stages`,
     );
@@ -812,6 +915,7 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
       workspace_memberships: 1,
       setup_tokens: 1,
       receipts: 1,
+      setup_deliveries: 1,
       pipelines: 1,
       stages: 5,
     }]);
@@ -897,14 +1001,26 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
       token_hash_hex: string;
       request_id: string;
       receipt_json: string;
+      delivery_json: string;
+      delivery_cipher_hex: string;
+      recipient_email_hash_hex: string;
+      encryption_key_id: string;
+      delivery_state: string;
       raw_columns: number;
     }>(
       pool,
       `SELECT encode(action_token.token_hash, 'hex') AS token_hash_hex,
               action_token.request_id,
               receipt.receipt_json,
+              to_jsonb(delivery)::text AS delivery_json,
+              encode(delivery.encrypted_payload, 'hex') AS delivery_cipher_hex,
+              encode(delivery.recipient_email_hash, 'hex') AS recipient_email_hash_hex,
+              delivery.encryption_key_id,
+              delivery.state AS delivery_state,
               raw_column_count.raw_columns
        FROM app.identity_action_tokens AS action_token
+       JOIN app_private.account_setup_deliveries AS delivery
+         ON delivery.action_token_id = action_token.id
        JOIN LATERAL (
          SELECT to_jsonb(provisioning_receipt)::text AS receipt_json
          FROM app_private.customer_provisioning_receipts AS provisioning_receipt
@@ -914,7 +1030,11 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
          SELECT count(*)::int AS raw_columns
          FROM information_schema.columns
          WHERE table_schema IN ('app', 'app_private')
-           AND table_name IN ('identity_action_tokens', 'customer_provisioning_receipts')
+           AND table_name IN (
+             'identity_action_tokens', 'customer_provisioning_receipts',
+             'account_setup_deliveries', 'account_setup_reissue_receipts',
+             'account_setup_claims'
+           )
            AND column_name LIKE '%raw%'
        ) AS raw_column_count
        WHERE action_token.id = $1`,
@@ -923,56 +1043,140 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
     assert.equal(storedCredential[0]!.token_hash_hex, setupTokenHash.toString('hex'));
     assert.notEqual(storedCredential[0]!.token_hash_hex, setupToken.toString('hex'));
     assert.equal(storedCredential[0]!.request_id, idempotencyKey);
+    assert.equal(storedCredential[0]!.delivery_cipher_hex, encryptedDelivery.toString('hex'));
+    assert.equal(storedCredential[0]!.recipient_email_hash_hex, recipientEmailHash.toString('hex'));
+    assert.equal(storedCredential[0]!.encryption_key_id, 'integration-key-v1');
+    assert.equal(storedCredential[0]!.delivery_state, 'pending');
     assert.equal(storedCredential[0]!.raw_columns, 0);
     assert.doesNotMatch(storedCredential[0]!.receipt_json, new RegExp(setupToken.toString('hex'), 'i'));
     assert.doesNotMatch(storedCredential[0]!.receipt_json, new RegExp(setupToken.toString('base64url'), 'i'));
+    assert.doesNotMatch(storedCredential[0]!.delivery_json, new RegExp(setupToken.toString('hex'), 'i'));
+    assert.doesNotMatch(storedCredential[0]!.delivery_json, new RegExp(setupToken.toString('base64url'), 'i'));
 
     const collisionKey = `collision-${suffix}`;
     const collisionSlug = `collision-${suffix}`;
+    const collisionEmail = `collision-${suffix}@example.test`;
     const collisionInput: unknown[] = [
       collisionKey,
       'Collision Customer',
       collisionSlug,
       'Collision Workspace',
       `workspace-${collisionSlug}`,
-      `collision-${suffix}@example.test`,
+      collisionEmail,
       'Collision Owner',
       setupTokenHash,
+      createHash('sha256').update(collisionEmail).digest(),
       'Europe/London',
       'en-GB',
       'GBP',
+      randomUUID(),
+      1,
+      'integration-key-v1',
+      randomBytes(12),
+      randomBytes(96),
+      randomBytes(16),
     ];
     await expectPostgresError(
       provisioningQuery(pool, provisionCustomerSql, collisionInput),
       '23505',
     );
-    const collisionRollback = await ownerQuery<{ organizations: number; receipts: number }>(
+    const collisionRollback = await ownerQuery<{ organizations: number; receipts: number; deliveries: number }>(
       pool,
       `SELECT
          (SELECT count(*)::int FROM app.organizations WHERE slug = $1) AS organizations,
-         (SELECT count(*)::int FROM app_private.customer_provisioning_receipts WHERE idempotency_key = $2) AS receipts`,
-      [collisionSlug, collisionKey],
+         (SELECT count(*)::int FROM app_private.customer_provisioning_receipts WHERE idempotency_key = $2) AS receipts,
+         (SELECT count(*)::int FROM app_private.account_setup_deliveries WHERE user_id IN (
+           SELECT id FROM app.users WHERE email::text = $3
+         )) AS deliveries`,
+      [collisionSlug, collisionKey, collisionEmail],
     );
-    assert.deepEqual(collisionRollback, [{ organizations: 0, receipts: 0 }]);
+    assert.deepEqual(collisionRollback, [{ organizations: 0, receipts: 0, deliveries: 0 }]);
 
     const passwordHash = await hashPassword('integration-native-password');
     const sessionTokenHash = createHash('sha256').update(randomBytes(32)).digest();
     const csrfSecretHash = createHash('sha256').update(randomBytes(32)).digest();
-    const wrongSetup = await roleQuery(
+    const leaseTokenHash = createHash('sha256').update(randomBytes(32)).digest();
+    const claimedDelivery = await setupRuntimeQuery<{
+      delivery_id: string;
+      action_token_id: string;
+      encryption_key_id: string;
+      encrypted_payload: Buffer;
+      recipient_email_hash: Buffer;
+      aad_context: Buffer;
+      attempt_count: number;
+    }>(pool, 'r72_setup_delivery_command', claimDeliverySql, [leaseTokenHash, 1, 60]);
+    assert.equal(claimedDelivery.length, 1);
+    assert.equal(claimedDelivery[0]!.delivery_id, provisioned.setup_delivery_id);
+    assert.equal(claimedDelivery[0]!.action_token_id, provisioned.setup_action_token_id);
+    assert.equal(claimedDelivery[0]!.encryption_key_id, 'integration-key-v1');
+    assert.deepEqual(claimedDelivery[0]!.encrypted_payload, encryptedDelivery);
+    assert.deepEqual(claimedDelivery[0]!.recipient_email_hash, recipientEmailHash);
+    assert.deepEqual(
+      claimedDelivery[0]!.aad_context,
+      Buffer.concat([
+        Buffer.from('r72/setup-link/v1'),
+        Buffer.from([0]),
+        Buffer.from(provisioned.setup_delivery_id.toLowerCase()),
+      ]),
+    );
+    assert.equal(claimedDelivery[0]!.attempt_count, 1);
+
+    const acknowledged = await setupRuntimeQuery<{ acknowledged: boolean }>(
+      pool,
+      'r72_setup_delivery_command',
+      `SELECT app_private.acknowledge_account_setup_delivery($1, $2) AS acknowledged`,
+      [provisioned.setup_delivery_id, leaseTokenHash],
+    );
+    assert.deepEqual(acknowledged, [{ acknowledged: true }]);
+
+    const invalidTokenHash = createHash('sha256').update(randomBytes(32)).digest();
+    const invalidClaimHash = createHash('sha256').update(randomBytes(32)).digest();
+    const invalidSourceHash = createHash('sha256').update(randomBytes(32)).digest();
+    assert.deepEqual(await roleQuery(
+      pool,
+      'r72_identity_command',
+      reserveSetupSql,
+      [invalidTokenHash, invalidClaimHash, invalidSourceHash],
+    ), []);
+
+    const claimHash = createHash('sha256').update(randomBytes(32)).digest();
+    const sourceHash = createHash('sha256').update(randomBytes(32)).digest();
+    const wrongSourceHash = createHash('sha256').update(randomBytes(32)).digest();
+    await expectPostgresError(
+      roleQuery(pool, 'r72_web', reserveSetupSql, [setupTokenHash, claimHash, sourceHash]),
+      '42501',
+    );
+    await expectPostgresError(
+      provisioningQuery(pool, completeSetupSql, [
+        setupTokenHash, claimHash, sourceHash, passwordHash,
+        sessionTokenHash, csrfSecretHash, null, null,
+      ]),
+      '42501',
+    );
+
+    const reserved = await roleQuery<{ claim_expires_at: Date }>(
+      pool,
+      'r72_identity_command',
+      reserveSetupSql,
+      [setupTokenHash, claimHash, sourceHash],
+    );
+    assert.equal(reserved.length, 1);
+    assert.ok(reserved[0]!.claim_expires_at instanceof Date);
+    assert.deepEqual(await roleQuery(
+      pool,
+      'r72_identity_command',
+      reserveSetupSql,
+      [setupTokenHash, createHash('sha256').update(randomBytes(32)).digest(), sourceHash],
+    ), [], 'one live token has exactly one claimant');
+    assert.deepEqual(await roleQuery(
       pool,
       'r72_identity_command',
       completeSetupSql,
-      [createHash('sha256').update(randomBytes(32)).digest(), passwordHash, sessionTokenHash, csrfSecretHash, null, null],
-    );
-    assert.deepEqual(wrongSetup, []);
-    await expectPostgresError(
-      roleQuery(pool, 'r72_web', completeSetupSql, [setupTokenHash, passwordHash, sessionTokenHash, csrfSecretHash, null, null]),
-      '42501',
-    );
-    await expectPostgresError(
-      provisioningQuery(pool, completeSetupSql, [setupTokenHash, passwordHash, sessionTokenHash, csrfSecretHash, null, null]),
-      '42501',
-    );
+      [
+        setupTokenHash, claimHash, wrongSourceHash, passwordHash,
+        sessionTokenHash, csrfSecretHash, null, null,
+      ],
+    ), [], 'a claim is bound to its source hash');
 
     const completed = await roleQuery<{
       session_id: string;
@@ -984,7 +1188,10 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
       pool,
       'r72_identity_command',
       completeSetupSql,
-      [setupTokenHash, passwordHash, sessionTokenHash, csrfSecretHash, null, null],
+      [
+        setupTokenHash, claimHash, sourceHash, passwordHash,
+        sessionTokenHash, csrfSecretHash, null, null,
+      ],
     );
     assert.equal(completed.length, 1);
     assert.equal(completed[0]!.user_id, provisioned.owner_user_id);
@@ -992,20 +1199,12 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
     assert.equal(completed[0]!.selected_workspace_id, provisioned.workspace_id);
     assert.ok(completed[0]!.expires_at instanceof Date);
 
-    const replayedSetup = await roleQuery(
+    assert.deepEqual(await roleQuery(
       pool,
       'r72_identity_command',
-      completeSetupSql,
-      [
-        setupTokenHash,
-        await hashPassword('replayed-password-must-not-win'),
-        createHash('sha256').update(randomBytes(32)).digest(),
-        createHash('sha256').update(randomBytes(32)).digest(),
-        null,
-        null,
-      ],
-    );
-    assert.deepEqual(replayedSetup, []);
+      reserveSetupSql,
+      [setupTokenHash, createHash('sha256').update(randomBytes(32)).digest(), sourceHash],
+    ), []);
 
     const activatedState = await ownerQuery<{
       status: string;
@@ -1015,6 +1214,10 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
       token_consumed: boolean;
       token_revoked: boolean;
       sessions: number;
+      setup_claims: number;
+      delivery_state: string;
+      delivery_payload_erased: boolean;
+      delivery_superseded: boolean;
     }>(
       pool,
       `SELECT person.status,
@@ -1023,9 +1226,15 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
               person.row_version::text,
               action_token.consumed_at IS NOT NULL AS token_consumed,
               action_token.revoked_at IS NOT NULL AS token_revoked,
-              (SELECT count(*)::int FROM app.user_sessions AS session WHERE session.user_id = person.id) AS sessions
+              (SELECT count(*)::int FROM app.user_sessions AS session WHERE session.user_id = person.id) AS sessions,
+              (SELECT count(*)::int FROM app_private.account_setup_claims AS claim WHERE claim.user_id = person.id) AS setup_claims,
+              delivery.state AS delivery_state,
+              delivery.encrypted_payload IS NULL AS delivery_payload_erased,
+              delivery.superseded_at IS NOT NULL AS delivery_superseded
        FROM app.users AS person
        JOIN app.identity_action_tokens AS action_token ON action_token.user_id = person.id
+       JOIN app_private.account_setup_deliveries AS delivery
+         ON delivery.action_token_id = action_token.id
        WHERE person.id = $1 AND action_token.id = $2`,
       [provisioned.owner_user_id, provisioned.setup_action_token_id],
     );
@@ -1037,6 +1246,10 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
       token_consumed: true,
       token_revoked: false,
       sessions: 1,
+      setup_claims: 0,
+      delivery_state: 'delivered',
+      delivery_payload_erased: true,
+      delivery_superseded: false,
     }]);
 
     const resolved = await roleQuery<{
@@ -1059,55 +1272,409 @@ test('real PostgreSQL proves atomic native customer provisioning and one-use acc
     }]);
 
     const raceSuffix = randomUUID().replaceAll('-', '').slice(0, 12);
+    const raceEmail = `race-${raceSuffix}@example.test`;
     const raceSetupTokenHash = createHash('sha256').update(randomBytes(32)).digest();
+    const raceRecipientHash = createHash('sha256').update(raceEmail).digest();
     const raceProvisioningInput: unknown[] = [
       `race-${raceSuffix}`,
       'Race Customer',
       `race-${raceSuffix}`,
       'Race Workspace',
       `race-workspace-${raceSuffix}`,
-      `race-${raceSuffix}@example.test`,
+      raceEmail,
       'Race Owner',
       raceSetupTokenHash,
+      raceRecipientHash,
       'Europe/London',
       'en-GB',
       'GBP',
+      randomUUID(),
+      1,
+      'integration-key-v1',
+      randomBytes(12),
+      randomBytes(96),
+      randomBytes(16),
     ];
     const raceProvisioned = (await provisioningQuery<ProvisionedCustomerRow>(
       pool,
       provisionCustomerSql,
       raceProvisioningInput,
     ))[0]!;
-    const racePasswordHash = await hashPassword('integration-race-password');
-    const raceSessionA = createHash('sha256').update(randomBytes(32)).digest();
-    const raceSessionB = createHash('sha256').update(randomBytes(32)).digest();
-    const [raceA, raceB] = await Promise.all([
-      roleQuery<{ session_id: string }>(
+    const releaseClaimHash = createHash('sha256').update(randomBytes(32)).digest();
+    const raceSourceHash = createHash('sha256').update(randomBytes(32)).digest();
+    assert.equal((await roleQuery(
+      pool,
+      'r72_identity_command',
+      reserveSetupSql,
+      [raceSetupTokenHash, releaseClaimHash, raceSourceHash],
+    )).length, 1);
+    assert.deepEqual(await roleQuery<{ released: boolean }>(
+      pool,
+      'r72_identity_command',
+      releaseSetupSql,
+      [raceSetupTokenHash, releaseClaimHash, createHash('sha256').update(randomBytes(32)).digest()],
+    ), [{ released: false }]);
+    assert.deepEqual(await roleQuery<{ released: boolean }>(
+      pool,
+      'r72_identity_command',
+      releaseSetupSql,
+      [raceSetupTokenHash, releaseClaimHash, raceSourceHash],
+    ), [{ released: true }]);
+
+    const firstRaceLeaseHash = createHash('sha256').update(randomBytes(32)).digest();
+    assert.equal((await setupRuntimeQuery(
+      pool,
+      'r72_setup_delivery_command',
+      claimDeliverySql,
+      [firstRaceLeaseHash, 1, 60],
+    )).length, 1);
+    const renewed = await setupRuntimeQuery<{ lease_expires_at: Date }>(
+      pool,
+      'r72_setup_delivery_command',
+      `SELECT lease_expires_at
+       FROM app_private.renew_account_setup_delivery_lease($1, $2, 60)`,
+      [raceProvisioned.setup_delivery_id, firstRaceLeaseHash],
+    );
+    assert.equal(renewed.length, 1);
+    const retryAt = new Date(Date.now() + 60_000);
+    assert.deepEqual((await setupRuntimeQuery<{ delivery_state: string }>(
+      pool,
+      'r72_setup_delivery_command',
+      `SELECT delivery_state
+       FROM app_private.fail_account_setup_delivery($1, $2, $3, $4)`,
+      [raceProvisioned.setup_delivery_id, firstRaceLeaseHash, 'provider_unavailable', retryAt],
+    )).map((row) => row.delivery_state), ['retry']);
+    await ownerQuery(
+      pool,
+      `UPDATE app_private.account_setup_deliveries
+       SET available_at = statement_timestamp()
+       WHERE id = $1`,
+      [raceProvisioned.setup_delivery_id],
+    );
+    const staleLeaseHash = createHash('sha256').update(randomBytes(32)).digest();
+    assert.equal((await setupRuntimeQuery(
+      pool,
+      'r72_setup_delivery_command',
+      claimDeliverySql,
+      [staleLeaseHash, 1, 60],
+    )).length, 1);
+
+    const oldClaimHash = createHash('sha256').update(randomBytes(32)).digest();
+    assert.equal((await roleQuery(
+      pool,
+      'r72_identity_command',
+      reserveSetupSql,
+      [raceSetupTokenHash, oldClaimHash, raceSourceHash],
+    )).length, 1);
+
+    const reissueSql = `
+      SELECT setup_action_token_id, setup_expires_at, setup_delivery_id,
+             setup_delivery_generation, created_now
+      FROM app_private.reissue_native_account_setup(
+        $1::text, $2::uuid, $3::uuid, $4::text, $5::bytea, $6::bytea,
+        $7::uuid, $8::smallint, $9::text, $10::bytea, $11::bytea, $12::bytea
+      )`;
+    const reissueKey = `reissue-${raceSuffix}`;
+    const reissuedTokenHash = createHash('sha256').update(randomBytes(32)).digest();
+    const reissuedDeliveryId = randomUUID();
+    const reissueInput: unknown[] = [
+      reissueKey,
+      raceProvisioned.workspace_id,
+      raceProvisioned.owner_user_id,
+      `support-ticket:${raceSuffix}:owner-request`,
+      reissuedTokenHash,
+      raceRecipientHash,
+      reissuedDeliveryId,
+      1,
+      'integration-key-v1',
+      randomBytes(12),
+      randomBytes(96),
+      randomBytes(16),
+    ];
+    const wrongRecipientKey = `wrong-recipient-${raceSuffix}`;
+    await expectPostgresError(
+      setupRuntimeQuery(
         pool,
-        'r72_identity_command',
-        completeSetupSql,
-        [raceSetupTokenHash, racePasswordHash, raceSessionA, createHash('sha256').update(randomBytes(32)).digest(), null, null],
+        'r72_setup_reissue_command',
+        reissueSql,
+        [
+          wrongRecipientKey,
+          raceProvisioned.workspace_id,
+          raceProvisioned.owner_user_id,
+          `support-ticket:${raceSuffix}:wrong-recipient`,
+          createHash('sha256').update(randomBytes(32)).digest(),
+          createHash('sha256').update('not-the-owner@example.test').digest(),
+          randomUUID(),
+          1,
+          'integration-key-v1',
+          randomBytes(12),
+          randomBytes(96),
+          randomBytes(16),
+        ],
       ),
-      roleQuery<{ session_id: string }>(
-        pool,
-        'r72_identity_command',
-        completeSetupSql,
-        [raceSetupTokenHash, racePasswordHash, raceSessionB, createHash('sha256').update(randomBytes(32)).digest(), null, null],
-      ),
-    ]);
-    assert.equal(raceA.length + raceB.length, 1, 'exactly one concurrent setup claimant wins');
-    const raceState = await ownerQuery<{ sessions: number; consumed: boolean; active: boolean }>(
+      '22023',
+    );
+    const wrongRecipientRollback = await ownerQuery<{
+      live_setup_tokens: number;
+      deliveries: number;
+      reissue_receipts: number;
+      max_generation: number;
+    }>(
       pool,
       `SELECT
-         (SELECT count(*)::int FROM app.user_sessions WHERE user_id = $1) AS sessions,
-         action_token.consumed_at IS NOT NULL AS consumed,
-         person.status = 'active' AS active
+         (SELECT count(*)::int
+          FROM app.identity_action_tokens
+          WHERE user_id = $1 AND purpose = 'account_setup'
+            AND consumed_at IS NULL AND revoked_at IS NULL) AS live_setup_tokens,
+         (SELECT count(*)::int
+          FROM app_private.account_setup_deliveries
+          WHERE user_id = $1) AS deliveries,
+         (SELECT count(*)::int
+          FROM app_private.account_setup_reissue_receipts
+          WHERE idempotency_key = $2) AS reissue_receipts,
+         (SELECT max(generation)::int
+          FROM app_private.account_setup_deliveries
+          WHERE user_id = $1) AS max_generation`,
+      [raceProvisioned.owner_user_id, wrongRecipientKey],
+    );
+    assert.deepEqual(wrongRecipientRollback, [{
+      live_setup_tokens: 1,
+      deliveries: 1,
+      reissue_receipts: 0,
+      max_generation: 1,
+    }], 'a recipient mismatch rolls back without installing any credential or job');
+    const reissued = (await setupRuntimeQuery<{
+      setup_action_token_id: string;
+      setup_delivery_id: string;
+      setup_delivery_generation: number;
+      created_now: boolean;
+    }>(pool, 'r72_setup_reissue_command', reissueSql, reissueInput))[0]!;
+    assert.equal(reissued.setup_delivery_id, reissuedDeliveryId);
+    assert.equal(reissued.setup_delivery_generation, 2);
+    assert.equal(reissued.created_now, true);
+
+    assert.deepEqual(await setupRuntimeQuery<{ acknowledged: boolean }>(
+      pool,
+      'r72_setup_delivery_command',
+      `SELECT app_private.acknowledge_account_setup_delivery($1, $2) AS acknowledged`,
+      [raceProvisioned.setup_delivery_id, staleLeaseHash],
+    ), [{ acknowledged: false }], 'reissue fences a stale delivery worker');
+    assert.deepEqual(await roleQuery(
+      pool,
+      'r72_identity_command',
+      completeSetupSql,
+      [
+        raceSetupTokenHash, oldClaimHash, raceSourceHash,
+        await hashPassword('revoked-password-must-not-win'),
+        createHash('sha256').update(randomBytes(32)).digest(),
+        createHash('sha256').update(randomBytes(32)).digest(),
+        null,
+        null,
+      ],
+    ), [], 'reissue revokes the prior token and claim atomically');
+
+    const reissueReplay = [...reissueInput];
+    reissueReplay[4] = createHash('sha256').update(randomBytes(32)).digest();
+    reissueReplay[6] = randomUUID();
+    reissueReplay[10] = randomBytes(96);
+    const replayedReissue = (await setupRuntimeQuery<{
+      setup_action_token_id: string;
+      setup_delivery_id: string;
+      setup_delivery_generation: number;
+      created_now: boolean;
+    }>(pool, 'r72_setup_reissue_command', reissueSql, reissueReplay))[0]!;
+    assert.deepEqual(replayedReissue, {
+      setup_action_token_id: reissued.setup_action_token_id,
+      setup_delivery_id: reissued.setup_delivery_id,
+      setup_delivery_generation: 2,
+      created_now: false,
+    });
+
+    const superseded = await ownerQuery<{
+      token_revoked: boolean;
+      state: string;
+      payload_erased: boolean;
+      superseded: boolean;
+      claims: number;
+    }>(
+      pool,
+      `SELECT action_token.revoked_at IS NOT NULL AS token_revoked,
+              delivery.state,
+              delivery.encrypted_payload IS NULL AS payload_erased,
+              delivery.superseded_at IS NOT NULL AS superseded,
+              (SELECT count(*)::int FROM app_private.account_setup_claims WHERE user_id = $1) AS claims
        FROM app.identity_action_tokens AS action_token
-       JOIN app.users AS person ON person.id = action_token.user_id
+       JOIN app_private.account_setup_deliveries AS delivery
+         ON delivery.action_token_id = action_token.id
        WHERE action_token.id = $2`,
       [raceProvisioned.owner_user_id, raceProvisioned.setup_action_token_id],
     );
-    assert.deepEqual(raceState, [{ sessions: 1, consumed: true, active: true }]);
+    assert.deepEqual(superseded, [{
+      token_revoked: true,
+      state: 'superseded',
+      payload_erased: true,
+      superseded: true,
+      claims: 0,
+    }]);
+
+    const concurrentClaimA = createHash('sha256').update(randomBytes(32)).digest();
+    const concurrentClaimB = createHash('sha256').update(randomBytes(32)).digest();
+    const [reservedA, reservedB] = await Promise.all([
+      roleQuery<{ claim_expires_at: Date }>(
+        pool,
+        'r72_identity_command',
+        reserveSetupSql,
+        [reissuedTokenHash, concurrentClaimA, raceSourceHash],
+      ),
+      roleQuery<{ claim_expires_at: Date }>(
+        pool,
+        'r72_identity_command',
+        reserveSetupSql,
+        [reissuedTokenHash, concurrentClaimB, raceSourceHash],
+      ),
+    ]);
+    assert.equal(reservedA.length + reservedB.length, 1, 'exactly one concurrent reservation wins');
+    const winningClaim = reservedA.length === 1 ? concurrentClaimA : concurrentClaimB;
+
+    const finalPasswordHash = await hashPassword('integration-concurrent-password');
+    const finalSessionHash = createHash('sha256').update(randomBytes(32)).digest();
+    const competingReissueInput: unknown[] = [
+      `concurrent-reissue-${raceSuffix}`,
+      raceProvisioned.workspace_id,
+      raceProvisioned.owner_user_id,
+      `support-ticket:${raceSuffix}:concurrent-reissue`,
+      createHash('sha256').update(randomBytes(32)).digest(),
+      raceRecipientHash,
+      randomUUID(),
+      1,
+      'integration-key-v1',
+      randomBytes(12),
+      randomBytes(96),
+      randomBytes(16),
+    ];
+    const [completionRace, reissueRace] = await Promise.allSettled([
+      roleQuery<{ session_id: string }>(
+        pool,
+        'r72_identity_command',
+        completeSetupSql,
+        [
+          reissuedTokenHash, winningClaim, raceSourceHash, finalPasswordHash,
+          finalSessionHash, createHash('sha256').update(randomBytes(32)).digest(),
+          null, null,
+        ],
+      ),
+      setupRuntimeQuery<{
+        setup_action_token_id: string;
+        created_now: boolean;
+      }>(pool, 'r72_setup_reissue_command', reissueSql, competingReissueInput),
+    ]);
+    for (const outcome of [completionRace, reissueRace]) {
+      if (outcome.status === 'rejected') {
+        assert.notEqual((outcome.reason as { code?: string }).code, '40P01', 'lock order prevents deadlock');
+      }
+    }
+    assert.equal(completionRace.status, 'fulfilled');
+    const completionWon = completionRace.value.length === 1;
+    const reissueWon = reissueRace.status === 'fulfilled' && reissueRace.value.length === 1;
+    assert.notEqual(completionWon, reissueWon, 'completion or reissue wins atomically, never both');
+    if (reissueRace.status === 'rejected') {
+      assert.equal((reissueRace.reason as { code?: string }).code, '22023');
+    }
+
+    const raceState = await ownerQuery<{ sessions: number; active: boolean; live_setup_tokens: number }>(
+      pool,
+      `SELECT
+         (SELECT count(*)::int FROM app.user_sessions WHERE user_id = $1) AS sessions,
+         person.status = 'active' AS active,
+         (SELECT count(*)::int
+          FROM app.identity_action_tokens
+          WHERE user_id = $1 AND purpose = 'account_setup'
+            AND consumed_at IS NULL AND revoked_at IS NULL) AS live_setup_tokens
+       FROM app.users AS person
+       WHERE person.id = $1`,
+      [raceProvisioned.owner_user_id],
+    );
+    assert.deepEqual(raceState, completionWon
+      ? [{ sessions: 1, active: true, live_setup_tokens: 0 }]
+      : [{ sessions: 0, active: false, live_setup_tokens: 1 }]);
+
+    const expiredSuffix = randomUUID().replaceAll('-', '').slice(0, 12);
+    const expiredEmail = `expired-${expiredSuffix}@example.test`;
+    const expiredTokenHash = createHash('sha256').update(randomBytes(32)).digest();
+    const expiredProvisioned = (await provisioningQuery<ProvisionedCustomerRow>(
+      pool,
+      provisionCustomerSql,
+      [
+        `expired-${expiredSuffix}`,
+        'Expired Delivery Customer',
+        `expired-${expiredSuffix}`,
+        'Expired Delivery Workspace',
+        `expired-workspace-${expiredSuffix}`,
+        expiredEmail,
+        'Expired Owner',
+        expiredTokenHash,
+        createHash('sha256').update(expiredEmail).digest(),
+        'Europe/London',
+        'en-GB',
+        'GBP',
+        randomUUID(),
+        1,
+        'retired-expired-key',
+        randomBytes(12),
+        randomBytes(96),
+        randomBytes(16),
+      ],
+    ))[0]!;
+    const liveRequiredKeys = await setupRuntimeQuery<{ encryption_key_id: string }>(
+      pool,
+      'r72_setup_delivery_command',
+      `SELECT encryption_key_id
+       FROM app_private.required_account_setup_delivery_key_ids()`,
+    );
+    assert.ok(liveRequiredKeys.some((row) => row.encryption_key_id === 'retired-expired-key'));
+    await ownerQuery(
+      pool,
+      `UPDATE app.identity_action_tokens
+       SET created_at = statement_timestamp() - interval '2 hours',
+           expires_at = statement_timestamp() - interval '1 hour'
+       WHERE id = $1`,
+      [expiredProvisioned.setup_action_token_id],
+    );
+    const afterExpiryRequiredKeys = await setupRuntimeQuery<{ encryption_key_id: string }>(
+      pool,
+      'r72_setup_delivery_command',
+      `SELECT encryption_key_id
+       FROM app_private.required_account_setup_delivery_key_ids()`,
+    );
+    assert.equal(
+      afterExpiryRequiredKeys.some((row) => row.encryption_key_id === 'retired-expired-key'),
+      false,
+      'expired work cannot deadlock readiness on a retired key',
+    );
+    await setupRuntimeQuery(
+      pool,
+      'r72_setup_delivery_command',
+      claimDeliverySql,
+      [createHash('sha256').update(randomBytes(32)).digest(), 1, 60],
+    );
+    const expiredDeliveryState = await ownerQuery<{
+      state: string;
+      payload_erased: boolean;
+      last_error_code: string;
+    }>(
+      pool,
+      `SELECT state,
+              encrypted_payload IS NULL AS payload_erased,
+              last_error_code
+       FROM app_private.account_setup_deliveries
+       WHERE id = $1`,
+      [expiredProvisioned.setup_delivery_id],
+    );
+    assert.deepEqual(expiredDeliveryState, [{
+      state: 'dead_letter',
+      payload_erased: true,
+      last_error_code: 'setup_token_expired',
+    }]);
   } finally {
     await resetIdentityTables(pool);
     await pool.end();

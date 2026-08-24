@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 import type { Pool, QueryResult } from 'pg';
-import { hashPassword } from '../src/portal/accounts.js';
+import {
+  hashPassword,
+  PortalScryptCapacityError,
+  PortalScryptLimiter,
+  type PortalScryptWorkLimiter,
+} from '../src/portal/accounts.js';
 import { PgPortalAuthService } from '../src/portal/auth-pg-service.js';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
@@ -139,21 +144,27 @@ test('account setup atomically consumes a hashed one-use token and returns a can
   const setupToken = Buffer.alloc(32, 7).toString('base64url');
   const password = 'a-new-canonical-password';
   const calls: Call[] = [];
-  let attempts = 0;
+  let reservations = 0;
   const service = new PgPortalAuthService({
     readPool: pool(() => result([])),
     commandPool: pool((call) => {
       calls.push(call);
-      if (!call.sql.includes('complete-setup')) throw new Error(`unexpected SQL: ${call.sql}`);
-      attempts += 1;
-      if (attempts > 1) return result([]);
-      return result([{
-        session_id: SESSION_ID,
-        user_id: USER_ID,
-        user_email: USER_EMAIL,
-        selected_workspace_id: WORKSPACE_ID,
-        expires_at: new Date(NOW + 14 * 24 * 60 * 60 * 1000).toISOString(),
-      }]);
+      if (call.sql.includes('reserve-setup')) {
+        reservations += 1;
+        return reservations === 1
+          ? result([{ claim_expires_at: new Date(NOW + 2 * 60 * 1000).toISOString() }])
+          : result([]);
+      }
+      if (call.sql.includes('complete-setup')) {
+        return result([{
+          session_id: SESSION_ID,
+          user_id: USER_ID,
+          user_email: USER_EMAIL,
+          selected_workspace_id: WORKSPACE_ID,
+          expires_at: new Date(NOW + 14 * 24 * 60 * 60 * 1000).toISOString(),
+        }]);
+      }
+      throw new Error(`unexpected SQL: ${call.sql}`);
     }),
   });
 
@@ -165,20 +176,29 @@ test('account setup atomically consumes a hashed one-use token and returns a can
   assert.equal(completed?.userEmail, USER_EMAIL);
   assert.match(completed?.sessionToken ?? '', /^[A-Za-z0-9_-]{43}$/);
 
-  const first = calls[0]!;
-  assert.match(first.sql, /complete_native_account_setup\(\$1, \$2, \$3, \$4, \$5, \$6\)/);
-  assert.deepEqual(first.values?.[0], createHash('sha256').update(setupToken).digest());
-  assert.match(String(first.values?.[1]), /^scrypt\$v1\$/);
-  assert.ok(Buffer.isBuffer(first.values?.[2]) && (first.values?.[2] as Buffer).length === 32);
-  assert.ok(Buffer.isBuffer(first.values?.[3]) && (first.values?.[3] as Buffer).length === 32);
-  assert.deepEqual(first.values?.[4], createHash('sha256').update('127.0.0.1').digest());
-  assert.deepEqual(first.values?.[5], createHash('sha256').update('R72 setup browser').digest());
+  const reserve = calls[0]!;
+  const first = calls[1]!;
+  assert.match(reserve.sql, /reserve_native_account_setup\(\$1, \$2, \$3\)/);
+  assert.match(first.sql, /complete_native_account_setup\(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8\)/);
+  assert.deepEqual(reserve.values?.[0], createHash('sha256').update(setupToken).digest());
+  assert.ok(Buffer.isBuffer(reserve.values?.[1]) && (reserve.values?.[1] as Buffer).length === 32);
+  assert.deepEqual(reserve.values?.[2], createHash('sha256')
+    .update('relaunch72/setup-source/v1\u0000')
+    .update('127.0.0.1')
+    .digest());
+  assert.deepEqual(first.values?.slice(0, 3), reserve.values);
+  assert.match(String(first.values?.[3]), /^scrypt\$v1\$/);
+  assert.ok(Buffer.isBuffer(first.values?.[4]) && (first.values?.[4] as Buffer).length === 32);
+  assert.ok(Buffer.isBuffer(first.values?.[5]) && (first.values?.[5] as Buffer).length === 32);
+  assert.deepEqual(first.values?.[6], createHash('sha256').update('127.0.0.1').digest());
+  assert.deepEqual(first.values?.[7], createHash('sha256').update('R72 setup browser').digest());
   assert.equal(Array.from(first.values ?? []).includes(setupToken), false, 'raw setup token is never a SQL parameter');
   assert.equal(Array.from(first.values ?? []).includes(password), false, 'raw password is never a SQL parameter');
   assert.equal(Array.from(first.values ?? []).includes(completed!.sessionToken), false, 'raw session token is never a SQL parameter');
+  assert.equal(calls.some((call) => call.sql.includes('release-setup')), false, 'atomic success consumed its own claim');
 
   assert.equal(await service.completeSetup(setupToken, 'a-second-canonical-password', { now: NOW }), null);
-  assert.equal(calls.length, 2, 'the consumed-token zero-row result is treated as an invalid setup attempt');
+  assert.equal(calls.length, 3, 'a consumed token stops at cheap reservation without another scrypt/completion');
 });
 
 test('invalid account setup input never reaches PostgreSQL', async () => {
@@ -190,6 +210,94 @@ test('invalid account setup input never reaches PostgreSQL', async () => {
   assert.equal(await service.completeSetup('not-a-token', 'a-valid-long-password', { now: NOW }), null);
   assert.equal(await service.completeSetup(Buffer.alloc(32, 8).toString('base64url'), 'too-short', { now: NOW }), null);
   assert.equal(calls, 0);
+});
+
+test('a random valid-shape setup token stops at cheap reservation and never enters scrypt', async () => {
+  let scryptRuns = 0;
+  const limiter: PortalScryptWorkLimiter = {
+    async run<T>(work: () => Promise<T>): Promise<T> {
+      scryptRuns += 1;
+      return work();
+    },
+  };
+  const calls: Call[] = [];
+  const service = new PgPortalAuthService({
+    readPool: pool(() => result([])),
+    commandPool: pool((call) => { calls.push(call); return result([]); }),
+    scryptLimiter: limiter,
+  });
+  const randomToken = Buffer.alloc(32, 77).toString('base64url');
+  assert.equal(await service.completeSetup(randomToken, 'a-valid-canonical-password', { now: NOW }), null);
+  assert.equal(scryptRuns, 0);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0]!.sql, /reserve_native_account_setup/);
+  assert.equal(calls[0]!.values?.some((value) => value === randomToken), false);
+  assert.deepEqual(calls[0]!.values?.[2], createHash('sha256')
+    .update('relaunch72/setup-source/v1\u0000')
+    .update('unavailable')
+    .digest(), 'unconfigured client-address policy uses one domain-separated unavailable binding');
+});
+
+test('setup releases its database claim when the process-wide scrypt scheduler is saturated', async () => {
+  const limiter = new PortalScryptLimiter(1);
+  let openGate!: () => void;
+  const gate = new Promise<void>((resolve) => { openGate = resolve; });
+  const occupied = limiter.run(async () => gate);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const calls: Call[] = [];
+  const service = new PgPortalAuthService({
+    readPool: pool(() => result([])),
+    commandPool: pool((call) => {
+      calls.push(call);
+      if (call.sql.includes('reserve-setup')) {
+        return result([{ claim_expires_at: new Date(NOW + 2 * 60 * 1000).toISOString() }]);
+      }
+      if (call.sql.includes('release-setup')) return result([{ released: true }]);
+      throw new Error(`unexpected SQL: ${call.sql}`);
+    }),
+    scryptLimiter: limiter,
+  });
+  await assert.rejects(
+    service.completeSetup(Buffer.alloc(32, 78).toString('base64url'), 'a-valid-canonical-password', { now: NOW }),
+    PortalScryptCapacityError,
+  );
+  assert.deepEqual(calls.map((call) => /portal\.auth\.([a-z-]+)/.exec(call.sql)?.[1]), ['reserve-setup', 'release-setup']);
+  assert.deepEqual(calls[1]!.values, calls[0]!.values, 'release is bound to the exact token, claim and source hashes');
+  openGate();
+  await occupied;
+});
+
+test('setup releases a valid claim after a zero-row completion race or SQL error', async () => {
+  for (const completion of ['zero-row', 'error'] as const) {
+    const calls: Call[] = [];
+    const service = new PgPortalAuthService({
+      readPool: pool(() => result([])),
+      commandPool: pool((call) => {
+        calls.push(call);
+        if (call.sql.includes('reserve-setup')) {
+          return result([{ claim_expires_at: new Date(NOW + 2 * 60 * 1000).toISOString() }]);
+        }
+        if (call.sql.includes('complete-setup')) {
+          if (completion === 'error') throw new Error('completion unavailable');
+          return result([]);
+        }
+        if (call.sql.includes('release-setup')) return result([{ released: true }]);
+        throw new Error(`unexpected SQL: ${call.sql}`);
+      }),
+    });
+    const operation = service.completeSetup(
+      Buffer.alloc(32, completion === 'zero-row' ? 79 : 80).toString('base64url'),
+      'a-valid-canonical-password',
+      { now: NOW },
+    );
+    if (completion === 'error') await assert.rejects(operation, /completion unavailable/);
+    else assert.equal(await operation, null);
+    assert.deepEqual(
+      calls.map((call) => /portal\.auth\.([a-z-]+)/.exec(call.sql)?.[1]),
+      ['reserve-setup', 'complete-setup', 'release-setup'],
+    );
+    assert.deepEqual(calls[2]!.values, calls[0]!.values);
+  }
 });
 
 test('a password or membership race fails as invalid login and revocation hashes the cookie', async () => {
