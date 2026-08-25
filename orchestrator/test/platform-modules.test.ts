@@ -23,9 +23,11 @@ test('runtime resolution presents the shipped Journey Manager only with its capa
   assert.equal(byId.get('crm')?.description, 'Private contacts, opportunities, tasks and recorded CRM activity.');
   assert.equal(byId.get('journeys')?.state, 'ready');
   assert.equal(byId.get('journeys')?.route, '/portal/journeys/board');
-  assert.equal(byId.get('content')?.state, 'preview');
+  assert.equal(byId.get('content')?.state, 'ready');
+  assert.equal(byId.get('content')?.route, '/portal/content');
   assert.equal(byId.get('social')?.state, 'planned');
-  assert.equal(byId.get('inbox')?.state, 'planned');
+  assert.equal(byId.get('inbox')?.state, 'preview');
+  assert.equal(byId.get('inbox')?.route, '/portal/inbox');
   assert.equal(byId.get('listening')?.state, 'planned');
   assert.equal(byId.get('webinars')?.state, 'planned');
 });

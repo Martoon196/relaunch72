@@ -8,7 +8,7 @@ import { CORE_PLATFORM_MODULES, platformModules, type PlatformModuleId, type Pla
 import type { PlatformCapability } from '../platform/capabilities.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
 
-export type PortalSection = 'overview' | 'crm' | 'journeys' | 'billing';
+export type PortalSection = 'overview' | 'crm' | 'journeys' | 'content' | 'inbox' | 'billing';
 
 export function escapeHtml(value: unknown): string {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -189,6 +189,8 @@ export function appShell(opts: AppShellOptions): string {
     (opts.active === 'overview' && id === 'overview')
     || (opts.active === 'crm' && id === 'crm')
     || (opts.active === 'journeys' && id === 'journeys')
+    || (opts.active === 'content' && id === 'content')
+    || (opts.active === 'inbox' && id === 'inbox')
     || (opts.active === 'billing' && id === 'settings');
   const workingNav = workingModules.map((module) => {
     const current = isCurrent(module.id);
@@ -223,7 +225,7 @@ export function appShell(opts: AppShellOptions): string {
         <div class="nav-label">Workspace</div>
         ${workingNav}
       </nav>
-      <div class="sidebar-foot"><div class="sandbox-note"><span class="sandbox-dot"></span><span><strong>${crmMode ? 'Private CRM' : 'Private sandbox'}</strong>${crmMode ? 'Saved workspace records · channel rails locked' : 'Mock generation only · no publishing'}</span></div></div>
+      <div class="sidebar-foot"><div class="sandbox-note"><span class="sandbox-dot"></span><span><strong>${crmMode ? 'Private workspace' : 'Private sandbox'}</strong>${crmMode ? (capabilities.has('conversations.read') ? 'Saved CRM records · TEST channel rails only' : 'Saved CRM records · live channel rails locked') : 'Mock generation only · no publishing'}</span></div></div>
     </aside>
     <div class="workspace">
       <header class="topbar">
@@ -235,7 +237,7 @@ export function appShell(opts: AppShellOptions): string {
             ${quickWorking}
           </nav>
         </details>
-        <div class="top-actions"><span class="status-badge"><span class="dot"></span>${crmMode ? 'CRM records' : 'Mock workspace'}</span><form method="post" action="/portal/logout">${csrfField}<button class="top-icon-button" type="submit" aria-label="Sign out" title="Sign out">${icon('logout')}</button></form></div>
+        <div class="top-actions"><span class="status-badge"><span class="dot"></span>${crmMode ? (capabilities.has('conversations.read') ? 'CRM + TEST rails' : 'CRM records') : 'Mock workspace'}</span><form method="post" action="/portal/logout">${csrfField}<button class="top-icon-button" type="submit" aria-label="Sign out" title="Sign out">${icon('logout')}</button></form></div>
       </header>
       <main class="main" id="main-content" tabindex="-1">${opts.body}</main>
     </div>

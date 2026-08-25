@@ -1,18 +1,38 @@
+import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
 import { createDatabasePool } from '../db/pool.js';
 import { loadDatabaseConfig, type DatabaseConfig } from '../db/config.js';
 import { assertRuntimeSchemaCurrent } from '../db/runtime-readiness.js';
+import { requestDatabaseContext } from '../db/rls.js';
+import {
+  createPgInboxReadService,
+  type InboxConversationQuery,
+} from '../inbox-pg/index.js';
 import { PgPortalAuthService } from './auth-pg-service.js';
-import { createPgPortalCrmService, type PgPortalCrmService } from './crm-pg-service.js';
+import {
+  createPgPortalCrmPrincipalResolver,
+  createPgPortalCrmService,
+  type PgPortalCrmService,
+} from './crm-pg-service.js';
+import type { PortalCrmRequestIdentity } from './crm-service.js';
+import {
+  createPgPortalCompanyContentService,
+  type PgPortalCompanyContentService,
+} from './company-content-pg-service.js';
 import {
   createPgPortalJourneyManagerService,
   type PgPortalJourneyManagerService,
 } from './journey-manager-service.js';
+import type { PortalInboxReadBoundary } from './router.js';
 
 export interface PgPortalPlatform {
   auth: PgPortalAuthService;
   crm: PgPortalCrmService;
   journeys: PgPortalJourneyManagerService;
+  /** Omitted unless the dedicated r72_content_command identity passes readiness. */
+  companyContent?: PgPortalCompanyContentService;
+  /** Canonical TEST-only queue read model; it has no send or provider operation. */
+  inbox: PortalInboxReadBoundary;
   close(): Promise<void>;
 }
 
@@ -34,11 +54,34 @@ export function postgresPortalEnabled(env: NodeJS.ProcessEnv = process.env): boo
   throw new Error('PORTAL_POSTGRES_ENABLED must be true or false');
 }
 
+export function createPgPortalInboxReadBoundary(
+  webPool: Pick<Pool, 'query' | 'connect'>,
+): PortalInboxReadBoundary {
+  const principalResolver = createPgPortalCrmPrincipalResolver(webPool);
+  const readService = createPgInboxReadService(webPool);
+  return Object.freeze({
+    async listConversations(
+      identity: PortalCrmRequestIdentity,
+      query?: InboxConversationQuery,
+    ) {
+      const principal = await principalResolver.resolve(identity.sessionToken);
+      if (!principal) return null;
+      return readService.listConversations(requestDatabaseContext({
+        ...principal,
+        requestId: identity.requestId,
+        portalSessionTokenHash: createHash('sha256').update(identity.sessionToken).digest(),
+      }), query);
+    },
+  });
+}
+
 /**
- * Compose the portal only after its three least-privilege identities connect
+ * Compose the portal only after its three required least-privilege identities connect
  * and the web identity proves the exact bundled migration ledger. Any partial
  * construction is closed before the error escapes. Sensitive provisioning and
- * setup delivery are composed separately by buildPgOnboardingPlatform.
+ * setup delivery are composed separately by buildPgOnboardingPlatform. Company
+ * content is an optional module and is exposed only when its fourth, dedicated
+ * command identity independently passes readiness.
  */
 export async function buildPgPortalPlatform(
   env: NodeJS.ProcessEnv = process.env,
@@ -77,11 +120,37 @@ export async function buildPgPortalPlatform(
       commandPool.query('/* portal.crm-command-role-readiness */ SELECT 1'),
     ]);
 
+    let companyContent: PgPortalCompanyContentService | undefined;
+    if (env.DATABASE_CONTENT_COMMAND_URL?.trim()) {
+      let contentCommandPool: Pool | undefined;
+      try {
+        const contentCommandConfig = requireCutoverIdentity(
+          loadDatabaseConfig('contentCommand', env),
+          'DATABASE_CONTENT_COMMAND_URL',
+          'r72_content_command',
+        );
+        contentCommandPool = createDatabasePool(contentCommandConfig);
+        await contentCommandPool.query('/* portal.content-command-role-readiness */ SELECT 1');
+        companyContent = createPgPortalCompanyContentService({
+          webPool,
+          commandPool: contentCommandPool,
+        });
+        pools.push(contentCommandPool);
+      } catch {
+        await contentCommandPool?.end().catch(() => undefined);
+        // Optional means optional, not permissive: a missing or invalid command
+        // identity leaves every content mutation route uncomposed.
+        companyContent = undefined;
+      }
+    }
+
     let closed = false;
     return {
       auth: new PgPortalAuthService({ readPool: webPool, commandPool: identityPool }),
       crm: createPgPortalCrmService({ webPool, commandPool }),
       journeys: createPgPortalJourneyManagerService({ webPool, commandPool }),
+      companyContent,
+      inbox: createPgPortalInboxReadBoundary(webPool),
       async close(): Promise<void> {
         if (closed) return;
         closed = true;

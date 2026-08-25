@@ -137,6 +137,11 @@ class InMemoryContentSql implements SqlExecutor {
     if (sql.includes('company-content.lock-source-identity')) {
       return this.rows<T>([{}]);
     }
+    if (sql.includes('company-content.lock-item-identity')
+        || sql.includes('company-content.lock-version-item')
+        || sql.includes('company-content.lock-approval-identity')) {
+      return this.rows<T>([{}]);
+    }
     if (sql.includes('company-content.find-item-by-source')) {
       const [sourceSystem, sourceItemId] = values.map(String);
       const entry = [...this.items.entries()].find(([, source]) => (

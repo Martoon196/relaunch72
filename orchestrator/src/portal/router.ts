@@ -6,6 +6,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
+import type { PlatformCapability } from '../platform/capabilities.js';
 import { parseCookies } from '../server/admin/session.js';
 import {
   PORTAL_COOKIE,
@@ -50,6 +51,22 @@ import {
   type JourneyManagerNoticeCode,
 } from './journey-manager-presenter.js';
 import type { PortalJourneyManagerService } from './journey-manager-service.js';
+import {
+  CONTENT_CONTROL_ROOM_ROUTE,
+  presentContentControlRoom,
+} from './content-control-room-presenter.js';
+import { renderContentControlRoomBody } from './content-control-room-view.js';
+import type { PortalCompanyContentService } from './company-content-service.js';
+import {
+  CONVERSION_INBOX_MAX_CONVERSATIONS,
+  CONVERSION_INBOX_ROUTE,
+  normaliseConversionInboxFilters,
+  presentConversionInbox,
+  type ConversionInboxThreadSnapshot,
+} from './conversion-inbox-presenter.js';
+import { renderConversionInboxBody } from './conversion-inbox-view.js';
+import type { InboxConversationQuery } from '../inbox-pg/read-model.js';
+import type { InboxConversationPage } from '../inbox-pg/types.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
 import {
   CRM_PORTAL_ROUTES,
@@ -121,6 +138,26 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   crm: PortalCrmService;
   /** Exact, read-mostly conversion definition manager. Omitted until composed and ready. */
   journeys?: PortalJourneyManagerService;
+  /** Company-owned immutable content catalogue. It exposes no provider or publish operation. */
+  companyContent?: PortalCompanyContentService;
+  /** TEST-only conversion queue. Thread detail remains a separate optional projection. */
+  inbox?: PortalInboxReadBoundary;
+}
+
+/**
+ * Portal-facing inbox read boundary. Implementations own session resolution and
+ * RLS context; the router never accepts a browser-supplied workspace id.
+ */
+export interface PortalInboxReadBoundary {
+  listConversations(
+    identity: PortalCrmRequestIdentity,
+    query?: InboxConversationQuery,
+  ): Promise<InboxConversationPage | null>;
+  /** A real workspace-scoped projection only. Absence keeps the detail pane empty. */
+  thread?(
+    identity: PortalCrmRequestIdentity,
+    conversationId: string,
+  ): Promise<ConversionInboxThreadSnapshot | null>;
 }
 
 export type PortalDeps = LegacyPortalDeps | PostgresPortalDeps;
@@ -273,6 +310,7 @@ function crmPage(
     capabilities: new Set([
       'workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read',
       ...((deps.kind === 'postgres' && deps.journeys) ? ['journeys.read'] as const : []),
+      ...optionalPortalCapabilities(deps),
     ]),
     billingAvailable: deps.kind === 'legacy' && !!deps.billing,
     crmAvailable: true,
@@ -295,6 +333,7 @@ function journeyManagerPage(
     productProfile: deps.productProfile,
     capabilities: new Set([
       'workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read', 'journeys.read',
+      ...optionalPortalCapabilities(deps),
     ]),
     billingAvailable: false,
     crmAvailable: true,
@@ -317,6 +356,7 @@ function journeyBoardPage(
     productProfile: deps.productProfile,
     capabilities: new Set([
       'workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read', 'journeys.read',
+      ...optionalPortalCapabilities(deps),
     ]),
     billingAvailable: deps.kind === 'legacy' && !!deps.billing,
     crmAvailable: true,
@@ -330,6 +370,40 @@ function journeySubnav(active: 'board' | 'rules'): string {
   return `<nav aria-label="Journey workspace" style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap"><a class="button ${active === 'board' ? '' : 'secondary'} compact" href="${JOURNEY_BOARD_ROUTE}"${active === 'board' ? ' aria-current="page"' : ''}>Live board</a><a class="button ${active === 'rules' ? '' : 'secondary'} compact" href="${JOURNEY_MANAGER_ROUTE}"${active === 'rules' ? ' aria-current="page"' : ''}>Journey rules</a></nav>`;
 }
 
+function optionalPortalCapabilities(deps: PortalDeps): readonly PlatformCapability[] {
+  if (deps.kind !== 'postgres') return [];
+  return [
+    ...(deps.companyContent ? ['content.drafts.read'] as const : []),
+    ...(deps.inbox ? ['conversations.read'] as const : []),
+  ];
+}
+
+function operationalPage(
+  workspaceName: string,
+  body: string,
+  deps: PostgresPortalDeps,
+  active: 'content' | 'inbox',
+  csrfToken: string,
+): string {
+  const label = active === 'content' ? 'Content Control' : 'Conversion Inbox';
+  return appShell({
+    title: `${deps.productProfile?.productName ?? 'Relaunch72'} ${label} — ${workspaceName}`,
+    tenantName: workspaceName,
+    active,
+    productProfile: deps.productProfile,
+    capabilities: new Set([
+      'workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read',
+      ...(deps.journeys ? ['journeys.read'] as const : []),
+      ...optionalPortalCapabilities(deps),
+    ]),
+    billingAvailable: false,
+    crmAvailable: true,
+    mode: 'crm',
+    csrfToken,
+    body,
+  });
+}
+
 function portalStatusPage(
   deps: PortalDeps,
   sessionToken: string,
@@ -338,7 +412,7 @@ function portalStatusPage(
     message: string;
     backHref?: string;
     backLabel?: string;
-    active?: 'overview' | 'crm' | 'journeys' | 'billing';
+    active?: 'overview' | 'crm' | 'journeys' | 'content' | 'inbox' | 'billing';
     crmAvailable?: boolean;
   },
 ): string {
@@ -357,11 +431,13 @@ function portalStatusPage(
         ? ['crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read'] as const
         : []),
       ...((deps.kind === 'postgres' && deps.journeys) ? ['journeys.read'] as const : []),
+      ...optionalPortalCapabilities(deps),
       ...((deps.kind === 'legacy' && !!deps.billing) ? ['billing.read'] as const : []),
     ]),
     billingAvailable: deps.kind === 'legacy' && !!deps.billing,
     crmAvailable: options.crmAvailable ?? !!deps.crm,
-    mode: options.active === 'crm' || options.active === 'journeys' ? 'crm' : 'sandbox',
+    mode: options.active === 'crm' || options.active === 'journeys'
+      || options.active === 'content' || options.active === 'inbox' ? 'crm' : 'sandbox',
     csrfToken: portalCsrfToken(deps.sessionSecret, sessionToken),
     body,
   });
@@ -666,6 +742,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         capabilities: new Set([
           'workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read',
           ...(deps.journeys ? ['journeys.read'] as const : []),
+          ...optionalPortalCapabilities(deps),
         ]),
         crmAvailable: true,
         mode: 'crm',
@@ -677,6 +754,136 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         title: 'Growth HQ temporarily unavailable',
         message: 'No data was changed. Try again shortly.',
         active: 'overview',
+      }));
+    }
+  }
+
+  // ── company-owned content control: immutable catalogue evidence only ──
+  if (deps.kind === 'postgres' && p === CONTENT_CONTROL_ROOM_ROUTE && method === 'GET') {
+    if (!deps.companyContent) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+      title: 'Content Control not connected',
+      message: 'The company-owned content catalogue is not enabled for this workspace.',
+      active: 'content',
+    }));
+    try {
+      const outcome = await deps.companyContent.snapshot(crmIdentity(sessionToken, deps), {
+        limit: 100,
+      });
+      if (!outcome.ok) {
+        const status = outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden'
+          ? 403
+          : outcome.kind === 'validation'
+            ? 400
+            : outcome.kind === 'not_found'
+              ? 404
+              : 503;
+        return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+          title: status === 503 ? 'Content Control temporarily unavailable' : 'Content Control not available',
+          message: outcome.message,
+          active: 'content',
+          backHref: '/portal',
+          backLabel: 'Return to Growth HQ',
+        }));
+      }
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      const view = presentContentControlRoom(outcome.snapshot.catalog, {
+        workspaceName: outcome.snapshot.workspace.workspaceName,
+        asOf: outcome.snapshot.workspace.snapshotAt,
+        filters: {
+          query: url.searchParams.get('q') ?? '',
+          channel: url.searchParams.get('channel') ?? '',
+          format: url.searchParams.get('format') ?? '',
+        },
+      });
+      return sendHtml(res, 200, operationalPage(
+        outcome.snapshot.workspace.workspaceName,
+        renderContentControlRoomBody(view),
+        deps,
+        'content',
+        csrfToken,
+      ));
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Content Control temporarily unavailable',
+        message: 'No approval, version or provider state was changed. Try again shortly.',
+        active: 'content',
+        backHref: '/portal',
+        backLabel: 'Return to Growth HQ',
+      }));
+    }
+  }
+
+  // ── TEST conversion inbox: queue read plus an explicitly separate detail projection ──
+  if (deps.kind === 'postgres' && p === CONVERSION_INBOX_ROUTE && method === 'GET') {
+    if (!deps.inbox) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+      title: 'Conversion Inbox not connected',
+      message: 'The TEST/SIMULATED conversation read service is not enabled for this workspace.',
+      active: 'inbox',
+    }));
+    const filters = normaliseConversionInboxFilters({
+      query: url.searchParams.get('q') ?? '',
+      channel: url.searchParams.get('channel') ?? '',
+      queue: url.searchParams.get('queue') ?? '',
+    });
+    const requestedConversation = (url.searchParams.get('conversation') ?? '').toLowerCase();
+    const conversationId = CRM_OBJECT_ID.test(requestedConversation)
+      ? requestedConversation
+      : undefined;
+    const identity = crmIdentity(sessionToken, deps);
+    try {
+      const [shell, page] = await Promise.all([
+        deps.crm.workspaceShell ? deps.crm.workspaceShell(identity) : deps.crm.snapshot(identity),
+        deps.inbox.listConversations(identity, {
+          limit: CONVERSION_INBOX_MAX_CONVERSATIONS,
+          channel: filters.channel === 'all' ? null : filters.channel,
+          state: filters.queue === 'open' ? 'open' : null,
+          search: filters.query || null,
+        }),
+      ]);
+      if (!shell || !page || page.workspaceId !== shell.workspace.id) {
+        return sendHtml(res, 403, portalStatusPage(deps, sessionToken, {
+          title: 'Conversion Inbox workspace not available',
+          message: 'This session cannot read a matching workspace-scoped TEST conversation queue.',
+          active: 'inbox',
+          backHref: '/portal',
+          backLabel: 'Return to Growth HQ',
+        }));
+      }
+
+      const options = {
+        workspaceName: shell.workspace.name,
+        filters: {
+          query: filters.query,
+          channel: filters.channel,
+          queue: filters.queue,
+          conversationId,
+        },
+      } as const;
+      const queueOnly = presentConversionInbox({ page, threads: [] }, options);
+      const selectedConversationId = queueOnly.conversations.find((item) => item.selected)?.conversationId;
+      let threads: readonly ConversionInboxThreadSnapshot[] = [];
+      if (selectedConversationId && deps.inbox.thread
+          && page.conversations.some((item) => item.conversationId === selectedConversationId)) {
+        const thread = await deps.inbox.thread(identity, selectedConversationId);
+        // A mismatched or invisible projection never reaches the presenter.
+        if (thread?.conversationId === selectedConversationId) threads = [thread];
+      }
+      const view = presentConversionInbox({ page, threads }, options);
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      return sendHtml(res, 200, operationalPage(
+        shell.workspace.name,
+        renderConversionInboxBody(view),
+        deps,
+        'inbox',
+        csrfToken,
+      ));
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Conversion Inbox temporarily unavailable',
+        message: 'No draft was queued and no message left Growth HQ. Try again shortly.',
+        active: 'inbox',
+        backHref: '/portal',
+        backLabel: 'Return to Growth HQ',
       }));
     }
   }

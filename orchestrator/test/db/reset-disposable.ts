@@ -1,3 +1,4 @@
+import '../../src/config.js';
 import { loadDatabaseConfig } from '../../src/db/config.js';
 import { createDatabasePool } from '../../src/db/pool.js';
 import {
@@ -7,6 +8,8 @@ import {
 
 const APP_ROLES = [
   'r72_commerce_definer',
+  'r72_content_adapter',
+  'r72_content_command',
   'r72_crm_command',
   'r72_external_event_definer',
   'r72_external_event_command',
@@ -17,6 +20,7 @@ const APP_ROLES = [
   'r72_onboarding_definer',
   'r72_owner',
   'r72_provisioning_command',
+  'r72_provider_operation_definer',
   'r72_public',
   'r72_readonly',
   'r72_security_definer',

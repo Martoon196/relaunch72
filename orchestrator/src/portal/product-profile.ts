@@ -189,8 +189,11 @@ export const PROPERTY_PREDATOR_GROWTH_PROFILE = createProfile({
     accent: '#00e5cc', accentDeep: '#00e5cc', accentSoft: '#0a2c2c',
     nav: '#050608', navRaised: '#111318', navLine: '#1e2430', navText: '#eef1f7', navMuted: '#9aa6ba',
   },
-  visibleNavigation: ['overview', 'crm', 'journeys'],
-  moduleLabels: { overview: 'Today', crm: 'Leads', journeys: 'Journeys' },
+  visibleNavigation: ['overview', 'crm', 'journeys', 'content', 'inbox'],
+  moduleLabels: {
+    overview: 'Today', crm: 'Leads', journeys: 'Journeys',
+    content: 'Content', inbox: 'Inbox',
+  },
   journeyBlueprints: [
     {
       id: 'property-predator-self-serve', label: 'Self-serve conversion',
@@ -213,11 +216,10 @@ export const PROPERTY_PREDATOR_GROWTH_PROFILE = createProfile({
       id: 'content',
       label: 'Affiliate Stash content machine',
       summary: 'Reuse its brand-trained generation, swipe library and artwork catalogue; Growth HQ will orchestrate reviewed items instead of rebuilding it.',
-      state: 'reuse',
-      href: 'https://propertypredator.com/affiliate',
+      state: 'foundation',
     },
     { id: 'social', label: 'Social machine', summary: 'Broad publishing with provider-confirmed outcomes.', state: 'planned' },
-    { id: 'inbox', label: 'Conversion inbox', summary: 'Email, WhatsApp, SMS, Messenger and Instagram.', state: 'planned' },
+    { id: 'inbox', label: 'Conversion inbox', summary: 'Approval-led email, WhatsApp, SMS, Messenger and Instagram test rails.', state: 'foundation' },
     { id: 'webinars', label: 'Predator Briefing', summary: 'Live registration, attendance and follow-up journeys.', state: 'planned' },
     { id: 'automations', label: 'Conversion recipes', summary: 'Approval-led sequences with visible stop rules.', state: 'planned' },
   ],

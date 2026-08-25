@@ -37,8 +37,7 @@ test('known portal product profiles resolve as immutable presentation contracts'
       id: 'content',
       label: 'Affiliate Stash content machine',
       summary: 'Reuse its brand-trained generation, swipe library and artwork catalogue; Growth HQ will orchestrate reviewed items instead of rebuilding it.',
-      state: 'reuse',
-      href: 'https://propertypredator.com/affiliate',
+      state: 'foundation',
     },
   );
 });
@@ -49,7 +48,10 @@ test('product profiles fail closed and cannot carry authorization state', () => 
   assert.equal('capabilities' in PROPERTY_PREDATOR_GROWTH_PROFILE, false);
   assert.equal('permissions' in PROPERTY_PREDATOR_GROWTH_PROFILE, false);
   assert.equal('providerConnections' in PROPERTY_PREDATOR_GROWTH_PROFILE, false);
-  assert.deepEqual(PROPERTY_PREDATOR_GROWTH_PROFILE.visibleNavigation, ['overview', 'crm', 'journeys']);
+  assert.deepEqual(
+    PROPERTY_PREDATOR_GROWTH_PROFILE.visibleNavigation,
+    ['overview', 'crm', 'journeys', 'content', 'inbox'],
+  );
 });
 
 test('Property Predator blueprint labels keep product-led and literal LAPS journeys distinct', () => {
@@ -73,6 +75,8 @@ test('Property Predator sign-in advertises only its visible workspace modules', 
   assert.match(html, /<span>Today<\/span>/);
   assert.match(html, /<span>Leads<\/span>/);
   assert.match(html, /<span>Journeys<\/span>/);
+  assert.match(html, /<span>Content<\/span>/);
+  assert.match(html, /<span class="planned">Inbox · preview<\/span>/);
   assert.match(html, /fonts\.googleapis\.com\/css2\?family=Cormorant\+Garamond/);
   assert.match(html, /family=Syne/);
   assert.match(html, /family=IBM\+Plex\+Mono/);

@@ -1,3 +1,4 @@
+import '../../src/config.js';
 import {
   assertDisposableTestDatabase,
   DATABASE_INTEGRATION_CONFIRMATION,
@@ -25,3 +26,4 @@ await import('./growth-evidence-rls.integration.test.js');
 await import('./legacy-lead-import.integration.test.js');
 await import('./legacy-lead-board-materialization.integration.test.js');
 await import('./company-content.integration.test.js');
+await import('./inbox-provider.integration.test.js');

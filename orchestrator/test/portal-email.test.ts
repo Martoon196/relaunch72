@@ -11,6 +11,8 @@ import { JsonCrmStore } from '../src/crm/store.js';
 import { JsonAccountStore } from '../src/portal/accounts.js';
 import type { PortalAuthService } from '../src/portal/auth-service.js';
 import type { PortalCrmService } from '../src/portal/crm-service.js';
+import type { PortalCompanyContentService } from '../src/portal/company-content-service.js';
+import type { PortalInboxReadBoundary } from '../src/portal/router.js';
 
 test('PostgreSQL portal composition has no JSON dashboard, login or campaign dependency', () => {
   const auth: PortalAuthService = {
@@ -24,17 +26,29 @@ test('PostgreSQL portal composition has no JSON dashboard, login or campaign dep
     moveOpportunity: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
     completeTask: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
   };
+  const companyContent: PortalCompanyContentService = {
+    snapshot: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+    requestApproval: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+    decideApproval: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+  };
+  const inbox: PortalInboxReadBoundary = {
+    listConversations: async () => null,
+  };
 
   const trustedClientAddress = (req: Parameters<NonNullable<ReturnType<typeof buildPostgresPortalDeps>['trustedClientAddress']>>[0]) => req.socket.remoteAddress;
   const portal = buildPostgresPortalDeps({
-    sessionSecret: 'secret', secure: true, auth, crm, trustedClientAddress,
+    sessionSecret: 'secret', secure: true, auth, crm, companyContent, inbox, trustedClientAddress,
   });
   const safeDefault = buildPostgresPortalDeps({ sessionSecret: 'secret', secure: true, auth, crm });
 
   assert.equal(portal.kind, 'postgres');
   assert.equal(portal.auth, auth);
   assert.equal(portal.crm, crm);
+  assert.equal(portal.companyContent, companyContent);
+  assert.equal(portal.inbox, inbox);
   assert.equal(portal.trustedClientAddress, trustedClientAddress);
+  assert.equal(safeDefault.companyContent, undefined, 'an uncomposed content command module stays absent');
+  assert.equal(safeDefault.inbox, undefined, 'an uncomposed inbox read module stays absent');
   assert.equal(safeDefault.trustedClientAddress, undefined, 'no socket or proxy inference is configured implicitly');
   assert.equal('login' in portal, false);
   assert.equal('dashboard' in portal, false);

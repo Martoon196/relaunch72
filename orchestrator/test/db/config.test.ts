@@ -120,6 +120,64 @@ test('CRM commands have a dedicated verified role URL and pool identity', async 
   await pool.end();
 });
 
+test('company-content approval commands have a dedicated verified role configuration', async () => {
+  assert.ok(DATABASE_ROLES.includes('contentCommand'));
+  assert.throws(
+    () => loadDatabaseConfig('contentCommand', {
+      NODE_ENV: 'production',
+      DATABASE_CONTENT_COMMAND_URL:
+        'postgresql://r72_crm_command:secret@database.example/relaunch72?sslmode=require',
+    }),
+    /must authenticate as the least-privilege r72_content_command role/,
+  );
+
+  const config = loadDatabaseConfig('contentCommand', {
+    NODE_ENV: 'production',
+    DATABASE_CONTENT_COMMAND_URL:
+      'postgresql://r72_content_command:secret@database.example/relaunch72?sslmode=require',
+    DATABASE_CONTENT_COMMAND_POOL_MAX: '2',
+  });
+  assert.equal(config.sourceEnv, 'DATABASE_CONTENT_COMMAND_URL');
+  assert.equal(config.expectedDatabaseUser, 'r72_content_command');
+  assert.equal(config.applicationName, 'relaunch72-content-command');
+  assert.equal(config.maxConnections, 2);
+
+  const pool = createDatabasePool(config, { onBackgroundError: () => undefined });
+  assert.equal(pool.options.application_name, 'relaunch72-content-command');
+  assert.equal(pool.options.max, 2);
+  assert.equal(typeof pool.options.verify, 'function');
+  await pool.end();
+});
+
+test('company-content source intake has a separate verified adapter role configuration', async () => {
+  assert.ok(DATABASE_ROLES.includes('contentAdapter'));
+  assert.throws(
+    () => loadDatabaseConfig('contentAdapter', {
+      NODE_ENV: 'production',
+      DATABASE_CONTENT_ADAPTER_URL:
+        'postgresql://r72_content_command:secret@database.example/relaunch72?sslmode=require',
+    }),
+    /must authenticate as the least-privilege r72_content_adapter role/,
+  );
+
+  const config = loadDatabaseConfig('contentAdapter', {
+    NODE_ENV: 'production',
+    DATABASE_CONTENT_ADAPTER_URL:
+      'postgresql://r72_content_adapter:secret@database.example/relaunch72?sslmode=require',
+    DATABASE_CONTENT_ADAPTER_POOL_MAX: '2',
+  });
+  assert.equal(config.sourceEnv, 'DATABASE_CONTENT_ADAPTER_URL');
+  assert.equal(config.expectedDatabaseUser, 'r72_content_adapter');
+  assert.equal(config.applicationName, 'relaunch72-content-adapter');
+  assert.equal(config.maxConnections, 2);
+
+  const pool = createDatabasePool(config, { onBackgroundError: () => undefined });
+  assert.equal(pool.options.application_name, 'relaunch72-content-adapter');
+  assert.equal(pool.options.max, 2);
+  assert.equal(typeof pool.options.verify, 'function');
+  await pool.end();
+});
+
 test('legacy imports have a dedicated verified operator role and pool identity', async () => {
   assert.ok(DATABASE_ROLES.includes('importCommand'));
   assert.throws(

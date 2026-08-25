@@ -308,6 +308,11 @@ async function main(): Promise<void> {
     try {
       postgresPortal = await buildPgPortalPlatform(process.env);
       console.log('PostgreSQL portal identity and CRM contracts are current and ready.');
+      if (postgresPortal.companyContent) {
+        console.log('Company content catalogue and protected approval commands are ready.');
+      } else {
+        console.warn('⚠  Company content controls remain unavailable; the dedicated content command identity is absent or did not pass readiness.');
+      }
     } catch (error) {
       // No legacy-cookie fallback in requested database mode. Payments may stay
       // live for liveness, but the customer portal is deliberately not mounted.
@@ -331,6 +336,8 @@ async function main(): Promise<void> {
         auth: postgresPortal.auth,
         crm: postgresPortal.crm,
         journeys: postgresPortal.journeys,
+        companyContent: postgresPortal.companyContent,
+        inbox: postgresPortal.inbox,
         productProfile: portalProductProfile,
       });
       console.log('Canonical PostgreSQL client portal mounted at /portal; JSON portal stores are not composed.');

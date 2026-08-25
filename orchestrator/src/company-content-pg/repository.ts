@@ -274,8 +274,7 @@ export class CompanyContentPgRepository {
        FROM app.command_receipts
        WHERE actor_user_id = app_private.current_user_id()
          AND command_name = $1
-         AND idempotency_key = $2
-       FOR UPDATE`,
+         AND idempotency_key = $2`,
       [input.commandName, input.commandKey],
     );
     const row = existing.rows[0];
@@ -355,14 +354,23 @@ export class CompanyContentPgRepository {
          ORDER BY version.version_number DESC, version.id
          LIMIT 1
        ) AS latest ON true
-       WHERE item.source_system = $1 AND item.source_item_id = $2
-       FOR UPDATE OF item`,
+       WHERE item.source_system = $1 AND item.source_item_id = $2`,
       [sourceSystem, sourceItemId],
     );
     return result.rows[0] ? lockedItem(result.rows[0]) : null;
   }
 
   async lockContentItem(contentItemId: string): Promise<LockedCompanyContentItem | null> {
+    await this.transaction.query(
+      `/* company-content.lock-item-identity */
+       SELECT pg_catalog.pg_advisory_xact_lock(
+         pg_catalog.hashtextextended(
+           'company-content-item:' || app_private.current_workspace_id()::text || ':' || $1,
+           7200021
+         )
+       )`,
+      [contentItemId],
+    );
     const result = await this.transaction.query<LockedItemRow>(
       `/* company-content.lock-item */
        SELECT item.id AS "contentItemId",
@@ -379,8 +387,7 @@ export class CompanyContentPgRepository {
          ORDER BY version.version_number DESC, version.id
          LIMIT 1
        ) AS latest ON true
-       WHERE item.id = $1
-       FOR UPDATE OF item`,
+       WHERE item.id = $1`,
       [contentItemId],
     );
     return result.rows[0] ? lockedItem(result.rows[0]) : null;
@@ -480,6 +487,16 @@ export class CompanyContentPgRepository {
     contentItemId: string,
     contentVersionId: string,
   ): Promise<LockedCompanyContentVersion | null> {
+    await this.transaction.query(
+      `/* company-content.lock-version-item */
+       SELECT pg_catalog.pg_advisory_xact_lock(
+         pg_catalog.hashtextextended(
+           'company-content-item:' || app_private.current_workspace_id()::text || ':' || $1,
+           7200021
+         )
+       )`,
+      [contentItemId],
+    );
     const result = await this.transaction.query<VersionRow>(
       `/* company-content.lock-version */
        SELECT version.content_item_id AS "contentItemId",
@@ -498,8 +515,7 @@ export class CompanyContentPgRepository {
        JOIN app.company_content_versions AS version
          ON version.workspace_id = item.workspace_id
         AND version.content_item_id = item.id
-       WHERE item.id = $1 AND version.id = $2
-       FOR UPDATE OF item`,
+       WHERE item.id = $1 AND version.id = $2`,
       [contentItemId, contentVersionId],
     );
     return result.rows[0] ? lockedVersion(result.rows[0]) : null;
@@ -559,6 +575,16 @@ export class CompanyContentPgRepository {
   async lockApprovalRequest(
     approvalRequestId: string,
   ): Promise<LockedCompanyContentApprovalRequest | null> {
+    await this.transaction.query(
+      `/* company-content.lock-approval-identity */
+       SELECT pg_catalog.pg_advisory_xact_lock(
+         pg_catalog.hashtextextended(
+           'company-content-approval:' || app_private.current_workspace_id()::text || ':' || $1,
+           7200021
+         )
+       )`,
+      [approvalRequestId],
+    );
     const result = await this.transaction.query<ApprovalRequestRow>(
       `/* company-content.lock-approval-request */
        SELECT request.id AS "approvalRequestId",
@@ -583,8 +609,7 @@ export class CompanyContentPgRepository {
        LEFT JOIN app.company_content_approval_decisions AS decision
          ON decision.workspace_id = request.workspace_id
         AND decision.approval_request_id = request.id
-       WHERE request.id = $1
-       FOR UPDATE OF item, request`,
+       WHERE request.id = $1`,
       [approvalRequestId],
     );
     return result.rows[0] ? approvalRequest(result.rows[0]) : null;

@@ -19,7 +19,12 @@ import {
 
 const skip = testDatabaseSkipReason();
 
-function contentRunner(pool: Pool): CompanyContentTransactionRunner {
+type CompanyContentRole = 'r72_content_adapter' | 'r72_content_command';
+
+function contentRunner(
+  pool: Pool,
+  role: CompanyContentRole,
+): CompanyContentTransactionRunner {
   return {
     async run<T>(
       context: DatabaseRequestContext,
@@ -31,7 +36,8 @@ function contentRunner(pool: Pool): CompanyContentTransactionRunner {
         const isolation = options.serializable ? 'SERIALIZABLE' : 'READ COMMITTED';
         const access = options.readOnly ? 'READ ONLY' : 'READ WRITE';
         await client.query(`BEGIN ISOLATION LEVEL ${isolation} ${access}`);
-        await client.query('SET LOCAL ROLE r72_content_command');
+        // Role is a compile-time allowlist, never browser or fixture input.
+        await client.query(`SET LOCAL ROLE ${role}`);
         await client.query(
           `SELECT set_config('app.user_id', $1, true),
                   set_config('app.workspace_id', $2, true),
@@ -54,7 +60,7 @@ function contentRunner(pool: Pool): CompanyContentTransactionRunner {
 
 async function roleQuery(
   pool: Pool,
-  role: 'r72_web' | 'r72_content_command',
+  role: 'r72_web' | CompanyContentRole,
   context: DatabaseRequestContext,
   sql: string,
   values: readonly unknown[] = [],
@@ -144,8 +150,11 @@ test('company content is isolated, immutable, replay-safe and marks superseded a
         workspaceA, organizationId, ownerA, marketerA, workspaceB, ownerB,
       ]);
 
-    const service = new CompanyContentService({
-      transactionRunner: contentRunner(pool),
+    const adapterService = new CompanyContentService({
+      transactionRunner: contentRunner(pool, 'r72_content_adapter'),
+    });
+    const commandService = new CompanyContentService({
+      transactionRunner: contentRunner(pool, 'r72_content_command'),
     });
     const checkedAt = new Date(Date.now() - 60_000);
     const firstCommand = {
@@ -164,30 +173,40 @@ test('company content is isolated, immutable, replay-safe and marks superseded a
         expiresAt: new Date(checkedAt.getTime() + 5 * 60_000).toISOString(),
       },
     };
-    const first = await service.createVersion(ownerContext, firstCommand);
-    assert.equal((await service.createVersion(ownerContext, firstCommand)).disposition, 'replayed');
+    const first = await adapterService.createVersion(ownerContext, firstCommand);
+    assert.equal((await adapterService.createVersion(ownerContext, firstCommand)).disposition, 'replayed');
     await assert.rejects(
-      service.createVersion(ownerContext, { ...firstCommand, content: 'changed bytes' }),
+      adapterService.createVersion(ownerContext, { ...firstCommand, content: 'changed bytes' }),
       CompanyContentIdempotencyConflictError,
     );
+    await expectPostgresError(commandService.createVersion(ownerContext, {
+      ...firstCommand,
+      commandKey: 'approval-role-cannot-create-version',
+      source: { ...firstCommand.source, version: 'forbidden-command-role' },
+    }), '42501');
 
-    const request = await service.requestApproval(marketerContext, {
+    const request = await commandService.requestApproval(marketerContext, {
       commandKey: 'integration-request-v1',
       contentItemId: first.contentItemId,
       contentVersionId: first.contentVersionId,
       reviewNote: 'Ready for manager review',
     });
-    await expectPostgresError(service.decideApproval(marketerContext, {
+    await expectPostgresError(commandService.decideApproval(marketerContext, {
       commandKey: 'marketer-cannot-approve',
       approvalRequestId: request.approvalRequestId,
       decision: 'approved',
     }), '42501');
-    await service.decideApproval(ownerContext, {
+    await commandService.decideApproval(ownerContext, {
       commandKey: 'owner-approval-v1',
       approvalRequestId: request.approvalRequestId,
       decision: 'approved',
     });
-    const approvedCatalog = await service.listCatalog(ownerContext, { limit: 10 });
+    await expectPostgresError(adapterService.requestApproval(ownerContext, {
+      commandKey: 'adapter-cannot-request-approval',
+      contentItemId: first.contentItemId,
+      contentVersionId: first.contentVersionId,
+    }), '42501');
+    const approvedCatalog = await commandService.listCatalog(ownerContext, { limit: 10 });
     assert.deepEqual(
       approvedCatalog.items.map((item) => [
         item.approvalStatus, item.sourceFresh, item.publishable,
@@ -200,7 +219,7 @@ test('company content is isolated, immutable, replay-safe and marks superseded a
       checkedAtSql: string,
       expiresAtSql: string,
     ) => roleQuery(
-      pool, 'r72_content_command', ownerContext,
+      pool, 'r72_content_adapter', ownerContext,
       `INSERT INTO app.company_content_source_attestations (
          id, workspace_id, content_item_id, content_version_id,
          source_system, source_item_id, source_version,
@@ -228,7 +247,7 @@ test('company content is isolated, immutable, replay-safe and marks superseded a
       "statement_timestamp() - interval '1 minute'",
     ), '23514');
 
-    const second = await service.createVersion(ownerContext, {
+    const second = await adapterService.createVersion(ownerContext, {
       ...firstCommand,
       commandKey: 'integration-content-v2',
       contentItemId: first.contentItemId,
@@ -239,11 +258,11 @@ test('company content is isolated, immutable, replay-safe and marks superseded a
     });
     assert.equal(second.versionNumber, 2);
     assert.deepEqual(
-      (await service.listVersionApprovalStates(ownerContext, first.contentItemId))
+      (await commandService.listVersionApprovalStates(ownerContext, first.contentItemId))
         .map((version) => [version.versionNumber, version.approvalStatus, version.approvalStale]),
       [[2, 'unrequested', false], [1, 'approved', true]],
     );
-    const catalog = await service.listCatalog(ownerContext, { limit: 10 });
+    const catalog = await commandService.listCatalog(ownerContext, { limit: 10 });
     assert.deepEqual(
       catalog.items.map((item) => [
         item.versionNumber, item.approvalStatus, item.approvalStale,
@@ -252,9 +271,32 @@ test('company content is isolated, immutable, replay-safe and marks superseded a
       [[2, 'stale', true, true, false]],
     );
 
-    assert.deepEqual(await service.listCatalog(otherContext), {
+    assert.deepEqual(await roleQuery(
+      pool, 'r72_content_adapter', ownerContext,
+      `SELECT command_name AS "commandName"
+       FROM app.command_receipts ORDER BY command_name, id`,
+    ), [
+      { commandName: 'companyContent.createVersion' },
+      { commandName: 'companyContent.createVersion' },
+    ]);
+    assert.deepEqual(await roleQuery(
+      pool, 'r72_content_command', ownerContext,
+      `SELECT command_name AS "commandName"
+       FROM app.command_receipts ORDER BY command_name, id`,
+    ), [{ commandName: 'companyContent.decideApproval' }]);
+    assert.deepEqual(await roleQuery(
+      pool, 'r72_content_command', marketerContext,
+      `SELECT command_name AS "commandName"
+       FROM app.command_receipts ORDER BY command_name, id`,
+    ), [{ commandName: 'companyContent.requestApproval' }]);
+
+    assert.deepEqual(await commandService.listCatalog(otherContext), {
       items: [], nextCursor: null,
     });
+    assert.deepEqual(await roleQuery(
+      pool, 'r72_content_adapter', otherContext,
+      'SELECT count(*)::integer AS count FROM app.company_content_versions',
+    ), [{ count: 0 }]);
     assert.deepEqual(await roleQuery(
       pool, 'r72_web', otherContext,
       'SELECT count(*)::integer AS count FROM app.company_content_versions',

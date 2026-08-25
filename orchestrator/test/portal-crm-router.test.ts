@@ -216,7 +216,7 @@ test('real CRM pages render through the authenticated service boundary and task 
   const contacts = await call('GET', '/portal/crm/contacts', deps(crm));
   assert.equal(contacts.statusCode, 200);
   assert.match(contacts.body, /Create lead in CRM/);
-  assert.match(contacts.body, /Private CRM/);
+  assert.match(contacts.body, /Private workspace/);
   assert.match(contacts.body, /CRM records/);
   assert.doesNotMatch(contacts.body, /Mock workspace/);
   assert.match(contacts.body, /href="\/portal\/crm\/contacts" aria-current="page"/);

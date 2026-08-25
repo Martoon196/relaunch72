@@ -3,8 +3,9 @@
 -- polymorphic approval surface. Every request and decision is tied through
 -- same-workspace foreign keys to one exact, hash-addressed content version.
 
-DO $content_command_role$
+DO $content_roles$
 DECLARE
+  checked_role text;
   unexpected_parent text;
   unexpected_member text;
 BEGIN
@@ -15,73 +16,106 @@ BEGIN
   END IF;
 
   IF NOT EXISTS (
-    SELECT 1
-    FROM pg_catalog.pg_roles
-    WHERE rolname = 'r72_content_command'
-      AND rolcanlogin
-      AND NOT rolinherit
-      AND NOT rolsuper
-      AND NOT rolcreatedb
-      AND NOT rolcreaterole
-      AND NOT rolreplication
-      AND NOT rolbypassrls
+    SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'r72_content_adapter'
   ) THEN
-    RAISE EXCEPTION 'Unsafe role attributes: r72_content_command does not match the required capability shape';
+    CREATE ROLE r72_content_adapter LOGIN NOINHERIT;
   END IF;
 
-  REVOKE r72_owner, r72_security_definer FROM r72_content_command;
+  FOREACH checked_role IN ARRAY ARRAY[
+    'r72_content_command', 'r72_content_adapter'
+  ]
+  LOOP
+    IF NOT EXISTS (
+      SELECT 1
+      FROM pg_catalog.pg_roles
+      WHERE rolname = checked_role
+        AND rolcanlogin
+        AND NOT rolinherit
+        AND NOT rolsuper
+        AND NOT rolcreatedb
+        AND NOT rolcreaterole
+        AND NOT rolreplication
+        AND NOT rolbypassrls
+    ) THEN
+      RAISE EXCEPTION 'Unsafe role attributes: % does not match the required capability shape',
+        checked_role;
+    END IF;
+  END LOOP;
+
+  REVOKE r72_owner, r72_security_definer, r72_content_adapter
+    FROM r72_content_command;
+  REVOKE r72_owner, r72_security_definer, r72_content_command
+    FROM r72_content_adapter;
   REVOKE r72_content_command FROM
     r72_web, r72_public, r72_worker, r72_webhook, r72_readonly,
     r72_crm_command, r72_identity_command, r72_provisioning_command,
     r72_setup_delivery_command, r72_setup_reissue_command,
     r72_external_event_command, r72_import_command;
+  REVOKE r72_content_adapter FROM
+    r72_web, r72_public, r72_worker, r72_webhook, r72_readonly,
+    r72_crm_command, r72_identity_command, r72_provisioning_command,
+    r72_setup_delivery_command, r72_setup_reissue_command,
+    r72_external_event_command, r72_import_command;
 
-  SELECT parent.rolname
-    INTO unexpected_parent
-  FROM pg_catalog.pg_auth_members AS membership
-  JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
-  JOIN pg_catalog.pg_roles AS parent ON parent.oid = membership.roleid
-  WHERE member.rolname = 'r72_content_command'
-  LIMIT 1;
+  FOREACH checked_role IN ARRAY ARRAY[
+    'r72_content_command', 'r72_content_adapter'
+  ]
+  LOOP
+    unexpected_parent := NULL;
+    unexpected_member := NULL;
 
-  IF unexpected_parent IS NOT NULL THEN
-    RAISE EXCEPTION 'Unsafe content command membership: r72_content_command can SET ROLE %',
-      unexpected_parent;
-  END IF;
+    SELECT parent.rolname
+      INTO unexpected_parent
+    FROM pg_catalog.pg_auth_members AS membership
+    JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
+    JOIN pg_catalog.pg_roles AS parent ON parent.oid = membership.roleid
+    WHERE member.rolname = checked_role
+    LIMIT 1;
 
-  SELECT member.rolname
-    INTO unexpected_member
-  FROM pg_catalog.pg_auth_members AS membership
-  JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
-  JOIN pg_catalog.pg_roles AS parent ON parent.oid = membership.roleid
-  WHERE parent.rolname = 'r72_content_command'
-    AND member.rolname <> current_user
-  LIMIT 1;
+    IF unexpected_parent IS NOT NULL THEN
+      RAISE EXCEPTION 'Unsafe content role membership: % can SET ROLE %',
+        checked_role, unexpected_parent;
+    END IF;
 
-  IF unexpected_member IS NOT NULL THEN
-    RAISE EXCEPTION 'Unsafe content command grant: % can SET ROLE r72_content_command',
-      unexpected_member;
-  END IF;
+    SELECT member.rolname
+      INTO unexpected_member
+    FROM pg_catalog.pg_auth_members AS membership
+    JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
+    JOIN pg_catalog.pg_roles AS parent ON parent.oid = membership.roleid
+    WHERE parent.rolname = checked_role
+      AND member.rolname <> current_user
+    LIMIT 1;
 
-  EXECUTE format('GRANT r72_content_command TO %I', current_user);
-END
-$content_command_role$;
+    IF unexpected_member IS NOT NULL THEN
+      RAISE EXCEPTION 'Unsafe content role grant: % can SET ROLE %',
+        unexpected_member, checked_role;
+    END IF;
+
+    EXECUTE format('GRANT %I TO %I', checked_role, current_user);
+  END LOOP;
+END;
+$content_roles$;
 
 SET LOCAL ROLE r72_owner;
 
-REVOKE ALL ON SCHEMA app, app_private FROM r72_content_command;
-REVOKE ALL ON ALL TABLES IN SCHEMA app FROM r72_content_command;
-REVOKE ALL ON ALL TABLES IN SCHEMA app_private FROM r72_content_command;
-REVOKE ALL ON ALL FUNCTIONS IN SCHEMA app_private FROM r72_content_command;
-REVOKE CREATE ON SCHEMA public FROM r72_content_command;
-GRANT USAGE ON SCHEMA app, app_private TO r72_content_command;
+REVOKE ALL ON SCHEMA app, app_private
+  FROM r72_content_command, r72_content_adapter;
+REVOKE ALL ON ALL TABLES IN SCHEMA app
+  FROM r72_content_command, r72_content_adapter;
+REVOKE ALL ON ALL TABLES IN SCHEMA app_private
+  FROM r72_content_command, r72_content_adapter;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA app_private
+  FROM r72_content_command, r72_content_adapter;
+REVOKE CREATE ON SCHEMA public FROM r72_content_command, r72_content_adapter;
+GRANT USAGE ON SCHEMA app, app_private
+  TO r72_content_command, r72_content_adapter;
 GRANT EXECUTE ON FUNCTION app_private.current_workspace_id(),
   app_private.current_user_id(), app_private.current_actor_kind(),
   app_private.current_request_id(),
   app_private.has_active_workspace_membership(uuid, uuid),
   app_private.can_write_workspace(uuid, uuid),
   app_private.can_manage_workspace(uuid, uuid)
-TO r72_content_command;
+TO r72_content_command, r72_content_adapter;
 
 -- A logical item is only an identity. All editable/display facts live in an
 -- immutable version so there is no mutable "current content" row to approve.
@@ -148,7 +182,7 @@ CREATE TABLE app.company_content_versions (
     octet_length(content_body) BETWEEN 1 AND 1048576
   ),
   content_sha256 bytea GENERATED ALWAYS AS (
-    public.digest(pg_catalog.convert_to(content_body, 'UTF8'), 'sha256')
+    public.digest(content_body, 'sha256')
   ) STORED,
   blob_storage_key text NOT NULL CHECK (
     blob_storage_key = btrim(blob_storage_key)
@@ -339,7 +373,7 @@ BEGIN
   NEW.created_request_id := app_private.current_request_id();
   NEW.created_at := statement_timestamp();
   RETURN NEW;
-END
+END;
 $function$;
 
 CREATE FUNCTION app_private.guard_company_content_version_insert()
@@ -391,7 +425,7 @@ BEGIN
   END IF;
 
   RETURN NEW;
-END
+END;
 $function$;
 
 CREATE FUNCTION app_private.guard_company_content_approval_request_insert()
@@ -464,7 +498,7 @@ BEGIN
   END IF;
 
   RETURN NEW;
-END
+END;
 $function$;
 
 CREATE FUNCTION app_private.guard_company_content_source_attestation_insert()
@@ -478,7 +512,7 @@ BEGIN
   NEW.attested_request_id := app_private.current_request_id();
   NEW.created_at := statement_timestamp();
   RETURN NEW;
-END
+END;
 $function$;
 
 CREATE FUNCTION app_private.guard_company_content_approval_decision_insert()
@@ -515,7 +549,7 @@ BEGIN
   END IF;
 
   RETURN NEW;
-END
+END;
 $function$;
 
 CREATE FUNCTION app_private.reject_company_content_mutation()
@@ -527,7 +561,7 @@ AS $function$
 BEGIN
   RAISE EXCEPTION 'company content versions and approval records are append-only'
     USING ERRCODE = '55000';
-END
+END;
 $function$;
 
 -- Trigger functions are owned by r72_owner (the active migration role) and
@@ -576,7 +610,7 @@ BEGIN
       table_name || '_immutable', table_name
     );
   END LOOP;
-END
+END;
 $immutable_triggers$;
 
 DO $content_rls$
@@ -606,28 +640,53 @@ BEGIN
       table_name || '_member_select', table_name
     );
   END LOOP;
-END
+END;
 $content_rls$;
 
-CREATE POLICY company_content_items_command_insert
-  ON app.company_content_items FOR INSERT TO r72_content_command WITH CHECK (
+-- The source adapter can read and append only the exact intake facts required
+-- by createVersion. It cannot request or decide a human approval.
+DO $content_adapter_select$
+DECLARE
+  table_name text;
+BEGIN
+  FOREACH table_name IN ARRAY ARRAY[
+    'company_content_items', 'company_content_versions',
+    'company_content_source_attestations'
+  ]
+  LOOP
+    EXECUTE format(
+      'CREATE POLICY %I ON app.%I FOR SELECT TO r72_content_adapter
+       USING (
+         workspace_id = app_private.current_workspace_id()
+         AND app_private.has_active_workspace_membership(
+           app_private.current_user_id(), workspace_id
+         )
+       )',
+      table_name || '_adapter_select', table_name
+    );
+  END LOOP;
+END;
+$content_adapter_select$;
+
+CREATE POLICY company_content_items_adapter_insert
+  ON app.company_content_items FOR INSERT TO r72_content_adapter WITH CHECK (
     workspace_id = app_private.current_workspace_id()
     AND created_by_user_id = app_private.current_user_id()
     AND created_request_id = app_private.current_request_id()
     AND app_private.can_write_workspace(created_by_user_id, workspace_id)
   );
 
-CREATE POLICY company_content_versions_command_insert
-  ON app.company_content_versions FOR INSERT TO r72_content_command WITH CHECK (
+CREATE POLICY company_content_versions_adapter_insert
+  ON app.company_content_versions FOR INSERT TO r72_content_adapter WITH CHECK (
     workspace_id = app_private.current_workspace_id()
     AND created_by_user_id = app_private.current_user_id()
     AND created_request_id = app_private.current_request_id()
     AND app_private.can_write_workspace(created_by_user_id, workspace_id)
   );
 
-CREATE POLICY company_content_source_attestations_command_insert
+CREATE POLICY company_content_source_attestations_adapter_insert
   ON app.company_content_source_attestations
-  FOR INSERT TO r72_content_command WITH CHECK (
+  FOR INSERT TO r72_content_adapter WITH CHECK (
     workspace_id = app_private.current_workspace_id()
     AND attested_by_user_id = app_private.current_user_id()
     AND attested_request_id = app_private.current_request_id()
@@ -650,21 +709,56 @@ CREATE POLICY company_content_approval_decisions_manager_insert
     AND app_private.can_manage_workspace(decided_by_user_id, workspace_id)
   );
 
--- Reuse the established caller-scoped request hash/idempotency ledger. Only
--- this role's own receipts are visible and only terminal fields may change.
+-- Reuse the established caller-scoped request hash/idempotency ledger. The
+-- adapter can claim only createVersion; the approval role can claim only the
+-- two human-review commands. Neither role can see the other's receipts.
+CREATE POLICY command_receipts_content_adapter_select ON app.command_receipts
+  FOR SELECT TO r72_content_adapter USING (
+    workspace_id = app_private.current_workspace_id()
+    AND actor_user_id = app_private.current_user_id()
+    AND app_private.has_active_workspace_membership(actor_user_id, workspace_id)
+    AND command_name = 'companyContent.createVersion'
+  );
+CREATE POLICY command_receipts_content_adapter_insert ON app.command_receipts
+  FOR INSERT TO r72_content_adapter WITH CHECK (
+    workspace_id = app_private.current_workspace_id()
+    AND actor_user_id = app_private.current_user_id()
+    AND app_private.can_write_workspace(actor_user_id, workspace_id)
+    AND command_name = 'companyContent.createVersion'
+    AND status = 'started'
+  );
+CREATE POLICY command_receipts_content_adapter_update ON app.command_receipts
+  FOR UPDATE TO r72_content_adapter USING (
+    workspace_id = app_private.current_workspace_id()
+    AND actor_user_id = app_private.current_user_id()
+    AND app_private.can_write_workspace(actor_user_id, workspace_id)
+    AND command_name = 'companyContent.createVersion'
+    AND status = 'started'
+  ) WITH CHECK (
+    workspace_id = app_private.current_workspace_id()
+    AND actor_user_id = app_private.current_user_id()
+    AND app_private.can_write_workspace(actor_user_id, workspace_id)
+    AND command_name = 'companyContent.createVersion'
+    AND status IN ('succeeded', 'failed')
+  );
+
 CREATE POLICY command_receipts_content_select ON app.command_receipts
   FOR SELECT TO r72_content_command USING (
     workspace_id = app_private.current_workspace_id()
     AND actor_user_id = app_private.current_user_id()
     AND app_private.has_active_workspace_membership(actor_user_id, workspace_id)
-    AND command_name LIKE 'companyContent.%'
+    AND command_name IN (
+      'companyContent.requestApproval', 'companyContent.decideApproval'
+    )
   );
 CREATE POLICY command_receipts_content_insert ON app.command_receipts
   FOR INSERT TO r72_content_command WITH CHECK (
     workspace_id = app_private.current_workspace_id()
     AND actor_user_id = app_private.current_user_id()
     AND app_private.can_write_workspace(actor_user_id, workspace_id)
-    AND command_name LIKE 'companyContent.%'
+    AND command_name IN (
+      'companyContent.requestApproval', 'companyContent.decideApproval'
+    )
     AND status = 'started'
   );
 CREATE POLICY command_receipts_content_update ON app.command_receipts
@@ -672,13 +766,17 @@ CREATE POLICY command_receipts_content_update ON app.command_receipts
     workspace_id = app_private.current_workspace_id()
     AND actor_user_id = app_private.current_user_id()
     AND app_private.can_write_workspace(actor_user_id, workspace_id)
-    AND command_name LIKE 'companyContent.%'
+    AND command_name IN (
+      'companyContent.requestApproval', 'companyContent.decideApproval'
+    )
     AND status = 'started'
   ) WITH CHECK (
     workspace_id = app_private.current_workspace_id()
     AND actor_user_id = app_private.current_user_id()
     AND app_private.can_write_workspace(actor_user_id, workspace_id)
-    AND command_name LIKE 'companyContent.%'
+    AND command_name IN (
+      'companyContent.requestApproval', 'companyContent.decideApproval'
+    )
     AND status IN ('succeeded', 'failed')
   );
 
@@ -686,13 +784,21 @@ GRANT SELECT ON app.company_content_items, app.company_content_versions,
   app.company_content_source_attestations,
   app.company_content_approval_requests, app.company_content_approval_decisions
 TO r72_web, r72_content_command;
+GRANT SELECT ON app.company_content_items, app.company_content_versions,
+  app.company_content_source_attestations
+TO r72_content_adapter;
 GRANT INSERT ON app.company_content_items, app.company_content_versions,
-  app.company_content_source_attestations,
-  app.company_content_approval_requests, app.company_content_approval_decisions
+  app.company_content_source_attestations
+TO r72_content_adapter;
+GRANT INSERT ON app.company_content_approval_requests,
+  app.company_content_approval_decisions
 TO r72_content_command;
 GRANT SELECT, INSERT ON app.command_receipts TO r72_content_command;
 GRANT UPDATE (result, status, response_status, completed_at)
   ON app.command_receipts TO r72_content_command;
+GRANT SELECT, INSERT ON app.command_receipts TO r72_content_adapter;
+GRANT UPDATE (result, status, response_status, completed_at)
+  ON app.command_receipts TO r72_content_adapter;
 
 INSERT INTO app_private.workspace_table_registry
   (schema_name, table_name, workspace_column)
@@ -704,7 +810,7 @@ VALUES
   ('app', 'company_content_approval_decisions', 'workspace_id');
 
 -- Assert the migration leaves no table mutation path on the web identity and
--- no update/delete capability on immutable content tables for the command role.
+-- no cross-purpose inserts or update/delete capability for either content role.
 DO $content_capability_check$
 DECLARE
   table_name text;
@@ -719,9 +825,28 @@ BEGIN
        OR pg_catalog.has_table_privilege('r72_web', 'app.' || table_name, 'UPDATE')
        OR pg_catalog.has_table_privilege('r72_web', 'app.' || table_name, 'DELETE')
        OR pg_catalog.has_table_privilege('r72_content_command', 'app.' || table_name, 'UPDATE')
-       OR pg_catalog.has_table_privilege('r72_content_command', 'app.' || table_name, 'DELETE') THEN
+       OR pg_catalog.has_table_privilege('r72_content_command', 'app.' || table_name, 'DELETE')
+       OR pg_catalog.has_table_privilege('r72_content_adapter', 'app.' || table_name, 'UPDATE')
+       OR pg_catalog.has_table_privilege('r72_content_adapter', 'app.' || table_name, 'DELETE')
+       OR (
+         table_name IN (
+           'company_content_items', 'company_content_versions',
+           'company_content_source_attestations'
+         )
+         AND pg_catalog.has_table_privilege(
+           'r72_content_command', 'app.' || table_name, 'INSERT'
+         )
+       )
+       OR (
+         table_name IN (
+           'company_content_approval_requests', 'company_content_approval_decisions'
+         )
+         AND pg_catalog.has_table_privilege(
+           'r72_content_adapter', 'app.' || table_name, 'INSERT'
+         )
+       ) THEN
       RAISE EXCEPTION 'Unsafe company content table capability on %', table_name;
     END IF;
   END LOOP;
-END
+END;
 $content_capability_check$;

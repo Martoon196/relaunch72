@@ -6,6 +6,18 @@
  */
 import { createServer, type IncomingMessage } from 'node:http';
 import { appShell } from '../src/portal/ui.js';
+import { createPropertyPredatorContentCatalogFixture } from '../src/portal/content-control-room-fixtures.js';
+import {
+  CONTENT_CONTROL_ROOM_ROUTE,
+  presentContentControlRoom,
+} from '../src/portal/content-control-room-presenter.js';
+import { renderContentControlRoomBody } from '../src/portal/content-control-room-view.js';
+import { createPropertyPredatorTestInboxSnapshot } from '../src/portal/conversion-inbox-fixtures.js';
+import {
+  CONVERSION_INBOX_ROUTE,
+  presentConversionInbox,
+} from '../src/portal/conversion-inbox-presenter.js';
+import { renderConversionInboxBody } from '../src/portal/conversion-inbox-view.js';
 import { renderGrowthHomeBody } from '../src/portal/growth-home.js';
 import { renderLead360Body, type Lead360View } from '../src/portal/lead-360-view.js';
 import { JOURNEY_BOARD_CLIENT_SOURCE } from '../src/portal/journey-board-client.js';
@@ -611,11 +623,18 @@ function applyPreviewSignal(contactId: string, signalKey: string): boolean {
   return true;
 }
 
-function shell(body: string, active: 'overview' | 'crm' | 'journeys', title: string): string {
+function shell(
+  body: string,
+  active: 'overview' | 'crm' | 'journeys' | 'content' | 'inbox',
+  title: string,
+): string {
   return appShell({
     title, tenantName: snapshot.workspace.name, active, body,
     productProfile: PROPERTY_PREDATOR_GROWTH_PROFILE,
-    capabilities: new Set(['workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read', 'journeys.read']),
+    capabilities: new Set([
+      'workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read',
+      'journeys.read', 'content.drafts.read', 'conversations.read',
+    ]),
     crmAvailable: true, mode: 'crm', csrfToken: PREVIEW_CSRF,
   });
 }
@@ -651,6 +670,36 @@ function page(url: URL): { status: number; html: string; board?: boolean } {
   if (path === '/portal/journeys') return {
     status: 200,
     html: shell(`${previewJourneyNav('rules')}${renderJourneyManagerBody(journeyManager)}`, 'journeys', 'Property Predator — Journey Rules'),
+  };
+  if (path === CONTENT_CONTROL_ROOM_ROUTE) return {
+    status: 200,
+    html: shell(renderContentControlRoomBody(presentContentControlRoom(
+      createPropertyPredatorContentCatalogFixture(),
+      {
+        workspaceName: snapshot.workspace.name,
+        asOf: '2026-08-26T08:42:00.000Z',
+        filters: {
+          query: url.searchParams.get('q'),
+          channel: url.searchParams.get('channel'),
+          format: url.searchParams.get('format'),
+        },
+      },
+    )), 'content', 'Property Predator — Content Control'),
+  };
+  if (path === CONVERSION_INBOX_ROUTE) return {
+    status: 200,
+    html: shell(renderConversionInboxBody(presentConversionInbox(
+      createPropertyPredatorTestInboxSnapshot(),
+      {
+        workspaceName: snapshot.workspace.name,
+        filters: {
+          query: url.searchParams.get('q'),
+          channel: url.searchParams.get('channel'),
+          queue: url.searchParams.get('queue'),
+          conversationId: url.searchParams.get('conversation'),
+        },
+      },
+    )), 'inbox', 'Property Predator — Conversion Inbox'),
   };
   if (path === '/portal/crm/contacts') return {
     status: 200,

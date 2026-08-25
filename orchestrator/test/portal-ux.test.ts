@@ -89,16 +89,16 @@ test('small semantic text tokens retain WCAG AA contrast on their surfaces', () 
   }
 });
 
-test('planned platform modules are discoverable but never rendered as working links', () => {
+test('remaining planned platform modules are discoverable but never rendered as working links', () => {
   const html = dashboardPage(dashboard());
   const planned = CORE_PLATFORM_MODULES.filter((module) => module.stage === 'planned');
-  assert.ok(planned.length >= 5);
+  assert.equal(planned.length, 4);
   for (const module of planned) {
     assert.match(html, new RegExp(module.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.match(html, /aria-disabled="true"/);
   assert.match(html, /Designed into the platform boundary · not available in this sandbox/);
-  assert.doesNotMatch(html, /href="\/portal\/(social|listening|inbox|webinars|automations)"/);
+  assert.doesNotMatch(html, /href="\/portal\/(social|listening|webinars|automations)"/);
 });
 
 test('empty CRM and content states explain what is absent without fake controls', () => {
@@ -162,7 +162,7 @@ test('login and billing keep the same accessible premium shell semantics', () =>
   assert.match(login, /name="_login_csrf" value="signed-login-csrf"/);
   assert.match(login, /value="owner@example.test"/);
   assert.match(login, /<span>CRM<\/span>/);
-  assert.match(login, /Content · preview/);
+  assert.match(login, /<span>Content<\/span>/);
   assert.match(login, /Private sandbox · secure session · no public publishing/);
 
   const setupCsrf = Buffer.alloc(32, 7).toString('base64url');
