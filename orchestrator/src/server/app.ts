@@ -234,7 +234,10 @@ export function createApp(deps: AppDeps) {
       if (route === `POST ${PROPERTY_PREDATOR_EXTERNAL_EVENT_PATH}`) {
         const bridge = deps.propertyPredatorExternalEvents;
         if (!bridge?.enabled) return send(res, 404, { error: 'not_found' });
-        if (!bridge.ready || !bridge.handle) {
+        // A mounted handler stays callable while health is degraded so an
+        // exact signed retry can repair a receipt-first partial projection.
+        // Startup failures have no handler and remain closed.
+        if (!bridge.handle) {
           return send(res, 503, { error: 'external_event_bridge_unavailable' });
         }
         try {

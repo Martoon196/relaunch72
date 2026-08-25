@@ -31,6 +31,12 @@ const OPPORTUNITY_ID = '13131313-1313-4313-8313-131313131313';
 const PIPELINE_ID = '14141414-1414-4414-8414-141414141414';
 const CRM_STAGE_ID = '15151515-1515-4515-8515-151515151515';
 const TASK_ID = '16161616-1616-4616-8616-161616161616';
+const AGENCY_ENROLLMENT_ID = '17171717-1717-4717-8717-171717171717';
+const AGENCY_JOURNEY_ID = '18181818-1818-4818-8818-181818181818';
+const AGENCY_VERSION_ID = '19191919-1919-4919-8919-191919191919';
+const AGENCY_APPOINTMENT_ID = '20202020-2020-4020-8020-202020202020';
+const AGENCY_SALE_ID = '21212121-2121-4121-8121-212121212121';
+const AGENCY_SCORE_ID = '23232323-2323-4323-8323-232323232323';
 
 type Row = Record<string, unknown>;
 
@@ -43,12 +49,29 @@ function journeyStage(row: Row): Row {
     enrollment_id: ENROLLMENT_ID,
     journey_id: JOURNEY_ID,
     journey_version_id: VERSION_ID,
+    journey_slug: 'property-predator-self-serve',
     journey_name: 'Property Predator self-serve',
     enrollment_status: 'active',
     current_milestone_id: CURRENT_STAGE_ID,
     enrolled_at: new Date('2026-08-20T09:00:00.000Z'),
     last_event_at: new Date('2026-08-25T10:15:00.000Z'),
     ended_at: null,
+    ...row,
+  });
+}
+
+function agencyJourneyStage(row: Row): Row {
+  return scoped({
+    enrollment_id: AGENCY_ENROLLMENT_ID,
+    journey_id: AGENCY_JOURNEY_ID,
+    journey_version_id: AGENCY_VERSION_ID,
+    journey_slug: 'property-predator-agency-laps',
+    journey_name: 'Property Predator agency LAPS',
+    enrollment_status: 'completed',
+    current_milestone_id: AGENCY_SALE_ID,
+    enrolled_at: new Date('2026-07-01T09:00:00.000Z'),
+    last_event_at: new Date('2026-08-22T15:00:00.000Z'),
+    ended_at: new Date('2026-08-22T15:00:00.000Z'),
     ...row,
   });
 }
@@ -239,6 +262,8 @@ test('Lead360ReadService maps and deeply freezes one narrow case file in one sco
     updatedAt: '2026-08-25T11:00:00.000Z',
   });
   assert.equal(result.journey?.name, 'Property Predator self-serve');
+  assert.equal(result.journeys?.length, 1);
+  assert.equal(result.journeys?.[0]?.slug, 'property-predator-self-serve');
   assert.deepEqual(result.journey?.stages.map((stage) => [stage.name, stage.isCurrent, stage.reachedAt]), [
     ['Lead', false, '2026-08-20T09:00:00.000Z'],
     ['Appointment booked', true, '2026-08-25T10:15:00.000Z'],
@@ -285,6 +310,7 @@ test('Lead360ReadService maps and deeply freezes one narrow case file in one sco
     result,
     result.identity,
     result.journey,
+    result.journeys,
     result.journey?.stages,
     result.journey?.stages[0],
     result.score,
@@ -303,6 +329,169 @@ test('Lead360ReadService maps and deeply freezes one narrow case file in one sco
     result.crm.tasks,
     result.crm.tasks[0],
   ]) assert.ok(value && Object.isFrozen(value));
+});
+
+test('Lead360ReadService retains every bounded Property Predator enrollment and its own latest score', async () => {
+  const rows = fixtures();
+  rows['conversion.lead-360.read-journey']!.push(
+    agencyJourneyStage({
+      milestone_id: AGENCY_APPOINTMENT_ID,
+      milestone_key: 'appointment',
+      milestone_name: 'Appointment',
+      position: 2,
+      semantic: 'appointment',
+      is_completion: false,
+      reached_at: new Date('2026-08-20T10:00:00.000Z'),
+    }),
+    agencyJourneyStage({
+      milestone_id: AGENCY_SALE_ID,
+      milestone_key: 'sale',
+      milestone_name: 'Sale',
+      position: 4,
+      semantic: 'sale',
+      is_completion: true,
+      reached_at: new Date('2026-08-22T15:00:00.000Z'),
+    }),
+  );
+  rows['conversion.lead-360.read-score']!.push(scoped({
+    score_id: AGENCY_SCORE_ID,
+    enrollment_id: AGENCY_ENROLLMENT_ID,
+    total_score: '48',
+    band_key: 'hot',
+    component_scores: { engagement: 25, intent: 23 },
+    reasons: ['Completed the agency sale journey.'],
+    source_occurred_at: new Date('2026-08-22T15:00:00.000Z'),
+    evaluated_at: new Date('2026-08-22T15:00:01.000Z'),
+  }));
+
+  const result = await new Lead360ReadService({ transactionRunner: new FakeRunner(rows) })
+    .load(userContext(), CONTACT_ID);
+  assert.ok(result);
+  assert.deepEqual(result.journeys?.map((journey) => ({
+    slug: journey.slug,
+    status: journey.status,
+    current: journey.stages.find((stage) => stage.isCurrent)?.name,
+    total: journey.score?.total,
+    sourceAt: journey.score?.sourceOccurredAt,
+    evaluatedAt: journey.score?.evaluatedAt,
+    endedAt: journey.endedAt,
+  })), [{
+    slug: 'property-predator-self-serve',
+    status: 'active',
+    current: 'Appointment booked',
+    total: 76,
+    sourceAt: '2026-08-25T10:15:00.000Z',
+    evaluatedAt: '2026-08-25T10:16:00.000Z',
+    endedAt: null,
+  }, {
+    slug: 'property-predator-agency-laps',
+    status: 'completed',
+    current: 'Sale',
+    total: 48,
+    sourceAt: '2026-08-22T15:00:00.000Z',
+    evaluatedAt: '2026-08-22T15:00:01.000Z',
+    endedAt: '2026-08-22T15:00:00.000Z',
+  }]);
+  assert.equal(result.journey, result.journeys?.[0], 'singular journey remains the compatibility alias');
+  assert.equal(result.score, result.journeys?.[0]?.score, 'singular score remains the compatibility alias');
+  assert.ok(Object.isFrozen(result.journeys?.[1]?.score));
+  assert.ok(Object.isFrozen(result.journeys?.[1]?.score?.reasons));
+});
+
+test('Lead360ReadService chooses one deterministic primary route without dropping the other rails', async () => {
+  const rows = fixtures();
+  rows['conversion.lead-360.read-journey']!.push(agencyJourneyStage({
+    enrollment_status: 'active',
+    current_milestone_id: AGENCY_APPOINTMENT_ID,
+    last_event_at: new Date('2026-08-24T10:00:00.000Z'),
+    ended_at: null,
+    milestone_id: AGENCY_APPOINTMENT_ID,
+    milestone_key: 'appointment',
+    milestone_name: 'Appointment',
+    position: 2,
+    semantic: 'appointment',
+    is_completion: false,
+    reached_at: new Date('2026-08-24T10:00:00.000Z'),
+  }));
+  const agencyScore = scoped({
+    score_id: AGENCY_SCORE_ID,
+    enrollment_id: AGENCY_ENROLLMENT_ID,
+    total_score: '90',
+    band_key: 'burning',
+    component_scores: { engagement: 55, intent: 35 },
+    reasons: ['Agency intent is strongest.'],
+    source_occurred_at: new Date('2026-08-24T10:00:00.000Z'),
+    evaluated_at: new Date('2026-08-24T10:01:00.000Z'),
+  });
+  rows['conversion.lead-360.read-score']!.push(agencyScore);
+
+  const highestScore = await new Lead360ReadService({ transactionRunner: new FakeRunner(rows) })
+    .load(userContext(), CONTACT_ID);
+  assert.ok(highestScore);
+  assert.equal(highestScore.journey?.slug, 'property-predator-agency-laps');
+  assert.equal(highestScore.score?.total, 90);
+  assert.deepEqual(highestScore.journeys?.map((journey) => journey.slug), [
+    'property-predator-agency-laps', 'property-predator-self-serve',
+  ]);
+
+  agencyScore.total_score = '76';
+  const mostRecentActive = await new Lead360ReadService({ transactionRunner: new FakeRunner(rows) })
+    .load(userContext(), CONTACT_ID);
+  assert.equal(mostRecentActive?.journey?.slug, 'property-predator-self-serve');
+
+  for (const row of rows['conversion.lead-360.read-journey']!.filter(
+    (candidate) => candidate.enrollment_id === AGENCY_ENROLLMENT_ID,
+  )) row.last_event_at = new Date('2026-08-25T10:15:00.000Z');
+  const stableRouteTieBreak = await new Lead360ReadService({ transactionRunner: new FakeRunner(rows) })
+    .load(userContext(), CONTACT_ID);
+  assert.equal(stableRouteTieBreak?.journey?.slug, 'property-predator-self-serve');
+  assert.equal(stableRouteTieBreak?.journeys?.length, 2);
+});
+
+test('Lead360ReadService chooses the most recent terminal route only when no route is active', async () => {
+  const rows = fixtures();
+  for (const row of rows['conversion.lead-360.read-journey']!) {
+    row.enrollment_status = 'withdrawn';
+    row.last_event_at = new Date('2026-08-21T12:00:00.000Z');
+    row.ended_at = new Date('2026-08-21T12:00:00.000Z');
+  }
+  rows['conversion.lead-360.read-journey']!.push(
+    agencyJourneyStage({
+      milestone_id: AGENCY_APPOINTMENT_ID,
+      milestone_key: 'appointment',
+      milestone_name: 'Appointment',
+      position: 2,
+      semantic: 'appointment',
+      is_completion: false,
+      reached_at: new Date('2026-08-20T10:00:00.000Z'),
+    }),
+    agencyJourneyStage({
+      milestone_id: AGENCY_SALE_ID,
+      milestone_key: 'sale',
+      milestone_name: 'Sale',
+      position: 4,
+      semantic: 'sale',
+      is_completion: true,
+      reached_at: new Date('2026-08-22T15:00:00.000Z'),
+    }),
+  );
+  rows['conversion.lead-360.read-score']!.push(scoped({
+    score_id: AGENCY_SCORE_ID,
+    enrollment_id: AGENCY_ENROLLMENT_ID,
+    total_score: '10',
+    band_key: 'quiet',
+    component_scores: { engagement: 10, intent: 0 },
+    reasons: ['Terminal history.'],
+    source_occurred_at: new Date('2026-08-22T15:00:00.000Z'),
+    evaluated_at: new Date('2026-08-22T15:00:01.000Z'),
+  }));
+
+  const result = await new Lead360ReadService({ transactionRunner: new FakeRunner(rows) })
+    .load(userContext(), CONTACT_ID);
+  assert.ok(result);
+  assert.equal(result.journey?.slug, 'property-predator-agency-laps');
+  assert.equal(result.score?.total, 10, 'terminal recency wins; a stale terminal score cannot own the headline');
+  assert.equal(result.journeys?.[1]?.score?.total, 76);
 });
 
 test('Lead360ReadService returns null for an invisible contact without probing related tables', async () => {
@@ -360,6 +549,9 @@ test('Lead 360 SQL stays parameterized, RLS-scoped and outside private payload j
   assert.match(sql, /app\.communication_suppression_events/);
   assert.match(sql, /app\.opportunities/);
   assert.match(sql, /app\.tasks/);
+  assert.match(sql, /journey\.slug::text IN \(\s*'property-predator-self-serve', 'property-predator-agency-laps'\s*\)/);
+  assert.match(sql, /LIMIT 10/, 'active and recent journey reads remain explicitly bounded');
+  assert.match(sql, /JOIN LATERAL \([\s\S]+app\.lead_score_snapshots/, 'each bounded enrollment selects its own latest score');
   assert.doesNotMatch(sql, /app_private\.(?:external|journal|receipt)/i);
   assert.doesNotMatch(sql, /source_payload_sha256|raw_payload|signature|token_hash|password_hash/i);
 });

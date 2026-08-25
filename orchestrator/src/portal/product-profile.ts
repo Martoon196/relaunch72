@@ -31,7 +31,7 @@ export interface PortalJourneyBlueprint {
 }
 
 export interface PortalReadinessRail {
-  id: 'content' | 'social' | 'inbox' | 'webinars' | 'automations';
+  id: 'content' | 'social' | 'inbox' | 'webinars' | 'journeys' | 'automations';
   label: string;
   summary: string;
   state: 'foundation' | 'planned';
@@ -186,6 +186,11 @@ export const PROPERTY_PREDATOR_GROWTH_PROFILE = createProfile({
     },
   ],
   readinessRails: [
+    {
+      id: 'journeys', label: 'Journey runtime',
+      summary: 'Automatic enrolment, evidence-led advancement and explainable scores.',
+      state: 'foundation',
+    },
     { id: 'content', label: 'Predator content engine', summary: 'Approved brand assets and partner-ready campaigns.', state: 'planned' },
     { id: 'social', label: 'Social machine', summary: 'Broad publishing with provider-confirmed outcomes.', state: 'planned' },
     { id: 'inbox', label: 'Conversion inbox', summary: 'Email, WhatsApp, SMS, Messenger and Instagram.', state: 'planned' },

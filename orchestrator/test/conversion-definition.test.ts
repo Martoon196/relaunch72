@@ -81,6 +81,8 @@ test('Property Predator ships distinct product-led and literal LAPS blueprints',
     assert.equal(blueprint.milestones.filter((item) => item.isCompletion).length, 1);
     assert.ok(Object.isFrozen(blueprint));
     assert.ok(Object.isFrozen(blueprint.scoreModel.rules));
+    assert.equal(blueprint.version, 2);
+    assert.equal(blueprint.scoreModel.version, 2);
   }
   assert.equal(
     PROPERTY_PREDATOR_SELF_SERVE_JOURNEY.scoreModel.definitionHash,
@@ -88,7 +90,7 @@ test('Property Predator ships distinct product-led and literal LAPS blueprints',
   );
 });
 
-test('Property Predator V1 accepts only current bridge events and commerce-authoritative sales', () => {
+test('Property Predator V2 maps real route evidence and commerce-authoritative sales', () => {
   const acceptedEventSources = new Set<string>(PROPERTY_PREDATOR_EXTERNAL_EVENT_TYPES);
   for (const blueprint of PROPERTY_PREDATOR_CONVERSION_BLUEPRINTS) {
     for (const trigger of blueprint.triggers) {
@@ -100,9 +102,24 @@ test('Property Predator V1 accepts only current bridge events and commerce-autho
       kind: 'commerce', sourceKey: 'payment_collected', milestoneKey: 'sale',
       mode: 'direct', frequency: 'once_per_enrollment',
     }]);
-    assert.ok(!blueprint.triggers.some((item) => /pricing|checkout|purchase_completed/.test(item.sourceKey)));
+    assert.ok(!blueprint.triggers.some((item) => /checkout|purchase_completed/.test(item.sourceKey)));
   }
-  assert.ok(!PROPERTY_PREDATOR_SELF_SERVE_JOURNEY.triggers.some((item) => item.milestoneKey === 'priced'));
+  assert.ok(PROPERTY_PREDATOR_SELF_SERVE_JOURNEY.triggers.some(
+    (item) => item.kind === 'event' && item.sourceKey === 'offer.presented' && item.milestoneKey === 'priced',
+  ));
+  assert.ok(PROPERTY_PREDATOR_AGENCY_LAPS_JOURNEY.triggers.some(
+    (item) => item.kind === 'event' && item.sourceKey === 'sales.appointment.booked'
+      && item.milestoneKey === 'appointment',
+  ));
+  assert.ok(!PROPERTY_PREDATOR_AGENCY_LAPS_JOURNEY.triggers.some(
+    (item) => item.sourceKey === 'identity.account.created',
+  ));
+  const scoreSources = new Set(PROPERTY_PREDATOR_SELF_SERVE_JOURNEY.scoreModel.rules.map(
+    (rule) => `${rule.kind}:${rule.sourceKey}`,
+  ));
+  assert.ok(scoreSources.has('event:content.consumption.completed'));
+  assert.ok(scoreSources.has('event:sales.presentation.completed'));
+  assert.ok(scoreSources.has('commerce:payment_collected'));
 });
 
 test('canonical SHA-256 ignores property insertion order and trimmed display whitespace', () => {

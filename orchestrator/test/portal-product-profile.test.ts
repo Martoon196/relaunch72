@@ -22,6 +22,15 @@ test('known portal product profiles resolve as immutable presentation contracts'
   assert.ok(Object.isFrozen(PROPERTY_PREDATOR_GROWTH_PROFILE.theme));
   assert.ok(Object.isFrozen(PROPERTY_PREDATOR_GROWTH_PROFILE.journeyBlueprints));
   assert.ok(Object.isFrozen(PROPERTY_PREDATOR_GROWTH_PROFILE.journeyBlueprints[0]?.milestones));
+  assert.deepEqual(
+    PROPERTY_PREDATOR_GROWTH_PROFILE.readinessRails.find((rail) => rail.id === 'journeys'),
+    {
+      id: 'journeys',
+      label: 'Journey runtime',
+      summary: 'Automatic enrolment, evidence-led advancement and explainable scores.',
+      state: 'foundation',
+    },
+  );
 });
 
 test('product profiles fail closed and cannot carry authorization state', () => {

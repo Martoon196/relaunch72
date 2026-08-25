@@ -46,7 +46,7 @@ function caseFile(): Lead360View {
 test('Lead 360 renders a semantic forensic case file with exact evidence and decision rails', () => {
   const html = renderLead360Body(caseFile());
   assert.match(html, /<article class="lead360" aria-labelledby="lead360-title">/);
-  assert.match(html, /<nav class="lead360-journey" aria-label="Journey stages">/);
+  assert.match(html, /<nav class="lead360-journey" aria-label="Primary journey stages" data-primary-route="true">/);
   assert.match(html, /aria-current="step"/);
   assert.match(html, /Engagement evidence/);
   assert.match(html, /aria-label="Recorded evidence, newest first"/);
@@ -55,10 +55,74 @@ test('Lead 360 renders a semantic forensic case file with exact evidence and dec
   assert.match(html, /Source · Webinar player/);
   assert.match(html, /25 Aug 2026, 09:55:00 UTC/);
   assert.match(html, /Best next move/);
+  assert.match(html, /Primary route · Self-serve conversion/);
   assert.match(html, /Offer history/);
   assert.match(html, /No response recorded/);
   assert.match(html, /Consent \+ suppression/);
   assert.match(html, /CRM summary/);
+});
+
+test('Lead 360 renders every runtime enrollment with its own milestones, score timing and terminal state', () => {
+  const view = caseFile();
+  const journeys: NonNullable<Lead360View['journeys']> = [
+    {
+      label: 'Property Predator self-serve',
+      isPrimary: true,
+      status: 'active',
+      enrolledAt: '2026-08-24T09:00:00.000Z',
+      lastEventAt: '2026-08-25T10:00:00.000Z',
+      endedAt: null,
+      stages: [
+        { key: 'lead', label: 'Lead', state: 'complete', reachedAt: '2026-08-24T09:00:00.000Z' },
+        { key: 'priced', label: 'Pricing reviewed', state: 'current', reachedAt: '2026-08-25T10:00:00.000Z' },
+        { key: 'sale', label: 'Sale', state: 'upcoming', reachedAt: null },
+      ],
+      score: {
+        total: 76,
+        explanation: 'Pricing and reply evidence increased intent.',
+        sourceOccurredAt: '2026-08-25T10:12:00.000Z',
+        evaluatedAt: '2026-08-25T10:12:01.000Z',
+      },
+    },
+    {
+      label: 'Property Predator agency LAPS',
+      status: 'completed',
+      enrolledAt: '2026-07-01T09:00:00.000Z',
+      lastEventAt: '2026-08-22T15:00:00.000Z',
+      endedAt: '2026-08-22T15:00:00.000Z',
+      stages: [
+        { key: 'appointment', label: 'Appointment', state: 'complete', reachedAt: '2026-08-20T10:00:00.000Z' },
+        { key: 'sale', label: 'Agency sale', state: 'current', reachedAt: '2026-08-22T15:00:00.000Z' },
+      ],
+      score: {
+        total: 48,
+        explanation: 'The agency sale journey completed.',
+        sourceOccurredAt: '2026-08-22T15:00:00.000Z',
+        evaluatedAt: '2026-08-22T15:00:01.000Z',
+      },
+    },
+  ];
+  const html = renderLead360Body({
+    ...view,
+    journeys,
+    journey: journeys[0]!,
+    primaryJourneyLabel: 'Property Predator self-serve',
+  });
+
+  assert.equal((html.match(/<nav class="lead360-journey"/g) ?? []).length, 2);
+  assert.equal((html.match(/<nav class="lead360-journey"[^>]*data-primary-route="true"/g) ?? []).length, 1);
+  assert.equal((html.match(/>Primary route<\/span>/g) ?? []).length, 1);
+  assert.ok(html.indexOf('Property Predator self-serve') < html.indexOf('Property Predator agency LAPS'));
+  assert.match(html, /state-active">Active</);
+  assert.match(html, /Latest event <time datetime="2026-08-25T10:00:00.000Z"/);
+  assert.match(html, /state-completed">Completed</);
+  assert.match(html, /Ended <time datetime="2026-08-22T15:00:00.000Z"/);
+  assert.match(html, /Pricing and reply evidence increased intent\./);
+  assert.match(html, /The agency sale journey completed\./);
+  assert.match(html, /Evidence through<\/dt><dd><time datetime="2026-08-25T10:12:00.000Z"/);
+  assert.match(html, /Evaluated<\/dt><dd><time datetime="2026-08-22T15:00:01.000Z"/);
+  assert.equal((html.match(/aria-current="step"/g) ?? []).length, 2);
+  assert.deepEqual(view.journey.stages.map((stage) => stage.label), ['Lead', 'Activated', 'Priced', 'Sale']);
 });
 
 test('Lead 360 orders the timeline newest first without changing the supplied array', () => {
@@ -106,7 +170,7 @@ test('Lead 360 applies the documented evidence-score bands at their exact bounda
   assert.equal(lead360ScoreBand(21), 'quiet');
   assert.equal(lead360ScoreBand(0), 'quiet');
   assert.equal(lead360ScoreBand(null), 'unscored');
-  assert.match(renderLead360Body(caseFile()), /Lead score 76, Burning/);
+  assert.match(renderLead360Body(caseFile()), /Primary journey score 76, Burning\. Primary route · Self-serve conversion/);
 });
 
 test('Lead 360 empty states invent no consumption, offers, consent or CRM work', () => {
@@ -129,13 +193,13 @@ test('Lead 360 empty states invent no consumption, offers, consent or CRM work',
   assert.match(html, /No channel evidence/);
   assert.match(html, /No CRM opportunities/);
   assert.match(html, /No CRM tasks/);
-  assert.match(html, /Lead score —, Unscored/);
+  assert.match(html, /Primary journey score —, Unscored\. No primary route/);
   assert.doesNotMatch(html, /92% complete|Webinar player|£1,497/);
 });
 
 test('Lead 360 remains read-only and exposes no external-effect control', () => {
   const html = renderLead360Body(caseFile());
-  assert.match(html, /Recommendation only · nothing has been sent or changed\./);
+  assert.match(html, /Route context names the score source; consent and CRM tasks remain contact-wide\. Nothing has been sent or changed\./);
   assert.doesNotMatch(html, /<(?:form|button|input|select|textarea)\b/i);
   assert.doesNotMatch(html, /onclick=|onsubmit=|Send message|Publish post|Start automation/i);
   assert.doesNotMatch(html, /payload|event hash|provider secret/i);

@@ -16,6 +16,8 @@ export const PROPERTY_PREDATOR_EXTERNAL_EVENT_TYPES = [
   'content.consumption.completed',
   'offer.presented',
   'offer.responded',
+  'sales.appointment.booked',
+  'sales.presentation.completed',
   'commerce.purchase.completed',
   'commerce.purchase.refunded',
   'commerce.subscription.cancelled',
@@ -96,12 +98,27 @@ export interface PropertyPredatorOfferRespondedData {
   readonly response: 'accepted' | 'declined' | 'deferred' | 'requested_contact';
 }
 
+export interface PropertyPredatorAppointmentBookedData {
+  readonly appointmentId: string;
+  readonly startsAt: string;
+  readonly bookingSource: 'self_serve_calendar' | 'team' | 'partner_referral';
+  readonly meetingKind: 'discovery' | 'strategy' | 'partner';
+}
+
+export interface PropertyPredatorPresentationCompletedData {
+  readonly appointmentId: string;
+  readonly presentationKey: string;
+  readonly durationSeconds: number;
+  readonly outcome: 'completed' | 'follow_up_requested' | 'proposal_requested';
+}
+
 export interface PropertyPredatorPurchaseCompletedData {
   readonly provider: 'stripe';
   readonly providerEventId: string;
   readonly checkoutSessionId: string;
   readonly productKey: string;
   readonly billingKind: 'one_off' | 'subscription';
+  readonly subscriptionId?: string;
   readonly amountMinor: number;
   readonly currency: string;
 }
@@ -146,6 +163,8 @@ export type PropertyPredatorExternalEvent =
   | PropertyPredatorExternalEventBase<'content.consumption.completed', PropertyPredatorContentConsumptionCompletedData>
   | PropertyPredatorExternalEventBase<'offer.presented', PropertyPredatorOfferPresentedData>
   | PropertyPredatorExternalEventBase<'offer.responded', PropertyPredatorOfferRespondedData>
+  | PropertyPredatorExternalEventBase<'sales.appointment.booked', PropertyPredatorAppointmentBookedData>
+  | PropertyPredatorExternalEventBase<'sales.presentation.completed', PropertyPredatorPresentationCompletedData>
   | PropertyPredatorExternalEventBase<'commerce.purchase.completed', PropertyPredatorPurchaseCompletedData>
   | PropertyPredatorExternalEventBase<'commerce.purchase.refunded', PropertyPredatorPurchaseRefundedData>
   | PropertyPredatorExternalEventBase<'commerce.subscription.cancelled', PropertyPredatorSubscriptionCancelledData>;
@@ -464,18 +483,73 @@ function parseOfferResponded(value: unknown): Readonly<PropertyPredatorOfferResp
   });
 }
 
+function parseAppointmentBooked(value: unknown): Readonly<PropertyPredatorAppointmentBookedData> {
+  const data = dataRecord(value, 'data');
+  exactKeys(data, 'data', ['appointmentId', 'startsAt', 'bookingSource', 'meetingKind']);
+  return Object.freeze({
+    appointmentId: safeReference(data.appointmentId, 'data.appointmentId', 128),
+    startsAt: canonicalTimestamp(data.startsAt, 'data.startsAt'),
+    bookingSource: literal(
+      data.bookingSource,
+      'data.bookingSource',
+      ['self_serve_calendar', 'team', 'partner_referral'] as const,
+    ),
+    meetingKind: literal(
+      data.meetingKind,
+      'data.meetingKind',
+      ['discovery', 'strategy', 'partner'] as const,
+    ),
+  });
+}
+
+function parsePresentationCompleted(
+  value: unknown,
+): Readonly<PropertyPredatorPresentationCompletedData> {
+  const data = dataRecord(value, 'data');
+  exactKeys(data, 'data', [
+    'appointmentId', 'presentationKey', 'durationSeconds', 'outcome',
+  ]);
+  return Object.freeze({
+    appointmentId: safeReference(data.appointmentId, 'data.appointmentId', 128),
+    presentationKey: safeGrowthKey(data.presentationKey, 'data.presentationKey', 150),
+    durationSeconds: boundedInteger(
+      data.durationSeconds,
+      'data.durationSeconds',
+      1,
+      MAX_CONSUMED_SECONDS,
+    ),
+    outcome: literal(
+      data.outcome,
+      'data.outcome',
+      ['completed', 'follow_up_requested', 'proposal_requested'] as const,
+    ),
+  });
+}
+
 function parsePurchaseCompleted(value: unknown): Readonly<PropertyPredatorPurchaseCompletedData> {
   const data = dataRecord(value, 'data');
   exactKeys(data, 'data', [
     'provider', 'providerEventId', 'checkoutSessionId', 'productKey',
     'billingKind', 'amountMinor', 'currency',
-  ]);
+  ], ['subscriptionId']);
+  const billingKind = literal(
+    data.billingKind,
+    'data.billingKind',
+    ['one_off', 'subscription'] as const,
+  );
+  const subscriptionId = Object.hasOwn(data, 'subscriptionId')
+    ? safeReference(data.subscriptionId, 'data.subscriptionId', 255)
+    : undefined;
+  if ((billingKind === 'subscription') !== (subscriptionId !== undefined)) {
+    fail('data.subscriptionId is required only for subscription billing');
+  }
   return Object.freeze({
     provider: literal(data.provider, 'data.provider', ['stripe'] as const),
     providerEventId: safeReference(data.providerEventId, 'data.providerEventId', 255),
     checkoutSessionId: safeReference(data.checkoutSessionId, 'data.checkoutSessionId', 128),
     productKey: safeKey(data.productKey, 'data.productKey'),
-    billingKind: literal(data.billingKind, 'data.billingKind', ['one_off', 'subscription'] as const),
+    billingKind,
+    ...(subscriptionId === undefined ? {} : { subscriptionId }),
     amountMinor: positiveSafeInteger(data.amountMinor, 'data.amountMinor'),
     currency: currency(data.currency, 'data.currency'),
   });
@@ -557,6 +631,10 @@ export function parsePropertyPredatorExternalEvent(value: unknown): PropertyPred
       return Object.freeze({ ...common, type, data: parseOfferPresented(event.data) });
     case 'offer.responded':
       return Object.freeze({ ...common, type, data: parseOfferResponded(event.data) });
+    case 'sales.appointment.booked':
+      return Object.freeze({ ...common, type, data: parseAppointmentBooked(event.data) });
+    case 'sales.presentation.completed':
+      return Object.freeze({ ...common, type, data: parsePresentationCompleted(event.data) });
     case 'commerce.purchase.completed':
       return Object.freeze({ ...common, type, data: parsePurchaseCompleted(event.data) });
     case 'commerce.purchase.refunded':

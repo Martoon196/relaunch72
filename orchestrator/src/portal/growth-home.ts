@@ -16,11 +16,6 @@ const GROWTH_HOME_STYLE = `
   @media(max-width:480px){.pp-metrics{grid-template-columns:1fr}.pp-metric,.pp-metric:nth-child(3),.pp-metric:nth-child(even){border-right:0}.pp-metric:nth-child(n+2){border-top:1px solid var(--line)}.pp-funnel-rail{grid-template-columns:1fr}.pp-funnel-stage::after{display:none}.pp-hero-actions .button{width:100%}.pp-evidence-grid{grid-template-columns:1fr 1fr}}
 `;
 
-function percent(value: number | null): string {
-  if (value === null) return '—';
-  return `${Math.max(0, value).toLocaleString('en-GB', { maximumFractionDigits: 1 })}%`;
-}
-
 function dateTime(value: string, timezone: string): string {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return 'Recorded time unavailable';
@@ -58,14 +53,14 @@ function attentionQueue(snapshot: CrmWorkspaceSnapshot, openStageIds: ReadonlySe
     : '<div class="pp-empty"><strong>No urgent CRM work.</strong>Add a next task when a lead needs a human move.</div>';
 }
 
-function funnel(funnelView: GrowthFunnelView, dataState: GrowthIntelligenceView['dataState']): string {
-  const leadCount = funnelView.stages[0]?.count ?? 0;
+function funnel(funnelView: GrowthFunnelView, windowLabel: string): string {
+  const hasJourneyEvidence = funnelView.stages.some((stage) => stage.count > 0);
   const stages = funnelView.stages.map((stage, index) => `<article class="pp-funnel-stage">
     <span class="pp-stage-index">0${index + 1}</span><span class="pp-stage-label">${escapeHtml(stage.label)}</span>
     <strong class="pp-stage-count">${stage.count.toLocaleString('en-GB')}</strong>
-    <span class="pp-stage-foot"><span>Step <strong>${percent(stage.stepConversionPercent)}</strong></span><span>+${stage.movedInWindow}</span></span>
+    <span class="pp-stage-foot"><span>${stage.count === 0 ? 'No evidence' : 'Distinct people'}</span><span>${escapeHtml(windowLabel)} <strong>+${stage.movedInWindow}</strong></span></span>
   </article>`).join('');
-  const empty = dataState === 'empty' || leadCount === 0
+  const empty = !hasJourneyEvidence
     ? '<div class="pp-funnel-empty">No journey evidence is recorded yet. CRM pipeline stages are deliberately not counted as conversion stages.</div>'
     : '';
   return `<section class="pp-funnel"><div class="pp-funnel-top"><div><h3>${escapeHtml(funnelView.label)}</h3><p>${escapeHtml(funnelView.description)}</p></div><span class="pp-track">${funnelView.track === 'self_serve' ? 'Product-led' : 'Sales-assisted'}</span></div><div class="pp-funnel-rail">${stages}</div>${empty}</section>`;
@@ -125,9 +120,7 @@ export function renderGrowthHomeBody(
   const priced = stageCount(growth, 'priced') + stageCount(growth, 'presentation');
   const sales = stageCount(growth, 'sale');
   const selfServe = growth.funnels.find((item) => item.track === 'self_serve');
-  const selfLead = selfServe?.stages.find((stage) => stage.key === 'lead')?.count ?? 0;
   const selfActivated = selfServe?.stages.find((stage) => stage.key === 'activated')?.count ?? 0;
-  const activationRate = selfLead > 0 ? (selfActivated / selfLead) * 100 : null;
   const stateClass = growth.dataState === 'live' ? '' : growth.dataState;
   const stateLabel = growth.dataState === 'live' ? 'Live intelligence' : growth.dataState === 'preview' ? 'Demo evidence' : 'Awaiting signals';
   const stateTruth = growth.dataState === 'preview'
@@ -149,13 +142,13 @@ export function renderGrowthHomeBody(
     </div></section>
     <section class="pp-metrics" aria-label="Conversion evidence snapshot">
       <article class="pp-metric"><small>Route leads</small><strong>${leadCount}</strong><span>Distinct within each journey · routes may overlap</span></article>
-      <article class="pp-metric"><small>Activation rate</small><strong>${percent(activationRate)}</strong><span>First weapon fired after capture</span></article>
+      <article class="pp-metric"><small>Activated</small><strong>${selfActivated}</strong><span>Distinct self-serve contacts with recorded activation evidence</span></article>
       <article class="pp-metric"><small>Priced / presented</small><strong>${priced}</strong><span>Offer evidence, not an assumed intent</span></article>
       <article class="pp-metric"><small>Sales</small><strong>${sales}</strong><span>Authoritative payment-backed milestones</span></article>
       <article class="pp-metric"><small>CRM leads</small><strong>${snapshot.contacts.filter((contact) => contact.lifecycle === 'lead' || contact.lifecycle === 'prospect').length}</strong><span>Saved contacts awaiting or inside journeys</span></article>
     </section>
     <div class="pp-grid"><div class="pp-stack">
-      <section class="pp-panel" aria-labelledby="funnel-title"><div class="pp-panel-head"><div><div class="pp-panel-kicker">Measured conversion</div><h2 id="funnel-title">Two routes. No fake stages.</h2><p>Self-serve and agency buying journeys stay distinct.</p></div><span class="pp-panel-action">As of ${escapeHtml(dateTime(growth.asOf, snapshot.workspace.timezone))}</span></div><div class="pp-panel-body"><div class="pp-funnels">${growth.funnels.map((item) => funnel(item, growth.dataState)).join('')}</div></div></section>
+      <section class="pp-panel" aria-labelledby="funnel-title"><div class="pp-panel-head"><div><div class="pp-panel-kicker">Measured conversion</div><h2 id="funnel-title">Two routes. No fake stages.</h2><p>Self-serve and agency buying journeys stay distinct.</p></div><span class="pp-panel-action">As of ${escapeHtml(dateTime(growth.asOf, snapshot.workspace.timezone))}</span></div><div class="pp-panel-body"><div class="pp-funnels">${growth.funnels.map((item) => funnel(item, growth.windowLabel)).join('')}</div></div></section>
       <section class="pp-panel" id="hot-list" aria-labelledby="hot-list-title"><div class="pp-panel-head"><div><div class="pp-panel-kicker">Case files</div><h2 id="hot-list-title">Who needs the next move?</h2><p>Score, exact last evidence and a human-readable action.</p></div><a class="pp-panel-action" href="/portal/crm/contacts">All leads →</a></div><div class="pp-panel-body">${hotList(growth, snapshot.workspace.timezone)}</div></section>
     </div><aside class="pp-stack" aria-label="Evidence and action rails">
       <section class="pp-panel" aria-labelledby="evidence-title"><div class="pp-panel-head"><div><div class="pp-panel-kicker">Consumption + intent</div><h2 id="evidence-title">Evidence captured</h2></div></div><div class="pp-panel-body">${evidenceTotals(growth)}</div></section>

@@ -229,10 +229,8 @@ async function recordConsent(pool: Pool, fixture: ConversionFixture): Promise<vo
 }
 
 async function recordSuppression(pool: Pool, fixture: ConversionFixture): Promise<void> {
-  await scopedQuery(
+  await ownerQuery(
     pool,
-    'r72_webhook',
-    { workspaceId: fixture.workspaceId },
     `INSERT INTO app.communication_suppression_events
        (id, workspace_id, contact_id, contact_point_id, channel, purpose,
         state, reason, source, source_event_id, actor_kind, occurred_at)
@@ -250,10 +248,8 @@ async function recordSuppression(pool: Pool, fixture: ConversionFixture): Promis
 }
 
 async function recordScore(pool: Pool, fixture: ConversionFixture): Promise<void> {
-  await scopedQuery(
+  await ownerQuery(
     pool,
-    'r72_webhook',
-    { workspaceId: fixture.workspaceId },
     `INSERT INTO app.lead_score_snapshots
        (id, workspace_id, enrollment_id, contact_id, score_model_version_id,
         total_score, band_key, component_scores, reasons, applied_rules,
@@ -275,10 +271,8 @@ async function recordScore(pool: Pool, fixture: ConversionFixture): Promise<void
 }
 
 async function recordPaidSale(pool: Pool, fixture: ConversionFixture): Promise<void> {
-  await scopedQuery(
+  await ownerQuery(
     pool,
-    'r72_webhook',
-    { workspaceId: fixture.workspaceId },
     `INSERT INTO app.conversion_commerce_facts
        (id, workspace_id, enrollment_id, contact_id, source_system,
         source_event_id, source_payload_sha256, fact_type, external_order_id,
@@ -295,10 +289,8 @@ async function recordPaidSale(pool: Pool, fixture: ConversionFixture): Promise<v
       `order_${fixture.commerceFactId}`,
     ],
   );
-  await scopedQuery(
+  await ownerQuery(
     pool,
-    'r72_webhook',
-    { workspaceId: fixture.workspaceId },
     `INSERT INTO app.conversion_milestone_facts
        (id, workspace_id, enrollment_id, contact_id, journey_version_id,
         milestone_id, milestone_semantic, source_kind, commerce_fact_id,
@@ -315,10 +307,8 @@ async function recordPaidSale(pool: Pool, fixture: ConversionFixture): Promise<v
       fixture.commerceFactId,
     ],
   );
-  assert.deepEqual(await scopedQuery<{ id: string; status: string; current_milestone_id: string }>(
+  assert.deepEqual(await ownerQuery<{ id: string; status: string; current_milestone_id: string }>(
     pool,
-    'r72_webhook',
-    { workspaceId: fixture.workspaceId },
     `UPDATE app.conversion_enrollments
         SET status = 'completed', current_milestone_id = $1,
             last_event_at = statement_timestamp(), ended_at = statement_timestamp(),
@@ -887,7 +877,6 @@ test('real PostgreSQL enforces conversion publishing, tenant RLS, immutable evid
       ['r72_web', { workspaceId: workspaceA, userId: managerA }],
       ['r72_crm_command', { workspaceId: workspaceA, userId: managerA }],
       ['r72_worker', { workspaceId: workspaceA }],
-      ['r72_webhook', { workspaceId: workspaceA }],
     ] as const) {
       assert.deepEqual(await scopedQuery<{
         score_models: number;
@@ -922,6 +911,16 @@ test('real PostgreSQL enforces conversion publishing, tenant RLS, immutable evid
         [fixtureB.journeyId, fixtureB.commerceFactId],
       ), []);
     }
+
+    await expectPostgresError(
+      scopedQuery(
+        pool,
+        'r72_webhook',
+        { workspaceId: workspaceA },
+        'SELECT count(*) FROM app.conversion_journeys',
+      ),
+      '42501',
+    );
 
     for (const fact of [
       {

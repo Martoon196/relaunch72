@@ -14,16 +14,17 @@ const SCORE_BANDS = [
 const SCORE_MODEL: ConversionScoreModelDefinitionInput = {
   slug: 'property-predator-lead-score',
   name: 'Property Predator lead score',
-  version: 1,
+  version: 2,
   components: [
     { key: 'fit', name: 'Fit', maxPoints: 30 },
     { key: 'engagement', name: 'Engagement', maxPoints: 35 },
     { key: 'intent', name: 'Intent', maxPoints: 35 },
   ],
   bands: SCORE_BANDS,
-  // V1 scores only facts in the currently accepted bridge catalogue. Fit and
-  // intent remain unallocated until explicit, evidence-backed signals exist;
-  // pricing/checkout placeholders are not treated as if they are live facts.
+  // Version 2 scores only immutable first-party event or commerce facts. Fit
+  // remains deliberately unallocated until a reviewed source exists. A lead
+  // can therefore become Burning only through unusually strong evidence
+  // across both buying motions; consent and permission remain separate.
   rules: [
     {
       key: 'account-created', componentKey: 'engagement',
@@ -35,8 +36,43 @@ const SCORE_MODEL: ConversionScoreModelDefinitionInput = {
     {
       key: 'analysis-completed', componentKey: 'engagement',
       kind: 'event',
-      sourceKey: 'product.analysis.completed', points: 30,
+      sourceKey: 'product.analysis.completed', points: 15,
       reason: 'Completed a Property Predator analysis.',
+      mode: 'direct', frequency: 'once_per_enrollment',
+    },
+    {
+      key: 'content-completed', componentKey: 'engagement',
+      kind: 'event',
+      sourceKey: 'content.consumption.completed', points: 15,
+      reason: 'Completed a recorded Property Predator content asset.',
+      mode: 'direct', frequency: 'once_per_enrollment',
+    },
+    {
+      key: 'offer-presented', componentKey: 'intent',
+      kind: 'event',
+      sourceKey: 'offer.presented', points: 10,
+      reason: 'Reached a recorded Property Predator offer.',
+      mode: 'direct', frequency: 'once_per_enrollment',
+    },
+    {
+      key: 'appointment-booked', componentKey: 'intent',
+      kind: 'event',
+      sourceKey: 'sales.appointment.booked', points: 10,
+      reason: 'Booked a recorded Property Predator appointment.',
+      mode: 'direct', frequency: 'once_per_enrollment',
+    },
+    {
+      key: 'presentation-completed', componentKey: 'intent',
+      kind: 'event',
+      sourceKey: 'sales.presentation.completed', points: 10,
+      reason: 'Completed a recorded Property Predator presentation.',
+      mode: 'direct', frequency: 'once_per_enrollment',
+    },
+    {
+      key: 'payment-collected', componentKey: 'intent',
+      kind: 'commerce',
+      sourceKey: 'payment_collected', points: 5,
+      reason: 'Completed an authoritative collected payment.',
       mode: 'direct', frequency: 'once_per_enrollment',
     },
   ],
@@ -56,7 +92,7 @@ export const PROPERTY_PREDATOR_SELF_SERVE_JOURNEY = defineConversionJourney({
   slug: 'property-predator-self-serve',
   name: 'Property Predator self-serve conversion',
   description: 'Product-led conversion from an identified account through meaningful product activation and offer exposure to an authoritative paid sale.',
-  version: 1,
+  version: 2,
   milestones: [
     { key: 'lead', name: 'Lead', position: 1, semantic: 'lead', isCompletion: false },
     { key: 'activated', name: 'Activated', position: 2, semantic: 'activation', isCompletion: false },
@@ -66,8 +102,7 @@ export const PROPERTY_PREDATOR_SELF_SERVE_JOURNEY = defineConversionJourney({
   triggers: [
     event('identity.account.created', 'lead'),
     event('product.analysis.completed', 'activated'),
-    // Priced is intentionally unmapped in V1: pricing and checkout source
-    // events are reserved, not accepted facts in the current PP bridge.
+    event('offer.presented', 'priced'),
     paymentCollected('sale'),
   ],
   scoreModel: SCORE_MODEL,
@@ -77,7 +112,7 @@ export const PROPERTY_PREDATOR_AGENCY_LAPS_JOURNEY = defineConversionJourney({
   slug: 'property-predator-agency-laps',
   name: 'Property Predator agency LAPS',
   description: 'Sales-assisted Lead, Appointment, Presentation and Sale journey for agency and organisation opportunities.',
-  version: 1,
+  version: 2,
   milestones: [
     { key: 'lead', name: 'Lead', position: 1, semantic: 'lead', isCompletion: false },
     { key: 'appointment', name: 'Appointment', position: 2, semantic: 'appointment', isCompletion: false },
@@ -85,8 +120,11 @@ export const PROPERTY_PREDATOR_AGENCY_LAPS_JOURNEY = defineConversionJourney({
     { key: 'sale', name: 'Sale', position: 4, semantic: 'sale', isCompletion: true },
   ],
   triggers: [
-    event('identity.account.created', 'lead'),
-    // Appointment and Presentation wait for explicit calendar/attendance facts.
+    // The runtime establishes Lead and Appointment together when the first
+    // authoritative appointment event enrolls this route. Account creation
+    // alone stays on the self-serve journey instead of duplicating every lead.
+    event('sales.appointment.booked', 'appointment'),
+    event('sales.presentation.completed', 'presentation'),
     paymentCollected('sale'),
   ],
   scoreModel: SCORE_MODEL,

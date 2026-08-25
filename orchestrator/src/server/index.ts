@@ -32,9 +32,17 @@ import { customerOutboundMessagingEnabled, runtimeSafetyPolicy, subscriptionChec
 import { canonicalIntake } from '../intake/canonical.js';
 import { buildPgPortalPlatform, postgresPortalEnabled, type PgPortalPlatform } from '../portal/postgres-platform.js';
 import { resolvePortalProductProfile } from '../portal/product-profile.js';
-import { createExternalEventCommandDatabasePool } from '../db/pool.js';
 import {
+  createExternalEventCommandDatabasePool,
+  createWebhookDatabasePool,
+} from '../db/pool.js';
+import {
+  PgPropertyPredatorGrowthEventProjector,
+  PgPropertyPredatorJourneyRuntime,
   PgPropertyPredatorExternalEventShadowService,
+  PropertyPredatorRuntimeEventStore,
+  assertPgPropertyPredatorGrowthEventProjectorReady,
+  assertPgPropertyPredatorJourneyRuntimeReady,
   assertPgPropertyPredatorExternalEventShadowStoreReady,
   createPropertyPredatorExternalEventHandler,
   loadPropertyPredatorExternalEventConfig,
@@ -146,6 +154,8 @@ async function main(): Promise<void> {
   const externalEventConfig = loadPropertyPredatorExternalEventConfig(process.env);
   let externalEventCommandPool:
     ReturnType<typeof createExternalEventCommandDatabasePool> | undefined;
+  let externalEventWebhookPool:
+    ReturnType<typeof createWebhookDatabasePool> | undefined;
   let propertyPredatorExternalEvents: PropertyPredatorExternalEventBridgeMount = Object.freeze({
     enabled: externalEventConfig.enabled,
     ready: false,
@@ -161,40 +171,84 @@ async function main(): Promise<void> {
       if (!process.env.DATABASE_EXTERNAL_EVENT_COMMAND_URL?.trim()) {
         throw new Error('dedicated external-event command database identity is required');
       }
+      if (!process.env.DATABASE_WEBHOOK_URL?.trim()) {
+        throw new Error('dedicated webhook projection database identity is required');
+      }
       externalEventCommandPool = createExternalEventCommandDatabasePool(process.env);
-      await assertPgPropertyPredatorExternalEventShadowStoreReady(externalEventCommandPool);
-      const store = new PgPropertyPredatorExternalEventShadowService({
+      externalEventWebhookPool = createWebhookDatabasePool(process.env);
+      await Promise.all([
+        assertPgPropertyPredatorExternalEventShadowStoreReady(externalEventCommandPool),
+        assertPgPropertyPredatorGrowthEventProjectorReady(externalEventWebhookPool),
+        assertPgPropertyPredatorJourneyRuntimeReady(
+          externalEventWebhookPool,
+          externalEventConfig.binding.workspaceId,
+        ),
+      ]);
+      const receiptStore = new PgPropertyPredatorExternalEventShadowService({
         commandPool: externalEventCommandPool,
         workspaceId: externalEventConfig.binding.workspaceId,
       });
-      propertyPredatorExternalEvents = Object.freeze({
-        enabled: true,
+      const growthProjector = new PgPropertyPredatorGrowthEventProjector({
+        webhookPool: externalEventWebhookPool,
+        workspaceId: externalEventConfig.binding.workspaceId,
+      });
+      const journeyRuntime = new PgPropertyPredatorJourneyRuntime({
+        webhookPool: externalEventWebhookPool,
+        workspaceId: externalEventConfig.binding.workspaceId,
+      });
+      const store = new PropertyPredatorRuntimeEventStore({
+        receiptStore,
+        growthProjector,
+        journeyRuntime,
+      });
+      const runtimeHealth: {
+        ready: boolean;
+        blockers: readonly string[];
+      } = {
         ready: true,
         blockers: Object.freeze([]),
-        handle: createPropertyPredatorExternalEventHandler({
-          production: externalEventConfig.production,
-          trustedProxyAddresses: externalEventConfig.trustedProxyAddresses,
-          bindings: [{
-            keyId: externalEventConfig.binding.keyId,
-            sharedSecret: externalEventConfig.binding.sharedSecret,
-            store,
-          }],
-        }),
+      };
+      const handle = createPropertyPredatorExternalEventHandler({
+        production: externalEventConfig.production,
+        trustedProxyAddresses: externalEventConfig.trustedProxyAddresses,
+        bindings: [{
+          keyId: externalEventConfig.binding.keyId,
+          sharedSecret: externalEventConfig.binding.sharedSecret,
+          store,
+        }],
+        onRuntimeAvailable: () => {
+          runtimeHealth.ready = true;
+          runtimeHealth.blockers = Object.freeze([]);
+        },
+        onRuntimeUnavailable: () => {
+          runtimeHealth.ready = false;
+          runtimeHealth.blockers = Object.freeze([
+            'Property Predator external-event runtime failed its latest projection',
+          ]);
+        },
       });
-      console.log('Property Predator external-event shadow bridge is ready.');
+      propertyPredatorExternalEvents = Object.freeze({
+        enabled: true,
+        get ready() { return runtimeHealth.ready; },
+        get blockers() { return runtimeHealth.blockers; },
+        handle,
+      });
+      console.log('Property Predator external-event journey runtime is ready.');
     } catch {
-      if (externalEventCommandPool) {
-        await Promise.allSettled([externalEventCommandPool.end()]);
-        externalEventCommandPool = undefined;
-      }
+      await Promise.allSettled([
+        externalEventCommandPool?.end(),
+        externalEventWebhookPool?.end(),
+      ]);
+      externalEventCommandPool = undefined;
+      externalEventWebhookPool = undefined;
       propertyPredatorExternalEvents = Object.freeze({
         enabled: true,
         ready: false,
         blockers: Object.freeze([
-          'Property Predator external-event receipt store did not pass protected readiness',
+          'Property Predator external-event runtime did not pass protected readiness',
         ]),
       });
-      console.warn('⚠  Property Predator external-event bridge unavailable; protected readiness failed.');
+      console.warn('⚠  Property Predator external-event runtime unavailable; protected readiness failed.');
     }
   } else if (externalEventConfig.enabled) {
     console.warn(`⚠  Property Predator external-event bridge unavailable: ${externalEventConfig.blockers.join('; ')}`);
@@ -370,6 +424,7 @@ async function main(): Promise<void> {
       await Promise.all([
         postgresPortal?.close(),
         externalEventCommandPool?.end(),
+        externalEventWebhookPool?.end(),
       ]);
     } catch (error) {
       process.exitCode = 1;

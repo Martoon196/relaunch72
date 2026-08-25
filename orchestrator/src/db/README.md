@@ -72,9 +72,14 @@ messages, publishing, or any external provider effect.
 - Authenticated Property Predator source ingress uses
   `DATABASE_EXTERNAL_EVENT_COMMAND_URL` / `r72_external_event_command`. That
   login has no table grants and can execute only the request-context helpers
-  plus the receipt recorder owned by a separate NOLOGIN definer. The current
-  route is disabled by default and journals replay-safe shadow receipts only;
-  it cannot project CRM, journey, consent, outbox or provider effects.
+  plus the receipt recorder owned by a separate NOLOGIN definer. The route is
+  disabled by default. When explicitly enabled it also requires
+  `DATABASE_WEBHOOK_URL` / `r72_webhook`; the application composes replay-safe
+  Growth and Journey projectors behind the immutable shadow receipt. The
+  webhook login is table-blind for this domain and supplies only the accepted
+  event ID to those separately reviewed definer functions. This can derive
+  CRM, evidence, enrolment, milestone, score, consent, commerce and pending
+  outbox facts, but it cannot call a provider or produce an external effect.
 - The migrator needs permission to create roles and extensions, but does not
   need true PostgreSQL superuser authority. Role bootstraps rely on safe
   `CREATE ROLE` defaults and audit every protected capability instead of trying
@@ -124,7 +129,14 @@ Migration `0014` adds the forced-RLS Conversion Journey, scoring, consent,
 suppression, commerce and milestone foundation with immutable publication and
 payment-backed Sale authority. Migration `0015` adds the isolated receipt-only
 Property Predator external-event command/definer roles and replay-safe shadow
-ledger.
+ledger. Migration `0016` adds forced-RLS Property Predator source identities,
+content consumption, offer, attribution and private projection evidence.
+Migration `0017` adds the table-blind, event-ID-only Growth evidence projector
+and its independent idempotency receipts. Migration `0018` adds the exact v2
+self-serve and Agency LAPS Journey runtime: automatic enrolment, monotonic
+milestones, model-derived score snapshots, endpoint-bound consent, routed
+commerce facts, transactionally matched outbox facts and separate replay
+receipts behind a NOLOGIN/NOINHERIT definer.
 
 Before the first successful managed-PostgreSQL application, the pre-launch role
 bootstraps in `0001`, `0003`, `0004`, `0006` and `0008` were amended to support

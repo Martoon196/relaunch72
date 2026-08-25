@@ -6,11 +6,15 @@ import { validateDatabaseContext, type DatabaseRequestContext } from '../db/rls.
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const INTEGER_PATTERN = /^(?:0|[1-9]\d*)$/;
 const EVIDENCE_LIMIT = 200;
+const JOURNEY_LIMIT = 10;
 const OFFER_LIMIT = 50;
 const OPPORTUNITY_LIMIT = 50;
 const TASK_LIMIT = 100;
 
 const ENROLLMENT_STATUSES = ['active', 'completed', 'withdrawn', 'disqualified'] as const;
+const PROPERTY_PREDATOR_JOURNEY_SLUGS = [
+  'property-predator-self-serve', 'property-predator-agency-laps',
+] as const;
 const MILESTONE_SEMANTICS = [
   'lead', 'appointment', 'presentation', 'activation', 'offer', 'sale', 'retention', 'custom',
 ] as const;
@@ -36,6 +40,7 @@ const TASK_PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const;
 const TASK_STATUSES = ['open', 'completed', 'cancelled'] as const;
 
 export type Lead360EnrollmentStatus = (typeof ENROLLMENT_STATUSES)[number];
+export type Lead360JourneySlug = (typeof PROPERTY_PREDATOR_JOURNEY_SLUGS)[number];
 export type Lead360MilestoneSemantic = (typeof MILESTONE_SEMANTICS)[number];
 export type Lead360EvidenceKind = (typeof EVIDENCE_KINDS)[number];
 export type Lead360OfferResponse = (typeof OFFER_RESPONSES)[number];
@@ -75,6 +80,8 @@ export interface Lead360JourneyRead {
   readonly enrollmentId: string;
   readonly journeyId: string;
   readonly journeyVersionId: string;
+  /** Present on current PostgreSQL reads; optional for older custom adapters. */
+  readonly slug?: Lead360JourneySlug;
   readonly name: string;
   readonly status: Lead360EnrollmentStatus;
   readonly currentMilestoneId: string | null;
@@ -82,6 +89,8 @@ export interface Lead360JourneyRead {
   readonly lastEventAt: string | null;
   readonly endedAt: string | null;
   readonly stages: readonly Lead360JourneyStageRead[];
+  /** Latest explainable score for this exact enrollment. */
+  readonly score?: Lead360ScoreRead | null;
 }
 
 export interface Lead360ScoreRead {
@@ -179,7 +188,15 @@ export interface Lead360CaseFileRead {
   readonly contactId: string;
   readonly asOf: string;
   readonly identity: Lead360IdentityRead;
+  /**
+   * All bounded Property Predator enrollments in primary-route order. Active
+   * routes rank by score, latest activity and the stable product route order;
+   * when none is active, the most recent terminal route ranks first.
+   */
+  readonly journeys?: readonly Lead360JourneyRead[];
+  /** Backward-compatible alias for the deterministically chosen primary journey. */
   readonly journey: Lead360JourneyRead | null;
+  /** Backward-compatible alias for the primary journey's latest score. */
   readonly score: Lead360ScoreRead | null;
   readonly evidence: readonly Lead360EvidenceRead[];
   readonly offers: readonly Lead360OfferRead[];
@@ -375,7 +392,7 @@ const CONTACT_SQL = `/* conversion.lead-360.read-contact */
     AND contact.deleted_at IS NULL`;
 
 const JOURNEY_SQL = `/* conversion.lead-360.read-journey */
-  WITH selected_enrollment AS (
+  WITH selected_enrollments AS (
     SELECT enrollment.workspace_id,
            enrollment.contact_id,
            enrollment.id,
@@ -385,21 +402,30 @@ const JOURNEY_SQL = `/* conversion.lead-360.read-journey */
            enrollment.current_milestone_id,
            enrollment.enrolled_at,
            enrollment.last_event_at,
-           enrollment.ended_at
+           enrollment.ended_at,
+           journey.slug::text AS journey_slug,
+           journey.name AS journey_name
     FROM app.conversion_enrollments AS enrollment
+    JOIN app.conversion_journeys AS journey
+      ON journey.workspace_id = app_private.current_workspace_id()
+     AND journey.id = enrollment.journey_id
     WHERE enrollment.workspace_id = app_private.current_workspace_id()
       AND enrollment.contact_id = $1::uuid
+      AND journey.slug::text IN (
+        'property-predator-self-serve', 'property-predator-agency-laps'
+      )
     ORDER BY (enrollment.status = 'active') DESC,
-             enrollment.enrolled_at DESC,
+             coalesce(enrollment.last_event_at, enrollment.ended_at, enrollment.enrolled_at) DESC,
              enrollment.id DESC
-    LIMIT 1
+    LIMIT ${JOURNEY_LIMIT}
   )
   SELECT enrollment.workspace_id,
          enrollment.contact_id,
          enrollment.id AS enrollment_id,
          enrollment.journey_id,
          enrollment.journey_version_id,
-         journey.name AS journey_name,
+         enrollment.journey_slug,
+         enrollment.journey_name,
          enrollment.status AS enrollment_status,
          enrollment.current_milestone_id,
          enrollment.enrolled_at,
@@ -412,10 +438,7 @@ const JOURNEY_SQL = `/* conversion.lead-360.read-journey */
          milestone.semantic,
          milestone.is_completion,
          reached.occurred_at AS reached_at
-  FROM selected_enrollment AS enrollment
-  JOIN app.conversion_journeys AS journey
-    ON journey.workspace_id = app_private.current_workspace_id()
-   AND journey.id = enrollment.journey_id
+  FROM selected_enrollments AS enrollment
   LEFT JOIN app.conversion_journey_milestones AS milestone
     ON milestone.workspace_id = app_private.current_workspace_id()
    AND milestone.journey_version_id = enrollment.journey_version_id
@@ -424,35 +447,64 @@ const JOURNEY_SQL = `/* conversion.lead-360.read-journey */
    AND reached.enrollment_id = enrollment.id
    AND reached.contact_id = $1::uuid
    AND reached.milestone_id = milestone.id
-  ORDER BY milestone.position NULLS LAST, milestone.id`;
+  ORDER BY (enrollment.status = 'active') DESC,
+           coalesce(enrollment.last_event_at, enrollment.ended_at, enrollment.enrolled_at) DESC,
+           enrollment.id DESC,
+           milestone.position NULLS LAST,
+           milestone.id`;
 
 const SCORE_SQL = `/* conversion.lead-360.read-score */
-  WITH selected_enrollment AS (
-    SELECT enrollment.id
+  WITH selected_enrollments AS (
+    SELECT enrollment.workspace_id,
+           enrollment.contact_id,
+           enrollment.id,
+           enrollment.status,
+           enrollment.enrolled_at,
+           enrollment.last_event_at,
+           enrollment.ended_at
     FROM app.conversion_enrollments AS enrollment
+    JOIN app.conversion_journeys AS journey
+      ON journey.workspace_id = app_private.current_workspace_id()
+     AND journey.id = enrollment.journey_id
     WHERE enrollment.workspace_id = app_private.current_workspace_id()
       AND enrollment.contact_id = $1::uuid
+      AND journey.slug::text IN (
+        'property-predator-self-serve', 'property-predator-agency-laps'
+      )
     ORDER BY (enrollment.status = 'active') DESC,
-             enrollment.enrolled_at DESC,
+             coalesce(enrollment.last_event_at, enrollment.ended_at, enrollment.enrolled_at) DESC,
              enrollment.id DESC
-    LIMIT 1
+    LIMIT ${JOURNEY_LIMIT}
   )
-  SELECT score.workspace_id,
-         score.contact_id,
+  SELECT enrollment.workspace_id,
+         enrollment.contact_id,
          score.id AS score_id,
-         score.enrollment_id,
+         enrollment.id AS enrollment_id,
          score.total_score::text AS total_score,
          score.band_key,
          score.component_scores,
          score.reasons,
          score.source_occurred_at,
          score.evaluated_at
-  FROM app.lead_score_snapshots AS score
-  JOIN selected_enrollment AS enrollment ON enrollment.id = score.enrollment_id
-  WHERE score.workspace_id = app_private.current_workspace_id()
-    AND score.contact_id = $1::uuid
-  ORDER BY score.evaluated_at DESC, score.id DESC
-  LIMIT 1`;
+  FROM selected_enrollments AS enrollment
+  JOIN LATERAL (
+    SELECT snapshot.id,
+           snapshot.total_score,
+           snapshot.band_key,
+           snapshot.component_scores,
+           snapshot.reasons,
+           snapshot.source_occurred_at,
+           snapshot.evaluated_at
+    FROM app.lead_score_snapshots AS snapshot
+    WHERE snapshot.workspace_id = app_private.current_workspace_id()
+      AND snapshot.contact_id = $1::uuid
+      AND snapshot.enrollment_id = enrollment.id
+    ORDER BY snapshot.evaluated_at DESC, snapshot.id DESC
+    LIMIT 1
+  ) AS score ON true
+  ORDER BY (enrollment.status = 'active') DESC,
+           coalesce(enrollment.last_event_at, enrollment.ended_at, enrollment.enrolled_at) DESC,
+           enrollment.id DESC`;
 
 const EVIDENCE_SQL = `/* conversion.lead-360.read-evidence */
   WITH evidence AS (
@@ -768,65 +820,90 @@ function mapContact(
   });
 }
 
-function mapJourney(
-  values: readonly unknown[],
+function mapScoreRow(
+  value: unknown,
+  index: number,
   workspaceId: string,
   contactId: string,
-): Lead360JourneyRead | null {
-  if (values.length === 0) return null;
-  const rows = values.map((value, index) => record(value, `journey[${index}]`));
-  rows.forEach((row, index) => assertScope(row, `journey[${index}]`, workspaceId, contactId));
-  const first = rows[0]!;
-  const enrollmentId = uuid(first.enrollment_id, 'journey.enrollmentId');
-  const journeyId = uuid(first.journey_id, 'journey.journeyId');
-  const journeyVersionId = uuid(first.journey_version_id, 'journey.journeyVersionId');
-  const name = text(first.journey_name, 'journey.name');
-  const status = oneOf(first.enrollment_status, ENROLLMENT_STATUSES, 'journey.status');
-  const currentMilestoneId = nullableUuid(first.current_milestone_id, 'journey.currentMilestoneId');
-  const enrolledAt = timestamp(first.enrolled_at, 'journey.enrolledAt');
-  const lastEventAt = nullableTimestamp(first.last_event_at, 'journey.lastEventAt');
-  const endedAt = nullableTimestamp(first.ended_at, 'journey.endedAt');
-  if ((status === 'active') !== (endedAt === null)) return fail('journey has inconsistent terminal metadata');
+): Lead360ScoreRead {
+  const row = record(value, `scores[${index}]`);
+  assertScope(row, `scores[${index}]`, workspaceId, contactId);
+  return Object.freeze({
+    id: uuid(row.score_id, `scores[${index}].id`),
+    enrollmentId: uuid(row.enrollment_id, `scores[${index}].enrollmentId`),
+    total: integer(row.total_score, `scores[${index}].total`, 0, 100),
+    band: text(row.band_key, `scores[${index}].band`),
+    componentScores: componentScores(row.component_scores, `scores[${index}].componentScores`),
+    reasons: reasons(row.reasons, `scores[${index}].reasons`),
+    sourceOccurredAt: timestamp(row.source_occurred_at, `scores[${index}].sourceOccurredAt`),
+    evaluatedAt: timestamp(row.evaluated_at, `scores[${index}].evaluatedAt`),
+  });
+}
 
-  const stages = Object.freeze(rows.map((row, index): Lead360JourneyStageRead => {
-    if (uuid(row.enrollment_id, `journey[${index}].enrollmentId`) !== enrollmentId
-        || uuid(row.journey_id, `journey[${index}].journeyId`) !== journeyId
-        || uuid(row.journey_version_id, `journey[${index}].journeyVersionId`) !== journeyVersionId
-        || text(row.journey_name, `journey[${index}].name`) !== name
-        || oneOf(row.enrollment_status, ENROLLMENT_STATUSES, `journey[${index}].status`) !== status
-        || nullableUuid(row.current_milestone_id, `journey[${index}].currentMilestoneId`) !== currentMilestoneId
-        || timestamp(row.enrolled_at, `journey[${index}].enrolledAt`) !== enrolledAt
-        || nullableTimestamp(row.last_event_at, `journey[${index}].lastEventAt`) !== lastEventAt
-        || nullableTimestamp(row.ended_at, `journey[${index}].endedAt`) !== endedAt) {
-      return fail(`journey[${index}] does not describe one stable enrollment`);
+function mapJourneyGroup(
+  rows: readonly Record<string, unknown>[],
+  groupIndex: number,
+  score: Lead360ScoreRead | null,
+): Lead360JourneyRead {
+  const label = `journeys[${groupIndex}]`;
+  const first = rows[0]!;
+  const enrollmentId = uuid(first.enrollment_id, `${label}.enrollmentId`);
+  const journeyId = uuid(first.journey_id, `${label}.journeyId`);
+  const journeyVersionId = uuid(first.journey_version_id, `${label}.journeyVersionId`);
+  const slug = oneOf(first.journey_slug, PROPERTY_PREDATOR_JOURNEY_SLUGS, `${label}.slug`);
+  const name = text(first.journey_name, `${label}.name`);
+  const status = oneOf(first.enrollment_status, ENROLLMENT_STATUSES, `${label}.status`);
+  const currentMilestoneId = nullableUuid(first.current_milestone_id, `${label}.currentMilestoneId`);
+  const enrolledAt = timestamp(first.enrolled_at, `${label}.enrolledAt`);
+  const lastEventAt = nullableTimestamp(first.last_event_at, `${label}.lastEventAt`);
+  const endedAt = nullableTimestamp(first.ended_at, `${label}.endedAt`);
+  if ((status === 'active') !== (endedAt === null)) return fail(`${label} has inconsistent terminal metadata`);
+  if (score !== null && score.enrollmentId !== enrollmentId) {
+    return fail(`${label} score belongs to another enrollment`);
+  }
+
+  const stages = Object.freeze(rows.map((row, stageIndex): Lead360JourneyStageRead => {
+    const stageLabel = `${label}.stages[${stageIndex}]`;
+    if (uuid(row.enrollment_id, `${stageLabel}.enrollmentId`) !== enrollmentId
+        || uuid(row.journey_id, `${stageLabel}.journeyId`) !== journeyId
+        || uuid(row.journey_version_id, `${stageLabel}.journeyVersionId`) !== journeyVersionId
+        || oneOf(row.journey_slug, PROPERTY_PREDATOR_JOURNEY_SLUGS, `${stageLabel}.slug`) !== slug
+        || text(row.journey_name, `${stageLabel}.journeyName`) !== name
+        || oneOf(row.enrollment_status, ENROLLMENT_STATUSES, `${stageLabel}.status`) !== status
+        || nullableUuid(row.current_milestone_id, `${stageLabel}.currentMilestoneId`) !== currentMilestoneId
+        || timestamp(row.enrolled_at, `${stageLabel}.enrolledAt`) !== enrolledAt
+        || nullableTimestamp(row.last_event_at, `${stageLabel}.lastEventAt`) !== lastEventAt
+        || nullableTimestamp(row.ended_at, `${stageLabel}.endedAt`) !== endedAt) {
+      return fail(`${stageLabel} does not describe one stable enrollment`);
     }
-    const id = uuid(row.milestone_id, `journey[${index}].milestoneId`);
+    const id = uuid(row.milestone_id, `${stageLabel}.id`);
     return Object.freeze({
       id,
-      key: text(row.milestone_key, `journey[${index}].key`),
-      name: text(row.milestone_name, `journey[${index}].name`),
-      position: integer(row.position, `journey[${index}].position`, 1, 2_147_483_647),
-      semantic: oneOf(row.semantic, MILESTONE_SEMANTICS, `journey[${index}].semantic`),
-      isCompletion: bool(row.is_completion, `journey[${index}].isCompletion`),
+      key: text(row.milestone_key, `${stageLabel}.key`),
+      name: text(row.milestone_name, `${stageLabel}.name`),
+      position: integer(row.position, `${stageLabel}.position`, 1, 2_147_483_647),
+      semantic: oneOf(row.semantic, MILESTONE_SEMANTICS, `${stageLabel}.semantic`),
+      isCompletion: bool(row.is_completion, `${stageLabel}.isCompletion`),
       isCurrent: id === currentMilestoneId,
-      reachedAt: nullableTimestamp(row.reached_at, `journey[${index}].reachedAt`),
+      reachedAt: nullableTimestamp(row.reached_at, `${stageLabel}.reachedAt`),
     });
   }));
   for (let index = 1; index < stages.length; index += 1) {
     if (stages[index - 1]!.position >= stages[index]!.position) {
-      return fail('journey stages must be strictly ordered');
+      return fail(`${label} stages must be strictly ordered`);
     }
   }
   if (currentMilestoneId !== null && stages.filter((stage) => stage.isCurrent).length !== 1) {
-    return fail('journey current milestone is outside its stage list');
+    return fail(`${label} current milestone is outside its stage list`);
   }
   if (status === 'completed' && currentMilestoneId === null) {
-    return fail('completed journey must identify its current milestone');
+    return fail(`${label} completed journey must identify its current milestone`);
   }
   return Object.freeze({
     enrollmentId,
     journeyId,
     journeyVersionId,
+    slug,
     name,
     status,
     currentMilestoneId,
@@ -834,33 +911,79 @@ function mapJourney(
     lastEventAt,
     endedAt,
     stages,
+    score,
   });
 }
 
-function mapScore(
-  values: readonly unknown[],
+function journeyRouteRank(journey: Lead360JourneyRead): number {
+  const rank = journey.slug ? PROPERTY_PREDATOR_JOURNEY_SLUGS.indexOf(journey.slug) : -1;
+  return rank === -1 ? PROPERTY_PREDATOR_JOURNEY_SLUGS.length : rank;
+}
+
+function journeyActivityTime(journey: Lead360JourneyRead): number {
+  return Date.parse(journey.status === 'active'
+    ? (journey.lastEventAt ?? journey.enrolledAt)
+    : (journey.endedAt ?? journey.lastEventAt ?? journey.enrolledAt));
+}
+
+/** Total ordering for the one journey that owns the headline score and next move. */
+function compareJourneyPriority(left: Lead360JourneyRead, right: Lead360JourneyRead): number {
+  const leftActive = left.status === 'active';
+  const rightActive = right.status === 'active';
+  if (leftActive !== rightActive) return leftActive ? -1 : 1;
+
+  if (leftActive) {
+    const scoreDifference = (right.score?.total ?? -1) - (left.score?.total ?? -1);
+    if (scoreDifference !== 0) return scoreDifference;
+  }
+
+  const activityDifference = journeyActivityTime(right) - journeyActivityTime(left);
+  if (activityDifference !== 0) return activityDifference;
+  const routeDifference = journeyRouteRank(left) - journeyRouteRank(right);
+  if (routeDifference !== 0) return routeDifference;
+  return left.enrollmentId < right.enrollmentId ? -1 : left.enrollmentId > right.enrollmentId ? 1 : 0;
+}
+
+function mapJourneys(
+  journeyValues: readonly unknown[],
+  scoreValues: readonly unknown[],
   workspaceId: string,
   contactId: string,
-  journey: Lead360JourneyRead | null,
-): Lead360ScoreRead | null {
-  if (values.length === 0) return null;
-  if (values.length !== 1) return fail('latest score query must return at most one row');
-  const row = record(values[0], 'score');
-  assertScope(row, 'score', workspaceId, contactId);
-  const enrollmentId = uuid(row.enrollment_id, 'score.enrollmentId');
-  if (!journey || journey.enrollmentId !== enrollmentId) {
-    return fail('latest score does not belong to the selected journey');
+): readonly Lead360JourneyRead[] {
+  const scores = Object.freeze(scoreValues.map((value, index) => (
+    mapScoreRow(value, index, workspaceId, contactId)
+  )));
+  const scoreByEnrollment = new Map<string, Lead360ScoreRead>();
+  for (const score of scores) {
+    if (scoreByEnrollment.has(score.enrollmentId)) {
+      return fail(`scores contain more than one latest row for enrollment ${score.enrollmentId}`);
+    }
+    scoreByEnrollment.set(score.enrollmentId, score);
   }
-  return Object.freeze({
-    id: uuid(row.score_id, 'score.id'),
-    enrollmentId,
-    total: integer(row.total_score, 'score.total', 0, 100),
-    band: text(row.band_key, 'score.band'),
-    componentScores: componentScores(row.component_scores, 'score.componentScores'),
-    reasons: reasons(row.reasons, 'score.reasons'),
-    sourceOccurredAt: timestamp(row.source_occurred_at, 'score.sourceOccurredAt'),
-    evaluatedAt: timestamp(row.evaluated_at, 'score.evaluatedAt'),
+
+  const groups: Array<{ enrollmentId: string; rows: Record<string, unknown>[] }> = [];
+  const groupByEnrollment = new Map<string, { enrollmentId: string; rows: Record<string, unknown>[] }>();
+  journeyValues.forEach((value, rowIndex) => {
+    const row = record(value, `journeyRows[${rowIndex}]`);
+    assertScope(row, `journeyRows[${rowIndex}]`, workspaceId, contactId);
+    const enrollmentId = uuid(row.enrollment_id, `journeyRows[${rowIndex}].enrollmentId`);
+    let group = groupByEnrollment.get(enrollmentId);
+    if (!group) {
+      group = { enrollmentId, rows: [] };
+      groupByEnrollment.set(enrollmentId, group);
+      groups.push(group);
+    }
+    group.rows.push(row);
   });
+
+  const journeys = Object.freeze(groups.map((group, index) => (
+    mapJourneyGroup(group.rows, index, scoreByEnrollment.get(group.enrollmentId) ?? null)
+  )).sort(compareJourneyPriority));
+  const enrollmentIds = new Set(journeys.map((journey) => journey.enrollmentId));
+  if (scores.some((score) => !enrollmentIds.has(score.enrollmentId))) {
+    return fail('latest score rows include an enrollment outside the bounded journey set');
+  }
+  return journeys;
 }
 
 function mapEvidence(
@@ -1089,8 +1212,9 @@ export class Lead360ReadService {
       const opportunityRows = await queryRows(transaction, OPPORTUNITIES_SQL, contactId);
       const taskRows = await queryRows(transaction, TASKS_SQL, contactId);
 
-      const journey = mapJourney(journeyRows, workspaceId, contactId);
-      const score = mapScore(scoreRows, workspaceId, contactId, journey);
+      const journeys = mapJourneys(journeyRows, scoreRows, workspaceId, contactId);
+      const journey = journeys[0] ?? null;
+      const score = journey?.score ?? null;
       const evidence = Object.freeze(evidenceRows.map((row, index) => (
         mapEvidence(row, index, workspaceId, contactId)
       )));
@@ -1112,6 +1236,7 @@ export class Lead360ReadService {
         contactId,
         asOf: contact.asOf,
         identity: contact.identity,
+        journeys,
         journey,
         score,
         evidence,

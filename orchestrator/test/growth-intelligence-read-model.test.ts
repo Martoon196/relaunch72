@@ -128,6 +128,15 @@ test('GrowthIntelligenceReadService rejects non-user contexts and malformed scor
     () => new GrowthIntelligenceReadService({ transactionRunner: new FakeRunner(malformed) }).load(userContext()),
     GrowthIntelligenceReadDataError,
   );
+
+  const duplicated = fixtures();
+  duplicated['conversion.growth.read-hot-leads']!.push({
+    ...duplicated['conversion.growth.read-hot-leads']![0]!,
+  });
+  await assert.rejects(
+    () => new GrowthIntelligenceReadService({ transactionRunner: new FakeRunner(duplicated) }).load(userContext()),
+    /each contact at most once/,
+  );
 });
 
 test('growth intelligence SQL reads only RLS-scoped app tables and never private payload journals', async () => {
@@ -137,9 +146,30 @@ test('growth intelligence SQL reads only RLS-scoped app tables and never private
   assert.match(sql, /app_private\.current_workspace_id\(\)/);
   assert.match(sql, /app\.content_consumption_facts/);
   assert.match(sql, /app\.offer_presentation_facts/);
-  assert.match(sql, /count\(DISTINCT fact\.contact_id\)/, 'funnel stages count people, not repeat enrollments');
+  assert.match(sql, /count\(DISTINCT fact\.contact_id\)::text AS achieved_count/, 'funnel stages count people, not repeat enrollments');
+  assert.match(sql, /count\(DISTINCT fact\.contact_id\) FILTER/, 'window movement counts each person once per milestone');
+  assert.equal(
+    (sql.match(/AND fact\.(?:occurred_at|presented_at|responded_at) <= transaction_timestamp\(\)/g) ?? []).length,
+    6,
+    'every 30-day funnel and evidence window is capped at the read snapshot',
+  );
+  assert.match(sql, /consumption\.id AS source_id/);
+  assert.match(sql, /presentation\.id AS source_id/);
+  assert.match(sql, /response\.id AS source_id/);
+  assert.match(
+    sql,
+    /ORDER BY evidence\.occurred_at DESC, evidence\.kind, evidence\.label,\s+evidence\.source_id DESC/,
+    'same-time evidence has a stable immutable fact tie-breaker',
+  );
   assert.match(sql, /DISTINCT ON \(enrollment\.contact_id\)/, 'hot list contains each person once');
+  assert.match(sql, /enrollment\.status = 'active'/, 'terminal journeys do not displace actionable enrollments');
   assert.match(sql, /latest_score\.total_score >= 22/, 'quiet and unscored records stay out of the attention list');
+  assert.match(
+    sql,
+    /ORDER BY enrollment\.contact_id,\s+latest_score\.total_score DESC NULLS LAST,\s+latest_score\.evaluated_at DESC,\s+enrollment\.last_event_at DESC NULLS LAST,\s+current_milestone\.position DESC NULLS LAST,\s+journey\.slug::text,\s+enrollment\.id DESC/,
+    'two active journeys choose the most actionable enrollment with total ordering',
+  );
   assert.match(sql, /count\(DISTINCT \(fact\.contact_id, fact\.content_key, fact\.content_version\)\)/);
+  assert.doesNotMatch(sql, /response <> 'presented'/, 'every persisted response is a real reply');
   assert.doesNotMatch(sql, /external_event_shadow|payload_sha256|raw_payload|signature/i);
 });

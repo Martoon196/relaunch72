@@ -10,6 +10,7 @@ import { escapeHtml } from './ui.js';
 
 export type Lead360ScoreBand = 'burning' | 'hot' | 'warm' | 'quiet' | 'unscored';
 export type Lead360StageState = 'complete' | 'current' | 'upcoming';
+export type Lead360JourneyStatus = 'active' | 'completed' | 'withdrawn' | 'disqualified';
 export type Lead360EvidenceKind =
   | 'watched'
   | 'listened'
@@ -40,9 +41,24 @@ export interface Lead360JourneyStageView {
   readonly reachedAt: string | null;
 }
 
+export interface Lead360JourneyScoreView {
+  readonly total: number;
+  readonly explanation: string | null;
+  readonly sourceOccurredAt: string;
+  readonly evaluatedAt: string;
+}
+
 export interface Lead360JourneyView {
   readonly label: string;
   readonly stages: readonly Lead360JourneyStageView[];
+  /** True only for the route that owns the headline score and recommendation context. */
+  readonly isPrimary?: boolean;
+  /** Runtime metadata is optional so older portal adapters remain source-compatible. */
+  readonly status?: Lead360JourneyStatus;
+  readonly enrolledAt?: string;
+  readonly lastEventAt?: string | null;
+  readonly endedAt?: string | null;
+  readonly score?: Lead360JourneyScoreView | null;
 }
 
 export interface Lead360EvidenceView {
@@ -102,6 +118,10 @@ export interface Lead360View {
   readonly identity: Lead360IdentityView;
   readonly score: number | null;
   readonly scoreExplanation: string | null;
+  /** Explicit route context for the headline score and best-next-move panel. */
+  readonly primaryJourneyLabel?: string | null;
+  /** All active/recent runtime enrollments. Falls back to `journey` when absent. */
+  readonly journeys?: readonly Lead360JourneyView[];
   readonly journey: Lead360JourneyView;
   readonly evidence: readonly Lead360EvidenceView[];
   readonly nextMove: Lead360NextMoveView | null;
@@ -150,6 +170,13 @@ const SCORE_LABELS: Readonly<Record<Lead360ScoreBand, string>> = Object.freeze({
   unscored: 'Unscored',
 });
 
+const JOURNEY_STATUS_LABELS: Readonly<Record<Lead360JourneyStatus, string>> = Object.freeze({
+  active: 'Active',
+  completed: 'Completed',
+  withdrawn: 'Withdrawn',
+  disqualified: 'Disqualified',
+});
+
 export function lead360ScoreBand(score: number | null): Lead360ScoreBand {
   if (score === null || !Number.isFinite(score)) return 'unscored';
   if (score >= 70) return 'burning';
@@ -193,14 +220,55 @@ function contactLine(identity: Lead360IdentityView): string {
     : '<span>No contact details recorded</span>';
 }
 
-function stageRail(journey: Lead360JourneyView): string {
-  if (!journey.stages.length) {
-    return emptyState('No journey enrolled', 'This lead has no recorded conversion stage yet.');
+function journeyTiming(journey: Lead360JourneyView): string {
+  if (!journey.status) return '';
+  if (journey.status === 'active') {
+    const latest = journey.lastEventAt ?? journey.enrolledAt ?? null;
+    return latest
+      ? `<span class="lead360-journey-time">Latest event ${timestamp(latest)}</span>`
+      : '<span class="lead360-journey-time">No event time recorded</span>';
   }
-  return `<nav class="lead360-journey" aria-label="Journey stages"><div class="lead360-section-label">${escapeHtml(journey.label)}</div><ol>${journey.stages.map((stage, index) => `<li class="is-${stage.state}"${stage.state === 'current' ? ' aria-current="step"' : ''}>
+  return journey.endedAt
+    ? `<span class="lead360-journey-time">Ended ${timestamp(journey.endedAt)}</span>`
+    : '<span class="lead360-journey-time">End time not recorded</span>';
+}
+
+function journeyScore(score: Lead360JourneyScoreView | null | undefined): string {
+  if (score === undefined) return '';
+  if (score === null) {
+    return '<div class="lead360-journey-score is-unscored"><strong>Unscored</strong><span>No score recorded for this enrollment.</span></div>';
+  }
+  const band = lead360ScoreBand(score.total);
+  return `<div class="lead360-journey-score is-${band}"><div><strong>${escapeHtml(finiteScore(score.total))}</strong><span>${escapeHtml(SCORE_LABELS[band])}</span></div>${score.explanation ? `<p>${escapeHtml(score.explanation)}</p>` : '<p>No score explanation recorded.</p>'}<dl><div><dt>Evidence through</dt><dd>${timestamp(score.sourceOccurredAt)}</dd></div><div><dt>Evaluated</dt><dd>${timestamp(score.evaluatedAt)}</dd></div></dl></div>`;
+}
+
+function stageRail(journey: Lead360JourneyView): string {
+  const status = journey.status
+    ? `<span class="lead360-journey-status state-${journey.status}">${escapeHtml(JOURNEY_STATUS_LABELS[journey.status])}</span>`
+    : '';
+  const stages = journey.stages.length
+    ? `<ol>${journey.stages.map((stage, index) => `<li class="is-${stage.state}"${stage.state === 'current' ? ' aria-current="step"' : ''}>
     <span class="lead360-stage-node">${escapeHtml(String(index + 1).padStart(2, '0'))}</span>
     <span class="lead360-stage-copy"><strong>${escapeHtml(stage.label)}</strong>${stage.reachedAt ? timestamp(stage.reachedAt) : `<small>${stage.state === 'upcoming' ? 'Not reached' : 'Time not recorded'}</small>`}</span>
-  </li>`).join('')}</ol></nav>`;
+  </li>`).join('')}</ol>`
+    : emptyState('No milestones recorded', 'This enrollment has no recorded conversion milestones.');
+  const primary = journey.isPrimary
+    ? '<span class="lead360-primary-route">Primary route</span>'
+    : '';
+  return `<nav class="lead360-journey" aria-label="${journey.isPrimary ? 'Primary journey stages' : 'Journey stages'}"${journey.isPrimary ? ' data-primary-route="true"' : ''}><header class="lead360-journey-head"><div><div class="lead360-section-label">${escapeHtml(journey.label)}</div>${journeyTiming(journey)}</div><div class="lead360-journey-flags">${primary}${status}</div></header>${stages}${journeyScore(journey.score)}</nav>`;
+}
+
+function journeyRails(view: Lead360View): string {
+  const journeys = view.journeys === undefined
+    ? (view.journey.stages.length ? [view.journey] : [])
+    : view.journeys;
+  if (!journeys.length) {
+    return emptyState('No journey enrolled', 'This lead has no recorded conversion stage yet.');
+  }
+  const explicitPrimary = journeys.some((journey) => journey.isPrimary);
+  return `<section class="lead360-journeys" aria-label="Conversion journeys">${journeys.map((journey, index) => (
+    stageRail(explicitPrimary || index !== 0 ? journey : { ...journey, isPrimary: true })
+  )).join('')}</section>`;
 }
 
 function evidenceTimeline(evidence: readonly Lead360EvidenceView[]): string {
@@ -225,11 +293,14 @@ function evidenceTimeline(evidence: readonly Lead360EvidenceView[]): string {
   }).join('')}</ol>`;
 }
 
-function nextMove(move: Lead360NextMoveView | null): string {
+function nextMove(move: Lead360NextMoveView | null, primaryJourneyLabel: string | null): string {
   if (!move) {
     return emptyState('No evidence-based next move', 'Review the case after a recorded signal or CRM task is added.');
   }
-  return `<div class="lead360-next-move"><div class="lead360-move-flag">Recommended</div><h3>${escapeHtml(move.label)}</h3><p>${escapeHtml(move.reason)}</p>${move.dueAt ? `<div class="lead360-due"><span>Suggested by</span>${timestamp(move.dueAt)}</div>` : ''}<small>Recommendation only · nothing has been sent or changed.</small></div>`;
+  const routeContext = primaryJourneyLabel
+    ? `<div class="lead360-move-route">Primary route · ${escapeHtml(primaryJourneyLabel)}</div>`
+    : '<div class="lead360-move-route">Contact-wide context · no primary route</div>';
+  return `<div class="lead360-next-move"><div class="lead360-move-flag">Recommended</div>${routeContext}<h3>${escapeHtml(move.label)}</h3><p>${escapeHtml(move.reason)}</p>${move.dueAt ? `<div class="lead360-due"><span>Suggested by</span>${timestamp(move.dueAt)}</div>` : ''}<small>Route context names the score source; consent and CRM tasks remain contact-wide. Nothing has been sent or changed.</small></div>`;
 }
 
 function offerHistory(offers: readonly Lead360OfferView[]): string {
@@ -265,31 +336,38 @@ const LEAD_360_STYLE = `
   .lead360-case-head::before{content:"";position:absolute;inset:0 auto 0 0;width:5px;background:var(--case-accent)}.lead360-kicker,.lead360-section-label{font:800 .63rem/1.2 var(--mono,monospace);letter-spacing:.14em;text-transform:uppercase;color:var(--case-accent)}.lead360-case-head h1{font-size:clamp(1.7rem,3.1vw,2.65rem);line-height:1.02;letter-spacing:-.045em;margin:8px 0 10px}.lead360-contact-line{display:flex;align-items:center;flex-wrap:wrap;gap:8px;color:var(--case-muted);font-size:.77rem}.lead360-contact-line i{width:3px;height:3px;border-radius:50%;background:#59605f}.lead360-owner{display:block;margin-top:11px;color:#c6cac6;font-size:.7rem}.lead360-owner b{color:var(--case-muted);font-weight:600}
   .lead360-score{min-width:132px;align-self:center;display:grid;grid-template-columns:auto 1fr;align-items:center;gap:12px;border:1px solid var(--case-line);border-radius:3px;padding:13px 15px;background:rgba(5,7,7,.48)}.lead360-score strong{font:900 2.15rem/1 var(--mono,monospace);letter-spacing:-.08em}.lead360-score span{display:grid;gap:2px}.lead360-score span b{font:900 .72rem var(--mono,monospace);letter-spacing:.08em;text-transform:uppercase}.lead360-score small{color:var(--case-muted);font-size:.59rem}.lead360-score.is-burning{border-color:#a73731;box-shadow:inset 4px 0 var(--case-danger)}.lead360-score.is-burning strong,.lead360-score.is-burning b{color:#ff746a}.lead360-score.is-hot{box-shadow:inset 4px 0 #ed8625}.lead360-score.is-hot strong,.lead360-score.is-hot b{color:#f3a04e}.lead360-score.is-warm{box-shadow:inset 4px 0 var(--case-accent)}.lead360-score.is-warm strong,.lead360-score.is-warm b{color:#f1c66a}.lead360-score.is-quiet,.lead360-score.is-unscored{box-shadow:inset 4px 0 #64706f}
   .lead360-journey{padding:18px 32px 20px;border-bottom:1px solid var(--case-line);background:#101313}.lead360-journey ol{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));list-style:none;padding:0;margin:13px 0 0}.lead360-journey li{position:relative;display:grid;grid-template-columns:31px 1fr;gap:9px;align-items:start;padding-right:15px}.lead360-journey li:not(:last-child)::after{content:"";position:absolute;top:14px;left:31px;right:0;height:1px;background:#343a3a}.lead360-stage-node{position:relative;z-index:1;width:29px;height:29px;display:grid;place-items:center;border:1px solid #4a5150;border-radius:50%;background:#121515;color:#8c9593;font:800 .59rem var(--mono,monospace)}.lead360-stage-copy{display:grid;gap:3px;min-width:0}.lead360-stage-copy strong{font-size:.72rem}.lead360-stage-copy time,.lead360-stage-copy small{color:#78817f;font:600 .55rem var(--mono,monospace)}.lead360-journey .is-complete .lead360-stage-node{border-color:#737d78;color:#dce1db}.lead360-journey .is-current .lead360-stage-node{border-color:var(--case-accent);background:var(--case-accent);color:#141713;box-shadow:0 0 0 4px rgba(239,170,34,.11)}.lead360-journey .is-current .lead360-stage-copy strong{color:var(--case-accent)}.lead360-journey .is-upcoming{opacity:.5}
+  .lead360-journeys>.lead360-journey:last-child{border-bottom:1px solid var(--case-line)}.lead360-journey[data-primary-route="true"]{box-shadow:inset 5px 0 var(--case-accent)}.lead360-journey-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}.lead360-journey-head>div{display:grid;gap:5px}.lead360-journey-flags{display:flex!important;grid-auto-flow:column;align-items:center;gap:6px}.lead360-primary-route{border:1px solid var(--case-accent);padding:3px 7px;color:var(--case-accent);font:900 .53rem var(--mono,monospace);letter-spacing:.07em;text-transform:uppercase}.lead360-journey-time{color:#7f8886;font:600 .55rem var(--mono,monospace)}.lead360-journey-status{border:1px solid #46504d;padding:3px 7px;color:#b8bfbc;font:800 .53rem var(--mono,monospace);letter-spacing:.07em;text-transform:uppercase}.lead360-journey-status.state-active{border-color:#6c562b;color:#efc36a}.lead360-journey-status.state-completed{border-color:#315c47;color:#73c99d}.lead360-journey-status.state-withdrawn,.lead360-journey-status.state-disqualified{border-color:#693b38;color:#eb7c73}.lead360-journey-score{display:grid;grid-template-columns:auto minmax(180px,1fr) auto;align-items:center;gap:13px;margin-top:15px;padding:11px 12px;border:1px solid #303737;background:#0c0f0f}.lead360-journey-score>div:first-child{display:grid;grid-template-columns:auto auto;align-items:baseline;gap:7px}.lead360-journey-score>div:first-child strong{font:900 1.15rem var(--mono,monospace)}.lead360-journey-score>div:first-child span{color:var(--case-accent);font:800 .54rem var(--mono,monospace);text-transform:uppercase}.lead360-journey-score>p{margin:0;color:#adb4b1;font-size:.65rem;line-height:1.4}.lead360-journey-score>dl{display:grid;gap:4px;margin:0}.lead360-journey-score>dl>div{display:grid;grid-template-columns:auto auto;gap:5px}.lead360-journey-score dt{color:#747d7a;font:700 .49rem var(--mono,monospace);text-transform:uppercase}.lead360-journey-score dd{margin:0;color:#929b98;font:600 .5rem var(--mono,monospace)}.lead360-journey-score.is-unscored{grid-template-columns:auto 1fr}.lead360-journey-score.is-unscored>span{color:#7f8886;font-size:.61rem}
   .lead360-layout{display:grid;grid-template-columns:minmax(180px,.62fr) minmax(380px,1.45fr) minmax(260px,.88fr);align-items:start}.lead360-column{min-width:0;padding:24px}.lead360-column+.lead360-column{border-left:1px solid var(--case-line)}.lead360-centre{background:#0e1011}.lead360-section{padding-bottom:25px}.lead360-section+.lead360-section{padding-top:24px;border-top:1px solid var(--case-line)}.lead360-section-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:16px}.lead360-section h2{font-size:.94rem;letter-spacing:-.01em;margin:5px 0 0}.lead360-section-head>span{color:var(--case-muted);font:600 .57rem var(--mono,monospace)}
   .lead360-timeline{list-style:none;padding:0;margin:0}.lead360-event{position:relative;display:grid;grid-template-columns:17px 1fr;gap:13px;padding-bottom:20px}.lead360-event:not(:last-child)::before{content:"";position:absolute;left:5px;top:12px;bottom:0;width:1px;background:#343a3a}.lead360-event-mark{position:relative;z-index:1;width:11px;height:11px;margin-top:5px;border:2px solid var(--case-accent);border-radius:50%;background:#111415}.lead360-event article{border:1px solid var(--case-line);border-radius:4px;background:var(--case-panel);padding:14px 15px}.lead360-event article header,.lead360-event article footer{display:flex;align-items:center;justify-content:space-between;gap:9px;flex-wrap:wrap}.lead360-evidence-type{color:var(--case-accent);font:850 .57rem var(--mono,monospace);letter-spacing:.11em;text-transform:uppercase}.lead360-progress{border:1px solid #4a4030;background:#211d16;color:#eec16f;padding:2px 6px;font:750 .53rem var(--mono,monospace);text-transform:uppercase}.lead360-event h3{font-size:.82rem;margin:8px 0 4px}.lead360-event p{color:#b6bcba;font-size:.71rem;line-height:1.5;margin:0 0 10px}.lead360-event footer{padding-top:9px;border-top:1px solid #282d2d;color:#7f8886;font:600 .55rem var(--mono,monospace)}.lead360-event footer span:last-child{overflow-wrap:anywhere}
-  .lead360-next-move{position:relative;border:1px solid #544426;background:linear-gradient(145deg,#221d14,#171714);padding:17px 16px 15px}.lead360-move-flag{display:inline-block;margin-bottom:9px;color:#17150e;background:var(--case-accent);padding:3px 7px;font:900 .55rem var(--mono,monospace);letter-spacing:.09em;text-transform:uppercase}.lead360-next-move h3{font-size:.92rem;margin:0 0 7px}.lead360-next-move p{color:#c1b9a9;font-size:.71rem;line-height:1.55;margin:0 0 13px}.lead360-next-move>small{display:block;margin-top:12px;color:#8c8679;font-size:.58rem}.lead360-due{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:10px;border-top:1px solid #3b3426;color:#c4b99e;font:650 .56rem var(--mono,monospace)}.lead360-due span{color:#8c8679;text-transform:uppercase}
+  .lead360-next-move{position:relative;border:1px solid #544426;background:linear-gradient(145deg,#221d14,#171714);padding:17px 16px 15px}.lead360-move-flag{display:inline-block;margin-bottom:7px;color:#17150e;background:var(--case-accent);padding:3px 7px;font:900 .55rem var(--mono,monospace);letter-spacing:.09em;text-transform:uppercase}.lead360-move-route{margin:0 0 11px;color:#efc36a;font:800 .55rem var(--mono,monospace);letter-spacing:.04em}.lead360-next-move h3{font-size:.92rem;margin:0 0 7px}.lead360-next-move p{color:#c1b9a9;font-size:.71rem;line-height:1.55;margin:0 0 13px}.lead360-next-move>small{display:block;margin-top:12px;color:#8c8679;font-size:.58rem}.lead360-due{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:10px;border-top:1px solid #3b3426;color:#c4b99e;font:650 .56rem var(--mono,monospace)}.lead360-due span{color:#8c8679;text-transform:uppercase}
   .lead360-offers,.lead360-consent,.lead360-crm-list{list-style:none;padding:0;margin:0}.lead360-offers{display:grid;gap:9px}.lead360-offers>li{border:1px solid var(--case-line);background:var(--case-panel);padding:13px}.lead360-offer-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.lead360-offer-head strong{font-size:.72rem}.lead360-offer-head>span,.lead360-consent>li>span:nth-child(2),.lead360-crm-list>li>span{border:1px solid #3c4442;padding:2px 5px;font:750 .5rem var(--mono,monospace);text-transform:uppercase;color:#abb1af}.lead360-offer-head .state-accepted,.lead360-consent .state-permitted,.lead360-crm-list .state-won,.lead360-crm-list .state-complete{border-color:#315c47;color:#73c99d}.lead360-offer-head .state-declined,.lead360-consent .state-withdrawn,.lead360-consent .state-suppressed,.lead360-crm-list .state-lost{border-color:#693b38;color:#eb7c73}.lead360-offer-value{color:var(--case-accent);font:800 .64rem var(--mono,monospace);margin-top:5px}.lead360-offers dl{display:grid;gap:5px;margin:10px 0 0}.lead360-offers dl>div{display:grid;grid-template-columns:58px 1fr;gap:7px}.lead360-offers dt{color:#7d8583;font:700 .52rem var(--mono,monospace);text-transform:uppercase}.lead360-offers dd{margin:0;color:#afb5b3;font:600 .54rem var(--mono,monospace)}.lead360-offers p{margin:10px 0 0;padding-top:9px;border-top:1px solid #2b3030;color:#b1b7b5;font-size:.67rem;line-height:1.5}
   .lead360-consent .state-denied,.lead360-crm-list .state-cancelled{border-color:#693b38;color:#eb7c73}.lead360-offer-head .state-requested_contact{border-color:#315c47;color:#73c99d}
   .lead360-suppression{margin-bottom:10px;border:1px solid #6a3935;background:#211413;padding:11px}.lead360-suppression strong{color:#f1847a;font:800 .59rem var(--mono,monospace);text-transform:uppercase}.lead360-suppression p{margin:4px 0 0;color:#c8a5a1;font-size:.66rem}.lead360-consent{display:grid;gap:7px}.lead360-consent li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 8px;padding:10px;border:1px solid var(--case-line);background:var(--case-panel)}.lead360-consent li>div{display:grid}.lead360-consent strong{font-size:.69rem}.lead360-consent small{color:#7e8785;font-size:.56rem}.lead360-consent time,.lead360-consent .lead360-time-missing{grid-column:1/-1;color:#737c7a;font:600 .52rem var(--mono,monospace)}
   .lead360-crm-block>h3{font:800 .59rem var(--mono,monospace);letter-spacing:.08em;text-transform:uppercase;color:#a7aeac;margin:0 0 8px}.lead360-crm-block>h3:not(:first-child){margin-top:18px}.lead360-crm-list{display:grid;gap:6px}.lead360-crm-list li{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:9px;padding:10px 11px;border-left:2px solid #414846;background:#151819}.lead360-crm-list li>div{display:grid;gap:2px}.lead360-crm-list strong{font-size:.68rem}.lead360-crm-list li>div>span{color:#858e8b;font-size:.57rem}.lead360-crm-list time{font:600 .54rem var(--mono,monospace)}
   .lead360-empty{border:1px dashed #3c4342;background:#111414;padding:18px;text-align:left}.lead360-empty strong{display:block;font-size:.7rem;color:#c7ccca}.lead360-empty p{color:#7f8886;font-size:.64rem;line-height:1.5;margin:5px 0 0}.lead360-time-missing{color:#78817f;font:600 .55rem var(--mono,monospace)}.lead360-as-of{padding:11px 32px;border-top:1px solid var(--case-line);background:#090b0c;color:#6e7775;font:600 .55rem var(--mono,monospace);text-align:right}
   @media(max-width:1120px){.lead360-layout{grid-template-columns:minmax(0,1.35fr) minmax(250px,.8fr)}.lead360-left{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px;border-bottom:1px solid var(--case-line)}.lead360-column+.lead360-column{border-left:0}.lead360-right{border-left:1px solid var(--case-line)!important}}
-  @media(max-width:760px){.lead360-case-head{grid-template-columns:1fr;padding:25px 21px 21px}.lead360-score{justify-self:start}.lead360-journey{padding:17px 21px}.lead360-journey ol{display:grid;grid-template-columns:1fr;gap:8px}.lead360-journey li:not(:last-child)::after{left:14px;right:auto;top:29px;bottom:-9px;width:1px;height:auto}.lead360-layout{display:block}.lead360-left{display:block}.lead360-column{padding:21px}.lead360-column+.lead360-column,.lead360-right{border-left:0!important;border-top:1px solid var(--case-line)}.lead360-as-of{padding-inline:21px;text-align:left}}
+  @media(max-width:760px){.lead360-case-head{grid-template-columns:1fr;padding:25px 21px 21px}.lead360-score{justify-self:start}.lead360-journey{padding:17px 21px}.lead360-journey ol{display:grid;grid-template-columns:1fr;gap:8px}.lead360-journey li:not(:last-child)::after{left:14px;right:auto;top:29px;bottom:-9px;width:1px;height:auto}.lead360-journey-score{grid-template-columns:1fr}.lead360-layout{display:block}.lead360-left{display:block}.lead360-column{padding:21px}.lead360-column+.lead360-column,.lead360-right{border-left:0!important;border-top:1px solid var(--case-line)}.lead360-as-of{padding-inline:21px;text-align:left}}
   @media(forced-colors:active){.lead360,.lead360-event article,.lead360-next-move,.lead360-offers>li,.lead360-consent li{forced-color-adjust:auto}.lead360-event-mark,.lead360-stage-node{border:2px solid CanvasText}}
 `;
 
 export function renderLead360Body(view: Lead360View): string {
   const band = lead360ScoreBand(view.score);
   const owner = view.identity.ownerName ? escapeHtml(view.identity.ownerName) : 'Unassigned';
+  const primaryJourneyLabel = view.primaryJourneyLabel === undefined
+    ? ((view.journeys?.find((journey) => journey.isPrimary) ?? view.journey).stages.length
+      ? (view.journeys?.find((journey) => journey.isPrimary) ?? view.journey).label
+      : null)
+    : view.primaryJourneyLabel;
+  const scoreContext = primaryJourneyLabel ? `Primary route · ${primaryJourneyLabel}` : 'No primary route';
   return `<style data-property-predator-lead-360>${LEAD_360_STYLE}</style><article class="lead360" aria-labelledby="lead360-title">
     <header class="lead360-case-head"><div><div class="lead360-kicker">Lead 360 · Evidence case file</div><h1 id="lead360-title">${escapeHtml(view.identity.displayName)}</h1><div class="lead360-contact-line">${contactLine(view.identity)}</div><span class="lead360-owner"><b>CRM owner ·</b> ${owner}</span></div>
-      <div class="lead360-score is-${band}" aria-label="Lead score ${escapeHtml(finiteScore(view.score))}, ${escapeHtml(SCORE_LABELS[band])}"><strong>${escapeHtml(finiteScore(view.score))}</strong><span><b>${escapeHtml(SCORE_LABELS[band])}</b><small>Evidence score</small></span></div>
+      <div class="lead360-score is-${band}" aria-label="Primary journey score ${escapeHtml(finiteScore(view.score))}, ${escapeHtml(SCORE_LABELS[band])}. ${escapeHtml(scoreContext)}"><strong>${escapeHtml(finiteScore(view.score))}</strong><span><b>${escapeHtml(SCORE_LABELS[band])}</b><small>${escapeHtml(scoreContext)}</small></span></div>
     </header>
-    ${stageRail(view.journey)}
+    ${journeyRails(view)}
     <div class="lead360-layout">
       <aside class="lead360-column lead360-left" aria-label="Lead context"><section class="lead360-section" aria-labelledby="lead360-score-reason"><div class="lead360-section-head"><div><div class="lead360-section-label">Scoring</div><h2 id="lead360-score-reason">Why this score?</h2></div></div>${view.scoreExplanation ? `<p class="lead360-case-note">${escapeHtml(view.scoreExplanation)}</p>` : emptyState('No score explanation', 'A score has not been justified by recorded evidence.')}</section><section class="lead360-section" aria-labelledby="lead360-crm"><div class="lead360-section-head"><div><div class="lead360-section-label">Saved records</div><h2 id="lead360-crm">CRM summary</h2></div></div>${crmSummary(view.crm)}</section></aside>
       <section class="lead360-column lead360-centre" aria-labelledby="lead360-evidence"><div class="lead360-section-head"><div><div class="lead360-section-label">Exact chronology</div><h2 id="lead360-evidence">Engagement evidence</h2></div><span>Newest first</span></div>${evidenceTimeline(view.evidence)}</section>
-      <aside class="lead360-column lead360-right" aria-label="Decision rail"><section class="lead360-section" aria-labelledby="lead360-next"><div class="lead360-section-head"><div><div class="lead360-section-label">Human judgement</div><h2 id="lead360-next">Best next move</h2></div></div>${nextMove(view.nextMove)}</section><section class="lead360-section" aria-labelledby="lead360-offers"><div class="lead360-section-head"><div><div class="lead360-section-label">Commercial evidence</div><h2 id="lead360-offers">Offer history</h2></div></div>${offerHistory(view.offers)}</section><section class="lead360-section" aria-labelledby="lead360-consent"><div class="lead360-section-head"><div><div class="lead360-section-label">Contact safety</div><h2 id="lead360-consent">Consent + suppression</h2></div></div>${consentStatus(view.consent, view.suppressionReason)}</section></aside>
+      <aside class="lead360-column lead360-right" aria-label="Decision rail"><section class="lead360-section" aria-labelledby="lead360-next"><div class="lead360-section-head"><div><div class="lead360-section-label">Human judgement</div><h2 id="lead360-next">Best next move</h2></div></div>${nextMove(view.nextMove, primaryJourneyLabel)}</section><section class="lead360-section" aria-labelledby="lead360-offers"><div class="lead360-section-head"><div><div class="lead360-section-label">Commercial evidence</div><h2 id="lead360-offers">Offer history</h2></div></div>${offerHistory(view.offers)}</section><section class="lead360-section" aria-labelledby="lead360-consent"><div class="lead360-section-head"><div><div class="lead360-section-label">Contact safety</div><h2 id="lead360-consent">Consent + suppression</h2></div></div>${consentStatus(view.consent, view.suppressionReason)}</section></aside>
     </div>
     <footer class="lead360-as-of">Case file viewed as of ${timestamp(view.asOf)}</footer>
   </article>`;

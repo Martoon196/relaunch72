@@ -11,6 +11,10 @@ export const CONVERSION_SCOREABLE_SOURCE_REGISTRY = Object.freeze({
   event: Object.freeze([
     'identity.account.created',
     'product.analysis.completed',
+    'content.consumption.completed',
+    'offer.presented',
+    'sales.appointment.booked',
+    'sales.presentation.completed',
   ]),
   commerce: Object.freeze([
     'payment_collected',

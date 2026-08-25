@@ -66,9 +66,18 @@ const EXAMPLES: Readonly<Record<string, Record<string, unknown>>> = Object.freez
   'offer.responded': {
     presentationEventId: PRESENTATION_EVENT_ID, response: 'requested_contact',
   },
+  'sales.appointment.booked': {
+    appointmentId: 'apt_123', startsAt: '2026-08-26T10:30:00.000Z',
+    bookingSource: 'self_serve_calendar', meetingKind: 'discovery',
+  },
+  'sales.presentation.completed': {
+    appointmentId: 'apt_123', presentationKey: 'agency:partner-briefing',
+    durationSeconds: 2_700, outcome: 'proposal_requested',
+  },
   'commerce.purchase.completed': {
     provider: 'stripe', providerEventId: 'evt_123', checkoutSessionId: 'cs_123',
-    productKey: 'pro_investor', billingKind: 'subscription', amountMinor: 9_900, currency: 'gbp',
+    productKey: 'pro_investor', billingKind: 'subscription', subscriptionId: 'sub_123',
+    amountMinor: 9_900, currency: 'gbp',
   },
   'commerce.purchase.refunded': {
     provider: 'stripe', providerEventId: 'evt_refund_123', checkoutSessionId: 'cs_123',
@@ -180,6 +189,18 @@ test('event identities, times and bounded signal values must be canonical', () =
   assert.throws(() => parsePropertyPredatorExternalEvent(envelope('commerce.purchase.completed', {
     ...EXAMPLES['commerce.purchase.completed'], currency: 'GBP',
   })), /lowercase three-letter/);
+  assert.throws(() => parsePropertyPredatorExternalEvent(envelope('commerce.purchase.completed', {
+    ...EXAMPLES['commerce.purchase.completed'], subscriptionId: undefined,
+  })), /subscriptionId/);
+  assert.throws(() => parsePropertyPredatorExternalEvent(envelope('commerce.purchase.completed', {
+    ...EXAMPLES['commerce.purchase.completed'], billingKind: 'one_off',
+  })), /subscriptionId/);
+  const oneOff: Record<string, unknown> = { ...EXAMPLES['commerce.purchase.completed'], billingKind: 'one_off' };
+  delete oneOff.subscriptionId;
+  assert.equal(
+    parsePropertyPredatorExternalEvent(envelope('commerce.purchase.completed', oneOff)).type,
+    'commerce.purchase.completed',
+  );
 });
 
 test('account display names and consent evidence are optional, safe and backwards compatible', () => {
@@ -368,6 +389,43 @@ test('offer responses reference one canonical presentation event and one support
   assert.throws(() => parsePropertyPredatorExternalEvent(envelope('offer.responded', {
     presentationEventId: PRESENTATION_EVENT_ID, response: 'accepted', offerKey: 'pro',
   })), /unsupported field: offerKey/);
+});
+
+test('agency appointment and presentation facts are exact and bounded', () => {
+  for (const bookingSource of ['self_serve_calendar', 'team', 'partner_referral']) {
+    const event = parsePropertyPredatorExternalEvent(envelope('sales.appointment.booked', {
+      ...EXAMPLES['sales.appointment.booked'], bookingSource,
+    }));
+    assert.equal(event.type, 'sales.appointment.booked');
+    assert.equal(event.data.bookingSource, bookingSource);
+  }
+  for (const meetingKind of ['discovery', 'strategy', 'partner']) {
+    const event = parsePropertyPredatorExternalEvent(envelope('sales.appointment.booked', {
+      ...EXAMPLES['sales.appointment.booked'], meetingKind,
+    }));
+    assert.equal(event.type, 'sales.appointment.booked');
+    assert.equal(event.data.meetingKind, meetingKind);
+  }
+  for (const outcome of ['completed', 'follow_up_requested', 'proposal_requested']) {
+    const event = parsePropertyPredatorExternalEvent(envelope('sales.presentation.completed', {
+      ...EXAMPLES['sales.presentation.completed'], outcome,
+    }));
+    assert.equal(event.type, 'sales.presentation.completed');
+    assert.equal(event.data.outcome, outcome);
+  }
+
+  assert.throws(() => parsePropertyPredatorExternalEvent(envelope('sales.appointment.booked', {
+    ...EXAMPLES['sales.appointment.booked'], startsAt: '2026-08-26T10:30:00Z',
+  })), /canonical RFC3339/);
+  assert.throws(() => parsePropertyPredatorExternalEvent(envelope('sales.appointment.booked', {
+    ...EXAMPLES['sales.appointment.booked'], appointmentId: 'bad appointment',
+  })), /safe provider reference/);
+  assert.throws(() => parsePropertyPredatorExternalEvent(envelope('sales.presentation.completed', {
+    ...EXAMPLES['sales.presentation.completed'], presentationKey: 'Agency Briefing',
+  })), /safe lowercase key/);
+  assert.throws(() => parsePropertyPredatorExternalEvent(envelope('sales.presentation.completed', {
+    ...EXAMPLES['sales.presentation.completed'], durationSeconds: 0,
+  })), /integer from 1/);
 });
 
 test('raw-body parsing enforces UTF-8 JSON and the 32 KiB boundary', () => {

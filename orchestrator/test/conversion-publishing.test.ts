@@ -204,7 +204,9 @@ test('same score-model version with a different digest fails before journey writ
 
 test('publisher returns a typed conflict instead of reactivating an older score-model version', async () => {
   const runner = new RecordingRunner();
-  const { repository, calls } = recordingRepository({ scoreLatestPublishedVersionNumber: 2 });
+  const requestedVersion = PROPERTY_PREDATOR_SELF_SERVE_JOURNEY.scoreModel.version;
+  const activeVersion = requestedVersion + 1;
+  const { repository, calls } = recordingRepository({ scoreLatestPublishedVersionNumber: activeVersion });
   const service = new ConversionCommandService({
     transactionRunner: runner,
     repositoryFactory: () => repository,
@@ -214,7 +216,7 @@ test('publisher returns a typed conflict instead of reactivating an older score-
     service.publishBlueprint(context(), PROPERTY_PREDATOR_SELF_SERVE_JOURNEY),
     (error: unknown) => error instanceof ConversionBlueprintActivationConflictError
       && error.code === 'conversion_blueprint_activation_conflict'
-      && /version 1; version 2 has already been published/.test(error.message),
+      && error.message.includes(`version ${requestedVersion}; version ${activeVersion} has already been published`),
   );
   assert.deepEqual(calls.map((call) => call.name), [
     'insertScoreModelIfMissing', 'lockScoreModelBySlug',
@@ -224,13 +226,14 @@ test('publisher returns a typed conflict instead of reactivating an older score-
 test('publisher returns a typed conflict instead of reactivating an older journey version', async () => {
   const runner = new RecordingRunner();
   const blueprint = PROPERTY_PREDATOR_SELF_SERVE_JOURNEY;
+  const activeVersion = blueprint.version + 1;
   const { repository, calls } = recordingRepository({
     scoreVersion: {
       id: SCORE_VERSION_ID,
       definition: canonicalScoreDocument(),
       definitionHash: Buffer.from(blueprint.scoreModel.definitionHash, 'hex'),
     },
-    journeyLatestPublishedVersionNumber: 2,
+    journeyLatestPublishedVersionNumber: activeVersion,
   });
   const service = new ConversionCommandService({
     transactionRunner: runner,
@@ -241,7 +244,7 @@ test('publisher returns a typed conflict instead of reactivating an older journe
     service.publishBlueprint(context(), blueprint),
     (error: unknown) => error instanceof ConversionBlueprintActivationConflictError
       && error.code === 'conversion_blueprint_activation_conflict'
-      && /version 1; version 2 has already been published/.test(error.message),
+      && error.message.includes(`version ${blueprint.version}; version ${activeVersion} has already been published`),
   );
   assert.deepEqual(calls.map((call) => call.name), [
     'insertScoreModelIfMissing', 'lockScoreModelBySlug', 'findScoreModelVersion',

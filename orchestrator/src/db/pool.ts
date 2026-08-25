@@ -70,6 +70,14 @@ export function createExternalEventCommandDatabasePool(
   return createDatabasePool(loadDatabaseConfig('externalEventCommand', env), hooks);
 }
 
+/** Function-only pool for authenticated evidence and conversion projection. */
+export function createWebhookDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('webhook', env), hooks);
+}
+
 /** Isolated pre-context identity pool; it can execute audited auth functions only. */
 export function createIdentityCommandDatabasePool(
   env: NodeJS.ProcessEnv = process.env,

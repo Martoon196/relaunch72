@@ -16,6 +16,7 @@ import {
   type GrowthJourneySlug,
   type Lead360CaseFileRead,
   type Lead360ReadService,
+  type Lead360ScoreRead,
 } from '../conversion-pg/index.js';
 import { requestDatabaseContext, type DatabaseRequestContext } from '../db/rls.js';
 import { InactivePortalSessionError } from '../db/transaction.js';
@@ -45,6 +46,7 @@ import {
 } from './growth-intelligence.js';
 import type {
   Lead360ConsentState,
+  Lead360JourneyView,
   Lead360NextMoveView,
   Lead360OfferState,
   Lead360View,
@@ -202,15 +204,14 @@ function funnelStages(
     .filter((row) => row.journeySlug === journeySlug)
     .sort((left, right) => left.position - right.position);
   if (!rows.length) return defaults.stages;
-  return Object.freeze(rows.map((row, index) => {
-    const previous = rows[index - 1];
+  return Object.freeze(rows.map((row) => {
     return Object.freeze({
       key: row.milestoneKey,
       label: row.milestoneName,
       count: row.count,
-      stepConversionPercent: !previous || previous.count === 0
-        ? null
-        : Math.round((row.count / previous.count) * 1_000) / 10,
+      // These are independent distinct-contact reach totals, not a cohort.
+      // A truthful transition percentage needs enrollment-level transition data.
+      stepConversionPercent: null,
       movedInWindow: row.movedInWindow,
     });
   }));
@@ -276,12 +277,41 @@ function moneyLabel(amountMinor: number, currency: string): string {
   }
 }
 
-function lead360Explanation(read: Lead360CaseFileRead): string | null {
-  if (!read.score) return null;
-  const components = Object.entries(read.score.componentScores)
+function lead360ScoreExplanation(score: Lead360ScoreRead | null | undefined): string | null {
+  if (!score) return null;
+  const components = Object.entries(score.componentScores)
     .map(([key, value]) => `${titleCaseKey(key)} ${value}`);
-  const explanation = [...read.score.reasons, ...components];
+  const explanation = [...score.reasons, ...components];
   return explanation.length ? explanation.join(' · ') : null;
+}
+
+function mapLead360Journey(
+  journey: NonNullable<Lead360CaseFileRead['journey']>,
+  fallbackScore: Lead360ScoreRead | null,
+  isPrimary: boolean,
+): Lead360JourneyView {
+  const score = journey.score
+    ?? (fallbackScore?.enrollmentId === journey.enrollmentId ? fallbackScore : null);
+  return Object.freeze({
+    label: journey.name,
+    isPrimary,
+    status: journey.status,
+    enrolledAt: journey.enrolledAt,
+    lastEventAt: journey.lastEventAt,
+    endedAt: journey.endedAt,
+    score: score ? Object.freeze({
+      total: score.total,
+      explanation: lead360ScoreExplanation(score),
+      sourceOccurredAt: score.sourceOccurredAt,
+      evaluatedAt: score.evaluatedAt,
+    }) : null,
+    stages: Object.freeze(journey.stages.map((stage) => Object.freeze({
+      key: stage.key,
+      label: stage.name,
+      state: stage.isCurrent ? 'current' as const : stage.reachedAt ? 'complete' as const : 'upcoming' as const,
+      reachedAt: stage.reachedAt,
+    }))),
+  });
 }
 
 function lead360NextMove(read: Lead360CaseFileRead): Lead360NextMoveView | null {
@@ -334,7 +364,17 @@ function offerState(read: Lead360CaseFileRead['offers'][number]): Lead360OfferSt
 }
 
 function mapLead360(read: Lead360CaseFileRead): Lead360View {
-  const journey = read.journey;
+  const journeyReads = read.journeys ?? (read.journey ? [read.journey] : []);
+  const primaryEnrollmentId = read.journey?.enrollmentId ?? null;
+  const journeys = Object.freeze(journeyReads.map((journey) => mapLead360Journey(
+    journey,
+    read.score,
+    journey.enrollmentId === primaryEnrollmentId,
+  )));
+  const journey = journeys.find((candidate) => candidate.isPrimary) ?? journeys[0] ?? Object.freeze({
+    label: 'No conversion journey',
+    stages: Object.freeze([]),
+  });
   const suppressionReason = read.consent.find((item) => item.state === 'suppressed')?.suppressionReason ?? null;
   return Object.freeze({
     identity: Object.freeze({
@@ -346,16 +386,10 @@ function mapLead360(read: Lead360CaseFileRead): Lead360View {
       ownerName: read.identity.ownerUserId ? 'Assigned workspace member' : null,
     }),
     score: read.score?.total ?? null,
-    scoreExplanation: lead360Explanation(read),
-    journey: Object.freeze({
-      label: journey?.name ?? 'No conversion journey',
-      stages: Object.freeze((journey?.stages ?? []).map((stage) => Object.freeze({
-        key: stage.key,
-        label: stage.name,
-        state: stage.isCurrent ? 'current' as const : stage.reachedAt ? 'complete' as const : 'upcoming' as const,
-        reachedAt: stage.reachedAt,
-      }))),
-    }),
+    scoreExplanation: lead360ScoreExplanation(read.score),
+    primaryJourneyLabel: read.journey?.name ?? null,
+    journeys,
+    journey,
     evidence: Object.freeze(read.evidence.map((item) => Object.freeze({
       id: item.id,
       kind: item.kind,

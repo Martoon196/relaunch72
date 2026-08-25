@@ -7,7 +7,7 @@ import {
   PropertyPredatorExternalEventContractError,
 } from './contracts.js';
 import {
-  type PgPropertyPredatorExternalEventShadowService,
+  type PropertyPredatorExternalEventShadowRecordInput,
   PropertyPredatorExternalEventReceiptConflictError,
 } from './pg-service.js';
 import {
@@ -18,11 +18,18 @@ import {
 export const PROPERTY_PREDATOR_EXTERNAL_EVENT_PATH =
   '/api/external-events/v1/property-predator' as const;
 
+export interface PropertyPredatorExternalEventStore {
+  record(input: PropertyPredatorExternalEventShadowRecordInput): Promise<{
+    readonly disposition: 'shadow' | 'projected';
+    readonly replayed: boolean;
+  }>;
+}
+
 export interface PropertyPredatorExternalEventRouterBinding {
   readonly keyId: string;
   readonly sharedSecret: Uint8Array;
   /** Store is already bound to this key's trusted server-side workspace. */
-  readonly store: Pick<PgPropertyPredatorExternalEventShadowService, 'record'>;
+  readonly store: PropertyPredatorExternalEventStore;
 }
 
 export interface PropertyPredatorExternalEventRouterOptions {
@@ -31,6 +38,9 @@ export interface PropertyPredatorExternalEventRouterOptions {
   /** Exact socket peer addresses allowed to assert X-Forwarded-Proto. */
   readonly trustedProxyAddresses?: readonly string[];
   readonly bindings: readonly PropertyPredatorExternalEventRouterBinding[];
+  /** Safe health hooks; failures here must never change the HTTP contract. */
+  readonly onRuntimeAvailable?: () => void;
+  readonly onRuntimeUnavailable?: () => void;
 }
 
 export interface PropertyPredatorExternalEventBridgeMount {
@@ -52,6 +62,15 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
     'x-content-type-options': 'nosniff',
   });
   res.end(encoded);
+}
+
+function notifyHealth(callback: (() => void) | undefined): void {
+  try {
+    callback?.();
+  } catch {
+    // Health reporting is deliberately observational. It cannot turn a
+    // committed projection into an HTTP failure or expose operator details.
+  }
 }
 
 function exactSingleHeader(req: IncomingMessage, name: string): string | undefined {
@@ -223,9 +242,10 @@ export function createPropertyPredatorExternalEventHandler(
 
     try {
       const result = await binding.store.record({ rawBody, verifiedSignature });
+      notifyHealth(options.onRuntimeAvailable);
       sendJson(res, result.replayed ? 200 : 202, {
         accepted: true,
-        disposition: 'shadow',
+        disposition: result.disposition,
         replayed: result.replayed,
       });
     } catch (error) {
@@ -241,6 +261,7 @@ export function createPropertyPredatorExternalEventHandler(
         sendJson(res, 409, { error: 'event_conflict' });
         return;
       }
+      notifyHealth(options.onRuntimeUnavailable);
       sendJson(res, 503, { error: 'external_event_store_unavailable' });
     }
   };

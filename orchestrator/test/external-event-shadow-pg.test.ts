@@ -155,12 +155,16 @@ test('store readiness requires the exact receipt-only role and hardened recorder
   );
 });
 
-test('server composition cannot borrow the broader webhook database pool', async () => {
+test('server composition separates receipt intake from table-blind webhook projection', async () => {
   const serverSource = await readFile(new URL('../src/server/index.ts', import.meta.url), 'utf8');
   assert.match(serverSource, /createExternalEventCommandDatabasePool\(process\.env\)/);
   assert.match(serverSource, /DATABASE_EXTERNAL_EVENT_COMMAND_URL/);
+  assert.match(serverSource, /createWebhookDatabasePool\(process\.env\)/);
+  assert.match(serverSource, /DATABASE_WEBHOOK_URL/);
+  assert.match(serverSource, /commandPool: externalEventCommandPool/);
+  assert.match(serverSource, /webhookPool: externalEventWebhookPool/);
+  assert.match(serverSource, /PropertyPredatorRuntimeEventStore/);
   assert.doesNotMatch(serverSource, /loadDatabaseConfig\('webhook'[^)]*\)/);
-  assert.doesNotMatch(serverSource, /externalEventWebhookPool|webhookPool: externalEvent/);
 });
 
 test('record derives workspace only from server mapping and hashes exact raw bytes', async () => {

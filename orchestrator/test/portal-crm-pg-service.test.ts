@@ -145,7 +145,7 @@ test('portal adapter maps verified Growth HQ evidence without treating CRM stage
           {
             journeySlug: 'property-predator-self-serve' as const,
             journeyName: 'Self-serve conversion', journeyDescription: 'Verified product route',
-            milestoneKey: 'lead', milestoneName: 'Lead', position: 1, count: 10, movedInWindow: 4,
+            milestoneKey: 'lead', milestoneName: 'Lead', position: 1, count: 0, movedInWindow: 0,
           },
           {
             journeySlug: 'property-predator-self-serve' as const,
@@ -170,7 +170,7 @@ test('portal adapter maps verified Growth HQ evidence without treating CRM stage
   const growth = await service.growth(identity());
   assert.equal(growth?.dataState, 'live');
   assert.deepEqual(growth?.funnels[0]?.stages.map((stage) => [stage.key, stage.count, stage.stepConversionPercent]), [
-    ['lead', 10, null], ['activated', 6, 60],
+    ['lead', 0, null], ['activated', 6, null],
   ]);
   assert.equal(growth?.funnels[1]?.stages[0]?.count, 0, 'missing journey keeps a truthful zero blueprint');
   assert.equal(growth?.hotLeads[0]?.band, 'burning', 'published score thresholds own the display band');
@@ -191,6 +191,22 @@ test('portal adapter maps the narrow Lead 360 read model without losing exact of
           primaryEmail: 'avery@example.test', primaryPhone: null, lifecycle: 'lead' as const,
           ownerUserId: USER_ID, createdAt: '2026-08-20T09:00:00.000Z', updatedAt: '2026-08-25T11:00:00.000Z',
         },
+        journeys: [{
+          enrollmentId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', journeyId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          journeyVersionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Agency LAPS', status: 'active' as const,
+          currentMilestoneId: STAGE_ID, enrolledAt: '2026-08-20T09:00:00.000Z', lastEventAt: '2026-08-25T10:00:00.000Z', endedAt: null,
+          stages: [{ id: STAGE_ID, key: 'appointment', name: 'Appointment', position: 2, semantic: 'appointment' as const, isCompletion: false, isCurrent: true, reachedAt: '2026-08-25T10:00:00.000Z' }],
+        }, {
+          enrollmentId: '15151515-1515-4515-8515-151515151515', journeyId: '16161616-1616-4616-8616-161616161616',
+          journeyVersionId: '17171717-1717-4717-8717-171717171717', name: 'Self-serve conversion', status: 'active' as const,
+          currentMilestoneId: '18181818-1818-4818-8818-181818181818', enrolledAt: '2026-08-21T09:00:00.000Z', lastEventAt: '2026-08-24T10:00:00.000Z', endedAt: null,
+          stages: [{ id: '18181818-1818-4818-8818-181818181818', key: 'activated', name: 'Activated', position: 2, semantic: 'activation' as const, isCompletion: false, isCurrent: true, reachedAt: '2026-08-24T10:00:00.000Z' }],
+          score: {
+            id: '19191919-1919-4919-8919-191919191919', enrollmentId: '15151515-1515-4515-8515-151515151515',
+            total: 35, band: 'warm', componentScores: { engagement: 35, intent: 0 }, reasons: ['Completed analysis'],
+            sourceOccurredAt: '2026-08-24T10:00:00.000Z', evaluatedAt: '2026-08-24T10:01:00.000Z',
+          },
+        }],
         journey: {
           enrollmentId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', journeyId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
           journeyVersionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Agency LAPS', status: 'active' as const,
@@ -240,6 +256,13 @@ test('portal adapter maps the narrow Lead 360 read model without losing exact of
   assert.equal(caseFile?.consent[0]?.state, 'denied');
   assert.equal(caseFile?.crm.tasks[0]?.state, 'cancelled');
   assert.match(caseFile?.scoreExplanation ?? '', /Requested contact · Engagement 42 · Intent 10/);
+  assert.equal(caseFile?.journeys?.length, 2);
+  assert.equal(caseFile?.journeys?.[0]?.status, 'active');
+  assert.equal(caseFile?.journeys?.[0]?.isPrimary, true);
+  assert.equal(caseFile?.journeys?.[1]?.isPrimary, false);
+  assert.equal(caseFile?.primaryJourneyLabel, 'Agency LAPS');
+  assert.match(caseFile?.journeys?.[0]?.score?.explanation ?? '', /Requested contact · Engagement 42 · Intent 10/);
+  assert.equal(caseFile?.journeys?.[1]?.score?.total, 35);
   assert.equal(caseFile?.nextMove?.label, 'Review channel permission before any outreach');
   assert.ok(Object.isFrozen(caseFile));
 });

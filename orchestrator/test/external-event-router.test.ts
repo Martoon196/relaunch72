@@ -112,7 +112,9 @@ function response(): ServerResponse & {
 }
 
 function strictStore(
-  outcome: PropertyPredatorExternalEventShadowRecordResult | Error,
+  outcome: PropertyPredatorExternalEventShadowRecordResult
+    | { readonly disposition: 'projected'; readonly replayed: boolean }
+    | Error,
   seen: PropertyPredatorExternalEventShadowRecordInput[] = [],
 ) {
   return {
@@ -129,10 +131,15 @@ function handlerWithStore(
   store: ReturnType<typeof strictStore>,
   production = false,
   trustedProxyAddresses: readonly string[] = [],
+  health: {
+    readonly onRuntimeAvailable?: () => void;
+    readonly onRuntimeUnavailable?: () => void;
+  } = {},
 ) {
   return createPropertyPredatorExternalEventHandler({
     production,
     trustedProxyAddresses,
+    ...health,
     bindings: [{ keyId: KEY_ID, sharedSecret: SECRET, store }],
   });
 }
@@ -154,6 +161,25 @@ test('the endpoint returns 202 first receipt and 200 exact replay', async () => 
   await replayHandler(request(body, signedHeaders(body)), replay);
   assert.equal(replay.statusCode, 200);
   assert.deepEqual(replay.body, { accepted: true, disposition: 'shadow', replayed: true });
+});
+
+test('the endpoint reports projected only after the composed runtime succeeds', async () => {
+  const body = eventBody();
+  const first = response();
+  await handlerWithStore(strictStore({ disposition: 'projected', replayed: false }))(
+    request(body, signedHeaders(body)),
+    first,
+  );
+  assert.equal(first.statusCode, 202);
+  assert.deepEqual(first.body, { accepted: true, disposition: 'projected', replayed: false });
+
+  const replay = response();
+  await handlerWithStore(strictStore({ disposition: 'projected', replayed: true }))(
+    request(body, signedHeaders(body)),
+    replay,
+  );
+  assert.equal(replay.statusCode, 200);
+  assert.deepEqual(replay.body, { accepted: true, disposition: 'projected', replayed: true });
 });
 
 test('authentication is decided before any event-contract response', async () => {
@@ -234,6 +260,39 @@ test('digest conflict and receipt-store failure have narrow non-leaking response
   assert.equal(unavailable.statusCode, 503);
   assert.deepEqual(unavailable.body, { error: 'external_event_store_unavailable' });
   assert.doesNotMatch(JSON.stringify(unavailable.body), /secret|hunter@example/i);
+});
+
+test('runtime health follows projection outcomes without changing response truth', async () => {
+  const body = eventBody();
+  const health: string[] = [];
+  const unavailable = response();
+  await handlerWithStore(
+    strictStore(new Error('database unavailable')),
+    false,
+    [],
+    { onRuntimeUnavailable: () => health.push('unavailable') },
+  )(request(body, signedHeaders(body)), unavailable);
+  assert.equal(unavailable.statusCode, 503);
+  assert.deepEqual(health, ['unavailable']);
+
+  const projected = response();
+  await handlerWithStore(
+    strictStore({ disposition: 'projected', replayed: false }),
+    false,
+    [],
+    { onRuntimeAvailable: () => health.push('available') },
+  )(request(body, signedHeaders(body)), projected);
+  assert.equal(projected.statusCode, 202);
+  assert.deepEqual(health, ['unavailable', 'available']);
+
+  const observational = response();
+  await handlerWithStore(
+    strictStore({ disposition: 'projected', replayed: false }),
+    false,
+    [],
+    { onRuntimeAvailable: () => { throw new Error('health observer failed'); } },
+  )(request(body, signedHeaders(body)), observational);
+  assert.equal(observational.statusCode, 202);
 });
 
 test('production requires real HTTPS unless a trusted proxy is explicitly configured', async () => {
@@ -416,4 +475,27 @@ test('main app reports bridge readiness and keeps an incomplete opt-in closed', 
   const hidden = response();
   await disabled(request(body, signedHeaders(body)), hidden);
   assert.equal(hidden.statusCode, 404);
+});
+
+test('a mounted degraded bridge remains open for an exact repair retry', async () => {
+  let handled = 0;
+  const handler = appForBridge({
+    enabled: true,
+    ready: false,
+    blockers: ['latest projection failed'],
+    handle: async (_req, res) => {
+      handled += 1;
+      const encoded = JSON.stringify({ accepted: true, disposition: 'projected' });
+      res.writeHead(202, {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(encoded),
+      });
+      res.end(encoded);
+    },
+  });
+  const body = eventBody();
+  const retried = response();
+  await handler(request(body, signedHeaders(body)), retried);
+  assert.equal(retried.statusCode, 202);
+  assert.equal(handled, 1);
 });

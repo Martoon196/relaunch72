@@ -77,6 +77,7 @@ const FUNNEL_SQL = `/* conversion.growth.read-funnels */
          count(DISTINCT fact.contact_id)::text AS achieved_count,
          count(DISTINCT fact.contact_id) FILTER (
            WHERE fact.occurred_at >= transaction_timestamp() - interval '30 days'
+             AND fact.occurred_at <= transaction_timestamp()
          )::text AS moved_in_window
   FROM app.conversion_journeys AS journey
   JOIN app.conversion_journey_versions AS version
@@ -126,7 +127,9 @@ const HOT_LEADS_SQL = `/* conversion.growth.read-hot-leads */
          latest_content.summary AS content_summary,
          latest_offer.summary AS offer_summary,
          latest_score.total_score AS score_sort,
+         latest_score.evaluated_at AS score_evaluated_at,
          enrollment.last_event_at AS enrollment_last_event_at,
+         current_milestone.position AS current_stage_position,
          enrollment.id AS enrollment_id
   FROM app.conversion_enrollments AS enrollment
   JOIN app.contacts AS contact
@@ -141,7 +144,7 @@ const HOT_LEADS_SQL = `/* conversion.growth.read-hot-leads */
    AND current_milestone.journey_version_id = enrollment.journey_version_id
    AND current_milestone.id = enrollment.current_milestone_id
   LEFT JOIN LATERAL (
-    SELECT score.total_score, score.band_key
+    SELECT score.total_score, score.band_key, score.evaluated_at
     FROM app.lead_score_snapshots AS score
     WHERE score.workspace_id = enrollment.workspace_id
       AND score.enrollment_id = enrollment.id
@@ -164,7 +167,8 @@ const HOT_LEADS_SQL = `/* conversion.growth.read-hot-leads */
                WHEN 'started' THEN 'Started'
                ELSE trim(to_char(consumption.progress_basis_points / 100.0, 'FM990D0')) || '% complete'
              END AS detail,
-             consumption.occurred_at
+             consumption.occurred_at,
+             consumption.id AS source_id
       FROM app.content_consumption_facts AS consumption
       WHERE consumption.workspace_id = enrollment.workspace_id
         AND consumption.contact_id = enrollment.contact_id
@@ -173,17 +177,20 @@ const HOT_LEADS_SQL = `/* conversion.growth.read-hot-leads */
              CASE WHEN presentation.price_minor IS NULL THEN presentation.product_key
                   ELSE presentation.currency || ' ' || trim(to_char(presentation.price_minor / 100.0, 'FM9999999990D00'))
              END,
-             presentation.presented_at
+             presentation.presented_at,
+             presentation.id AS source_id
       FROM app.offer_presentation_facts AS presentation
       WHERE presentation.workspace_id = enrollment.workspace_id
         AND presentation.contact_id = enrollment.contact_id
       UNION ALL
-      SELECT 'reply', response.response, 'Offer response', response.responded_at
+      SELECT 'reply', response.response, 'Offer response', response.responded_at,
+             response.id AS source_id
       FROM app.offer_response_facts AS response
       WHERE response.workspace_id = enrollment.workspace_id
         AND response.contact_id = enrollment.contact_id
     ) AS evidence
-    ORDER BY evidence.occurred_at DESC, evidence.kind, evidence.label
+    ORDER BY evidence.occurred_at DESC, evidence.kind, evidence.label,
+             evidence.source_id DESC
     LIMIT 1
   ) AS latest_evidence ON true
   LEFT JOIN LATERAL (
@@ -214,15 +221,22 @@ const HOT_LEADS_SQL = `/* conversion.growth.read-hot-leads */
   ) AS latest_offer ON true
   WHERE enrollment.workspace_id = app_private.current_workspace_id()
     AND journey.slug::text = ANY($1::text[])
+    AND enrollment.status = 'active'
     AND latest_score.total_score >= 22
   ORDER BY enrollment.contact_id,
            latest_score.total_score DESC NULLS LAST,
+           latest_score.evaluated_at DESC,
            enrollment.last_event_at DESC NULLS LAST,
-           enrollment.id
+           current_milestone.position DESC NULLS LAST,
+           journey.slug::text,
+           enrollment.id DESC
   ) AS ranked
   ORDER BY ranked.score_sort DESC NULLS LAST,
+           ranked.score_evaluated_at DESC,
            ranked.enrollment_last_event_at DESC NULLS LAST,
-           ranked.enrollment_id
+           ranked.current_stage_position DESC NULLS LAST,
+           ranked.contact_id,
+           ranked.enrollment_id DESC
   LIMIT 20`;
 
 const TOTALS_SQL = `/* conversion.growth.read-evidence-totals */
@@ -230,22 +244,26 @@ const TOTALS_SQL = `/* conversion.growth.read-evidence-totals */
          (SELECT count(DISTINCT (fact.contact_id, fact.content_key, fact.content_version)) FROM app.content_consumption_facts AS fact
            WHERE fact.workspace_id = app_private.current_workspace_id()
              AND fact.action IN ('started', 'progressed')
-             AND fact.occurred_at >= transaction_timestamp() - interval '30 days')::text AS content_started,
+             AND fact.occurred_at >= transaction_timestamp() - interval '30 days'
+             AND fact.occurred_at <= transaction_timestamp())::text AS content_started,
          (SELECT count(DISTINCT (fact.contact_id, fact.content_key, fact.content_version)) FROM app.content_consumption_facts AS fact
            WHERE fact.workspace_id = app_private.current_workspace_id()
              AND fact.action = 'completed'
-             AND fact.occurred_at >= transaction_timestamp() - interval '30 days')::text AS content_completed,
+             AND fact.occurred_at >= transaction_timestamp() - interval '30 days'
+             AND fact.occurred_at <= transaction_timestamp())::text AS content_completed,
          (SELECT count(*) FROM app.offer_presentation_facts AS fact
            WHERE fact.workspace_id = app_private.current_workspace_id()
-             AND fact.presented_at >= transaction_timestamp() - interval '30 days')::text AS offers_shown,
+             AND fact.presented_at >= transaction_timestamp() - interval '30 days'
+             AND fact.presented_at <= transaction_timestamp())::text AS offers_shown,
          (SELECT count(*) FROM app.offer_response_facts AS fact
            WHERE fact.workspace_id = app_private.current_workspace_id()
-             AND fact.response <> 'presented'
-             AND fact.responded_at >= transaction_timestamp() - interval '30 days')::text AS replies,
+             AND fact.responded_at >= transaction_timestamp() - interval '30 days'
+             AND fact.responded_at <= transaction_timestamp())::text AS replies,
          (SELECT count(*) FROM app.conversion_milestone_facts AS fact
            WHERE fact.workspace_id = app_private.current_workspace_id()
              AND fact.milestone_semantic = 'appointment'
-             AND fact.occurred_at >= transaction_timestamp() - interval '30 days')::text AS appointments`;
+             AND fact.occurred_at >= transaction_timestamp() - interval '30 days'
+             AND fact.occurred_at <= transaction_timestamp())::text AS appointments`;
 
 function fail(message: string): never {
   throw new GrowthIntelligenceReadDataError(message);
@@ -373,11 +391,16 @@ export class GrowthIntelligenceReadService {
       const totalsRows = await queryRows(transaction, TOTALS_SQL);
       if (totalsRows.length !== 1) throw new GrowthIntelligenceReadDataError('Growth totals must return exactly one row');
       const mappedTotals = mapTotals(totalsRows[0]);
+      const funnels = Object.freeze(funnelRows.map(mapFunnel));
+      const hotLeads = Object.freeze(hotLeadRows.map(mapLead));
+      if (new Set(hotLeads.map((lead) => lead.contactId)).size !== hotLeads.length) {
+        throw new GrowthIntelligenceReadDataError('Growth hot leads must contain each contact at most once');
+      }
       return Object.freeze({
         asOf: mappedTotals.asOf,
         windowLabel: 'Last 30 days',
-        funnels: Object.freeze(funnelRows.map(mapFunnel)),
-        hotLeads: Object.freeze(hotLeadRows.map(mapLead)),
+        funnels,
+        hotLeads,
         evidenceTotals: mappedTotals.totals,
       });
     });

@@ -143,6 +143,36 @@ const lead360: Lead360View = {
   },
   score: 82,
   scoreExplanation: 'Completed the Predator Briefing · Returned to pricing twice · Requested personal contact · Engagement 57 · Intent 25',
+  primaryJourneyLabel: 'Self-serve conversion',
+  journeys: [{
+    label: 'Self-serve conversion', isPrimary: true, status: 'active',
+    enrolledAt: '2026-08-14T09:20:00.000Z', lastEventAt: '2026-08-25T15:18:00.000Z', endedAt: null,
+    score: {
+      total: 82,
+      explanation: 'Completed the Predator Briefing · Returned to pricing twice · Requested personal contact · Engagement 57 · Intent 25',
+      sourceOccurredAt: '2026-08-25T15:18:00.000Z', evaluatedAt: '2026-08-25T15:18:02.000Z',
+    },
+    stages: [
+      { key: 'lead', label: 'Lead', state: 'complete', reachedAt: '2026-08-14T09:20:00.000Z' },
+      { key: 'activated', label: 'Activated', state: 'complete', reachedAt: '2026-08-19T14:02:00.000Z' },
+      { key: 'priced', label: 'Priced', state: 'current', reachedAt: '2026-08-25T15:10:00.000Z' },
+      { key: 'sale', label: 'Sale', state: 'upcoming', reachedAt: null },
+    ],
+  }, {
+    label: 'Agency LAPS', status: 'active',
+    enrolledAt: '2026-08-22T11:00:00.000Z', lastEventAt: '2026-08-25T15:24:00.000Z', endedAt: null,
+    score: {
+      total: 25,
+      explanation: 'Booked a strategy appointment · Engagement 15 · Intent 10',
+      sourceOccurredAt: '2026-08-25T15:24:00.000Z', evaluatedAt: '2026-08-25T15:24:01.000Z',
+    },
+    stages: [
+      { key: 'lead', label: 'Lead', state: 'complete', reachedAt: '2026-08-22T11:00:00.000Z' },
+      { key: 'appointment', label: 'Appointment', state: 'current', reachedAt: '2026-08-25T15:24:00.000Z' },
+      { key: 'presentation', label: 'Presentation', state: 'upcoming', reachedAt: null },
+      { key: 'sale', label: 'Sale', state: 'upcoming', reachedAt: null },
+    ],
+  }],
   journey: {
     label: 'Self-serve conversion',
     stages: [

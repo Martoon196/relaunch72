@@ -8,6 +8,10 @@ attention list, evidence-backed engagement reporting, Lead 360 and a secure
 disposable-Neon-tested projection boundary. It is still deliberately
 effect-free: no provider is connected and nothing can contact a lead.
 
+The automatic enrolment, milestone, scoring, consent and commerce runtime that
+now follows this foundation is documented in
+`25-PROPERTY-PREDATOR-JOURNEY-RUNTIME.md`.
+
 ## What now exists
 
 ### Property Predator product experience
@@ -60,7 +64,7 @@ forced-RLS records for source identities, content consumption, offer
 presentations/responses, attribution and private projection receipts. Evidence
 keeps exact provenance and the human-readable offer label used at the time.
 
-The strict external-event catalogue now accepts bounded versions of:
+The Growth evidence projector owns bounded versions of:
 
 - `content.consumption.progressed`;
 - `content.consumption.completed`;
@@ -87,9 +91,10 @@ and refuse quarantined/shared-address shortcuts. Dependent events require an
 existing source identity. Offer responses resolve their saved presentation.
 Projection receipts make retries idempotent.
 
-This projector service is built and tested but is intentionally not composed
-into the live worker yet. That wiring belongs with journey projection and
-operational replay controls rather than being switched on piecemeal.
+This projector is now composed behind the signed route with the separate
+journey projector. Each stage owns an independent receipt, so an exact retry can
+finish a partially interrupted projection without duplicating completed facts.
+The complete runtime boundary is described in handoff 25.
 
 ## Verification evidence
 
@@ -110,28 +115,30 @@ These are local and disposable-test-environment results. They are not a
 production deployment or evidence that an external provider has been
 connected.
 
+Those figures are the verified baseline for the Growth foundation through
+`0017`; they must not be presented as the final test count for the later `0018`
+runtime. Handoff 25 defines the additional verification boundary.
+
 ## What is deliberately still missing
 
 1. **Property Predator event sender.** The source application does not yet emit
    these signed events to Growth HQ.
-2. **Live projector composition.** The secure projector exists, but the worker
-   does not yet invoke it automatically.
-3. **Journey runtime.** Receipt-to-enrolment, milestone achievement and score
-   projection are the next core build; the Journey Manager UI is not built.
-4. **Consent and commerce projection.** Those authoritative facts still need
-   their own projector paths before automation can rely on them.
-5. **Provider connections.** No email, WhatsApp, SMS, shared inbox, social
+2. **Journey Manager and setup UX.** The exact v2 definitions and automatic
+   runtime exist, but manager-facing installation and editing screens do not.
+3. **Workflow execution.** Durable outbox intent exists, but no workflow or
+   provider consumer acts on it.
+4. **Provider connections.** No email, WhatsApp, SMS, shared inbox, social
    publishing/listening or webinar account is connected.
-6. **Autonomous replies.** Recommendations are visible, but no AI or workflow
+5. **Autonomous replies.** Recommendations are visible, but no AI or workflow
    can send on its own.
-7. **Production activation.** Nothing has been deployed and no production
+6. **Production activation.** Nothing has been deployed and no production
    database has been read or written.
 
 ## Provider decision and product boundary
 
 The provider discovery is not being restarted. The existing costed shortlist
-and integration sequence in `17-GHL-REPLACEMENT-PROVIDER-RESEARCH.md` and
-`18-PROVIDER-COST-MODEL.md` remain the working decisions. Providers stay behind
+and integration sequence in `17-WHITE-LABEL-PROVIDER-MATRIX.md` and
+`18-LAUNCH-COST-MODEL.md` remain the working decisions. Providers stay behind
 capability adapters so the Growth HQ domain does not become coupled to one
 vendor.
 

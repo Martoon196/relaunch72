@@ -50,9 +50,9 @@ function growth(): GrowthIntelligenceView {
         description: 'Captured identity to first weapon, priced intent and paid sale.',
         stages: [
           { key: 'lead', label: 'Lead', count: 5, stepConversionPercent: null, movedInWindow: 2 },
-          { key: 'activated', label: 'Activated', count: 3, stepConversionPercent: 60, movedInWindow: 2 },
-          { key: 'priced', label: 'Priced', count: 2, stepConversionPercent: 66.7, movedInWindow: 1 },
-          { key: 'sale', label: 'Sale', count: 1, stepConversionPercent: 50, movedInWindow: 1 },
+          { key: 'activated', label: 'Activated', count: 3, stepConversionPercent: null, movedInWindow: 2 },
+          { key: 'priced', label: 'Priced', count: 2, stepConversionPercent: null, movedInWindow: 1 },
+          { key: 'sale', label: 'Sale', count: 1, stepConversionPercent: null, movedInWindow: 1 },
         ],
       },
       {
@@ -60,9 +60,9 @@ function growth(): GrowthIntelligenceView {
         description: 'Named agency lead to appointment, presentation and collected sale.',
         stages: [
           { key: 'lead', label: 'Lead', count: 2, stepConversionPercent: null, movedInWindow: 1 },
-          { key: 'appointment', label: 'Appointment', count: 1, stepConversionPercent: 50, movedInWindow: 1 },
-          { key: 'presentation', label: 'Presentation', count: 1, stepConversionPercent: 100, movedInWindow: 1 },
-          { key: 'sale', label: 'Sale', count: 1, stepConversionPercent: 100, movedInWindow: 1 },
+          { key: 'appointment', label: 'Appointment', count: 1, stepConversionPercent: null, movedInWindow: 1 },
+          { key: 'presentation', label: 'Presentation', count: 1, stepConversionPercent: null, movedInWindow: 1 },
+          { key: 'sale', label: 'Sale', count: 1, stepConversionPercent: null, movedInWindow: 1 },
         ],
       },
     ],
@@ -84,7 +84,11 @@ test('Growth HQ separates measured journey evidence from saved CRM facts', () =>
   const html = renderGrowthHomeBody(snapshot(), PROPERTY_PREDATOR_GROWTH_PROFILE, growth());
   assert.match(html, /<small>Route leads<\/small><strong>7<\/strong>/);
   assert.match(html, /Distinct within each journey · routes may overlap/);
-  assert.match(html, /<small>Activation rate<\/small><strong>60%<\/strong>/);
+  assert.match(html, /<small>Activated<\/small><strong>3<\/strong>/);
+  assert.match(html, /Distinct self-serve contacts with recorded activation evidence/);
+  assert.match(html, /Distinct people/);
+  assert.match(html, /Last 30 days <strong>\+2<\/strong>/);
+  assert.doesNotMatch(html, /Activation rate|>Step </);
   assert.match(html, /<small>Priced \/ presented<\/small><strong>3<\/strong>/);
   assert.match(html, /<small>Sales<\/small><strong>2<\/strong>/);
   assert.match(html, /<small>CRM leads<\/small><strong>1<\/strong>/);
@@ -96,6 +100,29 @@ test('Growth HQ separates measured journey evidence from saved CRM facts', () =>
   assert.doesNotMatch(html, /Predator Briefing <Replay>/);
 });
 
+test('Growth HQ treats sparse direct-entry stages as evidence, not upcoming or cohort conversion', () => {
+  const base = growth();
+  const selfServe = base.funnels[0]!;
+  const sparse: GrowthIntelligenceView = {
+    ...base,
+    dataState: 'live',
+    funnels: [{
+      ...selfServe,
+      stages: selfServe.stages.map((stage) => stage.key === 'lead'
+        ? { ...stage, count: 0, movedInWindow: 0 }
+        : stage),
+    }, base.funnels[1]!],
+  };
+  const html = renderGrowthHomeBody(snapshot(), PROPERTY_PREDATOR_GROWTH_PROFILE, sparse);
+
+  assert.doesNotMatch(html, /No journey evidence is recorded yet/);
+  assert.match(
+    html,
+    /pp-stage-label">Lead<\/span>[\s\S]*?pp-stage-count">0<\/strong>[\s\S]*?No evidence[\s\S]*?pp-stage-label">Activated<\/span>[\s\S]*?pp-stage-count">3<\/strong>[\s\S]*?Distinct people/,
+  );
+  assert.doesNotMatch(html, /upcoming|Activation rate|>Step /i);
+});
+
 test('Growth HQ distinguishes self-serve conversion from literal agency LAPS', () => {
   const html = renderGrowthHomeBody(snapshot(), PROPERTY_PREDATOR_GROWTH_PROFILE, growth());
   assert.match(html, /Self-serve conversion/);
@@ -105,6 +132,8 @@ test('Growth HQ distinguishes self-serve conversion from literal agency LAPS', (
   assert.match(html, /Presentation/);
   assert.match(html, /Two routes\. No fake stages\./);
   assert.match(html, /Sale requires collected payment/);
+  assert.match(html, /Journey runtime/);
+  assert.match(html, /pp-rail-state ready">Foundation/);
 });
 
 test('Growth HQ empty state invents no activity or provider readiness', () => {
