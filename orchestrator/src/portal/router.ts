@@ -31,6 +31,8 @@ import {
 import type { InMemoryLoginThrottle } from './session.js';
 import { accountSetupPage, accountSetupUnavailablePage, loginPage, dashboardPage, billingPage } from './views.js';
 import { appShell, escapeHtml } from './ui.js';
+import { renderGrowthHomeBody } from './growth-home.js';
+import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
 import {
   CRM_PORTAL_ROUTES,
   renderCrmContactsBody,
@@ -55,6 +57,8 @@ import type { PortalAuthRequestContext, PortalAuthService, PortalSessionIdentity
 interface PortalCommonDeps {
   sessionSecret: string;
   secure: boolean;
+  /** Deployment-owned presentation. It never grants permissions or provider readiness. */
+  productProfile?: PortalProductProfile;
   /** Process-local login limiter; replace with a shared implementation at multi-instance scale. */
   loginThrottle?: Pick<InMemoryLoginThrottle, 'reserve' | 'release' | 'failure' | 'success'>;
   /** Process-local setup limiter; keys are hashed source and token fingerprints only. */
@@ -123,7 +127,7 @@ function sendHtml(res: ServerResponse, code: number, body: string, cookie?: stri
 function sendLoginPage(
   res: ServerResponse,
   code: number,
-  deps: Pick<PortalDeps, 'sessionSecret' | 'secure'>,
+  deps: Pick<PortalDeps, 'sessionSecret' | 'secure' | 'productProfile'>,
   error?: string,
   email = '',
   extra: Record<string, string> = {},
@@ -132,7 +136,7 @@ function sendLoginPage(
   sendHtml(
     res,
     code,
-    loginPage(error, email, csrfToken),
+    loginPage(error, email, csrfToken, deps.productProfile ?? RELAUNCH72_PRODUCT_PROFILE),
     portalLoginCsrfCookie(csrfToken, deps.secure),
     extra,
   );
@@ -228,9 +232,13 @@ function crmPage(
   csrfToken: string,
 ): string {
   return appShell({
-    title: `Relaunch72 CRM — ${snapshot.workspace.name}`,
+    title: `${deps.productProfile?.productName ?? 'Relaunch72'} CRM — ${snapshot.workspace.name}`,
     tenantName: snapshot.workspace.name,
     active: 'crm',
+    productProfile: deps.productProfile,
+    capabilities: new Set([
+      'workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read',
+    ]),
     billingAvailable: deps.kind === 'legacy' && !!deps.billing,
     crmAvailable: true,
     mode: 'crm',
@@ -256,9 +264,17 @@ function portalStatusPage(
   const body = `<header class="page-heading"><div><div class="eyebrow">Workspace status</div><h1>${escapeHtml(options.title)}</h1><p>${escapeHtml(options.message)}</p></div></header>
     <section class="panel" aria-label="Recovery action"><div class="panel-body" style="padding-top:19px"><a class="button secondary" href="${escapeHtml(backHref)}">${escapeHtml(backLabel)}</a></div></section>`;
   return appShell({
-    title: `Relaunch72 — ${options.title}`,
+    title: `${deps.productProfile?.productName ?? 'Relaunch72'} — ${options.title}`,
     tenantName: 'Your workspace',
     active: options.active ?? 'overview',
+    productProfile: deps.productProfile,
+    capabilities: new Set([
+      'workspace.overview.read',
+      ...((options.crmAvailable ?? !!deps.crm)
+        ? ['crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read'] as const
+        : []),
+      ...((deps.kind === 'legacy' && !!deps.billing) ? ['billing.read'] as const : []),
+    ]),
     billingAvailable: deps.kind === 'legacy' && !!deps.billing,
     crmAvailable: options.crmAvailable ?? !!deps.crm,
     mode: options.active === 'crm' ? 'crm' : 'sandbox',
@@ -310,7 +326,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   const now = deps.now ? deps.now() : Date.now();
   const requestCookies = parseCookies(req.headers.cookie);
   const sessionToken = requestCookies[PORTAL_COOKIE] ?? '';
-  const portalHome = deps.kind === 'postgres' ? CRM_PORTAL_ROUTES.contacts : '/portal';
+  const portalHome = '/portal';
   let tenantId: string | null = null;
   let portalIdentity: PortalSessionIdentity | null = null;
   // Public account actions must remain usable when a stale cookie exists and
@@ -510,6 +526,40 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     sessionToken ? clearPortalCookie(deps.secure) : undefined,
   );
 
+  // Canonical PostgreSQL Growth HQ. Only the secure CRM snapshot contributes
+  // numbers; this route never falls back to the legacy JSON demo dashboard.
+  if (deps.kind === 'postgres' && p === '/portal' && method === 'GET') {
+    try {
+      const snapshot = await deps.crm.snapshot(crmIdentity(sessionToken, deps));
+      if (!snapshot) return sendHtml(res, 403, portalStatusPage(deps, sessionToken, {
+        title: 'Workspace not available',
+        message: 'This session no longer has access to the selected workspace.',
+        active: 'overview',
+      }));
+      const profile = deps.productProfile ?? RELAUNCH72_PRODUCT_PROFILE;
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      return sendHtml(res, 200, appShell({
+        title: `${profile.productName} — ${snapshot.workspace.name}`,
+        tenantName: snapshot.workspace.name,
+        active: 'overview',
+        productProfile: profile,
+        capabilities: new Set([
+          'workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read',
+        ]),
+        crmAvailable: true,
+        mode: 'crm',
+        csrfToken,
+        body: renderGrowthHomeBody(snapshot, profile),
+      }));
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Growth HQ temporarily unavailable',
+        message: 'No data was changed. Try again shortly.',
+        active: 'overview',
+      }));
+    }
+  }
+
   // ── durable CRM: real service only; no fake fallback data ──
   if (p === '/portal/crm' && method === 'GET') {
     return deps.crm
@@ -684,7 +734,6 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   }
 
   if (deps.kind === 'postgres') {
-    if (p === '/portal' && method === 'GET') return redirect(res, CRM_PORTAL_ROUTES.contacts);
     return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
       title: 'Not available',
       message: 'That legacy portal feature is not part of this PostgreSQL workspace.',

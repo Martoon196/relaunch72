@@ -20,6 +20,7 @@ import type { PortalCrmService } from './crm-service.js';
 import type { PortalAuthService } from './auth-service.js';
 import type { SubscriptionStore } from '../server/subscriptions.js';
 import { canonicalIntake } from '../intake/canonical.js';
+import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
 
 export interface ProvisionArgs {
   email: string;
@@ -125,6 +126,7 @@ export interface PostgresPortalConfig {
   secure: boolean;
   auth: PortalAuthService;
   crm: PortalCrmService;
+  productProfile?: PortalProductProfile;
   /** Explicit authenticated-proxy client address policy; omitted by default. */
   trustedClientAddress?: PostgresPortalDeps['trustedClientAddress'];
   now?: () => number;
@@ -143,6 +145,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     loginThrottle: new InMemoryLoginThrottle(),
     auth: cfg.auth,
     crm: cfg.crm,
+    productProfile: cfg.productProfile ?? RELAUNCH72_PRODUCT_PROFILE,
     trustedClientAddress: cfg.trustedClientAddress,
     now: cfg.now,
     requestId: cfg.requestId,

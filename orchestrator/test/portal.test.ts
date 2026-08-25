@@ -60,7 +60,13 @@ function deps(over: Partial<LegacyPortalDeps> = {}): LegacyPortalDeps {
 }
 
 const crm: PortalCrmService = {
-  snapshot: async () => null,
+  snapshot: async () => ({
+    workspace: {
+      id: WORKSPACE_ID, name: 'Frayne Electrical', timezone: 'Europe/London',
+      snapshotAt: '2026-08-25T12:00:00.000Z', canWrite: true,
+    },
+    contacts: [], stages: [], opportunities: [], tasks: [], timeline: [],
+  }),
   createLead: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
   moveOpportunity: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
   completeTask: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
@@ -204,7 +210,7 @@ test('database auth issues opaque cookies and never accepts a legacy signed tena
   const d = postgresDeps(auth);
   const login = await call('POST', '/portal/login', d, loginPost({ email: 'owner@frayne.co', password: 'good' }));
   assert.equal(login.statusCode, 302);
-  assert.equal(login.headers.location, '/portal/crm/contacts');
+  assert.equal(login.headers.location, '/portal');
   assert.match(login.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}(?:;|$)`));
   assert.doesNotMatch(login.headers['set-cookie'] ?? '', /\./, 'opaque database cookie is not a signed tenant payload');
 
@@ -212,8 +218,8 @@ test('database auth issues opaque cookies and never accepts a legacy signed tena
   assert.equal(legacy.statusCode, 302);
   assert.equal(legacy.headers.location, '/portal/login?reason=session-ended');
   const accepted = await call('GET', '/portal', d, { cookie: `${PORTAL_COOKIE}=${opaque}` });
-  assert.equal(accepted.statusCode, 302);
-  assert.equal(accepted.headers.location, '/portal/crm/contacts');
+  assert.equal(accepted.statusCode, 200);
+  assert.match(accepted.body, /Turn attention into revenue/);
 });
 
 test('database sessions use canonical workspace identity without a legacy bridge', async () => {
@@ -232,8 +238,8 @@ test('database sessions use canonical workspace identity without a legacy bridge
     cookie: `${PORTAL_COOKIE}=${opaque}`,
   });
 
-  assert.equal(res.statusCode, 302);
-  assert.equal(res.headers.location, '/portal/crm/contacts');
+  assert.equal(res.statusCode, 200);
+  assert.match(res.body, /Frayne Electrical/);
 });
 
 test('database auth failure never downgrades to legacy login', async () => {
@@ -327,7 +333,7 @@ test('database account setup issues its canonical session and enters the CRM', a
   }));
 
   assert.equal(completed.statusCode, 303);
-  assert.equal(completed.headers.location, '/portal/crm/contacts');
+  assert.equal(completed.headers.location, '/portal');
   assert.match(completed.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}(?:;|$)`));
   assert.deepEqual(seen, [{ token: SETUP_TOKEN, password: 'a-secure-password', now: 1_000_000 }]);
 });
@@ -614,7 +620,7 @@ test('database login does not preflight a JSON dashboard before issuing its sess
   };
   const res = await call('POST', '/portal/login', postgresDeps(auth), loginPost({ email: 'owner@frayne.co', password: 'good' }));
   assert.equal(res.statusCode, 302);
-  assert.equal(res.headers.location, '/portal/crm/contacts');
+  assert.equal(res.headers.location, '/portal');
   assert.deepEqual(revoked, []);
   assert.match(res.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}`));
 });

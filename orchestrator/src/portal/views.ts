@@ -8,6 +8,7 @@ import type { DashboardData } from './data.js';
 import type { BillingView } from './billing.js';
 import { PIPELINE_STAGES, type PipelineStage } from '../crm/types.js';
 import { appShell, escapeHtml as esc, icon, pageHead, plannedPortalModules, portalModuleIcon } from './ui.js';
+import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
 
 export function accountSetupPage(setupCsrfToken: string, error?: string): string {
   return `${pageHead('Relaunch72 — Set up your account')}<body>
@@ -50,14 +51,20 @@ export function accountSetupUnavailablePage(message = 'Account setup is not open
   </body></html>`;
 }
 
-export function loginPage(error?: string, email = '', loginCsrfToken = ''): string {
-  return `${pageHead('Relaunch72 — Sign in')}<body>
+export function loginPage(
+  error?: string,
+  email = '',
+  loginCsrfToken = '',
+  productProfile: PortalProductProfile = RELAUNCH72_PRODUCT_PROFILE,
+): string {
+  const productName = esc(productProfile.productName);
+  return `${pageHead(`${productProfile.productName} — Sign in`, productProfile)}<body>
     <main class="auth-shell">
       <section class="auth-panel" aria-labelledby="login-title">
         <div class="auth-card">
-          <a class="auth-brand" href="/portal/login" aria-label="Relaunch72 sign in"><span class="brand-mark">R72</span><strong>RELAUNCH72</strong></a>
+          <a class="auth-brand" href="/portal/login" aria-label="${productName} sign in"><span class="brand-mark">${esc(productProfile.compactMark)}</span><strong>${productName}</strong></a>
           <h1 id="login-title">Welcome back.</h1>
-          <p class="auth-lead">Sign in to your private marketing workspace.</p>
+          <p class="auth-lead">${esc(productProfile.auth.lead)}</p>
           ${error ? `<div class="auth-error" role="alert">${icon('lock')}<span>${esc(error)}</span></div>` : ''}
           <form method="post" action="/portal/login">
             <input type="hidden" name="_login_csrf" value="${esc(loginCsrfToken)}">
@@ -69,7 +76,7 @@ export function loginPage(error?: string, email = '', loginCsrfToken = ''): stri
         </div>
       </section>
       <aside class="auth-story" aria-label="Product preview">
-        <div class="auth-story-inner"><div class="auth-kicker">Your marketing command centre</div><h2>Clear work.<br>Calm control.</h2><p>Work your contacts, opportunities and tasks alongside generated drafts. Channel publishing remains safely locked until each integration is production-ready.</p>
+        <div class="auth-story-inner"><div class="auth-kicker">${esc(productProfile.auth.storyKicker)}</div><h2>${esc(productProfile.auth.storyTitle)}</h2><p>${esc(productProfile.auth.storyBody)}</p>
           <div class="auth-modules" aria-label="Workspace modules"><span>CRM workspace</span><span>Content drafts</span><span class="planned">Social · planned</span><span class="planned">WhatsApp · planned</span><span class="planned">Listening · planned</span></div>
         </div>
       </aside>
@@ -126,7 +133,15 @@ export function billingPage(tenantName: string, billing: BillingView, opts: { ca
       <section class="panel" aria-labelledby="plans-title"><div class="panel-head"><div><h2 id="plans-title">${opts.canSubscribe === true ? (billing.active ? 'Change your plan' : 'Choose a plan') : 'Planned tiers'}</h2><p class="panel-subtitle">${opts.canSubscribe === true ? 'Billed monthly · cancel anytime' : 'Preview pricing · no checkout'}</p></div></div><div class="panel-body"><div class="plans">${plans}</div></div></section>
     </div>`;
 
-  return appShell({ title: 'Relaunch72 — Billing', tenantName, active: 'billing', billingAvailable: true, crmAvailable: opts.crmAvailable, csrfToken: opts.csrfToken, body });
+  return appShell({
+    title: 'Relaunch72 — Billing', tenantName, active: 'billing', billingAvailable: true,
+    crmAvailable: opts.crmAvailable, csrfToken: opts.csrfToken,
+    capabilities: new Set([
+      'workspace.overview.read', 'billing.read',
+      ...(opts.crmAvailable ? ['crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read'] as const : []),
+    ]),
+    body,
+  });
 }
 
 function pipelinePanel(data: DashboardData): string {
@@ -205,5 +220,14 @@ export function dashboardPage(data: DashboardData, billing?: BillingView, opts: 
     <div class="dashboard-grid"><div class="stack">${pipelinePanel(data)}${contentPanel(data)}${contactsPanel(data)}</div><aside class="stack" aria-label="Workspace context">${billing ? billingCard(billing) : ''}${activityPanel(data)}${brandPanel(data)}</aside></div>
     ${expansionModules()}`;
 
-  return appShell({ title: `Relaunch72 — ${data.tenant.name}`, tenantName: data.tenant.name, active: 'overview', billingAvailable: !!billing, crmAvailable: opts.crmAvailable, csrfToken: opts.csrfToken, body });
+  return appShell({
+    title: `Relaunch72 — ${data.tenant.name}`, tenantName: data.tenant.name, active: 'overview',
+    billingAvailable: !!billing, crmAvailable: opts.crmAvailable, csrfToken: opts.csrfToken,
+    capabilities: new Set([
+      'workspace.overview.read', 'content.drafts.read', 'analytics.read',
+      ...(billing ? ['billing.read'] as const : []),
+      ...(opts.crmAvailable ? ['crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read'] as const : []),
+    ]),
+    body,
+  });
 }

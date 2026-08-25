@@ -6,6 +6,7 @@
 
 import { CORE_PLATFORM_MODULES, platformModules, type PlatformModuleId, type PlatformModuleManifest } from '../platform/modules.js';
 import type { PlatformCapability } from '../platform/capabilities.js';
+import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
 
 export type PortalSection = 'overview' | 'crm' | 'billing';
 
@@ -103,15 +104,24 @@ export const PORTAL_STYLE = `
   @media(forced-colors:active){.brand-mark,.button,.status-badge,.pill,.status,.stage-badge{forced-color-adjust:none}.nav-item[aria-current="page"]{outline:2px solid Highlight}.field input:focus-visible{outline:3px solid Highlight}.stage::after{background:CanvasText}.skip-link{border:1px solid ButtonText}}
 `;
 
-export function pageHead(title: string): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#101827"><meta name="referrer" content="no-referrer"><title>${escapeHtml(title)}</title><style>${PORTAL_STYLE}</style></head>`;
+function profileTheme(profile: PortalProductProfile): string {
+  const theme = profile.theme;
+  return `:root{--accent:${theme.accent};--accent-deep:${theme.accentDeep};--accent-soft:${theme.accentSoft};--nav:${theme.nav};--nav-raised:${theme.navRaised};--nav-line:${theme.navLine};--nav-text:${theme.navText};--nav-muted:${theme.navMuted}}`;
 }
 
-interface AppShellOptions {
+export function pageHead(title: string, productProfile: PortalProductProfile = RELAUNCH72_PRODUCT_PROFILE): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="${productProfile.theme.nav}"><meta name="referrer" content="no-referrer"><title>${escapeHtml(title)}</title><style>${PORTAL_STYLE}${profileTheme(productProfile)}</style></head>`;
+}
+
+export interface AppShellOptions {
   title: string;
   tenantName: string;
   active: PortalSection;
   body: string;
+  /** Trusted deployment presentation only. It never grants a capability. */
+  productProfile?: PortalProductProfile;
+  /** Capabilities proven by the composed services for this exact response. */
+  capabilities?: ReadonlySet<PlatformCapability>;
   billingAvailable?: boolean;
   /** Only advertise CRM routes when a real workspace service is wired. */
   crmAvailable?: boolean;
@@ -131,11 +141,10 @@ function plannedNav(module: PlatformModuleManifest): string {
 }
 
 export function appShell(opts: AppShellOptions): string {
+  const profile = opts.productProfile ?? RELAUNCH72_PRODUCT_PROFILE;
   const tenant = escapeHtml(opts.tenantName);
   const crmMode = opts.mode === 'crm';
-  const capabilities = new Set<PlatformCapability>([
-    'workspace.overview.read', 'content.drafts.read', 'analytics.read',
-  ]);
+  const capabilities = new Set<PlatformCapability>(opts.capabilities ?? ['workspace.overview.read']);
   if (opts.crmAvailable) {
     capabilities.add('crm.contacts.read');
     capabilities.add('crm.pipeline.read');
@@ -143,7 +152,9 @@ export function appShell(opts: AppShellOptions): string {
   }
   if (opts.billingAvailable) capabilities.add('billing.read');
   const resolvedModules = platformModules.navigation({ capabilities });
-  const workingModules = resolvedModules.filter((module) => module.state !== 'planned' && module.route);
+  const visibleIds = new Set(profile.visibleNavigation);
+  const workingModules = resolvedModules.filter((module) => visibleIds.has(module.id) && module.state !== 'planned' && module.route);
+  const moduleLabel = (module: PlatformModuleManifest): string => profile.moduleLabels[module.id] ?? module.shortLabel;
   const isCurrent = (id: PlatformModuleId): boolean =>
     (opts.active === 'overview' && id === 'overview')
     || (opts.active === 'crm' && id === 'crm')
@@ -153,23 +164,25 @@ export function appShell(opts: AppShellOptions): string {
     const stateLabel = module.state === 'preview' ? 'Preview' : module.state === 'setup_required' ? 'Setup' : '';
     const state = stateLabel ? `<span class="module-state">${escapeHtml(stateLabel)}</span>` : '';
     if (module.state === 'setup_required' || module.state === 'unavailable') {
-      return `<span class="nav-item nav-locked" role="link" aria-disabled="true" title="${escapeHtml(module.label)} is not connected in this workspace">${portalModuleIcon(module.id)}<span>${escapeHtml(module.shortLabel)}</span>${state}</span>`;
+      return `<span class="nav-item nav-locked" role="link" aria-disabled="true" title="${escapeHtml(module.label)} is not connected in this workspace">${portalModuleIcon(module.id)}<span>${escapeHtml(moduleLabel(module))}</span>${state}</span>`;
     }
-    return `<a class="nav-item" href="${escapeHtml(module.route!)}"${current ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}<span>${escapeHtml(module.shortLabel)}</span>${state}</a>`;
+    return `<a class="nav-item" href="${escapeHtml(module.route!)}"${current ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}<span>${escapeHtml(moduleLabel(module))}</span>${state}</a>`;
   }).join('');
   const quickWorking = workingModules.map((module) => module.state === 'setup_required' || module.state === 'unavailable'
     ? `<span class="command-link locked" role="link" aria-disabled="true">${portalModuleIcon(module.id)}${escapeHtml(module.label)}<small>${icon('lock')}Setup</small></span>`
     : `<a class="command-link" href="${escapeHtml(module.route!)}">${portalModuleIcon(module.id)}${escapeHtml(module.label)}<small>${module.state === 'preview' ? 'Preview' : module.group}</small></a>`).join('');
-  const quickPlanned = plannedPortalModules.map((module) => `<span class="command-link locked" role="link" aria-disabled="true">${portalModuleIcon(module.id)}${escapeHtml(module.label)}<small>${icon('lock')}Planned</small></span>`).join('');
   const mobileModules = workingModules.filter((module) => module.state === 'ready' || module.state === 'preview');
-  const mobileNav = mobileModules.map((module) => `<a href="${escapeHtml(module.route!)}"${isCurrent(module.id) ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}${escapeHtml(module.shortLabel)}</a>`).join('');
+  const mobileNav = mobileModules.map((module) => `<a href="${escapeHtml(module.route!)}"${isCurrent(module.id) ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}${escapeHtml(moduleLabel(module))}</a>`).join('');
   const csrfField = opts.csrfToken
     ? `<input type="hidden" name="_csrf" value="${escapeHtml(opts.csrfToken)}">`
     : '';
-  return `${pageHead(opts.title)}<body><a class="skip-link" href="#main-content">Skip to main content</a>
+  const productName = escapeHtml(profile.productName);
+  const compactMark = escapeHtml(profile.compactMark);
+  const suiteLabel = escapeHtml(profile.suiteLabel);
+  return `${pageHead(opts.title, profile)}<body><a class="skip-link" href="#main-content">Skip to main content</a>
   <div class="app-shell">
     <aside class="sidebar" aria-label="Workspace navigation">
-      <a class="brand-lockup" href="/portal" aria-label="Relaunch72 overview"><span class="brand-mark">R72</span><span class="brand-name">RELAUNCH72<small>Command centre</small></span></a>
+      <a class="brand-lockup" href="/portal" aria-label="${productName} overview"><span class="brand-mark">${compactMark}</span><span class="brand-name">${productName}<small>${suiteLabel}</small></span></a>
       <details class="workspace-menu">
         <summary aria-label="Workspace menu: ${tenant}"><span class="workspace-avatar">${workspaceInitial(opts.tenantName)}</span><span class="workspace-copy"><strong>${tenant}</strong><small>Current workspace</small></span>${icon('chevron', 'chev')}</summary>
         <div class="workspace-popover"><div class="workspace-current"><span class="workspace-avatar">${workspaceInitial(opts.tenantName)}</span><span>${tenant}</span></div><p>One workspace is connected. Multi-workspace switching is planned.</p></div>
@@ -177,21 +190,17 @@ export function appShell(opts: AppShellOptions): string {
       <nav class="primary-nav" aria-label="Primary">
         <div class="nav-label">Workspace</div>
         ${workingNav}
-        <div class="nav-label">Expansion modules</div>
-        ${plannedPortalModules.map(plannedNav).join('')}
       </nav>
       <div class="sidebar-foot"><div class="sandbox-note"><span class="sandbox-dot"></span><span><strong>${crmMode ? 'Private CRM' : 'Private sandbox'}</strong>${crmMode ? 'Saved workspace records · provider effects locked' : 'Mock generation only · no publishing'}</span></div></div>
     </aside>
     <div class="workspace">
       <header class="topbar">
-        <a class="mobile-brand" href="/portal"><span class="brand-mark">R72</span><strong>RELAUNCH72</strong></a>
+        <a class="mobile-brand" href="/portal"><span class="brand-mark">${compactMark}</span><strong>${productName}</strong></a>
         <details class="quick-menu">
           <summary aria-label="Open quick navigation">${icon('search')}<span>Quick navigation</span></summary>
           <nav class="command-popover" aria-label="Quick navigation">
             <div class="command-title">Go to</div>
             ${quickWorking}
-            <div class="command-title">Expansion modules</div>
-            ${quickPlanned}
           </nav>
         </details>
         <div class="top-actions"><span class="status-badge"><span class="dot"></span>${crmMode ? 'CRM records' : 'Mock workspace'}</span><form method="post" action="/portal/logout">${csrfField}<button class="top-icon-button" type="submit" aria-label="Sign out" title="Sign out">${icon('logout')}</button></form></div>

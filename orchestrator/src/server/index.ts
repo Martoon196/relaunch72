@@ -31,6 +31,7 @@ import type { BuildEntitlement } from './entitlements.js';
 import { customerOutboundMessagingEnabled, runtimeSafetyPolicy, subscriptionCheckoutBlockers } from './readiness.js';
 import { canonicalIntake } from '../intake/canonical.js';
 import { buildPgPortalPlatform, postgresPortalEnabled, type PgPortalPlatform } from '../portal/postgres-platform.js';
+import { resolvePortalProductProfile } from '../portal/product-profile.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ORCH_ROOT = path.resolve(HERE, '../..');
@@ -183,6 +184,7 @@ async function main(): Promise<void> {
   const billingEnforced = /^(1|true|yes)$/i.test(process.env.BILLING_ENFORCED?.trim() ?? '');
 
   const requirePostgresPortal = postgresPortalEnabled(process.env);
+  const portalProductProfile = resolvePortalProductProfile(process.env.PORTAL_PRODUCT_PROFILE);
   let postgresPortal: PgPortalPlatform | undefined;
   if (requirePostgresPortal) {
     try {
@@ -210,6 +212,7 @@ async function main(): Promise<void> {
         secure: securePortalCookie,
         auth: postgresPortal.auth,
         crm: postgresPortal.crm,
+        productProfile: portalProductProfile,
       });
       console.log('Canonical PostgreSQL client portal mounted at /portal; JSON portal stores are not composed.');
     } else {
