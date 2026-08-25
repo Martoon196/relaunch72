@@ -3,9 +3,13 @@
 > **Engineering update — 2026-08-25:** this file preserves the original audit
 > baseline below. PostgreSQL/RLS, a modular platform shell and the first durable
 > CRM loop have since been implemented on the local Codex branch. The newest
-> Property Predator-specific slice—the visual Journey Manager and safe legacy
-> lead/affiliate-attribution migration boundary—is documented, without claiming
-> deployment or connected channels, in
+> Property Predator-specific slice—the operational people Journey Board,
+> protected drag-and-drop workflow, Lead 360 drawer and explicit reuse of the
+> existing Affiliate Stash content machine—is documented, without claiming a
+> production deployment or connected publisher, in
+> [27-PROPERTY-PREDATOR-LIVE-JOURNEY-BOARD-AND-CONTENT-REUSE.md](./27-PROPERTY-PREDATOR-LIVE-JOURNEY-BOARD-AND-CONTENT-REUSE.md).
+> The preceding visual Journey Manager and safe legacy
+> lead/affiliate-attribution migration boundary is in
 > [26-PROPERTY-PREDATOR-JOURNEY-MANAGER-AND-LEAD-MIGRATION.md](./26-PROPERTY-PREDATOR-JOURNEY-MANAGER-AND-LEAD-MIGRATION.md).
 > Its runtime and Growth HQ foundations are
 > [25-PROPERTY-PREDATOR-JOURNEY-RUNTIME.md](./25-PROPERTY-PREDATOR-JOURNEY-RUNTIME.md)

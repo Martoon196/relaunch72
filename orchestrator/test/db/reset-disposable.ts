@@ -13,6 +13,7 @@ const APP_ROLES = [
   'r72_identity_command',
   'r72_import_command',
   'r72_journey_projector_definer',
+  'r72_legacy_materializer_definer',
   'r72_onboarding_definer',
   'r72_owner',
   'r72_provisioning_command',

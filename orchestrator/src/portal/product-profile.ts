@@ -34,7 +34,8 @@ export interface PortalReadinessRail {
   id: 'content' | 'social' | 'inbox' | 'webinars' | 'journeys' | 'automations';
   label: string;
   summary: string;
-  state: 'foundation' | 'planned';
+  state: 'foundation' | 'reuse' | 'planned';
+  href?: string;
 }
 
 export interface PortalProductProfile {
@@ -69,6 +70,19 @@ function checkedText(value: string, label: string): string {
   return text;
 }
 
+function checkedHref(value: string | undefined, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.username || url.password || !url.hostname) {
+      throw new Error('unsafe URL');
+    }
+    return url.toString();
+  } catch {
+    throw new Error(`${label} must be an absolute HTTPS URL`);
+  }
+}
+
 function checkedTheme(theme: PortalThemeTokens): Readonly<PortalThemeTokens> {
   for (const [name, value] of Object.entries(theme)) {
     if (!HEX_COLOR.test(value)) throw new Error(`product profile theme ${name} must be a six-digit hex colour`);
@@ -86,11 +100,15 @@ function createProfile(profile: PortalProductProfile): PortalProductProfile {
     summary: checkedText(journey.summary, `journey ${journey.id} summary`),
     milestones: Object.freeze(journey.milestones.map((milestone) => checkedText(milestone, `journey ${journey.id} milestone`))),
   })));
-  const readinessRails = Object.freeze(profile.readinessRails.map((rail) => Object.freeze({
-    ...rail,
-    label: checkedText(rail.label, `readiness rail ${rail.id} label`),
-    summary: checkedText(rail.summary, `readiness rail ${rail.id} summary`),
-  })));
+  const readinessRails = Object.freeze(profile.readinessRails.map((rail) => {
+    const href = checkedHref(rail.href, `readiness rail ${rail.id} href`);
+    return Object.freeze({
+      ...rail,
+      label: checkedText(rail.label, `readiness rail ${rail.id} label`),
+      summary: checkedText(rail.summary, `readiness rail ${rail.id} summary`),
+      ...(href ? { href } : {}),
+    });
+  }));
   return Object.freeze({
     ...profile,
     productName: checkedText(profile.productName, 'productName'),
@@ -191,7 +209,13 @@ export const PROPERTY_PREDATOR_GROWTH_PROFILE = createProfile({
       summary: 'Automatic enrolment, evidence-led advancement and explainable scores.',
       state: 'foundation',
     },
-    { id: 'content', label: 'Predator content engine', summary: 'Approved brand assets and partner-ready campaigns.', state: 'planned' },
+    {
+      id: 'content',
+      label: 'Affiliate Stash content machine',
+      summary: 'Reuse its brand-trained generation, swipe library and artwork catalogue; Growth HQ will orchestrate reviewed items instead of rebuilding it.',
+      state: 'reuse',
+      href: 'https://propertypredator.com/affiliate',
+    },
     { id: 'social', label: 'Social machine', summary: 'Broad publishing with provider-confirmed outcomes.', state: 'planned' },
     { id: 'inbox', label: 'Conversion inbox', summary: 'Email, WhatsApp, SMS, Messenger and Instagram.', state: 'planned' },
     { id: 'webinars', label: 'Predator Briefing', summary: 'Live registration, attendance and follow-up journeys.', state: 'planned' },

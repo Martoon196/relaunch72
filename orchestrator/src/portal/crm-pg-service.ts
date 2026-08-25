@@ -10,10 +10,14 @@ import {
 } from '../crm-pg/index.js';
 import {
   createPgGrowthIntelligenceReadService,
+  createPgJourneyBoardReadService,
   createPgLead360ReadService,
   type GrowthIntelligenceReadService,
   type GrowthIntelligenceReadSnapshot,
   type GrowthJourneySlug,
+  type JourneyBoardCardRead,
+  type JourneyBoardReadService,
+  type JourneyBoardReadSnapshot,
   type Lead360CaseFileRead,
   type Lead360ReadService,
   type Lead360ScoreRead,
@@ -33,6 +37,8 @@ import type {
   PortalCrmRequestIdentity,
   PortalCrmService,
   PortalCrmWorkspaceShell,
+  PortalJourneyBoardFilters,
+  PortalJourneyBoardSnapshot,
   PortalMoveOpportunityInput,
 } from './crm-service.js';
 import {
@@ -51,6 +57,12 @@ import type {
   Lead360OfferState,
   Lead360View,
 } from './lead-360-view.js';
+import type {
+  JourneyBoardCardView,
+  JourneyBoardDueState,
+  JourneyBoardLaneView,
+  JourneyBoardOfferState,
+} from './journey-board-view.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const COMMAND_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -440,6 +452,178 @@ function mapLead360(read: Lead360CaseFileRead): Lead360View {
   });
 }
 
+const BOARD_BANDS = ['burning', 'hot', 'warm', 'quiet', 'unscored'] as const;
+
+function boardFilter(value: string | undefined, maximum: number): string {
+  return (value ?? '').trim().slice(0, maximum);
+}
+
+function boardAffiliateLabel(card: JourneyBoardCardRead): string | null {
+  const attribution = card.attribution;
+  if (!attribution) return null;
+  return attribution.affiliateName
+    ?? attribution.affiliateCode
+    ?? attribution.referralCode
+    ?? (attribution.affiliateId || attribution.affiliateSourceId ? 'Affiliate attributed' : null);
+}
+
+function boardSourceLabel(card: JourneyBoardCardRead): string {
+  const attribution = card.attribution;
+  return attribution?.utmSource
+    ?? attribution?.channel
+    ?? attribution?.sourceSystem
+    ?? card.contactSource
+    ?? 'Unattributed';
+}
+
+function boardOffer(summary: string | null): JourneyBoardCardView['offer'] {
+  if (!summary) return null;
+  const separator = summary.lastIndexOf(' · ');
+  const label = separator > 0 ? summary.slice(0, separator) : summary;
+  const rawState = separator > 0 ? summary.slice(separator + 3) : 'shown';
+  const state: JourneyBoardOfferState = rawState === 'shown'
+    ? 'presented'
+    : ['accepted', 'declined', 'deferred', 'requested_contact'].includes(rawState)
+      ? rawState as JourneyBoardOfferState
+      : 'no_response';
+  return Object.freeze({ label, state, valueLabel: null });
+}
+
+function boardDueState(dueAt: string | null, asOf: string): JourneyBoardDueState {
+  if (!dueAt) return 'none';
+  return dueAt < asOf ? 'overdue' : 'due';
+}
+
+function mapJourneyBoardCard(
+  card: JourneyBoardCardRead,
+  read: JourneyBoardReadSnapshot,
+  nextCommandKey: () => string,
+): JourneyBoardCardView {
+  const journey = card.primaryJourney;
+  const milestone = journey?.currentMilestone ?? null;
+  const score = journey?.score?.total ?? null;
+  const task = card.nextTask;
+  return Object.freeze({
+    id: card.opportunityId,
+    contactId: card.contactId,
+    laneId: card.stageId,
+    displayName: card.contactName,
+    companyName: card.companyName,
+    ownerName: card.ownerUserId ? 'Assigned workspace member' : null,
+    score,
+    scoreBand: scoreBand(score),
+    sourceLabel: boardSourceLabel(card),
+    affiliateLabel: boardAffiliateLabel(card),
+    journey: Object.freeze({
+      routeKey: journey?.slug ?? 'not-enrolled',
+      routeLabel: journey?.name ?? 'Not enrolled',
+      stageKey: milestone?.key ?? 'awaiting-enrolment',
+      stageLabel: milestone?.name ?? 'Awaiting automatic enrolment',
+      stageSemantic: milestone?.semantic ?? 'lead',
+      lastAdvancedAt: milestone?.reachedAt ?? null,
+      stageAutomatic: milestone?.automatic ?? false,
+      otherJourneyCount: journey?.otherEnrollmentCount ?? 0,
+      paymentVerifiedSale: milestone?.semantic === 'sale' && milestone.paymentVerified,
+    }),
+    latestSignal: card.latestEvidence ? Object.freeze({
+      kind: card.latestEvidence.kind,
+      label: card.latestEvidence.title,
+      detail: card.latestEvidence.detail,
+      occurredAt: card.latestEvidence.occurredAt,
+      progressPercent: card.latestEvidence.progressBasisPoints === null
+        ? null
+        : card.latestEvidence.progressBasisPoints / 100,
+      automatic: card.latestEvidence.automatic,
+    }) : null,
+    offer: boardOffer(card.offerSummary),
+    nextMove: task ? Object.freeze({
+      label: task.title,
+      dueAt: task.dueAt,
+      dueState: boardDueState(task.dueAt, read.asOf),
+    }) : score !== null && score >= 22 ? Object.freeze({
+      label: nextMove(score, milestone?.name ?? null),
+      dueAt: null,
+      dueState: 'none' as const,
+    }) : null,
+    move: read.workspace.canWrite ? Object.freeze({
+      commandKey: nextCommandKey(),
+      expectedVersion: card.rowVersion,
+      allowedLaneIds: Object.freeze(read.stages.map((stage) => stage.id)),
+    }) : null,
+  });
+}
+
+function mapJourneyBoard(
+  read: JourneyBoardReadSnapshot,
+  filters: PortalJourneyBoardFilters | undefined,
+  nextCommandKey: () => string,
+): PortalJourneyBoardSnapshot {
+  const query = boardFilter(filters?.query, 120);
+  const requestedRoute = boardFilter(filters?.route, 100);
+  const requestedBand = boardFilter(filters?.band, 20);
+  const band = BOARD_BANDS.includes(requestedBand as typeof BOARD_BANDS[number]) ? requestedBand : '';
+  const mapped = read.cards.map((card) => mapJourneyBoardCard(card, read, nextCommandKey));
+  const routeOptions = new Map<string, string>();
+  for (const card of mapped) routeOptions.set(card.journey.routeKey, card.journey.routeLabel);
+  const route = routeOptions.has(requestedRoute) ? requestedRoute : '';
+  const queryLower = query.toLocaleLowerCase('en-GB');
+  const cards = Object.freeze(mapped.filter((card) => {
+    if (route && card.journey.routeKey !== route) return false;
+    if (band && card.scoreBand !== band) return false;
+    if (!queryLower) return true;
+    return [card.displayName, card.companyName, card.sourceLabel, card.affiliateLabel]
+      .some((value) => value?.toLocaleLowerCase('en-GB').includes(queryLower));
+  }));
+  const laneCoverageByStage = new Map(read.laneCoverage.map((lane) => [lane.stageId, lane]));
+  const lanes: readonly JourneyBoardLaneView[] = Object.freeze(read.stages.map((stage) => {
+    const laneCards = cards.filter((card) => card.laneId === stage.id);
+    const coverage = laneCoverageByStage.get(stage.id);
+    if (!coverage) throw new Error('Journey Board lane coverage is incomplete');
+    return Object.freeze({
+      id: stage.id,
+      label: stage.name,
+      description: stage.stageType === 'won'
+        ? 'Closed CRM outcome · automatic Sale still requires collected payment.'
+        : stage.stageType === 'lost'
+          ? 'Closed CRM outcome · journey evidence remains preserved.'
+          : 'Team workflow queue · move cards without changing journey evidence.',
+      position: stage.position,
+      cardCount: laneCards.length,
+      totalCardCount: coverage.totalCardCount,
+      attentionCount: laneCards.filter((card) => card.nextMove?.dueState === 'overdue'
+        || card.scoreBand === 'burning').length,
+      isClosed: stage.stageType !== 'open',
+      isPartial: coverage.truncated,
+    });
+  }));
+  return Object.freeze({
+    workspace: Object.freeze({
+      name: read.workspace.name,
+      asOf: read.asOf,
+      timezone: read.workspace.timezone,
+      canWrite: read.workspace.canWrite,
+    }),
+    filters: Object.freeze({
+      query,
+      route,
+      band,
+      routes: Object.freeze([...routeOptions].map(([value, label]) => Object.freeze({ value, label }))),
+      bands: Object.freeze(BOARD_BANDS.map((value) => Object.freeze({
+        value,
+        label: value === 'unscored' ? 'Unscored' : titleCaseKey(value),
+      }))),
+    }),
+    lanes,
+    cards,
+    coverage: Object.freeze({
+      loadedCardCount: read.loadedCardCount,
+      totalCardCount: read.totalCardCount,
+      perLaneCardLimit: read.perLaneCardLimit,
+      partial: read.truncated,
+    }),
+  });
+}
+
 interface LocalParts {
   year: number;
   month: number;
@@ -524,6 +708,7 @@ export interface PgPortalCrmDependencies {
   commandService: Pick<CrmCommandService, 'createLead' | 'moveOpportunityStage' | 'completeTask'>;
   growthReadService?: Pick<GrowthIntelligenceReadService, 'load'>;
   lead360ReadService?: Pick<Lead360ReadService, 'load'>;
+  journeyBoardReadService?: Pick<JourneyBoardReadService, 'load'>;
   nextCommandKey?: () => string;
 }
 
@@ -594,6 +779,24 @@ export class PgPortalCrmService implements PortalCrmService {
     try {
       const read = await this.dependencies.lead360ReadService.load(context, canonicalContactId);
       return read ? mapLead360(read) : null;
+    } catch (error) {
+      if (error instanceof InactivePortalSessionError) return null;
+      throw error;
+    }
+  }
+
+  async journeyBoard(
+    identity: PortalCrmRequestIdentity,
+    filters?: PortalJourneyBoardFilters,
+  ): Promise<PortalJourneyBoardSnapshot | null> {
+    const context = await this.context(identity);
+    if (!context || !this.dependencies.journeyBoardReadService) return null;
+    try {
+      return mapJourneyBoard(
+        await this.dependencies.journeyBoardReadService.load(context),
+        filters,
+        this.nextCommandKey,
+      );
     } catch (error) {
       if (error instanceof InactivePortalSessionError) return null;
       throw error;
@@ -722,6 +925,7 @@ export function createPgPortalCrmService(input: {
     readService: createPgCrmReadService(input.webPool),
     growthReadService: createPgGrowthIntelligenceReadService(input.webPool),
     lead360ReadService: createPgLead360ReadService(input.webPool),
+    journeyBoardReadService: createPgJourneyBoardReadService(input.webPool),
     commandService: new CrmCommandService({ transactionRunner: createPgCrmTransactionRunner(input.commandPool) }),
   });
 }

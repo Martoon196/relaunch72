@@ -107,6 +107,20 @@ export interface IdentityCandidate {
 
 interface CandidateRow extends QueryResultRow, IdentityCandidate {}
 
+export interface LegacyLeadBoardPlacement {
+  readonly disposition: 'created' | 'existing' | 'blocked';
+  readonly opportunityId: string | null;
+  readonly pipelineId: string | null;
+  readonly stageId: string | null;
+  readonly failureReason:
+    | 'contact_inactive'
+    | 'default_pipeline_missing'
+    | 'first_open_stage_missing'
+    | null;
+}
+
+interface BoardPlacementRow extends QueryResultRow, LegacyLeadBoardPlacement {}
+
 function batch(row: BatchRow): LegacyImportBatchRecord {
   return {
     id: row.id,
@@ -595,6 +609,28 @@ export class LegacyLeadImportRepository {
     if (privatePayload.rowCount !== 1) {
       throw new Error('Legacy import private attribution payload insert returned no row');
     }
+  }
+
+  async ensureBoardOpportunity(
+    contactId: string,
+    sourceSystem: string,
+    sourceRecordId: string,
+  ): Promise<LegacyLeadBoardPlacement> {
+    const result = await this.transaction.query<BoardPlacementRow>(
+      `/* legacy-import.ensure-board-opportunity */
+       SELECT disposition,
+              opportunity_id AS "opportunityId",
+              pipeline_id AS "pipelineId",
+              stage_id AS "stageId",
+              failure_reason AS "failureReason"
+       FROM app_private.ensure_legacy_lead_board_opportunity($1, $2, $3)`,
+      [contactId, sourceSystem, sourceRecordId],
+    );
+    const placement = result.rows[0];
+    if (!placement || result.rowCount !== 1) {
+      throw new Error('Legacy import board opportunity materialization returned no outcome');
+    }
+    return placement;
   }
 
   async resolveRow(input: {

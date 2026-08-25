@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 import type { CrmWorkspaceReadSnapshot } from '../src/crm-pg/index.js';
+import type { JourneyBoardReadSnapshot } from '../src/conversion-pg/index.js';
 import {
   PgPortalCrmService,
   createPgPortalCrmPrincipalResolver,
@@ -177,6 +178,96 @@ test('portal adapter maps verified Growth HQ evidence without treating CRM stage
   assert.equal(growth?.hotLeads[0]?.lastEvidence?.kind, 'watched');
   assert.match(growth?.hotLeads[0]?.nextMove ?? '', /Contact personally/);
   assert.ok(Object.isFrozen(growth));
+});
+
+test('portal adapter maps the operational board without letting CRM lanes become journey evidence', async () => {
+  const boardRead: JourneyBoardReadSnapshot = {
+    workspace: {
+      id: WORKSPACE_ID, name: 'Northstar Property', timezone: 'Europe/London', currency: 'GBP',
+      defaultPipelineId: PIPELINE_ID, canWrite: true,
+    },
+    asOf: '2026-08-25T12:00:00.000Z',
+    stages: [
+      { id: STAGE_ID, pipelineId: PIPELINE_ID, name: 'New lead', position: 1, stageType: 'open', isTerminal: false, rowVersion: 1 },
+      { id: OTHER_STAGE_ID, pipelineId: PIPELINE_ID, name: 'Won', position: 2, stageType: 'won', isTerminal: true, rowVersion: 1 },
+    ],
+    cards: [{
+      opportunityId: OPPORTUNITY_ID, contactId: CONTACT_ID, contactName: 'Avery Stone', companyName: 'Stone Developments',
+      lifecycle: 'lead', primaryEmail: 'avery@example.test', primaryPhone: null, contactSource: 'portal',
+      pipelineId: PIPELINE_ID, stageId: STAGE_ID, title: 'Agency pilot', status: 'open', valueMinor: 250_000,
+      currency: 'GBP', probability: 50, ownerUserId: USER_ID, expectedCloseDate: null,
+      updatedAt: '2026-08-25T11:00:00.000Z', rowVersion: 2,
+      primaryJourney: {
+        enrollmentId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', slug: 'property-predator-agency-laps',
+        name: 'Agency LAPS', status: 'active', enrolledAt: '2026-08-20T09:00:00.000Z',
+        lastEventAt: '2026-08-25T10:00:00.000Z', endedAt: null, otherEnrollmentCount: 1,
+        currentMilestone: {
+          id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', key: 'appointment', name: 'Appointment',
+          position: 2, semantic: 'appointment', reachedAt: '2026-08-25T10:00:00.000Z',
+          sourceKind: 'event', sourceActorKind: 'webhook', commerceFactType: null,
+          automatic: true, paymentVerified: false,
+        },
+        score: {
+          id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', total: 55, band: 'database-label-is-not-trusted',
+          reasons: ['Booked appointment'], sourceOccurredAt: '2026-08-25T10:00:00.000Z',
+          evaluatedAt: '2026-08-25T10:00:01.000Z',
+        },
+      },
+      latestEvidence: {
+        id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', kind: 'appointment', title: 'Appointment booked',
+        detail: 'Strategy call', progressBasisPoints: null, occurredAt: '2026-08-25T10:00:00.000Z',
+        sourceLabel: 'Agency LAPS', sourceKind: 'manual', sourceActorKind: 'user',
+        commerceFactType: null, automatic: false, paymentVerified: false,
+      },
+      contentSummary: null, offerSummary: 'Agency pilot · requested_contact',
+      nextTask: { id: TASK_ID, title: 'Prepare the discovery', priority: 'high', dueAt: '2026-08-25T13:00:00.000Z' },
+      attribution: {
+        origin: 'legacy', sourceSystem: 'property-predator-legacy', sourceReference: 'lead-42',
+        attributionType: null, channel: null, affiliateId: null, affiliateSourceId: 'old-affiliate-1',
+        affiliateName: 'Sarah Partner', affiliateCode: 'PP-SARAH', referralCode: 'SARAH42',
+        utmSource: 'linkedin', utmMedium: 'social', utmCampaign: 'agency-launch',
+        attributedAt: '2026-08-20T09:00:00.000Z',
+      },
+    }],
+    laneCoverage: [
+      { stageId: STAGE_ID, loadedCardCount: 1, totalCardCount: 1, truncated: false },
+      { stageId: OTHER_STAGE_ID, loadedCardCount: 0, totalCardCount: 0, truncated: false },
+    ],
+    perLaneCardLimit: 75, loadedCardCount: 1, totalCardCount: 1, truncated: false,
+  };
+  const service = new PgPortalCrmService({
+    principalResolver: { resolve: async () => ({ userId: USER_ID, workspaceId: WORKSPACE_ID }) },
+    readService: { loadWorkspaceSnapshot: async () => readSnapshot() },
+    journeyBoardReadService: { load: async () => boardRead },
+    commandService: {} as PgPortalCrmDependencies['commandService'],
+    nextCommandKey: () => 'board-command-key-1',
+  });
+
+  const board = await service.journeyBoard(identity(), {
+    query: 'Sarah', route: 'property-predator-agency-laps', band: 'hot',
+  });
+  assert.equal(board?.cards.length, 1);
+  assert.equal(board?.cards[0]?.scoreBand, 'hot', 'published score thresholds own the board band');
+  assert.equal(board?.cards[0]?.laneId, STAGE_ID, 'team workflow lane remains the CRM stage');
+  assert.equal(board?.cards[0]?.journey.stageLabel, 'Appointment', 'automatic milestone remains a separate fact');
+  assert.equal(board?.cards[0]?.journey.stageAutomatic, true);
+  assert.equal(board?.cards[0]?.latestSignal?.automatic, false, 'manual milestone evidence is never labelled AUTO');
+  assert.equal(board?.cards[0]?.journey.otherJourneyCount, 1);
+  assert.equal(board?.cards[0]?.affiliateLabel, 'Sarah Partner');
+  assert.equal(board?.cards[0]?.sourceLabel, 'linkedin');
+  assert.equal(board?.cards[0]?.move?.expectedVersion, 2);
+  assert.deepEqual(board?.cards[0]?.move?.allowedLaneIds, [STAGE_ID, OTHER_STAGE_ID]);
+  assert.equal(board?.cards[0]?.offer?.state, 'requested_contact');
+  assert.deepEqual(board?.coverage, {
+    loadedCardCount: 1, totalCardCount: 1, perLaneCardLimit: 75, partial: false,
+  });
+  assert.deepEqual(board?.lanes.map((lane) => [lane.totalCardCount, lane.isPartial]), [[1, false], [0, false]]);
+  assert.equal(board?.lanes[1]?.description, 'Closed CRM outcome · automatic Sale still requires collected payment.');
+  assert.ok(Object.isFrozen(board));
+
+  const unknownRoute = await service.journeyBoard(identity(), { route: 'not-a-published-route' });
+  assert.equal(unknownRoute?.filters.route, '');
+  assert.equal(unknownRoute?.cards.length, 1, 'an unknown route behaves like the visible All routes selection');
 });
 
 test('portal adapter maps the narrow Lead 360 read model without losing exact offer or consent states', async () => {

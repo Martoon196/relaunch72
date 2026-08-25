@@ -33,6 +33,12 @@ import { accountSetupPage, accountSetupUnavailablePage, loginPage, dashboardPage
 import { appShell, escapeHtml } from './ui.js';
 import { renderGrowthHomeBody } from './growth-home.js';
 import { renderLead360Body } from './lead-360-view.js';
+import { JOURNEY_BOARD_CLIENT_SOURCE } from './journey-board-client.js';
+import {
+  JOURNEY_BOARD_CLIENT_ROUTE,
+  JOURNEY_BOARD_ROUTE,
+  renderJourneyBoardBody,
+} from './journey-board-view.js';
 import { renderJourneyManagerBody } from './journey-manager-view.js';
 import {
   JOURNEY_MANAGER_CONFIRMATION,
@@ -135,6 +141,20 @@ function sendHtml(res: ServerResponse, code: number, body: string, cookie?: stri
   if (cookie) headers['set-cookie'] = cookie;
   Object.assign(headers, extra);
   res.writeHead(code, headers);
+  res.end(body);
+}
+
+function sendJavaScript(res: ServerResponse, body: string): void {
+  res.writeHead(200, {
+    'content-type': 'text/javascript; charset=utf-8',
+    'content-length': String(Buffer.byteLength(body)),
+    // The asset has a stable URL, so every navigation must revalidate it after
+    // a deploy rather than running markup against an hour-old enhancement.
+    'cache-control': 'no-cache, max-age=0, must-revalidate',
+    'referrer-policy': 'no-referrer',
+    'x-content-type-options': 'nosniff',
+    'content-security-policy': "default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+  });
   res.end(body);
 }
 
@@ -284,6 +304,32 @@ function journeyManagerPage(
   });
 }
 
+function journeyBoardPage(
+  workspaceName: string,
+  body: string,
+  deps: PortalDeps,
+  csrfToken: string,
+): string {
+  return appShell({
+    title: `${deps.productProfile?.productName ?? 'Relaunch72'} Live Journeys — ${workspaceName}`,
+    tenantName: workspaceName,
+    active: 'journeys',
+    productProfile: deps.productProfile,
+    capabilities: new Set([
+      'workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read', 'journeys.read',
+    ]),
+    billingAvailable: deps.kind === 'legacy' && !!deps.billing,
+    crmAvailable: true,
+    mode: 'crm',
+    csrfToken,
+    body,
+  });
+}
+
+function journeySubnav(active: 'board' | 'rules'): string {
+  return `<nav aria-label="Journey workspace" style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap"><a class="button ${active === 'board' ? '' : 'secondary'} compact" href="${JOURNEY_BOARD_ROUTE}"${active === 'board' ? ' aria-current="page"' : ''}>Live board</a><a class="button ${active === 'rules' ? '' : 'secondary'} compact" href="${JOURNEY_MANAGER_ROUTE}"${active === 'rules' ? ' aria-current="page"' : ''}>Journey rules</a></nav>`;
+}
+
 function portalStatusPage(
   deps: PortalDeps,
   sessionToken: string,
@@ -344,9 +390,26 @@ function crmRedirect(
   deps: PortalDeps,
   sessionToken: string,
   code: PortalCrmNoticeCode,
+  status = 302,
+  returnParams?: URLSearchParams,
 ): void {
   const token = crmNoticeToken(deps.sessionSecret, sessionToken, code);
-  redirect(res, `${route}?notice=${encodeURIComponent(token)}`);
+  const query = new URLSearchParams({ notice: token });
+  returnParams?.forEach((value, key) => query.set(key, value));
+  redirect(res, `${route}?${query.toString()}`, undefined, status);
+}
+
+const JOURNEY_BOARD_RETURN_BANDS = new Set(['burning', 'hot', 'warm', 'quiet', 'unscored']);
+
+function journeyBoardReturnParams(form: Readonly<Record<string, string>>): URLSearchParams {
+  const query = new URLSearchParams();
+  const search = (form.return_q ?? '').trim();
+  if (search && search.length <= 120 && !/[\u0000-\u001f\u007f]/u.test(search)) query.set('q', search);
+  const route = (form.return_route ?? '').trim();
+  if (/^[a-z0-9][a-z0-9._-]{0,99}$/u.test(route)) query.set('route', route);
+  const band = (form.return_band ?? '').trim();
+  if (JOURNEY_BOARD_RETURN_BANDS.has(band)) query.set('band', band);
+  return query;
 }
 
 function outcomeNotice(outcome: PortalCrmMutationOutcome): CrmNotice {
@@ -371,6 +434,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   const url = new URL(req.url ?? '/', 'http://localhost');
   const p = url.pathname.replace(/\/+$/, '') || '/portal';
   const method = req.method ?? 'GET';
+  if (p === JOURNEY_BOARD_CLIENT_ROUTE && method === 'GET') {
+    return sendJavaScript(res, JOURNEY_BOARD_CLIENT_SOURCE);
+  }
   const now = deps.now ? deps.now() : Date.now();
   const requestCookies = parseCookies(req.headers.cookie);
   const sessionToken = requestCookies[PORTAL_COOKIE] ?? '';
@@ -615,6 +681,48 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
   }
 
+  // ── live Journey Board: movable CRM workflow beside immutable evidence ──
+  if (p === JOURNEY_BOARD_ROUTE && method === 'GET') {
+    if (!deps.crm?.journeyBoard) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+      title: 'Live journeys not connected',
+      message: 'The protected operational board is not enabled for this workspace.',
+      active: 'journeys',
+    }));
+    try {
+      const board = await deps.crm.journeyBoard(crmIdentity(sessionToken, deps), {
+        query: url.searchParams.get('q') ?? '',
+        route: url.searchParams.get('route') ?? '',
+        band: url.searchParams.get('band') ?? '',
+      });
+      if (!board) return sendHtml(res, 403, portalStatusPage(deps, sessionToken, {
+        title: 'Journey workspace not available',
+        message: 'This session no longer has access to the selected workspace.',
+        active: 'journeys',
+      }));
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      const notice = crmNoticeFromQuery(url.searchParams, deps.sessionSecret, sessionToken);
+      return sendHtml(
+        res,
+        200,
+        journeyBoardPage(board.workspace.name, `${journeySubnav('board')}${renderJourneyBoardBody({
+          ...board,
+          csrfToken,
+          notice,
+        })}`, deps, csrfToken),
+        undefined,
+        {
+          'content-security-policy': "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        },
+      );
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Live journeys temporarily unavailable',
+        message: 'No workflow, journey evidence or outbound action was changed. Try again shortly.',
+        active: 'journeys',
+      }));
+    }
+  }
+
   // ── conversion Journey Manager: read-only topology plus explicit manager setup ──
   if (deps.kind === 'postgres' && p === JOURNEY_MANAGER_ROUTE && method === 'GET') {
     if (!deps.journeys) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
@@ -643,7 +751,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       return sendHtml(
         res,
         200,
-        journeyManagerPage(shell, renderJourneyManagerBody(view), deps, csrfToken),
+        journeyManagerPage(shell, `${journeySubnav('rules')}${renderJourneyManagerBody(view)}`, deps, csrfToken),
       );
     } catch {
       return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
@@ -689,6 +797,58 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       return journeyRedirect(res, deps, sessionToken, code);
     } catch {
       return journeyRedirect(res, deps, sessionToken, 'unavailable');
+    }
+  }
+
+  const journeyBoardMoveMatch = /^\/portal\/journeys\/board\/opportunities\/([^/]+)\/stage$/.exec(p);
+  if (deps.crm && journeyBoardMoveMatch && method === 'POST') {
+    const opportunityId = journeyBoardMoveMatch[1]!;
+    if (!CRM_OBJECT_ID.test(opportunityId)) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+      title: 'Opportunity not found',
+      message: 'That workflow card address is not valid for this workspace.',
+      active: 'journeys', backHref: JOURNEY_BOARD_ROUTE, backLabel: 'Return to live journeys',
+    }));
+    const form = await readForm(req);
+    if (!verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return sendHtml(res, 403, portalStatusPage(deps, sessionToken, {
+        title: 'Refresh needed',
+        message: 'The secure form token was invalid. No workflow or journey evidence was changed.',
+        active: 'journeys', backHref: JOURNEY_BOARD_ROUTE, backLabel: 'Return to live journeys',
+      }));
+    }
+    const returnParams = journeyBoardReturnParams(form);
+    try {
+      const outcome = await deps.crm.moveOpportunity(crmIdentity(sessionToken, deps), {
+        commandKey: form.command_key ?? '',
+        opportunityId,
+        targetStageId: form.target_lane_id ?? '',
+        expectedRowVersion: form.expected_version ?? '',
+      });
+      if (outcome.ok) return crmRedirect(
+        res,
+        JOURNEY_BOARD_ROUTE,
+        deps,
+        sessionToken,
+        outcome.disposition === 'replayed' ? 'replayed' : 'moved',
+        303,
+        returnParams,
+      );
+      if (outcome.kind === 'conflict') return crmRedirect(res, JOURNEY_BOARD_ROUTE, deps, sessionToken, 'conflict', 303, returnParams);
+      if (outcome.kind === 'not_found') return crmRedirect(res, JOURNEY_BOARD_ROUTE, deps, sessionToken, 'missing', 303, returnParams);
+      return sendHtml(res, outcome.kind === 'forbidden' ? 403 : outcome.kind === 'unavailable' ? 503 : 400,
+        portalStatusPage(deps, sessionToken, {
+          title: 'Workflow lane was not changed',
+          message: outcome.kind === 'validation'
+            ? 'Refresh the board and choose a valid team workflow lane.'
+            : outcome.message,
+          active: 'journeys', backHref: JOURNEY_BOARD_ROUTE, backLabel: 'Return to live journeys',
+        }));
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Live journeys temporarily unavailable',
+        message: 'The workflow card was not moved. Journey evidence was not changed.',
+        active: 'journeys', backHref: JOURNEY_BOARD_ROUTE, backLabel: 'Return to live journeys',
+      }));
     }
   }
 

@@ -382,6 +382,11 @@ test('moveOpportunityStage locks, version-checks, mutates and appends history/ac
   assert.equal(history?.values?.[8], activity?.values?.[11]);
   assert.equal(activity?.values?.[11], outbox?.values?.[7]);
   assert.match(String(outbox?.values?.[5]), /"type":"crm.opportunity.stage_changed"/);
+  assert.match(
+    String(outbox?.sql),
+    /\$1::uuid[\s\S]*\$1::uuid::text/,
+    'the shared event id is typed once as UUID before deriving its text idempotency key',
+  );
 });
 
 test('a stale opportunity version is a typed conflict and leaves no history or outbox', async () => {

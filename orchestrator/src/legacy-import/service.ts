@@ -373,13 +373,25 @@ export class LegacyLeadImportService {
         const existing = await repository.findReceipt(batch.sourceSystem, row.sourceRecordId);
         if (existing) {
           if (equalBytes(existing.payloadHash, row.payloadHash)) {
+            const boardPlacement = await repository.ensureBoardOpportunity(
+              existing.contactId, batch.sourceSystem, row.sourceRecordId,
+            );
             replayed += 1;
             await repository.resolveRow({
               rowId: stagedRow.id, status: 'replayed', contactId: existing.contactId,
-              receiptId: existing.id, resolution: { reason: 'source_record_already_imported' },
+              receiptId: existing.id,
+              resolution: {
+                reason: 'source_record_already_imported',
+                boardPlacement,
+              },
               committedAt: now.toISOString(),
             });
-            report.push({ sourceRecordId: row.sourceRecordId, resolution: 'replayed', contactId: existing.contactId });
+            report.push({
+              sourceRecordId: row.sourceRecordId,
+              resolution: 'replayed',
+              contactId: existing.contactId,
+              boardPlacement,
+            });
           } else {
             quarantined += 1;
             await repository.resolveRow({
@@ -444,13 +456,25 @@ export class LegacyLeadImportService {
             attribution: row.attribution, recordedAt: now.toISOString(),
           });
         }
+        const boardPlacement = await repository.ensureBoardOpportunity(
+          contactId, batch.sourceSystem, row.sourceRecordId,
+        );
         await repository.resolveRow({
           rowId: stagedRow.id, status: outcome === 'created' ? 'imported' : 'matched',
           contactId, receiptId,
-          resolution: { reason: decision.reasons[0], liveContactOverwritten: false },
+          resolution: {
+            reason: decision.reasons[0],
+            liveContactOverwritten: false,
+            boardPlacement,
+          },
           committedAt: now.toISOString(),
         });
-        report.push({ sourceRecordId: row.sourceRecordId, resolution: outcome, contactId });
+        report.push({
+          sourceRecordId: row.sourceRecordId,
+          resolution: outcome,
+          contactId,
+          boardPlacement,
+        });
       }
 
       await repository.completeBatch({

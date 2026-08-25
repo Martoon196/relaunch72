@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import type { Pool, QueryResultRow } from 'pg';
+import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import type { DatabaseRequestContext } from '../../src/db/rls.js';
 import type { SqlExecutor } from '../../src/crm-pg/types.js';
+import { CrmCommandService, createPgCrmTransactionRunner } from '../../src/crm-pg/index.js';
+import {
+  JourneyBoardReadDataError,
+  createPgJourneyBoardReadService,
+} from '../../src/conversion-pg/index.js';
 import {
   LegacyImportConflictError,
   LegacyLeadImportService,
@@ -18,6 +23,43 @@ import {
 } from './database-helper.js';
 
 const skip = testDatabaseSkipReason();
+
+type JourneyBoardRuntimeRole = 'r72_web' | 'r72_crm_command';
+
+/**
+ * Exercise the production transaction adapters as their real runtime roles.
+ * The disposable migrator can SET ROLE; each assumed-role connection is then
+ * destroyed on release so role state can never return to the shared pool.
+ */
+function runtimeRolePool(
+  pool: Pool,
+  role: JourneyBoardRuntimeRole,
+): Pick<Pool, 'connect'> {
+  return {
+    async connect(): Promise<PoolClient> {
+      const client = await pool.connect();
+      try {
+        await client.query(role === 'r72_web'
+          ? 'SET ROLE r72_web'
+          : 'SET ROLE r72_crm_command');
+        const identity = await client.query<{ role_name: string }>(
+          'SELECT current_user AS role_name',
+        );
+        assert.equal(identity.rows[0]?.role_name, role);
+        return new Proxy(client, {
+          get(target, property) {
+            if (property === 'release') return () => target.release(true);
+            const value: unknown = Reflect.get(target, property, target);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        });
+      } catch (error) {
+        client.release(true);
+        throw error;
+      }
+    },
+  } as Pick<Pool, 'connect'>;
+}
 
 function importRunner(pool: Pool): LegacyImportTransactionRunner {
   return {
@@ -110,6 +152,9 @@ test('disposable PostgreSQL rehearses, commits and replays legacy leads without 
   const ownerA = randomUUID();
   const viewerA = randomUUID();
   const ownerB = randomUUID();
+  const boardPipelineId = randomUUID();
+  const boardOpenStageId = randomUUID();
+  const boardWonStageId = randomUUID();
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
   const ownerContext: DatabaseRequestContext = {
     actorKind: 'user', workspaceId: workspaceA, userId: ownerA,
@@ -198,6 +243,21 @@ test('disposable PostgreSQL rehearses, commits and replays legacy leads without 
               ($5, $6, $7, 'owner', 'active', $6, statement_timestamp())`,
       [workspaceA, organizationA, ownerA, viewerA, workspaceB, organizationB, ownerB],
     );
+    await ownerQuery(
+      pool,
+      `INSERT INTO app.pipelines
+         (id, workspace_id, name, slug, status, is_default)
+       VALUES ($1, $2, 'Imported lead workflow', 'imported-lead-workflow', 'active', true)`,
+      [boardPipelineId, workspaceA],
+    );
+    await ownerQuery(
+      pool,
+      `INSERT INTO app.pipeline_stages
+         (id, workspace_id, pipeline_id, name, slug, position, stage_type, is_terminal)
+       VALUES ($1, $2, $3, 'New signal', 'new-signal', 1, 'open', false),
+              ($4, $2, $3, 'Won', 'won', 2, 'won', true)`,
+      [boardOpenStageId, workspaceA, boardPipelineId, boardWonStageId],
+    );
 
     const service = new LegacyLeadImportService({
       transactionRunner: importRunner(pool),
@@ -257,6 +317,87 @@ test('disposable PostgreSQL rehearses, commits and replays legacy leads without 
       affiliate_code: 'PPAFF001', referral_code: 'PREDATOR-001',
       referred_source_record_id: 'missing_user_002',
     }]);
+
+    const [importedContact] = await ownerQuery<{ id: string }>(
+      pool,
+      'SELECT id FROM app.contacts WHERE workspace_id = $1',
+      [workspaceA],
+    );
+    assert.ok(importedContact);
+    const boardReadService = createPgJourneyBoardReadService(
+      runtimeRolePool(pool, 'r72_web'),
+    );
+    const board = await boardReadService.load({
+      ...ownerContext,
+      requestId: 'legacy-import-journey-board-read',
+    });
+    assert.equal(board.workspace.canWrite, true);
+    assert.equal(board.cards.length, 1);
+    assert.equal(board.cards[0]?.contactName, 'Original Lead');
+    assert.equal(board.cards[0]?.contactId, importedContact.id);
+    assert.equal(board.cards[0]?.stageId, boardOpenStageId);
+    assert.equal(board.cards[0]?.primaryJourney, null, 'imported people remain visible before automatic enrolment evidence');
+    assert.equal(board.cards[0]?.attribution?.origin, 'legacy');
+    assert.equal(board.cards[0]?.attribution?.affiliateCode, 'PPAFF001');
+    assert.equal(board.cards[0]?.attribution?.referralCode, 'PREDATOR-001');
+    assert.equal(board.cards[0]?.attribution?.sourceReference, 'user_001');
+
+    const viewerBoard = await boardReadService.load({
+      ...viewerContext,
+      requestId: 'legacy-import-journey-board-viewer-read',
+    });
+    assert.equal(viewerBoard.workspace.canWrite, false);
+    assert.deepEqual(
+      viewerBoard.cards.map((card) => card.opportunityId),
+      board.cards.map((card) => card.opportunityId),
+      'a viewer may read the workspace board without gaining move authority',
+    );
+
+    const isolatedBoard = await boardReadService.load({
+      ...otherWorkspaceContext,
+      requestId: 'legacy-import-journey-board-isolated-read',
+    });
+    assert.equal(isolatedBoard.workspace.id, workspaceB);
+    assert.equal(isolatedBoard.workspace.canWrite, true);
+    assert.deepEqual(isolatedBoard.cards, []);
+    await assert.rejects(
+      boardReadService.load({
+        actorKind: 'user', workspaceId: workspaceA, userId: ownerB,
+        requestId: 'legacy-import-journey-board-cross-workspace-read',
+      }),
+      JourneyBoardReadDataError,
+    );
+
+    const initialCard = board.cards[0]!;
+    const commandService = new CrmCommandService({
+      transactionRunner: createPgCrmTransactionRunner(
+        runtimeRolePool(pool, 'r72_crm_command'),
+      ),
+    });
+    const moved = await commandService.moveOpportunityStage({
+      ...ownerContext,
+      requestId: 'legacy-import-journey-board-move',
+    }, {
+      commandKey: `legacy-board-move-${suffix}`,
+      opportunityId: initialCard.opportunityId,
+      targetStageId: boardWonStageId,
+      expectedRowVersion: initialCard.rowVersion,
+      note: 'Disposable integration move',
+    });
+    assert.equal(moved.fromStageId, boardOpenStageId);
+    assert.equal(moved.toStageId, boardWonStageId);
+    assert.equal(moved.status, 'won');
+    assert.equal(moved.rowVersion, initialCard.rowVersion + 1);
+
+    const movedBoard = await boardReadService.load({
+      ...ownerContext,
+      requestId: 'legacy-import-journey-board-reread',
+    });
+    assert.equal(movedBoard.cards.length, 1);
+    assert.equal(movedBoard.cards[0]?.stageId, boardWonStageId);
+    assert.equal(movedBoard.cards[0]?.status, 'won');
+    assert.equal(movedBoard.cards[0]?.rowVersion, initialCard.rowVersion + 1);
+    assert.equal(movedBoard.cards[0]?.primaryJourney, null);
 
     await expectPostgresError(
       webRoleQuery(

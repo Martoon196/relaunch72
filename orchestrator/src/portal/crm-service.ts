@@ -7,6 +7,7 @@ import type {
 } from './crm-views.js';
 import type { GrowthIntelligenceView } from './growth-intelligence.js';
 import type { Lead360View } from './lead-360-view.js';
+import type { JourneyBoardView } from './journey-board-view.js';
 
 /**
  * Request identity passed to the CRM boundary. The raw cookie is deliberately
@@ -58,6 +59,15 @@ export interface PortalCrmWorkspaceShell {
   readonly workspace: CrmWorkspaceView;
 }
 
+export interface PortalJourneyBoardFilters {
+  readonly query?: string;
+  readonly route?: string;
+  readonly band?: string;
+}
+
+/** The service owns RLS reads and command keys; the router adds its session-bound CSRF token. */
+export type PortalJourneyBoardSnapshot = Omit<JourneyBoardView, 'csrfToken' | 'notice' | 'previewSignal'>;
+
 /**
  * Router-facing CRM application boundary. Implementations own authentication,
  * authorization, transaction context and command error sanitisation.
@@ -70,6 +80,11 @@ export interface PortalCrmService {
   growth?(identity: PortalCrmRequestIdentity): Promise<GrowthIntelligenceView | null>;
   /** Read-only case file for one RLS-visible contact. */
   lead360?(identity: PortalCrmRequestIdentity, contactId: string): Promise<Lead360View | null>;
+  /** Operational CRM lanes beside read-only automatic journey evidence. */
+  journeyBoard?(
+    identity: PortalCrmRequestIdentity,
+    filters?: PortalJourneyBoardFilters,
+  ): Promise<PortalJourneyBoardSnapshot | null>;
   createLead(identity: PortalCrmRequestIdentity, input: PortalCreateLeadInput): Promise<PortalCrmMutationOutcome>;
   moveOpportunity(identity: PortalCrmRequestIdentity, input: PortalMoveOpportunityInput): Promise<PortalCrmMutationOutcome>;
   completeTask(identity: PortalCrmRequestIdentity, input: PortalCompleteTaskInput): Promise<PortalCrmMutationOutcome>;

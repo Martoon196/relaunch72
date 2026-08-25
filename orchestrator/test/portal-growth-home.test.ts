@@ -134,6 +134,10 @@ test('Growth HQ distinguishes self-serve conversion from literal agency LAPS', (
   assert.match(html, /Sale requires collected payment/);
   assert.match(html, /Journey runtime/);
   assert.match(html, /pp-rail-state ready">Foundation/);
+  assert.match(html, /Affiliate Stash content machine/);
+  assert.match(html, /pp-rail-state reuse">Reuse existing/);
+  assert.match(html, /href="https:\/\/propertypredator\.com\/affiliate"/);
+  assert.match(html, /Open existing machine/);
 });
 
 test('Growth HQ empty state invents no activity or provider readiness', () => {

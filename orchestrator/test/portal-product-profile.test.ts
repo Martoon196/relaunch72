@@ -31,6 +31,16 @@ test('known portal product profiles resolve as immutable presentation contracts'
       state: 'foundation',
     },
   );
+  assert.deepEqual(
+    PROPERTY_PREDATOR_GROWTH_PROFILE.readinessRails.find((rail) => rail.id === 'content'),
+    {
+      id: 'content',
+      label: 'Affiliate Stash content machine',
+      summary: 'Reuse its brand-trained generation, swipe library and artwork catalogue; Growth HQ will orchestrate reviewed items instead of rebuilding it.',
+      state: 'reuse',
+      href: 'https://propertypredator.com/affiliate',
+    },
+  );
 });
 
 test('product profiles fail closed and cannot carry authorization state', () => {

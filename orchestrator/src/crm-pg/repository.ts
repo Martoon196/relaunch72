@@ -517,8 +517,8 @@ export class CrmPgRepository {
          event_version, idempotency_key, payload, request_id, correlation_id,
          causation_id, occurred_at, available_at, attempt_count, status, created_at
        ) VALUES (
-         $1, app_private.current_workspace_id(), $2, $3, $4,
-         $5, $1::text, $6::jsonb, $7, $8, $9,
+         $1::uuid, app_private.current_workspace_id(), $2, $3, $4,
+         $5, $1::uuid::text, $6::jsonb, $7, $8, $9,
          $10::timestamptz, $10::timestamptz, 0, 'pending', $10::timestamptz
        )`,
       [

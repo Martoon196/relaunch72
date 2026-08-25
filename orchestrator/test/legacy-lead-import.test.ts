@@ -354,6 +354,13 @@ test('commit matching appends provenance but never updates or inserts a live con
         kind: 'email', normalizedValue: 'ada@example.test', contactId,
         dedupeState: 'normal', contactState: 'active',
       }] as unknown as TRow[]);
+      if (statement.includes('ensure-board-opportunity')) return result([{
+        disposition: 'created',
+        opportunityId: '61000000-0000-4000-8000-000000000001',
+        pipelineId: '62000000-0000-4000-8000-000000000001',
+        stageId: '63000000-0000-4000-8000-000000000001',
+        failureReason: null,
+      }] as unknown as TRow[]);
       return result<TRow>([], 1);
     },
   });
@@ -372,6 +379,12 @@ test('commit matching appends provenance but never updates or inserts a live con
   assert.ok(statements.some((statement) => statement.includes('insert-receipt')));
   assert.ok(statements.some((statement) => statement.includes('insert-provenance')));
   assert.ok(statements.some((statement) => statement.includes('insert-attribution')));
+  assert.ok(statements.some((statement) => statement.includes('ensure-board-opportunity')));
+  assert.ok(
+    statements.findIndex((statement) => statement.includes('insert-provenance'))
+      < statements.findIndex((statement) => statement.includes('ensure-board-opportunity')),
+    'the board adapter must see committed immutable provenance before it can materialize',
+  );
   assert.ok(statements.every((statement) => !statement.includes('insert-contact */')));
   assert.ok(statements.every((statement) => !statement.includes('insert-contact-points')));
   assert.ok(statements.every((statement) => !/UPDATE app\.contacts|UPDATE app\.contact_points/.test(statement)));

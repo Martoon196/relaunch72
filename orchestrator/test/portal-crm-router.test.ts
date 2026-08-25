@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
-import type { PortalCrmService, PortalCrmRequestIdentity } from '../src/portal/crm-service.js';
+import type {
+  PortalCrmService,
+  PortalCrmMutationOutcome,
+  PortalCrmRequestIdentity,
+  PortalJourneyBoardFilters,
+  PortalJourneyBoardSnapshot,
+} from '../src/portal/crm-service.js';
 import {
   PgPortalCrmService,
   type PgPortalCrmDependencies,
@@ -55,6 +61,8 @@ class FakeCrm implements PortalCrmService {
   moveCalls = 0;
   completeCalls = 0;
   lead360Calls: string[] = [];
+  journeyBoardCalls: PortalJourneyBoardFilters[] = [];
+  moveOutcome: PortalCrmMutationOutcome = { ok: true, disposition: 'applied' };
 
   async snapshot(identity: PortalCrmRequestIdentity) {
     this.snapshotCalls += 1;
@@ -67,9 +75,9 @@ class FakeCrm implements PortalCrmService {
     return { ok: true as const, disposition: 'applied' as const };
   }
 
-  async moveOpportunity() {
+  async moveOpportunity(): Promise<PortalCrmMutationOutcome> {
     this.moveCalls += 1;
-    return { ok: true as const, disposition: 'applied' as const };
+    return this.moveOutcome;
   }
 
   async completeTask() {
@@ -102,6 +110,43 @@ class FakeCrm implements PortalCrmService {
       offers: [], consent: [], suppressionReason: null,
       crm: { opportunities: [], tasks: [] },
       asOf: '2026-08-23T12:00:00.000Z',
+    };
+  }
+
+  async journeyBoard(
+    _identity: PortalCrmRequestIdentity,
+    filters: PortalJourneyBoardFilters = {},
+  ): Promise<PortalJourneyBoardSnapshot> {
+    this.journeyBoardCalls.push(filters);
+    return {
+      workspace: { name: 'Northstar Property', asOf: '2026-08-25T12:00:00.000Z', timezone: 'Europe/London', canWrite: true },
+      filters: {
+        query: filters.query ?? '', route: filters.route ?? '', band: filters.band ?? '',
+        routes: [{ value: 'property-predator-agency-laps', label: 'Agency LAPS' }],
+        bands: [{ value: 'hot', label: 'Hot' }],
+      },
+      lanes: [
+        { id: STAGE_ID, label: 'New lead', description: 'Team workflow queue.', position: 1, cardCount: 1, totalCardCount: 1, attentionCount: 1, isClosed: false, isPartial: false },
+        { id: OTHER_STAGE_ID, label: 'Qualified', description: 'Team workflow queue.', position: 2, cardCount: 0, totalCardCount: 0, attentionCount: 0, isClosed: false, isPartial: false },
+      ],
+      cards: [{
+        id: OPPORTUNITY_ID, contactId: CONTACT_ID, laneId: STAGE_ID, displayName: 'Avery Stone',
+        companyName: 'Stone Developments', ownerName: 'Assigned workspace member', score: 52, scoreBand: 'hot',
+        sourceLabel: 'LinkedIn', affiliateLabel: 'PP-AVERY',
+        journey: {
+          routeKey: 'property-predator-agency-laps', routeLabel: 'Agency LAPS', stageKey: 'appointment',
+          stageLabel: 'Appointment', stageSemantic: 'appointment', lastAdvancedAt: '2026-08-25T10:00:00.000Z',
+          stageAutomatic: true, otherJourneyCount: 1, paymentVerifiedSale: false,
+        },
+        latestSignal: {
+          kind: 'appointment', label: 'Appointment booked', detail: 'Strategy call',
+          occurredAt: '2026-08-25T10:00:00.000Z', progressPercent: null, automatic: true,
+        },
+        offer: null,
+        nextMove: { label: 'Prepare the call', dueAt: '2026-08-25T13:00:00.000Z', dueState: 'due' },
+        move: { commandKey: 'board-move-command-1', expectedVersion: 2, allowedLaneIds: [STAGE_ID, OTHER_STAGE_ID] },
+      }],
+      coverage: { loadedCardCount: 1, totalCardCount: 1, perLaneCardLimit: 75, partial: false },
     };
   }
 }
@@ -188,6 +233,74 @@ test('real CRM pages render through the authenticated service boundary and task 
   const completed = await call('GET', '/portal/crm/tasks?status=completed', deps(crm));
   assert.doesNotMatch(completed.body, /Call Avery/);
   assert.match(completed.body, /Review pack/);
+});
+
+test('Live Journey Board renders real people, serves fixed enhancement code and moves only the CRM workflow lane', async () => {
+  const crm = new FakeCrm();
+  const board = await call('GET', '/portal/journeys/board?q=Avery&route=property-predator-agency-laps&band=hot', deps(crm));
+  assert.equal(board.statusCode, 200);
+  assert.match(board.body, /People moving\. <em>Evidence proving why\.<\/em>/);
+  assert.match(board.body, /Avery Stone/);
+  assert.match(board.body, /AUTO/);
+  assert.match(board.body, /Dragging changes the team workflow lane only/);
+  assert.match(board.body, /name="target_lane_id"/);
+  assert.match(board.body, /name="return_q" value="Avery"/);
+  assert.match(board.body, /name="return_route" value="property-predator-agency-laps"/);
+  assert.match(board.body, /name="return_band" value="hot"/);
+  assert.match(board.body, /src="\/portal\/assets\/journey-board\.js"/);
+  assert.match(board.headers['content-security-policy'] ?? '', /script-src 'self'/);
+  assert.match(board.headers['content-security-policy'] ?? '', /connect-src 'self'/);
+  assert.deepEqual(crm.journeyBoardCalls, [{
+    query: 'Avery', route: 'property-predator-agency-laps', band: 'hot',
+  }]);
+
+  const asset = await call('GET', '/portal/assets/journey-board.js', deps());
+  assert.equal(asset.statusCode, 200);
+  assert.match(asset.headers['content-type'] ?? '', /^text\/javascript/);
+  assert.equal(asset.headers['cache-control'], 'no-cache, max-age=0, must-revalidate');
+  assert.match(asset.body, /data-drag-handle/);
+  assert.doesNotMatch(asset.body, /sessionToken|cookie\s*=/i);
+
+  const forged = await call('POST', `/portal/journeys/board/opportunities/${OPPORTUNITY_ID}/stage`, deps(crm), new URLSearchParams({
+    _csrf: 'forged', command_key: 'board-move-command-1', target_lane_id: OTHER_STAGE_ID, expected_version: '2',
+  }).toString());
+  assert.equal(forged.statusCode, 403);
+  assert.equal(crm.moveCalls, 0);
+
+  const csrf = portalCsrfToken(SECRET, sessionToken);
+  const moved = await call('POST', `/portal/journeys/board/opportunities/${OPPORTUNITY_ID}/stage`, deps(crm), new URLSearchParams({
+    _csrf: csrf, command_key: 'board-move-command-1', target_lane_id: OTHER_STAGE_ID, expected_version: '2',
+    return_q: 'Avery & team', return_route: 'property-predator-agency-laps', return_band: 'hot',
+  }).toString());
+  assert.equal(moved.statusCode, 303);
+  assert.match(moved.headers.location ?? '', /^\/portal\/journeys\/board\?notice=moved\./);
+  const movedLocation = new URL(moved.headers.location!, 'https://portal.example');
+  assert.equal(movedLocation.searchParams.get('q'), 'Avery & team');
+  assert.equal(movedLocation.searchParams.get('route'), 'property-predator-agency-laps');
+  assert.equal(movedLocation.searchParams.get('band'), 'hot');
+  assert.equal(crm.moveCalls, 1);
+
+  const conflictCrm = new FakeCrm();
+  conflictCrm.moveOutcome = { ok: false, kind: 'conflict', message: 'The card changed.' };
+  const conflict = await call('POST', `/portal/journeys/board/opportunities/${OPPORTUNITY_ID}/stage`, deps(conflictCrm), new URLSearchParams({
+    _csrf: csrf, command_key: 'board-move-command-1', target_lane_id: OTHER_STAGE_ID, expected_version: '2',
+    return_q: 'Avery', return_route: 'property-predator-agency-laps', return_band: 'hot',
+  }).toString());
+  assert.equal(conflict.statusCode, 303);
+  const conflictLocation = new URL(conflict.headers.location!, 'https://portal.example');
+  assert.match(conflictLocation.searchParams.get('notice') ?? '', /^conflict\./);
+  assert.equal(conflictLocation.searchParams.get('q'), 'Avery');
+  assert.equal(conflictLocation.searchParams.get('route'), 'property-predator-agency-laps');
+  assert.equal(conflictLocation.searchParams.get('band'), 'hot');
+
+  const invalidReturn = await call('POST', `/portal/journeys/board/opportunities/${OPPORTUNITY_ID}/stage`, deps(new FakeCrm()), new URLSearchParams({
+    _csrf: csrf, command_key: 'board-move-command-1', target_lane_id: OTHER_STAGE_ID, expected_version: '2',
+    return_q: `A${'x'.repeat(121)}`, return_route: 'https://outside.example/', return_band: 'vip',
+  }).toString());
+  const invalidLocation = new URL(invalidReturn.headers.location!, 'https://portal.example');
+  assert.equal(invalidLocation.searchParams.has('q'), false);
+  assert.equal(invalidLocation.searchParams.has('route'), false);
+  assert.equal(invalidLocation.searchParams.has('band'), false);
 });
 
 test('Lead 360 route renders one read-only RLS case file and rejects malformed or invisible contacts', async () => {
