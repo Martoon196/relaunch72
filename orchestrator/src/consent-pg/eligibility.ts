@@ -104,6 +104,68 @@ function consentState(value: unknown): ConsentRow['state'] {
 }
 
 /**
+ * Evaluate one endpoint using an already-open, workspace-scoped transaction.
+ *
+ * Queue-producing commands must use this seam so the permission evidence and
+ * the queued effect are decided inside the same database transaction. The
+ * worker must still re-evaluate immediately before a provider call because no
+ * SQL transaction can make a later remote HTTP effect atomic with an opt-out.
+ */
+export async function evaluateEndpointInTransaction(
+  transaction: CommunicationEligibilitySqlExecutor,
+  query: CommunicationEligibilityQuery,
+): Promise<CommunicationEligibilityResult> {
+  validateQuery(query);
+  const endpointResult = await transaction.query<EndpointRow>(
+    CURRENT_ENDPOINT_SQL,
+    [query.contactPointId, query.channel],
+  );
+  const endpoint = endpointResult.rows[0] ?? null;
+  if (!endpoint) {
+    return Object.freeze({
+      status: 'blocked',
+      reason: 'endpoint_unavailable',
+      consentEventId: null,
+      suppressionEventId: null,
+    });
+  }
+  const identityHash = Buffer.from(endpoint.identityHash);
+  if (identityHash.length !== 32) {
+    throw new Error('communication endpoint query returned an invalid identity digest');
+  }
+  const values = [query.contactPointId, query.channel, query.purpose, identityHash] as const;
+  const [suppressionResult, consentResult] = await Promise.all([
+    transaction.query<SuppressionRow>(ACTIVE_SUPPRESSION_SQL, values),
+    transaction.query<ConsentRow>(LATEST_CONSENT_SQL, values),
+  ]);
+  const suppression = suppressionResult.rows[0] ?? null;
+  const consent = consentResult.rows[0] ?? null;
+  if (suppression) {
+    return Object.freeze({
+      status: 'blocked',
+      reason: 'suppressed',
+      consentEventId: consent?.id ?? null,
+      suppressionEventId: suppression.id,
+    });
+  }
+  if (!consent) {
+    return Object.freeze({
+      status: 'unknown',
+      reason: 'no_evidence',
+      consentEventId: null,
+      suppressionEventId: null,
+    });
+  }
+  const state = consentState(consent.state);
+  return Object.freeze({
+    status: state === 'granted' ? 'allowed' : 'blocked',
+    reason: state,
+    consentEventId: consent.id,
+    suppressionEventId: null,
+  });
+}
+
+/**
  * Resolve permission from immutable evidence. The legacy mutable
  * contact_points.consent_status column is intentionally never consulted.
  */
@@ -116,55 +178,10 @@ export class CommunicationEligibilityService {
   ): Promise<CommunicationEligibilityResult> {
     validateDatabaseContext(context);
     validateQuery(query);
-    return this.transactionRunner.run(context, async (transaction) => {
-      const endpointResult = await transaction.query<EndpointRow>(
-        CURRENT_ENDPOINT_SQL,
-        [query.contactPointId, query.channel],
-      );
-      const endpoint = endpointResult.rows[0] ?? null;
-      if (!endpoint) {
-        return Object.freeze({
-          status: 'blocked',
-          reason: 'endpoint_unavailable',
-          consentEventId: null,
-          suppressionEventId: null,
-        });
-      }
-      const identityHash = Buffer.from(endpoint.identityHash);
-      if (identityHash.length !== 32) {
-        throw new Error('communication endpoint query returned an invalid identity digest');
-      }
-      const values = [query.contactPointId, query.channel, query.purpose, identityHash] as const;
-      const [suppressionResult, consentResult] = await Promise.all([
-        transaction.query<SuppressionRow>(ACTIVE_SUPPRESSION_SQL, values),
-        transaction.query<ConsentRow>(LATEST_CONSENT_SQL, values),
-      ]);
-      const suppression = suppressionResult.rows[0] ?? null;
-      const consent = consentResult.rows[0] ?? null;
-      if (suppression) {
-        return Object.freeze({
-          status: 'blocked',
-          reason: 'suppressed',
-          consentEventId: consent?.id ?? null,
-          suppressionEventId: suppression.id,
-        });
-      }
-      if (!consent) {
-        return Object.freeze({
-          status: 'unknown',
-          reason: 'no_evidence',
-          consentEventId: null,
-          suppressionEventId: null,
-        });
-      }
-      const state = consentState(consent.state);
-      return Object.freeze({
-        status: state === 'granted' ? 'allowed' : 'blocked',
-        reason: state,
-        consentEventId: consent.id,
-        suppressionEventId: null,
-      });
-    });
+    return this.transactionRunner.run(
+      context,
+      async (transaction) => evaluateEndpointInTransaction(transaction, query),
+    );
   }
 }
 

@@ -3,6 +3,7 @@ import test from 'node:test';
 import type { DatabaseRequestContext } from '../src/db/rls.js';
 import {
   CommunicationEligibilityService,
+  evaluateEndpointInTransaction,
   type CommunicationEligibilitySqlExecutor,
   type CommunicationEligibilityTransactionRunner,
 } from '../src/consent-pg/index.js';
@@ -141,6 +142,35 @@ test('eligibility reads only immutable evidence and never the legacy consent hin
     assert.match(evidenceSql, /endpoint_identity_sha256 = \$4/);
     assert.match(evidenceSql, /occurred_at <= statement_timestamp\(\) \+ interval '5 minutes'/);
   }
+});
+
+test('queue commands can evaluate permission inside their existing transaction', async () => {
+  const statements: string[] = [];
+  const executor: CommunicationEligibilitySqlExecutor = {
+    async query<TRow extends Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
+      statements.push(sql);
+      if (sql.includes('current-endpoint')) {
+        assert.deepEqual(values, [QUERY.contactPointId, QUERY.channel]);
+        return { rows: [{ identityHash: ENDPOINT_IDENTITY_HASH }] as unknown as TRow[] };
+      }
+      assert.deepEqual(values, [
+        QUERY.contactPointId, QUERY.channel, QUERY.purpose, ENDPOINT_IDENTITY_HASH,
+      ]);
+      if (sql.includes('active-suppression')) return { rows: [] };
+      if (sql.includes('latest-consent')) {
+        return { rows: [{ id: 'consent-in-command', state: 'granted' }] as unknown as TRow[] };
+      }
+      throw new Error('unexpected query');
+    },
+  };
+
+  assert.deepEqual(await evaluateEndpointInTransaction(executor, QUERY), {
+    status: 'allowed',
+    reason: 'granted',
+    consentEventId: 'consent-in-command',
+    suppressionEventId: null,
+  });
+  assert.equal(statements.length, 3);
 });
 
 test('eligibility rejects a malformed endpoint identity digest before evidence can authorize', async () => {
