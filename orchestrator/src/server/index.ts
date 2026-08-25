@@ -32,6 +32,14 @@ import { customerOutboundMessagingEnabled, runtimeSafetyPolicy, subscriptionChec
 import { canonicalIntake } from '../intake/canonical.js';
 import { buildPgPortalPlatform, postgresPortalEnabled, type PgPortalPlatform } from '../portal/postgres-platform.js';
 import { resolvePortalProductProfile } from '../portal/product-profile.js';
+import { createExternalEventCommandDatabasePool } from '../db/pool.js';
+import {
+  PgPropertyPredatorExternalEventShadowService,
+  assertPgPropertyPredatorExternalEventShadowStoreReady,
+  createPropertyPredatorExternalEventHandler,
+  loadPropertyPredatorExternalEventConfig,
+  type PropertyPredatorExternalEventBridgeMount,
+} from '../integrations/external-events/index.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ORCH_ROOT = path.resolve(HERE, '../..');
@@ -135,6 +143,62 @@ async function main(): Promise<void> {
     console.warn('⚠  STRIPE_SECRET_KEY not set — starting UNCONFIGURED: /health is up, but checkout & webhook 503 until you add a key (see docs/deploy-render.md).');
   }
   const stripe = cfg.secretKey ? (makeStripe(cfg.secretKey) as unknown as StripeLike) : unconfiguredStripe();
+  const externalEventConfig = loadPropertyPredatorExternalEventConfig(process.env);
+  let externalEventCommandPool:
+    ReturnType<typeof createExternalEventCommandDatabasePool> | undefined;
+  let propertyPredatorExternalEvents: PropertyPredatorExternalEventBridgeMount = Object.freeze({
+    enabled: externalEventConfig.enabled,
+    ready: false,
+    blockers: externalEventConfig.blockers,
+  });
+  if (externalEventConfig.enabled
+      && externalEventConfig.configurationReady
+      && externalEventConfig.binding) {
+    try {
+      // An explicitly enabled bridge may never fall back to a generic local or
+      // owner database credential. The pool itself verifies current_user on
+      // every new physical connection before it can be checked out.
+      if (!process.env.DATABASE_EXTERNAL_EVENT_COMMAND_URL?.trim()) {
+        throw new Error('dedicated external-event command database identity is required');
+      }
+      externalEventCommandPool = createExternalEventCommandDatabasePool(process.env);
+      await assertPgPropertyPredatorExternalEventShadowStoreReady(externalEventCommandPool);
+      const store = new PgPropertyPredatorExternalEventShadowService({
+        commandPool: externalEventCommandPool,
+        workspaceId: externalEventConfig.binding.workspaceId,
+      });
+      propertyPredatorExternalEvents = Object.freeze({
+        enabled: true,
+        ready: true,
+        blockers: Object.freeze([]),
+        handle: createPropertyPredatorExternalEventHandler({
+          production: externalEventConfig.production,
+          trustedProxyAddresses: externalEventConfig.trustedProxyAddresses,
+          bindings: [{
+            keyId: externalEventConfig.binding.keyId,
+            sharedSecret: externalEventConfig.binding.sharedSecret,
+            store,
+          }],
+        }),
+      });
+      console.log('Property Predator external-event shadow bridge is ready.');
+    } catch {
+      if (externalEventCommandPool) {
+        await Promise.allSettled([externalEventCommandPool.end()]);
+        externalEventCommandPool = undefined;
+      }
+      propertyPredatorExternalEvents = Object.freeze({
+        enabled: true,
+        ready: false,
+        blockers: Object.freeze([
+          'Property Predator external-event receipt store did not pass protected readiness',
+        ]),
+      });
+      console.warn('⚠  Property Predator external-event bridge unavailable; protected readiness failed.');
+    }
+  } else if (externalEventConfig.enabled) {
+    console.warn(`⚠  Property Predator external-event bridge unavailable: ${externalEventConfig.blockers.join('; ')}`);
+  }
   const orders = fileOrderStore(cfg.ordersFile);
   const subscriptions = fileSubscriptionStore(cfg.subscriptionsFile);
   const runtimePolicy = runtimeSafetyPolicy(cfg);
@@ -281,6 +345,7 @@ async function main(): Promise<void> {
           ? 'required PostgreSQL portal services did not pass readiness'
           : 'client portal dependencies did not compose'],
     onIntakeAccepted,
+    propertyPredatorExternalEvents,
   });
   const server = http.createServer((req, res) => { void app(req, res); });
   server.listen(cfg.port, cfg.host, () => {
@@ -302,7 +367,10 @@ async function main(): Promise<void> {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => error ? reject(error) : resolve());
       });
-      await postgresPortal?.close();
+      await Promise.all([
+        postgresPortal?.close(),
+        externalEventCommandPool?.end(),
+      ]);
     } catch (error) {
       process.exitCode = 1;
       console.error(`Shutdown failed: ${(error as Error).name || 'Error'}`);

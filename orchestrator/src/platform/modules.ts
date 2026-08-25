@@ -3,6 +3,7 @@ import { isPlatformCapability, type PlatformCapability } from './capabilities.js
 export type PlatformModuleId =
   | 'overview'
   | 'crm'
+  | 'journeys'
   | 'content'
   | 'social'
   | 'inbox'
@@ -49,7 +50,7 @@ export interface PlatformModuleRegistry {
   navigation(context: ModuleRuntimeContext): readonly ResolvedPlatformModule[];
 }
 
-const MODULE_IDS = new Set<PlatformModuleId>(['overview', 'crm', 'content', 'social', 'inbox', 'listening', 'webinars', 'automations', 'analytics', 'settings']);
+const MODULE_IDS = new Set<PlatformModuleId>(['overview', 'crm', 'journeys', 'content', 'social', 'inbox', 'listening', 'webinars', 'automations', 'analytics', 'settings']);
 const MODULE_GROUPS = new Set<PlatformModuleGroup>(['work', 'channels', 'intelligence', 'system']);
 const MODULE_STAGES = new Set<PlatformModuleStage>(['available', 'preview', 'planned']);
 const MODULE_ICONS = new Set<PlatformModuleManifest['icon']>(['home', 'users', 'sparkles', 'send', 'inbox', 'radar', 'video', 'workflow', 'chart', 'settings']);
@@ -173,6 +174,7 @@ export function createPlatformModuleRegistry(input: readonly PlatformModuleManif
 export const CORE_PLATFORM_MODULES: readonly PlatformModuleManifest[] = Object.freeze([
   { id: 'overview', label: 'Overview', shortLabel: 'Home', description: 'Workspace priorities, activity and connected operations.', icon: 'home', group: 'work', order: 10, route: '/portal', stage: 'available', requiredCapabilities: ['workspace.overview.read'] },
   { id: 'crm', label: 'CRM', shortLabel: 'CRM', description: 'Private contacts, opportunities, tasks and recorded CRM activity.', icon: 'users', group: 'work', order: 20, route: '/portal/crm/contacts', stage: 'available', requiredCapabilities: ['crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read'], dependsOn: ['overview'] },
+  { id: 'journeys', label: 'Conversion journeys', shortLabel: 'Journeys', description: 'Versioned milestones, explainable lead scores and auditable conversion facts.', icon: 'workflow', group: 'work', order: 25, stage: 'planned', requiredCapabilities: ['journeys.read'], dependsOn: ['crm'] },
   { id: 'content', label: 'Content', shortLabel: 'Content', description: 'On-brand drafts, approvals and the publishing calendar.', icon: 'sparkles', group: 'work', order: 30, route: '/portal#content', stage: 'preview', requiredCapabilities: ['content.drafts.read'], dependsOn: ['overview'] },
   { id: 'social', label: 'Social publishing', shortLabel: 'Social', description: 'Plan, approve, schedule and reconcile social posts.', icon: 'send', group: 'channels', order: 40, stage: 'planned', requiredCapabilities: ['social.publish'], dependsOn: ['content'] },
   { id: 'inbox', label: 'Shared inbox', shortLabel: 'Inbox', description: 'One queue for customer conversations, including WhatsApp.', icon: 'inbox', group: 'channels', order: 50, stage: 'planned', requiredCapabilities: ['conversations.read'], dependsOn: ['crm'] },

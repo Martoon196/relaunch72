@@ -1,8 +1,12 @@
 # 00 — START HERE (Relaunch72 audit handoff)
 
-> **Engineering update — 2026-08-24:** this file preserves the original audit
+> **Engineering update — 2026-08-25:** this file preserves the original audit
 > baseline below. PostgreSQL/RLS, a modular platform shell and the first durable
-> CRM loop have since been implemented on the local Codex branch. Start with
+> CRM loop have since been implemented on the local Codex branch. The newest
+> Property Predator-specific slice is documented—without presenting planned
+> channels as connected—in
+> [24-PROPERTY-PREDATOR-GROWTH-FOUNDATION.md](./24-PROPERTY-PREDATOR-GROWTH-FOUNDATION.md).
+> For the foundation that precedes it, start with
 > [15-POSTGRES-CRM-FOUNDATION.md](./15-POSTGRES-CRM-FOUNDATION.md),
 > [16-MODULAR-PRODUCT-UX.md](./16-MODULAR-PRODUCT-UX.md),
 > [17-WHITE-LABEL-PROVIDER-MATRIX.md](./17-WHITE-LABEL-PROVIDER-MATRIX.md),
@@ -16,12 +20,16 @@
 > before relying on
 > historical statements such as “no database” or the old test count.
 
-> **Current database proof:** migrations `0001`–`0013` passed all three
+> **Database proof before the newest slice:** migrations `0001`–`0013` passed all three
 > destructive integration tests against a freshly reset, explicitly disposable
 > direct Neon database. This includes paid Checkout provenance, claim-bound
-> atomic fulfilment and provider-acceptance settlement. The new modules remain
+> atomic fulfilment and provider-acceptance settlement. Migrations `0014` and
+> `0015` add conversion and shadow-event foundations; their final verification
+> results are in the **Verification evidence** section of
+> [24-PROPERTY-PREDATOR-GROWTH-FOUNDATION.md](./24-PROPERTY-PREDATOR-GROWTH-FOUNDATION.md).
+> Effect-producing modules remain
 > detached/off by default. No production database, customer data, charge, email,
-> deployment or provider was touched.
+> message, post, webinar, deployment or provider was touched.
 
 > Prepared for an external coding agent performing a full CRM + architecture audit.
 > **Documentation only** — no code, deps, or config were changed to produce this pack

@@ -22,6 +22,10 @@ import { handlePortal, type PortalDeps } from '../portal/router.js';
 import { entitlementForOrder, type BuildEntitlement } from './entitlements.js';
 import { oneOffCheckoutBlockers, subscriptionCheckoutBlockers } from './readiness.js';
 import { canonicalIntake } from '../intake/canonical.js';
+import {
+  PROPERTY_PREDATOR_EXTERNAL_EVENT_PATH,
+  type PropertyPredatorExternalEventBridgeMount,
+} from '../integrations/external-events/router.js';
 
 /** Optional marketing sync (Brevo). Both are no-ops when Brevo isn't configured. */
 export interface MarketingHooks {
@@ -61,6 +65,8 @@ export interface AppDeps {
   buildBlockers?: string[];
   /** Truthful execution mode exposed by health for accepted builds. */
   buildMode?: 'mock' | 'live';
+  /** Optional, disabled-by-default Property Predator receipt-only source bridge. */
+  propertyPredatorExternalEvents?: PropertyPredatorExternalEventBridgeMount;
 }
 
 function send(res: ServerResponse, code: number, body: unknown): void {
@@ -215,7 +221,28 @@ export function createApp(deps: AppDeps) {
           build_mode: deps.buildMode ?? 'live',
           portal_ready: Boolean(deps.portal),
           portal_blockers: deps.portal ? [] : [...(deps.portalBlockers ?? ['client portal is not mounted'])],
+          ...(deps.propertyPredatorExternalEvents ? {
+            property_predator_external_events: {
+              enabled: deps.propertyPredatorExternalEvents.enabled,
+              ready: deps.propertyPredatorExternalEvents.ready,
+              blockers: [...deps.propertyPredatorExternalEvents.blockers],
+            },
+          } : {}),
         });
+      }
+
+      if (route === `POST ${PROPERTY_PREDATOR_EXTERNAL_EVENT_PATH}`) {
+        const bridge = deps.propertyPredatorExternalEvents;
+        if (!bridge?.enabled) return send(res, 404, { error: 'not_found' });
+        if (!bridge.ready || !bridge.handle) {
+          return send(res, 503, { error: 'external_event_bridge_unavailable' });
+        }
+        try {
+          await bridge.handle(req, res);
+        } catch {
+          if (!res.headersSent) send(res, 503, { error: 'external_event_bridge_unavailable' });
+        }
+        return;
       }
 
       // Stripe-backed routes degrade to 503 until a key is configured, rather than

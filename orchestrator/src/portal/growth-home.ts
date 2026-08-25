@@ -31,10 +31,11 @@ function stageName(snapshot: CrmWorkspaceSnapshot, opportunity: CrmOpportunityVi
   return snapshot.stages.find((stage) => stage.id === opportunity.stageId)?.name ?? 'Current pipeline stage';
 }
 
-function attentionQueue(snapshot: CrmWorkspaceSnapshot): string {
+function attentionQueue(snapshot: CrmWorkspaceSnapshot, openStageIds: ReadonlySet<string>): string {
   const overdue = snapshot.tasks.filter((task) => isOverdue(task, snapshot.workspace.snapshotAt));
   const open = snapshot.tasks.filter((task) => task.status === 'open' && !isOverdue(task, snapshot.workspace.snapshotAt));
-  const unworked = snapshot.opportunities.filter((opportunity) => !opportunity.nextTaskAt);
+  const unworked = snapshot.opportunities.filter((opportunity) =>
+    openStageIds.has(opportunity.stageId) && !opportunity.nextTaskAt);
   const entries: string[] = [];
   for (const task of overdue.slice(0, 4)) {
     entries.push(`<li class="attention-item"><span class="attention-mark">${icon('calendar')}</span><span class="attention-copy"><strong>${escapeHtml(task.title)}</strong><span>${escapeHtml(task.contactName ?? task.opportunityTitle ?? 'Workspace task')}</span></span><span class="attention-state overdue">Overdue</span></li>`);
@@ -80,10 +81,10 @@ export function renderGrowthHomeBody(snapshot: CrmWorkspaceSnapshot, profile: Po
       <article class="growth-metric"><small>Needs attention</small><strong>${overdueTasks.length}</strong><span>Recorded tasks now overdue</span></article>
     </section>
     <div class="growth-grid"><div class="stack">
-      <section class="panel" aria-labelledby="attention-title"><div class="panel-head"><div><h2 id="attention-title">What needs attention</h2><p class="panel-subtitle">Saved tasks first · then unworked opportunities</p></div><a class="text-link" href="/portal/crm/tasks">All tasks →</a></div><div class="panel-body">${attentionQueue(snapshot)}</div></section>
+      <section class="panel" aria-labelledby="attention-title"><div class="panel-head"><div><h2 id="attention-title">What needs attention</h2><p class="panel-subtitle">Saved tasks first · then unworked opportunities</p></div><a class="text-link" href="/portal/crm/tasks">All tasks →</a></div><div class="panel-body">${attentionQueue(snapshot, openStageIds)}</div></section>
       <section class="panel" aria-labelledby="readiness-title"><div class="panel-head"><div><h2 id="readiness-title">The machine we are connecting</h2><p class="panel-subtitle">Truthful build state · unavailable rails have no action controls</p></div></div><div class="panel-body">${readiness(profile)}</div></section>
     </div><aside class="stack" aria-label="Conversion context">
       <section class="panel" aria-labelledby="journeys-title"><div class="panel-head"><div><h2 id="journeys-title">Conversion Journeys</h2><p class="panel-subtitle">Profile blueprints · live milestone facts come next</p></div></div><div class="panel-body">${journeyBlueprints(profile)}</div></section>
-      <section class="panel" aria-labelledby="workspace-truth-title"><div class="panel-head"><div><h2 id="workspace-truth-title">Workspace truth</h2><p class="panel-subtitle">No provider effects are enabled</p></div></div><div class="panel-body"><div class="growth-empty"><strong>${escapeHtml(snapshot.workspace.name)}</strong>${snapshot.contacts.length} contacts · ${snapshot.opportunities.length} opportunities · ${openTasks.length} open tasks. Messages, posts and webinar reminders remain locked until their provider rails are proven.</div></div></section>
+      <section class="panel" aria-labelledby="workspace-truth-title"><div class="panel-head"><div><h2 id="workspace-truth-title">Workspace truth</h2><p class="panel-subtitle">Growth HQ channels are not connected</p></div></div><div class="panel-body"><div class="growth-empty"><strong>${escapeHtml(snapshot.workspace.name)}</strong>${snapshot.contacts.length} contacts · ${snapshot.opportunities.length} opportunities · ${openTasks.length} open tasks. Growth HQ messaging, social publishing and webinar reminders remain locked until their provider rails are proven.</div></div></section>
     </aside></div>`;
 }

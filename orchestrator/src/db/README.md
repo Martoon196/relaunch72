@@ -12,8 +12,9 @@ messages, publishing, or any external provider effect.
 - Production runtime URLs must authenticate as their matching least-privilege
   roles (`r72_web`, `r72_identity_command`, `r72_provisioning_command`,
   `r72_setup_delivery_command`, `r72_setup_reissue_command`,
-  `r72_crm_command`, `r72_worker`, `r72_webhook`, `r72_public`, or
-  `r72_readonly`). Every pool verifies `current_user` before checkout.
+  `r72_crm_command`, `r72_external_event_command`, `r72_worker`,
+  `r72_webhook`, `r72_public`, or `r72_readonly`). Every pool verifies
+  `current_user` before checkout.
 - Portal reads use `DATABASE_WEB_URL` / `r72_web`. That role can read CRM rows
   allowed by forced RLS but has no CRM table mutation grant or write policy.
 - Portal password login, one-use account setup and opaque-session
@@ -63,14 +64,27 @@ messages, publishing, or any external provider effect.
   identity allowed to mutate CRM state, append history/activity/outbox facts,
   or claim command receipts. Permissions and active membership are still
   checked by forced RLS for every statement.
+- Conversion definitions, enrollments, milestone facts, explainable score
+  snapshots and endpoint-bound consent/suppression evidence use the same
+  forced-RLS workspace boundary. Published definition versions are frozen,
+  activation is monotonic, Sale requires a same-enrollment collected-payment
+  fact, and trigger sources are constrained by a positive database allowlist.
+- Authenticated Property Predator source ingress uses
+  `DATABASE_EXTERNAL_EVENT_COMMAND_URL` / `r72_external_event_command`. That
+  login has no table grants and can execute only the request-context helpers
+  plus the receipt recorder owned by a separate NOLOGIN definer. The current
+  route is disabled by default and journals replay-safe shadow receipts only;
+  it cannot project CRM, journey, consent, outbox or provider effects.
 - The migrator needs permission to create roles and extensions, but does not
   need true PostgreSQL superuser authority. Role bootstraps rely on safe
   `CREATE ROLE` defaults and audit every protected capability instead of trying
   to alter superuser-only attributes. Migrations never contain passwords;
   provision runtime role passwords or managed identities in the hosting
   secret/control plane.
-- The ordinary suite skips the real PostgreSQL test when no database is
-  configured. `npm run test:db:integration` is intentionally stricter: it
+- The ordinary suite always skips the five live PostgreSQL tests, even when a
+  developer keeps a test URL in `.env`. `npm run test:db:integration` is the
+  only command that opens their explicit opt-in gate, and it is intentionally
+  stricter: it
   fails unless `TEST_DATABASE_URL` names an explicitly disposable database
   containing a standalone `test` segment, so a green integration command can
   never mean “skipped”. It also requires
@@ -106,6 +120,11 @@ the inner provisioning primitive. Migration `0013` persists provider acceptance
 evidence, makes unattributed acknowledgement unavailable to the worker, caps the
 initial lease to setup-token expiry and adds an explicit fenced permanent
 provider-rejection command.
+Migration `0014` adds the forced-RLS Conversion Journey, scoring, consent,
+suppression, commerce and milestone foundation with immutable publication and
+payment-backed Sale authority. Migration `0015` adds the isolated receipt-only
+Property Predator external-event command/definer roles and replay-safe shadow
+ledger.
 
 Before the first successful managed-PostgreSQL application, the pre-launch role
 bootstraps in `0001`, `0003`, `0004`, `0006` and `0008` were amended to support
@@ -142,13 +161,14 @@ email link—and erases encrypted fields when a delivery becomes delivered,
 superseded or dead-lettered. Retired decrypt keys must remain configured until
 startup readiness reports that no claimable row needs them.
 
-`npm run test:db:integration` passed **3/3** against a freshly reset disposable
-direct Neon database on 2026-08-24. The proof covers RLS/revocation, atomic
-onboarding/setup, exact paid-Checkout reconciliation, changed-byte event replay
-rejection, claim-bound concurrent fulfilment, claim expiry, provider acceptance
-evidence and runtime privilege fences across the `0001`–`0013` ledger.
-The final sequential repository suite, including those real database tests,
-passed **610/610 with 0 failures and 0 skips**.
+`npm run test:db:integration` passed **5/5** against a freshly reset disposable
+direct Neon database on 2026-08-25. The proof covers RLS/revocation, atomic
+onboarding/setup, exact paid-Checkout reconciliation, conversion publication,
+endpoint-bound consent, payment-backed Sale, source allowlisting, and the
+receipt-only external-event role/replay boundary across migrations
+`0001`–`0015`. The ordinary non-destructive suite passed **678/683 with 0
+failures**; its five skips are exactly those gated live tests. TypeScript
+type-checking also passed.
 Automatic PostgreSQL onboarding nevertheless remains locked. The detached
 Checkout/dispatcher modules are not wired into `server/app.ts`, no real email
 provider adapter exists, and no worker starts automatically. Keep this path out

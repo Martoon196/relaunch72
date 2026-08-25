@@ -68,7 +68,21 @@ test('Growth HQ empty state invents no activity or provider readiness', () => {
   const html = renderGrowthHomeBody(empty, PROPERTY_PREDATOR_GROWTH_PROFILE);
   assert.match(html, /No urgent work is recorded/);
   assert.match(html, /Not connected/);
-  assert.match(html, /No provider effects are enabled/);
+  assert.match(html, /Growth HQ channels are not connected/);
   assert.doesNotMatch(html, /href="[^"]+">Social machine/);
   assert.doesNotMatch(html, /revenue generated|messages sent|posts published/i);
+});
+
+test('Growth HQ attention queue excludes opportunities in closed stages', () => {
+  const closed = snapshot();
+  closed.tasks = [];
+  closed.opportunities = [{
+    id: 'o2', contactId: 'c2', contactName: 'Paid customer', title: 'Completed sale', stageId: 's2',
+    valueMinor: 250_000, currency: 'GBP', updatedAt: '2026-08-25T10:00:00.000Z', rowVersion: 1,
+    moveCommandKey: 'move-2',
+  }];
+  const html = renderGrowthHomeBody(closed, PROPERTY_PREDATOR_GROWTH_PROFILE);
+  assert.match(html, /No urgent work is recorded/);
+  assert.doesNotMatch(html, /Completed sale/);
+  assert.doesNotMatch(html, /No task/);
 });

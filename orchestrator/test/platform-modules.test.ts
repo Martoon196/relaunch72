@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createPlatformEvent } from '../src/platform/events.js';
+import { createPlatformEvent, PLATFORM_EVENT_TYPES } from '../src/platform/events.js';
 import { CORE_PLATFORM_MODULES, createPlatformModuleRegistry, platformModules } from '../src/platform/modules.js';
 import type { PlatformCapability } from '../src/platform/capabilities.js';
 import { createProviderRegistry } from '../src/providers/registry.js';
@@ -8,7 +8,7 @@ import { createProviderOperationContext, type SocialPublishingProvider } from '.
 
 test('core modules have stable unique ids/routes and uncluttered ordering', () => {
   assert.deepEqual(platformModules.modules.map((module) => module.id), [
-    'overview', 'crm', 'content', 'social', 'inbox', 'listening', 'webinars', 'automations', 'analytics', 'settings',
+    'overview', 'crm', 'journeys', 'content', 'social', 'inbox', 'listening', 'webinars', 'automations', 'analytics', 'settings',
   ]);
   assert.equal(new Set(platformModules.modules.map((module) => module.id)).size, platformModules.modules.length);
   const routes = platformModules.modules.flatMap((module) => module.route ? [module.route] : []);
@@ -21,11 +21,21 @@ test('runtime resolution never presents planned modules as ready', () => {
   assert.equal(byId.get('overview')?.state, 'ready');
   assert.equal(byId.get('crm')?.state, 'ready');
   assert.equal(byId.get('crm')?.description, 'Private contacts, opportunities, tasks and recorded CRM activity.');
+  assert.equal(byId.get('journeys')?.state, 'planned');
   assert.equal(byId.get('content')?.state, 'preview');
   assert.equal(byId.get('social')?.state, 'planned');
   assert.equal(byId.get('inbox')?.state, 'planned');
   assert.equal(byId.get('listening')?.state, 'planned');
   assert.equal(byId.get('webinars')?.state, 'planned');
+});
+
+test('conversion facts use stable internal event names without accepting external envelopes', () => {
+  assert.ok(PLATFORM_EVENT_TYPES.includes('conversion.enrollment.started'));
+  assert.ok(PLATFORM_EVENT_TYPES.includes('conversion.milestone.achieved'));
+  assert.ok(PLATFORM_EVENT_TYPES.includes('conversion.score.updated'));
+  assert.ok(PLATFORM_EVENT_TYPES.includes('conversion.commerce.fact_recorded'));
+  assert.ok(PLATFORM_EVENT_TYPES.includes('communication.consent.recorded'));
+  assert.ok(PLATFORM_EVENT_TYPES.includes('communication.suppression.recorded'));
 });
 
 test('available modules surface missing setup and explicit disablement truthfully', () => {

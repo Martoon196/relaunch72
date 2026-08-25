@@ -8,6 +8,8 @@ import {
 const APP_ROLES = [
   'r72_commerce_definer',
   'r72_crm_command',
+  'r72_external_event_definer',
+  'r72_external_event_command',
   'r72_identity_command',
   'r72_onboarding_definer',
   'r72_owner',

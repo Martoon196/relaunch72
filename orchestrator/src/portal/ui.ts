@@ -39,7 +39,7 @@ const ICON_PATHS: Record<IconName, string> = {
 };
 
 const MODULE_ICONS: Record<PlatformModuleId, IconName> = {
-  overview: 'overview', crm: 'contacts', content: 'content', social: 'social', inbox: 'inbox',
+  overview: 'overview', crm: 'contacts', journeys: 'automation', content: 'content', social: 'social', inbox: 'inbox',
   listening: 'listening', webinars: 'calendar', automations: 'automation', analytics: 'activity', settings: 'billing',
 };
 
@@ -191,7 +191,7 @@ export function appShell(opts: AppShellOptions): string {
         <div class="nav-label">Workspace</div>
         ${workingNav}
       </nav>
-      <div class="sidebar-foot"><div class="sandbox-note"><span class="sandbox-dot"></span><span><strong>${crmMode ? 'Private CRM' : 'Private sandbox'}</strong>${crmMode ? 'Saved workspace records · provider effects locked' : 'Mock generation only · no publishing'}</span></div></div>
+      <div class="sidebar-foot"><div class="sandbox-note"><span class="sandbox-dot"></span><span><strong>${crmMode ? 'Private CRM' : 'Private sandbox'}</strong>${crmMode ? 'Saved workspace records · channel rails locked' : 'Mock generation only · no publishing'}</span></div></div>
     </aside>
     <div class="workspace">
       <header class="topbar">

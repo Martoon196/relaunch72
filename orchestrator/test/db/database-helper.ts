@@ -5,10 +5,22 @@ import { createDatabasePool } from '../../src/db/pool.js';
 
 const TEST_NAME_PATTERN = /(?:^|[_-])test(?:$|[_-])/i;
 export const DISPOSABLE_BRANCH_CONFIRMATION = 'reset-disposable-branch';
-type ScopedTestRole = 'r72_web' | 'r72_crm_command' | 'r72_worker';
+export const DATABASE_INTEGRATION_CONFIRMATION = 'explicit-disposable-run';
+type ScopedTestRole =
+  | 'r72_web'
+  | 'r72_crm_command'
+  | 'r72_external_event_command'
+  | 'r72_worker'
+  | 'r72_webhook';
 type UnscopedTestRole = 'r72_web' | 'r72_identity_command' | 'r72_crm_command' | 'r72_worker';
 
-const TEST_ROLES = new Set<ScopedTestRole>(['r72_web', 'r72_crm_command', 'r72_worker']);
+const TEST_ROLES = new Set<ScopedTestRole>([
+  'r72_web',
+  'r72_crm_command',
+  'r72_external_event_command',
+  'r72_worker',
+  'r72_webhook',
+]);
 const UNSCOPED_TEST_ROLES = new Set<UnscopedTestRole>([
   'r72_web',
   'r72_identity_command',
@@ -17,6 +29,10 @@ const UNSCOPED_TEST_ROLES = new Set<UnscopedTestRole>([
 ]);
 
 export function testDatabaseSkipReason(): string | false {
+  if (process.env.RELAUNCH72_DATABASE_INTEGRATION?.trim()
+      !== DATABASE_INTEGRATION_CONFIRMATION) {
+    return 'real PostgreSQL integration is available only through the explicit test:db:integration command';
+  }
   return process.env.TEST_DATABASE_URL?.trim()
     ? false
     : 'TEST_DATABASE_URL is not set; PostgreSQL integration test is opt-in';
@@ -97,7 +113,16 @@ export async function scopedQuery<T extends QueryResultRow = QueryResultRow>(
          set_config('app.workspace_id', $2, true),
          set_config('app.actor_kind', $3, true),
          set_config('app.request_id', $4, true)`,
-      [context.userId ?? '', context.workspaceId, role === 'r72_worker' ? 'worker' : 'user', context.requestId ?? 'integration-test'],
+      [
+        context.userId ?? '',
+        context.workspaceId,
+        role === 'r72_worker'
+          ? 'worker'
+          : role === 'r72_webhook' || role === 'r72_external_event_command'
+            ? 'webhook'
+            : 'user',
+        context.requestId ?? 'integration-test',
+      ],
     );
     const result = await client.query<T>(sql, values);
     await client.query('COMMIT');

@@ -161,7 +161,8 @@ test('login and billing keep the same accessible premium shell semantics', () =>
   assert.match(login, /autocomplete="current-password"/);
   assert.match(login, /name="_login_csrf" value="signed-login-csrf"/);
   assert.match(login, /value="owner@example.test"/);
-  assert.match(login, /CRM workspace/);
+  assert.match(login, /<span>CRM<\/span>/);
+  assert.match(login, /Content · preview/);
   assert.match(login, /Private sandbox · secure session · no public publishing/);
 
   const setupCsrf = Buffer.alloc(32, 7).toString('base64url');

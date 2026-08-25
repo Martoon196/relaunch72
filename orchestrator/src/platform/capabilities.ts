@@ -11,6 +11,8 @@ export const PLATFORM_CAPABILITIES = [
   'crm.pipeline.write',
   'crm.tasks.read',
   'crm.tasks.write',
+  'journeys.read',
+  'journeys.manage',
   'content.drafts.read',
   'content.drafts.generate',
   'social.publish',

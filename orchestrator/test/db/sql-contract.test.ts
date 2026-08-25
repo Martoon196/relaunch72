@@ -17,6 +17,8 @@ const migration10Url = new URL('../../src/db/migrations/0010_delivery_lease_port
 const migration11Url = new URL('../../src/db/migrations/0011_stable_chronology_defaults.sql', import.meta.url);
 const migration12Url = new URL('../../src/db/migrations/0012_paid_checkout_provenance.sql', import.meta.url);
 const migration13Url = new URL('../../src/db/migrations/0013_setup_delivery_provider_settlement.sql', import.meta.url);
+const migration14Url = new URL('../../src/db/migrations/0014_conversion_journeys.sql', import.meta.url);
+const migration15Url = new URL('../../src/db/migrations/0015_external_event_shadow_bridge.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -455,9 +457,9 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums native identity through commerce and delivery settlement', async () => {
+test('bundled migration discovery orders and checksums native identity through the external-event shadow bridge', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-9);
+  const tail = migrations.slice(-11);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0005_canonical_portal_identity.sql', version: 5 },
     { filename: '0006_customer_provisioning.sql', version: 6 },
@@ -468,6 +470,8 @@ test('bundled migration discovery orders and checksums native identity through c
     { filename: '0011_stable_chronology_defaults.sql', version: 11 },
     { filename: '0012_paid_checkout_provenance.sql', version: 12 },
     { filename: '0013_setup_delivery_provider_settlement.sql', version: 13 },
+    { filename: '0014_conversion_journeys.sql', version: 14 },
+    { filename: '0015_external_event_shadow_bridge.sql', version: 15 },
   ]);
   const sources = [
     (await readFile(migration5Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -479,6 +483,8 @@ test('bundled migration discovery orders and checksums native identity through c
     (await readFile(migration11Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration12Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration13Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration14Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration15Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
@@ -764,6 +770,257 @@ test('0013 removes unattributed acknowledgement and grants only exact settlement
   }
   assert.match(sql, /LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog/g);
   assert.match(sql, /REVOKE CREATE ON SCHEMA app_private FROM r72_setup_delivery_definer/);
+});
+
+test('0014 creates and registers one forced-RLS conversion foundation', async () => {
+  const sql = normalise(await readFile(migration14Url, 'utf8'));
+  const tables = [...sql.matchAll(/CREATE TABLE app\.([a-z_]+) \(/g)]
+    .map((match) => match[1]!);
+  const expectedTables = [
+    'lead_score_models',
+    'lead_score_model_versions',
+    'conversion_journeys',
+    'conversion_journey_versions',
+    'conversion_journey_milestones',
+    'conversion_journey_triggers',
+    'conversion_enrollments',
+    'communication_consent_events',
+    'communication_suppression_events',
+    'conversion_commerce_facts',
+    'conversion_milestone_facts',
+    'lead_score_snapshots',
+  ];
+  assert.deepEqual(tables, expectedTables);
+
+  const rls = /DO \$rls\$(.*?)\$rls\$;/.exec(sql)?.[1];
+  assert.ok(rls);
+  assert.match(rls, /ALTER TABLE app\.%I ENABLE ROW LEVEL SECURITY/);
+  assert.match(rls, /ALTER TABLE app\.%I FORCE ROW LEVEL SECURITY/);
+  assert.match(rls, /FOR ALL TO r72_owner USING \(true\) WITH CHECK \(true\)/);
+  for (const table of expectedTables) {
+    const definition = new RegExp(`CREATE TABLE app\\.${table} \\((.*?)\\);`).exec(sql)?.[1];
+    assert.ok(definition, `${table} has a table definition`);
+    assert.match(definition, /workspace_id uuid NOT NULL/);
+    assert.match(definition, /UNIQUE \(workspace_id, id\)/);
+    assert.match(rls, new RegExp(`'${table}'`));
+    assert.match(sql, new RegExp(`\\('app', '${table}', 'workspace_id'\\)`));
+  }
+
+  assert.match(sql, /ADD CONSTRAINT contact_points_workspace_id_id_contact_id_uq UNIQUE \(workspace_id, id, contact_id\)/);
+  assert.doesNotMatch(sql, /(?:CREATE|ALTER|INSERT INTO|UPDATE|DELETE FROM) app_private\.platform_orders/);
+});
+
+test('0014 pins immutable journey and score versions through same-workspace keys', async () => {
+  const sql = normalise(await readFile(migration14Url, 'utf8'));
+  assert.match(sql, /FOREIGN KEY \(workspace_id, id, active_version_id\) REFERENCES app\.lead_score_model_versions \(workspace_id, model_id, id\) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED/);
+  assert.match(sql, /FOREIGN KEY \(workspace_id, id, active_version_id\) REFERENCES app\.conversion_journey_versions \(workspace_id, journey_id, id\) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED/);
+  assert.match(sql, /UNIQUE \(workspace_id, model_id, version_no\)/);
+  assert.match(sql, /UNIQUE \(workspace_id, journey_id, version_no\)/);
+  assert.match(sql, /definition_sha256 bytea NOT NULL CHECK \(octet_length\(definition_sha256\) = 32\)/);
+  for (const versionTable of ['lead_score_model_versions', 'conversion_journey_versions']) {
+    const versionDefinition = new RegExp(`CREATE TABLE app\\.${versionTable} \\((.*?)\\);`).exec(sql)?.[1];
+    assert.ok(versionDefinition);
+    assert.match(versionDefinition, /published_at timestamptz/);
+    assert.match(versionDefinition, /CHECK \(published_at IS NULL OR published_at >= created_at\)/);
+  }
+  assert.match(sql, /FOREIGN KEY \(workspace_id, journey_id, journey_version_id\) REFERENCES app\.conversion_journey_versions \(workspace_id, journey_id, id\) ON DELETE RESTRICT/);
+  assert.match(sql, /FOREIGN KEY \(workspace_id, opportunity_id, contact_id\) REFERENCES app\.opportunities \(workspace_id, id, contact_id\) ON DELETE RESTRICT/);
+  assert.match(sql, /FOREIGN KEY \(workspace_id, journey_version_id, current_milestone_id\) REFERENCES app\.conversion_journey_milestones \(workspace_id, journey_version_id, id\) ON DELETE RESTRICT/);
+  assert.match(sql, /FOREIGN KEY \(workspace_id, enrollment_id, contact_id, score_model_version_id\) REFERENCES app\.conversion_enrollments \(workspace_id, id, contact_id, score_model_version_id\) ON DELETE RESTRICT/);
+  const activationGate = /CREATE FUNCTION app_private\.require_active_journey_completion\(\)(.*?)\$function\$;/.exec(sql)?.[1];
+  assert.ok(activationGate);
+  assert.match(activationGate, /SECURITY DEFINER SET search_path = pg_catalog/);
+  assert.match(activationGate, /IF NEW\.status = 'active' THEN/);
+  assert.match(activationGate, /milestone\.journey_version_id = NEW\.active_version_id AND milestone\.is_completion/);
+  assert.match(activationGate, /IF completion_count <> 1 THEN/);
+  assert.match(sql, /CREATE CONSTRAINT TRIGGER conversion_journeys_active_completion_ck AFTER INSERT OR UPDATE OF status, active_version_id ON app\.conversion_journeys DEFERRABLE INITIALLY DEFERRED/);
+  assert.match(sql, /REVOKE ALL ON FUNCTION app_private\.require_active_journey_completion\(\) FROM PUBLIC/);
+
+  for (const functionName of [
+    'require_monotonic_score_model_activation',
+    'mark_score_model_version_published',
+    'require_monotonic_journey_activation',
+    'mark_journey_version_published',
+    'require_unpublished_journey_version',
+  ]) {
+    const functionBody = new RegExp(`CREATE FUNCTION app_private\\.${functionName}\\(\\)(.*?)\\$function\\$;`).exec(sql)?.[1];
+    assert.ok(functionBody, `${functionName} exists`);
+    assert.match(functionBody, /SECURITY DEFINER SET search_path = pg_catalog/);
+    assert.match(sql, new RegExp(`REVOKE ALL ON FUNCTION app_private\\.${functionName}\\(\\) FROM PUBLIC`));
+  }
+  assert.match(sql, /require_monotonic_score_model_activation[\s\S]+target_version < latest_published_version/);
+  assert.match(sql, /require_monotonic_journey_activation[\s\S]+target_version < latest_published_version/);
+  assert.match(sql, /SET published_at = coalesce\(version_row\.published_at, statement_timestamp\(\)\)/g);
+  assert.match(sql, /IF NOT FOUND THEN RAISE EXCEPTION 'active score model version could not be published'/);
+  assert.match(sql, /IF NOT FOUND THEN RAISE EXCEPTION 'active conversion journey version could not be published'/);
+  assert.match(sql, /CREATE TRIGGER lead_score_models_publish_version AFTER INSERT OR UPDATE OF status, active_version_id ON app\.lead_score_models FOR EACH ROW WHEN \(NEW\.status = 'active'\)/);
+  assert.match(sql, /CREATE TRIGGER conversion_journeys_publish_version AFTER INSERT OR UPDATE OF status, active_version_id ON app\.conversion_journeys FOR EACH ROW WHEN \(NEW\.status = 'active'\)/);
+  assert.match(sql, /CREATE TRIGGER conversion_journeys_monotonic_activation_ck BEFORE UPDATE OF status, active_version_id ON app\.conversion_journeys/);
+  assert.match(sql, /CREATE TRIGGER lead_score_models_monotonic_activation_ck BEFORE UPDATE OF status, active_version_id ON app\.lead_score_models/);
+  const childFreeze = /CREATE FUNCTION app_private\.require_unpublished_journey_version\(\)(.*?)\$function\$;/.exec(sql)?.[1];
+  assert.ok(childFreeze);
+  assert.match(childFreeze, /published_at/);
+  assert.match(childFreeze, /FOR UPDATE/);
+  assert.match(childFreeze, /published conversion journey versions are frozen/);
+  assert.match(sql, /CREATE TRIGGER conversion_journey_milestones_unpublished_ck BEFORE INSERT ON app\.conversion_journey_milestones/);
+  assert.match(sql, /CREATE TRIGGER conversion_journey_triggers_unpublished_ck BEFORE INSERT ON app\.conversion_journey_triggers/);
+  assert.match(sql, /trigger_kind = 'event' AND source_key IN \( 'identity\.account\.created', 'product\.analysis\.completed' \)/);
+  assert.match(sql, /trigger_kind = 'commerce' AND source_key = 'payment_collected'/);
+  assert.doesNotMatch(sql, /trigger_kind <> 'commerce' OR source_key = 'payment_collected'/);
+  const versionLock = /CREATE FUNCTION app_private\.lock_conversion_journey_version\( p_journey_id uuid, p_version_no integer \)(.*?)\$function\$;/.exec(sql)?.[1];
+  assert.ok(versionLock);
+  assert.match(versionLock, /SECURITY DEFINER SET search_path = pg_catalog/);
+  assert.match(versionLock, /trusted_workspace_id := app_private\.current_workspace_id\(\)/);
+  assert.match(versionLock, /app_private\.can_manage_workspace\(trusted_user_id, trusted_workspace_id\)/);
+  assert.match(versionLock, /version_row\.workspace_id = trusted_workspace_id/);
+  assert.match(versionLock, /FOR UPDATE/);
+  assert.match(sql, /REVOKE ALL ON FUNCTION app_private\.lock_conversion_journey_version\(uuid, integer\) FROM PUBLIC/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.lock_conversion_journey_version\(uuid, integer\) TO r72_crm_command/);
+
+  for (const delimiter of [
+    'configuration_version_policies',
+    'configuration_child_policies',
+  ]) {
+    const policyBlock = new RegExp(`DO \\$${delimiter}\\$(.*?)\\$${delimiter}\\$;`).exec(sql)?.[1];
+    assert.ok(policyBlock);
+    assert.match(policyBlock, /FOR INSERT TO r72_crm_command/);
+    assert.doesNotMatch(policyBlock, /FOR (?:UPDATE|DELETE)/);
+  }
+  const containerPolicies = /DO \$configuration_container_policies\$(.*?)\$configuration_container_policies\$;/.exec(sql)?.[1];
+  assert.ok(containerPolicies);
+  assert.match(containerPolicies, /status = ''draft'' AND active_version_id IS NULL/);
+  const childPolicies = /DO \$configuration_child_policies\$(.*?)\$configuration_child_policies\$;/.exec(sql)?.[1];
+  assert.ok(childPolicies);
+  assert.match(childPolicies, /draft_version\.published_at IS NULL/);
+  for (const table of [
+    'lead_score_model_versions',
+    'conversion_journey_versions',
+    'conversion_journey_milestones',
+    'conversion_journey_triggers',
+    'communication_consent_events',
+    'communication_suppression_events',
+    'conversion_commerce_facts',
+    'conversion_milestone_facts',
+    'lead_score_snapshots',
+  ]) {
+    assert.doesNotMatch(sql, new RegExp(`GRANT (?:UPDATE|DELETE)[^;]*app\\.${table}`));
+  }
+});
+
+test('0014 separates human commands, verified webhook facts, and read-only roles', async () => {
+  const sql = normalise(await readFile(migration14Url, 'utf8'));
+  const managerContainers = /DO \$configuration_container_policies\$(.*?)\$configuration_container_policies\$;/.exec(sql)?.[1];
+  assert.ok(managerContainers);
+  assert.match(managerContainers, /app_private\.can_manage_workspace/);
+  assert.match(managerContainers, /FOR INSERT TO r72_crm_command/);
+  assert.match(managerContainers, /FOR UPDATE TO r72_crm_command/);
+
+  for (const role of ['r72_web', 'r72_worker']) {
+    assert.doesNotMatch(
+      sql,
+      new RegExp(`GRANT (?:INSERT|UPDATE|DELETE)[^;]* TO [^;]*\\b${role}\\b`),
+    );
+  }
+  assert.doesNotMatch(sql, /GRANT (?:INSERT|UPDATE|DELETE)[^;]*app\.(?:lead_score_models|lead_score_model_versions|conversion_journeys|conversion_journey_versions|conversion_journey_milestones|conversion_journey_triggers)[^;]* TO [^;]*\br72_webhook\b/);
+  assert.doesNotMatch(sql, /GRANT INSERT ON app\.conversion_commerce_facts TO [^;]*\br72_crm_command\b/);
+  assert.match(sql, /CREATE POLICY conversion_commerce_facts_webhook_insert ON app\.conversion_commerce_facts FOR INSERT TO r72_webhook WITH CHECK \( workspace_id = app_private\.current_workspace_id\(\) AND actor_kind = 'webhook' AND actor_user_id IS NULL \)/);
+  assert.match(sql, /CREATE POLICY communication_suppression_events_webhook_insert[^;]+state = 'suppressed'[^;]+actor_kind = 'webhook'/);
+  assert.match(sql, /CREATE POLICY conversion_milestone_facts_command_insert[^;]+source_kind = 'manual'[^;]+actor_kind = 'user'/);
+  assert.match(sql, /CREATE POLICY lead_score_snapshots_webhook_insert[^;]+actor_kind = 'webhook'/);
+
+  const commandEnrollmentInsert = /CREATE POLICY conversion_enrollments_command_insert(.*?);/.exec(sql)?.[1];
+  const commandEnrollmentUpdate = /CREATE POLICY conversion_enrollments_command_update(.*?);/.exec(sql)?.[1];
+  const webhookEnrollmentInsert = /CREATE POLICY conversion_enrollments_webhook_insert(.*?);/.exec(sql)?.[1];
+  const webhookEnrollmentUpdate = /CREATE POLICY conversion_enrollments_webhook_update(.*?);/.exec(sql)?.[1];
+  assert.ok(commandEnrollmentInsert);
+  assert.ok(commandEnrollmentUpdate);
+  assert.ok(webhookEnrollmentInsert);
+  assert.ok(webhookEnrollmentUpdate);
+  for (const insertPolicy of [commandEnrollmentInsert, webhookEnrollmentInsert]) {
+    assert.match(insertPolicy, /FROM app\.conversion_journey_versions AS selected_version/);
+    assert.match(insertPolicy, /selected_version\.score_model_version_id IS NOT DISTINCT FROM conversion_enrollments\.score_model_version_id/);
+  }
+  for (const commandPolicy of [commandEnrollmentInsert, commandEnrollmentUpdate]) {
+    assert.match(commandPolicy, /status <> 'completed'[^;]+completion\.is_completion/);
+    assert.match(commandPolicy, /NOT EXISTS \([^;]+milestone\.semantic = 'sale'/);
+    assert.doesNotMatch(commandPolicy, /conversion_milestone_facts/);
+  }
+  assert.match(webhookEnrollmentUpdate, /status <> 'completed'[^;]+completion\.is_completion/);
+  assert.match(webhookEnrollmentUpdate, /NOT EXISTS \([^;]+milestone\.semantic = 'sale'/);
+  assert.match(webhookEnrollmentUpdate, /OR EXISTS \([^;]+FROM app\.conversion_milestone_facts AS fact/);
+  assert.match(webhookEnrollmentUpdate, /fact\.milestone_semantic = 'sale' AND fact\.source_kind = 'commerce'/);
+});
+
+test('0014 makes consent, payment-backed sales, and score evidence durable facts', async () => {
+  const sql = normalise(await readFile(migration14Url, 'utf8'));
+  assert.match(sql, /FOREIGN KEY \(workspace_id, contact_point_id, contact_id\) REFERENCES app\.contact_points \(workspace_id, id, contact_id\) ON DELETE RESTRICT/g);
+  assert.match(sql, /state text NOT NULL CHECK \(state IN \('granted', 'denied', 'withdrawn'\)\)/);
+  assert.match(sql, /state text NOT NULL CHECK \(state IN \('suppressed', 'released'\)\)/);
+  assert.match(sql, /COMMENT ON COLUMN app\.contact_points\.consent_status IS 'Compatibility hint only; outbound eligibility must use communication consent and suppression events\.'/);
+  assert.equal((sql.match(/endpoint_identity_sha256 bytea NOT NULL CHECK \(octet_length\(endpoint_identity_sha256\) = 32\)/g) ?? []).length, 2);
+  const endpointCapture = /CREATE FUNCTION app_private\.capture_communication_endpoint_identity\(\)(.*?)\$function\$;/.exec(sql)?.[1];
+  assert.ok(endpointCapture);
+  assert.match(endpointCapture, /SECURITY DEFINER SET search_path = pg_catalog/);
+  assert.match(endpointCapture, /point\.kind, point\.value, point\.normalized_value/);
+  assert.match(endpointCapture, /NEW\.endpoint_identity_sha256 := public\.digest/);
+  assert.match(sql, /CREATE TRIGGER communication_consent_events_capture_endpoint_identity BEFORE INSERT ON app\.communication_consent_events/);
+  assert.match(sql, /CREATE TRIGGER communication_suppression_events_capture_endpoint_identity BEFORE INSERT ON app\.communication_suppression_events/);
+  assert.match(sql, /REVOKE UPDATE \(kind, value, normalized_value\) ON app\.contact_points FROM r72_crm_command/);
+  assert.match(sql, /UNIQUE \(workspace_id, source_system, source_event_id\)/);
+  assert.match(sql, /commerce_fact_type = 'payment_collected'/);
+  assert.match(sql, /\(milestone_semantic = 'sale'\) = \(source_kind = 'commerce'\)/);
+  assert.match(sql, /total_score smallint NOT NULL CHECK \(total_score BETWEEN 0 AND 100\)/);
+  assert.match(sql, /source_payload_sha256 bytea NOT NULL CHECK \(octet_length\(source_payload_sha256\) = 32\)/);
+
+  const outboxPolicy = /CREATE POLICY outbox_events_conversion_webhook_insert(.*?);/.exec(sql)?.[1];
+  assert.ok(outboxPolicy);
+  assert.match(outboxPolicy, /FOR INSERT TO r72_webhook/);
+  for (const eventType of [
+    'conversion.enrollment.started',
+    'conversion.milestone.achieved',
+    'conversion.score.updated',
+    'conversion.commerce.fact_recorded',
+    'communication.consent.recorded',
+    'communication.suppression.recorded',
+  ]) {
+    assert.match(outboxPolicy, new RegExp(`'${eventType.replaceAll('.', '\\.')}'`));
+  }
+  assert.match(outboxPolicy, /status = 'pending' AND attempt_count = 0 AND published_at IS NULL AND last_error IS NULL/);
+  assert.match(sql, /GRANT INSERT ON app\.outbox_events TO r72_webhook/);
+  assert.doesNotMatch(sql, /GRANT (?:SELECT|UPDATE|DELETE)[^;]*app\.outbox_events[^;]* TO [^;]*\br72_webhook\b/);
+});
+
+test('0015 exposes one immutable receipt-only capability for authenticated PP events', async () => {
+  const sql = normalise(await readFile(migration15Url, 'utf8'));
+  assert.match(sql, /'r72_external_event_definer', false/);
+  assert.match(sql, /'r72_external_event_command', true/);
+  assert.match(sql, /'CREATE ROLE %I %s NOINHERIT'/);
+  assert.doesNotMatch(sql, /ALTER ROLE r72_external_event_definer/);
+  assert.doesNotMatch(sql, /ALTER ROLE r72_external_event_command/);
+  assert.match(sql, /CREATE TABLE app_private\.external_event_shadow_receipts \(/);
+  assert.match(sql, /PRIMARY KEY \(workspace_id, source, event_id\)/);
+  assert.match(sql, /payload_sha256 bytea NOT NULL CHECK \(octet_length\(payload_sha256\) = 32\)/);
+  assert.match(sql, /disposition text NOT NULL DEFAULT 'shadow' CHECK \(disposition = 'shadow'\)/);
+  assert.match(sql, /GRANT SELECT, INSERT ON app_private\.external_event_shadow_receipts TO r72_external_event_definer/);
+  assert.doesNotMatch(sql, /GRANT (?:UPDATE|DELETE)[^;]*external_event_shadow_receipts/);
+  assert.doesNotMatch(sql, /GRANT [^;]*external_event_shadow_receipts[^;]* TO [^;]*\br72_(?:web|webhook|worker|crm_command)\b/);
+
+  const receiptFunction = /CREATE FUNCTION app_private\.record_external_event_shadow_receipt\((.*?)\$function\$;/.exec(sql)?.[1];
+  assert.ok(receiptFunction);
+  assert.match(receiptFunction, /SECURITY DEFINER SET search_path = pg_catalog/);
+  assert.match(receiptFunction, /trusted_actor_kind IS DISTINCT FROM 'webhook'/);
+  assert.match(receiptFunction, /p_workspace_id IS DISTINCT FROM trusted_workspace_id/);
+  assert.match(receiptFunction, /ON CONFLICT \(workspace_id, source, event_id\) DO NOTHING/);
+  assert.match(receiptFunction, /existing_payload_sha256 IS DISTINCT FROM p_payload_sha256/);
+  assert.match(receiptFunction, /RETURN QUERY SELECT 'shadow'::text, true/);
+  assert.doesNotMatch(receiptFunction, /INSERT INTO app\./);
+  assert.doesNotMatch(receiptFunction, /outbox_events|conversion_enrollments|contacts|opportunities|tasks/);
+
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.record_external_event_shadow_receipt\([^)]+\) TO r72_external_event_command/);
+  assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.record_external_event_shadow_receipt\([^)]+\) TO [^;]*\br72_(?:web|webhook|worker|crm_command)\b/);
+  assert.match(sql, /owner_role\.rolname = 'r72_external_event_definer'/);
+  assert.match(sql, /procedure\.proconfig = ARRAY\['search_path=pg_catalog'\]::text\[\]/);
+  assert.match(sql, /unexpectedly has table privilege/);
 });
 
 test('0007 removes ambient public-schema object creation from every application role', async () => {

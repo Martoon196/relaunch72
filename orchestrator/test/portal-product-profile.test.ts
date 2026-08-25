@@ -5,6 +5,11 @@ import {
   RELAUNCH72_PRODUCT_PROFILE,
   resolvePortalProductProfile,
 } from '../src/portal/product-profile.js';
+import {
+  PROPERTY_PREDATOR_AGENCY_LAPS_JOURNEY,
+  PROPERTY_PREDATOR_SELF_SERVE_JOURNEY,
+} from '../src/conversion-pg/index.js';
+import { loginPage } from '../src/portal/views.js';
 
 test('known portal product profiles resolve as immutable presentation contracts', () => {
   assert.equal(resolvePortalProductProfile(), RELAUNCH72_PRODUCT_PROFILE);
@@ -28,7 +33,23 @@ test('product profiles fail closed and cannot carry authorization state', () => 
 
 test('Property Predator blueprint labels keep product-led and literal LAPS journeys distinct', () => {
   const [selfServe, agency] = PROPERTY_PREDATOR_GROWTH_PROFILE.journeyBlueprints;
-  assert.deepEqual(selfServe?.milestones, ['Lead', 'Activated', 'Priced', 'Sale']);
-  assert.deepEqual(agency?.milestones, ['Lead', 'Appointment', 'Presentation', 'Sale']);
+  assert.equal(selfServe?.id, PROPERTY_PREDATOR_SELF_SERVE_JOURNEY.slug);
+  assert.equal(agency?.id, PROPERTY_PREDATOR_AGENCY_LAPS_JOURNEY.slug);
+  assert.deepEqual(
+    selfServe?.milestones,
+    PROPERTY_PREDATOR_SELF_SERVE_JOURNEY.milestones.map((milestone) => milestone.name),
+  );
+  assert.deepEqual(
+    agency?.milestones,
+    PROPERTY_PREDATOR_AGENCY_LAPS_JOURNEY.milestones.map((milestone) => milestone.name),
+  );
   assert.notEqual(selfServe?.label, agency?.label);
+});
+
+test('Property Predator sign-in advertises only its visible workspace modules', () => {
+  const html = loginPage(undefined, '', 'csrf', PROPERTY_PREDATOR_GROWTH_PROFILE);
+  assert.match(html, /<span>Today<\/span>/);
+  assert.match(html, /<span>Leads<\/span>/);
+  assert.doesNotMatch(html, /Content drafts|Social · planned|WhatsApp · planned|Listening · planned/);
+  assert.doesNotMatch(html, /makes sure the right conversation actually becomes a sale/);
 });

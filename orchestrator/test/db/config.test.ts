@@ -4,11 +4,43 @@ import { DATABASE_ROLES, loadDatabaseConfig } from '../../src/db/config.js';
 import {
   createCrmCommandDatabasePool,
   createDatabasePool,
+  createExternalEventCommandDatabasePool,
   createIdentityCommandDatabasePool,
   createProvisioningCommandDatabasePool,
   createSetupDeliveryCommandDatabasePool,
   createSetupReissueCommandDatabasePool,
 } from '../../src/db/pool.js';
+
+test('external-event ingress uses its exact receipt-only database identity', async () => {
+  assert.ok(DATABASE_ROLES.includes('externalEventCommand'));
+  assert.throws(
+    () => loadDatabaseConfig('externalEventCommand', {
+      NODE_ENV: 'production',
+      DATABASE_EXTERNAL_EVENT_COMMAND_URL:
+        'postgresql://r72_webhook:secret@database.example/relaunch72?sslmode=require',
+    }),
+    /must authenticate as the least-privilege r72_external_event_command role/,
+  );
+
+  const config = loadDatabaseConfig('externalEventCommand', {
+    NODE_ENV: 'production',
+    DATABASE_EXTERNAL_EVENT_COMMAND_URL:
+      'postgresql://r72_external_event_command:secret@database.example/relaunch72?sslmode=require',
+    DATABASE_EXTERNAL_EVENT_COMMAND_POOL_MAX: '2',
+  });
+  assert.equal(config.sourceEnv, 'DATABASE_EXTERNAL_EVENT_COMMAND_URL');
+  assert.equal(config.expectedDatabaseUser, 'r72_external_event_command');
+  assert.equal(config.applicationName, 'relaunch72-external-event-command');
+  assert.equal(config.maxConnections, 2);
+
+  const pool = createExternalEventCommandDatabasePool({
+    DATABASE_EXTERNAL_EVENT_COMMAND_URL:
+      'postgresql://r72_external_event_command:secret@localhost/relaunch72_test?sslmode=disable',
+  }, { onBackgroundError: () => undefined });
+  assert.equal(pool.options.application_name, 'relaunch72-external-event-command');
+  assert.equal(typeof pool.options.verify, 'function');
+  await pool.end();
+});
 
 test('database config uses generic DATABASE_URL only for local development', () => {
   const config = loadDatabaseConfig('web', {

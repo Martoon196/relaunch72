@@ -1,4 +1,7 @@
-import { assertDisposableTestDatabase } from './database-helper.js';
+import {
+  assertDisposableTestDatabase,
+  DATABASE_INTEGRATION_CONFIRMATION,
+} from './database-helper.js';
 
 const rawUrl = process.env.TEST_DATABASE_URL?.trim();
 
@@ -10,7 +13,11 @@ if (!rawUrl) {
 
 assertDisposableTestDatabase(rawUrl);
 
-// The ordinary test suite imports this file directly and may skip when no
-// disposable database exists. The explicit integration command comes through
-// this preflight so a green exit always means PostgreSQL was actually reached.
+// Ordinary `npm test` discovers the integration files but must never make a
+// network/database run merely because a developer keeps TEST_DATABASE_URL in
+// .env. Only this guarded preflight turns the real tests on, so a green explicit
+// command always means PostgreSQL was actually reached.
+process.env.RELAUNCH72_DATABASE_INTEGRATION = DATABASE_INTEGRATION_CONFIRMATION;
 await import('./rls.integration.test.js');
+await import('./conversion-rls.integration.test.js');
+await import('./external-event-shadow.integration.test.js');

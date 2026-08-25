@@ -62,6 +62,14 @@ export function createCrmCommandDatabasePool(
   return createDatabasePool(loadDatabaseConfig('crmCommand', env), hooks);
 }
 
+/** Receipt-only pool for authenticated external-event ingress. */
+export function createExternalEventCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('externalEventCommand', env), hooks);
+}
+
 /** Isolated pre-context identity pool; it can execute audited auth functions only. */
 export function createIdentityCommandDatabasePool(
   env: NodeJS.ProcessEnv = process.env,

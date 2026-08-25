@@ -1,11 +1,14 @@
 # 08 — HONEST GAP REPORT
 
-> **Engineering update — 2026-08-24:** this report is an intentionally retained
+> **Engineering update — 2026-08-25:** this report is an intentionally retained
 > pre-foundation baseline. The database/RLS foundation and a first PostgreSQL CRM
 > loop now exist locally, so the “not built” and test-count statements below are
-> historical. The current, deliberately unsmoothed status—including the portal
-> identity cutover that still blocks runtime activation—is in
-> [19-CRM-FIRST-LOOP-STATUS.md](./19-CRM-FIRST-LOOP-STATUS.md).
+> historical. Read [19-CRM-FIRST-LOOP-STATUS.md](./19-CRM-FIRST-LOOP-STATUS.md)
+> for the CRM cutover and
+> [24-PROPERTY-PREDATOR-GROWTH-FOUNDATION.md](./24-PROPERTY-PREDATOR-GROWTH-FOUNDATION.md)
+> for the newest Growth HQ, conversion, consent and receipt-only source-bridge
+> work. That newer foundation does **not** mean messaging, social publishing,
+> listening, webinars or autonomous conversion effects are connected.
 
 The prior artifact ("Inside Relaunch72") is a **founder/marketing briefing**. This file reconciles it against the code. Nothing below contradicts that the engineering is genuinely well-structured and tested — the point is to separate *proven-in-production* from *works-on-mock* from *not-built*, so the audit starts from reality.
 

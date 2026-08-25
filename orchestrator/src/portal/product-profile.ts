@@ -14,7 +14,8 @@ export interface PortalThemeTokens {
 }
 
 export interface PortalJourneyBlueprint {
-  id: 'self_serve' | 'agency_laps';
+  /** Stable installation slug used by the PostgreSQL journey publisher. */
+  id: 'property-predator-self-serve' | 'property-predator-agency-laps';
   label: string;
   summary: string;
   milestones: readonly string[];
@@ -151,7 +152,7 @@ export const PROPERTY_PREDATOR_GROWTH_PROFILE = createProfile({
     lead: 'Sign in to the private PropertyPredator partner workspace.',
     storyKicker: 'Growth HQ',
     storyTitle: 'Find the signal. Work the next move.',
-    storyBody: 'Property intelligence creates the opportunity. Growth HQ makes sure the right conversation actually becomes a sale.',
+    storyBody: 'Property intelligence creates the opportunity. Growth HQ starts with the real leads and next moves that will anchor the route to a sale.',
   },
   theme: {
     accent: '#00cdb8', accentDeep: '#057f75', accentSoft: '#e2faf6',
@@ -161,18 +162,18 @@ export const PROPERTY_PREDATOR_GROWTH_PROFILE = createProfile({
   moduleLabels: { overview: 'Today', crm: 'Leads' },
   journeyBlueprints: [
     {
-      id: 'self_serve', label: 'Self-serve conversion',
+      id: 'property-predator-self-serve', label: 'Self-serve conversion',
       summary: 'From captured interest through meaningful product use and a genuine paid moment.',
       milestones: ['Lead', 'Activated', 'Priced', 'Sale'],
     },
     {
-      id: 'agency_laps', label: 'Agency LAPS',
+      id: 'property-predator-agency-laps', label: 'Agency LAPS',
       summary: 'The literal appointment-led route for agency pilots and higher-value sales.',
       milestones: ['Lead', 'Appointment', 'Presentation', 'Sale'],
     },
   ],
   readinessRails: [
-    { id: 'content', label: 'Predator content engine', summary: 'Approved brand assets and partner-ready campaigns.', state: 'foundation' },
+    { id: 'content', label: 'Predator content engine', summary: 'Approved brand assets and partner-ready campaigns.', state: 'planned' },
     { id: 'social', label: 'Social machine', summary: 'Broad publishing with provider-confirmed outcomes.', state: 'planned' },
     { id: 'inbox', label: 'Conversion inbox', summary: 'Email, WhatsApp, SMS, Messenger and Instagram.', state: 'planned' },
     { id: 'webinars', label: 'Predator Briefing', summary: 'Live registration, attendance and follow-up journeys.', state: 'planned' },

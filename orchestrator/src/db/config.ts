@@ -8,6 +8,7 @@ export const DATABASE_ROLES = [
   'setupDeliveryCommand',
   'setupReissueCommand',
   'crmCommand',
+  'externalEventCommand',
   'worker',
   'webhook',
   'public',
@@ -25,6 +26,7 @@ const ROLE_URL_ENV: Record<DatabaseRole, string> = {
   setupDeliveryCommand: 'DATABASE_SETUP_DELIVERY_COMMAND_URL',
   setupReissueCommand: 'DATABASE_SETUP_REISSUE_COMMAND_URL',
   crmCommand: 'DATABASE_CRM_COMMAND_URL',
+  externalEventCommand: 'DATABASE_EXTERNAL_EVENT_COMMAND_URL',
   worker: 'DATABASE_WORKER_URL',
   webhook: 'DATABASE_WEBHOOK_URL',
   public: 'DATABASE_PUBLIC_URL',
@@ -38,6 +40,7 @@ const EXPECTED_RUNTIME_USER: Partial<Record<DatabaseRole, string>> = {
   setupDeliveryCommand: 'r72_setup_delivery_command',
   setupReissueCommand: 'r72_setup_reissue_command',
   crmCommand: 'r72_crm_command',
+  externalEventCommand: 'r72_external_event_command',
   worker: 'r72_worker',
   webhook: 'r72_webhook',
   public: 'r72_public',
@@ -165,15 +168,17 @@ export function loadDatabaseConfig(
 
   const rolePoolKey = role === 'crmCommand'
     ? 'DATABASE_CRM_COMMAND_POOL_MAX'
-    : role === 'setupDeliveryCommand'
-      ? 'DATABASE_SETUP_DELIVERY_COMMAND_POOL_MAX'
-    : role === 'setupReissueCommand'
-      ? 'DATABASE_SETUP_REISSUE_COMMAND_POOL_MAX'
-    : role === 'provisioningCommand'
-      ? 'DATABASE_PROVISIONING_COMMAND_POOL_MAX'
-    : role === 'identityCommand'
-      ? 'DATABASE_IDENTITY_COMMAND_POOL_MAX'
-      : `DATABASE_${role.toUpperCase()}_POOL_MAX`;
+    : role === 'externalEventCommand'
+      ? 'DATABASE_EXTERNAL_EVENT_COMMAND_POOL_MAX'
+      : role === 'setupDeliveryCommand'
+        ? 'DATABASE_SETUP_DELIVERY_COMMAND_POOL_MAX'
+        : role === 'setupReissueCommand'
+          ? 'DATABASE_SETUP_REISSUE_COMMAND_POOL_MAX'
+          : role === 'provisioningCommand'
+            ? 'DATABASE_PROVISIONING_COMMAND_POOL_MAX'
+            : role === 'identityCommand'
+              ? 'DATABASE_IDENTITY_COMMAND_POOL_MAX'
+              : `DATABASE_${role.toUpperCase()}_POOL_MAX`;
   return {
     role,
     connectionString: url.toString(),
@@ -212,15 +217,17 @@ export function loadDatabaseConfig(
     ),
     applicationName: role === 'crmCommand'
       ? 'relaunch72-crm-command'
-      : role === 'setupDeliveryCommand'
-        ? 'relaunch72-setup-delivery-command'
-      : role === 'setupReissueCommand'
-        ? 'relaunch72-setup-reissue-command'
-      : role === 'provisioningCommand'
-        ? 'relaunch72-provisioning-command'
-      : role === 'identityCommand'
-        ? 'relaunch72-identity-command'
-        : `relaunch72-${role}`,
+      : role === 'externalEventCommand'
+        ? 'relaunch72-external-event-command'
+        : role === 'setupDeliveryCommand'
+          ? 'relaunch72-setup-delivery-command'
+          : role === 'setupReissueCommand'
+            ? 'relaunch72-setup-reissue-command'
+            : role === 'provisioningCommand'
+              ? 'relaunch72-provisioning-command'
+              : role === 'identityCommand'
+                ? 'relaunch72-identity-command'
+                : `relaunch72-${role}`,
     expectedDatabaseUser: enforceRuntimeIdentity ? expectedDatabaseUser : undefined,
   };
 }

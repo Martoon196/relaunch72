@@ -7,8 +7,26 @@
 import type { DashboardData } from './data.js';
 import type { BillingView } from './billing.js';
 import { PIPELINE_STAGES, type PipelineStage } from '../crm/types.js';
+import { CORE_PLATFORM_MODULES } from '../platform/modules.js';
 import { appShell, escapeHtml as esc, icon, pageHead, plannedPortalModules, portalModuleIcon } from './ui.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
+
+function loginModuleBadges(productProfile: PortalProductProfile): string {
+  const visible = new Set(productProfile.visibleNavigation);
+  return CORE_PLATFORM_MODULES
+    .filter((module) => visible.has(module.id))
+    .map((module) => {
+      const label = productProfile.moduleLabels[module.id] ?? module.shortLabel;
+      const suffix = module.stage === 'planned'
+        ? ' · planned'
+        : module.stage === 'preview'
+          ? ' · preview'
+          : '';
+      const className = module.stage === 'available' ? '' : ' class="planned"';
+      return `<span${className}>${esc(label)}${suffix}</span>`;
+    })
+    .join('');
+}
 
 export function accountSetupPage(setupCsrfToken: string, error?: string): string {
   return `${pageHead('Relaunch72 — Set up your account')}<body>
@@ -77,7 +95,7 @@ export function loginPage(
       </section>
       <aside class="auth-story" aria-label="Product preview">
         <div class="auth-story-inner"><div class="auth-kicker">${esc(productProfile.auth.storyKicker)}</div><h2>${esc(productProfile.auth.storyTitle)}</h2><p>${esc(productProfile.auth.storyBody)}</p>
-          <div class="auth-modules" aria-label="Workspace modules"><span>CRM workspace</span><span>Content drafts</span><span class="planned">Social · planned</span><span class="planned">WhatsApp · planned</span><span class="planned">Listening · planned</span></div>
+          <div class="auth-modules" aria-label="Workspace modules">${loginModuleBadges(productProfile)}</div>
         </div>
       </aside>
     </main>
