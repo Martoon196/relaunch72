@@ -99,6 +99,151 @@ test('portal adapter maps the durable read model and supplies server-owned mutat
   assert.ok(Object.isFrozen(snapshot));
 });
 
+test('PostgreSQL portal workspace shell uses the one-query context read without loading a CRM snapshot', async () => {
+  let commandContextReads = 0;
+  let fullSnapshotReads = 0;
+  const service = new PgPortalCrmService({
+    principalResolver: { resolve: async () => ({ userId: USER_ID, workspaceId: WORKSPACE_ID }) },
+    readService: {
+      loadWorkspaceCommandContext: async () => {
+        commandContextReads += 1;
+        return readSnapshot().workspace;
+      },
+      loadWorkspaceSnapshot: async () => {
+        fullSnapshotReads += 1;
+        throw new Error('workspace shell must not load the full CRM snapshot');
+      },
+    },
+    commandService: {} as PgPortalCrmDependencies['commandService'],
+  });
+
+  const shell = await service.workspaceShell(identity());
+  assert.deepEqual(shell, {
+    workspace: {
+      id: WORKSPACE_ID,
+      name: 'Northstar Property',
+      timezone: 'Europe/London',
+      snapshotAt: '2026-08-24T08:00:00.000Z',
+      canWrite: true,
+    },
+  });
+  assert.equal(commandContextReads, 1);
+  assert.equal(fullSnapshotReads, 0);
+  assert.ok(Object.isFrozen(shell));
+  assert.ok(Object.isFrozen(shell?.workspace));
+});
+
+test('portal adapter maps verified Growth HQ evidence without treating CRM stages as funnel stages', async () => {
+  const service = new PgPortalCrmService({
+    principalResolver: { resolve: async () => ({ userId: USER_ID, workspaceId: WORKSPACE_ID }) },
+    readService: { loadWorkspaceSnapshot: async () => readSnapshot() },
+    growthReadService: {
+      load: async () => ({
+        asOf: '2026-08-25T12:00:00.000Z',
+        windowLabel: 'Last 30 days' as const,
+        funnels: [
+          {
+            journeySlug: 'property-predator-self-serve' as const,
+            journeyName: 'Self-serve conversion', journeyDescription: 'Verified product route',
+            milestoneKey: 'lead', milestoneName: 'Lead', position: 1, count: 10, movedInWindow: 4,
+          },
+          {
+            journeySlug: 'property-predator-self-serve' as const,
+            journeyName: 'Self-serve conversion', journeyDescription: 'Verified product route',
+            milestoneKey: 'activated', milestoneName: 'Activated', position: 2, count: 6, movedInWindow: 3,
+          },
+        ],
+        hotLeads: [{
+          contactId: CONTACT_ID, displayName: 'Avery Stone', companyName: null,
+          journeySlug: 'property-predator-self-serve' as const, currentStage: 'Activated',
+          score: 71, band: 'unexpected-database-label', evidenceKind: 'watched' as const,
+          evidenceLabel: 'Predator Briefing', evidenceDetail: '82% complete',
+          evidenceAt: '2026-08-25T10:00:00.000Z', contentSummary: 'Predator Briefing · 82%',
+          offerSummary: null,
+        }],
+        evidenceTotals: { contentStarted: 3, contentCompleted: 1, offersShown: 0, replies: 0, appointments: 0 },
+      }),
+    },
+    commandService: {} as PgPortalCrmDependencies['commandService'],
+  });
+
+  const growth = await service.growth(identity());
+  assert.equal(growth?.dataState, 'live');
+  assert.deepEqual(growth?.funnels[0]?.stages.map((stage) => [stage.key, stage.count, stage.stepConversionPercent]), [
+    ['lead', 10, null], ['activated', 6, 60],
+  ]);
+  assert.equal(growth?.funnels[1]?.stages[0]?.count, 0, 'missing journey keeps a truthful zero blueprint');
+  assert.equal(growth?.hotLeads[0]?.band, 'burning', 'published score thresholds own the display band');
+  assert.equal(growth?.hotLeads[0]?.lastEvidence?.kind, 'watched');
+  assert.match(growth?.hotLeads[0]?.nextMove ?? '', /Contact personally/);
+  assert.ok(Object.isFrozen(growth));
+});
+
+test('portal adapter maps the narrow Lead 360 read model without losing exact offer or consent states', async () => {
+  const service = new PgPortalCrmService({
+    principalResolver: { resolve: async () => ({ userId: USER_ID, workspaceId: WORKSPACE_ID }) },
+    readService: { loadWorkspaceSnapshot: async () => readSnapshot() },
+    lead360ReadService: {
+      load: async () => ({
+        workspaceId: WORKSPACE_ID, contactId: CONTACT_ID, asOf: '2026-08-25T12:00:00.000Z',
+        identity: {
+          contactId: CONTACT_ID, displayName: 'Avery Stone', companyName: null,
+          primaryEmail: 'avery@example.test', primaryPhone: null, lifecycle: 'lead' as const,
+          ownerUserId: USER_ID, createdAt: '2026-08-20T09:00:00.000Z', updatedAt: '2026-08-25T11:00:00.000Z',
+        },
+        journey: {
+          enrollmentId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', journeyId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          journeyVersionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Agency LAPS', status: 'active' as const,
+          currentMilestoneId: STAGE_ID, enrolledAt: '2026-08-20T09:00:00.000Z', lastEventAt: '2026-08-25T10:00:00.000Z', endedAt: null,
+          stages: [{ id: STAGE_ID, key: 'appointment', name: 'Appointment', position: 2, semantic: 'appointment' as const, isCompletion: false, isCurrent: true, reachedAt: '2026-08-25T10:00:00.000Z' }],
+        },
+        score: {
+          id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', enrollmentId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          total: 52, band: 'hot', componentScores: { engagement: 42, intent: 10 }, reasons: ['Requested contact'],
+          sourceOccurredAt: '2026-08-25T10:00:00.000Z', evaluatedAt: '2026-08-25T10:01:00.000Z',
+        },
+        evidence: [{
+          id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', kind: 'offer' as const, title: 'Apex Annual',
+          detail: 'requested contact', progressBasisPoints: null, occurredAt: '2026-08-25T10:00:00.000Z', sourceLabel: 'Offer response',
+        }],
+        offers: [{
+          id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', offerKey: 'apex-annual', label: 'Apex Annual', offerVersion: '2026.08',
+          productKey: 'apex', priceMinor: 9900, currency: 'GBP', placement: 'results', presentedAt: '2026-08-25T09:58:00.000Z',
+          latestResponse: { id: '12121212-1212-4212-8212-121212121212', response: 'requested_contact' as const, respondedAt: '2026-08-25T10:00:00.000Z' },
+        }],
+        consent: [{
+          contactPointId: '13131313-1313-4313-8313-131313131313', contactPointKind: 'email' as const, contactPointLabel: 'Work',
+          contactPointValue: 'avery@example.test', isPrimary: true, isVerified: true, dedupeState: 'normal' as const,
+          channel: 'email' as const, purpose: 'property_predator_marketing', state: 'denied' as const, lawfulBasis: null,
+          updatedAt: '2026-08-25T09:00:00.000Z', consentEventId: '14141414-1414-4414-8414-141414141414',
+          suppressionEventId: null, suppressionReason: null,
+        }],
+        crm: {
+          opportunities: [{
+            id: OPPORTUNITY_ID, pipelineId: PIPELINE_ID, stageId: STAGE_ID, stageName: 'Qualified', title: 'Apex Annual',
+            status: 'open' as const, valueMinor: 9900, currency: 'GBP', probability: 50, expectedCloseDate: null, closedAt: null,
+            updatedAt: '2026-08-25T11:00:00.000Z',
+          }],
+          tasks: [{
+            id: TASK_ID, opportunityId: OPPORTUNITY_ID, title: 'Old task', priority: 'normal' as const, status: 'cancelled' as const,
+            dueAt: null, completedAt: null, updatedAt: '2026-08-25T11:00:00.000Z',
+          }],
+        },
+      }),
+    },
+    commandService: {} as PgPortalCrmDependencies['commandService'],
+  });
+
+  const caseFile = await service.lead360(identity(), CONTACT_ID);
+  assert.equal(caseFile?.offers[0]?.title, 'Apex Annual');
+  assert.equal(caseFile?.offers[0]?.state, 'requested_contact');
+  assert.equal(caseFile?.consent[0]?.state, 'denied');
+  assert.equal(caseFile?.crm.tasks[0]?.state, 'cancelled');
+  assert.match(caseFile?.scoreExplanation ?? '', /Requested contact · Engagement 42 · Intent 10/);
+  assert.equal(caseFile?.nextMove?.label, 'Review channel permission before any outreach');
+  assert.ok(Object.isFrozen(caseFile));
+});
+
 test('create lead validates browser input, owns actor fields and resolves task due time in workspace time', async () => {
   const commands: unknown[] = [];
   let commandContextReads = 0;

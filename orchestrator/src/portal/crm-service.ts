@@ -1,5 +1,12 @@
 import crypto from 'node:crypto';
-import type { CrmNotice, CrmWorkspaceSnapshot, CreateLeadField } from './crm-views.js';
+import type {
+  CrmNotice,
+  CrmWorkspaceSnapshot,
+  CrmWorkspaceView,
+  CreateLeadField,
+} from './crm-views.js';
+import type { GrowthIntelligenceView } from './growth-intelligence.js';
+import type { Lead360View } from './lead-360-view.js';
 
 /**
  * Request identity passed to the CRM boundary. The raw cookie is deliberately
@@ -47,12 +54,22 @@ export type PortalCrmMutationOutcome =
     }
   | { ok: false; kind: 'conflict' | 'not_found' | 'forbidden' | 'unavailable'; message: string };
 
+export interface PortalCrmWorkspaceShell {
+  readonly workspace: CrmWorkspaceView;
+}
+
 /**
  * Router-facing CRM application boundary. Implementations own authentication,
  * authorization, transaction context and command error sanitisation.
  */
 export interface PortalCrmService {
   snapshot(identity: PortalCrmRequestIdentity): Promise<CrmWorkspaceSnapshot | null>;
+  /** Narrow workspace chrome for pages whose own read model supplies all body data. */
+  workspaceShell?(identity: PortalCrmRequestIdentity): Promise<PortalCrmWorkspaceShell | null>;
+  /** Read-only conversion intelligence. Omitted by deliberately narrow adapters. */
+  growth?(identity: PortalCrmRequestIdentity): Promise<GrowthIntelligenceView | null>;
+  /** Read-only case file for one RLS-visible contact. */
+  lead360?(identity: PortalCrmRequestIdentity, contactId: string): Promise<Lead360View | null>;
   createLead(identity: PortalCrmRequestIdentity, input: PortalCreateLeadInput): Promise<PortalCrmMutationOutcome>;
   moveOpportunity(identity: PortalCrmRequestIdentity, input: PortalMoveOpportunityInput): Promise<PortalCrmMutationOutcome>;
   completeTask(identity: PortalCrmRequestIdentity, input: PortalCompleteTaskInput): Promise<PortalCrmMutationOutcome>;

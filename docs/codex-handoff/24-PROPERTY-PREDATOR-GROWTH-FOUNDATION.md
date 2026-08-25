@@ -1,247 +1,141 @@
-# 24 — PROPERTY PREDATOR GROWTH FOUNDATION
+# 24 — PROPERTY PREDATOR GROWTH HQ FOUNDATION
 
-**Measured:** 2026-08-25 on the local Codex branch.
+**Measured:** 2026-08-25 on `codex/relaunch72-platform-foundation`.
 
-**Status:** the Property Predator profile, Conversion Journey domain, outbound
-eligibility boundary and signed shadow source bridge are implemented as a
-foundation. This is not yet a connected marketing machine or a customer-ready
-journey product.
-
-**Verification:** TypeScript type-checking and the complete ordinary test suite
-pass. Exact final counts, plus the fresh disposable-Neon proof, are recorded
-below under **Verification evidence**.
-
-**External effects:** the new bridge is disabled by default and receipt-only.
-No message, email, WhatsApp, SMS, Messenger reply, Instagram action, social
-post, webinar action, customer contact, charge, purchase, deployment or
-production-database write is performed by this slice.
-
-## Verification evidence
-
-The final local proof for this slice was:
-
-- `npm run typecheck`: passed;
-- ordinary non-destructive suite: **683 tests — 678 passed, 0 failed, 5 live
-  database tests deliberately skipped** behind the explicit integration gate;
-- fresh guarded reset/migration of the explicitly disposable
-  `TEST_DATABASE_URL`: passed through migrations `0001`–`0015`; and
-- explicit sequential disposable-Neon suite: **5/5 passed**, covering identity
-  and CRM isolation, one-use provisioning, paid-checkout provenance, conversion
-  publishing/consent/payment authority, and the receipt-only external-event
-  role boundary.
-
-These results are test-environment evidence, not a production deployment or a
-claim that the missing provider integrations below already work.
+**Status:** Property Predator now has a branded, usable Growth HQ slice on the
+shared Relaunch72 platform: two distinct conversion journeys, a deduplicated
+attention list, evidence-backed engagement reporting, Lead 360 and a secure
+disposable-Neon-tested projection boundary. It is still deliberately
+effect-free: no provider is connected and nothing can contact a lead.
 
 ## What now exists
 
-### A profile-aware Property Predator Growth HQ
+### Property Predator product experience
 
-`src/portal/product-profile.ts` defines Property Predator as a product profile
-on the reusable Relaunch72 engine rather than a second hard-coded application.
-Selecting `PORTAL_PRODUCT_PROFILE=property_predator_growth` supplies its own
-name, mark, colour tokens, sign-in story, navigation labels, journey summaries
-and truthful rail-readiness copy. The existing Relaunch72 profile remains the
-default.
+The `property_predator_growth` product profile uses the owned Property Predator
+identity rather than generic SaaS styling: the PP mark and wordmark, dark ink
+palette, warm metallic accents, editorial display type and sharper conversion
+language. The ordinary Relaunch72 profile remains the default and reusable
+platform behaviour is not hard-coded to one brand.
 
-The Property Predator profile intentionally exposes only **Today** and
-**Leads** in its current navigation. The premium Growth HQ home in
-`src/portal/growth-home.ts` is composed with the existing portal and CRM
-boundary; in PostgreSQL portal mode it renders the canonical saved workspace
-snapshot. It calculates:
+The Growth HQ home shows saved CRM and engagement facts rather than invented
+analytics. It includes:
 
-- lead/prospect count;
-- open opportunity count;
-- open pipeline value, explicitly labelled as potential value rather than
-  collected revenue;
-- overdue saved tasks; and
-- an attention queue of saved tasks followed by opportunities without a next
-  task.
+- lead/prospect count, open opportunities, potential pipeline value and overdue
+  tasks;
+- separate self-serve **Lead → Activated → Priced → Sale** and agency
+  **Lead → Appointment → Presentation → Sale** funnels;
+- distinct people at each funnel stage, while explicitly allowing a person to
+  participate in both routes;
+- one deduplicated row per person in the hot-lead list;
+- exact content, offer, reply and commerce evidence totals; and
+- a next-move recommendation that checks suppression and channel permission
+  before any outreach is suggested.
 
-Those are CRM facts, not invented performance analytics. Empty states say when
-nothing urgent is recorded. Planned content, publishing, inbox, webinar and
-automation rails are visible as build context but have no action controls while
-unconnected.
+Empty and unconnected states are truthful. Email, WhatsApp, social, webinar,
+listening and automation rails have no fake success state or live action while
+their providers are absent.
 
-### Two different conversion journeys
+### Lead 360
 
-`src/conversion-pg/property-predator-blueprints.ts` keeps the two real sales
-motions separate:
+`/portal/crm/contacts/:contact-id` now opens a focused Lead 360 record. It brings
+together, for one saved contact:
 
-| Blueprint | Milestones | Current evidence mapping |
-|---|---|---|
-| `property-predator-self-serve` | Lead → Activated → Priced → Sale | Account creation can establish Lead; completed product analysis can establish Activated; Sale requires collected payment. Priced is deliberately unmapped until an authoritative pricing/checkout fact exists. |
-| `property-predator-agency-laps` | Lead → Appointment → Presentation → Sale | Account creation can establish Lead; Sale requires collected payment. Appointment and Presentation remain deliberately unmapped until authoritative calendar and attendance facts exist. |
+- contact details, CRM state, opportunities and tasks;
+- content progress and completion evidence;
+- offer presentation and response history;
+- recorded consent and suppression evidence;
+- an auditable next-move recommendation; and
+- bounded query results so a very active contact cannot make the page grow
+  without limit.
 
-This prevents the product-led **Activated/Priced** path from being mislabeled as
-Daniel Priestley's literal **Lead/Appointment/Presentation/Sale** path. The two
-blueprints can share infrastructure without pretending they mean the same
-thing.
+The permission decision is evaluated before the outreach recommendation. The
+page says evidence was **recorded**; it does not upgrade ordinary observations
+into falsely “verified” claims.
 
-### Versioned, publishable conversion definitions
+### Exact growth-evidence storage
 
-Migration `0014_conversion_journeys.sql` adds workspace-owned tables for score
-models and versions, journey containers and versions, ordered milestones,
-triggers, enrollments, consent and suppression evidence, commerce facts,
-milestone facts and score snapshots. The tables use same-workspace foreign keys
-and forced row-level security.
+Migration `0016_property_predator_growth_evidence.sql` adds workspace-isolated,
+forced-RLS records for source identities, content consumption, offer
+presentations/responses, attribution and private projection receipts. Evidence
+keeps exact provenance and the human-readable offer label used at the time.
 
-`src/conversion-pg/definition.ts` produces strict canonical definitions and
-SHA-256 content digests. `src/conversion-pg/commands.ts` and `repository.ts`
-publish one score-model/journey blueprint atomically. The publishing boundary:
+The strict external-event catalogue now accepts bounded versions of:
 
-- requires an authenticated workspace manager;
-- creates immutable numbered definition versions;
-- verifies the canonical digest on replay and rejects a different definition
-  reusing the same version number;
-- activates versions monotonically rather than reopening published content as
-  a draft;
-- pins each enrollment to its exact journey and score-model version; and
-- requires an active journey version to contain exactly one completion
-  milestone.
+- `content.consumption.progressed`;
+- `content.consumption.completed`;
+- `offer.presented`; and
+- `offer.responded`.
 
-There is no customer-facing journey manager/editor yet. The internal
-command/service and storage boundary can install audited blueprints in code and
-tests; it is not yet wired to a CLI, server route, admin action or drag-and-drop
-automation builder.
+Unknown fields and malformed identifiers, timestamps, amounts or source facts
+remain rejected.
 
-### Sale means verified collected money
+### Secure source projector
 
-The database makes **Sale** a protected semantic, not a label a salesperson or
-browser can apply casually:
+Migration `0017_property_predator_growth_projector.sql` and the PostgreSQL
+projector add the narrow bridge from an authenticated shadow receipt to CRM and
+growth evidence.
 
-- commerce triggers accept only `payment_collected`;
-- conversion commerce facts can be appended only by the webhook capability;
-- a Sale milestone fact must be linked by foreign key to the same enrollment,
-  contact and `payment_collected` commerce fact;
-- manual milestone facts cannot use the Sale semantic; and
-- a webhook cannot move an enrollment to Sale until that commerce-backed
-  milestone fact exists.
+The webhook-facing database role cannot read or write the growth tables. It can
+only request projection by event ID. A `SECURITY DEFINER` function reopens the
+canonical stored event, revalidates its event type and derives the operational
+facts server-side. The caller cannot supply a different contact, workspace,
+offer, content item or response during projection.
 
-The accepted Property Predator wire event `commerce.purchase.completed` is not
-yet projected into these conversion facts. The rule above describes the target
-authority boundary, not a claim that Property Predator purchases currently
-advance a journey.
+Identity events resolve or create a contact from a normal active email endpoint
+and refuse quarantined/shared-address shortcuts. Dependent events require an
+existing source identity. Offer responses resolve their saved presentation.
+Projection receipts make retries idempotent.
 
-### Explicit, explainable scoring inputs
+This projector service is built and tested but is intentionally not composed
+into the live worker yet. That wiring belongs with journey projection and
+operational replay controls rather than being switched on piecemeal.
 
-`src/conversion-pg/scoreable-sources.ts` is a positive registry: adding an event
-to a wire catalogue does not make it scoreable automatically. The V1 registry
-allows only account creation, completed product analysis and the authoritative
-`payment_collected` commerce fact. The shipped Property Predator score rules
-currently award points only for account creation and completed analysis; fit
-and intent remain unallocated until evidence-backed sources exist.
+## Verification evidence
 
-Consent, permission and suppression events are not score inputs. Lead score
-snapshots retain the pinned model version, component scores, explanations,
-applied rules, source identity and source-payload digest so a score can be
-audited instead of appearing as an unexplained AI opinion.
+The completed local proof for this slice is:
 
-### Endpoint-bound consent and suppression evidence
+- TypeScript type-check: passed;
+- complete ordinary non-destructive suite: **723 tests — 717 passed, 0 failed,
+  6 explicitly guarded live-database tests skipped**;
+- guarded reset of the explicitly disposable `TEST_DATABASE_URL`: passed;
+- all forward migrations through `0017`: passed;
+- explicit sequential disposable-Neon integration suite: **6/6 passed**;
+- the real PostgreSQL Growth HQ read-model query, including RLS context, ran
+  successfully against disposable Neon; and
+- desktop and mobile browser acceptance: no horizontal overflow, broken
+  images or browser-console errors on Growth HQ or Lead 360.
 
-Migration `0014` records consent and suppression as append-only events. Each
-event is bound to a SHA-256 identity of the exact contact endpoint that existed
-when the evidence was recorded. Runtime CRM commands can no longer silently
-retarget that contact-point UUID to a different address or number.
+These are local and disposable-test-environment results. They are not a
+production deployment or evidence that an external provider has been
+connected.
 
-`src/consent-pg/eligibility.ts` evaluates the current endpoint against immutable
-evidence in a read-only repeatable-read transaction. An active global or
-purpose-specific suppression wins over consent. With no valid evidence the
-answer is unknown, not allowed. The old mutable `contact_points.consent_status`
-field remains only as a compatibility hint and is deliberately not trusted for
-outbound eligibility.
+## What is deliberately still missing
 
-This is an eligibility decision service, not a sender. No channel adapter is
-allowed or invoked by it.
+1. **Property Predator event sender.** The source application does not yet emit
+   these signed events to Growth HQ.
+2. **Live projector composition.** The secure projector exists, but the worker
+   does not yet invoke it automatically.
+3. **Journey runtime.** Receipt-to-enrolment, milestone achievement and score
+   projection are the next core build; the Journey Manager UI is not built.
+4. **Consent and commerce projection.** Those authoritative facts still need
+   their own projector paths before automation can rely on them.
+5. **Provider connections.** No email, WhatsApp, SMS, shared inbox, social
+   publishing/listening or webinar account is connected.
+6. **Autonomous replies.** Recommendations are visible, but no AI or workflow
+   can send on its own.
+7. **Production activation.** Nothing has been deployed and no production
+   database has been read or written.
 
-### A strict, signed Property Predator source contract
+## Provider decision and product boundary
 
-`src/integrations/external-events/contracts.ts` defines a bounded V1 catalogue:
+The provider discovery is not being restarted. The existing costed shortlist
+and integration sequence in `17-GHL-REPLACEMENT-PROVIDER-RESEARCH.md` and
+`18-PROVIDER-COST-MODEL.md` remain the working decisions. Providers stay behind
+capability adapters so the Growth HQ domain does not become coupled to one
+vendor.
 
-- account created;
-- marketing consent updated;
-- affiliate referral attributed;
-- product analysis completed;
-- purchase completed;
-- purchase refunded; and
-- subscription cancelled.
-
-The parser rejects unknown fields and non-canonical identifiers, timestamps,
-references, amounts and currencies. The payload cannot choose a workspace;
-trusted server configuration binds each HMAC key to one workspace.
-
-`signature.ts` authenticates the exact raw request bytes with
-`HMAC-SHA256(secret, timestamp + "." + rawBody)`, a dedicated key ID, constant-
-time digest comparison, a five-minute delivery window and a 32 KiB body limit.
-The HTTP route is the exact POST endpoint
-`/api/external-events/v1/property-predator`. It is absent by default, fails
-closed when enabled with incomplete configuration, and in production requires
-an encrypted socket or an exact configured proxy address before trusting
-`X-Forwarded-Proto`.
-
-### Receipt-only means receipt-only
-
-The current boundary is intentionally:
-
-```text
-Property Predator sender (not built here)
-  → strict V1 contract + raw-body HMAC
-  → disabled-by-default HTTP route
-  → private idempotent shadow receipt
-  ╳ no CRM/contact projection
-  ╳ no journey enrollment, milestone or score projection
-  ╳ no consent projection or outbox event
-  ╳ no message, post or webinar effect
-```
-
-Migration `0015_external_event_shadow_bridge.sql` stores authenticated events in
-`app_private.external_event_shadow_receipts` for observation and replay safety.
-The exact raw bytes are hashed but not retained; the already-validated canonical
-event is journalled. Replaying the same event ID with the same bytes returns a
-safe replay result, while reusing the ID with different bytes is a conflict.
-There is no update or delete path.
-
-Database access is split into a dedicated `r72_external_event_command` LOGIN
-identity and a `r72_external_event_definer` NOLOGIN owner. Startup readiness
-requires the command identity to have only private-schema usage plus execution
-of the narrow SECURITY DEFINER recorder and request-context functions. It must
-have no direct table privileges, no application-schema access and no unexpected
-private-function execution. This is deliberately separate from the broader
-webhook identity.
-
-The bridge therefore proves authentication, schema compatibility, workspace
-binding, idempotency and least privilege before any source event is allowed to
-change operational state.
-
-## What is still missing
-
-This foundation must not be described as a GHL/Hootsuite replacement yet:
-
-1. **No Property Predator sender exists here.** The Property Predator
-   application does not yet emit these signed events to Growth HQ.
-2. **No receipt projector exists.** Shadow receipts do not create or update CRM
-   contacts, attribute affiliates, append consent evidence, enroll a contact,
-   achieve a milestone, calculate a score or convert a purchase into a
-   commerce-backed Sale.
-3. **No effect-producing provider connections exist for this product slice.**
-   There is no customer OAuth/token lifecycle, shared inbox, email/SMS/WhatsApp
-   conversation runtime, Messenger/Instagram reply runtime, social publisher,
-   social listening runtime, webinar runtime or connected automation runner.
-4. **No customer-facing Journey Manager exists.** Publishing is currently an
-   internal command/service boundary exercised in code and tests; users cannot
-   build, simulate, approve, pause or inspect journey executions in the portal.
-5. **No autonomous reply system exists.** Consent eligibility and auditable
-   scoring are safety prerequisites, not permission to contact anybody.
-6. **No production activation has occurred.** The bridge remains disabled by
-   default and this work authorises no deployment or provider effect.
-
-## Product boundary
-
-Property Predator is the first reusable vertical profile on the Relaunch72
-engine. The shared pieces—CRM snapshot, capabilities, Conversion Journeys,
-permission evidence and source-ingress pattern—are designed to support future
-profiles without collapsing their domain language.
-
-**Ordris remains parked.** Asset management stays in Ordris and any connection
-or port belongs after acquisition/conversion, not inside this foundation. No
-Ordris integration or data movement is implemented or implied here.
+Property Predator is the first vertical profile on the shared engine. The CRM,
+evidence, permission, journey and integration boundaries are reusable for later
+products. **Ordris remains parked**; its asset-management capability can be
+connected after the acquisition and conversion machine is established.

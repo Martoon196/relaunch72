@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import type { PortalCrmService, PortalCrmRequestIdentity } from '../src/portal/crm-service.js';
+import {
+  PgPortalCrmService,
+  type PgPortalCrmDependencies,
+} from '../src/portal/crm-pg-service.js';
 import type { CrmWorkspaceSnapshot } from '../src/portal/crm-views.js';
+import type { Lead360View } from '../src/portal/lead-360-view.js';
 import { handlePortal, type PortalDeps } from '../src/portal/router.js';
 import { PORTAL_COOKIE, portalCsrfToken, signTenant } from '../src/portal/session.js';
 
@@ -45,11 +50,14 @@ function snapshot(): CrmWorkspaceSnapshot {
 
 class FakeCrm implements PortalCrmService {
   identities: PortalCrmRequestIdentity[] = [];
+  snapshotCalls = 0;
   createCalls = 0;
   moveCalls = 0;
   completeCalls = 0;
+  lead360Calls: string[] = [];
 
   async snapshot(identity: PortalCrmRequestIdentity) {
+    this.snapshotCalls += 1;
     this.identities.push(identity);
     return snapshot();
   }
@@ -67,6 +75,34 @@ class FakeCrm implements PortalCrmService {
   async completeTask() {
     this.completeCalls += 1;
     return { ok: true as const, disposition: 'applied' as const };
+  }
+
+  async lead360(_identity: PortalCrmRequestIdentity, contactId: string): Promise<Lead360View | null> {
+    this.lead360Calls.push(contactId);
+    if (contactId !== CONTACT_ID) return null;
+    return {
+      identity: {
+        contactId, displayName: 'Avery <Stone>', companyName: 'Stone Developments',
+        primaryEmail: 'avery@example.test', primaryPhone: null, ownerName: 'Assigned workspace member',
+      },
+      score: 76,
+      scoreExplanation: 'Watched 92% · requested contact',
+      journey: {
+        label: 'Agency LAPS',
+        stages: [
+          { key: 'lead', label: 'Lead', state: 'complete', reachedAt: '2026-08-20T09:00:00.000Z' },
+          { key: 'appointment', label: 'Appointment', state: 'current', reachedAt: '2026-08-23T10:00:00.000Z' },
+        ],
+      },
+      evidence: [{
+        id: '88888888-8888-4888-8888-888888888888', kind: 'watched', title: 'Predator <Briefing>',
+        detail: '92% complete', percentage: 92, occurredAt: '2026-08-23T10:00:00.000Z', sourceLabel: 'Content · video',
+      }],
+      nextMove: { label: 'Review personally', reason: 'Latest verified signal.', dueAt: null },
+      offers: [], consent: [], suppressionReason: null,
+      crm: { opportunities: [], tasks: [] },
+      asOf: '2026-08-23T12:00:00.000Z',
+    };
   }
 }
 
@@ -152,6 +188,90 @@ test('real CRM pages render through the authenticated service boundary and task 
   const completed = await call('GET', '/portal/crm/tasks?status=completed', deps(crm));
   assert.doesNotMatch(completed.body, /Call Avery/);
   assert.match(completed.body, /Review pack/);
+});
+
+test('Lead 360 route renders one read-only RLS case file and rejects malformed or invisible contacts', async () => {
+  const crm = new FakeCrm();
+  const found = await call('GET', `/portal/crm/contacts/${CONTACT_ID}`, deps(crm));
+  assert.equal(found.statusCode, 200);
+  assert.match(found.body, /Lead 360 · Evidence case file/);
+  assert.match(found.body, /Avery &lt;Stone&gt;/);
+  assert.match(found.body, /Predator &lt;Briefing&gt;/);
+  assert.doesNotMatch(found.body, /Send message|Publish post/i);
+  assert.deepEqual(crm.lead360Calls, [CONTACT_ID]);
+  assert.equal(crm.snapshotCalls, 1, 'legacy adapters without workspaceShell keep the snapshot fallback');
+
+  const malformed = await call('GET', '/portal/crm/contacts/not-a-uuid', deps(crm));
+  assert.equal(malformed.statusCode, 404);
+  assert.deepEqual(crm.lead360Calls, [CONTACT_ID], 'malformed IDs never enter the service');
+  assert.equal(crm.snapshotCalls, 1);
+
+  const invisible = await call('GET', '/portal/crm/contacts/99999999-9999-4999-8999-999999999999', deps(crm));
+  assert.equal(invisible.statusCode, 404);
+  assert.match(invisible.body, /No RLS-visible contact exists/);
+  assert.equal(crm.snapshotCalls, 2);
+});
+
+test('Pg-backed Lead 360 route reads only workspace shell context and the contact case file', async () => {
+  let commandContextReads = 0;
+  let fullSnapshotReads = 0;
+  let leadReads = 0;
+  const crm = new PgPortalCrmService({
+    principalResolver: { resolve: async () => ({ userId: '88888888-8888-4888-8888-888888888888', workspaceId: WORKSPACE_ID }) },
+    readService: {
+      loadWorkspaceCommandContext: async () => {
+        commandContextReads += 1;
+        return {
+          id: WORKSPACE_ID,
+          name: 'Northstar Property',
+          timezone: 'Europe/London',
+          currency: 'GBP',
+          snapshotAt: '2026-08-23T12:00:00.000Z',
+          defaultPipelineId: null,
+          canWrite: true,
+        };
+      },
+      loadWorkspaceSnapshot: async () => {
+        fullSnapshotReads += 1;
+        throw new Error('Lead 360 route must not load a full CRM snapshot');
+      },
+    },
+    lead360ReadService: {
+      load: async () => {
+        leadReads += 1;
+        return {
+          workspaceId: WORKSPACE_ID,
+          contactId: CONTACT_ID,
+          asOf: '2026-08-23T12:00:00.000Z',
+          identity: {
+            contactId: CONTACT_ID,
+            displayName: 'Narrow Avery',
+            companyName: null,
+            primaryEmail: null,
+            primaryPhone: null,
+            lifecycle: 'lead' as const,
+            ownerUserId: null,
+            createdAt: '2026-08-20T09:00:00.000Z',
+            updatedAt: '2026-08-23T11:00:00.000Z',
+          },
+          journey: null,
+          score: null,
+          evidence: [],
+          offers: [],
+          consent: [],
+          crm: { opportunities: [], tasks: [] },
+        };
+      },
+    },
+    commandService: {} as PgPortalCrmDependencies['commandService'],
+  });
+
+  const found = await call('GET', `/portal/crm/contacts/${CONTACT_ID}`, deps(crm));
+  assert.equal(found.statusCode, 200);
+  assert.match(found.body, /Narrow Avery/);
+  assert.equal(commandContextReads, 1);
+  assert.equal(leadReads, 1);
+  assert.equal(fullSnapshotReads, 0);
 });
 
 test('CRM mutations require a session-bound CSRF token and redirect with signed notices', async () => {

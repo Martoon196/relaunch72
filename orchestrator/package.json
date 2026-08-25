@@ -21,6 +21,7 @@
     "signoff": "tsx src/signoff/cli.ts",
     "deliver": "tsx src/deliver/cli.ts",
     "serve": "tsx src/server/index.ts",
+    "preview:property-predator": "node --import ./test/windows-node24-shim.mjs --import tsx test/manual-property-predator-preview.ts",
     "stripe:setup": "tsx src/server/setup.ts",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:check": "tsx src/db/migrate.ts --check"

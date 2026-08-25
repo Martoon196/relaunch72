@@ -8,11 +8,21 @@ import {
   createPgCrmTransactionRunner,
   type CrmWorkspaceReadSnapshot,
 } from '../crm-pg/index.js';
+import {
+  createPgGrowthIntelligenceReadService,
+  createPgLead360ReadService,
+  type GrowthIntelligenceReadService,
+  type GrowthIntelligenceReadSnapshot,
+  type GrowthJourneySlug,
+  type Lead360CaseFileRead,
+  type Lead360ReadService,
+} from '../conversion-pg/index.js';
 import { requestDatabaseContext, type DatabaseRequestContext } from '../db/rls.js';
 import { InactivePortalSessionError } from '../db/transaction.js';
 import type {
   CrmTimelineItemView,
   CrmWorkspaceSnapshot,
+  CrmWorkspaceView,
   CreateLeadField,
 } from './crm-views.js';
 import type {
@@ -21,8 +31,24 @@ import type {
   PortalCrmMutationOutcome,
   PortalCrmRequestIdentity,
   PortalCrmService,
+  PortalCrmWorkspaceShell,
   PortalMoveOpportunityInput,
 } from './crm-service.js';
+import {
+  emptyGrowthIntelligence,
+  type GrowthEvidenceKind,
+  type GrowthFunnelStageView,
+  type GrowthFunnelView,
+  type GrowthIntelligenceView,
+  type GrowthScoreBand,
+  type GrowthTrack,
+} from './growth-intelligence.js';
+import type {
+  Lead360ConsentState,
+  Lead360NextMoveView,
+  Lead360OfferState,
+  Lead360View,
+} from './lead-360-view.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const COMMAND_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -77,15 +103,19 @@ function timelineKind(activityType: string): CrmTimelineItemView['kind'] {
   return 'other';
 }
 
+function mapWorkspace(read: CrmWorkspaceReadSnapshot['workspace']): CrmWorkspaceView {
+  return Object.freeze({
+    id: read.id,
+    name: read.name,
+    timezone: read.timezone,
+    snapshotAt: read.snapshotAt,
+    canWrite: read.canWrite,
+  });
+}
+
 function mapSnapshot(read: CrmWorkspaceReadSnapshot, nextKey: () => string): CrmWorkspaceSnapshot {
   return Object.freeze({
-    workspace: Object.freeze({
-      id: read.workspace.id,
-      name: read.workspace.name,
-      timezone: read.workspace.timezone,
-      snapshotAt: read.workspace.snapshotAt,
-      canWrite: read.workspace.canWrite,
-    }),
+    workspace: mapWorkspace(read.workspace),
     contacts: Object.freeze(read.contacts.map((contact) => Object.freeze({
       id: contact.id,
       displayName: contact.displayName,
@@ -139,6 +169,240 @@ function mapSnapshot(read: CrmWorkspaceReadSnapshot, nextKey: () => string): Crm
       actorName: null,
       occurredAt: activity.occurredAt,
     }))),
+  });
+}
+
+const TRACK_BY_JOURNEY: Readonly<Record<GrowthJourneySlug, GrowthTrack>> = Object.freeze({
+  'property-predator-self-serve': 'self_serve',
+  'property-predator-agency-laps': 'agency',
+});
+
+function scoreBand(score: number | null): GrowthScoreBand {
+  if (score === null) return 'unscored';
+  if (score >= 70) return 'burning';
+  if (score >= 45) return 'hot';
+  if (score >= 22) return 'warm';
+  return 'quiet';
+}
+
+function nextMove(score: number | null, stage: string | null): string {
+  const band = scoreBand(score);
+  if (band === 'burning') return 'Contact personally within 24 hours after checking channel permission, using the latest recorded signal.';
+  if (stage && /priced|presentation/i.test(stage)) return 'Review the exact offer and record the human follow-up.';
+  if (band === 'hot') return 'Invite them to the next live Predator Briefing after checking channel permission.';
+  return 'Review the evidence and add a human CRM task.';
+}
+
+function funnelStages(
+  read: GrowthIntelligenceReadSnapshot,
+  journeySlug: GrowthJourneySlug,
+  defaults: GrowthFunnelView,
+): readonly GrowthFunnelStageView[] {
+  const rows = read.funnels
+    .filter((row) => row.journeySlug === journeySlug)
+    .sort((left, right) => left.position - right.position);
+  if (!rows.length) return defaults.stages;
+  return Object.freeze(rows.map((row, index) => {
+    const previous = rows[index - 1];
+    return Object.freeze({
+      key: row.milestoneKey,
+      label: row.milestoneName,
+      count: row.count,
+      stepConversionPercent: !previous || previous.count === 0
+        ? null
+        : Math.round((row.count / previous.count) * 1_000) / 10,
+      movedInWindow: row.movedInWindow,
+    });
+  }));
+}
+
+function mapGrowthSnapshot(read: GrowthIntelligenceReadSnapshot): GrowthIntelligenceView {
+  const empty = emptyGrowthIntelligence(read.asOf);
+  const funnels = Object.freeze(empty.funnels.map((defaults) => {
+    const slug: GrowthJourneySlug = defaults.track === 'self_serve'
+      ? 'property-predator-self-serve'
+      : 'property-predator-agency-laps';
+    const first = read.funnels.find((row) => row.journeySlug === slug);
+    return Object.freeze({
+      ...defaults,
+      label: first?.journeyName ?? defaults.label,
+      description: first?.journeyDescription ?? defaults.description,
+      stages: funnelStages(read, slug, defaults),
+    });
+  }));
+  const evidenceTotals = Object.freeze({ ...read.evidenceTotals });
+  const hasEvidence = Object.values(evidenceTotals).some((value) => value > 0);
+  const hasFunnelMovement = funnels.some((funnel) => funnel.stages.some((stage) => stage.count > 0));
+  return Object.freeze({
+    dataState: hasEvidence || hasFunnelMovement || read.hotLeads.length > 0 ? 'live' : 'empty',
+    asOf: read.asOf,
+    windowLabel: read.windowLabel,
+    funnels,
+    hotLeads: Object.freeze(read.hotLeads.map((lead) => Object.freeze({
+      contactId: lead.contactId,
+      displayName: lead.displayName,
+      companyName: lead.companyName,
+      track: TRACK_BY_JOURNEY[lead.journeySlug],
+      stage: lead.currentStage ?? 'No stage recorded',
+      score: lead.score,
+      band: scoreBand(lead.score),
+      lastEvidence: lead.evidenceKind && lead.evidenceLabel && lead.evidenceDetail && lead.evidenceAt
+        ? Object.freeze({
+          kind: lead.evidenceKind as GrowthEvidenceKind,
+          label: lead.evidenceLabel,
+          detail: lead.evidenceDetail,
+          occurredAt: lead.evidenceAt,
+        })
+        : null,
+      contentSummary: lead.contentSummary,
+      offerSummary: lead.offerSummary,
+      nextMove: nextMove(lead.score, lead.currentStage),
+    }))),
+    evidenceTotals,
+  });
+}
+
+function titleCaseKey(value: string): string {
+  return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function moneyLabel(amountMinor: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat('en-GB', {
+      style: 'currency', currency, minimumFractionDigits: 2, maximumFractionDigits: 2,
+    }).format(amountMinor / 100);
+  } catch {
+    return `${currency} ${(amountMinor / 100).toFixed(2)}`;
+  }
+}
+
+function lead360Explanation(read: Lead360CaseFileRead): string | null {
+  if (!read.score) return null;
+  const components = Object.entries(read.score.componentScores)
+    .map(([key, value]) => `${titleCaseKey(key)} ${value}`);
+  const explanation = [...read.score.reasons, ...components];
+  return explanation.length ? explanation.join(' · ') : null;
+}
+
+function lead360NextMove(read: Lead360CaseFileRead): Lead360NextMoveView | null {
+  const suppression = read.consent.find((item) => item.state === 'suppressed');
+  if (suppression) {
+    return Object.freeze({
+      label: 'Review the contact block before any outreach',
+      reason: suppression.suppressionReason ?? 'A recorded suppression is active on a saved contact channel.',
+      dueAt: null,
+    });
+  }
+  const blockedConsent = read.consent.find((item) => item.state === 'denied' || item.state === 'withdrawn');
+  if (blockedConsent) {
+    return Object.freeze({
+      label: 'Review channel permission before any outreach',
+      reason: `${titleCaseKey(blockedConsent.channel)} permission is recorded as ${blockedConsent.state}.`,
+      dueAt: null,
+    });
+  }
+  const openTask = read.crm.tasks.find((task) => task.status === 'open');
+  if (openTask) {
+    return Object.freeze({
+      label: openTask.title,
+      reason: 'This is the next saved human CRM task. Completing it does not send anything automatically.',
+      dueAt: openTask.dueAt,
+    });
+  }
+  const latest = read.evidence[0];
+  if (!read.score || read.score.total < 22) return null;
+  const reason = latest
+    ? `Latest recorded signal: ${latest.title}.`
+    : `The latest evidence score is ${read.score.total}.`;
+  return Object.freeze({
+    label: read.score.total >= 70
+      ? 'Review this lead personally today'
+      : read.score.total >= 45
+        ? 'Prepare the next human follow-up'
+        : 'Review the latest signal',
+    reason,
+    dueAt: null,
+  });
+}
+
+function consentState(state: Lead360CaseFileRead['consent'][number]['state']): Lead360ConsentState {
+  return state;
+}
+
+function offerState(read: Lead360CaseFileRead['offers'][number]): Lead360OfferState {
+  return read.latestResponse?.response ?? 'no_response';
+}
+
+function mapLead360(read: Lead360CaseFileRead): Lead360View {
+  const journey = read.journey;
+  const suppressionReason = read.consent.find((item) => item.state === 'suppressed')?.suppressionReason ?? null;
+  return Object.freeze({
+    identity: Object.freeze({
+      contactId: read.identity.contactId,
+      displayName: read.identity.displayName,
+      companyName: read.identity.companyName,
+      primaryEmail: read.identity.primaryEmail,
+      primaryPhone: read.identity.primaryPhone,
+      ownerName: read.identity.ownerUserId ? 'Assigned workspace member' : null,
+    }),
+    score: read.score?.total ?? null,
+    scoreExplanation: lead360Explanation(read),
+    journey: Object.freeze({
+      label: journey?.name ?? 'No conversion journey',
+      stages: Object.freeze((journey?.stages ?? []).map((stage) => Object.freeze({
+        key: stage.key,
+        label: stage.name,
+        state: stage.isCurrent ? 'current' as const : stage.reachedAt ? 'complete' as const : 'upcoming' as const,
+        reachedAt: stage.reachedAt,
+      }))),
+    }),
+    evidence: Object.freeze(read.evidence.map((item) => Object.freeze({
+      id: item.id,
+      kind: item.kind,
+      title: item.title,
+      detail: item.detail,
+      percentage: item.progressBasisPoints === null ? null : item.progressBasisPoints / 100,
+      occurredAt: item.occurredAt,
+      sourceLabel: item.sourceLabel,
+    }))),
+    nextMove: lead360NextMove(read),
+    offers: Object.freeze(read.offers.map((item) => Object.freeze({
+      id: item.id,
+      title: item.label,
+      valueLabel: moneyLabel(item.priceMinor, item.currency),
+      state: offerState(item),
+      presentedAt: item.presentedAt,
+      responseAt: item.latestResponse?.respondedAt ?? null,
+      responseDetail: item.latestResponse ? titleCaseKey(item.latestResponse.response) : null,
+    }))),
+    consent: Object.freeze(read.consent.map((item) => Object.freeze({
+      channelLabel: `${titleCaseKey(item.channel)} · ${item.contactPointLabel ?? item.contactPointValue}`,
+      state: consentState(item.state),
+      basis: [
+        item.purpose ? titleCaseKey(item.purpose) : null,
+        item.lawfulBasis ? titleCaseKey(item.lawfulBasis) : null,
+        item.isVerified ? 'Verified endpoint' : 'Endpoint not verified',
+        item.dedupeState === 'normal' ? null : titleCaseKey(item.dedupeState),
+      ].filter((value): value is string => Boolean(value)).join(' · '),
+      updatedAt: item.updatedAt,
+    }))),
+    suppressionReason,
+    crm: Object.freeze({
+      opportunities: Object.freeze(read.crm.opportunities.map((item) => Object.freeze({
+        id: item.id,
+        title: item.title,
+        stageLabel: item.stageName,
+        state: item.status,
+        valueLabel: moneyLabel(item.valueMinor, item.currency),
+      }))),
+      tasks: Object.freeze(read.crm.tasks.map((item) => Object.freeze({
+        id: item.id,
+        title: item.title,
+        state: item.status === 'completed' ? 'complete' as const : item.status,
+        dueAt: item.dueAt,
+      }))),
+    }),
+    asOf: read.asOf,
   });
 }
 
@@ -224,6 +488,8 @@ export interface PgPortalCrmDependencies {
   readService: Pick<CrmReadService, 'loadWorkspaceSnapshot'>
     & Partial<Pick<CrmReadService, 'loadWorkspaceCommandContext'>>;
   commandService: Pick<CrmCommandService, 'createLead' | 'moveOpportunityStage' | 'completeTask'>;
+  growthReadService?: Pick<GrowthIntelligenceReadService, 'load'>;
+  lead360ReadService?: Pick<Lead360ReadService, 'load'>;
   nextCommandKey?: () => string;
 }
 
@@ -257,6 +523,43 @@ export class PgPortalCrmService implements PortalCrmService {
     if (!context) return null;
     try {
       return mapSnapshot(await this.dependencies.readService.loadWorkspaceSnapshot(context), this.nextCommandKey);
+    } catch (error) {
+      if (error instanceof InactivePortalSessionError) return null;
+      throw error;
+    }
+  }
+
+  async workspaceShell(identity: PortalCrmRequestIdentity): Promise<PortalCrmWorkspaceShell | null> {
+    const context = await this.context(identity);
+    if (!context) return null;
+    try {
+      return Object.freeze({ workspace: mapWorkspace(await this.commandWorkspace(context)) });
+    } catch (error) {
+      if (error instanceof InactivePortalSessionError) return null;
+      throw error;
+    }
+  }
+
+  async growth(identity: PortalCrmRequestIdentity): Promise<GrowthIntelligenceView | null> {
+    const context = await this.context(identity);
+    if (!context) return null;
+    if (!this.dependencies.growthReadService) return emptyGrowthIntelligence(new Date().toISOString());
+    try {
+      return mapGrowthSnapshot(await this.dependencies.growthReadService.load(context));
+    } catch (error) {
+      if (error instanceof InactivePortalSessionError) return null;
+      throw error;
+    }
+  }
+
+  async lead360(identity: PortalCrmRequestIdentity, contactId: string): Promise<Lead360View | null> {
+    const canonicalContactId = canonicalUuid(contactId);
+    if (!canonicalContactId) return null;
+    const context = await this.context(identity);
+    if (!context || !this.dependencies.lead360ReadService) return null;
+    try {
+      const read = await this.dependencies.lead360ReadService.load(context, canonicalContactId);
+      return read ? mapLead360(read) : null;
     } catch (error) {
       if (error instanceof InactivePortalSessionError) return null;
       throw error;
@@ -383,6 +686,8 @@ export function createPgPortalCrmService(input: {
   return new PgPortalCrmService({
     principalResolver: createPgPortalCrmPrincipalResolver(input.webPool),
     readService: createPgCrmReadService(input.webPool),
+    growthReadService: createPgGrowthIntelligenceReadService(input.webPool),
+    lead360ReadService: createPgLead360ReadService(input.webPool),
     commandService: new CrmCommandService({ transactionRunner: createPgCrmTransactionRunner(input.commandPool) }),
   });
 }

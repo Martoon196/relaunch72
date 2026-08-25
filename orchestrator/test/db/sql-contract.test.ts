@@ -19,6 +19,8 @@ const migration12Url = new URL('../../src/db/migrations/0012_paid_checkout_prove
 const migration13Url = new URL('../../src/db/migrations/0013_setup_delivery_provider_settlement.sql', import.meta.url);
 const migration14Url = new URL('../../src/db/migrations/0014_conversion_journeys.sql', import.meta.url);
 const migration15Url = new URL('../../src/db/migrations/0015_external_event_shadow_bridge.sql', import.meta.url);
+const migration16Url = new URL('../../src/db/migrations/0016_property_predator_growth_evidence.sql', import.meta.url);
+const migration17Url = new URL('../../src/db/migrations/0017_property_predator_growth_projector.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -457,9 +459,9 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums native identity through the external-event shadow bridge', async () => {
+test('bundled migration discovery orders and checksums native identity through the Growth projector', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-11);
+  const tail = migrations.slice(-13);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0005_canonical_portal_identity.sql', version: 5 },
     { filename: '0006_customer_provisioning.sql', version: 6 },
@@ -472,6 +474,8 @@ test('bundled migration discovery orders and checksums native identity through t
     { filename: '0013_setup_delivery_provider_settlement.sql', version: 13 },
     { filename: '0014_conversion_journeys.sql', version: 14 },
     { filename: '0015_external_event_shadow_bridge.sql', version: 15 },
+    { filename: '0016_property_predator_growth_evidence.sql', version: 16 },
+    { filename: '0017_property_predator_growth_projector.sql', version: 17 },
   ]);
   const sources = [
     (await readFile(migration5Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -485,6 +489,8 @@ test('bundled migration discovery orders and checksums native identity through t
     (await readFile(migration13Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration14Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration15Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration16Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration17Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));

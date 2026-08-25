@@ -15,7 +15,9 @@ test('known portal product profiles resolve as immutable presentation contracts'
   assert.equal(resolvePortalProductProfile(), RELAUNCH72_PRODUCT_PROFILE);
   assert.equal(resolvePortalProductProfile('property_predator_growth'), PROPERTY_PREDATOR_GROWTH_PROFILE);
   assert.equal(PROPERTY_PREDATOR_GROWTH_PROFILE.productName, 'PropertyPredator');
-  assert.equal(PROPERTY_PREDATOR_GROWTH_PROFILE.theme.accent, '#00cdb8');
+  assert.equal(PROPERTY_PREDATOR_GROWTH_PROFILE.theme.accent, '#00e5cc');
+  assert.equal(PROPERTY_PREDATOR_GROWTH_PROFILE.theme.canvas, '#050608');
+  assert.equal(PROPERTY_PREDATOR_GROWTH_PROFILE.theme.ink, '#eef1f7');
   assert.ok(Object.isFrozen(PROPERTY_PREDATOR_GROWTH_PROFILE));
   assert.ok(Object.isFrozen(PROPERTY_PREDATOR_GROWTH_PROFILE.theme));
   assert.ok(Object.isFrozen(PROPERTY_PREDATOR_GROWTH_PROFILE.journeyBlueprints));
@@ -48,8 +50,13 @@ test('Property Predator blueprint labels keep product-led and literal LAPS journ
 
 test('Property Predator sign-in advertises only its visible workspace modules', () => {
   const html = loginPage(undefined, '', 'csrf', PROPERTY_PREDATOR_GROWTH_PROFILE);
+  const genericHtml = loginPage(undefined, '', 'csrf', RELAUNCH72_PRODUCT_PROFILE);
   assert.match(html, /<span>Today<\/span>/);
   assert.match(html, /<span>Leads<\/span>/);
+  assert.match(html, /fonts\.googleapis\.com\/css2\?family=Cormorant\+Garamond/);
+  assert.match(html, /family=Syne/);
+  assert.match(html, /family=IBM\+Plex\+Mono/);
+  assert.doesNotMatch(genericHtml, /fonts\.googleapis\.com/);
   assert.doesNotMatch(html, /Content drafts|Social · planned|WhatsApp · planned|Listening · planned/);
   assert.doesNotMatch(html, /makes sure the right conversation actually becomes a sale/);
 });

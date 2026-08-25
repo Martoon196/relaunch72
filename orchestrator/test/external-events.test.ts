@@ -17,6 +17,8 @@ const EVENT_ID = '0198e9dd-a56f-7000-8000-000000000001';
 const CORRELATION_ID = '0198e9dd-a56f-7000-8000-000000000002';
 const ACCOUNT_ID = '0d445877-f8cf-4d65-9640-258710a69375';
 const AFFILIATE_ID = 'c4a8a965-fb4a-4a96-a469-7f29a48bf83c';
+const PRESENTATION_EVENT_ID = '018f2a93-3b8e-72cc-9d32-eed1e2a5ed86';
+const POLICY_TEXT_SHA256 = 'a'.repeat(64);
 const KEY_ID = 'pp-growth-2026-01';
 const NOW = 1_787_652_000;
 const TIMESTAMP = String(NOW);
@@ -35,14 +37,35 @@ function envelope(type: string, data: Record<string, unknown>): Record<string, u
 }
 
 const EXAMPLES: Readonly<Record<string, Record<string, unknown>>> = Object.freeze({
-  'identity.account.created': { email: 'hunter@example.com', signupMethod: 'password' },
+  'identity.account.created': {
+    email: 'hunter@example.com', signupMethod: 'password', displayName: 'Hunter & Co',
+  },
   'privacy.consent.updated': {
     purpose: 'property_predator_marketing', channel: 'email', state: 'granted', source: 'registration',
+    email: 'hunter@example.com', policyVersion: '2026-08-25', policyTextSha256: POLICY_TEXT_SHA256,
   },
   'affiliate.referral.attributed': {
     affiliateId: AFFILIATE_ID, referralCode: 'martoon-72', model: 'last_click',
   },
   'product.analysis.completed': { toolKey: 'full_xray', accessMode: 'paid', unitsSpent: 2 },
+  'content.consumption.progressed': {
+    contentKey: 'academy:deal-analysis', contentVersion: '2026.08',
+    title: 'Deal Analysis: A & B <Foundations>', medium: 'video',
+    progressBasisPoints: 5_000, consumedSeconds: 420,
+  },
+  'content.consumption.completed': {
+    contentKey: 'academy:deal-analysis', contentVersion: '2026.08',
+    title: 'Deal Analysis: A & B <Foundations>', medium: 'video',
+    progressBasisPoints: 10_000, consumedSeconds: 840,
+  },
+  'offer.presented': {
+    offerKey: 'pro-investor:annual', offerVersion: '2026.08', productKey: 'pro_investor',
+    label: 'Pro Investor — Annual <Launch>', price: { amountMinor: 99_000, currency: 'gbp' },
+    placement: 'academy:completion',
+  },
+  'offer.responded': {
+    presentationEventId: PRESENTATION_EVENT_ID, response: 'requested_contact',
+  },
   'commerce.purchase.completed': {
     provider: 'stripe', providerEventId: 'evt_123', checkoutSessionId: 'cs_123',
     productKey: 'pro_investor', billingKind: 'subscription', amountMinor: 9_900, currency: 'gbp',
@@ -94,6 +117,7 @@ test('the strict V1 catalogue parses every supported Property Predator event', (
     assert.ok(Object.isFrozen(event));
     assert.ok(Object.isFrozen(event.subject));
     assert.ok(Object.isFrozen(event.data));
+    if (event.type === 'offer.presented') assert.ok(Object.isFrozen(event.data.price));
   }
 });
 
@@ -156,6 +180,194 @@ test('event identities, times and bounded signal values must be canonical', () =
   assert.throws(() => parsePropertyPredatorExternalEvent(envelope('commerce.purchase.completed', {
     ...EXAMPLES['commerce.purchase.completed'], currency: 'GBP',
   })), /lowercase three-letter/);
+});
+
+test('account display names and consent evidence are optional, safe and backwards compatible', () => {
+  const displayName = 'Avery & <North> "Quoted" \\ Partners';
+  const account = parsePropertyPredatorExternalEventBody(raw(envelope('identity.account.created', {
+    email: 'avery@example.com', signupMethod: 'google', displayName,
+  })));
+  assert.equal(account.type, 'identity.account.created');
+  assert.equal(account.data.displayName, displayName);
+
+  const legacyAccount = parsePropertyPredatorExternalEvent(envelope('identity.account.created', {
+    email: 'legacy@example.com', signupMethod: 'password',
+  }));
+  assert.equal(legacyAccount.type, 'identity.account.created');
+  assert.ok(!Object.hasOwn(legacyAccount.data, 'displayName'));
+
+  for (const displayName of [' padded', 'line\nbreak', 'x'.repeat(201), '']) {
+    assert.throws(() => parsePropertyPredatorExternalEvent(envelope('identity.account.created', {
+      email: 'avery@example.com', signupMethod: 'password', displayName,
+    })), /displayName/);
+  }
+
+  for (const [state, source] of [
+    ['denied', 'account_preferences'],
+    ['withdrawn', 'unsubscribe'],
+  ] as const) {
+    const consent = parsePropertyPredatorExternalEvent(envelope('privacy.consent.updated', {
+      purpose: 'property_predator_marketing', channel: 'email', state, source,
+    }));
+    assert.equal(consent.type, 'privacy.consent.updated');
+    assert.equal(consent.data.state, state);
+    assert.ok(!Object.hasOwn(consent.data, 'email'));
+    assert.ok(!Object.hasOwn(consent.data, 'policyVersion'));
+    assert.ok(!Object.hasOwn(consent.data, 'policyTextSha256'));
+  }
+
+  const consent = parsePropertyPredatorExternalEvent(envelope(
+    'privacy.consent.updated',
+    EXAMPLES['privacy.consent.updated']!,
+  ));
+  assert.equal(consent.type, 'privacy.consent.updated');
+  assert.equal(consent.data.email, 'hunter@example.com');
+  assert.equal(consent.data.policyVersion, '2026-08-25');
+  assert.equal(consent.data.policyTextSha256, POLICY_TEXT_SHA256);
+
+  for (const [field, value, pattern] of [
+    ['email', 'Hunter@example.com', /canonical lowercase email/],
+    ['policyVersion', '2026\n08', /control characters/],
+    ['policyVersion', 'x'.repeat(101), /1 to 100 characters/],
+    ['policyTextSha256', 'A'.repeat(64), /lowercase hexadecimal SHA-256/],
+    ['policyTextSha256', 'a'.repeat(63), /lowercase hexadecimal SHA-256/],
+  ] as const) {
+    assert.throws(() => parsePropertyPredatorExternalEvent(envelope('privacy.consent.updated', {
+      ...EXAMPLES['privacy.consent.updated'], [field]: value,
+    })), pattern);
+  }
+});
+
+test('content progress and completion use exact bounded evidence without an action field', () => {
+  const progressed = EXAMPLES['content.consumption.progressed']!;
+  for (const medium of ['video', 'audio', 'article', 'document', 'other']) {
+    const event = parsePropertyPredatorExternalEvent(envelope('content.consumption.progressed', {
+      ...progressed, medium,
+    }));
+    assert.equal(event.type, 'content.consumption.progressed');
+    assert.equal(event.data.medium, medium);
+  }
+
+  for (const progressBasisPoints of [0, 10_000]) {
+    const event = parsePropertyPredatorExternalEvent(envelope('content.consumption.progressed', {
+      ...progressed, progressBasisPoints,
+    }));
+    assert.equal(event.type, 'content.consumption.progressed');
+    assert.equal(event.data.progressBasisPoints, progressBasisPoints);
+  }
+
+  const contentKey = `a${'b'.repeat(149)}`;
+  const contentVersion = 'v'.repeat(100);
+  const title = 'T'.repeat(200);
+  for (const consumedSeconds of [0, 2_147_483_647]) {
+    const event = parsePropertyPredatorExternalEvent(envelope('content.consumption.progressed', {
+      ...progressed, contentKey, contentVersion, title, consumedSeconds,
+    }));
+    assert.equal(event.type, 'content.consumption.progressed');
+    assert.equal(event.data.contentKey.length, 150);
+    assert.equal(event.data.contentVersion.length, 100);
+    assert.equal(event.data.title.length, 200);
+    assert.equal(event.data.consumedSeconds, consumedSeconds);
+  }
+
+  const completed = parsePropertyPredatorExternalEvent(envelope(
+    'content.consumption.completed',
+    EXAMPLES['content.consumption.completed']!,
+  ));
+  assert.equal(completed.type, 'content.consumption.completed');
+  assert.equal(completed.data.progressBasisPoints, 10_000);
+
+  for (const [field, value, pattern] of [
+    ['contentKey', 'Academy:lesson', /safe lowercase key/],
+    ['contentKey', `a${'b'.repeat(150)}`, /1 to 150 characters/],
+    ['contentVersion', 'v'.repeat(101), /1 to 100 characters/],
+    ['contentVersion', 'v1\nlatest', /control characters/],
+    ['title', 'T'.repeat(201), /1 to 200 characters/],
+    ['title', 'Unsafe\u0000title', /control characters/],
+    ['medium', 'ebook', /medium is invalid/],
+    ['progressBasisPoints', -1, /integer from 0 to 10000/],
+    ['progressBasisPoints', 10_001, /integer from 0 to 10000/],
+    ['progressBasisPoints', 50.5, /integer from 0 to 10000/],
+    ['consumedSeconds', -1, /integer from 0 to 2147483647/],
+    ['consumedSeconds', 2_147_483_648, /integer from 0 to 2147483647/],
+    ['consumedSeconds', 1.5, /integer from 0 to 2147483647/],
+  ] as const) {
+    assert.throws(() => parsePropertyPredatorExternalEvent(envelope('content.consumption.progressed', {
+      ...progressed, [field]: value,
+    })), pattern);
+  }
+  assert.throws(() => parsePropertyPredatorExternalEvent(envelope('content.consumption.completed', {
+    ...EXAMPLES['content.consumption.completed'], progressBasisPoints: 9_999,
+  })), /must be 10000 for a completed content event/);
+  assert.throws(() => parsePropertyPredatorExternalEvent(envelope('content.consumption.completed', {
+    ...EXAMPLES['content.consumption.completed'], action: 'completed',
+  })), /unsupported field: action/);
+});
+
+test('offer presentations have an exact frozen price and bounded display metadata', () => {
+  const presented = EXAMPLES['offer.presented']!;
+  const label = 'Investor & <Agency> "Launch"';
+  const free = parsePropertyPredatorExternalEventBody(raw(envelope('offer.presented', {
+    ...presented,
+    offerKey: `a${'b'.repeat(149)}`,
+    offerVersion: 'v'.repeat(100),
+    productKey: `p${'r'.repeat(149)}`,
+    label,
+    price: { amountMinor: 0, currency: 'eur' },
+    placement: `p${'l'.repeat(99)}`,
+  })));
+  assert.equal(free.type, 'offer.presented');
+  assert.equal(free.data.label, label);
+  assert.deepEqual(free.data.price, { amountMinor: 0, currency: 'eur' });
+  assert.ok(Object.isFrozen(free.data.price));
+
+  for (const [field, value, pattern] of [
+    ['offerKey', 'Pro Annual', /safe lowercase key/],
+    ['offerKey', `a${'b'.repeat(150)}`, /1 to 150 characters/],
+    ['offerVersion', 'v'.repeat(101), /1 to 100 characters/],
+    ['productKey', 'Pro', /safe lowercase key/],
+    ['label', 'L'.repeat(201), /1 to 200 characters/],
+    ['label', 'bad\ttitle', /control characters/],
+    ['placement', 'Pricing Page', /safe lowercase key/],
+    ['placement', `p${'l'.repeat(100)}`, /1 to 100 characters/],
+  ] as const) {
+    assert.throws(() => parsePropertyPredatorExternalEvent(envelope('offer.presented', {
+      ...presented, [field]: value,
+    })), pattern);
+  }
+
+  for (const [price, pattern] of [
+    [null, /data.price must be an object/],
+    [{ amountMinor: -1, currency: 'gbp' }, /integer from 0/],
+    [{ amountMinor: 1.5, currency: 'gbp' }, /integer from 0/],
+    [{ amountMinor: Number.MAX_SAFE_INTEGER + 1, currency: 'gbp' }, /integer from 0/],
+    [{ amountMinor: 100, currency: 'GBP' }, /lowercase three-letter/],
+    [{ amountMinor: 100, currency: 'gbp', taxMinor: 20 }, /unsupported field: taxMinor/],
+  ] as const) {
+    assert.throws(() => parsePropertyPredatorExternalEvent(envelope('offer.presented', {
+      ...presented, price,
+    })), pattern);
+  }
+});
+
+test('offer responses reference one canonical presentation event and one supported response', () => {
+  for (const response of ['accepted', 'declined', 'deferred', 'requested_contact']) {
+    const event = parsePropertyPredatorExternalEvent(envelope('offer.responded', {
+      presentationEventId: PRESENTATION_EVENT_ID, response,
+    }));
+    assert.equal(event.type, 'offer.responded');
+    assert.equal(event.data.presentationEventId, PRESENTATION_EVENT_ID);
+    assert.equal(event.data.response, response);
+  }
+  assert.throws(() => parsePropertyPredatorExternalEvent(envelope('offer.responded', {
+    presentationEventId: PRESENTATION_EVENT_ID.toUpperCase(), response: 'accepted',
+  })), /canonical lowercase UUID/);
+  assert.throws(() => parsePropertyPredatorExternalEvent(envelope('offer.responded', {
+    presentationEventId: PRESENTATION_EVENT_ID, response: 'presented',
+  })), /response is invalid/);
+  assert.throws(() => parsePropertyPredatorExternalEvent(envelope('offer.responded', {
+    presentationEventId: PRESENTATION_EVENT_ID, response: 'accepted', offerKey: 'pro',
+  })), /unsupported field: offerKey/);
 });
 
 test('raw-body parsing enforces UTF-8 JSON and the 32 KiB boundary', () => {

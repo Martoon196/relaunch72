@@ -3,6 +3,15 @@ import type { PlatformModuleId } from '../platform/modules.js';
 export type PortalProductProfileId = 'relaunch72' | 'property_predator_growth';
 
 export interface PortalThemeTokens {
+  canvas: string;
+  panel: string;
+  panelSubtle: string;
+  panelStrong: string;
+  ink: string;
+  muted: string;
+  faint: string;
+  line: string;
+  lineStrong: string;
   accent: string;
   accentDeep: string;
   accentSoft: string;
@@ -123,6 +132,8 @@ export const RELAUNCH72_PRODUCT_PROFILE = createProfile({
     storyBody: 'Bring customer context, content and conversion work into one secure operating workspace.',
   },
   theme: {
+    canvas: '#f4f6f8', panel: '#ffffff', panelSubtle: '#f8f9fb', panelStrong: '#edf1f5',
+    ink: '#152033', muted: '#657187', faint: '#59677d', line: '#dfe4eb', lineStrong: '#cbd3df',
     accent: '#ed9c24', accentDeep: '#a45f08', accentSoft: '#fff3de',
     nav: '#101827', navRaised: '#182236', navLine: '#2a374b', navText: '#e8edf4', navMuted: '#8f9db0',
   },
@@ -145,8 +156,8 @@ export const PROPERTY_PREDATOR_GROWTH_PROFILE = createProfile({
   suiteLabel: 'Growth HQ',
   home: {
     eyebrow: 'PropertyPredator · conversion command',
-    title: 'Know who needs attention. Move the sale.',
-    summary: 'A shared operating desk for PropertyPredator and its partners: real leads, real next actions and an auditable path to paid conversion.',
+    title: 'See what every lead is hiding.',
+    summary: 'Every signal. One evidence trail. The next move from first touch to paid conversion.',
   },
   auth: {
     lead: 'Sign in to the private PropertyPredator partner workspace.',
@@ -155,8 +166,10 @@ export const PROPERTY_PREDATOR_GROWTH_PROFILE = createProfile({
     storyBody: 'Property intelligence creates the opportunity. Growth HQ starts with the real leads and next moves that will anchor the route to a sale.',
   },
   theme: {
-    accent: '#00cdb8', accentDeep: '#057f75', accentSoft: '#e2faf6',
-    nav: '#071113', navRaised: '#102124', navLine: '#22383b', navText: '#e8f5f3', navMuted: '#8da9a5',
+    canvas: '#050608', panel: '#111318', panelSubtle: '#0b0d11', panelStrong: '#161a21',
+    ink: '#eef1f7', muted: '#9aa6ba', faint: '#6e7a90', line: '#1e2430', lineStrong: '#303949',
+    accent: '#00e5cc', accentDeep: '#00e5cc', accentSoft: '#0a2c2c',
+    nav: '#050608', navRaised: '#111318', navLine: '#1e2430', navText: '#eef1f7', navMuted: '#9aa6ba',
   },
   visibleNavigation: ['overview', 'crm'],
   moduleLabels: { overview: 'Today', crm: 'Leads' },

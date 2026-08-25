@@ -8,7 +8,7 @@ import type { DashboardData } from './data.js';
 import type { BillingView } from './billing.js';
 import { PIPELINE_STAGES, type PipelineStage } from '../crm/types.js';
 import { CORE_PLATFORM_MODULES } from '../platform/modules.js';
-import { appShell, escapeHtml as esc, icon, pageHead, plannedPortalModules, portalModuleIcon } from './ui.js';
+import { appShell, escapeHtml as esc, icon, pageHead, plannedPortalModules, portalModuleIcon, productBrandMark, productBrandName } from './ui.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
 
 function loginModuleBadges(productProfile: PortalProductProfile): string {
@@ -80,7 +80,7 @@ export function loginPage(
     <main class="auth-shell">
       <section class="auth-panel" aria-labelledby="login-title">
         <div class="auth-card">
-          <a class="auth-brand" href="/portal/login" aria-label="${productName} sign in"><span class="brand-mark">${esc(productProfile.compactMark)}</span><strong>${productName}</strong></a>
+          <a class="auth-brand" href="/portal/login" aria-label="${productName} sign in"><span class="brand-mark">${productBrandMark(productProfile)}</span><strong class="brand-name">${productBrandName(productProfile)}</strong></a>
           <h1 id="login-title">Welcome back.</h1>
           <p class="auth-lead">${esc(productProfile.auth.lead)}</p>
           ${error ? `<div class="auth-error" role="alert">${icon('lock')}<span>${esc(error)}</span></div>` : ''}

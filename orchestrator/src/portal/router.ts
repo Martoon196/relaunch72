@@ -32,6 +32,7 @@ import type { InMemoryLoginThrottle } from './session.js';
 import { accountSetupPage, accountSetupUnavailablePage, loginPage, dashboardPage, billingPage } from './views.js';
 import { appShell, escapeHtml } from './ui.js';
 import { renderGrowthHomeBody } from './growth-home.js';
+import { renderLead360Body } from './lead-360-view.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
 import {
   CRM_PORTAL_ROUTES,
@@ -115,7 +116,7 @@ function sendHtml(res: ServerResponse, code: number, body: string, cookie?: stri
     'cache-control': 'no-store',
     'referrer-policy': 'no-referrer',
     'x-content-type-options': 'nosniff',
-    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
     'permissions-policy': 'camera=(), microphone=(), geolocation=()',
   };
   if (cookie) headers['set-cookie'] = cookie;
@@ -226,14 +227,14 @@ function readForm(req: IncomingMessage): Promise<Record<string, string>> {
 }
 
 function crmPage(
-  snapshot: CrmWorkspaceSnapshot,
+  shell: Pick<CrmWorkspaceSnapshot, 'workspace'>,
   body: string,
   deps: PortalDeps,
   csrfToken: string,
 ): string {
   return appShell({
-    title: `${deps.productProfile?.productName ?? 'Relaunch72'} CRM — ${snapshot.workspace.name}`,
-    tenantName: snapshot.workspace.name,
+    title: `${deps.productProfile?.productName ?? 'Relaunch72'} CRM — ${shell.workspace.name}`,
+    tenantName: shell.workspace.name,
     active: 'crm',
     productProfile: deps.productProfile,
     capabilities: new Set([
@@ -537,6 +538,12 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         active: 'overview',
       }));
       const profile = deps.productProfile ?? RELAUNCH72_PRODUCT_PROFILE;
+      const growth = deps.crm.growth ? await deps.crm.growth(crmIdentity(sessionToken, deps)) : undefined;
+      if (deps.crm.growth && !growth) return sendHtml(res, 403, portalStatusPage(deps, sessionToken, {
+        title: 'Workspace not available',
+        message: 'This session no longer has access to the selected workspace.',
+        active: 'overview',
+      }));
       const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
       return sendHtml(res, 200, appShell({
         title: `${profile.productName} — ${snapshot.workspace.name}`,
@@ -549,7 +556,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         crmAvailable: true,
         mode: 'crm',
         csrfToken,
-        body: renderGrowthHomeBody(snapshot, profile),
+        body: renderGrowthHomeBody(snapshot, profile, growth ?? undefined),
       }));
     } catch {
       return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
@@ -574,6 +581,47 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
       title: 'CRM not connected', message: 'The durable CRM is not enabled for this workspace.', crmAvailable: false,
     }));
+  }
+
+  const lead360Match = /^\/portal\/crm\/contacts\/([^/]+)$/.exec(p);
+  if (deps.crm && lead360Match && method === 'GET') {
+    const contactId = lead360Match[1]!;
+    if (!CRM_OBJECT_ID.test(contactId)) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+      title: 'Lead not found',
+      message: 'That Lead 360 address is not valid for this workspace.',
+      active: 'crm', backHref: CRM_PORTAL_ROUTES.contacts, backLabel: 'Return to contacts',
+    }));
+    if (!deps.crm.lead360) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+      title: 'Lead 360 not connected',
+      message: 'This CRM service does not expose the read-only evidence case file yet.',
+      active: 'crm', backHref: CRM_PORTAL_ROUTES.contacts, backLabel: 'Return to contacts',
+    }));
+    const identity = crmIdentity(sessionToken, deps);
+    try {
+      const shell = deps.crm.workspaceShell
+        ? await deps.crm.workspaceShell(identity)
+        : await deps.crm.snapshot(identity);
+      if (!shell) return sendHtml(res, 403, portalStatusPage(deps, sessionToken, {
+        title: 'CRM workspace not available',
+        message: 'This session no longer has access to the durable CRM workspace.',
+        active: 'crm', backHref: CRM_PORTAL_ROUTES.contacts, backLabel: 'Return to contacts',
+      }));
+      const caseFile = await deps.crm.lead360(identity, contactId);
+      if (!caseFile) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Lead not found',
+        message: 'No RLS-visible contact exists at that address in this workspace.',
+        active: 'crm', backHref: CRM_PORTAL_ROUTES.contacts, backLabel: 'Return to contacts',
+      }));
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      const body = `<nav aria-label="Lead 360 breadcrumb" style="margin-bottom:14px"><a class="button secondary compact" href="${CRM_PORTAL_ROUTES.contacts}">← All contacts</a></nav>${renderLead360Body(caseFile)}`;
+      return sendHtml(res, 200, crmPage(shell, body, deps, csrfToken));
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Lead 360 temporarily unavailable',
+        message: 'No data was changed. Return to contacts and try again shortly.',
+        active: 'crm', backHref: CRM_PORTAL_ROUTES.contacts, backLabel: 'Return to contacts',
+      }));
+    }
   }
 
   if (deps.crm && method === 'GET' && [CRM_PORTAL_ROUTES.contacts, CRM_PORTAL_ROUTES.pipeline, CRM_PORTAL_ROUTES.tasks].includes(p as never)) {

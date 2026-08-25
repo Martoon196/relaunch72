@@ -106,11 +106,41 @@ export const PORTAL_STYLE = `
 
 function profileTheme(profile: PortalProductProfile): string {
   const theme = profile.theme;
-  return `:root{--accent:${theme.accent};--accent-deep:${theme.accentDeep};--accent-soft:${theme.accentSoft};--nav:${theme.nav};--nav-raised:${theme.navRaised};--nav-line:${theme.navLine};--nav-text:${theme.navText};--nav-muted:${theme.navMuted}}`;
+  const predator = profile.id === 'property_predator_growth'
+    ? `:root{color-scheme:dark;--sans:Syne,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--mono:"IBM Plex Mono","SFMono-Regular",Consolas,monospace;--display:"Cormorant Garamond",Georgia,serif;--success:#22c55e;--success-soft:#10291d;--danger:#ef4444;--danger-soft:#321719;--info:#72a7ff;--info-soft:#121f34;--shadow-sm:none;--shadow-lg:none;--radius:14px;--radius-sm:10px}
+      .topbar{background:rgba(5,6,8,.91);border-bottom-color:var(--line)}.sidebar{border-right-color:var(--line)}
+      .brand-name{font-family:var(--display);font-size:1.06rem;font-weight:600;letter-spacing:-.01em}.brand-name .brand-accent{color:var(--accent)}.brand-name small{font-family:var(--mono);font-size:.54rem;letter-spacing:.14em;margin-top:4px}
+      .brand-mark{background:var(--nav);box-shadow:none;border-radius:0;color:var(--accent)}.brand-mark svg{width:31px;height:31px}
+      .workspace-avatar{background:var(--panel-strong);color:var(--ink)}.workspace-popover{background:var(--panel);color:var(--ink)}
+      .nav-item[aria-current="page"]{color:var(--ink);background:rgba(0,229,204,.07);box-shadow:inset 2px 0 var(--accent)}.nav-item[aria-current="page"] .icon{color:var(--accent)}
+      .button{color:#03110f;box-shadow:none}.button:hover{background:#00ffde}.button.secondary{color:var(--ink)}
+      .status-badge{border-color:#185047}.panel,.metric,.growth-metric,.crm-panel{box-shadow:none}
+      .field input,.crm-field input,.crm-field select,.crm-move-field select{background:var(--panel-strong);color:var(--ink);border-color:var(--line-strong)}
+      .auth-story h2,.growth-hero h1,.pp-display{font-family:var(--display);font-weight:600;letter-spacing:-.025em}
+      .mobile-nav{background:rgba(5,6,8,.96)!important}`
+    : ':root{--display:Georgia,serif}';
+  return `:root{--canvas:${theme.canvas};--panel:${theme.panel};--panel-subtle:${theme.panelSubtle};--panel-strong:${theme.panelStrong};--ink:${theme.ink};--muted:${theme.muted};--faint:${theme.faint};--line:${theme.line};--line-strong:${theme.lineStrong};--accent:${theme.accent};--accent-deep:${theme.accentDeep};--accent-soft:${theme.accentSoft};--nav:${theme.nav};--nav-raised:${theme.navRaised};--nav-line:${theme.navLine};--nav-text:${theme.navText};--nav-muted:${theme.navMuted}}${predator}`;
+}
+
+function predatorMark(): string {
+  return '<svg viewBox="0 0 512 512" aria-hidden="true" focusable="false"><path d="M256 96 388 176v160L256 416 124 336V176Z" fill="none" stroke="currentColor" stroke-width="30" stroke-linejoin="round"/><circle cx="256" cy="256" r="52" fill="currentColor"/></svg>';
+}
+
+export function productBrandMark(profile: PortalProductProfile): string {
+  return profile.id === 'property_predator_growth' ? predatorMark() : escapeHtml(profile.compactMark);
+}
+
+export function productBrandName(profile: PortalProductProfile): string {
+  return profile.id === 'property_predator_growth'
+    ? '<span>Property</span><span class="brand-accent">Predator</span>'
+    : escapeHtml(profile.productName);
 }
 
 export function pageHead(title: string, productProfile: PortalProductProfile = RELAUNCH72_PRODUCT_PROFILE): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="${productProfile.theme.nav}"><meta name="referrer" content="no-referrer"><title>${escapeHtml(title)}</title><style>${PORTAL_STYLE}${profileTheme(productProfile)}</style></head>`;
+  const brandFonts = productProfile.id === 'property_predator_growth'
+    ? '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Syne:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">'
+    : '';
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="${productProfile.theme.nav}"><meta name="referrer" content="no-referrer"><title>${escapeHtml(title)}</title>${brandFonts}<style>${PORTAL_STYLE}${profileTheme(productProfile)}</style></head>`;
 }
 
 export interface AppShellOptions {
@@ -177,12 +207,13 @@ export function appShell(opts: AppShellOptions): string {
     ? `<input type="hidden" name="_csrf" value="${escapeHtml(opts.csrfToken)}">`
     : '';
   const productName = escapeHtml(profile.productName);
-  const compactMark = escapeHtml(profile.compactMark);
+  const compactMark = productBrandMark(profile);
+  const brandName = productBrandName(profile);
   const suiteLabel = escapeHtml(profile.suiteLabel);
   return `${pageHead(opts.title, profile)}<body><a class="skip-link" href="#main-content">Skip to main content</a>
   <div class="app-shell">
     <aside class="sidebar" aria-label="Workspace navigation">
-      <a class="brand-lockup" href="/portal" aria-label="${productName} overview"><span class="brand-mark">${compactMark}</span><span class="brand-name">${productName}<small>${suiteLabel}</small></span></a>
+      <a class="brand-lockup" href="/portal" aria-label="${productName} overview"><span class="brand-mark">${compactMark}</span><span class="brand-name">${brandName}<small>${suiteLabel}</small></span></a>
       <details class="workspace-menu">
         <summary aria-label="Workspace menu: ${tenant}"><span class="workspace-avatar">${workspaceInitial(opts.tenantName)}</span><span class="workspace-copy"><strong>${tenant}</strong><small>Current workspace</small></span>${icon('chevron', 'chev')}</summary>
         <div class="workspace-popover"><div class="workspace-current"><span class="workspace-avatar">${workspaceInitial(opts.tenantName)}</span><span>${tenant}</span></div><p>One workspace is connected. Multi-workspace switching is planned.</p></div>
@@ -195,7 +226,7 @@ export function appShell(opts: AppShellOptions): string {
     </aside>
     <div class="workspace">
       <header class="topbar">
-        <a class="mobile-brand" href="/portal"><span class="brand-mark">${compactMark}</span><strong>${productName}</strong></a>
+        <a class="mobile-brand" href="/portal"><span class="brand-mark">${compactMark}</span><strong class="brand-name">${brandName}</strong></a>
         <details class="quick-menu">
           <summary aria-label="Open quick navigation">${icon('search')}<span>Quick navigation</span></summary>
           <nav class="command-popover" aria-label="Quick navigation">
