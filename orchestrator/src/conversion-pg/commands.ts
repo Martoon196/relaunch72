@@ -179,7 +179,7 @@ function digestMatches(stored: Uint8Array, expectedHex: string): boolean {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-function scoreModelDocument(blueprint: ConversionJourneyDefinition): Readonly<Record<string, unknown>> {
+export function scoreModelDocument(blueprint: ConversionJourneyDefinition): Readonly<Record<string, unknown>> {
   return Object.freeze({
     schemaVersion: blueprint.schemaVersion,
     slug: blueprint.scoreModel.slug,
@@ -191,7 +191,7 @@ function scoreModelDocument(blueprint: ConversionJourneyDefinition): Readonly<Re
   });
 }
 
-function journeySettingsDocument(blueprint: ConversionJourneyDefinition): Readonly<Record<string, unknown>> {
+export function journeySettingsDocument(blueprint: ConversionJourneyDefinition): Readonly<Record<string, unknown>> {
   return Object.freeze({
     schemaVersion: blueprint.schemaVersion,
     mappingMode: 'direct',
@@ -275,10 +275,38 @@ export class ConversionCommandService {
     context: DatabaseRequestContext,
     blueprint: ConversionJourneyDefinition,
   ): Promise<PublishConversionBlueprintResult> {
+    const results = await this.publishBlueprints(context, [blueprint]);
+    return results[0]!;
+  }
+
+  /** Publishes a reviewed set in one transaction: either every route lands or none do. */
+  async publishBlueprints(
+    context: DatabaseRequestContext,
+    blueprints: readonly ConversionJourneyDefinition[],
+  ): Promise<readonly PublishConversionBlueprintResult[]> {
     assertAuthenticatedUserContext(context);
-    const definition = verifyDefinedBlueprint(blueprint);
+    if (!Array.isArray(blueprints) || blueprints.length < 1 || blueprints.length > 20) {
+      throw new InvalidPublishedConversionBlueprintError('blueprints must contain between 1 and 20 definitions');
+    }
+    const definitions = blueprints.map(verifyDefinedBlueprint);
+    if (new Set(definitions.map((definition) => definition.slug)).size !== definitions.length) {
+      throw new InvalidPublishedConversionBlueprintError('blueprints must not repeat a journey slug');
+    }
 
     return this.dependencies.transactionRunner.run(context, async (transaction) => {
+      const results: PublishConversionBlueprintResult[] = [];
+      for (const definition of definitions) {
+        results.push(await this.publishDefinedBlueprint(context, definition, transaction));
+      }
+      return Object.freeze(results);
+    });
+  }
+
+  private async publishDefinedBlueprint(
+    context: DatabaseRequestContext & { readonly userId: string },
+    definition: ConversionJourneyDefinition,
+    transaction: ConversionSqlExecutor,
+  ): Promise<PublishConversionBlueprintResult> {
       const repository = this.repositoryFactory(transaction);
       const userId = context.userId;
       let insertedVersion = false;
@@ -453,6 +481,5 @@ export class ConversionCommandService {
         milestoneIds,
         triggerIds,
       });
-    });
   }
 }

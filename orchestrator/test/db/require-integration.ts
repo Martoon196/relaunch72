@@ -22,3 +22,4 @@ await import('./rls.integration.test.js');
 await import('./conversion-rls.integration.test.js');
 await import('./external-event-shadow.integration.test.js');
 await import('./growth-evidence-rls.integration.test.js');
+await import('./legacy-lead-import.integration.test.js');

@@ -4,10 +4,15 @@ import { loadDatabaseConfig, type DatabaseConfig } from '../db/config.js';
 import { assertRuntimeSchemaCurrent } from '../db/runtime-readiness.js';
 import { PgPortalAuthService } from './auth-pg-service.js';
 import { createPgPortalCrmService, type PgPortalCrmService } from './crm-pg-service.js';
+import {
+  createPgPortalJourneyManagerService,
+  type PgPortalJourneyManagerService,
+} from './journey-manager-service.js';
 
 export interface PgPortalPlatform {
   auth: PgPortalAuthService;
   crm: PgPortalCrmService;
+  journeys: PgPortalJourneyManagerService;
   close(): Promise<void>;
 }
 
@@ -76,6 +81,7 @@ export async function buildPgPortalPlatform(
     return {
       auth: new PgPortalAuthService({ readPool: webPool, commandPool: identityPool }),
       crm: createPgPortalCrmService({ webPool, commandPool }),
+      journeys: createPgPortalJourneyManagerService({ webPool, commandPool }),
       async close(): Promise<void> {
         if (closed) return;
         closed = true;

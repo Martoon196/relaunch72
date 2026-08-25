@@ -62,6 +62,18 @@ export function createCrmCommandDatabasePool(
   return createDatabasePool(loadDatabaseConfig('crmCommand', env), hooks);
 }
 
+/**
+ * Create the isolated operator pool for rehearsing, staging, and committing
+ * legacy lead imports. It must never be shared with the ordinary CRM command
+ * or portal read paths.
+ */
+export function createImportCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('importCommand', env), hooks);
+}
+
 /** Receipt-only pool for authenticated external-event ingress. */
 export function createExternalEventCommandDatabasePool(
   env: NodeJS.ProcessEnv = process.env,

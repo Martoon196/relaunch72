@@ -8,7 +8,7 @@ import { CORE_PLATFORM_MODULES, platformModules, type PlatformModuleId, type Pla
 import type { PlatformCapability } from '../platform/capabilities.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
 
-export type PortalSection = 'overview' | 'crm' | 'billing';
+export type PortalSection = 'overview' | 'crm' | 'journeys' | 'billing';
 
 export function escapeHtml(value: unknown): string {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -188,6 +188,7 @@ export function appShell(opts: AppShellOptions): string {
   const isCurrent = (id: PlatformModuleId): boolean =>
     (opts.active === 'overview' && id === 'overview')
     || (opts.active === 'crm' && id === 'crm')
+    || (opts.active === 'journeys' && id === 'journeys')
     || (opts.active === 'billing' && id === 'settings');
   const workingNav = workingModules.map((module) => {
     const current = isCurrent(module.id);

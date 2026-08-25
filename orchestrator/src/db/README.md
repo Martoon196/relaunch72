@@ -13,8 +13,8 @@ messages, publishing, or any external provider effect.
   roles (`r72_web`, `r72_identity_command`, `r72_provisioning_command`,
   `r72_setup_delivery_command`, `r72_setup_reissue_command`,
   `r72_crm_command`, `r72_external_event_command`, `r72_worker`,
-  `r72_webhook`, `r72_public`, or `r72_readonly`). Every pool verifies
-  `current_user` before checkout.
+  `r72_webhook`, `r72_import_command`, `r72_public`, or `r72_readonly`). Every
+  pool verifies `current_user` before checkout.
 - Portal reads use `DATABASE_WEB_URL` / `r72_web`. That role can read CRM rows
   allowed by forced RLS but has no CRM table mutation grant or write policy.
 - Portal password login, one-use account setup and opaque-session
@@ -64,11 +64,24 @@ messages, publishing, or any external provider effect.
   identity allowed to mutate CRM state, append history/activity/outbox facts,
   or claim command receipts. Permissions and active membership are still
   checked by forced RLS for every statement.
+- Legacy contact migration uses the separate
+  `createImportCommandDatabasePool` factory,
+  `DATABASE_IMPORT_COMMAND_URL`, and `r72_import_command`. This manager-only,
+  forced-RLS role can rehearse, stage and append imported contacts and their
+  provenance through the versioned import service. It cannot update an existing
+  live contact. Exact source payloads and raw attribution remain private;
+  ordinary portal reads see only sanitised provenance and typed attribution.
+  Database guards own the actor/request/timestamps and legal lifecycle
+  transitions rather than trusting caller-supplied audit values.
 - Conversion definitions, enrollments, milestone facts, explainable score
   snapshots and endpoint-bound consent/suppression evidence use the same
   forced-RLS workspace boundary. Published definition versions are frozen,
   activation is monotonic, Sale requires a same-enrollment collected-payment
   fact, and trigger sources are constrained by a positive database allowlist.
+  The reviewed Property Predator route pair installs atomically. Readiness and
+  replay deeply compare stored score JSON and journey settings as well as
+  hashes/topology, and the locked command transaction rechecks conflicts before
+  writing.
 - Authenticated Property Predator source ingress uses
   `DATABASE_EXTERNAL_EVENT_COMMAND_URL` / `r72_external_event_command`. That
   login has no table grants and can execute only the request-context helpers
@@ -86,7 +99,7 @@ messages, publishing, or any external provider effect.
   to alter superuser-only attributes. Migrations never contain passwords;
   provision runtime role passwords or managed identities in the hosting
   secret/control plane.
-- The ordinary suite always skips the five live PostgreSQL tests, even when a
+- The ordinary suite always skips the eight live PostgreSQL tests, even when a
   developer keeps a test URL in `.env`. `npm run test:db:integration` is the
   only command that opens their explicit opt-in gate, and it is intentionally
   stricter: it
@@ -136,13 +149,18 @@ and its independent idempotency receipts. Migration `0018` adds the exact v2
 self-serve and Agency LAPS Journey runtime: automatic enrolment, monotonic
 milestones, model-derived score snapshots, endpoint-bound consent, routed
 commerce facts, transactionally matched outbox facts and separate replay
-receipts behind a NOLOGIN/NOINHERIT definer.
+receipts behind a NOLOGIN/NOINHERIT definer. Migration `0019` adds the isolated
+legacy-import command role, immutable/hash-pinned staging, replay receipts,
+verified-identity dedupe, quarantine, public sanitised contact provenance,
+typed affiliate attribution with private raw payloads, canonical unresolved
+attribution receipts across batches, and database-owned audit/lifecycle guards.
 
 Before the first successful managed-PostgreSQL application, the pre-launch role
 bootstraps in `0001`, `0003`, `0004`, `0006` and `0008` were amended to support
-Neon's non-superuser project owner; `0002` remained unchanged. The successfully
-proven `0001`–`0011` ledger is now the checksum baseline. Any later database
-change must be a new forward migration.
+Neon's non-superuser project owner; `0002` remained unchanged. The migration
+ledger through `0019` has now been replayed and checksum-verified from zero on
+the disposable Neon database. Any later database change must be a new forward
+migration.
 
 The always-on PostgreSQL portal and sensitive onboarding process are composed
 separately:
@@ -173,14 +191,16 @@ email link—and erases encrypted fields when a delivery becomes delivered,
 superseded or dead-lettered. Retired decrypt keys must remain configured until
 startup readiness reports that no claimable row needs them.
 
-`npm run test:db:integration` passed **5/5** against a freshly reset disposable
-direct Neon database on 2026-08-25. The proof covers RLS/revocation, atomic
-onboarding/setup, exact paid-Checkout reconciliation, conversion publication,
-endpoint-bound consent, payment-backed Sale, source allowlisting, and the
-receipt-only external-event role/replay boundary across migrations
-`0001`–`0015`. The ordinary non-destructive suite passed **678/683 with 0
-failures**; its five skips are exactly those gated live tests. TypeScript
-type-checking also passed.
+`npm run test:db:integration` passed **8/8** against a freshly reset disposable
+direct Neon database on 2026-08-25 after replaying migrations `0001`–`0019`.
+The proof covers RLS/revocation, atomic onboarding/setup, exact paid-Checkout
+reconciliation, conversion publication and Journey projection, endpoint-bound
+consent, payment-backed Sale, source allowlisting, receipt-only external-event
+replay, Growth read models, and the isolated legacy lead import boundary. The
+ordinary non-destructive suite discovered **801 tests: 793 passed, 0 failed and
+8 skipped**; those skips are exactly the gated live tests. The focused strike
+suite passed **174/174**. TypeScript checking passed after the final Journey
+Manager CSS adjustment.
 Automatic PostgreSQL onboarding nevertheless remains locked. The detached
 Checkout/dispatcher modules are not wired into `server/app.ts`, no real email
 provider adapter exists, and no worker starts automatically. Keep this path out

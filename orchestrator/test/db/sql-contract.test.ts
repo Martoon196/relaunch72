@@ -22,6 +22,7 @@ const migration15Url = new URL('../../src/db/migrations/0015_external_event_shad
 const migration16Url = new URL('../../src/db/migrations/0016_property_predator_growth_evidence.sql', import.meta.url);
 const migration17Url = new URL('../../src/db/migrations/0017_property_predator_growth_projector.sql', import.meta.url);
 const migration18Url = new URL('../../src/db/migrations/0018_property_predator_journey_runtime.sql', import.meta.url);
+const migration19Url = new URL('../../src/db/migrations/0019_legacy_lead_import_foundation.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -460,9 +461,9 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums native identity through the journey runtime', async () => {
+test('bundled migration discovery orders and checksums native identity through legacy lead import', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-14);
+  const tail = migrations.slice(-15);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0005_canonical_portal_identity.sql', version: 5 },
     { filename: '0006_customer_provisioning.sql', version: 6 },
@@ -478,6 +479,7 @@ test('bundled migration discovery orders and checksums native identity through t
     { filename: '0016_property_predator_growth_evidence.sql', version: 16 },
     { filename: '0017_property_predator_growth_projector.sql', version: 17 },
     { filename: '0018_property_predator_journey_runtime.sql', version: 18 },
+    { filename: '0019_legacy_lead_import_foundation.sql', version: 19 },
   ]);
   const sources = [
     (await readFile(migration5Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -494,6 +496,7 @@ test('bundled migration discovery orders and checksums native identity through t
     (await readFile(migration16Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration17Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration18Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration19Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));

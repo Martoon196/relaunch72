@@ -39,7 +39,7 @@ test('product profiles fail closed and cannot carry authorization state', () => 
   assert.equal('capabilities' in PROPERTY_PREDATOR_GROWTH_PROFILE, false);
   assert.equal('permissions' in PROPERTY_PREDATOR_GROWTH_PROFILE, false);
   assert.equal('providerConnections' in PROPERTY_PREDATOR_GROWTH_PROFILE, false);
-  assert.deepEqual(PROPERTY_PREDATOR_GROWTH_PROFILE.visibleNavigation, ['overview', 'crm']);
+  assert.deepEqual(PROPERTY_PREDATOR_GROWTH_PROFILE.visibleNavigation, ['overview', 'crm', 'journeys']);
 });
 
 test('Property Predator blueprint labels keep product-led and literal LAPS journeys distinct', () => {
@@ -62,6 +62,7 @@ test('Property Predator sign-in advertises only its visible workspace modules', 
   const genericHtml = loginPage(undefined, '', 'csrf', RELAUNCH72_PRODUCT_PROFILE);
   assert.match(html, /<span>Today<\/span>/);
   assert.match(html, /<span>Leads<\/span>/);
+  assert.match(html, /<span>Journeys<\/span>/);
   assert.match(html, /fonts\.googleapis\.com\/css2\?family=Cormorant\+Garamond/);
   assert.match(html, /family=Syne/);
   assert.match(html, /family=IBM\+Plex\+Mono/);

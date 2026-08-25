@@ -18,6 +18,7 @@ import type { Intake } from '../types.js';
 import type { LegacyPortalDeps, PostgresPortalDeps } from './router.js';
 import type { PortalCrmService } from './crm-service.js';
 import type { PortalAuthService } from './auth-service.js';
+import type { PortalJourneyManagerService } from './journey-manager-service.js';
 import type { SubscriptionStore } from '../server/subscriptions.js';
 import { canonicalIntake } from '../intake/canonical.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
@@ -126,6 +127,7 @@ export interface PostgresPortalConfig {
   secure: boolean;
   auth: PortalAuthService;
   crm: PortalCrmService;
+  journeys?: PortalJourneyManagerService;
   productProfile?: PortalProductProfile;
   /** Explicit authenticated-proxy client address policy; omitted by default. */
   trustedClientAddress?: PostgresPortalDeps['trustedClientAddress'];
@@ -145,6 +147,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     loginThrottle: new InMemoryLoginThrottle(),
     auth: cfg.auth,
     crm: cfg.crm,
+    journeys: cfg.journeys,
     productProfile: cfg.productProfile ?? RELAUNCH72_PRODUCT_PROFILE,
     trustedClientAddress: cfg.trustedClientAddress,
     now: cfg.now,

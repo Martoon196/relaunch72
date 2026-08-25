@@ -330,6 +330,7 @@ async function main(): Promise<void> {
         secure: securePortalCookie,
         auth: postgresPortal.auth,
         crm: postgresPortal.crm,
+        journeys: postgresPortal.journeys,
         productProfile: portalProductProfile,
       });
       console.log('Canonical PostgreSQL client portal mounted at /portal; JSON portal stores are not composed.');

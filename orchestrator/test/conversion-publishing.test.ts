@@ -9,6 +9,7 @@ import {
   ConversionPgRepository,
   InvalidConversionCommandContextError,
   InvalidPublishedConversionBlueprintError,
+  PROPERTY_PREDATOR_AGENCY_LAPS_JOURNEY,
   PROPERTY_PREDATOR_SELF_SERVE_JOURNEY,
   type ConversionBlueprintRepository,
   type ConversionDefinitionVersionRecord,
@@ -180,6 +181,26 @@ test('publishBlueprint uses one transaction and maps immutable child IDs before 
   }
   assert.equal(milestoneCalls.length, Object.keys(result.milestoneIds).length);
   assert.equal(calls.some((call) => /outbox|provider/i.test(call.name)), false);
+});
+
+test('publishBlueprints keeps a multi-route foundation inside one transaction', async () => {
+  const runner = new RecordingRunner();
+  const { repository } = recordingRepository();
+  const service = new ConversionCommandService({
+    transactionRunner: runner,
+    repositoryFactory: () => repository,
+    nextId: ids(),
+  });
+
+  const results = await service.publishBlueprints(context(), [
+    PROPERTY_PREDATOR_SELF_SERVE_JOURNEY,
+    PROPERTY_PREDATOR_AGENCY_LAPS_JOURNEY,
+  ]);
+
+  assert.equal(runner.runs, 1);
+  assert.equal(results.length, 2);
+  assert.ok(results.every((result) => result.disposition === 'applied'));
+  assert.ok(Object.isFrozen(results));
 });
 
 test('same score-model version with a different digest fails before journey writes or activation', async () => {

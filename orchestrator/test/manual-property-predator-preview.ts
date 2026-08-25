@@ -9,6 +9,10 @@ import { appShell } from '../src/portal/ui.js';
 import { renderGrowthHomeBody } from '../src/portal/growth-home.js';
 import { renderLead360Body, type Lead360View } from '../src/portal/lead-360-view.js';
 import {
+  renderJourneyManagerBody,
+  type JourneyManagerView,
+} from '../src/portal/journey-manager-view.js';
+import {
   renderCrmContactsBody,
   renderCrmPipelineBody,
   renderCrmTasksBody,
@@ -211,11 +215,70 @@ const lead360: Lead360View = {
   asOf: SNAPSHOT_AT,
 };
 
-function shell(body: string, active: 'overview' | 'crm', title: string): string {
+const journeyManager: JourneyManagerView = {
+  workspaceName: snapshot.workspace.name,
+  asOf: SNAPSHOT_AT,
+  state: 'ready',
+  readinessTitle: 'Routes and scoring are active',
+  readinessSummary: 'Both immutable v2 routes and the shared score model match the reviewed Property Predator foundation.',
+  routes: [
+    {
+      slug: 'property-predator-self-serve', label: 'Property Predator self-serve conversion',
+      description: 'Product-led conversion from an identified account through meaningful activation and offer exposure to an authoritative paid sale.',
+      version: 2, state: 'active', enrollmentLabel: 'Account-led enrolment',
+      milestones: [
+        { key: 'lead', label: 'Lead', semantic: 'lead', isCompletion: false },
+        { key: 'activated', label: 'Activated', semantic: 'activation', isCompletion: false },
+        { key: 'priced', label: 'Priced', semantic: 'offer', isCompletion: false },
+        { key: 'sale', label: 'Sale', semantic: 'sale', isCompletion: true },
+      ],
+      triggers: [
+        { kind: 'event', sourceKey: 'identity.account.created', milestoneKey: 'lead', evidenceLabel: 'Account created' },
+        { kind: 'event', sourceKey: 'product.analysis.completed', milestoneKey: 'activated', evidenceLabel: 'Analysis completed' },
+        { kind: 'event', sourceKey: 'offer.presented', milestoneKey: 'priced', evidenceLabel: 'Offer presented' },
+        { kind: 'commerce', sourceKey: 'payment_collected', milestoneKey: 'sale', evidenceLabel: 'Collected payment' },
+      ],
+    },
+    {
+      slug: 'property-predator-agency-laps', label: 'Property Predator agency LAPS',
+      description: 'Sales-assisted Lead, Appointment, Presentation and Sale journey for agency and organisation opportunities.',
+      version: 2, state: 'active', enrollmentLabel: 'Appointment-led enrolment',
+      milestones: [
+        { key: 'lead', label: 'Lead', semantic: 'lead', isCompletion: false },
+        { key: 'appointment', label: 'Appointment', semantic: 'appointment', isCompletion: false },
+        { key: 'presentation', label: 'Presentation', semantic: 'presentation', isCompletion: false },
+        { key: 'sale', label: 'Sale', semantic: 'sale', isCompletion: true },
+      ],
+      triggers: [
+        { kind: 'event', sourceKey: 'sales.appointment.booked', milestoneKey: 'appointment', evidenceLabel: 'Appointment booked' },
+        { kind: 'event', sourceKey: 'sales.presentation.completed', milestoneKey: 'presentation', evidenceLabel: 'Presentation completed' },
+        { kind: 'commerce', sourceKey: 'payment_collected', milestoneKey: 'sale', evidenceLabel: 'Collected payment' },
+      ],
+    },
+  ],
+  scoring: {
+    label: 'Property Predator lead score', version: 2, state: 'active', ruleCount: 7,
+    components: [
+      { key: 'fit', label: 'Fit', maxPoints: 30, allocatedPoints: 0 },
+      { key: 'engagement', label: 'Engagement', maxPoints: 35, allocatedPoints: 35 },
+      { key: 'intent', label: 'Intent', maxPoints: 35, allocatedPoints: 35 },
+    ],
+    bands: [
+      { key: 'quiet', label: 'Quiet', minScore: 0, maxScore: 21 },
+      { key: 'warm', label: 'Warm', minScore: 22, maxScore: 44 },
+      { key: 'hot', label: 'Hot', minScore: 45, maxScore: 69 },
+      { key: 'burning', label: 'Burning', minScore: 70, maxScore: 100 },
+    ],
+    excludedSignals: ['Consent status', 'CRM stage', 'Task completion', 'Email opens'],
+  },
+  setup: { state: 'ready', canManage: true, postAction: '/portal/journeys/foundation' },
+};
+
+function shell(body: string, active: 'overview' | 'crm' | 'journeys', title: string): string {
   return appShell({
     title, tenantName: snapshot.workspace.name, active, body,
     productProfile: PROPERTY_PREDATOR_GROWTH_PROFILE,
-    capabilities: new Set(['workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read']),
+    capabilities: new Set(['workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read', 'journeys.read']),
     crmAvailable: true, mode: 'crm', csrfToken: 'preview-only-csrf-token-0000000000000000',
   });
 }
@@ -228,6 +291,10 @@ function page(path: string): { status: number; html: string } {
   if (path === `/portal/crm/contacts/${CONTACT_ID}`) return {
     status: 200,
     html: shell(`<nav aria-label="Lead 360 breadcrumb" style="margin-bottom:14px"><a class="button secondary compact" href="/portal/crm/contacts">← All contacts</a></nav>${renderLead360Body(lead360)}`, 'crm', 'Amelia Hart — Lead 360'),
+  };
+  if (path === '/portal/journeys') return {
+    status: 200,
+    html: shell(renderJourneyManagerBody(journeyManager), 'journeys', 'Property Predator — Journeys'),
   };
   if (path === '/portal/crm/contacts') return {
     status: 200,

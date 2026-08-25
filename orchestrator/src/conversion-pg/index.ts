@@ -7,3 +7,4 @@ export * from './repository.js';
 export * from './commands.js';
 export * from './growth-intelligence-read-model.js';
 export * from './lead-360-read-model.js';
+export * from './journey-manager.js';

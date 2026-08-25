@@ -13,20 +13,23 @@ export interface PropertyPredatorBlueprintInstallResult {
 /**
  * Installs or exactly replays the two immutable Property Predator definitions.
  *
- * Each publication keeps the manager-gated command boundary from migration
- * 0014. If the second transaction is interrupted the first remains a valid
- * published definition and an exact rerun safely completes the pair; runtime
- * readiness stays closed until both active versions exist.
+ * The pair is published under one manager-gated transaction. A conflict in
+ * either route rolls the complete foundation back, so a browser request cannot
+ * leave a half-installed runtime.
  */
 export async function installPropertyPredatorConversionBlueprints(
-  service: Pick<ConversionCommandService, 'publishBlueprint'>,
+  service: Pick<ConversionCommandService, 'publishBlueprints'>,
   context: DatabaseRequestContext,
 ): Promise<PropertyPredatorBlueprintInstallResult> {
-  if (!service || typeof service.publishBlueprint !== 'function') {
-    throw new TypeError('service must provide publishBlueprint()');
+  if (!service || typeof service.publishBlueprints !== 'function') {
+    throw new TypeError('service must provide publishBlueprints()');
   }
-  const [selfServeBlueprint, agencyBlueprint] = PROPERTY_PREDATOR_CONVERSION_BLUEPRINTS;
-  const selfServe = await service.publishBlueprint(context, selfServeBlueprint!);
-  const agencyLaps = await service.publishBlueprint(context, agencyBlueprint!);
+  const [selfServe, agencyLaps] = await service.publishBlueprints(
+    context,
+    PROPERTY_PREDATOR_CONVERSION_BLUEPRINTS,
+  );
+  if (!selfServe || !agencyLaps) {
+    throw new TypeError('publishBlueprints() did not return both Property Predator routes');
+  }
   return Object.freeze({ selfServe, agencyLaps });
 }

@@ -33,6 +33,17 @@ import { accountSetupPage, accountSetupUnavailablePage, loginPage, dashboardPage
 import { appShell, escapeHtml } from './ui.js';
 import { renderGrowthHomeBody } from './growth-home.js';
 import { renderLead360Body } from './lead-360-view.js';
+import { renderJourneyManagerBody } from './journey-manager-view.js';
+import {
+  JOURNEY_MANAGER_CONFIRMATION,
+  JOURNEY_MANAGER_INSTALL_ROUTE,
+  JOURNEY_MANAGER_ROUTE,
+  journeyManagerNoticeFromQuery,
+  journeyManagerNoticeToken,
+  presentJourneyManager,
+  type JourneyManagerNoticeCode,
+} from './journey-manager-presenter.js';
+import type { PortalJourneyManagerService } from './journey-manager-service.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
 import {
   CRM_PORTAL_ROUTES,
@@ -102,6 +113,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   kind: 'postgres';
   auth: PortalAuthService;
   crm: PortalCrmService;
+  /** Exact, read-mostly conversion definition manager. Omitted until composed and ready. */
+  journeys?: PortalJourneyManagerService;
 }
 
 export type PortalDeps = LegacyPortalDeps | PostgresPortalDeps;
@@ -239,8 +252,31 @@ function crmPage(
     productProfile: deps.productProfile,
     capabilities: new Set([
       'workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read',
+      ...((deps.kind === 'postgres' && deps.journeys) ? ['journeys.read'] as const : []),
     ]),
     billingAvailable: deps.kind === 'legacy' && !!deps.billing,
+    crmAvailable: true,
+    mode: 'crm',
+    csrfToken,
+    body,
+  });
+}
+
+function journeyManagerPage(
+  shell: Pick<CrmWorkspaceSnapshot, 'workspace'>,
+  body: string,
+  deps: PostgresPortalDeps,
+  csrfToken: string,
+): string {
+  return appShell({
+    title: `${deps.productProfile?.productName ?? 'Relaunch72'} Journeys — ${shell.workspace.name}`,
+    tenantName: shell.workspace.name,
+    active: 'journeys',
+    productProfile: deps.productProfile,
+    capabilities: new Set([
+      'workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read', 'journeys.read',
+    ]),
+    billingAvailable: false,
     crmAvailable: true,
     mode: 'crm',
     csrfToken,
@@ -256,7 +292,7 @@ function portalStatusPage(
     message: string;
     backHref?: string;
     backLabel?: string;
-    active?: 'overview' | 'crm' | 'billing';
+    active?: 'overview' | 'crm' | 'journeys' | 'billing';
     crmAvailable?: boolean;
   },
 ): string {
@@ -274,11 +310,12 @@ function portalStatusPage(
       ...((options.crmAvailable ?? !!deps.crm)
         ? ['crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read'] as const
         : []),
+      ...((deps.kind === 'postgres' && deps.journeys) ? ['journeys.read'] as const : []),
       ...((deps.kind === 'legacy' && !!deps.billing) ? ['billing.read'] as const : []),
     ]),
     billingAvailable: deps.kind === 'legacy' && !!deps.billing,
     crmAvailable: options.crmAvailable ?? !!deps.crm,
-    mode: options.active === 'crm' ? 'crm' : 'sandbox',
+    mode: options.active === 'crm' || options.active === 'journeys' ? 'crm' : 'sandbox',
     csrfToken: portalCsrfToken(deps.sessionSecret, sessionToken),
     body,
   });
@@ -289,6 +326,16 @@ function crmIdentity(sessionToken: string, deps: PortalDeps): PortalCrmRequestId
     sessionToken,
     requestId: deps.requestId ? deps.requestId() : randomUUID(),
   };
+}
+
+function journeyRedirect(
+  res: ServerResponse,
+  deps: PostgresPortalDeps,
+  sessionToken: string,
+  code: JourneyManagerNoticeCode,
+): void {
+  const token = journeyManagerNoticeToken(deps.sessionSecret, sessionToken, code);
+  redirect(res, `${JOURNEY_MANAGER_ROUTE}?notice=${encodeURIComponent(token)}`, undefined, 303);
 }
 
 function crmRedirect(
@@ -552,6 +599,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         productProfile: profile,
         capabilities: new Set([
           'workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read',
+          ...(deps.journeys ? ['journeys.read'] as const : []),
         ]),
         crmAvailable: true,
         mode: 'crm',
@@ -564,6 +612,83 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         message: 'No data was changed. Try again shortly.',
         active: 'overview',
       }));
+    }
+  }
+
+  // ── conversion Journey Manager: read-only topology plus explicit manager setup ──
+  if (deps.kind === 'postgres' && p === JOURNEY_MANAGER_ROUTE && method === 'GET') {
+    if (!deps.journeys) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+      title: 'Journey Manager not connected',
+      message: 'The protected journey definition service is not enabled for this workspace.',
+      active: 'journeys',
+    }));
+    const identity = crmIdentity(sessionToken, deps);
+    try {
+      const [shell, snapshot] = await Promise.all([
+        deps.crm.workspaceShell ? deps.crm.workspaceShell(identity) : deps.crm.snapshot(identity),
+        deps.journeys.snapshot(identity),
+      ]);
+      if (!shell || !snapshot) return sendHtml(res, 403, portalStatusPage(deps, sessionToken, {
+        title: 'Journey workspace not available',
+        message: 'This session no longer has access to the selected workspace.',
+        active: 'journeys',
+      }));
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      const view = presentJourneyManager(
+        snapshot,
+        shell.workspace.name,
+        { csrfToken, commandKey: randomUUID() },
+        journeyManagerNoticeFromQuery(url.searchParams, deps.sessionSecret, sessionToken),
+      );
+      return sendHtml(
+        res,
+        200,
+        journeyManagerPage(shell, renderJourneyManagerBody(view), deps, csrfToken),
+      );
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Journey Manager temporarily unavailable',
+        message: 'No definition, lead or outbound action was changed. Try again shortly.',
+        active: 'journeys',
+      }));
+    }
+  }
+
+  if (deps.kind === 'postgres' && p === JOURNEY_MANAGER_INSTALL_ROUTE && method === 'POST') {
+    if (!deps.journeys) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+      title: 'Journey Manager not connected',
+      message: 'The protected journey definition service is not enabled for this workspace.',
+      active: 'journeys',
+    }));
+    const form = await readForm(req);
+    if (!verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return sendHtml(res, 403, portalStatusPage(deps, sessionToken, {
+        title: 'Refresh needed',
+        message: 'The secure form token was invalid. No journey definition was changed.',
+        active: 'journeys',
+        backHref: JOURNEY_MANAGER_ROUTE,
+        backLabel: 'Return to journeys',
+      }));
+    }
+    if (!CRM_OBJECT_ID.test(form.command_key ?? '') || form.confirmation !== JOURNEY_MANAGER_CONFIRMATION) {
+      return journeyRedirect(res, deps, sessionToken, 'invalid');
+    }
+    try {
+      const outcome = await deps.journeys.installFoundation({
+        sessionToken,
+        requestId: form.command_key!,
+      });
+      if (outcome.ok) {
+        return journeyRedirect(res, deps, sessionToken, outcome.disposition === 'replayed' ? 'replayed' : 'installed');
+      }
+      const code: JourneyManagerNoticeCode = outcome.kind === 'forbidden'
+        ? 'forbidden'
+        : outcome.kind === 'conflict'
+          ? 'conflict'
+          : 'unavailable';
+      return journeyRedirect(res, deps, sessionToken, code);
+    } catch {
+      return journeyRedirect(res, deps, sessionToken, 'unavailable');
     }
   }
 

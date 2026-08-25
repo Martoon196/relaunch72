@@ -24,6 +24,11 @@ import type { DashboardData } from '../src/portal/data.js';
 import type { BillingView } from '../src/portal/billing.js';
 import type { PortalAuthService } from '../src/portal/auth-service.js';
 import type { PortalCrmService } from '../src/portal/crm-service.js';
+import type { PortalJourneyManagerService } from '../src/portal/journey-manager-service.js';
+import type { JourneyManagerReadSnapshot } from '../src/conversion-pg/journey-manager.js';
+import { PROPERTY_PREDATOR_CONVERSION_BLUEPRINTS } from '../src/conversion-pg/property-predator-blueprints.js';
+import { JOURNEY_MANAGER_CONFIRMATION } from '../src/portal/journey-manager-presenter.js';
+import { PROPERTY_PREDATOR_GROWTH_PROFILE } from '../src/portal/product-profile.js';
 
 function billingView(over: Partial<BillingView> = {}): BillingView {
   return {
@@ -72,6 +77,33 @@ const crm: PortalCrmService = {
   completeTask: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
 };
 
+function journeySnapshot(runtimeReady = false): JourneyManagerReadSnapshot {
+  const [selfServe, agency] = PROPERTY_PREDATOR_CONVERSION_BLUEPRINTS;
+  const score = selfServe!.scoreModel;
+  return Object.freeze({
+    snapshotAt: '2026-08-25T12:00:00.000Z', canManage: true,
+    foundationState: runtimeReady ? 'ready' : 'not_installed', runtimeReady,
+    routes: Object.freeze([selfServe!, agency!].map((route) => Object.freeze({
+      slug: route.slug as 'property-predator-self-serve' | 'property-predator-agency-laps',
+      name: route.name, description: route.description, version: route.version,
+      definitionHash: route.definitionHash,
+      publication: runtimeReady ? 'published' as const : 'missing' as const,
+      activeVersion: runtimeReady ? route.version : null,
+      publishedAt: runtimeReady ? '2026-08-25T11:55:00.000Z' : null,
+      runtimeReady, milestones: route.milestones, triggers: route.triggers,
+    }))),
+    scoreModel: Object.freeze({
+      slug: score.slug, name: score.name, version: score.version,
+      definitionHash: score.definitionHash,
+      publication: runtimeReady ? 'published' : 'missing',
+      activeVersion: runtimeReady ? score.version : null,
+      publishedAt: runtimeReady ? '2026-08-25T11:55:00.000Z' : null,
+      maxScore: 100, components: score.components, bands: score.bands, rules: score.rules,
+    }),
+    safety: Object.freeze({ definitionsOnly: true, sendsMessages: false, publishesSocialPosts: false, triggersProviders: false }),
+  });
+}
+
 function postgresDeps(auth: PortalAuthService, over: Partial<PostgresPortalDeps> = {}): PostgresPortalDeps {
   return {
     sessionSecret: SECRET,
@@ -105,7 +137,9 @@ function mkReq(method: string, url: string, opts: RequestOptions = {}) {
   req.socket = { remoteAddress: opts.remoteAddress };
   if (opts.cookie) req.headers.cookie = opts.cookie;
   if (opts.forwardedFor) req.headers['x-forwarded-for'] = opts.forwardedFor;
-  queueMicrotask(() => { if (opts.body) req.emit('data', Buffer.from(opts.body)); req.emit('end'); });
+  // A real IncomingMessage buffers until the handler subscribes. setImmediate
+  // lets async PostgreSQL session resolution finish before this stream emits.
+  setImmediate(() => { if (opts.body) req.emit('data', Buffer.from(opts.body)); req.emit('end'); });
   return req;
 }
 function mkRes() {
@@ -240,6 +274,96 @@ test('database sessions use canonical workspace identity without a legacy bridge
 
   assert.equal(res.statusCode, 200);
   assert.match(res.body, /Frayne Electrical/);
+});
+
+test('authenticated Journey Manager renders the visual topology and setup boundary', async () => {
+  const opaque = Buffer.alloc(32, 17).toString('base64url');
+  const auth: PortalAuthService = {
+    resolve: async (token) => token === opaque ? {
+      sessionToken: token, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID,
+    } : null,
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+  const journeys: PortalJourneyManagerService = {
+    snapshot: async () => journeySnapshot(false),
+    installFoundation: async () => assert.fail('GET must never install definitions'),
+  };
+
+  const res = await call('GET', '/portal/journeys', postgresDeps(auth, {
+    journeys,
+    productProfile: PROPERTY_PREDATOR_GROWTH_PROFILE,
+  }), {
+    cookie: `${PORTAL_COOKIE}=${opaque}`,
+  });
+
+  assert.equal(res.statusCode, 200);
+  assert.match(res.body, /Visual journey map/);
+  assert.match(res.body, /property-predator-self-serve/);
+  assert.match(res.body, /property-predator-agency-laps/);
+  assert.match(res.body, /name="_csrf"/);
+  assert.match(res.body, /name="command_key" value="[0-9a-f-]{36}"/);
+  assert.match(res.body, new RegExp(JOURNEY_MANAGER_CONFIRMATION));
+  assert.match(res.body, /href="\/portal\/journeys" aria-current="page"/);
+});
+
+test('Journey Manager install requires CSRF and typed confirmation, then returns a signed status', async () => {
+  const opaque = Buffer.alloc(32, 18).toString('base64url');
+  const auth: PortalAuthService = {
+    resolve: async (token) => token === opaque ? {
+      sessionToken: token, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID,
+    } : null,
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+  let installs = 0;
+  const journeys: PortalJourneyManagerService = {
+    snapshot: async () => journeySnapshot(false),
+    installFoundation: async (identity) => {
+      installs += 1;
+      assert.equal(identity.requestId, '11111111-1111-4111-8111-111111111111');
+      return { ok: true, disposition: 'applied', routes: { selfServe: 'applied', agencyLaps: 'applied' } };
+    },
+  };
+  const d = postgresDeps(auth, { journeys });
+  const cookie = `${PORTAL_COOKIE}=${opaque}`;
+  const invalidCsrf = await call('POST', '/portal/journeys/foundation', d, {
+    cookie,
+    body: new URLSearchParams({
+      command_key: '11111111-1111-4111-8111-111111111111',
+      confirmation: JOURNEY_MANAGER_CONFIRMATION,
+    }).toString(),
+  });
+  assert.equal(invalidCsrf.statusCode, 403);
+  assert.equal(installs, 0);
+
+  const invalidConfirmation = await call('POST', '/portal/journeys/foundation', d, {
+    cookie,
+    body: new URLSearchParams({
+      _csrf: portalCsrfToken(SECRET, opaque),
+      command_key: '11111111-1111-4111-8111-111111111111',
+      confirmation: 'install whatever',
+    }).toString(),
+  });
+  assert.equal(invalidConfirmation.statusCode, 303);
+  assert.equal(installs, 0);
+
+  const installed = await call('POST', '/portal/journeys/foundation', d, {
+    cookie,
+    body: new URLSearchParams({
+      _csrf: portalCsrfToken(SECRET, opaque),
+      command_key: '11111111-1111-4111-8111-111111111111',
+      confirmation: JOURNEY_MANAGER_CONFIRMATION,
+    }).toString(),
+  });
+  assert.equal(installed.statusCode, 303);
+  assert.match(installed.headers.location ?? '', /^\/portal\/journeys\?notice=installed\./);
+  assert.equal(installs, 1);
+
+  const status = await call('GET', installed.headers.location!, d, { cookie });
+  assert.equal(status.statusCode, 200);
+  assert.match(status.body, /Journey foundation installed/);
+  assert.doesNotMatch(status.body, /private database detail/);
 });
 
 test('database auth failure never downgrades to legacy login', async () => {

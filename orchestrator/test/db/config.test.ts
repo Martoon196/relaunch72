@@ -6,6 +6,7 @@ import {
   createDatabasePool,
   createExternalEventCommandDatabasePool,
   createIdentityCommandDatabasePool,
+  createImportCommandDatabasePool,
   createProvisioningCommandDatabasePool,
   createSetupDeliveryCommandDatabasePool,
   createSetupReissueCommandDatabasePool,
@@ -114,6 +115,39 @@ test('CRM commands have a dedicated verified role URL and pool identity', async 
     DATABASE_CRM_COMMAND_POOL_MAX: '2',
   }, { onBackgroundError: () => undefined });
   assert.equal(pool.options.application_name, 'relaunch72-crm-command');
+  assert.equal(pool.options.max, 2);
+  assert.equal(typeof pool.options.verify, 'function');
+  await pool.end();
+});
+
+test('legacy imports have a dedicated verified operator role and pool identity', async () => {
+  assert.ok(DATABASE_ROLES.includes('importCommand'));
+  assert.throws(
+    () => loadDatabaseConfig('importCommand', {
+      NODE_ENV: 'production',
+      DATABASE_IMPORT_COMMAND_URL:
+        'postgresql://r72_crm_command:secret@database.example/relaunch72?sslmode=require',
+    }),
+    /must authenticate as the least-privilege r72_import_command role/,
+  );
+
+  const config = loadDatabaseConfig('importCommand', {
+    NODE_ENV: 'production',
+    DATABASE_IMPORT_COMMAND_URL:
+      'postgresql://r72_import_command:secret@database.example/relaunch72?sslmode=require',
+    DATABASE_IMPORT_COMMAND_POOL_MAX: '2',
+  });
+  assert.equal(config.sourceEnv, 'DATABASE_IMPORT_COMMAND_URL');
+  assert.equal(config.expectedDatabaseUser, 'r72_import_command');
+  assert.equal(config.applicationName, 'relaunch72-import-command');
+  assert.equal(config.maxConnections, 2);
+
+  const pool = createImportCommandDatabasePool({
+    DATABASE_IMPORT_COMMAND_URL:
+      'postgresql://r72_import_command:secret@localhost/relaunch72_test?sslmode=disable',
+    DATABASE_IMPORT_COMMAND_POOL_MAX: '2',
+  }, { onBackgroundError: () => undefined });
+  assert.equal(pool.options.application_name, 'relaunch72-import-command');
   assert.equal(pool.options.max, 2);
   assert.equal(typeof pool.options.verify, 'function');
   await pool.end();

@@ -15,13 +15,14 @@ test('core modules have stable unique ids/routes and uncluttered ordering', () =
   assert.equal(new Set(routes).size, routes.length);
 });
 
-test('runtime resolution never presents planned modules as ready', () => {
+test('runtime resolution presents the shipped Journey Manager only with its capability', () => {
   const everyCapability = new Set<PlatformCapability>(CORE_PLATFORM_MODULES.flatMap((module) => [...module.requiredCapabilities]));
   const byId = new Map(platformModules.resolve({ capabilities: everyCapability }).map((module) => [module.id, module]));
   assert.equal(byId.get('overview')?.state, 'ready');
   assert.equal(byId.get('crm')?.state, 'ready');
   assert.equal(byId.get('crm')?.description, 'Private contacts, opportunities, tasks and recorded CRM activity.');
-  assert.equal(byId.get('journeys')?.state, 'planned');
+  assert.equal(byId.get('journeys')?.state, 'ready');
+  assert.equal(byId.get('journeys')?.route, '/portal/journeys');
   assert.equal(byId.get('content')?.state, 'preview');
   assert.equal(byId.get('social')?.state, 'planned');
   assert.equal(byId.get('inbox')?.state, 'planned');

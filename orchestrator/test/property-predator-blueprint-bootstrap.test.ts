@@ -25,15 +25,18 @@ function result(seed: string): PublishConversionBlueprintResult {
   });
 }
 
-test('the installer publishes self-serve then agency through the manager command boundary', async () => {
+test('the installer publishes self-serve and agency atomically through the manager command boundary', async () => {
   const calls: string[] = [];
   const first = result('1');
   const second = result('2');
   const service = {
-    publishBlueprint: async (receivedContext: typeof context, blueprint: (typeof PROPERTY_PREDATOR_CONVERSION_BLUEPRINTS)[number]) => {
+    publishBlueprints: async (
+      receivedContext: typeof context,
+      blueprints: typeof PROPERTY_PREDATOR_CONVERSION_BLUEPRINTS,
+    ) => {
       assert.equal(receivedContext, context);
-      calls.push(blueprint.slug);
-      return calls.length === 1 ? first : second;
+      calls.push(...blueprints.map((blueprint) => blueprint.slug));
+      return [first, second];
     },
   };
 
@@ -47,22 +50,21 @@ test('the installer publishes self-serve then agency through the manager command
   assert.ok(Object.isFrozen(installed));
 });
 
-test('a failed agency publication remains visible and an exact rerun can resume', async () => {
-  const failure = new Error('agency definition unavailable');
+test('an atomic publication failure escapes without a partial result', async () => {
+  const failure = new Error('foundation unavailable');
   let calls = 0;
   await assert.rejects(installPropertyPredatorConversionBlueprints({
-    publishBlueprint: async () => {
+    publishBlueprints: async () => {
       calls += 1;
-      if (calls === 2) throw failure;
-      return result('1');
+      throw failure;
     },
   }, context), failure);
-  assert.equal(calls, 2);
+  assert.equal(calls, 1);
 });
 
 test('the installer rejects a missing publication service before doing work', async () => {
   await assert.rejects(
     installPropertyPredatorConversionBlueprints({} as never, context),
-    /must provide publishBlueprint/,
+    /must provide publishBlueprints/,
   );
 });

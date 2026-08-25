@@ -3,8 +3,13 @@
 > **Engineering update — 2026-08-25:** this file preserves the original audit
 > baseline below. PostgreSQL/RLS, a modular platform shell and the first durable
 > CRM loop have since been implemented on the local Codex branch. The newest
-> Property Predator-specific slice is documented—without presenting planned
-> channels as connected—in
+> Property Predator-specific slice—the visual Journey Manager and safe legacy
+> lead/affiliate-attribution migration boundary—is documented, without claiming
+> deployment or connected channels, in
+> [26-PROPERTY-PREDATOR-JOURNEY-MANAGER-AND-LEAD-MIGRATION.md](./26-PROPERTY-PREDATOR-JOURNEY-MANAGER-AND-LEAD-MIGRATION.md).
+> Its runtime and Growth HQ foundations are
+> [25-PROPERTY-PREDATOR-JOURNEY-RUNTIME.md](./25-PROPERTY-PREDATOR-JOURNEY-RUNTIME.md)
+> and
 > [24-PROPERTY-PREDATOR-GROWTH-FOUNDATION.md](./24-PROPERTY-PREDATOR-GROWTH-FOUNDATION.md).
 > For the foundation that precedes it, start with
 > [15-POSTGRES-CRM-FOUNDATION.md](./15-POSTGRES-CRM-FOUNDATION.md),

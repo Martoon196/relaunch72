@@ -11,6 +11,7 @@ const APP_ROLES = [
   'r72_external_event_definer',
   'r72_external_event_command',
   'r72_identity_command',
+  'r72_import_command',
   'r72_journey_projector_definer',
   'r72_onboarding_definer',
   'r72_owner',
