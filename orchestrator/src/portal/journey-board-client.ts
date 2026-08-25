@@ -13,9 +13,13 @@ export const JOURNEY_BOARD_CLIENT_SOURCE = String.raw`(() => {
   const live = root.querySelector('[data-board-live]');
   const board = root.querySelector('.jb-board');
   const lanes = Array.from(root.querySelectorAll('[data-journey-lane]'));
+  const cards = Array.from(root.querySelectorAll('[data-journey-card]'));
   const handles = Array.from(root.querySelectorAll('[data-drag-handle]'));
   let lifted = null;
   let targetLane = null;
+  let pointerDrag = null;
+  const POINTER_DRAG_THRESHOLD = 6;
+  const CARD_SWIPE_THRESHOLD = 14;
 
   const announce = (message) => {
     if (!live) return;
@@ -35,6 +39,7 @@ export const JOURNEY_BOARD_CLIENT_SOURCE = String.raw`(() => {
 
   const clearTargets = () => {
     lanes.forEach((lane) => lane.removeAttribute('data-drop-target'));
+    cards.forEach((card) => card.removeAttribute('data-pointer-target-label'));
     targetLane = null;
   };
 
@@ -42,7 +47,7 @@ export const JOURNEY_BOARD_CLIENT_SOURCE = String.raw`(() => {
     if (lifted) {
       lifted.card.removeAttribute('data-dragging');
       lifted.handle.setAttribute('aria-pressed', 'false');
-      lifted.handle.focus();
+      if (lifted.restoreFocus) lifted.handle.focus();
     }
     clearTargets();
     lifted = null;
@@ -61,6 +66,7 @@ export const JOURNEY_BOARD_CLIENT_SOURCE = String.raw`(() => {
     clearTargets();
     targetLane = lane;
     lane.setAttribute('data-drop-target', 'true');
+    lifted.card.setAttribute('data-pointer-target-label', laneLabel(lane));
     announce(cardName(lifted.card) + ' ready for ' + laneLabel(lane) + '. Press Space or Enter to save, or Escape to cancel.');
     return true;
   };
@@ -78,15 +84,15 @@ export const JOURNEY_BOARD_CLIENT_SOURCE = String.raw`(() => {
     form.requestSubmit();
   };
 
-  const beginLift = (handle) => {
+  const beginLift = (handle, restoreFocus = true, instruction = 'Use arrow keys to choose a permitted workflow lane.') => {
     const card = handle.closest('[data-journey-card]');
     if (!card) return;
     if (lifted && lifted.handle !== handle) cancelLift();
-    lifted = { handle, card };
+    lifted = { handle, card, restoreFocus };
     card.setAttribute('data-dragging', 'true');
     handle.setAttribute('aria-pressed', 'true');
     const current = lanes.indexOf(card.closest('[data-journey-lane]'));
-    announce(cardName(card) + ' picked up from ' + laneLabel(lanes[current]) + ', column ' + (current + 1) + ' of ' + lanes.length + '. Use arrow keys to choose a permitted workflow lane.');
+    announce(cardName(card) + ' picked up from ' + laneLabel(lanes[current]) + ', column ' + (current + 1) + ' of ' + lanes.length + '. ' + instruction);
   };
 
   const stepDestination = (direction) => {
@@ -100,7 +106,136 @@ export const JOURNEY_BOARD_CLIENT_SOURCE = String.raw`(() => {
     announce('No permitted workflow destination is available.');
   };
 
+  const laneAtPoint = (clientX, clientY) => {
+    const element = document.elementFromPoint(clientX, clientY);
+    const lane = element && typeof element.closest === 'function'
+      ? element.closest('[data-journey-lane]')
+      : null;
+    return lane && root.contains(lane) ? lane : null;
+  };
+
+  const directionalDestination = (card, direction) => {
+    const origin = lanes.indexOf(card.closest('[data-journey-lane]'));
+    if (origin < 0) return null;
+    for (let index = origin + direction; index >= 0 && index < lanes.length; index += direction) {
+      if (approvedDestination(card, lanes[index])) return lanes[index];
+    }
+    return null;
+  };
+
+  const narrowBoard = () => typeof window.matchMedia === 'function'
+    && window.matchMedia('(max-width: 760px)').matches;
+
+  const scrollBoardForPointer = (clientX) => {
+    if (!board || typeof board.getBoundingClientRect !== 'function') return;
+    const bounds = board.getBoundingClientRect();
+    const edge = Math.min(56, bounds.width / 5);
+    const amount = clientX < bounds.left + edge
+      ? -28
+      : clientX > bounds.right - edge
+        ? 28
+        : 0;
+    if (!amount) return;
+    if (typeof board.scrollBy === 'function') board.scrollBy({ left: amount, behavior: 'auto' });
+    else board.scrollLeft += amount;
+  };
+
+  const releasePointer = () => {
+    const state = pointerDrag;
+    pointerDrag = null;
+    root.removeAttribute('data-pointer-dragging');
+    if (state && typeof state.captureTarget.hasPointerCapture === 'function'
+      && state.captureTarget.hasPointerCapture(state.pointerId)) {
+      try { state.captureTarget.releasePointerCapture(state.pointerId); } catch {}
+    }
+    return state;
+  };
+
+  const cancelPointer = (message) => {
+    const state = releasePointer();
+    if (state && state.active) cancelLift(message);
+  };
+
+  const movePointer = (event) => {
+    const state = pointerDrag;
+    if (!state || state.pointerId !== event.pointerId) return;
+    if (!state.active) {
+      const deltaX = event.clientX - state.startX;
+      const deltaY = event.clientY - state.startY;
+      if (state.mode === 'card') {
+        if (Math.abs(deltaY) >= POINTER_DRAG_THRESHOLD && Math.abs(deltaY) > Math.abs(deltaX)) {
+          releasePointer();
+          return;
+        }
+        if (Math.abs(deltaX) < CARD_SWIPE_THRESHOLD || Math.abs(deltaX) <= Math.abs(deltaY) * 1.2) return;
+      } else if (Math.hypot(deltaX, deltaY) < POINTER_DRAG_THRESHOLD) {
+        return;
+      }
+      state.active = true;
+      beginLift(
+        state.handle,
+        false,
+        state.mode === 'card'
+          ? 'Keep swiping left or right, then release to save the shown team lane.'
+          : 'Move over a permitted workflow lane, then release to save.',
+      );
+      root.setAttribute('data-pointer-dragging', 'true');
+      if (typeof state.captureTarget.setPointerCapture === 'function') {
+        try { state.captureTarget.setPointerCapture(state.pointerId); } catch {}
+      }
+    }
+    event.preventDefault();
+    if (state.mode === 'card') {
+      const direction = event.clientX >= state.startX ? 1 : -1;
+      const lane = directionalDestination(state.card, direction);
+      if (lane) {
+        if (targetLane !== lane) chooseLane(lane);
+      } else if (targetLane) {
+        clearTargets();
+      }
+      return;
+    }
+    scrollBoardForPointer(event.clientX);
+    const lane = laneAtPoint(event.clientX, event.clientY);
+    if (lane && approvedDestination(state.card, lane)) {
+      if (targetLane !== lane) chooseLane(lane);
+    } else if (targetLane) {
+      clearTargets();
+    }
+  };
+
+  const finishPointer = (event) => {
+    const state = pointerDrag;
+    if (!state || state.pointerId !== event.pointerId) return;
+    if (state.active && state.mode === 'handle') {
+      const lane = laneAtPoint(event.clientX, event.clientY);
+      if (lane && approvedDestination(state.card, lane) && targetLane !== lane) chooseLane(lane);
+    }
+    const destination = state.active ? targetLane : null;
+    releasePointer();
+    if (!state.active) return;
+    event.preventDefault();
+    if (destination) submitMove(state.card, destination);
+    else cancelLift(cardName(state.card) + ' movement cancelled. Drop on a permitted workflow lane.');
+  };
+
   handles.forEach((handle) => {
+    handle.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || event.isPrimary === false || pointerDrag) return;
+      const card = handle.closest('[data-journey-card]');
+      if (!card) return;
+      pointerDrag = {
+        handle,
+        card,
+        captureTarget: handle,
+        mode: 'handle',
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        active: false,
+      };
+    });
+
     handle.addEventListener('keydown', (event) => {
       const key = event.key;
       if ((key === ' ' || key === 'Enter') && !lifted) {
@@ -130,33 +265,33 @@ export const JOURNEY_BOARD_CLIENT_SOURCE = String.raw`(() => {
       }
     });
 
-    handle.addEventListener('dragstart', (event) => {
-      beginLift(handle);
-      if (event.dataTransfer) {
-        event.dataTransfer.effectAllowed = 'move';
-        event.dataTransfer.setData('text/plain', lifted.card.getAttribute('data-card-id') || 'workflow-card');
-      }
-    });
-    handle.addEventListener('dragend', () => cancelLift());
   });
 
-  lanes.forEach((lane) => {
-    lane.addEventListener('dragover', (event) => {
-      if (!lifted || !approvedDestination(lifted.card, lane)) return;
-      event.preventDefault();
-      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-      if (targetLane !== lane) chooseLane(lane);
-    });
-    lane.addEventListener('dragleave', (event) => {
-      if (event.relatedTarget && lane.contains(event.relatedTarget)) return;
-      if (targetLane === lane) clearTargets();
-    });
-    lane.addEventListener('drop', (event) => {
-      if (!lifted || !approvedDestination(lifted.card, lane)) return;
-      event.preventDefault();
-      submitMove(lifted.card, lane);
-    });
+  root.addEventListener('pointerdown', (event) => {
+    if (!narrowBoard() || event.button !== 0 || event.isPrimary === false || pointerDrag) return;
+    const target = event.target;
+    if (!target || typeof target.closest !== 'function') return;
+    if (target.closest('a, button, input, select, textarea, label, [contenteditable="true"], [data-workflow-move-form]')) return;
+    const card = target.closest('[data-journey-card][data-workflow-movable="true"]');
+    if (!card || !root.contains(card)) return;
+    const handle = card.querySelector('[data-drag-handle]');
+    if (!handle) return;
+    pointerDrag = {
+      handle,
+      card,
+      captureTarget: card,
+      mode: 'card',
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+    };
   });
+
+  document.addEventListener('pointermove', movePointer, { passive: false });
+  document.addEventListener('pointerup', finishPointer);
+  document.addEventListener('pointercancel', () => cancelPointer('Workflow movement cancelled. Nothing changed.'));
+  window.addEventListener('blur', () => cancelPointer('Workflow movement cancelled. Nothing changed.'));
 
   const tabs = Array.from(root.querySelectorAll('[data-lane-tab]'));
   const activateMobileLane = (laneId) => {

@@ -132,6 +132,22 @@ test('renders search, route and band filters as shareable GET controls', () => {
   assert.match(html, /name="return_band" value="hot"/);
 });
 
+test('partial filtered boards disclose their loaded boundary and avoid absolute empty claims', () => {
+  const html = renderJourneyBoardBody(view({
+    filters: { ...view().filters, query: 'Missing person' },
+    lanes: [{
+      id: 'work-next', label: 'Work next', description: 'Loaded queue.', position: 1,
+      cardCount: 0, totalCardCount: 90, attentionCount: 0, isClosed: false, isPartial: true,
+    }],
+    cards: [],
+    coverage: { loadedCardCount: 75, totalCardCount: 90, perLaneCardLimit: 75, partial: true },
+  }));
+  assert.match(html, /Showing 75 of 90 saved workflow cards/);
+  assert.match(html, /Filters search the loaded cards only/);
+  assert.match(html, /No match in the loaded cards/);
+  assert.doesNotMatch(html, /No people in this workflow lane/);
+});
+
 test('partial lanes never turn a loaded-page filter miss into a global no-match claim', () => {
   const base = view();
   const html = renderJourneyBoardBody(view({
@@ -189,8 +205,11 @@ test('non-automatic milestone provenance is labelled recorded without claiming a
 
 test('authorised cards have dedicated drag handles and real protected POST fallbacks', () => {
   const html = renderJourneyBoardBody(view());
-  assert.match(html, /<button class="jb-drag-handle" type="button" draggable="true" aria-pressed="false"/);
-  assert.match(html, /press Space then arrows and Space/);
+  assert.match(html, /data-journey-card data-workflow-movable="true"/);
+  assert.match(html, /<button class="jb-drag-handle" type="button" aria-pressed="false"/);
+  assert.doesNotMatch(html, /draggable="true"/);
+  assert.match(html, /Press and drag this handle, or press Space then arrows and Space/);
+  assert.match(html, /Swipe a blank area of this card left or right/);
   assert.match(html, /<form class="jb-move" method="post" action="\/portal\/journeys\/board\/opportunities\/card-amelia\/stage" data-workflow-move-form>/);
   assert.match(html, /name="_csrf" value="preview-csrf-token-000000000000"/);
   assert.match(html, /name="command_key" value="move-amelia-command"/);
@@ -230,6 +249,8 @@ test('mobile enhancement uses honest pressed buttons while no-JS markup preserve
   assert.match(html, /\.jb-mobile-stage-tab\{[^}]*min-height:44px/);
   assert.match(html, /\.jb-move-row\{grid-template-columns:1fr\}/);
   assert.match(html, /\.jb-move-field,\.jb-move-submit\{grid-column:1\/-1\}/);
+  assert.match(html, /\.jb-enhanced \.jb-card\[data-workflow-movable="true"\]\{cursor:grab;touch-action:pan-y\}/);
+  assert.match(html, /\.jb-move-help-desktop\{display:none\}\.jb-move-help-mobile\{display:inline\}/);
 });
 
 test('drawer is an accessible progressive enhancement over full-page Lead 360 links', () => {
@@ -316,8 +337,15 @@ test('empty board and empty card facts invent no operational or conversion data'
 test('client asset compiles and implements pointer, keyboard, mobile and drawer enhancement safely', () => {
   assert.equal(JOURNEY_BOARD_CLIENT_SOURCE, JOURNEY_BOARD_CLIENT_SCRIPT);
   assert.doesNotThrow(() => new Function(JOURNEY_BOARD_CLIENT_SCRIPT));
-  assert.match(JOURNEY_BOARD_CLIENT_SCRIPT, /addEventListener\('dragstart'/);
-  assert.match(JOURNEY_BOARD_CLIENT_SCRIPT, /addEventListener\('drop'/);
+  assert.match(JOURNEY_BOARD_CLIENT_SCRIPT, /addEventListener\('pointerdown'/);
+  assert.match(JOURNEY_BOARD_CLIENT_SCRIPT, /addEventListener\('pointermove'/);
+  assert.match(JOURNEY_BOARD_CLIENT_SCRIPT, /addEventListener\('pointerup'/);
+  assert.match(JOURNEY_BOARD_CLIENT_SCRIPT, /setPointerCapture/);
+  assert.match(JOURNEY_BOARD_CLIENT_SCRIPT, /elementFromPoint/);
+  assert.match(JOURNEY_BOARD_CLIENT_SCRIPT, /directionalDestination/);
+  assert.match(JOURNEY_BOARD_CLIENT_SCRIPT, /max-width: 760px/);
+  assert.match(JOURNEY_BOARD_CLIENT_SCRIPT, /target\.closest\('a, button, input, select, textarea, label/);
+  assert.doesNotMatch(JOURNEY_BOARD_CLIENT_SCRIPT, /addEventListener\('dragstart'|dataTransfer/);
   assert.match(JOURNEY_BOARD_CLIENT_SCRIPT, /key === ' '/);
   assert.match(JOURNEY_BOARD_CLIENT_SCRIPT, /key === 'Enter'/);
   assert.match(JOURNEY_BOARD_CLIENT_SCRIPT, /key === 'ArrowRight'/);
