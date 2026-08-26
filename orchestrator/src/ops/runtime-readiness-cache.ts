@@ -45,7 +45,6 @@ export function createCachedRuntimeReadinessProbe(
             () => reject(new Error('runtime readiness timeout')),
             timeoutMs,
           );
-          timer.unref?.();
         });
         const blockers = safeBlockers(await Promise.race([options.probe(), timeout]));
         cached = Object.freeze({
