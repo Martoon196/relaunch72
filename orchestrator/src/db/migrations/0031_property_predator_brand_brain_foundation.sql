@@ -110,6 +110,7 @@ CREATE TABLE app_private.brand_brain_source_version_refs (
   ),
   recorded_at timestamptz NOT NULL DEFAULT statement_timestamp(),
   UNIQUE (workspace_id, id),
+  UNIQUE (workspace_id, source_release_id, id),
   UNIQUE (workspace_id, source_release_id, source_id),
   UNIQUE (workspace_id, source_release_id, id, source_id, content_sha256, consumer_use),
   FOREIGN KEY (workspace_id, source_release_id)
@@ -163,6 +164,7 @@ CREATE TABLE app_private.brand_brain_specialist_profile_refs (
   ),
   recorded_at timestamptz NOT NULL DEFAULT statement_timestamp(),
   UNIQUE (workspace_id, id),
+  UNIQUE (workspace_id, source_release_id, id),
   UNIQUE (workspace_id, source_release_id, profile_id),
   UNIQUE (workspace_id, source_release_id, id, profile_id, runtime_brand_sha256),
   FOREIGN KEY (workspace_id, source_release_id)
@@ -276,6 +278,7 @@ CREATE TABLE app_private.brand_brain_quarantines (
   ),
   recorded_at timestamptz NOT NULL DEFAULT statement_timestamp(),
   UNIQUE (workspace_id, id),
+  UNIQUE (workspace_id, source_release_id, id),
   UNIQUE (workspace_id, source_release_id, quarantine_id),
   FOREIGN KEY (workspace_id, source_release_id)
     REFERENCES app_private.brand_brain_source_releases (workspace_id, id)

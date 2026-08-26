@@ -38,6 +38,11 @@ test('0031 stores only private immutable hash references with forced workspace i
   assert.match(sql, /workspace_id = app_private\.current_workspace_id\(\)/);
   assert.match(sql, /FOREIGN KEY \(workspace_id, source_release_id, specialist_profile_ref_id\)/);
   assert.match(sql, /FOREIGN KEY \(workspace_id, source_release_id, source_version_ref_id\)/);
+  assert.equal(
+    (sql.match(/UNIQUE \(workspace_id, source_release_id, id\)/g) ?? []).length,
+    3,
+    'every composite child reference must have an exact PostgreSQL parent key',
+  );
   assert.match(sql, /FOREIGN KEY \(workspace_id, source_release_id, manifest_sha256\)/);
   assert.match(sql, /BEFORE UPDATE OR DELETE ON app_private\.%I/);
   assert.match(sql, /Brand Brain inventory, evidence and decisions are append-only/);
