@@ -1,6 +1,8 @@
 # Property Predator Growth HQ — controlled production deployment
 
-Status: **prepared, not deployed**. Last reviewed 26 August 2026.
+Status: **dark production deployed and verified** on 26 August 2026 at
+`e18acd1`. Provider effects and email delivery remain OFF; emergency pause
+remains ON.
 
 The production manifest is [`render.property-predator.production.yaml`](../render.property-predator.production.yaml). It creates two new process-isolated services; it does not alter or reuse the free Relaunch72 payments sandbox in `render.yaml`.
 
@@ -75,7 +77,7 @@ At the DNS provider for `propertypredator.com`, review and then create:
 
 | Type | Host/name | Target/value | TTL |
 |---|---|---|---:|
-| CNAME | `hq` | `<EXACT HOST RETURNED BY RENDER>.onrender.com` | 300 |
+| CNAME | `hq` | `property-predator-growth-hq.onrender.com` | Automatic |
 
 Before adding it, remove only conflicting `A`, `AAAA` or `CNAME` records for the exact `hq` host after confirming they are unused. Do not alter apex, `www`, mail or unrelated subdomains.
 
@@ -156,14 +158,51 @@ No rollback may enable a provider effect or restore an older credential without 
 
 Never log a secret, URL, email address or raw webhook body during rotation. Evidence records contain redacted identifiers and hashes only.
 
-## Current blockers — service creation may be prepared, but deployment must not start yet
+## Current deployed state and remaining activation blockers
 
-- The separate Frankfurt Neon project is on the exact 27-file ledger and the one-shot audited founder bootstrap has completed. Six fresh role credentials still need to be issued into their exact Render secret slots.
-- The founder receipt proves one internal Property Predator / Growth HQ workspace, its pending owner, the dark Mailgun EU connection and the hashed owned seed. It imported no customer, contact, inbox, consent, message or provider-operation data.
-- `/ready`, live dependency rechecks, canonical-host enforcement and the database-installation proof now exist, but production credentials and binding evidence are not yet configured.
-- The named `serve:property-predator-email-worker` entrypoint now exists and is tested. It is deliberately inert: it verifies schema, database identity and policy, then idles without importing a provider adapter or reading an API key.
-- The real Mailgun adapter and database authorization boundary are implemented and tested, but deliberately not composed into the dark worker. Composition and any outbound key require the separate final activation approval.
-- The authenticated Mailgun router is mounted in the working release, but its production signing key, dedicated database identity and signed provider test-event evidence do not yet exist.
-- Mailgun account ownership, EU region, sending-domain DNS, suppression evidence and billing cap are not yet proven.
-- Pilot-facing TEST fixture projections must be replaced or kept inaccessible before external users receive access.
-- No production deploy, DNS mutation, purchase or live send has been performed by this artifact-only change.
+- Render web and worker services are live in Frankfurt on the same reviewed
+  commit, `e18acd1`, with manual deploys and the Render subdomain disabled.
+- `hq.propertypredator.com` is a verified CNAME to the exact Render target and
+  Render has issued its managed certificate.
+- Live `GET /health` and `GET /ready` both return HTTP 200. The readiness body
+  is exactly `{"ready":true,"blockers":[]}`. Health reports the PostgreSQL
+  portal and signed Mailgun ingress ready while checkout, subscriptions and
+  public lead capture remain unavailable.
+- `GET /portal` redirects unauthenticated requests to `/portal/login`; no demo
+  portal or JSON fallback is mounted.
+- The worker's live redacted readiness record proves `dark-production`, exact
+  `r72_mailgun_worker_command`, database boundary ready, provider effects OFF,
+  delivery OFF, emergency pause ON, no dispatch loop, no provider adapter and
+  zero provider network calls. The pilot remains limited to one owned internal
+  seed, ten recipients, ten messages per run and 100 messages per UTC month.
+- The separate Frankfurt Neon project is on the exact 27-file ledger. All six
+  restricted role credentials authenticate through only their matching Render
+  slots. No owner or migrator URL is present in either service.
+- The founder receipt proves one internal Property Predator / Growth HQ
+  workspace, its pending owner, the dark Mailgun EU connection and the hashed
+  owned seed. It imported no customer, contact, inbox, consent, message or
+  provider-operation data.
+- Mailgun EU and `mg.propertypredator.com` are configured. SPF, rotating DKIM
+  and tracking DNS resolve publicly. A domain-level webhook now covers all
+  eight supported delivery, engagement, failure and suppression event classes
+  at the signed Growth HQ endpoint.
+- Mailgun's fabricated test event reached the live route and was rejected as
+  unmatched with HTTP 503. This is expected fail-closed evidence: synthetic
+  provider IDs cannot create delivery history. It caused no outbound effect or
+  customer write.
+- No Mailgun sending API key exists in Render. The real adapter and database
+  authorization boundary are implemented and tested but remain deliberately
+  uncomposed; the live worker cannot send.
+
+Before any external delivery:
+
+1. Reissue the founder setup link against the canonical `.com` origin if the
+   first memory-only handoff link was lost, then prove login and CSRF.
+2. Reconcile Mailgun suppression truth and retain direct test evidence.
+3. Name no more than ten owned internal seed recipients and obtain the separate
+   final activation approval.
+4. Add a restricted Mailgun sending key only to the isolated worker, compose
+   the reviewed adapter, repeat all release gates and keep the emergency pause
+   ON until the final activation moment.
+5. Keep TEST fixture projections inaccessible to external users and import no
+   customer data without a separately reviewed import rehearsal.
