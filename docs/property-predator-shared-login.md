@@ -1,6 +1,7 @@
 # Property Predator shared login boundary
 
-Status: implementation and migration prepared; production activation is OFF.
+Status: implementation and migration prepared; production activation is a
+dashboard-controlled Growth HQ web-service setting.
 
 ## Outcome
 
@@ -78,7 +79,7 @@ All are web-service-only. The worker must receive none.
 
 | Setting | Rule |
 |---|---|
-| `PROPERTY_PREDATOR_SSO_ENABLED` | Exact `true` or `false`; production Blueprint is checked in as `false` |
+| `PROPERTY_PREDATOR_SSO_ENABLED` | Exact `true` or `false`; dashboard-controlled (`sync: false`) so Blueprint syncs preserve the reviewed operator value |
 | `PROPERTY_PREDATOR_SSO_ISSUER` | Exact canonical issuer |
 | `PROPERTY_PREDATOR_SSO_AUTHORIZE_URL` | Exact issuer `/sso.html` |
 | `PROPERTY_PREDATOR_SSO_TOKEN_URL` | Exact issuer `/api/auth/sso/token` |

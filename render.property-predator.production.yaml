@@ -52,11 +52,11 @@ services:
       - key: SESSION_SECRET
         generateValue: true
 
-      # Shared Property Predator identity bridge. The checked-in enable switch
-      # remains OFF until both repositories are deployed, the exact client
-      # values are manually confirmed and an end-to-end seed login passes.
+      # Shared Property Predator identity bridge. The enable switch is owned by
+      # the web-service dashboard so a later Blueprint sync cannot overwrite an
+      # explicitly reviewed activation or emergency deactivation.
       - key: PROPERTY_PREDATOR_SSO_ENABLED
-        value: "false"
+        sync: false
       - key: PROPERTY_PREDATOR_SSO_ISSUER
         value: https://propertypredator.com
       - key: PROPERTY_PREDATOR_SSO_AUTHORIZE_URL

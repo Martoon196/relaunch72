@@ -232,8 +232,11 @@ Before applying migration 0029:
 4. Generate one dedicated 32+ character client secret shared only by the two
    SSO backends. It must not equal `SESSION_SECRET` or any JWT/Google secret.
 5. Keep `PROPERTY_PREDATOR_SSO_ENABLED=false` in the reviewed first schema-29
-   release. Keep provider effects OFF, email delivery OFF and emergency pause
-   ON. SSO activation does not authorise any customer communication.
+   release. The Blueprint declares this switch `sync: false`: set it directly
+   on the Growth HQ web service and use **Save and deploy**, so later Blueprint
+   syncs preserve the reviewed operator value. Keep provider effects OFF, email
+   delivery OFF and emergency pause ON. SSO activation does not authorise any
+   customer communication.
 
 Activation is a separate configuration step after both applications are live:
 

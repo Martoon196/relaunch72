@@ -32,6 +32,20 @@ function secretSlot(key: string): void {
   );
 }
 
+function dashboardControlledSlot(key: string): void {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  assert.match(
+    webManifest,
+    new RegExp(`- key: ${escapedKey}\\r?\\n\\s+sync: false(?:\\r?\\n|$)`),
+    `${key} must remain dashboard-controlled so Blueprint syncs preserve the operator value`,
+  );
+  assert.doesNotMatch(
+    webManifest,
+    new RegExp(`- key: ${escapedKey}\\r?\\n\\s+value:`),
+    `${key} must not regain a Blueprint-owned literal value`,
+  );
+}
+
 function literalValueIn(section: string, key: string, value: string): void {
   const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const escapedValue = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -86,7 +100,7 @@ test('production Blueprint is isolated, manually deployed and fail-closed', () =
   literalValue('PUBLIC_LEAD_CAPTURE_ENABLED', 'false');
   literalValue('PORTAL_DEMO_SEED', 'false');
   literalValue('PROPERTY_PREDATOR_EXTERNAL_EVENTS_ENABLED', 'false');
-  literalValue('PROPERTY_PREDATOR_SSO_ENABLED', 'false');
+  dashboardControlledSlot('PROPERTY_PREDATOR_SSO_ENABLED');
   literalValue('PROPERTY_PREDATOR_SSO_ISSUER', 'https://propertypredator.com');
   literalValue('PROPERTY_PREDATOR_SSO_AUTHORIZE_URL', 'https://propertypredator.com/sso.html');
   literalValue('PROPERTY_PREDATOR_SSO_TOKEN_URL', 'https://propertypredator.com/api/auth/sso/token');
