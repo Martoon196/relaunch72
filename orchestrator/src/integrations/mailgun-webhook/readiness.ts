@@ -25,6 +25,20 @@ export async function assertPgMailgunWebhookIngressReady(
   await assertExpectedDatabaseInstallation(pool, expectedInstallationId);
   const result = await pool.query<ReadinessRow>(
     `/* mailgun-webhook.protected-readiness */
+     -- The command role intentionally has no USAGE on app. Resolve relation
+     -- OIDs through pg_catalog so proving table blindness needs no schema access.
+     WITH protected_relations AS (
+       SELECT relation.relname, relation.oid
+       FROM pg_catalog.pg_class AS relation
+       JOIN pg_catalog.pg_namespace AS namespace
+         ON namespace.oid = relation.relnamespace
+       WHERE namespace.nspname = 'app'
+         AND relation.relname IN (
+           'mailgun_webhook_events',
+           'mailgun_webhook_signature_tokens'
+         )
+         AND relation.relkind IN ('r', 'p')
+     )
      SELECT current_user = 'r72_mailgun_webhook_command' AS correct_user,
             pg_catalog.has_function_privilege(
               current_user,
@@ -32,13 +46,28 @@ export async function assertPgMailgunWebhookIngressReady(
               'EXECUTE'
             ) AS can_record,
             NOT pg_catalog.has_table_privilege(
-              current_user, 'app.mailgun_webhook_events', 'SELECT'
+              current_user,
+              (
+                SELECT oid FROM protected_relations
+                WHERE relname = 'mailgun_webhook_events'
+              ),
+              'SELECT'
             )
             AND NOT pg_catalog.has_table_privilege(
-              current_user, 'app.mailgun_webhook_events', 'INSERT'
+              current_user,
+              (
+                SELECT oid FROM protected_relations
+                WHERE relname = 'mailgun_webhook_events'
+              ),
+              'INSERT'
             )
             AND NOT pg_catalog.has_table_privilege(
-              current_user, 'app.mailgun_webhook_signature_tokens', 'SELECT'
+              current_user,
+              (
+                SELECT oid FROM protected_relations
+                WHERE relname = 'mailgun_webhook_signature_tokens'
+              ),
+              'SELECT'
             ) AS table_blind,
             NOT pg_catalog.pg_has_role(
               current_user, 'r72_mailgun_webhook_definer', 'MEMBER'

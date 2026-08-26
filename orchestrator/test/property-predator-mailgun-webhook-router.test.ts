@@ -173,6 +173,14 @@ test('Mailgun webhook readiness proves the exact function-only database identity
   assert.match(statements.join(' '), /r72_mailgun_webhook_command/);
   assert.match(statements.join(' '), /record_mailgun_webhook_event/);
   assert.match(statements.join(' '), /mailgun_webhook_binding_ready/);
+  const protectedReadiness = statements.find((statement) =>
+    statement.includes('mailgun-webhook.protected-readiness')) ?? '';
+  assert.match(protectedReadiness, /pg_catalog\.pg_class/);
+  assert.match(protectedReadiness, /pg_catalog\.pg_namespace/);
+  assert.doesNotMatch(
+    protectedReadiness,
+    /has_table_privilege\(\s*current_user,\s*'app\./,
+  );
 
   await assert.rejects(assertPgMailgunWebhookIngressReady({
     query: async (statement: string) => statement.includes('runtime_database_installation_id')
