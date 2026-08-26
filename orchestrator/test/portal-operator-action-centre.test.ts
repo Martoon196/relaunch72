@@ -53,10 +53,10 @@ test('queue ranks breaches, due-now work and blocked P0 work ahead of the deck',
   const view = presentOperatorActionCentre(createPropertyPredatorOperatorActionCentreFixture());
   assert.deepEqual(view.needsNow.map((action) => action.actionId), [
     'journey-laila-stall',
-    'inbox-email-approval',
     'automation-consent-expiry',
-    'content-rejection-revision',
     'webinar-replay-approval',
+    'inbox-email-approval',
+    'content-rejection-revision',
   ]);
   assert.deepEqual(view.needsNow.map((action) => action.indexLabel), ['01', '02', '03', '04', '05']);
   assert.equal(view.onDeck[0]?.actionId, 'crm-call-sophie');
@@ -144,7 +144,7 @@ test('duplicate IDs and oversized queues fail integrity while the display stays 
   assert.match(renderOperatorActionCentreBody(view), /Safe queue bound reached/);
 });
 
-test('premium responsive UI exposes deep links and visibly disabled mutation controls', () => {
+test('premium responsive fixture UI exposes deep links without inventing mutation controls', () => {
   const view = presentOperatorActionCentre(createPropertyPredatorOperatorActionCentreFixture());
   const html = renderOperatorActionCentreBody(view);
   assert.match(html, /data-property-predator-operator-action-centre/);
@@ -168,10 +168,10 @@ test('premium responsive UI exposes deep links and visibly disabled mutation con
   assert.match(html, /CRM task/);
   assert.match(html, /Source evidence/);
   assert.match(html, /href="\/portal\/journeys\/board\?q=Laila\+Morgan&amp;route=property-predator-self-serve&amp;band=warm"/);
-  assert.equal((html.match(/class="oac-action-button" type="button" disabled aria-disabled="true"/g) ?? []).length, 14);
-  assert.equal((html.match(/class="oac-action-button complete" type="button" disabled aria-disabled="true"/g) ?? []).length, 14);
-  assert.match(html, /Snooze is unavailable because no Operator Action command boundary is connected/);
-  assert.match(html, /Complete is unavailable because no Operator Action command boundary is connected/);
+  assert.equal((html.match(/Source-owned completion/g) ?? []).length, 14);
+  assert.doesNotMatch(html, />Complete · unavailable</);
+  assert.doesNotMatch(html, />Snooze · unavailable</);
+  assert.match(html, /No fictional control can write/);
   assert.match(html, /min-height:46px/);
   assert.match(html, /@media\(max-width:760px\)/);
   assert.match(html, /@media\(max-width:520px\)/);

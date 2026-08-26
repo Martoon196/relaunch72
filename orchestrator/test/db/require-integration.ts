@@ -29,3 +29,4 @@ await import('./company-content.integration.test.js');
 await import('./inbox-provider.integration.test.js');
 await import('./property-predator-email-pilot.integration.test.js');
 await import('./property-predator-founder-bootstrap.integration.test.js');
+await import('./operator-action-control.integration.test.js');

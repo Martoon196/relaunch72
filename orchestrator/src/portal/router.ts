@@ -106,6 +106,20 @@ import {
 import type { DashboardData } from './data.js';
 import type { BillingView } from './billing.js';
 import type { PortalAuthRequestContext, PortalAuthService, PortalSessionIdentity } from './auth-service.js';
+import {
+  OPERATOR_ACTION_CENTRE_MAX_ACTIONS,
+  OPERATOR_ACTION_CENTRE_ROUTE,
+  presentOperatorActionCentre,
+} from './operator-action-centre-presenter.js';
+import { renderOperatorActionCentreBody } from './operator-action-centre-view.js';
+import type { PortalOperatorActionCentreService } from './operator-action-centre-pg-service.js';
+import {
+  operatorActionNoticeFromQuery,
+  operatorActionNoticeToken,
+  operatorActionSnoozeChoiceToken,
+  operatorActionSnoozeInstantFromToken,
+  type OperatorActionNoticeCode,
+} from './operator-action-centre-actions.js';
 
 interface PortalCommonDeps {
   sessionSecret: string;
@@ -156,6 +170,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   crm: PortalCrmService;
   /** Exact, read-mostly conversion definition manager. Omitted until composed and ready. */
   journeys?: PortalJourneyManagerService;
+  /** Authoritative cross-module operator queue; only assignment and snooze mutate its overlay. */
+  operatorActions?: PortalOperatorActionCentreService;
   /** Company-owned immutable content catalogue. It exposes no provider or publish operation. */
   companyContent?: PortalCompanyContentService;
   /** TEST-only conversion queue. Thread detail remains a separate optional projection. */
@@ -393,6 +409,7 @@ function journeySubnav(active: 'board' | 'rules'): string {
 function optionalPortalCapabilities(deps: PortalDeps): readonly PlatformCapability[] {
   if (deps.kind !== 'postgres') return [];
   return [
+    ...(deps.operatorActions ? ['actions.read'] as const : []),
     ...(deps.companyContent ? ['content.drafts.read'] as const : []),
     ...(deps.inbox ? ['conversations.read'] as const : []),
   ];
@@ -424,6 +441,33 @@ function operationalPage(
   });
 }
 
+function operatorActionPage(
+  workspaceName: string,
+  body: string,
+  deps: PostgresPortalDeps,
+  csrfToken: string,
+  canWrite: boolean,
+): string {
+  return appShell({
+    title: `${deps.productProfile?.productName ?? 'Relaunch72'} Actions — ${workspaceName}`,
+    tenantName: workspaceName,
+    active: 'actions',
+    productProfile: deps.productProfile,
+    capabilities: new Set([
+      'workspace.overview.read', 'actions.read',
+      ...(canWrite ? ['actions.manage'] as const : []),
+      'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read',
+      ...(deps.journeys ? ['journeys.read'] as const : []),
+      ...optionalPortalCapabilities(deps),
+    ]),
+    billingAvailable: false,
+    crmAvailable: true,
+    mode: 'crm',
+    csrfToken,
+    body,
+  });
+}
+
 function portalStatusPage(
   deps: PortalDeps,
   sessionToken: string,
@@ -432,7 +476,7 @@ function portalStatusPage(
     message: string;
     backHref?: string;
     backLabel?: string;
-    active?: 'overview' | 'crm' | 'journeys' | 'content' | 'inbox' | 'billing';
+    active?: 'overview' | 'actions' | 'crm' | 'journeys' | 'content' | 'inbox' | 'billing';
     crmAvailable?: boolean;
   },
 ): string {
@@ -456,7 +500,7 @@ function portalStatusPage(
     ]),
     billingAvailable: deps.kind === 'legacy' && !!deps.billing,
     crmAvailable: options.crmAvailable ?? !!deps.crm,
-    mode: options.active === 'crm' || options.active === 'journeys'
+    mode: options.active === 'actions' || options.active === 'crm' || options.active === 'journeys'
       || options.active === 'content' || options.active === 'inbox' ? 'crm' : 'sandbox',
     csrfToken: portalCsrfToken(deps.sessionSecret, sessionToken),
     body,
@@ -608,6 +652,41 @@ function outcomeNotice(outcome: PortalCrmMutationOutcome): CrmNotice {
             : 'Check the lead details',
     message: outcome.message,
   };
+}
+
+const OPERATOR_ACTION_COMMAND_ROUTE = /^\/portal\/actions\/([^/]+)\/(snooze|assignment)$/u;
+const OPERATOR_ACTION_ID = /^[a-z][a-z0-9._:-]{2,159}$/u;
+const OPERATOR_ACTION_SNOOZE_CHOICES = Object.freeze([
+  Object.freeze({ minutes: 60, label: '1 hour' }),
+  Object.freeze({ minutes: 240, label: '4 hours' }),
+  Object.freeze({ minutes: 1_440, label: '1 day' }),
+]);
+
+function operatorActionRedirect(
+  res: ServerResponse,
+  deps: PostgresPortalDeps,
+  sessionToken: string,
+  code: OperatorActionNoticeCode,
+): void {
+  const notice = operatorActionNoticeToken(deps.sessionSecret, sessionToken, code);
+  redirect(res, `${OPERATOR_ACTION_CENTRE_ROUTE}?notice=${encodeURIComponent(notice)}`, undefined, 303);
+}
+
+function operatorActionFailureNotice(kind: string): OperatorActionNoticeCode {
+  if (kind === 'forbidden') return 'forbidden';
+  if (kind === 'conflict') return 'conflict';
+  if (kind === 'not_found') return 'missing';
+  if (kind === 'validation') return 'invalid';
+  return 'unavailable';
+}
+
+function decodedOperatorActionId(encoded: string): string | null {
+  try {
+    const value = decodeURIComponent(encoded);
+    return OPERATOR_ACTION_ID.test(value) ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 const CRM_OBJECT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -855,7 +934,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         crmAvailable: true,
         mode: 'crm',
         csrfToken,
-        body: renderGrowthHomeBody(snapshot, profile, growth ?? undefined),
+        body: renderGrowthHomeBody(snapshot, profile, growth ?? undefined, {
+          actionCentreAvailable: Boolean(deps.operatorActions),
+        }),
       }));
     } catch {
       return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
@@ -863,6 +944,139 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         message: 'No data was changed. Try again shortly.',
         active: 'overview',
       }));
+    }
+  }
+
+  // ── authoritative cross-module operator queue: organise work, never fake completion ──
+  if (deps.kind === 'postgres' && p === OPERATOR_ACTION_CENTRE_ROUTE && method === 'GET') {
+    if (!deps.operatorActions) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+      title: 'Action Centre not connected',
+      message: 'The protected workspace action queue is not enabled for this deployment.',
+      active: 'actions',
+    }));
+    try {
+      const snapshot = await deps.operatorActions.snapshot(crmIdentity(sessionToken, deps), {
+        limit: OPERATOR_ACTION_CENTRE_MAX_ACTIONS,
+      });
+      if (!snapshot) return sendHtml(res, 403, portalStatusPage(deps, sessionToken, {
+        title: 'Action workspace not available',
+        message: 'This session no longer has access to the authoritative operator queue.',
+        active: 'actions',
+      }));
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      const view = presentOperatorActionCentre(snapshot);
+      const security = view.mutatingControlsEnabled ? (() => {
+        const snoozeCommandKeys = Object.fromEntries(view.actions
+          .filter((action) => action.canSnooze)
+          .map((action) => [action.actionId, randomUUID()]));
+        return {
+          csrfToken,
+          snoozeCommandKeys,
+          snoozeChoices: Object.fromEntries(view.actions
+            .filter((action) => action.canSnooze)
+            .map((action) => [action.actionId, OPERATOR_ACTION_SNOOZE_CHOICES.map((choice) => ({
+              label: choice.label,
+              token: operatorActionSnoozeChoiceToken(
+                deps.sessionSecret,
+                sessionToken,
+                action.actionId,
+                snoozeCommandKeys[action.actionId]!,
+                new Date(now + choice.minutes * 60_000).toISOString(),
+              ),
+            }))])),
+          assignmentCommandKeys: Object.fromEntries(view.actions
+            .filter((action) => action.canAssign)
+            .map((action) => [action.actionId, randomUUID()])),
+        };
+      })() : undefined;
+      return sendHtml(res, 200, operatorActionPage(
+        snapshot.workspaceName,
+        renderOperatorActionCentreBody(view, {
+          security,
+          notice: operatorActionNoticeFromQuery(
+            url.searchParams,
+            deps.sessionSecret,
+            sessionToken,
+          ),
+        }),
+        deps,
+        csrfToken,
+        view.canWrite,
+      ));
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Action Centre temporarily unavailable',
+        message: 'No source record, assignment, snooze or provider operation was changed. Try again shortly.',
+        active: 'actions',
+      }));
+    }
+  }
+
+  const operatorActionCommandMatch = p.match(OPERATOR_ACTION_COMMAND_ROUTE);
+  if (deps.kind === 'postgres' && operatorActionCommandMatch && method === 'POST') {
+    if (!deps.operatorActions) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+      title: 'Action Centre not connected',
+      message: 'The protected workspace action queue is not enabled for this deployment.',
+      active: 'actions',
+    }));
+    const actionId = decodedOperatorActionId(operatorActionCommandMatch[1] ?? '');
+    const command = operatorActionCommandMatch[2];
+    const form = await readForm(req);
+    const expectedText = form.expected_row_version ?? '';
+    const expectedRowVersion = /^(?:0|[1-9][0-9]{0,9})$/u.test(expectedText)
+      ? Number(expectedText) : null;
+    if (!actionId || !CRM_OBJECT_ID.test(form.command_key ?? '')
+        || expectedRowVersion === null
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return operatorActionRedirect(res, deps, sessionToken, 'invalid');
+    }
+    try {
+      if (command === 'snooze') {
+        const snoozedUntil = operatorActionSnoozeInstantFromToken(
+          form.snooze_choice ?? '',
+          deps.sessionSecret,
+          sessionToken,
+          actionId,
+          form.command_key!,
+        );
+        if (!snoozedUntil) {
+          return operatorActionRedirect(res, deps, sessionToken, 'invalid');
+        }
+        const outcome = await deps.operatorActions.snoozeAction(crmIdentity(sessionToken, deps), {
+          actionId,
+          commandKey: form.command_key!,
+          expectedRowVersion,
+          snoozedUntil,
+        });
+        return operatorActionRedirect(
+          res,
+          deps,
+          sessionToken,
+          outcome.ok
+            ? outcome.disposition === 'replayed' ? 'replayed' : 'snoozed'
+            : operatorActionFailureNotice(outcome.kind),
+        );
+      }
+      const suppliedAssignee = (form.assigned_user_id ?? '').trim().toLowerCase();
+      if (suppliedAssignee && !CRM_OBJECT_ID.test(suppliedAssignee)) {
+        return operatorActionRedirect(res, deps, sessionToken, 'invalid');
+      }
+      const outcome = await deps.operatorActions.assignAction(crmIdentity(sessionToken, deps), {
+        actionId,
+        commandKey: form.command_key!,
+        expectedRowVersion,
+        assignedUserId: suppliedAssignee || null,
+      });
+      return operatorActionRedirect(
+        res,
+        deps,
+        sessionToken,
+        outcome.ok
+          ? outcome.disposition === 'replayed' ? 'replayed' : suppliedAssignee ? 'assigned' : 'released'
+          : operatorActionFailureNotice(outcome.kind),
+      );
+    } catch {
+      return operatorActionRedirect(res, deps, sessionToken, 'unavailable');
     }
   }
 

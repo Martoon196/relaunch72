@@ -397,6 +397,7 @@ async function main(): Promise<void> {
       } else {
         console.warn('⚠  Company content controls remain unavailable; the dedicated content command identity is absent or did not pass readiness.');
       }
+      console.log('Authoritative Operator Action Centre and protected assignment/snooze commands are ready.');
     } catch (error) {
       // No legacy-cookie fallback in requested database mode. Payments may stay
       // live for liveness, but the customer portal is deliberately not mounted.
@@ -420,6 +421,7 @@ async function main(): Promise<void> {
         auth: postgresPortal.auth,
         crm: postgresPortal.crm,
         journeys: postgresPortal.journeys,
+        operatorActions: postgresPortal.operatorActions,
         companyContent: postgresPortal.companyContent,
         inbox: postgresPortal.inbox,
         inboxCommands: postgresPortal.inboxCommands,

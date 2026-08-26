@@ -34,6 +34,9 @@ export interface OperatorActionEvidenceSnapshot {
 
 export interface OperatorActionSnapshot {
   readonly actionId: string;
+  /** Stable server-derived source identity. Browsers must never author it. */
+  readonly actionKind?: string;
+  readonly sourceReference?: string;
   readonly source: OperatorActionSource;
   readonly priority: OperatorActionPriority;
   readonly status: OperatorActionStatus;
@@ -49,19 +52,43 @@ export interface OperatorActionSnapshot {
   readonly deepLink: string;
   readonly deepLinkLabel: string;
   readonly evidence: OperatorActionEvidenceSnapshot;
+  /** Durable assignment/snooze overlay metadata; absent on fictional fixtures. */
+  readonly rowVersion?: number | null;
+  readonly sourceRowVersion?: number;
+  readonly assignedUserId?: string | null;
+  readonly assignmentOverridden?: boolean;
+  readonly snoozedUntil?: string | null;
+  readonly canSnooze?: boolean;
+  readonly canAssign?: boolean;
+}
+
+export interface OperatorAssignableMemberSnapshot {
+  readonly userId: string;
+  readonly displayName: string;
+  readonly role: 'owner' | 'admin' | 'marketer' | 'sales';
 }
 
 export interface OperatorActionCentreSnapshot {
   readonly workspaceId: string;
   readonly workspaceName: string;
   readonly asOf: string;
-  readonly environment: 'test';
-  readonly datasetKind: 'fictional_test_fixture';
+  readonly environment: 'test' | 'production';
+  readonly datasetKind: 'fictional_test_fixture' | 'postgres_authoritative';
+  readonly currentUserId?: string;
+  readonly canWrite?: boolean;
+  readonly canManage?: boolean;
+  readonly canAssign?: boolean;
+  readonly commandBoundaryAvailable?: boolean;
+  readonly assignableMembers?: readonly OperatorAssignableMemberSnapshot[];
+  readonly membersTruncated?: boolean;
+  readonly inputTruncated?: boolean;
   readonly actions: readonly OperatorActionSnapshot[];
 }
 
 export interface OperatorActionView {
   readonly actionId: string;
+  readonly actionKind: string;
+  readonly sourceReference: string;
   readonly indexLabel: string;
   readonly source: OperatorActionSource;
   readonly sourceLabel: string;
@@ -101,6 +128,13 @@ export interface OperatorActionView {
     observedLabel: string;
     available: boolean;
   }>;
+  readonly rowVersion: number | null;
+  readonly sourceRowVersion: number | null;
+  readonly assignedUserId: string | null;
+  readonly assignmentOverridden: boolean;
+  readonly snoozedUntil: string | null;
+  readonly canSnooze: boolean;
+  readonly canAssign: boolean;
   readonly inputValid: boolean;
 }
 
@@ -126,9 +160,15 @@ export interface OperatorActionCentreView {
   readonly workspaceName: string;
   readonly asOf: string;
   readonly asOfLabel: string;
-  readonly environment: 'test';
-  readonly datasetKind: 'fictional_test_fixture';
-  readonly datasetBoundary: 'FICTIONAL TEST FIXTURE · no customer, provider or production records';
+  readonly environment: 'test' | 'production';
+  readonly datasetKind: 'fictional_test_fixture' | 'postgres_authoritative';
+  readonly datasetBoundary: string;
+  readonly currentUserId: string | null;
+  readonly canWrite: boolean;
+  readonly canManage: boolean;
+  readonly canAssign: boolean;
+  readonly assignableMembers: readonly OperatorAssignableMemberSnapshot[];
+  readonly membersTruncated: boolean;
   readonly actions: readonly OperatorActionView[];
   readonly needsNow: readonly OperatorActionView[];
   readonly onDeck: readonly OperatorActionView[];
@@ -150,8 +190,8 @@ export interface OperatorActionCentreView {
     duplicateActions: number;
   }>;
   readonly inputTruncated: boolean;
-  readonly commandBoundaryAvailable: false;
-  readonly mutatingControlsEnabled: false;
+  readonly commandBoundaryAvailable: boolean;
+  readonly mutatingControlsEnabled: boolean;
   readonly providerEffects: 'none';
 }
 
@@ -181,6 +221,7 @@ const STATUS_LABELS: Readonly<Record<OperatorActionStatus, string>> = Object.fre
 const SOURCE_ORDER: readonly OperatorActionSource[] = Object.freeze([
   'journey', 'inbox', 'content', 'webinar', 'automation', 'provider', 'crm',
 ]);
+const OPERATOR_ACTION_KEY = /^[a-z][a-z0-9._:-]{2,159}$/u;
 
 function boundedText(value: unknown, max = OPERATOR_ACTION_CENTRE_MAX_TEXT): string {
   return [...String(value ?? '')].slice(0, max).join('');
@@ -283,16 +324,27 @@ function actionView(action: OperatorActionSnapshot, asOf: number | null): Operat
   const source = SOURCE_META[action.source];
   const priority = PRIORITY_META[action.priority];
   const sla = slaView(action.dueAt, asOf);
+  const hasAssignedIdentity = typeof action.assignedUserId === 'string'
+    && action.assignedUserId.trim().length > 0;
   const ownerLabel = action.ownerLabel === null || action.ownerLabel.trim().length === 0
-    ? 'Unassigned'
+    ? hasAssignedIdentity ? 'Assigned workspace member' : 'Unassigned'
     : boundedText(action.ownerLabel, 100);
-  const ownerAssigned = ownerLabel !== 'Unassigned';
+  const ownerAssigned = hasAssignedIdentity || ownerLabel !== 'Unassigned';
   const created = validInstant(action.createdAt);
   const ageMinutes = created === null || asOf === null ? null : Math.max(0, Math.floor((asOf - created) / 60_000));
   const link = safePortalLink(action.deepLink);
   const evidence = evidenceView(action.evidence);
+  const actionKind = boundedText(action.actionKind ?? action.source, 100);
+  const sourceReference = boundedText(action.sourceReference ?? action.actionId, 180);
+  const actionKeyValid = OPERATOR_ACTION_KEY.test(action.actionId);
+  const rowVersion = Number.isSafeInteger(action.rowVersion) && (action.rowVersion ?? -1) >= 0
+    ? action.rowVersion! : null;
+  const sourceRowVersion = Number.isSafeInteger(action.sourceRowVersion) && (action.sourceRowVersion ?? -1) >= 0
+    ? action.sourceRowVersion! : null;
+  const snoozedUntil = action.snoozedUntil && validInstant(action.snoozedUntil) !== null
+    ? action.snoozedUntil : null;
   const textValid = [
-    action.actionId, action.title, action.detail, action.ownerTeam, action.signalLabel,
+    action.actionId, actionKind, sourceReference, action.title, action.detail, action.ownerTeam, action.signalLabel,
     action.deepLinkLabel, action.evidence.label, action.evidence.detail,
   ].every((value) => [...String(value)].length <= OPERATOR_ACTION_CENTRE_MAX_TEXT);
   const chronologyValid = created !== null && asOf !== null && created <= asOf
@@ -301,6 +353,8 @@ function actionView(action: OperatorActionSnapshot, asOf: number | null): Operat
     || (action.priority === 'p0' && action.status === 'blocked');
   return Object.freeze({
     actionId: boundedText(action.actionId, 120),
+    actionKind,
+    sourceReference,
     indexLabel: '',
     source: action.source,
     sourceLabel: source.label,
@@ -331,7 +385,14 @@ function actionView(action: OperatorActionSnapshot, asOf: number | null): Operat
     deepLinkLabel: boundedText(action.deepLinkLabel, 100),
     deepLinkValid: link.valid,
     evidence,
-    inputValid: textValid && chronologyValid && link.valid && evidence.available,
+    rowVersion,
+    sourceRowVersion,
+    assignedUserId: action.assignedUserId ?? null,
+    assignmentOverridden: action.assignmentOverridden === true,
+    snoozedUntil,
+    canSnooze: action.canSnooze === true && actionKeyValid,
+    canAssign: action.canAssign === true && actionKeyValid,
+    inputValid: actionKeyValid && textValid && chronologyValid && link.valid && evidence.available,
   });
 }
 
@@ -340,6 +401,9 @@ function slaSortRank(state: OperatorActionSlaState): number {
 }
 
 function compareActions(left: OperatorActionView, right: OperatorActionView): number {
+  const critical = Number(right.priority === 'p0' && right.status === 'blocked')
+    - Number(left.priority === 'p0' && left.status === 'blocked');
+  if (critical !== 0) return critical;
   const sla = slaSortRank(left.slaState) - slaSortRank(right.slaState);
   if (sla !== 0) return sla;
   const priority = left.priorityRank - right.priorityRank;
@@ -350,7 +414,7 @@ function compareActions(left: OperatorActionView, right: OperatorActionView): nu
   return left.actionId.localeCompare(right.actionId, 'en-GB');
 }
 
-/** Assemble, validate and rank a bounded operational TEST queue. */
+/** Assemble, validate and rank a bounded operational queue without changing source truth. */
 export function presentOperatorActionCentre(snapshot: OperatorActionCentreSnapshot): OperatorActionCentreView {
   const asOf = validInstant(snapshot.asOf);
   const boundedActions = snapshot.actions.slice(0, OPERATOR_ACTION_CENTRE_MAX_ACTIONS);
@@ -398,16 +462,33 @@ export function presentOperatorActionCentre(snapshot: OperatorActionCentreSnapsh
         || right.total - left.total
         || left.ownerLabel.localeCompare(right.ownerLabel, 'en-GB')),
   );
-  const inputTruncated = snapshot.actions.length > OPERATOR_ACTION_CENTRE_MAX_ACTIONS;
+  const authoritative = snapshot.datasetKind === 'postgres_authoritative';
+  const inputTruncated = snapshot.inputTruncated === true
+    || snapshot.actions.length > OPERATOR_ACTION_CENTRE_MAX_ACTIONS;
   const coherent = asOf !== null && invalidActions === 0 && duplicates === 0 && !inputTruncated;
+  const canWrite = authoritative && snapshot.canWrite === true;
+  const commandBoundaryAvailable = authoritative && snapshot.commandBoundaryAvailable === true;
+  const assignableMembers = Object.freeze((snapshot.assignableMembers ?? []).slice(0, 100).map((member) => Object.freeze({
+    userId: boundedText(member.userId, 80),
+    displayName: boundedText(member.displayName, 120),
+    role: member.role,
+  })));
   return Object.freeze({
     workspaceId: boundedText(snapshot.workspaceId, 120),
     workspaceName: boundedText(snapshot.workspaceName, 160),
     asOf: asOf === null ? snapshot.asOf : new Date(asOf).toISOString(),
     asOfLabel: formatInstant(snapshot.asOf),
-    environment: 'test',
-    datasetKind: 'fictional_test_fixture',
-    datasetBoundary: 'FICTIONAL TEST FIXTURE · no customer, provider or production records',
+    environment: snapshot.environment,
+    datasetKind: snapshot.datasetKind,
+    datasetBoundary: authoritative
+      ? 'RLS-SCOPED POSTGRESQL SNAPSHOT · source records remain authoritative'
+      : 'FICTIONAL TEST FIXTURE · no customer, provider or production records',
+    currentUserId: authoritative ? boundedText(snapshot.currentUserId ?? '', 80) || null : null,
+    canWrite,
+    canManage: authoritative && snapshot.canManage === true,
+    canAssign: authoritative && snapshot.canAssign === true,
+    assignableMembers,
+    membersTruncated: snapshot.membersTruncated === true || (snapshot.assignableMembers?.length ?? 0) > 100,
     actions,
     needsNow,
     onDeck,
@@ -425,14 +506,16 @@ export function presentOperatorActionCentre(snapshot: OperatorActionCentreSnapsh
       coherent,
       label: coherent ? 'QUEUE COHERENT' : 'REVIEW INPUT',
       detail: coherent
-        ? 'Every visible TEST action has a unique key, safe portal link, valid SLA chronology and source evidence.'
+        ? authoritative
+          ? 'Every visible action has a unique server-derived key, safe portal link, valid chronology and measured source evidence.'
+          : 'Every visible TEST action has a unique key, safe portal link, valid SLA chronology and source evidence.'
         : 'One or more actions lost a valid key, portal link, chronology or evidence proof; treat the affected row as advisory.',
       invalidActions,
       duplicateActions: duplicates,
     }),
     inputTruncated,
-    commandBoundaryAvailable: false,
-    mutatingControlsEnabled: false,
+    commandBoundaryAvailable,
+    mutatingControlsEnabled: commandBoundaryAvailable && canWrite,
     providerEffects: 'none',
   });
 }

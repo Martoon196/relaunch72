@@ -5,6 +5,8 @@
  */
 export const PLATFORM_CAPABILITIES = [
   'workspace.overview.read',
+  'actions.read',
+  'actions.manage',
   'crm.contacts.read',
   'crm.contacts.write',
   'crm.pipeline.read',

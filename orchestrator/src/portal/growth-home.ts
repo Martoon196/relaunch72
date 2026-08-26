@@ -121,6 +121,7 @@ export function renderGrowthHomeBody(
   snapshot: CrmWorkspaceSnapshot,
   profile: PortalProductProfile,
   suppliedGrowth?: GrowthIntelligenceView,
+  options: Readonly<{ actionCentreAvailable?: boolean }> = {},
 ): string {
   const growth = suppliedGrowth ?? emptyGrowthIntelligence(snapshot.workspace.snapshotAt);
   const openStageIds = new Set(snapshot.stages.filter((stage) => !stage.isClosed).map((stage) => stage.id));
@@ -139,13 +140,23 @@ export function renderGrowthHomeBody(
   const heroTitle = profile.id === 'property_predator_growth'
     ? 'See what every <em>lead</em> is hiding.'
     : escapeHtml(profile.home.title);
+  const actionCentreAvailable = options.actionCentreAvailable === true;
+  const heroActions = actionCentreAvailable
+    ? '<a class="button" href="/portal/actions">Open Action Centre</a><a class="button secondary" href="#hot-list">Work the hot list</a>'
+    : '<a class="button" href="#hot-list">Work the hot list</a><a class="button secondary" href="/portal/crm/contacts">Open CRM</a>';
+  const attentionCopy = actionCentreAvailable
+    ? 'This CRM preview rolls into the full evidence-backed operator queue.'
+    : 'CRM tasks remain separate from journey evidence.';
+  const attentionLink = actionCentreAvailable
+    ? '<a class="pp-panel-action" href="/portal/actions">Action Centre →</a>'
+    : '<a class="pp-panel-action" href="/portal/crm/tasks">Tasks →</a>';
 
   return `<style>${GROWTH_HOME_STYLE}</style><div class="pp-home">
     <section class="pp-hero" aria-labelledby="growth-home-title"><div class="pp-hero-copy">
       <div class="pp-live-line ${stateClass}"><span class="pp-live-dot"></span>${escapeHtml(stateLabel)} · ${escapeHtml(growth.windowLabel)}</div>
       <h1 id="growth-home-title">${heroTitle}</h1>
       <p>${escapeHtml(profile.home.summary)}</p>
-      <div class="pp-hero-actions"><a class="button" href="#hot-list">Work the hot list</a><a class="button secondary" href="/portal/crm/contacts">Open CRM</a></div>
+      <div class="pp-hero-actions">${heroActions}</div>
       <div class="pp-hero-proof"><span><i></i>${escapeHtml(stateTruth)}</span><span><i></i>Sale requires collected payment</span><span><i></i>Consent never adds score</span></div>
     </div></section>
     <section class="pp-metrics" aria-label="Conversion evidence snapshot">
@@ -160,7 +171,7 @@ export function renderGrowthHomeBody(
       <section class="pp-panel" id="hot-list" aria-labelledby="hot-list-title"><div class="pp-panel-head"><div><div class="pp-panel-kicker">Case files</div><h2 id="hot-list-title">Who needs the next move?</h2><p>Score, exact last evidence and a human-readable action.</p></div><a class="pp-panel-action" href="/portal/crm/contacts">All leads →</a></div><div class="pp-panel-body">${hotList(growth, snapshot.workspace.timezone)}</div></section>
     </div><aside class="pp-stack" aria-label="Evidence and action rails">
       <section class="pp-panel" aria-labelledby="evidence-title"><div class="pp-panel-head"><div><div class="pp-panel-kicker">Consumption + intent</div><h2 id="evidence-title">Evidence captured</h2></div></div><div class="pp-panel-body">${evidenceTotals(growth)}</div></section>
-      <section class="pp-panel" aria-labelledby="attention-title"><div class="pp-panel-head"><div><div class="pp-panel-kicker">Human work</div><h2 id="attention-title">Needs attention</h2><p>CRM tasks remain separate from journey evidence.</p></div><a class="pp-panel-action" href="/portal/crm/tasks">Tasks →</a></div><div class="pp-panel-body">${attentionQueue(snapshot, openStageIds)}</div></section>
+      <section class="pp-panel" aria-labelledby="attention-title"><div class="pp-panel-head"><div><div class="pp-panel-kicker">Human work</div><h2 id="attention-title">Needs attention</h2><p>${attentionCopy}</p></div>${attentionLink}</div><div class="pp-panel-body">${attentionQueue(snapshot, openStageIds)}</div></section>
       <section class="pp-panel" aria-labelledby="machine-title"><div class="pp-panel-head"><div><div class="pp-panel-kicker">Modular machine</div><h2 id="machine-title">Rails</h2></div></div><div class="pp-panel-body">${readiness(profile)}</div></section>
     </aside></div>
   </div>`;

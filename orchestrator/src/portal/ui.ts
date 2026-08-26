@@ -8,7 +8,7 @@ import { CORE_PLATFORM_MODULES, platformModules, type PlatformModuleId, type Pla
 import type { PlatformCapability } from '../platform/capabilities.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
 
-export type PortalSection = 'overview' | 'crm' | 'journeys' | 'content' | 'inbox' | 'billing';
+export type PortalSection = 'overview' | 'actions' | 'crm' | 'journeys' | 'content' | 'inbox' | 'billing';
 
 export function escapeHtml(value: unknown): string {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -39,7 +39,7 @@ const ICON_PATHS: Record<IconName, string> = {
 };
 
 const MODULE_ICONS: Record<PlatformModuleId, IconName> = {
-  overview: 'overview', crm: 'contacts', journeys: 'automation', content: 'content', social: 'social', inbox: 'inbox',
+  overview: 'overview', actions: 'activity', crm: 'contacts', journeys: 'automation', content: 'content', social: 'social', inbox: 'inbox',
   listening: 'listening', webinars: 'calendar', automations: 'automation', analytics: 'activity', settings: 'billing',
 };
 
@@ -187,6 +187,7 @@ export function appShell(opts: AppShellOptions): string {
   const moduleLabel = (module: PlatformModuleManifest): string => profile.moduleLabels[module.id] ?? module.shortLabel;
   const isCurrent = (id: PlatformModuleId): boolean =>
     (opts.active === 'overview' && id === 'overview')
+    || (opts.active === 'actions' && id === 'actions')
     || (opts.active === 'crm' && id === 'crm')
     || (opts.active === 'journeys' && id === 'journeys')
     || (opts.active === 'content' && id === 'content')

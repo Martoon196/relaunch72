@@ -50,7 +50,7 @@ test('product profiles fail closed and cannot carry authorization state', () => 
   assert.equal('providerConnections' in PROPERTY_PREDATOR_GROWTH_PROFILE, false);
   assert.deepEqual(
     PROPERTY_PREDATOR_GROWTH_PROFILE.visibleNavigation,
-    ['overview', 'crm', 'journeys', 'content', 'inbox'],
+    ['overview', 'actions', 'crm', 'journeys', 'content', 'inbox'],
   );
 });
 
@@ -73,6 +73,7 @@ test('Property Predator sign-in advertises only its visible workspace modules', 
   const html = loginPage(undefined, '', 'csrf', PROPERTY_PREDATOR_GROWTH_PROFILE);
   const genericHtml = loginPage(undefined, '', 'csrf', RELAUNCH72_PRODUCT_PROFILE);
   assert.match(html, /<span>Today<\/span>/);
+  assert.match(html, /<span>Actions<\/span>/);
   assert.match(html, /<span>Leads<\/span>/);
   assert.match(html, /<span>Journeys<\/span>/);
   assert.match(html, /<span>Content<\/span>/);

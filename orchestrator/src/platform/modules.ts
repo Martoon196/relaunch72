@@ -2,6 +2,7 @@ import { isPlatformCapability, type PlatformCapability } from './capabilities.js
 
 export type PlatformModuleId =
   | 'overview'
+  | 'actions'
   | 'crm'
   | 'journeys'
   | 'content'
@@ -50,7 +51,7 @@ export interface PlatformModuleRegistry {
   navigation(context: ModuleRuntimeContext): readonly ResolvedPlatformModule[];
 }
 
-const MODULE_IDS = new Set<PlatformModuleId>(['overview', 'crm', 'journeys', 'content', 'social', 'inbox', 'listening', 'webinars', 'automations', 'analytics', 'settings']);
+const MODULE_IDS = new Set<PlatformModuleId>(['overview', 'actions', 'crm', 'journeys', 'content', 'social', 'inbox', 'listening', 'webinars', 'automations', 'analytics', 'settings']);
 const MODULE_GROUPS = new Set<PlatformModuleGroup>(['work', 'channels', 'intelligence', 'system']);
 const MODULE_STAGES = new Set<PlatformModuleStage>(['available', 'preview', 'planned']);
 const MODULE_ICONS = new Set<PlatformModuleManifest['icon']>(['home', 'users', 'sparkles', 'send', 'inbox', 'radar', 'video', 'workflow', 'chart', 'settings']);
@@ -173,6 +174,7 @@ export function createPlatformModuleRegistry(input: readonly PlatformModuleManif
 
 export const CORE_PLATFORM_MODULES: readonly PlatformModuleManifest[] = Object.freeze([
   { id: 'overview', label: 'Overview', shortLabel: 'Home', description: 'Workspace priorities, activity and connected operations.', icon: 'home', group: 'work', order: 10, route: '/portal', stage: 'available', requiredCapabilities: ['workspace.overview.read'] },
+  { id: 'actions', label: 'Operator Action Centre', shortLabel: 'Actions', description: 'One evidence-backed queue for urgent work, ownership and safe snoozing.', icon: 'workflow', group: 'work', order: 15, route: '/portal/actions', stage: 'available', requiredCapabilities: ['actions.read'], dependsOn: ['overview'] },
   { id: 'crm', label: 'CRM', shortLabel: 'CRM', description: 'Private contacts, opportunities, tasks and recorded CRM activity.', icon: 'users', group: 'work', order: 20, route: '/portal/crm/contacts', stage: 'available', requiredCapabilities: ['crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read'], dependsOn: ['overview'] },
   { id: 'journeys', label: 'Live journeys', shortLabel: 'Journeys', description: 'Operational lead lanes beside evidence-led milestones, scores and next moves.', icon: 'workflow', group: 'work', order: 25, route: '/portal/journeys/board', stage: 'available', requiredCapabilities: ['journeys.read'], dependsOn: ['crm'] },
   { id: 'content', label: 'Content control', shortLabel: 'Content', description: 'Immutable on-brand versions, source proof and exact approvals.', icon: 'sparkles', group: 'work', order: 30, route: '/portal/content', stage: 'available', requiredCapabilities: ['content.drafts.read'], dependsOn: ['overview'] },

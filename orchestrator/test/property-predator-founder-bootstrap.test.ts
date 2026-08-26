@@ -6,6 +6,7 @@ import { discoverMigrations } from '../src/db/migrate.js';
 import {
   bootstrapPropertyPredatorFounder,
   loadPropertyPredatorFounderBootstrapConfig,
+  PROPERTY_PREDATOR_FOUNDER_BOOTSTRAP_TERMINAL_CHECKSUM,
   propertyPredatorFounderMigrationLedger,
 } from '../src/ops/property-predator-founder-bootstrap.js';
 
@@ -40,27 +41,16 @@ async function bootstrapFixture(createdNow: boolean): Promise<{
   sqlTokenHash: Buffer;
   bootstrapValues: unknown[];
 }> {
-  const migrations = await discoverMigrations();
-  const ledgerRows = migrations.map(({ filename, checksum }) => ({ filename, checksum }));
   const setupBytes = Buffer.alloc(32, 0xa5);
   const rawToken = setupBytes.toString('base64url');
   let sqlTokenHash = Buffer.alloc(0);
   let bootstrapValues: unknown[] = [];
-  let connectionNumber = 0;
   const clients: FakeClient[] = [];
   const pool = {
     connect: async () => {
-      connectionNumber += 1;
-      const readinessConnection = connectionNumber === 1;
       const client: FakeClient = {
         releasedWith: undefined,
         query: (async (sql: string, values?: unknown[]) => {
-          if (readinessConnection && sql.includes("to_regclass('app_private.schema_migrations')")) {
-            return result([{ ledger: 'app_private.schema_migrations' }]);
-          }
-          if (readinessConnection && sql.includes('SELECT filename, checksum')) {
-            return result(ledgerRows);
-          }
           if (sql.includes('bootstrap_property_predator_founder')) {
             bootstrapValues = values ? [...values] : [];
             sqlTokenHash = Buffer.from(bootstrapValues[3] as Buffer);
@@ -94,7 +84,7 @@ async function bootstrapFixture(createdNow: boolean): Promise<{
     changeReference: 'pp-ghq-founder-bootstrap-20260826',
     expectedInstallationId: IDS.installation,
   });
-  assert.equal(clients.length, 2);
+  assert.equal(clients.length, 1);
   assert.equal(clients.every((client) => client.releasedWith !== true), true);
   return { handoff, rawToken, sqlTokenHash, bootstrapValues };
 }
@@ -108,6 +98,9 @@ test('founder bootstrap sends only a setup-token hash to SQL and returns one mem
   assert.equal(fixture.bootstrapValues.some((value) => value === fixture.rawToken), false);
   assert.equal(fixture.bootstrapValues[0], 'pp-ghq-founder-bootstrap-20260826');
   assert.equal(fixture.bootstrapValues[1], IDS.installation);
+  const reviewedLedger = JSON.parse(String(fixture.bootstrapValues[2])) as Array<{ filename: string }>;
+  assert.equal(reviewedLedger.length, 27);
+  assert.equal(reviewedLedger.at(-1)?.filename, '0027_property_predator_founder_bootstrap.sql');
   assert.equal(fixture.handoff.createdNow, true);
   assert.equal(fixture.handoff.setup.status, 'created');
   assert.equal(
@@ -157,8 +150,27 @@ test('founder bootstrap config and local release ledger are exact', async () => 
 
   const migrations = await discoverMigrations();
   assert.equal(propertyPredatorFounderMigrationLedger(migrations).length, 27);
+  assert.equal(propertyPredatorFounderMigrationLedger(migrations).at(-1)?.filename,
+    '0027_property_predator_founder_bootstrap.sql');
+  assert.equal(propertyPredatorFounderMigrationLedger(migrations).at(-1)?.checksum,
+    PROPERTY_PREDATOR_FOUNDER_BOOTSTRAP_TERMINAL_CHECKSUM);
   assert.throws(
-    () => propertyPredatorFounderMigrationLedger(migrations.slice(0, -1)),
+    () => propertyPredatorFounderMigrationLedger(migrations.slice(0, 26)),
+    /exact reviewed migration ledger/,
+  );
+  assert.throws(
+    () => propertyPredatorFounderMigrationLedger([
+      { ...migrations[0]!, filename: '0001_tampered.sql' },
+      ...migrations.slice(1),
+    ]),
+    /exact reviewed migration ledger/,
+  );
+  assert.throws(
+    () => propertyPredatorFounderMigrationLedger([
+      ...migrations.slice(0, 26),
+      { ...migrations[26]!, checksum: '0'.repeat(64) },
+      ...migrations.slice(27),
+    ]),
     /exact reviewed migration ledger/,
   );
 });

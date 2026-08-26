@@ -158,6 +158,40 @@ No rollback may enable a provider effect or restore an older credential without 
 
 Never log a secret, URL, email address or raw webhook body during rotation. Evidence records contain redacted identifiers and hashes only.
 
+## 8. Operator Action Centre schema-28 cutover
+
+Migration `0028_operator_action_control_foundation.sql` adds only the
+workspace-scoped assignment and snooze overlay for the authoritative Action
+Centre. It does not complete source work, import leads or enable a provider
+effect.
+
+This is an exact-ledger cutover: the schema-27 web release must reject schema
+28, and the schema-28 web release must reject schema 27. Apply the migration
+and immediately deploy the exact reviewed commit. Expect a short fail-closed
+readiness window between those two actions; roll forward if either step needs
+repair.
+
+Before the cutover:
+
+1. Prove the founder receipt already exists and do not attempt to rerun the
+   one-time founder bootstrap. Its reviewed boundary remains permanently
+   pinned to migrations `0001`–`0027`.
+2. Prove the disposable database passes the full integration suite at schema
+   28 and record the exact release commit.
+3. Keep provider effects OFF, email delivery OFF and the emergency pause ON.
+4. Confirm the exact schema-28 release is available to Render before changing
+   the production ledger.
+
+After the cutover, require all of the following before accepting the release:
+
+- `/ready` returns HTTP 200 with no blockers on the exact 28-file ledger;
+- an authenticated owner can open `/portal/actions`;
+- the queue contains only production database facts and never fixture labels;
+- assignment and snooze commands are CSRF-protected, replay-safe and leave the
+  originating task, journey, approval or provider record untouched; and
+- the web and dark worker readiness evidence still reports zero provider
+  effects.
+
 ## Current deployed state and remaining activation blockers
 
 - Render web and worker services are live in Frankfurt on the same reviewed

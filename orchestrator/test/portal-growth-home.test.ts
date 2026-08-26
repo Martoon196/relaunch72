@@ -100,6 +100,23 @@ test('Growth HQ separates measured journey evidence from saved CRM facts', () =>
   assert.doesNotMatch(html, /Predator Briefing <Replay>/);
 });
 
+test('Growth HQ advertises the Action Centre only when its route is mounted', () => {
+  const unavailable = renderGrowthHomeBody(snapshot(), PROPERTY_PREDATOR_GROWTH_PROFILE, growth());
+  assert.doesNotMatch(unavailable, /href="\/portal\/actions"/);
+  assert.doesNotMatch(unavailable, /Open Action Centre|Action Centre →/);
+  assert.match(unavailable, /href="#hot-list">Work the hot list/);
+  assert.match(unavailable, /href="\/portal\/crm\/contacts">Open CRM/);
+  assert.match(unavailable, /href="\/portal\/crm\/tasks">Tasks →/);
+
+  const available = renderGrowthHomeBody(snapshot(), PROPERTY_PREDATOR_GROWTH_PROFILE, growth(), {
+    actionCentreAvailable: true,
+  });
+  assert.equal((available.match(/href="\/portal\/actions"/g) ?? []).length, 2);
+  assert.match(available, /Open Action Centre/);
+  assert.match(available, /Action Centre →/);
+  assert.doesNotMatch(available, /href="\/portal\/crm\/tasks">Tasks →/);
+});
+
 test('Growth HQ treats sparse direct-entry stages as evidence, not upcoming or cohort conversion', () => {
   const base = growth();
   const selfServe = base.funnels[0]!;

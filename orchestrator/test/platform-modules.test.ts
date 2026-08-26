@@ -8,7 +8,7 @@ import { createProviderOperationContext, type SocialPublishingProvider } from '.
 
 test('core modules have stable unique ids/routes and uncluttered ordering', () => {
   assert.deepEqual(platformModules.modules.map((module) => module.id), [
-    'overview', 'crm', 'journeys', 'content', 'social', 'inbox', 'listening', 'webinars', 'automations', 'analytics', 'settings',
+    'overview', 'actions', 'crm', 'journeys', 'content', 'social', 'inbox', 'listening', 'webinars', 'automations', 'analytics', 'settings',
   ]);
   assert.equal(new Set(platformModules.modules.map((module) => module.id)).size, platformModules.modules.length);
   const routes = platformModules.modules.flatMap((module) => module.route ? [module.route] : []);
@@ -19,6 +19,8 @@ test('runtime resolution presents the shipped Journey Manager only with its capa
   const everyCapability = new Set<PlatformCapability>(CORE_PLATFORM_MODULES.flatMap((module) => [...module.requiredCapabilities]));
   const byId = new Map(platformModules.resolve({ capabilities: everyCapability }).map((module) => [module.id, module]));
   assert.equal(byId.get('overview')?.state, 'ready');
+  assert.equal(byId.get('actions')?.state, 'ready');
+  assert.equal(byId.get('actions')?.route, '/portal/actions');
   assert.equal(byId.get('crm')?.state, 'ready');
   assert.equal(byId.get('crm')?.description, 'Private contacts, opportunities, tasks and recorded CRM activity.');
   assert.equal(byId.get('journeys')?.state, 'ready');
@@ -59,14 +61,15 @@ test('a module cannot look ready while a declared dependency is unavailable', ()
 
 test('registry rejects duplicate ids, duplicate routes and dependency cycles', () => {
   const overview = CORE_PLATFORM_MODULES[0]!;
+  const crm = CORE_PLATFORM_MODULES.find((module) => module.id === 'crm')!;
   assert.throws(() => createPlatformModuleRegistry([overview, overview]), /duplicate module id/);
   assert.throws(() => createPlatformModuleRegistry([
     overview,
-    { ...CORE_PLATFORM_MODULES[1]!, route: overview.route },
+    { ...crm, route: overview.route },
   ]), /duplicate module route/);
   assert.throws(() => createPlatformModuleRegistry([
     { ...overview, dependsOn: ['crm'] },
-    { ...CORE_PLATFORM_MODULES[1]!, dependsOn: ['overview'] },
+    { ...crm, dependsOn: ['overview'] },
   ]), /dependency cycle/);
   assert.throws(() => createPlatformModuleRegistry([
     { ...overview, stage: 'launched' as never },

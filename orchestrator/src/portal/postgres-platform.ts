@@ -30,11 +30,17 @@ import {
   type PgPortalConversionInboxCommandService,
 } from './conversion-inbox-pg-service.js';
 import { createPgConversionInboxThreadReadService } from './conversion-inbox-thread-pg-service.js';
+import {
+  createPgPortalOperatorActionCentreService,
+  type PgPortalOperatorActionCentreService,
+} from './operator-action-centre-pg-service.js';
 
 export interface PgPortalPlatform {
   auth: PgPortalAuthService;
   crm: PgPortalCrmService;
   journeys: PgPortalJourneyManagerService;
+  /** RLS-scoped authoritative operator queue with assignment/snooze overlays only. */
+  operatorActions: PgPortalOperatorActionCentreService;
   /** Omitted unless the dedicated r72_content_command identity passes readiness. */
   companyContent?: PgPortalCompanyContentService;
   /** Canonical TEST-only queue read model; it has no send or provider operation. */
@@ -194,6 +200,11 @@ export async function buildPgPortalPlatform(
       auth: new PgPortalAuthService({ readPool: webPool, commandPool: identityPool }),
       crm: createPgPortalCrmService({ webPool, commandPool }),
       journeys: createPgPortalJourneyManagerService({ webPool, commandPool }),
+      operatorActions: createPgPortalOperatorActionCentreService({
+        webPool,
+        commandPool,
+        environment: env.NODE_ENV?.trim() === 'production' ? 'production' : 'test',
+      }),
       companyContent,
       inbox: createPgPortalInboxReadBoundary(webPool),
       inboxCommands: createPgPortalConversionInboxCommandService({ webPool, commandPool }),

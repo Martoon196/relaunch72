@@ -1,7 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import {
-  assertSchemaCurrent,
   discoverMigrations,
   type SqlMigration,
 } from '../db/migrate.js';
@@ -40,6 +39,8 @@ export const PROPERTY_PREDATOR_FOUNDER_BOOTSTRAP_MIGRATIONS = Object.freeze([
   '0026_database_installation_identity.sql',
   '0027_property_predator_founder_bootstrap.sql',
 ] as const);
+export const PROPERTY_PREDATOR_FOUNDER_BOOTSTRAP_TERMINAL_CHECKSUM =
+  '53853bb092c087438e4e18fcbc70a7674e5f3d3346ef43aebe88b4145a99d3ba';
 
 export interface PropertyPredatorFounderBootstrapConfig {
   changeReference: string;
@@ -125,13 +126,16 @@ export function propertyPredatorFounderMigrationLedger(
   migrations: readonly SqlMigration[],
 ): ReadonlyArray<Readonly<{ filename: string; checksum: string }>> {
   const filenames = migrations.map((migration) => migration.filename);
-  if (filenames.length !== PROPERTY_PREDATOR_FOUNDER_BOOTSTRAP_MIGRATIONS.length
-      || filenames.some((filename, index) => (
+  const reviewedCount = PROPERTY_PREDATOR_FOUNDER_BOOTSTRAP_MIGRATIONS.length;
+  if (filenames.length < reviewedCount
+      || filenames.slice(0, reviewedCount).some((filename, index) => (
         filename !== PROPERTY_PREDATOR_FOUNDER_BOOTSTRAP_MIGRATIONS[index]
-      ))) {
+      ))
+      || migrations[reviewedCount - 1]?.checksum
+        !== PROPERTY_PREDATOR_FOUNDER_BOOTSTRAP_TERMINAL_CHECKSUM) {
     throw new Error('Founder bootstrap release does not contain the exact reviewed migration ledger');
   }
-  return Object.freeze(migrations.map((migration) => Object.freeze({
+  return Object.freeze(migrations.slice(0, reviewedCount).map((migration) => Object.freeze({
     filename: migration.filename,
     checksum: migration.checksum,
   })));
@@ -157,7 +161,6 @@ export async function bootstrapPropertyPredatorFounder(
 ): Promise<PropertyPredatorFounderBootstrapHandoff> {
   const migrations = await discoverMigrations(dependencies.migrationsDirectory);
   const ledger = propertyPredatorFounderMigrationLedger(migrations);
-  await assertSchemaCurrent(dependencies.pool, dependencies.migrationsDirectory);
 
   const rawTokenBytes = (dependencies.setupTokenBytes ?? (() => randomBytes(32)))();
   if (!Buffer.isBuffer(rawTokenBytes) || rawTokenBytes.byteLength !== 32) {

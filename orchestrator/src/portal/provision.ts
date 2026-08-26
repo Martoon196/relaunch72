@@ -21,6 +21,7 @@ import type { PortalAuthService } from './auth-service.js';
 import type { PortalJourneyManagerService } from './journey-manager-service.js';
 import type { PortalCompanyContentService } from './company-content-service.js';
 import type { PortalConversionInboxCommandService } from './conversion-inbox-service.js';
+import type { PortalOperatorActionCentreService } from './operator-action-centre-pg-service.js';
 import type { SubscriptionStore } from '../server/subscriptions.js';
 import { canonicalIntake } from '../intake/canonical.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
@@ -130,6 +131,8 @@ export interface PostgresPortalConfig {
   auth: PortalAuthService;
   crm: PortalCrmService;
   journeys?: PortalJourneyManagerService;
+  /** Authoritative operator queue; assignment/snooze only, with no provider effects. */
+  operatorActions?: PortalOperatorActionCentreService;
   /** Omitted unless the dedicated company-content command identity is ready. */
   companyContent?: PortalCompanyContentService;
   /** TEST-only conversion queue read boundary; no provider/send capability. */
@@ -156,6 +159,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     auth: cfg.auth,
     crm: cfg.crm,
     journeys: cfg.journeys,
+    operatorActions: cfg.operatorActions,
     companyContent: cfg.companyContent,
     inbox: cfg.inbox,
     inboxCommands: cfg.inboxCommands,
