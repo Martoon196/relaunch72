@@ -14,10 +14,11 @@ import {
   type NormalizedLegacyUnresolvedAttribution,
 } from './types.js';
 
-const SOURCE_SYSTEM = /^[a-z][a-z0-9_.:-]{0,99}$/;
+const SOURCE_SYSTEM = /^[a-z][a-z0-9_.:/-]{0,99}$/;
 const BATCH_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const CONTROL = /[\u0000-\u001f\u007f]/;
+const QUARANTINE_REASON = /^[a-z][a-z0-9_.:-]{0,99}$/;
 
 function stableJson(value: unknown): string {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') {
@@ -259,7 +260,7 @@ export function normalizeLegacyLeadBatch(
   }
   const sourceSystem = text(input.sourceSystem, 'sourceSystem', 100, issues, true).toLowerCase();
   if (!SOURCE_SYSTEM.test(sourceSystem)) {
-    issues.push({ path: 'sourceSystem', message: 'must use lowercase letters, numbers, dot, underscore, colon or hyphen' });
+    issues.push({ path: 'sourceSystem', message: 'must use lowercase letters, numbers, dot, underscore, slash, colon or hyphen' });
   }
   const batchKey = text(input.batchKey, 'batchKey', 128, issues, true);
   if (!BATCH_KEY.test(batchKey)) {
@@ -305,6 +306,28 @@ export function normalizeLegacyLeadBatch(
       }
       if (identity.primary) primaryKinds.add(identity.kind);
     }
+    const sourceQuarantineReasons: string[] = [];
+    if (row.sourceQuarantineReasons !== undefined) {
+      if (!Array.isArray(row.sourceQuarantineReasons)
+          || row.sourceQuarantineReasons.length > 20) {
+        issues.push({
+          path: `${path}.sourceQuarantineReasons`,
+          message: 'must contain at most 20 reason codes',
+        });
+      } else {
+        for (const [reasonIndex, value] of row.sourceQuarantineReasons.entries()) {
+          const reasonPath = `${path}.sourceQuarantineReasons[${reasonIndex}]`;
+          const reason = text(value, reasonPath, 100, issues, true);
+          if (!QUARANTINE_REASON.test(reason)) {
+            issues.push({ path: reasonPath, message: 'must be a canonical reason code' });
+          }
+          if (sourceQuarantineReasons.includes(reason)) {
+            issues.push({ path: reasonPath, message: 'must not be duplicated' });
+          }
+          sourceQuarantineReasons.push(reason);
+        }
+      }
+    }
     const normalized = {
       sourceRecordId,
       displayName: text(row.displayName, `${path}.displayName`, 200, issues, true),
@@ -314,10 +337,25 @@ export function normalizeLegacyLeadBatch(
       attribution: row.attribution == null
         ? null
         : normalizeAttribution(row.attribution, `${path}.attribution`, originalCreatedAt, now, issues),
+      sourceQuarantineReasons,
     };
+    // `sourceQuarantineReasons` was added after schema v1 was already in use.
+    // Preserve the exact pre-existing canonical bytes when it is absent/empty
+    // so staged batches and receipts remain replay-compatible. Runtime callers
+    // still receive an explicit empty array through `normalized`.
+    const canonicalPayload = sourceQuarantineReasons.length > 0
+      ? normalized
+      : {
+          sourceRecordId: normalized.sourceRecordId,
+          displayName: normalized.displayName,
+          companyName: normalized.companyName,
+          originalCreatedAt: normalized.originalCreatedAt,
+          identities: normalized.identities,
+          attribution: normalized.attribution,
+        };
     let payloadJson = '';
     try {
-      payloadJson = stableJson(normalized);
+      payloadJson = stableJson(canonicalPayload);
       if (Buffer.byteLength(payloadJson, 'utf8') > 524_288) {
         issues.push({ path, message: 'canonical row must be at most 512 KiB' });
       }

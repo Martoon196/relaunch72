@@ -36,6 +36,8 @@ export interface LegacyLeadRowInput {
   readonly originalCreatedAt: string;
   readonly identities: readonly LegacyLeadIdentityInput[];
   readonly attribution?: LegacyLeadAttributionInput | null;
+  /** Source-integrity reasons that force this row into quarantine after replay checks. */
+  readonly sourceQuarantineReasons?: readonly string[];
 }
 
 export interface LegacyLeadBatchInput {
@@ -103,6 +105,7 @@ export interface NormalizedLegacyLeadRow {
   readonly originalCreatedAt: string;
   readonly identities: readonly NormalizedLegacyLeadIdentity[];
   readonly attribution: NormalizedLegacyLeadAttribution | null;
+  readonly sourceQuarantineReasons: readonly string[];
   readonly payloadJson: string;
   readonly payloadHash: Uint8Array;
 }

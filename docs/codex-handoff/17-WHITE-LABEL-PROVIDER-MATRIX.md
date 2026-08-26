@@ -4,6 +4,7 @@
 **Verified:** **2026-08-24**, against current public material published by the vendors themselves. Prices are public list prices, normally before tax, and can change.
 **Scope:** replaceable rails for social publishing, social listening, WhatsApp/shared inbox, webinars/video, email, SMS, booking and an optional automation backend.
 **Product rule:** Relaunch72 owns the customer experience, canonical records, permissions, consent, reporting and operation history. A provider supplies a rail; it does not become the product.
+**AI reuse dependency:** provider work must follow the [Property Predator AI reuse contract](../property-predator-ai-reuse-contract.md). Affiliate Stash and the founder-owned Content Marketer, Image Maker, Social Media Manager, customer avatars, knowledge and proven outputs are inventoried and ported into the versioned Brand Brain before any replacement specialist is created. Provider adapters may transport approved artifacts; they never become the source of Property Predator intelligence.
 
 ---
 

@@ -103,6 +103,8 @@ export interface IdentityCandidate {
   readonly contactId: string;
   readonly dedupeState: 'normal' | 'shared' | 'quarantined';
   readonly contactState: 'active' | 'archived' | 'deleted';
+  /** Existing CRM evidence only; source verification is never silently promoted. */
+  readonly isVerified?: boolean;
 }
 
 interface CandidateRow extends QueryResultRow, IdentityCandidate {}
@@ -415,6 +417,7 @@ export class LegacyLeadImportRepository {
       `/* legacy-import.find-identity-candidates */
        SELECT point.kind, point.normalized_value AS "normalizedValue",
               point.contact_id AS "contactId", point.dedupe_state AS "dedupeState",
+              point.is_verified AS "isVerified",
               CASE
                 WHEN contact.deleted_at IS NOT NULL THEN 'deleted'
                 WHEN contact.lifecycle_status = 'archived' THEN 'archived'

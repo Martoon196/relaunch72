@@ -105,6 +105,35 @@ test('canonical legacy JSON retains source IDs, affiliate codes and dangling fac
   assert.equal(bytesToHex(left.inputHash), bytesToHex(right.inputHash));
 });
 
+test('empty source quarantine reasons preserve the literal pre-extension v1 canonical bytes', () => {
+  const normalized = normalizeLegacyLeadBatch({
+    schemaVersion: 1,
+    sourceSystem: 'property_predator',
+    batchKey: 'legacy-hash-golden',
+    rows: [{
+      sourceRecordId: 'user_001',
+      displayName: 'Legacy Lead',
+      companyName: null,
+      originalCreatedAt: '2024-01-02T03:04:05.000Z',
+      identities: [{
+        kind: 'email', value: 'legacy@example.test', verified: true,
+        label: null, primary: true,
+      }],
+      attribution: null,
+    }],
+  }, new Date('2026-08-27T12:00:00.000Z'));
+  const expectedRow = '{"attribution":null,"companyName":null,"displayName":"Legacy Lead","identities":[{"kind":"email","label":null,"normalizedValue":"legacy@example.test","primary":true,"value":"legacy@example.test","verified":true}],"originalCreatedAt":"2024-01-02T03:04:05.000Z","sourceRecordId":"user_001"}';
+  const expectedInput = '{"batchKey":"legacy-hash-golden","rows":[{"attribution":null,"companyName":null,"displayName":"Legacy Lead","identities":[{"kind":"email","label":null,"normalizedValue":"legacy@example.test","primary":true,"value":"legacy@example.test","verified":true}],"originalCreatedAt":"2024-01-02T03:04:05.000Z","sourceRecordId":"user_001"}],"schemaVersion":1,"sourceSystem":"property_predator","unresolvedAttributions":[]}';
+
+  assert.deepEqual(normalized.rows[0]?.sourceQuarantineReasons, []);
+  assert.equal(normalized.rows[0]?.payloadJson, expectedRow);
+  assert.equal(bytesToHex(normalized.rows[0]!.payloadHash),
+    'ce638df9d8a8f1d777d318c9b6e5194c69dc645f2c9c49839b33e3e8d3b5d3a0');
+  assert.equal(normalized.inputJson, expectedInput);
+  assert.equal(bytesToHex(normalized.inputHash),
+    '4d2b7ff751edd2d9eb82a00b26da5b9f34c3a23de6f48325e83e00bda00b9eb5');
+});
+
 test('canonical validation rejects ambiguous input before any database call', async () => {
   const runner = new Runner({ query: async () => result([]) });
   const service = new LegacyLeadImportService({ transactionRunner: runner });

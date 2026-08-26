@@ -3,3 +3,6 @@ export * from './validation.js';
 export * from './repository.js';
 export * from './service.js';
 export * from './property-predator-adapter.js';
+export * from './property-predator-snapshot-v2.js';
+export * from './property-predator-snapshot-repository.js';
+export * from './property-predator-snapshot-service.js';

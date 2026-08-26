@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 2,
+  "sourceSystem": "property-predator.accounts/v2",
+  "snapshotId": "0198f20f-6ac0-7000-8000-000000000042",
+  "generatedAt": "2026-08-27T10:09:00.000Z",
+  "watermark": "2026-08-27T10:08:30.000Z",
+  "complete": true,
+  "manifest": {
+    "pageCount": 1,
+    "recordCount": 2,
+    "eventHighWatermark": "42",
+    "contentSha256": "31a9d2f78da74c0428690214d643b7193030686a5aaa945b8f2ba71c22cab211"
+  },
+  "pages": [
+    {
+      "pageNumber": 1,
+      "cursor": null,
+      "nextCursor": null,
+      "previousPageSha256": null,
+      "records": [
+        {
+          "account": {
+            "id": "10000000-0000-4000-8000-000000000001",
+            "email": "owner@example.test",
+            "createdAt": "2026-01-01T09:00:00.000Z",
+            "displayName": "Álex 🏠",
+            "companyName": "Predátor Partners",
+            "verifiedIdentity": {
+              "provider": "google",
+              "emailVerified": true,
+              "verifiedAt": "2026-01-01T09:01:00.000Z"
+            }
+          },
+          "ownAffiliate": {
+            "id": "30000000-0000-4000-8000-000000000001",
+            "code": "A",
+            "codeStatus": "unknown",
+            "createdAt": "2026-01-01T09:02:00.000Z"
+          },
+          "originalAttribution": null
+        },
+        {
+          "account": {
+            "id": "10000000-0000-4000-8000-000000000002",
+            "email": "lead@example.test",
+            "createdAt": "2026-01-02T10:00:00.000Z",
+            "verifiedIdentity": null
+          },
+          "ownAffiliate": null,
+          "originalAttribution": {
+            "referralId": "40000000-0000-4000-8000-000000000001",
+            "affiliateId": "30000000-0000-4000-8000-000000000001",
+            "affiliateCode": "A",
+            "attachedAt": "2026-01-02T09:59:00.000Z"
+          }
+        }
+      ],
+      "pageSha256": "9d94f96060d7b02d7c3a05a824518999f7c1f7554ed9779837cb86f280111b71"
+    }
+  ]
+}

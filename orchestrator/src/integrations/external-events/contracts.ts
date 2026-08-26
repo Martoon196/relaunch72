@@ -23,6 +23,13 @@ export const PROPERTY_PREDATOR_EXTERNAL_EVENT_TYPES = [
   'commerce.subscription.cancelled',
 ] as const;
 
+/**
+ * Frozen producer/consumer catalogue for the source transactional outbox.
+ * The source must emit these names exactly; aliases are intentionally absent.
+ */
+export const PROPERTY_PREDATOR_REVIEWED_OUTBOX_EVENT_TYPES =
+  PROPERTY_PREDATOR_EXTERNAL_EVENT_TYPES;
+
 export type PropertyPredatorExternalEventType =
   (typeof PROPERTY_PREDATOR_EXTERNAL_EVENT_TYPES)[number];
 

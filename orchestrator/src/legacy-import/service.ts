@@ -58,7 +58,13 @@ function decide(candidates: readonly IdentityCandidate[], verifiedCount: number)
   if (contacts.length > 1) {
     return { resolution: 'quarantine', contactId: null, reasons: ['split_identity'] };
   }
-  if (contacts[0]) return { resolution: 'match', contactId: contacts[0], reasons: ['verified_identity_match'] };
+  if (contacts[0]) return {
+    resolution: 'match',
+    contactId: contacts[0],
+    reasons: candidates.some((candidate) => candidate.isVerified === false)
+      ? ['verified_identity_match', 'verification_evidence_not_promoted']
+      : ['verified_identity_match'],
+  };
   return { resolution: 'create', contactId: null, reasons: ['no_existing_verified_identity_match'] };
 }
 
@@ -146,6 +152,16 @@ export class LegacyLeadImportService {
           });
           continue;
         }
+        if (row.sourceQuarantineReasons.length > 0) {
+          report.push({
+            ordinal: index + 1,
+            sourceRecordId: row.sourceRecordId,
+            resolution: 'quarantine',
+            contactId: null,
+            reasons: row.sourceQuarantineReasons,
+          });
+          continue;
+        }
         const verified = row.identities.filter((identity) => identity.verified);
         const candidates = await repository.findIdentityCandidates(verified);
         let decision = decide(candidates, verified.length);
@@ -220,6 +236,11 @@ export class LegacyLeadImportService {
     managerContext(context);
     const now = this.now();
     const normalized = normalizeLegacyLeadBatch(input, now);
+    if (normalized.sourceSystem === 'property-predator.accounts/v2') {
+      throw new LegacyImportConflictError(
+        'Property Predator account snapshot v2 is authorised for zero-write preview only',
+      );
+    }
     const total = normalized.rows.length + normalized.unresolvedAttributions.length;
     return this.dependencies.transactionRunner.run(context, async (transaction) => {
       const repository = new LegacyLeadImportRepository(transaction);
@@ -404,6 +425,21 @@ export class LegacyLeadImportService {
           continue;
         }
 
+        if (row.sourceQuarantineReasons.length > 0) {
+          quarantined += 1;
+          await repository.resolveRow({
+            rowId: stagedRow.id, status: 'quarantined', contactId: null,
+            receiptId: null, resolution: { reasons: row.sourceQuarantineReasons },
+            committedAt: now.toISOString(),
+          });
+          report.push({
+            sourceRecordId: row.sourceRecordId,
+            resolution: 'quarantined',
+            reasons: row.sourceQuarantineReasons,
+          });
+          continue;
+        }
+
         const verified = row.identities.filter((identity) => identity.verified);
         const decision = decide(await repository.findIdentityCandidates(verified), verified.length);
         if (decision.resolution === 'quarantine') {
@@ -464,6 +500,7 @@ export class LegacyLeadImportService {
           contactId, receiptId,
           resolution: {
             reason: decision.reasons[0],
+            reconciliationNotices: decision.reasons.slice(1),
             liveContactOverwritten: false,
             boardPlacement,
           },

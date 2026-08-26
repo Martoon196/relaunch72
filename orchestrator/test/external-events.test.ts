@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   PROPERTY_PREDATOR_EXTERNAL_EVENT_MAX_BODY_BYTES,
   PROPERTY_PREDATOR_EXTERNAL_EVENT_TYPES,
+  PROPERTY_PREDATOR_REVIEWED_OUTBOX_EVENT_TYPES,
   PropertyPredatorExternalEventAuthenticationError,
   PropertyPredatorExternalEventBodyTooLargeError,
   PropertyPredatorExternalEventContractError,
@@ -118,6 +119,11 @@ function verify(overrides: Partial<Parameters<typeof verifyPropertyPredatorExter
 
 test('the strict V1 catalogue parses every supported Property Predator event', () => {
   assert.deepEqual(PROPERTY_PREDATOR_EXTERNAL_EVENT_TYPES, Object.keys(EXAMPLES));
+  assert.strictEqual(
+    PROPERTY_PREDATOR_REVIEWED_OUTBOX_EVENT_TYPES,
+    PROPERTY_PREDATOR_EXTERNAL_EVENT_TYPES,
+    'producer outbox and Growth HQ ingress must share one frozen catalogue',
+  );
   for (const type of PROPERTY_PREDATOR_EXTERNAL_EVENT_TYPES) {
     const event = parsePropertyPredatorExternalEvent(envelope(type, EXAMPLES[type]!));
     assert.equal(event.type, type);
