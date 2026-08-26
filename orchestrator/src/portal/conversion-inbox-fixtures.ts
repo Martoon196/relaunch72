@@ -93,6 +93,7 @@ function summary(person: typeof PEOPLE[number], index: number): InboxConversatio
     contactName: person.name,
     subject: person.subject,
     unreadCount: person.unread,
+    requiresApproval: index === 0,
     lastMessageAt: person.lastAt,
     latestMessage: Object.freeze({
       messageId: `40000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
@@ -163,6 +164,7 @@ function messages(
 
 function draft(index: number): ConversionInboxDraftSnapshot {
   const suffix = String(index + 1).padStart(12, '0');
+  const approvalRequestId = `80000000-0000-4000-8000-${suffix}`;
   if (index === 2) {
     return Object.freeze({
       messageId: `60000000-0000-4000-8000-${suffix}`,
@@ -173,6 +175,9 @@ function draft(index: number): ConversionInboxDraftSnapshot {
       approvalNote: 'Exact test draft v2 approved.',
       deliveryState: 'not_queued',
       updatedAt: '2026-08-26T08:05:00.000Z',
+      rowVersion: 3,
+      approvalRequestId,
+      purpose: 'property_predator_follow_up',
     });
   }
   if (index === 1) {
@@ -185,6 +190,39 @@ function draft(index: number): ConversionInboxDraftSnapshot {
       approvalNote: 'Exact test draft v3 approved.',
       deliveryState: 'queued',
       updatedAt: '2026-08-26T08:31:00.000Z',
+      rowVersion: 4,
+      approvalRequestId,
+      purpose: 'property_predator_follow_up',
+    });
+  }
+  if (index === 3) {
+    return Object.freeze({
+      messageId: `60000000-0000-4000-8000-${suffix}`,
+      body: 'Perfect. Your test appointment remains held for 10:30. This operation cannot reach a real phone.',
+      lifecycle: 'approved',
+      versionNumber: 2,
+      approvalState: 'approved',
+      approvalNote: 'Exact test appointment reply approved.',
+      deliveryState: 'not_queued',
+      updatedAt: '2026-08-26T08:18:00.000Z',
+      rowVersion: 2,
+      approvalRequestId,
+      purpose: 'appointment_follow_up',
+    });
+  }
+  if (index === 4) {
+    return Object.freeze({
+      messageId: `60000000-0000-4000-8000-${suffix}`,
+      body: 'Yes. The comparison report can place two developments side by side, including risk, demand and projected returns.',
+      lifecycle: 'draft',
+      versionNumber: 1,
+      approvalState: 'not_requested',
+      approvalNote: null,
+      deliveryState: 'not_queued',
+      updatedAt: '2026-08-26T08:39:00.000Z',
+      rowVersion: 1,
+      approvalRequestId: null,
+      purpose: 'property_predator_follow_up',
     });
   }
   return Object.freeze({
@@ -198,12 +236,16 @@ function draft(index: number): ConversionInboxDraftSnapshot {
     approvalNote: 'Waiting for a test workspace reviewer.',
     deliveryState: 'not_queued',
     updatedAt: '2026-08-26T08:39:00.000Z',
+    rowVersion: 2,
+    approvalRequestId,
+    purpose: 'property_predator_follow_up',
   });
 }
 
 function thread(person: typeof PEOPLE[number], index: number): ConversionInboxThreadSnapshot {
   return Object.freeze({
     conversationId: person.conversationId,
+    contactPointId: `70000000-0000-4000-8001-${String(index + 1).padStart(12, '0')}`,
     messages: messages(person, index),
     lead: lead(person),
     consents: consent(person),

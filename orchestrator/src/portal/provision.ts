@@ -20,6 +20,7 @@ import type { PortalCrmService } from './crm-service.js';
 import type { PortalAuthService } from './auth-service.js';
 import type { PortalJourneyManagerService } from './journey-manager-service.js';
 import type { PortalCompanyContentService } from './company-content-service.js';
+import type { PortalConversionInboxCommandService } from './conversion-inbox-service.js';
 import type { SubscriptionStore } from '../server/subscriptions.js';
 import { canonicalIntake } from '../intake/canonical.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
@@ -133,6 +134,8 @@ export interface PostgresPortalConfig {
   companyContent?: PortalCompanyContentService;
   /** TEST-only conversion queue read boundary; no provider/send capability. */
   inbox?: PortalInboxReadBoundary;
+  /** Durable TEST-only draft/approval queue boundary; no dispatcher capability. */
+  inboxCommands?: PortalConversionInboxCommandService;
   productProfile?: PortalProductProfile;
   /** Explicit authenticated-proxy client address policy; omitted by default. */
   trustedClientAddress?: PostgresPortalDeps['trustedClientAddress'];
@@ -155,6 +158,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     journeys: cfg.journeys,
     companyContent: cfg.companyContent,
     inbox: cfg.inbox,
+    inboxCommands: cfg.inboxCommands,
     productProfile: cfg.productProfile ?? RELAUNCH72_PRODUCT_PROFILE,
     trustedClientAddress: cfg.trustedClientAddress,
     now: cfg.now,

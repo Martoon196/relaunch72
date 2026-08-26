@@ -6,7 +6,9 @@ import type { SqlExecutor, SqlResult } from '../src/crm-pg/types.js';
 import type { DatabaseRequestContext } from '../src/db/rls.js';
 import {
   InboxCommandService,
+  INBOX_APPROVAL_REVIEW_MAX_BODY_BYTES,
   InboxIdempotencyConflictError,
+  InboxValidationError,
   InboxProviderDispatcher,
   InboxPgRepository,
   PgInboxReadService,
@@ -345,6 +347,115 @@ test('inbox commands replay exact results and conflict on changed input', async 
   assert.equal(sql.configurationWrites, 1);
 });
 
+class ApprovalBoundarySql implements SqlExecutor {
+  readonly writes: string[] = [];
+
+  constructor(
+    private readonly bodyBytes: number,
+    private readonly lifecycle: 'approval_pending' | 'approved' = 'approval_pending',
+  ) {}
+
+  async query<T extends Record<string, unknown>>(
+    sql: string,
+    values: readonly unknown[] = [],
+  ): Promise<SqlResult<T>> {
+    if (sql.includes('inbox.claim-command')) {
+      return {
+        rows: [{
+          id: values[0], payloadHash: values[4], status: 'started', result: null,
+        }] as unknown as T[],
+        rowCount: 1,
+      };
+    }
+    if (sql.includes('inbox.lock-approval-request')
+        || sql.includes('inbox.lock-approved-message')) {
+      return {
+        rows: [{
+          conversationId: CONVERSATION,
+          providerConnectionId: CONNECTION,
+          channelEndpointId: ENDPOINT,
+          channel: 'email',
+          environment: 'test',
+          contactId: USER,
+          contactPointId: ENDPOINT,
+          messageId: MESSAGE,
+          messageVersionId: VERSION,
+          versionNumber: 1,
+          bodySha256: createHash('sha256').update('immutable body').digest('hex'),
+          bodyBytes: this.bodyBytes,
+          lifecycle: this.lifecycle,
+          rowVersion: this.lifecycle === 'approved' ? 2 : 1,
+          approvalRequestId: DELIVERY,
+          requestNumber: 1,
+          approvalDecisionId: this.lifecycle === 'approved' ? OPERATION : null,
+          decision: this.lifecycle === 'approved' ? 'approved' : null,
+        }] as unknown as T[],
+        rowCount: 1,
+      };
+    }
+    if (sql.includes('inbox.insert-approval-decision')) {
+      this.writes.push('decision');
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes('inbox.apply-approval-decision')) {
+      this.writes.push('message');
+      return { rows: [{ rowVersion: 2 }] as unknown as T[], rowCount: 1 };
+    }
+    if (sql.includes('inbox.complete-command')) {
+      this.writes.push('receipt');
+      return { rows: [], rowCount: 1 };
+    }
+    throw new Error(`Unexpected approval-boundary SQL: ${sql}`);
+  }
+}
+
+function approvalBoundaryService(sql: ApprovalBoundarySql): InboxCommandService {
+  return new InboxCommandService({
+    transactionRunner: transactionRunner(sql),
+    nextId: ids(),
+    now: () => new Date('2026-08-26T12:00:00.000Z'),
+  });
+}
+
+test('approval and TEST queue commands fail closed on bodies outside the complete review boundary', async () => {
+  const approvalSql = new ApprovalBoundarySql(INBOX_APPROVAL_REVIEW_MAX_BODY_BYTES + 1);
+  const approvalService = approvalBoundaryService(approvalSql);
+  await assert.rejects(approvalService.decideApproval(userContext, {
+    commandKey: 'forged-oversized-approval',
+    approvalRequestId: DELIVERY,
+    decision: 'approved',
+  }), InboxValidationError);
+  assert.deepEqual(approvalSql.writes, []);
+
+  const queueSql = new ApprovalBoundarySql(
+    INBOX_APPROVAL_REVIEW_MAX_BODY_BYTES + 1,
+    'approved',
+  );
+  const queueService = approvalBoundaryService(queueSql);
+  await assert.rejects(queueService.queueApprovedMessage(userContext, {
+    commandKey: 'forged-oversized-queue',
+    messageId: MESSAGE,
+    expectedRowVersion: 2,
+    purpose: 'marketing',
+  }), InboxValidationError);
+  assert.deepEqual(queueSql.writes, []);
+});
+
+test('oversized approval targets still accept rejection and changes-requested decisions', async () => {
+  for (const decision of ['rejected', 'changes_requested'] as const) {
+    const sql = new ApprovalBoundarySql(INBOX_APPROVAL_REVIEW_MAX_BODY_BYTES + 1);
+    const result = await approvalBoundaryService(sql).decideApproval(userContext, {
+      commandKey: `oversized-${decision}`,
+      approvalRequestId: DELIVERY,
+      decision,
+      decisionNote: `Return the oversized draft as ${decision}.`,
+    });
+    assert.equal(result.decision, decision);
+    assert.equal(result.lifecycle, 'draft');
+    assert.deepEqual(sql.writes, ['decision', 'message', 'receipt']);
+  }
+});
+
 test('inbox repository serializes receipts as JSON and safely maps PostgreSQL bigint rows', async () => {
   const receiptCalls: Array<{ sql: string; values: readonly unknown[] }> = [];
   const receiptExecutor: SqlExecutor = {
@@ -431,6 +542,7 @@ test('inbox repository serializes receipts as JSON and safely maps PostgreSQL bi
 
 class ReadClient {
   invalid = false;
+  conversationSql = '';
   async query<TRow extends QueryResultRow>(sql: string): Promise<QueryResult<TRow>> {
     if (sql.startsWith('BEGIN') || sql === 'COMMIT' || sql === 'ROLLBACK'
         || sql.includes("set_config('app.user_id'")) return queryResult([]);
@@ -438,15 +550,19 @@ class ReadClient {
       workspaceId: WORKSPACE, timezone: 'Europe/London', canWrite: true,
       canManage: false, asOf: new Date('2026-08-26T12:00:00.000Z'),
     }] as unknown as TRow[]);
-    if (sql.includes('inbox.list-conversations')) return queryResult([{
+    if (sql.includes('inbox.list-conversations')) {
+      this.conversationSql = sql;
+      return queryResult([{
       conversationId: CONVERSATION, inboxId: INBOX, channel: 'email', state: 'open',
       contactId: USER, contactName: 'Demo Lead', subject: null, unreadCount: 1,
+      requiresApproval: true,
       lastMessageAt: new Date('2026-08-26T11:59:00.000Z'),
       sortAt: new Date('2026-08-26T11:59:00.000Z'), rowVersion: 2,
       latestMessageId: MESSAGE, latestDirection: 'inbound',
       latestLifecycle: 'received', latestBody: this.invalid ? '' : 'Hello test inbox',
       latestOccurredAt: new Date('2026-08-26T11:59:00.000Z'),
-    }] as unknown as TRow[]);
+      }] as unknown as TRow[]);
+    }
     throw new Error(`Unexpected read SQL: ${sql}`);
   }
   release(): void {}
@@ -459,6 +575,14 @@ test('inbox read model is bounded, omits endpoint addresses and fails closed on 
   const page = await service.listConversations(userContext, { limit: 10, search: 'Demo' });
   assert.equal(page.conversations.length, 1);
   assert.equal(page.conversations[0]!.latestMessage?.body, 'Hello test inbox');
+  assert.equal(page.conversations[0]!.requiresApproval, true);
+  assert.match(client.conversationSql, /approval_message\.lifecycle = 'approval_pending'/);
+  assert.match(client.conversationSql, /approval_message\.lifecycle = 'draft'/);
+  assert.match(client.conversationSql, /latest_approval\.decision = 'changes_requested'/);
+  assert.match(client.conversationSql,
+    /ORDER BY approval_request\.request_number DESC, approval_request\.id DESC\s+LIMIT 1/);
+  assert.match(client.conversationSql,
+    /latest_approval\.approval_decision_id IS NULL/);
   assert.equal(Object.hasOwn(page.conversations[0]!, 'recipient'), false);
   client.invalid = true;
   await assert.rejects(service.listConversations(userContext), /latest message is invalid/);

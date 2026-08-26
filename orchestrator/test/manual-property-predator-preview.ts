@@ -1,9 +1,11 @@
 /**
- * Local, read-only Property Predator product preview.
+ * Local, test-only Property Predator product preview.
  *
- * It serves explicit preview fixtures only: no database, provider, message,
- * social post, payment or production service is touched.
+ * It serves process-local preview fixtures only: protected controls mutate
+ * ephemeral TEST state, while no database, provider, message, social post,
+ * payment or production service is touched.
  */
+import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage } from 'node:http';
 import { appShell } from '../src/portal/ui.js';
 import { createPropertyPredatorContentCatalogFixture } from '../src/portal/content-control-room-fixtures.js';
@@ -12,12 +14,84 @@ import {
   presentContentControlRoom,
 } from '../src/portal/content-control-room-presenter.js';
 import { renderContentControlRoomBody } from '../src/portal/content-control-room-view.js';
+import {
+  CONTENT_APPROVAL_DECISION_ROUTE,
+  CONTENT_APPROVAL_REQUEST_ROUTE,
+  contentControlNoticeFromQuery,
+  contentControlNoticeToken,
+  type ContentControlNoticeCode,
+} from '../src/portal/content-control-room-actions.js';
 import { createPropertyPredatorTestInboxSnapshot } from '../src/portal/conversion-inbox-fixtures.js';
 import {
   CONVERSION_INBOX_ROUTE,
   presentConversionInbox,
 } from '../src/portal/conversion-inbox-presenter.js';
 import { renderConversionInboxBody } from '../src/portal/conversion-inbox-view.js';
+import {
+  CONVERSION_INBOX_CREATE_DRAFT_ROUTE,
+  conversionInboxNoticeFromQuery,
+  conversionInboxNoticeToken,
+  type ConversionInboxNoticeCode,
+} from '../src/portal/conversion-inbox-actions.js';
+import {
+  CONTENT_CALENDAR_ROUTE,
+  presentContentCalendar,
+} from '../src/portal/content-calendar-presenter.js';
+import {
+  createPropertyPredatorContentCalendarFixture,
+  PROPERTY_PREDATOR_CONTENT_CALENDAR_AS_OF,
+} from '../src/portal/content-calendar-fixtures.js';
+import { renderContentCalendarBody } from '../src/portal/content-calendar-view.js';
+import {
+  SOCIAL_COMPOSER_ROUTE,
+  presentSocialComposer,
+} from '../src/portal/social-composer-presenter.js';
+import {
+  createPropertyPredatorSocialComposerFixture,
+  PROPERTY_PREDATOR_SOCIAL_COMPOSER_AS_OF,
+} from '../src/portal/social-composer-fixtures.js';
+import { renderSocialComposerBody } from '../src/portal/social-composer-view.js';
+import {
+  PROVIDER_CONNECTIONS_ROUTE,
+  presentProviderConnections,
+} from '../src/portal/provider-connections-presenter.js';
+import { createPropertyPredatorProviderConnectionsFixture } from '../src/portal/provider-connections-fixtures.js';
+import { renderProviderConnectionsBody } from '../src/portal/provider-connections-view.js';
+import {
+  CAMPAIGN_COMMAND_ROUTE,
+  presentCampaignCommand,
+} from '../src/portal/campaign-command-presenter.js';
+import {
+  createPropertyPredatorCampaignCommandFixture,
+  PROPERTY_PREDATOR_CAMPAIGN_COMMAND_AS_OF,
+} from '../src/portal/campaign-command-fixtures.js';
+import { renderCampaignCommandBody } from '../src/portal/campaign-command-view.js';
+import {
+  AUTOMATION_STUDIO_ROUTE,
+  presentAutomationStudio,
+} from '../src/portal/automation-studio-presenter.js';
+import {
+  createPropertyPredatorAutomationStudioFixture,
+} from '../src/portal/automation-studio-fixtures.js';
+import { renderAutomationStudioBody } from '../src/portal/automation-studio-view.js';
+import {
+  WEBINAR_STUDIO_ROUTE,
+  presentWebinarStudio,
+} from '../src/portal/webinar-studio-presenter.js';
+import { createPropertyPredatorWebinarStudioFixture } from '../src/portal/webinar-studio-fixtures.js';
+import { renderWebinarStudioBody } from '../src/portal/webinar-studio-view.js';
+import {
+  GROWTH_ANALYTICS_ROUTE,
+  presentGrowthAnalytics,
+} from '../src/portal/growth-analytics-presenter.js';
+import { createPropertyPredatorGrowthAnalyticsFixture } from '../src/portal/growth-analytics-fixtures.js';
+import { renderGrowthAnalyticsBody } from '../src/portal/growth-analytics-view.js';
+import {
+  OPERATOR_ACTION_CENTRE_ROUTE,
+  presentOperatorActionCentre,
+} from '../src/portal/operator-action-centre-presenter.js';
+import { createPropertyPredatorOperatorActionCentreFixture } from '../src/portal/operator-action-centre-fixtures.js';
+import { renderOperatorActionCentreBody } from '../src/portal/operator-action-centre-view.js';
 import { renderGrowthHomeBody } from '../src/portal/growth-home.js';
 import { renderLead360Body, type Lead360View } from '../src/portal/lead-360-view.js';
 import { JOURNEY_BOARD_CLIENT_SOURCE } from '../src/portal/journey-board-client.js';
@@ -296,6 +370,171 @@ const journeyManager: JourneyManagerView = {
 };
 
 const PREVIEW_CSRF = 'preview-only-csrf-token-0000000000000000';
+const PREVIEW_CONTENT_NOTICE_SECRET = 'preview-content-notice-secret';
+const PREVIEW_CONTENT_NOTICE_SESSION = 'preview-content-session';
+const PREVIEW_INBOX_NOTICE_SECRET = 'preview-inbox-notice-secret';
+const PREVIEW_INBOX_NOTICE_SESSION = 'preview-inbox-session';
+let previewContentCatalog = createPropertyPredatorContentCatalogFixture();
+let previewInboxSnapshot = createPropertyPredatorTestInboxSnapshot();
+
+function updatePreviewInboxDraft(
+  predicate: (messageId: string | null, approvalRequestId: string | null) => boolean,
+  update: (draft: typeof previewInboxSnapshot.threads[number]['draft']) => typeof previewInboxSnapshot.threads[number]['draft'],
+): boolean {
+  let applied = false;
+  previewInboxSnapshot = {
+    ...previewInboxSnapshot,
+    threads: previewInboxSnapshot.threads.map((thread) => {
+      if (!predicate(thread.draft.messageId, thread.draft.approvalRequestId)) return thread;
+      const nextDraft = update(thread.draft);
+      if (nextDraft === thread.draft) return thread;
+      applied = true;
+      return Object.freeze({ ...thread, draft: Object.freeze(nextDraft) });
+    }),
+  };
+  return applied;
+}
+
+function revisePreviewInboxDraft(messageId: string, body: string, expectedRowVersion: string): boolean {
+  const cleanBody = body.trim();
+  if (!cleanBody || Buffer.byteLength(cleanBody, 'utf8') > 8_192) return false;
+  return updatePreviewInboxDraft(
+    (candidate) => candidate === messageId,
+    (draft) => {
+      if (draft.lifecycle !== 'draft' || String(draft.rowVersion) !== expectedRowVersion) return draft;
+      return {
+        ...draft,
+        body: cleanBody,
+        versionNumber: (draft.versionNumber ?? 0) + 1,
+        rowVersion: (draft.rowVersion ?? 0) + 1,
+        approvalState: 'not_requested' as const,
+        approvalRequestId: null,
+        approvalNote: null,
+        updatedAt: new Date().toISOString(),
+      };
+    },
+  );
+}
+
+function requestPreviewInboxApproval(messageId: string, expectedRowVersion: string): boolean {
+  return updatePreviewInboxDraft(
+    (candidate) => candidate === messageId,
+    (draft) => {
+      if (draft.lifecycle !== 'draft' || String(draft.rowVersion) !== expectedRowVersion) return draft;
+      const suffix = messageId.slice(-12);
+      return {
+        ...draft,
+        lifecycle: 'approval_pending' as const,
+        approvalState: 'pending' as const,
+        approvalRequestId: `80000000-0000-4000-8000-${suffix}`,
+        approvalNote: 'Waiting for a preview workspace reviewer.',
+        rowVersion: (draft.rowVersion ?? 0) + 1,
+        updatedAt: new Date().toISOString(),
+      };
+    },
+  );
+}
+
+function decidePreviewInboxApproval(
+  approvalRequestId: string,
+  decision: 'approved' | 'rejected' | 'changes_requested',
+  decisionNote: string,
+): boolean {
+  if (decision !== 'approved' && decisionNote.trim().length === 0) return false;
+  return updatePreviewInboxDraft(
+    (_messageId, candidate) => candidate === approvalRequestId,
+    (draft) => {
+      if (draft.approvalState !== 'pending') return draft;
+      return {
+        ...draft,
+        lifecycle: decision === 'approved' ? 'approved' as const : 'draft' as const,
+        approvalState: decision,
+        approvalNote: decisionNote.trim() || 'Approved for the preview TEST queue only.',
+        rowVersion: (draft.rowVersion ?? 0) + 1,
+        updatedAt: new Date().toISOString(),
+      };
+    },
+  );
+}
+
+function queuePreviewInboxTestOperation(
+  messageId: string,
+  expectedRowVersion: string,
+  purpose: string,
+): boolean {
+  if (!['property_predator_follow_up', 'appointment_follow_up'].includes(purpose)) return false;
+  const thread = previewInboxSnapshot.threads.find((candidate) => candidate.draft.messageId === messageId);
+  if (!thread) return false;
+  const requiredConsentChannel = thread.conversationId
+    ? ((previewInboxSnapshot.page.conversations.find((item) => item.conversationId === thread.conversationId)?.channel
+      ?? 'email') as 'email' | 'sms' | 'whatsapp' | 'instagram' | 'facebook')
+    : 'email';
+  const consentChannel = requiredConsentChannel === 'instagram' || requiredConsentChannel === 'facebook'
+    ? 'social' : requiredConsentChannel;
+  if (!thread.consents.some((consent) => consent.channel === consentChannel && consent.state === 'permitted')) {
+    return false;
+  }
+  return updatePreviewInboxDraft(
+    (candidate) => candidate === messageId,
+    (draft) => {
+      if (draft.lifecycle !== 'approved' || draft.approvalState !== 'approved'
+          || draft.deliveryState !== 'not_queued'
+          || String(draft.rowVersion) !== expectedRowVersion
+          || draft.purpose !== purpose) return draft;
+      return {
+        ...draft,
+        deliveryState: 'queued' as const,
+        rowVersion: (draft.rowVersion ?? 0) + 1,
+        updatedAt: new Date().toISOString(),
+      };
+    },
+  );
+}
+
+function requestPreviewContentApproval(contentItemId: string, contentVersionId: string): boolean {
+  let applied = false;
+  previewContentCatalog = {
+    ...previewContentCatalog,
+    items: previewContentCatalog.items.map((item) => {
+      if (item.contentItemId !== contentItemId || item.contentVersionId !== contentVersionId
+          || !['unrequested', 'rejected', 'changes_requested', 'stale'].includes(item.approvalStatus)) return item;
+      applied = true;
+      return Object.freeze({
+        ...item,
+        approvalRequestId: randomUUID(),
+        approvalDecisionId: null,
+        approvalStatus: 'pending' as const,
+        approvalStale: false,
+        publishable: false,
+      });
+    }),
+  };
+  return applied;
+}
+
+function decidePreviewContentApproval(
+  approvalRequestId: string,
+  decision: 'approved' | 'rejected' | 'changes_requested',
+  decisionNote: string,
+): boolean {
+  if (decision !== 'approved' && decisionNote.trim().length === 0) return false;
+  let applied = false;
+  previewContentCatalog = {
+    ...previewContentCatalog,
+    items: previewContentCatalog.items.map((item) => {
+      if (item.approvalRequestId !== approvalRequestId || item.approvalStatus !== 'pending') return item;
+      applied = true;
+      return Object.freeze({
+        ...item,
+        approvalDecisionId: randomUUID(),
+        approvalStatus: decision,
+        approvalStale: false,
+        publishable: decision === 'approved' && item.sourceFresh,
+      });
+    }),
+  };
+  return applied;
+}
 const NEW_SIGNAL_STAGE = '77777777-7777-4777-8777-777777777777';
 const QUALIFIED_STAGE = '88888888-8888-4888-8888-888888888888';
 const PROPOSAL_STAGE = '99999999-9999-4999-8999-999999999999';
@@ -628,8 +867,9 @@ function shell(
   active: 'overview' | 'crm' | 'journeys' | 'content' | 'inbox',
   title: string,
 ): string {
+  const previewBoundary = '<aside role="status" aria-label="Local preview boundary" style="position:sticky;z-index:1000;top:0;display:flex;justify-content:center;gap:10px;align-items:center;min-height:42px;padding:8px 16px;border-bottom:1px solid #8a6a29;background:#201806;color:#f2c96d;font:800 12px/1.4 ui-monospace,monospace;letter-spacing:.035em;text-align:center"><strong>LOCAL PREVIEW</strong><span>Fictional / in-memory state · reload or process restart can lose changes · no live provider effects</span></aside>';
   return appShell({
-    title, tenantName: snapshot.workspace.name, active, body,
+    title, tenantName: snapshot.workspace.name, active, body: `${previewBoundary}${body}`,
     productProfile: PROPERTY_PREDATOR_GROWTH_PROFILE,
     capabilities: new Set([
       'workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read',
@@ -643,11 +883,113 @@ function previewJourneyNav(active: 'board' | 'rules'): string {
   return `<nav aria-label="Journey workspace" style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap"><a class="button ${active === 'board' ? '' : 'secondary'} compact" href="${JOURNEY_BOARD_ROUTE}"${active === 'board' ? ' aria-current="page"' : ''}>Live board</a><a class="button ${active === 'rules' ? '' : 'secondary'} compact" href="/portal/journeys"${active === 'rules' ? ' aria-current="page"' : ''}>Journey rules</a></nav>`;
 }
 
+type PreviewOperationsRoute = 'today' | 'actions' | 'journeys' | 'campaigns' | 'content'
+  | 'compose' | 'calendar' | 'inbox' | 'automations' | 'webinars' | 'analytics' | 'connections';
+
+function previewOperationsNav(active: PreviewOperationsRoute): string {
+  const links: readonly Readonly<{ key: PreviewOperationsRoute; href: string; label: string }>[] = [
+    { key: 'today', href: '/portal', label: 'Today' },
+    { key: 'actions', href: OPERATOR_ACTION_CENTRE_ROUTE, label: 'Action centre' },
+    { key: 'journeys', href: JOURNEY_BOARD_ROUTE, label: 'Live journeys' },
+    { key: 'campaigns', href: CAMPAIGN_COMMAND_ROUTE, label: 'Campaigns' },
+    { key: 'content', href: CONTENT_CONTROL_ROOM_ROUTE, label: 'Content' },
+    { key: 'compose', href: SOCIAL_COMPOSER_ROUTE, label: 'Composer' },
+    { key: 'calendar', href: CONTENT_CALENDAR_ROUTE, label: 'Calendar' },
+    { key: 'inbox', href: CONVERSION_INBOX_ROUTE, label: 'Inbox' },
+    { key: 'automations', href: AUTOMATION_STUDIO_ROUTE, label: 'Automations' },
+    { key: 'webinars', href: WEBINAR_STUDIO_ROUTE, label: 'Webinars' },
+    { key: 'analytics', href: GROWTH_ANALYTICS_ROUTE, label: 'Analytics' },
+    { key: 'connections', href: PROVIDER_CONNECTIONS_ROUTE, label: 'Connections' },
+  ];
+  return `<nav aria-label="Growth operations" style="display:flex;gap:7px;margin-bottom:14px;flex-wrap:wrap">${links.map((link) => `<a class="button ${link.key === active ? '' : 'secondary'} compact" href="${link.href}"${link.key === active ? ' aria-current="page"' : ''}>${link.label}</a>`).join('')}</nav>`;
+}
+
+function previewContentControl(url: URL): string {
+  const view = presentContentControlRoom(previewContentCatalog, {
+    workspaceName: snapshot.workspace.name,
+    asOf: '2026-08-26T08:42:00.000Z',
+    canWrite: true,
+    canManage: true,
+    notice: contentControlNoticeFromQuery(
+      url.searchParams,
+      PREVIEW_CONTENT_NOTICE_SECRET,
+      PREVIEW_CONTENT_NOTICE_SESSION,
+    ),
+    filters: {
+      query: url.searchParams.get('q'),
+      channel: url.searchParams.get('channel'),
+      format: url.searchParams.get('format'),
+    },
+  });
+  return renderContentControlRoomBody(view, {
+    security: {
+      csrfToken: PREVIEW_CSRF,
+      requestApprovalKeys: Object.fromEntries(view.items.map((item) => [
+        item.contentVersionId,
+        `preview-content-request:${item.contentVersionId}`,
+      ])),
+      decisionKeys: Object.fromEntries(view.items.flatMap((item) => (
+        item.approvalRequestId ? [[
+          item.approvalRequestId,
+          `preview-content-decision:${item.approvalRequestId}`,
+        ]] : []
+      ))),
+    },
+  });
+}
+
+function previewConversionInbox(url: URL): string {
+  const view = presentConversionInbox(previewInboxSnapshot, {
+    workspaceName: snapshot.workspace.name,
+    notice: conversionInboxNoticeFromQuery(
+      url.searchParams,
+      PREVIEW_INBOX_NOTICE_SECRET,
+      PREVIEW_INBOX_NOTICE_SESSION,
+    ),
+    filters: {
+      query: url.searchParams.get('q'),
+      channel: url.searchParams.get('channel'),
+      queue: url.searchParams.get('queue'),
+      conversationId: url.searchParams.get('conversation'),
+    },
+  });
+  const thread = view.selectedThread;
+  const draft = thread?.draft;
+  const messageId = draft?.messageId;
+  const approvalRequestId = draft?.approvalRequestId;
+  return renderConversionInboxBody(view, {
+    security: {
+      csrfToken: PREVIEW_CSRF,
+      createDraftKeys: thread && draft?.messageId === null
+        ? { [thread.summary.conversationId]: `preview-inbox-create:${thread.summary.conversationId}` }
+        : {},
+      reviseDraftKeys: messageId && draft?.lifecycle === 'draft'
+        ? { [messageId]: `preview-inbox-revise:${messageId}` }
+        : {},
+      requestApprovalKeys: messageId && draft?.lifecycle === 'draft'
+        ? { [messageId]: `preview-inbox-request:${messageId}` }
+        : {},
+      decisionKeys: approvalRequestId && draft?.approvalState === 'pending'
+        ? { [approvalRequestId]: `preview-inbox-decision:${approvalRequestId}` }
+        : {},
+      queueKeys: messageId && draft?.mayQueueTestOperation
+        ? { [messageId]: `preview-inbox-queue:${messageId}` }
+        : {},
+    },
+  });
+}
+
 function page(url: URL): { status: number; html: string; board?: boolean } {
   const path = url.pathname.replace(/\/+$/, '') || '/portal';
   if (path === '/portal') return {
     status: 200,
     html: shell(renderGrowthHomeBody(snapshot, PROPERTY_PREDATOR_GROWTH_PROFILE, growth), 'overview', 'Property Predator — Growth HQ'),
+  };
+  if (path === OPERATOR_ACTION_CENTRE_ROUTE) return {
+    status: 200,
+    html: shell(`${previewOperationsNav('actions')}${renderOperatorActionCentreBody(presentOperatorActionCentre(
+      createPropertyPredatorOperatorActionCentreFixture(),
+    ))}`, 'overview', 'Property Predator — Action Centre'),
   };
   const leadMatch = /^\/portal\/crm\/contacts\/([^/]+)$/.exec(path);
   if (leadMatch) {
@@ -664,42 +1006,84 @@ function page(url: URL): { status: number; html: string; board?: boolean } {
   }
   if (path === JOURNEY_BOARD_ROUTE) return {
     status: 200,
-    html: shell(`${previewJourneyNav('board')}${renderJourneyBoardBody(previewBoard(url))}`, 'journeys', 'Property Predator — Live Journeys'),
+    html: shell(`${previewOperationsNav('journeys')}${previewJourneyNav('board')}${renderJourneyBoardBody(previewBoard(url))}`, 'journeys', 'Property Predator — Live Journeys'),
     board: true,
   };
   if (path === '/portal/journeys') return {
     status: 200,
-    html: shell(`${previewJourneyNav('rules')}${renderJourneyManagerBody(journeyManager)}`, 'journeys', 'Property Predator — Journey Rules'),
+    html: shell(`${previewOperationsNav('journeys')}${previewJourneyNav('rules')}${renderJourneyManagerBody(journeyManager)}`, 'journeys', 'Property Predator — Journey Rules'),
   };
   if (path === CONTENT_CONTROL_ROOM_ROUTE) return {
     status: 200,
-    html: shell(renderContentControlRoomBody(presentContentControlRoom(
-      createPropertyPredatorContentCatalogFixture(),
+    html: shell(`${previewOperationsNav('content')}${previewContentControl(url)}`, 'content', 'Property Predator — Content Control'),
+  };
+  if (path === CONTENT_CALENDAR_ROUTE) return {
+    status: 200,
+    html: shell(`${previewOperationsNav('calendar')}${renderContentCalendarBody(presentContentCalendar(
+      createPropertyPredatorContentCalendarFixture(),
       {
         workspaceName: snapshot.workspace.name,
-        asOf: '2026-08-26T08:42:00.000Z',
+        timezone: snapshot.workspace.timezone,
+        asOf: PROPERTY_PREDATOR_CONTENT_CALENDAR_AS_OF,
         filters: {
-          query: url.searchParams.get('q'),
+          mode: url.searchParams.get('mode'),
+          date: url.searchParams.get('date'),
           channel: url.searchParams.get('channel'),
-          format: url.searchParams.get('format'),
         },
       },
-    )), 'content', 'Property Predator — Content Control'),
+    ))}`, 'content', 'Property Predator — Content Calendar'),
+  };
+  if (path === SOCIAL_COMPOSER_ROUTE) return {
+    status: 200,
+    html: shell(`${previewOperationsNav('compose')}${renderSocialComposerBody(presentSocialComposer(
+      createPropertyPredatorSocialComposerFixture(),
+      {
+        workspaceName: snapshot.workspace.name,
+        asOf: PROPERTY_PREDATOR_SOCIAL_COMPOSER_AS_OF,
+        filters: {
+          channel: url.searchParams.get('channel'),
+          preview: url.searchParams.get('preview'),
+        },
+      },
+    ))}`, 'content', 'Property Predator — Social Composer'),
+  };
+  if (path === CAMPAIGN_COMMAND_ROUTE) return {
+    status: 200,
+    html: shell(`${previewOperationsNav('campaigns')}${renderCampaignCommandBody(presentCampaignCommand(
+      createPropertyPredatorCampaignCommandFixture(),
+      { workspaceName: snapshot.workspace.name, asOf: PROPERTY_PREDATOR_CAMPAIGN_COMMAND_AS_OF },
+    ))}`, 'content', 'Property Predator — Campaign Command'),
   };
   if (path === CONVERSION_INBOX_ROUTE) return {
     status: 200,
-    html: shell(renderConversionInboxBody(presentConversionInbox(
-      createPropertyPredatorTestInboxSnapshot(),
+    html: shell(`${previewOperationsNav('inbox')}${previewConversionInbox(url)}`, 'inbox', 'Property Predator — Conversion Inbox'),
+  };
+  if (path === AUTOMATION_STUDIO_ROUTE) return {
+    status: 200,
+    html: shell(`${previewOperationsNav('automations')}${renderAutomationStudioBody(presentAutomationStudio(
+      createPropertyPredatorAutomationStudioFixture(),
       {
-        workspaceName: snapshot.workspace.name,
-        filters: {
-          query: url.searchParams.get('q'),
-          channel: url.searchParams.get('channel'),
-          queue: url.searchParams.get('queue'),
-          conversationId: url.searchParams.get('conversation'),
-        },
+        node: url.searchParams.get('node'),
       },
-    )), 'inbox', 'Property Predator — Conversion Inbox'),
+    ))}`, 'journeys', 'Property Predator — Automation Studio'),
+  };
+  if (path === WEBINAR_STUDIO_ROUTE) return {
+    status: 200,
+    html: shell(`${previewOperationsNav('webinars')}${renderWebinarStudioBody(presentWebinarStudio(
+      createPropertyPredatorWebinarStudioFixture(),
+    ))}`, 'content', 'Property Predator — Webinar Studio'),
+  };
+  if (path === GROWTH_ANALYTICS_ROUTE) return {
+    status: 200,
+    html: shell(`${previewOperationsNav('analytics')}${renderGrowthAnalyticsBody(presentGrowthAnalytics(
+      createPropertyPredatorGrowthAnalyticsFixture(),
+    ))}`, 'overview', 'Property Predator — Growth Analytics'),
+  };
+  if (path === PROVIDER_CONNECTIONS_ROUTE) return {
+    status: 200,
+    html: shell(`${previewOperationsNav('connections')}${renderProviderConnectionsBody(presentProviderConnections(
+      createPropertyPredatorProviderConnectionsFixture(),
+    ))}`, 'overview', 'Property Predator — Connections'),
   };
   if (path === '/portal/crm/contacts') return {
     status: 200,
@@ -745,6 +1129,47 @@ function previewBoardReturnLocation(form: URLSearchParams | null, notice: 'moved
   const band = (form?.get('return_band') ?? '').trim();
   if (['burning', 'hot', 'warm', 'quiet', 'unscored'].includes(band)) query.set('band', band);
   return `${JOURNEY_BOARD_ROUTE}?${query.toString()}`;
+}
+
+function previewContentReturnLocation(form: URLSearchParams | null, code: ContentControlNoticeCode): string {
+  const query = new URLSearchParams({
+    notice: contentControlNoticeToken(
+      PREVIEW_CONTENT_NOTICE_SECRET,
+      PREVIEW_CONTENT_NOTICE_SESSION,
+      code,
+    ),
+  });
+  const search = (form?.get('return_q') ?? '').trim();
+  if (search && search.length <= 80 && !/[\u0000-\u001f\u007f]/u.test(search)) query.set('q', search);
+  const channel = form?.get('return_channel') ?? '';
+  if (['social', 'email', 'webinar', 'library'].includes(channel)) query.set('channel', channel);
+  const format = form?.get('return_format') ?? '';
+  if (['article', 'document', 'email', 'image', 'social_post', 'video', 'webinar', 'other'].includes(format)) query.set('format', format);
+  const anchor = /^(?:ccr-content-)[1-9][0-9]{0,2}$/u.test(form?.get('return_anchor') ?? '')
+    ? `#${form!.get('return_anchor')}`
+    : '';
+  return `${CONTENT_CONTROL_ROOM_ROUTE}?${query.toString()}${anchor}`;
+}
+
+function previewInboxReturnLocation(form: URLSearchParams | null, code: ConversionInboxNoticeCode): string {
+  const query = new URLSearchParams({
+    notice: conversionInboxNoticeToken(
+      PREVIEW_INBOX_NOTICE_SECRET,
+      PREVIEW_INBOX_NOTICE_SESSION,
+      code,
+    ),
+  });
+  const search = (form?.get('return_q') ?? '').trim();
+  if (search && search.length <= 80 && !/[\u0000-\u001f\u007f]/u.test(search)) query.set('q', search);
+  const channel = form?.get('return_channel') ?? '';
+  if (['email', 'whatsapp', 'sms', 'instagram', 'facebook'].includes(channel)) query.set('channel', channel);
+  const queue = form?.get('return_queue') ?? '';
+  if (['unread', 'approval', 'open'].includes(queue)) query.set('queue', queue);
+  const conversation = form?.get('return_conversation') ?? '';
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(conversation)) {
+    query.set('conversation', conversation.toLowerCase());
+  }
+  return `${CONVERSION_INBOX_ROUTE}?${query.toString()}`;
 }
 
 const server = createServer(async (request, response) => {
@@ -799,6 +1224,133 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (request.method === 'POST' && path === CONTENT_APPROVAL_REQUEST_ROUTE) {
+    const form = await readPreviewForm(request);
+    const contentItemId = form?.get('content_item_id') ?? '';
+    const contentVersionId = form?.get('content_version_id') ?? '';
+    const valid = form?.get('_csrf') === PREVIEW_CSRF
+      && form.get('command_key') === `preview-content-request:${contentVersionId}`
+      && requestPreviewContentApproval(contentItemId, contentVersionId);
+    response.writeHead(303, {
+      location: previewContentReturnLocation(form, valid ? 'requested' : 'invalid'),
+      'cache-control': 'no-store',
+    });
+    response.end();
+    return;
+  }
+
+  if (request.method === 'POST' && path === CONTENT_APPROVAL_DECISION_ROUTE) {
+    const form = await readPreviewForm(request);
+    const approvalRequestId = form?.get('approval_request_id') ?? '';
+    const decision = form?.get('decision') ?? '';
+    const validDecision = decision === 'approved' || decision === 'rejected' || decision === 'changes_requested';
+    const valid = form?.get('_csrf') === PREVIEW_CSRF
+      && form.get('command_key') === `preview-content-decision:${approvalRequestId}`
+      && validDecision
+      && decidePreviewContentApproval(
+        approvalRequestId,
+        decision as 'approved' | 'rejected' | 'changes_requested',
+        form.get('decision_note') ?? '',
+      );
+    response.writeHead(303, {
+      location: previewContentReturnLocation(
+        form,
+        valid ? decision as 'approved' | 'rejected' | 'changes_requested' : 'invalid',
+      ),
+      'cache-control': 'no-store',
+    });
+    response.end();
+    return;
+  }
+
+  const inboxReviseMatch = /^\/portal\/inbox\/messages\/([^/]+)\/versions$/.exec(path);
+  if (request.method === 'POST' && inboxReviseMatch) {
+    const form = await readPreviewForm(request);
+    const messageId = inboxReviseMatch[1]!;
+    const valid = form?.get('_csrf') === PREVIEW_CSRF
+      && form.get('command_key') === `preview-inbox-revise:${messageId}`
+      && revisePreviewInboxDraft(
+        messageId,
+        form.get('body') ?? '',
+        form.get('expected_row_version') ?? '',
+      );
+    response.writeHead(303, {
+      location: previewInboxReturnLocation(form, valid ? 'draft_saved' : 'conflict'),
+      'cache-control': 'no-store',
+    });
+    response.end();
+    return;
+  }
+
+  const inboxRequestMatch = /^\/portal\/inbox\/messages\/([^/]+)\/approval-requests$/.exec(path);
+  if (request.method === 'POST' && inboxRequestMatch) {
+    const form = await readPreviewForm(request);
+    const messageId = inboxRequestMatch[1]!;
+    const valid = form?.get('_csrf') === PREVIEW_CSRF
+      && form.get('command_key') === `preview-inbox-request:${messageId}`
+      && requestPreviewInboxApproval(messageId, form.get('expected_row_version') ?? '');
+    response.writeHead(303, {
+      location: previewInboxReturnLocation(form, valid ? 'approval_requested' : 'conflict'),
+      'cache-control': 'no-store',
+    });
+    response.end();
+    return;
+  }
+
+  const inboxDecisionMatch = /^\/portal\/inbox\/approval-requests\/([^/]+)\/decisions$/.exec(path);
+  if (request.method === 'POST' && inboxDecisionMatch) {
+    const form = await readPreviewForm(request);
+    const approvalRequestId = inboxDecisionMatch[1]!;
+    const decision = form?.get('decision') ?? '';
+    const validDecision = decision === 'approved' || decision === 'rejected' || decision === 'changes_requested';
+    const valid = form?.get('_csrf') === PREVIEW_CSRF
+      && form.get('command_key') === `preview-inbox-decision:${approvalRequestId}`
+      && validDecision
+      && decidePreviewInboxApproval(
+        approvalRequestId,
+        decision as 'approved' | 'rejected' | 'changes_requested',
+        form.get('decision_note') ?? '',
+      );
+    response.writeHead(303, {
+      location: previewInboxReturnLocation(
+        form,
+        valid ? decision as 'approved' | 'rejected' | 'changes_requested' : 'conflict',
+      ),
+      'cache-control': 'no-store',
+    });
+    response.end();
+    return;
+  }
+
+  const inboxQueueMatch = /^\/portal\/inbox\/messages\/([^/]+)\/test-queue$/.exec(path);
+  if (request.method === 'POST' && inboxQueueMatch) {
+    const form = await readPreviewForm(request);
+    const messageId = inboxQueueMatch[1]!;
+    const valid = form?.get('_csrf') === PREVIEW_CSRF
+      && form.get('command_key') === `preview-inbox-queue:${messageId}`
+      && queuePreviewInboxTestOperation(
+        messageId,
+        form.get('expected_row_version') ?? '',
+        form.get('purpose') ?? '',
+      );
+    response.writeHead(303, {
+      location: previewInboxReturnLocation(form, valid ? 'test_queued' : 'consent_blocked'),
+      'cache-control': 'no-store',
+    });
+    response.end();
+    return;
+  }
+
+  if (request.method === 'POST' && path === CONVERSION_INBOX_CREATE_DRAFT_ROUTE) {
+    const form = await readPreviewForm(request);
+    response.writeHead(303, {
+      location: previewInboxReturnLocation(form, 'invalid'),
+      'cache-control': 'no-store',
+    });
+    response.end();
+    return;
+  }
+
   if (request.method !== 'GET') {
     response.writeHead(405, { allow: 'GET, POST', 'cache-control': 'no-store' });
     response.end();
@@ -812,7 +1364,7 @@ const server = createServer(async (request, response) => {
     'x-content-type-options': 'nosniff',
     'content-security-policy': rendered.board
       ? "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
-      : "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'none'; base-uri 'none'; frame-ancestors 'none'",
+      : "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
   });
   response.end(rendered.html);
 });

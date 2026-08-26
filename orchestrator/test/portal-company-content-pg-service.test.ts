@@ -22,6 +22,7 @@ import type {
   PortalCompanyContentRequestIdentity,
   PortalCompanyContentWorkspaceAccess,
 } from '../src/portal/company-content-service.js';
+import { createPropertyPredatorContentCatalogFixture } from '../src/portal/content-control-room-fixtures.js';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const WORKSPACE_ID = '22222222-2222-4222-8222-222222222222';
@@ -132,6 +133,23 @@ test('portal company content snapshot resolves one server-owned RLS context and 
   assert.strictEqual(outcome.snapshot.catalog, EMPTY_CATALOG);
   assert.ok(Object.isFrozen(outcome));
   assert.ok(Object.isFrozen(outcome.snapshot));
+});
+
+test('portal company content snapshot locks a stored publishable claim without rewriting its source object', async () => {
+  const sourceCatalog = createPropertyPredatorContentCatalogFixture();
+  assert.equal(sourceCatalog.items[0]?.publishable, true);
+  const service = new PgPortalCompanyContentService(dependencies({
+    readService: { listCatalog: async () => sourceCatalog },
+  }));
+
+  const outcome = await service.snapshot(identity());
+
+  assert.equal(outcome.ok, true);
+  if (!outcome.ok) return;
+  assert.equal(outcome.snapshot.catalog.items[0]?.publishable, false);
+  assert.equal(sourceCatalog.items[0]?.publishable, true);
+  assert.ok(Object.isFrozen(outcome.snapshot.catalog));
+  assert.ok(Object.isFrozen(outcome.snapshot.catalog.items));
 });
 
 test('portal company content stops an unresolved session before any workspace or content read', async () => {
@@ -252,7 +270,7 @@ test('approval decisions are manager-only before the command and command RLS rem
   assertRlsContext(capturedContext);
 });
 
-test('manager approval decision returns the immutable request, version and hash evidence', async () => {
+test('manager rejection returns immutable request, version and hash evidence', async () => {
   let capturedInput: unknown;
   const service = new PgPortalCompanyContentService(dependencies({
     commandService: {
@@ -265,7 +283,7 @@ test('manager approval decision returns the immutable request, version and hash 
           approvalRequestId: APPROVAL_REQUEST_ID,
           contentItemId: CONTENT_ITEM_ID,
           contentVersionId: CONTENT_VERSION_ID,
-          decision: 'approved',
+          decision: input.decision,
           contentSha256: CONTENT_SHA,
         };
       },
@@ -274,8 +292,8 @@ test('manager approval decision returns the immutable request, version and hash 
   const input = {
     commandKey: 'content-decision-2',
     approvalRequestId: APPROVAL_REQUEST_ID,
-    decision: 'approved' as const,
-    decisionNote: null,
+    decision: 'rejected' as const,
+    decisionNote: 'Exact review content is unavailable.',
   };
 
   const outcome = await service.decideApproval(identity(), input);
@@ -285,8 +303,36 @@ test('manager approval decision returns the immutable request, version and hash 
   assert.equal(outcome.approvalDecisionId, APPROVAL_DECISION_ID);
   assert.equal(outcome.contentVersionId, CONTENT_VERSION_ID);
   assert.equal(outcome.contentSha256, CONTENT_SHA);
+  assert.equal(outcome.decision, 'rejected');
   assert.deepEqual(capturedInput, input);
   assert.ok(Object.isFrozen(outcome));
+});
+
+test('manager approval fails closed before the command service while exact review content is unavailable', async () => {
+  let commands = 0;
+  const service = new PgPortalCompanyContentService(dependencies({
+    commandService: {
+      requestApproval: async () => { throw new Error('not used'); },
+      decideApproval: async () => {
+        commands += 1;
+        throw new Error('must not run');
+      },
+    },
+  }));
+
+  const outcome = await service.decideApproval(identity(), {
+    commandKey: 'content-decision-approval-locked',
+    approvalRequestId: APPROVAL_REQUEST_ID,
+    decision: 'approved',
+    decisionNote: null,
+  });
+
+  assert.deepEqual(outcome, {
+    ok: false,
+    kind: 'review_unavailable',
+    message: 'Approval is locked until the exact hash-bound content can be shown for review.',
+  });
+  assert.equal(commands, 0);
 });
 
 test('portal boundary preserves distinct validation, idempotency, in-progress, version and approval conflicts', async (t) => {

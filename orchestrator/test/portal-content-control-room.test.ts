@@ -12,6 +12,12 @@ import {
   presentContentControlRoom,
 } from '../src/portal/content-control-room-presenter.js';
 import { renderContentControlRoomBody } from '../src/portal/content-control-room-view.js';
+import {
+  CONTENT_APPROVAL_DECISION_ROUTE,
+  CONTENT_APPROVAL_REQUEST_ROUTE,
+  contentControlNoticeFromQuery,
+  contentControlNoticeToken,
+} from '../src/portal/content-control-room-actions.js';
 
 const HASH_A = '11'.repeat(32);
 const HASH_B = '22'.repeat(32);
@@ -103,7 +109,8 @@ test('Content Control Room presents exact provenance and filters by deterministi
   });
   assert.equal(present([image], { channel: 'library' }).items.length, 1);
   assert.equal(view.metrics.loaded, 3);
-  assert.equal(view.metrics.publishable, 3);
+  assert.equal(view.metrics.publishable, 0);
+  assert.equal(view.metrics.needsAttention, 3);
   assert.equal(view.matchingCount, 1);
 });
 
@@ -138,21 +145,22 @@ test('Content Control Room truth labels keep stale approval and expired source p
   const view = present([item(), stale, expired, pending]);
   const html = renderContentControlRoomBody(view);
 
-  assert.equal(view.metrics.publishable, 1);
-  assert.equal(view.metrics.needsAttention, 3);
+  assert.equal(view.metrics.publishable, 0);
+  assert.equal(view.metrics.needsAttention, 4);
   assert.deepEqual(view.reviewQueue.map((entry) => entry.reason), [
-    'Approve this exact version',
-    'Decision waiting',
-    'Refresh source proof',
+    'Exact review content unavailable',
+    'Exact review content unavailable',
+    'Exact review content unavailable',
+    'Exact review content unavailable',
   ]);
   assert.match(html, /Stale approval/);
   assert.match(html, /Stale · newer version exists/);
   assert.match(html, /An older decision does not cover immutable v4/);
   assert.match(html, /Source proof stale/);
-  assert.match(html, /A fresh source catalogue attestation is required/);
-  assert.equal((html.match(/Publishable gate<\/span><strong>Eligible/g) ?? []).length, 1);
-  assert.equal((html.match(/Publishable gate<\/span><strong>Locked/g) ?? []).length, 3);
-  assert.match(html, /Eligible is not published/);
+  assert.match(html, /exact text or artwork bytes are not available/i);
+  assert.equal((html.match(/Publishable gate<\/span><strong>Eligible/g) ?? []).length, 0);
+  assert.equal((html.match(/Publishable gate<\/span><strong>Locked/g) ?? []).length, 4);
+  assert.match(html, /Approval and outbound use are locked/);
   assert.match(html, /No post, message, schedule or provider call happens here/);
 });
 
@@ -166,8 +174,8 @@ test('Content Control Room fails a contradictory stored publishable claim closed
   assert.equal(view.items[0]?.publishable, false);
   assert.equal(view.items[0]?.publishableLabel, 'Locked');
   assert.equal(view.metrics.publishable, 0);
-  assert.equal(view.reviewQueue[0]?.reason, 'Decision waiting');
-  assert.match(renderContentControlRoomBody(view), /An exact approval decision is required/);
+  assert.equal(view.reviewQueue[0]?.reason, 'Exact review content unavailable');
+  assert.match(renderContentControlRoomBody(view), /exact text or artwork bytes are not available/i);
 });
 
 test('Content Control Room escapes every supplied display and audit field', () => {
@@ -230,6 +238,81 @@ test('Content Control Room has labelled, touch-sized, responsive review semantic
   assert.match(html, /@media\(forced-colors:active\)/);
   assert.doesNotMatch(html, /method="post"|Connect provider|Publish now|Schedule now/i);
   assert.match(html, /Zero provider effects/);
+});
+
+test('Content Control Room exposes protected approval commands only to authorised roles', () => {
+  const pending = item({
+    approvalStatus: 'pending',
+    approvalDecisionId: null,
+    publishable: false,
+  });
+  const unrequested = item({
+    contentItemId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    contentVersionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    approvalRequestId: null,
+    approvalDecisionId: null,
+    approvalStatus: 'unrequested',
+    publishable: false,
+  });
+  const view = presentContentControlRoom(page([pending, unrequested]), {
+    workspaceName: 'Property Predator Growth HQ',
+    asOf: '2026-08-26T08:05:00.000Z',
+    canWrite: true,
+    canManage: true,
+  });
+  const html = renderContentControlRoomBody(view, {
+    security: {
+      csrfToken: 'content-csrf-token-0000000000000001',
+      requestApprovalKeys: {
+        [unrequested.contentVersionId]: 'content-request-command-0001',
+      },
+      decisionKeys: {
+        [pending.approvalRequestId!]: 'content-decision-command-0001',
+      },
+    },
+  });
+
+  assert.match(html, new RegExp(`method="post" action="${CONTENT_APPROVAL_REQUEST_ROUTE}"`));
+  assert.match(html, new RegExp(`method="post" action="${CONTENT_APPROVAL_DECISION_ROUTE}"`));
+  assert.match(html, /name="content_item_id" value="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"/);
+  assert.match(html, /name="content_version_id" value="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"/);
+  assert.match(html, /name="approval_request_id" value="33333333-3333-4333-8333-333333333333"/);
+  assert.doesNotMatch(html, /name="decision" value="approved"|Approve exact v3/);
+  assert.match(html, /name="decision" value="changes_requested">Request changes/);
+  assert.match(html, /name="decision" value="rejected">Reject/);
+  assert.match(html, /Approval locked · exact review content unavailable/);
+  assert.match(html, /server will reject any forged approval/i);
+
+  const readOnly = renderContentControlRoomBody(present([pending, unrequested]), {
+    security: {
+      csrfToken: 'content-csrf-token-0000000000000001',
+      requestApprovalKeys: { [unrequested.contentVersionId]: 'content-request-command-0001' },
+      decisionKeys: { [pending.approvalRequestId!]: 'content-decision-command-0001' },
+    },
+  });
+  assert.doesNotMatch(readOnly, /method="post"/);
+  assert.match(readOnly, /Your current workspace role can inspect immutable evidence/);
+});
+
+test('Content Control notices are session-bound and never claim publishing occurred', () => {
+  const secret = 'content-notice-secret';
+  const session = 'content-session';
+  for (const code of ['requested', 'approved', 'rejected', 'changes_requested', 'replayed'] as const) {
+    const query = new URLSearchParams({ notice: contentControlNoticeToken(secret, session, code) });
+    const notice = contentControlNoticeFromQuery(query, secret, session);
+    assert.ok(notice);
+    assert.doesNotMatch(`${notice.title} ${notice.message}`, /published successfully|post sent|message sent/i);
+    assert.equal(contentControlNoticeFromQuery(query, secret, 'another-session'), undefined);
+  }
+  const lockedQuery = new URLSearchParams({
+    notice: contentControlNoticeToken(secret, session, 'review_unavailable'),
+  });
+  const locked = contentControlNoticeFromQuery(lockedQuery, secret, session);
+  assert.deepEqual(locked, {
+    kind: 'error',
+    title: 'Approval locked safely',
+    message: 'The exact hash-bound text or artwork is not available to inspect, so approval and outbound eligibility remain locked.',
+  });
 });
 
 test('Content Control Room bounds query, catalogue and review output and fails invalid filters closed', () => {

@@ -21,6 +21,13 @@ export interface PortalCompanyContentWorkspaceAccess {
   readonly canManage: boolean;
 }
 
+/**
+ * The catalogue currently exposes immutable identity and hashes, but not the
+ * exact text/blob bytes a human must inspect. Keep approval and outbound use
+ * closed until a hash-bound review representation is added to this boundary.
+ */
+export const PORTAL_COMPANY_CONTENT_REVIEW_REPRESENTATION_AVAILABLE = false;
+
 export interface PortalCompanyContentSnapshot {
   readonly workspace: PortalCompanyContentWorkspaceAccess;
   readonly catalog: CompanyContentCatalogPage;
@@ -35,6 +42,7 @@ export type PortalCompanyContentFailureKind =
   | 'command_in_progress'
   | 'version_conflict'
   | 'approval_conflict'
+  | 'review_unavailable'
   | 'unavailable';
 
 export interface PortalCompanyContentFailure {

@@ -4,6 +4,7 @@ import type { DatabaseRequestContext } from '../db/rls.js';
 import { withTransaction } from '../db/transaction.js';
 import type { SqlExecutor } from '../crm-pg/types.js';
 import { evaluateEndpointInTransaction } from '../consent-pg/eligibility.js';
+import { INBOX_COMPLETE_REVIEW_MAX_BODY_BYTES } from './limits.js';
 import { InboxPgRepository, type LockedMessageRow } from './repository.js';
 import {
   InboxCommandInProgressError,
@@ -54,6 +55,9 @@ const REQUEST_APPROVAL = 'inbox.requestApproval';
 const DECIDE_APPROVAL = 'inbox.decideApproval';
 const QUEUE_APPROVED = 'inbox.queueApproved';
 const RECORD_RECEIPT = 'inbox.recordTestReceipt';
+
+/** Maximum body that the current human-review surface can render in full. */
+export const INBOX_APPROVAL_REVIEW_MAX_BODY_BYTES = INBOX_COMPLETE_REVIEW_MAX_BODY_BYTES;
 
 function hashesEqual(left: Uint8Array, right: Uint8Array): boolean {
   const a = Buffer.from(left);
@@ -307,6 +311,12 @@ export class InboxCommandService {
         if (approval.lifecycle !== 'approval_pending' || approval.approvalDecisionId !== null) {
           throw new InboxVersionConflictError('Approval request is no longer pending');
         }
+        if (input.decision === 'approved'
+            && approval.bodyBytes > INBOX_APPROVAL_REVIEW_MAX_BODY_BYTES) {
+          throw new InboxValidationError(
+            'The exact immutable draft exceeds the complete human-review boundary',
+          );
+        }
         const approvalDecisionId = this.#nextId();
         const message = await repository.decideApproval({ approvalDecisionId,
           approval, command: input, actorUserId: actorUserId(context),
@@ -337,6 +347,11 @@ export class InboxCommandService {
         const message = await repository.lockApprovedMessage(input.messageId);
         if (!message) throw new InboxNotFoundError('Approved message');
         if (message.rowVersion !== input.expectedRowVersion) throw new InboxVersionConflictError();
+        if (message.bodyBytes > INBOX_APPROVAL_REVIEW_MAX_BODY_BYTES) {
+          throw new InboxValidationError(
+            'The exact immutable draft exceeds the complete human-review boundary',
+          );
+        }
         const consentChannel = message.channel === 'instagram' || message.channel === 'facebook'
           ? 'social' : message.channel;
         const eligibility = await evaluateEndpointInTransaction(repository.executor, {

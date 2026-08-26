@@ -24,6 +24,11 @@ import {
   type PgPortalJourneyManagerService,
 } from './journey-manager-service.js';
 import type { PortalInboxReadBoundary } from './router.js';
+import {
+  createPgPortalConversionInboxCommandService,
+  type PgPortalConversionInboxCommandService,
+} from './conversion-inbox-pg-service.js';
+import { createPgConversionInboxThreadReadService } from './conversion-inbox-thread-pg-service.js';
 
 export interface PgPortalPlatform {
   auth: PgPortalAuthService;
@@ -33,6 +38,8 @@ export interface PgPortalPlatform {
   companyContent?: PgPortalCompanyContentService;
   /** Canonical TEST-only queue read model; it has no send or provider operation. */
   inbox: PortalInboxReadBoundary;
+  /** Durable TEST-only draft/approval queue commands; it cannot dispatch. */
+  inboxCommands: PgPortalConversionInboxCommandService;
   close(): Promise<void>;
 }
 
@@ -59,18 +66,29 @@ export function createPgPortalInboxReadBoundary(
 ): PortalInboxReadBoundary {
   const principalResolver = createPgPortalCrmPrincipalResolver(webPool);
   const readService = createPgInboxReadService(webPool);
+  const threadReadService = createPgConversionInboxThreadReadService(webPool);
+  async function context(identity: PortalCrmRequestIdentity) {
+    const principal = await principalResolver.resolve(identity.sessionToken);
+    if (!principal) return null;
+    return requestDatabaseContext({
+      ...principal,
+      requestId: identity.requestId,
+      portalSessionTokenHash: createHash('sha256').update(identity.sessionToken).digest(),
+    });
+  }
   return Object.freeze({
     async listConversations(
       identity: PortalCrmRequestIdentity,
       query?: InboxConversationQuery,
     ) {
-      const principal = await principalResolver.resolve(identity.sessionToken);
-      if (!principal) return null;
-      return readService.listConversations(requestDatabaseContext({
-        ...principal,
-        requestId: identity.requestId,
-        portalSessionTokenHash: createHash('sha256').update(identity.sessionToken).digest(),
-      }), query);
+      const databaseContext = await context(identity);
+      if (!databaseContext) return null;
+      return readService.listConversations(databaseContext, query);
+    },
+    async thread(identity: PortalCrmRequestIdentity, conversationId: string) {
+      const databaseContext = await context(identity);
+      if (!databaseContext) return null;
+      return threadReadService.thread(databaseContext, conversationId);
     },
   });
 }
@@ -151,6 +169,7 @@ export async function buildPgPortalPlatform(
       journeys: createPgPortalJourneyManagerService({ webPool, commandPool }),
       companyContent,
       inbox: createPgPortalInboxReadBoundary(webPool),
+      inboxCommands: createPgPortalConversionInboxCommandService({ webPool, commandPool }),
       async close(): Promise<void> {
         if (closed) return;
         closed = true;

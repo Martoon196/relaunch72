@@ -51,6 +51,8 @@ export interface LockedMessageRow extends LockedConversationRow {
 }
 
 export interface LockedApprovalRow extends LockedMessageRow {
+  /** Exact immutable app.message_versions.body_text size measured by PostgreSQL. */
+  readonly bodyBytes: number;
   readonly approvalRequestId: string;
   readonly requestNumber: number;
   readonly approvalDecisionId: string | null;
@@ -518,7 +520,10 @@ export class InboxPgRepository {
 
   async lockApprovalRequest(approvalRequestId: string): Promise<LockedApprovalRow | null> {
     const result = await this.transaction.query<
-      Omit<LockedApprovalRow, 'rowVersion'> & { rowVersion: number | string } & QueryResultRow
+      Omit<LockedApprovalRow, 'rowVersion' | 'bodyBytes'> & {
+        rowVersion: number | string;
+        bodyBytes: number | string;
+      } & QueryResultRow
     >(
       `/* inbox.lock-approval-request */
        SELECT message.conversation_id AS "conversationId",
@@ -530,6 +535,7 @@ export class InboxPgRepository {
               message.id AS "messageId", message.current_version_id AS "messageVersionId",
               message.current_version_number AS "versionNumber",
               encode(message.current_body_sha256, 'hex') AS "bodySha256",
+              octet_length(version.body_text) AS "bodyBytes",
               message.lifecycle, message.row_version AS "rowVersion",
               request.id AS "approvalRequestId", request.request_number AS "requestNumber",
               decision.id AS "approvalDecisionId", decision.decision
@@ -542,6 +548,13 @@ export class InboxPgRepository {
        JOIN app.conversations AS conversation
          ON conversation.workspace_id = message.workspace_id
         AND conversation.id = message.conversation_id
+       JOIN app.message_versions AS version
+         ON version.workspace_id = message.workspace_id
+        AND version.conversation_id = message.conversation_id
+        AND version.message_id = message.id
+        AND version.id = message.current_version_id
+        AND version.version_number = message.current_version_number
+        AND version.body_sha256 = message.current_body_sha256
        JOIN app.inboxes AS inbox
          ON inbox.workspace_id = conversation.workspace_id
         AND inbox.id = conversation.inbox_id
@@ -555,7 +568,8 @@ export class InboxPgRepository {
     const row = result.rows[0];
     if (!row) return null;
     const rowVersion = positiveSafeInteger(row.rowVersion, 'Locked approval row version');
-    return { ...row, rowVersion };
+    const bodyBytes = positiveSafeInteger(row.bodyBytes, 'Locked approval body byte length');
+    return { ...row, rowVersion, bodyBytes };
   }
 
   async decideApproval(input: {
@@ -600,7 +614,10 @@ export class InboxPgRepository {
 
   async lockApprovedMessage(messageId: string): Promise<LockedApprovalRow | null> {
     const result = await this.transaction.query<
-      Omit<LockedApprovalRow, 'rowVersion'> & { rowVersion: number | string } & QueryResultRow
+      Omit<LockedApprovalRow, 'rowVersion' | 'bodyBytes'> & {
+        rowVersion: number | string;
+        bodyBytes: number | string;
+      } & QueryResultRow
     >(
       `/* inbox.lock-approved-message */
        SELECT message.conversation_id AS "conversationId",
@@ -612,6 +629,7 @@ export class InboxPgRepository {
               message.id AS "messageId", message.current_version_id AS "messageVersionId",
               message.current_version_number AS "versionNumber",
               encode(message.current_body_sha256, 'hex') AS "bodySha256",
+              octet_length(version.body_text) AS "bodyBytes",
               message.lifecycle, message.row_version AS "rowVersion",
               request.id AS "approvalRequestId", request.request_number AS "requestNumber",
               decision.id AS "approvalDecisionId", decision.decision
@@ -622,6 +640,13 @@ export class InboxPgRepository {
        JOIN app.inboxes AS inbox
          ON inbox.workspace_id = conversation.workspace_id
         AND inbox.id = conversation.inbox_id
+       JOIN app.message_versions AS version
+         ON version.workspace_id = message.workspace_id
+        AND version.conversation_id = message.conversation_id
+        AND version.message_id = message.id
+        AND version.id = message.current_version_id
+        AND version.version_number = message.current_version_number
+        AND version.body_sha256 = message.current_body_sha256
        JOIN LATERAL (
          SELECT request.* FROM app.message_approval_requests AS request
          WHERE request.workspace_id = message.workspace_id
@@ -645,7 +670,11 @@ export class InboxPgRepository {
       row.rowVersion,
       'Locked approved message row version',
     );
-    return { ...row, rowVersion };
+    const bodyBytes = positiveSafeInteger(
+      row.bodyBytes,
+      'Locked approved message body byte length',
+    );
+    return { ...row, rowVersion, bodyBytes };
   }
 
   async queueApprovedMessage(input: {

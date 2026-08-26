@@ -164,6 +164,8 @@ export interface InboxConversationSummary {
   readonly contactName: string | null;
   readonly subject: string | null;
   readonly unreadCount: number;
+  /** True when the exact current outbound version awaits a decision or returned rework. */
+  readonly requiresApproval: boolean;
   readonly lastMessageAt: string | null;
   readonly latestMessage: Readonly<{
     messageId: string;

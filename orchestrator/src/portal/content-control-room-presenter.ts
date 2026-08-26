@@ -4,6 +4,8 @@ import type {
   CompanyContentKind,
   CompanyContentOrigin,
 } from '../company-content-pg/types.js';
+import type { ContentControlNoticeView } from './content-control-room-actions.js';
+import { PORTAL_COMPANY_CONTENT_REVIEW_REPRESENTATION_AVAILABLE } from './company-content-service.js';
 
 export const CONTENT_CONTROL_ROOM_ROUTE = '/portal/content' as const;
 export const CONTENT_CONTROL_ROOM_MAX_ITEMS = 100;
@@ -64,6 +66,9 @@ export interface ContentControlRoomItemView {
   readonly approvalDetail: string;
   readonly approvalTone: ContentApprovalTone;
   readonly approvalStale: boolean;
+  readonly reviewRepresentationAvailable: boolean;
+  readonly reviewRepresentationLabel: 'Exact content available' | 'Exact content unavailable';
+  readonly reviewRepresentationDetail: string;
   readonly sourceAttestationId: string | null;
   readonly sourceCheckedAt: string | null;
   readonly sourceExpiresAt: string | null;
@@ -108,6 +113,9 @@ export interface ContentControlRoomView {
   readonly catalogEmpty: boolean;
   readonly inputTruncated: boolean;
   readonly hasMore: boolean;
+  readonly canWrite: boolean;
+  readonly canManage: boolean;
+  readonly notice?: ContentControlNoticeView;
 }
 
 export interface PresentContentControlRoomOptions {
@@ -115,6 +123,9 @@ export interface PresentContentControlRoomOptions {
   /** Request/snapshot time supplied by the caller; the presenter never invents it. */
   readonly asOf: string;
   readonly filters?: ContentControlRoomFilterInput;
+  readonly canWrite?: boolean;
+  readonly canManage?: boolean;
+  readonly notice?: ContentControlNoticeView;
 }
 
 const CHANNELS = new Set<ContentControlRoomChannel>([
@@ -204,7 +215,9 @@ function exactApproval(item: CompanyContentCatalogItem): boolean {
 
 function approvalDetail(item: CompanyContentCatalogItem, stale: boolean): string {
   if (stale) return `An older decision does not cover immutable v${item.versionNumber}.`;
-  if (item.approvalStatus === 'approved') return `The decision covers the exact v${item.versionNumber} content hash.`;
+  if (item.approvalStatus === 'approved') {
+    return `A decision is recorded against the v${item.versionNumber} hash, but this surface cannot show the exact review content.`;
+  }
   if (item.approvalStatus === 'pending') return `The exact v${item.versionNumber} request has no decision yet.`;
   if (item.approvalStatus === 'changes_requested') return `The exact v${item.versionNumber} review requested changes.`;
   if (item.approvalStatus === 'rejected') return `The exact v${item.versionNumber} request was rejected.`;
@@ -224,9 +237,13 @@ function publishableDetail(
   item: CompanyContentCatalogItem,
   approved: boolean,
   stale: boolean,
+  reviewRepresentationAvailable: boolean,
   publishable: boolean,
 ): string {
   if (publishable) return 'Exact approval and fresh source proof agree. No provider action has run.';
+  if (!reviewRepresentationAvailable) {
+    return 'The exact text or artwork bytes are not available in this review surface, so approval and outbound use stay locked.';
+  }
   if (stale) return 'This version needs its own approval decision.';
   if (!approved) return 'An exact approval decision is required.';
   if (!item.sourceFresh) return 'A fresh source catalogue attestation is required.';
@@ -237,9 +254,11 @@ function reviewReason(
   item: CompanyContentCatalogItem,
   approved: boolean,
   stale: boolean,
+  reviewRepresentationAvailable: boolean,
   publishable: boolean,
 ): string | null {
   if (publishable) return null;
+  if (!reviewRepresentationAvailable) return 'Exact review content unavailable';
   if (stale) return 'Approve this exact version';
   if (item.approvalStatus === 'pending') return 'Decision waiting';
   if (item.approvalStatus === 'changes_requested') return 'Changes requested';
@@ -253,7 +272,11 @@ function presentItem(item: CompanyContentCatalogItem, index: number): ContentCon
   const channel = channelFor(item.kind);
   const stale = item.approvalStale || item.approvalStatus === 'stale';
   const approved = exactApproval(item) && !stale;
-  const publishable = item.publishable && approved && item.sourceFresh;
+  const reviewRepresentationAvailable = PORTAL_COMPANY_CONTENT_REVIEW_REPRESENTATION_AVAILABLE;
+  const publishable = item.publishable
+    && approved
+    && item.sourceFresh
+    && reviewRepresentationAvailable;
   return Object.freeze({
     anchorId: `ccr-content-${index + 1}`,
     contentItemId: item.contentItemId,
@@ -280,6 +303,13 @@ function presentItem(item: CompanyContentCatalogItem, index: number): ContentCon
     approvalDetail: approvalDetail(item, stale),
     approvalTone: approvalTone(item.approvalStatus),
     approvalStale: stale,
+    reviewRepresentationAvailable,
+    reviewRepresentationLabel: reviewRepresentationAvailable
+      ? 'Exact content available'
+      : 'Exact content unavailable',
+    reviewRepresentationDetail: reviewRepresentationAvailable
+      ? 'The exact hash-bound review representation is available for human inspection.'
+      : 'Only metadata and hashes are available here; the exact text or artwork cannot be inspected.',
     sourceAttestationId: item.sourceAttestationId,
     sourceCheckedAt: item.sourceCheckedAt,
     sourceExpiresAt: item.sourceExpiresAt,
@@ -288,8 +318,20 @@ function presentItem(item: CompanyContentCatalogItem, index: number): ContentCon
     sourceFreshnessDetail: freshnessDetail(item),
     publishable,
     publishableLabel: publishable ? 'Eligible' : 'Locked',
-    publishableDetail: publishableDetail(item, approved, stale, publishable),
-    reviewReason: reviewReason(item, approved, stale, publishable),
+    publishableDetail: publishableDetail(
+      item,
+      approved,
+      stale,
+      reviewRepresentationAvailable,
+      publishable,
+    ),
+    reviewReason: reviewReason(
+      item,
+      approved,
+      stale,
+      reviewRepresentationAvailable,
+      publishable,
+    ),
     createdAt: item.createdAt,
   });
 }
@@ -371,5 +413,8 @@ export function presentContentControlRoom(
     catalogEmpty: loaded.length === 0,
     inputTruncated,
     hasMore: catalog.nextCursor !== null || inputTruncated,
+    canWrite: options.canWrite === true,
+    canManage: options.canManage === true,
+    ...(options.notice ? { notice: options.notice } : {}),
   });
 }

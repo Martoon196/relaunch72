@@ -9,6 +9,7 @@ import {
   CompanyContentValidationError,
   CompanyContentVersionConflictError,
   createCompanyContentTransactionRunner,
+  type CompanyContentCatalogPage,
   type CompanyContentCatalogQuery,
   type CompanyContentService as CompanyContentServiceShape,
   type CompanyContentTransactionRunner,
@@ -31,6 +32,7 @@ import type {
   PortalRequestCompanyContentApprovalInput,
   PortalRequestCompanyContentApprovalOutcome,
 } from './company-content-service.js';
+import { PORTAL_COMPANY_CONTENT_REVIEW_REPRESENTATION_AVAILABLE } from './company-content-service.js';
 
 interface WorkspaceAccessRow extends QueryResultRow {
   readonly workspaceId: unknown;
@@ -176,6 +178,17 @@ function readFailure(error: unknown): PortalCompanyContentFailure {
   return failure('unavailable', 'The company content catalogue is temporarily unavailable.');
 }
 
+function reviewSafeCatalog(catalog: CompanyContentCatalogPage): CompanyContentCatalogPage {
+  if (PORTAL_COMPANY_CONTENT_REVIEW_REPRESENTATION_AVAILABLE
+      || !catalog.items.some((item) => item.publishable)) return catalog;
+  return Object.freeze({
+    ...catalog,
+    items: Object.freeze(catalog.items.map((item) => (
+      item.publishable ? Object.freeze({ ...item, publishable: false }) : item
+    ))),
+  });
+}
+
 export class PgPortalCompanyContentService implements PortalCompanyContentService {
   constructor(private readonly dependencies: PgPortalCompanyContentDependencies) {}
 
@@ -197,7 +210,9 @@ export class PgPortalCompanyContentService implements PortalCompanyContentServic
       if (!workspace) {
         return failure('forbidden', 'This workspace is not available to the current portal session.');
       }
-      const catalog = await this.dependencies.readService.listCatalog(context, query);
+      const catalog = reviewSafeCatalog(
+        await this.dependencies.readService.listCatalog(context, query),
+      );
       return Object.freeze({
         ok: true,
         snapshot: Object.freeze({ workspace, catalog }),
@@ -237,6 +252,13 @@ export class PgPortalCompanyContentService implements PortalCompanyContentServic
       if (!access) return failure('forbidden', 'This workspace is not available to the current portal session.');
       if (!access.canManage) {
         return failure('forbidden', 'Only a workspace owner or admin can decide company content approvals.');
+      }
+      if (input.decision === 'approved'
+          && !PORTAL_COMPANY_CONTENT_REVIEW_REPRESENTATION_AVAILABLE) {
+        return failure(
+          'review_unavailable',
+          'Approval is locked until the exact hash-bound content can be shown for review.',
+        );
       }
       const result = await this.dependencies.commandService.decideApproval(context, input);
       return Object.freeze({ ok: true, ...result });

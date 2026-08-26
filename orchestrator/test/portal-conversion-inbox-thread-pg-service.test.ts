@@ -1,0 +1,323 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import test from 'node:test';
+import type { Pool, QueryResult, QueryResultRow } from 'pg';
+import type { DatabaseRequestContext } from '../src/db/rls.js';
+import {
+  PgConversionInboxThreadReadService,
+} from '../src/portal/conversion-inbox-thread-pg-service.js';
+import { CONVERSION_INBOX_MAX_MESSAGE_BYTES } from '../src/portal/conversion-inbox-presenter.js';
+
+const WORKSPACE = '11111111-1111-4111-8111-111111111111';
+const USER = '22222222-2222-4222-8222-222222222222';
+const CONVERSATION = '33333333-3333-4333-8333-333333333333';
+const CONTACT = '44444444-4444-4444-8444-444444444444';
+const POINT = '55555555-5555-4555-8555-555555555555';
+const INBOUND = '66666666-6666-4666-8666-666666666666';
+const DRAFT = '77777777-7777-4777-8777-777777777777';
+const APPROVAL = '88888888-8888-4888-8888-888888888888';
+const NEWER_DRAFT = '99999999-9999-4999-8999-999999999999';
+const DRAFT_POINT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+function result<TRow extends QueryResultRow>(rows: TRow[]): QueryResult<TRow> {
+  return { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] };
+}
+
+const context: DatabaseRequestContext = Object.freeze({
+  actorKind: 'user',
+  workspaceId: WORKSPACE,
+  userId: USER,
+  requestId: 'portal-inbox-thread-read-1',
+  portalSessionTokenHash: createHash('sha256').update('opaque-session').digest(),
+});
+
+function core(overrides: Record<string, unknown> = {}): QueryResultRow {
+  return {
+    conversationId: CONVERSATION,
+    contactId: CONTACT,
+    contactPointId: POINT,
+    displayName: 'Aisha Demo',
+    companyName: 'Fictional Developments',
+    lifecycleStatus: 'lead',
+    source: 'affiliate',
+    stageName: 'Presentation watched',
+    score: '82',
+    referralCode: 'PARTNER_17',
+    nextMove: 'Qualified appointment',
+    draftMessageId: DRAFT,
+    draftBody: 'Exact immutable TEST draft.',
+    draftLifecycle: 'approval_pending',
+    draftVersionNumber: '2',
+    draftRowVersion: '3',
+    draftUpdatedAt: new Date('2026-08-26T09:05:00.000Z'),
+    approvalRequestId: APPROVAL,
+    approvalDecision: null,
+    approvalNote: 'Check the promise.',
+    deliveryStatus: null,
+    deliveryPurpose: null,
+    consentPurpose: 'property_predator_follow_up',
+    ...overrides,
+  };
+}
+
+class ThreadReadClient {
+  readonly calls: Array<{ sql: string; values: readonly unknown[] }> = [];
+  coreRows: QueryResultRow[] = [core()];
+  transcriptRows: QueryResultRow[] = [
+    {
+      messageId: DRAFT,
+      direction: 'outbound',
+      lifecycle: 'approval_pending',
+      body: 'Exact immutable TEST draft.',
+      occurredAt: new Date('2026-08-26T09:04:00.000Z'),
+      deliveryStatus: null,
+    },
+    {
+      messageId: INBOUND,
+      direction: 'inbound',
+      lifecycle: 'received',
+      body: 'Can you show me the comparison?',
+      occurredAt: new Date('2026-08-26T09:00:00.000Z'),
+      deliveryStatus: null,
+    },
+  ];
+  consentRows: QueryResultRow[] = [{
+    channel: 'email',
+    consentState: 'granted',
+    lawfulBasis: 'consent',
+    purpose: 'property_predator_follow_up',
+    consentAt: new Date('2026-08-26T08:50:00.000Z'),
+    suppressionState: null,
+    suppressionAt: null,
+    endpointAvailable: true,
+  }];
+
+  async query<TRow extends QueryResultRow>(
+    sql: string,
+    values: readonly unknown[] = [],
+  ): Promise<QueryResult<TRow>> {
+    this.calls.push({ sql, values });
+    if (sql.startsWith('BEGIN') || sql === 'COMMIT' || sql === 'ROLLBACK'
+        || sql.includes("set_config('app.user_id'")) return result([]);
+    if (sql.includes('database.lock-portal-session')) return result([
+      { active: true },
+    ] as unknown as TRow[]);
+    if (sql.includes('portal.conversion-inbox.thread-core')) {
+      return result(this.coreRows as TRow[]);
+    }
+    if (sql.includes('portal.conversion-inbox.thread-transcript')) {
+      return result(this.transcriptRows as TRow[]);
+    }
+    if (sql.includes('portal.conversion-inbox.thread-consent')) {
+      return result(this.consentRows as TRow[]);
+    }
+    throw new Error(`Unexpected thread read SQL: ${sql}`);
+  }
+
+  release(): void {}
+}
+
+test('PostgreSQL thread projection is session-guarded, bounded and maps exact TEST state', async () => {
+  const client = new ThreadReadClient();
+  const service = new PgConversionInboxThreadReadService({
+    connect: async () => client,
+  } as unknown as Pick<Pool, 'connect'>);
+
+  const snapshot = await service.thread(context, CONVERSATION);
+
+  assert.ok(snapshot);
+  assert.equal(snapshot.conversationId, CONVERSATION);
+  assert.equal(snapshot.contactPointId, POINT);
+  assert.deepEqual(snapshot.messages.map((message) => message.messageId), [INBOUND, DRAFT]);
+  assert.equal(snapshot.messages[0]!.authorLabel, 'Aisha Demo');
+  assert.equal(snapshot.messages[1]!.authorLabel, 'Growth team');
+  assert.deepEqual(snapshot.lead, {
+    contactId: CONTACT,
+    displayName: 'Aisha Demo',
+    companyName: 'Fictional Developments',
+    stageLabel: 'Presentation watched',
+    score: 82,
+    sourceLabel: 'affiliate',
+    affiliateLabel: 'Referral PARTNER_17',
+    nextMove: 'Advance to Qualified appointment',
+  });
+  assert.deepEqual(snapshot.consents, [{
+    channel: 'email',
+    state: 'permitted',
+    basis: 'consent · property_predator_follow_up',
+    updatedAt: '2026-08-26T08:50:00.000Z',
+  }]);
+  assert.deepEqual(snapshot.draft, {
+    messageId: DRAFT,
+    body: 'Exact immutable TEST draft.',
+    lifecycle: 'approval_pending',
+    versionNumber: 2,
+    approvalState: 'pending',
+    approvalNote: 'Check the promise.',
+    deliveryState: 'not_queued',
+    updatedAt: '2026-08-26T09:05:00.000Z',
+    rowVersion: 3,
+    approvalRequestId: APPROVAL,
+    purpose: 'property_predator_follow_up',
+  });
+  assert.ok(Object.isFrozen(snapshot));
+  assert.ok(Object.isFrozen(snapshot.messages));
+  assert.equal(JSON.stringify(snapshot).includes('@'), false);
+  assert.equal(JSON.stringify(snapshot).includes('normalized'), false);
+
+  const guardIndex = client.calls.findIndex((call) => call.sql.includes('database.lock-portal-session'));
+  const contextIndex = client.calls.findIndex((call) => call.sql.includes("set_config('app.user_id'"));
+  const coreIndex = client.calls.findIndex((call) => call.sql.includes('thread-core'));
+  assert.ok(guardIndex > 0 && contextIndex > guardIndex && coreIndex > contextIndex);
+  assert.deepEqual(client.calls[coreIndex]!.values, [CONVERSATION]);
+  const transcript = client.calls.find((call) => call.sql.includes('thread-transcript'))!;
+  assert.deepEqual(transcript.values, [CONVERSATION, 81]);
+  const consent = client.calls.find((call) => call.sql.includes('thread-consent'))!;
+  assert.deepEqual(consent.values, [CONVERSATION, POINT, 8]);
+});
+
+test('thread projection uses only the exact endpoint current consent and suppression evidence', async () => {
+  const client = new ThreadReadClient();
+  client.consentRows = [{
+    channel: 'email', consentState: 'granted', lawfulBasis: 'consent',
+    purpose: 'marketing', consentAt: new Date('2026-08-26T08:50:00.000Z'),
+    suppressionState: 'suppressed', suppressionAt: new Date('2026-08-26T09:10:00.000Z'),
+    endpointAvailable: true,
+  }];
+  const service = new PgConversionInboxThreadReadService({
+    connect: async () => client,
+  } as unknown as Pick<Pool, 'connect'>);
+
+  const suppressed = await service.thread(context, CONVERSATION);
+  assert.equal(suppressed?.consents[0]?.state, 'suppressed');
+  assert.equal(suppressed?.consents[0]?.updatedAt, '2026-08-26T09:10:00.000Z');
+
+  client.consentRows = [{
+    ...client.consentRows[0], suppressionState: null, suppressionAt: null,
+    endpointAvailable: false,
+  }];
+  const unavailable = await service.thread(context, CONVERSATION);
+  assert.equal(unavailable?.consents[0]?.state, 'unknown');
+});
+
+test('thread projection prioritises the exact pending or rework target over a newer ordinary draft', async () => {
+  const client = new ThreadReadClient();
+  client.coreRows = [core({
+    draftMessageId: DRAFT,
+    draftBody: 'Older exact copy returned for rework.',
+    draftLifecycle: 'draft',
+    approvalDecision: 'changes_requested',
+    approvalNote: 'Fix the evidence before approval.',
+  })];
+  client.transcriptRows = [{
+    messageId: NEWER_DRAFT,
+    direction: 'outbound',
+    lifecycle: 'draft',
+    body: 'Newer unrelated ordinary draft.',
+    occurredAt: new Date('2026-08-26T09:10:00.000Z'),
+    deliveryStatus: null,
+  }, {
+    messageId: DRAFT,
+    direction: 'outbound',
+    lifecycle: 'draft',
+    body: 'Older exact copy returned for rework.',
+    occurredAt: new Date('2026-08-26T09:04:00.000Z'),
+    deliveryStatus: null,
+  }];
+  const service = new PgConversionInboxThreadReadService({
+    connect: async () => client,
+  } as unknown as Pick<Pool, 'connect'>);
+
+  const snapshot = await service.thread(context, CONVERSATION);
+
+  assert.equal(snapshot?.draft.messageId, DRAFT);
+  assert.equal(snapshot?.draft.approvalState, 'changes_requested');
+  assert.deepEqual(snapshot?.messages.map((message) => message.messageId), [DRAFT, NEWER_DRAFT]);
+  const coreSql = client.calls.find((call) => call.sql.includes('thread-core'))!.sql;
+  assert.match(coreSql, /ORDER BY EXISTS \(/);
+  assert.match(coreSql, /target_request\.message_id = message\.id/);
+  assert.match(coreSql,
+    /ORDER BY target_request\.request_number DESC, target_request\.id DESC\s+LIMIT 1/);
+  assert.match(coreSql, /message\.lifecycle = 'approval_pending' AND latest_target\.decision_id IS NULL/);
+  assert.match(coreSql, /message\.lifecycle = 'draft'[\s\S]*latest_target\.decision = 'changes_requested'/);
+  assert.match(coreSql, /\) DESC,\s*message\.occurred_at DESC, message\.id DESC/);
+});
+
+test('thread projection binds the displayed consent endpoint to the selected draft endpoint', async () => {
+  const client = new ThreadReadClient();
+  client.coreRows = [core({ contactPointId: DRAFT_POINT })];
+  const service = new PgConversionInboxThreadReadService({
+    connect: async () => client,
+  } as unknown as Pick<Pool, 'connect'>);
+
+  const snapshot = await service.thread(context, CONVERSATION);
+
+  assert.equal(snapshot?.contactPointId, DRAFT_POINT);
+  const coreSql = client.calls.find((call) => call.sql.includes('thread-core'))!.sql;
+  assert.match(coreSql, /draft\.id IS NOT NULL AND point\.id = draft\.contact_point_id/);
+  assert.match(coreSql, /draft\.id IS NULL[\s\S]*point\.deleted_at IS NULL/);
+  const consent = client.calls.find((call) => call.sql.includes('thread-consent'))!;
+  assert.deepEqual(consent.values, [CONVERSATION, DRAFT_POINT, 8]);
+});
+
+test('thread projection preserves the complete database body for presenter-owned review truncation', async () => {
+  const client = new ThreadReadClient();
+  const hiddenTail = 'TAIL-MUST-BE-REVIEWED';
+  const databaseBody = `${'x'.repeat(65_536 - hiddenTail.length)}${hiddenTail}`;
+  assert.equal(Buffer.byteLength(databaseBody, 'utf8'), 65_536);
+  assert.ok(Buffer.byteLength(databaseBody, 'utf8') > CONVERSION_INBOX_MAX_MESSAGE_BYTES);
+  client.coreRows = [core({ draftBody: databaseBody })];
+  client.transcriptRows = [{
+    ...client.transcriptRows[0],
+    body: databaseBody,
+  }];
+  const service = new PgConversionInboxThreadReadService({
+    connect: async () => client,
+  } as unknown as Pick<Pool, 'connect'>);
+
+  const snapshot = await service.thread(context, CONVERSATION);
+
+  assert.equal(snapshot?.draft.body, databaseBody);
+  assert.equal(snapshot?.draft.body.endsWith(hiddenTail), true);
+  assert.equal(snapshot?.messages[0]?.body, databaseBody);
+  assert.equal(snapshot?.messages[0]?.body.endsWith(hiddenTail), true);
+});
+
+test('thread projection fails closed instead of clipping oversized or malformed database bodies', async () => {
+  const client = new ThreadReadClient();
+  const service = new PgConversionInboxThreadReadService({
+    connect: async () => client,
+  } as unknown as Pick<Pool, 'connect'>);
+
+  client.coreRows = [core({ draftBody: 'x'.repeat(65_537) })];
+  await assert.rejects(service.thread(context, CONVERSATION), /draftBody is invalid/);
+
+  client.coreRows = [core({ draftBody: 'valid draft' })];
+  client.transcriptRows = [{
+    ...client.transcriptRows[0],
+    body: '',
+  }];
+  await assert.rejects(service.thread(context, CONVERSATION), /messageBody is invalid/);
+});
+
+test('thread projection returns null without inventing detail and fails closed on malformed rows', async () => {
+  const client = new ThreadReadClient();
+  const service = new PgConversionInboxThreadReadService({
+    connect: async () => client,
+  } as unknown as Pick<Pool, 'connect'>);
+
+  client.coreRows = [];
+  assert.equal(await service.thread(context, CONVERSATION), null);
+  assert.equal(client.calls.some((call) => call.sql.includes('thread-transcript')), false);
+
+  client.calls.length = 0;
+  client.coreRows = [core({ draftVersionNumber: '9007199254740992' })];
+  await assert.rejects(
+    service.thread(context, CONVERSATION),
+    /draftVersionNumber is invalid/,
+  );
+  await assert.rejects(
+    service.thread(context, 'not-a-conversation'),
+    /conversationId is invalid/,
+  );
+});

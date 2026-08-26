@@ -56,11 +56,16 @@ test('conversion inbox composition resolves the opaque session before any RLS re
     sessionToken: 'opaque-missing-session',
     requestId: 'request-inbox-1',
   });
+  const thread = await inbox.thread!({
+    sessionToken: 'opaque-missing-session',
+    requestId: 'request-inbox-thread-1',
+  }, '33333333-3333-4333-8333-333333333333');
 
   assert.equal(page, null);
+  assert.equal(thread, null);
   assert.equal(readConnections, 0);
-  assert.deepEqual(Object.keys(inbox), ['listConversations']);
-  assert.equal('thread' in inbox, false);
+  assert.deepEqual(Object.keys(inbox), ['listConversations', 'thread']);
+  assert.equal('thread' in inbox, true);
   assert.equal('send' in inbox, false);
   assert.equal('publish' in inbox, false);
 });

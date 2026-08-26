@@ -15,6 +15,7 @@ import {
   PgProviderOperationQueue,
   ProviderOperationConsentChangedError,
 } from '../../src/provider-operations-pg/index.js';
+import { createPgConversionInboxThreadReadService } from '../../src/portal/conversion-inbox-thread-pg-service.js';
 import {
   expectPostgresError,
   openTestDatabase,
@@ -87,6 +88,23 @@ function workerConnectPool(pool: Pool): Pick<Pool, 'connect'> {
         query: async (sql: string, values?: readonly unknown[]) => {
           const result = await client.query(sql, values ? [...values] : undefined);
           if (/^BEGIN\b/.test(sql)) await client.query('SET LOCAL ROLE r72_worker');
+          return result;
+        },
+        release: (destroy?: boolean) => client.release(destroy),
+      };
+      return wrapped as unknown as PoolClient;
+    }) as Pool['connect'],
+  };
+}
+
+function webConnectPool(pool: Pool): Pick<Pool, 'connect'> {
+  return {
+    connect: (async () => {
+      const client = await pool.connect();
+      const wrapped = {
+        query: async (sql: string, values?: readonly unknown[]) => {
+          const result = await client.query(sql, values ? [...values] : undefined);
+          if (/^BEGIN\b/.test(sql)) await client.query('SET LOCAL ROLE r72_web');
           return result;
         },
         release: (destroy?: boolean) => client.release(destroy),
@@ -195,7 +213,41 @@ test('test inbox is approval/consent bound, dispatches without network and fence
       });
     };
 
-    const firstQueued = await approveAndQueue('first');
+    const firstDraft = await service.createDraft(contextA, {
+      commandKey: 'first-draft', conversationId: inbound.conversationId,
+      contactPointId: contactPointA, body: 'Approved reserved copy first',
+    });
+    const firstRequested = await service.requestApproval(contextA, {
+      commandKey: 'first-request', messageId: firstDraft.messageId,
+      expectedRowVersion: firstDraft.rowVersion,
+    });
+    const threadReader = createPgConversionInboxThreadReadService(webConnectPool(pool));
+    const pendingThread = await threadReader.thread(contextA, inbound.conversationId);
+    assert.equal(pendingThread?.contactPointId, contactPointA);
+    assert.equal(pendingThread?.messages.at(-1)?.messageId, firstDraft.messageId);
+    assert.equal(pendingThread?.draft.messageId, firstDraft.messageId);
+    assert.equal(pendingThread?.draft.approvalState, 'pending');
+    assert.equal(pendingThread?.draft.purpose, 'marketing');
+    assert.equal(pendingThread?.consents[0]?.state, 'permitted');
+    assert.equal(pendingThread?.lead.displayName, 'Reserved Test Lead');
+    assert.equal(JSON.stringify(pendingThread).includes('lead@propertypredator.invalid'), false);
+    assert.equal(await threadReader.thread({
+      actorKind: 'user', workspaceId: workspaceB, userId: ownerB,
+      requestId: 'inbox-thread-cross-workspace-denied',
+    }, inbound.conversationId), null);
+
+    const firstApproved = await service.decideApproval(contextA, {
+      commandKey: 'first-approve', approvalRequestId: firstRequested.approvalRequestId,
+      decision: 'approved',
+    });
+    const firstQueued = await service.queueApprovedMessage(contextA, {
+      commandKey: 'first-queue', messageId: firstApproved.messageId,
+      expectedRowVersion: firstApproved.rowVersion, purpose: 'marketing',
+    });
+    const queuedThread = await threadReader.thread(contextA, inbound.conversationId);
+    assert.equal(queuedThread?.draft.messageId, null);
+    assert.equal(queuedThread?.messages.at(-1)?.lifecycle, 'committed');
+    assert.equal(queuedThread?.messages.at(-1)?.deliveryState, 'queued');
     assert.equal((await service.queueApprovedMessage(contextA, {
       commandKey: 'first-queue', messageId: firstQueued.messageId,
       expectedRowVersion: firstQueued.rowVersion - 1, purpose: 'marketing',

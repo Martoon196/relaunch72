@@ -56,7 +56,17 @@ import {
   presentContentControlRoom,
 } from './content-control-room-presenter.js';
 import { renderContentControlRoomBody } from './content-control-room-view.js';
-import type { PortalCompanyContentService } from './company-content-service.js';
+import {
+  CONTENT_APPROVAL_DECISION_ROUTE,
+  CONTENT_APPROVAL_REQUEST_ROUTE,
+  contentControlNoticeFromQuery,
+  contentControlNoticeToken,
+  type ContentControlNoticeCode,
+} from './content-control-room-actions.js';
+import {
+  PORTAL_COMPANY_CONTENT_REVIEW_REPRESENTATION_AVAILABLE,
+  type PortalCompanyContentService,
+} from './company-content-service.js';
 import {
   CONVERSION_INBOX_MAX_CONVERSATIONS,
   CONVERSION_INBOX_ROUTE,
@@ -65,6 +75,14 @@ import {
   type ConversionInboxThreadSnapshot,
 } from './conversion-inbox-presenter.js';
 import { renderConversionInboxBody } from './conversion-inbox-view.js';
+import type { PortalConversionInboxCommandService } from './conversion-inbox-service.js';
+import {
+  CONVERSION_INBOX_CREATE_DRAFT_ROUTE,
+  conversionInboxNoticeFromQuery,
+  conversionInboxNoticeToken,
+  isConversionInboxTestQueuePurpose,
+  type ConversionInboxNoticeCode,
+} from './conversion-inbox-actions.js';
 import type { InboxConversationQuery } from '../inbox-pg/read-model.js';
 import type { InboxConversationPage } from '../inbox-pg/types.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
@@ -142,6 +160,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   companyContent?: PortalCompanyContentService;
   /** TEST-only conversion queue. Thread detail remains a separate optional projection. */
   inbox?: PortalInboxReadBoundary;
+  /** Durable TEST-only draft/approval/queue commands. It has no provider dispatcher. */
+  inboxCommands?: PortalConversionInboxCommandService;
 }
 
 /**
@@ -475,6 +495,93 @@ function crmRedirect(
   redirect(res, `${route}?${query.toString()}`, undefined, status);
 }
 
+const CONTENT_RETURN_CHANNELS = new Set(['all', 'social', 'email', 'webinar', 'library']);
+const CONTENT_RETURN_FORMATS = new Set([
+  'all', 'article', 'document', 'email', 'image', 'social_post', 'video', 'webinar', 'other',
+]);
+
+function contentControlReturnLocation(
+  form: Readonly<Record<string, string>>,
+  noticeToken: string,
+): string {
+  const query = new URLSearchParams({ notice: noticeToken });
+  const search = (form.return_q ?? '').trim();
+  if (search && search.length <= 80 && !/[\u0000-\u001f\u007f]/u.test(search)) query.set('q', search);
+  const channel = (form.return_channel ?? '').trim();
+  if (CONTENT_RETURN_CHANNELS.has(channel) && channel !== 'all') query.set('channel', channel);
+  const format = (form.return_format ?? '').trim();
+  if (CONTENT_RETURN_FORMATS.has(format) && format !== 'all') query.set('format', format);
+  const anchor = /^(?:ccr-content-)[1-9][0-9]{0,2}$/u.test(form.return_anchor ?? '')
+    ? `#${form.return_anchor}`
+    : '';
+  return `${CONTENT_CONTROL_ROOM_ROUTE}?${query.toString()}${anchor}`;
+}
+
+function contentControlRedirect(
+  res: ServerResponse,
+  deps: PostgresPortalDeps,
+  sessionToken: string,
+  form: Readonly<Record<string, string>>,
+  code: ContentControlNoticeCode,
+): void {
+  const noticeToken = contentControlNoticeToken(deps.sessionSecret, sessionToken, code);
+  redirect(res, contentControlReturnLocation(form, noticeToken), undefined, 303);
+}
+
+function contentFailureNotice(kind: string): ContentControlNoticeCode {
+  if (kind === 'unauthenticated' || kind === 'forbidden') return 'forbidden';
+  if (kind === 'validation') return 'invalid';
+  if (kind === 'not_found') return 'missing';
+  if (kind === 'review_unavailable') return 'review_unavailable';
+  if (kind === 'idempotency_conflict' || kind === 'command_in_progress'
+      || kind === 'version_conflict' || kind === 'approval_conflict') return 'conflict';
+  return 'unavailable';
+}
+
+const INBOX_RETURN_CHANNELS = new Set(['all', 'email', 'whatsapp', 'sms', 'instagram', 'facebook']);
+const INBOX_RETURN_QUEUES = new Set(['all', 'unread', 'approval', 'open']);
+const INBOX_MESSAGE_VERSION_ROUTE = /^\/portal\/inbox\/messages\/([0-9a-f-]+)\/versions$/iu;
+const INBOX_APPROVAL_REQUEST_ROUTE = /^\/portal\/inbox\/messages\/([0-9a-f-]+)\/approval-requests$/iu;
+const INBOX_APPROVAL_DECISION_ROUTE = /^\/portal\/inbox\/approval-requests\/([0-9a-f-]+)\/decisions$/iu;
+const INBOX_TEST_QUEUE_ROUTE = /^\/portal\/inbox\/messages\/([0-9a-f-]+)\/test-queue$/iu;
+
+function conversionInboxReturnLocation(
+  form: Readonly<Record<string, string>>,
+  noticeToken: string,
+): string {
+  const query = new URLSearchParams({ notice: noticeToken });
+  const search = (form.return_q ?? '').trim();
+  if (search && search.length <= 80 && !/[\u0000-\u001f\u007f]/u.test(search)) query.set('q', search);
+  const channel = (form.return_channel ?? '').trim();
+  if (INBOX_RETURN_CHANNELS.has(channel) && channel !== 'all') query.set('channel', channel);
+  const queue = (form.return_queue ?? '').trim();
+  if (INBOX_RETURN_QUEUES.has(queue) && queue !== 'all') query.set('queue', queue);
+  const conversation = (form.return_conversation ?? '').trim().toLowerCase();
+  if (CRM_OBJECT_ID.test(conversation)) query.set('conversation', conversation);
+  return `${CONVERSION_INBOX_ROUTE}?${query.toString()}`;
+}
+
+function conversionInboxRedirect(
+  res: ServerResponse,
+  deps: PostgresPortalDeps,
+  sessionToken: string,
+  form: Readonly<Record<string, string>>,
+  code: ConversionInboxNoticeCode,
+): void {
+  const token = conversionInboxNoticeToken(deps.sessionSecret, sessionToken, code);
+  redirect(res, conversionInboxReturnLocation(form, token), undefined, 303);
+}
+
+function conversionInboxFailureNotice(kind: string): ConversionInboxNoticeCode {
+  if (kind === 'unauthenticated' || kind === 'forbidden') return 'forbidden';
+  if (kind === 'validation') return 'invalid';
+  if (kind === 'not_found') return 'missing';
+  if (kind === 'consent_blocked') return 'consent_blocked';
+  if (kind === 'idempotency_conflict' || kind === 'command_in_progress'
+      || kind === 'version_conflict') return 'conflict';
+  return 'unavailable';
+}
+
 const JOURNEY_BOARD_RETURN_BANDS = new Set(['burning', 'hot', 'warm', 'quiet', 'unscored']);
 
 function journeyBoardReturnParams(form: Readonly<Record<string, string>>): URLSearchParams {
@@ -789,6 +896,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       const view = presentContentControlRoom(outcome.snapshot.catalog, {
         workspaceName: outcome.snapshot.workspace.workspaceName,
         asOf: outcome.snapshot.workspace.snapshotAt,
+        canWrite: outcome.snapshot.workspace.canWrite,
+        canManage: outcome.snapshot.workspace.canManage,
+        notice: contentControlNoticeFromQuery(url.searchParams, deps.sessionSecret, sessionToken),
         filters: {
           query: url.searchParams.get('q') ?? '',
           channel: url.searchParams.get('channel') ?? '',
@@ -797,7 +907,18 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       });
       return sendHtml(res, 200, operationalPage(
         outcome.snapshot.workspace.workspaceName,
-        renderContentControlRoomBody(view),
+        renderContentControlRoomBody(view, {
+          security: view.canWrite ? {
+            csrfToken,
+            requestApprovalKeys: Object.fromEntries(view.items.map((item) => [
+              item.contentVersionId,
+              randomUUID(),
+            ])),
+            decisionKeys: Object.fromEntries(view.items.flatMap((item) => (
+              item.approvalRequestId ? [[item.approvalRequestId, randomUUID()]] : []
+            ))),
+          } : undefined,
+        }),
         deps,
         'content',
         csrfToken,
@@ -810,6 +931,76 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         backHref: '/portal',
         backLabel: 'Return to Growth HQ',
       }));
+    }
+  }
+
+  if (deps.kind === 'postgres' && p === CONTENT_APPROVAL_REQUEST_ROUTE && method === 'POST') {
+    if (!deps.companyContent) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+      title: 'Content Control not connected',
+      message: 'The protected company-content approval service is not enabled.',
+      active: 'content',
+    }));
+    const form = await readForm(req);
+    if (!verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return contentControlRedirect(res, deps, sessionToken, form, 'invalid');
+    }
+    try {
+      const outcome = await deps.companyContent.requestApproval(crmIdentity(sessionToken, deps), {
+        commandKey: form.command_key ?? '',
+        contentItemId: form.content_item_id ?? '',
+        contentVersionId: form.content_version_id ?? '',
+        reviewNote: form.review_note ?? null,
+      });
+      return contentControlRedirect(
+        res,
+        deps,
+        sessionToken,
+        form,
+        outcome.ok
+          ? outcome.disposition === 'replayed' ? 'replayed' : 'requested'
+          : contentFailureNotice(outcome.kind),
+      );
+    } catch {
+      return contentControlRedirect(res, deps, sessionToken, form, 'unavailable');
+    }
+  }
+
+  if (deps.kind === 'postgres' && p === CONTENT_APPROVAL_DECISION_ROUTE && method === 'POST') {
+    if (!deps.companyContent) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+      title: 'Content Control not connected',
+      message: 'The protected company-content approval service is not enabled.',
+      active: 'content',
+    }));
+    const form = await readForm(req);
+    if (!verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return contentControlRedirect(res, deps, sessionToken, form, 'invalid');
+    }
+    const decision = form.decision;
+    if (decision !== 'approved' && decision !== 'rejected' && decision !== 'changes_requested') {
+      return contentControlRedirect(res, deps, sessionToken, form, 'invalid');
+    }
+    if (decision === 'approved'
+        && !PORTAL_COMPANY_CONTENT_REVIEW_REPRESENTATION_AVAILABLE) {
+      return contentControlRedirect(res, deps, sessionToken, form, 'review_unavailable');
+    }
+    try {
+      const outcome = await deps.companyContent.decideApproval(crmIdentity(sessionToken, deps), {
+        commandKey: form.command_key ?? '',
+        approvalRequestId: form.approval_request_id ?? '',
+        decision,
+        decisionNote: form.decision_note ?? null,
+      });
+      return contentControlRedirect(
+        res,
+        deps,
+        sessionToken,
+        form,
+        outcome.ok
+          ? outcome.disposition === 'replayed' ? 'replayed' : outcome.decision
+          : contentFailureNotice(outcome.kind),
+      );
+    } catch {
+      return contentControlRedirect(res, deps, sessionToken, form, 'unavailable');
     }
   }
 
@@ -852,6 +1043,11 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
 
       const options = {
         workspaceName: shell.workspace.name,
+        notice: conversionInboxNoticeFromQuery(
+          url.searchParams,
+          deps.sessionSecret,
+          sessionToken,
+        ),
         filters: {
           query: filters.query,
           channel: filters.channel,
@@ -870,9 +1066,26 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       }
       const view = presentConversionInbox({ page, threads }, options);
       const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      const draft = view.selectedThread?.draft;
+      const conversationIdForAction = view.selectedThread?.summary.conversationId;
+      const messageIdForAction = draft?.messageId;
+      const approvalRequestIdForAction = draft?.approvalRequestId;
+      const actionSecurity = deps.inboxCommands && view.canWrite ? {
+        csrfToken,
+        createDraftKeys: conversationIdForAction && draft?.messageId === null
+          ? { [conversationIdForAction]: randomUUID() } : {},
+        reviseDraftKeys: messageIdForAction && draft?.lifecycle === 'draft'
+          ? { [messageIdForAction]: randomUUID() } : {},
+        requestApprovalKeys: messageIdForAction && draft?.lifecycle === 'draft'
+          ? { [messageIdForAction]: randomUUID() } : {},
+        decisionKeys: view.canManage && approvalRequestIdForAction && draft?.approvalState === 'pending'
+          ? { [approvalRequestIdForAction]: randomUUID() } : {},
+        queueKeys: view.canManage && messageIdForAction && draft?.mayQueueTestOperation
+          ? { [messageIdForAction]: randomUUID() } : {},
+      } : undefined;
       return sendHtml(res, 200, operationalPage(
         shell.workspace.name,
-        renderConversionInboxBody(view),
+        renderConversionInboxBody(view, { security: actionSecurity }),
         deps,
         'inbox',
         csrfToken,
@@ -885,6 +1098,138 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         backHref: '/portal',
         backLabel: 'Return to Growth HQ',
       }));
+    }
+  }
+
+  if (deps.kind === 'postgres' && p === CONVERSION_INBOX_CREATE_DRAFT_ROUTE && method === 'POST') {
+    if (!deps.inboxCommands) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+      title: 'Conversion Inbox controls not connected',
+      message: 'The protected TEST draft command service is not enabled.',
+      active: 'inbox',
+    }));
+    const form = await readForm(req);
+    if (!verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return conversionInboxRedirect(res, deps, sessionToken, form, 'invalid');
+    }
+    try {
+      const outcome = await deps.inboxCommands.createDraft(crmIdentity(sessionToken, deps), {
+        commandKey: form.command_key ?? '',
+        conversationId: form.conversation_id ?? '',
+        contactPointId: form.contact_point_id ?? '',
+        body: form.body ?? '',
+        sourceContent: null,
+      });
+      return conversionInboxRedirect(res, deps, sessionToken, form,
+        outcome.ok
+          ? outcome.disposition === 'replayed' ? 'replayed' : 'draft_created'
+          : conversionInboxFailureNotice(outcome.kind));
+    } catch {
+      return conversionInboxRedirect(res, deps, sessionToken, form, 'unavailable');
+    }
+  }
+
+  const inboxVersionMatch = p.match(INBOX_MESSAGE_VERSION_ROUTE);
+  if (deps.kind === 'postgres' && inboxVersionMatch && method === 'POST') {
+    const messageId = (inboxVersionMatch[1] ?? '').toLowerCase();
+    const form = await readForm(req);
+    if (!deps.inboxCommands || !CRM_OBJECT_ID.test(messageId)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return conversionInboxRedirect(res, deps, sessionToken, form,
+        deps.inboxCommands ? 'invalid' : 'unavailable');
+    }
+    try {
+      const outcome = await deps.inboxCommands.reviseDraft(crmIdentity(sessionToken, deps), {
+        commandKey: form.command_key ?? '',
+        messageId,
+        expectedRowVersion: form.expected_row_version ?? '',
+        body: form.body ?? '',
+        sourceContent: null,
+      });
+      return conversionInboxRedirect(res, deps, sessionToken, form,
+        outcome.ok
+          ? outcome.disposition === 'replayed' ? 'replayed' : 'draft_saved'
+          : conversionInboxFailureNotice(outcome.kind));
+    } catch {
+      return conversionInboxRedirect(res, deps, sessionToken, form, 'unavailable');
+    }
+  }
+
+  const inboxApprovalRequestMatch = p.match(INBOX_APPROVAL_REQUEST_ROUTE);
+  if (deps.kind === 'postgres' && inboxApprovalRequestMatch && method === 'POST') {
+    const messageId = (inboxApprovalRequestMatch[1] ?? '').toLowerCase();
+    const form = await readForm(req);
+    if (!deps.inboxCommands || !CRM_OBJECT_ID.test(messageId)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return conversionInboxRedirect(res, deps, sessionToken, form,
+        deps.inboxCommands ? 'invalid' : 'unavailable');
+    }
+    try {
+      const outcome = await deps.inboxCommands.requestApproval(crmIdentity(sessionToken, deps), {
+        commandKey: form.command_key ?? '',
+        messageId,
+        expectedRowVersion: form.expected_row_version ?? '',
+        reviewNote: form.review_note ?? null,
+      });
+      return conversionInboxRedirect(res, deps, sessionToken, form,
+        outcome.ok
+          ? outcome.disposition === 'replayed' ? 'replayed' : 'approval_requested'
+          : conversionInboxFailureNotice(outcome.kind));
+    } catch {
+      return conversionInboxRedirect(res, deps, sessionToken, form, 'unavailable');
+    }
+  }
+
+  const inboxDecisionMatch = p.match(INBOX_APPROVAL_DECISION_ROUTE);
+  if (deps.kind === 'postgres' && inboxDecisionMatch && method === 'POST') {
+    const approvalRequestId = (inboxDecisionMatch[1] ?? '').toLowerCase();
+    const form = await readForm(req);
+    const decision = form.decision;
+    if (!deps.inboxCommands || !CRM_OBJECT_ID.test(approvalRequestId)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)
+        || (decision !== 'approved' && decision !== 'rejected' && decision !== 'changes_requested')) {
+      return conversionInboxRedirect(res, deps, sessionToken, form,
+        deps.inboxCommands ? 'invalid' : 'unavailable');
+    }
+    try {
+      const outcome = await deps.inboxCommands.decideApproval(crmIdentity(sessionToken, deps), {
+        commandKey: form.command_key ?? '',
+        approvalRequestId,
+        decision,
+        decisionNote: form.decision_note ?? null,
+      });
+      return conversionInboxRedirect(res, deps, sessionToken, form,
+        outcome.ok
+          ? outcome.disposition === 'replayed' ? 'replayed' : outcome.decision
+          : conversionInboxFailureNotice(outcome.kind));
+    } catch {
+      return conversionInboxRedirect(res, deps, sessionToken, form, 'unavailable');
+    }
+  }
+
+  const inboxTestQueueMatch = p.match(INBOX_TEST_QUEUE_ROUTE);
+  if (deps.kind === 'postgres' && inboxTestQueueMatch && method === 'POST') {
+    const messageId = (inboxTestQueueMatch[1] ?? '').toLowerCase();
+    const form = await readForm(req);
+    const purpose = form.purpose;
+    if (!deps.inboxCommands || !CRM_OBJECT_ID.test(messageId)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)
+        || !isConversionInboxTestQueuePurpose(purpose)) {
+      return conversionInboxRedirect(res, deps, sessionToken, form,
+        deps.inboxCommands ? 'invalid' : 'unavailable');
+    }
+    try {
+      const outcome = await deps.inboxCommands.queueApprovedMessage(crmIdentity(sessionToken, deps), {
+        commandKey: form.command_key ?? '',
+        messageId,
+        expectedRowVersion: form.expected_row_version ?? '',
+        purpose,
+      });
+      return conversionInboxRedirect(res, deps, sessionToken, form,
+        outcome.ok
+          ? outcome.disposition === 'replayed' ? 'replayed' : 'test_queued'
+          : conversionInboxFailureNotice(outcome.kind));
+    } catch {
+      return conversionInboxRedirect(res, deps, sessionToken, form, 'unavailable');
     }
   }
 

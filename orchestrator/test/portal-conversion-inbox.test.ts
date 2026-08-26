@@ -2,19 +2,45 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createPropertyPredatorTestInboxSnapshot } from '../src/portal/conversion-inbox-fixtures.js';
 import {
+  CONVERSION_INBOX_MAX_MESSAGE_BYTES,
   presentConversionInbox,
   type ConversionInboxSnapshot,
 } from '../src/portal/conversion-inbox-presenter.js';
-import { renderConversionInboxBody } from '../src/portal/conversion-inbox-view.js';
+import {
+  renderConversionInboxBody,
+  type ConversionInboxActionSecurity,
+} from '../src/portal/conversion-inbox-view.js';
+import {
+  conversionInboxNoticeFromQuery,
+  conversionInboxNoticeToken,
+} from '../src/portal/conversion-inbox-actions.js';
+
+const ACTION_SECURITY: ConversionInboxActionSecurity = {
+  csrfToken: 'fixture-csrf-token',
+  createDraftKeys: {},
+  reviseDraftKeys: {
+    '60000000-0000-4000-8000-000000000005': 'revise-command-5',
+  },
+  requestApprovalKeys: {
+    '60000000-0000-4000-8000-000000000005': 'request-command-5',
+  },
+  decisionKeys: {
+    '80000000-0000-4000-8000-000000000001': 'decision-command-1',
+  },
+  queueKeys: {
+    '60000000-0000-4000-8000-000000000004': 'queue-command-4',
+  },
+};
 
 function render(
   snapshot: ConversionInboxSnapshot = createPropertyPredatorTestInboxSnapshot(),
   filters: Readonly<Record<string, unknown>> = {},
+  security?: ConversionInboxActionSecurity,
 ): string {
   return renderConversionInboxBody(presentConversionInbox(snapshot, {
     workspaceName: 'Property Predator Growth HQ',
     filters,
-  }));
+  }), { security });
 }
 
 test('renders a dense Predator-branded omnichannel conversion workspace', () => {
@@ -34,12 +60,12 @@ test('renders a dense Predator-branded omnichannel conversion workspace', () => 
 test('makes the test and simulation boundary impossible to miss', () => {
   const html = render();
   assert.match(html, /TEST \/ SIMULATED/);
-  assert.match(html, /Fictional leads\. Non-routable provider adapters/);
-  assert.match(html, /Nothing here has contacted a real person/);
+  assert.match(html, /Contact records may be workspace CRM data/);
+  assert.match(html, /Provider adapters are non-routable; no message here has contacted anyone/);
   assert.match(html, /Email · TEST/);
   assert.match(html, /SIMULATED delivered · no real delivery occurred/);
   assert.match(html, /No message left Growth HQ/);
-  assert.match(html, /Controls cannot contact anyone, publish anything or invoke a provider/);
+  assert.match(html, /cannot contact anyone or invoke a live provider/);
   assert.doesNotMatch(html, /\bmessage sent\b|\bsent successfully\b|\bsuccessfully delivered\b|data-environment="live"/i);
   assert.doesNotMatch(html, /action="[^"]*(?:send|deliver|publish)/i);
 });
@@ -53,7 +79,7 @@ test('renders all five channel controls and real fictional test queue fixtures',
     assert.match(html, new RegExp(person));
   }
   assert.equal((html.match(/<li class="ci-conversation">/g) ?? []).length, 5);
-  assert.match(html, /aria-label="Fictional test conversation queue"/);
+  assert.match(html, /aria-label="TEST and simulated conversation queue"/);
 });
 
 test('uses singular conversation copy when a channel has one loaded fixture', () => {
@@ -145,21 +171,93 @@ test('escapes every user and source controlled field at the view boundary', () =
 });
 
 test('uses semantic landmarks, associated controls and touch-size targets', () => {
-  const html = render();
+  const html = render(createPropertyPredatorTestInboxSnapshot(), { channel: 'facebook' }, ACTION_SECURITY);
   assert.match(html, /<nav class="ci-channels" aria-label="Test conversation channels">/);
   assert.match(html, /<main class="ci-thread" aria-labelledby="ci-thread-title">/);
   assert.match(html, /<aside class="ci-context" aria-label="Lead and safety context">/);
   assert.match(html, /<label id="ci-draft-title" for="ci-reply-draft">/);
   assert.match(html, /<textarea id="ci-reply-draft"/);
-  assert.match(html, /aria-label="Test draft controls"/);
-  assert.match(html, /<button type="button" disabled>Save test draft<\/button>/);
+  assert.match(html, /action="\/portal\/inbox\/messages\/60000000-0000-4000-8000-000000000005\/versions"/);
+  assert.match(html, /action="\/portal\/inbox\/messages\/60000000-0000-4000-8000-000000000005\/approval-requests"/);
+  assert.match(html, /name="_csrf" value="fixture-csrf-token"/);
+  assert.match(html, />Save new immutable version<\/button>/);
+  assert.match(html, />Request human approval<\/button>/);
   assert.match(html, /role="status" aria-live="polite"/);
   assert.match(html, /\.ci-field input,.ci-field select\{[^}]*height:44px/);
-  assert.match(html, /\.ci-draft-actions button\{[^}]*min-height:44px/);
+  assert.match(html, /\.ci-draft-actions button,.ci-review-actions button\{[^}]*min-height:44px/);
   assert.match(html, /@media\(max-width:840px\)/);
   assert.match(html, /@media\(max-width:560px\)/);
   assert.match(html, /@media\(prefers-reduced-motion:reduce\)/);
   assert.match(html, /@media\(forced-colors:active\)/);
+});
+
+test('renders manager-only approval and consent-gated TEST queue controls without a live send route', () => {
+  const approval = render(createPropertyPredatorTestInboxSnapshot(), { channel: 'email' }, ACTION_SECURITY);
+  assert.match(approval, /action="\/portal\/inbox\/approval-requests\/80000000-0000-4000-8000-000000000001\/decisions"/);
+  assert.match(approval, /Approve exact v1/);
+  assert.match(approval, /Request changes/);
+  assert.match(approval, /Reject/);
+
+  const queue = render(createPropertyPredatorTestInboxSnapshot(), { channel: 'sms' }, ACTION_SECURITY);
+  assert.match(queue, /action="\/portal\/inbox\/messages\/60000000-0000-4000-8000-000000000004\/test-queue"/);
+  assert.match(queue, /name="purpose" value="appointment_follow_up"/);
+  assert.match(queue, />Queue TEST operation<\/button>/);
+  assert.doesNotMatch(queue, /action="[^"]*(?:send|deliver|publish)/i);
+});
+
+test('reports a clipped database draft and locks approval so its unseen tail cannot be approved', () => {
+  const base = createPropertyPredatorTestInboxSnapshot();
+  const hiddenTail = 'TAIL-MUST-BE-REVIEWED';
+  const fullDraft = `${'x'.repeat(CONVERSION_INBOX_MAX_MESSAGE_BYTES)}${hiddenTail}`;
+  const snapshot: ConversionInboxSnapshot = {
+    ...base,
+    threads: [{
+      ...base.threads[0]!,
+      draft: {
+        ...base.threads[0]!.draft,
+        body: fullDraft,
+      },
+    }, ...base.threads.slice(1)],
+  };
+  const view = presentConversionInbox(snapshot, {
+    workspaceName: 'Property Predator Growth HQ',
+    filters: { channel: 'email' },
+  });
+  const html = renderConversionInboxBody(view, { security: ACTION_SECURITY });
+
+  assert.equal(view.selectedThread?.draft.bodyTruncated, true);
+  assert.equal(view.selectedThread?.draft.body.endsWith(hiddenTail), false);
+  assert.equal(view.selectedThread?.draft.mayQueueTestOperation, false);
+  assert.doesNotMatch(html, new RegExp(hiddenTail));
+  assert.match(html, /Long draft clipped at the safe display boundary/);
+  assert.match(html, /Approval, editing and queueing are locked until the complete draft can be reviewed/);
+  assert.match(html, />Full review required<\/button>/);
+  assert.doesNotMatch(html, />Approve exact v1<\/button>/);
+  assert.doesNotMatch(html, /approval-requests\/80000000-0000-4000-8000-000000000001\/decisions/);
+});
+
+test('Conversion Inbox notices are session-bound and describe only protected TEST outcomes', () => {
+  const secret = 'conversion-inbox-notice-secret';
+  const session = 'conversion-inbox-session-a';
+  const token = conversionInboxNoticeToken(secret, session, 'test_queued');
+  const notice = conversionInboxNoticeFromQuery(
+    new URLSearchParams({ notice: token }),
+    secret,
+    session,
+  );
+  assert.equal(notice?.title, 'TEST operation queued');
+  assert.match(notice?.message ?? '', /non-routable simulator operation/);
+  assert.match(notice?.message ?? '', /No real person, account or provider was contacted/);
+  assert.equal(conversionInboxNoticeFromQuery(
+    new URLSearchParams({ notice: token }),
+    secret,
+    'different-session',
+  ), undefined);
+  assert.equal(conversionInboxNoticeFromQuery(
+    new URLSearchParams({ notice: `${token}tampered` }),
+    secret,
+    session,
+  ), undefined);
 });
 
 test('preserves filters in selected-thread links and exposes an honest bounded state', () => {

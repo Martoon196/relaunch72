@@ -1,5 +1,12 @@
 import { escapeHtml } from './ui.js';
 import {
+  CONVERSION_INBOX_CREATE_DRAFT_ROUTE,
+  conversionInboxDecisionRoute,
+  conversionInboxRequestApprovalRoute,
+  conversionInboxReviseDraftRoute,
+  conversionInboxTestQueueRoute,
+} from './conversion-inbox-actions.js';
+import {
   CONVERSION_INBOX_ROUTE,
   type ConversionInboxChannelFilter,
   type ConversionInboxConsentView,
@@ -9,6 +16,19 @@ import {
   type ConversionInboxSelectedThreadView,
   type ConversionInboxView,
 } from './conversion-inbox-presenter.js';
+
+export interface ConversionInboxActionSecurity {
+  readonly csrfToken: string;
+  readonly createDraftKeys: Readonly<Record<string, string>>;
+  readonly reviseDraftKeys: Readonly<Record<string, string>>;
+  readonly requestApprovalKeys: Readonly<Record<string, string>>;
+  readonly decisionKeys: Readonly<Record<string, string>>;
+  readonly queueKeys: Readonly<Record<string, string>>;
+}
+
+export interface RenderConversionInboxOptions {
+  readonly security?: ConversionInboxActionSecurity;
+}
 
 const CHANNEL_GLYPHS: Readonly<Record<ConversionInboxChannelFilter, string>> = Object.freeze({
   all: 'HQ', email: 'EM', whatsapp: 'WA', sms: 'SM', instagram: 'IG', facebook: 'FB',
@@ -22,14 +42,14 @@ const CONVERSION_INBOX_STYLE = `
   .ci-workspace{display:grid;grid-template-columns:76px minmax(280px,350px) minmax(420px,1fr) minmax(270px,315px);height:min(760px,calc(100vh - 235px));min-height:620px}.ci-channels{border-right:1px solid var(--ci-line);background:#090c0e;padding:10px 8px;overflow-y:auto}.ci-channels ul{list-style:none;display:grid;gap:7px;margin:0;padding:0}.ci-channel{position:relative;min-height:56px;display:grid;place-items:center;border:1px solid transparent;border-radius:8px;color:var(--ci-faint)}.ci-channel:hover,.ci-channel:focus-visible{border-color:var(--ci-line-strong);background:var(--ci-raised);color:var(--ci-ink)}.ci-channel[aria-current="page"]{border-color:#267b71;background:#092421;color:var(--ci-teal)}.ci-glyph{font:900 12px var(--mono,monospace);letter-spacing:.03em}.ci-channel-count{position:absolute;right:3px;top:3px;min-width:18px;height:18px;display:grid;place-items:center;border:1px solid var(--ci-line-strong);border-radius:999px;background:#07090b;color:var(--ci-muted);font:800 10px var(--mono,monospace)}.ci-channel-test{display:block;margin-top:3px;font:800 9px var(--mono,monospace);letter-spacing:.05em}
   .ci-queue{min-width:0;border-right:1px solid var(--ci-line);background:var(--ci-panel);overflow-y:auto}.ci-queue-head{position:sticky;z-index:3;top:0;padding:13px 14px 11px;border-bottom:1px solid var(--ci-line);background:rgba(12,16,18,.97)}.ci-queue-title{display:flex;align-items:center;justify-content:space-between;gap:10px}.ci-queue-title h2{margin:0;font-size:14px}.ci-unread{border:1px solid #63542f;border-radius:999px;padding:3px 7px;color:var(--ci-amber);font:850 11px var(--mono,monospace)}.ci-queue-head p{margin:5px 0 0;color:var(--ci-faint);font-size:11px}.ci-conversations{list-style:none;margin:0;padding:0}.ci-conversation{border-bottom:1px solid var(--ci-line)}.ci-conversation>a{position:relative;display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:9px;min-height:112px;padding:12px 12px 11px;color:var(--ci-ink)}.ci-conversation>a:hover,.ci-conversation>a:focus-visible{background:#111719}.ci-conversation>a[aria-current="true"]{background:#10201f;box-shadow:inset 3px 0 var(--ci-teal)}.ci-avatar{width:38px;height:38px;display:grid;place-items:center;border:1px solid var(--ci-line-strong);border-radius:50%;background:#0a0d0f;color:var(--ci-teal);font:900 12px var(--mono,monospace)}.ci-person{min-width:0}.ci-person-line{display:flex;gap:6px;align-items:center}.ci-person strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.ci-dot{width:7px;height:7px;flex:0 0 auto;border-radius:50%;background:var(--ci-teal)}.ci-subject{display:block;margin-top:3px;color:var(--ci-muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ci-preview{display:-webkit-box;margin:6px 0 0;color:#c7d0d1;font-size:12px;line-height:1.45;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical}.ci-queue-meta{text-align:right}.ci-queue-meta time{display:block;color:var(--ci-faint);font:700 10px var(--mono,monospace)}.ci-channel-pill,.ci-approval-pill{display:inline-flex;margin-top:7px;border:1px solid var(--ci-line-strong);border-radius:999px;padding:3px 6px;color:var(--ci-muted);font:800 9px var(--mono,monospace);text-transform:uppercase}.ci-approval-pill{border-color:#66552e;color:var(--ci-amber)}.ci-boundary,.ci-queue-empty{margin:12px;border:1px dashed var(--ci-line-strong);padding:12px;color:var(--ci-faint);font-size:11px;line-height:1.5}.ci-queue-empty{padding:25px 14px;text-align:center}
   .ci-thread{min-width:0;display:grid;grid-template-rows:auto minmax(180px,1fr) auto;background:#0a0d0f;overflow:hidden}.ci-thread-head{display:flex;align-items:center;justify-content:space-between;gap:13px;min-height:68px;padding:10px 17px;border-bottom:1px solid var(--ci-line);background:#0d1113}.ci-thread-person{min-width:0}.ci-thread-person h2{margin:0;font-size:16px}.ci-thread-person p{margin:4px 0 0;color:var(--ci-muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ci-test-stamp{flex:0 0 auto;border:1px solid #267b71;background:#092421;padding:7px 9px;color:var(--ci-teal);font:850 10px var(--mono,monospace);letter-spacing:.05em;text-align:center}.ci-transcript{min-height:0;overflow-y:auto;padding:18px 18px 8px;scrollbar-color:var(--ci-line-strong) transparent}.ci-transcript ol{list-style:none;display:grid;gap:12px;margin:0;padding:0}.ci-message{max-width:min(78%,650px)}.ci-message[data-direction="outbound"]{margin-left:auto}.ci-message[data-direction="internal_note"]{max-width:100%;margin-inline:auto}.ci-message-head{display:flex;align-items:center;gap:7px;margin-bottom:4px;color:var(--ci-faint);font-size:10px}.ci-message[data-direction="outbound"] .ci-message-head{justify-content:flex-end}.ci-message-body{border:1px solid var(--ci-line);border-radius:4px 12px 12px 12px;background:var(--ci-raised);padding:10px 12px;color:#e5ebea;font-size:13px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}.ci-message[data-direction="outbound"] .ci-message-body{border-color:#276c65;border-radius:12px 4px 12px 12px;background:#0c2421}.ci-message[data-direction="internal_note"] .ci-message-body{border-color:#6c582c;background:#171308;color:#d9cba9}.ci-delivery{display:flex;align-items:center;justify-content:flex-end;gap:5px;margin-top:5px;color:var(--ci-faint);font:750 10px var(--mono,monospace)}.ci-delivery::before{content:"TEST";border:1px solid var(--ci-line-strong);padding:1px 4px;color:var(--ci-teal)}.ci-truncated{display:block;margin-top:5px;color:var(--ci-amber);font-size:10px}.ci-transcript-boundary{margin:0 0 12px;border:1px dashed var(--ci-line-strong);padding:8px;color:var(--ci-faint);font-size:10px;text-align:center}
-  .ci-composer{border-top:1px solid var(--ci-line);background:#0d1113;padding:12px 15px 14px}.ci-composer-top{display:flex;align-items:center;justify-content:space-between;gap:9px;margin-bottom:7px}.ci-composer-top label{font-size:12px;font-weight:850}.ci-version{color:var(--ci-faint);font:750 10px var(--mono,monospace)}.ci-composer textarea{display:block;width:100%;min-height:78px;max-height:170px;resize:vertical;border:1px solid var(--ci-line-strong);border-radius:8px;background:#090c0e;color:var(--ci-ink);padding:10px 11px;font-size:13px;line-height:1.5}.ci-composer-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:9px}.ci-gate-copy{min-width:0;color:var(--ci-muted);font-size:10px;line-height:1.4}.ci-gate-copy strong{display:block;color:var(--ci-amber);font:850 10px var(--mono,monospace);text-transform:uppercase}.ci-draft-actions{display:flex;gap:7px}.ci-draft-actions button{min-height:44px;border:1px solid var(--ci-line-strong);border-radius:7px;padding:0 11px;background:var(--ci-raised);color:var(--ci-muted);font-size:11px;font-weight:850}.ci-draft-actions .ci-primary{border-color:var(--ci-teal);background:var(--ci-teal);color:#03110f}.ci-draft-actions button:disabled{cursor:not-allowed;opacity:.58}.ci-preview-note{margin:8px 0 0;color:var(--ci-faint);font-size:10px}
+  .ci-composer{border-top:1px solid var(--ci-line);background:#0d1113;padding:12px 15px 14px}.ci-composer-top{display:flex;align-items:center;justify-content:space-between;gap:9px;margin-bottom:7px}.ci-composer-top label,.ci-composer-top strong{font-size:12px;font-weight:850}.ci-version{color:var(--ci-faint);font:750 10px var(--mono,monospace)}.ci-composer textarea{display:block;width:100%;min-height:78px;max-height:170px;resize:vertical;border:1px solid var(--ci-line-strong);border-radius:8px;background:#090c0e;color:var(--ci-ink);padding:10px 11px;font-size:13px;line-height:1.5}.ci-composer textarea[readonly]{color:var(--ci-muted);background:#090b0d}.ci-composer-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:9px}.ci-gate-copy{min-width:0;color:var(--ci-muted);font-size:10px;line-height:1.4}.ci-gate-copy strong{display:block;color:var(--ci-amber);font:850 10px var(--mono,monospace);text-transform:uppercase}.ci-draft-actions{display:flex;gap:7px;align-items:center;flex-wrap:wrap}.ci-action-form{margin:0}.ci-review-form{display:grid;grid-template-columns:minmax(145px,1fr) auto;gap:8px;align-items:end;margin-top:9px}.ci-review-form label{display:grid;gap:5px;color:var(--ci-faint);font:750 10px var(--mono,monospace);letter-spacing:.05em;text-transform:uppercase}.ci-review-form textarea{min-height:52px}.ci-review-actions{display:flex;gap:6px;flex-wrap:wrap}.ci-draft-actions button,.ci-review-actions button{min-height:44px;border:1px solid var(--ci-line-strong);border-radius:7px;padding:0 11px;background:var(--ci-raised);color:var(--ci-ink);font-size:11px;font-weight:850;cursor:pointer}.ci-draft-actions .ci-primary,.ci-review-actions .ci-primary{border-color:var(--ci-teal);background:var(--ci-teal);color:#03110f}.ci-review-actions .ci-warn{border-color:#806834;color:var(--ci-amber)}.ci-review-actions .ci-danger{border-color:#78413d;color:var(--ci-red)}.ci-draft-actions button:disabled,.ci-review-actions button:disabled{cursor:not-allowed;opacity:.58}.ci-preview-note{margin:8px 0 0;color:var(--ci-faint);font-size:10px}.ci-notice{margin:12px 18px 0;border:1px solid var(--ci-line-strong);border-left:4px solid var(--ci-teal);background:#0b1514;padding:11px 13px}.ci-notice[data-kind="info"]{border-left-color:var(--ci-amber);background:#171308}.ci-notice[data-kind="error"]{border-left-color:var(--ci-red);background:#190d0d}.ci-notice strong{display:block;font-size:12px}.ci-notice p{margin:4px 0 0;color:var(--ci-muted);font-size:11px;line-height:1.45}
   .ci-context{min-width:0;border-left:1px solid var(--ci-line);background:var(--ci-panel);overflow-y:auto}.ci-context section{padding:14px;border-bottom:1px solid var(--ci-line)}.ci-context h2{margin:0 0 10px;color:var(--ci-faint);font:850 10px var(--mono,monospace);letter-spacing:.09em;text-transform:uppercase}.ci-lead-name{font-size:15px;font-weight:850}.ci-company{display:block;margin-top:3px;color:var(--ci-muted);font-size:11px}.ci-lead-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:11px}.ci-stat{border:1px solid var(--ci-line);background:#090c0e;padding:8px}.ci-stat span{display:block;color:var(--ci-faint);font:750 9px var(--mono,monospace);text-transform:uppercase}.ci-stat strong{display:block;margin-top:4px;font-size:12px}.ci-score{color:var(--ci-teal)}.ci-fact{margin:9px 0 0;color:var(--ci-muted);font-size:11px;line-height:1.5}.ci-fact b{color:var(--ci-ink)}.ci-lead-link{min-height:44px;display:flex;align-items:center;justify-content:center;margin-top:11px;border:1px solid var(--ci-line-strong);border-radius:7px;color:var(--ci-ink);font-size:11px;font-weight:850}.ci-lead-link:hover,.ci-lead-link:focus-visible{border-color:var(--ci-teal);color:var(--ci-teal)}
   .ci-consents{list-style:none;display:grid;gap:7px;margin:0;padding:0}.ci-consent{border:1px solid var(--ci-line);background:#090c0e;padding:8px}.ci-consent-top{display:flex;align-items:center;justify-content:space-between;gap:7px}.ci-consent strong{font-size:11px}.ci-consent-badge{border:1px solid var(--ci-line-strong);border-radius:999px;padding:2px 5px;color:var(--ci-muted);font:800 9px var(--mono,monospace);text-transform:uppercase}.ci-consent[data-state="permitted"] .ci-consent-badge{border-color:#2a705c;color:var(--ci-green)}.ci-consent[data-state="denied"] .ci-consent-badge,.ci-consent[data-state="withdrawn"] .ci-consent-badge,.ci-consent[data-state="suppressed"] .ci-consent-badge{border-color:#75403c;color:var(--ci-red)}.ci-consent p{margin:5px 0 0;color:var(--ci-faint);font-size:10px;line-height:1.4}
   .ci-gate{list-style:none;display:grid;gap:7px;margin:0;padding:0}.ci-gate li{position:relative;display:grid;grid-template-columns:22px minmax(0,1fr);gap:7px}.ci-gate li:not(:last-child)::after{content:"";position:absolute;left:10px;top:22px;bottom:-8px;width:1px;background:var(--ci-line-strong)}.ci-step{z-index:1;width:22px;height:22px;display:grid;place-items:center;border:1px solid var(--ci-line-strong);border-radius:50%;background:#090c0e;color:var(--ci-faint);font:850 9px var(--mono,monospace)}.ci-gate [data-complete="true"] .ci-step{border-color:#2a705c;color:var(--ci-green)}.ci-step-copy strong{display:block;font-size:11px}.ci-step-copy span{display:block;margin-top:2px;color:var(--ci-faint);font-size:10px;line-height:1.4}.ci-delivery-card{border:1px solid var(--ci-line);background:#090c0e;padding:9px}.ci-delivery-card strong{display:block;color:var(--ci-teal);font:850 11px var(--mono,monospace)}.ci-delivery-card p{margin:5px 0 0;color:var(--ci-muted);font-size:10px;line-height:1.45}
   .ci-empty-thread{grid-column:3/-1;display:grid;place-items:center;padding:28px;text-align:center;background:#0a0d0f}.ci-empty-thread div{max-width:420px}.ci-empty-thread h2{margin-bottom:6px}.ci-empty-thread p{margin:0;color:var(--ci-muted);font-size:12px;line-height:1.6}
   @media(max-width:1180px){.ci-workspace{grid-template-columns:70px minmax(270px,330px) minmax(390px,1fr)}.ci-context{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-column:2/-1;border-left:0;border-top:1px solid var(--ci-line);overflow:visible}.ci-workspace{height:auto;min-height:700px}.ci-queue{max-height:720px}.ci-thread{min-height:700px}.ci-context section{border-bottom:0;border-right:1px solid var(--ci-line)}.ci-context section:last-child{border-right:0}.ci-empty-thread{grid-column:2/-1;min-height:650px}}
   @media(max-width:840px){.ci-head{grid-template-columns:1fr}.ci-mode{min-width:0}.ci-truth{grid-template-columns:1fr}.ci-snapshot{white-space:normal}.ci-toolbar{grid-template-columns:1fr 1fr}.ci-field:first-child{grid-column:1/-1}.ci-workspace{grid-template-columns:1fr}.ci-channels{border-right:0;border-bottom:1px solid var(--ci-line);overflow-x:auto;padding:8px 12px}.ci-channels ul{display:flex}.ci-channel{width:58px;min-height:52px;flex:0 0 58px}.ci-queue{max-height:410px;border-right:0;border-bottom:1px solid var(--ci-line)}.ci-thread{min-height:680px}.ci-context{grid-column:1;grid-template-columns:1fr 1fr}.ci-context section:last-child{grid-column:1/-1;border-top:1px solid var(--ci-line)}.ci-empty-thread{grid-column:1;min-height:480px}}
-  @media(max-width:560px){.ci-head{padding:21px 17px 17px}.ci-head h1{font-size:2.3rem}.ci-truth{padding-inline:17px}.ci-toolbar{grid-template-columns:1fr;padding:12px 14px}.ci-field:first-child{grid-column:auto}.ci-button,.ci-clear{width:100%}.ci-conversation>a{min-height:118px}.ci-thread{min-height:650px}.ci-thread-head{align-items:start}.ci-test-stamp{max-width:106px}.ci-transcript{padding-inline:12px}.ci-message{max-width:91%}.ci-composer{padding-inline:12px}.ci-composer-bar{align-items:stretch;flex-direction:column}.ci-draft-actions{display:grid;grid-template-columns:1fr 1fr}.ci-draft-actions button{width:100%}.ci-context{grid-template-columns:1fr}.ci-context section,.ci-context section:last-child{grid-column:1;border-right:0}.ci-lead-grid{grid-template-columns:1fr 1fr}}
+  @media(max-width:560px){.ci-head{padding:21px 17px 17px}.ci-head h1{font-size:2.3rem}.ci-truth{padding-inline:17px}.ci-toolbar{grid-template-columns:1fr;padding:12px 14px}.ci-field:first-child{grid-column:auto}.ci-button,.ci-clear{width:100%}.ci-conversation>a{min-height:118px}.ci-thread{min-height:650px}.ci-thread-head{align-items:start}.ci-test-stamp{max-width:106px}.ci-transcript{padding-inline:12px}.ci-message{max-width:91%}.ci-composer{padding-inline:12px}.ci-composer-bar{align-items:stretch;flex-direction:column}.ci-draft-actions,.ci-review-actions{display:grid;grid-template-columns:1fr}.ci-draft-actions button,.ci-review-actions button{width:100%}.ci-review-form{grid-template-columns:1fr}.ci-context{grid-template-columns:1fr}.ci-context section,.ci-context section:last-child{grid-column:1;border-right:0}.ci-lead-grid{grid-template-columns:1fr 1fr}}
   @media(prefers-reduced-motion:reduce){.ci *{scroll-behavior:auto!important;transition:none!important}}
   @media(forced-colors:active){.ci,.ci-mode,.ci-conversation>a[aria-current="true"],.ci-message-body,.ci-channel{forced-color-adjust:auto}.ci-channel,.ci-conversation>a,.ci-message-body,.ci-composer textarea,.ci-stat,.ci-consent{border:1px solid CanvasText}.ci-channel[aria-current="page"],.ci-conversation>a[aria-current="true"]{border:2px solid Highlight}}
 `;
@@ -109,10 +129,10 @@ function renderQueue(view: ConversionInboxView): string {
   const boundary = view.hasMore
     ? `<p class="ci-boundary"><strong>Bounded queue.</strong> Showing ${escapeHtml(view.loadedConversationCount)} loaded records; more may exist.</p>` : '';
   const items = view.conversations.length > 0
-    ? `<ol class="ci-conversations" aria-label="Fictional test conversation queue">${view.conversations.map((item) => renderQueueItem(view, item)).join('')}</ol>`
+    ? `<ol class="ci-conversations" aria-label="TEST and simulated conversation queue">${view.conversations.map((item) => renderQueueItem(view, item)).join('')}</ol>`
     : '<p class="ci-queue-empty">No match in the loaded test queue. Clear a filter to keep exploring.</p>';
   return `<section class="ci-queue" aria-labelledby="ci-queue-title">
-    <header class="ci-queue-head"><div class="ci-queue-title"><h2 id="ci-queue-title">Conversation queue</h2><span class="ci-unread">${escapeHtml(view.totalUnreadCount)} unread</span></div><p>${escapeHtml(view.matchingConversationCount)} of ${escapeHtml(view.loadedConversationCount)} loaded · fictional test leads</p></header>
+    <header class="ci-queue-head"><div class="ci-queue-title"><h2 id="ci-queue-title">Conversation queue</h2><span class="ci-unread">${escapeHtml(view.totalUnreadCount)} unread</span></div><p>${escapeHtml(view.matchingConversationCount)} of ${escapeHtml(view.loadedConversationCount)} loaded · TEST / simulated conversations</p></header>
     ${items}${boundary}
   </section>`;
 }
@@ -128,21 +148,76 @@ function renderTranscript(thread: ConversionInboxSelectedThreadView, timezone: s
   return `<div class="ci-transcript" id="ci-transcript" tabindex="-1"><h3 class="ci-sr">Test message transcript</h3>${truncated}<ol aria-label="Test message transcript">${items}</ol></div>`;
 }
 
-function renderComposer(thread: ConversionInboxSelectedThreadView, canWrite: boolean): string {
+function inboxReturnFields(view: ConversionInboxView, thread: ConversionInboxSelectedThreadView): string {
+  return `<input type="hidden" name="return_q" value="${escapeHtml(view.filters.query)}"><input type="hidden" name="return_channel" value="${escapeHtml(view.filters.channel)}"><input type="hidden" name="return_queue" value="${escapeHtml(view.filters.queue)}"><input type="hidden" name="return_conversation" value="${escapeHtml(thread.summary.conversationId)}">`;
+}
+
+function protectedFields(
+  view: ConversionInboxView,
+  thread: ConversionInboxSelectedThreadView,
+  security: ConversionInboxActionSecurity,
+  commandKey: string,
+): string {
+  return `<input type="hidden" name="_csrf" value="${escapeHtml(security.csrfToken)}"><input type="hidden" name="command_key" value="${escapeHtml(commandKey)}">${inboxReturnFields(view, thread)}`;
+}
+
+function readOnlyComposer(
+  view: ConversionInboxView,
+  thread: ConversionInboxSelectedThreadView,
+  security: ConversionInboxActionSecurity | undefined,
+): string {
   const draft = thread.draft;
   const version = draft.versionNumber === null ? 'Unsaved test draft' : `Immutable test draft v${draft.versionNumber}`;
+  const messageId = draft.messageId;
+  const approvalRequestId = draft.approvalRequestId;
+  const decisionKey = approvalRequestId ? security?.decisionKeys[approvalRequestId] : undefined;
+  const queueKey = messageId ? security?.queueKeys[messageId] : undefined;
+  const canDecide = view.canManage && draft.approvalState === 'pending'
+    && !draft.bodyTruncated && approvalRequestId !== null && decisionKey && security;
+  const canQueue = view.canManage && !draft.bodyTruncated && draft.mayQueueTestOperation
+    && messageId !== null && draft.rowVersion !== null && queueKey && security;
+  const decision = canDecide ? `<form class="ci-review-form" method="post" action="${escapeHtml(conversionInboxDecisionRoute(approvalRequestId))}">${protectedFields(view, thread, security, decisionKey)}<label>Reviewer note<textarea name="decision_note" maxlength="4000" placeholder="Required for changes or rejection"></textarea></label><div class="ci-review-actions"><button class="ci-primary" type="submit" name="decision" value="approved">Approve exact v${escapeHtml(draft.versionNumber ?? '—')}</button><button class="ci-warn" type="submit" name="decision" value="changes_requested">Request changes</button><button class="ci-danger" type="submit" name="decision" value="rejected">Reject</button></div></form>` : '';
+  const queue = canQueue ? `<form class="ci-action-form" method="post" action="${escapeHtml(conversionInboxTestQueueRoute(messageId))}">${protectedFields(view, thread, security, queueKey)}<input type="hidden" name="expected_row_version" value="${escapeHtml(draft.rowVersion)}"><input type="hidden" name="purpose" value="${escapeHtml(draft.purpose)}"><button class="ci-primary" type="submit">Queue TEST operation</button></form>` : `<button class="ci-primary" type="button" disabled>${draft.bodyTruncated ? 'Full review required' : draft.mayQueueTestOperation ? 'Queue permission required' : 'Approval gate locked'}</button>`;
   return `<section class="ci-composer" aria-labelledby="ci-draft-title">
-    <div class="ci-composer-top"><label id="ci-draft-title" for="ci-reply-draft">Reply draft</label><span class="ci-version">${escapeHtml(version)}</span></div>
-    <textarea id="ci-reply-draft" name="body" maxlength="8192"${canWrite ? '' : ' readonly'}>${escapeHtml(draft.body)}</textarea>${draft.bodyTruncated ? '<span class="ci-truncated">Long draft clipped at the safe display boundary.</span>' : ''}
+    <div class="ci-composer-top"><strong id="ci-draft-title">Reply draft</strong><span class="ci-version">${escapeHtml(version)}</span></div>
+    <textarea aria-labelledby="ci-draft-title" maxlength="8192" readonly>${escapeHtml(draft.body)}</textarea>${draft.bodyTruncated ? '<span class="ci-truncated" role="alert">Long draft clipped at the safe display boundary. Approval, editing and queueing are locked until the complete draft can be reviewed.</span>' : ''}
     <div class="ci-composer-bar">
       <div class="ci-gate-copy"><strong>${escapeHtml(draft.approvalLabel)} · ${escapeHtml(draft.deliveryLabel)}</strong>${escapeHtml(draft.gateDetail)}</div>
-      <div class="ci-draft-actions" aria-label="Test draft controls">
-        <button type="button" disabled>Save test draft</button>
-        <button class="ci-primary" type="button" disabled>${draft.mayQueueTestOperation ? 'Queue TEST operation' : 'Approval gate locked'}</button>
-      </div>
+      <div class="ci-draft-actions" aria-label="Test draft controls">${queue}</div>
     </div>
-    <p class="ci-preview-note">Read-only foundation preview. Controls cannot contact anyone, publish anything or invoke a provider.</p>
+    ${decision}<p class="ci-preview-note">Protected controls create approval evidence or a non-routable TEST queue record only. They cannot contact anyone or invoke a live provider.</p>
   </section>`;
+}
+
+function editableComposer(
+  view: ConversionInboxView,
+  thread: ConversionInboxSelectedThreadView,
+  security: ConversionInboxActionSecurity,
+): string {
+  const draft = thread.draft;
+  const messageId = draft.messageId;
+  const version = draft.versionNumber === null ? 'New test draft' : `Immutable test draft v${draft.versionNumber}`;
+  if (messageId === null) {
+    const commandKey = security.createDraftKeys[thread.summary.conversationId];
+    if (!commandKey || !thread.contactPointId) return readOnlyComposer(view, thread, security);
+    return `<section class="ci-composer" aria-labelledby="ci-draft-title"><form method="post" action="${CONVERSION_INBOX_CREATE_DRAFT_ROUTE}">${protectedFields(view, thread, security, commandKey)}<input type="hidden" name="conversation_id" value="${escapeHtml(thread.summary.conversationId)}"><input type="hidden" name="contact_point_id" value="${escapeHtml(thread.contactPointId)}"><div class="ci-composer-top"><label id="ci-draft-title" for="ci-reply-draft">Reply draft</label><span class="ci-version">${escapeHtml(version)}</span></div><textarea id="ci-reply-draft" name="body" maxlength="8192" required>${escapeHtml(draft.body)}</textarea><div class="ci-composer-bar"><div class="ci-gate-copy"><strong>Draft only · nothing queued</strong>Create immutable version 1 before human review.</div><div class="ci-draft-actions"><button class="ci-primary" type="submit">Create TEST draft</button></div></div></form><p class="ci-preview-note">Saving creates database evidence only. No provider can be called from this control.</p></section>`;
+  }
+  const reviseKey = security.reviseDraftKeys[messageId];
+  const requestKey = security.requestApprovalKeys[messageId];
+  if (!reviseKey || !requestKey || draft.rowVersion === null) return readOnlyComposer(view, thread, security);
+  return `<section class="ci-composer" aria-labelledby="ci-draft-title"><form method="post" action="${escapeHtml(conversionInboxReviseDraftRoute(messageId))}">${protectedFields(view, thread, security, reviseKey)}<input type="hidden" name="expected_row_version" value="${escapeHtml(draft.rowVersion)}"><div class="ci-composer-top"><label id="ci-draft-title" for="ci-reply-draft">Reply draft</label><span class="ci-version">${escapeHtml(version)}</span></div><textarea id="ci-reply-draft" name="body" maxlength="8192" required>${escapeHtml(draft.body)}</textarea><div class="ci-composer-bar"><div class="ci-gate-copy"><strong>${escapeHtml(draft.approvalLabel)} · ${escapeHtml(draft.deliveryLabel)}</strong>${escapeHtml(draft.gateDetail)}</div><div class="ci-draft-actions"><button type="submit">Save new immutable version</button></div></div></form><form class="ci-review-form" method="post" action="${escapeHtml(conversionInboxRequestApprovalRoute(messageId))}">${protectedFields(view, thread, security, requestKey)}<input type="hidden" name="expected_row_version" value="${escapeHtml(draft.rowVersion)}"><label>Review brief<textarea name="review_note" maxlength="4000" placeholder="What must the reviewer verify?"></textarea></label><div class="ci-review-actions"><button class="ci-primary" type="submit">Request human approval</button></div></form><p class="ci-preview-note">Every save creates a new immutable body hash. Approval never carries across to changed copy.</p></section>`;
+}
+
+function renderComposer(
+  view: ConversionInboxView,
+  thread: ConversionInboxSelectedThreadView,
+  security: ConversionInboxActionSecurity | undefined,
+): string {
+  if (view.canWrite && security && thread.draft.lifecycle === 'draft'
+      && !thread.draft.bodyTruncated) {
+    return editableComposer(view, thread, security);
+  }
+  return readOnlyComposer(view, thread, security);
 }
 
 function renderConsent(consent: ConversionInboxConsentView, timezone: string): string {
@@ -176,26 +251,37 @@ function renderContext(thread: ConversionInboxSelectedThreadView, timezone: stri
   </aside>`;
 }
 
-function renderSelected(view: ConversionInboxView): string {
+function renderSelected(
+  view: ConversionInboxView,
+  security: ConversionInboxActionSecurity | undefined,
+): string {
   const thread = view.selectedThread;
   if (!thread) return '<section class="ci-empty-thread"><div><h2>Select a loaded test conversation</h2><p>The thread, Lead 360 context, consent check and approval gate will appear here. No provider is connected.</p></div></section>';
   return `<main class="ci-thread" aria-labelledby="ci-thread-title">
     <header class="ci-thread-head"><div class="ci-thread-person"><h2 id="ci-thread-title">${escapeHtml(thread.lead.displayName)}</h2><p>${escapeHtml(thread.summary.subject ?? thread.summary.channelLabel)} · ${escapeHtml(thread.summary.stateLabel)}</p></div><span class="ci-test-stamp">${escapeHtml(thread.summary.channelLabel)}<br>TEST / SIMULATED</span></header>
-    ${renderTranscript(thread, view.timezone)}${renderComposer(thread, view.canWrite)}
+    ${renderTranscript(thread, view.timezone)}${renderComposer(view, thread, security)}
   </main>${renderContext(thread, view.timezone)}`;
 }
 
-export function renderConversionInboxBody(view: ConversionInboxView): string {
+function renderNotice(view: ConversionInboxView): string {
+  if (!view.notice) return '';
+  return `<aside class="ci-notice" data-kind="${escapeHtml(view.notice.kind)}" role="status"><strong>${escapeHtml(view.notice.title)}</strong><p>${escapeHtml(view.notice.message)}</p></aside>`;
+}
+
+export function renderConversionInboxBody(
+  view: ConversionInboxView,
+  options: RenderConversionInboxOptions = {},
+): string {
   const queueOptions: readonly Readonly<{ value: ConversionInboxQueueFilter; label: string }>[] = [
     { value: 'all', label: 'Everything loaded' }, { value: 'unread', label: 'Unread' },
-    { value: 'approval', label: 'Needs approval' }, { value: 'open', label: 'Open' },
+    { value: 'approval', label: 'Approval & rework' }, { value: 'open', label: 'Open' },
   ];
   return `<section class="ci" data-property-predator-conversion-inbox data-environment="test">
     <style>${CONVERSION_INBOX_STYLE}</style><a class="ci-skip" href="#ci-transcript">Skip to transcript</a>
-    <header class="ci-head"><div><span class="ci-kicker">Growth HQ · Conversion Inbox</span><h1>Every channel. <em>One human queue.</em></h1><p>Turn engagement into confident conversations with the lead journey, consent and exact approval state visible beside every reply.</p></div><div class="ci-mode"><strong>TEST / SIMULATED</strong><span>Fictional leads. Non-routable provider adapters. Nothing here has contacted a real person.</span></div></header>
-    <div class="ci-truth"><strong>Safety boundary</strong><p>Delivery labels describe simulator outcomes only. An approved draft is still blocked unless current channel consent also agrees.</p><span class="ci-snapshot">${escapeHtml(view.workspaceName)} · Snapshot ${dateTime(view.asOf, view.timezone)}</span></div>
+    <header class="ci-head"><div><span class="ci-kicker">Growth HQ · Conversion Inbox</span><h1>Every channel. <em>One human queue.</em></h1><p>Turn engagement into confident conversations with the lead journey, consent and exact approval state visible beside every reply.</p></div><div class="ci-mode"><strong>TEST / SIMULATED</strong><span>Contact records may be workspace CRM data. Provider adapters are non-routable; no message here has contacted anyone.</span></div></header>
+    <div class="ci-truth"><strong>Safety boundary</strong><p>Delivery labels describe simulator outcomes only. An approved draft is still blocked unless current channel consent also agrees.</p><span class="ci-snapshot">${escapeHtml(view.workspaceName)} · Snapshot ${dateTime(view.asOf, view.timezone)}</span></div>${renderNotice(view)}
     <form class="ci-toolbar" method="get" action="${CONVERSION_INBOX_ROUTE}" aria-label="Filter loaded test conversations"><div class="ci-field"><label for="ci-query">Search loaded queue</label><input id="ci-query" name="q" type="search" maxlength="80" value="${escapeHtml(view.filters.query)}" placeholder="Person, subject or message"></div><div class="ci-field"><label for="ci-queue-filter">Work queue</label><select id="ci-queue-filter" name="queue">${queueOptions.map((item) => `<option value="${item.value}"${item.value === view.filters.queue ? ' selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}</select></div>${view.filters.channel !== 'all' ? `<input type="hidden" name="channel" value="${escapeHtml(view.filters.channel)}">` : ''}<button class="ci-button" type="submit">Apply filters</button><a class="ci-clear" href="${CONVERSION_INBOX_ROUTE}">Clear</a></form>
-    <div class="ci-workspace">${renderChannelRail(view)}${renderQueue(view)}${renderSelected(view)}</div>
+    <div class="ci-workspace">${renderChannelRail(view)}${renderQueue(view)}${renderSelected(view, options.security)}</div>
     <div class="ci-sr" role="status" aria-live="polite">${escapeHtml(loadedConversationLabel(view.matchingConversationCount))} ${view.matchingConversationCount === 1 ? 'matches' : 'match'} the current filters.</div>
   </section>`;
 }

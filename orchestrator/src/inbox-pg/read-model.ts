@@ -48,6 +48,7 @@ interface ConversationRow extends QueryResultRow {
   contactName: string | null;
   subject: string | null;
   unreadCount: number | string;
+  requiresApproval: boolean;
   lastMessageAt: string | Date | null;
   sortAt: string | Date;
   rowVersion: number | string;
@@ -86,7 +87,8 @@ function mapConversation(row: ConversationRow): InboxConversationSummary {
       || (row.subject !== null && (typeof row.subject !== 'string'
         || row.subject.length < 1 || row.subject.length > 500))
       || (row.contactName !== null && (typeof row.contactName !== 'string'
-        || row.contactName.length < 1 || row.contactName.length > 200))) {
+        || row.contactName.length < 1 || row.contactName.length > 200))
+      || typeof row.requiresApproval !== 'boolean') {
     throw new Error('Inbox conversation read returned invalid canonical data');
   }
   const hasMessage = row.latestMessageId !== null;
@@ -121,6 +123,7 @@ function mapConversation(row: ConversationRow): InboxConversationSummary {
     contactName: row.contactName,
     subject: row.subject,
     unreadCount: integer(row.unreadCount, 'unreadCount', 0, 1_000_000),
+    requiresApproval: row.requiresApproval,
     lastMessageAt: row.lastMessageAt === null ? null : timestamp(row.lastMessageAt, 'lastMessageAt'),
     latestMessage,
     rowVersion: integer(row.rowVersion, 'rowVersion', 1, Number.MAX_SAFE_INTEGER),
@@ -195,6 +198,37 @@ export class PgInboxReadService implements InboxReadService {
                 conversation.state, conversation.contact_id AS "contactId",
                 contact.display_name AS "contactName", conversation.subject,
                 conversation.unread_count AS "unreadCount",
+                EXISTS (
+                  SELECT 1
+                  FROM app.messages AS approval_message
+                  JOIN LATERAL (
+                    SELECT approval_request.id,
+                           approval_decision.id AS approval_decision_id,
+                           approval_decision.decision
+                    FROM app.message_approval_requests AS approval_request
+                    LEFT JOIN app.message_approval_decisions AS approval_decision
+                      ON approval_decision.workspace_id = approval_request.workspace_id
+                     AND approval_decision.approval_request_id = approval_request.id
+                    WHERE approval_request.workspace_id = approval_message.workspace_id
+                      AND approval_request.conversation_id = approval_message.conversation_id
+                      AND approval_request.message_id = approval_message.id
+                      AND approval_request.message_version_id = approval_message.current_version_id
+                      AND approval_request.version_number = approval_message.current_version_number
+                      AND approval_request.body_sha256 = approval_message.current_body_sha256
+                    ORDER BY approval_request.request_number DESC, approval_request.id DESC
+                    LIMIT 1
+                  ) AS latest_approval ON true
+                  WHERE approval_message.workspace_id = conversation.workspace_id
+                    AND approval_message.conversation_id = conversation.id
+                    AND approval_message.environment = 'test'
+                    AND approval_message.direction = 'outbound'
+                    AND (
+                      (approval_message.lifecycle = 'approval_pending'
+                        AND latest_approval.approval_decision_id IS NULL)
+                      OR (approval_message.lifecycle = 'draft'
+                        AND latest_approval.decision = 'changes_requested')
+                    )
+                ) AS "requiresApproval",
                 conversation.last_message_at AS "lastMessageAt",
                 coalesce(conversation.last_message_at, conversation.created_at) AS "sortAt",
                 conversation.row_version AS "rowVersion",

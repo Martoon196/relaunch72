@@ -66,9 +66,40 @@ test('filters loaded summaries without inventing data outside InboxConversationP
     workspaceName: WORKSPACE,
     filters: { queue: 'approval' },
   });
-  assert.deepEqual(approvals.conversations.map((item) => item.contactName), [
-    'Aisha Rahman', 'Sophie Grant', 'Liam Carter',
-  ]);
+  assert.deepEqual(approvals.conversations.map((item) => item.contactName), ['Aisha Rahman']);
+});
+
+test('a loaded exact thread overrides stale summary approval state in either direction', () => {
+  const base = createPropertyPredatorTestInboxSnapshot();
+  const summary = base.page.conversations[0]!;
+  const thread = base.threads[0]!;
+  const resolvedSnapshot: ConversionInboxSnapshot = {
+    page: {
+      ...base.page,
+      conversations: [{ ...summary, requiresApproval: true }, ...base.page.conversations.slice(1)],
+    },
+    threads: [{
+      ...thread,
+      draft: {
+        ...thread.draft,
+        lifecycle: 'draft',
+        approvalState: 'rejected',
+        approvalNote: 'The latest exact-version request was rejected.',
+      },
+    }, ...base.threads.slice(1)],
+  };
+  const resolved = presentConversionInbox(resolvedSnapshot, { workspaceName: WORKSPACE });
+  assert.equal(resolved.conversations[0]?.requiresApproval, false);
+
+  const newlyPendingSnapshot: ConversionInboxSnapshot = {
+    ...base,
+    page: {
+      ...base.page,
+      conversations: [{ ...summary, requiresApproval: false }, ...base.page.conversations.slice(1)],
+    },
+  };
+  const newlyPending = presentConversionInbox(newlyPendingSnapshot, { workspaceName: WORKSPACE });
+  assert.equal(newlyPending.conversations[0]?.requiresApproval, true);
 });
 
 test('keeps approved content fail-closed when current channel consent is unknown', () => {

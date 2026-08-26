@@ -4,6 +4,10 @@ import { runMigrations } from '../../src/db/migrate.js';
 import { createDatabasePool } from '../../src/db/pool.js';
 
 const TEST_NAME_PATTERN = /(?:^|[_-])test(?:$|[_-])/i;
+const DISPOSABLE_DATABASE_LEASE_SQL = `
+  pg_catalog.hashtext(pg_catalog.current_database()),
+  pg_catalog.hashtext('relaunch72-disposable-integration')
+`;
 export const DISPOSABLE_BRANCH_CONFIRMATION = 'reset-disposable-branch';
 export const DATABASE_INTEGRATION_CONFIRMATION = 'explicit-disposable-run';
 type ScopedTestRole =
@@ -71,8 +75,58 @@ export async function openTestDatabase(): Promise<Pool> {
     DATABASE_POOL_MAX: '4',
   });
   const pool = createDatabasePool(config);
-  await runMigrations(pool);
-  return pool;
+  const leaseClient = await pool.connect();
+  let leaseHeld = false;
+  try {
+    // Every integration test resets shared schemas/tables. Node's in-process
+    // concurrency flag cannot prevent another terminal or agent from running
+    // the same disposable branch at the same time, so hold one database-scoped
+    // session lease until this pool closes.
+    await leaseClient.query(
+      `SELECT pg_catalog.pg_advisory_lock(${DISPOSABLE_DATABASE_LEASE_SQL})`,
+    );
+    leaseHeld = true;
+    const endPool = pool.end.bind(pool);
+    let ending: Promise<void> | undefined;
+    pool.end = (() => {
+      ending ??= (async () => {
+        let unlockError: unknown;
+        try {
+          const unlocked = await leaseClient.query<{ unlocked: boolean }>(
+            `SELECT pg_catalog.pg_advisory_unlock(${DISPOSABLE_DATABASE_LEASE_SQL}) AS unlocked`,
+          );
+          if (unlocked.rows[0]?.unlocked !== true) {
+            throw new Error('Disposable database integration lease was not held');
+          }
+        } catch (error) {
+          unlockError = error;
+        } finally {
+          leaseClient.release(unlockError !== undefined);
+        }
+
+        try {
+          await endPool();
+        } catch (endError) {
+          if (unlockError !== undefined) {
+            throw new AggregateError(
+              [unlockError, endError],
+              'Disposable database lease release and pool shutdown both failed',
+            );
+          }
+          throw endError;
+        }
+        if (unlockError !== undefined) throw unlockError;
+      })();
+      return ending;
+    }) as Pool['end'];
+
+    await runMigrations(pool);
+    return pool;
+  } catch (error) {
+    if (!leaseHeld) leaseClient.release(true);
+    await pool.end().catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function ownerQuery<T extends QueryResultRow = QueryResultRow>(

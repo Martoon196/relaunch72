@@ -4,6 +4,11 @@ import type {
   InboxConversationSummary,
   InboxMessageLifecycle,
 } from '../inbox-pg/types.js';
+import { INBOX_COMPLETE_REVIEW_MAX_BODY_BYTES } from '../inbox-pg/limits.js';
+import {
+  isConversionInboxTestQueuePurpose,
+  type ConversionInboxNoticeView,
+} from './conversion-inbox-actions.js';
 import type { ConversationChannel } from '../providers/contracts.js';
 
 export const CONVERSION_INBOX_ROUTE = '/portal/inbox' as const;
@@ -11,7 +16,7 @@ export const CONVERSION_INBOX_MAX_CONVERSATIONS = 50;
 export const CONVERSION_INBOX_MAX_MESSAGES = 80;
 export const CONVERSION_INBOX_MAX_CONSENTS = 8;
 export const CONVERSION_INBOX_MAX_QUERY_LENGTH = 80;
-export const CONVERSION_INBOX_MAX_MESSAGE_BYTES = 8_192;
+export const CONVERSION_INBOX_MAX_MESSAGE_BYTES = INBOX_COMPLETE_REVIEW_MAX_BODY_BYTES;
 
 export type ConversionInboxChannelFilter = 'all' | ConversationChannel;
 export type ConversionInboxQueueFilter = 'all' | 'unread' | 'approval' | 'open';
@@ -83,10 +88,14 @@ export interface ConversionInboxDraftSnapshot {
   readonly approvalNote: string | null;
   readonly deliveryState: ConversionInboxDeliveryState;
   readonly updatedAt: string | null;
+  readonly rowVersion: number | null;
+  readonly approvalRequestId: string | null;
+  readonly purpose: string;
 }
 
 export interface ConversionInboxThreadSnapshot {
   readonly conversationId: string;
+  readonly contactPointId: string | null;
   readonly messages: readonly ConversionInboxTranscriptMessageSnapshot[];
   readonly lead: ConversionInboxLeadSnapshot;
   readonly consents: readonly ConversionInboxConsentSnapshot[];
@@ -139,6 +148,7 @@ export interface ConversionInboxDraftView extends ConversionInboxDraftSnapshot {
 
 export interface ConversionInboxSelectedThreadView {
   readonly summary: ConversionInboxQueueItemView;
+  readonly contactPointId: string | null;
   readonly lead: ConversionInboxLeadSnapshot;
   readonly messages: readonly ConversionInboxTranscriptMessageView[];
   readonly transcriptTruncated: boolean;
@@ -169,17 +179,20 @@ export interface ConversionInboxView {
   readonly selectedThread: ConversionInboxSelectedThreadView | null;
   readonly inputTruncated: boolean;
   readonly hasMore: boolean;
+  readonly notice?: ConversionInboxNoticeView;
 }
 
 export interface PresentConversionInboxOptions {
   readonly workspaceName: string;
   readonly filters?: ConversionInboxFilterInput;
+  readonly notice?: ConversionInboxNoticeView;
 }
 
 const CHANNELS = new Set<ConversionInboxChannelFilter>([
   'all', 'email', 'whatsapp', 'sms', 'instagram', 'facebook',
 ]);
 const QUEUES = new Set<ConversionInboxQueueFilter>(['all', 'unread', 'approval', 'open']);
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const CHANNEL_LABELS: Readonly<Record<ConversationChannel, string>> = Object.freeze({
   email: 'Email',
   whatsapp: 'WhatsApp',
@@ -268,7 +281,7 @@ function queueItem(
     channelLabel: CHANNEL_LABELS[summary.channel],
     stateLabel: stateLabel(summary.state),
     preview: `${preview.value}${preview.truncated ? '…' : ''}`,
-    requiresApproval: needsApproval(thread),
+    requiresApproval: thread === undefined ? summary.requiresApproval : needsApproval(thread),
     testProviderLabel: `${CHANNEL_LABELS[summary.channel]} · TEST / SIMULATED`,
   });
 }
@@ -330,18 +343,37 @@ function draftView(
   const consentChannel = summary.channel === 'instagram' || summary.channel === 'facebook'
     ? 'social' : summary.channel;
   const relevantConsent = consents.find((consent) => consent.channel === consentChannel);
+  const messageId = draft.messageId && UUID.test(draft.messageId) ? draft.messageId.toLowerCase() : null;
+  const approvalRequestId = draft.approvalRequestId && UUID.test(draft.approvalRequestId)
+    ? draft.approvalRequestId.toLowerCase() : null;
+  const rowVersion = typeof draft.rowVersion === 'number' && Number.isSafeInteger(draft.rowVersion)
+    && draft.rowVersion > 0 ? draft.rowVersion : null;
   const exactApproval = draft.lifecycle === 'approved' && draft.approvalState === 'approved'
     && draft.versionNumber !== null && Number.isSafeInteger(draft.versionNumber)
-    && draft.versionNumber > 0 && draft.messageId !== null;
+    && draft.versionNumber > 0 && messageId !== null;
   const consentAllowsQueueing = relevantConsent?.allowsQueueing === true;
-  const mayQueueTestOperation = exactApproval && consentAllowsQueueing && draft.deliveryState === 'not_queued';
-  let gateDetail = 'An exact immutable draft approval is required.';
-  if (exactApproval && !consentAllowsQueueing) gateDetail = 'Current channel consent does not permit queueing.';
-  else if (mayQueueTestOperation) gateDetail = 'Eligible for the TEST queue only. No live provider is connected.';
-  else if (exactApproval && consentAllowsQueueing) gateDetail = 'A TEST/SIMULATED operation already records this draft state.';
+  const purposeAllowsQueueing = isConversionInboxTestQueuePurpose(draft.purpose);
   const body = utf8Prefix(draft.body, CONVERSION_INBOX_MAX_MESSAGE_BYTES);
+  const mayQueueTestOperation = exactApproval && consentAllowsQueueing
+    && purposeAllowsQueueing && !body.truncated && draft.deliveryState === 'not_queued';
+  let gateDetail = body.truncated
+    ? 'The complete draft is outside the safe review display boundary. Approval and queueing are locked.'
+    : 'An exact immutable draft approval is required.';
+  if (!body.truncated && exactApproval && !consentAllowsQueueing) {
+    gateDetail = 'Current channel consent does not permit queueing.';
+  } else if (!body.truncated && exactApproval && !purposeAllowsQueueing) {
+    gateDetail = 'This message purpose is not approved for the TEST queue.';
+  } else if (mayQueueTestOperation) {
+    gateDetail = 'Eligible for the TEST queue only. No live provider is connected.';
+  } else if (!body.truncated && exactApproval && consentAllowsQueueing) {
+    gateDetail = 'A TEST/SIMULATED operation already records this draft state.';
+  }
   return Object.freeze({
     ...draft,
+    messageId,
+    approvalRequestId,
+    rowVersion,
+    purpose: utf8Prefix(draft.purpose.trim(), 100).value,
     body: body.value,
     bodyTruncated: body.truncated,
     approvalNote: draft.approvalNote === null
@@ -377,6 +409,8 @@ function selectedThread(
   });
   return Object.freeze({
     summary,
+    contactPointId: snapshot.contactPointId && UUID.test(snapshot.contactPointId)
+      ? snapshot.contactPointId.toLowerCase() : null,
     lead: boundedLead,
     messages: Object.freeze(sourceMessages.map(transcriptMessage)),
     transcriptTruncated: snapshot.messages.length > sourceMessages.length,
@@ -437,5 +471,6 @@ export function presentConversionInbox(
     selectedThread: selected,
     inputTruncated,
     hasMore: snapshot.page.nextCursor !== null || inputTruncated,
+    ...(options.notice ? { notice: options.notice } : {}),
   });
 }
