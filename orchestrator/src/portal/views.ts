@@ -28,12 +28,19 @@ function loginModuleBadges(productProfile: PortalProductProfile): string {
     .join('');
 }
 
-export function accountSetupPage(setupCsrfToken: string, error?: string): string {
-  return `${pageHead('Relaunch72 — Set up your account')}<body>
+export function accountSetupPage(
+  setupCsrfToken: string,
+  error?: string,
+  productProfile: PortalProductProfile = RELAUNCH72_PRODUCT_PROFILE,
+): string {
+  const plainProductName = productProfile.id === 'relaunch72' ? 'Relaunch72' : productProfile.productName;
+  const productName = esc(plainProductName);
+  const suiteLabel = productProfile.id === 'relaunch72' ? productProfile.suiteLabel.toLowerCase() : productProfile.suiteLabel;
+  return `${pageHead(`${plainProductName} — Set up your account`, productProfile)}<body>
     <main class="auth-shell">
       <section class="auth-panel" aria-labelledby="setup-title">
         <div class="auth-card">
-          <div class="auth-brand"><span class="brand-mark">R72</span><strong>RELAUNCH72</strong></div>
+          <div class="auth-brand" aria-label="${productName} account setup"><span class="brand-mark">${productBrandMark(productProfile)}</span><strong class="brand-name">${productBrandName(productProfile)}</strong></div>
           <h1 id="setup-title">Choose your password.</h1>
           <p class="auth-lead">Use at least 12 characters. This private setup link works once.</p>
           ${error ? `<div class="auth-error" role="alert">${icon('lock')}<span>${esc(error)}</span></div>` : ''}
@@ -47,19 +54,25 @@ export function accountSetupPage(setupCsrfToken: string, error?: string): string
           <p class="auth-foot">Private one-time setup · the link cannot be reused</p>
         </div>
       </section>
-      <aside class="auth-story" aria-label="Account security"><div class="auth-story-inner"><div class="auth-kicker">One secure step</div><h2>Your workspace<br>is waiting.</h2><p>Set your password to open the private Relaunch72 command centre. Your account stays isolated to its own workspace.</p><div class="auth-modules"><span>One-use setup link</span><span>Secure session</span><span>No public publishing</span></div></div></aside>
+      <aside class="auth-story" aria-label="Account security"><div class="auth-story-inner"><div class="auth-kicker">One secure step</div><h2>Your workspace<br>is waiting.</h2><p>Set your password to open the private ${productName} ${esc(suiteLabel)}. Your account stays isolated to its own workspace.</p><div class="auth-modules"><span>One-use setup link</span><span>Secure session</span><span>No public publishing</span></div></div></aside>
     </main>
   </body></html>`;
 }
 
-export function accountSetupUnavailablePage(message = 'Account setup is not open yet. Ask the Relaunch72 team to provision pilot access.'): string {
-  return `${pageHead('Relaunch72 — Account setup')}<body>
+export function accountSetupUnavailablePage(
+  message?: string,
+  productProfile: PortalProductProfile = RELAUNCH72_PRODUCT_PROFILE,
+): string {
+  const plainProductName = productProfile.id === 'relaunch72' ? 'Relaunch72' : productProfile.productName;
+  const productName = esc(plainProductName);
+  const statusMessage = message ?? `Account setup is not open yet. Ask the ${plainProductName} team to provision pilot access.`;
+  return `${pageHead(`${plainProductName} — Account setup`, productProfile)}<body>
     <main class="auth-shell">
       <section class="auth-panel" aria-labelledby="setup-title">
         <div class="auth-card">
-          <a class="auth-brand" href="/portal/login" aria-label="Relaunch72 sign in"><span class="brand-mark">R72</span><strong>RELAUNCH72</strong></a>
+          <a class="auth-brand" href="/portal/login" aria-label="${productName} sign in"><span class="brand-mark">${productBrandMark(productProfile)}</span><strong class="brand-name">${productBrandName(productProfile)}</strong></a>
           <h1 id="setup-title">Setup is currently paused.</h1>
-          <div class="auth-error" role="status">${icon('lock')}<span>${esc(message)}</span></div>
+          <div class="auth-error" role="status">${icon('lock')}<span>${esc(statusMessage)}</span></div>
           <a class="button auth-button" href="/portal/login">Return to sign in ${icon('chevron')}</a>
           <p class="auth-foot">No password or account change has been made.</p>
         </div>

@@ -404,6 +404,27 @@ test('a stale cookie cannot block a fresh database login or account setup page',
   assert.equal(resolveCalls, 0);
 });
 
+test('the setup router keeps Property Predator branding on available and unavailable paths', async () => {
+  const available = deps({
+    productProfile: PROPERTY_PREDATOR_GROWTH_PROFILE,
+    completeSetup: async () => null,
+  });
+  const flow = await beginSetup(available);
+  const setup = await call('GET', '/portal/setup', available, { cookie: flow.cookie });
+  assert.equal(setup.statusCode, 200);
+  assert.match(setup.body, /<title>PropertyPredator — Set up your account<\/title>/);
+  assert.match(setup.body, /private PropertyPredator Growth HQ/);
+  assert.doesNotMatch(setup.body, /Relaunch72|RELAUNCH72|>R72</);
+
+  const unavailable = await call('GET', '/portal/setup', deps({
+    productProfile: PROPERTY_PREDATOR_GROWTH_PROFILE,
+  }));
+  assert.equal(unavailable.statusCode, 503);
+  assert.match(unavailable.body, /<title>PropertyPredator — Account setup<\/title>/);
+  assert.match(unavailable.body, /Ask the PropertyPredator team/);
+  assert.doesNotMatch(unavailable.body, /Relaunch72|RELAUNCH72|>R72</);
+});
+
 test('one-time setup chooses a password, signs in and rejects an already-used token', async () => {
   const seen: Array<{ token: string; password: string; now: number }> = [];
   let available = true;

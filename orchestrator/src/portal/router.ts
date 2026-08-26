@@ -621,6 +621,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     return sendJavaScript(res, JOURNEY_BOARD_CLIENT_SOURCE);
   }
   const now = deps.now ? deps.now() : Date.now();
+  const productProfile = deps.productProfile ?? RELAUNCH72_PRODUCT_PROFILE;
   const requestCookies = parseCookies(req.headers.cookie);
   const sessionToken = requestCookies[PORTAL_COOKIE] ?? '';
   const portalHome = '/portal';
@@ -649,7 +650,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     const linkedToken = url.searchParams.get('token');
     if (linkedToken !== null) {
       if (!isPortalSetupToken(linkedToken)) {
-        return sendHtml(res, 400, accountSetupUnavailablePage(SETUP_FAILURE_MESSAGE), clearPortalSetupCookie(deps.secure), {
+        return sendHtml(res, 400, accountSetupUnavailablePage(SETUP_FAILURE_MESSAGE, productProfile), clearPortalSetupCookie(deps.secure), {
           'cache-control': 'no-store',
           'referrer-policy': 'no-referrer',
         });
@@ -667,7 +668,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       ? Boolean(deps.auth.completeSetup)
       : Boolean(deps.completeSetup);
     if (!setupEnabled) {
-      return sendHtml(res, 503, accountSetupUnavailablePage(), undefined, {
+      return sendHtml(res, 503, accountSetupUnavailablePage(undefined, productProfile), undefined, {
         'cache-control': 'no-store',
         'referrer-policy': 'no-referrer',
       });
@@ -675,12 +676,12 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     const setupCookieValue = requestCookies[PORTAL_SETUP_COOKIE];
     const setupToken = verifyPortalSetupCookie(deps.sessionSecret, setupCookieValue, now);
     if (!setupToken || !setupCookieValue) {
-      return sendHtml(res, 400, accountSetupUnavailablePage(SETUP_FAILURE_MESSAGE), clearPortalSetupCookie(deps.secure), {
+      return sendHtml(res, 400, accountSetupUnavailablePage(SETUP_FAILURE_MESSAGE, productProfile), clearPortalSetupCookie(deps.secure), {
         'cache-control': 'no-store',
         'referrer-policy': 'no-referrer',
       });
     }
-    return sendHtml(res, 200, accountSetupPage(portalSetupCsrfToken(deps.sessionSecret, setupCookieValue, now)), undefined, {
+    return sendHtml(res, 200, accountSetupPage(portalSetupCsrfToken(deps.sessionSecret, setupCookieValue, now), undefined, productProfile), undefined, {
       'cache-control': 'no-store',
       'referrer-policy': 'no-referrer',
     });
@@ -688,7 +689,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   if (p === '/portal/setup' && method === 'POST') {
     const setup = deps.kind === 'postgres' ? deps.auth.completeSetup : deps.completeSetup;
     if (!setup) {
-      return sendHtml(res, 503, accountSetupUnavailablePage());
+      return sendHtml(res, 503, accountSetupUnavailablePage(undefined, productProfile));
     }
     const form = await readForm(req);
     const setupCookieValue = requestCookies[PORTAL_SETUP_COOKIE];
@@ -698,7 +699,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       // Do not clear a browser's setup cookie from a cross-site POST that did
       // not carry its Strict cookie/CSRF value. The underlying link can still
       // be revisited; terminal database invalidity is cleared below.
-      return sendHtml(res, 403, accountSetupUnavailablePage(SETUP_FAILURE_MESSAGE), undefined, {
+      return sendHtml(res, 403, accountSetupUnavailablePage(SETUP_FAILURE_MESSAGE, productProfile), undefined, {
         'cache-control': 'no-store',
         'referrer-policy': 'no-referrer',
       });
@@ -706,10 +707,10 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     const setupCsrf = portalSetupCsrfToken(deps.sessionSecret, setupCookieValue, now);
     const password = form.password ?? '';
     if (password.length < 12 || password.length > 1_024) {
-      return sendHtml(res, 400, accountSetupPage(setupCsrf, 'Use a password between 12 and 1,024 characters.'), undefined, { 'cache-control': 'no-store' });
+      return sendHtml(res, 400, accountSetupPage(setupCsrf, 'Use a password between 12 and 1,024 characters.', productProfile), undefined, { 'cache-control': 'no-store' });
     }
     if (password !== (form.confirm ?? '')) {
-      return sendHtml(res, 400, accountSetupPage(setupCsrf, 'Those passwords do not match.'), undefined, { 'cache-control': 'no-store' });
+      return sendHtml(res, 400, accountSetupPage(setupCsrf, 'Those passwords do not match.', productProfile), undefined, { 'cache-control': 'no-store' });
     }
     const throttle = deps.setupThrottle ?? DEFAULT_SETUP_THROTTLE;
     const keys = setupKeys(req, token, deps);
@@ -718,7 +719,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       const status = throttle.reserve(key, now);
       if (!status.allowed) {
         for (const reserved of reservations) throttle.release(reserved);
-        return sendHtml(res, 429, accountSetupUnavailablePage(SETUP_FAILURE_MESSAGE), undefined, {
+        return sendHtml(res, 429, accountSetupUnavailablePage(SETUP_FAILURE_MESSAGE, productProfile), undefined, {
           'cache-control': 'no-store',
           'referrer-policy': 'no-referrer',
           'retry-after': String(status.retryAfterSeconds),
@@ -733,11 +734,11 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         : await deps.completeSetup!(token, password, now);
     } catch {
       for (const key of reservations) throttle.release(key);
-      return sendHtml(res, 503, accountSetupPage(setupCsrf, 'Secure account setup is temporarily unavailable. Try again shortly.'), undefined, { 'cache-control': 'no-store' });
+      return sendHtml(res, 503, accountSetupPage(setupCsrf, 'Secure account setup is temporarily unavailable. Try again shortly.', productProfile), undefined, { 'cache-control': 'no-store' });
     }
     if (!completed) {
       for (const key of reservations) throttle.failure(key, now);
-      return sendHtml(res, 400, accountSetupUnavailablePage(SETUP_FAILURE_MESSAGE), clearPortalSetupCookie(deps.secure), { 'cache-control': 'no-store' });
+      return sendHtml(res, 400, accountSetupUnavailablePage(SETUP_FAILURE_MESSAGE, productProfile), clearPortalSetupCookie(deps.secure), { 'cache-control': 'no-store' });
     }
     for (const key of reservations) throttle.success(key);
     const completedToken = typeof completed === 'string'

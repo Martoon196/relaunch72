@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { accountSetupPage, billingPage, dashboardPage, loginPage } from '../src/portal/views.js';
+import { accountSetupPage, accountSetupUnavailablePage, billingPage, dashboardPage, loginPage } from '../src/portal/views.js';
+import { PROPERTY_PREDATOR_GROWTH_PROFILE } from '../src/portal/product-profile.js';
 import { planOptions } from '../src/portal/billing.js';
 import { CORE_PLATFORM_MODULES } from '../src/platform/modules.js';
 import { PORTAL_STYLE } from '../src/portal/ui.js';
@@ -184,4 +185,20 @@ test('login and billing keep the same accessible premium shell semantics', () =>
   assert.doesNotMatch(billing, /href="\/portal" aria-current="page"/);
   assert.match(billing, /Plan preview only/);
   assert.doesNotMatch(billing, /action="\/portal\/subscribe"/);
+});
+
+test('account setup screens use the active Property Predator product profile', () => {
+  const setupCsrf = Buffer.alloc(32, 8).toString('base64url');
+  const setup = accountSetupPage(setupCsrf, undefined, PROPERTY_PREDATOR_GROWTH_PROFILE);
+  const unavailable = accountSetupUnavailablePage(undefined, PROPERTY_PREDATOR_GROWTH_PROFILE);
+
+  for (const html of [setup, unavailable]) {
+    assert.match(html, /<title>PropertyPredator —/);
+    assert.match(html, /aria-label="PropertyPredator (?:account setup|sign in)"/);
+    assert.match(html, /<span>Property<\/span><span class="brand-accent">Predator<\/span>/);
+    assert.match(html, /--accent:#00e5cc/);
+    assert.doesNotMatch(html, /Relaunch72|RELAUNCH72|>R72</);
+  }
+  assert.match(setup, /private PropertyPredator Growth HQ/);
+  assert.match(unavailable, /Ask the PropertyPredator team/);
 });
