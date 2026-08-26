@@ -21,6 +21,7 @@ import type { PortalAuthService } from './auth-service.js';
 import type { PropertyPredatorSsoClient } from './property-predator-sso.js';
 import type { PortalJourneyManagerService } from './journey-manager-service.js';
 import type { PortalCompanyContentService } from './company-content-service.js';
+import type { PortalBrandBrainService } from './brand-brain-service.js';
 import type { PortalConversionInboxCommandService } from './conversion-inbox-service.js';
 import type { PortalOperatorActionCentreService } from './operator-action-centre-pg-service.js';
 import type { SubscriptionStore } from '../server/subscriptions.js';
@@ -138,6 +139,8 @@ export interface PostgresPortalConfig {
   operatorActions?: PortalOperatorActionCentreService;
   /** Omitted unless the dedicated company-content command identity is ready. */
   companyContent?: PortalCompanyContentService;
+  /** Read-only Brand Brain metadata. Omitted until its RLS reader is ready. */
+  brandBrain?: PortalBrandBrainService;
   /** TEST-only conversion queue read boundary; no provider/send capability. */
   inbox?: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval queue boundary; no dispatcher capability. */
@@ -165,6 +168,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     journeys: cfg.journeys,
     operatorActions: cfg.operatorActions,
     companyContent: cfg.companyContent,
+    brandBrain: cfg.brandBrain,
     inbox: cfg.inbox,
     inboxCommands: cfg.inboxCommands,
     productProfile: cfg.productProfile ?? RELAUNCH72_PRODUCT_PROFILE,

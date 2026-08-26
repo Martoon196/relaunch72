@@ -40,6 +40,12 @@ test('known portal product profiles resolve as immutable presentation contracts'
       state: 'foundation',
     },
   );
+  assert.deepEqual(PROPERTY_PREDATOR_GROWTH_PROFILE.contentWorkspace, {
+    brainRoute: '/portal/content/brain',
+    brainLabel: 'Brand Brain',
+    brainSummary: 'Inventory, governance and evaluation readiness for owned Property Predator AI specialists.',
+  });
+  assert.equal(RELAUNCH72_PRODUCT_PROFILE.contentWorkspace, undefined);
 });
 
 test('product profiles fail closed and cannot carry authorization state', () => {
@@ -48,6 +54,7 @@ test('product profiles fail closed and cannot carry authorization state', () => 
   assert.equal('capabilities' in PROPERTY_PREDATOR_GROWTH_PROFILE, false);
   assert.equal('permissions' in PROPERTY_PREDATOR_GROWTH_PROFILE, false);
   assert.equal('providerConnections' in PROPERTY_PREDATOR_GROWTH_PROFILE, false);
+  assert.equal('capabilities' in PROPERTY_PREDATOR_GROWTH_PROFILE.contentWorkspace!, false);
   assert.deepEqual(
     PROPERTY_PREDATOR_GROWTH_PROFILE.visibleNavigation,
     ['overview', 'actions', 'crm', 'journeys', 'content', 'inbox'],

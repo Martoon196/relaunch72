@@ -1,0 +1,108 @@
+import {
+  BRAND_BRAIN_FOUNDER_EXPORT_ANCHOR,
+  BRAND_BRAIN_QUARANTINE_ANCHOR,
+  BRAND_BRAIN_SOURCE_RELEASE_ANCHOR,
+} from './brand-brain-actions.js';
+import type {
+  BrandBrainConflictView,
+  BrandBrainGateTone,
+  BrandBrainGateView,
+  BrandBrainReadOnlyActionView,
+  BrandBrainSourceView,
+  BrandBrainSpecialistView,
+  BrandBrainView,
+} from './brand-brain-presenter.js';
+import { renderContentWorkspaceNavigation } from './content-workspace-navigation.js';
+import { escapeHtml } from './ui.js';
+
+export interface RenderBrandBrainOptions {
+  readonly brainLabel?: string;
+}
+
+const BRAND_BRAIN_STYLE = `
+  .bbc{--bbc-bg:#050708;--bbc-panel:#0c1012;--bbc-raised:#12181b;--bbc-soft:#080b0d;--bbc-line:#243036;--bbc-line-strong:#34434a;--bbc-ink:#f2f6f5;--bbc-muted:#a0adb0;--bbc-faint:#718087;--bbc-teal:#00e5cc;--bbc-teal-soft:#072824;--bbc-amber:#f2b84b;--bbc-red:#ff7169;min-width:0;color:var(--bbc-ink);background:var(--bbc-bg);border:1px solid #020303;overflow:hidden}.bbc *{box-sizing:border-box}.bbc h1,.bbc h2,.bbc h3,.bbc p{margin-top:0}.bbc a{text-decoration:none}.bbc code{font-family:var(--mono,monospace);overflow-wrap:anywhere}
+  .bbc-hero{position:relative;display:grid;grid-template-columns:minmax(0,1.25fr) minmax(280px,.55fr);gap:24px;align-items:end;padding:30px;border-bottom:1px solid var(--bbc-line);background:radial-gradient(circle at 82% 0,rgba(0,229,204,.16),transparent 30%),linear-gradient(132deg,#131a1d,#07090a 72%);overflow:hidden}.bbc-hero::after{content:"";position:absolute;right:14%;top:-95px;width:235px;height:235px;border:1px solid rgba(0,229,204,.13);transform:rotate(45deg);pointer-events:none}.bbc-kicker{position:relative;color:var(--bbc-teal);font:850 12px/1.2 var(--mono,monospace);letter-spacing:.14em;text-transform:uppercase}.bbc-hero h1{position:relative;margin:9px 0 10px;font-family:var(--display,var(--sans));font-size:clamp(2.35rem,5vw,4.8rem);font-weight:600;line-height:.9;letter-spacing:-.045em}.bbc-hero h1 em{font-style:normal;color:var(--bbc-teal)}.bbc-hero-copy>p{position:relative;max-width:780px;margin:0;color:var(--bbc-muted);font-size:14px;line-height:1.68}.bbc-effects{position:relative;border:1px solid #6b3e3b;background:rgba(28,10,10,.72);padding:16px}.bbc-effects small{display:block;color:var(--bbc-red);font:900 12px var(--mono,monospace);letter-spacing:.12em;text-transform:uppercase}.bbc-effects strong{display:block;margin:7px 0 6px;font:900 25px/1 var(--mono,monospace);color:#fff}.bbc-effects p{margin:0;color:#d4b8b6;font-size:12px;line-height:1.5}
+  .bbc-truth{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:13px;align-items:center;padding:12px 30px;border-bottom:1px solid var(--bbc-line);background:#090c0e}.bbc-truth-mark{color:var(--bbc-teal);font:850 12px var(--mono,monospace);letter-spacing:.08em;text-transform:uppercase}.bbc-truth p{margin:0;color:var(--bbc-muted);font-size:12px;line-height:1.5}.bbc-truth p strong{color:var(--bbc-ink)}.bbc-dataset{border:1px solid var(--bbc-line-strong);padding:4px 8px;color:var(--bbc-faint);font:800 11px var(--mono,monospace);letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}
+  .bbc-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-bottom:1px solid var(--bbc-line);background:var(--bbc-panel)}.bbc-metric{min-width:0;padding:16px 18px;border-right:1px solid var(--bbc-line)}.bbc-metric:last-child{border-right:0}.bbc-metric small{display:block;color:var(--bbc-faint);font:800 11px var(--mono,monospace);letter-spacing:.06em;text-transform:uppercase}.bbc-metric strong{display:block;margin:7px 0 4px;font:900 23px/1 var(--mono,monospace)}.bbc-metric span{display:block;color:var(--bbc-muted);font-size:11px;line-height:1.45}.bbc-metric.wait strong{color:var(--bbc-amber)}.bbc-metric.ready strong{color:var(--bbc-teal)}
+  .bbc-gates{padding:18px;border-bottom:1px solid var(--bbc-line);background:#080b0d}.bbc-section-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:12px}.bbc-section-heading h2{margin:0;font-size:16px}.bbc-section-heading p{margin:4px 0 0;color:var(--bbc-muted);font-size:12px}.bbc-readiness{border:1px solid var(--bbc-line-strong);padding:5px 8px;color:var(--bbc-amber);font:850 11px var(--mono,monospace);text-transform:uppercase;white-space:nowrap}.bbc-readiness.ready{border-color:#2a7b70;color:var(--bbc-teal);background:var(--bbc-teal-soft)}.bbc-gate-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}.bbc-gate{border:1px solid var(--bbc-line);border-top:3px solid var(--bbc-faint);background:var(--bbc-panel);padding:13px}.bbc-gate.pass{border-top-color:var(--bbc-teal)}.bbc-gate.wait{border-top-color:var(--bbc-amber)}.bbc-gate.blocked{border-top-color:var(--bbc-red)}.bbc-gate small{display:block;color:var(--bbc-faint);font:800 11px var(--mono,monospace);letter-spacing:.05em;text-transform:uppercase}.bbc-gate strong{display:block;margin:7px 0 5px;font-size:13px}.bbc-gate.pass strong{color:var(--bbc-teal)}.bbc-gate.wait strong{color:var(--bbc-amber)}.bbc-gate.blocked strong{color:var(--bbc-red)}.bbc-gate p{margin:0;color:var(--bbc-muted);font-size:11px;line-height:1.5}
+  .bbc-layout{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(310px,.65fr);gap:14px;align-items:start;padding:16px}.bbc-stack{display:grid;gap:14px;min-width:0}.bbc-panel{min-width:0;border:1px solid var(--bbc-line);background:var(--bbc-panel)}.bbc-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:16px 17px 13px;border-bottom:1px solid var(--bbc-line)}.bbc-panel-head h2{margin:0;font-size:16px}.bbc-panel-head p{margin:4px 0 0;color:var(--bbc-muted);font-size:11px;line-height:1.45}.bbc-chip{display:inline-flex;min-height:24px;align-items:center;border:1px solid var(--bbc-line-strong);padding:3px 8px;color:var(--bbc-muted);font:800 11px var(--mono,monospace);text-transform:uppercase;white-space:nowrap}.bbc-chip.good{border-color:#2a7b70;color:var(--bbc-teal);background:var(--bbc-teal-soft)}.bbc-chip.wait{border-color:#6b5832;color:var(--bbc-amber);background:#171308}.bbc-chip.blocked{border-color:#6b3e3b;color:var(--bbc-red);background:#190d0d}
+  .bbc-release{scroll-margin-top:84px}.bbc-release-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;padding:13px 16px;border-bottom:1px solid var(--bbc-line)}.bbc-proof{min-width:0;border:1px solid var(--bbc-line);background:var(--bbc-soft);padding:10px}.bbc-proof strong{display:block;margin-bottom:6px;color:var(--bbc-faint);font:800 11px var(--mono,monospace);letter-spacing:.05em;text-transform:uppercase}.bbc-proof code,.bbc-proof time{font-size:11px;color:var(--bbc-ink);overflow-wrap:anywhere}.bbc-sources{list-style:none;margin:0;padding:7px 15px}.bbc-source{display:grid;grid-template-columns:minmax(150px,1.1fr) minmax(150px,.9fr) auto;gap:10px;align-items:center;padding:11px 0;border-bottom:1px solid var(--bbc-line)}.bbc-source:last-child{border-bottom:0}.bbc-source strong{display:block;font-size:12px}.bbc-source code{display:block;margin-top:3px;color:var(--bbc-faint);font-size:10px}.bbc-source-meta{display:flex;gap:5px;flex-wrap:wrap}.bbc-mini{border:1px solid var(--bbc-line);padding:3px 6px;color:var(--bbc-muted);font:750 10px var(--mono,monospace)}.bbc-source.quarantined{color:var(--bbc-red)}
+  .bbc-specialists{list-style:none;margin:0;padding:8px 15px}.bbc-specialist{display:grid;grid-template-columns:44px minmax(0,1fr) auto;gap:12px;align-items:start;padding:13px 0;border-bottom:1px solid var(--bbc-line)}.bbc-specialist:last-child{border-bottom:0}.bbc-index{width:40px;height:40px;border:1px solid var(--bbc-line-strong);display:grid;place-items:center;color:var(--bbc-teal);font:900 12px var(--mono,monospace)}.bbc-specialist h3{margin:0;font-size:13px}.bbc-specialist-id{display:block;margin-top:3px;color:var(--bbc-faint);font:650 10px var(--mono,monospace);overflow-wrap:anywhere}.bbc-capabilities{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}.bbc-blocker{margin:8px 0 0;color:var(--bbc-amber);font-size:11px;line-height:1.5}.bbc-runtime{text-align:right}.bbc-runtime code{display:block;margin-top:5px;color:var(--bbc-faint);font-size:9px}
+  .bbc-external{scroll-margin-top:84px}.bbc-external-list{list-style:none;margin:0;padding:7px 15px}.bbc-external-item{padding:13px 0;border-bottom:1px solid var(--bbc-line)}.bbc-external-item:last-child{border-bottom:0}.bbc-external-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.bbc-external h3{margin:0;font-size:13px}.bbc-external p{margin:7px 0 0;color:var(--bbc-muted);font-size:11px;line-height:1.5}.bbc-external code{display:block;margin-top:6px;color:var(--bbc-faint);font-size:10px}.bbc-export-note{padding:12px 15px;border-top:1px solid var(--bbc-line);background:var(--bbc-soft);color:var(--bbc-muted);font-size:11px;line-height:1.55}.bbc-export-note strong{color:var(--bbc-ink)}
+  .bbc-conflict{scroll-margin-top:84px;border-left:4px solid var(--bbc-red)}.bbc-conflict-body{padding:15px 16px}.bbc-conflict-body h3{font-size:14px;margin:0 0 7px}.bbc-conflict-body p{color:var(--bbc-muted);font-size:11px;line-height:1.55;margin:0 0 9px}.bbc-conflict-body p:last-child{margin-bottom:0}.bbc-conflict-body strong{color:var(--bbc-ink)}
+  .bbc-boundary{padding:15px 16px}.bbc-boundary ul{margin:0;padding:0;list-style:none}.bbc-boundary li{display:grid;grid-template-columns:17px 1fr;gap:8px;padding:6px 0;color:var(--bbc-muted);font-size:11px;line-height:1.45}.bbc-boundary li::before{content:"✓";color:var(--bbc-teal);font-weight:900}.bbc-boundary li.locked::before{content:"×";color:var(--bbc-red)}.bbc-actions{display:flex;gap:7px;flex-wrap:wrap;padding:12px 16px;border-top:1px solid var(--bbc-line)}.bbc-action{min-height:44px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--bbc-line-strong);padding:8px 11px;color:var(--bbc-ink);font-size:11px;font-weight:850}.bbc-action.primary{border-color:var(--bbc-teal);background:var(--bbc-teal);color:#03110f}.bbc-footer{display:flex;justify-content:space-between;gap:14px;padding:13px 18px;border-top:1px solid var(--bbc-line);background:#07090a;color:var(--bbc-faint);font-size:11px}.bbc-footer strong{color:var(--bbc-muted)}
+  @media(max-width:1000px){.bbc-hero{grid-template-columns:1fr}.bbc-metrics{grid-template-columns:repeat(3,1fr)}.bbc-metric:nth-child(3){border-right:0}.bbc-metric:nth-child(n+4){border-top:1px solid var(--bbc-line)}.bbc-layout{grid-template-columns:1fr}.bbc-gate-grid{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:680px){.bbc-hero{padding:24px 20px}.bbc-truth{grid-template-columns:1fr;padding:12px 20px}.bbc-dataset{justify-self:start}.bbc-metrics{grid-template-columns:repeat(2,1fr)}.bbc-metric:nth-child(3){border-right:1px solid var(--bbc-line)}.bbc-metric:nth-child(even){border-right:0}.bbc-metric:nth-child(n+3){border-top:1px solid var(--bbc-line)}.bbc-gate-grid{grid-template-columns:1fr}.bbc-release-grid{grid-template-columns:1fr}.bbc-source{grid-template-columns:1fr}.bbc-specialist{grid-template-columns:38px minmax(0,1fr)}.bbc-index{width:36px;height:36px}.bbc-runtime{grid-column:2;text-align:left}.bbc-panel-head,.bbc-external-head,.bbc-footer{align-items:stretch;flex-direction:column}.bbc-actions{display:grid}.bbc-action{width:100%}}
+  @media(max-width:430px){.bbc-hero h1{font-size:2.55rem}.bbc-metrics{grid-template-columns:1fr}.bbc-metric{border-right:0!important}.bbc-layout{padding:9px}}
+  @media(forced-colors:active){.bbc,.bbc-panel,.bbc-gate,.bbc-effects,.bbc-chip,.bbc-action{forced-color-adjust:auto}.bbc-gate{border-top-width:5px}}
+  @media(prefers-reduced-motion:reduce){.bbc *{scroll-behavior:auto!important;transition:none!important}}
+`;
+
+function safeCount(value: number): string {
+  return Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString('en-GB') : '0';
+}
+
+function time(value: string): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return 'Not recorded';
+  const label = new Intl.DateTimeFormat('en-GB', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone: 'UTC',
+  }).format(date);
+  return `<time datetime="${escapeHtml(date.toISOString())}">${escapeHtml(label)} UTC</time>`;
+}
+
+function tone(value: BrandBrainGateTone): BrandBrainGateTone {
+  return value === 'pass' || value === 'wait' || value === 'blocked' ? value : 'blocked';
+}
+
+function gate(view: BrandBrainGateView, index: number): string {
+  return `<article class="bbc-gate ${tone(view.tone)}"><small>${String(index + 1).padStart(2, '0')} · ${escapeHtml(view.label)}</small><strong>${escapeHtml(view.stateLabel)}</strong><p>${escapeHtml(view.detail)}</p></article>`;
+}
+
+function source(view: BrandBrainSourceView): string {
+  return `<li class="bbc-source${view.quarantined ? ' quarantined' : ''}"><div><strong>${escapeHtml(view.assetRoleLabel)}</strong><code>${escapeHtml(view.sourceId)}</code></div><div class="bbc-source-meta"><span class="bbc-mini">${escapeHtml(view.authorityLabel)}</span><span class="bbc-mini">${escapeHtml(view.ownershipLabel)}</span><span class="bbc-mini">${escapeHtml(view.licenceLabel)}</span></div><code>${escapeHtml(view.digestLabel)}</code></li>`;
+}
+
+function specialist(view: BrandBrainSpecialistView, index: number): string {
+  const capabilities = view.capabilities.length
+    ? view.capabilities.map((capability) => `<span class="bbc-mini">${escapeHtml(capability)}</span>`).join('')
+    : '<span class="bbc-mini">Capabilities awaiting inventory</span>';
+  return `<li class="bbc-specialist"><span class="bbc-index">${String(index + 1).padStart(2, '0')}</span><div><h3>${escapeHtml(view.name)}</h3><span class="bbc-specialist-id">${escapeHtml(view.profileId)}</span><div class="bbc-capabilities">${capabilities}</div>${view.blockedReason ? `<p class="bbc-blocker">${escapeHtml(view.blockedReason)}</p>` : ''}</div><div class="bbc-runtime"><span class="bbc-chip ${view.runtimeReady ? 'good' : 'wait'}">${escapeHtml(view.runtimeLabel)}</span><code>${escapeHtml(view.brandDigestLabel)}</code></div></li>`;
+}
+
+function conflict(view: BrandBrainConflictView): string {
+  return `<section class="bbc-panel bbc-conflict" id="${BRAND_BRAIN_QUARANTINE_ANCHOR}" aria-labelledby="bbc-conflict-title"><div class="bbc-panel-head"><div><h2 id="bbc-conflict-title">Visual-policy conflict</h2><p>Excluded from every runtime profile until resolved.</p></div><span class="bbc-chip blocked">${escapeHtml(view.statusLabel)}</span></div><div class="bbc-conflict-body"><h3>${escapeHtml(view.title)}</h3><p>${escapeHtml(view.detail)}</p><p><strong>Resolution:</strong> ${escapeHtml(view.resolution)}</p></div></section>`;
+}
+
+function actionLink(view: BrandBrainReadOnlyActionView, primary = false): string {
+  return `<a class="bbc-action${primary ? ' primary' : ''}" href="${escapeHtml(view.href)}">${escapeHtml(view.label)}</a>`;
+}
+
+export function renderBrandBrainBody(
+  view: BrandBrainView,
+  options: RenderBrandBrainOptions = {},
+): string {
+  const brandBrainLabel = options.brainLabel ?? 'Brand Brain';
+  const externalProfiles = view.externalProfiles.map((profile) => `<li class="bbc-external-item"><div class="bbc-external-head"><h3>${escapeHtml(profile.name)}</h3><span class="bbc-chip wait">${escapeHtml(profile.statusLabel)}</span></div><p>${escapeHtml(profile.purpose)}</p><code>${escapeHtml(profile.profileId)} · ${escapeHtml(profile.callableLabel)}</code></li>`).join('');
+  const actions = view.actions.map((entry, index) => actionLink(entry, index === 0)).join('');
+  return `${renderContentWorkspaceNavigation('brain', {
+    brandBrainAvailable: true,
+    brainLabel: brandBrainLabel,
+  })}<style>${BRAND_BRAIN_STYLE}</style><section class="bbc" aria-labelledby="bbc-title">
+    <header class="bbc-hero"><div class="bbc-hero-copy"><div class="bbc-kicker">Property Predator · owned intelligence</div><h1 id="bbc-title">Reuse the brain.<br><em>Prove every part.</em></h1><p>The source system, asset inventory and specialist bots stay authoritative. Growth HQ records their metadata, governance and evaluation readiness without copying prompt bodies or pretending private ChatGPT bots are callable APIs.</p></div><aside class="bbc-effects" aria-label="Provider effects status"><small>Runtime safety</small><strong>PROVIDER EFFECTS OFF</strong><p>No model call, generation, message, post, schedule, purchase or provider operation can start from this page.</p></aside></header>
+    <div class="bbc-truth"><span class="bbc-truth-mark">Metadata only</span><p><strong>No raw prompts, knowledge files, source paths, storage keys, customer records or secrets are shown.</strong> This page is a read-only governance window.</p><span class="bbc-dataset">${escapeHtml(view.datasetLabel)}</span></div>
+    <section class="bbc-metrics" aria-label="Brand Brain summary"><div class="bbc-metric"><small>Source specialists</small><strong>${safeCount(view.metrics.specialistCount)}</strong><span>Existing source profiles inventoried</span></div><div class="bbc-metric wait"><small>Founder specialists</small><strong>${safeCount(view.metrics.externalAwaitingCount)}</strong><span>Awaiting reviewed exports</span></div><div class="bbc-metric"><small>Source assets</small><strong>${safeCount(view.metrics.sourceCount)}</strong><span>Hash-addressed metadata records</span></div><div class="bbc-metric"><small>Artwork references</small><strong>${safeCount(view.metrics.artworkCount)}</strong><span>Catalogue references, not copied bytes</span></div><div class="bbc-metric ${view.metrics.runtimeReadyCount > 0 ? 'ready' : 'wait'}"><small>Runtime ready</small><strong>${safeCount(view.metrics.runtimeReadyCount)}</strong><span>of ${safeCount(view.metrics.specialistCount)} source specialists</span></div></section>
+    <section class="bbc-gates" aria-labelledby="bbc-gates-title"><div class="bbc-section-heading"><div><h2 id="bbc-gates-title">Release readiness</h2><p>Every gate binds to the same canonical source release and brand hash.</p></div><span class="bbc-readiness${view.readyToActivate ? ' ready' : ''}">${view.readyToActivate ? 'All gates passed' : 'Runtime remains locked'}</span></div><div class="bbc-gate-grid">${view.gates.map(gate).join('')}</div></section>
+    <div class="bbc-layout"><div class="bbc-stack">
+      <section class="bbc-panel bbc-release" id="${BRAND_BRAIN_SOURCE_RELEASE_ANCHOR}" aria-labelledby="bbc-release-title"><div class="bbc-panel-head"><div><h2 id="bbc-release-title">Canonical source release</h2><p>Immutable identifiers and digests only. Full-text authority stays in the owned source system.</p></div><span class="bbc-chip ${view.release.sourceFresh ? 'good' : 'blocked'}">${escapeHtml(view.release.sourceFreshLabel)}</span></div><div class="bbc-release-grid"><div class="bbc-proof"><strong>Source release</strong><code>${escapeHtml(view.release.sourceReleaseId)}</code></div><div class="bbc-proof"><strong>Recorded</strong>${time(view.release.recordedAt)}</div><div class="bbc-proof"><strong>Manifest SHA-256</strong><code>${escapeHtml(view.release.manifestDigestLabel)}</code></div><div class="bbc-proof"><strong>Runtime brand SHA-256</strong><code>${escapeHtml(view.release.runtimeBrandDigestLabel)}</code></div></div><ul class="bbc-sources" aria-label="Source metadata">${view.sources.map(source).join('')}</ul></section>
+      <section class="bbc-panel" aria-labelledby="bbc-specialists-title"><div class="bbc-panel-head"><div><h2 id="bbc-specialists-title">Existing source specialists</h2><p>Six owned roles share one reviewed Brand Brain. Their source instructions remain at source.</p></div><span class="bbc-chip">${safeCount(view.metrics.specialistCount)} inventoried</span></div><ol class="bbc-specialists">${view.specialists.map(specialist).join('')}</ol></section>
+    </div><aside class="bbc-stack">
+      <section class="bbc-panel bbc-external" id="${BRAND_BRAIN_FOUNDER_EXPORT_ANCHOR}" aria-labelledby="bbc-external-title"><div class="bbc-panel-head"><div><h2 id="bbc-external-title">Founder ChatGPT specialists</h2><p>Known to exist; not silently recreated or treated as API endpoints.</p></div><span class="bbc-chip wait">${safeCount(view.metrics.externalAwaitingCount)} waiting</span></div><ul class="bbc-external-list">${externalProfiles}</ul><div class="bbc-export-note"><strong>Founder export required.</strong> Import only reviewed instructions, owned knowledge files, approved examples and tool requirements. Personal conversations, customer-private data and credentials stay out.</div></section>
+      ${view.conflict ? conflict(view.conflict) : ''}
+      <section class="bbc-panel" aria-labelledby="bbc-boundary-title"><div class="bbc-panel-head"><div><h2 id="bbc-boundary-title">Safe boundary</h2><p>What this slice can and cannot do.</p></div><span class="bbc-chip good">Read only</span></div><div class="bbc-boundary"><ul><li>Show source-labelled, hash-addressed inventory metadata</li><li>Show governance and golden-evaluation readiness</li><li>Keep conflicts visibly quarantined</li><li class="locked">No raw prompt or knowledge-file display</li><li class="locked">No review or activation command</li><li class="locked">No model or provider effect</li></ul></div><div class="bbc-actions">${actions}</div></section>
+    </aside></div>
+    <footer class="bbc-footer"><span><strong>${escapeHtml(view.workspaceName)}</strong> · snapshot ${time(view.asOf)}</span><span>${view.illustrative ? 'Illustrative fixture · ' : ''}${view.activated ? 'Activation recorded; provider effects still off' : 'Not activated · provider effects off'}</span></footer>
+  </section>`;
+}

@@ -21,6 +21,7 @@ import {
   type ContentControlRoomItemView,
   type ContentControlRoomView,
 } from './content-control-room-presenter.js';
+import { renderContentWorkspaceNavigation } from './content-workspace-navigation.js';
 
 export interface ContentControlRoomActionSecurity {
   readonly csrfToken: string;
@@ -32,6 +33,8 @@ export interface ContentControlRoomActionSecurity {
 
 export interface RenderContentControlRoomOptions {
   readonly security?: ContentControlRoomActionSecurity;
+  readonly brandBrainAvailable?: boolean;
+  readonly brandBrainLabel?: string;
 }
 
 const CHANNEL_OPTIONS: readonly Readonly<{ value: ContentControlRoomChannel; label: string }>[] = Object.freeze([
@@ -206,7 +209,13 @@ export function renderContentControlRoomBody(
   const truncationTruth = view.inputTruncated
     ? ' The presenter rejected unbounded output and rendered only the first 100 records.'
     : '';
-  return `<style data-property-predator-content-control>${CONTENT_CONTROL_ROOM_STYLE}</style><article class="ccr" aria-labelledby="ccr-title">
+  const workspaceNavigation = options.brandBrainAvailable
+    ? renderContentWorkspaceNavigation('library', {
+        brandBrainAvailable: true,
+        brainLabel: options.brandBrainLabel,
+      })
+    : '';
+  return `${workspaceNavigation}<style data-property-predator-content-control>${CONTENT_CONTROL_ROOM_STYLE}</style><article class="ccr" aria-labelledby="ccr-title">
     <header class="ccr-hero"><div class="ccr-hero-copy"><div class="ccr-kicker">Growth HQ · Content control</div><h1 id="ccr-title">Every asset. Every version. <em>No guesswork.</em></h1><p>Reuse the owned Property Predator content machine, then hold every revision behind an exact approval and a fresh source proof. Fast to inspect. Impossible to confuse with a live publishing screen.</p></div><aside class="ccr-snapshot" aria-label="Content catalogue snapshot"><span>Company-owned catalogue</span><strong>${escapeHtml(view.workspaceName)}</strong><small>${safeCount(view.sourceCount)} source system${view.sourceCount === 1 ? '' : 's'} · viewed ${time(view.asOf)}</small></aside></header>
     <section class="ccr-truth" aria-label="Content safety boundary"><span class="ccr-truth-mark">Truth boundary</span><p><strong>Approval and outbound use are locked.</strong> This catalogue currently shows identity, provenance and hashes, but not the exact text or artwork a human must inspect. No post, message, schedule or provider call happens here.</p><span class="ccr-readonly">${view.canManage ? 'Fail-closed controls' : view.canWrite ? 'Submit controls' : 'Review control only'}</span></section>${notice(view.notice)}
     <section class="ccr-metrics" aria-label="Loaded catalogue summary"><div class="ccr-metric"><small>Latest versions loaded</small><strong>${safeCount(view.metrics.loaded)}</strong><span>Bounded to 100 exact records</span></div><div class="ccr-metric"><small>Recorded approvals</small><strong>${safeCount(view.metrics.exactApproved)}</strong><span>Hash-bound decisions, not reviewable here</span></div><div class="ccr-metric eligible"><small>Outbound eligible</small><strong>${safeCount(view.metrics.publishable)}</strong><span>Locked until exact content is reviewable</span></div><div class="ccr-metric attention"><small>Needs attention</small><strong>${safeCount(view.metrics.needsAttention)}</strong><span>Review representation or source proof blocked</span></div></section>

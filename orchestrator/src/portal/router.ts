@@ -67,6 +67,10 @@ import {
   PORTAL_COMPANY_CONTENT_REVIEW_REPRESENTATION_AVAILABLE,
   type PortalCompanyContentService,
 } from './company-content-service.js';
+import { BRAND_BRAIN_ROUTE } from './brand-brain-actions.js';
+import { presentBrandBrain } from './brand-brain-presenter.js';
+import type { PortalBrandBrainService } from './brand-brain-service.js';
+import { renderBrandBrainBody } from './brand-brain-view.js';
 import {
   CONVERSION_INBOX_MAX_CONVERSATIONS,
   CONVERSION_INBOX_ROUTE,
@@ -184,6 +188,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   operatorActions?: PortalOperatorActionCentreService;
   /** Company-owned immutable content catalogue. It exposes no provider or publish operation. */
   companyContent?: PortalCompanyContentService;
+  /** Read-only owned-intelligence metadata. It exposes no review, activation or model operation. */
+  brandBrain?: PortalBrandBrainService;
   /** TEST-only conversion queue. Thread detail remains a separate optional projection. */
   inbox?: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval/queue commands. It has no provider dispatcher. */
@@ -427,7 +433,7 @@ function optionalPortalCapabilities(deps: PortalDeps): readonly PlatformCapabili
   if (deps.kind !== 'postgres') return [];
   return [
     ...(deps.operatorActions ? ['actions.read'] as const : []),
-    ...(deps.companyContent ? ['content.drafts.read'] as const : []),
+    ...(deps.companyContent || deps.brandBrain ? ['content.drafts.read'] as const : []),
     ...(deps.inbox ? ['conversations.read'] as const : []),
   ];
 }
@@ -1214,6 +1220,54 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
   }
 
+  // ── Brand Brain: owned-intelligence metadata and readiness only ──
+  if (deps.kind === 'postgres' && p === BRAND_BRAIN_ROUTE && method === 'GET') {
+    const brainNavigation = deps.productProfile?.contentWorkspace;
+    if (!deps.brandBrain || brainNavigation?.brainRoute !== BRAND_BRAIN_ROUTE) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Brand Brain not connected',
+        message: 'The read-only owned-intelligence inventory is not enabled for this workspace.',
+        active: 'content',
+        backHref: '/portal/content',
+        backLabel: 'Return to Content Control',
+      }));
+    }
+    try {
+      const outcome = await deps.brandBrain.snapshot(crmIdentity(sessionToken, deps));
+      if (!outcome.ok) {
+        const status = outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden'
+          ? 403
+          : outcome.kind === 'not_found'
+            ? 404
+            : 503;
+        return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+          title: status === 503 ? 'Brand Brain temporarily unavailable' : 'Brand Brain not available',
+          message: outcome.message,
+          active: 'content',
+          backHref: '/portal/content',
+          backLabel: 'Return to Content Control',
+        }));
+      }
+      const view = presentBrandBrain(outcome.snapshot);
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      return sendHtml(res, 200, operationalPage(
+        outcome.snapshot.workspace.workspaceName,
+        renderBrandBrainBody(view, { brainLabel: brainNavigation.brainLabel }),
+        deps,
+        'content',
+        csrfToken,
+      ));
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Brand Brain temporarily unavailable',
+        message: 'No source, review, evaluation, activation or provider state was changed. Try again shortly.',
+        active: 'content',
+        backHref: '/portal/content',
+        backLabel: 'Return to Content Control',
+      }));
+    }
+  }
+
   // ── company-owned content control: immutable catalogue evidence only ──
   if (deps.kind === 'postgres' && p === CONTENT_CONTROL_ROOM_ROUTE && method === 'GET') {
     if (!deps.companyContent) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
@@ -1257,6 +1311,11 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       return sendHtml(res, 200, operationalPage(
         outcome.snapshot.workspace.workspaceName,
         renderContentControlRoomBody(view, {
+          brandBrainAvailable: Boolean(
+            deps.brandBrain
+            && deps.productProfile?.contentWorkspace?.brainRoute === BRAND_BRAIN_ROUTE
+          ),
+          brandBrainLabel: deps.productProfile?.contentWorkspace?.brainLabel,
           security: view.canWrite ? {
             csrfToken,
             requestApprovalKeys: Object.fromEntries(view.items.map((item) => [

@@ -38,6 +38,12 @@ export interface PortalReadinessRail {
   href?: string;
 }
 
+export interface PortalContentWorkspaceNavigation {
+  readonly brainRoute: '/portal/content/brain';
+  readonly brainLabel: string;
+  readonly brainSummary: string;
+}
+
 export interface PortalProductProfile {
   id: PortalProductProfileId;
   productName: string;
@@ -59,6 +65,8 @@ export interface PortalProductProfile {
   moduleLabels: Readonly<Partial<Record<PlatformModuleId, string>>>;
   journeyBlueprints: readonly PortalJourneyBlueprint[];
   readinessRails: readonly PortalReadinessRail[];
+  /** Product-owned nested content navigation; presentation only, never authority. */
+  contentWorkspace?: PortalContentWorkspaceNavigation;
 }
 
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
@@ -109,6 +117,16 @@ function createProfile(profile: PortalProductProfile): PortalProductProfile {
       ...(href ? { href } : {}),
     });
   }));
+  const contentWorkspace = profile.contentWorkspace
+    ? Object.freeze({
+        brainRoute: profile.contentWorkspace.brainRoute,
+        brainLabel: checkedText(profile.contentWorkspace.brainLabel, 'Brand Brain navigation label'),
+        brainSummary: checkedText(profile.contentWorkspace.brainSummary, 'Brand Brain navigation summary'),
+      })
+    : undefined;
+  if (contentWorkspace && contentWorkspace.brainRoute !== '/portal/content/brain') {
+    throw new Error('Brand Brain navigation must use the canonical portal route');
+  }
   return Object.freeze({
     ...profile,
     productName: checkedText(profile.productName, 'productName'),
@@ -130,6 +148,7 @@ function createProfile(profile: PortalProductProfile): PortalProductProfile {
     moduleLabels,
     journeyBlueprints,
     readinessRails,
+    ...(contentWorkspace ? { contentWorkspace } : {}),
   });
 }
 
@@ -223,6 +242,11 @@ export const PROPERTY_PREDATOR_GROWTH_PROFILE = createProfile({
     { id: 'webinars', label: 'Predator Briefing', summary: 'Live registration, attendance and follow-up journeys.', state: 'planned' },
     { id: 'automations', label: 'Conversion recipes', summary: 'Approval-led sequences with visible stop rules.', state: 'planned' },
   ],
+  contentWorkspace: {
+    brainRoute: '/portal/content/brain',
+    brainLabel: 'Brand Brain',
+    brainSummary: 'Inventory, governance and evaluation readiness for owned Property Predator AI specialists.',
+  },
 });
 
 const PROFILES: Readonly<Record<PortalProductProfileId, PortalProductProfile>> = Object.freeze({
