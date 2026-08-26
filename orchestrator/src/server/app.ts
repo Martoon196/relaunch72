@@ -204,6 +204,19 @@ export function createApp(deps: AppDeps) {
       }
     }
 
+    // The custom domain is the front door to Growth HQ. Keep the bare origin
+    // useful instead of exposing the API router's JSON 404 to a human visitor.
+    // `/portal` owns the authentication redirect, so this remains same-origin
+    // and never leaks a setup token or reflects an untrusted Host header.
+    if (route === 'GET /') {
+      res.writeHead(302, {
+        location: '/portal',
+        'cache-control': 'no-store',
+      });
+      res.end();
+      return;
+    }
+
     // The admin control room is same-origin, browser-navigated HTML — handled
     // before the CORS/API layer, with its own auth gate.
     if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {

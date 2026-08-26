@@ -192,6 +192,16 @@ test('operational routes are pinned to the canonical host while probes remain av
   assert.equal(canonical.statusCode, 404);
 });
 
+test('GET / sends a human visitor to the secure portal without caching the redirect', async () => {
+  const { handler } = app({ canonicalHost: 'hq.propertypredator.com' });
+  const response = res();
+  await handler(req('GET', '/', '', { host: 'hq.propertypredator.com' }), response);
+  assert.equal(response.statusCode, 302);
+  assert.equal(response._headers.location, '/portal');
+  assert.equal(response._headers['cache-control'], 'no-store');
+  assert.equal(response._body, '');
+});
+
 test('GET /ready fails closed until the secure portal is mounted', async () => {
   const { handler } = app({ portalBlockers: ['required PostgreSQL portal services did not pass readiness'] });
   const unavailable = res();
