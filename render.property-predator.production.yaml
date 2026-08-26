@@ -52,6 +52,31 @@ services:
       - key: SESSION_SECRET
         generateValue: true
 
+      # Shared Property Predator identity bridge. The checked-in enable switch
+      # remains OFF until both repositories are deployed, the exact client
+      # values are manually confirmed and an end-to-end seed login passes.
+      - key: PROPERTY_PREDATOR_SSO_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_SSO_ISSUER
+        value: https://propertypredator.com
+      - key: PROPERTY_PREDATOR_SSO_AUTHORIZE_URL
+        value: https://propertypredator.com/sso.html
+      - key: PROPERTY_PREDATOR_SSO_TOKEN_URL
+        value: https://propertypredator.com/api/auth/sso/token
+      - key: PROPERTY_PREDATOR_SSO_CLIENT_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_SSO_CLIENT_SECRET
+        sync: false
+      - key: PROPERTY_PREDATOR_SSO_REDIRECT_URI
+        value: https://hq.propertypredator.com/portal/auth/property-predator/callback
+      # First-link authority is explicit server configuration. The user UUID
+      # must be the pre-existing office@propertypredator.com HQ founder; the
+      # allowlist is the verified main-site Google identity, confirmed by hand.
+      - key: PROPERTY_PREDATOR_SSO_BOOTSTRAP_USER_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_SSO_BOOTSTRAP_EMAILS
+        sync: false
+
       # Payments, public capture, demo data, automatic imports and legacy rails
       # remain unavailable. Provider credentials for those systems are absent.
       - key: PLATFORM_SUBSCRIPTIONS_ENABLED

@@ -33,6 +33,9 @@ import { canonicalIntake } from '../intake/canonical.js';
 import { buildPgPortalPlatform, postgresPortalEnabled, type PgPortalPlatform } from '../portal/postgres-platform.js';
 import { resolvePortalProductProfile } from '../portal/product-profile.js';
 import {
+  composePropertyPredatorSso,
+} from '../portal/property-predator-sso.js';
+import {
   createExternalEventCommandDatabasePool,
   createMailgunWebhookCommandDatabasePool,
   createWebhookDatabasePool,
@@ -414,11 +417,19 @@ async function main(): Promise<void> {
       throw new Error('required PostgreSQL portal services did not pass readiness');
     }
     const securePortalCookie = Boolean(cfg.production) || Boolean(portalBaseUrl?.startsWith('https://'));
+    const propertyPredatorSsoComposition = postgresPortal
+      ? composePropertyPredatorSso(process.env, cfg.sessionSecret, securePortalCookie)
+      : { state: 'disabled' as const };
+    const propertyPredatorSso = propertyPredatorSsoComposition.client;
+    if (propertyPredatorSsoComposition.state === 'invalid') {
+      console.warn('⚠  Property Predator SSO configuration is invalid; shared-login routes remain disabled and native Growth HQ password access remains mounted.');
+    }
     if (postgresPortal) {
       portal = buildPostgresPortalDeps({
         sessionSecret: cfg.sessionSecret,
         secure: securePortalCookie,
         auth: postgresPortal.auth,
+        propertyPredatorSso,
         crm: postgresPortal.crm,
         journeys: postgresPortal.journeys,
         operatorActions: postgresPortal.operatorActions,
@@ -427,7 +438,7 @@ async function main(): Promise<void> {
         inboxCommands: postgresPortal.inboxCommands,
         productProfile: portalProductProfile,
       });
-      console.log('Canonical PostgreSQL client portal mounted at /portal; JSON portal stores are not composed.');
+      console.log(`Canonical PostgreSQL client portal mounted at /portal; JSON portal stores are not composed; Property Predator SSO ${propertyPredatorSso ? 'ready' : 'disabled'}.`);
     } else {
       if (cfg.production) {
         throw new Error('production portal requires PostgreSQL mode; the legacy JSON portal is local-development only');

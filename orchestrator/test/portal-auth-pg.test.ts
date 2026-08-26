@@ -9,12 +9,37 @@ import {
   type PortalScryptWorkLimiter,
 } from '../src/portal/accounts.js';
 import { PgPortalAuthService } from '../src/portal/auth-pg-service.js';
+import type { PortalExternalIdentityAssertion } from '../src/portal/auth-service.js';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const WORKSPACE_ID = '22222222-2222-4222-8222-222222222222';
 const SESSION_ID = '33333333-3333-4333-8333-333333333333';
 const USER_EMAIL = 'owner@example.test';
 const NOW = Date.parse('2026-08-24T10:00:00.000Z');
+
+function externalAssertion(
+  over: Partial<PortalExternalIdentityAssertion> = {},
+): PortalExternalIdentityAssertion {
+  return {
+    issuer: 'https://propertypredator.com',
+    subject: '44444444-4444-4444-8444-444444444444',
+    email: 'martin.howard1984@gmail.com',
+    emailVerified: true,
+    issuedAt: new Date(NOW - 10_000).toISOString(),
+    expiresAt: new Date(NOW + 5 * 60_000).toISOString(),
+    affiliate: {
+      member: true,
+      affiliateId: '55555555-5555-4555-8555-555555555555',
+      code: 'founder_01',
+      codeStatus: 'active',
+    },
+    attribution: {
+      referrerAffiliateId: null,
+      attachedAt: null,
+    },
+    ...over,
+  };
+}
 
 interface Call { sql: string; values?: readonly unknown[] }
 
@@ -320,4 +345,99 @@ test('a password or membership race fails as invalid login and revocation hashes
   await service.revoke(token);
   const revoke = calls.find((call) => call.sql.includes('revoke-session'))!;
   assert.deepEqual(revoke.values, [createHash('sha256').update(token).digest()]);
+});
+
+test('verified Property Predator identity creates the same opaque HQ session without changing canonical email', async () => {
+  const calls: Call[] = [];
+  const service = new PgPortalAuthService({
+    readPool: pool(() => result([])),
+    commandPool: pool((call) => {
+      calls.push(call);
+      return result([{
+        session_id: SESSION_ID,
+        user_id: USER_ID,
+        // The founder's canonical HQ contact email intentionally differs from
+        // the verified main-site Google identity used for the one-time link.
+        user_email: 'office@propertypredator.com',
+        selected_workspace_id: WORKSPACE_ID,
+        expires_at: new Date(NOW + 24 * 60 * 60 * 1000).toISOString(),
+      }]);
+    }),
+  });
+  const assertion = externalAssertion();
+  const authenticated = await service.loginExternal(assertion, {
+    now: NOW,
+    ipAddress: '192.0.2.10',
+    userAgent: 'Growth HQ test browser',
+  }, USER_ID);
+  assert.equal(authenticated?.userEmail, 'office@propertypredator.com');
+  assert.equal(authenticated?.userId, USER_ID);
+  assert.equal(authenticated?.workspaceId, WORKSPACE_ID);
+  assert.match(authenticated?.sessionToken ?? '', /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0]!.sql, /create_portal_external_identity_session/);
+  assert.deepEqual(calls[0]!.values?.slice(0, 11), [
+    assertion.issuer,
+    assertion.subject,
+    assertion.email,
+    true,
+    USER_ID,
+    true,
+    assertion.affiliate.affiliateId,
+    assertion.affiliate.code,
+    assertion.affiliate.codeStatus,
+    null,
+    null,
+  ]);
+  assert.ok(Buffer.isBuffer(calls[0]!.values?.[11]) && (calls[0]!.values?.[11] as Buffer).length === 32);
+  assert.ok(Buffer.isBuffer(calls[0]!.values?.[12]) && (calls[0]!.values?.[12] as Buffer).length === 32);
+  assert.deepEqual(calls[0]!.values?.[13], createHash('sha256').update('192.0.2.10').digest());
+  assert.deepEqual(calls[0]!.values?.[14], createHash('sha256').update('Growth HQ test browser').digest());
+  assert.equal(calls[0]!.values?.includes(authenticated!.sessionToken), false, 'raw opaque session never enters SQL');
+});
+
+test('external login rejects any issuer, unverified email or incomplete affiliate identity before PostgreSQL', async () => {
+  let calls = 0;
+  const service = new PgPortalAuthService({
+    readPool: pool(() => result([])),
+    commandPool: pool(() => { calls += 1; return result([]); }),
+  });
+  assert.equal(await service.loginExternal(
+    externalAssertion({ issuer: 'https://attacker.example' }),
+    { now: NOW },
+    USER_ID,
+  ), null);
+  assert.equal(await service.loginExternal(
+    { ...externalAssertion(), emailVerified: false } as unknown as PortalExternalIdentityAssertion,
+    { now: NOW },
+    USER_ID,
+  ), null);
+  assert.equal(await service.loginExternal(
+    externalAssertion({ affiliate: { member: true, affiliateId: null, code: null, codeStatus: null } }),
+    { now: NOW },
+    USER_ID,
+  ), null);
+  assert.equal(calls, 0);
+});
+
+test('external identity without an existing link or bootstrap membership creates no HQ session', async () => {
+  const calls: Call[] = [];
+  const service = new PgPortalAuthService({
+    readPool: pool(() => result([])),
+    commandPool: pool((call) => { calls.push(call); return result([]); }),
+  });
+  assert.equal(await service.loginExternal(externalAssertion({
+    email: 'affiliate@example.test',
+    affiliate: { member: false, affiliateId: null, code: null, codeStatus: null },
+  }), { now: NOW }), null);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.values?.[4], null, 'the assertion cannot choose a user or workspace');
+});
+
+test('external link/member race fails as an invalid sign-in', async () => {
+  const service = new PgPortalAuthService({
+    readPool: pool(() => result([])),
+    commandPool: pool(() => { throw Object.assign(new Error('already linked'), { code: '42501' }); }),
+  });
+  assert.equal(await service.loginExternal(externalAssertion(), { now: NOW }, USER_ID), null);
 });

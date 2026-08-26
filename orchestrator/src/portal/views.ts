@@ -10,6 +10,7 @@ import { PIPELINE_STAGES, type PipelineStage } from '../crm/types.js';
 import { CORE_PLATFORM_MODULES } from '../platform/modules.js';
 import { appShell, escapeHtml as esc, icon, pageHead, plannedPortalModules, portalModuleIcon, productBrandMark, productBrandName } from './ui.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
+import { PROPERTY_PREDATOR_SSO_START_ROUTE } from './property-predator-sso.js';
 
 function loginModuleBadges(productProfile: PortalProductProfile): string {
   const visible = new Set(productProfile.visibleNavigation);
@@ -87,8 +88,17 @@ export function loginPage(
   email = '',
   loginCsrfToken = '',
   productProfile: PortalProductProfile = RELAUNCH72_PRODUCT_PROFILE,
+  options: { propertyPredatorSso?: boolean } = {},
 ): string {
   const productName = esc(productProfile.productName);
+  const sharedSignIn = options.propertyPredatorSso
+    ? `<div class="auth-sso" aria-label="Shared Property Predator sign in">
+        <a class="button secondary auth-provider-button" href="${PROPERTY_PREDATOR_SSO_START_ROUTE}?provider=google"><span class="auth-provider-mark google" aria-hidden="true">G</span><span>Continue with Google</span></a>
+        <a class="button secondary auth-provider-button" href="${PROPERTY_PREDATOR_SSO_START_ROUTE}"><span class="auth-provider-mark predator" aria-hidden="true">P</span><span>Continue with Property Predator</span></a>
+        <p class="auth-sso-note">First shared sign-in may ask you to confirm or link your verified Google account on Property Predator.</p>
+      </div>
+      <div class="auth-divider"><span>or use your Growth HQ password</span></div>`
+    : '';
   return `${pageHead(`${productProfile.productName} — Sign in`, productProfile)}<body>
     <main class="auth-shell">
       <section class="auth-panel" aria-labelledby="login-title">
@@ -97,13 +107,14 @@ export function loginPage(
           <h1 id="login-title">Welcome back.</h1>
           <p class="auth-lead">${esc(productProfile.auth.lead)}</p>
           ${error ? `<div class="auth-error" role="alert">${icon('lock')}<span>${esc(error)}</span></div>` : ''}
+          ${sharedSignIn}
           <form method="post" action="/portal/login">
             <input type="hidden" name="_login_csrf" value="${esc(loginCsrfToken)}">
             <div class="field"><label for="email">Email address</label><input id="email" name="email" type="email" inputmode="email" autocomplete="username" autocapitalize="none" spellcheck="false" value="${esc(email)}" required autofocus></div>
             <div class="field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required></div>
             <button class="button auth-button" type="submit">Sign in securely ${icon('chevron')}</button>
           </form>
-          <p class="auth-foot">Private sandbox · secure session · no public publishing</p>
+          <p class="auth-foot">Private workspace · secure session · password access remains available</p>
         </div>
       </section>
       <aside class="auth-story" aria-label="Product preview">

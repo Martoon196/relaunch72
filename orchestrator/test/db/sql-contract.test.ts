@@ -32,6 +32,7 @@ const migration25Url = new URL('../../src/db/migrations/0025_property_predator_e
 const migration26Url = new URL('../../src/db/migrations/0026_database_installation_identity.sql', import.meta.url);
 const migration27Url = new URL('../../src/db/migrations/0027_property_predator_founder_bootstrap.sql', import.meta.url);
 const migration28Url = new URL('../../src/db/migrations/0028_operator_action_control_foundation.sql', import.meta.url);
+const migration29Url = new URL('../../src/db/migrations/0029_property_predator_sso_identity.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -470,9 +471,9 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums native identity through the Operator Action control boundary', async () => {
+test('bundled migration discovery orders and checksums native identity through the Property Predator SSO boundary', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-24);
+  const tail = migrations.slice(-25);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0005_canonical_portal_identity.sql', version: 5 },
     { filename: '0006_customer_provisioning.sql', version: 6 },
@@ -498,6 +499,7 @@ test('bundled migration discovery orders and checksums native identity through t
     { filename: '0026_database_installation_identity.sql', version: 26 },
     { filename: '0027_property_predator_founder_bootstrap.sql', version: 27 },
     { filename: '0028_operator_action_control_foundation.sql', version: 28 },
+    { filename: '0029_property_predator_sso_identity.sql', version: 29 },
   ]);
   const sources = [
     (await readFile(migration5Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -524,6 +526,7 @@ test('bundled migration discovery orders and checksums native identity through t
     (await readFile(migration26Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration27Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration28Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration29Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));

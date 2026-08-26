@@ -54,7 +54,7 @@ async function invoke(
   );
 }
 
-test('schema 28 permanently retires the schema-27 founder bootstrap without partial writes', {
+test('schema 29 keeps the schema-27 founder bootstrap permanently retired without partial writes', {
   skip,
 }, async () => {
   const pool = await openTestDatabase();
@@ -62,7 +62,7 @@ test('schema 28 permanently retires the schema-27 founder bootstrap without part
     await resetIdentityTables(pool);
     const migrations = await discoverMigrations();
     const reviewedLedger = propertyPredatorFounderMigrationLedger(migrations);
-    assert.equal(migrations.length, 28);
+    assert.equal(migrations.length, 29);
     assert.equal(reviewedLedger.length, 27);
     assert.equal(
       reviewedLedger.at(-1)?.checksum,
@@ -76,7 +76,7 @@ test('schema 28 permanently retires the schema-27 founder bootstrap without part
     const installationId = installation[0]!.installation_id;
 
     // The one-time production bootstrap was reviewed for exactly migrations
-    // 0001-0027. Once 0028 exists, even that correct historical ledger must
+    // 0001-0027. Once 0028 or any later migration exists, even that correct historical ledger must
     // fail closed instead of silently provisioning against a newer schema.
     await expectPostgresError(
       invoke(pool, installationId, reviewedLedger),

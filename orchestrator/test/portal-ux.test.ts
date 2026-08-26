@@ -164,7 +164,7 @@ test('login and billing keep the same accessible premium shell semantics', () =>
   assert.match(login, /value="owner@example.test"/);
   assert.match(login, /<span>CRM<\/span>/);
   assert.match(login, /<span>Content<\/span>/);
-  assert.match(login, /Private sandbox · secure session · no public publishing/);
+  assert.match(login, /Private workspace · secure session · password access remains available/);
 
   const setupCsrf = Buffer.alloc(32, 7).toString('base64url');
   const setup = accountSetupPage(setupCsrf, 'Those passwords do not match.');

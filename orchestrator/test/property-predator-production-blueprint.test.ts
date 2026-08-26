@@ -86,6 +86,33 @@ test('production Blueprint is isolated, manually deployed and fail-closed', () =
   literalValue('PUBLIC_LEAD_CAPTURE_ENABLED', 'false');
   literalValue('PORTAL_DEMO_SEED', 'false');
   literalValue('PROPERTY_PREDATOR_EXTERNAL_EVENTS_ENABLED', 'false');
+  literalValue('PROPERTY_PREDATOR_SSO_ENABLED', 'false');
+  literalValue('PROPERTY_PREDATOR_SSO_ISSUER', 'https://propertypredator.com');
+  literalValue('PROPERTY_PREDATOR_SSO_AUTHORIZE_URL', 'https://propertypredator.com/sso.html');
+  literalValue('PROPERTY_PREDATOR_SSO_TOKEN_URL', 'https://propertypredator.com/api/auth/sso/token');
+  literalValue(
+    'PROPERTY_PREDATOR_SSO_REDIRECT_URI',
+    'https://hq.propertypredator.com/portal/auth/property-predator/callback',
+  );
+  for (const key of [
+    'PROPERTY_PREDATOR_SSO_CLIENT_ID',
+    'PROPERTY_PREDATOR_SSO_CLIENT_SECRET',
+    'PROPERTY_PREDATOR_SSO_BOOTSTRAP_USER_ID',
+    'PROPERTY_PREDATOR_SSO_BOOTSTRAP_EMAILS',
+  ]) secretSlot(key);
+  for (const key of [
+    'PROPERTY_PREDATOR_SSO_ENABLED',
+    'PROPERTY_PREDATOR_SSO_ISSUER',
+    'PROPERTY_PREDATOR_SSO_AUTHORIZE_URL',
+    'PROPERTY_PREDATOR_SSO_TOKEN_URL',
+    'PROPERTY_PREDATOR_SSO_CLIENT_ID',
+    'PROPERTY_PREDATOR_SSO_CLIENT_SECRET',
+    'PROPERTY_PREDATOR_SSO_REDIRECT_URI',
+    'PROPERTY_PREDATOR_SSO_BOOTSTRAP_USER_ID',
+    'PROPERTY_PREDATOR_SSO_BOOTSTRAP_EMAILS',
+  ]) {
+    assert.doesNotMatch(workerManifest, new RegExp(`- key: ${key}\\b`));
+  }
   for (const section of [webManifest, workerManifest]) {
     literalValueIn(section, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'false');
     literalValueIn(section, 'PROPERTY_PREDATOR_EMAIL_DELIVERY_ENABLED', 'false');

@@ -4,6 +4,11 @@ Status: **dark production deployed and verified** on 26 August 2026 at
 `e18acd1`. Provider effects and email delivery remain OFF; emergency pause
 remains ON.
 
+Migration `0029_property_predator_sso_identity.sql` and the shared-login
+runtime are prepared in the current branch but are **not applied or deployed**
+by this document update. The production database remains on its recorded
+schema-28 state until the separately authorised schema-29 cutover below.
+
 The production manifest is [`render.property-predator.production.yaml`](../render.property-predator.production.yaml). It creates two new process-isolated services; it does not alter or reuse the free Relaunch72 payments sandbox in `render.yaml`.
 
 No step in this document authorises customer-data import, customer email, social publishing, payments, WhatsApp, SMS or webinar effects. The first deployment is a locked control plane with email effects off.
@@ -16,6 +21,7 @@ No step in this document authorises customer-data import, customer email, social
 | Canonical origin | `https://hq.propertypredator.com` |
 | Database | A separate Neon production project; PostgreSQL is the only durable portal store |
 | Database access | Four portal roles plus `r72_mailgun_webhook_command` in the web service; only `r72_mailgun_worker_command` in the outbound worker |
+| Shared login | Optional Property Predator authorization-code + PKCE bridge; checked-in production switch OFF; native HQ password remains break-glass |
 | Email | Mailgun EU signed-ingress slot only; outbound key intentionally absent and delivery disabled |
 | Payments | No Stripe secrets; checkout and subscriptions must remain unavailable |
 | Imports | No import credential, job, hook or automatic seed |
@@ -155,6 +161,9 @@ No rollback may enable a provider effect or restore an older credential without 
 - **Mailgun API key:** keep delivery paused, create the replacement, update Render, prove API authentication without sending, then revoke the old key.
 - **Mailgun signing key:** accept the new key only after an explicit rotation window is implemented. Prove new signed test events, then remove the old verifier. Never silently accept both indefinitely.
 - **Session secret:** rotating it signs out every operator. Schedule the change, update the generated value, redeploy and verify login/CSRF before access is restored.
+- **Property Predator SSO client secret:** use a dedicated secret that is not
+  `SESSION_SECRET` or a main-site signing/JWT secret. Keep SSO disabled, rotate
+  both applications together, prove a seed login, then retire the old value.
 
 Never log a secret, URL, email address or raw webhook body during rotation. Evidence records contain redacted identifiers and hashes only.
 
@@ -191,6 +200,71 @@ After the cutover, require all of the following before accepting the release:
   originating task, journey, approval or provider record untouched; and
 - the web and dark worker readiness evidence still reports zero provider
   effects.
+
+## 9. Shared Property Predator login — schema-29 cutover (prepared, not deployed)
+
+Migration `0029_property_predator_sso_identity.sql` adds only the immutable
+Property Predator issuer/subject link, minimal affiliate/source metadata and a
+nullable external-identity provenance marker on otherwise ordinary opaque HQ
+sessions. It creates no user, organisation, workspace or membership, imports no
+affiliate/customer data and grants no provider capability.
+
+This is another exact-ledger cutover. A schema-28 release must reject schema 29,
+and the schema-29 release must reject schema 28. Rehearse on the explicitly
+disposable test database, apply the one forward migration, then immediately
+deploy the exact reviewed commit. Do not rerun the schema-27 founder bootstrap.
+
+Before applying migration 0029:
+
+1. Confirm the existing HQ founder user UUID belongs to canonical contact email
+   `office@propertypredator.com` and already has an active Growth HQ membership.
+   Put that UUID in `PROPERTY_PREDATOR_SSO_BOOTSTRAP_USER_ID`; never guess it.
+2. Confirm the main-site founder/admin Google identity is exactly
+   `martin.howard1984@gmail.com`, is Google-verified, and put only that address
+   in `PROPERTY_PREDATOR_SSO_BOOTSTRAP_EMAILS`. The two emails intentionally do
+   not match: the immutable external subject is linked to the pre-existing HQ
+   user, while the canonical HQ contact email remains unchanged.
+3. Configure client id exactly `growth-hq`; issuer exactly
+   `https://propertypredator.com`; authorize URL exactly
+   `https://propertypredator.com/sso.html`; token URL exactly
+   `https://propertypredator.com/api/auth/sso/token`; and callback exactly
+   `https://hq.propertypredator.com/portal/auth/property-predator/callback`.
+4. Generate one dedicated 32+ character client secret shared only by the two
+   SSO backends. It must not equal `SESSION_SECRET` or any JWT/Google secret.
+5. Keep `PROPERTY_PREDATOR_SSO_ENABLED=false` in the reviewed first schema-29
+   release. Keep provider effects OFF, email delivery OFF and emergency pause
+   ON. SSO activation does not authorise any customer communication.
+
+Activation is a separate configuration step after both applications are live:
+
+1. Set the exact same client id/secret/callback contract on the main site and
+   Growth HQ, then enable SSO only on the web service. The email worker receives
+   none of these values.
+2. Verify `/portal/login` shows **Continue with Google**, **Continue with
+   Property Predator**, and the existing Growth HQ password form.
+3. Use the owned founder Google identity. The browser carries only a one-use
+   authorization code, PKCE state/verifier transaction and the resulting opaque
+   HQ cookie. The client secret travels by HTTPS Basic authentication on the
+   server-to-server token request; no main JWT, refresh token or Google token is
+   retained by HQ.
+4. Confirm the first verified assertion activates and links the pre-existing
+   founder only, retires any outstanding one-time setup link and does not change
+   `office@propertypredator.com`.
+5. Confirm a returning issuer/subject signs in without bootstrap configuration;
+   an arbitrary affiliate gets no HQ user or membership; suspended memberships
+   fail closed; every callback clears its short-lived transaction cookie; and
+   logout/revocation still operates on the normal opaque HQ session.
+
+Federated pilot sessions expire after 24 hours while password sessions retain
+their existing lifetime. This limits stale access after a main-site account
+change. An authenticated main-site lifecycle revocation webhook or backchannel
+introspection contract must revoke sessions by `external_identity_id` before
+shared login expands beyond the owned founder pilot.
+
+If any check fails, set `PROPERTY_PREDATOR_SSO_ENABLED=false` and redeploy/restart
+the web service. Password login remains the break-glass path. Do not reverse
+migration 0029; ship a forward repair. Full protocol and data-boundary details
+are in [`property-predator-shared-login.md`](property-predator-shared-login.md).
 
 ## Current deployed state and remaining activation blockers
 

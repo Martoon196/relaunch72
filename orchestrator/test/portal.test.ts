@@ -22,7 +22,14 @@ import {
 } from '../src/portal/session.js';
 import type { DashboardData } from '../src/portal/data.js';
 import type { BillingView } from '../src/portal/billing.js';
-import type { PortalAuthService } from '../src/portal/auth-service.js';
+import type { PortalAuthService, PortalExternalIdentityAssertion } from '../src/portal/auth-service.js';
+import {
+  PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE,
+  PROPERTY_PREDATOR_SSO_COOKIE,
+  PROPERTY_PREDATOR_SSO_START_ROUTE,
+  composePropertyPredatorSso,
+  type PropertyPredatorSsoClient,
+} from '../src/portal/property-predator-sso.js';
 import type { PortalCrmService } from '../src/portal/crm-service.js';
 import type { PortalJourneyManagerService } from '../src/portal/journey-manager-service.js';
 import type { JourneyManagerReadSnapshot } from '../src/conversion-pg/journey-manager.js';
@@ -113,6 +120,34 @@ function postgresDeps(auth: PortalAuthService, over: Partial<PostgresPortalDeps>
     crm,
     ...over,
     kind: 'postgres',
+  };
+}
+
+const externalAssertion: PortalExternalIdentityAssertion = {
+  issuer: 'https://propertypredator.com',
+  subject: '44444444-4444-4444-8444-444444444444',
+  email: 'martin.howard1984@gmail.com',
+  emailVerified: true,
+  issuedAt: new Date(900_000).toISOString(),
+  expiresAt: new Date(1_100_000).toISOString(),
+  affiliate: {
+    member: true,
+    affiliateId: '55555555-5555-4555-8555-555555555555',
+    code: 'founder_01',
+    codeStatus: 'active',
+  },
+  attribution: { referrerAffiliateId: null, attachedAt: null },
+};
+
+function fakeSso(over: Partial<PropertyPredatorSsoClient> = {}): PropertyPredatorSsoClient {
+  return {
+    begin: () => ({
+      url: 'https://propertypredator.com/sso.html?client_id=growth-hq&state=external-state',
+      cookie: `${PROPERTY_PREDATOR_SSO_COOKIE}=encrypted-transaction; HttpOnly; Secure; SameSite=Lax; Path=${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}; Max-Age=600`,
+    }),
+    complete: async () => ({ assertion: externalAssertion, bootstrapUserId: USER_ID }),
+    clearCookie: () => `${PROPERTY_PREDATOR_SSO_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}; Max-Age=0`,
+    ...over,
   };
 }
 
@@ -375,6 +410,158 @@ test('database auth failure never downgrades to legacy login', async () => {
   const res = await call('POST', '/portal/login', postgresDeps(auth), loginPost({ email: 'owner@frayne.co', password: 'good' }));
   assert.equal(res.statusCode, 503);
   assert.match(res.body, /temporarily unavailable/);
+});
+
+test('Growth HQ login offers shared Google and Property Predator sign-in while keeping password break-glass', async () => {
+  const opaque = Buffer.alloc(32, 19).toString('base64url');
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => ({ sessionToken: opaque, userId: USER_ID, userEmail: 'office@propertypredator.com', workspaceId: WORKSPACE_ID }),
+    revoke: async () => undefined,
+  };
+  const d = postgresDeps(auth, {
+    propertyPredatorSso: fakeSso(),
+    productProfile: PROPERTY_PREDATOR_GROWTH_PROFILE,
+  });
+  const page = await call('GET', '/portal/login', d);
+  assert.equal(page.statusCode, 200);
+  assert.match(page.body, /Continue with Google/);
+  assert.match(page.body, /Continue with Property Predator/);
+  assert.match(page.body, /or use your Growth HQ password/);
+  assert.ok(page.body.includes(`${PROPERTY_PREDATOR_SSO_START_ROUTE}?provider=google`));
+  assert.match(page.body, /action="\/portal\/login"/);
+
+  const password = await call('POST', '/portal/login', d, loginPost({
+    email: 'office@propertypredator.com', password: 'break-glass-password',
+  }));
+  assert.equal(password.statusCode, 302);
+  assert.equal(password.headers.location, '/portal');
+  assert.match(password.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}`));
+});
+
+test('malformed enabled SSO stays absent while canonical password login remains mounted', async () => {
+  const opaque = Buffer.alloc(32, 29).toString('base64url');
+  const composition = composePropertyPredatorSso(
+    { PROPERTY_PREDATOR_SSO_ENABLED: 'true' } as NodeJS.ProcessEnv,
+    SECRET,
+    false,
+  );
+  assert.equal(composition.state, 'invalid');
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => ({ sessionToken: opaque, userId: USER_ID, userEmail: 'office@propertypredator.com', workspaceId: WORKSPACE_ID }),
+    revoke: async () => undefined,
+  };
+  const d = postgresDeps(auth, { propertyPredatorSso: composition.client });
+  const page = await call('GET', '/portal/login', d);
+  assert.equal(page.statusCode, 200);
+  assert.doesNotMatch(page.body, /Continue with Google|Continue with Property Predator/);
+  const ssoRoute = await call('GET', PROPERTY_PREDATOR_SSO_START_ROUTE, d);
+  assert.equal(ssoRoute.statusCode, 404);
+  const password = await call('POST', '/portal/login', d, loginPost({
+    email: 'office@propertypredator.com', password: 'native-break-glass',
+  }));
+  assert.equal(password.statusCode, 302);
+  assert.equal(password.headers.location, '/portal');
+  assert.match(password.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}`));
+});
+
+test('SSO start uses the provider hint and sets only the encrypted host-only transaction cookie', async () => {
+  const providers: Array<string | undefined> = [];
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+  const d = postgresDeps(auth, {
+    propertyPredatorSso: fakeSso({
+      begin: (provider) => {
+        providers.push(provider);
+        return {
+          url: 'https://propertypredator.com/sso.html?client_id=growth-hq',
+          cookie: `${PROPERTY_PREDATOR_SSO_COOKIE}=opaque-encrypted-value; HttpOnly; Secure; SameSite=Lax; Path=${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}; Max-Age=600`,
+        };
+      },
+    }),
+  });
+  const started = await call('GET', `${PROPERTY_PREDATOR_SSO_START_ROUTE}?provider=google`, d);
+  assert.equal(started.statusCode, 302);
+  assert.equal(started.headers.location, 'https://propertypredator.com/sso.html?client_id=growth-hq');
+  assert.deepEqual(providers, ['google']);
+  assert.match(started.headers['set-cookie'] ?? '', new RegExp(`^${PROPERTY_PREDATOR_SSO_COOKIE}=`));
+  assert.match(started.headers['set-cookie'] ?? '', /HttpOnly/);
+  assert.match(started.headers['set-cookie'] ?? '', /SameSite=Lax/);
+  assert.match(started.headers['set-cookie'] ?? '', new RegExp(`Path=${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}`));
+  assert.doesNotMatch(started.headers['set-cookie'] ?? '', /Domain=/i);
+  assert.equal(started.headers['cache-control'], 'no-store');
+  assert.equal(started.headers['referrer-policy'], 'no-referrer');
+
+  const invalid = await call('GET', `${PROPERTY_PREDATOR_SSO_START_ROUTE}?provider=attacker&next=https://attacker.example`, d);
+  assert.equal(invalid.statusCode, 400);
+  assert.equal(providers.length, 1);
+});
+
+test('SSO callback exchanges once, issues the existing opaque HQ cookie and uses a fixed redirect', async () => {
+  const opaque = Buffer.alloc(32, 20).toString('base64url');
+  const exchanges: unknown[][] = [];
+  const logins: unknown[][] = [];
+  let resolveCalls = 0;
+  const auth: PortalAuthService = {
+    resolve: async () => { resolveCalls += 1; throw new Error('stale session must not resolve on callback'); },
+    login: async () => null,
+    loginExternal: async (...args) => {
+      logins.push(args);
+      return { sessionToken: opaque, userId: USER_ID, userEmail: 'office@propertypredator.com', workspaceId: WORKSPACE_ID };
+    },
+    revoke: async () => undefined,
+  };
+  const d = postgresDeps(auth, {
+    propertyPredatorSso: fakeSso({
+      complete: async (...args) => {
+        exchanges.push(args);
+        return { assertion: externalAssertion, bootstrapUserId: USER_ID };
+      },
+    }),
+  });
+  const callback = await call(
+    'GET',
+    `${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}?code=one-time-authorization-code&state=expected-state`,
+    d,
+    { cookie: `${PORTAL_COOKIE}=stale; ${PROPERTY_PREDATOR_SSO_COOKIE}=encrypted-transaction` },
+  );
+  assert.equal(callback.statusCode, 303);
+  assert.equal(callback.headers.location, '/portal');
+  assert.equal(resolveCalls, 0);
+  assert.deepEqual(exchanges[0], ['one-time-authorization-code', 'expected-state', 'encrypted-transaction', 1_000_000]);
+  assert.equal(logins[0]?.[0], externalAssertion);
+  assert.equal(logins[0]?.[2], USER_ID);
+  assert.match(callback.headers['set-cookie'] ?? '', new RegExp(`${PORTAL_COOKIE}=${opaque}`));
+  assert.match(callback.headers['set-cookie'] ?? '', /Max-Age=86400/);
+  assert.match(callback.headers['set-cookie'] ?? '', new RegExp(`${PROPERTY_PREDATOR_SSO_COOKIE}=.*Max-Age=0`));
+  assert.equal(callback.headers['cache-control'], 'no-store');
+  assert.equal(callback.headers['referrer-policy'], 'no-referrer');
+});
+
+test('every terminal SSO callback failure clears the transaction and reveals no provider detail', async () => {
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => null,
+    loginExternal: async () => null,
+    revoke: async () => undefined,
+  };
+  for (const scenario of [
+    { method: 'GET', url: `${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}?error=access_denied&state=s`, sso: fakeSso(), status: 400 },
+    { method: 'GET', url: `${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}?code=valid-code-value-123&state=s`, sso: fakeSso({ complete: async () => null }), status: 401 },
+    { method: 'GET', url: `${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}?code=valid-code-value-123&state=s`, sso: fakeSso({ complete: async () => { throw new Error('secret provider detail'); } }), status: 503 },
+    { method: 'POST', url: PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE, sso: fakeSso(), status: 405 },
+  ]) {
+    const response = await call(scenario.method, scenario.url, postgresDeps(auth, {
+      propertyPredatorSso: scenario.sso,
+    }), { cookie: `${PROPERTY_PREDATOR_SSO_COOKIE}=encrypted-transaction` });
+    assert.equal(response.statusCode, scenario.status);
+    assert.match(response.headers['set-cookie'] ?? '', new RegExp(`${PROPERTY_PREDATOR_SSO_COOKIE}=.*Max-Age=0`));
+    assert.doesNotMatch(response.body, /access_denied|secret provider detail|valid-code-value/);
+  }
 });
 
 test('a stale cookie cannot block a fresh database login or account setup page', async () => {

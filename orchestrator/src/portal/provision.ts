@@ -18,6 +18,7 @@ import type { Intake } from '../types.js';
 import type { LegacyPortalDeps, PortalInboxReadBoundary, PostgresPortalDeps } from './router.js';
 import type { PortalCrmService } from './crm-service.js';
 import type { PortalAuthService } from './auth-service.js';
+import type { PropertyPredatorSsoClient } from './property-predator-sso.js';
 import type { PortalJourneyManagerService } from './journey-manager-service.js';
 import type { PortalCompanyContentService } from './company-content-service.js';
 import type { PortalConversionInboxCommandService } from './conversion-inbox-service.js';
@@ -129,6 +130,8 @@ export interface PostgresPortalConfig {
   sessionSecret: string;
   secure: boolean;
   auth: PortalAuthService;
+  /** Optional, env-gated main-site identity bridge. It never carries provider tokens. */
+  propertyPredatorSso?: PropertyPredatorSsoClient;
   crm: PortalCrmService;
   journeys?: PortalJourneyManagerService;
   /** Authoritative operator queue; assignment/snooze only, with no provider effects. */
@@ -157,6 +160,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     secure: cfg.secure,
     loginThrottle: new InMemoryLoginThrottle(),
     auth: cfg.auth,
+    propertyPredatorSso: cfg.propertyPredatorSso,
     crm: cfg.crm,
     journeys: cfg.journeys,
     operatorActions: cfg.operatorActions,

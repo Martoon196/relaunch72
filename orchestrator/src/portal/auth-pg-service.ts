@@ -9,12 +9,16 @@ import type {
   PortalAuthenticatedSession,
   PortalAuthRequestContext,
   PortalAuthService,
+  PortalExternalIdentityAssertion,
   PortalSessionIdentity,
 } from './auth-service.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const OPAQUE_SESSION_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PROPERTY_PREDATOR_SSO_ISSUER = 'https://propertypredator.com';
+const AFFILIATE_CODE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const AFFILIATE_STATUS_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 
 interface CredentialRow extends QueryResultRow {
   user_id: string;
@@ -64,6 +68,40 @@ function canonicalEmail(value: unknown): string | null {
 
 function rawOpaqueSession(): string {
   return randomBytes(32).toString('base64url');
+}
+
+function validExternalIdentityAssertion(
+  assertion: PortalExternalIdentityAssertion,
+  context: PortalAuthRequestContext,
+  bootstrapUserId: string | undefined,
+): boolean {
+  const issuedAt = Date.parse(assertion.issuedAt);
+  const expiresAt = Date.parse(assertion.expiresAt);
+  const affiliate = assertion.affiliate;
+  const attribution = assertion.attribution;
+  return assertion.emailVerified === true
+    && assertion.issuer === PROPERTY_PREDATOR_SSO_ISSUER
+    && canonicalUuid(assertion.subject) === assertion.subject
+    && canonicalEmail(assertion.email) === assertion.email
+    && Number.isFinite(issuedAt)
+    && Number.isFinite(expiresAt)
+    && issuedAt <= context.now + 60_000
+    && expiresAt > context.now
+    && expiresAt > issuedAt
+    && expiresAt - issuedAt <= 10 * 60 * 1_000
+    && (bootstrapUserId === undefined || canonicalUuid(bootstrapUserId) === bootstrapUserId)
+    && typeof affiliate?.member === 'boolean'
+    && (affiliate.affiliateId === null || canonicalUuid(affiliate.affiliateId) === affiliate.affiliateId)
+    && (affiliate.code === null || AFFILIATE_CODE_PATTERN.test(affiliate.code))
+    && (affiliate.codeStatus === null || AFFILIATE_STATUS_PATTERN.test(affiliate.codeStatus))
+    && (affiliate.member
+      ? affiliate.affiliateId !== null && affiliate.code !== null && affiliate.codeStatus !== null
+      : affiliate.affiliateId === null && affiliate.code === null && affiliate.codeStatus === null)
+    && (attribution.referrerAffiliateId === null
+      || canonicalUuid(attribution.referrerAffiliateId) === attribution.referrerAffiliateId)
+    && (attribution.attachedAt === null
+      || (Number.isFinite(Date.parse(attribution.attachedAt))
+        && Date.parse(attribution.attachedAt) <= context.now + 60_000));
 }
 
 function isAuthorizationRace(error: unknown): boolean {
@@ -301,6 +339,73 @@ export class PgPortalAuthService implements PortalAuthService {
         }
       }
     }
+  }
+
+  async loginExternal(
+    assertion: PortalExternalIdentityAssertion,
+    context: PortalAuthRequestContext,
+    bootstrapUserId?: string,
+  ): Promise<PortalAuthenticatedSession | null> {
+    if (!validExternalIdentityAssertion(assertion, context, bootstrapUserId)) return null;
+
+    const sessionToken = rawOpaqueSession();
+    const csrfSecret = randomBytes(32);
+    let created;
+    try {
+      created = await this.dependencies.commandPool.query<SessionRow>(
+        `/* portal.auth.create-external-identity-session */
+         SELECT session_id, user_id, user_email, selected_workspace_id, expires_at
+         FROM app_private.create_portal_external_identity_session(
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+           $11, $12, $13, $14, $15
+         )`,
+        [
+          assertion.issuer,
+          assertion.subject,
+          assertion.email,
+          assertion.emailVerified,
+          bootstrapUserId ?? null,
+          assertion.affiliate.member,
+          assertion.affiliate.affiliateId,
+          assertion.affiliate.code,
+          assertion.affiliate.codeStatus,
+          assertion.attribution.referrerAffiliateId,
+          assertion.attribution.attachedAt,
+          sha256(sessionToken),
+          sha256(csrfSecret),
+          metadataHash(context.ipAddress),
+          metadataHash(context.userAgent),
+        ],
+      );
+    } catch (error) {
+      // A concurrent re-link, membership revoke or workspace suspension is an
+      // invalid sign-in. No external identity detail is exposed to the caller.
+      if (isAuthorizationRace(error)) return null;
+      throw error;
+    }
+    if (created.rows.length === 0) return null;
+    if (created.rows.length !== 1) throw new Error('External portal login did not create exactly one session');
+    const row = created.rows[0]!;
+    const returnedSessionId = canonicalUuid(row.session_id);
+    const userId = canonicalUuid(row.user_id);
+    const userEmail = canonicalEmail(row.user_email);
+    const workspaceId = canonicalUuid(row.selected_workspace_id);
+    const expiresAt = row.expires_at instanceof Date ? row.expires_at.toISOString() : row.expires_at;
+    const expiry = typeof expiresAt === 'string' ? Date.parse(expiresAt) : Number.NaN;
+    // The canonical HQ email deliberately does not need to match the asserted
+    // main-site email. Immutable issuer + subject is the linked authority.
+    if (!returnedSessionId || !userId || !userEmail || !workspaceId
+        || !Number.isFinite(expiry) || expiry <= context.now
+        || expiry > context.now + 24 * 60 * 60 * 1_000 + 60_000) {
+      throw new Error('External portal login created an invalid session');
+    }
+    return Object.freeze({
+      sessionToken,
+      userId,
+      userEmail,
+      workspaceId,
+      expiresAt: new Date(expiry).toISOString(),
+    });
   }
 
   private async releaseSetupClaim(

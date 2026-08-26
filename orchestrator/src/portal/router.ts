@@ -107,6 +107,14 @@ import type { DashboardData } from './data.js';
 import type { BillingView } from './billing.js';
 import type { PortalAuthRequestContext, PortalAuthService, PortalSessionIdentity } from './auth-service.js';
 import {
+  PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE,
+  PROPERTY_PREDATOR_SSO_COOKIE,
+  PROPERTY_PREDATOR_SSO_START_ROUTE,
+  clearPropertyPredatorSsoCookie,
+  type PropertyPredatorSsoClient,
+  type PropertyPredatorSsoProviderHint,
+} from './property-predator-sso.js';
+import {
   OPERATOR_ACTION_CENTRE_MAX_ACTIONS,
   OPERATOR_ACTION_CENTRE_ROUTE,
   presentOperatorActionCentre,
@@ -167,6 +175,8 @@ export interface LegacyPortalDeps extends PortalCommonDeps {
 export interface PostgresPortalDeps extends PortalCommonDeps {
   kind: 'postgres';
   auth: PortalAuthService;
+  /** Exact Property Predator authorization-code bridge; absent means no SSO routes or UI. */
+  propertyPredatorSso?: PropertyPredatorSsoClient;
   crm: PortalCrmService;
   /** Exact, read-mostly conversion definition manager. Omitted until composed and ready. */
   journeys?: PortalJourneyManagerService;
@@ -234,17 +244,24 @@ function sendJavaScript(res: ServerResponse, body: string): void {
 function sendLoginPage(
   res: ServerResponse,
   code: number,
-  deps: Pick<PortalDeps, 'sessionSecret' | 'secure' | 'productProfile'>,
+  deps: PortalDeps,
   error?: string,
   email = '',
   extra: Record<string, string> = {},
+  additionalCookies: readonly string[] = [],
 ): void {
   const csrfToken = portalLoginCsrfToken(deps.sessionSecret);
   sendHtml(
     res,
     code,
-    loginPage(error, email, csrfToken, deps.productProfile ?? RELAUNCH72_PRODUCT_PROFILE),
-    portalLoginCsrfCookie(csrfToken, deps.secure),
+    loginPage(
+      error,
+      email,
+      csrfToken,
+      deps.productProfile ?? RELAUNCH72_PRODUCT_PROFILE,
+      { propertyPredatorSso: deps.kind === 'postgres' && Boolean(deps.propertyPredatorSso) },
+    ),
+    [portalLoginCsrfCookie(csrfToken, deps.secure), ...additionalCookies],
     extra,
   );
 }
@@ -711,6 +728,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   // logout validates its cookie-bound CSRF token without resolving first.
   const skipSessionResolution = p === '/portal/setup'
     || (p === '/portal/login' && method === 'POST')
+    || p === PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE
     || (p === '/portal/logout' && method === 'POST');
   if (sessionToken && !skipSessionResolution) {
     try {
@@ -725,6 +743,122 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   }
 
   // ── one-time account setup / login / logout (no auth) ──
+  if (p === PROPERTY_PREDATOR_SSO_START_ROUTE && method === 'GET') {
+    if (tenantId || portalIdentity) return redirect(res, portalHome);
+    if (deps.kind !== 'postgres' || !deps.propertyPredatorSso) {
+      return sendLoginPage(res, 404, deps, 'Property Predator sign-in is not available yet. Use your Growth HQ password.');
+    }
+    const providerValues = url.searchParams.getAll('provider');
+    const validQuery = [...url.searchParams.keys()].every((key) => key === 'provider')
+      && providerValues.length <= 1;
+    const provider = providerValues[0] as PropertyPredatorSsoProviderHint | undefined;
+    if (!validQuery || (provider !== undefined && provider !== 'google')) {
+      return sendLoginPage(res, 400, deps, 'That sign-in option was not recognised. Try again.');
+    }
+    try {
+      const authorization = deps.propertyPredatorSso.begin(provider, now);
+      return redirect(res, authorization.url, authorization.cookie, 302, {
+        'cache-control': 'no-store',
+        'referrer-policy': 'no-referrer',
+      });
+    } catch {
+      return sendLoginPage(res, 503, deps, 'Property Predator sign-in is temporarily unavailable. Use your Growth HQ password.');
+    }
+  }
+  if (p === PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE) {
+    const clearTransaction = clearPropertyPredatorSsoCookie(deps.secure);
+    if (method !== 'GET') {
+      return sendLoginPage(
+        res,
+        405,
+        deps,
+        'We could not complete that sign-in. Try again or use your Growth HQ password.',
+        '',
+        { allow: 'GET' },
+        [clearTransaction],
+      );
+    }
+    if (deps.kind !== 'postgres' || !deps.propertyPredatorSso || !deps.auth.loginExternal) {
+      return sendLoginPage(
+        res,
+        404,
+        deps,
+        'Property Predator sign-in is not available yet. Use your Growth HQ password.',
+        '',
+        {},
+        [clearTransaction],
+      );
+    }
+    const sso = deps.propertyPredatorSso;
+    const codeValues = url.searchParams.getAll('code');
+    const stateValues = url.searchParams.getAll('state');
+    const errorValues = url.searchParams.getAll('error');
+    const callbackKeys = [...url.searchParams.keys()];
+    const successfulShape = callbackKeys.every((key) => key === 'code' || key === 'state')
+      && codeValues.length === 1
+      && stateValues.length === 1
+      && errorValues.length === 0;
+    if (!successfulShape) {
+      return sendLoginPage(
+        res,
+        400,
+        deps,
+        'We could not complete that sign-in. Try again or use your Growth HQ password.',
+        '',
+        {},
+        [sso.clearCookie()],
+      );
+    }
+    try {
+      const exchange = await sso.complete(
+        codeValues[0]!,
+        stateValues[0]!,
+        requestCookies[PROPERTY_PREDATOR_SSO_COOKIE],
+        now,
+      );
+      const authenticated = exchange
+        ? await deps.auth.loginExternal(
+            exchange.assertion,
+            authRequestContext(req, now, deps),
+            exchange.bootstrapUserId,
+          )
+        : null;
+      if (!authenticated) {
+        return sendLoginPage(
+          res,
+          401,
+          deps,
+          'We could not complete that sign-in. Use your Growth HQ password or contact support.',
+          '',
+          {},
+          [sso.clearCookie()],
+        );
+      }
+      const authenticatedExpiry = authenticated.expiresAt
+        ? Date.parse(authenticated.expiresAt)
+        : Number.NaN;
+      const ssoSessionMaxAge = Number.isFinite(authenticatedExpiry)
+        ? Math.max(1, Math.min(24 * 60 * 60, Math.floor((authenticatedExpiry - now) / 1_000)))
+        : 24 * 60 * 60;
+      return redirect(res, portalHome, [
+        portalCookie(authenticated.sessionToken, deps.secure, ssoSessionMaxAge),
+        sso.clearCookie(),
+      ], 303, {
+        'cache-control': 'no-store',
+        'referrer-policy': 'no-referrer',
+      });
+    } catch {
+      return sendLoginPage(
+        res,
+        503,
+        deps,
+        'Property Predator sign-in is temporarily unavailable. Use your Growth HQ password.',
+        '',
+        {},
+        [sso.clearCookie()],
+      );
+    }
+  }
   if (p === '/portal/setup' && method === 'GET') {
     const linkedToken = url.searchParams.get('token');
     if (linkedToken !== null) {
