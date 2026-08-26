@@ -37,17 +37,20 @@ Therefore the fixed base is approximately **$29/month** before VAT and email usa
 The separate `property-predator-growth-hq-production-eu` Neon project now exists in AWS Frankfurt. It was created empty; no project was cloned, promoted, reset or repurposed.
 
 1. The production compute is capped at 0.25–1 CU and scales to zero after five inactive minutes.
-2. All 26 reviewed forward-only migrations through `0026_database_installation_identity.sql` were applied on 26 August 2026 through a direct administrative connection. Never place that connection or `DATABASE_MIGRATOR_URL` in Render.
+2. All 27 reviewed forward-only migrations through `0027_property_predator_founder_bootstrap.sql` were applied on 26 August 2026. The final migration was rehearsed through the same atomic connector transaction on the disposable database before production. Never place the direct administrative connection or `DATABASE_MIGRATOR_URL` in Render.
 3. Every production pool must prove the same opaque `PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID`; the underlying singleton table remains unreadable to runtime roles.
-4. After migrations create the application roles, issue separate random credentials for:
+4. Run the one-shot founder bootstrap only while the production database is still empty. Set `PROPERTY_PREDATOR_FOUNDER_BOOTSTRAP_CHANGE_REFERENCE` to the reviewed lowercase change reference and `PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID` to the exact installation UUID, then run `npm run founder:bootstrap`. The command re-verifies every local/database migration checksum and the installation UUID before one transaction reuses `app_private.provision_customer_workspace` to create only Property Predator, Growth HQ, its pending founder, the default Sales pipeline, one Mailgun EU connection row, one dark control event and the hashed owned seed attestation for `office@propertypredator.com`.
+5. Open the printed `127.0.0.1` handoff URL once. It is memory-only, has no-store headers, closes after its first response or 20 minutes and never writes the setup URL to disk. Copy the founder setup link and the four Render values, then destroy the page. A replay returns the same database IDs but cannot claim its newly generated raw setup token is valid; use the audited setup-reissue path if the first link is lost.
+6. The Mailgun connection is logical configuration only. It is `active` because signed-webhook/readiness correlation requires a canonical live connection, but it stores no credential, creates no endpoint or inbox, makes no provider call and is governed by an append-only control event with provider effects OFF, delivery OFF and emergency pause ON.
+7. After migrations create the application roles, issue separate random credentials for:
    - `r72_web`
    - `r72_identity_command`
    - `r72_crm_command`
    - `r72_content_command`
    - `r72_mailgun_worker_command`, used only through `DATABASE_MAILGUN_WORKER_URL`
    - `r72_mailgun_webhook_command`, used only through `DATABASE_MAILGUN_WEBHOOK_URL`
-5. Put each role's pooled Neon URL into only its matching Render secret slot. The URL username must exactly match the role name. Keep `DATABASE_SSL_MODE=verify-full`.
-6. Run `npm run db:check` with the direct migration identity outside the web service. Then start the release with only the six runtime identities.
+8. Put each role's pooled Neon URL into only its matching Render secret slot. The URL username must exactly match the role name. Keep `DATABASE_SSL_MODE=verify-full`.
+9. Run `npm run db:check` with the direct migration identity outside the web service. Then start the release with only the six runtime identities.
 
 The production workspace and first operator must be created through an audited operator path. Do not run demo seeding or import legacy/customer contacts during this pilot.
 
@@ -155,8 +158,8 @@ Never log a secret, URL, email address or raw webhook body during rotation. Evid
 
 ## Current blockers — service creation may be prepared, but deployment must not start yet
 
-- The separate Frankfurt Neon project and its 26 migrations now exist; six fresh role credentials still need to be issued into their exact Render secret slots.
-- The production workspace and named operator have not yet been provisioned through an audited path.
+- The separate Frankfurt Neon project is on the exact 27-file ledger and the one-shot audited founder bootstrap has completed. Six fresh role credentials still need to be issued into their exact Render secret slots.
+- The founder receipt proves one internal Property Predator / Growth HQ workspace, its pending owner, the dark Mailgun EU connection and the hashed owned seed. It imported no customer, contact, inbox, consent, message or provider-operation data.
 - `/ready`, live dependency rechecks, canonical-host enforcement and the database-installation proof now exist, but production credentials and binding evidence are not yet configured.
 - The named `serve:property-predator-email-worker` entrypoint now exists and is tested. It is deliberately inert: it verifies schema, database identity and policy, then idles without importing a provider adapter or reading an API key.
 - The real Mailgun adapter and database authorization boundary are implemented and tested, but deliberately not composed into the dark worker. Composition and any outbound key require the separate final activation approval.

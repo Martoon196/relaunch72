@@ -62,12 +62,15 @@ not a Property Predator production blueprint and must not be made live merely by
 adding credentials. A separately reviewed production service definition, durable
 PostgreSQL deployment and rollback plan are still required.
 
-The current server also leaves automatic PostgreSQL onboarding deliberately
-locked, and several new operations screens are still powered by labelled TEST
-fixtures. Before external access, provision the founder workspace/operator through
-an audited operator path and replace each pilot-facing fixture with a workspace-
-scoped production read. The preflight prints both as manual proof gates instead of
-pretending an environment variable can prove them.
+Automatic customer onboarding remains deliberately locked, and several new
+operations screens are still powered by labelled TEST fixtures. The separate
+one-shot founder bootstrap is an offline, empty-database-only operator path: it
+creates the internal Property Predator / Growth HQ boundary and a credential-free
+Mailgun EU configuration row under a fail-closed control event. It is not a
+customer-import or public-signup path. Before external access, run that audited
+bootstrap and replace each pilot-facing fixture with a workspace-scoped production
+read. The preflight prints both as manual proof gates instead of pretending an
+environment variable can prove them.
 
 ## Credential and verification pack
 

@@ -99,6 +99,16 @@ messages, publishing, or any external provider effect.
   to alter superuser-only attributes. Migrations never contain passwords;
   provision runtime role passwords or managed identities in the hosting
   secret/control plane.
+- The internal Property Predator founder bootstrap is an explicit offline
+  migrator operation, not a runtime or public onboarding route. Migration
+  `0027` exposes its one-shot SECURITY DEFINER wrapper only to `r72_owner`,
+  requires an empty database plus the exact 27-file checksum ledger and
+  installation UUID, and reuses the established native workspace primitive.
+  Its logical `mailgun_eu` live connection contains no credential. The first
+  control event pins provider effects and delivery OFF with emergency pause ON;
+  no contact, endpoint, inbox, consent, message, operation or delivery row is
+  created. `npm run founder:bootstrap` returns the raw account-setup link only
+  through a one-use, no-store loopback page held in memory.
 - The ordinary suite always skips the eight live PostgreSQL tests, even when a
   developer keeps a test URL in `.env`. `npm run test:db:integration` is the
   only command that opens their explicit opt-in gate, and it is intentionally
@@ -154,6 +164,14 @@ legacy-import command role, immutable/hash-pinned staging, replay receipts,
 verified-identity dedupe, quarantine, public sanitised contact provenance,
 typed affiliate attribution with private raw payloads, canonical unresolved
 attribution receipts across batches, and database-owned audit/lifecycle guards.
+Migrations `0020` through `0023` add legacy-lead board materialisation, immutable
+company-content approval/version evidence, the workspace-isolated inbox and
+provider-operation core, and test-only dispatch claims. Migration `0024` adds
+signed, replay-safe Mailgun webhook evidence. Migration `0025` adds the atomic,
+function-only controlled email-pilot boundary and durable spend/volume controls.
+Migration `0026` adds one opaque installation UUID exposed through a table-blind
+runtime proof. Migration `0027` adds the append-only, one-shot internal founder
+bootstrap receipt and its fixed dark Mailgun EU configuration.
 
 Before the first successful managed-PostgreSQL application, the pre-launch role
 bootstraps in `0001`, `0003`, `0004`, `0006` and `0008` were amended to support

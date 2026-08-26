@@ -18,6 +18,7 @@
     "serve": "npm run --workspace orchestrator serve",
     "serve:property-predator-email-worker": "npm run --workspace orchestrator serve:property-predator-email-worker",
     "pilot:preflight": "npm run --workspace orchestrator pilot:preflight",
+    "founder:bootstrap": "npm run --workspace orchestrator founder:bootstrap --",
     "stripe:setup": "npm run --workspace orchestrator stripe:setup",
     "db:migrate": "npm run --workspace orchestrator db:migrate",
     "db:check": "npm run --workspace orchestrator db:check",
