@@ -195,7 +195,7 @@ After the cutover, require all of the following before accepting the release:
 ## Current deployed state and remaining activation blockers
 
 - Render web and worker services are live in Frankfurt on the same reviewed
-  commit, `e18acd1`, with manual deploys and the Render subdomain disabled.
+  commit, `16f1f88`, with manual deploys and the Render subdomain disabled.
 - `hq.propertypredator.com` is a verified CNAME to the exact Render target and
   Render has issued its managed certificate.
 - Live `GET /health` and `GET /ready` both return HTTP 200. The readiness body
@@ -209,7 +209,7 @@ After the cutover, require all of the following before accepting the release:
   delivery OFF, emergency pause ON, no dispatch loop, no provider adapter and
   zero provider network calls. The pilot remains limited to one owned internal
   seed, ten recipients, ten messages per run and 100 messages per UTC month.
-- The separate Frankfurt Neon project is on the exact 27-file ledger. All six
+- The separate Frankfurt Neon project is on the exact 28-file ledger. All six
   restricted role credentials authenticate through only their matching Render
   slots. No owner or migrator URL is present in either service.
 - The founder receipt proves one internal Property Predator / Growth HQ
@@ -240,3 +240,43 @@ Before any external delivery:
    ON until the final activation moment.
 5. Keep TEST fixture projections inaccessible to external users and import no
    customer data without a separately reviewed import rehearsal.
+
+## Schema-28 cutover evidence — 26 August 2026
+
+The authorised Operator Action Centre cutover completed as a forward-only
+release with every provider effect still disabled:
+
+- the migration runner first proved the production ledger was a valid
+  27-migration prefix with only
+  `0028_operator_action_control_foundation.sql` pending;
+- the atomic migration reported `1 applied, 27 already current`, followed by
+  `Database schema is current`;
+- the production ledger contains 28 migrations and records migration 0028 with
+  SHA-256
+  `745a613cd30e967cc8c9371a096cf2c8e0498c84fa58bac031f4acd945c691fa`;
+- the new controls, append-only audit-event and command-receipt relations exist
+  and contained zero rows immediately after cutover;
+- Render deployed exact commit
+  `16f1f88f3a0219874b3e5bb22e2d5606737f20aa` to web deploy
+  `dep-da7imt15efls73e3vneg` and worker deploy
+  `dep-da7in0rbc2fs73d04k4g`;
+- both independent Render builds passed 1,208 tests: 1,194 passed, 14 skipped
+  by design and zero failed;
+- live `/ready` returned HTTP 200 with exactly
+  `{"ready":true,"blockers":[]}`;
+- live `/health` returned HTTP 200 with portal readiness true while checkout,
+  subscriptions, public lead capture and external-event ingestion remained
+  unavailable;
+- unauthenticated `/portal` and `/portal/actions` both redirected to
+  `/portal/login`, whose response retained PropertyPredator branding; and
+- the live worker emitted its redacted `dark-production` readiness record for
+  `r72_mailgun_worker_command`, with provider effects false, email delivery
+  false, emergency pause true, no dispatch loop, no provider adapter and zero
+  provider network calls.
+
+No founder bootstrap was rerun, no customer or contact was imported, no live
+assignment/snooze command was submitted, and no email or provider effect was
+enabled. Authenticated founder rendering of `/portal/actions` remains a manual
+session check after the founder completes or resumes sign-in; the disposable
+schema-28 integration proof remains authoritative for command mutation and RLS
+behaviour.
