@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "suiteId": "property-predator.brand-brain-offline-eval/v1",
+  "sourceManifestSha256": "d55afac02ac995f6157749181cf230ea8acc23b7b129dd6f92f63bcd04b57300",
+  "runnerVersion": "property-predator-brand-brain-offline-eval/v1",
+  "positiveCaseCount": 4,
+  "negativeCaseCount": 5,
+  "cases": [
+    {
+      "caseId": "positive-social-authority-selection",
+      "class": "positive",
+      "deliverableKind": "post",
+      "assertionCode": "exact-profile-authority-hashes",
+      "forbiddenRuntimeSourceIds": [],
+      "expectedOutcome": "metadata-plan-only"
+    },
+    {
+      "caseId": "positive-email-authority-selection",
+      "class": "positive",
+      "deliverableKind": "email",
+      "assertionCode": "exact-profile-authority-hashes",
+      "forbiddenRuntimeSourceIds": [],
+      "expectedOutcome": "metadata-plan-only"
+    },
+    {
+      "caseId": "positive-content-authority-selection",
+      "class": "positive",
+      "deliverableKind": "article",
+      "assertionCode": "exact-profile-authority-hashes",
+      "forbiddenRuntimeSourceIds": [],
+      "expectedOutcome": "metadata-plan-only"
+    },
+    {
+      "caseId": "positive-stored-manifest-equivalence",
+      "class": "positive",
+      "deliverableKind": "ad",
+      "assertionCode": "stored-source-hashes-equal-manifest",
+      "forbiddenRuntimeSourceIds": [],
+      "expectedOutcome": "metadata-plan-only"
+    },
+    {
+      "caseId": "negative-reference-only-source",
+      "class": "negative",
+      "deliverableKind": "post",
+      "assertionCode": "reference-only-never-runtime",
+      "forbiddenRuntimeSourceIds": ["ai-brief-grounding"],
+      "expectedOutcome": "excluded"
+    },
+    {
+      "caseId": "negative-quarantined-source",
+      "class": "negative",
+      "deliverableKind": "image",
+      "assertionCode": "quarantine-never-runtime",
+      "forbiddenRuntimeSourceIds": ["legacy-admin-image-style"],
+      "expectedOutcome": "blocked"
+    },
+    {
+      "caseId": "negative-panther-visual-conflict",
+      "class": "negative",
+      "deliverableKind": "image",
+      "assertionCode": "unresolved-visual-conflict-blocks-image",
+      "forbiddenRuntimeSourceIds": ["legacy-admin-image-style"],
+      "expectedOutcome": "blocked"
+    },
+    {
+      "caseId": "negative-stale-source-attestation",
+      "class": "negative",
+      "deliverableKind": "email",
+      "assertionCode": "stale-source-blocks-plan",
+      "forbiddenRuntimeSourceIds": [],
+      "expectedOutcome": "blocked"
+    },
+    {
+      "caseId": "negative-provider-and-external-gpt-effects",
+      "class": "negative",
+      "deliverableKind": "post",
+      "assertionCode": "callable-and-provider-effects-remain-false",
+      "forbiddenRuntimeSourceIds": [],
+      "expectedOutcome": "effects-off"
+    }
+  ],
+  "holdoutCaseIds": [
+    "negative-reference-only-source",
+    "negative-quarantined-source",
+    "negative-panther-visual-conflict",
+    "negative-stale-source-attestation",
+    "negative-provider-and-external-gpt-effects"
+  ],
+  "suiteSha256": "88ca474133d36bbc4345f180e9045feb31d9ddec6b2bb0a5eb810c894f22de51"
+}
