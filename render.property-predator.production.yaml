@@ -1,0 +1,218 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+#
+# Property Predator Growth HQ — CONTROLLED PRODUCTION PILOT ONLY.
+#
+# This is intentionally separate from render.yaml, which remains the Relaunch72
+# test-payments sandbox. In Render, create a NEW Blueprint and explicitly select
+# this file. Never point the existing sandbox Blueprint at this manifest.
+#
+# The services are unable to send email as checked in: both provider-effect
+# gates are false and the emergency pause is true. autoDeploy is also off. A
+# human must review the exact commit, sync the Blueprint, and trigger each
+# deploy manually.
+services:
+  - type: web
+    name: property-predator-growth-hq
+    runtime: node
+    region: frankfurt
+    plan: starter
+    branch: codex/relaunch72-platform-foundation
+    numInstances: 1
+    buildCommand: npm ci --include=dev && npm run typecheck && npm test
+    startCommand: npm run serve
+    # /health remains process liveness. /ready must fail unless the protected
+    # PostgreSQL portal and locked production runtime are genuinely ready.
+    healthCheckPath: /ready
+    maxShutdownDelaySeconds: 60
+    autoDeployTrigger: off
+    domains:
+      - hq.propertypredator.co.uk
+    # The canonical domain is the only public origin. Render still exposes the
+    # generated target in its dashboard so DNS can be configured.
+    renderSubdomainPolicy: disabled
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+
+      # Product and canonical origins.
+      - key: PORTAL_POSTGRES_ENABLED
+        value: "true"
+      - key: PORTAL_PRODUCT_PROFILE
+        value: property_predator_growth
+      - key: PORTAL_BASE_URL
+        value: https://hq.propertypredator.co.uk
+      - key: PUBLIC_BASE_URL
+        value: https://propertypredator.co.uk
+      - key: ALLOWED_ORIGINS
+        value: https://hq.propertypredator.co.uk,https://propertypredator.co.uk,https://www.propertypredator.co.uk
+      - key: SESSION_SECRET
+        generateValue: true
+
+      # Payments, public capture, demo data, automatic imports and legacy rails
+      # remain unavailable. Provider credentials for those systems are absent.
+      - key: PLATFORM_SUBSCRIPTIONS_ENABLED
+        value: "false"
+      - key: PUBLIC_LEAD_CAPTURE_ENABLED
+        value: "false"
+      - key: BILLING_ENFORCED
+        value: "false"
+      - key: PORTAL_DEMO_SEED
+        value: "false"
+      - key: RELAUNCH72_FORCE_MOCK_BUILDS
+        value: "true"
+      - key: RELAUNCH72_MAX_CONCURRENT_BUILDS
+        value: "1"
+      - key: PROPERTY_PREDATOR_EXTERNAL_EVENTS_ENABLED
+        value: "false"
+
+      # Neon production web identities. Each URL is issued for exactly the
+      # named NOINHERIT login role. Owner, migrator and outbound-worker URLs
+      # never enter the internet-facing service.
+      - key: DATABASE_SSL_MODE
+        value: verify-full
+      - key: DATABASE_WEB_URL
+        sync: false
+      - key: DATABASE_IDENTITY_COMMAND_URL
+        sync: false
+      - key: DATABASE_CRM_COMMAND_URL
+        sync: false
+      - key: DATABASE_CONTENT_COMMAND_URL
+        sync: false
+      # Dedicated r72_mailgun_webhook_command identity. This is deliberately
+      # narrower than the platform's generic webhook role.
+      - key: DATABASE_MAILGUN_WEBHOOK_URL
+        sync: false
+      - key: DATABASE_WEB_POOL_MAX
+        value: "4"
+      - key: DATABASE_IDENTITY_COMMAND_POOL_MAX
+        value: "2"
+      - key: DATABASE_CRM_COMMAND_POOL_MAX
+        value: "3"
+      - key: DATABASE_CONTENT_COMMAND_POOL_MAX
+        value: "2"
+      - key: DATABASE_MAILGUN_WEBHOOK_POOL_MAX
+        value: "2"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        value: "5000"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: "15000"
+
+      # Internal seed-pilot boundary. The workspace UUID is server-owned config,
+      # not browser input. No customer records are imported by this Blueprint.
+      - key: PROPERTY_PREDATOR_PILOT_WORKSPACE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_MAILGUN_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_PILOT_STAGE
+        value: internal-seed
+      - key: PROPERTY_PREDATOR_PILOT_RECIPIENT_SCOPE
+        value: owned-internal-seeds-only
+      - key: PROPERTY_PREDATOR_PILOT_MAX_RECIPIENTS
+        value: "10"
+
+      # Provider effects are triply fail-closed. A later activation requires a
+      # separate user approval plus a reviewed configuration change.
+      - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_EMAIL_DELIVERY_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_EMAIL_EMERGENCY_PAUSED
+        value: "true"
+      - key: PROPERTY_PREDATOR_EMAIL_PROVIDER
+        value: mailgun
+
+      # Mailgun EU INGRESS slots only. The public web service never receives the
+      # outbound API key. Signed provider test events are permitted; they cause
+      # no outbound provider effect.
+      - key: PROPERTY_PREDATOR_MAILGUN_WEBHOOK_ENABLED
+        value: "true"
+      - key: MAILGUN_SIGNING_KEY
+        sync: false
+      - key: MAILGUN_REGION
+        value: eu
+      - key: MAILGUN_EVENT_WEBHOOK_URL
+        value: https://hq.propertypredator.co.uk/api/provider-webhooks/mailgun/events
+      - key: MAILGUN_WEBHOOK_SIGNATURE_VERIFICATION_ENABLED
+        value: "true"
+
+  # This isolated worker is the only process that may ever receive the Mailgun
+  # outbound key. Its named entrypoint is deliberately deployment-blocking until
+  # the reviewed worker composition lands; do not replace it with `npm run serve`.
+  - type: worker
+    name: property-predator-email-worker
+    runtime: node
+    region: frankfurt
+    plan: starter
+    branch: codex/relaunch72-platform-foundation
+    numInstances: 1
+    buildCommand: npm ci --include=dev && npm run typecheck && npm test
+    startCommand: npm run --workspace orchestrator serve:property-predator-email-worker
+    maxShutdownDelaySeconds: 120
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+
+      # The worker receives only r72_mailgun_worker_command, never portal,
+      # webhook, owner, migrator, import or generic database credentials.
+      - key: DATABASE_SSL_MODE
+        value: verify-full
+      - key: DATABASE_MAILGUN_WORKER_URL
+        sync: false
+      - key: DATABASE_MAILGUN_WORKER_POOL_MAX
+        value: "3"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        value: "5000"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: "15000"
+
+      # Provider effects remain disabled even if every credential is present.
+      - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_EMAIL_DELIVERY_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_EMAIL_EMERGENCY_PAUSED
+        value: "true"
+      - key: PROPERTY_PREDATOR_EMAIL_PROVIDER
+        value: mailgun
+      - key: PROPERTY_PREDATOR_PILOT_WORKSPACE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_MAILGUN_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_PILOT_STAGE
+        value: internal-seed
+      - key: PROPERTY_PREDATOR_PILOT_RECIPIENT_SCOPE
+        value: owned-internal-seeds-only
+      - key: PROPERTY_PREDATOR_PILOT_MAX_RECIPIENTS
+        value: "10"
+      - key: PROPERTY_PREDATOR_EMAIL_INTERNAL_SEEDS
+        sync: false
+      - key: PROPERTY_PREDATOR_EMAIL_RUN_MESSAGE_CAP
+        value: "10"
+      - key: PROPERTY_PREDATOR_EMAIL_MONTHLY_MESSAGE_CAP
+        value: "100"
+      # USD micros: conservative one-cent estimate, $0.10/run, $1/month.
+      - key: PROPERTY_PREDATOR_EMAIL_ESTIMATED_RECIPIENT_COST_USD_MICROS
+        value: "10000"
+      - key: PROPERTY_PREDATOR_EMAIL_RUN_SPEND_CAP_USD_MICROS
+        value: "100000"
+      - key: PROPERTY_PREDATOR_EMAIL_MONTHLY_SPEND_CAP_USD_MICROS
+        value: "1000000"
+
+      # No Mailgun outbound credential or sending identity is present in the
+      # dark deployment. Those values are added only after separate activation
+      # approval and a reviewed worker change that can actually use them.

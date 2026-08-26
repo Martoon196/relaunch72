@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import { createDatabasePool } from '../db/pool.js';
 import { loadDatabaseConfig, type DatabaseConfig } from '../db/config.js';
 import { assertRuntimeSchemaCurrent } from '../db/runtime-readiness.js';
+import { assertExpectedDatabaseInstallation } from '../db/installation-identity.js';
 import { requestDatabaseContext } from '../db/rls.js';
 import {
   createPgInboxReadService,
@@ -40,6 +41,8 @@ export interface PgPortalPlatform {
   inbox: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval queue commands; it cannot dispatch. */
   inboxCommands: PgPortalConversionInboxCommandService;
+  /** Bounded caller-owned runtime probe; throws without exposing connection details. */
+  assertReady(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -105,6 +108,12 @@ export async function buildPgPortalPlatform(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<PgPortalPlatform> {
   const pools: Pool[] = [];
+  const requireCompanyContent = env.NODE_ENV?.trim() === 'production'
+    && env.PORTAL_PRODUCT_PROFILE?.trim() === 'property_predator_growth';
+  const expectedInstallationId = env.PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID?.trim();
+  if (requireCompanyContent && !expectedInstallationId) {
+    throw new Error('Property Predator production requires its database installation identity');
+  }
   try {
     // Even in local development, an enabled cutover must never collapse the
     // three runtime paths onto a generic owner/migrator DATABASE_URL.
@@ -123,6 +132,9 @@ export async function buildPgPortalPlatform(
       'DATABASE_CRM_COMMAND_URL',
       'r72_crm_command',
     );
+    if (requireCompanyContent && !env.DATABASE_CONTENT_COMMAND_URL?.trim()) {
+      throw new Error('Property Predator production requires DATABASE_CONTENT_COMMAND_URL');
+    }
 
     const webPool = createDatabasePool(webConfig);
     pools.push(webPool);
@@ -132,6 +144,13 @@ export async function buildPgPortalPlatform(
     pools.push(commandPool);
 
     await assertRuntimeSchemaCurrent(webPool);
+    if (expectedInstallationId) {
+      await Promise.all([
+        assertExpectedDatabaseInstallation(webPool, expectedInstallationId),
+        assertExpectedDatabaseInstallation(identityPool, expectedInstallationId),
+        assertExpectedDatabaseInstallation(commandPool, expectedInstallationId),
+      ]);
+    }
     // Force role verification now instead of on the first customer's request.
     await Promise.all([
       identityPool.query('/* portal.identity-role-readiness */ SELECT 1'),
@@ -139,6 +158,7 @@ export async function buildPgPortalPlatform(
     ]);
 
     let companyContent: PgPortalCompanyContentService | undefined;
+    let contentReadinessPool: Pool | undefined;
     if (env.DATABASE_CONTENT_COMMAND_URL?.trim()) {
       let contentCommandPool: Pool | undefined;
       try {
@@ -148,14 +168,21 @@ export async function buildPgPortalPlatform(
           'r72_content_command',
         );
         contentCommandPool = createDatabasePool(contentCommandConfig);
+        if (expectedInstallationId) {
+          await assertExpectedDatabaseInstallation(contentCommandPool, expectedInstallationId);
+        }
         await contentCommandPool.query('/* portal.content-command-role-readiness */ SELECT 1');
         companyContent = createPgPortalCompanyContentService({
           webPool,
           commandPool: contentCommandPool,
         });
+        contentReadinessPool = contentCommandPool;
         pools.push(contentCommandPool);
       } catch {
         await contentCommandPool?.end().catch(() => undefined);
+        if (requireCompanyContent) {
+          throw new Error('Property Predator production content controls did not pass readiness');
+        }
         // Optional means optional, not permissive: a missing or invalid command
         // identity leaves every content mutation route uncomposed.
         companyContent = undefined;
@@ -170,6 +197,26 @@ export async function buildPgPortalPlatform(
       companyContent,
       inbox: createPgPortalInboxReadBoundary(webPool),
       inboxCommands: createPgPortalConversionInboxCommandService({ webPool, commandPool }),
+      async assertReady(): Promise<void> {
+        await Promise.all([
+          assertRuntimeSchemaCurrent(webPool),
+          ...(expectedInstallationId
+            ? [
+                assertExpectedDatabaseInstallation(webPool, expectedInstallationId),
+                assertExpectedDatabaseInstallation(identityPool, expectedInstallationId),
+                assertExpectedDatabaseInstallation(commandPool, expectedInstallationId),
+                ...(contentReadinessPool
+                  ? [assertExpectedDatabaseInstallation(contentReadinessPool, expectedInstallationId)]
+                  : []),
+              ]
+            : []),
+          identityPool.query('/* portal.identity-runtime-readiness */ SELECT 1'),
+          commandPool.query('/* portal.crm-runtime-readiness */ SELECT 1'),
+          ...(contentReadinessPool
+            ? [contentReadinessPool.query('/* portal.content-runtime-readiness */ SELECT 1')]
+            : []),
+        ]);
+      },
       async close(): Promise<void> {
         if (closed) return;
         closed = true;

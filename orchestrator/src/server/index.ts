@@ -34,6 +34,7 @@ import { buildPgPortalPlatform, postgresPortalEnabled, type PgPortalPlatform } f
 import { resolvePortalProductProfile } from '../portal/product-profile.js';
 import {
   createExternalEventCommandDatabasePool,
+  createMailgunWebhookCommandDatabasePool,
   createWebhookDatabasePool,
 } from '../db/pool.js';
 import {
@@ -48,6 +49,18 @@ import {
   loadPropertyPredatorExternalEventConfig,
   type PropertyPredatorExternalEventBridgeMount,
 } from '../integrations/external-events/index.js';
+import {
+  MailgunWebhookIngressService,
+  PgMailgunWebhookRepository,
+} from '../mailgun-webhook-pg/index.js';
+import { assertPgMailgunWebhookIngressReady } from '../integrations/mailgun-webhook/readiness.js';
+import {
+  createPropertyPredatorMailgunWebhookHandler,
+  loadPropertyPredatorMailgunWebhookConfig,
+  type PropertyPredatorMailgunWebhookMount,
+} from '../integrations/mailgun-webhook/router.js';
+import { propertyPredatorDarkProductionBlockers } from '../ops/property-predator-dark-production.js';
+import { createCachedRuntimeReadinessProbe } from '../ops/runtime-readiness-cache.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ORCH_ROOT = path.resolve(HERE, '../..');
@@ -145,6 +158,13 @@ function makeMarketing(): MarketingHooks | undefined {
 
 async function main(): Promise<void> {
   const cfg = loadStripeConfig();
+  const serviceReadinessBlockers = propertyPredatorDarkProductionBlockers(process.env);
+  if (serviceReadinessBlockers.length > 0) {
+    // For the controlled production profile, an injected effect credential or
+    // loosened switch must stop the process before any SDK/client can perform
+    // startup work. Readiness alone is too late for an irreversible rail.
+    throw new Error('Property Predator production safety policy did not pass');
+  }
   // Start regardless of config so the host's health check passes; checkout/webhook
   // return 503 until a key is added. Crash-on-missing-secret breaks cloud deploys.
   if (!cfg.secretKey) {
@@ -253,6 +273,59 @@ async function main(): Promise<void> {
   } else if (externalEventConfig.enabled) {
     console.warn(`⚠  Property Predator external-event bridge unavailable: ${externalEventConfig.blockers.join('; ')}`);
   }
+
+  const mailgunWebhookConfig = loadPropertyPredatorMailgunWebhookConfig(process.env);
+  let mailgunWebhookPool:
+    ReturnType<typeof createMailgunWebhookCommandDatabasePool> | undefined;
+  let propertyPredatorMailgunWebhook: PropertyPredatorMailgunWebhookMount = Object.freeze({
+    enabled: mailgunWebhookConfig.enabled,
+    ready: false,
+    blockers: mailgunWebhookConfig.blockers,
+  });
+  if (mailgunWebhookConfig.enabled
+      && mailgunWebhookConfig.configurationReady
+      && mailgunWebhookConfig.workspaceId
+      && mailgunWebhookConfig.providerConnectionId
+      && mailgunWebhookConfig.signingKey) {
+    try {
+      mailgunWebhookPool = createMailgunWebhookCommandDatabasePool(process.env);
+      await assertPgMailgunWebhookIngressReady(
+        mailgunWebhookPool,
+        mailgunWebhookConfig.workspaceId,
+        mailgunWebhookConfig.providerConnectionId,
+        process.env.PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID?.trim() ?? '',
+      );
+      const repository = new PgMailgunWebhookRepository({
+        commandPool: mailgunWebhookPool,
+        workspaceId: mailgunWebhookConfig.workspaceId,
+        providerConnectionId: mailgunWebhookConfig.providerConnectionId,
+      });
+      const ingress = new MailgunWebhookIngressService({
+        repository,
+        signingKey: mailgunWebhookConfig.signingKey,
+      });
+      propertyPredatorMailgunWebhook = Object.freeze({
+        enabled: true,
+        ready: true,
+        blockers: Object.freeze([]),
+        handle: createPropertyPredatorMailgunWebhookHandler(ingress),
+      });
+      console.log('Signed Mailgun delivery-evidence ingress is ready.');
+    } catch {
+      await mailgunWebhookPool?.end();
+      mailgunWebhookPool = undefined;
+      propertyPredatorMailgunWebhook = Object.freeze({
+        enabled: true,
+        ready: false,
+        blockers: Object.freeze([
+          'Mailgun webhook did not pass protected database readiness',
+        ]),
+      });
+      console.warn('⚠  Mailgun webhook unavailable; protected readiness failed.');
+    }
+  } else if (mailgunWebhookConfig.enabled) {
+    console.warn(`⚠  Mailgun webhook unavailable: ${mailgunWebhookConfig.blockers.join('; ')}`);
+  }
   const orders = fileOrderStore(cfg.ordersFile);
   const subscriptions = fileSubscriptionStore(cfg.subscriptionsFile);
   const runtimePolicy = runtimeSafetyPolicy(cfg);
@@ -274,6 +347,17 @@ async function main(): Promise<void> {
   // PUBLIC_BASE_URL is the separately hosted funnel/Stripe return origin. The
   // setup link must instead point at the service/domain that actually mounts /portal.
   const portalBaseUrl = process.env.PORTAL_BASE_URL?.trim() || (!cfg.production ? cfg.publicBaseUrl : undefined);
+  let canonicalHost: string | undefined;
+  if (cfg.production && portalBaseUrl) {
+    try {
+      const parsedPortalBaseUrl = new URL(portalBaseUrl);
+      if (parsedPortalBaseUrl.protocol === 'https:') {
+        canonicalHost = parsedPortalBaseUrl.hostname.toLowerCase();
+      }
+    } catch {
+      canonicalHost = undefined;
+    }
+  }
   const canAutoProvisionPortal = portalProvisioningEnabled(Boolean(cfg.production), postmarkToken, portalBaseUrl);
   if (!canAutoProvisionPortal) {
     console.warn('⚠  Portal auto-provisioning disabled: POSTMARK_SERVER_TOKEN and PORTAL_BASE_URL are required to deliver valid one-time setup links in production.');
@@ -391,6 +475,37 @@ async function main(): Promise<void> {
     : undefined;
 
   const buildBlockers = forceMockBuilds || process.env.ANTHROPIC_API_KEY?.trim() ? [] : ['Anthropic build key is not configured'];
+  const runtimeReadinessProbe = (postgresPortal || mailgunWebhookConfig.enabled)
+    ? createCachedRuntimeReadinessProbe({
+        probe: async () => {
+          const blockers: string[] = [];
+          if (postgresPortal) {
+            try { await postgresPortal.assertReady(); }
+            catch { blockers.push('Protected PostgreSQL portal runtime is unavailable'); }
+          } else if (requirePostgresPortal) {
+            blockers.push('Protected PostgreSQL portal runtime is unavailable');
+          }
+          if (mailgunWebhookConfig.enabled) {
+            if (!mailgunWebhookPool || !mailgunWebhookConfig.workspaceId
+                || !mailgunWebhookConfig.providerConnectionId) {
+              blockers.push('Protected Mailgun webhook runtime is unavailable');
+            } else {
+              try {
+                await assertPgMailgunWebhookIngressReady(
+                  mailgunWebhookPool,
+                  mailgunWebhookConfig.workspaceId,
+                  mailgunWebhookConfig.providerConnectionId,
+                  process.env.PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID?.trim() ?? '',
+                );
+              } catch {
+                blockers.push('Protected Mailgun webhook runtime is unavailable');
+              }
+            }
+          }
+          return Object.freeze(blockers);
+        },
+      })
+    : undefined;
   const app = createApp({
     stripe,
     cfg,
@@ -398,6 +513,9 @@ async function main(): Promise<void> {
     subscriptions,
     kickPipeline,
     buildBlockers,
+    serviceReadinessBlockers,
+    runtimeReadinessProbe,
+    canonicalHost,
     buildMode: forceMockBuilds ? 'mock' : 'live',
     now: () => new Date().toISOString(),
     marketing,
@@ -409,6 +527,7 @@ async function main(): Promise<void> {
           : 'client portal dependencies did not compose'],
     onIntakeAccepted,
     propertyPredatorExternalEvents,
+    propertyPredatorMailgunWebhook,
   });
   const server = http.createServer((req, res) => { void app(req, res); });
   server.listen(cfg.port, cfg.host, () => {
@@ -434,6 +553,7 @@ async function main(): Promise<void> {
         postgresPortal?.close(),
         externalEventCommandPool?.end(),
         externalEventWebhookPool?.end(),
+        mailgunWebhookPool?.end(),
       ]);
     } catch (error) {
       process.exitCode = 1;

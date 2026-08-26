@@ -27,6 +27,9 @@ const migration20Url = new URL('../../src/db/migrations/0020_legacy_lead_journey
 const migration21Url = new URL('../../src/db/migrations/0021_company_content_versions_and_approvals.sql', import.meta.url);
 const migration22Url = new URL('../../src/db/migrations/0022_provider_operations_and_inbox_core.sql', import.meta.url);
 const migration23Url = new URL('../../src/db/migrations/0023_provider_operation_dispatch.sql', import.meta.url);
+const migration24Url = new URL('../../src/db/migrations/0024_mailgun_webhook_evidence.sql', import.meta.url);
+const migration25Url = new URL('../../src/db/migrations/0025_property_predator_email_pilot_boundary.sql', import.meta.url);
+const migration26Url = new URL('../../src/db/migrations/0026_database_installation_identity.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -465,9 +468,9 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums native identity through provider dispatch', async () => {
+test('bundled migration discovery orders and checksums native identity through the database installation boundary', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-19);
+  const tail = migrations.slice(-22);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0005_canonical_portal_identity.sql', version: 5 },
     { filename: '0006_customer_provisioning.sql', version: 6 },
@@ -488,6 +491,9 @@ test('bundled migration discovery orders and checksums native identity through p
     { filename: '0021_company_content_versions_and_approvals.sql', version: 21 },
     { filename: '0022_provider_operations_and_inbox_core.sql', version: 22 },
     { filename: '0023_provider_operation_dispatch.sql', version: 23 },
+    { filename: '0024_mailgun_webhook_evidence.sql', version: 24 },
+    { filename: '0025_property_predator_email_pilot_boundary.sql', version: 25 },
+    { filename: '0026_database_installation_identity.sql', version: 26 },
   ]);
   const sources = [
     (await readFile(migration5Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -509,6 +515,9 @@ test('bundled migration discovery orders and checksums native identity through p
     (await readFile(migration21Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration22Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration23Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration24Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration25Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration26Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));

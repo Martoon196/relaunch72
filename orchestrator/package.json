@@ -21,6 +21,7 @@
     "signoff": "tsx src/signoff/cli.ts",
     "deliver": "tsx src/deliver/cli.ts",
     "serve": "tsx src/server/index.ts",
+    "serve:property-predator-email-worker": "tsx src/workers/property-predator-email/cli.ts",
     "preview:property-predator": "node --import ./test/windows-node24-shim.mjs --import tsx test/manual-property-predator-preview.ts",
     "pilot:preflight": "node --import ./test/windows-node24-shim.mjs --import tsx src/ops/property-predator-live-pilot-preflight-cli.ts",
     "stripe:setup": "tsx src/server/setup.ts",

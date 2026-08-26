@@ -2,6 +2,7 @@
  * The Stripe backend as a dependency-injected request handler, so routes test
  * without a socket, a key, or the pipeline. Routes:
  *   GET  /health               — liveness + test/live mode
+ *   GET  /ready                — fail-closed production traffic readiness
  *   POST /api/checkout         — { tier, bump? } → { url } (Stripe Checkout Session)
  *   POST /api/stripe/webhook   — verify signature, record the paid order, sync customer
  *   POST /api/intake           — S0-gate a submitted intake; on accept, kick the build
@@ -26,6 +27,10 @@ import {
   PROPERTY_PREDATOR_EXTERNAL_EVENT_PATH,
   type PropertyPredatorExternalEventBridgeMount,
 } from '../integrations/external-events/router.js';
+import {
+  PROPERTY_PREDATOR_MAILGUN_WEBHOOK_PATH,
+  type PropertyPredatorMailgunWebhookMount,
+} from '../integrations/mailgun-webhook/router.js';
 
 /** Optional marketing sync (Brevo). Both are no-ops when Brevo isn't configured. */
 export interface MarketingHooks {
@@ -63,10 +68,18 @@ export interface AppDeps {
   webhookReceipts?: WebhookReceiptStore;
   /** Extra boot-time reasons a build cannot safely start (for example no AI key). */
   buildBlockers?: string[];
+  /** Process-level production release blockers, already reduced to safe labels. */
+  serviceReadinessBlockers?: readonly string[];
+  /** Optional cached live dependency probe used only by /ready, never /health. */
+  runtimeReadinessProbe?: () => Promise<readonly string[]>;
+  /** Exact public Host accepted for every route other than liveness/readiness. */
+  canonicalHost?: string;
   /** Truthful execution mode exposed by health for accepted builds. */
   buildMode?: 'mock' | 'live';
   /** Optional, disabled-by-default Property Predator receipt-only source bridge. */
   propertyPredatorExternalEvents?: PropertyPredatorExternalEventBridgeMount;
+  /** Optional, disabled-by-default signed Mailgun delivery-evidence ingress. */
+  propertyPredatorMailgunWebhook?: PropertyPredatorMailgunWebhookMount;
 }
 
 function send(res: ServerResponse, code: number, body: unknown): void {
@@ -178,6 +191,19 @@ export function createApp(deps: AppDeps) {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const route = `${req.method} ${url.pathname}`;
 
+    // Render's health probes must remain available before custom-DNS cutover,
+    // but every operational surface is host-bound. Never redirect a mismatched
+    // Host: a fixed 421 avoids reflecting attacker-controlled proxy headers.
+    if (deps.canonicalHost && route !== 'GET /health' && route !== 'GET /ready') {
+      const rawHost = typeof req.headers.host === 'string'
+        ? req.headers.host.trim().toLowerCase()
+        : '';
+      const requestHost = rawHost.replace(/:\d+$/, '');
+      if (requestHost !== deps.canonicalHost) {
+        return send(res, 421, { error: 'misdirected request' });
+      }
+    }
+
     // The admin control room is same-origin, browser-navigated HTML — handled
     // before the CORS/API layer, with its own auth gate.
     if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
@@ -204,6 +230,38 @@ export function createApp(deps: AppDeps) {
       // CORS preflight: the browser asks before the real POST from the site.
       if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
+      if (route === 'GET /ready') {
+        const blockers = [...(deps.serviceReadinessBlockers ?? [])];
+        if (!deps.portal) {
+          blockers.push(...(deps.portalBlockers ?? ['client portal is not mounted']));
+        }
+        const externalEvents = deps.propertyPredatorExternalEvents;
+        if (externalEvents?.enabled && !externalEvents.ready) {
+          blockers.push(...externalEvents.blockers.map((blocker) => `Property Predator external events: ${blocker}`));
+          if (externalEvents.blockers.length === 0) {
+            blockers.push('Property Predator external events are enabled but not ready');
+          }
+        }
+        const mailgunWebhook = deps.propertyPredatorMailgunWebhook;
+        if (mailgunWebhook?.enabled && !mailgunWebhook.ready) {
+          blockers.push(...mailgunWebhook.blockers.map((blocker) => `Mailgun webhook: ${blocker}`));
+          if (mailgunWebhook.blockers.length === 0) {
+            blockers.push('Mailgun webhook is enabled but not ready');
+          }
+        }
+        if (deps.runtimeReadinessProbe) {
+          try {
+            blockers.push(...await deps.runtimeReadinessProbe());
+          } catch {
+            blockers.push('Protected runtime readiness probe failed');
+          }
+        }
+        return send(res, blockers.length === 0 ? 200 : 503, {
+          ready: blockers.length === 0,
+          blockers,
+        });
+      }
+
       if (route === 'GET /health') {
         // Liveness remains 200, while readiness is explicit and cannot be
         // confused with "a Stripe key exists".
@@ -219,6 +277,8 @@ export function createApp(deps: AppDeps) {
           subscription_blockers: subscriptionBlockers,
           accepting_public_leads: deps.cfg.publicLeadCaptureEnabled === true && Boolean(deps.marketing?.onLead),
           build_mode: deps.buildMode ?? 'live',
+          service_ready: (deps.serviceReadinessBlockers ?? []).length === 0,
+          service_readiness_blockers: [...(deps.serviceReadinessBlockers ?? [])],
           portal_ready: Boolean(deps.portal),
           portal_blockers: deps.portal ? [] : [...(deps.portalBlockers ?? ['client portal is not mounted'])],
           ...(deps.propertyPredatorExternalEvents ? {
@@ -228,7 +288,28 @@ export function createApp(deps: AppDeps) {
               blockers: [...deps.propertyPredatorExternalEvents.blockers],
             },
           } : {}),
+          ...(deps.propertyPredatorMailgunWebhook ? {
+            property_predator_mailgun_webhook: {
+              enabled: deps.propertyPredatorMailgunWebhook.enabled,
+              ready: deps.propertyPredatorMailgunWebhook.ready,
+              blockers: [...deps.propertyPredatorMailgunWebhook.blockers],
+            },
+          } : {}),
         });
+      }
+
+      if (route === `POST ${PROPERTY_PREDATOR_MAILGUN_WEBHOOK_PATH}`) {
+        const webhook = deps.propertyPredatorMailgunWebhook;
+        if (!webhook?.enabled) return send(res, 404, { error: 'not_found' });
+        if (!webhook.ready || !webhook.handle) {
+          return send(res, 503, { error: 'mailgun_webhook_unavailable' });
+        }
+        try {
+          await webhook.handle(req, res);
+        } catch {
+          if (!res.headersSent) send(res, 503, { error: 'mailgun_webhook_unavailable' });
+        }
+        return;
       }
 
       if (route === `POST ${PROPERTY_PREDATOR_EXTERNAL_EVENT_PATH}`) {

@@ -82,6 +82,22 @@ export function createExternalEventCommandDatabasePool(
   return createDatabasePool(loadDatabaseConfig('externalEventCommand', env), hooks);
 }
 
+/** Function-only pool for the controlled Mailgun outbound pilot boundary. */
+export function createMailgunWorkerCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('mailgunWorkerCommand', env), hooks);
+}
+
+/** Function-only pool for signed Mailgun event ingestion. */
+export function createMailgunWebhookCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('mailgunWebhookCommand', env), hooks);
+}
+
 /** Function-only pool for authenticated evidence and conversion projection. */
 export function createWebhookDatabasePool(
   env: NodeJS.ProcessEnv = process.env,

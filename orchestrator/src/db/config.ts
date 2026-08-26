@@ -12,6 +12,8 @@ export const DATABASE_ROLES = [
   'contentCommand',
   'importCommand',
   'externalEventCommand',
+  'mailgunWorkerCommand',
+  'mailgunWebhookCommand',
   'worker',
   'webhook',
   'public',
@@ -33,6 +35,8 @@ const ROLE_URL_ENV: Record<DatabaseRole, string> = {
   contentCommand: 'DATABASE_CONTENT_COMMAND_URL',
   importCommand: 'DATABASE_IMPORT_COMMAND_URL',
   externalEventCommand: 'DATABASE_EXTERNAL_EVENT_COMMAND_URL',
+  mailgunWorkerCommand: 'DATABASE_MAILGUN_WORKER_URL',
+  mailgunWebhookCommand: 'DATABASE_MAILGUN_WEBHOOK_URL',
   worker: 'DATABASE_WORKER_URL',
   webhook: 'DATABASE_WEBHOOK_URL',
   public: 'DATABASE_PUBLIC_URL',
@@ -50,6 +54,8 @@ const EXPECTED_RUNTIME_USER: Partial<Record<DatabaseRole, string>> = {
   contentCommand: 'r72_content_command',
   importCommand: 'r72_import_command',
   externalEventCommand: 'r72_external_event_command',
+  mailgunWorkerCommand: 'r72_mailgun_worker_command',
+  mailgunWebhookCommand: 'r72_mailgun_webhook_command',
   worker: 'r72_worker',
   webhook: 'r72_webhook',
   public: 'r72_public',
@@ -185,6 +191,10 @@ export function loadDatabaseConfig(
           ? 'DATABASE_IMPORT_COMMAND_POOL_MAX'
           : role === 'externalEventCommand'
             ? 'DATABASE_EXTERNAL_EVENT_COMMAND_POOL_MAX'
+            : role === 'mailgunWorkerCommand'
+              ? 'DATABASE_MAILGUN_WORKER_POOL_MAX'
+              : role === 'mailgunWebhookCommand'
+                ? 'DATABASE_MAILGUN_WEBHOOK_POOL_MAX'
             : role === 'setupDeliveryCommand'
               ? 'DATABASE_SETUP_DELIVERY_COMMAND_POOL_MAX'
               : role === 'setupReissueCommand'
@@ -240,6 +250,10 @@ export function loadDatabaseConfig(
             ? 'relaunch72-import-command'
             : role === 'externalEventCommand'
               ? 'relaunch72-external-event-command'
+              : role === 'mailgunWorkerCommand'
+                ? 'property-predator-mailgun-worker-command'
+                : role === 'mailgunWebhookCommand'
+                  ? 'property-predator-mailgun-webhook-command'
               : role === 'setupDeliveryCommand'
                 ? 'relaunch72-setup-delivery-command'
                 : role === 'setupReissueCommand'

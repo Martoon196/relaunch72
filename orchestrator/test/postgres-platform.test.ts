@@ -41,6 +41,34 @@ test('PostgreSQL portal cutover still requires its isolated CRM command identity
   );
 });
 
+test('Property Predator production requires its dedicated company-content command identity', async () => {
+  await assert.rejects(
+    () => buildPgPortalPlatform({
+      NODE_ENV: 'production',
+      PORTAL_PRODUCT_PROFILE: 'property_predator_growth',
+      PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID: '33333333-3333-4333-8333-333333333333',
+      DATABASE_WEB_URL: 'postgresql://r72_web:secret@db.example.test/growth_hq?sslmode=verify-full',
+      DATABASE_IDENTITY_COMMAND_URL: 'postgresql://r72_identity_command:secret@db.example.test/growth_hq?sslmode=verify-full',
+      DATABASE_CRM_COMMAND_URL: 'postgresql://r72_crm_command:secret@db.example.test/growth_hq?sslmode=verify-full',
+    }),
+    /requires DATABASE_CONTENT_COMMAND_URL/,
+  );
+});
+
+test('Property Predator production pins every runtime pool to one database installation', async () => {
+  await assert.rejects(
+    () => buildPgPortalPlatform({
+      NODE_ENV: 'production',
+      PORTAL_PRODUCT_PROFILE: 'property_predator_growth',
+      DATABASE_WEB_URL: 'postgresql://r72_web:secret@db.example.test/growth_hq?sslmode=verify-full',
+      DATABASE_IDENTITY_COMMAND_URL: 'postgresql://r72_identity_command:secret@db.example.test/growth_hq?sslmode=verify-full',
+      DATABASE_CRM_COMMAND_URL: 'postgresql://r72_crm_command:secret@db.example.test/growth_hq?sslmode=verify-full',
+      DATABASE_CONTENT_COMMAND_URL: 'postgresql://r72_content_command:secret@db.example.test/growth_hq?sslmode=verify-full',
+    }),
+    /requires its database installation identity/,
+  );
+});
+
 test('conversion inbox composition resolves the opaque session before any RLS read and exposes no send surface', async () => {
   let readConnections = 0;
   const webPool = {

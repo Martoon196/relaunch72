@@ -13,6 +13,7 @@ import {
 } from '../src/server/orders.js';
 import { memorySubscriptionStore } from '../src/server/subscriptions.js';
 import { createApp } from '../src/server/app.js';
+import { PROPERTY_PREDATOR_MAILGUN_WEBHOOK_PATH } from '../src/integrations/mailgun-webhook/router.js';
 import { validIntake } from './helpers.js';
 
 function cfg(over: Partial<StripeConfig> = {}): StripeConfig {
@@ -168,9 +169,154 @@ test('GET /health reports test mode + configured', async () => {
     subscription_blockers: ['recurring platform subscriptions are preview-only and not accepting payment'],
     accepting_public_leads: false,
     build_mode: 'live',
+    service_ready: true,
+    service_readiness_blockers: [],
     portal_ready: false,
     portal_blockers: ['client portal is not mounted'],
   });
+});
+
+test('operational routes are pinned to the canonical host while probes remain available', async () => {
+  const { handler } = app({ canonicalHost: 'hq.propertypredator.co.uk' });
+  const wrong = res();
+  await handler(req('GET', '/portal', '', { host: 'attacker.example' }), wrong);
+  assert.equal(wrong.statusCode, 421);
+  assert.deepEqual(JSON.parse(wrong._body), { error: 'misdirected request' });
+
+  const health = res();
+  await handler(req('GET', '/health', '', { host: 'render-internal.example' }), health);
+  assert.equal(health.statusCode, 200);
+
+  const canonical = res();
+  await handler(req('GET', '/portal', '', { host: 'HQ.PROPERTYPREDATOR.CO.UK:443' }), canonical);
+  assert.equal(canonical.statusCode, 404);
+});
+
+test('GET /ready fails closed until the secure portal is mounted', async () => {
+  const { handler } = app({ portalBlockers: ['required PostgreSQL portal services did not pass readiness'] });
+  const unavailable = res();
+  await handler(req('GET', '/ready'), unavailable);
+  assert.equal(unavailable.statusCode, 503);
+  assert.deepEqual(JSON.parse(unavailable._body), {
+    ready: false,
+    blockers: ['required PostgreSQL portal services did not pass readiness'],
+  });
+
+  const mounted = app({ portal: {} as NonNullable<Parameters<typeof createApp>[0]['portal']> }).handler;
+  const ready = res();
+  await mounted(req('GET', '/ready'), ready);
+  assert.equal(ready.statusCode, 200);
+  assert.deepEqual(JSON.parse(ready._body), { ready: true, blockers: [] });
+});
+
+test('GET /ready fails closed on process-level production safety blockers', async () => {
+  const { handler } = app({
+    portal: {} as NonNullable<Parameters<typeof createApp>[0]['portal']>,
+    serviceReadinessBlockers: ['Outbound Mailgun credential is forbidden in the public web process'],
+  });
+  const ready = res();
+  await handler(req('GET', '/ready'), ready);
+  assert.equal(ready.statusCode, 503);
+  assert.deepEqual(JSON.parse(ready._body), {
+    ready: false,
+    blockers: ['Outbound Mailgun credential is forbidden in the public web process'],
+  });
+  const health = res();
+  await handler(req('GET', '/health'), health);
+  assert.equal(JSON.parse(health._body).service_ready, false);
+});
+
+test('GET /ready awaits the bounded live dependency probe while health stays liveness-only', async () => {
+  let probes = 0;
+  const { handler } = app({
+    portal: {} as NonNullable<Parameters<typeof createApp>[0]['portal']>,
+    runtimeReadinessProbe: async () => {
+      probes += 1;
+      return ['Protected PostgreSQL portal runtime is unavailable'];
+    },
+  });
+  const health = res();
+  await handler(req('GET', '/health'), health);
+  assert.equal(health.statusCode, 200);
+  assert.equal(probes, 0);
+
+  const ready = res();
+  await handler(req('GET', '/ready'), ready);
+  assert.equal(ready.statusCode, 503);
+  assert.equal(probes, 1);
+  assert.deepEqual(JSON.parse(ready._body).blockers, [
+    'Protected PostgreSQL portal runtime is unavailable',
+  ]);
+});
+
+test('GET /ready fails closed when an enabled Property Predator bridge is degraded', async () => {
+  const { handler } = app({
+    portal: {} as NonNullable<Parameters<typeof createApp>[0]['portal']>,
+    propertyPredatorExternalEvents: {
+      enabled: true,
+      ready: false,
+      blockers: ['receipt store is unavailable'],
+    },
+  });
+  const response = res();
+  await handler(req('GET', '/ready'), response);
+  assert.equal(response.statusCode, 503);
+  assert.deepEqual(JSON.parse(response._body), {
+    ready: false,
+    blockers: ['Property Predator external events: receipt store is unavailable'],
+  });
+});
+
+test('GET /ready and health expose an enabled but degraded Mailgun webhook without secrets', async () => {
+  const { handler } = app({
+    portal: {} as NonNullable<Parameters<typeof createApp>[0]['portal']>,
+    propertyPredatorMailgunWebhook: {
+      enabled: true,
+      ready: false,
+      blockers: ['protected receipt store is unavailable'],
+    },
+  });
+  const ready = res();
+  await handler(req('GET', '/ready'), ready);
+  assert.equal(ready.statusCode, 503);
+  assert.deepEqual(JSON.parse(ready._body), {
+    ready: false,
+    blockers: ['Mailgun webhook: protected receipt store is unavailable'],
+  });
+
+  const health = res();
+  await handler(req('GET', '/health'), health);
+  const status = JSON.parse(health._body);
+  assert.deepEqual(status.property_predator_mailgun_webhook, {
+    enabled: true,
+    ready: false,
+    blockers: ['protected receipt store is unavailable'],
+  });
+});
+
+test('Mailgun webhook route is dark by default and delegates only when ready', async () => {
+  const dark = app().handler;
+  const hidden = res();
+  await dark(req('POST', PROPERTY_PREDATOR_MAILGUN_WEBHOOK_PATH, '{}'), hidden);
+  assert.equal(hidden.statusCode, 404);
+
+  let calls = 0;
+  const mounted = app({
+    propertyPredatorMailgunWebhook: {
+      enabled: true,
+      ready: true,
+      blockers: [],
+      handle: async (_request, response) => {
+        calls += 1;
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end('{"received":true}');
+      },
+    },
+  }).handler;
+  const accepted = res();
+  await mounted(req('POST', PROPERTY_PREDATOR_MAILGUN_WEBHOOK_PATH, '{}'), accepted);
+  assert.equal(accepted.statusCode, 200);
+  assert.equal(calls, 1);
 });
 
 test('a required but unmounted portal returns a branded 503 and explicit health blocker', async () => {

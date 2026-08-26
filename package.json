@@ -16,6 +16,7 @@
     "test": "npm run --workspace orchestrator test",
     "typecheck": "npm run --workspace orchestrator typecheck",
     "serve": "npm run --workspace orchestrator serve",
+    "serve:property-predator-email-worker": "npm run --workspace orchestrator serve:property-predator-email-worker",
     "pilot:preflight": "npm run --workspace orchestrator pilot:preflight",
     "stripe:setup": "npm run --workspace orchestrator stripe:setup",
     "db:migrate": "npm run --workspace orchestrator db:migrate",
