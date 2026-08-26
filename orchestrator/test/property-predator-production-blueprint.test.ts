@@ -57,7 +57,8 @@ test('production Blueprint is isolated, manually deployed and fail-closed', () =
   assert.match(manifest, /autoDeployTrigger: off/);
   assert.match(manifest, /healthCheckPath: \/ready/);
   assert.match(manifest, /renderSubdomainPolicy: disabled/);
-  assert.match(manifest, /- hq\.propertypredator\.co\.uk/);
+  assert.match(manifest, /- hq\.propertypredator\.com/);
+  assert.doesNotMatch(manifest, /propertypredator\.co\.uk/);
   assert.equal(
     (manifest.match(/buildCommand: npm ci --include=dev && npm run typecheck && npm test/g) ?? []).length,
     2,
@@ -75,6 +76,12 @@ test('production Blueprint is isolated, manually deployed and fail-closed', () =
 
   literalValue('PORTAL_POSTGRES_ENABLED', 'true');
   literalValue('PORTAL_PRODUCT_PROFILE', 'property_predator_growth');
+  literalValue('PORTAL_BASE_URL', 'https://hq.propertypredator.com');
+  literalValue('PUBLIC_BASE_URL', 'https://propertypredator.com');
+  literalValue(
+    'ALLOWED_ORIGINS',
+    'https://hq.propertypredator.com,https://propertypredator.com,https://www.propertypredator.com',
+  );
   literalValue('PLATFORM_SUBSCRIPTIONS_ENABLED', 'false');
   literalValue('PUBLIC_LEAD_CAPTURE_ENABLED', 'false');
   literalValue('PORTAL_DEMO_SEED', 'false');
@@ -153,7 +160,7 @@ test('Mailgun ingress is isolated and the dark worker receives no outbound secre
   literalValue('MAILGUN_REGION', 'eu');
   literalValue(
     'MAILGUN_EVENT_WEBHOOK_URL',
-    'https://hq.propertypredator.co.uk/api/provider-webhooks/mailgun/events',
+    'https://hq.propertypredator.com/api/provider-webhooks/mailgun/events',
   );
   literalValue('MAILGUN_WEBHOOK_SIGNATURE_VERIFICATION_ENABLED', 'true');
   assert.doesNotMatch(

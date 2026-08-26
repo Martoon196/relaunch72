@@ -11,7 +11,7 @@ No step in this document authorises customer-data import, customer email, social
 | Concern | Production-pilot decision |
 |---|---|
 | Runtime | One Render Starter web service and one isolated Starter email worker, Frankfurt |
-| Canonical origin | `https://hq.propertypredator.co.uk` |
+| Canonical origin | `https://hq.propertypredator.com` |
 | Database | A separate Neon production project; PostgreSQL is the only durable portal store |
 | Database access | Four portal roles plus `r72_mailgun_webhook_command` in the web service; only `r72_mailgun_worker_command` in the outbound worker |
 | Email | Mailgun EU signed-ingress slot only; outbound key intentionally absent and delivery disabled |
@@ -71,7 +71,7 @@ Render runs `npm ci`, type-checking and the complete local test suite before it 
 
 Do not guess Render's target. After service creation, copy the exact generated `onrender.com` hostname from the Render dashboard.
 
-At the DNS provider for `propertypredator.co.uk`, review and then create:
+At the DNS provider for `propertypredator.com`, review and then create:
 
 | Type | Host/name | Target/value | TTL |
 |---|---|---|---:|
@@ -79,7 +79,7 @@ At the DNS provider for `propertypredator.co.uk`, review and then create:
 
 Before adding it, remove only conflicting `A`, `AAAA` or `CNAME` records for the exact `hq` host after confirming they are unused. Do not alter apex, `www`, mail or unrelated subdomains.
 
-In Render, add/verify `hq.propertypredator.co.uk` and wait for its managed TLS certificate. If Cloudflare manages DNS, use **DNS only** while Render verifies the hostname and set SSL/TLS to Full; proxying can be reviewed after verification. If the zone uses CAA records, ensure they permit `letsencrypt.org` and `pki.goog` before requesting the certificate. Render's current procedure is documented at [Custom Domains](https://render.com/docs/custom-domains).
+In Render, add/verify `hq.propertypredator.com` and wait for its managed TLS certificate. If Cloudflare manages DNS, use **DNS only** while Render verifies the hostname and set SSL/TLS to Full; proxying can be reviewed after verification. If the zone uses CAA records, ensure they permit `letsencrypt.org` and `pki.goog` before requesting the certificate. Render's current procedure is documented at [Custom Domains](https://render.com/docs/custom-domains).
 
 The web manifest disables the Render subdomain. Do not re-enable it as a second production origin without a reviewed reason.
 
@@ -87,10 +87,10 @@ The web manifest disables the Render subdomain. Do not re-enable it as a second 
 
 Create Mailgun in its EU region and keep delivery disabled in Growth HQ.
 
-1. Add a dedicated sending subdomain such as `mg.propertypredator.co.uk` in Mailgun.
+1. Add the dedicated sending subdomain `mg.propertypredator.com` in Mailgun.
 2. Copy the exact SPF, DKIM, tracking and verification records returned by Mailgun. Do not pre-invent values or replace the domain's existing apex mail records.
 3. Store the webhook signing key only in the web service. Do not put an API key or sending identity in either Render process during the dark deployment. A later activation change may add the API key only to the isolated worker; neither process may ever receive both credentials.
-4. Configure the Mailgun event webhook as `https://hq.propertypredator.co.uk/api/provider-webhooks/mailgun/events`; the checked-in router authenticates the untouched signature fields before event parsing or persistence.
+4. Configure the Mailgun event webhook as `https://hq.propertypredator.com/api/provider-webhooks/mailgun/events`; the checked-in router authenticates the untouched signature fields before event parsing or persistence.
 5. Treat DNS and suppression synchronisation as unverified until each has direct console/test evidence; those claims are not accepted from editable environment labels.
 6. Keep both provider-effect switches false and the emergency pause true. Mailgun test events may prove signed ingress; they do not authorise delivery.
 

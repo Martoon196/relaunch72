@@ -26,7 +26,7 @@ services:
     maxShutdownDelaySeconds: 60
     autoDeployTrigger: off
     domains:
-      - hq.propertypredator.co.uk
+      - hq.propertypredator.com
     # The canonical domain is the only public origin. Render still exposes the
     # generated target in its dashboard so DNS can be configured.
     renderSubdomainPolicy: disabled
@@ -44,11 +44,11 @@ services:
       - key: PORTAL_PRODUCT_PROFILE
         value: property_predator_growth
       - key: PORTAL_BASE_URL
-        value: https://hq.propertypredator.co.uk
+        value: https://hq.propertypredator.com
       - key: PUBLIC_BASE_URL
-        value: https://propertypredator.co.uk
+        value: https://propertypredator.com
       - key: ALLOWED_ORIGINS
-        value: https://hq.propertypredator.co.uk,https://propertypredator.co.uk,https://www.propertypredator.co.uk
+        value: https://hq.propertypredator.com,https://propertypredator.com,https://www.propertypredator.com
       - key: SESSION_SECRET
         generateValue: true
 
@@ -139,7 +139,7 @@ services:
       - key: MAILGUN_REGION
         value: eu
       - key: MAILGUN_EVENT_WEBHOOK_URL
-        value: https://hq.propertypredator.co.uk/api/provider-webhooks/mailgun/events
+        value: https://hq.propertypredator.com/api/provider-webhooks/mailgun/events
       - key: MAILGUN_WEBHOOK_SIGNATURE_VERIFICATION_ENABLED
         value: "true"
 

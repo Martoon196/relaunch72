@@ -112,7 +112,7 @@ test('founder bootstrap sends only a setup-token hash to SQL and returns one mem
   assert.equal(fixture.handoff.setup.status, 'created');
   assert.equal(
     fixture.handoff.setup.url,
-    `https://hq.propertypredator.co.uk/portal/setup?token=${fixture.rawToken}`,
+    `https://hq.propertypredator.com/portal/setup?token=${fixture.rawToken}`,
   );
   assert.deepEqual(fixture.handoff.render, {
     PROPERTY_PREDATOR_PILOT_WORKSPACE_ID: IDS.workspace,

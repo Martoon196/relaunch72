@@ -10,7 +10,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 const CHANGE_REFERENCE_PATTERN = /^[a-z][a-z0-9._:-]{7,79}$/;
 
 export const PROPERTY_PREDATOR_FOUNDER_EMAIL = 'office@propertypredator.com';
-export const PROPERTY_PREDATOR_FOUNDER_PORTAL_ORIGIN = 'https://hq.propertypredator.co.uk';
+export const PROPERTY_PREDATOR_FOUNDER_PORTAL_ORIGIN = 'https://hq.propertypredator.com';
 export const PROPERTY_PREDATOR_FOUNDER_BOOTSTRAP_MIGRATIONS = Object.freeze([
   '0001_extensions_roles.sql',
   '0002_identity_workspaces.sql',

@@ -15,7 +15,7 @@ function locked(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
     PORTAL_DEMO_SEED: 'false',
     RELAUNCH72_FORCE_MOCK_BUILDS: 'true',
     PROPERTY_PREDATOR_EXTERNAL_EVENTS_ENABLED: 'false',
-    PORTAL_BASE_URL: 'https://hq.propertypredator.co.uk',
+    PORTAL_BASE_URL: 'https://hq.propertypredator.com',
     PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID: '33333333-3333-4333-8333-333333333333',
     PROPERTY_PREDATOR_MAILGUN_WEBHOOK_ENABLED: 'true',
     MAILGUN_WEBHOOK_SIGNATURE_VERIFICATION_ENABLED: 'true',

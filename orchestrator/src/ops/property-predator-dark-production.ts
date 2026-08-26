@@ -27,7 +27,7 @@ export function propertyPredatorDarkProductionBlockers(
   exact('PROPERTY_PREDATOR_EXTERNAL_EVENTS_ENABLED', 'false', 'External source events');
   exact(
     'PORTAL_BASE_URL',
-    'https://hq.propertypredator.co.uk',
+    'https://hq.propertypredator.com',
     'Canonical Growth HQ origin',
   );
   if (!uuid.test(env.PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID?.trim() ?? '')) {
