@@ -14,6 +14,10 @@ import {
 import { memorySubscriptionStore } from '../src/server/subscriptions.js';
 import { createApp } from '../src/server/app.js';
 import { PROPERTY_PREDATOR_MAILGUN_WEBHOOK_PATH } from '../src/integrations/mailgun-webhook/router.js';
+import {
+  PROPERTY_PREDATOR_SIMULATED_META_DM_INBOUND_PATH,
+  PROPERTY_PREDATOR_SIMULATED_WHATSAPP_INBOUND_PATH,
+} from '../src/integrations/simulated-inbound/router.js';
 import { validIntake } from './helpers.js';
 import { PORTAL_COOKIE } from '../src/portal/session.js';
 
@@ -384,6 +388,84 @@ test('Mailgun webhook route is dark by default and delegates only when ready', a
   await mounted(req('POST', PROPERTY_PREDATOR_MAILGUN_WEBHOOK_PATH, '{}'), accepted);
   assert.equal(accepted.statusCode, 200);
   assert.equal(calls, 1);
+});
+
+test('simulated WhatsApp inbound stays dark by default and delegates only when ready', async () => {
+  const dark = app().handler;
+  const hidden = res();
+  await dark(req('POST', PROPERTY_PREDATOR_SIMULATED_WHATSAPP_INBOUND_PATH, '{}'), hidden);
+  assert.equal(hidden.statusCode, 404);
+
+  let calls = 0;
+  const mounted = app({
+    propertyPredatorSimulatedWhatsAppInbound: {
+      enabled: true,
+      ready: true,
+      blockers: [],
+      handle: async (_request, response) => {
+        calls += 1;
+        response.writeHead(202, { 'content-type': 'application/json' });
+        response.end('{"accepted":true,"environment":"test"}');
+      },
+    },
+  }).handler;
+  const accepted = res();
+  await mounted(req('POST', PROPERTY_PREDATOR_SIMULATED_WHATSAPP_INBOUND_PATH, '{}'), accepted);
+  assert.equal(accepted.statusCode, 202);
+  assert.equal(calls, 1);
+});
+
+test('simulated Facebook/Instagram DM inbound stays dark and uses the same gated mount', async () => {
+  const dark = app().handler;
+  const hidden = res();
+  await dark(req('POST', PROPERTY_PREDATOR_SIMULATED_META_DM_INBOUND_PATH, '{}'), hidden);
+  assert.equal(hidden.statusCode, 404);
+
+  let calls = 0;
+  const mounted = app({
+    propertyPredatorSimulatedMetaDmInbound: {
+      enabled: true,
+      ready: true,
+      blockers: [],
+      handle: async (_request, response) => {
+        calls += 1;
+        response.writeHead(202, { 'content-type': 'application/json' });
+        response.end('{"accepted":true,"environment":"test"}');
+      },
+    },
+  }).handler;
+  const accepted = res();
+  await mounted(req('POST', PROPERTY_PREDATOR_SIMULATED_META_DM_INBOUND_PATH, '{}'), accepted);
+  assert.equal(accepted.statusCode, 202);
+  assert.equal(calls, 1);
+});
+
+test('simulated WhatsApp inbound readiness and health expose only fixed safe blockers', async () => {
+  const { handler } = app({
+    portal: {} as NonNullable<Parameters<typeof createApp>[0]['portal']>,
+    propertyPredatorSimulatedWhatsAppInbound: {
+      enabled: true,
+      ready: false,
+      blockers: ['durable test receipt service is unavailable'],
+    },
+  });
+  const ready = res();
+  await handler(req('GET', '/ready'), ready);
+  assert.equal(ready.statusCode, 503);
+  assert.deepEqual(JSON.parse(ready._body), {
+    ready: false,
+    blockers: [
+      'Simulated WhatsApp inbound: durable test receipt service is unavailable',
+    ],
+  });
+
+  const health = res();
+  await handler(req('GET', '/health'), health);
+  assert.deepEqual(JSON.parse(health._body).property_predator_simulated_whatsapp_inbound, {
+    enabled: true,
+    ready: false,
+    blockers: ['durable test receipt service is unavailable'],
+  });
 });
 
 test('a required but unmounted portal returns a branded 503 and explicit health blocker', async () => {

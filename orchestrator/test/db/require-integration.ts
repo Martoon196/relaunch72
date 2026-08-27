@@ -28,6 +28,7 @@ await import('./property-predator-snapshot.integration.test.js');
 await import('./legacy-lead-board-materialization.integration.test.js');
 await import('./company-content.integration.test.js');
 await import('./inbox-provider.integration.test.js');
+await import('./test-inbox-webhook.integration.test.js');
 await import('./property-predator-email-pilot.integration.test.js');
 await import('./property-predator-founder-bootstrap.integration.test.js');
 await import('./operator-action-control.integration.test.js');

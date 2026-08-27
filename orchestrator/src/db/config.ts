@@ -13,6 +13,7 @@ export const DATABASE_ROLES = [
   'externalEventCommand',
   'mailgunWorkerCommand',
   'mailgunWebhookCommand',
+  'testInboxWebhookCommand',
   'worker',
   'webhook',
   'public',
@@ -37,6 +38,7 @@ const ROLE_URL_ENV: Record<DatabaseRole, string> = {
   externalEventCommand: 'DATABASE_EXTERNAL_EVENT_COMMAND_URL',
   mailgunWorkerCommand: 'DATABASE_MAILGUN_WORKER_URL',
   mailgunWebhookCommand: 'DATABASE_MAILGUN_WEBHOOK_URL',
+  testInboxWebhookCommand: 'DATABASE_TEST_INBOX_WEBHOOK_URL',
   worker: 'DATABASE_WORKER_URL',
   webhook: 'DATABASE_WEBHOOK_URL',
   public: 'DATABASE_PUBLIC_URL',
@@ -57,6 +59,7 @@ const EXPECTED_RUNTIME_USER: Partial<Record<DatabaseRole, string>> = {
   externalEventCommand: 'r72_external_event_command',
   mailgunWorkerCommand: 'r72_mailgun_worker_command',
   mailgunWebhookCommand: 'r72_mailgun_webhook_command',
+  testInboxWebhookCommand: 'r72_test_inbox_webhook_command',
   worker: 'r72_worker',
   webhook: 'r72_webhook',
   public: 'r72_public',
@@ -196,17 +199,19 @@ export function loadDatabaseConfig(
               ? 'DATABASE_MAILGUN_WORKER_POOL_MAX'
               : role === 'mailgunWebhookCommand'
                 ? 'DATABASE_MAILGUN_WEBHOOK_POOL_MAX'
-            : role === 'setupDeliveryCommand'
-              ? 'DATABASE_SETUP_DELIVERY_COMMAND_POOL_MAX'
-              : role === 'setupReissueCommand'
-                ? 'DATABASE_SETUP_REISSUE_COMMAND_POOL_MAX'
-                : role === 'provisioningCommand'
-                  ? 'DATABASE_PROVISIONING_COMMAND_POOL_MAX'
-                  : role === 'abuseCommand'
-                    ? 'DATABASE_ABUSE_COMMAND_POOL_MAX'
-                  : role === 'identityCommand'
-                    ? 'DATABASE_IDENTITY_COMMAND_POOL_MAX'
-                    : `DATABASE_${role.toUpperCase()}_POOL_MAX`;
+                : role === 'testInboxWebhookCommand'
+                  ? 'DATABASE_TEST_INBOX_WEBHOOK_POOL_MAX'
+                  : role === 'setupDeliveryCommand'
+                    ? 'DATABASE_SETUP_DELIVERY_COMMAND_POOL_MAX'
+                    : role === 'setupReissueCommand'
+                      ? 'DATABASE_SETUP_REISSUE_COMMAND_POOL_MAX'
+                      : role === 'provisioningCommand'
+                        ? 'DATABASE_PROVISIONING_COMMAND_POOL_MAX'
+                        : role === 'abuseCommand'
+                          ? 'DATABASE_ABUSE_COMMAND_POOL_MAX'
+                          : role === 'identityCommand'
+                            ? 'DATABASE_IDENTITY_COMMAND_POOL_MAX'
+                            : `DATABASE_${role.toUpperCase()}_POOL_MAX`;
   return {
     role,
     connectionString: url.toString(),
@@ -261,17 +266,19 @@ export function loadDatabaseConfig(
                 ? 'property-predator-mailgun-worker-command'
                 : role === 'mailgunWebhookCommand'
                   ? 'property-predator-mailgun-webhook-command'
-              : role === 'setupDeliveryCommand'
-                ? 'relaunch72-setup-delivery-command'
-                : role === 'setupReissueCommand'
-                  ? 'relaunch72-setup-reissue-command'
-                  : role === 'provisioningCommand'
-                    ? 'relaunch72-provisioning-command'
-                    : role === 'abuseCommand'
-                      ? 'relaunch72-abuse-command'
-                    : role === 'identityCommand'
-                      ? 'relaunch72-identity-command'
-                      : `relaunch72-${role}`,
+                  : role === 'testInboxWebhookCommand'
+                    ? 'property-predator-test-inbox-webhook-command'
+                    : role === 'setupDeliveryCommand'
+                      ? 'relaunch72-setup-delivery-command'
+                      : role === 'setupReissueCommand'
+                        ? 'relaunch72-setup-reissue-command'
+                        : role === 'provisioningCommand'
+                          ? 'relaunch72-provisioning-command'
+                          : role === 'abuseCommand'
+                            ? 'relaunch72-abuse-command'
+                            : role === 'identityCommand'
+                              ? 'relaunch72-identity-command'
+                              : `relaunch72-${role}`,
     expectedDatabaseUser: enforceRuntimeIdentity ? expectedDatabaseUser : undefined,
   };
 }

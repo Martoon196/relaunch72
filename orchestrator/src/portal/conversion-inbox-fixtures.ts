@@ -4,6 +4,7 @@ import type {
   ConversionInboxDraftSnapshot,
   ConversionInboxLeadSnapshot,
   ConversionInboxRailActivitySnapshot,
+  ConversionInboxSignedInboundEvidenceSnapshot,
   ConversionInboxSnapshot,
   ConversionInboxThreadSnapshot,
   ConversionInboxTranscriptMessageSnapshot,
@@ -134,6 +135,21 @@ function consent(
   })]);
 }
 
+function signedInboundEvidence(
+  person: typeof PEOPLE[number],
+  index: number,
+): ConversionInboxSignedInboundEvidenceSnapshot | null {
+  if (person.channel !== 'whatsapp' && person.channel !== 'facebook'
+      && person.channel !== 'instagram') return null;
+  return Object.freeze({
+    kind: 'signed_simulator_event',
+    source: person.channel === 'whatsapp' ? 'whatsapp_simulator' : 'social_dm_simulator',
+    network: person.channel,
+    receiptId: `a1000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+    verifiedAt: person.lastAt,
+  });
+}
+
 function messages(
   person: typeof PEOPLE[number],
   index: number,
@@ -159,6 +175,7 @@ function messages(
       body: person.latest,
       occurredAt: person.lastAt,
       deliveryState: null,
+      inboundEvidence: signedInboundEvidence(person, index),
     }),
   ]);
 }

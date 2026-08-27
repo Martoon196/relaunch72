@@ -19,6 +19,7 @@ const APPROVAL = '88888888-8888-4888-8888-888888888888';
 const NEWER_DRAFT = '99999999-9999-4999-8999-999999999999';
 const DRAFT_POINT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const CORRELATION = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const INBOUND_RECEIPT = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 
 function result<TRow extends QueryResultRow>(rows: TRow[]): QueryResult<TRow> {
   return { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] };
@@ -67,26 +68,37 @@ function core(overrides: Record<string, unknown> = {}): QueryResultRow {
   };
 }
 
+function transcript(overrides: Record<string, unknown> = {}): QueryResultRow {
+  return {
+    sourceKind: 'test_fixture',
+    inboundReceiptId: null,
+    inboundProviderFamily: null,
+    inboundNetwork: null,
+    inboundVerifiedAt: null,
+    ...overrides,
+  };
+}
+
 class ThreadReadClient {
   readonly calls: Array<{ sql: string; values: readonly unknown[] }> = [];
   coreRows: QueryResultRow[] = [core()];
   transcriptRows: QueryResultRow[] = [
-    {
+    transcript({
       messageId: DRAFT,
       direction: 'outbound',
       lifecycle: 'approval_pending',
       body: 'Exact immutable TEST draft.',
       occurredAt: new Date('2026-08-26T09:04:00.000Z'),
       deliveryStatus: null,
-    },
-    {
+    }),
+    transcript({
       messageId: INBOUND,
       direction: 'inbound',
       lifecycle: 'received',
       body: 'Can you show me the comparison?',
       occurredAt: new Date('2026-08-26T09:00:00.000Z'),
       deliveryStatus: null,
-    },
+    }),
   ];
   consentRows: QueryResultRow[] = [{
     channel: 'email',
@@ -182,6 +194,52 @@ test('PostgreSQL thread projection is session-guarded, bounded and maps exact TE
   assert.deepEqual(transcript.values, [CONVERSATION, 81]);
   const consent = client.calls.find((call) => call.sql.includes('thread-consent'))!;
   assert.deepEqual(consent.values, [CONVERSATION, POINT, 8]);
+});
+
+test('thread projection exposes only authoritative message-linked simulator provenance', async () => {
+  const client = new ThreadReadClient();
+  client.transcriptRows[1] = transcript({
+    ...client.transcriptRows[1],
+    sourceKind: 'verified_webhook',
+    inboundReceiptId: INBOUND_RECEIPT,
+    inboundProviderFamily: 'whatsapp',
+    inboundNetwork: 'whatsapp',
+    inboundVerifiedAt: new Date('2026-08-26T09:00:01.000Z'),
+  });
+  const service = new PgConversionInboxThreadReadService({
+    connect: async () => client,
+  } as unknown as Pick<Pool, 'connect'>);
+
+  const snapshot = await service.thread(context, CONVERSATION);
+  assert.deepEqual(snapshot?.messages[0]?.inboundEvidence, {
+    kind: 'signed_simulator_event',
+    source: 'whatsapp_simulator',
+    network: 'whatsapp',
+    receiptId: INBOUND_RECEIPT,
+    verifiedAt: '2026-08-26T09:00:01.000Z',
+  });
+  const sql = client.calls.find((call) => call.sql.includes('thread-transcript'))!.sql;
+  assert.match(sql, /app_private\.test_inbox_webhook_message_provenance\(/);
+  assert.match(sql, /message\.source_kind = 'verified_webhook'/);
+  assert.doesNotMatch(sql, /external_event_id|signature_sha256|source_identity_sha256|destination_identity_sha256/);
+
+  client.transcriptRows[1] = transcript({
+    ...client.transcriptRows[1],
+    inboundProviderFamily: null,
+  });
+  await assert.rejects(
+    service.thread(context, CONVERSATION),
+    /signed inbound provenance is inconsistent/,
+  );
+
+  client.transcriptRows[1] = transcript({
+    ...client.transcriptRows[1],
+    inboundProviderFamily: 'social_dm',
+  });
+  await assert.rejects(
+    service.thread(context, CONVERSATION),
+    /signed inbound provider is inconsistent/,
+  );
 });
 
 test('thread projection reduces durable TEST operations to queued, accepted, reconciled or attention', async () => {
@@ -296,21 +354,21 @@ test('thread projection prioritises the exact pending or rework target over a ne
     approvalDecision: 'changes_requested',
     approvalNote: 'Fix the evidence before approval.',
   })];
-  client.transcriptRows = [{
+  client.transcriptRows = [transcript({
     messageId: NEWER_DRAFT,
     direction: 'outbound',
     lifecycle: 'draft',
     body: 'Newer unrelated ordinary draft.',
     occurredAt: new Date('2026-08-26T09:10:00.000Z'),
     deliveryStatus: null,
-  }, {
+  }), transcript({
     messageId: DRAFT,
     direction: 'outbound',
     lifecycle: 'draft',
     body: 'Older exact copy returned for rework.',
     occurredAt: new Date('2026-08-26T09:04:00.000Z'),
     deliveryStatus: null,
-  }];
+  })];
   const service = new PgConversionInboxThreadReadService({
     connect: async () => client,
   } as unknown as Pick<Pool, 'connect'>);

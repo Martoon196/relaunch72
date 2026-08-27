@@ -31,6 +31,12 @@ import {
   PROPERTY_PREDATOR_MAILGUN_WEBHOOK_PATH,
   type PropertyPredatorMailgunWebhookMount,
 } from '../integrations/mailgun-webhook/router.js';
+import {
+  PROPERTY_PREDATOR_SIMULATED_META_DM_INBOUND_PATH,
+  PROPERTY_PREDATOR_SIMULATED_WHATSAPP_INBOUND_PATH,
+  type PropertyPredatorSimulatedMetaDmInboundMount,
+  type PropertyPredatorSimulatedWhatsAppInboundMount,
+} from '../integrations/simulated-inbound/router.js';
 
 /** Optional marketing sync (Brevo). Both are no-ops when Brevo isn't configured. */
 export interface MarketingHooks {
@@ -82,6 +88,10 @@ export interface AppDeps {
   propertyPredatorExternalEvents?: PropertyPredatorExternalEventBridgeMount;
   /** Optional, disabled-by-default signed Mailgun delivery-evidence ingress. */
   propertyPredatorMailgunWebhook?: PropertyPredatorMailgunWebhookMount;
+  /** Optional, disabled-by-default signed non-routable WhatsApp TEST ingress. */
+  propertyPredatorSimulatedWhatsAppInbound?: PropertyPredatorSimulatedWhatsAppInboundMount;
+  /** Optional, disabled-by-default signed non-routable Facebook/Instagram DM TEST ingress. */
+  propertyPredatorSimulatedMetaDmInbound?: PropertyPredatorSimulatedMetaDmInboundMount;
   /** Optional request-handler seam; production defaults to the bundled admin router. */
   adminHandler?: (req: IncomingMessage, res: ServerResponse, cfg: StripeConfig) => void | Promise<void>;
 }
@@ -298,6 +308,22 @@ export function createApp(deps: AppDeps) {
             blockers.push('Mailgun webhook is enabled but not ready');
           }
         }
+        const simulatedWhatsApp = deps.propertyPredatorSimulatedWhatsAppInbound;
+        if (simulatedWhatsApp?.enabled && !simulatedWhatsApp.ready) {
+          blockers.push(...simulatedWhatsApp.blockers.map((blocker) =>
+            `Simulated WhatsApp inbound: ${blocker}`));
+          if (simulatedWhatsApp.blockers.length === 0) {
+            blockers.push('Simulated WhatsApp inbound is enabled but not ready');
+          }
+        }
+        const simulatedMetaDm = deps.propertyPredatorSimulatedMetaDmInbound;
+        if (simulatedMetaDm?.enabled && !simulatedMetaDm.ready) {
+          blockers.push(...simulatedMetaDm.blockers.map((blocker) =>
+            `Simulated Meta DM inbound: ${blocker}`));
+          if (simulatedMetaDm.blockers.length === 0) {
+            blockers.push('Simulated Meta DM inbound is enabled but not ready');
+          }
+        }
         if (deps.runtimeReadinessProbe) {
           try {
             blockers.push(...await deps.runtimeReadinessProbe());
@@ -344,7 +370,53 @@ export function createApp(deps: AppDeps) {
               blockers: [...deps.propertyPredatorMailgunWebhook.blockers],
             },
           } : {}),
+          ...(deps.propertyPredatorSimulatedWhatsAppInbound ? {
+            property_predator_simulated_whatsapp_inbound: {
+              enabled: deps.propertyPredatorSimulatedWhatsAppInbound.enabled,
+              ready: deps.propertyPredatorSimulatedWhatsAppInbound.ready,
+              blockers: [...deps.propertyPredatorSimulatedWhatsAppInbound.blockers],
+            },
+          } : {}),
+          ...(deps.propertyPredatorSimulatedMetaDmInbound ? {
+            property_predator_simulated_meta_dm_inbound: {
+              enabled: deps.propertyPredatorSimulatedMetaDmInbound.enabled,
+              ready: deps.propertyPredatorSimulatedMetaDmInbound.ready,
+              blockers: [...deps.propertyPredatorSimulatedMetaDmInbound.blockers],
+            },
+          } : {}),
         });
+      }
+
+      if (route === `POST ${PROPERTY_PREDATOR_SIMULATED_WHATSAPP_INBOUND_PATH}`) {
+        const webhook = deps.propertyPredatorSimulatedWhatsAppInbound;
+        if (!webhook?.enabled) return send(res, 404, { error: 'not_found' });
+        if (!webhook.ready || !webhook.handle) {
+          return send(res, 503, { error: 'simulated_whatsapp_inbound_unavailable' });
+        }
+        try {
+          await webhook.handle(req, res);
+        } catch {
+          if (!res.headersSent) {
+            send(res, 503, { error: 'simulated_whatsapp_inbound_unavailable' });
+          }
+        }
+        return;
+      }
+
+      if (route === `POST ${PROPERTY_PREDATOR_SIMULATED_META_DM_INBOUND_PATH}`) {
+        const webhook = deps.propertyPredatorSimulatedMetaDmInbound;
+        if (!webhook?.enabled) return send(res, 404, { error: 'not_found' });
+        if (!webhook.ready || !webhook.handle) {
+          return send(res, 503, { error: 'simulated_meta_dm_inbound_unavailable' });
+        }
+        try {
+          await webhook.handle(req, res);
+        } catch {
+          if (!res.headersSent) {
+            send(res, 503, { error: 'simulated_meta_dm_inbound_unavailable' });
+          }
+        }
+        return;
       }
 
       if (route === `POST ${PROPERTY_PREDATOR_MAILGUN_WEBHOOK_PATH}`) {

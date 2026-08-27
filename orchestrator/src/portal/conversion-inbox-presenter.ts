@@ -43,6 +43,16 @@ export type ConversionInboxRailActivityState =
   | 'reconciled'
   | 'attention';
 
+export interface ConversionInboxSignedInboundEvidenceSnapshot {
+  readonly kind: 'signed_simulator_event';
+  readonly source: 'whatsapp_simulator' | 'social_dm_simulator';
+  readonly network: 'whatsapp' | 'facebook' | 'instagram';
+  /** Opaque internal receipt UUID. No provider event/address data is exposed. */
+  readonly receiptId: string;
+  /** Server-side verification time, never a caller-asserted provider timestamp. */
+  readonly verifiedAt: string;
+}
+
 export interface ConversionInboxFilterInput {
   readonly query?: unknown;
   readonly channel?: unknown;
@@ -64,6 +74,8 @@ export interface ConversionInboxTranscriptMessageSnapshot {
   readonly body: string;
   readonly occurredAt: string;
   readonly deliveryState?: ConversionInboxDeliveryState | null;
+  /** Absent/null unless an immutable, message-linked TEST webhook receipt exists. */
+  readonly inboundEvidence?: ConversionInboxSignedInboundEvidenceSnapshot | null;
 }
 
 export interface ConversionInboxConsentSnapshot {
@@ -142,6 +154,16 @@ export interface ConversionInboxTranscriptMessageView {
   readonly occurredAt: string;
   readonly deliveryState: ConversionInboxDeliveryState | null;
   readonly deliveryLabel: string | null;
+  readonly inboundEvidence: ConversionInboxSignedInboundEvidenceView | null;
+}
+
+export interface ConversionInboxSignedInboundEvidenceView
+  extends ConversionInboxSignedInboundEvidenceSnapshot {
+  readonly label: 'Signed TEST inbound';
+  readonly networkLabel: 'WhatsApp' | 'Facebook' | 'Instagram';
+  readonly networkCode: 'WA' | 'FB' | 'IG';
+  readonly receiptLabel: string;
+  readonly accessibleLabel: string;
 }
 
 export interface ConversionInboxConsentView extends ConversionInboxConsentSnapshot {
@@ -214,6 +236,7 @@ const CHANNELS = new Set<ConversionInboxChannelFilter>([
 ]);
 const QUEUES = new Set<ConversionInboxQueueFilter>(['all', 'unread', 'approval', 'open']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const CANONICAL_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 const CHANNEL_LABELS: Readonly<Record<ConversationChannel, string>> = Object.freeze({
   email: 'Email',
   whatsapp: 'WhatsApp',
@@ -331,6 +354,40 @@ function deliveryLabel(state: ConversionInboxDeliveryState): string {
   return 'SIMULATED failed';
 }
 
+function signedInboundEvidence(
+  message: ConversionInboxTranscriptMessageSnapshot,
+): ConversionInboxSignedInboundEvidenceView | null {
+  const evidence = message.inboundEvidence;
+  if (!evidence || message.direction !== 'inbound' || message.lifecycle !== 'received'
+      || evidence.kind !== 'signed_simulator_event'
+      || !UUID.test(evidence.receiptId)
+      || !CANONICAL_UTC.test(evidence.verifiedAt)
+      || !Number.isFinite(Date.parse(evidence.verifiedAt))
+      || new Date(evidence.verifiedAt).toISOString() !== evidence.verifiedAt) return null;
+  const expectedSource = evidence.network === 'whatsapp'
+    ? 'whatsapp_simulator'
+    : evidence.network === 'facebook' || evidence.network === 'instagram'
+      ? 'social_dm_simulator' : null;
+  if (expectedSource === null || evidence.source !== expectedSource) return null;
+  const networkLabel = evidence.network === 'whatsapp' ? 'WhatsApp'
+    : evidence.network === 'facebook' ? 'Facebook' : 'Instagram';
+  const networkCode = evidence.network === 'whatsapp' ? 'WA'
+    : evidence.network === 'facebook' ? 'FB' : 'IG';
+  const receiptId = evidence.receiptId.toLowerCase();
+  return Object.freeze({
+    kind: 'signed_simulator_event',
+    source: evidence.source,
+    network: evidence.network,
+    receiptId,
+    verifiedAt: evidence.verifiedAt,
+    label: 'Signed TEST inbound',
+    networkLabel,
+    networkCode,
+    receiptLabel: `TEST IN ${receiptId.slice(0, 8)}…${receiptId.slice(-4)}`,
+    accessibleLabel: `Signed simulated ${networkLabel} inbound event. Non-routable test only; no live account connected.`,
+  });
+}
+
 function transcriptMessage(
   message: ConversionInboxTranscriptMessageSnapshot,
 ): ConversionInboxTranscriptMessageView {
@@ -343,6 +400,7 @@ function transcriptMessage(
     bodyTruncated: body.truncated,
     deliveryState: state,
     deliveryLabel: state === null ? null : deliveryLabel(state),
+    inboundEvidence: signedInboundEvidence(message),
   });
 }
 

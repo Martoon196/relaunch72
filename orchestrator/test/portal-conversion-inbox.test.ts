@@ -130,6 +130,17 @@ test('shows selected transcript, draft state, approval gate, consent and simulat
   assert.match(html, /No provider operation exists for this exact draft/);
 });
 
+test('renders signed simulator provenance without exposing the full receipt or provider data', () => {
+  const html = render(createPropertyPredatorTestInboxSnapshot(), { channel: 'whatsapp' });
+  assert.match(html, /class="ci-inbound-proof"/);
+  assert.match(html, /Signed TEST inbound · WA/);
+  assert.match(html, /Signed simulated WhatsApp inbound event\. Non-routable test only; no live account connected\./);
+  assert.match(html, /Simulator signature verified · Receipt TEST IN a1000000…0002 · verified <time/);
+  assert.match(html, /@media\(forced-colors:active\)[\s\S]*\.ci-inbound-proof/);
+  assert.doesNotMatch(html, /a1000000-0000-4000-8000-000000000002/);
+  assert.doesNotMatch(html, /signature=|sha256=|test-dm:|\+447700900/i);
+});
+
 test('approved social reply remains visibly locked when consent is unknown', () => {
   const html = render(createPropertyPredatorTestInboxSnapshot(), { channel: 'instagram' });
   assert.match(html, /Marcus Reed/);

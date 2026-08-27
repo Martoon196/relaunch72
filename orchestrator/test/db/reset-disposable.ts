@@ -47,6 +47,8 @@ const APP_ROLES = [
   'r72_setup_delivery_command',
   'r72_setup_delivery_definer',
   'r72_setup_reissue_command',
+  'r72_test_inbox_webhook_command',
+  'r72_test_inbox_webhook_definer',
   'r72_web',
   'r72_webhook',
   'r72_worker',

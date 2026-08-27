@@ -13,6 +13,7 @@ import {
   type ConversionInboxDraftSnapshot,
   type ConversionInboxLeadSnapshot,
   type ConversionInboxRailActivitySnapshot,
+  type ConversionInboxSignedInboundEvidenceSnapshot,
   type ConversionInboxThreadSnapshot,
   type ConversionInboxTranscriptMessageSnapshot,
 } from './conversion-inbox-presenter.js';
@@ -81,9 +82,14 @@ interface TranscriptRow extends QueryResultRow {
   messageId: string;
   direction: string;
   lifecycle: string;
+  sourceKind: string;
   body: string;
   occurredAt: string | Date;
   deliveryStatus: string | null;
+  inboundReceiptId: string | null;
+  inboundProviderFamily: string | null;
+  inboundNetwork: string | null;
+  inboundVerifiedAt: string | Date | null;
 }
 
 interface ConsentRow extends QueryResultRow {
@@ -368,8 +374,13 @@ WHERE conversation.id = $1
 
 const TRANSCRIPT_SQL = `/* portal.conversion-inbox.thread-transcript */
 SELECT message.id AS "messageId", message.direction, message.lifecycle,
+       message.source_kind AS "sourceKind",
        version.body_text AS body, message.occurred_at AS "occurredAt",
-       delivery.status AS "deliveryStatus"
+       delivery.status AS "deliveryStatus",
+       inbound_provenance.receipt_id AS "inboundReceiptId",
+       inbound_provenance.provider_family AS "inboundProviderFamily",
+       inbound_provenance.network AS "inboundNetwork",
+       inbound_provenance.received_at AS "inboundVerifiedAt"
 FROM app.messages AS message
 JOIN app.message_versions AS version
   ON version.workspace_id = message.workspace_id
@@ -391,6 +402,12 @@ LEFT JOIN LATERAL (
   ORDER BY candidate.updated_at DESC, candidate.id DESC
   LIMIT 1
 ) AS delivery ON true
+LEFT JOIN LATERAL app_private.test_inbox_webhook_message_provenance(
+  message.workspace_id, message.conversation_id, message.id
+) AS inbound_provenance ON message.environment = 'test'
+  AND message.direction = 'inbound'
+  AND message.lifecycle = 'received'
+  AND message.source_kind = 'verified_webhook'
 WHERE message.conversation_id = $1
   AND message.environment = 'test'
 ORDER BY message.occurred_at DESC, message.id DESC
@@ -704,6 +721,38 @@ function mapRailActivity(row: ThreadCoreRow): ConversionInboxRailActivitySnapsho
   });
 }
 
+function mapInboundEvidence(
+  row: TranscriptRow,
+): ConversionInboxSignedInboundEvidenceSnapshot | null {
+  const fields = [row.inboundReceiptId, row.inboundProviderFamily,
+    row.inboundNetwork, row.inboundVerifiedAt];
+  if (fields.every((value) => value === null)) return null;
+  if (fields.some((value) => value === null)
+      || row.direction !== 'inbound' || row.lifecycle !== 'received'
+      || row.sourceKind !== 'verified_webhook') {
+    throw new Error('Conversion Inbox signed inbound provenance is inconsistent');
+  }
+  const network = row.inboundNetwork;
+  const providerFamily = row.inboundProviderFamily;
+  if (network !== 'whatsapp' && network !== 'facebook' && network !== 'instagram') {
+    throw new Error('Conversion Inbox signed inbound network is invalid');
+  }
+  const source = providerFamily === 'whatsapp' && network === 'whatsapp'
+    ? 'whatsapp_simulator'
+    : providerFamily === 'social_dm' && (network === 'facebook' || network === 'instagram')
+      ? 'social_dm_simulator' : null;
+  if (source === null) {
+    throw new Error('Conversion Inbox signed inbound provider is inconsistent');
+  }
+  return Object.freeze({
+    kind: 'signed_simulator_event',
+    source,
+    network,
+    receiptId: uuid(row.inboundReceiptId, 'inboundReceiptId'),
+    verifiedAt: timestamp(row.inboundVerifiedAt, 'inboundVerifiedAt'),
+  });
+}
+
 function mapTranscript(
   rows: readonly TranscriptRow[],
   displayName: string,
@@ -724,6 +773,7 @@ function mapTranscript(
         : row.direction === 'internal_note' ? 'Internal note' : 'Growth team',
       body: databaseBody(row.body, 'messageBody'),
       occurredAt: timestamp(row.occurredAt, 'occurredAt'),
+      inboundEvidence: mapInboundEvidence(row),
       ...(state === null ? {} : { deliveryState: state }),
     });
   }).reverse());

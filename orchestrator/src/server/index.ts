@@ -71,6 +71,7 @@ import { propertyPredatorDarkProductionBlockers } from '../ops/property-predator
 import { createCachedRuntimeReadinessProbe } from '../ops/runtime-readiness-cache.js';
 import { createPortalRequestContextResolver } from '../portal/request-context.js';
 import { createSafeTelemetryLogger } from '../ops/safe-telemetry.js';
+import { composePropertyPredatorSimulatedInbound } from '../integrations/simulated-inbound/composition.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ORCH_ROOT = path.resolve(HERE, '../..');
@@ -526,8 +527,16 @@ async function main(): Promise<void> {
       }
     : undefined;
 
+  const simulatedInbound = await composePropertyPredatorSimulatedInbound(process.env);
+  if (simulatedInbound.enabled) {
+    console.log(simulatedInbound.ready
+      ? 'Signed non-routable simulated TEST ingress is ready.'
+      : '⚠  Simulated inbound TEST ingress unavailable; protected readiness failed.');
+  }
+
   const buildBlockers = forceMockBuilds || process.env.ANTHROPIC_API_KEY?.trim() ? [] : ['Anthropic build key is not configured'];
-  const runtimeReadinessProbe = (postgresPortal || mailgunWebhookConfig.enabled)
+  const runtimeReadinessProbe = (postgresPortal || mailgunWebhookConfig.enabled
+      || simulatedInbound.enabled)
     ? createCachedRuntimeReadinessProbe({
         probe: async () => {
           const blockers: string[] = [];
@@ -552,6 +561,13 @@ async function main(): Promise<void> {
               } catch {
                 blockers.push('Protected Mailgun webhook runtime is unavailable');
               }
+            }
+          }
+          if (simulatedInbound.enabled) {
+            try {
+              await simulatedInbound.assertReady();
+            } catch {
+              blockers.push('Protected simulated inbound TEST runtime is unavailable');
             }
           }
           return Object.freeze(blockers);
@@ -581,6 +597,8 @@ async function main(): Promise<void> {
     onIntakeAccepted,
     propertyPredatorExternalEvents,
     propertyPredatorMailgunWebhook,
+    propertyPredatorSimulatedWhatsAppInbound: simulatedInbound.whatsapp,
+    propertyPredatorSimulatedMetaDmInbound: simulatedInbound.metaDm,
   });
   const server = http.createServer((req, res) => { void app(req, res); });
   server.headersTimeout = 10_000;
@@ -613,6 +631,7 @@ async function main(): Promise<void> {
         externalEventCommandPool?.end(),
         externalEventWebhookPool?.end(),
         mailgunWebhookPool?.end(),
+        simulatedInbound.close(),
       ]);
     } catch (error) {
       process.exitCode = 1;

@@ -78,6 +78,47 @@ test('filters loaded summaries without inventing data outside InboxConversationP
   assert.deepEqual(approvals.conversations.map((item) => item.contactName), ['Aisha Rahman']);
 });
 
+test('projects only exact signed simulator evidence for a received inbound message', () => {
+  const base = createPropertyPredatorTestInboxSnapshot();
+  const whatsapp = presentConversionInbox(base, {
+    workspaceName: WORKSPACE,
+    filters: { channel: 'whatsapp' },
+  });
+  const evidence = whatsapp.selectedThread?.messages.find((message) => message.direction === 'inbound')
+    ?.inboundEvidence;
+  assert.deepEqual(evidence, {
+    kind: 'signed_simulator_event',
+    source: 'whatsapp_simulator',
+    network: 'whatsapp',
+    receiptId: 'a1000000-0000-4000-8000-000000000002',
+    verifiedAt: '2026-08-26T08:25:00.000Z',
+    label: 'Signed TEST inbound',
+    networkLabel: 'WhatsApp',
+    networkCode: 'WA',
+    receiptLabel: 'TEST IN a1000000…0002',
+    accessibleLabel: 'Signed simulated WhatsApp inbound event. Non-routable test only; no live account connected.',
+  });
+
+  const thread = base.threads[1]!;
+  const inbound = thread.messages.find((message) => message.direction === 'inbound')!;
+  const malformed = {
+    ...base,
+    threads: [{
+      ...thread,
+      messages: thread.messages.map((message) => message.messageId === inbound.messageId ? {
+        ...message,
+        inboundEvidence: { ...inbound.inboundEvidence!, source: 'social_dm_simulator' },
+      } : message),
+    }],
+  } as unknown as ConversionInboxSnapshot;
+  const hidden = presentConversionInbox(malformed, {
+    workspaceName: WORKSPACE,
+    filters: { channel: 'whatsapp' },
+  });
+  assert.equal(hidden.selectedThread?.messages.find((message) => message.direction === 'inbound')
+    ?.inboundEvidence, null);
+});
+
 test('projects only coarse TEST rail activity and an opaque correlation label', () => {
   const snapshot = createPropertyPredatorTestInboxSnapshot();
   const expected = new Map([

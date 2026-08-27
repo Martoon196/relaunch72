@@ -161,6 +161,7 @@ test('real PostgreSQL proves identity and CRM RLS, same-workspace FKs, append-on
       [[
         'r72_security_definer', 'r72_web', 'r72_identity_command', 'r72_crm_command',
         'r72_public', 'r72_worker', 'r72_webhook', 'r72_readonly',
+        'r72_test_inbox_webhook_definer', 'r72_test_inbox_webhook_command',
       ]],
     );
     assert.deepEqual(unsafeMemberships.rows, []);
@@ -182,6 +183,7 @@ test('real PostgreSQL proves identity and CRM RLS, same-workspace FKs, append-on
         'r72_owner', 'r72_security_definer', 'r72_web', 'r72_public',
         'r72_worker', 'r72_webhook', 'r72_readonly', 'r72_crm_command',
         'r72_identity_command', 'r72_provisioning_command',
+        'r72_test_inbox_webhook_definer', 'r72_test_inbox_webhook_command',
       ]],
     );
     assert.deepEqual(publicSchemaCreators.rows, []);
