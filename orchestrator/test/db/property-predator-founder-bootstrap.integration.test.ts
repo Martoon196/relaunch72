@@ -54,7 +54,7 @@ async function invoke(
   );
 }
 
-test('schema 35 keeps the schema-27 founder bootstrap permanently retired without partial writes', {
+test('post-0027 schemas keep the founder bootstrap permanently retired without partial writes', {
   skip,
 }, async () => {
   const pool = await openTestDatabase();
@@ -62,8 +62,11 @@ test('schema 35 keeps the schema-27 founder bootstrap permanently retired withou
     await resetIdentityTables(pool);
     const migrations = await discoverMigrations();
     const reviewedLedger = propertyPredatorFounderMigrationLedger(migrations);
-    assert.equal(migrations.length, 35);
     assert.equal(reviewedLedger.length, 27);
+    assert.ok(
+      migrations.some((migration) => migration.version > reviewedLedger.length),
+      'the retirement proof requires at least one migration after the reviewed bootstrap ledger',
+    );
     assert.equal(
       reviewedLedger.at(-1)?.checksum,
       PROPERTY_PREDATOR_FOUNDER_BOOTSTRAP_TERMINAL_CHECKSUM,
