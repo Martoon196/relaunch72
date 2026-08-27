@@ -38,6 +38,7 @@ const migration31Url = new URL('../../src/db/migrations/0031_property_predator_b
 const migration32Url = new URL('../../src/db/migrations/0032_property_predator_affiliate_compliance_foundation.sql', import.meta.url);
 const migration33Url = new URL('../../src/db/migrations/0033_property_predator_company_asset_foundation.sql', import.meta.url);
 const migration34Url = new URL('../../src/db/migrations/0034_property_predator_email_pilot_clock_fence.sql', import.meta.url);
+const migration35Url = new URL('../../src/db/migrations/0035_company_asset_portal_session_capability.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -476,9 +477,9 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums through the email pilot clock fence', async () => {
+test('bundled migration discovery orders and checksums through the asset session capability', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-30);
+  const tail = migrations.slice(-31);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0005_canonical_portal_identity.sql', version: 5 },
     { filename: '0006_customer_provisioning.sql', version: 6 },
@@ -510,6 +511,7 @@ test('bundled migration discovery orders and checksums through the email pilot c
     { filename: '0032_property_predator_affiliate_compliance_foundation.sql', version: 32 },
     { filename: '0033_property_predator_company_asset_foundation.sql', version: 33 },
     { filename: '0034_property_predator_email_pilot_clock_fence.sql', version: 34 },
+    { filename: '0035_company_asset_portal_session_capability.sql', version: 35 },
   ]);
   const sources = [
     (await readFile(migration5Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -542,6 +544,7 @@ test('bundled migration discovery orders and checksums through the email pilot c
     (await readFile(migration32Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration33Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration34Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration35Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
