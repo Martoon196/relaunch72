@@ -34,3 +34,4 @@ await import('./operator-action-control.integration.test.js');
 await import('./property-predator-sso.integration.test.js');
 await import('./brand-brain.integration.test.js');
 await import('./affiliate-compliance.integration.test.js');
+await import('./company-asset.integration.test.js');
