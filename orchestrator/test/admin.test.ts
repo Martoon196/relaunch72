@@ -21,6 +21,15 @@ import { handleAdmin } from '../src/server/admin/router.js';
 import { InMemoryLoginThrottle, signTenant } from '../src/portal/session.js';
 import type { StripeConfig } from '../src/server/config.js';
 
+// Render injects the service's production proxy settings into its build
+// environment. Unit tests that exercise the direct/local request boundary must
+// supply their own environment explicitly so a cloud build cannot change the
+// scenario under test.
+const DIRECT_TEST_RUNTIME_ENV = Object.freeze({
+  PORTAL_PROXY_MODE: 'direct',
+  PORTAL_ABUSE_HASH_SECRET: 'r72-admin-direct-test-abuse-secret-v1',
+}) as NodeJS.ProcessEnv;
+
 function cfg(over: Partial<StripeConfig> = {}): StripeConfig {
   return {
     secretKey: 'sk_test_x', keyMode: 'test', webhookSecret: 'wh', priceIds: {}, planIds: {}, platformSubscriptionsEnabled: false, sandboxAccessToken: '', publicLeadCaptureEnabled: false, publicBaseUrl: 'https://relaunch72.test', host: '127.0.0.1', port: 0,
@@ -184,12 +193,12 @@ test('login: wrong password 401, right password sets a session cookie', async ()
   const bad = res(); await handleAdmin(req('POST', '/admin/login', {
     cookie: form.cookie,
     body: `_csrf=${encodeURIComponent(form.csrf)}&password=nope`,
-  }), bad, c, dir);
+  }), bad, c, dir, undefined, DIRECT_TEST_RUNTIME_ENV);
   assert.equal(bad.statusCode, 401);
   const ok = res(); await handleAdmin(req('POST', '/admin/login', {
     cookie: form.cookie,
     body: `_csrf=${encodeURIComponent(form.csrf)}&password=hunter2`,
-  }), ok, c, dir);
+  }), ok, c, dir, undefined, DIRECT_TEST_RUNTIME_ENV);
   assert.equal(ok.statusCode, 302); assert.equal(ok.headers.location, '/admin');
   assert.match(String(ok.headers['set-cookie']), new RegExp(SESSION_COOKIE + '='));
   assert.match(String(ok.headers['set-cookie']), /SameSite=Strict/);
@@ -211,14 +220,14 @@ test('configured admin TOTP is required and wrong factors share one generic erro
   await handleAdmin(req('POST', '/admin/login', {
     cookie: form.cookie,
     body: `_csrf=${encodeURIComponent(form.csrf)}&password=hunter2`,
-  }), missing, c, dir);
+  }), missing, c, dir, undefined, DIRECT_TEST_RUNTIME_ENV);
   assert.equal(missing.statusCode, 401);
   assert.match(missing.body, /Wrong password or authenticator code/);
   const accepted = res();
   await handleAdmin(req('POST', '/admin/login', {
     cookie: form.cookie,
     body: `_csrf=${encodeURIComponent(form.csrf)}&password=hunter2&totp=${totpCode(secret, Date.now())}`,
-  }), accepted, c, dir);
+  }), accepted, c, dir, undefined, DIRECT_TEST_RUNTIME_ENV);
   assert.equal(accepted.statusCode, 302);
 });
 test('admin login throttles repeated failures by source', async () => {
@@ -233,7 +242,7 @@ test('admin login throttles repeated failures by source', async () => {
       cookie: form.cookie,
       remoteAddress: '203.0.113.9',
       forwardedFor: `198.51.100.${i + 1}`,
-    }), bad, c, dir, throttle);
+    }), bad, c, dir, throttle, DIRECT_TEST_RUNTIME_ENV);
     assert.equal(bad.statusCode, 401);
   }
   const blocked = res();
@@ -242,7 +251,7 @@ test('admin login throttles repeated failures by source', async () => {
     cookie: form.cookie,
     remoteAddress: '203.0.113.9',
     forwardedFor: '192.0.2.200',
-  }), blocked, c, dir, throttle);
+  }), blocked, c, dir, throttle, DIRECT_TEST_RUNTIME_ENV);
   assert.equal(blocked.statusCode, 429);
   assert.equal(blocked.headers['retry-after'], '60');
 });
