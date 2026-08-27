@@ -28,16 +28,37 @@ export interface WhatsAppDarkTemplateInput {
 export interface WhatsAppDarkTemplate extends WhatsAppDarkTemplateInput {
   readonly lifecycle: 'test_only_draft';
   readonly bodySha256: string;
+  readonly templateSha256: string;
+}
+
+export interface WhatsAppDarkEvidenceBundleInput {
+  readonly workspaceId: string;
+  readonly connectionId: string;
+  readonly recipientSha256: string;
+  readonly templateId: string;
+  readonly templateVersion: number;
+  readonly templateSha256: string;
+  readonly approvalId: string;
+  readonly approvalDecision: 'approved_for_test_simulation';
+  readonly consentEvidenceId: string;
+  readonly consentDecision: 'eligible_for_test_simulation';
+  readonly pecrSenderDecisionId: string;
+  readonly pecrSenderDecision: 'eligible_for_test_simulation';
+  readonly operatorInstigatorDecisionId: string;
+  readonly operatorInstigatorDecision: 'eligible_for_test_simulation';
+  readonly purpose: 'own_inbox_test';
+  readonly evaluatedAt: string;
+}
+
+export interface WhatsAppDarkEvidenceBundle extends WhatsAppDarkEvidenceBundleInput {
+  readonly evidenceBundleSha256: string;
 }
 
 export interface WhatsAppDarkTemplateRequest {
   readonly recipient: string;
   readonly template: WhatsAppDarkTemplate;
   readonly variables: Readonly<Record<string, string>>;
-  readonly approvalId: string;
-  readonly consentEvidenceId: string;
-  readonly pecrSenderDecisionId: string;
-  readonly operatorInstigatorDecisionId: string;
+  readonly evidence: WhatsAppDarkEvidenceBundle;
 }
 
 export interface WhatsAppDarkResult {
@@ -94,6 +115,12 @@ export function assertReservedWhatsAppTestNumber(value: unknown, label: string):
   return value;
 }
 
+export function whatsAppDarkRecipientSha256(recipient: string): string {
+  return createHash('sha256')
+    .update(assertReservedWhatsAppTestNumber(recipient, 'recipient'), 'utf8')
+    .digest('hex');
+}
+
 export function assertWhatsAppDarkContext(context: ProviderOperationContext): void {
   if (context.providerId !== WHATSAPP_DARK_PROVIDER_ID) fail('provider context is not the dark simulator');
   assertWhatsAppDarkUuid(context.workspaceId, 'context.workspaceId');
@@ -129,6 +156,16 @@ export function createWhatsAppDarkTemplate(input: WhatsAppDarkTemplateInput): Wh
   if (new Set(placeholders).size !== declared.size || placeholders.some((name) => !declared.has(name))) {
     fail('template placeholders must exactly match the declared variables');
   }
+  const bodySha256 = createHash('sha256').update(body, 'utf8').digest('hex');
+  const templateSha256 = createHash('sha256').update(JSON.stringify({
+    body,
+    category: input.category,
+    language: input.language,
+    name: input.name,
+    templateId: input.templateId,
+    variableNames,
+    version: input.version,
+  }), 'utf8').digest('hex');
   return Object.freeze({
     templateId: input.templateId,
     version: input.version,
@@ -138,26 +175,85 @@ export function createWhatsAppDarkTemplate(input: WhatsAppDarkTemplateInput): Wh
     body,
     variableNames: Object.freeze([...variableNames]),
     lifecycle: 'test_only_draft',
-    bodySha256: createHash('sha256').update(body, 'utf8').digest('hex'),
+    bodySha256,
+    templateSha256,
   });
 }
 
-export function renderWhatsAppDarkTemplate(request: WhatsAppDarkTemplateRequest): Readonly<{
+export function createWhatsAppDarkEvidenceBundle(
+  input: WhatsAppDarkEvidenceBundleInput,
+): WhatsAppDarkEvidenceBundle {
+  const workspaceId = assertWhatsAppDarkUuid(input.workspaceId, 'evidence.workspaceId');
+  const connectionId = assertWhatsAppDarkUuid(input.connectionId, 'evidence.connectionId');
+  const evidenceIds = [
+    ['evidence.approvalId', input.approvalId],
+    ['evidence.consentEvidenceId', input.consentEvidenceId],
+    ['evidence.pecrSenderDecisionId', input.pecrSenderDecisionId],
+    ['evidence.operatorInstigatorDecisionId', input.operatorInstigatorDecisionId],
+  ] as const;
+  for (const [label, value] of evidenceIds) assertWhatsAppDarkUuid(value, label);
+  if (!/^[a-f0-9]{64}$/u.test(input.recipientSha256)
+      || !TEMPLATE_ID.test(input.templateId)
+      || !Number.isSafeInteger(input.templateVersion) || input.templateVersion < 1
+      || !/^[a-f0-9]{64}$/u.test(input.templateSha256)
+      || input.approvalDecision !== 'approved_for_test_simulation'
+      || input.consentDecision !== 'eligible_for_test_simulation'
+      || input.pecrSenderDecision !== 'eligible_for_test_simulation'
+      || input.operatorInstigatorDecision !== 'eligible_for_test_simulation'
+      || input.purpose !== 'own_inbox_test'
+      || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(input.evaluatedAt)
+      || Number.isNaN(Date.parse(input.evaluatedAt))
+      || new Date(input.evaluatedAt).toISOString() !== input.evaluatedAt) {
+    fail('evidence bundle is invalid');
+  }
+  const exact = {
+    workspaceId,
+    connectionId,
+    recipientSha256: input.recipientSha256,
+    templateId: input.templateId,
+    templateVersion: input.templateVersion,
+    templateSha256: input.templateSha256,
+    approvalId: input.approvalId,
+    approvalDecision: input.approvalDecision,
+    consentEvidenceId: input.consentEvidenceId,
+    consentDecision: input.consentDecision,
+    pecrSenderDecisionId: input.pecrSenderDecisionId,
+    pecrSenderDecision: input.pecrSenderDecision,
+    operatorInstigatorDecisionId: input.operatorInstigatorDecisionId,
+    operatorInstigatorDecision: input.operatorInstigatorDecision,
+    purpose: input.purpose,
+    evaluatedAt: input.evaluatedAt,
+  } as const;
+  return Object.freeze({
+    ...exact,
+    evidenceBundleSha256: createHash('sha256').update(JSON.stringify(exact), 'utf8').digest('hex'),
+  });
+}
+
+export function renderWhatsAppDarkTemplate(
+  context: ProviderOperationContext,
+  request: WhatsAppDarkTemplateRequest,
+): Readonly<{
   recipient: string;
   renderedBody: string;
   renderedBodySha256: string;
 }> {
+  assertWhatsAppDarkContext(context);
   const recipient = assertReservedWhatsAppTestNumber(request.recipient, 'recipient');
-  const evidence = [
-    ['approvalId', request.approvalId],
-    ['consentEvidenceId', request.consentEvidenceId],
-    ['pecrSenderDecisionId', request.pecrSenderDecisionId],
-    ['operatorInstigatorDecisionId', request.operatorInstigatorDecisionId],
-  ] as const;
-  for (const [label, value] of evidence) assertWhatsAppDarkUuid(value, label);
   if (request.template.lifecycle !== 'test_only_draft') fail('only test-only draft templates are accepted');
   const template = createWhatsAppDarkTemplate(request.template);
   if (request.template.bodySha256 !== template.bodySha256) fail('template body hash is invalid');
+  if (request.template.templateSha256 !== template.templateSha256) fail('template metadata hash is invalid');
+  const evidence = createWhatsAppDarkEvidenceBundle(request.evidence);
+  if (request.evidence.evidenceBundleSha256 !== evidence.evidenceBundleSha256
+      || evidence.workspaceId !== context.workspaceId
+      || evidence.connectionId !== context.connectionId
+      || evidence.recipientSha256 !== whatsAppDarkRecipientSha256(recipient)
+      || evidence.templateId !== template.templateId
+      || evidence.templateVersion !== template.version
+      || evidence.templateSha256 !== template.templateSha256) {
+    fail('evidence bundle is not bound to this test operation');
+  }
   const suppliedKeys = Object.keys(request.variables).sort();
   const expectedKeys = [...template.variableNames].sort();
   if (suppliedKeys.length !== expectedKeys.length

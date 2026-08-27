@@ -6,9 +6,11 @@ import {
   SimulatedWhatsAppDarkAdapter,
   WhatsAppDarkContractError,
   createSignedSimulatedWhatsAppInbound,
+  createWhatsAppDarkEvidenceBundle,
   createWhatsAppDarkTemplate,
   toOwnInboxTestInbound,
   verifySimulatedWhatsAppWebhook,
+  whatsAppDarkRecipientSha256,
 } from '../src/whatsapp-dark/index.js';
 
 const WORKSPACE_ID = '11111111-1111-4111-8111-111111111111';
@@ -48,15 +50,30 @@ const request = Object.freeze({
   recipient: '+447700900001',
   template,
   variables: Object.freeze({ first_name: 'Test Founder', pack_reference: 'TEST-001' }),
-  approvalId: APPROVAL_ID,
-  consentEvidenceId: CONSENT_ID,
-  pecrSenderDecisionId: PECR_ID,
-  operatorInstigatorDecisionId: INSTIGATOR_ID,
+  evidence: createWhatsAppDarkEvidenceBundle({
+    workspaceId: WORKSPACE_ID,
+    connectionId: CONNECTION_ID,
+    recipientSha256: whatsAppDarkRecipientSha256('+447700900001'),
+    templateId: template.templateId,
+    templateVersion: template.version,
+    templateSha256: template.templateSha256,
+    approvalId: APPROVAL_ID,
+    approvalDecision: 'approved_for_test_simulation',
+    consentEvidenceId: CONSENT_ID,
+    consentDecision: 'eligible_for_test_simulation',
+    pecrSenderDecisionId: PECR_ID,
+    pecrSenderDecision: 'eligible_for_test_simulation',
+    operatorInstigatorDecisionId: INSTIGATOR_ID,
+    operatorInstigatorDecision: 'eligible_for_test_simulation',
+    purpose: 'own_inbox_test',
+    evaluatedAt: NOW.toISOString(),
+  }),
 });
 
 test('template model is immutable, hash-bound and exact-variable only', async () => {
   assert.equal(template.lifecycle, 'test_only_draft');
   assert.match(template.bodySha256, /^[a-f0-9]{64}$/);
+  assert.match(template.templateSha256, /^[a-f0-9]{64}$/);
   assert.ok(Object.isFrozen(template));
   assert.ok(Object.isFrozen(template.variableNames));
   assert.throws(() => createWhatsAppDarkTemplate({
@@ -73,6 +90,14 @@ test('template model is immutable, hash-bound and exact-variable only', async ()
     ...request,
     template: { ...template, body: 'Forged {{first_name}} {{pack_reference}}.' },
   }), /body hash is invalid/);
+  await assert.rejects(adapter.simulateTemplate(context, {
+    ...request,
+    template: { ...template, category: 'marketing' },
+  }), /metadata hash is invalid/);
+  await assert.rejects(adapter.simulateTemplate(context, {
+    ...request,
+    evidence: { ...request.evidence, workspaceId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' },
+  }), /not bound to this test operation/);
 });
 
 test('simulator refuses routable numbers and records hashes without raw body or recipient', async () => {
@@ -155,6 +180,29 @@ test('webhook verification fails closed before parsing and rejects scope/address
     from: '+447911123456', to: '+447700900001', body: 'No.',
     occurredAt: NOW.toISOString(), testSecret: TEST_SECRET,
   }), /reserved non-routable/);
+});
+
+test('webhook snapshots one exact byte value before authentication and parsing', () => {
+  const signed = createSignedSimulatedWhatsAppInbound({
+    workspaceId: WORKSPACE_ID, connectionId: CONNECTION_ID,
+    from: '+447700900002', to: '+447700900001', body: 'Authenticated body.',
+    occurredAt: NOW.toISOString(), testSecret: TEST_SECRET,
+  });
+  const forged = createSignedSimulatedWhatsAppInbound({
+    workspaceId: WORKSPACE_ID, connectionId: CONNECTION_ID,
+    from: '+447700900002', to: '+447700900001', body: 'Forged body.',
+    occurredAt: '2026-08-27T14:00:01.000Z', testSecret: TEST_SECRET,
+  });
+  let reads = 0;
+  const hostile = {
+    get rawBody() { reads += 1; return reads === 1 ? signed.rawBody : forged.rawBody; },
+    signature: signed.signature,
+    contentType: signed.contentType,
+    testSecret: TEST_SECRET,
+  };
+  const event = verifySimulatedWhatsAppWebhook(hostile);
+  assert.equal(reads, 1);
+  assert.equal(event.event.body, 'Authenticated body.');
 });
 
 test('dark WhatsApp module has no transport, SDK, registry, credential or live-effect path', async () => {

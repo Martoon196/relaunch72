@@ -164,22 +164,27 @@ export function verifySimulatedWhatsAppWebhook(input: Readonly<{
   contentType: string;
   testSecret: string;
 }>): SimulatedWhatsAppInboundEvent {
-  if (!(input.rawBody instanceof Uint8Array) || input.rawBody.byteLength < 2
-      || input.rawBody.byteLength > MAX_WEBHOOK_BYTES) fail('webhook byte length is invalid');
-  if (typeof input.contentType !== 'string'
-      || input.contentType.toLowerCase().split(';', 1)[0]?.trim() !== 'application/json') {
+  const suppliedBody = input.rawBody;
+  const suppliedSignature = input.signature;
+  const suppliedContentType = input.contentType;
+  const suppliedSecret = input.testSecret;
+  if (!(suppliedBody instanceof Uint8Array) || suppliedBody.byteLength < 2
+      || suppliedBody.byteLength > MAX_WEBHOOK_BYTES) fail('webhook byte length is invalid');
+  const rawBody = Uint8Array.from(suppliedBody);
+  if (typeof suppliedContentType !== 'string'
+      || suppliedContentType.toLowerCase().split(';', 1)[0]?.trim() !== 'application/json') {
     fail('webhook media type is invalid');
   }
-  const signature = SIGNATURE.exec(input.signature);
+  const signature = typeof suppliedSignature === 'string' ? SIGNATURE.exec(suppliedSignature) : null;
   if (!signature) fail('webhook signature is invalid');
-  const expected = createHmac('sha256', webhookSecret(input.testSecret)).update(input.rawBody).digest();
+  const expected = createHmac('sha256', webhookSecret(suppliedSecret)).update(rawBody).digest();
   const supplied = Buffer.from(signature[1]!, 'hex');
   if (supplied.byteLength !== expected.byteLength || !timingSafeEqual(supplied, expected)) {
     fail('webhook signature is invalid');
   }
   let text: string;
   try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(input.rawBody);
+    text = new TextDecoder('utf-8', { fatal: true }).decode(rawBody);
   } catch {
     fail('webhook body is not valid UTF-8');
   }

@@ -64,7 +64,7 @@ export class SimulatedWhatsAppDarkAdapter implements WhatsAppDarkAdapter {
     request: WhatsAppDarkTemplateRequest,
   ): Promise<WhatsAppDarkResult> {
     assertWhatsAppDarkContext(context);
-    const rendered = renderWhatsAppDarkTemplate(request);
+    const rendered = renderWhatsAppDarkTemplate(context, request);
     const testReference = reference(context);
     this.#audit.push(Object.freeze({
       mode: 'simulate',
