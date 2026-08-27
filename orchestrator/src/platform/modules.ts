@@ -6,6 +6,7 @@ export type PlatformModuleId =
   | 'crm'
   | 'journeys'
   | 'content'
+  | 'affiliates'
   | 'social'
   | 'inbox'
   | 'listening'
@@ -51,7 +52,7 @@ export interface PlatformModuleRegistry {
   navigation(context: ModuleRuntimeContext): readonly ResolvedPlatformModule[];
 }
 
-const MODULE_IDS = new Set<PlatformModuleId>(['overview', 'actions', 'crm', 'journeys', 'content', 'social', 'inbox', 'listening', 'webinars', 'automations', 'analytics', 'settings']);
+const MODULE_IDS = new Set<PlatformModuleId>(['overview', 'actions', 'crm', 'journeys', 'content', 'affiliates', 'social', 'inbox', 'listening', 'webinars', 'automations', 'analytics', 'settings']);
 const MODULE_GROUPS = new Set<PlatformModuleGroup>(['work', 'channels', 'intelligence', 'system']);
 const MODULE_STAGES = new Set<PlatformModuleStage>(['available', 'preview', 'planned']);
 const MODULE_ICONS = new Set<PlatformModuleManifest['icon']>(['home', 'users', 'sparkles', 'send', 'inbox', 'radar', 'video', 'workflow', 'chart', 'settings']);
@@ -178,6 +179,7 @@ export const CORE_PLATFORM_MODULES: readonly PlatformModuleManifest[] = Object.f
   { id: 'crm', label: 'CRM', shortLabel: 'CRM', description: 'Private contacts, opportunities, tasks and recorded CRM activity.', icon: 'users', group: 'work', order: 20, route: '/portal/crm/contacts', stage: 'available', requiredCapabilities: ['crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read'], dependsOn: ['overview'] },
   { id: 'journeys', label: 'Live journeys', shortLabel: 'Journeys', description: 'Operational lead lanes beside evidence-led milestones, scores and next moves.', icon: 'workflow', group: 'work', order: 25, route: '/portal/journeys/board', stage: 'available', requiredCapabilities: ['journeys.read'], dependsOn: ['crm'] },
   { id: 'content', label: 'Content control', shortLabel: 'Content', description: 'Immutable on-brand versions, source proof and exact approvals.', icon: 'sparkles', group: 'work', order: 30, route: '/portal/content', stage: 'available', requiredCapabilities: ['content.drafts.read'], dependsOn: ['overview'] },
+  { id: 'affiliates', label: 'Affiliate compliance', shortLabel: 'Affiliates', description: 'Legal packs, acceptance, training, channel authority, cases and fail-closed eligibility.', icon: 'users', group: 'work', order: 35, route: '/portal/affiliates/compliance', stage: 'preview', requiredCapabilities: ['affiliates.compliance.read'], dependsOn: ['overview'] },
   { id: 'social', label: 'Social publishing', shortLabel: 'Social', description: 'Plan, approve, schedule and reconcile social posts.', icon: 'send', group: 'channels', order: 40, stage: 'planned', requiredCapabilities: ['social.publish'], dependsOn: ['content'] },
   { id: 'inbox', label: 'Conversion inbox', shortLabel: 'Inbox', description: 'One approval-led queue for email, WhatsApp, SMS and social conversations.', icon: 'inbox', group: 'channels', order: 50, route: '/portal/inbox', stage: 'preview', requiredCapabilities: ['conversations.read'], dependsOn: ['crm'] },
   { id: 'listening', label: 'Social listening', shortLabel: 'Listening', description: 'Mentions, topics, sentiment and response opportunities.', icon: 'radar', group: 'intelligence', order: 60, stage: 'planned', requiredCapabilities: ['social.listen'], dependsOn: ['social'] },

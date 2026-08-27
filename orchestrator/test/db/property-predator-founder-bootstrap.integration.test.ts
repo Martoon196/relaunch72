@@ -54,7 +54,7 @@ async function invoke(
   );
 }
 
-test('schema 31 keeps the schema-27 founder bootstrap permanently retired without partial writes', {
+test('schema 32 keeps the schema-27 founder bootstrap permanently retired without partial writes', {
   skip,
 }, async () => {
   const pool = await openTestDatabase();
@@ -62,7 +62,7 @@ test('schema 31 keeps the schema-27 founder bootstrap permanently retired withou
     await resetIdentityTables(pool);
     const migrations = await discoverMigrations();
     const reviewedLedger = propertyPredatorFounderMigrationLedger(migrations);
-    assert.equal(migrations.length, 31);
+    assert.equal(migrations.length, 32);
     assert.equal(reviewedLedger.length, 27);
     assert.equal(
       reviewedLedger.at(-1)?.checksum,

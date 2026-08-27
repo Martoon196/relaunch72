@@ -7,6 +7,7 @@ import {
 } from './database-helper.js';
 
 const APP_ROLES = [
+  'r72_affiliate_compliance_command',
   'r72_commerce_definer',
   'r72_content_adapter',
   'r72_content_command',

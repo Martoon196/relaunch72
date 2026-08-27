@@ -92,6 +92,12 @@ import {
 } from '../src/portal/operator-action-centre-presenter.js';
 import { createPropertyPredatorOperatorActionCentreFixture } from '../src/portal/operator-action-centre-fixtures.js';
 import { renderOperatorActionCentreBody } from '../src/portal/operator-action-centre-view.js';
+import { createPropertyPredatorAffiliateComplianceFixture } from '../src/portal/affiliate-compliance-fixtures.js';
+import {
+  AFFILIATE_COMPLIANCE_ROUTE,
+  presentAffiliateCompliance,
+} from '../src/portal/affiliate-compliance-presenter.js';
+import { renderAffiliateComplianceBody } from '../src/portal/affiliate-compliance-view.js';
 import { renderGrowthHomeBody } from '../src/portal/growth-home.js';
 import { renderLead360Body, type Lead360View } from '../src/portal/lead-360-view.js';
 import { JOURNEY_BOARD_CLIENT_SOURCE } from '../src/portal/journey-board-client.js';
@@ -864,7 +870,7 @@ function applyPreviewSignal(contactId: string, signalKey: string): boolean {
 
 function shell(
   body: string,
-  active: 'overview' | 'actions' | 'crm' | 'journeys' | 'content' | 'inbox',
+  active: 'overview' | 'actions' | 'crm' | 'journeys' | 'content' | 'inbox' | 'affiliates',
   title: string,
 ): string {
   const previewBoundary = '<aside role="status" aria-label="Local preview boundary" style="position:sticky;z-index:1000;top:0;display:flex;justify-content:center;gap:10px;align-items:center;min-height:42px;padding:8px 16px;border-bottom:1px solid #8a6a29;background:#201806;color:#f2c96d;font:800 12px/1.4 ui-monospace,monospace;letter-spacing:.035em;text-align:center"><strong>LOCAL PREVIEW</strong><span>Fictional / in-memory state · reload or process restart can lose changes · no live provider effects</span></aside>';
@@ -874,6 +880,7 @@ function shell(
     capabilities: new Set([
       'workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read',
       'actions.read', 'journeys.read', 'content.drafts.read', 'conversations.read',
+      'affiliates.compliance.read',
     ]),
     crmAvailable: true, mode: 'crm', csrfToken: PREVIEW_CSRF,
   });
@@ -992,6 +999,16 @@ function page(url: URL): { status: number; html: string; board?: boolean } {
     html: shell(`${previewOperationsNav('actions')}${renderOperatorActionCentreBody(presentOperatorActionCentre(
       createPropertyPredatorOperatorActionCentreFixture(),
     ))}`, 'actions', 'Property Predator — Action Centre'),
+  };
+  if (path === AFFILIATE_COMPLIANCE_ROUTE) return {
+    status: 200,
+    html: shell(
+      renderAffiliateComplianceBody(presentAffiliateCompliance(
+        createPropertyPredatorAffiliateComplianceFixture(),
+      )),
+      'affiliates',
+      'Property Predator — Affiliate Compliance',
+    ),
   };
   const leadMatch = /^\/portal\/crm\/contacts\/([^/]+)$/.exec(path);
   if (leadMatch) {

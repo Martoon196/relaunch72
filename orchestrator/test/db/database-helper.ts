@@ -13,6 +13,7 @@ export const DATABASE_INTEGRATION_CONFIRMATION = 'explicit-disposable-run';
 type ScopedTestRole =
   | 'r72_web'
   | 'r72_crm_command'
+  | 'r72_affiliate_compliance_command'
   | 'r72_external_event_command'
   | 'r72_worker'
   | 'r72_webhook';
@@ -21,6 +22,7 @@ type UnscopedTestRole = 'r72_web' | 'r72_identity_command' | 'r72_crm_command' |
 const TEST_ROLES = new Set<ScopedTestRole>([
   'r72_web',
   'r72_crm_command',
+  'r72_affiliate_compliance_command',
   'r72_external_event_command',
   'r72_worker',
   'r72_webhook',

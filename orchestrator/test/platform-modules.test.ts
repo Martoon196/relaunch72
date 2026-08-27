@@ -8,7 +8,7 @@ import { createProviderOperationContext, type SocialPublishingProvider } from '.
 
 test('core modules have stable unique ids/routes and uncluttered ordering', () => {
   assert.deepEqual(platformModules.modules.map((module) => module.id), [
-    'overview', 'actions', 'crm', 'journeys', 'content', 'social', 'inbox', 'listening', 'webinars', 'automations', 'analytics', 'settings',
+    'overview', 'actions', 'crm', 'journeys', 'content', 'affiliates', 'social', 'inbox', 'listening', 'webinars', 'automations', 'analytics', 'settings',
   ]);
   assert.equal(new Set(platformModules.modules.map((module) => module.id)).size, platformModules.modules.length);
   const routes = platformModules.modules.flatMap((module) => module.route ? [module.route] : []);
@@ -27,6 +27,8 @@ test('runtime resolution presents the shipped Journey Manager only with its capa
   assert.equal(byId.get('journeys')?.route, '/portal/journeys/board');
   assert.equal(byId.get('content')?.state, 'ready');
   assert.equal(byId.get('content')?.route, '/portal/content');
+  assert.equal(byId.get('affiliates')?.state, 'preview');
+  assert.equal(byId.get('affiliates')?.route, '/portal/affiliates/compliance');
   assert.equal(byId.get('social')?.state, 'planned');
   assert.equal(byId.get('inbox')?.state, 'preview');
   assert.equal(byId.get('inbox')?.route, '/portal/inbox');

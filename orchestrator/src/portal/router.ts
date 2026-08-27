@@ -132,6 +132,12 @@ import {
   operatorActionSnoozeInstantFromToken,
   type OperatorActionNoticeCode,
 } from './operator-action-centre-actions.js';
+import {
+  AFFILIATE_COMPLIANCE_ROUTE,
+  presentAffiliateCompliance,
+} from './affiliate-compliance-presenter.js';
+import { renderAffiliateComplianceBody } from './affiliate-compliance-view.js';
+import type { PortalAffiliateComplianceService } from './affiliate-compliance-service.js';
 
 interface PortalCommonDeps {
   sessionSecret: string;
@@ -190,6 +196,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   companyContent?: PortalCompanyContentService;
   /** Read-only owned-intelligence metadata. It exposes no review, activation or model operation. */
   brandBrain?: PortalBrandBrainService;
+  /** Fixture-only affiliate legal/readiness evidence. It exposes no acceptance, link or channel command. */
+  affiliateCompliance?: PortalAffiliateComplianceService;
   /** TEST-only conversion queue. Thread detail remains a separate optional projection. */
   inbox?: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval/queue commands. It has no provider dispatcher. */
@@ -434,6 +442,7 @@ function optionalPortalCapabilities(deps: PortalDeps): readonly PlatformCapabili
   return [
     ...(deps.operatorActions ? ['actions.read'] as const : []),
     ...(deps.companyContent || deps.brandBrain ? ['content.drafts.read'] as const : []),
+    ...(deps.affiliateCompliance ? ['affiliates.compliance.read'] as const : []),
     ...(deps.inbox ? ['conversations.read'] as const : []),
   ];
 }
@@ -442,10 +451,14 @@ function operationalPage(
   workspaceName: string,
   body: string,
   deps: PostgresPortalDeps,
-  active: 'content' | 'inbox',
+  active: 'content' | 'affiliates' | 'inbox',
   csrfToken: string,
 ): string {
-  const label = active === 'content' ? 'Content Control' : 'Conversion Inbox';
+  const label = active === 'content'
+    ? 'Content Control'
+    : active === 'affiliates'
+      ? 'Affiliate Compliance'
+      : 'Conversion Inbox';
   return appShell({
     title: `${deps.productProfile?.productName ?? 'Relaunch72'} ${label} — ${workspaceName}`,
     tenantName: workspaceName,
@@ -499,7 +512,7 @@ function portalStatusPage(
     message: string;
     backHref?: string;
     backLabel?: string;
-    active?: 'overview' | 'actions' | 'crm' | 'journeys' | 'content' | 'inbox' | 'billing';
+    active?: 'overview' | 'actions' | 'crm' | 'journeys' | 'content' | 'affiliates' | 'inbox' | 'billing';
     crmAvailable?: boolean;
   },
 ): string {
@@ -524,7 +537,7 @@ function portalStatusPage(
     billingAvailable: deps.kind === 'legacy' && !!deps.billing,
     crmAvailable: options.crmAvailable ?? !!deps.crm,
     mode: options.active === 'actions' || options.active === 'crm' || options.active === 'journeys'
-      || options.active === 'content' || options.active === 'inbox' ? 'crm' : 'sandbox',
+      || options.active === 'content' || options.active === 'affiliates' || options.active === 'inbox' ? 'crm' : 'sandbox',
     csrfToken: portalCsrfToken(deps.sessionSecret, sessionToken),
     body,
   });
@@ -1217,6 +1230,47 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       );
     } catch {
       return operatorActionRedirect(res, deps, sessionToken, 'unavailable');
+    }
+  }
+
+  // ── affiliate compliance: fictional evidence and fail-closed readiness only ──
+  if (deps.kind === 'postgres' && p === AFFILIATE_COMPLIANCE_ROUTE && method === 'GET') {
+    if (!deps.affiliateCompliance || deps.productProfile?.id !== 'property_predator_growth') {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Affiliate Compliance not connected',
+        message: 'The protected affiliate evidence preview is not enabled for this workspace.',
+        active: 'affiliates',
+      }));
+    }
+    try {
+      const outcome = await deps.affiliateCompliance.snapshot(crmIdentity(sessionToken, deps));
+      if (!outcome.ok) {
+        const status = outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden'
+          ? 403
+          : outcome.kind === 'not_found'
+            ? 404
+            : 503;
+        return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+          title: status === 503 ? 'Affiliate Compliance temporarily unavailable' : 'Affiliate Compliance not available',
+          message: outcome.message,
+          active: 'affiliates',
+        }));
+      }
+      const view = presentAffiliateCompliance(outcome.snapshot);
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      return sendHtml(res, 200, operationalPage(
+        outcome.snapshot.workspace.workspaceName,
+        renderAffiliateComplianceBody(view),
+        deps,
+        'affiliates',
+        csrfToken,
+      ));
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Affiliate Compliance temporarily unavailable',
+        message: 'No legal, acceptance, training, declaration, channel, case or permission evidence was changed.',
+        active: 'affiliates',
+      }));
     }
   }
 

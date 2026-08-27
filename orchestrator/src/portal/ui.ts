@@ -8,7 +8,7 @@ import { CORE_PLATFORM_MODULES, platformModules, type PlatformModuleId, type Pla
 import type { PlatformCapability } from '../platform/capabilities.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
 
-export type PortalSection = 'overview' | 'actions' | 'crm' | 'journeys' | 'content' | 'inbox' | 'billing';
+export type PortalSection = 'overview' | 'actions' | 'crm' | 'journeys' | 'content' | 'affiliates' | 'inbox' | 'billing';
 
 export function escapeHtml(value: unknown): string {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -39,7 +39,7 @@ const ICON_PATHS: Record<IconName, string> = {
 };
 
 const MODULE_ICONS: Record<PlatformModuleId, IconName> = {
-  overview: 'overview', actions: 'activity', crm: 'contacts', journeys: 'automation', content: 'content', social: 'social', inbox: 'inbox',
+  overview: 'overview', actions: 'activity', crm: 'contacts', journeys: 'automation', content: 'content', affiliates: 'contacts', social: 'social', inbox: 'inbox',
   listening: 'listening', webinars: 'calendar', automations: 'automation', analytics: 'activity', settings: 'billing',
 };
 
@@ -192,6 +192,7 @@ export function appShell(opts: AppShellOptions): string {
     || (opts.active === 'crm' && id === 'crm')
     || (opts.active === 'journeys' && id === 'journeys')
     || (opts.active === 'content' && id === 'content')
+    || (opts.active === 'affiliates' && id === 'affiliates')
     || (opts.active === 'inbox' && id === 'inbox')
     || (opts.active === 'billing' && id === 'settings');
   const workingNav = workingModules.map((module) => {

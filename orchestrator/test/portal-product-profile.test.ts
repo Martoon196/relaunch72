@@ -57,7 +57,7 @@ test('product profiles fail closed and cannot carry authorization state', () => 
   assert.equal('capabilities' in PROPERTY_PREDATOR_GROWTH_PROFILE.contentWorkspace!, false);
   assert.deepEqual(
     PROPERTY_PREDATOR_GROWTH_PROFILE.visibleNavigation,
-    ['overview', 'actions', 'crm', 'journeys', 'content', 'inbox'],
+    ['overview', 'actions', 'crm', 'journeys', 'content', 'affiliates', 'inbox'],
   );
 });
 
@@ -84,6 +84,7 @@ test('Property Predator sign-in advertises only its visible workspace modules', 
   assert.match(html, /<span>Leads<\/span>/);
   assert.match(html, /<span>Journeys<\/span>/);
   assert.match(html, /<span>Content<\/span>/);
+  assert.match(html, /<span class="planned">Affiliates · preview<\/span>/);
   assert.match(html, /<span class="planned">Inbox · preview<\/span>/);
   assert.match(html, /fonts\.googleapis\.com\/css2\?family=Cormorant\+Garamond/);
   assert.match(html, /family=Syne/);

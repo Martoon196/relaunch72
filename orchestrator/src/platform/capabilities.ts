@@ -17,6 +17,7 @@ export const PLATFORM_CAPABILITIES = [
   'journeys.manage',
   'content.drafts.read',
   'content.drafts.generate',
+  'affiliates.compliance.read',
   'social.publish',
   'social.listen',
   'conversations.read',
