@@ -193,7 +193,7 @@ test('Content Calendar rejects unknown versions and never substitutes another ca
   assert.equal(view.hasUnknownVersion, true);
 });
 
-test('Content Calendar renders a premium accessible planner while every content control stays TEST-only and disabled', () => {
+test('Content Calendar renders a premium accessible planner and fails closed without injected TEST commands', () => {
   const html = renderContentCalendarBody(present());
   assert.match(html, /<nav class="pp-content-nav" aria-label="Content operations">/);
   assert.doesNotMatch(html, /href="\/portal\/content\/compose"/);
@@ -201,16 +201,17 @@ test('Content Calendar renders a premium accessible planner while every content 
   assert.match(html, /<article class="ccal" aria-labelledby="ccal-title" data-provider-effects="none" data-content-calendar data-calendar-mode="week" data-calendar-timezone="Europe\/London" data-source-truncated="false" data-preview-dirty="false">/);
   assert.match(html, /Own the week\. <em>Control the signal\.<\/em>/);
   assert.match(html, /TEST planner · zero delivery/);
-  assert.match(html, /A slot is not a scheduled provider job/);
+  assert.match(html, /A durable TEST plan is not a provider schedule/);
   assert.match(html, /aria-label="Calendar view"/);
   assert.match(html, /aria-label="Filter planner by channel"/);
   assert.match(html, /aria-label="Scrollable week content calendar"/);
   assert.match(html, /<details><summary>Planning proof<\/summary>/);
-  assert.match(html, /\+ New TEST draft slot · disabled/);
+  assert.match(html, /href="\/portal\/campaigns\/new">\+ Build campaign<\/a>/);
   assert.match(html, /Create TEST draft slot · simulator only/);
   assert.match(html, /data-calendar-move-handle/);
   assert.match(html, /Choose date &amp; time/);
   assert.match(html, /Move TEST plan/);
+  assert.match(html, /Review TEST move/);
   assert.match(html, /Browser-only movement/);
   assert.match(html, /Nothing is saved; reloading restores this exact snapshot/);
   assert.match(html, /data-calendar-live role="status" aria-live="polite"/);
@@ -227,6 +228,96 @@ test('Content Calendar renders a premium accessible planner while every content 
   assert.equal((html.match(/<script\b/g) ?? []).length, 1);
   assert.doesNotMatch(html, /method="post"|Publish now|Schedule now|Connect provider/i);
   assert.equal((html.match(/executionMode|providerToken|accessToken|apiKey/g) ?? []).length, 0);
+});
+
+test('Content Calendar renders injected native create, reschedule and cancel TEST commands without a provider rail', () => {
+  const view = present();
+  const first = view.days.flatMap((day) => day.slots)[0];
+  assert.ok(first);
+  const action = (actionUrl: string, commandKey: string) => ({
+    actionUrl,
+    commandKey,
+    csrfToken: 'csrf-calendar-test-token-123456',
+  });
+  const html = renderContentCalendarBody(view, {
+    mutations: {
+      create: {
+        ...action('/portal/campaigns/test-planning-intents', 'calendar:create:001'),
+        campaignRevisions: [{ value: 'campaign/revision', label: 'Signal sprint · r1' }],
+        contentVersions: [{ value: first.contentVersionId, label: first.title }],
+        targets: [{ value: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', label: 'LinkedIn TEST target' }],
+      },
+      slots: {
+        [first.slotId]: {
+          intentId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          targetId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          intentSha256: 'a'.repeat(64),
+          expectedUpdatedAt: '2026-08-26T08:30:00.000Z',
+          reschedule: action('/portal/content/calendar/test-reschedule', 'calendar:move:001'),
+          cancel: action('/portal/content/calendar/test-cancel', 'calendar:cancel:001'),
+          jitStatus: {
+            state: 'due',
+            label: 'JIT proof waiting',
+            detail: 'Exact source proof will be refreshed inside the TEST window.',
+            nextRevalidationAt: '2026-08-26T08:45:00.000Z',
+          },
+        },
+      },
+      outcome: {
+        kind: 'success',
+        title: 'New TEST time saved',
+        detail: 'Immutable planning intent superseded safely.',
+        intentId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        statusUrl: '/portal/content/calendar/test-status?intent=cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      },
+    },
+  });
+  assert.match(html, /<form class="ccal-command-form" method="post" action="\/portal\/campaigns\/test-planning-intents" data-calendar-command-form data-command-kind="create">/);
+  assert.match(html, /name="_csrf" value="csrf-calendar-test-token-123456"/);
+  assert.match(html, /name="command_key" value="calendar:create:001"/);
+  assert.match(html, /name="target_ids" multiple required/);
+  assert.match(html, /data-command-kind="reschedule" data-confirm-message=/);
+  assert.match(html, /name="desired_for_local"/);
+  assert.match(html, /data-command-kind="cancel" data-confirm-message=/);
+  const createForm = html.match(/<form[^>]+data-command-kind="create"[^>]*>([\s\S]*?)<\/form>/)?.[1] ?? '';
+  const rescheduleForm = html.match(/<form[^>]+data-command-kind="reschedule"[^>]*>([\s\S]*?)<\/form>/)?.[1] ?? '';
+  const cancelForm = html.match(/<form[^>]+data-command-kind="cancel"[^>]*>([\s\S]*?)<\/form>/)?.[1] ?? '';
+  assert.equal((createForm.match(/name="environment"/g) ?? []).length, 1);
+  assert.doesNotMatch(rescheduleForm, /name="environment"/);
+  assert.doesNotMatch(cancelForm, /name="environment"/);
+  assert.match(html, /JIT proof waiting/);
+  assert.match(html, /data-calendar-jit-status-url="\/portal\/content\/calendar\/test-status\?intent=/);
+  assert.match(html, /Protected TEST commands available/);
+  assert.doesNotMatch(html, /providerToken|accessToken|apiKey|testAccountRef|storageKey/);
+});
+
+test('Content Calendar validates optional durable planning and JIT provenance against the exact slot', () => {
+  const item = firstCatalogItem();
+  const planning = {
+    intentId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    intentSha256: 'a'.repeat(64),
+    targetId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    desiredFor: '2026-08-26T09:00:00.000Z',
+    planningState: 'awaiting_revalidation' as const,
+    revalidationState: 'waiting_for_window' as const,
+    nextRevalidationAt: '2026-08-26T08:45:00.000Z',
+    updatedAt: '2026-08-26T08:30:00.000Z',
+    environment: 'test' as const,
+    providerEffects: 'none' as const,
+  };
+  const exact = present({ catalog: page([item]), slots: [slot(item, { planning })] });
+  const exactSlot = exact.days.flatMap((day) => day.slots)[0];
+  assert.equal(exactSlot?.planning?.identityProofValid, true);
+  assert.equal(exactSlot?.planning?.statusLabel, 'JIT proof waiting');
+
+  const contradicted = present({
+    catalog: page([item]),
+    slots: [slot(item, { planning: { ...planning, desiredFor: '2026-08-27T09:00:00.000Z' } })],
+  });
+  const locked = contradicted.days.flatMap((day) => day.slots)[0];
+  assert.equal(locked?.planning?.identityProofValid, false);
+  assert.equal(locked?.planning?.statusTone, 'blocked');
+  assert.equal(locked?.simulationEligible, false);
 });
 
 test('Content Calendar escapes hostile catalogue and planning labels', () => {
@@ -291,7 +382,7 @@ test('Content Calendar canonicalises legacy view filters and emits stable mode r
   assert.doesNotMatch(html, /\/portal\/content\/calendar\?view=/);
 });
 
-test('Content Calendar client is dependency-free DOM-only movement and composer preview enhancement', () => {
+test('Content Calendar client progressively enhances native TEST forms with confirmation and rollback', () => {
   assert.equal(CONTENT_CALENDAR_CLIENT_SOURCE, CONTENT_CALENDAR_CLIENT_SCRIPT);
   assert.doesNotThrow(() => new Function(CONTENT_CALENDAR_CLIENT_SCRIPT));
   assert.match(CONTENT_CALENDAR_CLIENT_SCRIPT, /addEventListener\('pointerdown'/);
@@ -301,12 +392,18 @@ test('Content Calendar client is dependency-free DOM-only movement and composer 
   assert.match(CONTENT_CALENDAR_CLIENT_SCRIPT, /if \(lifted\) finishLift\(\)/);
   assert.match(CONTENT_CALENDAR_CLIENT_SCRIPT, /!element\.hasAttribute\('data-calendar-live'\)/);
   assert.match(CONTENT_CALENDAR_CLIENT_SCRIPT, /browser preview only/);
+  assert.match(CONTENT_CALENDAR_CLIENT_SCRIPT, /sameOriginUrl/);
+  assert.match(CONTENT_CALENDAR_CLIENT_SCRIPT, /new window\.FormData\(form\)/);
+  assert.match(CONTENT_CALENDAR_CLIENT_SCRIPT, /credentials: 'same-origin'/);
+  assert.match(CONTENT_CALENDAR_CLIENT_SCRIPT, /rollbackMove/);
+  assert.match(CONTENT_CALENDAR_CLIENT_SCRIPT, /dataset\.confirmMessage/);
+  assert.match(CONTENT_CALENDAR_CLIENT_SCRIPT, /form\.requestSubmit\(\)/);
   assert.match(CONTENT_CALENDAR_CLIENT_SCRIPT, /data-composer-preview/);
   assert.match(CONTENT_CALENDAR_CLIENT_SCRIPT, /reload discards these changes/);
   assert.match(CONTENT_CALENDAR_CLIENT_SCRIPT, /const wallTime = date \+ 'T' \+ label/);
   assert.match(CONTENT_CALENDAR_CLIENT_SCRIPT, /workspace wall time/);
   assert.doesNotMatch(CONTENT_CALENDAR_CLIENT_SCRIPT, /getUTCHours|getUTCMinutes|:00\.000Z/);
-  assert.doesNotMatch(CONTENT_CALENDAR_CLIENT_SCRIPT, /\bfetch\s*\(|requestSubmit|XMLHttpRequest|sendBeacon|WebSocket/);
+  assert.doesNotMatch(CONTENT_CALENDAR_CLIENT_SCRIPT, /XMLHttpRequest|sendBeacon|WebSocket|innerHTML|insertAdjacentHTML/);
 });
 
 test('Content Calendar bounds untrusted inputs and invalid navigation fails to deterministic defaults', () => {

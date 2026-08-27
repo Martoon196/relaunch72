@@ -4,11 +4,20 @@ import { verifyPublicSocialDarkPlan } from '../social-dark/contracts.js';
 import {
   SocialCampaignPgContractError,
   type CancelSocialCampaignTargetCommand,
+  type CancelSocialPlanningTargetCommand,
+  type ClaimSocialPlanningRevalidationsCommand,
+  type CompleteSocialPlanningRevalidationCommand,
   type CreateSocialCampaignRevisionCommand,
+  type FailSocialPlanningRevalidationCommand,
+  type MaterializeSocialPlanningIntentCommand,
+  type PlanSocialCampaignIntentCommand,
   type RegisterSocialCampaignTestTargetCommand,
+  type RescheduleSocialPlanningTargetCommand,
   type ScheduleSocialCampaignCommand,
   type SocialCampaignApprovedMediaBinding,
   type SocialCampaignTargetState,
+  type SocialPlanningState,
+  type SocialRevalidationState,
 } from './types.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -31,6 +40,17 @@ export const PUBLIC_SOCIAL_TEST_STATES = Object.freeze([
   'reconciliation_required', 'simulated_reconciled', 'dead_letter',
 ] as const satisfies readonly SocialCampaignTargetState[]);
 const STATES = new Set<string>(PUBLIC_SOCIAL_TEST_STATES);
+
+export const PUBLIC_SOCIAL_PLANNING_STATES = Object.freeze([
+  'awaiting_revalidation', 'revalidation_leased', 'proof_ready',
+  'materialized', 'cancelled', 'superseded', 'revalidation_attention',
+] as const satisfies readonly SocialPlanningState[]);
+const PLANNING_STATES = new Set<string>(PUBLIC_SOCIAL_PLANNING_STATES);
+
+export const PUBLIC_SOCIAL_REVALIDATION_STATES = Object.freeze([
+  'waiting_for_window', 'leased', 'retry_wait', 'verified', 'materialized', 'dead_letter',
+] as const satisfies readonly SocialRevalidationState[]);
+const REVALIDATION_STATES = new Set<string>(PUBLIC_SOCIAL_REVALIDATION_STATES);
 
 function fail(message: string): never {
   throw new SocialCampaignPgContractError(message);
@@ -82,6 +102,16 @@ export function socialCampaignNetwork(value: unknown, label: string): SocialNetw
 export function socialCampaignState(value: unknown, label: string): SocialCampaignTargetState {
   if (typeof value !== 'string' || !STATES.has(value)) fail(`${label} is invalid`);
   return value as SocialCampaignTargetState;
+}
+
+export function socialPlanningState(value: unknown, label: string): SocialPlanningState {
+  if (typeof value !== 'string' || !PLANNING_STATES.has(value)) fail(`${label} is invalid`);
+  return value as SocialPlanningState;
+}
+
+export function socialRevalidationState(value: unknown, label: string): SocialRevalidationState {
+  if (typeof value !== 'string' || !REVALIDATION_STATES.has(value)) fail(`${label} is invalid`);
+  return value as SocialRevalidationState;
 }
 
 export function socialCampaignSafeKey(value: unknown, label: string): string {
@@ -278,5 +308,171 @@ export function validateCancelSocialCampaignTarget(
     workspaceId,
     operationId,
     reasonSha256: createHash('sha256').update(reason, 'utf8').digest('hex'),
+  });
+}
+
+function uniqueUuidArray(
+  value: unknown,
+  label: string,
+  minimum: number,
+  maximum: number,
+): readonly string[] {
+  if (!Array.isArray(value) || value.length < minimum || value.length > maximum) {
+    fail(`${label} must contain from ${minimum} to ${maximum} identities`);
+  }
+  const canonical = value.map((candidate, index) =>
+    socialCampaignUuid(candidate, `${label}[${index}]`));
+  if (new Set(canonical).size !== canonical.length) fail(`${label} must be unique`);
+  return Object.freeze(canonical);
+}
+
+export function validatePlanSocialCampaignIntent(
+  input: PlanSocialCampaignIntentCommand,
+): PlanSocialCampaignIntentCommand {
+  const workspaceId = socialCampaignUuid(input.workspaceId, 'workspaceId');
+  const intentId = socialCampaignUuid(input.intentId, 'intentId');
+  const campaignId = socialCampaignUuid(input.campaignId, 'campaignId');
+  const revisionId = socialCampaignUuid(input.revisionId, 'revisionId');
+  const contentVersionId = socialCampaignUuid(input.contentVersionId, 'contentVersionId');
+  const desiredFor = socialCampaignTimestamp(input.desiredFor, 'desiredFor');
+  const maxAttempts = socialCampaignInteger(input.maxAttempts, 'maxAttempts', 1, 4);
+  const targetIds = uniqueUuidArray(input.targetIds, 'targetIds', 1, 9);
+  const mediaVersionIds = uniqueUuidArray(input.mediaVersionIds, 'mediaVersionIds', 0, 10);
+  return Object.freeze({
+    workspaceId, intentId, campaignId, revisionId, contentVersionId,
+    desiredFor, maxAttempts, targetIds, mediaVersionIds,
+  });
+}
+
+export function validateRescheduleSocialPlanningTarget(
+  input: RescheduleSocialPlanningTargetCommand,
+): Readonly<{
+  workspaceId: string;
+  predecessorIntentId: string;
+  targetId: string;
+  successorIntentId: string;
+  newDesiredFor: string;
+  reasonSha256: string;
+}> {
+  const workspaceId = socialCampaignUuid(input.workspaceId, 'workspaceId');
+  const predecessorIntentId = socialCampaignUuid(
+    input.predecessorIntentId, 'predecessorIntentId',
+  );
+  const targetId = socialCampaignUuid(input.targetId, 'targetId');
+  const successorIntentId = socialCampaignUuid(input.successorIntentId, 'successorIntentId');
+  if (successorIntentId === predecessorIntentId) {
+    fail('successorIntentId must differ from predecessorIntentId');
+  }
+  const newDesiredFor = socialCampaignTimestamp(input.newDesiredFor, 'newDesiredFor');
+  const reason = socialCampaignBoundedText(input.reason, 'reason', 1, 2_000);
+  const reasonSha256 = createHash('sha256').update(reason, 'utf8').digest('hex');
+  return Object.freeze({
+    workspaceId, predecessorIntentId, targetId, successorIntentId,
+    newDesiredFor, reasonSha256,
+  });
+}
+
+export function validateCancelSocialPlanningTarget(
+  input: CancelSocialPlanningTargetCommand,
+): Readonly<{
+  workspaceId: string;
+  intentId: string;
+  targetId: string;
+  reasonSha256: string;
+}> {
+  const workspaceId = socialCampaignUuid(input.workspaceId, 'workspaceId');
+  const intentId = socialCampaignUuid(input.intentId, 'intentId');
+  const targetId = socialCampaignUuid(input.targetId, 'targetId');
+  const reason = socialCampaignBoundedText(input.reason, 'reason', 1, 2_000);
+  const reasonSha256 = createHash('sha256').update(reason, 'utf8').digest('hex');
+  return Object.freeze({ workspaceId, intentId, targetId, reasonSha256 });
+}
+
+function socialPlanningLeaseTokenHash(value: unknown): Buffer {
+  if (!(value instanceof Uint8Array) || value.byteLength !== 32) {
+    fail('leaseToken must contain exactly 32 bytes');
+  }
+  return createHash('sha256').update(value).digest();
+}
+
+export function validateClaimSocialPlanningRevalidations(
+  input: ClaimSocialPlanningRevalidationsCommand,
+): Readonly<{
+  workerId: string;
+  leaseTokenHash: Buffer;
+  batchSize: number;
+  leaseSeconds: number;
+}> {
+  return Object.freeze({
+    workerId: socialCampaignUuid(input.workerId, 'workerId'),
+    leaseTokenHash: socialPlanningLeaseTokenHash(input.leaseToken),
+    batchSize: socialCampaignInteger(input.batchSize ?? 1, 'batchSize', 1, 50),
+    leaseSeconds: socialCampaignInteger(input.leaseSeconds ?? 60, 'leaseSeconds', 30, 300),
+  });
+}
+
+export function validateCompleteSocialPlanningRevalidation(
+  input: CompleteSocialPlanningRevalidationCommand,
+): Readonly<{
+  workspaceId: string;
+  jobId: string;
+  workerId: string;
+  leaseTokenHash: Buffer;
+  leaseVersion: number;
+  proofId: string;
+  contentAttestationId: string;
+  mediaAttestationIds: readonly string[];
+}> {
+  return Object.freeze({
+    workspaceId: socialCampaignUuid(input.workspaceId, 'workspaceId'),
+    jobId: socialCampaignUuid(input.jobId, 'jobId'),
+    workerId: socialCampaignUuid(input.workerId, 'workerId'),
+    leaseTokenHash: socialPlanningLeaseTokenHash(input.leaseToken),
+    leaseVersion: socialCampaignInteger(
+      input.leaseVersion, 'leaseVersion', 1, Number.MAX_SAFE_INTEGER,
+    ),
+    proofId: socialCampaignUuid(input.proofId, 'proofId'),
+    contentAttestationId: socialCampaignUuid(
+      input.contentAttestationId, 'contentAttestationId',
+    ),
+    mediaAttestationIds: uniqueUuidArray(
+      input.mediaAttestationIds, 'mediaAttestationIds', 0, 10,
+    ),
+  });
+}
+
+export function validateFailSocialPlanningRevalidation(
+  input: FailSocialPlanningRevalidationCommand,
+): Readonly<{
+  workspaceId: string;
+  jobId: string;
+  workerId: string;
+  leaseTokenHash: Buffer;
+  leaseVersion: number;
+  errorCode: string;
+  retryable: boolean;
+}> {
+  if (typeof input.retryable !== 'boolean') fail('retryable must be a boolean');
+  return Object.freeze({
+    workspaceId: socialCampaignUuid(input.workspaceId, 'workspaceId'),
+    jobId: socialCampaignUuid(input.jobId, 'jobId'),
+    workerId: socialCampaignUuid(input.workerId, 'workerId'),
+    leaseTokenHash: socialPlanningLeaseTokenHash(input.leaseToken),
+    leaseVersion: socialCampaignInteger(
+      input.leaseVersion, 'leaseVersion', 1, Number.MAX_SAFE_INTEGER,
+    ),
+    errorCode: socialCampaignSafeCode(input.errorCode, 'errorCode'),
+    retryable: input.retryable,
+  });
+}
+
+export function validateMaterializeSocialPlanningIntent(
+  input: MaterializeSocialPlanningIntentCommand,
+): MaterializeSocialPlanningIntentCommand {
+  return Object.freeze({
+    workspaceId: socialCampaignUuid(input.workspaceId, 'workspaceId'),
+    jobId: socialCampaignUuid(input.jobId, 'jobId'),
+    proofId: socialCampaignUuid(input.proofId, 'proofId'),
+    postId: socialCampaignUuid(input.postId, 'postId'),
   });
 }

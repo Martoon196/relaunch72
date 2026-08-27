@@ -3,15 +3,11 @@ import type { Pool, QueryResultRow } from 'pg';
 import type { SqlExecutor } from '../crm-pg/types.js';
 import { requestDatabaseContext, type DatabaseRequestContext } from '../db/rls.js';
 import { InactivePortalSessionError, withTransaction } from '../db/transaction.js';
-import { createPublicSocialDarkPlan } from '../social-dark/contracts.js';
 import {
   PgSocialCampaignCommandRepository,
   PgSocialCampaignReadRepository,
   SocialCampaignPgContractError,
-  socialCampaignNetwork,
   socialCampaignRevisionSha256,
-  socialCampaignSha256,
-  socialCampaignUuid,
 } from '../social-campaign-pg/index.js';
 import {
   createPgPortalCrmPrincipalResolver,
@@ -19,8 +15,10 @@ import {
   type PortalCrmPrincipalResolver,
 } from './crm-pg-service.js';
 import type {
-  PortalCancelPublicSocialTargetInput,
+  PortalCancelPublicSocialPlanningTargetInput,
+  PortalCreatePublicSocialCampaignPlanInput,
   PortalCreatePublicSocialRevisionInput,
+  PortalPlanPublicSocialCampaignInput,
   PortalPublicSocialCommandOutcome,
   PortalPublicSocialFailure,
   PortalPublicSocialRequestIdentity,
@@ -28,8 +26,7 @@ import type {
   PortalPublicSocialSnapshotInput,
   PortalPublicSocialSnapshotOutcome,
   PortalPublicSocialWorkspaceAccess,
-  PortalRegisterPublicSocialTestTargetInput,
-  PortalSchedulePublicSocialCampaignInput,
+  PortalReschedulePublicSocialTargetInput,
 } from './public-social-service.js';
 
 interface WorkspaceAccessRow extends QueryResultRow {
@@ -170,13 +167,16 @@ function outcomeFailure(error: unknown, operation: 'read' | 'command'): PortalPu
       'The exact source proof expires before that TEST time. Refresh the proof or choose an earlier rehearsal time.',
     );
   }
+  if (postgresCode(error) === 'P0002') {
+    return failure('not_found', 'That exact TEST planning intent or target is unavailable.');
+  }
   if (postgresCode(error) === '42501') {
     return failure('forbidden', 'Workspace owner or admin access is required for TEST campaign command.');
   }
   if (postgresCode(error) === '23503') {
     return failure('not_found', 'That exact TEST campaign, target or approved content evidence is unavailable.');
   }
-  if (['23505', '40001'].includes(postgresCode(error) ?? '')) {
+  if (['23505', '40001', '55000'].includes(postgresCode(error) ?? '')) {
     return failure('conflict', 'The TEST campaign changed after this page loaded. Refresh before trying again.');
   }
   return operation === 'read'
@@ -184,13 +184,28 @@ function outcomeFailure(error: unknown, operation: 'read' | 'command'): PortalPu
     : failure('unavailable', 'The TEST campaign change could not be saved safely. No provider action was triggered.');
 }
 
-function testAccountRef(network: string, targetId: string): string {
-  const compact = targetId.replaceAll('-', '');
-  return `test-account:${network}:portal_${compact.slice(0, 32)}`;
+function portalCommandKey(value: unknown): string {
+  if (typeof value !== 'string' || !/^[\x21-\x7e]{1,128}$/u.test(value)) {
+    throw new SocialCampaignPgContractError('commandKey is invalid');
+  }
+  return value;
 }
 
-function planTargetId(network: string, targetId: string): string {
-  return `social_test_target_${network}_${targetId.replaceAll('-', '').slice(0, 24)}`;
+/** Stable server-derived UUID makes a browser command key replay-safe without trusting an id. */
+function portalCommandUuid(
+  kind: 'campaign' | 'revision' | 'plan' | 'reschedule',
+  context: DatabaseRequestContext,
+  rawCommandKey: unknown,
+): string {
+  const commandKey = portalCommandKey(rawCommandKey);
+  if (!context.userId) throw new SocialCampaignPgContractError('user context is invalid');
+  const bytes = createHash('sha256').update([
+    'public-social-portal-command/v1', kind, context.workspaceId, context.userId, commandKey,
+  ].join('\n'), 'utf8').digest().subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function commandSuccess<TResult>(
@@ -221,6 +236,16 @@ export class PgPortalPublicSocialService implements PortalPublicSocialService {
     }, { readOnly: true });
   }
 
+  private async workspaceAccess(
+    context: DatabaseRequestContext,
+  ): Promise<PortalPublicSocialWorkspaceAccess | null> {
+    return this.dependencies.readRunner.run(
+      context,
+      (transaction) => loadWorkspaceAccess(transaction, context),
+      { readOnly: true },
+    );
+  }
+
   async snapshot(
     identity: PortalPublicSocialRequestIdentity,
     input: PortalPublicSocialSnapshotInput,
@@ -243,12 +268,26 @@ export class PgPortalPublicSocialService implements PortalPublicSocialService {
           to: input.to,
           limit: input.limit,
         });
+        const planningTargets = await repository.listPlannerTargets(
+          context.workspaceId,
+          input.limit ?? 120,
+        );
+        const planningCalendar = await repository.listPlanningCalendar({
+          workspaceId: context.workspaceId,
+          from: input.from,
+          to: input.to,
+          limit: input.limit,
+        });
         return Object.freeze({
           ok: true,
           snapshot: Object.freeze({
             workspace,
             campaign,
             calendar,
+            planning: Object.freeze({
+              targets: planningTargets,
+              calendar: planningCalendar,
+            }),
             environment: 'test' as const,
             providerEffects: 'none' as const,
           }),
@@ -284,96 +323,55 @@ export class PgPortalPublicSocialService implements PortalPublicSocialService {
     }
   }
 
-  async registerTestTarget(
+  async createCampaignPlan(
     identity: PortalPublicSocialRequestIdentity,
-    input: PortalRegisterPublicSocialTestTargetInput,
+    input: PortalCreatePublicSocialCampaignPlanInput,
   ) {
     try {
       const context = await this.context(identity);
       if (!context) return failure('unauthenticated', 'This portal session is no longer active.');
-      if (!await this.canManage(context)) {
-        return failure('forbidden', 'Only a workspace owner or admin can manage TEST targets.');
+      const access = await this.workspaceAccess(context);
+      if (!access?.canManage) {
+        return failure('forbidden', 'Only a workspace owner or admin can plan TEST campaigns.');
       }
-      const targetId = socialCampaignUuid(input.targetId, 'targetId');
-      const network = socialCampaignNetwork(input.network, 'network');
-      const result = await this.dependencies.commandRunner.run(context, (transaction) =>
-        new PgSocialCampaignCommandRepository(transaction).registerTestTarget({
-          workspaceId: context.workspaceId,
-          targetId,
-          connectionId: input.connectionId,
-          network,
-          testAccountRef: testAccountRef(network, targetId),
-          displayName: input.displayName,
-        }), { readOnly: false, serializable: true });
-      return commandSuccess(result);
-    } catch (error) {
-      return outcomeFailure(error, 'command');
-    }
-  }
-
-  async schedule(
-    identity: PortalPublicSocialRequestIdentity,
-    input: PortalSchedulePublicSocialCampaignInput,
-  ) {
-    try {
-      const context = await this.context(identity);
-      if (!context) return failure('unauthenticated', 'This portal session is no longer active.');
-      if (!await this.canManage(context)) {
-        return failure('forbidden', 'Only a workspace owner or admin can schedule TEST campaigns.');
-      }
-      if (!Array.isArray(input.targets) || !Array.isArray(input.mediaBindings)) {
-        throw new SocialCampaignPgContractError('TEST campaign bindings are invalid');
-      }
-      const targetIds = input.targets.map((target, index) =>
-        socialCampaignUuid(target.targetId, `targets[${index}].targetId`));
-      const approvedContentSha256 = socialCampaignSha256(input.contentSha256, 'contentSha256');
-      const bodySha256 = typeof input.text === 'string'
-        ? createHash('sha256').update(input.text, 'utf8').digest('hex')
-        : null;
-      if (bodySha256 !== approvedContentSha256) {
-        throw new SocialCampaignPgContractError(
-          'TEST campaign body does not match the exact approved content hash',
-        );
-      }
+      const campaignId = portalCommandUuid('campaign', context, input.commandKey);
+      const revisionId = portalCommandUuid('revision', context, input.commandKey);
+      const intentId = portalCommandUuid('plan', context, input.commandKey);
       const result = await this.dependencies.commandRunner.run(context, async (transaction) => {
         const repository = new PgSocialCampaignCommandRepository(transaction);
-        const commandTargets = await repository.resolveTestTargets(context.workspaceId, targetIds);
-        const targets = commandTargets.map((target) => Object.freeze({
-          ...target,
-          planTargetId: planTargetId(target.network, target.targetId),
-        }));
-        const plan = createPublicSocialDarkPlan({
-          contentVersionId: input.contentVersionId,
-          contentSha256: approvedContentSha256,
-          approvalId: input.approvalDecisionId,
-          text: input.text,
-          media: input.mediaBindings.map((media) => Object.freeze({
-            artifactId: media.planArtifactId,
-            sha256: media.contentSha256,
-          })),
-          targets: targets.map((target) => Object.freeze({
-            targetId: target.planTargetId,
-            network: target.network,
-            testAccountRef: target.testAccountRef,
-          })),
-          scheduledFor: input.scheduledFor,
-          maxAttempts: input.maxAttempts,
-        });
-        return repository.schedule({
+        const revision = {
           workspaceId: context.workspaceId,
-          postId: input.postId,
-          campaignId: input.campaignId,
-          revisionId: input.revisionId,
-          contentItemId: input.contentItemId,
-          approvalRequestId: input.approvalRequestId,
-          approvalDecisionId: input.approvalDecisionId,
-          sourceAttestationId: input.sourceAttestationId,
-          targetBindings: targets.map((target) => Object.freeze({
-            targetId: target.targetId,
-            planTargetId: target.planTargetId,
-          })),
-          mediaBindings: input.mediaBindings,
-          plan,
+          campaignId,
+          revisionId,
+          revisionNumber: 1,
+          previousRevisionId: null,
+          title: input.title,
+          objective: input.objective,
+          timezone: access.timezone,
+        } as const;
+        const created = await repository.createRevision({
+          ...revision,
+          revisionSha256: socialCampaignRevisionSha256(revision),
+        });
+        const planned = await repository.planIntent({
+          workspaceId: context.workspaceId,
+          intentId,
+          campaignId,
+          revisionId,
+          contentVersionId: input.contentVersionId,
+          desiredFor: input.desiredFor,
+          maxAttempts: input.maxAttempts ?? 3,
+          targetIds: input.targetIds,
+          mediaVersionIds: input.mediaVersionIds,
+        });
+        return Object.freeze({
+          campaignId: created.campaignId,
+          revisionId: created.revisionId,
+          intentId: planned.intentId,
+          intentSha256: planned.intentSha256,
+          disposition: created.disposition === 'replayed' && planned.disposition === 'replayed'
+            ? 'replayed' as const
+            : 'applied' as const,
         });
       }, { readOnly: false, serializable: true });
       return commandSuccess(result);
@@ -382,20 +380,76 @@ export class PgPortalPublicSocialService implements PortalPublicSocialService {
     }
   }
 
-  async cancelTarget(
+  async plan(
     identity: PortalPublicSocialRequestIdentity,
-    input: PortalCancelPublicSocialTargetInput,
+    input: PortalPlanPublicSocialCampaignInput,
   ) {
     try {
       const context = await this.context(identity);
       if (!context) return failure('unauthenticated', 'This portal session is no longer active.');
       if (!await this.canManage(context)) {
-        return failure('forbidden', 'Only a workspace owner or admin can cancel TEST campaign targets.');
+        return failure('forbidden', 'Only a workspace owner or admin can plan TEST campaigns.');
+      }
+      const intentId = portalCommandUuid('plan', context, input.commandKey);
+      const result = await this.dependencies.commandRunner.run(context, (transaction) =>
+        new PgSocialCampaignCommandRepository(transaction).planIntent({
+          workspaceId: context.workspaceId,
+          intentId,
+          campaignId: input.campaignId,
+          revisionId: input.revisionId,
+          contentVersionId: input.contentVersionId,
+          desiredFor: input.desiredFor,
+          maxAttempts: input.maxAttempts,
+          targetIds: input.targetIds,
+          mediaVersionIds: input.mediaVersionIds,
+        }), { readOnly: false, serializable: true });
+      return commandSuccess(result);
+    } catch (error) {
+      return outcomeFailure(error, 'command');
+    }
+  }
+
+  async reschedule(
+    identity: PortalPublicSocialRequestIdentity,
+    input: PortalReschedulePublicSocialTargetInput,
+  ) {
+    try {
+      const context = await this.context(identity);
+      if (!context) return failure('unauthenticated', 'This portal session is no longer active.');
+      if (!await this.canManage(context)) {
+        return failure('forbidden', 'Only a workspace owner or admin can reschedule TEST campaigns.');
+      }
+      const successorIntentId = portalCommandUuid('reschedule', context, input.commandKey);
+      const result = await this.dependencies.commandRunner.run(context, (transaction) =>
+        new PgSocialCampaignCommandRepository(transaction).reschedulePlanningTarget({
+          workspaceId: context.workspaceId,
+          predecessorIntentId: input.predecessorIntentId,
+          targetId: input.targetId,
+          successorIntentId,
+          newDesiredFor: input.newDesiredFor,
+          reason: input.reason,
+        }), { readOnly: false, serializable: true });
+      return commandSuccess(result);
+    } catch (error) {
+      return outcomeFailure(error, 'command');
+    }
+  }
+
+  async cancel(
+    identity: PortalPublicSocialRequestIdentity,
+    input: PortalCancelPublicSocialPlanningTargetInput,
+  ) {
+    try {
+      const context = await this.context(identity);
+      if (!context) return failure('unauthenticated', 'This portal session is no longer active.');
+      if (!await this.canManage(context)) {
+        return failure('forbidden', 'Only a workspace owner or admin can cancel TEST campaign plans.');
       }
       const result = await this.dependencies.commandRunner.run(context, (transaction) =>
-        new PgSocialCampaignCommandRepository(transaction).cancelTarget({
+        new PgSocialCampaignCommandRepository(transaction).cancelPlanningTarget({
           workspaceId: context.workspaceId,
-          operationId: input.operationId,
+          intentId: input.intentId,
+          targetId: input.targetId,
           reason: input.reason,
         }), { readOnly: false, serializable: true });
       return commandSuccess(result);

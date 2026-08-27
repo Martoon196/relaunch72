@@ -1,13 +1,13 @@
-import type { SocialNetwork } from '../providers/contracts.js';
 import type {
-  CancelSocialCampaignTargetResult,
+  CancelSocialPlanningTargetResult,
   CreateSocialCampaignRevisionCommand,
   CreateSocialCampaignRevisionResult,
-  RegisterSocialCampaignTestTargetResult,
-  SocialCampaignApprovedMediaBinding,
+  PlanSocialCampaignIntentResult,
+  RescheduleSocialPlanningTargetResult,
   SocialCampaignCalendarProjectionPage,
   SocialCampaignCommandProjectionPage,
-  ScheduleSocialCampaignResult,
+  SocialPlannerTargetProjectionPage,
+  SocialPlanningCalendarProjectionPage,
 } from '../social-campaign-pg/index.js';
 
 /** Opaque browser identity; workspace and actor identity are always session-resolved. */
@@ -37,6 +37,11 @@ export interface PortalPublicSocialSnapshot {
   readonly workspace: PortalPublicSocialWorkspaceAccess;
   readonly campaign: SocialCampaignCommandProjectionPage;
   readonly calendar: SocialCampaignCalendarProjectionPage;
+  /** Durable planner truth, including intents waiting for just-in-time source proof. */
+  readonly planning?: Readonly<{
+    readonly targets: SocialPlannerTargetProjectionPage;
+    readonly calendar: SocialPlanningCalendarProjectionPage;
+  }>;
   readonly environment: 'test';
   readonly providerEffects: 'none';
 }
@@ -46,48 +51,52 @@ export type PortalCreatePublicSocialRevisionInput = Omit<
   'workspaceId' | 'revisionSha256'
 >;
 
-/** The reserved TEST account reference is derived server-side and never crosses the browser boundary. */
-export interface PortalRegisterPublicSocialTestTargetInput {
-  readonly targetId: string;
-  readonly connectionId: string;
-  readonly network: SocialNetwork;
-  readonly displayName: string;
+/** One browser command; revision and intent are committed or rolled back together. */
+export interface PortalCreatePublicSocialCampaignPlanInput {
+  readonly commandKey: string;
+  readonly title: string;
+  readonly objective: string;
+  readonly contentVersionId: string;
+  readonly desiredFor: string;
+  readonly maxAttempts?: number;
+  readonly targetIds: readonly string[];
+  readonly mediaVersionIds: readonly string[];
 }
 
-export interface PortalPublicSocialScheduleTargetInput {
-  readonly targetId: string;
+export interface PortalCreatePublicSocialCampaignPlanResult {
+  readonly campaignId: string;
+  readonly revisionId: string;
+  readonly intentId: string;
+  readonly intentSha256: string;
+  readonly disposition: 'applied' | 'replayed';
 }
 
 /**
- * Browser-safe plan material. The server seals the plan and derives logical
- * target ids plus reserved account refs; callers cannot submit either value.
- * The body is write-only and is never returned by this service.
+ * Browser-safe planner input. It intentionally has no body, hash, approval,
+ * attestation, provider connection, TEST account reference or storage key.
  */
-export interface PortalSchedulePublicSocialCampaignInput {
-  readonly postId: string;
+export interface PortalPlanPublicSocialCampaignInput {
+  readonly commandKey: string;
   readonly campaignId: string;
   readonly revisionId: string;
-  readonly contentItemId: string;
   readonly contentVersionId: string;
-  readonly contentSha256: string;
-  readonly approvalRequestId: string;
-  readonly approvalDecisionId: string;
-  readonly sourceAttestationId: string;
-  readonly text: string;
-  /** TEST-only 0039 boundary: must be earlier than every exact source attestation expiry. */
-  /**
-   * Must remain inside every exact source-attestation expiry. Current source
-   * proofs last at most 15 minutes; long-dated delivery needs a future audited
-   * just-in-time re-attestation workflow rather than silently reusing stale proof.
-   */
-  readonly scheduledFor: string;
+  readonly desiredFor: string;
   readonly maxAttempts: number;
-  readonly targets: readonly PortalPublicSocialScheduleTargetInput[];
-  readonly mediaBindings: readonly SocialCampaignApprovedMediaBinding[];
+  readonly targetIds: readonly string[];
+  readonly mediaVersionIds: readonly string[];
 }
 
-export interface PortalCancelPublicSocialTargetInput {
-  readonly operationId: string;
+export interface PortalReschedulePublicSocialTargetInput {
+  readonly commandKey: string;
+  readonly predecessorIntentId: string;
+  readonly targetId: string;
+  readonly newDesiredFor: string;
+  readonly reason: string;
+}
+
+export interface PortalCancelPublicSocialPlanningTargetInput {
+  readonly intentId: string;
+  readonly targetId: string;
   readonly reason: string;
 }
 
@@ -130,18 +139,30 @@ export interface PortalPublicSocialService {
     input: PortalCreatePublicSocialRevisionInput,
   ): Promise<PortalPublicSocialCommandOutcome<CreateSocialCampaignRevisionResult>>;
 
-  registerTestTarget(
+  createCampaignPlan?(
     identity: PortalPublicSocialRequestIdentity,
-    input: PortalRegisterPublicSocialTestTargetInput,
-  ): Promise<PortalPublicSocialCommandOutcome<RegisterSocialCampaignTestTargetResult>>;
+    input: PortalCreatePublicSocialCampaignPlanInput,
+  ): Promise<PortalPublicSocialCommandOutcome<PortalCreatePublicSocialCampaignPlanResult>>;
 
-  schedule(
+  plan?(
     identity: PortalPublicSocialRequestIdentity,
-    input: PortalSchedulePublicSocialCampaignInput,
-  ): Promise<PortalPublicSocialCommandOutcome<ScheduleSocialCampaignResult>>;
+    input: PortalPlanPublicSocialCampaignInput,
+  ): Promise<PortalPublicSocialCommandOutcome<PlanSocialCampaignIntentResult>>;
 
-  cancelTarget(
+  reschedule?(
     identity: PortalPublicSocialRequestIdentity,
-    input: PortalCancelPublicSocialTargetInput,
-  ): Promise<PortalPublicSocialCommandOutcome<CancelSocialCampaignTargetResult>>;
+    input: PortalReschedulePublicSocialTargetInput,
+  ): Promise<PortalPublicSocialCommandOutcome<RescheduleSocialPlanningTargetResult>>;
+
+  cancel?(
+    identity: PortalPublicSocialRequestIdentity,
+    input: PortalCancelPublicSocialPlanningTargetInput,
+  ): Promise<PortalPublicSocialCommandOutcome<CancelSocialPlanningTargetResult>>;
+
+  /** @deprecated Read-only route fixture compatibility; production has no such portal capability. */
+  readonly registerTestTarget?: () => Promise<PortalPublicSocialCommandOutcome<never>>;
+  /** @deprecated Read-only route fixture compatibility; planning never directly schedules a provider. */
+  readonly schedule?: () => Promise<PortalPublicSocialCommandOutcome<never>>;
+  /** @deprecated Read-only route fixture compatibility; cancel the planning target instead. */
+  readonly cancelTarget?: () => Promise<PortalPublicSocialCommandOutcome<never>>;
 }

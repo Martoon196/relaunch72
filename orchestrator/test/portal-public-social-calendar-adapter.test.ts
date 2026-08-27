@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SocialNetwork } from '../src/providers/contracts.js';
-import type { SocialCampaignCalendarProjection } from '../src/social-campaign-pg/types.js';
+import type {
+  SocialCampaignCalendarProjection,
+  SocialPlanningCalendarProjection,
+} from '../src/social-campaign-pg/types.js';
 import {
   createPropertyPredatorContentCalendarFixture,
   PROPERTY_PREDATOR_CONTENT_CALENDAR_AS_OF,
@@ -59,6 +62,39 @@ function projection(
     maxSimulationAttempts: 3,
     reconciliationAttemptCount: 0,
     maxReconciliationAttempts: 3,
+    updatedAt: '2026-08-27T12:00:00.000Z',
+    environment: 'test',
+    providerEffects: 'none',
+    ...overrides,
+  });
+}
+
+function planningProjection(
+  index = 1,
+  overrides: Partial<SocialPlanningCalendarProjection> = {},
+): SocialPlanningCalendarProjection {
+  const item = firstCatalogItem();
+  return Object.freeze({
+    intentId: uuid(700 + index),
+    campaignId: IDS.campaign,
+    revisionId: IDS.revision,
+    revisionNumber: 4,
+    campaignTitle: 'Opportunity Autopsy TEST campaign',
+    desiredFor: `2026-08-28T${String(8 + index).padStart(2, '0')}:00:00.000Z`,
+    contentItemId: item.contentItemId,
+    contentVersionId: item.contentVersionId,
+    contentSha256: item.contentSha256,
+    intentSha256: 'e'.repeat(64),
+    targetId: uuid(800 + index),
+    network: 'facebook',
+    targetLabel: 'Facebook TEST rail',
+    planningState: 'awaiting_revalidation',
+    materializedPostId: null,
+    materializedOperationId: null,
+    operationState: null,
+    revalidationState: 'waiting_for_window',
+    nextRevalidationAt: '2026-08-28T08:30:00.000Z',
+    lastErrorCode: null,
     updatedAt: '2026-08-27T12:00:00.000Z',
     environment: 'test',
     providerEffects: 'none',
@@ -243,4 +279,90 @@ test('catalogue mismatch keeps the projection hash exact and lets the presenter 
   assert.equal(slot?.immutableVersionMatches, false);
   assert.equal(slot?.gateLabel, 'Locked');
   assert.match(slot?.gateDetail ?? '', /does not match the latest immutable version/);
+});
+
+test('0040 desired-time intents become durable cards before materialisation', () => {
+  const fixture = createPropertyPredatorContentCalendarFixture();
+  const planned = planningProjection();
+  const snapshot = adaptPublicSocialCalendar([], fixture.catalog, false, [planned], false);
+  assert.equal(snapshot.slots.length, 1);
+  const slot = snapshot.slots[0];
+  assert.ok(slot);
+  assert.equal(slot.slotId, `${planned.intentId}:${planned.targetId}`);
+  assert.equal(slot.scheduledFor, planned.desiredFor);
+  assert.equal(slot.publicSocial, undefined);
+  assert.deepEqual(slot.planning, {
+    intentId: planned.intentId,
+    intentSha256: planned.intentSha256,
+    targetId: planned.targetId,
+    desiredFor: planned.desiredFor,
+    planningState: 'awaiting_revalidation',
+    revalidationState: 'waiting_for_window',
+    nextRevalidationAt: planned.nextRevalidationAt,
+    updatedAt: planned.updatedAt,
+    environment: 'test',
+    providerEffects: 'none',
+  });
+  const view = presentContentCalendar(snapshot, {
+    workspaceName: 'Property Predator Growth HQ',
+    timezone: 'Europe/London',
+    asOf: PROPERTY_PREDATOR_CONTENT_CALENDAR_AS_OF,
+    filters: { mode: 'week', date: '2026-08-28' },
+  });
+  const rendered = view.days.flatMap((day) => day.slots)[0];
+  assert.equal(rendered?.planning?.identityProofValid, true);
+  assert.equal(rendered?.planning?.statusLabel, 'JIT proof waiting');
+  assert.equal(rendered?.planning?.statusTone, 'due');
+  assert.doesNotMatch(JSON.stringify(snapshot), /body|connectionId|testAccountRef|storageKey/i);
+});
+
+test('materialised planning proof enriches one operation card without duplicating it', () => {
+  const fixture = createPropertyPredatorContentCalendarFixture();
+  const operation = projection(1);
+  const planned = planningProjection(1, {
+    targetId: operation.targetId,
+    desiredFor: operation.scheduledFor,
+    planningState: 'materialized',
+    materializedPostId: operation.postId,
+    materializedOperationId: operation.operationId,
+    operationState: operation.state,
+    revalidationState: 'materialized',
+    nextRevalidationAt: null,
+  });
+  const snapshot = adaptPublicSocialCalendar(
+    [operation], fixture.catalog, false, [planned], false,
+  );
+  assert.equal(snapshot.slots.length, 1);
+  assert.equal(snapshot.slots[0]?.slotId, operation.operationId);
+  assert.equal(snapshot.slots[0]?.publicSocial?.operationId, operation.operationId);
+  assert.equal(snapshot.slots[0]?.planning?.intentId, planned.intentId);
+  assert.equal(snapshot.slots[0]?.planning?.planningState, 'materialized');
+});
+
+test('planning adapter rejects unsafe fields, duplicate targets and contradictory materialisation', () => {
+  const fixture = createPropertyPredatorContentCalendarFixture();
+  const planned = planningProjection();
+  assert.throws(
+    () => adaptPublicSocialCalendar([], fixture.catalog, false, [{
+      ...planned, body: 'browser must never receive this',
+    } as unknown as SocialPlanningCalendarProjection]),
+    /unsupported field body/,
+  );
+  assert.throws(
+    () => adaptPublicSocialCalendar([], fixture.catalog, false, [planned, planned]),
+    /duplicate planning target/,
+  );
+  const operation = projection(1);
+  assert.throws(
+    () => adaptPublicSocialCalendar([operation], fixture.catalog, false, [planningProjection(1, {
+      targetId: operation.targetId,
+      desiredFor: operation.scheduledFor,
+      materializedPostId: operation.postId,
+      materializedOperationId: operation.operationId,
+      operationState: operation.state,
+      revalidationState: 'materialized',
+      contentSha256: 'f'.repeat(64),
+    })]),
+    /materialized planning proof contradicts operation/,
+  );
 });

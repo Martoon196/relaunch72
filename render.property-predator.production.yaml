@@ -131,6 +131,11 @@ services:
       # quarantine, publish, generate content or perform provider operations.
       - key: DATABASE_CONTENT_ADAPTER_URL
         sync: false
+      # Migration 0040 campaign planning uses its own function-only command
+      # role. This identity can append TEST planning intent evidence; it cannot
+      # call a social provider or use the worker/revalidator functions.
+      - key: DATABASE_PUBLIC_SOCIAL_COMMAND_URL
+        sync: false
       # Dedicated r72_mailgun_webhook_command identity. This is deliberately
       # narrower than the platform's generic webhook role.
       - key: DATABASE_MAILGUN_WEBHOOK_URL
@@ -148,6 +153,8 @@ services:
       - key: DATABASE_CONTENT_COMMAND_POOL_MAX
         value: "2"
       - key: DATABASE_CONTENT_ADAPTER_POOL_MAX
+        value: "2"
+      - key: DATABASE_PUBLIC_SOCIAL_COMMAND_POOL_MAX
         value: "2"
       - key: DATABASE_MAILGUN_WEBHOOK_POOL_MAX
         value: "2"
@@ -177,6 +184,8 @@ services:
       # separate user approval plus a reviewed configuration change.
       - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
         value: "false"
+      - key: PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED
+        value: "true"
       - key: PROPERTY_PREDATOR_EMAIL_DELIVERY_ENABLED
         value: "false"
       - key: PROPERTY_PREDATOR_EMAIL_EMERGENCY_PAUSED
@@ -271,3 +280,112 @@ services:
       # No Mailgun outbound credential or sending identity is present in the
       # dark deployment. Those values are added only after separate activation
       # approval and a reviewed worker change that can actually use them.
+
+  # Migration 0040 just-in-time revalidation runs in a separate dark worker.
+  # It can claim one due TEST intent, read one exact approved company-content
+  # version, persist a lease-bound system proof and materialize the simulator job.
+  # It has no social-provider SDK, credential or publication capability.
+  - type: worker
+    name: property-predator-public-social-revalidator
+    runtime: node
+    region: frankfurt
+    plan: starter
+    branch: codex/relaunch72-platform-foundation
+    numInstances: 1
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
+    startCommand: npm run --workspace orchestrator serve:public-social-revalidator
+    maxShutdownDelaySeconds: 120
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+
+      # One NOINHERIT, function-only identity. Its two source-proof functions
+      # are fenced to the exact unexpired job lease; it has no table access.
+      - key: DATABASE_SSL_MODE
+        value: verify-full
+      - key: DATABASE_PUBLIC_SOCIAL_REVALIDATOR_URL
+        sync: false
+      - key: DATABASE_PUBLIC_SOCIAL_REVALIDATOR_POOL_MAX
+        value: "1"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        value: "5000"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: "15000"
+      - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
+        sync: false
+
+      # Exact read-only Affiliate Stash/company-content bridge identity. The
+      # token is copied from the main Property Predator service's READ slot;
+      # the generate token, admin token and every user session remain absent.
+      - key: PROPERTY_PREDATOR_COMPANY_CONTENT_ORIGIN
+        value: https://propertypredator.com
+      - key: PROPERTY_PREDATOR_COMPANY_CONTENT_CLIENT_ID
+        value: relaunch72
+      - key: PROPERTY_PREDATOR_COMPANY_CONTENT_READ_TOKEN
+        sync: false
+      - key: PROPERTY_PREDATOR_COMPANY_CONTENT_TIMEOUT_MS
+        value: "8000"
+      # Hard TEST boundary. The runner refuses to boot if any value is relaxed
+      # or if a live-provider-shaped credential enters this process.
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_REVALIDATOR_ENVIRONMENT
+        value: test
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_REVALIDATOR_POLL_MS
+        value: "1000"
+      - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED
+        value: "true"
+
+  # The only consumer of materialized 0039 TEST operations. It runs a local,
+  # deterministic simulator and never loads a network client or live account.
+  - type: worker
+    name: property-predator-public-social-test-rail
+    runtime: node
+    region: frankfurt
+    plan: starter
+    branch: codex/relaunch72-platform-foundation
+    numInstances: 1
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
+    startCommand: npm run --workspace orchestrator serve:public-social-test-rail
+    maxShutdownDelaySeconds: 120
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+
+      # One exact function-only 0039 worker identity; no portal, revalidator,
+      # content, owner, migrator, import or provider credential is supplied.
+      - key: DATABASE_SSL_MODE
+        value: verify-full
+      - key: DATABASE_PUBLIC_SOCIAL_WORKER_URL
+        sync: false
+      - key: DATABASE_PUBLIC_SOCIAL_WORKER_POOL_MAX
+        value: "1"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        value: "5000"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: "15000"
+      - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
+        sync: false
+
+      # This exact provider id is the in-memory deterministic TEST simulator.
+      # Both locks are startup assertions, not advisory labels.
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_RAIL_ENVIRONMENT
+        value: test
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_RAIL_PROVIDER_ID
+        value: public_social_dark_simulator
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_RAIL_POLL_MS
+        value: "1000"
+      - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED
+        value: "true"

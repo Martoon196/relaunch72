@@ -7,11 +7,26 @@ import { fileURLToPath } from 'node:url';
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const manifestPath = path.join(repositoryRoot, 'render.property-predator.production.yaml');
 const manifest = fs.readFileSync(manifestPath, 'utf8');
-const workerMarker = '\n  - type: worker\n';
-const workerOffset = manifest.indexOf(workerMarker);
-assert.notEqual(workerOffset, -1, 'production Blueprint must isolate outbound work');
-const webManifest = manifest.slice(0, workerOffset);
-const workerManifest = manifest.slice(workerOffset + 1);
+
+function serviceSection(type: 'web' | 'worker', name: string): string {
+  const marker = `\n  - type: ${type}\n    name: ${name}\n`;
+  const start = manifest.indexOf(marker);
+  assert.notEqual(start, -1, `${name} must exist in the production Blueprint`);
+  const end = manifest.indexOf('\n  - type: ', start + marker.length);
+  return manifest.slice(start + 1, end === -1 ? manifest.length : end);
+}
+
+const webManifest = serviceSection('web', 'property-predator-growth-hq');
+const emailWorkerManifest = serviceSection('worker', 'property-predator-email-worker');
+const revalidatorWorkerManifest = serviceSection(
+  'worker', 'property-predator-public-social-revalidator',
+);
+const socialTestWorkerManifest = serviceSection(
+  'worker', 'property-predator-public-social-test-rail',
+);
+const workerManifests = [
+  emailWorkerManifest, revalidatorWorkerManifest, socialTestWorkerManifest,
+] as const;
 
 function literalValue(key: string, value: string): void {
   const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -75,17 +90,25 @@ test('production Blueprint is isolated, manually deployed and fail-closed', () =
   assert.doesNotMatch(manifest, /propertypredator\.co\.uk/);
   assert.equal(
     (manifest.match(/buildCommand: npm ci --ignore-scripts --include=dev && node scripts\/supply-chain\.mjs --check && npm run typecheck && npm test/g) ?? []).length,
-    2,
-    'both production processes must install the locked dev toolchain used by build checks and TS entrypoints',
+    4,
+    'all four isolated production processes must install the locked checked toolchain',
   );
   assert.match(manifest, /startCommand: npm run serve/);
-  assert.match(workerManifest, /name: property-predator-email-worker/);
-  assert.match(workerManifest, /plan: starter/);
-  assert.match(workerManifest, /region: frankfurt/);
-  assert.match(workerManifest, /autoDeployTrigger: off/);
+  assert.match(emailWorkerManifest, /name: property-predator-email-worker/);
+  assert.match(emailWorkerManifest, /plan: starter/);
+  assert.match(emailWorkerManifest, /region: frankfurt/);
+  assert.match(emailWorkerManifest, /autoDeployTrigger: off/);
   assert.match(
-    workerManifest,
+    emailWorkerManifest,
     /startCommand: npm run --workspace orchestrator serve:property-predator-email-worker/,
+  );
+  assert.match(
+    revalidatorWorkerManifest,
+    /startCommand: npm run --workspace orchestrator serve:public-social-revalidator/,
+  );
+  assert.match(
+    socialTestWorkerManifest,
+    /startCommand: npm run --workspace orchestrator serve:public-social-test-rail/,
   );
 
   literalValue('PORTAL_POSTGRES_ENABLED', 'true');
@@ -134,12 +157,20 @@ test('production Blueprint is isolated, manually deployed and fail-closed', () =
     'PROPERTY_PREDATOR_SSO_BOOTSTRAP_USER_ID',
     'PROPERTY_PREDATOR_SSO_BOOTSTRAP_EMAILS',
   ]) {
-    assert.doesNotMatch(workerManifest, new RegExp(`- key: ${key}\\b`));
+    for (const worker of workerManifests) {
+      assert.doesNotMatch(worker, new RegExp(`- key: ${key}\\b`));
+    }
   }
-  for (const section of [webManifest, workerManifest]) {
+  for (const section of [webManifest, emailWorkerManifest]) {
     literalValueIn(section, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'false');
     literalValueIn(section, 'PROPERTY_PREDATOR_EMAIL_DELIVERY_ENABLED', 'false');
     literalValueIn(section, 'PROPERTY_PREDATOR_EMAIL_EMERGENCY_PAUSED', 'true');
+  }
+  literalValueIn(webManifest, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'true');
+  for (const section of [revalidatorWorkerManifest, socialTestWorkerManifest]) {
+    literalValueIn(section, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'false');
+    literalValueIn(section, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'true');
+    assert.doesNotMatch(section, /- key: PROPERTY_PREDATOR_EMAIL_(?:DELIVERY_ENABLED|EMERGENCY_PAUSED)\b/);
   }
   literalValue('PROPERTY_PREDATOR_PILOT_STAGE', 'internal-seed');
   literalValue('PROPERTY_PREDATOR_PILOT_RECIPIENT_SCOPE', 'owned-internal-seeds-only');
@@ -154,12 +185,15 @@ test('production Blueprint keeps web and worker database identities process-isol
     'DATABASE_ABUSE_COMMAND_URL',
     'DATABASE_CONTENT_COMMAND_URL',
     'DATABASE_CONTENT_ADAPTER_URL',
+    'DATABASE_PUBLIC_SOCIAL_COMMAND_URL',
     'DATABASE_MAILGUN_WEBHOOK_URL',
   ]) secretSlot(key);
   secretSlot('DATABASE_MAILGUN_WORKER_URL');
+  secretSlot('DATABASE_PUBLIC_SOCIAL_REVALIDATOR_URL');
+  secretSlot('DATABASE_PUBLIC_SOCIAL_WORKER_URL');
   assert.equal(
     (manifest.match(/- key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID\b/g) ?? []).length,
-    2,
+    4,
   );
   secretSlot('PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID');
 
@@ -170,16 +204,35 @@ test('production Blueprint keeps web and worker database identities process-isol
     'DATABASE_CRM_COMMAND_URL',
     'DATABASE_IDENTITY_COMMAND_URL',
     'DATABASE_MAILGUN_WEBHOOK_URL',
+    'DATABASE_PUBLIC_SOCIAL_COMMAND_URL',
     'DATABASE_WEB_URL',
   ]);
-  assert.deepEqual(databaseUrlKeys(workerManifest), ['DATABASE_MAILGUN_WORKER_URL']);
+  assert.deepEqual(databaseUrlKeys(emailWorkerManifest), ['DATABASE_MAILGUN_WORKER_URL']);
+  assert.deepEqual(databaseUrlKeys(revalidatorWorkerManifest), [
+    'DATABASE_PUBLIC_SOCIAL_REVALIDATOR_URL',
+  ]);
+  assert.deepEqual(databaseUrlKeys(socialTestWorkerManifest), [
+    'DATABASE_PUBLIC_SOCIAL_WORKER_URL',
+  ]);
 
   assert.doesNotMatch(webManifest, /- key: DATABASE_MAILGUN_WORKER_URL\b/);
-  assert.match(workerManifest, /- key: DATABASE_MAILGUN_WORKER_URL\b/);
+  assert.doesNotMatch(
+    webManifest,
+    /- key: DATABASE_PUBLIC_SOCIAL_(?:REVALIDATOR|WORKER)_URL\b/,
+  );
+  assert.match(emailWorkerManifest, /- key: DATABASE_MAILGUN_WORKER_URL\b/);
   assert.match(webManifest, /- key: DATABASE_MAILGUN_WEBHOOK_URL\b/);
   assert.doesNotMatch(
-    workerManifest,
+    emailWorkerManifest,
     /- key: DATABASE_(?:WEB|IDENTITY_COMMAND|CRM_COMMAND|ABUSE_COMMAND|CONTENT_COMMAND|CONTENT_ADAPTER|MAILGUN_WEBHOOK)_URL\b/,
+  );
+  assert.doesNotMatch(
+    revalidatorWorkerManifest,
+    /- key: DATABASE_(?:WEB|IDENTITY_COMMAND|CRM_COMMAND|ABUSE_COMMAND|CONTENT_COMMAND|MAILGUN_WEBHOOK|MAILGUN_WORKER|PUBLIC_SOCIAL_COMMAND|PUBLIC_SOCIAL_WORKER)_URL\b/,
+  );
+  assert.doesNotMatch(
+    socialTestWorkerManifest,
+    /- key: DATABASE_(?:WEB|IDENTITY_COMMAND|CRM_COMMAND|ABUSE_COMMAND|CONTENT_COMMAND|CONTENT_ADAPTER|MAILGUN_WEBHOOK|MAILGUN_WORKER|PUBLIC_SOCIAL_COMMAND|PUBLIC_SOCIAL_REVALIDATOR)_URL\b/,
   );
 
   literalValue('DATABASE_SSL_MODE', 'verify-full');
@@ -198,18 +251,22 @@ test('Mailgun ingress is isolated and the dark worker receives no outbound secre
   assert.doesNotMatch(webManifest, /- key: MAILGUN_API_KEY\b/);
   assert.doesNotMatch(webManifest, /- key: DATABASE_MAILGUN_WORKER_URL\b/);
   assert.match(webManifest, /- key: MAILGUN_SIGNING_KEY\b/);
-  assert.doesNotMatch(workerManifest, /- key: MAILGUN_API_KEY\b/);
-  assert.doesNotMatch(workerManifest, /- key: MAILGUN_SENDING_DOMAIN\b/);
-  assert.doesNotMatch(workerManifest, /- key: MAILGUN_FROM_EMAIL\b/);
-  assert.doesNotMatch(workerManifest, /- key: MAILGUN_SIGNING_KEY\b/);
-  assert.doesNotMatch(workerManifest, /- key: MAILGUN_EVENT_WEBHOOK_URL\b/);
+  assert.doesNotMatch(emailWorkerManifest, /- key: MAILGUN_API_KEY\b/);
+  assert.doesNotMatch(emailWorkerManifest, /- key: MAILGUN_SENDING_DOMAIN\b/);
+  assert.doesNotMatch(emailWorkerManifest, /- key: MAILGUN_FROM_EMAIL\b/);
+  assert.doesNotMatch(emailWorkerManifest, /- key: MAILGUN_SIGNING_KEY\b/);
+  assert.doesNotMatch(emailWorkerManifest, /- key: MAILGUN_EVENT_WEBHOOK_URL\b/);
   assert.doesNotMatch(
-    workerManifest,
+    emailWorkerManifest,
     /- key: MAILGUN_WEBHOOK_SIGNATURE_VERIFICATION_ENABLED\b/,
   );
-  assert.doesNotMatch(workerManifest, /- key: SESSION_SECRET\b/);
-  assert.doesNotMatch(workerManifest, /- key: DATABASE_MAILGUN_WEBHOOK_URL\b/);
-  assert.match(workerManifest, /- key: PROPERTY_PREDATOR_EMAIL_INTERNAL_SEEDS\b/);
+  assert.doesNotMatch(emailWorkerManifest, /- key: SESSION_SECRET\b/);
+  assert.doesNotMatch(emailWorkerManifest, /- key: DATABASE_MAILGUN_WEBHOOK_URL\b/);
+  assert.match(emailWorkerManifest, /- key: PROPERTY_PREDATOR_EMAIL_INTERNAL_SEEDS\b/);
+  for (const worker of [revalidatorWorkerManifest, socialTestWorkerManifest]) {
+    assert.doesNotMatch(worker, /- key: MAILGUN_[A-Z0-9_]+\b/);
+    assert.doesNotMatch(worker, /- key: PROPERTY_PREDATOR_EMAIL_[A-Z0-9_]+\b/);
+  }
 
   literalValue('PROPERTY_PREDATOR_EMAIL_PROVIDER', 'mailgun');
   literalValue('PROPERTY_PREDATOR_MAILGUN_WEBHOOK_ENABLED', 'true');
@@ -236,10 +293,12 @@ test('deployment requires a dedicated dormant worker entrypoint without a web fa
     'utf8',
   )) as { scripts?: Record<string, unknown> };
   assert.match(
-    workerManifest,
+    emailWorkerManifest,
     /startCommand: npm run --workspace orchestrator serve:property-predator-email-worker/,
   );
-  assert.doesNotMatch(workerManifest, /startCommand: npm run serve(?:\s|$)/);
+  for (const worker of workerManifests) {
+    assert.doesNotMatch(worker, /startCommand: npm run serve(?:\s|$)/);
+  }
   const workerEntrypoint = orchestratorPackage.scripts?.['serve:property-predator-email-worker'];
   if (typeof workerEntrypoint !== 'string' || workerEntrypoint.trim() === '') {
     assert.match(

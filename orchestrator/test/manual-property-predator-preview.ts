@@ -5,8 +5,8 @@
  * ephemeral TEST state, while no database, provider, message, social post,
  * payment or production service is touched.
  */
-import { randomUUID } from 'node:crypto';
-import { createServer, type IncomingMessage } from 'node:http';
+import { createHash, randomUUID } from 'node:crypto';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { appShell } from '../src/portal/ui.js';
 import { createPropertyPredatorContentCatalogFixture } from '../src/portal/content-control-room-fixtures.js';
 import {
@@ -40,12 +40,31 @@ import {
 import {
   CONTENT_CALENDAR_ROUTE,
   presentContentCalendar,
+  type ContentCalendarSlotSnapshot,
+  type ContentCalendarSnapshot,
 } from '../src/portal/content-calendar-presenter.js';
 import {
   createPropertyPredatorContentCalendarFixture,
   PROPERTY_PREDATOR_CONTENT_CALENDAR_AS_OF,
 } from '../src/portal/content-calendar-fixtures.js';
-import { renderContentCalendarBody } from '../src/portal/content-calendar-view.js';
+import {
+  renderContentCalendarBody,
+  type ContentCalendarMutationView,
+} from '../src/portal/content-calendar-view.js';
+import {
+  CAMPAIGN_WIZARD_CREATE_TEST_ROUTE,
+  CAMPAIGN_WIZARD_ROUTE,
+  campaignWizardNoticeFromQuery,
+  campaignWizardNoticeToken,
+  type CampaignWizardNoticeCode,
+} from '../src/portal/campaign-wizard-actions.js';
+import {
+  presentCampaignWizard,
+  type CampaignWizardSnapshot,
+  type CampaignWizardTargetSnapshot,
+} from '../src/portal/campaign-wizard-presenter.js';
+import { renderCampaignWizardBody } from '../src/portal/campaign-wizard-view.js';
+import { workspaceLocalDateTime } from '../src/portal/crm-pg-service.js';
 import {
   SOCIAL_COMPOSER_ROUTE,
   presentSocialComposer,
@@ -395,8 +414,505 @@ const PREVIEW_CONTENT_NOTICE_SECRET = 'preview-content-notice-secret';
 const PREVIEW_CONTENT_NOTICE_SESSION = 'preview-content-session';
 const PREVIEW_INBOX_NOTICE_SECRET = 'preview-inbox-notice-secret';
 const PREVIEW_INBOX_NOTICE_SESSION = 'preview-inbox-session';
+const PREVIEW_CAMPAIGN_NOTICE_SECRET = 'preview-campaign-notice-secret';
+const PREVIEW_CAMPAIGN_NOTICE_SESSION = 'preview-campaign-session';
+const PREVIEW_CALENDAR_RESCHEDULE_ROUTE = '/portal/content/calendar/test-planning-targets/reschedule';
+const PREVIEW_CALENDAR_CANCEL_ROUTE = '/portal/content/calendar/test-planning-targets/cancel';
+const PREVIEW_CALENDAR_CAMPAIGN_REVISION_KEY = 'property-predator-signal-sprint:r3';
 let previewContentCatalog = createPropertyPredatorContentCatalogFixture();
 let previewInboxSnapshot = createPropertyPredatorTestInboxSnapshot();
+
+const PREVIEW_CAMPAIGN_TARGETS = Object.freeze([
+  Object.freeze({
+    targetId: 'a7000000-0000-4000-8000-000000000001',
+    network: 'linkedin',
+    targetLabel: 'LinkedIn TEST rail',
+    planningEnabled: true,
+    environment: 'test',
+    providerEffects: 'none',
+  }),
+  Object.freeze({
+    targetId: 'a7000000-0000-4000-8000-000000000002',
+    network: 'instagram',
+    targetLabel: 'Instagram TEST rail',
+    planningEnabled: true,
+    environment: 'test',
+    providerEffects: 'none',
+  }),
+  Object.freeze({
+    targetId: 'a7000000-0000-4000-8000-000000000003',
+    network: 'facebook',
+    targetLabel: 'Facebook TEST rail',
+    planningEnabled: true,
+    environment: 'test',
+    providerEffects: 'none',
+  }),
+  Object.freeze({
+    targetId: 'a7000000-0000-4000-8000-000000000004',
+    network: 'x',
+    targetLabel: 'X TEST rail',
+    planningEnabled: true,
+    environment: 'test',
+    providerEffects: 'none',
+  }),
+] satisfies readonly CampaignWizardTargetSnapshot[]);
+
+type PreviewPlanningState = NonNullable<ContentCalendarSlotSnapshot['planning']>['planningState'];
+type PreviewRevalidationState = NonNullable<ContentCalendarSlotSnapshot['planning']>['revalidationState'];
+
+interface PreviewCampaignTargetState {
+  readonly slotId: string;
+  readonly campaignId: string;
+  readonly revisionId: string;
+  readonly revisionNumber: number;
+  readonly campaignTitle: string;
+  readonly objective: string;
+  readonly contentItemId: string;
+  readonly contentVersionId: string;
+  readonly contentSha256: string;
+  readonly intentId: string;
+  readonly intentSha256: string;
+  readonly targetId: string;
+  readonly targetLabel: string;
+  readonly channel: CampaignWizardTargetSnapshot['network'];
+  readonly desiredFor: string;
+  readonly planningState: PreviewPlanningState;
+  readonly revalidationState: PreviewRevalidationState;
+  readonly nextRevalidationAt: string | null;
+  readonly updatedAt: string;
+  readonly version: number;
+}
+
+export interface PreviewCampaignActionResult {
+  readonly ok: boolean;
+  readonly code: CampaignWizardNoticeCode;
+  readonly message: string;
+  readonly intentId?: string;
+  readonly targetId?: string;
+}
+
+const previewCampaignTargets = new Map<string, PreviewCampaignTargetState>();
+const previewCampaignHistory: PreviewCampaignTargetState[] = [];
+const previewCampaignCommandResults = new Map<string, PreviewCampaignActionResult>();
+
+function previewSha(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function previewNextRevalidationAt(desiredFor: string): string | null {
+  const time = new Date(desiredFor).getTime();
+  return Number.isFinite(time) ? new Date(time - 30 * 60_000).toISOString() : null;
+}
+
+function cleanPreviewText(value: string | null, maximum: number): string | null {
+  const clean = (value ?? '').trim();
+  return clean && clean.length <= maximum
+    && !/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(clean)
+    ? clean
+    : null;
+}
+
+function previewPlanningTarget(intentId: string, targetId: string): PreviewCampaignTargetState | undefined {
+  return [...previewCampaignTargets.values()].find((state) => (
+    state.intentId === intentId && state.targetId === targetId
+  ));
+}
+
+function previewCreateCommandKey(): string {
+  return `preview-campaign-create:${randomUUID()}`;
+}
+
+function previewRescheduleCommandKey(state: PreviewCampaignTargetState): string {
+  return `preview-calendar-reschedule:${state.intentId}:${state.targetId}:v${state.version}`;
+}
+
+function previewCancelCommandKey(state: PreviewCampaignTargetState): string {
+  return `preview-calendar-cancel:${state.intentId}:${state.targetId}:v${state.version}`;
+}
+
+/** Reset only the process-local showcase state. No database or provider exists behind it. */
+export function resetPreviewCampaignState(): void {
+  previewCampaignTargets.clear();
+  previewCampaignHistory.length = 0;
+  previewCampaignCommandResults.clear();
+  const fixture = createPropertyPredatorContentCalendarFixture();
+  const seededSlot = fixture.slots.find((slot) => slot.slotId === '91000000-0000-4000-8000-000000000002');
+  const target = PREVIEW_CAMPAIGN_TARGETS[1];
+  if (!seededSlot || !target) throw new Error('Property Predator preview planning seed is incomplete');
+  const intentId = 'd1000000-0000-4000-8000-000000000001';
+  previewCampaignTargets.set(seededSlot.slotId, Object.freeze({
+    slotId: seededSlot.slotId,
+    campaignId: PROPERTY_PREDATOR_PUBLIC_SOCIAL_CAMPAIGN_ID,
+    revisionId: 'a2000000-0000-4000-8000-000000000003',
+    revisionNumber: 3,
+    campaignTitle: 'Property Predator Signal Sprint',
+    objective: seededSlot.objectiveLabel,
+    contentItemId: seededSlot.contentItemId,
+    contentVersionId: seededSlot.contentVersionId,
+    contentSha256: seededSlot.contentSha256,
+    intentId,
+    intentSha256: previewSha({ intentId, targetId: target.targetId, desiredFor: seededSlot.scheduledFor }),
+    targetId: target.targetId,
+    targetLabel: target.targetLabel,
+    channel: target.network,
+    desiredFor: seededSlot.scheduledFor,
+    planningState: 'awaiting_revalidation',
+    revalidationState: 'waiting_for_window',
+    nextRevalidationAt: previewNextRevalidationAt(seededSlot.scheduledFor),
+    updatedAt: '2026-08-27T08:42:00.000Z',
+    version: 1,
+  }));
+}
+
+/** Safe evidence projection used by the preview regression test. */
+export function previewCampaignStateForTest(): Readonly<{
+  active: readonly PreviewCampaignTargetState[];
+  history: readonly PreviewCampaignTargetState[];
+}> {
+  return Object.freeze({
+    active: Object.freeze([...previewCampaignTargets.values()].map((state) => Object.freeze({ ...state }))),
+    history: Object.freeze(previewCampaignHistory.map((state) => Object.freeze({ ...state }))),
+  });
+}
+
+function previewCampaignWizardSnapshot(): CampaignWizardSnapshot {
+  const approval = (status: typeof previewContentCatalog.items[number]['approvalStatus']) => {
+    if (status === 'approved' || status === 'pending' || status === 'rejected' || status === 'changes_requested') {
+      return status;
+    }
+    return 'unavailable' as const;
+  };
+  const option = (item: typeof previewContentCatalog.items[number]) => Object.freeze({
+    contentItemId: item.contentItemId,
+    contentVersionId: item.contentVersionId,
+    contentSha256: item.contentSha256,
+    title: item.title,
+    versionNumber: item.versionNumber,
+    kindLabel: item.kind.replaceAll('_', ' '),
+    approvalStatus: approval(item.approvalStatus),
+    sourceFresh: item.sourceFresh,
+    publishable: item.publishable,
+  });
+  return Object.freeze({
+    content: Object.freeze(previewContentCatalog.items.filter((item) => item.kind === 'social_post').map(option)),
+    media: Object.freeze(previewContentCatalog.items.filter((item) => item.kind === 'image' || item.kind === 'video').map(option)),
+    targets: PREVIEW_CAMPAIGN_TARGETS,
+    sourceTruncated: false,
+  });
+}
+
+function previewCalendarSlot(
+  state: PreviewCampaignTargetState,
+  base: ContentCalendarSlotSnapshot | undefined,
+): ContentCalendarSlotSnapshot | null {
+  const item = previewContentCatalog.items.find((candidate) => candidate.contentVersionId === state.contentVersionId);
+  if (!item) return null;
+  return Object.freeze({
+    slotId: state.slotId,
+    contentItemId: state.contentItemId,
+    contentVersionId: state.contentVersionId,
+    contentSha256: state.contentSha256,
+    scheduledFor: state.desiredFor,
+    channel: state.channel,
+    variantLabel: base?.variantLabel ?? `${state.campaignTitle} · ${state.targetLabel}`,
+    objectiveLabel: state.objective,
+    ownerLabel: base?.ownerLabel ?? 'Growth HQ preview desk',
+    plannerState: base?.plannerState ?? 'draft',
+    executionMode: 'simulated',
+    publicSocial: base?.publicSocial,
+    planning: Object.freeze({
+      intentId: state.intentId,
+      intentSha256: state.intentSha256,
+      targetId: state.targetId,
+      desiredFor: state.desiredFor,
+      planningState: state.planningState,
+      revalidationState: state.revalidationState,
+      nextRevalidationAt: state.nextRevalidationAt,
+      updatedAt: state.updatedAt,
+      environment: 'test',
+      providerEffects: 'none',
+    }),
+  });
+}
+
+/** Rebuild the page from process-local state so GET-after-POST and reload agree. */
+export function createPersistentPreviewContentCalendar(): ContentCalendarSnapshot {
+  const base = createPropertyPredatorContentCalendarFixture();
+  const loaded = new Set<string>();
+  const slots: ContentCalendarSlotSnapshot[] = [];
+  for (const baseSlot of base.slots) {
+    const state = previewCampaignTargets.get(baseSlot.slotId);
+    if (!state) {
+      slots.push(baseSlot);
+      continue;
+    }
+    loaded.add(state.slotId);
+    const projected = previewCalendarSlot(state, baseSlot);
+    if (projected) slots.push(projected);
+  }
+  for (const state of previewCampaignTargets.values()) {
+    if (loaded.has(state.slotId)) continue;
+    const projected = previewCalendarSlot(state, undefined);
+    if (projected) slots.push(projected);
+  }
+  return Object.freeze({
+    catalog: previewContentCatalog,
+    slots: Object.freeze(slots),
+    sourceTruncated: false,
+  });
+}
+
+function previewCalendarMutations(url: URL): ContentCalendarMutationView {
+  const eligibleContent = previewContentCatalog.items.filter((item) => item.publishable);
+  const slotActions: Record<string, NonNullable<ContentCalendarMutationView['slots']>[string]> = {};
+  for (const state of previewCampaignTargets.values()) {
+    const current = state.planningState !== 'cancelled' && state.planningState !== 'superseded';
+    slotActions[state.slotId] = Object.freeze({
+      intentId: state.intentId,
+      targetId: state.targetId,
+      intentSha256: state.intentSha256,
+      expectedUpdatedAt: state.updatedAt,
+      reschedule: current ? Object.freeze({
+        actionUrl: PREVIEW_CALENDAR_RESCHEDULE_ROUTE,
+        csrfToken: PREVIEW_CSRF,
+        commandKey: previewRescheduleCommandKey(state),
+      }) : undefined,
+      cancel: current ? Object.freeze({
+        actionUrl: PREVIEW_CALENDAR_CANCEL_ROUTE,
+        csrfToken: PREVIEW_CSRF,
+        commandKey: previewCancelCommandKey(state),
+      }) : undefined,
+      jitStatus: state.planningState === 'cancelled'
+        ? Object.freeze({
+          state: 'cancelled', label: 'TEST target cancelled',
+          detail: 'This exact process-local target is stopped. No provider was called.',
+          nextRevalidationAt: null,
+        })
+        : Object.freeze({
+          state: 'current', label: 'JIT source check waiting',
+          detail: 'The local showcase will re-check the exact source close to the desired TEST time.',
+          nextRevalidationAt: state.nextRevalidationAt,
+        }),
+    });
+  }
+  const outcome = campaignWizardNoticeFromQuery(
+    url.searchParams,
+    PREVIEW_CAMPAIGN_NOTICE_SECRET,
+    PREVIEW_CAMPAIGN_NOTICE_SESSION,
+  );
+  return Object.freeze({
+    create: Object.freeze({
+      actionUrl: CAMPAIGN_WIZARD_CREATE_TEST_ROUTE,
+      csrfToken: PREVIEW_CSRF,
+      commandKey: previewCreateCommandKey(),
+      campaignRevisions: Object.freeze([Object.freeze({
+        value: PREVIEW_CALENDAR_CAMPAIGN_REVISION_KEY,
+        label: 'Property Predator Signal Sprint · revision 3',
+        detail: 'TEST planning only',
+      })]),
+      contentVersions: Object.freeze(eligibleContent.map((item) => Object.freeze({
+        value: item.contentVersionId,
+        label: item.title,
+        detail: `immutable v${item.versionNumber}`,
+      }))),
+      targets: Object.freeze(PREVIEW_CAMPAIGN_TARGETS.map((target) => Object.freeze({
+        value: target.targetId,
+        label: target.targetLabel,
+        detail: `${target.network} · provider effects none`,
+      }))),
+    }),
+    slots: Object.freeze(slotActions),
+    outcome,
+  });
+}
+
+function previewCommandReplay(commandKey: string | null): PreviewCampaignActionResult | null {
+  if (!commandKey) return null;
+  const prior = previewCampaignCommandResults.get(commandKey);
+  return prior ? Object.freeze({
+    ...prior,
+    code: 'replayed',
+    message: 'This exact local TEST command was already applied; no duplicate state was created.',
+  }) : null;
+}
+
+function previewCampaignInvalid(message: string): PreviewCampaignActionResult {
+  return Object.freeze({ ok: false, code: 'invalid', message });
+}
+
+/** Apply a TEST-only campaign create form to in-memory preview state. */
+export function applyPreviewCampaignCreate(form: URLSearchParams | null): PreviewCampaignActionResult {
+  if (!form || form.get('_csrf') !== PREVIEW_CSRF || form.get('environment') !== 'test') {
+    return previewCampaignInvalid('The local TEST campaign form was incomplete. Nothing changed.');
+  }
+  const commandKey = form.get('command_key');
+  const replay = previewCommandReplay(commandKey);
+  if (replay) return replay;
+  if (!commandKey?.startsWith('preview-campaign-create:') || commandKey.length > 200) {
+    return previewCampaignInvalid('The local TEST campaign command key was invalid. Nothing changed.');
+  }
+  const contentVersionId = form.get('content_version_id') ?? '';
+  const content = previewContentCatalog.items.find((item) => (
+    item.contentVersionId === contentVersionId && item.kind === 'social_post' && item.publishable
+  ));
+  const targetIds = [...new Set(form.getAll('target_ids'))];
+  const targets = targetIds.map((id) => PREVIEW_CAMPAIGN_TARGETS.find((target) => target.targetId === id));
+  const mediaIds = [...new Set(form.getAll('media_version_ids'))];
+  const mediaValid = mediaIds.length <= 10 && mediaIds.every((id) => previewContentCatalog.items.some((item) => (
+    item.contentVersionId === id && (item.kind === 'image' || item.kind === 'video') && item.publishable
+  )));
+  const maxAttempts = Number(form.get('max_attempts') ?? '1');
+  const fromCalendar = form.get('campaign_revision_key') === PREVIEW_CALENDAR_CAMPAIGN_REVISION_KEY;
+  const title = fromCalendar
+    ? 'Property Predator Signal Sprint'
+    : cleanPreviewText(form.get('title'), 160);
+  const objective = fromCalendar
+    ? 'Rehearse the exact approved Property Predator signal across owned TEST rails.'
+    : cleanPreviewText(form.get('objective'), 1_000);
+  let desiredFor = '';
+  try {
+    if (form.get('timezone') !== snapshot.workspace.timezone) throw new Error('timezone mismatch');
+    desiredFor = workspaceLocalDateTime(form.get('desired_for_local') ?? '', snapshot.workspace.timezone);
+  } catch {
+    return previewCampaignInvalid('Choose a real, unambiguous Property Predator workspace time. Nothing changed.');
+  }
+  if (!content || !title || !objective || targetIds.length === 0 || targetIds.length > 20
+      || targets.some((target) => !target) || !mediaValid
+      || !Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 3
+      || form.get('confirm_test_only') !== 'confirmed') {
+    return previewCampaignInvalid('Choose eligible approved copy, owned TEST targets and confirm the TEST boundary.');
+  }
+
+  const campaignId = randomUUID();
+  const revisionId = randomUUID();
+  const intentId = randomUUID();
+  const createdAt = new Date().toISOString();
+  const intentSha256 = previewSha({
+    campaignId, revisionId, contentVersionId, targetIds, mediaIds, desiredFor, maxAttempts,
+  });
+  for (const target of targets) {
+    if (!target) continue;
+    const slotId = randomUUID();
+    previewCampaignTargets.set(slotId, Object.freeze({
+      slotId,
+      campaignId,
+      revisionId,
+      revisionNumber: 1,
+      campaignTitle: title,
+      objective,
+      contentItemId: content.contentItemId,
+      contentVersionId: content.contentVersionId,
+      contentSha256: content.contentSha256,
+      intentId,
+      intentSha256,
+      targetId: target.targetId,
+      targetLabel: target.targetLabel,
+      channel: target.network,
+      desiredFor,
+      planningState: 'awaiting_revalidation',
+      revalidationState: 'waiting_for_window',
+      nextRevalidationAt: previewNextRevalidationAt(desiredFor),
+      updatedAt: createdAt,
+      version: 1,
+    }));
+  }
+  const result = Object.freeze({
+    ok: true,
+    code: 'planned' as const,
+    message: 'Durable process-local TEST campaign created. Refresh the calendar to see it; no provider was called.',
+    intentId,
+  });
+  previewCampaignCommandResults.set(commandKey, result);
+  return result;
+}
+
+/** Append reschedule evidence and replace only the current preview projection. */
+export function applyPreviewCampaignReschedule(form: URLSearchParams | null): PreviewCampaignActionResult {
+  if (!form || form.get('_csrf') !== PREVIEW_CSRF || form.get('environment') !== 'test') {
+    return previewCampaignInvalid('The local TEST reschedule form was incomplete. Nothing changed.');
+  }
+  const commandKey = form.get('command_key');
+  const replay = previewCommandReplay(commandKey);
+  if (replay) return replay;
+  const state = previewPlanningTarget(form.get('intent_id') ?? '', form.get('target_id') ?? '');
+  const reason = cleanPreviewText(form.get('reason'), 500);
+  let desiredFor = '';
+  try {
+    desiredFor = workspaceLocalDateTime(form.get('desired_for_local') ?? '', snapshot.workspace.timezone);
+  } catch {
+    return previewCampaignInvalid('Choose a real, unambiguous Property Predator workspace time. Nothing changed.');
+  }
+  if (!state || !commandKey || commandKey !== previewRescheduleCommandKey(state)
+      || form.get('intent_sha256') !== state.intentSha256
+      || form.get('expected_updated_at') !== state.updatedAt
+      || form.get('confirm_change') !== 'confirmed' || !reason
+      || state.planningState === 'cancelled' || state.planningState === 'superseded') {
+    return previewCampaignInvalid('The TEST target changed or the reschedule evidence was incomplete. Refresh first.');
+  }
+  previewCampaignHistory.push(Object.freeze({ ...state, planningState: 'superseded' }));
+  const successorIntentId = randomUUID();
+  const updatedAt = new Date().toISOString();
+  const successor = Object.freeze({
+    ...state,
+    intentId: successorIntentId,
+    intentSha256: previewSha({ predecessor: state.intentId, successorIntentId, targetId: state.targetId, desiredFor, reason }),
+    desiredFor,
+    planningState: 'awaiting_revalidation' as const,
+    revalidationState: 'waiting_for_window' as const,
+    nextRevalidationAt: previewNextRevalidationAt(desiredFor),
+    updatedAt,
+    version: state.version + 1,
+  });
+  previewCampaignTargets.set(state.slotId, successor);
+  const result = Object.freeze({
+    ok: true,
+    code: 'rescheduled' as const,
+    message: 'New process-local TEST time saved. Refresh confirms it; no provider was called.',
+    intentId: successorIntentId,
+    targetId: state.targetId,
+  });
+  previewCampaignCommandResults.set(commandKey, result);
+  return result;
+}
+
+/** Cancel one exact process-local TEST target. External systems are unreachable. */
+export function applyPreviewCampaignCancel(form: URLSearchParams | null): PreviewCampaignActionResult {
+  if (!form || form.get('_csrf') !== PREVIEW_CSRF || form.get('environment') !== 'test') {
+    return previewCampaignInvalid('The local TEST cancellation form was incomplete. Nothing changed.');
+  }
+  const commandKey = form.get('command_key');
+  const replay = previewCommandReplay(commandKey);
+  if (replay) return replay;
+  const state = previewPlanningTarget(form.get('intent_id') ?? '', form.get('target_id') ?? '');
+  const reason = cleanPreviewText(form.get('reason'), 500);
+  if (!state || !commandKey || commandKey !== previewCancelCommandKey(state)
+      || form.get('intent_sha256') !== state.intentSha256
+      || form.get('expected_updated_at') !== state.updatedAt
+      || form.get('confirm_cancel') !== 'confirmed' || !reason
+      || state.planningState === 'cancelled' || state.planningState === 'superseded') {
+    return previewCampaignInvalid('The TEST target changed or the cancellation evidence was incomplete. Refresh first.');
+  }
+  previewCampaignHistory.push(state);
+  const cancelled = Object.freeze({
+    ...state,
+    planningState: 'cancelled' as const,
+    nextRevalidationAt: null,
+    updatedAt: new Date().toISOString(),
+    version: state.version + 1,
+  });
+  previewCampaignTargets.set(state.slotId, cancelled);
+  const result = Object.freeze({
+    ok: true,
+    code: 'cancelled' as const,
+    message: 'Exact process-local TEST target cancelled. Refresh confirms it; no provider was called.',
+    intentId: state.intentId,
+    targetId: state.targetId,
+  });
+  previewCampaignCommandResults.set(commandKey, result);
+  return result;
+}
+
+resetPreviewCampaignState();
 
 function updatePreviewInboxDraft(
   predicate: (messageId: string | null, approvalRequestId: string | null) => boolean,
@@ -1066,10 +1582,37 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
       'Property Predator — Company Assets',
     ),
   };
+  if (path === CAMPAIGN_WIZARD_ROUTE) return {
+    status: 200,
+    html: shell(`${previewOperationsNav('campaigns')}${renderCampaignWizardBody(
+      presentCampaignWizard(previewCampaignWizardSnapshot(), {
+        workspaceName: snapshot.workspace.name,
+        timezone: snapshot.workspace.timezone,
+        asOf: new Date().toISOString(),
+      }),
+      {
+        action: {
+          actionUrl: CAMPAIGN_WIZARD_CREATE_TEST_ROUTE,
+          csrfToken: PREVIEW_CSRF,
+          commandKey: previewCreateCommandKey(),
+          returnTo: CONTENT_CALENDAR_ROUTE,
+        },
+        outcome: campaignWizardNoticeFromQuery(
+          url.searchParams,
+          PREVIEW_CAMPAIGN_NOTICE_SECRET,
+          PREVIEW_CAMPAIGN_NOTICE_SESSION,
+        ),
+        companyAssetsAvailable: true,
+        assetsLabel: PROPERTY_PREDATOR_GROWTH_PROFILE.contentWorkspace?.assetsLabel,
+        brandBrainAvailable: true,
+        brainLabel: PROPERTY_PREDATOR_GROWTH_PROFILE.contentWorkspace?.brainLabel,
+      },
+    )}`, 'content', 'Property Predator — Build Campaign'),
+  };
   if (path === CONTENT_CALENDAR_ROUTE) return {
     status: 200,
     html: shell(`${previewOperationsNav('calendar')}${renderContentCalendarBody(presentContentCalendar(
-      createPropertyPredatorContentCalendarFixture(),
+      createPersistentPreviewContentCalendar(),
       {
         workspaceName: snapshot.workspace.name,
         timezone: snapshot.workspace.timezone,
@@ -1080,7 +1623,9 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
           channel: url.searchParams.get('channel'),
         },
       },
-    ))}`, 'content', 'Property Predator — Content Calendar'),
+    ), {
+      mutations: previewCalendarMutations(url),
+    })}`, 'content', 'Property Predator — Content Calendar'),
     scripted: true,
   };
   if (path === SOCIAL_COMPOSER_ROUTE) return {
@@ -1240,6 +1785,64 @@ function previewInboxReturnLocation(form: URLSearchParams | null, code: Conversi
   return `${CONVERSION_INBOX_ROUTE}?${query.toString()}`;
 }
 
+function previewCampaignReturnLocation(
+  form: URLSearchParams | null,
+  result: PreviewCampaignActionResult,
+): string {
+  const requestedReturn = form?.get('return_to') ?? '';
+  const base = requestedReturn === CAMPAIGN_WIZARD_ROUTE || requestedReturn === CONTENT_CALENDAR_ROUTE
+    ? requestedReturn
+    : CONTENT_CALENDAR_ROUTE;
+  const query = new URLSearchParams({
+    notice: campaignWizardNoticeToken(
+      PREVIEW_CAMPAIGN_NOTICE_SECRET,
+      PREVIEW_CAMPAIGN_NOTICE_SESSION,
+      result.code,
+    ),
+  });
+  const mode = form?.get('return_mode') ?? '';
+  if (mode === 'week' || mode === 'month') query.set('mode', mode);
+  const date = form?.get('return_date') ?? '';
+  if (/^\d{4}-\d{2}-\d{2}$/u.test(date)) query.set('date', date);
+  const channel = form?.get('return_channel') ?? '';
+  if (['all', ...PREVIEW_CAMPAIGN_TARGETS.map((target) => target.network)].includes(channel as never)) {
+    query.set('channel', channel);
+  }
+  return `${base}?${query.toString()}`;
+}
+
+function previewCampaignResponse(
+  request: IncomingMessage,
+  response: ServerResponse,
+  form: URLSearchParams | null,
+  result: PreviewCampaignActionResult,
+): void {
+  const location = previewCampaignReturnLocation(form, result);
+  const wantsJson = (request.headers.accept ?? '').includes('application/json')
+    && request.headers['x-requested-with'] === 'ContentCalendar';
+  if (wantsJson) {
+    const body = JSON.stringify({
+      ok: result.ok,
+      message: result.message,
+      intentId: result.intentId,
+      targetId: result.targetId,
+      redirect: location,
+      environment: 'test',
+      providerEffects: 'none',
+    });
+    response.writeHead(result.ok ? 200 : 409, {
+      'content-type': 'application/json; charset=utf-8',
+      'content-length': String(Buffer.byteLength(body)),
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    });
+    response.end(body);
+    return;
+  }
+  response.writeHead(303, { location, 'cache-control': 'no-store' });
+  response.end();
+}
+
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? '/portal', 'http://127.0.0.1');
   const path = url.pathname.replace(/\/+$/, '') || '/portal';
@@ -1261,6 +1864,24 @@ const server = createServer(async (request, response) => {
       'x-content-type-options': 'nosniff',
     });
     response.end(CONTENT_CALENDAR_CLIENT_SOURCE);
+    return;
+  }
+
+  if (request.method === 'POST' && path === CAMPAIGN_WIZARD_CREATE_TEST_ROUTE) {
+    const form = await readPreviewForm(request);
+    previewCampaignResponse(request, response, form, applyPreviewCampaignCreate(form));
+    return;
+  }
+
+  if (request.method === 'POST' && path === PREVIEW_CALENDAR_RESCHEDULE_ROUTE) {
+    const form = await readPreviewForm(request);
+    previewCampaignResponse(request, response, form, applyPreviewCampaignReschedule(form));
+    return;
+  }
+
+  if (request.method === 'POST' && path === PREVIEW_CALENDAR_CANCEL_ROUTE) {
+    const form = await readPreviewForm(request);
+    previewCampaignResponse(request, response, form, applyPreviewCampaignCancel(form));
     return;
   }
 
@@ -1443,7 +2064,7 @@ const server = createServer(async (request, response) => {
     'content-security-policy': rendered.board
       ? "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
       : rendered.scripted
-        ? "default-src 'none'; script-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+        ? "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
         : "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
   });
   response.end(rendered.html);

@@ -298,7 +298,9 @@ test('Live Journey Board renders real people, serves fixed enhancement code and 
   assert.match(calendarAsset.headers['content-type'] ?? '', /^text\/javascript/);
   assert.equal(calendarAsset.headers['cache-control'], 'no-cache, max-age=0, must-revalidate');
   assert.match(calendarAsset.body, /data-calendar-move-handle/);
-  assert.doesNotMatch(calendarAsset.body, /fetch\s*\(|XMLHttpRequest|sessionToken|cookie\s*=/i);
+  assert.match(calendarAsset.body, /window\.fetch\(url\.href/);
+  assert.match(calendarAsset.body, /url\.origin === window\.location\.origin/);
+  assert.doesNotMatch(calendarAsset.body, /XMLHttpRequest|sessionToken|cookie\s*=/i);
 
   const forged = await call('POST', `/portal/journeys/board/opportunities/${OPPORTUNITY_ID}/stage`, deps(crm), new URLSearchParams({
     _csrf: 'forged', command_key: 'board-move-command-1', target_lane_id: OTHER_STAGE_ID, expected_version: '2',

@@ -16,6 +16,25 @@ export type SocialCampaignTargetState =
   | 'simulated_reconciled'
   | 'dead_letter';
 
+/** Durable, browser-visible state of one target on a planning intent. */
+export type SocialPlanningState =
+  | 'awaiting_revalidation'
+  | 'revalidation_leased'
+  | 'proof_ready'
+  | 'materialized'
+  | 'cancelled'
+  | 'superseded'
+  | 'revalidation_attention';
+
+/** Internal JIT source-check state. It is projected only as bounded status copy. */
+export type SocialRevalidationState =
+  | 'waiting_for_window'
+  | 'leased'
+  | 'retry_wait'
+  | 'verified'
+  | 'materialized'
+  | 'dead_letter';
+
 export interface CreateSocialCampaignRevisionCommand {
   readonly workspaceId: string;
   readonly campaignId: string;
@@ -115,6 +134,188 @@ export interface CancelSocialCampaignTargetResult {
   readonly disposition: SocialCampaignDisposition;
 }
 
+/**
+ * A durable TEST planning command. The caller selects immutable identities;
+ * PostgreSQL resolves body, hashes, approvals, attestations and connections.
+ */
+export interface PlanSocialCampaignIntentCommand {
+  readonly workspaceId: string;
+  readonly intentId: string;
+  readonly campaignId: string;
+  readonly revisionId: string;
+  readonly contentVersionId: string;
+  readonly desiredFor: string;
+  readonly maxAttempts: number;
+  readonly targetIds: readonly string[];
+  readonly mediaVersionIds: readonly string[];
+}
+
+export interface PlanSocialCampaignIntentResult {
+  readonly intentId: string;
+  readonly intentSha256: string;
+  readonly disposition: SocialCampaignDisposition;
+}
+
+export interface RescheduleSocialPlanningTargetCommand {
+  readonly workspaceId: string;
+  readonly predecessorIntentId: string;
+  readonly targetId: string;
+  readonly successorIntentId: string;
+  readonly newDesiredFor: string;
+  /** Plain safe operator copy; only its SHA-256 crosses into PostgreSQL. */
+  readonly reason: string;
+}
+
+export interface RescheduleSocialPlanningTargetResult {
+  readonly successorIntentId: string;
+  readonly disposition: SocialCampaignDisposition;
+}
+
+export interface CancelSocialPlanningTargetCommand {
+  readonly workspaceId: string;
+  readonly intentId: string;
+  readonly targetId: string;
+  /** Plain safe operator copy; only its SHA-256 crosses into PostgreSQL. */
+  readonly reason: string;
+}
+
+export interface CancelSocialPlanningTargetResult {
+  readonly intentId: string;
+  readonly targetId: string;
+  readonly state: 'cancelled';
+  readonly disposition: SocialCampaignDisposition;
+}
+
+/**
+ * Worker-only claim command for the bounded just-in-time source check. The raw
+ * lease token is hashed before it crosses the PostgreSQL function boundary.
+ */
+export interface ClaimSocialPlanningRevalidationsCommand {
+  readonly workerId: string;
+  readonly leaseToken: Uint8Array;
+  readonly batchSize?: number;
+  readonly leaseSeconds?: number;
+}
+
+/** Exact immutable source tuple that a trusted adapter must re-attest. */
+export interface SocialPlanningRevalidationMediaMaterial {
+  readonly ordinal: number;
+  readonly contentItemId: string;
+  readonly contentVersionId: string;
+  readonly sourceSystem: string;
+  readonly sourceItemId: string;
+  readonly sourceVersion: string;
+  readonly contentSha256: string;
+  readonly blobSha256: string;
+  readonly brandSha256: string;
+}
+
+/**
+ * Worker-only JIT material. It is deliberately not part of any portal DTO or
+ * browser projection.
+ */
+export interface SocialPlanningRevalidationClaim {
+  readonly jobId: string;
+  readonly workspaceId: string;
+  readonly intentId: string;
+  readonly leaseVersion: number;
+  readonly desiredFor: string;
+  readonly contentItemId: string;
+  readonly contentVersionId: string;
+  readonly sourceSystem: string;
+  readonly sourceItemId: string;
+  readonly sourceVersion: string;
+  readonly contentSha256: string;
+  readonly blobSha256: string;
+  readonly brandSha256: string;
+  readonly media: readonly SocialPlanningRevalidationMediaMaterial[];
+}
+
+export interface CompleteSocialPlanningRevalidationCommand {
+  readonly workspaceId: string;
+  readonly jobId: string;
+  readonly workerId: string;
+  readonly leaseToken: Uint8Array;
+  readonly leaseVersion: number;
+  readonly proofId: string;
+  readonly contentAttestationId: string;
+  /** Ordered exactly like the claimed media ordinals. */
+  readonly mediaAttestationIds: readonly string[];
+}
+
+export interface CompleteSocialPlanningRevalidationResult {
+  readonly proofId: string;
+  readonly state: 'verified';
+  readonly disposition: SocialCampaignDisposition;
+}
+
+export interface FailSocialPlanningRevalidationCommand {
+  readonly workspaceId: string;
+  readonly jobId: string;
+  readonly workerId: string;
+  readonly leaseToken: Uint8Array;
+  readonly leaseVersion: number;
+  readonly errorCode: string;
+  readonly retryable: boolean;
+}
+
+export interface FailSocialPlanningRevalidationResult {
+  readonly jobId: string;
+  readonly state: 'retry_wait' | 'dead_letter';
+}
+
+export interface MaterializeSocialPlanningIntentCommand {
+  readonly workspaceId: string;
+  readonly jobId: string;
+  readonly proofId: string;
+  readonly postId: string;
+}
+
+export interface MaterializeSocialPlanningIntentResult {
+  readonly postId: string;
+  readonly operationIds: readonly string[];
+  readonly disposition: SocialCampaignDisposition;
+}
+
+/** Safe wizard option. Provider connection and TEST account references are omitted. */
+export interface SocialPlannerTargetProjection {
+  readonly targetId: string;
+  readonly network: SocialNetwork;
+  readonly targetLabel: string;
+  readonly environment: 'test';
+  readonly providerEffects: 'none';
+}
+
+/**
+ * Safe durable calendar row. It exposes identities and bounded state only: no
+ * content body, approval/attestation ids, connection ids, account refs or blob keys.
+ */
+export interface SocialPlanningCalendarProjection {
+  readonly intentId: string;
+  readonly campaignId: string;
+  readonly revisionId: string;
+  readonly revisionNumber: number;
+  readonly campaignTitle: string;
+  readonly desiredFor: string;
+  readonly contentItemId: string;
+  readonly contentVersionId: string;
+  readonly contentSha256: string;
+  readonly intentSha256: string;
+  readonly targetId: string;
+  readonly network: SocialNetwork;
+  readonly targetLabel: string;
+  readonly planningState: SocialPlanningState;
+  readonly materializedPostId: string | null;
+  readonly materializedOperationId: string | null;
+  readonly operationState: SocialCampaignTargetState | null;
+  readonly revalidationState: SocialRevalidationState | null;
+  readonly nextRevalidationAt: string | null;
+  readonly lastErrorCode: string | null;
+  readonly updatedAt: string;
+  readonly environment: 'test';
+  readonly providerEffects: 'none';
+}
+
 /** Safe campaign projection. It contains no credentials, account references or post body. */
 export interface SocialCampaignCommandProjection {
   readonly campaignId: string;
@@ -186,6 +387,14 @@ export type SocialCampaignCommandProjectionPage = SocialCampaignProjectionPage<
 
 export type SocialCampaignCalendarProjectionPage = SocialCampaignProjectionPage<
   SocialCampaignCalendarProjection
+>;
+
+export type SocialPlannerTargetProjectionPage = SocialCampaignProjectionPage<
+  SocialPlannerTargetProjection
+>;
+
+export type SocialPlanningCalendarProjectionPage = SocialCampaignProjectionPage<
+  SocialPlanningCalendarProjection
 >;
 
 export type PublicSocialTestAttemptKind = 'simulation' | 'reconcile';

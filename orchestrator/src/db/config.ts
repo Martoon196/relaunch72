@@ -16,6 +16,7 @@ export const DATABASE_ROLES = [
   'testInboxWebhookCommand',
   'publicSocialCommand',
   'publicSocialWorkerCommand',
+  'publicSocialRevalidatorCommand',
   'worker',
   'webhook',
   'public',
@@ -43,6 +44,7 @@ const ROLE_URL_ENV: Record<DatabaseRole, string> = {
   testInboxWebhookCommand: 'DATABASE_TEST_INBOX_WEBHOOK_URL',
   publicSocialCommand: 'DATABASE_PUBLIC_SOCIAL_COMMAND_URL',
   publicSocialWorkerCommand: 'DATABASE_PUBLIC_SOCIAL_WORKER_URL',
+  publicSocialRevalidatorCommand: 'DATABASE_PUBLIC_SOCIAL_REVALIDATOR_URL',
   worker: 'DATABASE_WORKER_URL',
   webhook: 'DATABASE_WEBHOOK_URL',
   public: 'DATABASE_PUBLIC_URL',
@@ -66,6 +68,7 @@ const EXPECTED_RUNTIME_USER: Partial<Record<DatabaseRole, string>> = {
   testInboxWebhookCommand: 'r72_test_inbox_webhook_command',
   publicSocialCommand: 'r72_public_social_command',
   publicSocialWorkerCommand: 'r72_public_social_worker_command',
+  publicSocialRevalidatorCommand: 'r72_public_social_revalidator_command',
   worker: 'r72_worker',
   webhook: 'r72_webhook',
   public: 'r72_public',
@@ -209,8 +212,10 @@ export function loadDatabaseConfig(
                   ? 'DATABASE_TEST_INBOX_WEBHOOK_POOL_MAX'
                   : role === 'publicSocialCommand'
                     ? 'DATABASE_PUBLIC_SOCIAL_COMMAND_POOL_MAX'
-                    : role === 'publicSocialWorkerCommand'
+                  : role === 'publicSocialWorkerCommand'
                       ? 'DATABASE_PUBLIC_SOCIAL_WORKER_POOL_MAX'
+                    : role === 'publicSocialRevalidatorCommand'
+                      ? 'DATABASE_PUBLIC_SOCIAL_REVALIDATOR_POOL_MAX'
                   : role === 'setupDeliveryCommand'
                     ? 'DATABASE_SETUP_DELIVERY_COMMAND_POOL_MAX'
                     : role === 'setupReissueCommand'
@@ -282,6 +287,8 @@ export function loadDatabaseConfig(
                       ? 'property-predator-public-social-command'
                       : role === 'publicSocialWorkerCommand'
                         ? 'property-predator-public-social-worker-command'
+                      : role === 'publicSocialRevalidatorCommand'
+                        ? 'property-predator-public-social-revalidator-command'
                     : role === 'setupDeliveryCommand'
                       ? 'relaunch72-setup-delivery-command'
                       : role === 'setupReissueCommand'

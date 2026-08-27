@@ -43,6 +43,7 @@ const APP_ROLES = [
   'r72_provider_operation_definer',
   'r72_public_social_command',
   'r72_public_social_definer',
+  'r72_public_social_revalidator_command',
   'r72_public_social_worker_command',
   'r72_public',
   'r72_readonly',

@@ -3,9 +3,13 @@ import type { SocialNetwork } from '../providers/contracts.js';
 import type {
   SocialCampaignCalendarProjection,
   SocialCampaignTargetState,
+  SocialPlanningCalendarProjection,
+  SocialPlanningState,
+  SocialRevalidationState,
 } from '../social-campaign-pg/types.js';
 import {
   CONTENT_CALENDAR_MAX_SLOTS,
+  type ContentCalendarPlanningProvenance,
   type ContentCalendarPublicSocialChannel,
   type ContentCalendarPublicSocialProvenance,
   type ContentCalendarSlotSnapshot,
@@ -24,6 +28,13 @@ const PUBLIC_SOCIAL_STATES = new Set<SocialCampaignTargetState>([
   'simulated_succeeded', 'simulated_failed', 'simulated_cancelled',
   'reconciliation_required', 'simulated_reconciled', 'dead_letter',
 ]);
+const PUBLIC_SOCIAL_PLANNING_STATES = new Set<SocialPlanningState>([
+  'awaiting_revalidation', 'revalidation_leased', 'proof_ready', 'materialized',
+  'cancelled', 'superseded', 'revalidation_attention',
+]);
+const PUBLIC_SOCIAL_REVALIDATION_STATES = new Set<SocialRevalidationState>([
+  'waiting_for_window', 'leased', 'retry_wait', 'verified', 'materialized', 'dead_letter',
+]);
 const ALLOWED_PROJECTION_FIELDS = new Set<keyof SocialCampaignCalendarProjection>([
   'campaignId', 'revisionId', 'revisionNumber', 'campaignTitle', 'postId',
   'contentItemId', 'contentVersionId', 'contentSha256', 'planSha256',
@@ -31,6 +42,13 @@ const ALLOWED_PROJECTION_FIELDS = new Set<keyof SocialCampaignCalendarProjection
   'simulationAttemptCount', 'maxSimulationAttempts',
   'reconciliationAttemptCount', 'maxReconciliationAttempts',
   'updatedAt', 'environment', 'providerEffects',
+]);
+const ALLOWED_PLANNING_FIELDS = new Set<keyof SocialPlanningCalendarProjection>([
+  'intentId', 'campaignId', 'revisionId', 'revisionNumber', 'campaignTitle',
+  'desiredFor', 'contentItemId', 'contentVersionId', 'contentSha256', 'intentSha256',
+  'targetId', 'network', 'targetLabel', 'planningState', 'materializedPostId',
+  'materializedOperationId', 'operationState', 'revalidationState',
+  'nextRevalidationAt', 'lastErrorCode', 'updatedAt', 'environment', 'providerEffects',
 ]);
 
 export class PublicSocialCalendarAdapterError extends Error {
@@ -90,6 +108,29 @@ function state(value: unknown): SocialCampaignTargetState {
   return value as SocialCampaignTargetState;
 }
 
+function nullableUuid(value: unknown, label: string): string | null {
+  return value === null ? null : uuid(value, label);
+}
+
+function nullableTimestamp(value: unknown, label: string): string | null {
+  return value === null ? null : timestamp(value, label);
+}
+
+function planningState(value: unknown): SocialPlanningState {
+  if (typeof value !== 'string' || !PUBLIC_SOCIAL_PLANNING_STATES.has(value as SocialPlanningState)) {
+    fail('planningState is outside the durable TEST taxonomy');
+  }
+  return value as SocialPlanningState;
+}
+
+function revalidationState(value: unknown): SocialRevalidationState {
+  if (typeof value !== 'string'
+      || !PUBLIC_SOCIAL_REVALIDATION_STATES.has(value as SocialRevalidationState)) {
+    fail('revalidationState is outside the durable TEST taxonomy');
+  }
+  return value as SocialRevalidationState;
+}
+
 function assertAllowlistedShape(value: SocialCampaignCalendarProjection, index: number): void {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     fail(`projection ${index + 1} is not an object`);
@@ -97,6 +138,20 @@ function assertAllowlistedShape(value: SocialCampaignCalendarProjection, index: 
   for (const key of Object.keys(value)) {
     if (!ALLOWED_PROJECTION_FIELDS.has(key as keyof SocialCampaignCalendarProjection)) {
       fail(`projection ${index + 1} contains unsupported field ${key}`);
+    }
+  }
+}
+
+function assertPlanningAllowlistedShape(
+  value: SocialPlanningCalendarProjection,
+  index: number,
+): void {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail(`planning projection ${index + 1} is not an object`);
+  }
+  for (const key of Object.keys(value)) {
+    if (!ALLOWED_PLANNING_FIELDS.has(key as keyof SocialPlanningCalendarProjection)) {
+      fail(`planning projection ${index + 1} contains unsupported field ${key}`);
     }
   }
 }
@@ -184,6 +239,83 @@ function adaptOne(
   });
 }
 
+interface AdaptedPlanningSlot {
+  readonly slot: ContentCalendarSlotSnapshot;
+  readonly campaignId: string;
+  readonly revisionId: string;
+  readonly targetId: string;
+  readonly materializedOperationId: string | null;
+}
+
+function adaptPlanningOne(
+  input: SocialPlanningCalendarProjection,
+  index: number,
+): AdaptedPlanningSlot {
+  assertPlanningAllowlistedShape(input, index);
+  if (input.environment !== 'test' || input.providerEffects !== 'none') {
+    fail(`planning projection ${index + 1} is not a zero-effect TEST projection`);
+  }
+  const intentId = uuid(input.intentId, 'intentId');
+  const campaignId = uuid(input.campaignId, 'campaignId');
+  const revisionId = uuid(input.revisionId, 'revisionId');
+  const revisionNumber = integer(input.revisionNumber, 'revisionNumber', 1, 1_000_000);
+  const campaignTitle = text(input.campaignTitle, 'campaignTitle', 200);
+  const desiredFor = timestamp(input.desiredFor, 'desiredFor');
+  const contentItemId = uuid(input.contentItemId, 'contentItemId');
+  const contentVersionId = uuid(input.contentVersionId, 'contentVersionId');
+  const contentSha256 = sha256(input.contentSha256, 'contentSha256');
+  const intentSha256 = sha256(input.intentSha256, 'intentSha256');
+  const targetId = uuid(input.targetId, 'targetId');
+  const publicNetwork = network(input.network);
+  const targetLabel = text(input.targetLabel, 'targetLabel', 120);
+  const durablePlanningState = planningState(input.planningState);
+  const materializedPostId = nullableUuid(input.materializedPostId, 'materializedPostId');
+  const materializedOperationId = nullableUuid(
+    input.materializedOperationId,
+    'materializedOperationId',
+  );
+  if ((materializedPostId === null) !== (materializedOperationId === null)) {
+    fail('materialized planning identities must be present together');
+  }
+  if (input.operationState !== null) state(input.operationState);
+  const durableRevalidationState = revalidationState(input.revalidationState);
+  const nextRevalidationAt = nullableTimestamp(input.nextRevalidationAt, 'nextRevalidationAt');
+  if (input.lastErrorCode !== null) text(input.lastErrorCode, 'lastErrorCode', 80);
+  const updatedAt = timestamp(input.updatedAt, 'updatedAt');
+  const planning: ContentCalendarPlanningProvenance = Object.freeze({
+    intentId,
+    intentSha256,
+    targetId,
+    desiredFor,
+    planningState: durablePlanningState,
+    revalidationState: durableRevalidationState,
+    nextRevalidationAt,
+    updatedAt,
+    environment: 'test',
+    providerEffects: 'none',
+  });
+  return Object.freeze({
+    campaignId,
+    revisionId,
+    targetId,
+    materializedOperationId,
+    slot: Object.freeze({
+      slotId: materializedOperationId ?? `${intentId}:${targetId}`,
+      contentItemId,
+      contentVersionId,
+      contentSha256,
+      scheduledFor: desiredFor,
+      channel: publicNetwork,
+      variantLabel: `${campaignTitle} · revision ${revisionNumber}`,
+      objectiveLabel: `Durable TEST planning intent · ${intentSha256.slice(0, 10)}…`,
+      ownerLabel: `${targetLabel} · public social TEST planner`,
+      plannerState: durablePlanningState === 'materialized' ? 'simulated_preview' : 'draft',
+      executionMode: 'simulated',
+      planning,
+    }),
+  });
+}
+
 /**
  * Allowlisted adapter from the safe DB projection to the existing planner model.
  * It does not read content bodies, provider accounts, connection ids or storage keys.
@@ -192,15 +324,23 @@ export function adaptPublicSocialCalendar(
   projections: readonly SocialCampaignCalendarProjection[],
   catalog: CompanyContentCatalogPage,
   sourceTruncated: boolean,
+  planningProjections: readonly SocialPlanningCalendarProjection[] = [],
+  planningSourceTruncated = false,
 ): ContentCalendarSnapshot {
   if (!Array.isArray(projections)) fail('projections must be an array');
-  if (typeof sourceTruncated !== 'boolean') fail('sourceTruncated must be boolean');
+  if (!Array.isArray(planningProjections)) fail('planningProjections must be an array');
+  if (typeof sourceTruncated !== 'boolean' || typeof planningSourceTruncated !== 'boolean') {
+    fail('source truncation flags must be boolean');
+  }
   if (projections.length > CONTENT_CALENDAR_MAX_SLOTS) {
     fail(`projections exceed the ${CONTENT_CALENDAR_MAX_SLOTS}-slot calendar bound`);
   }
+  if (planningProjections.length > CONTENT_CALENDAR_MAX_SLOTS) {
+    fail(`planning projections exceed the ${CONTENT_CALENDAR_MAX_SLOTS}-slot calendar bound`);
+  }
   const operationIds = new Set<string>();
   const postTargets = new Map<string, string>();
-  const slots = projections
+  const operationSlots = projections
     .map((projection, index) => adaptOne(projection, index))
     .map((slot) => {
       const operationId = slot.publicSocial!.operationId;
@@ -213,8 +353,54 @@ export function adaptPublicSocialCalendar(
       }
       postTargets.set(postTargetKey, operationId);
       return slot;
-    })
+    });
+  const planningKeys = new Set<string>();
+  const planningByOperation = new Map<string, AdaptedPlanningSlot>();
+  const planningSlots = planningProjections.map((projection, index) => {
+    const adapted = adaptPlanningOne(projection, index);
+    const key = `${adapted.slot.planning!.intentId}:${adapted.targetId}`;
+    if (planningKeys.has(key)) fail(`duplicate planning target ${key}`);
+    planningKeys.add(key);
+    if (adapted.materializedOperationId) {
+      if (planningByOperation.has(adapted.materializedOperationId)) {
+        fail(`duplicate materialized planning operation ${adapted.materializedOperationId}`);
+      }
+      planningByOperation.set(adapted.materializedOperationId, adapted);
+    }
+    return adapted;
+  });
+  const matchedOperations = new Set<string>();
+  const enrichedOperationSlots = operationSlots.map((slot) => {
+    const operationId = slot.publicSocial!.operationId;
+    const planning = planningByOperation.get(operationId);
+    if (!planning) return slot;
+    if (planning.campaignId !== slot.publicSocial!.campaignId
+        || planning.revisionId !== slot.publicSocial!.revisionId
+        || planning.targetId !== slot.publicSocial!.targetId
+        || planning.slot.contentItemId !== slot.contentItemId
+        || planning.slot.contentVersionId !== slot.contentVersionId
+        || planning.slot.contentSha256 !== slot.contentSha256
+        || planning.slot.channel !== slot.channel
+        || planning.slot.scheduledFor !== slot.scheduledFor) {
+      fail(`materialized planning proof contradicts operation ${operationId}`);
+    }
+    matchedOperations.add(operationId);
+    return Object.freeze({ ...slot, planning: planning.slot.planning });
+  });
+  const slots = [
+    ...enrichedOperationSlots,
+    ...planningSlots
+      .filter((planning) => !planning.materializedOperationId
+        || !matchedOperations.has(planning.materializedOperationId))
+      .map((planning) => planning.slot),
+  ]
     .sort((left, right) => left.scheduledFor.localeCompare(right.scheduledFor)
       || left.slotId.localeCompare(right.slotId));
-  return Object.freeze({ catalog, slots: Object.freeze(slots), sourceTruncated });
+  const bounded = slots.slice(0, CONTENT_CALENDAR_MAX_SLOTS);
+  return Object.freeze({
+    catalog,
+    slots: Object.freeze(bounded),
+    sourceTruncated: sourceTruncated || planningSourceTruncated
+      || slots.length > CONTENT_CALENDAR_MAX_SLOTS,
+  });
 }

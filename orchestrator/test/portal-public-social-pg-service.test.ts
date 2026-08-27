@@ -22,6 +22,8 @@ const IDS = {
   attestation: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
   mediaVersion: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
   operation: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+  intent: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+  successor: '12121212-1212-4212-8212-121212121212',
 } as const;
 const SESSION = 'opaque-browser-session-token';
 const IDENTITY = Object.freeze({ sessionToken: SESSION, requestId: 'portal-public-social-test' });
@@ -101,6 +103,19 @@ function principalResolver(principal: { userId: string; workspaceId: string } | 
   };
 }
 
+function derivedCommandUuid(
+  kind: 'campaign' | 'revision' | 'plan' | 'reschedule',
+  commandKey: string,
+): string {
+  const bytes = createHash('sha256').update([
+    'public-social-portal-command/v1', kind, IDS.workspace, IDS.user, commandKey,
+  ].join('\n'), 'utf8').digest().subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 test('authenticated snapshot stays on the web transaction and exposes only safe projections', async () => {
   const campaignRow = {
     campaignId: IDS.campaign,
@@ -151,10 +166,42 @@ test('authenticated snapshot stays on the web transaction and exposes only safe 
     updatedAt: NOW,
     hasMore: false,
   };
+  const plannerTargetRow = {
+    targetId: IDS.target,
+    network: 'facebook',
+    targetLabel: 'Facebook TEST',
+    hasMore: false,
+  };
+  const planningRow = {
+    intentId: IDS.intent,
+    campaignId: IDS.campaign,
+    revisionId: IDS.revision,
+    revisionNumber: 1,
+    campaignTitle: 'Launch rehearsal',
+    desiredFor: '2026-08-28T09:00:00.000Z',
+    contentItemId: IDS.item,
+    contentVersionId: IDS.version,
+    contentSha256: '2'.repeat(64),
+    intentSha256: '4'.repeat(64),
+    targetId: IDS.target,
+    network: 'facebook',
+    targetLabel: 'Facebook TEST',
+    planningState: 'awaiting_revalidation',
+    materializedPostId: null,
+    materializedOperationId: null,
+    operationState: null,
+    revalidationState: 'waiting_for_window',
+    nextRevalidationAt: '2026-08-28T08:50:00.000Z',
+    lastErrorCode: null,
+    updatedAt: NOW,
+    hasMore: false,
+  };
   const readRunner = new FakeRunner([[
     workspace(),
     [campaignRow],
     [calendarRow],
+    [plannerTargetRow],
+    [planningRow],
   ]]);
   const commandRunner = new FakeRunner([]);
   const principal = principalResolver();
@@ -177,12 +224,19 @@ test('authenticated snapshot stays on the web transaction and exposes only safe 
   assert.equal(outcome.snapshot.campaign.hasMore, false);
   assert.equal(outcome.snapshot.calendar.items[0]?.providerEffects, 'none');
   assert.equal(outcome.snapshot.calendar.hasMore, false);
+  assert.equal(outcome.snapshot.planning?.targets.items[0]?.targetLabel, 'Facebook TEST');
+  assert.equal(
+    outcome.snapshot.planning?.calendar.items[0]?.planningState,
+    'awaiting_revalidation',
+  );
   assert.equal(outcome.snapshot.environment, 'test');
   assert.equal(commandRunner.calls.length, 0);
   assert.equal(readRunner.calls.length, 1);
   assert.deepEqual(readRunner.calls[0]?.options, { readOnly: true, serializable: true });
   assert.deepEqual(readRunner.calls[0]?.executor.calls.map((call) => call.values[0]), [
     undefined,
+    IDS.workspace,
+    IDS.workspace,
     IDS.workspace,
     IDS.workspace,
   ]);
@@ -196,7 +250,7 @@ test('authenticated snapshot stays on the web transaction and exposes only safe 
   );
 });
 
-test('manager commands inject the session workspace, derive TEST refs and keep write-only plan data out of outcomes', async () => {
+test('manager commands persist browser-safe planning identities without accepting provider evidence', async () => {
   const readRunner = new FakeRunner([
     [workspace()], [workspace()], [workspace()], [workspace()],
   ]);
@@ -207,17 +261,21 @@ test('manager commands inject the session workspace, derive TEST refs and keep w
       revisionNumber: 1,
       disposition: 'applied',
     }]],
-    [[{ targetId: IDS.target, disposition: 'applied' }]],
-    [
-      [{
-        ordinal: 1,
-        targetId: IDS.target,
-        network: 'facebook',
-        testAccountRef: 'test-account:facebook:database_owned_target',
-      }],
-      [{ postId: IDS.post, operationIds: [IDS.operation], disposition: 'applied' }],
-    ],
-    [[{ operationId: IDS.operation, state: 'simulated_cancelled', disposition: 'applied' }]],
+    [[{
+      intentId: derivedCommandUuid('plan', 'plan-command-001'),
+      intentSha256: '5'.repeat(64),
+      disposition: 'applied',
+    }]],
+    [[{
+      successorIntentId: derivedCommandUuid('reschedule', 'reschedule-command-001'),
+      disposition: 'applied',
+    }]],
+    [[{
+      intentId: IDS.intent,
+      targetId: IDS.target,
+      state: 'cancelled',
+      disposition: 'applied',
+    }]],
   ]);
   const service = new PgPortalPublicSocialService({
     principalResolver: principalResolver().resolver,
@@ -236,50 +294,39 @@ test('manager commands inject the session workspace, derive TEST refs and keep w
     revisionSha256: '1'.repeat(64),
     workspaceId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
   } as never);
-  const registered = await service.registerTestTarget(IDENTITY, {
-    targetId: IDS.target,
-    connectionId: IDS.connection,
-    network: 'facebook',
-    displayName: 'Property Predator Facebook TEST',
-    testAccountRef: 'test-account:facebook:browser-controlled',
-  } as never);
-  const body = 'Write-only fictional TEST post content.';
-  const bodySha256 = createHash('sha256').update(body, 'utf8').digest('hex');
-  const scheduled = await service.schedule(IDENTITY, {
-    postId: IDS.post,
+  const planned = await service.plan(IDENTITY, {
+    commandKey: 'plan-command-001',
     campaignId: IDS.campaign,
     revisionId: IDS.revision,
-    contentItemId: IDS.item,
     contentVersionId: IDS.version,
-    contentSha256: bodySha256,
-    approvalRequestId: IDS.approvalRequest,
+    desiredFor: '2026-08-28T09:00:00.000Z',
+    maxAttempts: 3,
+    targetIds: [IDS.target],
+    mediaVersionIds: [IDS.mediaVersion],
+    workspaceId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+    text: 'PRIVATE-BROWSER-BODY',
+    contentSha256: '8'.repeat(64),
     approvalDecisionId: IDS.approvalDecision,
     sourceAttestationId: IDS.attestation,
-    text: body,
-    scheduledFor: '2026-08-28T09:00:00.000Z',
-    maxAttempts: 3,
-    targets: [{ targetId: IDS.target, network: 'instagram' }],
-    mediaBindings: [{
-      planArtifactId: IDS.mediaVersion,
-      contentItemId: IDS.item,
-      contentVersionId: IDS.mediaVersion,
-      contentSha256: '4'.repeat(64),
-      blobSha256: '5'.repeat(64),
-      approvalRequestId: IDS.approvalRequest,
-      approvalDecisionId: IDS.approvalDecision,
-      sourceAttestationId: IDS.attestation,
-    }],
-    workspaceId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+    connectionId: IDS.connection,
     testAccountRef: 'test-account:facebook:browser-controlled',
     blobStorageKey: 'browser/controlled/secret.png',
   } as never);
-  const cancelled = await service.cancelTarget(IDENTITY, {
-    operationId: IDS.operation,
-    reason: 'Cancel this fictional TEST target.',
+  const rescheduled = await service.reschedule(IDENTITY, {
+    commandKey: 'reschedule-command-001',
+    predecessorIntentId: IDS.intent,
+    targetId: IDS.target,
+    newDesiredFor: '2026-08-29T10:00:00.000Z',
+    reason: 'Move this TEST placement to the next evidence window.',
     workspaceId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
   } as never);
+  const cancelled = await service.cancel(IDENTITY, {
+    intentId: IDS.intent,
+    targetId: IDS.target,
+    reason: 'Cancel this fictional TEST placement.',
+  });
 
-  for (const outcome of [revision, registered, scheduled, cancelled]) {
+  for (const outcome of [revision, planned, rescheduled, cancelled]) {
     assert.equal(outcome.ok, true);
     assert.equal(outcome.ok && outcome.environment, 'test');
     assert.equal(outcome.ok && outcome.providerEffects, 'none');
@@ -294,25 +341,81 @@ test('manager commands inject the session workspace, derive TEST refs and keep w
   assert.ok(commandQueries.every((call) => call.values[0] === IDS.workspace));
   assert.match(commandRunner.calls[0]!.executor.calls[0]!.values[8] as string, /^[a-f0-9]{64}$/u);
   assert.notEqual(commandRunner.calls[0]!.executor.calls[0]!.values[8], '1'.repeat(64));
-  assert.equal(commandRunner.calls[1]!.executor.calls[0]!.values[4],
-    'test-account:facebook:portal_66666666666646668666666666666666');
-  const targetResolutionQuery = commandRunner.calls[2]!.executor.calls[0]!;
-  const scheduleQuery = commandRunner.calls[2]!.executor.calls[1]!;
-  assert.match(targetResolutionQuery.sql, /resolve_test_social_campaign_targets/u);
-  assert.deepEqual(targetResolutionQuery.values[1], [IDS.target]);
-  assert.doesNotMatch(JSON.stringify(scheduleQuery.values), /browser-controlled|secret\.png/u);
-  assert.doesNotMatch(JSON.stringify(scheduleQuery.values), new RegExp(body, 'u'));
-  assert.deepEqual(Object.keys(JSON.parse(scheduleQuery.values[14] as string)[0]).sort(), [
-    'approvalDecisionId', 'approvalRequestId', 'blobSha256', 'contentItemId',
-    'contentSha256', 'contentVersionId', 'sourceAttestationId',
+  const planQuery = commandRunner.calls[1]!.executor.calls[0]!;
+  const rescheduleQuery = commandRunner.calls[2]!.executor.calls[0]!;
+  const cancelQuery = commandRunner.calls[3]!.executor.calls[0]!;
+  assert.match(planQuery.sql, /create_test_social_planning_intent/u);
+  assert.match(planQuery.values[1] as string, /^[0-9a-f-]{36}$/u);
+  assert.deepEqual(planQuery.values.slice(2), [
+    IDS.campaign, IDS.revision, IDS.version, '2026-08-28T09:00:00.000Z',
+    3, [IDS.target], [IDS.mediaVersion],
   ]);
+  assert.match(rescheduleQuery.sql, /reschedule_test_social_planning_target/u);
+  assert.match(cancelQuery.sql, /cancel_test_social_planning_target/u);
+  assert.equal(rescheduleQuery.values[5], createHash('sha256')
+    .update('Move this TEST placement to the next evidence window.', 'utf8').digest('hex'));
+  assert.equal(cancelQuery.values[3], createHash('sha256')
+    .update('Cancel this fictional TEST placement.', 'utf8').digest('hex'));
+  assert.doesNotMatch(JSON.stringify(commandRunner.calls),
+    /PRIVATE-BROWSER-BODY|browser-controlled|secret\.png|approvalDecisionId|sourceAttestationId/u);
   assert.doesNotMatch(
-    JSON.stringify({ revision, registered, scheduled, cancelled }),
-    /test-account:|Write-only fictional|blobStorageKey|secret\.png/u,
+    JSON.stringify({ revision, planned, rescheduled, cancelled }),
+    /test-account:|PRIVATE-BROWSER-BODY|blobStorageKey|secret\.png/u,
   );
 });
 
-test('schedule rejects a browser body that does not hash to the approved content before command SQL', async () => {
+test('campaign wizard creates revision and planning intent in one serializable transaction', async () => {
+  const commandKey = 'wizard-command-001';
+  const campaignId = derivedCommandUuid('campaign', commandKey);
+  const revisionId = derivedCommandUuid('revision', commandKey);
+  const intentId = derivedCommandUuid('plan', commandKey);
+  const readRunner = new FakeRunner([[workspace()]]);
+  const commandRunner = new FakeRunner([[
+    [{ campaignId, revisionId, revisionNumber: 1, disposition: 'applied' }],
+    [{ intentId, intentSha256: '6'.repeat(64), disposition: 'applied' }],
+  ]]);
+  const service = new PgPortalPublicSocialService({
+    principalResolver: principalResolver().resolver,
+    readRunner,
+    commandRunner,
+  });
+
+  const outcome = await service.createCampaignPlan(IDENTITY, {
+    commandKey,
+    title: 'Predator evidence week',
+    objective: 'Move one approved company asset through the TEST planning rail.',
+    contentVersionId: IDS.version,
+    desiredFor: '2026-09-02T10:30:00.000Z',
+    targetIds: [IDS.target],
+    mediaVersionIds: [IDS.mediaVersion],
+  });
+
+  assert.deepEqual(outcome, {
+    ok: true,
+    result: {
+      campaignId,
+      revisionId,
+      intentId,
+      intentSha256: '6'.repeat(64),
+      disposition: 'applied',
+    },
+    environment: 'test',
+    providerEffects: 'none',
+  });
+  assert.equal(commandRunner.calls.length, 1);
+  assert.deepEqual(commandRunner.calls[0]?.options, { readOnly: false, serializable: true });
+  assert.equal(commandRunner.calls[0]?.executor.calls.length, 2);
+  assert.match(commandRunner.calls[0]!.executor.calls[0]!.sql,
+    /create_test_social_campaign_revision/u);
+  assert.match(commandRunner.calls[0]!.executor.calls[1]!.sql,
+    /create_test_social_planning_intent/u);
+  assert.deepEqual(commandRunner.calls[0]!.executor.calls[1]!.values.slice(1), [
+    intentId, campaignId, revisionId, IDS.version,
+    '2026-09-02T10:30:00.000Z', 3, [IDS.target], [IDS.mediaVersion],
+  ]);
+});
+
+test('planning rejects an invalid command key before command SQL', async () => {
   const readRunner = new FakeRunner([[workspace()]]);
   const commandRunner = new FakeRunner([]);
   const service = new PgPortalPublicSocialService({
@@ -320,21 +423,15 @@ test('schedule rejects a browser body that does not hash to the approved content
     readRunner,
     commandRunner,
   });
-  const outcome = await service.schedule(IDENTITY, {
-    postId: IDS.post,
+  const outcome = await service.plan(IDENTITY, {
+    commandKey: 'contains spaces',
     campaignId: IDS.campaign,
     revisionId: IDS.revision,
-    contentItemId: IDS.item,
     contentVersionId: IDS.version,
-    contentSha256: '2'.repeat(64),
-    approvalRequestId: IDS.approvalRequest,
-    approvalDecisionId: IDS.approvalDecision,
-    sourceAttestationId: IDS.attestation,
-    text: 'A different browser-supplied body.',
-    scheduledFor: '2026-08-28T09:00:00.000Z',
+    desiredFor: '2026-08-28T09:00:00.000Z',
     maxAttempts: 3,
-    targets: [{ targetId: IDS.target }],
-    mediaBindings: [],
+    targetIds: [IDS.target],
+    mediaVersionIds: [],
   });
   assert.deepEqual(outcome, {
     ok: false,
@@ -344,35 +441,23 @@ test('schedule rejects a browser body that does not hash to the approved content
   assert.equal(commandRunner.calls.length, 0);
 });
 
-test('schedule explains the short source-proof window without exposing database detail', async () => {
-  const body = 'Exact short-horizon TEST rehearsal body.';
+test('unsafe planning lifecycle conflicts return safe copy', async () => {
   const service = new PgPortalPublicSocialService({
     principalResolver: principalResolver().resolver,
     readRunner: new FakeRunner([[workspace()]]),
-    commandRunner: new RejectingRunner('P0039'),
+    commandRunner: new RejectingRunner('55000'),
   });
-  const outcome = await service.schedule(IDENTITY, {
-    postId: IDS.post,
-    campaignId: IDS.campaign,
-    revisionId: IDS.revision,
-    contentItemId: IDS.item,
-    contentVersionId: IDS.version,
-    contentSha256: createHash('sha256').update(body, 'utf8').digest('hex'),
-    approvalRequestId: IDS.approvalRequest,
-    approvalDecisionId: IDS.approvalDecision,
-    sourceAttestationId: IDS.attestation,
-    text: body,
-    scheduledFor: '2026-08-28T09:00:00.000Z',
-    maxAttempts: 3,
-    targets: [{ targetId: IDS.target }],
-    mediaBindings: [],
+  const outcome = await service.cancel(IDENTITY, {
+    intentId: IDS.intent,
+    targetId: IDS.target,
+    reason: 'Cancel only if the lifecycle is still safe.',
   });
   assert.deepEqual(outcome, {
     ok: false,
-    kind: 'validation',
-    message: 'The exact source proof expires before that TEST time. Refresh the proof or choose an earlier rehearsal time.',
+    kind: 'conflict',
+    message: 'The TEST campaign changed after this page loaded. Refresh before trying again.',
   });
-  assert.doesNotMatch(JSON.stringify(outcome), /PostgreSQL|private|P0039/iu);
+  assert.doesNotMatch(JSON.stringify(outcome), /PostgreSQL|private|55000/iu);
 });
 
 test('missing sessions and read-only memberships fail before command SQL with safe copy', async () => {
@@ -406,8 +491,9 @@ test('missing sessions and read-only memberships fail before command SQL with sa
     readRunner: readOnlyRunner,
     commandRunner: forbiddenCommand,
   });
-  const outcome = await readOnly.cancelTarget(IDENTITY, {
-    operationId: IDS.operation,
+  const outcome = await readOnly.cancel(IDENTITY, {
+    intentId: IDS.intent,
+    targetId: IDS.target,
     reason: 'Cannot run.',
   });
   assert.equal(outcome.ok, false);

@@ -1,6 +1,7 @@
 /**
- * Dependency-free, presentation-only enhancement for the TEST content workspace.
- * It never calls fetch, submits a form or persists a provider operation.
+ * Dependency-free progressive enhancement for durable TEST calendar commands.
+ * Native forms remain the baseline; this layer adds pointer/touch/keyboard
+ * confirmation, same-origin saving state and deterministic visual rollback.
  */
 
 export const CONTENT_CALENDAR_CLIENT_ROUTE = '/portal/assets/content-calendar.js' as const;
@@ -22,6 +23,10 @@ export const CONTENT_CALENDAR_CLIENT_SOURCE = String.raw`(() => {
     const sheetTime = sheet && sheet.querySelector('[data-calendar-sheet-time]');
     const sheetApply = sheet && sheet.querySelector('[data-calendar-sheet-apply]');
     const sheetCancel = sheet && sheet.querySelector('[data-calendar-sheet-cancel]');
+    const sheetCopy = sheet && sheet.querySelector('[data-calendar-sheet-copy]');
+    const sheetDurableFields = sheet && sheet.querySelector('[data-calendar-sheet-durable-fields]');
+    const sheetReason = sheet && sheet.querySelector('[data-calendar-sheet-reason]');
+    const sheetConfirm = sheet && sheet.querySelector('[data-calendar-sheet-confirm]');
     let lifted = null;
     let pointerState = null;
     let sheetCard = null;
@@ -33,6 +38,21 @@ export const CONTENT_CALENDAR_CLIENT_SOURCE = String.raw`(() => {
       if (!live) return;
       live.textContent = '';
       window.setTimeout(() => { live.textContent = message; }, 20);
+    };
+
+    const sameOriginUrl = (value) => {
+      try {
+        const url = new URL(value, window.location.href);
+        return url.origin === window.location.origin && url.pathname.startsWith('/portal/') ? url : null;
+      } catch {
+        return null;
+      }
+    };
+
+    const setFormStatus = (form, message) => {
+      const status = form && form.querySelector('[data-calendar-form-status]');
+      if (status) status.textContent = message;
+      announce(message);
     };
 
     const dayLabel = (day) => day ? (day.getAttribute('aria-label') || day.dataset.date || 'day') : 'day';
@@ -155,11 +175,82 @@ export const CONTENT_CALENDAR_CLIENT_SOURCE = String.raw`(() => {
       return true;
     };
 
+    const captureMove = (card) => {
+      const originDay = dayForCard(card);
+      const container = card && card.parentElement;
+      const time = card && card.querySelector('.ccal-time');
+      return {
+        originDay,
+        container,
+        nextSibling: card ? card.nextSibling : null,
+        scheduledFor: card ? card.dataset.scheduledFor : '',
+        previewWallTime: card ? card.dataset.previewWallTime : undefined,
+        timeText: time ? time.textContent : '',
+        timeDateTime: time ? time.getAttribute('datetime') : null,
+      };
+    };
+
+    const rollbackMove = (card, snapshot) => {
+      if (!card || !snapshot || !snapshot.container) return;
+      const currentDay = dayForCard(card);
+      if (snapshot.nextSibling && snapshot.nextSibling.parentNode === snapshot.container) {
+        snapshot.container.insertBefore(card, snapshot.nextSibling);
+      } else {
+        snapshot.container.appendChild(card);
+      }
+      card.dataset.scheduledFor = snapshot.scheduledFor || '';
+      if (snapshot.previewWallTime === undefined) card.removeAttribute('data-preview-wall-time');
+      else card.dataset.previewWallTime = snapshot.previewWallTime;
+      const time = card.querySelector('.ccal-time');
+      if (time) {
+        time.textContent = snapshot.timeText || '';
+        if (snapshot.timeDateTime === null) time.removeAttribute('datetime');
+        else time.setAttribute('datetime', snapshot.timeDateTime);
+      }
+      ensureEmptyState(currentDay);
+      ensureEmptyState(snapshot.originDay);
+    };
+
+    const openMoveSheet = (card, targetDay, minutes, returnFocus) => {
+      if (!sheet || !sheetDate || !sheetTime || !card || !targetDay) return false;
+      const rescheduleForm = card.querySelector('[data-calendar-command-form][data-command-kind="reschedule"]');
+      const durable = Boolean(rescheduleForm);
+      sheetCard = card;
+      sheetReturnFocus = returnFocus || card.querySelector('[data-calendar-move-handle]');
+      sheetDate.value = targetDay.dataset.date || '';
+      sheetTime.value = timeValue(minutes);
+      if (sheetCopy) sheetCopy.textContent = durable
+        ? 'Review the new desired TEST time, explain the change and confirm. The card rolls back if saving fails.'
+        : 'This slot has no protected command boundary. The move remains a browser-only preview and is discarded on reload.';
+      if (sheetDurableFields) sheetDurableFields.hidden = !durable;
+      if (sheetReason) sheetReason.value = '';
+      if (sheetConfirm) sheetConfirm.checked = false;
+      if (sheetApply) sheetApply.textContent = durable ? 'Confirm & save TEST time' : 'Move in preview';
+      sheetInert = Array.from(root.children)
+        .filter((element) => element !== sheet && !element.hasAttribute('data-calendar-live'))
+        .map((element) => ({ element, hadInert: element.hasAttribute('inert') }));
+      sheetInert.forEach(({ element }) => element.setAttribute('inert', ''));
+      sheet.hidden = false;
+      sheetDate.focus();
+      announce((durable ? 'Durable TEST move confirmation' : 'Browser preview') + ' opened for ' + cardLabel(card) + '.');
+      return true;
+    };
+
     const commitLift = () => {
       if (!lifted) return;
       const state = lifted;
-      applyMove(state.card, state.targetDay, state.minutes, false);
-      finishLift();
+      const durable = state.card.querySelector('[data-calendar-command-form][data-command-kind="reschedule"]');
+      if (durable && state.targetDay) {
+        const card = state.card;
+        const targetDay = state.targetDay;
+        const minutes = state.minutes;
+        const handle = state.handle;
+        finishLift();
+        openMoveSheet(card, targetDay, minutes, handle);
+      } else {
+        applyMove(state.card, state.targetDay, state.minutes, false);
+        finishLift();
+      }
     };
 
     const moveTargetDay = (delta) => {
@@ -313,19 +404,7 @@ export const CONTENT_CALENDAR_CLIENT_SOURCE = String.raw`(() => {
         // A keyboard user can tab from a lifted handle into this button. The
         // sheet is a separate movement mode, so retire the stale lift first.
         if (lifted) finishLift();
-        sheetCard = card;
-        sheetReturnFocus = button;
-        sheetDate.value = day.dataset.date || '';
-        sheetTime.value = timeValue(minutesFromCard(card));
-        sheetInert = Array.from(root.children)
-          // Keep the aria-live node active while the rest of the calendar is
-          // inert so sheet-open and validation announcements remain audible.
-          .filter((element) => element !== sheet && !element.hasAttribute('data-calendar-live'))
-          .map((element) => ({ element, hadInert: element.hasAttribute('inert') }));
-        sheetInert.forEach(({ element }) => element.setAttribute('inert', ''));
-        sheet.hidden = false;
-        sheetDate.focus();
-        announce('Move preview opened for ' + cardLabel(card) + '. Choose a loaded date and time.');
+        openMoveSheet(card, day, minutesFromCard(card), button);
       });
     });
     if (sheetCancel) sheetCancel.addEventListener('click', closeSheet);
@@ -339,8 +418,36 @@ export const CONTENT_CALENDAR_CLIENT_SOURCE = String.raw`(() => {
       }
       const minutes = (Number(match[1]) * 60) + Number(match[2]);
       const card = sheetCard;
-      closeSheet();
-      applyMove(card, target, minutes, true);
+      const form = card.querySelector('[data-calendar-command-form][data-command-kind="reschedule"]');
+      if (form) {
+        const reason = String(sheetReason && sheetReason.value || '').trim();
+        if (!reason || reason.length > 500) {
+          announce('Explain this TEST time change in 500 characters or fewer. Nothing changed.');
+          if (sheetReason) sheetReason.focus();
+          return;
+        }
+        if (!sheetConfirm || !sheetConfirm.checked) {
+          announce('Confirm the new immutable TEST time before saving. Nothing changed.');
+          if (sheetConfirm) sheetConfirm.focus();
+          return;
+        }
+        const desired = form.querySelector('[data-calendar-reschedule-time]');
+        const formReason = form.querySelector('textarea[name="reason"]');
+        const formConfirm = form.querySelector('input[name="confirm_change"]');
+        if (!desired || !formReason || !formConfirm) {
+          announce('The protected reschedule form is unavailable. Nothing changed.');
+          return;
+        }
+        desired.value = sheetDate.value + 'T' + timeValue(minutes);
+        formReason.value = reason;
+        formConfirm.checked = true;
+        form.dataset.confirmedBySheet = 'true';
+        closeSheet();
+        form.requestSubmit();
+      } else {
+        closeSheet();
+        applyMove(card, target, minutes, true);
+      }
     });
     if (sheet) {
       sheet.addEventListener('click', (event) => { if (event.target === sheet) closeSheet(); });
@@ -363,6 +470,117 @@ export const CONTENT_CALENDAR_CLIENT_SOURCE = String.raw`(() => {
           first.focus();
         }
       });
+    }
+
+    const safeResponseMessage = (value, fallback) => {
+      const message = typeof value === 'string' ? value.trim() : '';
+      return message && message.length <= 500 && !/[\u0000-\u001f\u007f-\u009f]/u.test(message)
+        ? message
+        : fallback;
+    };
+
+    const parseBoundedJson = async (response) => {
+      const body = await response.text();
+      if (body.length > 8192) throw new Error('Response exceeded safe UI bound');
+      return body ? JSON.parse(body) : {};
+    };
+
+    root.addEventListener('submit', async (event) => {
+      const form = event.target && event.target.closest
+        ? event.target.closest('[data-calendar-command-form]')
+        : null;
+      if (!form || !root.contains(form)) return;
+      const url = sameOriginUrl(form.action);
+      if (!url || typeof window.fetch !== 'function' || typeof window.FormData !== 'function'
+          || typeof window.URLSearchParams !== 'function') return;
+      const confirmedBySheet = form.dataset.confirmedBySheet === 'true';
+      delete form.dataset.confirmedBySheet;
+      const confirmMessage = form.dataset.confirmMessage;
+      if (!confirmedBySheet && confirmMessage && !window.confirm(confirmMessage)) {
+        event.preventDefault();
+        setFormStatus(form, 'TEST command cancelled. Nothing changed.');
+        return;
+      }
+      event.preventDefault();
+      if (form.getAttribute('aria-busy') === 'true') return;
+
+      const kind = form.dataset.commandKind || 'command';
+      const card = form.closest('[data-calendar-slot]');
+      const buttons = Array.from(form.querySelectorAll('button, input[type="submit"]'));
+      const moveSnapshot = kind === 'reschedule' && card ? captureMove(card) : null;
+      let moved = false;
+      if (kind === 'reschedule' && card) {
+        const desired = form.querySelector('[data-calendar-reschedule-time]');
+        const match = desired && /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})$/.exec(desired.value);
+        const target = match ? days.find((day) => day.dataset.date === match[1]) : null;
+        if (match && target) moved = applyMove(card, target, (Number(match[2]) * 60) + Number(match[3]), false);
+      }
+      form.setAttribute('aria-busy', 'true');
+      buttons.forEach((button) => { button.disabled = true; });
+      if (card) card.setAttribute('data-command-state', 'saving');
+      setFormStatus(form, kind === 'cancel'
+        ? 'Cancelling exact TEST target…'
+        : kind === 'create'
+          ? 'Creating durable TEST planning intent…'
+          : 'Saving new immutable TEST time…');
+
+      try {
+        const response = await window.fetch(url.href, {
+          method: 'POST',
+          body: new window.URLSearchParams(new window.FormData(form)),
+          credentials: 'same-origin',
+          redirect: 'follow',
+          headers: {
+            Accept: 'application/json',
+            'X-Requested-With': 'ContentCalendar',
+          },
+        });
+        const contentType = response.headers.get('content-type') || '';
+        if ((response.redirected || contentType.includes('text/html')) && response.ok) {
+          const redirect = sameOriginUrl(response.url);
+          if (!redirect) throw new Error('Unsafe response redirect');
+          window.location.assign(redirect.href);
+          return;
+        }
+        const payload = contentType.includes('application/json')
+          ? await parseBoundedJson(response)
+          : {};
+        if (!response.ok || payload.ok === false) throw new Error('Protected command failed');
+        const message = safeResponseMessage(payload.message, kind === 'cancel'
+          ? 'Exact TEST target cancelled. Provider effects remain none.'
+          : kind === 'create'
+            ? 'Durable TEST planning intent created. No provider was called.'
+            : 'New immutable TEST time saved. Provider effects remain none.');
+        if (card) card.setAttribute('data-command-state', 'saved');
+        if (moved) root.removeAttribute('data-preview-dirty');
+        setFormStatus(form, message);
+      } catch {
+        if (moved && card && moveSnapshot) rollbackMove(card, moveSnapshot);
+        if (card) card.setAttribute('data-command-state', 'error');
+        setFormStatus(form, 'The TEST command was not saved. The visible calendar was rolled back; refresh before retrying.');
+      } finally {
+        form.removeAttribute('aria-busy');
+        buttons.forEach((button) => { button.disabled = false; });
+      }
+    });
+
+    const outcome = root.querySelector('[data-calendar-jit-status-url]');
+    if (outcome && typeof window.fetch === 'function') {
+      const statusUrl = sameOriginUrl(outcome.dataset.calendarJitStatusUrl);
+      const detail = outcome.querySelector('[data-calendar-outcome-detail]');
+      if (statusUrl && detail) {
+        outcome.setAttribute('data-jit-loading', 'true');
+        window.fetch(statusUrl.href, {
+          credentials: 'same-origin',
+          headers: { Accept: 'application/json', 'X-Requested-With': 'ContentCalendarStatus' },
+        }).then(async (response) => {
+          if (!response.ok || !(response.headers.get('content-type') || '').includes('application/json')) return;
+          const payload = await parseBoundedJson(response);
+          detail.textContent = safeResponseMessage(payload.message, detail.textContent);
+        }).catch(() => {
+          // The server-rendered PRG outcome remains authoritative and visible.
+        }).finally(() => outcome.removeAttribute('data-jit-loading'));
+      }
     }
   };
 

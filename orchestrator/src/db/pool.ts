@@ -122,6 +122,14 @@ export function createPublicSocialWorkerCommandDatabasePool(
   return createDatabasePool(loadDatabaseConfig('publicSocialWorkerCommand', env), hooks);
 }
 
+/** Function-only pool for JIT owned-source revalidation; it cannot publish. */
+export function createPublicSocialRevalidatorCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('publicSocialRevalidatorCommand', env), hooks);
+}
+
 /** Function-only pool for the isolated provider-operation worker. */
 export function createWorkerDatabasePool(
   env: NodeJS.ProcessEnv = process.env,

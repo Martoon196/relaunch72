@@ -24,6 +24,7 @@
     "serve:property-predator-email-worker": "tsx src/workers/property-predator-email/cli.ts",
     "serve:omnichannel-test-rail": "tsx src/workers/omnichannel-test-rail/cli.ts",
     "serve:public-social-test-rail": "tsx src/workers/public-social-test-rail/cli.ts",
+    "serve:public-social-revalidator": "tsx src/workers/public-social-revalidator/cli.ts",
     "preview:property-predator": "node --import ./test/windows-node24-shim.mjs --import tsx test/manual-property-predator-preview.ts",
     "pilot:preflight": "node --import ./test/windows-node24-shim.mjs --import tsx src/ops/property-predator-live-pilot-preflight-cli.ts",
     "founder:bootstrap": "tsx src/ops/property-predator-founder-bootstrap-cli.ts",

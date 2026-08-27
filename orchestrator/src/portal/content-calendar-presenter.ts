@@ -3,7 +3,11 @@ import type {
   CompanyContentCatalogPage,
 } from '../company-content-pg/types.js';
 import type { SocialNetwork } from '../providers/contracts.js';
-import type { SocialCampaignTargetState } from '../social-campaign-pg/types.js';
+import type {
+  SocialCampaignTargetState,
+  SocialPlanningState,
+  SocialRevalidationState,
+} from '../social-campaign-pg/types.js';
 
 export const CONTENT_CALENDAR_ROUTE = '/portal/content/calendar' as const;
 export const CONTENT_CALENDAR_MAX_CATALOG_ITEMS = 100;
@@ -39,6 +43,23 @@ export interface ContentCalendarPublicSocialProvenance {
   readonly providerEffects: 'none';
 }
 
+export type ContentCalendarPlanningState = SocialPlanningState;
+export type ContentCalendarRevalidationState = SocialRevalidationState;
+
+/** Safe 0040 planning provenance. Bodies, account refs and proof internals are absent. */
+export interface ContentCalendarPlanningProvenance {
+  readonly intentId: string;
+  readonly intentSha256: string;
+  readonly targetId: string;
+  readonly desiredFor: string;
+  readonly planningState: ContentCalendarPlanningState;
+  readonly revalidationState: ContentCalendarRevalidationState;
+  readonly nextRevalidationAt: string | null;
+  readonly updatedAt: string;
+  readonly environment: 'test';
+  readonly providerEffects: 'none';
+}
+
 /**
  * A planning fact only. It cannot contain provider credentials or request data.
  * Channel variants are placement metadata around an immutable approved version;
@@ -58,6 +79,8 @@ export interface ContentCalendarSlotSnapshot {
   readonly executionMode: 'simulated';
   /** Allowlisted durable TEST provenance. Raw body/account/storage data has no shape here. */
   readonly publicSocial?: ContentCalendarPublicSocialProvenance;
+  /** Optional 0040 desired-time intent projection. */
+  readonly planning?: ContentCalendarPlanningProvenance;
 }
 
 export interface ContentCalendarSnapshot {
@@ -110,6 +133,14 @@ export interface ContentCalendarSlotView {
   readonly gateLabel: 'Simulation ready' | 'Locked';
   readonly gateDetail: string;
   readonly publicSocial: ContentCalendarPublicSocialView | null;
+  readonly planning: ContentCalendarPlanningView | null;
+}
+
+export interface ContentCalendarPlanningView extends ContentCalendarPlanningProvenance {
+  readonly identityProofValid: boolean;
+  readonly statusLabel: string;
+  readonly statusDetail: string;
+  readonly statusTone: 'current' | 'due' | 'blocked' | 'complete' | 'cancelled';
 }
 
 export interface ContentCalendarPublicSocialView extends ContentCalendarPublicSocialProvenance {
@@ -283,6 +314,52 @@ const PUBLIC_SOCIAL_STATE_META: Readonly<Record<SocialCampaignTargetState, Reado
   }),
 });
 
+const PLANNING_STATE_META: Readonly<Record<ContentCalendarPlanningState, Readonly<{
+  label: string;
+  detail: string;
+  tone: ContentCalendarPlanningView['statusTone'];
+}>>> = Object.freeze({
+  awaiting_revalidation: Object.freeze({
+    label: 'JIT proof waiting',
+    detail: 'The desired TEST time is durable; exact source proof will be revalidated in its bounded window.',
+    tone: 'due',
+  }),
+  revalidation_leased: Object.freeze({
+    label: 'JIT proof checking',
+    detail: 'A TEST worker is checking exact approval and source proof. No provider can be called.',
+    tone: 'due',
+  }),
+  proof_ready: Object.freeze({
+    label: 'JIT proof ready',
+    detail: 'Exact proof is current for materialisation into a TEST simulator operation.',
+    tone: 'current',
+  }),
+  materialized: Object.freeze({
+    label: 'TEST operation materialised',
+    detail: 'The planning intent has produced durable simulator evidence; this is not a publication.',
+    tone: 'complete',
+  }),
+  cancelled: Object.freeze({
+    label: 'Planning target cancelled',
+    detail: 'This exact TEST target is cancelled and cannot advance.',
+    tone: 'cancelled',
+  }),
+  superseded: Object.freeze({
+    label: 'Planning target superseded',
+    detail: 'A newer immutable intent replaced this desired time.',
+    tone: 'cancelled',
+  }),
+  revalidation_attention: Object.freeze({
+    label: 'JIT proof needs attention',
+    detail: 'Exact proof could not be revalidated inside the bounded TEST workflow.',
+    tone: 'blocked',
+  }),
+});
+
+const REVALIDATION_STATES = new Set<ContentCalendarRevalidationState>([
+  'waiting_for_window', 'leased', 'retry_wait', 'verified', 'materialized', 'dead_letter',
+]);
+
 function canonicalInstant(value: string): boolean {
   const parsed = new Date(value);
   return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
@@ -382,6 +459,67 @@ function presentPublicSocial(
     identityProofValid,
   });
   return Object.freeze({ view, allowsSimulation: identityProofValid && stateMeta.allowsSimulation });
+}
+
+function presentPlanning(
+  provenance: ContentCalendarPlanningProvenance,
+  slot: ContentCalendarSlotSnapshot,
+): ContentCalendarPlanningView {
+  const knownPlanningState = Object.prototype.hasOwnProperty.call(
+    PLANNING_STATE_META,
+    provenance.planningState,
+  );
+  const meta = knownPlanningState
+    ? PLANNING_STATE_META[provenance.planningState]
+    : Object.freeze({
+      label: 'Planning proof locked',
+      detail: 'The durable planning state was not recognised.',
+      tone: 'blocked' as const,
+    });
+  const intentId = typeof provenance.intentId === 'string' ? provenance.intentId : 'locked';
+  const intentSha256 = typeof provenance.intentSha256 === 'string'
+    ? provenance.intentSha256 : 'locked';
+  const targetId = typeof provenance.targetId === 'string' ? provenance.targetId : 'locked';
+  const desiredFor = typeof provenance.desiredFor === 'string'
+    ? provenance.desiredFor : '1970-01-01T00:00:00.000Z';
+  const updatedAt = typeof provenance.updatedAt === 'string'
+    ? provenance.updatedAt : '1970-01-01T00:00:00.000Z';
+  const nextRevalidationAt = provenance.nextRevalidationAt === null
+    ? null
+    : typeof provenance.nextRevalidationAt === 'string'
+      ? provenance.nextRevalidationAt
+      : 'invalid';
+  const identityProofValid = UUID.test(intentId)
+    && SHA256.test(intentSha256)
+    && UUID.test(targetId)
+    && canonicalInstant(desiredFor)
+    && desiredFor === slot.scheduledFor
+    && knownPlanningState
+    && REVALIDATION_STATES.has(provenance.revalidationState)
+    && (nextRevalidationAt === null || canonicalInstant(nextRevalidationAt))
+    && canonicalInstant(updatedAt)
+    && provenance.environment === 'test'
+    && provenance.providerEffects === 'none';
+  return Object.freeze({
+    intentId,
+    intentSha256,
+    targetId,
+    desiredFor,
+    planningState: knownPlanningState ? provenance.planningState : 'revalidation_attention',
+    revalidationState: REVALIDATION_STATES.has(provenance.revalidationState)
+      ? provenance.revalidationState
+      : 'dead_letter',
+    nextRevalidationAt: nextRevalidationAt === 'invalid' ? null : nextRevalidationAt,
+    updatedAt,
+    environment: 'test',
+    providerEffects: 'none',
+    identityProofValid,
+    statusLabel: identityProofValid ? meta.label : 'Planning proof locked',
+    statusDetail: identityProofValid
+      ? meta.detail
+      : 'Intent, target, desired time or TEST-boundary provenance contradicted this slot.',
+    statusTone: identityProofValid ? meta.tone : 'blocked',
+  });
 }
 
 function validDateOnly(value: unknown): string | null {
@@ -551,7 +689,10 @@ function presentSlot(
   const publicSocialResult = slot.publicSocial
     ? presentPublicSocial(slot.publicSocial, slot)
     : null;
-  const simulationEligible = contentEligible && (publicSocialResult?.allowsSimulation ?? true);
+  const planning = slot.planning ? presentPlanning(slot.planning, slot) : null;
+  const simulationEligible = contentEligible
+    && (publicSocialResult?.allowsSimulation ?? true)
+    && (planning?.identityProofValid ?? true);
   const scheduled = new Date(slot.scheduledFor);
   const timeLabel = Number.isFinite(scheduled.getTime())
     ? new Intl.DateTimeFormat('en-GB', {
@@ -592,10 +733,15 @@ function presentSlot(
       ? gateDetail({ item, versionMatches, approved, fresh, eligible: contentEligible })
       : publicSocialResult && !publicSocialResult.allowsSimulation
         ? publicSocialResult.view.stateDetail
-        : publicSocialResult
-          ? `${gateDetail({ item, versionMatches, approved, fresh, eligible: contentEligible })} ${publicSocialResult.view.stateDetail}`
-          : gateDetail({ item, versionMatches, approved, fresh, eligible: contentEligible }),
+        : planning && !planning.identityProofValid
+          ? planning.statusDetail
+          : publicSocialResult
+            ? `${gateDetail({ item, versionMatches, approved, fresh, eligible: contentEligible })} ${publicSocialResult.view.stateDetail}`
+            : planning
+              ? `${gateDetail({ item, versionMatches, approved, fresh, eligible: contentEligible })} ${planning.statusDetail}`
+              : gateDetail({ item, versionMatches, approved, fresh, eligible: contentEligible }),
     publicSocial: publicSocialResult?.view ?? null,
+    planning,
   });
 }
 

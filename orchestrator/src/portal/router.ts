@@ -7,6 +7,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PlatformCapability } from '../platform/capabilities.js';
+import type { CompanyContentCatalogItem } from '../company-content-pg/types.js';
 import { parseCookies } from '../server/admin/session.js';
 import {
   PORTAL_COOKIE,
@@ -44,8 +45,25 @@ import {
   normaliseContentCalendarFilters,
   presentContentCalendar,
 } from './content-calendar-presenter.js';
-import { renderContentCalendarBody } from './content-calendar-view.js';
+import {
+  renderContentCalendarBody,
+  type ContentCalendarMutationView,
+  type ContentCalendarSlotActionView,
+} from './content-calendar-view.js';
 import { adaptPublicSocialCalendar } from './public-social-calendar-adapter.js';
+import {
+  CAMPAIGN_WIZARD_CREATE_TEST_ROUTE,
+  CAMPAIGN_WIZARD_ROUTE,
+  campaignWizardNoticeFromQuery,
+  campaignWizardNoticeToken,
+  isSafeCampaignWizardPortalPath,
+  type CampaignWizardNoticeCode,
+} from './campaign-wizard-actions.js';
+import {
+  presentCampaignWizard,
+  type CampaignWizardContentSnapshot,
+} from './campaign-wizard-presenter.js';
+import { renderCampaignWizardBody } from './campaign-wizard-view.js';
 import {
   PUBLIC_SOCIAL_CAMPAIGNS_ROUTE,
   presentPublicSocialCampaigns,
@@ -138,6 +156,7 @@ import {
   type PortalCrmSnapshotRequest,
   type PortalCrmService,
 } from './crm-service.js';
+import { workspaceLocalDateTime } from './crm-pg-service.js';
 import { CRM_PAGE_QUERY_KEY } from './crm-pagination.js';
 import type { DashboardData } from './data.js';
 import type { BillingView } from './billing.js';
@@ -177,7 +196,11 @@ import {
 } from './provider-readiness-cockpit-presenter.js';
 import { renderProviderReadinessCockpitBody } from './provider-readiness-cockpit-view.js';
 import type { PortalProviderReadinessService } from './provider-readiness-cockpit-service.js';
-import type { PortalPublicSocialService } from './public-social-service.js';
+import type {
+  PortalPublicSocialService,
+  PortalPublicSocialSnapshot,
+  PortalPublicSocialSnapshotOutcome,
+} from './public-social-service.js';
 import {
   authSubjectAbuseAdmission,
   classifyPortalAbuseRoute,
@@ -462,6 +485,47 @@ function readForm(req: IncomingMessage): Promise<Record<string, string>> {
   });
 }
 
+/**
+ * Bounded application/x-www-form-urlencoded reader for commands with repeated
+ * target/media ids. It preserves cardinality so duplicate singleton fields
+ * cannot be silently collapsed into attacker-chosen values.
+ */
+function readMultiValueForm(req: IncomingMessage): Promise<URLSearchParams | null> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    const finish = (value: URLSearchParams | null): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > 64 * 1024) {
+        chunks.length = 0;
+        finish(null);
+        return;
+      }
+      if (!settled) chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (settled) return;
+      try {
+        finish(new URLSearchParams(Buffer.concat(chunks).toString('utf8')));
+      } catch {
+        finish(null);
+      }
+    });
+    req.on('error', () => finish(null));
+  });
+}
+
+function oneFormValue(form: URLSearchParams, key: string): string | null {
+  const values = form.getAll(key);
+  return values.length === 1 ? values[0]! : null;
+}
+
 function crmPage(
   shell: Pick<CrmWorkspaceSnapshot, 'workspace'>,
   body: string,
@@ -660,6 +724,251 @@ function contentCalendarReadRange(selectedDate: string): Readonly<{ from: string
     from: new Date(selected - (45 * dayMs)).toISOString(),
     to: new Date(selected + (46 * dayMs)).toISOString(),
   });
+}
+
+const CONTENT_CALENDAR_CREATE_TEST_ROUTE = '/portal/content/calendar/test-planning-intents';
+const CONTENT_CALENDAR_RESCHEDULE_TEST_ROUTE = '/portal/content/calendar/test-reschedule';
+const CONTENT_CALENDAR_CANCEL_TEST_ROUTE = '/portal/content/calendar/test-cancel';
+const CAMPAIGN_FORM_TEXT = /^[^\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u202a-\u202e\u2066-\u2069]+$/u;
+const CAMPAIGN_LOCAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/u;
+const CAMPAIGN_RETURN_MODES = new Set(['week', 'month']);
+const CAMPAIGN_RETURN_CHANNELS = new Set([
+  'all', 'facebook', 'instagram', 'linkedin', 'tiktok', 'x', 'youtube',
+  'google_business_profile', 'threads', 'pinterest', 'email', 'webinar',
+]);
+
+function campaignFormText(value: string | null, maximumBytes: number): string | null {
+  if (value === null || value !== value.trim() || !value || !CAMPAIGN_FORM_TEXT.test(value)
+      || Buffer.byteLength(value, 'utf8') > maximumBytes) return null;
+  return value;
+}
+
+function campaignUuidValues(
+  form: URLSearchParams,
+  key: string,
+  minimum: number,
+  maximum: number,
+): readonly string[] | null {
+  const supplied = form.getAll(key).map((value) => value.trim().toLowerCase());
+  if (supplied.length < minimum || supplied.length > maximum
+      || supplied.some((value) => !CRM_OBJECT_ID.test(value))
+      || new Set(supplied).size !== supplied.length) return null;
+  return Object.freeze(supplied);
+}
+
+function campaignFailureNotice(kind: string): CampaignWizardNoticeCode {
+  if (kind === 'unauthenticated' || kind === 'forbidden') return 'forbidden';
+  if (kind === 'validation') return 'invalid';
+  if (kind === 'not_found') return 'missing';
+  if (kind === 'conflict') return 'conflict';
+  return 'unavailable';
+}
+
+function campaignCalendarReturnQuery(form: URLSearchParams): URLSearchParams {
+  const query = new URLSearchParams();
+  const mode = oneFormValue(form, 'return_mode');
+  if (mode && CAMPAIGN_RETURN_MODES.has(mode)) query.set('mode', mode);
+  const date = oneFormValue(form, 'return_date');
+  if (date && /^\d{4}-\d{2}-\d{2}$/u.test(date)) query.set('date', date);
+  const channel = oneFormValue(form, 'return_channel');
+  if (channel && CAMPAIGN_RETURN_CHANNELS.has(channel)) query.set('channel', channel);
+  return query;
+}
+
+function campaignNoticeLocation(
+  deps: PostgresPortalDeps,
+  sessionToken: string,
+  code: CampaignWizardNoticeCode,
+  destination: typeof CAMPAIGN_WIZARD_ROUTE | typeof CONTENT_CALENDAR_ROUTE,
+  returnQuery?: URLSearchParams,
+): string {
+  const query = returnQuery ?? new URLSearchParams();
+  query.set('notice', campaignWizardNoticeToken(deps.sessionSecret, sessionToken, code));
+  return `${destination}?${query.toString()}`;
+}
+
+function campaignNoticeRedirect(
+  res: ServerResponse,
+  deps: PostgresPortalDeps,
+  sessionToken: string,
+  code: CampaignWizardNoticeCode,
+  destination: typeof CAMPAIGN_WIZARD_ROUTE | typeof CONTENT_CALENDAR_ROUTE,
+  returnQuery?: URLSearchParams,
+): void {
+  redirect(
+    res,
+    campaignNoticeLocation(deps, sessionToken, code, destination, returnQuery),
+    undefined,
+    303,
+  );
+}
+
+function campaignContentSnapshot(
+  item: CompanyContentCatalogItem,
+): CampaignWizardContentSnapshot {
+  const approvalStatus: CampaignWizardContentSnapshot['approvalStatus'] = item.approvalStale
+    ? 'unavailable'
+    : item.approvalStatus === 'approved'
+      || item.approvalStatus === 'pending'
+      || item.approvalStatus === 'rejected'
+      || item.approvalStatus === 'changes_requested'
+      ? item.approvalStatus
+      : 'unavailable';
+  const kindLabel = item.kind === 'social_post' ? 'Social post'
+    : item.kind === 'image' ? 'Artwork'
+      : item.kind === 'video' ? 'Video'
+        : item.kind === 'email' ? 'Email'
+          : item.kind === 'webinar' ? 'Webinar'
+            : item.kind === 'article' ? 'Article'
+              : item.kind === 'document' ? 'Document'
+                : 'Company content';
+  return Object.freeze({
+    contentItemId: item.contentItemId,
+    contentVersionId: item.contentVersionId,
+    contentSha256: item.contentSha256,
+    title: item.title,
+    versionNumber: item.versionNumber,
+    kindLabel,
+    approvalStatus,
+    sourceFresh: item.sourceFresh,
+    publishable: item.publishable,
+  });
+}
+
+function publicSocialPlanningMutations(
+  deps: PostgresPortalDeps,
+  sessionToken: string,
+  snapshot: PortalPublicSocialSnapshot,
+  view: ReturnType<typeof presentContentCalendar>,
+  query: URLSearchParams,
+): ContentCalendarMutationView | undefined {
+  const planning = snapshot.planning;
+  if (!planning) return undefined;
+  const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+  const canManage = snapshot.workspace.canManage;
+  const slotViews = new Map(view.days.flatMap((day) => day.slots).map((slot) => [slot.slotId, slot]));
+  const slots: Record<string, ContentCalendarSlotActionView> = {};
+  for (const row of planning.calendar.items) {
+    const slotId = row.materializedOperationId ?? `${row.intentId}:${row.targetId}`;
+    const presented = slotViews.get(slotId)?.planning;
+    if (!presented) continue;
+    const active = row.planningState !== 'cancelled'
+      && row.planningState !== 'superseded'
+      && row.planningState !== 'materialized';
+    slots[slotId] = Object.freeze({
+      intentId: row.intentId,
+      targetId: row.targetId,
+      intentSha256: row.intentSha256,
+      expectedUpdatedAt: row.updatedAt,
+      ...(active && canManage && deps.publicSocial?.reschedule ? {
+        reschedule: Object.freeze({
+          actionUrl: CONTENT_CALENDAR_RESCHEDULE_TEST_ROUTE,
+          csrfToken,
+          commandKey: randomUUID(),
+        }),
+      } : {}),
+      ...(active && canManage && deps.publicSocial?.cancel ? {
+        cancel: Object.freeze({
+          actionUrl: CONTENT_CALENDAR_CANCEL_TEST_ROUTE,
+          csrfToken,
+          commandKey: randomUUID(),
+        }),
+      } : {}),
+      jitStatus: Object.freeze({
+        state: presented.statusTone,
+        label: presented.statusLabel,
+        detail: presented.statusDetail,
+        nextRevalidationAt: presented.nextRevalidationAt,
+      }),
+    });
+  }
+  const revisions = new Map<string, { value: string; label: string; detail: string }>();
+  for (const row of planning.calendar.items) {
+    const value = `${row.campaignId}:${row.revisionId}`;
+    if (!revisions.has(value)) revisions.set(value, {
+      value,
+      label: row.campaignTitle,
+      detail: `Immutable revision ${row.revisionNumber}`,
+    });
+  }
+  const eligibleContent = view.backlog.filter((item) => item.simulationEligible);
+  const create = canManage && deps.publicSocial?.plan && revisions.size > 0
+    && eligibleContent.length > 0 && planning.targets.items.length > 0
+    ? Object.freeze({
+        actionUrl: CONTENT_CALENDAR_CREATE_TEST_ROUTE,
+        csrfToken,
+        commandKey: randomUUID(),
+        campaignRevisions: Object.freeze([...revisions.values()]),
+        contentVersions: Object.freeze(eligibleContent.map((item) => Object.freeze({
+          value: item.contentVersionId,
+          label: item.title,
+          detail: `Immutable v${item.versionNumber} · ${item.shortHash}…`,
+        }))),
+        targets: Object.freeze(planning.targets.items.map((target) => Object.freeze({
+          value: target.targetId,
+          label: target.targetLabel,
+          detail: `${target.network} · TEST only`,
+        }))),
+      })
+    : undefined;
+  const notice = campaignWizardNoticeFromQuery(
+    query,
+    deps.sessionSecret,
+    sessionToken,
+  );
+  return Object.freeze({
+    ...(create ? { create } : {}),
+    ...(Object.keys(slots).length > 0 ? { slots: Object.freeze(slots) } : {}),
+    ...(notice ? { outcome: notice } : {}),
+  });
+}
+
+function campaignFormKeysAllowed(form: URLSearchParams, allowed: ReadonlySet<string>): boolean {
+  return [...form.keys()].every((key) => allowed.has(key));
+}
+
+async function campaignCommandSnapshot(
+  service: PortalPublicSocialService,
+  identity: PortalCrmRequestIdentity,
+  now: number,
+  selectedDate?: string | null,
+): Promise<PortalPublicSocialSnapshotOutcome> {
+  const asOf = new Date(now).toISOString();
+  const filters = normaliseContentCalendarFilters({ date: selectedDate }, asOf);
+  const range = contentCalendarReadRange(filters.date);
+  return service.snapshot(identity, { from: range.from, to: range.to, limit: 120 });
+}
+
+function campaignDesiredInstant(
+  form: URLSearchParams,
+  workspaceTimezone: string,
+  requireTimezoneEcho = true,
+): string | null {
+  const local = oneFormValue(form, 'desired_for_local');
+  const suppliedTimezone = oneFormValue(form, 'timezone');
+  if (!local || !CAMPAIGN_LOCAL_TIME.test(local)
+      || (requireTimezoneEcho && suppliedTimezone !== workspaceTimezone)) return null;
+  try {
+    return workspaceLocalDateTime(local, workspaceTimezone);
+  } catch {
+    return null;
+  }
+}
+
+function campaignCommandKey(form: URLSearchParams): string | null {
+  const key = oneFormValue(form, 'command_key');
+  return key && /^[\x21-\x7e]{8,200}$/u.test(key) ? key : null;
+}
+
+function campaignMaxAttempts(form: URLSearchParams): number | null {
+  const value = oneFormValue(form, 'max_attempts');
+  return value === '1' || value === '2' || value === '3' ? Number(value) : null;
+}
+
+function campaignCanonicalInstant(value: string | null): value is string {
+  if (!value) return false;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
 }
 
 function crmSnapshotRequest(path: string, query: URLSearchParams): PortalCrmSnapshotRequest {
@@ -1821,6 +2130,374 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
   }
 
+  // ── public-social campaign wizard: approved ids -> one atomic durable TEST plan ──
+  if (deps.kind === 'postgres' && p === CAMPAIGN_WIZARD_ROUTE && method === 'GET') {
+    if (!deps.publicSocial || !deps.companyContent) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Campaign Builder not connected',
+        message: 'The protected TEST planner and company-content catalogue must both be enabled.',
+        active: 'content',
+        backHref: CONTENT_CALENDAR_ROUTE,
+        backLabel: 'Return to Campaign Calendar',
+      }));
+    }
+    const asOf = new Date(now).toISOString();
+    const selected = normaliseContentCalendarFilters({}, asOf);
+    const range = contentCalendarReadRange(selected.date);
+    const identity = crmIdentity(sessionToken, deps);
+    try {
+      const [socialOutcome, contentOutcome] = await Promise.all([
+        deps.publicSocial.snapshot(identity, { from: range.from, to: range.to, limit: 120 }),
+        deps.companyContent.snapshot(identity, { limit: 100 }),
+      ]);
+      const failure = !socialOutcome.ok
+        ? socialOutcome
+        : !contentOutcome.ok
+          ? contentOutcome
+          : null;
+      if (failure) {
+        const status = failure.kind === 'unauthenticated' || failure.kind === 'forbidden'
+          ? 403 : failure.kind === 'validation' ? 400 : failure.kind === 'not_found' ? 404 : 503;
+        return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+          title: status === 503 ? 'Campaign Builder temporarily unavailable' : 'Campaign Builder unavailable',
+          message: failure.message,
+          active: 'content',
+          backHref: CONTENT_CALENDAR_ROUTE,
+          backLabel: 'Return to Campaign Calendar',
+        }));
+      }
+      if (!socialOutcome.ok || !contentOutcome.ok) {
+        throw new Error('campaign wizard projection escaped its safe outcome boundary');
+      }
+      const social = socialOutcome.snapshot;
+      const content = contentOutcome.snapshot;
+      if (social.workspace.workspaceId !== content.workspace.workspaceId) {
+        throw new Error('campaign wizard workspace mismatch');
+      }
+      const allContent = content.catalog.items.map(campaignContentSnapshot);
+      const view = presentCampaignWizard({
+        content: allContent.filter((item, index) => content.catalog.items[index]?.kind === 'social_post'),
+        media: allContent.filter((_item, index) => {
+          const kind = content.catalog.items[index]?.kind;
+          return kind === 'image' || kind === 'video';
+        }),
+        targets: (social.planning?.targets.items ?? []).map((target) => Object.freeze({
+          ...target,
+          planningEnabled: true,
+        })),
+        sourceTruncated: content.catalog.nextCursor !== null
+          || (social.planning?.targets.hasMore ?? false),
+      }, {
+        workspaceName: social.workspace.workspaceName,
+        timezone: social.workspace.timezone,
+        asOf: social.workspace.snapshotAt,
+      });
+      const contentNavigation = deps.productProfile?.contentWorkspace;
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      return sendHtml(res, 200, operationalPage(
+        social.workspace.workspaceName,
+        renderCampaignWizardBody(view, {
+          ...(social.workspace.canManage && deps.publicSocial.createCampaignPlan ? {
+            action: {
+              actionUrl: CAMPAIGN_WIZARD_CREATE_TEST_ROUTE,
+              csrfToken,
+              commandKey: randomUUID(),
+              returnTo: CONTENT_CALENDAR_ROUTE,
+            },
+          } : {}),
+          outcome: campaignWizardNoticeFromQuery(
+            url.searchParams,
+            deps.sessionSecret,
+            sessionToken,
+          ),
+          companyAssetsAvailable: Boolean(
+            deps.companyAssets && contentNavigation?.assetsRoute === COMPANY_ASSETS_ROUTE
+          ),
+          assetsLabel: contentNavigation?.assetsLabel,
+          brandBrainAvailable: Boolean(
+            deps.brandBrain && contentNavigation?.brainRoute === BRAND_BRAIN_ROUTE
+          ),
+          brainLabel: contentNavigation?.brainLabel,
+        }),
+        deps,
+        'content',
+        csrfToken,
+      ));
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Campaign Builder temporarily unavailable',
+        message: 'No campaign, content, target, provider or schedule state was changed.',
+        active: 'content',
+        backHref: CONTENT_CALENDAR_ROUTE,
+        backLabel: 'Return to Campaign Calendar',
+      }));
+    }
+  }
+
+  if (deps.kind === 'postgres' && p === CAMPAIGN_WIZARD_CREATE_TEST_ROUTE && method === 'POST') {
+    if (!deps.publicSocial?.createCampaignPlan) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Campaign command not connected',
+        message: 'The atomic TEST campaign command is not enabled.',
+        active: 'content',
+        backHref: CAMPAIGN_WIZARD_ROUTE,
+        backLabel: 'Return to Campaign Builder',
+      }));
+    }
+    const form = await readMultiValueForm(req);
+    const allowed = new Set([
+      '_csrf', 'command_key', 'environment', 'timezone', 'return_to', 'title', 'objective',
+      'content_version_id', 'media_version_ids', 'target_ids', 'desired_for_local',
+      'max_attempts', 'confirm_test_only',
+    ]);
+    if (!form || !campaignFormKeysAllowed(form, allowed)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '')
+        || oneFormValue(form, 'environment') !== 'test'
+        || oneFormValue(form, 'confirm_test_only') !== 'confirmed') {
+      return campaignNoticeRedirect(res, deps, sessionToken, 'invalid', CAMPAIGN_WIZARD_ROUTE);
+    }
+    const commandKey = campaignCommandKey(form);
+    const title = campaignFormText(oneFormValue(form, 'title'), 200);
+    const objective = campaignFormText(oneFormValue(form, 'objective'), 2_000);
+    const contentVersionId = campaignUuidValues(form, 'content_version_id', 1, 1)?.[0] ?? null;
+    const targetIds = campaignUuidValues(form, 'target_ids', 1, 9);
+    const mediaVersionIds = campaignUuidValues(form, 'media_version_ids', 0, 10);
+    const maxAttempts = campaignMaxAttempts(form);
+    if (!commandKey || !title || !objective || !contentVersionId
+        || !targetIds || !mediaVersionIds || maxAttempts === null) {
+      return campaignNoticeRedirect(res, deps, sessionToken, 'invalid', CAMPAIGN_WIZARD_ROUTE);
+    }
+    try {
+      const workspaceOutcome = await campaignCommandSnapshot(
+        deps.publicSocial,
+        crmIdentity(sessionToken, deps),
+        now,
+      );
+      if (!workspaceOutcome.ok) {
+        return campaignNoticeRedirect(
+          res, deps, sessionToken, campaignFailureNotice(workspaceOutcome.kind), CAMPAIGN_WIZARD_ROUTE,
+        );
+      }
+      const desiredFor = campaignDesiredInstant(form, workspaceOutcome.snapshot.workspace.timezone);
+      if (!desiredFor) {
+        return campaignNoticeRedirect(res, deps, sessionToken, 'invalid', CAMPAIGN_WIZARD_ROUTE);
+      }
+      const outcome = await deps.publicSocial.createCampaignPlan(
+        crmIdentity(sessionToken, deps),
+        {
+          commandKey,
+          title,
+          objective,
+          contentVersionId,
+          desiredFor,
+          maxAttempts,
+          targetIds,
+          mediaVersionIds,
+        },
+      );
+      if (!outcome.ok) {
+        return campaignNoticeRedirect(
+          res, deps, sessionToken, campaignFailureNotice(outcome.kind), CAMPAIGN_WIZARD_ROUTE,
+        );
+      }
+      const requestedReturn = oneFormValue(form, 'return_to');
+      const destination = requestedReturn === CONTENT_CALENDAR_ROUTE
+        && isSafeCampaignWizardPortalPath(requestedReturn)
+        ? CONTENT_CALENDAR_ROUTE
+        : CAMPAIGN_WIZARD_ROUTE;
+      return campaignNoticeRedirect(
+        res,
+        deps,
+        sessionToken,
+        outcome.result.disposition === 'replayed' ? 'replayed' : 'planned',
+        destination,
+      );
+    } catch {
+      return campaignNoticeRedirect(res, deps, sessionToken, 'unavailable', CAMPAIGN_WIZARD_ROUTE);
+    }
+  }
+
+  if (deps.kind === 'postgres' && p === CONTENT_CALENDAR_CREATE_TEST_ROUTE && method === 'POST') {
+    if (!deps.publicSocial?.plan) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'TEST planning command not connected',
+        message: 'No campaign, provider or schedule state was changed.',
+        active: 'content',
+        backHref: CONTENT_CALENDAR_ROUTE,
+        backLabel: 'Return to Campaign Calendar',
+      }));
+    }
+    const form = await readMultiValueForm(req);
+    const allowed = new Set([
+      '_csrf', 'command_key', 'environment', 'timezone', 'campaign_revision_key',
+      'content_version_id', 'target_ids', 'desired_for_local', 'max_attempts',
+      'confirm_test_only',
+    ]);
+    if (!form || !campaignFormKeysAllowed(form, allowed)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '')
+        || oneFormValue(form, 'environment') !== 'test'
+        || oneFormValue(form, 'confirm_test_only') !== 'confirmed') {
+      return campaignNoticeRedirect(res, deps, sessionToken, 'invalid', CONTENT_CALENDAR_ROUTE);
+    }
+    const revisionKey = oneFormValue(form, 'campaign_revision_key')?.split(':') ?? [];
+    const commandKey = campaignCommandKey(form);
+    const contentVersionId = campaignUuidValues(form, 'content_version_id', 1, 1)?.[0] ?? null;
+    const targetIds = campaignUuidValues(form, 'target_ids', 1, 9);
+    const maxAttempts = campaignMaxAttempts(form);
+    if (revisionKey.length !== 2 || !CRM_OBJECT_ID.test(revisionKey[0] ?? '')
+        || !CRM_OBJECT_ID.test(revisionKey[1] ?? '') || !commandKey || !contentVersionId
+        || !targetIds || maxAttempts === null) {
+      return campaignNoticeRedirect(res, deps, sessionToken, 'invalid', CONTENT_CALENDAR_ROUTE);
+    }
+    try {
+      const workspaceOutcome = await campaignCommandSnapshot(
+        deps.publicSocial, crmIdentity(sessionToken, deps), now,
+      );
+      if (!workspaceOutcome.ok) {
+        return campaignNoticeRedirect(
+          res, deps, sessionToken, campaignFailureNotice(workspaceOutcome.kind), CONTENT_CALENDAR_ROUTE,
+        );
+      }
+      const desiredFor = campaignDesiredInstant(form, workspaceOutcome.snapshot.workspace.timezone);
+      if (!desiredFor) {
+        return campaignNoticeRedirect(res, deps, sessionToken, 'invalid', CONTENT_CALENDAR_ROUTE);
+      }
+      const outcome = await deps.publicSocial.plan(crmIdentity(sessionToken, deps), {
+        commandKey,
+        campaignId: revisionKey[0]!.toLowerCase(),
+        revisionId: revisionKey[1]!.toLowerCase(),
+        contentVersionId,
+        desiredFor,
+        maxAttempts,
+        targetIds,
+        mediaVersionIds: [],
+      });
+      return campaignNoticeRedirect(
+        res,
+        deps,
+        sessionToken,
+        outcome.ok
+          ? outcome.result.disposition === 'replayed' ? 'replayed' : 'planned'
+          : campaignFailureNotice(outcome.kind),
+        CONTENT_CALENDAR_ROUTE,
+      );
+    } catch {
+      return campaignNoticeRedirect(res, deps, sessionToken, 'unavailable', CONTENT_CALENDAR_ROUTE);
+    }
+  }
+
+  if (deps.kind === 'postgres'
+      && (p === CONTENT_CALENDAR_RESCHEDULE_TEST_ROUTE || p === CONTENT_CALENDAR_CANCEL_TEST_ROUTE)
+      && method === 'POST') {
+    const rescheduling = p === CONTENT_CALENDAR_RESCHEDULE_TEST_ROUTE;
+    if (!deps.publicSocial || (rescheduling ? !deps.publicSocial.reschedule : !deps.publicSocial.cancel)) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'TEST planning command not connected',
+        message: 'No campaign, provider or schedule state was changed.',
+        active: 'content',
+        backHref: CONTENT_CALENDAR_ROUTE,
+        backLabel: 'Return to Campaign Calendar',
+      }));
+    }
+    const form = await readMultiValueForm(req);
+    const allowed = new Set([
+      '_csrf', 'command_key', 'intent_id', 'target_id', 'intent_sha256',
+      'expected_updated_at', 'desired_for_local', 'reason',
+      'confirm_change', 'confirm_cancel', 'return_mode', 'return_date', 'return_channel',
+    ]);
+    const returnQuery = form ? campaignCalendarReturnQuery(form) : new URLSearchParams();
+    if (!form || !campaignFormKeysAllowed(form, allowed)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '')
+        || oneFormValue(form, rescheduling ? 'confirm_change' : 'confirm_cancel') !== 'confirmed') {
+      return campaignNoticeRedirect(
+        res, deps, sessionToken, 'invalid', CONTENT_CALENDAR_ROUTE, returnQuery,
+      );
+    }
+    const commandKey = campaignCommandKey(form);
+    const intentId = (oneFormValue(form, 'intent_id') ?? '').toLowerCase();
+    const targetId = (oneFormValue(form, 'target_id') ?? '').toLowerCase();
+    const expectedSha256 = oneFormValue(form, 'intent_sha256');
+    const expectedUpdatedAt = oneFormValue(form, 'expected_updated_at');
+    const reason = campaignFormText(oneFormValue(form, 'reason'), 500);
+    if (!commandKey || !CRM_OBJECT_ID.test(intentId) || !CRM_OBJECT_ID.test(targetId)
+        || !expectedSha256 || !/^[a-f0-9]{64}$/u.test(expectedSha256)
+        || !campaignCanonicalInstant(expectedUpdatedAt)
+        || !reason) {
+      return campaignNoticeRedirect(
+        res, deps, sessionToken, 'invalid', CONTENT_CALENDAR_ROUTE, returnQuery,
+      );
+    }
+    try {
+      const snapshotOutcome = await campaignCommandSnapshot(
+        deps.publicSocial,
+        crmIdentity(sessionToken, deps),
+        now,
+        oneFormValue(form, 'return_date'),
+      );
+      if (!snapshotOutcome.ok) {
+        return campaignNoticeRedirect(
+          res, deps, sessionToken, campaignFailureNotice(snapshotOutcome.kind),
+          CONTENT_CALENDAR_ROUTE, returnQuery,
+        );
+      }
+      const exact = snapshotOutcome.snapshot.planning?.calendar.items.find((row) => (
+        row.intentId === intentId && row.targetId === targetId
+      ));
+      if (!exact) {
+        return campaignNoticeRedirect(
+          res, deps, sessionToken, 'missing', CONTENT_CALENDAR_ROUTE, returnQuery,
+        );
+      }
+      if (exact.intentSha256 !== expectedSha256 || exact.updatedAt !== expectedUpdatedAt) {
+        return campaignNoticeRedirect(
+          res, deps, sessionToken, 'conflict', CONTENT_CALENDAR_ROUTE, returnQuery,
+        );
+      }
+      if (rescheduling) {
+        const desiredFor = campaignDesiredInstant(
+          form,
+          snapshotOutcome.snapshot.workspace.timezone,
+          false,
+        );
+        if (!desiredFor) {
+          return campaignNoticeRedirect(
+            res, deps, sessionToken, 'invalid', CONTENT_CALENDAR_ROUTE, returnQuery,
+          );
+        }
+        const outcome = await deps.publicSocial.reschedule!(crmIdentity(sessionToken, deps), {
+          commandKey,
+          predecessorIntentId: intentId,
+          targetId,
+          newDesiredFor: desiredFor,
+          reason,
+        });
+        return campaignNoticeRedirect(
+          res, deps, sessionToken,
+          outcome.ok ? outcome.result.disposition === 'replayed' ? 'replayed' : 'rescheduled'
+            : campaignFailureNotice(outcome.kind),
+          CONTENT_CALENDAR_ROUTE,
+          returnQuery,
+        );
+      }
+      const outcome = await deps.publicSocial.cancel!(crmIdentity(sessionToken, deps), {
+        intentId,
+        targetId,
+        reason,
+      });
+      return campaignNoticeRedirect(
+        res, deps, sessionToken,
+        outcome.ok ? outcome.result.disposition === 'replayed' ? 'replayed' : 'cancelled'
+          : campaignFailureNotice(outcome.kind),
+        CONTENT_CALENDAR_ROUTE,
+        returnQuery,
+      );
+    } catch {
+      return campaignNoticeRedirect(
+        res, deps, sessionToken, 'unavailable', CONTENT_CALENDAR_ROUTE, returnQuery,
+      );
+    }
+  }
+
   // ── public-social campaigns: exact body-free command projection, read-only ──
   if (deps.kind === 'postgres' && p === PUBLIC_SOCIAL_CAMPAIGNS_ROUTE && method === 'GET') {
     if (!deps.publicSocial) {
@@ -1980,6 +2657,8 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         social.calendar.items,
         content.catalog,
         social.calendar.hasMore,
+        social.planning?.calendar.items ?? [],
+        social.planning?.calendar.hasMore ?? false,
       );
       const view = presentContentCalendar(snapshot, {
         workspaceName: social.workspace.workspaceName,
@@ -1989,6 +2668,13 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       });
       const contentNavigation = deps.productProfile?.contentWorkspace;
       const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      const mutations = publicSocialPlanningMutations(
+        deps,
+        sessionToken,
+        social,
+        view,
+        url.searchParams,
+      );
       return sendHtml(res, 200, operationalPage(
         social.workspace.workspaceName,
         renderContentCalendarBody(view, {
@@ -2002,12 +2688,13 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
             && contentNavigation?.brainRoute === BRAND_BRAIN_ROUTE
           ),
           brainLabel: contentNavigation?.brainLabel,
+          mutations,
         }),
         deps,
         'content',
         csrfToken,
       ), undefined, {
-        'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        'content-security-policy': "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
       });
     } catch {
       return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
