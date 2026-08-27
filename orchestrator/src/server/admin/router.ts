@@ -7,10 +7,24 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { StripeConfig } from '../config.js';
+import { loadPortalAbuseRuntimeConfig, type StripeConfig } from '../config.js';
 import { RUNS_DIR } from '../../paths.js';
+import { createPortalRequestContextResolver } from '../../portal/request-context.js';
 import {
-  passwordOk, signSession, verifySession, parseCookies, sessionCookie, clearCookie, SESSION_COOKIE,
+  ADMIN_LOGIN_CSRF_COOKIE,
+  adminCsrfToken,
+  adminLoginCsrfCookie,
+  adminLoginCsrfToken,
+  clearCookie,
+  parseCookies,
+  passwordOk,
+  sessionCookie,
+  SESSION_COOKIE,
+  signSession,
+  verifyAdminCsrf,
+  verifyAdminLoginCsrf,
+  verifySession,
+  verifyTotp,
 } from './session.js';
 import { listRuns, getRunDetail, readDeliverable, listOrders } from './store.js';
 import { loginPage, dashboardPage, runDetailPage, renderDeliverable } from './views.js';
@@ -66,11 +80,43 @@ function readForm(req: IncomingMessage): Promise<Record<string, string>> {
   });
 }
 
-function loginSource(req: IncomingMessage): string {
-  const forwarded = req.headers['x-forwarded-for'];
-  return (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim()
-    || req.socket?.remoteAddress
-    || 'unknown';
+function loginSource(
+  req: IncomingMessage,
+  cfg: StripeConfig,
+  env: NodeJS.ProcessEnv,
+): string | null {
+  try {
+    const runtime = loadPortalAbuseRuntimeConfig(Boolean(cfg.production), env);
+    const context = createPortalRequestContextResolver({
+      hashSecret: runtime.hashSecret,
+      proxyMode: runtime.proxyMode,
+      directClientAddress: (request) => request.socket?.remoteAddress,
+    })(req);
+    return context?.clientAddress ?? null;
+  } catch {
+    // Production must never fall back to the proxy peer or an appendable
+    // forwarding header when its authoritative Render evidence is unavailable.
+    return null;
+  }
+}
+
+function sendLogin(
+  res: ServerResponse,
+  code: number,
+  cfg: StripeConfig,
+  secure: boolean,
+  error?: string,
+  existingCsrf?: string,
+  extra: Record<string, string> = {},
+): void {
+  const csrf = existingCsrf || adminLoginCsrfToken(cfg.sessionSecret);
+  sendHtml(
+    res,
+    code,
+    loginPage(error, csrf, Boolean(cfg.adminTotpSecret)),
+    adminLoginCsrfCookie(csrf, secure),
+    extra,
+  );
 }
 
 /** Handle a request under /admin. Returns nothing — always writes a response. */
@@ -80,6 +126,7 @@ export async function handleAdmin(
   cfg: StripeConfig,
   runsDir: string = RUNS_DIR,
   loginThrottle: Pick<InMemoryLoginThrottle, 'reserve' | 'failure' | 'success'> = DEFAULT_ADMIN_LOGIN_THROTTLE,
+  runtimeEnv: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
   if (!cfg.adminPassword) { sendHtml(res, 404, '<h1>Admin is disabled</h1><p>Set ADMIN_PASSWORD to enable the control room.</p>'); return; }
 
@@ -88,36 +135,79 @@ export async function handleAdmin(
   const method = req.method ?? 'GET';
   const secure = req.headers['x-forwarded-proto'] === 'https' || cfg.publicBaseUrl.startsWith('https');
   const now = Date.now();
-  const authed = verifySession(cfg.sessionSecret, parseCookies(req.headers.cookie)[SESSION_COOKIE], now);
+  const cookies = parseCookies(req.headers.cookie);
+  const sessionToken = cookies[SESSION_COOKIE];
+  const adminSessionEpoch = cfg.adminSessionEpoch ?? 0;
+  const authed = verifySession(cfg.sessionSecret, sessionToken, now, adminSessionEpoch);
 
   // ── login / logout (no auth required) ──
-  if (p === '/admin/login' && method === 'GET') { sendHtml(res, 200, loginPage()); return; }
+  if (p === '/admin/login' && method === 'GET') {
+    if (authed) { redirect(res, '/admin'); return; }
+    sendLogin(res, 200, cfg, secure);
+    return;
+  }
   if (p === '/admin/login' && method === 'POST') {
-    const throttleKey = `source:${loginSource(req)}`;
+    const form = await readForm(req);
+    const loginCsrf = cookies[ADMIN_LOGIN_CSRF_COOKIE];
+    if (!verifyAdminLoginCsrf(cfg.sessionSecret, loginCsrf, form._csrf)) {
+      sendLogin(res, 403, cfg, secure, 'Refresh the sign-in page and try again.');
+      return;
+    }
+    const source = loginSource(req, cfg, runtimeEnv);
+    if (!source) {
+      sendLogin(res, 503, cfg, secure, 'Secure sign-in is temporarily unavailable. Try again shortly.', loginCsrf, {
+        'retry-after': '30',
+      });
+      return;
+    }
+    const throttleKey = `source:${source}`;
     const throttle = loginThrottle.reserve(throttleKey, now);
     if (!throttle.allowed) {
-      sendHtml(res, 429, loginPage('Too many login attempts. Try again later.'), undefined, {
+      sendLogin(res, 429, cfg, secure, 'Too many login attempts. Try again later.', loginCsrf, {
         'retry-after': String(throttle.retryAfterSeconds),
       });
       return;
     }
-    const form = await readForm(req);
-    if (passwordOk(form.password ?? '', cfg.adminPassword)) {
+    const passwordAccepted = passwordOk(form.password ?? '', cfg.adminPassword);
+    const totpAccepted = cfg.adminTotpSecret
+      ? verifyTotp(cfg.adminTotpSecret, form.totp, now)
+      : true;
+    if (passwordAccepted && totpAccepted) {
       loginThrottle.success(throttleKey);
-      redirect(res, '/admin', sessionCookie(signSession(cfg.sessionSecret, now), secure));
+      redirect(res, '/admin', sessionCookie(
+        signSession(cfg.sessionSecret, now, undefined, adminSessionEpoch),
+        secure,
+      ));
     } else {
       loginThrottle.failure(throttleKey, now);
-      sendHtml(res, 401, loginPage('Wrong password.'));
+      sendLogin(
+        res,
+        401,
+        cfg,
+        secure,
+        cfg.adminTotpSecret ? 'Wrong password or authenticator code.' : 'Wrong password.',
+        loginCsrf,
+      );
     }
     return;
   }
-  if (p === '/admin/logout' && method === 'POST') { redirect(res, '/admin/login', clearCookie(secure)); return; }
 
   // ── everything below requires a session ──
   if (!authed) { redirect(res, '/admin/login'); return; }
+  const csrf = adminCsrfToken(cfg.sessionSecret, sessionToken!);
+
+  if (p === '/admin/logout' && method === 'POST') {
+    const form = await readForm(req);
+    if (!verifyAdminCsrf(cfg.sessionSecret, sessionToken, form._csrf)) {
+      sendHtml(res, 403, '<h1>Refresh needed</h1><p>Your session remains active.</p>');
+      return;
+    }
+    redirect(res, '/admin/login', clearCookie(secure));
+    return;
+  }
 
   if (p === '/admin' && method === 'GET') {
-    sendHtml(res, 200, dashboardPage(listRuns(runsDir), listOrders(cfg.ordersFile)));
+    sendHtml(res, 200, dashboardPage(listRuns(runsDir), listOrders(cfg.ordersFile), csrf));
     return;
   }
 
@@ -129,7 +219,7 @@ export async function handleAdmin(
     if (!detail) { sendHtml(res, 404, '<h1>Run not found</h1><p><a href="/admin">← back</a></p>'); return; }
     const stage = url.searchParams.get('view');
     const view = stage && RUN_ID.test(stage) ? { stage, html: renderDeliverable(readDeliverable(runsDir, id, stage)) } : null;
-    sendHtml(res, 200, runDetailPage(detail, view));
+    sendHtml(res, 200, runDetailPage(detail, view, csrf));
     return;
   }
 
@@ -142,6 +232,10 @@ export async function handleAdmin(
     if (!fs.existsSync(bundlePath)) { sendHtml(res, 400, '<h1>No pack to sign off</h1><p>This run hasn’t assembled yet. <a href="/admin/run/' + encodeURIComponent(id) + '">← back</a></p>'); return; }
     const bundle = JSON.parse(fs.readFileSync(bundlePath, 'utf8')) as BundleLike;
     const form = await readForm(req);
+    if (!verifyAdminCsrf(cfg.sessionSecret, sessionToken, form._csrf)) {
+      sendHtml(res, 403, '<h1>Refresh needed</h1><p>No sign-off decision was recorded.</p>');
+      return;
+    }
     try {
       const at = new Date().toISOString();
       const decision = form.decision === 'sent_back'
@@ -154,8 +248,18 @@ export async function handleAdmin(
       redirect(res, '/admin/run/' + encodeURIComponent(id));
     } catch (e) {
       const detail = getRunDetail(runsDir, id);
-      const msg = e instanceof SignoffError ? e.message : (e as Error).message;
-      sendHtml(res, 400, detail ? runDetailPage(detail, { stage: 'Sign-off', html: `<p class="err">${msg}</p>` }) : `<h1>${msg}</h1>`);
+      // Validation errors are fixed, trusted copy. Filesystem/runtime failures
+      // may contain paths or credentials and must never cross the HTTP boundary.
+      const expectedFailure = e instanceof SignoffError;
+      const msg = expectedFailure
+        ? e.message
+        : 'Sign-off could not be completed. No decision was recorded; try again shortly.';
+      const safeMessage = msg.replace(/[&<>"']/g, (character) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[character] as string));
+      sendHtml(res, expectedFailure ? 400 : 503, detail
+        ? runDetailPage(detail, { stage: 'Sign-off', html: `<p class="err">${safeMessage}</p>` }, csrf)
+        : `<h1>${safeMessage}</h1>`);
     }
     return;
   }

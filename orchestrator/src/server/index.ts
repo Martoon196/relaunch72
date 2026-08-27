@@ -70,10 +70,12 @@ import {
 import { propertyPredatorDarkProductionBlockers } from '../ops/property-predator-dark-production.js';
 import { createCachedRuntimeReadinessProbe } from '../ops/runtime-readiness-cache.js';
 import { createPortalRequestContextResolver } from '../portal/request-context.js';
+import { createSafeTelemetryLogger } from '../ops/safe-telemetry.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ORCH_ROOT = path.resolve(HERE, '../..');
 const CLI = path.join(ORCH_ROOT, 'src', 'cli.ts');
+const SERVICE_TELEMETRY = createSafeTelemetryLogger({ service: 'relaunch72-server' });
 
 /** Persist the accepted intake + immutable paid scope, then spawn the build. */
 function createKick(intakeDir: string, opts: { mockOnly: boolean; maxConcurrent: number }) {
@@ -97,16 +99,27 @@ function createKick(intakeDir: string, opts: { mockOnly: boolean; maxConcurrent:
       execution_mode: opts.mockOnly ? 'mock' : 'live',
       intake_file: file,
     }, null, 2), 'utf8');
-    console.log(`▶ Intake accepted — kicking ${opts.mockOnly ? 'MOCK ' : ''}${entitlement.product} pipeline through ${entitlement.through} for ${ref}`);
-    // inherit stdout/stderr so the build's progress + errors show in the host logs
-    // (was 'ignore', which made every build invisible).
+    // This id is generated independently of the Stripe session and filesystem
+    // reference, so service logs can correlate the child lifecycle without
+    // exposing payment/customer identifiers.
+    const correlationId = SERVICE_TELEMETRY.nextCorrelationId();
+    SERVICE_TELEMETRY.emit('info', 'pipeline.accepted', { correlationId });
+    // Pipeline output can contain intake/customer content and provider-authored
+    // error text. The service log records only the safe correlated lifecycle;
+    // detailed build evidence remains in the protected run artifacts.
     activeBuilds += 1;
     const args = ['tsx', CLI, '--input', file, '--through', entitlement.through, ...(opts.mockOnly ? ['--mock'] : [])];
-    const child = spawn('npx', args, { cwd: ORCH_ROOT, detached: true, stdio: ['ignore', 'inherit', 'inherit'] });
+    const child = spawn('npx', args, { cwd: ORCH_ROOT, detached: true, stdio: 'ignore' });
     let released = false;
     const release = (): void => { if (!released) { released = true; activeBuilds -= 1; } };
-    child.on('error', (error) => { release(); console.error(`■ Pipeline for ${ref} failed to start: ${error.message}`); });
-    child.on('exit', (code) => { release(); console.log(`■ Pipeline for ${ref} exited (code ${code ?? 'null'})`); });
+    child.on('error', (error) => {
+      release();
+      SERVICE_TELEMETRY.emit('error', 'pipeline.start_failed', { correlationId, error });
+    });
+    child.on('exit', () => {
+      release();
+      SERVICE_TELEMETRY.emit('info', 'pipeline.exited', { correlationId });
+    });
     child.unref();
     return file;
   };
@@ -126,24 +139,24 @@ function unconfiguredStripe(): StripeLike {
 async function ensurePrices(stripe: StripeLike, cfg: StripeConfig): Promise<void> {
   try {
     const { priceIds, provisioned, created, reused } = await ensureCatalogPrices(
-      stripe as unknown as StripeCatalogLike, cfg.priceIds, 'usd', (m) => console.log('  ' + m));
+      stripe as unknown as StripeCatalogLike, cfg.priceIds, 'usd');
     if (provisioned) {
       Object.assign(cfg.priceIds, priceIds);
       console.log(`Catalog ready — ${created.length} created, ${reused.length} reused.`);
     }
   } catch (e) {
-    console.warn(`⚠  Stripe price auto-provision failed: ${(e as Error).message}. Checkout will remain unavailable (503) until it succeeds — restart the service, or set STRIPE_PRICE_* manually.`);
+    SERVICE_TELEMETRY.emit('warn', 'stripe.catalog.provision_failed', { error: e });
   }
   if (cfg.platformSubscriptionsEnabled) {
     try {
       const { priceIds, provisioned, created, reused } = await ensurePlanPrices(
-        stripe as unknown as StripeCatalogLike, cfg.planIds, 'usd', (m) => console.log('  ' + m));
+        stripe as unknown as StripeCatalogLike, cfg.planIds, 'usd');
       if (provisioned) {
         Object.assign(cfg.planIds, priceIds);
         console.log(`Preview plans ready — ${created.length} created, ${reused.length} reused.`);
       }
     } catch (e) {
-      console.warn(`⚠  Stripe plan auto-provision failed: ${(e as Error).message}. Subscription checkout will stay unavailable.`);
+      SERVICE_TELEMETRY.emit('warn', 'stripe.plan_catalog.provision_failed', { error: e });
     }
   }
 }
@@ -376,8 +389,10 @@ async function main(): Promise<void> {
         const setupUrl = new URL('/portal/setup', portalBaseUrl!);
         setupUrl.searchParams.set('token', r.setupToken);
         const msg = loginEmail({ to: r.email, tenantName: r.name, setupUrl: setupUrl.toString(), generated: r.generated, from: process.env.EMAIL_FROM?.trim() });
-        const sent = await makePostmark(postmarkToken).send(msg);
-        console.log(`✉  Account setup email sent to ${r.email} (id ${sent.messageId})`);
+        await makePostmark(postmarkToken).send(msg);
+        // Provider acceptance is useful operational evidence; the recipient and
+        // provider message id are deliberately not service-log fields.
+        SERVICE_TELEMETRY.emit('info', 'portal.setup_email.accepted');
       }
     : undefined;
 
@@ -417,7 +432,7 @@ async function main(): Promise<void> {
     } catch (error) {
       // No legacy-cookie fallback in requested database mode. Payments may stay
       // live for liveness, but the customer portal is deliberately not mounted.
-      console.warn(`⚠  PostgreSQL portal unavailable; portal remains unmounted (${(error as Error).name || 'readiness error'}). See protected service logs for the readiness failure.`);
+      SERVICE_TELEMETRY.emit('warn', 'portal.readiness_failed', { error });
     }
   }
 
@@ -486,7 +501,7 @@ async function main(): Promise<void> {
       console.log(cfg.production
         ? 'Legacy JSON client portal mounted at /portal — production demo seeding disabled.'
         : allowDemoSeed
-          ? `Legacy JSON client portal mounted at /portal — explicit development demo: ${process.env.PORTAL_DEMO_EMAIL?.trim() || 'owner@frayne-electrical.co.uk'}`
+          ? 'Legacy JSON client portal mounted at /portal — explicit development demo enabled.'
           : 'Legacy JSON client portal mounted at /portal — development demo seeding disabled.');
     }
   } catch (e) {
@@ -494,7 +509,7 @@ async function main(): Promise<void> {
       await postgresPortal.close();
       postgresPortal = undefined;
     }
-    console.warn(`⚠  Client portal not mounted: ${(e as Error).message}`);
+    SERVICE_TELEMETRY.emit('warn', 'portal.mount_failed', { error: e });
   }
 
   // On an accepted intake, provision that customer's portal login in the background.
@@ -506,8 +521,8 @@ async function main(): Promise<void> {
         const email = order.email;
         if (!email) return;
         void bundle!.provision({ email, name: String(intake.A1 ?? 'Your business'), intake })
-          .then((r) => console.log(`▶ Portal account ${r.existing ? 'exists' : 'provisioned'} for ${r.email}${r.generated ? '' : ' [brand brain deferred]'}${!r.existing && !postmarkToken ? ' [development only: setup email not delivered]' : ''}`))
-          .catch((err) => console.warn(`Portal provision failed for ${email}: ${(err as Error).message}`));
+          .then(() => SERVICE_TELEMETRY.emit('info', 'portal.provision.accepted'))
+          .catch((error) => SERVICE_TELEMETRY.emit('warn', 'portal.provision.failed', { error }));
       }
     : undefined;
 
@@ -601,11 +616,14 @@ async function main(): Promise<void> {
       ]);
     } catch (error) {
       process.exitCode = 1;
-      console.error(`Shutdown failed: ${(error as Error).name || 'Error'}`);
+      SERVICE_TELEMETRY.emit('error', 'server.shutdown_failed', { error });
     }
   };
   process.once('SIGINT', () => { void shutdown('SIGINT'); });
   process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
 }
 
-main().catch((e) => { console.error(`Fatal: ${(e as Error).message}`); process.exit(1); });
+main().catch((error) => {
+  SERVICE_TELEMETRY.emit('error', 'server.fatal', { error });
+  process.exit(1);
+});

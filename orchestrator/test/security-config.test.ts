@@ -69,10 +69,41 @@ test('a non-loopback bind is hardened even when NODE_ENV was forgotten', () => {
   assert.equal(remote.host, '0.0.0.0');
 });
 
-test('enabled production admin access requires a strong password', () => {
+test('enabled production admin access requires password, TOTP and a revocation epoch', () => {
   const base = { NODE_ENV: 'production', SESSION_SECRET: 'dedicated-production-session-secret' } as NodeJS.ProcessEnv;
   assert.throws(() => loadStripeConfig({ ...base, ADMIN_PASSWORD: 'weak-password' }), /ADMIN_PASSWORD/);
-  assert.equal(loadStripeConfig({ ...base, ADMIN_PASSWORD: 'long-random-admin-password' }).adminPassword, 'long-random-admin-password');
+  assert.throws(
+    () => loadStripeConfig({ ...base, ADMIN_PASSWORD: 'long-random-admin-password' }),
+    /ADMIN_TOTP_SECRET/,
+  );
+  const withTotp = {
+    ...base,
+    ADMIN_PASSWORD: 'long-random-admin-password',
+    ADMIN_TOTP_SECRET: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
+  };
+  assert.throws(() => loadStripeConfig(withTotp), /ADMIN_SESSION_EPOCH/);
+  const configured = loadStripeConfig({ ...withTotp, ADMIN_SESSION_EPOCH: '1' });
+  assert.equal(configured.adminPassword, 'long-random-admin-password');
+  assert.equal(configured.adminTotpSecret, withTotp.ADMIN_TOTP_SECRET);
+  assert.equal(configured.adminSessionEpoch, 1);
+  assert.throws(
+    () => loadStripeConfig({ ...withTotp, ADMIN_SESSION_EPOCH: '-1' }),
+    /ADMIN_SESSION_EPOCH/,
+  );
+  assert.throws(
+    () => loadStripeConfig({ ...base, ADMIN_TOTP_SECRET: 'not-base32' }),
+    /ADMIN_TOTP_SECRET/,
+  );
+});
+
+test('sandbox Render contract documents fail-closed admin MFA and trusted proxy values', () => {
+  const manifest = readFileSync(new URL('../../render.yaml', import.meta.url), 'utf8');
+  for (const key of ['ADMIN_PASSWORD', 'ADMIN_TOTP_SECRET', 'ADMIN_SESSION_EPOCH']) {
+    assert.match(manifest, new RegExp(`- key: ${key}\\r?\\n\\s+sync: false`));
+  }
+  assert.doesNotMatch(manifest, /- key: ADMIN_SESSION_EPOCH\r?\n\s+value:/);
+  assert.match(manifest, /- key: PORTAL_PROXY_MODE\r?\n\s+value: render/);
+  assert.match(manifest, /- key: PORTAL_ABUSE_HASH_SECRET\r?\n\s+generateValue: true/);
 });
 
 test('a live Stripe key activates production auth safety even when NODE_ENV is development', () => {

@@ -15,7 +15,7 @@ services:
     region: frankfurt          # closest to the UK; change if you prefer
     plan: free                 # ephemeral test sandbox only; never a real-order host.
     branch: codex/relaunch72-platform-foundation
-    buildCommand: npm ci
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
     startCommand: npm run serve
     healthCheckPath: /health
     autoDeploy: true
@@ -43,6 +43,21 @@ services:
         sync: false
       - key: SESSION_SECRET           # dedicated random 32+ character cookie-signing key (required)
         sync: false
+      # Admin stays disabled while ADMIN_PASSWORD is empty. If it already has a
+      # value, add the same base32 setup key to an authenticator and Render
+      # before deploying; otherwise startup deliberately fails closed.
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_TOTP_SECRET
+        sync: false
+      - key: ADMIN_SESSION_EPOCH
+        sync: false             # operator-owned; Blueprint sync must never reset revocation state
+      # Render's strict CF-Connecting-IP value is admin-login source authority;
+      # appendable X-Forwarded-For is never trusted.
+      - key: PORTAL_PROXY_MODE
+        value: render
+      - key: PORTAL_ABUSE_HASH_SECRET
+        generateValue: true
       - key: SANDBOX_ACCESS_TOKEN     # private 24+ char founder code for the public test sandbox
         sync: false
       # ---- optional ----

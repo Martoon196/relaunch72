@@ -11,7 +11,7 @@
     "keyword": "tsx src/keyword/cli.ts",
     "ads": "tsx src/ads/cli.ts",
     "manager": "tsx src/manager/cli.ts",
-    "test": "node --import ./test/windows-node24-shim.mjs --import tsx --test test/*.test.ts test/db/*.test.ts",
+    "test": "node --import ./test/windows-node24-shim.mjs --import tsx --test test/*.test.ts test/*.test.mjs test/db/*.test.ts",
     "test:db": "node --import ./test/windows-node24-shim.mjs --import tsx --test test/db/*.test.ts",
     "test:db:reset": "node --import ./test/windows-node24-shim.mjs --import tsx test/db/reset-disposable.ts",
     "test:db:integration": "node --import ./test/windows-node24-shim.mjs --import tsx --test --test-concurrency=1 test/db/require-integration.ts",

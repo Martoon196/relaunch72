@@ -74,7 +74,7 @@ test('production Blueprint is isolated, manually deployed and fail-closed', () =
   assert.match(manifest, /- hq\.propertypredator\.com/);
   assert.doesNotMatch(manifest, /propertypredator\.co\.uk/);
   assert.equal(
-    (manifest.match(/buildCommand: npm ci --include=dev && npm run typecheck && npm test/g) ?? []).length,
+    (manifest.match(/buildCommand: npm ci --ignore-scripts --include=dev && node scripts\/supply-chain\.mjs --check && npm run typecheck && npm test/g) ?? []).length,
     2,
     'both production processes must install the locked dev toolchain used by build checks and TS entrypoints',
   );
@@ -98,6 +98,9 @@ test('production Blueprint is isolated, manually deployed and fail-closed', () =
     /- key: PORTAL_ABUSE_HASH_SECRET\r?\n\s+generateValue: true/,
     'the abuse HMAC secret must be generated independently in the web service',
   );
+  secretSlot('ADMIN_PASSWORD');
+  secretSlot('ADMIN_TOTP_SECRET');
+  dashboardControlledSlot('ADMIN_SESSION_EPOCH');
   literalValue(
     'ALLOWED_ORIGINS',
     'https://hq.propertypredator.com,https://propertypredator.com,https://www.propertypredator.com',

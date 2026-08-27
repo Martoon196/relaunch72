@@ -18,7 +18,7 @@ services:
     plan: starter
     branch: codex/relaunch72-platform-foundation
     numInstances: 1
-    buildCommand: npm ci --include=dev && npm run typecheck && npm test
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
     startCommand: npm run serve
     # /health remains process liveness. /ready must fail unless the protected
     # PostgreSQL portal and locked production runtime are genuinely ready.
@@ -58,6 +58,17 @@ services:
         value: render
       - key: PORTAL_ABUSE_HASH_SECRET
         generateValue: true
+
+      # The legacy control room remains disabled when ADMIN_PASSWORD is empty.
+      # Before deploying an existing password, store the same base32 setup key
+      # in the founder's authenticator and this secret slot. Incrementing the
+      # epoch below revokes every previously issued admin cookie.
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_TOTP_SECRET
+        sync: false
+      - key: ADMIN_SESSION_EPOCH
+        sync: false
 
       # Shared Property Predator identity bridge. The enable switch is owned by
       # the web-service dashboard so a later Blueprint sync cannot overwrite an
@@ -197,7 +208,7 @@ services:
     plan: starter
     branch: codex/relaunch72-platform-foundation
     numInstances: 1
-    buildCommand: npm ci --include=dev && npm run typecheck && npm test
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
     startCommand: npm run --workspace orchestrator serve:property-predator-email-worker
     maxShutdownDelaySeconds: 120
     autoDeployTrigger: off

@@ -37,7 +37,12 @@ test('pre-authentication login CSRF uses a signed double-submit token and strict
 
 test('session payloads carry explicit version and audience claims', () => {
   const decode = (token: string): Record<string, unknown> => JSON.parse(Buffer.from(token.split('.')[0]!, 'base64url').toString('utf8')) as Record<string, unknown>;
-  assert.deepEqual(decode(signSession('secret', 1)), { v: 1, aud: 'admin', exp: 1 + 12 * 60 * 60 * 1000 });
+  assert.deepEqual(decode(signSession('secret', 1)), {
+    v: 2,
+    aud: 'admin',
+    epoch: 0,
+    exp: 1 + 12 * 60 * 60 * 1000,
+  });
   assert.deepEqual(decode(signTenant('secret', 'tenant-1', 1)), { v: 1, aud: 'portal', tid: 'tenant-1', exp: 1 + 14 * 24 * 60 * 60 * 1000 });
 });
 

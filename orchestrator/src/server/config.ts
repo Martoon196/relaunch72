@@ -7,6 +7,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import '../config.js'; // side-effect: loads .env into process.env before we read it
+import { canonicalTotpSecret } from './admin/session.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -54,6 +55,10 @@ export interface StripeConfig {
   allowedOrigins: string[];
   /** Admin control room: password gate + cookie-signing secret. Empty = /admin disabled. */
   adminPassword: string;
+  /** Optional in local development; mandatory whenever production admin access is enabled. */
+  adminTotpSecret?: string;
+  /** Increment to invalidate every outstanding stateless admin session immediately. */
+  adminSessionEpoch?: number;
   sessionSecret: string;
 }
 
@@ -106,6 +111,27 @@ export function loadStripeConfig(env: NodeJS.ProcessEnv = process.env): StripeCo
   if (production && adminPassword && adminPassword.length < 16) {
     throw new Error('ADMIN_PASSWORD must be at least 16 characters when admin access is enabled in production');
   }
+  const rawAdminTotpSecret = env.ADMIN_TOTP_SECRET?.trim() ?? '';
+  const adminTotpSecret = canonicalTotpSecret(rawAdminTotpSecret) ?? '';
+  if (rawAdminTotpSecret && !adminTotpSecret) {
+    throw new Error('ADMIN_TOTP_SECRET must be a base32 secret containing 32 to 128 characters');
+  }
+  const rawAdminSessionEpoch = env.ADMIN_SESSION_EPOCH?.trim() ?? '';
+  const adminSessionEpoch = rawAdminSessionEpoch ? Number(rawAdminSessionEpoch) : 0;
+  if (!Number.isSafeInteger(adminSessionEpoch) || adminSessionEpoch < 0) {
+    throw new Error('ADMIN_SESSION_EPOCH must be a non-negative integer');
+  }
+  if (production && adminPassword) {
+    if (!adminTotpSecret) {
+      throw new Error('ADMIN_TOTP_SECRET is required when admin access is enabled in production');
+    }
+    if (adminSessionEpoch < 1) {
+      throw new Error('ADMIN_SESSION_EPOCH must be at least 1 when admin access is enabled in production');
+    }
+    if (adminPassword === configuredSessionSecret) {
+      throw new Error('ADMIN_PASSWORD and SESSION_SECRET must be independent values');
+    }
+  }
   // DATA_DIR lets a Render persistent disk hold orders/intakes across redeploys.
   const dataDir = env.DATA_DIR?.trim() || path.join(REPO_ROOT, 'data');
   const extraOrigins = (env.ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -128,6 +154,8 @@ export function loadStripeConfig(env: NodeJS.ProcessEnv = process.env): StripeCo
     subscriptionsFile: path.join(dataDir, 'subscriptions.jsonl'),
     allowedOrigins: [...new Set([...DEFAULT_ORIGINS, ...extraOrigins])],
     adminPassword,
+    adminTotpSecret,
+    adminSessionEpoch,
     // Never reuse a webhook credential as a cookie-signing key. The fixed value
     // exists only for local development; production validation above rejects it.
     sessionSecret: configuredSessionSecret || 'r72-dev-session-secret',

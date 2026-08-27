@@ -48,22 +48,28 @@ function pill(status: string): string {
   return `<span class="pill ${cls}">${esc(status)}</span>`;
 }
 
-function layout(title: string, body: string, opts: { authed: boolean } = { authed: true }): string {
+function layout(
+  title: string,
+  body: string,
+  opts: { authed: boolean; csrfToken?: string } = { authed: true },
+): string {
   const nav = opts.authed
-    ? `<div class="row"><a href="/admin">Runs</a> · <form method="post" action="/admin/logout" style="display:inline"><button class="btn ghost" style="padding:5px 12px">Log out</button></form></div>`
+    ? `<div class="row"><a href="/admin">Runs</a> · <form method="post" action="/admin/logout" style="display:inline"><input type="hidden" name="_csrf" value="${esc(opts.csrfToken ?? '')}"/><button class="btn ghost" style="padding:5px 12px">Log out</button></form></div>`
     : '';
   return `<!doctype html><html lang="en-GB"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>${esc(title)} · Relaunch72 admin</title><style>${CSS}</style></head><body>
 <header class="bar"><div class="wrap"><a class="mark" href="/admin">Relaunch<b>72</b><small>admin</small></a>${nav}</div></header>
 <main class="wrap">${body}</main></body></html>`;
 }
 
-export function loginPage(error?: string): string {
+export function loginPage(error?: string, csrfToken = '', totpRequired = false): string {
   return layout('Sign in', `
     <div class="panel" style="max-width:380px;margin:60px auto">
       <h1>Admin</h1><p class="muted" style="margin-top:0">Your control room. Password required.</p>
       ${error ? `<div class="err">${esc(error)}</div>` : ''}
       <form method="post" action="/admin/login">
+        <input type="hidden" name="_csrf" value="${esc(csrfToken)}"/>
         <input type="password" name="password" placeholder="Admin password" autofocus autocomplete="current-password"/>
+        ${totpRequired ? '<input type="text" name="totp" placeholder="6-digit authenticator code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" style="margin-top:10px"/>' : ''}
         <div style="margin-top:12px"><button class="btn" type="submit">Sign in</button></div>
       </form>
     </div>`, { authed: false });
@@ -72,7 +78,7 @@ export function loginPage(error?: string): string {
 function money(n: number): string { return `$${(n || 0).toFixed(2)}`; }
 function when(iso: string): string { return iso ? esc(iso.replace('T', ' ').replace(/\..*/, '') + ' UTC') : '—'; }
 
-export function dashboardPage(runs: RunSummary[], orders: Order[]): string {
+export function dashboardPage(runs: RunSummary[], orders: Order[], csrfToken = ''): string {
   const runRows = runs.length ? runs.map((r) => `
     <tr>
       <td><a href="/admin/run/${esc(r.id)}"><b>${esc(r.business)}</b></a><div class="muted mono" style="font-size:11px">${esc(r.id.slice(0, 40))}…</div></td>
@@ -94,7 +100,10 @@ export function dashboardPage(runs: RunSummary[], orders: Order[]): string {
     <div class="panel" style="padding:0"><table><thead><tr><th>Business</th><th>Status</th><th>Through</th><th>Cost</th><th>Started</th></tr></thead><tbody>${runRows}</tbody></table></div>
     <h2>Orders</h2>
     <div class="panel" style="padding:0"><table><thead><tr><th>Tier</th><th>Email</th><th>Paid</th><th>Status</th><th>When</th></tr></thead><tbody>${orderRows || `<tr><td colspan="5" class="empty">No orders recorded yet.</td></tr>`}</tbody></table></div>
-    <div class="foot">Test mode. Customer data — keep this password private.</div>`);
+    <div class="foot">Test mode. Customer data — keep this password private.</div>`, {
+      authed: true,
+      csrfToken,
+    });
 }
 
 /** Generic, readable render of a deliverable's JSON — headings for keys, quotes styled. */
@@ -116,7 +125,11 @@ export function renderDeliverable(obj: unknown): string {
   return `<div class="doc">${typeof obj === 'object' && obj ? block(obj as Record<string, unknown>) : '<p class="muted">Empty.</p>'}</div>`;
 }
 
-export function runDetailPage(d: RunDetail, view: { stage: string; html: string } | null): string {
+export function runDetailPage(
+  d: RunDetail,
+  view: { stage: string; html: string } | null,
+  csrfToken = '',
+): string {
   const s = d.summary;
   const parked = d.stages.find((x) => x.status === 'parked');
   const stageRows = d.stages.map((x) => `
@@ -128,10 +141,12 @@ export function runDetailPage(d: RunDetail, view: { stage: string; html: string 
     : s.hasBundle
       ? `<div class="panel"><h2 style="margin-top:0">Sign-off</h2><p class="muted">Read the pack, then decide. Approving unlocks delivery.</p>
          <form method="post" action="/admin/run/${esc(d.id)}/signoff" class="row" style="align-items:flex-start">
+           <input type="hidden" name="_csrf" value="${esc(csrfToken)}"/>
            <input type="hidden" name="decision" value="approved"/>
            <button class="btn" name="decision" value="approved" type="submit">Approve ✓</button>
          </form>
          <form method="post" action="/admin/run/${esc(d.id)}/signoff" style="margin-top:12px">
+           <input type="hidden" name="_csrf" value="${esc(csrfToken)}"/>
            <textarea name="notes" rows="2" placeholder="What to fix (required to send back)…"></textarea>
            <div style="margin-top:8px"><button class="btn danger" name="decision" value="sent_back" type="submit">Send back</button></div>
          </form></div>`
@@ -154,5 +169,8 @@ export function runDetailPage(d: RunDetail, view: { stage: string; html: string 
     <h2>Stages</h2>
     <div class="panel" style="padding:0"><table><thead><tr><th>Stage</th><th>Status</th><th>Model</th><th>Cost</th><th>Output</th></tr></thead><tbody>${stageRows}</tbody></table></div>
     ${viewer}
-    <div class="foot">Customer data — private.</div>`);
+    <div class="foot">Customer data — private.</div>`, {
+      authed: true,
+      csrfToken,
+    });
 }

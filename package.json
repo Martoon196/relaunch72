@@ -24,7 +24,9 @@
     "db:migrate": "npm run --workspace orchestrator db:migrate",
     "db:check": "npm run --workspace orchestrator db:check",
     "test:db": "npm run --workspace orchestrator test:db",
-    "test:db:integration": "npm run --workspace orchestrator test:db:integration"
+    "test:db:integration": "npm run --workspace orchestrator test:db:integration",
+    "supply-chain:check": "node scripts/supply-chain.mjs --check",
+    "sbom:write": "node scripts/supply-chain.mjs --write"
   },
   "engines": {
     "node": ">=20"

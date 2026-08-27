@@ -5,7 +5,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { passwordOk, signSession, verifySession, parseCookies, SESSION_COOKIE } from '../src/server/admin/session.js';
+import {
+  ADMIN_LOGIN_CSRF_COOKIE,
+  adminCsrfToken,
+  parseCookies,
+  passwordOk,
+  SESSION_COOKIE,
+  signSession,
+  totpCode,
+  verifySession,
+  verifyTotp,
+} from '../src/server/admin/session.js';
 import { listRuns, getRunDetail, readDeliverable, listOrders } from '../src/server/admin/store.js';
 import { handleAdmin } from '../src/server/admin/router.js';
 import { InMemoryLoginThrottle, signTenant } from '../src/portal/session.js';
@@ -45,12 +55,29 @@ function makeRuns(): string {
   return dir;
 }
 
-function req(method: string, url: string, opts: { cookie?: string; body?: string } = {}): IncomingMessage {
+function req(
+  method: string,
+  url: string,
+  opts: {
+    cookie?: string;
+    body?: string;
+    forwardedFor?: string;
+    cfConnectingIp?: string;
+    remoteAddress?: string;
+  } = {},
+): IncomingMessage {
   const r = Readable.from([Buffer.from(opts.body ?? '')]) as unknown as IncomingMessage;
   const headers: Record<string, string> = {};
   if (opts.cookie) headers.cookie = opts.cookie;
   if (opts.body) headers['content-type'] = 'application/x-www-form-urlencoded';
-  return Object.assign(r, { method, url, headers });
+  if (opts.forwardedFor) headers['x-forwarded-for'] = opts.forwardedFor;
+  if (opts.cfConnectingIp) headers['cf-connecting-ip'] = opts.cfConnectingIp;
+  return Object.assign(r, {
+    method,
+    url,
+    headers,
+    socket: { remoteAddress: opts.remoteAddress ?? '127.0.0.1' },
+  });
 }
 function res(): ServerResponse & { statusCode: number; headers: Record<string, string>; body: string } {
   const r = { statusCode: 0, headers: {} as Record<string, string>, body: '', headersSent: false } as {
@@ -60,6 +87,19 @@ function res(): ServerResponse & { statusCode: number; headers: Record<string, s
   r.writeHead = (c, h) => { r.statusCode = c; if (h) Object.assign(r.headers, h); r.headersSent = true; return r; };
   r.end = (b) => { r.body = b ?? ''; return r; };
   return r as unknown as ServerResponse & { statusCode: number; headers: Record<string, string>; body: string };
+}
+
+async function adminLoginForm(
+  c: StripeConfig,
+  runsDir: string,
+): Promise<{ csrf: string; cookie: string }> {
+  const response = res();
+  await handleAdmin(req('GET', '/admin/login'), response, c, runsDir);
+  const csrf = response.body.match(/name="_csrf" value="([^"]+)"/)?.[1];
+  const cookie = String(response.headers['set-cookie']).split(';', 1)[0];
+  if (!csrf || !cookie) throw new Error('Admin login form did not issue its CSRF pair');
+  assert.match(cookie, new RegExp(`^${ADMIN_LOGIN_CSRF_COOKIE}=`));
+  return { csrf, cookie };
 }
 
 // ─── session ─────────────────────────────────────────────────────────────────
@@ -115,6 +155,20 @@ test('unauthed /admin redirects to login; login page renders', async () => {
   assert.equal(l.headers['cache-control'], 'no-store');
   assert.match(l.headers['content-security-policy'] ?? '', /frame-ancestors 'none'/);
 });
+test('admin session epoch revokes every older cookie immediately', () => {
+  const now = 1_000_000;
+  const token = signSession('secret', now, 60_000, 7);
+  assert.equal(verifySession('secret', token, now + 1, 7), true);
+  assert.equal(verifySession('secret', token, now + 1, 8), false);
+});
+test('RFC 6238 TOTP uses the standard SHA-1 vector and a bounded drift window', () => {
+  const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'; // ASCII 12345678901234567890
+  assert.equal(totpCode(secret, 59_000), '287082');
+  assert.equal(verifyTotp(secret, '287082', 59_000), true);
+  assert.equal(verifyTotp(secret, '287082', 89_000), true);
+  assert.equal(verifyTotp(secret, '287082', 119_000), false);
+  assert.equal(verifyTotp(secret, 'not-six', 59_000), false);
+});
 test('a valid portal session copied into the admin cookie is rejected', async () => {
   const c = cfg();
   const customerToken = signTenant(c.sessionSecret, 'tenant-customer', Date.now());
@@ -124,35 +178,188 @@ test('a valid portal session copied into the admin cookie is rejected', async ()
   assert.equal(r.headers.location, '/admin/login');
 });
 test('login: wrong password 401, right password sets a session cookie', async () => {
-  const bad = res(); await handleAdmin(req('POST', '/admin/login', { body: 'password=nope' }), bad, cfg(), makeRuns());
+  const c = cfg();
+  const dir = makeRuns();
+  const form = await adminLoginForm(c, dir);
+  const bad = res(); await handleAdmin(req('POST', '/admin/login', {
+    cookie: form.cookie,
+    body: `_csrf=${encodeURIComponent(form.csrf)}&password=nope`,
+  }), bad, c, dir);
   assert.equal(bad.statusCode, 401);
-  const ok = res(); await handleAdmin(req('POST', '/admin/login', { body: 'password=hunter2' }), ok, cfg(), makeRuns());
+  const ok = res(); await handleAdmin(req('POST', '/admin/login', {
+    cookie: form.cookie,
+    body: `_csrf=${encodeURIComponent(form.csrf)}&password=hunter2`,
+  }), ok, c, dir);
   assert.equal(ok.statusCode, 302); assert.equal(ok.headers.location, '/admin');
   assert.match(String(ok.headers['set-cookie']), new RegExp(SESSION_COOKIE + '='));
+  assert.match(String(ok.headers['set-cookie']), /SameSite=Strict/);
+  assert.match(String(ok.headers['set-cookie']), /Path=\/admin/);
+});
+test('admin login requires its signed pre-authentication CSRF cookie', async () => {
+  const c = cfg();
+  const response = res();
+  await handleAdmin(req('POST', '/admin/login', { body: 'password=hunter2&_csrf=forged' }), response, c, makeRuns());
+  assert.equal(response.statusCode, 403);
+  assert.doesNotMatch(String(response.headers['set-cookie']), new RegExp(`^${SESSION_COOKIE}=`));
+});
+test('configured admin TOTP is required and wrong factors share one generic error', async () => {
+  const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
+  const c = cfg({ adminTotpSecret: secret });
+  const dir = makeRuns();
+  const form = await adminLoginForm(c, dir);
+  const missing = res();
+  await handleAdmin(req('POST', '/admin/login', {
+    cookie: form.cookie,
+    body: `_csrf=${encodeURIComponent(form.csrf)}&password=hunter2`,
+  }), missing, c, dir);
+  assert.equal(missing.statusCode, 401);
+  assert.match(missing.body, /Wrong password or authenticator code/);
+  const accepted = res();
+  await handleAdmin(req('POST', '/admin/login', {
+    cookie: form.cookie,
+    body: `_csrf=${encodeURIComponent(form.csrf)}&password=hunter2&totp=${totpCode(secret, Date.now())}`,
+  }), accepted, c, dir);
+  assert.equal(accepted.statusCode, 302);
 });
 test('admin login throttles repeated failures by source', async () => {
   const throttle = new InMemoryLoginThrottle(2, 60_000, 60_000);
   const c = cfg();
+  const dir = makeRuns();
+  const form = await adminLoginForm(c, dir);
   for (let i = 0; i < 2; i++) {
     const bad = res();
-    await handleAdmin(req('POST', '/admin/login', { body: 'password=nope' }), bad, c, makeRuns(), throttle);
+    await handleAdmin(req('POST', '/admin/login', {
+      body: `_csrf=${encodeURIComponent(form.csrf)}&password=nope`,
+      cookie: form.cookie,
+      remoteAddress: '203.0.113.9',
+      forwardedFor: `198.51.100.${i + 1}`,
+    }), bad, c, dir, throttle);
     assert.equal(bad.statusCode, 401);
   }
   const blocked = res();
-  await handleAdmin(req('POST', '/admin/login', { body: 'password=hunter2' }), blocked, c, makeRuns(), throttle);
+  await handleAdmin(req('POST', '/admin/login', {
+    body: `_csrf=${encodeURIComponent(form.csrf)}&password=hunter2`,
+    cookie: form.cookie,
+    remoteAddress: '203.0.113.9',
+    forwardedFor: '192.0.2.200',
+  }), blocked, c, dir, throttle);
   assert.equal(blocked.statusCode, 429);
   assert.equal(blocked.headers['retry-after'], '60');
+});
+test('Render admin throttling separates authoritative client addresses', async () => {
+  const throttle = new InMemoryLoginThrottle(1, 60_000, 60_000);
+  const c = cfg({ production: true });
+  const dir = makeRuns();
+  const form = await adminLoginForm(c, dir);
+  const renderEnv = {
+    PORTAL_PROXY_MODE: 'render',
+    PORTAL_ABUSE_HASH_SECRET: 'admin-render-abuse-secret-at-least-32-characters',
+  } as NodeJS.ProcessEnv;
+  const failed = res();
+  await handleAdmin(req('POST', '/admin/login', {
+    cookie: form.cookie,
+    body: `_csrf=${encodeURIComponent(form.csrf)}&password=nope`,
+    cfConnectingIp: '203.0.113.10',
+    forwardedFor: '192.0.2.1',
+  }), failed, c, dir, throttle, renderEnv);
+  assert.equal(failed.statusCode, 401);
+  const otherClient = res();
+  await handleAdmin(req('POST', '/admin/login', {
+    cookie: form.cookie,
+    body: `_csrf=${encodeURIComponent(form.csrf)}&password=hunter2`,
+    cfConnectingIp: '203.0.113.11',
+    forwardedFor: '192.0.2.1',
+  }), otherClient, c, dir, throttle, renderEnv);
+  assert.equal(otherClient.statusCode, 302);
+});
+test('Render admin throttling ignores spoofed X-Forwarded-For', async () => {
+  const throttle = new InMemoryLoginThrottle(1, 60_000, 60_000);
+  const c = cfg({ production: true });
+  const dir = makeRuns();
+  const form = await adminLoginForm(c, dir);
+  const renderEnv = {
+    PORTAL_PROXY_MODE: 'render',
+    PORTAL_ABUSE_HASH_SECRET: 'admin-render-abuse-secret-at-least-32-characters',
+  } as NodeJS.ProcessEnv;
+  const failed = res();
+  await handleAdmin(req('POST', '/admin/login', {
+    cookie: form.cookie,
+    body: `_csrf=${encodeURIComponent(form.csrf)}&password=nope`,
+    cfConnectingIp: '203.0.113.20',
+    forwardedFor: '192.0.2.10',
+  }), failed, c, dir, throttle, renderEnv);
+  assert.equal(failed.statusCode, 401);
+  const spoofed = res();
+  await handleAdmin(req('POST', '/admin/login', {
+    cookie: form.cookie,
+    body: `_csrf=${encodeURIComponent(form.csrf)}&password=hunter2`,
+    cfConnectingIp: '203.0.113.20',
+    forwardedFor: '198.51.100.250',
+  }), spoofed, c, dir, throttle, renderEnv);
+  assert.equal(spoofed.statusCode, 429);
+});
+test('Render admin login fails closed without its authoritative client header', async () => {
+  const throttle = new InMemoryLoginThrottle(5, 60_000, 60_000);
+  const c = cfg({ production: true });
+  const dir = makeRuns();
+  const form = await adminLoginForm(c, dir);
+  const response = res();
+  await handleAdmin(req('POST', '/admin/login', {
+    cookie: form.cookie,
+    body: `_csrf=${encodeURIComponent(form.csrf)}&password=hunter2`,
+    forwardedFor: '203.0.113.30',
+  }), response, c, dir, throttle, {
+    PORTAL_PROXY_MODE: 'render',
+    PORTAL_ABUSE_HASH_SECRET: 'admin-render-abuse-secret-at-least-32-characters',
+  });
+  assert.equal(response.statusCode, 503);
+  assert.equal(response.headers['retry-after'], '30');
+  assert.doesNotMatch(String(response.headers['set-cookie']), new RegExp(`^${SESSION_COOKIE}=`));
 });
 test('authed dashboard lists runs; run detail renders; sign-off writes signoff.json', async () => {
   const dir = makeRuns();
   const c = cfg();
-  const cookie = `${SESSION_COOKIE}=${signSession(c.sessionSecret, Date.now())}`;
+  const sessionToken = signSession(c.sessionSecret, Date.now());
+  const cookie = `${SESSION_COOKIE}=${sessionToken}`;
+  const csrf = adminCsrfToken(c.sessionSecret, sessionToken);
   const dash = res(); await handleAdmin(req('GET', '/admin', { cookie }), dash, c, dir);
   assert.equal(dash.statusCode, 200); assert.match(dash.body, /Acme Joinery/); assert.match(dash.body, /Beta Ltd/);
+  assert.match(dash.body, new RegExp(encodeURIComponent(csrf).replace(/%/g, '%')));
   const det = res(); await handleAdmin(req('GET', '/admin/run/runB', { cookie }), det, c, dir);
   assert.equal(det.statusCode, 200); assert.match(det.body, /Sign-off/);
-  const so = res(); await handleAdmin(req('POST', '/admin/run/runB/signoff', { cookie, body: 'decision=approved' }), so, c, dir);
+  const so = res(); await handleAdmin(req('POST', '/admin/run/runB/signoff', {
+    cookie,
+    body: `_csrf=${encodeURIComponent(csrf)}&decision=approved`,
+  }), so, c, dir);
   assert.equal(so.statusCode, 302);
   const written = JSON.parse(fs.readFileSync(path.join(dir, 'runB', 'signoff.json'), 'utf8'));
   assert.equal(written.decision, 'approved');
+});
+test('logout and sign-off reject missing session-bound CSRF without mutation', async () => {
+  const dir = makeRuns();
+  const c = cfg();
+  const cookie = `${SESSION_COOKIE}=${signSession(c.sessionSecret, Date.now())}`;
+  const signoff = res();
+  await handleAdmin(req('POST', '/admin/run/runB/signoff', { cookie, body: 'decision=approved' }), signoff, c, dir);
+  assert.equal(signoff.statusCode, 403);
+  assert.equal(fs.existsSync(path.join(dir, 'runB', 'signoff.json')), false);
+  const logout = res();
+  await handleAdmin(req('POST', '/admin/logout', { cookie, body: '' }), logout, c, dir);
+  assert.equal(logout.statusCode, 403);
+  assert.equal(logout.headers['set-cookie'], undefined);
+});
+test('unexpected sign-off failures never expose filesystem error details', async () => {
+  const dir = makeRuns();
+  fs.mkdirSync(path.join(dir, 'runB', 'signoff.json'));
+  const c = cfg();
+  const sessionToken = signSession(c.sessionSecret, Date.now());
+  const csrf = adminCsrfToken(c.sessionSecret, sessionToken);
+  const response = res();
+  await handleAdmin(req('POST', '/admin/run/runB/signoff', {
+    cookie: `${SESSION_COOKIE}=${sessionToken}`,
+    body: `_csrf=${encodeURIComponent(csrf)}&decision=approved`,
+  }), response, c, dir);
+  assert.equal(response.statusCode, 503);
+  assert.match(response.body, /Sign-off could not be completed/);
+  assert.doesNotMatch(response.body, /EISDIR|signoff\.json|filesystem|\\Users\\/i);
 });
