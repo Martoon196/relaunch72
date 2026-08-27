@@ -393,21 +393,45 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
     assert.equal(authorized.disposition, 'authorized');
     if (authorized.disposition !== 'authorized') throw new Error('Pilot was not authorized');
     const providerMessageId = `pilot-${operationId}@mail.propertypredator.co.uk`;
+    const providerOccurredAt = new Date(Date.now() - 10 * 60_000).toISOString();
     await boundary.settleProviderCall(authorized.reservationId, authorized.requestSha256, {
       status: 'accepted', externalId: `<${providerMessageId}>`,
-      occurredAt: new Date().toISOString(), retryable: false,
+      occurredAt: providerOccurredAt, retryable: false,
       errorCode: null, summary: 'Mailgun accepted the controlled seed message',
     });
-    assert.deepEqual(await ownerQuery<{ state: string; provider_reference: string; status: string }>(
+    assert.deepEqual(await ownerQuery<{
+      state: string;
+      provider_reference: string;
+      status: string;
+      provider_fact_preserved: boolean;
+      operation_chronology_fenced: boolean;
+      delivery_chronology_fenced: boolean;
+    }>(
       pool,
-      `SELECT operation.state, operation.provider_reference, delivery.status
+      `SELECT operation.state, operation.provider_reference, delivery.status,
+              reservation.provider_occurred_at = $3::timestamptz
+                AS provider_fact_preserved,
+              operation.completed_at >= operation.created_at
+                AS operation_chronology_fenced,
+              delivery.accepted_at >= delivery.queued_at
+                AS delivery_chronology_fenced
        FROM app.provider_operations AS operation
        JOIN app.message_deliveries AS delivery
          ON delivery.workspace_id = operation.workspace_id
         AND delivery.provider_operation_id = operation.id
+       JOIN app.property_predator_email_pilot_reservations AS reservation
+         ON reservation.workspace_id = operation.workspace_id
+        AND reservation.operation_id = operation.id
        WHERE operation.workspace_id = $1 AND operation.id = $2`,
-      [workspaceId, operationId],
-    ), [{ state: 'accepted', provider_reference: `<${providerMessageId}>`, status: 'accepted' }]);
+      [workspaceId, operationId, providerOccurredAt],
+    ), [{
+      state: 'accepted',
+      provider_reference: `<${providerMessageId}>`,
+      status: 'accepted',
+      provider_fact_preserved: true,
+      operation_chronology_fenced: true,
+      delivery_chronology_fenced: true,
+    }]);
 
     const timestamp = String(Math.floor(Date.now() / 1000));
     const token = `integration-token-${operationId}`;
