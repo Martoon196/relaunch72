@@ -1,7 +1,12 @@
-import type {
-  ProviderCredentialAuthMode,
-  ProviderKind,
-  ProviderWebhookVerificationMode,
+import { createHash } from 'node:crypto';
+import { isPlatformCapability, type PlatformCapability } from '../platform/capabilities.js';
+import {
+  providerRegistry,
+  type ProviderCredentialAuthMode,
+  type ProviderKind,
+  type ProviderManifest,
+  type ProviderRegistry,
+  type ProviderWebhookVerificationMode,
 } from '../providers/registry.js';
 
 /**
@@ -12,20 +17,20 @@ import type {
  * immutable evidence references, with `internal_seed_ready` as a hard ceiling.
  */
 
-export const PROVIDER_ACTIVATION_RAILS = [
+export const PROVIDER_ACTIVATION_RAILS = Object.freeze([
   'mailgun_email',
   'whatsapp',
   'public_social',
   'social_dm',
-] as const;
+] as const);
 
 export type ProviderActivationRail = (typeof PROVIDER_ACTIVATION_RAILS)[number];
 
-export const PROVIDER_ACTIVATION_READINESS_STAGES = [
+export const PROVIDER_ACTIVATION_READINESS_STAGES = Object.freeze([
   'adapter_contract_verified',
   'provider_test_verified',
   'internal_seed_ready',
-] as const;
+] as const);
 
 export type ProviderActivationReadinessStage =
   (typeof PROVIDER_ACTIVATION_READINESS_STAGES)[number];
@@ -33,7 +38,7 @@ export type ProviderActivationReadiness = 'not_ready' | ProviderActivationReadin
 
 export const PROVIDER_ACTIVATION_READINESS_CEILING = 'internal_seed_ready' as const;
 
-export const PROVIDER_ACTIVATION_GATES = [
+export const PROVIDER_ACTIVATION_GATES = Object.freeze([
   'commercialSaasRights',
   'dpa',
   'security',
@@ -65,13 +70,21 @@ export const PROVIDER_ACTIVATION_GATES = [
   'adapterContract',
   'testProvider',
   'internalSeed',
-] as const;
+] as const);
 
 export type ProviderActivationGate = (typeof PROVIDER_ACTIVATION_GATES)[number];
 
 export type ProviderEvidenceStatus = 'verified' | 'not_applicable' | 'missing' | 'failed';
 
 export interface ProviderGateEvidence {
+  readonly gate: ProviderActivationGate;
+  readonly rail: ProviderActivationRail;
+  readonly providerId: string;
+  readonly adapterContractVersion: string;
+  readonly workspaceId: string;
+  readonly providerConnectionId: string;
+  readonly assessedScopeVersion: 1;
+  readonly assessedScopeSha256: string;
   readonly status: ProviderEvidenceStatus;
   readonly evidenceId: string | null;
   readonly evidenceSha256: string | null;
@@ -84,7 +97,20 @@ export interface ProviderReadinessManifestMetadata {
   readonly kind: ProviderKind;
   readonly outboundCredentialAuth: ProviderCredentialAuthMode;
   readonly inboundWebhookVerification: ProviderWebhookVerificationMode;
+  readonly capabilities: readonly PlatformCapability[];
   readonly adapterContractVersion: string;
+}
+
+export interface ProviderActivationContractRegistration {
+  readonly rail: ProviderActivationRail;
+  readonly providerId: string;
+  readonly adapterContractVersion: string;
+}
+
+/** Opaque, immutable resolver created only from provider-registry metadata. */
+export interface ProviderActivationAuthority {
+  readonly authorityVersion: 1;
+  readonly manifestCount: number;
 }
 
 export interface ProviderReadinessWorkspaceScope {
@@ -249,6 +275,7 @@ export type ProviderReadinessReasonCode =
   | 'WORKSPACE_SCOPE_MISMATCH'
   | 'WORKSPACE_ISOLATION_UNVERIFIED'
   | 'WEBHOOK_CONTRACT_UNSAFE'
+  | 'PROVIDER_TEST_SCOPE_INVALID'
   | 'CHANNEL_POLICY_SCOPE_INVALID'
   | 'TERRITORY_OUTSIDE_COMMERCIAL_RIGHTS'
   | 'DARK_SWITCH_INVARIANT_FAILED'
@@ -347,6 +374,14 @@ const PROVIDER_ID = /^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/;
 const SEMVER = /^(?:0|[1-9][0-9]{0,3})\.(?:0|[1-9][0-9]{0,3})\.(?:0|[1-9][0-9]{0,3})$/;
 const ISO_TERRITORY = /^[A-Z]{2}$/;
 const CANONICAL_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const MAX_INPUT_DEPTH = 16;
+const MAX_ARRAY_ITEMS = 64;
+const MAX_OBJECT_KEYS = 64;
+const MAX_TOTAL_NODES = 2_048;
+const MAX_TOTAL_KEYS = 1_024;
+const MAX_KEY_BYTES = 128;
+const MAX_STRING_BYTES = 1_024;
+const MAX_TOTAL_PLAIN_DATA_BYTES = 128 * 1_024;
 
 const FORBIDDEN_CREDENTIAL_KEYS = new Set([
   'apikey',
@@ -374,6 +409,86 @@ const WEBHOOK_MODES = new Set<ProviderWebhookVerificationMode>([
   'hmac_signature', 'asymmetric_signature', 'verification_token', 'none',
 ]);
 
+const REQUIRED_CAPABILITIES_BY_RAIL: Readonly<
+  Record<ProviderActivationRail, readonly PlatformCapability[]>
+> = Object.freeze({
+  mailgun_email: Object.freeze(['conversations.reply'] as const),
+  whatsapp: Object.freeze(['channel.whatsapp', 'conversations.reply'] as const),
+  public_social: Object.freeze(['social.publish'] as const),
+  social_dm: Object.freeze(['conversations.reply'] as const),
+});
+
+interface TrustedProviderActivationManifest {
+  readonly rail: ProviderActivationRail;
+  readonly provider: ProviderManifest;
+  readonly adapterContractVersion: string;
+}
+
+const AUTHORITY_MANIFESTS = new WeakMap<
+  ProviderActivationAuthority,
+  ReadonlyMap<string, TrustedProviderActivationManifest>
+>();
+
+function authorityKey(rail: ProviderActivationRail, providerId: string): string {
+  return `${rail}\u0000${providerId}`;
+}
+
+/**
+ * Bind reviewed adapter-contract versions to immutable provider-registry rows.
+ *
+ * Production uses the composed registry below. The current registry is empty,
+ * so production assessments fail closed until a real adapter is registered and
+ * explicitly given a reviewed contract version by composition.
+ */
+export function createProviderActivationAuthority(
+  registry: ProviderRegistry,
+  registrations: readonly ProviderActivationContractRegistration[],
+): ProviderActivationAuthority {
+  if (!Object.isFrozen(registry) || !Object.isFrozen(registry.providers)) {
+    throw new Error('provider activation authority requires an immutable provider registry');
+  }
+  if (!Array.isArray(registrations) || registrations.length > 32) {
+    throw new Error('provider activation authority registration count is invalid');
+  }
+  const manifests = new Map<string, TrustedProviderActivationManifest>();
+  const reviewedRegistrations = registrations as readonly ProviderActivationContractRegistration[];
+  for (const registration of reviewedRegistrations) {
+    if (!PROVIDER_ACTIVATION_RAILS.includes(registration.rail)
+        || !PROVIDER_ID.test(registration.providerId)
+        || !SEMVER.test(registration.adapterContractVersion)) {
+      throw new Error('provider activation authority registration is invalid');
+    }
+    let provider: ProviderManifest;
+    try {
+      provider = registry.get(registration.providerId);
+    } catch {
+      throw new Error(`provider activation authority references unknown provider: ${registration.providerId}`);
+    }
+    if (!Object.isFrozen(provider) || !Object.isFrozen(provider.capabilities)) {
+      throw new Error('provider activation authority requires immutable provider manifests');
+    }
+    const requiredCapabilities = REQUIRED_CAPABILITIES_BY_RAIL[registration.rail];
+    if (requiredCapabilities.some((capability) => !provider.capabilities.includes(capability))) {
+      throw new Error(`provider ${provider.id} lacks the required ${registration.rail} capability`);
+    }
+    const key = authorityKey(registration.rail, registration.providerId);
+    if (manifests.has(key)) throw new Error('duplicate provider activation authority registration');
+    manifests.set(key, Object.freeze({
+      rail: registration.rail,
+      provider,
+      adapterContractVersion: registration.adapterContractVersion,
+    }));
+  }
+  const authority = Object.freeze({
+    authorityVersion: 1 as const,
+    manifestCount: manifests.size,
+  });
+  AUTHORITY_MANIFESTS.set(authority, manifests);
+  return authority;
+}
+
+const DEFAULT_PROVIDER_ACTIVATION_AUTHORITY = createProviderActivationAuthority(providerRegistry, []);
+
 type PlainRecord = Record<string, unknown>;
 
 class ReadinessValidationError extends Error {
@@ -394,30 +509,92 @@ function invalid(
   throw new ReadinessValidationError({ code, path, message });
 }
 
+interface PlainDataBudget {
+  nodes: number;
+  keys: number;
+  bytes: number;
+}
+
+function consumePlainDataBytes(
+  budget: PlainDataBudget,
+  value: string,
+  path: string,
+  perValueLimit: number,
+): void {
+  const bytes = Buffer.byteLength(value, 'utf8');
+  if (bytes > perValueLimit) {
+    invalid('INPUT_VALUE_INVALID', path, `${path} exceeds its byte bound.`);
+  }
+  budget.bytes += bytes;
+  if (budget.bytes > MAX_TOTAL_PLAIN_DATA_BYTES) {
+    invalid('INPUT_VALUE_INVALID', 'input', 'Input exceeds the total plain-data byte bound.');
+  }
+}
+
 function scanForCredentialFields(
   value: unknown,
   path: string,
   ancestors: WeakSet<object>,
+  budget: PlainDataBudget,
   depth = 0,
 ): void {
+  budget.nodes += 1;
+  budget.bytes += 8;
+  if (budget.nodes > MAX_TOTAL_NODES || budget.bytes > MAX_TOTAL_PLAIN_DATA_BYTES) {
+    invalid('INPUT_VALUE_INVALID', 'input', 'Input exceeds the total plain-data bound.');
+  }
+  if (typeof value === 'string') {
+    consumePlainDataBytes(budget, value, path, MAX_STRING_BYTES);
+    return;
+  }
   if (value === null || typeof value !== 'object') return;
-  if (depth > 16) invalid('INPUT_NOT_PLAIN_DATA', path, 'Input nesting exceeds the supported limit.');
+  if (depth > MAX_INPUT_DEPTH) {
+    invalid('INPUT_NOT_PLAIN_DATA', path, 'Input nesting exceeds the supported limit.');
+  }
   if (ancestors.has(value)) invalid('INPUT_NOT_PLAIN_DATA', path, 'Input must not contain circular references.');
   ancestors.add(value);
   try {
     if (Array.isArray(value)) {
-      if (value.length > 64) invalid('INPUT_VALUE_INVALID', path, 'Input array exceeds the supported limit.');
-      value.forEach((item, index) => scanForCredentialFields(item, `${path}[${index}]`, ancestors, depth + 1));
+      if (Object.getPrototypeOf(value) !== Array.prototype || value.length > MAX_ARRAY_ITEMS) {
+        invalid('INPUT_VALUE_INVALID', path, 'Input array exceeds the supported limit.');
+      }
+      const keys = Reflect.ownKeys(value);
+      const expectedKeys = [...Array(value.length).keys()].map(String);
+      if (keys.length !== value.length + 1
+          || keys.some((key) => typeof key !== 'string')
+          || !expectedKeys.every((key) => Object.prototype.hasOwnProperty.call(value, key))) {
+        invalid('INPUT_NOT_PLAIN_DATA', path, 'Input arrays must be dense plain-data arrays.');
+      }
+      expectedKeys.forEach((key, index) => {
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (!descriptor?.enumerable || !('value' in descriptor)) {
+          invalid('INPUT_NOT_PLAIN_DATA', `${path}[${index}]`, 'Input arrays must contain data properties only.');
+        }
+        budget.keys += 1;
+        if (budget.keys > MAX_TOTAL_KEYS) {
+          invalid('INPUT_VALUE_INVALID', 'input', 'Input exceeds the total key bound.');
+        }
+        scanForCredentialFields(descriptor.value, `${path}[${index}]`, ancestors, budget, depth + 1);
+      });
       return;
     }
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) {
       invalid('INPUT_NOT_PLAIN_DATA', path, 'Input must contain plain data objects only.');
     }
-    if (Object.getOwnPropertySymbols(value).length > 0) {
+    const ownKeys = Reflect.ownKeys(value);
+    if (ownKeys.length > MAX_OBJECT_KEYS) {
+      invalid('INPUT_VALUE_INVALID', path, 'Input object exceeds the supported key bound.');
+    }
+    if (ownKeys.some((key) => typeof key !== 'string')) {
       invalid('INPUT_NOT_PLAIN_DATA', path, 'Symbol properties are not supported.');
     }
     for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(value))) {
+      budget.keys += 1;
+      if (budget.keys > MAX_TOTAL_KEYS) {
+        invalid('INPUT_VALUE_INVALID', 'input', 'Input exceeds the total key bound.');
+      }
+      consumePlainDataBytes(budget, key, `${path}.${key}`, MAX_KEY_BYTES);
       if (!descriptor.enumerable || !('value' in descriptor)) {
         invalid('INPUT_NOT_PLAIN_DATA', `${path}.${key}`, 'Input fields must be enumerable data properties.');
       }
@@ -429,7 +606,7 @@ function scanForCredentialFields(
           'Credential material is forbidden; provide only a secret-manager metadata reference.',
         );
       }
-      scanForCredentialFields(descriptor.value, `${path}.${key}`, ancestors, depth + 1);
+      scanForCredentialFields(descriptor.value, `${path}.${key}`, ancestors, budget, depth + 1);
     }
   } finally {
     ancestors.delete(value);
@@ -509,6 +686,81 @@ function canonicalInstant(value: unknown, path: string): string {
   return value;
 }
 
+function canonicalJsonValue(value: unknown): unknown {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return value;
+  if (Array.isArray(value)) return value.map(canonicalJsonValue);
+  if (typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(
+      Object.keys(value as Record<string, unknown>)
+        .sort()
+        .map((key) => [key, canonicalJsonValue((value as Record<string, unknown>)[key])]),
+    );
+  }
+  throw new Error('assessed provider scope is not canonical plain data');
+}
+
+export function providerActivationAssessedScopeSha256(
+  input: Pick<ProviderActivationReadinessInput, 'schemaVersion' | 'rail' | 'provider' | 'workspace' | 'scope'>,
+): string {
+  const canonical = JSON.stringify(canonicalJsonValue({
+    schemaVersion: input.schemaVersion,
+    rail: input.rail,
+    provider: input.provider,
+    workspace: input.workspace,
+    scope: input.scope,
+  }));
+  return createHash('sha256')
+    .update('provider-activation-assessed-scope/v1\u0000', 'utf8')
+    .update(canonical, 'utf8')
+    .digest('hex');
+}
+
+const DAY_MS = 24 * 60 * 60 * 1_000;
+const PROVIDER_GATE_MAX_AGE_MS: Readonly<Record<ProviderActivationGate, number>> = Object.freeze({
+  commercialSaasRights: 365 * DAY_MS,
+  dpa: 365 * DAY_MS,
+  security: 90 * DAY_MS,
+  dataRegion: 90 * DAY_MS,
+  accountOwnership: 90 * DAY_MS,
+  workspaceIsolation: 30 * DAY_MS,
+  secretManagerReference: 30 * DAY_MS,
+  signedWebhook: 30 * DAY_MS,
+  replayProtection: 30 * DAY_MS,
+  idempotency: 30 * DAY_MS,
+  reconciliation: 30 * DAY_MS,
+  consent: 7 * DAY_MS,
+  purpose: 7 * DAY_MS,
+  territory: 30 * DAY_MS,
+  sender: 7 * DAY_MS,
+  suppression: 7 * DAY_MS,
+  approval: 7 * DAY_MS,
+  version: 7 * DAY_MS,
+  spendCaps: DAY_MS,
+  volumeCaps: DAY_MS,
+  emergencyPause: DAY_MS,
+  runtimeEffectsSwitch: DAY_MS,
+  databaseEffectsSwitch: DAY_MS,
+  workspaceEffectsSwitch: DAY_MS,
+  railEffectsSwitch: DAY_MS,
+  export: 365 * DAY_MS,
+  deletion: 365 * DAY_MS,
+  exit: 365 * DAY_MS,
+  adapterContract: 30 * DAY_MS,
+  testProvider: DAY_MS,
+  internalSeed: DAY_MS,
+});
+
+interface ExpectedEvidenceBinding {
+  readonly gate: ProviderActivationGate;
+  readonly rail: ProviderActivationRail;
+  readonly providerId: string;
+  readonly adapterContractVersion: string;
+  readonly workspaceId: string;
+  readonly providerConnectionId: string;
+  readonly assessedScopeSha256: string;
+}
+
 function stringArray(
   value: unknown,
   path: string,
@@ -537,10 +789,41 @@ function parseGateEvidence(
   value: unknown,
   path: string,
   evaluatedAtMs: number,
+  expected: ExpectedEvidenceBinding,
 ): ProviderGateEvidence {
   const record = exactRecord(value, path, [
+    'gate', 'rail', 'providerId', 'adapterContractVersion', 'workspaceId',
+    'providerConnectionId', 'assessedScopeVersion', 'assessedScopeSha256',
     'status', 'evidenceId', 'evidenceSha256', 'verifiedAt', 'expiresAt',
   ]);
+  const binding = {
+    gate: oneOf(record.gate, PROVIDER_ACTIVATION_GATES, `${path}.gate`),
+    rail: oneOf(record.rail, PROVIDER_ACTIVATION_RAILS, `${path}.rail`),
+    providerId: typeof record.providerId === 'string' && PROVIDER_ID.test(record.providerId)
+      ? record.providerId
+      : invalid('INPUT_VALUE_INVALID', `${path}.providerId`, `${path}.providerId is invalid.`),
+    adapterContractVersion: typeof record.adapterContractVersion === 'string'
+        && SEMVER.test(record.adapterContractVersion)
+      ? record.adapterContractVersion
+      : invalid(
+        'INPUT_VALUE_INVALID', `${path}.adapterContractVersion`,
+        `${path}.adapterContractVersion is invalid.`,
+      ),
+    workspaceId: canonicalUuid(record.workspaceId, `${path}.workspaceId`),
+    providerConnectionId: canonicalUuid(record.providerConnectionId, `${path}.providerConnectionId`),
+    assessedScopeVersion: record.assessedScopeVersion,
+    assessedScopeSha256: sha256(record.assessedScopeSha256, `${path}.assessedScopeSha256`),
+  };
+  if (binding.assessedScopeVersion !== 1
+      || binding.gate !== expected.gate
+      || binding.rail !== expected.rail
+      || binding.providerId !== expected.providerId
+      || binding.adapterContractVersion !== expected.adapterContractVersion
+      || binding.workspaceId !== expected.workspaceId
+      || binding.providerConnectionId !== expected.providerConnectionId
+      || binding.assessedScopeSha256 !== expected.assessedScopeSha256) {
+    return invalid('INPUT_VALUE_INVALID', path, `${path} is not bound to the assessed provider scope.`);
+  }
   const status = oneOf(record.status, ['verified', 'not_applicable', 'missing', 'failed'] as const, `${path}.status`);
 
   if (status === 'missing' || status === 'failed') {
@@ -552,7 +835,15 @@ function parseGateEvidence(
         `${path} must not claim evidence metadata for a missing or failed gate.`,
       );
     }
-    return Object.freeze({ status, evidenceId: null, evidenceSha256: null, verifiedAt: null, expiresAt: null });
+    return Object.freeze({
+      ...binding,
+      assessedScopeVersion: 1 as const,
+      status,
+      evidenceId: null,
+      evidenceSha256: null,
+      verifiedAt: null,
+      expiresAt: null,
+    });
   }
 
   const evidenceId = canonicalUuid(record.evidenceId, `${path}.evidenceId`);
@@ -567,12 +858,27 @@ function parseGateEvidence(
   if (expiresAtMs <= verifiedAtMs) {
     return invalid('INPUT_VALUE_INVALID', `${path}.expiresAt`, `${path} expiry must follow verification.`);
   }
-  return Object.freeze({ status, evidenceId, evidenceSha256, verifiedAt, expiresAt });
+  if (expiresAtMs - verifiedAtMs > PROVIDER_GATE_MAX_AGE_MS[expected.gate]) {
+    return invalid(
+      'INPUT_VALUE_INVALID', `${path}.expiresAt`,
+      `${path} expiry exceeds the maximum age for ${expected.gate}.`,
+    );
+  }
+  return Object.freeze({
+    ...binding,
+    assessedScopeVersion: 1 as const,
+    status,
+    evidenceId,
+    evidenceSha256,
+    verifiedAt,
+    expiresAt,
+  });
 }
 
 function parseProvider(value: unknown): ProviderReadinessManifestMetadata {
   const record = exactRecord(value, 'input.provider', [
-    'providerId', 'kind', 'outboundCredentialAuth', 'inboundWebhookVerification', 'adapterContractVersion',
+    'providerId', 'kind', 'outboundCredentialAuth', 'inboundWebhookVerification',
+    'capabilities', 'adapterContractVersion',
   ]);
   if (typeof record.providerId !== 'string' || !PROVIDER_ID.test(record.providerId)) {
     return invalid('INPUT_VALUE_INVALID', 'input.provider.providerId', 'Provider id must be a bounded lowercase slug.');
@@ -599,11 +905,24 @@ function parseProvider(value: unknown): ProviderReadinessManifestMetadata {
       'Webhook verification mode is unsupported.',
     );
   }
+  const capabilities = stringArray(
+    record.capabilities,
+    'input.provider.capabilities',
+    1,
+    32,
+    (candidate, path) => {
+      if (typeof candidate !== 'string' || !isPlatformCapability(candidate)) {
+        return invalid('INPUT_VALUE_INVALID', path, `${path} is not a platform capability.`);
+      }
+      return candidate;
+    },
+  ) as readonly PlatformCapability[];
   return Object.freeze({
     providerId: record.providerId,
     kind: record.kind as ProviderKind,
     outboundCredentialAuth: record.outboundCredentialAuth as ProviderCredentialAuthMode,
     inboundWebhookVerification: record.inboundWebhookVerification as ProviderWebhookVerificationMode,
+    capabilities,
     adapterContractVersion: record.adapterContractVersion,
   });
 }
@@ -906,7 +1225,12 @@ function parseScope(value: unknown): ProviderReadinessScope {
 }
 
 function parseInput(input: unknown, evaluatedAtMs: number): ProviderActivationReadinessInput {
-  scanForCredentialFields(input, 'input', new WeakSet());
+  scanForCredentialFields(
+    input,
+    'input',
+    new WeakSet(),
+    { nodes: 0, keys: 0, bytes: 0 },
+  );
   const record = exactRecord(input, 'input', [
     'schemaVersion', 'rail', 'provider', 'workspace', 'scope', 'evidence',
   ]);
@@ -917,14 +1241,44 @@ function parseInput(input: unknown, evaluatedAtMs: number): ProviderActivationRe
   const provider = parseProvider(record.provider);
   const workspace = parseWorkspace(record.workspace);
   const scope = parseScope(record.scope);
+  const assessedScopeSha256 = providerActivationAssessedScopeSha256({
+    schemaVersion: 1,
+    rail,
+    provider,
+    workspace,
+    scope,
+  });
   const evidenceRecord = exactRecord(record.evidence, 'input.evidence', PROVIDER_ACTIVATION_GATES);
   const parsedEvidence = {} as Record<ProviderActivationGate, ProviderGateEvidence>;
+  const evidenceIds = new Set<string>();
+  const evidenceDigests = new Set<string>();
   for (const gate of PROVIDER_ACTIVATION_GATES) {
-    parsedEvidence[gate] = parseGateEvidence(
+    const parsed = parseGateEvidence(
       evidenceRecord[gate],
       `input.evidence.${gate}`,
       evaluatedAtMs,
+      {
+        gate,
+        rail,
+        providerId: provider.providerId,
+        adapterContractVersion: provider.adapterContractVersion,
+        workspaceId: workspace.workspaceId,
+        providerConnectionId: workspace.providerConnectionId,
+        assessedScopeSha256,
+      },
     );
+    if (parsed.evidenceId !== null) {
+      if (evidenceIds.has(parsed.evidenceId) || evidenceDigests.has(parsed.evidenceSha256!)) {
+        return invalid(
+          'INPUT_VALUE_INVALID',
+          `input.evidence.${gate}`,
+          'Evidence records cannot be replayed across provider activation gates.',
+        );
+      }
+      evidenceIds.add(parsed.evidenceId);
+      evidenceDigests.add(parsed.evidenceSha256!);
+    }
+    parsedEvidence[gate] = parsed;
   }
   return Object.freeze({
     schemaVersion: 1,
@@ -962,7 +1316,8 @@ function evidenceReason(
       return reason('NOT_APPLICABLE_INVALID', gate, `${gate} cannot be marked not applicable for this rail.`);
     }
   }
-  if (Date.parse(evidence.expiresAt!) <= evaluatedAtMs) {
+  if (Date.parse(evidence.expiresAt!) <= evaluatedAtMs
+      || evaluatedAtMs - Date.parse(evidence.verifiedAt!) > PROVIDER_GATE_MAX_AGE_MS[gate]) {
     return reason('EVIDENCE_STALE', gate, `Evidence for ${gate} is stale.`);
   }
   return null;
@@ -980,11 +1335,36 @@ function uniqueReasons(reasons: readonly ProviderReadinessReason[]): readonly Pr
   return Object.freeze(result);
 }
 
-function providerMetadataBlockers(input: ProviderActivationReadinessInput): readonly ProviderReadinessReason[] {
+function providerMetadataBlockers(
+  input: ProviderActivationReadinessInput,
+  authority: ProviderActivationAuthority,
+): readonly ProviderReadinessReason[] {
   const { rail, provider } = input;
+  const authorityTrusted = typeof authority === 'object'
+    && authority !== null
+    && AUTHORITY_MANIFESTS.has(authority);
+  const authoritative = authorityTrusted ? AUTHORITY_MANIFESTS.get(authority)?.get(
+    authorityKey(rail, provider.providerId),
+  ) : undefined;
   const signed = provider.inboundWebhookVerification === 'hmac_signature'
     || provider.inboundWebhookVerification === 'asymmetric_signature';
-  let matches = signed && provider.outboundCredentialAuth !== 'none';
+  const candidateCapabilities = [...provider.capabilities].sort();
+  const authoritativeCapabilities = authoritative
+    ? [...authoritative.provider.capabilities].sort()
+    : [];
+  const requiredCapabilities = REQUIRED_CAPABILITIES_BY_RAIL[rail];
+  let matches = authorityTrusted
+    && authority.authorityVersion === 1
+    && authoritative !== undefined
+    && signed
+    && provider.outboundCredentialAuth !== 'none'
+    && provider.kind === authoritative.provider.kind
+    && provider.outboundCredentialAuth === authoritative.provider.outboundCredentialAuth
+    && provider.inboundWebhookVerification === authoritative.provider.inboundWebhookVerification
+    && provider.adapterContractVersion === authoritative.adapterContractVersion
+    && candidateCapabilities.length === authoritativeCapabilities.length
+    && candidateCapabilities.every((capability, index) => capability === authoritativeCapabilities[index])
+    && requiredCapabilities.every((capability) => candidateCapabilities.includes(capability));
   if (rail === 'mailgun_email') {
     matches = matches
       && provider.providerId === 'mailgun_eu'
@@ -1014,8 +1394,11 @@ function providerMetadataBlockers(input: ProviderActivationReadinessInput): read
     )]);
 }
 
-function adapterScopeBlockers(input: ProviderActivationReadinessInput): readonly ProviderReadinessReason[] {
-  const blockers: ProviderReadinessReason[] = [...providerMetadataBlockers(input)];
+function adapterScopeBlockers(
+  input: ProviderActivationReadinessInput,
+  authority: ProviderActivationAuthority,
+): readonly ProviderReadinessReason[] {
+  const blockers: ProviderReadinessReason[] = [...providerMetadataBlockers(input, authority)];
   const { scope, workspace } = input;
   if (scope.commercialRights.model === 'internal_use_only') {
     blockers.push(reason(
@@ -1130,6 +1513,7 @@ function stageBlockers(
   input: ProviderActivationReadinessInput,
   stage: ProviderActivationReadinessStage,
   evaluatedAtMs: number,
+  authority: ProviderActivationAuthority,
 ): readonly ProviderReadinessReason[] {
   const gates = stage === 'adapter_contract_verified'
     ? ADAPTER_STAGE_GATES
@@ -1141,7 +1525,14 @@ function stageBlockers(
     const blocked = evidenceReason(gate, input.evidence[gate], input.rail, evaluatedAtMs);
     if (blocked) blockers.push(blocked);
   }
-  blockers.push(...adapterScopeBlockers(input));
+  blockers.push(...adapterScopeBlockers(input, authority));
+  if (stage !== 'adapter_contract_verified' && input.scope.testProvider.mode !== 'provider_sandbox') {
+    blockers.push(reason(
+      'PROVIDER_TEST_SCOPE_INVALID',
+      'testProvider',
+      'Provider-test and internal-seed readiness require a provider-issued sandbox/test scope.',
+    ));
+  }
   if (stage === 'internal_seed_ready') blockers.push(...internalSeedScopeBlockers(input));
   return uniqueReasons(blockers);
 }
@@ -1190,6 +1581,7 @@ function invalidReport(
 export function evaluateProviderActivationReadiness(
   candidate: unknown,
   clock: Date = new Date(),
+  authority: ProviderActivationAuthority = DEFAULT_PROVIDER_ACTIVATION_AUTHORITY,
 ): ProviderActivationReadinessReport {
   const evaluatedAtMs = clock instanceof Date ? clock.getTime() : Number.NaN;
   const evaluatedAt = Number.isFinite(evaluatedAtMs)
@@ -1216,7 +1608,7 @@ export function evaluateProviderActivationReadiness(
   }
 
   const stages = Object.freeze(PROVIDER_ACTIVATION_READINESS_STAGES.map((stage) => {
-    const blockers = stageBlockers(input, stage, evaluatedAtMs);
+    const blockers = stageBlockers(input, stage, evaluatedAtMs, authority);
     return Object.freeze({ stage, ready: blockers.length === 0, blockers });
   }));
   const adapterReady = stages[0]!.ready;
