@@ -25,11 +25,22 @@ export interface SocialDmDarkAudit {
 }
 
 function references(context: ProviderOperationContext): Readonly<{ thread: string; message: string }> {
-  const base = `${context.workspaceId}\n${context.connectionId}\n${context.operationId}\n${context.idempotencyKey}`;
+  const base = contextBindingSha256(context);
   return Object.freeze({
     thread: `test-dm-thread_${createHash('sha256').update(`thread\n${base}`, 'utf8').digest('hex').slice(0, 32)}`,
     message: `test-dm-message_${createHash('sha256').update(`message\n${base}`, 'utf8').digest('hex').slice(0, 32)}`,
   });
+}
+
+function contextBindingSha256(context: ProviderOperationContext): string {
+  return createHash('sha256').update(JSON.stringify({
+    workspaceId: context.workspaceId,
+    connectionId: context.connectionId,
+    providerId: context.providerId,
+    operationId: context.operationId,
+    idempotencyKey: context.idempotencyKey,
+    correlationId: context.correlationId,
+  }), 'utf8').digest('hex');
 }
 
 export class SimulatedSocialDmDarkAdapter implements SocialDmDarkAdapter {
@@ -38,6 +49,7 @@ export class SimulatedSocialDmDarkAdapter implements SocialDmDarkAdapter {
   readonly #now: () => Date;
   readonly #audit: SocialDmDarkAudit[] = [];
   readonly #results = new Map<string, Readonly<{
+    contextSha256: string;
     requestSha256: string;
     result: SocialDmDarkResult;
   }>>();
@@ -55,8 +67,10 @@ export class SimulatedSocialDmDarkAdapter implements SocialDmDarkAdapter {
     request: SocialDmDarkRequest,
   ): Promise<SocialDmDarkResult> {
     const valid = validateSocialDmDarkRequest(context, request);
+    const contextSha256 = contextBindingSha256(valid.context);
     const ref = references(valid.context);
     const requestSha256 = createHash('sha256').update(JSON.stringify({
+      contextSha256,
       bodySha256: valid.bodySha256,
       evidenceSha256: valid.evidence.evidenceSha256,
       network: valid.network,
@@ -66,6 +80,9 @@ export class SimulatedSocialDmDarkAdapter implements SocialDmDarkAdapter {
     }), 'utf8').digest('hex');
     const existing = this.#results.get(valid.context.operationId);
     if (existing) {
+      if (existing.contextSha256 !== contextSha256) {
+        throw new SocialDmDarkContractError('operation id was reused with different test context');
+      }
       if (existing.requestSha256 !== requestSha256) {
         throw new SocialDmDarkContractError('operation id was reused with different test input');
       }
@@ -81,7 +98,7 @@ export class SimulatedSocialDmDarkAdapter implements SocialDmDarkAdapter {
       providerOperationsCreated: 0 as const,
       externalMessageAttempted: false as const,
     });
-    this.#results.set(valid.context.operationId, Object.freeze({ requestSha256, result }));
+    this.#results.set(valid.context.operationId, Object.freeze({ contextSha256, requestSha256, result }));
     this.#audit.push(Object.freeze({
       action: 'simulate',
       operationId: valid.context.operationId,
@@ -100,9 +117,11 @@ export class SimulatedSocialDmDarkAdapter implements SocialDmDarkAdapter {
     testMessageRef: string,
   ): Promise<SocialDmDarkResult> {
     const exactContext = assertSocialDmDarkContext(context);
+    const contextSha256 = contextBindingSha256(exactContext);
     const expected = references(exactContext).message;
     const stored = this.#results.get(exactContext.operationId);
-    if (!stored || typeof testMessageRef !== 'string' || !MESSAGE_REF.test(testMessageRef)
+    if (!stored || stored.contextSha256 !== contextSha256
+        || typeof testMessageRef !== 'string' || !MESSAGE_REF.test(testMessageRef)
         || testMessageRef !== expected || stored.result.testMessageRef !== expected) {
       throw new SocialDmDarkContractError('social DM simulation reference is invalid');
     }

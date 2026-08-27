@@ -80,6 +80,45 @@ test('simulator refuses real or cross-network addresses and binds all decision e
     .reconcileSimulation(context, result.testMessageRef));
 });
 
+test('same operation rejects context drift and reconciliation is correlation-bound', async () => {
+  const adapter = new SimulatedSocialDmDarkAdapter({ now: () => NOW });
+  const request = { network: 'instagram' as const, recipient, text: 'Context-bound test DM.',
+    threadRef: null, replyToMessageRef: null, evidence };
+  const result = await adapter.simulateMessage(context, request);
+  const correlationDrift = {
+    ...context, correlationId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+  };
+  await assert.rejects(
+    adapter.simulateMessage(correlationDrift, request),
+    /operation id was reused with different test context/,
+  );
+  await assert.rejects(
+    adapter.reconcileSimulation(correlationDrift, result.testMessageRef),
+    /simulation reference is invalid/,
+  );
+  await assert.rejects(adapter.simulateMessage({ ...context, idempotencyKey: 'drifted-key' }, request),
+    /operation id was reused with different test context/);
+  const otherWorkspace = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const workspaceEvidence = createSocialDmDarkEvidence({ ...evidence, workspaceId: otherWorkspace });
+  await assert.rejects(adapter.simulateMessage({ ...context, workspaceId: otherWorkspace }, {
+    ...request, evidence: workspaceEvidence,
+  }), /operation id was reused with different test context/);
+  const otherConnection = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const connectionEvidence = createSocialDmDarkEvidence({ ...evidence, connectionId: otherConnection });
+  await assert.rejects(adapter.simulateMessage({ ...context, connectionId: otherConnection }, {
+    ...request, evidence: connectionEvidence,
+  }), /operation id was reused with different test context/);
+  await assert.rejects(adapter.simulateMessage({ ...context, providerId: 'another-provider' }, request),
+    /not the social DM simulator/);
+
+  const secondAdapter = new SimulatedSocialDmDarkAdapter({ now: () => NOW });
+  const second = await secondAdapter.simulateMessage({
+    ...context, operationId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+  }, request);
+  assert.notEqual(second.testThreadRef, result.testThreadRef);
+  assert.notEqual(second.testMessageRef, result.testMessageRef);
+});
+
 test('signed simulated event becomes a unified-inbox command only after exact verification', () => {
   const signed = createSignedSocialDmDarkInbound({
     workspaceId: WORKSPACE_ID, connectionId: CONNECTION_ID, network: 'instagram',
@@ -136,6 +175,61 @@ test('webhook snapshots signed bytes once and rejects tampering before parsing',
     contentType: signed.contentType,
     testSecret: SECRET,
   }), /signature is invalid/);
+});
+
+test('webhook copies signed bytes before consulting an overridable byteLength property', () => {
+  const signed = createSignedSocialDmDarkInbound({
+    workspaceId: WORKSPACE_ID, connectionId: CONNECTION_ID, network: 'instagram',
+    from: 'test-dm:instagram:source', to: recipient,
+    body: 'Original signed bytes.', occurredAt: NOW.toISOString(), testSecret: SECRET,
+  });
+  const forged = createSignedSocialDmDarkInbound({
+    workspaceId: WORKSPACE_ID, connectionId: CONNECTION_ID, network: 'instagram',
+    from: 'test-dm:instagram:source', to: recipient,
+    body: 'Forged body same size.', occurredAt: NOW.toISOString(), testSecret: SECRET,
+  });
+  assert.equal(signed.rawBody.length, forged.rawBody.length);
+  const adversarial = Uint8Array.from(signed.rawBody);
+  let byteLengthReads = 0;
+  Object.defineProperty(adversarial, 'byteLength', {
+    configurable: true,
+    get() {
+      byteLengthReads += 1;
+      adversarial.set(forged.rawBody);
+      return forged.rawBody.length;
+    },
+  });
+  const event = verifySocialDmDarkInbound({
+    rawBody: adversarial, signature: signed.signature,
+    contentType: signed.contentType, testSecret: SECRET,
+  });
+  assert.equal(byteLengthReads, 0);
+  assert.equal(event.event.body, 'Original signed bytes.');
+});
+
+test('signed-event constructor snapshots every caller field exactly once', () => {
+  const reads = new Map<string, number>();
+  const once = <T>(name: string, value: T): (() => T) => () => {
+    reads.set(name, (reads.get(name) ?? 0) + 1);
+    return value;
+  };
+  const input = Object.defineProperties({}, {
+    workspaceId: { enumerable: true, get: once('workspaceId', WORKSPACE_ID) },
+    connectionId: { enumerable: true, get: once('connectionId', CONNECTION_ID) },
+    network: { enumerable: true, get: once('network', 'instagram' as const) },
+    from: { enumerable: true, get: once('from', 'test-dm:instagram:snapshot-source') },
+    to: { enumerable: true, get: once('to', recipient) },
+    body: { enumerable: true, get: once('body', 'Snapshotted exactly once.') },
+    occurredAt: { enumerable: true, get: once('occurredAt', NOW.toISOString()) },
+    testSecret: { enumerable: true, get: once('testSecret', SECRET) },
+  }) as Parameters<typeof createSignedSocialDmDarkInbound>[0];
+  const signed = createSignedSocialDmDarkInbound(input);
+  assert.deepEqual(Object.fromEntries(reads), {
+    workspaceId: 1, connectionId: 1, network: 1, from: 1, to: 1,
+    body: 1, occurredAt: 1, testSecret: 1,
+  });
+  const event = verifySocialDmDarkInbound({ ...signed, testSecret: SECRET });
+  assert.equal(event.event.body, 'Snapshotted exactly once.');
 });
 
 test('dark social-DM module has no external transport, provider registry or effect path', async () => {

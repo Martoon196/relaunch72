@@ -115,24 +115,37 @@ export function createSignedSocialDmDarkInbound(input: Readonly<{
   occurredAt: string;
   testSecret: string;
 }>): Readonly<{ rawBody: Uint8Array; signature: string; contentType: 'application/json' }> {
-  const network = socialDmDarkNetwork(input.network, 'input.network');
-  const seed = [input.workspaceId, input.connectionId, network, input.from, input.to, input.body, input.occurredAt]
+  const snapshot = Object.freeze({
+    workspaceId: input.workspaceId,
+    connectionId: input.connectionId,
+    network: input.network,
+    from: input.from,
+    to: input.to,
+    body: input.body,
+    occurredAt: input.occurredAt,
+    testSecret: input.testSecret,
+  });
+  const network = socialDmDarkNetwork(snapshot.network, 'input.network');
+  const seed = [
+    snapshot.workspaceId, snapshot.connectionId, network, snapshot.from,
+    snapshot.to, snapshot.body, snapshot.occurredAt,
+  ]
     .join('\n');
   const digest = createHash('sha256').update(seed, 'utf8').digest('hex').slice(0, 32);
   const event = normalize({
     schemaVersion: 1, environment: 'test', providerId: SOCIAL_DM_DARK_PROVIDER_ID,
-    workspaceId: input.workspaceId, connectionId: input.connectionId,
-    eventId: `social_dm_evt_${digest}`, occurredAt: input.occurredAt,
+    workspaceId: snapshot.workspaceId, connectionId: snapshot.connectionId,
+    eventId: `social_dm_evt_${digest}`, occurredAt: snapshot.occurredAt,
     event: {
       type: 'message.inbound', network,
       threadRef: `test-dm-thread_${digest}`, messageRef: `test-dm-message_${digest}`,
-      from: input.from, to: input.to, body: input.body,
+      from: snapshot.from, to: snapshot.to, body: snapshot.body,
     },
   });
   const rawBody = new TextEncoder().encode(JSON.stringify(event));
   return Object.freeze({
     rawBody,
-    signature: `sha256=${createHmac('sha256', secret(input.testSecret)).update(rawBody).digest('hex')}`,
+    signature: `sha256=${createHmac('sha256', secret(snapshot.testSecret)).update(rawBody).digest('hex')}`,
     contentType: 'application/json',
   });
 }
@@ -144,10 +157,13 @@ export function verifySocialDmDarkInbound(input: Readonly<{
   testSecret: string;
 }>): VerifiedSocialDmDarkInbound {
   const candidate = input.rawBody;
-  if (!(candidate instanceof Uint8Array) || candidate.byteLength < 2 || candidate.byteLength > MAX_BYTES) {
+  if (!(candidate instanceof Uint8Array)) {
     fail('webhook byte length is invalid');
   }
-  const rawBody = Uint8Array.from(candidate);
+  const rawBody = new Uint8Array(candidate);
+  if (rawBody.byteLength < 2 || rawBody.byteLength > MAX_BYTES) {
+    fail('webhook byte length is invalid');
+  }
   const signatureValue = input.signature;
   const contentType = input.contentType;
   const secretValue = input.testSecret;
