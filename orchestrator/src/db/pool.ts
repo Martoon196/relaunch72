@@ -106,6 +106,22 @@ export function createTestInboxWebhookCommandDatabasePool(
   return createDatabasePool(loadDatabaseConfig('testInboxWebhookCommand', env), hooks);
 }
 
+/** Function-only portal command pool for TEST public-social campaign planning. */
+export function createPublicSocialCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('publicSocialCommand', env), hooks);
+}
+
+/** Function-only worker pool for the no-network public-social TEST rail. */
+export function createPublicSocialWorkerCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('publicSocialWorkerCommand', env), hooks);
+}
+
 /** Function-only pool for the isolated provider-operation worker. */
 export function createWorkerDatabasePool(
   env: NodeJS.ProcessEnv = process.env,

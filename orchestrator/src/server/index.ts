@@ -474,6 +474,7 @@ async function main(): Promise<void> {
         operatorActions: postgresPortal.operatorActions,
         companyContent: postgresPortal.companyContent,
         companyAssets: postgresPortal.companyAssets,
+        publicSocial: postgresPortal.publicSocial,
         inbox: postgresPortal.inbox,
         inboxCommands: postgresPortal.inboxCommands,
         productProfile: portalProductProfile,

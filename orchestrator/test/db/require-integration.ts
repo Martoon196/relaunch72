@@ -1,3 +1,6 @@
+import { spawn } from 'node:child_process';
+import { readdir } from 'node:fs/promises';
+import { once } from 'node:events';
 import '../../src/config.js';
 import {
   assertDisposableTestDatabase,
@@ -19,22 +22,31 @@ assertDisposableTestDatabase(rawUrl);
 // .env. Only this guarded preflight turns the real tests on, so a green explicit
 // command always means PostgreSQL was actually reached.
 process.env.RELAUNCH72_DATABASE_INTEGRATION = DATABASE_INTEGRATION_CONFIRMATION;
-await import('./rls.integration.test.js');
-await import('./conversion-rls.integration.test.js');
-await import('./external-event-shadow.integration.test.js');
-await import('./growth-evidence-rls.integration.test.js');
-await import('./legacy-lead-import.integration.test.js');
-await import('./property-predator-snapshot.integration.test.js');
-await import('./legacy-lead-board-materialization.integration.test.js');
-await import('./company-content.integration.test.js');
-await import('./inbox-provider.integration.test.js');
-await import('./test-inbox-webhook.integration.test.js');
-await import('./property-predator-email-pilot.integration.test.js');
-await import('./property-predator-founder-bootstrap.integration.test.js');
-await import('./operator-action-control.integration.test.js');
-await import('./property-predator-sso.integration.test.js');
-await import('./portal-abuse.integration.test.js');
-await import('./brand-brain.integration.test.js');
-await import('./affiliate-compliance.integration.test.js');
-await import('./company-asset.integration.test.js');
-await import('./company-asset-session-capability.integration.test.js');
+
+const integrationFiles = (await readdir(new URL('.', import.meta.url)))
+  .filter((filename) => filename.endsWith('.integration.test.ts'))
+  .sort()
+  .map((filename) => `test/db/${filename}`);
+
+if (integrationFiles.length < 20
+    || !integrationFiles.includes('test/db/public-social-campaign.integration.test.ts')) {
+  throw new Error('disposable integration test discovery is incomplete');
+}
+
+const child = spawn(process.execPath, [
+  '--import', './test/windows-node24-shim.mjs',
+  '--import', 'tsx',
+  '--test',
+  '--test-concurrency=1',
+  ...integrationFiles,
+], {
+  cwd: process.cwd(),
+  env: process.env,
+  stdio: 'inherit',
+  windowsHide: true,
+});
+
+const [code, signal] = await once(child, 'exit') as [number | null, NodeJS.Signals | null];
+if (code !== 0) {
+  throw new Error(`disposable integration suite failed (${signal ?? code ?? 'unknown'})`);
+}

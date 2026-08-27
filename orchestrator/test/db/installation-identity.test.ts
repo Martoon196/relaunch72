@@ -12,6 +12,8 @@ const PRODUCTION_ROLES = [
   'r72_mailgun_webhook_command',
   'r72_mailgun_worker_command',
   'r72_test_inbox_webhook_command',
+  'r72_public_social_command',
+  'r72_public_social_worker_command',
 ] as const;
 
 function installationPool(
@@ -43,7 +45,7 @@ test('installation identity accepts one exact UUID through the function-only que
   assert.equal(sql.includes(EXPECTED), false);
 });
 
-test('all seven runtime role pools can be pinned independently to one expected UUID', async () => {
+test('all runtime role pools can be pinned independently to one expected UUID', async () => {
   const queried: string[] = [];
   await Promise.all(PRODUCTION_ROLES.map(async (role) => {
     await assertExpectedDatabaseInstallation(

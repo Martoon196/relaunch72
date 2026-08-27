@@ -1,14 +1,43 @@
 import { BRAND_BRAIN_ROUTE } from './brand-brain-actions.js';
+import { CAMPAIGN_COMMAND_ROUTE } from './campaign-command-presenter.js';
 import { COMPANY_ASSETS_ROUTE } from './company-assets-actions.js';
+import { CONTENT_CALENDAR_ROUTE } from './content-calendar-presenter.js';
 import { CONTENT_CONTROL_ROOM_ROUTE } from './content-control-room-presenter.js';
+import { SOCIAL_COMPOSER_ROUTE } from './social-composer-presenter.js';
 import { escapeHtml } from './ui.js';
 
-export type ContentWorkspaceNavigationTarget = 'library' | 'assets' | 'brain';
+export type ContentWorkspaceNavigationTarget =
+  | 'campaigns'
+  | 'calendar'
+  | 'composer'
+  | 'library'
+  | 'assets'
+  | 'brain';
+
+const CONTENT_WORKSPACE_NAVIGATION_STYLE = `
+  .pp-content-nav{display:flex;align-items:center;gap:6px;max-width:100%;margin:0 0 14px;padding:6px;border:1px solid #253238;border-radius:10px;background:#090d0f;overflow-x:auto;scrollbar-width:thin;scrollbar-color:#39474e #090d0f}
+  .pp-content-nav a{flex:0 0 auto;min-height:44px;display:inline-flex;align-items:center;justify-content:center;border:1px solid transparent;border-radius:7px;padding:0 12px;color:#96a5a9;font-size:12px;font-weight:850;line-height:1.2;text-decoration:none;white-space:nowrap}
+  .pp-content-nav a:hover{border-color:#3b4b51;color:#f3f7f6}.pp-content-nav a[aria-current="page"]{border-color:#318178;background:#08211e;color:#65f3e3;box-shadow:inset 0 -2px #00e5cc}
+  .pp-content-nav a:focus-visible{outline:3px solid rgba(0,229,204,.34);outline-offset:2px}
+  @media(max-width:560px){.pp-content-nav{margin-inline:-2px;padding:5px}.pp-content-nav a{padding-inline:10px}}
+  @media(forced-colors:active){.pp-content-nav,.pp-content-nav a{forced-color-adjust:auto}.pp-content-nav a[aria-current="page"]{border:3px solid Highlight}}
+`;
+
+const CONTENT_WORKSPACE_LINKS: readonly Readonly<{
+  target: ContentWorkspaceNavigationTarget;
+  href: string;
+  label: string;
+}>[] = Object.freeze([
+  { target: 'campaigns', href: CAMPAIGN_COMMAND_ROUTE, label: 'Campaigns' },
+  { target: 'calendar', href: CONTENT_CALENDAR_ROUTE, label: 'Calendar' },
+  { target: 'library', href: CONTENT_CONTROL_ROOM_ROUTE, label: 'Content Control' },
+]);
 
 export function renderContentWorkspaceNavigation(
   active: ContentWorkspaceNavigationTarget,
   options: Readonly<{
     companyAssetsAvailable?: boolean;
+    composerAvailable?: boolean;
     assetsLabel?: string;
     brandBrainAvailable: boolean;
     brainLabel?: string;
@@ -16,17 +45,17 @@ export function renderContentWorkspaceNavigation(
     brandBrainAvailable: false,
   },
 ): string {
-  const libraryCurrent = active === 'library' ? ' aria-current="page"' : '';
-  const assetsCurrent = active === 'assets' ? ' aria-current="page"' : '';
-  const brainCurrent = active === 'brain' ? ' aria-current="page"' : '';
-  const libraryClass = active === 'library' ? 'button compact' : 'button secondary compact';
-  const assetsClass = active === 'assets' ? 'button compact' : 'button secondary compact';
-  const brainClass = active === 'brain' ? 'button compact' : 'button secondary compact';
+  const links = CONTENT_WORKSPACE_LINKS.map((link) => (
+    `<a href="${link.href}"${active === link.target ? ' aria-current="page"' : ''}>${link.label}</a>`
+  )).join('');
+  const composer = options.composerAvailable || active === 'composer'
+    ? `<a href="${SOCIAL_COMPOSER_ROUTE}"${active === 'composer' ? ' aria-current="page"' : ''}>Composer</a>`
+    : '';
   const assets = options.companyAssetsAvailable
-    ? `<a class="${assetsClass}" href="${COMPANY_ASSETS_ROUTE}"${assetsCurrent}>${escapeHtml(options.assetsLabel ?? 'Company Assets')}</a>`
+    ? `<a href="${COMPANY_ASSETS_ROUTE}"${active === 'assets' ? ' aria-current="page"' : ''}>${escapeHtml(options.assetsLabel ?? 'Company Assets')}</a>`
     : '';
   const brain = options.brandBrainAvailable
-    ? `<a class="${brainClass}" href="${BRAND_BRAIN_ROUTE}"${brainCurrent}>${escapeHtml(options.brainLabel ?? 'Brand Brain')}</a>`
+    ? `<a href="${BRAND_BRAIN_ROUTE}"${active === 'brain' ? ' aria-current="page"' : ''}>${escapeHtml(options.brainLabel ?? 'Brand Brain')}</a>`
     : '';
-  return `<nav aria-label="Content workspace" style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap"><a class="${libraryClass}" href="${CONTENT_CONTROL_ROOM_ROUTE}"${libraryCurrent}>Content control</a>${assets}${brain}</nav>`;
+  return `<style data-property-predator-content-workspace-navigation>${CONTENT_WORKSPACE_NAVIGATION_STYLE}</style><nav class="pp-content-nav" aria-label="Content operations">${links}${composer}${assets}${brain}</nav>`;
 }

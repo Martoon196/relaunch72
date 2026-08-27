@@ -36,6 +36,22 @@ import { renderGrowthHomeBody } from './growth-home.js';
 import { renderLead360Body } from './lead-360-view.js';
 import { JOURNEY_BOARD_CLIENT_SOURCE } from './journey-board-client.js';
 import {
+  CONTENT_CALENDAR_CLIENT_ROUTE,
+  CONTENT_CALENDAR_CLIENT_SOURCE,
+} from './content-calendar-client.js';
+import {
+  CONTENT_CALENDAR_ROUTE,
+  normaliseContentCalendarFilters,
+  presentContentCalendar,
+} from './content-calendar-presenter.js';
+import { renderContentCalendarBody } from './content-calendar-view.js';
+import { adaptPublicSocialCalendar } from './public-social-calendar-adapter.js';
+import {
+  PUBLIC_SOCIAL_CAMPAIGNS_ROUTE,
+  presentPublicSocialCampaigns,
+} from './public-social-campaigns-presenter.js';
+import { renderPublicSocialCampaignsBody } from './public-social-campaigns-view.js';
+import {
   JOURNEY_BOARD_CLIENT_ROUTE,
   JOURNEY_BOARD_ROUTE,
   renderJourneyBoardBody,
@@ -161,6 +177,7 @@ import {
 } from './provider-readiness-cockpit-presenter.js';
 import { renderProviderReadinessCockpitBody } from './provider-readiness-cockpit-view.js';
 import type { PortalProviderReadinessService } from './provider-readiness-cockpit-service.js';
+import type { PortalPublicSocialService } from './public-social-service.js';
 import {
   authSubjectAbuseAdmission,
   classifyPortalAbuseRoute,
@@ -241,6 +258,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   affiliateCompliance?: PortalAffiliateComplianceService;
   /** Dark-only provider readiness metadata. It exposes no credential, switch or provider operation. */
   providerReadiness?: PortalProviderReadinessService;
+  /** Durable TEST-only campaign planning and safe social calendar projection. */
+  publicSocial?: PortalPublicSocialService;
   /** TEST-only conversion queue. Thread detail remains a separate optional projection. */
   inbox?: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval/queue commands. It has no provider dispatcher. */
@@ -521,7 +540,7 @@ function optionalPortalCapabilities(deps: PortalDeps): readonly PlatformCapabili
   if (deps.kind !== 'postgres') return [];
   return [
     ...(deps.operatorActions ? ['actions.read'] as const : []),
-    ...(deps.companyContent || deps.brandBrain || deps.companyAssets
+    ...(deps.companyContent || deps.brandBrain || deps.companyAssets || deps.publicSocial
       ? ['content.drafts.read'] as const
       : []),
     ...(deps.affiliateCompliance ? ['affiliates.compliance.read'] as const : []),
@@ -632,6 +651,15 @@ function crmIdentity(sessionToken: string, deps: PortalDeps): PortalCrmRequestId
     sessionToken,
     requestId: deps.requestId ? deps.requestId() : randomUUID(),
   };
+}
+
+function contentCalendarReadRange(selectedDate: string): Readonly<{ from: string; to: string }> {
+  const selected = Date.parse(`${selectedDate}T00:00:00.000Z`);
+  const dayMs = 86_400_000;
+  return Object.freeze({
+    from: new Date(selected - (45 * dayMs)).toISOString(),
+    to: new Date(selected + (46 * dayMs)).toISOString(),
+  });
 }
 
 function crmSnapshotRequest(path: string, query: URLSearchParams): PortalCrmSnapshotRequest {
@@ -923,6 +951,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   try {
   if (p === JOURNEY_BOARD_CLIENT_ROUTE && method === 'GET') {
     return sendJavaScript(res, JOURNEY_BOARD_CLIENT_SOURCE);
+  }
+  if (p === CONTENT_CALENDAR_CLIENT_ROUTE && method === 'GET') {
+    return sendJavaScript(res, CONTENT_CALENDAR_CLIENT_SOURCE);
   }
   const productProfile = deps.productProfile ?? RELAUNCH72_PRODUCT_PROFILE;
   const requestCookies = parseCookies(req.headers.cookie);
@@ -1787,6 +1818,205 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       );
     } catch {
       return companyAssetsRedirect(res, deps, sessionToken, form, 'unavailable');
+    }
+  }
+
+  // ── public-social campaigns: exact body-free command projection, read-only ──
+  if (deps.kind === 'postgres' && p === PUBLIC_SOCIAL_CAMPAIGNS_ROUTE && method === 'GET') {
+    if (!deps.publicSocial) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Campaign Command not connected',
+        message: 'The protected TEST campaign projection is not enabled for this workspace.',
+        active: 'content',
+        backHref: CONTENT_CALENDAR_ROUTE,
+        backLabel: 'Return to Campaign Calendar',
+      }));
+    }
+    const campaignValues = url.searchParams.getAll('campaign');
+    const campaignValue = campaignValues.length === 1 ? campaignValues[0]!.trim() : '';
+    if (campaignValues.length > 1 || (campaignValue && !CRM_OBJECT_ID.test(campaignValue))) {
+      return sendHtml(res, 400, portalStatusPage(deps, sessionToken, {
+        title: 'Campaign address not valid',
+        message: 'Open one exact campaign from the authenticated Campaign Calendar.',
+        active: 'content',
+        backHref: CONTENT_CALENDAR_ROUTE,
+        backLabel: 'Return to Campaign Calendar',
+      }));
+    }
+    const requestedCampaignId = campaignValue ? campaignValue.toLowerCase() : null;
+    const asOf = new Date(now).toISOString();
+    const selected = normaliseContentCalendarFilters({}, asOf);
+    const range = contentCalendarReadRange(selected.date);
+    try {
+      const outcome = await deps.publicSocial.snapshot(crmIdentity(sessionToken, deps), {
+        campaignId: requestedCampaignId,
+        from: range.from,
+        to: range.to,
+        limit: 1,
+      });
+      if (!outcome.ok) {
+        const status = outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden'
+          ? 403
+          : outcome.kind === 'validation'
+            ? 400
+            : outcome.kind === 'not_found'
+              ? 404
+              : 503;
+        return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+          title: status === 503
+            ? 'Campaign Command temporarily unavailable'
+            : 'Campaign Command not available',
+          message: outcome.message,
+          active: 'content',
+          backHref: CONTENT_CALENDAR_ROUTE,
+          backLabel: 'Return to Campaign Calendar',
+        }));
+      }
+      const snapshot = outcome.snapshot;
+      const view = presentPublicSocialCampaigns(snapshot.campaign.items, {
+        workspaceName: snapshot.workspace.workspaceName,
+        workspaceTimezone: snapshot.workspace.timezone,
+        snapshotAt: snapshot.workspace.snapshotAt,
+        requestedCampaignId,
+        calendarFilters: {
+          mode: url.searchParams.get('calendar_mode'),
+          date: url.searchParams.get('calendar_date'),
+          channel: url.searchParams.get('calendar_channel'),
+        },
+        inputTruncated: snapshot.campaign.hasMore,
+      });
+      const contentNavigation = deps.productProfile?.contentWorkspace;
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      return sendHtml(res, 200, operationalPage(
+        snapshot.workspace.workspaceName,
+        renderPublicSocialCampaignsBody(view, {
+          companyAssetsAvailable: Boolean(
+            deps.companyAssets
+            && contentNavigation?.assetsRoute === COMPANY_ASSETS_ROUTE
+          ),
+          assetsLabel: contentNavigation?.assetsLabel,
+          brandBrainAvailable: Boolean(
+            deps.brandBrain
+            && contentNavigation?.brainRoute === BRAND_BRAIN_ROUTE
+          ),
+          brainLabel: contentNavigation?.brainLabel,
+        }),
+        deps,
+        'content',
+        csrfToken,
+      ));
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Campaign Command temporarily unavailable',
+        message: 'No campaign, provider, schedule or delivery state was changed. Try again shortly.',
+        active: 'content',
+        backHref: CONTENT_CALENDAR_ROUTE,
+        backLabel: 'Return to Campaign Calendar',
+      }));
+    }
+  }
+
+  // ── public-social calendar: authenticated TEST projections + exact owned content proof ──
+  if (deps.kind === 'postgres' && p === CONTENT_CALENDAR_ROUTE && method === 'GET') {
+    if (!deps.publicSocial || !deps.companyContent) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Campaign Calendar not connected',
+        message: 'The protected TEST campaign projection and company-content catalogue must both be enabled.',
+        active: 'content',
+        backHref: CONTENT_CONTROL_ROOM_ROUTE,
+        backLabel: 'Return to Content Control',
+      }));
+    }
+    const asOf = new Date(now).toISOString();
+    const filters = normaliseContentCalendarFilters({
+      mode: url.searchParams.get('mode'),
+      view: url.searchParams.get('view'),
+      date: url.searchParams.get('date'),
+      channel: url.searchParams.get('channel'),
+    }, asOf);
+    const range = contentCalendarReadRange(filters.date);
+    const identity = crmIdentity(sessionToken, deps);
+    try {
+      const [socialOutcome, contentOutcome] = await Promise.all([
+        deps.publicSocial.snapshot(identity, {
+          from: range.from,
+          to: range.to,
+          limit: 120,
+        }),
+        deps.companyContent.snapshot(identity, { limit: 100 }),
+      ]);
+      const failure = !socialOutcome.ok
+        ? { kind: socialOutcome.kind, message: socialOutcome.message }
+        : !contentOutcome.ok
+          ? { kind: contentOutcome.kind, message: contentOutcome.message }
+          : null;
+      if (failure) {
+        const status = failure.kind === 'unauthenticated' || failure.kind === 'forbidden'
+          ? 403
+          : failure.kind === 'validation'
+            ? 400
+            : failure.kind === 'not_found'
+              ? 404
+              : 503;
+        return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+          title: status === 503
+            ? 'Campaign Calendar temporarily unavailable'
+            : 'Campaign Calendar not available',
+          message: failure.message,
+          active: 'content',
+          backHref: CONTENT_CONTROL_ROOM_ROUTE,
+          backLabel: 'Return to Content Control',
+        }));
+      }
+      if (!socialOutcome.ok || !contentOutcome.ok) {
+        throw new Error('calendar projection failure escaped its safe response boundary');
+      }
+      const social = socialOutcome.snapshot;
+      const content = contentOutcome.snapshot;
+      if (social.workspace.workspaceId !== content.workspace.workspaceId) {
+        throw new Error('calendar workspace projection mismatch');
+      }
+      const snapshot = adaptPublicSocialCalendar(
+        social.calendar.items,
+        content.catalog,
+        social.calendar.hasMore,
+      );
+      const view = presentContentCalendar(snapshot, {
+        workspaceName: social.workspace.workspaceName,
+        timezone: social.workspace.timezone,
+        asOf: social.workspace.snapshotAt,
+        filters,
+      });
+      const contentNavigation = deps.productProfile?.contentWorkspace;
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      return sendHtml(res, 200, operationalPage(
+        social.workspace.workspaceName,
+        renderContentCalendarBody(view, {
+          companyAssetsAvailable: Boolean(
+            deps.companyAssets
+            && contentNavigation?.assetsRoute === COMPANY_ASSETS_ROUTE
+          ),
+          assetsLabel: contentNavigation?.assetsLabel,
+          brandBrainAvailable: Boolean(
+            deps.brandBrain
+            && contentNavigation?.brainRoute === BRAND_BRAIN_ROUTE
+          ),
+          brainLabel: contentNavigation?.brainLabel,
+        }),
+        deps,
+        'content',
+        csrfToken,
+      ), undefined, {
+        'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      });
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Campaign Calendar temporarily unavailable',
+        message: 'No campaign, content, provider, schedule or delivery state was changed. Try again shortly.',
+        active: 'content',
+        backHref: CONTENT_CONTROL_ROOM_ROUTE,
+        backLabel: 'Return to Content Control',
+      }));
     }
   }
 

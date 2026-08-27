@@ -293,6 +293,13 @@ test('Live Journey Board renders real people, serves fixed enhancement code and 
   assert.match(asset.body, /data-drag-handle/);
   assert.doesNotMatch(asset.body, /sessionToken|cookie\s*=/i);
 
+  const calendarAsset = await call('GET', '/portal/assets/content-calendar.js', deps());
+  assert.equal(calendarAsset.statusCode, 200);
+  assert.match(calendarAsset.headers['content-type'] ?? '', /^text\/javascript/);
+  assert.equal(calendarAsset.headers['cache-control'], 'no-cache, max-age=0, must-revalidate');
+  assert.match(calendarAsset.body, /data-calendar-move-handle/);
+  assert.doesNotMatch(calendarAsset.body, /fetch\s*\(|XMLHttpRequest|sessionToken|cookie\s*=/i);
+
   const forged = await call('POST', `/portal/journeys/board/opportunities/${OPPORTUNITY_ID}/stage`, deps(crm), new URLSearchParams({
     _csrf: 'forged', command_key: 'board-move-command-1', target_lane_id: OTHER_STAGE_ID, expected_version: '2',
   }).toString());

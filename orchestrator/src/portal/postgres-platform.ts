@@ -39,6 +39,10 @@ import {
   type PgPortalCompanyAssetsService,
 } from './company-assets-pg-service.js';
 import { PgPortalAbuseGuard } from './abuse-pg-service.js';
+import {
+  createPgPortalPublicSocialService,
+  type PgPortalPublicSocialService,
+} from './public-social-pg-service.js';
 
 export interface PgPortalPlatform {
   auth: PgPortalAuthService;
@@ -52,6 +56,8 @@ export interface PgPortalPlatform {
   companyContent?: PgPortalCompanyContentService;
   /** Omitted unless adapter reads and founder command writes both pass readiness. */
   companyAssets?: PgPortalCompanyAssetsService;
+  /** Durable TEST-only public-social campaign planner and safe calendar projection. */
+  publicSocial?: PgPortalPublicSocialService;
   /** Canonical TEST-only queue read model; it has no send or provider operation. */
   inbox: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval queue commands; it cannot dispatch. */
@@ -262,9 +268,11 @@ export async function buildPgPortalPlatform(
 
     let companyContent: PgPortalCompanyContentService | undefined;
     let companyAssets: PgPortalCompanyAssetsService | undefined;
+    let publicSocial: PgPortalPublicSocialService | undefined;
     let contentReadinessPool: Pool | undefined;
     let contentCommandPool: Pool | undefined;
     let assetReadinessPool: Pool | undefined;
+    let publicSocialReadinessPool: Pool | undefined;
     if (env.DATABASE_CONTENT_COMMAND_URL?.trim()) {
       try {
         const contentCommandConfig = requireCutoverIdentity(
@@ -324,6 +332,38 @@ export async function buildPgPortalPlatform(
       }
     }
 
+    if (env.DATABASE_PUBLIC_SOCIAL_COMMAND_URL?.trim()) {
+      let publicSocialCommandPool: Pool | undefined;
+      try {
+        const publicSocialCommandConfig = requireCutoverIdentity(
+          loadDatabaseConfig('publicSocialCommand', env),
+          'DATABASE_PUBLIC_SOCIAL_COMMAND_URL',
+          'r72_public_social_command',
+        );
+        publicSocialCommandPool = createDatabasePool(publicSocialCommandConfig);
+        if (expectedInstallationId) {
+          await assertExpectedDatabaseInstallation(publicSocialCommandPool, expectedInstallationId);
+        }
+        const ready = await publicSocialCommandPool.query<{ ready: boolean }>(
+          `/* portal.public-social-command-role-readiness */
+           SELECT app_private.public_social_campaign_boundary_ready() AS ready`,
+        );
+        if (ready.rows.length !== 1 || ready.rows[0]?.ready !== true) {
+          throw new Error('Public-social TEST boundary is not ready');
+        }
+        publicSocial = createPgPortalPublicSocialService({
+          webPool,
+          publicSocialCommandPool,
+        });
+        publicSocialReadinessPool = publicSocialCommandPool;
+        pools.push(publicSocialCommandPool);
+      } catch {
+        await publicSocialCommandPool?.end().catch(() => undefined);
+        publicSocial = undefined;
+        publicSocialReadinessPool = undefined;
+      }
+    }
+
     let closed = false;
     return {
       auth: new PgPortalAuthService({ readPool: webPool, commandPool: identityPool }),
@@ -341,6 +381,7 @@ export async function buildPgPortalPlatform(
       }),
       companyContent,
       companyAssets,
+      publicSocial,
       inbox: createPgPortalInboxReadBoundary(webPool),
       inboxCommands: createPgPortalConversionInboxCommandService({ webPool, commandPool }),
       async assertReady(): Promise<void> {
@@ -358,6 +399,9 @@ export async function buildPgPortalPlatform(
                 ...(assetReadinessPool
                   ? [assertExpectedDatabaseInstallation(assetReadinessPool, expectedInstallationId)]
                   : []),
+                ...(publicSocialReadinessPool
+                  ? [assertExpectedDatabaseInstallation(publicSocialReadinessPool, expectedInstallationId)]
+                  : []),
               ]
             : []),
           identityPool.query('/* portal.identity-runtime-readiness */ SELECT 1'),
@@ -368,6 +412,16 @@ export async function buildPgPortalPlatform(
             : []),
           ...(assetReadinessPool && contentCommandPool
             ? [assertCompanyAssetRoleCapabilities(assetReadinessPool, contentCommandPool)]
+            : []),
+          ...(publicSocialReadinessPool
+            ? [publicSocialReadinessPool.query(
+                `/* portal.public-social-runtime-readiness */
+                 SELECT app_private.public_social_campaign_boundary_ready() AS ready`,
+              ).then((result) => {
+                if (result.rows.length !== 1 || result.rows[0]?.ready !== true) {
+                  throw new Error('Public-social TEST boundary is not ready');
+                }
+              })]
             : []),
         ]);
       },

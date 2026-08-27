@@ -1,0 +1,91 @@
+import type { SocialCampaignCommandProjection } from '../social-campaign-pg/types.js';
+
+export const PROPERTY_PREDATOR_PUBLIC_SOCIAL_CAMPAIGN_ID =
+  'a1000000-0000-4000-8000-000000000001';
+export const PROPERTY_PREDATOR_PUBLIC_SOCIAL_CAMPAIGNS_AS_OF =
+  '2026-08-27T12:00:00.000Z';
+
+const BASE: SocialCampaignCommandProjection = Object.freeze({
+  campaignId: PROPERTY_PREDATOR_PUBLIC_SOCIAL_CAMPAIGN_ID,
+  revisionId: 'a2000000-0000-4000-8000-000000000003',
+  revisionNumber: 3,
+  revisionSha256: 'a3'.repeat(32),
+  title: 'Property Predator Signal Sprint',
+  objective: 'Move approved opportunity education through a measured, channel-native TEST rhythm.',
+  timezone: 'Europe/London',
+  postId: 'a3000000-0000-4000-8000-000000000001',
+  contentItemId: '81000000-0000-4000-8000-000000000001',
+  contentVersionId: '82000000-0000-4000-8000-000000000001',
+  contentSha256: '1'.padStart(64, '0'),
+  planSha256: 'c3'.repeat(32),
+  scheduledFor: '2026-08-28T09:30:00.000Z',
+  operationId: 'a6000000-0000-4000-8000-000000000001',
+  targetId: 'a7000000-0000-4000-8000-000000000001',
+  network: 'linkedin',
+  targetLabel: 'LinkedIn TEST rail',
+  state: 'simulated_succeeded',
+  simulationAttemptCount: 1,
+  maxSimulationAttempts: 3,
+  reconciliationAttemptCount: 0,
+  maxReconciliationAttempts: 3,
+  testReferenceSha256: 'd3'.repeat(32),
+  environment: 'test',
+  providerEffects: 'none',
+});
+
+export function createPropertyPredatorPublicSocialCampaignsFixture(): readonly SocialCampaignCommandProjection[] {
+  return Object.freeze([
+    BASE,
+    Object.freeze({
+      ...BASE,
+      operationId: 'a6000000-0000-4000-8000-000000000002',
+      targetId: 'a7000000-0000-4000-8000-000000000002',
+      network: 'instagram' as const,
+      targetLabel: 'Instagram TEST rail',
+      state: 'reconciliation_required' as const,
+      simulationAttemptCount: 2,
+      reconciliationAttemptCount: 1,
+      testReferenceSha256: null,
+    }),
+    Object.freeze({
+      ...BASE,
+      postId: 'a3000000-0000-4000-8000-000000000002',
+      contentItemId: 'a4000000-0000-4000-8000-000000000002',
+      contentVersionId: 'a5000000-0000-4000-8000-000000000004',
+      contentSha256: 'b4'.repeat(32),
+      planSha256: 'c4'.repeat(32),
+      scheduledFor: '2026-08-29T13:00:00.000Z',
+      operationId: 'a6000000-0000-4000-8000-000000000003',
+      targetId: 'a7000000-0000-4000-8000-000000000003',
+      network: 'facebook' as const,
+      targetLabel: 'Facebook TEST rail',
+      state: 'waiting_for_test_time' as const,
+      simulationAttemptCount: 0,
+      testReferenceSha256: null,
+    }),
+    Object.freeze({
+      ...BASE,
+      revisionId: 'a2000000-0000-4000-8000-000000000002',
+      revisionNumber: 2,
+      revisionSha256: 'a2'.repeat(32),
+      title: 'Property Predator Signal Sprint · earlier revision',
+      objective: 'Earlier immutable TEST campaign revision retained for audit history.',
+      postId: null,
+      contentItemId: null,
+      contentVersionId: null,
+      contentSha256: null,
+      planSha256: null,
+      scheduledFor: null,
+      operationId: null,
+      targetId: null,
+      network: null,
+      targetLabel: null,
+      state: null,
+      simulationAttemptCount: null,
+      maxSimulationAttempts: null,
+      reconciliationAttemptCount: null,
+      maxReconciliationAttempts: null,
+      testReferenceSha256: null,
+    }),
+  ]);
+}

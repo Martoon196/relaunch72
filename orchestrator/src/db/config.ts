@@ -14,6 +14,8 @@ export const DATABASE_ROLES = [
   'mailgunWorkerCommand',
   'mailgunWebhookCommand',
   'testInboxWebhookCommand',
+  'publicSocialCommand',
+  'publicSocialWorkerCommand',
   'worker',
   'webhook',
   'public',
@@ -39,6 +41,8 @@ const ROLE_URL_ENV: Record<DatabaseRole, string> = {
   mailgunWorkerCommand: 'DATABASE_MAILGUN_WORKER_URL',
   mailgunWebhookCommand: 'DATABASE_MAILGUN_WEBHOOK_URL',
   testInboxWebhookCommand: 'DATABASE_TEST_INBOX_WEBHOOK_URL',
+  publicSocialCommand: 'DATABASE_PUBLIC_SOCIAL_COMMAND_URL',
+  publicSocialWorkerCommand: 'DATABASE_PUBLIC_SOCIAL_WORKER_URL',
   worker: 'DATABASE_WORKER_URL',
   webhook: 'DATABASE_WEBHOOK_URL',
   public: 'DATABASE_PUBLIC_URL',
@@ -60,6 +64,8 @@ const EXPECTED_RUNTIME_USER: Partial<Record<DatabaseRole, string>> = {
   mailgunWorkerCommand: 'r72_mailgun_worker_command',
   mailgunWebhookCommand: 'r72_mailgun_webhook_command',
   testInboxWebhookCommand: 'r72_test_inbox_webhook_command',
+  publicSocialCommand: 'r72_public_social_command',
+  publicSocialWorkerCommand: 'r72_public_social_worker_command',
   worker: 'r72_worker',
   webhook: 'r72_webhook',
   public: 'r72_public',
@@ -201,6 +207,10 @@ export function loadDatabaseConfig(
                 ? 'DATABASE_MAILGUN_WEBHOOK_POOL_MAX'
                 : role === 'testInboxWebhookCommand'
                   ? 'DATABASE_TEST_INBOX_WEBHOOK_POOL_MAX'
+                  : role === 'publicSocialCommand'
+                    ? 'DATABASE_PUBLIC_SOCIAL_COMMAND_POOL_MAX'
+                    : role === 'publicSocialWorkerCommand'
+                      ? 'DATABASE_PUBLIC_SOCIAL_WORKER_POOL_MAX'
                   : role === 'setupDeliveryCommand'
                     ? 'DATABASE_SETUP_DELIVERY_COMMAND_POOL_MAX'
                     : role === 'setupReissueCommand'
@@ -268,6 +278,10 @@ export function loadDatabaseConfig(
                   ? 'property-predator-mailgun-webhook-command'
                   : role === 'testInboxWebhookCommand'
                     ? 'property-predator-test-inbox-webhook-command'
+                    : role === 'publicSocialCommand'
+                      ? 'property-predator-public-social-command'
+                      : role === 'publicSocialWorkerCommand'
+                        ? 'property-predator-public-social-worker-command'
                     : role === 'setupDeliveryCommand'
                       ? 'relaunch72-setup-delivery-command'
                       : role === 'setupReissueCommand'

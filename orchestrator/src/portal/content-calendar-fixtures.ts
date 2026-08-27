@@ -3,6 +3,7 @@ import type {
   ContentCalendarSlotSnapshot,
   ContentCalendarSnapshot,
 } from './content-calendar-presenter.js';
+import { PROPERTY_PREDATOR_PUBLIC_SOCIAL_CAMPAIGN_ID } from './public-social-campaigns-fixtures.js';
 
 export const PROPERTY_PREDATOR_CONTENT_CALENDAR_AS_OF = '2026-08-26T08:42:00.000Z';
 
@@ -27,9 +28,10 @@ export function createPropertyPredatorContentCalendarFixture(): ContentCalendarS
 
   return Object.freeze({
     catalog,
+    sourceTruncated: false,
     slots: Object.freeze([
       slot({
-        slotId: '91000000-0000-4000-8000-000000000001',
+        slotId: 'a6000000-0000-4000-8000-000000000001',
         contentItemId: approved.contentItemId,
         contentVersionId: approved.contentVersionId,
         contentSha256: approved.contentSha256,
@@ -39,6 +41,26 @@ export function createPropertyPredatorContentCalendarFixture(): ContentCalendarS
         objectiveLabel: 'Turn evidence curiosity into briefing visits',
         ownerLabel: 'Growth HQ test desk',
         plannerState: 'simulated_preview',
+        publicSocial: Object.freeze({
+          campaignId: PROPERTY_PREDATOR_PUBLIC_SOCIAL_CAMPAIGN_ID,
+          revisionId: 'a2000000-0000-4000-8000-000000000003',
+          revisionNumber: 3,
+          campaignTitle: 'Property Predator Signal Sprint',
+          postId: 'a3000000-0000-4000-8000-000000000001',
+          planSha256: 'c3'.repeat(32),
+          operationId: 'a6000000-0000-4000-8000-000000000001',
+          targetId: 'a7000000-0000-4000-8000-000000000001',
+          targetLabel: 'LinkedIn TEST rail',
+          network: 'linkedin',
+          state: 'simulated_succeeded',
+          simulationAttemptCount: 1,
+          maxSimulationAttempts: 3,
+          reconciliationAttemptCount: 0,
+          maxReconciliationAttempts: 3,
+          updatedAt: '2026-08-27T12:00:00.000Z',
+          environment: 'test',
+          providerEffects: 'none',
+        }),
       }),
       slot({
         slotId: '91000000-0000-4000-8000-000000000002',

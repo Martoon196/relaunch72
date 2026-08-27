@@ -141,6 +141,8 @@ test('Campaign Command bounds oversized inputs and fails closed despite visible 
 
 test('Campaign Command renders premium responsive command UX with disabled TEST controls only', () => {
   const html = renderCampaignCommandBody(present());
+  assert.match(html, /<nav class="pp-content-nav" aria-label="Content operations">/);
+  assert.match(html, /href="\/portal\/campaigns" aria-current="page">Campaigns/);
   assert.match(html, /data-property-predator-campaign-command/);
   assert.match(html, /<article class="ccm" aria-labelledby="ccm-title" data-environment="test" data-provider-effects="none" data-command-boundary="absent">/);
   assert.match(html, /A campaign is a system\. <em>Command it\.<\/em>/);
@@ -160,6 +162,10 @@ test('Campaign Command renders premium responsive command UX with disabled TEST 
   assert.match(html, /Activate campaign · unavailable/);
   assert.equal((html.match(/disabled aria-disabled="true"/g) ?? []).length, 2);
   assert.match(html, /No send · no publish · no spend/);
+  assert.match(html, /aria-label="Campaign planning views"/);
+  assert.doesNotMatch(html, /href="\/portal\/content\/compose"/);
+  assert.match(html, /Composer remains offline until its company-content adapter is mounted/);
+  assert.match(html, /\/portal\/content\/calendar\?mode=week&amp;date=2026-08-27&amp;channel=all/);
   assert.match(html, /min-height:46px/);
   assert.match(html, /@media\(max-width:920px\)/);
   assert.match(html, /@media\(max-width:440px\)/);

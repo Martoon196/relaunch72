@@ -128,6 +128,7 @@ interface CatalogRow extends QueryResultRow {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
+const SAFE_DISPLAY_TEXT = /^[^\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u202a-\u202e\u2066-\u2069]+$/u;
 const CONTENT_ORIGINS = new Set<CompanyContentOrigin>(['imported', 'generated', 'edited']);
 const CONTENT_KINDS = new Set<CompanyContentKind>([
   'article', 'document', 'email', 'image', 'social_post',
@@ -175,6 +176,7 @@ function catalogItem(row: CatalogRow): CompanyContentCatalogItem {
       || !CONTENT_ORIGINS.has(row.origin)
       || !CONTENT_KINDS.has(row.kind)
       || typeof row.title !== 'string' || row.title.length < 1
+      || row.title !== row.title.trim() || !SAFE_DISPLAY_TEXT.test(row.title)
       || typeof row.contentMimeType !== 'string' || row.contentMimeType.length < 3
       || typeof row.sourceSystem !== 'string' || row.sourceSystem.length < 1
       || typeof row.sourceItemId !== 'string' || row.sourceItemId.length < 1

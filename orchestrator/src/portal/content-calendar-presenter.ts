@@ -2,6 +2,8 @@ import type {
   CompanyContentCatalogItem,
   CompanyContentCatalogPage,
 } from '../company-content-pg/types.js';
+import type { SocialNetwork } from '../providers/contracts.js';
+import type { SocialCampaignTargetState } from '../social-campaign-pg/types.js';
 
 export const CONTENT_CALENDAR_ROUTE = '/portal/content/calendar' as const;
 export const CONTENT_CALENDAR_MAX_CATALOG_ITEMS = 100;
@@ -9,13 +11,33 @@ export const CONTENT_CALENDAR_MAX_SLOTS = 120;
 export const CONTENT_CALENDAR_MAX_BACKLOG_ITEMS = 8;
 
 export type ContentCalendarMode = 'week' | 'month';
+export type ContentCalendarPublicSocialChannel = SocialNetwork;
 export type ContentCalendarChannel =
-  | 'linkedin'
-  | 'instagram'
-  | 'facebook'
+  | ContentCalendarPublicSocialChannel
   | 'email'
   | 'webinar';
 export type ContentCalendarChannelFilter = 'all' | ContentCalendarChannel;
+
+export interface ContentCalendarPublicSocialProvenance {
+  readonly campaignId: string;
+  readonly revisionId: string;
+  readonly revisionNumber: number;
+  readonly campaignTitle: string;
+  readonly postId: string;
+  readonly planSha256: string;
+  readonly operationId: string;
+  readonly targetId: string;
+  readonly targetLabel: string;
+  readonly network: ContentCalendarPublicSocialChannel;
+  readonly state: SocialCampaignTargetState;
+  readonly simulationAttemptCount: number;
+  readonly maxSimulationAttempts: number;
+  readonly reconciliationAttemptCount: number;
+  readonly maxReconciliationAttempts: number;
+  readonly updatedAt: string;
+  readonly environment: 'test';
+  readonly providerEffects: 'none';
+}
 
 /**
  * A planning fact only. It cannot contain provider credentials or request data.
@@ -34,15 +56,21 @@ export interface ContentCalendarSlotSnapshot {
   readonly ownerLabel: string;
   readonly plannerState: 'draft' | 'simulated_preview';
   readonly executionMode: 'simulated';
+  /** Allowlisted durable TEST provenance. Raw body/account/storage data has no shape here. */
+  readonly publicSocial?: ContentCalendarPublicSocialProvenance;
 }
 
 export interface ContentCalendarSnapshot {
   readonly catalog: CompanyContentCatalogPage;
   readonly slots: readonly ContentCalendarSlotSnapshot[];
+  /** Database-proven continuation beyond the loaded complete post aggregates. */
+  readonly sourceTruncated: boolean;
 }
 
 export interface ContentCalendarFilterInput {
   readonly mode?: unknown;
+  /** Legacy preview links used `view`; accepted read-only and canonicalised to `mode`. */
+  readonly view?: unknown;
   readonly date?: unknown;
   readonly channel?: unknown;
 }
@@ -81,6 +109,21 @@ export interface ContentCalendarSlotView {
   readonly simulationEligible: boolean;
   readonly gateLabel: 'Simulation ready' | 'Locked';
   readonly gateDetail: string;
+  readonly publicSocial: ContentCalendarPublicSocialView | null;
+}
+
+export interface ContentCalendarPublicSocialView extends ContentCalendarPublicSocialProvenance {
+  readonly campaignShortId: string;
+  readonly revisionShortId: string;
+  readonly postShortId: string;
+  readonly operationShortId: string;
+  readonly targetShortId: string;
+  readonly planShortHash: string;
+  readonly stateLabel: string;
+  readonly stateDetail: string;
+  readonly stateTone: 'planned' | 'working' | 'complete' | 'cancelled' | 'attention';
+  readonly attention: boolean;
+  readonly identityProofValid: boolean;
 }
 
 export interface ContentCalendarDayView {
@@ -127,6 +170,7 @@ export interface ContentCalendarView {
   readonly visibleSlotCount: number;
   readonly catalogCount: number;
   readonly inputTruncated: boolean;
+  readonly sourceTruncated: boolean;
   readonly hasUnknownVersion: boolean;
 }
 
@@ -140,7 +184,8 @@ export interface PresentContentCalendarOptions {
 
 const MODES = new Set<ContentCalendarMode>(['week', 'month']);
 const CHANNELS = new Set<ContentCalendarChannelFilter>([
-  'all', 'linkedin', 'instagram', 'facebook', 'email', 'webinar',
+  'all', 'linkedin', 'instagram', 'facebook', 'tiktok', 'x', 'youtube',
+  'google_business_profile', 'threads', 'pinterest', 'email', 'webinar',
 ]);
 const DAY_MS = 86_400_000;
 
@@ -148,6 +193,12 @@ const CHANNEL_LABELS: Readonly<Record<ContentCalendarChannel, string>> = Object.
   linkedin: 'LinkedIn',
   instagram: 'Instagram',
   facebook: 'Facebook',
+  tiktok: 'TikTok',
+  x: 'X',
+  youtube: 'YouTube',
+  google_business_profile: 'Google Business Profile',
+  threads: 'Threads',
+  pinterest: 'Pinterest',
   email: 'Email',
   webinar: 'Webinar',
 });
@@ -156,6 +207,12 @@ const CHANNEL_CODES: Readonly<Record<ContentCalendarChannel, string>> = Object.f
   linkedin: 'in',
   instagram: 'ig',
   facebook: 'fb',
+  tiktok: 'tt',
+  x: 'x',
+  youtube: 'yt',
+  google_business_profile: 'gb',
+  threads: 'th',
+  pinterest: 'pi',
   email: 'em',
   webinar: 'wb',
 });
@@ -171,6 +228,162 @@ const KIND_LABELS: Readonly<Record<CompanyContentCatalogItem['kind'], string>> =
   other: 'Content',
 });
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const SHA256 = /^[a-f0-9]{64}$/u;
+const PUBLIC_SOCIAL_CHANNELS = new Set<ContentCalendarPublicSocialChannel>([
+  'facebook', 'instagram', 'linkedin', 'tiktok', 'x', 'youtube',
+  'google_business_profile', 'threads', 'pinterest',
+]);
+const PUBLIC_SOCIAL_STATE_META: Readonly<Record<SocialCampaignTargetState, Readonly<{
+  label: string;
+  detail: string;
+  tone: ContentCalendarPublicSocialView['stateTone'];
+  attention: boolean;
+  allowsSimulation: boolean;
+}>>> = Object.freeze({
+  waiting_for_test_time: Object.freeze({
+    label: 'TEST plan queued', detail: 'Waiting for its durable TEST time; no external publication is possible.',
+    tone: 'planned', attention: false, allowsSimulation: true,
+  }),
+  leased: Object.freeze({
+    label: 'Simulator leased', detail: 'A TEST worker holds the durable lease; provider effects remain none.',
+    tone: 'working', attention: false, allowsSimulation: true,
+  }),
+  calling_simulator: Object.freeze({
+    label: 'Simulator running', detail: 'The non-routable TEST simulator is evaluating this operation.',
+    tone: 'working', attention: false, allowsSimulation: true,
+  }),
+  retry_wait: Object.freeze({
+    label: 'TEST retry waiting', detail: 'The durable simulator operation is waiting for its bounded retry.',
+    tone: 'working', attention: false, allowsSimulation: true,
+  }),
+  simulated_succeeded: Object.freeze({
+    label: 'Simulation complete', detail: 'The durable TEST simulator completed; this is not a social publication.',
+    tone: 'complete', attention: false, allowsSimulation: true,
+  }),
+  simulated_failed: Object.freeze({
+    label: 'Simulation failed', detail: 'The durable TEST operation failed and needs operator attention.',
+    tone: 'attention', attention: true, allowsSimulation: false,
+  }),
+  simulated_cancelled: Object.freeze({
+    label: 'TEST plan cancelled', detail: 'The durable TEST operation was cancelled and cannot advance.',
+    tone: 'cancelled', attention: false, allowsSimulation: false,
+  }),
+  reconciliation_required: Object.freeze({
+    label: 'Reconciliation required', detail: 'The simulator result is ambiguous and requires safe reconciliation.',
+    tone: 'attention', attention: true, allowsSimulation: false,
+  }),
+  simulated_reconciled: Object.freeze({
+    label: 'Simulation reconciled', detail: 'The durable TEST simulator result was safely reconciled.',
+    tone: 'complete', attention: false, allowsSimulation: true,
+  }),
+  dead_letter: Object.freeze({
+    label: 'TEST dead letter', detail: 'Bounded attempts are exhausted; operator attention is required.',
+    tone: 'attention', attention: true, allowsSimulation: false,
+  }),
+});
+
+function canonicalInstant(value: string): boolean {
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
+}
+
+function safePublicSocialText(value: string, maximum: number): boolean {
+  return typeof value === 'string' && value === value.trim() && value.length > 0
+    && value.length <= maximum
+    && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u202a-\u202e\u2066-\u2069]/u.test(value);
+}
+
+function presentPublicSocial(
+  provenance: ContentCalendarPublicSocialProvenance,
+  slot: ContentCalendarSlotSnapshot,
+): Readonly<{ view: ContentCalendarPublicSocialView; allowsSimulation: boolean }> {
+  const knownState = Object.prototype.hasOwnProperty.call(PUBLIC_SOCIAL_STATE_META, provenance.state);
+  const stateMeta = knownState ? PUBLIC_SOCIAL_STATE_META[provenance.state] : Object.freeze({
+    label: 'Provenance locked', detail: 'The durable TEST state was not recognised.',
+    tone: 'attention' as const, attention: true, allowsSimulation: false,
+  });
+  const campaignId = typeof provenance.campaignId === 'string' ? provenance.campaignId : 'locked';
+  const revisionId = typeof provenance.revisionId === 'string' ? provenance.revisionId : 'locked';
+  const campaignTitle = typeof provenance.campaignTitle === 'string'
+    ? provenance.campaignTitle.slice(0, 200) : 'Campaign unavailable';
+  const postId = typeof provenance.postId === 'string' ? provenance.postId : 'locked';
+  const planSha256 = typeof provenance.planSha256 === 'string' ? provenance.planSha256 : 'locked';
+  const operationId = typeof provenance.operationId === 'string' ? provenance.operationId : 'locked';
+  const targetId = typeof provenance.targetId === 'string' ? provenance.targetId : 'locked';
+  const targetLabel = typeof provenance.targetLabel === 'string'
+    ? provenance.targetLabel.slice(0, 120) : 'Target unavailable';
+  const revisionNumber = Number.isSafeInteger(provenance.revisionNumber)
+    ? provenance.revisionNumber : 0;
+  const simulationAttemptCount = Number.isSafeInteger(provenance.simulationAttemptCount)
+    ? provenance.simulationAttemptCount : 0;
+  const maxSimulationAttempts = Number.isSafeInteger(provenance.maxSimulationAttempts)
+    ? provenance.maxSimulationAttempts : 0;
+  const reconciliationAttemptCount = Number.isSafeInteger(provenance.reconciliationAttemptCount)
+    ? provenance.reconciliationAttemptCount : 0;
+  const maxReconciliationAttempts = Number.isSafeInteger(provenance.maxReconciliationAttempts)
+    ? provenance.maxReconciliationAttempts : 0;
+  const updatedAt = typeof provenance.updatedAt === 'string'
+    ? provenance.updatedAt : '1970-01-01T00:00:00.000Z';
+  const identityProofValid = [
+    campaignId, revisionId, postId, operationId, targetId,
+  ].every((value) => typeof value === 'string' && UUID.test(value))
+    && revisionNumber > 0
+    && safePublicSocialText(campaignTitle, 200)
+    && SHA256.test(planSha256)
+    && safePublicSocialText(targetLabel, 120)
+    && PUBLIC_SOCIAL_CHANNELS.has(provenance.network)
+    && provenance.network === slot.channel
+    && operationId === slot.slotId
+    && knownState
+    && simulationAttemptCount >= 0
+    && maxSimulationAttempts >= 1
+    && simulationAttemptCount <= maxSimulationAttempts
+    && reconciliationAttemptCount >= 0
+    && maxReconciliationAttempts >= 1
+    && reconciliationAttemptCount <= maxReconciliationAttempts
+    && canonicalInstant(updatedAt)
+    && provenance.environment === 'test'
+    && provenance.providerEffects === 'none';
+  const attention = !identityProofValid || stateMeta.attention;
+  const stateLabel = identityProofValid ? stateMeta.label : 'Provenance locked';
+  const stateDetail = identityProofValid
+    ? stateMeta.detail
+    : 'Campaign, operation or TEST-environment provenance contradicted the calendar slot and was locked.';
+  const view: ContentCalendarPublicSocialView = Object.freeze({
+    campaignId,
+    revisionId,
+    revisionNumber,
+    campaignTitle,
+    postId,
+    planSha256,
+    operationId,
+    targetId,
+    targetLabel,
+    network: provenance.network,
+    state: knownState ? provenance.state : 'dead_letter',
+    simulationAttemptCount,
+    maxSimulationAttempts,
+    reconciliationAttemptCount,
+    maxReconciliationAttempts,
+    updatedAt,
+    environment: 'test',
+    providerEffects: 'none',
+    campaignShortId: campaignId.slice(0, 8),
+    revisionShortId: revisionId.slice(0, 8),
+    postShortId: postId.slice(0, 8),
+    operationShortId: operationId.slice(0, 8),
+    targetShortId: targetId.slice(0, 8),
+    planShortHash: planSha256.slice(0, 10),
+    stateLabel,
+    stateDetail,
+    stateTone: identityProofValid ? stateMeta.tone : 'attention',
+    attention,
+    identityProofValid,
+  });
+  return Object.freeze({ view, allowsSimulation: identityProofValid && stateMeta.allowsSimulation });
+}
+
 function validDateOnly(value: unknown): string | null {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   const parsed = new Date(`${value}T00:00:00.000Z`);
@@ -179,24 +392,48 @@ function validDateOnly(value: unknown): string | null {
     : null;
 }
 
-function safeAsOfDate(asOf: string): string {
-  const date = new Date(asOf);
-  return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : '1970-01-01';
+function safeTimeZone(value: unknown): string {
+  if (typeof value !== 'string' || value.length < 1 || value.length > 100) return 'UTC';
+  try {
+    new Intl.DateTimeFormat('en-GB', { timeZone: value }).format(new Date(0));
+    return value;
+  } catch {
+    return 'UTC';
+  }
+}
+
+function dateInTimeZone(value: string | Date, timeZone: string): string | null {
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    year: 'numeric', month: '2-digit', day: '2-digit', timeZone,
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+  const candidate = year && month && day ? `${year}-${month}-${day}` : null;
+  return candidate && validDateOnly(candidate) ? candidate : null;
+}
+
+function safeAsOfDate(asOf: string, timeZone = 'UTC'): string {
+  return dateInTimeZone(asOf, safeTimeZone(timeZone)) ?? '1970-01-01';
 }
 
 export function normaliseContentCalendarFilters(
   input: ContentCalendarFilterInput = {},
   asOf = '1970-01-01T00:00:00.000Z',
+  timeZone = 'UTC',
 ): ContentCalendarFiltersView {
-  const mode = typeof input.mode === 'string' && MODES.has(input.mode as ContentCalendarMode)
-    ? input.mode as ContentCalendarMode
+  const requestedMode = input.mode ?? input.view;
+  const mode = typeof requestedMode === 'string' && MODES.has(requestedMode as ContentCalendarMode)
+    ? requestedMode as ContentCalendarMode
     : 'week';
   const channel = typeof input.channel === 'string' && CHANNELS.has(input.channel as ContentCalendarChannelFilter)
     ? input.channel as ContentCalendarChannelFilter
     : 'all';
   return Object.freeze({
     mode,
-    date: validDateOnly(input.date) ?? safeAsOfDate(asOf),
+    date: validDateOnly(input.date) ?? safeAsOfDate(asOf, timeZone),
     channel,
   });
 }
@@ -302,6 +539,7 @@ function presentSlot(
   item: CompanyContentCatalogItem | undefined,
   asOf: string,
   index: number,
+  timeZone: string,
 ): ContentCalendarSlotView {
   const versionMatches = Boolean(item
     && item.contentItemId === slot.contentItemId
@@ -309,11 +547,15 @@ function presentSlot(
     && item.contentSha256 === slot.contentSha256);
   const approved = Boolean(item && exactApproval(item) && versionMatches);
   const fresh = Boolean(item && attestationFresh(item, asOf) && versionMatches);
-  const simulationEligible = Boolean(item?.publishable && versionMatches && approved && fresh);
+  const contentEligible = Boolean(item?.publishable && versionMatches && approved && fresh);
+  const publicSocialResult = slot.publicSocial
+    ? presentPublicSocial(slot.publicSocial, slot)
+    : null;
+  const simulationEligible = contentEligible && (publicSocialResult?.allowsSimulation ?? true);
   const scheduled = new Date(slot.scheduledFor);
   const timeLabel = Number.isFinite(scheduled.getTime())
     ? new Intl.DateTimeFormat('en-GB', {
-      hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone,
     }).format(scheduled)
     : 'Invalid time';
   return Object.freeze({
@@ -346,7 +588,14 @@ function presentSlot(
     sourceExpiresAt: item?.sourceExpiresAt ?? null,
     simulationEligible,
     gateLabel: simulationEligible ? 'Simulation ready' : 'Locked',
-    gateDetail: gateDetail({ item, versionMatches, approved, fresh, eligible: simulationEligible }),
+    gateDetail: !contentEligible
+      ? gateDetail({ item, versionMatches, approved, fresh, eligible: contentEligible })
+      : publicSocialResult && !publicSocialResult.allowsSimulation
+        ? publicSocialResult.view.stateDetail
+        : publicSocialResult
+          ? `${gateDetail({ item, versionMatches, approved, fresh, eligible: contentEligible })} ${publicSocialResult.view.stateDetail}`
+          : gateDetail({ item, versionMatches, approved, fresh, eligible: contentEligible }),
+    publicSocial: publicSocialResult?.view ?? null,
   });
 }
 
@@ -371,16 +620,16 @@ function presentBacklogItem(
   });
 }
 
-function validSlotDate(slot: ContentCalendarSlotSnapshot): string | null {
-  const parsed = new Date(slot.scheduledFor);
-  return Number.isFinite(parsed.getTime()) ? parsed.toISOString().slice(0, 10) : null;
+function validSlotDate(slot: ContentCalendarSlotSnapshot, timeZone: string): string | null {
+  return dateInTimeZone(slot.scheduledFor, timeZone);
 }
 
 export function presentContentCalendar(
   snapshot: ContentCalendarSnapshot,
   options: PresentContentCalendarOptions,
 ): ContentCalendarView {
-  const filters = normaliseContentCalendarFilters(options.filters, options.asOf);
+  const timeZone = safeTimeZone(options.timezone);
+  const filters = normaliseContentCalendarFilters(options.filters, options.asOf, timeZone);
   const bounds = periodBounds(filters);
   const catalog = snapshot.catalog.items.slice(0, CONTENT_CALENDAR_MAX_CATALOG_ITEMS);
   const itemByVersion = new Map(catalog.map((item) => [item.contentVersionId, item] as const));
@@ -388,7 +637,7 @@ export function presentContentCalendar(
   const visibleSnapshots = boundedSlots
     .filter((slot) => filters.channel === 'all' || slot.channel === filters.channel)
     .filter((slot) => {
-      const date = validSlotDate(slot);
+      const date = validSlotDate(slot, timeZone);
       return date !== null && date >= dateOnly(bounds.gridStart) && date <= dateOnly(bounds.gridEnd);
     })
     .sort((left, right) => left.scheduledFor.localeCompare(right.scheduledFor));
@@ -397,12 +646,13 @@ export function presentContentCalendar(
     itemByVersion.get(slot.contentVersionId),
     options.asOf,
     index,
+    timeZone,
   ));
   const slotsByDate = new Map<string, ContentCalendarSlotView[]>();
   for (const [index, slot] of visibleSlots.entries()) {
     const snapshot = visibleSnapshots[index];
     if (!snapshot) continue;
-    const date = validSlotDate(snapshot);
+    const date = validSlotDate(snapshot, timeZone);
     if (!date) continue;
     const daySlots = slotsByDate.get(date) ?? [];
     daySlots.push(slot);
@@ -420,7 +670,7 @@ export function presentContentCalendar(
         weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC',
       }).format(cursor),
       inPrimaryPeriod: cursor >= bounds.primaryStart && cursor <= bounds.primaryEnd,
-      isToday: date === safeAsOfDate(options.asOf),
+      isToday: date === safeAsOfDate(options.asOf, timeZone),
       slots: Object.freeze(slotsByDate.get(date) ?? []),
     }));
   }
@@ -439,7 +689,7 @@ export function presentContentCalendar(
 
   return Object.freeze({
     workspaceName: options.workspaceName,
-    timezone: options.timezone,
+    timezone: timeZone,
     asOf: options.asOf,
     filters,
     periodLabel,
@@ -455,8 +705,11 @@ export function presentContentCalendar(
     }),
     visibleSlotCount: visibleSlots.length,
     catalogCount: catalog.length,
-    inputTruncated: snapshot.catalog.items.length > CONTENT_CALENDAR_MAX_CATALOG_ITEMS
+    inputTruncated: snapshot.sourceTruncated
+      || snapshot.catalog.nextCursor !== null
+      || snapshot.catalog.items.length > CONTENT_CALENDAR_MAX_CATALOG_ITEMS
       || snapshot.slots.length > CONTENT_CALENDAR_MAX_SLOTS,
+    sourceTruncated: snapshot.sourceTruncated,
     hasUnknownVersion: visibleSlots.some((slot) => !slot.immutableVersionMatches),
   });
 }

@@ -68,14 +68,15 @@ import {
 import { createPropertyPredatorProviderReadinessFixture } from '../src/portal/provider-readiness-cockpit-fixtures.js';
 import { renderProviderReadinessCockpitBody } from '../src/portal/provider-readiness-cockpit-view.js';
 import {
-  CAMPAIGN_COMMAND_ROUTE,
-  presentCampaignCommand,
-} from '../src/portal/campaign-command-presenter.js';
+  PUBLIC_SOCIAL_CAMPAIGNS_ROUTE,
+  presentPublicSocialCampaigns,
+} from '../src/portal/public-social-campaigns-presenter.js';
 import {
-  createPropertyPredatorCampaignCommandFixture,
-  PROPERTY_PREDATOR_CAMPAIGN_COMMAND_AS_OF,
-} from '../src/portal/campaign-command-fixtures.js';
-import { renderCampaignCommandBody } from '../src/portal/campaign-command-view.js';
+  createPropertyPredatorPublicSocialCampaignsFixture,
+  PROPERTY_PREDATOR_PUBLIC_SOCIAL_CAMPAIGN_ID,
+  PROPERTY_PREDATOR_PUBLIC_SOCIAL_CAMPAIGNS_AS_OF,
+} from '../src/portal/public-social-campaigns-fixtures.js';
+import { renderPublicSocialCampaignsBody } from '../src/portal/public-social-campaigns-view.js';
 import {
   AUTOMATION_STUDIO_ROUTE,
   presentAutomationStudio,
@@ -111,6 +112,10 @@ import { renderAffiliateComplianceBody } from '../src/portal/affiliate-complianc
 import { renderGrowthHomeBody } from '../src/portal/growth-home.js';
 import { renderLead360Body, type Lead360View } from '../src/portal/lead-360-view.js';
 import { JOURNEY_BOARD_CLIENT_SOURCE } from '../src/portal/journey-board-client.js';
+import {
+  CONTENT_CALENDAR_CLIENT_ROUTE,
+  CONTENT_CALENDAR_CLIENT_SOURCE,
+} from '../src/portal/content-calendar-client.js';
 import {
   JOURNEY_BOARD_CLIENT_ROUTE,
   JOURNEY_BOARD_ROUTE,
@@ -908,7 +913,7 @@ function previewOperationsNav(active: PreviewOperationsRoute): string {
     { key: 'today', href: '/portal', label: 'Today' },
     { key: 'actions', href: OPERATOR_ACTION_CENTRE_ROUTE, label: 'Action centre' },
     { key: 'journeys', href: JOURNEY_BOARD_ROUTE, label: 'Live journeys' },
-    { key: 'campaigns', href: CAMPAIGN_COMMAND_ROUTE, label: 'Campaigns' },
+    { key: 'campaigns', href: PUBLIC_SOCIAL_CAMPAIGNS_ROUTE, label: 'Campaigns' },
     { key: 'content', href: CONTENT_CONTROL_ROOM_ROUTE, label: 'Content' },
     { key: 'compose', href: SOCIAL_COMPOSER_ROUTE, label: 'Composer' },
     { key: 'calendar', href: CONTENT_CALENDAR_ROUTE, label: 'Calendar' },
@@ -998,7 +1003,7 @@ function previewConversionInbox(url: URL): string {
   });
 }
 
-function page(url: URL): { status: number; html: string; board?: boolean } {
+function page(url: URL): { status: number; html: string; board?: boolean; scripted?: boolean } {
   const path = url.pathname.replace(/\/+$/, '') || '/portal';
   if (path === '/portal') return {
     status: 200,
@@ -1076,6 +1081,7 @@ function page(url: URL): { status: number; html: string; board?: boolean } {
         },
       },
     ))}`, 'content', 'Property Predator — Content Calendar'),
+    scripted: true,
   };
   if (path === SOCIAL_COMPOSER_ROUTE) return {
     status: 200,
@@ -1090,12 +1096,24 @@ function page(url: URL): { status: number; html: string; board?: boolean } {
         },
       },
     ))}`, 'content', 'Property Predator — Social Composer'),
+    scripted: true,
   };
-  if (path === CAMPAIGN_COMMAND_ROUTE) return {
+  if (path === PUBLIC_SOCIAL_CAMPAIGNS_ROUTE) return {
     status: 200,
-    html: shell(`${previewOperationsNav('campaigns')}${renderCampaignCommandBody(presentCampaignCommand(
-      createPropertyPredatorCampaignCommandFixture(),
-      { workspaceName: snapshot.workspace.name, asOf: PROPERTY_PREDATOR_CAMPAIGN_COMMAND_AS_OF },
+    html: shell(`${previewOperationsNav('campaigns')}${renderPublicSocialCampaignsBody(presentPublicSocialCampaigns(
+      createPropertyPredatorPublicSocialCampaignsFixture(),
+      {
+        workspaceName: snapshot.workspace.name,
+        workspaceTimezone: snapshot.workspace.timezone,
+        snapshotAt: PROPERTY_PREDATOR_PUBLIC_SOCIAL_CAMPAIGNS_AS_OF,
+        requestedCampaignId: PROPERTY_PREDATOR_PUBLIC_SOCIAL_CAMPAIGN_ID,
+         calendarFilters: {
+          mode: url.searchParams.get('calendar_mode'),
+          date: url.searchParams.get('calendar_date'),
+           channel: url.searchParams.get('calendar_channel'),
+         },
+         inputTruncated: false,
+       },
     ))}`, 'content', 'Property Predator — Campaign Command'),
   };
   if (path === CONVERSION_INBOX_ROUTE) return {
@@ -1233,6 +1251,16 @@ const server = createServer(async (request, response) => {
       'x-content-type-options': 'nosniff',
     });
     response.end(JOURNEY_BOARD_CLIENT_SOURCE);
+    return;
+  }
+  if (request.method === 'GET' && path === CONTENT_CALENDAR_CLIENT_ROUTE) {
+    response.writeHead(200, {
+      'content-type': 'text/javascript; charset=utf-8',
+      'content-length': String(Buffer.byteLength(CONTENT_CALENDAR_CLIENT_SOURCE)),
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    });
+    response.end(CONTENT_CALENDAR_CLIENT_SOURCE);
     return;
   }
 
@@ -1414,7 +1442,9 @@ const server = createServer(async (request, response) => {
     'x-content-type-options': 'nosniff',
     'content-security-policy': rendered.board
       ? "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
-      : "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      : rendered.scripted
+        ? "default-src 'none'; script-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+        : "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
   });
   response.end(rendered.html);
 });

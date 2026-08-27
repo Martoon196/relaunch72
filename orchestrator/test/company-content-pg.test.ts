@@ -627,4 +627,13 @@ test('workspace catalog is cursor-bounded and rejects invalid database rows', as
     new CompanyContentPgRepository(badExecutor).listCatalog({ limit: 10, cursor: null }),
     /invalid canonical data/,
   );
+  Object.assign(invalidRows[0]!, {
+    contentItemId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    contentVersionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    title: 'Trusted catalogue item\u202egnp.exe',
+  });
+  await assert.rejects(
+    new CompanyContentPgRepository(badExecutor).listCatalog({ limit: 10, cursor: null }),
+    /invalid canonical data/,
+  );
 });

@@ -12,6 +12,7 @@ import {
   SOCIAL_COMPOSER_ROUTE,
   type SocialComposerSnapshot,
 } from '../src/portal/social-composer-presenter.js';
+import { CONTENT_CALENDAR_CLIENT_ROUTE } from '../src/portal/content-calendar-client.js';
 import { renderSocialComposerBody } from '../src/portal/social-composer-view.js';
 
 const OPTIONS = Object.freeze({
@@ -113,7 +114,9 @@ test('Social Composer fails one variant closed when its immutable version lineag
 
 test('Social Composer renders premium touch-responsive editing and preview without an outbound boundary', () => {
   const html = renderSocialComposerBody(present());
-  assert.match(html, /<article class="scomp" aria-labelledby="scomp-title" data-provider-effects="none" data-command-boundary="absent">/);
+  assert.match(html, /<nav class="pp-content-nav" aria-label="Content operations">/);
+  assert.match(html, /href="\/portal\/content\/compose" aria-current="page">Composer/);
+  assert.match(html, /<article class="scomp" aria-labelledby="scomp-title" data-provider-effects="none" data-command-boundary="absent" data-social-composer data-local-dirty="false">/);
   assert.match(html, /One truth\. <em>Five perfect cuts\.<\/em>/);
   assert.match(html, /Illustrative Affiliate Stash adapter contract/);
   assert.match(html, /fictional preview input, not content fetched from Affiliate Stash/);
@@ -124,6 +127,13 @@ test('Social Composer renders premium touch-responsive editing and preview witho
   assert.match(html, /aria-label="Channel format and safety checks"/);
   assert.match(html, /aria-label="Preview mode"/);
   assert.match(html, /<textarea class="scomp-textarea"/);
+  assert.match(html, /data-composer-field="headline"/);
+  assert.match(html, /data-composer-field="body"/);
+  assert.match(html, /data-composer-preview="headline"/);
+  assert.match(html, /data-composer-preview="body"/);
+  assert.match(html, /data-composer-count-for="body"/);
+  assert.match(html, /Loaded TEST snapshot\. Typing changes the unsaved browser preview only; reload resets it/);
+  assert.match(html, /Reset local preview/);
   assert.match(html, /Save TEST draft · unavailable/);
   assert.match(html, /Request review · unavailable/);
   assert.match(html, /disabled aria-disabled="true"/);
@@ -132,6 +142,8 @@ test('Social Composer renders premium touch-responsive editing and preview witho
   assert.match(html, /@media\(max-width:820px\)/);
   assert.match(html, /@media\(max-width:540px\)/);
   assert.match(html, /@media\(forced-colors:active\)/);
+  assert.match(html, new RegExp(`<script src="${CONTENT_CALENDAR_CLIENT_ROUTE.replaceAll('/', '\\/')}" defer><\\/script>$`));
+  assert.equal((html.match(/<script\b/g) ?? []).length, 1);
   assert.doesNotMatch(html, /<form|method="post"|Publish now|Schedule now|Generate with AI|Connect provider/i);
   assert.equal((html.match(/providerToken|accessToken|apiKey|secretKey/g) ?? []).length, 0);
 });
@@ -167,7 +179,20 @@ test('Social Composer escapes hostile copy, labels, artwork and workspace values
   assert.match(html, /&lt;\/textarea&gt;&lt;img src=x onerror=alert\(4\)&gt;/);
   assert.match(html, /&lt;Offer &amp; Co&gt;/);
   assert.match(html, /&lt;script&gt;alert\(7\)&lt;\/script&gt;/);
-  assert.doesNotMatch(html, /<(?:script|img)\b/i);
+  assert.doesNotMatch(html.replace(/<script src="\/portal\/assets\/content-calendar\.js" defer><\/script>/, ''), /<(?:script|img)\b/i);
+});
+
+test('Social Composer exposes local-only counters and email preview bindings without persistence controls', () => {
+  const html = renderSocialComposerBody(present(undefined, { channel: 'email' }));
+  assert.match(html, /data-composer-field="subject"/);
+  assert.match(html, /data-composer-count-for="subject" data-limit="60"/);
+  assert.match(html, /data-composer-field="preheader"/);
+  assert.match(html, /data-composer-count-for="preheader" data-limit="100"/);
+  assert.match(html, /data-composer-preview="subject"/);
+  assert.match(html, /data-composer-preview="preheader"/);
+  assert.match(html, /data-composer-preview="cta"/);
+  assert.match(html, /data-composer-reset/);
+  assert.doesNotMatch(html, /method="post"|action="\/portal\/content\/compose/i);
 });
 
 test('Social Composer bounds untrusted collections and normalises unknown navigation', () => {

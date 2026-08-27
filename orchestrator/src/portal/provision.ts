@@ -151,6 +151,8 @@ export interface PostgresPortalConfig {
   inbox?: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval queue boundary; no dispatcher capability. */
   inboxCommands?: PortalConversionInboxCommandService;
+  /** Durable TEST-only public-social planning boundary. */
+  publicSocial?: NonNullable<PostgresPortalDeps['publicSocial']>;
   productProfile?: PortalProductProfile;
   /** Distributed fail-closed guard required by the PostgreSQL portal. */
   abuse: NonNullable<PostgresPortalDeps['abuse']>;
@@ -197,6 +199,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     affiliateCompliance: cfg.affiliateCompliance,
     inbox: cfg.inbox,
     inboxCommands: cfg.inboxCommands,
+    publicSocial: cfg.publicSocial,
     productProfile: cfg.productProfile ?? RELAUNCH72_PRODUCT_PROFILE,
     trustedClientAddress: cfg.trustedClientAddress,
     now: cfg.now,
