@@ -13,7 +13,20 @@ export const DATABASE_INTEGRATION_CONFIRMATION = 'explicit-disposable-run';
 type ScopedTestRole =
   | 'r72_web'
   | 'r72_crm_command'
-  | 'r72_affiliate_compliance_command'
+  | 'r72_affiliate_draft_command'
+  | 'r72_affiliate_lifecycle_command'
+  | 'r72_affiliate_legal_command'
+  | 'r72_affiliate_commercial_command'
+  | 'r72_affiliate_acceptance_command'
+  | 'r72_affiliate_capacity_command'
+  | 'r72_affiliate_declaration_command'
+  | 'r72_affiliate_training_authority_command'
+  | 'r72_affiliate_training_evidence_command'
+  | 'r72_affiliate_specialist_command'
+  | 'r72_affiliate_channel_command'
+  | 'r72_affiliate_effect_command'
+  | 'r72_affiliate_case_command'
+  | 'r72_affiliate_receipt_command'
   | 'r72_external_event_command'
   | 'r72_worker'
   | 'r72_webhook';
@@ -22,7 +35,20 @@ type UnscopedTestRole = 'r72_web' | 'r72_identity_command' | 'r72_crm_command' |
 const TEST_ROLES = new Set<ScopedTestRole>([
   'r72_web',
   'r72_crm_command',
-  'r72_affiliate_compliance_command',
+  'r72_affiliate_draft_command',
+  'r72_affiliate_lifecycle_command',
+  'r72_affiliate_legal_command',
+  'r72_affiliate_commercial_command',
+  'r72_affiliate_acceptance_command',
+  'r72_affiliate_capacity_command',
+  'r72_affiliate_declaration_command',
+  'r72_affiliate_training_authority_command',
+  'r72_affiliate_training_evidence_command',
+  'r72_affiliate_specialist_command',
+  'r72_affiliate_channel_command',
+  'r72_affiliate_effect_command',
+  'r72_affiliate_case_command',
+  'r72_affiliate_receipt_command',
   'r72_external_event_command',
   'r72_worker',
   'r72_webhook',

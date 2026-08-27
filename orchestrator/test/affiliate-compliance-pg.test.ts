@@ -1,226 +1,373 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  AFFILIATE_COMPLIANCE_CHANNELS,
+  AFFILIATE_COMPLIANCE_EFFECT_KINDS,
+  AFFILIATE_COMPLIANCE_LIFECYCLE_STATES,
+  AFFILIATE_COMPLIANCE_PERMISSIONS,
+  AFFILIATE_COMPLIANCE_REASON_CODES,
+  AFFILIATE_SPECIALIST_DECISION_KINDS,
   evaluateAffiliateCompliance,
+  type AffiliateComplianceChannel,
   type AffiliateComplianceEvidence,
   type AffiliateCompliancePermission,
+  type EvaluateAffiliateComplianceInput,
 } from '../src/affiliate-compliance-pg/index.js';
 
 const NOW = '2026-08-27T12:00:00.000Z';
 const FUTURE = '2027-08-27T12:00:00.000Z';
-const SHA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const WORKSPACE_ID = 'ad100000-0000-4000-8000-000000000001';
+const SUBJECT_ID = 'ad200000-0000-4000-8000-000000000001';
+const SCOPE_SHA = '1'.repeat(64);
+const SNAPSHOT_SHA = '2'.repeat(64);
+const NONCE_SHA = '3'.repeat(64);
+const SHA = 'a'.repeat(64);
+
+function contentClass(channel: AffiliateComplianceChannel) {
+  if (channel === 'affiliate_recruitment') return 'affiliate_recruitment' as const;
+  if (channel === 'tracking' || channel === 'payout' || channel === 'audience_upload' || channel === 'phone') {
+    return 'operational_only' as const;
+  }
+  return 'ordinary_product' as const;
+}
 
 function readyEvidence(): AffiliateComplianceEvidence {
-  const declaration = Object.freeze({ status: 'current' as const, version: 'v1', evidenceSha256: SHA, expiresAt: FUTURE });
-  const specialist = Object.freeze({ status: 'current' as const, decisionReference: 'specialist-decision-1', expiresAt: FUTURE });
-  const pecr = Object.freeze({
-    ...specialist,
+  const declaration = {
+    status: 'current' as const,
+    decision: 'affirmed' as const,
+    version: 'v1',
+    declarationSha256: SHA,
+    evidenceSha256: SHA,
+    occurredAt: '2026-08-03T00:00:00.000Z',
+    expiresAt: FUTURE,
+  };
+  const specialist = (decisionKind: Exclude<(typeof AFFILIATE_SPECIALIST_DECISION_KINDS)[number], 'pecr_sender_route' | 'pecr_instigator_route'>) => ({
+    status: 'current' as const,
+    decisionKind,
+    decision: 'approved' as const,
+    decisionReference: `decision-${decisionKind}`,
+    actionScopeSha256: SCOPE_SHA,
+    validFrom: '2026-08-01T00:00:00.000Z',
+    expiresAt: FUTURE,
+  });
+  const pecr = (decisionKind: 'pecr_sender_route' | 'pecr_instigator_route') => ({
+    status: 'current' as const,
+    decisionKind,
+    decision: 'approved' as const,
+    decisionReference: `decision-${decisionKind}`,
+    actionScopeSha256: SCOPE_SHA,
+    validFrom: '2026-08-01T00:00:00.000Z',
+    expiresAt: FUTURE,
     routeClassification: 'individual_consent' as const,
-    partyReference: 'party-ref-1',
-    responsibilityReference: 'responsibility-ref-1',
+    partyReference: `party-${decisionKind}`,
+    responsibilityReference: `responsibility-${decisionKind}`,
   });
-  return Object.freeze({
-    policyPack: Object.freeze({
-      bundleId: 'bundle-v1', bundleVersion: '1.0.0', bundleSha256: SHA,
-      legalApproval: 'approved', commercialApproval: 'approved', publication: 'published',
-      effectiveAt: '2026-08-01T00:00:00.000Z', expiresAt: FUTURE,
-    }),
-    acceptance: Object.freeze({
-      status: 'accepted', bundleId: 'bundle-v1', bundleSha256: SHA,
-      acceptedAt: '2026-08-02T00:00:00.000Z', expiresAt: FUTURE,
-      capacityVerified: true, reacceptanceRequired: false,
-    }),
-    training: Object.freeze({
-      status: 'passed', completedAt: '2026-08-03T00:00:00.000Z', expiresAt: FUTURE,
+  const effect = (kind: 'content_scope_approval' | 'rendered_disclosure_check' | 'claim_evidence' | 'recipient_route' | 'suppression' | 'visitor_choice' | 'payout_checks') => ({
+    kind,
+    status: 'current' as const,
+    decision: 'satisfied' as const,
+    actionScopeSha256: SCOPE_SHA,
+    evidenceSha256: SHA,
+    validFrom: '2026-08-01T00:00:00.000Z',
+    expiresAt: FUTURE,
+  });
+
+  return {
+    workspaceId: WORKSPACE_ID,
+    subjectId: SUBJECT_ID,
+    evidenceSnapshotSha256: SNAPSHOT_SHA,
+    policyPack: {
+      bundleId: 'bundle-v1',
+      bundleVersion: '1.0.0',
+      bundleSha256: SHA,
+      legalApproval: 'approved',
+      commercialApproval: 'approved',
+      publication: 'published',
+      effectiveAt: '2026-08-01T00:00:00.000Z',
+      expiresAt: FUTURE,
+    },
+    lifecycle: {
+      state: 'active',
+      occurredAt: '2026-08-02T00:00:00.000Z',
+      evidenceSha256: SHA,
+    },
+    acceptance: {
+      status: 'accepted',
+      bundleId: 'bundle-v1',
+      bundleSha256: SHA,
+      acceptedAt: '2026-08-02T00:00:00.000Z',
+      expiresAt: FUTURE,
+    },
+    capacity: {
+      status: 'current',
+      decision: 'verified',
+      capacityReference: 'capacity-decision-v1',
+      evidenceSha256: SHA,
+      occurredAt: '2026-08-02T00:00:00.000Z',
+      expiresAt: FUTURE,
+    },
+    training: {
+      status: 'passed',
+      trainingKey: 'affiliate_core',
+      trainingVersion: 'v1',
+      courseSha256: SHA,
+      quizSha256: SHA,
+      approvalState: 'approved',
+      completedAt: '2026-08-03T00:00:00.000Z',
+      expiresAt: FUTURE,
       attestationSha256: SHA,
-    }),
-    declarations: Object.freeze({ businessTax: declaration, disclosureClaims: declaration, dataProtection: declaration }),
-    channelAuthorities: Object.freeze([
-      Object.freeze({ channel: 'public_social' as const, status: 'current' as const, validFrom: '2026-08-01T00:00:00.000Z', validUntil: FUTURE, evidenceSha256: SHA }),
-      Object.freeze({ channel: 'affiliate_recruitment' as const, status: 'current' as const, validFrom: '2026-08-01T00:00:00.000Z', validUntil: FUTURE, evidenceSha256: SHA }),
-      Object.freeze({ channel: 'email' as const, status: 'current' as const, validFrom: '2026-08-01T00:00:00.000Z', validUntil: FUTURE, evidenceSha256: SHA }),
-      Object.freeze({ channel: 'tracking' as const, status: 'current' as const, validFrom: '2026-08-01T00:00:00.000Z', validUntil: FUTURE, evidenceSha256: SHA }),
-      Object.freeze({ channel: 'payout' as const, status: 'current' as const, validFrom: '2026-08-01T00:00:00.000Z', validUntil: FUTURE, evidenceSha256: SHA }),
-    ]),
-    specialistDecisions: Object.freeze({
-      pecrSenderRoute: pecr,
-      pecrInstigatorRoute: pecr,
-      affiliateRecruitmentPolicy: specialist,
-      financialPromotionPerimeter: specialist,
-      consumerEligibilityReview: specialist,
-      sanctionsScreening: specialist,
-    }),
-    holds: Object.freeze([]),
-    effects: Object.freeze({
-      propertyInvestmentContent: false,
-      contentApprovedForScope: true,
-      disclosureRenderedAndChecked: true,
-      claimEvidenceCurrent: true,
-      recipientRouteCurrent: true,
-      suppressionClear: true,
-      visitorChoiceCurrent: true,
-      payoutChecksCurrent: true,
-      providerEffectsOn: true,
-    }),
-  });
+    },
+    declarations: {
+      businessTax: declaration,
+      disclosureClaims: { ...declaration },
+      dataProtection: { ...declaration },
+    },
+    channelAuthorities: AFFILIATE_COMPLIANCE_CHANNELS.map((channel, index) => ({
+      channel,
+      status: 'current' as const,
+      authorityState: 'approved' as const,
+      contentClass: contentClass(channel),
+      purposeCode: 'affiliate_marketing',
+      territoryCode: 'GB',
+      senderPartyReference: 'property-predator',
+      accountScopeReference: `account-${index}`,
+      actionScopeSha256: SCOPE_SHA,
+      validFrom: '2026-08-01T00:00:00.000Z',
+      validUntil: FUTURE,
+      evidenceSha256: index.toString(16).padStart(64, '0'),
+    })),
+    specialistDecisions: {
+      pecrSenderRoute: pecr('pecr_sender_route'),
+      pecrInstigatorRoute: pecr('pecr_instigator_route'),
+      affiliateRecruitmentPolicy: specialist('affiliate_recruitment_policy'),
+      financialPromotionPerimeter: specialist('financial_promotion_perimeter'),
+      consumerEligibilityReview: specialist('consumer_eligibility_review'),
+      sanctionsScreening: specialist('sanctions_screening'),
+    },
+    cases: [],
+    permissionFacts: [],
+    effects: {
+      contentClassification: {
+        kind: 'content_classification',
+        status: 'current',
+        classification: 'ordinary_product',
+        actionScopeSha256: SCOPE_SHA,
+        evidenceSha256: SHA,
+        validFrom: '2026-08-01T00:00:00.000Z',
+        expiresAt: FUTURE,
+      },
+      contentScopeApproval: effect('content_scope_approval'),
+      disclosureRenderedCheck: effect('rendered_disclosure_check'),
+      claimEvidence: effect('claim_evidence'),
+      recipientRoute: effect('recipient_route'),
+      suppression: effect('suppression'),
+      visitorChoice: effect('visitor_choice'),
+      payoutChecks: effect('payout_checks'),
+      providerEffects: 'off',
+    },
+  };
 }
 
-function evaluate(permission: AffiliateCompliancePermission, evidence: AffiliateComplianceEvidence) {
-  return evaluateAffiliateCompliance({ permission, now: NOW, evidence });
+function input(permission: AffiliateCompliancePermission, evidence = readyEvidence()): EvaluateAffiliateComplianceInput {
+  return {
+    permission,
+    workspaceId: WORKSPACE_ID,
+    subjectId: SUBJECT_ID,
+    actionScopeSha256: SCOPE_SHA,
+    decisionNonceSha256: NONCE_SHA,
+    now: NOW,
+    evidence,
+  };
 }
 
-test('one central evaluator allows a short-lived link decision only when every general gate is current', () => {
-  const decision = evaluate('affiliate_link.issue', readyEvidence());
-  assert.equal(decision.decision, 'allow');
-  assert.deepEqual(decision.reasonCodes, []);
-  assert.equal(decision.expiresAt, '2026-08-27T12:05:00.000Z');
-  assert.ok(Object.isFrozen(decision));
-  assert.ok(Object.isFrozen(decision.reasonCodes));
+function evaluate(permission: AffiliateCompliancePermission, evidence = readyEvidence()) {
+  return evaluateAffiliateCompliance(input(permission, evidence));
+}
+
+function mutableEvidence(): any {
+  return structuredClone(readyEvidence());
+}
+
+test('all exported compliance vocabularies are runtime-frozen and cannot manufacture admin.override', () => {
+  for (const collection of [
+    AFFILIATE_COMPLIANCE_PERMISSIONS,
+    AFFILIATE_COMPLIANCE_CHANNELS,
+    AFFILIATE_COMPLIANCE_LIFECYCLE_STATES,
+    AFFILIATE_SPECIALIST_DECISION_KINDS,
+    AFFILIATE_COMPLIANCE_EFFECT_KINDS,
+    AFFILIATE_COMPLIANCE_REASON_CODES,
+  ]) {
+    assert.equal(Object.isFrozen(collection), true);
+    assert.throws(() => (collection as unknown as string[]).push('admin.override'), TypeError);
+  }
+  const attacked = evaluateAffiliateCompliance({ ...input('affiliate_link.issue'), permission: 'admin.override' } as never);
+  assert.equal(attacked.decision, 'deny');
+  assert.deepEqual(attacked.reasonCodes, ['UNKNOWN_PERMISSION']);
 });
 
-test('every missing or stale general evidence class independently fails closed', () => {
-  const ready = readyEvidence();
+test('a valid manual decision is short-lived and bound to the exact workspace, subject, scope, snapshot and nonce', () => {
+  const decision = evaluate('affiliate_link.issue');
+  assert.equal(decision.decision, 'allow');
+  assert.deepEqual(decision.reasonCodes, []);
+  assert.equal(decision.workspaceId, WORKSPACE_ID);
+  assert.equal(decision.subjectId, SUBJECT_ID);
+  assert.equal(decision.actionScopeSha256, SCOPE_SHA);
+  assert.equal(decision.evidenceSnapshotSha256, SNAPSHOT_SHA);
+  assert.equal(decision.decisionNonceSha256, NONCE_SHA);
+  assert.equal(decision.expiresAt, '2026-08-27T12:05:00.000Z');
+  assert.equal(Object.isFrozen(decision), true);
+  assert.equal(Object.isFrozen(decision.reasonCodes), true);
+});
+
+test('exact validation rejects string/number boolean bypasses and structural surprises before allow', () => {
+  const attacks: unknown[] = [];
+  for (const value of ['false', 0, 1]) {
+    const candidate = structuredClone(input('affiliate_link.issue')) as any;
+    candidate.evidence.acceptance.capacityVerified = value;
+    attacks.push(candidate);
+  }
+  const extraKey = structuredClone(input('affiliate_link.issue')) as any;
+  extraKey['admin.override'] = true;
+  attacks.push(extraKey);
+
+  const getter = structuredClone(input('affiliate_link.issue')) as any;
+  Object.defineProperty(getter.evidence.capacity, 'decision', {
+    enumerable: true,
+    get: () => 'verified',
+  });
+  attacks.push(getter);
+
+  const prototype = structuredClone(input('affiliate_link.issue')) as any;
+  Object.setPrototypeOf(prototype.evidence, { adminOverride: true });
+  attacks.push(prototype);
+
+  const proxyTarget = structuredClone(input('affiliate_link.issue'));
+  attacks.push(new Proxy(proxyTarget, {}));
+
+  const sparse = structuredClone(input('affiliate_link.issue')) as any;
+  sparse.evidence.channelAuthorities = new Array(1);
+  attacks.push(sparse);
+
+  const wrongWorkspace = structuredClone(input('affiliate_link.issue')) as any;
+  wrongWorkspace.evidence.workspaceId = 'ad100000-0000-4000-8000-000000000002';
+  attacks.push(wrongWorkspace);
+
+  for (const [index, attack] of attacks.entries()) {
+    const decision = evaluateAffiliateCompliance(attack as never);
+    assert.equal(decision.decision, 'deny');
+    if (index < 3) assert.deepEqual(decision.reasonCodes, ['EVIDENCE_INVALID']);
+    else assert.ok(decision.reasonCodes.includes('EVIDENCE_INVALID') || decision.reasonCodes.includes('UNKNOWN_PERMISSION'));
+  }
+});
+
+test('general policy, acceptance, training, declaration and lifecycle states stay decisive', () => {
   const cases: readonly [AffiliateComplianceEvidence, string][] = [
-    [{ ...ready, policyPack: null }, 'POLICY_PACK_MISSING'],
-    [{ ...ready, policyPack: { ...ready.policyPack!, legalApproval: 'pending' } }, 'LEGAL_APPROVAL_MISSING'],
-    [{ ...ready, policyPack: { ...ready.policyPack!, commercialApproval: 'pending' } }, 'COMMERCIAL_APPROVAL_MISSING'],
-    [{ ...ready, policyPack: { ...ready.policyPack!, publication: 'draft' } }, 'POLICY_PACK_NOT_PUBLISHED'],
-    [{ ...ready, acceptance: null }, 'ACCEPTANCE_MISSING'],
-    [{ ...ready, acceptance: { ...ready.acceptance!, bundleSha256: 'b'.repeat(64) } }, 'ACCEPTANCE_BUNDLE_MISMATCH'],
-    [{ ...ready, training: null }, 'TRAINING_MISSING'],
-    [{ ...ready, declarations: { ...ready.declarations, businessTax: null } }, 'BUSINESS_TAX_DECLARATION_MISSING'],
-    [{ ...ready, channelAuthorities: [] }, 'PROMOTION_CHANNEL_NOT_APPROVED'],
-    [{ ...ready, holds: [{ kind: 'suspension', active: true, caseReference: 'case-1' }] }, 'SUSPENSION_ACTIVE'],
+    [{ ...readyEvidence(), policyPack: null }, 'POLICY_PACK_MISSING'],
+    [{ ...readyEvidence(), policyPack: { ...readyEvidence().policyPack!, legalApproval: 'rejected' } }, 'LEGAL_APPROVAL_MISSING'],
+    [{ ...readyEvidence(), policyPack: { ...readyEvidence().policyPack!, commercialApproval: 'withdrawn' } }, 'COMMERCIAL_APPROVAL_MISSING'],
+    [{ ...readyEvidence(), policyPack: { ...readyEvidence().policyPack!, publication: 'superseded' } }, 'POLICY_PACK_NOT_PUBLISHED'],
+    [{ ...readyEvidence(), acceptance: { ...readyEvidence().acceptance!, status: 'declined' } }, 'ACCEPTANCE_MISSING'],
+    [{ ...readyEvidence(), acceptance: { ...readyEvidence().acceptance!, bundleSha256: 'b'.repeat(64) } }, 'ACCEPTANCE_BUNDLE_MISMATCH'],
+    [{ ...readyEvidence(), capacity: { ...readyEvidence().capacity!, decision: 'blocked' } }, 'SIGNATORY_AUTHORITY_UNVERIFIED'],
+    [{ ...readyEvidence(), training: { ...readyEvidence().training!, approvalState: 'blocked' } }, 'TRAINING_MISSING'],
+    [{ ...readyEvidence(), declarations: { ...readyEvidence().declarations, businessTax: { ...readyEvidence().declarations.businessTax!, decision: 'declined' } } }, 'BUSINESS_TAX_DECLARATION_MISSING'],
+    [{ ...readyEvidence(), lifecycle: { ...readyEvidence().lifecycle, state: 'terminated' } }, 'LIFECYCLE_TERMINATED'],
+    [{ ...readyEvidence(), lifecycle: { ...readyEvidence().lifecycle, state: 'withdrawn' } }, 'LIFECYCLE_WITHDRAWN'],
   ];
   for (const [evidence, expected] of cases) {
     const decision = evaluate('affiliate_link.issue', evidence);
-    assert.equal(decision.decision, 'deny');
+    assert.equal(decision.decision, 'deny', expected);
     assert.ok(decision.reasonCodes.includes(expected as never), expected);
   }
 });
 
-test('recipient electronic mail requires independent sender and instigator PECR route evidence', () => {
-  const ready = readyEvidence();
-  const missingSender = evaluate('email.send', {
-    ...ready,
-    specialistDecisions: { ...ready.specialistDecisions, pecrSenderRoute: null },
-  });
-  const unknownInstigator = evaluate('email.send', {
-    ...ready,
-    specialistDecisions: {
-      ...ready.specialistDecisions,
-      pecrInstigatorRoute: { ...ready.specialistDecisions.pecrInstigatorRoute!, routeClassification: 'unknown' },
-    },
-  });
-  assert.ok(missingSender.reasonCodes.includes('PECR_SENDER_ROUTE_MISSING'));
-  assert.ok(unknownInstigator.reasonCodes.includes('PECR_INSTIGATOR_DECISION_MISSING'));
-  assert.equal(evaluate('email.send', { ...ready, effects: { ...ready.effects, providerEffectsOn: false } }).decision, 'deny');
-});
+test('blocked, expired and wrong-scope channel, specialist, case and permission evidence cannot allow', () => {
+  const blockedChannel = mutableEvidence();
+  blockedChannel.channelAuthorities = blockedChannel.channelAuthorities.map((authority: AffiliateComplianceEvidence['channelAuthorities'][number]) => (
+    authority.channel === 'affiliate_link' ? { ...authority, authorityState: 'blocked' } : authority
+  ));
+  assert.ok(evaluate('affiliate_link.issue', blockedChannel).reasonCodes.includes('PROMOTION_CHANNEL_NOT_APPROVED'));
 
-test('affiliate recruitment has a distinct permission and cannot borrow ordinary product-content approval', () => {
-  const ready = readyEvidence();
-  const withoutRecruitmentDecision = {
-    ...ready,
-    specialistDecisions: { ...ready.specialistDecisions, affiliateRecruitmentPolicy: null },
+  const wrongScope = mutableEvidence();
+  wrongScope.channelAuthorities = wrongScope.channelAuthorities.map((authority: AffiliateComplianceEvidence['channelAuthorities'][number]) => (
+    authority.channel === 'affiliate_link' ? { ...authority, actionScopeSha256: '4'.repeat(64) } : authority
+  ));
+  assert.ok(evaluate('affiliate_link.issue', wrongScope).reasonCodes.includes('PROMOTION_CHANNEL_NOT_APPROVED'));
+
+  const blockedRecruitment = mutableEvidence();
+  blockedRecruitment.specialistDecisions.affiliateRecruitmentPolicy = {
+    ...blockedRecruitment.specialistDecisions.affiliateRecruitmentPolicy!, decision: 'blocked',
   };
-  assert.equal(evaluate('public_social.manual_publish', withoutRecruitmentDecision).decision, 'allow');
-  const recruitment = evaluate('affiliate_recruitment.manual_publish', withoutRecruitmentDecision);
-  assert.equal(recruitment.decision, 'deny');
-  assert.ok(recruitment.reasonCodes.includes('AFFILIATE_RECRUITMENT_POLICY_MISSING'));
+  assert.ok(evaluate('affiliate_recruitment.manual_publish', blockedRecruitment).reasonCodes.includes('AFFILIATE_RECRUITMENT_POLICY_MISSING'));
+
+  const openCase = mutableEvidence();
+  openCase.cases = [{
+    kind: 'fraud', state: 'opened', permissionEffect: 'block', caseReference: 'CASE-001',
+    occurredAt: NOW, evidenceSha256: SHA,
+  }];
+  assert.ok(evaluate('affiliate_link.issue', openCase).reasonCodes.includes('FRAUD_HOLD_ACTIVE'));
+
+  const permissionBlock = mutableEvidence();
+  permissionBlock.permissionFacts = [{
+    permission: 'affiliate_link.issue', state: 'blocked', actionScopeSha256: SCOPE_SHA,
+    validFrom: NOW, validUntil: FUTURE, evidenceSha256: SHA,
+  }];
+  assert.ok(evaluate('affiliate_link.issue', permissionBlock).reasonCodes.includes('PERMISSION_BLOCK_ACTIVE'));
 });
 
-test('property/investment content and payout keep specialist decisions explicit', () => {
-  const ready = readyEvidence();
-  const content = evaluate('public_social.manual_publish', {
-    ...ready,
-    effects: { ...ready.effects, propertyInvestmentContent: true },
-    specialistDecisions: {
-      ...ready.specialistDecisions,
-      financialPromotionPerimeter: null,
-      consumerEligibilityReview: null,
-    },
-  });
-  assert.ok(content.reasonCodes.includes('FINANCIAL_PROMOTION_PERIMETER_MISSING'));
-  assert.ok(content.reasonCodes.includes('CONSUMER_ELIGIBILITY_REVIEW_MISSING'));
+test('PECR sender and instigator, CAP 20, CAP 14/FCA/FSMA, consumer status and OFSI remain independent', () => {
+  const missingSender = mutableEvidence();
+  missingSender.specialistDecisions.pecrSenderRoute = null;
+  assert.ok(evaluate('email.send', missingSender).reasonCodes.includes('PECR_SENDER_ROUTE_MISSING'));
 
-  const payout = evaluate('commission.payout', {
-    ...ready,
-    specialistDecisions: { ...ready.specialistDecisions, sanctionsScreening: null },
-  });
-  assert.ok(payout.reasonCodes.includes('SANCTIONS_SCREENING_MISSING'));
+  const missingInstigator = mutableEvidence();
+  missingInstigator.specialistDecisions.pecrInstigatorRoute = null;
+  assert.ok(evaluate('email.send', missingInstigator).reasonCodes.includes('PECR_INSTIGATOR_DECISION_MISSING'));
+
+  const noCap20 = mutableEvidence();
+  noCap20.specialistDecisions.affiliateRecruitmentPolicy = null;
+  assert.equal(evaluate('public_social.manual_publish', noCap20).decision, 'allow');
+  assert.ok(evaluate('affiliate_recruitment.manual_publish', noCap20).reasonCodes.includes('AFFILIATE_RECRUITMENT_POLICY_MISSING'));
+
+  const property = mutableEvidence();
+  property.effects.contentClassification = { ...property.effects.contentClassification!, classification: 'property_investment' };
+  property.channelAuthorities = property.channelAuthorities.map((authority: AffiliateComplianceEvidence['channelAuthorities'][number]) => (
+    authority.channel === 'public_social' ? { ...authority, contentClass: 'property_investment' } : authority
+  ));
+  property.specialistDecisions.financialPromotionPerimeter = null;
+  property.specialistDecisions.consumerEligibilityReview = null;
+  const propertyDecision = evaluate('public_social.manual_publish', property);
+  assert.ok(propertyDecision.reasonCodes.includes('FINANCIAL_PROMOTION_PERIMETER_MISSING'));
+  assert.ok(propertyDecision.reasonCodes.includes('CONSUMER_ELIGIBILITY_REVIEW_MISSING'));
+
+  const staleSanctions = mutableEvidence();
+  staleSanctions.specialistDecisions.sanctionsScreening = {
+    ...staleSanctions.specialistDecisions.sanctionsScreening!, expiresAt: null,
+  };
+  assert.ok(evaluate('commission.payout', staleSanctions).reasonCodes.includes('SANCTIONS_SCREENING_MISSING'));
 });
 
-test('malformed time and runtime-unknown permission return a denial instead of throwing', () => {
-  const evidence = readyEvidence();
-  const malformed = evaluateAffiliateCompliance({ permission: 'affiliate_link.issue', now: 'later', evidence });
-  assert.deepEqual(malformed.reasonCodes, ['EVIDENCE_INVALID']);
-  const unknown = evaluateAffiliateCompliance({ permission: 'admin.override' as never, now: NOW, evidence });
-  assert.deepEqual(unknown.reasonCodes, ['UNKNOWN_PERMISSION']);
-  assert.equal(unknown.decision, 'deny');
-});
-
-test('malformed projected evidence identifiers, hashes and chronology deny every affected gate', () => {
-  const ready = readyEvidence();
-  const cases: readonly [AffiliateCompliancePermission, AffiliateComplianceEvidence, string][] = [
-    ['affiliate_link.issue', {
-      ...ready,
-      acceptance: { ...ready.acceptance!, acceptedAt: 'not-an-instant' },
-    }, 'EVIDENCE_INVALID'],
-    ['affiliate_link.issue', {
-      ...ready,
-      acceptance: { ...ready.acceptance!, acceptedAt: FUTURE },
-    }, 'EVIDENCE_INVALID'],
-    ['affiliate_link.issue', {
-      ...ready,
-      training: { ...ready.training!, completedAt: null },
-    }, 'EVIDENCE_INVALID'],
-    ['affiliate_link.issue', {
-      ...ready,
-      training: { ...ready.training!, attestationSha256: 'blank' },
-    }, 'EVIDENCE_INVALID'],
-    ['affiliate_link.issue', {
-      ...ready,
-      channelAuthorities: ready.channelAuthorities.map((authority) => ({
-        ...authority, validFrom: null,
-      })),
-    }, 'PROMOTION_CHANNEL_NOT_APPROVED'],
-    ['email.send', {
-      ...ready,
-      channelAuthorities: ready.channelAuthorities.map((authority) => (
-        authority.channel === 'email' ? { ...authority, evidenceSha256: '' } : authority
-      )),
-    }, 'CHANNEL_AUTHORITY_MISSING'],
-    ['affiliate_recruitment.manual_publish', {
-      ...ready,
-      specialistDecisions: {
-        ...ready.specialistDecisions,
-        affiliateRecruitmentPolicy: {
-          ...ready.specialistDecisions.affiliateRecruitmentPolicy!,
-          decisionReference: '   ',
-        },
-      },
-    }, 'AFFILIATE_RECRUITMENT_POLICY_MISSING'],
-    ['commission.payout', {
-      ...ready,
-      specialistDecisions: {
-        ...ready.specialistDecisions,
-        sanctionsScreening: {
-          ...ready.specialistDecisions.sanctionsScreening!,
-          expiresAt: 'malformed',
-        },
-      },
-    }, 'SANCTIONS_SCREENING_MISSING'],
-    ['affiliate_link.issue', {
-      ...ready,
-      declarations: {
-        ...ready.declarations,
-        businessTax: { ...ready.declarations.businessTax!, evidenceSha256: '' },
-      },
-    }, 'BUSINESS_TAX_DECLARATION_MISSING'],
+test('every provider-effect permission remains denied without manufacturing provider capability', () => {
+  const providerPermissions: readonly AffiliateCompliancePermission[] = [
+    'public_social.provider_publish', 'affiliate_recruitment.provider_publish',
+    'email.send', 'sms.send', 'whatsapp.send', 'social_dm.send', 'audience.upload',
+    'paid_ads.launch', 'phone.marketing', 'commission.payout',
   ];
-  for (const [permission, evidence, reason] of cases) {
-    const decision = evaluate(permission, evidence);
-    assert.equal(decision.decision, 'deny', reason);
-    assert.ok(decision.reasonCodes.includes(reason as never), reason);
+  for (const permission of providerPermissions) {
+    const decision = evaluate(permission);
+    assert.equal(decision.decision, 'deny', permission);
+    assert.ok(decision.reasonCodes.includes('PROVIDER_EFFECTS_OFF'), permission);
+  }
+});
+
+test('malformed canonical values return a denial instead of throwing', () => {
+  for (const patch of [
+    { now: 'later' },
+    { actionScopeSha256: 'not-a-digest' },
+    { decisionNonceSha256: '4'.repeat(65) },
+  ]) {
+    const decision = evaluateAffiliateCompliance({ ...input('affiliate_link.issue'), ...patch } as never);
+    assert.equal(decision.decision, 'deny');
+    assert.deepEqual(decision.reasonCodes, ['EVIDENCE_INVALID']);
   }
 });

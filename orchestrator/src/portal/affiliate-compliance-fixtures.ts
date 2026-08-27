@@ -1,4 +1,5 @@
 import type {
+  AffiliateComplianceCaseEvidence,
   AffiliateComplianceEvidence,
   AffiliateDeclarationEvidence,
   AffiliateSpecialistDecisionEvidence,
@@ -11,6 +12,16 @@ import type {
 
 const NOW = '2026-08-27T12:00:00.000Z';
 const FUTURE = '2027-08-27T12:00:00.000Z';
+const WORKSPACE_ID = 'ac200000-0000-4000-8000-000000000001';
+const ACTION_SCOPE_SHA = '7777777777777777777777777777777777777777777777777777777777777777';
+const EVIDENCE_SNAPSHOT_SHA = '6666666666666666666666666666666666666666666666666666666666666666';
+const SUBJECT_1 = 'ac100000-0000-4000-8000-000000000001';
+const SUBJECT_2 = 'ac100000-0000-4000-8000-000000000002';
+const SUBJECT_3 = 'ac100000-0000-4000-8000-000000000003';
+
+// Only snapshots created and frozen in this module may cross the fixture-only presenter boundary.
+const AUTHENTIC_FIXTURES = new WeakSet<object>();
+
 // Reproducible illustrative bundle digest: SHA-256 of the seven exact document
 // hashes below, in display order, joined with a single LF and no final LF.
 const PACK_SHA = '739ce2b2d9b051a94fca79c622cd476934edb61c25dc207e89e6850e1d859ce6';
@@ -36,35 +47,72 @@ const DOCUMENTS: readonly PortalAffiliateComplianceDocument[] = Object.freeze([
 
 const CURRENT_DECLARATION: AffiliateDeclarationEvidence = Object.freeze({
   status: 'current',
+  decision: 'affirmed',
   version: 'fixture-v1',
+  declarationSha256: '5555555555555555555555555555555555555555555555555555555555555555',
   evidenceSha256: '8888888888888888888888888888888888888888888888888888888888888888',
+  occurredAt: '2026-08-26T11:00:00.000Z',
   expiresAt: FUTURE,
 });
 
 const MISSING_DECLARATION: AffiliateDeclarationEvidence = Object.freeze({
-  status: 'missing', version: null, evidenceSha256: null, expiresAt: null,
+  status: 'missing',
+  decision: null,
+  version: null,
+  declarationSha256: null,
+  evidenceSha256: null,
+  occurredAt: null,
+  expiresAt: null,
 });
 
-const MISSING_SPECIALIST_DECISION: AffiliateSpecialistDecisionEvidence = Object.freeze({
-  status: 'missing', decisionReference: null, expiresAt: null,
-});
+function missingSpecialist(decisionKind: AffiliateSpecialistDecisionEvidence['decisionKind']): AffiliateSpecialistDecisionEvidence {
+  return Object.freeze({
+    status: 'missing',
+    decisionKind,
+    decision: null,
+    decisionReference: null,
+    actionScopeSha256: null,
+    validFrom: null,
+    expiresAt: null,
+  });
+}
 
-const MISSING_PECR_ROUTE = Object.freeze({
-  ...MISSING_SPECIALIST_DECISION,
-  routeClassification: 'unknown' as const,
-  partyReference: null,
-  responsibilityReference: null,
-});
+function missingPecr(decisionKind: 'pecr_sender_route' | 'pecr_instigator_route') {
+  return Object.freeze({
+    ...missingSpecialist(decisionKind),
+    decisionKind,
+    routeClassification: 'unknown' as const,
+    partyReference: null,
+    responsibilityReference: null,
+  });
+}
+
+function missingEffect(kind: 'content_scope_approval' | 'rendered_disclosure_check' | 'claim_evidence' | 'recipient_route' | 'suppression' | 'visitor_choice' | 'payout_checks') {
+  return Object.freeze({
+    kind,
+    status: 'missing' as const,
+    decision: null,
+    actionScopeSha256: null,
+    evidenceSha256: null,
+    validFrom: null,
+    expiresAt: null,
+  });
+}
 
 function evidence(input: Readonly<{
+  subjectId: string;
+  lifecycle: AffiliateComplianceEvidence['lifecycle']['state'];
   acceptance: 'current' | 'missing';
   training: 'current' | 'missing' | 'expired';
   declarations: 'current' | 'missing';
   channels: readonly ('public_social' | 'email' | 'whatsapp' | 'social_dm')[];
-  holds?: AffiliateComplianceEvidence['holds'];
+  cases?: readonly AffiliateComplianceCaseEvidence[];
 }>): AffiliateComplianceEvidence {
-  const declarations = input.declarations === 'current' ? CURRENT_DECLARATION : MISSING_DECLARATION;
+  const declaration = input.declarations === 'current' ? CURRENT_DECLARATION : MISSING_DECLARATION;
   return Object.freeze({
+    workspaceId: WORKSPACE_ID,
+    subjectId: input.subjectId,
+    evidenceSnapshotSha256: EVIDENCE_SNAPSHOT_SHA,
     policyPack: Object.freeze({
       bundleId: 'policy-pack-draft-2026-08-27',
       bundleVersion: 'draft-1',
@@ -75,63 +123,102 @@ function evidence(input: Readonly<{
       effectiveAt: null,
       expiresAt: null,
     }),
+    lifecycle: Object.freeze({
+      state: input.lifecycle,
+      occurredAt: '2026-08-26T09:00:00.000Z',
+      evidenceSha256: '4444444444444444444444444444444444444444444444444444444444444444',
+    }),
     acceptance: input.acceptance === 'current' ? Object.freeze({
       status: 'accepted',
       bundleId: 'policy-pack-draft-2026-08-27',
       bundleSha256: PACK_SHA,
       acceptedAt: '2026-08-26T10:15:00.000Z',
       expiresAt: FUTURE,
-      capacityVerified: true,
-      reacceptanceRequired: false,
+    }) : null,
+    capacity: input.acceptance === 'current' ? Object.freeze({
+      status: 'current' as const,
+      decision: 'verified' as const,
+      capacityReference: 'fixture-capacity-decision',
+      evidenceSha256: 'abababababababababababababababababababababababababababababababab',
+      occurredAt: '2026-08-26T10:10:00.000Z',
+      expiresAt: FUTURE,
     }) : null,
     training: input.training === 'missing' ? null : Object.freeze({
       status: 'passed',
+      trainingKey: 'affiliate_core',
+      trainingVersion: 'fixture-v1',
+      courseSha256: '3333333333333333333333333333333333333333333333333333333333333333',
+      quizSha256: '2222222222222222222222222222222222222222222222222222222222222222',
+      approvalState: 'approved',
       completedAt: '2026-08-26T10:45:00.000Z',
       expiresAt: input.training === 'expired' ? '2026-08-26T10:45:00.000Z' : FUTURE,
       attestationSha256: '9999999999999999999999999999999999999999999999999999999999999999',
     }),
     declarations: Object.freeze({
-      businessTax: declarations,
-      disclosureClaims: declarations,
-      dataProtection: declarations,
+      businessTax: declaration,
+      disclosureClaims: declaration,
+      dataProtection: declaration,
     }),
     channelAuthorities: Object.freeze(input.channels.map((channel, index) => Object.freeze({
       channel,
       status: 'current' as const,
+      authorityState: 'approved' as const,
+      contentClass: 'property_investment' as const,
+      purposeCode: 'affiliate_marketing',
+      territoryCode: 'GB',
+      senderPartyReference: 'fixture-sender',
+      accountScopeReference: `fixture-account-${index + 1}`,
+      actionScopeSha256: ACTION_SCOPE_SHA,
       validFrom: '2026-08-26T11:00:00.000Z',
       validUntil: FUTURE,
       evidenceSha256: `${String(index + 10).padStart(2, '0')}`.repeat(32),
     }))),
     specialistDecisions: Object.freeze({
-      pecrSenderRoute: MISSING_PECR_ROUTE,
-      pecrInstigatorRoute: MISSING_PECR_ROUTE,
-      affiliateRecruitmentPolicy: MISSING_SPECIALIST_DECISION,
-      financialPromotionPerimeter: MISSING_SPECIALIST_DECISION,
-      consumerEligibilityReview: MISSING_SPECIALIST_DECISION,
-      sanctionsScreening: MISSING_SPECIALIST_DECISION,
+      pecrSenderRoute: missingPecr('pecr_sender_route'),
+      pecrInstigatorRoute: missingPecr('pecr_instigator_route'),
+      affiliateRecruitmentPolicy: missingSpecialist('affiliate_recruitment_policy'),
+      financialPromotionPerimeter: missingSpecialist('financial_promotion_perimeter'),
+      consumerEligibilityReview: missingSpecialist('consumer_eligibility_review'),
+      sanctionsScreening: missingSpecialist('sanctions_screening'),
     }),
-    holds: Object.freeze([...(input.holds ?? [])]),
+    cases: Object.freeze([...(input.cases ?? [])]),
+    permissionFacts: Object.freeze([]),
     effects: Object.freeze({
-      propertyInvestmentContent: true,
-      contentApprovedForScope: false,
-      disclosureRenderedAndChecked: false,
-      claimEvidenceCurrent: false,
-      recipientRouteCurrent: false,
-      suppressionClear: false,
-      visitorChoiceCurrent: false,
-      payoutChecksCurrent: false,
-      providerEffectsOn: false,
+      contentClassification: Object.freeze({
+        kind: 'content_classification' as const,
+        status: 'current' as const,
+        classification: 'property_investment' as const,
+        actionScopeSha256: ACTION_SCOPE_SHA,
+        evidenceSha256: '1111111111111111111111111111111111111111111111111111111111111111',
+        validFrom: '2026-08-26T11:00:00.000Z',
+        expiresAt: FUTURE,
+      }),
+      contentScopeApproval: missingEffect('content_scope_approval'),
+      disclosureRenderedCheck: missingEffect('rendered_disclosure_check'),
+      claimEvidence: missingEffect('claim_evidence'),
+      recipientRoute: missingEffect('recipient_route'),
+      suppression: missingEffect('suppression'),
+      visitorChoice: missingEffect('visitor_choice'),
+      payoutChecks: missingEffect('payout_checks'),
+      providerEffects: 'off' as const,
     }),
   });
 }
 
 const SUBJECTS: readonly PortalAffiliateComplianceSubject[] = Object.freeze([
   Object.freeze({
-    subjectId: 'ac100000-0000-4000-8000-000000000001',
+    subjectId: SUBJECT_1,
     displayLabel: 'Fictional affiliate 01',
     fictional: true as const,
     lifecycleLabel: 'Evidence prepared · legal pack blocked',
-    evidence: evidence({ acceptance: 'current', training: 'current', declarations: 'current', channels: ['public_social'] }),
+    evidence: evidence({
+      subjectId: SUBJECT_1,
+      lifecycle: 'active_limited',
+      acceptance: 'current',
+      training: 'current',
+      declarations: 'current',
+      channels: ['public_social'],
+    }),
     cases: Object.freeze([]),
     timeline: Object.freeze([
       Object.freeze({ eventId: 'timeline-a1', eventType: 'declaration.attested', label: 'Illustrative declarations recorded', occurredAt: '2026-08-26T11:00:00.000Z', evidenceSha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', previousEventId: 'timeline-a0' }),
@@ -139,13 +226,22 @@ const SUBJECTS: readonly PortalAffiliateComplianceSubject[] = Object.freeze([
     ]),
   }),
   Object.freeze({
-    subjectId: 'ac100000-0000-4000-8000-000000000002',
+    subjectId: SUBJECT_2,
     displayLabel: 'Fictional legacy affiliate',
     fictional: true as const,
     lifecycleLabel: 'Migrated unverified · reacceptance required',
     evidence: evidence({
-      acceptance: 'missing', training: 'missing', declarations: 'missing', channels: [],
-      holds: Object.freeze([Object.freeze({ kind: 'reacceptance', active: true, caseReference: 'LEGACY-MIGRATION' })]),
+      subjectId: SUBJECT_2,
+      lifecycle: 'migrated_unverified',
+      acceptance: 'missing',
+      training: 'missing',
+      declarations: 'missing',
+      channels: [],
+      cases: Object.freeze([Object.freeze({
+        kind: 'reacceptance', state: 'opened', permissionEffect: 'block',
+        caseReference: 'LEGACY-MIGRATION', occurredAt: '2026-08-25T09:00:00.000Z',
+        evidenceSha256: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+      })]),
     }),
     cases: Object.freeze([]),
     timeline: Object.freeze([
@@ -153,15 +249,19 @@ const SUBJECTS: readonly PortalAffiliateComplianceSubject[] = Object.freeze([
     ]),
   }),
   Object.freeze({
-    subjectId: 'ac100000-0000-4000-8000-000000000003',
+    subjectId: SUBJECT_3,
     displayLabel: 'Fictional affiliate 03',
     fictional: true as const,
     lifecycleLabel: 'Interim suspension · correction open',
     evidence: evidence({
-      acceptance: 'current', training: 'expired', declarations: 'current', channels: ['public_social', 'email'],
-      holds: Object.freeze([
-        Object.freeze({ kind: 'suspension', active: true, caseReference: 'DEMO-CASE-003' }),
-        Object.freeze({ kind: 'correction', active: true, caseReference: 'DEMO-CASE-003' }),
+      subjectId: SUBJECT_3,
+      lifecycle: 'suspended_interim',
+      acceptance: 'current',
+      training: 'expired',
+      declarations: 'current',
+      channels: ['public_social', 'email'],
+      cases: Object.freeze([
+        Object.freeze({ kind: 'suspension', state: 'suspended_interim', permissionEffect: 'block', caseReference: 'DEMO-CASE-003', occurredAt: '2026-08-27T08:35:00.000Z', evidenceSha256: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd' }),
       ]),
     }),
     cases: Object.freeze([Object.freeze({
@@ -182,9 +282,9 @@ const SUBJECTS: readonly PortalAffiliateComplianceSubject[] = Object.freeze([
 
 /** Synthetic workflow data only: no production IDs, people, links, commissions or provider state. */
 export function createPropertyPredatorAffiliateComplianceFixture(): PortalAffiliateComplianceSnapshot {
-  return Object.freeze({
+  const snapshot: PortalAffiliateComplianceSnapshot = Object.freeze({
     workspace: Object.freeze({
-      workspaceId: 'ac200000-0000-4000-8000-000000000001',
+      workspaceId: WORKSPACE_ID,
       workspaceName: 'Property Predator Growth HQ',
       snapshotAt: NOW,
       canManage: true,
@@ -213,4 +313,12 @@ export function createPropertyPredatorAffiliateComplianceFixture(): PortalAffili
     subjects: SUBJECTS,
     dataset: 'illustrative_fixture',
   });
+  AUTHENTIC_FIXTURES.add(snapshot);
+  return snapshot;
+}
+
+export function isAuthenticPropertyPredatorAffiliateComplianceFixture(
+  value: PortalAffiliateComplianceSnapshot,
+): boolean {
+  return AUTHENTIC_FIXTURES.has(value);
 }

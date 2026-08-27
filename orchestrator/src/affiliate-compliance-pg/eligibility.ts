@@ -1,16 +1,27 @@
-import {
-  AFFILIATE_COMPLIANCE_CHANNELS,
-  AFFILIATE_COMPLIANCE_PERMISSIONS,
-  type AffiliateChannelAuthorityEvidence,
-  type AffiliateComplianceChannel,
-  type AffiliateComplianceDecision,
-  type AffiliateCompliancePermission,
-  type AffiliateComplianceReasonCode,
-  type AffiliateDeclarationEvidence,
-  type EvaluateAffiliateComplianceInput,
+import type {
+  AffiliateChannelAuthorityEvidence,
+  AffiliateComplianceCaseEvidence,
+  AffiliateComplianceChannel,
+  AffiliateComplianceDecision,
+  AffiliateCompliancePermission,
+  AffiliateComplianceReasonCode,
+  AffiliateDeclarationEvidence,
+  AffiliatePermissionFactEvidence,
+  AffiliateScopedEffectEvidence,
+  AffiliateSpecialistDecisionEvidence,
+  EvaluateAffiliateComplianceInput,
 } from './types.js';
+import {
+  asValidatedAffiliateComplianceInput,
+  validateAffiliateComplianceInput,
+} from './validation.js';
 
-const PERMISSION_CHANNEL: Readonly<Partial<Record<AffiliateCompliancePermission, AffiliateComplianceChannel>>> = Object.freeze({
+const ZERO_UUID = '00000000-0000-4000-8000-000000000000';
+const ZERO_SHA256 = '0'.repeat(64);
+
+const PERMISSION_CHANNEL: Readonly<Record<AffiliateCompliancePermission, AffiliateComplianceChannel>> = Object.freeze({
+  'affiliate_link.issue': 'affiliate_link',
+  'content.export_linked': 'content_export',
   'public_social.manual_publish': 'public_social',
   'public_social.provider_publish': 'public_social',
   'affiliate_recruitment.manual_publish': 'affiliate_recruitment',
@@ -19,42 +30,61 @@ const PERMISSION_CHANNEL: Readonly<Partial<Record<AffiliateCompliancePermission,
   'sms.send': 'sms',
   'whatsapp.send': 'whatsapp',
   'social_dm.send': 'social_dm',
-  'audience.upload': 'paid_ads',
+  'audience.upload': 'audience_upload',
   'paid_ads.launch': 'paid_ads',
   'phone.marketing': 'phone',
   'affiliate_attribution.write': 'tracking',
   'commission.payout': 'payout',
 });
 
-const PROVIDER_EFFECT_PERMISSIONS = new Set<AffiliateCompliancePermission>([
-  'public_social.provider_publish',
-  'affiliate_recruitment.provider_publish',
-  'email.send',
-  'sms.send',
-  'whatsapp.send',
-  'social_dm.send',
-  'audience.upload',
-  'paid_ads.launch',
-  'phone.marketing',
-  'commission.payout',
-]);
+function isProviderEffectPermission(permission: AffiliateCompliancePermission): boolean {
+  switch (permission) {
+    case 'public_social.provider_publish':
+    case 'affiliate_recruitment.provider_publish':
+    case 'email.send':
+    case 'sms.send':
+    case 'whatsapp.send':
+    case 'social_dm.send':
+    case 'audience.upload':
+    case 'paid_ads.launch':
+    case 'phone.marketing':
+    case 'commission.payout':
+      return true;
+    default:
+      return false;
+  }
+}
 
-const CONTENT_PERMISSIONS = new Set<AffiliateCompliancePermission>([
-  'content.export_linked',
-  'public_social.manual_publish',
-  'public_social.provider_publish',
-  'affiliate_recruitment.manual_publish',
-  'affiliate_recruitment.provider_publish',
-  'email.send',
-  'sms.send',
-  'whatsapp.send',
-  'social_dm.send',
-  'paid_ads.launch',
-]);
+function isContentPermission(permission: AffiliateCompliancePermission): boolean {
+  switch (permission) {
+    case 'content.export_linked':
+    case 'public_social.manual_publish':
+    case 'public_social.provider_publish':
+    case 'affiliate_recruitment.manual_publish':
+    case 'affiliate_recruitment.provider_publish':
+    case 'email.send':
+    case 'sms.send':
+    case 'whatsapp.send':
+    case 'social_dm.send':
+    case 'paid_ads.launch':
+      return true;
+    default:
+      return false;
+  }
+}
 
-const RECIPIENT_PERMISSIONS = new Set<AffiliateCompliancePermission>([
-  'email.send', 'sms.send', 'whatsapp.send', 'social_dm.send', 'phone.marketing',
-]);
+function isRecipientPermission(permission: AffiliateCompliancePermission): boolean {
+  switch (permission) {
+    case 'email.send':
+    case 'sms.send':
+    case 'whatsapp.send':
+    case 'social_dm.send':
+    case 'phone.marketing':
+      return true;
+    default:
+      return false;
+  }
+}
 
 const NEXT_ACTIONS: Readonly<Partial<Record<AffiliateComplianceReasonCode, string>>> = Object.freeze({
   POLICY_PACK_MISSING: 'Publish a solicitor-approved policy pack before onboarding affiliates.',
@@ -68,27 +98,32 @@ const NEXT_ACTIONS: Readonly<Partial<Record<AffiliateComplianceReasonCode, strin
   ACCEPTANCE_EXPIRED: 'Collect a fresh acceptance before restoring permissions.',
   SIGNATORY_AUTHORITY_UNVERIFIED: 'Verify that the accepting person has authority for the named affiliate entity.',
   REACCEPTANCE_REQUIRED: 'Present the changed terms and collect explicit reacceptance.',
-  TRAINING_MISSING: 'Complete the current disclosure, claims and direct-marketing training.',
-  TRAINING_EXPIRED: 'Repeat the current training and assessment.',
+  TRAINING_MISSING: 'Complete the exact current approved training version and assessment.',
+  TRAINING_EXPIRED: 'Repeat the exact current training and assessment.',
   BUSINESS_TAX_DECLARATION_MISSING: 'Complete the current business, tax and VAT declaration.',
-  DISCLOSURE_CLAIMS_ACKNOWLEDGEMENT_MISSING: 'Acknowledge the current disclosure and claims policy.',
-  DATA_PROTECTION_DECLARATION_MISSING: 'Complete the current data-protection and direct-marketing declaration.',
-  PROMOTION_CHANNEL_NOT_APPROVED: 'Request and verify at least one permitted promotion channel.',
-  CHANNEL_AUTHORITY_MISSING: 'Verify this channel, purpose, territory and sender before use.',
+  DISCLOSURE_CLAIMS_ACKNOWLEDGEMENT_MISSING: 'Affirm the current disclosure and claims policy.',
+  DATA_PROTECTION_DECLARATION_MISSING: 'Affirm the current data-protection and direct-marketing declaration.',
+  LIFECYCLE_TERMINATED: 'A terminated affiliate cannot receive a permission decision.',
+  LIFECYCLE_WITHDRAWN: 'A withdrawn affiliate cannot receive a permission decision.',
+  LIFECYCLE_NOT_ELIGIBLE: 'Complete the independent affiliate lifecycle review before evaluating a permission.',
+  PROMOTION_CHANNEL_NOT_APPROVED: 'Approve the exact affiliate-link or content-export channel scope.',
+  CHANNEL_AUTHORITY_MISSING: 'Verify the exact channel, purpose, territory, sender, account and action scope.',
+  CONTENT_CLASSIFICATION_MISSING: 'Record the exact current content classification for this action scope.',
   CONTENT_SCOPE_NOT_APPROVED: 'Use an exact content version approved for this channel and audience.',
   DISCLOSURE_CHECK_MISSING: 'Check the disclosure after final rendering, cropping and truncation.',
   CLAIM_EVIDENCE_MISSING: 'Attach current evidence for every objective claim.',
   RECIPIENT_ROUTE_MISSING: 'Record the lawful recipient-level route immediately before release.',
   PECR_SENDER_ROUTE_MISSING: 'Record the exact PECR sender route, party and responsibility for this flow.',
-  PECR_INSTIGATOR_DECISION_MISSING: 'Record who instigates this electronic-marketing flow and the Operator responsibilities.',
-  AFFILIATE_RECRUITMENT_POLICY_MISSING: 'Classify and approve the affiliate-recruitment or team-reward flow under the dedicated policy.',
-  FINANCIAL_PROMOTION_PERIMETER_MISSING: 'Obtain the recorded CAP 14 and FCA/FSMA perimeter decision for this content.',
-  CONSUMER_ELIGIBILITY_REVIEW_MISSING: 'Complete the independent consumer/status eligibility review for this content and audience.',
-  SANCTIONS_SCREENING_MISSING: 'Complete OFSI screening, ownership/control review and the approved hold/escalation route.',
+  PECR_INSTIGATOR_DECISION_MISSING: 'Record who instigates this flow and the Operator responsibilities.',
+  AFFILIATE_RECRUITMENT_POLICY_MISSING: 'Record the scoped CAP Section 20 affiliate-recruitment decision.',
+  FINANCIAL_PROMOTION_PERIMETER_MISSING: 'Record the scoped CAP 14 and FCA/FSMA perimeter approval.',
+  CONSUMER_ELIGIBILITY_REVIEW_MISSING: 'Complete the independent scoped consumer/status eligibility review.',
+  SANCTIONS_SCREENING_MISSING: 'Complete OFSI screening with a finite rescreen deadline and approved hold route.',
   SUPPRESSION_CHECK_FAILED: 'Resolve the suppression or objection before any release.',
   VISITOR_CHOICE_MISSING: 'Obtain the required visitor choice before attribution storage or access.',
   PAYOUT_CHECKS_MISSING: 'Complete payee, VAT, validation and reconciliation checks.',
-  PROVIDER_EFFECTS_OFF: 'A separately authorised activation must enable every provider-effects layer.',
+  PROVIDER_EFFECTS_OFF: 'This module grants no provider capability; use a separately authorised activation boundary.',
+  PERMISSION_BLOCK_ACTIVE: 'Resolve the current scoped permission block before evaluating again.',
   CORRECTION_REQUIRED: 'Complete and evidence the required correction.',
   SUSPENSION_ACTIVE: 'Resolve the active suspension case before restoring permissions.',
   FRAUD_HOLD_ACTIVE: 'Resolve the fraud review before restoring permissions.',
@@ -101,64 +136,138 @@ function parseInstant(value: string | null): number | null {
   return Number.isFinite(instant) ? instant : null;
 }
 
-function isNonBlank(value: string | null): value is string {
-  return typeof value === 'string' && value.trim().length > 0;
-}
-
-function isSha256(value: string | null): value is string {
-  return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
-}
-
-function optionalExpiryIsCurrent(value: string | null, now: number): boolean {
-  if (value === null) return true;
+function currentUntil(value: string | null, now: number, required = false): boolean {
+  if (value === null) return !required;
   const expiresAt = parseInstant(value);
   return expiresAt !== null && expiresAt > now;
 }
 
-function currentDeclaration(
-  declaration: AffiliateDeclarationEvidence | null,
+function currentDeclaration(declaration: AffiliateDeclarationEvidence | null, now: number): boolean {
+  if (!declaration || declaration.status !== 'current' || declaration.decision !== 'affirmed') return false;
+  const occurredAt = parseInstant(declaration.occurredAt);
+  return occurredAt !== null && occurredAt <= now
+    && declaration.version !== null
+    && declaration.declarationSha256 !== null
+    && declaration.evidenceSha256 !== null
+    && currentUntil(declaration.expiresAt, now);
+}
+
+function currentCapacity(
+  capacity: EvaluateAffiliateComplianceInput['evidence']['capacity'],
   now: number,
 ): boolean {
-  if (!declaration || declaration.status !== 'current') return false;
-  return isNonBlank(declaration.version)
-    && isSha256(declaration.evidenceSha256)
-    && optionalExpiryIsCurrent(declaration.expiresAt, now);
+  if (!capacity || capacity.status !== 'current' || capacity.decision !== 'verified'
+      || capacity.capacityReference === null || capacity.evidenceSha256 === null) return false;
+  const occurredAt = parseInstant(capacity.occurredAt);
+  return occurredAt !== null && occurredAt <= now && currentUntil(capacity.expiresAt, now);
 }
 
 function currentChannel(
   authority: AffiliateChannelAuthorityEvidence,
+  requiredChannel: AffiliateComplianceChannel,
+  requiredContentClass: AffiliateChannelAuthorityEvidence['contentClass'],
+  actionScopeSha256: string,
   now: number,
 ): boolean {
-  if (authority.status !== 'current') return false;
+  if (authority.channel !== requiredChannel
+      || authority.contentClass !== requiredContentClass
+      || authority.actionScopeSha256 !== actionScopeSha256
+      || authority.status !== 'current'
+      || authority.authorityState !== 'approved') return false;
   const validFrom = parseInstant(authority.validFrom);
-  return validFrom !== null
-    && validFrom <= now
-    && isSha256(authority.evidenceSha256)
-    && optionalExpiryIsCurrent(authority.validUntil, now);
+  return validFrom !== null && validFrom <= now
+    && authority.evidenceSha256 !== null
+    && currentUntil(authority.validUntil, now);
+}
+
+function requiredContentClass(
+  permission: AffiliateCompliancePermission,
+  classification: 'ordinary_product' | 'property_investment' | null,
+): AffiliateChannelAuthorityEvidence['contentClass'] {
+  if (permission === 'affiliate_recruitment.manual_publish'
+      || permission === 'affiliate_recruitment.provider_publish') return 'affiliate_recruitment';
+  if (isContentPermission(permission)) return classification ?? 'ordinary_product';
+  switch (permission) {
+    case 'audience.upload':
+    case 'phone.marketing':
+    case 'affiliate_attribution.write':
+    case 'commission.payout':
+      return 'operational_only';
+    default:
+      return 'ordinary_product';
+  }
 }
 
 function currentSpecialistDecision(
-  decision: {
-    readonly status: string;
-    readonly decisionReference: string | null;
-    readonly expiresAt: string | null;
-  } | null,
+  decision: AffiliateSpecialistDecisionEvidence | null,
+  expectedKind: AffiliateSpecialistDecisionEvidence['decisionKind'],
+  actionScopeSha256: string,
   now: number,
+  finiteExpiryRequired = false,
 ): boolean {
-  return Boolean(decision
-    && decision.status === 'current'
-    && isNonBlank(decision.decisionReference)
-    && optionalExpiryIsCurrent(decision.expiresAt, now));
+  if (!decision
+      || decision.status !== 'current'
+      || decision.decision !== 'approved'
+      || decision.decisionKind !== expectedKind
+      || decision.actionScopeSha256 !== actionScopeSha256
+      || decision.decisionReference === null) return false;
+  const validFrom = parseInstant(decision.validFrom);
+  return validFrom !== null && validFrom <= now
+    && currentUntil(decision.expiresAt, now, finiteExpiryRequired);
 }
 
 function currentPecrRoute(
-  decision: { readonly status: string; readonly decisionReference: string | null; readonly expiresAt: string | null; readonly routeClassification: string; readonly partyReference: string | null; readonly responsibilityReference: string | null } | null,
+  decision: EvaluateAffiliateComplianceInput['evidence']['specialistDecisions']['pecrSenderRoute'],
+  expectedKind: 'pecr_sender_route' | 'pecr_instigator_route',
+  actionScopeSha256: string,
   now: number,
 ): boolean {
-  return currentSpecialistDecision(decision, now)
+  return currentSpecialistDecision(decision, expectedKind, actionScopeSha256, now)
     && decision!.routeClassification !== 'unknown'
-    && Boolean(decision!.partyReference?.trim())
-    && Boolean(decision!.responsibilityReference?.trim());
+    && decision!.partyReference !== null
+    && decision!.responsibilityReference !== null;
+}
+
+function currentEffect(
+  effect: AffiliateScopedEffectEvidence | null,
+  expectedKind: AffiliateScopedEffectEvidence['kind'],
+  actionScopeSha256: string,
+  now: number,
+): boolean {
+  if (!effect || effect.kind !== expectedKind || effect.status !== 'current'
+      || effect.decision !== 'satisfied' || effect.actionScopeSha256 !== actionScopeSha256
+      || effect.evidenceSha256 === null) return false;
+  const validFrom = parseInstant(effect.validFrom);
+  return validFrom !== null && validFrom <= now && currentUntil(effect.expiresAt, now);
+}
+
+function currentContentClassification(
+  input: EvaluateAffiliateComplianceInput,
+  now: number,
+): 'ordinary_product' | 'property_investment' | null {
+  const classification = input.evidence.effects.contentClassification;
+  if (!classification || classification.status !== 'current'
+      || classification.actionScopeSha256 !== input.actionScopeSha256
+      || classification.evidenceSha256 === null) return null;
+  const validFrom = parseInstant(classification.validFrom);
+  if (validFrom === null || validFrom > now || !currentUntil(classification.expiresAt, now)) return null;
+  return classification.classification;
+}
+
+function currentPermissionBlock(
+  fact: AffiliatePermissionFactEvidence,
+  permission: AffiliateCompliancePermission,
+  actionScopeSha256: string,
+  now: number,
+): boolean {
+  if (fact.permission !== permission || fact.actionScopeSha256 !== actionScopeSha256
+      || fact.state === 'expired') return false;
+  const validFrom = parseInstant(fact.validFrom);
+  return validFrom !== null && validFrom <= now && currentUntil(fact.validUntil, now);
+}
+
+function activeBlockingCase(entry: AffiliateComplianceCaseEvidence): boolean {
+  return entry.permissionEffect === 'block' && entry.state !== 'closed' && entry.state !== 'reinstated';
 }
 
 function uniqueReasons(reasons: readonly AffiliateComplianceReasonCode[]): readonly AffiliateComplianceReasonCode[] {
@@ -167,46 +276,44 @@ function uniqueReasons(reasons: readonly AffiliateComplianceReasonCode[]): reado
 
 function decisionExpiry(now: number, candidates: readonly (string | null)[]): string {
   const ceiling = now + 5 * 60_000;
-  const expiries = candidates
-    .map(parseInstant)
-    .filter((instant): instant is number => instant !== null && instant > now);
+  const expiries = candidates.map(parseInstant).filter((instant): instant is number => instant !== null && instant > now);
   return new Date(Math.min(ceiling, ...expiries)).toISOString();
 }
 
-/**
- * The sole product-domain eligibility evaluator. Missing, malformed, stale or
- * contradictory evidence is a denial. Provider readiness never implies legal
- * readiness and a CRM/affiliate lifecycle label is deliberately not an input.
- */
-export function evaluateAffiliateCompliance(
-  input: EvaluateAffiliateComplianceInput,
-): AffiliateComplianceDecision {
-  const permission = input.permission;
-  const now = Date.parse(input.now);
-  const knownPermission = (AFFILIATE_COMPLIANCE_PERMISSIONS as readonly unknown[]).includes(permission);
-  if (!knownPermission || !Number.isFinite(now)) {
-    const safePermission = knownPermission ? permission : 'affiliate_link.issue';
-    const reasonCode: AffiliateComplianceReasonCode = knownPermission
-      ? 'EVIDENCE_INVALID'
-      : 'UNKNOWN_PERMISSION';
-    return Object.freeze({
-      decision: 'deny',
-      permission: safePermission,
-      evaluatedAt: Number.isFinite(now) ? new Date(now).toISOString() : new Date(0).toISOString(),
-      expiresAt: Number.isFinite(now) ? new Date(now).toISOString() : new Date(0).toISOString(),
-      reasonCodes: Object.freeze([reasonCode]),
-      nextAction: 'Refresh the evidence and request a new compliance decision.',
-    });
-  }
+function invalidDecision(knownPermission: boolean): AffiliateComplianceDecision {
+  const reasonCode: AffiliateComplianceReasonCode = knownPermission ? 'EVIDENCE_INVALID' : 'UNKNOWN_PERMISSION';
+  return Object.freeze({
+    decision: 'deny',
+    permission: 'affiliate_link.issue',
+    workspaceId: ZERO_UUID,
+    subjectId: ZERO_UUID,
+    actionScopeSha256: ZERO_SHA256,
+    evidenceSnapshotSha256: ZERO_SHA256,
+    decisionNonceSha256: ZERO_SHA256,
+    evaluatedAt: new Date(0).toISOString(),
+    expiresAt: new Date(0).toISOString(),
+    reasonCodes: Object.freeze([reasonCode]),
+    nextAction: 'Refresh the exact evidence snapshot and request a new scoped decision.',
+  });
+}
 
-  const evidence = input.evidence;
+/**
+ * Sole product-domain eligibility evaluator. Every runtime value is deeply and
+ * exactly validated before it can enter an allow path. The decision is bound to
+ * one workspace, subject, action scope, evidence snapshot and one-use nonce.
+ * This module never grants or owns provider capability.
+ */
+export function evaluateAffiliateCompliance(input: EvaluateAffiliateComplianceInput): AffiliateComplianceDecision {
+  const validation = validateAffiliateComplianceInput(input);
+  if (!validation.valid) return invalidDecision(validation.knownPermission);
+  const safeInput = asValidatedAffiliateComplianceInput(input);
+  const { permission, evidence } = safeInput;
+  const now = Date.parse(safeInput.now);
   const reasons: AffiliateComplianceReasonCode[] = [];
+
   const pack = evidence.policyPack;
   if (!pack) reasons.push('POLICY_PACK_MISSING');
   if (pack) {
-    if (!isNonBlank(pack.bundleId)
-        || !isNonBlank(pack.bundleVersion)
-        || !isSha256(pack.bundleSha256)) reasons.push('EVIDENCE_INVALID');
     if (pack.legalApproval !== 'approved') reasons.push('LEGAL_APPROVAL_MISSING');
     if (pack.commercialApproval !== 'approved') reasons.push('COMMERCIAL_APPROVAL_MISSING');
     if (pack.publication !== 'published') reasons.push('POLICY_PACK_NOT_PUBLISHED');
@@ -224,120 +331,169 @@ export function evaluateAffiliateCompliance(
   }
   if (acceptance?.status === 'accepted') {
     const acceptedAt = parseInstant(acceptance.acceptedAt);
-    if (!isNonBlank(acceptance.bundleId)
-        || !isSha256(acceptance.bundleSha256)
-        || acceptedAt === null
-        || acceptedAt > now) reasons.push('EVIDENCE_INVALID');
-    const expiresAt = parseInstant(acceptance.expiresAt);
-    if (acceptance.expiresAt !== null && (expiresAt === null || expiresAt <= now)) reasons.push('ACCEPTANCE_EXPIRED');
-    if (!acceptance.capacityVerified) reasons.push('SIGNATORY_AUTHORITY_UNVERIFIED');
-    if (acceptance.reacceptanceRequired) reasons.push('REACCEPTANCE_REQUIRED');
+    if (acceptedAt === null || acceptedAt > now) reasons.push('EVIDENCE_INVALID');
+    if (!currentUntil(acceptance.expiresAt, now)) reasons.push('ACCEPTANCE_EXPIRED');
   }
+  if (!currentCapacity(evidence.capacity, now)) reasons.push('SIGNATORY_AUTHORITY_UNVERIFIED');
 
   const training = evidence.training;
-  if (!training || training.status !== 'passed') reasons.push('TRAINING_MISSING');
+  if (!training || training.status !== 'passed' || training.approvalState !== 'approved') reasons.push('TRAINING_MISSING');
   if (training?.status === 'passed') {
     const completedAt = parseInstant(training.completedAt);
-    if (completedAt === null
-        || completedAt > now
-        || !isSha256(training.attestationSha256)) reasons.push('EVIDENCE_INVALID');
-    const expiresAt = parseInstant(training.expiresAt);
-    if (training.expiresAt === null || expiresAt === null || expiresAt <= now) reasons.push('TRAINING_EXPIRED');
+    if (completedAt === null || completedAt > now) reasons.push('EVIDENCE_INVALID');
+    if (!currentUntil(training.expiresAt, now, true)) reasons.push('TRAINING_EXPIRED');
   }
+
   if (!currentDeclaration(evidence.declarations.businessTax, now)) reasons.push('BUSINESS_TAX_DECLARATION_MISSING');
   if (!currentDeclaration(evidence.declarations.disclosureClaims, now)) reasons.push('DISCLOSURE_CLAIMS_ACKNOWLEDGEMENT_MISSING');
   if (!currentDeclaration(evidence.declarations.dataProtection, now)) reasons.push('DATA_PROTECTION_DECLARATION_MISSING');
 
-  for (const hold of evidence.holds) {
-    if (!hold.active) continue;
-    if (hold.kind === 'reacceptance') reasons.push('REACCEPTANCE_REQUIRED');
-    if (hold.kind === 'correction') reasons.push('CORRECTION_REQUIRED');
-    if (hold.kind === 'suspension') reasons.push('SUSPENSION_ACTIVE');
-    if (hold.kind === 'fraud') reasons.push('FRAUD_HOLD_ACTIVE');
-    if (hold.kind === 'security') reasons.push('SECURITY_HOLD_ACTIVE');
+  const lifecycleOccurredAt = parseInstant(evidence.lifecycle.occurredAt);
+  if (lifecycleOccurredAt === null || lifecycleOccurredAt > now) reasons.push('EVIDENCE_INVALID');
+
+  switch (evidence.lifecycle.state) {
+    case 'active':
+      break;
+    case 'terminated':
+      reasons.push('LIFECYCLE_TERMINATED');
+      break;
+    case 'withdrawn':
+      reasons.push('LIFECYCLE_WITHDRAWN');
+      break;
+    case 'reacceptance_required':
+      reasons.push('REACCEPTANCE_REQUIRED');
+      break;
+    case 'correction_required':
+      reasons.push('CORRECTION_REQUIRED');
+      break;
+    case 'suspended_interim':
+    case 'suspended_final':
+      reasons.push('SUSPENSION_ACTIVE');
+      break;
+    default:
+      reasons.push('LIFECYCLE_NOT_ELIGIBLE');
   }
 
-  const currentAuthorities = evidence.channelAuthorities.filter((authority) => (
-    (AFFILIATE_COMPLIANCE_CHANNELS as readonly unknown[]).includes(authority.channel)
-    && currentChannel(authority, now)
-  ));
-  if ((permission === 'affiliate_link.issue' || permission === 'content.export_linked')
-      && !currentAuthorities.some((authority) => authority.channel !== 'payout')) {
-    reasons.push('PROMOTION_CHANNEL_NOT_APPROVED');
+  for (const entry of evidence.cases) {
+    if (!activeBlockingCase(entry)) continue;
+    if (entry.kind === 'reacceptance') reasons.push('REACCEPTANCE_REQUIRED');
+    if (entry.kind === 'correction') reasons.push('CORRECTION_REQUIRED');
+    if (entry.kind === 'suspension') reasons.push('SUSPENSION_ACTIVE');
+    if (entry.kind === 'fraud') reasons.push('FRAUD_HOLD_ACTIVE');
+    if (entry.kind === 'security') reasons.push('SECURITY_HOLD_ACTIVE');
   }
+
+  if (evidence.permissionFacts.some((fact) => currentPermissionBlock(
+    fact, permission, safeInput.actionScopeSha256, now,
+  ))) reasons.push('PERMISSION_BLOCK_ACTIVE');
+
+  let contentClassification: 'ordinary_product' | 'property_investment' | null = null;
+  if (isContentPermission(permission)) contentClassification = currentContentClassification(safeInput, now);
+
   const requiredChannel = PERMISSION_CHANNEL[permission];
-  if (requiredChannel && !currentAuthorities.some((authority) => authority.channel === requiredChannel)) {
-    reasons.push('CHANNEL_AUTHORITY_MISSING');
+  const channelCurrent = evidence.channelAuthorities.some((authority) => currentChannel(
+    authority, requiredChannel, requiredContentClass(permission, contentClassification),
+    safeInput.actionScopeSha256, now,
+  ));
+  if (!channelCurrent) {
+    reasons.push(permission === 'affiliate_link.issue' || permission === 'content.export_linked'
+      ? 'PROMOTION_CHANNEL_NOT_APPROVED'
+      : 'CHANNEL_AUTHORITY_MISSING');
   }
 
-  if (CONTENT_PERMISSIONS.has(permission)) {
-    if (!evidence.effects.contentApprovedForScope) reasons.push('CONTENT_SCOPE_NOT_APPROVED');
-    if (!evidence.effects.disclosureRenderedAndChecked) reasons.push('DISCLOSURE_CHECK_MISSING');
-    if (!evidence.effects.claimEvidenceCurrent) reasons.push('CLAIM_EVIDENCE_MISSING');
+  if (isContentPermission(permission)) {
+    if (contentClassification === null) reasons.push('CONTENT_CLASSIFICATION_MISSING');
+    if (!currentEffect(evidence.effects.contentScopeApproval, 'content_scope_approval', safeInput.actionScopeSha256, now)) {
+      reasons.push('CONTENT_SCOPE_NOT_APPROVED');
+    }
+    if (!currentEffect(evidence.effects.disclosureRenderedCheck, 'rendered_disclosure_check', safeInput.actionScopeSha256, now)) {
+      reasons.push('DISCLOSURE_CHECK_MISSING');
+    }
+    if (!currentEffect(evidence.effects.claimEvidence, 'claim_evidence', safeInput.actionScopeSha256, now)) {
+      reasons.push('CLAIM_EVIDENCE_MISSING');
+    }
   }
-  if (RECIPIENT_PERMISSIONS.has(permission)) {
-    if (!evidence.effects.recipientRouteCurrent) reasons.push('RECIPIENT_ROUTE_MISSING');
-    if (!currentPecrRoute(evidence.specialistDecisions.pecrSenderRoute, now)) {
+
+  if (isRecipientPermission(permission)) {
+    if (!currentEffect(evidence.effects.recipientRoute, 'recipient_route', safeInput.actionScopeSha256, now)) {
+      reasons.push('RECIPIENT_ROUTE_MISSING');
+    }
+    if (!currentPecrRoute(evidence.specialistDecisions.pecrSenderRoute, 'pecr_sender_route', safeInput.actionScopeSha256, now)) {
       reasons.push('PECR_SENDER_ROUTE_MISSING');
     }
-    if (!currentPecrRoute(evidence.specialistDecisions.pecrInstigatorRoute, now)) {
+    if (!currentPecrRoute(evidence.specialistDecisions.pecrInstigatorRoute, 'pecr_instigator_route', safeInput.actionScopeSha256, now)) {
       reasons.push('PECR_INSTIGATOR_DECISION_MISSING');
     }
-    if (!evidence.effects.suppressionClear) reasons.push('SUPPRESSION_CHECK_FAILED');
+    if (!currentEffect(evidence.effects.suppression, 'suppression', safeInput.actionScopeSha256, now)) {
+      reasons.push('SUPPRESSION_CHECK_FAILED');
+    }
   }
+
   if ((permission === 'affiliate_recruitment.manual_publish'
       || permission === 'affiliate_recruitment.provider_publish')
-      && !currentSpecialistDecision(evidence.specialistDecisions.affiliateRecruitmentPolicy, now)) {
-    reasons.push('AFFILIATE_RECRUITMENT_POLICY_MISSING');
+      && !currentSpecialistDecision(
+        evidence.specialistDecisions.affiliateRecruitmentPolicy,
+        'affiliate_recruitment_policy', safeInput.actionScopeSha256, now,
+      )) reasons.push('AFFILIATE_RECRUITMENT_POLICY_MISSING');
+
+  if (contentClassification === 'property_investment') {
+    if (!currentSpecialistDecision(
+      evidence.specialistDecisions.financialPromotionPerimeter,
+      'financial_promotion_perimeter', safeInput.actionScopeSha256, now,
+    )) reasons.push('FINANCIAL_PROMOTION_PERIMETER_MISSING');
+    if (!currentSpecialistDecision(
+      evidence.specialistDecisions.consumerEligibilityReview,
+      'consumer_eligibility_review', safeInput.actionScopeSha256, now,
+    )) reasons.push('CONSUMER_ELIGIBILITY_REVIEW_MISSING');
   }
-  if (evidence.effects.propertyInvestmentContent
-      && CONTENT_PERMISSIONS.has(permission)
-      && !currentSpecialistDecision(evidence.specialistDecisions.financialPromotionPerimeter, now)) {
-    reasons.push('FINANCIAL_PROMOTION_PERIMETER_MISSING');
-  }
-  if (evidence.effects.propertyInvestmentContent
-      && CONTENT_PERMISSIONS.has(permission)
-      && !currentSpecialistDecision(evidence.specialistDecisions.consumerEligibilityReview, now)) {
-    reasons.push('CONSUMER_ELIGIBILITY_REVIEW_MISSING');
-  }
-  if (permission === 'affiliate_attribution.write' && !evidence.effects.visitorChoiceCurrent) {
+
+  if (permission === 'affiliate_attribution.write'
+      && !currentEffect(evidence.effects.visitorChoice, 'visitor_choice', safeInput.actionScopeSha256, now)) {
     reasons.push('VISITOR_CHOICE_MISSING');
   }
-  if (permission === 'commission.payout' && !evidence.effects.payoutChecksCurrent) {
-    reasons.push('PAYOUT_CHECKS_MISSING');
+  if (permission === 'commission.payout') {
+    if (!currentEffect(evidence.effects.payoutChecks, 'payout_checks', safeInput.actionScopeSha256, now)) {
+      reasons.push('PAYOUT_CHECKS_MISSING');
+    }
+    if (!currentSpecialistDecision(
+      evidence.specialistDecisions.sanctionsScreening,
+      'sanctions_screening', safeInput.actionScopeSha256, now, true,
+    )) reasons.push('SANCTIONS_SCREENING_MISSING');
   }
-  if (permission === 'commission.payout'
-      && !currentSpecialistDecision(evidence.specialistDecisions.sanctionsScreening, now)) {
-    reasons.push('SANCTIONS_SCREENING_MISSING');
-  }
-  if (PROVIDER_EFFECT_PERMISSIONS.has(permission) && !evidence.effects.providerEffectsOn) {
-    reasons.push('PROVIDER_EFFECTS_OFF');
-  }
+
+  // Provider activation is deliberately outside this module and cannot be supplied as a caller boolean.
+  if (isProviderEffectPermission(permission)) reasons.push('PROVIDER_EFFECTS_OFF');
 
   const reasonCodes = uniqueReasons(reasons);
   const expiries = [
     pack?.expiresAt ?? null,
     acceptance?.expiresAt ?? null,
+    evidence.capacity?.expiresAt ?? null,
     training?.expiresAt ?? null,
     evidence.declarations.businessTax?.expiresAt ?? null,
     evidence.declarations.disclosureClaims?.expiresAt ?? null,
     evidence.declarations.dataProtection?.expiresAt ?? null,
-    evidence.specialistDecisions.pecrSenderRoute?.expiresAt ?? null,
-    evidence.specialistDecisions.pecrInstigatorRoute?.expiresAt ?? null,
-    evidence.specialistDecisions.affiliateRecruitmentPolicy?.expiresAt ?? null,
-    evidence.specialistDecisions.financialPromotionPerimeter?.expiresAt ?? null,
-    evidence.specialistDecisions.consumerEligibilityReview?.expiresAt ?? null,
-    evidence.specialistDecisions.sanctionsScreening?.expiresAt ?? null,
-    ...currentAuthorities.map((authority) => authority.validUntil),
+    ...evidence.channelAuthorities.map((authority) => authority.validUntil),
+    ...Object.values(evidence.specialistDecisions).map((decision) => decision?.expiresAt ?? null),
+    ...Object.values(evidence.effects).flatMap((effect) => (
+      typeof effect === 'object' && effect !== null && 'expiresAt' in effect ? [effect.expiresAt] : []
+    )),
+    ...evidence.permissionFacts.map((fact) => fact.validUntil),
   ];
+
   return Object.freeze({
     decision: reasonCodes.length === 0 ? 'allow' : 'deny',
     permission,
+    workspaceId: safeInput.workspaceId,
+    subjectId: safeInput.subjectId,
+    actionScopeSha256: safeInput.actionScopeSha256,
+    evidenceSnapshotSha256: evidence.evidenceSnapshotSha256,
+    decisionNonceSha256: safeInput.decisionNonceSha256,
     evaluatedAt: new Date(now).toISOString(),
     expiresAt: decisionExpiry(now, expiries),
     reasonCodes,
     nextAction: reasonCodes.length === 0
-      ? 'Permission is ready for one short-lived, server-side use.'
+      ? 'Permission is ready for one nonce-bound, short-lived server-side use; consume it atomically.'
       : NEXT_ACTIONS[reasonCodes[0]!] ?? 'Resolve the first blocked evidence gate and evaluate again.',
   });
 }

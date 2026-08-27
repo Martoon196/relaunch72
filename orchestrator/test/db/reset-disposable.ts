@@ -7,7 +7,20 @@ import {
 } from './database-helper.js';
 
 const APP_ROLES = [
-  'r72_affiliate_compliance_command',
+  'r72_affiliate_draft_command',
+  'r72_affiliate_lifecycle_command',
+  'r72_affiliate_legal_command',
+  'r72_affiliate_commercial_command',
+  'r72_affiliate_acceptance_command',
+  'r72_affiliate_capacity_command',
+  'r72_affiliate_declaration_command',
+  'r72_affiliate_training_authority_command',
+  'r72_affiliate_training_evidence_command',
+  'r72_affiliate_specialist_command',
+  'r72_affiliate_channel_command',
+  'r72_affiliate_effect_command',
+  'r72_affiliate_case_command',
+  'r72_affiliate_receipt_command',
   'r72_commerce_definer',
   'r72_content_adapter',
   'r72_content_command',

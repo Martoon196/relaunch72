@@ -51,12 +51,16 @@ test('Affiliate Compliance is branded, touch-friendly and never exposes a link o
   assert.match(html, /min-height:46px/);
   assert.match(html, /@media\(forced-colors:active\)/);
   assert.match(html, /<details class="ac-evidence">/);
+  assert.match(html, /<table class="ac-doc-table">/);
+  assert.match(html, /<caption>Exact fictional document versions/);
+  assert.match(html, /<th scope="col">/);
+  assert.match(html, /<th scope="row">/);
   assert.match(html, /no misleading overall compliance score/i);
   assert.doesNotMatch(html, /[0-9]+% compliant/i);
   assert.doesNotMatch(html, /<form\b|method="post"|copy link|href="https?:\/\/[^\"]*ref=/i);
 });
 
-test('Affiliate Compliance presenter allowlists fixture evidence and drops unknown secrets and private values', () => {
+test('Affiliate Compliance presenter rejects cloned or forged fixtures and the view escapes display text', () => {
   const fixture = createPropertyPredatorAffiliateComplianceFixture();
   const poisoned = {
     ...fixture,
@@ -64,11 +68,12 @@ test('Affiliate Compliance presenter allowlists fixture evidence and drops unkno
     programme: { ...fixture.programme, apiKey: 'DO-NOT-RENDER-SECRET' },
     subjects: [{ ...fixture.subjects[0]!, email: 'real@example.com', rawIp: '127.0.0.1' }],
   } as unknown as PortalAffiliateComplianceSnapshot;
-  const view = presentAffiliateCompliance(poisoned);
-  const encoded = JSON.stringify(view);
+  assert.throws(() => presentAffiliateCompliance(poisoned), AffiliateCompliancePresentationError);
+
+  const view = structuredClone(presentAffiliateCompliance(fixture)) as any;
+  view.subjects[0].displayLabel = '<script>bad</script>';
   const html = renderAffiliateComplianceBody(view);
-  assert.doesNotMatch(encoded, /DO-NOT-RENDER|real@example|127\.0\.0\.1/);
-  assert.doesNotMatch(html, /DO-NOT-RENDER|real@example|127\.0\.0\.1|<script>bad<\/script>/);
+  assert.doesNotMatch(html, /<script>bad<\/script>/);
   assert.match(html, /&lt;script&gt;bad&lt;\/script&gt;/);
 });
 
@@ -80,6 +85,8 @@ test('Affiliate Compliance fails closed if the snapshot claims real data, approv
     { ...fixture, programme: { ...fixture.programme, solicitorApproved: true } },
     { ...fixture, programme: { ...fixture.programme, published: true } },
     { ...fixture, subjects: [{ ...fixture.subjects[0]!, fictional: false }] },
+    { ...fixture, workspace: { ...fixture.workspace, canManage: false } },
+    { ...fixture, subjects: [{ ...fixture.subjects[0]!, displayLabel: 'Real customer name' }] },
   ]) {
     assert.throws(() => presentAffiliateCompliance(snapshot as never), AffiliateCompliancePresentationError);
   }

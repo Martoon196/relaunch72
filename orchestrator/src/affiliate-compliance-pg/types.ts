@@ -1,4 +1,4 @@
-export const AFFILIATE_COMPLIANCE_PERMISSIONS = [
+export const AFFILIATE_COMPLIANCE_PERMISSIONS = Object.freeze([
   'affiliate_link.issue',
   'content.export_linked',
   'public_social.manual_publish',
@@ -14,24 +14,74 @@ export const AFFILIATE_COMPLIANCE_PERMISSIONS = [
   'phone.marketing',
   'affiliate_attribution.write',
   'commission.payout',
-] as const;
+] as const);
 
 export type AffiliateCompliancePermission = (typeof AFFILIATE_COMPLIANCE_PERMISSIONS)[number];
 
-export const AFFILIATE_COMPLIANCE_CHANNELS = [
+/** One canonical channel vocabulary shared by SQL, projections and the evaluator. */
+export const AFFILIATE_COMPLIANCE_CHANNELS = Object.freeze([
+  'affiliate_link',
+  'content_export',
   'public_social',
   'affiliate_recruitment',
   'email',
   'sms',
   'whatsapp',
   'social_dm',
+  'audience_upload',
   'paid_ads',
   'phone',
   'tracking',
   'payout',
-] as const;
+] as const);
 
 export type AffiliateComplianceChannel = (typeof AFFILIATE_COMPLIANCE_CHANNELS)[number];
+
+export const AFFILIATE_COMPLIANCE_LIFECYCLE_STATES = Object.freeze([
+  'account_only',
+  'application_draft',
+  'identity_review',
+  'legal_bundle_presented',
+  'legal_accepted',
+  'training_required',
+  'declarations_required',
+  'compliance_review',
+  'active_limited',
+  'active',
+  'reacceptance_required',
+  'correction_required',
+  'suspended_interim',
+  'suspended_final',
+  'terminated',
+  'withdrawn',
+  'migrated_unverified',
+] as const);
+
+export type AffiliateComplianceLifecycleState = (typeof AFFILIATE_COMPLIANCE_LIFECYCLE_STATES)[number];
+
+export const AFFILIATE_SPECIALIST_DECISION_KINDS = Object.freeze([
+  'pecr_sender_route',
+  'pecr_instigator_route',
+  'affiliate_recruitment_policy',
+  'financial_promotion_perimeter',
+  'consumer_eligibility_review',
+  'sanctions_screening',
+] as const);
+
+export type AffiliateSpecialistDecisionKind = (typeof AFFILIATE_SPECIALIST_DECISION_KINDS)[number];
+
+export const AFFILIATE_COMPLIANCE_EFFECT_KINDS = Object.freeze([
+  'content_classification',
+  'content_scope_approval',
+  'rendered_disclosure_check',
+  'claim_evidence',
+  'recipient_route',
+  'suppression',
+  'visitor_choice',
+  'payout_checks',
+] as const);
+
+export type AffiliateComplianceEffectKind = (typeof AFFILIATE_COMPLIANCE_EFFECT_KINDS)[number];
 
 export type ComplianceEvidenceStatus = 'current' | 'missing' | 'expired' | 'withdrawn';
 
@@ -52,12 +102,24 @@ export interface AffiliateAcceptanceEvidence {
   readonly bundleSha256: string | null;
   readonly acceptedAt: string | null;
   readonly expiresAt: string | null;
-  readonly capacityVerified: boolean;
-  readonly reacceptanceRequired: boolean;
+}
+
+export interface AffiliateCapacityEvidence {
+  readonly status: ComplianceEvidenceStatus;
+  readonly decision: 'verified' | 'blocked' | null;
+  readonly capacityReference: string | null;
+  readonly evidenceSha256: string | null;
+  readonly occurredAt: string | null;
+  readonly expiresAt: string | null;
 }
 
 export interface AffiliateTrainingEvidence {
   readonly status: 'passed' | 'failed' | 'missing';
+  readonly trainingKey: string | null;
+  readonly trainingVersion: string | null;
+  readonly courseSha256: string | null;
+  readonly quizSha256: string | null;
+  readonly approvalState: 'approved' | 'blocked' | 'withdrawn' | null;
   readonly completedAt: string | null;
   readonly expiresAt: string | null;
   readonly attestationSha256: string | null;
@@ -65,40 +127,93 @@ export interface AffiliateTrainingEvidence {
 
 export interface AffiliateDeclarationEvidence {
   readonly status: ComplianceEvidenceStatus;
+  readonly decision: 'affirmed' | 'declined' | 'withdrawn' | null;
   readonly version: string | null;
+  readonly declarationSha256: string | null;
   readonly evidenceSha256: string | null;
+  readonly occurredAt: string | null;
   readonly expiresAt: string | null;
+}
+
+export interface AffiliateLifecycleEvidence {
+  readonly state: AffiliateComplianceLifecycleState;
+  readonly occurredAt: string;
+  readonly evidenceSha256: string;
 }
 
 export interface AffiliateChannelAuthorityEvidence {
   readonly channel: AffiliateComplianceChannel;
   readonly status: ComplianceEvidenceStatus;
+  readonly authorityState: 'approved' | 'blocked' | 'revoked' | 'expired';
+  readonly contentClass: 'ordinary_product' | 'affiliate_recruitment' | 'property_investment' | 'operational_only';
+  readonly purposeCode: string;
+  readonly territoryCode: string;
+  readonly senderPartyReference: string;
+  readonly accountScopeReference: string;
+  readonly actionScopeSha256: string;
   readonly validFrom: string | null;
   readonly validUntil: string | null;
   readonly evidenceSha256: string | null;
 }
 
-export interface AffiliateComplianceHold {
+export interface AffiliateComplianceCaseEvidence {
   readonly kind: 'reacceptance' | 'correction' | 'suspension' | 'fraud' | 'security';
-  readonly active: boolean;
+  readonly state: 'opened' | 'takedown_requested' | 'correction_requested' | 'suspended_interim' | 'suspended_final' | 'reinstated' | 'closed';
+  readonly permissionEffect: 'block' | 'monitor';
   readonly caseReference: string;
+  readonly occurredAt: string;
+  readonly evidenceSha256: string;
+}
+
+export interface AffiliatePermissionFactEvidence {
+  readonly permission: AffiliateCompliancePermission;
+  readonly state: 'requested' | 'blocked' | 'revoked' | 'expired';
+  readonly actionScopeSha256: string;
+  readonly validFrom: string;
+  readonly validUntil: string | null;
+  readonly evidenceSha256: string;
+}
+
+export interface AffiliateScopedEffectEvidence {
+  readonly kind: Exclude<AffiliateComplianceEffectKind, 'content_classification'>;
+  readonly status: ComplianceEvidenceStatus;
+  readonly decision: 'satisfied' | 'blocked' | null;
+  readonly actionScopeSha256: string | null;
+  readonly evidenceSha256: string | null;
+  readonly validFrom: string | null;
+  readonly expiresAt: string | null;
+}
+
+export interface AffiliateContentClassificationEvidence {
+  readonly kind: 'content_classification';
+  readonly status: ComplianceEvidenceStatus;
+  readonly classification: 'ordinary_product' | 'property_investment' | null;
+  readonly actionScopeSha256: string | null;
+  readonly evidenceSha256: string | null;
+  readonly validFrom: string | null;
+  readonly expiresAt: string | null;
 }
 
 export interface AffiliateEffectEvidence {
-  readonly propertyInvestmentContent: boolean;
-  readonly contentApprovedForScope: boolean;
-  readonly disclosureRenderedAndChecked: boolean;
-  readonly claimEvidenceCurrent: boolean;
-  readonly recipientRouteCurrent: boolean;
-  readonly suppressionClear: boolean;
-  readonly visitorChoiceCurrent: boolean;
-  readonly payoutChecksCurrent: boolean;
-  readonly providerEffectsOn: boolean;
+  readonly contentClassification: AffiliateContentClassificationEvidence | null;
+  readonly contentScopeApproval: AffiliateScopedEffectEvidence | null;
+  readonly disclosureRenderedCheck: AffiliateScopedEffectEvidence | null;
+  readonly claimEvidence: AffiliateScopedEffectEvidence | null;
+  readonly recipientRoute: AffiliateScopedEffectEvidence | null;
+  readonly suppression: AffiliateScopedEffectEvidence | null;
+  readonly visitorChoice: AffiliateScopedEffectEvidence | null;
+  readonly payoutChecks: AffiliateScopedEffectEvidence | null;
+  /** This compliance module owns no provider capability. */
+  readonly providerEffects: 'off';
 }
 
 export interface AffiliateSpecialistDecisionEvidence {
   readonly status: ComplianceEvidenceStatus;
+  readonly decisionKind: AffiliateSpecialistDecisionKind;
+  readonly decision: 'approved' | 'blocked' | null;
   readonly decisionReference: string | null;
+  readonly actionScopeSha256: string | null;
+  readonly validFrom: string | null;
   readonly expiresAt: string | null;
 }
 
@@ -110,14 +225,20 @@ export type PecrElectronicMailRoute =
   | 'unknown';
 
 export interface AffiliatePecrRouteDecisionEvidence extends AffiliateSpecialistDecisionEvidence {
+  readonly decisionKind: 'pecr_sender_route' | 'pecr_instigator_route';
   readonly routeClassification: PecrElectronicMailRoute;
   readonly partyReference: string | null;
   readonly responsibilityReference: string | null;
 }
 
 export interface AffiliateComplianceEvidence {
+  readonly workspaceId: string;
+  readonly subjectId: string;
+  readonly evidenceSnapshotSha256: string;
   readonly policyPack: AffiliatePolicyPackEvidence | null;
+  readonly lifecycle: AffiliateLifecycleEvidence;
   readonly acceptance: AffiliateAcceptanceEvidence | null;
+  readonly capacity: AffiliateCapacityEvidence | null;
   readonly training: AffiliateTrainingEvidence | null;
   readonly declarations: Readonly<{
     businessTax: AffiliateDeclarationEvidence | null;
@@ -126,24 +247,19 @@ export interface AffiliateComplianceEvidence {
   }>;
   readonly channelAuthorities: readonly AffiliateChannelAuthorityEvidence[];
   readonly specialistDecisions: Readonly<{
-    /** Per-flow sender route and responsibility under PECR. */
     pecrSenderRoute: AffiliatePecrRouteDecisionEvidence | null;
-    /** Per-flow Operator instigator/responsibility decision under PECR. */
     pecrInstigatorRoute: AffiliatePecrRouteDecisionEvidence | null;
-    /** CAP Section 20 classification for affiliate recruitment/team rewards. */
     affiliateRecruitmentPolicy: AffiliateSpecialistDecisionEvidence | null;
-    /** CAP Section 14 and FCA/FSMA perimeter classification/approval. */
     financialPromotionPerimeter: AffiliateSpecialistDecisionEvidence | null;
-    /** Consumer/status eligibility review kept independent from claim approval. */
     consumerEligibilityReview: AffiliateSpecialistDecisionEvidence | null;
-    /** OFSI screening, ownership/control, rescreen and freeze/escalation route. */
     sanctionsScreening: AffiliateSpecialistDecisionEvidence | null;
   }>;
-  readonly holds: readonly AffiliateComplianceHold[];
+  readonly cases: readonly AffiliateComplianceCaseEvidence[];
+  readonly permissionFacts: readonly AffiliatePermissionFactEvidence[];
   readonly effects: AffiliateEffectEvidence;
 }
 
-export const AFFILIATE_COMPLIANCE_REASON_CODES = [
+export const AFFILIATE_COMPLIANCE_REASON_CODES = Object.freeze([
   'UNKNOWN_PERMISSION',
   'EVIDENCE_INVALID',
   'POLICY_PACK_MISSING',
@@ -162,8 +278,12 @@ export const AFFILIATE_COMPLIANCE_REASON_CODES = [
   'BUSINESS_TAX_DECLARATION_MISSING',
   'DISCLOSURE_CLAIMS_ACKNOWLEDGEMENT_MISSING',
   'DATA_PROTECTION_DECLARATION_MISSING',
+  'LIFECYCLE_TERMINATED',
+  'LIFECYCLE_WITHDRAWN',
+  'LIFECYCLE_NOT_ELIGIBLE',
   'PROMOTION_CHANNEL_NOT_APPROVED',
   'CHANNEL_AUTHORITY_MISSING',
+  'CONTENT_CLASSIFICATION_MISSING',
   'CONTENT_SCOPE_NOT_APPROVED',
   'DISCLOSURE_CHECK_MISSING',
   'CLAIM_EVIDENCE_MISSING',
@@ -178,17 +298,24 @@ export const AFFILIATE_COMPLIANCE_REASON_CODES = [
   'VISITOR_CHOICE_MISSING',
   'PAYOUT_CHECKS_MISSING',
   'PROVIDER_EFFECTS_OFF',
+  'PERMISSION_BLOCK_ACTIVE',
   'CORRECTION_REQUIRED',
   'SUSPENSION_ACTIVE',
   'FRAUD_HOLD_ACTIVE',
   'SECURITY_HOLD_ACTIVE',
-] as const;
+] as const);
 
 export type AffiliateComplianceReasonCode = (typeof AFFILIATE_COMPLIANCE_REASON_CODES)[number];
 
 export interface AffiliateComplianceDecision {
   readonly decision: 'allow' | 'deny';
   readonly permission: AffiliateCompliancePermission;
+  readonly workspaceId: string;
+  readonly subjectId: string;
+  /** Digest of the exact action, recipient/audience, content version, provider and account scope. */
+  readonly actionScopeSha256: string;
+  readonly evidenceSnapshotSha256: string;
+  readonly decisionNonceSha256: string;
   readonly evaluatedAt: string;
   readonly expiresAt: string;
   readonly reasonCodes: readonly AffiliateComplianceReasonCode[];
@@ -197,6 +324,11 @@ export interface AffiliateComplianceDecision {
 
 export interface EvaluateAffiliateComplianceInput {
   readonly permission: AffiliateCompliancePermission;
+  readonly workspaceId: string;
+  readonly subjectId: string;
+  /** Digest of the exact action, recipient/audience, content version, provider and account scope. */
+  readonly actionScopeSha256: string;
+  readonly decisionNonceSha256: string;
   readonly now: string;
   readonly evidence: AffiliateComplianceEvidence;
 }

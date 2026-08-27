@@ -9,10 +9,13 @@ import type {
   PortalAffiliateComplianceSnapshot,
   PortalAffiliateComplianceTimelineEvent,
 } from './affiliate-compliance-service.js';
+import { isAuthenticPropertyPredatorAffiliateComplianceFixture } from './affiliate-compliance-fixtures.js';
 
 export const AFFILIATE_COMPLIANCE_ROUTE = '/portal/affiliates/compliance' as const;
 
 const SHA256 = /^[0-9a-f]{64}$/u;
+const DISPLAY_ACTION_SCOPE_SHA256 = '7'.repeat(64);
+const DISPLAY_DECISION_NONCE_SHA256 = 'f'.repeat(64);
 const DISPLAY_PERMISSIONS: readonly AffiliateCompliancePermission[] = Object.freeze([
   'affiliate_link.issue',
   'public_social.manual_publish',
@@ -43,8 +46,12 @@ const REASON_LABELS: Readonly<Record<AffiliateComplianceReasonCode, string>> = O
   BUSINESS_TAX_DECLARATION_MISSING: 'Business and tax declaration missing',
   DISCLOSURE_CLAIMS_ACKNOWLEDGEMENT_MISSING: 'Disclosure and claims acknowledgement missing',
   DATA_PROTECTION_DECLARATION_MISSING: 'Data-protection declaration missing',
+  LIFECYCLE_TERMINATED: 'Affiliate lifecycle terminated',
+  LIFECYCLE_WITHDRAWN: 'Affiliate lifecycle withdrawn',
+  LIFECYCLE_NOT_ELIGIBLE: 'Affiliate lifecycle not eligible',
   PROMOTION_CHANNEL_NOT_APPROVED: 'No promotion channel approved',
   CHANNEL_AUTHORITY_MISSING: 'Channel authority missing',
+  CONTENT_CLASSIFICATION_MISSING: 'Content classification missing',
   CONTENT_SCOPE_NOT_APPROVED: 'Content scope not approved',
   DISCLOSURE_CHECK_MISSING: 'Rendered disclosure check missing',
   CLAIM_EVIDENCE_MISSING: 'Claim evidence missing',
@@ -59,6 +66,7 @@ const REASON_LABELS: Readonly<Record<AffiliateComplianceReasonCode, string>> = O
   VISITOR_CHOICE_MISSING: 'Visitor tracking choice missing',
   PAYOUT_CHECKS_MISSING: 'Payout checks missing',
   PROVIDER_EFFECTS_OFF: 'External effects off',
+  PERMISSION_BLOCK_ACTIVE: 'Scoped permission block active',
   CORRECTION_REQUIRED: 'Correction required',
   SUSPENSION_ACTIVE: 'Suspension active',
   FRAUD_HOLD_ACTIVE: 'Fraud hold active',
@@ -240,17 +248,21 @@ function subjectView(
   if (subject.fictional !== true) {
     throw new AffiliateCompliancePresentationError('Only fictional compliance fixtures may enter this surface');
   }
-  const decisions = DISPLAY_PERMISSIONS.map((permission) => evaluateAffiliateCompliance({
-    permission,
-    now,
-    evidence: subject.evidence,
+    const decisions = DISPLAY_PERMISSIONS.map((permission) => evaluateAffiliateCompliance({
+      permission,
+      workspaceId: subject.evidence.workspaceId,
+      subjectId: subject.evidence.subjectId,
+      actionScopeSha256: DISPLAY_ACTION_SCOPE_SHA256,
+      decisionNonceSha256: DISPLAY_DECISION_NONCE_SHA256,
+      now,
+      evidence: subject.evidence,
   }));
   if (decisions.some((decision) => decision.decision !== 'deny')) {
     throw new AffiliateCompliancePresentationError('Fixture compliance must remain fail-closed');
   }
   const primary = decisions[0]!;
   const channels = subject.evidence.channelAuthorities
-    .filter((authority) => authority.status === 'current')
+    .filter((authority) => authority.status === 'current' && authority.authorityState === 'approved')
     .map((authority) => bounded(authority.channel, 'Unknown channel', 80).replaceAll('_', ' '));
   const declarations = Object.values(subject.evidence.declarations);
   return Object.freeze({
@@ -283,9 +295,10 @@ function subjectView(
       ? 'Illustrative acceptance recorded · not valid for an unpublished draft'
       : 'Current acceptance missing',
     trainingLabel: subject.evidence.training?.status === 'passed'
+      && subject.evidence.training.approvalState === 'approved'
       ? (Date.parse(subject.evidence.training.expiresAt ?? '') > Date.parse(now) ? 'Training pass current' : 'Training expired')
       : 'Training pass missing',
-    declarationLabel: declarations.every((entry) => entry?.status === 'current')
+    declarationLabel: declarations.every((entry) => entry?.status === 'current' && entry.decision === 'affirmed')
       ? 'Three declarations current' : 'Declarations incomplete',
   });
 }
@@ -293,7 +306,10 @@ function subjectView(
 export function presentAffiliateCompliance(
   snapshot: PortalAffiliateComplianceSnapshot,
 ): AffiliateComplianceView {
-  if (snapshot.dataset !== 'illustrative_fixture'
+  if (!isAuthenticPropertyPredatorAffiliateComplianceFixture(snapshot)
+      || snapshot.workspace.canManage !== true
+      || snapshot.subjects.some((subject) => !subject.displayLabel.startsWith('Fictional '))
+      || snapshot.dataset !== 'illustrative_fixture'
       || snapshot.programme.externalEffects !== false
       || snapshot.programme.solicitorApproved !== false
       || snapshot.programme.published !== false
