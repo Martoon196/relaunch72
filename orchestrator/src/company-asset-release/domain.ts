@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { types as nodeUtilTypes } from 'node:util';
 import {
   canonicalPropertyPredatorAiInventoryJson,
   parsePropertyPredatorAiInventory,
@@ -23,6 +24,9 @@ const MAX_ARRAY_LENGTH = 1_000;
 const MAX_STRING_CHARS = 4_096;
 const MAX_TOTAL_STRING_CHARS = 512 * 1024;
 const MAX_KEY_CHARS = 100;
+export const COMPANY_ASSET_MAX_APPROVAL_CLOCK_SKEW_MS = 5 * 60 * 1_000;
+const COMPANY_ASSET_MAX_APPROVAL_CLOCK_SKEW_MICROS =
+  BigInt(COMPANY_ASSET_MAX_APPROVAL_CLOCK_SKEW_MS) * 1_000n;
 
 const SHA256 = /^[0-9a-f]{64}$/u;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
@@ -81,6 +85,10 @@ export const COMPANY_OWNED_GENERATION_CONTRACT = deepFreeze({
   affiliateInput: 'forbidden',
   sessionInput: 'forbidden',
   customerInput: 'forbidden',
+  customerPrivateDataInput: 'forbidden',
+  privateDataInput: 'forbidden',
+  rawPromptInput: 'forbidden',
+  rawKnowledgeInput: 'forbidden',
   hqHumanApprovalRequired: true,
   modelCalls: false,
   sourceCalls: false,
@@ -197,6 +205,7 @@ export interface CompanyAssetFounderApproval {
 export type CompanyAssetReconciliationReasonCode =
   | 'founder_approval_missing'
   | 'founder_approval_invalid'
+  | 'founder_approval_not_yet_effective'
   | 'founder_approval_expired'
   | 'release_hash_changed'
   | 'source_catalog_hash_changed'
@@ -281,6 +290,7 @@ function snapshotValue(
     return value;
   }
   if (typeof value !== 'object') plainDataError(label, 'is not plain JSON data');
+  if (nodeUtilTypes.isProxy(value)) plainDataError(label, 'must not be a Proxy');
 
   let prototype: object | null;
   let descriptors: PropertyDescriptorMap;
@@ -336,9 +346,9 @@ function snapshotValue(
     }
     const descriptor = descriptors[key];
     if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) {
-      plainDataError(`${label}.${key}`, 'must be an enumerable data property');
+      plainDataError(`${label} field`, 'must be an enumerable data property');
     }
-    clone[key] = snapshotValue(descriptor.value, `${label}.${key}`, depth + 1, budget);
+    clone[key] = snapshotValue(descriptor.value, `${label} field`, depth + 1, budget);
   }
   return clone;
 }
@@ -454,14 +464,26 @@ function instant(value: JsonValue | undefined, label: string): string {
   const offsetHour = match[10] === undefined ? 0 : Number(match[10]);
   const offsetMinute = match[11] === undefined ? 0 : Number(match[11]);
   const days = [31, isLeapYear(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  if (month < 1 || month > 12 || day < 1 || day > days[month - 1]!
+  if (year === 0 || month < 1 || month > 12 || day < 1 || day > days[month - 1]!
       || hour > 23 || minute > 59 || second > 59
-      || offsetHour > 14 || offsetMinute > 59 || (offsetHour === 14 && offsetMinute !== 0)
+      || offsetHour > 23 || offsetMinute > 59
       || (offsetSign === '-' && offsetHour === 0 && offsetMinute === 0)
       || !Number.isFinite(Date.parse(value))) {
     throw new CompanyAssetReleaseContractError(`${label} must be a valid canonical RFC3339 instant`);
   }
   return value;
+}
+
+function instantEpochMicros(value: string): bigint {
+  const match = RFC3339.exec(value);
+  if (!match) throw new CompanyAssetReleaseContractError('validated instant cannot be compared');
+  const fraction = (match[7] ?? '').padEnd(6, '0');
+  const secondPrecision = match[7] === undefined ? value : value.replace(`.${match[7]}`, '');
+  const epochMs = Date.parse(secondPrecision);
+  if (!Number.isFinite(epochMs)) {
+    throw new CompanyAssetReleaseContractError('validated instant cannot be compared');
+  }
+  return BigInt(epochMs) * 1_000n + BigInt(fraction || '0');
 }
 
 function canonicalSha256(value: unknown): string {
@@ -584,16 +606,27 @@ function scopeItem(item: CompanyAssetReleaseItem): CompanyAssetReleaseScopeItem 
 }
 
 function validateCanonicalItemOrder(items: readonly CompanyAssetReleaseScopeItem[], label: string): void {
+  const identities = new Set<string>();
+  const identityVersions = new Set<string>();
   const versionIds = new Set<string>();
   let previous: string | null = null;
   for (const item of items) {
+    const identity = itemIdentity(item);
     const current = itemSortKey(item);
-    if (previous !== null && current <= previous) {
-      throw new CompanyAssetReleaseContractError(`${label} must be sorted and unique`);
+    if (identityVersions.has(current)) {
+      throw new CompanyAssetReleaseContractError(`${label} repeats an item identity/version`);
+    }
+    if (identities.has(identity)) {
+      throw new CompanyAssetReleaseContractError(`${label} repeats an item identity`);
     }
     if (versionIds.has(item.versionId)) {
       throw new CompanyAssetReleaseContractError(`${label} repeats a versionId`);
     }
+    if (previous !== null && current <= previous) {
+      throw new CompanyAssetReleaseContractError(`${label} must be in canonical order`);
+    }
+    identities.add(identity);
+    identityVersions.add(current);
     previous = current;
     versionIds.add(item.versionId);
   }
@@ -812,7 +845,7 @@ export function parseCompanyAssetFounderApproval(input: unknown): CompanyAssetFo
     approval.approvalExpiresAt,
     'founder approval.approvalExpiresAt',
   );
-  if (Date.parse(approvalExpiresAt) <= Date.parse(approvedAt)) {
+  if (instantEpochMicros(approvalExpiresAt) <= instantEpochMicros(approvedAt)) {
     throw new CompanyAssetReleaseContractError('founder approval expiry must follow approval time');
   }
   const scope = parseScope(approval.scope);
@@ -848,6 +881,7 @@ export function parseCompanyAssetFounderApproval(input: unknown): CompanyAssetFo
 const RECONCILIATION_REASON_ORDER = Object.freeze([
   'founder_approval_missing',
   'founder_approval_invalid',
+  'founder_approval_not_yet_effective',
   'founder_approval_expired',
   'release_hash_changed',
   'source_catalog_hash_changed',
@@ -947,7 +981,7 @@ function releaseUsabilityReasons(
   const reasons = new Set<CompanyAssetReleaseUsabilityReasonCode>();
   if (!hasReconciledApproval) reasons.add('hq_human_approval_required');
   if (items.length === 0) reasons.add('source_material_missing');
-  const evaluatedMs = evaluatedAt === undefined ? Number.NaN : Date.parse(evaluatedAt);
+  const evaluatedMicros = evaluatedAt === undefined ? null : instantEpochMicros(evaluatedAt);
   for (const item of items) {
     if (item.sourceApprovalStatus === 'missing') reasons.add('source_approval_missing');
     else if (item.sourceApprovalStatus === 'unknown') reasons.add('source_approval_unknown');
@@ -960,8 +994,8 @@ function releaseUsabilityReasons(
     else if (item.approvalExpiryStatus === 'unknown') reasons.add('source_approval_expiry_unknown');
     else if (item.approvalExpiryStatus === 'expired'
         || (item.approvalExpiresAt !== null
-          && Number.isFinite(evaluatedMs)
-          && Date.parse(item.approvalExpiresAt) <= evaluatedMs)) {
+          && evaluatedMicros !== null
+          && instantEpochMicros(item.approvalExpiresAt) <= evaluatedMicros)) {
       reasons.add('source_approval_expired_by_time');
     }
     if (item.quarantineStatus === 'not-recorded-at-source' || item.quarantineStatus === 'unknown') {
@@ -992,7 +1026,12 @@ export function reconcileCompanyAssetRelease(
     }
   }
   if (approval) {
-    if (Date.parse(approval.approvalExpiresAt) <= Date.parse(evaluatedAt)) {
+    const evaluatedMicros = instantEpochMicros(evaluatedAt);
+    if (instantEpochMicros(approval.approvedAt)
+        > evaluatedMicros + COMPANY_ASSET_MAX_APPROVAL_CLOCK_SKEW_MICROS) {
+      reasons.add('founder_approval_not_yet_effective');
+    }
+    if (instantEpochMicros(approval.approvalExpiresAt) <= evaluatedMicros) {
       reasons.add('founder_approval_expired');
     }
     for (const reason of compareScopes(release.scope, approval.scope)) reasons.add(reason);

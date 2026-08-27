@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import * as domainApi from '../src/company-asset-release/domain.js';
 import {
+  COMPANY_ASSET_MAX_APPROVAL_CLOCK_SKEW_MS,
   COMPANY_ASSET_RELEASE_ID,
   COMPANY_OWNED_GENERATION_CONTRACT,
   PROPERTY_PREDATOR_COMPANY_ASSET_SOURCE_COMMIT,
@@ -257,12 +258,13 @@ test('rejects invented expiry and quarantine certainty even when an attacker reh
 
 test('validates canonical RFC3339 instants without accepting naive, impossible or unknown-offset dates', async () => {
   for (const badInstant of [
+    '0000-01-01T00:00:00Z',
     '2026-08-27T09:12:00',
     '2026-08-27t09:12:00z',
     '2026-02-30T09:12:00Z',
     '2026-08-27T24:00:00Z',
     '2026-08-27T09:12:00-00:00',
-    '2026-08-27T09:12:00+14:01',
+    '2026-08-27T09:12:00+24:00',
     '2026-08-27T09:12:00.1234567Z',
   ]) {
     const candidate = await envelope();
@@ -274,11 +276,34 @@ test('validates canonical RFC3339 instants without accepting naive, impossible o
   candidate.release.approvedItems[0].approvedAt = '2026-02-30T09:12:00Z';
   rehashBridge(candidate);
   assert.throws(() => parseCompanyAssetReleaseBridge(candidate), /canonical RFC3339 instant/);
+
+  for (const validInstant of [
+    '0001-01-01T00:00:00Z',
+    '2026-08-27T09:12:00+14:01',
+    '2026-08-27T09:12:00+23:59',
+    '9999-12-31T23:59:59.999999Z',
+  ]) {
+    const valid = await envelope();
+    valid.generatedAt = validInstant;
+    assert.equal(parseCompanyAssetReleaseBridge(valid).generatedAt, validInstant);
+  }
 });
 
 test('requires sorted unique item tuples, unique versions and exact asset resource paths', async () => {
   const unsorted = await envelope([generatedItem(), assetItem()]);
-  assert.throws(() => parseCompanyAssetReleaseBridge(unsorted), /sorted and unique/);
+  assert.throws(() => parseCompanyAssetReleaseBridge(unsorted), /canonical order/);
+
+  const duplicateIdentity = await envelope([
+    assetItem({ itemVersion: 3, versionId: '11111111-1111-4111-8111-111111111111' }),
+    assetItem(),
+  ]);
+  assert.throws(() => parseCompanyAssetReleaseBridge(duplicateIdentity), /repeats an item identity$/);
+
+  const duplicateIdentityVersion = await envelope([assetItem(), detached(assetItem())]);
+  assert.throws(
+    () => parseCompanyAssetReleaseBridge(duplicateIdentityVersion),
+    /repeats an item identity\/version/,
+  );
 
   const duplicateVersion = await envelope([assetItem(), generatedItem()]);
   duplicateVersion.release.approvedItems[1].versionId = VERSION_ID;
@@ -320,7 +345,7 @@ test('reuses the exact AI inventory parser, including its trusted package and qu
   );
 });
 
-test('fails before invoking getters and rejects prototype, sparse-array, width and depth surprises', async () => {
+test('fails before invoking getters or Proxy traps and rejects exotic, cyclic, sparse, wide and deep data', async () => {
   const getterInput = await envelope();
   let getterCalls = 0;
   Object.defineProperty(getterInput, 'generatedAt', {
@@ -334,6 +359,25 @@ test('fails before invoking getters and rejects prototype, sparse-array, width a
   assert.throws(() => parseCompanyAssetReleaseBridge(getterInput), /enumerable data property/);
   assert.equal(getterCalls, 0);
 
+  const proxyTarget = await envelope();
+  let proxyTrapCalls = 0;
+  const proxyInput = new Proxy(proxyTarget, {
+    getOwnPropertyDescriptor(target, key) {
+      proxyTrapCalls += 1;
+      return Reflect.getOwnPropertyDescriptor(target, key);
+    },
+    getPrototypeOf(target) {
+      proxyTrapCalls += 1;
+      return Reflect.getPrototypeOf(target);
+    },
+    ownKeys(target) {
+      proxyTrapCalls += 1;
+      return Reflect.ownKeys(target);
+    },
+  });
+  assert.throws(() => parseCompanyAssetReleaseBridge(proxyInput), /must not be a Proxy/);
+  assert.equal(proxyTrapCalls, 0);
+
   const prototypeInput = await envelope();
   Object.setPrototypeOf(prototypeInput, { inheritedSecret: 'surprise' });
   assert.throws(() => parseCompanyAssetReleaseBridge(prototypeInput), /surprising object prototype/);
@@ -342,6 +386,10 @@ test('fails before invoking getters and rejects prototype, sparse-array, width a
   sparseInput.release.approvedItems = new Array(2);
   sparseInput.release.approvedItemCount = 2;
   assert.throws(() => parseCompanyAssetReleaseBridge(sparseInput), /dense array/);
+
+  const cyclicInput = await envelope();
+  cyclicInput.cycle = cyclicInput;
+  assert.throws(() => parseCompanyAssetReleaseBridge(cyclicInput), /depth bound/);
 
   const wideInput = await envelope();
   wideInput.attack = Object.fromEntries(
@@ -375,6 +423,39 @@ test('enforces single-string, aggregate-string, node and canonical byte budgets'
   const tooManyBytes = await envelope();
   tooManyBytes.attack = Array.from({ length: 90 }, () => '\u20ac'.repeat(4_000));
   assert.throws(() => parseCompanyAssetReleaseBridge(tooManyBytes), /byte bound/);
+});
+
+test('contract errors never echo sensitive field values or attacker-controlled keys', async () => {
+  const sensitive = 'sensitive-token-alpha-991-never-log';
+  const malformedDate = await envelope();
+  malformedDate.generatedAt = sensitive;
+
+  const malformedHash = await envelope();
+  malformedHash.release.approvedItems[0].contentSha256 = sensitive;
+  rehashBridge(malformedHash);
+
+  const sensitiveKey = await envelope();
+  sensitiveKey[sensitive] = BigInt(1);
+
+  const release = parseCompanyAssetReleaseBridge(await envelope());
+  const malformedApproval = founderApproval(release);
+  malformedApproval.approvalId = `${sensitive} credential`;
+
+  for (const action of [
+    () => parseCompanyAssetReleaseBridge(malformedDate),
+    () => parseCompanyAssetReleaseBridge(malformedHash),
+    () => parseCompanyAssetReleaseBridge(sensitiveKey),
+    () => parseCompanyAssetFounderApproval(malformedApproval),
+  ]) {
+    let thrown: unknown;
+    try {
+      action();
+    } catch (error) {
+      thrown = error;
+    }
+    assert.ok(thrown instanceof Error);
+    assert.equal(thrown.message.includes(sensitive), false);
+  }
 });
 
 test('parses a bounded founder approval and reconciles an unchanged exact tuple deterministically', async () => {
@@ -420,6 +501,52 @@ test('missing, invalid or expired founder approval is review_required and never 
   assert.deepEqual(expired.reconciliationReasonCodes, ['founder_approval_expired']);
   assert.equal(expired.status, 'review_required');
   assert.equal(expired.usable, false);
+});
+
+test('founder approval cannot become effective beyond the explicit trusted-clock skew ceiling', async () => {
+  const release = parseCompanyAssetReleaseBridge(await envelope());
+  const evaluatedAt = '2026-08-27T12:00:00Z';
+  assert.equal(COMPANY_ASSET_MAX_APPROVAL_CLOCK_SKEW_MS, 5 * 60 * 1_000);
+
+  const atCeiling = founderApproval(release);
+  atCeiling.approvedAt = '2026-08-27T12:05:00Z';
+  atCeiling.approvalExpiresAt = '2026-08-27T13:00:00Z';
+  const accepted = reconcileCompanyAssetRelease(release, atCeiling, evaluatedAt);
+  assert.equal(accepted.status, 'reconciled');
+  assert.deepEqual(accepted.reconciliationReasonCodes, []);
+
+  const beyondCeiling = founderApproval(release);
+  beyondCeiling.approvedAt = '2026-08-27T12:05:00.000001Z';
+  beyondCeiling.approvalExpiresAt = '2026-08-27T13:00:00Z';
+  const first = reconcileCompanyAssetRelease(release, beyondCeiling, evaluatedAt);
+  const second = reconcileCompanyAssetRelease(release, beyondCeiling, evaluatedAt);
+  assert.equal(first.status, 'review_required');
+  assert.equal(first.usable, false);
+  assert.deepEqual(first.reconciliationReasonCodes, ['founder_approval_not_yet_effective']);
+  assert.equal(first.reconciliationSha256, second.reconciliationSha256);
+
+  const expiresAtClock = founderApproval(release);
+  expiresAtClock.approvedAt = '2026-08-27T11:00:00Z';
+  expiresAtClock.approvalExpiresAt = evaluatedAt;
+  const expired = reconcileCompanyAssetRelease(release, expiresAtClock, evaluatedAt);
+  assert.deepEqual(expired.reconciliationReasonCodes, ['founder_approval_expired']);
+
+  const microsecondExpiry = founderApproval(release);
+  microsecondExpiry.approvedAt = '2026-08-27T12:00:00.000000Z';
+  microsecondExpiry.approvalExpiresAt = '2026-08-27T12:00:00.000001Z';
+  assert.doesNotThrow(() => parseCompanyAssetFounderApproval(microsecondExpiry));
+  const beforeMicrosecondExpiry = reconcileCompanyAssetRelease(
+    release,
+    microsecondExpiry,
+    '2026-08-27T12:00:00.000000Z',
+  );
+  assert.equal(beforeMicrosecondExpiry.status, 'reconciled');
+  const atMicrosecondExpiry = reconcileCompanyAssetRelease(
+    release,
+    microsecondExpiry,
+    '2026-08-27T12:00:00.000001Z',
+  );
+  assert.deepEqual(atMicrosecondExpiry.reconciliationReasonCodes, ['founder_approval_expired']);
 });
 
 test('release, catalog and item hash changes produce ordered deterministic review reasons', async () => {
@@ -530,6 +657,22 @@ test('tampered founder scope digests and unsafe approval records fail closed', a
   );
   assert.deepEqual(affiliateResult.reconciliationReasonCodes, ['item_status_changed']);
   assert.equal(affiliateResult.usable, false);
+
+  const duplicatedApproval = founderApproval(release);
+  duplicatedApproval.scope.approvedItems.push(detached(duplicatedApproval.scope.approvedItems[0]));
+  rehashApproval(duplicatedApproval);
+  const firstDuplicate = reconcileCompanyAssetRelease(
+    release,
+    duplicatedApproval,
+    '2026-08-27T12:00:00Z',
+  );
+  const secondDuplicate = reconcileCompanyAssetRelease(
+    release,
+    duplicatedApproval,
+    '2026-08-27T12:00:00Z',
+  );
+  assert.deepEqual(firstDuplicate.reconciliationReasonCodes, ['founder_approval_invalid']);
+  assert.equal(firstDuplicate.reconciliationSha256, secondDuplicate.reconciliationSha256);
 });
 
 test('company-owned generation contract is effects-off and the module exposes no operation path', async () => {
@@ -539,6 +682,10 @@ test('company-owned generation contract is effects-off and the module exposes no
     affiliateInput: 'forbidden',
     sessionInput: 'forbidden',
     customerInput: 'forbidden',
+    customerPrivateDataInput: 'forbidden',
+    privateDataInput: 'forbidden',
+    rawPromptInput: 'forbidden',
+    rawKnowledgeInput: 'forbidden',
     hqHumanApprovalRequired: true,
     modelCalls: false,
     sourceCalls: false,
