@@ -130,26 +130,38 @@ export function createSignedSimulatedWhatsAppInbound(input: Readonly<{
   occurredAt: string;
   testSecret: string;
 }>): SignedSimulatedWhatsAppWebhook {
-  const seed = [input.workspaceId, input.connectionId, input.from, input.to, input.occurredAt, input.body].join('\n');
+  const snapshot = {
+    workspaceId: input.workspaceId,
+    connectionId: input.connectionId,
+    from: input.from,
+    to: input.to,
+    body: input.body,
+    occurredAt: input.occurredAt,
+    testSecret: input.testSecret,
+  };
+  const seed = [
+    snapshot.workspaceId, snapshot.connectionId, snapshot.from,
+    snapshot.to, snapshot.occurredAt, snapshot.body,
+  ].join('\n');
   const digest = createHash('sha256').update(seed, 'utf8').digest('hex').slice(0, 32);
   const event = normalizedEvent({
     schemaVersion: 1,
     environment: 'test',
     providerId: WHATSAPP_DARK_PROVIDER_ID,
-    workspaceId: input.workspaceId,
-    connectionId: input.connectionId,
+    workspaceId: snapshot.workspaceId,
+    connectionId: snapshot.connectionId,
     eventId: `waevt_${digest}`,
-    occurredAt: input.occurredAt,
+    occurredAt: snapshot.occurredAt,
     event: {
       type: 'message.inbound',
       messageId: `wamsg_test_${digest}`,
-      from: input.from,
-      to: input.to,
-      body: input.body,
+      from: snapshot.from,
+      to: snapshot.to,
+      body: snapshot.body,
     },
   });
   const rawBody = new TextEncoder().encode(JSON.stringify(event));
-  const secret = webhookSecret(input.testSecret);
+  const secret = webhookSecret(snapshot.testSecret);
   return Object.freeze({
     rawBody,
     signature: `sha256=${createHmac('sha256', secret).update(rawBody).digest('hex')}`,
@@ -165,9 +177,11 @@ export function verifySimulatedWhatsAppWebhook(input: Readonly<{
   testSecret: string;
 }>): SimulatedWhatsAppInboundEvent {
   const suppliedBody = input.rawBody;
-  if (!(suppliedBody instanceof Uint8Array) || suppliedBody.byteLength < 2
-      || suppliedBody.byteLength > MAX_WEBHOOK_BYTES) fail('webhook byte length is invalid');
+  if (!(suppliedBody instanceof Uint8Array)) fail('webhook byte length is invalid');
   const rawBody = Uint8Array.from(suppliedBody);
+  if (rawBody.byteLength < 2 || rawBody.byteLength > MAX_WEBHOOK_BYTES) {
+    fail('webhook byte length is invalid');
+  }
   const suppliedSignature = input.signature;
   const suppliedContentType = input.contentType;
   const suppliedSecret = input.testSecret;

@@ -68,11 +68,16 @@ export class SimulatedWhatsAppDarkAdapter implements WhatsAppDarkAdapter {
     const rendered = renderWhatsAppDarkTemplate(exactContext, request);
     const recipientSha256 = createHash('sha256').update(rendered.recipient, 'utf8').digest('hex');
     const requestSha256 = createHash('sha256').update(JSON.stringify({
+      connectionId: exactContext.connectionId,
+      correlationId: exactContext.correlationId,
       evidenceBundleSha256: rendered.evidenceBundleSha256,
+      idempotencyKey: exactContext.idempotencyKey,
+      providerId: exactContext.providerId,
       recipientSha256,
       renderedBodySha256: rendered.renderedBodySha256,
       templateId: rendered.templateId,
       templateVersion: rendered.templateVersion,
+      workspaceId: exactContext.workspaceId,
     }), 'utf8').digest('hex');
     const existing = this.#results.get(exactContext.operationId);
     if (existing) {

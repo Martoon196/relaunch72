@@ -132,6 +132,9 @@ test('simulator refuses routable numbers and records hashes without raw body or 
   await assert.rejects(adapter.simulateTemplate(context, {
     ...request, variables: { first_name: 'Changed', pack_reference: 'TEST-001' },
   }), /reused with different test input/);
+  await assert.rejects(adapter.simulateTemplate({
+    ...context, idempotencyKey: 'whatsapp-test-operation-drift',
+  }, request), /reused with different test input/);
   await assert.rejects(new SimulatedWhatsAppDarkAdapter({ now: () => NOW })
     .reconcileSimulation(context, result.testReference), /reference is invalid/);
 });
@@ -239,6 +242,47 @@ test('webhook copies bytes before any later input getter can mutate the supplied
     contentType: good.contentType,
     testSecret: TEST_SECRET,
   }), /signature is invalid/);
+});
+
+test('webhook never consults an overridable source byteLength before copying', () => {
+  const good = createSignedSimulatedWhatsAppInbound({
+    workspaceId: WORKSPACE_ID, connectionId: CONNECTION_ID,
+    from: '+447700900002', to: '+447700900001', body: 'Good',
+    occurredAt: NOW.toISOString(), testSecret: TEST_SECRET,
+  });
+  const evil = createSignedSimulatedWhatsAppInbound({
+    workspaceId: WORKSPACE_ID, connectionId: CONNECTION_ID,
+    from: '+447700900002', to: '+447700900001', body: 'Evil',
+    occurredAt: NOW.toISOString(), testSecret: TEST_SECRET,
+  });
+  const mutable = Uint8Array.from(good.rawBody);
+  let byteLengthReads = 0;
+  Object.defineProperty(mutable, 'byteLength', {
+    configurable: true,
+    get() { byteLengthReads += 1; mutable.set(evil.rawBody); return evil.rawBody.byteLength; },
+  });
+  const event = verifySimulatedWhatsAppWebhook({
+    rawBody: mutable, signature: good.signature,
+    contentType: good.contentType, testSecret: TEST_SECRET,
+  });
+  assert.equal(byteLengthReads, 0);
+  assert.equal(event.event.body, 'Good');
+});
+
+test('signed inbound creator snapshots every caller field once', () => {
+  let bodyReads = 0;
+  const signed = createSignedSimulatedWhatsAppInbound({
+    workspaceId: WORKSPACE_ID,
+    connectionId: CONNECTION_ID,
+    from: '+447700900002',
+    to: '+447700900001',
+    get body() { bodyReads += 1; return bodyReads === 1 ? 'Snap' : 'Drift'; },
+    occurredAt: NOW.toISOString(),
+    testSecret: TEST_SECRET,
+  });
+  const event = verifySimulatedWhatsAppWebhook({ ...signed, testSecret: TEST_SECRET });
+  assert.equal(bodyReads, 1);
+  assert.equal(event.event.body, 'Snap');
 });
 
 test('own-inbox binding values are snapshotted once before command construction', () => {
