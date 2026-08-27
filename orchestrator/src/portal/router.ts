@@ -138,6 +138,12 @@ import {
 } from './affiliate-compliance-presenter.js';
 import { renderAffiliateComplianceBody } from './affiliate-compliance-view.js';
 import type { PortalAffiliateComplianceService } from './affiliate-compliance-service.js';
+import {
+  PROVIDER_READINESS_COCKPIT_ROUTE,
+  presentProviderReadinessCockpit,
+} from './provider-readiness-cockpit-presenter.js';
+import { renderProviderReadinessCockpitBody } from './provider-readiness-cockpit-view.js';
+import type { PortalProviderReadinessService } from './provider-readiness-cockpit-service.js';
 
 interface PortalCommonDeps {
   sessionSecret: string;
@@ -198,6 +204,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   brandBrain?: PortalBrandBrainService;
   /** Fixture-only affiliate legal/readiness evidence. It exposes no acceptance, link or channel command. */
   affiliateCompliance?: PortalAffiliateComplianceService;
+  /** Dark-only provider readiness metadata. It exposes no credential, switch or provider operation. */
+  providerReadiness?: PortalProviderReadinessService;
   /** TEST-only conversion queue. Thread detail remains a separate optional projection. */
   inbox?: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval/queue commands. It has no provider dispatcher. */
@@ -451,10 +459,12 @@ function operationalPage(
   workspaceName: string,
   body: string,
   deps: PostgresPortalDeps,
-  active: 'content' | 'affiliates' | 'inbox',
+  active: 'overview' | 'content' | 'affiliates' | 'inbox',
   csrfToken: string,
 ): string {
-  const label = active === 'content'
+  const label = active === 'overview'
+    ? 'Provider Readiness'
+    : active === 'content'
     ? 'Content Control'
     : active === 'affiliates'
       ? 'Affiliate Compliance'
@@ -1270,6 +1280,50 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         title: 'Affiliate Compliance temporarily unavailable',
         message: 'No legal, acceptance, training, declaration, channel, case or permission evidence was changed.',
         active: 'affiliates',
+      }));
+    }
+  }
+
+  // ── provider readiness: bounded evidence only; every external effect stays off ──
+  if (deps.kind === 'postgres' && p === PROVIDER_READINESS_COCKPIT_ROUTE && method === 'GET') {
+    const readinessLinked = deps.productProfile?.readinessRails.some(
+      (rail) => rail.href === PROVIDER_READINESS_COCKPIT_ROUTE,
+    ) ?? false;
+    if (!deps.providerReadiness || !readinessLinked) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Provider Readiness not connected',
+        message: 'The dark provider evidence cockpit is not enabled for this workspace.',
+        active: 'overview',
+      }));
+    }
+    try {
+      const outcome = await deps.providerReadiness.snapshot(crmIdentity(sessionToken, deps));
+      if (!outcome.ok) {
+        const status = outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden'
+          ? 403
+          : outcome.kind === 'not_found'
+            ? 404
+            : 503;
+        return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+          title: status === 503 ? 'Provider Readiness temporarily unavailable' : 'Provider Readiness not available',
+          message: outcome.message,
+          active: 'overview',
+        }));
+      }
+      const view = presentProviderReadinessCockpit(outcome.snapshot);
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      return sendHtml(res, 200, operationalPage(
+        outcome.snapshot.workspace.workspaceName,
+        renderProviderReadinessCockpitBody(view),
+        deps,
+        'overview',
+        csrfToken,
+      ));
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Provider Readiness temporarily unavailable',
+        message: 'No provider account, credential, switch, send, post or direct message was changed.',
+        active: 'overview',
       }));
     }
   }

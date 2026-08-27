@@ -58,6 +58,12 @@ import {
 import { createPropertyPredatorProviderConnectionsFixture } from '../src/portal/provider-connections-fixtures.js';
 import { renderProviderConnectionsBody } from '../src/portal/provider-connections-view.js';
 import {
+  PROVIDER_READINESS_COCKPIT_ROUTE,
+  presentProviderReadinessCockpit,
+} from '../src/portal/provider-readiness-cockpit-presenter.js';
+import { createPropertyPredatorProviderReadinessFixture } from '../src/portal/provider-readiness-cockpit-fixtures.js';
+import { renderProviderReadinessCockpitBody } from '../src/portal/provider-readiness-cockpit-view.js';
+import {
   CAMPAIGN_COMMAND_ROUTE,
   presentCampaignCommand,
 } from '../src/portal/campaign-command-presenter.js';
@@ -891,7 +897,7 @@ function previewJourneyNav(active: 'board' | 'rules'): string {
 }
 
 type PreviewOperationsRoute = 'today' | 'actions' | 'journeys' | 'campaigns' | 'content'
-  | 'compose' | 'calendar' | 'inbox' | 'automations' | 'webinars' | 'analytics' | 'connections';
+  | 'compose' | 'calendar' | 'inbox' | 'automations' | 'webinars' | 'analytics' | 'readiness';
 
 function previewOperationsNav(active: PreviewOperationsRoute): string {
   const links: readonly Readonly<{ key: PreviewOperationsRoute; href: string; label: string }>[] = [
@@ -906,7 +912,7 @@ function previewOperationsNav(active: PreviewOperationsRoute): string {
     { key: 'automations', href: AUTOMATION_STUDIO_ROUTE, label: 'Automations' },
     { key: 'webinars', href: WEBINAR_STUDIO_ROUTE, label: 'Webinars' },
     { key: 'analytics', href: GROWTH_ANALYTICS_ROUTE, label: 'Analytics' },
-    { key: 'connections', href: PROVIDER_CONNECTIONS_ROUTE, label: 'Connections' },
+    { key: 'readiness', href: PROVIDER_READINESS_COCKPIT_ROUTE, label: 'Provider readiness' },
   ];
   return `<nav aria-label="Growth operations" style="display:flex;gap:7px;margin-bottom:14px;flex-wrap:wrap">${links.map((link) => `<a class="button ${link.key === active ? '' : 'secondary'} compact" href="${link.href}"${link.key === active ? ' aria-current="page"' : ''}>${link.label}</a>`).join('')}</nav>`;
 }
@@ -1100,9 +1106,15 @@ function page(url: URL): { status: number; html: string; board?: boolean } {
   };
   if (path === PROVIDER_CONNECTIONS_ROUTE) return {
     status: 200,
-    html: shell(`${previewOperationsNav('connections')}${renderProviderConnectionsBody(presentProviderConnections(
+    html: shell(`${previewOperationsNav('readiness')}${renderProviderConnectionsBody(presentProviderConnections(
       createPropertyPredatorProviderConnectionsFixture(),
     ))}`, 'overview', 'Property Predator — Connections'),
+  };
+  if (path === PROVIDER_READINESS_COCKPIT_ROUTE) return {
+    status: 200,
+    html: shell(`${previewOperationsNav('readiness')}${renderProviderReadinessCockpitBody(
+      presentProviderReadinessCockpit(createPropertyPredatorProviderReadinessFixture()),
+    )}`, 'overview', 'Property Predator — Provider Readiness'),
   };
   if (path === '/portal/crm/contacts') return {
     status: 200,

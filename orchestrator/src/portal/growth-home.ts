@@ -109,7 +109,7 @@ function readiness(profile: PortalProductProfile): string {
   };
   return `<div class="pp-rail-list">${profile.readinessRails.map((rail) => {
     const state = railState(rail.state);
-    return `<article class="pp-rail"><div class="pp-rail-top"><strong>${escapeHtml(rail.label)}</strong><span class="pp-rail-state ${state.className}">${state.label}</span></div><p>${escapeHtml(rail.summary)}</p>${rail.href ? `<a class="pp-rail-link" href="${escapeHtml(rail.href)}">Open existing machine →</a>` : ''}</article>`;
+    return `<article class="pp-rail"><div class="pp-rail-top"><strong>${escapeHtml(rail.label)}</strong><span class="pp-rail-state ${state.className}">${state.label}</span></div><p>${escapeHtml(rail.summary)}</p>${rail.href ? `<a class="pp-rail-link" href="${escapeHtml(rail.href)}">Open workspace →</a>` : ''}</article>`;
   }).join('')}</div>`;
 }
 

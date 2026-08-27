@@ -80,6 +80,7 @@ function checkedText(value: string, label: string): string {
 
 function checkedHref(value: string | undefined, label: string): string | undefined {
   if (value === undefined) return undefined;
+  if (/^\/portal(?:\/[a-z0-9_-]+)+$/.test(value)) return value;
   try {
     const url = new URL(value);
     if (url.protocol !== 'https:' || url.username || url.password || !url.hostname) {
@@ -237,7 +238,13 @@ export const PROPERTY_PREDATOR_GROWTH_PROFILE = createProfile({
       summary: 'Reuse its brand-trained generation, swipe library and artwork catalogue; Growth HQ will orchestrate reviewed items instead of rebuilding it.',
       state: 'foundation',
     },
-    { id: 'social', label: 'Social machine', summary: 'Broad publishing with provider-confirmed outcomes.', state: 'planned' },
+    {
+      id: 'social',
+      label: 'Provider readiness',
+      summary: 'Dark activation gates for email, WhatsApp, public social and social DMs.',
+      state: 'foundation',
+      href: '/portal/providers/readiness',
+    },
     { id: 'inbox', label: 'Conversion inbox', summary: 'Approval-led email, WhatsApp, SMS, Messenger and Instagram test rails.', state: 'foundation' },
     { id: 'webinars', label: 'Predator Briefing', summary: 'Live registration, attendance and follow-up journeys.', state: 'planned' },
     { id: 'automations', label: 'Conversion recipes', summary: 'Approval-led sequences with visible stop rules.', state: 'planned' },

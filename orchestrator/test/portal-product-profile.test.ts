@@ -40,6 +40,16 @@ test('known portal product profiles resolve as immutable presentation contracts'
       state: 'foundation',
     },
   );
+  assert.deepEqual(
+    PROPERTY_PREDATOR_GROWTH_PROFILE.readinessRails.find((rail) => rail.id === 'social'),
+    {
+      id: 'social',
+      label: 'Provider readiness',
+      summary: 'Dark activation gates for email, WhatsApp, public social and social DMs.',
+      state: 'foundation',
+      href: '/portal/providers/readiness',
+    },
+  );
   assert.deepEqual(PROPERTY_PREDATOR_GROWTH_PROFILE.contentWorkspace, {
     brainRoute: '/portal/content/brain',
     brainLabel: 'Brand Brain',
