@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isProxy } from 'node:util/types';
 import { isPlatformCapability, type PlatformCapability } from '../platform/capabilities.js';
 import {
   providerRegistry,
@@ -515,12 +516,19 @@ interface PlainDataBudget {
   bytes: number;
 }
 
+function structuralFieldPath(path: string, index: number): string {
+  return `${path}{field:${index}}`;
+}
+
 function consumePlainDataBytes(
   budget: PlainDataBudget,
   value: string,
   path: string,
   perValueLimit: number,
 ): void {
+  if (value.length > perValueLimit) {
+    invalid('INPUT_VALUE_INVALID', path, `${path} exceeds its byte bound.`);
+  }
   const bytes = Buffer.byteLength(value, 'utf8');
   if (bytes > perValueLimit) {
     invalid('INPUT_VALUE_INVALID', path, `${path} exceeds its byte bound.`);
@@ -547,7 +555,20 @@ function scanForCredentialFields(
     consumePlainDataBytes(budget, value, path, MAX_STRING_BYTES);
     return;
   }
-  if (value === null || typeof value !== 'object') return;
+  if (value === null) return;
+  if (typeof value === 'boolean') return;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      invalid('INPUT_NOT_PLAIN_DATA', path, 'Input numbers must be finite.');
+    }
+    return;
+  }
+  if (typeof value !== 'object') {
+    invalid('INPUT_NOT_PLAIN_DATA', path, 'Input must contain plain data only.');
+  }
+  if (isProxy(value)) {
+    invalid('INPUT_NOT_PLAIN_DATA', path, 'Input must not contain proxy objects.');
+  }
   if (depth > MAX_INPUT_DEPTH) {
     invalid('INPUT_NOT_PLAIN_DATA', path, 'Input nesting exceeds the supported limit.');
   }
@@ -555,26 +576,39 @@ function scanForCredentialFields(
   ancestors.add(value);
   try {
     if (Array.isArray(value)) {
-      if (Object.getPrototypeOf(value) !== Array.prototype || value.length > MAX_ARRAY_ITEMS) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) {
+        invalid('INPUT_NOT_PLAIN_DATA', path, 'Input arrays must use the standard array prototype.');
+      }
+      if (value.length > MAX_ARRAY_ITEMS) {
         invalid('INPUT_VALUE_INVALID', path, 'Input array exceeds the supported limit.');
       }
       const keys = Reflect.ownKeys(value);
       const expectedKeys = [...Array(value.length).keys()].map(String);
+      const actualKeys = new Set(keys);
       if (keys.length !== value.length + 1
           || keys.some((key) => typeof key !== 'string')
-          || !expectedKeys.every((key) => Object.prototype.hasOwnProperty.call(value, key))) {
+          || !actualKeys.has('length')
+          || !expectedKeys.every((key) => actualKeys.has(key))) {
         invalid('INPUT_NOT_PLAIN_DATA', path, 'Input arrays must be dense plain-data arrays.');
       }
+
+      budget.keys += expectedKeys.length;
+      if (budget.keys > MAX_TOTAL_KEYS) {
+        invalid('INPUT_VALUE_INVALID', 'input', 'Input exceeds the total key bound.');
+      }
       expectedKeys.forEach((key, index) => {
+        consumePlainDataBytes(budget, key, `${path}[${index}]`, MAX_KEY_BYTES);
+      });
+
+      const items = expectedKeys.map((key, index) => {
         const descriptor = Object.getOwnPropertyDescriptor(value, key);
         if (!descriptor?.enumerable || !('value' in descriptor)) {
           invalid('INPUT_NOT_PLAIN_DATA', `${path}[${index}]`, 'Input arrays must contain data properties only.');
         }
-        budget.keys += 1;
-        if (budget.keys > MAX_TOTAL_KEYS) {
-          invalid('INPUT_VALUE_INVALID', 'input', 'Input exceeds the total key bound.');
-        }
-        scanForCredentialFields(descriptor.value, `${path}[${index}]`, ancestors, budget, depth + 1);
+        return descriptor.value;
+      });
+      items.forEach((item, index) => {
+        scanForCredentialFields(item, `${path}[${index}]`, ancestors, budget, depth + 1);
       });
       return;
     }
@@ -589,25 +623,35 @@ function scanForCredentialFields(
     if (ownKeys.some((key) => typeof key !== 'string')) {
       invalid('INPUT_NOT_PLAIN_DATA', path, 'Symbol properties are not supported.');
     }
-    for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(value))) {
-      budget.keys += 1;
-      if (budget.keys > MAX_TOTAL_KEYS) {
-        invalid('INPUT_VALUE_INVALID', 'input', 'Input exceeds the total key bound.');
-      }
-      consumePlainDataBytes(budget, key, `${path}.${key}`, MAX_KEY_BYTES);
-      if (!descriptor.enumerable || !('value' in descriptor)) {
-        invalid('INPUT_NOT_PLAIN_DATA', `${path}.${key}`, 'Input fields must be enumerable data properties.');
+
+    budget.keys += ownKeys.length;
+    if (budget.keys > MAX_TOTAL_KEYS) {
+      invalid('INPUT_VALUE_INVALID', 'input', 'Input exceeds the total key bound.');
+    }
+    const stringKeys = ownKeys as string[];
+    stringKeys.forEach((key, index) => {
+      consumePlainDataBytes(budget, key, structuralFieldPath(path, index), MAX_KEY_BYTES);
+    });
+
+    const fields = stringKeys.map((key, index) => {
+      const fieldPath = structuralFieldPath(path, index);
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor?.enumerable || !('value' in descriptor)) {
+        invalid('INPUT_NOT_PLAIN_DATA', fieldPath, 'Input fields must be enumerable data properties.');
       }
       const normalised = key.replace(/[^a-z0-9]/giu, '').toLowerCase();
       if (FORBIDDEN_CREDENTIAL_KEYS.has(normalised)) {
         invalid(
           'FORBIDDEN_CREDENTIAL_FIELD',
-          `${path}.${key}`,
+          fieldPath,
           'Credential material is forbidden; provide only a secret-manager metadata reference.',
         );
       }
-      scanForCredentialFields(descriptor.value, `${path}.${key}`, ancestors, budget, depth + 1);
-    }
+      return { path: fieldPath, value: descriptor.value };
+    });
+    fields.forEach((field) => {
+      scanForCredentialFields(field.value, field.path, ancestors, budget, depth + 1);
+    });
   } finally {
     ancestors.delete(value);
   }
@@ -617,26 +661,39 @@ function exactRecord(value: unknown, path: string, expectedKeys: readonly string
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return invalid('INPUT_NOT_PLAIN_DATA', path, `${path} must be a plain object.`);
   }
+  if (isProxy(value)) {
+    return invalid('INPUT_NOT_PLAIN_DATA', path, `${path} must not be a proxy object.`);
+  }
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) {
     return invalid('INPUT_NOT_PLAIN_DATA', path, `${path} must be a plain object.`);
   }
-  if (Object.getOwnPropertySymbols(value).length > 0) {
+  const ownKeys = Reflect.ownKeys(value);
+  if (ownKeys.length > MAX_OBJECT_KEYS) {
+    return invalid('INPUT_VALUE_INVALID', path, `${path} exceeds the supported structural width.`);
+  }
+  if (ownKeys.some((key) => typeof key !== 'string')) {
     return invalid('INPUT_NOT_PLAIN_DATA', path, `${path} must not contain symbol properties.`);
   }
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  for (const [key, descriptor] of Object.entries(descriptors)) {
-    if (!descriptor.enumerable || !('value' in descriptor)) {
-      return invalid('INPUT_NOT_PLAIN_DATA', `${path}.${key}`, `${path} must contain data properties only.`);
+  const fields = new Map<string, unknown>();
+  for (const [index, key] of (ownKeys as string[]).entries()) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor?.enumerable || !('value' in descriptor)) {
+      return invalid(
+        'INPUT_NOT_PLAIN_DATA',
+        structuralFieldPath(path, index),
+        `${path} must contain enumerable data properties only.`,
+      );
     }
+    fields.set(key, descriptor.value);
   }
-  const actual = Object.keys(descriptors).sort();
+  const actual = [...fields.keys()].sort();
   const expected = [...expectedKeys].sort();
   if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
     return invalid('INPUT_SHAPE_INVALID', path, `${path} contains missing or unsupported fields.`);
   }
-  const result: PlainRecord = {};
-  for (const key of expectedKeys) result[key] = descriptors[key]!.value;
+  const result = Object.create(null) as PlainRecord;
+  for (const key of expectedKeys) result[key] = fields.get(key);
   return result;
 }
 

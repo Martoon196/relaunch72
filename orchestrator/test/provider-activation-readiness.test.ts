@@ -408,10 +408,64 @@ test('credential-shaped input is rejected before parsing and is never echoed int
   assert.equal(report.inputAccepted, false);
   assert.equal(report.readiness, 'not_ready');
   assert.equal(report.validationIssues[0]?.code, 'FORBIDDEN_CREDENTIAL_FIELD');
-  assert.equal(report.validationIssues[0]?.path, 'input.apiKey');
+  assert.match(report.validationIssues[0]?.path ?? '', /^input\{field:\d+\}$/u);
   assert.equal(JSON.stringify(report).includes('must-never-appear'), false);
+  assert.equal(JSON.stringify(report).includes('apiKey'), false);
   assert.equal(report.safety.liveAuthorised, false);
   assert.equal(report.safety.providerOperationsCreated, 0);
+});
+
+test('pre-schema traversal rejects proxies and accessors before executing reflective traps', () => {
+  let ownKeysCalls = 0;
+  let descriptorCalls = 0;
+  let prototypeCalls = 0;
+  const alternatingWideProxy = new Proxy({}, {
+    getPrototypeOf() {
+      prototypeCalls += 1;
+      return Object.prototype;
+    },
+    ownKeys() {
+      ownKeysCalls += 1;
+      return ownKeysCalls === 1
+        ? []
+        : Array.from({ length: 50_000 }, (_unused, index) => `opaque_${index}`);
+    },
+    getOwnPropertyDescriptor() {
+      descriptorCalls += 1;
+      return { configurable: true, enumerable: true, writable: true, value: true };
+    },
+  });
+  const proxyReport = evaluateProviderActivationReadiness(alternatingWideProxy, NOW);
+  assert.equal(proxyReport.inputAccepted, false);
+  assert.equal(proxyReport.validationIssues[0]?.code, 'INPUT_NOT_PLAIN_DATA');
+  assert.equal(proxyReport.validationIssues[0]?.path, 'input');
+  assert.equal(prototypeCalls, 0);
+  assert.equal(ownKeysCalls, 0);
+  assert.equal(descriptorCalls, 0);
+
+  let getterCalls = 0;
+  const accessorInput = {};
+  Object.defineProperty(accessorInput, 'opaque', {
+    configurable: true,
+    enumerable: true,
+    get() {
+      getterCalls += 1;
+      return 'getter-result-must-not-run';
+    },
+  });
+  const accessorReport = evaluateProviderActivationReadiness(accessorInput, NOW);
+  assert.equal(accessorReport.inputAccepted, false);
+  assert.equal(accessorReport.validationIssues[0]?.code, 'INPUT_NOT_PLAIN_DATA');
+  assert.equal(getterCalls, 0);
+  assert.equal(JSON.stringify(accessorReport).includes('getter-result-must-not-run'), false);
+
+  const exoticReport = evaluateProviderActivationReadiness(Object.create({ inherited: true }), NOW);
+  assert.equal(exoticReport.inputAccepted, false);
+  assert.equal(exoticReport.validationIssues[0]?.code, 'INPUT_NOT_PLAIN_DATA');
+
+  const nonJsonPrimitiveReport = evaluateProviderActivationReadiness({ opaque: 1n }, NOW);
+  assert.equal(nonJsonPrimitiveReport.inputAccepted, false);
+  assert.equal(nonJsonPrimitiveReport.validationIssues[0]?.code, 'INPUT_NOT_PLAIN_DATA');
 });
 
 test('unknown fields, invalid seed bounds and inconsistent caps are malformed rather than partially trusted', () => {
@@ -580,11 +634,42 @@ test('policy arrays are runtime-frozen and plain-data width and bytes are bounde
   assert.equal(wideReport.inputAccepted, false);
   assert.match(wideReport.validationIssues[0]?.message ?? '', /key bound/u);
 
+  const excessiveTotalKeys = {
+    branches: Array.from({ length: 32 }, (_unused, branch) => Object.fromEntries(
+      Array.from({ length: 40 }, (_innerUnused, field) => [`field_${branch}_${field}`, true]),
+    )),
+  };
+  const totalKeysReport = evaluateProviderActivationReadiness(excessiveTotalKeys, NOW);
+  assert.equal(totalKeysReport.inputAccepted, false);
+  assert.equal(totalKeysReport.validationIssues[0]?.path, 'input');
+  assert.match(totalKeysReport.validationIssues[0]?.message ?? '', /total key bound/u);
+
   const oversized = clone(readyInput('mailgun_email')) as unknown as Record<string, unknown>;
   oversized.note = 'x'.repeat(1_025);
   const oversizedReport = evaluateProviderActivationReadiness(oversized, NOW, MAILGUN_AUTHORITY);
   assert.equal(oversizedReport.inputAccepted, false);
   assert.match(oversizedReport.validationIssues[0]?.message ?? '', /byte bound/u);
+
+  const excessiveTotalBytes = {
+    payload: Array.from(
+      { length: 4 },
+      () => Array.from({ length: 64 }, () => 'x'.repeat(600)),
+    ),
+  };
+  const totalBytesReport = evaluateProviderActivationReadiness(excessiveTotalBytes, NOW);
+  assert.equal(totalBytesReport.inputAccepted, false);
+  assert.equal(totalBytesReport.validationIssues[0]?.path, 'input');
+  assert.match(totalBytesReport.validationIssues[0]?.message ?? '', /total plain-data byte bound/u);
+
+  const opaqueMarker = 'CALLER_CONTROLLED_OPAQUE_MARKER';
+  const opaqueKey = `opaque_${opaqueMarker}_${'x'.repeat(140)}`;
+  const opaqueKeyReport = evaluateProviderActivationReadiness({ [opaqueKey]: true }, NOW);
+  assert.equal(opaqueKeyReport.inputAccepted, false);
+  assert.equal(opaqueKeyReport.validationIssues[0]?.code, 'INPUT_VALUE_INVALID');
+  assert.equal(opaqueKeyReport.validationIssues[0]?.path, 'input{field:0}');
+  assert.equal(JSON.stringify(opaqueKeyReport).includes(opaqueMarker), false);
+  assert.ok((opaqueKeyReport.validationIssues[0]?.path.length ?? 1_000) < 64);
+  assert.ok((opaqueKeyReport.validationIssues[0]?.message.length ?? 1_000) < 128);
 
   const sparse = clone(readyInput('mailgun_email'));
   const capabilities = new Array<string>(2);
