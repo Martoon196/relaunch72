@@ -31,6 +31,7 @@ function firstChannelEnvironment(): NodeJS.ProcessEnv {
     DATABASE_IDENTITY_COMMAND_URL: databaseUrl('r72_identity_command'),
     DATABASE_CRM_COMMAND_URL: databaseUrl('r72_crm_command'),
     DATABASE_CONTENT_COMMAND_URL: databaseUrl('r72_content_command'),
+    DATABASE_CONTENT_ADAPTER_URL: databaseUrl('r72_content_adapter'),
     DATABASE_WORKER_URL: databaseUrl('r72_worker'),
     DATABASE_WEBHOOK_URL: databaseUrl('r72_webhook'),
     PROPERTY_PREDATOR_PILOT_WORKSPACE_ID: '8a4a838f-9b3b-4f6b-a879-3459aa3771ae',
@@ -79,6 +80,7 @@ test('missing production foundation and Mailgun settings fail closed by name', (
 test('unsafe cutover shapes stay blocked even when all first-channel credentials exist', () => {
   const env = firstChannelEnvironment();
   env.DATABASE_WEB_URL = databaseUrl('neondb_owner');
+  env.DATABASE_CONTENT_ADAPTER_URL = databaseUrl('r72_content_command');
   env.DATABASE_SSL_MODE = 'require';
   env.PORTAL_BASE_URL = 'https://user:password@app.propertypredator.co.uk';
   env.PROPERTY_PREDATOR_PILOT_MAX_RECIPIENTS = '5000';
@@ -87,6 +89,7 @@ test('unsafe cutover shapes stay blocked even when all first-channel credentials
   assert.equal(report.result, 'blocked');
   for (const settingName of [
     'DATABASE_WEB_URL',
+    'DATABASE_CONTENT_ADAPTER_URL',
     'DATABASE_SSL_MODE',
     'PORTAL_BASE_URL',
     'PROPERTY_PREDATOR_PILOT_MAX_RECIPIENTS',

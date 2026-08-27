@@ -143,6 +143,7 @@ const FOUNDATION_SETTINGS: readonly SettingSpec[] = Object.freeze([
   setting('DATABASE_IDENTITY_COMMAND_URL', 'Identity command database identity', isProductionDatabaseUrl('r72_identity_command'), 'The least-privilege r72_identity_command database URL'),
   setting('DATABASE_CRM_COMMAND_URL', 'CRM command database identity', isProductionDatabaseUrl('r72_crm_command'), 'The least-privilege r72_crm_command database URL'),
   setting('DATABASE_CONTENT_COMMAND_URL', 'Content command database identity', isProductionDatabaseUrl('r72_content_command'), 'The least-privilege r72_content_command database URL'),
+  setting('DATABASE_CONTENT_ADAPTER_URL', 'Company asset metadata database identity', isProductionDatabaseUrl('r72_content_adapter'), 'The metadata-only r72_content_adapter database URL'),
   setting('DATABASE_WORKER_URL', 'Outbox worker database identity', isProductionDatabaseUrl('r72_worker'), 'The least-privilege r72_worker database URL'),
   setting('DATABASE_WEBHOOK_URL', 'Webhook database identity', isProductionDatabaseUrl('r72_webhook'), 'The least-privilege r72_webhook database URL'),
   setting('PROPERTY_PREDATOR_PILOT_WORKSPACE_ID', 'Dedicated pilot workspace', matches(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i), 'A dedicated Property Predator production workspace UUID'),

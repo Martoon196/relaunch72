@@ -107,6 +107,10 @@ services:
         sync: false
       - key: DATABASE_CONTENT_COMMAND_URL
         sync: false
+      # Dedicated metadata-only company-asset reader. It cannot approve,
+      # quarantine, publish, generate content or perform provider operations.
+      - key: DATABASE_CONTENT_ADAPTER_URL
+        sync: false
       # Dedicated r72_mailgun_webhook_command identity. This is deliberately
       # narrower than the platform's generic webhook role.
       - key: DATABASE_MAILGUN_WEBHOOK_URL
@@ -118,6 +122,8 @@ services:
       - key: DATABASE_CRM_COMMAND_POOL_MAX
         value: "3"
       - key: DATABASE_CONTENT_COMMAND_POOL_MAX
+        value: "2"
+      - key: DATABASE_CONTENT_ADAPTER_POOL_MAX
         value: "2"
       - key: DATABASE_MAILGUN_WEBHOOK_POOL_MAX
         value: "2"

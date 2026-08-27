@@ -143,6 +143,7 @@ test('production Blueprint keeps web and worker database identities process-isol
     'DATABASE_IDENTITY_COMMAND_URL',
     'DATABASE_CRM_COMMAND_URL',
     'DATABASE_CONTENT_COMMAND_URL',
+    'DATABASE_CONTENT_ADAPTER_URL',
     'DATABASE_MAILGUN_WEBHOOK_URL',
   ]) secretSlot(key);
   secretSlot('DATABASE_MAILGUN_WORKER_URL');
@@ -153,6 +154,7 @@ test('production Blueprint keeps web and worker database identities process-isol
   secretSlot('PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID');
 
   assert.deepEqual(databaseUrlKeys(webManifest), [
+    'DATABASE_CONTENT_ADAPTER_URL',
     'DATABASE_CONTENT_COMMAND_URL',
     'DATABASE_CRM_COMMAND_URL',
     'DATABASE_IDENTITY_COMMAND_URL',
@@ -166,7 +168,7 @@ test('production Blueprint keeps web and worker database identities process-isol
   assert.match(webManifest, /- key: DATABASE_MAILGUN_WEBHOOK_URL\b/);
   assert.doesNotMatch(
     workerManifest,
-    /- key: DATABASE_(?:WEB|IDENTITY_COMMAND|CRM_COMMAND|CONTENT_COMMAND|MAILGUN_WEBHOOK)_URL\b/,
+    /- key: DATABASE_(?:WEB|IDENTITY_COMMAND|CRM_COMMAND|CONTENT_COMMAND|CONTENT_ADAPTER|MAILGUN_WEBHOOK)_URL\b/,
   );
 
   literalValue('DATABASE_SSL_MODE', 'verify-full');

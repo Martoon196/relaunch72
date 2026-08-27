@@ -55,10 +55,11 @@ The separate `property-predator-growth-hq-production-eu` Neon project now exists
    - `r72_identity_command`
    - `r72_crm_command`
    - `r72_content_command`
+   - `r72_content_adapter`, used only through `DATABASE_CONTENT_ADAPTER_URL` for active-session-fenced company-asset metadata reads
    - `r72_mailgun_worker_command`, used only through `DATABASE_MAILGUN_WORKER_URL`
    - `r72_mailgun_webhook_command`, used only through `DATABASE_MAILGUN_WEBHOOK_URL`
 8. Put each role's pooled Neon URL into only its matching Render secret slot. The URL username must exactly match the role name. Keep `DATABASE_SSL_MODE=verify-full`.
-9. Run `npm run db:check` with the direct migration identity outside the web service. Then start the release with only the six runtime identities.
+9. Run `npm run db:check` with the direct migration identity outside the web service. Then start the release with only the seven runtime identities.
 
 The production workspace and first operator must be created through an audited operator path. Do not run demo seeding or import legacy/customer contacts during this pilot.
 
@@ -111,9 +112,9 @@ Mailgun signs webhook events. The application must verify timestamp, token and s
 `GET /ready` is the required Render health-check path. It must not return success until the reviewed application implementation proves at least:
 
 - exact bundled migration ledger through `r72_web`;
-- one exact database-installation UUID independently proven by all six runtime identities;
+- one exact database-installation UUID independently proven by all seven runtime identities;
 - PostgreSQL portal mounted with no fallback to legacy JSON stores;
-- exact `r72_identity_command`, `r72_crm_command` and `r72_content_command` role readiness;
+- exact `r72_identity_command`, `r72_crm_command`, `r72_content_command` and metadata-only `r72_content_adapter` role readiness;
 - dedicated `r72_mailgun_webhook_command` identity ready through `DATABASE_MAILGUN_WEBHOOK_URL`; worker readiness remains isolated from web readiness;
 - provider effects false and emergency pause true;
 - no public lead capture, checkout, subscription, demo seed or automatic import;
