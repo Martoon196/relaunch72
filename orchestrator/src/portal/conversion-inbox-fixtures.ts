@@ -3,6 +3,7 @@ import type {
   ConversionInboxConsentSnapshot,
   ConversionInboxDraftSnapshot,
   ConversionInboxLeadSnapshot,
+  ConversionInboxRailActivitySnapshot,
   ConversionInboxSnapshot,
   ConversionInboxThreadSnapshot,
   ConversionInboxTranscriptMessageSnapshot,
@@ -242,6 +243,22 @@ function draft(index: number): ConversionInboxDraftSnapshot {
   });
 }
 
+function railActivity(index: number): ConversionInboxRailActivitySnapshot | null {
+  const states = ['accepted', 'queued', 'attention', 'reconciled'] as const;
+  const state = states[index];
+  if (!state) return null;
+  return Object.freeze({
+    state,
+    correlationId: `91000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+    occurredAt: [
+      '2026-08-26T08:36:00.000Z',
+      '2026-08-26T08:31:00.000Z',
+      '2026-08-26T08:07:00.000Z',
+      '2026-08-26T08:18:00.000Z',
+    ][index]!,
+  });
+}
+
 function thread(person: typeof PEOPLE[number], index: number): ConversionInboxThreadSnapshot {
   return Object.freeze({
     conversationId: person.conversationId,
@@ -250,6 +267,7 @@ function thread(person: typeof PEOPLE[number], index: number): ConversionInboxTh
     lead: lead(person),
     consents: consent(person),
     draft: draft(index),
+    railActivity: railActivity(index),
   });
 }
 

@@ -12,6 +12,7 @@ import {
   type ConversionInboxDeliveryState,
   type ConversionInboxDraftSnapshot,
   type ConversionInboxLeadSnapshot,
+  type ConversionInboxRailActivitySnapshot,
   type ConversionInboxThreadSnapshot,
   type ConversionInboxTranscriptMessageSnapshot,
 } from './conversion-inbox-presenter.js';
@@ -24,6 +25,14 @@ const APPROVAL_STATES = new Set(['approved', 'rejected', 'changes_requested']);
 const DELIVERY_STATES = new Set([
   'queued', 'sending', 'accepted', 'delivered', 'read', 'failed',
   'reconciliation_required', 'cancelled',
+]);
+const OPERATION_STATES = new Set([
+  'queued', 'leased', 'calling', 'retry_wait', 'accepted', 'succeeded',
+  'failed', 'reconciliation_required', 'dead_letter', 'cancelled',
+]);
+const ATTEMPT_KINDS = new Set(['dispatch', 'reconcile']);
+const ATTEMPT_STATES = new Set([
+  'leased', 'calling', 'accepted', 'pending', 'succeeded', 'failed', 'needs_attention',
 ]);
 const CONSENT_STATES = new Set(['granted', 'denied', 'withdrawn']);
 const CONSENT_CHANNELS = new Set(['email', 'sms', 'whatsapp', 'social']);
@@ -60,6 +69,12 @@ interface ThreadCoreRow extends QueryResultRow {
   deliveryStatus: string | null;
   deliveryPurpose: string | null;
   consentPurpose: string | null;
+  railDeliveryStatus: string | null;
+  railOperationState: string | null;
+  railCorrelationId: string | null;
+  railAttemptKind: string | null;
+  railAttemptState: string | null;
+  railOccurredAt: string | Date | null;
 }
 
 interface TranscriptRow extends QueryResultRow {
@@ -105,7 +120,13 @@ SELECT conversation.id AS "conversationId",
        approval.approval_note AS "approvalNote",
        draft_delivery.status AS "deliveryStatus",
        draft_delivery.purpose AS "deliveryPurpose",
-       current_consent.purpose AS "consentPurpose"
+       current_consent.purpose AS "consentPurpose",
+       rail_activity.delivery_status AS "railDeliveryStatus",
+       rail_activity.operation_state AS "railOperationState",
+       rail_activity.correlation_id AS "railCorrelationId",
+       rail_activity.attempt_kind AS "railAttemptKind",
+       rail_activity.attempt_state AS "railAttemptState",
+       rail_activity.occurred_at AS "railOccurredAt"
 FROM app.conversations AS conversation
 JOIN app.contacts AS contact
   ON contact.workspace_id = conversation.workspace_id
@@ -270,6 +291,47 @@ LEFT JOIN LATERAL (
   ORDER BY delivery.updated_at DESC, delivery.id DESC
   LIMIT 1
 ) AS draft_delivery ON true
+LEFT JOIN LATERAL (
+  SELECT delivery.status AS delivery_status,
+         operation.state AS operation_state,
+         operation.correlation_id,
+         latest_attempt.attempt_kind,
+         latest_attempt.state AS attempt_state,
+         greatest(
+           operation.updated_at,
+           delivery.updated_at,
+           coalesce(
+             latest_attempt.completed_at,
+             latest_attempt.started_at,
+             operation.updated_at
+           )
+         ) AS occurred_at
+  FROM app.message_deliveries AS delivery
+  JOIN app.provider_operations AS operation
+    ON operation.workspace_id = delivery.workspace_id
+   AND operation.id = delivery.provider_operation_id
+   AND operation.message_delivery_id = delivery.id
+   AND operation.environment = delivery.environment
+  JOIN app.provider_connections AS rail_connection
+    ON rail_connection.workspace_id = operation.workspace_id
+   AND rail_connection.id = operation.provider_connection_id
+   AND rail_connection.environment = operation.environment
+   AND rail_connection.provider_id = 'test_conversation'
+  LEFT JOIN LATERAL (
+    SELECT attempt.attempt_kind, attempt.state,
+           attempt.completed_at, attempt.started_at
+    FROM app.provider_operation_attempts AS attempt
+    WHERE attempt.workspace_id = operation.workspace_id
+      AND attempt.provider_operation_id = operation.id
+    ORDER BY attempt.attempt_number DESC, attempt.id DESC
+    LIMIT 1
+  ) AS latest_attempt ON true
+  WHERE delivery.workspace_id = conversation.workspace_id
+    AND delivery.conversation_id = conversation.id
+    AND delivery.environment = 'test'
+  ORDER BY operation.updated_at DESC, delivery.updated_at DESC, delivery.id DESC
+  LIMIT 1
+) AS rail_activity ON true
 LEFT JOIN LATERAL (
   SELECT consent.purpose
   FROM app.communication_consent_events AS consent
@@ -589,6 +651,59 @@ function mapDraft(row: ThreadCoreRow): ConversionInboxDraftSnapshot {
   });
 }
 
+function mapRailActivity(row: ThreadCoreRow): ConversionInboxRailActivitySnapshot | null {
+  const fields = [
+    row.railDeliveryStatus,
+    row.railOperationState,
+    row.railCorrelationId,
+    row.railAttemptKind,
+    row.railAttemptState,
+    row.railOccurredAt,
+  ];
+  if (fields.every((value) => value === null)) return null;
+  if (row.railDeliveryStatus === null || row.railOperationState === null
+      || row.railCorrelationId === null || row.railOccurredAt === null
+      || !DELIVERY_STATES.has(row.railDeliveryStatus)
+      || !OPERATION_STATES.has(row.railOperationState)
+      || ((row.railAttemptKind === null) !== (row.railAttemptState === null))
+      || (row.railAttemptKind !== null && !ATTEMPT_KINDS.has(row.railAttemptKind))
+      || (row.railAttemptState !== null && !ATTEMPT_STATES.has(row.railAttemptState))) {
+    throw new Error('Conversion Inbox TEST rail activity is invalid');
+  }
+
+  const needsAttention = ['failed', 'reconciliation_required', 'cancelled']
+    .includes(row.railDeliveryStatus)
+    || ['failed', 'reconciliation_required', 'dead_letter', 'cancelled']
+      .includes(row.railOperationState);
+  let state: ConversionInboxRailActivitySnapshot['state'];
+  if (needsAttention) {
+    state = 'attention';
+  } else if (row.railAttemptKind === 'reconcile'
+      && ['accepted', 'succeeded'].includes(row.railAttemptState ?? '')
+      && ['accepted', 'succeeded'].includes(row.railOperationState)
+      && ['accepted', 'delivered', 'read'].includes(row.railDeliveryStatus)) {
+    state = 'reconciled';
+  } else if (['accepted', 'delivered', 'read'].includes(row.railDeliveryStatus)
+      && ['accepted', 'succeeded'].includes(row.railOperationState)
+      && row.railAttemptKind === 'dispatch'
+      && ['accepted', 'succeeded'].includes(row.railAttemptState ?? '')) {
+    state = 'accepted';
+  } else if (['queued', 'sending'].includes(row.railDeliveryStatus)
+      && ['queued', 'leased', 'calling', 'retry_wait'].includes(row.railOperationState)
+      && (row.railAttemptState === null
+        || ['leased', 'calling', 'failed'].includes(row.railAttemptState))) {
+    state = 'queued';
+  } else {
+    throw new Error('Conversion Inbox TEST rail activity is inconsistent');
+  }
+
+  return Object.freeze({
+    state,
+    correlationId: uuid(row.railCorrelationId, 'railCorrelationId'),
+    occurredAt: timestamp(row.railOccurredAt, 'railOccurredAt'),
+  });
+}
+
 function mapTranscript(
   rows: readonly TranscriptRow[],
   displayName: string,
@@ -700,6 +815,7 @@ export class PgConversionInboxThreadReadService implements ConversionInboxThread
         lead,
         consents: mapConsents(consentResult.rows),
         draft: mapDraft(core),
+        railActivity: mapRailActivity(core),
       });
     }, { readOnly: true, isolation: 'repeatable read' });
   }

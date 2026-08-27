@@ -1,5 +1,3 @@
-import '../config.js';
-
 export const DATABASE_ROLES = [
   'migrator',
   'web',

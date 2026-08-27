@@ -55,6 +55,8 @@ test('renders a dense Predator-branded omnichannel conversion workspace', () => 
   assert.match(html, /Journey stage/);
   assert.match(html, /Lead score/);
   assert.match(html, /North Star Network/);
+  assert.match(html, /aria-label="TEST rail activity: Simulator accepted"/);
+  assert.match(html, /Trace TEST 91000000…0001/);
 });
 
 test('makes the test and simulation boundary impossible to miss', () => {
@@ -68,6 +70,28 @@ test('makes the test and simulation boundary impossible to miss', () => {
   assert.match(html, /cannot contact anyone or invoke a live provider/);
   assert.doesNotMatch(html, /\bmessage sent\b|\bsent successfully\b|\bsuccessfully delivered\b|data-environment="live"/i);
   assert.doesNotMatch(html, /action="[^"]*(?:send|deliver|publish)/i);
+  assert.doesNotMatch(html, /91000000-0000-4000-8000-000000000001/);
+});
+
+test('shows truthful queued, accepted, reconciled, attention and empty TEST rail states', () => {
+  const fixture = createPropertyPredatorTestInboxSnapshot();
+  const cases = [
+    ['email', 'accepted', 'Simulator accepted'],
+    ['whatsapp', 'queued', 'Queued for simulator'],
+    ['instagram', 'attention', 'Needs attention'],
+    ['sms', 'reconciled', 'Reconciled'],
+  ] as const;
+  for (const [channel, state, label] of cases) {
+    const html = render(fixture, { channel });
+    assert.match(html, new RegExp(`data-rail-state="${state}"`));
+    assert.match(html, new RegExp(`>${label}<`));
+    assert.match(html, /TEST rail/);
+    assert.match(html, /Last change <time datetime=/);
+  }
+  const empty = render(fixture, { channel: 'facebook' });
+  assert.match(empty, /data-rail-state="none"/);
+  assert.match(empty, /No operation recorded/);
+  assert.match(empty, /Nothing is queued for this conversation/);
 });
 
 test('renders all five channel controls and real fictional test queue fixtures', () => {
@@ -183,10 +207,13 @@ test('uses semantic landmarks, associated controls and touch-size targets', () =
   assert.match(html, />Save new immutable version<\/button>/);
   assert.match(html, />Request human approval<\/button>/);
   assert.match(html, /role="status" aria-live="polite"/);
+  assert.match(html, /aria-label="TEST rail activity/);
   assert.match(html, /\.ci-field input,.ci-field select\{[^}]*height:44px/);
   assert.match(html, /\.ci-draft-actions button,.ci-review-actions button\{[^}]*min-height:44px/);
   assert.match(html, /@media\(max-width:840px\)/);
   assert.match(html, /@media\(max-width:560px\)/);
+  assert.match(html, /\.ci-rail-activity\{display:grid;grid-template-columns:auto minmax\(0,1fr\)/);
+  assert.match(html, /\.ci-rail-activity\{grid-template-columns:auto minmax\(0,1fr\);align-items:start/);
   assert.match(html, /@media\(prefers-reduced-motion:reduce\)/);
   assert.match(html, /@media\(forced-colors:active\)/);
 });

@@ -373,6 +373,10 @@ test('Conversion Inbox passes bounded filters, loads only the selected visible t
   assert.match(result.body, /TEST \/ SIMULATED/);
   assert.match(result.body, /Contact records may be workspace CRM data/);
   assert.match(result.body, /no message here has contacted anyone/);
+  assert.match(result.body, /aria-label="TEST rail activity: Queued for simulator"/);
+  assert.match(result.body, /data-rail-state="queued"/);
+  assert.match(result.body, /Trace TEST 91000000…0002/);
+  assert.doesNotMatch(result.body, /91000000-0000-4000-8000-000000000002/);
   assert.match(result.body, /href="\/portal\/inbox" aria-current="page"/);
   assert.doesNotMatch(result.body, /action="[^"]*(?:send|deliver|publish)/i);
   assert.deepEqual(queries, [{

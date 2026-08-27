@@ -37,6 +37,11 @@ export type ConversionInboxDeliveryState =
   | 'delivered'
   | 'read'
   | 'failed';
+export type ConversionInboxRailActivityState =
+  | 'queued'
+  | 'accepted'
+  | 'reconciled'
+  | 'attention';
 
 export interface ConversionInboxFilterInput {
   readonly query?: unknown;
@@ -93,6 +98,14 @@ export interface ConversionInboxDraftSnapshot {
   readonly purpose: string;
 }
 
+export interface ConversionInboxRailActivitySnapshot {
+  /** Coarse operator state projected from durable TEST delivery/operation evidence. */
+  readonly state: ConversionInboxRailActivityState;
+  /** Opaque UUID used to correlate this TEST operation without exposing provider data. */
+  readonly correlationId: string;
+  readonly occurredAt: string;
+}
+
 export interface ConversionInboxThreadSnapshot {
   readonly conversationId: string;
   readonly contactPointId: string | null;
@@ -100,6 +113,7 @@ export interface ConversionInboxThreadSnapshot {
   readonly lead: ConversionInboxLeadSnapshot;
   readonly consents: readonly ConversionInboxConsentSnapshot[];
   readonly draft: ConversionInboxDraftSnapshot;
+  readonly railActivity: ConversionInboxRailActivitySnapshot | null;
 }
 
 export interface ConversionInboxSnapshot {
@@ -146,6 +160,12 @@ export interface ConversionInboxDraftView extends ConversionInboxDraftSnapshot {
   readonly gateDetail: string;
 }
 
+export interface ConversionInboxRailActivityView extends ConversionInboxRailActivitySnapshot {
+  readonly label: string;
+  readonly detail: string;
+  readonly correlationLabel: string;
+}
+
 export interface ConversionInboxSelectedThreadView {
   readonly summary: ConversionInboxQueueItemView;
   readonly contactPointId: string | null;
@@ -154,6 +174,7 @@ export interface ConversionInboxSelectedThreadView {
   readonly transcriptTruncated: boolean;
   readonly consents: readonly ConversionInboxConsentView[];
   readonly draft: ConversionInboxDraftView;
+  readonly railActivity: ConversionInboxRailActivityView | null;
 }
 
 export interface ConversionInboxChannelMetricView {
@@ -387,6 +408,36 @@ function draftView(
   });
 }
 
+function railActivityView(
+  activity: ConversionInboxRailActivitySnapshot | null,
+): ConversionInboxRailActivityView | null {
+  if (activity === null || !UUID.test(activity.correlationId)) return null;
+  const occurredAt = new Date(activity.occurredAt);
+  if (!Number.isFinite(occurredAt.getTime())) return null;
+  const correlationId = activity.correlationId.toLowerCase();
+  const labels: Readonly<Record<ConversionInboxRailActivityState, string>> = Object.freeze({
+    queued: 'Queued for simulator',
+    accepted: 'Simulator accepted',
+    reconciled: 'Reconciled',
+    attention: 'Needs attention',
+  });
+  const details: Readonly<Record<ConversionInboxRailActivityState, string>> = Object.freeze({
+    queued: 'Waiting for the non-routable TEST worker.',
+    accepted: 'A simulator response is durably recorded.',
+    reconciled: 'The TEST outcome was reconciled and durably recorded.',
+    attention: 'The TEST operation needs an operator decision.',
+  });
+  if (!Object.hasOwn(labels, activity.state)) return null;
+  return Object.freeze({
+    state: activity.state,
+    correlationId,
+    occurredAt: occurredAt.toISOString(),
+    label: labels[activity.state],
+    detail: details[activity.state],
+    correlationLabel: `TEST ${correlationId.slice(0, 8)}…${correlationId.slice(-4)}`,
+  });
+}
+
 function selectedThread(
   summary: ConversionInboxQueueItemView,
   snapshot: ConversionInboxThreadSnapshot,
@@ -416,6 +467,7 @@ function selectedThread(
     transcriptTruncated: snapshot.messages.length > sourceMessages.length,
     consents,
     draft: draftView(snapshot.draft, consents, summary),
+    railActivity: railActivityView(snapshot.railActivity),
   });
 }
 

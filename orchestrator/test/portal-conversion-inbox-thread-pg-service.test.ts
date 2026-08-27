@@ -18,6 +18,7 @@ const DRAFT = '77777777-7777-4777-8777-777777777777';
 const APPROVAL = '88888888-8888-4888-8888-888888888888';
 const NEWER_DRAFT = '99999999-9999-4999-8999-999999999999';
 const DRAFT_POINT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const CORRELATION = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
 function result<TRow extends QueryResultRow>(rows: TRow[]): QueryResult<TRow> {
   return { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] };
@@ -56,6 +57,12 @@ function core(overrides: Record<string, unknown> = {}): QueryResultRow {
     deliveryStatus: null,
     deliveryPurpose: null,
     consentPurpose: 'property_predator_follow_up',
+    railDeliveryStatus: null,
+    railOperationState: null,
+    railCorrelationId: null,
+    railAttemptKind: null,
+    railAttemptState: null,
+    railOccurredAt: null,
     ...overrides,
   };
 }
@@ -160,6 +167,7 @@ test('PostgreSQL thread projection is session-guarded, bounded and maps exact TE
     approvalRequestId: APPROVAL,
     purpose: 'property_predator_follow_up',
   });
+  assert.equal(snapshot.railActivity, null);
   assert.ok(Object.isFrozen(snapshot));
   assert.ok(Object.isFrozen(snapshot.messages));
   assert.equal(JSON.stringify(snapshot).includes('@'), false);
@@ -174,6 +182,85 @@ test('PostgreSQL thread projection is session-guarded, bounded and maps exact TE
   assert.deepEqual(transcript.values, [CONVERSATION, 81]);
   const consent = client.calls.find((call) => call.sql.includes('thread-consent'))!;
   assert.deepEqual(consent.values, [CONVERSATION, POINT, 8]);
+});
+
+test('thread projection reduces durable TEST operations to queued, accepted, reconciled or attention', async () => {
+  const cases = [
+    {
+      expected: 'queued',
+      row: { railDeliveryStatus: 'queued', railOperationState: 'queued',
+        railAttemptKind: null, railAttemptState: null },
+    },
+    {
+      expected: 'queued',
+      row: { railDeliveryStatus: 'queued', railOperationState: 'retry_wait',
+        railAttemptKind: 'dispatch', railAttemptState: 'failed' },
+    },
+    {
+      expected: 'accepted',
+      row: { railDeliveryStatus: 'accepted', railOperationState: 'succeeded',
+        railAttemptKind: 'dispatch', railAttemptState: 'succeeded' },
+    },
+    {
+      expected: 'reconciled',
+      row: { railDeliveryStatus: 'accepted', railOperationState: 'succeeded',
+        railAttemptKind: 'reconcile', railAttemptState: 'succeeded' },
+    },
+    {
+      expected: 'attention',
+      row: { railDeliveryStatus: 'reconciliation_required',
+        railOperationState: 'reconciliation_required', railAttemptKind: 'dispatch',
+        railAttemptState: 'needs_attention' },
+    },
+  ] as const;
+
+  for (const item of cases) {
+    const client = new ThreadReadClient();
+    client.coreRows = [core({
+      ...item.row,
+      railCorrelationId: CORRELATION,
+      railOccurredAt: new Date('2026-08-26T09:06:00.000Z'),
+    })];
+    const service = new PgConversionInboxThreadReadService({
+      connect: async () => client,
+    } as unknown as Pick<Pool, 'connect'>);
+
+    const snapshot = await service.thread(context, CONVERSATION);
+
+    assert.deepEqual(snapshot?.railActivity, {
+      state: item.expected,
+      correlationId: CORRELATION,
+      occurredAt: '2026-08-26T09:06:00.000Z',
+    });
+    const sql = client.calls.find((call) => call.sql.includes('thread-core'))!.sql;
+    assert.match(sql, /operation\.correlation_id/);
+    assert.match(sql, /latest_attempt\.attempt_kind/);
+    assert.match(sql, /JOIN app\.provider_connections AS rail_connection/);
+    assert.match(sql, /rail_connection\.provider_id = 'test_conversation'/);
+    assert.match(sql, /delivery\.environment = 'test'/);
+    assert.doesNotMatch(sql, /operation\.provider_reference|operation\.last_summary|operation\.last_error_code/);
+  }
+});
+
+test('thread projection rejects partial or contradictory TEST rail evidence', async () => {
+  const client = new ThreadReadClient();
+  const service = new PgConversionInboxThreadReadService({
+    connect: async () => client,
+  } as unknown as Pick<Pool, 'connect'>);
+
+  client.coreRows = [core({
+    railDeliveryStatus: 'accepted', railOperationState: 'succeeded',
+    railCorrelationId: null, railAttemptKind: 'dispatch', railAttemptState: 'succeeded',
+    railOccurredAt: new Date('2026-08-26T09:06:00.000Z'),
+  })];
+  await assert.rejects(service.thread(context, CONVERSATION), /rail activity is invalid/i);
+
+  client.coreRows = [core({
+    railDeliveryStatus: 'queued', railOperationState: 'succeeded',
+    railCorrelationId: CORRELATION, railAttemptKind: 'dispatch', railAttemptState: 'succeeded',
+    railOccurredAt: new Date('2026-08-26T09:06:00.000Z'),
+  })];
+  await assert.rejects(service.thread(context, CONVERSATION), /rail activity is inconsistent/i);
 });
 
 test('thread projection uses only the exact endpoint current consent and suppression evidence', async () => {

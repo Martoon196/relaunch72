@@ -98,6 +98,14 @@ export function createMailgunWebhookCommandDatabasePool(
   return createDatabasePool(loadDatabaseConfig('mailgunWebhookCommand', env), hooks);
 }
 
+/** Function-only pool for the isolated provider-operation worker. */
+export function createWorkerDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('worker', env), hooks);
+}
+
 /** Function-only pool for authenticated evidence and conversion projection. */
 export function createWebhookDatabasePool(
   env: NodeJS.ProcessEnv = process.env,

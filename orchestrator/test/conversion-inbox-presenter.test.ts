@@ -43,6 +43,14 @@ test('projects the canonical inbox page into a channel-aware conversion queue', 
   assert.equal(view.selectedThread?.summary.channel, 'email');
   assert.equal(view.selectedThread?.draft.approvalLabel, 'Approval pending');
   assert.equal(view.selectedThread?.draft.mayQueueTestOperation, false);
+  assert.deepEqual(view.selectedThread?.railActivity, {
+    state: 'accepted',
+    correlationId: '91000000-0000-4000-8000-000000000001',
+    occurredAt: '2026-08-26T08:36:00.000Z',
+    label: 'Simulator accepted',
+    detail: 'A simulator response is durably recorded.',
+    correlationLabel: 'TEST 91000000…0001',
+  });
 });
 
 test('filters loaded summaries without inventing data outside InboxConversationPage', () => {
@@ -55,6 +63,7 @@ test('filters loaded summaries without inventing data outside InboxConversationP
   assert.equal(whatsapp.selectedThread?.draft.exactApproval, true);
   assert.equal(whatsapp.selectedThread?.draft.deliveryLabel, 'TEST queue only');
   assert.equal(whatsapp.selectedThread?.draft.mayQueueTestOperation, false);
+  assert.equal(whatsapp.selectedThread?.railActivity?.state, 'queued');
 
   const query = presentConversionInbox(snapshot, {
     workspaceName: WORKSPACE,
@@ -67,6 +76,44 @@ test('filters loaded summaries without inventing data outside InboxConversationP
     filters: { queue: 'approval' },
   });
   assert.deepEqual(approvals.conversations.map((item) => item.contactName), ['Aisha Rahman']);
+});
+
+test('projects only coarse TEST rail activity and an opaque correlation label', () => {
+  const snapshot = createPropertyPredatorTestInboxSnapshot();
+  const expected = new Map([
+    ['email', 'accepted'],
+    ['whatsapp', 'queued'],
+    ['instagram', 'attention'],
+    ['sms', 'reconciled'],
+    ['facebook', undefined],
+  ]);
+  for (const [channel, state] of expected) {
+    const view = presentConversionInbox(snapshot, {
+      workspaceName: WORKSPACE,
+      filters: { channel },
+    });
+    assert.equal(view.selectedThread?.railActivity?.state, state);
+    if (state) {
+      assert.match(view.selectedThread?.railActivity?.correlationLabel ?? '', /^TEST [0-9a-f]{8}…[0-9a-f]{4}$/);
+    }
+  }
+});
+
+test('drops inherited or malformed TEST rail state names at the presenter boundary', () => {
+  const base = createPropertyPredatorTestInboxSnapshot();
+  const thread = base.threads[0]!;
+  const snapshot = {
+    ...base,
+    threads: [{
+      ...thread,
+      railActivity: {
+        ...thread.railActivity!,
+        state: 'constructor',
+      },
+    }, ...base.threads.slice(1)],
+  } as unknown as ConversionInboxSnapshot;
+  const view = presentConversionInbox(snapshot, { workspaceName: WORKSPACE });
+  assert.equal(view.selectedThread?.railActivity, null);
 });
 
 test('a loaded exact thread overrides stale summary approval state in either direction', () => {

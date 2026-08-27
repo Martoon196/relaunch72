@@ -195,6 +195,9 @@ export async function assertSchemaCurrent(
 }
 
 async function main(): Promise<void> {
+  // CLI convenience only. Library consumers (especially isolated workers)
+  // must not load a repository .env file as an import side effect.
+  await import('../config.js');
   const config = loadDatabaseConfig('migrator');
   const pool = createDatabasePool(config);
   try {
