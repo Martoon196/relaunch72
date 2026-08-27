@@ -90,6 +90,15 @@ export interface CrmTimelineItemView {
   occurredAt: string;
 }
 
+export interface CrmCollectionPageView {
+  /** True only when a validated cursor selected a continuation page. */
+  continuation: boolean;
+  hasNextPage: boolean;
+  /** Opaque, session-bound token. It is never parsed or trusted by this view. */
+  nextCursor: string | null;
+  pageSize: number;
+}
+
 export interface CrmWorkspaceSnapshot {
   workspace: CrmWorkspaceView;
   contacts: readonly CrmContactView[];
@@ -97,6 +106,11 @@ export interface CrmWorkspaceSnapshot {
   opportunities: readonly CrmOpportunityView[];
   tasks: readonly CrmTaskView[];
   timeline: readonly CrmTimelineItemView[];
+  pagination?: Readonly<{
+    contacts?: CrmCollectionPageView;
+    pipeline?: CrmCollectionPageView;
+    tasks?: CrmCollectionPageView;
+  }>;
 }
 
 export type CreateLeadField = 'display_name' | 'company_name' | 'email' | 'phone' |
@@ -154,10 +168,10 @@ export const CRM_PORTAL_STYLE = `
   .crm-empty{border:1px dashed var(--line-strong);border-radius:12px;background:var(--panel-subtle);padding:25px 18px;text-align:center}.crm-empty .icon{width:24px;height:24px;color:var(--faint);margin-bottom:8px}.crm-empty strong{display:block;font-size:.79rem}.crm-empty p{max-width:440px;margin:5px auto 0;color:var(--muted);font-size:.7rem}.crm-unavailable{border:1px solid #efd09a;border-radius:11px;background:var(--accent-soft);padding:13px;color:#71430d;font-size:.72rem}
   .crm-board-intro{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}.crm-board-help{max-width:640px;color:var(--muted);font-size:.71rem;margin:0}.crm-board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(286px,1fr);gap:12px;overflow-x:auto;padding:2px 2px 13px;scroll-snap-type:x proximity;scrollbar-color:var(--line-strong) transparent}.crm-stage-column{scroll-snap-align:start;border:1px solid var(--line);border-radius:14px;background:var(--panel-subtle);padding:10px;min-height:220px}.crm-stage-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 3px 11px;border-bottom:3px solid var(--stage-tone,var(--line-strong))}.crm-stage-head h2{font-size:.78rem;margin:0}.crm-stage-total{font:800 .62rem var(--mono);color:var(--muted)}.crm-stage-cards{display:grid;gap:9px;padding-top:10px}.crm-stage-tone-0{--stage-tone:#4d7fbd}.crm-stage-tone-1{--stage-tone:#9b70b7}.crm-stage-tone-2{--stage-tone:#d18b2f}.crm-stage-tone-3{--stage-tone:#158063}.crm-stage-tone-4{--stage-tone:#b45555}.crm-stage-tone-5{--stage-tone:#657187}.crm-opportunity{border:1px solid var(--line);border-radius:11px;background:var(--panel);padding:12px;box-shadow:0 1px 3px rgba(16,24,39,.04)}.crm-opportunity h3{font-size:.78rem;line-height:1.4;margin:0 0 5px}.crm-opportunity-contact{font-size:.69rem;color:var(--muted);margin-bottom:10px}.crm-opportunity-meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-bottom:11px}.crm-meta-item{border-radius:8px;background:var(--panel-subtle);padding:7px}.crm-meta-item span{display:block;color:var(--faint);font:700 .62rem var(--mono);letter-spacing:.04em;text-transform:uppercase}.crm-meta-item strong{display:block;margin-top:3px;font-size:.7rem;font-weight:730;overflow-wrap:anywhere}.crm-move-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;align-items:end;padding-top:10px;border-top:1px solid var(--line)}.crm-move-field label{display:block;color:var(--faint);font:700 .62rem var(--mono);letter-spacing:.04em;text-transform:uppercase;margin-bottom:5px}.crm-move-field select{width:100%;height:36px;border:1px solid var(--line-strong);border-radius:9px;background:#fff;color:var(--ink);padding:5px 8px;font-size:.69rem}.crm-move-form .button{min-height:36px;padding:7px 10px;font-size:.69rem}.crm-card-note{margin:9px 0 0;color:var(--faint);font-size:.64rem}.crm-stage-empty{padding:20px 8px;text-align:center;color:var(--faint);font-size:.67rem}.crm-board-empty{padding:34px 18px}
   .crm-board:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
-  .crm-filterbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.crm-filterlinks{display:flex;gap:5px;padding:4px;border:1px solid var(--line);border-radius:11px;background:var(--panel-subtle)}.crm-filterlinks a{min-height:32px;display:inline-flex;align-items:center;padding:6px 10px;border-radius:8px;color:var(--muted);font-size:.67rem;font-weight:740}.crm-filterlinks a[aria-current="page"]{background:var(--panel);color:var(--ink);box-shadow:var(--shadow-sm)}.crm-task-list,.crm-timeline{list-style:none;margin:0;padding:0;display:grid;gap:9px}.crm-task{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center;border:1px solid var(--line);border-radius:11px;background:var(--panel-subtle);padding:12px}.crm-task h3{font-size:.77rem;margin:0 0 4px}.crm-task-context{color:var(--muted);font-size:.67rem;margin:0}.crm-task-meta{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:8px}.crm-task-status,.crm-due-state{display:inline-flex;border:1px solid var(--line);border-radius:999px;background:var(--panel);padding:3px 7px;color:var(--muted);font:750 .6rem var(--mono);letter-spacing:.035em;text-transform:uppercase}.crm-task-status.completed{border-color:#b9dfd1;background:var(--success-soft);color:var(--success)}.crm-due-state.overdue{border-color:#edc1be;background:var(--danger-soft);color:var(--danger)}.crm-complete-form{text-align:right}.crm-complete-form .button{white-space:nowrap}.crm-complete-form p{max-width:180px;margin:6px 0 0;color:var(--faint);font-size:.64rem;text-align:right}
+  .crm-filterbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.crm-filterlinks{display:flex;gap:5px;padding:4px;border:1px solid var(--line);border-radius:11px;background:var(--panel-subtle)}.crm-filterlinks a{min-height:32px;display:inline-flex;align-items:center;padding:6px 10px;border-radius:8px;color:var(--muted);font-size:.67rem;font-weight:740}.crm-filterlinks a[aria-current="page"]{background:var(--panel);color:var(--ink);box-shadow:var(--shadow-sm)}.crm-pagination{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;margin-top:16px;padding-top:14px;border-top:1px solid var(--line);color:var(--faint);font-size:.64rem}.crm-pagination>*:last-child{justify-self:end}.crm-page-end{color:var(--faint)}.crm-task-list,.crm-timeline{list-style:none;margin:0;padding:0;display:grid;gap:9px}.crm-task{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center;border:1px solid var(--line);border-radius:11px;background:var(--panel-subtle);padding:12px}.crm-task h3{font-size:.77rem;margin:0 0 4px}.crm-task-context{color:var(--muted);font-size:.67rem;margin:0}.crm-task-meta{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:8px}.crm-task-status,.crm-due-state{display:inline-flex;border:1px solid var(--line);border-radius:999px;background:var(--panel);padding:3px 7px;color:var(--muted);font:750 .6rem var(--mono);letter-spacing:.035em;text-transform:uppercase}.crm-task-status.completed{border-color:#b9dfd1;background:var(--success-soft);color:var(--success)}.crm-due-state.overdue{border-color:#edc1be;background:var(--danger-soft);color:var(--danger)}.crm-complete-form{text-align:right}.crm-complete-form .button{white-space:nowrap}.crm-complete-form p{max-width:180px;margin:6px 0 0;color:var(--faint);font-size:.64rem;text-align:right}
   .crm-timeline-item{display:grid;grid-template-columns:30px minmax(0,1fr);gap:9px;position:relative}.crm-timeline-item:not(:last-child)::after{content:"";position:absolute;left:14px;top:30px;bottom:-9px;border-left:1px solid var(--line)}.crm-timeline-mark{position:relative;z-index:1;width:30px;height:30px;border:1px solid var(--line);border-radius:9px;background:var(--panel-subtle);display:grid;place-items:center;color:var(--muted);font:800 .68rem var(--mono)}.crm-timeline-copy{padding:4px 0 8px}.crm-timeline-copy p{font-size:.69rem;margin:0 0 3px}.crm-timeline-copy small{display:block;color:var(--faint);font-size:.61rem}.crm-visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
   @media(max-width:1080px){.crm-layout{grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr)}.crm-table .crm-optional-column{display:none}}
-  @media(max-width:820px){.crm-layout{grid-template-columns:1fr}.crm-board{grid-auto-columns:minmax(270px,82vw)}.crm-board-intro{display:block}.crm-board-help{margin-top:7px}.crm-task{grid-template-columns:1fr}.crm-complete-form{text-align:left}.crm-complete-form p{text-align:left;max-width:none}}
+  @media(max-width:820px){.crm-layout{grid-template-columns:1fr}.crm-board{grid-auto-columns:minmax(270px,82vw)}.crm-board-intro{display:block}.crm-board-help{margin-top:7px}.crm-task{grid-template-columns:1fr}.crm-complete-form{text-align:left}.crm-complete-form p{text-align:left;max-width:none}.crm-pagination{grid-template-columns:1fr 1fr}.crm-pagination>span:nth-child(2){display:none}}
   @media(max-width:640px){.crm-page{gap:15px}.crm-panel-head{padding:15px 14px 11px}.crm-panel-body{padding:0 14px 14px}.crm-field-grid{grid-template-columns:1fr}.crm-field.full{grid-column:auto}.crm-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}.crm-table,.crm-table tbody,.crm-table tr,.crm-table td{display:block;width:100%}.crm-table tr{padding:10px 0;border-bottom:1px solid var(--line)}.crm-table tr:last-child{border-bottom:0}.crm-table td{display:grid;grid-template-columns:94px 1fr;gap:9px;border:0;padding:4px 0}.crm-table td::before{content:attr(data-label);color:var(--faint);font:700 .6rem var(--mono);letter-spacing:.05em;text-transform:uppercase}.crm-table .crm-optional-column{display:grid}.crm-board{grid-auto-columns:minmax(260px,88vw)}.crm-move-form{grid-template-columns:1fr}.crm-move-form .button{width:100%}.crm-subnav a{padding-inline:10px}.crm-filterbar{align-items:stretch}.crm-filterlinks{width:100%;display:grid;grid-template-columns:repeat(3,1fr)}.crm-filterlinks a{justify-content:center}}
   @media(forced-colors:active){.crm-subnav a[aria-current="page"],.crm-notice,.crm-stage-column,.crm-opportunity,.crm-task{border:1px solid CanvasText}.crm-stage-head{border-bottom-color:CanvasText}.crm-field [aria-invalid="true"]{outline:2px solid Mark}}
 `;
@@ -314,6 +328,30 @@ function emptyState(iconName: 'contacts' | 'pipeline' | 'calendar' | 'activity',
   return `<div class="crm-empty${extraClass ? ` ${extraClass}` : ''}" role="status">${icon(iconName)}<strong>${escapeHtml(title)}</strong><p>${escapeHtml(message)}</p></div>`;
 }
 
+function collectionCount(shown: number, page: CrmCollectionPageView | undefined): string {
+  return `${count(shown)}${page?.hasNextPage ? '+' : ''}`;
+}
+
+function collectionPagination(
+  page: CrmCollectionPageView | undefined,
+  route: string,
+  preserved: Readonly<Record<string, string>> = {},
+): string {
+  if (!page || (!page.continuation && !page.hasNextPage)) return '';
+  const firstQuery = new URLSearchParams(preserved);
+  const firstHref = firstQuery.size > 0 ? `${route}?${firstQuery.toString()}` : route;
+  const nextQuery = new URLSearchParams(preserved);
+  if (page.nextCursor) nextQuery.set('after', page.nextCursor);
+  const nextHref = `${route}?${nextQuery.toString()}`;
+  const first = page.continuation
+    ? `<a class="button secondary compact" href="${escapeHtml(firstHref)}">First page</a>`
+    : '<span></span>';
+  const next = page.hasNextPage && page.nextCursor
+    ? `<a class="button secondary compact" rel="next" href="${escapeHtml(nextHref)}">Next ${count(page.pageSize)}</a>`
+    : '<span class="crm-page-end">End of saved records</span>';
+  return `<nav class="crm-pagination" aria-label="Saved record pages">${first}<span>Showing ${count(page.pageSize)} or fewer records per page</span>${next}</nav>`;
+}
+
 function primaryReach(contact: CrmContactView): string {
   const email = contact.primaryEmail?.trim();
   const phone = contact.primaryPhone?.trim();
@@ -417,12 +455,13 @@ function timelinePanel(snapshot: CrmWorkspaceSnapshot): string {
 
 /** Renders the Contacts + Create lead body fragment for the shared portal shell. */
 export function renderCrmContactsBody(snapshot: CrmWorkspaceSnapshot, options: ContactsPageOptions): string {
+  const contactPage = snapshot.pagination?.contacts;
   return `${styleElement()}<div class="crm-page" data-crm-page="contacts">
     ${pageHeading(snapshot.workspace, 'contacts', 'Contacts', 'Create and review the people and companies held inside this private workspace.', snapshot.workspace.canWrite ? { href: '#crm-create-lead', label: 'Create a lead' } : undefined)}
     ${crmNav('contacts')}
     ${notice(options.notice)}
     <div class="crm-layout"><div class="crm-stack">
-      <section class="crm-panel" aria-labelledby="crm-contacts-title"><div class="crm-panel-head"><div><h2 id="crm-contacts-title">All contacts</h2><p>Saved CRM records · no outreach is triggered from this list</p></div><span class="crm-count" aria-label="${count(snapshot.contacts.length)} contacts">${count(snapshot.contacts.length)}</span></div><div class="crm-panel-body">${contactsTable(snapshot)}</div></section>
+      <section class="crm-panel" aria-labelledby="crm-contacts-title"><div class="crm-panel-head"><div><h2 id="crm-contacts-title">Contacts</h2><p>Saved CRM records · no outreach is triggered from this list</p></div><span class="crm-count" aria-label="${collectionCount(snapshot.contacts.length, contactPage)} contacts shown">${collectionCount(snapshot.contacts.length, contactPage)}</span></div><div class="crm-panel-body">${contactsTable(snapshot)}${collectionPagination(contactPage, CRM_PORTAL_ROUTES.contacts)}</div></section>
       ${timelinePanel(snapshot)}
     </div><aside class="crm-panel crm-create-panel" id="crm-create-lead" aria-labelledby="crm-create-lead-title"><div class="crm-panel-head"><div><h2 id="crm-create-lead-title">Create a lead</h2><p>Contact + opportunity + optional first task</p></div>${icon('contacts')}</div><div class="crm-panel-body">${createLeadForm(snapshot, options)}</div></aside></div>
   </div>`;
@@ -460,7 +499,7 @@ function pipelineBoard(snapshot: CrmWorkspaceSnapshot, csrfToken: string): strin
         const index = cardIndex++;
         return opportunityCardWithToken(opportunity, stages, snapshot, csrfToken, index);
       }).join('');
-    return `<section class="crm-stage-column crm-stage-tone-${stageIndex % 6}" aria-labelledby="crm-stage-${stageIndex}-title"><div class="crm-stage-head"><h2 id="crm-stage-${stageIndex}-title">${escapeHtml(stage.name)}</h2><span class="crm-stage-total">${count(opportunities.length)}</span></div><div class="crm-stage-cards">${cards}</div></section>`;
+    return `<section class="crm-stage-column crm-stage-tone-${stageIndex % 6}" aria-labelledby="crm-stage-${stageIndex}-title"><div class="crm-stage-head"><h2 id="crm-stage-${stageIndex}-title">${escapeHtml(stage.name)}</h2><span class="crm-stage-total" aria-label="${count(opportunities.length)} opportunities shown on this page">${count(opportunities.length)}</span></div><div class="crm-stage-cards">${cards}</div></section>`;
   });
   const orphaned = snapshot.opportunities.filter((opportunity) => !stages.some((stage) => stage.id === opportunity.stageId));
   if (orphaned.length > 0) {
@@ -484,20 +523,30 @@ function opportunityCardWithToken(opportunity: CrmOpportunityView, stages: reado
 
 /** Renders the accessible, form-driven Opportunity pipeline body fragment. */
 export function renderCrmPipelineBody(snapshot: CrmWorkspaceSnapshot, options: PipelinePageOptions): string {
+  const pipelinePage = snapshot.pagination?.pipeline;
+  const pipelineSummary = pipelinePage
+    ? `${collectionCount(snapshot.opportunities.length, pipelinePage)} saved opportunities shown across ${count(snapshot.stages.length)} stages`
+    : `${count(snapshot.opportunities.length)} saved opportunities across ${count(snapshot.stages.length)} stages`;
   return `${styleElement()}<div class="crm-page" data-crm-page="pipeline">
     ${pageHeading(snapshot.workspace, 'pipeline', 'Opportunity pipeline', 'Move saved opportunities through the pipeline with explicit, reviewable form submissions.')}
     ${crmNav('pipeline')}
     ${notice(options.notice)}
-    <section class="crm-panel" aria-labelledby="crm-board-title"><div class="crm-panel-head crm-board-intro"><div><h2 id="crm-board-title">Pipeline board</h2><p>${count(snapshot.opportunities.length)} saved opportunities across ${count(snapshot.stages.length)} stages</p></div><p class="crm-board-help" id="crm-board-keyboard-help">Swipe horizontally, or focus the board and use arrow keys, to move between stages. Use the labelled “Move to” form on a card to save a change; there is no pretend drag and drop.</p></div><div class="crm-panel-body">${pipelineBoard(snapshot, options.csrfToken)}</div></section>
+    <section class="crm-panel" aria-labelledby="crm-board-title"><div class="crm-panel-head crm-board-intro"><div><h2 id="crm-board-title">Pipeline board</h2><p>${pipelineSummary}</p></div><p class="crm-board-help" id="crm-board-keyboard-help">Swipe horizontally, or focus the board and use arrow keys, to move between stages. Use the labelled “Move to” form on a card to save a change; there is no pretend drag and drop.</p></div><div class="crm-panel-body">${pipelineBoard(snapshot, options.csrfToken)}${collectionPagination(pipelinePage, CRM_PORTAL_ROUTES.pipeline)}</div></section>
     ${timelinePanel(snapshot)}
   </div>`;
 }
 
-function taskFilterNav(active: CrmTaskFilter, tasks: readonly CrmTaskView[]): string {
+function taskFilterNav(
+  active: CrmTaskFilter,
+  tasks: readonly CrmTaskView[],
+  page?: CrmCollectionPageView,
+): string {
   const openCount = tasks.filter((task) => task.status === 'open').length;
   const completeCount = tasks.filter((task) => task.status === 'completed').length;
   const filter = (id: CrmTaskFilter, href: string, label: string, itemCount: number): string =>
-    `<a href="${href}"${active === id ? ' aria-current="page"' : ''}>${label} <span class="crm-visually-hidden">tasks: </span>${count(itemCount)}</a>`;
+    `<a href="${href}"${active === id ? ' aria-current="page"' : ''}>${label}${page
+      ? (active === id ? ` <span class="crm-visually-hidden">tasks shown: </span>${collectionCount(tasks.length, page)}` : '')
+      : ` <span class="crm-visually-hidden">tasks: </span>${count(itemCount)}`}</a>`;
   return `<nav class="crm-filterlinks" aria-label="Task status filter">${filter('open', `${CRM_PORTAL_ROUTES.tasks}?status=open`, 'Open', openCount)}${filter('all', `${CRM_PORTAL_ROUTES.tasks}?status=all`, 'All', tasks.length)}${filter('completed', `${CRM_PORTAL_ROUTES.tasks}?status=completed`, 'Completed', completeCount)}</nav>`;
 }
 
@@ -531,10 +580,11 @@ function taskList(snapshot: CrmWorkspaceSnapshot, filter: CrmTaskFilter, csrfTok
 /** Renders the Tasks body fragment with real status-filter links and POST forms. */
 export function renderCrmTasksBody(snapshot: CrmWorkspaceSnapshot, options: TasksPageOptions): string {
   const filter = options.filter === 'all' || options.filter === 'completed' ? options.filter : 'open';
+  const taskPage = snapshot.pagination?.tasks;
   return `${styleElement()}<div class="crm-page" data-crm-page="tasks">
     ${pageHeading(snapshot.workspace, 'tasks', 'Tasks', 'See the next CRM actions and record completion without triggering external messages.')}
     ${crmNav('tasks')}
     ${notice(options.notice)}
-    <div class="crm-layout"><section class="crm-panel" aria-labelledby="crm-tasks-title"><div class="crm-panel-head crm-filterbar"><div><h2 id="crm-tasks-title">${filter === 'all' ? 'All tasks' : filter === 'completed' ? 'Completed tasks' : 'Open tasks'}</h2><p>Saved workspace tasks · task changes are recorded in CRM activity</p></div>${taskFilterNav(filter, snapshot.tasks)}</div><div class="crm-panel-body">${taskList(snapshot, filter, options.csrfToken)}</div></section><aside>${timelinePanel(snapshot)}</aside></div>
+    <div class="crm-layout"><section class="crm-panel" aria-labelledby="crm-tasks-title"><div class="crm-panel-head crm-filterbar"><div><h2 id="crm-tasks-title">${filter === 'all' ? 'All tasks' : filter === 'completed' ? 'Completed tasks' : 'Open tasks'}</h2><p>Saved workspace tasks · task changes are recorded in CRM activity</p></div>${taskFilterNav(filter, snapshot.tasks, taskPage)}</div><div class="crm-panel-body">${taskList(snapshot, filter, options.csrfToken)}${collectionPagination(taskPage, CRM_PORTAL_ROUTES.tasks, { status: filter })}</div></section><aside>${timelinePanel(snapshot)}</aside></div>
   </div>`;
 }

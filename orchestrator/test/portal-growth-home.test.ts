@@ -91,7 +91,8 @@ test('Growth HQ separates measured journey evidence from saved CRM facts', () =>
   assert.doesNotMatch(html, /Activation rate|>Step </);
   assert.match(html, /<small>Priced \/ presented<\/small><strong>3<\/strong>/);
   assert.match(html, /<small>Sales<\/small><strong>2<\/strong>/);
-  assert.match(html, /<small>CRM leads<\/small><strong>1<\/strong>/);
+  assert.match(html, /<small>CRM leads loaded<\/small><strong>1<\/strong>/);
+  assert.match(html, /bounded overview snapshot · not a workspace total/);
   assert.match(html, /Demo evidence/);
   assert.match(html, /Call &lt;Avery&gt;/);
   assert.doesNotMatch(html, /Call <Avery>/);
@@ -181,4 +182,79 @@ test('Growth HQ attention queue excludes opportunities in closed stages', () => 
   assert.match(html, /No urgent CRM work/);
   assert.doesNotMatch(html, /Completed sale/);
   assert.doesNotMatch(html, /No task/);
+});
+
+test('Growth HQ makes bounded overview counts and priority queue semantics explicit', () => {
+  const bounded = snapshot();
+  bounded.contacts = Array.from({ length: 50 }, (_, index) => ({
+    id: `contact-${index}`,
+    displayName: `Loaded lead ${index}`,
+    lifecycle: 'lead' as const,
+    openOpportunityCount: 1,
+    createdAt: '2026-08-20T09:00:00.000Z',
+  }));
+  bounded.tasks = [
+    {
+      id: 'future', title: 'Nearest due task', status: 'open', dueAt: '2026-08-26T09:00:00.000Z',
+      rowVersion: 1, completeCommandKey: 'task-future',
+    },
+    {
+      id: 'recent-overdue', title: 'Recently overdue task', status: 'open', dueAt: '2026-08-25T11:00:00.000Z',
+      rowVersion: 1, completeCommandKey: 'task-recent',
+    },
+    {
+      id: 'old-overdue', title: 'Most overdue task', status: 'open', dueAt: '2026-08-20T09:00:00.000Z',
+      rowVersion: 1, completeCommandKey: 'task-old',
+    },
+  ];
+  bounded.opportunities = [
+    {
+      id: 'recent-opportunity', contactId: 'contact-1', contactName: 'Recent lead', title: 'Recently unworked opportunity',
+      stageId: 's1', updatedAt: '2026-08-24T10:00:00.000Z', rowVersion: 1, moveCommandKey: 'move-recent',
+    },
+    {
+      id: 'old-opportunity', contactId: 'contact-2', contactName: 'Older lead', title: 'Longest-unworked opportunity',
+      stageId: 's1', updatedAt: '2026-08-10T10:00:00.000Z', rowVersion: 1, moveCommandKey: 'move-old',
+    },
+  ];
+
+  const html = renderGrowthHomeBody(bounded, PROPERTY_PREDATOR_GROWTH_PROFILE, growth());
+  assert.match(html, /<small>CRM leads loaded<\/small><strong>50<\/strong>/);
+  assert.match(html, /not a workspace total/);
+  assert.match(html, /bounded overview preview, not the complete workspace queue/i);
+  assert.match(html, /most overdue, then nearest due, then longest-unworked open opportunities/i);
+  assert.doesNotMatch(html, /<small>CRM leads<\/small>/);
+
+  const mostOverdue = html.indexOf('Most overdue task');
+  const recentlyOverdue = html.indexOf('Recently overdue task');
+  const nearestDue = html.indexOf('Nearest due task');
+  const longestUnworked = html.indexOf('Longest-unworked opportunity');
+  assert.ok(mostOverdue > -1);
+  assert.ok(mostOverdue < recentlyOverdue);
+  assert.ok(recentlyOverdue < nearestDue);
+  assert.ok(nearestDue < longestUnworked);
+  assert.doesNotMatch(html, /Recently unworked opportunity/);
+});
+
+test('Growth HQ fills the bounded attention preview with overdue work before lower-priority items', () => {
+  const urgent = snapshot();
+  urgent.tasks = [
+    ...Array.from({ length: 4 }, (_, index) => ({
+      id: `overdue-${index}`,
+      title: `Overdue priority ${index}`,
+      status: 'open' as const,
+      dueAt: `2026-08-${String(20 + index).padStart(2, '0')}T09:00:00.000Z`,
+      rowVersion: 1,
+      completeCommandKey: `task-overdue-${index}`,
+    })),
+    {
+      id: 'future', title: 'Lower-priority future task', status: 'open', dueAt: '2026-08-26T09:00:00.000Z',
+      rowVersion: 1, completeCommandKey: 'task-future',
+    },
+  ];
+
+  const html = renderGrowthHomeBody(urgent, PROPERTY_PREDATOR_GROWTH_PROFILE, growth());
+  assert.equal((html.match(/Overdue priority \d/g) ?? []).length, 4);
+  assert.doesNotMatch(html, /Lower-priority future task/);
+  assert.doesNotMatch(html, /Apex annual/);
 });

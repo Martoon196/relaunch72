@@ -82,7 +82,15 @@ export interface AppDeps {
   propertyPredatorExternalEvents?: PropertyPredatorExternalEventBridgeMount;
   /** Optional, disabled-by-default signed Mailgun delivery-evidence ingress. */
   propertyPredatorMailgunWebhook?: PropertyPredatorMailgunWebhookMount;
+  /** Optional request-handler seam; production defaults to the bundled admin router. */
+  adminHandler?: (req: IncomingMessage, res: ServerResponse, cfg: StripeConfig) => void | Promise<void>;
 }
+
+const SAFE_ERROR = {
+  bodyTooLarge: { error: 'request body too large' },
+  invalidRequest: { error: 'invalid request' },
+  internal: { error: 'internal server error' },
+} as const;
 
 function send(res: ServerResponse, code: number, body: unknown): void {
   const s = JSON.stringify(body);
@@ -242,8 +250,8 @@ export function createApp(deps: AppDeps) {
     // The admin control room is same-origin, browser-navigated HTML — handled
     // before the CORS/API layer, with its own auth gate.
     if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
-      try { await handleAdmin(req, res, deps.cfg); }
-      catch (e) { if (!res.headersSent) send(res, 500, { error: (e as Error).message }); }
+      try { await (deps.adminHandler ?? handleAdmin)(req, res, deps.cfg); }
+      catch { if (!res.headersSent) send(res, 500, SAFE_ERROR.internal); }
       return;
     }
 
@@ -463,8 +471,8 @@ export function createApp(deps: AppDeps) {
         try {
           await deps.marketing.onLead(email, body.firstName?.trim() || undefined);
           return send(res, 200, { ok: true, synced: true });
-        } catch (e) {
-          console.warn(`marketing onLead failed: ${(e as Error).message}`);
+        } catch {
+          console.warn('marketing onLead failed');
           return send(res, 502, { ok: false, synced: false, error: 'lead delivery failed' });
         }
       }
@@ -525,9 +533,9 @@ export function createApp(deps: AppDeps) {
           // provisioning instead of risking an account for the wrong person.
           try {
             void Promise.resolve(deps.onIntakeAccepted(intake, claimed))
-              .catch((e: unknown) => console.warn(`onIntakeAccepted failed: ${(e as Error).message}`));
-          } catch (e) {
-            console.warn(`onIntakeAccepted failed: ${(e as Error).message}`);
+              .catch(() => console.warn('onIntakeAccepted failed'));
+          } catch {
+            console.warn('onIntakeAccepted failed');
           }
         }
         return send(res, 200, { accepted: true, building: true, run: runRef });
@@ -535,9 +543,9 @@ export function createApp(deps: AppDeps) {
 
       return send(res, 404, { error: 'not found' });
     } catch (e) {
-      if (e instanceof BodyTooLargeError) return send(res, 413, { error: e.message });
-      if (e instanceof CheckoutError || e instanceof SyntaxError) return send(res, 400, { error: e.message });
-      return send(res, 500, { error: (e as Error).message });
+      if (e instanceof BodyTooLargeError) return send(res, 413, SAFE_ERROR.bodyTooLarge);
+      if (e instanceof CheckoutError || e instanceof SyntaxError) return send(res, 400, SAFE_ERROR.invalidRequest);
+      return send(res, 500, SAFE_ERROR.internal);
     }
   };
 }

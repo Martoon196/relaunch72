@@ -115,11 +115,14 @@ import {
 import {
   crmNoticeFromQuery,
   crmNoticeToken,
+  PortalCrmPageCursorError,
   type PortalCrmMutationOutcome,
   type PortalCrmNoticeCode,
   type PortalCrmRequestIdentity,
+  type PortalCrmSnapshotRequest,
   type PortalCrmService,
 } from './crm-service.js';
+import { CRM_PAGE_QUERY_KEY } from './crm-pagination.js';
 import type { DashboardData } from './data.js';
 import type { BillingView } from './billing.js';
 import type { PortalAuthRequestContext, PortalAuthService, PortalSessionIdentity } from './auth-service.js';
@@ -628,6 +631,30 @@ function crmIdentity(sessionToken: string, deps: PortalDeps): PortalCrmRequestId
   return {
     sessionToken,
     requestId: deps.requestId ? deps.requestId() : randomUUID(),
+  };
+}
+
+function crmSnapshotRequest(path: string, query: URLSearchParams): PortalCrmSnapshotRequest {
+  const cursorValues = query.getAll(CRM_PAGE_QUERY_KEY);
+  if (cursorValues.length > 1) throw new PortalCrmPageCursorError();
+  const cursor = cursorValues.length === 1 ? cursorValues[0]! : undefined;
+  if (path === CRM_PORTAL_ROUTES.contacts) {
+    return { section: 'contacts', ...(cursor !== undefined ? { cursor } : {}) };
+  }
+  if (path === CRM_PORTAL_ROUTES.pipeline) {
+    return { section: 'pipeline', ...(cursor !== undefined ? { cursor } : {}) };
+  }
+
+  const statusValues = query.getAll('status');
+  if (statusValues.length > 1) throw new PortalCrmPageCursorError();
+  const filter = statusValues[0] ?? 'open';
+  if (filter !== 'open' && filter !== 'completed' && filter !== 'all') {
+    throw new PortalCrmPageCursorError();
+  }
+  return {
+    section: 'tasks',
+    filter,
+    ...(cursor !== undefined ? { cursor } : {}),
   };
 }
 
@@ -2372,7 +2399,8 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   if (deps.crm && method === 'GET' && [CRM_PORTAL_ROUTES.contacts, CRM_PORTAL_ROUTES.pipeline, CRM_PORTAL_ROUTES.tasks].includes(p as never)) {
     const identity = crmIdentity(sessionToken, deps);
     try {
-      const snapshot = await deps.crm.snapshot(identity);
+      const readRequest = crmSnapshotRequest(p, url.searchParams);
+      const snapshot = await deps.crm.snapshot(identity, readRequest);
       if (!snapshot) return sendHtml(res, 403, portalStatusPage(deps, sessionToken, {
         title: 'CRM workspace not available', message: 'This session no longer has access to the durable CRM workspace.', active: 'crm',
       }));
@@ -2385,12 +2413,19 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           : renderCrmTasksBody(snapshot, {
             csrfToken,
             notice,
-            filter: url.searchParams.get('status') === 'all' || url.searchParams.get('status') === 'completed'
-              ? url.searchParams.get('status') as 'all' | 'completed'
-              : 'open',
+            filter: readRequest.section === 'tasks' ? readRequest.filter : 'open',
           });
       return sendHtml(res, 200, crmPage(snapshot, body, deps, csrfToken));
-    } catch {
+    } catch (error) {
+      if (error instanceof PortalCrmPageCursorError) {
+        return sendHtml(res, 400, portalStatusPage(deps, sessionToken, {
+          title: 'CRM page link expired',
+          message: 'Return to the first page and use the latest saved-record controls.',
+          active: 'crm',
+          backHref: p,
+          backLabel: 'Return to the first page',
+        }));
+      }
       return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
         title: 'CRM temporarily unavailable', message: 'No change was made. Try again after returning to the workspace.', active: 'crm',
       }));
@@ -2424,7 +2459,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       if (outcome.kind === 'conflict') return crmRedirect(res, CRM_PORTAL_ROUTES.contacts, deps, sessionToken, 'conflict');
       if (outcome.kind === 'not_found') return crmRedirect(res, CRM_PORTAL_ROUTES.contacts, deps, sessionToken, 'missing');
 
-      const snapshot = await deps.crm.snapshot(identity);
+      const snapshot = await deps.crm.snapshot(identity, { section: 'contacts' });
       if (!snapshot) return sendHtml(res, 403, portalStatusPage(deps, sessionToken, {
         title: 'CRM workspace not available', message: 'This session no longer has access to the durable CRM workspace.', active: 'crm',
       }));

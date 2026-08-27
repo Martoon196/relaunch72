@@ -5,6 +5,7 @@ import type {
   PortalCrmService,
   PortalCrmMutationOutcome,
   PortalCrmRequestIdentity,
+  PortalCrmSnapshotRequest,
   PortalJourneyBoardFilters,
   PortalJourneyBoardSnapshot,
 } from '../src/portal/crm-service.js';
@@ -20,6 +21,7 @@ import { PORTAL_COOKIE, portalCsrfToken, signTenant } from '../src/portal/sessio
 const SECRET = 'crm-router-secret';
 const NOW = 1_000_000;
 const WORKSPACE_ID = '11111111-1111-4111-8111-111111111111';
+const CURSOR_SECRET = 'server-only-crm-cursor-secret-for-tests-123456';
 const STAGE_ID = '22222222-2222-4222-8222-222222222222';
 const OTHER_STAGE_ID = '33333333-3333-4333-8333-333333333333';
 const CONTACT_ID = '44444444-4444-4444-8444-444444444444';
@@ -56,6 +58,7 @@ function snapshot(): CrmWorkspaceSnapshot {
 
 class FakeCrm implements PortalCrmService {
   identities: PortalCrmRequestIdentity[] = [];
+  snapshotRequests: Array<PortalCrmSnapshotRequest | undefined> = [];
   snapshotCalls = 0;
   createCalls = 0;
   moveCalls = 0;
@@ -64,9 +67,10 @@ class FakeCrm implements PortalCrmService {
   journeyBoardCalls: PortalJourneyBoardFilters[] = [];
   moveOutcome: PortalCrmMutationOutcome = { ok: true, disposition: 'applied' };
 
-  async snapshot(identity: PortalCrmRequestIdentity) {
+  async snapshot(identity: PortalCrmRequestIdentity, request?: PortalCrmSnapshotRequest) {
     this.snapshotCalls += 1;
     this.identities.push(identity);
+    this.snapshotRequests.push(request);
     return snapshot();
   }
 
@@ -233,6 +237,34 @@ test('real CRM pages render through the authenticated service boundary and task 
   const completed = await call('GET', '/portal/crm/tasks?status=completed', deps(crm));
   assert.doesNotMatch(completed.body, /Call Avery/);
   assert.match(completed.body, /Review pack/);
+  assert.deepEqual(crm.snapshotRequests, [
+    { section: 'contacts' },
+    { section: 'tasks', filter: 'open' },
+    { section: 'tasks', filter: 'all' },
+    { section: 'tasks', filter: 'completed' },
+  ]);
+});
+
+test('CRM list routes reject ambiguous cursors and invalid task filters before entering the service', async () => {
+  const crm = new FakeCrm();
+  const duplicateCursor = await call(
+    'GET',
+    '/portal/crm/contacts?after=one&after=two',
+    deps(crm),
+  );
+  assert.equal(duplicateCursor.statusCode, 400);
+  assert.match(duplicateCursor.body, /CRM page link expired/);
+
+  const duplicateStatus = await call(
+    'GET',
+    '/portal/crm/tasks?status=open&status=all',
+    deps(crm),
+  );
+  assert.equal(duplicateStatus.statusCode, 400);
+
+  const invalidStatus = await call('GET', '/portal/crm/tasks?status=cancelled', deps(crm));
+  assert.equal(invalidStatus.statusCode, 400);
+  assert.equal(crm.snapshotCalls, 0);
 });
 
 test('Live Journey Board renders real people, serves fixed enhancement code and moves only the CRM workflow lane', async () => {
@@ -330,6 +362,7 @@ test('Pg-backed Lead 360 route reads only workspace shell context and the contac
   let fullSnapshotReads = 0;
   let leadReads = 0;
   const crm = new PgPortalCrmService({
+    cursorSecret: CURSOR_SECRET,
     principalResolver: { resolve: async () => ({ userId: '88888888-8888-4888-8888-888888888888', workspaceId: WORKSPACE_ID }) },
     readService: {
       loadWorkspaceCommandContext: async () => {

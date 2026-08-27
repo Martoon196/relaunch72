@@ -6,6 +6,10 @@ import {
   CrmReadService,
   createPgCrmReadService,
   createPgCrmTransactionRunner,
+  type CrmContactReadCursor,
+  type CrmOpportunityReadCursor,
+  type CrmTaskReadCursor,
+  type CrmWorkspaceReadRequest,
   type CrmWorkspaceReadSnapshot,
 } from '../crm-pg/index.js';
 import {
@@ -36,11 +40,21 @@ import type {
   PortalCrmMutationOutcome,
   PortalCrmRequestIdentity,
   PortalCrmService,
+  PortalCrmSnapshotRequest,
   PortalCrmWorkspaceShell,
   PortalJourneyBoardFilters,
   PortalJourneyBoardSnapshot,
   PortalMoveOpportunityInput,
 } from './crm-service.js';
+import { PortalCrmPageCursorError } from './crm-service.js';
+import {
+  CRM_PAGE_SIZE,
+  crmPageCursorToken,
+  verifyCrmPageCursor,
+  type CrmPageCursor,
+  type CrmPageKind,
+  type CrmTaskPageFilter,
+} from './crm-pagination.js';
 import {
   emptyGrowthIntelligence,
   type GrowthEvidenceKind,
@@ -127,7 +141,28 @@ function mapWorkspace(read: CrmWorkspaceReadSnapshot['workspace']): CrmWorkspace
   });
 }
 
-function mapSnapshot(read: CrmWorkspaceReadSnapshot, nextKey: () => string): CrmWorkspaceSnapshot {
+interface MappedCrmCollectionPage {
+  readonly section: 'contacts' | 'pipeline' | 'tasks';
+  readonly continuation: boolean;
+  readonly hasNextPage: boolean;
+  readonly nextCursor: string | null;
+}
+
+function mapSnapshot(
+  read: CrmWorkspaceReadSnapshot,
+  nextKey: () => string,
+  page?: MappedCrmCollectionPage,
+): CrmWorkspaceSnapshot {
+  const pagination = page
+    ? Object.freeze({
+        [page.section]: Object.freeze({
+          continuation: page.continuation,
+          hasNextPage: page.hasNextPage,
+          nextCursor: page.nextCursor,
+          pageSize: CRM_PAGE_SIZE,
+        }),
+      })
+    : undefined;
   return Object.freeze({
     workspace: mapWorkspace(read.workspace),
     contacts: Object.freeze(read.contacts.map((contact) => Object.freeze({
@@ -183,6 +218,120 @@ function mapSnapshot(read: CrmWorkspaceReadSnapshot, nextKey: () => string): Crm
       actorName: null,
       occurredAt: activity.occurredAt,
     }))),
+    ...(pagination ? { pagination } : {}),
+  });
+}
+
+function verifiedReadRequest(
+  request: PortalCrmSnapshotRequest | undefined,
+  context: DatabaseRequestContext,
+  cursorSecret: string,
+  sessionToken: string,
+): { readonly readRequest: CrmWorkspaceReadRequest | undefined; readonly continuation: boolean } {
+  if (!request) return Object.freeze({ readRequest: undefined, continuation: false });
+  if (request.section === 'overview') {
+    return Object.freeze({ readRequest: { section: 'overview' as const }, continuation: false });
+  }
+
+  const expected = request.section === 'tasks'
+    ? { workspaceId: context.workspaceId, kind: 'tasks' as const, taskFilter: request.filter as CrmTaskPageFilter }
+    : { workspaceId: context.workspaceId, kind: request.section as CrmPageKind };
+  const cursor = request.cursor === undefined
+    ? null
+    : verifyCrmPageCursor(cursorSecret, sessionToken, request.cursor, expected);
+  if (request.cursor !== undefined && !cursor) throw new PortalCrmPageCursorError();
+
+  if (request.section === 'contacts') {
+    if (cursor && cursor.kind !== 'contacts') throw new PortalCrmPageCursorError();
+    return Object.freeze({
+      readRequest: {
+        section: 'contacts' as const,
+        ...(cursor ? { after: { updatedAt: cursor.updatedAt, id: cursor.id } } : {}),
+      },
+      continuation: Boolean(cursor),
+    });
+  }
+  if (request.section === 'pipeline') {
+    if (cursor && cursor.kind !== 'pipeline') throw new PortalCrmPageCursorError();
+    return Object.freeze({
+      readRequest: {
+        section: 'pipeline' as const,
+        ...(cursor ? { after: { updatedAt: cursor.updatedAt, id: cursor.id } } : {}),
+      },
+      continuation: Boolean(cursor),
+    });
+  }
+  if (request.filter !== 'open' && request.filter !== 'completed' && request.filter !== 'all') {
+    throw new PortalCrmPageCursorError();
+  }
+  if (cursor && cursor.kind !== 'tasks') throw new PortalCrmPageCursorError();
+  return Object.freeze({
+    readRequest: {
+      section: 'tasks' as const,
+      filter: request.filter,
+      ...(cursor
+        ? {
+            after: {
+              statusRank: cursor.statusRank,
+              dueAt: cursor.dueAt,
+              updatedAt: cursor.updatedAt,
+              id: cursor.id,
+            },
+          }
+        : {}),
+    },
+    continuation: Boolean(cursor),
+  });
+}
+
+function collectionPage(
+  read: CrmWorkspaceReadSnapshot,
+  request: PortalCrmSnapshotRequest | undefined,
+  cursorSecret: string,
+  sessionToken: string,
+  continuation: boolean,
+): MappedCrmCollectionPage | undefined {
+  if (!request || request.section === 'overview') return undefined;
+  const pageInfo = request.section === 'contacts'
+    ? read.pagination?.contacts
+    : request.section === 'pipeline'
+      ? read.pagination?.opportunities
+      : read.pagination?.tasks;
+  if (!pageInfo) throw new Error('CRM collection read did not return bounded page information');
+
+  let cursor: CrmPageCursor | null = null;
+  if (pageInfo.hasNextPage) {
+    if (!pageInfo.endCursor) throw new Error('CRM collection page omitted its continuation tuple');
+    const base = {
+      version: 1 as const,
+      workspaceId: read.workspace.id,
+    };
+    cursor = request.section === 'contacts'
+      ? {
+          ...base,
+          kind: 'contacts',
+          ...(pageInfo.endCursor as CrmContactReadCursor),
+        }
+      : request.section === 'pipeline'
+        ? {
+            ...base,
+            kind: 'pipeline',
+            ...(pageInfo.endCursor as CrmOpportunityReadCursor),
+          }
+        : {
+            ...base,
+            kind: 'tasks',
+            filter: request.filter,
+            ...(pageInfo.endCursor as CrmTaskReadCursor),
+          };
+  }
+  const nextCursor = cursor ? crmPageCursorToken(cursorSecret, sessionToken, cursor) : null;
+  if (cursor && !nextCursor) throw new Error('CRM collection cursor could not be issued');
+  return Object.freeze({
+    section: request.section,
+    continuation,
+    hasNextPage: pageInfo.hasNextPage,
+    nextCursor,
   });
 }
 
@@ -702,6 +851,8 @@ function commandOutcome(error: unknown): PortalCrmMutationOutcome {
 }
 
 export interface PgPortalCrmDependencies {
+  /** Server-only key source. Browser session material alone must never forge cursors. */
+  cursorSecret: string;
   principalResolver: PortalCrmPrincipalResolver;
   readService: Pick<CrmReadService, 'loadWorkspaceSnapshot'>
     & Partial<Pick<CrmReadService, 'loadWorkspaceCommandContext'>>;
@@ -716,6 +867,9 @@ export class PgPortalCrmService implements PortalCrmService {
   private readonly nextCommandKey: () => string;
 
   constructor(private readonly dependencies: PgPortalCrmDependencies) {
+    if (dependencies.cursorSecret.length < 32 || dependencies.cursorSecret.length > 4_096) {
+      throw new Error('Portal CRM cursor key source must be a server-only value of at least 32 characters');
+    }
     this.nextCommandKey = dependencies.nextCommandKey ?? randomUUID;
   }
 
@@ -737,11 +891,31 @@ export class PgPortalCrmService implements PortalCrmService {
     return (await this.dependencies.readService.loadWorkspaceSnapshot(context)).workspace;
   }
 
-  async snapshot(identity: PortalCrmRequestIdentity): Promise<CrmWorkspaceSnapshot | null> {
+  async snapshot(
+    identity: PortalCrmRequestIdentity,
+    request?: PortalCrmSnapshotRequest,
+  ): Promise<CrmWorkspaceSnapshot | null> {
     const context = await this.context(identity);
     if (!context) return null;
     try {
-      return mapSnapshot(await this.dependencies.readService.loadWorkspaceSnapshot(context), this.nextCommandKey);
+      const verified = verifiedReadRequest(
+        request,
+        context,
+        this.dependencies.cursorSecret,
+        identity.sessionToken,
+      );
+      const read = await this.dependencies.readService.loadWorkspaceSnapshot(context, verified.readRequest);
+      return mapSnapshot(
+        read,
+        this.nextCommandKey,
+        collectionPage(
+          read,
+          request,
+          this.dependencies.cursorSecret,
+          identity.sessionToken,
+          verified.continuation,
+        ),
+      );
     } catch (error) {
       if (error instanceof InactivePortalSessionError) return null;
       throw error;
@@ -919,8 +1093,10 @@ export class PgPortalCrmService implements PortalCrmService {
 export function createPgPortalCrmService(input: {
   webPool: Pool;
   commandPool: Pool;
+  cursorSecret: string;
 }): PgPortalCrmService {
   return new PgPortalCrmService({
+    cursorSecret: input.cursorSecret,
     principalResolver: createPgPortalCrmPrincipalResolver(input.webPool),
     readService: createPgCrmReadService(input.webPool),
     growthReadService: createPgGrowthIntelligenceReadService(input.webPool),

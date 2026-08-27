@@ -9,6 +9,7 @@ import {
   workspaceLocalDateTime,
   type PgPortalCrmDependencies,
 } from '../src/portal/crm-pg-service.js';
+import { PortalCrmPageCursorError } from '../src/portal/crm-service.js';
 
 const WORKSPACE_ID = '11111111-1111-4111-8111-111111111111';
 const USER_ID = '22222222-2222-4222-8222-222222222222';
@@ -18,6 +19,7 @@ const OTHER_STAGE_ID = '55555555-5555-4555-8555-555555555555';
 const CONTACT_ID = '66666666-6666-4666-8666-666666666666';
 const OPPORTUNITY_ID = '77777777-7777-4777-8777-777777777777';
 const TASK_ID = '88888888-8888-4888-8888-888888888888';
+const CURSOR_SECRET = 'server-only-crm-cursor-secret-for-tests-123456';
 
 function readSnapshot(canWrite = true): CrmWorkspaceReadSnapshot {
   return {
@@ -81,6 +83,7 @@ test('workspace wall time resolves exactly and rejects DST gaps and ambiguous cl
 test('portal adapter maps the durable read model and supplies server-owned mutation keys', async () => {
   const keys = ['move-key-1', 'complete-key-1'];
   const service = new PgPortalCrmService({
+    cursorSecret: CURSOR_SECRET,
     principalResolver: { resolve: async () => ({ userId: USER_ID, workspaceId: WORKSPACE_ID }) },
     readService: { loadWorkspaceSnapshot: async () => readSnapshot() },
     commandService: {} as PgPortalCrmDependencies['commandService'],
@@ -100,10 +103,68 @@ test('portal adapter maps the durable read model and supplies server-owned mutat
   assert.ok(Object.isFrozen(snapshot));
 });
 
+test('portal adapter binds database continuation tuples to session, workspace, route and task filter', async () => {
+  const requests: unknown[] = [];
+  const service = new PgPortalCrmService({
+    cursorSecret: CURSOR_SECRET,
+    principalResolver: { resolve: async () => ({ userId: USER_ID, workspaceId: WORKSPACE_ID }) },
+    readService: {
+      loadWorkspaceSnapshot: async (_context, request) => {
+        requests.push(request);
+        return {
+          ...readSnapshot(),
+          pagination: {
+            contacts: {
+              hasNextPage: true,
+              endCursor: { updatedAt: '2026-08-23T09:00:00.000Z', id: CONTACT_ID },
+            },
+            opportunities: null,
+            tasks: null,
+          },
+        };
+      },
+    },
+    commandService: {} as PgPortalCrmDependencies['commandService'],
+  });
+
+  const first = await service.snapshot(identity(), { section: 'contacts' });
+  const token = first?.pagination?.contacts?.nextCursor;
+  assert.equal(first?.pagination?.contacts?.continuation, false);
+  assert.equal(first?.pagination?.contacts?.hasNextPage, true);
+  assert.equal(first?.pagination?.contacts?.pageSize, 50);
+  assert.ok(token);
+  assert.deepEqual(requests[0], { section: 'contacts' });
+
+  const second = await service.snapshot(identity(), { section: 'contacts', cursor: token });
+  assert.equal(second?.pagination?.contacts?.continuation, true);
+  assert.deepEqual(requests[1], {
+    section: 'contacts',
+    after: { updatedAt: '2026-08-23T09:00:00.000Z', id: CONTACT_ID },
+  });
+
+  await assert.rejects(
+    service.snapshot(
+      { ...identity(), sessionToken: 'another-session-token' },
+      { section: 'contacts', cursor: token },
+    ),
+    (error: unknown) => error instanceof PortalCrmPageCursorError,
+  );
+  await assert.rejects(
+    service.snapshot(identity(), { section: 'pipeline', cursor: token }),
+    (error: unknown) => error instanceof PortalCrmPageCursorError,
+  );
+  await assert.rejects(
+    service.snapshot(identity(), { section: 'tasks', filter: 'open', cursor: token }),
+    (error: unknown) => error instanceof PortalCrmPageCursorError,
+  );
+  assert.equal(requests.length, 2, 'invalid cursors fail before opening a CRM read transaction');
+});
+
 test('PostgreSQL portal workspace shell uses the one-query context read without loading a CRM snapshot', async () => {
   let commandContextReads = 0;
   let fullSnapshotReads = 0;
   const service = new PgPortalCrmService({
+    cursorSecret: CURSOR_SECRET,
     principalResolver: { resolve: async () => ({ userId: USER_ID, workspaceId: WORKSPACE_ID }) },
     readService: {
       loadWorkspaceCommandContext: async () => {
@@ -136,6 +197,7 @@ test('PostgreSQL portal workspace shell uses the one-query context read without 
 
 test('portal adapter maps verified Growth HQ evidence without treating CRM stages as funnel stages', async () => {
   const service = new PgPortalCrmService({
+    cursorSecret: CURSOR_SECRET,
     principalResolver: { resolve: async () => ({ userId: USER_ID, workspaceId: WORKSPACE_ID }) },
     readService: { loadWorkspaceSnapshot: async () => readSnapshot() },
     growthReadService: {
@@ -236,6 +298,7 @@ test('portal adapter maps the operational board without letting CRM lanes become
     perLaneCardLimit: 75, loadedCardCount: 1, totalCardCount: 1, truncated: false,
   };
   const service = new PgPortalCrmService({
+    cursorSecret: CURSOR_SECRET,
     principalResolver: { resolve: async () => ({ userId: USER_ID, workspaceId: WORKSPACE_ID }) },
     readService: { loadWorkspaceSnapshot: async () => readSnapshot() },
     journeyBoardReadService: { load: async () => boardRead },
@@ -272,6 +335,7 @@ test('portal adapter maps the operational board without letting CRM lanes become
 
 test('portal adapter maps the narrow Lead 360 read model without losing exact offer or consent states', async () => {
   const service = new PgPortalCrmService({
+    cursorSecret: CURSOR_SECRET,
     principalResolver: { resolve: async () => ({ userId: USER_ID, workspaceId: WORKSPACE_ID }) },
     readService: { loadWorkspaceSnapshot: async () => readSnapshot() },
     lead360ReadService: {
@@ -362,6 +426,7 @@ test('create lead validates browser input, owns actor fields and resolves task d
   const commands: unknown[] = [];
   let commandContextReads = 0;
   const service = new PgPortalCrmService({
+    cursorSecret: CURSOR_SECRET,
     principalResolver: { resolve: async () => ({ userId: USER_ID, workspaceId: WORKSPACE_ID }) },
     readService: {
       loadWorkspaceSnapshot: async () => { throw new Error('mutation must not load the full CRM snapshot'); },
@@ -410,6 +475,7 @@ test('create lead validates browser input, owns actor fields and resolves task d
 test('viewer membership blocks all portal mutation services before a command transaction', async () => {
   let commands = 0;
   const service = new PgPortalCrmService({
+    cursorSecret: CURSOR_SECRET,
     principalResolver: { resolve: async () => ({ userId: USER_ID, workspaceId: WORKSPACE_ID }) },
     readService: { loadWorkspaceSnapshot: async () => readSnapshot(false) },
     commandService: {

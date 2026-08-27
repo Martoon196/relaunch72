@@ -33,12 +33,30 @@ function stageName(snapshot: CrmWorkspaceSnapshot, opportunity: CrmOpportunityVi
   return snapshot.stages.find((stage) => stage.id === opportunity.stageId)?.name ?? 'Current CRM stage';
 }
 
+function taskPriority(left: CrmTaskView, right: CrmTaskView): number {
+  if (left.dueAt && right.dueAt) {
+    const due = left.dueAt.localeCompare(right.dueAt);
+    if (due !== 0) return due;
+  } else if (left.dueAt) {
+    return -1;
+  } else if (right.dueAt) {
+    return 1;
+  }
+  return left.id.localeCompare(right.id);
+}
+
 function attentionQueue(snapshot: CrmWorkspaceSnapshot, openStageIds: ReadonlySet<string>): string {
-  const overdue = snapshot.tasks.filter((task) => isOverdue(task, snapshot.workspace.snapshotAt));
-  const open = snapshot.tasks.filter((task) => task.status === 'open' && !isOverdue(task, snapshot.workspace.snapshotAt));
-  const unworked = snapshot.opportunities.filter((opportunity) => openStageIds.has(opportunity.stageId) && !opportunity.nextTaskAt);
+  const overdue = snapshot.tasks
+    .filter((task) => isOverdue(task, snapshot.workspace.snapshotAt))
+    .sort(taskPriority);
+  const open = snapshot.tasks
+    .filter((task) => task.status === 'open' && !isOverdue(task, snapshot.workspace.snapshotAt))
+    .sort(taskPriority);
+  const unworked = snapshot.opportunities
+    .filter((opportunity) => openStageIds.has(opportunity.stageId) && !opportunity.nextTaskAt)
+    .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt) || left.id.localeCompare(right.id));
   const entries: string[] = [];
-  for (const task of overdue.slice(0, 3)) {
+  for (const task of overdue.slice(0, 4)) {
     entries.push(`<li><span class="pp-attention-mark">${icon('calendar')}</span><span class="pp-attention-copy"><strong>${escapeHtml(task.title)}</strong><span>${escapeHtml(task.contactName ?? task.opportunityTitle ?? 'Workspace task')}</span></span><span class="pp-attention-state overdue">Overdue</span></li>`);
   }
   for (const task of open.slice(0, Math.max(0, 4 - entries.length))) {
@@ -50,7 +68,7 @@ function attentionQueue(snapshot: CrmWorkspaceSnapshot, openStageIds: ReadonlySe
   }
   return entries.length
     ? `<ol class="pp-attention">${entries.join('')}</ol>`
-    : '<div class="pp-empty"><strong>No urgent CRM work.</strong>Add a next task when a lead needs a human move.</div>';
+    : '<div class="pp-empty"><strong>No urgent CRM work in this loaded overview snapshot.</strong>Add a next task when a lead needs a human move.</div>';
 }
 
 function funnel(funnelView: GrowthFunnelView, windowLabel: string): string {
@@ -128,6 +146,9 @@ export function renderGrowthHomeBody(
   const leadCount = stageCount(growth, 'lead');
   const priced = stageCount(growth, 'priced') + stageCount(growth, 'presentation');
   const sales = stageCount(growth, 'sale');
+  const loadedCrmLeadCount = snapshot.contacts
+    .filter((contact) => contact.lifecycle === 'lead' || contact.lifecycle === 'prospect')
+    .length;
   const selfServe = growth.funnels.find((item) => item.track === 'self_serve');
   const selfActivated = selfServe?.stages.find((stage) => stage.key === 'activated')?.count ?? 0;
   const stateClass = growth.dataState === 'live' ? '' : growth.dataState;
@@ -145,8 +166,8 @@ export function renderGrowthHomeBody(
     ? '<a class="button" href="/portal/actions">Open Action Centre</a><a class="button secondary" href="#hot-list">Work the hot list</a>'
     : '<a class="button" href="#hot-list">Work the hot list</a><a class="button secondary" href="/portal/crm/contacts">Open CRM</a>';
   const attentionCopy = actionCentreAvailable
-    ? 'This CRM preview rolls into the full evidence-backed operator queue.'
-    : 'CRM tasks remain separate from journey evidence.';
+    ? 'Up to four loaded CRM items: most overdue, then nearest due, then longest unworked. The full evidence-backed queue is in Action Centre.'
+    : 'A bounded overview preview, not the complete workspace queue: most overdue, then nearest due, then longest-unworked open opportunities.';
   const attentionLink = actionCentreAvailable
     ? '<a class="pp-panel-action" href="/portal/actions">Action Centre →</a>'
     : '<a class="pp-panel-action" href="/portal/crm/tasks">Tasks →</a>';
@@ -164,7 +185,7 @@ export function renderGrowthHomeBody(
       <article class="pp-metric"><small>Activated</small><strong>${selfActivated}</strong><span>Distinct self-serve contacts with recorded activation evidence</span></article>
       <article class="pp-metric"><small>Priced / presented</small><strong>${priced}</strong><span>Offer evidence, not an assumed intent</span></article>
       <article class="pp-metric"><small>Sales</small><strong>${sales}</strong><span>Authoritative payment-backed milestones</span></article>
-      <article class="pp-metric"><small>CRM leads</small><strong>${snapshot.contacts.filter((contact) => contact.lifecycle === 'lead' || contact.lifecycle === 'prospect').length}</strong><span>Saved contacts awaiting or inside journeys</span></article>
+      <article class="pp-metric"><small>CRM leads loaded</small><strong>${loadedCrmLeadCount}</strong><span>Lead / prospect rows in this bounded overview snapshot · not a workspace total</span></article>
     </section>
     <div class="pp-grid"><div class="pp-stack">
       <section class="pp-panel" aria-labelledby="funnel-title"><div class="pp-panel-head"><div><div class="pp-panel-kicker">Measured conversion</div><h2 id="funnel-title">Two routes. No fake stages.</h2><p>Self-serve and agency buying journeys stay distinct.</p></div><span class="pp-panel-action">As of ${escapeHtml(dateTime(growth.asOf, snapshot.workspace.timezone))}</span></div><div class="pp-panel-body"><div class="pp-funnels">${growth.funnels.map((item) => funnel(item, growth.windowLabel)).join('')}</div></div></section>

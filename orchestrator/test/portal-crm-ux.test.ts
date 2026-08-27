@@ -337,6 +337,37 @@ test('task empty state and invalid mutation metadata are explicit', () => {
   assert.doesNotMatch(invalid, /class="crm-complete-form"/);
 });
 
+test('bounded collection pages expose honest, accessible continuation controls', () => {
+  const first = {
+    continuation: false,
+    hasNextPage: true,
+    nextCursor: 'opaque.cursor+/=',
+    pageSize: 50,
+  } as const;
+  const contacts = renderCrmContactsBody(snapshot({
+    pagination: { contacts: first },
+  }), { csrfToken: 'csrf', createLeadCommandKey: 'create' });
+  assert.match(contacts, /aria-label="1\+ contacts shown">1\+<\/span>/);
+  assert.match(contacts, /<nav class="crm-pagination" aria-label="Saved record pages">/);
+  assert.match(contacts, /rel="next" href="\/portal\/crm\/contacts\?after=opaque.cursor%2B%2F%3D">Next 50<\/a>/);
+  assert.doesNotMatch(contacts, />First page<\/a>/);
+
+  const pipeline = renderCrmPipelineBody(snapshot({
+    pagination: { pipeline: first },
+  }), { csrfToken: 'csrf' });
+  assert.match(pipeline, /1\+ saved opportunities shown across 3 stages/);
+  assert.match(pipeline, /aria-label="1 opportunities shown on this page"/);
+
+  const tasks = renderCrmTasksBody(snapshot({
+    pagination: {
+      tasks: { ...first, continuation: true, hasNextPage: false, nextCursor: null },
+    },
+  }), { csrfToken: 'csrf', filter: 'open' });
+  assert.match(tasks, /href="\/portal\/crm\/tasks\?status=open">First page<\/a>/);
+  assert.match(tasks, /End of saved records/);
+  assert.doesNotMatch(tasks, /[?&]after=/);
+});
+
 test('CRM bodies use responsive and forced-colour hooks without scripted fake interactions', () => {
   const contacts = renderCrmContactsBody(snapshot(), { csrfToken: 'csrf', createLeadCommandKey: 'create' });
   const pipeline = renderCrmPipelineBody(snapshot(), { csrfToken: 'csrf' });

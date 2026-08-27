@@ -425,10 +425,34 @@ test('POST /api/checkout returns a Stripe URL', async () => {
   assert.match(JSON.parse(r._body).url, /pay\.stripe\.test/);
 });
 
-test('POST /api/checkout 400s an unknown tier', async () => {
+test('the admin outer boundary masks secret-bearing implementation errors', async () => {
+  const secret = 'ADMIN_DATABASE_PASSWORD=do-not-reflect-this';
+  const { handler } = app({
+    adminHandler: async () => { throw new Error(`filesystem failed with ${secret}`); },
+  });
+  const r = res();
+  await handler(req('GET', '/admin'), r);
+  assert.equal(r.statusCode, 500);
+  assert.deepEqual(JSON.parse(r._body), { error: 'internal server error' });
+  assert.doesNotMatch(r._body, /ADMIN_DATABASE_PASSWORD|filesystem failed|do-not-reflect-this/);
+});
+
+test('POST /api/checkout 400s an unknown tier without reflecting CheckoutError details', async () => {
+  const secret = 'CHECKOUT_PROVIDER_SECRET=do-not-reflect-this';
   const { handler } = app(); const r = res();
-  await handler(req('POST', '/api/checkout', JSON.stringify({ tier: 'bogus' })), r);
+  await handler(req('POST', '/api/checkout', JSON.stringify({ tier: secret })), r);
   assert.equal(r.statusCode, 400);
+  assert.deepEqual(JSON.parse(r._body), { error: 'invalid request' });
+  assert.doesNotMatch(r._body, /CHECKOUT_PROVIDER_SECRET|do-not-reflect-this|unknown tier/);
+});
+
+test('malformed JSON receives a stable generic 400 without parser or request details', async () => {
+  const secret = 'JSON_SECRET=do-not-reflect-this';
+  const { handler } = app(); const r = res();
+  await handler(req('POST', '/api/checkout', `{"tier":"core","token":"${secret}",`), r);
+  assert.equal(r.statusCode, 400);
+  assert.deepEqual(JSON.parse(r._body), { error: 'invalid request' });
+  assert.doesNotMatch(r._body, /JSON_SECRET|do-not-reflect-this|JSON|position|Unexpected/);
 });
 
 test('POST /api/stripe/webhook records the order on a good signature, 400s a bad one', async () => {
@@ -450,6 +474,8 @@ test('API request bodies are bounded before parsing or side effects', async () =
   const r = res();
   await handler(req('POST', '/api/checkout', tooLarge, { 'content-length': String(Buffer.byteLength(tooLarge)) }), r);
   assert.equal(r.statusCode, 413);
+  assert.deepEqual(JSON.parse(r._body), { error: 'request body too large' });
+  assert.doesNotMatch(r._body, /65536|bytes|exceeds/);
   assert.equal(created.length, 0);
 });
 
@@ -658,12 +684,15 @@ test('POST /api/intake enforces the acknowledgement server-side before claiming 
 });
 
 test('POST /api/intake restores the paid entitlement after a synchronous launch failure', async () => {
+  const secret = 'PIPELINE_DATABASE_URL=do-not-reflect-this';
   const store = memStore();
   store.record({ session_id: 'cs_retry', tier: 'core', bump: false, email: null, amount_total: null, currency: null, status: 'paid_awaiting_intake', paid_at: 'T' });
-  const { handler } = app({ orders: store, kickPipeline: () => { throw new Error('launch failed'); } });
+  const { handler } = app({ orders: store, kickPipeline: () => { throw new Error(`launch failed: ${secret}`); } });
   const r = res();
   await handler(req('POST', '/api/intake', JSON.stringify({ ...validIntake(), _stripe_session: 'cs_retry', consent: true })), r);
   assert.equal(r.statusCode, 500);
+  assert.deepEqual(JSON.parse(r._body), { error: 'internal server error' });
+  assert.doesNotMatch(r._body, /PIPELINE_DATABASE_URL|do-not-reflect-this|launch failed/);
   assert.equal(store.find('cs_retry')?.status, 'paid_awaiting_intake');
 });
 
@@ -815,6 +844,49 @@ test('POST /api/subscribe 400s a bad email when enabled and 503s when delivery i
   await app().handler(req('POST', '/api/subscribe', JSON.stringify({ email: 'lead@x.com' })), off);
   assert.equal(off.statusCode, 503);
   assert.equal(JSON.parse(off._body).synced, false);
+});
+
+test('integration failures never write exception secrets or customer data to service logs', async () => {
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...parts: unknown[]) => { warnings.push(parts.map(String).join(' ')); };
+  try {
+    const lead = app({
+      marketing: {
+        onLead: async () => {
+          throw new Error('postgresql://owner:password@private.example/customer@example.com');
+        },
+      },
+    });
+    const leadResponse = res();
+    await lead.handler(
+      req('POST', '/api/subscribe', JSON.stringify({ email: 'customer@example.com' })),
+      leadResponse,
+    );
+    assert.equal(leadResponse.statusCode, 502);
+
+    const intake = app({
+      onIntakeAccepted: async () => {
+        throw new Error('https://api.example.test/?token=render-secret');
+      },
+    });
+    intake.store.record({
+      session_id: 'cs_log_mask', tier: 'core', bump: false,
+      email: 'private-buyer@example.com', amount_total: 99700, currency: 'gbp',
+      status: 'paid_awaiting_intake', paid_at: 'T',
+    });
+    const intakeResponse = res();
+    await intake.handler(req('POST', '/api/intake', JSON.stringify({
+      ...validIntake(), _stripe_session: 'cs_log_mask', consent: true,
+    })), intakeResponse);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(intakeResponse.statusCode, 200);
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.deepEqual(warnings, ['marketing onLead failed', 'onIntakeAccepted failed']);
+  assert.doesNotMatch(warnings.join('\n'), /password|token|customer@|private-buyer|postgresql|https:/i);
 });
 
 // ─── subscriptions (recurring billing) ───────────────────────────────────────

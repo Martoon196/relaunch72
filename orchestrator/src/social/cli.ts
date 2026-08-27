@@ -1,11 +1,11 @@
 /**
  * AI Socials Manager — spike CLI.
  *
- *   # Dry-run a run's S8 pack into a schedule (no network, no cost):
- *   npm run social -- --run runs/<id> --schedule 2026-08-01 --mock
+ *   # Dry-run a run's S8 pack into a schedule (DEFAULT; no network, no cost):
+ *   npm run social -- --run runs/<id> --schedule 2026-08-01
  *
- *   # Live (needs AYRSHARE_API_KEY in .env; opt-in, informed consent applies):
- *   npm run social -- --run runs/<id> --schedule 2026-08-01 --platform Facebook --publish
+ *   # `--publish` changes only the preview action. This legacy spike has no
+ *   # live provider path; durable provider operations own that later boundary.
  *
  * Every post passes qaSocialPost (no-invention guard) BEFORE it is queued: any
  * FATAL issue blocks that post; the run writes social-plan.json for review.
@@ -14,35 +14,68 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import '../config.js';
 import type { Intake, QAIssue } from '../types.js';
 import { qaSocialPost } from '../qa/checks.js';
 import { buildSchedule, type S8Output } from './schedule.js';
 import { MockPublisher } from './mock.js';
-import { AyrsharedPublisher } from './ayrshare.js';
-import type { PlannedPost, PublishResult, SocialPublisher } from './types.js';
+import type { PublishResult, SocialPublisher } from './types.js';
 
-interface CliArgs {
+export interface SocialCliArgs {
   run?: string;
   startDate?: string;
   time?: string;
   platforms: string[];
   mock: boolean;
   publish: boolean;
+  executeProviderEffects: boolean;
+  approvalId?: string;
+  approvalSha256?: string;
+  idempotencyKey?: string;
 }
 
-function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { platforms: [], mock: false, publish: false };
+export interface SocialCliRuntime {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly createMockPublisher?: () => SocialPublisher;
+  readonly log?: (message: string) => void;
+}
+
+export const SOCIAL_PROVIDER_EFFECTS_SWITCH = 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED';
+
+function argumentValue(argv: readonly string[], index: number, flag: string): string {
+  const value = argv[index + 1];
+  if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value`);
+  return value;
+}
+
+function setOnce(args: SocialCliArgs, field: 'approvalId' | 'approvalSha256' | 'idempotencyKey', value: string, flag: string): void {
+  if (args[field] !== undefined) throw new Error(`${flag} may be supplied only once`);
+  args[field] = value;
+}
+
+export function parseSocialCliArgs(argv: readonly string[]): SocialCliArgs {
+  const args: SocialCliArgs = {
+    platforms: [],
+    mock: false,
+    publish: false,
+    executeProviderEffects: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--run') args.run = argv[++i];
-    else if (a === '--schedule') args.startDate = argv[++i];
-    else if (a === '--time') args.time = argv[++i];
-    else if (a === '--platform') args.platforms.push(argv[++i] as string);
+    if (a === '--run') { args.run = argumentValue(argv, i, a); i += 1; }
+    else if (a === '--schedule') { args.startDate = argumentValue(argv, i, a); i += 1; }
+    else if (a === '--time') { args.time = argumentValue(argv, i, a); i += 1; }
+    else if (a === '--platform') { args.platforms.push(argumentValue(argv, i, a)); i += 1; }
     else if (a === '--mock') args.mock = true;
     else if (a === '--publish') args.publish = true;
+    else if (a === '--execute-provider-effects') args.executeProviderEffects = true;
+    else if (a === '--approval-id') { setOnce(args, 'approvalId', argumentValue(argv, i, a), a); i += 1; }
+    else if (a === '--approval-sha256') { setOnce(args, 'approvalSha256', argumentValue(argv, i, a), a); i += 1; }
+    else if (a === '--idempotency-key') { setOnce(args, 'idempotencyKey', argumentValue(argv, i, a), a); i += 1; }
     else if (a === '--help' || a === '-h') {
-      console.log('Usage: npm run social -- --run runs/<id> --schedule YYYY-MM-DD [--time HH:MM] [--platform <name> ...] [--mock] [--publish]');
+      console.log('Usage: npm run social -- --run runs/<id> --schedule YYYY-MM-DD [--time HH:MM] [--platform <name> ...] [--publish] [--mock]');
+      console.log('Dry-run is the only mode. Live provider effects are unavailable in this legacy CLI.');
       process.exit(0);
     } else throw new Error(`Unknown argument: ${a}`);
   }
@@ -51,12 +84,28 @@ function parseArgs(argv: string[]): CliArgs {
   return args;
 }
 
+function assertLegacyCliIsDark(args: SocialCliArgs): void {
+  if (args.executeProviderEffects || args.approvalId !== undefined
+      || args.approvalSha256 !== undefined || args.idempotencyKey !== undefined) {
+    throw new Error(
+      'live social provider effects are unavailable in this legacy CLI; use the durable provider-operation rail',
+    );
+  }
+}
+
 function readJson<T>(file: string): T {
   return JSON.parse(fs.readFileSync(file, 'utf8')) as T;
 }
 
-async function main(): Promise<number> {
-  const args = parseArgs(process.argv.slice(2));
+export async function runSocialCli(
+  argv: readonly string[],
+  runtime: SocialCliRuntime = {},
+): Promise<number> {
+  const args = parseSocialCliArgs(argv);
+  const log = runtime.log ?? console.log;
+  // No combination of environment, `--publish`, approval-shaped text or an
+  // idempotency-shaped value can construct a live adapter from this spike.
+  assertLegacyCliIsDark(args);
   const runDir = path.resolve(args.run as string);
 
   const intake = readJson<Intake>(path.join(runDir, 'intake.json'));
@@ -71,34 +120,38 @@ async function main(): Promise<number> {
   }
 
   const planned = buildSchedule(s8, { startDate: args.startDate as string, time: args.time, platforms: args.platforms });
-  console.log(`Socials plan for ${path.basename(runDir)} — ${planned.length} post(s), day 1 = ${args.startDate}${args.platforms.length ? ` (platforms: ${args.platforms.join(', ')})` : ''}`);
+  log(`Socials plan for ${path.basename(runDir)} — ${planned.length} post(s), day 1 = ${args.startDate}${args.platforms.length ? ` (platforms: ${args.platforms.join(', ')})` : ''}`);
 
   // ── QA gate: every post checked before anything is queued ──────────────────
   const checked = planned.map((p) => ({ post: p, issues: qaSocialPost({ platform: p.platform, text: p.text, day: p.day }, intake, prior) }));
   const blocked = checked.filter((c) => c.issues.some((i) => i.fatal));
   const flagged = checked.filter((c) => c.issues.length > 0 && !c.issues.some((i) => i.fatal));
   for (const c of [...blocked, ...flagged]) {
-    for (const issue of c.issues) console.log(`   ${issue.fatal ? '✗ FATAL' : '⚠'} ${issue.message}`);
+    for (const issue of c.issues) log(`   ${issue.fatal ? '✗ FATAL' : '⚠'} ${issue.message}`);
   }
   const publishable = checked.filter((c) => c.issues.length === 0).map((c) => c.post);
-  console.log(`  QA: ${publishable.length} clean · ${flagged.length} flagged · ${blocked.length} blocked (fatal)`);
+  log(`  QA: ${publishable.length} clean · ${flagged.length} flagged · ${blocked.length} blocked (fatal)`);
 
-  // ── Publish/schedule the clean posts through the chosen backend ────────────
-  const client: SocialPublisher = args.mock ? new MockPublisher() : new AyrsharedPublisher();
-  console.log(`  backend: ${client.mode}${client.mode === 'live' ? ' (Ayrshare)' : ''} · action: ${args.publish ? 'publish now' : 'schedule'}`);
+  const client: SocialPublisher = (runtime.createMockPublisher ?? (() => new MockPublisher()))();
+  if (client.mode !== 'mock') throw new Error('dry-run mode refuses a live publisher');
+  const action = args.publish ? 'publish now' : 'schedule';
+  log(`  backend: ${client.mode} · action: dry-run: would ${action}`);
 
   const results: PublishResult[] = [];
   for (const post of publishable) {
     const r = args.publish ? await client.publish(post) : await client.schedule(post);
     results.push(r);
-    console.log(`   ${r.status === 'failed' ? '✗' : '→'} day ${post.day} ${post.platform} @ ${post.scheduleDate}${r.error ? ` — ${r.error}` : ''}`);
+    log(`   ${r.status === 'failed' ? '✗' : '→'} day ${post.day} ${post.platform} @ ${post.scheduleDate}${r.error ? ` — ${r.error}` : ''}`);
   }
 
   const plan = {
     run: path.basename(runDir),
     start_date: args.startDate,
     backend: client.mode,
-    action: args.publish ? 'publish' : 'schedule',
+    action: args.publish ? 'preview_publish' : 'preview_schedule',
+    provider_effects: 'none',
+    approval: null,
+    idempotency_sha256: null,
     counts: { planned: planned.length, clean: publishable.length, flagged: flagged.length, blocked: blocked.length },
     posts: checked.map((c) => ({
       day: c.post.day,
@@ -112,14 +165,19 @@ async function main(): Promise<number> {
     cost_usd_total: results.reduce((n, r) => n + (r.costUsd ?? 0), 0),
   };
   fs.writeFileSync(path.join(runDir, 'social-plan.json'), JSON.stringify(plan, null, 2), 'utf8');
-  console.log(`\n✓ Plan written: ${runDir}/social-plan.json`);
-  if (client.mode === 'mock') console.log('NOTE: mock backend — nothing was posted; this is a dry run.');
+  log(`\n✓ Plan written: ${runDir}/social-plan.json`);
+  log('NOTE: dry-run backend — no live provider exists here and nothing was scheduled or published.');
   return blocked.length > 0 ? 3 : 0;
 }
 
-main()
-  .then((code) => process.exit(code))
-  .catch((err) => {
-    console.error(`Error: ${(err as Error).message}`);
-    process.exit(1);
-  });
+const directEntry = process.argv[1]
+  ? pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url
+  : false;
+if (directEntry) {
+  runSocialCli(process.argv.slice(2))
+    .then((code) => process.exit(code))
+    .catch((err) => {
+      console.error(`Error: ${(err as Error).message}`);
+      process.exit(1);
+    });
+}

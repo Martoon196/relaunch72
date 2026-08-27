@@ -328,7 +328,11 @@ export async function buildPgPortalPlatform(
     return {
       auth: new PgPortalAuthService({ readPool: webPool, commandPool: identityPool }),
       abuse,
-      crm: createPgPortalCrmService({ webPool, commandPool }),
+      crm: createPgPortalCrmService({
+        webPool,
+        commandPool,
+        cursorSecret: env.SESSION_SECRET?.trim() ?? '',
+      }),
       journeys: createPgPortalJourneyManagerService({ webPool, commandPool }),
       operatorActions: createPgPortalOperatorActionCentreService({
         webPool,

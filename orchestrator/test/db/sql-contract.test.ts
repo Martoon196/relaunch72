@@ -40,6 +40,7 @@ const migration33Url = new URL('../../src/db/migrations/0033_property_predator_c
 const migration34Url = new URL('../../src/db/migrations/0034_property_predator_email_pilot_clock_fence.sql', import.meta.url);
 const migration35Url = new URL('../../src/db/migrations/0035_company_asset_portal_session_capability.sql', import.meta.url);
 const migration36Url = new URL('../../src/db/migrations/0036_portal_abuse_limits.sql', import.meta.url);
+const migration37Url = new URL('../../src/db/migrations/0037_crm_bounded_page_indexes.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -478,9 +479,9 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums through the portal abuse boundary', async () => {
+test('bundled migration discovery orders and checksums through the bounded CRM page indexes', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-32);
+  const tail = migrations.slice(-33);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0005_canonical_portal_identity.sql', version: 5 },
     { filename: '0006_customer_provisioning.sql', version: 6 },
@@ -514,6 +515,7 @@ test('bundled migration discovery orders and checksums through the portal abuse 
     { filename: '0034_property_predator_email_pilot_clock_fence.sql', version: 34 },
     { filename: '0035_company_asset_portal_session_capability.sql', version: 35 },
     { filename: '0036_portal_abuse_limits.sql', version: 36 },
+    { filename: '0037_crm_bounded_page_indexes.sql', version: 37 },
   ]);
   const sources = [
     (await readFile(migration5Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -548,6 +550,7 @@ test('bundled migration discovery orders and checksums through the portal abuse 
     (await readFile(migration34Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration35Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration36Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration37Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));

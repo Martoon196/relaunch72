@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type {
   CrmNotice,
+  CrmTaskFilter,
   CrmWorkspaceSnapshot,
   CrmWorkspaceView,
   CreateLeadField,
@@ -59,6 +60,26 @@ export interface PortalCrmWorkspaceShell {
   readonly workspace: CrmWorkspaceView;
 }
 
+/**
+ * A route-specific CRM read. The opaque continuation token is verified only
+ * after the service resolves the active session and its selected workspace.
+ */
+export type PortalCrmSnapshotRequest =
+  | { readonly section: 'overview' }
+  | { readonly section: 'contacts'; readonly cursor?: string }
+  | { readonly section: 'pipeline'; readonly cursor?: string }
+  | { readonly section: 'tasks'; readonly cursor?: string; readonly filter: CrmTaskFilter };
+
+/** Safe, caller-distinguishable rejection for malformed or out-of-scope page tokens. */
+export class PortalCrmPageCursorError extends Error {
+  readonly code = 'invalid_portal_crm_page_cursor';
+
+  constructor() {
+    super('The CRM page cursor is invalid');
+    this.name = 'PortalCrmPageCursorError';
+  }
+}
+
 export interface PortalJourneyBoardFilters {
   readonly query?: string;
   readonly route?: string;
@@ -73,7 +94,10 @@ export type PortalJourneyBoardSnapshot = Omit<JourneyBoardView, 'csrfToken' | 'n
  * authorization, transaction context and command error sanitisation.
  */
 export interface PortalCrmService {
-  snapshot(identity: PortalCrmRequestIdentity): Promise<CrmWorkspaceSnapshot | null>;
+  snapshot(
+    identity: PortalCrmRequestIdentity,
+    request?: PortalCrmSnapshotRequest,
+  ): Promise<CrmWorkspaceSnapshot | null>;
   /** Narrow workspace chrome for pages whose own read model supplies all body data. */
   workspaceShell?(identity: PortalCrmRequestIdentity): Promise<PortalCrmWorkspaceShell | null>;
   /** Read-only conversion intelligence. Omitted by deliberately narrow adapters. */

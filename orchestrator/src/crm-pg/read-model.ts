@@ -6,12 +6,63 @@ import type { CrmTransactionRunner, SqlExecutor } from './types.js';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const INTEGER_PATTERN = /^(?:0|[1-9]\d*)$/;
+const ORDERING_TIMESTAMP_PATTERN = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.(\d{3,6})Z$/;
+const PAGE_SIZE = 50;
+const PAGE_QUERY_LIMIT = PAGE_SIZE + 1;
+const STAGE_LIMIT = 100;
+const STAGE_QUERY_LIMIT = STAGE_LIMIT + 1;
 const TIMELINE_LIMIT = 100;
 
 export type CrmLifecycleStatus = 'lead' | 'customer' | 'archived';
 export type CrmOpportunityReadStatus = 'open' | 'won' | 'lost';
 export type CrmTaskReadStatus = 'open' | 'completed' | 'cancelled';
 export type CrmStageType = 'open' | 'won' | 'lost';
+export type CrmTaskReadFilter = 'open' | 'completed' | 'all';
+
+export interface CrmContactReadCursor {
+  readonly updatedAt: string;
+  readonly id: string;
+}
+
+export interface CrmOpportunityReadCursor {
+  readonly updatedAt: string;
+  readonly id: string;
+}
+
+export interface CrmTaskReadCursor {
+  readonly statusRank: 0 | 1 | 2;
+  readonly dueAt: string | null;
+  readonly updatedAt: string;
+  readonly id: string;
+}
+
+export interface CrmReadPageInfo<TCursor> {
+  readonly hasNextPage: boolean;
+  /** Raw database tuple. The portal must authenticate and bind this before exposing it. */
+  readonly endCursor: TCursor | null;
+}
+
+export interface CrmWorkspaceReadPagination {
+  readonly contacts: CrmReadPageInfo<CrmContactReadCursor> | null;
+  readonly opportunities: CrmReadPageInfo<CrmOpportunityReadCursor> | null;
+  readonly tasks: CrmReadPageInfo<CrmTaskReadCursor> | null;
+}
+
+export type CrmWorkspaceReadRequest =
+  | {
+      readonly section: 'overview';
+      readonly contactsAfter?: CrmContactReadCursor;
+      readonly opportunitiesAfter?: CrmOpportunityReadCursor;
+      readonly tasksAfter?: CrmTaskReadCursor;
+      readonly taskFilter?: CrmTaskReadFilter;
+    }
+  | { readonly section: 'contacts'; readonly after?: CrmContactReadCursor }
+  | { readonly section: 'pipeline'; readonly after?: CrmOpportunityReadCursor }
+  | {
+      readonly section: 'tasks';
+      readonly after?: CrmTaskReadCursor;
+      readonly filter?: CrmTaskReadFilter;
+    };
 
 export interface CrmWorkspaceRead {
   readonly id: string;
@@ -111,6 +162,8 @@ export interface CrmWorkspaceReadSnapshot {
   readonly opportunities: readonly CrmOpportunityRead[];
   readonly tasks: readonly CrmTaskRead[];
   readonly timeline: readonly CrmActivityRead[];
+  /** Optional only for backwards-compatible callers constructing test snapshots. DB reads always provide it. */
+  readonly pagination?: CrmWorkspaceReadPagination;
 }
 
 export interface CrmReadDependencies {
@@ -214,6 +267,119 @@ function timestamp(value: unknown, label: string): string {
 
 function nullableTimestamp(value: unknown, label: string): string | null {
   return value === null ? null : timestamp(value, label);
+}
+
+/**
+ * Cursor timestamps must retain PostgreSQL's microseconds. JavaScript Date
+ * intentionally remains the UI projection above, but it is not precise enough
+ * to be a database ordering key.
+ */
+function orderingTimestamp(value: unknown, label: string): string {
+  if (value instanceof Date) return timestamp(value, label);
+  if (typeof value !== 'string') {
+    throw new CrmReadDataError(`${label} must be a precise UTC timestamp`);
+  }
+  const match = ORDERING_TIMESTAMP_PATTERN.exec(value);
+  // Compatibility for pre-precision cursors and narrow adapters. Real list SQL
+  // always returns the dedicated six-digit cursor columns below.
+  if (!match) return timestamp(value, label);
+  const millisecondProjection = `${match[1]}.${match[2]!.slice(0, 3)}Z`;
+  const parsed = new Date(millisecondProjection);
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString() !== millisecondProjection) {
+    throw new CrmReadDataError(`${label} must be a precise UTC timestamp`);
+  }
+  return value;
+}
+
+function nullableOrderingTimestamp(value: unknown, label: string): string | null {
+  return value === null ? null : orderingTimestamp(value, label);
+}
+
+function contactCursor(value: unknown, label: string): CrmContactReadCursor {
+  const row = record(value, label);
+  return Object.freeze({
+    updatedAt: orderingTimestamp(row.updatedAt, `${label}.updatedAt`),
+    id: uuid(row.id, `${label}.id`),
+  });
+}
+
+function opportunityCursor(value: unknown, label: string): CrmOpportunityReadCursor {
+  const row = record(value, label);
+  return Object.freeze({
+    updatedAt: orderingTimestamp(row.updatedAt, `${label}.updatedAt`),
+    id: uuid(row.id, `${label}.id`),
+  });
+}
+
+function taskCursor(value: unknown, label: string): CrmTaskReadCursor {
+  const row = record(value, label);
+  return Object.freeze({
+    statusRank: safeInteger(row.statusRank, `${label}.statusRank`, 0, 2) as 0 | 1 | 2,
+    dueAt: nullableOrderingTimestamp(row.dueAt, `${label}.dueAt`),
+    updatedAt: orderingTimestamp(row.updatedAt, `${label}.updatedAt`),
+    id: uuid(row.id, `${label}.id`),
+  });
+}
+
+interface NormalizedCrmWorkspaceReadRequest {
+  readonly section: 'overview' | 'contacts' | 'pipeline' | 'tasks';
+  readonly contactsAfter: CrmContactReadCursor | null;
+  readonly opportunitiesAfter: CrmOpportunityReadCursor | null;
+  readonly tasksAfter: CrmTaskReadCursor | null;
+  readonly taskFilter: CrmTaskReadFilter;
+}
+
+function normalizeReadRequest(value: CrmWorkspaceReadRequest | undefined): NormalizedCrmWorkspaceReadRequest {
+  if (value === undefined) {
+    return Object.freeze({
+      section: 'overview',
+      contactsAfter: null,
+      opportunitiesAfter: null,
+      tasksAfter: null,
+      taskFilter: 'all',
+    });
+  }
+  const row = record(value, 'CRM read request');
+  const section = oneOf(row.section, ['overview', 'contacts', 'pipeline', 'tasks'] as const, 'CRM read request.section');
+  const normalized: NormalizedCrmWorkspaceReadRequest = section === 'overview'
+    ? {
+        section,
+        contactsAfter: row.contactsAfter === undefined ? null : contactCursor(row.contactsAfter, 'CRM read request.contactsAfter'),
+        opportunitiesAfter: row.opportunitiesAfter === undefined
+          ? null : opportunityCursor(row.opportunitiesAfter, 'CRM read request.opportunitiesAfter'),
+        tasksAfter: row.tasksAfter === undefined ? null : taskCursor(row.tasksAfter, 'CRM read request.tasksAfter'),
+        taskFilter: oneOf(row.taskFilter ?? 'all', ['open', 'completed', 'all'] as const, 'CRM read request.taskFilter'),
+      }
+    : section === 'contacts'
+      ? {
+          section,
+          contactsAfter: row.after === undefined ? null : contactCursor(row.after, 'CRM read request.after'),
+          opportunitiesAfter: null,
+          tasksAfter: null,
+          taskFilter: 'all',
+        }
+      : section === 'pipeline'
+        ? {
+            section,
+            contactsAfter: null,
+            opportunitiesAfter: row.after === undefined ? null : opportunityCursor(row.after, 'CRM read request.after'),
+            tasksAfter: null,
+            taskFilter: 'all',
+          }
+        : {
+            section,
+            contactsAfter: null,
+            opportunitiesAfter: null,
+            tasksAfter: row.after === undefined ? null : taskCursor(row.after, 'CRM read request.after'),
+            taskFilter: oneOf(row.filter ?? 'open', ['open', 'completed', 'all'] as const, 'CRM read request.filter'),
+          };
+  if (normalized.tasksAfter && normalized.taskFilter !== 'all') {
+    const requiredRank = normalized.taskFilter === 'open' ? 0 : 1;
+    if (normalized.tasksAfter.statusRank !== requiredRank) {
+      throw new CrmReadDataError('CRM task cursor does not belong to the requested status filter');
+    }
+  }
+  return Object.freeze(normalized);
 }
 
 function nullableDate(value: unknown, label: string): string | null {
@@ -328,7 +494,8 @@ function mapTask(value: unknown, index: number): CrmTaskRead {
     opportunityId: nullableUuid(row.opportunity_id, `tasks[${index}].opportunityId`),
     opportunityTitle: nullableText(row.opportunity_title, `tasks[${index}].opportunityTitle`),
     title: text(row.title, `tasks[${index}].title`),
-    description: nullableText(row.description, `tasks[${index}].description`),
+    // Task descriptions are deliberately excluded from list reads; detail reads may expose them later.
+    description: null,
     assigneeUserId: nullableUuid(row.assignee_user_id, `tasks[${index}].assigneeUserId`),
     priority: oneOf(row.priority, ['low', 'normal', 'high', 'urgent'] as const, `tasks[${index}].priority`),
     status: oneOf(row.status, ['open', 'completed', 'cancelled'] as const, `tasks[${index}].status`),
@@ -343,6 +510,57 @@ function mapTask(value: unknown, index: number): CrmTaskRead {
     throw new CrmReadDataError(`tasks[${index}] has inconsistent completion metadata`);
   }
   return task;
+}
+
+function taskStatusRank(status: CrmTaskReadStatus): 0 | 1 | 2 {
+  return status === 'open' ? 0 : status === 'completed' ? 1 : 2;
+}
+
+function boundedPage<TItem, TCursor>(
+  inputRows: readonly Record<string, unknown>[],
+  label: string,
+  mapper: (value: unknown, index: number) => TItem,
+  cursorFor: (item: TItem, row: Record<string, unknown>) => TCursor,
+): { readonly items: readonly TItem[]; readonly pageInfo: CrmReadPageInfo<TCursor> } {
+  if (inputRows.length > PAGE_QUERY_LIMIT) {
+    throw new CrmReadDataError(`${label} query exceeded its fixed database limit`);
+  }
+  const hasNextPage = inputRows.length === PAGE_QUERY_LIMIT;
+  const items = Object.freeze(inputRows.slice(0, PAGE_SIZE).map(mapper));
+  const lastItem = items.at(-1);
+  const lastRow = inputRows[Math.min(inputRows.length, PAGE_SIZE) - 1];
+  return Object.freeze({
+    items,
+    pageInfo: Object.freeze({
+      hasNextPage,
+      endCursor: lastItem === undefined || lastRow === undefined
+        ? null
+        : Object.freeze(cursorFor(lastItem, lastRow)),
+    }),
+  });
+}
+
+function contactPage(inputRows: readonly Record<string, unknown>[]) {
+  return boundedPage(inputRows, 'Contact page', mapContact, (item, row) => ({
+    updatedAt: orderingTimestamp(row.cursor_updated_at ?? row.updated_at, 'Contact page cursor.updatedAt'),
+    id: item.id,
+  }));
+}
+
+function opportunityPage(inputRows: readonly Record<string, unknown>[]) {
+  return boundedPage(inputRows, 'Opportunity page', mapOpportunity, (item, row) => ({
+    updatedAt: orderingTimestamp(row.cursor_updated_at ?? row.updated_at, 'Opportunity page cursor.updatedAt'),
+    id: item.id,
+  }));
+}
+
+function taskPage(inputRows: readonly Record<string, unknown>[]) {
+  return boundedPage(inputRows, 'Task page', mapTask, (item, row) => ({
+    statusRank: taskStatusRank(item.status),
+    dueAt: nullableOrderingTimestamp(row.cursor_due_at ?? row.due_at, 'Task page cursor.dueAt'),
+    updatedAt: orderingTimestamp(row.cursor_updated_at ?? row.updated_at, 'Task page cursor.updatedAt'),
+    id: item.id,
+  }));
 }
 
 function mapActivity(value: unknown, index: number): CrmActivityRead {
@@ -389,6 +607,10 @@ const CONTACTS_SQL = `/* crm.read.contacts */
          contact.row_version::text AS row_version,
          contact.created_at,
          contact.updated_at,
+         to_char(
+           contact.updated_at AT TIME ZONE 'UTC',
+           'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+         ) AS cursor_updated_at,
          primary_email.value AS primary_email,
          primary_phone.value AS primary_phone,
          open_opportunities.open_count::text AS open_opportunity_count,
@@ -445,7 +667,13 @@ const CONTACTS_SQL = `/* crm.read.contacts */
   ) AS last_activity ON true
   WHERE contact.workspace_id = app_private.current_workspace_id()
     AND contact.deleted_at IS NULL
-  ORDER BY contact.updated_at DESC, contact.id`;
+    AND (
+      $1::timestamptz IS NULL
+      OR contact.updated_at < $1::timestamptz
+      OR (contact.updated_at = $1::timestamptz AND contact.id > $2::uuid)
+    )
+  ORDER BY contact.updated_at DESC, contact.id
+  LIMIT $3`;
 
 const STAGES_SQL = `/* crm.read.stages */
   SELECT stage.id,
@@ -461,7 +689,8 @@ const STAGES_SQL = `/* crm.read.stages */
    AND pipeline.id = stage.pipeline_id
    AND pipeline.is_default
   WHERE stage.workspace_id = app_private.current_workspace_id()
-  ORDER BY stage.position, stage.id`;
+  ORDER BY stage.position, stage.id
+  LIMIT $1`;
 
 const OPPORTUNITIES_SQL = `/* crm.read.opportunities */
   SELECT opportunity.id,
@@ -478,6 +707,10 @@ const OPPORTUNITIES_SQL = `/* crm.read.opportunities */
          opportunity.owner_user_id,
          opportunity.expected_close_date::text AS expected_close_date,
          opportunity.updated_at,
+         to_char(
+           opportunity.updated_at AT TIME ZONE 'UTC',
+           'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+         ) AS cursor_updated_at,
          opportunity.row_version::text AS row_version,
          next_task.id AS next_task_id,
          next_task.title AS next_task_title,
@@ -501,7 +734,13 @@ const OPPORTUNITIES_SQL = `/* crm.read.opportunities */
     LIMIT 1
   ) AS next_task ON true
   WHERE opportunity.workspace_id = app_private.current_workspace_id()
-  ORDER BY opportunity.updated_at DESC, opportunity.id`;
+    AND (
+      $1::timestamptz IS NULL
+      OR opportunity.updated_at < $1::timestamptz
+      OR (opportunity.updated_at = $1::timestamptz AND opportunity.id > $2::uuid)
+    )
+  ORDER BY opportunity.updated_at DESC, opportunity.id
+  LIMIT $3`;
 
 const TASKS_SQL = `/* crm.read.tasks */
   SELECT task.id,
@@ -510,14 +749,21 @@ const TASKS_SQL = `/* crm.read.tasks */
          task.opportunity_id,
          opportunity.name AS opportunity_title,
          task.title,
-         task.description,
          task.assignee_user_id,
          task.priority,
          task.status,
          task.due_at,
+         to_char(
+           task.due_at AT TIME ZONE 'UTC',
+           'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+         ) AS cursor_due_at,
          task.completed_at,
          task.completed_by_user_id,
          task.updated_at,
+         to_char(
+           task.updated_at AT TIME ZONE 'UTC',
+           'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+         ) AS cursor_updated_at,
          task.row_version::text AS row_version
   FROM app.tasks AS task
   LEFT JOIN app.contacts AS contact
@@ -529,10 +775,43 @@ const TASKS_SQL = `/* crm.read.tasks */
    AND opportunity.id = task.opportunity_id
   WHERE task.workspace_id = app_private.current_workspace_id()
     AND (task.contact_id IS NULL OR contact.id IS NOT NULL)
+    AND ($1::text = 'all' OR task.status = $1::text)
+    AND (
+      $2::integer IS NULL
+      OR CASE task.status WHEN 'open' THEN 0 WHEN 'completed' THEN 1 ELSE 2 END > $2::integer
+      OR (
+        CASE task.status WHEN 'open' THEN 0 WHEN 'completed' THEN 1 ELSE 2 END = $2::integer
+        AND (
+          (
+            $3::timestamptz IS NOT NULL
+            AND (
+              task.due_at IS NULL
+              OR task.due_at > $3::timestamptz
+              OR (
+                task.due_at = $3::timestamptz
+                AND (
+                  task.updated_at < $4::timestamptz
+                  OR (task.updated_at = $4::timestamptz AND task.id > $5::uuid)
+                )
+              )
+            )
+          )
+          OR (
+            $3::timestamptz IS NULL
+            AND task.due_at IS NULL
+            AND (
+              task.updated_at < $4::timestamptz
+              OR (task.updated_at = $4::timestamptz AND task.id > $5::uuid)
+            )
+          )
+        )
+      )
+    )
   ORDER BY CASE task.status WHEN 'open' THEN 0 WHEN 'completed' THEN 1 ELSE 2 END,
            task.due_at ASC NULLS LAST,
            task.updated_at DESC,
-           task.id`;
+           task.id
+  LIMIT $6`;
 
 const TIMELINE_SQL = `/* crm.read.timeline */
   SELECT activity.id,
@@ -549,8 +828,12 @@ const TIMELINE_SQL = `/* crm.read.timeline */
   ORDER BY activity.occurred_at DESC, activity.id DESC
   LIMIT ${TIMELINE_LIMIT}`;
 
-async function rows(transaction: SqlExecutor, sql: string): Promise<readonly Record<string, unknown>[]> {
-  const result = await transaction.query(sql);
+async function rows(
+  transaction: SqlExecutor,
+  sql: string,
+  values?: readonly unknown[],
+): Promise<readonly Record<string, unknown>[]> {
+  const result = await transaction.query(sql, values);
   return result.rows;
 }
 
@@ -571,45 +854,90 @@ export class CrmReadService {
     });
   }
 
-  async loadWorkspaceSnapshot(context: DatabaseRequestContext): Promise<CrmWorkspaceReadSnapshot> {
+  async loadWorkspaceSnapshot(
+    context: DatabaseRequestContext,
+    request?: CrmWorkspaceReadRequest,
+  ): Promise<CrmWorkspaceReadSnapshot> {
     validateDatabaseContext(context);
     if (context.actorKind !== 'user' || !context.userId) {
       throw new CrmReadDataError('CRM workspace snapshots require an authenticated user context');
     }
+    const normalized = normalizeReadRequest(request);
     return this.dependencies.transactionRunner.run(context, async (transaction) => {
       const workspaceRows = await rows(transaction, WORKSPACE_SQL);
       if (workspaceRows.length !== 1) {
         throw new CrmReadDataError('Workspace snapshot must resolve exactly one visible workspace');
       }
       const workspace = mapWorkspace(workspaceRows[0]);
-      const contactRows = await rows(transaction, CONTACTS_SQL);
-      const stageRows = await rows(transaction, STAGES_SQL);
-      const opportunityRows = await rows(transaction, OPPORTUNITIES_SQL);
-      const taskRows = await rows(transaction, TASKS_SQL);
+      const includeContacts = normalized.section === 'overview' || normalized.section === 'contacts';
+      const includeStages = normalized.section === 'overview'
+        || normalized.section === 'contacts'
+        || normalized.section === 'pipeline';
+      const includeOpportunities = normalized.section === 'overview' || normalized.section === 'pipeline';
+      const includeTasks = normalized.section === 'overview' || normalized.section === 'tasks';
+
+      const contactRows = includeContacts
+        ? await rows(transaction, CONTACTS_SQL, [
+            normalized.contactsAfter?.updatedAt ?? null,
+            normalized.contactsAfter?.id ?? null,
+            PAGE_QUERY_LIMIT,
+          ])
+        : [];
+      const stageRows = includeStages
+        ? await rows(transaction, STAGES_SQL, [STAGE_QUERY_LIMIT])
+        : [];
+      if (stageRows.length > STAGE_LIMIT) {
+        throw new CrmReadDataError(`Default pipeline exceeds the hard limit of ${STAGE_LIMIT} stages`);
+      }
+      const opportunityRows = includeOpportunities
+        ? await rows(transaction, OPPORTUNITIES_SQL, [
+            normalized.opportunitiesAfter?.updatedAt ?? null,
+            normalized.opportunitiesAfter?.id ?? null,
+            PAGE_QUERY_LIMIT,
+          ])
+        : [];
+      const taskRows = includeTasks
+        ? await rows(transaction, TASKS_SQL, [
+            normalized.taskFilter,
+            normalized.tasksAfter?.statusRank ?? null,
+            normalized.tasksAfter?.dueAt ?? null,
+            normalized.tasksAfter?.updatedAt ?? null,
+            normalized.tasksAfter?.id ?? null,
+            PAGE_QUERY_LIMIT,
+          ])
+        : [];
       const timelineRows = await rows(transaction, TIMELINE_SQL);
 
-      const contacts = Object.freeze(contactRows.map(mapContact));
+      const contactsPage = includeContacts ? contactPage(contactRows) : null;
       const stages = Object.freeze(stageRows.map(mapStage));
-      const opportunities = Object.freeze(opportunityRows.map(mapOpportunity));
-      const tasks = Object.freeze(taskRows.map(mapTask));
+      const opportunitiesPage = includeOpportunities ? opportunityPage(opportunityRows) : null;
+      const tasksPage = includeTasks ? taskPage(taskRows) : null;
+      const contacts = contactsPage?.items ?? Object.freeze([] as CrmContactRead[]);
+      const opportunities = opportunitiesPage?.items ?? Object.freeze([] as CrmOpportunityRead[]);
+      const tasks = tasksPage?.items ?? Object.freeze([] as CrmTaskRead[]);
       const timeline = Object.freeze(timelineRows.map(mapActivity));
 
       if (workspace.defaultPipelineId !== null) {
-        if (stages.some((stage) => stage.pipelineId !== workspace.defaultPipelineId)) {
+        if (includeStages && stages.some((stage) => stage.pipelineId !== workspace.defaultPipelineId)) {
           throw new CrmReadDataError('Default pipeline stage snapshot is internally inconsistent');
         }
-        if (opportunities.some((opportunity) => opportunity.pipelineId !== workspace.defaultPipelineId)) {
+        if (includeOpportunities && opportunities.some((opportunity) => opportunity.pipelineId !== workspace.defaultPipelineId)) {
           throw new CrmReadDataError('Default pipeline opportunity snapshot is internally inconsistent');
         }
-        const stageIds = new Set(stages.map((stage) => stage.id));
-        if (opportunities.some((opportunity) => !stageIds.has(opportunity.stageId))) {
+        const stageIds = includeStages ? new Set(stages.map((stage) => stage.id)) : null;
+        if (stageIds && opportunities.some((opportunity) => !stageIds.has(opportunity.stageId))) {
           throw new CrmReadDataError('An opportunity references a stage outside the default pipeline snapshot');
         }
-      } else if (stages.length > 0 || opportunities.length > 0) {
+      } else if ((includeStages && stages.length > 0) || (includeOpportunities && opportunities.length > 0)) {
         throw new CrmReadDataError('Pipeline rows were returned without a visible default pipeline');
       }
 
-      return Object.freeze({ workspace, contacts, stages, opportunities, tasks, timeline });
+      const pagination: CrmWorkspaceReadPagination = Object.freeze({
+        contacts: contactsPage?.pageInfo ?? null,
+        opportunities: opportunitiesPage?.pageInfo ?? null,
+        tasks: tasksPage?.pageInfo ?? null,
+      });
+      return Object.freeze({ workspace, contacts, stages, opportunities, tasks, timeline, pagination });
     });
   }
 }
