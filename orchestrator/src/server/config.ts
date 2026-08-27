@@ -136,8 +136,9 @@ export function loadStripeConfig(env: NodeJS.ProcessEnv = process.env): StripeCo
 
 /**
  * Production PostgreSQL portal traffic is reachable only through Render's
- * trusted proxy boundary. The abuse HMAC key is deliberately independent from
- * the session-signing key so evidence cannot become a cookie oracle.
+ * trusted proxy boundary. Render mode accepts one strict CF-Connecting-IP and
+ * never treats appendable X-Forwarded-For as source authority. The abuse HMAC
+ * key is independent from the session key so evidence cannot become an oracle.
  */
 export function loadPortalAbuseRuntimeConfig(
   production: boolean,

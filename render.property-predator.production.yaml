@@ -51,8 +51,9 @@ services:
         value: https://hq.propertypredator.com,https://propertypredator.com,https://www.propertypredator.com
       - key: SESSION_SECRET
         generateValue: true
-      # Render terminates the trusted proxy chain. Client addresses are HMACed
-      # with a key that is independent from the session-signing secret.
+      # Render's edge overwrites CF-Connecting-IP; that strict single value is
+      # source authority and appendable X-Forwarded-For is ignored. Addresses
+      # are HMACed with a key independent from the session-signing secret.
       - key: PORTAL_PROXY_MODE
         value: render
       - key: PORTAL_ABUSE_HASH_SECRET

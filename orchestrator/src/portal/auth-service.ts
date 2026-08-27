@@ -1,7 +1,7 @@
 export interface PortalAuthRequestContext {
   now: number;
-  /** Direct peer address only; proxy-derived client IP needs an explicit trust policy. */
-  ipAddress?: string;
+  /** Deployment-keyed, domain-separated source evidence; never a raw address/digest. */
+  sourceHash?: Buffer;
   userAgent?: string;
 }
 

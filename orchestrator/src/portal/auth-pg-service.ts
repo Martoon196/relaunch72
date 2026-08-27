@@ -48,12 +48,11 @@ function metadataHash(value: string | undefined): Buffer | null {
   return sha256(value.slice(0, 4_096));
 }
 
-function setupSourceHash(value: string | undefined): Buffer {
-  const normalized = value?.trim().slice(0, 256) || 'unavailable';
-  return createHash('sha256')
-    .update('relaunch72/setup-source/v1\u0000')
-    .update(normalized)
-    .digest();
+function sourceEvidenceHash(value: Buffer | undefined): Buffer {
+  if (!Buffer.isBuffer(value) || value.length !== 32) {
+    throw new Error('Portal authentication source evidence is unavailable');
+  }
+  return Buffer.from(value);
 }
 
 function canonicalUuid(value: unknown): string | null {
@@ -181,6 +180,7 @@ export class PgPortalAuthService implements PortalAuthService {
     if (!userId || userEmail !== normalizedEmail || !workspaceId || currentPasswordHash !== credential.password_hash) {
       throw new Error('Portal login credential returned invalid identity data');
     }
+    const sourceHash = sourceEvidenceHash(context.sourceHash);
 
     const sessionToken = rawOpaqueSession();
     const csrfSecret = randomBytes(32);
@@ -196,7 +196,7 @@ export class PgPortalAuthService implements PortalAuthService {
           currentPasswordHash,
           sha256(sessionToken),
           sha256(csrfSecret),
-          metadataHash(context.ipAddress),
+          sourceHash,
           metadataHash(context.userAgent),
         ],
       );
@@ -238,7 +238,7 @@ export class PgPortalAuthService implements PortalAuthService {
 
     const setupTokenHash = sha256(setupToken);
     const claimHash = sha256(randomBytes(32));
-    const sourceHash = setupSourceHash(context.ipAddress);
+    const sourceHash = sourceEvidenceHash(context.sourceHash);
     let reserved;
     try {
       reserved = await this.dependencies.commandPool.query<SetupClaimRow>(
@@ -290,7 +290,7 @@ export class PgPortalAuthService implements PortalAuthService {
             passwordHash,
             sha256(sessionToken),
             sha256(csrfSecret),
-            metadataHash(context.ipAddress),
+            sourceHash,
             metadataHash(context.userAgent),
           ],
         );
@@ -347,6 +347,7 @@ export class PgPortalAuthService implements PortalAuthService {
     bootstrapUserId?: string,
   ): Promise<PortalAuthenticatedSession | null> {
     if (!validExternalIdentityAssertion(assertion, context, bootstrapUserId)) return null;
+    const sourceHash = sourceEvidenceHash(context.sourceHash);
 
     const sessionToken = rawOpaqueSession();
     const csrfSecret = randomBytes(32);
@@ -373,7 +374,7 @@ export class PgPortalAuthService implements PortalAuthService {
           assertion.attribution.attachedAt,
           sha256(sessionToken),
           sha256(csrfSecret),
-          metadataHash(context.ipAddress),
+          sourceHash,
           metadataHash(context.userAgent),
         ],
       );

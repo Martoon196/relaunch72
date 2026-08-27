@@ -127,6 +127,7 @@ import {
   PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE,
   PROPERTY_PREDATOR_SSO_COOKIE,
   PROPERTY_PREDATOR_SSO_START_ROUTE,
+  PropertyPredatorSsoAuthenticationError,
   clearPropertyPredatorSsoCookie,
   type PropertyPredatorSsoClient,
   type PropertyPredatorSsoProviderHint,
@@ -388,13 +389,17 @@ function setupKeys(req: IncomingMessage, setupToken: string, deps: PortalDeps): 
   return keys;
 }
 
-function authRequestContext(req: IncomingMessage, now: number, deps: PortalDeps): PortalAuthRequestContext {
+function authRequestContext(
+  req: IncomingMessage,
+  now: number,
+  requestContext: PortalRequestContext | null,
+): PortalAuthRequestContext {
   const userAgent = Array.isArray(req.headers['user-agent'])
     ? req.headers['user-agent'][0]
     : req.headers['user-agent'];
   return {
     now,
-    ipAddress: resolvedTrustedClientAddress(req, deps),
+    ...(requestContext?.sourceHash ? { sourceHash: Buffer.from(requestContext.sourceHash) } : {}),
     userAgent: userAgent?.slice(0, 4_096),
   };
 }
@@ -852,9 +857,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     return sendAbuseStatus(res, 503, 30);
   }
   if (resolvedRequestContext) {
-    // Freeze deployment-derived request evidence once. Existing service calls
-    // can keep their narrow dependency shape while sharing one request id and
-    // one trusted address rather than re-reading headers independently.
+    // Freeze deployment-derived request evidence once. Existing process-local
+    // throttles share the trusted address while persistence receives only the
+    // keyed source evidence from this same once-per-request boundary.
     deps = {
       ...deps,
       requestId: () => resolvedRequestContext.requestId,
@@ -1028,7 +1033,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       const authenticated = exchange
         ? await deps.auth.loginExternal(
             exchange.assertion,
-            authRequestContext(req, now, deps),
+            authRequestContext(req, now, resolvedRequestContext),
             exchange.bootstrapUserId,
           )
         : null;
@@ -1058,13 +1063,16 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         'cache-control': 'no-store',
         'referrer-policy': 'no-referrer',
       });
-    } catch {
-      await completeAbuseLease(ssoAbuseLease, 'service_error');
+    } catch (error) {
+      const authenticationFailure = error instanceof PropertyPredatorSsoAuthenticationError;
+      await completeAbuseLease(ssoAbuseLease, authenticationFailure ? 'auth_failure' : 'service_error');
       return sendLoginPage(
         res,
-        503,
+        authenticationFailure ? 401 : 503,
         deps,
-        'Property Predator sign-in is temporarily unavailable. Use your Growth HQ password.',
+        authenticationFailure
+          ? 'We could not complete that sign-in. Use your Growth HQ password or contact support.'
+          : 'Property Predator sign-in is temporarily unavailable. Use your Growth HQ password.',
         '',
         {},
         [sso.clearCookie()],
@@ -1172,7 +1180,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     let completed;
     try {
       completed = deps.kind === 'postgres'
-        ? await deps.auth.completeSetup!(token, password, authRequestContext(req, now, deps))
+        ? await deps.auth.completeSetup!(token, password, authRequestContext(req, now, resolvedRequestContext))
         : await deps.completeSetup!(token, password, now);
     } catch {
       for (const key of reservations) throttle.release(key);
@@ -1243,7 +1251,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     let authenticated;
     try {
       authenticated = deps.kind === 'postgres'
-        ? await deps.auth.login(email, form.password ?? '', authRequestContext(req, now, deps))
+        ? await deps.auth.login(email, form.password ?? '', authRequestContext(req, now, resolvedRequestContext))
         : await deps.login(email, form.password ?? '');
     } catch {
       for (const key of reservations) deps.loginThrottle?.release(key);

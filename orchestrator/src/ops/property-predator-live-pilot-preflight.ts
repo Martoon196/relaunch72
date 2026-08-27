@@ -138,7 +138,7 @@ const FOUNDATION_SETTINGS: readonly SettingSpec[] = Object.freeze([
   setting('PORTAL_BASE_URL', 'Growth HQ HTTPS origin', (raw) => isHttpsUrl(raw, true), 'A single credential-free HTTPS Growth HQ origin'),
   setting('PUBLIC_BASE_URL', 'Public HTTPS origin', (raw) => isHttpsUrl(raw, true), 'A single credential-free public HTTPS origin'),
   setting('SESSION_SECRET', 'Dedicated session-signing secret', (raw) => raw.trim().length >= 32 && raw.trim() !== 'r72-dev-session-secret', 'A dedicated session-signing secret of at least 32 characters'),
-  setting('PORTAL_PROXY_MODE', 'Trusted Render proxy boundary', exact('render'), 'Render trusted-proxy client-address resolution'),
+  setting('PORTAL_PROXY_MODE', 'Trusted Render proxy boundary', exact('render'), 'Strict Render CF-Connecting-IP source resolution; X-Forwarded-For ignored'),
   setting('PORTAL_ABUSE_HASH_SECRET', 'Dedicated abuse-evidence HMAC secret', minLength(32), 'A dedicated abuse-evidence HMAC secret of at least 32 characters'),
   setting('DATABASE_SSL_MODE', 'Verified database TLS', exact('verify-full'), 'Certificate-verifying database TLS'),
   setting('DATABASE_WEB_URL', 'Read-model database identity', isProductionDatabaseUrl('r72_web'), 'The least-privilege r72_web database URL'),

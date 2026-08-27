@@ -106,6 +106,18 @@ export class PropertyPredatorSsoExchangeError extends Error {
   }
 }
 
+/** The token endpoint rejected this authorization attempt as a caller error. */
+export class PropertyPredatorSsoAuthenticationError extends PropertyPredatorSsoExchangeError {
+  constructor() {
+    super();
+    this.name = 'PropertyPredatorSsoAuthenticationError';
+  }
+}
+
+function isTokenAuthenticationFailure(status: number): boolean {
+  return status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
+
 function exactBoolean(raw: string | undefined, name: string): boolean {
   const value = raw?.trim().toLowerCase() ?? '';
   if (!value || value === 'false') return false;
@@ -550,6 +562,9 @@ export class LivePropertyPredatorSsoClient implements PropertyPredatorSsoClient 
       });
     } catch {
       throw new PropertyPredatorSsoExchangeError();
+    }
+    if (isTokenAuthenticationFailure(response.status)) {
+      throw new PropertyPredatorSsoAuthenticationError();
     }
     const contentLength = Number(response.headers.get('content-length') ?? '0');
     const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';

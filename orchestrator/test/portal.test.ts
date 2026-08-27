@@ -22,11 +22,17 @@ import {
 } from '../src/portal/session.js';
 import type { DashboardData } from '../src/portal/data.js';
 import type { BillingView } from '../src/portal/billing.js';
-import type { PortalAuthService, PortalExternalIdentityAssertion } from '../src/portal/auth-service.js';
+import type {
+  PortalAuthRequestContext,
+  PortalAuthService,
+  PortalExternalIdentityAssertion,
+} from '../src/portal/auth-service.js';
 import {
   PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE,
   PROPERTY_PREDATOR_SSO_COOKIE,
   PROPERTY_PREDATOR_SSO_START_ROUTE,
+  PropertyPredatorSsoAuthenticationError,
+  PropertyPredatorSsoExchangeError,
   composePropertyPredatorSso,
   type PropertyPredatorSsoClient,
 } from '../src/portal/property-predator-sso.js';
@@ -332,6 +338,33 @@ test('database auth issues opaque cookies and never accepts a legacy signed tena
   const accepted = await call('GET', '/portal', d, { cookie: `${PORTAL_COOKIE}=${opaque}` });
   assert.equal(accepted.statusCode, 200);
   assert.match(accepted.body, /Turn attention into revenue/);
+});
+
+test('router passes keyed source evidence, never a raw or enumerable address digest, to database auth', async () => {
+  let captured: PortalAuthRequestContext | undefined;
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async (_email, _password, context) => { captured = context; return null; },
+    revoke: async () => undefined,
+  };
+  const guard = recordingAbuseGuard((_, callNumber) => allowedDecision(callNumber));
+  const context = requestContext('auth-source-request');
+  const response = await call('POST', '/portal/login', postgresDeps(auth, {
+    abuse: guard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => context,
+  }), loginPost({ email: 'owner@frayne.co', password: 'wrong' }));
+
+  assert.equal(response.statusCode, 401);
+  assert.ok(captured);
+  assert.deepEqual(captured.sourceHash, context.sourceHash);
+  assert.equal('ipAddress' in captured, false);
+  assert.doesNotMatch(JSON.stringify(captured), /203\.0\.113\.42/);
+  assert.notDeepEqual(
+    captured.sourceHash,
+    createHash('sha256').update('203.0.113.42').digest(),
+    'enumerable plain source digest never crosses the authentication boundary',
+  );
 });
 
 test('distributed source admission runs before session resolution and fails closed with Retry-After', async () => {
@@ -848,6 +881,7 @@ test('every terminal SSO callback failure clears the transaction and reveals no 
   for (const scenario of [
     { method: 'GET', url: `${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}?error=access_denied&state=s`, sso: fakeSso(), status: 400 },
     { method: 'GET', url: `${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}?code=valid-code-value-123&state=s`, sso: fakeSso({ complete: async () => null }), status: 401 },
+    { method: 'GET', url: `${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}?code=valid-code-value-123&state=s`, sso: fakeSso({ complete: async () => { throw new PropertyPredatorSsoAuthenticationError(); } }), status: 401 },
     { method: 'GET', url: `${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}?code=valid-code-value-123&state=s`, sso: fakeSso({ complete: async () => { throw new Error('secret provider detail'); } }), status: 503 },
     { method: 'POST', url: PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE, sso: fakeSso(), status: 405 },
   ]) {
@@ -857,6 +891,39 @@ test('every terminal SSO callback failure clears the transaction and reveals no 
     assert.equal(response.statusCode, scenario.status);
     assert.match(response.headers['set-cookie'] ?? '', new RegExp(`${PROPERTY_PREDATOR_SSO_COOKIE}=.*Max-Age=0`));
     assert.doesNotMatch(response.body, /access_denied|secret provider detail|valid-code-value/);
+  }
+});
+
+test('SSO callback accounts token rejection as auth failure and transient exchange failure as service error', async () => {
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => null,
+    loginExternal: async () => assert.fail('a rejected exchange must not reach local session issuance'),
+    revoke: async () => undefined,
+  };
+  for (const scenario of [
+    { error: new PropertyPredatorSsoAuthenticationError(), status: 401, outcome: 'auth_failure' as const },
+    { error: new PropertyPredatorSsoExchangeError(), status: 503, outcome: 'service_error' as const },
+  ]) {
+    const guard = recordingAbuseGuard((_, callNumber) => allowedDecision(callNumber));
+    const response = await call(
+      'GET',
+      `${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}?code=valid-code-value-123&state=valid-state-value-123`,
+      postgresDeps(auth, {
+        abuse: guard,
+        abuseHashSecret: ABUSE_SECRET,
+        requestContext: () => requestContext(`sso-${scenario.outcome}`),
+        propertyPredatorSso: fakeSso({ complete: async () => { throw scenario.error; } }),
+      }),
+      { cookie: `${PROPERTY_PREDATOR_SSO_COOKIE}=encrypted-transaction` },
+    );
+    assert.equal(response.statusCode, scenario.status);
+    assert.equal(
+      guard.completions.find(({ leaseHash }) => leaseHash[0] === 2)?.outcome,
+      scenario.outcome,
+    );
+    assert.match(response.headers['set-cookie'] ?? '', new RegExp(`${PROPERTY_PREDATOR_SSO_COOKIE}=.*Max-Age=0`));
+    assert.doesNotMatch(response.body, new RegExp(scenario.error.name));
   }
 });
 

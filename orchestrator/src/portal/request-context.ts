@@ -9,9 +9,9 @@ export interface PortalRequestContext {
   readonly requestId: string;
   /** Keyed request/trace evidence; raw identifiers never enter abuse storage. */
   readonly requestHash: Buffer;
-  /** Raw address is used only by the existing session metadata boundary. */
+  /** Raw address is used only by bounded process-local throttles. */
   readonly clientAddress?: string;
-  /** Keyed low-entropy client-address evidence used by the abuse guard. */
+  /** Keyed low-entropy client-address evidence used by guards and auth metadata. */
   readonly sourceHash?: Buffer;
   /** Render/Cloudflare trace correlation only. Never an authority or limit key. */
   readonly cfRay?: string;
@@ -31,6 +31,12 @@ function firstHeaderValue(value: string | string[] | undefined): string | undefi
   const raw = Array.isArray(value) ? value[0] : value;
   const first = raw?.split(',', 1)[0]?.trim();
   return first || undefined;
+}
+
+function strictSingleHeaderValue(value: string | string[] | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const candidate = value.trim();
+  return candidate && !candidate.includes(',') ? candidate : undefined;
 }
 
 function canonicalClientAddress(value: string | undefined): string | undefined {
@@ -63,9 +69,10 @@ export function portalAbuseHash(secret: string, domain: string, value: string): 
 }
 
 /**
- * Render terminates the trusted proxy chain and supplies the true client in
- * the first X-Forwarded-For value. Production deliberately has no socket or
- * untrusted-header fallback: missing/malformed evidence must fail closed.
+ * Render's Cloudflare edge overwrites CF-Connecting-IP with the true client
+ * address while X-Forwarded-For is appendable and therefore never authority.
+ * Production deliberately has no socket/header fallback: missing, duplicated
+ * or malformed source evidence must fail closed.
  */
 export function createPortalRequestContextResolver(
   options: PortalRequestContextResolverOptions,
@@ -75,7 +82,7 @@ export function createPortalRequestContextResolver(
   }
   return (req: IncomingMessage): PortalRequestContext | null => {
     const clientAddress = canonicalClientAddress(options.proxyMode === 'render'
-      ? firstHeaderValue(req.headers['x-forwarded-for'])
+      ? strictSingleHeaderValue(req.headers['cf-connecting-ip'])
       : options.directClientAddress?.(req));
     if (options.proxyMode === 'render' && !clientAddress) return null;
 

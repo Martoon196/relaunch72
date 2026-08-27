@@ -13,7 +13,7 @@ function request(headers: IncomingMessage['headers'] = {}): IncomingMessage {
   return Object.assign(Readable.from([]), { headers }) as unknown as IncomingMessage;
 }
 
-test('Render request context trusts only the first valid X-Forwarded-For address', () => {
+test('Render request context trusts only one canonical CF-Connecting-IP address', () => {
   const resolve = createPortalRequestContextResolver({
     hashSecret: SECRET,
     proxyMode: 'render',
@@ -21,7 +21,8 @@ test('Render request context trusts only the first valid X-Forwarded-For address
     directClientAddress: () => '127.0.0.1',
   });
   const context = resolve(request({
-    'x-forwarded-for': '203.0.113.42, 10.0.0.1',
+    'cf-connecting-ip': '203.0.113.42',
+    'x-forwarded-for': '198.51.100.99, 203.0.113.42, 10.0.0.1',
     'cf-ray': 'abc123-FRA',
   }));
   assert.ok(context);
@@ -33,11 +34,20 @@ test('Render request context trusts only the first valid X-Forwarded-For address
   assert.notDeepEqual(context.requestHash, portalAbuseHash(SECRET, 'request', 'request-1'));
 });
 
-test('Render request context fails closed without a valid client address', () => {
+test('Render request context fails closed for missing, malformed or duplicated source evidence', () => {
   const resolve = createPortalRequestContextResolver({ hashSecret: SECRET, proxyMode: 'render' });
   assert.equal(resolve(request()), null);
-  assert.equal(resolve(request({ 'x-forwarded-for': 'not-an-ip, 203.0.113.9' })), null);
-  assert.equal(resolve(request({ 'x-forwarded-for': '' })), null);
+  assert.equal(resolve(request({
+    'x-forwarded-for': '203.0.113.9',
+  })), null, 'X-Forwarded-For is never source authority');
+  assert.equal(resolve(request({ 'cf-connecting-ip': 'not-an-ip' })), null);
+  assert.equal(resolve(request({ 'cf-connecting-ip': '' })), null);
+  assert.equal(resolve(request({
+    'cf-connecting-ip': '203.0.113.9, 198.51.100.4',
+  })), null, 'a comma-joined duplicate is rejected rather than selecting one value');
+  assert.equal(resolve(request({
+    'cf-connecting-ip': ['203.0.113.9', '198.51.100.4'],
+  })), null, 'an array-shaped duplicate is rejected rather than selecting one value');
 });
 
 test('equivalent IPv6 spellings resolve to one source identity', () => {
@@ -47,9 +57,9 @@ test('equivalent IPv6 spellings resolve to one source identity', () => {
     requestId: () => 'request-ipv6',
   });
   const expanded = resolve(request({
-    'x-forwarded-for': '2001:0db8:0000:0000:0000:0000:0000:0001',
+    'cf-connecting-ip': '2001:0db8:0000:0000:0000:0000:0000:0001',
   }));
-  const compressed = resolve(request({ 'x-forwarded-for': '2001:db8::1' }));
+  const compressed = resolve(request({ 'cf-connecting-ip': '2001:db8::1' }));
   assert.ok(expanded && compressed);
   assert.equal(expanded.clientAddress, '2001:db8::1');
   assert.deepEqual(expanded.sourceHash, compressed.sourceHash);
@@ -62,10 +72,10 @@ test('CF-Ray is bounded trace metadata and never a source key', () => {
     requestId: () => 'request-2',
   });
   const invalid = resolve(request({
-    'x-forwarded-for': '2001:db8::1',
+    'cf-connecting-ip': '2001:db8::1',
     'cf-ray': 'bad trace value with spaces',
   }));
-  const absent = resolve(request({ 'x-forwarded-for': '2001:db8::1' }));
+  const absent = resolve(request({ 'cf-connecting-ip': '2001:db8::1' }));
   assert.ok(invalid && absent);
   assert.equal(invalid.cfRay, undefined);
   assert.deepEqual(invalid.sourceHash, absent.sourceHash);
@@ -79,7 +89,10 @@ test('direct mode uses only its explicit development resolver', () => {
     requestId: () => 'request-3',
     directClientAddress: () => '127.0.0.1',
   });
-  const context = resolve(request({ 'x-forwarded-for': '198.51.100.4' }));
+  const context = resolve(request({
+    'cf-connecting-ip': '198.51.100.8',
+    'x-forwarded-for': '198.51.100.4',
+  }));
   assert.ok(context);
   assert.equal(context.clientAddress, '127.0.0.1');
 });

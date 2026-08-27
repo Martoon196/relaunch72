@@ -742,6 +742,17 @@ AS $function$
       'app_private.portal_abuse_ready()',
       'EXECUTE'
     )
+    AND pg_catalog.to_regprocedure(
+      'app_private.runtime_database_installation_id()'
+    ) IS NOT NULL
+    AND has_function_privilege(
+      'r72_abuse_command',
+      'app_private.runtime_database_installation_id()',
+      'EXECUTE'
+    )
+    AND NOT has_schema_privilege('r72_abuse_command', 'app_private', 'CREATE')
+    AND NOT has_schema_privilege('r72_abuse_command', 'app', 'USAGE')
+    AND NOT has_schema_privilege('r72_abuse_command', 'public', 'CREATE')
     AND NOT (
       has_table_privilege('r72_abuse_command', 'app_private.portal_abuse_storage_state', 'SELECT')
       OR has_table_privilege('r72_abuse_command', 'app_private.portal_abuse_storage_state', 'INSERT')
@@ -777,6 +788,45 @@ AS $function$
       OR has_table_privilege('r72_abuse_command', 'app_private.portal_abuse_denial_aggregates', 'TRUNCATE')
       OR has_table_privilege('r72_abuse_command', 'app_private.portal_abuse_denial_aggregates', 'REFERENCES')
       OR has_table_privilege('r72_abuse_command', 'app_private.portal_abuse_denial_aggregates', 'TRIGGER')
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM pg_catalog.pg_class AS relation
+      JOIN pg_catalog.pg_namespace AS namespace
+        ON namespace.oid = relation.relnamespace
+      WHERE namespace.nspname IN ('app', 'app_private')
+        AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+        AND (
+          has_table_privilege('r72_abuse_command', relation.oid, 'SELECT')
+          OR has_table_privilege('r72_abuse_command', relation.oid, 'INSERT')
+          OR has_table_privilege('r72_abuse_command', relation.oid, 'UPDATE')
+          OR has_table_privilege('r72_abuse_command', relation.oid, 'DELETE')
+          OR has_table_privilege('r72_abuse_command', relation.oid, 'TRUNCATE')
+          OR has_table_privilege('r72_abuse_command', relation.oid, 'REFERENCES')
+          OR has_table_privilege('r72_abuse_command', relation.oid, 'TRIGGER')
+        )
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM pg_catalog.pg_proc AS procedure
+      JOIN pg_catalog.pg_namespace AS namespace
+        ON namespace.oid = procedure.pronamespace
+      WHERE namespace.nspname IN ('app', 'app_private')
+        AND procedure.oid NOT IN (
+          pg_catalog.to_regprocedure(
+            'app_private.admit_portal_abuse(text,text[],bytea[],integer[],integer[],integer[],integer[],bytea,bytea)'
+          ),
+          pg_catalog.to_regprocedure(
+            'app_private.complete_portal_abuse_lease(bytea,text)'
+          ),
+          pg_catalog.to_regprocedure('app_private.portal_abuse_ready()'),
+          pg_catalog.to_regprocedure(
+            'app_private.runtime_database_installation_id()'
+          )
+        )
+        AND has_function_privilege(
+          'r72_abuse_command', procedure.oid, 'EXECUTE'
+        )
     )
     AND EXISTS (
       SELECT 1
@@ -815,28 +865,85 @@ GRANT EXECUTE ON FUNCTION app_private.complete_portal_abuse_lease(bytea, text)
   TO r72_abuse_command;
 GRANT EXECUTE ON FUNCTION app_private.portal_abuse_ready()
   TO r72_abuse_command;
+GRANT EXECUTE ON FUNCTION app_private.runtime_database_installation_id()
+  TO r72_abuse_command;
 
 -- Reassert the table-blind runtime boundary after every object and grant exists.
 DO $portal_abuse_privilege_audit$
 DECLARE
-  table_name text;
+  admit_oid oid := pg_catalog.to_regprocedure(
+    'app_private.admit_portal_abuse(text,text[],bytea[],integer[],integer[],integer[],integer[],bytea,bytea)'
+  );
+  complete_oid oid := pg_catalog.to_regprocedure(
+    'app_private.complete_portal_abuse_lease(bytea,text)'
+  );
+  ready_oid oid := pg_catalog.to_regprocedure(
+    'app_private.portal_abuse_ready()'
+  );
+  installation_oid oid := pg_catalog.to_regprocedure(
+    'app_private.runtime_database_installation_id()'
+  );
+  unexpected_capability text;
 BEGIN
-  FOREACH table_name IN ARRAY ARRAY[
-    'portal_abuse_storage_state',
-    'portal_abuse_buckets',
-    'portal_abuse_leases',
-    'portal_abuse_denial_aggregates'
-  ] LOOP
-    IF has_table_privilege('r72_abuse_command', 'app_private.' || table_name, 'SELECT')
-      OR has_table_privilege('r72_abuse_command', 'app_private.' || table_name, 'INSERT')
-      OR has_table_privilege('r72_abuse_command', 'app_private.' || table_name, 'UPDATE')
-      OR has_table_privilege('r72_abuse_command', 'app_private.' || table_name, 'DELETE')
-      OR has_table_privilege('r72_abuse_command', 'app_private.' || table_name, 'TRUNCATE')
-      OR has_table_privilege('r72_abuse_command', 'app_private.' || table_name, 'REFERENCES')
-      OR has_table_privilege('r72_abuse_command', 'app_private.' || table_name, 'TRIGGER') THEN
-      RAISE EXCEPTION 'Unsafe portal abuse capability: r72_abuse_command can access app_private.%',
-        table_name;
-    END IF;
-  END LOOP;
+  IF admit_oid IS NULL OR complete_oid IS NULL OR ready_oid IS NULL
+    OR installation_oid IS NULL THEN
+    RAISE EXCEPTION 'Portal abuse function boundary is incomplete';
+  END IF;
+
+  IF NOT has_schema_privilege('r72_abuse_command', 'app_private', 'USAGE')
+    OR has_schema_privilege('r72_abuse_command', 'app_private', 'CREATE')
+    OR has_schema_privilege('r72_abuse_command', 'app', 'USAGE')
+    OR has_schema_privilege('r72_abuse_command', 'public', 'CREATE')
+    OR NOT has_function_privilege('r72_abuse_command', admit_oid, 'EXECUTE')
+    OR NOT has_function_privilege('r72_abuse_command', complete_oid, 'EXECUTE')
+    OR NOT has_function_privilege('r72_abuse_command', ready_oid, 'EXECUTE')
+    OR NOT has_function_privilege(
+      'r72_abuse_command', installation_oid, 'EXECUTE'
+    ) THEN
+    RAISE EXCEPTION 'Portal abuse exact function boundary is unavailable';
+  END IF;
+
+  SELECT namespace.nspname || '.' || relation.relname
+    INTO unexpected_capability
+  FROM pg_catalog.pg_class AS relation
+  JOIN pg_catalog.pg_namespace AS namespace
+    ON namespace.oid = relation.relnamespace
+  WHERE namespace.nspname IN ('app', 'app_private')
+    AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+    AND (
+      has_table_privilege('r72_abuse_command', relation.oid, 'SELECT')
+      OR has_table_privilege('r72_abuse_command', relation.oid, 'INSERT')
+      OR has_table_privilege('r72_abuse_command', relation.oid, 'UPDATE')
+      OR has_table_privilege('r72_abuse_command', relation.oid, 'DELETE')
+      OR has_table_privilege('r72_abuse_command', relation.oid, 'TRUNCATE')
+      OR has_table_privilege('r72_abuse_command', relation.oid, 'REFERENCES')
+      OR has_table_privilege('r72_abuse_command', relation.oid, 'TRIGGER')
+    )
+  LIMIT 1;
+
+  IF unexpected_capability IS NOT NULL THEN
+    RAISE EXCEPTION 'Unsafe portal abuse capability: r72_abuse_command can access %',
+      unexpected_capability;
+  END IF;
+
+  unexpected_capability := NULL;
+  SELECT namespace.nspname || '.' || procedure.proname
+    INTO unexpected_capability
+  FROM pg_catalog.pg_proc AS procedure
+  JOIN pg_catalog.pg_namespace AS namespace
+    ON namespace.oid = procedure.pronamespace
+  WHERE namespace.nspname IN ('app', 'app_private')
+    AND procedure.oid <> ALL (ARRAY[
+      admit_oid, complete_oid, ready_oid, installation_oid
+    ])
+    AND has_function_privilege(
+      'r72_abuse_command', procedure.oid, 'EXECUTE'
+    )
+  LIMIT 1;
+
+  IF unexpected_capability IS NOT NULL THEN
+    RAISE EXCEPTION 'Unsafe portal abuse capability: r72_abuse_command can execute %',
+      unexpected_capability;
+  END IF;
 END
 $portal_abuse_privilege_audit$;

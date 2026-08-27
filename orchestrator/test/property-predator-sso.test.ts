@@ -4,6 +4,7 @@ import {
   LivePropertyPredatorSsoClient,
   PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE,
   PROPERTY_PREDATOR_SSO_COOKIE,
+  PropertyPredatorSsoAuthenticationError,
   PropertyPredatorSsoConfigurationError,
   PropertyPredatorSsoExchangeError,
   clearPropertyPredatorSsoCookie,
@@ -337,4 +338,51 @@ test('non-200, oversized and non-JSON token responses expose only one generic ex
       return true;
     });
   }
+});
+
+test('token caller rejections are typed separately from transient provider failures', async () => {
+  const completeWith = async (
+    fetch: NonNullable<ConstructorParameters<typeof LivePropertyPredatorSsoClient>[0]['fetch']>,
+  ): Promise<void> => {
+    const client = new LivePropertyPredatorSsoClient({
+      config: config(), sessionSecret: SESSION_SECRET, secure: true,
+      randomBytes: deterministicBytes(), fetch,
+    });
+    const started = client.begin(undefined, NOW);
+    await client.complete(
+      'single-use-authorization-code',
+      new URL(started.url).searchParams.get('state')!,
+      cookieValue(started.cookie),
+      NOW,
+    );
+  };
+  const response = (status: number) => async () => ({
+    ok: false,
+    status,
+    headers: new Headers({ 'content-type': 'application/json' }),
+    text: async () => '{"error":"provider detail is never surfaced"}',
+  });
+
+  for (const status of [400, 401, 403, 422]) {
+    await assert.rejects(completeWith(response(status)), (error: unknown) => {
+      assert.ok(error instanceof PropertyPredatorSsoAuthenticationError);
+      assert.equal(error.message, 'Property Predator identity exchange failed');
+      return true;
+    });
+  }
+  for (const status of [408, 429, 500, 503]) {
+    await assert.rejects(completeWith(response(status)), (error: unknown) => {
+      assert.ok(error instanceof PropertyPredatorSsoExchangeError);
+      assert.equal(error instanceof PropertyPredatorSsoAuthenticationError, false);
+      return true;
+    });
+  }
+  await assert.rejects(
+    completeWith(async () => { throw new DOMException('timed out', 'TimeoutError'); }),
+    (error: unknown) => {
+      assert.ok(error instanceof PropertyPredatorSsoExchangeError);
+      assert.equal(error instanceof PropertyPredatorSsoAuthenticationError, false);
+      return true;
+    },
+  );
 });

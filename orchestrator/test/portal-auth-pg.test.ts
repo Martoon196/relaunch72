@@ -9,13 +9,27 @@ import {
   type PortalScryptWorkLimiter,
 } from '../src/portal/accounts.js';
 import { PgPortalAuthService } from '../src/portal/auth-pg-service.js';
-import type { PortalExternalIdentityAssertion } from '../src/portal/auth-service.js';
+import type {
+  PortalAuthRequestContext,
+  PortalExternalIdentityAssertion,
+} from '../src/portal/auth-service.js';
+import { portalAbuseHash } from '../src/portal/request-context.js';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const WORKSPACE_ID = '22222222-2222-4222-8222-222222222222';
 const SESSION_ID = '33333333-3333-4333-8333-333333333333';
 const USER_EMAIL = 'owner@example.test';
 const NOW = Date.parse('2026-08-24T10:00:00.000Z');
+const RAW_SOURCE = '203.0.113.42';
+const SOURCE_SECRET = 'portal-auth-source-test-secret-at-least-32-characters';
+const SOURCE_HASH = portalAbuseHash(SOURCE_SECRET, 'source', RAW_SOURCE);
+const ENUMERABLE_SOURCE_DIGEST = createHash('sha256').update(RAW_SOURCE).digest();
+
+function authContext(
+  over: Partial<PortalAuthRequestContext> = {},
+): PortalAuthRequestContext {
+  return { now: NOW, sourceHash: Buffer.from(SOURCE_HASH), ...over };
+}
 
 function externalAssertion(
   over: Partial<PortalExternalIdentityAssertion> = {},
@@ -110,9 +124,11 @@ test('password login creates one opaque session bound to the compare-and-swap cr
     throw new Error(`unexpected SQL: ${call.sql}`);
   });
   const service = new PgPortalAuthService({ readPool: pool(() => result([])), commandPool });
-  const session = await service.login(' Owner@Example.Test ', password, {
-    now: NOW, ipAddress: '127.0.0.1', userAgent: 'R72 test browser',
-  });
+  const session = await service.login(
+    ' Owner@Example.Test ',
+    password,
+    authContext({ userAgent: 'R72 test browser' }),
+  );
   assert.match(session?.sessionToken ?? '', /^[A-Za-z0-9_-]{43}$/);
   assert.equal(session?.userId, USER_ID);
   assert.equal(session?.workspaceId, WORKSPACE_ID);
@@ -124,6 +140,10 @@ test('password login creates one opaque session bound to the compare-and-swap cr
   assert.equal(create.values?.[2], storedHash);
   assert.ok(Buffer.isBuffer(create.values?.[3]) && (create.values?.[3] as Buffer).length === 32);
   assert.ok(Buffer.isBuffer(create.values?.[4]) && (create.values?.[4] as Buffer).length === 32);
+  assert.deepEqual(create.values?.[5], SOURCE_HASH);
+  assert.equal(create.values?.includes(RAW_SOURCE), false);
+  assert.equal(create.values?.some((value) => Buffer.isBuffer(value)
+    && value.equals(ENUMERABLE_SOURCE_DIGEST)), false, 'an enumerable plain IP digest never enters SQL');
   assert.equal(Array.from(create.values ?? []).some((value) => value === session!.sessionToken), false, 'raw session token is never a SQL parameter');
 });
 
@@ -141,7 +161,7 @@ test('unknown and wrong-password login never creates a session', async () => {
         throw new Error('session creation must not run');
       }),
     });
-    assert.equal(await service.login('nobody@example.test', 'wrong-password', { now: NOW }), null);
+    assert.equal(await service.login('nobody@example.test', 'wrong-password', authContext()), null);
     assert.equal(calls.some((call) => call.sql.includes('create-session')), false);
   }
 });
@@ -160,7 +180,7 @@ test('PostgreSQL login rejects legacy password hashes without upgrade or session
       throw new Error(`unexpected SQL: ${call.sql}`);
     }),
   });
-  assert.equal(await service.login('legacy@example.test', password, { now: NOW }), null);
+  assert.equal(await service.login('legacy@example.test', password, authContext()), null);
   assert.equal(calls.some((call) => call.sql.includes('upgrade-password')), false);
   assert.equal(calls.some((call) => call.sql.includes('create-session')), false);
 });
@@ -193,9 +213,11 @@ test('account setup atomically consumes a hashed one-use token and returns a can
     }),
   });
 
-  const completed = await service.completeSetup(setupToken, password, {
-    now: NOW, ipAddress: '127.0.0.1', userAgent: 'R72 setup browser',
-  });
+  const completed = await service.completeSetup(
+    setupToken,
+    password,
+    authContext({ userAgent: 'R72 setup browser' }),
+  );
   assert.equal(completed?.userId, USER_ID);
   assert.equal(completed?.workspaceId, WORKSPACE_ID);
   assert.equal(completed?.userEmail, USER_EMAIL);
@@ -207,22 +229,22 @@ test('account setup atomically consumes a hashed one-use token and returns a can
   assert.match(first.sql, /complete_native_account_setup\(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8\)/);
   assert.deepEqual(reserve.values?.[0], createHash('sha256').update(setupToken).digest());
   assert.ok(Buffer.isBuffer(reserve.values?.[1]) && (reserve.values?.[1] as Buffer).length === 32);
-  assert.deepEqual(reserve.values?.[2], createHash('sha256')
-    .update('relaunch72/setup-source/v1\u0000')
-    .update('127.0.0.1')
-    .digest());
+  assert.deepEqual(reserve.values?.[2], SOURCE_HASH);
   assert.deepEqual(first.values?.slice(0, 3), reserve.values);
   assert.match(String(first.values?.[3]), /^scrypt\$v1\$/);
   assert.ok(Buffer.isBuffer(first.values?.[4]) && (first.values?.[4] as Buffer).length === 32);
   assert.ok(Buffer.isBuffer(first.values?.[5]) && (first.values?.[5] as Buffer).length === 32);
-  assert.deepEqual(first.values?.[6], createHash('sha256').update('127.0.0.1').digest());
+  assert.deepEqual(first.values?.[6], SOURCE_HASH);
   assert.deepEqual(first.values?.[7], createHash('sha256').update('R72 setup browser').digest());
+  assert.equal(first.values?.includes(RAW_SOURCE), false);
+  assert.equal(first.values?.some((value) => Buffer.isBuffer(value)
+    && value.equals(ENUMERABLE_SOURCE_DIGEST)), false, 'setup never persists an enumerable plain IP digest');
   assert.equal(Array.from(first.values ?? []).includes(setupToken), false, 'raw setup token is never a SQL parameter');
   assert.equal(Array.from(first.values ?? []).includes(password), false, 'raw password is never a SQL parameter');
   assert.equal(Array.from(first.values ?? []).includes(completed!.sessionToken), false, 'raw session token is never a SQL parameter');
   assert.equal(calls.some((call) => call.sql.includes('release-setup')), false, 'atomic success consumed its own claim');
 
-  assert.equal(await service.completeSetup(setupToken, 'a-second-canonical-password', { now: NOW }), null);
+  assert.equal(await service.completeSetup(setupToken, 'a-second-canonical-password', authContext()), null);
   assert.equal(calls.length, 3, 'a consumed token stops at cheap reservation without another scrypt/completion');
 });
 
@@ -235,6 +257,31 @@ test('invalid account setup input never reaches PostgreSQL', async () => {
   assert.equal(await service.completeSetup('not-a-token', 'a-valid-long-password', { now: NOW }), null);
   assert.equal(await service.completeSetup(Buffer.alloc(32, 8).toString('base64url'), 'too-short', { now: NOW }), null);
   assert.equal(calls, 0);
+});
+
+test('valid database authentication writes fail closed without 32-byte keyed source evidence', async () => {
+  let calls = 0;
+  const service = new PgPortalAuthService({
+    readPool: pool(() => result([])),
+    commandPool: pool(() => { calls += 1; return result([]); }),
+  });
+  const setupToken = Buffer.alloc(32, 18).toString('base64url');
+  await assert.rejects(
+    service.completeSetup(setupToken, 'a-valid-canonical-password', { now: NOW }),
+    /source evidence is unavailable/,
+  );
+  await assert.rejects(
+    service.completeSetup(setupToken, 'a-valid-canonical-password', {
+      now: NOW,
+      sourceHash: Buffer.alloc(31),
+    }),
+    /source evidence is unavailable/,
+  );
+  await assert.rejects(
+    service.loginExternal(externalAssertion(), { now: NOW }, USER_ID),
+    /source evidence is unavailable/,
+  );
+  assert.equal(calls, 0, 'missing or malformed keyed source evidence is rejected before SQL');
 });
 
 test('a random valid-shape setup token stops at cheap reservation and never enters scrypt', async () => {
@@ -252,15 +299,12 @@ test('a random valid-shape setup token stops at cheap reservation and never ente
     scryptLimiter: limiter,
   });
   const randomToken = Buffer.alloc(32, 77).toString('base64url');
-  assert.equal(await service.completeSetup(randomToken, 'a-valid-canonical-password', { now: NOW }), null);
+  assert.equal(await service.completeSetup(randomToken, 'a-valid-canonical-password', authContext()), null);
   assert.equal(scryptRuns, 0);
   assert.equal(calls.length, 1);
   assert.match(calls[0]!.sql, /reserve_native_account_setup/);
   assert.equal(calls[0]!.values?.some((value) => value === randomToken), false);
-  assert.deepEqual(calls[0]!.values?.[2], createHash('sha256')
-    .update('relaunch72/setup-source/v1\u0000')
-    .update('unavailable')
-    .digest(), 'unconfigured client-address policy uses one domain-separated unavailable binding');
+  assert.deepEqual(calls[0]!.values?.[2], SOURCE_HASH);
 });
 
 test('setup releases its database claim when the process-wide scrypt scheduler is saturated', async () => {
@@ -283,7 +327,7 @@ test('setup releases its database claim when the process-wide scrypt scheduler i
     scryptLimiter: limiter,
   });
   await assert.rejects(
-    service.completeSetup(Buffer.alloc(32, 78).toString('base64url'), 'a-valid-canonical-password', { now: NOW }),
+    service.completeSetup(Buffer.alloc(32, 78).toString('base64url'), 'a-valid-canonical-password', authContext()),
     PortalScryptCapacityError,
   );
   assert.deepEqual(calls.map((call) => /portal\.auth\.([a-z-]+)/.exec(call.sql)?.[1]), ['reserve-setup', 'release-setup']);
@@ -313,7 +357,7 @@ test('setup releases a valid claim after a zero-row completion race or SQL error
     const operation = service.completeSetup(
       Buffer.alloc(32, completion === 'zero-row' ? 79 : 80).toString('base64url'),
       'a-valid-canonical-password',
-      { now: NOW },
+      authContext(),
     );
     if (completion === 'error') await assert.rejects(operation, /completion unavailable/);
     else assert.equal(await operation, null);
@@ -341,7 +385,7 @@ test('a password or membership race fails as invalid login and revocation hashes
       throw new Error(`unexpected SQL: ${call.sql}`);
     }),
   });
-  assert.equal(await service.login('owner@example.test', 'right-password', { now: NOW }), null);
+  assert.equal(await service.login('owner@example.test', 'right-password', authContext()), null);
   await service.revoke(token);
   const revoke = calls.find((call) => call.sql.includes('revoke-session'))!;
   assert.deepEqual(revoke.values, [createHash('sha256').update(token).digest()]);
@@ -365,11 +409,11 @@ test('verified Property Predator identity creates the same opaque HQ session wit
     }),
   });
   const assertion = externalAssertion();
-  const authenticated = await service.loginExternal(assertion, {
-    now: NOW,
-    ipAddress: '192.0.2.10',
-    userAgent: 'Growth HQ test browser',
-  }, USER_ID);
+  const authenticated = await service.loginExternal(
+    assertion,
+    authContext({ userAgent: 'Growth HQ test browser' }),
+    USER_ID,
+  );
   assert.equal(authenticated?.userEmail, 'office@propertypredator.com');
   assert.equal(authenticated?.userId, USER_ID);
   assert.equal(authenticated?.workspaceId, WORKSPACE_ID);
@@ -391,8 +435,11 @@ test('verified Property Predator identity creates the same opaque HQ session wit
   ]);
   assert.ok(Buffer.isBuffer(calls[0]!.values?.[11]) && (calls[0]!.values?.[11] as Buffer).length === 32);
   assert.ok(Buffer.isBuffer(calls[0]!.values?.[12]) && (calls[0]!.values?.[12] as Buffer).length === 32);
-  assert.deepEqual(calls[0]!.values?.[13], createHash('sha256').update('192.0.2.10').digest());
+  assert.deepEqual(calls[0]!.values?.[13], SOURCE_HASH);
   assert.deepEqual(calls[0]!.values?.[14], createHash('sha256').update('Growth HQ test browser').digest());
+  assert.equal(calls[0]!.values?.includes(RAW_SOURCE), false);
+  assert.equal(calls[0]!.values?.some((value) => Buffer.isBuffer(value)
+    && value.equals(ENUMERABLE_SOURCE_DIGEST)), false, 'external auth never persists an enumerable plain IP digest');
   assert.equal(calls[0]!.values?.includes(authenticated!.sessionToken), false, 'raw opaque session never enters SQL');
 });
 
@@ -429,7 +476,7 @@ test('external identity without an existing link or bootstrap membership creates
   assert.equal(await service.loginExternal(externalAssertion({
     email: 'affiliate@example.test',
     affiliate: { member: false, affiliateId: null, code: null, codeStatus: null },
-  }), { now: NOW }), null);
+  }), authContext()), null);
   assert.equal(calls.length, 1);
   assert.equal(calls[0]!.values?.[4], null, 'the assertion cannot choose a user or workspace');
 });
@@ -439,5 +486,5 @@ test('external link/member race fails as an invalid sign-in', async () => {
     readPool: pool(() => result([])),
     commandPool: pool(() => { throw Object.assign(new Error('already linked'), { code: '42501' }); }),
   });
-  assert.equal(await service.loginExternal(externalAssertion(), { now: NOW }, USER_ID), null);
+  assert.equal(await service.loginExternal(externalAssertion(), authContext(), USER_ID), null);
 });

@@ -27,6 +27,7 @@ test('0036 creates a table-blind exact abuse command role and private definer', 
   assert.doesNotMatch(sql, /GRANT (?:SELECT|INSERT|UPDATE|DELETE|TRUNCATE)[^;]+TO r72_abuse_command/);
   assert.match(sql, /REVOKE CREATE ON SCHEMA app_private FROM r72_abuse_definer/);
   assert.match(sql, /Unsafe portal abuse capability: r72_abuse_command can access/);
+  assert.match(sql, /Unsafe portal abuse capability: r72_abuse_command can execute/);
 });
 
 test('0036 stores only allowlisted classes and fixed-size keyed evidence', async () => {
@@ -106,7 +107,7 @@ test('0036 denial and completion contracts are bounded and fail closed', async (
   assert.match(sql, /RETURN true/);
 });
 
-test('0036 exposes only fixed-search-path functions and read-only readiness', async () => {
+test('0036 exposes only the four fixed-search-path functions and read-only readiness', async () => {
   const sql = await migration();
   assert.equal((sql.match(/SECURITY DEFINER SET search_path = pg_catalog/g) ?? []).length, 3);
   assert.match(sql, /CREATE FUNCTION app_private\.portal_abuse_ready\(\) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog/);
@@ -118,6 +119,12 @@ test('0036 exposes only fixed-search-path functions and read-only readiness', as
   assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.admit_portal_abuse\([^;]+\) TO r72_abuse_command/);
   assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.complete_portal_abuse_lease\(bytea, text\) TO r72_abuse_command/);
   assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.portal_abuse_ready\(\) TO r72_abuse_command/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.runtime_database_installation_id\(\) TO r72_abuse_command/);
+  assert.match(sql, /to_regprocedure\( 'app_private\.runtime_database_installation_id\(\)' \) IS NOT NULL/);
+  assert.match(sql, /has_function_privilege\( 'r72_abuse_command', 'app_private\.runtime_database_installation_id\(\)', 'EXECUTE' \)/);
+  assert.match(sql, /namespace\.nspname IN \('app', 'app_private'\)[^;]+has_table_privilege\('r72_abuse_command', relation\.oid, 'SELECT'\)/);
+  assert.match(sql, /procedure\.oid NOT IN \([^;]+runtime_database_installation_id\(\)[^;]+has_function_privilege\( 'r72_abuse_command', procedure\.oid, 'EXECUTE' \)/);
+  assert.match(sql, /procedure\.oid <> ALL \(ARRAY\[ admit_oid, complete_oid, ready_oid, installation_oid \]\)/);
 
   const readinessBody = sql.match(
     /CREATE FUNCTION app_private\.portal_abuse_ready\(\)[\s\S]+?\$function\$;/,
