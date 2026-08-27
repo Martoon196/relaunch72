@@ -25,6 +25,7 @@ import type { PortalBrandBrainService } from './brand-brain-service.js';
 import type { PortalAffiliateComplianceService } from './affiliate-compliance-service.js';
 import type { PortalConversionInboxCommandService } from './conversion-inbox-service.js';
 import type { PortalOperatorActionCentreService } from './operator-action-centre-pg-service.js';
+import type { PortalCompanyAssetsService } from './company-assets-service.js';
 import type { SubscriptionStore } from '../server/subscriptions.js';
 import { canonicalIntake } from '../intake/canonical.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
@@ -140,6 +141,8 @@ export interface PostgresPortalConfig {
   operatorActions?: PortalOperatorActionCentreService;
   /** Omitted unless the dedicated company-content command identity is ready. */
   companyContent?: PortalCompanyContentService;
+  /** Omitted unless both company-asset least-privilege identities are ready. */
+  companyAssets?: PortalCompanyAssetsService;
   /** Read-only Brand Brain metadata. Omitted until its RLS reader is ready. */
   brandBrain?: PortalBrandBrainService;
   /** Fixture-only affiliate compliance evidence. Omitted outside explicit preview composition. */
@@ -171,6 +174,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     journeys: cfg.journeys,
     operatorActions: cfg.operatorActions,
     companyContent: cfg.companyContent,
+    companyAssets: cfg.companyAssets,
     brandBrain: cfg.brandBrain,
     affiliateCompliance: cfg.affiliateCompliance,
     inbox: cfg.inbox,

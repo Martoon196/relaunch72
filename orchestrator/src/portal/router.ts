@@ -72,6 +72,19 @@ import { presentBrandBrain } from './brand-brain-presenter.js';
 import type { PortalBrandBrainService } from './brand-brain-service.js';
 import { renderBrandBrainBody } from './brand-brain-view.js';
 import {
+  COMPANY_ASSETS_ROUTE,
+  COMPANY_ASSET_QUARANTINE_ROUTE,
+  companyAssetsNoticeFromQuery,
+  companyAssetsNoticeToken,
+  type CompanyAssetsNoticeCode,
+} from './company-assets-actions.js';
+import { presentCompanyAssets } from './company-assets-presenter.js';
+import type {
+  PortalCompanyAssetQuarantineReasonCode,
+  PortalCompanyAssetsService,
+} from './company-assets-service.js';
+import { renderCompanyAssetsBody } from './company-assets-view.js';
+import {
   CONVERSION_INBOX_MAX_CONVERSATIONS,
   CONVERSION_INBOX_ROUTE,
   normaliseConversionInboxFilters,
@@ -202,6 +215,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   companyContent?: PortalCompanyContentService;
   /** Read-only owned-intelligence metadata. It exposes no review, activation or model operation. */
   brandBrain?: PortalBrandBrainService;
+  /** Migration 0033 metadata and founder quarantine-only commands. */
+  companyAssets?: PortalCompanyAssetsService;
   /** Fixture-only affiliate legal/readiness evidence. It exposes no acceptance, link or channel command. */
   affiliateCompliance?: PortalAffiliateComplianceService;
   /** Dark-only provider readiness metadata. It exposes no credential, switch or provider operation. */
@@ -449,7 +464,9 @@ function optionalPortalCapabilities(deps: PortalDeps): readonly PlatformCapabili
   if (deps.kind !== 'postgres') return [];
   return [
     ...(deps.operatorActions ? ['actions.read'] as const : []),
-    ...(deps.companyContent || deps.brandBrain ? ['content.drafts.read'] as const : []),
+    ...(deps.companyContent || deps.brandBrain || deps.companyAssets
+      ? ['content.drafts.read'] as const
+      : []),
     ...(deps.affiliateCompliance ? ['affiliates.compliance.read'] as const : []),
     ...(deps.inbox ? ['conversations.read'] as const : []),
   ];
@@ -625,6 +642,43 @@ function contentFailureNotice(kind: string): ContentControlNoticeCode {
   if (kind === 'review_unavailable') return 'review_unavailable';
   if (kind === 'idempotency_conflict' || kind === 'command_in_progress'
       || kind === 'version_conflict' || kind === 'approval_conflict') return 'conflict';
+  return 'unavailable';
+}
+
+function companyAssetsReturnLocation(
+  form: Readonly<Record<string, string>>,
+  noticeToken: string,
+): string {
+  const anchor = /^(?:company-asset-)[1-9][0-9]{0,1}$/u.test(form.return_anchor ?? '')
+    ? `#${form.return_anchor}`
+    : '';
+  return `${COMPANY_ASSETS_ROUTE}?notice=${encodeURIComponent(noticeToken)}${anchor}`;
+}
+
+function companyAssetsRedirect(
+  res: ServerResponse,
+  deps: PostgresPortalDeps,
+  sessionToken: string,
+  form: Readonly<Record<string, string>>,
+  code: CompanyAssetsNoticeCode,
+): void {
+  redirect(
+    res,
+    companyAssetsReturnLocation(
+      form,
+      companyAssetsNoticeToken(deps.sessionSecret, sessionToken, code),
+    ),
+    undefined,
+    303,
+  );
+}
+
+function companyAssetsFailureNotice(kind: string): CompanyAssetsNoticeCode {
+  if (kind === 'unauthenticated' || kind === 'forbidden') return 'forbidden';
+  if (kind === 'validation') return 'invalid';
+  if (kind === 'not_found') return 'missing';
+  if (kind === 'review_unavailable') return 'review_unavailable';
+  if (kind === 'idempotency_conflict' || kind === 'exact_item_conflict') return 'conflict';
   return 'unavailable';
 }
 
@@ -1360,7 +1414,14 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
       return sendHtml(res, 200, operationalPage(
         outcome.snapshot.workspace.workspaceName,
-        renderBrandBrainBody(view, { brainLabel: brainNavigation.brainLabel }),
+        renderBrandBrainBody(view, {
+          brainLabel: brainNavigation.brainLabel,
+          companyAssetsAvailable: Boolean(
+            deps.companyAssets
+            && brainNavigation.assetsRoute === COMPANY_ASSETS_ROUTE
+          ),
+          companyAssetsLabel: brainNavigation.assetsLabel,
+        }),
         deps,
         'content',
         csrfToken,
@@ -1373,6 +1434,155 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         backHref: '/portal/content',
         backLabel: 'Return to Content Control',
       }));
+    }
+  }
+
+  // ── Property Predator company assets: metadata + quarantine-only decisions ──
+  if (deps.kind === 'postgres' && p === COMPANY_ASSETS_ROUTE && method === 'GET') {
+    const assetsNavigation = deps.productProfile?.contentWorkspace;
+    if (!deps.companyAssets || assetsNavigation?.assetsRoute !== COMPANY_ASSETS_ROUTE) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Company Assets not connected',
+        message: 'The migration 0033 metadata library is not enabled for this workspace.',
+        active: 'content',
+        backHref: '/portal/content',
+        backLabel: 'Return to Content Control',
+      }));
+    }
+    try {
+      const outcome = await deps.companyAssets.snapshot(crmIdentity(sessionToken, deps));
+      if (!outcome.ok) {
+        const status = outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden'
+          ? 403
+          : outcome.kind === 'validation'
+            ? 400
+            : outcome.kind === 'not_found'
+              ? 404
+              : 503;
+        return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+          title: status === 503
+            ? 'Company Assets temporarily unavailable'
+            : 'Company Assets not available',
+          message: outcome.message,
+          active: 'content',
+          backHref: '/portal/content',
+          backLabel: 'Return to Content Control',
+        }));
+      }
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      const view = presentCompanyAssets(outcome.snapshot, {
+        notice: companyAssetsNoticeFromQuery(
+          url.searchParams,
+          deps.sessionSecret,
+          sessionToken,
+        ),
+      });
+      return sendHtml(res, 200, operationalPage(
+        outcome.snapshot.workspace.workspaceName,
+        renderCompanyAssetsBody(view, {
+          assetsLabel: assetsNavigation.assetsLabel,
+          brandBrainAvailable: Boolean(
+            deps.brandBrain
+            && assetsNavigation.brainRoute === BRAND_BRAIN_ROUTE
+          ),
+          brandBrainLabel: assetsNavigation.brainLabel,
+          security: view.canQuarantine ? {
+            csrfToken,
+            quarantineKeys: Object.fromEntries(view.items.flatMap((item) => (
+              item.quarantineActions.map((action) => [
+                `${item.releaseItemId}:${action.dimension}`,
+                randomUUID(),
+              ])
+            ))),
+          } : undefined,
+        }),
+        deps,
+        'content',
+        csrfToken,
+      ));
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Company Assets temporarily unavailable',
+        message: 'No quarantine, approval, source, generation or provider state was changed.',
+        active: 'content',
+        backHref: '/portal/content',
+        backLabel: 'Return to Content Control',
+      }));
+    }
+  }
+
+  if (deps.kind === 'postgres'
+      && p === COMPANY_ASSET_QUARANTINE_ROUTE
+      && method === 'POST') {
+    const assetsNavigation = deps.productProfile?.contentWorkspace;
+    if (!deps.companyAssets || assetsNavigation?.assetsRoute !== COMPANY_ASSETS_ROUTE) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Company Assets not connected',
+        message: 'The protected founder quarantine service is not enabled.',
+        active: 'content',
+      }));
+    }
+    const form = await readForm(req);
+    if (!verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return companyAssetsRedirect(res, deps, sessionToken, form, 'invalid');
+    }
+    if (form.outcome !== 'quarantined') {
+      return companyAssetsRedirect(
+        res,
+        deps,
+        sessionToken,
+        form,
+        form.outcome === 'clear' ? 'review_unavailable' : 'invalid',
+      );
+    }
+    const itemType = form.item_type === 'asset'
+      || form.item_type === 'generated'
+      || form.item_type === 'media'
+      ? form.item_type
+      : null;
+    const dimension = form.dimension === 'visual_policy'
+      || form.dimension === 'claim'
+      || form.dimension === 'asset'
+      ? form.dimension
+      : null;
+    const expectedReason = dimension === 'visual_policy'
+      ? 'visual_policy_conflict'
+      : dimension === 'claim'
+        ? 'claims_unsubstantiated'
+        : dimension === 'asset'
+          ? 'asset_integrity_failed'
+          : null;
+    if (!itemType || !dimension || !expectedReason
+        || form.reason_code !== expectedReason
+        || form.evidence_sha256 !== form.item_content_sha256
+        || (dimension === 'asset' && itemType !== 'asset')) {
+      return companyAssetsRedirect(res, deps, sessionToken, form, 'invalid');
+    }
+    try {
+      const outcome = await deps.companyAssets.quarantine(crmIdentity(sessionToken, deps), {
+        commandKey: form.command_key ?? '',
+        sourceReleaseId: form.source_release_id ?? '',
+        releaseItemId: form.release_item_id ?? '',
+        itemType,
+        itemId: form.item_id ?? '',
+        itemContentSha256: form.item_content_sha256 ?? '',
+        itemBrandSha256: form.item_brand_sha256 ?? '',
+        dimension,
+        outcome: 'quarantined',
+        reasonCode: expectedReason as PortalCompanyAssetQuarantineReasonCode,
+        evidenceSha256: form.evidence_sha256 ?? '',
+      });
+      return companyAssetsRedirect(
+        res,
+        deps,
+        sessionToken,
+        form,
+        outcome.ok
+          ? outcome.disposition === 'replayed' ? 'replayed' : 'quarantined'
+          : companyAssetsFailureNotice(outcome.kind),
+      );
+    } catch {
+      return companyAssetsRedirect(res, deps, sessionToken, form, 'unavailable');
     }
   }
 
@@ -1419,6 +1629,11 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       return sendHtml(res, 200, operationalPage(
         outcome.snapshot.workspace.workspaceName,
         renderContentControlRoomBody(view, {
+          companyAssetsAvailable: Boolean(
+            deps.companyAssets
+            && deps.productProfile?.contentWorkspace?.assetsRoute === COMPANY_ASSETS_ROUTE
+          ),
+          companyAssetsLabel: deps.productProfile?.contentWorkspace?.assetsLabel,
           brandBrainAvailable: Boolean(
             deps.brandBrain
             && deps.productProfile?.contentWorkspace?.brainRoute === BRAND_BRAIN_ROUTE

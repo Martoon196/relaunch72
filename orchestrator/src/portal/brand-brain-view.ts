@@ -17,6 +17,8 @@ import { escapeHtml } from './ui.js';
 
 export interface RenderBrandBrainOptions {
   readonly brainLabel?: string;
+  readonly companyAssetsAvailable?: boolean;
+  readonly companyAssetsLabel?: string;
 }
 
 const BRAND_BRAIN_STYLE = `
@@ -88,6 +90,8 @@ export function renderBrandBrainBody(
   const externalProfiles = view.externalProfiles.map((profile) => `<li class="bbc-external-item"><div class="bbc-external-head"><h3>${escapeHtml(profile.name)}</h3><span class="bbc-chip wait">${escapeHtml(profile.statusLabel)}</span></div><p>${escapeHtml(profile.purpose)}</p><code>${escapeHtml(profile.profileId)} · ${escapeHtml(profile.callableLabel)}</code></li>`).join('');
   const actions = view.actions.map((entry, index) => actionLink(entry, index === 0)).join('');
   return `${renderContentWorkspaceNavigation('brain', {
+    companyAssetsAvailable: options.companyAssetsAvailable === true,
+    assetsLabel: options.companyAssetsLabel,
     brandBrainAvailable: true,
     brainLabel: brandBrainLabel,
   })}<style>${BRAND_BRAIN_STYLE}</style><section class="bbc" aria-labelledby="bbc-title">

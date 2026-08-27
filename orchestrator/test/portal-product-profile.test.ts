@@ -51,6 +51,9 @@ test('known portal product profiles resolve as immutable presentation contracts'
     },
   );
   assert.deepEqual(PROPERTY_PREDATOR_GROWTH_PROFILE.contentWorkspace, {
+    assetsRoute: '/portal/content/assets',
+    assetsLabel: 'Company Assets',
+    assetsSummary: 'Immutable Property Predator asset, ownership, approval and quarantine metadata.',
     brainRoute: '/portal/content/brain',
     brainLabel: 'Brand Brain',
     brainSummary: 'Inventory, governance and evaluation readiness for owned Property Predator AI specialists.',

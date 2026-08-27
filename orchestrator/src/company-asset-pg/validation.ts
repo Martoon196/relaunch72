@@ -58,6 +58,9 @@ export interface NormalizedCompanyAssetQuarantineDecision {
   readonly sourceReleaseId: string;
   readonly itemType: 'asset' | 'generated' | 'media';
   readonly itemId: string;
+  readonly releaseItemId: string | null;
+  readonly itemContentSha256: string | null;
+  readonly itemBrandSha256: string | null;
   readonly dimension: CompanyAssetQuarantineDimension;
   readonly outcome: CompanyAssetQuarantineOutcome;
   readonly reasonCode: CompanyAssetQuarantineReasonCode;
@@ -220,6 +223,18 @@ export function normalizeCompanyAssetQuarantineDecision(
 ): NormalizedCompanyAssetQuarantineDecision {
   if (!['asset', 'generated', 'media'].includes(command.itemType)) fail('itemType is invalid');
   if (!SAFE_ITEM_ID.test(command.itemId)) fail('itemId is invalid');
+  const exactTuple = [
+    command.releaseItemId,
+    command.itemContentSha256,
+    command.itemBrandSha256,
+  ];
+  const exactTupleCount = exactTuple.filter((value) => value !== undefined).length;
+  if (exactTupleCount !== 0 && exactTupleCount !== exactTuple.length) {
+    fail('exact item tuple must include id, content hash and brand hash');
+  }
+  if (command.outcome === 'quarantined' && exactTupleCount !== exactTuple.length) {
+    fail('quarantine requires an exact item tuple');
+  }
   const matrix: Readonly<Record<
     CompanyAssetQuarantineDimension,
     Readonly<Record<CompanyAssetQuarantineOutcome, readonly CompanyAssetQuarantineReasonCode[]>>
@@ -236,11 +251,24 @@ export function normalizeCompanyAssetQuarantineDecision(
       fail('non-asset item cannot claim asset payload evidence');
     }
   }
+  if (command.outcome === 'quarantined'
+      && command.evidenceSha256 !== command.itemContentSha256) {
+    fail('quarantine evidence must equal the exact item content hash');
+  }
   return Object.freeze({
     commandKeySha256: commandKeySha256(command.commandKey),
     sourceReleaseId: exactUuid(command.sourceReleaseId, 'sourceReleaseId'),
     itemType: command.itemType,
     itemId: command.itemId,
+    releaseItemId: exactTupleCount === 0
+      ? null
+      : exactUuid(command.releaseItemId!, 'releaseItemId'),
+    itemContentSha256: exactTupleCount === 0
+      ? null
+      : exactSha256(command.itemContentSha256!, 'itemContentSha256'),
+    itemBrandSha256: exactTupleCount === 0
+      ? null
+      : exactSha256(command.itemBrandSha256!, 'itemBrandSha256'),
     dimension: command.dimension,
     outcome: command.outcome,
     reasonCode: command.reasonCode,

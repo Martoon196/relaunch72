@@ -34,6 +34,10 @@ import {
   createPgPortalOperatorActionCentreService,
   type PgPortalOperatorActionCentreService,
 } from './operator-action-centre-pg-service.js';
+import {
+  createPgPortalCompanyAssetsService,
+  type PgPortalCompanyAssetsService,
+} from './company-assets-pg-service.js';
 
 export interface PgPortalPlatform {
   auth: PgPortalAuthService;
@@ -43,6 +47,8 @@ export interface PgPortalPlatform {
   operatorActions: PgPortalOperatorActionCentreService;
   /** Omitted unless the dedicated r72_content_command identity passes readiness. */
   companyContent?: PgPortalCompanyContentService;
+  /** Omitted unless adapter reads and founder command writes both pass readiness. */
+  companyAssets?: PgPortalCompanyAssetsService;
   /** Canonical TEST-only queue read model; it has no send or provider operation. */
   inbox: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval queue commands; it cannot dispatch. */
@@ -61,6 +67,81 @@ function requireCutoverIdentity(
     throw new Error(`PostgreSQL portal cutover requires ${sourceEnv} authenticated as ${expectedUser}`);
   }
   return config;
+}
+
+async function assertCompanyAssetRoleCapabilities(
+  adapterPool: Pool,
+  commandPool: Pool,
+): Promise<void> {
+  const [adapter, command] = await Promise.all([
+    adapterPool.query<{ ready: boolean }>(
+      `/* portal.company-assets-adapter-role-readiness */
+       SELECT current_user = 'r72_content_adapter'
+          AND (SELECT bool_and(pg_catalog.has_table_privilege(
+                  current_user, 'app_private.' || required.table_name, 'SELECT'
+                ))
+               FROM (VALUES
+                 ('company_asset_releases'), ('company_asset_release_items'),
+                 ('company_asset_source_attestations'), ('company_asset_eval_reports'),
+                 ('company_asset_eval_cases'), ('company_asset_founder_approvals'),
+                 ('company_asset_quarantine_decisions'), ('company_asset_reconciliations')
+               ) AS required(table_name))
+          AND pg_catalog.has_function_privilege(
+                current_user,
+                'app_private.active_portal_session(bytea,uuid,uuid)',
+                'EXECUTE'
+              )
+          AND NOT pg_catalog.has_function_privilege(
+                current_user,
+                'app_private.lock_active_portal_session(bytea,uuid,uuid)',
+                'EXECUTE'
+              )
+          AND NOT pg_catalog.has_table_privilege(
+                current_user,
+                'app_private.company_asset_quarantine_decisions',
+                'INSERT'
+              )
+          AND NOT pg_catalog.has_table_privilege(
+                current_user, 'app.provider_operations', 'INSERT'
+              ) AS ready`,
+    ),
+    commandPool.query<{ ready: boolean }>(
+      `/* portal.company-assets-command-role-readiness */
+       SELECT current_user = 'r72_content_command'
+          AND pg_catalog.has_table_privilege(
+                current_user, 'app_private.company_asset_release_items', 'SELECT'
+              )
+          AND pg_catalog.has_table_privilege(
+                current_user, 'app_private.company_asset_quarantine_decisions', 'SELECT'
+              )
+          AND pg_catalog.has_table_privilege(
+                current_user, 'app_private.company_asset_quarantine_decisions', 'INSERT'
+              )
+          AND pg_catalog.has_function_privilege(
+                current_user,
+                'app_private.lock_active_portal_session(bytea,uuid,uuid)',
+                'EXECUTE'
+              )
+          AND NOT pg_catalog.has_function_privilege(
+                current_user,
+                'app_private.active_portal_session(bytea,uuid,uuid)',
+                'EXECUTE'
+              )
+          AND NOT pg_catalog.has_table_privilege(
+                current_user, 'app_private.company_asset_releases', 'INSERT'
+              )
+          AND NOT pg_catalog.has_table_privilege(
+                current_user, 'app_private.company_asset_reconciliations', 'INSERT'
+              )
+          AND NOT pg_catalog.has_table_privilege(
+                current_user, 'app.provider_operations', 'INSERT'
+              ) AS ready`,
+    ),
+  ]);
+  if (adapter.rows.length !== 1 || adapter.rows[0]?.ready !== true
+      || command.rows.length !== 1 || command.rows[0]?.ready !== true) {
+    throw new Error('Company asset portal role capabilities are incomplete');
+  }
 }
 
 export function postgresPortalEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -141,6 +222,9 @@ export async function buildPgPortalPlatform(
     if (requireCompanyContent && !env.DATABASE_CONTENT_COMMAND_URL?.trim()) {
       throw new Error('Property Predator production requires DATABASE_CONTENT_COMMAND_URL');
     }
+    if (requireCompanyContent && !env.DATABASE_CONTENT_ADAPTER_URL?.trim()) {
+      throw new Error('Property Predator production requires DATABASE_CONTENT_ADAPTER_URL');
+    }
 
     const webPool = createDatabasePool(webConfig);
     pools.push(webPool);
@@ -164,9 +248,11 @@ export async function buildPgPortalPlatform(
     ]);
 
     let companyContent: PgPortalCompanyContentService | undefined;
+    let companyAssets: PgPortalCompanyAssetsService | undefined;
     let contentReadinessPool: Pool | undefined;
+    let contentCommandPool: Pool | undefined;
+    let assetReadinessPool: Pool | undefined;
     if (env.DATABASE_CONTENT_COMMAND_URL?.trim()) {
-      let contentCommandPool: Pool | undefined;
       try {
         const contentCommandConfig = requireCutoverIdentity(
           loadDatabaseConfig('contentCommand', env),
@@ -192,6 +278,36 @@ export async function buildPgPortalPlatform(
         // Optional means optional, not permissive: a missing or invalid command
         // identity leaves every content mutation route uncomposed.
         companyContent = undefined;
+        contentCommandPool = undefined;
+      }
+    }
+
+    if (env.DATABASE_CONTENT_ADAPTER_URL?.trim() && contentCommandPool) {
+      let contentAdapterPool: Pool | undefined;
+      try {
+        const contentAdapterConfig = requireCutoverIdentity(
+          loadDatabaseConfig('contentAdapter', env),
+          'DATABASE_CONTENT_ADAPTER_URL',
+          'r72_content_adapter',
+        );
+        contentAdapterPool = createDatabasePool(contentAdapterConfig);
+        if (expectedInstallationId) {
+          await assertExpectedDatabaseInstallation(contentAdapterPool, expectedInstallationId);
+        }
+        await assertCompanyAssetRoleCapabilities(contentAdapterPool, contentCommandPool);
+        companyAssets = createPgPortalCompanyAssetsService({
+          webPool,
+          adapterPool: contentAdapterPool,
+          commandPool: contentCommandPool,
+        });
+        assetReadinessPool = contentAdapterPool;
+        pools.push(contentAdapterPool);
+      } catch {
+        await contentAdapterPool?.end().catch(() => undefined);
+        companyAssets = undefined;
+        if (requireCompanyContent) {
+          throw new Error('Property Predator production company-assets controls did not pass readiness');
+        }
       }
     }
 
@@ -206,6 +322,7 @@ export async function buildPgPortalPlatform(
         environment: env.NODE_ENV?.trim() === 'production' ? 'production' : 'test',
       }),
       companyContent,
+      companyAssets,
       inbox: createPgPortalInboxReadBoundary(webPool),
       inboxCommands: createPgPortalConversionInboxCommandService({ webPool, commandPool }),
       async assertReady(): Promise<void> {
@@ -219,12 +336,18 @@ export async function buildPgPortalPlatform(
                 ...(contentReadinessPool
                   ? [assertExpectedDatabaseInstallation(contentReadinessPool, expectedInstallationId)]
                   : []),
+                ...(assetReadinessPool
+                  ? [assertExpectedDatabaseInstallation(assetReadinessPool, expectedInstallationId)]
+                  : []),
               ]
             : []),
           identityPool.query('/* portal.identity-runtime-readiness */ SELECT 1'),
           commandPool.query('/* portal.crm-runtime-readiness */ SELECT 1'),
           ...(contentReadinessPool
             ? [contentReadinessPool.query('/* portal.content-runtime-readiness */ SELECT 1')]
+            : []),
+          ...(assetReadinessPool && contentCommandPool
+            ? [assertCompanyAssetRoleCapabilities(assetReadinessPool, contentCommandPool)]
             : []),
         ]);
       },

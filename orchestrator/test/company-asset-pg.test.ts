@@ -18,6 +18,7 @@ import {
 } from '../src/company-content-adapter/property-predator-ai-inventory.js';
 import {
   CompanyAssetConflictError,
+  CompanyAssetPgRepository,
   CompanyAssetValidationError,
   boundedCompanyAssetReadLimit,
   normalizeCompanyAssetApproval,
@@ -190,6 +191,42 @@ test('quarantine decisions use exact allowlisted dimension/outcome/reason combin
   assert.equal(valid.reasonCode, 'asset_integrity_verified');
   assert.match(valid.commandKeySha256, /^[0-9a-f]{64}$/);
 
+  const exact = normalizeCompanyAssetQuarantineDecision({
+    commandKey: 'fictional-quarantine-exact-1',
+    sourceReleaseId: '10000000-0000-4000-8000-000000000002',
+    releaseItemId: '10000000-0000-4000-8000-000000000003',
+    itemType: 'asset', itemId: 'asset:fictional-evidence-card',
+    itemContentSha256: 'bb'.repeat(32), itemBrandSha256: 'cc'.repeat(32),
+    dimension: 'visual_policy', outcome: 'quarantined',
+    reasonCode: 'visual_policy_conflict', evidenceSha256: 'bb'.repeat(32),
+  });
+  assert.equal(exact.releaseItemId, '10000000-0000-4000-8000-000000000003');
+  assert.equal(exact.itemContentSha256, 'bb'.repeat(32));
+  assert.throws(() => normalizeCompanyAssetQuarantineDecision({
+    commandKey: 'fictional-quarantine-no-tuple',
+    sourceReleaseId: '10000000-0000-4000-8000-000000000002',
+    itemType: 'asset', itemId: 'asset:fictional-evidence-card',
+    dimension: 'visual_policy', outcome: 'quarantined',
+    reasonCode: 'visual_policy_conflict', evidenceSha256: 'bb'.repeat(32),
+  } as never), /quarantine requires an exact item tuple/);
+  assert.throws(() => normalizeCompanyAssetQuarantineDecision({
+    commandKey: 'fictional-quarantine-partial-tuple',
+    sourceReleaseId: '10000000-0000-4000-8000-000000000002',
+    releaseItemId: '10000000-0000-4000-8000-000000000003',
+    itemType: 'asset', itemId: 'asset:fictional-evidence-card',
+    dimension: 'visual_policy', outcome: 'quarantined',
+    reasonCode: 'visual_policy_conflict', evidenceSha256: 'bb'.repeat(32),
+  } as never), /exact item tuple/);
+  assert.throws(() => normalizeCompanyAssetQuarantineDecision({
+    commandKey: 'fictional-quarantine-wrong-evidence',
+    sourceReleaseId: '10000000-0000-4000-8000-000000000002',
+    releaseItemId: '10000000-0000-4000-8000-000000000003',
+    itemType: 'asset', itemId: 'asset:fictional-evidence-card',
+    itemContentSha256: 'bb'.repeat(32), itemBrandSha256: 'cc'.repeat(32),
+    dimension: 'visual_policy', outcome: 'quarantined',
+    reasonCode: 'visual_policy_conflict', evidenceSha256: 'dd'.repeat(32),
+  }), /evidence must equal the exact item content hash/);
+
   assert.throws(() => normalizeCompanyAssetQuarantineDecision({
     commandKey: 'fictional-quarantine-bypass',
     sourceReleaseId: '10000000-0000-4000-8000-000000000002',
@@ -204,6 +241,55 @@ test('quarantine decisions use exact allowlisted dimension/outcome/reason combin
     dimension: 'claim', outcome: 'clear', reasonCode: 'claims_unsubstantiated',
     evidenceSha256: 'aa'.repeat(32),
   }), CompanyAssetValidationError);
+});
+
+test('item summaries are bounded, metadata-only and include exact quarantine decisions', async () => {
+  let queryText = '';
+  let queryValues: readonly unknown[] | undefined;
+  const row = {
+    releaseItemId: '10000000-0000-4000-8000-000000000003',
+    sourceReleaseId: '10000000-0000-4000-8000-000000000002',
+    itemOrdinal: 1,
+    itemType: 'asset',
+    itemId: 'asset:fictional-evidence-card',
+    itemVersion: 4,
+    versionId: '10000000-0000-4000-8000-000000000001',
+    contentSha256: '11'.repeat(32),
+    blobSha256: '22'.repeat(32),
+    brandSha256: '33'.repeat(32),
+    approvalId: 'source-approval-1',
+    approvedAt: '2026-08-27T09:10:00Z',
+    approvalExpiryStatus: 'missing',
+    contentMode: 'company-owned',
+    hqUseStatus: 'review-required',
+    ownershipStatus: 'source-asserted-company-owned',
+    privacyStatus: 'customer-private-data-forbidden',
+    sourceQuarantineStatus: 'not-recorded-at-source',
+    sourceApprovalStatus: 'source-approved-exact-version',
+    decisions: [{
+      dimension: 'visual_policy', outcome: 'quarantined',
+      reasonCode: 'visual_policy_conflict', evidenceSha256: '44'.repeat(32),
+      recordedAt: '2026-08-27T10:00:00Z',
+    }],
+    recordedAt: '2026-08-27T09:12:00Z',
+  };
+  const repository = new CompanyAssetPgRepository({
+    query: async (text: string, values?: readonly unknown[]) => {
+      queryText = text;
+      queryValues = values;
+      return { rows: [row, { ...row, itemOrdinal: 2 }], rowCount: 2 };
+    },
+  } as never);
+
+  const page = await repository.listItems(row.sourceReleaseId, 1);
+  assert.equal(page.items.length, 1);
+  assert.equal(page.hasMore, true);
+  assert.equal(page.items[0]!.contentSha256, row.contentSha256);
+  assert.equal(page.items[0]!.decisions[0]!.reasonCode, 'visual_policy_conflict');
+  assert.deepEqual(queryValues, [row.sourceReleaseId, 2]);
+  assert.match(queryText, /company-asset\.list-items-bounded-metadata-only/);
+  assert.doesNotMatch(queryText, /content_resource_path|asset_resource_path|provider_operations/);
+  assert.doesNotMatch(JSON.stringify(page), /rawPrompt|knowledgeBody|customerRecord|resourcePath/iu);
 });
 
 test('founder approval is exact-scope/expiry bound and reconciliation stays dark on unknown source facts', async () => {

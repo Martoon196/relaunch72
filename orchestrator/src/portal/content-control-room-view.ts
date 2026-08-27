@@ -33,6 +33,8 @@ export interface ContentControlRoomActionSecurity {
 
 export interface RenderContentControlRoomOptions {
   readonly security?: ContentControlRoomActionSecurity;
+  readonly companyAssetsAvailable?: boolean;
+  readonly companyAssetsLabel?: string;
   readonly brandBrainAvailable?: boolean;
   readonly brandBrainLabel?: string;
 }
@@ -209,9 +211,11 @@ export function renderContentControlRoomBody(
   const truncationTruth = view.inputTruncated
     ? ' The presenter rejected unbounded output and rendered only the first 100 records.'
     : '';
-  const workspaceNavigation = options.brandBrainAvailable
+  const workspaceNavigation = options.companyAssetsAvailable || options.brandBrainAvailable
     ? renderContentWorkspaceNavigation('library', {
-        brandBrainAvailable: true,
+        companyAssetsAvailable: options.companyAssetsAvailable === true,
+        assetsLabel: options.companyAssetsLabel,
+        brandBrainAvailable: options.brandBrainAvailable === true,
         brainLabel: options.brandBrainLabel,
       })
     : '';

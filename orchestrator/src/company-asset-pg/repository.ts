@@ -11,6 +11,10 @@ import type { CompanyAssetEvalReport } from '../company-asset-release/evaluation
 import type {
   CompanyAssetQuarantineDimension,
   CompanyAssetQuarantineOutcome,
+  CompanyAssetItemDecisionSummary,
+  CompanyAssetItemPage,
+  CompanyAssetItemSummary,
+  CompanyAssetQuarantineReasonCode,
   CompanyAssetReleaseSummary,
   CompanyAssetTransactionRunner,
 } from './types.js';
@@ -80,9 +84,11 @@ interface QuarantineRow extends Record<string, unknown> {
   releaseItemId: string;
   dimension: CompanyAssetQuarantineDimension;
   outcome: CompanyAssetQuarantineOutcome;
-  reasonCode: string;
-  itemType: string;
+  reasonCode: CompanyAssetQuarantineReasonCode;
+  itemType: 'asset' | 'generated' | 'media';
   itemId: string;
+  contentSha256: string;
+  brandSha256: string;
   evidenceSha256: string;
   commandKeySha256: string;
 }
@@ -112,6 +118,38 @@ interface SummaryRow extends ReleaseRow {
   latestGuardReasonCodes: unknown;
 }
 
+interface ItemSummaryRow extends Record<string, unknown> {
+  releaseItemId: unknown;
+  sourceReleaseId: unknown;
+  itemOrdinal: unknown;
+  itemType: unknown;
+  itemId: unknown;
+  itemVersion: unknown;
+  versionId: unknown;
+  contentSha256: unknown;
+  blobSha256: unknown;
+  brandSha256: unknown;
+  approvalId: unknown;
+  approvedAt: unknown;
+  approvalExpiryStatus: unknown;
+  contentMode: unknown;
+  hqUseStatus: unknown;
+  ownershipStatus: unknown;
+  privacyStatus: unknown;
+  sourceQuarantineStatus: unknown;
+  sourceApprovalStatus: unknown;
+  decisions: unknown;
+  recordedAt: unknown;
+}
+
+const QUARANTINE_DIMENSIONS = new Set(['visual_policy', 'claim', 'asset']);
+const QUARANTINE_OUTCOMES = new Set(['clear', 'quarantined']);
+const QUARANTINE_REASONS = new Set([
+  'visual_policy_match', 'visual_policy_conflict',
+  'claims_supported', 'claims_unsubstantiated', 'no_claims_present',
+  'asset_integrity_verified', 'asset_integrity_failed', 'no_asset_payload',
+]);
+
 function integer(value: unknown, label: string): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`${label} is invalid`);
@@ -123,6 +161,132 @@ function textArray(value: unknown, label: string): readonly string[] {
     throw new Error(`${label} is invalid`);
   }
   return Object.freeze([...value] as string[]);
+}
+
+function requiredText(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.length === 0) throw new Error(`${label} is invalid`);
+  return value;
+}
+
+function uuidText(value: unknown, label: string): string {
+  const text = requiredText(value, label);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
+    .test(text)) throw new Error(`${label} is invalid`);
+  return text.toLowerCase();
+}
+
+function shaText(value: unknown, label: string): string {
+  const text = requiredText(value, label);
+  if (!/^[0-9a-f]{64}$/u.test(text)) throw new Error(`${label} is invalid`);
+  return text;
+}
+
+function decisionSummaries(value: unknown): readonly CompanyAssetItemDecisionSummary[] {
+  if (!Array.isArray(value) || value.length > 3) {
+    throw new Error('company asset item decisions are invalid');
+  }
+  const seen = new Set<string>();
+  return Object.freeze(value.map((raw): CompanyAssetItemDecisionSummary => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('company asset item decision is invalid');
+    }
+    const row = raw as Record<string, unknown>;
+    if (typeof row.dimension !== 'string' || !QUARANTINE_DIMENSIONS.has(row.dimension)
+        || typeof row.outcome !== 'string' || !QUARANTINE_OUTCOMES.has(row.outcome)
+        || typeof row.reasonCode !== 'string' || !QUARANTINE_REASONS.has(row.reasonCode)
+        || typeof row.evidenceSha256 !== 'string' || !/^[0-9a-f]{64}$/u.test(row.evidenceSha256)
+        || typeof row.recordedAt !== 'string' || !Number.isFinite(Date.parse(row.recordedAt))
+        || seen.has(row.dimension)) {
+      throw new Error('company asset item decision metadata is invalid');
+    }
+    const reasonMatches = row.dimension === 'visual_policy'
+      ? row.outcome === 'clear'
+        ? row.reasonCode === 'visual_policy_match'
+        : row.reasonCode === 'visual_policy_conflict'
+      : row.dimension === 'claim'
+        ? row.outcome === 'clear'
+          ? row.reasonCode === 'claims_supported' || row.reasonCode === 'no_claims_present'
+          : row.reasonCode === 'claims_unsubstantiated'
+        : row.outcome === 'clear'
+          ? row.reasonCode === 'asset_integrity_verified' || row.reasonCode === 'no_asset_payload'
+          : row.reasonCode === 'asset_integrity_failed';
+    if (!reasonMatches) throw new Error('company asset item decision reason is invalid');
+    seen.add(row.dimension);
+    return Object.freeze({
+      dimension: row.dimension as CompanyAssetQuarantineDimension,
+      outcome: row.outcome as CompanyAssetQuarantineOutcome,
+      reasonCode: row.reasonCode as CompanyAssetQuarantineReasonCode,
+      evidenceSha256: row.evidenceSha256,
+      recordedAt: row.recordedAt,
+    });
+  }));
+}
+
+function itemSummary(row: ItemSummaryRow): CompanyAssetItemSummary {
+  const itemType = requiredText(row.itemType, 'itemType');
+  if (!['asset', 'generated', 'media'].includes(itemType)) {
+    throw new Error('itemType is invalid');
+  }
+  const itemOrdinal = integer(row.itemOrdinal, 'itemOrdinal');
+  const itemVersion = integer(row.itemVersion, 'itemVersion');
+  if (itemOrdinal < 1 || itemVersion < 1) throw new Error('company asset item ordering is invalid');
+  const approvedAt = requiredText(row.approvedAt, 'approvedAt');
+  const recordedAt = requiredText(row.recordedAt, 'recordedAt');
+  if (!Number.isFinite(Date.parse(approvedAt)) || !Number.isFinite(Date.parse(recordedAt))) {
+    throw new Error('company asset item chronology is invalid');
+  }
+  if (row.approvalExpiryStatus !== 'missing'
+      || row.contentMode !== 'company-owned'
+      || row.hqUseStatus !== 'review-required'
+      || row.ownershipStatus !== 'source-asserted-company-owned'
+      || row.privacyStatus !== 'customer-private-data-forbidden'
+      || row.sourceQuarantineStatus !== 'not-recorded-at-source'
+      || row.sourceApprovalStatus !== 'source-approved-exact-version') {
+    throw new Error('company asset item crossed the sealed metadata boundary');
+  }
+  const itemId = requiredText(row.itemId, 'itemId');
+  const versionId = requiredText(row.versionId, 'versionId');
+  const approvalId = requiredText(row.approvalId, 'approvalId');
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(itemId)
+      || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u.test(versionId)
+      || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(approvalId)) {
+    throw new Error('company asset item identity is invalid');
+  }
+  const contentSha256 = shaText(row.contentSha256, 'contentSha256');
+  const blobSha256 = row.blobSha256 === null ? null : shaText(row.blobSha256, 'blobSha256');
+  if ((itemType === 'asset' && blobSha256 === null)
+      || (itemType !== 'asset' && blobSha256 !== null)) {
+    throw new Error('company asset blob metadata is invalid');
+  }
+  const decisions = decisionSummaries(row.decisions);
+  if (decisions.some((decision) => decision.dimension === 'asset'
+      && ((itemType === 'asset' && decision.reasonCode === 'no_asset_payload')
+        || (itemType !== 'asset' && decision.reasonCode !== 'no_asset_payload')))) {
+    throw new Error('company asset integrity decision does not match item type');
+  }
+  return Object.freeze({
+    releaseItemId: uuidText(row.releaseItemId, 'releaseItemId'),
+    sourceReleaseId: uuidText(row.sourceReleaseId, 'sourceReleaseId'),
+    itemOrdinal,
+    itemType: itemType as CompanyAssetItemSummary['itemType'],
+    itemId,
+    itemVersion,
+    versionId,
+    contentSha256,
+    blobSha256,
+    brandSha256: shaText(row.brandSha256, 'brandSha256'),
+    approvalId,
+    approvedAt,
+    approvalExpiryStatus: 'missing',
+    contentMode: 'company-owned',
+    hqUseStatus: 'review-required',
+    ownershipStatus: 'source-asserted-company-owned',
+    privacyStatus: 'customer-private-data-forbidden',
+    sourceQuarantineStatus: 'not-recorded-at-source',
+    sourceApprovalStatus: 'source-approved-exact-version',
+    decisions,
+    recordedAt,
+  });
 }
 
 export interface StoredCompanyAssetRelease {
@@ -603,6 +767,8 @@ export class CompanyAssetPgRepository {
               decision.decision_outcome AS outcome,
               decision.reason_code AS "reasonCode",
               item.item_type AS "itemType", item.item_id AS "itemId",
+              encode(item.content_sha256, 'hex') AS "contentSha256",
+              encode(item.brand_sha256, 'hex') AS "brandSha256",
               encode(decision.evidence_sha256, 'hex') AS "evidenceSha256",
               encode(decision.command_key_sha256, 'hex') AS "commandKeySha256"
        FROM app_private.company_asset_quarantine_decisions AS decision
@@ -835,6 +1001,52 @@ export class CompanyAssetPgRepository {
       providerEffects: false,
       recordedAt: row.recordedAt,
     })));
+  }
+
+  async listItems(sourceReleaseId: string, limit: number): Promise<CompanyAssetItemPage> {
+    const result = await this.transaction.query<ItemSummaryRow>(
+      `/* company-asset.list-items-bounded-metadata-only */
+       SELECT item.id::text AS "releaseItemId",
+              item.source_release_id::text AS "sourceReleaseId",
+              item.item_ordinal AS "itemOrdinal",
+              item.item_type AS "itemType", item.item_id AS "itemId",
+              item.item_version AS "itemVersion", item.version_id AS "versionId",
+              encode(item.content_sha256, 'hex') AS "contentSha256",
+              CASE WHEN item.blob_sha256 IS NULL THEN NULL
+                ELSE encode(item.blob_sha256, 'hex') END AS "blobSha256",
+              encode(item.brand_sha256, 'hex') AS "brandSha256",
+              item.approval_id AS "approvalId", item.approved_at::text AS "approvedAt",
+              item.approval_expiry_status AS "approvalExpiryStatus",
+              item.content_mode AS "contentMode", item.hq_use_status AS "hqUseStatus",
+              item.ownership_status AS "ownershipStatus",
+              item.privacy_status AS "privacyStatus",
+              item.quarantine_status AS "sourceQuarantineStatus",
+              item.source_approval_status AS "sourceApprovalStatus",
+              COALESCE((
+                SELECT jsonb_agg(jsonb_build_object(
+                  'dimension', decision.decision_dimension,
+                  'outcome', decision.decision_outcome,
+                  'reasonCode', decision.reason_code,
+                  'evidenceSha256', encode(decision.evidence_sha256, 'hex'),
+                  'recordedAt', decision.recorded_at::text
+                ) ORDER BY decision.decision_dimension)
+                FROM app_private.company_asset_quarantine_decisions AS decision
+                WHERE decision.workspace_id = item.workspace_id
+                  AND decision.source_release_id = item.source_release_id
+                  AND decision.release_item_id = item.id
+              ), '[]'::jsonb) AS decisions,
+              item.recorded_at::text AS "recordedAt"
+       FROM app_private.company_asset_release_items AS item
+       WHERE item.source_release_id = $1
+       ORDER BY item.item_ordinal ASC, item.id ASC
+       LIMIT $2`,
+      [sourceReleaseId, limit + 1],
+    );
+    const hasMore = result.rows.length > limit;
+    return Object.freeze({
+      items: Object.freeze(result.rows.slice(0, limit).map(itemSummary)),
+      hasMore,
+    });
   }
 }
 

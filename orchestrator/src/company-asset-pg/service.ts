@@ -6,6 +6,7 @@ import {
   CompanyAssetNotFoundError,
   type ApproveCompanyAssetScopeCommand,
   type ApproveCompanyAssetScopeResult,
+  type CompanyAssetItemPage,
   type CompanyAssetReleaseSummary,
   type CompanyAssetServiceDependencies,
   type DecideCompanyAssetQuarantineCommand,
@@ -25,6 +26,7 @@ import {
   normalizeCompanyAssetReconciliation,
   normalizeStageCompanyAssetRelease,
   instantEpochMicros,
+  exactUuid,
   validateCompanyAssetManagerContext,
 } from './validation.js';
 
@@ -333,7 +335,12 @@ export class CompanyAssetService {
               || prior.dimension !== input.dimension || prior.outcome !== input.outcome
               || prior.reasonCode !== input.reasonCode
               || prior.itemType !== input.itemType || prior.itemId !== input.itemId
-              || prior.evidenceSha256 !== input.evidenceSha256) {
+              || prior.evidenceSha256 !== input.evidenceSha256
+              || (input.releaseItemId !== null && (
+                prior.releaseItemId !== input.releaseItemId
+                || prior.contentSha256 !== input.itemContentSha256
+                || prior.brandSha256 !== input.itemBrandSha256
+              ))) {
             throw new CompanyAssetConflictError('Company asset quarantine command key was reused');
           }
           return Object.freeze({
@@ -341,23 +348,40 @@ export class CompanyAssetService {
             quarantineDecisionId: prior.quarantineDecisionId,
             sourceReleaseId: prior.sourceReleaseId,
             releaseItemId: prior.releaseItemId,
+            itemType: prior.itemType,
+            itemId: prior.itemId,
+            itemContentSha256: prior.contentSha256,
+            itemBrandSha256: prior.brandSha256,
             dimension: prior.dimension,
             outcome: prior.outcome,
+            reasonCode: prior.reasonCode,
             evidenceSha256: prior.evidenceSha256,
             providerEffects: false as const,
           });
         }
         const item = await repository.findItem(input.sourceReleaseId, input.itemType, input.itemId);
         if (!item) throw new CompanyAssetNotFoundError('Company asset release item was not found');
+        if (input.releaseItemId !== null && (
+          item.releaseItemId !== input.releaseItemId
+          || item.contentSha256 !== input.itemContentSha256
+          || item.brandSha256 !== input.itemBrandSha256
+        )) {
+          throw new CompanyAssetConflictError(
+            'Company asset quarantine target no longer matches the exact reviewed item tuple',
+          );
+        }
         await repository.lockRelease(item.releaseSha256, item.scopeSha256);
         const inserted = await repository.insertQuarantineDecision({
           id: this.#nextId(), item, decision: input,
         });
         const row = await repository.findQuarantineByCommand(input.commandKeySha256);
-        if (!row || row.releaseItemId !== item.releaseItemId
+        if (!row || row.sourceReleaseId !== input.sourceReleaseId
+            || row.releaseItemId !== item.releaseItemId
             || row.dimension !== input.dimension || row.outcome !== input.outcome
             || row.reasonCode !== input.reasonCode
             || row.itemType !== input.itemType || row.itemId !== input.itemId
+            || row.contentSha256 !== item.contentSha256
+            || row.brandSha256 !== item.brandSha256
             || row.evidenceSha256 !== input.evidenceSha256) {
           throw new CompanyAssetConflictError('Company asset quarantine decision replay differs');
         }
@@ -366,8 +390,13 @@ export class CompanyAssetService {
           quarantineDecisionId: row.quarantineDecisionId,
           sourceReleaseId: row.sourceReleaseId,
           releaseItemId: row.releaseItemId,
+          itemType: row.itemType,
+          itemId: row.itemId,
+          itemContentSha256: row.contentSha256,
+          itemBrandSha256: row.brandSha256,
           dimension: row.dimension,
           outcome: row.outcome,
+          reasonCode: row.reasonCode,
           evidenceSha256: row.evidenceSha256,
           providerEffects: false as const,
         });
@@ -460,6 +489,21 @@ export class CompanyAssetService {
     return this.dependencies.transactionRunner.run(
       context,
       async (transaction) => new CompanyAssetPgRepository(transaction).listReleases(limit),
+      { readOnly: true },
+    );
+  }
+
+  async listItems(
+    context: DatabaseRequestContext,
+    input: Readonly<{ sourceReleaseId: string; limit?: number }>,
+  ): Promise<CompanyAssetItemPage> {
+    validateCompanyAssetManagerContext(context);
+    const sourceReleaseId = exactUuid(input.sourceReleaseId, 'sourceReleaseId');
+    const limit = boundedCompanyAssetReadLimit(input.limit);
+    return this.dependencies.transactionRunner.run(
+      context,
+      async (transaction) => new CompanyAssetPgRepository(transaction)
+        .listItems(sourceReleaseId, limit),
       { readOnly: true },
     );
   }

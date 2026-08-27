@@ -39,6 +39,9 @@ export interface PortalReadinessRail {
 }
 
 export interface PortalContentWorkspaceNavigation {
+  readonly assetsRoute: '/portal/content/assets';
+  readonly assetsLabel: string;
+  readonly assetsSummary: string;
   readonly brainRoute: '/portal/content/brain';
   readonly brainLabel: string;
   readonly brainSummary: string;
@@ -120,13 +123,19 @@ function createProfile(profile: PortalProductProfile): PortalProductProfile {
   }));
   const contentWorkspace = profile.contentWorkspace
     ? Object.freeze({
+        assetsRoute: profile.contentWorkspace.assetsRoute,
+        assetsLabel: checkedText(profile.contentWorkspace.assetsLabel, 'Company assets navigation label'),
+        assetsSummary: checkedText(profile.contentWorkspace.assetsSummary, 'Company assets navigation summary'),
         brainRoute: profile.contentWorkspace.brainRoute,
         brainLabel: checkedText(profile.contentWorkspace.brainLabel, 'Brand Brain navigation label'),
         brainSummary: checkedText(profile.contentWorkspace.brainSummary, 'Brand Brain navigation summary'),
       })
     : undefined;
-  if (contentWorkspace && contentWorkspace.brainRoute !== '/portal/content/brain') {
-    throw new Error('Brand Brain navigation must use the canonical portal route');
+  if (contentWorkspace && (
+    contentWorkspace.assetsRoute !== '/portal/content/assets'
+    || contentWorkspace.brainRoute !== '/portal/content/brain'
+  )) {
+    throw new Error('Content workspace navigation must use canonical portal routes');
   }
   return Object.freeze({
     ...profile,
@@ -250,6 +259,9 @@ export const PROPERTY_PREDATOR_GROWTH_PROFILE = createProfile({
     { id: 'automations', label: 'Conversion recipes', summary: 'Approval-led sequences with visible stop rules.', state: 'planned' },
   ],
   contentWorkspace: {
+    assetsRoute: '/portal/content/assets',
+    assetsLabel: 'Company Assets',
+    assetsSummary: 'Immutable Property Predator asset, ownership, approval and quarantine metadata.',
     brainRoute: '/portal/content/brain',
     brainLabel: 'Brand Brain',
     brainSummary: 'Inventory, governance and evaluation readiness for owned Property Predator AI specialists.',

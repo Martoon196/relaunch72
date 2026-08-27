@@ -65,24 +65,51 @@ export interface ApproveCompanyAssetScopeResult {
   readonly providerEffects: false;
 }
 
-export interface DecideCompanyAssetQuarantineCommand {
+interface DecideCompanyAssetQuarantineCommandBase {
   readonly commandKey: string;
   readonly sourceReleaseId: string;
   readonly itemType: 'asset' | 'generated' | 'media';
   readonly itemId: string;
   readonly dimension: CompanyAssetQuarantineDimension;
-  readonly outcome: CompanyAssetQuarantineOutcome;
   readonly reasonCode: CompanyAssetQuarantineReasonCode;
   readonly evidenceSha256: string;
 }
+
+interface ExactCompanyAssetItemTuple {
+  readonly releaseItemId: string;
+  readonly itemContentSha256: string;
+  readonly itemBrandSha256: string;
+}
+
+/**
+ * Restrictive decisions always require the exact immutable item tuple. The
+ * tuple-less variant remains only for the pre-existing clear workflow, which
+ * is not exposed by the metadata-only portal surface.
+ */
+export type DecideCompanyAssetQuarantineCommand = DecideCompanyAssetQuarantineCommandBase & (
+  | ({ readonly outcome: 'quarantined' } & ExactCompanyAssetItemTuple)
+  | ({ readonly outcome: 'clear' } & (
+      | ExactCompanyAssetItemTuple
+      | {
+          readonly releaseItemId?: undefined;
+          readonly itemContentSha256?: undefined;
+          readonly itemBrandSha256?: undefined;
+        }
+    ))
+);
 
 export interface DecideCompanyAssetQuarantineResult {
   readonly disposition: 'applied' | 'replayed';
   readonly quarantineDecisionId: string;
   readonly sourceReleaseId: string;
   readonly releaseItemId: string;
+  readonly itemType: 'asset' | 'generated' | 'media';
+  readonly itemId: string;
+  readonly itemContentSha256: string;
+  readonly itemBrandSha256: string;
   readonly dimension: CompanyAssetQuarantineDimension;
   readonly outcome: CompanyAssetQuarantineOutcome;
+  readonly reasonCode: CompanyAssetQuarantineReasonCode;
   readonly evidenceSha256: string;
   readonly providerEffects: false;
 }
@@ -131,6 +158,48 @@ export interface CompanyAssetReleaseSummary {
   readonly generationMode: 'simulated_draft_only';
   readonly providerEffects: false;
   readonly recordedAt: string;
+}
+
+export interface CompanyAssetItemDecisionSummary {
+  readonly dimension: CompanyAssetQuarantineDimension;
+  readonly outcome: CompanyAssetQuarantineOutcome;
+  readonly reasonCode: CompanyAssetQuarantineReasonCode;
+  readonly evidenceSha256: string;
+  readonly recordedAt: string;
+}
+
+/**
+ * Metadata-only item projection. It deliberately omits content/artwork bytes,
+ * internal resource paths, prompts, knowledge, storage locations and customer
+ * data. Every identifier and digest is bound to migration 0033's immutable row.
+ */
+export interface CompanyAssetItemSummary {
+  readonly releaseItemId: string;
+  readonly sourceReleaseId: string;
+  readonly itemOrdinal: number;
+  readonly itemType: 'asset' | 'generated' | 'media';
+  readonly itemId: string;
+  readonly itemVersion: number;
+  readonly versionId: string;
+  readonly contentSha256: string;
+  readonly blobSha256: string | null;
+  readonly brandSha256: string;
+  readonly approvalId: string;
+  readonly approvedAt: string;
+  readonly approvalExpiryStatus: 'missing';
+  readonly contentMode: 'company-owned';
+  readonly hqUseStatus: 'review-required';
+  readonly ownershipStatus: 'source-asserted-company-owned';
+  readonly privacyStatus: 'customer-private-data-forbidden';
+  readonly sourceQuarantineStatus: 'not-recorded-at-source';
+  readonly sourceApprovalStatus: 'source-approved-exact-version';
+  readonly decisions: readonly CompanyAssetItemDecisionSummary[];
+  readonly recordedAt: string;
+}
+
+export interface CompanyAssetItemPage {
+  readonly items: readonly CompanyAssetItemSummary[];
+  readonly hasMore: boolean;
 }
 
 export interface CompanyAssetTransactionRunner {

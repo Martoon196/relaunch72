@@ -21,6 +21,10 @@ import {
   contentControlNoticeToken,
   type ContentControlNoticeCode,
 } from '../src/portal/content-control-room-actions.js';
+import { COMPANY_ASSETS_ROUTE } from '../src/portal/company-assets-actions.js';
+import { createPropertyPredatorCompanyAssetsFixture } from '../src/portal/company-assets-fixtures.js';
+import { presentCompanyAssets } from '../src/portal/company-assets-presenter.js';
+import { renderCompanyAssetsBody } from '../src/portal/company-assets-view.js';
 import { createPropertyPredatorTestInboxSnapshot } from '../src/portal/conversion-inbox-fixtures.js';
 import {
   CONVERSION_INBOX_ROUTE,
@@ -935,6 +939,8 @@ function previewContentControl(url: URL): string {
     },
   });
   return renderContentControlRoomBody(view, {
+    companyAssetsAvailable: true,
+    companyAssetsLabel: PROPERTY_PREDATOR_GROWTH_PROFILE.contentWorkspace?.assetsLabel,
     security: {
       csrfToken: PREVIEW_CSRF,
       requestApprovalKeys: Object.fromEntries(view.items.map((item) => [
@@ -1041,6 +1047,19 @@ function page(url: URL): { status: number; html: string; board?: boolean } {
   if (path === CONTENT_CONTROL_ROOM_ROUTE) return {
     status: 200,
     html: shell(`${previewOperationsNav('content')}${previewContentControl(url)}`, 'content', 'Property Predator — Content Control'),
+  };
+  if (path === COMPANY_ASSETS_ROUTE) return {
+    status: 200,
+    html: shell(
+      `${previewOperationsNav('content')}${renderCompanyAssetsBody(
+        presentCompanyAssets(createPropertyPredatorCompanyAssetsFixture()),
+        {
+          assetsLabel: PROPERTY_PREDATOR_GROWTH_PROFILE.contentWorkspace?.assetsLabel,
+        },
+      )}`,
+      'content',
+      'Property Predator — Company Assets',
+    ),
   };
   if (path === CONTENT_CALENDAR_ROUTE) return {
     status: 200,

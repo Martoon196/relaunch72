@@ -400,6 +400,11 @@ async function main(): Promise<void> {
       } else {
         console.warn('⚠  Company content controls remain unavailable; the dedicated content command identity is absent or did not pass readiness.');
       }
+      if (postgresPortal.companyAssets) {
+        console.log('Company asset metadata and founder quarantine-only controls are ready.');
+      } else {
+        console.warn('⚠  Company asset controls remain unavailable; adapter/command role readiness did not pass.');
+      }
       console.log('Authoritative Operator Action Centre and protected assignment/snooze commands are ready.');
     } catch (error) {
       // No legacy-cookie fallback in requested database mode. Payments may stay
@@ -434,6 +439,7 @@ async function main(): Promise<void> {
         journeys: postgresPortal.journeys,
         operatorActions: postgresPortal.operatorActions,
         companyContent: postgresPortal.companyContent,
+        companyAssets: postgresPortal.companyAssets,
         inbox: postgresPortal.inbox,
         inboxCommands: postgresPortal.inboxCommands,
         productProfile: portalProductProfile,
