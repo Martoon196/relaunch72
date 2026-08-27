@@ -211,6 +211,18 @@ test('company asset persistence is replay-safe, exact-tuple gated, dark and role
     requestId: 'fictional-company-asset-viewer',
   };
   try {
+    const runtimeIdentity = await scopedRoleQuery(
+      pool,
+      'r72_content_adapter',
+      contextA,
+      `SELECT app_private.runtime_database_installation_id()::text AS installation_id`,
+    );
+    assert.equal(runtimeIdentity.length, 1);
+    assert.match(
+      String(runtimeIdentity[0]?.installation_id ?? ''),
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+
     await resetIdentityTables(pool);
     const suffix = organizationId.replaceAll('-', '').slice(0, 10);
     await ownerQuery(pool,
