@@ -98,6 +98,16 @@ test('template model is immutable, hash-bound and exact-variable only', async ()
     ...request,
     evidence: { ...request.evidence, workspaceId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' },
   }), /not bound to this test operation/);
+  let decisionReads = 0;
+  const stableEvidence = createWhatsAppDarkEvidenceBundle({
+    ...request.evidence,
+    get approvalDecision() {
+      decisionReads += 1;
+      return decisionReads === 1 ? 'approved_for_test_simulation' : 'changed_after_validation';
+    },
+  } as unknown as Parameters<typeof createWhatsAppDarkEvidenceBundle>[0]);
+  assert.equal(decisionReads, 1);
+  assert.equal(stableEvidence.approvalDecision, 'approved_for_test_simulation');
 });
 
 test('simulator refuses routable numbers and records hashes without raw body or recipient', async () => {
@@ -119,6 +129,11 @@ test('simulator refuses routable numbers and records hashes without raw body or 
   assert.doesNotMatch(JSON.stringify(adapter.audit), /Test Founder|\+447700900001|property pack is ready/);
   await assert.doesNotReject(adapter.reconcileSimulation(context, result.testReference));
   await assert.rejects(adapter.reconcileSimulation(context, 'wa_test_00000000000000000000000000000000'));
+  await assert.rejects(adapter.simulateTemplate(context, {
+    ...request, variables: { first_name: 'Changed', pack_reference: 'TEST-001' },
+  }), /reused with different test input/);
+  await assert.rejects(new SimulatedWhatsAppDarkAdapter({ now: () => NOW })
+    .reconcileSimulation(context, result.testReference), /reference is invalid/);
 });
 
 test('signed simulated inbound webhook maps into an own-inbox test command', () => {
@@ -203,6 +218,52 @@ test('webhook snapshots one exact byte value before authentication and parsing',
   const event = verifySimulatedWhatsAppWebhook(hostile);
   assert.equal(reads, 1);
   assert.equal(event.event.body, 'Authenticated body.');
+});
+
+test('webhook copies bytes before any later input getter can mutate the supplied array', () => {
+  const good = createSignedSimulatedWhatsAppInbound({
+    workspaceId: WORKSPACE_ID, connectionId: CONNECTION_ID,
+    from: '+447700900002', to: '+447700900001', body: 'Good',
+    occurredAt: NOW.toISOString(), testSecret: TEST_SECRET,
+  });
+  const evil = createSignedSimulatedWhatsAppInbound({
+    workspaceId: WORKSPACE_ID, connectionId: CONNECTION_ID,
+    from: '+447700900002', to: '+447700900001', body: 'Evil',
+    occurredAt: NOW.toISOString(), testSecret: TEST_SECRET,
+  });
+  assert.equal(good.rawBody.byteLength, evil.rawBody.byteLength);
+  const mutable = Uint8Array.from(good.rawBody);
+  assert.throws(() => verifySimulatedWhatsAppWebhook({
+    rawBody: mutable,
+    get signature() { mutable.set(evil.rawBody); return evil.signature; },
+    contentType: good.contentType,
+    testSecret: TEST_SECRET,
+  }), /signature is invalid/);
+});
+
+test('own-inbox binding values are snapshotted once before command construction', () => {
+  const signed = createSignedSimulatedWhatsAppInbound({
+    workspaceId: WORKSPACE_ID, connectionId: CONNECTION_ID,
+    from: '+447700900002', to: '+447700900001', body: 'Bound once.',
+    occurredAt: NOW.toISOString(), testSecret: TEST_SECRET,
+  });
+  const event = verifySimulatedWhatsAppWebhook({ ...signed, testSecret: TEST_SECRET });
+  const reads = new Map<string, number>();
+  const once = (name: string, value: string): string => {
+    const count = (reads.get(name) ?? 0) + 1;
+    reads.set(name, count);
+    return count === 1 ? value : 'NOT_A_UUID';
+  };
+  const command = toOwnInboxTestInbound(event, {
+    get workspaceId() { return once('workspaceId', WORKSPACE_ID); },
+    get connectionId() { return once('connectionId', CONNECTION_ID); },
+    get inboxId() { return once('inboxId', INBOX_ID); },
+    get contactId() { return once('contactId', CONTACT_ID); },
+    get contactPointId() { return once('contactPointId', CONTACT_POINT_ID); },
+    ownedTestNumber: '+447700900001', sourceTestNumber: '+447700900002',
+  });
+  assert.equal(command.inboxId, INBOX_ID);
+  assert.ok([...reads.values()].every((count) => count === 1));
 });
 
 test('dark WhatsApp module has no transport, SDK, registry, credential or live-effect path', async () => {

@@ -49,6 +49,7 @@ export class SimulatedWhatsAppDarkAdapter implements WhatsAppDarkAdapter {
   readonly providerId = WHATSAPP_DARK_PROVIDER_ID;
   readonly mode = 'simulated_test_only' as const;
   readonly #audit: WhatsAppSimulationAudit[] = [];
+  readonly #results = new Map<string, Readonly<{ requestSha256: string; result: WhatsAppDarkResult }>>();
   readonly #now: () => Date;
 
   constructor(options: Readonly<{ now?: () => Date }> = {}) {
@@ -63,35 +64,56 @@ export class SimulatedWhatsAppDarkAdapter implements WhatsAppDarkAdapter {
     context: ProviderOperationContext,
     request: WhatsAppDarkTemplateRequest,
   ): Promise<WhatsAppDarkResult> {
-    assertWhatsAppDarkContext(context);
-    const rendered = renderWhatsAppDarkTemplate(context, request);
-    const testReference = reference(context);
+    const exactContext = assertWhatsAppDarkContext(context);
+    const rendered = renderWhatsAppDarkTemplate(exactContext, request);
+    const recipientSha256 = createHash('sha256').update(rendered.recipient, 'utf8').digest('hex');
+    const requestSha256 = createHash('sha256').update(JSON.stringify({
+      evidenceBundleSha256: rendered.evidenceBundleSha256,
+      recipientSha256,
+      renderedBodySha256: rendered.renderedBodySha256,
+      templateId: rendered.templateId,
+      templateVersion: rendered.templateVersion,
+    }), 'utf8').digest('hex');
+    const existing = this.#results.get(exactContext.operationId);
+    if (existing) {
+      if (existing.requestSha256 !== requestSha256) {
+        throw new WhatsAppDarkContractError('operation id was reused with different test input');
+      }
+      return existing.result;
+    }
+    const testReference = reference(exactContext);
+    const simulatedResult = result(testReference, this.#now);
     this.#audit.push(Object.freeze({
       mode: 'simulate',
-      operationId: context.operationId,
-      templateId: request.template.templateId,
-      templateVersion: request.template.version,
-      recipientSha256: createHash('sha256').update(rendered.recipient, 'utf8').digest('hex'),
+      operationId: exactContext.operationId,
+      templateId: rendered.templateId,
+      templateVersion: rendered.templateVersion,
+      recipientSha256,
       renderedBodySha256: rendered.renderedBodySha256,
       testReference,
       externalDeliveryAttempted: false,
     }));
-    return result(testReference, this.#now);
+    this.#results.set(exactContext.operationId, Object.freeze({ requestSha256, result: simulatedResult }));
+    return simulatedResult;
   }
 
   async reconcileSimulation(
     context: ProviderOperationContext,
     testReference: string,
   ): Promise<WhatsAppDarkResult> {
-    assertWhatsAppDarkContext(context);
-    if (!TEST_REFERENCE.test(testReference) || testReference !== reference(context)) {
+    const exactContext = assertWhatsAppDarkContext(context);
+    const stored = this.#results.get(exactContext.operationId);
+    if (!stored || !TEST_REFERENCE.test(testReference) || testReference !== reference(exactContext)
+        || stored.result.testReference !== testReference) {
       throw new WhatsAppDarkContractError('WhatsApp simulation reference is invalid');
     }
-    this.#audit.push(Object.freeze({
-      mode: 'reconcile', operationId: context.operationId,
-      templateId: null, templateVersion: null, recipientSha256: null,
-      renderedBodySha256: null, testReference, externalDeliveryAttempted: false,
-    }));
-    return result(testReference, this.#now);
+    if (!this.#audit.some((entry) => entry.mode === 'reconcile' && entry.operationId === exactContext.operationId)) {
+      this.#audit.push(Object.freeze({
+        mode: 'reconcile', operationId: exactContext.operationId,
+        templateId: null, templateVersion: null, recipientSha256: null,
+        renderedBodySha256: null, testReference, externalDeliveryAttempted: false,
+      }));
+    }
+    return stored.result;
   }
 }

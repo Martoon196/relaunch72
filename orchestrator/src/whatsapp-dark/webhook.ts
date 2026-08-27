@@ -165,12 +165,12 @@ export function verifySimulatedWhatsAppWebhook(input: Readonly<{
   testSecret: string;
 }>): SimulatedWhatsAppInboundEvent {
   const suppliedBody = input.rawBody;
-  const suppliedSignature = input.signature;
-  const suppliedContentType = input.contentType;
-  const suppliedSecret = input.testSecret;
   if (!(suppliedBody instanceof Uint8Array) || suppliedBody.byteLength < 2
       || suppliedBody.byteLength > MAX_WEBHOOK_BYTES) fail('webhook byte length is invalid');
   const rawBody = Uint8Array.from(suppliedBody);
+  const suppliedSignature = input.signature;
+  const suppliedContentType = input.contentType;
+  const suppliedSecret = input.testSecret;
   if (typeof suppliedContentType !== 'string'
       || suppliedContentType.toLowerCase().split(';', 1)[0]?.trim() !== 'application/json') {
     fail('webhook media type is invalid');
@@ -205,25 +205,22 @@ export function toOwnInboxTestInbound(
   binding: OwnInboxWhatsAppBinding,
 ): RecordTestInboundCommand {
   if (!VERIFIED_EVENTS.has(event)) fail('webhook must be authenticated before inbox mapping');
-  const ids = [
-    ['binding.workspaceId', binding.workspaceId],
-    ['binding.connectionId', binding.connectionId],
-    ['binding.inboxId', binding.inboxId],
-    ['binding.contactId', binding.contactId],
-    ['binding.contactPointId', binding.contactPointId],
-  ] as const;
-  for (const [label, value] of ids) assertWhatsAppDarkUuid(value, label);
+  const workspaceId = assertWhatsAppDarkUuid(binding.workspaceId, 'binding.workspaceId');
+  const connectionId = assertWhatsAppDarkUuid(binding.connectionId, 'binding.connectionId');
+  const inboxId = assertWhatsAppDarkUuid(binding.inboxId, 'binding.inboxId');
+  const contactId = assertWhatsAppDarkUuid(binding.contactId, 'binding.contactId');
+  const contactPointId = assertWhatsAppDarkUuid(binding.contactPointId, 'binding.contactPointId');
   const owned = assertReservedWhatsAppTestNumber(binding.ownedTestNumber, 'binding.ownedTestNumber');
   const source = assertReservedWhatsAppTestNumber(binding.sourceTestNumber, 'binding.sourceTestNumber');
-  if (event.workspaceId !== binding.workspaceId || event.connectionId !== binding.connectionId
+  if (event.workspaceId !== workspaceId || event.connectionId !== connectionId
       || event.event.to !== owned || event.event.from !== source) {
     fail('webhook does not match the own-inbox test binding');
   }
   return Object.freeze({
     commandKey: `whatsapp-test-inbound:${event.eventId}`,
-    inboxId: binding.inboxId,
-    contactId: binding.contactId,
-    contactPointId: binding.contactPointId,
+    inboxId,
+    contactId,
+    contactPointId,
     body: event.event.body,
     occurredAt: event.occurredAt,
   });
