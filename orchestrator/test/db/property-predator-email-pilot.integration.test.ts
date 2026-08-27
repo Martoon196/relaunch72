@@ -393,7 +393,24 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
     assert.equal(authorized.disposition, 'authorized');
     if (authorized.disposition !== 'authorized') throw new Error('Pilot was not authorized');
     const providerMessageId = `pilot-${operationId}@mail.propertypredator.co.uk`;
-    const providerOccurredAt = new Date(Date.now() - 10 * 60_000).toISOString();
+    const skewTimestamp = await ownerQuery<{ provider_occurred_at_epoch_ms: string }>(
+      pool,
+      `SELECT (
+         extract(epoch FROM (
+           LEAST(operation.created_at, delivery.queued_at) - interval '10 minutes'
+         )) * 1000
+       )::bigint::text AS provider_occurred_at_epoch_ms
+       FROM app.provider_operations AS operation
+       JOIN app.message_deliveries AS delivery
+         ON delivery.workspace_id = operation.workspace_id
+        AND delivery.provider_operation_id = operation.id
+       WHERE operation.workspace_id = $1 AND operation.id = $2`,
+      [workspaceId, operationId],
+    );
+    assert.equal(skewTimestamp.length, 1);
+    const providerOccurredAt = new Date(
+      Number(skewTimestamp[0]!.provider_occurred_at_epoch_ms),
+    ).toISOString();
     await boundary.settleProviderCall(authorized.reservationId, authorized.requestSha256, {
       status: 'accepted', externalId: `<${providerMessageId}>`,
       occurredAt: providerOccurredAt, retryable: false,
@@ -404,17 +421,29 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
       provider_reference: string;
       status: string;
       provider_fact_preserved: boolean;
+      provider_precedes_operation: boolean;
+      provider_precedes_delivery: boolean;
       operation_chronology_fenced: boolean;
       delivery_chronology_fenced: boolean;
+      operation_clamped_to_created: boolean;
+      delivery_clamped_to_queued: boolean;
     }>(
       pool,
       `SELECT operation.state, operation.provider_reference, delivery.status,
               reservation.provider_occurred_at = $3::timestamptz
                 AS provider_fact_preserved,
+              reservation.provider_occurred_at < operation.created_at
+                AS provider_precedes_operation,
+              reservation.provider_occurred_at < delivery.queued_at
+                AS provider_precedes_delivery,
               operation.completed_at >= operation.created_at
                 AS operation_chronology_fenced,
               delivery.accepted_at >= delivery.queued_at
-                AS delivery_chronology_fenced
+                AS delivery_chronology_fenced,
+              operation.completed_at = operation.created_at
+                AS operation_clamped_to_created,
+              delivery.accepted_at = delivery.queued_at
+                AS delivery_clamped_to_queued
        FROM app.provider_operations AS operation
        JOIN app.message_deliveries AS delivery
          ON delivery.workspace_id = operation.workspace_id
@@ -429,8 +458,12 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
       provider_reference: `<${providerMessageId}>`,
       status: 'accepted',
       provider_fact_preserved: true,
+      provider_precedes_operation: true,
+      provider_precedes_delivery: true,
       operation_chronology_fenced: true,
       delivery_chronology_fenced: true,
+      operation_clamped_to_created: true,
+      delivery_clamped_to_queued: true,
     }]);
 
     const timestamp = String(Math.floor(Date.now() / 1000));
