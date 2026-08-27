@@ -157,6 +157,16 @@ import {
 } from './provider-readiness-cockpit-presenter.js';
 import { renderProviderReadinessCockpitBody } from './provider-readiness-cockpit-view.js';
 import type { PortalProviderReadinessService } from './provider-readiness-cockpit-service.js';
+import {
+  authSubjectAbuseAdmission,
+  classifyPortalAbuseRoute,
+  principalAbuseAdmission,
+  sourceAbuseAdmission,
+  type PortalAbuseAdmission,
+  type PortalAbuseGuard,
+  type PortalAbuseOutcome,
+} from './abuse.js';
+import type { PortalRequestContext } from './request-context.js';
 
 interface PortalCommonDeps {
   sessionSecret: string;
@@ -173,6 +183,12 @@ interface PortalCommonDeps {
    * Without it, no shared socket/proxy address is used for source blocking.
    */
   trustedClientAddress?: (req: IncomingMessage) => string | undefined;
+  /** Deployment-owned, once-per-request trusted proxy and HMAC boundary. */
+  requestContext?: (req: IncomingMessage) => PortalRequestContext | null;
+  /** Required for every production PostgreSQL portal request. */
+  abuse?: PortalAbuseGuard;
+  /** Dedicated HMAC secret used only to derive low-entropy abuse subjects. */
+  abuseHashSecret?: string;
   now?: () => number;
   requestId?: () => string;
 }
@@ -262,6 +278,39 @@ function sendHtml(res: ServerResponse, code: number, body: string, cookie?: stri
   Object.assign(headers, extra);
   res.writeHead(code, headers);
   res.end(body);
+}
+
+function sendAbuseStatus(
+  res: ServerResponse,
+  code: 429 | 503,
+  retryAfterSeconds: number,
+): void {
+  const title = code === 429 ? 'Please slow down' : 'Workspace temporarily unavailable';
+  const message = code === 429
+    ? 'Too many requests were received. Wait briefly and try again.'
+    : 'The protected request boundary is temporarily unavailable. Try again shortly.';
+  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head><body><main><h1>${title}</h1><p>${message}</p></main></body></html>`;
+  sendHtml(res, code, body, undefined, {
+    'retry-after': String(Math.max(1, Math.ceil(retryAfterSeconds))),
+  });
+}
+
+async function reserveAbuse(
+  res: ServerResponse,
+  guard: PortalAbuseGuard,
+  admission: PortalAbuseAdmission,
+): Promise<Buffer | null | false> {
+  try {
+    const decision = await guard.admit(admission);
+    if (!decision.allowed) {
+      sendAbuseStatus(res, 429, decision.retryAfterSeconds);
+      return false;
+    }
+    return decision.leaseHash;
+  } catch {
+    sendAbuseStatus(res, 503, 5);
+    return false;
+  }
 }
 
 function sendJavaScript(res: ServerResponse, body: string): void {
@@ -796,10 +845,53 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   const url = new URL(req.url ?? '/', 'http://localhost');
   const p = url.pathname.replace(/\/+$/, '') || '/portal';
   const method = req.method ?? 'GET';
+  const now = deps.now ? deps.now() : Date.now();
+  const routeClass = classifyPortalAbuseRoute(p, method);
+  const resolvedRequestContext = deps.requestContext?.(req) ?? null;
+  if (deps.abuse && !resolvedRequestContext) {
+    return sendAbuseStatus(res, 503, 30);
+  }
+  if (resolvedRequestContext) {
+    // Freeze deployment-derived request evidence once. Existing service calls
+    // can keep their narrow dependency shape while sharing one request id and
+    // one trusted address rather than re-reading headers independently.
+    deps = {
+      ...deps,
+      requestId: () => resolvedRequestContext.requestId,
+      trustedClientAddress: () => resolvedRequestContext.clientAddress,
+    } as PortalDeps;
+  }
+  const abuseLeases: Array<{
+    readonly leaseHash: Buffer;
+    outcome: PortalAbuseOutcome;
+  }> = [];
+  const trackAbuseLease = (leaseHash: Buffer | null | false): void => {
+    if (leaseHash) abuseLeases.push({ leaseHash, outcome: 'success' });
+  };
+  const completeAbuseLease = async (
+    leaseHash: Buffer | null | false,
+    outcome: PortalAbuseOutcome,
+  ): Promise<void> => {
+    if (!leaseHash || !deps.abuse) return;
+    const index = abuseLeases.findIndex((candidate) => candidate.leaseHash.equals(leaseHash));
+    if (index < 0) return;
+    abuseLeases[index]!.outcome = outcome;
+    try {
+      await deps.abuse.complete(leaseHash, outcome);
+      abuseLeases.splice(index, 1);
+    } catch { /* final retry preserves the exact outcome; expiry remains the fail-safe */ }
+  };
+  if (deps.abuse && resolvedRequestContext) {
+    const admission = sourceAbuseAdmission(resolvedRequestContext, routeClass, now);
+    if (!admission) return sendAbuseStatus(res, 503, 30);
+    const lease = await reserveAbuse(res, deps.abuse, admission);
+    if (lease === false) return;
+    trackAbuseLease(lease);
+  }
+  try {
   if (p === JOURNEY_BOARD_CLIENT_ROUTE && method === 'GET') {
     return sendJavaScript(res, JOURNEY_BOARD_CLIENT_SOURCE);
   }
-  const now = deps.now ? deps.now() : Date.now();
   const productProfile = deps.productProfile ?? RELAUNCH72_PRODUCT_PROFILE;
   const requestCookies = parseCookies(req.headers.cookie);
   const sessionToken = requestCookies[PORTAL_COOKIE] ?? '';
@@ -823,6 +915,23 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     } catch {
       return sendLoginPage(res, 503, deps, 'Secure sign-in is temporarily unavailable. Try again shortly.');
     }
+  }
+  if (deps.abuse && resolvedRequestContext && portalIdentity
+      && routeClass !== 'auth.login' && routeClass !== 'auth.setup' && routeClass !== 'auth.sso') {
+    if (!deps.abuseHashSecret) return sendAbuseStatus(res, 503, 30);
+    const lease = await reserveAbuse(
+      res,
+      deps.abuse,
+      principalAbuseAdmission(
+        resolvedRequestContext,
+        routeClass,
+        deps.abuseHashSecret,
+        portalIdentity,
+        now,
+      ),
+    );
+    if (lease === false) return;
+    trackAbuseLease(lease);
   }
 
   // ── one-time account setup / login / logout (no auth) ──
@@ -892,6 +1001,23 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         [sso.clearCookie()],
       );
     }
+    let ssoAbuseLease: Buffer | null | false = null;
+    if (deps.abuse && resolvedRequestContext) {
+      if (!deps.abuseHashSecret) return sendAbuseStatus(res, 503, 30);
+      ssoAbuseLease = await reserveAbuse(
+        res,
+        deps.abuse,
+        authSubjectAbuseAdmission(
+          resolvedRequestContext,
+          'auth.sso',
+          deps.abuseHashSecret,
+          stateValues[0]!,
+          now,
+        ),
+      );
+      if (ssoAbuseLease === false) return;
+      trackAbuseLease(ssoAbuseLease);
+    }
     try {
       const exchange = await sso.complete(
         codeValues[0]!,
@@ -907,6 +1033,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           )
         : null;
       if (!authenticated) {
+        await completeAbuseLease(ssoAbuseLease, 'auth_failure');
         return sendLoginPage(
           res,
           401,
@@ -923,6 +1050,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       const ssoSessionMaxAge = Number.isFinite(authenticatedExpiry)
         ? Math.max(1, Math.min(24 * 60 * 60, Math.floor((authenticatedExpiry - now) / 1_000)))
         : 24 * 60 * 60;
+      await completeAbuseLease(ssoAbuseLease, 'success');
       return redirect(res, portalHome, [
         portalCookie(authenticated.sessionToken, deps.secure, ssoSessionMaxAge),
         sso.clearCookie(),
@@ -931,6 +1059,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         'referrer-policy': 'no-referrer',
       });
     } catch {
+      await completeAbuseLease(ssoAbuseLease, 'service_error');
       return sendLoginPage(
         res,
         503,
@@ -1008,6 +1137,23 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     if (password !== (form.confirm ?? '')) {
       return sendHtml(res, 400, accountSetupPage(setupCsrf, 'Those passwords do not match.', productProfile), undefined, { 'cache-control': 'no-store' });
     }
+    let setupAbuseLease: Buffer | null | false = null;
+    if (deps.abuse && resolvedRequestContext) {
+      if (!deps.abuseHashSecret) return sendAbuseStatus(res, 503, 30);
+      setupAbuseLease = await reserveAbuse(
+        res,
+        deps.abuse,
+        authSubjectAbuseAdmission(
+          resolvedRequestContext,
+          'auth.setup',
+          deps.abuseHashSecret,
+          token,
+          now,
+        ),
+      );
+      if (setupAbuseLease === false) return;
+      trackAbuseLease(setupAbuseLease);
+    }
     const throttle = deps.setupThrottle ?? DEFAULT_SETUP_THROTTLE;
     const keys = setupKeys(req, token, deps);
     const reservations: string[] = [];
@@ -1030,13 +1176,16 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         : await deps.completeSetup!(token, password, now);
     } catch {
       for (const key of reservations) throttle.release(key);
+      await completeAbuseLease(setupAbuseLease, 'service_error');
       return sendHtml(res, 503, accountSetupPage(setupCsrf, 'Secure account setup is temporarily unavailable. Try again shortly.', productProfile), undefined, { 'cache-control': 'no-store' });
     }
     if (!completed) {
       for (const key of reservations) throttle.failure(key, now);
+      await completeAbuseLease(setupAbuseLease, 'auth_failure');
       return sendHtml(res, 400, accountSetupUnavailablePage(SETUP_FAILURE_MESSAGE, productProfile), clearPortalSetupCookie(deps.secure), { 'cache-control': 'no-store' });
     }
     for (const key of reservations) throttle.success(key);
+    await completeAbuseLease(setupAbuseLease, 'success');
     const completedToken = typeof completed === 'string'
       ? signTenant(deps.sessionSecret, completed, now)
       : completed.sessionToken;
@@ -1062,6 +1211,23 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     if (!verifyPortalLoginCsrf(deps.sessionSecret, loginCsrfCookieToken, form._login_csrf)) {
       return sendLoginPage(res, 403, deps, 'Refresh the sign-in page and try again.', email);
     }
+    let loginAbuseLease: Buffer | null | false = null;
+    if (deps.abuse && resolvedRequestContext) {
+      if (!deps.abuseHashSecret) return sendAbuseStatus(res, 503, 30);
+      loginAbuseLease = await reserveAbuse(
+        res,
+        deps.abuse,
+        authSubjectAbuseAdmission(
+          resolvedRequestContext,
+          'auth.login',
+          deps.abuseHashSecret,
+          email || 'unknown',
+          now,
+        ),
+      );
+      if (loginAbuseLease === false) return;
+      trackAbuseLease(loginAbuseLease);
+    }
     const keys = loginKeys(req, email, deps);
     const reservations: string[] = [];
     for (const key of keys) {
@@ -1081,13 +1247,16 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         : await deps.login(email, form.password ?? '');
     } catch {
       for (const key of reservations) deps.loginThrottle?.release(key);
+      await completeAbuseLease(loginAbuseLease, 'service_error');
       return sendLoginPage(res, 503, deps, 'Secure sign-in is temporarily unavailable. Try again shortly.', email);
     }
     if (!authenticated) {
       for (const key of keys) deps.loginThrottle?.failure(key, now);
+      await completeAbuseLease(loginAbuseLease, 'auth_failure');
       return sendLoginPage(res, 401, deps, 'Wrong email or password.', email);
     }
     for (const key of keys) deps.loginThrottle?.success(key);
+    await completeAbuseLease(loginAbuseLease, 'success');
     const authenticatedToken = typeof authenticated === 'string'
       ? signTenant(deps.sessionSecret, authenticated, now)
       : authenticated.sessionToken;
@@ -2444,4 +2613,10 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   }
 
   return sendHtml(res, 404, '<h1>Not found</h1><p><a href="/portal">← dashboard</a></p>');
+  } finally {
+    if (deps.abuse && abuseLeases.length) {
+      await Promise.allSettled(abuseLeases.map(({ leaseHash, outcome }) =>
+        deps.abuse!.complete(leaseHash, outcome)));
+    }
+  }
 }

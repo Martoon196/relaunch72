@@ -7,6 +7,8 @@ import {
 } from './database-helper.js';
 
 const APP_ROLES = [
+  'r72_abuse_command',
+  'r72_abuse_definer',
   'r72_affiliate_draft_command',
   'r72_affiliate_lifecycle_command',
   'r72_affiliate_legal_command',

@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { loadStripeConfig, portalProvisioningEnabled } from '../src/server/config.js';
+import {
+  loadPortalAbuseRuntimeConfig,
+  loadStripeConfig,
+  portalProvisioningEnabled,
+} from '../src/server/config.js';
 import { customerOutboundMessagingEnabled, runtimeSafetyPolicy } from '../src/server/readiness.js';
 
 test('production refuses a missing, default or short SESSION_SECRET', () => {
@@ -22,6 +26,36 @@ test('production accepts a dedicated long SESSION_SECRET and development retains
   assert.equal(dev.production, false);
   assert.equal(dev.sessionSecret, 'r72-dev-session-secret');
   assert.equal(dev.host, '127.0.0.1');
+});
+
+test('production abuse boundary requires an independent HMAC key and Render proxy mode', () => {
+  const sessionSecret = 'dedicated-production-session-secret-value';
+  const abuseSecret = 'dedicated-production-abuse-hmac-secret-value';
+  assert.throws(
+    () => loadPortalAbuseRuntimeConfig(true, { SESSION_SECRET: sessionSecret }),
+    /PORTAL_ABUSE_HASH_SECRET/,
+  );
+  assert.throws(
+    () => loadPortalAbuseRuntimeConfig(true, {
+      SESSION_SECRET: sessionSecret,
+      PORTAL_ABUSE_HASH_SECRET: sessionSecret,
+      PORTAL_PROXY_MODE: 'render',
+    }),
+    /independent/,
+  );
+  assert.throws(
+    () => loadPortalAbuseRuntimeConfig(true, {
+      SESSION_SECRET: sessionSecret,
+      PORTAL_ABUSE_HASH_SECRET: abuseSecret,
+      PORTAL_PROXY_MODE: 'direct',
+    }),
+    /must be render/,
+  );
+  assert.deepEqual(loadPortalAbuseRuntimeConfig(true, {
+    SESSION_SECRET: sessionSecret,
+    PORTAL_ABUSE_HASH_SECRET: abuseSecret,
+    PORTAL_PROXY_MODE: 'render',
+  }), { hashSecret: abuseSecret, proxyMode: 'render' });
 });
 
 test('a non-loopback bind is hardened even when NODE_ENV was forgotten', () => {

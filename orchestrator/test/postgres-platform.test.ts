@@ -41,6 +41,18 @@ test('PostgreSQL portal cutover still requires its isolated CRM command identity
   );
 });
 
+test('PostgreSQL portal cutover requires its distributed abuse command identity', async () => {
+  await assert.rejects(
+    () => buildPgPortalPlatform({
+      NODE_ENV: 'development',
+      DATABASE_WEB_URL: 'postgresql://r72_web:secret@localhost/relaunch72_test?sslmode=disable',
+      DATABASE_IDENTITY_COMMAND_URL: 'postgresql://r72_identity_command:secret@localhost/relaunch72_test?sslmode=disable',
+      DATABASE_CRM_COMMAND_URL: 'postgresql://r72_crm_command:secret@localhost/relaunch72_test?sslmode=disable',
+    }),
+    /DATABASE_ABUSE_COMMAND_URL is required/,
+  );
+});
+
 test('Property Predator production requires its dedicated company-content command identity', async () => {
   await assert.rejects(
     () => buildPgPortalPlatform({
@@ -50,6 +62,7 @@ test('Property Predator production requires its dedicated company-content comman
       DATABASE_WEB_URL: 'postgresql://r72_web:secret@db.example.test/growth_hq?sslmode=verify-full',
       DATABASE_IDENTITY_COMMAND_URL: 'postgresql://r72_identity_command:secret@db.example.test/growth_hq?sslmode=verify-full',
       DATABASE_CRM_COMMAND_URL: 'postgresql://r72_crm_command:secret@db.example.test/growth_hq?sslmode=verify-full',
+      DATABASE_ABUSE_COMMAND_URL: 'postgresql://r72_abuse_command:secret@db.example.test/growth_hq?sslmode=verify-full',
     }),
     /requires DATABASE_CONTENT_COMMAND_URL/,
   );

@@ -4,6 +4,7 @@ export const DATABASE_ROLES = [
   'migrator',
   'web',
   'identityCommand',
+  'abuseCommand',
   'provisioningCommand',
   'setupDeliveryCommand',
   'setupReissueCommand',
@@ -27,6 +28,7 @@ const ROLE_URL_ENV: Record<DatabaseRole, string> = {
   migrator: 'DATABASE_MIGRATOR_URL',
   web: 'DATABASE_WEB_URL',
   identityCommand: 'DATABASE_IDENTITY_COMMAND_URL',
+  abuseCommand: 'DATABASE_ABUSE_COMMAND_URL',
   provisioningCommand: 'DATABASE_PROVISIONING_COMMAND_URL',
   setupDeliveryCommand: 'DATABASE_SETUP_DELIVERY_COMMAND_URL',
   setupReissueCommand: 'DATABASE_SETUP_REISSUE_COMMAND_URL',
@@ -46,6 +48,7 @@ const ROLE_URL_ENV: Record<DatabaseRole, string> = {
 const EXPECTED_RUNTIME_USER: Partial<Record<DatabaseRole, string>> = {
   web: 'r72_web',
   identityCommand: 'r72_identity_command',
+  abuseCommand: 'r72_abuse_command',
   provisioningCommand: 'r72_provisioning_command',
   setupDeliveryCommand: 'r72_setup_delivery_command',
   setupReissueCommand: 'r72_setup_reissue_command',
@@ -201,6 +204,8 @@ export function loadDatabaseConfig(
                 ? 'DATABASE_SETUP_REISSUE_COMMAND_POOL_MAX'
                 : role === 'provisioningCommand'
                   ? 'DATABASE_PROVISIONING_COMMAND_POOL_MAX'
+                  : role === 'abuseCommand'
+                    ? 'DATABASE_ABUSE_COMMAND_POOL_MAX'
                   : role === 'identityCommand'
                     ? 'DATABASE_IDENTITY_COMMAND_POOL_MAX'
                     : `DATABASE_${role.toUpperCase()}_POOL_MAX`;
@@ -214,7 +219,7 @@ export function loadDatabaseConfig(
     enableChannelBinding: channelBinding === 'require',
     maxConnections: parseBoundedInteger(
       env[rolePoolKey] ?? env.DATABASE_POOL_MAX,
-      role === 'worker' ? 10 : 5,
+      role === 'worker' ? 10 : role === 'abuseCommand' ? 2 : 5,
       1,
       100,
       rolePoolKey,
@@ -234,11 +239,15 @@ export function loadDatabaseConfig(
       'DATABASE_IDLE_TIMEOUT_MS',
     ),
     statementTimeoutMs: parseBoundedInteger(
-      env.DATABASE_STATEMENT_TIMEOUT_MS,
-      role === 'migrator' ? 120_000 : 15_000,
+      role === 'abuseCommand'
+        ? env.DATABASE_ABUSE_COMMAND_STATEMENT_TIMEOUT_MS
+        : env.DATABASE_STATEMENT_TIMEOUT_MS,
+      role === 'migrator' ? 120_000 : role === 'abuseCommand' ? 1_000 : 15_000,
       500,
-      600_000,
-      'DATABASE_STATEMENT_TIMEOUT_MS',
+      role === 'abuseCommand' ? 1_000 : 600_000,
+      role === 'abuseCommand'
+        ? 'DATABASE_ABUSE_COMMAND_STATEMENT_TIMEOUT_MS'
+        : 'DATABASE_STATEMENT_TIMEOUT_MS',
     ),
     applicationName: role === 'contentAdapter'
       ? 'relaunch72-content-adapter'
@@ -260,6 +269,8 @@ export function loadDatabaseConfig(
                   ? 'relaunch72-setup-reissue-command'
                   : role === 'provisioningCommand'
                     ? 'relaunch72-provisioning-command'
+                    : role === 'abuseCommand'
+                      ? 'relaunch72-abuse-command'
                     : role === 'identityCommand'
                       ? 'relaunch72-identity-command'
                       : `relaunch72-${role}`,

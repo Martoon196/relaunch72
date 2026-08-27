@@ -138,10 +138,13 @@ const FOUNDATION_SETTINGS: readonly SettingSpec[] = Object.freeze([
   setting('PORTAL_BASE_URL', 'Growth HQ HTTPS origin', (raw) => isHttpsUrl(raw, true), 'A single credential-free HTTPS Growth HQ origin'),
   setting('PUBLIC_BASE_URL', 'Public HTTPS origin', (raw) => isHttpsUrl(raw, true), 'A single credential-free public HTTPS origin'),
   setting('SESSION_SECRET', 'Dedicated session-signing secret', (raw) => raw.trim().length >= 32 && raw.trim() !== 'r72-dev-session-secret', 'A dedicated session-signing secret of at least 32 characters'),
+  setting('PORTAL_PROXY_MODE', 'Trusted Render proxy boundary', exact('render'), 'Render trusted-proxy client-address resolution'),
+  setting('PORTAL_ABUSE_HASH_SECRET', 'Dedicated abuse-evidence HMAC secret', minLength(32), 'A dedicated abuse-evidence HMAC secret of at least 32 characters'),
   setting('DATABASE_SSL_MODE', 'Verified database TLS', exact('verify-full'), 'Certificate-verifying database TLS'),
   setting('DATABASE_WEB_URL', 'Read-model database identity', isProductionDatabaseUrl('r72_web'), 'The least-privilege r72_web database URL'),
   setting('DATABASE_IDENTITY_COMMAND_URL', 'Identity command database identity', isProductionDatabaseUrl('r72_identity_command'), 'The least-privilege r72_identity_command database URL'),
   setting('DATABASE_CRM_COMMAND_URL', 'CRM command database identity', isProductionDatabaseUrl('r72_crm_command'), 'The least-privilege r72_crm_command database URL'),
+  setting('DATABASE_ABUSE_COMMAND_URL', 'Abuse command database identity', isProductionDatabaseUrl('r72_abuse_command'), 'The least-privilege r72_abuse_command database URL'),
   setting('DATABASE_CONTENT_COMMAND_URL', 'Content command database identity', isProductionDatabaseUrl('r72_content_command'), 'The least-privilege r72_content_command database URL'),
   setting('DATABASE_CONTENT_ADAPTER_URL', 'Company asset metadata database identity', isProductionDatabaseUrl('r72_content_adapter'), 'The metadata-only r72_content_adapter database URL'),
   setting('DATABASE_WORKER_URL', 'Outbox worker database identity', isProductionDatabaseUrl('r72_worker'), 'The least-privilege r72_worker database URL'),
@@ -243,6 +246,12 @@ export function sanitizePropertyPredatorPilotEnvironment(
       present,
       valid: present ? spec.validator(raw ?? '') : false,
     });
+  }
+  // Reduce cross-secret reuse to one invalid bit before returning. Raw secret
+  // material still never crosses this sanitizer boundary.
+  if (env.PORTAL_ABUSE_HASH_SECRET?.trim()
+      && env.PORTAL_ABUSE_HASH_SECRET.trim() === env.SESSION_SECRET?.trim()) {
+    evidence.PORTAL_ABUSE_HASH_SECRET = Object.freeze({ present: true, valid: false });
   }
   return Object.freeze(evidence);
 }

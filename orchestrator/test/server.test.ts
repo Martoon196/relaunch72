@@ -15,6 +15,7 @@ import { memorySubscriptionStore } from '../src/server/subscriptions.js';
 import { createApp } from '../src/server/app.js';
 import { PROPERTY_PREDATOR_MAILGUN_WEBHOOK_PATH } from '../src/integrations/mailgun-webhook/router.js';
 import { validIntake } from './helpers.js';
+import { PORTAL_COOKIE } from '../src/portal/session.js';
 
 function cfg(over: Partial<StripeConfig> = {}): StripeConfig {
   return {
@@ -217,6 +218,62 @@ test('GET /ready fails closed until the secure portal is mounted', async () => {
   await mounted(req('GET', '/ready'), ready);
   assert.equal(ready.statusCode, 200);
   assert.deepEqual(JSON.parse(ready._body), { ready: true, blockers: [] });
+});
+
+test('portal process concurrency is bounded without queueing', async () => {
+  let releaseResolve!: () => void;
+  const blocked = new Promise<void>((resolve) => { releaseResolve = resolve; });
+  let resolveStarted!: () => void;
+  const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+  const portal = {
+    kind: 'postgres', sessionSecret: 'test-secret', secure: false,
+    auth: {
+      resolve: async () => { resolveStarted(); await blocked; return null; },
+      login: async () => null,
+      revoke: async () => undefined,
+    },
+    crm: {},
+  } as unknown as NonNullable<Parameters<typeof createApp>[0]['portal']>;
+  const { handler } = app({ portal, portalMaxConcurrentRequests: 1 });
+  const first = res();
+  const firstCall = handler(req('GET', '/portal', '', {
+    cookie: `${PORTAL_COOKIE}=opaque-session`,
+  }), first);
+  await started;
+  const second = res();
+  await handler(req('GET', '/portal'), second);
+  assert.equal(second.statusCode, 429);
+  assert.equal(second._headers['retry-after'], '1');
+  assert.equal(second._headers['cache-control'], 'no-store');
+  releaseResolve();
+  await firstCall;
+});
+
+test('unexpected portal failures are generic, no-store and retryable', async () => {
+  const portal = {
+    kind: 'legacy', sessionSecret: 'test-secret', secure: false,
+    now: () => { throw new Error('private database detail'); },
+    login: async () => null,
+    dashboard: async () => null,
+    runTick: async () => 0,
+  } as unknown as NonNullable<Parameters<typeof createApp>[0]['portal']>;
+  const { handler } = app({ portal });
+  const response = res();
+  await handler(req('GET', '/portal'), response);
+  assert.equal(response.statusCode, 503);
+  assert.equal(response._headers['cache-control'], 'no-store');
+  assert.equal(response._headers['retry-after'], '5');
+  assert.doesNotMatch(response._body, /private database detail/);
+});
+
+test('HTTP server entrypoint has bounded header, request, response and socket reuse limits', () => {
+  const source = fs.readFileSync(new URL('../src/server/index.ts', import.meta.url), 'utf8');
+  assert.match(source, /server\.headersTimeout = 10_000/);
+  assert.match(source, /server\.requestTimeout = 30_000/);
+  assert.match(source, /server\.timeout = 30_000/);
+  assert.match(source, /server\.keepAliveTimeout = 5_000/);
+  assert.match(source, /server\.maxRequestsPerSocket = 100/);
+  assert.match(source, /server\.maxHeadersCount = 100/);
 });
 
 test('GET /ready fails closed on process-level production safety blockers', async () => {

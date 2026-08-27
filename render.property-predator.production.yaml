@@ -51,6 +51,12 @@ services:
         value: https://hq.propertypredator.com,https://propertypredator.com,https://www.propertypredator.com
       - key: SESSION_SECRET
         generateValue: true
+      # Render terminates the trusted proxy chain. Client addresses are HMACed
+      # with a key that is independent from the session-signing secret.
+      - key: PORTAL_PROXY_MODE
+        value: render
+      - key: PORTAL_ABUSE_HASH_SECRET
+        generateValue: true
 
       # Shared Property Predator identity bridge. The enable switch is owned by
       # the web-service dashboard so a later Blueprint sync cannot overwrite an
@@ -105,6 +111,8 @@ services:
         sync: false
       - key: DATABASE_CRM_COMMAND_URL
         sync: false
+      - key: DATABASE_ABUSE_COMMAND_URL
+        sync: false
       - key: DATABASE_CONTENT_COMMAND_URL
         sync: false
       # Dedicated metadata-only company-asset reader. It cannot approve,
@@ -121,6 +129,10 @@ services:
         value: "2"
       - key: DATABASE_CRM_COMMAND_POOL_MAX
         value: "3"
+      - key: DATABASE_ABUSE_COMMAND_POOL_MAX
+        value: "2"
+      - key: DATABASE_ABUSE_COMMAND_STATEMENT_TIMEOUT_MS
+        value: "1000"
       - key: DATABASE_CONTENT_COMMAND_POOL_MAX
         value: "2"
       - key: DATABASE_CONTENT_ADAPTER_POOL_MAX

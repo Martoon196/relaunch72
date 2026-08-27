@@ -9,7 +9,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { JsonCrmStore } from '../crm/store.js';
 import { JsonAccountStore, type AccountStore } from './accounts.js';
-import { InMemoryLoginThrottle } from './session.js';
+import { InMemoryLoginThrottle, InMemorySetupThrottle } from './session.js';
 import { makeDashboard } from './data.js';
 import { makeBilling } from './billing.js';
 import { generateBrandBrain, runTickReal } from './run.js';
@@ -152,6 +152,11 @@ export interface PostgresPortalConfig {
   /** Durable TEST-only draft/approval queue boundary; no dispatcher capability. */
   inboxCommands?: PortalConversionInboxCommandService;
   productProfile?: PortalProductProfile;
+  /** Distributed fail-closed guard required by the PostgreSQL portal. */
+  abuse: NonNullable<PostgresPortalDeps['abuse']>;
+  /** Once-per-request trusted proxy/HMAC boundary. */
+  requestContext: NonNullable<PostgresPortalDeps['requestContext']>;
+  abuseHashSecret: string;
   /** Explicit authenticated-proxy client address policy; omitted by default. */
   trustedClientAddress?: PostgresPortalDeps['trustedClientAddress'];
   now?: () => number;
@@ -163,11 +168,24 @@ export interface PostgresPortalConfig {
  * billing store. PostgreSQL readiness is owned by buildPgPortalPlatform.
  */
 export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPortalDeps {
+  if (!cfg.abuse
+      || typeof cfg.abuse.admit !== 'function'
+      || typeof cfg.abuse.complete !== 'function'
+      || typeof cfg.requestContext !== 'function'
+      || typeof cfg.abuseHashSecret !== 'string'
+      || cfg.abuseHashSecret.trim().length < 32
+      || cfg.abuseHashSecret.trim() === cfg.sessionSecret.trim()) {
+    throw new Error('PostgreSQL portal abuse boundary is incomplete');
+  }
   return {
     kind: 'postgres',
     sessionSecret: cfg.sessionSecret,
     secure: cfg.secure,
     loginThrottle: new InMemoryLoginThrottle(),
+    setupThrottle: new InMemorySetupThrottle(),
+    abuse: cfg.abuse,
+    requestContext: cfg.requestContext,
+    abuseHashSecret: cfg.abuseHashSecret,
     auth: cfg.auth,
     propertyPredatorSso: cfg.propertyPredatorSso,
     crm: cfg.crm,

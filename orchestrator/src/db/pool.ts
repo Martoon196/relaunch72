@@ -114,6 +114,14 @@ export function createIdentityCommandDatabasePool(
   return createDatabasePool(loadDatabaseConfig('identityCommand', env), hooks);
 }
 
+/** Function-only pool for distributed portal abuse admission and lease release. */
+export function createAbuseCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('abuseCommand', env), hooks);
+}
+
 /** Isolated pre-context customer-provisioning pool; it has function execution only. */
 export function createProvisioningCommandDatabasePool(
   env: NodeJS.ProcessEnv = process.env,

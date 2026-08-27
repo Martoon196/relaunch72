@@ -14,7 +14,12 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { Intake } from '../types.js';
-import { loadStripeConfig, portalProvisioningEnabled } from './config.js';
+import {
+  loadPortalAbuseRuntimeConfig,
+  loadStripeConfig,
+  portalProvisioningEnabled,
+  type PortalAbuseRuntimeConfig,
+} from './config.js';
 import { fileOrderStore, type Order } from './orders.js';
 import { fileSubscriptionStore } from './subscriptions.js';
 import { createApp, type MarketingHooks } from './app.js';
@@ -64,6 +69,7 @@ import {
 } from '../integrations/mailgun-webhook/router.js';
 import { propertyPredatorDarkProductionBlockers } from '../ops/property-predator-dark-production.js';
 import { createCachedRuntimeReadinessProbe } from '../ops/runtime-readiness-cache.js';
+import { createPortalRequestContextResolver } from '../portal/request-context.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ORCH_ROOT = path.resolve(HERE, '../..');
@@ -391,8 +397,10 @@ async function main(): Promise<void> {
   const requirePostgresPortal = postgresPortalEnabled(process.env);
   const portalProductProfile = resolvePortalProductProfile(process.env.PORTAL_PRODUCT_PROFILE);
   let postgresPortal: PgPortalPlatform | undefined;
+  let portalAbuseRuntime: PortalAbuseRuntimeConfig | undefined;
   if (requirePostgresPortal) {
     try {
+      portalAbuseRuntime = loadPortalAbuseRuntimeConfig(Boolean(cfg.production), process.env);
       postgresPortal = await buildPgPortalPlatform(process.env);
       console.log('PostgreSQL portal identity and CRM contracts are current and ready.');
       if (postgresPortal.companyContent) {
@@ -430,10 +438,20 @@ async function main(): Promise<void> {
       console.warn('⚠  Property Predator SSO configuration is invalid; shared-login routes remain disabled and native Growth HQ password access remains mounted.');
     }
     if (postgresPortal) {
+      if (!portalAbuseRuntime) {
+        throw new Error('production portal abuse boundary did not compose');
+      }
       portal = buildPostgresPortalDeps({
         sessionSecret: cfg.sessionSecret,
         secure: securePortalCookie,
         auth: postgresPortal.auth,
+        abuse: postgresPortal.abuse,
+        abuseHashSecret: portalAbuseRuntime.hashSecret,
+        requestContext: createPortalRequestContextResolver({
+          hashSecret: portalAbuseRuntime.hashSecret,
+          proxyMode: portalAbuseRuntime.proxyMode,
+          directClientAddress: (req) => req.socket.remoteAddress,
+        }),
         propertyPredatorSso,
         crm: postgresPortal.crm,
         journeys: postgresPortal.journeys,
@@ -539,6 +557,7 @@ async function main(): Promise<void> {
     now: () => new Date().toISOString(),
     marketing,
     portal,
+    portalMaxConcurrentRequests: 32,
     portalBlockers: portal
       ? undefined
       : [requirePostgresPortal
@@ -549,6 +568,12 @@ async function main(): Promise<void> {
     propertyPredatorMailgunWebhook,
   });
   const server = http.createServer((req, res) => { void app(req, res); });
+  server.headersTimeout = 10_000;
+  server.requestTimeout = 30_000;
+  server.timeout = 30_000;
+  server.keepAliveTimeout = 5_000;
+  server.maxRequestsPerSocket = 100;
+  server.maxHeadersCount = 100;
   server.listen(cfg.port, cfg.host, () => {
     const mode = cfg.keyMode === 'live' ? 'LIVE LOCKED ⚠️' : cfg.keyMode.toUpperCase();
     console.log(`Relaunch72 payments server on ${cfg.host}:${cfg.port} — ${mode} mode`);

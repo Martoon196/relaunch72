@@ -57,6 +57,11 @@ export interface StripeConfig {
   sessionSecret: string;
 }
 
+export interface PortalAbuseRuntimeConfig {
+  readonly hashSecret: string;
+  readonly proxyMode: 'render' | 'direct';
+}
+
 /** Classify both standard (sk_) and restricted (rk_) Stripe secret keys. */
 export function classifyStripeKey(secretKey: string): StripeConfig['keyMode'] {
   if (!secretKey) return 'unconfigured';
@@ -127,6 +132,34 @@ export function loadStripeConfig(env: NodeJS.ProcessEnv = process.env): StripeCo
     // exists only for local development; production validation above rejects it.
     sessionSecret: configuredSessionSecret || 'r72-dev-session-secret',
   };
+}
+
+/**
+ * Production PostgreSQL portal traffic is reachable only through Render's
+ * trusted proxy boundary. The abuse HMAC key is deliberately independent from
+ * the session-signing key so evidence cannot become a cookie oracle.
+ */
+export function loadPortalAbuseRuntimeConfig(
+  production: boolean,
+  env: NodeJS.ProcessEnv = process.env,
+): PortalAbuseRuntimeConfig {
+  const hashSecret = env.PORTAL_ABUSE_HASH_SECRET?.trim()
+    || (production ? '' : 'r72-development-portal-abuse-secret-v1');
+  if (hashSecret.length < 32) {
+    throw new Error('PORTAL_ABUSE_HASH_SECRET must contain at least 32 characters');
+  }
+  if (production && hashSecret === env.SESSION_SECRET?.trim()) {
+    throw new Error('PORTAL_ABUSE_HASH_SECRET must be independent from SESSION_SECRET');
+  }
+  const rawProxyMode = env.PORTAL_PROXY_MODE?.trim().toLowerCase()
+    || (production ? '' : 'direct');
+  if (rawProxyMode !== 'render' && rawProxyMode !== 'direct') {
+    throw new Error('PORTAL_PROXY_MODE must be render or direct');
+  }
+  if (production && rawProxyMode !== 'render') {
+    throw new Error('PORTAL_PROXY_MODE must be render in production');
+  }
+  return Object.freeze({ hashSecret, proxyMode: rawProxyMode });
 }
 
 /** True once a tier has a real price id — checkout refuses tiers that don't. */

@@ -36,6 +36,13 @@ import type { JourneyManagerReadSnapshot } from '../src/conversion-pg/journey-ma
 import { PROPERTY_PREDATOR_CONVERSION_BLUEPRINTS } from '../src/conversion-pg/property-predator-blueprints.js';
 import { JOURNEY_MANAGER_CONFIRMATION } from '../src/portal/journey-manager-presenter.js';
 import { PROPERTY_PREDATOR_GROWTH_PROFILE } from '../src/portal/product-profile.js';
+import type {
+  PortalAbuseAdmission,
+  PortalAbuseDecision,
+  PortalAbuseGuard,
+  PortalAbuseOutcome,
+} from '../src/portal/abuse.js';
+import { portalAbuseHash, type PortalRequestContext } from '../src/portal/request-context.js';
 
 function billingView(over: Partial<BillingView> = {}): BillingView {
   return {
@@ -49,6 +56,42 @@ function billingView(over: Partial<BillingView> = {}): BillingView {
 const SECRET = 'test-secret';
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const WORKSPACE_ID = '22222222-2222-4222-8222-222222222222';
+const ABUSE_SECRET = 'portal-router-abuse-test-secret-at-least-32-characters';
+
+function requestContext(requestId = 'abuse-request-1'): PortalRequestContext {
+  return Object.freeze({
+    requestId,
+    requestHash: portalAbuseHash(ABUSE_SECRET, 'request', requestId),
+    clientAddress: '203.0.113.42',
+    sourceHash: portalAbuseHash(ABUSE_SECRET, 'source', '203.0.113.42'),
+    cfRay: 'abc123-FRA',
+  });
+}
+
+function recordingAbuseGuard(
+  decide: (input: PortalAbuseAdmission, call: number) => PortalAbuseDecision,
+): PortalAbuseGuard & {
+  admissions: PortalAbuseAdmission[];
+  completions: Array<{ leaseHash: Buffer; outcome: PortalAbuseOutcome }>;
+} {
+  const admissions: PortalAbuseAdmission[] = [];
+  const completions: Array<{ leaseHash: Buffer; outcome: PortalAbuseOutcome }> = [];
+  return {
+    admissions,
+    completions,
+    admit: async (input) => {
+      admissions.push(input);
+      return decide(input, admissions.length);
+    },
+    complete: async (leaseHash, outcome) => { completions.push({ leaseHash, outcome }); },
+    assertReady: async () => undefined,
+    close: async () => undefined,
+  };
+}
+
+function allowedDecision(call: number): PortalAbuseDecision {
+  return { allowed: true, retryAfterSeconds: 0, leaseHash: Buffer.alloc(32, call) };
+}
 
 const demoData: DashboardData = {
   tenant: { id: 't1', name: 'Frayne Electrical', createdAt: '2026-07-26T00:00:00Z' },
@@ -289,6 +332,259 @@ test('database auth issues opaque cookies and never accepts a legacy signed tena
   const accepted = await call('GET', '/portal', d, { cookie: `${PORTAL_COOKIE}=${opaque}` });
   assert.equal(accepted.statusCode, 200);
   assert.match(accepted.body, /Turn attention into revenue/);
+});
+
+test('distributed source admission runs before session resolution and fails closed with Retry-After', async () => {
+  let resolves = 0;
+  const auth: PortalAuthService = {
+    resolve: async () => { resolves += 1; return null; },
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+  const guard = recordingAbuseGuard(() => ({
+    allowed: false, retryAfterSeconds: 7, leaseHash: null,
+  }));
+  const response = await call('GET', '/portal', postgresDeps(auth, {
+    abuse: guard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => requestContext(),
+  }), { cookie: `${PORTAL_COOKIE}=opaque-session` });
+  assert.equal(response.statusCode, 429);
+  assert.equal(response.headers['retry-after'], '7');
+  assert.equal(response.headers['cache-control'], 'no-store');
+  assert.equal(resolves, 0);
+  assert.deepEqual(guard.admissions[0]?.dimensions.map(({ name }) => name), ['source', 'source_daily']);
+});
+
+test('missing source evidence and guard failures return generic no-store 503s', async () => {
+  const auth: PortalAuthService = {
+    resolve: async () => assert.fail('source boundary must run first'),
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+  const throwingGuard: PortalAbuseGuard = {
+    admit: async () => { throw new Error('private database detail'); },
+    complete: async () => undefined,
+    assertReady: async () => undefined,
+    close: async () => undefined,
+  };
+  const missing = await call('GET', '/portal', postgresDeps(auth, {
+    abuse: throwingGuard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => null,
+  }));
+  assert.equal(missing.statusCode, 503);
+  assert.equal(missing.headers['retry-after'], '30');
+  assert.equal(missing.headers['cache-control'], 'no-store');
+
+  const failed = await call('GET', '/portal', postgresDeps(auth, {
+    abuse: throwingGuard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => requestContext(),
+  }));
+  assert.equal(failed.statusCode, 503);
+  assert.equal(failed.headers['retry-after'], '5');
+  assert.doesNotMatch(failed.body, /private database detail/);
+});
+
+test('principal admission is enforced before CRM work and releases the source lease', async () => {
+  let snapshots = 0;
+  const auth: PortalAuthService = {
+    resolve: async (sessionToken) => ({
+      sessionToken, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID,
+    }),
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+  const guard = recordingAbuseGuard((_, callNumber) => callNumber === 1
+    ? allowedDecision(callNumber)
+    : { allowed: false, retryAfterSeconds: 11, leaseHash: null });
+  const response = await call('GET', '/portal', postgresDeps(auth, {
+    abuse: guard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => requestContext(),
+    crm: { ...crm, snapshot: async (...args) => { snapshots += 1; return crm.snapshot(...args); } },
+  }), { cookie: `${PORTAL_COOKIE}=opaque-session` });
+  assert.equal(response.statusCode, 429);
+  assert.equal(response.headers['retry-after'], '11');
+  assert.equal(snapshots, 0);
+  assert.deepEqual(guard.admissions[1]?.dimensions.map(({ name }) => name), [
+    'account', 'account_daily', 'workspace', 'workspace_daily', 'route_account', 'route_workspace',
+  ]);
+  assert.equal(guard.completions.length, 1);
+  assert.equal(guard.completions[0]?.outcome, 'success');
+});
+
+test('one request id is reused across every CRM call in a guarded request', async () => {
+  const seenRequestIds: string[] = [];
+  const auth: PortalAuthService = {
+    resolve: async (sessionToken) => ({
+      sessionToken, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID,
+    }),
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+  const guard = recordingAbuseGuard((_, callNumber) => allowedDecision(callNumber));
+  const guardedCrm = {
+    ...crm,
+    snapshot: async (identity: Parameters<PortalCrmService['snapshot']>[0]) => {
+      seenRequestIds.push(identity.requestId);
+      return crm.snapshot(identity);
+    },
+    growth: async (identity: Parameters<NonNullable<PortalCrmService['growth']>>[0]) => {
+      seenRequestIds.push(identity.requestId);
+      return null;
+    },
+  } as PortalCrmService;
+  const response = await call('GET', '/portal', postgresDeps(auth, {
+    abuse: guard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => requestContext('one-request-id'),
+    crm: guardedCrm,
+  }), { cookie: `${PORTAL_COOKIE}=opaque-session` });
+  assert.equal(response.statusCode, 403);
+  assert.deepEqual(seenRequestIds, ['one-request-id', 'one-request-id']);
+  assert.equal(guard.completions.length, 2);
+});
+
+test('login auth-subject denial happens before password verification', async () => {
+  let logins = 0;
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => { logins += 1; return null; },
+    revoke: async () => undefined,
+  };
+  const guard = recordingAbuseGuard((input, callNumber) =>
+    input.dimensions.some(({ name }) => name === 'auth')
+      ? { allowed: false, retryAfterSeconds: 13, leaseHash: null }
+      : allowedDecision(callNumber));
+  const response = await call('POST', '/portal/login', postgresDeps(auth, {
+    abuse: guard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => requestContext(),
+  }), loginPost({ email: 'owner@frayne.co', password: 'wrong' }));
+  assert.equal(response.statusCode, 429);
+  assert.equal(response.headers['retry-after'], '13');
+  assert.equal(logins, 0);
+  assert.equal(guard.admissions[1]?.routeClass, 'auth.login');
+});
+
+test('auth lease completion retries preserve failure accounting', async () => {
+  const completions: Array<{ lease: number; outcome: PortalAbuseOutcome }> = [];
+  let admissions = 0;
+  let authCompletionAttempts = 0;
+  const guard: PortalAbuseGuard = {
+    admit: async () => allowedDecision(++admissions),
+    complete: async (leaseHash, outcome) => {
+      const lease = leaseHash[0]!;
+      completions.push({ lease, outcome });
+      if (lease === 2 && authCompletionAttempts++ === 0) {
+        throw new Error('ambiguous completion transport failure');
+      }
+    },
+    assertReady: async () => undefined,
+    close: async () => undefined,
+  };
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+
+  const response = await call('POST', '/portal/login', postgresDeps(auth, {
+    abuse: guard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => requestContext(),
+  }), loginPost({ email: 'owner@frayne.co', password: 'wrong' }));
+
+  assert.equal(response.statusCode, 401);
+  assert.deepEqual(
+    completions.filter(({ lease }) => lease === 2).map(({ outcome }) => outcome),
+    ['auth_failure', 'auth_failure'],
+  );
+});
+
+test('setup auth-subject denial happens before password setup', async () => {
+  let setups = 0;
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => null,
+    completeSetup: async () => { setups += 1; return null; },
+    revoke: async () => undefined,
+  };
+  const guard = recordingAbuseGuard((input, callNumber) =>
+    input.dimensions.some(({ name }) => name === 'auth')
+      ? { allowed: false, retryAfterSeconds: 17, leaseHash: null }
+      : allowedDecision(callNumber));
+  const guarded = postgresDeps(auth, {
+    abuse: guard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => requestContext(),
+  });
+  const flow = await beginSetup(guarded);
+  const response = await call('POST', '/portal/setup', guarded, setupPost(flow, {
+    password: 'correct horse battery staple',
+    confirm: 'correct horse battery staple',
+  }));
+  assert.equal(response.statusCode, 429);
+  assert.equal(response.headers['retry-after'], '17');
+  assert.equal(setups, 0);
+});
+
+test('SSO subject denial happens before the provider backchannel', async () => {
+  let exchanges = 0;
+  const auth: PortalAuthService = {
+    resolve: async () => null,
+    login: async () => null,
+    loginExternal: async () => null,
+    revoke: async () => undefined,
+  };
+  const guard = recordingAbuseGuard((input, callNumber) =>
+    input.dimensions.some(({ name }) => name === 'auth')
+      ? { allowed: false, retryAfterSeconds: 19, leaseHash: null }
+      : allowedDecision(callNumber));
+  const response = await call(
+    'GET',
+    `${PROPERTY_PREDATOR_SSO_CALLBACK_ROUTE}?code=valid-code-value-123&state=valid-state-value-123`,
+    postgresDeps(auth, {
+      abuse: guard,
+      abuseHashSecret: ABUSE_SECRET,
+      requestContext: () => requestContext(),
+      propertyPredatorSso: fakeSso({ complete: async () => { exchanges += 1; return null; } }),
+    }),
+    { cookie: `${PROPERTY_PREDATOR_SSO_COOKIE}=encrypted-transaction` },
+  );
+  assert.equal(response.statusCode, 429);
+  assert.equal(response.headers['retry-after'], '19');
+  assert.equal(exchanges, 0);
+});
+
+test('command class principal denial happens before route body or command work', async () => {
+  let installs = 0;
+  const auth: PortalAuthService = {
+    resolve: async (sessionToken) => ({
+      sessionToken, userId: USER_ID, userEmail: 'owner@frayne.co', workspaceId: WORKSPACE_ID,
+    }),
+    login: async () => null,
+    revoke: async () => undefined,
+  };
+  const guard = recordingAbuseGuard((_, callNumber) => callNumber === 1
+    ? allowedDecision(callNumber)
+    : { allowed: false, retryAfterSeconds: 23, leaseHash: null });
+  const journeys: PortalJourneyManagerService = {
+    snapshot: async () => journeySnapshot(false),
+    installFoundation: async () => { installs += 1; return { ok: false, kind: 'unavailable', message: 'not used' }; },
+  };
+  const response = await call('POST', '/portal/journeys/foundation', postgresDeps(auth, {
+    abuse: guard,
+    abuseHashSecret: ABUSE_SECRET,
+    requestContext: () => requestContext(),
+    journeys,
+  }), { cookie: `${PORTAL_COOKIE}=opaque-session` });
+  assert.equal(response.statusCode, 429);
+  assert.equal(response.headers['retry-after'], '23');
+  assert.equal(guard.admissions[1]?.routeClass, 'command');
+  assert.equal(installs, 0);
 });
 
 test('database sessions use canonical workspace identity without a legacy bridge', async () => {

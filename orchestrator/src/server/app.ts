@@ -51,6 +51,8 @@ export interface AppDeps {
   marketing?: MarketingHooks;
   /** Optional client portal; absent = /portal 404s (payments still work). */
   portal?: PortalDeps;
+  /** Per-process no-queue shield in front of the distributed portal guard. */
+  portalMaxConcurrentRequests?: number;
   /** Safe operator-facing reasons the optional portal could not be mounted. */
   portalBlockers?: string[];
   /**
@@ -165,6 +167,20 @@ function sendPortalUnavailable(res: ServerResponse): void {
   res.end(body);
 }
 
+function sendPortalRuntimeStatus(res: ServerResponse, code: 429 | 503): void {
+  const body = code === 429
+    ? 'Too many portal requests are active. Try again shortly.'
+    : 'The secure portal request could not be completed. Try again shortly.';
+  res.writeHead(code, {
+    'content-type': 'text/plain; charset=utf-8',
+    'content-length': String(Buffer.byteLength(body)),
+    'cache-control': 'no-store',
+    'retry-after': code === 429 ? '1' : '5',
+    'x-content-type-options': 'nosniff',
+  });
+  res.end(body);
+}
+
 function sandboxAccessRequired(cfg: StripeConfig): boolean {
   return Boolean(cfg.production) && classifyStripeKey(cfg.secretKey) === 'test';
 }
@@ -186,6 +202,12 @@ export function createApp(deps: AppDeps) {
 
   const checkoutBlockers = (): string[] => oneOffCheckoutBlockers(deps.cfg, deps.buildBlockers ?? []);
   const recurringBlockers = (): string[] => subscriptionCheckoutBlockers(deps.cfg);
+  const portalMaxConcurrentRequests = deps.portalMaxConcurrentRequests ?? 32;
+  if (!Number.isSafeInteger(portalMaxConcurrentRequests)
+      || portalMaxConcurrentRequests < 1 || portalMaxConcurrentRequests > 1_024) {
+    throw new Error('Portal process concurrency bound is invalid');
+  }
+  let activePortalRequests = 0;
 
   return async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
@@ -233,8 +255,14 @@ export function createApp(deps: AppDeps) {
         else send(res, 404, { error: 'portal not enabled' });
         return;
       }
+      if (activePortalRequests >= portalMaxConcurrentRequests) {
+        sendPortalRuntimeStatus(res, 429);
+        return;
+      }
+      activePortalRequests += 1;
       try { await handlePortal(req, res, deps.portal); }
-      catch (e) { if (!res.headersSent) send(res, 500, { error: (e as Error).message }); }
+      catch { if (!res.headersSent) sendPortalRuntimeStatus(res, 503); }
+      finally { activePortalRequests -= 1; }
       return;
     }
 

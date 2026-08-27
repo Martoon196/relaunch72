@@ -30,7 +30,12 @@ type ScopedTestRole =
   | 'r72_external_event_command'
   | 'r72_worker'
   | 'r72_webhook';
-type UnscopedTestRole = 'r72_web' | 'r72_identity_command' | 'r72_crm_command' | 'r72_worker';
+type UnscopedTestRole =
+  | 'r72_web'
+  | 'r72_identity_command'
+  | 'r72_crm_command'
+  | 'r72_abuse_command'
+  | 'r72_worker';
 
 const TEST_ROLES = new Set<ScopedTestRole>([
   'r72_web',
@@ -57,6 +62,7 @@ const UNSCOPED_TEST_ROLES = new Set<UnscopedTestRole>([
   'r72_web',
   'r72_identity_command',
   'r72_crm_command',
+  'r72_abuse_command',
   'r72_worker',
 ]);
 

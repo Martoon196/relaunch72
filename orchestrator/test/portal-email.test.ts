@@ -13,6 +13,7 @@ import type { PortalAuthService } from '../src/portal/auth-service.js';
 import type { PortalCrmService } from '../src/portal/crm-service.js';
 import type { PortalCompanyContentService } from '../src/portal/company-content-service.js';
 import type { PortalInboxReadBoundary } from '../src/portal/router.js';
+import type { PortalAbuseGuard } from '../src/portal/abuse.js';
 
 test('PostgreSQL portal composition has no JSON dashboard, login or campaign dependency', () => {
   const auth: PortalAuthService = {
@@ -34,12 +35,43 @@ test('PostgreSQL portal composition has no JSON dashboard, login or campaign dep
   const inbox: PortalInboxReadBoundary = {
     listConversations: async () => null,
   };
+  const abuse: PortalAbuseGuard = {
+    admit: async () => ({ allowed: true, retryAfterSeconds: 0, leaseHash: null }),
+    complete: async () => undefined,
+    assertReady: async () => undefined,
+    close: async () => undefined,
+  };
+  const requestContext = () => ({
+    requestId: 'request-1',
+    requestHash: Buffer.alloc(32, 1),
+    clientAddress: '127.0.0.1',
+    sourceHash: Buffer.alloc(32, 2),
+  });
+  const abuseConfig = {
+    abuse,
+    requestContext,
+    abuseHashSecret: 'dedicated-test-abuse-secret-at-least-32-characters',
+  };
 
   const trustedClientAddress = (req: Parameters<NonNullable<ReturnType<typeof buildPostgresPortalDeps>['trustedClientAddress']>>[0]) => req.socket.remoteAddress;
   const portal = buildPostgresPortalDeps({
     sessionSecret: 'secret', secure: true, auth, crm, companyContent, inbox, trustedClientAddress,
+    ...abuseConfig,
   });
-  const safeDefault = buildPostgresPortalDeps({ sessionSecret: 'secret', secure: true, auth, crm });
+  const safeDefault = buildPostgresPortalDeps({
+    sessionSecret: 'secret', secure: true, auth, crm, ...abuseConfig,
+  });
+  assert.throws(
+    () => buildPostgresPortalDeps({
+      sessionSecret: 'same-secret-that-is-at-least-32-characters',
+      secure: true,
+      auth,
+      crm,
+      ...abuseConfig,
+      abuseHashSecret: 'same-secret-that-is-at-least-32-characters',
+    }),
+    /abuse boundary is incomplete/,
+  );
 
   assert.equal(portal.kind, 'postgres');
   assert.equal(portal.auth, auth);

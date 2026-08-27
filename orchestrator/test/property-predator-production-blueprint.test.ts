@@ -92,6 +92,12 @@ test('production Blueprint is isolated, manually deployed and fail-closed', () =
   literalValue('PORTAL_PRODUCT_PROFILE', 'property_predator_growth');
   literalValue('PORTAL_BASE_URL', 'https://hq.propertypredator.com');
   literalValue('PUBLIC_BASE_URL', 'https://propertypredator.com');
+  literalValue('PORTAL_PROXY_MODE', 'render');
+  assert.match(
+    webManifest,
+    /- key: PORTAL_ABUSE_HASH_SECRET\r?\n\s+generateValue: true/,
+    'the abuse HMAC secret must be generated independently in the web service',
+  );
   literalValue(
     'ALLOWED_ORIGINS',
     'https://hq.propertypredator.com,https://propertypredator.com,https://www.propertypredator.com',
@@ -142,6 +148,7 @@ test('production Blueprint keeps web and worker database identities process-isol
     'DATABASE_WEB_URL',
     'DATABASE_IDENTITY_COMMAND_URL',
     'DATABASE_CRM_COMMAND_URL',
+    'DATABASE_ABUSE_COMMAND_URL',
     'DATABASE_CONTENT_COMMAND_URL',
     'DATABASE_CONTENT_ADAPTER_URL',
     'DATABASE_MAILGUN_WEBHOOK_URL',
@@ -154,6 +161,7 @@ test('production Blueprint keeps web and worker database identities process-isol
   secretSlot('PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID');
 
   assert.deepEqual(databaseUrlKeys(webManifest), [
+    'DATABASE_ABUSE_COMMAND_URL',
     'DATABASE_CONTENT_ADAPTER_URL',
     'DATABASE_CONTENT_COMMAND_URL',
     'DATABASE_CRM_COMMAND_URL',
@@ -168,10 +176,12 @@ test('production Blueprint keeps web and worker database identities process-isol
   assert.match(webManifest, /- key: DATABASE_MAILGUN_WEBHOOK_URL\b/);
   assert.doesNotMatch(
     workerManifest,
-    /- key: DATABASE_(?:WEB|IDENTITY_COMMAND|CRM_COMMAND|CONTENT_COMMAND|CONTENT_ADAPTER|MAILGUN_WEBHOOK)_URL\b/,
+    /- key: DATABASE_(?:WEB|IDENTITY_COMMAND|CRM_COMMAND|ABUSE_COMMAND|CONTENT_COMMAND|CONTENT_ADAPTER|MAILGUN_WEBHOOK)_URL\b/,
   );
 
   literalValue('DATABASE_SSL_MODE', 'verify-full');
+  literalValue('DATABASE_ABUSE_COMMAND_POOL_MAX', '2');
+  literalValue('DATABASE_ABUSE_COMMAND_STATEMENT_TIMEOUT_MS', '1000');
   assert.doesNotMatch(manifest, /- key: (?:DATABASE_URL|DATABASE_MIGRATOR_URL|TEST_DATABASE_URL)\b/);
   assert.doesNotMatch(manifest, /postgres(?:ql)?:\/\//i);
   assert.doesNotMatch(manifest, /(?:preDeployCommand|initialDeployHook|afterFirstDeployCommand):/);

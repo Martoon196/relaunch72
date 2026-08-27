@@ -38,9 +38,12 @@ import {
   createPgPortalCompanyAssetsService,
   type PgPortalCompanyAssetsService,
 } from './company-assets-pg-service.js';
+import { PgPortalAbuseGuard } from './abuse-pg-service.js';
 
 export interface PgPortalPlatform {
   auth: PgPortalAuthService;
+  /** Distributed, function-only admission guard shared by every web instance. */
+  abuse: PgPortalAbuseGuard;
   crm: PgPortalCrmService;
   journeys: PgPortalJourneyManagerService;
   /** RLS-scoped authoritative operator queue with assignment/snooze overlays only. */
@@ -184,7 +187,7 @@ export function createPgPortalInboxReadBoundary(
 }
 
 /**
- * Compose the portal only after its three required least-privilege identities connect
+ * Compose the portal only after its four required least-privilege identities connect
  * and the web identity proves the exact bundled migration ledger. Any partial
  * construction is closed before the error escapes. Sensitive provisioning and
  * setup delivery are composed separately by buildPgOnboardingPlatform. Company
@@ -219,6 +222,11 @@ export async function buildPgPortalPlatform(
       'DATABASE_CRM_COMMAND_URL',
       'r72_crm_command',
     );
+    const abuseConfig = requireCutoverIdentity(
+      loadDatabaseConfig('abuseCommand', env),
+      'DATABASE_ABUSE_COMMAND_URL',
+      'r72_abuse_command',
+    );
     if (requireCompanyContent && !env.DATABASE_CONTENT_COMMAND_URL?.trim()) {
       throw new Error('Property Predator production requires DATABASE_CONTENT_COMMAND_URL');
     }
@@ -232,6 +240,9 @@ export async function buildPgPortalPlatform(
     pools.push(identityPool);
     const commandPool = createDatabasePool(commandConfig);
     pools.push(commandPool);
+    const abusePool = createDatabasePool(abuseConfig);
+    pools.push(abusePool);
+    const abuse = new PgPortalAbuseGuard(abusePool);
 
     await assertRuntimeSchemaCurrent(webPool);
     if (expectedInstallationId) {
@@ -239,12 +250,14 @@ export async function buildPgPortalPlatform(
         assertExpectedDatabaseInstallation(webPool, expectedInstallationId),
         assertExpectedDatabaseInstallation(identityPool, expectedInstallationId),
         assertExpectedDatabaseInstallation(commandPool, expectedInstallationId),
+        assertExpectedDatabaseInstallation(abusePool, expectedInstallationId),
       ]);
     }
     // Force role verification now instead of on the first customer's request.
     await Promise.all([
       identityPool.query('/* portal.identity-role-readiness */ SELECT 1'),
       commandPool.query('/* portal.crm-command-role-readiness */ SELECT 1'),
+      abuse.assertReady(),
     ]);
 
     let companyContent: PgPortalCompanyContentService | undefined;
@@ -314,6 +327,7 @@ export async function buildPgPortalPlatform(
     let closed = false;
     return {
       auth: new PgPortalAuthService({ readPool: webPool, commandPool: identityPool }),
+      abuse,
       crm: createPgPortalCrmService({ webPool, commandPool }),
       journeys: createPgPortalJourneyManagerService({ webPool, commandPool }),
       operatorActions: createPgPortalOperatorActionCentreService({
@@ -333,6 +347,7 @@ export async function buildPgPortalPlatform(
                 assertExpectedDatabaseInstallation(webPool, expectedInstallationId),
                 assertExpectedDatabaseInstallation(identityPool, expectedInstallationId),
                 assertExpectedDatabaseInstallation(commandPool, expectedInstallationId),
+                assertExpectedDatabaseInstallation(abusePool, expectedInstallationId),
                 ...(contentReadinessPool
                   ? [assertExpectedDatabaseInstallation(contentReadinessPool, expectedInstallationId)]
                   : []),
@@ -343,6 +358,7 @@ export async function buildPgPortalPlatform(
             : []),
           identityPool.query('/* portal.identity-runtime-readiness */ SELECT 1'),
           commandPool.query('/* portal.crm-runtime-readiness */ SELECT 1'),
+          abuse.assertReady(),
           ...(contentReadinessPool
             ? [contentReadinessPool.query('/* portal.content-runtime-readiness */ SELECT 1')]
             : []),

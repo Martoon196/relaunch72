@@ -11,6 +11,7 @@ import {
 
 const DB_PASSWORD = 'database-password-that-must-never-escape';
 const SESSION_SECRET = 'session-secret-that-must-never-escape-123456';
+const ABUSE_SECRET = 'abuse-secret-that-must-never-escape-12345678';
 const MAILGUN_API_KEY = 'mailgun-api-key-that-must-never-escape';
 const MAILGUN_SIGNING_KEY = 'mailgun-signing-key-that-must-never-escape';
 
@@ -26,10 +27,13 @@ function firstChannelEnvironment(): NodeJS.ProcessEnv {
     PORTAL_BASE_URL: 'https://app.propertypredator.co.uk',
     PUBLIC_BASE_URL: 'https://propertypredator.co.uk',
     SESSION_SECRET,
+    PORTAL_PROXY_MODE: 'render',
+    PORTAL_ABUSE_HASH_SECRET: ABUSE_SECRET,
     DATABASE_SSL_MODE: 'verify-full',
     DATABASE_WEB_URL: databaseUrl('r72_web'),
     DATABASE_IDENTITY_COMMAND_URL: databaseUrl('r72_identity_command'),
     DATABASE_CRM_COMMAND_URL: databaseUrl('r72_crm_command'),
+    DATABASE_ABUSE_COMMAND_URL: databaseUrl('r72_abuse_command'),
     DATABASE_CONTENT_COMMAND_URL: databaseUrl('r72_content_command'),
     DATABASE_CONTENT_ADAPTER_URL: databaseUrl('r72_content_adapter'),
     DATABASE_WORKER_URL: databaseUrl('r72_worker'),
@@ -81,7 +85,10 @@ test('unsafe cutover shapes stay blocked even when all first-channel credentials
   const env = firstChannelEnvironment();
   env.DATABASE_WEB_URL = databaseUrl('neondb_owner');
   env.DATABASE_CONTENT_ADAPTER_URL = databaseUrl('r72_content_command');
+  env.DATABASE_ABUSE_COMMAND_URL = databaseUrl('r72_web');
   env.DATABASE_SSL_MODE = 'require';
+  env.PORTAL_PROXY_MODE = 'direct';
+  env.PORTAL_ABUSE_HASH_SECRET = SESSION_SECRET;
   env.PORTAL_BASE_URL = 'https://user:password@app.propertypredator.co.uk';
   env.PROPERTY_PREDATOR_PILOT_MAX_RECIPIENTS = '5000';
 
@@ -90,7 +97,10 @@ test('unsafe cutover shapes stay blocked even when all first-channel credentials
   for (const settingName of [
     'DATABASE_WEB_URL',
     'DATABASE_CONTENT_ADAPTER_URL',
+    'DATABASE_ABUSE_COMMAND_URL',
     'DATABASE_SSL_MODE',
+    'PORTAL_PROXY_MODE',
+    'PORTAL_ABUSE_HASH_SECRET',
     'PORTAL_BASE_URL',
     'PROPERTY_PREDATOR_PILOT_MAX_RECIPIENTS',
   ]) {
@@ -106,7 +116,7 @@ test('raw secrets and URLs are destroyed at the sanitizer boundary and never ren
   const serializedReport = JSON.stringify(report);
   const rendered = formatPropertyPredatorPilotPreflight(report);
 
-  for (const secret of [DB_PASSWORD, SESSION_SECRET, MAILGUN_API_KEY, MAILGUN_SIGNING_KEY]) {
+  for (const secret of [DB_PASSWORD, SESSION_SECRET, ABUSE_SECRET, MAILGUN_API_KEY, MAILGUN_SIGNING_KEY]) {
     assert.doesNotMatch(serializedEvidence, new RegExp(secret));
     assert.doesNotMatch(serializedReport, new RegExp(secret));
     assert.doesNotMatch(rendered, new RegExp(secret));
