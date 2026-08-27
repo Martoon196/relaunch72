@@ -118,7 +118,7 @@ test('simulator refuses routable numbers and records hashes without raw body or 
   const result = await adapter.simulateTemplate(context, request);
   assert.deepEqual(result, {
     effectMode: 'simulated_test_only', status: 'simulated',
-    testReference: 'wa_test_085d72da9ad59a3b173a7a7656d44ba0',
+    testReference: 'wa_test_94cd29bc53ea0ba3426390fd67e2200b',
     occurredAt: NOW.toISOString(), providerOperationCreated: false,
     externalDeliveryAttempted: false,
     summary: 'Reserved WhatsApp test operation simulated',
@@ -135,6 +135,9 @@ test('simulator refuses routable numbers and records hashes without raw body or 
   await assert.rejects(adapter.simulateTemplate({
     ...context, idempotencyKey: 'whatsapp-test-operation-drift',
   }, request), /reused with different test input/);
+  await assert.rejects(adapter.reconcileSimulation({
+    ...context, correlationId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+  }, result.testReference), /reference is invalid/);
   await assert.rejects(new SimulatedWhatsAppDarkAdapter({ now: () => NOW })
     .reconcileSimulation(context, result.testReference), /reference is invalid/);
 });

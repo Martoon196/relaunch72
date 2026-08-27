@@ -25,7 +25,14 @@ export interface WhatsAppSimulationAudit {
 
 function reference(context: ProviderOperationContext): string {
   return `wa_test_${createHash('sha256')
-    .update(`${context.workspaceId}\n${context.connectionId}\n${context.operationId}\n${context.idempotencyKey}`, 'utf8')
+    .update([
+      context.workspaceId,
+      context.connectionId,
+      context.providerId,
+      context.operationId,
+      context.idempotencyKey,
+      context.correlationId,
+    ].join('\n'), 'utf8')
     .digest('hex').slice(0, 32)}`;
 }
 
