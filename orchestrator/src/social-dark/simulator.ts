@@ -4,10 +4,11 @@ import {
   PUBLIC_SOCIAL_DARK_PROVIDER_ID,
   PublicSocialDarkContractError,
   assertPublicSocialDarkContext,
-  createPublicSocialDarkPlan,
   socialDarkTimestamp,
+  verifyPublicSocialDarkPlan,
   type PublicSocialDarkAdapter,
   type PublicSocialDarkBatch,
+  type PublicSocialDarkContextSnapshot,
   type PublicSocialDarkPlan,
   type PublicSocialDarkTargetState,
 } from './contracts.js';
@@ -34,6 +35,8 @@ interface InternalBatch {
   readonly workspaceId: string;
   readonly connectionId: string;
   readonly operationId: string;
+  readonly correlationId: string;
+  readonly idempotencyKeySha256: string;
   readonly requestSha256: string;
   readonly contentVersionId: string;
   readonly contentSha256: string;
@@ -62,7 +65,7 @@ function addSeconds(timestamp: string, seconds: number): string {
   return new Date(Date.parse(timestamp) + seconds * 1_000).toISOString();
 }
 
-function batchId(context: ProviderOperationContext): string {
+function batchId(context: PublicSocialDarkContextSnapshot): string {
   return `social_test_batch_${createHash('sha256')
     .update(`${context.workspaceId}\n${context.connectionId}\n${context.operationId}`, 'utf8')
     .digest('hex').slice(0, 32)}`;
@@ -108,6 +111,7 @@ export class SimulatedPublicSocialDarkAdapter implements PublicSocialDarkAdapter
   readonly providerId = PUBLIC_SOCIAL_DARK_PROVIDER_ID;
   readonly mode = 'simulated_test_only' as const;
   readonly #batches = new Map<string, InternalBatch>();
+  readonly #idempotencyBindings = new Map<string, Readonly<{ batchId: string; requestSha256: string }>>();
   readonly #audit: PublicSocialDarkAudit[] = [];
   readonly #failureBudgets: ReadonlyMap<string, number>;
   readonly #now: () => Date;
@@ -116,10 +120,19 @@ export class SimulatedPublicSocialDarkAdapter implements PublicSocialDarkAdapter
     now?: () => Date;
     transientFailuresByTargetId?: Readonly<Record<string, number>>;
   }> = {}) {
-    this.#now = options.now ?? (() => new Date());
+    if (typeof options !== 'object' || options === null) fail('simulator options are invalid');
+    const rawOptions = options as unknown as Record<string, unknown>;
+    const rawNow = rawOptions.now;
+    const rawBudgets = rawOptions.transientFailuresByTargetId;
+    if (rawNow !== undefined && typeof rawNow !== 'function') fail('simulator clock is invalid');
+    this.#now = (rawNow as (() => Date) | undefined) ?? (() => new Date());
     const budgets = new Map<string, number>();
-    for (const [targetId, count] of Object.entries(options.transientFailuresByTargetId ?? {})) {
-      if (!TARGET_ID.test(targetId) || !Number.isSafeInteger(count) || count < 0 || count > 3) {
+    if (rawBudgets !== undefined && (typeof rawBudgets !== 'object' || rawBudgets === null
+        || Array.isArray(rawBudgets))) fail('transient failure plan is invalid');
+    const budgetEntries = Object.entries(rawBudgets ?? {});
+    for (const [targetId, count] of budgetEntries) {
+      if (typeof targetId !== 'string' || !TARGET_ID.test(targetId)
+          || typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0 || count > 3) {
         fail('transient failure plan is invalid');
       }
       budgets.set(targetId, count);
@@ -132,29 +145,56 @@ export class SimulatedPublicSocialDarkAdapter implements PublicSocialDarkAdapter
   }
 
   #boundBatch(context: ProviderOperationContext, requestedBatchId: string): InternalBatch {
-    assertPublicSocialDarkContext(context);
-    if (!BATCH_ID.test(requestedBatchId)) fail('batchId is invalid');
-    const batch = this.#batches.get(requestedBatchId);
-    if (!batch || batch.workspaceId !== context.workspaceId
-        || batch.connectionId !== context.connectionId || batch.operationId !== context.operationId) {
+    const sealedContext = assertPublicSocialDarkContext(context);
+    const batchIdInput: unknown = requestedBatchId;
+    if (typeof batchIdInput !== 'string' || !BATCH_ID.test(batchIdInput)) fail('batchId is invalid');
+    const batch = this.#batches.get(batchIdInput);
+    const idempotencyKeySha256 = createHash('sha256').update(sealedContext.idempotencyKey, 'utf8').digest('hex');
+    if (!batch || batch.workspaceId !== sealedContext.workspaceId
+        || batch.connectionId !== sealedContext.connectionId || batch.operationId !== sealedContext.operationId
+        || batch.correlationId !== sealedContext.correlationId
+        || batch.idempotencyKeySha256 !== idempotencyKeySha256) {
       fail('batch is not bound to this simulation context');
     }
     return batch;
   }
 
   scheduleSimulation(context: ProviderOperationContext, plan: PublicSocialDarkPlan): PublicSocialDarkBatch {
-    assertPublicSocialDarkContext(context);
-    if (plan.mode !== 'simulated_test_only') fail('plan mode is invalid');
-    const sealedPlan = createPublicSocialDarkPlan(plan);
-    if (sealedPlan.planSha256 !== plan.planSha256) fail('plan hash is invalid');
-    const now = this.#now().toISOString();
+    const sealedContext = assertPublicSocialDarkContext(context);
+    const sealedPlan = verifyPublicSocialDarkPlan(plan);
+    const rawNow = this.#now();
+    if (!(rawNow instanceof Date)) fail('simulator clock returned an invalid instant');
+    const nowMilliseconds = Date.prototype.getTime.call(rawNow);
+    if (!Number.isFinite(nowMilliseconds)) fail('simulator clock returned an invalid instant');
+    const now = new Date(nowMilliseconds).toISOString();
     if (Date.parse(sealedPlan.scheduledFor) < Date.parse(now)
         || Date.parse(sealedPlan.scheduledFor) > Date.parse(now) + 366 * 24 * 60 * 60 * 1_000) {
       fail('scheduledFor is outside the test scheduling window');
     }
-    const requestSha256 = createHash('sha256')
-      .update(`${sealedPlan.planSha256}\n${context.idempotencyKey}`, 'utf8').digest('hex');
-    const id = batchId(context);
+    const idempotencyKeySha256 = createHash('sha256')
+      .update(sealedContext.idempotencyKey, 'utf8').digest('hex');
+    const requestSha256 = createHash('sha256').update(JSON.stringify({
+      connectionId: sealedContext.connectionId,
+      correlationId: sealedContext.correlationId,
+      idempotencyKeySha256,
+      operationId: sealedContext.operationId,
+      planSha256: sealedPlan.planSha256,
+      providerId: sealedContext.providerId,
+      workspaceId: sealedContext.workspaceId,
+    }), 'utf8').digest('hex');
+    const idempotencyBindingKey = createHash('sha256')
+      .update(`${sealedContext.workspaceId}\n${sealedContext.connectionId}\n${sealedContext.idempotencyKey}`, 'utf8')
+      .digest('hex');
+    const idempotencyBinding = this.#idempotencyBindings.get(idempotencyBindingKey);
+    if (idempotencyBinding) {
+      if (idempotencyBinding.requestSha256 !== requestSha256) {
+        fail('idempotency key was reused with different social operation evidence');
+      }
+      const replay = this.#batches.get(idempotencyBinding.batchId);
+      if (!replay) fail('idempotency binding is invalid');
+      return snapshot(replay, 'replayed');
+    }
+    const id = batchId(sealedContext);
     const existing = this.#batches.get(id);
     if (existing) {
       if (existing.requestSha256 !== requestSha256) fail('operation id was reused with a different social plan');
@@ -162,9 +202,11 @@ export class SimulatedPublicSocialDarkAdapter implements PublicSocialDarkAdapter
     }
     const batch: InternalBatch = {
       batchId: id,
-      workspaceId: context.workspaceId,
-      connectionId: context.connectionId,
-      operationId: context.operationId,
+      workspaceId: sealedContext.workspaceId,
+      connectionId: sealedContext.connectionId,
+      operationId: sealedContext.operationId,
+      correlationId: sealedContext.correlationId,
+      idempotencyKeySha256,
       requestSha256,
       contentVersionId: sealedPlan.contentVersionId,
       contentSha256: sealedPlan.contentSha256,
@@ -183,6 +225,7 @@ export class SimulatedPublicSocialDarkAdapter implements PublicSocialDarkAdapter
       })),
     };
     this.#batches.set(id, batch);
+    this.#idempotencyBindings.set(idempotencyBindingKey, Object.freeze({ batchId: id, requestSha256 }));
     this.#audit.push(Object.freeze({
       action: 'scheduled', batchId: id, targetId: null, attempt: null,
       reasonSha256: null, externalPublishAttempted: false,
@@ -195,8 +238,10 @@ export class SimulatedPublicSocialDarkAdapter implements PublicSocialDarkAdapter
     requestedBatchId: string,
     rawAsOf: string,
   ): PublicSocialDarkBatch {
-    const batch = this.#boundBatch(context, requestedBatchId);
-    const asOf = socialDarkTimestamp(rawAsOf, 'asOf');
+    const batchIdInput = requestedBatchId;
+    const asOfInput = rawAsOf;
+    const batch = this.#boundBatch(context, batchIdInput);
+    const asOf = socialDarkTimestamp(asOfInput, 'asOf');
     for (const target of batch.targets) {
       if ((target.status !== 'waiting_for_test_time' && target.status !== 'retry_wait')
           || target.nextAttemptAt === null || Date.parse(target.nextAttemptAt) > Date.parse(asOf)) continue;
@@ -240,12 +285,16 @@ export class SimulatedPublicSocialDarkAdapter implements PublicSocialDarkAdapter
     targetId: string,
     reason: string,
   ): PublicSocialDarkBatch {
-    const batch = this.#boundBatch(context, requestedBatchId);
-    if (!TARGET_ID.test(targetId) || typeof reason !== 'string' || !SAFE_REASON.test(reason)
-        || Buffer.byteLength(reason, 'utf8') > 2_000) {
+    const batchIdInput = requestedBatchId;
+    const targetIdInput: unknown = targetId;
+    const reasonInput: unknown = reason;
+    const batch = this.#boundBatch(context, batchIdInput);
+    if (typeof targetIdInput !== 'string' || !TARGET_ID.test(targetIdInput)
+        || typeof reasonInput !== 'string' || !SAFE_REASON.test(reasonInput)
+        || Buffer.byteLength(reasonInput, 'utf8') > 2_000) {
       fail('cancellation input is invalid');
     }
-    const target = batch.targets.find((candidate) => candidate.targetId === targetId);
+    const target = batch.targets.find((candidate) => candidate.targetId === targetIdInput);
     if (!target) fail('target is not part of this batch');
     if (target.status !== 'waiting_for_test_time' && target.status !== 'retry_wait') {
       fail('target can no longer be cancelled');
@@ -254,8 +303,8 @@ export class SimulatedPublicSocialDarkAdapter implements PublicSocialDarkAdapter
     target.nextAttemptAt = null;
     target.lastErrorCode = null;
     this.#audit.push(Object.freeze({
-      action: 'cancelled', batchId: batch.batchId, targetId, attempt: target.attempts,
-      reasonSha256: createHash('sha256').update(reason, 'utf8').digest('hex'),
+      action: 'cancelled', batchId: batch.batchId, targetId: targetIdInput, attempt: target.attempts,
+      reasonSha256: createHash('sha256').update(reasonInput, 'utf8').digest('hex'),
       externalPublishAttempted: false,
     }));
     return snapshot(batch, 'applied');
@@ -267,17 +316,21 @@ export class SimulatedPublicSocialDarkAdapter implements PublicSocialDarkAdapter
     targetId: string,
     suppliedReference: string,
   ): PublicSocialDarkBatch {
-    const batch = this.#boundBatch(context, requestedBatchId);
-    if (!TARGET_ID.test(targetId) || !TEST_REFERENCE.test(suppliedReference)) {
+    const batchIdInput = requestedBatchId;
+    const targetIdInput: unknown = targetId;
+    const referenceInput: unknown = suppliedReference;
+    const batch = this.#boundBatch(context, batchIdInput);
+    if (typeof targetIdInput !== 'string' || !TARGET_ID.test(targetIdInput)
+        || typeof referenceInput !== 'string' || !TEST_REFERENCE.test(referenceInput)) {
       fail('reconciliation input is invalid');
     }
-    const target = batch.targets.find((candidate) => candidate.targetId === targetId);
-    if (!target || target.testReference !== suppliedReference) fail('simulation cannot be reconciled');
+    const target = batch.targets.find((candidate) => candidate.targetId === targetIdInput);
+    if (!target || target.testReference !== referenceInput) fail('simulation cannot be reconciled');
     if (target.status === 'simulated_reconciled') return snapshot(batch, 'replayed');
     if (target.status !== 'simulated_succeeded') fail('simulation cannot be reconciled');
     target.status = 'simulated_reconciled';
     this.#audit.push(Object.freeze({
-      action: 'reconciled', batchId: batch.batchId, targetId, attempt: target.attempts,
+      action: 'reconciled', batchId: batch.batchId, targetId: targetIdInput, attempt: target.attempts,
       reasonSha256: null, externalPublishAttempted: false,
     }));
     return snapshot(batch, 'applied');
