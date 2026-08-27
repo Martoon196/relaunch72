@@ -1,8 +1,10 @@
 # Property Predator Security and Anti-Scraping Strike Plan
 
-**Status:** required launch gate  
+**Status:** required launch gate
+
 **Applies to:** Property Predator, Growth HQ, affiliate operations, CRM, content,
-inbox, outbound rails, provider adapters and future white-label modules  
+inbox, outbound rails, provider adapters and future white-label modules
+
 **Effects policy:** all customer imports and provider effects remain off until the
 relevant gates in this document pass
 
