@@ -161,6 +161,68 @@ test('stream byte cap stops an undeclared oversized response', async () => {
   await assert.rejects(transport.loadRelease(), /exceeds the byte bound/);
 });
 
+test('absolute deadline rejects fetch and body implementations that ignore abort', async () => {
+  const common = {
+    baseUrl: 'https://propertypredator.example', clientId: 'growth-hq',
+    readToken: TOKEN, timeoutMs: 100,
+  } as const;
+  const startedFetch = Date.now();
+  await assert.rejects(createPropertyPredatorCompanyAssetBridgeTransport({
+    ...common,
+    fetchImpl: async () => new Promise<Response>(() => {}),
+  }).loadRelease(), /request timed out/);
+  assert.ok(Date.now() - startedFetch < 1_000);
+
+  const hangingBody = new ReadableStream<Uint8Array>({
+    pull: async () => new Promise<void>(() => {}),
+  });
+  const startedBody = Date.now();
+  await assert.rejects(createPropertyPredatorCompanyAssetBridgeTransport({
+    ...common,
+    fetchImpl: async () => new Response(hangingBody, {
+      headers: { 'content-type': 'application/json' },
+    }),
+  }).loadRelease(), /request timed out/);
+  assert.ok(Date.now() - startedBody < 1_000);
+});
+
+test('transmits an immutable endpoint identity and rejects runtime-coerced client identities', async () => {
+  const fixture = await bridgeFixture();
+  const observed: string[] = [];
+  const transport = createPropertyPredatorCompanyAssetBridgeTransport({
+    baseUrl: 'https://propertypredator.example', clientId: 'growth-hq', readToken: TOKEN,
+    fetchImpl: async (input) => {
+      assert.equal(typeof input, 'string');
+      observed.push(String(input));
+      return new Response(JSON.stringify(fixture), {
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+      });
+    },
+  });
+  await transport.loadRelease();
+  await transport.loadRelease();
+  assert.deepEqual(observed, [
+    'https://propertypredator.example/api/internal/company-content/bridge',
+    'https://propertypredator.example/api/internal/company-content/bridge',
+  ]);
+  assert.throws(() => createPropertyPredatorCompanyAssetBridgeTransport({
+    baseUrl: 'https://propertypredator.example',
+    clientId: { toString: () => 'growth-hq' } as unknown as string,
+    readToken: TOKEN,
+  }), /client identity is invalid/);
+});
+
+test('accepts only JSON or structured JSON with an optional UTF-8 charset', async () => {
+  const fixture = await bridgeFixture();
+  for (const contentType of ['application/json; garbage', 'application/json; charset=utf-16']) {
+    const transport = createPropertyPredatorCompanyAssetBridgeTransport({
+      baseUrl: 'https://propertypredator.example', clientId: 'growth-hq', readToken: TOKEN,
+      fetchImpl: async () => new Response(JSON.stringify(fixture), { headers: { 'content-type': contentType } }),
+    });
+    await assert.rejects(transport.loadRelease(), /media type is invalid/);
+  }
+});
+
 test('transport source has no content-body, asset-byte, generation, model or provider operation method', async () => {
   const source = await readFile(
     new URL('../src/company-asset-release/property-predator-bridge-transport.ts', import.meta.url),
