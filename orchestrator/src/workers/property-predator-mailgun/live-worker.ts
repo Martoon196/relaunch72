@@ -15,6 +15,7 @@ import {
 } from '../../providers/mailgun-eu-http-adapter.js';
 import {
   loadPropertyPredatorEmailPilotPolicy,
+  normalizeOwnedInternalSeedEmail,
   type PropertyPredatorEmailPilotPolicy,
 } from '../../providers/property-predator-email-pilot-config.js';
 import {
@@ -54,8 +55,42 @@ export interface PropertyPredatorLiveMailgunRunResult {
 }
 
 export interface PropertyPredatorLiveMailgunWorkerRuntime {
+  readonly readiness: PropertyPredatorLiveMailgunWorkerReadiness;
   readonly stopped: Promise<void>;
   shutdown(): Promise<void>;
+}
+
+export interface PropertyPredatorLiveMailgunWorkerReadiness {
+  readonly schemaVersion: 1;
+  readonly event: 'ready';
+  readonly service: typeof PROPERTY_PREDATOR_LIVE_MAILGUN_WORKER_SERVICE;
+  readonly mode: typeof PROPERTY_PREDATOR_LIVE_MAILGUN_WORKER_MODE;
+  readonly provider: Readonly<{
+    id: 'mailgun';
+    region: 'eu';
+    sendingDomain: typeof PROPERTY_PREDATOR_LIVE_MAILGUN_DOMAIN;
+    credentialScope: 'domain-sending';
+    dedicatedCredentialConfigured: true;
+    webhookSigningKeyPresent: false;
+  }>;
+  readonly database: Readonly<{
+    role: 'r72_mailgun_worker_command';
+    boundaryReady: true;
+  }>;
+  readonly safety: Readonly<{
+    providerEffectsEnabled: true;
+    emailDeliveryEnabled: true;
+    emergencyPaused: false;
+    dispatchLoopStarted: true;
+    providerAdapterInstantiated: true;
+    providerNetworkCallsMadeAtReadiness: false;
+  }>;
+  readonly pilot: Readonly<{
+    recipientScope: 'owned-internal-seeds-only';
+    recipientCountPerRun: 1;
+    messageCountPerRun: 1;
+    monthlyHardCap: typeof PROPERTY_PREDATOR_LIVE_MAILGUN_MONTHLY_HARD_CAP;
+  }>;
 }
 
 export interface PropertyPredatorLiveMailgunRunDependencies {
@@ -181,6 +216,41 @@ function structuredErrorLine(
   }))}\n`;
 }
 
+function liveReadiness(): PropertyPredatorLiveMailgunWorkerReadiness {
+  return Object.freeze({
+    schemaVersion: 1,
+    event: 'ready',
+    service: PROPERTY_PREDATOR_LIVE_MAILGUN_WORKER_SERVICE,
+    mode: PROPERTY_PREDATOR_LIVE_MAILGUN_WORKER_MODE,
+    provider: Object.freeze({
+      id: 'mailgun',
+      region: 'eu',
+      sendingDomain: PROPERTY_PREDATOR_LIVE_MAILGUN_DOMAIN,
+      credentialScope: 'domain-sending',
+      dedicatedCredentialConfigured: true,
+      webhookSigningKeyPresent: false,
+    }),
+    database: Object.freeze({
+      role: 'r72_mailgun_worker_command',
+      boundaryReady: true,
+    }),
+    safety: Object.freeze({
+      providerEffectsEnabled: true,
+      emailDeliveryEnabled: true,
+      emergencyPaused: false,
+      dispatchLoopStarted: true,
+      providerAdapterInstantiated: true,
+      providerNetworkCallsMadeAtReadiness: false,
+    }),
+    pilot: Object.freeze({
+      recipientScope: 'owned-internal-seeds-only',
+      recipientCountPerRun: 1,
+      messageCountPerRun: 1,
+      monthlyHardCap: PROPERTY_PREDATOR_LIVE_MAILGUN_MONTHLY_HARD_CAP,
+    }),
+  });
+}
+
 /** Run at most one recovery action or one recipient delivery. */
 export async function runOnePropertyPredatorLiveMailgunJob(
   dependencies: Readonly<PropertyPredatorLiveMailgunRunDependencies>,
@@ -221,6 +291,29 @@ export async function runOnePropertyPredatorLiveMailgunJob(
     return Object.freeze({ disposition: 'settled', providerResult });
   }
 
+  let canonicalRecipient: string | null = null;
+  try {
+    const normalized = normalizeOwnedInternalSeedEmail(decision.recipient);
+    if (dependencies.policy.internalSeedAllowlist.includes(normalized)) {
+      canonicalRecipient = normalized;
+    }
+  } catch {
+    canonicalRecipient = null;
+  }
+  if (!canonicalRecipient) {
+    const providerResult = Object.freeze({
+      status: 'failed' as const,
+      externalId: null,
+      occurredAt: now().toISOString(),
+      retryable: false,
+      errorCode: 'mailgun_recipient_outside_internal_seed_allowlist',
+      summary: 'Mailgun job recipient was outside the owned internal-seed allowlist',
+    });
+    const settled = await dependencies.repository.settle(lease, rawToken, providerResult);
+    if (!settled) throw new Error('Mailgun job settlement fence was lost');
+    return Object.freeze({ disposition: 'settled', providerResult });
+  }
+
   const context = createProviderOperationContext({
     connection: Object.freeze({
       id: decision.providerConnectionId,
@@ -234,7 +327,7 @@ export async function runOnePropertyPredatorLiveMailgunJob(
   let providerResult: ProviderOperationResult;
   try {
     providerResult = await dependencies.transport.send(context, Object.freeze({
-      recipients: Object.freeze([decision.recipient]),
+      recipients: Object.freeze([canonicalRecipient]),
       subject: decision.subject,
       text: decision.text,
       idempotencySha256: decision.requestSha256,
@@ -292,6 +385,7 @@ export async function startPropertyPredatorLiveMailgunWorker(
 
   let repository: PropertyPredatorMailgunWorkerRepository;
   let transport: MailgunEuEmailTransport;
+  const readiness = liveReadiness();
   try {
     repository = (dependencies.createRepository
        ?? ((commandPool, workspaceId, providerConnectionId) => createPgPropertyPredatorMailgunWorkerRepository({
@@ -299,21 +393,6 @@ export async function startPropertyPredatorLiveMailgunWorker(
        })))(pool, policy.workspaceId, policy.providerConnectionId);
     transport = (dependencies.createTransport
       ?? createMailgunEuHttpAdapterFromDomainSendingKeyEnvironment)(env);
-    (dependencies.writeReadiness ?? ((line: string) => { process.stdout.write(line); }))(
-      `${JSON.stringify(Object.freeze({
-        schemaVersion: 1,
-        event: 'ready',
-        service: PROPERTY_PREDATOR_LIVE_MAILGUN_WORKER_SERVICE,
-        mode: PROPERTY_PREDATOR_LIVE_MAILGUN_WORKER_MODE,
-        safety: Object.freeze({
-          recipientCountPerRun: 1,
-          monthlyHardCap: PROPERTY_PREDATOR_LIVE_MAILGUN_MONTHLY_HARD_CAP,
-          region: 'eu',
-          credentialScope: 'domain-sending',
-          webhookSigningKeyPresent: false,
-        }),
-      }))}\n`,
-    );
   } catch (error) {
     await pool.end();
     throw error;
@@ -336,6 +415,25 @@ export async function startPropertyPredatorLiveMailgunWorker(
     }, pollIntervalMs);
   };
   schedule();
+  try {
+    (dependencies.writeReadiness ?? ((line: string) => { process.stdout.write(line); }))(
+      `${JSON.stringify(readiness)}\n`,
+    );
+  } catch (error) {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    try {
+      await pool.end();
+    } catch (closeError) {
+      resolveStopped?.();
+      throw new AggregateError(
+        [error, closeError],
+        'Live Mailgun readiness emission and pool shutdown both failed',
+      );
+    }
+    resolveStopped?.();
+    throw error;
+  }
 
   let shutdownPromise: Promise<void> | undefined;
   const shutdown = (): Promise<void> => {
@@ -345,5 +443,5 @@ export async function startPropertyPredatorLiveMailgunWorker(
     shutdownPromise = inFlight.then(() => pool.end()).finally(() => resolveStopped?.());
     return shutdownPromise;
   };
-  return Object.freeze({ stopped: stoppedPromise, shutdown });
+  return Object.freeze({ readiness, stopped: stoppedPromise, shutdown });
 }

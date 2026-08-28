@@ -188,8 +188,10 @@ function readinessFor(
  *
  * This composition owns no dispatch loop and imports no provider transport.
  * Its only external connection is the function-only worker PostgreSQL role,
- * used once to prove the exact installed pilot boundary. A later, separately
- * approved tranche must introduce any provider-call capability.
+ * used once to prove the exact installed pilot boundary. The separately
+ * composed live worker is loaded only when the CLI receives its exact
+ * action-time mode and that worker independently proves every live switch,
+ * recipient cap, credential scope and database boundary before polling.
  */
 export async function startPropertyPredatorDarkEmailWorker(
   dependencies: PropertyPredatorDarkEmailWorkerDependencies = {},

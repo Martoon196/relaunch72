@@ -6,6 +6,14 @@ and database control is explicitly active, the emergency pause is released,
 and the exact recipient/caps remain `office@propertypredator.com`, one recipient
 per run, and three messages per UTC month.
 
+The checked-in Render worker mode is `dark-production`. It receives no outbound
+Mailgun credential or sender-identity slot, never imports the transport and
+never starts a dispatch loop. Exact live composition emits one redacted
+readiness record proving the isolated database role, EU endpoint, domain-key
+scope, caps, released pause and instantiated adapter; it contains no recipient,
+credential, connection id or database URL and is emitted before the first
+polling interval can make a provider call.
+
 Use a Mailgun **Domain Sending Key** for `mg.propertypredator.com` wherever the
 account supports it. The worker deliberately rejects a broad account API key,
 uses only `https://api.eu.mailgun.net`, and never receives the Mailgun webhook

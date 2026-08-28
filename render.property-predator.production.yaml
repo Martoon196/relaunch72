@@ -254,7 +254,16 @@ services:
       - key: DATABASE_STATEMENT_TIMEOUT_MS
         value: "15000"
 
-      # Provider effects remain disabled even if every credential is present.
+      # The checked-in mode composes only the inert dark worker. The CLI can
+      # select the reviewed internal-seed live worker, but only after an exact
+      # action-time change to this mode, all three safety switches and the
+      # conservative 1-recipient / 1-run / 3-month caps below.
+      - key: PROPERTY_PREDATOR_EMAIL_WORKER_MODE
+        value: dark-production
+
+      # Provider effects remain disabled and this dark service receives no
+      # outbound Mailgun credential or sender identity. In this mode no Mailgun
+      # adapter or dispatch loop exists.
       - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
         value: "false"
       - key: PROPERTY_PREDATOR_EMAIL_DELIVERY_ENABLED
@@ -288,10 +297,6 @@ services:
         value: "100000"
       - key: PROPERTY_PREDATOR_EMAIL_MONTHLY_SPEND_CAP_USD_MICROS
         value: "1000000"
-
-      # No Mailgun outbound credential or sending identity is present in the
-      # dark deployment. Those values are added only after separate activation
-      # approval and a reviewed worker change that can actually use them.
 
   # Migration 0040 just-in-time revalidation runs in a separate dark worker.
   # It can claim one due TEST intent, read one exact approved company-content

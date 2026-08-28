@@ -36,6 +36,7 @@ class Repository implements PropertyPredatorMailgunWorkerRepository {
   recover = false;
   recoveryError: Error | null = null;
   decisionConnectionId: string = IDS.connection;
+  decisionRecipient = 'office@propertypredator.com';
   settlements: ProviderOperationResult[] = [];
   claims = 0;
   async recoverOne() {
@@ -56,7 +57,7 @@ class Repository implements PropertyPredatorMailgunWorkerRepository {
       correlationId: IDS.correlation, providerConnectionId: this.decisionConnectionId,
       reservationId: IDS.reservation, requestSha256: REQUEST_SHA,
       expectedMessageId: `<pp-${REQUEST_SHA}@mg.propertypredator.com>`,
-      recipient: 'office@propertypredator.com', subject: 'Owned seed', text: 'Controlled body',
+      recipient: this.decisionRecipient, subject: 'Owned seed', text: 'Controlled body',
     };
   }
   async settle(_lease: unknown, _token: unknown, result: ProviderOperationResult) {
@@ -133,6 +134,23 @@ test('a job for another provider connection is settled without a provider call',
   assert.equal(result.disposition, 'settled');
   assert.equal(result.providerResult?.status, 'failed');
   assert.equal(result.providerResult?.errorCode, 'mailgun_provider_connection_mismatch');
+  assert.equal(transport.calls.length, 0);
+  assert.equal(repository.settlements.length, 1);
+});
+
+test('a job for a recipient outside the owned seed allowlist is settled without a provider call', async () => {
+  const repository = new Repository();
+  repository.decisionRecipient = 'customer@example.com';
+  const transport = new Transport();
+  const result = await runOnePropertyPredatorLiveMailgunJob({
+    repository, transport, policy: policy(), now: () => NOW,
+    randomToken: () => Buffer.alloc(32, 4),
+  });
+  assert.equal(result.disposition, 'settled');
+  assert.equal(
+    result.providerResult?.errorCode,
+    'mailgun_recipient_outside_internal_seed_allowlist',
+  );
   assert.equal(transport.calls.length, 0);
   assert.equal(repository.settlements.length, 1);
 });
@@ -217,6 +235,22 @@ test('default live-worker failures emit counted structured telemetry without raw
     writeErrorTelemetry: (line) => { lines.push(line); },
     pollIntervalMs: 250,
   });
+  assert.deepEqual(runtime.readiness.safety, {
+    providerEffectsEnabled: true,
+    emailDeliveryEnabled: true,
+    emergencyPaused: false,
+    dispatchLoopStarted: true,
+    providerAdapterInstantiated: true,
+    providerNetworkCallsMadeAtReadiness: false,
+  });
+  assert.deepEqual(runtime.readiness.pilot, {
+    recipientScope: 'owned-internal-seeds-only',
+    recipientCountPerRun: 1,
+    messageCountPerRun: 1,
+    monthlyHardCap: 3,
+  });
+  const serializedReadiness = JSON.stringify(runtime.readiness);
+  assert.doesNotMatch(serializedReadiness, /domain-key|office@|postgresql|secret/i);
   backgroundError?.(new Error('mailgun-domain-key-secret'));
   backgroundError?.(new TypeError('office@propertypredator.com'));
   await new Promise((resolve) => setTimeout(resolve, 300));
