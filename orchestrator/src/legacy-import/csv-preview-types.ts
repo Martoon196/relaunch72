@@ -40,15 +40,6 @@ export interface LegacyImportSourcePayload {
   readonly mediaType: 'text/csv' | 'application/csv';
 }
 
-/**
- * Minimal read-only boundary for a future upload, API or object-store source.
- * Implementations expose bytes only; persistence and provider methods are not part of the contract.
- */
-export interface LegacyImportSourceAdapter {
-  readonly adapterId: string;
-  read(): Promise<LegacyImportSourcePayload>;
-}
-
 export interface CsvImportProvenance {
   readonly adapterId: string;
   readonly sourceSha256: string;
@@ -99,6 +90,13 @@ export interface CsvImportPreviewReceipt {
   readonly quarantinedRowCount: number;
   readonly columnCount: number;
   readonly quarantineReasonCounts: Readonly<Record<CsvImportQuarantineReason, number>>;
+  /**
+   * The pure preview starts only after bytes are supplied. An upload, API or
+   * object-store read is deliberately outside this receipt and must carry its
+   * own acquisition evidence; this receipt never claims an arbitrary caller's
+   * read was effects-free.
+   */
+  readonly sourceAcquisition: 'outside_preview_boundary';
   readonly effects: Readonly<{
     databaseWrites: 0;
     externalMutations: 0;
@@ -120,7 +118,6 @@ export interface CsvImportPreview {
 
 export type CsvImportPreviewErrorCode =
   | 'adapter_invalid'
-  | 'adapter_surface_unsafe'
   | 'limits_invalid'
   | 'source_read_failed'
   | 'source_media_type_unsafe'
@@ -147,8 +144,7 @@ export class CsvImportPreviewError extends Error {
 }
 
 const CSV_IMPORT_PREVIEW_ERROR_MESSAGES: Readonly<Record<CsvImportPreviewErrorCode, string>> = Object.freeze({
-  adapter_invalid: 'The import source adapter is invalid.',
-  adapter_surface_unsafe: 'The import source adapter exposes a forbidden mutation surface.',
+  adapter_invalid: 'The import source identity is invalid.',
   limits_invalid: 'The CSV preview limits are invalid.',
   source_read_failed: 'The import source could not be read safely.',
   source_media_type_unsafe: 'The import source is not an approved CSV media type.',

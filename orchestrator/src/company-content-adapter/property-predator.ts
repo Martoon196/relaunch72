@@ -121,6 +121,70 @@ function digest(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
+function digestBytes(value: Uint8Array): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+async function boundedJsonBody(response: Response): Promise<Readonly<{
+  bytes: Uint8Array;
+  text: string;
+}>> {
+  const declaredRaw = response.headers.get('content-length');
+  if (declaredRaw !== null) {
+    if (!/^(?:0|[1-9][0-9]*)$/u.test(declaredRaw)) {
+      throw new PropertyPredatorContentContractError(
+        'company-content catalog content-length is malformed',
+      );
+    }
+    const declared = Number(declaredRaw);
+    if (!Number.isSafeInteger(declared) || declared > MAX_CATALOG_BYTES) {
+      throw new PropertyPredatorContentContractError('company-content catalog is too large');
+    }
+  }
+  if (!response.body) {
+    throw new PropertyPredatorContentContractError('company-content catalog body is unavailable');
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let actualBytes = 0;
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      if (!(next.value instanceof Uint8Array)) {
+        throw new PropertyPredatorContentContractError(
+          'company-content catalog response stream is invalid',
+        );
+      }
+      // Count before retaining a chunk so an untrusted response can never make
+      // the runtime buffer more than the documented two-MiB catalogue bound.
+      actualBytes += next.value.byteLength;
+      if (!Number.isSafeInteger(actualBytes) || actualBytes > MAX_CATALOG_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new PropertyPredatorContentContractError('company-content catalog is too large');
+      }
+      chunks.push(Uint8Array.from(next.value));
+    }
+  } catch (error) {
+    if (error instanceof PropertyPredatorContentContractError) throw error;
+    throw new PropertyPredatorContentContractError(
+      'company-content catalog response stream failed closed',
+    );
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = Uint8Array.from(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+  let body: string;
+  try {
+    body = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    throw new PropertyPredatorContentContractError(
+      'company-content catalog is not canonical UTF-8',
+    );
+  }
+  return Object.freeze({ bytes, text: body });
+}
+
 function assertCompanyText(value: string, label: string): void {
   const folded = value.toLocaleLowerCase('en-GB');
   if (AFFILIATE_MARKERS.some((marker) => folded.includes(marker)) || FIRST_PERSON_RESULT.test(value)) {
@@ -453,15 +517,9 @@ export function createPropertyPredatorHttpCatalogTransport(
             'company-content catalog media type is invalid',
           );
         }
-        const declared = Number(response.headers.get('content-length') ?? 0);
-        if (Number.isFinite(declared) && declared > MAX_CATALOG_BYTES) {
-          throw new PropertyPredatorContentContractError('company-content catalog is too large');
-        }
-        const body = await response.text();
-        if (Buffer.byteLength(body, 'utf8') > MAX_CATALOG_BYTES) {
-          throw new PropertyPredatorContentContractError('company-content catalog is too large');
-        }
-        if (response.headers.get('etag') !== `"sha256-${digest(body)}"`) {
+        const bounded = await boundedJsonBody(response);
+        const body = bounded.text;
+        if (response.headers.get('etag') !== `"sha256-${digestBytes(bounded.bytes)}"`) {
           throw new PropertyPredatorContentContractError(
             'company-content catalog ETag does not bind the exact response bytes',
           );

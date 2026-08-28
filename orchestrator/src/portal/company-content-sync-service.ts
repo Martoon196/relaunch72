@@ -23,6 +23,7 @@ export interface PortalCompanyContentSyncSnapshot {
 export type PortalCompanyContentSyncFailureKind =
   | 'unauthenticated'
   | 'forbidden'
+  | 'replayed'
   | 'conflict'
   | 'unavailable';
 

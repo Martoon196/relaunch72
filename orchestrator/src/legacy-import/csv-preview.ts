@@ -11,7 +11,6 @@ import {
   type CsvImportQuarantinedRow,
   type CsvImportTargetField,
   type CsvPreviewLimits,
-  type LegacyImportSourceAdapter,
   type LegacyImportSourcePayload,
 } from './csv-preview-types.js';
 
@@ -33,11 +32,6 @@ const TARGET_FIELDS = new Set<CsvImportTargetField>([
   'contact.first_name', 'contact.last_name', 'contact.full_name', 'contact.email',
   'contact.phone', 'contact.company', 'contact.job_title', 'lead.title', 'lead.stage',
   'lead.status', 'lead.value', 'lead.currency', 'lead.source', 'lead.notes',
-]);
-
-const FORBIDDEN_ADAPTER_METHODS = Object.freeze([
-  'write', 'save', 'commit', 'insert', 'update', 'delete', 'remove', 'send',
-  'publish', 'schedule', 'generate', 'mutate', 'execute',
 ]);
 
 const REASON_ORDER: readonly CsvImportQuarantineReason[] = Object.freeze([
@@ -377,6 +371,7 @@ function receipt(
     quarantinedRowCount: quarantinedRows.length,
     columnCount,
     quarantineReasonCounts: countReasons(quarantinedRows),
+    sourceAcquisition: 'outside_preview_boundary' as const,
     effects: Object.freeze({ databaseWrites: 0 as const, externalMutations: 0 as const, providerCalls: 0 as const }),
   });
   return Object.freeze({
@@ -485,28 +480,6 @@ export function previewLegacyCsvImport(
   });
 }
 
-/** Adapter wrapper for future upload/API sources. It accepts read-only surfaces only. */
-export async function previewLegacyCsvImportFromAdapter(
-  adapter: LegacyImportSourceAdapter,
-  mapping: CsvImportMapping,
-  limits?: CsvPreviewLimits,
-): Promise<CsvImportPreview> {
-  if (!adapter || typeof adapter !== 'object' || typeof adapter.read !== 'function'
-      || typeof adapter.adapterId !== 'string') {
-    throw new CsvImportPreviewError('adapter_invalid');
-  }
-  if (FORBIDDEN_ADAPTER_METHODS.some((method) => method in adapter)) {
-    throw new CsvImportPreviewError('adapter_surface_unsafe');
-  }
-  let payload: LegacyImportSourcePayload;
-  try {
-    payload = await adapter.read();
-  } catch {
-    throw new CsvImportPreviewError('source_read_failed');
-  }
-  return previewLegacyCsvImport(payload, adapter.adapterId, mapping, limits);
-}
-
 export type {
   CsvImportMapping,
   CsvImportPreview,
@@ -514,7 +487,6 @@ export type {
   CsvImportQuarantineReason,
   CsvImportTargetField,
   CsvPreviewLimits,
-  LegacyImportSourceAdapter,
   LegacyImportSourcePayload,
 } from './csv-preview-types.js';
 export { CsvImportPreviewError } from './csv-preview-types.js';

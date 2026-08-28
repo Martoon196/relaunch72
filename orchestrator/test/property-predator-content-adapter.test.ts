@@ -208,6 +208,33 @@ test('HTTP transport fails closed for insecure origins, weak credentials and ove
   await assert.rejects(transport.loadCatalog(), /too large/);
 });
 
+test('HTTP transport stream-counts actual bytes and rejects malformed length or unsafe UTF-8', async () => {
+  const makeTransport = (response: Response) => createPropertyPredatorHttpCatalogTransport({
+    baseUrl: 'https://propertypredator.example',
+    clientId: 'growth-hq',
+    readToken: 'x'.repeat(40),
+    fetchImpl: async () => response,
+  });
+  await assert.rejects(
+    makeTransport(new Response('{}', {
+      headers: { 'content-type': 'application/json', 'content-length': '12.5' },
+    })).loadCatalog(),
+    /content-length is malformed/,
+  );
+  await assert.rejects(
+    makeTransport(new Response(new Uint8Array(2 * 1024 * 1024 + 1), {
+      headers: { 'content-type': 'application/json' },
+    })).loadCatalog(),
+    /too large/,
+  );
+  await assert.rejects(
+    makeTransport(new Response(Uint8Array.from([0x7b, 0xff, 0x7d]), {
+      headers: { 'content-type': 'application/json' },
+    })).loadCatalog(),
+    /canonical UTF-8/,
+  );
+});
+
 test('HTTP transport rejects a strong ETag or catalogue component header that does not match', async () => {
   const source = catalog([mediaItem()]);
   const invalidHeaders: readonly Record<string, string>[] = [

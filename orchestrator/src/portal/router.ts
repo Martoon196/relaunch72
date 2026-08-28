@@ -124,7 +124,6 @@ import {
   companyContentSyncNoticeFromQuery,
   companyContentSyncNoticeToken,
   verifyCompanyContentSyncCommandToken,
-  type CompanyContentSyncReplayGuard,
   type CompanyContentSyncNoticeCode,
 } from './company-content-sync-actions.js';
 import type { PortalCompanyContentSyncService } from './company-content-sync-service.js';
@@ -290,8 +289,6 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   companyAssets?: PortalCompanyAssetsService;
   /** Founder/admin effects-off source sync and immutable import evidence. */
   companyContentSync?: PortalCompanyContentSyncService;
-  /** Bounded one-use command evidence; required whenever source sync is mounted. */
-  companyContentSyncReplayGuard?: CompanyContentSyncReplayGuard;
   /** Fixture-only affiliate legal/readiness evidence. It exposes no acceptance, link or channel command. */
   affiliateCompliance?: PortalAffiliateComplianceService;
   /** Dark-only provider readiness metadata. It exposes no credential, switch or provider operation. */
@@ -1961,8 +1958,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   // ── Property Predator source sync: authenticated reads + adapter-only writes ──
   if (deps.kind === 'postgres' && p === COMPANY_CONTENT_SYNC_ROUTE) {
     if (deps.productProfile?.id !== 'property_predator_growth'
-        || !deps.companyContentSync
-        || !deps.companyContentSyncReplayGuard) {
+        || !deps.companyContentSync) {
       return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
         title: 'Source Sync not connected',
         message: 'The scoped Property Predator company-content source is not configured for this service.',
@@ -2007,26 +2003,15 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           || !commandKey) {
         return companyContentSyncRedirect(res, deps, sessionToken, 'invalid');
       }
-      const replayDisposition = deps.companyContentSyncReplayGuard.consume(
-        sessionToken,
-        commandKey,
-        now,
-      );
-      if (replayDisposition !== 'accepted') {
-        return companyContentSyncRedirect(
-          res,
-          deps,
-          sessionToken,
-          replayDisposition === 'replayed' ? 'replayed' : 'unavailable',
-        );
-      }
       try {
         const outcome = await deps.companyContentSync.sync({
           sessionToken,
           requestId: commandKey,
         });
         if (!outcome.ok) {
-          const code: CompanyContentSyncNoticeCode = outcome.kind === 'conflict'
+          const code: CompanyContentSyncNoticeCode = outcome.kind === 'replayed'
+            ? 'replayed'
+            : outcome.kind === 'conflict'
             ? 'busy'
             : outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden'
               ? 'forbidden'

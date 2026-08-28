@@ -90,7 +90,7 @@ export function verifyCompanyContentSyncCommandToken(
 }
 
 export interface CompanyContentSyncReplayGuard {
-  /** Atomically accepts a command once for this running portal process. */
+  /** Test-fallback contract; production consumption is PostgreSQL-authoritative. */
   consume(
     sessionToken: string,
     commandKey: string,
@@ -99,9 +99,9 @@ export interface CompanyContentSyncReplayGuard {
 }
 
 /**
- * A bounded server-side one-use guard closes browser and sequential HTTP
- * replay before any source read starts. The sync itself remains database
- * idempotent; this process-local layer stores only hashes and expires them.
+ * Explicit test-only fallback for pure router/unit rehearsals. Production must
+ * use PgPortalCompanyContentSyncCommandGuard; this process-local map is never
+ * composed by buildPostgresPortalDeps.
  */
 export class InMemoryCompanyContentSyncReplayGuard implements CompanyContentSyncReplayGuard {
   private readonly consumed = new Map<string, number>();

@@ -4,9 +4,7 @@ import {
   CsvImportPreviewError,
   canonicalCsvHeader,
   previewLegacyCsvImport,
-  previewLegacyCsvImportFromAdapter,
   type CsvImportMapping,
-  type LegacyImportSourceAdapter,
 } from '../src/legacy-import/csv-preview.js';
 
 const encoder = new TextEncoder();
@@ -67,6 +65,7 @@ test('UTF-8 BOM, quoted newlines and doubled quotes map into an effects-free pre
   assert.deepEqual(preview.receipt.effects, {
     databaseWrites: 0, externalMutations: 0, providerCalls: 0,
   });
+  assert.equal(preview.receipt.sourceAcquisition, 'outside_preview_boundary');
 });
 
 test('canonical header normalisation rejects empty, duplicate and prototype-pollution names', () => {
@@ -239,38 +238,13 @@ test('malformed optional mapping collections fail with the fixed mapping error',
   }
 });
 
-test('read-only source adapters are accepted and mutation-shaped adapters are rejected before use', async () => {
-  let reads = 0;
-  const adapter: LegacyImportSourceAdapter = Object.freeze({
-    adapterId: 'future-upload-adapter',
-    async read() {
-      reads += 1;
-      return source('Email\nowner@example.test');
-    },
-  });
-  const preview = await previewLegacyCsvImportFromAdapter(adapter, {
+test('pure payload preview never attests an upload or API acquisition it did not perform', () => {
+  const preview = previewLegacyCsvImport(source('Email\nowner@example.test'), 'future-upload', {
     columns: [{ sourceHeader: 'Email', targetField: 'contact.email' }],
   });
-  assert.equal(reads, 1);
+  assert.equal(preview.receipt.sourceAcquisition, 'outside_preview_boundary');
   assert.equal(preview.receipt.effects.databaseWrites, 0);
   assert.equal(preview.receipt.effects.externalMutations, 0);
   assert.equal(preview.receipt.effects.providerCalls, 0);
-  assert.equal('write' in preview, false);
-  assert.equal('commit' in preview, false);
-
-  let unsafeReads = 0;
-  const unsafeAdapter = {
-    adapterId: 'unsafe-adapter',
-    async read() { unsafeReads += 1; return source('Email\nowner@example.test'); },
-    async write() { throw new Error('must never run'); },
-  } as unknown as LegacyImportSourceAdapter;
-  await assert.rejects(
-    previewLegacyCsvImportFromAdapter(unsafeAdapter, {
-      columns: [{ sourceHeader: 'Email', targetField: 'contact.email' }],
-    }),
-    (error: unknown) => error instanceof CsvImportPreviewError
-      && error.code === 'adapter_surface_unsafe'
-      && !/owner@example\.test/u.test(error.message),
-  );
-  assert.equal(unsafeReads, 0);
+  assert.equal(Object.hasOwn(preview.receipt, 'externalReads'), false);
 });

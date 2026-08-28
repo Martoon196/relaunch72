@@ -14,7 +14,7 @@ import {
   type PropertyPredatorContentSyncStatus,
 } from '../company-content-sync/index.js';
 import { requestDatabaseContext, type DatabaseRequestContext } from '../db/rls.js';
-import { InactivePortalSessionError } from '../db/transaction.js';
+import { InactivePortalSessionError, withTransaction } from '../db/transaction.js';
 import {
   PgPortalCompanyAssetsWorkspaceAccessReader,
   type PortalCompanyAssetsWorkspaceAccessReader,
@@ -126,7 +126,54 @@ export interface PgPortalCompanyContentSyncDependencies {
   readonly principalResolver: Pick<PortalCrmPrincipalResolver, 'resolve'>;
   readonly accessReader: PortalCompanyAssetsWorkspaceAccessReader;
   readonly coordinator: ContentSyncCoordinator;
+  readonly commandGuard: PortalCompanyContentSyncCommandGuard;
   readonly syncLock: PortalCompanyContentSyncLock;
+}
+
+export type PortalCompanyContentSyncCommandDisposition =
+  | 'accepted'
+  | 'replayed'
+  | 'saturated';
+
+export interface PortalCompanyContentSyncCommandGuard {
+  consume(context: DatabaseRequestContext): Promise<PortalCompanyContentSyncCommandDisposition>;
+}
+
+interface CommandConsumeRow extends QueryResultRow {
+  readonly disposition: unknown;
+}
+
+/**
+ * Production one-use protection. The function stores only the already-hashed
+ * portal session plus a database-hashed command key and commits that evidence
+ * before the source coordinator can make its first network read.
+ */
+export class PgPortalCompanyContentSyncCommandGuard
+implements PortalCompanyContentSyncCommandGuard {
+  constructor(private readonly pool: Pool) {}
+
+  async consume(context: DatabaseRequestContext): Promise<PortalCompanyContentSyncCommandDisposition> {
+    if (!context.portalSessionTokenHash) {
+      throw new InactivePortalSessionError();
+    }
+    return withTransaction(this.pool, context, async (transaction) => {
+      const result = await transaction.query<CommandConsumeRow>(
+        `/* portal.company-content-sync.consume-command */
+         SELECT app_private.consume_company_content_sync_command(
+           $1::uuid, $2::bytea, $3::text
+         ) AS disposition`,
+        [context.workspaceId, context.portalSessionTokenHash, context.requestId],
+      );
+      const disposition = result.rows[0]?.disposition;
+      if (result.rows.length !== 1
+          || (disposition !== 'accepted'
+            && disposition !== 'replayed'
+            && disposition !== 'saturated')) {
+        throw new Error('Company-content sync command guard returned invalid evidence');
+      }
+      return disposition;
+    });
+  }
 }
 
 export type PortalCompanyContentSyncLockOutcome<T> =
@@ -279,6 +326,19 @@ export class PgPortalCompanyContentSyncService implements PortalCompanyContentSy
     try {
       const authorization = await this.authorized(identity);
       if ('ok' in authorization) return authorization;
+      const commandDisposition = await this.dependencies.commandGuard.consume(authorization.context);
+      if (commandDisposition === 'replayed') {
+        return failure(
+          'replayed',
+          'That protected source-sync command was already consumed.',
+        );
+      }
+      if (commandDisposition !== 'accepted') {
+        return failure(
+          'unavailable',
+          'The protected source-sync command ledger is temporarily unavailable.',
+        );
+      }
       const locked = await this.dependencies.syncLock.run(
         authorization.context.workspaceId,
         () => this.dependencies.coordinator.sync(authorization.context),
@@ -319,6 +379,7 @@ export function createPgPortalCompanyContentSyncService(input: {
     accessReader: new PgPortalCompanyAssetsWorkspaceAccessReader(
       createCompanyAssetTransactionRunner(input.webPool),
     ),
+    commandGuard: new PgPortalCompanyContentSyncCommandGuard(input.webPool),
     syncLock: new PgPortalCompanyContentSyncLock(input.webPool),
     coordinator: new PropertyPredatorContentSyncCoordinator({
       bridge: createPropertyPredatorCompanyAssetBridgeTransport(sourceOptions),

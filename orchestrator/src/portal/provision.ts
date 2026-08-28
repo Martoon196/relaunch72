@@ -23,7 +23,6 @@ import type { PortalJourneyManagerService } from './journey-manager-service.js';
 import type { PortalCompanyContentService } from './company-content-service.js';
 import type { PortalBrandBrainService } from './brand-brain-service.js';
 import type { PortalCompanyContentSyncService } from './company-content-sync-service.js';
-import { InMemoryCompanyContentSyncReplayGuard } from './company-content-sync-actions.js';
 import type { PortalAffiliateComplianceService } from './affiliate-compliance-service.js';
 import type { PortalConversionInboxCommandService } from './conversion-inbox-service.js';
 import type { PortalOperatorActionCentreService } from './operator-action-centre-pg-service.js';
@@ -206,9 +205,6 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     companyContent: cfg.companyContent,
     companyAssets: cfg.companyAssets,
     companyContentSync: cfg.companyContentSync,
-    companyContentSyncReplayGuard: cfg.companyContentSync
-      ? new InMemoryCompanyContentSyncReplayGuard()
-      : undefined,
     brandBrain: cfg.brandBrain,
     affiliateCompliance: cfg.affiliateCompliance,
     inbox: cfg.inbox,

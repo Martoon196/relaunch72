@@ -34,6 +34,11 @@ const SOURCE_SYSTEM = 'propertypredator.company-content';
 const MAX_SOURCE_ITEMS = 500;
 const SOURCE_PROOF_MS = 10 * 60_000;
 const MAX_RETRY_MS = 5 * 60_000;
+// Both independently authenticated source components must describe the same
+// observation. A catalogue older than five minutes is not safe to stage even
+// though a successful local attestation may itself remain useful for ten.
+const SOURCE_OBSERVATION_MAX_AGE_MS = 5 * 60_000;
+const SOURCE_OBSERVATION_FUTURE_SKEW_MS = 30_000;
 
 export type PropertyPredatorContentSyncState =
   | 'not_run'
@@ -47,6 +52,7 @@ export type PropertyPredatorContentSyncBlockerCode =
   | 'source_proof_expired'
   | 'source_unavailable'
   | 'source_contract_invalid'
+  | 'source_observation_invalid'
   | 'release_catalog_mismatch'
   | 'brand_brain_mismatch'
   | 'exact_resource_mismatch'
@@ -279,7 +285,16 @@ function resourceMatches(
 function assertCoherentRelease(
   release: CompanyAssetRelease,
   catalog: PropertyPredatorCompanyContentCatalog,
+  observedAt: Date,
 ): void {
+  const observedMs = observedAt.getTime();
+  const sourceMs = Date.parse(catalog.generatedAt);
+  if (!Number.isFinite(observedMs) || !Number.isFinite(sourceMs)
+      || release.generatedAt !== catalog.generatedAt
+      || sourceMs > observedMs + SOURCE_OBSERVATION_FUTURE_SKEW_MS
+      || observedMs - sourceMs > SOURCE_OBSERVATION_MAX_AGE_MS) {
+    throw new Error('source_observation_invalid');
+  }
   if (release.sourceCatalogSha256 !== catalog.catalogSha256
       || release.approvedItemCount !== catalog.itemCount) {
     throw new Error('release_catalog_mismatch');
@@ -523,7 +538,9 @@ export class PropertyPredatorContentSyncCoordinator {
         this.dependencies.bridge.loadRelease(),
         this.dependencies.catalog.catalog(),
       ]);
-      assertCoherentRelease(release, catalog);
+      // Freshness/coherence is proved before Brand Brain, asset staging or any
+      // exact-resource/local-content operation can observe the source tuple.
+      assertCoherentRelease(release, catalog, attemptTime);
 
       let staged: Awaited<ReturnType<AssetService['stageRelease']>>;
       let localItems: Awaited<ReturnType<AssetService['listItems']>>;
@@ -619,7 +636,7 @@ export class PropertyPredatorContentSyncCoordinator {
               byteLength: asset.bytes.byteLength,
               mediaType: asset.mediaType,
             });
-            verifiedArtworkBytes += 1;
+            verifiedArtworkBytes += asset.bytes.byteLength;
           }
         } catch (error) {
           blockers.push(resourceFailure(error, itemRef));
@@ -717,7 +734,8 @@ export class PropertyPredatorContentSyncCoordinator {
       const code: PropertyPredatorContentSyncBlockerCode = error instanceof Error
         && (error.message === 'release_catalog_mismatch'
           || error.message === 'brand_brain_mismatch'
-          || error.message === 'source_import_incomplete')
+          || error.message === 'source_import_incomplete'
+          || error.message === 'source_observation_invalid')
         ? error.message
         : error instanceof LocalContentSyncPersistenceError
           ? 'local_write_failed'
@@ -729,6 +747,7 @@ export class PropertyPredatorContentSyncCoordinator {
         source_proof_expired: 'The last owned-source proof has expired.',
         source_unavailable: 'The owned source could not be checked safely.',
         source_contract_invalid: 'The source response did not match the approved company-content contract.',
+        source_observation_invalid: 'The source catalogue and release observation time was stale, future-dated or inconsistent.',
         release_catalog_mismatch: 'The source release and exact content catalogue do not describe the same immutable set.',
         brand_brain_mismatch: 'The catalogue brand hash and trusted Brand Brain package do not agree.',
         exact_resource_mismatch: 'An exact source resource did not match its approved catalogue tuple.',

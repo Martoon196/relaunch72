@@ -6,6 +6,7 @@ import type { PropertyPredatorContentSyncStatus } from '../src/company-content-s
 import type { DatabaseRequestContext } from '../src/db/rls.js';
 import {
   loadPropertyPredatorContentSyncSourceConfig,
+  PgPortalCompanyContentSyncCommandGuard,
   PgPortalCompanyContentSyncLock,
   PgPortalCompanyContentSyncService,
   type PortalCompanyContentSyncLock,
@@ -46,6 +47,10 @@ const acquiredSyncLock: PortalCompanyContentSyncLock = {
   async run(_workspaceId, operation) {
     return Object.freeze({ acquired: true as const, value: await operation() });
   },
+};
+
+const acceptedCommandGuard = {
+  async consume() { return 'accepted' as const; },
 };
 
 function status(overrides: Partial<PropertyPredatorContentSyncStatus> = {}): PropertyPredatorContentSyncStatus {
@@ -149,7 +154,6 @@ function routerDeps(
     auth: routerAuth,
     crm: routerCrm,
     companyContentSync,
-    companyContentSyncReplayGuard: new InMemoryCompanyContentSyncReplayGuard(),
     ...overrides,
   };
 }
@@ -161,12 +165,21 @@ function routerService(input: Readonly<{
   syncOutcome?: PortalCompanyContentSyncOutcome;
 }> = {}): PortalCompanyContentSyncService {
   const safe = Object.freeze({ ok: true as const, snapshot: portalSnapshot() });
+  const consumed = new Set<string>();
   return {
     async snapshot(identity) {
       input.snapshots?.push(identity);
       return input.snapshotOutcome ?? safe;
     },
     async sync(identity) {
+      if (consumed.has(identity.requestId)) {
+        return Object.freeze({
+          ok: false as const,
+          kind: 'replayed' as const,
+          message: 'That protected source-sync command was already consumed.',
+        });
+      }
+      consumed.add(identity.requestId);
       input.syncs?.push(identity);
       return input.syncOutcome ?? safe;
     },
@@ -323,6 +336,7 @@ test('portal composition rejects an injected Source Sync service outside the bra
 test('operator service resolves workspace server-side and passes only an RLS user context', async () => {
   const captured: DatabaseRequestContext[] = [];
   const service = new PgPortalCompanyContentSyncService({
+    commandGuard: acceptedCommandGuard,
     syncLock: acquiredSyncLock,
     principalResolver: {
       async resolve(sessionToken) {
@@ -366,9 +380,65 @@ test('operator service resolves workspace server-side and passes only an RLS use
   }
 });
 
+test('durable command consumption blocks a replay after the source is withdrawn', async () => {
+  const consumed = new Set<string>();
+  let sourceReads = 0;
+  let lockCalls = 0;
+  const service = new PgPortalCompanyContentSyncService({
+    commandGuard: {
+      async consume(context) {
+        if (consumed.has(context.requestId)) return 'replayed';
+        consumed.add(context.requestId);
+        return 'accepted';
+      },
+    },
+    syncLock: {
+      async run(_workspaceId, operation) {
+        lockCalls += 1;
+        return Object.freeze({ acquired: true as const, value: await operation() });
+      },
+    },
+    principalResolver: {
+      async resolve() { return Object.freeze({ userId: USER_ID, workspaceId: WORKSPACE_ID }); },
+    },
+    accessReader: {
+      async load() {
+        return Object.freeze({
+          workspaceId: WORKSPACE_ID,
+          workspaceName: 'Property Predator',
+          snapshotAt: NOW,
+          canManage: true,
+        });
+      },
+    },
+    coordinator: {
+      snapshot() { throw new Error('unexpected snapshot'); },
+      async sync() {
+        sourceReads += 1;
+        return status({ state: 'retry_wait', sourceFresh: false });
+      },
+    },
+  });
+  const identity = {
+    sessionToken: 'opaque-session',
+    requestId: 'company-content-sync-withdrawn-source',
+  };
+  const first = await service.sync(identity);
+  const replay = await service.sync(identity);
+  assert.equal(first.ok, true);
+  assert.deepEqual(replay, {
+    ok: false,
+    kind: 'replayed',
+    message: 'That protected source-sync command was already consumed.',
+  });
+  assert.equal(sourceReads, 1);
+  assert.equal(lockCalls, 1, 'replay must stop before a source-owning workspace lock');
+});
+
 test('operator service denies non-admins before the source coordinator is touched', async () => {
   let touched = false;
   const service = new PgPortalCompanyContentSyncService({
+    commandGuard: acceptedCommandGuard,
     syncLock: acquiredSyncLock,
     principalResolver: {
       async resolve() { return Object.freeze({ userId: USER_ID, workspaceId: WORKSPACE_ID }); },
@@ -400,6 +470,7 @@ test('operator service denies non-admins before the source coordinator is touche
 test('operator service returns a safe conflict without touching the coordinator when workspace is locked', async () => {
   let touched = false;
   const service = new PgPortalCompanyContentSyncService({
+    commandGuard: acceptedCommandGuard,
     syncLock: {
       async run(workspaceId) {
         assert.equal(workspaceId, WORKSPACE_ID);
@@ -465,6 +536,42 @@ test('workspace advisory lock pins one transaction around the whole operation an
   assert.deepEqual(releases, [false]);
 });
 
+test('PostgreSQL command guard commits durable consumption before returning accepted', async () => {
+  const queries: Array<Readonly<{ sql: string; values?: readonly unknown[] }>> = [];
+  const releases: unknown[] = [];
+  const client = {
+    async query(sql: string, values?: readonly unknown[]) {
+      queries.push({ sql, ...(values ? { values } : {}) });
+      if (sql.includes('database.lock-portal-session')) return { rows: [{ active: true }] };
+      if (sql.includes('consume-command')) return { rows: [{ disposition: 'accepted' }] };
+      return { rows: [] };
+    },
+    release(destroy?: boolean) { releases.push(destroy); },
+  };
+  const guard = new PgPortalCompanyContentSyncCommandGuard({
+    async connect() { return client; },
+  } as never);
+  const disposition = await guard.consume({
+    actorKind: 'user',
+    workspaceId: WORKSPACE_ID,
+    userId: USER_ID,
+    requestId: 'company-content-sync-durable-command',
+    portalSessionTokenHash: Buffer.alloc(32, 73),
+  });
+  assert.equal(disposition, 'accepted');
+  assert.match(queries[0]!.sql, /BEGIN/);
+  assert.match(queries[1]!.sql, /lock-portal-session/);
+  assert.match(queries[2]!.sql, /set_config/);
+  assert.match(queries[3]!.sql, /consume_company_content_sync_command/);
+  assert.deepEqual(queries[3]!.values, [
+    WORKSPACE_ID,
+    Buffer.alloc(32, 73),
+    'company-content-sync-durable-command',
+  ]);
+  assert.match(queries[4]!.sql, /COMMIT/);
+  assert.deepEqual(releases, [false]);
+});
+
 test('workspace advisory lock skips a competing operation and destroys a connection when release fails', async () => {
   let operationRan = false;
   const releases: unknown[] = [];
@@ -498,6 +605,16 @@ test('status view exposes freshness, retry and safe why-blocked copy without eff
     sourceFresh: false,
     canRetry: false,
     nextRetryAt: '2026-08-28T10:00:05.000Z',
+    counts: Object.freeze({
+      sourceItems: 7,
+      importedVersions: 0,
+      refreshedAttestations: 0,
+      unchangedVersions: 1,
+      verifiedArtworkBytes: 8,
+      quarantinedItems: 2,
+      reviewIncompleteItems: 3,
+      blockedItems: 1,
+    }),
     blockers: Object.freeze([Object.freeze({
       code: 'source_unavailable',
       itemRef: '<private-source>',
@@ -528,6 +645,8 @@ test('status view exposes freshness, retry and safe why-blocked copy without eff
   assert.match(html, /why anything is blocked/i);
   assert.match(html, /source unavailable/i);
   assert.match(html, /&lt;private-source&gt;/);
+  assert.match(html, /Blocked \/ quarantined<\/span><strong>6<\/strong>/);
+  assert.match(html, /8 verified · 0 copied/);
   assert.match(html, /providerEffects=false/);
   assert.match(html, /customer-private accepted: no/i);
   assert.match(html, /artwork bytes are verified in memory and never copied/i);
@@ -667,7 +786,7 @@ test('Source Sync command proof rejects expired and materially future issue time
   assert.equal(verifyCompanyContentSyncCommandToken(SECRET, SESSION, future, now), null);
 });
 
-test('Source Sync replay evidence fails closed at capacity without evicting a live command', async () => {
+test('explicit in-memory test fallback fails closed at capacity without evicting a live command', () => {
   const now = Date.parse(NOW);
   const guard = new InMemoryCompanyContentSyncReplayGuard();
   const originalKey = 'company-content-sync-capacity-original';
@@ -680,22 +799,8 @@ test('Source Sync replay evidence fails closed at capacity without evicting a li
   }
   assert.equal(guard.consume(SESSION, originalKey, now), 'replayed');
 
-  const syncs: unknown[] = [];
-  const deps = routerDeps(routerService({ syncs }), { companyContentSyncReplayGuard: guard });
   const saturatedKey = 'company-content-sync-capacity-new';
-  const result = await routerCall(
-    COMPANY_CONTENT_SYNC_ROUTE,
-    deps,
-    COOKIE,
-    'POST',
-    new URLSearchParams({
-      _csrf: portalCsrfToken(SECRET, SESSION),
-      command_token: companyContentSyncCommandToken(SECRET, SESSION, saturatedKey, now),
-    }).toString(),
-  );
-  assert.equal(result.statusCode, 303);
-  assert.match(result.headers.location ?? '', /\?notice=unavailable\./);
-  assert.equal(syncs.length, 0);
+  assert.equal(guard.consume(SESSION, saturatedKey, now), 'saturated');
   assert.equal(guard.consume(SESSION, originalKey, now), 'replayed');
 });
 

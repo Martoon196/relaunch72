@@ -297,15 +297,26 @@ function harness(input: Readonly<{
     bytes: Uint8Array;
   }>;
   contentWriteError?: Error;
+  catalogGeneratedAt?: string;
+  releaseGeneratedAt?: string;
+  clockAt?: string;
 }> = {}) {
   const fixture = sourceFixture(input.asset);
+  const catalog = Object.freeze({
+    ...fixture.catalog,
+    generatedAt: input.catalogGeneratedAt ?? fixture.catalog.generatedAt,
+  });
+  const release = Object.freeze({
+    ...fixture.release,
+    generatedAt: input.releaseGeneratedAt ?? fixture.release.generatedAt,
+  });
   const created: CreateCompanyContentVersionCommand[] = [];
   const refreshed: RefreshCompanyContentSourceAttestationCommand[] = [];
   let bridgeCalls = 0;
   let resourceCalls = 0;
   let stageCalls = 0;
   const catalogQueries: unknown[] = [];
-  let clock = new Date(CHECKED_AT);
+  let clock = new Date(input.clockAt ?? CHECKED_AT);
   const coordinator = new PropertyPredatorContentSyncCoordinator({
     now: () => new Date(clock),
     nextRunId: () => 'sync-run-0001',
@@ -313,10 +324,10 @@ function harness(input: Readonly<{
       async loadRelease() {
         bridgeCalls += 1;
         if (input.bridgeError) throw input.bridgeError;
-        return fixture.release;
+        return release;
       },
     },
-    catalog: { async catalog() { return fixture.catalog; } },
+    catalog: { async catalog() { return catalog; } },
     resources: {
       async loadVersion() {
         resourceCalls += 1;
@@ -455,6 +466,31 @@ test('imports only the exact canonical company-owned bytes through the effects-o
   }]);
 });
 
+test('rejects stale, future and mismatched source observations before any local staging', async () => {
+  const cases = [
+    harness({
+      catalogGeneratedAt: '2026-08-28T09:54:59.999Z',
+      releaseGeneratedAt: '2026-08-28T09:54:59.999Z',
+    }),
+    harness({
+      catalogGeneratedAt: '2026-08-28T10:00:30.001Z',
+      releaseGeneratedAt: '2026-08-28T10:00:30.001Z',
+    }),
+    harness({
+      catalogGeneratedAt: '2026-08-28T09:59:59.000Z',
+      releaseGeneratedAt: CHECKED_AT,
+    }),
+  ];
+  for (const subject of cases) {
+    const result = await subject.coordinator.sync(CONTEXT);
+    assert.equal(result.state, 'retry_wait');
+    assert.equal(result.blockers[0]?.code, 'source_observation_invalid');
+    assert.equal(subject.stageCalls, 0);
+    assert.equal(subject.resourceCalls, 0);
+    assert.equal(subject.created.length, 0);
+  }
+});
+
 test('refreshes a source proof instead of duplicating an existing immutable revision', async () => {
   const fixture = sourceFixture();
   const subject = harness({ local: [existingItem(fixture)] });
@@ -563,6 +599,10 @@ test('local review evidence must cover the complete immutable source tuple', asy
 });
 
 test('approved artwork MIME and byte length must match the immutable asset payload', async () => {
+  const approved = harness({ asset: true });
+  const approvedResult = await approved.coordinator.sync(CONTEXT);
+  assert.equal(approvedResult.counts.verifiedArtworkBytes, APPROVED_ASSET_BYTES.byteLength);
+
   const wrongMedia = harness({
     asset: true,
     assetResponse: Object.freeze({
