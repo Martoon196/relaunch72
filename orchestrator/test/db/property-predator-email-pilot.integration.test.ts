@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import test from 'node:test';
-import type { Pool, PoolClient } from 'pg';
+import { Pool, type PoolClient } from 'pg';
 import {
   PgMailgunWebhookRepository,
   MailgunWebhookIngressService,
@@ -37,6 +37,44 @@ function roleConnectPool(pool: Pool, role: string): Pick<Pool, 'connect'> {
       } as unknown as PoolClient;
     }) as Pool['connect'],
   };
+}
+
+async function openMailgunWorkerLoginPool(ownerPool: Pool): Promise<Pool> {
+  const rawUrl = process.env.TEST_DATABASE_URL?.trim();
+  if (!rawUrl) throw new Error('TEST_DATABASE_URL is required');
+  const password = `mailgun-worker-${randomUUID()}`;
+  const ownerClient = await ownerPool.connect();
+  try {
+    const statement = await ownerClient.query<{ sql: string }>(
+      `SELECT pg_catalog.format(
+         'ALTER ROLE r72_mailgun_worker_command PASSWORD %L', $1::text
+       ) AS sql`,
+      [password],
+    );
+    await ownerClient.query(statement.rows[0]!.sql);
+  } finally {
+    ownerClient.release();
+  }
+
+  const workerUrl = new URL(rawUrl);
+  workerUrl.username = 'r72_mailgun_worker_command';
+  workerUrl.password = password;
+  return new Pool({
+    connectionString: workerUrl.toString(),
+    max: 2,
+    application_name: 'relaunch72-disposable-mailgun-worker-test',
+  });
+}
+
+async function clearMailgunWorkerLoginPassword(ownerPool: Pool): Promise<void> {
+  const ownerClient = await ownerPool.connect();
+  try {
+    await ownerClient.query(
+      'ALTER ROLE r72_mailgun_worker_command PASSWORD NULL',
+    );
+  } finally {
+    ownerClient.release();
+  }
 }
 
 function sha(value: string): string {
@@ -138,6 +176,7 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
   skip,
 }, async () => {
   const pool = await openTestDatabase();
+  let workerPool: Pool | undefined;
   const organizationId = randomUUID();
   const workspaceId = randomUUID();
   const ownerId = randomUUID();
@@ -159,6 +198,7 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
   const emailSha = sha(recipient);
 
   try {
+    workerPool = await openMailgunWorkerLoginPool(pool);
     await resetIdentityTables(pool);
     await ownerQuery(pool,
       `INSERT INTO app.organizations (id, name, slug, kind, status)
@@ -306,7 +346,7 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
       [workspaceId, connectionId]);
 
     const boundary = new PgControlledEmailPilotBoundary({
-      commandPool: roleConnectPool(pool, 'r72_mailgun_worker_command'),
+      commandPool: workerPool,
       workspaceId,
       runtimeEvidence: {
         providerEffectsEnabled: true,
@@ -712,7 +752,7 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
         `temporary-${mailgunJobId}`],
     );
     const mailgunWorker = new PgPropertyPredatorMailgunWorkerRepository({
-      commandPool: roleConnectPool(pool, 'r72_mailgun_worker_command'),
+      commandPool: workerPool,
       workspaceId,
       providerConnectionId: connectionId,
     });
@@ -804,6 +844,8 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
       job_error: null,
     }]);
   } finally {
+    await workerPool?.end();
+    await clearMailgunWorkerLoginPassword(pool);
     await pool.end();
   }
 });

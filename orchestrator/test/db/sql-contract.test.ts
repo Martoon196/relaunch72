@@ -49,6 +49,7 @@ const migration42Url = new URL('../../src/db/migrations/0042_content_adapter_run
 const migration43Url = new URL('../../src/db/migrations/0043_property_predator_mailgun_worker_jobs.sql', import.meta.url);
 const migration44Url = new URL('../../src/db/migrations/0044_company_content_sync_command_consumption.sql', import.meta.url);
 const migration45Url = new URL('../../src/db/migrations/0045_property_predator_email_pilot_signed_recovery_guard.sql', import.meta.url);
+const migration46Url = new URL('../../src/db/migrations/0046_neon_mailgun_worker_creator_membership.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -491,7 +492,6 @@ test('bundled migration discovery orders and checksums through signed email reco
   const migrations = await discoverMigrations();
   const tail = migrations.slice(-40);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
-    { filename: '0006_customer_provisioning.sql', version: 6 },
     { filename: '0007_public_schema_hardening.sql', version: 7 },
     { filename: '0008_setup_delivery_recovery.sql', version: 8 },
     { filename: '0009_neon_integration_repairs.sql', version: 9 },
@@ -531,9 +531,9 @@ test('bundled migration discovery orders and checksums through signed email reco
     { filename: '0043_property_predator_mailgun_worker_jobs.sql', version: 43 },
     { filename: '0044_company_content_sync_command_consumption.sql', version: 44 },
     { filename: '0045_property_predator_email_pilot_signed_recovery_guard.sql', version: 45 },
+    { filename: '0046_neon_mailgun_worker_creator_membership.sql', version: 46 },
   ]);
   const sources = [
-    (await readFile(migration6Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration8Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration9Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -573,6 +573,7 @@ test('bundled migration discovery orders and checksums through signed email reco
     (await readFile(migration43Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration44Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration45Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration46Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
