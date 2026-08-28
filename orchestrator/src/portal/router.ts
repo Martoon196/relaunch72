@@ -119,6 +119,17 @@ import type {
 } from './company-assets-service.js';
 import { renderCompanyAssetsBody } from './company-assets-view.js';
 import {
+  COMPANY_CONTENT_SYNC_ROUTE,
+  companyContentSyncCommandToken,
+  companyContentSyncNoticeFromQuery,
+  companyContentSyncNoticeToken,
+  verifyCompanyContentSyncCommandToken,
+  type CompanyContentSyncReplayGuard,
+  type CompanyContentSyncNoticeCode,
+} from './company-content-sync-actions.js';
+import type { PortalCompanyContentSyncService } from './company-content-sync-service.js';
+import { renderCompanyContentSyncBody } from './company-content-sync-view.js';
+import {
   CONVERSION_INBOX_MAX_CONVERSATIONS,
   CONVERSION_INBOX_ROUTE,
   normaliseConversionInboxFilters,
@@ -277,6 +288,10 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   brandBrain?: PortalBrandBrainService;
   /** Migration 0033 metadata and founder quarantine-only commands. */
   companyAssets?: PortalCompanyAssetsService;
+  /** Founder/admin effects-off source sync and immutable import evidence. */
+  companyContentSync?: PortalCompanyContentSyncService;
+  /** Bounded one-use command evidence; required whenever source sync is mounted. */
+  companyContentSyncReplayGuard?: CompanyContentSyncReplayGuard;
   /** Fixture-only affiliate legal/readiness evidence. It exposes no acceptance, link or channel command. */
   affiliateCompliance?: PortalAffiliateComplianceService;
   /** Dark-only provider readiness metadata. It exposes no credential, switch or provider operation. */
@@ -604,7 +619,8 @@ function optionalPortalCapabilities(deps: PortalDeps): readonly PlatformCapabili
   if (deps.kind !== 'postgres') return [];
   return [
     ...(deps.operatorActions ? ['actions.read'] as const : []),
-    ...(deps.companyContent || deps.brandBrain || deps.companyAssets || deps.publicSocial
+    ...(deps.companyContent || deps.brandBrain || deps.companyAssets
+        || deps.companyContentSync || deps.publicSocial
       ? ['content.drafts.read'] as const
       : []),
     ...(deps.affiliateCompliance ? ['affiliates.compliance.read'] as const : []),
@@ -715,6 +731,22 @@ function crmIdentity(sessionToken: string, deps: PortalDeps): PortalCrmRequestId
     sessionToken,
     requestId: deps.requestId ? deps.requestId() : randomUUID(),
   };
+}
+
+function companyContentSyncRedirect(
+  res: ServerResponse,
+  deps: PortalDeps,
+  sessionToken: string,
+  code: CompanyContentSyncNoticeCode,
+): void {
+  const notice = companyContentSyncNoticeToken(deps.sessionSecret, sessionToken, code);
+  redirect(
+    res,
+    `${COMPANY_CONTENT_SYNC_ROUTE}?notice=${encodeURIComponent(notice)}`,
+    undefined,
+    303,
+    { 'cache-control': 'no-store' },
+  );
 }
 
 function contentCalendarReadRange(selectedDate: string): Readonly<{ from: string; to: string }> {
@@ -1926,6 +1958,143 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
   }
 
+  // ── Property Predator source sync: authenticated reads + adapter-only writes ──
+  if (deps.kind === 'postgres' && p === COMPANY_CONTENT_SYNC_ROUTE) {
+    if (deps.productProfile?.id !== 'property_predator_growth'
+        || !deps.companyContentSync
+        || !deps.companyContentSyncReplayGuard) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Source Sync not connected',
+        message: 'The scoped Property Predator company-content source is not configured for this service.',
+        active: 'content',
+        backHref: '/portal/content',
+        backLabel: 'Return to Content Control',
+      }));
+    }
+    if (method !== 'GET' && method !== 'POST') {
+      return sendHtml(res, 405, portalStatusPage(deps, sessionToken, {
+        title: 'Source Sync method not allowed',
+        message: 'Use the protected Source Sync page and its effects-off operator command.',
+        active: 'content',
+        backHref: COMPANY_CONTENT_SYNC_ROUTE,
+        backLabel: 'Return to Source Sync',
+      }), undefined, { allow: 'GET, POST' });
+    }
+    if (method === 'POST') {
+      const rawContentType = req.headers['content-type'];
+      const contentType = Array.isArray(rawContentType) ? '' : rawContentType?.split(';', 1)[0]?.trim().toLowerCase();
+      if (contentType !== 'application/x-www-form-urlencoded') {
+        return companyContentSyncRedirect(res, deps, sessionToken, 'invalid');
+      }
+      const form = await readMultiValueForm(req);
+      const keys = form ? [...new Set(form.keys())].sort() : [];
+      const csrfToken = form ? oneFormValue(form, '_csrf') : null;
+      const suppliedCommand = form ? oneFormValue(form, 'command_token') : null;
+      const commandKey = suppliedCommand
+        ? verifyCompanyContentSyncCommandToken(
+            deps.sessionSecret,
+            sessionToken,
+            suppliedCommand,
+            now,
+          )
+        : null;
+      if (!form
+          || keys.length !== 2
+          || keys[0] !== '_csrf'
+          || keys[1] !== 'command_token'
+          || !csrfToken
+          || !verifyPortalCsrf(deps.sessionSecret, sessionToken, csrfToken)
+          || !commandKey) {
+        return companyContentSyncRedirect(res, deps, sessionToken, 'invalid');
+      }
+      const replayDisposition = deps.companyContentSyncReplayGuard.consume(
+        sessionToken,
+        commandKey,
+        now,
+      );
+      if (replayDisposition !== 'accepted') {
+        return companyContentSyncRedirect(
+          res,
+          deps,
+          sessionToken,
+          replayDisposition === 'replayed' ? 'replayed' : 'unavailable',
+        );
+      }
+      try {
+        const outcome = await deps.companyContentSync.sync({
+          sessionToken,
+          requestId: commandKey,
+        });
+        if (!outcome.ok) {
+          const code: CompanyContentSyncNoticeCode = outcome.kind === 'conflict'
+            ? 'busy'
+            : outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden'
+              ? 'forbidden'
+              : 'unavailable';
+          return companyContentSyncRedirect(res, deps, sessionToken, code);
+        }
+        const code: CompanyContentSyncNoticeCode = outcome.snapshot.sync.state === 'current'
+          ? 'synced'
+          : outcome.snapshot.sync.state === 'retry_wait'
+            ? 'retry_wait'
+            : 'attention';
+        return companyContentSyncRedirect(res, deps, sessionToken, code);
+      } catch {
+        return companyContentSyncRedirect(res, deps, sessionToken, 'unavailable');
+      }
+    }
+    try {
+      const outcome = await deps.companyContentSync.snapshot(crmIdentity(sessionToken, deps));
+      if (!outcome.ok) {
+        const responseStatus = outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden'
+          ? 403 : 503;
+        return sendHtml(res, responseStatus, portalStatusPage(deps, sessionToken, {
+          title: responseStatus === 503
+            ? 'Source Sync temporarily unavailable'
+            : 'Source Sync not available',
+          message: outcome.message,
+          active: 'content',
+          backHref: '/portal/content',
+          backLabel: 'Return to Content Control',
+        }));
+      }
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      const commandToken = companyContentSyncCommandToken(
+        deps.sessionSecret,
+        sessionToken,
+        randomUUID(),
+        now,
+      );
+      return sendHtml(res, 200, operationalPage(
+        outcome.snapshot.workspace.workspaceName,
+        renderCompanyContentSyncBody(outcome.snapshot, {
+          csrfToken,
+          commandToken,
+          notice: companyContentSyncNoticeFromQuery(
+            url.searchParams,
+            deps.sessionSecret,
+            sessionToken,
+          ),
+          companyAssetsAvailable: Boolean(deps.companyAssets),
+          assetsLabel: deps.productProfile?.contentWorkspace?.assetsLabel,
+          brandBrainAvailable: Boolean(deps.brandBrain),
+          brainLabel: deps.productProfile?.contentWorkspace?.brainLabel,
+        }),
+        deps,
+        'content',
+        csrfToken,
+      ));
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Source Sync temporarily unavailable',
+        message: 'No content, quarantine, provider or external-delivery state was changed.',
+        active: 'content',
+        backHref: '/portal/content',
+        backLabel: 'Return to Content Control',
+      }));
+    }
+  }
+
   // ── Brand Brain: owned-intelligence metadata and readiness only ──
   if (deps.kind === 'postgres' && p === BRAND_BRAIN_ROUTE && method === 'GET') {
     const brainNavigation = deps.productProfile?.contentWorkspace;
@@ -2760,6 +2929,10 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
             && deps.productProfile?.contentWorkspace?.brainRoute === BRAND_BRAIN_ROUTE
           ),
           brandBrainLabel: deps.productProfile?.contentWorkspace?.brainLabel,
+          companyContentSyncAvailable: Boolean(
+            deps.companyContentSync
+            && deps.productProfile?.id === 'property_predator_growth'
+          ),
           security: view.canWrite ? {
             csrfToken,
             requestApprovalKeys: Object.fromEntries(view.items.map((item) => [

@@ -43,6 +43,12 @@ import {
   createPgPortalPublicSocialService,
   type PgPortalPublicSocialService,
 } from './public-social-pg-service.js';
+import {
+  createPgPortalCompanyContentSyncService,
+  loadPropertyPredatorContentSyncSourceConfig,
+  type PropertyPredatorContentSyncSourceConfig,
+  type PgPortalCompanyContentSyncService,
+} from './company-content-sync-pg-service.js';
 
 export interface PgPortalPlatform {
   auth: PgPortalAuthService;
@@ -56,6 +62,8 @@ export interface PgPortalPlatform {
   companyContent?: PgPortalCompanyContentService;
   /** Omitted unless adapter reads and founder command writes both pass readiness. */
   companyAssets?: PgPortalCompanyAssetsService;
+  /** Effects-off, operator-triggered source verification and immutable import. */
+  companyContentSync?: PgPortalCompanyContentSyncService;
   /** Durable TEST-only public-social campaign planner and safe calendar projection. */
   publicSocial?: PgPortalPublicSocialService;
   /** Canonical TEST-only queue read model; it has no send or provider operation. */
@@ -65,6 +73,34 @@ export interface PgPortalPlatform {
   /** Bounded caller-owned runtime probe; throws without exposing connection details. */
   assertReady(): Promise<void>;
   close(): Promise<void>;
+}
+
+const PROPERTY_PREDATOR_CONTENT_SYNC_ENV = Object.freeze([
+  'PROPERTY_PREDATOR_COMPANY_CONTENT_ORIGIN',
+  'PROPERTY_PREDATOR_COMPANY_CONTENT_CLIENT_ID',
+  'PROPERTY_PREDATOR_COMPANY_CONTENT_READ_TOKEN',
+  'PROPERTY_PREDATOR_COMPANY_CONTENT_TIMEOUT_MS',
+  'PROPERTY_PREDATOR_COMPANY_CONTENT_ALLOW_LOCAL_HTTP',
+] as const);
+
+/**
+ * Company-content source composition belongs to one exact branded product.
+ * A secret copied to a generic Relaunch72 service therefore fails startup
+ * instead of quietly mounting a cross-product source boundary.
+ */
+export function propertyPredatorContentSyncSourceForProfile(
+  env: NodeJS.ProcessEnv,
+): PropertyPredatorContentSyncSourceConfig | undefined {
+  const exactProfile = env.PORTAL_PRODUCT_PROFILE?.trim() === 'property_predator_growth';
+  const configured = PROPERTY_PREDATOR_CONTENT_SYNC_ENV.some(
+    (name) => Boolean(env[name]?.trim()),
+  );
+  if (configured && !exactProfile) {
+    throw new Error(
+      'Property Predator company-content source is forbidden outside property_predator_growth',
+    );
+  }
+  return exactProfile ? loadPropertyPredatorContentSyncSourceConfig(env) : undefined;
 }
 
 function requireCutoverIdentity(
@@ -204,9 +240,12 @@ export async function buildPgPortalPlatform(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<PgPortalPlatform> {
   const pools: Pool[] = [];
+  const propertyPredatorGrowthProfile = env.PORTAL_PRODUCT_PROFILE?.trim()
+    === 'property_predator_growth';
   const requireCompanyContent = env.NODE_ENV?.trim() === 'production'
-    && env.PORTAL_PRODUCT_PROFILE?.trim() === 'property_predator_growth';
+    && propertyPredatorGrowthProfile;
   const expectedInstallationId = env.PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID?.trim();
+  const companyContentSyncSource = propertyPredatorContentSyncSourceForProfile(env);
   if (requireCompanyContent && !expectedInstallationId) {
     throw new Error('Property Predator production requires its database installation identity');
   }
@@ -268,10 +307,12 @@ export async function buildPgPortalPlatform(
 
     let companyContent: PgPortalCompanyContentService | undefined;
     let companyAssets: PgPortalCompanyAssetsService | undefined;
+    let companyContentSync: PgPortalCompanyContentSyncService | undefined;
     let publicSocial: PgPortalPublicSocialService | undefined;
     let contentReadinessPool: Pool | undefined;
     let contentCommandPool: Pool | undefined;
     let assetReadinessPool: Pool | undefined;
+    let contentAdapterPool: Pool | undefined;
     let publicSocialReadinessPool: Pool | undefined;
     if (env.DATABASE_CONTENT_COMMAND_URL?.trim()) {
       try {
@@ -304,7 +345,6 @@ export async function buildPgPortalPlatform(
     }
 
     if (env.DATABASE_CONTENT_ADAPTER_URL?.trim() && contentCommandPool) {
-      let contentAdapterPool: Pool | undefined;
       try {
         const contentAdapterConfig = requireCutoverIdentity(
           loadDatabaseConfig('contentAdapter', env),
@@ -321,11 +361,19 @@ export async function buildPgPortalPlatform(
           adapterPool: contentAdapterPool,
           commandPool: contentCommandPool,
         });
+        if (companyContentSyncSource) {
+          companyContentSync = createPgPortalCompanyContentSyncService({
+            webPool,
+            adapterPool: contentAdapterPool,
+            source: companyContentSyncSource,
+          });
+        }
         assetReadinessPool = contentAdapterPool;
         pools.push(contentAdapterPool);
       } catch {
         await contentAdapterPool?.end().catch(() => undefined);
         companyAssets = undefined;
+        companyContentSync = undefined;
         if (requireCompanyContent) {
           throw new Error('Property Predator production company-assets controls did not pass readiness');
         }
@@ -381,6 +429,7 @@ export async function buildPgPortalPlatform(
       }),
       companyContent,
       companyAssets,
+      companyContentSync,
       publicSocial,
       inbox: createPgPortalInboxReadBoundary(webPool),
       inboxCommands: createPgPortalConversionInboxCommandService({ webPool, commandPool }),

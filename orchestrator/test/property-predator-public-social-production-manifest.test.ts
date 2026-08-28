@@ -76,9 +76,13 @@ const web = serviceSection('web', 'property-predator-growth-hq');
 const revalidator = serviceSection('worker', 'property-predator-public-social-revalidator');
 const testRail = serviceSection('worker', 'property-predator-public-social-test-rail');
 
-test('Growth HQ web process receives only the function-only 0040 planner command identity', () => {
+test('Growth HQ web receives the planner identity and one exact read-only company-content source', () => {
   valueLessSlot(web, 'DATABASE_PUBLIC_SOCIAL_COMMAND_URL');
   literal(web, 'DATABASE_PUBLIC_SOCIAL_COMMAND_POOL_MAX', '2');
+  literal(web, 'PROPERTY_PREDATOR_COMPANY_CONTENT_ORIGIN', 'https://propertypredator.com');
+  literal(web, 'PROPERTY_PREDATOR_COMPANY_CONTENT_CLIENT_ID', 'relaunch72');
+  valueLessSlot(web, 'PROPERTY_PREDATOR_COMPANY_CONTENT_READ_TOKEN');
+  literal(web, 'PROPERTY_PREDATOR_COMPANY_CONTENT_TIMEOUT_MS', '8000');
   literal(web, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'false');
   literal(web, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'true');
   assert.doesNotMatch(
@@ -89,6 +93,7 @@ test('Growth HQ web process receives only the function-only 0040 planner command
     web,
     /- key: PROPERTY_PREDATOR_(?:PUBLIC_SOCIAL_REVALIDATOR|PUBLIC_SOCIAL_RAIL)_/,
   );
+  assert.doesNotMatch(web, /- key: (?:COMPANY_CONTENT_GENERATE_TOKEN|ADMIN_TOKEN)\b/);
 });
 
 test('0040 JIT revalidator has one function-only database identity and one read-only source credential', () => {

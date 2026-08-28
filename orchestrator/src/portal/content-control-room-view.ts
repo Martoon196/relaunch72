@@ -37,6 +37,7 @@ export interface RenderContentControlRoomOptions {
   readonly companyAssetsLabel?: string;
   readonly brandBrainAvailable?: boolean;
   readonly brandBrainLabel?: string;
+  readonly companyContentSyncAvailable?: boolean;
 }
 
 const CHANNEL_OPTIONS: readonly Readonly<{ value: ContentControlRoomChannel; label: string }>[] = Object.freeze([
@@ -212,11 +213,13 @@ export function renderContentControlRoomBody(
     ? ' The presenter rejected unbounded output and rendered only the first 100 records.'
     : '';
   const workspaceNavigation = options.companyAssetsAvailable || options.brandBrainAvailable
+      || options.companyContentSyncAvailable
     ? renderContentWorkspaceNavigation('library', {
         companyAssetsAvailable: options.companyAssetsAvailable === true,
         assetsLabel: options.companyAssetsLabel,
         brandBrainAvailable: options.brandBrainAvailable === true,
         brainLabel: options.brandBrainLabel,
+        companyContentSyncAvailable: options.companyContentSyncAvailable === true,
       })
     : '';
   return `${workspaceNavigation}<style data-property-predator-content-control>${CONTENT_CONTROL_ROOM_STYLE}</style><article class="ccr" aria-labelledby="ccr-title">

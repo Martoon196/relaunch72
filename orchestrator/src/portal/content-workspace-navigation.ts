@@ -4,6 +4,7 @@ import { COMPANY_ASSETS_ROUTE } from './company-assets-actions.js';
 import { CONTENT_CALENDAR_ROUTE } from './content-calendar-presenter.js';
 import { CONTENT_CONTROL_ROOM_ROUTE } from './content-control-room-presenter.js';
 import { SOCIAL_COMPOSER_ROUTE } from './social-composer-presenter.js';
+import { COMPANY_CONTENT_SYNC_ROUTE } from './company-content-sync-actions.js';
 import { escapeHtml } from './ui.js';
 
 export type ContentWorkspaceNavigationTarget =
@@ -12,7 +13,8 @@ export type ContentWorkspaceNavigationTarget =
   | 'composer'
   | 'library'
   | 'assets'
-  | 'brain';
+  | 'brain'
+  | 'sync';
 
 const CONTENT_WORKSPACE_NAVIGATION_STYLE = `
   .pp-content-nav{display:flex;align-items:center;gap:6px;max-width:100%;margin:0 0 14px;padding:6px;border:1px solid #253238;border-radius:10px;background:#090d0f;overflow-x:auto;scrollbar-width:thin;scrollbar-color:#39474e #090d0f}
@@ -41,6 +43,7 @@ export function renderContentWorkspaceNavigation(
     assetsLabel?: string;
     brandBrainAvailable: boolean;
     brainLabel?: string;
+    companyContentSyncAvailable?: boolean;
   }> = {
     brandBrainAvailable: false,
   },
@@ -57,5 +60,8 @@ export function renderContentWorkspaceNavigation(
   const brain = options.brandBrainAvailable
     ? `<a href="${BRAND_BRAIN_ROUTE}"${active === 'brain' ? ' aria-current="page"' : ''}>${escapeHtml(options.brainLabel ?? 'Brand Brain')}</a>`
     : '';
-  return `<style data-property-predator-content-workspace-navigation>${CONTENT_WORKSPACE_NAVIGATION_STYLE}</style><nav class="pp-content-nav" aria-label="Content operations">${links}${composer}${assets}${brain}</nav>`;
+  const sync = options.companyContentSyncAvailable
+    ? `<a href="${COMPANY_CONTENT_SYNC_ROUTE}"${active === 'sync' ? ' aria-current="page"' : ''}>Source Sync</a>`
+    : '';
+  return `<style data-property-predator-content-workspace-navigation>${CONTENT_WORKSPACE_NAVIGATION_STYLE}</style><nav class="pp-content-nav" aria-label="Content operations">${links}${composer}${assets}${brain}${sync}</nav>`;
 }

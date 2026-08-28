@@ -22,6 +22,8 @@ import type { PropertyPredatorSsoClient } from './property-predator-sso.js';
 import type { PortalJourneyManagerService } from './journey-manager-service.js';
 import type { PortalCompanyContentService } from './company-content-service.js';
 import type { PortalBrandBrainService } from './brand-brain-service.js';
+import type { PortalCompanyContentSyncService } from './company-content-sync-service.js';
+import { InMemoryCompanyContentSyncReplayGuard } from './company-content-sync-actions.js';
 import type { PortalAffiliateComplianceService } from './affiliate-compliance-service.js';
 import type { PortalConversionInboxCommandService } from './conversion-inbox-service.js';
 import type { PortalOperatorActionCentreService } from './operator-action-centre-pg-service.js';
@@ -143,6 +145,8 @@ export interface PostgresPortalConfig {
   companyContent?: PortalCompanyContentService;
   /** Omitted unless both company-asset least-privilege identities are ready. */
   companyAssets?: PortalCompanyAssetsService;
+  /** Effects-off company-owned source sync. */
+  companyContentSync?: PortalCompanyContentSyncService;
   /** Read-only Brand Brain metadata. Omitted until its RLS reader is ready. */
   brandBrain?: PortalBrandBrainService;
   /** Fixture-only affiliate compliance evidence. Omitted outside explicit preview composition. */
@@ -170,6 +174,7 @@ export interface PostgresPortalConfig {
  * billing store. PostgreSQL readiness is owned by buildPgPortalPlatform.
  */
 export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPortalDeps {
+  const productProfile = cfg.productProfile ?? RELAUNCH72_PRODUCT_PROFILE;
   if (!cfg.abuse
       || typeof cfg.abuse.admit !== 'function'
       || typeof cfg.abuse.complete !== 'function'
@@ -178,6 +183,11 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
       || cfg.abuseHashSecret.trim().length < 32
       || cfg.abuseHashSecret.trim() === cfg.sessionSecret.trim()) {
     throw new Error('PostgreSQL portal abuse boundary is incomplete');
+  }
+  if (cfg.companyContentSync && productProfile.id !== 'property_predator_growth') {
+    throw new Error(
+      'Property Predator company-content sync is forbidden outside property_predator_growth',
+    );
   }
   return {
     kind: 'postgres',
@@ -195,12 +205,16 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     operatorActions: cfg.operatorActions,
     companyContent: cfg.companyContent,
     companyAssets: cfg.companyAssets,
+    companyContentSync: cfg.companyContentSync,
+    companyContentSyncReplayGuard: cfg.companyContentSync
+      ? new InMemoryCompanyContentSyncReplayGuard()
+      : undefined,
     brandBrain: cfg.brandBrain,
     affiliateCompliance: cfg.affiliateCompliance,
     inbox: cfg.inbox,
     inboxCommands: cfg.inboxCommands,
     publicSocial: cfg.publicSocial,
-    productProfile: cfg.productProfile ?? RELAUNCH72_PRODUCT_PROFILE,
+    productProfile,
     trustedClientAddress: cfg.trustedClientAddress,
     now: cfg.now,
     requestId: cfg.requestId,

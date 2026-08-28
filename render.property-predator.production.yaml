@@ -112,6 +112,18 @@ services:
       - key: PROPERTY_PREDATOR_EXTERNAL_EVENTS_ENABLED
         value: "false"
 
+      # Read-only, exact-origin company-content source used by the protected
+      # Source Sync control. The credential can read only approved company
+      # resources; it is not a generate/admin/provider token.
+      - key: PROPERTY_PREDATOR_COMPANY_CONTENT_ORIGIN
+        value: https://propertypredator.com
+      - key: PROPERTY_PREDATOR_COMPANY_CONTENT_CLIENT_ID
+        value: relaunch72
+      - key: PROPERTY_PREDATOR_COMPANY_CONTENT_READ_TOKEN
+        sync: false
+      - key: PROPERTY_PREDATOR_COMPANY_CONTENT_TIMEOUT_MS
+        value: "8000"
+
       # Neon production web identities. Each URL is issued for exactly the
       # named NOINHERIT login role. Owner, migrator and outbound-worker URLs
       # never enter the internet-facing service.
