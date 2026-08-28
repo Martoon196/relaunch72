@@ -2,6 +2,11 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import type { PortalAuthService } from '../src/portal/auth-service.js';
+import { createPropertyPredatorBrandBrainFixture } from '../src/portal/brand-brain-fixtures.js';
+import type {
+  PortalBrandBrainRequestIdentity,
+  PortalBrandBrainService,
+} from '../src/portal/brand-brain-service.js';
 import {
   CAMPAIGN_WIZARD_CREATE_TEST_ROUTE,
   CAMPAIGN_WIZARD_ROUTE,
@@ -342,6 +347,22 @@ function contentService(): PortalCompanyContentService {
   };
 }
 
+function brandBrainService(calls: PortalBrandBrainRequestIdentity[]): PortalBrandBrainService {
+  return {
+    snapshot: async (identity) => {
+      calls.push(identity);
+      const fixture = createPropertyPredatorBrandBrainFixture();
+      return {
+        ok: true,
+        snapshot: {
+          ...fixture,
+          workspace: { ...fixture.workspace, workspaceId: IDS.workspace },
+        },
+      };
+    },
+  };
+}
+
 function baseCreateForm(): URLSearchParams {
   const form = new URLSearchParams({
     _csrf: portalCsrfToken(SECRET, SESSION),
@@ -387,9 +408,11 @@ function baseCalendarForm(kind: 'reschedule' | 'cancel'): URLSearchParams {
 
 test('GET campaign wizard joins safe company content and TEST targets into one protected form', async () => {
   const calls = freshCalls();
-  const result = await call('GET', CAMPAIGN_WIZARD_ROUTE, postgres({
+  const brandCalls: PortalBrandBrainRequestIdentity[] = [];
+  const result = await call('GET', `${CAMPAIGN_WIZARD_ROUTE}?laps=property-predator-agency-laps%3Apresentation`, postgres({
     publicSocial: socialService(calls),
     companyContent: contentService(),
+    brandBrain: brandBrainService(brandCalls),
   }));
 
   assert.equal(result.statusCode, 200);
@@ -402,6 +425,12 @@ test('GET campaign wizard joins safe company content and TEST targets into one p
   assert.match(result.body, new RegExp(`name="target_ids" value="${IDS.targetTwo}"`));
   assert.match(result.body, /data-environment="test"/);
   assert.match(result.body, /data-provider-effects="none"/);
+  assert.match(result.body, /data-marketing-draft-preflight/);
+  assert.match(result.body, /Appointment → Presentation/);
+  assert.match(result.body, /value="property-predator-agency-laps:presentation" selected/);
+  assert.match(result.body, /Offer Architect/);
+  assert.match(result.body, /Adapted internal methods/);
+  assert.doesNotMatch(result.body, /Generate with AI|Run specialist|Call model/i);
   assert.doesNotMatch(
     result.body,
     /name="(?:body|body_text|provider|provider_id|connection_id|account_ref|storage_key|credential|publish)"/i,
@@ -411,6 +440,26 @@ test('GET campaign wizard joins safe company content and TEST targets into one p
     sessionToken: SESSION,
     requestId: 'planning-mutations-router-request',
   });
+  assert.deepEqual(brandCalls, [{
+    sessionToken: SESSION,
+    requestId: 'planning-mutations-router-request',
+  }]);
+});
+
+test('Campaign Wizard stays operational and makes Brand Brain failure a visible draft-only blocker', async () => {
+  const calls = freshCalls();
+  const result = await call('GET', CAMPAIGN_WIZARD_ROUTE, postgres({
+    publicSocial: socialService(calls),
+    companyContent: contentService(),
+    brandBrain: {
+      snapshot: async () => { throw new Error('private infrastructure detail'); },
+    },
+  }));
+
+  assert.equal(result.statusCode, 200);
+  assert.match(result.body, /Brand Brain metadata is unavailable/);
+  assert.match(result.body, new RegExp(`action="${CAMPAIGN_WIZARD_CREATE_TEST_ROUTE}"`));
+  assert.doesNotMatch(result.body, /private infrastructure detail/);
 });
 
 test('production calendar CSP permits its same-origin protected mutation enhancement', async () => {

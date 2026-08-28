@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { planPropertyPredatorMarketingDraft } from '../src/company-content-adapter/property-predator-marketing-draft-plan.js';
 import {
   campaignWizardNoticeFromQuery,
   campaignWizardNoticeToken,
@@ -11,6 +12,7 @@ import {
   type CampaignWizardSnapshot,
 } from '../src/portal/campaign-wizard-presenter.js';
 import { renderCampaignWizardBody } from '../src/portal/campaign-wizard-view.js';
+import { createPropertyPredatorBrandBrainFixture } from '../src/portal/brand-brain-fixtures.js';
 
 const COPY: CampaignWizardContentSnapshot = Object.freeze({
   contentItemId: '11111111-1111-4111-8111-111111111111',
@@ -50,6 +52,10 @@ function view(snapshot: CampaignWizardSnapshot = SNAPSHOT) {
     workspaceName: 'Property Predator Growth HQ',
     timezone: 'Europe/London',
     asOf: '2026-08-27T09:00:00.000Z',
+    draftPlan: planPropertyPredatorMarketingDraft({
+      selection: 'property-predator-agency-laps:appointment',
+      brandBrainSnapshot: createPropertyPredatorBrandBrainFixture(),
+    }),
   });
 }
 
@@ -87,6 +93,17 @@ test('Campaign Wizard renders a native protected POST with separate copy and app
   assert.match(html, /name="desired_for_local"/);
   assert.match(html, /name="confirm_test_only" value="confirmed" required/);
   assert.match(html, />Create durable TEST campaign<\/button>/);
+  assert.match(html, /data-marketing-draft-preflight data-callable="false" data-persisted="false" data-provider-effects="none"/);
+  assert.match(html, /<form class="cwiz-brain-control" method="get" action="\/portal\/campaigns\/new">/);
+  assert.match(html, /name="laps"/);
+  assert.match(html, /value="property-predator-agency-laps:appointment" selected/);
+  assert.match(html, /Lead → Appointment/);
+  assert.match(html, /Offer Architect/);
+  assert.match(html, /Direct Response Copywriter/);
+  assert.match(html, /Social Media Manager/);
+  assert.match(html, /Draft recipe blocked/);
+  assert.match(html, /No model is called, nothing is persisted by the campaign command/);
+  assert.doesNotMatch(html, /Generate with AI|Run specialist|Call model/i);
   assert.match(html, /@media\(max-width:580px\)/);
   assert.match(html, /@media\(forced-colors:active\)/);
   assert.doesNotMatch(html, /providerToken|accessToken|apiKey|testAccountRef|storageKey|blobSha256/);
@@ -96,7 +113,8 @@ test('Campaign Wizard fails closed when an unsafe or incomplete action is inject
   const hostile = { ...ACTION, actionUrl: 'https://attacker.example/collect' };
   assert.equal(isCampaignWizardCreateActionReady(hostile), false);
   const html = renderCampaignWizardBody(view(), { action: hostile });
-  assert.doesNotMatch(html, /<form\b|attacker\.example/);
+  assert.doesNotMatch(html, /<form class="cwiz-form"|attacker\.example/);
+  assert.match(html, /<form class="cwiz-brain-control" method="get"/);
   assert.match(html, /data-read-only="true"/);
   assert.match(html, /router has not supplied a protected command boundary/i);
 });

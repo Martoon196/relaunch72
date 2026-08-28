@@ -18,6 +18,7 @@ import { BRAND_BRAIN_ROUTE } from '../src/portal/brand-brain-actions.js';
 import { createPropertyPredatorBrandBrainFixture } from '../src/portal/brand-brain-fixtures.js';
 import { presentBrandBrain } from '../src/portal/brand-brain-presenter.js';
 import { renderBrandBrainBody } from '../src/portal/brand-brain-view.js';
+import { planPropertyPredatorMarketingDraft } from '../src/company-content-adapter/property-predator-marketing-draft-plan.js';
 import {
   CONTENT_APPROVAL_DECISION_ROUTE,
   CONTENT_APPROVAL_REQUEST_ROUTE,
@@ -1635,6 +1636,10 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
         workspaceName: snapshot.workspace.name,
         timezone: snapshot.workspace.timezone,
         asOf: new Date().toISOString(),
+        draftPlan: planPropertyPredatorMarketingDraft({
+          selection: url.searchParams.get('laps'),
+          brandBrainSnapshot: createPropertyPredatorBrandBrainFixture(),
+        }),
       }),
       {
         action: {

@@ -1,4 +1,5 @@
 import type { SocialNetwork } from '../providers/contracts.js';
+import type { PropertyPredatorMarketingDraftPlan } from '../company-content-adapter/property-predator-marketing-draft-plan.js';
 
 export const CAMPAIGN_WIZARD_MAX_CONTENT_OPTIONS = 40;
 export const CAMPAIGN_WIZARD_MAX_TARGET_OPTIONS = 40;
@@ -64,12 +65,15 @@ export interface CampaignWizardView {
   readonly inputTruncated: boolean;
   readonly environment: 'test';
   readonly providerEffects: 'none';
+  /** Read-only marketing provenance preflight. It is never part of the campaign POST. */
+  readonly draftPlan?: PropertyPredatorMarketingDraftPlan;
 }
 
 export interface PresentCampaignWizardOptions {
   readonly workspaceName: string;
   readonly timezone: string;
   readonly asOf: string;
+  readonly draftPlan?: PropertyPredatorMarketingDraftPlan;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -192,5 +196,6 @@ export function presentCampaignWizard(
       || snapshot.targets.length > CAMPAIGN_WIZARD_MAX_TARGET_OPTIONS,
     environment: 'test',
     providerEffects: 'none',
+    ...(options.draftPlan ? { draftPlan: options.draftPlan } : {}),
   });
 }

@@ -64,6 +64,7 @@ import {
   type CampaignWizardContentSnapshot,
 } from './campaign-wizard-presenter.js';
 import { renderCampaignWizardBody } from './campaign-wizard-view.js';
+import { planPropertyPredatorMarketingDraft } from '../company-content-adapter/property-predator-marketing-draft-plan.js';
 import {
   PUBLIC_SOCIAL_CAMPAIGNS_ROUTE,
   presentPublicSocialCampaigns,
@@ -103,7 +104,10 @@ import {
 } from './company-content-service.js';
 import { BRAND_BRAIN_ROUTE } from './brand-brain-actions.js';
 import { presentBrandBrain } from './brand-brain-presenter.js';
-import type { PortalBrandBrainService } from './brand-brain-service.js';
+import type {
+  PortalBrandBrainService,
+  PortalBrandBrainSnapshot,
+} from './brand-brain-service.js';
 import { renderBrandBrainBody } from './brand-brain-view.js';
 import {
   COMPANY_ASSETS_ROUTE,
@@ -2488,6 +2492,23 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       if (social.workspace.workspaceId !== content.workspace.workspaceId) {
         throw new Error('campaign wizard workspace mismatch');
       }
+      let brandBrainSnapshot: PortalBrandBrainSnapshot | undefined;
+      if (deps.brandBrain) {
+        try {
+          const brandOutcome = await deps.brandBrain.snapshot(identity);
+          if (brandOutcome.ok
+              && brandOutcome.snapshot.workspace.workspaceId === social.workspace.workspaceId) {
+            brandBrainSnapshot = brandOutcome.snapshot;
+          }
+        } catch {
+          // Brand Brain is additive here. Its absence becomes a visible draft
+          // blocker and must not take down the existing protected TEST wizard.
+        }
+      }
+      const draftPlan = planPropertyPredatorMarketingDraft({
+        selection: url.searchParams.get('laps'),
+        brandBrainSnapshot,
+      });
       const allContent = content.catalog.items.map(campaignContentSnapshot);
       const view = presentCampaignWizard({
         content: allContent.filter((item, index) => content.catalog.items[index]?.kind === 'social_post'),
@@ -2505,6 +2526,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         workspaceName: social.workspace.workspaceName,
         timezone: social.workspace.timezone,
         asOf: social.workspace.snapshotAt,
+        draftPlan,
       });
       const contentNavigation = deps.productProfile?.contentWorkspace;
       const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
