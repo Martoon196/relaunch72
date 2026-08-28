@@ -7,3 +7,4 @@ export * from './property-predator-snapshot-v2.js';
 export * from './property-predator-snapshot-repository.js';
 export * from './property-predator-snapshot-service.js';
 export * from './csv-preview.js';
+export * from './migration-centre.js';
