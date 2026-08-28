@@ -6,10 +6,10 @@
 # test-payments sandbox. In Render, create a NEW Blueprint and explicitly select
 # this file. Never point the existing sandbox Blueprint at this manifest.
 #
-# The services are unable to send email as checked in: both provider-effect
-# gates are false and the emergency pause is true. autoDeploy is also off. A
-# human must review the exact commit, sync the Blueprint, and trigger each
-# deploy manually.
+# The public web service remains unable to send. Only the isolated Mailgun
+# worker is configured for the one-address internal-seed pilot; this Blueprint
+# does not stage a job, autoDeploy is off, and a human must still review the
+# exact commit, sync the secret slots, and trigger the worker deploy manually.
 services:
   - type: web
     name: property-predator-growth-hq
@@ -124,6 +124,19 @@ services:
       - key: PROPERTY_PREDATOR_COMPANY_CONTENT_TIMEOUT_MS
         value: "8000"
 
+      # One bounded company-content model call may create an immutable,
+      # source-review-required campaign draft. The source service owns the
+      # durable per-client quota and idempotency ledger. This web process has
+      # no send, schedule or publish adapter.
+      - key: PROPERTY_PREDATOR_CAMPAIGN_GENERATION_ENABLED
+        value: "true"
+      - key: PROPERTY_PREDATOR_CAMPAIGN_GENERATION_PROVIDER_EFFECTS_ENABLED
+        value: "true"
+      - key: PROPERTY_PREDATOR_CAMPAIGN_GENERATION_EMERGENCY_PAUSED
+        value: "false"
+      - key: PROPERTY_PREDATOR_COMPANY_CONTENT_GENERATE_TOKEN
+        sync: false
+
       # Neon production web identities. Each URL is issued for exactly the
       # named NOINHERIT login role. Owner, migrator and outbound-worker URLs
       # never enter the internet-facing service.
@@ -219,9 +232,9 @@ services:
       - key: MAILGUN_WEBHOOK_SIGNATURE_VERIFICATION_ENABLED
         value: "true"
 
-  # This isolated worker is the only process that may ever receive the Mailgun
-  # outbound key. Its named entrypoint is deliberately deployment-blocking until
-  # the reviewed worker composition lands; do not replace it with `npm run serve`.
+  # This isolated worker is the only process that may receive the domain-scoped
+  # Mailgun outbound key and verified sender. The Blueprint starts the reviewed
+  # worker composition but never stages an email job.
   - type: worker
     name: property-predator-email-worker
     runtime: node
@@ -254,22 +267,20 @@ services:
       - key: DATABASE_STATEMENT_TIMEOUT_MS
         value: "15000"
 
-      # The checked-in mode composes only the inert dark worker. The CLI can
-      # select the reviewed internal-seed live worker, but only after an exact
-      # action-time change to this mode, all three safety switches and the
-      # conservative 1-recipient / 1-run / 3-month caps below.
+      # Exact controlled live mode. Startup fails closed unless every switch,
+      # recipient and cap below matches the reviewed one-address seed pilot.
       - key: PROPERTY_PREDATOR_EMAIL_WORKER_MODE
-        value: dark-production
+        value: internal-seed-live
 
-      # Provider effects remain disabled and this dark service receives no
-      # outbound Mailgun credential or sender identity. In this mode no Mailgun
-      # adapter or dispatch loop exists.
+      # These switches affect only the isolated email worker. The public web
+      # service remains effects-off and paused; social/WhatsApp/DM/webinar rails
+      # receive no credential or activation switch.
       - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
-        value: "false"
-      - key: PROPERTY_PREDATOR_EMAIL_DELIVERY_ENABLED
-        value: "false"
-      - key: PROPERTY_PREDATOR_EMAIL_EMERGENCY_PAUSED
         value: "true"
+      - key: PROPERTY_PREDATOR_EMAIL_DELIVERY_ENABLED
+        value: "true"
+      - key: PROPERTY_PREDATOR_EMAIL_EMERGENCY_PAUSED
+        value: "false"
       - key: PROPERTY_PREDATOR_EMAIL_PROVIDER
         value: mailgun
       - key: PROPERTY_PREDATOR_PILOT_WORKSPACE_ID
@@ -283,20 +294,34 @@ services:
       - key: PROPERTY_PREDATOR_PILOT_RECIPIENT_SCOPE
         value: owned-internal-seeds-only
       - key: PROPERTY_PREDATOR_PILOT_MAX_RECIPIENTS
-        value: "10"
+        value: "1"
       - key: PROPERTY_PREDATOR_EMAIL_INTERNAL_SEEDS
         sync: false
       - key: PROPERTY_PREDATOR_EMAIL_RUN_MESSAGE_CAP
-        value: "10"
+        value: "1"
       - key: PROPERTY_PREDATOR_EMAIL_MONTHLY_MESSAGE_CAP
-        value: "100"
-      # USD micros: conservative one-cent estimate, $0.10/run, $1/month.
+        value: "3"
+      # USD micros: one conservative unit estimate, one unit/run, three/month.
       - key: PROPERTY_PREDATOR_EMAIL_ESTIMATED_RECIPIENT_COST_USD_MICROS
-        value: "10000"
+        value: "1000"
       - key: PROPERTY_PREDATOR_EMAIL_RUN_SPEND_CAP_USD_MICROS
-        value: "100000"
+        value: "1000"
       - key: PROPERTY_PREDATOR_EMAIL_MONTHLY_SPEND_CAP_USD_MICROS
-        value: "1000000"
+        value: "3000"
+
+      # Mailgun EU egress only. The outbound worker receives a key scoped to
+      # this single sending domain and a separately verified From identity.
+      # The broad account API key and webhook signing key remain absent.
+      - key: MAILGUN_REGION
+        value: eu
+      - key: MAILGUN_SENDING_DOMAIN
+        value: mg.propertypredator.com
+      - key: MAILGUN_KEY_SCOPE
+        value: domain-sending
+      - key: MAILGUN_DOMAIN_SENDING_KEY
+        sync: false
+      - key: MAILGUN_FROM_EMAIL
+        sync: false
 
   # Migration 0040 just-in-time revalidation runs in a separate dark worker.
   # It can claim one due TEST intent, read one exact approved company-content

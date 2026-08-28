@@ -636,6 +636,36 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
     const messageDeliveryId = ambiguousDelivery[0]!.message_delivery_id;
     const mailgunJobId = randomUUID();
     const expectedMessageId = `<pp-${ambiguous.requestSha256}@mg.propertypredator.com>`;
+
+    await assert.rejects(
+      ownerQuery(
+        pool,
+        `UPDATE app.property_predator_email_pilot_reservations
+         SET state = 'pending'
+         WHERE workspace_id = $1 AND id = $2`,
+        [workspaceId, ambiguous.reservationId],
+      ),
+      /Property Predator email pilot reservation evidence is immutable/,
+      'an ambiguous reservation cannot be moved back to a nonterminal state',
+    );
+    await assert.rejects(
+      ownerQuery(
+        pool,
+        `UPDATE app.property_predator_email_pilot_reservations
+         SET state = 'accepted',
+             provider_external_id = $3,
+             provider_occurred_at = statement_timestamp(),
+             provider_retryable = false,
+             provider_error_code = NULL,
+             provider_summary = 'Unsigned recovery projection',
+             settled_at = statement_timestamp()
+         WHERE workspace_id = $1 AND id = $2`,
+        [workspaceId, ambiguous.reservationId, expectedMessageId],
+      ),
+      /Property Predator email pilot reservation evidence is immutable/,
+      'a terminal recovery must carry the exact signed-receipt projection',
+    );
+
     await ownerQuery(
       pool,
       `INSERT INTO app.property_predator_mailgun_jobs (

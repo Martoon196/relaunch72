@@ -24,11 +24,11 @@ test('image studio view is honest about preview, effects and approval boundaries
   assert.match(html, /gpt-image-2/);
   assert.match(html, /data-provider-effects="none"/);
   assert.match(html, /Effects OFF · emergency pause ON/);
-  assert.match(html, /Fictional composition preview/);
+  assert.match(html, /Structured composition preview/);
   assert.match(html, /Generate review proposal · locked/);
   assert.match(html, /disabled aria-disabled="true"/);
   assert.match(html, /Apply the supplied real logo/);
-  assert.match(html, /human approval required/i);
+  assert.match(html, /generated output requires human approval/i);
   assert.doesNotMatch(html, /publish now/i);
 });
 

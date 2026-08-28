@@ -53,6 +53,7 @@ import {
 import { adaptPublicSocialCalendar } from './public-social-calendar-adapter.js';
 import {
   CAMPAIGN_WIZARD_CREATE_TEST_ROUTE,
+  CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE,
   CAMPAIGN_WIZARD_ROUTE,
   campaignWizardNoticeFromQuery,
   campaignWizardNoticeToken,
@@ -65,6 +66,12 @@ import {
 } from './campaign-wizard-presenter.js';
 import { renderCampaignWizardBody } from './campaign-wizard-view.js';
 import { planPropertyPredatorMarketingDraft } from '../company-content-adapter/property-predator-marketing-draft-plan.js';
+import {
+  PropertyPredatorCampaignDraftRuntimeError,
+  type PropertyPredatorCampaignDraftApprovedVersionEvidence,
+  type PropertyPredatorCampaignDraftRuntime,
+} from '../company-content-adapter/property-predator-campaign-draft-runtime.js';
+import { renderCampaignDraftReviewBody } from './campaign-draft-review-view.js';
 import {
   PUBLIC_SOCIAL_CAMPAIGNS_ROUTE,
   presentPublicSocialCampaigns,
@@ -109,6 +116,9 @@ import type {
   PortalBrandBrainSnapshot,
 } from './brand-brain-service.js';
 import { renderBrandBrainBody } from './brand-brain-view.js';
+import { createAuthoritativeImageStudioSnapshot } from './image-studio-authoritative.js';
+import { IMAGE_STUDIO_ROUTE, presentImageStudio } from './image-studio-presenter.js';
+import { renderImageStudioBody } from './image-studio-view.js';
 import {
   COMPANY_ASSETS_ROUTE,
   COMPANY_ASSET_QUARANTINE_ROUTE,
@@ -328,6 +338,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   providerReadiness?: PortalProviderReadinessService;
   /** Durable TEST-only campaign planning and safe social calendar projection. */
   publicSocial?: PortalPublicSocialService;
+  /** One real company-content generation effect; output is source-review-only and never outbound. */
+  campaignDrafts?: Pick<PropertyPredatorCampaignDraftRuntime, 'generateReviewDraft'>;
   /** TEST-only conversion queue. Thread detail remains a separate optional projection. */
   inbox?: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval/queue commands. It has no provider dispatcher. */
@@ -869,6 +881,13 @@ const CAMPAIGN_RETURN_CHANNELS = new Set([
   'all', 'facebook', 'instagram', 'linkedin', 'tiktok', 'x', 'youtube',
   'google_business_profile', 'threads', 'pinterest', 'email', 'webinar',
 ]);
+const CAMPAIGN_REVIEW_DRAFT_MAXIMUM_COST_MINOR = 250;
+const CAMPAIGN_REVIEW_DRAFT_PLATFORMS = new Set(['linkedin', 'instagram', 'facebook', 'x']);
+const CAMPAIGN_REVIEW_DRAFT_TONES = new Set([
+  'direct and useful',
+  'educational and evidence-led',
+  'challenging but credible',
+]);
 
 function campaignFormText(value: string | null, maximumBytes: number): string | null {
   if (value === null || value !== value.trim() || !value || !CAMPAIGN_FORM_TEXT.test(value)
@@ -887,6 +906,33 @@ function campaignUuidValues(
       || supplied.some((value) => !CRM_OBJECT_ID.test(value))
       || new Set(supplied).size !== supplied.length) return null;
   return Object.freeze(supplied);
+}
+
+function campaignDraftEvidence(
+  item: CompanyContentCatalogItem,
+): PropertyPredatorCampaignDraftApprovedVersionEvidence | null {
+  if (item.approvalStatus !== 'approved' || item.approvalStale
+      || !item.sourceFresh || !item.publishable
+      || !item.approvalRequestId || !item.approvalDecisionId
+      || item.source.system !== 'propertypredator.company-content') return null;
+  return Object.freeze({
+    contentItemId: item.contentItemId,
+    contentVersionId: item.contentVersionId,
+    versionNumber: item.versionNumber,
+    contentSha256: item.contentSha256,
+    blobSha256: item.blobSha256,
+    brandSha256: item.brandSha256,
+    approvalRequestId: item.approvalRequestId,
+    approvalDecisionId: item.approvalDecisionId,
+    approvalStatus: 'approved',
+    approvalStale: false,
+    sourceFresh: true,
+    publishable: true,
+    sourceSystem: 'propertypredator.company-content',
+    sourceItemId: item.source.itemId,
+    sourceVersion: item.source.version,
+    kind: item.kind,
+  });
 }
 
 function campaignFailureNotice(kind: string): CampaignWizardNoticeCode {
@@ -959,6 +1005,7 @@ function campaignContentSnapshot(
     contentItemId: item.contentItemId,
     contentVersionId: item.contentVersionId,
     contentSha256: item.contentSha256,
+    brandSha256: item.brandSha256,
     title: item.title,
     versionNumber: item.versionNumber,
     kindLabel,
@@ -2488,6 +2535,66 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
   }
 
+  // ── Image Studio: authoritative brief workspace + existing founder rail ──
+  if (deps.kind === 'postgres' && p === IMAGE_STUDIO_ROUTE && method === 'GET') {
+    const contentNavigation = deps.productProfile?.contentWorkspace;
+    if (deps.productProfile?.id !== 'property_predator_growth'
+        || !deps.brandBrain || !deps.companyAssets
+        || contentNavigation?.brainRoute !== BRAND_BRAIN_ROUTE
+        || contentNavigation.assetsRoute !== COMPANY_ASSETS_ROUTE) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Image Studio not connected',
+        message: 'Authoritative Brand Brain and company-asset metadata are required for this workspace.',
+        active: 'content',
+        backHref: '/portal/content',
+        backLabel: 'Return to Content Control',
+      }));
+    }
+    try {
+      const identity = crmIdentity(sessionToken, deps);
+      const [brainOutcome, assetOutcome] = await Promise.all([
+        deps.brandBrain.snapshot(identity),
+        deps.companyAssets.snapshot(identity),
+      ]);
+      const failure = !brainOutcome.ok ? brainOutcome : !assetOutcome.ok ? assetOutcome : null;
+      if (failure) {
+        const status = failure.kind === 'unauthenticated' || failure.kind === 'forbidden'
+          ? 403 : failure.kind === 'not_found' ? 404 : 503;
+        return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+          title: status === 503 ? 'Image Studio temporarily unavailable' : 'Image Studio not available',
+          message: failure.message,
+          active: 'content',
+          backHref: '/portal/content',
+          backLabel: 'Return to Content Control',
+        }));
+      }
+      if (!brainOutcome.ok || !assetOutcome.ok) {
+        throw new Error('Image Studio source outcome escaped its safe boundary');
+      }
+      const snapshot = createAuthoritativeImageStudioSnapshot({
+        brandBrain: brainOutcome.snapshot,
+        companyAssets: assetOutcome.snapshot,
+        query: url.searchParams,
+      });
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      return sendHtml(res, 200, operationalPage(
+        snapshot.workspaceName,
+        renderImageStudioBody(presentImageStudio(snapshot)),
+        deps,
+        'content',
+        csrfToken,
+      ));
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Image Studio temporarily unavailable',
+        message: 'No provider, artwork, approval, publishing or customer state was changed.',
+        active: 'content',
+        backHref: '/portal/content',
+        backLabel: 'Return to Content Control',
+      }));
+    }
+  }
+
   // ── Property Predator company assets: metadata + quarantine-only decisions ──
   if (deps.kind === 'postgres' && p === COMPANY_ASSETS_ROUTE && method === 'GET') {
     const assetsNavigation = deps.productProfile?.contentWorkspace;
@@ -2736,6 +2843,24 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
               returnTo: CONTENT_CALENDAR_ROUTE,
             },
           } : {}),
+          ...(deps.campaignDrafts
+            && content.workspace.canManage
+            && brandBrainSnapshot?.workspace.canManage
+            && draftPlan.readiness === 'draft_recipe_ready'
+            && draftPlan.brandBrain
+            && content.catalog.items.some((item) => item.kind === 'social_post'
+              && item.brandSha256 === draftPlan.brandBrain!.runtimeBrandSha256
+              && campaignDraftEvidence(item) !== null)
+            && content.catalog.items.some((item) => (item.kind === 'image' || item.kind === 'video')
+              && item.brandSha256 === draftPlan.brandBrain!.runtimeBrandSha256
+              && campaignDraftEvidence(item) !== null) ? {
+              draftGenerationAction: {
+                actionUrl: CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE,
+                csrfToken,
+                commandKey: randomUUID(),
+                maximumCostMinor: CAMPAIGN_REVIEW_DRAFT_MAXIMUM_COST_MINOR,
+              },
+            } : {}),
           outcome: campaignWizardNoticeFromQuery(
             url.searchParams,
             deps.sessionSecret,
@@ -2761,6 +2886,163 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         active: 'content',
         backHref: CONTENT_CALENDAR_ROUTE,
         backLabel: 'Return to Campaign Calendar',
+      }));
+    }
+  }
+
+  if (deps.kind === 'postgres'
+      && p === CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE && method === 'POST') {
+    if (!deps.campaignDrafts || !deps.companyContent || !deps.brandBrain) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Campaign generation not connected',
+        message: 'The review-only company-content generation command is not enabled.',
+        active: 'content',
+        backHref: CAMPAIGN_WIZARD_ROUTE,
+        backLabel: 'Return to Campaign Builder',
+      }));
+    }
+    const form = await readMultiValueForm(req);
+    const allowed = new Set([
+      '_csrf', 'command_key', 'expected_plan_sha256', 'laps', 'provider_effects',
+      'platform', 'tone', 'topic', 'approved_fact_version_id',
+      'approved_asset_version_id', 'confirm_generation_only',
+    ]);
+    if (!form || !campaignFormKeysAllowed(form, allowed)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '')
+        || oneFormValue(form, 'provider_effects') !== 'generation_only'
+        || oneFormValue(form, 'confirm_generation_only') !== 'confirmed') {
+      return sendHtml(res, 400, portalStatusPage(deps, sessionToken, {
+        title: 'Review draft command rejected',
+        message: 'The protected generation form was incomplete or invalid. No outbound effect ran.',
+        active: 'content',
+        backHref: CAMPAIGN_WIZARD_ROUTE,
+        backLabel: 'Return to Campaign Builder',
+      }));
+    }
+    const commandKey = campaignCommandKey(form);
+    const expectedPlanSha256 = oneFormValue(form, 'expected_plan_sha256');
+    const selection = campaignFormText(oneFormValue(form, 'laps'), 200);
+    const platform = oneFormValue(form, 'platform');
+    const tone = oneFormValue(form, 'tone');
+    const topic = campaignFormText(oneFormValue(form, 'topic'), 1_600);
+    const factVersionIds = campaignUuidValues(form, 'approved_fact_version_id', 1, 1);
+    const assetVersionIds = campaignUuidValues(form, 'approved_asset_version_id', 1, 1);
+    if (!commandKey || !expectedPlanSha256 || !/^[0-9a-f]{64}$/u.test(expectedPlanSha256)
+        || !selection || !platform || !CAMPAIGN_REVIEW_DRAFT_PLATFORMS.has(platform)
+        || !tone || !CAMPAIGN_REVIEW_DRAFT_TONES.has(tone) || !topic
+        || !factVersionIds || !assetVersionIds) {
+      return sendHtml(res, 400, portalStatusPage(deps, sessionToken, {
+        title: 'Review draft command rejected',
+        message: 'Choose one exact fact, one exact asset and a valid bounded brief. Nothing was generated.',
+        active: 'content',
+        backHref: CAMPAIGN_WIZARD_ROUTE,
+        backLabel: 'Return to Campaign Builder',
+      }));
+    }
+    const identity = crmIdentity(sessionToken, deps);
+    try {
+      const [contentOutcome, brainOutcome] = await Promise.all([
+        deps.companyContent.snapshot(identity, { limit: 100 }),
+        deps.brandBrain.snapshot(identity),
+      ]);
+      const failure = !contentOutcome.ok ? contentOutcome : !brainOutcome.ok ? brainOutcome : null;
+      if (failure) {
+        const status = failure.kind === 'unauthenticated' || failure.kind === 'forbidden'
+          ? 403 : failure.kind === 'not_found' ? 404 : 503;
+        return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+          title: 'Review draft unavailable',
+          message: failure.message,
+          active: 'content',
+          backHref: CAMPAIGN_WIZARD_ROUTE,
+          backLabel: 'Return to Campaign Builder',
+        }));
+      }
+      if (!contentOutcome.ok || !brainOutcome.ok) {
+        throw new Error('campaign draft evidence escaped its safe outcome boundary');
+      }
+      const content = contentOutcome.snapshot;
+      const brandBrainSnapshot = brainOutcome.snapshot;
+      if (content.workspace.workspaceId !== brandBrainSnapshot.workspace.workspaceId
+          || !content.workspace.canManage || !brandBrainSnapshot.workspace.canManage) {
+        return sendHtml(res, 403, portalStatusPage(deps, sessionToken, {
+          title: 'Campaign generation access required',
+          message: 'Workspace manager access is required for a generation-only provider effect.',
+          active: 'content',
+          backHref: CAMPAIGN_WIZARD_ROUTE,
+          backLabel: 'Return to Campaign Builder',
+        }));
+      }
+      const plan = planPropertyPredatorMarketingDraft({
+        selection,
+        brandBrainSnapshot,
+      });
+      if (!plan.brandBrain || plan.readiness !== 'draft_recipe_ready'
+          || plan.planSha256 !== expectedPlanSha256) {
+        return sendHtml(res, 409, portalStatusPage(deps, sessionToken, {
+          title: 'Campaign evidence changed',
+          message: 'The exact Brand Brain or campaign plan changed. Refresh before generating.',
+          active: 'content',
+          backHref: `${CAMPAIGN_WIZARD_ROUTE}?laps=${encodeURIComponent(selection)}`,
+          backLabel: 'Refresh Campaign Builder',
+        }));
+      }
+      const factItem = content.catalog.items.find((item) =>
+        item.contentVersionId === factVersionIds[0] && item.kind === 'social_post');
+      const assetItem = content.catalog.items.find((item) =>
+        item.contentVersionId === assetVersionIds[0]
+          && (item.kind === 'image' || item.kind === 'video'));
+      const fact = factItem ? campaignDraftEvidence(factItem) : null;
+      const asset = assetItem ? campaignDraftEvidence(assetItem) : null;
+      if (!fact || !asset
+          || fact.brandSha256 !== plan.brandBrain.runtimeBrandSha256
+          || asset.brandSha256 !== plan.brandBrain.runtimeBrandSha256) {
+        return sendHtml(res, 409, portalStatusPage(deps, sessionToken, {
+          title: 'Approved campaign evidence changed',
+          message: 'The exact fact or asset version is no longer approved, fresh and Brand Brain-aligned.',
+          active: 'content',
+          backHref: `${CAMPAIGN_WIZARD_ROUTE}?laps=${encodeURIComponent(selection)}`,
+          backLabel: 'Refresh Campaign Builder',
+        }));
+      }
+      const result = await deps.campaignDrafts.generateReviewDraft(Object.freeze({
+        idempotencyKey: commandKey,
+        expectedPlanSha256,
+        maximumCostMinor: CAMPAIGN_REVIEW_DRAFT_MAXIMUM_COST_MINOR,
+        providerEffects: 'generation_only',
+        brief: Object.freeze({ platform, topic, tone }),
+        draftPlan: Object.freeze({ selection, brandBrainSnapshot }),
+        brandBrain: Object.freeze({
+          sourceSystem: 'property-predator',
+          sourceReleaseId: plan.brandBrain.sourceReleaseId,
+          manifestSha256: plan.brandBrain.manifestSha256,
+          runtimeBrandSha256: plan.brandBrain.runtimeBrandSha256,
+          specialistProfileId: plan.brandBrain.specialistProfileId,
+        }),
+        approvedFacts: Object.freeze([fact]),
+        approvedAssets: Object.freeze([asset]),
+      }));
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      return sendHtml(res, 201, operationalPage(
+        content.workspace.workspaceName,
+        renderCampaignDraftReviewBody(result),
+        deps,
+        'content',
+        csrfToken,
+      ));
+    } catch (error) {
+      const status = error instanceof PropertyPredatorCampaignDraftRuntimeError
+        && (error.code === 'invalid_command' || error.code === 'evidence_invalid') ? 400
+        : error instanceof PropertyPredatorCampaignDraftRuntimeError
+          && (error.code === 'stale_plan' || error.code === 'integrity_mismatch') ? 409
+          : 503;
+      return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+        title: status === 503 ? 'Review draft temporarily unavailable' : 'Review draft rejected',
+        message: status === 503
+          ? 'The generation command did not return a confirmed draft. No message was sent and nothing was scheduled or published.'
+          : 'The exact review-only generation evidence did not match. Refresh before trying again.',
+        active: 'content',
+        backHref: CAMPAIGN_WIZARD_ROUTE,
+        backLabel: 'Return to Campaign Builder',
       }));
     }
   }

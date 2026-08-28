@@ -10,11 +10,12 @@ import { renderBrandBrainBody } from '../src/portal/brand-brain-view.js';
 import { renderContentWorkspaceNavigation } from '../src/portal/content-workspace-navigation.js';
 import type { PortalBrandBrainSnapshot } from '../src/portal/brand-brain-service.js';
 
-test('Brand Brain presents six source specialists, three founder exports and one inert adapted method pack', () => {
+test('Brand Brain presents six source specialists, five adapted founder profiles and one inert method pack', () => {
   const view = presentBrandBrain(createPropertyPredatorBrandBrainFixture());
 
   assert.equal(view.metrics.specialistCount, 6);
-  assert.equal(view.metrics.externalAwaitingCount, 3);
+  assert.equal(view.metrics.externalAwaitingCount, 0);
+  assert.equal(view.metrics.externalAdaptedCount, 5);
   assert.equal(view.metrics.adaptedMethodPackCount, 1);
   assert.equal(view.metrics.runtimeReadyCount, 0);
   assert.equal(view.metrics.approvedReviewCount, 2);
@@ -68,9 +69,11 @@ test('Brand Brain presents six source specialists, three founder exports and one
       callable: profile.callableLabel,
     })),
     [
-      { name: 'Content Marketer', status: 'Awaiting founder export', callable: 'Not callable' },
-      { name: 'Image Maker', status: 'Awaiting founder export', callable: 'Not callable' },
-      { name: 'Social Media Manager', status: 'Awaiting founder export', callable: 'Not callable' },
+      { name: 'Content Marketer', status: 'Adapted into Brand Brain', callable: 'Not callable' },
+      { name: 'Image Maker', status: 'Adapted into Brand Brain', callable: 'Not callable' },
+      { name: 'Social Media Manager', status: 'Adapted into Brand Brain', callable: 'Not callable' },
+      { name: 'Offer Architect', status: 'Adapted into Brand Brain', callable: 'Not callable' },
+      { name: 'Direct Response Copywriter', status: 'Adapted into Brand Brain', callable: 'Not callable' },
     ],
   );
   assert.deepEqual(

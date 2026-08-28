@@ -8,6 +8,8 @@ export function createPropertyPredatorImageStudioFixture(): ImageStudioSnapshot 
   return Object.freeze({
     workspaceName: 'Property Predator Growth HQ',
     capturedAt: '2026-08-28T14:20:00.000Z',
+    dataset: 'illustrative_fixture',
+    usageEvidence: 'illustrative_fixture',
     model: 'gpt-image-2',
     credentialBoundary: 'property-predator-openai-image-api/v1',
     effects: Object.freeze({

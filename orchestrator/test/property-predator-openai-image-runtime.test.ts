@@ -218,21 +218,27 @@ test('readiness serialization contains no API key or credential digests', () => 
   assert.match(serialized, /gpt-image-2/);
 });
 
-test('production manifest keeps Mailgun dark without outbound credential slots', () => {
+test('production manifest keeps image effects isolated from the controlled Mailgun seed worker', () => {
   const manifest = readFileSync(
     new URL('../../render.property-predator.production.yaml', import.meta.url),
     'utf8',
   );
-  const worker = manifest.slice(manifest.indexOf('name: property-predator-email-worker'));
-  assert.match(worker, /key: PROPERTY_PREDATOR_EMAIL_WORKER_MODE\s+value: dark-production/);
-  assert.match(worker, /key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED\s+value: "false"/);
-  assert.match(worker, /key: PROPERTY_PREDATOR_EMAIL_DELIVERY_ENABLED\s+value: "false"/);
-  assert.match(worker, /key: PROPERTY_PREDATOR_EMAIL_EMERGENCY_PAUSED\s+value: "true"/);
-  assert.doesNotMatch(worker, /key: MAILGUN_REGION\b/);
-  assert.doesNotMatch(worker, /key: MAILGUN_SENDING_DOMAIN\b/);
-  assert.doesNotMatch(worker, /key: MAILGUN_FROM_EMAIL\b/);
-  assert.doesNotMatch(worker, /key: MAILGUN_KEY_SCOPE\b/);
-  assert.doesNotMatch(worker, /key: MAILGUN_DOMAIN_SENDING_KEY\b/);
+  const start = manifest.indexOf('name: property-predator-email-worker');
+  const end = manifest.indexOf('\n  - type: worker', start + 1);
+  const worker = manifest.slice(start, end);
+  assert.match(worker, /key: PROPERTY_PREDATOR_EMAIL_WORKER_MODE\s+value: internal-seed-live/);
+  assert.match(worker, /key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED\s+value: "true"/);
+  assert.match(worker, /key: PROPERTY_PREDATOR_EMAIL_DELIVERY_ENABLED\s+value: "true"/);
+  assert.match(worker, /key: PROPERTY_PREDATOR_EMAIL_EMERGENCY_PAUSED\s+value: "false"/);
+  assert.match(worker, /key: PROPERTY_PREDATOR_PILOT_MAX_RECIPIENTS\s+value: "1"/);
+  assert.match(worker, /key: PROPERTY_PREDATOR_EMAIL_RUN_MESSAGE_CAP\s+value: "1"/);
+  assert.match(worker, /key: PROPERTY_PREDATOR_EMAIL_MONTHLY_MESSAGE_CAP\s+value: "3"/);
+  assert.match(worker, /key: MAILGUN_REGION\s+value: eu/);
+  assert.match(worker, /key: MAILGUN_SENDING_DOMAIN\s+value: mg\.propertypredator\.com/);
+  assert.match(worker, /key: MAILGUN_FROM_EMAIL\s+sync: false/);
+  assert.match(worker, /key: MAILGUN_KEY_SCOPE\s+value: domain-sending/);
+  assert.match(worker, /key: MAILGUN_DOMAIN_SENDING_KEY\s+sync: false/);
   assert.doesNotMatch(worker, /key: MAILGUN_API_KEY\b/);
   assert.doesNotMatch(worker, /key: MAILGUN_SIGNING_KEY\b/);
+  assert.doesNotMatch(worker, /stage_property_predator_mailgun_job|PROPERTY_PREDATOR_MAILGUN_JOB/);
 });

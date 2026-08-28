@@ -108,20 +108,18 @@ test('TEST public-social campaign scheduling is workspace-isolated, replay-safe 
   try {
     const runtimeReadiness = await scopedQuery<{
       migration_count: number;
-      latest_filename: string;
+      has_worker_readiness_migration: boolean;
       installation_id: string;
     }>(pool, 'r72_public_social_worker_command', workerContext,
       `SELECT count(*)::int AS migration_count,
-              max(filename) AS latest_filename,
+              bool_or(filename = '0041_public_social_worker_runtime_readiness.sql')
+                AS has_worker_readiness_migration,
               app_private.runtime_database_installation_id()::text AS installation_id
        FROM app_private.runtime_schema_migrations()`,
     );
     assert.equal(runtimeReadiness.length, 1);
-    assert.equal(runtimeReadiness[0]?.migration_count, 41);
-    assert.equal(
-      runtimeReadiness[0]?.latest_filename,
-      '0041_public_social_worker_runtime_readiness.sql',
-    );
+    assert.ok((runtimeReadiness[0]?.migration_count ?? 0) >= 41);
+    assert.equal(runtimeReadiness[0]?.has_worker_readiness_migration, true);
     assert.match(
       runtimeReadiness[0]?.installation_id ?? '',
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,

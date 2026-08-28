@@ -19,14 +19,16 @@ export interface PortalBrandBrainWorkspaceAccess {
 
 /**
  * A founder-owned ChatGPT specialist cannot be called by Growth HQ from its
- * consumer-product URL. Only founder-exported, reviewed metadata may advance
- * beyond this placeholder state in a later, separately authorised workflow.
+ * consumer-product URL. The profile may be recorded as adapted once its
+ * founder-supplied instructions and owned knowledge have been reviewed into
+ * the private Property Predator method pack; it still never becomes a
+ * callable consumer-product endpoint.
  */
 export interface PortalBrandBrainExternalProfile {
   readonly profileId: string;
   readonly name: string;
   readonly purpose: string;
-  readonly status: 'awaiting_founder_export';
+  readonly status: 'awaiting_founder_export' | 'adapted_internal';
   readonly callable: false;
 }
 

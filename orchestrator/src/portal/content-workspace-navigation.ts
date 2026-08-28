@@ -73,7 +73,8 @@ export function renderContentWorkspaceNavigation(
   const composer = options.composerAvailable || active === 'composer'
     ? `<a href="${SOCIAL_COMPOSER_ROUTE}"${active === 'composer' ? ' aria-current="page"' : ''}>Composer</a>`
     : '';
-  const images = options.imageStudioAvailable || active === 'images'
+  const images = (options.imageStudioAvailable
+      ?? (options.companyAssetsAvailable && options.brandBrainAvailable)) || active === 'images'
     ? `<a href="${IMAGE_STUDIO_ROUTE}"${active === 'images' ? ' aria-current="page"' : ''}>Image Studio</a>`
     : '';
   const assets = options.companyAssetsAvailable

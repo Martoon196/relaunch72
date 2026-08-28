@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import type { PortalAuthService } from '../src/portal/auth-service.js';
@@ -9,10 +10,15 @@ import type {
 } from '../src/portal/brand-brain-service.js';
 import {
   CAMPAIGN_WIZARD_CREATE_TEST_ROUTE,
+  CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE,
   CAMPAIGN_WIZARD_ROUTE,
   campaignWizardNoticeFromQuery,
   campaignWizardNoticeToken,
 } from '../src/portal/campaign-wizard-actions.js';
+import { PropertyPredatorCampaignDraftRuntime } from '../src/company-content-adapter/property-predator-campaign-draft-runtime.js';
+import type { PropertyPredatorGenerateDraftCommand } from '../src/company-content-adapter/property-predator-generation.js';
+import { planPropertyPredatorMarketingDraft } from '../src/company-content-adapter/property-predator-marketing-draft-plan.js';
+import { canonicalCompanyContentJson } from '../src/company-content-pg/validation.js';
 import type { PortalCompanyContentService } from '../src/portal/company-content-service.js';
 import { createPropertyPredatorContentCatalogFixture } from '../src/portal/content-control-room-fixtures.js';
 import type { PortalCrmService } from '../src/portal/crm-service.js';
@@ -39,6 +45,10 @@ const NOW = '2026-08-27T12:00:00.000Z';
 const CONTENT_CALENDAR_ROUTE = '/portal/content/calendar';
 const RESCHEDULE_ROUTE = '/portal/content/calendar/test-reschedule';
 const CANCEL_ROUTE = '/portal/content/calendar/test-cancel';
+
+function digest(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
 
 const IDS = Object.freeze({
   workspace: '91000000-0000-4000-8000-000000000001',
@@ -300,7 +310,7 @@ function freshCalls(): SocialCalls {
   return { snapshots: [], plans: [], reschedules: [], cancels: [] };
 }
 
-function contentService(): PortalCompanyContentService {
+function contentService(brandSha256?: string): PortalCompanyContentService {
   const fixture = createPropertyPredatorContentCatalogFixture();
   const copy = fixture.items[0]!;
   const artwork = fixture.items[2]!;
@@ -322,6 +332,7 @@ function contentService(): PortalCompanyContentService {
               contentItemId: IDS.contentItem,
               contentVersionId: IDS.contentVersion,
               contentSha256: 'a'.repeat(64),
+              ...(brandSha256 ? { brandSha256 } : {}),
               sourceCheckedAt: '2026-08-27T11:55:00.000Z',
               sourceExpiresAt: '2026-08-27T12:05:00.000Z',
               sourceFresh: true,
@@ -330,6 +341,7 @@ function contentService(): PortalCompanyContentService {
             Object.freeze({
               ...artwork,
               contentVersionId: IDS.mediaOne,
+              ...(brandSha256 ? { brandSha256 } : {}),
               approvalStatus: 'approved' as const,
               approvalStale: false,
               sourceCheckedAt: '2026-08-27T11:55:00.000Z',
@@ -345,6 +357,83 @@ function contentService(): PortalCompanyContentService {
     requestApproval: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
     decideApproval: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
   };
+}
+
+function readyBrandBrainSnapshot() {
+  const fixture = JSON.parse(JSON.stringify(createPropertyPredatorBrandBrainFixture())) as
+    ReturnType<typeof createPropertyPredatorBrandBrainFixture>;
+  return {
+    ...fixture,
+    workspace: { ...fixture.workspace, workspaceId: IDS.workspace, canManage: true },
+    brain: {
+      ...fixture.brain,
+      activated: true,
+      sourceFresh: true,
+      evaluationPassed: true,
+      visualPolicyConflict: false,
+      reviews: [
+        ...fixture.brain.reviews,
+        {
+          dimension: 'brand_readiness' as const,
+          decision: 'approved' as const,
+          decisionId: 'b3000000-0000-4000-8000-000000000003',
+        },
+      ],
+      specialists: fixture.brain.specialists.map((profile) => (
+        profile.profileId === 'propertypredator.owned.social/v1'
+          ? { ...profile, capabilities: ['post', 'thread'], runtimeReady: true, blockedReason: null }
+          : profile
+      )),
+    },
+  };
+}
+
+function readyBrandBrainService(): PortalBrandBrainService {
+  return { snapshot: async () => ({ ok: true, snapshot: readyBrandBrainSnapshot() }) };
+}
+
+function campaignGenerationRuntime(calls: PropertyPredatorGenerateDraftCommand[]) {
+  return new PropertyPredatorCampaignDraftRuntime({
+    generation: {
+      generateDraft: async (command) => {
+        calls.push(command);
+        const payload = Object.freeze({
+          body: 'The headline gets attention. The evidence earns the next decision.',
+          contextSha256: command.contextSha256,
+          cta_url: 'https://propertypredator.com/learn',
+          kind: 'post' as const,
+          platform: command.brief.platform,
+          schema: 'propertypredator.company-content/v1' as const,
+          title: 'Start with the evidence',
+          type: 'generated' as const,
+        });
+        const usage = Object.freeze({
+          accountingState: 'provider_tokens_unpriced' as const,
+          inputTokens: 700,
+          outputTokens: 140,
+          model: 'test-company-content-model',
+          providerRequestId: 'provider-request-review-router-0001',
+        });
+        return {
+          ok: true as const,
+          schemaVersion: 1 as const,
+          brandSha256: command.expectedBrandSha256,
+          contentSha256: digest(canonicalCompanyContentJson(payload)),
+          contextSha256: command.contextSha256,
+          draftId: 'd1000000-0000-4000-8000-000000000001',
+          itemVersion: 1,
+          payload,
+          status: 'source_review_required' as const,
+          usage,
+          usageSha256: digest(canonicalCompanyContentJson(usage)),
+          versionId: 'd2000000-0000-4000-8000-000000000001',
+        };
+      },
+    },
+    providerEffectsEnabled: true,
+    emergencyPaused: false,
+    hardMaximumCostMinor: 500,
+  });
 }
 
 function brandBrainService(calls: PortalBrandBrainRequestIdentity[]): PortalBrandBrainService {
@@ -382,6 +471,27 @@ function baseCreateForm(): URLSearchParams {
   form.append('media_version_ids', IDS.mediaOne);
   form.append('media_version_ids', IDS.mediaTwo.toUpperCase());
   return form;
+}
+
+function baseReviewDraftForm(): URLSearchParams {
+  const snapshot = readyBrandBrainSnapshot();
+  const plan = planPropertyPredatorMarketingDraft({
+    selection: 'property-predator-self-serve:activated',
+    brandBrainSnapshot: snapshot,
+  });
+  return new URLSearchParams({
+    _csrf: portalCsrfToken(SECRET, SESSION),
+    command_key: 'campaign-review-draft-command-0001',
+    expected_plan_sha256: plan.planSha256,
+    laps: plan.selection.key,
+    provider_effects: 'generation_only',
+    platform: 'linkedin',
+    tone: 'direct and useful',
+    topic: 'Show why evidence should earn the next property decision.',
+    approved_fact_version_id: IDS.contentVersion,
+    approved_asset_version_id: IDS.mediaOne,
+    confirm_generation_only: 'confirmed',
+  });
 }
 
 function baseCalendarForm(kind: 'reschedule' | 'cancel'): URLSearchParams {
@@ -460,6 +570,78 @@ test('Campaign Wizard stays operational and makes Brand Brain failure a visible 
   assert.match(result.body, /Brand Brain metadata is unavailable/);
   assert.match(result.body, new RegExp(`action="${CAMPAIGN_WIZARD_CREATE_TEST_ROUTE}"`));
   assert.doesNotMatch(result.body, /private infrastructure detail/);
+});
+
+test('Campaign Wizard exposes one exact generation-only form only when the runtime and evidence align', async () => {
+  const brain = readyBrandBrainSnapshot();
+  const generationCalls: PropertyPredatorGenerateDraftCommand[] = [];
+  const result = await call('GET', CAMPAIGN_WIZARD_ROUTE, postgres({
+    publicSocial: socialService(freshCalls()),
+    companyContent: contentService(brain.brain.runtimeBrandSha256),
+    brandBrain: readyBrandBrainService(),
+    campaignDrafts: campaignGenerationRuntime(generationCalls),
+  }));
+
+  assert.equal(result.statusCode, 200);
+  assert.match(result.body, new RegExp(`action="${CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE}"`));
+  assert.match(result.body, /Generate one real review draft/);
+  assert.match(result.body, /name="approved_fact_version_id"/);
+  assert.match(result.body, /name="approved_asset_version_id"/);
+  assert.match(result.body, /name="provider_effects" value="generation_only"/);
+  assert.match(result.body, /data-outbound-effects="none"/);
+  assert.doesNotMatch(result.body, /name="(?:workspace_id|provider_id|credential|send|schedule|publish)"/i);
+  assert.equal(generationCalls.length, 0);
+});
+
+test('authenticated CSRF-bound campaign generation re-reads exact evidence and renders an unsendable review result', async () => {
+  const brain = readyBrandBrainSnapshot();
+  const generationCalls: PropertyPredatorGenerateDraftCommand[] = [];
+  const result = await call('POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, postgres({
+    companyContent: contentService(brain.brain.runtimeBrandSha256),
+    brandBrain: readyBrandBrainService(),
+    campaignDrafts: campaignGenerationRuntime(generationCalls),
+  }), baseReviewDraftForm());
+
+  assert.equal(result.statusCode, 201);
+  assert.equal(result.headers['cache-control'], 'no-store');
+  assert.equal(generationCalls.length, 1);
+  assert.equal(generationCalls[0]!.maximumCostMinor, 250);
+  assert.equal(generationCalls[0]!.brief.kind, 'post');
+  assert.equal(generationCalls[0]!.brief.platform, 'linkedin');
+  assert.match(result.body, /Generated\. <em>Not unleashed\.<\/em>/);
+  assert.match(result.body, /The headline gets attention\. The evidence earns the next decision\./);
+  assert.match(result.body, /data-review-required="true"/);
+  assert.match(result.body, /data-publishable="false"/);
+  assert.match(result.body, /data-sendable="false"/);
+  assert.match(result.body, /data-schedulable="false"/);
+  assert.match(result.body, /data-provider-effects="generation-only"/);
+  assert.match(result.body, new RegExp(IDS.contentVersion));
+  assert.match(result.body, new RegExp(IDS.mediaOne));
+  assert.doesNotMatch(result.body, /provider-request-review-router-0001/);
+});
+
+test('campaign generation rejects invalid CSRF and changed exact evidence before the provider runtime', async () => {
+  const brain = readyBrandBrainSnapshot();
+  const calls: PropertyPredatorGenerateDraftCommand[] = [];
+  const dependencies = postgres({
+    companyContent: contentService(brain.brain.runtimeBrandSha256),
+    brandBrain: readyBrandBrainService(),
+    campaignDrafts: campaignGenerationRuntime(calls),
+  });
+  const invalidCsrf = baseReviewDraftForm();
+  invalidCsrf.set('_csrf', 'invalid');
+  const invalid = await call(
+    'POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, dependencies, invalidCsrf,
+  );
+  assert.equal(invalid.statusCode, 400);
+
+  const stale = baseReviewDraftForm();
+  stale.set('expected_plan_sha256', 'f'.repeat(64));
+  const changed = await call(
+    'POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, dependencies, stale,
+  );
+  assert.equal(changed.statusCode, 409);
+  assert.equal(calls.length, 0);
 });
 
 test('production calendar CSP permits its same-origin protected mutation enhancement', async () => {

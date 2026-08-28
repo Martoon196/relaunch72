@@ -62,7 +62,7 @@ export interface BrandBrainExternalProfileView {
   readonly profileId: string;
   readonly name: string;
   readonly purpose: string;
-  readonly statusLabel: 'Awaiting founder export';
+  readonly statusLabel: 'Awaiting founder export' | 'Adapted into Brand Brain';
   readonly callableLabel: 'Not callable';
 }
 
@@ -119,6 +119,7 @@ export interface BrandBrainView {
     specialistCount: number;
     runtimeReadyCount: number;
     externalAwaitingCount: number;
+    externalAdaptedCount: number;
     adaptedMethodPackCount: number;
     artworkCount: number;
     approvedReviewCount: number;
@@ -253,14 +254,17 @@ function specialistView(profile: BrandBrainSpecialistSummary): BrandBrainSpecial
 }
 
 function externalProfileView(profile: PortalBrandBrainExternalProfile): BrandBrainExternalProfileView {
-  if (profile.status !== 'awaiting_founder_export' || profile.callable !== false) {
+  if (!['awaiting_founder_export', 'adapted_internal'].includes(profile.status)
+      || profile.callable !== false) {
     throw new BrandBrainPresentationError('An external specialist crossed the safe founder-export boundary');
   }
   return Object.freeze({
     profileId: boundedText(profile.profileId, 'external-profile-unavailable', 200),
     name: boundedText(profile.name, 'Founder specialist', 200),
     purpose: boundedText(profile.purpose, 'Founder-owned specialist awaiting export.', 320),
-    statusLabel: 'Awaiting founder export',
+    statusLabel: profile.status === 'adapted_internal'
+      ? 'Adapted into Brand Brain'
+      : 'Awaiting founder export',
     callableLabel: 'Not callable',
   });
 }
@@ -361,6 +365,10 @@ export function presentBrandBrain(snapshot: PortalBrandBrainSnapshot): BrandBrai
   const externalProfiles = Object.freeze(externalInput
     .slice(0, MAX_EXTERNAL_PROFILES)
     .map(externalProfileView));
+  const externalAwaitingCount = externalInput
+    .filter((profile) => profile.status === 'awaiting_founder_export').length;
+  const externalAdaptedCount = externalInput
+    .filter((profile) => profile.status === 'adapted_internal').length;
   const adaptedMethodPacks = Object.freeze(adaptedMethodPackInput
     .slice(0, MAX_ADAPTED_METHOD_PACKS)
     .map(adaptedMethodPackView));
@@ -408,7 +416,7 @@ export function presentBrandBrain(snapshot: PortalBrandBrainSnapshot): BrandBrai
   const readyToActivate = gates.every((gate) => gate.passes)
     && specialists.length > 0
     && runtimeReadyCount === specialists.length
-    && externalProfiles.length === 0;
+    && externalAwaitingCount === 0;
   return Object.freeze({
     workspaceName: boundedText(snapshot.workspace.workspaceName, 'Property Predator Growth HQ', 200),
     asOf: safeInstant(snapshot.workspace.snapshotAt, snapshot.brain.recordedAt),
@@ -433,7 +441,8 @@ export function presentBrandBrain(snapshot: PortalBrandBrainSnapshot): BrandBrai
       sourceCount: sources.length,
       specialistCount: specialists.length,
       runtimeReadyCount,
-      externalAwaitingCount: externalProfiles.length,
+      externalAwaitingCount,
+      externalAdaptedCount,
       adaptedMethodPackCount: adaptedMethodPacks.length,
       artworkCount: safeCount(snapshot.brain.artworkCount),
       approvedReviewCount,

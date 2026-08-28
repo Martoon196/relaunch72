@@ -83,6 +83,10 @@ test('Growth HQ web receives the planner identity and one exact read-only compan
   literal(web, 'PROPERTY_PREDATOR_COMPANY_CONTENT_CLIENT_ID', 'relaunch72');
   valueLessSlot(web, 'PROPERTY_PREDATOR_COMPANY_CONTENT_READ_TOKEN');
   literal(web, 'PROPERTY_PREDATOR_COMPANY_CONTENT_TIMEOUT_MS', '8000');
+  literal(web, 'PROPERTY_PREDATOR_CAMPAIGN_GENERATION_ENABLED', 'true');
+  literal(web, 'PROPERTY_PREDATOR_CAMPAIGN_GENERATION_PROVIDER_EFFECTS_ENABLED', 'true');
+  literal(web, 'PROPERTY_PREDATOR_CAMPAIGN_GENERATION_EMERGENCY_PAUSED', 'false');
+  valueLessSlot(web, 'PROPERTY_PREDATOR_COMPANY_CONTENT_GENERATE_TOKEN');
   literal(web, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'false');
   literal(web, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'true');
   assert.doesNotMatch(
@@ -94,6 +98,12 @@ test('Growth HQ web receives the planner identity and one exact read-only compan
     /- key: PROPERTY_PREDATOR_(?:PUBLIC_SOCIAL_REVALIDATOR|PUBLIC_SOCIAL_RAIL)_/,
   );
   assert.doesNotMatch(web, /- key: (?:COMPANY_CONTENT_GENERATE_TOKEN|ADMIN_TOKEN)\b/);
+  for (const worker of [revalidator, testRail]) {
+    assert.doesNotMatch(
+      worker,
+      /- key: PROPERTY_PREDATOR_(?:CAMPAIGN_GENERATION_[A-Z0-9_]+|COMPANY_CONTENT_GENERATE_TOKEN)\b/,
+    );
+  }
 });
 
 test('0040 JIT revalidator has one function-only database identity and one read-only source credential', () => {

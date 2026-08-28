@@ -53,6 +53,16 @@ import {
   createPgPortalCompanyContentReviewService,
   type PgPortalCompanyContentReviewService,
 } from './company-content-review-pg-service.js';
+import {
+  createPgPortalBrandBrainService,
+  type PgPortalBrandBrainService,
+} from './brand-brain-pg-service.js';
+import {
+  composePropertyPredatorCampaignDraftRuntime,
+} from './property-predator-campaign-draft-composition.js';
+import type {
+  PropertyPredatorCampaignDraftRuntime,
+} from '../company-content-adapter/property-predator-campaign-draft-runtime.js';
 
 export interface PgPortalPlatform {
   auth: PgPortalAuthService;
@@ -70,6 +80,10 @@ export interface PgPortalPlatform {
   companyContentSync?: PgPortalCompanyContentSyncService;
   /** Manager-only exact source review; read-only and provider-incapable. */
   companyContentReview?: PgPortalCompanyContentReviewService;
+  /** Product-scoped, metadata-only Brand Brain read boundary. */
+  brandBrain?: PgPortalBrandBrainService;
+  /** Exact-evidence, review-only source generation; no send/publish surface. */
+  campaignDrafts?: Pick<PropertyPredatorCampaignDraftRuntime, 'generateReviewDraft'>;
   /** Durable TEST-only public-social campaign planner and safe calendar projection. */
   publicSocial?: PgPortalPublicSocialService;
   /** Canonical TEST-only queue read model; it has no send or provider operation. */
@@ -195,6 +209,38 @@ async function assertCompanyAssetRoleCapabilities(
   }
 }
 
+async function assertBrandBrainRoleCapabilities(adapterPool: Pool): Promise<void> {
+  const result = await adapterPool.query<{ ready: boolean }>(
+    `/* portal.brand-brain-adapter-role-readiness */
+     SELECT current_user = 'r72_content_adapter'
+        AND (SELECT bool_and(pg_catalog.has_table_privilege(
+                current_user, 'app_private.' || required.table_name, 'SELECT'
+              ))
+             FROM (VALUES
+               ('brand_brain_source_releases'), ('brand_brain_source_version_refs'),
+               ('brand_brain_specialist_profile_refs'), ('brand_brain_quarantines'),
+               ('brand_brain_source_attestations'), ('brand_brain_eval_results'),
+               ('brand_brain_review_decisions'), ('brand_brain_activations')
+             ) AS required(table_name))
+        AND pg_catalog.has_function_privilege(
+              current_user,
+              'app_private.active_portal_session(bytea,uuid,uuid)',
+              'EXECUTE'
+            )
+        AND NOT pg_catalog.has_function_privilege(
+              current_user,
+              'app_private.lock_active_portal_session(bytea,uuid,uuid)',
+              'EXECUTE'
+            )
+        AND NOT pg_catalog.has_table_privilege(
+              current_user, 'app.provider_operations', 'INSERT'
+            ) AS ready`,
+  );
+  if (result.rows.length !== 1 || result.rows[0]?.ready !== true) {
+    throw new Error('Brand Brain portal read role capabilities are incomplete');
+  }
+}
+
 export function postgresPortalEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env.PORTAL_POSTGRES_ENABLED?.trim().toLowerCase() ?? '';
   if (!raw || raw === '0' || raw === 'false' || raw === 'no') return false;
@@ -252,6 +298,7 @@ export async function buildPgPortalPlatform(
     && propertyPredatorGrowthProfile;
   const expectedInstallationId = env.PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID?.trim();
   const companyContentSyncSource = propertyPredatorContentSyncSourceForProfile(env);
+  const campaignDraftComposition = composePropertyPredatorCampaignDraftRuntime(env);
   if (requireCompanyContent && !expectedInstallationId) {
     throw new Error('Property Predator production requires its database installation identity');
   }
@@ -315,6 +362,7 @@ export async function buildPgPortalPlatform(
     let companyAssets: PgPortalCompanyAssetsService | undefined;
     let companyContentSync: PgPortalCompanyContentSyncService | undefined;
     let companyContentReview: PgPortalCompanyContentReviewService | undefined;
+    let brandBrain: PgPortalBrandBrainService | undefined;
     let publicSocial: PgPortalPublicSocialService | undefined;
     let contentReadinessPool: Pool | undefined;
     let contentCommandPool: Pool | undefined;
@@ -363,6 +411,9 @@ export async function buildPgPortalPlatform(
           await assertExpectedDatabaseInstallation(contentAdapterPool, expectedInstallationId);
         }
         await assertCompanyAssetRoleCapabilities(contentAdapterPool, contentCommandPool);
+        if (propertyPredatorGrowthProfile) {
+          await assertBrandBrainRoleCapabilities(contentAdapterPool);
+        }
         companyAssets = createPgPortalCompanyAssetsService({
           webPool,
           adapterPool: contentAdapterPool,
@@ -380,6 +431,12 @@ export async function buildPgPortalPlatform(
             source: companyContentSyncSource,
           });
         }
+        if (propertyPredatorGrowthProfile) {
+          brandBrain = createPgPortalBrandBrainService({
+            webPool,
+            adapterPool: contentAdapterPool,
+          });
+        }
         assetReadinessPool = contentAdapterPool;
         pools.push(contentAdapterPool);
       } catch {
@@ -387,6 +444,7 @@ export async function buildPgPortalPlatform(
         companyAssets = undefined;
         companyContentSync = undefined;
         companyContentReview = undefined;
+        brandBrain = undefined;
         if (requireCompanyContent) {
           throw new Error('Property Predator production company-assets controls did not pass readiness');
         }
@@ -444,6 +502,10 @@ export async function buildPgPortalPlatform(
       companyAssets,
       companyContentSync,
       companyContentReview,
+      brandBrain,
+      campaignDrafts: companyContent && brandBrain
+        ? campaignDraftComposition.runtime
+        : undefined,
       publicSocial,
       inbox: createPgPortalInboxReadBoundary(webPool),
       inboxCommands: createPgPortalConversionInboxCommandService({ webPool, commandPool }),
@@ -474,7 +536,10 @@ export async function buildPgPortalPlatform(
             ? [contentReadinessPool.query('/* portal.content-runtime-readiness */ SELECT 1')]
             : []),
           ...(assetReadinessPool && contentCommandPool
-            ? [assertCompanyAssetRoleCapabilities(assetReadinessPool, contentCommandPool)]
+            ? [
+                assertCompanyAssetRoleCapabilities(assetReadinessPool, contentCommandPool),
+                ...(brandBrain ? [assertBrandBrainRoleCapabilities(assetReadinessPool)] : []),
+              ]
             : []),
           ...(publicSocialReadinessPool
             ? [publicSocialReadinessPool.query(

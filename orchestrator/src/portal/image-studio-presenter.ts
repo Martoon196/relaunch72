@@ -3,6 +3,9 @@ export const IMAGE_STUDIO_ROUTE = '/portal/content/images' as const;
 export interface ImageStudioSnapshot {
   readonly workspaceName: string;
   readonly capturedAt: string;
+  readonly dataset?: 'illustrative_fixture' | 'postgres_authoritative';
+  readonly usageEvidence?: 'illustrative_fixture' | 'worker_not_connected' | 'authoritative_worker_ledger';
+  readonly currentImageMakerHref?: string;
   readonly model: 'gpt-image-2';
   readonly credentialBoundary: 'property-predator-openai-image-api/v1';
   readonly effects: Readonly<{
@@ -77,6 +80,9 @@ export interface ImageStudioView {
   readonly brief: ImageStudioSnapshot['brief'];
   readonly references: ImageStudioSnapshot['references'];
   readonly proposals: ImageStudioSnapshot['proposals'];
+  readonly dataset: 'illustrative_fixture' | 'postgres_authoritative';
+  readonly usageEvidence: 'illustrative_fixture' | 'worker_not_connected' | 'authoritative_worker_ledger';
+  readonly currentImageMakerHref: string | null;
   readonly generateAvailable: boolean;
   readonly gateLabel: string;
   readonly gateDetail: string;
@@ -101,6 +107,19 @@ function gauge(usedRaw: number, limitRaw: number, label: string): ImageStudioGau
 
 function isSha256(value: string): boolean {
   return /^[a-f0-9]{64}$/u.test(value);
+}
+
+function currentImageMakerHref(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.hostname === 'propertypredator.com'
+      && url.pathname === '/admin.html' && url.hash === '#ai-image-maker'
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export function presentImageStudio(snapshot: ImageStudioSnapshot): ImageStudioView {
@@ -174,6 +193,9 @@ export function presentImageStudio(snapshot: ImageStudioSnapshot): ImageStudioVi
     brief: Object.freeze({ ...snapshot.brief }),
     references: Object.freeze(snapshot.references.slice(0, 12).map((item) => Object.freeze({ ...item }))),
     proposals: Object.freeze(snapshot.proposals.slice(0, 12).map((item) => Object.freeze({ ...item }))),
+    dataset: snapshot.dataset ?? 'illustrative_fixture',
+    usageEvidence: snapshot.usageEvidence ?? 'illustrative_fixture',
+    currentImageMakerHref: currentImageMakerHref(snapshot.currentImageMakerHref),
     generateAvailable,
     gateLabel,
     gateDetail,

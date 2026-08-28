@@ -430,6 +430,14 @@ async function main(): Promise<void> {
       } else {
         console.warn('⚠  Company asset controls remain unavailable; adapter/command role readiness did not pass.');
       }
+      if (postgresPortal.brandBrain) {
+        console.log('PostgreSQL Brand Brain metadata is ready with provider effects off.');
+      }
+      if (postgresPortal.campaignDrafts) {
+        console.log('Review-only campaign generation is ready; source-owned durable quota remains authoritative and outbound effects are absent.');
+      } else {
+        console.warn('⚠  Review-only campaign generation remains disabled; the Campaign Wizard will not offer a provider action.');
+      }
       console.log('Authoritative Operator Action Centre and protected assignment/snooze commands are ready.');
     } catch (error) {
       // No legacy-cookie fallback in requested database mode. Payments may stay
@@ -477,6 +485,8 @@ async function main(): Promise<void> {
         companyAssets: postgresPortal.companyAssets,
         companyContentSync: postgresPortal.companyContentSync,
         companyContentReview: postgresPortal.companyContentReview,
+        brandBrain: postgresPortal.brandBrain,
+        campaignDrafts: postgresPortal.campaignDrafts,
         publicSocial: postgresPortal.publicSocial,
         inbox: postgresPortal.inbox,
         inboxCommands: postgresPortal.inboxCommands,

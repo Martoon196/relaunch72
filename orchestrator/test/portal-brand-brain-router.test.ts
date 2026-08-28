@@ -149,7 +149,7 @@ test('Brand Brain route passes only the opaque session identity and renders a re
   assert.equal(result.headers['cache-control'], 'no-store');
   assert.match(result.body, /PROVIDER EFFECTS OFF/);
   assert.match(result.body, /Source Social Media Manager/);
-  assert.match(result.body, /Awaiting founder export/);
+  assert.match(result.body, /Adapted into Brand Brain/);
   assert.match(result.body, /Panther imagery vs no-animal visual rule/);
   assert.match(result.body, /href="\/portal\/content\/brain" aria-current="page"/);
   assert.match(result.body, /href="\/portal\/content"/);

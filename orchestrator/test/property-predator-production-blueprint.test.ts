@@ -47,6 +47,19 @@ function secretSlot(key: string): void {
   );
 }
 
+function secretSlotIn(section: string, key: string): void {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  assert.match(
+    section,
+    new RegExp(`- key: ${escapedKey}\\r?\\n\\s+sync: false(?:\\r?\\n|$)`),
+    `${key} must be a value-less Render secret slot in its isolated service`,
+  );
+  assert.doesNotMatch(
+    section,
+    new RegExp(`- key: ${escapedKey}\\r?\\n\\s+value:`),
+  );
+}
+
 function dashboardControlledSlot(key: string): void {
   const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   assert.match(
@@ -77,7 +90,7 @@ function databaseUrlKeys(section: string): string[] {
     .sort();
 }
 
-test('production Blueprint is isolated, manually deployed and fail-closed', () => {
+test('production Blueprint is isolated, manually deployed and narrowly fail-closed', () => {
   assert.match(manifest, /name: property-predator-growth-hq/);
   assert.match(manifest, /region: frankfurt/);
   assert.match(manifest, /plan: starter/);
@@ -161,20 +174,62 @@ test('production Blueprint is isolated, manually deployed and fail-closed', () =
       assert.doesNotMatch(worker, new RegExp(`- key: ${key}\\b`));
     }
   }
-  for (const section of [webManifest, emailWorkerManifest]) {
-    literalValueIn(section, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'false');
-    literalValueIn(section, 'PROPERTY_PREDATOR_EMAIL_DELIVERY_ENABLED', 'false');
-    literalValueIn(section, 'PROPERTY_PREDATOR_EMAIL_EMERGENCY_PAUSED', 'true');
+  literalValueIn(webManifest, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'false');
+  literalValueIn(webManifest, 'PROPERTY_PREDATOR_CAMPAIGN_GENERATION_ENABLED', 'true');
+  literalValueIn(
+    webManifest,
+    'PROPERTY_PREDATOR_CAMPAIGN_GENERATION_PROVIDER_EFFECTS_ENABLED',
+    'true',
+  );
+  literalValueIn(
+    webManifest,
+    'PROPERTY_PREDATOR_CAMPAIGN_GENERATION_EMERGENCY_PAUSED',
+    'false',
+  );
+  secretSlotIn(webManifest, 'PROPERTY_PREDATOR_COMPANY_CONTENT_GENERATE_TOKEN');
+  assert.equal(
+    (manifest.match(/- key: PROPERTY_PREDATOR_COMPANY_CONTENT_GENERATE_TOKEN\b/g) ?? []).length,
+    1,
+    'the scoped generation credential must exist only in the Growth HQ web service',
+  );
+  for (const worker of workerManifests) {
+    assert.doesNotMatch(
+      worker,
+      /- key: PROPERTY_PREDATOR_(?:CAMPAIGN_GENERATION_[A-Z0-9_]+|COMPANY_CONTENT_GENERATE_TOKEN)\b/,
+    );
   }
+  assert.doesNotMatch(
+    manifest,
+    /- key: PROPERTY_PREDATOR_CONTENT_(?:READ|SYNC)_CREDENTIAL_SHA256\b/,
+    'credential separation hashes are derived from existing web-only secrets',
+  );
+  literalValueIn(webManifest, 'PROPERTY_PREDATOR_EMAIL_DELIVERY_ENABLED', 'false');
+  literalValueIn(webManifest, 'PROPERTY_PREDATOR_EMAIL_EMERGENCY_PAUSED', 'true');
+  literalValueIn(emailWorkerManifest, 'PROPERTY_PREDATOR_EMAIL_WORKER_MODE', 'internal-seed-live');
+  literalValueIn(emailWorkerManifest, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'true');
+  literalValueIn(emailWorkerManifest, 'PROPERTY_PREDATOR_EMAIL_DELIVERY_ENABLED', 'true');
+  literalValueIn(emailWorkerManifest, 'PROPERTY_PREDATOR_EMAIL_EMERGENCY_PAUSED', 'false');
   literalValueIn(webManifest, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'true');
   for (const section of [revalidatorWorkerManifest, socialTestWorkerManifest]) {
     literalValueIn(section, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'false');
     literalValueIn(section, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'true');
     assert.doesNotMatch(section, /- key: PROPERTY_PREDATOR_EMAIL_(?:DELIVERY_ENABLED|EMERGENCY_PAUSED)\b/);
   }
-  literalValue('PROPERTY_PREDATOR_PILOT_STAGE', 'internal-seed');
-  literalValue('PROPERTY_PREDATOR_PILOT_RECIPIENT_SCOPE', 'owned-internal-seeds-only');
-  literalValue('PROPERTY_PREDATOR_PILOT_MAX_RECIPIENTS', '10');
+  for (const section of [webManifest, emailWorkerManifest]) {
+    literalValueIn(section, 'PROPERTY_PREDATOR_PILOT_STAGE', 'internal-seed');
+    literalValueIn(section, 'PROPERTY_PREDATOR_PILOT_RECIPIENT_SCOPE', 'owned-internal-seeds-only');
+  }
+  literalValueIn(webManifest, 'PROPERTY_PREDATOR_PILOT_MAX_RECIPIENTS', '10');
+  literalValueIn(emailWorkerManifest, 'PROPERTY_PREDATOR_PILOT_MAX_RECIPIENTS', '1');
+  literalValueIn(emailWorkerManifest, 'PROPERTY_PREDATOR_EMAIL_RUN_MESSAGE_CAP', '1');
+  literalValueIn(emailWorkerManifest, 'PROPERTY_PREDATOR_EMAIL_MONTHLY_MESSAGE_CAP', '3');
+  literalValueIn(
+    emailWorkerManifest,
+    'PROPERTY_PREDATOR_EMAIL_ESTIMATED_RECIPIENT_COST_USD_MICROS',
+    '1000',
+  );
+  literalValueIn(emailWorkerManifest, 'PROPERTY_PREDATOR_EMAIL_RUN_SPEND_CAP_USD_MICROS', '1000');
+  literalValueIn(emailWorkerManifest, 'PROPERTY_PREDATOR_EMAIL_MONTHLY_SPEND_CAP_USD_MICROS', '3000');
 });
 
 test('production Blueprint keeps web and worker database identities process-isolated', () => {
@@ -245,15 +300,18 @@ test('production Blueprint keeps web and worker database identities process-isol
   assert.doesNotMatch(manifest, /^\s+disk:/m);
 });
 
-test('Mailgun ingress is isolated and the dark worker receives no outbound secret', () => {
+test('Mailgun ingress and controlled internal-seed egress use disjoint exact secrets', () => {
   secretSlot('MAILGUN_SIGNING_KEY');
 
   assert.doesNotMatch(webManifest, /- key: MAILGUN_API_KEY\b/);
   assert.doesNotMatch(webManifest, /- key: DATABASE_MAILGUN_WORKER_URL\b/);
   assert.match(webManifest, /- key: MAILGUN_SIGNING_KEY\b/);
   assert.doesNotMatch(emailWorkerManifest, /- key: MAILGUN_API_KEY\b/);
-  assert.doesNotMatch(emailWorkerManifest, /- key: MAILGUN_SENDING_DOMAIN\b/);
-  assert.doesNotMatch(emailWorkerManifest, /- key: MAILGUN_FROM_EMAIL\b/);
+  literalValueIn(emailWorkerManifest, 'MAILGUN_REGION', 'eu');
+  literalValueIn(emailWorkerManifest, 'MAILGUN_SENDING_DOMAIN', 'mg.propertypredator.com');
+  literalValueIn(emailWorkerManifest, 'MAILGUN_KEY_SCOPE', 'domain-sending');
+  secretSlotIn(emailWorkerManifest, 'MAILGUN_DOMAIN_SENDING_KEY');
+  secretSlotIn(emailWorkerManifest, 'MAILGUN_FROM_EMAIL');
   assert.doesNotMatch(emailWorkerManifest, /- key: MAILGUN_SIGNING_KEY\b/);
   assert.doesNotMatch(emailWorkerManifest, /- key: MAILGUN_EVENT_WEBHOOK_URL\b/);
   assert.doesNotMatch(
@@ -263,6 +321,11 @@ test('Mailgun ingress is isolated and the dark worker receives no outbound secre
   assert.doesNotMatch(emailWorkerManifest, /- key: SESSION_SECRET\b/);
   assert.doesNotMatch(emailWorkerManifest, /- key: DATABASE_MAILGUN_WEBHOOK_URL\b/);
   assert.match(emailWorkerManifest, /- key: PROPERTY_PREDATOR_EMAIL_INTERNAL_SEEDS\b/);
+  assert.doesNotMatch(
+    emailWorkerManifest,
+    /stage_property_predator_mailgun_job|PROPERTY_PREDATOR_MAILGUN_JOB|(?:preDeployCommand|initialDeployHook|afterFirstDeployCommand):/,
+    'Blueprint activation must not stage a provider job',
+  );
   for (const worker of [revalidatorWorkerManifest, socialTestWorkerManifest]) {
     assert.doesNotMatch(worker, /- key: MAILGUN_[A-Z0-9_]+\b/);
     assert.doesNotMatch(worker, /- key: PROPERTY_PREDATOR_EMAIL_[A-Z0-9_]+\b/);
@@ -280,10 +343,15 @@ test('Mailgun ingress is isolated and the dark worker receives no outbound secre
     manifest,
     /- key: (?:STRIPE_SECRET_KEY|STRIPE_WEBHOOK_SECRET|POSTMARK_SERVER_TOKEN|BREVO_API_KEY|ANTHROPIC_API_KEY|DATABASE_IMPORT_COMMAND_URL)\b/,
   );
+  assert.doesNotMatch(
+    manifest,
+    /- key: (?:TWILIO_[A-Z0-9_]+|AYRSHARE_[A-Z0-9_]+|WHEREBY_[A-Z0-9_]+|META_(?:ACCESS_TOKEN|APP_SECRET)|PROPERTY_PREDATOR_(?:WHATSAPP_PROVIDER|META_WHATSAPP_INGRESS_ENABLED|WHEREBY_INGRESS_ENABLED))\b/,
+    'WhatsApp, social/DM and webinar provider rails must remain credential-free and dark',
+  );
   assert.doesNotMatch(manifest, /MAILGUN_(?:API_KEY|SIGNING_KEY):\s*\S+/);
 });
 
-test('deployment requires a dedicated dormant worker entrypoint without a web fallback', () => {
+test('deployment requires a dedicated controlled worker entrypoint without a web fallback', () => {
   const deploymentGuide = fs.readFileSync(
     path.join(repositoryRoot, 'docs/property-predator-production-deployment.md'),
     'utf8',

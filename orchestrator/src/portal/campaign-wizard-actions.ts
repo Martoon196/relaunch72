@@ -10,6 +10,8 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 
 export const CAMPAIGN_WIZARD_ROUTE = '/portal/campaigns/new' as const;
 export const CAMPAIGN_WIZARD_CREATE_TEST_ROUTE = '/portal/campaigns/test-planning-intents' as const;
+export const CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE =
+  '/portal/campaigns/review-drafts' as const;
 
 export interface CampaignWizardCreateAction {
   readonly actionUrl: string;
@@ -17,6 +19,14 @@ export interface CampaignWizardCreateAction {
   readonly commandKey: string;
   /** GET destination restored after the POST/redirect/GET cycle. */
   readonly returnTo?: string;
+}
+
+export interface CampaignWizardGenerateReviewDraftAction {
+  readonly actionUrl: typeof CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE;
+  readonly csrfToken: string;
+  readonly commandKey: string;
+  /** Server-owned reservation ceiling. The browser can display but not alter it. */
+  readonly maximumCostMinor: number;
 }
 
 export type CampaignWizardOutcomeKind = 'success' | 'info' | 'error';
@@ -154,4 +164,19 @@ export function isCampaignWizardCreateActionReady(
     && !/[\u0000-\u001f\u007f]/u.test(action.csrfToken)
     && COMMAND_KEY.test(action.commandKey)
     && (action.returnTo === undefined || isSafeCampaignWizardPortalPath(action.returnTo)));
+}
+
+export function isCampaignWizardGenerateReviewDraftActionReady(
+  action: CampaignWizardGenerateReviewDraftAction | undefined,
+): action is CampaignWizardGenerateReviewDraftAction {
+  return Boolean(action
+    && action.actionUrl === CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE
+    && typeof action.csrfToken === 'string'
+    && action.csrfToken.length >= 16
+    && action.csrfToken.length <= 512
+    && !/[\u0000-\u001f\u007f]/u.test(action.csrfToken)
+    && COMMAND_KEY.test(action.commandKey)
+    && Number.isSafeInteger(action.maximumCostMinor)
+    && action.maximumCostMinor >= 1
+    && action.maximumCostMinor <= 25_000);
 }

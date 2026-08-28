@@ -8,6 +8,8 @@ export interface CampaignWizardContentSnapshot {
   readonly contentItemId: string;
   readonly contentVersionId: string;
   readonly contentSha256: string;
+  /** Exact brand snapshot digest; generation requires equality with the active Brand Brain. */
+  readonly brandSha256?: string;
   readonly title: string;
   readonly versionNumber: number;
   readonly kindLabel: string;

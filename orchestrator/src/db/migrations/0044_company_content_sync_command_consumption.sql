@@ -3,6 +3,11 @@
 -- workspace-scoped SHA-256 evidence before any Property Predator source read.
 -- No raw session token, command key, email address or source content is stored.
 
+-- The migrator login is deliberately not granted ongoing app_private access.
+-- Assume the migration-owner role before resolving private preflight objects,
+-- exactly as the later DDL already requires.
+SET LOCAL ROLE r72_owner;
+
 DO $preflight$
 BEGIN
   IF NOT EXISTS (
@@ -25,8 +30,6 @@ BEGIN
   END IF;
 END
 $preflight$;
-
-SET LOCAL ROLE r72_owner;
 
 CREATE TABLE app.company_content_sync_command_consumptions (
   workspace_id uuid NOT NULL
@@ -75,7 +78,16 @@ ON CONFLICT (schema_name, table_name) DO UPDATE
     IS DISTINCT FROM EXCLUDED.workspace_column;
 
 RESET ROLE;
-SET LOCAL ROLE r72_security_definer;
+-- r72_security_definer deliberately has no CREATE privilege on app_private.
+-- Create as the migration owner, then transfer the exact function ownership.
+SET LOCAL ROLE r72_owner;
+
+-- The definer reads only the already transaction-local workspace/user context.
+-- These two setting readers are the minimum dependency needed before the
+-- manager/session functions (which the same role owns) can be evaluated.
+GRANT EXECUTE ON FUNCTION app_private.current_workspace_id(),
+  app_private.current_user_id()
+  TO r72_security_definer;
 
 CREATE FUNCTION app_private.consume_company_content_sync_command(
   p_workspace_id uuid,
@@ -170,14 +182,23 @@ BEGIN
 END
 $function$;
 
+-- PostgreSQL requires the incoming function owner to have CREATE on the
+-- containing schema during the ownership transfer. Grant it only inside this
+-- migration transaction and revoke it immediately afterwards.
+GRANT CREATE ON SCHEMA app_private TO r72_security_definer;
 ALTER FUNCTION app_private.consume_company_content_sync_command(uuid, bytea, text)
   OWNER TO r72_security_definer;
+REVOKE CREATE ON SCHEMA app_private FROM r72_security_definer;
 REVOKE ALL ON FUNCTION app_private.consume_company_content_sync_command(uuid, bytea, text)
   FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.consume_company_content_sync_command(uuid, bytea, text)
   TO r72_web;
 
 RESET ROLE;
+
+-- Resolve the private function during the capability audit as the migration
+-- owner; the migrator login itself intentionally has no schema visibility.
+SET LOCAL ROLE r72_owner;
 
 DO $capability_audit$
 BEGIN
@@ -217,3 +238,5 @@ BEGIN
   END IF;
 END
 $capability_audit$;
+
+RESET ROLE;
