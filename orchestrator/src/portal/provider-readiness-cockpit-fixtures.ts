@@ -230,8 +230,73 @@ const LABELS: Readonly<Record<ProviderActivationRail, string>> = Object.freeze({
   social_listening: 'Social listening · candidate',
 });
 
+const OPERATIONAL_BLOCKERS: Readonly<Record<ProviderActivationRail, readonly Readonly<{
+  code: string;
+  message: string;
+}>[]>> = Object.freeze({
+  mailgun_email: Object.freeze([
+    Object.freeze({
+      code: 'EMAIL_DELIVERY_SWITCH_OFF',
+      message: 'Email delivery is OFF; only the fictional queue projection is visible.',
+    }),
+    Object.freeze({
+      code: 'EMAIL_RECONCILIATION_REQUIRED',
+      message: 'One simulated outcome still needs signed-receipt reconciliation.',
+    }),
+  ]),
+  whatsapp: Object.freeze([
+    Object.freeze({
+      code: 'WHATSAPP_PROVIDER_NOT_COMPOSED',
+      message: 'No WhatsApp provider account, phone identity or signed webhook is connected.',
+    }),
+  ]),
+  public_social: Object.freeze([
+    Object.freeze({
+      code: 'SOCIAL_PROVIDER_NOT_COMPOSED',
+      message: 'Publishing uses a local simulation; no real social profile can receive a post.',
+    }),
+    Object.freeze({
+      code: 'SOCIAL_RETRY_FIXTURE_ONLY',
+      message: 'The retry backlog is fictional test evidence, not a scheduled provider retry.',
+    }),
+  ]),
+  social_dm: Object.freeze([
+    Object.freeze({
+      code: 'DM_INBOX_PERMISSION_MISSING',
+      message: 'No real inbox permission, recipient consent or reply identity is present.',
+    }),
+  ]),
+  webinar: Object.freeze([
+    Object.freeze({
+      code: 'WEBINAR_HOST_NOT_COMPOSED',
+      message: 'No webinar host, registration webhook or attendance feed is connected.',
+    }),
+  ]),
+  social_listening: Object.freeze([
+    Object.freeze({
+      code: 'LISTENING_FEED_NOT_COMPOSED',
+      message: 'No real listening feed, query entitlement or retention scope is connected.',
+    }),
+  ]),
+});
+
+const TELEMETRY_COUNTS: Readonly<Record<ProviderActivationRail, Readonly<{
+  queued: number;
+  retry: number;
+  reconciliation: number;
+  errors: number;
+}>>> = Object.freeze({
+  mailgun_email: Object.freeze({ queued: 2, retry: 0, reconciliation: 1, errors: 1 }),
+  whatsapp: Object.freeze({ queued: 0, retry: 0, reconciliation: 0, errors: 0 }),
+  public_social: Object.freeze({ queued: 3, retry: 2, reconciliation: 0, errors: 2 }),
+  social_dm: Object.freeze({ queued: 0, retry: 0, reconciliation: 0, errors: 0 }),
+  webinar: Object.freeze({ queued: 1, retry: 0, reconciliation: 0, errors: 0 }),
+  social_listening: Object.freeze({ queued: 4, retry: 0, reconciliation: 0, errors: 0 }),
+});
+
 function fixtureRail(rail: ProviderActivationRail): PortalProviderReadinessRailSnapshot {
   const input = inputFor(rail);
+  const telemetry = TELEMETRY_COUNTS[rail];
   return Object.freeze({
     rail,
     providerLabel: LABELS[rail],
@@ -250,6 +315,31 @@ function fixtureRail(rail: ProviderActivationRail): PortalProviderReadinessRailS
       verifiedAt: input.evidence[gate].verifiedAt,
       expiresAt: input.evidence[gate].expiresAt,
     }))),
+    telemetry: Object.freeze({
+      source: 'fictional_simulation',
+      executionMode: rail === 'whatsapp' || rail === 'social_dm'
+        || rail === 'webinar' || rail === 'social_listening'
+        ? 'not_composed'
+        : 'simulation_only',
+      workerState: rail === 'whatsapp' || rail === 'social_dm'
+        || rail === 'webinar' || rail === 'social_listening'
+        ? 'not_composed'
+        : 'paused',
+      emergencyPaused: true,
+      observedAt: PROPERTY_PREDATOR_PROVIDER_READINESS_AS_OF,
+      queuedCount: telemetry.queued,
+      activeLeaseCount: 0,
+      activeLeaseExpiresAt: null,
+      retryWaitCount: telemetry.retry,
+      nextRetryAt: telemetry.retry > 0 ? '2026-08-27T12:10:00.000Z' : null,
+      reconciliationRequiredCount: telemetry.reconciliation,
+      oldestReconciliationAt: telemetry.reconciliation > 0
+        ? '2026-08-27T11:42:00.000Z'
+        : null,
+      errorCount: telemetry.errors,
+      lastErrorClass: telemetry.errors > 0 ? 'Error' : null,
+      blockers: OPERATIONAL_BLOCKERS[rail],
+    }),
   });
 }
 

@@ -206,6 +206,12 @@ import {
 } from './provider-readiness-cockpit-presenter.js';
 import { renderProviderReadinessCockpitBody } from './provider-readiness-cockpit-view.js';
 import type { PortalProviderReadinessService } from './provider-readiness-cockpit-service.js';
+import { createPropertyPredatorSocialAccountControlFixture } from './social-account-control-fixtures.js';
+import {
+  SOCIAL_ACCOUNT_CONTROL_ROUTE,
+  presentSocialAccountControl,
+} from './social-account-control-presenter.js';
+import { renderSocialAccountControlBody } from './social-account-control-view.js';
 import type {
   PortalPublicSocialService,
   PortalPublicSocialSnapshot,
@@ -1907,6 +1913,34 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         title: 'Affiliate Compliance temporarily unavailable',
         message: 'No legal, acceptance, training, declaration, channel, case or permission evidence was changed.',
         active: 'affiliates',
+      }));
+    }
+  }
+
+  // ── provider readiness: bounded evidence only; every external effect stays off ──
+  if (deps.kind === 'postgres' && p === SOCIAL_ACCOUNT_CONTROL_ROUTE && method === 'GET') {
+    if (deps.productProfile?.id !== 'property_predator_growth') {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Social accounts not connected',
+        message: 'The Property Predator social-account rehearsal is not enabled for this workspace.',
+        active: 'content',
+      }));
+    }
+    try {
+      const view = presentSocialAccountControl(createPropertyPredatorSocialAccountControlFixture());
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      return sendHtml(res, 200, operationalPage(
+        view.workspaceName,
+        renderSocialAccountControlBody(view),
+        deps,
+        'content',
+        csrfToken,
+      ));
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Social accounts temporarily unavailable',
+        message: 'No account, permission, provider connection or external effect was changed.',
+        active: 'content',
       }));
     }
   }

@@ -131,9 +131,18 @@ test('Brand Brain actions are allowlisted GET navigation and content subnav mark
 
   const library = renderContentWorkspaceNavigation('library', { brandBrainAvailable: true });
   const brain = renderContentWorkspaceNavigation('brain', { brandBrainAvailable: true });
+  const create = renderContentWorkspaceNavigation('create', { brandBrainAvailable: true });
   assert.match(library, /href="\/portal\/content" aria-current="page"/);
   assert.doesNotMatch(library, /href="\/portal\/content\/brain" aria-current="page"/);
   assert.match(brain, /href="\/portal\/content\/brain" aria-current="page"/);
   assert.doesNotMatch(brain, /href="\/portal\/content" aria-current="page"/);
-  assert.doesNotMatch(`${library}${brain}`, /<form\b|method="post"/i);
+  assert.match(create, /href="\/portal\/campaigns\/new" data-content-action="create" aria-current="page"/);
+  assert.match(create, /href="\/portal\/social\/accounts"/);
+  assert.doesNotMatch(create, /href="\/portal\/providers\/readiness"/);
+  const readinessComposed = renderContentWorkspaceNavigation('create', {
+    brandBrainAvailable: true,
+    providerReadinessAvailable: true,
+  });
+  assert.match(readinessComposed, /href="\/portal\/providers\/readiness"/);
+  assert.doesNotMatch(`${library}${brain}${create}`, /<form\b|method="post"/i);
 });

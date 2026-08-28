@@ -86,6 +86,12 @@ import {
 } from '../src/portal/provider-readiness-cockpit-presenter.js';
 import { createPropertyPredatorProviderReadinessFixture } from '../src/portal/provider-readiness-cockpit-fixtures.js';
 import { renderProviderReadinessCockpitBody } from '../src/portal/provider-readiness-cockpit-view.js';
+import { createPropertyPredatorSocialAccountControlFixture } from '../src/portal/social-account-control-fixtures.js';
+import {
+  SOCIAL_ACCOUNT_CONTROL_ROUTE,
+  presentSocialAccountControl,
+} from '../src/portal/social-account-control-presenter.js';
+import { renderSocialAccountControlBody } from '../src/portal/social-account-control-view.js';
 import {
   PUBLIC_SOCIAL_CAMPAIGNS_ROUTE,
   presentPublicSocialCampaigns,
@@ -1404,7 +1410,7 @@ function shell(
   active: 'overview' | 'actions' | 'crm' | 'journeys' | 'content' | 'inbox' | 'affiliates',
   title: string,
 ): string {
-  const previewBoundary = '<aside role="status" aria-label="Local preview boundary" style="position:sticky;z-index:1000;top:0;display:flex;justify-content:center;gap:10px;align-items:center;min-height:42px;padding:8px 16px;border-bottom:1px solid #8a6a29;background:#201806;color:#f2c96d;font:800 12px/1.4 ui-monospace,monospace;letter-spacing:.035em;text-align:center"><strong>LOCAL PREVIEW</strong><span>Fictional / in-memory state · reload or process restart can lose changes · no live provider effects</span></aside>';
+  const previewBoundary = '<aside role="status" aria-label="Local preview boundary" style="position:sticky;z-index:1000;top:0;display:flex;flex-wrap:wrap;justify-content:center;gap:4px 10px;align-items:center;min-height:42px;padding:8px 16px;border-bottom:1px solid #8a6a29;background:#201806;color:#f2c96d;font:800 12px/1.4 ui-monospace,monospace;letter-spacing:.035em;text-align:center"><strong style="flex:0 0 auto">LOCAL PREVIEW</strong><span style="flex:1 1 240px;min-width:0">Fictional / in-memory state · reload or process restart can lose changes · no live provider effects</span></aside>';
   return appShell({
     title, tenantName: snapshot.workspace.name, active, body: `${previewBoundary}${body}`,
     productProfile: PROPERTY_PREDATOR_GROWTH_PROFILE,
@@ -1422,7 +1428,7 @@ function previewJourneyNav(active: 'board' | 'rules'): string {
 }
 
 type PreviewOperationsRoute = 'today' | 'actions' | 'journeys' | 'campaigns' | 'content'
-  | 'compose' | 'calendar' | 'inbox' | 'automations' | 'webinars' | 'analytics' | 'readiness';
+  | 'compose' | 'calendar' | 'inbox' | 'automations' | 'webinars' | 'analytics' | 'social_accounts' | 'readiness';
 
 function previewOperationsNav(active: PreviewOperationsRoute): string {
   const links: readonly Readonly<{ key: PreviewOperationsRoute; href: string; label: string }>[] = [
@@ -1437,9 +1443,10 @@ function previewOperationsNav(active: PreviewOperationsRoute): string {
     { key: 'automations', href: AUTOMATION_STUDIO_ROUTE, label: 'Automations' },
     { key: 'webinars', href: WEBINAR_STUDIO_ROUTE, label: 'Webinars' },
     { key: 'analytics', href: GROWTH_ANALYTICS_ROUTE, label: 'Analytics' },
+    { key: 'social_accounts', href: SOCIAL_ACCOUNT_CONTROL_ROUTE, label: 'Social accounts' },
     { key: 'readiness', href: PROVIDER_READINESS_COCKPIT_ROUTE, label: 'Provider readiness' },
   ];
-  return `<nav aria-label="Growth operations" style="display:flex;gap:7px;margin-bottom:14px;flex-wrap:wrap">${links.map((link) => `<a class="button ${link.key === active ? '' : 'secondary'} compact" href="${link.href}"${link.key === active ? ' aria-current="page"' : ''}>${link.label}</a>`).join('')}</nav>`;
+  return `<nav aria-label="Growth operations" style="display:flex;gap:7px;margin:0 -2px 14px;padding:0 2px 8px;overflow-x:auto;overscroll-behavior-inline:contain;scroll-snap-type:inline proximity">${links.map((link) => `<a class="button ${link.key === active ? '' : 'secondary'} compact" style="flex:0 0 auto;scroll-snap-align:start" href="${link.href}"${link.key === active ? ' aria-current="page"' : ''}>${link.label}</a>`).join('')}</nav>`;
 }
 
 function previewContentControl(url: URL): string {
@@ -1691,6 +1698,12 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
     html: shell(`${previewOperationsNav('readiness')}${renderProviderConnectionsBody(presentProviderConnections(
       createPropertyPredatorProviderConnectionsFixture(),
     ))}`, 'overview', 'Property Predator — Connections'),
+  };
+  if (path === SOCIAL_ACCOUNT_CONTROL_ROUTE) return {
+    status: 200,
+    html: shell(`${previewOperationsNav('social_accounts')}${renderSocialAccountControlBody(
+      presentSocialAccountControl(createPropertyPredatorSocialAccountControlFixture()),
+    )}`, 'content', 'Property Predator — Social Accounts'),
   };
   if (path === PROVIDER_READINESS_COCKPIT_ROUTE) return {
     status: 200,

@@ -104,7 +104,7 @@ export function renderCampaignWizardBody(
       : 'Exact eligible content and at least one TEST target are required.'
     : 'The router has not supplied a protected command boundary. This surface is read-only.';
 
-  return `${renderContentWorkspaceNavigation('campaigns', {
+  return `${renderContentWorkspaceNavigation('create', {
     companyAssetsAvailable: options.companyAssetsAvailable,
     assetsLabel: options.assetsLabel,
     brandBrainAvailable: options.brandBrainAvailable ?? false,

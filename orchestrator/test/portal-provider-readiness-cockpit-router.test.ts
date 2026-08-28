@@ -122,6 +122,11 @@ test('provider readiness route passes only opaque identity and renders no operat
   assert.match(result.body, /Provider Readiness/);
   assert.match(result.body, /ILLUSTRATIVE TEST DATA/);
   assert.match(result.body, /EXTERNAL EFFECTS OFF/);
+  assert.match(result.body, /SIMULATED · NO PROVIDER/);
+  assert.match(result.body, /NOT COMPOSED · NO PROVIDER/);
+  assert.match(result.body, /Fictional local telemetry/);
+  assert.match(result.body, /Worker telemetry/);
+  assert.match(result.body, /Reconciliation/);
   assert.doesNotMatch(result.body, /<form[^>]+action="\/portal\/providers|Connect now|Activate now/i);
   assert.deepEqual(calls, [{ sessionToken: SESSION, requestId: 'provider-readiness-request' }]);
 });

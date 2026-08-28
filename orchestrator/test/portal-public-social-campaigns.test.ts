@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SocialCampaignCommandProjection } from '../src/social-campaign-pg/types.js';
+import { createPropertyPredatorPublicSocialCampaignsFixture } from '../src/portal/public-social-campaigns-fixtures.js';
 import {
   presentPublicSocialCampaigns,
   PublicSocialCampaignsPresentationError,
@@ -90,6 +91,18 @@ test('presents exact campaign, revision, post and target TEST provenance without
     ['instagram', 'linkedin'],
   );
   assert.equal(view.revisions[0]?.posts[0]?.targets[0]?.stateTone, 'attention');
+  assert.equal(view.revisions[0]?.posts[0]?.receiptCount, 1);
+  assert.deepEqual(
+    view.revisions[0]?.posts[0]?.launchSteps.map((step) => [step.key, step.tone]),
+    [
+      ['content', 'complete'],
+      ['builder', 'complete'],
+      ['calendar', 'complete'],
+      ['approval', 'complete'],
+      ['queue', 'attention'],
+      ['receipt', 'working'],
+    ],
+  );
   assert.equal(Object.isFrozen(view), true);
   assert.equal(Object.isFrozen(view.revisions), true);
   assert.doesNotMatch(
@@ -115,6 +128,17 @@ test('renders an accessible responsive Property Predator read-only command surfa
   assert.match(html, /data-provider-effects="none"/);
   assert.match(html, /data-read-only="true"/);
   assert.match(html, /Authenticated read model · TEST only/);
+  assert.match(html, /href="\/portal\/campaigns\/new">Build TEST campaign<\/a>/);
+  assert.match(html, /Open TEST calendar/);
+  assert.match(html, /data-campaign-launch-runway/);
+  assert.match(html, /TEST launch runway/);
+  assert.match(html, /Approved company content/);
+  assert.match(html, /Campaign Builder/);
+  assert.match(html, /Campaign Calendar/);
+  assert.match(html, /Approval \+ source gate/);
+  assert.match(html, /Dark simulator queue/);
+  assert.match(html, /Simulated evidence/);
+  assert.match(html, /No simulator receipt hash has been recorded/);
   assert.match(html, /TEST dead letter/);
   assert.match(html, /role="status"/);
   assert.match(html, new RegExp(IDS.campaign));
@@ -132,6 +156,87 @@ test('renders an accessible responsive Property Predator read-only command surfa
   assert.doesNotMatch(html, /<(?:form|button|input|textarea|select|script)\b/i);
   assert.doesNotMatch(html, /(?:Activate campaign|Publish now|Retry now|Cancel operation)/i);
   assert.doesNotMatch(html, /test-account:|storageKey|connectionId|providerToken|body text/i);
+});
+
+test('launch runway shows a complete TEST chain only when every target has settled receipt evidence', () => {
+  const secondOperation = projection({
+    operationId: '88888888-8888-4888-8888-888888888888',
+    targetId: '99999999-9999-4999-8999-999999999999',
+    network: 'instagram',
+    targetLabel: 'Instagram TEST rail',
+    state: 'simulated_reconciled',
+    reconciliationAttemptCount: 1,
+    testReferenceSha256: 'e'.repeat(64),
+  });
+  const view = presentPublicSocialCampaigns([projection(), secondOperation], OPTIONS);
+  const post = view.revisions[0]?.posts[0];
+  assert.ok(post);
+  assert.equal(post.receiptCount, 2);
+  assert.equal(post.launchSteps.find((step) => step.key === 'queue')?.tone, 'complete');
+  assert.equal(post.launchSteps.find((step) => step.key === 'receipt')?.tone, 'complete');
+  const html = renderPublicSocialCampaignsBody(view);
+  assert.match(html, /2 receipts sealed/);
+  assert.match(html, /They prove simulation, never publication/);
+});
+
+test('launch runway does not claim approval materialisation or receipt evidence for a post-only plan', () => {
+  const postOnly = projection({
+    operationId: null,
+    targetId: null,
+    network: null,
+    targetLabel: null,
+    state: null,
+    simulationAttemptCount: null,
+    maxSimulationAttempts: null,
+    reconciliationAttemptCount: null,
+    maxReconciliationAttempts: null,
+    testReferenceSha256: null,
+  });
+  const post = presentPublicSocialCampaigns([postOnly], OPTIONS).revisions[0]?.posts[0];
+  assert.ok(post);
+  assert.equal(post.receiptCount, 0);
+  assert.deepEqual(
+    post.launchSteps.slice(3).map((step) => [step.key, step.stateLabel, step.tone]),
+    [
+      ['approval', 'Awaiting operation proof', 'planned'],
+      ['queue', 'No target operation yet', 'planned'],
+      ['receipt', 'Awaiting TEST evidence', 'planned'],
+    ],
+  );
+});
+
+test('launch runway distinguishes a cancelled TEST operation from queued or published work', () => {
+  const cancelled = projection({
+    state: 'simulated_cancelled',
+    simulationAttemptCount: 0,
+    testReferenceSha256: null,
+  });
+  const post = presentPublicSocialCampaigns([cancelled], OPTIONS).revisions[0]?.posts[0];
+  assert.ok(post);
+  assert.deepEqual(
+    post.launchSteps.slice(4).map((step) => [step.key, step.stateLabel, step.tone]),
+    [
+      ['queue', 'TEST operations cancelled', 'cancelled'],
+      ['receipt', 'No receipt expected · cancelled', 'cancelled'],
+    ],
+  );
+});
+
+test('Property Predator preview fixture demonstrates both a complete launch and a revalidation attention path', () => {
+  const fixture = presentPublicSocialCampaigns(
+    createPropertyPredatorPublicSocialCampaignsFixture(),
+    {
+      ...OPTIONS,
+      requestedCampaignId: 'a1000000-0000-4000-8000-000000000001',
+    },
+  );
+  const posts = fixture.revisions[0]?.posts ?? [];
+  assert.equal(posts.length, 2);
+  assert.equal(posts[0]?.receiptCount, 2);
+  assert.equal(posts[0]?.launchSteps.find((step) => step.key === 'queue')?.tone, 'complete');
+  assert.equal(posts[0]?.launchSteps.find((step) => step.key === 'receipt')?.tone, 'complete');
+  assert.equal(posts[1]?.launchSteps.find((step) => step.key === 'queue')?.tone, 'attention');
+  assert.equal(posts[1]?.launchSteps.find((step) => step.key === 'receipt')?.tone, 'attention');
 });
 
 test('presents the complete nine-network and ten-state TEST taxonomy without inventing live states', () => {

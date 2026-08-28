@@ -9,7 +9,11 @@ import {
   type ProviderEvidenceStatus,
   type ProviderReadinessReason,
 } from '../provider-activation-readiness/domain.js';
-import type { PortalProviderReadinessSnapshot } from './provider-readiness-cockpit-service.js';
+import type {
+  PortalProviderExecutionMode,
+  PortalProviderReadinessSnapshot,
+  PortalProviderTelemetrySource,
+} from './provider-readiness-cockpit-service.js';
 
 export const PROVIDER_READINESS_COCKPIT_ROUTE = '/portal/providers/readiness' as const;
 
@@ -37,6 +41,32 @@ export interface ProviderEvidenceView {
   readonly expiresAt: string | null;
 }
 
+export interface ProviderOperationalBlockerView {
+  readonly code: string;
+  readonly message: string;
+}
+
+export interface ProviderWorkerTelemetryView {
+  readonly source: PortalProviderTelemetrySource;
+  readonly executionMode: PortalProviderExecutionMode;
+  readonly sourceLabel: string;
+  readonly executionModeLabel: string;
+  readonly workerStateLabel: string;
+  readonly tone: ProviderCockpitTone;
+  readonly pauseLabel: 'ENGAGED';
+  readonly observedAt: string;
+  readonly queuedCount: number;
+  readonly activeLeaseCount: number;
+  readonly leaseLabel: string;
+  readonly retryWaitCount: number;
+  readonly retryLabel: string;
+  readonly reconciliationRequiredCount: number;
+  readonly reconciliationLabel: string;
+  readonly errorCount: number;
+  readonly lastErrorClass: string | null;
+  readonly blockers: readonly ProviderOperationalBlockerView[];
+}
+
 export interface ProviderReadinessRailView {
   readonly rail: ProviderActivationRail;
   readonly anchorId: string;
@@ -53,6 +83,7 @@ export interface ProviderReadinessRailView {
   readonly evidence: readonly ProviderEvidenceView[];
   readonly evidenceCurrent: number;
   readonly evidenceAttention: number;
+  readonly telemetry: ProviderWorkerTelemetryView;
   readonly caps: Readonly<{
     currency: string;
     spendOperation: string;
@@ -77,6 +108,12 @@ export interface ProviderReadinessCockpitView {
   readonly blockedRailCount: number;
   readonly totalEvidenceCurrent: number;
   readonly totalEvidenceAttention: number;
+  readonly simulatedRailCount: number;
+  readonly realDarkRailCount: number;
+  readonly notComposedRailCount: number;
+  readonly totalQueuedCount: number;
+  readonly totalRetryWaitCount: number;
+  readonly totalReconciliationCount: number;
   readonly safety: Readonly<{
     liveAuthorised: false;
     providerEffectsAllowed: false;
@@ -107,6 +144,22 @@ const READINESS_LABELS: Readonly<Record<ProviderActivationReadiness, string>> = 
   internal_seed_ready: 'Internal seed ready',
 });
 
+const EXECUTION_MODE_LABELS = Object.freeze({
+  simulation_only: 'SIMULATED · NO PROVIDER',
+  real_adapter_dark: 'REAL ADAPTER · EFFECTS OFF',
+  not_composed: 'NOT COMPOSED · NO PROVIDER',
+});
+
+const WORKER_STATE_LABELS = Object.freeze({
+  paused: 'Paused by operator control',
+  not_composed: 'No worker composed',
+});
+
+const OPERATIONAL_BLOCKER_CODE = /^[A-Z][A-Z0-9_]{2,79}$/;
+const SAFE_ERROR_CLASSES = new Set([
+  'Error', 'AggregateError', 'TypeError', 'RangeError', 'DatabaseError', 'ConnectionError',
+]);
+
 function boundedText(value: unknown, fallback: string, max = 160): string {
   if (typeof value !== 'string') return fallback;
   const clean = value.trim();
@@ -134,10 +187,121 @@ function money(minorUnits: number, currency: string): string {
 }
 
 function safeCount(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
-    throw new Error('provider readiness cap must be a non-negative safe integer');
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)
+      || value < 0 || value > 1_000_000) {
+    throw new Error('provider readiness count must be a bounded non-negative safe integer');
   }
   return value;
+}
+
+function requiredInstant(value: unknown, label: string): string {
+  const parsed = instant(value);
+  if (!parsed) throw new Error(`${label} is invalid`);
+  return parsed;
+}
+
+function presentTelemetry(
+  source: PortalProviderReadinessSnapshot['rails'][number]['telemetry'],
+  illustrative: boolean,
+  snapshotAtMs: number,
+): ProviderWorkerTelemetryView {
+  if (!source || source.emergencyPaused !== true) {
+    throw new Error('provider worker telemetry must prove the emergency pause is engaged');
+  }
+  if (!['fictional_simulation', 'observed_runtime'].includes(source.source)
+      || !['simulation_only', 'real_adapter_dark', 'not_composed'].includes(source.executionMode)
+      || !['paused', 'not_composed'].includes(source.workerState)) {
+    throw new Error('provider worker telemetry mode is invalid');
+  }
+  if (illustrative
+      && (source.source !== 'fictional_simulation'
+        || source.executionMode === 'real_adapter_dark')) {
+    throw new Error('illustrative telemetry cannot claim a real provider runtime');
+  }
+  if (!illustrative && source.source !== 'observed_runtime') {
+    throw new Error('runtime readiness evidence cannot be labelled as a simulation');
+  }
+  if ((source.executionMode === 'not_composed') !== (source.workerState === 'not_composed')) {
+    throw new Error('provider worker composition telemetry is contradictory');
+  }
+  const observedAt = requiredInstant(source.observedAt, 'provider worker observedAt');
+  if (Date.parse(observedAt) > snapshotAtMs) {
+    throw new Error('provider worker telemetry is newer than its cockpit snapshot');
+  }
+  const queuedCount = safeCount(source.queuedCount);
+  const activeLeaseCount = safeCount(source.activeLeaseCount);
+  const retryWaitCount = safeCount(source.retryWaitCount);
+  const reconciliationRequiredCount = safeCount(source.reconciliationRequiredCount);
+  const errorCount = safeCount(source.errorCount);
+  const activeLeaseExpiresAt = source.activeLeaseExpiresAt === null
+    ? null
+    : requiredInstant(source.activeLeaseExpiresAt, 'provider active lease expiry');
+  const nextRetryAt = source.nextRetryAt === null
+    ? null
+    : requiredInstant(source.nextRetryAt, 'provider next retry');
+  const oldestReconciliationAt = source.oldestReconciliationAt === null
+    ? null
+    : requiredInstant(source.oldestReconciliationAt, 'provider reconciliation age');
+  if (activeLeaseCount !== 0 || activeLeaseExpiresAt !== null) {
+    throw new Error('paused provider telemetry cannot claim an active lease');
+  }
+  if ((retryWaitCount === 0) !== (nextRetryAt === null)
+      || (nextRetryAt && Date.parse(nextRetryAt) < Date.parse(observedAt))) {
+    throw new Error('provider retry telemetry is contradictory');
+  }
+  if ((reconciliationRequiredCount === 0) !== (oldestReconciliationAt === null)
+      || (oldestReconciliationAt && Date.parse(oldestReconciliationAt) > Date.parse(observedAt))) {
+    throw new Error('provider reconciliation telemetry is contradictory');
+  }
+  if ((errorCount === 0) !== (source.lastErrorClass === null)
+      || (source.lastErrorClass !== null && !SAFE_ERROR_CLASSES.has(source.lastErrorClass))) {
+    throw new Error('provider error telemetry is not safely redacted');
+  }
+  if (!Array.isArray(source.blockers) || source.blockers.length < 1 || source.blockers.length > 12) {
+    throw new Error('provider operational blocker evidence is incomplete');
+  }
+  const blockerCodes = new Set<string>();
+  const blockers = Object.freeze(source.blockers.map((blocker) => {
+    if (!blocker || typeof blocker !== 'object'
+        || typeof blocker.code !== 'string'
+        || !OPERATIONAL_BLOCKER_CODE.test(blocker.code)
+        || blockerCodes.has(blocker.code)
+        || typeof blocker.message !== 'string'
+        || blocker.message !== blocker.message.trim()
+        || blocker.message.length < 8 || blocker.message.length > 240) {
+      throw new Error('provider operational blocker evidence is invalid');
+    }
+    blockerCodes.add(blocker.code);
+    return Object.freeze({ code: blocker.code, message: blocker.message });
+  }));
+  return Object.freeze({
+    source: source.source,
+    executionMode: source.executionMode,
+    sourceLabel: source.source === 'fictional_simulation'
+      ? 'Fictional local telemetry'
+      : 'Observed runtime telemetry',
+    executionModeLabel: EXECUTION_MODE_LABELS[source.executionMode],
+    workerStateLabel: WORKER_STATE_LABELS[source.workerState],
+    tone: source.executionMode === 'not_composed'
+      ? 'blocked'
+      : source.executionMode === 'real_adapter_dark' ? 'working' : 'muted',
+    pauseLabel: 'ENGAGED',
+    observedAt,
+    queuedCount,
+    activeLeaseCount,
+    leaseLabel: 'No active lease',
+    retryWaitCount,
+    retryLabel: retryWaitCount === 0
+      ? 'No retry waiting'
+      : `${illustrative ? 'Next fictional retry' : 'Next retry'} · ${nextRetryAt}`,
+    reconciliationRequiredCount,
+    reconciliationLabel: reconciliationRequiredCount === 0
+      ? 'No reconciliation waiting'
+      : `${illustrative ? 'Oldest fictional item' : 'Oldest item'} · ${oldestReconciliationAt}`,
+    errorCount,
+    lastErrorClass: source.lastErrorClass,
+    blockers,
+  });
 }
 
 function evidenceFreshness(
@@ -220,6 +384,7 @@ function presentRail(
       expiresAt,
     });
   }));
+  const telemetry = presentTelemetry(source.telemetry, illustrative, asOfMs);
   const stageByName = new Map(report.stages.map((stage) => [stage.stage, stage]));
   if (stageByName.size !== PROVIDER_ACTIVATION_READINESS_STAGES.length) {
     throw new Error('provider readiness report stage set is incomplete');
@@ -272,6 +437,7 @@ function presentRail(
     evidence,
     evidenceCurrent,
     evidenceAttention,
+    telemetry,
     caps: Object.freeze({
       currency: caps.currency,
       spendOperation: money(operationSpend, caps.currency),
@@ -322,6 +488,15 @@ export function presentProviderReadinessCockpit(
     blockedRailCount: rails.filter((rail) => rail.readiness === 'not_ready').length,
     totalEvidenceCurrent: rails.reduce((total, rail) => total + rail.evidenceCurrent, 0),
     totalEvidenceAttention: rails.reduce((total, rail) => total + rail.evidenceAttention, 0),
+    simulatedRailCount: rails.filter((rail) => rail.telemetry.executionMode === 'simulation_only').length,
+    realDarkRailCount: rails.filter((rail) => rail.telemetry.executionMode === 'real_adapter_dark').length,
+    notComposedRailCount: rails.filter((rail) => rail.telemetry.executionMode === 'not_composed').length,
+    totalQueuedCount: rails.reduce((total, rail) => total + rail.telemetry.queuedCount, 0),
+    totalRetryWaitCount: rails.reduce((total, rail) => total + rail.telemetry.retryWaitCount, 0),
+    totalReconciliationCount: rails.reduce(
+      (total, rail) => total + rail.telemetry.reconciliationRequiredCount,
+      0,
+    ),
     safety: Object.freeze({
       liveAuthorised: false,
       providerEffectsAllowed: false,

@@ -313,6 +313,22 @@ export interface PublicSocialCampaignTargetView {
   readonly testReferenceSha256: string | null;
 }
 
+export type PublicSocialCampaignLaunchTone =
+  | 'planned'
+  | 'working'
+  | 'complete'
+  | 'cancelled'
+  | 'attention';
+
+export interface PublicSocialCampaignLaunchStepView {
+  readonly key: 'content' | 'builder' | 'calendar' | 'approval' | 'queue' | 'receipt';
+  readonly indexLabel: string;
+  readonly label: string;
+  readonly stateLabel: string;
+  readonly detail: string;
+  readonly tone: PublicSocialCampaignLaunchTone;
+}
+
 export interface PublicSocialCampaignPostView {
   readonly postId: string;
   readonly contentItemId: string;
@@ -321,6 +337,8 @@ export interface PublicSocialCampaignPostView {
   readonly planSha256: string;
   readonly scheduledFor: string;
   readonly targets: readonly PublicSocialCampaignTargetView[];
+  readonly receiptCount: number;
+  readonly launchSteps: readonly PublicSocialCampaignLaunchStepView[];
 }
 
 export interface PublicSocialCampaignRevisionView {
@@ -402,6 +420,117 @@ function samePost(post: MutablePost, row: SocialCampaignCommandProjection): bool
     && post.contentSha256 === row.contentSha256
     && post.planSha256 === row.planSha256
     && post.scheduledFor === row.scheduledFor;
+}
+
+function launchSteps(
+  post: Readonly<{
+    contentVersionId: string;
+    contentSha256: string;
+    planSha256: string;
+    scheduledFor: string;
+  }>,
+  targets: readonly PublicSocialCampaignTargetView[],
+): readonly PublicSocialCampaignLaunchStepView[] {
+  const receiptCount = targets.filter((target) => target.testReferenceSha256 !== null).length;
+  const attentionCount = targets.filter((target) => target.attention).length;
+  const completeCount = targets.filter((target) => target.stateTone === 'complete').length;
+  const workingCount = targets.filter((target) => target.stateTone === 'working').length;
+  const cancelledCount = targets.filter((target) => target.stateTone === 'cancelled').length;
+  const queueTone: PublicSocialCampaignLaunchTone = attentionCount > 0
+    ? 'attention'
+    : targets.length > 0 && completeCount === targets.length
+      ? 'complete'
+      : targets.length > 0 && completeCount + cancelledCount === targets.length
+        ? 'cancelled'
+      : workingCount > 0
+        ? 'working'
+        : 'planned';
+  const queueLabel = attentionCount > 0
+    ? `${attentionCount} need attention`
+    : targets.length === 0
+      ? 'No target operation yet'
+      : completeCount === targets.length
+        ? 'Simulator queue settled'
+        : completeCount + cancelledCount === targets.length
+          ? cancelledCount === targets.length
+            ? 'TEST operations cancelled'
+            : `Queue settled · ${cancelledCount} cancelled`
+        : workingCount > 0
+          ? 'Simulator working'
+          : 'TEST operations queued';
+  const receiptTone: PublicSocialCampaignLaunchTone = targets.length > 0
+    && cancelledCount === targets.length
+    ? 'cancelled'
+    : targets.length > 0 && receiptCount > 0
+      && receiptCount + cancelledCount === targets.length
+      ? 'complete'
+    : receiptCount > 0
+      ? 'working'
+      : attentionCount > 0
+        ? 'attention'
+        : 'planned';
+  const receiptLabel = targets.length > 0 && cancelledCount === targets.length
+    ? 'No receipt expected · cancelled'
+    : receiptCount > 0 && receiptCount + cancelledCount === targets.length
+      ? `${receiptCount} receipt${receiptCount === 1 ? '' : 's'} sealed${cancelledCount > 0 ? ` · ${cancelledCount} cancelled` : ''}`
+    : receiptCount === 0
+    ? 'Awaiting TEST evidence'
+      : `${receiptCount} of ${targets.length} receipts sealed`;
+
+  return Object.freeze([
+    Object.freeze({
+      key: 'content' as const,
+      indexLabel: '01',
+      label: 'Approved company content',
+      stateLabel: 'Exact version pinned',
+      detail: `Version ${post.contentVersionId} · SHA ${post.contentSha256.slice(0, 12)}…`,
+      tone: 'complete' as const,
+    }),
+    Object.freeze({
+      key: 'builder' as const,
+      indexLabel: '02',
+      label: 'Campaign Builder',
+      stateLabel: 'Immutable plan sealed',
+      detail: `Body-free plan proof ${post.planSha256.slice(0, 12)}…`,
+      tone: 'complete' as const,
+    }),
+    Object.freeze({
+      key: 'calendar' as const,
+      indexLabel: '03',
+      label: 'Campaign Calendar',
+      stateLabel: 'TEST slot fixed',
+      detail: `Durable TEST time ${post.scheduledFor}`,
+      tone: 'complete' as const,
+    }),
+    Object.freeze({
+      key: 'approval' as const,
+      indexLabel: '04',
+      label: 'Approval + source gate',
+      stateLabel: targets.length > 0 ? 'Materialisation proof present' : 'Awaiting operation proof',
+      detail: targets.length > 0
+        ? 'The post and target operations exist only after the exact approval/source boundary passed. Current planning/revalidation state, when present, remains visible in Calendar.'
+        : 'No target operation proves materialisation yet. Approval decision identities remain private.',
+      tone: targets.length > 0 ? 'complete' as const : 'planned' as const,
+    }),
+    Object.freeze({
+      key: 'queue' as const,
+      indexLabel: '05',
+      label: 'Dark simulator queue',
+      stateLabel: queueLabel,
+      detail: `${targets.length} bounded TEST target${targets.length === 1 ? '' : 's'} · provider effects none`,
+      tone: queueTone,
+    }),
+    Object.freeze({
+      key: 'receipt' as const,
+      indexLabel: '06',
+      label: 'Simulated evidence',
+      stateLabel: receiptLabel,
+      detail: receiptCount > 0
+        ? 'Exact receipt hashes are shown in the operation evidence below. They prove simulation, never publication.'
+        : 'No simulator receipt hash has been recorded for this TEST plan.',
+      tone: receiptTone,
+    }),
+  ]);
 }
 
 /**
@@ -523,18 +652,23 @@ export function presentPublicSocialCampaigns(
       const posts = [...revision.posts.values()]
         .sort((left, right) => left.scheduledFor.localeCompare(right.scheduledFor)
           || left.postId.localeCompare(right.postId))
-        .map((post): PublicSocialCampaignPostView => Object.freeze({
-          postId: post.postId,
-          contentItemId: post.contentItemId,
-          contentVersionId: post.contentVersionId,
-          contentSha256: post.contentSha256,
-          planSha256: post.planSha256,
-          scheduledFor: post.scheduledFor,
-          targets: Object.freeze(post.targets.sort((left, right) => (
+        .map((post): PublicSocialCampaignPostView => {
+          const targets = Object.freeze(post.targets.sort((left, right) => (
             left.network.localeCompare(right.network)
               || left.operationId.localeCompare(right.operationId)
-          ))),
-        }));
+          )));
+          return Object.freeze({
+            postId: post.postId,
+            contentItemId: post.contentItemId,
+            contentVersionId: post.contentVersionId,
+            contentSha256: post.contentSha256,
+            planSha256: post.planSha256,
+            scheduledFor: post.scheduledFor,
+            targets,
+            receiptCount: targets.filter((target) => target.testReferenceSha256 !== null).length,
+            launchSteps: launchSteps(post, targets),
+          });
+        });
       const targets = posts.flatMap((post) => post.targets);
       return Object.freeze({
         revisionId: revision.revisionId,
