@@ -23,6 +23,7 @@ import type { PortalJourneyManagerService } from './journey-manager-service.js';
 import type { PortalCompanyContentService } from './company-content-service.js';
 import type { PortalBrandBrainService } from './brand-brain-service.js';
 import type { PortalCompanyContentSyncService } from './company-content-sync-service.js';
+import type { PortalCompanyContentReviewService } from './company-content-review-service.js';
 import type { PortalAffiliateComplianceService } from './affiliate-compliance-service.js';
 import type { PortalConversionInboxCommandService } from './conversion-inbox-service.js';
 import type { PortalOperatorActionCentreService } from './operator-action-centre-pg-service.js';
@@ -146,6 +147,8 @@ export interface PostgresPortalConfig {
   companyAssets?: PortalCompanyAssetsService;
   /** Effects-off company-owned source sync. */
   companyContentSync?: PortalCompanyContentSyncService;
+  /** Manager-only exact-version source review. */
+  companyContentReview?: PortalCompanyContentReviewService;
   /** Read-only Brand Brain metadata. Omitted until its RLS reader is ready. */
   brandBrain?: PortalBrandBrainService;
   /** Fixture-only affiliate compliance evidence. Omitted outside explicit preview composition. */
@@ -183,7 +186,8 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
       || cfg.abuseHashSecret.trim() === cfg.sessionSecret.trim()) {
     throw new Error('PostgreSQL portal abuse boundary is incomplete');
   }
-  if (cfg.companyContentSync && productProfile.id !== 'property_predator_growth') {
+  if ((cfg.companyContentSync || cfg.companyContentReview)
+      && productProfile.id !== 'property_predator_growth') {
     throw new Error(
       'Property Predator company-content sync is forbidden outside property_predator_growth',
     );
@@ -205,6 +209,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     companyContent: cfg.companyContent,
     companyAssets: cfg.companyAssets,
     companyContentSync: cfg.companyContentSync,
+    companyContentReview: cfg.companyContentReview,
     brandBrain: cfg.brandBrain,
     affiliateCompliance: cfg.affiliateCompliance,
     inbox: cfg.inbox,

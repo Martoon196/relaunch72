@@ -49,6 +49,10 @@ import {
   type PropertyPredatorContentSyncSourceConfig,
   type PgPortalCompanyContentSyncService,
 } from './company-content-sync-pg-service.js';
+import {
+  createPgPortalCompanyContentReviewService,
+  type PgPortalCompanyContentReviewService,
+} from './company-content-review-pg-service.js';
 
 export interface PgPortalPlatform {
   auth: PgPortalAuthService;
@@ -64,6 +68,8 @@ export interface PgPortalPlatform {
   companyAssets?: PgPortalCompanyAssetsService;
   /** Effects-off, operator-triggered source verification and immutable import. */
   companyContentSync?: PgPortalCompanyContentSyncService;
+  /** Manager-only exact source review; read-only and provider-incapable. */
+  companyContentReview?: PgPortalCompanyContentReviewService;
   /** Durable TEST-only public-social campaign planner and safe calendar projection. */
   publicSocial?: PgPortalPublicSocialService;
   /** Canonical TEST-only queue read model; it has no send or provider operation. */
@@ -308,6 +314,7 @@ export async function buildPgPortalPlatform(
     let companyContent: PgPortalCompanyContentService | undefined;
     let companyAssets: PgPortalCompanyAssetsService | undefined;
     let companyContentSync: PgPortalCompanyContentSyncService | undefined;
+    let companyContentReview: PgPortalCompanyContentReviewService | undefined;
     let publicSocial: PgPortalPublicSocialService | undefined;
     let contentReadinessPool: Pool | undefined;
     let contentCommandPool: Pool | undefined;
@@ -367,6 +374,11 @@ export async function buildPgPortalPlatform(
             adapterPool: contentAdapterPool,
             source: companyContentSyncSource,
           });
+          companyContentReview = createPgPortalCompanyContentReviewService({
+            webPool,
+            adapterPool: contentAdapterPool,
+            source: companyContentSyncSource,
+          });
         }
         assetReadinessPool = contentAdapterPool;
         pools.push(contentAdapterPool);
@@ -374,6 +386,7 @@ export async function buildPgPortalPlatform(
         await contentAdapterPool?.end().catch(() => undefined);
         companyAssets = undefined;
         companyContentSync = undefined;
+        companyContentReview = undefined;
         if (requireCompanyContent) {
           throw new Error('Property Predator production company-assets controls did not pass readiness');
         }
@@ -430,6 +443,7 @@ export async function buildPgPortalPlatform(
       companyContent,
       companyAssets,
       companyContentSync,
+      companyContentReview,
       publicSocial,
       inbox: createPgPortalInboxReadBoundary(webPool),
       inboxCommands: createPgPortalConversionInboxCommandService({ webPool, commandPool }),

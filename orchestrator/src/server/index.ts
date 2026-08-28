@@ -475,6 +475,7 @@ async function main(): Promise<void> {
         companyContent: postgresPortal.companyContent,
         companyAssets: postgresPortal.companyAssets,
         companyContentSync: postgresPortal.companyContentSync,
+        companyContentReview: postgresPortal.companyContentReview,
         publicSocial: postgresPortal.publicSocial,
         inbox: postgresPortal.inbox,
         inboxCommands: postgresPortal.inboxCommands,

@@ -22,9 +22,16 @@ import {
   type ContentControlNoticeCode,
 } from '../src/portal/content-control-room-actions.js';
 import { COMPANY_ASSETS_ROUTE } from '../src/portal/company-assets-actions.js';
-import { createPropertyPredatorCompanyAssetsFixture } from '../src/portal/company-assets-fixtures.js';
 import { presentCompanyAssets } from '../src/portal/company-assets-presenter.js';
 import { renderCompanyAssetsBody } from '../src/portal/company-assets-view.js';
+import {
+  createPropertyPredatorCompanyAssetsReviewPreviewFixture,
+  createPropertyPredatorCompanyContentReviewFixture,
+  createPropertyPredatorCompanyContentReviewHrefs,
+  PROPERTY_PREDATOR_REVIEW_FIXTURE_RELEASE_ITEM_ID,
+} from '../src/portal/company-content-review-fixtures.js';
+import { presentCompanyContentReview } from '../src/portal/company-content-review-presenter.js';
+import { renderCompanyContentReviewBody } from '../src/portal/company-content-review-view.js';
 import { createPropertyPredatorTestInboxSnapshot } from '../src/portal/conversion-inbox-fixtures.js';
 import {
   CONVERSION_INBOX_ROUTE,
@@ -1580,15 +1587,28 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
     status: 200,
     html: shell(
       `${previewOperationsNav('content')}${renderCompanyAssetsBody(
-        presentCompanyAssets(createPropertyPredatorCompanyAssetsFixture()),
+        presentCompanyAssets(createPropertyPredatorCompanyAssetsReviewPreviewFixture()),
         {
           assetsLabel: PROPERTY_PREDATOR_GROWTH_PROFILE.contentWorkspace?.assetsLabel,
+          exactReviewHrefsByReleaseItemId: createPropertyPredatorCompanyContentReviewHrefs(),
         },
       )}`,
       'content',
       'Property Predator — Company Assets',
     ),
   };
+  if (path === `/portal/content/assets/review/${PROPERTY_PREDATOR_REVIEW_FIXTURE_RELEASE_ITEM_ID}`) {
+    return {
+      status: 200,
+      html: shell(
+        `${previewOperationsNav('content')}${renderCompanyContentReviewBody(
+          presentCompanyContentReview(createPropertyPredatorCompanyContentReviewFixture()),
+        )}`,
+        'content',
+        'Property Predator — Exact Content Review',
+      ),
+    };
+  }
   if (path === CAMPAIGN_WIZARD_ROUTE) return {
     status: 200,
     html: shell(`${previewOperationsNav('campaigns')}${renderCampaignWizardBody(

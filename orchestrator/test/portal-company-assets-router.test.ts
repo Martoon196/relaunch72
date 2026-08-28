@@ -11,6 +11,10 @@ import type {
   PortalCompanyAssetsService,
   PortalQuarantineCompanyAssetInput,
 } from '../src/portal/company-assets-service.js';
+import {
+  COMPANY_CONTENT_REVIEW_ROUTE_PREFIX,
+  type PortalCompanyContentReviewService,
+} from '../src/portal/company-content-review-service.js';
 import type { PortalCrmService } from '../src/portal/crm-service.js';
 import {
   PROPERTY_PREDATOR_GROWTH_PROFILE,
@@ -186,10 +190,36 @@ test('company-assets GET passes opaque identity and renders only bounded metadat
   assert.match(result.body, /Clear locked/);
   assert.match(result.body, /Approval locked/);
   assert.doesNotMatch(result.body, /name="outcome" value="clear"|<img\b|Generate now|Publish now/i);
+  assert.doesNotMatch(result.body, /Review exact copy \/ artwork/);
   assert.deepEqual(snapshots, [{
     sessionToken: SESSION,
     requestId: 'company-assets-router-request',
   }]);
+});
+
+test('company-assets exposes exact same-item review links only when manager review is composed', async () => {
+  const review: PortalCompanyContentReviewService = {
+    review: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+    artwork: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
+  };
+  const fixture = createPropertyPredatorCompanyAssetsFixture();
+  const result = await call(
+    COMPANY_ASSETS_ROUTE,
+    postgres({ companyAssets: fixtureService(), companyContentReview: review }),
+    COOKIE,
+  );
+  assert.equal(result.statusCode, 200);
+  for (const item of fixture.itemPage.items) {
+    assert.match(
+      result.body,
+      new RegExp(`${COMPANY_CONTENT_REVIEW_ROUTE_PREFIX}/${item.releaseItemId}`),
+    );
+  }
+  assert.doesNotMatch(result.body, /\/portal\/content\/assets\/review\/wrong/i);
+  assert.doesNotMatch(
+    result.body,
+    /\/portal\/content\/assets\/review\/[0-9a-f-]{36}[?&](?:token|workspace_id)=/i,
+  );
 });
 
 test('company-assets quarantine POST is CSRF-bound and forwards one exact server-derived tuple', async () => {

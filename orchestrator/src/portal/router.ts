@@ -129,6 +129,12 @@ import {
 import type { PortalCompanyContentSyncService } from './company-content-sync-service.js';
 import { renderCompanyContentSyncBody } from './company-content-sync-view.js';
 import {
+  COMPANY_CONTENT_REVIEW_ROUTE_PREFIX,
+  type PortalCompanyContentReviewService,
+} from './company-content-review-service.js';
+import { presentCompanyContentReview } from './company-content-review-presenter.js';
+import { renderCompanyContentReviewBody } from './company-content-review-view.js';
+import {
   CONVERSION_INBOX_MAX_CONVERSATIONS,
   CONVERSION_INBOX_ROUTE,
   normaliseConversionInboxFilters,
@@ -295,6 +301,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   companyAssets?: PortalCompanyAssetsService;
   /** Founder/admin effects-off source sync and immutable import evidence. */
   companyContentSync?: PortalCompanyContentSyncService;
+  /** Founder/admin exact staged-resource review. Read-only and provider-incapable. */
+  companyContentReview?: PortalCompanyContentReviewService;
   /** Fixture-only affiliate legal/readiness evidence. It exposes no acceptance, link or channel command. */
   affiliateCompliance?: PortalAffiliateComplianceService;
   /** Dark-only provider readiness metadata. It exposes no credential, switch or provider operation. */
@@ -342,6 +350,27 @@ function sendHtml(res: ServerResponse, code: number, body: string, cookie?: stri
   Object.assign(headers, extra);
   res.writeHead(code, headers);
   res.end(body);
+}
+
+function sendVerifiedCompanyArtwork(
+  res: ServerResponse,
+  artwork: Readonly<{
+    mediaType: 'image/png' | 'image/jpeg' | 'image/webp';
+    sha256: string;
+    bytes: Uint8Array;
+  }>,
+): void {
+  res.writeHead(200, {
+    'content-type': artwork.mediaType,
+    'content-length': String(artwork.bytes.byteLength),
+    'cache-control': 'private, no-store, max-age=0, no-transform',
+    etag: `"sha256-${artwork.sha256}"`,
+    'x-content-type-options': 'nosniff',
+    'cross-origin-resource-policy': 'same-origin',
+    'referrer-policy': 'no-referrer',
+    'content-security-policy': "default-src 'none'; sandbox",
+  });
+  res.end(Buffer.from(artwork.bytes));
 }
 
 function sendAbuseStatus(
@@ -1989,6 +2018,97 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
   }
 
+  // ── exact company-content review: manager-only, read-only and source verified ──
+  const companyContentReviewMatch = new RegExp(
+    `^${COMPANY_CONTENT_REVIEW_ROUTE_PREFIX}/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})(/file)?$`,
+    'u',
+  ).exec(p);
+  if (deps.kind === 'postgres' && companyContentReviewMatch) {
+    if (method !== 'GET') {
+      return sendHtml(res, 405, portalStatusPage(deps, sessionToken, {
+        title: 'Exact review method not allowed',
+        message: 'This boundary is read-only. Use Company Assets for protected review decisions.',
+        active: 'content',
+        backHref: COMPANY_ASSETS_ROUTE,
+        backLabel: 'Return to Company Assets',
+      }), undefined, { allow: 'GET' });
+    }
+    if (deps.productProfile?.id !== 'property_predator_growth'
+        || !deps.companyContentReview) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Exact content review not connected',
+        message: 'The verified Property Predator review boundary is not enabled for this workspace.',
+        active: 'content',
+        backHref: COMPANY_ASSETS_ROUTE,
+        backLabel: 'Return to Company Assets',
+      }));
+    }
+    const releaseItemId = companyContentReviewMatch[1]!;
+    try {
+      if (companyContentReviewMatch[2]) {
+        const outcome = await deps.companyContentReview.artwork(
+          crmIdentity(sessionToken, deps),
+          releaseItemId,
+        );
+        if (!outcome.ok) {
+          const status = outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden'
+            ? 403
+            : outcome.kind === 'not_found' || outcome.kind === 'validation'
+              ? 404
+              : 503;
+          return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+            title: status === 503
+              ? 'Exact artwork verification unavailable'
+              : 'Exact artwork not available',
+            message: outcome.message,
+            active: 'content',
+            backHref: `${COMPANY_CONTENT_REVIEW_ROUTE_PREFIX}/${releaseItemId}`,
+            backLabel: 'Return to exact review',
+          }));
+        }
+        return sendVerifiedCompanyArtwork(res, outcome);
+      }
+      const outcome = await deps.companyContentReview.review(
+        crmIdentity(sessionToken, deps),
+        releaseItemId,
+      );
+      if (!outcome.ok) {
+        const status = outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden'
+          ? 403
+          : outcome.kind === 'not_found' || outcome.kind === 'validation'
+            ? 404
+            : 503;
+        return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+          title: status === 503
+            ? 'Exact content review temporarily unavailable'
+            : 'Exact content review not available',
+          message: outcome.message,
+          active: 'content',
+          backHref: COMPANY_ASSETS_ROUTE,
+          backLabel: 'Return to Company Assets',
+        }));
+      }
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      return sendHtml(res, 200, operationalPage(
+        outcome.snapshot.workspace.workspaceName,
+        renderCompanyContentReviewBody(presentCompanyContentReview(outcome.snapshot)),
+        deps,
+        'content',
+        csrfToken,
+      ), undefined, {
+        'content-security-policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      });
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Exact content review temporarily unavailable',
+        message: 'No review decision, source record, provider or external effect was changed.',
+        active: 'content',
+        backHref: COMPANY_ASSETS_ROUTE,
+        backLabel: 'Return to Company Assets',
+      }));
+    }
+  }
+
   // ── Property Predator source sync: authenticated reads + adapter-only writes ──
   if (deps.kind === 'postgres' && p === COMPANY_CONTENT_SYNC_ROUTE) {
     if (deps.productProfile?.id !== 'property_predator_growth'
@@ -2218,6 +2338,12 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
             && assetsNavigation.brainRoute === BRAND_BRAIN_ROUTE
           ),
           brandBrainLabel: assetsNavigation.brainLabel,
+          exactReviewHrefsByReleaseItemId: view.canManage && deps.companyContentReview
+            ? Object.freeze(Object.fromEntries(view.items.map((item) => [
+                item.releaseItemId,
+                `${COMPANY_CONTENT_REVIEW_ROUTE_PREFIX}/${item.releaseItemId}`,
+              ])))
+            : undefined,
           security: view.canQuarantine ? {
             csrfToken,
             quarantineKeys: Object.fromEntries(view.items.flatMap((item) => (

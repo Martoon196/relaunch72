@@ -10,6 +10,9 @@ import type {
 import { renderContentWorkspaceNavigation } from './content-workspace-navigation.js';
 import { escapeHtml } from './ui.js';
 
+const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const EXACT_REVIEW_ROUTE = '/portal/content/assets/review';
+
 export interface CompanyAssetsActionSecurity {
   readonly csrfToken: string;
   /** Keyed by exact release-item UUID plus decision dimension. */
@@ -18,6 +21,11 @@ export interface CompanyAssetsActionSecurity {
 
 export interface RenderCompanyAssetsOptions {
   readonly security?: CompanyAssetsActionSecurity;
+  /**
+   * Read-only review links keyed by the exact immutable release-item UUID.
+   * Values are revalidated against the card identity before rendering.
+   */
+  readonly exactReviewHrefsByReleaseItemId?: Readonly<Record<string, string>>;
   readonly brandBrainAvailable?: boolean;
   readonly brandBrainLabel?: string;
   readonly assetsLabel?: string;
@@ -31,8 +39,8 @@ const STYLE = `
   .pal-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-bottom:1px solid var(--line);background:var(--panel)}.pal-metric{min-width:0;padding:16px 18px;border-right:1px solid var(--line)}.pal-metric:last-child{border-right:0}.pal-metric small{display:block;color:var(--faint);font:800 10px var(--mono,monospace);letter-spacing:.06em;text-transform:uppercase}.pal-metric strong{display:block;margin:7px 0 4px;font:900 23px/1 var(--mono,monospace)}.pal-metric span{display:block;color:var(--muted);font-size:11px;line-height:1.45}.pal-metric.warn strong{color:var(--amber)}.pal-metric.block strong{color:var(--red)}
   .pal-release{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(300px,.65fr);gap:12px;padding:16px;border-bottom:1px solid var(--line)}.pal-panel{min-width:0;border:1px solid var(--line);background:var(--panel)}.pal-panel-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;padding:15px 16px 12px;border-bottom:1px solid var(--line)}.pal-panel-head h2{margin:0;font-size:15px}.pal-panel-head p{margin:4px 0 0;color:var(--muted);font-size:11px;line-height:1.45}.pal-chip{display:inline-flex;align-items:center;min-height:23px;border:1px solid var(--strong);padding:3px 7px;color:var(--muted);font:800 10px var(--mono,monospace);text-transform:uppercase;white-space:nowrap}.pal-chip.good{border-color:#2a7b70;color:var(--teal);background:#072824}.pal-chip.warn{border-color:#6b5832;color:var(--amber);background:#171308}.pal-chip.block{border-color:#6b3e3b;color:var(--red);background:#190d0d}.pal-proof-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:12px}.pal-proof{min-width:0;border:1px solid var(--line);background:var(--soft);padding:9px}.pal-proof strong{display:block;margin-bottom:5px;color:var(--faint);font:800 10px var(--mono,monospace);text-transform:uppercase}.pal-proof code,.pal-proof time{font-size:10px}.pal-gates{list-style:none;margin:0;padding:8px 14px}.pal-gates li{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--line);font-size:11px}.pal-gates li:last-child{border-bottom:0}.pal-gates span{color:var(--muted)}
   .pal-catalog{padding:0 16px 16px}.pal-catalog-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;padding:17px 0 12px}.pal-catalog-head h2{margin:0;font-size:17px}.pal-catalog-head p{margin:4px 0 0;color:var(--muted);font-size:11px}.pal-items{list-style:none;display:grid;gap:10px;margin:0;padding:0}.pal-card{border:1px solid var(--line);border-left:4px solid var(--teal);background:var(--raised);overflow:hidden}.pal-card.quarantined{border-left-color:var(--red)}.pal-card-head{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;padding:14px;border-bottom:1px solid var(--line)}.pal-meta{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:7px}.pal-card h3{margin:0;font-size:15px}.pal-id{display:block;margin-top:5px;color:var(--faint);font:650 10px var(--mono,monospace);overflow-wrap:anywhere}.pal-status{text-align:right}.pal-status code{display:block;margin-top:5px;color:var(--faint);font-size:9px}.pal-card-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(300px,.85fr)}.pal-evidence{padding:12px;border-right:1px solid var(--line)}.pal-evidence-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.pal-evidence .pal-proof.wide{grid-column:1/-1}.pal-decisions{list-style:none;margin:10px 0 0;padding:0}.pal-decision{display:grid;grid-template-columns:minmax(110px,.7fr) minmax(110px,.7fr) minmax(0,1fr);gap:8px;padding:8px 0;border-top:1px solid var(--line);font-size:10px}.pal-decision span{color:var(--muted)}.pal-decision.quarantined strong{color:var(--red)}
-  .pal-controls{padding:12px;background:#090d0e}.pal-controls h4{margin:0;font-size:12px}.pal-controls>p{margin:5px 0 10px;color:var(--muted);font-size:10px;line-height:1.45}.pal-action{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;align-items:end;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}.pal-action label{display:grid;gap:4px;color:var(--faint);font:750 9px var(--mono,monospace);text-transform:uppercase}.pal-action input{height:40px;min-width:0;border:1px solid var(--strong);background:var(--raised);color:var(--ink);padding:0 9px;font:650 10px var(--mono,monospace)}.pal-action button{min-height:40px;border:1px solid #78413d;background:#190d0d;color:var(--red);padding:0 10px;font-size:10px;font-weight:900;cursor:pointer}.pal-locks{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:10px}.pal-lock{border:1px solid var(--line);background:var(--soft);padding:8px}.pal-lock strong{display:block;color:var(--amber);font-size:10px}.pal-lock span{display:block;margin-top:4px;color:var(--faint);font-size:9px;line-height:1.4}.pal-empty{padding:32px;border:1px dashed var(--strong);text-align:center;color:var(--muted)}.pal-footer{display:flex;justify-content:space-between;gap:14px;padding:13px 18px;border-top:1px solid var(--line);background:#07090a;color:var(--faint);font-size:10px}.pal-footer strong{color:var(--muted)}
-  @media(max-width:1000px){.pal-hero,.pal-release{grid-template-columns:1fr}.pal-metrics{grid-template-columns:repeat(3,1fr)}.pal-card-grid{grid-template-columns:1fr}.pal-evidence{border-right:0;border-bottom:1px solid var(--line)}}@media(max-width:680px){.pal-hero{padding:24px 20px}.pal-truth{grid-template-columns:1fr;padding:12px 20px}.pal-dataset{justify-self:start}.pal-metrics{grid-template-columns:repeat(2,1fr)}.pal-proof-grid,.pal-evidence-grid{grid-template-columns:1fr}.pal-card-head{grid-template-columns:1fr}.pal-status{text-align:left}.pal-decision{grid-template-columns:1fr}.pal-action{grid-template-columns:1fr}.pal-locks{grid-template-columns:1fr}.pal-footer{flex-direction:column}}@media(max-width:430px){.pal-metrics{grid-template-columns:1fr}.pal-release,.pal-catalog{padding-left:9px;padding-right:9px}}@media(prefers-reduced-motion:reduce){.pal *{scroll-behavior:auto!important;transition:none!important}}
+  .pal-controls{padding:12px;background:#090d0e}.pal-controls h4{margin:0;font-size:12px}.pal-controls>p{margin:5px 0 10px;color:var(--muted);font-size:10px;line-height:1.45}.pal-review-bridge{margin:0 0 12px;padding:10px;border:1px solid #2a7b70;background:#071816}.pal-review-link{display:inline-flex;min-height:44px;align-items:center;justify-content:center;border:1px solid var(--teal);background:#082b27;color:var(--ink);padding:9px 13px;font-size:11px;font-weight:900;line-height:1.35;touch-action:manipulation}.pal-review-link:hover{background:#0b3a34}.pal-review-link:focus-visible{outline:3px solid var(--amber);outline-offset:3px}.pal-review-bridge p{margin:7px 0 0;color:var(--muted);font-size:10px;line-height:1.5}.pal-action{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;align-items:end;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}.pal-action label{display:grid;gap:4px;color:var(--faint);font:750 9px var(--mono,monospace);text-transform:uppercase}.pal-action input{height:40px;min-width:0;border:1px solid var(--strong);background:var(--raised);color:var(--ink);padding:0 9px;font:650 10px var(--mono,monospace)}.pal-action button{min-height:40px;border:1px solid #78413d;background:#190d0d;color:var(--red);padding:0 10px;font-size:10px;font-weight:900;cursor:pointer}.pal-locks{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:10px}.pal-lock{border:1px solid var(--line);background:var(--soft);padding:8px}.pal-lock strong{display:block;color:var(--amber);font-size:10px}.pal-lock span{display:block;margin-top:4px;color:var(--faint);font-size:9px;line-height:1.4}.pal-empty{padding:32px;border:1px dashed var(--strong);text-align:center;color:var(--muted)}.pal-footer{display:flex;justify-content:space-between;gap:14px;padding:13px 18px;border-top:1px solid var(--line);background:#07090a;color:var(--faint);font-size:10px}.pal-footer strong{color:var(--muted)}
+  @media(max-width:1000px){.pal-hero,.pal-release{grid-template-columns:1fr}.pal-metrics{grid-template-columns:repeat(3,1fr)}.pal-card-grid{grid-template-columns:1fr}.pal-evidence{border-right:0;border-bottom:1px solid var(--line)}}@media(max-width:680px){.pal-hero{padding:24px 20px}.pal-truth{grid-template-columns:1fr;padding:12px 20px}.pal-dataset{justify-self:start}.pal-metrics{grid-template-columns:repeat(2,1fr)}.pal-proof-grid,.pal-evidence-grid{grid-template-columns:1fr}.pal-card-head{grid-template-columns:1fr}.pal-status{text-align:left}.pal-decision{grid-template-columns:1fr}.pal-action{grid-template-columns:1fr}.pal-locks{grid-template-columns:1fr}.pal-footer{flex-direction:column}}@media(max-width:430px){.pal-metrics{grid-template-columns:1fr}.pal-release,.pal-catalog{padding-left:9px;padding-right:9px}}@media(prefers-reduced-motion:reduce){.pal *{scroll-behavior:auto!important;transition:none!important}}@media(forced-colors:active){.pal-review-link{border:2px solid LinkText;color:LinkText;forced-color-adjust:auto}.pal-review-link:focus-visible{outline:3px solid Highlight}}
 `;
 
 function count(value: number): string {
@@ -65,10 +73,34 @@ function validCommandKey(value: string | undefined): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u.test(value);
 }
 
+function exactReviewHref(
+  releaseItemId: string,
+  reviewHrefs: Readonly<Record<string, string>> | undefined,
+): string | null {
+  if (reviewHrefs === undefined
+      || reviewHrefs === null
+      || typeof reviewHrefs !== 'object'
+      || Array.isArray(reviewHrefs)
+      || !CANONICAL_UUID.test(releaseItemId)) {
+    return null;
+  }
+  try {
+    const prototype = Object.getPrototypeOf(reviewHrefs);
+    if (prototype !== Object.prototype && prototype !== null) return null;
+    const descriptor = Object.getOwnPropertyDescriptor(reviewHrefs, releaseItemId);
+    if (descriptor === undefined || !('value' in descriptor)) return null;
+    const expected = `${EXACT_REVIEW_ROUTE}/${releaseItemId}`;
+    return descriptor.value === expected ? expected : null;
+  } catch {
+    return null;
+  }
+}
+
 function controls(
   item: CompanyAssetItemView,
   view: CompanyAssetsView,
   security: CompanyAssetsActionSecurity | undefined,
+  reviewHref: string | null,
 ): string {
   const csrfToken = security?.csrfToken;
   const forms = view.canQuarantine && validToken(csrfToken)
@@ -79,18 +111,28 @@ function controls(
       }).join('')
     : '';
   const restrictive = forms || `<p>${item.decisionComplete ? 'All three immutable decision dimensions are already recorded.' : view.canManage ? 'Refresh to obtain protected quarantine commands.' : 'Founder or workspace-admin access is required.'}</p>`;
-  return `<section class="pal-controls" aria-label="Founder quarantine controls"><h4>Restrictive founder decision</h4><p>Quarantine can only remove this exact hash-bound item from consideration. It cannot clear, approve, publish or call a provider.</p>${restrictive}<div class="pal-locks"><div class="pal-lock"><strong>Clear locked</strong><span>Exact content or artwork is not reviewable on this metadata surface.</span></div><div class="pal-lock"><strong>Approval locked</strong><span>Source approval metadata is evidence, not a new Growth HQ approval.</span></div></div></section>`;
+  const review = reviewHref === null
+    ? ''
+    : `<section class="pal-review-bridge" aria-label="Exact item review"><a class="pal-review-link" href="${escapeHtml(reviewHref)}">Review exact copy / artwork</a><p>Opens the separate, read-only exact-version review. It cannot clear, approve, publish or call a provider.</p></section>`;
+  const locks = reviewHref === null
+    ? '<div class="pal-lock"><strong>Clear locked</strong><span>Exact content or artwork is not reviewable on this metadata surface.</span></div><div class="pal-lock"><strong>Approval locked</strong><span>Source approval metadata is evidence, not a new Growth HQ approval.</span></div>'
+    : '<div class="pal-lock"><strong>Clear locked</strong><span>This metadata page remains non-reviewable. The exact-version review is read-only; clear remains locked.</span></div><div class="pal-lock"><strong>Approval locked</strong><span>Source approval is provenance only. Growth HQ approval and every provider effect remain locked.</span></div>';
+  const controlsLabel = reviewHref === null
+    ? 'Founder quarantine controls'
+    : 'Exact review and founder quarantine controls';
+  return `<section class="pal-controls" aria-label="${controlsLabel}">${review}<h4>Restrictive founder decision</h4><p>Quarantine can only remove this exact hash-bound item from consideration. It cannot clear, approve, publish or call a provider.</p>${restrictive}<div class="pal-locks">${locks}</div></section>`;
 }
 
 function card(
   item: CompanyAssetItemView,
   view: CompanyAssetsView,
   security: CompanyAssetsActionSecurity | undefined,
+  reviewHref: string | null,
 ): string {
   const decisions = item.decisions.length
     ? `<ul class="pal-decisions" aria-label="Recorded item decisions">${item.decisions.map(decision).join('')}</ul>`
     : '<div class="pal-empty">No founder decision is recorded for this exact item yet.</div>';
-  return `<li><article class="pal-card${item.quarantined ? ' quarantined' : ''}" id="${escapeHtml(item.anchorId)}" aria-labelledby="${escapeHtml(item.anchorId)}-title"><header class="pal-card-head"><div><div class="pal-meta"><span class="pal-chip">${escapeHtml(item.itemTypeLabel)}</span><span class="pal-chip">Immutable v${count(item.itemVersion)}</span><span class="pal-chip good">${escapeHtml(item.sourceApprovalLabel)}</span></div><h3 id="${escapeHtml(item.anchorId)}-title">${escapeHtml(item.itemLabel)}</h3><code class="pal-id">${escapeHtml(item.itemId)}</code></div><div class="pal-status"><span class="pal-chip ${item.quarantined ? 'block' : item.decisionComplete ? 'good' : 'warn'}">${item.quarantined ? 'Quarantined' : item.decisionComplete ? 'Decision complete' : 'Review incomplete'}</span><code>${escapeHtml(item.releaseItemId)}</code></div></header><div class="pal-card-grid"><section class="pal-evidence" aria-label="Immutable item proof"><div class="pal-evidence-grid"><div class="pal-proof"><strong>Version identity</strong><code>${escapeHtml(item.versionId)}</code></div><div class="pal-proof"><strong>Source approval</strong><code>${escapeHtml(item.approvalId)}</code></div><div class="pal-proof wide"><strong>Content SHA-256</strong><code>${escapeHtml(item.contentSha256)}</code></div>${item.blobSha256 ? `<div class="pal-proof wide"><strong>Artwork/blob SHA-256</strong><code>${escapeHtml(item.blobSha256)}</code></div>` : ''}<div class="pal-proof wide"><strong>Runtime brand SHA-256</strong><code>${escapeHtml(item.brandSha256)}</code></div><div class="pal-proof"><strong>Ownership</strong><span>${escapeHtml(item.ownershipLabel)}</span></div><div class="pal-proof"><strong>Privacy</strong><span>${escapeHtml(item.privacyLabel)}</span></div></div>${decisions}</section>${controls(item, view, security)}</div></article></li>`;
+  return `<li><article class="pal-card${item.quarantined ? ' quarantined' : ''}" id="${escapeHtml(item.anchorId)}" aria-labelledby="${escapeHtml(item.anchorId)}-title"><header class="pal-card-head"><div><div class="pal-meta"><span class="pal-chip">${escapeHtml(item.itemTypeLabel)}</span><span class="pal-chip">Immutable v${count(item.itemVersion)}</span><span class="pal-chip good">${escapeHtml(item.sourceApprovalLabel)}</span></div><h3 id="${escapeHtml(item.anchorId)}-title">${escapeHtml(item.itemLabel)}</h3><code class="pal-id">${escapeHtml(item.itemId)}</code></div><div class="pal-status"><span class="pal-chip ${item.quarantined ? 'block' : item.decisionComplete ? 'good' : 'warn'}">${item.quarantined ? 'Quarantined' : item.decisionComplete ? 'Decision complete' : 'Review incomplete'}</span><code>${escapeHtml(item.releaseItemId)}</code></div></header><div class="pal-card-grid"><section class="pal-evidence" aria-label="Immutable item proof"><div class="pal-evidence-grid"><div class="pal-proof"><strong>Version identity</strong><code>${escapeHtml(item.versionId)}</code></div><div class="pal-proof"><strong>Source approval</strong><code>${escapeHtml(item.approvalId)}</code></div><div class="pal-proof wide"><strong>Content SHA-256</strong><code>${escapeHtml(item.contentSha256)}</code></div>${item.blobSha256 ? `<div class="pal-proof wide"><strong>Artwork/blob SHA-256</strong><code>${escapeHtml(item.blobSha256)}</code></div>` : ''}<div class="pal-proof wide"><strong>Runtime brand SHA-256</strong><code>${escapeHtml(item.brandSha256)}</code></div><div class="pal-proof"><strong>Ownership</strong><span>${escapeHtml(item.ownershipLabel)}</span></div><div class="pal-proof"><strong>Privacy</strong><span>${escapeHtml(item.privacyLabel)}</span></div></div>${decisions}</section>${controls(item, view, security, reviewHref)}</div></article></li>`;
 }
 
 export function renderCompanyAssetsBody(
@@ -98,7 +140,12 @@ export function renderCompanyAssetsBody(
   options: RenderCompanyAssetsOptions = {},
 ): string {
   const release = view.release;
-  const cards = view.items.map((item) => card(item, view, options.security)).join('');
+  const cards = view.items.map((item) => card(
+    item,
+    view,
+    options.security,
+    exactReviewHref(item.releaseItemId, options.exactReviewHrefsByReleaseItemId),
+  )).join('');
   const navigation = renderContentWorkspaceNavigation('assets', {
     companyAssetsAvailable: true,
     assetsLabel: options.assetsLabel,

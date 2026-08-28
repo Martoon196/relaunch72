@@ -82,6 +82,72 @@ test('company-assets presenter and view allowlist migration 0033 metadata and ke
   assert.doesNotMatch(html, /<img\b|<script\b|content_resource_path|asset_resource_path/i);
 });
 
+test('company-assets renders only an exact same-item read-only review link with touch and keyboard semantics', () => {
+  const view = presentCompanyAssets(authoritativeSnapshot());
+  const first = view.items[0]!;
+  const second = view.items[1]!;
+  const firstHref = `/portal/content/assets/review/${first.releaseItemId}`;
+  const html = renderCompanyAssetsBody(view, {
+    exactReviewHrefsByReleaseItemId: {
+      [first.releaseItemId]: firstHref,
+      [second.releaseItemId]: `/portal/content/assets/review/${first.releaseItemId}`,
+      'not-a-release-item': 'https://attacker.example/review',
+    },
+  });
+
+  assert.match(html, new RegExp(`<a class="pal-review-link" href="${firstHref}">Review exact copy / artwork</a>`));
+  assert.equal((html.match(/Review exact copy \/ artwork/gu) ?? []).length, 1);
+  assert.match(html, /\.pal-review-link\{[^}]*min-height:44px/);
+  assert.match(html, /\.pal-review-link\{[^}]*touch-action:manipulation/);
+  assert.match(html, /\.pal-review-link:focus-visible\{/);
+  assert.match(html, /separate, read-only exact-version review/);
+  assert.match(html, /metadata page remains non-reviewable/);
+  assert.match(html, /Growth HQ approval and every provider effect remain locked/);
+  assert.doesNotMatch(html, /target="_blank"|tabindex="-1"|onclick=|role="button"/i);
+  assert.doesNotMatch(html, /attacker\.example/);
+  assert.doesNotMatch(html, new RegExp(`/portal/content/assets/review/${second.releaseItemId}`));
+});
+
+test('company-assets omits absent, external, hostile and query-bearing exact-review options', () => {
+  const view = presentCompanyAssets(authoritativeSnapshot());
+  const first = view.items[0]!;
+  const expected = `/portal/content/assets/review/${first.releaseItemId}`;
+  const absent = renderCompanyAssetsBody(view);
+  assert.doesNotMatch(absent, /class="pal-review-bridge"|>Review exact copy \/ artwork</);
+  assert.match(absent, /Exact content or artwork is not reviewable on this metadata surface/);
+
+  for (const href of [
+    `https://hq.propertypredator.com${expected}`,
+    `//attacker.example${expected}`,
+    `${expected}?next=https://attacker.example`,
+    `${expected}#approve`,
+    `${expected}/`,
+    `javascript:alert(1)`,
+    `\" onmouseover=\"alert(1)`,
+  ]) {
+    const html = renderCompanyAssetsBody(view, {
+      exactReviewHrefsByReleaseItemId: { [first.releaseItemId]: href },
+    });
+    assert.doesNotMatch(html, /class="pal-review-bridge"|>Review exact copy \/ artwork</);
+    assert.doesNotMatch(html, /attacker\.example|javascript:|onmouseover=/i);
+  }
+
+  const inherited = Object.create({ [first.releaseItemId]: expected }) as Readonly<Record<string, string>>;
+  assert.doesNotMatch(
+    renderCompanyAssetsBody(view, { exactReviewHrefsByReleaseItemId: inherited }),
+    /class="pal-review-bridge"/,
+  );
+  const accessor = Object.create(null) as Record<string, string>;
+  Object.defineProperty(accessor, first.releaseItemId, {
+    enumerable: true,
+    get: () => { throw new Error('review href getter must not execute'); },
+  });
+  assert.doesNotMatch(
+    renderCompanyAssetsBody(view, { exactReviewHrefsByReleaseItemId: accessor }),
+    /class="pal-review-bridge"/,
+  );
+});
+
 test('company-assets presenter drops unknown raw/private fields and rejects poisoned boundaries', () => {
   const fixture = authoritativeSnapshot();
   const poisoned = {
