@@ -169,6 +169,8 @@ export interface CompanyContentCatalogQuery {
   /** Defaults to 50 and is always capped at 100 in SQL. */
   readonly limit?: number;
   readonly cursor?: CompanyContentCatalogCursor | null;
+  /** Optional exact source filter, applied in SQL before pagination. */
+  readonly sourceSystem?: string;
 }
 
 export interface CompanyContentCatalogItem {

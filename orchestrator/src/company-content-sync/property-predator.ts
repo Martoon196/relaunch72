@@ -11,7 +11,10 @@ import type {
   CompanyContentService,
   CreateCompanyContentVersionCommand,
 } from '../company-content-pg/index.js';
-import { canonicalCompanyContentJson } from '../company-content-pg/validation.js';
+import {
+  canonicalCompanyContentJson,
+  validateCompanyContentUserContext,
+} from '../company-content-pg/validation.js';
 import type {
   CompanyAssetRelease,
   PropertyPredatorCompanyAssetBridgeTransport,
@@ -313,7 +316,11 @@ async function localCatalog(
   const items: CompanyContentCatalogItem[] = [];
   let cursor: CompanyContentCatalogCursor | null = null;
   do {
-    const page = await service.listCatalog(context, { limit: 100, cursor });
+    const page = await service.listCatalog(context, {
+      limit: 100,
+      cursor,
+      sourceSystem: SOURCE_SYSTEM,
+    });
     items.push(...page.items);
     if (items.length > MAX_SOURCE_ITEMS) throw new Error('source_import_incomplete');
     cursor = page.nextCursor;
@@ -336,14 +343,44 @@ function importedTupleMatches(
 function exactDecisionCoverage(
   item: PropertyPredatorCompanyContentItem,
   decision: CompanyAssetItemSummary,
+  sourceReleaseId: string,
 ): boolean {
+  if (decision.sourceReleaseId !== sourceReleaseId
+      || decision.itemType !== item.itemType
+      || decision.itemId !== item.itemId
+      || decision.itemVersion !== item.itemVersion
+      || decision.versionId !== item.versionId
+      || decision.contentSha256 !== item.contentSha256
+      || decision.blobSha256 !== item.blobSha256
+      || decision.brandSha256 !== item.brandSha256
+      || decision.approvalId !== item.approvalId
+      || !Number.isFinite(Date.parse(decision.approvedAt))
+      || Date.parse(decision.approvedAt) !== Date.parse(item.approvedAt)
+      || decision.contentMode !== 'company-owned'
+      || decision.hqUseStatus !== 'review-required'
+      || decision.ownershipStatus !== 'source-asserted-company-owned'
+      || decision.privacyStatus !== 'customer-private-data-forbidden'
+      || decision.sourceQuarantineStatus !== 'not-recorded-at-source'
+      || decision.sourceApprovalStatus !== 'source-approved-exact-version'
+      || !Number.isFinite(Date.parse(decision.recordedAt))) {
+    return false;
+  }
   const required = item.itemType === 'asset'
     ? new Set(['visual_policy', 'claim', 'asset'])
     : new Set(['visual_policy', 'claim']);
+  const clearReasons = new Map<string, ReadonlySet<string>>([
+    ['visual_policy', new Set(['visual_policy_match'])],
+    ['claim', new Set(['claims_supported', 'no_claims_present'])],
+    ['asset', new Set(['asset_integrity_verified'])],
+  ]);
   const observed = new Set<string>();
   for (const entry of decision.decisions) {
     if (!required.has(entry.dimension) || entry.outcome !== 'clear'
-        || observed.has(entry.dimension)) {
+        || observed.has(entry.dimension)
+        || !clearReasons.get(entry.dimension)?.has(entry.reasonCode)
+        || !/^[a-f0-9]{64}$/u.test(entry.evidenceSha256)
+        || !Number.isFinite(Date.parse(entry.recordedAt))
+        || Date.parse(entry.recordedAt) < Date.parse(decision.recordedAt)) {
       return false;
     }
     observed.add(entry.dimension);
@@ -444,11 +481,13 @@ export class PropertyPredatorContentSyncCoordinator {
   }
 
   snapshot(context: DatabaseRequestContext): PropertyPredatorContentSyncStatus {
+    validateCompanyContentUserContext(context);
     const current = this.#states.get(context.workspaceId) ?? initialState();
     return status(context.workspaceId, current, this.#now().getTime());
   }
 
   async sync(context: DatabaseRequestContext): Promise<PropertyPredatorContentSyncStatus> {
+    validateCompanyContentUserContext(context);
     const running = this.#running.get(context.workspaceId);
     if (running) return running;
     const current = this.#states.get(context.workspaceId) ?? initialState();
@@ -551,7 +590,7 @@ export class PropertyPredatorContentSyncCoordinator {
           ));
           continue;
         }
-        if (!exactDecisionCoverage(item, decision)) {
+        if (!exactDecisionCoverage(item, decision, staged.sourceReleaseId)) {
           reviewIncompleteItems += 1;
           blockers.push(blocker(
             'quarantine_review_incomplete',
@@ -572,6 +611,10 @@ export class PropertyPredatorContentSyncCoordinator {
           if (item.itemType === 'asset') {
             if (!item.blobSha256) throw new Error('exact_resource_mismatch');
             const asset = await this.dependencies.resources.loadAsset(item.versionId, item.blobSha256);
+            if (asset.mediaType !== item.payload.media_type
+                || asset.bytes.byteLength !== item.payload.bytes) {
+              throw new Error('exact_resource_mismatch');
+            }
             verifiedAsset = Object.freeze({
               byteLength: asset.bytes.byteLength,
               mediaType: asset.mediaType,

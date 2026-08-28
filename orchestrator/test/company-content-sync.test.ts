@@ -69,13 +69,45 @@ function sourceItem(): PropertyPredatorCompanyContentItem {
   });
 }
 
-function sourceFixture(): Readonly<{
+const APPROVED_ASSET_BYTES = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
+
+function sourceAsset(): PropertyPredatorCompanyContentItem {
+  const blobSha256 = sha(APPROVED_ASSET_BYTES);
+  const payload = Object.freeze({
+    active: true,
+    blob_sha256: blobSha256,
+    bytes: APPROVED_ASSET_BYTES.byteLength,
+    caption: 'Property Predator approved artwork.',
+    category: 'brand',
+    filename: 'property-predator.png',
+    media_type: 'image/png',
+    schema: 'propertypredator.company-content/v1',
+    title: 'Property Predator artwork',
+    type: 'asset',
+  });
+  return Object.freeze({
+    approvalId: APPROVAL_ID,
+    approvedAt: '2026-08-28T09:00:00.000Z',
+    blobSha256,
+    brandSha256: BRAND_SHA,
+    contentSha256: sha(canonicalCompanyContentJson(payload)),
+    itemId: 'property-predator-artwork',
+    itemType: 'asset',
+    itemVersion: 1,
+    payload,
+    versionId: VERSION_ID,
+    assetFilePath: `/api/internal/company-content/assets/${VERSION_ID}/file`,
+  });
+}
+
+function sourceFixture(asset = false): Readonly<{
   item: PropertyPredatorCompanyContentItem;
   catalog: PropertyPredatorCompanyContentCatalog;
   release: CompanyAssetRelease;
   resource: PropertyPredatorApprovedVersionResource;
+  assetBytes: Uint8Array;
 }> {
-  const item = sourceItem();
+  const item = asset ? sourceAsset() : sourceItem();
   const catalog: PropertyPredatorCompanyContentCatalog = Object.freeze({
     schemaVersion: 1,
     brandSha256: BRAND_SHA,
@@ -90,8 +122,8 @@ function sourceFixture(): Readonly<{
     approvalExpiryStatus: 'missing' as const,
     approvalId: item.approvalId,
     approvedAt: item.approvedAt,
-    assetResourcePath: null,
-    blobSha256: null,
+    assetResourcePath: item.assetFilePath,
+    blobSha256: item.blobSha256,
     brandSha256: BRAND_SHA,
     contentMode: 'company-owned' as const,
     contentResourcePath: `/api/internal/company-content/versions/${VERSION_ID}`,
@@ -161,21 +193,31 @@ function sourceFixture(): Readonly<{
     brandSha256: item.brandSha256,
     payload: item.payload,
     canonicalContent: canonicalCompanyContentJson(item.payload),
-    assetResourcePath: null,
+    assetResourcePath: item.assetFilePath,
   });
-  return Object.freeze({ item, catalog, release, resource });
+  return Object.freeze({
+    item,
+    catalog,
+    release,
+    resource,
+    assetBytes: asset ? Uint8Array.from(APPROVED_ASSET_BYTES) : new Uint8Array(),
+  });
 }
 
 function decisionItem(
   fixture: ReturnType<typeof sourceFixture>,
   quarantined = false,
 ): CompanyAssetItemSummary {
-  const decision = (dimension: 'visual_policy' | 'claim') => Object.freeze({
+  const decision = (dimension: 'visual_policy' | 'claim' | 'asset') => Object.freeze({
     dimension,
     outcome: quarantined && dimension === 'claim' ? 'quarantined' as const : 'clear' as const,
     reasonCode: quarantined && dimension === 'claim'
       ? 'claims_unsubstantiated' as const
-      : dimension === 'claim' ? 'claims_supported' as const : 'visual_policy_match' as const,
+      : dimension === 'claim'
+        ? 'claims_supported' as const
+        : dimension === 'asset'
+          ? 'asset_integrity_verified' as const
+          : 'visual_policy_match' as const,
     evidenceSha256: fixture.item.contentSha256,
     recordedAt: CHECKED_AT,
   });
@@ -188,7 +230,7 @@ function decisionItem(
     itemVersion: fixture.item.itemVersion,
     versionId: fixture.item.versionId,
     contentSha256: fixture.item.contentSha256,
-    blobSha256: null,
+    blobSha256: fixture.item.blobSha256,
     brandSha256: fixture.item.brandSha256,
     approvalId: fixture.item.approvalId,
     approvedAt: fixture.item.approvedAt,
@@ -199,7 +241,11 @@ function decisionItem(
     privacyStatus: 'customer-private-data-forbidden',
     sourceQuarantineStatus: 'not-recorded-at-source',
     sourceApprovalStatus: 'source-approved-exact-version',
-    decisions: Object.freeze([decision('visual_policy'), decision('claim')]),
+    decisions: Object.freeze([
+      decision('visual_policy'),
+      decision('claim'),
+      ...(fixture.item.itemType === 'asset' ? [decision('asset')] : []),
+    ]),
     recordedAt: CHECKED_AT,
   });
 }
@@ -242,14 +288,23 @@ function harness(input: Readonly<{
   reviewIncomplete?: boolean;
   duplicateReviewDimension?: boolean;
   wrongLocalProjection?: boolean;
+  decisionOverride?: Partial<CompanyAssetItemSummary>;
+  asset?: boolean;
+  assetResponse?: Readonly<{
+    versionId: string;
+    mediaType: 'image/png' | 'image/jpeg' | 'image/webp';
+    sha256: string;
+    bytes: Uint8Array;
+  }>;
   contentWriteError?: Error;
 }> = {}) {
-  const fixture = sourceFixture();
+  const fixture = sourceFixture(input.asset);
   const created: CreateCompanyContentVersionCommand[] = [];
   const refreshed: RefreshCompanyContentSourceAttestationCommand[] = [];
   let bridgeCalls = 0;
   let resourceCalls = 0;
   let stageCalls = 0;
+  const catalogQueries: unknown[] = [];
   let clock = new Date(CHECKED_AT);
   const coordinator = new PropertyPredatorContentSyncCoordinator({
     now: () => new Date(clock),
@@ -267,7 +322,15 @@ function harness(input: Readonly<{
         resourceCalls += 1;
         return input.resource ?? fixture.resource;
       },
-      async loadAsset() { throw new Error('unexpected asset read'); },
+      async loadAsset() {
+        if (fixture.item.itemType !== 'asset') throw new Error('unexpected asset read');
+        return input.assetResponse ?? Object.freeze({
+          versionId: fixture.item.versionId,
+          mediaType: fixture.item.payload.media_type as 'image/png',
+          sha256: fixture.item.blobSha256!,
+          bytes: Uint8Array.from(fixture.assetBytes),
+        });
+      },
     },
     brandBrain: {
       async stageInventory() {
@@ -304,7 +367,8 @@ function harness(input: Readonly<{
         });
       },
       async listItems() {
-        const item = decisionItem(fixture, input.quarantined);
+        const baseItem = decisionItem(fixture, input.quarantined);
+        const item = Object.freeze({ ...baseItem, ...input.decisionOverride });
         return Object.freeze({
           items: Object.freeze([input.reviewIncomplete
             ? Object.freeze({ ...item, decisions: Object.freeze(item.decisions.slice(0, 1)) })
@@ -324,7 +388,8 @@ function harness(input: Readonly<{
       },
     },
     content: {
-      async listCatalog() {
+      async listCatalog(_context, query) {
+        catalogQueries.push(query);
         return Object.freeze({
           items: Object.freeze([...(input.local ?? [])]),
           nextCursor: null,
@@ -359,6 +424,7 @@ function harness(input: Readonly<{
   });
   return {
     coordinator, fixture, created, refreshed,
+    catalogQueries,
     get bridgeCalls() { return bridgeCalls; },
     get resourceCalls() { return resourceCalls; },
     get stageCalls() { return stageCalls; },
@@ -382,6 +448,11 @@ test('imports only the exact canonical company-owned bytes through the effects-o
   assert.equal(subject.created[0]?.metadata?.exactResourceVerified, true);
   assert.equal(subject.created[0]?.source.system, 'propertypredator.company-content');
   assert.equal(subject.refreshed.length, 0);
+  assert.deepEqual(subject.catalogQueries, [{
+    limit: 100,
+    cursor: null,
+    sourceSystem: 'propertypredator.company-content',
+  }]);
 });
 
 test('refreshes a source proof instead of duplicating an existing immutable revision', async () => {
@@ -449,6 +520,89 @@ test('duplicate review dimensions cannot substitute for exact review coverage', 
   assert.equal(result.counts.unchangedVersions, 0);
   assert.equal(subject.resourceCalls, 0);
   assert.equal(subject.created.length, 0);
+});
+
+test('local review evidence must cover the complete immutable source tuple', async () => {
+  const mismatches: readonly Partial<CompanyAssetItemSummary>[] = [
+    { sourceReleaseId: '20000000-0000-4000-8000-000000000090' },
+    { itemId: 'different-source-item' },
+    { itemType: 'media' },
+    { itemVersion: 2 },
+    { versionId: '20000000-0000-4000-8000-000000000091' },
+    { contentSha256: '1'.repeat(64) },
+    { blobSha256: '2'.repeat(64) },
+    { brandSha256: '3'.repeat(64) },
+    { approvalId: '20000000-0000-4000-8000-000000000092' },
+    { approvedAt: '2026-08-28T09:00:01.000Z' },
+  ];
+  for (const decisionOverride of mismatches) {
+    const subject = harness({ decisionOverride });
+    const result = await subject.coordinator.sync(CONTEXT);
+    assert.equal(result.state, 'attention');
+    assert.ok(
+      result.blockers[0]?.code === 'quarantine_review_incomplete'
+        || result.blockers[0]?.code === 'source_import_incomplete',
+    );
+    assert.equal(result.counts.unchangedVersions, 0);
+    assert.equal(subject.resourceCalls, 0);
+    assert.equal(subject.created.length, 0);
+  }
+
+  const fixture = sourceFixture();
+  const invalidEvidence = decisionItem(fixture);
+  const subject = harness({
+    decisionOverride: {
+      decisions: Object.freeze(invalidEvidence.decisions.map((entry, index) => (
+        index === 0 ? Object.freeze({ ...entry, evidenceSha256: 'not-a-digest' }) : entry
+      ))),
+    },
+  });
+  const result = await subject.coordinator.sync(CONTEXT);
+  assert.equal(result.blockers[0]?.code, 'quarantine_review_incomplete');
+  assert.equal(subject.resourceCalls, 0);
+});
+
+test('approved artwork MIME and byte length must match the immutable asset payload', async () => {
+  const wrongMedia = harness({
+    asset: true,
+    assetResponse: Object.freeze({
+      versionId: VERSION_ID,
+      mediaType: 'image/jpeg',
+      sha256: sha(APPROVED_ASSET_BYTES),
+      bytes: Uint8Array.from(APPROVED_ASSET_BYTES),
+    }),
+  });
+  const mediaResult = await wrongMedia.coordinator.sync(CONTEXT);
+  assert.equal(mediaResult.blockers[0]?.code, 'exact_resource_mismatch');
+  assert.equal(wrongMedia.created.length, 0);
+
+  const wrongSize = harness({
+    asset: true,
+    assetResponse: Object.freeze({
+      versionId: VERSION_ID,
+      mediaType: 'image/png',
+      sha256: sha(APPROVED_ASSET_BYTES),
+      bytes: Uint8Array.from([...APPROVED_ASSET_BYTES, 0]),
+    }),
+  });
+  const sizeResult = await wrongSize.coordinator.sync(CONTEXT);
+  assert.equal(sizeResult.blockers[0]?.code, 'exact_resource_mismatch');
+  assert.equal(wrongSize.created.length, 0);
+});
+
+test('unauthenticated contexts cannot inspect or poison sync state or contact the source', async () => {
+  const subject = harness();
+  const invalid = {
+    actorKind: 'system',
+    workspaceId: WORKSPACE_ID,
+    requestId: 'unauthenticated-sync-test',
+  } as unknown as DatabaseRequestContext;
+  assert.throws(() => subject.coordinator.snapshot(invalid), /authenticated workspace member/);
+  await assert.rejects(subject.coordinator.sync(invalid), /authenticated workspace member/);
+  assert.equal(subject.bridgeCalls, 0);
+  assert.equal(subject.resourceCalls, 0);
+  assert.equal(subject.stageCalls, 0);
+  assert.equal(subject.coordinator.snapshot(CONTEXT).state, 'not_run');
 });
 
 test('a wrong local release projection is blocked and never counted as unchanged', async () => {

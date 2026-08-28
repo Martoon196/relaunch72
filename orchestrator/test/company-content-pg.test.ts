@@ -335,13 +335,16 @@ class InMemoryContentSql implements SqlExecutor {
         }));
     }
     if (sql.includes('company-content.list-catalog')) {
-      const [cursorAt, cursorId, rawLimit] = values as [string | null, string | null, number];
+      const [cursorAt, cursorId, rawLimit, sourceSystem] = values as [
+        string | null, string | null, number, string | null,
+      ];
       return this.rows<T>(this.versions
         .filter((version) => {
           const latest = Math.max(...this.versions
             .filter((candidate) => candidate.itemId === version.itemId)
             .map((candidate) => candidate.versionNumber));
           if (version.versionNumber !== latest) return false;
+          if (sourceSystem !== null && version.sourceSystem !== sourceSystem) return false;
           if (cursorAt === null) return true;
           return version.createdAt < cursorAt
             || (version.createdAt === cursorAt && version.id < String(cursorId));
@@ -462,6 +465,36 @@ test('request hashes are canonical, actor-bound and insensitive to metadata key 
     canonicalCompanyContentJson({ é: 4, a: 3, _: 2, Z: 1 }),
     '{"Z":1,"_":2,"a":3,"é":4}',
   );
+});
+
+test('normalization snapshots and deeply freezes metadata before request-hash binding', () => {
+  const mutable = {
+    nested: { label: 'original', flags: ['reviewed', { accepted: true }] },
+  };
+  const normalized = normalizeCompanyContentVersionCommand(command({ metadata: mutable }));
+  const requestHash = companyContentRequestHash(
+    context,
+    'companyContent.createVersion',
+    normalized,
+  );
+
+  mutable.nested.label = 'mutated';
+  mutable.nested.flags[0] = 'replaced';
+  (mutable.nested.flags[1] as { accepted: boolean }).accepted = false;
+
+  assert.deepEqual(normalized.metadata, {
+    nested: { flags: ['reviewed', { accepted: true }], label: 'original' },
+  });
+  assert.deepEqual(
+    companyContentRequestHash(context, 'companyContent.createVersion', normalized),
+    requestHash,
+  );
+  const nested = normalized.metadata.nested as Readonly<Record<string, unknown>>;
+  const flags = nested.flags as readonly unknown[];
+  assert.equal(Object.isFrozen(normalized.metadata), true);
+  assert.equal(Object.isFrozen(nested), true);
+  assert.equal(Object.isFrozen(flags), true);
+  assert.equal(Object.isFrozen(flags[1]), true);
 });
 
 test('version, approval and edit flow preserves old approval as explicitly stale', async () => {
@@ -732,6 +765,37 @@ test('workspace catalog is cursor-bounded and rejects invalid database rows', as
   await assert.rejects(
     new CompanyContentPgRepository(badExecutor).listCatalog({ limit: 10, cursor: null }),
     /invalid canonical data/,
+  );
+});
+
+test('catalog source filtering is applied before SQL pagination and rejects unsafe filters', async () => {
+  const database = new InMemoryContentSql();
+  let tick = 0;
+  const service = new CompanyContentService({
+    transactionRunner: runner(database),
+    nextId: ids(),
+    now: () => new Date(Date.UTC(2026, 7, 28, 12, tick++)),
+  });
+  await service.createVersion(context, command({
+    commandKey: 'source-filter-property-predator',
+    source: {
+      system: 'propertypredator.company-content', itemId: 'owned-one', version: '1',
+    },
+  }));
+  await service.createVersion(context, command({
+    commandKey: 'source-filter-unrelated',
+    source: { system: 'unrelated.fixture', itemId: 'other-one', version: '1' },
+  }));
+  const filtered = await service.listCatalog(context, {
+    limit: 1,
+    sourceSystem: 'propertypredator.company-content',
+  });
+  assert.equal(filtered.items.length, 1);
+  assert.equal(filtered.items[0]?.source.system, 'propertypredator.company-content');
+  assert.equal(filtered.nextCursor, null);
+  await assert.rejects(
+    service.listCatalog(context, { sourceSystem: ' propertypredator.company-content' }),
+    CompanyContentValidationError,
   );
 });
 

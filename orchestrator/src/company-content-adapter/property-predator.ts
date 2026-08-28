@@ -16,6 +16,10 @@ const AFFILIATE_MARKERS = [
   'i earn a commission', 'commission if you', '?ref=', '&ref=',
 ];
 const FIRST_PERSON_RESULT = /\b(?:i|i've|i’d|i'd)\s+(?:use|used|found|saved|made|earned|stopped|avoided|overpaid|offered|bought|sold|invested|negotiated|achieved)\b|\bmy\s+(?:deal|property|portfolio|offer|investment|result|return|yield)\b/iu;
+const EMAIL_ADDRESS = /\b[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\b/iu;
+const UK_POSTCODE = /\b(?:GIR\s?0AA|[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2})\b/iu;
+const PRIVATE_FIELD_MARKER = /(?:\{\{|\[|%)(?:customer|client|contact|lead)?[_. -]*(?:first[_. -]?name|last[_. -]?name|full[_. -]?name|email|phone|mobile|address)(?:\}\}|\]|%)/iu;
+const PRIVATE_LABEL = /\b(?:customer|client|contact|lead)\s+(?:name|email|phone|mobile|address)\s*:/iu;
 
 export type PropertyPredatorCompanyContentItemType = 'media' | 'asset' | 'generated';
 
@@ -124,6 +128,26 @@ function assertCompanyText(value: string, label: string): void {
   }
 }
 
+function containsPhoneNumber(value: string): boolean {
+  const candidates = value.match(/(?:\+|\b0)[\d\s().-]{8,}\d/gu) ?? [];
+  return candidates.some((candidate) => {
+    const digitCount = candidate.replace(/\D/gu, '').length;
+    return digitCount >= 10 && digitCount <= 15;
+  });
+}
+
+function assertNoCustomerPrivateData(payload: Readonly<Record<string, unknown>>): void {
+  for (const value of Object.values(payload)) {
+    if (typeof value !== 'string') continue;
+    if (EMAIL_ADDRESS.test(value) || UK_POSTCODE.test(value) || containsPhoneNumber(value)
+        || PRIVATE_FIELD_MARKER.test(value) || PRIVATE_LABEL.test(value)) {
+      throw new PropertyPredatorContentContractError(
+        'item.payload contains customer-private data or personalisation fields',
+      );
+    }
+  }
+}
+
 function assertHttpsUrl(value: string, label: string): void {
   let url: URL;
   try { url = new URL(value); } catch { throw new PropertyPredatorContentContractError(`${label} is invalid`); }
@@ -190,6 +214,7 @@ function validatePayload(
     assertCompanyText(body, 'generated.body');
     assertHttpsUrl(cta, 'generated.cta_url');
   }
+  assertNoCustomerPrivateData(payload);
   return Object.freeze({ ...payload });
 }
 

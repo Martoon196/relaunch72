@@ -263,6 +263,12 @@ function resolveMapping(headers: readonly string[], mapping: CsvImportMapping): 
       || mapping.columns.length === 0 || mapping.columns.length > TARGET_FIELDS.size) {
     throw new CsvImportPreviewError('mapping_invalid');
   }
+  const affiliateSourceHeaders = mapping.affiliateSourceHeaders;
+  const requiredTargetFieldsInput = mapping.requiredTargetFields;
+  if ((affiliateSourceHeaders !== undefined && !Array.isArray(affiliateSourceHeaders))
+      || (requiredTargetFieldsInput !== undefined && !Array.isArray(requiredTargetFieldsInput))) {
+    throw new CsvImportPreviewError('mapping_invalid');
+  }
   const headerIndexes = new Map(headers.map((header, index) => [header, index]));
   const targets = new Set<CsvImportTargetField>();
   const pairs = new Set<string>();
@@ -281,7 +287,7 @@ function resolveMapping(headers: readonly string[], mapping: CsvImportMapping): 
     return Object.freeze({ sourceHeader, sourceIndex, targetField: entry.targetField });
   });
   const affiliateSeen = new Set<string>();
-  const affiliateColumns = (mapping.affiliateSourceHeaders ?? []).map((raw) => {
+  const affiliateColumns = (affiliateSourceHeaders ?? []).map((raw) => {
     const sourceHeader = canonicalMappingHeader(raw);
     const sourceIndex = headerIndexes.get(sourceHeader);
     if (sourceIndex === undefined || affiliateSeen.has(sourceHeader)) {
@@ -291,7 +297,7 @@ function resolveMapping(headers: readonly string[], mapping: CsvImportMapping): 
     return Object.freeze({ sourceHeader, sourceIndex });
   });
   const requiredSeen = new Set<CsvImportTargetField>();
-  const requiredTargetFields = (mapping.requiredTargetFields ?? []).map((field) => {
+  const requiredTargetFields = (requiredTargetFieldsInput ?? []).map((field) => {
     if (!isTargetField(field) || !targets.has(field) || requiredSeen.has(field)) {
       throw new CsvImportPreviewError('mapping_invalid');
     }
@@ -419,7 +425,6 @@ export function previewLegacyCsvImport(
 
   parsed.rows.forEach((row, rowIndex) => {
     const sourceRowNumber = rowIndex + 2;
-    const rowSha256 = sha256(JSON.stringify(row));
     const unsafeColumnIndexes = row
       .map((value, index) => formulaInjection(value) ? index + 1 : 0)
       .filter((value) => value > 0);
@@ -435,12 +440,14 @@ export function previewLegacyCsvImport(
     if (reasons.size > 0) {
       quarantinedRows.push(Object.freeze({
         sourceRowNumber,
-        rowSha256,
         reasons: Object.freeze(REASON_ORDER.filter((reason) => reasons.has(reason))),
         unsafeColumnIndexes: Object.freeze(unsafeColumnIndexes),
       }));
       return;
     }
+    // Accepted rows already expose their mapped preview values, so their hash
+    // remains useful provenance without weakening the PII-free quarantine boundary.
+    const rowSha256 = sha256(JSON.stringify(row));
     records.push(Object.freeze({
       contact,
       lead,

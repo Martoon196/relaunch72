@@ -123,6 +123,24 @@ test('rejects affiliate and personal-result language even with internally consis
   );
 });
 
+test('rejects obvious customer-private data and personalisation fields before import', () => {
+  const privateBodies = [
+    'Send this to jane.customer@example.test after the call.',
+    'Call the client on 07700 900123 before noon.',
+    'The customer address is SW1A 1AA.',
+    'Hello {{first_name}}, here is your private deal update.',
+    'Customer name: Jane Customer.',
+  ];
+  for (const body of privateBodies) {
+    const item = mediaItem(body);
+    assert.throws(
+      () => parsePropertyPredatorCompanyContentCatalog(catalog([item])),
+      /customer-private data or personalisation fields/,
+      body,
+    );
+  }
+});
+
 test('rejects stale brand approval and duplicate source versions', () => {
   const stale = { ...mediaItem(), brandSha256: 'b'.repeat(64) };
   assert.throws(

@@ -81,7 +81,6 @@ export type CsvImportQuarantineReason =
 
 export interface CsvImportQuarantinedRow {
   readonly sourceRowNumber: number;
-  readonly rowSha256: string;
   readonly reasons: readonly CsvImportQuarantineReason[];
   /** Column indexes are one-based and contain no source values or header text. */
   readonly unsafeColumnIndexes: readonly number[];
@@ -112,7 +111,7 @@ export interface CsvImportPreview {
   readonly canonicalHeaders: readonly string[];
   /** Mapped preview data; deliberately excluded from the PII-free receipt. */
   readonly records: readonly CsvImportPreviewRecord[];
-  /** Hashes and reason codes only; raw rejected cells never cross this boundary. */
+  /** Position and reason codes only; raw rejected cells and row-derived hashes never cross this boundary. */
   readonly quarantinedRows: readonly CsvImportQuarantinedRow[];
   readonly receipt: CsvImportPreviewReceipt;
   readonly previewOnly: true;

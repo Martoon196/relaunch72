@@ -35,6 +35,7 @@ const REFRESH_SOURCE_ATTESTATION = 'companyContent.refreshSourceAttestation';
 const REQUEST_APPROVAL = 'companyContent.requestApproval';
 const DECIDE_APPROVAL = 'companyContent.decideApproval';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SOURCE_SYSTEM = /^[A-Za-z][A-Za-z0-9_.:-]{0,99}$/;
 
 interface PgErrorLike {
   readonly code?: unknown;
@@ -509,6 +510,11 @@ export class CompanyContentService {
       throw new CompanyContentValidationError('Catalog limit must be an integer from 1 to 100');
     }
     const cursor = query.cursor ?? null;
+    const sourceSystem = query.sourceSystem ?? null;
+    if (sourceSystem !== null && (typeof sourceSystem !== 'string'
+        || sourceSystem !== sourceSystem.trim() || !SOURCE_SYSTEM.test(sourceSystem))) {
+      throw new CompanyContentValidationError('Catalog sourceSystem is invalid');
+    }
     if (cursor !== null) {
       if (!cursor || typeof cursor !== 'object'
           || typeof cursor.beforeCreatedAt !== 'string'
@@ -521,6 +527,7 @@ export class CompanyContentService {
       const repository = new CompanyContentPgRepository(transaction);
       const loaded = await repository.listCatalog({
         limit: limit + 1,
+        sourceSystem,
         cursor: cursor === null ? null : Object.freeze({
           beforeCreatedAt: cursor.beforeCreatedAt,
           beforeVersionId: cursor.beforeVersionId.toLowerCase(),

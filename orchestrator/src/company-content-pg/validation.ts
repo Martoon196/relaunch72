@@ -116,6 +116,20 @@ export function canonicalCompanyContentJson(value: unknown): string {
   return jsonValue(value, 'value', new Set<object>());
 }
 
+function deepFreezeCanonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    for (const child of value) deepFreezeCanonicalJson(child);
+    return Object.freeze(value);
+  }
+  if (value !== null && typeof value === 'object') {
+    for (const child of Object.values(value as Record<string, unknown>)) {
+      deepFreezeCanonicalJson(child);
+    }
+    return Object.freeze(value);
+  }
+  return value;
+}
+
 export function validateCompanyContentUserContext(context: DatabaseRequestContext): void {
   validateDatabaseContext(context);
   if (context.actorKind !== 'user' || !context.userId) {
@@ -194,6 +208,9 @@ export function normalizeCompanyContentVersionCommand(
   if (Buffer.byteLength(canonicalMetadata, 'utf8') > 65_536) {
     throw new CompanyContentValidationError('metadata must not exceed 65536 UTF-8 bytes');
   }
+  const metadataSnapshot = deepFreezeCanonicalJson(
+    JSON.parse(canonicalMetadata) as unknown,
+  ) as Readonly<Record<string, unknown>>;
   const sourceCheckedAt = timestamp(command.attestation?.checkedAt, 'attestation.checkedAt');
   const sourceExpiresAt = timestamp(command.attestation?.expiresAt, 'attestation.expiresAt');
   if (sourceExpiresAt <= sourceCheckedAt) {
@@ -227,7 +244,7 @@ export function normalizeCompanyContentVersionCommand(
     ),
     sourceCheckedAt,
     sourceExpiresAt,
-    metadata: metadata as Readonly<Record<string, unknown>>,
+    metadata: metadataSnapshot,
     contentSha256: createHash('sha256').update(command.content, 'utf8').digest('hex'),
   });
 }

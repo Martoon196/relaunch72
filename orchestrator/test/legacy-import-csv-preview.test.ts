@@ -111,10 +111,10 @@ test('formula-leading cells are rejected from mapped output and quarantined with
   assert.equal(preview.records[0]?.contact?.fields.email, 'jordan@example.test');
   assert.deepEqual(preview.quarantinedRows, [{
     sourceRowNumber: 2,
-    rowSha256: preview.quarantinedRows[0]?.rowSha256,
     reasons: ['formula_injection_cell'],
     unsafeColumnIndexes: [4],
   }]);
+  assert.equal(Object.hasOwn(preview.quarantinedRows[0]!, 'rowSha256'), false);
   assert.equal(preview.receipt.quarantineReasonCounts.formula_injection_cell, 1);
   const piiFreeEvidence = JSON.stringify({
     receipt: preview.receipt,
@@ -216,6 +216,27 @@ test('missing required values and empty mapped entities quarantine rows determin
   });
   assert.deepEqual(empty.quarantinedRows[0]?.reasons, ['mapped_entity_empty']);
   assert.equal(empty.records.length, 0);
+});
+
+test('malformed optional mapping collections fail with the fixed mapping error', () => {
+  const malformedValues: readonly unknown[] = [null, 'Email', {}, 17];
+  for (const field of ['affiliateSourceHeaders', 'requiredTargetFields'] as const) {
+    for (const value of malformedValues) {
+      const malformed = {
+        columns: [{ sourceHeader: 'Email', targetField: 'contact.email' }],
+        [field]: value,
+      } as unknown as CsvImportMapping;
+      assert.equal(
+        errorCode(() => previewLegacyCsvImport(
+          source('Email\nowner@example.test'),
+          'csv-upload',
+          malformed,
+        )),
+        'mapping_invalid',
+        `${field}=${String(value)}`,
+      );
+    }
+  }
 });
 
 test('read-only source adapters are accepted and mutation-shaped adapters are rejected before use', async () => {

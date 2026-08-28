@@ -878,6 +878,7 @@ export class CompanyContentPgRepository {
   async listCatalog(input: {
     readonly limit: number;
     readonly cursor: CompanyContentCatalogCursor | null;
+    readonly sourceSystem?: string | null;
   }): Promise<CompanyContentCatalogItem[]> {
     if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 101) {
       throw new Error('Company content repository catalog bound is invalid');
@@ -990,7 +991,8 @@ export class CompanyContentPgRepository {
              AND older.version_number < latest.version_number
          ) AS exists
        ) AS prior_approval ON true
-       WHERE (
+       WHERE ($4::text IS NULL OR latest.source_system = $4::text)
+       AND (
          $1::timestamptz IS NULL
          OR (latest.created_at, latest.content_version_id)
            < ($1::timestamptz, $2::uuid)
@@ -998,7 +1000,7 @@ export class CompanyContentPgRepository {
        ORDER BY latest.created_at DESC, latest.content_version_id DESC
        LIMIT $3`,
       [input.cursor?.beforeCreatedAt ?? null,
-        input.cursor?.beforeVersionId ?? null, input.limit],
+        input.cursor?.beforeVersionId ?? null, input.limit, input.sourceSystem ?? null],
     );
     if (result.rows.length > input.limit) {
       throw new Error('Company content catalog exceeded its SQL-side bound');
