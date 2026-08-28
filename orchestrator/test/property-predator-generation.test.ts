@@ -18,6 +18,7 @@ const GENERATE_TOKEN = 'test-only-company-content-generate-token-0000000001';
 const READ_TOKEN = 'test-only-company-content-read-token-0000000000001';
 const SYNC_TOKEN = 'test-only-company-content-sync-token-0000000000001';
 const BRAND_SHA256 = 'b'.repeat(64);
+const CONTEXT_SHA256 = 'c'.repeat(64);
 const VERSION_ID = '22222222-2222-4222-8222-222222222222';
 const DRAFT_ID = '33333333-3333-4333-8333-333333333333';
 
@@ -38,6 +39,7 @@ const APPROVED_CTA_HOSTS = Object.freeze(['propertypredator.com', 'www.propertyp
 const COMMAND: PropertyPredatorGenerateDraftCommand = Object.freeze({
   idempotencyKey: 'growth-hq-draft-000001',
   expectedBrandSha256: BRAND_SHA256,
+  contextSha256: CONTEXT_SHA256,
   maximumCostMinor: 25,
   brief: Object.freeze({
     kind: 'post',
@@ -52,6 +54,7 @@ function generatedPayload(
 ): PropertyPredatorGeneratedPayload {
   return {
     body: 'Use evidence, inspect the numbers, and make a deliberate decision.',
+    contextSha256: CONTEXT_SHA256,
     cta_url: 'https://propertypredator.com/learn',
     kind: 'post',
     platform: 'linkedin',
@@ -67,7 +70,7 @@ function generatedFixture(
 ): Record<string, unknown> {
   const payload = (patch.payload ?? generatedPayload()) as PropertyPredatorGeneratedPayload;
   const usage = (patch.usage ?? {
-    actualCostMinor: 12,
+    accountingState: 'provider_tokens_unpriced',
     inputTokens: 1_250,
     model: 'claude-sonnet-4-6',
     outputTokens: 480,
@@ -78,6 +81,7 @@ function generatedFixture(
     schemaVersion: 1,
     brandSha256: BRAND_SHA256,
     contentSha256: digest(canonicalCompanyContentJson(payload)),
+    contextSha256: CONTEXT_SHA256,
     draftId: DRAFT_ID,
     itemVersion: 1,
     payload,
@@ -186,10 +190,11 @@ test('uses the exact generate-only POST boundary and returns an immutable hash-v
   assert.equal(observedInit?.referrerPolicy, 'no-referrer');
   const body = String(observedInit?.body);
   assert.equal(body, canonicalCompanyContentJson({
-    brief: COMMAND.brief,
-    expectedBrandSha256: COMMAND.expectedBrandSha256,
-    maximumCostMinor: COMMAND.maximumCostMinor,
-    schema: 'propertypredator.company-content.generate/v1',
+    contextSha256: COMMAND.contextSha256,
+    kind: COMMAND.brief.kind,
+    platform: COMMAND.brief.platform,
+    tone: COMMAND.brief.tone,
+    topic: COMMAND.brief.topic,
   }));
   const headers = observedInit?.headers as Record<string, string>;
   assert.equal(headers.authorization, `Bearer ${GENERATE_TOKEN}`);
@@ -199,14 +204,17 @@ test('uses the exact generate-only POST boundary and returns an immutable hash-v
   assert.equal(Object.values(headers).includes(READ_TOKEN), false);
   assert.equal(Object.values(headers).includes(SYNC_TOKEN), false);
   assert.equal(draft.contentSha256, digest(canonicalCompanyContentJson(draft.payload)));
+  assert.equal(draft.contextSha256, COMMAND.contextSha256);
+  assert.equal(draft.payload.contextSha256, COMMAND.contextSha256);
   assert.equal(draft.status, 'source_review_required');
   assert.ok(Object.isFrozen(draft));
   assert.ok(Object.isFrozen(draft.payload));
   assert.ok(Object.isFrozen(draft.usage));
-  assert.equal(draft.usage.actualCostMinor, 12);
+  assert.equal(draft.usage.accountingState, 'provider_tokens_unpriced');
   assert.equal(draft.usageSha256, digest(canonicalCompanyContentJson(draft.usage)));
 
   assert.equal(controls.reservations.length, 1);
+  assert.equal(controls.reservations[0]?.contextSha256, COMMAND.contextSha256);
   assert.deepEqual(controls.outcomes, [{
     reservationId: 'generation-reservation-0001',
     requestSha256: digest(body),
@@ -216,7 +224,7 @@ test('uses the exact generate-only POST boundary and returns an immutable hash-v
     safeErrorCode: null,
     versionId: VERSION_ID,
     contentSha256: draft.contentSha256,
-    actualCostMinor: 12,
+    actualCostMinor: null,
     inputTokens: 1_250,
     outputTokens: 480,
     model: 'claude-sonnet-4-6',
@@ -305,7 +313,13 @@ test('rejects non-exact, private, attributed and unbounded requests before polic
     symbol,
     hostileProxy,
     { ...COMMAND, idempotencyKey: 'too-short' },
+    { ...COMMAND, idempotencyKey: 'martin.howard1984@example.com' },
+    { ...COMMAND, idempotencyKey: 'api_key-secret-0000000001' },
+    { ...COMMAND, idempotencyKey: '07123-456-789:request0001' },
+    { ...COMMAND, idempotencyKey: 'unsafe/header/value/0001' },
     { ...COMMAND, expectedBrandSha256: 'A'.repeat(64) },
+    { ...COMMAND, contextSha256: 'A'.repeat(64) },
+    { ...COMMAND, contextSha256: 'c'.repeat(63) },
     { ...COMMAND, maximumCostMinor: 0 },
     { ...COMMAND, brief: { ...COMMAND.brief, topic: ' person@example.com ' } },
     { ...COMMAND, brief: { ...COMMAND.brief, topic: 'Call 07123 456789 today' } },
@@ -468,8 +482,14 @@ test('requires the exact brand, payload identity, UUIDs and canonical content ha
   const markupPayload = generatedPayload({ body: '<img src=x onerror=alert(1)>' });
   const formattingMarkupPayload = generatedPayload({ body: '<strong>Evidence first</strong>' });
   const bodyLinkPayload = generatedPayload({ body: 'Read more at https://attacker.example/collect' });
+  const wrongContextPayload = generatedPayload({ contextSha256: 'd'.repeat(64) });
   const cases = [
     generatedFixture({ brandSha256: 'a'.repeat(64) }),
+    generatedFixture({ contextSha256: 'd'.repeat(64) }),
+    generatedFixture({
+      payload: wrongContextPayload,
+      contentSha256: digest(canonicalCompanyContentJson(wrongContextPayload)),
+    }),
     generatedFixture({ contentSha256: 'a'.repeat(64) }),
     generatedFixture({ payload: generatedPayload({ kind: 'email' }) }),
     generatedFixture({ versionId: 'ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF' }),
@@ -494,9 +514,9 @@ test('requires the exact brand, payload identity, UUIDs and canonical content ha
   }
 });
 
-test('requires exact hash-bound upstream usage and rejects spend above the reservation', async () => {
+test('requires exact hash-bound provider token accounting without inventing billed cost', async () => {
   const baseUsage = {
-    actualCostMinor: 12,
+    accountingState: 'provider_tokens_unpriced',
     inputTokens: 1_250,
     model: 'claude-sonnet-4-6',
     outputTokens: 480,
@@ -504,7 +524,8 @@ test('requires exact hash-bound upstream usage and rejects spend above the reser
   };
   const cases = [
     generatedFixture({ usageSha256: 'a'.repeat(64) }),
-    generatedFixture({ usage: { ...baseUsage, actualCostMinor: COMMAND.maximumCostMinor + 1 } }),
+    generatedFixture({ usage: { ...baseUsage, accountingState: 'estimated_cost' } }),
+    generatedFixture({ usage: { ...baseUsage, actualCostMinor: 0 } }),
     generatedFixture({ usage: { ...baseUsage, inputTokens: -1 } }),
     generatedFixture({ usage: { ...baseUsage, outputTokens: 10_000_001 } }),
     generatedFixture({ usage: { ...baseUsage, model: '<b>model</b>' } }),

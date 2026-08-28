@@ -7,6 +7,7 @@ import { CONTENT_CONTROL_ROOM_ROUTE } from './content-control-room-presenter.js'
 import { PROVIDER_READINESS_COCKPIT_ROUTE } from './provider-readiness-cockpit-presenter.js';
 import { SOCIAL_ACCOUNT_CONTROL_ROUTE } from './social-account-control-presenter.js';
 import { SOCIAL_COMPOSER_ROUTE } from './social-composer-presenter.js';
+import { IMAGE_STUDIO_ROUTE } from './image-studio-presenter.js';
 import { COMPANY_CONTENT_SYNC_ROUTE } from './company-content-sync-actions.js';
 import { escapeHtml } from './ui.js';
 
@@ -15,6 +16,7 @@ export type ContentWorkspaceNavigationTarget =
   | 'campaigns'
   | 'calendar'
   | 'composer'
+  | 'images'
   | 'connections'
   | 'readiness'
   | 'library'
@@ -50,6 +52,7 @@ export function renderContentWorkspaceNavigation(
   options: Readonly<{
     companyAssetsAvailable?: boolean;
     composerAvailable?: boolean;
+    imageStudioAvailable?: boolean;
     assetsLabel?: string;
     brandBrainAvailable: boolean;
     brainLabel?: string;
@@ -70,6 +73,9 @@ export function renderContentWorkspaceNavigation(
   const composer = options.composerAvailable || active === 'composer'
     ? `<a href="${SOCIAL_COMPOSER_ROUTE}"${active === 'composer' ? ' aria-current="page"' : ''}>Composer</a>`
     : '';
+  const images = options.imageStudioAvailable || active === 'images'
+    ? `<a href="${IMAGE_STUDIO_ROUTE}"${active === 'images' ? ' aria-current="page"' : ''}>Image Studio</a>`
+    : '';
   const assets = options.companyAssetsAvailable
     ? `<a href="${COMPANY_ASSETS_ROUTE}"${active === 'assets' ? ' aria-current="page"' : ''}>${escapeHtml(options.assetsLabel ?? 'Company Assets')}</a>`
     : '';
@@ -79,5 +85,5 @@ export function renderContentWorkspaceNavigation(
   const sync = options.companyContentSyncAvailable
     ? `<a href="${COMPANY_CONTENT_SYNC_ROUTE}"${active === 'sync' ? ' aria-current="page"' : ''}>Source Sync</a>`
     : '';
-  return `<style data-property-predator-content-workspace-navigation>${CONTENT_WORKSPACE_NAVIGATION_STYLE}</style><nav class="pp-content-nav" aria-label="Content operations">${links}${composer}${assets}${brain}${sync}</nav>`;
+  return `<style data-property-predator-content-workspace-navigation>${CONTENT_WORKSPACE_NAVIGATION_STYLE}</style><nav class="pp-content-nav" aria-label="Content operations">${links}${composer}${images}${assets}${brain}${sync}</nav>`;
 }

@@ -116,6 +116,7 @@ test('Social Composer renders premium touch-responsive editing and preview witho
   const html = renderSocialComposerBody(present());
   assert.match(html, /<nav class="pp-content-nav" aria-label="Content operations">/);
   assert.match(html, /href="\/portal\/content\/compose" aria-current="page">Composer/);
+  assert.doesNotMatch(html, /href="\/portal\/content\/images"/);
   assert.match(html, /<article class="scomp" aria-labelledby="scomp-title" data-provider-effects="none" data-command-boundary="absent" data-social-composer data-local-dirty="false">/);
   assert.match(html, /One truth\. <em>Five perfect cuts\.<\/em>/);
   assert.match(html, /Illustrative Affiliate Stash adapter contract/);

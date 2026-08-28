@@ -87,6 +87,12 @@ import {
 } from '../src/portal/social-composer-fixtures.js';
 import { renderSocialComposerBody } from '../src/portal/social-composer-view.js';
 import {
+  IMAGE_STUDIO_ROUTE,
+  presentImageStudio,
+} from '../src/portal/image-studio-presenter.js';
+import { createPropertyPredatorImageStudioFixture } from '../src/portal/image-studio-fixtures.js';
+import { renderImageStudioBody } from '../src/portal/image-studio-view.js';
+import {
   PROVIDER_CONNECTIONS_ROUTE,
   presentProviderConnections,
 } from '../src/portal/provider-connections-presenter.js';
@@ -1440,7 +1446,7 @@ function previewJourneyNav(active: 'board' | 'rules'): string {
 }
 
 type PreviewOperationsRoute = 'today' | 'actions' | 'journeys' | 'campaigns' | 'content'
-  | 'compose' | 'calendar' | 'inbox' | 'automations' | 'webinars' | 'analytics' | 'social_accounts' | 'readiness';
+  | 'compose' | 'images' | 'calendar' | 'inbox' | 'automations' | 'webinars' | 'analytics' | 'social_accounts' | 'readiness';
 
 function previewOperationsNav(active: PreviewOperationsRoute): string {
   const links: readonly Readonly<{ key: PreviewOperationsRoute; href: string; label: string }>[] = [
@@ -1450,6 +1456,7 @@ function previewOperationsNav(active: PreviewOperationsRoute): string {
     { key: 'campaigns', href: PUBLIC_SOCIAL_CAMPAIGNS_ROUTE, label: 'Campaigns' },
     { key: 'content', href: CONTENT_CONTROL_ROOM_ROUTE, label: 'Content' },
     { key: 'compose', href: SOCIAL_COMPOSER_ROUTE, label: 'Composer' },
+    { key: 'images', href: IMAGE_STUDIO_ROUTE, label: 'Image Studio' },
     { key: 'calendar', href: CONTENT_CALENDAR_ROUTE, label: 'Calendar' },
     { key: 'inbox', href: CONVERSION_INBOX_ROUTE, label: 'Inbox' },
     { key: 'automations', href: AUTOMATION_STUDIO_ROUTE, label: 'Automations' },
@@ -1692,6 +1699,13 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
         },
       },
     ))}`, 'content', 'Property Predator — Social Composer'),
+    scripted: true,
+  };
+  if (path === IMAGE_STUDIO_ROUTE) return {
+    status: 200,
+    html: shell(`${previewOperationsNav('images')}${renderImageStudioBody(presentImageStudio(
+      createPropertyPredatorImageStudioFixture(),
+    ))}`, 'content', 'Property Predator — Image Studio'),
     scripted: true,
   };
   if (path === PUBLIC_SOCIAL_CAMPAIGNS_ROUTE) return {

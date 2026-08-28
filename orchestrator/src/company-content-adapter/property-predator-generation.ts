@@ -3,12 +3,12 @@ import { canonicalCompanyContentJson } from '../company-content-pg/validation.js
 
 const ENDPOINT_PATH = '/api/internal/company-content/generate';
 const GENERATION_SCHEMA = 'propertypredator.company-content/v1';
-const GENERATION_REQUEST_SCHEMA = 'propertypredator.company-content.generate/v1';
 const MAX_REQUEST_BYTES = 8 * 1024;
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const SHA256 = /^[0-9a-f]{64}$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const SAFE_CLIENT_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/u;
+const SAFE_IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,199}$/u;
 const SAFE_RESERVATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{15,199}$/u;
 const SAFE_CTA_HOST = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/u;
 const PROPERTY_PREDATOR_CTA_ROOT = 'propertypredator.com';
@@ -19,6 +19,7 @@ const EMAIL_ADDRESS = /\b[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61
 const UK_POSTCODE = /\b(?:GIR\s?0AA|[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2})\b/iu;
 const PRIVATE_FIELD = /\b(?:customer|client|contact|lead)[_. -]*(?:id|first[_. -]?name|last[_. -]?name|full[_. -]?name|email|phone|mobile|address)\b/iu;
 const PRIVATE_LABEL = /\b(?:customer|client|contact|lead)\s+(?:name|email|phone|mobile|address)\s*:/iu;
+const SECRET_MARKER = /\b(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|secret|password|authorization|bearer)\b/iu;
 const AFFILIATE_MARKER = /(?:\{\{link\}\}|#ad\b|partner link|affiliate link|affiliate partner|i earn a commission|commission if you|[?&]ref=)/iu;
 const FIRST_PERSON_RESULT = /\b(?:i|i've|i’d|i'd)\s+(?:use|used|found|saved|made|earned|stopped|avoided|overpaid|offered|bought|sold|invested|negotiated|achieved)\b|\bmy\s+(?:deal|property|portfolio|offer|investment|result|return|yield)\b/iu;
 const MARKUP = /[<>]/u;
@@ -46,6 +47,8 @@ export interface PropertyPredatorGenerationBrief {
 export interface PropertyPredatorGenerateDraftCommand {
   readonly idempotencyKey: string;
   readonly expectedBrandSha256: string;
+  /** Canonical digest of the exact upstream LAPS, method and specialist selection. */
+  readonly contextSha256: string;
   /** The maximum amount this one reservation may consume, in minor currency units. */
   readonly maximumCostMinor: number;
   readonly brief: PropertyPredatorGenerationBrief;
@@ -65,6 +68,7 @@ export interface PropertyPredatorGenerationPolicyRequest {
   readonly requestSha256: string;
   readonly idempotencyKeySha256: string;
   readonly expectedBrandSha256: string;
+  readonly contextSha256: string;
   readonly kind: PropertyPredatorGenerationKind;
   readonly requestBytes: number;
   readonly maximumCostMinor: number;
@@ -103,7 +107,7 @@ export interface PropertyPredatorGenerationPolicyOutcome {
   readonly safeErrorCode: PropertyPredatorGenerationBridgeErrorCode | null;
   readonly versionId: string | null;
   readonly contentSha256: string | null;
-  /** Verified upstream accounting; null unless a complete version was confirmed. */
+  /** Null for token-only provider evidence; policy must retain the full spend reservation. */
   readonly actualCostMinor: number | null;
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
@@ -127,6 +131,7 @@ export interface PropertyPredatorGenerationPolicy {
 
 export interface PropertyPredatorGeneratedPayload {
   readonly body: string;
+  readonly contextSha256: string;
   readonly cta_url: string;
   readonly kind: PropertyPredatorGenerationKind;
   readonly platform: string;
@@ -136,8 +141,8 @@ export interface PropertyPredatorGeneratedPayload {
 }
 
 export interface PropertyPredatorGenerationUsage {
-  /** Actual ledger charge in the same minor-currency unit as maximumCostMinor. */
-  readonly actualCostMinor: number;
+  /** Provider-token accounting; no final billed line-item cost is asserted. */
+  readonly accountingState: 'provider_tokens_unpriced';
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly model: string;
@@ -149,6 +154,7 @@ export interface PropertyPredatorGeneratedDraft {
   readonly schemaVersion: 1;
   readonly brandSha256: string;
   readonly contentSha256: string;
+  readonly contextSha256: string;
   readonly draftId: string;
   readonly itemVersion: number;
   readonly payload: PropertyPredatorGeneratedPayload;
@@ -365,6 +371,7 @@ function command(input: unknown): Readonly<{
   idempotencyKey: string;
   idempotencyKeySha256: string;
   expectedBrandSha256: string;
+  contextSha256: string;
   maximumCostMinor: number;
   brief: PropertyPredatorGenerationBrief;
   body: string;
@@ -372,14 +379,20 @@ function command(input: unknown): Readonly<{
   requestSha256: string;
 }> {
   const value = dataRecord(input, [
-    'brief', 'expectedBrandSha256', 'idempotencyKey', 'maximumCostMinor',
+    'brief', 'contextSha256', 'expectedBrandSha256', 'idempotencyKey', 'maximumCostMinor',
   ], 'invalid_request');
   if (typeof value.idempotencyKey !== 'string'
-      || value.idempotencyKey.length < 16 || value.idempotencyKey.length > 200
-      || !VISIBLE_ASCII.test(value.idempotencyKey)) {
+      || !SAFE_IDEMPOTENCY_KEY.test(value.idempotencyKey)
+      || EMAIL_ADDRESS.test(value.idempotencyKey)
+      || UK_POSTCODE.test(value.idempotencyKey)
+      || containsPhoneNumber(value.idempotencyKey)
+      || PRIVATE_FIELD.test(value.idempotencyKey)
+      || PRIVATE_LABEL.test(value.idempotencyKey)
+      || SECRET_MARKER.test(value.idempotencyKey)) {
     throw bridgeError('invalid_request');
   }
   const expectedBrandSha256 = canonicalSha(value.expectedBrandSha256, 'invalid_request');
+  const contextSha256 = canonicalSha(value.contextSha256, 'invalid_request');
   if (!Number.isSafeInteger(value.maximumCostMinor)
       || (value.maximumCostMinor as number) < 1
       || (value.maximumCostMinor as number) > 100_000) {
@@ -401,10 +414,11 @@ function command(input: unknown): Readonly<{
     tone,
   });
   const body = canonicalCompanyContentJson(Object.freeze({
-    brief,
-    expectedBrandSha256,
-    maximumCostMinor: value.maximumCostMinor as number,
-    schema: GENERATION_REQUEST_SCHEMA,
+    contextSha256,
+    kind: brief.kind,
+    platform: brief.platform,
+    tone: brief.tone,
+    topic: brief.topic,
   }));
   const bodyBytes = Buffer.byteLength(body, 'utf8');
   if (bodyBytes < 1 || bodyBytes > MAX_REQUEST_BYTES) throw bridgeError('invalid_request');
@@ -412,6 +426,7 @@ function command(input: unknown): Readonly<{
     idempotencyKey: value.idempotencyKey,
     idempotencyKeySha256: sha256(value.idempotencyKey),
     expectedBrandSha256,
+    contextSha256,
     maximumCostMinor: value.maximumCostMinor as number,
     brief,
     body,
@@ -579,12 +594,11 @@ function nonNegativeInteger(input: unknown, maximum: number): number {
 function parseUsage(
   input: unknown,
   usageSha256: unknown,
-  maximumCostMinor: number,
 ): Readonly<{ usage: PropertyPredatorGenerationUsage; usageSha256: string }> {
   const raw = dataRecord(input, [
-    'actualCostMinor', 'inputTokens', 'model', 'outputTokens', 'providerRequestId',
+    'accountingState', 'inputTokens', 'model', 'outputTokens', 'providerRequestId',
   ], 'invalid_response');
-  const actualCostMinor = nonNegativeInteger(raw.actualCostMinor, maximumCostMinor);
+  if (raw.accountingState !== 'provider_tokens_unpriced') throw bridgeError('invalid_response');
   const inputTokens = nonNegativeInteger(raw.inputTokens, 10_000_000);
   const outputTokens = nonNegativeInteger(raw.outputTokens, 10_000_000);
   const model = responseText(raw.model, 1, 200);
@@ -594,7 +608,7 @@ function parseUsage(
     throw bridgeError('invalid_response');
   }
   const usage = Object.freeze({
-    actualCostMinor,
+    accountingState: 'provider_tokens_unpriced' as const,
     inputTokens,
     model,
     outputTokens,
@@ -612,12 +626,12 @@ function parseGeneratedDraft(
   expected: Readonly<{
     approvedCtaHosts: ReadonlySet<string>;
     brandSha256: string;
+    contextSha256: string;
     brief: PropertyPredatorGenerationBrief;
-    maximumCostMinor: number;
   }>,
 ): PropertyPredatorGeneratedDraft {
   const value = dataRecord(input, [
-    'brandSha256', 'contentSha256', 'draftId', 'itemVersion', 'ok', 'payload',
+    'brandSha256', 'contentSha256', 'contextSha256', 'draftId', 'itemVersion', 'ok', 'payload',
     'schemaVersion', 'status', 'usage', 'usageSha256', 'versionId',
   ], 'invalid_response');
   if (value.ok !== true || value.schemaVersion !== 1 || value.status !== 'source_review_required') {
@@ -625,7 +639,10 @@ function parseGeneratedDraft(
   }
   const brandSha256 = canonicalSha(value.brandSha256, 'invalid_response');
   const contentSha256 = canonicalSha(value.contentSha256, 'invalid_response');
-  if (brandSha256 !== expected.brandSha256) throw bridgeError('integrity_mismatch');
+  const contextSha256 = canonicalSha(value.contextSha256, 'invalid_response');
+  if (brandSha256 !== expected.brandSha256 || contextSha256 !== expected.contextSha256) {
+    throw bridgeError('integrity_mismatch');
+  }
   if (typeof value.draftId !== 'string' || !UUID.test(value.draftId)
       || typeof value.versionId !== 'string' || !UUID.test(value.versionId)
       || !Number.isSafeInteger(value.itemVersion)
@@ -633,10 +650,11 @@ function parseGeneratedDraft(
     throw bridgeError('invalid_response');
   }
   const rawPayload = dataRecord(value.payload, [
-    'body', 'cta_url', 'kind', 'platform', 'schema', 'title', 'type',
+    'body', 'contextSha256', 'cta_url', 'kind', 'platform', 'schema', 'title', 'type',
   ], 'invalid_response');
   if (rawPayload.type !== 'generated' || rawPayload.schema !== GENERATION_SCHEMA
-      || rawPayload.kind !== expected.brief.kind || rawPayload.platform !== expected.brief.platform) {
+      || rawPayload.kind !== expected.brief.kind || rawPayload.platform !== expected.brief.platform
+      || rawPayload.contextSha256 !== contextSha256) {
     throw bridgeError('integrity_mismatch');
   }
   const title = responseText(rawPayload.title, 1, 300);
@@ -657,6 +675,7 @@ function parseGeneratedDraft(
   }
   const payload = Object.freeze({
     body,
+    contextSha256,
     cta_url: cleanHttpsUrl(rawPayload.cta_url, expected.approvedCtaHosts),
     kind: rawPayload.kind as PropertyPredatorGenerationKind,
     platform,
@@ -667,12 +686,13 @@ function parseGeneratedDraft(
   if (sha256(canonicalCompanyContentJson(payload)) !== contentSha256) {
     throw bridgeError('integrity_mismatch');
   }
-  const accounting = parseUsage(value.usage, value.usageSha256, expected.maximumCostMinor);
+  const accounting = parseUsage(value.usage, value.usageSha256);
   return Object.freeze({
     ok: true,
     schemaVersion: 1,
     brandSha256,
     contentSha256,
+    contextSha256,
     draftId: value.draftId,
     itemVersion: value.itemVersion as number,
     payload,
@@ -690,6 +710,7 @@ function policyRequest(
     requestSha256: normalized.requestSha256,
     idempotencyKeySha256: normalized.idempotencyKeySha256,
     expectedBrandSha256: normalized.expectedBrandSha256,
+    contextSha256: normalized.contextSha256,
     kind: normalized.brief.kind,
     requestBytes: normalized.bodyBytes,
     maximumCostMinor: normalized.maximumCostMinor,
@@ -798,8 +819,8 @@ export function createPropertyPredatorGenerationTransport(
         const draft = parseGeneratedDraft(parsed, {
           approvedCtaHosts,
           brandSha256: normalized.expectedBrandSha256,
+          contextSha256: normalized.contextSha256,
           brief: normalized.brief,
-          maximumCostMinor: normalized.maximumCostMinor,
         });
         try {
           await beforeDeadline(policy.recordOutcome(Object.freeze({
@@ -811,7 +832,9 @@ export function createPropertyPredatorGenerationTransport(
             safeErrorCode: null,
             versionId: draft.versionId,
             contentSha256: draft.contentSha256,
-            actualCostMinor: draft.usage.actualCostMinor,
+            // The provider returns exact token usage but no final billed cost.
+            // Null deliberately leaves the maximum spend reservation consumed.
+            actualCostMinor: null,
             inputTokens: draft.usage.inputTokens,
             outputTokens: draft.usage.outputTokens,
             model: draft.usage.model,
