@@ -14,6 +14,10 @@ import {
   presentContentControlRoom,
 } from '../src/portal/content-control-room-presenter.js';
 import { renderContentControlRoomBody } from '../src/portal/content-control-room-view.js';
+import { BRAND_BRAIN_ROUTE } from '../src/portal/brand-brain-actions.js';
+import { createPropertyPredatorBrandBrainFixture } from '../src/portal/brand-brain-fixtures.js';
+import { presentBrandBrain } from '../src/portal/brand-brain-presenter.js';
+import { renderBrandBrainBody } from '../src/portal/brand-brain-view.js';
 import {
   CONTENT_APPROVAL_DECISION_ROUTE,
   CONTENT_APPROVAL_REQUEST_ROUTE,
@@ -1582,6 +1586,21 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
   if (path === CONTENT_CONTROL_ROOM_ROUTE) return {
     status: 200,
     html: shell(`${previewOperationsNav('content')}${previewContentControl(url)}`, 'content', 'Property Predator — Content Control'),
+  };
+  if (path === BRAND_BRAIN_ROUTE) return {
+    status: 200,
+    html: shell(
+      `${previewOperationsNav('content')}${renderBrandBrainBody(
+        presentBrandBrain(createPropertyPredatorBrandBrainFixture()),
+        {
+          companyAssetsAvailable: true,
+          companyAssetsLabel: PROPERTY_PREDATOR_GROWTH_PROFILE.contentWorkspace?.assetsLabel,
+          brainLabel: PROPERTY_PREDATOR_GROWTH_PROFILE.contentWorkspace?.brainLabel,
+        },
+      )}`,
+      'content',
+      'Property Predator — Content Brain',
+    ),
   };
   if (path === COMPANY_ASSETS_ROUTE) return {
     status: 200,

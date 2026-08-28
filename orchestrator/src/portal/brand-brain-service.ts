@@ -1,4 +1,5 @@
 import type { BrandBrainSnapshot } from '../brand-brain-pg/types.js';
+import type { FounderSpecialistPack } from '../company-content-adapter/founder-specialist-pack.js';
 
 /**
  * Opaque browser identity. The implementation resolves the portal session and
@@ -29,10 +30,22 @@ export interface PortalBrandBrainExternalProfile {
   readonly callable: false;
 }
 
+export interface PortalBrandBrainAdaptedMethodPack {
+  readonly pack: FounderSpecialistPack;
+  readonly sourceInventorySha256: string;
+  readonly sourceFileCount: number;
+  readonly sourceByteLength: number;
+}
+
 export interface PortalBrandBrainSnapshot {
   readonly workspace: PortalBrandBrainWorkspaceAccess;
   readonly brain: BrandBrainSnapshot;
   readonly externalProfiles: readonly PortalBrandBrainExternalProfile[];
+  /**
+   * Private adapted methods are projected through the inert specialist-pack
+   * contract. They are not ChatGPT profiles, runtime agents or provider tools.
+   */
+  readonly adaptedMethodPacks: readonly PortalBrandBrainAdaptedMethodPack[];
   readonly dataset: 'illustrative_fixture' | 'postgres_authoritative';
 }
 

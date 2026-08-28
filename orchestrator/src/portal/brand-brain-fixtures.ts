@@ -8,6 +8,12 @@ import type {
   PortalBrandBrainExternalProfile,
   PortalBrandBrainSnapshot,
 } from './brand-brain-service.js';
+import {
+  PROPERTY_PREDATOR_MARKETING_PACK,
+  PROPERTY_PREDATOR_MARKETING_SOURCE_BYTE_LENGTH,
+  PROPERTY_PREDATOR_MARKETING_SOURCE_FILE_COUNT,
+  PROPERTY_PREDATOR_MARKETING_SOURCE_INVENTORY_SHA256,
+} from '../company-content-adapter/property-predator-marketing-pack-registry.js';
 
 const RUNTIME_BRAND_SHA256 = 'b8e342f5473dd1be7dbaf0bcd80269a38b2bf15c8e4634aa66ea4f5e21c9c60e';
 
@@ -157,6 +163,14 @@ export function createPropertyPredatorBrandBrainFixture(): PortalBrandBrainSnaps
     }),
     brain,
     externalProfiles: EXTERNAL_PROFILES,
+    adaptedMethodPacks: Object.freeze([
+      Object.freeze({
+        pack: PROPERTY_PREDATOR_MARKETING_PACK,
+        sourceInventorySha256: PROPERTY_PREDATOR_MARKETING_SOURCE_INVENTORY_SHA256,
+        sourceFileCount: PROPERTY_PREDATOR_MARKETING_SOURCE_FILE_COUNT,
+        sourceByteLength: PROPERTY_PREDATOR_MARKETING_SOURCE_BYTE_LENGTH,
+      }),
+    ]),
     dataset: 'illustrative_fixture',
   });
 }

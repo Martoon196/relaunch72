@@ -1,9 +1,11 @@
+import { createHash } from 'node:crypto';
 import type {
   BrandBrainReviewDecision,
   BrandBrainReviewDimension,
   BrandBrainSourceSummary,
   BrandBrainSpecialistSummary,
 } from '../brand-brain-pg/types.js';
+import { parseFounderSpecialistPack } from '../company-content-adapter/founder-specialist-pack.js';
 import {
   brandBrainReadOnlyActionHref,
   type BrandBrainReadOnlyAction,
@@ -17,6 +19,7 @@ const SHA256 = /^[0-9a-f]{64}$/u;
 const MAX_SOURCES = 100;
 const MAX_SPECIALISTS = 20;
 const MAX_EXTERNAL_PROFILES = 10;
+const MAX_ADAPTED_METHOD_PACKS = 5;
 const MAX_CAPABILITIES = 8;
 
 export type BrandBrainGateTone = 'pass' | 'wait' | 'blocked';
@@ -63,6 +66,23 @@ export interface BrandBrainExternalProfileView {
   readonly callableLabel: 'Not callable';
 }
 
+export interface BrandBrainAdaptedMethodPackView {
+  readonly packId: string;
+  readonly name: string;
+  readonly capabilities: readonly string[];
+  readonly fileCount: number;
+  readonly sourceByteLength: number;
+  readonly sourceInventoryDigestLabel: string;
+  readonly packageDigestLabel: string;
+  readonly ownershipDigestLabel: string;
+  readonly provenanceLabel: 'Founder asserted owned or licensed';
+  readonly payloadLabel: 'Metadata and hashes only';
+  readonly reviewLabel: 'Review required';
+  readonly callableLabel: 'Not callable';
+  readonly effectsLabel: 'Effects none';
+  readonly providerAccessLabel: 'Provider access forbidden';
+}
+
 export interface BrandBrainConflictView {
   readonly title: 'Panther imagery vs no-animal visual rule';
   readonly statusLabel: 'Quarantined';
@@ -92,12 +112,14 @@ export interface BrandBrainView {
   readonly sources: readonly BrandBrainSourceView[];
   readonly specialists: readonly BrandBrainSpecialistView[];
   readonly externalProfiles: readonly BrandBrainExternalProfileView[];
+  readonly adaptedMethodPacks: readonly BrandBrainAdaptedMethodPackView[];
   readonly gates: readonly BrandBrainGateView[];
   readonly metrics: Readonly<{
     sourceCount: number;
     specialistCount: number;
     runtimeReadyCount: number;
     externalAwaitingCount: number;
+    adaptedMethodPackCount: number;
     artworkCount: number;
     approvedReviewCount: number;
     requiredReviewCount: 3;
@@ -243,6 +265,79 @@ function externalProfileView(profile: PortalBrandBrainExternalProfile): BrandBra
   });
 }
 
+function adaptedMethodPackView(input: unknown): BrandBrainAdaptedMethodPackView {
+  try {
+    if (!input || typeof input !== 'object' || Array.isArray(input)
+        || Object.getPrototypeOf(input) !== Object.prototype) {
+      throw new BrandBrainPresentationError('An adapted method pack projection is invalid');
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(input);
+    const ownKeys = Reflect.ownKeys(input);
+    if (ownKeys.some((key) => typeof key !== 'string')) {
+      throw new BrandBrainPresentationError('An adapted method pack projection is invalid');
+    }
+    const keys = (ownKeys as string[]).sort();
+    const expected = ['pack', 'sourceByteLength', 'sourceFileCount', 'sourceInventorySha256'];
+    if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+      throw new BrandBrainPresentationError('An adapted method pack projection is invalid');
+    }
+    if (expected.some((key) => {
+      const descriptor = descriptors[key];
+      return !descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value');
+    })) {
+      throw new BrandBrainPresentationError('An adapted method pack projection is invalid');
+    }
+    const pack = parseFounderSpecialistPack(descriptors.pack?.value);
+    const sourceInventorySha256 = descriptors.sourceInventorySha256?.value;
+    const sourceFileCount = descriptors.sourceFileCount?.value;
+    const sourceByteLength = descriptors.sourceByteLength?.value;
+    if (typeof sourceInventorySha256 !== 'string' || !SHA256.test(sourceInventorySha256)
+        || !Number.isSafeInteger(sourceFileCount) || sourceFileCount !== pack.files.length
+        || !Number.isSafeInteger(sourceByteLength) || sourceByteLength < 1
+        || sourceByteLength !== pack.files.reduce((total, file) => total + file.byteLength, 0)) {
+      throw new BrandBrainPresentationError('An adapted method pack source inventory is invalid');
+    }
+    const computedSourceInventorySha256 = createHash('sha256')
+      .update(pack.files
+        .map((file) => Object.freeze({
+          key: file.path.toLocaleLowerCase('en-GB'),
+          row: `${file.path}\t${file.byteLength}\t${file.contentSha256}`,
+        }))
+        .sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0)
+        .map(({ row }) => row)
+        .join('\n'), 'utf8')
+      .digest('hex');
+    if (computedSourceInventorySha256 !== sourceInventorySha256) {
+      throw new BrandBrainPresentationError('An adapted method pack source inventory is invalid');
+    }
+    const ownership = pack.ownershipEvidence[0];
+    if (!ownership) {
+      throw new BrandBrainPresentationError('An adapted method pack has no ownership evidence');
+    }
+    return Object.freeze({
+      packId: boundedText(pack.packId, 'adapted-pack-unavailable', 200),
+      name: boundedText(pack.specialist.name, 'Private adapted method pack', 200),
+      capabilities: Object.freeze(pack.specialist.proposalCapabilities
+        .slice(0, MAX_CAPABILITIES)
+        .map((capability) => tokenLabel(capability, 'Proposal guidance'))),
+      fileCount: pack.files.length,
+      sourceByteLength,
+      sourceInventoryDigestLabel: digestLabel(sourceInventorySha256),
+      packageDigestLabel: digestLabel(pack.packageSha256),
+      ownershipDigestLabel: digestLabel(ownership.contentSha256),
+      provenanceLabel: 'Founder asserted owned or licensed',
+      payloadLabel: 'Metadata and hashes only',
+      reviewLabel: 'Review required',
+      callableLabel: 'Not callable',
+      effectsLabel: 'Effects none',
+      providerAccessLabel: 'Provider access forbidden',
+    });
+  } catch (error) {
+    if (error instanceof BrandBrainPresentationError) throw error;
+    throw new BrandBrainPresentationError('An adapted method pack crossed the inert metadata boundary');
+  }
+}
+
 function action(action: BrandBrainReadOnlyAction, label: string): BrandBrainReadOnlyActionView {
   return Object.freeze({ action, label, href: brandBrainReadOnlyActionHref(action) });
 }
@@ -258,11 +353,17 @@ export function presentBrandBrain(snapshot: PortalBrandBrainSnapshot): BrandBrai
   const sourcesInput = Array.isArray(snapshot.brain.sources) ? snapshot.brain.sources : [];
   const specialistsInput = Array.isArray(snapshot.brain.specialists) ? snapshot.brain.specialists : [];
   const externalInput = Array.isArray(snapshot.externalProfiles) ? snapshot.externalProfiles : [];
+  const adaptedMethodPackInput = Array.isArray(snapshot.adaptedMethodPacks)
+    ? snapshot.adaptedMethodPacks
+    : [];
   const sources = Object.freeze(sourcesInput.slice(0, MAX_SOURCES).map(sourceView));
   const specialists = Object.freeze(specialistsInput.slice(0, MAX_SPECIALISTS).map(specialistView));
   const externalProfiles = Object.freeze(externalInput
     .slice(0, MAX_EXTERNAL_PROFILES)
     .map(externalProfileView));
+  const adaptedMethodPacks = Object.freeze(adaptedMethodPackInput
+    .slice(0, MAX_ADAPTED_METHOD_PACKS)
+    .map(adaptedMethodPackView));
   const ownership = reviewDecision(snapshot.brain.reviews, 'ownership_licence');
   const privacy = reviewDecision(snapshot.brain.reviews, 'privacy_security');
   const brand = reviewDecision(snapshot.brain.reviews, 'brand_readiness');
@@ -326,12 +427,14 @@ export function presentBrandBrain(snapshot: PortalBrandBrainSnapshot): BrandBrai
     sources,
     specialists,
     externalProfiles,
+    adaptedMethodPacks,
     gates,
     metrics: Object.freeze({
       sourceCount: sources.length,
       specialistCount: specialists.length,
       runtimeReadyCount,
       externalAwaitingCount: externalProfiles.length,
+      adaptedMethodPackCount: adaptedMethodPacks.length,
       artworkCount: safeCount(snapshot.brain.artworkCount),
       approvedReviewCount,
       requiredReviewCount: 3,
@@ -350,7 +453,8 @@ export function presentBrandBrain(snapshot: PortalBrandBrainSnapshot): BrandBrai
     providerEffectsOff: true,
     inputTruncated: sourcesInput.length > MAX_SOURCES
       || specialistsInput.length > MAX_SPECIALISTS
-      || externalInput.length > MAX_EXTERNAL_PROFILES,
+      || externalInput.length > MAX_EXTERNAL_PROFILES
+      || adaptedMethodPackInput.length > MAX_ADAPTED_METHOD_PACKS,
     actions: Object.freeze([
       action('content_library', 'Open Content Control'),
       action('source_release', 'Inspect source proof'),

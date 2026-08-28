@@ -10,11 +10,12 @@ import { renderBrandBrainBody } from '../src/portal/brand-brain-view.js';
 import { renderContentWorkspaceNavigation } from '../src/portal/content-workspace-navigation.js';
 import type { PortalBrandBrainSnapshot } from '../src/portal/brand-brain-service.js';
 
-test('Brand Brain presents the six source specialists and three founder exports without runtime authority', () => {
+test('Brand Brain presents six source specialists, three founder exports and one inert adapted method pack', () => {
   const view = presentBrandBrain(createPropertyPredatorBrandBrainFixture());
 
   assert.equal(view.metrics.specialistCount, 6);
   assert.equal(view.metrics.externalAwaitingCount, 3);
+  assert.equal(view.metrics.adaptedMethodPackCount, 1);
   assert.equal(view.metrics.runtimeReadyCount, 0);
   assert.equal(view.metrics.approvedReviewCount, 2);
   assert.equal(view.metrics.requiredReviewCount, 3);
@@ -33,6 +34,33 @@ test('Brand Brain presents the six source specialists and three founder exports 
       'Source Ad Copywriter',
     ],
   );
+  assert.deepEqual(view.adaptedMethodPacks, [
+    {
+      packId: 'property-predator-marketing',
+      name: 'Property Predator Marketing Method Pack',
+      capabilities: [
+        'Content proposal',
+        'Email proposal',
+        'Image brief proposal',
+        'Paid media proposal',
+        'Social proposal',
+        'Strategy proposal',
+        'Video script proposal',
+        'Workflow guidance',
+      ],
+      fileCount: 13,
+      sourceByteLength: 117_060,
+      sourceInventoryDigestLabel: '352068edf5fb…50c0cf3b',
+      packageDigestLabel: view.adaptedMethodPacks[0]?.packageDigestLabel,
+      ownershipDigestLabel: 'e1ca1980b7e0…0b846c3f',
+      provenanceLabel: 'Founder asserted owned or licensed',
+      payloadLabel: 'Metadata and hashes only',
+      reviewLabel: 'Review required',
+      callableLabel: 'Not callable',
+      effectsLabel: 'Effects none',
+      providerAccessLabel: 'Provider access forbidden',
+    },
+  ]);
   assert.deepEqual(
     view.externalProfiles.map((profile) => ({
       name: profile.name,
@@ -67,6 +95,14 @@ test('Brand Brain view is distinctly Property Predator, read-only and transparen
   assert.match(html, /Metadata only/);
   assert.match(html, /Illustrative metadata fixture/);
   assert.match(html, /Six owned roles share one reviewed Brand Brain/);
+  assert.match(html, /Private adapted method packs/);
+  assert.match(html, /property-predator-marketing/);
+  assert.match(html, /Founder asserted owned or licensed/);
+  assert.match(html, /not a ChatGPT bot or provider endpoint/);
+  assert.match(html, /Metadata and hashes only/);
+  assert.match(html, /Provider access forbidden/);
+  assert.match(html, /117,060 bytes/);
+  assert.match(html, /352068edf5fb…50c0cf3b/);
   assert.match(html, /Content Marketer/);
   assert.match(html, /Image Maker/);
   assert.match(html, /Social Media Manager/);
@@ -75,6 +111,7 @@ test('Brand Brain view is distinctly Property Predator, read-only and transparen
   assert.match(html, new RegExp(`href="${BRAND_BRAIN_ROUTE}" aria-current="page"`));
   assert.doesNotMatch(html, /<form\b|method="post"|Publish now|Generate now|Activate now|Connect provider/i);
   assert.doesNotMatch(html, /api[_ -]?key|bearer\s|database_url|storage key:/i);
+  assert.doesNotMatch(html, /adapted\/property-predator-marketing|SKILL\.md|licensed-methods\.md/i);
 });
 
 test('Brand Brain presenter allowlists metadata and drops unrecognised prompt, path and secret fields', () => {
@@ -121,6 +158,55 @@ test('Brand Brain fails closed if provider effects or external GPT callability a
       externalProfiles: [{ ...fixture.externalProfiles[0]!, callable: true }],
     } as unknown as PortalBrandBrainSnapshot),
     /founder-export boundary/,
+  );
+});
+
+test('Brand Brain fails closed if an adapted method pack carries prompt data or runtime authority', () => {
+  const fixture = createPropertyPredatorBrandBrainFixture();
+  const methodPack = fixture.adaptedMethodPacks[0]!;
+  const symbolic = { ...methodPack } as Record<PropertyKey, unknown>;
+  symbolic[Symbol('prompt')] = 'DO-NOT-ACCEPT';
+
+  assert.throws(
+    () => presentBrandBrain({
+      ...fixture,
+      adaptedMethodPacks: [{ ...methodPack, rawPrompt: 'DO-NOT-ACCEPT' }],
+    } as unknown as PortalBrandBrainSnapshot),
+    /adapted method pack/,
+  );
+  assert.throws(
+    () => presentBrandBrain({
+      ...fixture,
+      adaptedMethodPacks: [symbolic],
+    } as unknown as PortalBrandBrainSnapshot),
+    /adapted method pack/,
+  );
+  assert.throws(
+    () => presentBrandBrain({
+      ...fixture,
+      adaptedMethodPacks: [{ ...methodPack, pack: { ...methodPack.pack, callable: true } }],
+    } as unknown as PortalBrandBrainSnapshot),
+    /adapted method pack/,
+  );
+  assert.throws(
+    () => presentBrandBrain({
+      ...fixture,
+      adaptedMethodPacks: [{ ...methodPack, pack: { ...methodPack.pack, effects: 'provider' } }],
+    } as unknown as PortalBrandBrainSnapshot),
+    /adapted method pack/,
+  );
+  assert.throws(
+    () => presentBrandBrain({
+      ...fixture,
+      adaptedMethodPacks: [{
+        ...methodPack,
+        pack: {
+          ...methodPack.pack,
+          handling: { ...methodPack.pack.handling, providerAccess: 'allowed' },
+        },
+      }],
+    } as unknown as PortalBrandBrainSnapshot),
+    /adapted method pack/,
   );
 });
 
