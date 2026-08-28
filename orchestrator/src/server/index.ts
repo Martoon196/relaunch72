@@ -72,6 +72,7 @@ import { createCachedRuntimeReadinessProbe } from '../ops/runtime-readiness-cach
 import { createPortalRequestContextResolver } from '../portal/request-context.js';
 import { createSafeTelemetryLogger } from '../ops/safe-telemetry.js';
 import { composePropertyPredatorSimulatedInbound } from '../integrations/simulated-inbound/composition.js';
+import { composePropertyPredatorProviderIngress } from '../integrations/provider-ingress/index.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ORCH_ROOT = path.resolve(HERE, '../..');
@@ -537,9 +538,19 @@ async function main(): Promise<void> {
       : '⚠  Simulated inbound TEST ingress unavailable; protected readiness failed.');
   }
 
+  // Real provider callback paths stay dark until both an exact inbound-only
+  // capability grant and reviewed credential/durable-store endpoints compose.
+  // This slice contains no outbound Meta or Whereby client.
+  const providerIngress = composePropertyPredatorProviderIngress(process.env);
+  if (providerIngress.enabled) {
+    console.log(providerIngress.ready
+      ? 'Signed Meta/Whereby inbound callbacks are ready; provider effects remain off.'
+      : '⚠  Meta/Whereby inbound callbacks unavailable; protected endpoints did not pass readiness.');
+  }
+
   const buildBlockers = forceMockBuilds || process.env.ANTHROPIC_API_KEY?.trim() ? [] : ['Anthropic build key is not configured'];
   const runtimeReadinessProbe = (postgresPortal || mailgunWebhookConfig.enabled
-      || simulatedInbound.enabled)
+      || simulatedInbound.enabled || providerIngress.enabled)
     ? createCachedRuntimeReadinessProbe({
         probe: async () => {
           const blockers: string[] = [];
@@ -573,6 +584,9 @@ async function main(): Promise<void> {
               blockers.push('Protected simulated inbound TEST runtime is unavailable');
             }
           }
+          if (providerIngress.enabled && !providerIngress.ready) {
+            blockers.push('Protected Meta/Whereby provider ingress is unavailable');
+          }
           return Object.freeze(blockers);
         },
       })
@@ -602,6 +616,7 @@ async function main(): Promise<void> {
     propertyPredatorMailgunWebhook,
     propertyPredatorSimulatedWhatsAppInbound: simulatedInbound.whatsapp,
     propertyPredatorSimulatedMetaDmInbound: simulatedInbound.metaDm,
+    propertyPredatorProviderIngress: providerIngress,
   });
   const server = http.createServer((req, res) => { void app(req, res); });
   server.headersTimeout = 10_000;

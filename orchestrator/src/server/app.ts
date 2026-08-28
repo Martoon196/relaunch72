@@ -37,6 +37,10 @@ import {
   type PropertyPredatorSimulatedMetaDmInboundMount,
   type PropertyPredatorSimulatedWhatsAppInboundMount,
 } from '../integrations/simulated-inbound/router.js';
+import {
+  isPropertyPredatorProviderIngressPath,
+  type PropertyPredatorProviderIngressMount,
+} from '../integrations/provider-ingress/index.js';
 
 /** Optional marketing sync (Brevo). Both are no-ops when Brevo isn't configured. */
 export interface MarketingHooks {
@@ -92,6 +96,8 @@ export interface AppDeps {
   propertyPredatorSimulatedWhatsAppInbound?: PropertyPredatorSimulatedWhatsAppInboundMount;
   /** Optional, disabled-by-default signed non-routable Facebook/Instagram DM TEST ingress. */
   propertyPredatorSimulatedMetaDmInbound?: PropertyPredatorSimulatedMetaDmInboundMount;
+  /** Optional, inbound-only Meta/Whereby provider callbacks; never an outbound client. */
+  propertyPredatorProviderIngress?: PropertyPredatorProviderIngressMount;
   /** Optional request-handler seam; production defaults to the bundled admin router. */
   adminHandler?: (req: IncomingMessage, res: ServerResponse, cfg: StripeConfig) => void | Promise<void>;
 }
@@ -324,6 +330,14 @@ export function createApp(deps: AppDeps) {
             blockers.push('Simulated Meta DM inbound is enabled but not ready');
           }
         }
+        const providerIngress = deps.propertyPredatorProviderIngress;
+        if (providerIngress?.enabled && !providerIngress.ready) {
+          blockers.push(...providerIngress.blockers.map((blocker) =>
+            `Provider inbound: ${blocker}`));
+          if (providerIngress.blockers.length === 0) {
+            blockers.push('Provider inbound is enabled but not ready');
+          }
+        }
         if (deps.runtimeReadinessProbe) {
           try {
             blockers.push(...await deps.runtimeReadinessProbe());
@@ -384,7 +398,30 @@ export function createApp(deps: AppDeps) {
               blockers: [...deps.propertyPredatorSimulatedMetaDmInbound.blockers],
             },
           } : {}),
+          ...(deps.propertyPredatorProviderIngress ? {
+            property_predator_provider_ingress: {
+              enabled: deps.propertyPredatorProviderIngress.enabled,
+              ready: deps.propertyPredatorProviderIngress.ready,
+              blockers: [...deps.propertyPredatorProviderIngress.blockers],
+              paths: [...deps.propertyPredatorProviderIngress.paths],
+              provider_effects_enabled: false,
+            },
+          } : {}),
         });
+      }
+
+      if (isPropertyPredatorProviderIngressPath(url.pathname)) {
+        const ingress = deps.propertyPredatorProviderIngress;
+        if (!ingress?.enabled) return send(res, 404, { error: 'not_found' });
+        if (!ingress.ready || !ingress.handle || !ingress.ownsPath(url.pathname)) {
+          return send(res, 503, { error: 'provider_ingress_unavailable' });
+        }
+        try {
+          await ingress.handle(req, res);
+        } catch {
+          if (!res.headersSent) send(res, 503, { error: 'provider_ingress_unavailable' });
+        }
+        return;
       }
 
       if (route === `POST ${PROPERTY_PREDATOR_SIMULATED_WHATSAPP_INBOUND_PATH}`) {
