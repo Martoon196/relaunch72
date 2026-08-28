@@ -7,6 +7,7 @@ import {
   MailgunWebhookIngressService,
 } from '../../src/mailgun-webhook-pg/index.js';
 import { PgControlledEmailPilotBoundary } from '../../src/property-predator-email-pilot-pg/index.js';
+import { PgPropertyPredatorMailgunWorkerRepository } from '../../src/property-predator-mailgun-worker-pg/index.js';
 import {
   propertyPredatorEmailContentSha256,
   type ControlledEmailPilotBoundaryInput,
@@ -622,6 +623,155 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
       month_messages: 2,
       month_spend: '3000',
       operation_count: 3,
+    }]);
+
+    const ambiguousDelivery = await ownerQuery<{ message_delivery_id: string }>(
+      pool,
+      `SELECT message_delivery_id
+       FROM app.property_predator_email_pilot_reservations
+       WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId, ambiguous.reservationId],
+    );
+    assert.equal(ambiguousDelivery.length, 1);
+    const messageDeliveryId = ambiguousDelivery[0]!.message_delivery_id;
+    const mailgunJobId = randomUUID();
+    const expectedMessageId = `<pp-${ambiguous.requestSha256}@mg.propertypredator.com>`;
+    await ownerQuery(
+      pool,
+      `INSERT INTO app.property_predator_mailgun_jobs (
+         id, workspace_id, provider_connection_id, operation_id, correlation_id,
+         idempotency_key_sha256, request_sha256, run_id, utc_month,
+         message_version_id, approval_request_id, approval_decision_id,
+         approved_content_sha256, contact_point_id, consent_event_id,
+         email_sha256, estimated_spend_usd_micros, state, reservation_id,
+         message_delivery_id, expected_message_id, claim_count, provider_status,
+         provider_occurred_at, provider_retryable, provider_error_code,
+         provider_summary, settled_at
+       ) VALUES (
+         $1, $2, $3, $4, $5, decode($6, 'hex'), decode($7, 'hex'), $8,
+         date_trunc('month', statement_timestamp() AT TIME ZONE 'UTC')::date,
+         $9, $10, $11, decode($12, 'hex'), $13, $14, decode($15, 'hex'),
+         $16, 'reconciliation_required', $17, $18, $19, 1,
+         'needs_attention', statement_timestamp(), false,
+         'mailgun_outcome_unknown', 'Manual reconciliation required',
+         statement_timestamp()
+       )`,
+      [
+        mailgunJobId, workspaceId, connectionId, ambiguousInput.operationId,
+        ambiguousInput.correlationId, ambiguousInput.idempotencyKeySha256,
+        ambiguous.requestSha256, ambiguousInput.runId,
+        ambiguousApproval.messageVersionId, ambiguousApproval.approvalRequestId,
+        ambiguousApproval.approvalDecisionId,
+        ambiguousApproval.approvedContentSha256, contactPointId, consentId,
+        emailSha, ambiguousInput.estimatedSpendUsdMicros,
+        ambiguous.reservationId, messageDeliveryId, expectedMessageId,
+      ],
+    );
+    await ownerQuery(
+      pool,
+      `INSERT INTO app.provider_operation_receipts (
+         workspace_id, provider_operation_id, message_delivery_id,
+         source_kind, external_event_id, payload_sha256, delivery_status,
+         error_code, actor_kind, occurred_at
+       ) VALUES (
+         $1, $2, $3, 'verified_webhook', $4,
+         digest($4, 'sha256'), 'failed', 'mailgun.temporary',
+         'webhook', statement_timestamp()
+       )`,
+      [workspaceId, ambiguousInput.operationId, messageDeliveryId,
+        `temporary-${mailgunJobId}`],
+    );
+    const mailgunWorker = new PgPropertyPredatorMailgunWorkerRepository({
+      commandPool: roleConnectPool(pool, 'r72_mailgun_worker_command'),
+      workspaceId,
+      providerConnectionId: connectionId,
+    });
+    assert.equal(
+      await mailgunWorker.recoverOne(),
+      null,
+      'a temporary failure receipt must remain retryable and nonterminal',
+    );
+
+    await ownerQuery(
+      pool,
+      `INSERT INTO app.provider_operation_receipts (
+         workspace_id, provider_operation_id, message_delivery_id,
+         source_kind, external_event_id, payload_sha256, delivery_status,
+         error_code, actor_kind, occurred_at
+       ) VALUES (
+         $1, $2, $3, 'verified_webhook', $4,
+         digest($4, 'sha256'), 'accepted', NULL,
+         'webhook', statement_timestamp()
+       )`,
+      [workspaceId, ambiguousInput.operationId, messageDeliveryId,
+        `accepted-${mailgunJobId}`],
+    );
+    await ownerQuery(
+      pool,
+      `UPDATE app.message_deliveries
+       SET status = 'accepted', accepted_at = statement_timestamp(),
+           updated_at = statement_timestamp()
+       WHERE workspace_id = $1 AND id = $2
+         AND provider_operation_id = $3
+         AND status = 'reconciliation_required'`,
+      [workspaceId, messageDeliveryId, ambiguousInput.operationId],
+    );
+    assert.deepEqual(await mailgunWorker.recoverOne(), {
+      jobId: mailgunJobId,
+      disposition: 'signed_webhook_reconciled',
+    });
+    assert.deepEqual(await ownerQuery<{
+      reservation_state: string;
+      reservation_external_id: string;
+      reservation_error: string | null;
+      operation_state: string;
+      operation_reference: string;
+      operation_error: string | null;
+      operation_summary: string | null;
+      delivery_status: string;
+      job_state: string;
+      job_status: string;
+      job_external_id: string;
+      job_error: string | null;
+    }>(
+      pool,
+      `SELECT reservation.state AS reservation_state,
+              reservation.provider_external_id AS reservation_external_id,
+              reservation.provider_error_code AS reservation_error,
+              operation.state AS operation_state,
+              operation.provider_reference AS operation_reference,
+              operation.last_error_code AS operation_error,
+              operation.last_summary AS operation_summary,
+              delivery.status AS delivery_status,
+              job.state AS job_state,
+              job.provider_status AS job_status,
+              job.provider_external_id AS job_external_id,
+              job.provider_error_code AS job_error
+       FROM app.property_predator_mailgun_jobs AS job
+       JOIN app.property_predator_email_pilot_reservations AS reservation
+         ON reservation.workspace_id = job.workspace_id
+        AND reservation.id = job.reservation_id
+       JOIN app.provider_operations AS operation
+         ON operation.workspace_id = job.workspace_id
+        AND operation.id = job.operation_id
+       JOIN app.message_deliveries AS delivery
+         ON delivery.workspace_id = job.workspace_id
+        AND delivery.id = job.message_delivery_id
+       WHERE job.workspace_id = $1 AND job.id = $2`,
+      [workspaceId, mailgunJobId],
+    ), [{
+      reservation_state: 'accepted',
+      reservation_external_id: expectedMessageId,
+      reservation_error: null,
+      operation_state: 'accepted',
+      operation_reference: expectedMessageId,
+      operation_error: null,
+      operation_summary: null,
+      delivery_status: 'accepted',
+      job_state: 'settled',
+      job_status: 'accepted',
+      job_external_id: expectedMessageId,
+      job_error: null,
     }]);
   } finally {
     await pool.end();

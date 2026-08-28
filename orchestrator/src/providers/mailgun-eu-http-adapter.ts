@@ -20,6 +20,8 @@ export interface MailgunEuEmailRequest {
   readonly text: string;
   /** SHA-256 of the canonical controlled-pilot request. */
   readonly idempotencySha256: string;
+  /** Message-ID durably persisted by the worker before the provider call. */
+  readonly expectedMessageId?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -161,6 +163,11 @@ export class MailgunEuHttpAdapter implements MailgunEuEmailTransport {
     const subject = safeText(request.subject.normalize('NFC').trim(), 'Mailgun subject', MAX_SUBJECT_BYTES);
     if (/[\r\n]/u.test(subject)) throw new Error('Mailgun subject cannot contain header breaks');
     const body = safeText(request.text, 'Mailgun body', MAX_BODY_BYTES);
+    const expectedMessageId = `<pp-${request.idempotencySha256}@${this.#sendingDomain}>`;
+    if (request.expectedMessageId !== undefined
+        && request.expectedMessageId !== expectedMessageId) {
+      throw new Error('Mailgun expected Message-ID does not match durable worker evidence');
+    }
     if (request.signal?.aborted) throw new MailgunOutcomeUnknownError();
 
     const form = new FormData();
@@ -168,7 +175,7 @@ export class MailgunEuHttpAdapter implements MailgunEuEmailTransport {
     for (const recipient of recipients) form.append('to', recipient);
     form.set('subject', subject);
     form.set('text', body);
-    form.set('h:Message-Id', `<pp-${request.idempotencySha256}@${this.#sendingDomain}>`);
+    form.set('h:Message-Id', expectedMessageId);
     form.set('v:pp-idempotency-sha256', request.idempotencySha256);
     form.set('o:tracking', 'yes');
 
@@ -195,6 +202,14 @@ export class MailgunEuHttpAdapter implements MailgunEuEmailTransport {
 
     const occurredAt = this.#now().toISOString();
     if (!response.ok) {
+      const outcomeUnknown = response.status === 408 || response.status >= 500;
+      if (outcomeUnknown) {
+        return Object.freeze({
+          status: 'needs_attention', externalId: null, occurredAt, retryable: false,
+          errorCode: `mailgun_http_${response.status}_outcome_unknown`,
+          summary: 'Mailgun response did not prove whether the controlled-pilot request was accepted',
+        });
+      }
       const retryable = response.status === 408 || response.status === 409
         || response.status === 425 || response.status === 429 || response.status >= 500;
       return Object.freeze({
@@ -245,6 +260,34 @@ export function createMailgunEuHttpAdapterFromEnvironment(
   if (env.MAILGUN_REGION?.trim() !== 'eu') throw new Error('MAILGUN_REGION must be eu');
   return new MailgunEuHttpAdapter({
     apiKey: env.MAILGUN_API_KEY ?? '',
+    sendingDomain: env.MAILGUN_SENDING_DOMAIN ?? '',
+    fromEmail: env.MAILGUN_FROM_EMAIL ?? '',
+    fetch: options.fetch,
+    now: options.now,
+  });
+}
+
+/**
+ * Production worker factory for a domain-scoped Mailgun Domain Sending Key.
+ *
+ * The key is deliberately separate from the web-only webhook signing key and
+ * from any broad account API key. Mailgun Domain Sending Keys are limited to
+ * the selected domain's messages/messages.mime/events surfaces. The worker
+ * uses only the EU messages endpoint.
+ */
+export function createMailgunEuHttpAdapterFromDomainSendingKeyEnvironment(
+  env: NodeJS.ProcessEnv,
+  options: Readonly<{ fetch?: typeof fetch; now?: () => Date }> = {},
+): MailgunEuHttpAdapter {
+  if (env.MAILGUN_REGION?.trim() !== 'eu') throw new Error('MAILGUN_REGION must be eu');
+  if (env.MAILGUN_KEY_SCOPE?.trim() !== 'domain-sending') {
+    throw new Error('MAILGUN_KEY_SCOPE must be domain-sending');
+  }
+  if (env.MAILGUN_API_KEY?.trim()) {
+    throw new Error('The Mailgun worker must not receive a broad account API key');
+  }
+  return new MailgunEuHttpAdapter({
+    apiKey: env.MAILGUN_DOMAIN_SENDING_KEY ?? '',
     sendingDomain: env.MAILGUN_SENDING_DOMAIN ?? '',
     fromEmail: env.MAILGUN_FROM_EMAIL ?? '',
     fetch: options.fetch,

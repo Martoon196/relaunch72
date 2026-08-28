@@ -10,6 +10,7 @@ import {
   type ControlledEmailPilotCurrentEvidence,
 } from '../src/providers/controlled-property-predator-email-pilot.js';
 import {
+  createMailgunEuHttpAdapterFromDomainSendingKeyEnvironment,
   MailgunEuHttpAdapter,
   MailgunOutcomeUnknownError,
   type MailgunEuEmailRequest,
@@ -481,9 +482,54 @@ test('Mailgun adapter uses only the EU API, deterministic message identity and r
   assert.equal(form.get('v:pp-idempotency-sha256'), digest);
 });
 
+test('production factory accepts only an EU Domain Sending Key and the persisted Message-ID', async () => {
+  let calls = 0;
+  const digest = 'c'.repeat(64);
+  const adapter = createMailgunEuHttpAdapterFromDomainSendingKeyEnvironment({
+    MAILGUN_REGION: 'eu',
+    MAILGUN_KEY_SCOPE: 'domain-sending',
+    MAILGUN_DOMAIN_SENDING_KEY: 'domain-sending-secret',
+    MAILGUN_SENDING_DOMAIN: 'mg.propertypredator.com',
+    MAILGUN_FROM_EMAIL: 'growth@mg.propertypredator.com',
+  }, {
+    now: () => NOW,
+    fetch: (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({
+        id: `<pp-${digest}@mg.propertypredator.com>`, message: 'Queued',
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch,
+  });
+  await assert.rejects(adapter.send(context({ idempotencyKey: digest }), {
+    recipients: ['office@propertypredator.com'], subject: SUBJECT, text: BODY,
+    idempotencySha256: digest,
+    expectedMessageId: `<pp-${'d'.repeat(64)}@mg.propertypredator.com>`,
+  }), /does not match durable worker evidence/);
+  assert.equal(calls, 0);
+  const result = await adapter.send(context({ idempotencyKey: digest }), {
+    recipients: ['office@propertypredator.com'], subject: SUBJECT, text: BODY,
+    idempotencySha256: digest,
+    expectedMessageId: `<pp-${digest}@mg.propertypredator.com>`,
+  });
+  assert.equal(result.status, 'accepted');
+  assert.equal(calls, 1);
+  assert.throws(() => createMailgunEuHttpAdapterFromDomainSendingKeyEnvironment({
+    MAILGUN_REGION: 'eu', MAILGUN_KEY_SCOPE: 'domain-sending',
+    MAILGUN_DOMAIN_SENDING_KEY: 'domain-sending-secret',
+    MAILGUN_API_KEY: 'broad-account-key',
+    MAILGUN_SENDING_DOMAIN: 'mg.propertypredator.com',
+    MAILGUN_FROM_EMAIL: 'growth@mg.propertypredator.com',
+  }), /must not receive a broad account API key/);
+});
+
 test('Mailgun adapter classifies HTTP failures without leaking provider response bodies', async () => {
   const secretBody = 'upstream-secret-body-must-never-escape';
-  for (const [status, retryable] of [[400, false], [429, true], [503, true]] as const) {
+  for (const [status, expectedStatus, retryable] of [
+    [400, 'failed', false],
+    [429, 'failed', true],
+    [408, 'needs_attention', false],
+    [503, 'needs_attention', false],
+  ] as const) {
     const adapter = new MailgunEuHttpAdapter({
       apiKey: 'key-redacted', sendingDomain: 'mail.propertypredator.co.uk',
       fromEmail: 'growth@mail.propertypredator.co.uk', now: () => NOW,
@@ -493,7 +539,11 @@ test('Mailgun adapter classifies HTTP failures without leaking provider response
     const result = await adapter.send(context({ idempotencyKey: digest }), {
       recipients: ['seed@example.com'], subject: SUBJECT, text: BODY, idempotencySha256: digest,
     });
+    assert.equal(result.status, expectedStatus);
     assert.equal(result.retryable, retryable);
+    if (expectedStatus === 'needs_attention') {
+      assert.match(result.errorCode ?? '', /_outcome_unknown$/);
+    }
     assert.doesNotMatch(JSON.stringify(result), new RegExp(secretBody));
   }
 });

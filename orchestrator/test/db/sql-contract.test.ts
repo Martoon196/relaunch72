@@ -46,6 +46,7 @@ const migration39Url = new URL('../../src/db/migrations/0039_public_social_campa
 const migration40Url = new URL('../../src/db/migrations/0040_public_social_operational_planner.sql', import.meta.url);
 const migration41Url = new URL('../../src/db/migrations/0041_public_social_worker_runtime_readiness.sql', import.meta.url);
 const migration42Url = new URL('../../src/db/migrations/0042_content_adapter_runtime_installation_readiness.sql', import.meta.url);
+const migration43Url = new URL('../../src/db/migrations/0043_property_predator_mailgun_worker_jobs.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -484,9 +485,9 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums through content-adapter readiness', async () => {
+test('bundled migration discovery orders and checksums through Mailgun worker jobs', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-38);
+  const tail = migrations.slice(-39);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0005_canonical_portal_identity.sql', version: 5 },
     { filename: '0006_customer_provisioning.sql', version: 6 },
@@ -526,6 +527,7 @@ test('bundled migration discovery orders and checksums through content-adapter r
     { filename: '0040_public_social_operational_planner.sql', version: 40 },
     { filename: '0041_public_social_worker_runtime_readiness.sql', version: 41 },
     { filename: '0042_content_adapter_runtime_installation_readiness.sql', version: 42 },
+    { filename: '0043_property_predator_mailgun_worker_jobs.sql', version: 43 },
   ]);
   const sources = [
     (await readFile(migration5Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -566,6 +568,7 @@ test('bundled migration discovery orders and checksums through content-adapter r
     (await readFile(migration40Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration41Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration42Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration43Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
