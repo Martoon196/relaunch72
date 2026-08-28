@@ -4,18 +4,20 @@ import { createPropertyPredatorProviderReadinessFixture } from '../src/portal/pr
 import { presentProviderReadinessCockpit } from '../src/portal/provider-readiness-cockpit-presenter.js';
 import { renderProviderReadinessCockpitBody } from '../src/portal/provider-readiness-cockpit-view.js';
 
-test('provider cockpit presents the exact four rails from sealed dark-readiness reports', () => {
+test('provider cockpit presents the exact six rails from sealed dark-readiness reports', () => {
   const view = presentProviderReadinessCockpit(createPropertyPredatorProviderReadinessFixture());
   assert.deepEqual(view.rails.map((rail) => rail.rail), [
     'mailgun_email',
     'whatsapp',
     'public_social',
     'social_dm',
+    'webinar',
+    'social_listening',
   ]);
   assert.equal(view.illustrative, true);
   assert.equal(view.externalEffects, false);
   assert.equal(view.readyRailCount, 0);
-  assert.equal(view.blockedRailCount, 4);
+  assert.equal(view.blockedRailCount, 6);
   assert.deepEqual(view.safety, {
     liveAuthorised: false,
     providerEffectsAllowed: false,
@@ -58,6 +60,8 @@ test('provider cockpit renders branded, accessible, truthful dark controls', () 
   assert.match(html, /WhatsApp/);
   assert.match(html, /Public social/);
   assert.match(html, /Social DMs/);
+  assert.match(html, /Webinars/);
+  assert.match(html, /Social listening/);
   assert.match(html, /Why blocked/);
   assert.match(html, /Evidence freshness/);
   assert.match(html, /<details class="prc-evidence">/);

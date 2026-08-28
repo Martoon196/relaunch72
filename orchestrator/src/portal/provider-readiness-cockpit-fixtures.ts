@@ -22,6 +22,8 @@ const CONNECTION_IDS: Readonly<Record<ProviderActivationRail, string>> = Object.
   whatsapp: 'fa200000-0000-4000-8000-000000000002',
   public_social: 'fa200000-0000-4000-8000-000000000003',
   social_dm: 'fa200000-0000-4000-8000-000000000004',
+  webinar: 'fa200000-0000-4000-8000-000000000005',
+  social_listening: 'fa200000-0000-4000-8000-000000000006',
 });
 const HASH_A = 'a'.repeat(64);
 const HASH_B = 'b'.repeat(64);
@@ -51,6 +53,22 @@ function provider(rail: ProviderActivationRail): ProviderReadinessManifestMetada
     outboundCredentialAuth: 'oauth2',
     inboundWebhookVerification: 'asymmetric_signature',
     capabilities: ['social.publish'],
+    adapterContractVersion: '1.0.0',
+  };
+  if (rail === 'webinar') return {
+    providerId: 'webinar_host_candidate',
+    kind: 'webinar',
+    outboundCredentialAuth: 'oauth2',
+    inboundWebhookVerification: 'hmac_signature',
+    capabilities: ['webinars.manage'],
+    adapterContractVersion: '1.0.0',
+  };
+  if (rail === 'social_listening') return {
+    providerId: 'social_listener_candidate',
+    kind: 'analytics',
+    outboundCredentialAuth: 'oauth2',
+    inboundWebhookVerification: 'hmac_signature',
+    capabilities: ['social.listen'],
     adapterContractVersion: '1.0.0',
   };
   return {
@@ -97,7 +115,7 @@ function boundEvidence(
 }
 
 function inputFor(rail: ProviderActivationRail): ProviderActivationReadinessInput {
-  const publicBroadcast = rail === 'public_social';
+  const nonTargeted = rail === 'public_social' || rail === 'social_listening';
   const providerMetadata = provider(rail);
   const input: ProviderActivationReadinessInput = {
     schemaVersion: 1,
@@ -135,11 +153,11 @@ function inputFor(rail: ProviderActivationRail): ProviderActivationReadinessInpu
         maxReconciliationLagSeconds: 3_600,
       },
       policy: {
-        consentRoute: publicBroadcast ? 'not_applicable_public_broadcast' : 'individual_consent',
-        purpose: publicBroadcast ? 'approved_content_publish' : 'internal_seed_validation',
+        consentRoute: nonTargeted ? 'not_applicable_public_broadcast' : 'individual_consent',
+        purpose: rail === 'public_social' ? 'approved_content_publish' : 'internal_seed_validation',
         territories: ['GB'],
         senderReferenceSha256: HASH_D,
-        suppressionScope: publicBroadcast
+        suppressionScope: nonTargeted
           ? 'public_broadcast_not_applicable'
           : 'recipient_workspace_provider',
       },
@@ -153,9 +171,9 @@ function inputFor(rail: ProviderActivationRail): ProviderActivationReadinessInpu
         maxSpendPerOperationMinorUnits: rail === 'mailgun_email' ? 250 : 500,
         maxSpendPerDayMinorUnits: rail === 'mailgun_email' ? 2_500 : 5_000,
         maxSpendPerMonthMinorUnits: rail === 'mailgun_email' ? 25_000 : 50_000,
-        maxVolumePerOperation: publicBroadcast ? 5 : 1,
-        maxVolumePerDay: publicBroadcast ? 25 : 10,
-        maxVolumePerMonth: publicBroadcast ? 250 : 100,
+        maxVolumePerOperation: nonTargeted ? 5 : 1,
+        maxVolumePerDay: nonTargeted ? 25 : 10,
+        maxVolumePerMonth: nonTargeted ? 250 : 100,
       },
       switches: {
         emergencyPaused: true,
@@ -189,7 +207,7 @@ function inputFor(rail: ProviderActivationRail): ProviderActivationReadinessInpu
       ? { consent: 'missing', approval: 'missing', internalSeed: 'missing' }
       : {};
   const evidence = Object.fromEntries(PROVIDER_ACTIVATION_GATES.map((gate) => {
-    if (publicBroadcast && (gate === 'consent' || gate === 'suppression')) {
+    if (nonTargeted && (gate === 'consent' || gate === 'suppression')) {
       return [gate, boundEvidence(input, gate, 'not_applicable')];
     }
     const expired = rail === 'public_social' && gate === 'commercialSaasRights';
@@ -208,6 +226,8 @@ const LABELS: Readonly<Record<ProviderActivationRail, string>> = Object.freeze({
   whatsapp: 'WhatsApp Business · candidate',
   public_social: 'Public social publishing · candidate',
   social_dm: 'Social direct messages · candidate',
+  webinar: 'Webinar hosting · candidate',
+  social_listening: 'Social listening · candidate',
 });
 
 function fixtureRail(rail: ProviderActivationRail): PortalProviderReadinessRailSnapshot {
@@ -248,6 +268,8 @@ export function createPropertyPredatorProviderReadinessFixture(): PortalProvider
       'whatsapp',
       'public_social',
       'social_dm',
+      'webinar',
+      'social_listening',
     ] as const).map(fixtureRail)),
   });
 }

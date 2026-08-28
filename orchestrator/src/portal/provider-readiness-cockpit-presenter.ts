@@ -90,6 +90,8 @@ const RAIL_LABELS: Readonly<Record<ProviderActivationRail, Readonly<{ eyebrow: s
   whatsapp: Object.freeze({ eyebrow: 'Private messaging', label: 'WhatsApp' }),
   public_social: Object.freeze({ eyebrow: 'Audience growth', label: 'Public social' }),
   social_dm: Object.freeze({ eyebrow: 'Conversation rail', label: 'Social DMs' }),
+  webinar: Object.freeze({ eyebrow: 'Event conversion', label: 'Webinars' }),
+  social_listening: Object.freeze({ eyebrow: 'Market signals', label: 'Social listening' }),
 });
 
 const STAGE_LABELS: Readonly<Record<ProviderActivationReadinessStage, string>> = Object.freeze({
@@ -154,7 +156,7 @@ function evidenceFreshness(
 
 function assertRailSet(snapshot: PortalProviderReadinessSnapshot): void {
   if (!Array.isArray(snapshot.rails) || snapshot.rails.length !== PROVIDER_ACTIVATION_RAILS.length) {
-    throw new Error('provider readiness snapshot must contain the exact four dark rails');
+    throw new Error('provider readiness snapshot must contain the exact dark rail set');
   }
   const rails = new Set(snapshot.rails.map((item) => item.rail));
   if (rails.size !== PROVIDER_ACTIVATION_RAILS.length
