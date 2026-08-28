@@ -237,6 +237,21 @@ import {
   type PortalAbuseOutcome,
 } from './abuse.js';
 import type { PortalRequestContext } from './request-context.js';
+import { MigrationCentreError, type MigrationCentreErrorCode } from '../legacy-import/migration-centre.js';
+import {
+  MIGRATION_CENTRE_CLIENT_ROUTE,
+  MIGRATION_CENTRE_PREVIEW_ROUTE,
+  MIGRATION_CENTRE_ROUTE,
+  presentPortalMigrationPreview,
+  type PortalMigrationCentreService,
+} from './migration-centre-service.js';
+import {
+  parsePortalMigrationPreviewCommand,
+  portalMigrationCsrfHeader,
+  portalMigrationRequestIsSameOrigin,
+} from './migration-centre-http.js';
+import { MIGRATION_CENTRE_CLIENT_SOURCE } from './migration-centre-client.js';
+import { renderMigrationCentreBody } from './migration-centre-view.js';
 
 interface PortalCommonDeps {
   sessionSecret: string;
@@ -317,6 +332,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   inbox?: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval/queue commands. It has no provider dispatcher. */
   inboxCommands?: PortalConversionInboxCommandService;
+  /** Founder/admin effects-free CSV preview. No live importer or customer-write executor. */
+  migrations?: PortalMigrationCentreService;
 }
 
 /**
@@ -410,16 +427,40 @@ async function reserveAbuse(
   }
 }
 
-function sendJavaScript(res: ServerResponse, body: string): void {
+function sendJavaScript(
+  res: ServerResponse,
+  body: string,
+  cacheControl = 'no-cache, max-age=0, must-revalidate',
+): void {
   res.writeHead(200, {
     'content-type': 'text/javascript; charset=utf-8',
     'content-length': String(Buffer.byteLength(body)),
     // The asset has a stable URL, so every navigation must revalidate it after
     // a deploy rather than running markup against an hour-old enhancement.
-    'cache-control': 'no-cache, max-age=0, must-revalidate',
+    'cache-control': cacheControl,
     'referrer-policy': 'no-referrer',
     'x-content-type-options': 'nosniff',
     'content-security-policy': "default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+  });
+  res.end(body);
+}
+
+function sendJson(
+  res: ServerResponse,
+  code: number,
+  payload: unknown,
+  extra: Record<string, string> = {},
+): void {
+  const body = JSON.stringify(payload);
+  res.writeHead(code, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': String(Buffer.byteLength(body)),
+    'cache-control': 'private, no-store, max-age=0',
+    'referrer-policy': 'no-referrer',
+    'x-content-type-options': 'nosniff',
+    'cross-origin-resource-policy': 'same-origin',
+    'content-security-policy': "default-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    ...extra,
   });
   res.end(body);
 }
@@ -682,6 +723,30 @@ function operationalPage(
     title: `${deps.productProfile?.productName ?? 'Relaunch72'} ${label} — ${workspaceName}`,
     tenantName: workspaceName,
     active,
+    productProfile: deps.productProfile,
+    capabilities: new Set([
+      'workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read',
+      ...(deps.journeys ? ['journeys.read'] as const : []),
+      ...optionalPortalCapabilities(deps),
+    ]),
+    billingAvailable: false,
+    crmAvailable: true,
+    mode: 'crm',
+    csrfToken,
+    body,
+  });
+}
+
+function migrationCentrePage(
+  workspaceName: string,
+  body: string,
+  deps: PostgresPortalDeps,
+  csrfToken: string,
+): string {
+  return appShell({
+    title: `${deps.productProfile?.productName ?? 'Relaunch72'} Migration Centre — ${workspaceName}`,
+    tenantName: workspaceName,
+    active: 'crm',
     productProfile: deps.productProfile,
     capabilities: new Set([
       'workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read',
@@ -1277,6 +1342,31 @@ function decodedOperatorActionId(encoded: string): string | null {
 
 const CRM_OBJECT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+function migrationErrorStatus(code: MigrationCentreErrorCode | 'forbidden'): number {
+  if (code === 'forbidden' || code === 'principal_forbidden') return 403;
+  if (code === 'rate_limited') return 429;
+  if (code === 'idempotency_conflict') return 409;
+  if (code === 'source_too_large') return 413;
+  if (code === 'control_unavailable') return 503;
+  return 400;
+}
+
+function sendMigrationError(
+  res: ServerResponse,
+  code: MigrationCentreErrorCode | 'forbidden',
+  message: string,
+  retryAfterSeconds: number | null = null,
+): void {
+  const status = migrationErrorStatus(code);
+  sendJson(res, status, {
+    ok: false,
+    error: { code, message },
+    ...(retryAfterSeconds === null ? {} : { retryAfterSeconds }),
+  }, status === 429 && retryAfterSeconds !== null
+    ? { 'retry-after': String(Math.max(1, Math.ceil(retryAfterSeconds))) }
+    : {});
+}
+
 /** Handle a request under /portal. Always writes a response. */
 export async function handlePortal(req: IncomingMessage, res: ServerResponse, deps: PortalDeps): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
@@ -1331,6 +1421,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   }
   if (p === CONTENT_CALENDAR_CLIENT_ROUTE && method === 'GET') {
     return sendJavaScript(res, CONTENT_CALENDAR_CLIENT_SOURCE);
+  }
+  if (p === MIGRATION_CENTRE_CLIENT_ROUTE && method === 'GET') {
+    return sendJavaScript(res, MIGRATION_CENTRE_CLIENT_SOURCE, 'private, no-store, max-age=0');
   }
   const productProfile = deps.productProfile ?? RELAUNCH72_PRODUCT_PROFILE;
   const requestCookies = parseCookies(req.headers.cookie);
@@ -1731,6 +1824,108 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     sessionToken ? '/portal/login?reason=session-ended' : '/portal/login',
     sessionToken ? clearPortalCookie(deps.secure) : undefined,
   );
+
+  if (deps.kind === 'postgres' && p === MIGRATION_CENTRE_ROUTE) {
+    if (method !== 'GET') {
+      return sendHtml(res, 405, portalStatusPage(deps, sessionToken, {
+        title: 'Migration Centre page is read-only',
+        message: 'Use the protected preview control on the Migration Centre page.',
+        active: 'crm',
+        backHref: MIGRATION_CENTRE_ROUTE,
+        backLabel: 'Return to Migration Centre',
+      }), undefined, { allow: 'GET' });
+    }
+    if (!deps.migrations) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Migration Centre not connected',
+        message: 'The effects-free CSV preview boundary is not composed for this workspace.',
+        active: 'crm',
+      }));
+    }
+    try {
+      const access = await deps.migrations.access(crmIdentity(sessionToken, deps));
+      if (!access.ok) {
+        return sendHtml(res, access.kind === 'forbidden' ? 403 : 503, portalStatusPage(
+          deps,
+          sessionToken,
+          {
+            title: access.kind === 'forbidden'
+              ? 'Migration Centre restricted'
+              : 'Migration Centre temporarily unavailable',
+            message: access.message,
+            active: 'crm',
+          },
+        ));
+      }
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      return sendHtml(res, 200, migrationCentrePage(
+        access.workspaceName,
+        renderMigrationCentreBody({
+          workspaceName: access.workspaceName,
+          role: access.role,
+          csrfToken,
+        }),
+        deps,
+        csrfToken,
+      ), undefined, {
+        'content-security-policy': "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      });
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Migration Centre temporarily unavailable',
+        message: 'No CSV was read and no customer record was changed.',
+        active: 'crm',
+      }));
+    }
+  }
+
+  if (deps.kind === 'postgres' && p === MIGRATION_CENTRE_PREVIEW_ROUTE) {
+    if (method !== 'POST') {
+      return sendJson(res, 405, {
+        ok: false,
+        error: { code: 'method_not_allowed', message: 'Use POST for a migration preview.' },
+      }, { allow: 'POST' });
+    }
+    if (!deps.migrations) {
+      return sendJson(res, 404, {
+        ok: false,
+        error: { code: 'not_composed', message: 'The Migration Centre is not connected.' },
+      });
+    }
+    if (!portalMigrationRequestIsSameOrigin(req.headers)
+        || !verifyPortalCsrf(
+          deps.sessionSecret,
+          sessionToken,
+          portalMigrationCsrfHeader(req.headers),
+        )) {
+      return sendMigrationError(
+        res,
+        'principal_forbidden',
+        'The secure migration request could not be verified.',
+      );
+    }
+    try {
+      const command = parsePortalMigrationPreviewCommand(
+        req.headers,
+        req as AsyncIterable<Uint8Array>,
+      );
+      const outcome = await deps.migrations.preview(crmIdentity(sessionToken, deps), command);
+      if (!outcome.ok) {
+        return sendMigrationError(
+          res,
+          outcome.code,
+          outcome.message,
+          outcome.retryAfterSeconds,
+        );
+      }
+      return sendJson(res, 200, presentPortalMigrationPreview(outcome.result));
+    } catch (error) {
+      const safe = error instanceof MigrationCentreError
+        ? error
+        : new MigrationCentreError('control_unavailable');
+      return sendMigrationError(res, safe.code, safe.message, safe.retryAfterSeconds);
+    }
+  }
 
   // Canonical PostgreSQL Growth HQ. Only the secure CRM snapshot contributes
   // numbers; this route never falls back to the legacy JSON demo dashboard.
