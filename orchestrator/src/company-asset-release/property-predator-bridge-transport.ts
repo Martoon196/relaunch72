@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   CompanyAssetReleaseContractError,
   parseCompanyAssetReleaseBridge,
@@ -166,13 +167,22 @@ export function createPropertyPredatorCompanyAssetBridgeTransport(
           throw transportError('response media type is invalid');
         }
         const raw = await boundedBody(response, beforeDeadline);
+        const representationSha256 = createHash('sha256').update(raw, 'utf8').digest('hex');
+        if (response.headers.get('etag') !== `"sha256-${representationSha256}"`) {
+          throw transportError('ETag does not bind the exact response bytes');
+        }
         let parsed: unknown;
         try {
           parsed = JSON.parse(raw) as unknown;
         } catch {
           throw transportError('response is not valid JSON');
         }
-        return parseCompanyAssetReleaseBridge(parsed);
+        const release = parseCompanyAssetReleaseBridge(parsed);
+        if (response.headers.get('x-release-sha256') !== release.releaseSha256
+            || response.headers.get('x-source-observed-at') !== release.generatedAt) {
+          throw transportError('component headers do not match the response');
+        }
+        return release;
       } finally {
         clearTimeout(timer);
       }

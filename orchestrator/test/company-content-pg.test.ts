@@ -209,6 +209,39 @@ class InMemoryContentSql implements SqlExecutor {
       this.attestations.set(versionId, { id, checkedAt, expiresAt });
       return this.rows<T>([{ id, expiresAt }]);
     }
+    if (sql.includes('company-content.lock-attestation-version-item')) {
+      return this.rows<T>([{}]);
+    }
+    if (sql.includes('company-content.lock-attestation-version')) {
+      const [itemId, versionId] = values.map(String);
+      const version = this.versions.find((candidate) => (
+        candidate.itemId === itemId && candidate.id === versionId
+      ));
+      if (!version) return this.rows<T>([]);
+      const latestNumber = Math.max(...this.versions
+        .filter((candidate) => candidate.itemId === itemId)
+        .map((candidate) => candidate.versionNumber));
+      return this.rows<T>([{
+        contentItemId: itemId,
+        contentVersionId: version.id,
+        versionNumber: version.versionNumber,
+        sourceSystem: version.sourceSystem,
+        sourceItemId: version.sourceItemId,
+        sourceVersion: version.sourceVersion,
+        contentSha256: version.contentSha256,
+        blobSha256: version.blobSha256,
+        brandSha256: version.brandSha256,
+        isLatest: version.versionNumber === latestNumber,
+      }]);
+    }
+    if (sql.includes('company-content.insert-refreshed-source-attestation')) {
+      const id = String(values[0]);
+      const versionId = String(values[2]);
+      const checkedAt = String(values[10]);
+      const expiresAt = String(values[11]);
+      this.attestations.set(versionId, { id, checkedAt, expiresAt });
+      return this.rows<T>([{ id, expiresAt }]);
+    }
     if (sql.includes('company-content.lock-version')) {
       const [itemId, versionId] = values.map(String);
       const version = this.versions.find((candidate) => candidate.itemId === itemId && candidate.id === versionId);
@@ -528,6 +561,70 @@ test('source sync atomically resolves one logical item and appends the next sour
   assert.equal(database.items.size, 1);
 });
 
+test('source proof refresh is append-only and bound to the exact latest immutable tuple', async () => {
+  const database = new InMemoryContentSql();
+  const service = new CompanyContentService({
+    transactionRunner: runner(database),
+    nextId: ids(),
+    now: () => new Date('2026-08-28T10:00:00.000Z'),
+  });
+  const version = await service.createVersion(context, command());
+  const latest = (await service.listCatalog(context)).items[0]!;
+  const refreshCommand = {
+    commandKey: 'refresh-source-proof-1',
+    contentItemId: latest.contentItemId,
+    contentVersionId: latest.contentVersionId,
+    expected: {
+      source: latest.source,
+      contentSha256: latest.contentSha256,
+      blobSha256: latest.blobSha256,
+      brandSha256: latest.brandSha256,
+    },
+    attestation: {
+      catalogSha256: '44'.repeat(32),
+      checkedAt: '2026-08-28T10:00:00.000Z',
+      expiresAt: '2026-08-28T10:10:00.000Z',
+    },
+  } as const;
+  const result = await service.refreshSourceAttestation(context, refreshCommand);
+  assert.deepEqual({
+    contentItemId: result.contentItemId,
+    contentVersionId: result.contentVersionId,
+    providerEffects: result.providerEffects,
+    latestAttestation: database.attestations.get(version.contentVersionId)?.id,
+  }, {
+    contentItemId: latest.contentItemId,
+    contentVersionId: latest.contentVersionId,
+    providerEffects: false,
+    latestAttestation: result.sourceAttestationId,
+  });
+  const replayed = await service.refreshSourceAttestation(context, refreshCommand);
+  assert.deepEqual(replayed, { ...result, disposition: 'replayed' });
+  await assert.rejects(service.refreshSourceAttestation(context, {
+    ...refreshCommand,
+    attestation: {
+      ...refreshCommand.attestation,
+      expiresAt: '2026-08-28T10:09:00.000Z',
+    },
+  }), CompanyContentIdempotencyConflictError);
+  await assert.rejects(service.refreshSourceAttestation(context, {
+    commandKey: 'refresh-source-proof-conflict',
+    contentItemId: latest.contentItemId,
+    contentVersionId: latest.contentVersionId,
+    expected: {
+      source: latest.source,
+      contentSha256: '99'.repeat(32),
+      blobSha256: latest.blobSha256,
+      brandSha256: latest.brandSha256,
+    },
+    attestation: {
+      catalogSha256: '44'.repeat(32),
+      checkedAt: '2026-08-28T10:00:00.000Z',
+      expiresAt: '2026-08-28T10:10:00.000Z',
+    },
+  }), CompanyContentVersionConflictError);
+});
+
 test('approval is publishable only while the exact source attestation remains fresh', async () => {
   const database = new InMemoryContentSql();
   const service = new CompanyContentService({ transactionRunner: runner(database), nextId: ids() });
@@ -635,5 +732,37 @@ test('workspace catalog is cursor-bounded and rejects invalid database rows', as
   await assert.rejects(
     new CompanyContentPgRepository(badExecutor).listCatalog({ limit: 10, cursor: null }),
     /invalid canonical data/,
+  );
+});
+
+test('source proof refresh rejects a malformed locked database tuple before appending evidence', async () => {
+  const badExecutor: SqlExecutor = {
+    async query<T extends Record<string, unknown>>(sql: string): Promise<SqlResult<T>> {
+      if (sql.includes('lock-attestation-version-item')) {
+        return { rows: [], rowCount: 1 };
+      }
+      return {
+        rows: [{
+          contentItemId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          contentVersionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          versionNumber: 'not-a-number',
+          contentSha256: HASH_A,
+          sourceSystem: 'fixture',
+          sourceItemId: 'launch-plan',
+          sourceVersion: 'fixture-v1',
+          blobSha256: HASH_A,
+          brandSha256: HASH_B,
+          isLatest: true,
+        }] as unknown as T[],
+        rowCount: 1,
+      };
+    },
+  };
+  await assert.rejects(
+    new CompanyContentPgRepository(badExecutor).lockVersionForSourceAttestation(
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    ),
+    /attestation version returned invalid canonical data/,
   );
 });

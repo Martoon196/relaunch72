@@ -78,6 +78,34 @@ export interface CreateCompanyContentVersionResult {
   readonly sourceAttestationExpiresAt: string;
 }
 
+/**
+ * Append a new short-lived source proof to an existing immutable version.
+ * The expected tuple prevents a stale adapter read from refreshing a version
+ * whose source, content, blob or brand evidence has changed.
+ */
+export interface RefreshCompanyContentSourceAttestationCommand {
+  /** Actor-scoped replay key for this exact source observation. */
+  readonly commandKey: string;
+  readonly contentItemId: string;
+  readonly contentVersionId: string;
+  readonly expected: Readonly<{
+    readonly source: CompanyContentSourceProvenance;
+    readonly contentSha256: string;
+    readonly blobSha256: string;
+    readonly brandSha256: string;
+  }>;
+  readonly attestation: CompanyContentSourceAttestationInput;
+}
+
+export interface RefreshCompanyContentSourceAttestationResult {
+  readonly disposition: 'applied' | 'replayed';
+  readonly contentItemId: string;
+  readonly contentVersionId: string;
+  readonly sourceAttestationId: string;
+  readonly sourceAttestationExpiresAt: string;
+  readonly providerEffects: false;
+}
+
 export interface RequestCompanyContentApprovalCommand {
   readonly commandKey: string;
   readonly contentItemId: string;

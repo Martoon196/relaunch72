@@ -13,7 +13,10 @@ import type {
   CompanyContentTransactionRunner,
   CompanyContentVersionApprovalState,
 } from './types.js';
-import type { NormalizedCompanyContentVersionCommand } from './validation.js';
+import type {
+  NormalizedCompanyContentVersionCommand,
+  NormalizedRefreshCompanyContentSourceAttestationCommand,
+} from './validation.js';
 
 interface ReceiptRow extends QueryResultRow {
   id: string;
@@ -60,6 +63,15 @@ export interface LockedCompanyContentVersion {
   readonly versionNumber: number;
   readonly contentSha256: string;
   readonly isLatest: boolean;
+}
+
+export interface LockedCompanyContentAttestationVersion
+extends LockedCompanyContentVersion {
+  readonly sourceSystem: string;
+  readonly sourceItemId: string;
+  readonly sourceVersion: string;
+  readonly blobSha256: string;
+  readonly brandSha256: string;
 }
 
 interface ApprovalRequestRow extends QueryResultRow {
@@ -154,6 +166,50 @@ function lockedVersion(row: VersionRow): LockedCompanyContentVersion {
     ...row,
     versionNumber: Number(row.versionNumber),
   };
+}
+
+function lockedAttestationVersion(
+  row: QueryResultRow & {
+    contentItemId: string;
+    contentVersionId: string;
+    versionNumber: number | string;
+    contentSha256: string;
+    sourceSystem: string;
+    sourceItemId: string;
+    sourceVersion: string;
+    blobSha256: string;
+    brandSha256: string;
+    isLatest: boolean;
+  },
+): LockedCompanyContentAttestationVersion {
+  const versionNumber = Number(row.versionNumber);
+  if (!UUID.test(row.contentItemId) || !UUID.test(row.contentVersionId)
+      || !Number.isSafeInteger(versionNumber) || versionNumber < 1
+      || !SHA256.test(row.contentSha256) || !SHA256.test(row.blobSha256)
+      || !SHA256.test(row.brandSha256) || typeof row.isLatest !== 'boolean'
+      || typeof row.sourceSystem !== 'string' || row.sourceSystem.length < 1
+      || row.sourceSystem.length > 100 || row.sourceSystem !== row.sourceSystem.trim()
+      || !SAFE_DISPLAY_TEXT.test(row.sourceSystem)
+      || typeof row.sourceItemId !== 'string' || row.sourceItemId.length < 1
+      || row.sourceItemId.length > 500 || row.sourceItemId !== row.sourceItemId.trim()
+      || !SAFE_DISPLAY_TEXT.test(row.sourceItemId)
+      || typeof row.sourceVersion !== 'string' || row.sourceVersion.length < 1
+      || row.sourceVersion.length > 500 || row.sourceVersion !== row.sourceVersion.trim()
+      || !SAFE_DISPLAY_TEXT.test(row.sourceVersion)) {
+    throw new Error('Company content attestation version returned invalid canonical data');
+  }
+  return Object.freeze({
+    contentItemId: row.contentItemId,
+    contentVersionId: row.contentVersionId,
+    versionNumber,
+    contentSha256: row.contentSha256,
+    sourceSystem: row.sourceSystem,
+    sourceItemId: row.sourceItemId,
+    sourceVersion: row.sourceVersion,
+    blobSha256: row.blobSha256,
+    brandSha256: row.brandSha256,
+    isLatest: row.isLatest,
+  });
 }
 
 function approvalRequest(row: ApprovalRequestRow): LockedCompanyContentApprovalRequest {
@@ -521,6 +577,103 @@ export class CompanyContentPgRepository {
       [contentItemId, contentVersionId],
     );
     return result.rows[0] ? lockedVersion(result.rows[0]) : null;
+  }
+
+  async lockVersionForSourceAttestation(
+    contentItemId: string,
+    contentVersionId: string,
+  ): Promise<LockedCompanyContentAttestationVersion | null> {
+    await this.transaction.query(
+      `/* company-content.lock-attestation-version-item */
+       SELECT pg_catalog.pg_advisory_xact_lock(
+         pg_catalog.hashtextextended(
+           'company-content-item:' || app_private.current_workspace_id()::text || ':' || $1,
+           7200021
+         )
+       )`,
+      [contentItemId],
+    );
+    const result = await this.transaction.query<QueryResultRow & {
+      contentItemId: string;
+      contentVersionId: string;
+      versionNumber: number | string;
+      contentSha256: string;
+      sourceSystem: string;
+      sourceItemId: string;
+      sourceVersion: string;
+      blobSha256: string;
+      brandSha256: string;
+      isLatest: boolean;
+    }>(
+      `/* company-content.lock-attestation-version */
+       SELECT version.content_item_id AS "contentItemId",
+              version.id AS "contentVersionId",
+              version.version_number AS "versionNumber",
+              encode(version.content_sha256, 'hex') AS "contentSha256",
+              version.source_system AS "sourceSystem",
+              version.source_item_id AS "sourceItemId",
+              version.source_version AS "sourceVersion",
+              encode(version.blob_sha256, 'hex') AS "blobSha256",
+              encode(version.brand_sha256, 'hex') AS "brandSha256",
+              version.id = (
+                SELECT latest.id
+                FROM app.company_content_versions AS latest
+                WHERE latest.workspace_id = version.workspace_id
+                  AND latest.content_item_id = version.content_item_id
+                ORDER BY latest.version_number DESC, latest.id
+                LIMIT 1
+              ) AS "isLatest"
+       FROM app.company_content_versions AS version
+       WHERE version.content_item_id = $1 AND version.id = $2`,
+      [contentItemId, contentVersionId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return lockedAttestationVersion(row);
+  }
+
+  async insertRefreshedSourceAttestation(input: {
+    readonly id: string;
+    readonly version: LockedCompanyContentAttestationVersion;
+    readonly command: NormalizedRefreshCompanyContentSourceAttestationCommand;
+    readonly actorUserId: string;
+    readonly requestId: string;
+    readonly createdAt: string;
+  }): Promise<{ readonly id: string; readonly expiresAt: string }> {
+    const result = await this.transaction.query<QueryResultRow & {
+      id: string;
+      expiresAt: string;
+    }>(
+      `/* company-content.insert-refreshed-source-attestation */
+       INSERT INTO app.company_content_source_attestations (
+         id, workspace_id, content_item_id, content_version_id,
+         source_system, source_item_id, source_version,
+         content_sha256, blob_sha256, brand_sha256,
+         source_catalog_sha256, checked_at, expires_at,
+         attested_by_user_id, attested_request_id, created_at
+       ) VALUES (
+         $1, app_private.current_workspace_id(), $2, $3,
+         $4, $5, $6, decode($7, 'hex'), decode($8, 'hex'), decode($9, 'hex'),
+         decode($10, 'hex'), $11::timestamptz, $12::timestamptz,
+         $13, $14, $15::timestamptz
+       )
+       RETURNING id, expires_at::text AS "expiresAt"`,
+      [
+        input.id, input.version.contentItemId, input.version.contentVersionId,
+        input.command.sourceSystem, input.command.sourceItemId,
+        input.command.sourceVersion, input.command.contentSha256,
+        input.command.blobSha256, input.command.brandSha256,
+        input.command.sourceCatalogSha256, input.command.sourceCheckedAt,
+        input.command.sourceExpiresAt, input.actorUserId,
+        input.requestId, input.createdAt,
+      ],
+    );
+    const row = result.rows[0];
+    if (result.rows.length !== 1 || !row || !UUID.test(row.id)
+        || !Number.isFinite(Date.parse(row.expiresAt))) {
+      throw new Error('Refreshed source attestation returned invalid canonical data');
+    }
+    return Object.freeze({ id: row.id, expiresAt: row.expiresAt });
   }
 
   async nextApprovalRequestNumber(

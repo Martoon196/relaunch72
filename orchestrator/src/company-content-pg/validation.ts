@@ -8,6 +8,7 @@ import {
   type CompanyContentOrigin,
   type CreateCompanyContentVersionCommand,
   type DecideCompanyContentApprovalCommand,
+  type RefreshCompanyContentSourceAttestationCommand,
   type RequestCompanyContentApprovalCommand,
 } from './types.js';
 
@@ -228,6 +229,61 @@ export function normalizeCompanyContentVersionCommand(
     sourceExpiresAt,
     metadata: metadata as Readonly<Record<string, unknown>>,
     contentSha256: createHash('sha256').update(command.content, 'utf8').digest('hex'),
+  });
+}
+
+export interface NormalizedRefreshCompanyContentSourceAttestationCommand {
+  readonly commandKey: string;
+  readonly contentItemId: string;
+  readonly contentVersionId: string;
+  readonly sourceSystem: string;
+  readonly sourceItemId: string;
+  readonly sourceVersion: string;
+  readonly contentSha256: string;
+  readonly blobSha256: string;
+  readonly brandSha256: string;
+  readonly sourceCatalogSha256: string;
+  readonly sourceCheckedAt: string;
+  readonly sourceExpiresAt: string;
+}
+
+export function normalizeRefreshCompanyContentSourceAttestationCommand(
+  command: RefreshCompanyContentSourceAttestationCommand,
+): NormalizedRefreshCompanyContentSourceAttestationCommand {
+  if (!command || typeof command !== 'object') {
+    throw new CompanyContentValidationError('Source attestation refresh command is required');
+  }
+  const sourceSystem = exactText(command.expected?.source?.system, 'expected.source.system', 100);
+  if (!SOURCE_SYSTEM.test(sourceSystem)) {
+    throw new CompanyContentValidationError('expected.source.system is invalid');
+  }
+  const sourceCheckedAt = timestamp(command.attestation?.checkedAt, 'attestation.checkedAt');
+  const sourceExpiresAt = timestamp(command.attestation?.expiresAt, 'attestation.expiresAt');
+  if (sourceExpiresAt <= sourceCheckedAt) {
+    throw new CompanyContentValidationError('attestation.expiresAt must be after checkedAt');
+  }
+  if (new Date(sourceExpiresAt).getTime() - new Date(sourceCheckedAt).getTime()
+      > 15 * 60 * 1_000) {
+    throw new CompanyContentValidationError(
+      'Source attestation freshness may not exceed 15 minutes',
+    );
+  }
+  return Object.freeze({
+    commandKey: commandKey(command.commandKey),
+    contentItemId: uuid(command.contentItemId, 'contentItemId'),
+    contentVersionId: uuid(command.contentVersionId, 'contentVersionId'),
+    sourceSystem,
+    sourceItemId: exactText(command.expected?.source?.itemId, 'expected.source.itemId', 500),
+    sourceVersion: exactText(command.expected?.source?.version, 'expected.source.version', 500),
+    contentSha256: digest(command.expected?.contentSha256, 'expected.contentSha256'),
+    blobSha256: digest(command.expected?.blobSha256, 'expected.blobSha256'),
+    brandSha256: digest(command.expected?.brandSha256, 'expected.brandSha256'),
+    sourceCatalogSha256: digest(
+      command.attestation?.catalogSha256,
+      'attestation.catalogSha256',
+    ),
+    sourceCheckedAt,
+    sourceExpiresAt,
   });
 }
 

@@ -135,6 +135,18 @@ function digest(bytes: Uint8Array | string): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
+function exactRepresentationEtag(response: Response, bytes: Uint8Array): void {
+  if (response.headers.get('etag') !== `"sha256-${digest(bytes)}"`) {
+    throw error('ETag does not bind the exact response bytes');
+  }
+}
+
+function exactComponentHeader(response: Response, name: string, expected: string): void {
+  if (response.headers.get(name) !== expected) {
+    throw error(`${name} does not match the exact resource`);
+  }
+}
+
 async function boundedBytes(response: Response, maximum: number): Promise<Uint8Array> {
   const declared = response.headers.get('content-length');
   if (declared !== null && (!/^(?:0|[1-9][0-9]{0,9})$/u.test(declared)
@@ -288,10 +300,16 @@ export function createPropertyPredatorApprovedResourceTransport(
           throw error('version media type is invalid');
         }
         const bytes = await boundedBytes(response, MAX_VERSION_BYTES);
+        exactRepresentationEtag(response, bytes);
         let parsed: unknown;
         try { parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
         catch { throw error('version response is not canonical UTF-8 JSON'); }
-        return parseVersion(parsed, versionId, expectedContentSha256);
+        const resource = parseVersion(parsed, versionId, expectedContentSha256);
+        exactComponentHeader(response, 'x-company-content-version', resource.versionId);
+        exactComponentHeader(response, 'x-approval-id', resource.approvalId);
+        exactComponentHeader(response, 'x-brand-sha256', resource.brandSha256);
+        exactComponentHeader(response, 'x-content-sha256', resource.contentSha256);
+        return resource;
       });
     },
 
@@ -305,6 +323,7 @@ export function createPropertyPredatorApprovedResourceTransport(
         if (digest(bytes) !== expectedBlobSha256) throw error('asset digest failed verification');
         const etag = response.headers.get('etag');
         if (etag !== `"sha256-${expectedBlobSha256}"`) throw error('asset ETag is not exact');
+        exactComponentHeader(response, 'x-company-content-version', versionId);
         return Object.freeze({
           versionId,
           mediaType: mediaType as PropertyPredatorApprovedAssetResource['mediaType'],

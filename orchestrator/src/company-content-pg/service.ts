@@ -16,6 +16,8 @@ import {
   type CreateCompanyContentVersionResult,
   type DecideCompanyContentApprovalCommand,
   type DecideCompanyContentApprovalResult,
+  type RefreshCompanyContentSourceAttestationCommand,
+  type RefreshCompanyContentSourceAttestationResult,
   type RequestCompanyContentApprovalCommand,
   type RequestCompanyContentApprovalResult,
 } from './types.js';
@@ -24,10 +26,12 @@ import {
   normalizeApprovalDecisionCommand,
   normalizeApprovalRequestCommand,
   normalizeCompanyContentVersionCommand,
+  normalizeRefreshCompanyContentSourceAttestationCommand,
   validateCompanyContentUserContext,
 } from './validation.js';
 
 const CREATE_VERSION = 'companyContent.createVersion';
+const REFRESH_SOURCE_ATTESTATION = 'companyContent.refreshSourceAttestation';
 const REQUEST_APPROVAL = 'companyContent.requestApproval';
 const DECIDE_APPROVAL = 'companyContent.decideApproval';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -71,6 +75,19 @@ function approvalRequestResult(value: unknown): value is RequestCompanyContentAp
     && typeof value.contentVersionId === 'string'
     && typeof value.requestNumber === 'number'
     && validSha(value.contentSha256);
+}
+
+function refreshSourceAttestationResult(
+  value: unknown,
+): value is RefreshCompanyContentSourceAttestationResult {
+  return record(value)
+    && (value.disposition === 'applied' || value.disposition === 'replayed')
+    && typeof value.contentItemId === 'string' && UUID.test(value.contentItemId)
+    && typeof value.contentVersionId === 'string' && UUID.test(value.contentVersionId)
+    && typeof value.sourceAttestationId === 'string' && UUID.test(value.sourceAttestationId)
+    && typeof value.sourceAttestationExpiresAt === 'string'
+    && Number.isFinite(Date.parse(value.sourceAttestationExpiresAt))
+    && value.providerEffects === false;
 }
 
 function approvalDecisionResult(value: unknown): value is DecideCompanyContentApprovalResult {
@@ -301,6 +318,85 @@ export class CompanyContentService {
           payloadHash: requestHash,
           result: { ...result },
           completedAt: at,
+        });
+        return result;
+      }, { readOnly: false, serializable: true });
+    } catch (error) {
+      if (error instanceof CompanyContentIdempotencyConflictError
+          || error instanceof CompanyContentCommandInProgressError
+          || error instanceof CompanyContentNotFoundError
+          || error instanceof CompanyContentVersionConflictError) {
+        throw error;
+      }
+      return translateContentWriteError(error);
+    }
+  }
+
+  async refreshSourceAttestation(
+    context: DatabaseRequestContext,
+    command: RefreshCompanyContentSourceAttestationCommand,
+  ): Promise<RefreshCompanyContentSourceAttestationResult> {
+    validateCompanyContentUserContext(context);
+    const input = normalizeRefreshCompanyContentSourceAttestationCommand(command);
+    const requestHash = companyContentRequestHash(context, REFRESH_SOURCE_ATTESTATION, input);
+    try {
+      return await this.dependencies.transactionRunner.run(context, async (transaction) => {
+        const repository = new CompanyContentPgRepository(transaction);
+        const createdAt = this.#now().toISOString();
+        const claim = await repository.claimCommand({
+          id: this.#nextId(),
+          commandName: REFRESH_SOURCE_ATTESTATION,
+          commandKey: input.commandKey,
+          requestId: context.requestId,
+          payloadHash: requestHash,
+          createdAt,
+        });
+        if (!hashesEqual(claim.payloadHash, requestHash)) {
+          throw new CompanyContentIdempotencyConflictError();
+        }
+        if (!claim.inserted) {
+          if (claim.status === 'succeeded') {
+            return replay(claim.result, refreshSourceAttestationResult);
+          }
+          throw new CompanyContentCommandInProgressError();
+        }
+        const version = await repository.lockVersionForSourceAttestation(
+          input.contentItemId,
+          input.contentVersionId,
+        );
+        if (!version) throw new CompanyContentNotFoundError('Company content version');
+        if (!version.isLatest) throw new CompanyContentVersionConflictError();
+        if (version.sourceSystem !== input.sourceSystem
+            || version.sourceItemId !== input.sourceItemId
+            || version.sourceVersion !== input.sourceVersion
+            || version.contentSha256 !== input.contentSha256
+            || version.blobSha256 !== input.blobSha256
+            || version.brandSha256 !== input.brandSha256) {
+          throw new CompanyContentVersionConflictError(
+            'Company content source tuple changed before attestation refresh',
+          );
+        }
+        const attestation = await repository.insertRefreshedSourceAttestation({
+          id: this.#nextId(),
+          version,
+          command: input,
+          actorUserId: actorUserId(context),
+          requestId: context.requestId,
+          createdAt,
+        });
+        const result = Object.freeze<RefreshCompanyContentSourceAttestationResult>({
+          disposition: 'applied',
+          contentItemId: version.contentItemId,
+          contentVersionId: version.contentVersionId,
+          sourceAttestationId: attestation.id,
+          sourceAttestationExpiresAt: attestation.expiresAt,
+          providerEffects: false as const,
+        });
+        await repository.completeCommand({
+          receiptId: claim.id,
+          payloadHash: requestHash,
+          result: { ...result },
+          completedAt: createdAt,
         });
         return result;
       }, { readOnly: false, serializable: true });

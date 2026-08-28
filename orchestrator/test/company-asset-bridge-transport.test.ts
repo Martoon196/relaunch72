@@ -57,6 +57,20 @@ async function bridgeFixture(): Promise<Record<string, unknown>> {
   };
 }
 
+function bridgeResponse(fixture: Record<string, unknown>, headers: Record<string, string> = {}) {
+  const body = JSON.stringify(fixture);
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      etag: `"sha256-${createHash('sha256').update(body, 'utf8').digest('hex')}"`,
+      'x-release-sha256': String(fixture.releaseSha256),
+      'x-source-observed-at': String(fixture.generatedAt),
+      ...headers,
+    },
+  });
+}
+
 test('loads only the exact metadata bridge through a bounded authenticated GET', async () => {
   const fixture = await bridgeFixture();
   let observedUrl = '';
@@ -66,10 +80,7 @@ test('loads only the exact metadata bridge through a bounded authenticated GET',
     fetchImpl: async (input, init) => {
       observedUrl = String(input);
       observedInit = init;
-      return new Response(JSON.stringify(fixture), {
-        status: 200,
-        headers: { 'content-type': 'application/json; charset=utf-8' },
-      });
+      return bridgeResponse(fixture);
     },
   });
   const release = await transport.loadRelease();
@@ -122,8 +133,8 @@ test('allows explicit localhost HTTP only for tests', async () => {
   const transport = createPropertyPredatorCompanyAssetBridgeTransport({
     baseUrl: 'http://127.0.0.1:43172', clientId: 'growth-hq', readToken: TOKEN,
     allowLocalHttp: true,
-    fetchImpl: async () => new Response(JSON.stringify(fixture), {
-      headers: { 'content-type': 'application/problem+json' },
+    fetchImpl: async () => bridgeResponse(fixture, {
+      'content-type': 'application/problem+json',
     }),
   });
   await assert.doesNotReject(transport.loadRelease());
@@ -194,9 +205,7 @@ test('transmits an immutable endpoint identity and rejects runtime-coerced clien
     fetchImpl: async (input) => {
       assert.equal(typeof input, 'string');
       observed.push(String(input));
-      return new Response(JSON.stringify(fixture), {
-        headers: { 'content-type': 'application/json; charset=utf-8' },
-      });
+      return bridgeResponse(fixture);
     },
   });
   await transport.loadRelease();
@@ -220,6 +229,22 @@ test('accepts only JSON or structured JSON with an optional UTF-8 charset', asyn
       fetchImpl: async () => new Response(JSON.stringify(fixture), { headers: { 'content-type': contentType } }),
     });
     await assert.rejects(transport.loadRelease(), /media type is invalid/);
+  }
+});
+
+test('rejects bridge representation and component validators that do not match', async () => {
+  const fixture = await bridgeFixture();
+  const invalidHeaders: readonly Record<string, string>[] = [
+    { etag: `"sha256-${'0'.repeat(64)}"` },
+    { 'x-release-sha256': '0'.repeat(64) },
+    { 'x-source-observed-at': '2026-08-27T09:12:01+00:00' },
+  ];
+  for (const headers of invalidHeaders) {
+    const transport = createPropertyPredatorCompanyAssetBridgeTransport({
+      baseUrl: 'https://propertypredator.example', clientId: 'growth-hq', readToken: TOKEN,
+      fetchImpl: async () => bridgeResponse(fixture, headers),
+    });
+    await assert.rejects(transport.loadRelease(), /ETag|component headers/);
   }
 });
 

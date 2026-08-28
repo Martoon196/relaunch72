@@ -8,6 +8,7 @@ const SAFE_SOURCE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const HASH_SCHEMA = 'propertypredator.company-content/v1';
 const MAX_CATALOG_BYTES = 2 * 1024 * 1024;
 const MAX_CATALOG_ITEMS = 500;
+const JSON_MEDIA_TYPE = /^application\/(?:[a-z0-9!#$&^_.+-]+\+)?json(?:\s*;\s*charset=utf-8)?$/iu;
 const ALLOWED_ASSET_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const GENERATED_KINDS = new Set(['post', 'thread', 'email', 'script', 'article', 'ad', 'image']);
 const AFFILIATE_MARKERS = [
@@ -422,6 +423,11 @@ export function createPropertyPredatorHttpCatalogTransport(
             `company-content catalog returned HTTP ${response.status}`,
           );
         }
+        if (!JSON_MEDIA_TYPE.test(response.headers.get('content-type') ?? '')) {
+          throw new PropertyPredatorContentContractError(
+            'company-content catalog media type is invalid',
+          );
+        }
         const declared = Number(response.headers.get('content-length') ?? 0);
         if (Number.isFinite(declared) && declared > MAX_CATALOG_BYTES) {
           throw new PropertyPredatorContentContractError('company-content catalog is too large');
@@ -430,9 +436,25 @@ export function createPropertyPredatorHttpCatalogTransport(
         if (Buffer.byteLength(body, 'utf8') > MAX_CATALOG_BYTES) {
           throw new PropertyPredatorContentContractError('company-content catalog is too large');
         }
-        try { return JSON.parse(body) as unknown; } catch {
+        if (response.headers.get('etag') !== `"sha256-${digest(body)}"`) {
+          throw new PropertyPredatorContentContractError(
+            'company-content catalog ETag does not bind the exact response bytes',
+          );
+        }
+        let parsed: unknown;
+        try { parsed = JSON.parse(body) as unknown; } catch {
           throw new PropertyPredatorContentContractError('company-content catalog is not valid JSON');
         }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+            || response.headers.get('x-catalog-sha256')
+              !== (parsed as Record<string, unknown>).catalogSha256
+            || response.headers.get('x-source-observed-at')
+              !== (parsed as Record<string, unknown>).generatedAt) {
+          throw new PropertyPredatorContentContractError(
+            'company-content catalog component headers do not match the response',
+          );
+        }
+        return parsed;
       } finally {
         clearTimeout(timer);
       }

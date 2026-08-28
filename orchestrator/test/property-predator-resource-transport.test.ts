@@ -52,6 +52,22 @@ function transport(fetchImpl: typeof fetch) {
   });
 }
 
+function versionResponse(source: ReturnType<typeof mediaEnvelope>, headers: Record<string, string> = {}) {
+  const body = JSON.stringify(source);
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      etag: `"sha256-${sha(body)}"`,
+      'x-approval-id': source.item.approvalId,
+      'x-brand-sha256': source.item.brandSha256,
+      'x-company-content-version': source.item.versionId,
+      'x-content-sha256': source.item.contentSha256,
+      ...headers,
+    },
+  });
+}
+
 test('loads one exact approved body through the scoped read boundary and verifies its hash', async () => {
   const source = mediaEnvelope();
   let called = '';
@@ -59,10 +75,7 @@ test('loads one exact approved body through the scoped read boundary and verifie
   const client = transport(async (input, options) => {
     called = String(input);
     init = options;
-    return new Response(JSON.stringify(source), {
-      status: 200,
-      headers: { 'content-type': 'application/json; charset=utf-8' },
-    });
+    return versionResponse(source);
   });
   const version = await client.loadVersion(VERSION_ID, source.item.contentSha256);
   assert.equal(version.versionId, VERSION_ID);
@@ -88,6 +101,7 @@ test('loads exact approved artwork bytes only after MIME, ETag and digest verifi
     headers: {
       'content-type': 'image/png',
       etag: `"sha256-${digest}"`,
+      'x-company-content-version': VERSION_ID,
     },
   }));
   const asset = await client.loadAsset(VERSION_ID, digest);
@@ -100,10 +114,7 @@ test('rejects tampered bodies, assets, hostile shapes and escaped origins', asyn
   const body = mediaEnvelope();
   body.item.payload.body = 'Changed after approval';
   await assert.rejects(
-    transport(async () => new Response(JSON.stringify(body), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    })).loadVersion(VERSION_ID),
+    transport(async () => versionResponse(body)).loadVersion(VERSION_ID),
     /content digest failed verification/,
   );
 
@@ -141,4 +152,24 @@ test('rejects oversized resources before buffering them', async () => {
     },
   }));
   await assert.rejects(client.loadVersion(VERSION_ID), /response length is invalid/);
+});
+
+test('rejects exact-version representation and component validators that do not match', async () => {
+  const source = mediaEnvelope();
+  const invalidHeaders: readonly Record<string, string>[] = [
+    { etag: `"sha256-${'0'.repeat(64)}"` },
+    { 'x-approval-id': '33333333-3333-4333-8333-333333333333' },
+    { 'x-brand-sha256': '0'.repeat(64) },
+    { 'x-company-content-version': '33333333-3333-4333-8333-333333333333' },
+    { 'x-content-sha256': '0'.repeat(64) },
+  ];
+  for (const headers of invalidHeaders) {
+    await assert.rejects(
+      transport(async () => versionResponse(source, headers)).loadVersion(
+        VERSION_ID,
+        source.item.contentSha256,
+      ),
+      /ETag|does not match/,
+    );
+  }
 });

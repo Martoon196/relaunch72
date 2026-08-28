@@ -53,6 +53,20 @@ function catalog(items: readonly Record<string, unknown>[]) {
   };
 }
 
+function catalogResponse(source: ReturnType<typeof catalog>, headers: Record<string, string> = {}) {
+  const body = JSON.stringify(source);
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'content-type': 'application/json',
+      etag: `"sha256-${sha(body)}"`,
+      'x-catalog-sha256': source.catalogSha256,
+      'x-source-observed-at': source.generatedAt,
+      ...headers,
+    },
+  });
+}
+
 test('validates the exact Property Predator catalog and maps one source version without affiliate semantics', () => {
   const parsed = parsePropertyPredatorCompanyContentCatalog(catalog([mediaItem()]));
   assert.equal(parsed.itemCount, 1);
@@ -134,10 +148,7 @@ test('HTTP transport is scoped, no-store, bounded and never includes a publish o
     fetchImpl: async (input, init) => {
       calledUrl = String(input);
       calledInit = init ?? {};
-      return new Response(JSON.stringify(source), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
+      return catalogResponse(source);
     },
   });
 
@@ -170,8 +181,29 @@ test('HTTP transport fails closed for insecure origins, weak credentials and ove
     readToken: 'x'.repeat(40),
     fetchImpl: async () => new Response('{}', {
       status: 200,
-      headers: { 'content-length': String(3 * 1024 * 1024) },
+      headers: {
+        'content-type': 'application/json',
+        'content-length': String(3 * 1024 * 1024),
+      },
     }),
   });
   await assert.rejects(transport.loadCatalog(), /too large/);
+});
+
+test('HTTP transport rejects a strong ETag or catalogue component header that does not match', async () => {
+  const source = catalog([mediaItem()]);
+  const invalidHeaders: readonly Record<string, string>[] = [
+    { etag: `"sha256-${'0'.repeat(64)}"` },
+    { 'x-catalog-sha256': '0'.repeat(64) },
+    { 'x-source-observed-at': '2026-08-26T20:01:01+00:00' },
+  ];
+  for (const headers of invalidHeaders) {
+    const transport = createPropertyPredatorHttpCatalogTransport({
+      baseUrl: 'https://propertypredator.example',
+      clientId: 'growth-hq',
+      readToken: 'x'.repeat(40),
+      fetchImpl: async () => catalogResponse(source, headers),
+    });
+    await assert.rejects(transport.loadCatalog(), /ETag|component headers/);
+  }
 });
