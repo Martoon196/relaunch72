@@ -23,6 +23,8 @@ export const PROVIDER_ACTIVATION_RAILS = Object.freeze([
   'whatsapp',
   'public_social',
   'social_dm',
+  'webinar',
+  'social_listening',
 ] as const);
 
 export type ProviderActivationRail = (typeof PROVIDER_ACTIVATION_RAILS)[number];
@@ -417,6 +419,8 @@ const REQUIRED_CAPABILITIES_BY_RAIL: Readonly<
   whatsapp: Object.freeze(['channel.whatsapp', 'conversations.reply'] as const),
   public_social: Object.freeze(['social.publish'] as const),
   social_dm: Object.freeze(['conversations.reply'] as const),
+  webinar: Object.freeze(['webinars.manage'] as const),
+  social_listening: Object.freeze(['social.listen'] as const),
 });
 
 interface TrustedProviderActivationManifest {
@@ -1368,7 +1372,8 @@ function evidenceReason(
     return reason('EVIDENCE_FAILED', gate, `Evidence for ${gate} records a failed control.`);
   }
   if (evidence.status === 'not_applicable') {
-    const permitted = rail === 'public_social' && (gate === 'consent' || gate === 'suppression');
+    const nonTargetedRail = rail === 'public_social' || rail === 'social_listening';
+    const permitted = nonTargetedRail && (gate === 'consent' || gate === 'suppression');
     if (!permitted) {
       return reason('NOT_APPLICABLE_INVALID', gate, `${gate} cannot be marked not applicable for this rail.`);
     }
@@ -1439,6 +1444,14 @@ function providerMetadataBlockers(
   } else if (rail === 'social_dm') {
     matches = matches
       && (provider.kind === 'social' || provider.kind === 'messaging')
+      && (provider.outboundCredentialAuth === 'oauth2' || provider.outboundCredentialAuth === 'api_key');
+  } else if (rail === 'webinar') {
+    matches = matches
+      && provider.kind === 'webinar'
+      && (provider.outboundCredentialAuth === 'oauth2' || provider.outboundCredentialAuth === 'api_key');
+  } else if (rail === 'social_listening') {
+    matches = matches
+      && (provider.kind === 'social' || provider.kind === 'analytics')
       && (provider.outboundCredentialAuth === 'oauth2' || provider.outboundCredentialAuth === 'api_key');
   }
   if (provider.inboundWebhookVerification !== input.scope.webhook.verificationMode) matches = false;
@@ -1522,10 +1535,10 @@ function adapterScopeBlockers(
 function internalSeedScopeBlockers(input: ProviderActivationReadinessInput): readonly ProviderReadinessReason[] {
   const blockers: ProviderReadinessReason[] = [];
   const { scope, rail } = input;
-  const isPublic = rail === 'public_social';
+  const isNonTargeted = rail === 'public_social' || rail === 'social_listening';
   const consentEvidence = input.evidence.consent;
   const suppressionEvidence = input.evidence.suppression;
-  if (isPublic) {
+  if (isNonTargeted) {
     if (scope.policy.consentRoute !== 'not_applicable_public_broadcast'
         || scope.policy.suppressionScope !== 'public_broadcast_not_applicable'
         || consentEvidence.status !== 'not_applicable'
@@ -1533,7 +1546,7 @@ function internalSeedScopeBlockers(input: ProviderActivationReadinessInput): rea
       blockers.push(reason(
         'CHANNEL_POLICY_SCOPE_INVALID',
         'consent',
-        'Public social must use an evidenced non-targeted public-broadcast route.',
+        'Non-targeted public social and listening rails must use an evidenced public-broadcast route.',
       ));
     }
   } else if (scope.policy.consentRoute === 'not_applicable_public_broadcast'

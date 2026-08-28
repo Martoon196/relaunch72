@@ -45,6 +45,33 @@ const MAILGUN_AUTHORITY = createProviderActivationAuthority(MAILGUN_TEST_REGISTR
   providerId: 'mailgun_eu',
   adapterContractVersion: '1.0.0',
 }]);
+const DISABLED_FOUNDATION_REGISTRY = createProviderRegistry([{
+  id: 'social_listener',
+  name: 'Disabled social listening foundation',
+  kind: 'analytics',
+  outboundCredentialAuth: 'oauth2',
+  inboundWebhookVerification: 'hmac_signature',
+  capabilities: ['social.listen'],
+}, {
+  id: 'webinar_host',
+  name: 'Disabled webinar foundation',
+  kind: 'webinar',
+  outboundCredentialAuth: 'oauth2',
+  inboundWebhookVerification: 'hmac_signature',
+  capabilities: ['webinars.manage'],
+}]);
+const DISABLED_FOUNDATION_AUTHORITY = createProviderActivationAuthority(
+  DISABLED_FOUNDATION_REGISTRY,
+  [{
+    rail: 'social_listening',
+    providerId: 'social_listener',
+    adapterContractVersion: '1.0.0',
+  }, {
+    rail: 'webinar',
+    providerId: 'webinar_host',
+    adapterContractVersion: '1.0.0',
+  }],
+);
 
 function providerFor(rail: ProviderActivationRail): ProviderReadinessManifestMetadata {
   if (rail === 'mailgun_email') {
@@ -77,6 +104,26 @@ function providerFor(rail: ProviderActivationRail): ProviderReadinessManifestMet
       adapterContractVersion: '1.0.0',
     };
   }
+  if (rail === 'webinar') {
+    return {
+      providerId: 'webinar_host',
+      kind: 'webinar',
+      outboundCredentialAuth: 'oauth2',
+      inboundWebhookVerification: 'hmac_signature',
+      capabilities: ['webinars.manage'],
+      adapterContractVersion: '1.0.0',
+    };
+  }
+  if (rail === 'social_listening') {
+    return {
+      providerId: 'social_listener',
+      kind: 'analytics',
+      outboundCredentialAuth: 'oauth2',
+      inboundWebhookVerification: 'hmac_signature',
+      capabilities: ['social.listen'],
+      adapterContractVersion: '1.0.0',
+    };
+  }
   return {
     providerId: 'social_messages',
     kind: 'social',
@@ -89,7 +136,7 @@ function providerFor(rail: ProviderActivationRail): ProviderReadinessManifestMet
 
 function readyInput(rail: ProviderActivationRail): ProviderActivationReadinessInput {
   const provider = providerFor(rail);
-  const publicBroadcast = rail === 'public_social';
+  const nonTargeted = rail === 'public_social' || rail === 'social_listening';
   const input = {
     schemaVersion: 1,
     rail,
@@ -132,11 +179,11 @@ function readyInput(rail: ProviderActivationRail): ProviderActivationReadinessIn
         maxReconciliationLagSeconds: 3_600,
       },
       policy: {
-        consentRoute: publicBroadcast ? 'not_applicable_public_broadcast' : 'individual_consent',
-        purpose: publicBroadcast ? 'approved_content_publish' : 'internal_seed_validation',
+        consentRoute: nonTargeted ? 'not_applicable_public_broadcast' : 'individual_consent',
+        purpose: rail === 'public_social' ? 'approved_content_publish' : 'internal_seed_validation',
         territories: ['GB'],
         senderReferenceSha256: HASH_D,
-        suppressionScope: publicBroadcast
+        suppressionScope: nonTargeted
           ? 'public_broadcast_not_applicable'
           : 'recipient_workspace_provider',
       },
@@ -181,7 +228,7 @@ function readyInput(rail: ProviderActivationRail): ProviderActivationReadinessIn
     evidence: {} as Record<ProviderActivationGate, ProviderGateEvidence>,
   } satisfies ProviderActivationReadinessInput;
   input.evidence = bindAllEvidence(input);
-  if (publicBroadcast) {
+  if (nonTargeted) {
     input.evidence.consent = boundEvidence(input, 'consent', 'not_applicable');
     input.evidence.suppression = boundEvidence(input, 'suppression', 'not_applicable');
   }
@@ -256,6 +303,8 @@ test('empty production registry denies every rail; an exact injected authority s
     'whatsapp',
     'public_social',
     'social_dm',
+    'webinar',
+    'social_listening',
   ]);
   assert.equal(PROVIDER_ACTIVATION_READINESS_CEILING, 'internal_seed_ready');
 
@@ -293,6 +342,24 @@ test('empty production registry denies every rail; an exact injected authority s
   assert.deepEqual(trusted.blockingReasons, []);
   assert.equal(trusted.safety.liveAuthorised, false);
   assert.equal(trusted.safety.providerEffectsAllowed, false);
+});
+
+test('webinar and social-listening foundations can prove dark readiness without enabling effects', () => {
+  for (const rail of ['webinar', 'social_listening'] as const) {
+    const report = evaluateProviderActivationReadiness(
+      readyInput(rail), NOW, DISABLED_FOUNDATION_AUTHORITY,
+    );
+    assert.equal(report.inputAccepted, true, rail);
+    assert.equal(report.readiness, 'internal_seed_ready', rail);
+    assert.equal(report.nextStage, null, rail);
+    assert.deepEqual(report.blockingReasons, [], rail);
+    assert.deepEqual(report.safety, {
+      liveAuthorised: false,
+      providerEffectsAllowed: false,
+      providerOperationsCreated: 0,
+      separateActivationRequired: true,
+    });
+  }
 });
 
 test('stage progression is cumulative and reports the exact next missing proof', () => {
@@ -343,12 +410,21 @@ test('stale evidence fails closed with a transparent gate-level reason', () => {
   )));
 });
 
-test('public broadcast may explicitly mark consent and suppression not applicable; direct rails may not', () => {
+test('non-targeted public rails may mark consent and suppression not applicable; direct rails may not', () => {
   const publicReport = evaluateProviderActivationReadiness(readyInput('public_social'), NOW);
   assert.equal(publicReport.readiness, 'not_ready');
   const publicSeed = publicReport.stages.find((stage) => stage.stage === 'internal_seed_ready')!;
   assert.equal(publicSeed.blockers.some((item) => item.code === 'NOT_APPLICABLE_INVALID'), false);
   assert.equal(publicSeed.blockers.some((item) => item.code === 'CHANNEL_POLICY_SCOPE_INVALID'), false);
+
+  const listeningReport = evaluateProviderActivationReadiness(
+    readyInput('social_listening'), NOW, DISABLED_FOUNDATION_AUTHORITY,
+  );
+  const listeningSeed = listeningReport.stages.find(
+    (stage) => stage.stage === 'internal_seed_ready',
+  )!;
+  assert.equal(listeningSeed.blockers.some((item) => item.code === 'NOT_APPLICABLE_INVALID'), false);
+  assert.equal(listeningSeed.blockers.some((item) => item.code === 'CHANNEL_POLICY_SCOPE_INVALID'), false);
 
   const directInput = clone(readyInput('whatsapp'));
   (directInput.scope.policy as { consentRoute: string }).consentRoute =
