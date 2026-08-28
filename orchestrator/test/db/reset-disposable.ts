@@ -38,6 +38,9 @@ const APP_ROLES = [
   'r72_mailgun_worker_command',
   'r72_mailgun_worker_definer',
   'r72_onboarding_definer',
+  'r72_owned_seed_campaign_command',
+  'r72_owned_seed_message_command',
+  'r72_owned_seed_message_definer',
   'r72_owner',
   'r72_provisioning_command',
   'r72_provider_operation_definer',
@@ -104,6 +107,20 @@ try {
   );
   const roleNames = existingRoles.rows.map((row) => row.role_name);
   if (roleNames.length > 0) {
+    // PostgreSQL 16 managed-role creators may receive ADMIN without SET. That
+    // is enough to manage a role but not enough for DROP OWNED. On this
+    // positively identified disposable database only, temporarily add SET to
+    // the fixed application-role allowlist; dropping the roles removes these
+    // memberships in the same transaction.
+    for (const roleName of roleNames) {
+      const grant = await client.query<{ sql: string }>(
+        `SELECT pg_catalog.format(
+           'GRANT %I TO %I WITH SET TRUE', $1::text, current_user
+         ) AS sql`,
+        [roleName],
+      );
+      await client.query(grant.rows[0]!.sql);
+    }
     // Identifiers come exclusively from the fixed APP_ROLES allowlist above.
     const identifiers = roleNames.map((role) => `"${role}"`).join(', ');
     await client.query(`DROP OWNED BY ${identifiers}`);

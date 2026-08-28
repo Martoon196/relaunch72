@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 import {
+  COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE,
+  COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA,
   CompanyContentApprovalConflictError,
   CompanyContentCommandInProgressError,
   CompanyContentIdempotencyConflictError,
@@ -9,6 +11,7 @@ import {
   CompanyContentValidationError,
   CompanyContentVersionConflictError,
   type CompanyContentCatalogPage,
+  type CompanyContentExactReview,
   type CompanyContentTransactionRunner,
 } from '../src/company-content-pg/index.js';
 import type { DatabaseRequestContext } from '../src/db/rls.js';
@@ -31,6 +34,39 @@ const CONTENT_VERSION_ID = '44444444-4444-4444-8444-444444444444';
 const APPROVAL_REQUEST_ID = '55555555-5555-4555-8555-555555555555';
 const APPROVAL_DECISION_ID = '66666666-6666-4666-8666-666666666666';
 const CONTENT_SHA = 'a'.repeat(64);
+
+const EXACT_EMAIL_REVIEW: CompanyContentExactReview = Object.freeze({
+  contentItemId: CONTENT_ITEM_ID,
+  contentVersionId: CONTENT_VERSION_ID,
+  versionNumber: 1,
+  isLatest: true,
+  origin: 'generated',
+  kind: 'email',
+  title: 'Owned-seed welcome draft',
+  contentMimeType: COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE,
+  canonicalContent: '{"bodyText":"Fixture body","schema":"propertypredator.email-draft/v1","subject":"Fixture subject"}',
+  canonicalByteLength: 104,
+  contentSha256: CONTENT_SHA,
+  source: Object.freeze({
+    system: 'propertypredator.company-content',
+    itemId: 'owned-seed-welcome',
+    version: 'v1',
+  }),
+  blobSha256: 'b'.repeat(64),
+  brandSha256: 'c'.repeat(64),
+  approvalRequestId: APPROVAL_REQUEST_ID,
+  approvalDecisionId: null,
+  approvalStatus: 'pending',
+  approvalStale: false,
+  email: Object.freeze({
+    schema: COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA,
+    subject: 'Fixture subject',
+    bodyText: 'Fixture body',
+    subjectSha256: 'd'.repeat(64),
+    bodySha256: 'e'.repeat(64),
+  }),
+  createdAt: '2026-08-28T14:00:00.000Z',
+});
 
 function identity(overrides: Partial<PortalCompanyContentRequestIdentity> = {}): PortalCompanyContentRequestIdentity {
   return {
@@ -135,7 +171,69 @@ test('portal company content snapshot resolves one server-owned RLS context and 
   assert.ok(Object.isFrozen(outcome.snapshot));
 });
 
-test('portal company content snapshot locks a stored publishable claim without rewriting its source object', async () => {
+test('portal exact review resolves authenticated workspace context and returns exact immutable copy', async () => {
+  const contexts: DatabaseRequestContext[] = [];
+  let receivedInput: unknown;
+  const service = new PgPortalCompanyContentService(dependencies({
+    accessReader: {
+      load: async (context) => {
+        contexts.push(context);
+        return workspaceAccess();
+      },
+    },
+    readService: {
+      listCatalog: async () => EMPTY_CATALOG,
+      getExactReview: async (context, input) => {
+        contexts.push(context);
+        receivedInput = input;
+        return EXACT_EMAIL_REVIEW;
+      },
+    },
+  }));
+  const input = { contentItemId: CONTENT_ITEM_ID, contentVersionId: CONTENT_VERSION_ID };
+
+  const outcome = await service.review(identity(), input);
+
+  assert.equal(outcome.ok, true);
+  if (!outcome.ok) return;
+  assert.deepEqual(receivedInput, input);
+  assert.strictEqual(outcome.snapshot.review, EXACT_EMAIL_REVIEW);
+  assert.equal(outcome.snapshot.review.email?.subject, 'Fixture subject');
+  assert.equal(contexts.length, 2);
+  contexts.forEach(assertRlsContext);
+  assert.strictEqual(contexts[0], contexts[1]);
+  assert.ok(Object.isFrozen(outcome));
+  assert.ok(Object.isFrozen(outcome.snapshot));
+});
+
+test('portal exact review fails closed when the version is absent or the seam is not composed', async () => {
+  const absent = new PgPortalCompanyContentService(dependencies({
+    readService: {
+      listCatalog: async () => EMPTY_CATALOG,
+      getExactReview: async () => null,
+    },
+  }));
+  assert.deepEqual(await absent.review(identity(), {
+    contentItemId: CONTENT_ITEM_ID,
+    contentVersionId: CONTENT_VERSION_ID,
+  }), {
+    ok: false,
+    kind: 'not_found',
+    message: 'That exact content version is not available in this workspace.',
+  });
+
+  const uncomposed = new PgPortalCompanyContentService(dependencies());
+  assert.deepEqual(await uncomposed.review(identity(), {
+    contentItemId: CONTENT_ITEM_ID,
+    contentVersionId: CONTENT_VERSION_ID,
+  }), {
+    ok: false,
+    kind: 'review_unavailable',
+    message: 'Exact company content review is temporarily unavailable.',
+  });
+});
+
+test('portal company content snapshot preserves a publishable claim when the exact review route is available', async () => {
   const sourceCatalog = createPropertyPredatorContentCatalogFixture();
   assert.equal(sourceCatalog.items[0]?.publishable, true);
   const service = new PgPortalCompanyContentService(dependencies({
@@ -146,7 +244,7 @@ test('portal company content snapshot locks a stored publishable claim without r
 
   assert.equal(outcome.ok, true);
   if (!outcome.ok) return;
-  assert.equal(outcome.snapshot.catalog.items[0]?.publishable, false);
+  assert.equal(outcome.snapshot.catalog.items[0]?.publishable, true);
   assert.equal(sourceCatalog.items[0]?.publishable, true);
   assert.ok(Object.isFrozen(outcome.snapshot.catalog));
   assert.ok(Object.isFrozen(outcome.snapshot.catalog.items));
@@ -204,6 +302,73 @@ test('approval request always forwards the exact item and immutable version unde
   assert.deepEqual(captured.input, input);
   assertRlsContext(captured.context);
   assert.ok(Object.isFrozen(outcome));
+});
+
+test('manager-only portal seam persists one server-assembled email draft without approving it', async () => {
+  let capturedContext: DatabaseRequestContext | null = null;
+  let capturedInput: unknown;
+  const input = {
+    commandKey: 'campaign-email-draft-persist-1',
+    origin: 'generated' as const,
+    title: 'Owned-seed welcome email',
+    subject: 'Exact fixture subject',
+    bodyText: 'Exact fixture body for owned-seed review only.',
+    source: {
+      system: 'propertypredator.company-content',
+      itemId: 'campaign-owned-seed-welcome',
+      version: 'draft-v1',
+    },
+    blob: { storageKey: 'company-content/campaign-owned-seed-welcome/v1', sha256: 'b'.repeat(64) },
+    brand: { snapshotRef: 'brand/property-predator/runtime-v1', sha256: 'c'.repeat(64) },
+    attestation: {
+      catalogSha256: 'd'.repeat(64),
+      checkedAt: '2026-08-28T14:00:00.000Z',
+      expiresAt: '2026-08-28T14:10:00.000Z',
+    },
+    metadata: { evidenceSha256: 'e'.repeat(64), approvalStatus: 'unrequested' },
+  };
+  const service = new PgPortalCompanyContentService(dependencies({
+    draftService: {
+      createEmailDraftVersion: async (context, command) => {
+        capturedContext = context;
+        capturedInput = command;
+        return Object.freeze({
+          disposition: 'applied' as const,
+          contentItemId: CONTENT_ITEM_ID,
+          contentVersionId: CONTENT_VERSION_ID,
+          versionNumber: 1,
+          contentSha256: CONTENT_SHA,
+          sourceAttestationId: '77777777-7777-4777-8777-777777777777',
+          sourceAttestationExpiresAt: '2026-08-28T14:10:00.000Z',
+        });
+      },
+    },
+  }));
+
+  const outcome = await service.createEmailDraftVersion(identity(), input);
+
+  assert.equal(outcome.ok, true);
+  if (!outcome.ok) return;
+  assert.equal(outcome.contentVersionId, CONTENT_VERSION_ID);
+  assert.deepEqual(capturedInput, input);
+  assert.ok(capturedContext);
+  assertRlsContext(capturedContext);
+  assert.equal('approvalDecisionId' in outcome, false);
+
+  let commands = 0;
+  const readOnly = new PgPortalCompanyContentService(dependencies({
+    accessReader: { load: async () => workspaceAccess({ canManage: false }) },
+    draftService: {
+      createEmailDraftVersion: async () => {
+        commands += 1;
+        throw new Error('must not run');
+      },
+    },
+  }));
+  const denied = await readOnly.createEmailDraftVersion(identity(), input);
+  assert.equal(denied.ok, false);
+  if (!denied.ok) assert.equal(denied.kind, 'forbidden');
+  assert.equal(commands, 0);
 });
 
 test('read-only membership cannot request approval and never reaches the command service', async () => {
@@ -332,6 +497,83 @@ test('manager approval fails closed before the command service while exact revie
     kind: 'review_unavailable',
     message: 'Approval is locked until the exact hash-bound content can be shown for review.',
   });
+  assert.equal(commands, 0);
+});
+
+test('exact-reviewed approval re-reads the pending item, version, request and hash before deciding', async () => {
+  let capturedInput: unknown;
+  const service = new PgPortalCompanyContentService(dependencies({
+    readService: {
+      listCatalog: async () => EMPTY_CATALOG,
+      getExactReview: async () => EXACT_EMAIL_REVIEW,
+    },
+    commandService: {
+      requestApproval: async () => { throw new Error('not used'); },
+      decideApproval: async (_context, input) => {
+        capturedInput = input;
+        return {
+          disposition: 'applied',
+          approvalDecisionId: APPROVAL_DECISION_ID,
+          approvalRequestId: APPROVAL_REQUEST_ID,
+          contentItemId: CONTENT_ITEM_ID,
+          contentVersionId: CONTENT_VERSION_ID,
+          decision: input.decision,
+          contentSha256: CONTENT_SHA,
+        };
+      },
+    },
+  }));
+
+  const outcome = await service.decideExactReviewedApproval(identity(), {
+    commandKey: 'content-decision-exact-approved',
+    approvalRequestId: APPROVAL_REQUEST_ID,
+    decision: 'approved',
+    decisionNote: 'Reviewed the exact subject and body.',
+    contentItemId: CONTENT_ITEM_ID,
+    contentVersionId: CONTENT_VERSION_ID,
+    contentSha256: CONTENT_SHA,
+  });
+
+  assert.equal(outcome.ok, true);
+  if (!outcome.ok) return;
+  assert.equal(outcome.decision, 'approved');
+  assert.deepEqual(capturedInput, {
+    commandKey: 'content-decision-exact-approved',
+    approvalRequestId: APPROVAL_REQUEST_ID,
+    decision: 'approved',
+    decisionNote: 'Reviewed the exact subject and body.',
+  });
+});
+
+test('exact-reviewed approval fails closed if any immutable target changed', async () => {
+  let commands = 0;
+  const service = new PgPortalCompanyContentService(dependencies({
+    readService: {
+      listCatalog: async () => EMPTY_CATALOG,
+      getExactReview: async () => Object.freeze({
+        ...EXACT_EMAIL_REVIEW,
+        contentSha256: 'f'.repeat(64),
+      }),
+    },
+    commandService: {
+      requestApproval: async () => { throw new Error('not used'); },
+      decideApproval: async () => {
+        commands += 1;
+        throw new Error('must not run');
+      },
+    },
+  }));
+
+  const outcome = await service.decideExactReviewedApproval(identity(), {
+    commandKey: 'content-decision-exact-stale',
+    approvalRequestId: APPROVAL_REQUEST_ID,
+    decision: 'approved',
+    contentItemId: CONTENT_ITEM_ID,
+    contentVersionId: CONTENT_VERSION_ID,
+    contentSha256: CONTENT_SHA,
+  });
+  assert.equal(outcome.ok, false);
+  if (!outcome.ok) assert.equal(outcome.kind, 'review_unavailable');
   assert.equal(commands, 0);
 });
 

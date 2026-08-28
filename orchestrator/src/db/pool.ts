@@ -106,6 +106,22 @@ export function createTestInboxWebhookCommandDatabasePool(
   return createDatabasePool(loadDatabaseConfig('testInboxWebhookCommand', env), hooks);
 }
 
+/** Table-blind portal pool that may stage only the capped Property Predator owned seed. */
+export function createOwnedSeedCampaignCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('ownedSeedCampaignCommand', env), hooks);
+}
+
+/** Table-blind portal pool for the fixed office-seed draft and approval bridge. */
+export function createOwnedSeedMessageCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('ownedSeedMessageCommand', env), hooks);
+}
+
 /** Function-only portal command pool for TEST public-social campaign planning. */
 export function createPublicSocialCommandDatabasePool(
   env: NodeJS.ProcessEnv = process.env,

@@ -9,10 +9,14 @@ import {
   CompanyContentService,
   CompanyContentValidationError,
   CompanyContentVersionConflictError,
+  COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE,
+  COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA,
   canonicalCompanyContentJson,
+  canonicalCompanyContentEmailDraft,
   companyContentRequestHash,
   normalizeCompanyContentVersionCommand,
   type CompanyContentTransactionRunner,
+  type CreateCompanyContentEmailDraftVersionCommand,
   type CreateCompanyContentVersionCommand,
 } from '../src/company-content-pg/index.js';
 
@@ -48,6 +52,35 @@ function command(overrides: Partial<CreateCompanyContentVersionCommand> = {}): C
   };
 }
 
+function emailCommand(
+  overrides: Partial<CreateCompanyContentEmailDraftVersionCommand> = {},
+): CreateCompanyContentEmailDraftVersionCommand {
+  return {
+    commandKey: 'fixture-email-draft-1',
+    origin: 'generated',
+    title: 'Property Predator owned-seed welcome draft',
+    subject: 'Your Property Predator briefing',
+    bodyText: 'Hi Martin,\n\nThis is bounded fixture copy for exact human review.\n\nProperty Predator',
+    source: {
+      system: 'propertypredator.company-content',
+      itemId: 'campaign-owned-seed-welcome',
+      version: 'draft-v1',
+    },
+    blob: { storageKey: 'company-content/campaign-owned-seed-welcome/v1', sha256: HASH_A },
+    brand: { snapshotRef: 'brand/property-predator/runtime-v1', sha256: HASH_B },
+    attestation: {
+      catalogSha256: '33'.repeat(32),
+      checkedAt: ATTESTATION_CHECKED_AT.toISOString(),
+      expiresAt: ATTESTATION_EXPIRES_AT.toISOString(),
+    },
+    metadata: {
+      fixture: true,
+      evidence: { brandBrain: 'property-predator-runtime-v1' },
+    },
+    ...overrides,
+  };
+}
+
 interface Receipt {
   id: string;
   name: string;
@@ -65,6 +98,7 @@ interface Version {
   kind: string;
   title: string;
   contentMimeType: string;
+  content: string;
   sourceSystem: string;
   sourceItemId: string;
   sourceVersion: string;
@@ -184,6 +218,7 @@ class InMemoryContentSql implements SqlExecutor {
         kind: String(values[5]),
         title: String(values[6]),
         contentMimeType: String(values[10]),
+        content: String(values[11]),
         sourceSystem: String(values[7]),
         sourceItemId: String(values[8]),
         sourceVersion: String(values[9]),
@@ -334,6 +369,42 @@ class InMemoryContentSql implements SqlExecutor {
           };
         }));
     }
+    if (sql.includes('company-content.load-exact-review')) {
+      const [itemId, versionId] = values.map(String);
+      const version = this.versions.find((candidate) => (
+        candidate.itemId === itemId && candidate.id === versionId
+      ));
+      if (!version) return this.rows<T>([]);
+      const latestNumber = Math.max(...this.versions
+        .filter((candidate) => candidate.itemId === itemId)
+        .map((candidate) => candidate.versionNumber));
+      const request = this.requests
+        .filter((candidate) => candidate.versionId === version.id)
+        .sort((left, right) => right.requestNumber - left.requestNumber)[0];
+      const decision = request ? this.decisions.get(request.id) : undefined;
+      return this.rows<T>([{
+        contentItemId: version.itemId,
+        contentVersionId: version.id,
+        versionNumber: version.versionNumber,
+        isLatest: version.versionNumber === latestNumber,
+        origin: version.origin,
+        kind: version.kind,
+        title: version.title,
+        contentMimeType: version.contentMimeType,
+        canonicalContent: version.content,
+        contentSha256: version.contentSha256,
+        sourceSystem: version.sourceSystem,
+        sourceItemId: version.sourceItemId,
+        sourceVersion: version.sourceVersion,
+        blobSha256: version.blobSha256,
+        brandSha256: version.brandSha256,
+        approvalRequestId: request?.id ?? null,
+        approvalDecisionId: decision?.id ?? null,
+        approvalStatus: decision?.decision ?? (request ? 'pending' : 'unrequested'),
+        approvalStale: Boolean(request) && version.versionNumber !== latestNumber,
+        createdAt: version.createdAt,
+      }]);
+    }
     if (sql.includes('company-content.list-catalog')) {
       const [cursorAt, cursorId, rawLimit, sourceSystem] = values as [
         string | null, string | null, number, string | null,
@@ -447,6 +518,90 @@ test('normalization computes exact content SHA and rejects malformed provenance 
       metadata: { oversized: 'x'.repeat(65_537) },
     })),
     /metadata must not exceed 65536 UTF-8 bytes/,
+  );
+});
+
+test('email draft persistence seals exact subject and body into one immutable reviewed version', async () => {
+  const database = new InMemoryContentSql();
+  const service = new CompanyContentService({
+    transactionRunner: runner(database),
+    nextId: ids(),
+    now: () => new Date('2026-08-28T14:00:00.000Z'),
+  });
+  const draft = emailCommand();
+  const expectedCanonical = canonicalCompanyContentEmailDraft(
+    draft.subject,
+    draft.bodyText,
+  );
+
+  const persisted = await service.createEmailDraftVersion(context, draft);
+  assert.equal(database.versions[0]?.kind, 'email');
+  assert.equal(database.versions[0]?.contentMimeType, COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE);
+  assert.equal(database.versions[0]?.content, expectedCanonical);
+  assert.equal(
+    persisted.contentSha256,
+    createHash('sha256').update(expectedCanonical, 'utf8').digest('hex'),
+  );
+
+  const review = await service.getExactReview(context, {
+    contentItemId: persisted.contentItemId,
+    contentVersionId: persisted.contentVersionId,
+  });
+  assert.ok(review);
+  assert.equal(review.canonicalContent, expectedCanonical);
+  assert.equal(review.canonicalByteLength, Buffer.byteLength(expectedCanonical, 'utf8'));
+  assert.deepEqual(review.email, {
+    schema: COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA,
+    subject: draft.subject,
+    bodyText: draft.bodyText,
+    subjectSha256: createHash('sha256').update(draft.subject, 'utf8').digest('hex'),
+    bodySha256: createHash('sha256').update(draft.bodyText, 'utf8').digest('hex'),
+  });
+  assert.equal(review.approvalStatus, 'unrequested');
+  assert.equal(review.isLatest, true);
+
+  await assert.rejects(
+    service.createEmailDraftVersion(context, emailCommand({ subject: 'Unsafe\r\nBcc: x@example.test' })),
+    CompanyContentValidationError,
+  );
+});
+
+test('exact review rejects a database body whose bytes do not match its immutable digest', async () => {
+  const executor: SqlExecutor = {
+    async query<T extends Record<string, unknown>>(): Promise<SqlResult<T>> {
+      return {
+        rows: [{
+          contentItemId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          contentVersionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          versionNumber: 1,
+          isLatest: true,
+          origin: 'generated',
+          kind: 'email',
+          title: 'Exact fixture',
+          contentMimeType: COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE,
+          canonicalContent: canonicalCompanyContentEmailDraft('Subject', 'Body'),
+          contentSha256: '99'.repeat(32),
+          sourceSystem: 'propertypredator.company-content',
+          sourceItemId: 'fixture',
+          sourceVersion: 'v1',
+          blobSha256: HASH_A,
+          brandSha256: HASH_B,
+          approvalRequestId: null,
+          approvalDecisionId: null,
+          approvalStatus: 'unrequested',
+          approvalStale: false,
+          createdAt: '2026-08-28T14:00:00.000Z',
+        }] as unknown as T[],
+        rowCount: 1,
+      };
+    },
+  };
+  await assert.rejects(
+    new CompanyContentPgRepository(executor).loadExactReview(
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    ),
+    /invalid canonical data/,
   );
 });
 

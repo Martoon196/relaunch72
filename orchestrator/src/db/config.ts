@@ -14,6 +14,8 @@ export const DATABASE_ROLES = [
   'mailgunWorkerCommand',
   'mailgunWebhookCommand',
   'testInboxWebhookCommand',
+  'ownedSeedMessageCommand',
+  'ownedSeedCampaignCommand',
   'publicSocialCommand',
   'publicSocialWorkerCommand',
   'publicSocialRevalidatorCommand',
@@ -42,6 +44,8 @@ const ROLE_URL_ENV: Record<DatabaseRole, string> = {
   mailgunWorkerCommand: 'DATABASE_MAILGUN_WORKER_URL',
   mailgunWebhookCommand: 'DATABASE_MAILGUN_WEBHOOK_URL',
   testInboxWebhookCommand: 'DATABASE_TEST_INBOX_WEBHOOK_URL',
+  ownedSeedMessageCommand: 'DATABASE_OWNED_SEED_MESSAGE_URL',
+  ownedSeedCampaignCommand: 'DATABASE_OWNED_SEED_CAMPAIGN_URL',
   publicSocialCommand: 'DATABASE_PUBLIC_SOCIAL_COMMAND_URL',
   publicSocialWorkerCommand: 'DATABASE_PUBLIC_SOCIAL_WORKER_URL',
   publicSocialRevalidatorCommand: 'DATABASE_PUBLIC_SOCIAL_REVALIDATOR_URL',
@@ -66,6 +70,8 @@ const EXPECTED_RUNTIME_USER: Partial<Record<DatabaseRole, string>> = {
   mailgunWorkerCommand: 'r72_mailgun_worker_command',
   mailgunWebhookCommand: 'r72_mailgun_webhook_command',
   testInboxWebhookCommand: 'r72_test_inbox_webhook_command',
+  ownedSeedMessageCommand: 'r72_owned_seed_message_command',
+  ownedSeedCampaignCommand: 'r72_owned_seed_campaign_command',
   publicSocialCommand: 'r72_public_social_command',
   publicSocialWorkerCommand: 'r72_public_social_worker_command',
   publicSocialRevalidatorCommand: 'r72_public_social_revalidator_command',
@@ -210,8 +216,12 @@ export function loadDatabaseConfig(
                 ? 'DATABASE_MAILGUN_WEBHOOK_POOL_MAX'
                 : role === 'testInboxWebhookCommand'
                   ? 'DATABASE_TEST_INBOX_WEBHOOK_POOL_MAX'
-                  : role === 'publicSocialCommand'
-                    ? 'DATABASE_PUBLIC_SOCIAL_COMMAND_POOL_MAX'
+                  : role === 'ownedSeedMessageCommand'
+                    ? 'DATABASE_OWNED_SEED_MESSAGE_POOL_MAX'
+                    : role === 'ownedSeedCampaignCommand'
+                      ? 'DATABASE_OWNED_SEED_CAMPAIGN_POOL_MAX'
+                    : role === 'publicSocialCommand'
+                      ? 'DATABASE_PUBLIC_SOCIAL_COMMAND_POOL_MAX'
                   : role === 'publicSocialWorkerCommand'
                       ? 'DATABASE_PUBLIC_SOCIAL_WORKER_POOL_MAX'
                     : role === 'publicSocialRevalidatorCommand'
@@ -283,8 +293,12 @@ export function loadDatabaseConfig(
                   ? 'property-predator-mailgun-webhook-command'
                   : role === 'testInboxWebhookCommand'
                     ? 'property-predator-test-inbox-webhook-command'
-                    : role === 'publicSocialCommand'
-                      ? 'property-predator-public-social-command'
+                    : role === 'ownedSeedMessageCommand'
+                      ? 'property-predator-owned-seed-message-command'
+                      : role === 'ownedSeedCampaignCommand'
+                        ? 'property-predator-owned-seed-campaign-command'
+                      : role === 'publicSocialCommand'
+                        ? 'property-predator-public-social-command'
                       : role === 'publicSocialWorkerCommand'
                         ? 'property-predator-public-social-worker-command'
                       : role === 'publicSocialRevalidatorCommand'

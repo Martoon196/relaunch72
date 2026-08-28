@@ -10,10 +10,13 @@ import {
   CompanyContentVersionConflictError,
   type CompanyContentCatalogPage,
   type CompanyContentCatalogQuery,
+  type CompanyContentExactReview,
+  type CompanyContentExactReviewQuery,
   type CompanyContentServiceDependencies,
   type CompanyContentVersionApprovalState,
   type CreateCompanyContentVersionCommand,
   type CreateCompanyContentVersionResult,
+  type CreateCompanyContentEmailDraftVersionCommand,
   type DecideCompanyContentApprovalCommand,
   type DecideCompanyContentApprovalResult,
   type RefreshCompanyContentSourceAttestationCommand,
@@ -22,6 +25,7 @@ import {
   type RequestCompanyContentApprovalResult,
 } from './types.js';
 import {
+  companyContentEmailDraftVersionCommand,
   companyContentRequestHash,
   normalizeApprovalDecisionCommand,
   normalizeApprovalRequestCommand,
@@ -258,6 +262,17 @@ export class CompanyContentService {
       }
       return translateContentWriteError(error);
     }
+  }
+
+  /**
+   * Persists subject and body as one canonical, immutable content value. This
+   * is intentionally an internal service seam, not a provider send operation.
+   */
+  async createEmailDraftVersion(
+    context: DatabaseRequestContext,
+    command: CreateCompanyContentEmailDraftVersionCommand,
+  ): Promise<CreateCompanyContentVersionResult> {
+    return this.createVersion(context, companyContentEmailDraftVersionCommand(command));
   }
 
   async requestApproval(
@@ -497,6 +512,26 @@ export class CompanyContentService {
     return this.dependencies.transactionRunner.run(context, async (transaction) => {
       const repository = new CompanyContentPgRepository(transaction);
       return repository.listVersionApprovalStates(contentItemId.toLowerCase());
+    }, { readOnly: true });
+  }
+
+  async getExactReview(
+    context: DatabaseRequestContext,
+    query: CompanyContentExactReviewQuery,
+  ): Promise<CompanyContentExactReview | null> {
+    validateCompanyContentUserContext(context);
+    if (!query || typeof query !== 'object'
+        || !UUID.test(query.contentItemId) || !UUID.test(query.contentVersionId)) {
+      throw new CompanyContentValidationError(
+        'Exact review requires a content item UUID and immutable version UUID',
+      );
+    }
+    return this.dependencies.transactionRunner.run(context, async (transaction) => {
+      const repository = new CompanyContentPgRepository(transaction);
+      return repository.loadExactReview(
+        query.contentItemId.toLowerCase(),
+        query.contentVersionId.toLowerCase(),
+      );
     }, { readOnly: true });
   }
 

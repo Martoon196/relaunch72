@@ -24,15 +24,23 @@ import {
 import type {
   PortalCompanyContentFailure,
   PortalCompanyContentRequestIdentity,
+  PortalCompanyContentReviewInput,
+  PortalCompanyContentReviewOutcome,
   PortalCompanyContentService,
   PortalCompanyContentSnapshotOutcome,
   PortalCompanyContentWorkspaceAccess,
+  PortalCreateCompanyContentEmailDraftVersionInput,
+  PortalCreateCompanyContentEmailDraftVersionOutcome,
   PortalDecideCompanyContentApprovalInput,
+  PortalDecideExactReviewedCompanyContentApprovalInput,
   PortalDecideCompanyContentApprovalOutcome,
   PortalRequestCompanyContentApprovalInput,
   PortalRequestCompanyContentApprovalOutcome,
 } from './company-content-service.js';
-import { PORTAL_COMPANY_CONTENT_REVIEW_REPRESENTATION_AVAILABLE } from './company-content-service.js';
+import {
+  PORTAL_COMPANY_CONTENT_EXACT_REVIEW_AVAILABLE,
+  PORTAL_COMPANY_CONTENT_REVIEW_REPRESENTATION_AVAILABLE,
+} from './company-content-service.js';
 
 interface WorkspaceAccessRow extends QueryResultRow {
   readonly workspaceId: unknown;
@@ -110,9 +118,12 @@ export interface PgPortalCompanyContentDependencies {
   readonly principalResolver: Pick<PortalCrmPrincipalResolver, 'resolve'>;
   readonly accessReader: PortalCompanyContentWorkspaceAccessReader;
   /** Must use the web/read database role in production. */
-  readonly readService: Pick<CompanyContentServiceShape, 'listCatalog'>;
+  readonly readService: Pick<CompanyContentServiceShape, 'listCatalog'>
+    & Partial<Pick<CompanyContentServiceShape, 'getExactReview'>>;
   /** Must use the dedicated company-content command role in production. */
   readonly commandService: Pick<CompanyContentServiceShape, 'requestApproval' | 'decideApproval'>;
+  /** Must use the append-only company-content adapter role; never r72_web or r72_content_command. */
+  readonly draftService?: Pick<CompanyContentServiceShape, 'createEmailDraftVersion'>;
 }
 
 function databaseContext(
@@ -170,7 +181,7 @@ function readFailure(error: unknown): PortalCompanyContentFailure {
     return failure('unauthenticated', 'This portal session is no longer active.');
   }
   if (error instanceof CompanyContentValidationError) {
-    return failure('validation', 'The content catalogue request is invalid. Refresh the page and try again.');
+    return failure('validation', 'The company content request is invalid. Refresh the page and try again.');
   }
   if (postgresCode(error) === '42501') {
     return failure('forbidden', 'Your workspace role cannot read this company content catalogue.');
@@ -179,7 +190,7 @@ function readFailure(error: unknown): PortalCompanyContentFailure {
 }
 
 function reviewSafeCatalog(catalog: CompanyContentCatalogPage): CompanyContentCatalogPage {
-  if (PORTAL_COMPANY_CONTENT_REVIEW_REPRESENTATION_AVAILABLE
+  if (PORTAL_COMPANY_CONTENT_EXACT_REVIEW_AVAILABLE
       || !catalog.items.some((item) => item.publishable)) return catalog;
   return Object.freeze({
     ...catalog,
@@ -222,6 +233,34 @@ export class PgPortalCompanyContentService implements PortalCompanyContentServic
     }
   }
 
+  async review(
+    identity: PortalCompanyContentRequestIdentity,
+    input: PortalCompanyContentReviewInput,
+  ): Promise<PortalCompanyContentReviewOutcome> {
+    try {
+      const context = await this.context(identity);
+      if (!context) return failure('unauthenticated', 'This portal session is no longer active.');
+      const workspace = await this.dependencies.accessReader.load(context);
+      if (!workspace) {
+        return failure('forbidden', 'This workspace is not available to the current portal session.');
+      }
+      const exactReview = this.dependencies.readService.getExactReview;
+      if (!exactReview) {
+        return failure('review_unavailable', 'Exact company content review is temporarily unavailable.');
+      }
+      const review = await exactReview.call(this.dependencies.readService, context, input);
+      if (!review) {
+        return failure('not_found', 'That exact content version is not available in this workspace.');
+      }
+      return Object.freeze({
+        ok: true,
+        snapshot: Object.freeze({ workspace, review }),
+      });
+    } catch (error) {
+      return readFailure(error);
+    }
+  }
+
   async requestApproval(
     identity: PortalCompanyContentRequestIdentity,
     input: PortalRequestCompanyContentApprovalInput,
@@ -235,6 +274,29 @@ export class PgPortalCompanyContentService implements PortalCompanyContentServic
         return failure('forbidden', 'Your workspace role has read-only company content access.');
       }
       const result = await this.dependencies.commandService.requestApproval(context, input);
+      return Object.freeze({ ok: true, ...result });
+    } catch (error) {
+      return commandFailure(error);
+    }
+  }
+
+  async createEmailDraftVersion(
+    identity: PortalCompanyContentRequestIdentity,
+    input: PortalCreateCompanyContentEmailDraftVersionInput,
+  ): Promise<PortalCreateCompanyContentEmailDraftVersionOutcome> {
+    try {
+      const context = await this.context(identity);
+      if (!context) return failure('unauthenticated', 'This portal session is no longer active.');
+      const access = await this.dependencies.accessReader.load(context);
+      if (!access) return failure('forbidden', 'This workspace is not available to the current portal session.');
+      if (!access.canManage) {
+        return failure('forbidden', 'Only a workspace owner or admin can persist campaign email drafts.');
+      }
+      const createEmailDraft = this.dependencies.draftService?.createEmailDraftVersion;
+      if (!createEmailDraft) {
+        return failure('unavailable', 'Email draft persistence is temporarily unavailable.');
+      }
+      const result = await createEmailDraft.call(this.dependencies.draftService, context, input);
       return Object.freeze({ ok: true, ...result });
     } catch (error) {
       return commandFailure(error);
@@ -266,6 +328,50 @@ export class PgPortalCompanyContentService implements PortalCompanyContentServic
       return commandFailure(error);
     }
   }
+
+  async decideExactReviewedApproval(
+    identity: PortalCompanyContentRequestIdentity,
+    input: PortalDecideExactReviewedCompanyContentApprovalInput,
+  ): Promise<PortalDecideCompanyContentApprovalOutcome> {
+    try {
+      const context = await this.context(identity);
+      if (!context) return failure('unauthenticated', 'This portal session is no longer active.');
+      const access = await this.dependencies.accessReader.load(context);
+      if (!access) return failure('forbidden', 'This workspace is not available to the current portal session.');
+      if (!access.canManage) {
+        return failure('forbidden', 'Only a workspace owner or admin can decide company content approvals.');
+      }
+      const exactReview = this.dependencies.readService.getExactReview;
+      if (!exactReview) {
+        return failure('review_unavailable', 'Exact company content review is temporarily unavailable.');
+      }
+      const review = await exactReview.call(this.dependencies.readService, context, {
+        contentItemId: input.contentItemId,
+        contentVersionId: input.contentVersionId,
+      });
+      if (!review
+          || review.contentItemId !== input.contentItemId.toLowerCase()
+          || review.contentVersionId !== input.contentVersionId.toLowerCase()
+          || review.contentSha256 !== input.contentSha256.toLowerCase()
+          || review.approvalStatus !== 'pending'
+          || review.approvalStale
+          || review.approvalRequestId !== input.approvalRequestId.toLowerCase()) {
+        return failure(
+          'review_unavailable',
+          'The exact reviewed version or pending approval changed. Refresh before approving.',
+        );
+      }
+      const result = await this.dependencies.commandService.decideApproval(context, {
+        commandKey: input.commandKey,
+        approvalRequestId: input.approvalRequestId,
+        decision: 'approved',
+        decisionNote: input.decisionNote,
+      });
+      return Object.freeze({ ok: true, ...result });
+    } catch (error) {
+      return commandFailure(error);
+    }
+  }
 }
 
 /**
@@ -276,6 +382,7 @@ export class PgPortalCompanyContentService implements PortalCompanyContentServic
 export function createPgPortalCompanyContentService(input: {
   readonly webPool: Pool;
   readonly commandPool: Pool;
+  readonly adapterPool?: Pool;
 }): PgPortalCompanyContentService {
   const webRunner = createCompanyContentTransactionRunner(input.webPool);
   return new PgPortalCompanyContentService({
@@ -285,5 +392,8 @@ export function createPgPortalCompanyContentService(input: {
     commandService: new CompanyContentService({
       transactionRunner: createCompanyContentTransactionRunner(input.commandPool),
     }),
+    draftService: input.adapterPool ? new CompanyContentService({
+      transactionRunner: createCompanyContentTransactionRunner(input.adapterPool),
+    }) : undefined,
   });
 }

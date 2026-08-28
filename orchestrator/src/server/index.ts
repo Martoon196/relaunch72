@@ -490,6 +490,8 @@ async function main(): Promise<void> {
         publicSocial: postgresPortal.publicSocial,
         inbox: postgresPortal.inbox,
         inboxCommands: postgresPortal.inboxCommands,
+        ownedSeedCampaign: postgresPortal.ownedSeedCampaign,
+        ownedSeedMessages: postgresPortal.ownedSeedMessages,
         productProfile: portalProductProfile,
       });
       console.log(`Canonical PostgreSQL client portal mounted at /portal; JSON portal stores are not composed; Property Predator SSO ${propertyPredatorSso ? 'ready' : 'disabled'}.`);

@@ -20,7 +20,7 @@ const MILESTONE_SEMANTICS = [
 ] as const;
 const EVIDENCE_KINDS = [
   'watched', 'listened', 'read', 'downloaded', 'product', 'offer', 'reply',
-  'appointment', 'commerce',
+  'appointment', 'commerce', 'email',
 ] as const;
 const OFFER_RESPONSES = [
   'accepted', 'declined', 'deferred', 'requested_contact',
@@ -597,6 +597,42 @@ const EVIDENCE_SQL = `/* conversion.lead-360.read-evidence */
     FROM app.conversion_commerce_facts AS commerce
     WHERE commerce.workspace_id = app_private.current_workspace_id()
       AND commerce.contact_id = $1::uuid
+    UNION ALL
+    SELECT delivery.workspace_id,
+           delivery.contact_id,
+           receipt.id,
+           'email'::text,
+           CASE receipt.delivery_status
+             WHEN 'accepted' THEN 'Property Predator email accepted'
+             WHEN 'delivered' THEN 'Property Predator email delivered'
+             WHEN 'read' THEN 'Property Predator email opened'
+             ELSE 'Property Predator email failed'
+           END,
+           coalesce(conversation.subject, 'Approved Property Predator email'),
+           NULL::text,
+           receipt.occurred_at,
+           'Mailgun · signed receipt'::text
+    FROM app.provider_operation_receipts AS receipt
+    JOIN app.message_deliveries AS delivery
+      ON delivery.workspace_id = app_private.current_workspace_id()
+     AND delivery.provider_operation_id = receipt.provider_operation_id
+     AND delivery.id = receipt.message_delivery_id
+     AND delivery.contact_id = $1::uuid
+     AND delivery.conversation_channel = 'email'
+     AND delivery.environment = 'live'
+    JOIN app.conversations AS conversation
+      ON conversation.workspace_id = app_private.current_workspace_id()
+     AND conversation.id = delivery.conversation_id
+     AND conversation.contact_id = $1::uuid
+     AND conversation.channel = 'email'
+     AND conversation.environment = 'live'
+    JOIN app.provider_connections AS connection
+      ON connection.workspace_id = app_private.current_workspace_id()
+     AND connection.id = delivery.provider_connection_id
+     AND connection.provider_id = 'mailgun_eu'
+     AND connection.environment = 'live'
+    WHERE receipt.workspace_id = app_private.current_workspace_id()
+      AND receipt.source_kind = 'verified_webhook'
   )
   SELECT workspace_id,
          contact_id,

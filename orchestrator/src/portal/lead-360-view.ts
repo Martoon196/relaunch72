@@ -20,7 +20,8 @@ export type Lead360EvidenceKind =
   | 'offer'
   | 'reply'
   | 'appointment'
-  | 'commerce';
+  | 'commerce'
+  | 'email';
 export type Lead360OfferState = 'presented' | 'accepted' | 'declined' | 'deferred' | 'requested_contact' | 'expired' | 'no_response';
 export type Lead360ConsentState = 'permitted' | 'denied' | 'unknown' | 'withdrawn' | 'suppressed';
 export type Lead360CrmState = 'open' | 'won' | 'lost' | 'complete';
@@ -142,6 +143,7 @@ const EVIDENCE_LABELS: Readonly<Record<Lead360EvidenceKind, string>> = Object.fr
   reply: 'Reply',
   appointment: 'Appointment',
   commerce: 'Commerce',
+  email: 'Email',
 });
 
 const OFFER_LABELS: Readonly<Record<Lead360OfferState, string>> = Object.freeze({

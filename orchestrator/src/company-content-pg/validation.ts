@@ -2,15 +2,23 @@ import { createHash } from 'node:crypto';
 import type { DatabaseRequestContext } from '../db/rls.js';
 import { validateDatabaseContext } from '../db/rls.js';
 import {
+  COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE,
+  COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA,
   CompanyContentValidationError,
+  type CompanyContentEmailDraftPayload,
   type CompanyContentApprovalDecision,
   type CompanyContentKind,
   type CompanyContentOrigin,
+  type CreateCompanyContentEmailDraftVersionCommand,
   type CreateCompanyContentVersionCommand,
   type DecideCompanyContentApprovalCommand,
   type RefreshCompanyContentSourceAttestationCommand,
   type RequestCompanyContentApprovalCommand,
 } from './types.js';
+import {
+  COMPANY_CONTENT_DEFAULT_ATTESTATION_MAX_AGE_MS,
+  companyContentAttestationMaxAgeMs,
+} from './property-predator-owned-seed-attestation-policy.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -116,6 +124,97 @@ export function canonicalCompanyContentJson(value: unknown): string {
   return jsonValue(value, 'value', new Set<object>());
 }
 
+const EMAIL_SUBJECT_UNSAFE = /[\r\n\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/u;
+const EMAIL_BODY_UNSAFE = /[\u0000\u202a-\u202e\u2066-\u2069]/u;
+
+function emailSubject(value: unknown): string {
+  if (typeof value !== 'string' || value !== value.trim()
+      || value.length < 1 || value.length > 500 || EMAIL_SUBJECT_UNSAFE.test(value)) {
+    throw new CompanyContentValidationError(
+      'subject must be one safe trimmed line containing 1-500 characters',
+    );
+  }
+  return value;
+}
+
+function emailBody(value: unknown): string {
+  if (typeof value !== 'string' || value.trim().length < 1
+      || Buffer.byteLength(value, 'utf8') > 900_000 || EMAIL_BODY_UNSAFE.test(value)) {
+    throw new CompanyContentValidationError(
+      'bodyText must contain 1-900000 safe UTF-8 bytes',
+    );
+  }
+  return value;
+}
+
+/** Build the only canonical email payload accepted by the exact-review parser. */
+export function canonicalCompanyContentEmailDraft(
+  subject: unknown,
+  bodyText: unknown,
+): string {
+  return canonicalCompanyContentJson(Object.freeze<CompanyContentEmailDraftPayload>({
+    schema: COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA,
+    subject: emailSubject(subject),
+    bodyText: emailBody(bodyText),
+  }));
+}
+
+/**
+ * Converts generated or operator-provided copy into the generic immutable
+ * version command without placing the subject outside the hashed content body.
+ */
+export function companyContentEmailDraftVersionCommand(
+  command: CreateCompanyContentEmailDraftVersionCommand,
+): CreateCompanyContentVersionCommand {
+  if (!command || typeof command !== 'object') {
+    throw new CompanyContentValidationError('Company content email draft command is required');
+  }
+  return Object.freeze({
+    commandKey: command.commandKey,
+    contentItemId: command.contentItemId,
+    previousVersionId: command.previousVersionId,
+    origin: command.origin,
+    kind: 'email' as const,
+    title: command.title,
+    contentMimeType: COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE,
+    content: canonicalCompanyContentEmailDraft(command.subject, command.bodyText),
+    source: command.source,
+    blob: command.blob,
+    brand: command.brand,
+    attestation: command.attestation,
+    metadata: command.metadata,
+  });
+}
+
+/** Strict parser: extra/missing fields fail closed instead of becoming review copy. */
+export function parseCompanyContentEmailDraft(
+  canonicalContent: string,
+): CompanyContentEmailDraftPayload {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(canonicalContent) as unknown;
+  } catch {
+    throw new CompanyContentValidationError('Email draft content is not valid canonical JSON');
+  }
+  if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)
+      || Object.keys(decoded).sort().join(',') !== 'bodyText,schema,subject') {
+    throw new CompanyContentValidationError('Email draft content has an invalid shape');
+  }
+  const candidate = decoded as Record<string, unknown>;
+  if (candidate.schema !== COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA) {
+    throw new CompanyContentValidationError('Email draft content has an invalid schema');
+  }
+  const payload = Object.freeze<CompanyContentEmailDraftPayload>({
+    schema: COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA,
+    subject: emailSubject(candidate.subject),
+    bodyText: emailBody(candidate.bodyText),
+  });
+  if (canonicalCompanyContentJson(payload) !== canonicalContent) {
+    throw new CompanyContentValidationError('Email draft content is not canonical');
+  }
+  return payload;
+}
+
 function deepFreezeCanonicalJson(value: unknown): unknown {
   if (Array.isArray(value)) {
     for (const child of value) deepFreezeCanonicalJson(child);
@@ -200,6 +299,8 @@ export function normalizeCompanyContentVersionCommand(
   if (!SOURCE_SYSTEM.test(sourceSystem)) {
     throw new CompanyContentValidationError('source.system is invalid');
   }
+  const sourceItemId = exactText(command.source?.itemId, 'source.itemId', 500);
+  const sourceVersion = exactText(command.source?.version, 'source.version', 500);
   const metadata = command.metadata ?? {};
   if (typeof metadata !== 'object' || metadata === null || Array.isArray(metadata)) {
     throw new CompanyContentValidationError('metadata must be a JSON object');
@@ -211,15 +312,25 @@ export function normalizeCompanyContentVersionCommand(
   const metadataSnapshot = deepFreezeCanonicalJson(
     JSON.parse(canonicalMetadata) as unknown,
   ) as Readonly<Record<string, unknown>>;
+  const contentSha256 = createHash('sha256').update(command.content, 'utf8').digest('hex');
   const sourceCheckedAt = timestamp(command.attestation?.checkedAt, 'attestation.checkedAt');
   const sourceExpiresAt = timestamp(command.attestation?.expiresAt, 'attestation.expiresAt');
   if (sourceExpiresAt <= sourceCheckedAt) {
     throw new CompanyContentValidationError('attestation.expiresAt must be after checkedAt');
   }
+  const attestationMaxAgeMs = companyContentAttestationMaxAgeMs({
+    sourceSystem,
+    sourceItemId,
+    sourceVersion,
+    contentSha256,
+    metadata: metadataSnapshot,
+  });
   if (new Date(sourceExpiresAt).getTime() - new Date(sourceCheckedAt).getTime()
-      > 15 * 60 * 1_000) {
+      > attestationMaxAgeMs) {
     throw new CompanyContentValidationError(
-      'Source attestation freshness may not exceed 15 minutes',
+      attestationMaxAgeMs === COMPANY_CONTENT_DEFAULT_ATTESTATION_MAX_AGE_MS
+        ? 'Source attestation freshness may not exceed 15 minutes'
+        : 'Owned-seed proof attestation freshness may not exceed 24 hours',
     );
   }
   return Object.freeze({
@@ -232,8 +343,8 @@ export function normalizeCompanyContentVersionCommand(
     contentMimeType,
     content: command.content,
     sourceSystem,
-    sourceItemId: exactText(command.source?.itemId, 'source.itemId', 500),
-    sourceVersion: exactText(command.source?.version, 'source.version', 500),
+    sourceItemId,
+    sourceVersion,
     blobStorageKey: exactText(command.blob?.storageKey, 'blob.storageKey', 1024),
     blobSha256: digest(command.blob?.sha256, 'blob.sha256'),
     brandSnapshotRef: exactText(command.brand?.snapshotRef, 'brand.snapshotRef', 1024),
@@ -245,7 +356,7 @@ export function normalizeCompanyContentVersionCommand(
     sourceCheckedAt,
     sourceExpiresAt,
     metadata: metadataSnapshot,
-    contentSha256: createHash('sha256').update(command.content, 'utf8').digest('hex'),
+    contentSha256,
   });
 }
 
@@ -280,7 +391,7 @@ export function normalizeRefreshCompanyContentSourceAttestationCommand(
     throw new CompanyContentValidationError('attestation.expiresAt must be after checkedAt');
   }
   if (new Date(sourceExpiresAt).getTime() - new Date(sourceCheckedAt).getTime()
-      > 15 * 60 * 1_000) {
+      > COMPANY_CONTENT_DEFAULT_ATTESTATION_MAX_AGE_MS) {
     throw new CompanyContentValidationError(
       'Source attestation freshness may not exceed 15 minutes',
     );

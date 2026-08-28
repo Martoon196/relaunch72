@@ -4,6 +4,7 @@ export const CONTENT_APPROVAL_REQUEST_ROUTE = '/portal/content/approval-requests
 export const CONTENT_APPROVAL_DECISION_ROUTE = '/portal/content/approval-decisions' as const;
 
 export type ContentControlNoticeCode =
+  | 'draft_created'
   | 'requested'
   | 'approved'
   | 'rejected'
@@ -23,10 +24,86 @@ export interface ContentControlNoticeView {
 }
 
 const NOTICE_CODES = new Set<ContentControlNoticeCode>([
-  'requested', 'approved', 'rejected', 'changes_requested', 'replayed',
+  'draft_created', 'requested', 'approved', 'rejected', 'changes_requested', 'replayed',
   'forbidden', 'conflict', 'missing', 'invalid', 'review_unavailable', 'unavailable',
 ]);
 const NOTICE_CONTEXT = 'relaunch72:content-control-notice:v1\0';
+const EXACT_REVIEW_APPROVAL_CONTEXT = 'relaunch72:content-control-exact-review-approval:v1\0';
+const EXACT_REVIEW_APPROVAL_TTL_MS = 15 * 60 * 1_000;
+
+export interface ExactReviewApprovalTokenInput {
+  readonly contentItemId: string;
+  readonly contentVersionId: string;
+  readonly approvalRequestId: string;
+  readonly contentSha256: string;
+}
+
+function exactReviewApprovalPayload(
+  input: ExactReviewApprovalTokenInput,
+  expiresAt: number,
+): string {
+  return [
+    input.contentItemId.toLowerCase(),
+    input.contentVersionId.toLowerCase(),
+    input.approvalRequestId.toLowerCase(),
+    input.contentSha256.toLowerCase(),
+    String(expiresAt),
+  ].join('.');
+}
+
+function exactReviewApprovalMac(
+  secret: string,
+  sessionToken: string,
+  payload: string,
+): string {
+  return createHmac('sha256', secret)
+    .update(EXACT_REVIEW_APPROVAL_CONTEXT)
+    .update(sessionToken)
+    .update('\0')
+    .update(payload)
+    .digest('base64url');
+}
+
+/**
+ * Short-lived capability emitted only beside the complete immutable review.
+ * It is bound to this portal session, exact version, request and content hash;
+ * the summary page cannot mint or reuse it.
+ */
+export function exactReviewApprovalToken(
+  secret: string,
+  sessionToken: string,
+  input: ExactReviewApprovalTokenInput,
+  now: number,
+): string {
+  if (!secret || !sessionToken || !Number.isFinite(now)) return '';
+  const expiresAt = Math.floor(now + EXACT_REVIEW_APPROVAL_TTL_MS);
+  const payload = exactReviewApprovalPayload(input, expiresAt);
+  return `${payload}.${exactReviewApprovalMac(secret, sessionToken, payload)}`;
+}
+
+export function verifyExactReviewApprovalToken(
+  secret: string,
+  sessionToken: string,
+  supplied: string | undefined,
+  input: ExactReviewApprovalTokenInput,
+  now: number,
+): boolean {
+  if (!secret || !sessionToken || !supplied || supplied.length > 768 || !Number.isFinite(now)) return false;
+  const parts = supplied.split('.');
+  if (parts.length !== 6) return false;
+  const [contentItemId, contentVersionId, approvalRequestId, contentSha256, rawExpiry, actualMac] = parts;
+  const expiresAt = Number(rawExpiry);
+  if (!contentItemId || !contentVersionId || !approvalRequestId || !contentSha256
+      || !actualMac || !Number.isSafeInteger(expiresAt)
+      || expiresAt < now || expiresAt > now + EXACT_REVIEW_APPROVAL_TTL_MS) return false;
+  const expectedPayload = exactReviewApprovalPayload(input, expiresAt);
+  const suppliedPayload = [contentItemId, contentVersionId, approvalRequestId, contentSha256, rawExpiry].join('.');
+  if (suppliedPayload !== expectedPayload) return false;
+  const expectedMac = exactReviewApprovalMac(secret, sessionToken, expectedPayload);
+  const actualBytes = Buffer.from(actualMac);
+  const expectedBytes = Buffer.from(expectedMac);
+  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+}
 
 function noticeMac(secret: string, sessionToken: string, code: ContentControlNoticeCode): string {
   return createHmac('sha256', secret)
@@ -47,6 +124,11 @@ export function contentControlNoticeToken(
 }
 
 function noticeFor(code: ContentControlNoticeCode): ContentControlNoticeView {
+  if (code === 'draft_created') return {
+    kind: 'success',
+    title: 'Owned-seed proof draft created',
+    message: 'The exact internal subject and body are immutable and ready for human review. Nothing was sent.',
+  };
   if (code === 'requested') return {
     kind: 'success',
     title: 'Exact version submitted',

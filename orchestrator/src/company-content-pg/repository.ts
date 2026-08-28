@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Pool, QueryResultRow } from 'pg';
 import type { DatabaseRequestContext } from '../db/rls.js';
 import { withTransaction } from '../db/transaction.js';
@@ -8,15 +9,18 @@ import type {
   CompanyContentCatalogApprovalStatus,
   CompanyContentCatalogCursor,
   CompanyContentCatalogItem,
+  CompanyContentExactReview,
   CompanyContentKind,
   CompanyContentOrigin,
   CompanyContentTransactionRunner,
   CompanyContentVersionApprovalState,
 } from './types.js';
+import { COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE } from './types.js';
 import type {
   NormalizedCompanyContentVersionCommand,
   NormalizedRefreshCompanyContentSourceAttestationCommand,
 } from './validation.js';
+import { parseCompanyContentEmailDraft } from './validation.js';
 
 interface ReceiptRow extends QueryResultRow {
   id: string;
@@ -138,6 +142,29 @@ interface CatalogRow extends QueryResultRow {
   createdAt: string;
 }
 
+interface ExactReviewRow extends QueryResultRow {
+  contentItemId: string;
+  contentVersionId: string;
+  versionNumber: number | string;
+  isLatest: boolean;
+  origin: CompanyContentOrigin;
+  kind: CompanyContentKind;
+  title: string;
+  contentMimeType: string;
+  canonicalContent: string;
+  contentSha256: string;
+  sourceSystem: string;
+  sourceItemId: string;
+  sourceVersion: string;
+  blobSha256: string;
+  brandSha256: string;
+  approvalRequestId: string | null;
+  approvalDecisionId: string | null;
+  approvalStatus: CompanyContentApprovalStatus;
+  approvalStale: boolean;
+  createdAt: string;
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const SAFE_DISPLAY_TEXT = /^[^\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u202a-\u202e\u2066-\u2069]+$/u;
@@ -149,6 +176,84 @@ const CONTENT_KINDS = new Set<CompanyContentKind>([
 const CATALOG_APPROVAL_STATUSES = new Set<CompanyContentCatalogApprovalStatus>([
   'unrequested', 'pending', 'approved', 'rejected', 'changes_requested', 'stale',
 ]);
+const APPROVAL_STATUSES = new Set<CompanyContentApprovalStatus>([
+  'unrequested', 'pending', 'approved', 'rejected', 'changes_requested',
+]);
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+function exactReview(row: ExactReviewRow): CompanyContentExactReview {
+  const versionNumber = Number(row.versionNumber);
+  const canonicalByteLength = typeof row.canonicalContent === 'string'
+    ? Buffer.byteLength(row.canonicalContent, 'utf8') : -1;
+  const computedContentSha256 = typeof row.canonicalContent === 'string'
+    ? sha256(row.canonicalContent) : '';
+  if (!UUID.test(row.contentItemId) || !UUID.test(row.contentVersionId)
+      || !Number.isSafeInteger(versionNumber) || versionNumber < 1
+      || typeof row.isLatest !== 'boolean' || !CONTENT_ORIGINS.has(row.origin)
+      || !CONTENT_KINDS.has(row.kind)
+      || typeof row.title !== 'string' || row.title !== row.title.trim()
+      || row.title.length < 1 || row.title.length > 300
+      || !SAFE_DISPLAY_TEXT.test(row.title)
+      || typeof row.contentMimeType !== 'string'
+      || row.contentMimeType !== row.contentMimeType.trim().toLowerCase()
+      || row.contentMimeType.length < 3 || row.contentMimeType.length > 100
+      || canonicalByteLength < 1 || canonicalByteLength > 1_048_576
+      || !SHA256.test(row.contentSha256) || row.contentSha256 !== computedContentSha256
+      || typeof row.sourceSystem !== 'string' || row.sourceSystem.length < 1
+      || typeof row.sourceItemId !== 'string' || row.sourceItemId.length < 1
+      || typeof row.sourceVersion !== 'string' || row.sourceVersion.length < 1
+      || !SHA256.test(row.blobSha256) || !SHA256.test(row.brandSha256)
+      || (row.approvalRequestId !== null && !UUID.test(row.approvalRequestId))
+      || (row.approvalDecisionId !== null && !UUID.test(row.approvalDecisionId))
+      || !APPROVAL_STATUSES.has(row.approvalStatus)
+      || (row.approvalRequestId === null && row.approvalStatus !== 'unrequested')
+      || (row.approvalRequestId === null && row.approvalStale)
+      || (row.approvalRequestId !== null && row.approvalDecisionId === null
+        && row.approvalStatus !== 'pending')
+      || (row.approvalDecisionId !== null
+        && !['approved', 'rejected', 'changes_requested'].includes(row.approvalStatus))
+      || typeof row.approvalStale !== 'boolean'
+      || (row.approvalStale && row.isLatest)
+      || !Number.isFinite(Date.parse(row.createdAt))) {
+    throw new Error('Company content exact review returned invalid canonical data');
+  }
+  const emailPayload = row.kind === 'email'
+    && row.contentMimeType === COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE
+    ? parseCompanyContentEmailDraft(row.canonicalContent) : null;
+  return Object.freeze({
+    contentItemId: row.contentItemId,
+    contentVersionId: row.contentVersionId,
+    versionNumber,
+    isLatest: row.isLatest,
+    origin: row.origin,
+    kind: row.kind,
+    title: row.title,
+    contentMimeType: row.contentMimeType,
+    canonicalContent: row.canonicalContent,
+    canonicalByteLength,
+    contentSha256: row.contentSha256,
+    source: Object.freeze({
+      system: row.sourceSystem,
+      itemId: row.sourceItemId,
+      version: row.sourceVersion,
+    }),
+    blobSha256: row.blobSha256,
+    brandSha256: row.brandSha256,
+    approvalRequestId: row.approvalRequestId,
+    approvalDecisionId: row.approvalDecisionId,
+    approvalStatus: row.approvalStatus,
+    approvalStale: row.approvalStale,
+    email: emailPayload ? Object.freeze({
+      ...emailPayload,
+      subjectSha256: sha256(emailPayload.subject),
+      bodySha256: sha256(emailPayload.bodyText),
+    }) : null,
+    createdAt: new Date(row.createdAt).toISOString(),
+  });
+}
 
 function lockedItem(row: LockedItemRow): LockedCompanyContentItem {
   return {
@@ -873,6 +978,71 @@ export class CompanyContentPgRepository {
       approvalStatus: row.approvalStatus,
       approvalStale: row.approvalStale,
     }));
+  }
+
+  async loadExactReview(
+    contentItemId: string,
+    contentVersionId: string,
+  ): Promise<CompanyContentExactReview | null> {
+    const result = await this.transaction.query<ExactReviewRow>(
+      `/* company-content.load-exact-review */
+       SELECT version.content_item_id AS "contentItemId",
+              version.id AS "contentVersionId",
+              version.version_number AS "versionNumber",
+              NOT EXISTS (
+                SELECT 1
+                FROM app.company_content_versions AS newer
+                WHERE newer.workspace_id = version.workspace_id
+                  AND newer.content_item_id = version.content_item_id
+                  AND newer.version_number > version.version_number
+              ) AS "isLatest",
+              version.origin,
+              version.content_kind AS kind,
+              version.title,
+              version.content_mime_type AS "contentMimeType",
+              version.content_body AS "canonicalContent",
+              encode(version.content_sha256, 'hex') AS "contentSha256",
+              version.source_system AS "sourceSystem",
+              version.source_item_id AS "sourceItemId",
+              version.source_version AS "sourceVersion",
+              encode(version.blob_sha256, 'hex') AS "blobSha256",
+              encode(version.brand_sha256, 'hex') AS "brandSha256",
+              request.id AS "approvalRequestId",
+              decision.id AS "approvalDecisionId",
+              CASE
+                WHEN request.id IS NULL THEN 'unrequested'
+                WHEN decision.id IS NULL THEN 'pending'
+                ELSE decision.decision
+              END AS "approvalStatus",
+              request.id IS NOT NULL AND EXISTS (
+                SELECT 1
+                FROM app.company_content_versions AS newer
+                WHERE newer.workspace_id = version.workspace_id
+                  AND newer.content_item_id = version.content_item_id
+                  AND newer.version_number > version.version_number
+              ) AS "approvalStale",
+              version.created_at::text AS "createdAt"
+       FROM app.company_content_versions AS version
+       LEFT JOIN LATERAL (
+         SELECT candidate.id
+         FROM app.company_content_approval_requests AS candidate
+         WHERE candidate.workspace_id = version.workspace_id
+           AND candidate.content_item_id = version.content_item_id
+           AND candidate.content_version_id = version.id
+         ORDER BY candidate.request_number DESC, candidate.id
+         LIMIT 1
+       ) AS request ON true
+       LEFT JOIN app.company_content_approval_decisions AS decision
+         ON decision.workspace_id = version.workspace_id
+        AND decision.approval_request_id = request.id
+       WHERE version.content_item_id = $1
+         AND version.id = $2`,
+      [contentItemId, contentVersionId],
+    );
+    if (result.rows.length > 1) {
+      throw new Error('Company content exact review was returned more than once');
+    }
+    return result.rows[0] ? exactReview(result.rows[0]) : null;
   }
 
   async listCatalog(input: {

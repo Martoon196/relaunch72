@@ -50,6 +50,9 @@ const migration43Url = new URL('../../src/db/migrations/0043_property_predator_m
 const migration44Url = new URL('../../src/db/migrations/0044_company_content_sync_command_consumption.sql', import.meta.url);
 const migration45Url = new URL('../../src/db/migrations/0045_property_predator_email_pilot_signed_recovery_guard.sql', import.meta.url);
 const migration46Url = new URL('../../src/db/migrations/0046_neon_mailgun_worker_creator_membership.sql', import.meta.url);
+const migration47Url = new URL('../../src/db/migrations/0047_property_predator_owned_seed_campaign_loop.sql', import.meta.url);
+const migration48Url = new URL('../../src/db/migrations/0048_property_predator_owned_seed_live_message.sql', import.meta.url);
+const migration49Url = new URL('../../src/db/migrations/0049_property_predator_owned_seed_attestation_window.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -488,9 +491,9 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums through signed email recovery', async () => {
+test('bundled migration discovery orders and checksums through owned-seed attestation policy', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-40);
+  const tail = migrations.slice(-43);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0007_public_schema_hardening.sql', version: 7 },
     { filename: '0008_setup_delivery_recovery.sql', version: 8 },
@@ -532,6 +535,9 @@ test('bundled migration discovery orders and checksums through signed email reco
     { filename: '0044_company_content_sync_command_consumption.sql', version: 44 },
     { filename: '0045_property_predator_email_pilot_signed_recovery_guard.sql', version: 45 },
     { filename: '0046_neon_mailgun_worker_creator_membership.sql', version: 46 },
+    { filename: '0047_property_predator_owned_seed_campaign_loop.sql', version: 47 },
+    { filename: '0048_property_predator_owned_seed_live_message.sql', version: 48 },
+    { filename: '0049_property_predator_owned_seed_attestation_window.sql', version: 49 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -574,6 +580,9 @@ test('bundled migration discovery orders and checksums through signed email reco
     (await readFile(migration44Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration45Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration46Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration47Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration48Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration49Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));

@@ -4,6 +4,19 @@ import type {
   CompanyContentReviewView,
 } from './company-content-review-presenter.js';
 import { escapeHtml } from './ui.js';
+import type { PortalCompanyContentReviewSnapshot } from './company-content-service.js';
+import {
+  CONTENT_APPROVAL_DECISION_ROUTE,
+  CONTENT_APPROVAL_REQUEST_ROUTE,
+  type ContentControlNoticeView,
+} from './content-control-room-actions.js';
+import {
+  OWNED_SEED_CAMPAIGN_STAGE_ROUTE,
+  OWNED_SEED_MESSAGE_APPROVAL_DECISION_ROUTE,
+  OWNED_SEED_MESSAGE_APPROVAL_REQUEST_ROUTE,
+  OWNED_SEED_MESSAGE_CREATE_ROUTE,
+  type OwnedSeedWorkflowState,
+} from './owned-seed-actions.js';
 
 const STYLE = `
   .pcr{--pcr-bg:#050708;--pcr-panel:#0b1012;--pcr-raised:#11191c;--pcr-soft:#080c0e;--pcr-line:#253238;--pcr-strong:#3b4c53;--pcr-ink:#f5f8f7;--pcr-muted:#a5b2b4;--pcr-faint:#75858a;--pcr-teal:#00e5cc;--pcr-teal-soft:#082622;--pcr-amber:#f0b451;--pcr-amber-soft:#211707;--pcr-red:#ff746c;--pcr-red-soft:#25100f;min-width:0;overflow:hidden;border:1px solid #020303;background:var(--pcr-bg);color:var(--pcr-ink)}.pcr *{box-sizing:border-box}.pcr h1,.pcr h2,.pcr h3,.pcr p,.pcr figure{margin-top:0}.pcr a{color:inherit}.pcr code{font-family:var(--mono,monospace);font-variant-numeric:tabular-nums}.pcr :focus-visible{outline:3px solid var(--pcr-teal);outline-offset:3px}
@@ -25,6 +38,133 @@ const STYLE = `
   @media(prefers-reduced-motion:reduce){.pcr *,.pcr *::before,.pcr *::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}.pcr-mark{transform:none}.pcr-mark b{transform:none}}
   @media(forced-colors:active){.pcr,.pcr-panel,.pcr-status,.pcr-chip,.pcr-proof,.pcr-safety div,.pcr-art-stage img{forced-color-adjust:auto;border-color:CanvasText}.pcr-effects,.pcr-chip.good{border:2px solid Highlight}.pcr-status,.pcr-chip.warn,.pcr-blocker{border:2px solid Mark}.pcr-status[data-state=quarantined],.pcr-chip.block,.pcr-blocker[data-state=quarantined]{border:3px double CanvasText}.pcr-mark{transform:none}.pcr-mark b{transform:none}}
 `;
+
+export interface RenderPortalCompanyContentReviewOptions {
+  readonly notice?: ContentControlNoticeView;
+  readonly security?: Readonly<{
+    readonly csrfToken: string;
+    readonly requestCommandKey?: string;
+    readonly decisionCommandKey?: string;
+    readonly exactApprovalToken?: string;
+    readonly ownedSeedAvailable?: boolean;
+    readonly ownedSeedStageAvailable?: boolean;
+    readonly ownedSeedWorkflow?: OwnedSeedWorkflowState;
+    readonly ownedSeedWorkflowToken?: string;
+    readonly ownedSeedCommandKey?: string;
+    readonly ownedSeedRunId?: string;
+  }>;
+}
+
+function exactReviewNotice(notice: ContentControlNoticeView | undefined): string {
+  if (!notice) return '';
+  return `<section class="pcr-status" role="status" style="margin:14px" data-state="${notice.kind === 'error' ? 'quarantined' : 'pending'}"><small>${escapeHtml(notice.kind)}</small><strong>${escapeHtml(notice.title)}</strong><span>${escapeHtml(notice.message)}</span></section>`;
+}
+
+function validProtectedValue(value: string | undefined): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{20,512}$/u.test(value);
+}
+
+function validCommandKey(value: string | undefined): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u.test(value);
+}
+
+function validExactApprovalToken(value: string | undefined): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9._-]{20,768}$/u.test(value);
+}
+
+function validOwnedSeedWorkflowToken(value: string | undefined): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{20,1800}\.[A-Za-z0-9_-]{20,128}$/u.test(value);
+}
+
+function validUuid(value: string | undefined): value is string {
+  return typeof value === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value);
+}
+
+function exactReviewActions(
+  snapshot: PortalCompanyContentReviewSnapshot,
+  options: RenderPortalCompanyContentReviewOptions,
+): string {
+  const review = snapshot.review;
+  const security = options.security;
+  if (!snapshot.workspace.canWrite || !validProtectedValue(security?.csrfToken)) {
+    return '<section class="pcr-panel"><header class="pcr-subhead"><h2>Human decision</h2><p>This workspace role can inspect the exact copy but cannot change its review state.</p></header></section>';
+  }
+  if (!review.isLatest || review.approvalStale) {
+    return '<section class="pcr-panel"><header class="pcr-subhead"><h2>Historical version · read only</h2><p>This exact copy remains visible as evidence, but a stale or superseded version cannot receive a new review action. Open the latest immutable version.</p></header></section>';
+  }
+  const returnFields = `<input type="hidden" name="return_exact_item_id" value="${escapeHtml(review.contentItemId)}"><input type="hidden" name="return_exact_version_id" value="${escapeHtml(review.contentVersionId)}">`;
+  if (review.approvalStatus === 'pending' && review.approvalRequestId) {
+    if (!snapshot.workspace.canManage || !validCommandKey(security?.decisionCommandKey)
+        || !validExactApprovalToken(security?.exactApprovalToken)) {
+      return '<section class="pcr-panel"><header class="pcr-subhead"><h2>Manager decision required</h2><p>An owner or admin must decide this exact immutable version.</p></header></section>';
+    }
+    return `<section class="pcr-panel"><header class="pcr-subhead"><h2>Decide this exact version</h2><p>The server re-reads this item, version, digest and pending request before recording any decision. Approval changes review state only.</p></header><form class="pcr-readable" method="post" action="${CONTENT_APPROVAL_DECISION_ROUTE}"><input type="hidden" name="_csrf" value="${escapeHtml(security.csrfToken)}"><input type="hidden" name="command_key" value="${escapeHtml(security.decisionCommandKey)}"><input type="hidden" name="approval_request_id" value="${escapeHtml(review.approvalRequestId)}"><input type="hidden" name="review_content_item_id" value="${escapeHtml(review.contentItemId)}"><input type="hidden" name="review_content_version_id" value="${escapeHtml(review.contentVersionId)}"><input type="hidden" name="review_content_sha256" value="${escapeHtml(review.contentSha256)}"><input type="hidden" name="exact_approval_token" value="${escapeHtml(security.exactApprovalToken)}">${returnFields}<label class="pcr-readable-label" for="pcr-decision-note">Decision note</label><textarea class="pcr-body" style="min-height:120px;max-height:220px;width:100%" id="pcr-decision-note" name="decision_note" maxlength="4000" placeholder="Why is this exact version approved, rejected or changing?"></textarea><div style="display:flex;flex-wrap:wrap;gap:9px;margin-top:12px"><button class="pcr-chip good" type="submit" name="decision" value="approved">Approve exact version</button><button class="pcr-chip warn" type="submit" name="decision" value="changes_requested">Request changes</button><button class="pcr-chip block" type="submit" name="decision" value="rejected">Reject</button></div></form></section>`;
+  }
+  if (['unrequested', 'rejected', 'changes_requested'].includes(review.approvalStatus)
+      && validCommandKey(security?.requestCommandKey)) {
+    return `<section class="pcr-panel"><header class="pcr-subhead"><h2>Submit this exact version</h2><p>Create a new immutable review request pinned to the copy and SHA-256 shown here.</p></header><form class="pcr-readable" method="post" action="${CONTENT_APPROVAL_REQUEST_ROUTE}"><input type="hidden" name="_csrf" value="${escapeHtml(security.csrfToken)}"><input type="hidden" name="command_key" value="${escapeHtml(security.requestCommandKey)}"><input type="hidden" name="content_item_id" value="${escapeHtml(review.contentItemId)}"><input type="hidden" name="content_version_id" value="${escapeHtml(review.contentVersionId)}">${returnFields}<label class="pcr-readable-label" for="pcr-review-note">Review brief</label><textarea class="pcr-body" style="min-height:100px;max-height:200px;width:100%" id="pcr-review-note" name="review_note" maxlength="2000" placeholder="What should the reviewer verify?"></textarea><button class="pcr-chip good" style="margin-top:12px" type="submit">Request human approval</button></form></section>`;
+  }
+  return `<section class="pcr-panel"><header class="pcr-subhead"><h2>Human decision</h2><p>${review.approvalStatus === 'approved' ? 'This exact immutable version is approved. A separate message approval and capped delivery gate still apply.' : 'Refresh this exact review before taking another action.'}</p></header></section>`;
+}
+
+function ownedSeedWorkflowActions(
+  snapshot: PortalCompanyContentReviewSnapshot,
+  options: RenderPortalCompanyContentReviewOptions,
+): string {
+  const review = snapshot.review;
+  const security = options.security;
+  if (!security?.ownedSeedAvailable || review.approvalStatus !== 'approved'
+      || review.approvalStale || !review.isLatest || !review.email) return '';
+
+  const workflow = security.ownedSeedWorkflow;
+  const workflowMatchesReview = !workflow
+    || workflow.companyContentVersionId === review.contentVersionId;
+  if (!workflowMatchesReview) {
+    return '<section class="pcr-panel"><header class="pcr-subhead"><h2>Owned-seed proof · refresh required</h2><p>The signed workflow state belongs to a different immutable company-content version. No action is available from this page.</p></header></section>';
+  }
+  if (!snapshot.workspace.canManage || !validProtectedValue(security.csrfToken)
+      || !validCommandKey(security.ownedSeedCommandKey)) {
+    return '<section class="pcr-panel"><header class="pcr-subhead"><h2>Owned-seed proof · inspect only</h2><p>The exact email is approved, but this workspace role cannot advance the internal proof workflow.</p></header></section>';
+  }
+
+  const common = `<input type="hidden" name="_csrf" value="${escapeHtml(security.csrfToken)}"><input type="hidden" name="command_key" value="${escapeHtml(security.ownedSeedCommandKey)}"><input type="hidden" name="return_exact_item_id" value="${escapeHtml(review.contentItemId)}"><input type="hidden" name="return_exact_version_id" value="${escapeHtml(review.contentVersionId)}">`;
+  const boundary = '<p><strong>Controlled live boundary:</strong> the first three steps record internal evidence only. The final stage button creates one LIVE delivery intent; an enabled worker may call Mailgun. The job remains constrained to <code>office@propertypredator.com</code>, one message per run and three per month.</p>';
+
+  if (!workflow) {
+    return `<section class="pcr-panel" aria-labelledby="pcr-owned-seed-title"><header class="pcr-panel-head"><div><h2 id="pcr-owned-seed-title">Owned-seed delivery proof</h2><p>Turn this approved company-content version into a separate immutable LIVE message draft.</p></div><span class="pcr-chip warn">Step 1 of 4</span></header><div class="pcr-readable">${boundary}<form method="post" action="${OWNED_SEED_MESSAGE_CREATE_ROUTE}">${common}<input type="hidden" name="company_content_version_id" value="${escapeHtml(review.contentVersionId)}"><button class="pcr-chip good" type="submit">Create LIVE message draft</button></form></div></section>`;
+  }
+
+  if (!validOwnedSeedWorkflowToken(security.ownedSeedWorkflowToken)) {
+    return '<section class="pcr-panel"><header class="pcr-subhead"><h2>Owned-seed proof · signed state required</h2><p>The internal message exists, but its short-lived session-bound workflow token is missing or invalid. Refresh before advancing it.</p></header></section>';
+  }
+  const signed = `${common}<input type="hidden" name="owned_seed_workflow_token" value="${escapeHtml(security.ownedSeedWorkflowToken)}"><input type="hidden" name="message_id" value="${escapeHtml(workflow.messageId)}"><input type="hidden" name="message_version_id" value="${escapeHtml(workflow.messageVersionId)}">`;
+
+  if (workflow.phase === 'drafted') {
+    return `<section class="pcr-panel" aria-labelledby="pcr-owned-seed-title"><header class="pcr-panel-head"><div><h2 id="pcr-owned-seed-title">Approve the LIVE message</h2><p>The message is a separate immutable delivery object. It needs its own human approval.</p></div><span class="pcr-chip warn">Step 2 of 4</span></header><form class="pcr-readable" method="post" action="${OWNED_SEED_MESSAGE_APPROVAL_REQUEST_ROUTE}">${signed}${boundary}<label class="pcr-readable-label" for="pcr-owned-seed-review-note">Message review brief</label><textarea class="pcr-body" style="min-height:100px;max-height:200px;width:100%" id="pcr-owned-seed-review-note" name="review_note" maxlength="2000" placeholder="Confirm the owned office-only recipient, exact subject and exact body."></textarea><button class="pcr-chip good" style="margin-top:12px" type="submit">Request message approval</button></form></section>`;
+  }
+
+  if (workflow.phase === 'approval_pending') {
+    if (!snapshot.workspace.canManage || !workflow.approvalRequestId) {
+      return '<section class="pcr-panel"><header class="pcr-subhead"><h2>Message approval pending</h2><p>An owner or admin must decide this exact LIVE message version.</p></header></section>';
+    }
+    return `<section class="pcr-panel" aria-labelledby="pcr-owned-seed-title"><header class="pcr-panel-head"><div><h2 id="pcr-owned-seed-title">Decide the LIVE message</h2><p>This decision is distinct from the company-content approval above.</p></div><span class="pcr-chip warn">Step 3 of 4</span></header><form class="pcr-readable" method="post" action="${OWNED_SEED_MESSAGE_APPROVAL_DECISION_ROUTE}">${signed}<input type="hidden" name="approval_request_id" value="${escapeHtml(workflow.approvalRequestId)}">${boundary}<label class="pcr-readable-label" for="pcr-owned-seed-decision-note">Decision note</label><textarea class="pcr-body" style="min-height:100px;max-height:200px;width:100%" id="pcr-owned-seed-decision-note" name="decision_note" maxlength="4000" placeholder="Record why this exact LIVE message is approved, rejected or changing."></textarea><div style="display:flex;flex-wrap:wrap;gap:9px;margin-top:12px"><button class="pcr-chip good" type="submit" name="decision" value="approved">Approve LIVE message</button><button class="pcr-chip warn" type="submit" name="decision" value="changes_requested">Request changes</button><button class="pcr-chip block" type="submit" name="decision" value="rejected">Reject message</button></div></form></section>`;
+  }
+
+  if (workflow.phase === 'approved') {
+    if (!security.ownedSeedStageAvailable || !snapshot.workspace.canManage
+        || !validUuid(security.ownedSeedRunId)) {
+      return `<section class="pcr-panel"><header class="pcr-subhead"><h2>LIVE message approved</h2><p>The separate message approval is complete. The capped office-only staging rail is not available to this role or environment. No provider call has occurred.</p></header></section>`;
+    }
+    return `<section class="pcr-panel" aria-labelledby="pcr-owned-seed-title"><header class="pcr-panel-head"><div><h2 id="pcr-owned-seed-title">Stage the office-only proof</h2><p>Resolve the fixed owned recipient and stage one capped delivery job for the existing worker gate.</p></div><span class="pcr-chip good">Step 4 of 4</span></header><form class="pcr-readable" method="post" action="${OWNED_SEED_CAMPAIGN_STAGE_ROUTE}">${signed}<input type="hidden" name="run_id" value="${escapeHtml(security.ownedSeedRunId)}">${boundary}<button class="pcr-chip good" type="submit">Stage capped office-only job</button></form></section>`;
+  }
+
+  const label = workflow.phase === 'staged' ? 'Owned-seed job staged' : 'Owned-seed proof blocked';
+  const copy = workflow.phase === 'staged'
+    ? 'The capped LIVE job is queued for the worker boundary. Delivery may already have been attempted; use the signed receipt ledger for current provider truth.'
+    : 'The server blocked this workflow state. Refresh the exact review and resolve the recorded reason before trying again.';
+  return `<section class="pcr-panel"><header class="pcr-subhead"><h2>${label}</h2><p>${copy}</p></header></section>`;
+}
 
 function time(value: string): string {
   const date = new Date(value);
@@ -83,4 +223,23 @@ export function renderCompanyContentReviewBody(view: CompanyContentReviewView): 
     ? `${proof('Artwork blob SHA-256', view.artwork.blobSha256, true)}${proof('Expected artwork size', bytes(view.artwork.expectedByteLength))}${proof('Artwork response', view.artwork.verificationLabel)}`
     : '';
   return `<style data-property-predator-company-content-review>${STYLE}</style><article class="pcr" aria-labelledby="pcr-title"><header class="pcr-top"><a class="pcr-back" href="/portal/content/assets"><span aria-hidden="true">←</span> Back to Company Assets</a><div class="pcr-lockup"><span class="pcr-mark" aria-hidden="true"><b>PP</b></span><span>Property Predator · Growth HQ</span></div></header><section class="pcr-hero"><div><div class="pcr-kicker">Exact-content evidence room · immutable v${view.item.itemVersion.toLocaleString('en-GB')}</div><h1 id="pcr-title">Inspect the exact.<br><em>Keep authority honest.</em></h1><p class="pcr-lead"><strong>${escapeHtml(view.exactContent.title)}</strong> is shown at the verified response boundary. Review the complete copy or artwork, evidence decisions and exact hashes without granting permission or triggering an outside system.</p></div><aside class="pcr-status" data-state="${escapeHtml(view.item.state)}" aria-label="Growth HQ use status"><small>Growth HQ use status</small><strong>${escapeHtml(view.item.hqUseLabel)}</strong><span>${escapeHtml(view.item.stateLabel)}. This read-only page cannot clear, approve or distribute the item.</span></aside></section><section class="pcr-truth" aria-label="Approval boundary"><strong>Source provenance ≠ HQ approval</strong><p>The source record identifies an exact upstream version. It is evidence of provenance only—not permission from Growth HQ to use this content.</p><span class="pcr-effects">Provider effects off</span></section><div class="pcr-layout"><div class="pcr-main">${exactContentPanel(view)}<section class="pcr-panel" aria-labelledby="pcr-decisions-title"><header class="pcr-panel-head"><div><h2 id="pcr-decisions-title">Recorded evidence decisions</h2><p>Each decision is bound to its own immutable evidence digest.</p></div><span class="pcr-chip ${view.item.quarantined ? 'block' : view.item.decisions.length === 3 ? 'good' : 'warn'}">${view.item.decisions.length.toLocaleString('en-GB')} of 3 recorded</span></header><ul class="pcr-decisions">${decisionItems}</ul></section></div><aside class="pcr-side" aria-label="Review evidence and blockers"><section class="pcr-panel pcr-blocker" data-state="${escapeHtml(view.item.state)}"><div class="pcr-blocker-body"><span class="pcr-blocker-label">Why this item is blocked</span><h2>${escapeHtml(view.item.stateLabel)}</h2><p>${escapeHtml(view.item.whyBlocked)}</p></div></section><section class="pcr-panel pcr-pending-panel" aria-labelledby="pcr-pending-title"><header class="pcr-subhead"><h2 id="pcr-pending-title">Pending dimensions</h2><p>Missing evidence remains blocking; silence never means clear.</p></header><ul class="pcr-list pcr-pending">${pendingItems}</ul></section><section class="pcr-panel pcr-proof-panel" aria-labelledby="pcr-proof-title"><header class="pcr-subhead"><h2 id="pcr-proof-title">Exact identity &amp; hash proof</h2><p>Immutable identifiers for the version visible on this page.</p></header><div class="pcr-proof-grid">${proof('Release item', view.item.releaseItemId, true)}${proof('Source release', view.item.sourceReleaseId)}${proof('Source version', view.item.sourceVersionId)}${proof('Source item', `${view.item.itemType}:${view.item.itemId}`)}${proof('Content SHA-256', view.item.contentSha256, true)}${artworkProof}${proof('Runtime brand SHA-256', view.item.brandSha256, true)}<div class="pcr-proof"><strong>Source provenance ID</strong><code>${escapeHtml(view.item.sourceApproval.approvalId)}</code></div><div class="pcr-proof"><strong>Source recorded</strong>${time(view.item.sourceApproval.approvedAt)}</div><div class="pcr-proof wide"><strong>Authority meaning</strong><span>${escapeHtml(view.item.sourceApproval.provenanceLabel)}</span><span class="not-approval">${escapeHtml(view.item.sourceApproval.hqMeaningLabel)}</span></div></div></section><section class="pcr-panel pcr-safety-panel" aria-labelledby="pcr-safety-title"><header class="pcr-subhead"><h2 id="pcr-safety-title">Sealed safety boundary</h2><p>All four claims are asserted false by the verified review response.</p></header><div class="pcr-safety"><div><strong>Effects off</strong><span>No provider operation</span></div><div><strong>Private data rejected</strong><span>Customer-private input not accepted</span></div><div><strong>Affiliate copy rejected</strong><span>Affiliate content not accepted</span></div><div><strong>Authority separated</strong><span>Source record not promoted</span></div></div></section></aside></div><footer class="pcr-footer"><span><strong>${escapeHtml(view.workspace.name)}</strong> · snapshot ${time(view.workspace.snapshotAt)}</span><span>Read-only evidence · exact version · HQ use review required</span></footer></article>`;
+}
+
+/**
+ * Authenticated review body for versions stored in Growth HQ's immutable
+ * company-content ledger. It renders the exact subject/body and the digest
+ * evidence together; it contains no send, schedule or provider controls.
+ */
+export function renderPortalCompanyContentReviewBody(
+  snapshot: PortalCompanyContentReviewSnapshot,
+  options: RenderPortalCompanyContentReviewOptions = {},
+): string {
+  const review = snapshot.review;
+  const email = review.email;
+  const stateClass = review.approvalStatus === 'approved' && !review.approvalStale
+    ? 'good' : review.approvalStatus === 'rejected' ? 'block' : 'warn';
+  const exactCopy = email
+    ? `<section class="pcr-panel" aria-labelledby="pcr-email-title"><header class="pcr-panel-head"><div><h2 id="pcr-email-title">Exact email draft</h2><p>Subject and body are sealed inside the same immutable canonical payload.</p></div><span class="pcr-chip good">Hash checked</span></header><div class="pcr-readable"><span class="pcr-readable-label">Exact subject</span><pre class="pcr-body" style="min-height:0;max-height:180px" tabindex="0"><code>${escapeHtml(email.subject)}</code></pre><div class="pcr-cta"><strong>Subject SHA-256</strong><code>${escapeHtml(email.subjectSha256)}</code></div><span class="pcr-readable-label" style="margin-top:22px">Exact body</span><pre class="pcr-body" tabindex="0"><code>${escapeHtml(email.bodyText)}</code></pre><div class="pcr-cta"><strong>Body SHA-256</strong><code>${escapeHtml(email.bodySha256)}</code></div></div></section>`
+    : `<section class="pcr-panel" aria-labelledby="pcr-email-title"><header class="pcr-panel-head"><div><h2 id="pcr-email-title">Exact immutable content</h2><p>This version is not an email-draft payload. Its complete canonical bytes remain visible below.</p></div><span class="pcr-chip warn">${escapeHtml(review.kind)}</span></header><pre class="pcr-copy" tabindex="0"><code>${escapeHtml(review.canonicalContent)}</code></pre></section>`;
+  return `<style data-property-predator-company-content-review>${STYLE}</style><article class="pcr" aria-labelledby="pcr-ledger-title"><header class="pcr-top"><a class="pcr-back" href="/portal/content"><span aria-hidden="true">←</span> Back to Content Control</a><div class="pcr-lockup"><span class="pcr-mark" aria-hidden="true"><b>PP</b></span><span>Property Predator · Growth HQ</span></div></header>${exactReviewNotice(options.notice)}<section class="pcr-hero"><div><div class="pcr-kicker">Immutable company-content ledger · version ${review.versionNumber.toLocaleString('en-GB')}</div><h1 id="pcr-ledger-title">Approve what<br><em>you can see.</em></h1><p class="pcr-lead"><strong>${escapeHtml(review.title)}</strong> is rendered from the exact UTF-8 value whose digest is shown on this page. No summary, model output or mutable title substitutes for the reviewed copy.</p></div><aside class="pcr-status" data-state="${review.approvalStatus === 'rejected' ? 'quarantined' : 'pending'}"><small>Exact-version status</small><strong>${escapeHtml(review.approvalStatus.replace('_', ' '))}</strong><span>${review.isLatest ? 'Latest immutable version.' : 'Historical version; a newer version exists.'} ${review.approvalStale ? 'Any recorded approval is stale.' : 'No stale approval is presented.'}</span></aside></section><section class="pcr-truth"><strong>Review boundary active</strong><p>The exact copy and hashes are visible beside the deliberate human decision. Approval actions do not deliver; the separately labelled final staging control creates LIVE delivery intent.</p><span class="pcr-effects">Review page · no direct call</span></section><div class="pcr-layout"><div class="pcr-main">${exactCopy}<section class="pcr-panel"><header class="pcr-panel-head"><div><h2>Canonical payload</h2><p>The complete value stored in the immutable version row.</p></div><span class="pcr-chip good">${escapeHtml(bytes(review.canonicalByteLength))}</span></header><pre class="pcr-copy" tabindex="0"><code>${escapeHtml(review.canonicalContent)}</code></pre></section>${exactReviewActions(snapshot, options)}${ownedSeedWorkflowActions(snapshot, options)}</div><aside class="pcr-side"><section class="pcr-panel"><header class="pcr-subhead"><h2>Exact identity &amp; proof</h2><p>All approval actions target this item and version explicitly.</p></header><div class="pcr-proof-grid">${proof('Content item', review.contentItemId, true)}${proof('Content version', review.contentVersionId, true)}${proof('Content SHA-256', review.contentSha256, true)}${proof('Brand SHA-256', review.brandSha256, true)}${proof('Blob SHA-256', review.blobSha256, true)}${proof('Source system', review.source.system)}${proof('Source item', review.source.itemId)}${proof('Source version', review.source.version)}${proof('MIME type', review.contentMimeType, true)}</div></section><section class="pcr-panel"><header class="pcr-subhead"><h2>Approval target</h2><p>Request and decision identities are immutable evidence, not provider permission.</p></header><div class="pcr-proof-grid"><div class="pcr-proof"><strong>Status</strong><span class="pcr-chip ${stateClass}">${escapeHtml(review.approvalStatus)}</span></div>${proof('Request ID', review.approvalRequestId ?? 'Not requested', true)}${proof('Decision ID', review.approvalDecisionId ?? 'No decision', true)}</div></section></aside></div><footer class="pcr-footer"><span><strong>${escapeHtml(snapshot.workspace.workspaceName)}</strong> · snapshot ${time(snapshot.workspace.snapshotAt)}</span><span>Exact review · deliberate human decision · explicit LIVE staging boundary</span></footer></article>`;
 }

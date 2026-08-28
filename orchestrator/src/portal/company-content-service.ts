@@ -2,6 +2,8 @@ import type {
   CompanyContentApprovalDecision,
   CompanyContentCatalogPage,
   CompanyContentCatalogQuery,
+  CompanyContentExactReview,
+  CreateCompanyContentEmailDraftVersionCommand,
 } from '../company-content-pg/types.js';
 
 /**
@@ -22,10 +24,11 @@ export interface PortalCompanyContentWorkspaceAccess {
 }
 
 /**
- * The catalogue currently exposes immutable identity and hashes, but not the
- * exact text/blob bytes a human must inspect. Keep approval and outbound use
- * closed until a hash-bound review representation is added to this boundary.
+ * Exact version reads now return complete hash-checked bytes under the
+ * authenticated workspace context. Keep the final approval capability dark
+ * until the router places that review beside the exact decision action.
  */
+export const PORTAL_COMPANY_CONTENT_EXACT_REVIEW_AVAILABLE = true;
 export const PORTAL_COMPANY_CONTENT_REVIEW_REPRESENTATION_AVAILABLE = false;
 
 export interface PortalCompanyContentSnapshot {
@@ -59,6 +62,44 @@ export type PortalCompanyContentSnapshotOutcome =
     }
   | PortalCompanyContentFailure;
 
+export interface PortalCompanyContentReviewInput {
+  readonly contentItemId: string;
+  readonly contentVersionId: string;
+}
+
+export interface PortalCompanyContentReviewSnapshot {
+  readonly workspace: PortalCompanyContentWorkspaceAccess;
+  readonly review: CompanyContentExactReview;
+}
+
+export type PortalCompanyContentReviewOutcome =
+  | {
+      readonly ok: true;
+      readonly snapshot: PortalCompanyContentReviewSnapshot;
+    }
+  | PortalCompanyContentFailure;
+
+/**
+ * Must be assembled by the server from the generated draft plus the exact
+ * Brand Brain/source evidence already held by the campaign runtime. A browser
+ * must never be allowed to choose workspace or actor identity.
+ */
+export type PortalCreateCompanyContentEmailDraftVersionInput =
+  CreateCompanyContentEmailDraftVersionCommand;
+
+export type PortalCreateCompanyContentEmailDraftVersionOutcome =
+  | {
+      readonly ok: true;
+      readonly disposition: 'applied' | 'replayed';
+      readonly contentItemId: string;
+      readonly contentVersionId: string;
+      readonly versionNumber: number;
+      readonly contentSha256: string;
+      readonly sourceAttestationId: string;
+      readonly sourceAttestationExpiresAt: string;
+    }
+  | PortalCompanyContentFailure;
+
 /** Both ids are mandatory: the portal can never submit an implicit "latest" approval. */
 export interface PortalRequestCompanyContentApprovalInput {
   readonly commandKey: string;
@@ -86,6 +127,14 @@ export interface PortalDecideCompanyContentApprovalInput {
   readonly decisionNote?: string | null;
 }
 
+export interface PortalDecideExactReviewedCompanyContentApprovalInput
+  extends PortalDecideCompanyContentApprovalInput {
+  readonly decision: 'approved';
+  readonly contentItemId: string;
+  readonly contentVersionId: string;
+  readonly contentSha256: string;
+}
+
 export type PortalDecideCompanyContentApprovalOutcome =
   | {
       readonly ok: true;
@@ -109,6 +158,16 @@ export interface PortalCompanyContentService {
     query?: CompanyContentCatalogQuery,
   ): Promise<PortalCompanyContentSnapshotOutcome>;
 
+  review?(
+    identity: PortalCompanyContentRequestIdentity,
+    input: PortalCompanyContentReviewInput,
+  ): Promise<PortalCompanyContentReviewOutcome>;
+
+  createEmailDraftVersion?(
+    identity: PortalCompanyContentRequestIdentity,
+    input: PortalCreateCompanyContentEmailDraftVersionInput,
+  ): Promise<PortalCreateCompanyContentEmailDraftVersionOutcome>;
+
   requestApproval(
     identity: PortalCompanyContentRequestIdentity,
     input: PortalRequestCompanyContentApprovalInput,
@@ -117,5 +176,15 @@ export interface PortalCompanyContentService {
   decideApproval(
     identity: PortalCompanyContentRequestIdentity,
     input: PortalDecideCompanyContentApprovalInput,
+  ): Promise<PortalDecideCompanyContentApprovalOutcome>;
+
+  /**
+   * Approval-only seam used after a short-lived exact-review capability has
+   * been verified. Implementations must re-read the exact pending version;
+   * callers cannot promote the ordinary summary decision path.
+   */
+  decideExactReviewedApproval?(
+    identity: PortalCompanyContentRequestIdentity,
+    input: PortalDecideExactReviewedCompanyContentApprovalInput,
   ): Promise<PortalDecideCompanyContentApprovalOutcome>;
 }

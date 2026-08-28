@@ -103,12 +103,14 @@ import {
   CONTENT_APPROVAL_REQUEST_ROUTE,
   contentControlNoticeFromQuery,
   contentControlNoticeToken,
+  exactReviewApprovalToken,
+  verifyExactReviewApprovalToken,
   type ContentControlNoticeCode,
 } from './content-control-room-actions.js';
 import {
-  PORTAL_COMPANY_CONTENT_REVIEW_REPRESENTATION_AVAILABLE,
   type PortalCompanyContentService,
 } from './company-content-service.js';
+import { renderPortalCompanyContentReviewBody } from './company-content-review-view.js';
 import { BRAND_BRAIN_ROUTE } from './brand-brain-actions.js';
 import { presentBrandBrain } from './brand-brain-presenter.js';
 import type {
@@ -157,6 +159,22 @@ import {
 } from './conversion-inbox-presenter.js';
 import { renderConversionInboxBody } from './conversion-inbox-view.js';
 import type { PortalConversionInboxCommandService } from './conversion-inbox-service.js';
+import type { PortalOwnedSeedCampaignService } from './owned-seed-campaign-service.js';
+import type { PortalOwnedSeedMessageService } from './owned-seed-message-service.js';
+import {
+  OWNED_SEED_CAMPAIGN_STAGE_ROUTE,
+  OWNED_SEED_MESSAGE_APPROVAL_DECISION_ROUTE,
+  OWNED_SEED_MESSAGE_APPROVAL_REQUEST_ROUTE,
+  OWNED_SEED_MESSAGE_CREATE_ROUTE,
+  OWNED_SEED_PROOF_PREPARE_ROUTE,
+  ownedSeedWorkflowToken,
+  verifyOwnedSeedWorkflowToken,
+  type OwnedSeedWorkflowState,
+} from './owned-seed-actions.js';
+import {
+  PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_ITEM,
+  propertyPredatorOwnedSeedProofEmailCommand,
+} from './owned-seed-proof-email.js';
 import {
   CONVERSION_INBOX_CREATE_DRAFT_ROUTE,
   conversionInboxNoticeFromQuery,
@@ -344,6 +362,10 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   inbox?: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval/queue commands. It has no provider dispatcher. */
   inboxCommands?: PortalConversionInboxCommandService;
+  /** Fixed-recipient Mailgun job staging only; the worker remains a separate process. */
+  ownedSeedCampaign?: PortalOwnedSeedCampaignService;
+  /** Fixed-recipient LIVE draft and human message approval; it cannot stage or send. */
+  ownedSeedMessages?: PortalOwnedSeedMessageService;
   /** Founder/admin effects-free CSV preview. No live importer or customer-write executor. */
   migrations?: PortalMigrationCentreService;
 }
@@ -874,6 +896,7 @@ function contentCalendarReadRange(selectedDate: string): Readonly<{ from: string
 const CONTENT_CALENDAR_CREATE_TEST_ROUTE = '/portal/content/calendar/test-planning-intents';
 const CONTENT_CALENDAR_RESCHEDULE_TEST_ROUTE = '/portal/content/calendar/test-reschedule';
 const CONTENT_CALENDAR_CANCEL_TEST_ROUTE = '/portal/content/calendar/test-cancel';
+const COMPANY_CONTENT_EXACT_REVIEW_ROUTE = /^\/portal\/content\/items\/([0-9a-f-]+)\/versions\/([0-9a-f-]+)\/review$/iu;
 const CAMPAIGN_FORM_TEXT = /^[^\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u202a-\u202e\u2066-\u2069]+$/u;
 const CAMPAIGN_LOCAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/u;
 const CAMPAIGN_RETURN_MODES = new Set(['week', 'month']);
@@ -1209,6 +1232,13 @@ function contentControlReturnLocation(
   form: Readonly<Record<string, string>>,
   noticeToken: string,
 ): string {
+  const exactItemId = (form.return_exact_item_id ?? '').trim().toLowerCase();
+  const exactVersionId = (form.return_exact_version_id ?? '').trim().toLowerCase();
+  if (CRM_OBJECT_ID.test(exactItemId) && CRM_OBJECT_ID.test(exactVersionId)) {
+    const query = new URLSearchParams({ notice: noticeToken });
+    return `/portal/content/items/${encodeURIComponent(exactItemId)}`
+      + `/versions/${encodeURIComponent(exactVersionId)}/review?${query.toString()}`;
+  }
   const query = new URLSearchParams({ notice: noticeToken });
   const search = (form.return_q ?? '').trim();
   if (search && search.length <= 80 && !/[\u0000-\u001f\u007f]/u.test(search)) query.set('q', search);
@@ -1231,6 +1261,52 @@ function contentControlRedirect(
 ): void {
   const noticeToken = contentControlNoticeToken(deps.sessionSecret, sessionToken, code);
   redirect(res, contentControlReturnLocation(form, noticeToken), undefined, 303);
+}
+
+function exactCompanyContentReviewLocation(
+  contentItemId: string,
+  contentVersionId: string,
+  query?: Readonly<{ notice?: string; ownedSeed?: string }>,
+): string {
+  const params = new URLSearchParams();
+  if (query?.notice) params.set('notice', query.notice);
+  if (query?.ownedSeed) params.set('owned_seed', query.ownedSeed);
+  const suffix = params.size ? `?${params.toString()}` : '';
+  return `/portal/content/items/${encodeURIComponent(contentItemId)}`
+    + `/versions/${encodeURIComponent(contentVersionId)}/review${suffix}`;
+}
+
+function ownedSeedWorkflowRedirect(
+  res: ServerResponse,
+  deps: PostgresPortalDeps,
+  sessionToken: string,
+  contentItemId: string,
+  state: OwnedSeedWorkflowState | null,
+  code?: ContentControlNoticeCode,
+): void {
+  const notice = code
+    ? contentControlNoticeToken(deps.sessionSecret, sessionToken, code)
+    : undefined;
+  const token = state
+    ? ownedSeedWorkflowToken(deps.sessionSecret, sessionToken, state, deps.now ? deps.now() : Date.now())
+    : undefined;
+  const contentVersionId = state?.companyContentVersionId ?? '';
+  if (!CRM_OBJECT_ID.test(contentItemId) || !CRM_OBJECT_ID.test(contentVersionId) || (state && !token)) {
+    const fallback = contentControlNoticeToken(deps.sessionSecret, sessionToken, code ?? 'invalid');
+    redirect(res, `${CONTENT_CONTROL_ROOM_ROUTE}?notice=${encodeURIComponent(fallback)}`, undefined, 303);
+    return;
+  }
+  redirect(res, exactCompanyContentReviewLocation(contentItemId, contentVersionId, {
+    ...(notice ? { notice } : {}),
+    ...(token ? { ownedSeed: token } : {}),
+  }), undefined, 303, { 'cache-control': 'no-store' });
+}
+
+function ownedSeedWorkflowFailure(kind: string): ContentControlNoticeCode {
+  if (kind === 'unauthenticated' || kind === 'forbidden') return 'forbidden';
+  if (kind === 'validation') return 'invalid';
+  if (kind === 'conflict') return 'conflict';
+  return 'unavailable';
 }
 
 function contentFailureNotice(kind: string): ContentControlNoticeCode {
@@ -3520,6 +3596,365 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
   }
 
+  // ── owned-seed proof: exact company copy → separate LIVE message → capped job ──
+  if (deps.kind === 'postgres' && p === OWNED_SEED_PROOF_PREPARE_ROUTE && method === 'POST') {
+    const form = await readForm(req);
+    if (!deps.companyContent?.createEmailDraftVersion
+        || !deps.ownedSeedMessages || !deps.ownedSeedCampaign) {
+      return contentControlRedirect(res, deps, sessionToken, form, 'unavailable');
+    }
+    if (!verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return contentControlRedirect(res, deps, sessionToken, form, 'invalid');
+    }
+    try {
+      const identity = crmIdentity(sessionToken, deps);
+      const existing = await deps.companyContent.snapshot(identity, {
+        limit: 100,
+        sourceSystem: 'propertypredator.company-content',
+      });
+      if (!existing.ok) {
+        return contentControlRedirect(res, deps, sessionToken, form, contentFailureNotice(existing.kind));
+      }
+      const prior = existing.snapshot.catalog.items.find((item) => (
+        item.source.itemId === PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_ITEM
+      ));
+      if (prior?.sourceFresh) {
+        const notice = contentControlNoticeToken(deps.sessionSecret, sessionToken, 'replayed');
+        return redirect(res, exactCompanyContentReviewLocation(
+          prior.contentItemId,
+          prior.contentVersionId,
+          { notice },
+        ), undefined, 303, { 'cache-control': 'no-store' });
+      }
+      const revision = prior ? {
+        contentItemId: prior.contentItemId,
+        previousVersionId: prior.contentVersionId,
+        sourceVersion: `operational-proof-${new Date(now).toISOString().replace(/[^0-9]/gu, '')}`
+          + `-${createHash('sha256').update(form.command_key ?? '').digest('hex').slice(0, 16)}`,
+      } : undefined;
+      const outcome = await deps.companyContent.createEmailDraftVersion(
+        identity,
+        propertyPredatorOwnedSeedProofEmailCommand(form.command_key ?? '', now, revision),
+      );
+      if (!outcome.ok) {
+        return contentControlRedirect(res, deps, sessionToken, form, contentFailureNotice(outcome.kind));
+      }
+      const notice = contentControlNoticeToken(deps.sessionSecret, sessionToken, 'draft_created');
+      return redirect(res, exactCompanyContentReviewLocation(
+        outcome.contentItemId,
+        outcome.contentVersionId,
+        { notice },
+      ), undefined, 303, { 'cache-control': 'no-store' });
+    } catch {
+      return contentControlRedirect(res, deps, sessionToken, form, 'unavailable');
+    }
+  }
+
+  if (deps.kind === 'postgres' && p === OWNED_SEED_MESSAGE_CREATE_ROUTE && method === 'POST') {
+    const form = await readForm(req);
+    const contentItemId = (form.return_exact_item_id ?? '').trim().toLowerCase();
+    const contentVersionId = (form.return_exact_version_id ?? '').trim().toLowerCase();
+    if (!deps.ownedSeedMessages || !CRM_OBJECT_ID.test(contentItemId)
+        || !CRM_OBJECT_ID.test(contentVersionId)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return contentControlRedirect(res, deps, sessionToken, form, 'invalid');
+    }
+    try {
+      const outcome = await deps.ownedSeedMessages.createDraft(crmIdentity(sessionToken, deps), {
+        commandKey: form.command_key ?? '',
+        companyContentVersionId: contentVersionId,
+      });
+      if (!outcome.ok) {
+        const notice = contentControlNoticeToken(
+          deps.sessionSecret,
+          sessionToken,
+          ownedSeedWorkflowFailure(outcome.kind),
+        );
+        return redirect(res, exactCompanyContentReviewLocation(contentItemId, contentVersionId, { notice }), undefined, 303);
+      }
+      const result = outcome.result;
+      const state: OwnedSeedWorkflowState = Object.freeze({
+        phase: 'drafted',
+        companyContentVersionId: result.companyContentVersionId,
+        messageId: result.messageId,
+        messageVersionId: result.messageVersionId,
+        approvalRequestId: null,
+        subjectSha256: result.subjectSha256,
+        bodySha256: result.bodySha256,
+        sourceContentSha256: result.sourceContentSha256,
+      });
+      return ownedSeedWorkflowRedirect(res, deps, sessionToken, contentItemId, state);
+    } catch {
+      const notice = contentControlNoticeToken(deps.sessionSecret, sessionToken, 'unavailable');
+      return redirect(res, exactCompanyContentReviewLocation(contentItemId, contentVersionId, { notice }), undefined, 303);
+    }
+  }
+
+  if (deps.kind === 'postgres' && p === OWNED_SEED_MESSAGE_APPROVAL_REQUEST_ROUTE && method === 'POST') {
+    const form = await readForm(req);
+    const contentItemId = (form.return_exact_item_id ?? '').trim().toLowerCase();
+    const state = verifyOwnedSeedWorkflowToken(
+      deps.sessionSecret,
+      sessionToken,
+      form.owned_seed_workflow_token,
+      now,
+    );
+    if (!deps.ownedSeedMessages || !state || state.phase !== 'drafted'
+        || !CRM_OBJECT_ID.test(contentItemId)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return contentControlRedirect(res, deps, sessionToken, form, 'invalid');
+    }
+    try {
+      const outcome = await deps.ownedSeedMessages.requestApproval(crmIdentity(sessionToken, deps), {
+        commandKey: form.command_key ?? '',
+        messageId: state.messageId,
+        reviewNote: form.review_note ?? null,
+      });
+      if (!outcome.ok) {
+        return ownedSeedWorkflowRedirect(
+          res, deps, sessionToken, contentItemId, state, ownedSeedWorkflowFailure(outcome.kind),
+        );
+      }
+      const result = outcome.result;
+      if (result.messageId !== state.messageId || result.messageVersionId !== state.messageVersionId
+          || result.subjectSha256 !== state.subjectSha256 || result.bodySha256 !== state.bodySha256
+          || result.sourceContentSha256 !== state.sourceContentSha256) {
+        return ownedSeedWorkflowRedirect(res, deps, sessionToken, contentItemId, state, 'conflict');
+      }
+      return ownedSeedWorkflowRedirect(res, deps, sessionToken, contentItemId, Object.freeze({
+        ...state,
+        phase: 'approval_pending',
+        approvalRequestId: result.approvalRequestId,
+      }));
+    } catch {
+      return ownedSeedWorkflowRedirect(res, deps, sessionToken, contentItemId, state, 'unavailable');
+    }
+  }
+
+  if (deps.kind === 'postgres' && p === OWNED_SEED_MESSAGE_APPROVAL_DECISION_ROUTE && method === 'POST') {
+    const form = await readForm(req);
+    const contentItemId = (form.return_exact_item_id ?? '').trim().toLowerCase();
+    const state = verifyOwnedSeedWorkflowToken(
+      deps.sessionSecret,
+      sessionToken,
+      form.owned_seed_workflow_token,
+      now,
+    );
+    const decision = form.decision;
+    if (!deps.ownedSeedMessages || !state || state.phase !== 'approval_pending'
+        || !state.approvalRequestId || !CRM_OBJECT_ID.test(contentItemId)
+        || (decision !== 'approved' && decision !== 'rejected' && decision !== 'changes_requested')
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return contentControlRedirect(res, deps, sessionToken, form, 'invalid');
+    }
+    try {
+      const outcome = await deps.ownedSeedMessages.decideApproval(crmIdentity(sessionToken, deps), {
+        commandKey: form.command_key ?? '',
+        approvalRequestId: state.approvalRequestId,
+        decision,
+        decisionNote: form.decision_note ?? null,
+      });
+      if (!outcome.ok) {
+        return ownedSeedWorkflowRedirect(
+          res, deps, sessionToken, contentItemId, state, ownedSeedWorkflowFailure(outcome.kind),
+        );
+      }
+      const result = outcome.result;
+      if (result.messageId !== state.messageId || result.messageVersionId !== state.messageVersionId
+          || result.approvalRequestId !== state.approvalRequestId
+          || result.subjectSha256 !== state.subjectSha256 || result.bodySha256 !== state.bodySha256
+          || result.sourceContentSha256 !== state.sourceContentSha256) {
+        return ownedSeedWorkflowRedirect(res, deps, sessionToken, contentItemId, state, 'conflict');
+      }
+      return ownedSeedWorkflowRedirect(res, deps, sessionToken, contentItemId, Object.freeze({
+        ...state,
+        phase: decision === 'approved' ? 'approved' : 'drafted',
+        approvalRequestId: result.approvalRequestId,
+      }));
+    } catch {
+      return ownedSeedWorkflowRedirect(res, deps, sessionToken, contentItemId, state, 'unavailable');
+    }
+  }
+
+  if (deps.kind === 'postgres' && p === OWNED_SEED_CAMPAIGN_STAGE_ROUTE && method === 'POST') {
+    const form = await readForm(req);
+    const contentItemId = (form.return_exact_item_id ?? '').trim().toLowerCase();
+    const state = verifyOwnedSeedWorkflowToken(
+      deps.sessionSecret,
+      sessionToken,
+      form.owned_seed_workflow_token,
+      now,
+    );
+    if (!deps.ownedSeedCampaign || !state || state.phase !== 'approved'
+        || !CRM_OBJECT_ID.test(contentItemId)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return contentControlRedirect(res, deps, sessionToken, form, 'invalid');
+    }
+    try {
+      const outcome = await deps.ownedSeedCampaign.stage(crmIdentity(sessionToken, deps), {
+        commandKey: form.command_key ?? '',
+        messageVersionId: state.messageVersionId,
+        runId: form.run_id ?? '',
+      });
+      if (!outcome.ok) {
+        return ownedSeedWorkflowRedirect(
+          res, deps, sessionToken, contentItemId, state, ownedSeedWorkflowFailure(outcome.kind),
+        );
+      }
+      const result = outcome.result;
+      if (result.messageVersionId !== state.messageVersionId) {
+        return ownedSeedWorkflowRedirect(res, deps, sessionToken, contentItemId, state, 'conflict');
+      }
+      if (result.disposition === 'blocked') {
+        // A DB block is recoverable after fresh controls/evidence. Keep the
+        // separately approved message retryable rather than stranding it in a
+        // terminal browser-only phase.
+        return ownedSeedWorkflowRedirect(res, deps, sessionToken, contentItemId, state, 'conflict');
+      }
+      return ownedSeedWorkflowRedirect(res, deps, sessionToken, contentItemId, Object.freeze({
+        ...state,
+        phase: 'staged',
+      }));
+    } catch {
+      return ownedSeedWorkflowRedirect(res, deps, sessionToken, contentItemId, state, 'unavailable');
+    }
+  }
+
+  // ── exact company-content review: complete immutable bytes beside the decision ──
+  const exactCompanyContentReview = p.match(COMPANY_CONTENT_EXACT_REVIEW_ROUTE);
+  if (deps.kind === 'postgres' && exactCompanyContentReview && method === 'GET') {
+    const contentItemId = (exactCompanyContentReview[1] ?? '').toLowerCase();
+    const contentVersionId = (exactCompanyContentReview[2] ?? '').toLowerCase();
+    if (!deps.companyContent?.review
+        || !CRM_OBJECT_ID.test(contentItemId) || !CRM_OBJECT_ID.test(contentVersionId)) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Exact content review not connected',
+        message: 'The complete immutable review representation is not available. Nothing changed.',
+        active: 'content',
+        backHref: CONTENT_CONTROL_ROOM_ROUTE,
+        backLabel: 'Return to Content Control',
+      }));
+    }
+    try {
+      const outcome = await deps.companyContent.review(crmIdentity(sessionToken, deps), {
+        contentItemId,
+        contentVersionId,
+      });
+      if (!outcome.ok) {
+        const status = outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden'
+          ? 403 : outcome.kind === 'validation' ? 400 : outcome.kind === 'not_found' ? 404 : 503;
+        return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+          title: status === 503 ? 'Exact content review temporarily unavailable' : 'Exact content review unavailable',
+          message: outcome.message,
+          active: 'content',
+          backHref: CONTENT_CONTROL_ROOM_ROUTE,
+          backLabel: 'Return to Content Control',
+        }));
+      }
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      const review = outcome.snapshot.review;
+      const isOwnedSeedProof = review.source.system === 'propertypredator.company-content'
+        && review.source.itemId === PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_ITEM;
+      const ownedSeedEligible = Boolean(
+        isOwnedSeedProof
+        && outcome.snapshot.workspace.canManage
+        && deps.ownedSeedMessages
+        && review.isLatest
+        && !review.approvalStale
+        && review.approvalStatus === 'approved'
+        && review.email
+      );
+      let ownedSeedAvailable = ownedSeedEligible;
+      let ownedSeedWorkflow: OwnedSeedWorkflowState | undefined;
+      let ownedSeedWorkflowTokenValue: string | undefined;
+      if (ownedSeedEligible && deps.ownedSeedMessages && review.email) {
+        const resumed = await deps.ownedSeedMessages.resume(crmIdentity(sessionToken, deps), {
+          companyContentVersionId: review.contentVersionId,
+        });
+        if (!resumed.ok) {
+          ownedSeedAvailable = false;
+        } else if (resumed.result) {
+          const result = resumed.result;
+          const exactEvidenceMatches = result.companyContentVersionId === review.contentVersionId
+            && result.sourceContentSha256 === review.contentSha256
+            && result.subjectSha256 === review.email.subjectSha256
+            && result.bodySha256 === review.email.bodySha256;
+          if (!exactEvidenceMatches) {
+            ownedSeedAvailable = false;
+          } else {
+            ownedSeedWorkflow = Object.freeze({
+              phase: result.phase,
+              companyContentVersionId: result.companyContentVersionId,
+              messageId: result.messageId,
+              messageVersionId: result.messageVersionId,
+              approvalRequestId: result.approvalRequestId,
+              subjectSha256: result.subjectSha256,
+              bodySha256: result.bodySha256,
+              sourceContentSha256: result.sourceContentSha256,
+            });
+            ownedSeedWorkflowTokenValue = ownedSeedWorkflowToken(
+              deps.sessionSecret,
+              sessionToken,
+              ownedSeedWorkflow,
+              now,
+            );
+            if (!ownedSeedWorkflowTokenValue) ownedSeedAvailable = false;
+          }
+        }
+      }
+      return sendHtml(res, 200, operationalPage(
+        outcome.snapshot.workspace.workspaceName,
+        renderPortalCompanyContentReviewBody(outcome.snapshot, {
+          notice: contentControlNoticeFromQuery(
+            url.searchParams,
+            deps.sessionSecret,
+            sessionToken,
+          ),
+          security: {
+            csrfToken,
+            ownedSeedAvailable,
+            ownedSeedStageAvailable: Boolean(deps.ownedSeedCampaign),
+            ...(ownedSeedWorkflow && ownedSeedWorkflowTokenValue
+              ? {
+                  ownedSeedWorkflow,
+                  ownedSeedWorkflowToken: ownedSeedWorkflowTokenValue,
+                }
+              : {}),
+            ownedSeedCommandKey: randomUUID(),
+            ownedSeedRunId: randomUUID(),
+            ...(review.approvalStatus === 'pending' && review.approvalRequestId
+              ? {
+                  decisionCommandKey: randomUUID(),
+                  exactApprovalToken: exactReviewApprovalToken(
+                    deps.sessionSecret,
+                    sessionToken,
+                    {
+                      contentItemId: review.contentItemId,
+                      contentVersionId: review.contentVersionId,
+                      approvalRequestId: review.approvalRequestId,
+                      contentSha256: review.contentSha256,
+                    },
+                    now,
+                  ),
+                }
+              : { requestCommandKey: randomUUID() }),
+          },
+        }),
+        deps,
+        'content',
+        csrfToken,
+      ));
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Exact content review temporarily unavailable',
+        message: 'No approval, message, provider or schedule state was changed.',
+        active: 'content',
+        backHref: CONTENT_CONTROL_ROOM_ROUTE,
+        backLabel: 'Return to Content Control',
+      }));
+    }
+  }
+
   // ── company-owned content control: immutable catalogue evidence only ──
   if (deps.kind === 'postgres' && p === CONTENT_CONTROL_ROOM_ROUTE && method === 'GET') {
     if (!deps.companyContent) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
@@ -3577,6 +4012,14 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
             deps.companyContentSync
             && deps.productProfile?.id === 'property_predator_growth'
           ),
+          ownedSeedProofAvailable: Boolean(
+            view.canManage
+            && deps.companyContent.createEmailDraftVersion
+            && deps.ownedSeedMessages
+            && deps.ownedSeedCampaign
+            && deps.productProfile?.id === 'property_predator_growth'
+          ),
+          ownedSeedPrepareCommandKey: randomUUID(),
           security: view.canWrite ? {
             csrfToken,
             requestApprovalKeys: Object.fromEntries(view.items.map((item) => [
@@ -3648,11 +4091,53 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     if (decision !== 'approved' && decision !== 'rejected' && decision !== 'changes_requested') {
       return contentControlRedirect(res, deps, sessionToken, form, 'invalid');
     }
-    if (decision === 'approved'
-        && !PORTAL_COMPANY_CONTENT_REVIEW_REPRESENTATION_AVAILABLE) {
-      return contentControlRedirect(res, deps, sessionToken, form, 'review_unavailable');
-    }
     try {
+      if (decision === 'approved') {
+        const reviewItemId = (form.review_content_item_id ?? '').trim().toLowerCase();
+        const reviewVersionId = (form.review_content_version_id ?? '').trim().toLowerCase();
+        const reviewContentSha256 = (form.review_content_sha256 ?? '').trim().toLowerCase();
+        const approvalRequestId = (form.approval_request_id ?? '').trim().toLowerCase();
+        if (!deps.companyContent.decideExactReviewedApproval
+            || !CRM_OBJECT_ID.test(reviewItemId)
+            || !CRM_OBJECT_ID.test(reviewVersionId)
+            || !CRM_OBJECT_ID.test(approvalRequestId)
+            || !/^[0-9a-f]{64}$/u.test(reviewContentSha256)
+            || !verifyExactReviewApprovalToken(
+              deps.sessionSecret,
+              sessionToken,
+              form.exact_approval_token,
+              {
+                contentItemId: reviewItemId,
+                contentVersionId: reviewVersionId,
+                approvalRequestId,
+                contentSha256: reviewContentSha256,
+              },
+              now,
+            )) {
+          return contentControlRedirect(res, deps, sessionToken, form, 'review_unavailable');
+        }
+        const outcome = await deps.companyContent.decideExactReviewedApproval(
+          crmIdentity(sessionToken, deps),
+          {
+            commandKey: form.command_key ?? '',
+            approvalRequestId,
+            decision: 'approved',
+            decisionNote: form.decision_note ?? null,
+            contentItemId: reviewItemId,
+            contentVersionId: reviewVersionId,
+            contentSha256: reviewContentSha256,
+          },
+        );
+        return contentControlRedirect(
+          res,
+          deps,
+          sessionToken,
+          form,
+          outcome.ok
+            ? outcome.disposition === 'replayed' ? 'replayed' : outcome.decision
+            : contentFailureNotice(outcome.kind),
+        );
+      }
       const outcome = await deps.companyContent.decideApproval(crmIdentity(sessionToken, deps), {
         commandKey: form.command_key ?? '',
         approvalRequestId: form.approval_request_id ?? '',

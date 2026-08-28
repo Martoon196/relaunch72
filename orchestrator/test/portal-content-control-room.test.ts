@@ -109,8 +109,8 @@ test('Content Control Room presents exact provenance and filters by deterministi
   });
   assert.equal(present([image], { channel: 'library' }).items.length, 1);
   assert.equal(view.metrics.loaded, 3);
-  assert.equal(view.metrics.publishable, 0);
-  assert.equal(view.metrics.needsAttention, 3);
+  assert.equal(view.metrics.publishable, 3);
+  assert.equal(view.metrics.needsAttention, 0);
   assert.equal(view.matchingCount, 1);
 });
 
@@ -145,23 +145,22 @@ test('Content Control Room truth labels keep stale approval and expired source p
   const view = present([item(), stale, expired, pending]);
   const html = renderContentControlRoomBody(view);
 
-  assert.equal(view.metrics.publishable, 0);
-  assert.equal(view.metrics.needsAttention, 4);
+  assert.equal(view.metrics.publishable, 1);
+  assert.equal(view.metrics.needsAttention, 3);
   assert.deepEqual(view.reviewQueue.map((entry) => entry.reason), [
-    'Exact review content unavailable',
-    'Exact review content unavailable',
-    'Exact review content unavailable',
-    'Exact review content unavailable',
+    'Approve this exact version',
+    'Decision waiting',
+    'Refresh source proof',
   ]);
   assert.match(html, /Stale approval/);
   assert.match(html, /Stale · newer version exists/);
   assert.match(html, /An older decision does not cover immutable v4/);
   assert.match(html, /Source proof stale/);
-  assert.match(html, /exact text or artwork bytes are not available/i);
-  assert.equal((html.match(/Publishable gate<\/span><strong>Eligible/g) ?? []).length, 0);
-  assert.equal((html.match(/Publishable gate<\/span><strong>Locked/g) ?? []).length, 4);
-  assert.match(html, /Approval and outbound use are locked/);
-  assert.match(html, /No post, message, schedule or provider call happens here/);
+  assert.match(html, /exact hash-bound review representation is available/i);
+  assert.equal((html.match(/Publishable gate<\/span><strong>Eligible/g) ?? []).length, 1);
+  assert.equal((html.match(/Publishable gate<\/span><strong>Locked/g) ?? []).length, 3);
+  assert.match(html, /Exact review is available; outbound remains separate/);
+  assert.match(html, /No post, message, schedule or provider call happens from this catalogue/);
 });
 
 test('Content Control Room fails a contradictory stored publishable claim closed', () => {
@@ -174,8 +173,8 @@ test('Content Control Room fails a contradictory stored publishable claim closed
   assert.equal(view.items[0]?.publishable, false);
   assert.equal(view.items[0]?.publishableLabel, 'Locked');
   assert.equal(view.metrics.publishable, 0);
-  assert.equal(view.reviewQueue[0]?.reason, 'Exact review content unavailable');
-  assert.match(renderContentControlRoomBody(view), /exact text or artwork bytes are not available/i);
+  assert.equal(view.reviewQueue[0]?.reason, 'Decision waiting');
+  assert.match(renderContentControlRoomBody(view), /An exact approval decision is required/i);
 });
 
 test('Content Control Room escapes every supplied display and audit field', () => {
@@ -280,8 +279,8 @@ test('Content Control Room exposes protected approval commands only to authorise
   assert.doesNotMatch(html, /name="decision" value="approved"|Approve exact v3/);
   assert.match(html, /name="decision" value="changes_requested">Request changes/);
   assert.match(html, /name="decision" value="rejected">Reject/);
-  assert.match(html, /Approval locked · exact review content unavailable/);
-  assert.match(html, /server will reject any forged approval/i);
+  assert.match(html, /Open exact copy &amp; review/);
+  assert.match(html, /Exact review required/i);
 
   const readOnly = renderContentControlRoomBody(present([pending, unrequested]), {
     security: {

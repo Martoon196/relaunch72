@@ -26,6 +26,8 @@ import type { PortalCompanyContentSyncService } from './company-content-sync-ser
 import type { PortalCompanyContentReviewService } from './company-content-review-service.js';
 import type { PortalAffiliateComplianceService } from './affiliate-compliance-service.js';
 import type { PortalConversionInboxCommandService } from './conversion-inbox-service.js';
+import type { PortalOwnedSeedCampaignService } from './owned-seed-campaign-service.js';
+import type { PortalOwnedSeedMessageService } from './owned-seed-message-service.js';
 import type { PortalOperatorActionCentreService } from './operator-action-centre-pg-service.js';
 import type { PortalCompanyAssetsService } from './company-assets-service.js';
 import type { SubscriptionStore } from '../server/subscriptions.js';
@@ -159,6 +161,10 @@ export interface PostgresPortalConfig {
   inbox?: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval queue boundary; no dispatcher capability. */
   inboxCommands?: PortalConversionInboxCommandService;
+  /** Fixed office-seed staging boundary; no provider/network capability. */
+  ownedSeedCampaign?: PortalOwnedSeedCampaignService;
+  /** Fixed office-seed LIVE draft and explicit message approval; no provider effect. */
+  ownedSeedMessages?: PortalOwnedSeedMessageService;
   /** Durable TEST-only public-social planning boundary. */
   publicSocial?: NonNullable<PostgresPortalDeps['publicSocial']>;
   productProfile?: PortalProductProfile;
@@ -188,7 +194,8 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
       || cfg.abuseHashSecret.trim() === cfg.sessionSecret.trim()) {
     throw new Error('PostgreSQL portal abuse boundary is incomplete');
   }
-  if ((cfg.companyContentSync || cfg.companyContentReview || cfg.brandBrain || cfg.campaignDrafts)
+  if ((cfg.companyContentSync || cfg.companyContentReview || cfg.brandBrain || cfg.campaignDrafts
+      || cfg.ownedSeedMessages || cfg.ownedSeedCampaign)
       && productProfile.id !== 'property_predator_growth') {
     throw new Error(
       'Property Predator company-content sync is forbidden outside property_predator_growth',
@@ -217,6 +224,8 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     affiliateCompliance: cfg.affiliateCompliance,
     inbox: cfg.inbox,
     inboxCommands: cfg.inboxCommands,
+    ownedSeedCampaign: cfg.ownedSeedCampaign,
+    ownedSeedMessages: cfg.ownedSeedMessages,
     publicSocial: cfg.publicSocial,
     productProfile,
     trustedClientAddress: cfg.trustedClientAddress,

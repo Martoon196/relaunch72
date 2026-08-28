@@ -37,6 +37,7 @@ const AGENCY_VERSION_ID = '19191919-1919-4919-8919-191919191919';
 const AGENCY_APPOINTMENT_ID = '20202020-2020-4020-8020-202020202020';
 const AGENCY_SALE_ID = '21212121-2121-4121-8121-212121212121';
 const AGENCY_SCORE_ID = '23232323-2323-4323-8323-232323232323';
+const EMAIL_RECEIPT_ID = '24242424-2424-4424-8424-242424242424';
 
 type Row = Record<string, unknown>;
 
@@ -137,6 +138,15 @@ function fixtures(): Record<string, Row[]> {
         progress_basis_points: null,
         occurred_at: new Date('2026-08-25T10:15:00.000Z'),
         source_label: 'Property Predator self-serve',
+      }),
+      scoped({
+        id: EMAIL_RECEIPT_ID,
+        evidence_kind: 'email',
+        title: 'Property Predator email delivered',
+        detail: 'Growth HQ launch proof',
+        progress_basis_points: null,
+        occurred_at: new Date('2026-08-25T10:16:00.000Z'),
+        source_label: 'Mailgun · signed receipt',
       }),
     ],
     'conversion.lead-360.read-offers': [scoped({
@@ -280,6 +290,15 @@ test('Lead360ReadService maps and deeply freezes one narrow case file in one sco
   });
   assert.equal(result.evidence[0]?.title, '<script>not markup</script>');
   assert.equal(result.evidence[0]?.progressBasisPoints, 9200);
+  assert.deepEqual(result.evidence[2], {
+    id: EMAIL_RECEIPT_ID,
+    kind: 'email',
+    title: 'Property Predator email delivered',
+    detail: 'Growth HQ launch proof',
+    progressBasisPoints: null,
+    occurredAt: '2026-08-25T10:16:00.000Z',
+    sourceLabel: 'Mailgun · signed receipt',
+  });
   assert.deepEqual(result.offers[0]?.latestResponse, {
     id: RESPONSE_ID,
     response: 'accepted',
@@ -545,6 +564,10 @@ test('Lead 360 SQL stays parameterized, RLS-scoped and outside private payload j
   assert.match(sql, /app\.offer_presentation_facts/);
   assert.match(sql, /app\.offer_response_facts/);
   assert.match(sql, /app\.conversion_commerce_facts/);
+  assert.match(sql, /app\.provider_operation_receipts/);
+  assert.match(sql, /receipt\.source_kind = 'verified_webhook'/);
+  assert.match(sql, /connection\.provider_id = 'mailgun_eu'/);
+  assert.match(sql, /delivery\.environment = 'live'/);
   assert.match(sql, /app\.communication_consent_events/);
   assert.match(sql, /app\.communication_suppression_events/);
   assert.match(sql, /app\.opportunities/);

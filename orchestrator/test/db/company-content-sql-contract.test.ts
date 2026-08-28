@@ -167,6 +167,19 @@ test('company content repository exposes a bounded latest-version approval catal
   assert.match(repository, /Company content version history exceeded its read bound/);
 });
 
+test('company content exact review is version-bound and returns the stored body with database digest evidence', async () => {
+  const repository = normalise(await readFile(
+    new URL('../../src/company-content-pg/repository.ts', import.meta.url),
+    'utf8',
+  ));
+  assert.match(repository, /\/\* company-content\.load-exact-review \*\//);
+  assert.match(repository, /version\.content_body AS "canonicalContent"/);
+  assert.match(repository, /encode\(version\.content_sha256, 'hex'\) AS "contentSha256"/);
+  assert.match(repository, /WHERE version\.content_item_id = \$1 AND version\.id = \$2/);
+  assert.match(repository, /NOT EXISTS \( SELECT 1 FROM app\.company_content_versions AS newer/);
+  assert.match(repository, /ORDER BY candidate\.request_number DESC, candidate\.id LIMIT 1/);
+});
+
 test('0021 terminates every PL/pgSQL function and anonymous block as executable PostgreSQL', async () => {
   const sql = await readFile(migrationUrl, 'utf8');
   const functions = [...sql.matchAll(

@@ -79,6 +79,71 @@ export interface CreateCompanyContentVersionResult {
 }
 
 /**
+ * Exact, hash-bound representation used for owned email drafts. Subject and
+ * body live inside `content_body` together so neither can change without
+ * changing the immutable version digest.
+ */
+export const COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA =
+  'propertypredator.email-draft/v1' as const;
+export const COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE =
+  'application/vnd.propertypredator.email-draft+json' as const;
+
+export interface CompanyContentEmailDraftPayload {
+  readonly schema: typeof COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA;
+  readonly subject: string;
+  readonly bodyText: string;
+}
+
+export interface CreateCompanyContentEmailDraftVersionCommand
+extends Omit<CreateCompanyContentVersionCommand, 'kind' | 'contentMimeType' | 'content'> {
+  /** Generated drafts use `generated`; operator imports use `imported`; edits identify a predecessor. */
+  readonly origin: CompanyContentOrigin;
+  readonly subject: string;
+  readonly bodyText: string;
+}
+
+export interface CompanyContentExactReviewQuery {
+  readonly contentItemId: string;
+  readonly contentVersionId: string;
+}
+
+export interface CompanyContentExactEmailReview {
+  readonly schema: typeof COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA;
+  readonly subject: string;
+  readonly bodyText: string;
+  readonly subjectSha256: string;
+  readonly bodySha256: string;
+}
+
+/**
+ * One complete immutable version. The canonical bytes and their digest are
+ * returned together so a human review surface never approves a title/hash
+ * placeholder while hiding the actual copy.
+ */
+export interface CompanyContentExactReview {
+  readonly contentItemId: string;
+  readonly contentVersionId: string;
+  readonly versionNumber: number;
+  readonly isLatest: boolean;
+  readonly origin: CompanyContentOrigin;
+  readonly kind: CompanyContentKind;
+  readonly title: string;
+  readonly contentMimeType: string;
+  readonly canonicalContent: string;
+  readonly canonicalByteLength: number;
+  readonly contentSha256: string;
+  readonly source: CompanyContentSourceProvenance;
+  readonly blobSha256: string;
+  readonly brandSha256: string;
+  readonly approvalRequestId: string | null;
+  readonly approvalDecisionId: string | null;
+  readonly approvalStatus: CompanyContentApprovalStatus;
+  readonly approvalStale: boolean;
+  readonly email: CompanyContentExactEmailReview | null;
+  readonly createdAt: string;
+}
+
+/**
  * Append a new short-lived source proof to an existing immutable version.
  * The expected tuple prevents a stale adapter read from refreshing a version
  * whose source, content, blob or brand evidence has changed.

@@ -27,6 +27,7 @@ function caseFile(): Lead360View {
       { id: 'e1', kind: 'watched', title: 'Predator Briefing', detail: 'Replay session', percentage: 92, occurredAt: '2026-08-25T09:55:00.000Z', sourceLabel: 'Webinar player' },
       { id: 'e2', kind: 'offer', title: 'Apex annual offer', detail: 'Pricing page presented', percentage: null, occurredAt: '2026-08-25T10:00:00.000Z', sourceLabel: 'Property Predator' },
       { id: 'e3', kind: 'reply', title: 'Buying question received', detail: 'Asked about onboarding', percentage: null, occurredAt: '2026-08-25T10:12:00.000Z', sourceLabel: 'Email inbox' },
+      { id: 'e4', kind: 'email', title: 'Property Predator email delivered', detail: 'Growth HQ launch proof', percentage: null, occurredAt: '2026-08-25T10:13:00.000Z', sourceLabel: 'Mailgun · signed receipt' },
     ],
     nextMove: { label: 'Call while the offer is fresh', reason: 'The lead replied after viewing pricing. Answer the onboarding question before introducing anything new.', dueAt: '2026-08-25T11:00:00.000Z' },
     offers: [{ id: 'o1', title: 'Apex annual', valueLabel: '£1,497 per year', state: 'no_response', presentedAt: '2026-08-25T10:00:00.000Z', responseAt: null, responseDetail: 'Buying question received; no commercial response recorded.' }],
@@ -53,6 +54,9 @@ test('Lead 360 renders a semantic forensic case file with exact evidence and dec
   assert.match(html, /data-evidence-kind="watched"/);
   assert.match(html, /92% complete/);
   assert.match(html, /Source · Webinar player/);
+  assert.match(html, /data-evidence-kind="email"/);
+  assert.match(html, /Property Predator email delivered/);
+  assert.match(html, /Source · Mailgun · signed receipt/);
   assert.match(html, /25 Aug 2026, 09:55:00 UTC/);
   assert.match(html, /Best next move/);
   assert.match(html, /Primary route · Self-serve conversion/);

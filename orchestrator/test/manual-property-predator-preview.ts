@@ -10,6 +10,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { appShell } from '../src/portal/ui.js';
 import { createPropertyPredatorContentCatalogFixture } from '../src/portal/content-control-room-fixtures.js';
 import {
+  canonicalCompanyContentEmailDraft,
+  COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE,
+  COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA,
+  type CompanyContentCatalogItem,
+  type CompanyContentCatalogPage,
+  type CompanyContentExactReview,
+} from '../src/company-content-pg/index.js';
+import {
   CONTENT_CONTROL_ROOM_ROUTE,
   presentContentControlRoom,
 } from '../src/portal/content-control-room-presenter.js';
@@ -36,7 +44,23 @@ import {
   PROPERTY_PREDATOR_REVIEW_FIXTURE_RELEASE_ITEM_ID,
 } from '../src/portal/company-content-review-fixtures.js';
 import { presentCompanyContentReview } from '../src/portal/company-content-review-presenter.js';
-import { renderCompanyContentReviewBody } from '../src/portal/company-content-review-view.js';
+import {
+  renderCompanyContentReviewBody,
+  renderPortalCompanyContentReviewBody,
+} from '../src/portal/company-content-review-view.js';
+import type { PortalCompanyContentReviewSnapshot } from '../src/portal/company-content-service.js';
+import {
+  OWNED_SEED_CAMPAIGN_STAGE_ROUTE,
+  OWNED_SEED_MESSAGE_APPROVAL_DECISION_ROUTE,
+  OWNED_SEED_MESSAGE_APPROVAL_REQUEST_ROUTE,
+  OWNED_SEED_MESSAGE_CREATE_ROUTE,
+  type OwnedSeedWorkflowState,
+} from '../src/portal/owned-seed-actions.js';
+import {
+  PROPERTY_PREDATOR_OWNED_SEED_PROOF_BODY,
+  PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_ITEM,
+  PROPERTY_PREDATOR_OWNED_SEED_PROOF_SUBJECT,
+} from '../src/portal/owned-seed-proof-email.js';
 import { createPropertyPredatorTestInboxSnapshot } from '../src/portal/conversion-inbox-fixtures.js';
 import {
   CONVERSION_INBOX_ROUTE,
@@ -443,7 +467,74 @@ const PREVIEW_CAMPAIGN_NOTICE_SESSION = 'preview-campaign-session';
 const PREVIEW_CALENDAR_RESCHEDULE_ROUTE = '/portal/content/calendar/test-planning-targets/reschedule';
 const PREVIEW_CALENDAR_CANCEL_ROUTE = '/portal/content/calendar/test-planning-targets/cancel';
 const PREVIEW_CALENDAR_CAMPAIGN_REVISION_KEY = 'property-predator-signal-sprint:r3';
-let previewContentCatalog = createPropertyPredatorContentCatalogFixture();
+const PREVIEW_OWNED_SEED_MESSAGE_ID = '86000000-0000-4000-8000-000000000002';
+const PREVIEW_OWNED_SEED_MESSAGE_VERSION_ID = '87000000-0000-4000-8000-000000000002';
+const PREVIEW_OWNED_SEED_APPROVAL_REQUEST_ID = '88000000-0000-4000-8000-000000000002';
+const PREVIEW_OWNED_SEED_WORKFLOW_TOKEN = `${'a'.repeat(48)}.${'b'.repeat(43)}`;
+let previewOwnedSeedWorkflow: OwnedSeedWorkflowState | undefined;
+
+function previewExactPayload(item: CompanyContentCatalogItem): Readonly<{
+  canonicalContent: string;
+  contentMimeType: string;
+  email: CompanyContentExactReview['email'];
+  contentSha256: string;
+  blobSha256: string;
+}> {
+  const ownedSeed = item.source.itemId === PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_ITEM;
+  const subject = ownedSeed
+    ? PROPERTY_PREDATOR_OWNED_SEED_PROOF_SUBJECT
+    : `${item.title} — preview`;
+  const bodyText = ownedSeed
+    ? PROPERTY_PREDATOR_OWNED_SEED_PROOF_BODY
+    : `Fictional local-preview copy for ${item.title}.\n\nNo customer, affiliate or provider data is present.`;
+  const canonicalContent = item.kind === 'email'
+    ? canonicalCompanyContentEmailDraft(subject, bodyText)
+    : JSON.stringify({
+        body: bodyText,
+        schema: 'propertypredator.local-preview-content/v1',
+        title: item.title,
+      });
+  return Object.freeze({
+    canonicalContent,
+    contentMimeType: item.kind === 'email'
+      ? COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE
+      : 'application/json',
+    email: item.kind === 'email' ? Object.freeze({
+      schema: COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA,
+      subject,
+      bodyText,
+      subjectSha256: createHash('sha256').update(subject, 'utf8').digest('hex'),
+      bodySha256: createHash('sha256').update(bodyText, 'utf8').digest('hex'),
+    }) : null,
+    contentSha256: createHash('sha256').update(canonicalContent, 'utf8').digest('hex'),
+    blobSha256: createHash('sha256').update(`preview-blob:${canonicalContent}`, 'utf8').digest('hex'),
+  });
+}
+
+function createPreviewContentCatalog(): CompanyContentCatalogPage {
+  const source = createPropertyPredatorContentCatalogFixture();
+  return Object.freeze({
+    ...source,
+    items: Object.freeze(source.items.map((sourceItem, index) => {
+      const item = index === 1 ? Object.freeze({
+        ...sourceItem,
+        source: Object.freeze({
+          ...sourceItem.source,
+          itemId: PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_ITEM,
+        }),
+      }) : sourceItem;
+      const payload = previewExactPayload(item);
+      return Object.freeze({
+        ...item,
+        contentMimeType: payload.contentMimeType,
+        contentSha256: payload.contentSha256,
+        blobSha256: payload.blobSha256,
+      });
+    })),
+  });
+}
+
+let previewContentCatalog = createPreviewContentCatalog();
 let previewInboxSnapshot = createPropertyPredatorTestInboxSnapshot();
 
 const PREVIEW_CAMPAIGN_TARGETS = Object.freeze([
@@ -1504,6 +1595,55 @@ function previewContentControl(url: URL): string {
   });
 }
 
+export function previewExactCompanyContentReview(
+  contentItemId: string,
+  contentVersionId: string,
+): PortalCompanyContentReviewSnapshot | null {
+  const item = previewContentCatalog.items.find((candidate) => (
+    candidate.contentItemId === contentItemId
+    && candidate.contentVersionId === contentVersionId
+  ));
+  if (!item) return null;
+  const payload = previewExactPayload(item);
+  const approvalStatus = item.approvalStatus === 'stale'
+    ? 'approved' as const : item.approvalStatus;
+  return Object.freeze({
+    workspace: Object.freeze({
+      workspaceId: snapshot.workspace.id,
+      workspaceName: snapshot.workspace.name,
+      snapshotAt: new Date().toISOString(),
+      canWrite: true,
+      canManage: true,
+    }),
+    review: Object.freeze({
+      contentItemId: item.contentItemId,
+      contentVersionId: item.contentVersionId,
+      versionNumber: item.versionNumber,
+      isLatest: true,
+      origin: item.origin,
+      kind: item.kind,
+      title: item.title,
+      contentMimeType: payload.contentMimeType,
+      canonicalContent: payload.canonicalContent,
+      canonicalByteLength: Buffer.byteLength(payload.canonicalContent, 'utf8'),
+      contentSha256: payload.contentSha256,
+      source: item.source,
+      blobSha256: payload.blobSha256,
+      brandSha256: item.brandSha256,
+      approvalRequestId: item.approvalRequestId,
+      approvalDecisionId: item.approvalDecisionId,
+      approvalStatus,
+      approvalStale: item.approvalStale || item.approvalStatus === 'stale',
+      email: payload.email,
+      createdAt: item.createdAt,
+    }),
+  });
+}
+
+export function previewPageForTest(path: string): ReturnType<typeof page> {
+  return page(new URL(path, 'http://127.0.0.1'));
+}
+
 function previewConversionInbox(url: URL): string {
   const view = presentConversionInbox(previewInboxSnapshot, {
     workspaceName: snapshot.workspace.name,
@@ -1569,6 +1709,47 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
       'Property Predator — Affiliate Compliance',
     ),
   };
+  const exactContentMatch = /^\/portal\/content\/items\/([0-9a-f-]+)\/versions\/([0-9a-f-]+)\/review$/iu.exec(path);
+  if (exactContentMatch) {
+    const exact = previewExactCompanyContentReview(
+      (exactContentMatch[1] ?? '').toLowerCase(),
+      (exactContentMatch[2] ?? '').toLowerCase(),
+    );
+    if (exact) {
+      const review = exact.review;
+      const ownedSeed = review.source.itemId === PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_ITEM
+        && review.approvalStatus === 'approved' && !review.approvalStale;
+      return {
+        status: 200,
+        html: shell(`${previewOperationsNav('content')}${renderPortalCompanyContentReviewBody(exact, {
+          notice: contentControlNoticeFromQuery(
+            url.searchParams,
+            PREVIEW_CONTENT_NOTICE_SECRET,
+            PREVIEW_CONTENT_NOTICE_SESSION,
+          ),
+          security: {
+            csrfToken: PREVIEW_CSRF,
+            ...(review.approvalStatus === 'pending' && review.approvalRequestId
+              ? {
+                  decisionCommandKey: `preview-content-decision:${review.approvalRequestId}`,
+                  exactApprovalToken: 'preview_exact_approval_capability_0000000001',
+                }
+              : { requestCommandKey: `preview-content-request:${review.contentVersionId}` }),
+            ownedSeedAvailable: ownedSeed,
+            ownedSeedStageAvailable: ownedSeed,
+            ...(ownedSeed && previewOwnedSeedWorkflow
+              ? {
+                  ownedSeedWorkflow: previewOwnedSeedWorkflow,
+                  ownedSeedWorkflowToken: PREVIEW_OWNED_SEED_WORKFLOW_TOKEN,
+                }
+              : {}),
+            ownedSeedCommandKey: `preview-owned-seed:${review.contentVersionId}`,
+            ownedSeedRunId: '89000000-0000-4000-8000-000000000002',
+          },
+        })}`, 'content', 'Property Predator — Exact Company Content Review'),
+      };
+    }
+  }
   const leadMatch = /^\/portal\/crm\/contacts\/([^/]+)$/.exec(path);
   if (leadMatch) {
     const card = currentPreviewCards().find((candidate) => candidate.contactId === leadMatch[1]);
@@ -1823,6 +2004,13 @@ function previewContentReturnLocation(form: URLSearchParams | null, code: Conten
       code,
     ),
   });
+  const exactItemId = (form?.get('return_exact_item_id') ?? '').trim().toLowerCase();
+  const exactVersionId = (form?.get('return_exact_version_id') ?? '').trim().toLowerCase();
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+  if (uuid.test(exactItemId) && uuid.test(exactVersionId)) {
+    return `/portal/content/items/${encodeURIComponent(exactItemId)}`
+      + `/versions/${encodeURIComponent(exactVersionId)}/review?${query.toString()}`;
+  }
   const search = (form?.get('return_q') ?? '').trim();
   if (search && search.length <= 80 && !/[\u0000-\u001f\u007f]/u.test(search)) query.set('q', search);
   const channel = form?.get('return_channel') ?? '';
@@ -1988,6 +2176,105 @@ const server = createServer(async (request, response) => {
       && applyPreviewSignal(form.get('contact_id') ?? '', form.get('signal_key') ?? '');
     response.writeHead(303, {
       location: `${JOURNEY_BOARD_ROUTE}?notice=${valid ? 'signal' : 'conflict'}`,
+      'cache-control': 'no-store',
+    });
+    response.end();
+    return;
+  }
+
+  if (request.method === 'POST' && path === OWNED_SEED_MESSAGE_CREATE_ROUTE) {
+    const form = await readPreviewForm(request);
+    const contentItemId = form?.get('return_exact_item_id') ?? '';
+    const contentVersionId = form?.get('return_exact_version_id') ?? '';
+    const exact = previewExactCompanyContentReview(contentItemId, contentVersionId);
+    const valid = form?.get('_csrf') === PREVIEW_CSRF
+      && form.get('command_key') === `preview-owned-seed:${contentVersionId}`
+      && exact?.review.source.itemId === PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_ITEM
+      && exact.review.approvalStatus === 'approved'
+      && !exact.review.approvalStale
+      && exact.review.email;
+    if (valid && exact?.review.email) {
+      previewOwnedSeedWorkflow = Object.freeze({
+        phase: 'drafted',
+        companyContentVersionId: contentVersionId,
+        messageId: PREVIEW_OWNED_SEED_MESSAGE_ID,
+        messageVersionId: PREVIEW_OWNED_SEED_MESSAGE_VERSION_ID,
+        approvalRequestId: null,
+        subjectSha256: exact.review.email.subjectSha256,
+        bodySha256: exact.review.email.bodySha256,
+        sourceContentSha256: exact.review.contentSha256,
+      });
+    }
+    response.writeHead(303, {
+      location: previewContentReturnLocation(form, valid ? 'draft_created' : 'invalid'),
+      'cache-control': 'no-store',
+    });
+    response.end();
+    return;
+  }
+
+  if (request.method === 'POST' && path === OWNED_SEED_MESSAGE_APPROVAL_REQUEST_ROUTE) {
+    const form = await readPreviewForm(request);
+    const valid = form?.get('_csrf') === PREVIEW_CSRF
+      && form.get('owned_seed_workflow_token') === PREVIEW_OWNED_SEED_WORKFLOW_TOKEN
+      && form.get('message_id') === previewOwnedSeedWorkflow?.messageId
+      && previewOwnedSeedWorkflow?.phase === 'drafted';
+    if (valid && previewOwnedSeedWorkflow) {
+      previewOwnedSeedWorkflow = Object.freeze({
+        ...previewOwnedSeedWorkflow,
+        phase: 'approval_pending',
+        approvalRequestId: PREVIEW_OWNED_SEED_APPROVAL_REQUEST_ID,
+      });
+    }
+    response.writeHead(303, {
+      location: previewContentReturnLocation(form, valid ? 'requested' : 'invalid'),
+      'cache-control': 'no-store',
+    });
+    response.end();
+    return;
+  }
+
+  if (request.method === 'POST' && path === OWNED_SEED_MESSAGE_APPROVAL_DECISION_ROUTE) {
+    const form = await readPreviewForm(request);
+    const decision = form?.get('decision') ?? '';
+    const valid = form?.get('_csrf') === PREVIEW_CSRF
+      && form.get('owned_seed_workflow_token') === PREVIEW_OWNED_SEED_WORKFLOW_TOKEN
+      && form.get('approval_request_id') === previewOwnedSeedWorkflow?.approvalRequestId
+      && previewOwnedSeedWorkflow?.phase === 'approval_pending'
+      && ['approved', 'rejected', 'changes_requested'].includes(decision);
+    if (valid && previewOwnedSeedWorkflow) {
+      previewOwnedSeedWorkflow = Object.freeze({
+        ...previewOwnedSeedWorkflow,
+        phase: decision === 'approved' ? 'approved' : 'drafted',
+      });
+    }
+    response.writeHead(303, {
+      location: previewContentReturnLocation(
+        form,
+        valid && decision === 'approved' ? 'approved'
+          : valid && decision === 'rejected' ? 'rejected'
+            : valid && decision === 'changes_requested' ? 'changes_requested' : 'invalid',
+      ),
+      'cache-control': 'no-store',
+    });
+    response.end();
+    return;
+  }
+
+  if (request.method === 'POST' && path === OWNED_SEED_CAMPAIGN_STAGE_ROUTE) {
+    const form = await readPreviewForm(request);
+    const valid = form?.get('_csrf') === PREVIEW_CSRF
+      && form.get('owned_seed_workflow_token') === PREVIEW_OWNED_SEED_WORKFLOW_TOKEN
+      && form.get('message_version_id') === previewOwnedSeedWorkflow?.messageVersionId
+      && previewOwnedSeedWorkflow?.phase === 'approved';
+    if (valid && previewOwnedSeedWorkflow) {
+      previewOwnedSeedWorkflow = Object.freeze({
+        ...previewOwnedSeedWorkflow,
+        phase: 'staged',
+      });
+    }
+    response.writeHead(303, {
+      location: previewContentReturnLocation(form, valid ? 'replayed' : 'invalid'),
       'cache-control': 'no-store',
     });
     response.end();

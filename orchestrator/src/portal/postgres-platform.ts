@@ -63,6 +63,22 @@ import {
 import type {
   PropertyPredatorCampaignDraftRuntime,
 } from '../company-content-adapter/property-predator-campaign-draft-runtime.js';
+import {
+  createPropertyPredatorOwnedSeedCampaignService,
+  type PropertyPredatorOwnedSeedCampaignService,
+} from '../property-predator-owned-seed-campaign-pg/index.js';
+import {
+  createPgPortalOwnedSeedCampaignService,
+  type PgPortalOwnedSeedCampaignService,
+} from './owned-seed-campaign-pg-service.js';
+import {
+  createPropertyPredatorOwnedSeedMessageService,
+  type PropertyPredatorOwnedSeedMessageService,
+} from '../property-predator-owned-seed-message-pg/index.js';
+import {
+  createPgPortalOwnedSeedMessageService,
+  type PgPortalOwnedSeedMessageService,
+} from './owned-seed-message-pg-service.js';
 
 export interface PgPortalPlatform {
   auth: PgPortalAuthService;
@@ -90,6 +106,10 @@ export interface PgPortalPlatform {
   inbox: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval queue commands; it cannot dispatch. */
   inboxCommands: PgPortalConversionInboxCommandService;
+  /** Optional table-blind staging command for the fixed owned office seed only. */
+  ownedSeedCampaign?: PgPortalOwnedSeedCampaignService;
+  /** Fixed office-seed LIVE draft plus deliberate message approval; cannot send. */
+  ownedSeedMessages?: PgPortalOwnedSeedMessageService;
   /** Bounded caller-owned runtime probe; throws without exposing connection details. */
   assertReady(): Promise<void>;
   close(): Promise<void>;
@@ -364,11 +384,17 @@ export async function buildPgPortalPlatform(
     let companyContentReview: PgPortalCompanyContentReviewService | undefined;
     let brandBrain: PgPortalBrandBrainService | undefined;
     let publicSocial: PgPortalPublicSocialService | undefined;
+    let ownedSeedCampaign: PgPortalOwnedSeedCampaignService | undefined;
+    let ownedSeedCampaignCore: PropertyPredatorOwnedSeedCampaignService | undefined;
+    let ownedSeedMessages: PgPortalOwnedSeedMessageService | undefined;
+    let ownedSeedMessageCore: PropertyPredatorOwnedSeedMessageService | undefined;
     let contentReadinessPool: Pool | undefined;
     let contentCommandPool: Pool | undefined;
     let assetReadinessPool: Pool | undefined;
     let contentAdapterPool: Pool | undefined;
     let publicSocialReadinessPool: Pool | undefined;
+    let ownedSeedCampaignReadinessPool: Pool | undefined;
+    let ownedSeedMessageReadinessPool: Pool | undefined;
     if (env.DATABASE_CONTENT_COMMAND_URL?.trim()) {
       try {
         const contentCommandConfig = requireCutoverIdentity(
@@ -432,6 +458,11 @@ export async function buildPgPortalPlatform(
           });
         }
         if (propertyPredatorGrowthProfile) {
+          companyContent = createPgPortalCompanyContentService({
+            webPool,
+            commandPool: contentCommandPool,
+            adapterPool: contentAdapterPool,
+          });
           brandBrain = createPgPortalBrandBrainService({
             webPool,
             adapterPool: contentAdapterPool,
@@ -483,6 +514,76 @@ export async function buildPgPortalPlatform(
       }
     }
 
+    if (env.DATABASE_OWNED_SEED_CAMPAIGN_URL?.trim()) {
+      let ownedSeedCommandPool: Pool | undefined;
+      try {
+        const workspaceId = env.PROPERTY_PREDATOR_PILOT_WORKSPACE_ID?.trim().toLowerCase() ?? '';
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(workspaceId)) {
+          throw new Error('Owned-seed campaign requires the exact pilot workspace id');
+        }
+        const ownedSeedCommandConfig = requireCutoverIdentity(
+          loadDatabaseConfig('ownedSeedCampaignCommand', env),
+          'DATABASE_OWNED_SEED_CAMPAIGN_URL',
+          'r72_owned_seed_campaign_command',
+        );
+        ownedSeedCommandPool = createDatabasePool(ownedSeedCommandConfig);
+        if (expectedInstallationId) {
+          await assertExpectedDatabaseInstallation(ownedSeedCommandPool, expectedInstallationId);
+        }
+        ownedSeedCampaignCore = createPropertyPredatorOwnedSeedCampaignService({
+          commandPool: ownedSeedCommandPool,
+          workspaceId,
+        });
+        await ownedSeedCampaignCore.assertReady();
+        ownedSeedCampaign = createPgPortalOwnedSeedCampaignService({
+          webPool,
+          campaign: ownedSeedCampaignCore,
+        });
+        ownedSeedCampaignReadinessPool = ownedSeedCommandPool;
+        pools.push(ownedSeedCommandPool);
+      } catch {
+        await ownedSeedCommandPool?.end().catch(() => undefined);
+        ownedSeedCampaign = undefined;
+        ownedSeedCampaignCore = undefined;
+        ownedSeedCampaignReadinessPool = undefined;
+      }
+    }
+
+    if (env.DATABASE_OWNED_SEED_MESSAGE_URL?.trim()) {
+      let ownedSeedMessagePool: Pool | undefined;
+      try {
+        const workspaceId = env.PROPERTY_PREDATOR_PILOT_WORKSPACE_ID?.trim().toLowerCase() ?? '';
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(workspaceId)) {
+          throw new Error('Owned-seed message bridge requires the exact pilot workspace id');
+        }
+        const ownedSeedMessageConfig = requireCutoverIdentity(
+          loadDatabaseConfig('ownedSeedMessageCommand', env),
+          'DATABASE_OWNED_SEED_MESSAGE_URL',
+          'r72_owned_seed_message_command',
+        );
+        ownedSeedMessagePool = createDatabasePool(ownedSeedMessageConfig);
+        if (expectedInstallationId) {
+          await assertExpectedDatabaseInstallation(ownedSeedMessagePool, expectedInstallationId);
+        }
+        ownedSeedMessageCore = createPropertyPredatorOwnedSeedMessageService({
+          commandPool: ownedSeedMessagePool,
+          workspaceId,
+        });
+        await ownedSeedMessageCore.assertReady();
+        ownedSeedMessages = createPgPortalOwnedSeedMessageService({
+          webPool,
+          messages: ownedSeedMessageCore,
+        });
+        ownedSeedMessageReadinessPool = ownedSeedMessagePool;
+        pools.push(ownedSeedMessagePool);
+      } catch {
+        await ownedSeedMessagePool?.end().catch(() => undefined);
+        ownedSeedMessages = undefined;
+        ownedSeedMessageCore = undefined;
+        ownedSeedMessageReadinessPool = undefined;
+      }
+    }
+
     let closed = false;
     return {
       auth: new PgPortalAuthService({ readPool: webPool, commandPool: identityPool }),
@@ -509,6 +610,8 @@ export async function buildPgPortalPlatform(
       publicSocial,
       inbox: createPgPortalInboxReadBoundary(webPool),
       inboxCommands: createPgPortalConversionInboxCommandService({ webPool, commandPool }),
+      ownedSeedCampaign,
+      ownedSeedMessages,
       async assertReady(): Promise<void> {
         await Promise.all([
           assertRuntimeSchemaCurrent(webPool),
@@ -526,6 +629,12 @@ export async function buildPgPortalPlatform(
                   : []),
                 ...(publicSocialReadinessPool
                   ? [assertExpectedDatabaseInstallation(publicSocialReadinessPool, expectedInstallationId)]
+                  : []),
+                ...(ownedSeedCampaignReadinessPool
+                  ? [assertExpectedDatabaseInstallation(ownedSeedCampaignReadinessPool, expectedInstallationId)]
+                  : []),
+                ...(ownedSeedMessageReadinessPool
+                  ? [assertExpectedDatabaseInstallation(ownedSeedMessageReadinessPool, expectedInstallationId)]
                   : []),
               ]
             : []),
@@ -551,6 +660,8 @@ export async function buildPgPortalPlatform(
                 }
               })]
             : []),
+          ...(ownedSeedCampaignCore ? [ownedSeedCampaignCore.assertReady()] : []),
+          ...(ownedSeedMessageCore ? [ownedSeedMessageCore.assertReady()] : []),
         ]);
       },
       async close(): Promise<void> {

@@ -5,7 +5,7 @@ import type {
   CompanyContentOrigin,
 } from '../company-content-pg/types.js';
 import type { ContentControlNoticeView } from './content-control-room-actions.js';
-import { PORTAL_COMPANY_CONTENT_REVIEW_REPRESENTATION_AVAILABLE } from './company-content-service.js';
+import { PORTAL_COMPANY_CONTENT_EXACT_REVIEW_AVAILABLE } from './company-content-service.js';
 
 export const CONTENT_CONTROL_ROOM_ROUTE = '/portal/content' as const;
 export const CONTENT_CONTROL_ROOM_MAX_ITEMS = 100;
@@ -272,7 +272,7 @@ function presentItem(item: CompanyContentCatalogItem, index: number): ContentCon
   const channel = channelFor(item.kind);
   const stale = item.approvalStale || item.approvalStatus === 'stale';
   const approved = exactApproval(item) && !stale;
-  const reviewRepresentationAvailable = PORTAL_COMPANY_CONTENT_REVIEW_REPRESENTATION_AVAILABLE;
+  const reviewRepresentationAvailable = PORTAL_COMPANY_CONTENT_EXACT_REVIEW_AVAILABLE;
   const publishable = item.publishable
     && approved
     && item.sourceFresh

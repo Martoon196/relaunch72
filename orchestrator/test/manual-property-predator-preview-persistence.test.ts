@@ -116,3 +116,24 @@ test('preview campaign mutations reject incomplete commands without changing sta
   assert.equal(result.code, 'invalid');
   assert.deepEqual(preview.previewCampaignStateForTest(), before);
 });
+
+test('content-control exact-review links resolve to composed immutable preview pages', () => {
+  const first = preview.previewPageForTest(
+    '/portal/content/items/81000000-0000-4000-8000-000000000001'
+      + '/versions/82000000-0000-4000-8000-000000000001/review',
+  );
+  assert.equal(first.status, 200);
+  assert.match(first.html, /Approve what/);
+  assert.match(first.html, /The postcode is not the opportunity/);
+  assert.doesNotMatch(first.html, /Preview page not found/);
+
+  const ownedSeed = preview.previewPageForTest(
+    '/portal/content/items/81000000-0000-4000-8000-000000000002'
+      + '/versions/82000000-0000-4000-8000-000000000002/review',
+  );
+  assert.equal(ownedSeed.status, 200);
+  assert.match(ownedSeed.html, /Property Predator Growth HQ — owned-seed delivery proof/);
+  assert.match(ownedSeed.html, /Approve exact version/);
+  assert.match(ownedSeed.html, /name="return_exact_item_id"/);
+  assert.doesNotMatch(ownedSeed.html, /Preview page not found/);
+});
