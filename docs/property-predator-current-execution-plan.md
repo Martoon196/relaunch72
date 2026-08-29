@@ -157,6 +157,60 @@ Commercial signup, app review and account-verification lead times can run in par
 - Paid ads remain paused drafts; payments and spend activation are separate authorities.
 - Emergency pauses, volume/spend caps, suppressions, consent and least-privilege credentials remain part of the product, not temporary launch scaffolding.
 
+## Verification economy and master-rehearsal rule
+
+The team must spend verification effort in proportion to changed risk. Repeating
+the same broad audit after every narrow edit is not progress.
+
+### During each strike
+
+- Run the smallest focused tests that prove the changed behaviour, its failure
+  boundary and any directly affected contract, plus typecheck when TypeScript is
+  touched.
+- Add a disposable-database proof when a migration or database authority changes
+  and a guarded disposable URL is available. Never substitute production.
+- Run browser, responsive or accessibility checks only when the affected user
+  journey or presentation changed.
+- Mark the strike done when its scoped acceptance criteria pass, no known P0/P1
+  defect remains and the exact evidence is recorded. Do not reopen it merely to
+  repeat unchanged checks.
+
+### Milestone regression triggers
+
+Run a full regression only when one of these occurs:
+
+- a shared authentication, authorisation, database, runtime-composition or
+  security boundary changes;
+- a forward-migration/provider-composition batch is completed;
+- branches are integrated for a release candidate;
+- production deployment or the first separately authorised provider effect is
+  imminent; or
+- focused evidence reveals credible cross-system risk.
+
+Otherwise use the last green full-suite result as the baseline and test only the
+new risk. Auditing, ratification and adversarial-review passes must have a stated
+question and must stop once that question is answered.
+
+### Final Sol Ultra master rehearsal
+
+Before production activation, run one dedicated master-rehearsal task using the
+latest available **Sol model at Ultra reasoning**. It must review the combined
+release candidate once, not recreate every earlier strike. The rehearsal covers:
+
+1. the complete branch diff and dependency/supply-chain evidence;
+2. a clean guarded disposable-Neon reset, migrations and cross-role attack proof;
+3. full typecheck and regression suite;
+4. critical desktop/tablet/mobile browser journeys and accessibility;
+5. authentication, role, secret-isolation, cap, suppression, pause, idempotency,
+   receipt and outcome-unknown boundaries;
+6. one zero-effect or explicitly authorised owned-test rehearsal per provider
+   rail; and
+7. the final exact deployment, provider-account and rollback checklist.
+
+Any live email, WhatsApp, SMS or social publication still requires its own exact
+effect approval. A successful master rehearsal proves release readiness; it does
+not itself authorise deployment, migration or provider effects.
+
 ## Documentation truth and maintenance
 
 - `docs/roadmap.md` describes an older Relaunch72 product sequence and is **historical for this Property Predator execution**.
