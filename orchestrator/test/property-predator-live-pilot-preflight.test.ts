@@ -80,7 +80,8 @@ test('the mandatory first-channel configuration can pass while every later rail 
   assert.equal(report.providers[0]?.phase, 'mandatory-first-channel');
   assert.equal(report.providers[0]?.status, 'configuration-ready');
   assert.ok(report.providers.slice(1).every((provider) => provider.phase === 'deferred'));
-  assert.ok(report.providers.slice(1).every((provider) => provider.status === 'not-configured'));
+  assert.ok(report.providers.slice(1, -1).every((provider) => provider.status === 'not-configured'));
+  assert.equal(report.providers.at(-1)?.status, 'not-composed');
 });
 
 test('missing production foundation and Mailgun settings fail closed by name', () => {
@@ -184,6 +185,7 @@ test('the agreed provider catalogue is exact and keeps social listening outside 
       { rail: 'whatsapp', provider: 'Meta WhatsApp Cloud', phase: 'deferred' },
       { rail: 'owned_social', provider: 'Ayrshare owned X', phase: 'deferred' },
       { rail: 'sms', provider: 'Twilio Messaging UK SMS', phase: 'deferred' },
+      { rail: 'social_dm', provider: 'Meta Facebook and Instagram DMs', phase: 'deferred' },
     ],
   );
   const settings = PILOT_PROVIDER_CATALOGUE.flatMap((provider) => provider.settings.map((item) => item.setting));

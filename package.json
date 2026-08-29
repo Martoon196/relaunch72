@@ -24,6 +24,7 @@
     "serve:twilio-sms-live-webhook": "npm run --workspace orchestrator serve:twilio-sms-live-webhook",
     "serve:omnichannel-test-rail": "npm run --workspace orchestrator serve:omnichannel-test-rail",
     "pilot:preflight": "npm run --workspace orchestrator pilot:preflight",
+    "pilot:rehearse-targets": "npm run --workspace orchestrator pilot:rehearse-targets",
     "founder:bootstrap": "npm run --workspace orchestrator founder:bootstrap --",
     "snapshot:preview": "npm run --workspace orchestrator snapshot:preview --",
     "stripe:setup": "npm run --workspace orchestrator stripe:setup",

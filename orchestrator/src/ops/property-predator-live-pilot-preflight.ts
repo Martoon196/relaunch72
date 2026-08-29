@@ -7,7 +7,7 @@
  * setting names plus pass/fail state.
  */
 
-export type PilotRailId = 'customer_email' | 'whatsapp' | 'owned_social' | 'sms';
+export type PilotRailId = 'customer_email' | 'whatsapp' | 'owned_social' | 'sms' | 'social_dm';
 export type PilotPhase = 'mandatory-first-channel' | 'deferred';
 export type PreflightCheckState = 'pass' | 'missing' | 'invalid';
 
@@ -30,7 +30,7 @@ export interface PilotProviderPreflight {
   readonly rail: PilotRailId;
   readonly provider: string;
   readonly phase: PilotPhase;
-  readonly status: 'configuration-ready' | 'incomplete' | 'not-configured';
+  readonly status: 'configuration-ready' | 'incomplete' | 'not-configured' | 'not-composed';
   readonly checks: readonly PilotPreflightCheck[];
 }
 
@@ -59,6 +59,7 @@ interface ProviderSpec {
   readonly provider: string;
   readonly phase: PilotPhase;
   readonly settings: readonly SettingSpec[];
+  readonly composed?: boolean;
 }
 
 const exact = (expected: string): ((raw: string) => boolean) =>
@@ -281,6 +282,13 @@ export const PILOT_PROVIDER_CATALOGUE: readonly ProviderSpec[] = Object.freeze([
       setting('TWILIO_KEY_SCOPE', 'Twilio key scope', exact('restricted-api-key'), 'A restricted-api-key-only Twilio key'),
     ]),
   }),
+  Object.freeze({
+    rail: 'social_dm',
+    provider: 'Meta Facebook and Instagram DMs',
+    phase: 'deferred',
+    composed: false,
+    settings: Object.freeze([]),
+  }),
 ]);
 
 const ALL_SETTING_SPECS = Object.freeze([
@@ -347,7 +355,9 @@ export function evaluatePropertyPredatorPilotPreflight(
       check.setting !== 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED'
       && check.state !== 'missing'
     )).length;
-    const status = checks.every((check) => check.state === 'pass')
+    const status = provider.composed === false
+      ? 'not-composed'
+      : checks.every((check) => check.state === 'pass')
       ? 'configuration-ready'
       : configuredCount === 0
         ? 'not-configured'
@@ -377,7 +387,7 @@ export function evaluatePropertyPredatorPilotPreflight(
     providers,
     blockers,
     manualProofGates: Object.freeze([
-      'Run schema and installation readiness through migration 0055 using each exact function-only runtime identity; this preflight does not access a database.',
+      'Run schema and installation readiness through migration 0057 using each exact function-only runtime identity; this preflight does not access a database.',
       'Provision the dedicated workspace and named operator through an audited operator workflow; automatic PostgreSQL onboarding is currently locked.',
       'Verify the exact Mailgun domain, Meta app/WABA/phone and Ayrshare-owned X profile in their provider consoles without inferring any customer target.',
       'Apply credentials to their isolated services only: Mailgun sending versus webhook keys, and WhatsApp worker envelope key versus webhook app secret/verify token, must never share a process.',
@@ -387,6 +397,7 @@ export function evaluatePropertyPredatorPilotPreflight(
       'Prove the existing enqueue and durable pre-call pause/effects fences using one explicitly supplied owned internal recipient or account per rail.',
       'Stage one exact approved owned test email, parameter-free WhatsApp template and link-free X post; no customer recipient or inferred account is allowed.',
       'Record a separate channel-specific activation approval before enabling any provider effect.',
+      'Keep Facebook and Instagram DMs unavailable until their dedicated live adapter, signed webhook binding and reply receipt path are composed; environment values cannot bypass that missing implementation.',
     ]),
   });
 }

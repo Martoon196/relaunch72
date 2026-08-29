@@ -49,16 +49,26 @@ The gate is intentionally exact:
 - Ayrshare/X owned-profile configuration and exact connection evidence.
 - Existing durable enqueue and immediate pre-call effects/pause fences.
 
-Twilio SMS is a separate current build. Webinars, calendar/scheduler, social DMs
-and listening remain deferred rails. Their missing configuration cannot block an
-owned email, WhatsApp or X acceptance review; partially entered configuration is
-labelled incomplete instead of being mistaken for a connection.
+Twilio UK SMS is now a composed fifth control-room rail with its own command,
+worker, signed webhook and receipt identities. Facebook/Instagram social DMs,
+webinars, calendar/scheduler and listening remain deferred. Social DMs are shown
+as `not-composed`; environment values cannot pretend that a missing adapter is
+connected. Missing deferred configuration cannot block an owned email acceptance
+review, and partially entered configuration is labelled incomplete.
 
 A successful result means **ready for manual activation review**, not live-ready.
 Database schema readiness, provider-console ownership/billing, authenticated
 test webhooks, seed-contact consent/opt-out evidence and a separate channel-specific
 activation approval remain mandatory. Configuration names are documented in
 `.env.example`; real values belong only in the deployment secret manager.
+
+Run `npm run pilot:rehearse-targets` after supplying the founder-owned rehearsal
+evidence listed in `.env.example`. It validates the exact office mailbox, owned
+UK WhatsApp/SMS recipient, owned X profile, immutable content hashes, approvals,
+person/endpoints, consent and suppression state. It destroys raw values at the
+sanitizer boundary and makes no database, network, enqueue or provider call.
+Passing means only that the redacted pack is ready for a separately authorised,
+one-rail command rehearsal.
 
 The source-side acquisition bridge now has an exact one-attempt sender for the
 frozen Property Predator v1 event catalogue. The Property Predator application
