@@ -6,6 +6,26 @@
 **Product rule:** Relaunch72 owns the customer experience, canonical records, permissions, consent, reporting and operation history. A provider supplies a rail; it does not become the product.
 **AI reuse dependency:** provider work must follow the [Property Predator AI reuse contract](../property-predator-ai-reuse-contract.md). Affiliate Stash and the founder-owned Content Marketer, Image Maker, Social Media Manager, customer avatars, knowledge and proven outputs are inventoried and ported into the versioned Brand Brain before any replacement specialist is created. Provider adapters may transport approved artifacts; they never become the source of Property Predator intelligence.
 
+## Ratified Property Predator activation override — 29 August 2026
+
+The comparative research below remains useful for replacement-provider and exit
+planning, but its original “first choice” rows are no longer activation authority
+for Property Predator Growth HQ. The current ratified rails are:
+
+| Capability | Ratified current rail | Status |
+|---|---|---|
+| Customer email | **Mailgun EU** | Account/domain configured; controlled owned-recipient acceptance remains |
+| WhatsApp | **Direct Meta Cloud API** | Live worker and signed webhook/challenge composition built; exact account/template/owned-recipient inputs remain |
+| UK SMS | **Twilio Messaging** | Active implementation; distinct from the WhatsApp transport |
+| Owned X publishing | **Ayrshare with X credentials** | Isolated worker built; exact owned-profile binding and test post remain |
+| Social DMs | **No live adapter composed** | Shared inbox model exists; no provider may be presented as connected |
+| Broad social listening | **Deferred** | No first-pilot adapter or spend authorised |
+
+Therefore, the older Twilio-for-WhatsApp, Plivo-first-SMS, SES-first-email and
+Zernio-first-social recommendations below are historical candidates only. They
+must not override the current implementation, activation preflight or
+[controlled live-pilot record](../property-predator-live-pilot.md).
+
 ---
 
 ## 1. Decision in one page
