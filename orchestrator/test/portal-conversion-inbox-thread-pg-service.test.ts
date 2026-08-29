@@ -287,9 +287,14 @@ test('thread projection admits only receipt-gated LIVE owned-office Mailgun prov
     verifiedAt: '2026-08-26T09:00:01.000Z',
   });
   const sql = client.calls.map((call) => call.sql).join('\n');
-  assert.match(sql, /property_predator_mailgun_inbound_receipts/);
   assert.match(sql, /conversation\.environment = 'live'/);
-  assert.match(sql, /owned_reply\.inbound_message_id = message\.id/);
+  // Provenance is still receipt-gated, now through the bounded definer function
+  // keyed on the exact inbound message rather than a direct table read.
+  assert.match(
+    sql,
+    /app_private\.operational_inbox_live_message_provenance\(\s*message\.workspace_id, message\.conversation_id, message\.id/,
+  );
+  assert.doesNotMatch(sql, /property_predator_mailgun_inbound_receipts/);
 });
 
 test('thread projection admits only receipt-gated LIVE Twilio SMS provenance', async () => {
@@ -336,10 +341,18 @@ test('thread projection admits only receipt-gated LIVE Twilio SMS provenance', a
     verifiedAt: '2026-08-26T09:00:01.000Z',
   });
   const sql = client.calls.map((call) => call.sql).join('\n');
-  assert.match(sql, /property_predator_sms_inbox_projections/);
-  assert.match(sql, /property_predator_sms_jobs/);
-  assert.match(sql, /live_sms\.inbound_message_id = message\.id/);
-  assert.match(sql, /'twilio_sms_live'/);
+  // The SMS rail keeps both gates: provenance is keyed on the exact inbound
+  // message, and rail activity pins the exact provider operation. Both now go
+  // through the bounded definer functions, so r72_web names no evidence table.
+  assert.match(
+    sql,
+    /app_private\.operational_inbox_live_message_provenance\(\s*message\.workspace_id, message\.conversation_id, message\.id/,
+  );
+  assert.match(
+    sql,
+    /app_private\.operational_inbox_live_delivery_linked\(\s*delivery\.workspace_id, delivery\.id, operation\.id, conversation\.channel/,
+  );
+  assert.doesNotMatch(sql, /property_predator_sms_inbox_projections|property_predator_sms_jobs/);
   assert.doesNotMatch(sql, /signature_sha256|sender_identity_sha256|recipient_identity_sha256/);
 });
 

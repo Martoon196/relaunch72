@@ -585,8 +585,17 @@ test('inbox read model is bounded, omits endpoint addresses and fails closed on 
     /ORDER BY approval_request\.request_number DESC, approval_request\.id DESC\s+LIMIT 1/);
   assert.match(client.conversationSql,
     /latest_approval\.approval_decision_id IS NULL/);
-  assert.match(client.conversationSql, /property_predator_sms_inbox_projections/);
-  assert.match(client.conversationSql, /property_predator_sms_jobs/);
+  // Live rail evidence is still required, but r72_web now asks the bounded
+  // definer function instead of naming tables it has no privilege on. Reading
+  // them directly is what made the whole Inbox, empty state included, fail 42501.
+  assert.match(
+    client.conversationSql,
+    /app_private\.operational_inbox_live_conversation_visible\(\s*conversation\.workspace_id, conversation\.id, conversation\.channel/,
+  );
+  assert.doesNotMatch(
+    client.conversationSql,
+    /property_predator_sms_inbox_projections|property_predator_sms_jobs|property_predator_customer_email_jobs|property_predator_whatsapp_live_inbox_projections/,
+  );
   assert.equal(Object.hasOwn(page.conversations[0]!, 'recipient'), false);
   client.invalid = true;
   await assert.rejects(service.listConversations(userContext), /latest message is invalid/);

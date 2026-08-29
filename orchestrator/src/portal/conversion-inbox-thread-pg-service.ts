@@ -353,21 +353,8 @@ LEFT JOIN LATERAL (
      (conversation.environment = 'test'
        AND rail_connection.provider_id = 'test_conversation')
      OR (conversation.environment = 'live'
-       AND conversation.channel = 'email'
-       AND EXISTS (
-         SELECT 1
-         FROM app.property_predator_customer_email_jobs AS live_email
-         WHERE live_email.workspace_id = delivery.workspace_id
-           AND live_email.message_delivery_id = delivery.id
-       ))
-     OR (conversation.environment = 'live'
-       AND conversation.channel = 'sms'
-       AND EXISTS (
-         SELECT 1
-         FROM app.property_predator_sms_jobs AS live_sms
-         WHERE live_sms.workspace_id = delivery.workspace_id
-           AND live_sms.message_delivery_id = delivery.id
-           AND live_sms.operation_id = operation.id
+       AND app_private.operational_inbox_live_delivery_linked(
+         delivery.workspace_id, delivery.id, operation.id, conversation.channel
        ))
    )
   LEFT JOIN LATERAL (
@@ -441,45 +428,8 @@ WHERE conversation.id = $1
     conversation.environment = 'test'
     OR (
       conversation.environment = 'live'
-      AND (
-        (conversation.channel = 'email' AND (
-          EXISTS (
-            SELECT 1
-            FROM app.property_predator_mailgun_inbound_receipts AS owned_reply
-            WHERE owned_reply.workspace_id = conversation.workspace_id
-              AND owned_reply.conversation_id = conversation.id
-          ) OR EXISTS (
-            SELECT 1
-            FROM app.message_deliveries AS live_delivery
-            JOIN app.property_predator_customer_email_jobs AS live_email
-              ON live_email.workspace_id = live_delivery.workspace_id
-             AND live_email.message_delivery_id = live_delivery.id
-            WHERE live_delivery.workspace_id = conversation.workspace_id
-              AND live_delivery.conversation_id = conversation.id
-              AND live_delivery.environment = 'live'
-          )
-        )) OR (conversation.channel = 'whatsapp' AND EXISTS (
-          SELECT 1
-          FROM app.property_predator_whatsapp_live_inbox_projections AS live_whatsapp
-          WHERE live_whatsapp.workspace_id = conversation.workspace_id
-            AND live_whatsapp.conversation_id = conversation.id
-        )) OR (conversation.channel = 'sms' AND (
-          EXISTS (
-            SELECT 1
-            FROM app.property_predator_sms_inbox_projections AS live_sms
-            WHERE live_sms.workspace_id = conversation.workspace_id
-              AND live_sms.conversation_id = conversation.id
-          ) OR EXISTS (
-            SELECT 1
-            FROM app.message_deliveries AS live_delivery
-            JOIN app.property_predator_sms_jobs AS live_sms_job
-              ON live_sms_job.workspace_id = live_delivery.workspace_id
-             AND live_sms_job.message_delivery_id = live_delivery.id
-            WHERE live_delivery.workspace_id = conversation.workspace_id
-              AND live_delivery.conversation_id = conversation.id
-              AND live_delivery.environment = 'live'
-          )
-        ))
+      AND app_private.operational_inbox_live_conversation_visible(
+        conversation.workspace_id, conversation.id, conversation.channel
       )
     )
   )`;
@@ -489,19 +439,13 @@ SELECT message.id AS "messageId", message.direction, message.lifecycle,
        message.source_kind AS "sourceKind",
        version.body_text AS body, message.occurred_at AS "occurredAt",
        delivery.status AS "deliveryStatus",
-       coalesce(test_inbound.receipt_id, owned_reply.id, live_whatsapp.receipt_id,
-                live_sms.receipt_id)
+       coalesce(test_inbound.receipt_id, live_inbound.receipt_id)
          AS "inboundReceiptId",
-       CASE WHEN owned_reply.id IS NOT NULL THEN 'mailgun_email'
-            WHEN live_whatsapp.id IS NOT NULL THEN 'meta_whatsapp_live'
-            WHEN live_sms.id IS NOT NULL THEN 'twilio_sms_live'
-            ELSE test_inbound.provider_family END AS "inboundProviderFamily",
-       CASE WHEN owned_reply.id IS NOT NULL THEN 'email'
-            WHEN live_whatsapp.id IS NOT NULL THEN 'whatsapp'
-            WHEN live_sms.id IS NOT NULL THEN 'sms'
-            ELSE test_inbound.network END AS "inboundNetwork",
-       coalesce(test_inbound.received_at, owned_reply.received_at,
-                live_whatsapp.recorded_at, live_sms.recorded_at) AS "inboundVerifiedAt"
+       coalesce(live_inbound.provider_family, test_inbound.provider_family)
+         AS "inboundProviderFamily",
+       coalesce(live_inbound.network, test_inbound.network) AS "inboundNetwork",
+       coalesce(test_inbound.received_at, live_inbound.verified_at)
+         AS "inboundVerifiedAt"
 FROM app.messages AS message
 JOIN app.message_versions AS version
   ON version.workspace_id = message.workspace_id
@@ -529,76 +473,19 @@ LEFT JOIN LATERAL app_private.test_inbox_webhook_message_provenance(
   AND message.direction = 'inbound'
   AND message.lifecycle = 'received'
   AND message.source_kind = 'verified_webhook'
-LEFT JOIN app.property_predator_mailgun_inbound_receipts AS owned_reply
-  ON message.environment = 'live'
- AND message.direction = 'inbound'
- AND message.lifecycle = 'received'
- AND message.source_kind = 'verified_webhook'
- AND owned_reply.workspace_id = message.workspace_id
- AND owned_reply.conversation_id = message.conversation_id
- AND owned_reply.inbound_message_id = message.id
-LEFT JOIN app.property_predator_whatsapp_live_inbox_projections AS live_whatsapp
-  ON message.environment = 'live'
- AND message.channel = 'whatsapp'
- AND message.direction = 'inbound'
- AND message.lifecycle = 'received'
- AND message.source_kind = 'verified_webhook'
- AND live_whatsapp.workspace_id = message.workspace_id
- AND live_whatsapp.conversation_id = message.conversation_id
- AND live_whatsapp.inbound_message_id = message.id
-LEFT JOIN app.property_predator_sms_inbox_projections AS live_sms
-  ON message.environment = 'live'
- AND message.channel = 'sms'
- AND message.direction = 'inbound'
- AND message.lifecycle = 'received'
- AND message.source_kind = 'verified_webhook'
- AND live_sms.workspace_id = message.workspace_id
- AND live_sms.conversation_id = message.conversation_id
- AND live_sms.inbound_message_id = message.id
+LEFT JOIN LATERAL app_private.operational_inbox_live_message_provenance(
+  message.workspace_id, message.conversation_id, message.id
+) AS live_inbound ON message.environment = 'live'
+  AND message.direction = 'inbound'
+  AND message.lifecycle = 'received'
+  AND message.source_kind = 'verified_webhook'
 WHERE message.conversation_id = $1
   AND (
     message.environment = 'test'
     OR (
       message.environment = 'live'
-      AND (
-        (message.channel = 'email' AND (
-          EXISTS (
-            SELECT 1
-            FROM app.property_predator_mailgun_inbound_receipts AS proof
-            WHERE proof.workspace_id = message.workspace_id
-              AND proof.conversation_id = message.conversation_id
-          ) OR EXISTS (
-            SELECT 1
-            FROM app.message_deliveries AS live_delivery
-            JOIN app.property_predator_customer_email_jobs AS live_email
-              ON live_email.workspace_id = live_delivery.workspace_id
-             AND live_email.message_delivery_id = live_delivery.id
-            WHERE live_delivery.workspace_id = message.workspace_id
-              AND live_delivery.conversation_id = message.conversation_id
-              AND live_delivery.environment = 'live'
-          )
-        )) OR (message.channel = 'whatsapp' AND EXISTS (
-          SELECT 1
-          FROM app.property_predator_whatsapp_live_inbox_projections AS proof
-          WHERE proof.workspace_id = message.workspace_id
-            AND proof.conversation_id = message.conversation_id
-        )) OR (message.channel = 'sms' AND (
-          EXISTS (
-            SELECT 1
-            FROM app.property_predator_sms_inbox_projections AS proof
-            WHERE proof.workspace_id = message.workspace_id
-              AND proof.conversation_id = message.conversation_id
-          ) OR EXISTS (
-            SELECT 1
-            FROM app.message_deliveries AS live_delivery
-            JOIN app.property_predator_sms_jobs AS live_sms_job
-              ON live_sms_job.workspace_id = live_delivery.workspace_id
-             AND live_sms_job.message_delivery_id = live_delivery.id
-            WHERE live_delivery.workspace_id = message.workspace_id
-              AND live_delivery.conversation_id = message.conversation_id
-              AND live_delivery.environment = 'live'
-          )
-        ))
+      AND app_private.operational_inbox_live_conversation_visible(
+        message.workspace_id, message.conversation_id, message.channel
       )
     )
   )
@@ -631,45 +518,8 @@ WITH target AS (
       conversation.environment = 'test'
       OR (
         conversation.environment = 'live'
-        AND (
-          (conversation.channel = 'email' AND (
-            EXISTS (
-              SELECT 1
-              FROM app.property_predator_mailgun_inbound_receipts AS owned_reply
-              WHERE owned_reply.workspace_id = conversation.workspace_id
-                AND owned_reply.conversation_id = conversation.id
-            ) OR EXISTS (
-              SELECT 1
-              FROM app.message_deliveries AS live_delivery
-              JOIN app.property_predator_customer_email_jobs AS live_email
-                ON live_email.workspace_id = live_delivery.workspace_id
-               AND live_email.message_delivery_id = live_delivery.id
-              WHERE live_delivery.workspace_id = conversation.workspace_id
-                AND live_delivery.conversation_id = conversation.id
-                AND live_delivery.environment = 'live'
-            )
-          )) OR (conversation.channel = 'whatsapp' AND EXISTS (
-            SELECT 1
-            FROM app.property_predator_whatsapp_live_inbox_projections AS live_whatsapp
-            WHERE live_whatsapp.workspace_id = conversation.workspace_id
-              AND live_whatsapp.conversation_id = conversation.id
-          )) OR (conversation.channel = 'sms' AND (
-            EXISTS (
-              SELECT 1
-              FROM app.property_predator_sms_inbox_projections AS live_sms
-              WHERE live_sms.workspace_id = conversation.workspace_id
-                AND live_sms.conversation_id = conversation.id
-            ) OR EXISTS (
-              SELECT 1
-              FROM app.message_deliveries AS live_delivery
-              JOIN app.property_predator_sms_jobs AS live_sms_job
-                ON live_sms_job.workspace_id = live_delivery.workspace_id
-               AND live_sms_job.message_delivery_id = live_delivery.id
-              WHERE live_delivery.workspace_id = conversation.workspace_id
-                AND live_delivery.conversation_id = conversation.id
-                AND live_delivery.environment = 'live'
-            )
-          ))
+        AND app_private.operational_inbox_live_conversation_visible(
+          conversation.workspace_id, conversation.id, conversation.channel
         )
       )
     )
