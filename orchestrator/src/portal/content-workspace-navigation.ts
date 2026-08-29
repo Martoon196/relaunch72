@@ -5,6 +5,7 @@ import { CAMPAIGN_MACHINE_ROUTE } from './campaign-machine-presenter.js';
 import { COMPANY_ASSETS_ROUTE } from './company-assets-actions.js';
 import { CONTENT_CALENDAR_ROUTE } from './content-calendar-presenter.js';
 import { CONTENT_CONTROL_ROOM_ROUTE } from './content-control-room-presenter.js';
+import { LIVE_CHANNELS_ROUTE } from './live-channels-presenter.js';
 import { PROVIDER_READINESS_COCKPIT_ROUTE } from './provider-readiness-cockpit-presenter.js';
 import { SOCIAL_ACCOUNT_CONTROL_ROUTE } from './social-account-control-presenter.js';
 import { SOCIAL_COMPOSER_ROUTE } from './social-composer-presenter.js';
@@ -21,6 +22,7 @@ export type ContentWorkspaceNavigationTarget =
   | 'images'
   | 'connections'
   | 'readiness'
+  | 'live'
   | 'library'
   | 'assets'
   | 'brain'
@@ -47,6 +49,7 @@ const CONTENT_WORKSPACE_LINKS: readonly Readonly<{
   { target: 'calendar', href: CONTENT_CALENDAR_ROUTE, label: 'Calendar' },
   { target: 'connections', href: SOCIAL_ACCOUNT_CONTROL_ROUTE, label: 'Social accounts' },
   { target: 'readiness', href: PROVIDER_READINESS_COCKPIT_ROUTE, label: 'Rail status' },
+  { target: 'live', href: LIVE_CHANNELS_ROUTE, label: 'Live Channels' },
   { target: 'library', href: CONTENT_CONTROL_ROOM_ROUTE, label: 'Content Control' },
 ]);
 
@@ -64,6 +67,8 @@ export function renderContentWorkspaceNavigation(
     campaignMachineAvailable?: boolean;
     /** Show only when the canonical portal has composed the read-only evidence service. */
     providerReadinessAvailable?: boolean;
+    /** Property Predator-only live channel control room. */
+    liveChannelsAvailable?: boolean;
   }> = {
     brandBrainAvailable: false,
   },
@@ -75,6 +80,9 @@ export function renderContentWorkspaceNavigation(
     && (link.target !== 'sequences'
       || options.campaignMachineAvailable === true
       || active === 'sequences')
+    && (link.target !== 'live'
+      || options.liveChannelsAvailable === true
+      || active === 'live')
   )).map((link) => (
     `<a href="${link.href}"${link.target === 'create' ? ' data-content-action="create"' : ''}${active === link.target ? ' aria-current="page"' : ''}>${link.label}</a>`
   )).join('');
