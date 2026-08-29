@@ -95,4 +95,3 @@ test('Campaign Machine escapes hostile fixture text and remains deterministic', 
   assert.match(first, /&lt;script&gt;/);
   assert.match(first, /&lt;img src=x onerror=alert\(1\)&gt;/);
 });
-
