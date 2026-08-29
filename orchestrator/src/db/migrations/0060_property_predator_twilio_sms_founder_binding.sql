@@ -689,10 +689,13 @@ BEGIN
       AND job.utc_month = date_trunc('month', statement_timestamp() AT TIME ZONE 'UTC')::date
       AND job.state <> 'cancelled';
   END IF;
+  -- An unresolved message means the segment count is unknown, so headroom
+  -- cannot be claimed. Reporting ready here would be a false negative on the
+  -- one dimension a founder is most likely to trust.
   dimension := 'segment_cap_headroom';
-  ready := coalesce(selected_segments, 1) > 0
-    AND day_segments + coalesce(selected_segments, 0) <= 10
-    AND month_segments + coalesce(selected_segments, 0) <= 50;
+  ready := selected_segments IS NOT NULL
+    AND day_segments + selected_segments <= 10
+    AND month_segments + selected_segments <= 50;
   blocker_code := CASE WHEN ready THEN NULL ELSE 'CAP_REACHED' END;
   RETURN NEXT;
 
