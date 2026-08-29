@@ -32,6 +32,7 @@
     "preview:property-predator": "node --import ./test/windows-node24-shim.mjs --import tsx test/manual-property-predator-preview.ts",
     "pilot:preflight": "node --import ./test/windows-node24-shim.mjs --import tsx src/ops/property-predator-live-pilot-preflight-cli.ts",
     "founder:bootstrap": "tsx src/ops/property-predator-founder-bootstrap-cli.ts",
+    "founder:reissue-setup": "tsx src/ops/property-predator-founder-setup-reissue-cli.ts",
     "snapshot:preview": "tsx src/legacy-import/property-predator-snapshot-preview-cli.ts",
     "stripe:setup": "tsx src/server/setup.ts",
     "db:migrate": "tsx src/db/migrate.ts",

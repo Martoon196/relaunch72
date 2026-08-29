@@ -308,8 +308,11 @@ are in [`property-predator-shared-login.md`](property-predator-shared-login.md).
 
 Before any external delivery:
 
-1. Reissue the founder setup link against the canonical `.com` origin if the
-   first memory-only handoff link was lost, then prove login and CSRF.
+1. If the first memory-only handoff was lost, set the bootstrap receipt's exact
+   founder user/workspace UUIDs plus a fresh reviewed reissue change reference,
+   then run `npm run founder:reissue-setup`. Consume its one-use loopback
+   handoff, complete setup at the pinned `https://hq.propertypredator.com`
+   origin, and prove login and CSRF. An idempotent replay exposes no stale link.
 2. Reconcile Mailgun suppression truth and retain direct test evidence.
 3. Name no more than ten owned internal seed recipients and obtain the separate
    final activation approval.

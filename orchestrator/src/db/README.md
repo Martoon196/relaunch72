@@ -57,7 +57,10 @@ messages, publishing, or any external provider effect.
   restricted to a still-pending active owner, and binds the supplied recipient
   hash to that user's canonical database email before it revokes the old token
   and creates the next encrypted generation. It is an operator boundary, not a
-  public recovery endpoint.
+  public recovery endpoint. For the internal Property Predator founder only,
+  `npm run founder:reissue-setup` pins the canonical HQ origin and office email,
+  verifies schema/current-user readiness, and reveals a newly created link only
+  through a one-use loopback handoff. A replay never exposes a generated token.
 - CRM command handlers use the separate `createCrmCommandDatabasePool` factory,
   `DATABASE_CRM_COMMAND_URL`, and `r72_crm_command`. The role is `NOINHERIT`,
   cannot assume an owner/security role, and is the only user-facing runtime
