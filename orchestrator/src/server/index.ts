@@ -67,6 +67,16 @@ import {
   loadPropertyPredatorMailgunWebhookConfig,
   type PropertyPredatorMailgunWebhookMount,
 } from '../integrations/mailgun-webhook/router.js';
+import {
+  PropertyPredatorMailgunInboundIngressService,
+  PgPropertyPredatorMailgunInboundRepository,
+} from '../property-predator-mailgun-inbound-pg/index.js';
+import {
+  assertPgPropertyPredatorMailgunInboundReady,
+  createPropertyPredatorMailgunInboundHandler,
+  loadPropertyPredatorMailgunInboundConfig,
+  type PropertyPredatorMailgunInboundMount,
+} from '../integrations/mailgun-inbound/index.js';
 import { propertyPredatorDarkProductionBlockers } from '../ops/property-predator-dark-production.js';
 import { createCachedRuntimeReadinessProbe } from '../ops/runtime-readiness-cache.js';
 import { createPortalRequestContextResolver } from '../portal/request-context.js';
@@ -350,6 +360,58 @@ async function main(): Promise<void> {
   } else if (mailgunWebhookConfig.enabled) {
     console.warn(`⚠  Mailgun webhook unavailable: ${mailgunWebhookConfig.blockers.join('; ')}`);
   }
+  const mailgunInboundConfig = loadPropertyPredatorMailgunInboundConfig(process.env);
+  let mailgunInboundPool:
+    ReturnType<typeof createMailgunWebhookCommandDatabasePool> | undefined;
+  let propertyPredatorMailgunInbound: PropertyPredatorMailgunInboundMount = Object.freeze({
+    enabled: mailgunInboundConfig.enabled,
+    ready: false,
+    blockers: mailgunInboundConfig.blockers,
+  });
+  if (mailgunInboundConfig.enabled
+      && mailgunInboundConfig.configurationReady
+      && mailgunInboundConfig.workspaceId
+      && mailgunInboundConfig.providerConnectionId
+      && mailgunInboundConfig.signingKey) {
+    try {
+      mailgunInboundPool = createMailgunWebhookCommandDatabasePool(process.env);
+      await assertPgPropertyPredatorMailgunInboundReady(
+        mailgunInboundPool,
+        mailgunInboundConfig.workspaceId,
+        mailgunInboundConfig.providerConnectionId,
+        process.env.PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID?.trim() ?? '',
+      );
+      const repository = new PgPropertyPredatorMailgunInboundRepository({
+        commandPool: mailgunInboundPool,
+        workspaceId: mailgunInboundConfig.workspaceId,
+        providerConnectionId: mailgunInboundConfig.providerConnectionId,
+      });
+      const ingress = new PropertyPredatorMailgunInboundIngressService({
+        repository,
+        signingKey: mailgunInboundConfig.signingKey,
+      });
+      propertyPredatorMailgunInbound = Object.freeze({
+        enabled: true,
+        ready: true,
+        blockers: Object.freeze([]),
+        handle: createPropertyPredatorMailgunInboundHandler(ingress),
+      });
+      console.log('Signed owned-office Mailgun inbound reply ingress is ready.');
+    } catch {
+      await mailgunInboundPool?.end();
+      mailgunInboundPool = undefined;
+      propertyPredatorMailgunInbound = Object.freeze({
+        enabled: true,
+        ready: false,
+        blockers: Object.freeze([
+          'Mailgun inbound did not pass protected database readiness',
+        ]),
+      });
+      console.warn('⚠  Mailgun inbound unavailable; protected readiness failed.');
+    }
+  } else if (mailgunInboundConfig.enabled) {
+    console.warn(`⚠  Mailgun inbound unavailable: ${mailgunInboundConfig.blockers.join('; ')}`);
+  }
   const orders = fileOrderStore(cfg.ordersFile);
   const subscriptions = fileSubscriptionStore(cfg.subscriptionsFile);
   const runtimePolicy = runtimeSafetyPolicy(cfg);
@@ -562,6 +624,7 @@ async function main(): Promise<void> {
 
   const buildBlockers = forceMockBuilds || process.env.ANTHROPIC_API_KEY?.trim() ? [] : ['Anthropic build key is not configured'];
   const runtimeReadinessProbe = (postgresPortal || mailgunWebhookConfig.enabled
+      || mailgunInboundConfig.enabled
       || simulatedInbound.enabled || providerIngress.enabled)
     ? createCachedRuntimeReadinessProbe({
         probe: async () => {
@@ -586,6 +649,23 @@ async function main(): Promise<void> {
                 );
               } catch {
                 blockers.push('Protected Mailgun webhook runtime is unavailable');
+              }
+            }
+          }
+          if (mailgunInboundConfig.enabled) {
+            if (!mailgunInboundPool || !mailgunInboundConfig.workspaceId
+                || !mailgunInboundConfig.providerConnectionId) {
+              blockers.push('Protected Mailgun inbound runtime is unavailable');
+            } else {
+              try {
+                await assertPgPropertyPredatorMailgunInboundReady(
+                  mailgunInboundPool,
+                  mailgunInboundConfig.workspaceId,
+                  mailgunInboundConfig.providerConnectionId,
+                  process.env.PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID?.trim() ?? '',
+                );
+              } catch {
+                blockers.push('Protected Mailgun inbound runtime is unavailable');
               }
             }
           }
@@ -626,6 +706,7 @@ async function main(): Promise<void> {
     onIntakeAccepted,
     propertyPredatorExternalEvents,
     propertyPredatorMailgunWebhook,
+    propertyPredatorMailgunInbound,
     propertyPredatorSimulatedWhatsAppInbound: simulatedInbound.whatsapp,
     propertyPredatorSimulatedMetaDmInbound: simulatedInbound.metaDm,
     propertyPredatorProviderIngress: providerIngress,
@@ -661,6 +742,7 @@ async function main(): Promise<void> {
         externalEventCommandPool?.end(),
         externalEventWebhookPool?.end(),
         mailgunWebhookPool?.end(),
+        mailgunInboundPool?.end(),
         simulatedInbound.close(),
       ]);
     } catch (error) {

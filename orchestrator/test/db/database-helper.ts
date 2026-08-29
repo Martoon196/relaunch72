@@ -28,6 +28,7 @@ type ScopedTestRole =
   | 'r72_affiliate_case_command'
   | 'r72_affiliate_receipt_command'
   | 'r72_external_event_command'
+  | 'r72_mailgun_webhook_command'
   | 'r72_test_inbox_webhook_command'
   | 'r72_public_social_command'
   | 'r72_public_social_worker_command'
@@ -58,6 +59,7 @@ const TEST_ROLES = new Set<ScopedTestRole>([
   'r72_affiliate_case_command',
   'r72_affiliate_receipt_command',
   'r72_external_event_command',
+  'r72_mailgun_webhook_command',
   'r72_test_inbox_webhook_command',
   'r72_public_social_command',
   'r72_public_social_worker_command',
@@ -214,6 +216,7 @@ export async function scopedQuery<T extends QueryResultRow = QueryResultRow>(
           ? 'worker'
           : role === 'r72_webhook'
             || role === 'r72_external_event_command'
+            || role === 'r72_mailgun_webhook_command'
             || role === 'r72_test_inbox_webhook_command'
             ? 'webhook'
             : 'user',

@@ -4,6 +4,7 @@ import type { ConversationChannel, ConversationMessageRequest,
   WorkspaceOwnedProviderConnectionRecord } from '../providers/contracts.js';
 
 export type InboxEnvironment = 'test';
+export type InboxConversationReadEnvironment = 'test' | 'live';
 export type InboxConversationState = 'open' | 'snoozed' | 'closed' | 'quarantined';
 export type InboxMessageLifecycle =
   | 'received'
@@ -159,6 +160,8 @@ export interface InboxConversationSummary {
   readonly conversationId: string;
   readonly inboxId: string;
   readonly channel: ConversationChannel;
+  /** LIVE is admitted only for the exact owned-office Mailgun proof receipt. */
+  readonly environment?: InboxConversationReadEnvironment;
   readonly state: InboxConversationState;
   readonly contactId: string | null;
   readonly contactName: string | null;

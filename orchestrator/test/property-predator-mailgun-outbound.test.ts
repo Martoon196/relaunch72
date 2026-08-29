@@ -479,6 +479,9 @@ test('Mailgun adapter uses only the EU API, deterministic message identity and r
   const form = capturedInit?.body as FormData;
   assert.deepEqual(form.getAll('to'), ['seed@example.com']);
   assert.equal(form.get('h:Message-Id'), `<pp-${digest}@mail.propertypredator.co.uk>`);
+  const replyTo = String(form.get('h:Reply-To'));
+  assert.match(replyTo, /^reply\+[a-z2-7]{52}@mail[.]propertypredator[.]co[.]uk$/);
+  assert.ok(Buffer.byteLength(replyTo.split('@')[0]!, 'ascii') <= 64);
   assert.equal(form.get('v:pp-idempotency-sha256'), digest);
 });
 

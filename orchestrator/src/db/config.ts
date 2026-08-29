@@ -19,6 +19,7 @@ export const DATABASE_ROLES = [
   'publicSocialCommand',
   'publicSocialWorkerCommand',
   'publicSocialRevalidatorCommand',
+  'ownedSocialWorkerCommand',
   'worker',
   'webhook',
   'public',
@@ -49,6 +50,7 @@ const ROLE_URL_ENV: Record<DatabaseRole, string> = {
   publicSocialCommand: 'DATABASE_PUBLIC_SOCIAL_COMMAND_URL',
   publicSocialWorkerCommand: 'DATABASE_PUBLIC_SOCIAL_WORKER_URL',
   publicSocialRevalidatorCommand: 'DATABASE_PUBLIC_SOCIAL_REVALIDATOR_URL',
+  ownedSocialWorkerCommand: 'DATABASE_OWNED_SOCIAL_WORKER_URL',
   worker: 'DATABASE_WORKER_URL',
   webhook: 'DATABASE_WEBHOOK_URL',
   public: 'DATABASE_PUBLIC_URL',
@@ -75,6 +77,7 @@ const EXPECTED_RUNTIME_USER: Partial<Record<DatabaseRole, string>> = {
   publicSocialCommand: 'r72_public_social_command',
   publicSocialWorkerCommand: 'r72_public_social_worker_command',
   publicSocialRevalidatorCommand: 'r72_public_social_revalidator_command',
+  ownedSocialWorkerCommand: 'r72_owned_social_worker_command',
   worker: 'r72_worker',
   webhook: 'r72_webhook',
   public: 'r72_public',
@@ -226,6 +229,8 @@ export function loadDatabaseConfig(
                       ? 'DATABASE_PUBLIC_SOCIAL_WORKER_POOL_MAX'
                     : role === 'publicSocialRevalidatorCommand'
                       ? 'DATABASE_PUBLIC_SOCIAL_REVALIDATOR_POOL_MAX'
+                    : role === 'ownedSocialWorkerCommand'
+                      ? 'DATABASE_OWNED_SOCIAL_WORKER_POOL_MAX'
                   : role === 'setupDeliveryCommand'
                     ? 'DATABASE_SETUP_DELIVERY_COMMAND_POOL_MAX'
                     : role === 'setupReissueCommand'
@@ -303,6 +308,8 @@ export function loadDatabaseConfig(
                         ? 'property-predator-public-social-worker-command'
                       : role === 'publicSocialRevalidatorCommand'
                         ? 'property-predator-public-social-revalidator-command'
+                      : role === 'ownedSocialWorkerCommand'
+                        ? 'property-predator-owned-social-worker-command'
                     : role === 'setupDeliveryCommand'
                       ? 'relaunch72-setup-delivery-command'
                       : role === 'setupReissueCommand'

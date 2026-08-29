@@ -146,6 +146,14 @@ export function createPublicSocialRevalidatorCommandDatabasePool(
   return createDatabasePool(loadDatabaseConfig('publicSocialRevalidatorCommand', env), hooks);
 }
 
+/** Function-only pool for the capped owned-profile public-social live worker. */
+export function createOwnedSocialWorkerCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('ownedSocialWorkerCommand', env), hooks);
+}
+
 /** Function-only pool for the isolated provider-operation worker. */
 export function createWorkerDatabasePool(
   env: NodeJS.ProcessEnv = process.env,

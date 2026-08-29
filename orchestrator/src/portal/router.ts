@@ -73,6 +73,12 @@ import {
 } from '../company-content-adapter/property-predator-campaign-draft-runtime.js';
 import { renderCampaignDraftReviewBody } from './campaign-draft-review-view.js';
 import {
+  CAMPAIGN_MACHINE_ROUTE,
+  presentCampaignMachine,
+} from './campaign-machine-presenter.js';
+import { createPropertyPredatorCampaignMachineFixture } from './campaign-machine-fixtures.js';
+import { renderCampaignMachineBody } from './campaign-machine-view.js';
+import {
   PUBLIC_SOCIAL_CAMPAIGNS_ROUTE,
   presentPublicSocialCampaigns,
 } from './public-social-campaigns-presenter.js';
@@ -3387,6 +3393,31 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
   }
 
+  // ── Property Predator campaign templates: prepared copy/recipes, no effects ──
+  if (deps.kind === 'postgres' && p === CAMPAIGN_MACHINE_ROUTE && method === 'GET') {
+    if (deps.productProfile?.id !== 'property_predator_growth') {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Campaign Machine not available',
+        message: 'This Property Predator sequence library is not enabled for the current product profile.',
+        active: 'content',
+        backHref: PUBLIC_SOCIAL_CAMPAIGNS_ROUTE,
+        backLabel: 'Return to Campaigns',
+      }));
+    }
+    const fixture = createPropertyPredatorCampaignMachineFixture();
+    const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+    return sendHtml(res, 200, operationalPage(
+      fixture.workspaceName,
+      renderCampaignMachineBody(presentCampaignMachine({
+        ...fixture,
+        asOf: new Date(now).toISOString(),
+      })),
+      deps,
+      'content',
+      csrfToken,
+    ));
+  }
+
   // ── public-social campaigns: exact body-free command projection, read-only ──
   if (deps.kind === 'postgres' && p === PUBLIC_SOCIAL_CAMPAIGNS_ROUTE && method === 'GET') {
     if (!deps.publicSocial) {
@@ -3466,6 +3497,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
             && contentNavigation?.brainRoute === BRAND_BRAIN_ROUTE
           ),
           brainLabel: contentNavigation?.brainLabel,
+          campaignMachineAvailable: deps.productProfile?.id === 'property_predator_growth',
         }),
         deps,
         'content',

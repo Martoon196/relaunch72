@@ -36,6 +36,7 @@ const context: DatabaseRequestContext = Object.freeze({
 function core(overrides: Record<string, unknown> = {}): QueryResultRow {
   return {
     conversationId: CONVERSATION,
+    environment: 'test',
     contactId: CONTACT,
     contactPointId: POINT,
     displayName: 'Aisha Demo',
@@ -240,6 +241,55 @@ test('thread projection exposes only authoritative message-linked simulator prov
     service.thread(context, CONVERSATION),
     /signed inbound provider is inconsistent/,
   );
+});
+
+test('thread projection admits only receipt-gated LIVE owned-office Mailgun provenance', async () => {
+  const client = new ThreadReadClient();
+  client.coreRows = [core({
+    environment: 'live',
+    draftMessageId: null,
+    draftBody: null,
+    draftLifecycle: null,
+    draftVersionNumber: null,
+    draftRowVersion: null,
+    draftUpdatedAt: null,
+    approvalRequestId: null,
+    approvalDecision: null,
+    approvalNote: null,
+    deliveryStatus: null,
+    deliveryPurpose: null,
+    consentPurpose: null,
+  })];
+  client.transcriptRows = [transcript({
+    messageId: INBOUND,
+    direction: 'inbound',
+    lifecycle: 'received',
+    sourceKind: 'verified_webhook',
+    body: 'Owned office reply.',
+    occurredAt: new Date('2026-08-26T09:00:00.000Z'),
+    deliveryStatus: null,
+    inboundReceiptId: INBOUND_RECEIPT,
+    inboundProviderFamily: 'mailgun_email',
+    inboundNetwork: 'email',
+    inboundVerifiedAt: new Date('2026-08-26T09:00:01.000Z'),
+  })];
+  const service = new PgConversionInboxThreadReadService({
+    connect: async () => client,
+  } as unknown as Pick<Pool, 'connect'>);
+
+  const snapshot = await service.thread(context, CONVERSATION);
+  assert.equal(snapshot?.environment, 'live');
+  assert.deepEqual(snapshot?.messages[0]?.inboundEvidence, {
+    kind: 'signed_mailgun_inbound',
+    source: 'mailgun_eu',
+    network: 'email',
+    receiptId: INBOUND_RECEIPT,
+    verifiedAt: '2026-08-26T09:00:01.000Z',
+  });
+  const sql = client.calls.map((call) => call.sql).join('\n');
+  assert.match(sql, /property_predator_mailgun_inbound_receipts/);
+  assert.match(sql, /conversation\.environment = 'live'/);
+  assert.match(sql, /owned_reply\.inbound_message_id = message\.id/);
 });
 
 test('thread projection reduces durable TEST operations to queued, accepted, reconciled or attention', async () => {

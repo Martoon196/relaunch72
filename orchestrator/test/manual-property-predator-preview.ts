@@ -100,6 +100,12 @@ import {
   type CampaignWizardTargetSnapshot,
 } from '../src/portal/campaign-wizard-presenter.js';
 import { renderCampaignWizardBody } from '../src/portal/campaign-wizard-view.js';
+import {
+  CAMPAIGN_MACHINE_ROUTE,
+  presentCampaignMachine,
+} from '../src/portal/campaign-machine-presenter.js';
+import { createPropertyPredatorCampaignMachineFixture } from '../src/portal/campaign-machine-fixtures.js';
+import { renderCampaignMachineBody } from '../src/portal/campaign-machine-view.js';
 import { workspaceLocalDateTime } from '../src/portal/crm-pg-service.js';
 import {
   SOCIAL_COMPOSER_ROUTE,
@@ -1867,6 +1873,12 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
     })}`, 'content', 'Property Predator — Content Calendar'),
     scripted: true,
   };
+  if (path === CAMPAIGN_MACHINE_ROUTE) return {
+    status: 200,
+    html: shell(`${previewOperationsNav('campaigns')}${renderCampaignMachineBody(
+      presentCampaignMachine(createPropertyPredatorCampaignMachineFixture()),
+    )}`, 'content', 'Property Predator — Campaign Machine'),
+  };
   if (path === SOCIAL_COMPOSER_ROUTE) return {
     status: 200,
     html: shell(`${previewOperationsNav('compose')}${renderSocialComposerBody(presentSocialComposer(
@@ -1905,7 +1917,7 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
          },
          inputTruncated: false,
        },
-    ))}`, 'content', 'Property Predator — Campaign Command'),
+    ), { campaignMachineAvailable: true })}`, 'content', 'Property Predator — Campaign Command'),
   };
   if (path === CONVERSION_INBOX_ROUTE) return {
     status: 200,

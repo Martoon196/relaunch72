@@ -24,8 +24,12 @@ const revalidatorWorkerManifest = serviceSection(
 const socialTestWorkerManifest = serviceSection(
   'worker', 'property-predator-public-social-test-rail',
 );
+const ownedSocialLiveWorkerManifest = serviceSection(
+  'worker', 'property-predator-owned-public-social-live',
+);
 const workerManifests = [
   emailWorkerManifest, revalidatorWorkerManifest, socialTestWorkerManifest,
+  ownedSocialLiveWorkerManifest,
 ] as const;
 
 function literalValue(key: string, value: string): void {
@@ -103,8 +107,8 @@ test('production Blueprint is isolated, manually deployed and narrowly fail-clos
   assert.doesNotMatch(manifest, /propertypredator\.co\.uk/);
   assert.equal(
     (manifest.match(/buildCommand: npm ci --ignore-scripts --include=dev && node scripts\/supply-chain\.mjs --check && npm run typecheck && npm test/g) ?? []).length,
-    4,
-    'all four isolated production processes must install the locked checked toolchain',
+    5,
+    'all five isolated production processes must install the locked checked toolchain',
   );
   assert.match(manifest, /startCommand: npm run serve/);
   assert.match(emailWorkerManifest, /name: property-predator-email-worker/);
@@ -122,6 +126,10 @@ test('production Blueprint is isolated, manually deployed and narrowly fail-clos
   assert.match(
     socialTestWorkerManifest,
     /startCommand: npm run --workspace orchestrator serve:public-social-test-rail/,
+  );
+  assert.match(
+    ownedSocialLiveWorkerManifest,
+    /startCommand: npm run --workspace orchestrator serve:owned-public-social-live/,
   );
 
   literalValue('PORTAL_POSTGRES_ENABLED', 'true');
@@ -210,7 +218,9 @@ test('production Blueprint is isolated, manually deployed and narrowly fail-clos
   literalValueIn(emailWorkerManifest, 'PROPERTY_PREDATOR_EMAIL_DELIVERY_ENABLED', 'true');
   literalValueIn(emailWorkerManifest, 'PROPERTY_PREDATOR_EMAIL_EMERGENCY_PAUSED', 'false');
   literalValueIn(webManifest, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'true');
-  for (const section of [revalidatorWorkerManifest, socialTestWorkerManifest]) {
+  for (const section of [
+    revalidatorWorkerManifest, socialTestWorkerManifest, ownedSocialLiveWorkerManifest,
+  ]) {
     literalValueIn(section, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'false');
     literalValueIn(section, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'true');
     assert.doesNotMatch(section, /- key: PROPERTY_PREDATOR_EMAIL_(?:DELIVERY_ENABLED|EMERGENCY_PAUSED)\b/);
@@ -246,9 +256,10 @@ test('production Blueprint keeps web and worker database identities process-isol
   secretSlot('DATABASE_MAILGUN_WORKER_URL');
   secretSlot('DATABASE_PUBLIC_SOCIAL_REVALIDATOR_URL');
   secretSlot('DATABASE_PUBLIC_SOCIAL_WORKER_URL');
+  secretSlot('DATABASE_OWNED_SOCIAL_WORKER_URL');
   assert.equal(
     (manifest.match(/- key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID\b/g) ?? []).length,
-    4,
+    5,
   );
   secretSlot('PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID');
 
@@ -269,6 +280,9 @@ test('production Blueprint keeps web and worker database identities process-isol
   assert.deepEqual(databaseUrlKeys(socialTestWorkerManifest), [
     'DATABASE_PUBLIC_SOCIAL_WORKER_URL',
   ]);
+  assert.deepEqual(databaseUrlKeys(ownedSocialLiveWorkerManifest), [
+    'DATABASE_OWNED_SOCIAL_WORKER_URL',
+  ]);
 
   assert.doesNotMatch(webManifest, /- key: DATABASE_MAILGUN_WORKER_URL\b/);
   assert.doesNotMatch(
@@ -288,6 +302,10 @@ test('production Blueprint keeps web and worker database identities process-isol
   assert.doesNotMatch(
     socialTestWorkerManifest,
     /- key: DATABASE_(?:WEB|IDENTITY_COMMAND|CRM_COMMAND|ABUSE_COMMAND|CONTENT_COMMAND|CONTENT_ADAPTER|MAILGUN_WEBHOOK|MAILGUN_WORKER|PUBLIC_SOCIAL_COMMAND|PUBLIC_SOCIAL_REVALIDATOR)_URL\b/,
+  );
+  assert.doesNotMatch(
+    ownedSocialLiveWorkerManifest,
+    /- key: DATABASE_(?:WEB|IDENTITY_COMMAND|CRM_COMMAND|ABUSE_COMMAND|CONTENT_COMMAND|CONTENT_ADAPTER|MAILGUN_WEBHOOK|MAILGUN_WORKER|PUBLIC_SOCIAL_COMMAND|PUBLIC_SOCIAL_REVALIDATOR|PUBLIC_SOCIAL_WORKER)_URL\b/,
   );
 
   literalValue('DATABASE_SSL_MODE', 'verify-full');
@@ -326,13 +344,16 @@ test('Mailgun ingress and controlled internal-seed egress use disjoint exact sec
     /stage_property_predator_mailgun_job|PROPERTY_PREDATOR_MAILGUN_JOB|(?:preDeployCommand|initialDeployHook|afterFirstDeployCommand):/,
     'Blueprint activation must not stage a provider job',
   );
-  for (const worker of [revalidatorWorkerManifest, socialTestWorkerManifest]) {
+  for (const worker of [
+    revalidatorWorkerManifest, socialTestWorkerManifest, ownedSocialLiveWorkerManifest,
+  ]) {
     assert.doesNotMatch(worker, /- key: MAILGUN_[A-Z0-9_]+\b/);
     assert.doesNotMatch(worker, /- key: PROPERTY_PREDATOR_EMAIL_[A-Z0-9_]+\b/);
   }
 
   literalValue('PROPERTY_PREDATOR_EMAIL_PROVIDER', 'mailgun');
   literalValue('PROPERTY_PREDATOR_MAILGUN_WEBHOOK_ENABLED', 'true');
+  literalValue('PROPERTY_PREDATOR_MAILGUN_INBOUND_ENABLED', 'true');
   literalValue('MAILGUN_REGION', 'eu');
   literalValue(
     'MAILGUN_EVENT_WEBHOOK_URL',
@@ -345,9 +366,15 @@ test('Mailgun ingress and controlled internal-seed egress use disjoint exact sec
   );
   assert.doesNotMatch(
     manifest,
-    /- key: (?:TWILIO_[A-Z0-9_]+|AYRSHARE_[A-Z0-9_]+|WHEREBY_[A-Z0-9_]+|META_(?:ACCESS_TOKEN|APP_SECRET)|PROPERTY_PREDATOR_(?:WHATSAPP_PROVIDER|META_WHATSAPP_INGRESS_ENABLED|WHEREBY_INGRESS_ENABLED))\b/,
-    'WhatsApp, social/DM and webinar provider rails must remain credential-free and dark',
+    /- key: (?:TWILIO_[A-Z0-9_]+|WHEREBY_[A-Z0-9_]+|META_(?:ACCESS_TOKEN|APP_SECRET)|PROPERTY_PREDATOR_(?:WHATSAPP_PROVIDER|META_WHATSAPP_INGRESS_ENABLED|WHEREBY_INGRESS_ENABLED))\b/,
+    'WhatsApp, social-DM and webinar provider rails must remain credential-free and dark',
   );
+  for (const section of [
+    webManifest, emailWorkerManifest, revalidatorWorkerManifest, socialTestWorkerManifest,
+  ]) assert.doesNotMatch(section, /- key: AYRSHARE_[A-Z0-9_]+\b/);
+  for (const key of [
+    'AYRSHARE_API_KEY', 'AYRSHARE_X_OAUTH1_API_KEY', 'AYRSHARE_X_OAUTH1_API_SECRET',
+  ]) secretSlotIn(ownedSocialLiveWorkerManifest, key);
   assert.doesNotMatch(manifest, /MAILGUN_(?:API_KEY|SIGNING_KEY):\s*\S+/);
 });
 

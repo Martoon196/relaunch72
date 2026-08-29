@@ -141,6 +141,40 @@ test('renders signed simulator provenance without exposing the full receipt or p
   assert.doesNotMatch(html, /signature=|sha256=|test-dm:|\+447700900/i);
 });
 
+test('renders a receipt-gated owned-office Mailgun reply as LIVE without exposing a send control', () => {
+  const base = createPropertyPredatorTestInboxSnapshot();
+  const summary = base.page.conversations[0]!;
+  const thread = base.threads[0]!;
+  const inboundIndex = thread.messages.findIndex((message) => message.direction === 'inbound');
+  const messages = [...thread.messages];
+  messages[inboundIndex] = {
+    ...messages[inboundIndex]!,
+    inboundEvidence: {
+      kind: 'signed_mailgun_inbound',
+      source: 'mailgun_eu',
+      network: 'email',
+      receiptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      verifiedAt: '2026-08-26T09:00:01.000Z',
+    },
+  };
+  const snapshot: ConversionInboxSnapshot = {
+    page: {
+      ...base.page,
+      conversations: [{ ...summary, environment: 'live' }],
+    },
+    threads: [{ ...thread, environment: 'live', messages }],
+  };
+  const html = render(snapshot);
+  assert.match(html, /CONTROLLED PROOF \+ SIMULATED/);
+  assert.match(html, /LIVE OWNED-OFFICE PROOF/);
+  assert.match(html, /Signed Mailgun inbound · EM/);
+  assert.match(html, /Mailgun signature and exact reply correlation verified/);
+  assert.match(html, /Urgent admin call task created/);
+  assert.match(html, /href="\/portal\/actions"/);
+  assert.doesNotMatch(html, /Create TEST draft|Queue TEST operation|action="[^\"]*(?:send|deliver|publish)/i);
+  assert.doesNotMatch(html, /cccccccc-cccc-4ccc-8ccc-cccccccccccc/);
+});
+
 test('approved social reply remains visibly locked when consent is unknown', () => {
   const html = render(createPropertyPredatorTestInboxSnapshot(), { channel: 'instagram' });
   assert.match(html, /Marcus Reed/);

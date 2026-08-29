@@ -30,6 +30,13 @@ Growth HQ owns the people, attribution, consent, content, approvals, conversatio
 
 These are foundations, not proof of a complete operating loop. The next ten strikes supply that proof.
 
+### Prepared Campaign Machine candidate — not deployed
+
+- The branch now contains a Property Predator-only reusable sequence library surface and forward migration `0051`.
+- The model keeps campaign identity, immutable versions, prewritten steps, Brand Brain provenance, owned-specialist handoffs, LAPS entry/target milestones, automation entry/stop evidence, exact human review and reporting identity separate.
+- The first fixture is a six-step owned-office Lead-to-Activation nurture: four proposed emails plus two mandatory admin tasks. It contains no customer recipient, provider account, send command or live effect.
+- Activation remains blocked until the exact audience, offer/message, activation-window, consent/suppression and approved-version evidence is supplied at runtime.
+
 ## Main-site takeover lane — Codex owns this too
 
 Claude is no longer an execution dependency. Existing Claude branches are preserved as source material; they are not treated as trusted, merged or deployed merely because they exist.

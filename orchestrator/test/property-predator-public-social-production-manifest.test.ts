@@ -75,6 +75,7 @@ function assertWorkerEnvelope(section: string, startCommand: string): void {
 const web = serviceSection('web', 'property-predator-growth-hq');
 const revalidator = serviceSection('worker', 'property-predator-public-social-revalidator');
 const testRail = serviceSection('worker', 'property-predator-public-social-test-rail');
+const ownedLiveRail = serviceSection('worker', 'property-predator-owned-public-social-live');
 
 test('Growth HQ web receives the planner identity and one exact read-only company-content source', () => {
   valueLessSlot(web, 'DATABASE_PUBLIC_SOCIAL_COMMAND_URL');
@@ -98,12 +99,41 @@ test('Growth HQ web receives the planner identity and one exact read-only compan
     /- key: PROPERTY_PREDATOR_(?:PUBLIC_SOCIAL_REVALIDATOR|PUBLIC_SOCIAL_RAIL)_/,
   );
   assert.doesNotMatch(web, /- key: (?:COMPANY_CONTENT_GENERATE_TOKEN|ADMIN_TOKEN)\b/);
-  for (const worker of [revalidator, testRail]) {
+  for (const worker of [revalidator, testRail, ownedLiveRail]) {
     assert.doesNotMatch(
       worker,
       /- key: PROPERTY_PREDATOR_(?:CAMPAIGN_GENERATION_[A-Z0-9_]+|COMPANY_CONTENT_GENERATE_TOKEN)\b/,
     );
   }
+});
+
+test('0052 owned-profile worker is deployable dark with one exact live identity', () => {
+  assertWorkerEnvelope(
+    ownedLiveRail,
+    'npm run --workspace orchestrator serve:owned-public-social-live',
+  );
+  assert.deepEqual(databaseUrlKeys(ownedLiveRail), [
+    'DATABASE_OWNED_SOCIAL_WORKER_URL',
+  ]);
+  valueLessSlot(ownedLiveRail, 'DATABASE_OWNED_SOCIAL_WORKER_URL');
+  literal(ownedLiveRail, 'DATABASE_OWNED_SOCIAL_WORKER_POOL_MAX', '1');
+  literal(ownedLiveRail, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE', 'disabled');
+  literal(ownedLiveRail, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_PROVIDER_ID', 'ayrshare');
+  literal(ownedLiveRail, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK', 'x');
+  literal(ownedLiveRail, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_POLL_MS', '5000');
+  for (const key of [
+    'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_WORKSPACE_ID',
+    'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_CONNECTION_ID',
+    'PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_BASE64',
+    'PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_VERSION',
+    'AYRSHARE_API_KEY',
+    'AYRSHARE_X_OAUTH1_API_KEY',
+    'AYRSHARE_X_OAUTH1_API_SECRET',
+  ]) valueLessSlot(ownedLiveRail, key);
+  assert.doesNotMatch(
+    ownedLiveRail,
+    /- key: (?:DATABASE_URL|TEST_DATABASE_URL|DATABASE_MIGRATOR_URL|DATABASE_WEB_URL|DATABASE_PUBLIC_SOCIAL_(?:COMMAND|REVALIDATOR|WORKER)_URL|SESSION_SECRET|MAILGUN_[A-Z0-9_]+|STRIPE_[A-Z0-9_]+|META_[A-Z0-9_]+|LINKEDIN_[A-Z0-9_]+)\b/,
+  );
 });
 
 test('0040 JIT revalidator has one function-only database identity and one read-only source credential', () => {
@@ -151,11 +181,12 @@ test('materialized public-social operations reach only the deterministic TEST si
 
 test('social launch additions preserve the existing services and add no database or deployment mutation', () => {
   const services = [...manifest.matchAll(/^  - type: (?:web|worker)$/gmu)];
-  assert.equal(services.length, 4);
+  assert.equal(services.length, 5);
   assert.match(manifest, /name: property-predator-growth-hq/);
   assert.match(manifest, /name: property-predator-email-worker/);
   assert.match(manifest, /name: property-predator-public-social-revalidator/);
   assert.match(manifest, /name: property-predator-public-social-test-rail/);
+  assert.match(manifest, /name: property-predator-owned-public-social-live/);
   assert.doesNotMatch(manifest, /^databases:/mu);
   assert.doesNotMatch(manifest, /(?:preDeployCommand|initialDeployHook|afterFirstDeployCommand):/);
   assert.doesNotMatch(manifest, /postgres(?:ql)?:\/\//iu);

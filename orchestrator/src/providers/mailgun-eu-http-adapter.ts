@@ -7,6 +7,8 @@ import {
   normalizeOwnedInternalSeedEmail,
   PROPERTY_PREDATOR_EMAIL_PROVIDER_ID,
 } from './property-predator-email-pilot-config.js';
+export { propertyPredatorMailgunReplyAddress } from './property-predator-mailgun-reply-correlation.js';
+import { propertyPredatorMailgunReplyAddress } from './property-predator-mailgun-reply-correlation.js';
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const SAFE_EXTERNAL_ID = /^[^\u0000-\u001f\u007f]{1,500}$/u;
@@ -176,6 +178,13 @@ export class MailgunEuHttpAdapter implements MailgunEuEmailTransport {
     form.set('subject', subject);
     form.set('text', body);
     form.set('h:Message-Id', expectedMessageId);
+    form.set(
+      'h:Reply-To',
+      propertyPredatorMailgunReplyAddress(
+        request.idempotencySha256,
+        this.#sendingDomain,
+      ),
+    );
     form.set('v:pp-idempotency-sha256', request.idempotencySha256);
     form.set('o:tracking', 'yes');
 

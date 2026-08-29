@@ -553,7 +553,7 @@ class ReadClient {
     if (sql.includes('inbox.list-conversations')) {
       this.conversationSql = sql;
       return queryResult([{
-      conversationId: CONVERSATION, inboxId: INBOX, channel: 'email', state: 'open',
+      conversationId: CONVERSATION, inboxId: INBOX, channel: 'email', environment: 'test', state: 'open',
       contactId: USER, contactName: 'Demo Lead', subject: null, unreadCount: 1,
       requiresApproval: true,
       lastMessageAt: new Date('2026-08-26T11:59:00.000Z'),

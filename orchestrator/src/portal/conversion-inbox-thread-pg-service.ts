@@ -48,6 +48,7 @@ export interface ConversionInboxThreadReadService {
 
 interface ThreadCoreRow extends QueryResultRow {
   conversationId: string;
+  environment: string;
   contactId: string;
   contactPointId: string | null;
   displayName: string;
@@ -105,6 +106,7 @@ interface ConsentRow extends QueryResultRow {
 
 const THREAD_CORE_SQL = `/* portal.conversion-inbox.thread-core */
 SELECT conversation.id AS "conversationId",
+       conversation.environment,
        conversation.contact_id AS "contactId",
        selected_point.id AS "contactPointId",
        contact.display_name AS "displayName",
@@ -370,17 +372,31 @@ LEFT JOIN LATERAL (
   LIMIT 1
 ) AS current_consent ON true
 WHERE conversation.id = $1
-  AND conversation.environment = 'test'`;
+  AND (
+    conversation.environment = 'test'
+    OR (
+      conversation.environment = 'live'
+      AND conversation.channel = 'email'
+      AND EXISTS (
+        SELECT 1
+        FROM app.property_predator_mailgun_inbound_receipts AS owned_reply
+        WHERE owned_reply.workspace_id = conversation.workspace_id
+          AND owned_reply.conversation_id = conversation.id
+      )
+    )
+  )`;
 
 const TRANSCRIPT_SQL = `/* portal.conversion-inbox.thread-transcript */
 SELECT message.id AS "messageId", message.direction, message.lifecycle,
        message.source_kind AS "sourceKind",
        version.body_text AS body, message.occurred_at AS "occurredAt",
        delivery.status AS "deliveryStatus",
-       inbound_provenance.receipt_id AS "inboundReceiptId",
-       inbound_provenance.provider_family AS "inboundProviderFamily",
-       inbound_provenance.network AS "inboundNetwork",
-       inbound_provenance.received_at AS "inboundVerifiedAt"
+       coalesce(test_inbound.receipt_id, owned_reply.id) AS "inboundReceiptId",
+       CASE WHEN owned_reply.id IS NOT NULL THEN 'mailgun_email'
+            ELSE test_inbound.provider_family END AS "inboundProviderFamily",
+       CASE WHEN owned_reply.id IS NOT NULL THEN 'email'
+            ELSE test_inbound.network END AS "inboundNetwork",
+       coalesce(test_inbound.received_at, owned_reply.received_at) AS "inboundVerifiedAt"
 FROM app.messages AS message
 JOIN app.message_versions AS version
   ON version.workspace_id = message.workspace_id
@@ -404,12 +420,31 @@ LEFT JOIN LATERAL (
 ) AS delivery ON true
 LEFT JOIN LATERAL app_private.test_inbox_webhook_message_provenance(
   message.workspace_id, message.conversation_id, message.id
-) AS inbound_provenance ON message.environment = 'test'
+) AS test_inbound ON message.environment = 'test'
   AND message.direction = 'inbound'
   AND message.lifecycle = 'received'
   AND message.source_kind = 'verified_webhook'
+LEFT JOIN app.property_predator_mailgun_inbound_receipts AS owned_reply
+  ON message.environment = 'live'
+ AND message.direction = 'inbound'
+ AND message.lifecycle = 'received'
+ AND message.source_kind = 'verified_webhook'
+ AND owned_reply.workspace_id = message.workspace_id
+ AND owned_reply.conversation_id = message.conversation_id
+ AND owned_reply.inbound_message_id = message.id
 WHERE message.conversation_id = $1
-  AND message.environment = 'test'
+  AND (
+    message.environment = 'test'
+    OR (
+      message.environment = 'live'
+      AND EXISTS (
+        SELECT 1
+        FROM app.property_predator_mailgun_inbound_receipts AS proof
+        WHERE proof.workspace_id = message.workspace_id
+          AND proof.conversation_id = message.conversation_id
+      )
+    )
+  )
 ORDER BY message.occurred_at DESC, message.id DESC
 LIMIT $2`;
 
@@ -435,7 +470,19 @@ WITH target AS (
    AND point.id = $2
    AND point.contact_id = conversation.contact_id
   WHERE conversation.id = $1
-    AND conversation.environment = 'test'
+    AND (
+      conversation.environment = 'test'
+      OR (
+        conversation.environment = 'live'
+        AND conversation.channel = 'email'
+        AND EXISTS (
+          SELECT 1
+          FROM app.property_predator_mailgun_inbound_receipts AS owned_reply
+          WHERE owned_reply.workspace_id = conversation.workspace_id
+            AND owned_reply.conversation_id = conversation.id
+        )
+      )
+    )
 ), current_consent AS (
   SELECT target.*, consent.state AS consent_state,
          consent.lawful_basis, consent.purpose,
@@ -734,10 +781,13 @@ function mapInboundEvidence(
   }
   const network = row.inboundNetwork;
   const providerFamily = row.inboundProviderFamily;
-  if (network !== 'whatsapp' && network !== 'facebook' && network !== 'instagram') {
+  if (network !== 'email' && network !== 'whatsapp'
+      && network !== 'facebook' && network !== 'instagram') {
     throw new Error('Conversion Inbox signed inbound network is invalid');
   }
-  const source = providerFamily === 'whatsapp' && network === 'whatsapp'
+  const source = providerFamily === 'mailgun_email' && network === 'email'
+    ? 'mailgun_eu'
+    : providerFamily === 'whatsapp' && network === 'whatsapp'
     ? 'whatsapp_simulator'
     : providerFamily === 'social_dm' && (network === 'facebook' || network === 'instagram')
       ? 'social_dm_simulator' : null;
@@ -745,7 +795,7 @@ function mapInboundEvidence(
     throw new Error('Conversion Inbox signed inbound provider is inconsistent');
   }
   return Object.freeze({
-    kind: 'signed_simulator_event',
+    kind: source === 'mailgun_eu' ? 'signed_mailgun_inbound' : 'signed_simulator_event',
     source,
     network,
     receiptId: uuid(row.inboundReceiptId, 'inboundReceiptId'),
@@ -858,8 +908,12 @@ export class PgConversionInboxThreadReadService implements ConversionInboxThread
           id, contactPointId, CONVERSION_INBOX_MAX_CONSENTS,
         ]);
       const lead = mapLead(core);
+      if (core.environment !== 'test' && core.environment !== 'live') {
+        throw new Error('Conversion Inbox thread environment is invalid');
+      }
       return Object.freeze({
         conversationId: canonicalConversationId,
+        environment: core.environment,
         contactPointId,
         messages: mapTranscript(transcriptResult.rows, lead.displayName),
         lead,

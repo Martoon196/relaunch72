@@ -44,9 +44,9 @@ export type ConversionInboxRailActivityState =
   | 'attention';
 
 export interface ConversionInboxSignedInboundEvidenceSnapshot {
-  readonly kind: 'signed_simulator_event';
-  readonly source: 'whatsapp_simulator' | 'social_dm_simulator';
-  readonly network: 'whatsapp' | 'facebook' | 'instagram';
+  readonly kind: 'signed_simulator_event' | 'signed_mailgun_inbound';
+  readonly source: 'whatsapp_simulator' | 'social_dm_simulator' | 'mailgun_eu';
+  readonly network: 'email' | 'whatsapp' | 'facebook' | 'instagram';
   /** Opaque internal receipt UUID. No provider event/address data is exposed. */
   readonly receiptId: string;
   /** Server-side verification time, never a caller-asserted provider timestamp. */
@@ -120,6 +120,7 @@ export interface ConversionInboxRailActivitySnapshot {
 
 export interface ConversionInboxThreadSnapshot {
   readonly conversationId: string;
+  readonly environment?: 'test' | 'live';
   readonly contactPointId: string | null;
   readonly messages: readonly ConversionInboxTranscriptMessageSnapshot[];
   readonly lead: ConversionInboxLeadSnapshot;
@@ -159,9 +160,9 @@ export interface ConversionInboxTranscriptMessageView {
 
 export interface ConversionInboxSignedInboundEvidenceView
   extends ConversionInboxSignedInboundEvidenceSnapshot {
-  readonly label: 'Signed TEST inbound';
-  readonly networkLabel: 'WhatsApp' | 'Facebook' | 'Instagram';
-  readonly networkCode: 'WA' | 'FB' | 'IG';
+  readonly label: 'Signed TEST inbound' | 'Signed Mailgun inbound';
+  readonly networkLabel: 'Email' | 'WhatsApp' | 'Facebook' | 'Instagram';
+  readonly networkCode: 'EM' | 'WA' | 'FB' | 'IG';
   readonly receiptLabel: string;
   readonly accessibleLabel: string;
 }
@@ -326,7 +327,9 @@ function queueItem(
     stateLabel: stateLabel(summary.state),
     preview: `${preview.value}${preview.truncated ? '…' : ''}`,
     requiresApproval: thread === undefined ? summary.requiresApproval : needsApproval(thread),
-    testProviderLabel: `${CHANNEL_LABELS[summary.channel]} · TEST / SIMULATED`,
+    testProviderLabel: summary.environment === 'live'
+      ? `${CHANNEL_LABELS[summary.channel]} · LIVE OWNED-OFFICE PROOF`
+      : `${CHANNEL_LABELS[summary.channel]} · TEST / SIMULATED`,
   });
 }
 
@@ -359,32 +362,41 @@ function signedInboundEvidence(
 ): ConversionInboxSignedInboundEvidenceView | null {
   const evidence = message.inboundEvidence;
   if (!evidence || message.direction !== 'inbound' || message.lifecycle !== 'received'
-      || evidence.kind !== 'signed_simulator_event'
       || !UUID.test(evidence.receiptId)
       || !CANONICAL_UTC.test(evidence.verifiedAt)
       || !Number.isFinite(Date.parse(evidence.verifiedAt))
       || new Date(evidence.verifiedAt).toISOString() !== evidence.verifiedAt) return null;
-  const expectedSource = evidence.network === 'whatsapp'
+  const expectedSource = evidence.network === 'email'
+    ? 'mailgun_eu'
+    : evidence.network === 'whatsapp'
     ? 'whatsapp_simulator'
     : evidence.network === 'facebook' || evidence.network === 'instagram'
       ? 'social_dm_simulator' : null;
   if (expectedSource === null || evidence.source !== expectedSource) return null;
-  const networkLabel = evidence.network === 'whatsapp' ? 'WhatsApp'
+  const expectedKind = evidence.network === 'email'
+    ? 'signed_mailgun_inbound' : 'signed_simulator_event';
+  if (evidence.kind !== expectedKind) return null;
+  const networkLabel = evidence.network === 'email' ? 'Email'
+    : evidence.network === 'whatsapp' ? 'WhatsApp'
     : evidence.network === 'facebook' ? 'Facebook' : 'Instagram';
-  const networkCode = evidence.network === 'whatsapp' ? 'WA'
+  const networkCode = evidence.network === 'email' ? 'EM'
+    : evidence.network === 'whatsapp' ? 'WA'
     : evidence.network === 'facebook' ? 'FB' : 'IG';
   const receiptId = evidence.receiptId.toLowerCase();
   return Object.freeze({
-    kind: 'signed_simulator_event',
+    kind: evidence.kind,
     source: evidence.source,
     network: evidence.network,
     receiptId,
     verifiedAt: evidence.verifiedAt,
-    label: 'Signed TEST inbound',
+    label: evidence.kind === 'signed_mailgun_inbound'
+      ? 'Signed Mailgun inbound' : 'Signed TEST inbound',
     networkLabel,
     networkCode,
-    receiptLabel: `TEST IN ${receiptId.slice(0, 8)}…${receiptId.slice(-4)}`,
-    accessibleLabel: `Signed simulated ${networkLabel} inbound event. Non-routable test only; no live account connected.`,
+    receiptLabel: `${evidence.kind === 'signed_mailgun_inbound' ? 'MAIL IN' : 'TEST IN'} ${receiptId.slice(0, 8)}…${receiptId.slice(-4)}`,
+    accessibleLabel: evidence.kind === 'signed_mailgun_inbound'
+      ? 'Signed Mailgun email reply from the controlled owned-office proof. An admin call task was created.'
+      : `Signed simulated ${networkLabel} inbound event. Non-routable test only; no live account connected.`,
   });
 }
 

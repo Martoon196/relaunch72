@@ -43,6 +43,7 @@ interface ConversationRow extends QueryResultRow {
   conversationId: string;
   inboxId: string;
   channel: string;
+  environment: string;
   state: string;
   contactId: string | null;
   contactName: string | null;
@@ -84,6 +85,7 @@ function integer(value: unknown, field: string, minimum: number, maximum: number
 
 function mapConversation(row: ConversationRow): InboxConversationSummary {
   if (!CHANNELS.has(row.channel) || !STATES.has(row.state)
+      || (row.environment !== 'test' && row.environment !== 'live')
       || (row.subject !== null && (typeof row.subject !== 'string'
         || row.subject.length < 1 || row.subject.length > 500))
       || (row.contactName !== null && (typeof row.contactName !== 'string'
@@ -118,6 +120,7 @@ function mapConversation(row: ConversationRow): InboxConversationSummary {
     conversationId: uuid(row.conversationId, 'conversationId'),
     inboxId: uuid(row.inboxId, 'inboxId'),
     channel: row.channel as ConversationChannel,
+    environment: row.environment as 'test' | 'live',
     state: row.state as InboxConversationState,
     contactId: nullableUuid(row.contactId, 'contactId'),
     contactName: row.contactName,
@@ -195,6 +198,7 @@ export class PgInboxReadService implements InboxReadService {
         `/* inbox.list-conversations */
          SELECT conversation.id AS "conversationId",
                 conversation.inbox_id AS "inboxId", conversation.channel,
+                conversation.environment,
                 conversation.state, conversation.contact_id AS "contactId",
                 contact.display_name AS "contactName", conversation.subject,
                 conversation.unread_count AS "unreadCount",
@@ -257,7 +261,19 @@ export class PgInboxReadService implements InboxReadService {
            ORDER BY message.occurred_at DESC, message.id DESC
            LIMIT 1
          ) AS latest ON true
-         WHERE conversation.environment = 'test'
+         WHERE (
+             conversation.environment = 'test'
+             OR (
+               conversation.environment = 'live'
+               AND conversation.channel = 'email'
+               AND EXISTS (
+                 SELECT 1
+                 FROM app.property_predator_mailgun_inbound_receipts AS owned_reply
+                 WHERE owned_reply.workspace_id = conversation.workspace_id
+                   AND owned_reply.conversation_id = conversation.id
+               )
+             )
+           )
            AND ($1::text IS NULL OR conversation.channel = $1)
            AND ($2::text IS NULL OR conversation.state = $2)
            AND ($3::text IS NULL

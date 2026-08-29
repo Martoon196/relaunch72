@@ -633,6 +633,25 @@ const EVIDENCE_SQL = `/* conversion.lead-360.read-evidence */
      AND connection.environment = 'live'
     WHERE receipt.workspace_id = app_private.current_workspace_id()
       AND receipt.source_kind = 'verified_webhook'
+    UNION ALL
+    SELECT inbound.workspace_id,
+           inbound.contact_id,
+           inbound.id,
+           'reply'::text,
+           'Property Predator email reply received'::text,
+           coalesce(conversation.subject, 'Owned-office reply'),
+           NULL::text,
+           inbound.occurred_at,
+           'Mailgun · signed inbound reply'::text
+    FROM app.property_predator_mailgun_inbound_receipts AS inbound
+    JOIN app.conversations AS conversation
+      ON conversation.workspace_id = app_private.current_workspace_id()
+     AND conversation.id = inbound.conversation_id
+     AND conversation.contact_id = $1::uuid
+     AND conversation.channel = 'email'
+     AND conversation.environment = 'live'
+    WHERE inbound.workspace_id = app_private.current_workspace_id()
+      AND inbound.contact_id = $1::uuid
   )
   SELECT workspace_id,
          contact_id,

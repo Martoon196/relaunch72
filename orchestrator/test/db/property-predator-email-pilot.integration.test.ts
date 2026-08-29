@@ -9,13 +9,22 @@ import {
 import { PgControlledEmailPilotBoundary } from '../../src/property-predator-email-pilot-pg/index.js';
 import { PgPropertyPredatorMailgunWorkerRepository } from '../../src/property-predator-mailgun-worker-pg/index.js';
 import {
+  PgPropertyPredatorMailgunInboundRepository,
+  PropertyPredatorMailgunInboundConflictError,
+  PropertyPredatorMailgunInboundIngressService,
+  PropertyPredatorMailgunInboundUnmatchedError,
+} from '../../src/property-predator-mailgun-inbound-pg/index.js';
+import {
   propertyPredatorEmailContentSha256,
   type ControlledEmailPilotBoundaryInput,
 } from '../../src/providers/controlled-property-predator-email-pilot.js';
+import { propertyPredatorMailgunReplyToken } from '../../src/providers/property-predator-mailgun-reply-correlation.js';
 import {
+  expectPostgresError,
   openTestDatabase,
   ownerQuery,
   resetIdentityTables,
+  scopedQuery,
   testDatabaseSkipReason,
   withOwnerClient,
 } from './database-helper.js';
@@ -193,7 +202,7 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
   const consentId = randomUUID();
   const subject = 'Your owned Property Predator seed briefing';
   const body = 'This approved integration message can reach only one owned internal seed.';
-  const recipient = `owned-seed-${contactId.slice(0, 8)}@propertypredator.co.uk`;
+  const recipient = 'office@propertypredator.com';
   const contentSha = propertyPredatorEmailContentSha256(subject, body);
   const emailSha = sha(recipient);
 
@@ -842,6 +851,134 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
       job_status: 'accepted',
       job_external_id: expectedMessageId,
       job_error: null,
+    }]);
+
+    const inboundTimestamp = String(Math.floor(Date.now() / 1000));
+    const inboundMessageId = `owned-office-reply-${randomUUID()}@propertypredator.com`;
+    const inboundRecipient = `reply+${propertyPredatorMailgunReplyToken(
+      ambiguous.requestSha256,
+    )}@mg.propertypredator.com`;
+    const inboundForm = (
+      messageBody: string,
+      messageToken: string,
+      messageTimestamp = inboundTimestamp,
+    ): Buffer => {
+      const form = new URLSearchParams({
+        timestamp: messageTimestamp,
+        token: messageToken,
+        signature: createHmac('sha256', SIGNING_KEY)
+          .update(messageTimestamp + messageToken, 'ascii').digest('hex'),
+        sender: recipient,
+        recipient: inboundRecipient,
+        subject: `Re: ${subject}`,
+        'stripped-text': messageBody,
+        'message-headers': JSON.stringify([['Message-Id', `<${inboundMessageId}>`]]),
+        'attachment-count': '0',
+      });
+      return Buffer.from(form.toString(), 'utf8');
+    };
+    const inbound = new PropertyPredatorMailgunInboundIngressService({
+      repository: new PgPropertyPredatorMailgunInboundRepository({
+        commandPool: roleConnectPool(pool, 'r72_mailgun_webhook_command'),
+        workspaceId,
+        providerConnectionId: connectionId,
+      }),
+      signingKey: SIGNING_KEY,
+      nowSeconds: () => Number(inboundTimestamp),
+    });
+    const inboundPayload = inboundForm(
+      'Yes please. Call me about the next Property Predator step.',
+      `owned-office-inbound-${randomUUID()}`,
+    );
+    const inboundRecorded = await inbound.handle(inboundPayload);
+    assert.equal(inboundRecorded.replayed, false);
+    assert.equal(inboundRecorded.conversationId, conversationId);
+    assert.deepEqual(await inbound.handle(inboundPayload), {
+      disposition: 'recorded',
+      replayed: true,
+      conversationId,
+      messageId: inboundRecorded.messageId,
+      messageVersionId: inboundRecorded.messageVersionId,
+      adminCallTaskId: inboundRecorded.adminCallTaskId,
+    });
+    await assert.rejects(
+      inbound.handle(inboundForm(
+        'Changed evidence must never overwrite the recorded reply.',
+        `owned-office-conflict-${randomUUID()}`,
+      )),
+      PropertyPredatorMailgunInboundConflictError,
+    );
+
+    const wrongWorkspaceInbound = new PropertyPredatorMailgunInboundIngressService({
+      repository: new PgPropertyPredatorMailgunInboundRepository({
+        commandPool: roleConnectPool(pool, 'r72_mailgun_webhook_command'),
+        workspaceId: randomUUID(),
+        providerConnectionId: connectionId,
+      }),
+      signingKey: SIGNING_KEY,
+      nowSeconds: () => Number(inboundTimestamp),
+    });
+    await assert.rejects(
+      wrongWorkspaceInbound.handle(inboundPayload),
+      PropertyPredatorMailgunInboundUnmatchedError,
+    );
+    await expectPostgresError(scopedQuery(
+      pool,
+      'r72_mailgun_webhook_command',
+      { workspaceId, requestId: 'mailgun-inbound-table-blindness' },
+      'SELECT id FROM app.property_predator_mailgun_inbound_receipts',
+    ), '42501');
+    assert.deepEqual(await ownerQuery<{
+      unread_count: number;
+      assigned_user_id: string;
+      direction: string;
+      source_kind: string;
+      body_text: string;
+      task_priority: string;
+      task_status: string;
+      activity_type: string;
+      receipt_count: number;
+    }>(
+      pool,
+      `SELECT conversation.unread_count,
+              conversation.assigned_user_id,
+              message.direction,
+              message.source_kind,
+              version.body_text,
+              task.priority AS task_priority,
+              task.status AS task_status,
+              activity.activity_type,
+              count(receipt.id) OVER ()::integer AS receipt_count
+       FROM app.property_predator_mailgun_inbound_receipts AS receipt
+       JOIN app.conversations AS conversation
+         ON conversation.workspace_id = receipt.workspace_id
+        AND conversation.id = receipt.conversation_id
+       JOIN app.messages AS message
+         ON message.workspace_id = receipt.workspace_id
+        AND message.id = receipt.inbound_message_id
+       JOIN app.message_versions AS version
+         ON version.workspace_id = receipt.workspace_id
+        AND version.id = receipt.inbound_message_version_id
+       JOIN app.tasks AS task
+         ON task.workspace_id = receipt.workspace_id
+        AND task.id = receipt.admin_call_task_id
+       JOIN app.activities AS activity
+         ON activity.workspace_id = receipt.workspace_id
+        AND activity.task_id = receipt.admin_call_task_id
+        AND activity.activity_type = 'inbox.email.reply_received'
+       WHERE receipt.workspace_id = $1
+         AND receipt.provider_message_id = $2`,
+      [workspaceId, inboundMessageId],
+    ), [{
+      unread_count: 1,
+      assigned_user_id: ownerId,
+      direction: 'inbound',
+      source_kind: 'verified_webhook',
+      body_text: 'Yes please. Call me about the next Property Predator step.',
+      task_priority: 'urgent',
+      task_status: 'open',
+      activity_type: 'inbox.email.reply_received',
+      receipt_count: 1,
     }]);
   } finally {
     await workerPool?.end();

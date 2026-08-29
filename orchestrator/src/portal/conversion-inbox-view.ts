@@ -111,28 +111,30 @@ function renderChannelRail(view: ConversionInboxView): string {
 }
 
 function renderQueueItem(view: ConversionInboxView, item: ConversionInboxQueueItemView): string {
-  const name = item.contactName ?? 'Unmatched test contact';
+  const live = item.environment === 'live';
+  const name = item.contactName ?? (live ? 'Unmatched contact' : 'Unmatched test contact');
   return `<li class="ci-conversation">
-    <a href="${escapeHtml(queryUrl(view, { conversationId: item.conversationId }))}"${item.selected ? ' aria-current="true"' : ''} aria-label="Open test conversation with ${escapeHtml(name)} on ${escapeHtml(item.channelLabel)}">
+    <a href="${escapeHtml(queryUrl(view, { conversationId: item.conversationId }))}"${item.selected ? ' aria-current="true"' : ''} aria-label="Open ${live ? '' : 'test '}conversation with ${escapeHtml(name)} on ${escapeHtml(item.channelLabel)}">
       <span class="ci-avatar" aria-hidden="true">${escapeHtml(initials(name))}</span>
       <span class="ci-person">
         <span class="ci-person-line"><strong>${escapeHtml(name)}</strong>${item.unreadCount > 0 ? '<span class="ci-dot" aria-label="Unread"></span>' : ''}</span>
         <span class="ci-subject">${escapeHtml(item.subject ?? item.stateLabel)}</span>
         <span class="ci-preview">${escapeHtml(item.preview)}</span>
       </span>
-      <span class="ci-queue-meta">${dateTime(item.lastMessageAt, view.timezone, true)}<span class="ci-channel-pill">${escapeHtml(item.channelLabel)} · TEST</span>${item.requiresApproval ? '<span class="ci-approval-pill">Review</span>' : ''}</span>
+      <span class="ci-queue-meta">${dateTime(item.lastMessageAt, view.timezone, true)}<span class="ci-channel-pill">${escapeHtml(item.testProviderLabel)}</span>${item.requiresApproval ? '<span class="ci-approval-pill">Review</span>' : ''}</span>
     </a>
   </li>`;
 }
 
 function renderQueue(view: ConversionInboxView): string {
+  const hasLive = view.conversations.some((item) => item.environment === 'live');
   const boundary = view.hasMore
     ? `<p class="ci-boundary"><strong>Bounded queue.</strong> Showing ${escapeHtml(view.loadedConversationCount)} loaded records; more may exist.</p>` : '';
   const items = view.conversations.length > 0
-    ? `<ol class="ci-conversations" aria-label="TEST and simulated conversation queue">${view.conversations.map((item) => renderQueueItem(view, item)).join('')}</ol>`
+    ? `<ol class="ci-conversations" aria-label="${hasLive ? 'Controlled proof and simulated' : 'TEST and simulated'} conversation queue">${view.conversations.map((item) => renderQueueItem(view, item)).join('')}</ol>`
     : '<p class="ci-queue-empty">No match in the loaded test queue. Clear a filter to keep exploring.</p>';
   return `<section class="ci-queue" aria-labelledby="ci-queue-title">
-    <header class="ci-queue-head"><div class="ci-queue-title"><h2 id="ci-queue-title">Conversation queue</h2><span class="ci-unread">${escapeHtml(view.totalUnreadCount)} unread</span></div><p>${escapeHtml(view.matchingConversationCount)} of ${escapeHtml(view.loadedConversationCount)} loaded · TEST / simulated conversations</p></header>
+    <header class="ci-queue-head"><div class="ci-queue-title"><h2 id="ci-queue-title">Conversation queue</h2><span class="ci-unread">${escapeHtml(view.totalUnreadCount)} unread</span></div><p>${escapeHtml(view.matchingConversationCount)} of ${escapeHtml(view.loadedConversationCount)} loaded · ${hasLive ? 'controlled proof + simulations' : 'TEST / simulated conversations'}</p></header>
     ${items}${boundary}
   </section>`;
 }
@@ -146,7 +148,7 @@ function renderTranscript(thread: ConversionInboxSelectedThreadView, timezone: s
       ? `<span class="ci-inbound-proof" aria-label="${escapeHtml(evidence.accessibleLabel)}">${escapeHtml(evidence.label)} · ${escapeHtml(evidence.networkCode)}</span>`
       : '';
     const proofDetail = evidence
-      ? `<div class="ci-inbound-proof-detail">Simulator signature verified · Receipt ${escapeHtml(evidence.receiptLabel)} · verified ${dateTime(evidence.verifiedAt, timezone, true)}</div>`
+      ? `<div class="ci-inbound-proof-detail">${evidence.kind === 'signed_mailgun_inbound' ? 'Mailgun signature and exact reply correlation verified' : 'Simulator signature verified'} · Receipt ${escapeHtml(evidence.receiptLabel)} · verified ${dateTime(evidence.verifiedAt, timezone, true)}</div>`
       : '';
     return `<li class="ci-message" data-direction="${escapeHtml(message.direction)}">
       <div class="ci-message-head"><strong>${escapeHtml(message.authorLabel)}</strong><span>·</span>${dateTime(message.occurredAt, timezone, true)}${proof}</div>
@@ -160,6 +162,9 @@ function renderTranscript(thread: ConversionInboxSelectedThreadView, timezone: s
 function renderRailActivity(thread: ConversionInboxSelectedThreadView, timezone: string): string {
   const activity = thread.railActivity;
   if (activity === null) {
+    if (thread.summary.environment === 'live') {
+      return '<section class="ci-rail-activity" data-rail-state="reconciled" aria-label="Mailgun owned-office reply reconciled"><span class="ci-rail-kicker">MAILGUN INBOUND</span><strong class="ci-rail-state">Reply reconciled</strong><span class="ci-rail-copy">Lead 360 was updated, unread work was raised and an urgent admin call task was created atomically.</span></section>';
+    }
     return `<section class="ci-rail-activity" data-rail-state="none" aria-label="TEST rail activity"><span class="ci-rail-kicker">Latest TEST rail</span><strong class="ci-rail-state">No operation recorded</strong><span class="ci-rail-copy">Nothing is queued for this conversation.</span></section>`;
   }
   return `<section class="ci-rail-activity" data-rail-state="${escapeHtml(activity.state)}" aria-label="TEST rail activity: ${escapeHtml(activity.label)}"><span class="ci-rail-kicker">Latest TEST rail</span><strong class="ci-rail-state">${escapeHtml(activity.label)}</strong><span class="ci-rail-copy">${escapeHtml(activity.detail)}</span><span class="ci-rail-trace">Trace ${escapeHtml(activity.correlationLabel)}</span><span class="ci-rail-time">Last change ${dateTime(activity.occurredAt, timezone, true)}</span></section>`;
@@ -230,6 +235,9 @@ function renderComposer(
   thread: ConversionInboxSelectedThreadView,
   security: ConversionInboxActionSecurity | undefined,
 ): string {
+  if (thread.summary.environment === 'live') {
+    return '<section class="ci-composer" aria-labelledby="ci-draft-title"><div class="ci-composer-top"><strong id="ci-draft-title">Operator follow-up</strong><span class="ci-version">LIVE OWNED-OFFICE PROOF</span></div><div class="ci-composer-bar"><div class="ci-gate-copy"><strong>Urgent admin call task created</strong>Use Lead 360 or Action Centre to record the call outcome and next move. No automatic customer reply is sent from this proof.</div><div class="ci-draft-actions"><a class="ci-primary" href="/portal/actions">Open Action Centre</a></div></div></section>';
+  }
   if (view.canWrite && security && thread.draft.lifecycle === 'draft'
       && !thread.draft.bodyTruncated) {
     return editableComposer(view, thread, security);
@@ -274,8 +282,10 @@ function renderSelected(
 ): string {
   const thread = view.selectedThread;
   if (!thread) return '<section class="ci-empty-thread"><div><h2>Select a loaded test conversation</h2><p>The thread, Lead 360 context, consent check and approval gate will appear here. No provider is connected.</p></div></section>';
+  const mode = thread.summary.environment === 'live'
+    ? 'LIVE OWNED-OFFICE PROOF' : 'TEST / SIMULATED';
   return `<main class="ci-thread" aria-labelledby="ci-thread-title">
-    <header class="ci-thread-head"><div class="ci-thread-person"><h2 id="ci-thread-title">${escapeHtml(thread.lead.displayName)}</h2><p>${escapeHtml(thread.summary.subject ?? thread.summary.channelLabel)} · ${escapeHtml(thread.summary.stateLabel)}</p></div><span class="ci-test-stamp">${escapeHtml(thread.summary.channelLabel)}<br>TEST / SIMULATED</span></header>
+    <header class="ci-thread-head"><div class="ci-thread-person"><h2 id="ci-thread-title">${escapeHtml(thread.lead.displayName)}</h2><p>${escapeHtml(thread.summary.subject ?? thread.summary.channelLabel)} · ${escapeHtml(thread.summary.stateLabel)}</p></div><span class="ci-test-stamp">${escapeHtml(thread.summary.channelLabel)}<br>${escapeHtml(mode)}</span></header>
     ${renderRailActivity(thread, view.timezone)}${renderTranscript(thread, view.timezone)}${renderComposer(view, thread, security)}
   </main>${renderContext(thread, view.timezone)}`;
 }
@@ -293,10 +303,19 @@ export function renderConversionInboxBody(
     { value: 'all', label: 'Everything loaded' }, { value: 'unread', label: 'Unread' },
     { value: 'approval', label: 'Approval & rework' }, { value: 'open', label: 'Open' },
   ];
-  return `<section class="ci" data-property-predator-conversion-inbox data-environment="test">
+  const hasLive = view.conversations.some((item) => item.environment === 'live');
+  const mode = hasLive ? 'CONTROLLED PROOF + SIMULATED' : 'TEST / SIMULATED';
+  const modeDetail = hasLive
+    ? 'Only an exact signed owned-office Mailgun reply may appear as LIVE; every other loaded channel remains simulated.'
+    : 'Contact records may be workspace CRM data. Provider adapters are non-routable; no message here has contacted anyone.';
+  const truthTitle = hasLive ? 'Evidence boundary' : 'Safety boundary';
+  const truthDetail = hasLive
+    ? 'LIVE labels require an immutable Mailgun receipt bound to the owned office, exact outbound digest and one settled delivery. Simulated delivery labels remain non-routable.'
+    : 'Delivery labels describe simulator outcomes only. An approved draft is still blocked unless current channel consent also agrees.';
+  return `<section class="ci" data-property-predator-conversion-inbox data-environment="${hasLive ? 'controlled' : 'test'}">
     <style>${CONVERSION_INBOX_STYLE}</style><a class="ci-skip" href="#ci-transcript">Skip to transcript</a>
-    <header class="ci-head"><div><span class="ci-kicker">Growth HQ · Conversion Inbox</span><h1>Every channel. <em>One human queue.</em></h1><p>Turn engagement into confident conversations with the lead journey, consent and exact approval state visible beside every reply.</p></div><div class="ci-mode"><strong>TEST / SIMULATED</strong><span>Contact records may be workspace CRM data. Provider adapters are non-routable; no message here has contacted anyone.</span></div></header>
-    <div class="ci-truth"><strong>Safety boundary</strong><p>Delivery labels describe simulator outcomes only. An approved draft is still blocked unless current channel consent also agrees.</p><span class="ci-snapshot">${escapeHtml(view.workspaceName)} · Snapshot ${dateTime(view.asOf, view.timezone)}</span></div>${renderNotice(view)}
+    <header class="ci-head"><div><span class="ci-kicker">Growth HQ · Conversion Inbox</span><h1>Every channel. <em>One human queue.</em></h1><p>Turn engagement into confident conversations with the lead journey, consent and exact approval state visible beside every reply.</p></div><div class="ci-mode"><strong>${escapeHtml(mode)}</strong><span>${escapeHtml(modeDetail)}</span></div></header>
+    <div class="ci-truth"><strong>${escapeHtml(truthTitle)}</strong><p>${escapeHtml(truthDetail)}</p><span class="ci-snapshot">${escapeHtml(view.workspaceName)} · Snapshot ${dateTime(view.asOf, view.timezone)}</span></div>${renderNotice(view)}
     <form class="ci-toolbar" method="get" action="${CONVERSION_INBOX_ROUTE}" aria-label="Filter loaded test conversations"><div class="ci-field"><label for="ci-query">Search loaded queue</label><input id="ci-query" name="q" type="search" maxlength="80" value="${escapeHtml(view.filters.query)}" placeholder="Person, subject or message"></div><div class="ci-field"><label for="ci-queue-filter">Work queue</label><select id="ci-queue-filter" name="queue">${queueOptions.map((item) => `<option value="${item.value}"${item.value === view.filters.queue ? ' selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}</select></div>${view.filters.channel !== 'all' ? `<input type="hidden" name="channel" value="${escapeHtml(view.filters.channel)}">` : ''}<button class="ci-button" type="submit">Apply filters</button><a class="ci-clear" href="${CONVERSION_INBOX_ROUTE}">Clear</a></form>
     <div class="ci-workspace">${renderChannelRail(view)}${renderQueue(view)}${renderSelected(view, options.security)}</div>
     <div class="ci-sr" role="status" aria-live="polite">${escapeHtml(loadedConversationLabel(view.matchingConversationCount))} ${view.matchingConversationCount === 1 ? 'matches' : 'match'} the current filters.</div>

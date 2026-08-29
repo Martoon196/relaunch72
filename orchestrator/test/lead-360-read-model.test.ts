@@ -38,6 +38,7 @@ const AGENCY_APPOINTMENT_ID = '20202020-2020-4020-8020-202020202020';
 const AGENCY_SALE_ID = '21212121-2121-4121-8121-212121212121';
 const AGENCY_SCORE_ID = '23232323-2323-4323-8323-232323232323';
 const EMAIL_RECEIPT_ID = '24242424-2424-4424-8424-242424242424';
+const EMAIL_REPLY_RECEIPT_ID = '25252525-2525-4525-8525-252525252525';
 
 type Row = Record<string, unknown>;
 
@@ -147,6 +148,15 @@ function fixtures(): Record<string, Row[]> {
         progress_basis_points: null,
         occurred_at: new Date('2026-08-25T10:16:00.000Z'),
         source_label: 'Mailgun · signed receipt',
+      }),
+      scoped({
+        id: EMAIL_REPLY_RECEIPT_ID,
+        evidence_kind: 'reply',
+        title: 'Property Predator email reply received',
+        detail: 'Growth HQ launch proof',
+        progress_basis_points: null,
+        occurred_at: new Date('2026-08-25T10:17:00.000Z'),
+        source_label: 'Mailgun · signed inbound reply',
       }),
     ],
     'conversion.lead-360.read-offers': [scoped({
@@ -298,6 +308,15 @@ test('Lead360ReadService maps and deeply freezes one narrow case file in one sco
     progressBasisPoints: null,
     occurredAt: '2026-08-25T10:16:00.000Z',
     sourceLabel: 'Mailgun · signed receipt',
+  });
+  assert.deepEqual(result.evidence[3], {
+    id: EMAIL_REPLY_RECEIPT_ID,
+    kind: 'reply',
+    title: 'Property Predator email reply received',
+    detail: 'Growth HQ launch proof',
+    progressBasisPoints: null,
+    occurredAt: '2026-08-25T10:17:00.000Z',
+    sourceLabel: 'Mailgun · signed inbound reply',
   });
   assert.deepEqual(result.offers[0]?.latestResponse, {
     id: RESPONSE_ID,

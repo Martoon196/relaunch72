@@ -1,6 +1,7 @@
 import { BRAND_BRAIN_ROUTE } from './brand-brain-actions.js';
 import { CAMPAIGN_WIZARD_ROUTE } from './campaign-wizard-actions.js';
 import { CAMPAIGN_COMMAND_ROUTE } from './campaign-command-presenter.js';
+import { CAMPAIGN_MACHINE_ROUTE } from './campaign-machine-presenter.js';
 import { COMPANY_ASSETS_ROUTE } from './company-assets-actions.js';
 import { CONTENT_CALENDAR_ROUTE } from './content-calendar-presenter.js';
 import { CONTENT_CONTROL_ROOM_ROUTE } from './content-control-room-presenter.js';
@@ -14,6 +15,7 @@ import { escapeHtml } from './ui.js';
 export type ContentWorkspaceNavigationTarget =
   | 'create'
   | 'campaigns'
+  | 'sequences'
   | 'calendar'
   | 'composer'
   | 'images'
@@ -41,6 +43,7 @@ const CONTENT_WORKSPACE_LINKS: readonly Readonly<{
 }>[] = Object.freeze([
   { target: 'create', href: CAMPAIGN_WIZARD_ROUTE, label: '+ New campaign' },
   { target: 'campaigns', href: CAMPAIGN_COMMAND_ROUTE, label: 'Campaigns' },
+  { target: 'sequences', href: CAMPAIGN_MACHINE_ROUTE, label: 'Sequences' },
   { target: 'calendar', href: CONTENT_CALENDAR_ROUTE, label: 'Calendar' },
   { target: 'connections', href: SOCIAL_ACCOUNT_CONTROL_ROUTE, label: 'Social accounts' },
   { target: 'readiness', href: PROVIDER_READINESS_COCKPIT_ROUTE, label: 'Rail status' },
@@ -57,6 +60,8 @@ export function renderContentWorkspaceNavigation(
     brandBrainAvailable: boolean;
     brainLabel?: string;
     companyContentSyncAvailable?: boolean;
+    /** Property Predator-only reusable campaign template surface. */
+    campaignMachineAvailable?: boolean;
     /** Show only when the canonical portal has composed the read-only evidence service. */
     providerReadinessAvailable?: boolean;
   }> = {
@@ -64,9 +69,12 @@ export function renderContentWorkspaceNavigation(
   },
 ): string {
   const links = CONTENT_WORKSPACE_LINKS.filter((link) => (
-    link.target !== 'readiness'
+    (link.target !== 'readiness'
       || options.providerReadinessAvailable === true
-      || active === 'readiness'
+      || active === 'readiness')
+    && (link.target !== 'sequences'
+      || options.campaignMachineAvailable === true
+      || active === 'sequences')
   )).map((link) => (
     `<a href="${link.href}"${link.target === 'create' ? ' data-content-action="create"' : ''}${active === link.target ? ' aria-current="page"' : ''}>${link.label}</a>`
   )).join('');

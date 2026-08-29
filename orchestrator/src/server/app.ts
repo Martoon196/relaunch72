@@ -32,6 +32,10 @@ import {
   type PropertyPredatorMailgunWebhookMount,
 } from '../integrations/mailgun-webhook/router.js';
 import {
+  PROPERTY_PREDATOR_MAILGUN_INBOUND_PATH,
+  type PropertyPredatorMailgunInboundMount,
+} from '../integrations/mailgun-inbound/router.js';
+import {
   PROPERTY_PREDATOR_SIMULATED_META_DM_INBOUND_PATH,
   PROPERTY_PREDATOR_SIMULATED_WHATSAPP_INBOUND_PATH,
   type PropertyPredatorSimulatedMetaDmInboundMount,
@@ -92,6 +96,8 @@ export interface AppDeps {
   propertyPredatorExternalEvents?: PropertyPredatorExternalEventBridgeMount;
   /** Optional, disabled-by-default signed Mailgun delivery-evidence ingress. */
   propertyPredatorMailgunWebhook?: PropertyPredatorMailgunWebhookMount;
+  /** Optional, disabled-by-default owned-office Mailgun reply ingress. */
+  propertyPredatorMailgunInbound?: PropertyPredatorMailgunInboundMount;
   /** Optional, disabled-by-default signed non-routable WhatsApp TEST ingress. */
   propertyPredatorSimulatedWhatsAppInbound?: PropertyPredatorSimulatedWhatsAppInboundMount;
   /** Optional, disabled-by-default signed non-routable Facebook/Instagram DM TEST ingress. */
@@ -314,6 +320,13 @@ export function createApp(deps: AppDeps) {
             blockers.push('Mailgun webhook is enabled but not ready');
           }
         }
+        const mailgunInbound = deps.propertyPredatorMailgunInbound;
+        if (mailgunInbound?.enabled && !mailgunInbound.ready) {
+          blockers.push(...mailgunInbound.blockers.map((blocker) => `Mailgun inbound: ${blocker}`));
+          if (mailgunInbound.blockers.length === 0) {
+            blockers.push('Mailgun inbound is enabled but not ready');
+          }
+        }
         const simulatedWhatsApp = deps.propertyPredatorSimulatedWhatsAppInbound;
         if (simulatedWhatsApp?.enabled && !simulatedWhatsApp.ready) {
           blockers.push(...simulatedWhatsApp.blockers.map((blocker) =>
@@ -382,6 +395,14 @@ export function createApp(deps: AppDeps) {
               enabled: deps.propertyPredatorMailgunWebhook.enabled,
               ready: deps.propertyPredatorMailgunWebhook.ready,
               blockers: [...deps.propertyPredatorMailgunWebhook.blockers],
+            },
+          } : {}),
+          ...(deps.propertyPredatorMailgunInbound ? {
+            property_predator_mailgun_inbound: {
+              enabled: deps.propertyPredatorMailgunInbound.enabled,
+              ready: deps.propertyPredatorMailgunInbound.ready,
+              blockers: [...deps.propertyPredatorMailgunInbound.blockers],
+              recipient_scope: 'owned-office-proof-only',
             },
           } : {}),
           ...(deps.propertyPredatorSimulatedWhatsAppInbound ? {
@@ -466,6 +487,20 @@ export function createApp(deps: AppDeps) {
           await webhook.handle(req, res);
         } catch {
           if (!res.headersSent) send(res, 503, { error: 'mailgun_webhook_unavailable' });
+        }
+        return;
+      }
+
+      if (route === `POST ${PROPERTY_PREDATOR_MAILGUN_INBOUND_PATH}`) {
+        const inbound = deps.propertyPredatorMailgunInbound;
+        if (!inbound?.enabled) return send(res, 404, { error: 'not_found' });
+        if (!inbound.ready || !inbound.handle) {
+          return send(res, 503, { error: 'mailgun_inbound_unavailable' });
+        }
+        try {
+          await inbound.handle(req, res);
+        } catch {
+          if (!res.headersSent) send(res, 503, { error: 'mailgun_inbound_unavailable' });
         }
         return;
       }

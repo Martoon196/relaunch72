@@ -223,6 +223,10 @@ services:
       # no outbound provider effect.
       - key: PROPERTY_PREDATOR_MAILGUN_WEBHOOK_ENABLED
         value: "true"
+      # Exposes only the signed owned-office reply endpoint. A separately
+      # configured Mailgun Route is still required; this setting sends nothing.
+      - key: PROPERTY_PREDATOR_MAILGUN_INBOUND_ENABLED
+        value: "true"
       - key: MAILGUN_SIGNING_KEY
         sync: false
       - key: MAILGUN_REGION
@@ -427,6 +431,77 @@ services:
         value: public_social_dark_simulator
       - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_RAIL_POLL_MS
         value: "1000"
+      - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED
+        value: "true"
+
+  # 0052 owned-profile live worker. The service can be deployed in dark mode to
+  # prove its exact database boundary without loading an adapter or making a
+  # provider call. Activation requires changing the three interlocked safety
+  # values together after the owned Ayrshare/X profile evidence is reviewed.
+  - type: worker
+    name: property-predator-owned-public-social-live
+    runtime: node
+    region: frankfurt
+    plan: starter
+    branch: codex/relaunch72-platform-foundation
+    numInstances: 1
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
+    startCommand: npm run --workspace orchestrator serve:owned-public-social-live
+    maxShutdownDelaySeconds: 120
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+
+      # One exact 0052 function-only login. It can claim/load/begin/settle one
+      # owned-profile job and has no direct table, web or planner capability.
+      - key: DATABASE_SSL_MODE
+        value: verify-full
+      - key: DATABASE_OWNED_SOCIAL_WORKER_URL
+        sync: false
+      - key: DATABASE_OWNED_SOCIAL_WORKER_POOL_MAX
+        value: "1"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        value: "5000"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: "15000"
+      - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
+        sync: false
+
+      # Tenant/account binding and envelope key are secret-manager values. The
+      # plaintext Ayrshare profile key remains encrypted in Neon and is exposed
+      # only in memory for the single leased operation.
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_WORKSPACE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_BASE64
+        sync: false
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_VERSION
+        sync: false
+      - key: AYRSHARE_API_KEY
+        sync: false
+      - key: AYRSHARE_X_OAUTH1_API_KEY
+        sync: false
+      - key: AYRSHARE_X_OAUTH1_API_SECRET
+        sync: false
+
+      # Dark defaults. No live adapter is instantiated and no dispatch loop is
+      # started while this exact trio remains in place.
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE
+        value: disabled
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_PROVIDER_ID
+        value: ayrshare
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK
+        value: x
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_POLL_MS
+        value: "5000"
       - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
         value: "false"
       - key: PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED
