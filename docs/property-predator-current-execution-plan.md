@@ -217,6 +217,22 @@ Commercial signup, app review and account-verification lead times can run in par
 The team must spend verification effort in proportion to changed risk. Repeating
 the same broad audit after every narrow edit is not progress.
 
+### Live-by-default operating rule
+
+Routine application deployments and forward schema repairs preserve the current
+provider settings; they must not automatically darken a healthy rail, disable
+delivery or re-engage an emergency pause. OFF or paused posture is required only
+for a concrete critical condition such as an unknown recipient, missing consent
+or suppression evidence, an unbounded queue, an unproved destructive migration,
+or a provider/receipt fence that cannot fail closed.
+
+Once a rail has its exact founder-owned target, current consent and suppression
+evidence, reviewed content, hard caps, least-privilege credentials and focused
+provider/receipt proof, the next action is the explicitly authorised live owned
+test. Do not insert another zero-effect or darkness rehearsal unless it answers a
+new, stated risk. The final Sol Ultra master rehearsal remains the release-wide
+verification pass and must not be recreated piecemeal after every narrow change.
+
 ### During each strike
 
 - Run the smallest focused tests that prove the changed behaviour, its failure

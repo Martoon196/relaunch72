@@ -46,6 +46,7 @@ const APP_ROLES = [
   'r72_owned_social_definer',
   'r72_owned_social_worker_command',
   'r72_operational_inbox_definer',
+  'r72_operational_inbox_reader_definer',
   'r72_owned_seed_campaign_command',
   'r72_owned_seed_message_command',
   'r72_owned_seed_message_definer',

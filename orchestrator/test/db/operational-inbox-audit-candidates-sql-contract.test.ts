@@ -162,7 +162,7 @@ test('0062 audits privileges by attnum so a stale name cannot raise 42703', asyn
   // WHERE-clause evaluation order. The attnum overload cannot fail that way.
   assert.match(
     sql,
-    /has_column_privilege\(\s*'r72_operational_inbox_definer', resolved_relation, resolved_attnum, 'SELECT'\s*\)/,
+    /has_column_privilege\(\s*'r72_operational_inbox_reader_definer', resolved_relation, resolved_attnum, 'SELECT'\s*\)/,
   );
   assert.doesNotMatch(sql, /has_column_privilege\([^)]*format\(/);
   // The table audit resolves through to_regclass for the same reason.

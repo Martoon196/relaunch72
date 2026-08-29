@@ -10,15 +10,16 @@
 --   app.property_predator_sms_inbox_projections
 --   app.property_predator_sms_jobs
 --
--- r72_web holds no SELECT on any of them, and that is deliberate: 0055 and 0056
--- kept live rail evidence behind r72_operational_inbox_definer. PostgreSQL
+-- r72_web holds no SELECT on three of them. 0055 did expose the WhatsApp
+-- projection directly; this migration retires that legacy exception as the
+-- same bounded boundary takes over all three live rails. PostgreSQL
 -- resolves privileges on every relation named by a statement when it plans that
 -- statement, not when a row is produced. The whole Inbox query is therefore
 -- rejected with 42501 even in a workspace that has no live conversation at all,
 -- which is why the empty state failed exactly like a populated one.
 --
--- Fix. Three bounded SECURITY DEFINER read functions owned by
--- r72_operational_inbox_definer and granted to r72_web alone. They answer only
+-- Fix. Three bounded SECURITY DEFINER read functions owned by a dedicated
+-- r72_operational_inbox_reader_definer and granted to r72_web alone. They answer only
 -- the questions the Inbox asks: may this live conversation be listed, what
 -- signed inbound receipt does this message descend from, and is this delivery
 -- genuinely linked to a live provider operation. They return identifiers, a
@@ -28,23 +29,152 @@
 --
 -- This migration reads no customer data, sends nothing and changes no row.
 
+DO $roles$
+DECLARE unsafe_parent text;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_roles
+    WHERE rolname = 'r72_operational_inbox_reader_definer'
+  ) THEN
+    CREATE ROLE r72_operational_inbox_reader_definer NOLOGIN NOINHERIT;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_roles
+    WHERE rolname = 'r72_operational_inbox_reader_definer'
+      AND NOT rolcanlogin AND NOT rolinherit AND NOT rolsuper
+      AND NOT rolcreatedb AND NOT rolcreaterole
+      AND NOT rolreplication AND NOT rolbypassrls
+  ) THEN
+    RAISE EXCEPTION 'Unsafe operational inbox reader definer role attributes';
+  END IF;
+  REVOKE r72_owner, r72_security_definer, r72_operational_inbox_definer
+    FROM r72_operational_inbox_reader_definer;
+  REVOKE r72_operational_inbox_reader_definer
+    FROM r72_web, r72_public, r72_worker, r72_webhook, r72_readonly,
+      r72_crm_command, r72_operational_inbox_definer;
+  SELECT parent.rolname INTO unsafe_parent
+  FROM pg_catalog.pg_auth_members AS membership
+  JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
+  JOIN pg_catalog.pg_roles AS parent ON parent.oid = membership.roleid
+  WHERE member.rolname = 'r72_operational_inbox_reader_definer'
+  LIMIT 1;
+  IF unsafe_parent IS NOT NULL THEN
+    RAISE EXCEPTION 'Unsafe operational inbox reader definer parent: %', unsafe_parent;
+  END IF;
+  GRANT r72_operational_inbox_reader_definer TO r72_owner;
+END
+$roles$;
+
 SET LOCAL ROLE r72_owner;
+
+-- 0056 composed the signed SMS inbound projector and exact INSERT policy but
+-- did not extend the two older 0055 origin-domain checks. That made every real
+-- Twilio inbound projection fail before it could reach the unified Inbox.
+ALTER TABLE app.property_predator_admin_call_task_origins
+  DROP CONSTRAINT property_predator_admin_call_task_origins_source_channel_check;
+ALTER TABLE app.property_predator_admin_call_task_origins
+  ADD CONSTRAINT property_predator_admin_call_task_origins_source_channel_check
+  CHECK (source_channel IN (
+    'email', 'sms', 'whatsapp', 'instagram', 'facebook'
+  ));
+ALTER TABLE app.property_predator_admin_call_task_origins
+  DROP CONSTRAINT property_predator_admin_call_task_origins_source_provider_check;
+ALTER TABLE app.property_predator_admin_call_task_origins
+  ADD CONSTRAINT property_predator_admin_call_task_origins_source_provider_check
+  CHECK (source_provider IN (
+    'operator', 'mailgun_eu', 'twilio_messaging', 'meta_whatsapp_cloud'
+  ));
+
+-- Retire the one legacy direct live-evidence grant. The Inbox read paths in
+-- this release no longer reference this table, and the bounded function below
+-- replaces it before the migration commits.
+REVOKE SELECT ON app.property_predator_whatsapp_live_inbox_projections
+  FROM r72_web;
+DROP POLICY property_predator_whatsapp_live_inbox_projections_web_select
+  ON app.property_predator_whatsapp_live_inbox_projections;
+
+-- This reader is deliberately separate from r72_operational_inbox_definer.
+-- The older command role legitimately holds broader Mailgun receipt access for
+-- its append-only admin-call workflow; conflating it with this bounded reader
+-- made the original 0062 privilege audit impossible to satisfy.
+REVOKE ALL ON SCHEMA app, app_private
+  FROM r72_operational_inbox_reader_definer;
+REVOKE ALL ON ALL TABLES IN SCHEMA app
+  FROM r72_operational_inbox_reader_definer;
+REVOKE ALL ON ALL TABLES IN SCHEMA app_private
+  FROM r72_operational_inbox_reader_definer;
+REVOKE CREATE ON SCHEMA public FROM r72_operational_inbox_reader_definer;
+-- Functions in app_private have several deliberately isolated owners, so
+-- r72_owner cannot bulk-REVOKE their ACLs. The role is new in this migration;
+-- fail if an unexpected pre-existing installation gave it any direct function
+-- privilege instead of attempting an owner-invalid bulk revoke.
+DO $reader_function_hygiene$
+DECLARE unexpected_function text;
+BEGIN
+  SELECT procedure.oid::regprocedure::text INTO unexpected_function
+  FROM pg_catalog.pg_proc AS procedure
+  CROSS JOIN LATERAL pg_catalog.aclexplode(
+    coalesce(procedure.proacl, pg_catalog.acldefault('f', procedure.proowner))
+  ) AS privilege
+  WHERE privilege.grantee = (
+    SELECT oid FROM pg_catalog.pg_roles
+    WHERE rolname = 'r72_operational_inbox_reader_definer'
+  )
+  LIMIT 1;
+  IF unexpected_function IS NOT NULL THEN
+    RAISE EXCEPTION 'Unexpected operational inbox reader function privilege: %',
+      unexpected_function USING ERRCODE = '42501';
+  END IF;
+END
+$reader_function_hygiene$;
+GRANT USAGE ON SCHEMA app, app_private
+  TO r72_operational_inbox_reader_definer;
+GRANT EXECUTE ON FUNCTION app_private.current_workspace_id(),
+  app_private.current_user_id(), app_private.current_actor_kind(),
+  app_private.has_active_workspace_membership(uuid, uuid)
+  TO r72_operational_inbox_reader_definer;
 
 -- Column-scoped so the definer can answer the Inbox questions and nothing else.
 -- Bodies, digests, payloads and provider references are all withheld; the audit
 -- below fails the migration if any of them become readable.
 GRANT SELECT (workspace_id, id, conversation_id, environment)
-  ON app.message_deliveries TO r72_operational_inbox_definer;
+  ON app.message_deliveries TO r72_operational_inbox_reader_definer;
 GRANT SELECT (workspace_id, id, conversation_id, inbound_message_id, received_at)
-  ON app.property_predator_mailgun_inbound_receipts TO r72_operational_inbox_definer;
+  ON app.property_predator_mailgun_inbound_receipts TO r72_operational_inbox_reader_definer;
 GRANT SELECT (workspace_id, message_delivery_id)
-  ON app.property_predator_customer_email_jobs TO r72_operational_inbox_definer;
+  ON app.property_predator_customer_email_jobs TO r72_operational_inbox_reader_definer;
 GRANT SELECT (workspace_id, id, receipt_id, conversation_id, inbound_message_id, recorded_at)
-  ON app.property_predator_whatsapp_live_inbox_projections TO r72_operational_inbox_definer;
+  ON app.property_predator_whatsapp_live_inbox_projections TO r72_operational_inbox_reader_definer;
 GRANT SELECT (workspace_id, id, receipt_id, conversation_id, inbound_message_id, recorded_at)
-  ON app.property_predator_sms_inbox_projections TO r72_operational_inbox_definer;
+  ON app.property_predator_sms_inbox_projections TO r72_operational_inbox_reader_definer;
 GRANT SELECT (workspace_id, message_delivery_id, operation_id)
-  ON app.property_predator_sms_jobs TO r72_operational_inbox_definer;
+  ON app.property_predator_sms_jobs TO r72_operational_inbox_reader_definer;
+
+-- FORCE RLS remains active. The reader can see only the authenticated user's
+-- current workspace and only while the shared gate separately proves active
+-- membership.
+DO $reader_policies$
+DECLARE table_name text;
+BEGIN
+  FOREACH table_name IN ARRAY ARRAY[
+    'message_deliveries',
+    'property_predator_mailgun_inbound_receipts',
+    'property_predator_customer_email_jobs',
+    'property_predator_whatsapp_live_inbox_projections',
+    'property_predator_sms_inbox_projections',
+    'property_predator_sms_jobs'
+  ] LOOP
+    EXECUTE format(
+      'CREATE POLICY %I ON app.%I FOR SELECT TO r72_operational_inbox_reader_definer
+       USING (
+         workspace_id = nullif(current_setting(''app.workspace_id'', true), '''')::uuid
+         AND current_setting(''app.actor_kind'', true) = ''user''
+       )',
+      'operational_inbox_reader_' || table_name || '_select', table_name
+    );
+  END LOOP;
+END
+$reader_policies$;
 
 -- The candidate list is resolved against pg_attribute first, and the privilege
 -- test uses the (attrelid, attnum) overload. The name-based overload evaluates
@@ -93,7 +223,7 @@ BEGIN
         USING ERRCODE = '42703';
     END IF;
     IF pg_catalog.has_column_privilege(
-         'r72_operational_inbox_definer', resolved_relation, resolved_attnum, 'SELECT'
+         'r72_operational_inbox_reader_definer', resolved_relation, resolved_attnum, 'SELECT'
        ) THEN
       RAISE EXCEPTION
         'Operational inbox definer must not read app.%.%',
@@ -104,8 +234,8 @@ BEGIN
 END
 $definer_column_audit$;
 
-GRANT CREATE ON SCHEMA app_private TO r72_operational_inbox_definer;
-SET LOCAL ROLE r72_operational_inbox_definer;
+GRANT CREATE ON SCHEMA app_private TO r72_operational_inbox_reader_definer;
+SET LOCAL ROLE r72_operational_inbox_reader_definer;
 
 -- One shared gate so all three functions demand exactly the same context and a
 -- reviewer can prove they cannot drift apart.
@@ -289,7 +419,7 @@ $function$;
 RESET ROLE;
 SET LOCAL ROLE r72_owner;
 
-REVOKE CREATE ON SCHEMA app_private FROM r72_operational_inbox_definer;
+REVOKE CREATE ON SCHEMA app_private FROM r72_operational_inbox_reader_definer;
 
 REVOKE ALL ON FUNCTION app_private.operational_inbox_live_read_allowed(uuid)
   FROM PUBLIC;
@@ -315,7 +445,7 @@ GRANT EXECUTE ON FUNCTION app_private.operational_inbox_live_delivery_linked(
   uuid, uuid, uuid, text
 ) TO r72_web;
 
--- r72_web must remain table-blind on the four live evidence tables that caused
+-- r72_web must remain table-blind on the four live evidence tables involved in
 -- the outage. app.property_predator_mailgun_inbound_receipts is deliberately
 -- excluded: 0050 granted it to r72_web and Lead 360 still reads it directly, so
 -- revoking that grant belongs to a separate, wider change than this repair.

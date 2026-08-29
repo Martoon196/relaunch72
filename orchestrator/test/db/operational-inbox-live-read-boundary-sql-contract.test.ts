@@ -36,7 +36,7 @@ async function migration(): Promise<string> {
 
 test('0062 creates every inbox read function as a definer-owned stable reader', async () => {
   const sql = await migration();
-  assert.match(sql, /SET LOCAL ROLE r72_operational_inbox_definer;/);
+  assert.match(sql, /SET LOCAL ROLE r72_operational_inbox_reader_definer;/);
   for (const name of [...GRANTED_FUNCTIONS, 'operational_inbox_live_read_allowed']) {
     const declaration = new RegExp(
       `CREATE FUNCTION app_private\\.${name}\\(([^)]*)\\)[^$]*?`
@@ -107,6 +107,14 @@ test('0062 grants r72_web the three inbox questions and never the shared gate', 
 
 test('0062 gives r72_web no new table privilege and audits that it stays blind', async () => {
   const sql = await migration();
+  assert.match(
+    sql,
+    /REVOKE SELECT ON app\.property_predator_whatsapp_live_inbox_projections FROM r72_web/,
+  );
+  assert.match(
+    sql,
+    /DROP POLICY property_predator_whatsapp_live_inbox_projections_web_select ON app\.property_predator_whatsapp_live_inbox_projections/,
+  );
   for (const table of PROTECTED_TABLES) {
     assert.doesNotMatch(
       sql,
@@ -119,11 +127,19 @@ test('0062 gives r72_web no new table privilege and audits that it stays blind',
   assert.match(sql, /r72_web must stay table-blind on app\.%/);
 });
 
-test('0062 gives the definer column-scoped reads and denies evidence payloads', async () => {
+test('0062 isolates a bounded reader from the broader command definer', async () => {
   const sql = await migration();
+  assert.match(sql, /CREATE ROLE r72_operational_inbox_reader_definer NOLOGIN NOINHERIT/);
+  assert.match(sql, /GRANT r72_operational_inbox_reader_definer TO r72_owner/);
+  assert.doesNotMatch(
+    sql,
+    /GRANT r72_operational_inbox_reader_definer TO (?:r72_web|r72_crm_command|r72_operational_inbox_definer)/,
+  );
   // Every definer grant must name its columns; a bare table grant would hand the
   // definer the bodies and digests this boundary exists to withhold.
-  const definerGrants = sql.match(/GRANT SELECT[^;]*TO r72_operational_inbox_definer/g) ?? [];
+  const definerGrants = sql.match(
+    /GRANT SELECT[^;]*TO r72_operational_inbox_reader_definer/g,
+  ) ?? [];
   assert.ok(definerGrants.length >= 6, 'expected column-scoped definer grants');
   for (const grant of definerGrants) {
     assert.match(grant, /GRANT SELECT \(/, `definer grant must be column-scoped: ${grant}`);
@@ -137,8 +153,20 @@ test('0062 gives the definer column-scoped reads and denies evidence payloads', 
   ]) {
     assert.match(sql, new RegExp(`'${forbidden}'`), `${forbidden} must be audited`);
   }
-  assert.match(sql, /has_column_privilege\(\s*'r72_operational_inbox_definer'/);
+  assert.match(sql, /has_column_privilege\(\s*'r72_operational_inbox_reader_definer'/);
   assert.match(sql, /Operational inbox definer must not read app/);
+  for (const table of [
+    'message_deliveries',
+    'property_predator_mailgun_inbound_receipts',
+    ...PROTECTED_TABLES,
+  ]) {
+    assert.match(sql, new RegExp(`'${table}'`), `${table} must be policy-bound`);
+  }
+  assert.match(
+    sql,
+    /CREATE POLICY %I ON app\.%I FOR SELECT TO r72_operational_inbox_reader_definer/,
+  );
+  assert.match(sql, /'operational_inbox_reader_' \|\| table_name \|\| '_select'/);
 });
 
 test('0062 exposes only identifiers, provider family, network and timestamps', async () => {
@@ -164,6 +192,14 @@ test('0062 exposes only identifiers, provider family, network and timestamps', a
 
 test('0062 pins the exact SMS provider operation for rail activity', async () => {
   const sql = await migration();
+  assert.match(
+    sql,
+    /ADD CONSTRAINT property_predator_admin_call_task_origins_source_channel_check CHECK \(source_channel IN \( 'email', 'sms', 'whatsapp', 'instagram', 'facebook' \)\)/,
+  );
+  assert.match(
+    sql,
+    /ADD CONSTRAINT property_predator_admin_call_task_origins_source_provider_check CHECK \(source_provider IN \( 'operator', 'mailgun_eu', 'twilio_messaging', 'meta_whatsapp_cloud' \)\)/,
+  );
   const start = sql.indexOf(
     'CREATE FUNCTION app_private.operational_inbox_live_delivery_linked(',
   );

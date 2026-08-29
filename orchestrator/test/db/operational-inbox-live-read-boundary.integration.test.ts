@@ -384,7 +384,7 @@ test('0062 restores the Inbox read boundary for r72_web', { skip }, async (t) =>
            ('property_predator_whatsapp_live_inbox_projections', 'body_sha256')
        ) AS candidate(table_name, column_name)
        WHERE pg_catalog.has_column_privilege(
-         'r72_operational_inbox_definer',
+         'r72_operational_inbox_reader_definer',
          format('app.%I', candidate.table_name),
          candidate.column_name,
          'SELECT'
