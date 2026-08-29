@@ -110,12 +110,9 @@ memory for a single leased operation.
 
 ## Known gaps before a first authorised effect
 
-1. **No founder command runtime wiring.** `PgOwnedPublicSocialLiveCommandService`
-   is constructed by nothing outside its own test, and `DATABASE_OWNED_SOCIAL_COMMAND_URL`
-   is provisioned on the web service but never used. There is currently no code
-   path that can call `record_owned_social_profile` or `enqueue_owned_social_job`,
-   so no job can exist for the worker to claim. This is the largest remaining
-   blocker and it is a portal composition decision, not a database one.
+1. ~~No founder command runtime wiring.~~ **Closed.** The command service is now
+   composed into the portal from `DATABASE_OWNED_SOCIAL_COMMAND_URL` alone, and
+   the founder workflow below is usable.
 2. **No profile-linking wiring, so no Profile Key exists yet.**
    `AYRSHARE_PROFILE_LINKING_PORTAL_READY` is `false`, the binding repository
    has no implementation, and the Ayrshare Integration Package private key and
@@ -128,6 +125,34 @@ memory for a single leased operation.
 4. **The worker boundary probe is not a strict allowlist.** Unlike the WhatsApp
    rail, a stray `GRANT EXECUTE` on an unrelated `app_private` function to
    `r72_owned_social_worker_command` would pass readiness silently.
+
+## The founder workflow now usable
+
+All three commands live on the existing Live Channels control room at
+`/portal/channels/live`, under **Owned X account commands**. Each is a
+CSRF-protected POST requiring a deliberate confirmation checkbox and a
+scope-bound command key, gated to the Property Predator profile and an
+authenticated session. Founder/admin authority is enforced by Postgres, not by
+the router.
+
+1. **Bind one owned X profile** — `POST /portal/channels/live/owned-social/profile`.
+   Accepts the Ayrshare profile reference, the owned X account reference, the
+   Profile Key and the OAuth link evidence with its timing. The Profile Key is
+   sealed with the existing owned-social encryption contract inside the portal
+   service and never stored, echoed, logged, rendered or returned; the account
+   and profile references are reduced to digests in the same statement. The
+   control renders as an honest disabled button unless this process holds the
+   encryption contract.
+2. **Revoke a bound profile** — `POST /portal/channels/live/owned-social/revocation`.
+   Append-only and permanent. A rotation is a revoke followed by binding the
+   successor profile; there is deliberately no un-revoke.
+3. **Stage one approved publication** — `POST /portal/channels/live/owned-social/staging`.
+   Runs the `0059` readiness probe first and refuses unless every dimension
+   passes, then enqueues through `enqueue_owned_social_job` with digests the
+   service derives itself. Database-only: it claims no worker lease and calls
+   no provider.
+
+The emergency pause control is unchanged and still engage-only.
 
 ## Activation order
 

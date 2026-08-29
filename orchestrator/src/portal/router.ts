@@ -260,6 +260,9 @@ import {
 import { renderProviderReadinessCockpitBody } from './provider-readiness-cockpit-view.js';
 import type { PortalProviderReadinessService } from './provider-readiness-cockpit-service.js';
 import {
+  LIVE_CHANNELS_OWNED_SOCIAL_BIND_ROUTE,
+  LIVE_CHANNELS_OWNED_SOCIAL_REVOKE_ROUTE,
+  LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE,
   LIVE_CHANNELS_PAUSE_ROUTE,
   LIVE_CHANNELS_ROUTE,
   presentLiveChannels,
@@ -899,6 +902,21 @@ function portalStatusPage(
     csrfToken: portalCsrfToken(deps.sessionSecret, sessionToken),
     body,
   });
+}
+
+/**
+ * One mapping for every owned-social failure, so no handler can soften a
+ * denial into a generic rejection.
+ */
+function ownedSocialFailureNotice(
+  kind: 'unauthenticated' | 'forbidden' | 'validation' | 'conflict' | 'blocked' | 'unavailable',
+): LiveChannelsNoticeCode {
+  // Deliberately distinct from the pause codes: an owned-social failure must
+  // never be reported to a founder in pause language.
+  if (kind === 'blocked') return 'staging_blocked';
+  if (kind === 'forbidden' || kind === 'unauthenticated') return 'owned_social_forbidden';
+  if (kind === 'validation' || kind === 'conflict') return 'owned_social_invalid';
+  return 'owned_social_unavailable';
 }
 
 function crmIdentity(sessionToken: string, deps: PortalDeps): PortalCrmRequestIdentity {
@@ -2441,6 +2459,14 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           workspaceName,
           csrfToken,
           pauseCommandAvailable: Boolean(deps.liveChannelPause),
+          ownedSocialCommandAvailable: Boolean(deps.ownedSocialBinding),
+          ownedSocialProfileBindingComposed:
+            deps.ownedSocialBinding?.profileBindingComposed === true,
+          ownedSocialCommandKeys: {
+            bind: randomUUID(),
+            revoke: randomUUID(),
+            stage: randomUUID(),
+          },
           pauseCommandKeys: {
             all: randomUUID(),
             customer_email: randomUUID(),
@@ -2517,6 +2543,93 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         ? 'forbidden'
         : outcome.kind === 'validation' ? 'invalid' : 'unavailable',
     );
+  }
+
+  // Founder-only owned Ayrshare/X commands. Each is database-only: none can
+  // claim a worker lease or reach Ayrshare. The clear Profile Key is read from
+  // the form, handed to the sealing seam and never echoed back in any notice.
+  if (deps.kind === 'postgres'
+      && (p === LIVE_CHANNELS_OWNED_SOCIAL_BIND_ROUTE
+        || p === LIVE_CHANNELS_OWNED_SOCIAL_REVOKE_ROUTE
+        || p === LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE)
+      && method === 'POST') {
+    if (deps.productProfile?.id !== 'property_predator_growth') {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Live Channels not connected',
+        message: 'The Property Predator live channel control room is not enabled for this workspace.',
+        active: 'overview',
+      }));
+    }
+    const ownedSocialNotice = (code: LiveChannelsNoticeCode): void => redirect(
+      res,
+      `${LIVE_CHANNELS_ROUTE}?notice=${encodeURIComponent(liveChannelsNoticeToken(deps.sessionSecret, sessionToken, code))}`,
+      undefined,
+      303,
+    );
+    const allowed = p === LIVE_CHANNELS_OWNED_SOCIAL_BIND_ROUTE
+      ? new Set(['_csrf', 'command_key', 'profile_id', 'display_name', 'profile_reference',
+        'owned_account', 'profile_credential', 'oauth_evidence', 'linked_at',
+        'evidence_observed_at', 'confirm_owned'])
+      : p === LIVE_CHANNELS_OWNED_SOCIAL_REVOKE_ROUTE
+        ? new Set(['_csrf', 'command_key', 'profile_id', 'reason_code',
+          'revocation_evidence', 'confirm_revoke'])
+        : new Set(['_csrf', 'command_key', 'profile_id', 'content_item_id',
+          'content_version_id', 'approval_request_id', 'approval_decision_id',
+          'source_attestation_id', 'owned_account', 'operation_tag', 'confirm_stage']);
+    const confirmField = p === LIVE_CHANNELS_OWNED_SOCIAL_BIND_ROUTE
+      ? 'confirm_owned'
+      : p === LIVE_CHANNELS_OWNED_SOCIAL_REVOKE_ROUTE ? 'confirm_revoke' : 'confirm_stage';
+    const confirmValue = p === LIVE_CHANNELS_OWNED_SOCIAL_BIND_ROUTE
+      ? 'OWNED'
+      : p === LIVE_CHANNELS_OWNED_SOCIAL_REVOKE_ROUTE ? 'REVOKE' : 'STAGE';
+    const form = await readMultiValueForm(req);
+    const commandKey = form ? oneFormValue(form, 'command_key') : null;
+    if (!form || !campaignFormKeysAllowed(form, allowed)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '')
+        || oneFormValue(form, confirmField) !== confirmValue
+        || !commandKey || !CRM_OBJECT_ID.test(commandKey)) {
+      return ownedSocialNotice('owned_social_invalid');
+    }
+    if (!deps.ownedSocialBinding) return ownedSocialNotice('owned_social_unavailable');
+    const identity = crmIdentity(sessionToken, deps);
+    const profileId = oneFormValue(form, 'profile_id') ?? '';
+    if (p === LIVE_CHANNELS_OWNED_SOCIAL_BIND_ROUTE) {
+      const outcome = await deps.ownedSocialBinding.recordProfile(identity, {
+        profileId,
+        displayName: oneFormValue(form, 'display_name') ?? '',
+        providerProfileReference: oneFormValue(form, 'profile_reference') ?? '',
+        ownedAccountReference: oneFormValue(form, 'owned_account') ?? '',
+        profileKey: oneFormValue(form, 'profile_credential') ?? '',
+        ownershipAttested: true,
+        oauthPermissions: 'read_write',
+        oauthLinkEvidence: oneFormValue(form, 'oauth_evidence') ?? '',
+        linkedAt: oneFormValue(form, 'linked_at') ?? '',
+        evidenceObservedAt: oneFormValue(form, 'evidence_observed_at') ?? '',
+      });
+      return ownedSocialNotice(outcome.ok ? 'profile_bound' : ownedSocialFailureNotice(outcome.kind));
+    }
+    if (p === LIVE_CHANNELS_OWNED_SOCIAL_REVOKE_ROUTE) {
+      const outcome = await deps.ownedSocialBinding.revokeProfile(identity, {
+        profileId,
+        reasonCode: oneFormValue(form, 'reason_code') ?? '',
+        revocationEvidence: oneFormValue(form, 'revocation_evidence') ?? '',
+      });
+      return ownedSocialNotice(outcome.ok ? 'profile_revoked' : ownedSocialFailureNotice(outcome.kind));
+    }
+    const outcome = await deps.ownedSocialBinding.stagePublication(identity, {
+      profileId,
+      contentItemId: oneFormValue(form, 'content_item_id') ?? '',
+      contentVersionId: oneFormValue(form, 'content_version_id') ?? '',
+      approvalRequestId: oneFormValue(form, 'approval_request_id') ?? '',
+      approvalDecisionId: oneFormValue(form, 'approval_decision_id') ?? '',
+      sourceAttestationId: oneFormValue(form, 'source_attestation_id') ?? '',
+      ownedAccountReference: oneFormValue(form, 'owned_account') ?? '',
+      operationTag: oneFormValue(form, 'operation_tag') ?? '',
+    });
+    if (outcome.ok) return ownedSocialNotice('publication_staged');
+    // 'blocked' means the database refused the evidence; 'forbidden' means the
+    // founder lacked authority. They are reported differently on purpose.
+    return ownedSocialNotice(ownedSocialFailureNotice(outcome.kind));
   }
 
   // ── exact company-content review: manager-only, read-only and source verified ──

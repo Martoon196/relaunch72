@@ -249,8 +249,11 @@ export class PgPortalOwnedSocialBindingService implements PortalOwnedSocialBindi
         expectedOwnedAccountSha256: ownedSocialAccountDigest(input.ownedAccountReference),
         scheduledFor: null,
       });
+      // Distinct from 'forbidden': the founder had the authority to ask, the
+      // evidence simply is not there. Conflating them would report a genuine
+      // permission denial as missing readiness evidence.
       if (readiness.result !== 'ready-for-separately-authorised-owned-test') {
-        return failed('forbidden');
+        return failed('blocked');
       }
       // Derived here, never accepted from the caller, so the key is provably
       // bound to this exact owned profile and approved version.

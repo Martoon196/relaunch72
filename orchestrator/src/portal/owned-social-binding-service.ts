@@ -19,6 +19,8 @@ export type PortalOwnedSocialFailureKind =
   | 'forbidden'
   | 'validation'
   | 'conflict'
+  /** The database did not prove every readiness dimension for this target. */
+  | 'blocked'
   | 'unavailable';
 
 export interface PortalOwnedSocialFailure {

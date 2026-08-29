@@ -37,6 +37,12 @@ import {
 
 export const LIVE_CHANNELS_ROUTE = '/portal/channels/live' as const;
 export const LIVE_CHANNELS_PAUSE_ROUTE = '/portal/channels/live/emergency-pause' as const;
+export const LIVE_CHANNELS_OWNED_SOCIAL_BIND_ROUTE =
+  '/portal/channels/live/owned-social/profile' as const;
+export const LIVE_CHANNELS_OWNED_SOCIAL_REVOKE_ROUTE =
+  '/portal/channels/live/owned-social/revocation' as const;
+export const LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE =
+  '/portal/channels/live/owned-social/staging' as const;
 
 export type LiveChannelsPauseScope = PortalLiveChannelTruthRail | 'all';
 
@@ -123,6 +129,13 @@ export interface LiveChannelCardView {
 export type LiveChannelsNoticeCode =
   | 'pause_engaged'
   | 'pause_already'
+  | 'profile_bound'
+  | 'profile_revoked'
+  | 'publication_staged'
+  | 'staging_blocked'
+  | 'owned_social_invalid'
+  | 'owned_social_forbidden'
+  | 'owned_social_unavailable'
   | 'invalid'
   | 'forbidden'
   | 'unavailable';
