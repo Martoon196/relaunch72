@@ -30,6 +30,7 @@ const ALLOWED: Record<BoundaryKind, readonly string[]> = {
     'app_private.revoke_whatsapp_live_binding(uuid,uuid,bytea)',
     'app_private.record_whatsapp_live_template(uuid,uuid,uuid,uuid,uuid,uuid,uuid,text,bytea,text,text,bytea,timestamp with time zone)',
     'app_private.authorize_and_enqueue_whatsapp_live_job(uuid,uuid,uuid,uuid,uuid,uuid,uuid,uuid,uuid,uuid,uuid,text,timestamp with time zone,uuid,bytea,bytea)',
+    'app_private.property_predator_whatsapp_activation_readiness(uuid,uuid,uuid,uuid,uuid,uuid,text,bytea)',
     'app_private.runtime_schema_migrations()',
     'app_private.runtime_database_installation_id()',
     'app_private.lock_active_portal_session(bytea,uuid,uuid)',

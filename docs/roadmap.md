@@ -63,6 +63,9 @@ founder-owned acceptance target.
   provider account/domain evidence and an owned test recipient remain required.
 - ✅ WhatsApp — direct Meta Cloud foundation, worker and raw signed webhook path
   built; app/WABA/phone/template evidence and an owned test number remain required.
+  A zero-send activation readiness probe now binds one supplied owned target to
+  real binding, template, consent, suppression, cap and pause evidence without
+  enqueueing or calling Meta. See `docs/property-predator-whatsapp-activation.md`.
 - ✅ Owned social — Ayrshare/X foundation and isolated worker built; exact owned
   profile evidence, credentials and one approved test post remain required.
 - ✅ UK SMS — Twilio Messaging foundation, worker and signed webhook path built;
