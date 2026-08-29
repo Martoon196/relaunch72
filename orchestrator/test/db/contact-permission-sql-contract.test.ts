@@ -33,7 +33,16 @@ test('0063 reuses the existing consent ledger instead of a second consent system
 });
 
 test('0063 narrows the decision to an active owner or admin', async () => {
-  const body = functionBody(await migration());
+  const sql = await migration();
+  const body = functionBody(sql);
+  assert.match(sql, /CREATE ROLE r72_contact_permission_definer NOLOGIN NOINHERIT/);
+  assert.match(sql, /GRANT r72_contact_permission_definer TO r72_owner/);
+  assert.match(sql, /Unsafe contact permission definer role attributes/);
+  assert.match(sql, /GRANT USAGE ON SCHEMA app, app_private TO r72_contact_permission_definer/);
+  assert.match(
+    sql,
+    /GRANT EXECUTE ON FUNCTION app_private\.current_workspace_id\(\), app_private\.current_user_id\(\), app_private\.current_actor_kind\(\) TO r72_contact_permission_definer/,
+  );
   assert.match(
     body,
     /membership\.status = 'active' AND membership\.role IN \('owner', 'admin'\)/,
@@ -46,7 +55,10 @@ test('0063 narrows the decision to an active owner or admin', async () => {
 });
 
 test('0063 binds the decision to the exact contact, endpoint and channel', async () => {
-  const body = functionBody(await migration());
+  const sql = await migration();
+  const body = functionBody(sql);
+  assert.match(sql, /CREATE POLICY contact_permission_points_definer_select/);
+  assert.match(sql, /CREATE POLICY contact_permission_memberships_definer_select/);
   assert.match(body, /point\.id = p_contact_point_id AND point\.contact_id = p_contact_id/);
   assert.match(body, /point\.deleted_at IS NULL/);
   assert.match(body, /Contact permission endpoint is not bound to this contact/);
@@ -55,8 +67,9 @@ test('0063 binds the decision to the exact contact, endpoint and channel', async
   // The endpoint digest is derived from the stored point, never supplied.
   assert.match(
     body,
-    /endpoint_identity := public\.digest\( selected_point\.kind \|\| pg_catalog\.chr\(31\) \|\| selected_point\.value/,
+    /endpoint_identity := public\.digest\( selected_point_kind \|\| pg_catalog\.chr\(31\) \|\| selected_point_value/,
   );
+  assert.doesNotMatch(body, /SELECT point\.\*/);
 });
 
 test('0063 makes the command idempotent and refuses a reused key', async () => {

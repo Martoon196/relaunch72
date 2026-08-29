@@ -31,6 +31,7 @@
 -- performs no provider call.
 
 DO $roles$
+DECLARE unsafe_parent text;
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'r72_contact_permission_definer'
@@ -43,10 +44,45 @@ BEGIN
     RAISE EXCEPTION 'r72_crm_command must exist before the contact permission rail'
       USING ERRCODE = '42501';
   END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_roles
+    WHERE rolname = 'r72_contact_permission_definer'
+      AND NOT rolcanlogin AND NOT rolinherit AND NOT rolsuper
+      AND NOT rolcreatedb AND NOT rolcreaterole
+      AND NOT rolreplication AND NOT rolbypassrls
+  ) THEN
+    RAISE EXCEPTION 'Unsafe contact permission definer role attributes'
+      USING ERRCODE = '42501';
+  END IF;
+  REVOKE r72_owner, r72_security_definer, r72_operational_inbox_definer
+    FROM r72_contact_permission_definer;
+  REVOKE r72_contact_permission_definer
+    FROM r72_web, r72_public, r72_worker, r72_webhook, r72_readonly,
+      r72_crm_command;
+  SELECT parent.rolname INTO unsafe_parent
+  FROM pg_catalog.pg_auth_members AS membership
+  JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
+  JOIN pg_catalog.pg_roles AS parent ON parent.oid = membership.roleid
+  WHERE member.rolname = 'r72_contact_permission_definer'
+  LIMIT 1;
+  IF unsafe_parent IS NOT NULL THEN
+    RAISE EXCEPTION 'Unsafe contact permission definer parent: %', unsafe_parent
+      USING ERRCODE = '42501';
+  END IF;
+  GRANT r72_contact_permission_definer TO r72_owner;
 END
 $roles$;
 
 SET LOCAL ROLE r72_owner;
+
+REVOKE ALL ON SCHEMA app, app_private FROM r72_contact_permission_definer;
+REVOKE ALL ON ALL TABLES IN SCHEMA app FROM r72_contact_permission_definer;
+REVOKE ALL ON ALL TABLES IN SCHEMA app_private FROM r72_contact_permission_definer;
+REVOKE CREATE ON SCHEMA public FROM r72_contact_permission_definer;
+GRANT USAGE ON SCHEMA app, app_private TO r72_contact_permission_definer;
+GRANT EXECUTE ON FUNCTION app_private.current_workspace_id(),
+  app_private.current_user_id(), app_private.current_actor_kind()
+  TO r72_contact_permission_definer;
 
 -- One receipt per operator command key. This is the whole idempotency and
 -- replay/conflict story: the key is chosen by the founder-facing form, and the
@@ -121,10 +157,25 @@ GRANT SELECT (
 GRANT SELECT (
   workspace_id, user_id, role, status
 ) ON app.workspace_memberships TO r72_contact_permission_definer;
-GRANT SELECT (workspace_id, id, deleted_at) ON app.contacts
-  TO r72_contact_permission_definer;
-GRANT SELECT, INSERT ON app.communication_consent_events
-  TO r72_contact_permission_definer;
+GRANT INSERT (
+  id, workspace_id, contact_id, contact_point_id, channel, purpose,
+  state, lawful_basis, source, policy_version, policy_text_sha256,
+  source_event_id, actor_kind, actor_user_id, evidence,
+  endpoint_identity_sha256, occurred_at
+) ON app.communication_consent_events TO r72_contact_permission_definer;
+
+CREATE POLICY contact_permission_points_definer_select
+  ON app.contact_points FOR SELECT TO r72_contact_permission_definer
+  USING (
+    workspace_id = app_private.current_workspace_id()
+    AND app_private.current_actor_kind() = 'user'
+  );
+CREATE POLICY contact_permission_memberships_definer_select
+  ON app.workspace_memberships FOR SELECT TO r72_contact_permission_definer
+  USING (
+    workspace_id = app_private.current_workspace_id()
+    AND app_private.current_actor_kind() = 'user'
+  );
 
 CREATE POLICY communication_consent_events_permission_definer_insert
   ON app.communication_consent_events FOR INSERT
@@ -170,7 +221,9 @@ AS $function$
 DECLARE
   selected_user_id uuid;
   selected_request_id text := current_setting('app.request_id', true);
-  selected_point app.contact_points%ROWTYPE;
+  selected_point_kind text;
+  selected_point_value text;
+  selected_point_normalized_value text;
   selected_receipt app.contact_permission_command_receipts%ROWTYPE;
   expected_kind text;
   endpoint_identity bytea;
@@ -231,7 +284,9 @@ BEGIN
       USING ERRCODE = '42501';
   END IF;
 
-  SELECT point.* INTO selected_point
+  SELECT point.kind, point.value, point.normalized_value
+    INTO selected_point_kind, selected_point_value,
+      selected_point_normalized_value
   FROM app.contact_points AS point
   WHERE point.workspace_id = p_workspace_id
     AND point.id = p_contact_point_id
@@ -243,15 +298,15 @@ BEGIN
   END IF;
   expected_kind := CASE p_channel
     WHEN 'email' THEN 'email' WHEN 'sms' THEN 'phone' ELSE 'whatsapp' END;
-  IF selected_point.kind IS DISTINCT FROM expected_kind THEN
+  IF selected_point_kind IS DISTINCT FROM expected_kind THEN
     RAISE EXCEPTION 'Contact permission channel does not match the endpoint kind'
       USING ERRCODE = '22023';
   END IF;
 
   -- Derived from the stored endpoint, never supplied by the caller.
   endpoint_identity := public.digest(
-    selected_point.kind || pg_catalog.chr(31) || selected_point.value
-      || pg_catalog.chr(31) || selected_point.normalized_value,
+    selected_point_kind || pg_catalog.chr(31) || selected_point_value
+      || pg_catalog.chr(31) || selected_point_normalized_value,
     'sha256'
   );
   computed_request_sha256 := public.digest(

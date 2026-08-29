@@ -26,6 +26,7 @@ const APP_ROLES = [
   'r72_commerce_definer',
   'r72_content_adapter',
   'r72_content_command',
+  'r72_contact_permission_definer',
   'r72_crm_command',
   'r72_customer_email_command',
   'r72_customer_email_definer',
