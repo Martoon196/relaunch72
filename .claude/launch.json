@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "relaunch72-growth-hq-preview",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "--workspace", "orchestrator", "preview:property-predator"],
+      "port": 43199,
+      "env": {
+        "PROPERTY_PREDATOR_PREVIEW_PORT": "43199"
+      }
+    }
+  ]
+}

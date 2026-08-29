@@ -233,6 +233,19 @@ services:
         sync: false
       - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_CONNECTION_ID
         sync: false
+      # 0052/0059 owned Ayrshare/X founder command seam. The connection id
+      # binds the command service to one exact Ayrshare connection.
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_CONNECTION_ID
+        sync: false
+      # The owned-social profile-key encryption contract. These stay UNSET.
+      # The portal needs them only during a reviewed profile-binding window and
+      # renders an honest disabled control while they are absent. Remove them
+      # again once the owned profile is bound: the worker, not the web service,
+      # is what needs this key to run.
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_BASE64
+        sync: false
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_VERSION
+        sync: false
       - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
         sync: false
       - key: PROPERTY_PREDATOR_PILOT_STAGE

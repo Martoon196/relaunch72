@@ -10,7 +10,10 @@ import type { LiveChannelsNoticeCode, LiveChannelsNoticeView } from './live-chan
 const NOTICE_CONTEXT = 'property-predator:live-channels-notice:v1\0';
 
 const NOTICE_CODES = new Set<LiveChannelsNoticeCode>([
-  'pause_engaged', 'pause_already', 'invalid', 'forbidden', 'unavailable',
+  'pause_engaged', 'pause_already', 'profile_bound', 'profile_revoked',
+  'publication_staged', 'staging_blocked', 'owned_social_invalid',
+  'owned_social_forbidden', 'owned_social_unavailable',
+  'invalid', 'forbidden', 'unavailable',
 ]);
 
 function noticeMac(secret: string, sessionToken: string, code: LiveChannelsNoticeCode): string {
@@ -41,6 +44,41 @@ function noticeFor(code: LiveChannelsNoticeCode): LiveChannelsNoticeView {
     kind: 'info',
     title: 'Pause already engaged',
     message: 'This rail was already holding an engaged emergency pause, so nothing changed.',
+  };
+  if (code === 'profile_bound') return {
+    kind: 'success',
+    title: 'Owned profile bound',
+    message: 'The owned account evidence was sealed and recorded. The Profile Key was encrypted immediately and is not stored, shown or recoverable here.',
+  };
+  if (code === 'profile_revoked') return {
+    kind: 'info',
+    title: 'Owned profile revoked',
+    message: 'The binding is permanently revoked and can never publish again. Rotating to a successor means binding a new owned profile.',
+  };
+  if (code === 'publication_staged') return {
+    kind: 'success',
+    title: 'Publication staged',
+    message: 'One approved post is queued behind the owned-profile command boundary. No worker lease was claimed and Ayrshare was not called.',
+  };
+  if (code === 'staging_blocked') return {
+    kind: 'error',
+    title: 'Publication not staged',
+    message: 'The database did not prove every readiness dimension for this exact owned profile and approved post, so nothing was queued.',
+  };
+  if (code === 'owned_social_forbidden') return {
+    kind: 'error',
+    title: 'Owned X command not permitted',
+    message: 'Your current workspace role cannot bind, revoke or stage for this owned account. No profile, publication or channel state was changed.',
+  };
+  if (code === 'owned_social_unavailable') return {
+    kind: 'error',
+    title: 'Owned X command not connected',
+    message: 'The owned-social founder command boundary is not composed for this workspace, so nothing was recorded or queued.',
+  };
+  if (code === 'owned_social_invalid') return {
+    kind: 'error',
+    title: 'Owned X command rejected',
+    message: 'The request was missing its confirmation or failed verification. No profile evidence was stored and nothing was queued.',
   };
   if (code === 'forbidden') return {
     kind: 'error',

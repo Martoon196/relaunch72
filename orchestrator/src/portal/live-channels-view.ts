@@ -3,6 +3,9 @@
 import { renderContentWorkspaceNavigation } from './content-workspace-navigation.js';
 import { escapeHtml } from './ui.js';
 import {
+  LIVE_CHANNELS_OWNED_SOCIAL_BIND_ROUTE,
+  LIVE_CHANNELS_OWNED_SOCIAL_REVOKE_ROUTE,
+  LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE,
   LIVE_CHANNELS_PAUSE_ROUTE,
   type LiveChannelCardView,
   type LiveChannelGaugeView,
@@ -29,7 +32,7 @@ const STYLE = `
   .plc-pulse{display:grid;grid-template-columns:minmax(250px,1.4fr) repeat(4,minmax(120px,.65fr));border-bottom:1px solid var(--plc-line);background:var(--plc-panel)}.plc-pulse-lead,.plc-pulse-stat{padding:18px 20px;border-right:1px solid var(--plc-line)}.plc-pulse-stat:last-child{border-right:0}.plc-pulse-lead span,.plc-pulse-stat span{display:block;color:var(--plc-faint);font:800 10px var(--mono,monospace);letter-spacing:.07em;text-transform:uppercase}.plc-pulse-lead strong{display:block;margin:7px 0 5px;font-size:17px}.plc-pulse-lead p{margin:0;color:var(--plc-muted);font-size:12px;line-height:1.45}.plc-pulse-stat strong{display:block;margin-top:7px;font:900 21px var(--mono,monospace)}.plc-pulse-stat small{color:var(--plc-muted);font-size:11px}.plc-pulse-stat.attention strong{color:var(--plc-amber)}
   .plc-master{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,460px);gap:16px;align-items:center;padding:15px 34px;border-bottom:1px solid var(--plc-line);background:#0a0d0f}.plc-master-copy strong{display:block;font-size:13px}.plc-master-copy span{display:block;margin-top:3px;color:var(--plc-muted);font-size:11px;line-height:1.5}.plc-master .plc-guard{min-width:0}
   .plc-guard{border:1px solid var(--plc-line-2);background:#0d1113;min-width:0}.plc-guard>summary{display:flex;min-height:48px;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;cursor:pointer;font-size:12px;font-weight:800;list-style:none}.plc-guard>summary::-webkit-details-marker{display:none}.plc-guard>summary b{border:1px solid var(--plc-red);padding:4px 7px;color:var(--plc-red);font:900 9px var(--mono,monospace);letter-spacing:.05em;white-space:nowrap}.plc-guard>summary:after{content:"+";display:grid;width:22px;height:22px;place-items:center;border:1px solid var(--plc-line-2);color:var(--plc-teal);font:900 14px var(--mono,monospace);flex:0 0 auto}.plc-guard[open]>summary:after{content:"−"}
-  .plc-guard-body{display:grid;gap:10px;padding:2px 14px 14px;border-top:1px solid var(--plc-line)}.plc-guard-body p{margin:8px 0 0;color:var(--plc-muted);font-size:12px;line-height:1.55}.plc-guard-check{display:flex;align-items:flex-start;gap:9px;color:var(--plc-ink);font-size:12px;line-height:1.5}.plc-guard-check input{width:18px;height:18px;margin:1px 0 0;accent-color:var(--plc-red);flex:0 0 auto}
+  .plc-guard-body{display:grid;gap:10px;padding:2px 14px 14px;border-top:1px solid var(--plc-line)}.plc-guard-body p{margin:8px 0 0;color:var(--plc-muted);font-size:12px;line-height:1.55}.plc-guard-check{display:flex;align-items:flex-start;gap:9px;color:var(--plc-ink);font-size:12px;line-height:1.5}.plc-guard-check input{width:18px;height:18px;margin:1px 0 0;accent-color:var(--plc-red);flex:0 0 auto}.plc-field{display:block;color:var(--plc-ink);font-size:12px;line-height:1.5}.plc-field span{display:block;color:var(--plc-muted);margin:0 0 4px}.plc-field input{display:block;width:100%;min-height:44px;box-sizing:border-box;padding:0 10px;background:var(--plc-bg);border:1px solid var(--plc-line-2);border-radius:8px;color:var(--plc-ink);font:inherit}
   .plc-guard-button{min-height:44px;border:1px solid var(--plc-red);background:#1c0c0d;color:var(--plc-red);padding:0 16px;font:850 12px var(--sans,sans-serif);letter-spacing:.04em;cursor:pointer}.plc-guard-button:hover{background:#2a1214}.plc-guard-button[disabled]{border-color:var(--plc-line-2);background:#0d1113;color:var(--plc-faint);cursor:not-allowed}
   .plc-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px;padding:16px}
   .plc-card{min-width:0;border:1px solid var(--plc-line);border-top:3px solid var(--plc-red);border-radius:8px;background:var(--plc-panel);overflow:hidden}.plc-card.ready{border-top-color:var(--plc-teal)}.plc-card.working,.plc-card.paused{border-top-color:var(--plc-amber)}.plc-card.muted{border-top-color:var(--plc-line-2)}
@@ -91,6 +94,20 @@ export interface LiveChannelsRenderOptions {
     lead360Composed: boolean;
   }>;
   readonly notice?: LiveChannelsNoticeView;
+  /** True only when the owned-social founder command boundary is composed. */
+  readonly ownedSocialCommandAvailable?: boolean;
+  /**
+   * True only when this process also holds the owned-social profile-key
+   * encryption contract. Without it the portal will not accept a Profile Key
+   * it could not seal, and says so instead.
+   */
+  readonly ownedSocialProfileBindingComposed?: boolean;
+  /** Fresh per-render command keys, one per owned-social founder command. */
+  readonly ownedSocialCommandKeys?: Readonly<{
+    bind: string;
+    revoke: string;
+    stage: string;
+  }>;
 }
 
 function allowedLink(
@@ -208,6 +225,78 @@ function renderMasterStop(view: LiveChannelsView, options: LiveChannelsRenderOpt
   return `<section class="plc-master" aria-label="Master emergency stop"><div class="plc-master-copy"><strong>Master emergency stop</strong><span>At least one composed rail is not paused. The master stop is fail-safe: it can only move rails towards OFF.</span></div>${body}</section>`;
 }
 
+/**
+ * Founder-only owned Ayrshare/X commands. Reuses the existing panel and guard
+ * surface so nothing is redesigned, and follows the same three-state honesty
+ * rule as the pause control: done, not composed, or a deliberate form.
+ *
+ * The Profile Key field is write-only. It is never re-rendered, never echoed
+ * back on failure and never appears in a notice.
+ */
+function renderOwnedSocialCommands(
+  view: LiveChannelsView,
+  options: LiveChannelsRenderOptions,
+): string {
+  const card = view.channels.find((channel) => channel.rail === 'owned_social');
+  if (!card) return '';
+  const head = `<div class="plc-panel-head"><h2 id="plc-owned-social-title">Owned X account commands</h2><span>${escapeHtml(card.postureLabel)}</span></div>`;
+  if (!options.ownedSocialCommandAvailable) {
+    return `<section class="plc-panel" aria-labelledby="plc-owned-social-title">${head}<div class="plc-guard-body"><p>The owned-social founder command boundary is not composed for this workspace, so no profile can be bound and no publication can be staged from here. This portal will not invent one.</p><button class="plc-guard-button" type="button" disabled aria-disabled="true">Bind owned X profile — command boundary not composed</button></div></section>`;
+  }
+  const keys = options.ownedSocialCommandKeys ?? { bind: '', revoke: '', stage: '' };
+  const csrf = escapeHtml(options.csrfToken);
+  const bind = options.ownedSocialProfileBindingComposed
+    ? `<form method="post" action="${LIVE_CHANNELS_OWNED_SOCIAL_BIND_ROUTE}" autocomplete="off">
+      <input type="hidden" name="_csrf" value="${csrf}">
+      <input type="hidden" name="command_key" value="${escapeHtml(keys.bind)}">
+      <label class="plc-field"><span>Profile record id</span><input type="text" name="profile_id" required autocomplete="off"></label>
+      <label class="plc-field"><span>Display name</span><input type="text" name="display_name" required maxlength="120" autocomplete="off"></label>
+      <label class="plc-field"><span>Ayrshare profile reference</span><input type="text" name="profile_reference" required maxlength="200" autocomplete="off"></label>
+      <label class="plc-field"><span>Owned X account reference</span><input type="text" name="owned_account" required maxlength="200" autocomplete="off"></label>
+      <label class="plc-field"><span>Ayrshare Profile Key, sealed immediately and never stored here</span><input type="password" name="profile_credential" required maxlength="500" autocomplete="off"></label>
+      <label class="plc-field"><span>OAuth link evidence reference</span><input type="text" name="oauth_evidence" required maxlength="200" autocomplete="off"></label>
+      <label class="plc-field"><span>Linked at, UTC instant</span><input type="text" name="linked_at" required maxlength="40" autocomplete="off"></label>
+      <label class="plc-field"><span>Evidence observed at, UTC instant</span><input type="text" name="evidence_observed_at" required maxlength="40" autocomplete="off"></label>
+      <label class="plc-guard-check"><input type="checkbox" name="confirm_owned" value="OWNED" required> I attest this X account is founder-owned and its OAuth link carries read_write permission.</label>
+      <button class="plc-guard-button" type="submit">Bind owned X profile</button>
+    </form>`
+    : `<p>This process does not hold the owned-social profile-key encryption contract, so it will not accept a Profile Key it could not seal. Nothing is stored.</p><button class="plc-guard-button" type="button" disabled aria-disabled="true">Bind owned X profile — encryption contract not composed</button>`;
+  return `<section class="plc-panel" aria-labelledby="plc-owned-social-title">${head}
+    <details class="plc-guard"><summary><span>Bind one owned X profile</span><b>${options.ownedSocialProfileBindingComposed ? 'READY' : 'UNAVAILABLE'}</b></summary><div class="plc-guard-body">
+      <p>The Profile Key is encrypted with the existing owned-social contract before it reaches the database. It is never stored in the clear, echoed back, logged or shown again.</p>${bind}
+    </div></details>
+    <details class="plc-guard"><summary><span>Revoke a bound profile</span><b>PERMANENT</b></summary><div class="plc-guard-body">
+      <p>Revocation is append-only and permanent. A rotation is a revoke followed by binding the successor profile; there is deliberately no un-revoke.</p>
+      <form method="post" action="${LIVE_CHANNELS_OWNED_SOCIAL_REVOKE_ROUTE}" autocomplete="off">
+        <input type="hidden" name="_csrf" value="${csrf}">
+        <input type="hidden" name="command_key" value="${escapeHtml(keys.revoke)}">
+        <label class="plc-field"><span>Profile record id</span><input type="text" name="profile_id" required autocomplete="off"></label>
+        <label class="plc-field"><span>Reason code</span><input type="text" name="reason_code" required maxlength="100" autocomplete="off"></label>
+        <label class="plc-field"><span>Revocation evidence reference</span><input type="text" name="revocation_evidence" required maxlength="200" autocomplete="off"></label>
+        <label class="plc-guard-check"><input type="checkbox" name="confirm_revoke" value="REVOKE" required> I understand this permanently ends publication for this owned profile.</label>
+        <button class="plc-guard-button" type="submit">Revoke owned profile</button>
+      </form>
+    </div></details>
+    <details class="plc-guard"><summary><span>Stage one approved publication</span><b>${card.capReached ? 'CAP REACHED' : 'DATABASE PROVED'}</b></summary><div class="plc-guard-body">
+      <p>Staging queues one already-approved post behind the command boundary. The database re-proves the owned profile, content hash, approval, source attestation, caps and pause posture first; every dimension must pass or nothing is queued. No worker lease is claimed and Ayrshare is not called.</p>
+      <form method="post" action="${LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE}" autocomplete="off">
+        <input type="hidden" name="_csrf" value="${csrf}">
+        <input type="hidden" name="command_key" value="${escapeHtml(keys.stage)}">
+        <label class="plc-field"><span>Profile record id</span><input type="text" name="profile_id" required autocomplete="off"></label>
+        <label class="plc-field"><span>Content item id</span><input type="text" name="content_item_id" required autocomplete="off"></label>
+        <label class="plc-field"><span>Approved content version id</span><input type="text" name="content_version_id" required autocomplete="off"></label>
+        <label class="plc-field"><span>Approval request id</span><input type="text" name="approval_request_id" required autocomplete="off"></label>
+        <label class="plc-field"><span>Approval decision id</span><input type="text" name="approval_decision_id" required autocomplete="off"></label>
+        <label class="plc-field"><span>Source attestation id</span><input type="text" name="source_attestation_id" required autocomplete="off"></label>
+        <label class="plc-field"><span>Owned X account reference</span><input type="text" name="owned_account" required maxlength="200" autocomplete="off"></label>
+        <label class="plc-field"><span>Operation tag</span><input type="text" name="operation_tag" required maxlength="100" autocomplete="off"></label>
+        <label class="plc-guard-check"><input type="checkbox" name="confirm_stage" value="STAGE" required> I confirm this exact approved post may be queued for the owned X account.</label>
+        <button class="plc-guard-button" type="submit">Stage approved publication</button>
+      </form>
+    </div></details>
+  </section>`;
+}
+
 function renderApprovalsPanel(view: LiveChannelsView): string {
   const gated = view.approvalRequiredRailLabels;
   const rows = gated.length
@@ -252,6 +341,7 @@ export function renderLiveChannelsBody(
     ${renderMasterStop(view, options)}
     <div class="plc-grid">${view.channels.map((card) => renderCard(card, options)).join('')}${renderHandoffCard(view, options)}</div>
     ${renderApprovalsPanel(view)}
+    ${renderOwnedSocialCommands(view, options)}
     ${renderReceiptsPanel(view)}
     <footer class="plc-footer"><span><strong>Snapshot</strong> · ${escapeHtml(readableInstant(view.snapshotAt))} · ${escapeHtml(options.workspaceName)}</span><span><strong>Safety invariant</strong> · read-only evidence · no credentials · pause commands only move rails towards OFF</span></footer>
   </section>`;

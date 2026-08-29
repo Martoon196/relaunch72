@@ -2050,6 +2050,13 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
           sms: randomUUID(),
           social_dm: randomUUID(),
         },
+        ownedSocialCommandAvailable: true,
+        ownedSocialProfileBindingComposed: true,
+        ownedSocialCommandKeys: {
+          bind: randomUUID(),
+          revoke: randomUUID(),
+          stage: randomUUID(),
+        },
         railStatusAvailable: true,
         handoff: {
           conversionInboxComposed: true,
