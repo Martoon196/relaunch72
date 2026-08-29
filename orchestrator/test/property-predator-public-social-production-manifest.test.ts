@@ -8,7 +8,7 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const manifest = fs.readFileSync(
   path.join(repositoryRoot, 'render.property-predator.production.yaml'),
   'utf8',
-);
+).replace(/\r\n?/g, '\n');
 
 function serviceSection(type: 'web' | 'worker', name: string): string {
   const marker = `\n  - type: ${type}\n    name: ${name}\n`;
