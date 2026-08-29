@@ -1,6 +1,6 @@
 import type { Pool, QueryResultRow } from 'pg';
 import type {
-  MetaWhatsAppCredentialEnvelope,
+  MetaWhatsAppDispatchCredentialEnvelope,
   MetaWhatsAppDispatchResult,
   MetaWhatsAppLiveClaim,
   MetaWhatsAppLiveMaterial,
@@ -78,12 +78,12 @@ function timestamp(value: unknown, label: string): string {
   return new Date(normalized).toISOString();
 }
 
-function envelope(row: MaterialRow): MetaWhatsAppCredentialEnvelope {
+function envelope(row: MaterialRow): MetaWhatsAppDispatchCredentialEnvelope {
   const keyVersion = exactText(
     row.secretKeyVersion, /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u, 'key version',
   );
   const ciphertext = bytes(row.secretCiphertext, null, 'secret ciphertext');
-  if (ciphertext.length < 64 || ciphertext.length > 8_192) fail('secret ciphertext');
+  if (ciphertext.length < 38 || ciphertext.length > 8_192) fail('secret ciphertext');
   return Object.freeze({
     algorithm: 'aes-256-gcm-v1',
     keyVersion,

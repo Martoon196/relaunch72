@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { PgMetaWhatsAppLiveCommandService } from '../src/whatsapp-live-pg/index.js';
-import { encryptMetaWhatsAppCredentials } from '../src/whatsapp-live/index.js';
+import { encryptMetaWhatsAppDispatchCredentials } from '../src/whatsapp-live/index.js';
 
 const ids = ['11111111-1111-4111-8111-111111111111',
   '22222222-2222-4222-8222-222222222222', '33333333-3333-4333-8333-333333333333',
@@ -15,9 +15,9 @@ const ids = ['11111111-1111-4111-8111-111111111111',
 const [WORKSPACE, USER, CONNECTION, BINDING, TEMPLATE, CONTENT, VERSION, REQUEST,
   DECISION, CONTACT, POINT, CONSENT, SUBJECT, PUBLICATION, SENDER] = ids;
 const digest = (value: string): string => createHash('sha256').update(value).digest('hex');
-const secrets = { accessToken: 'EAAG-OWNED-PROPERTY-PREDATOR-TOKEN-123456789',
-  appSecret: 'property-predator-meta-app-secret-123456789',
-  verifyToken: 'property-predator-meta-verify-token-123456789' };
+const dispatchCredentials = {
+  accessToken: 'EAAG-OWNED-PROPERTY-PREDATOR-TOKEN-123456789',
+};
 const binding = { workspaceId: WORKSPACE, connectionId: CONNECTION,
   appId: '100001234567890', wabaId: '200001234567890',
   phoneNumberId: '300001234567890', graphApiVersion: 'v24.0' as const };
@@ -39,16 +39,26 @@ test('command service carries encrypted evidence only and enqueues by authority 
   const context = { actorKind: 'user' as const, workspaceId: WORKSPACE, userId: USER,
     requestId: 'founder-reviewed-whatsapp-command',
     portalSessionTokenHash: Buffer.alloc(32, 4) };
-  const envelope = encryptMetaWhatsAppCredentials({ binding, secrets,
+  const envelope = encryptMetaWhatsAppDispatchCredentials({ binding,
+    credentials: dispatchCredentials,
     encryptionKey: Buffer.alloc(32, 7), keyVersion: 'render-kms-v1', iv: Buffer.alloc(12, 3) });
   assert.equal(await service.recordBinding(context, { binding: { ...binding, bindingId: BINDING },
     ownedPhoneSha256: digest('owned-phone'), envelope,
     ownershipEvidenceSha256: digest('owned-evidence'),
     ownershipObservedAt: '2026-08-29T10:00:00.000Z', predecessorBindingId: null }), BINDING);
   const bindingCall = calls.find((call) => call.sql.includes('record_whatsapp_live_binding'))!;
-  assert.equal(bindingCall.values?.includes(secrets.accessToken), false);
-  assert.equal(bindingCall.values?.includes(secrets.appSecret), false);
+  assert.equal(bindingCall.values?.includes(dispatchCredentials.accessToken), false);
   assert.ok(bindingCall.values?.some((value) => Buffer.isBuffer(value)));
+
+  await assert.rejects(service.recordBinding(context, {
+    binding: { ...binding, bindingId: BINDING },
+    ownedPhoneSha256: digest('owned-phone'),
+    envelope: { ...envelope,
+      appSecret: 'property-predator-meta-app-secret-should-be-rejected' } as never,
+    ownershipEvidenceSha256: digest('owned-evidence'),
+    ownershipObservedAt: '2026-08-29T10:00:00.000Z',
+    predecessorBindingId: null,
+  }), /binding command is invalid/u);
 
   assert.equal(await service.authorizeAndEnqueue(context, {
     bindingId: BINDING, templateId: TEMPLATE, contactId: CONTACT, contactPointId: POINT,

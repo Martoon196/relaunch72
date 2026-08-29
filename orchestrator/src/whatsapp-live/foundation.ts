@@ -64,13 +64,16 @@ export interface MetaWhatsAppBinding {
   readonly graphApiVersion: 'v24.0';
 }
 
-export interface MetaWhatsAppSecrets {
+/**
+ * The only credential the outbound worker may decrypt. Webhook verification
+ * material is supplied directly to the isolated webhook process and must never
+ * enter this envelope.
+ */
+export interface MetaWhatsAppDispatchCredentials {
   readonly accessToken: string;
-  readonly appSecret: string;
-  readonly verifyToken: string;
 }
 
-export interface MetaWhatsAppCredentialEnvelope {
+export interface MetaWhatsAppDispatchCredentialEnvelope {
   readonly algorithm: 'aes-256-gcm-v1';
   readonly keyVersion: string;
   readonly ivBase64: string;
@@ -102,10 +105,18 @@ function bindingAad(input: MetaWhatsAppBinding): Buffer {
   }), 'utf8');
 }
 
-function snapshotSecrets(input: MetaWhatsAppSecrets): MetaWhatsAppSecrets {
-  if (!SAFE_SECRET.test(input.accessToken) || !SAFE_SECRET.test(input.appSecret)
-      || !SAFE_SECRET.test(input.verifyToken)) fail('invalid_configuration');
-  return Object.freeze({ ...input });
+function snapshotDispatchCredentials(
+  input: MetaWhatsAppDispatchCredentials,
+): MetaWhatsAppDispatchCredentials {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    fail('invalid_configuration');
+  }
+  const record = input as unknown as Record<string, unknown>;
+  const accessToken = record.accessToken;
+  if (Object.keys(record).join(',') !== 'accessToken'
+      || typeof accessToken !== 'string'
+      || !SAFE_SECRET.test(accessToken)) fail('invalid_configuration');
+  return Object.freeze({ accessToken });
 }
 
 function exactBase64(value: unknown, length?: number): Buffer {
@@ -118,15 +129,15 @@ function exactBase64(value: unknown, length?: number): Buffer {
   return bytes;
 }
 
-export function encryptMetaWhatsAppCredentials(input: Readonly<{
+export function encryptMetaWhatsAppDispatchCredentials(input: Readonly<{
   binding: MetaWhatsAppBinding;
-  secrets: MetaWhatsAppSecrets;
+  credentials: MetaWhatsAppDispatchCredentials;
   encryptionKey: Buffer;
   keyVersion: string;
   iv?: Buffer;
-}>): MetaWhatsAppCredentialEnvelope {
+}>): MetaWhatsAppDispatchCredentialEnvelope {
   const binding = snapshotBinding(input.binding);
-  const secrets = snapshotSecrets(input.secrets);
+  const credentials = snapshotDispatchCredentials(input.credentials);
   if (input.encryptionKey.length !== 32
       || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(input.keyVersion)) {
     fail('invalid_configuration');
@@ -134,7 +145,7 @@ export function encryptMetaWhatsAppCredentials(input: Readonly<{
   const iv = input.iv ? Buffer.from(input.iv) : randomBytes(12);
   if (iv.length !== 12) fail('invalid_configuration');
   const aad = bindingAad(binding);
-  const plaintext = Buffer.from(JSON.stringify(secrets), 'utf8');
+  const plaintext = Buffer.from(JSON.stringify(credentials), 'utf8');
   const cipher = createCipheriv('aes-256-gcm', input.encryptionKey, iv);
   cipher.setAAD(aad);
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
@@ -146,12 +157,12 @@ export function encryptMetaWhatsAppCredentials(input: Readonly<{
   });
 }
 
-export function decryptMetaWhatsAppCredentials(input: Readonly<{
+export function decryptMetaWhatsAppDispatchCredentials(input: Readonly<{
   binding: MetaWhatsAppBinding;
-  envelope: MetaWhatsAppCredentialEnvelope;
+  envelope: MetaWhatsAppDispatchCredentialEnvelope;
   encryptionKey: Buffer;
   expectedKeyVersion: string;
-}>): MetaWhatsAppSecrets {
+}>): MetaWhatsAppDispatchCredentials {
   const envelope = input.envelope;
   if (envelope.algorithm !== 'aes-256-gcm-v1'
       || envelope.keyVersion !== input.expectedKeyVersion || input.encryptionKey.length !== 32
@@ -177,8 +188,8 @@ export function decryptMetaWhatsAppCredentials(input: Readonly<{
     const parsed: unknown = JSON.parse(plaintext.toString('utf8'));
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) fail('invalid_binding');
     const record = parsed as Record<string, unknown>;
-    if (Object.keys(record).sort().join(',') !== 'accessToken,appSecret,verifyToken') fail('invalid_binding');
-    return snapshotSecrets(record as unknown as MetaWhatsAppSecrets);
+    if (Object.keys(record).join(',') !== 'accessToken') fail('invalid_binding');
+    return snapshotDispatchCredentials(record as unknown as MetaWhatsAppDispatchCredentials);
   } catch (error) {
     if (error instanceof MetaWhatsAppLiveError) throw error;
     fail('invalid_binding');
@@ -262,7 +273,7 @@ async function boundedResponse(response: Response): Promise<string> {
 
 export function createMetaWhatsAppLiveTransport(options: Readonly<{
   binding: MetaWhatsAppBinding;
-  secrets: MetaWhatsAppSecrets;
+  credentials: MetaWhatsAppDispatchCredentials;
   fetch: typeof fetch;
   providerEffectsEnabled: true;
   emergencyPaused: false;
@@ -270,7 +281,7 @@ export function createMetaWhatsAppLiveTransport(options: Readonly<{
   now?: () => Date;
 }>): MetaWhatsAppLiveTransport {
   const bound = snapshotBinding(options.binding);
-  const secrets = snapshotSecrets(options.secrets);
+  const credentials = snapshotDispatchCredentials(options.credentials);
   if (typeof options.fetch !== 'function' || options.providerEffectsEnabled !== true
       || options.emergencyPaused !== false) fail('invalid_configuration');
   const timeoutMs = options.timeoutMs ?? 10_000;
@@ -298,7 +309,7 @@ export function createMetaWhatsAppLiveTransport(options: Readonly<{
       try {
         const response = await options.fetch(url, {
           method: 'POST', redirect: 'error', signal: controller.signal,
-          headers: { Accept: 'application/json', Authorization: `Bearer ${secrets.accessToken}`,
+          headers: { Accept: 'application/json', Authorization: `Bearer ${credentials.accessToken}`,
             'Content-Type': 'application/json' }, body,
         });
         status = response.status;
@@ -352,7 +363,7 @@ export function createMetaWhatsAppLiveTransport(options: Readonly<{
 }
 
 export function verifyMetaWhatsAppLiveChallenge(
-  secrets: Readonly<Pick<MetaWhatsAppSecrets, 'verifyToken'>>,
+  secrets: Readonly<{ verifyToken: string }>,
   input: Readonly<{ mode: unknown; verifyToken: unknown; challenge: unknown }>,
 ): Readonly<{ status: 200 | 400 | 403; body: string }> {
   if (!SAFE_SECRET.test(secrets.verifyToken)) fail('invalid_configuration');
@@ -541,7 +552,7 @@ export interface MetaWhatsAppLiveClaim {
 
 export interface MetaWhatsAppLiveMaterial extends MetaWhatsAppLiveClaim {
   readonly binding: MetaWhatsAppBinding;
-  readonly envelope: MetaWhatsAppCredentialEnvelope;
+  readonly envelope: MetaWhatsAppDispatchCredentialEnvelope;
   readonly recipient: string;
   readonly templateName: string;
   readonly languageCode: string;
@@ -567,7 +578,7 @@ export async function runMetaWhatsAppLiveOnce(input: Readonly<{
   encryptionKeyVersion: string;
   leaseToken: Buffer;
   createTransport: (input: Readonly<{
-    binding: MetaWhatsAppBinding; secrets: MetaWhatsAppSecrets;
+    binding: MetaWhatsAppBinding; credentials: MetaWhatsAppDispatchCredentials;
     providerEffectsEnabled: true; emergencyPaused: false;
   }>) => MetaWhatsAppLiveTransport;
 }>): Promise<'idle' | 'accepted' | 'failed_or_attention'> {
@@ -580,14 +591,14 @@ export async function runMetaWhatsAppLiveOnce(input: Readonly<{
   if (material.workspaceId !== claim.workspaceId || material.connectionId !== claim.connectionId
       || material.bindingId !== claim.bindingId || material.jobId !== claim.jobId
       || material.leaseVersion !== claim.leaseVersion) fail('invalid_binding');
-  const secrets = decryptMetaWhatsAppCredentials({ binding: material.binding,
+  const credentials = decryptMetaWhatsAppDispatchCredentials({ binding: material.binding,
     envelope: material.envelope, encryptionKey: input.encryptionKey,
     expectedKeyVersion: input.encryptionKeyVersion });
   if (!await input.repository.markCalling({ ...claim, leaseToken: input.leaseToken,
     providerEffectsEnabled: true, emergencyPaused: false })) return 'failed_or_attention';
   let result: MetaWhatsAppDispatchResult;
   try {
-    const transport = input.createTransport({ binding: material.binding, secrets,
+    const transport = input.createTransport({ binding: material.binding, credentials,
       providerEffectsEnabled: true, emergencyPaused: false });
     result = await transport.sendTemplate(material);
   }

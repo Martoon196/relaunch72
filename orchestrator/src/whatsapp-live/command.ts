@@ -1,7 +1,7 @@
 import type { DatabaseRequestContext } from '../db/rls.js';
 import type {
   MetaWhatsAppBinding,
-  MetaWhatsAppCredentialEnvelope,
+  MetaWhatsAppDispatchCredentialEnvelope,
 } from './foundation.js';
 
 export type MetaWhatsAppLiveUserContext = DatabaseRequestContext & Readonly<{
@@ -13,7 +13,7 @@ export type MetaWhatsAppLiveUserContext = DatabaseRequestContext & Readonly<{
 export interface RecordMetaWhatsAppLiveBindingCommand {
   readonly binding: MetaWhatsAppBinding & Readonly<{ bindingId: string }>;
   readonly ownedPhoneSha256: string;
-  readonly envelope: MetaWhatsAppCredentialEnvelope;
+  readonly envelope: MetaWhatsAppDispatchCredentialEnvelope;
   readonly ownershipEvidenceSha256: string;
   readonly ownershipObservedAt: string;
   readonly predecessorBindingId: string | null;
@@ -54,8 +54,9 @@ export interface EnqueueMetaWhatsAppLiveTemplateCommand {
 
 /**
  * Exact founder-command seam for the future Live Channels control surface.
- * It accepts evidence identifiers and encrypted provider material only; it
- * cannot call Meta and never accepts a browser-supplied recipient address.
+ * It accepts evidence identifiers and an access-token-only dispatch envelope;
+ * webhook verification secrets are not part of this boundary. It cannot call
+ * Meta and never accepts a browser-supplied recipient address.
  */
 export interface MetaWhatsAppLiveCommandService {
   readonly workspaceId: string;

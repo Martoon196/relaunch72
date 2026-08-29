@@ -99,7 +99,9 @@ CREATE TABLE app.property_predator_whatsapp_live_bindings (
     secret_key_version ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
   ),
   secret_iv bytea NOT NULL CHECK (octet_length(secret_iv) = 12),
-  secret_ciphertext bytea NOT NULL CHECK (octet_length(secret_ciphertext) BETWEEN 64 AND 8192),
+  -- Canonical JSON containing only a 20-byte-minimum accessToken starts at
+  -- 38 bytes. Webhook app/verify secrets are deliberately excluded.
+  secret_ciphertext bytea NOT NULL CHECK (octet_length(secret_ciphertext) BETWEEN 38 AND 8192),
   secret_auth_tag bytea NOT NULL CHECK (octet_length(secret_auth_tag) = 16),
   secret_aad_sha256 bytea NOT NULL CHECK (octet_length(secret_aad_sha256) = 32),
   secret_payload_sha256 bytea NOT NULL CHECK (octet_length(secret_payload_sha256) = 32),
@@ -559,7 +561,7 @@ BEGIN
      OR p_app_id !~ '^[1-9][0-9]{4,29}$' OR p_waba_id !~ '^[1-9][0-9]{4,29}$'
      OR p_phone_number_id !~ '^[1-9][0-9]{4,29}$'
      OR octet_length(p_owned_phone_sha256) <> 32 OR octet_length(p_secret_iv) <> 12
-     OR octet_length(p_secret_ciphertext) NOT BETWEEN 64 AND 8192
+     OR octet_length(p_secret_ciphertext) NOT BETWEEN 38 AND 8192
      OR octet_length(p_secret_auth_tag) <> 16 OR octet_length(p_secret_aad_sha256) <> 32
      OR octet_length(p_secret_payload_sha256) <> 32
      OR octet_length(p_ownership_evidence_sha256) <> 32 THEN

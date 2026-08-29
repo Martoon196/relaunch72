@@ -76,17 +76,22 @@ export class PgMetaWhatsAppLiveCommandService implements MetaWhatsAppLiveCommand
   ): Promise<string> {
     this.#assertContext(context);
     const binding = command.binding;
+    const envelopeKeys = Object.keys(command.envelope).sort().join(',');
     if (binding.workspaceId !== this.workspaceId || binding.graphApiVersion !== 'v24.0'
         || !META_ID.test(binding.appId) || !META_ID.test(binding.wabaId)
         || !META_ID.test(binding.phoneNumberId)
         || command.envelope.algorithm !== 'aes-256-gcm-v1'
-        || !KEY_VERSION.test(command.envelope.keyVersion)) {
+        || !KEY_VERSION.test(command.envelope.keyVersion)
+        || envelopeKeys !== [
+          'aadSha256', 'algorithm', 'authTagBase64', 'ciphertextBase64',
+          'ivBase64', 'keyVersion', 'secretPayloadSha256',
+        ].join(',')) {
       throw new Error('Meta WhatsApp live binding command is invalid');
     }
     const ciphertext = exactBase64(
       command.envelope.ciphertextBase64, null, 'credential ciphertext',
     );
-    if (ciphertext.length < 64 || ciphertext.length > 8_192) {
+    if (ciphertext.length < 38 || ciphertext.length > 8_192) {
       throw new Error('Meta WhatsApp live credential ciphertext is invalid');
     }
     const values = [

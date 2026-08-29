@@ -20,7 +20,7 @@ test('0053 creates and audits least-privilege roles before assuming r72_owner', 
     /GRANT\s+(?:SELECT|INSERT|UPDATE|DELETE)[\s\S]{0,100}TO\s+r72_whatsapp_live_(?:command|worker_command|webhook_command)/iu);
 });
 
-test('0053 stores AES-GCM envelopes bound to exact workspace, connection, WABA and phone', () => {
+test('0053 stores access-token-only AES-GCM envelopes bound to exact workspace, connection, WABA and phone', () => {
   for (const fragment of [
     "secret_algorithm text NOT NULL CHECK (secret_algorithm = 'aes-256-gcm-v1')",
     'secret_key_version text NOT NULL', 'secret_iv bytea NOT NULL',
@@ -33,6 +33,7 @@ test('0053 stores AES-GCM envelopes bound to exact workspace, connection, WABA a
     /propertypredator\.meta-whatsapp-live\/v1[\s\S]*workspaceId[\s\S]*connectionId[\s\S]*appId[\s\S]*wabaId[\s\S]*phoneNumberId/u);
   assert.doesNotMatch(sql,
     /\b(?:access_token|app_secret|verify_token|plaintext_token|plaintext_secret)\b\s+(?:text|bytea)/iu);
+  assert.match(sql, /secret_ciphertext bytea NOT NULL CHECK \(octet_length\(secret_ciphertext\) BETWEEN 38 AND 8192\)/u);
   assert.match(sql,
     /UNIQUE \(workspace_id, id, provider_connection_id\)[\s\S]*FOREIGN KEY \(workspace_id, binding_id, provider_connection_id\)/u);
   assert.match(sql, /predecessor_binding_id uuid/u);

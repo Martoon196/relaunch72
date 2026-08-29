@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { createHash, createHmac } from 'node:crypto';
+import { createCipheriv, createHash, createHmac } from 'node:crypto';
 import test from 'node:test';
 import {
   MetaWhatsAppLiveError,
   createMetaWhatsAppLiveTransport,
-  decryptMetaWhatsAppCredentials,
+  decryptMetaWhatsAppDispatchCredentials,
   dispatchVerifiedMetaWhatsAppLiveEvents,
-  encryptMetaWhatsAppCredentials,
+  encryptMetaWhatsAppDispatchCredentials,
   loadMetaWhatsAppLiveRuntimeConfig,
   runMetaWhatsAppLiveOnce,
   verifyMetaWhatsAppLiveChallenge,
@@ -32,8 +32,10 @@ const BINDING = Object.freeze({
   phoneNumberId: '300001234567890',
   graphApiVersion: 'v24.0' as const,
 });
-const SECRETS = Object.freeze({
+const DISPATCH_CREDENTIALS = Object.freeze({
   accessToken: 'EAAG-OWNED-PROPERTY-PREDATOR-TOKEN-123456789',
+});
+const WEBHOOK_SECRETS = Object.freeze({
   appSecret: 'property-predator-meta-app-secret-123456789',
   verifyToken: 'property-predator-meta-verify-token-123456789',
 });
@@ -41,39 +43,80 @@ const KEY = Buffer.alloc(32, 7);
 const LEASE = Buffer.alloc(32, 9);
 const digest = (value: string | Uint8Array): string => createHash('sha256').update(value).digest('hex');
 
-const ENVELOPE = encryptMetaWhatsAppCredentials({
+const ENVELOPE = encryptMetaWhatsAppDispatchCredentials({
   binding: BINDING,
-  secrets: SECRETS,
+  credentials: DISPATCH_CREDENTIALS,
   encryptionKey: KEY,
   keyVersion: 'render-kms-v1',
   iv: Buffer.alloc(12, 3),
 });
 
-test('AES-256-GCM credentials are bound to workspace, connection, WABA and phone AAD', () => {
-  assert.deepEqual(decryptMetaWhatsAppCredentials({
+test('access-token-only AES-256-GCM credentials are bound to workspace, connection, WABA and phone AAD', () => {
+  assert.deepEqual(decryptMetaWhatsAppDispatchCredentials({
     binding: BINDING,
     envelope: ENVELOPE,
     encryptionKey: KEY,
     expectedKeyVersion: 'render-kms-v1',
-  }), SECRETS);
+  }), DISPATCH_CREDENTIALS);
   for (const binding of [
     { ...BINDING, workspaceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
     { ...BINDING, connectionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' },
     { ...BINDING, wabaId: '900001234567890' },
     { ...BINDING, phoneNumberId: '800001234567890' },
-  ]) assert.throws(() => decryptMetaWhatsAppCredentials({
+  ]) assert.throws(() => decryptMetaWhatsAppDispatchCredentials({
     binding,
     envelope: ENVELOPE,
     encryptionKey: KEY,
     expectedKeyVersion: 'render-kms-v1',
   }), MetaWhatsAppLiveError);
-  assert.throws(() => decryptMetaWhatsAppCredentials({
+  assert.throws(() => decryptMetaWhatsAppDispatchCredentials({
     binding: BINDING,
     envelope: { ...ENVELOPE, ciphertextBase64: Buffer.from('tampered').toString('base64') },
     encryptionKey: KEY,
     expectedKeyVersion: 'render-kms-v1',
   }), MetaWhatsAppLiveError);
-  assert.equal(JSON.stringify(ENVELOPE).includes(SECRETS.accessToken), false);
+  assert.equal(JSON.stringify(ENVELOPE).includes(DISPATCH_CREDENTIALS.accessToken), false);
+
+  assert.throws(() => encryptMetaWhatsAppDispatchCredentials({
+    binding: BINDING,
+    credentials: { ...DISPATCH_CREDENTIALS,
+      appSecret: WEBHOOK_SECRETS.appSecret } as never,
+    encryptionKey: KEY,
+    keyVersion: 'render-kms-v1',
+    iv: Buffer.alloc(12, 4),
+  }), MetaWhatsAppLiveError);
+
+  const legacyPlaintext = Buffer.from(JSON.stringify({
+    ...DISPATCH_CREDENTIALS,
+    appSecret: WEBHOOK_SECRETS.appSecret,
+    verifyToken: WEBHOOK_SECRETS.verifyToken,
+  }), 'utf8');
+  const legacyAad = Buffer.from(JSON.stringify({
+    contract: 'propertypredator.meta-whatsapp-live/v1',
+    ...BINDING,
+    providerId: 'meta_whatsapp_cloud',
+    channel: 'whatsapp',
+  }), 'utf8');
+  const legacyIv = Buffer.alloc(12, 5);
+  const legacyCipher = createCipheriv('aes-256-gcm', KEY, legacyIv);
+  legacyCipher.setAAD(legacyAad);
+  const legacyCiphertext = Buffer.concat([
+    legacyCipher.update(legacyPlaintext), legacyCipher.final(),
+  ]);
+  assert.throws(() => decryptMetaWhatsAppDispatchCredentials({
+    binding: BINDING,
+    envelope: {
+      algorithm: 'aes-256-gcm-v1',
+      keyVersion: 'render-kms-v1',
+      ivBase64: legacyIv.toString('base64'),
+      ciphertextBase64: legacyCiphertext.toString('base64'),
+      authTagBase64: legacyCipher.getAuthTag().toString('base64'),
+      aadSha256: digest(legacyAad),
+      secretPayloadSha256: digest(legacyPlaintext),
+    },
+    encryptionKey: KEY,
+    expectedKeyVersion: 'render-kms-v1',
+  }), MetaWhatsAppLiveError);
 });
 
 test('runtime defaults OFF and accepts only the complete explicit live switch tuple', () => {
@@ -102,7 +145,7 @@ test('direct Graph transport is explicit-fetch, one-recipient, one-template and 
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const transport = createMetaWhatsAppLiveTransport({
     binding: BINDING,
-    secrets: SECRETS,
+    credentials: DISPATCH_CREDENTIALS,
     providerEffectsEnabled: true,
     emergencyPaused: false,
     fetch: async (input, init = {}) => {
@@ -127,7 +170,7 @@ test('direct Graph transport is explicit-fetch, one-recipient, one-template and 
     'https://graph.facebook.com/v24.0/300001234567890/messages');
   assert.equal(calls[0]?.init.redirect, 'error');
   assert.equal((calls[0]?.init.headers as Record<string, string>).Authorization,
-    `Bearer ${SECRETS.accessToken}`);
+    `Bearer ${DISPATCH_CREDENTIALS.accessToken}`);
   assert.deepEqual(JSON.parse(String(calls[0]?.init.body)), {
     messaging_product: 'whatsapp', to: '447700900123', type: 'template',
     template: { name: 'property_predator_owned_proof', language: { code: 'en_GB' } },
@@ -141,7 +184,7 @@ test('direct Graph transport is explicit-fetch, one-recipient, one-template and 
       { input: '447700900123', wa_id: '447700900123' }],
   ]) {
     const unbound = createMetaWhatsAppLiveTransport({
-      binding: BINDING, secrets: SECRETS, providerEffectsEnabled: true,
+      binding: BINDING, credentials: DISPATCH_CREDENTIALS, providerEffectsEnabled: true,
       emergencyPaused: false,
       fetch: async () => new Response(JSON.stringify({ messaging_product: 'whatsapp',
         contacts, messages: [{ id: 'wamid.UNBOUND_CONTACT' }] }), { status: 200 }),
@@ -154,7 +197,7 @@ test('direct Graph transport is explicit-fetch, one-recipient, one-template and 
   }
 
   const oversized = createMetaWhatsAppLiveTransport({
-    binding: BINDING, secrets: SECRETS, providerEffectsEnabled: true,
+    binding: BINDING, credentials: DISPATCH_CREDENTIALS, providerEffectsEnabled: true,
     emergencyPaused: false,
     fetch: async () => new Response('x', { status: 200,
       headers: { 'content-length': '65537' } }),
@@ -173,7 +216,7 @@ function signedWebhook(payload: unknown): Readonly<{
 }> {
   const rawBody = Buffer.from(JSON.stringify(payload), 'utf8');
   return Object.freeze({ rawBody,
-    xHubSignature256: `sha256=${createHmac('sha256', SECRETS.appSecret)
+    xHubSignature256: `sha256=${createHmac('sha256', WEBHOOK_SECRETS.appSecret)
       .update(rawBody).digest('hex')}` });
 }
 
@@ -189,16 +232,16 @@ function webhookFixture(overrides: Readonly<{ duplicateConflict?: boolean }> = {
 }
 
 test('challenge and signed raw webhook enforce exact secret, WABA, phone and replay conflict', () => {
-  assert.deepEqual(verifyMetaWhatsAppLiveChallenge(SECRETS, {
-    mode: 'subscribe', verifyToken: SECRETS.verifyToken, challenge: 'owned-proof-challenge',
+  assert.deepEqual(verifyMetaWhatsAppLiveChallenge(WEBHOOK_SECRETS, {
+    mode: 'subscribe', verifyToken: WEBHOOK_SECRETS.verifyToken, challenge: 'owned-proof-challenge',
   }), { status: 200, body: 'owned-proof-challenge' });
-  assert.equal(verifyMetaWhatsAppLiveChallenge(SECRETS, {
+  assert.equal(verifyMetaWhatsAppLiveChallenge(WEBHOOK_SECRETS, {
     mode: 'subscribe', verifyToken: 'wrong-token-but-valid-length-1234567890', challenge: 'x',
   }).status, 403);
 
   const signed = signedWebhook(webhookFixture());
   const verified = verifyMetaWhatsAppLiveWebhook({
-    binding: BINDING, appSecret: SECRETS.appSecret, ...signed,
+    binding: BINDING, appSecret: WEBHOOK_SECRETS.appSecret, ...signed,
     contentType: 'application/json; charset=utf-8',
   });
   assert.equal(verified.events.length, 2);
@@ -206,19 +249,19 @@ test('challenge and signed raw webhook enforce exact secret, WABA, phone and rep
   assert.equal(verified.events[0]?.workspaceId, IDS.workspace);
 
   assert.throws(() => verifyMetaWhatsAppLiveWebhook({
-    binding: BINDING, appSecret: SECRETS.appSecret, rawBody: signed.rawBody,
+    binding: BINDING, appSecret: WEBHOOK_SECRETS.appSecret, rawBody: signed.rawBody,
     xHubSignature256: `sha256=${'0'.repeat(64)}`, contentType: 'application/json',
   }), (error: unknown) => error instanceof MetaWhatsAppLiveError
     && error.code === 'signature_invalid');
   const conflict = signedWebhook(webhookFixture({ duplicateConflict: true }));
   assert.throws(() => verifyMetaWhatsAppLiveWebhook({
-    binding: BINDING, appSecret: SECRETS.appSecret, ...conflict,
+    binding: BINDING, appSecret: WEBHOOK_SECRETS.appSecret, ...conflict,
     contentType: 'application/json',
   }), (error: unknown) => error instanceof MetaWhatsAppLiveError
     && error.code === 'webhook_invalid');
   assert.throws(() => verifyMetaWhatsAppLiveWebhook({
     binding: { ...BINDING, phoneNumberId: '900001234567890' },
-    appSecret: SECRETS.appSecret, ...signed, contentType: 'application/json',
+    appSecret: WEBHOOK_SECRETS.appSecret, ...signed, contentType: 'application/json',
   }), (error: unknown) => error instanceof MetaWhatsAppLiveError
     && error.code === 'invalid_binding');
 });
@@ -226,7 +269,7 @@ test('challenge and signed raw webhook enforce exact secret, WABA, phone and rep
 test('verified inbound and statuses expose only the durable inbox/Lead360 command seam', async () => {
   const signed = signedWebhook(webhookFixture());
   const verified = verifyMetaWhatsAppLiveWebhook({
-    binding: BINDING, appSecret: SECRETS.appSecret, ...signed,
+    binding: BINDING, appSecret: WEBHOOK_SECRETS.appSecret, ...signed,
     contentType: 'application/json',
   });
   const received: string[] = [];
@@ -260,7 +303,7 @@ test('signed deleted status is preserved as a durable terminal status', () => {
   fixture.entry[0]!.changes[0]!.value.statuses[0]!.status = 'deleted';
   const signed = signedWebhook(fixture);
   const verified = verifyMetaWhatsAppLiveWebhook({
-    binding: BINDING, appSecret: SECRETS.appSecret, ...signed,
+    binding: BINDING, appSecret: WEBHOOK_SECRETS.appSecret, ...signed,
     contentType: 'application/json',
   });
   assert.equal(verified.events.length, 1);
@@ -300,13 +343,18 @@ test('worker crosses durable calling fence before transport and makes ambiguity 
       PROPERTY_PREDATOR_WHATSAPP_LIVE_PROVIDER_ID: 'meta_whatsapp_cloud',
     }),
     repository, encryptionKey: KEY, encryptionKeyVersion: 'render-kms-v1', leaseToken: LEASE,
-    createTransport: () => ({
-      contract: 'propertypredator.meta-whatsapp-live/v1', executionMode: 'owned_template_live',
-      async sendTemplate() {
-        repository.order.push('transport');
-        throw new Error('socket closed after write');
-      },
-    }),
+    createTransport: ({ credentials }) => {
+      assert.deepEqual(Object.keys(credentials), ['accessToken']);
+      assert.equal('appSecret' in credentials, false);
+      assert.equal('verifyToken' in credentials, false);
+      return {
+        contract: 'propertypredator.meta-whatsapp-live/v1', executionMode: 'owned_template_live',
+        async sendTemplate() {
+          repository.order.push('transport');
+          throw new Error('socket closed after write');
+        },
+      };
+    },
   });
   assert.equal(result, 'failed_or_attention');
   assert.deepEqual(repository.order, ['claim', 'load', 'calling', 'transport', 'settled']);
