@@ -14,6 +14,7 @@ export const SAFE_TELEMETRY_EVENTS = Object.freeze([
   'portal.setup_email.accepted',
   'portal.readiness_failed',
   'portal.mount_failed',
+  'portal.inbox.read_failed',
   'portal.provision.accepted',
   'portal.provision.failed',
   'server.shutdown_failed',
@@ -31,6 +32,13 @@ export interface SafeTelemetryRecord {
   readonly event: SafeTelemetryEvent;
   readonly correlationId: string;
   readonly errorClass?: 'AggregateError' | 'RangeError' | 'TypeError' | 'Error';
+  /**
+   * PostgreSQL SQLSTATE only, and only when it matches the five-character
+   * class/subclass shape. A driver error also carries `message`, `detail`,
+   * `hint`, `where`, `schema`, `table`, `column` and the failing `query`; none
+   * of those may reach a log line, so nothing but the code is ever read.
+   */
+  readonly databaseCode?: string;
 }
 
 export interface SafeTelemetryLogger {
@@ -81,6 +89,21 @@ export function safeTelemetryErrorClass(
   return 'Error';
 }
 
+const DATABASE_CODE = /^[0-9A-Z]{5}$/u;
+
+/**
+ * Extract a PostgreSQL SQLSTATE and nothing else. `42501` (insufficient
+ * privilege) is the whole diagnosis for a boundary regression like the Inbox
+ * one, and it carries no customer data. Anything that is not exactly a
+ * five-character SQLSTATE is dropped rather than guessed at.
+ */
+export function safeDatabaseCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const candidate = (error as { code?: unknown }).code;
+  if (typeof candidate !== 'string') return undefined;
+  return DATABASE_CODE.test(candidate) ? candidate : undefined;
+}
+
 export function createSafeTelemetryLogger(
   options: SafeTelemetryLoggerOptions,
 ): SafeTelemetryLogger {
@@ -112,6 +135,12 @@ export function createSafeTelemetryLogger(
           : runtimeCorrelationId,
         ...(Object.prototype.hasOwnProperty.call(emitOptions, 'error')
           ? { errorClass: safeTelemetryErrorClass(emitOptions.error) }
+          : {}),
+        // Derived from the error, never accepted as a caller-supplied string,
+        // so there is still no route for arbitrary data into the record.
+        ...(Object.prototype.hasOwnProperty.call(emitOptions, 'error')
+          && safeDatabaseCode(emitOptions.error) !== undefined
+          ? { databaseCode: safeDatabaseCode(emitOptions.error) }
           : {}),
       });
       write(`${JSON.stringify(record)}\n`);

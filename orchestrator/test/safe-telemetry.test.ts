@@ -5,6 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   createSafeTelemetryLogger,
+  safeDatabaseCode,
   safeTelemetryErrorClass,
 } from '../src/ops/safe-telemetry.js';
 
@@ -110,4 +111,82 @@ test('server composition routes risky lifecycle logs through safe telemetry only
   ]) {
     assert.equal(source.includes(`'${event}'`), true, `server index must emit ${event}`);
   }
+});
+
+test('the inbox read failure event carries only a class and a SQLSTATE', () => {
+  const lines: string[] = [];
+  const logger = createSafeTelemetryLogger({
+    service: 'relaunch72-server',
+    write: (line) => { lines.push(line); },
+    now: () => '2026-08-29T10:00:00.000Z',
+    nextCorrelationId: () => '11111111-1111-4111-8111-111111111111',
+  });
+  // The shape a driver actually throws when a role lacks a table privilege.
+  const driverError = Object.assign(new Error('permission denied for table property_predator_sms_jobs'), {
+    code: '42501',
+    detail: 'workspace 0f2c...',
+    hint: 'GRANT SELECT ON app.property_predator_sms_jobs TO r72_web',
+    where: 'PL/pgSQL function inline_code_block line 4',
+    schema: 'app',
+    table: 'property_predator_sms_jobs',
+    query: 'SELECT conversation.id FROM app.conversations ...',
+  });
+  logger.emit('error', 'portal.inbox.read_failed', { error: driverError });
+  assert.equal(lines.length, 1);
+  const record = JSON.parse(lines[0]!) as Record<string, unknown>;
+  assert.deepEqual(record, {
+    schemaVersion: 1,
+    occurredAt: '2026-08-29T10:00:00.000Z',
+    service: 'relaunch72-server',
+    level: 'error',
+    event: 'portal.inbox.read_failed',
+    correlationId: '11111111-1111-4111-8111-111111111111',
+    errorClass: 'Error',
+    databaseCode: '42501',
+  });
+  // Nothing the driver attached may reach the line, including the failing SQL.
+  for (const leaked of [
+    'permission denied', 'GRANT SELECT', 'property_predator_sms_jobs',
+    'inline_code_block', 'SELECT conversation.id', 'workspace 0f2c',
+  ]) {
+    assert.equal(lines[0]!.includes(leaked), false, `record must not contain ${leaked}`);
+  }
+});
+
+test('only a real SQLSTATE is treated as a database code', () => {
+  assert.equal(safeDatabaseCode({ code: '42501' }), '42501');
+  assert.equal(safeDatabaseCode({ code: '23505' }), '23505');
+  for (const rejected of [
+    { code: 'ECONNREFUSED' }, { code: '4250' }, { code: '425011' },
+    { code: '42-01' }, { code: 42501 }, { code: null }, {}, null, undefined,
+    'ERROR', new Error('no code'),
+  ]) {
+    assert.equal(safeDatabaseCode(rejected), undefined, `must reject ${JSON.stringify(rejected)}`);
+  }
+});
+
+test('an error without a SQLSTATE still emits a class and omits the code', () => {
+  const lines: string[] = [];
+  const logger = createSafeTelemetryLogger({
+    service: 'relaunch72-server',
+    write: (line) => { lines.push(line); },
+    now: () => '2026-08-29T10:00:00.000Z',
+    nextCorrelationId: () => '22222222-2222-4222-8222-222222222222',
+  });
+  logger.emit('error', 'portal.inbox.read_failed', { error: new TypeError('boom') });
+  const record = JSON.parse(lines[0]!) as Record<string, unknown>;
+  assert.equal(record.errorClass, 'TypeError');
+  assert.equal(Object.prototype.hasOwnProperty.call(record, 'databaseCode'), false);
+  assert.equal(safeTelemetryErrorClass(new RangeError('x')), 'RangeError');
+});
+
+test('the portal router reports inbox read failures instead of swallowing them', () => {
+  const source = fs.readFileSync(path.resolve(HERE, '../src/portal/router.ts'), 'utf8');
+  assert.equal(source.includes("'portal.inbox.read_failed'"), true);
+  // The bare `catch {` that hid the privilege regression must not come back.
+  assert.equal(
+    /\} catch \{\s*return sendHtml\(res, 503, portalStatusPage\(deps, sessionToken, \{\s*title: 'Conversion Inbox temporarily unavailable'/.test(source),
+    false,
+    'the inbox catch must bind and report its error',
+  );
 });

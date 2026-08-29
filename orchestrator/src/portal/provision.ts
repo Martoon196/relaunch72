@@ -142,6 +142,8 @@ export interface PortalBundle {
 export interface PostgresPortalConfig {
   sessionSecret: string;
   secure: boolean;
+  /** Optional sanitised service telemetry for fail-closed read paths. */
+  telemetry?: PostgresPortalDeps['telemetry'];
   auth: PortalAuthService;
   /** Optional, env-gated main-site identity bridge. It never carries provider tokens. */
   propertyPredatorSso?: PropertyPredatorSsoClient;
@@ -224,6 +226,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     kind: 'postgres',
     sessionSecret: cfg.sessionSecret,
     secure: cfg.secure,
+    telemetry: cfg.telemetry,
     loginThrottle: new InMemoryLoginThrottle(),
     setupThrottle: new InMemorySetupThrottle(),
     abuse: cfg.abuse,

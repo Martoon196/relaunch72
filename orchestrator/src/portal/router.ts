@@ -313,6 +313,7 @@ import {
 } from './migration-centre-http.js';
 import { MIGRATION_CENTRE_CLIENT_SOURCE } from './migration-centre-client.js';
 import { renderMigrationCentreBody } from './migration-centre-view.js';
+import type { SafeTelemetryLogger } from '../ops/safe-telemetry.js';
 
 interface PortalCommonDeps {
   sessionSecret: string;
@@ -337,6 +338,15 @@ interface PortalCommonDeps {
   abuseHashSecret?: string;
   now?: () => number;
   requestId?: () => string;
+  /**
+   * Optional sanitised service telemetry. The Inbox previously swallowed every
+   * read failure, so a privilege regression surfaced only as "temporarily
+   * unavailable" with no trail to follow. Only the fixed event allowlist is
+   * reachable through this, and the record carries a correlation id, an error
+   * class and a PostgreSQL SQLSTATE — never SQL, credentials, message bodies
+   * or driver detail.
+   */
+  telemetry?: Pick<SafeTelemetryLogger, 'emit' | 'nextCorrelationId'>;
 }
 
 /** Explicit local-demo mode. This is the only mode allowed to touch JSON stores. */
@@ -4736,7 +4746,12 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         'inbox',
         csrfToken,
       ));
-    } catch {
+    } catch (error) {
+      // A swallowed read failure is why a privilege regression reached a
+      // founder walkthrough as an unexplained 503. The record carries the
+      // error class and SQLSTATE only, so an operator can tell 42501 from a
+      // connection fault without any customer data reaching a log line.
+      deps.telemetry?.emit('error', 'portal.inbox.read_failed', { error });
       return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
         title: 'Conversion Inbox temporarily unavailable',
         message: 'No draft was queued and no message left Growth HQ. Try again shortly.',

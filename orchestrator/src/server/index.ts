@@ -576,6 +576,7 @@ async function main(): Promise<void> {
       portal = buildPostgresPortalDeps({
         sessionSecret: cfg.sessionSecret,
         secure: securePortalCookie,
+        telemetry: SERVICE_TELEMETRY,
         auth: postgresPortal.auth,
         abuse: postgresPortal.abuse,
         abuseHashSecret: portalAbuseRuntime.hashSecret,
