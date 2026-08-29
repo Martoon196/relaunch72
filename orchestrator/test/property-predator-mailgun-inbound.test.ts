@@ -229,4 +229,10 @@ test('Mailgun inbound readiness proves the existing function-only command identi
   ));
   assert.match(statements.join(' '), /record_property_predator_owned_seed_mailgun_inbound/);
   assert.match(statements.join(' '), /r72_mailgun_webhook_command/);
+  assert.match(statements.join(' '), /pg_catalog\.pg_class/);
+  assert.match(statements.join(' '), /relation\.oid/);
+  assert.doesNotMatch(
+    statements.join(' '),
+    /has_table_privilege\(\s*current_user,\s*'app\.property_predator_mailgun_inbound_receipts'/,
+  );
 });

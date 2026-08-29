@@ -2,7 +2,7 @@
 
 **Authoritative execution snapshot:** 29 August 2026
 
-**Growth HQ baseline:** `codex/relaunch72-platform-foundation`, forward-only through migration `0059`
+**Growth HQ baseline:** `codex/relaunch72-platform-foundation`, production through migration `0059`; forward repair `0060` proven on disposable Neon only
 **Purpose:** one truthful sequence from the current foundation to an operational Property Predator marketing and conversion system.
 
 This document supersedes older roadmap prose for **current status, priority and sequencing**. Older handoffs, provider notes, security designs and deployment runbooks remain useful evidence, but their status labels must not be read as the present plan.
@@ -48,11 +48,31 @@ Growth HQ owns the people, attribution, consent, content, approvals, conversatio
   Mailgun EU sender/workspace/connection bindings. Before save, the live-mode,
   provider-effect, delivery, receipt and emergency-pause controls were proved
   as `disabled`, `false`, `false`, `false` and `true` respectively.
-- No service was deployed and no provider call, customer write, email, SMS,
-  WhatsApp message or social publication occurred. Deployment is held until
-  the exact local release tip (currently `f79355b` before this evidence update)
-  is published; Windows Git Credential Manager still returns
-  `SEC_E_NO_CREDENTIALS`.
+- The exact reviewed release graph was published at `c9f35ca`. Its first Growth
+  HQ deployment started the 0059-aware application but correctly remained
+  unready: production evidence exposed owner-default `PUBLIC EXECUTE` on eight
+  owned-social functions, which caused the table-blind portal abuse boundary to
+  fail closed. The separate Mailgun inbound probe also attempted a relation-name
+  lookup despite its role correctly lacking `app` schema usage.
+- Forward migration `0060` now reasserts the eight exact owned-social function
+  ACLs, and the Mailgun inbound probe uses the already-established catalog-OID
+  blindness pattern. On disposable Neon branch
+  `br-withered-resonance-b2u4pzab`, the ledger reached **60/60**, the PUBLIC
+  execute count was zero, the exact abuse identity returned ready, and the
+  Mailgun identity, table-blindness and existing binding all returned ready.
+  Production remains **59/59**: applying `0060` requires an explicit extension
+  of the production migration authority before the repaired release is deployed.
+- The permission-bound customer-email worker deployed successfully at
+  `c9f35ca` and reports `mode=disabled`, exact worker-role/schema/installation/
+  function readiness, provider credentials not loaded, adapter not instantiated,
+  zero readiness network calls, provider effects OFF, delivery OFF, emergency
+  pause ON, dispatch loop not started, and caps of 10/day and 50/month. The
+  Growth HQ web deployment correctly failed promotion because `/ready` retained
+  the blocker above; the public web service remains unavailable until production
+  `0060` is explicitly authorised and the repaired tip is published/deployed.
+- No provider call, customer write, email, SMS, WhatsApp message or social
+  publication occurred. Provider effects and delivery remain OFF and emergency
+  pause remains ON.
 
 These are foundations, not proof of a complete operating loop. The next ten strikes supply that proof.
 

@@ -24,6 +24,17 @@ export async function assertPgPropertyPredatorMailgunInboundReady(
   await assertExpectedDatabaseInstallation(pool, expectedInstallationId);
   const result = await pool.query<ReadinessRow>(
     `/* property-predator-mailgun-inbound.protected-readiness */
+     -- This role intentionally has no USAGE on app. Resolve the protected
+     -- relation through pg_catalog so the blindness proof itself stays usable.
+     WITH protected_relation AS (
+       SELECT relation.oid
+       FROM pg_catalog.pg_class AS relation
+       JOIN pg_catalog.pg_namespace AS namespace
+         ON namespace.oid = relation.relnamespace
+       WHERE namespace.nspname = 'app'
+         AND relation.relname = 'property_predator_mailgun_inbound_receipts'
+         AND relation.relkind IN ('r', 'p')
+     )
      SELECT current_user = 'r72_mailgun_webhook_command' AS correct_user,
             pg_catalog.has_function_privilege(
               current_user,
@@ -32,7 +43,13 @@ export async function assertPgPropertyPredatorMailgunInboundReady(
             ) AS can_record,
             NOT pg_catalog.has_table_privilege(
               current_user,
-              'app.property_predator_mailgun_inbound_receipts', 'SELECT'
+              (SELECT oid FROM protected_relation),
+              'SELECT'
+            )
+            AND NOT pg_catalog.has_table_privilege(
+              current_user,
+              (SELECT oid FROM protected_relation),
+              'INSERT'
             ) AS table_blind,
             NOT pg_catalog.pg_has_role(
               current_user, 'r72_mailgun_webhook_definer', 'MEMBER'
