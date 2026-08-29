@@ -173,6 +173,7 @@ import {
 } from './conversion-inbox-operations-service.js';
 import type { PortalLiveChannelTruthService } from './live-channel-truth-service.js';
 import type { PortalLiveChannelPauseService } from './live-channel-pause-service.js';
+import type { PortalOwnedSocialBindingService } from './owned-social-binding-service.js';
 import type { PortalOwnedSeedCampaignService } from './owned-seed-campaign-service.js';
 import type { PortalOwnedSeedMessageService } from './owned-seed-message-service.js';
 import {
@@ -393,6 +394,11 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   liveChannelTruth?: PortalLiveChannelTruthService;
   /** Founder/admin engage-only emergency pause; deliberately has no release command. */
   liveChannelPause?: PortalLiveChannelPauseService;
+  /**
+   * Founder-only owned Ayrshare/X profile binding and approved-publication
+   * staging. Database-only: it cannot claim a worker lease or call Ayrshare.
+   */
+  ownedSocialBinding?: PortalOwnedSocialBindingService;
   /** RLS-scoped immutable campaign templates, steps, approvals and reporting evidence. */
   campaignMachine?: PortalCampaignMachineService;
   /** Fixed-recipient Mailgun job staging only; the worker remains a separate process. */

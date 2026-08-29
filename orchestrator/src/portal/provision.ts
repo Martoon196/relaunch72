@@ -29,6 +29,7 @@ import type { PortalConversionInboxCommandService } from './conversion-inbox-ser
 import type { PortalConversionInboxOperationsService } from './conversion-inbox-operations-service.js';
 import type { PortalLiveChannelTruthService } from './live-channel-truth-service.js';
 import type { PortalLiveChannelPauseService } from './live-channel-pause-service.js';
+import type { PortalOwnedSocialBindingService } from './owned-social-binding-service.js';
 import type { PortalCampaignMachineService } from './campaign-machine-service.js';
 import type { PortalOwnedSeedCampaignService } from './owned-seed-campaign-service.js';
 import type { PortalOwnedSeedMessageService } from './owned-seed-message-service.js';
@@ -171,6 +172,8 @@ export interface PostgresPortalConfig {
   liveChannelTruth?: PortalLiveChannelTruthService;
   /** Engage-only durable emergency pause; no release command exists. */
   liveChannelPause?: PortalLiveChannelPauseService;
+  /** Founder-only owned Ayrshare/X binding and approved-publication staging. */
+  ownedSocialBinding?: PortalOwnedSocialBindingService;
   /** Authenticated immutable Campaign Machine read boundary. */
   campaignMachine?: PortalCampaignMachineService;
   /** Fixed office-seed staging boundary; no provider/network capability. */
@@ -207,7 +210,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     throw new Error('PostgreSQL portal abuse boundary is incomplete');
   }
   if ((cfg.companyContentSync || cfg.companyContentReview || cfg.brandBrain || cfg.campaignDrafts
-      || cfg.ownedSeedMessages || cfg.ownedSeedCampaign)
+      || cfg.ownedSeedMessages || cfg.ownedSeedCampaign || cfg.ownedSocialBinding)
       && productProfile.id !== 'property_predator_growth') {
     throw new Error(
       'Property Predator company-content sync is forbidden outside property_predator_growth',
@@ -239,6 +242,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     inboxOperations: cfg.inboxOperations,
     liveChannelTruth: cfg.liveChannelTruth,
     liveChannelPause: cfg.liveChannelPause,
+    ownedSocialBinding: cfg.ownedSocialBinding,
     campaignMachine: cfg.campaignMachine,
     ownedSeedCampaign: cfg.ownedSeedCampaign,
     ownedSeedMessages: cfg.ownedSeedMessages,

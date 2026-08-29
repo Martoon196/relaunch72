@@ -13,6 +13,7 @@ import {
   OwnedSocialActivationError,
   buildOwnedSocialActivationReadinessReport,
   deriveOwnedSocialPublicationRehearsal,
+  deriveOwnedSocialStagingDigests,
   deriveOwnedSocialStagingIdempotencyKey,
   formatOwnedSocialActivationReadiness,
   ownedSocialAccountDigest,
@@ -505,12 +506,41 @@ test('the portal staging key matches the offline rehearsal key exactly', () => {
   );
 });
 
-test('the approved bytes bind the request digest but not the staging key', () => {
+// Both digests are identifier-only so the portal, which is table-blind and
+// cannot read content_body, derives exactly what the offline rehearsal does.
+// The approved bytes are still reported as separate evidence.
+test('the approved bytes are reported as evidence, not folded into the digests', () => {
   const baseline = rehearsal();
   const changed = rehearsal({}, { approvedText: 'A different approved sentence' });
   assert.equal(changed.idempotencyKeySha256, baseline.idempotencyKeySha256);
-  assert.notEqual(changed.requestSha256, baseline.requestSha256);
+  assert.equal(changed.requestSha256, baseline.requestSha256);
   assert.notEqual(changed.contentSha256, baseline.contentSha256);
+  assert.equal(changed.contentMatchesApproval, true);
+  // A version whose bytes no longer match its recorded approval is visible.
+  const mismatched = rehearsal({}, {
+    approvedText: 'Owned social rehearsal proves the exact boundary',
+    expectedContentSha256: 'f'.repeat(64),
+  });
+  assert.equal(mismatched.contentMatchesApproval, false);
+});
+
+test('the staging digest pair is distinct and both halves are stable', () => {
+  const digests = deriveOwnedSocialStagingDigests(target(), OPERATION_TAG);
+  assert.match(digests.idempotencyKeySha256, /^[0-9a-f]{64}$/u);
+  assert.match(digests.requestSha256, /^[0-9a-f]{64}$/u);
+  assert.notEqual(digests.idempotencyKeySha256, digests.requestSha256);
+  assert.deepEqual(digests, deriveOwnedSocialStagingDigests(target(), OPERATION_TAG));
+  // Request-only identifiers move the request digest, never the staging key.
+  for (const override of [
+    { contentItemId: IDS.alternate },
+    { approvalRequestId: IDS.alternate },
+    { sourceAttestationId: IDS.alternate },
+    { expectedOwnedAccountSha256: 'a'.repeat(64) },
+  ]) {
+    const changed = deriveOwnedSocialStagingDigests(target(override), OPERATION_TAG);
+    assert.equal(changed.idempotencyKeySha256, digests.idempotencyKeySha256);
+    assert.notEqual(changed.requestSha256, digests.requestSha256);
+  }
 });
 
 // operationTag and scheduledFor are the only variable-width identity fields and

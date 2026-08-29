@@ -600,6 +600,7 @@ async function main(): Promise<void> {
         inboxOperations: postgresPortal.inboxOperations,
         liveChannelTruth: postgresPortal.liveChannelTruth,
         liveChannelPause: postgresPortal.liveChannelPause,
+        ownedSocialBinding: postgresPortal.ownedSocialBinding,
         campaignMachine: postgresPortal.campaignMachine,
         ownedSeedCampaign: postgresPortal.ownedSeedCampaign,
         ownedSeedMessages: postgresPortal.ownedSeedMessages,

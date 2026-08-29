@@ -43,6 +43,12 @@ import {
   type PgPortalLiveChannelPauseService,
 } from './live-channel-pause-pg-service.js';
 import {
+  createPgPortalOwnedSocialBindingService,
+  type PgPortalOwnedSocialBindingService,
+} from './owned-social-binding-pg-service.js';
+import { createPgOwnedPublicSocialLiveCommandService } from '../owned-public-social-pg/command-service.js';
+import { assertOwnedPublicSocialCommandBoundaryReady } from '../owned-public-social-pg/readiness.js';
+import {
   createPgPortalCampaignMachineService,
   type PgPortalCampaignMachineService,
 } from './campaign-machine-pg-service.js';
@@ -134,6 +140,12 @@ export interface PgPortalPlatform {
   ownedSeedCampaign?: PgPortalOwnedSeedCampaignService;
   /** Fixed office-seed LIVE draft plus deliberate message approval; cannot send. */
   ownedSeedMessages?: PgPortalOwnedSeedMessageService;
+  /**
+   * Founder-only owned Ayrshare/X binding and approved-publication staging.
+   * Composed only from DATABASE_OWNED_SOCIAL_COMMAND_URL authenticated as
+   * r72_owned_social_command, and only after that boundary proves table-blind.
+   */
+  ownedSocialBinding?: PgPortalOwnedSocialBindingService;
   /** Bounded caller-owned runtime probe; throws without exposing connection details. */
   assertReady(): Promise<void>;
   close(): Promise<void>;
@@ -165,6 +177,29 @@ export function propertyPredatorContentSyncSourceForProfile(
     );
   }
   return exactProfile ? loadPropertyPredatorContentSyncSourceConfig(env) : undefined;
+}
+
+const PORTAL_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+/**
+ * The owned-social profile-key encryption contract, if this process has been
+ * deliberately given it. It is absent by default, so the founder binding form
+ * renders as an honest disabled control rather than accepting a Profile Key
+ * the portal could not seal. Returns undefined rather than throwing so a
+ * missing or malformed key never takes the whole portal down.
+ */
+function ownedSocialProfileEncryption(
+  env: NodeJS.ProcessEnv,
+): Readonly<{ key: Buffer; keyVersion: string }> | undefined {
+  const encoded = env.PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_BASE64?.trim() ?? '';
+  const keyVersion =
+    env.PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_VERSION?.trim() ?? '';
+  if (!encoded || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(keyVersion)) return undefined;
+  if (!/^[A-Za-z0-9+/]+={0,2}$/u.test(encoded)) return undefined;
+  const key = Buffer.from(encoded, 'base64');
+  if (key.length !== 32 || key.toString('base64') !== encoded) return undefined;
+  return Object.freeze({ key, keyVersion });
 }
 
 function requireCutoverIdentity(
@@ -608,6 +643,53 @@ export async function buildPgPortalPlatform(
       }
     }
 
+    // The founder command seam for the owned Ayrshare/X rail. It rides only
+    // its own least-privilege identity and never the generic web pool, and it
+    // stays undefined unless that identity proves its exact boundary.
+    let ownedSocialBinding: PgPortalOwnedSocialBindingService | undefined;
+    let ownedSocialReadinessPool: Pool | undefined;
+    if (env.DATABASE_OWNED_SOCIAL_COMMAND_URL?.trim()) {
+      let ownedSocialPool: Pool | undefined;
+      try {
+        const workspaceId = env.PROPERTY_PREDATOR_PILOT_WORKSPACE_ID?.trim().toLowerCase() ?? '';
+        const connectionId = env.PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_CONNECTION_ID
+          ?.trim().toLowerCase() ?? '';
+        if (!PORTAL_UUID.test(workspaceId) || !PORTAL_UUID.test(connectionId)) {
+          throw new Error(
+            'Owned social command seam requires the exact pilot workspace and Ayrshare connection',
+          );
+        }
+        const ownedSocialConfig = requireCutoverIdentity(
+          loadDatabaseConfig('ownedSocialCommand', env),
+          'DATABASE_OWNED_SOCIAL_COMMAND_URL',
+          'r72_owned_social_command',
+        );
+        ownedSocialPool = createDatabasePool(ownedSocialConfig);
+        if (expectedInstallationId) {
+          await assertExpectedDatabaseInstallation(ownedSocialPool, expectedInstallationId);
+        }
+        await assertOwnedPublicSocialCommandBoundaryReady(ownedSocialPool);
+        const profileEncryption = ownedSocialProfileEncryption(env);
+        ownedSocialBinding = createPgPortalOwnedSocialBindingService({
+          webPool,
+          ownedSocialCommandPool: ownedSocialPool,
+          commandService: createPgOwnedPublicSocialLiveCommandService({
+            commandPool: ownedSocialPool,
+            workspaceId,
+            providerConnectionId: connectionId,
+          }),
+          providerConnectionId: connectionId,
+          ...(profileEncryption ? { profileEncryption } : {}),
+        });
+        ownedSocialReadinessPool = ownedSocialPool;
+        pools.push(ownedSocialPool);
+      } catch {
+        await ownedSocialPool?.end().catch(() => undefined);
+        ownedSocialBinding = undefined;
+        ownedSocialReadinessPool = undefined;
+      }
+    }
+
     let closed = false;
     return {
       auth: new PgPortalAuthService({ readPool: webPool, commandPool: identityPool }),
@@ -646,6 +728,7 @@ export async function buildPgPortalPlatform(
       campaignMachine: createPgPortalCampaignMachineService({ webPool }),
       ownedSeedCampaign,
       ownedSeedMessages,
+      ownedSocialBinding,
       async assertReady(): Promise<void> {
         await Promise.all([
           assertRuntimeSchemaCurrent(webPool),
@@ -696,6 +779,9 @@ export async function buildPgPortalPlatform(
             : []),
           ...(ownedSeedCampaignCore ? [ownedSeedCampaignCore.assertReady()] : []),
           ...(ownedSeedMessageCore ? [ownedSeedMessageCore.assertReady()] : []),
+          ...(ownedSocialReadinessPool
+            ? [assertOwnedPublicSocialCommandBoundaryReady(ownedSocialReadinessPool)]
+            : []),
         ]);
       },
       async close(): Promise<void> {
