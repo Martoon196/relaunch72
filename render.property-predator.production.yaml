@@ -109,8 +109,31 @@ services:
         value: "true"
       - key: RELAUNCH72_MAX_CONCURRENT_BUILDS
         value: "1"
+      # Property Predator conversion-event receiver. The switch stays a
+      # Blueprint literal so a dark production deploy can never be flipped on by
+      # a sync; the operator turns it on in the dashboard only after the
+      # dedicated key below is bound and the preflight passes.
       - key: PROPERTY_PREDATOR_EXTERNAL_EVENTS_ENABLED
         value: "false"
+      # Dedicated source key identity. It must match the exact key id the
+      # Property Predator dispatcher signs with, and it is not a shared
+      # credential: the loader refuses a secret that exactly reuses the Stripe,
+      # session, sandbox, Postmark or Brevo values.
+      - key: PROPERTY_PREDATOR_EXTERNAL_EVENTS_KEY_ID
+        sync: false
+      # The exact workspace this source key is trusted to write shadow events
+      # into. One key maps to one workspace; nothing in the signed body may
+      # choose or override it.
+      - key: PROPERTY_PREDATOR_EXTERNAL_EVENTS_WORKSPACE_ID
+        sync: false
+      # Dedicated base64url HMAC secret, 32..1024 bytes decoded. Never a
+      # Blueprint value, never logged, and never returned by readiness output.
+      - key: PROPERTY_PREDATOR_EXTERNAL_EVENTS_HMAC_SECRET_BASE64URL
+        sync: false
+      # Exact socket peer addresses permitted to assert X-Forwarded-Proto.
+      # Empty is correct unless a reviewed proxy terminates TLS in front.
+      - key: PROPERTY_PREDATOR_EXTERNAL_EVENTS_TRUSTED_PROXY_ADDRESSES
+        sync: false
 
       # Read-only, exact-origin company-content source used by the protected
       # Source Sync control. The credential can read only approved company
