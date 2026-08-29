@@ -603,6 +603,7 @@ async function main(): Promise<void> {
         liveChannelPause: postgresPortal.liveChannelPause,
         ownedSocialBinding: postgresPortal.ownedSocialBinding,
         smsBinding: postgresPortal.smsBinding,
+        contactPermission: postgresPortal.contactPermission,
         campaignMachine: postgresPortal.campaignMachine,
         ownedSeedCampaign: postgresPortal.ownedSeedCampaign,
         ownedSeedMessages: postgresPortal.ownedSeedMessages,
