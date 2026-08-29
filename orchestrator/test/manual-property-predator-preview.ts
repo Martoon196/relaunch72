@@ -2057,6 +2057,12 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
           revoke: randomUUID(),
           stage: randomUUID(),
         },
+        smsCommandAvailable: true,
+        smsCommandKeys: {
+          bind: randomUUID(),
+          revoke: randomUUID(),
+          stage: randomUUID(),
+        },
         railStatusAvailable: true,
         handoff: {
           conversionInboxComposed: true,
