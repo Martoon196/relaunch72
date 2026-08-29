@@ -57,6 +57,15 @@ BEGIN
   IF unsafe_membership IS NOT NULL THEN
     RAISE EXCEPTION 'Unsafe Twilio SMS live role membership: %', unsafe_membership;
   END IF;
+  -- PostgreSQL 16+ separates role administration from permission to SET a
+  -- role. Managed Neon therefore needs the same explicit, narrow memberships
+  -- used by the customer-email and WhatsApp foundations: the owner may create
+  -- the SECURITY DEFINER functions, while the migration principal may only
+  -- assume the three table-blind runtime roles for attack-shape proofs.
+  GRANT r72_sms_definer TO r72_owner;
+  EXECUTE format('GRANT r72_sms_command TO %I', current_user);
+  EXECUTE format('GRANT r72_sms_worker_command TO %I', current_user);
+  EXECUTE format('GRANT r72_sms_webhook_command TO %I', current_user);
 END
 $roles$;
 
@@ -3006,12 +3015,10 @@ $function$;
 RESET ROLE;
 SET LOCAL ROLE r72_owner;
 
--- Close the temporary DDL capability before exposing the exact callable
--- boundaries, then transfer every worker/webhook callable to the narrow
--- no-login definer so PostgreSQL enforces the same ownership story as 0054.
-REVOKE CREATE ON SCHEMA app_private
-  FROM r72_operational_inbox_definer, r72_sms_definer;
-
+-- Transfer every worker/webhook callable to the narrow no-login definer, then
+-- close the temporary DDL capability. PostgreSQL requires the new owner to
+-- retain CREATE on the containing schema until each ownership transfer is
+-- complete (the same ordering already proven by 0054 on managed Neon).
 ALTER FUNCTION app_private.claim_sms_live_job(uuid, uuid, bytea, integer)
   OWNER TO r72_sms_definer;
 ALTER FUNCTION app_private.load_sms_live_job(uuid, uuid, bigint, bytea)
@@ -3030,6 +3037,9 @@ ALTER FUNCTION app_private.record_sms_live_inbound_projection(
   uuid, uuid, text, text, text, text, text,
   bytea, bytea, bytea, bytea, bytea, timestamptz
 ) OWNER TO r72_sms_definer;
+
+REVOKE CREATE ON SCHEMA app_private
+  FROM r72_operational_inbox_definer, r72_sms_definer;
 
 REVOKE ALL ON FUNCTION app_private.authorize_and_enqueue_sms_live_job(
   uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid,
