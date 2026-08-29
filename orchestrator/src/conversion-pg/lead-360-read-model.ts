@@ -31,6 +31,8 @@ const COMMUNICATION_CHANNELS = [
   'email', 'sms', 'whatsapp', 'phone', 'social', 'webinar', 'web',
 ] as const;
 const CONSENT_STATES = ['granted', 'denied', 'withdrawn'] as const;
+const CONSENT_ACTOR_KINDS = ['user', 'worker', 'webhook', 'system'] as const;
+const SUPPRESSION_STATES = ['suppressed', 'released'] as const;
 const LAWFUL_BASES = [
   'consent', 'legitimate_interests', 'contract', 'legal_obligation',
   'vital_interests', 'public_task',
@@ -147,7 +149,17 @@ export interface Lead360ConsentRead {
   readonly lawfulBasis: (typeof LAWFUL_BASES)[number] | null;
   readonly updatedAt: string | null;
   readonly consentEventId: string | null;
+  /** Evidence source recorded with the decision, never an inferred signal. */
+  readonly consentSource: string | null;
+  readonly policyVersion: string | null;
+  /** Hex digest of the exact policy text the contact was shown, when recorded. */
+  readonly policyTextSha256: string | null;
+  /** When the decision took effect, versus when the ledger recorded it. */
+  readonly recordedAt: string | null;
+  readonly recordedByActorKind: 'user' | 'worker' | 'webhook' | 'system' | null;
+  readonly recordedByUserId: string | null;
   readonly suppressionEventId: string | null;
+  readonly suppressionState: 'suppressed' | 'released' | null;
   readonly suppressionReason: string | null;
 }
 
@@ -766,13 +778,22 @@ const CONSENT_SQL = `/* conversion.lead-360.read-consent */
          consent.state AS consent_state,
          consent.lawful_basis,
          consent.occurred_at AS consent_occurred_at,
+         consent.recorded_at AS consent_recorded_at,
+         consent.source AS consent_source,
+         consent.policy_version AS consent_policy_version,
+         pg_catalog.encode(consent.policy_text_sha256, 'hex') AS consent_policy_sha256,
+         consent.actor_kind AS consent_actor_kind,
+         consent.actor_user_id AS consent_actor_user_id,
          suppression.id AS suppression_event_id,
+         suppression.state AS suppression_state,
          suppression.reason AS suppression_reason,
          suppression.occurred_at AS suppression_occurred_at
   FROM scopes AS scope
   JOIN current_points AS point ON point.id = scope.contact_point_id
   LEFT JOIN LATERAL (
-    SELECT event.id, event.state, event.lawful_basis, event.occurred_at
+    SELECT event.id, event.state, event.lawful_basis, event.occurred_at,
+           event.recorded_at, event.source, event.policy_version,
+           event.policy_text_sha256, event.actor_kind, event.actor_user_id
     FROM app.communication_consent_events AS event
     WHERE event.workspace_id = app_private.current_workspace_id()
       AND event.contact_id = $1::uuid
@@ -785,7 +806,7 @@ const CONSENT_SQL = `/* conversion.lead-360.read-consent */
     LIMIT 1
   ) AS consent ON true
   LEFT JOIN LATERAL (
-    SELECT latest.id, latest.reason, latest.occurred_at
+    SELECT latest.id, latest.state, latest.reason, latest.occurred_at
     FROM (
       SELECT DISTINCT ON (coalesce(event.purpose, ''))
              event.id, event.state, event.reason, event.occurred_at, event.recorded_at
@@ -1118,8 +1139,16 @@ function mapConsent(
   let consentState: (typeof CONSENT_STATES)[number] | null = null;
   let lawfulBasis: (typeof LAWFUL_BASES)[number] | null = null;
   let consentOccurredAt: string | null = null;
+  let consentSource: string | null = null;
+  let policyVersion: string | null = null;
+  let policyTextSha256: string | null = null;
+  let recordedAt: string | null = null;
+  let recordedByActorKind: (typeof CONSENT_ACTOR_KINDS)[number] | null = null;
+  let recordedByUserId: string | null = null;
   if (consentEventId === null) {
-    if (row.consent_state !== null || row.lawful_basis !== null || row.consent_occurred_at !== null) {
+    if (row.consent_state !== null || row.lawful_basis !== null || row.consent_occurred_at !== null
+      || row.consent_source !== null || row.consent_recorded_at !== null
+      || row.consent_actor_kind !== null) {
       return fail(`consent[${index}] has incomplete consent metadata`);
     }
   } else {
@@ -1128,17 +1157,42 @@ function mapConsent(
       ? null
       : oneOf(row.lawful_basis, LAWFUL_BASES, `consent[${index}].lawfulBasis`);
     consentOccurredAt = timestamp(row.consent_occurred_at, `consent[${index}].consentOccurredAt`);
+    consentSource = text(row.consent_source, `consent[${index}].consentSource`);
+    policyVersion = nullableText(row.consent_policy_version, `consent[${index}].policyVersion`);
+    policyTextSha256 = nullableText(
+      row.consent_policy_sha256, `consent[${index}].policyTextSha256`,
+    );
+    if (policyTextSha256 !== null && !/^[0-9a-f]{64}$/u.test(policyTextSha256)) {
+      return fail(`consent[${index}] policy digest is not a sha256 hex digest`);
+    }
+    recordedAt = timestamp(row.consent_recorded_at, `consent[${index}].recordedAt`);
+    recordedByActorKind = oneOf(
+      row.consent_actor_kind, CONSENT_ACTOR_KINDS, `consent[${index}].recordedByActorKind`,
+    );
+    recordedByUserId = nullableUuid(
+      row.consent_actor_user_id, `consent[${index}].recordedByUserId`,
+    );
+    // The ledger's own rule, re-proved at the read boundary: an operator
+    // decision names its operator, and a machine decision never does.
+    if ((recordedByActorKind === 'user') !== (recordedByUserId !== null)) {
+      return fail(`consent[${index}] operator attribution is inconsistent`);
+    }
     if (consentState === 'granted' && lawfulBasis === null) {
       return fail(`consent[${index}] granted consent is missing its lawful basis`);
     }
   }
   let suppressionReason: string | null = null;
   let suppressionOccurredAt: string | null = null;
+  let suppressionState: (typeof SUPPRESSION_STATES)[number] | null = null;
   if (suppressionEventId === null) {
-    if (row.suppression_reason !== null || row.suppression_occurred_at !== null) {
+    if (row.suppression_reason !== null || row.suppression_occurred_at !== null
+      || row.suppression_state !== null) {
       return fail(`consent[${index}] has incomplete suppression metadata`);
     }
   } else {
+    suppressionState = oneOf(
+      row.suppression_state, SUPPRESSION_STATES, `consent[${index}].suppressionState`,
+    );
     suppressionReason = text(row.suppression_reason, `consent[${index}].suppressionReason`);
     suppressionOccurredAt = timestamp(
       row.suppression_occurred_at,
@@ -1168,7 +1222,14 @@ function mapConsent(
     lawfulBasis,
     updatedAt: suppressionOccurredAt ?? consentOccurredAt,
     consentEventId,
+    consentSource,
+    policyVersion,
+    policyTextSha256,
+    recordedAt,
+    recordedByActorKind,
+    recordedByUserId,
     suppressionEventId,
+    suppressionState,
     suppressionReason,
   });
 }

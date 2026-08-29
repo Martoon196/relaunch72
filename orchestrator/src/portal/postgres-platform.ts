@@ -43,6 +43,10 @@ import {
   type PgPortalLiveChannelPauseService,
 } from './live-channel-pause-pg-service.js';
 import {
+  createPgPortalContactPermissionService,
+  type PgPortalContactPermissionService,
+} from './contact-permission-pg-service.js';
+import {
   createPgPortalOwnedSocialBindingService,
   type PgPortalOwnedSocialBindingService,
 } from './owned-social-binding-pg-service.js';
@@ -157,6 +161,8 @@ export interface PgPortalPlatform {
    * DATABASE_SMS_COMMAND_URL authenticated as r72_sms_command.
    */
   smsBinding?: PgPortalSmsBindingService;
+  /** Founder-only contact permission decisions for the Lead 360 case file. */
+  contactPermission: PgPortalContactPermissionService;
   /** Bounded caller-owned runtime probe; throws without exposing connection details. */
   assertReady(): Promise<void>;
   close(): Promise<void>;
@@ -781,6 +787,13 @@ export async function buildPgPortalPlatform(
       }),
       liveChannelTruth: createPgPortalLiveChannelTruthService({ webPool }),
       liveChannelPause: createPgPortalLiveChannelPauseService({
+        webPool,
+        crmCommandPool: commandPool,
+      }),
+      // Session-scoped like the other CRM commands: the workspace comes
+      // from the resolved principal, and 0063 narrows the act to an active
+      // owner or admin of that workspace.
+      contactPermission: createPgPortalContactPermissionService({
         webPool,
         crmCommandPool: commandPool,
       }),

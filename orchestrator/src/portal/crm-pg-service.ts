@@ -580,6 +580,23 @@ function mapLead360(read: Lead360CaseFileRead): Lead360View {
         item.dedupeState === 'normal' ? null : titleCaseKey(item.dedupeState),
       ].filter((value): value is string => Boolean(value)).join(' · '),
       updatedAt: item.updatedAt,
+      endpoint: item.contactPointValue,
+      contactPointId: item.contactPointId,
+      channel: item.channel,
+      purpose: item.purpose,
+      evidenceSource: item.consentSource,
+      policyVersion: item.policyVersion,
+      policyTextSha256: item.policyTextSha256,
+      effectiveAt: item.updatedAt,
+      recordedAt: item.recordedAt,
+      // The ledger stores the operator as an id and the case file has never
+      // joined app.users, so the operator is named the same way the record
+      // owner is: by identifier, without widening any read privilege.
+      recordedBy: item.recordedByActorKind === null
+        ? null
+        : item.recordedByUserId ?? titleCaseKey(item.recordedByActorKind),
+      suppressionState: item.suppressionState,
+      suppressionReason: item.suppressionReason,
     }))),
     suppressionReason,
     crm: Object.freeze({

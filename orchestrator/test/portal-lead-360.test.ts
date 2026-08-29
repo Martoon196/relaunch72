@@ -32,8 +32,8 @@ function caseFile(): Lead360View {
     nextMove: { label: 'Call while the offer is fresh', reason: 'The lead replied after viewing pricing. Answer the onboarding question before introducing anything new.', dueAt: '2026-08-25T11:00:00.000Z' },
     offers: [{ id: 'o1', title: 'Apex annual', valueLabel: '£1,497 per year', state: 'no_response', presentedAt: '2026-08-25T10:00:00.000Z', responseAt: null, responseDetail: 'Buying question received; no commercial response recorded.' }],
     consent: [
-      { channelLabel: 'Email', state: 'permitted', basis: 'Explicit product updates', updatedAt: '2026-08-24T09:00:00.000Z' },
-      { channelLabel: 'WhatsApp', state: 'unknown', basis: null, updatedAt: null },
+      { channelLabel: 'Email', state: 'permitted', basis: 'Explicit product updates', updatedAt: '2026-08-24T09:00:00.000Z', endpoint: 'avery@example.test', contactPointId: '64646464-6464-4464-8464-646464646464', channel: 'email', purpose: 'property_predator_marketing', evidenceSource: 'founder.signed_form', policyVersion: 'pp-privacy-2026-08', policyTextSha256: 'c'.repeat(64), effectiveAt: '2026-08-24T09:00:00.000Z', recordedAt: '2026-08-24T09:00:02.000Z', recordedBy: '65656565-6565-4565-8565-656565656565', suppressionState: null, suppressionReason: null },
+      { channelLabel: 'WhatsApp', state: 'unknown', basis: null, updatedAt: null, endpoint: '+447700900123', contactPointId: '66666666-6666-4666-8666-666666666666', channel: 'whatsapp', purpose: null, evidenceSource: null, policyVersion: null, policyTextSha256: null, effectiveAt: null, recordedAt: null, recordedBy: null, suppressionState: null, suppressionReason: null },
     ],
     suppressionReason: null,
     crm: {
@@ -148,7 +148,7 @@ test('Lead 360 escapes every supplied display field and ignores undeclared provi
     evidence: [{ id: 'x', kind: 'read', title: '<Evidence>', detail: '"quoted" & unsafe', percentage: 50, occurredAt: 'bad"><script>', sourceLabel: '<source>' }],
     nextMove: { label: '<Call now>', reason: '<reason>', dueAt: null },
     offers: [{ id: 'x', title: '<Offer>', valueLabel: '<£1>', state: 'declined', presentedAt: '2026-08-25T10:00:00Z', responseAt: null, responseDetail: '<No>' }],
-    consent: [{ channelLabel: '<Email>', state: 'suppressed', basis: '<basis>', updatedAt: null }],
+    consent: [{ channelLabel: '<Email>', state: 'suppressed', basis: '<basis>', updatedAt: null, endpoint: '<script>alert(1)</script>@example.test', contactPointId: '67676767-6767-4767-8767-676767676767', channel: 'email', purpose: '<purpose>', evidenceSource: '<source>', policyVersion: '<policy>', policyTextSha256: '<digest>', effectiveAt: null, recordedAt: null, recordedBy: '<operator>', suppressionState: 'suppressed', suppressionReason: '<suppressed>' }],
     suppressionReason: '<suppressed>',
     crm: { opportunities: [{ id: 'x', title: '<Deal>', stageLabel: '<Stage>', state: 'open', valueLabel: null }], tasks: [{ id: 'x', title: '<Task>', state: 'open', dueAt: null }] },
     providerSecret: 'DO-NOT-RENDER',
@@ -207,4 +207,21 @@ test('Lead 360 remains read-only and exposes no external-effect control', () => 
   assert.doesNotMatch(html, /<(?:form|button|input|select|textarea)\b/i);
   assert.doesNotMatch(html, /onclick=|onsubmit=|Send message|Publish post|Start automation/i);
   assert.doesNotMatch(html, /payload|event hash|provider secret/i);
+});
+
+test('the composed permission form adds evidence and still no external effect', () => {
+  const html = renderLead360Body(caseFile(), {
+    permissionCommandAvailable: true,
+    permissionCommandKey: 'aa100000-0000-4000-8000-000000000001',
+    csrfToken: 'csrf-token-value',
+  });
+  // Exactly one form, and it records permission rather than reaching a provider.
+  assert.equal((html.match(/<form/giu) ?? []).length, 1);
+  assert.match(html, /action="\/portal\/crm\/contacts\/permission"/);
+  assert.doesNotMatch(
+    html,
+    /onclick=|onsubmit=|Send message|Publish post|Start automation/i,
+  );
+  assert.doesNotMatch(html, /payload|event hash|provider secret/i);
+  assert.match(html, /never queues or sends a message/);
 });

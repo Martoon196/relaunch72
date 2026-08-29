@@ -387,7 +387,11 @@ test('portal adapter maps the narrow Lead 360 read model without losing exact of
           contactPointValue: 'avery@example.test', isPrimary: true, isVerified: true, dedupeState: 'normal' as const,
           channel: 'email' as const, purpose: 'property_predator_marketing', state: 'denied' as const, lawfulBasis: null,
           updatedAt: '2026-08-25T09:00:00.000Z', consentEventId: '14141414-1414-4414-8414-141414141414',
-          suppressionEventId: null, suppressionReason: null,
+          consentSource: 'founder.written_confirmation', policyVersion: 'pp-privacy-2026-08',
+          policyTextSha256: 'a'.repeat(64), recordedAt: '2026-08-25T09:00:01.000Z',
+          recordedByActorKind: 'user' as const,
+          recordedByUserId: '15151515-1515-4515-8515-151515151515',
+          suppressionEventId: null, suppressionState: null, suppressionReason: null,
         }],
         crm: {
           opportunities: [{

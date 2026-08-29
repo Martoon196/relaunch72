@@ -314,6 +314,16 @@ import {
 import { MIGRATION_CENTRE_CLIENT_SOURCE } from './migration-centre-client.js';
 import { renderMigrationCentreBody } from './migration-centre-view.js';
 import type { SafeTelemetryLogger } from '../ops/safe-telemetry.js';
+import type { PortalContactPermissionService } from './contact-permission-service.js';
+import {
+  CONTACT_PERMISSION_CONFIRM_VALUE,
+  CONTACT_PERMISSION_FORM_KEYS,
+  CONTACT_PERMISSION_ROUTE,
+  contactCaseFileRoute,
+  contactPermissionNoticeFromQuery,
+  contactPermissionNoticeToken,
+  type ContactPermissionNoticeCode,
+} from './contact-permission-actions.js';
 
 interface PortalCommonDeps {
   sessionSecret: string;
@@ -421,6 +431,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
    * cannot claim a worker lease or call Twilio.
    */
   smsBinding?: PortalSmsBindingService;
+  /** Founder-only contact permission decisions on the Lead 360 case file. */
+  contactPermission?: PortalContactPermissionService;
   /** RLS-scoped immutable campaign templates, steps, approvals and reporting evidence. */
   campaignMachine?: PortalCampaignMachineService;
   /** Fixed-recipient Mailgun job staging only; the worker remains a separate process. */
@@ -5204,6 +5216,69 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }));
   }
 
+
+  // Founder-only contact permission decision. Database-only by construction:
+  // it appends one consent event and never queues, sends or releases anything.
+  if (deps.kind === 'postgres' && p === CONTACT_PERMISSION_ROUTE && method === 'POST') {
+    const form = await readMultiValueForm(req);
+    const contactId = (form ? oneFormValue(form, 'contact_id') ?? '' : '').toLowerCase();
+    // A notice must land on the exact case file the founder came from, so an
+    // unusable contact id goes back to the contact list rather than guessing.
+    if (!CRM_OBJECT_ID.test(contactId)) {
+      return redirect(res, CRM_PORTAL_ROUTES.contacts, undefined, 303);
+    }
+    const permissionNotice = (code: ContactPermissionNoticeCode): void => redirect(
+      res,
+      `${contactCaseFileRoute(contactId)}?notice=${encodeURIComponent(
+        contactPermissionNoticeToken(deps.sessionSecret, sessionToken, code),
+      )}`,
+      undefined,
+      303,
+    );
+    const commandKey = form ? oneFormValue(form, 'command_key') : null;
+    if (!form || !campaignFormKeysAllowed(form, new Set(CONTACT_PERMISSION_FORM_KEYS))
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '')
+        || oneFormValue(form, 'confirm_permission') !== CONTACT_PERMISSION_CONFIRM_VALUE
+        || !commandKey || !CRM_OBJECT_ID.test(commandKey)) {
+      return permissionNotice('permission_invalid');
+    }
+    if (!deps.contactPermission) return permissionNotice('permission_unavailable');
+    const field = (name: string): string => oneFormValue(form, name) ?? '';
+    const optional = (name: string): string | null => {
+      const value = oneFormValue(form, name);
+      return value === null || value.trim() === '' ? null : value.trim();
+    };
+    const outcome = await deps.contactPermission.recordDecision(
+      crmIdentity(sessionToken, deps),
+      {
+        commandKey,
+        contactId,
+        contactPointId: field('contact_point_id').toLowerCase(),
+        channel: field('channel'),
+        purpose: field('purpose'),
+        decision: field('decision'),
+        lawfulBasis: optional('lawful_basis'),
+        evidenceSource: field('evidence_source'),
+        policyVersion: optional('policy_version'),
+        policyTextSha256: optional('policy_text_sha256'),
+        sourceEventId: optional('source_event_id'),
+        occurredAt: field('occurred_at'),
+        operatorConfirmed: true,
+      },
+    );
+    if (outcome.ok) {
+      return permissionNotice(
+        outcome.disposition === 'replayed' ? 'permission_replayed' : 'permission_recorded',
+      );
+    }
+    return permissionNotice(
+      outcome.kind === 'conflict' ? 'permission_conflict'
+        : outcome.kind === 'forbidden' || outcome.kind === 'unauthenticated'
+          ? 'permission_forbidden'
+          : outcome.kind === 'validation' ? 'permission_invalid' : 'permission_unavailable',
+    );
+  }
+
   const lead360Match = /^\/portal\/crm\/contacts\/([^/]+)$/.exec(p);
   if (deps.crm && lead360Match && method === 'GET') {
     const contactId = lead360Match[1]!;
@@ -5234,7 +5309,18 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         active: 'crm', backHref: CRM_PORTAL_ROUTES.contacts, backLabel: 'Return to contacts',
       }));
       const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
-      const body = `<nav aria-label="Lead 360 breadcrumb" style="margin-bottom:14px"><a class="button secondary compact" href="${CRM_PORTAL_ROUTES.contacts}">← All contacts</a></nav>${renderLead360Body(caseFile)}`;
+      const body = `<nav aria-label="Lead 360 breadcrumb" style="margin-bottom:14px"><a class="button secondary compact" href="${CRM_PORTAL_ROUTES.contacts}">← All contacts</a></nav>${renderLead360Body(caseFile, {
+        // The legacy JSON portal has no permission boundary, so the panel
+        // renders its honest "not composed" state there rather than a form
+        // that could not record anything.
+        permissionCommandAvailable: deps.kind === 'postgres'
+          && Boolean(deps.contactPermission),
+        permissionCommandKey: randomUUID(),
+        csrfToken,
+        notice: contactPermissionNoticeFromQuery(
+          url.searchParams, deps.sessionSecret, sessionToken,
+        ),
+      })}`;
       return sendHtml(res, 200, crmPage(shell, body, deps, csrfToken));
     } catch {
       return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
