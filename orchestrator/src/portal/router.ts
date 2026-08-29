@@ -268,11 +268,6 @@ import {
   liveChannelsNoticeFromQuery,
   liveChannelsNoticeToken,
 } from './live-channels-actions.js';
-import { createPropertyPredatorLiveChannelsFixture } from './live-channels-fixtures.js';
-import type {
-  LiveChannelsPauseScope,
-  PortalLiveChannelsService,
-} from './live-channels-service.js';
 import { createPropertyPredatorSocialAccountControlFixture } from './social-account-control-fixtures.js';
 import {
   SOCIAL_ACCOUNT_CONTROL_ROUTE,
@@ -383,8 +378,6 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   affiliateCompliance?: PortalAffiliateComplianceService;
   /** Dark-only provider readiness metadata. It exposes no credential, switch or provider operation. */
   providerReadiness?: PortalProviderReadinessService;
-  /** Read-only live channel evidence plus an optional fail-safe pause command. Absent means the clearly-labelled fixture renders. */
-  liveChannels?: PortalLiveChannelsService;
   /** Durable TEST-only campaign planning and safe social calendar projection. */
   publicSocial?: PortalPublicSocialService;
   /** One real company-content generation effect; output is source-review-only and never outbound. */
@@ -2394,27 +2387,37 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         active: 'overview',
       }));
     }
+    // Production fails closed: without the composed truth seam there is no
+    // page. The illustrative fixture renders only in the labelled local
+    // preview harness, never from this route.
+    if (!deps.liveChannelTruth) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Live Channels not connected',
+        message: 'The shared live-channel truth seam is not composed for this workspace, so no channel state can be shown. Nothing was changed.',
+        active: 'overview',
+      }));
+    }
     try {
-      let snapshot;
-      if (deps.liveChannels) {
-        const outcome = await deps.liveChannels.snapshot(crmIdentity(sessionToken, deps));
-        if (!outcome.ok) {
-          const status = outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden'
-            ? 403
-            : outcome.kind === 'not_found'
-              ? 404
-              : 503;
-          return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
-            title: status === 503 ? 'Live Channels temporarily unavailable' : 'Live Channels not available',
-            message: outcome.message,
-            active: 'overview',
-          }));
-        }
-        snapshot = outcome.snapshot;
-      } else {
-        snapshot = createPropertyPredatorLiveChannelsFixture();
+      const identity = crmIdentity(sessionToken, deps);
+      const outcome = await deps.liveChannelTruth.snapshot(identity);
+      if (!outcome.ok) {
+        const status = outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden'
+          ? 403
+          : 503;
+        return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+          title: status === 503 ? 'Live Channels temporarily unavailable' : 'Live Channels not available',
+          message: outcome.message,
+          active: 'overview',
+        }));
       }
-      const view = presentLiveChannels(snapshot);
+      if (outcome.snapshot.dataset !== 'postgres_authoritative') {
+        throw new Error('live channel truth snapshot dataset is not authoritative');
+      }
+      const view = presentLiveChannels(outcome.snapshot);
+      const shell = deps.crm.workspaceShell
+        ? await deps.crm.workspaceShell(identity)
+        : await deps.crm.snapshot(identity);
+      const workspaceName = shell?.workspace.name ?? 'Property Predator Growth HQ';
       const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
       const notice = liveChannelsNoticeFromQuery(url.searchParams, deps.sessionSecret, sessionToken);
       const railStatusAvailable = Boolean(deps.providerReadiness)
@@ -2422,17 +2425,25 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           (rail) => rail.href === PROVIDER_READINESS_COCKPIT_ROUTE,
         ) ?? false);
       return sendHtml(res, 200, operationalPage(
-        view.workspaceName,
+        workspaceName,
         renderLiveChannelsBody(view, {
+          workspaceName,
           csrfToken,
-          pauseCommandAvailable: Boolean(deps.liveChannels?.engageEmergencyPause),
+          // No typed pause command boundary exists at the 9e26bae5 checkpoint.
+          pauseCommandAvailable: false,
           pauseCommandKeys: {
             all: randomUUID(),
-            customer_email_mailgun: randomUUID(),
-            owned_public_social: randomUUID(),
-            meta_whatsapp: randomUUID(),
+            customer_email: randomUUID(),
+            owned_social: randomUUID(),
+            whatsapp: randomUUID(),
+            social_dm: randomUUID(),
           },
           railStatusAvailable,
+          handoff: {
+            conversionInboxComposed: Boolean(deps.inbox),
+            inboxOperationsComposed: Boolean(deps.inboxOperations),
+            lead360Composed: Boolean(deps.crm.lead360),
+          },
           notice,
         }),
         deps,
@@ -2468,9 +2479,10 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     const scope = form ? oneFormValue(form, 'scope') : null;
     const commandKey = form ? oneFormValue(form, 'command_key') : null;
     const scopeAllowed = scope === 'all'
-      || scope === 'customer_email_mailgun'
-      || scope === 'owned_public_social'
-      || scope === 'meta_whatsapp';
+      || scope === 'customer_email'
+      || scope === 'owned_social'
+      || scope === 'whatsapp'
+      || scope === 'social_dm';
     if (!form || !campaignFormKeysAllowed(form, allowed)
         || !verifyPortalCsrf(deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '')
         || oneFormValue(form, 'confirm_pause') !== 'ENGAGE'
@@ -2478,22 +2490,11 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         || !commandKey || !CRM_OBJECT_ID.test(commandKey)) {
       return liveChannelsNoticeRedirect('invalid');
     }
-    const engage = deps.liveChannels?.engageEmergencyPause?.bind(deps.liveChannels);
-    if (!engage) return liveChannelsNoticeRedirect('unavailable');
-    try {
-      const outcome = await engage(crmIdentity(sessionToken, deps), {
-        scope: scope as LiveChannelsPauseScope,
-        commandKey,
-      });
-      if (!outcome.ok) {
-        return liveChannelsNoticeRedirect(
-          outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden' ? 'forbidden' : 'unavailable',
-        );
-      }
-      return liveChannelsNoticeRedirect(outcome.state === 'engaged' ? 'pause_engaged' : 'pause_already');
-    } catch {
-      return liveChannelsNoticeRedirect('unavailable');
-    }
+    // No typed emergency-pause backend boundary exists at the 9e26bae5
+    // checkpoint, and this portal will not invent one. A well-formed,
+    // CSRF-proven command therefore lands on the honest unavailable notice
+    // until Codex composes the boundary.
+    return liveChannelsNoticeRedirect('unavailable');
   }
 
   // ── exact company-content review: manager-only, read-only and source verified ──

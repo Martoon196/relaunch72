@@ -143,7 +143,7 @@ import {
   liveChannelsNoticeFromQuery,
   liveChannelsNoticeToken,
 } from '../src/portal/live-channels-actions.js';
-import type { PortalLiveChannelsSnapshot } from '../src/portal/live-channels-service.js';
+import type { LiveChannelsSourceSnapshot } from '../src/portal/live-channels-presenter.js';
 import { createPropertyPredatorProviderReadinessFixture } from '../src/portal/provider-readiness-cockpit-fixtures.js';
 import { renderProviderReadinessCockpitBody } from '../src/portal/provider-readiness-cockpit-view.js';
 import { createPropertyPredatorSocialAccountControlFixture } from '../src/portal/social-account-control-fixtures.js';
@@ -486,35 +486,43 @@ const PREVIEW_LIVE_CHANNELS_NOTICE_SECRET = 'preview-live-channels-notice-secret
 const PREVIEW_LIVE_CHANNELS_NOTICE_SESSION = 'preview-live-channels-session';
 
 /**
- * Process-local emergency-pause rehearsal. Only rails that stay blocked or
- * dark while unpaused may start released, so the illustrative snapshot can
- * never depict a deliverable channel. Engaging a pause mutates this set only;
- * no environment switch, database or provider exists behind it.
+ * Process-local, engage-only emergency-pause rehearsal. Engaging a pause
+ * appends the EMERGENCY_PAUSED blocker code to the fictional rail and can
+ * never be released from here; the mutated rails stay non-deliverable, so
+ * the illustrative snapshot can never depict a live channel. No environment
+ * switch, database or provider exists behind it.
  */
-const previewLivePauseReleased = new Set<string>(['owned_public_social']);
+const PREVIEW_LIVE_COMPOSED_RAILS = Object.freeze(['customer_email', 'owned_social', 'whatsapp'] as const);
+const previewLivePauseEngaged = new Set<string>(['customer_email']);
 
-function previewLiveChannelsSnapshot(): PortalLiveChannelsSnapshot {
+function previewLiveChannelsSnapshot(): LiveChannelsSourceSnapshot {
   const data = structuredClone(createPropertyPredatorLiveChannelsFixture()) as any;
-  for (const channel of data.channels) {
-    if (previewLivePauseReleased.has(channel.channel)) {
-      channel.switches.emergencyPaused = false;
+  for (const rail of data.rails) {
+    if (previewLivePauseEngaged.has(rail.rail)
+        && !rail.blockerCodes.includes('EMERGENCY_PAUSED')) {
+      rail.blockerCodes = [...rail.blockerCodes, 'EMERGENCY_PAUSED'];
     }
   }
-  return data as PortalLiveChannelsSnapshot;
+  return data as LiveChannelsSourceSnapshot;
 }
 
 function applyPreviewLivePause(form: URLSearchParams | null): 'pause_engaged' | 'pause_already' | 'invalid' {
   const scope = form?.get('scope') ?? '';
   const scopeAllowed = scope === 'all'
-    || scope === 'customer_email_mailgun'
-    || scope === 'owned_public_social'
-    || scope === 'meta_whatsapp';
+    || scope === 'customer_email'
+    || scope === 'owned_social'
+    || scope === 'whatsapp'
+    || scope === 'social_dm';
   if (!form || form.get('_csrf') !== PREVIEW_CSRF
       || form.get('confirm_pause') !== 'ENGAGE' || !scopeAllowed) {
     return 'invalid';
   }
-  const targets = scope === 'all' ? [...previewLivePauseReleased] : [scope];
-  const engaged = targets.filter((target) => previewLivePauseReleased.delete(target));
+  const targets = scope === 'all' ? [...PREVIEW_LIVE_COMPOSED_RAILS] : [scope];
+  const engaged = targets.filter((target) => {
+    if (previewLivePauseEngaged.has(target)) return false;
+    previewLivePauseEngaged.add(target);
+    return true;
+  });
   return engaged.length > 0 ? 'pause_engaged' : 'pause_already';
 }
 const PREVIEW_CALENDAR_RESCHEDULE_ROUTE = '/portal/content/calendar/test-planning-targets/reschedule';
@@ -2030,15 +2038,22 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
     html: shell(`${previewOperationsNav('live')}${renderLiveChannelsBody(
       presentLiveChannels(previewLiveChannelsSnapshot()),
       {
+        workspaceName: snapshot.workspace.name,
         csrfToken: PREVIEW_CSRF,
         pauseCommandAvailable: true,
         pauseCommandKeys: {
           all: randomUUID(),
-          customer_email_mailgun: randomUUID(),
-          owned_public_social: randomUUID(),
-          meta_whatsapp: randomUUID(),
+          customer_email: randomUUID(),
+          owned_social: randomUUID(),
+          whatsapp: randomUUID(),
+          social_dm: randomUUID(),
         },
         railStatusAvailable: true,
+        handoff: {
+          conversionInboxComposed: true,
+          inboxOperationsComposed: true,
+          lead360Composed: true,
+        },
         notice: liveChannelsNoticeFromQuery(
           url.searchParams,
           PREVIEW_LIVE_CHANNELS_NOTICE_SECRET,

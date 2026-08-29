@@ -1,11 +1,14 @@
 /**
  * Presenter for the Property Predator Live Channels control room.
  *
- * Fail-closed: every fact rendered by the view must be proven by the
- * snapshot or derived here from proven switch state. The presenter throws
- * on any inconsistency instead of displaying an unproven claim, and it
- * derives channel posture itself — a service can never simply assert that
- * a channel is live.
+ * Evidence mode consumes the shared `PortalLiveChannelTruthService` rail
+ * snapshot verbatim — there is deliberately no second readiness model and
+ * no provider SQL here. The presenter fail-closes: it revalidates every
+ * rail against the seam's own invariants, derives founder-facing posture
+ * itself, and throws on any inconsistency instead of displaying an
+ * unproven claim. Facts the sanitised seam does not carry (queue depth,
+ * approval counts, account identities) render as explicitly unavailable,
+ * never as zero or ready.
  */
 
 import {
@@ -19,22 +22,35 @@ import { CONVERSION_INBOX_ROUTE } from './conversion-inbox-presenter.js';
 import { CONTENT_CALENDAR_ROUTE } from './content-calendar-presenter.js';
 import { PUBLIC_SOCIAL_CAMPAIGNS_ROUTE } from './public-social-campaigns-presenter.js';
 import { PROVIDER_READINESS_COCKPIT_ROUTE } from './provider-readiness-cockpit-presenter.js';
-import type {
-  LiveChannelId,
-  LiveChannelMode,
-  LiveChannelProviderId,
-  PortalLiveChannelSnapshot,
-  PortalLiveChannelsSnapshot,
-} from './live-channels-service.js';
+import {
+  PORTAL_LIVE_CHANNEL_BLOCKER_CODES,
+  PORTAL_LIVE_CHANNEL_TRUTH_RAILS,
+  type PortalLiveChannelBlockerCode,
+  type PortalLiveChannelConnectionState,
+  type PortalLiveChannelInboundState,
+  type PortalLiveChannelOutboundOrReplyState,
+  type PortalLiveChannelReceiptOutcome,
+  type PortalLiveChannelReceiptState,
+  type PortalLiveChannelTruthRail,
+  type PortalLiveChannelTruthRailSnapshot,
+} from './live-channel-truth-service.js';
 
 export const LIVE_CHANNELS_ROUTE = '/portal/channels/live' as const;
 export const LIVE_CHANNELS_PAUSE_ROUTE = '/portal/channels/live/emergency-pause' as const;
 
-export const LIVE_CHANNEL_IDS: readonly LiveChannelId[] = Object.freeze([
-  'customer_email_mailgun',
-  'owned_public_social',
-  'meta_whatsapp',
-]);
+export type LiveChannelsPauseScope = PortalLiveChannelTruthRail | 'all';
+
+/**
+ * Presenter input. Evidence renders pass the truth snapshot through with
+ * its own `postgres_authoritative` dataset; only the labelled local
+ * preview may substitute `illustrative_fixture`.
+ */
+export interface LiveChannelsSourceSnapshot {
+  readonly workspaceId: string;
+  readonly snapshotAt: string;
+  readonly dataset: 'postgres_authoritative' | 'illustrative_fixture';
+  readonly rails: readonly PortalLiveChannelTruthRailSnapshot[];
+}
 
 export type LiveChannelPosture = 'ready' | 'degraded' | 'paused' | 'blocked' | 'not_connected';
 export type LiveChannelToneClass = 'ready' | 'working' | 'paused' | 'blocked' | 'muted';
@@ -53,62 +69,50 @@ export interface LiveChannelLinkView {
   readonly label: string;
 }
 
-export interface LiveChannelReceiptView {
-  readonly eventKind: string;
-  readonly eventLabel: string;
-  readonly safeCode: string;
-  readonly occurredAt: string;
+export interface LiveChannelStateChipView {
+  readonly label: string;
+  readonly value: string;
   readonly tone: LiveChannelToneClass;
 }
 
-export interface LiveChannelTimelineView extends LiveChannelReceiptView {
-  readonly channel: LiveChannelId;
-  readonly channelLabel: string;
+export interface LiveChannelReceiptView {
+  readonly outcome: PortalLiveChannelReceiptOutcome;
+  readonly outcomeLabel: string;
+  readonly receiptId: string;
+  readonly evidenceShaShort: string;
+  readonly recordedAt: string;
+  readonly tone: LiveChannelToneClass;
+}
+
+export interface LiveChannelRailReceiptView extends LiveChannelReceiptView {
+  readonly rail: PortalLiveChannelTruthRail;
+  readonly railLabel: string;
 }
 
 export interface LiveChannelBlockerView {
   readonly code: string;
   readonly message: string;
-  /** True when the presenter derived this from proven switch state. */
+  /** True when the presenter derived this from proven state rather than a seam code. */
   readonly derived: boolean;
 }
 
 export interface LiveChannelCardView {
-  readonly channel: LiveChannelId;
+  readonly rail: PortalLiveChannelTruthRail;
   readonly anchorId: string;
   readonly eyebrow: string;
   readonly label: string;
   readonly providerLabel: string;
-  readonly accountLabel: string;
-  readonly connectionLabel: string;
-  readonly connectionStatusLabel: string;
-  readonly contract: string;
+  readonly contractLabel: string;
   readonly posture: LiveChannelPosture;
   readonly postureLabel: string;
   readonly postureTone: LiveChannelToneClass;
-  readonly modeLabel: string;
-  readonly effectsLabel: string;
-  readonly deliveryLabel: string | null;
   readonly pauseEngaged: boolean;
-  readonly pauseLabel: 'ENGAGED' | 'RELEASED';
-  readonly workerLabel: string;
-  readonly dispatch: Readonly<{
-    queued: number;
-    inFlight: number;
-    awaitingProof: number;
-    needsAttention: number;
-    succeededToday: number;
-    failedToday: number;
-    observedLabel: string;
-  }>;
+  readonly capReached: boolean;
+  readonly stateChips: readonly LiveChannelStateChipView[];
   readonly gauges: readonly LiveChannelGaugeView[];
-  readonly perJobLabel: string;
+  readonly perJobLabel: string | null;
   readonly approvalRequirement: string;
-  readonly approvalsPending: number;
-  readonly approvalsOldestAt: string | null;
-  readonly permissionStateLabel: string;
-  readonly permissionTone: LiveChannelToneClass;
-  readonly permissionDetail: string;
+  readonly approvalRequired: boolean;
   readonly targetScope: string;
   readonly latestReceipt: LiveChannelReceiptView | null;
   readonly whyBlocked: readonly LiveChannelBlockerView[];
@@ -131,9 +135,8 @@ export interface LiveChannelsNoticeView {
 
 export interface LiveChannelsView {
   readonly workspaceId: string;
-  readonly workspaceName: string;
   readonly snapshotAt: string;
-  readonly dataset: PortalLiveChannelsSnapshot['dataset'];
+  readonly dataset: LiveChannelsSourceSnapshot['dataset'];
   readonly illustrative: boolean;
   readonly channels: readonly LiveChannelCardView[];
   readonly readyCount: number;
@@ -143,57 +146,39 @@ export interface LiveChannelsView {
   readonly notConnectedCount: number;
   readonly launchReadinessLabel: string;
   readonly launchReadinessTone: LiveChannelToneClass;
-  readonly allPaused: boolean;
-  readonly totalQueued: number;
-  readonly totalNeedsAttention: number;
-  readonly totalApprovalsPending: number;
+  /** True when every composed rail carries an engaged emergency pause. */
+  readonly allComposedPaused: boolean;
   readonly totalUsedToday: number;
   readonly totalDailyCap: number;
-  readonly timeline: readonly LiveChannelTimelineView[];
-  readonly handoff: Readonly<{
-    conversionInboxComposed: boolean;
-    lead360Composed: boolean;
-    whatsappProjectionLabel: string;
-    inboundLastDayLabel: string;
-  }>;
+  readonly attentionRailCount: number;
+  readonly approvalRequiredRailLabels: readonly string[];
+  readonly latestReceipts: readonly LiveChannelRailReceiptView[];
+  readonly whatsappInboundReady: boolean;
 }
 
-interface ChannelStatic {
+interface RailStatic {
   readonly eyebrow: string;
   readonly label: string;
-  readonly providerId: LiveChannelProviderId;
-  readonly liveMode: Exclude<LiveChannelMode, 'disabled'>;
-  readonly contract: string;
+  readonly providerLabel: string;
+  readonly contractLabel: string;
   readonly dailyCap: number;
   readonly monthlyCap: number;
-  readonly maxRecipientsPerJob: number;
-  readonly maxOperationsPerCycle: number;
-  readonly hasDeliverySwitch: boolean;
-  readonly receiptKinds: ReadonlySet<string>;
-  readonly failureReceiptKinds: ReadonlySet<string>;
+  readonly perJobLabel: string | null;
   readonly approvalRequirement: string;
   readonly targetScope: string;
   readonly unitNoun: string;
   readonly links: readonly LiveChannelLinkView[];
 }
 
-const CHANNEL_STATIC: Readonly<Record<LiveChannelId, ChannelStatic>> = Object.freeze({
-  customer_email_mailgun: Object.freeze({
+const RAIL_STATIC: Readonly<Record<PortalLiveChannelTruthRail, RailStatic>> = Object.freeze({
+  customer_email: Object.freeze({
     eyebrow: 'Owned audience',
     label: 'Customer email',
-    providerId: 'mailgun_eu',
-    liveMode: 'customer_live',
-    contract: CUSTOMER_EMAIL_LIVE_CONTRACT,
+    providerLabel: 'Mailgun EU',
+    contractLabel: CUSTOMER_EMAIL_LIVE_CONTRACT,
     dailyCap: CUSTOMER_EMAIL_DAILY_HARD_CAP,
     monthlyCap: CUSTOMER_EMAIL_MONTHLY_HARD_CAP,
-    maxRecipientsPerJob: 1,
-    maxOperationsPerCycle: 1,
-    hasDeliverySwitch: true,
-    receiptKinds: new Set([
-      'dispatch_accepted', 'dispatch_failed', 'outcome_unknown', 'accepted',
-      'delivered', 'opened', 'clicked', 'failed', 'complained', 'unsubscribed',
-    ]),
-    failureReceiptKinds: new Set(['dispatch_failed', 'outcome_unknown', 'failed', 'complained', 'unsubscribed']),
+    perJobLabel: '1 recipient / job · 1 operation / cycle',
     approvalRequirement: 'Approved campaign version, approved message and granted consent — all hash-bound inside a 15-minute authority window.',
     targetScope: 'One verified, consented email recipient per job · marketing purpose only · suppression always respected.',
     unitNoun: 'sends',
@@ -202,19 +187,14 @@ const CHANNEL_STATIC: Readonly<Record<LiveChannelId, ChannelStatic>> = Object.fr
       Object.freeze({ href: `${CONVERSION_INBOX_ROUTE}?queue=approval`, label: 'Approval queue' }),
     ]),
   }),
-  owned_public_social: Object.freeze({
+  owned_social: Object.freeze({
     eyebrow: 'Audience growth',
     label: 'Owned social publishing',
-    providerId: 'ayrshare',
-    liveMode: 'owned_profile_live',
-    contract: OWNED_PUBLIC_SOCIAL_LIVE_CONTRACT,
+    providerLabel: 'Ayrshare',
+    contractLabel: OWNED_PUBLIC_SOCIAL_LIVE_CONTRACT,
     dailyCap: 1,
     monthlyCap: 3,
-    maxRecipientsPerJob: 1,
-    maxOperationsPerCycle: 1,
-    hasDeliverySwitch: false,
-    receiptKinds: new Set(['accepted', 'published', 'failed', 'outcome_unknown']),
-    failureReceiptKinds: new Set(['failed', 'outcome_unknown']),
+    perJobLabel: '1 owned profile / job · 1 operation / cycle',
     approvalRequirement: 'Approved latest content version plus a fresh source attestation, hash-bound at enqueue.',
     targetScope: 'One owned X profile · approved, link-free post text · 280 characters maximum.',
     unitNoun: 'posts',
@@ -223,28 +203,35 @@ const CHANNEL_STATIC: Readonly<Record<LiveChannelId, ChannelStatic>> = Object.fr
       Object.freeze({ href: CONTENT_CALENDAR_ROUTE, label: 'Calendar' }),
     ]),
   }),
-  meta_whatsapp: Object.freeze({
+  whatsapp: Object.freeze({
     eyebrow: 'Private messaging',
     label: 'Meta WhatsApp',
-    providerId: 'meta_whatsapp_cloud',
-    liveMode: 'owned_template_live',
-    contract: META_WHATSAPP_LIVE_CONTRACT,
+    providerLabel: 'Meta WhatsApp Cloud',
+    contractLabel: META_WHATSAPP_LIVE_CONTRACT,
     dailyCap: 1,
     monthlyCap: 3,
-    maxRecipientsPerJob: 1,
-    maxOperationsPerCycle: 1,
-    hasDeliverySwitch: false,
-    receiptKinds: new Set([
-      'accepted', 'sent', 'delivered', 'read', 'failed',
-      'deleted', 'outcome_unknown', 'inbound_received',
-    ]),
-    failureReceiptKinds: new Set(['failed', 'deleted', 'outcome_unknown']),
+    perJobLabel: '1 recipient / job · 1 approved template / job',
     approvalRequirement: 'Meta-approved zero-parameter template, granted consent and the full PECR specialist chain inside a 15-minute authority window.',
     targetScope: 'One consented WhatsApp recipient per job · approved template messages only.',
     unitNoun: 'messages',
     links: Object.freeze([
       Object.freeze({ href: `${CONVERSION_INBOX_ROUTE}?channel=whatsapp`, label: 'WhatsApp conversations' }),
       Object.freeze({ href: `${CONVERSION_INBOX_ROUTE}?queue=approval`, label: 'Approval queue' }),
+    ]),
+  }),
+  social_dm: Object.freeze({
+    eyebrow: 'Conversation rail',
+    label: 'Social DMs',
+    providerLabel: 'No live adapter registered',
+    contractLabel: 'No live contract · adapter not composed',
+    dailyCap: 0,
+    monthlyCap: 0,
+    perJobLabel: null,
+    approvalRequirement: 'A live social-DM adapter, its contract and its approval chain must be composed before any requirement can be stated.',
+    targetScope: 'No target is permitted: the rail is present in the Conversion Inbox but has no live delivery adapter.',
+    unitNoun: 'messages',
+    links: Object.freeze([
+      Object.freeze({ href: CONVERSION_INBOX_ROUTE, label: 'Conversion Inbox' }),
     ]),
   }),
 });
@@ -265,178 +252,239 @@ const POSTURE_TONES: Readonly<Record<LiveChannelPosture, LiveChannelToneClass>> 
   not_connected: 'muted',
 });
 
-const RECEIPT_LABELS: Readonly<Record<string, string>> = Object.freeze({
-  dispatch_accepted: 'Dispatch accepted',
-  dispatch_failed: 'Dispatch failed',
-  outcome_unknown: 'Outcome unknown',
-  accepted: 'Accepted by provider',
-  published: 'Published',
-  delivered: 'Delivered',
-  opened: 'Opened',
-  clicked: 'Clicked',
-  sent: 'Sent',
-  read: 'Read',
-  failed: 'Failed',
-  deleted: 'Deleted by recipient',
-  complained: 'Complaint received',
-  unsubscribed: 'Unsubscribed',
-  inbound_received: 'Inbound received',
+/** Presenter-owned plain English for the seam's stable machine codes. */
+const BLOCKER_COPY: Readonly<Record<PortalLiveChannelBlockerCode, string>> = Object.freeze({
+  PROVIDER_NOT_CONFIGURED: 'No active live provider connection is configured for this rail.',
+  LIVE_ADAPTER_NOT_COMPOSED: 'No live delivery adapter is composed; the rail is present but cannot dispatch.',
+  EFFECTS_DISABLED: 'The provider-effects switch is OFF, so no external call can be made.',
+  INGRESS_NOT_READY: 'The inbound webhook ingress for this rail is not proven ready.',
+  CONSENT_REQUIRED: 'No granted consent evidence currently covers the allowed target scope.',
+  CONSENT_WITHDRAWN: 'Consent for the target scope was withdrawn and must be re-established.',
+  SUPPRESSED: 'The target scope is under an active suppression and cannot be contacted.',
+  APPROVAL_REQUIRED: 'A human approval decision is required before anything can dispatch.',
+  REPLY_WINDOW_CLOSED: 'The provider reply window has closed for the open conversation.',
+  CAP_REACHED: 'A hard send cap for this window is fully used; dispatch resumes when the window resets.',
+  RECEIPT_NEEDS_ATTENTION: 'A recorded receipt needs a human decision before the rail is clean again.',
+  IDENTITY_BINDING_REQUIRED: 'The owned account or number binding evidence is missing or unproven.',
+  OPERATOR_AUTHORITY_REQUIRED: 'Current operator authority evidence is missing for this action scope.',
+  TEMPLATE_REQUIRED: 'No provider-approved template is recorded for this rail.',
+  EMERGENCY_PAUSED: 'The emergency pause is engaged; no provider call can begin on this rail.',
+  OUTCOME_UNKNOWN_QUARANTINED: 'An ambiguous provider outcome is quarantined pending signed-receipt reconciliation.',
 });
 
-const BLOCKER_CODE = /^[A-Z][A-Z0-9_]{2,79}$/;
-const SAFE_CODE = /^[a-z][a-z0-9_.:-]{0,99}$/;
-const SECRET_SHAPED = /(api[_-]?key|secret|token|bearer|password|credential)/i;
-const LONG_OPAQUE_RUN = /[A-Za-z0-9+/=_-]{24,}/;
-/** A safe code is words joined by separators; an unbroken 24+ alnum run is key-shaped. */
-const OPAQUE_SAFE_CODE_RUN = /[a-z0-9]{24,}/;
-const MAX_TIMELINE = 20;
+/** Codes that keep a rail operating but demand attention; everything else hard-blocks. */
+const SOFT_BLOCKER_CODES: ReadonlySet<PortalLiveChannelBlockerCode> = new Set([
+  'EMERGENCY_PAUSED',
+  'APPROVAL_REQUIRED',
+  'CAP_REACHED',
+  'RECEIPT_NEEDS_ATTENTION',
+  'OUTCOME_UNKNOWN_QUARANTINED',
+]);
 
-function boundedText(value: unknown, fallback: string, max = 160): string {
-  if (typeof value !== 'string') return fallback;
+const CONNECTION_STATES = new Set<PortalLiveChannelConnectionState>([
+  'not_configured', 'configured', 'ready', 'degraded', 'revoked', 'not_composed',
+]);
+const INBOUND_STATES = new Set<PortalLiveChannelInboundState>([
+  'not_supported', 'not_ready', 'ready', 'degraded',
+]);
+const OUTBOUND_STATES = new Set<PortalLiveChannelOutboundOrReplyState>([
+  'not_supported', 'effects_disabled', 'blocked', 'approval_required', 'ready', 'cap_reached',
+]);
+const RECEIPT_STATES = new Set<PortalLiveChannelReceiptState>([
+  'none', 'pending', 'healthy', 'needs_attention', 'outcome_unknown',
+]);
+const RECEIPT_OUTCOMES = new Set<PortalLiveChannelReceiptOutcome>([
+  'accepted', 'succeeded', 'failed', 'inbound_verified', 'outcome_unknown',
+]);
+const BLOCKER_CODE_SET = new Set<string>(PORTAL_LIVE_CHANNEL_BLOCKER_CODES);
+
+const CONNECTION_LABELS: Readonly<Record<PortalLiveChannelConnectionState, string>> = Object.freeze({
+  not_configured: 'Not configured',
+  configured: 'Configured',
+  ready: 'Ready',
+  degraded: 'Degraded',
+  revoked: 'Revoked',
+  not_composed: 'Not composed',
+});
+const INBOUND_LABELS: Readonly<Record<PortalLiveChannelInboundState, string>> = Object.freeze({
+  not_supported: 'Not supported',
+  not_ready: 'Not ready',
+  ready: 'Ready',
+  degraded: 'Degraded',
+});
+const OUTBOUND_LABELS: Readonly<Record<PortalLiveChannelOutboundOrReplyState, string>> = Object.freeze({
+  not_supported: 'Not supported',
+  effects_disabled: 'Effects off',
+  blocked: 'Blocked',
+  approval_required: 'Approval required',
+  ready: 'Ready',
+  cap_reached: 'At cap',
+});
+const RECEIPT_STATE_LABELS: Readonly<Record<PortalLiveChannelReceiptState, string>> = Object.freeze({
+  none: 'None yet',
+  pending: 'Pending',
+  healthy: 'Healthy',
+  needs_attention: 'Needs attention',
+  outcome_unknown: 'Outcome unknown',
+});
+const RECEIPT_OUTCOME_LABELS: Readonly<Record<PortalLiveChannelReceiptOutcome, string>> = Object.freeze({
+  accepted: 'Accepted by provider',
+  succeeded: 'Succeeded',
+  failed: 'Failed',
+  inbound_verified: 'Inbound verified',
+  outcome_unknown: 'Outcome unknown',
+});
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+const MAX_CAP_VALUE = 1_000_000;
+
+function boundedText(value: unknown, max = 64): string {
+  if (typeof value !== 'string') return '';
   const clean = value.trim();
-  return clean ? [...clean].slice(0, max).join('') : fallback;
+  return clean ? [...clean].slice(0, max).join('') : '';
 }
 
-function safeLabel(value: unknown, label: string, max = 120): string {
-  const text = boundedText(value, '', max);
-  if (!text) throw new Error(`${label} is missing`);
-  if (SECRET_SHAPED.test(text) || LONG_OPAQUE_RUN.test(text)) {
-    throw new Error(`${label} looks secret-shaped and cannot be displayed`);
-  }
-  return text;
+function requiredInstant(value: unknown, label: string): string {
+  if (typeof value !== 'string') throw new Error(`${label} is invalid`);
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) throw new Error(`${label} is invalid`);
+  return new Date(parsed).toISOString();
 }
 
-function safeCount(value: unknown, label: string): number {
+function safeCap(value: unknown, label: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value)
-      || value < 0 || value > 1_000_000) {
+      || value < 0 || value > MAX_CAP_VALUE) {
     throw new Error(`${label} must be a bounded non-negative safe integer`);
   }
   return value;
 }
 
-function instant(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
-}
-
-function requiredInstant(value: unknown, label: string): string {
-  const parsed = instant(value);
-  if (!parsed) throw new Error(`${label} is invalid`);
-  return parsed;
-}
-
-function presentReceipt(
-  source: PortalLiveChannelSnapshot['latestReceipt'],
-  statics: ChannelStatic,
-  asOfMs: number,
-): LiveChannelReceiptView | null {
-  if (source === null) return null;
-  if (!source || typeof source !== 'object') throw new Error('live channel receipt is invalid');
-  if (typeof source.eventKind !== 'string' || !statics.receiptKinds.has(source.eventKind)) {
-    throw new Error(`live channel receipt kind is outside the ${statics.label} contract`);
-  }
-  if (typeof source.safeCode !== 'string' || !SAFE_CODE.test(source.safeCode)
-      || OPAQUE_SAFE_CODE_RUN.test(source.safeCode)) {
-    throw new Error('live channel receipt safe code is invalid or secret-shaped');
-  }
-  const occurredAt = requiredInstant(source.occurredAt, 'receipt occurredAt');
-  const recordedAt = requiredInstant(source.recordedAt, 'receipt recordedAt');
-  if (Date.parse(occurredAt) > asOfMs || Date.parse(recordedAt) > asOfMs) {
-    throw new Error('live channel receipt is newer than its snapshot');
-  }
+function gauge(label: string, used: number, cap: number, unitNoun: string): LiveChannelGaugeView {
+  const percent = cap === 0 ? 0 : Math.round((used / cap) * 100);
   return Object.freeze({
-    eventKind: source.eventKind,
-    eventLabel: RECEIPT_LABELS[source.eventKind] ?? source.eventKind,
-    safeCode: source.safeCode,
-    occurredAt,
-    tone: statics.failureReceiptKinds.has(source.eventKind)
-      ? 'blocked'
-      : source.eventKind === 'accepted' || source.eventKind === 'dispatch_accepted' || source.eventKind === 'sent'
-        ? 'working'
-        : 'ready',
+    label,
+    used,
+    cap,
+    percent,
+    summary: cap === 0
+      ? 'No cap window exists until the adapter is composed'
+      : `${used.toLocaleString('en-GB')} of ${cap.toLocaleString('en-GB')} ${unitNoun} used`,
+    attention: cap > 0 && percent >= 80,
   });
 }
 
-function derivedBlockers(
-  source: PortalLiveChannelSnapshot,
-  statics: ChannelStatic,
-): LiveChannelBlockerView[] {
-  const gaps: LiveChannelBlockerView[] = [];
-  if (source.identity.connectionStatus !== 'active') {
-    gaps.push({
-      code: 'CONNECTION_NOT_ACTIVE',
-      message: source.identity.connectionStatus === 'revoked'
-        ? 'The live provider connection was revoked. A new connection must be recorded before anything can dispatch.'
-        : 'No active live provider connection is recorded for this channel.',
-      derived: true,
-    });
+function toneForConnection(state: PortalLiveChannelConnectionState): LiveChannelToneClass {
+  if (state === 'ready') return 'ready';
+  if (state === 'degraded' || state === 'configured') return 'working';
+  if (state === 'revoked') return 'blocked';
+  return 'muted';
+}
+
+function toneForInbound(state: PortalLiveChannelInboundState): LiveChannelToneClass {
+  if (state === 'ready') return 'ready';
+  if (state === 'degraded') return 'working';
+  return 'muted';
+}
+
+function toneForOutbound(state: PortalLiveChannelOutboundOrReplyState): LiveChannelToneClass {
+  if (state === 'ready') return 'ready';
+  if (state === 'approval_required' || state === 'cap_reached') return 'working';
+  if (state === 'blocked' || state === 'effects_disabled') return 'blocked';
+  return 'muted';
+}
+
+function toneForReceiptState(state: PortalLiveChannelReceiptState): LiveChannelToneClass {
+  if (state === 'healthy') return 'ready';
+  if (state === 'pending') return 'working';
+  if (state === 'needs_attention' || state === 'outcome_unknown') return 'blocked';
+  return 'muted';
+}
+
+function toneForOutcome(outcome: PortalLiveChannelReceiptOutcome): LiveChannelToneClass {
+  if (outcome === 'succeeded' || outcome === 'inbound_verified') return 'ready';
+  if (outcome === 'accepted') return 'working';
+  return 'blocked';
+}
+
+function presentReceipt(
+  source: PortalLiveChannelTruthRailSnapshot['latestReceipt'],
+  receiptState: PortalLiveChannelReceiptState,
+  asOfMs: number,
+): LiveChannelReceiptView | null {
+  if ((receiptState === 'none') !== (source === null)) {
+    throw new Error('live channel receipt presence contradicts its receipt state');
   }
-  if (source.switches.mode === 'disabled') {
-    gaps.push({
-      code: 'MODE_DISABLED',
-      message: 'The channel execution mode is disabled by its environment switch tuple.',
-      derived: true,
-    });
+  if (source === null) return null;
+  if (!source || typeof source !== 'object'
+      || typeof source.receiptId !== 'string' || !UUID.test(source.receiptId)
+      || typeof source.evidenceSha256 !== 'string' || !SHA256_HEX.test(source.evidenceSha256)
+      || !RECEIPT_OUTCOMES.has(source.outcome)) {
+    throw new Error('live channel receipt evidence is invalid');
   }
-  if (!source.switches.providerEffectsEnabled) {
-    gaps.push({
-      code: 'PROVIDER_EFFECTS_OFF',
-      message: 'The provider-effects switch is OFF, so no external call can be made.',
-      derived: true,
-    });
+  const recordedAt = requiredInstant(source.recordedAt, 'receipt recordedAt');
+  if (Date.parse(recordedAt) > asOfMs) {
+    throw new Error('live channel receipt is newer than its snapshot');
   }
-  if (statics.hasDeliverySwitch && source.switches.deliveryEnabled === false) {
-    gaps.push({
-      code: 'DELIVERY_SWITCH_OFF',
-      message: 'The channel delivery switch is OFF, so dispatch cannot begin.',
-      derived: true,
-    });
+  if ((receiptState === 'pending' && source.outcome !== 'accepted')
+      || (receiptState === 'healthy'
+        && source.outcome !== 'succeeded' && source.outcome !== 'inbound_verified')
+      || (receiptState === 'needs_attention' && source.outcome !== 'failed')
+      || (receiptState === 'outcome_unknown' && source.outcome !== 'outcome_unknown')) {
+    throw new Error('live channel receipt outcome contradicts its receipt state');
   }
-  if (!source.dispatch.workerComposed) {
-    gaps.push({
-      code: 'WORKER_NOT_COMPOSED',
-      message: 'No dispatch worker is composed for this channel, so queued work cannot move.',
-      derived: true,
-    });
-  }
-  if (source.permission.state === 'missing' || source.permission.state === 'revoked') {
-    gaps.push({
-      code: 'PERMISSION_NOT_GRANTED',
-      message: source.permission.state === 'revoked'
-        ? 'The channel permission or consent evidence was revoked and must be re-established.'
-        : 'No granted consent or permission evidence currently covers the allowed target scope.',
-      derived: true,
-    });
-  }
-  return gaps;
+  return Object.freeze({
+    outcome: source.outcome,
+    outcomeLabel: RECEIPT_OUTCOME_LABELS[source.outcome],
+    receiptId: source.receiptId,
+    evidenceShaShort: `${source.evidenceSha256.slice(0, 12)}…`,
+    recordedAt,
+    tone: toneForOutcome(source.outcome),
+  });
 }
 
 function derivePosture(
-  source: PortalLiveChannelSnapshot,
-  hardBlockers: readonly LiveChannelBlockerView[],
+  source: PortalLiveChannelTruthRailSnapshot,
+  hardBlocked: boolean,
 ): LiveChannelPosture {
-  const connected = source.identity.connectionStatus === 'active'
-    && source.dispatch.workerComposed
-    && source.switches.mode !== 'disabled';
-  if (!connected) return 'not_connected';
-  if (hardBlockers.length > 0) return 'blocked';
-  if (source.switches.emergencyPaused) return 'paused';
-  if (source.dispatch.needsAttentionCount > 0
-      || source.dispatch.failedTodayCount > 0
-      || source.permission.state === 'partial') return 'degraded';
+  if (source.connectionState === 'not_composed' || source.connectionState === 'not_configured') {
+    return 'not_connected';
+  }
+  if (hardBlocked || source.connectionState === 'revoked'
+      || source.outboundOrReplyState === 'blocked'
+      || source.outboundOrReplyState === 'effects_disabled') {
+    // A paused rail with no other hard signal reads as paused, not blocked.
+    if (!hardBlocked
+        && source.connectionState !== 'revoked'
+        && source.outboundOrReplyState === 'blocked'
+        && source.blockerCodes.includes('EMERGENCY_PAUSED')) {
+      return 'paused';
+    }
+    return 'blocked';
+  }
+  if (source.blockerCodes.includes('EMERGENCY_PAUSED')) return 'paused';
+  if (source.connectionState === 'degraded'
+      || source.inboundState === 'degraded'
+      || source.receiptState === 'needs_attention'
+      || source.receiptState === 'outcome_unknown') {
+    return 'degraded';
+  }
+  if (source.connectionState !== 'ready') {
+    // 'configured' with no blocker and no degradation is still not proven ready.
+    return 'blocked';
+  }
   return 'ready';
 }
 
 function nextActionFor(
   posture: LiveChannelPosture,
-  statics: ChannelStatic,
+  statics: RailStatic,
   blockers: readonly LiveChannelBlockerView[],
 ): LiveChannelCardView['nextAction'] {
   if (posture === 'not_connected') {
     return Object.freeze({
       label: 'Compose the rail',
-      detail: 'Connection, worker and mode evidence must land before this channel can be assessed. Track progress on Rail status.',
+      detail: 'Connection, adapter and mode evidence must land before this rail can be assessed. Track progress on Rail status.',
       link: Object.freeze({ href: PROVIDER_READINESS_COCKPIT_ROUTE, label: 'Open Rail status' }),
     });
   }
@@ -460,7 +508,7 @@ function nextActionFor(
   if (posture === 'degraded') {
     return Object.freeze({
       label: 'Review attention items',
-      detail: `Needs-attention or failed ${statics.unitNoun} require a human decision before the rail is clean again.`,
+      detail: `A recorded receipt or rail signal needs a human decision before the ${statics.unitNoun} rail is clean again.`,
       link: Object.freeze({ href: PROVIDER_READINESS_COCKPIT_ROUTE, label: 'Open Rail status' }),
     });
   }
@@ -471,269 +519,165 @@ function nextActionFor(
   });
 }
 
-function gauge(
-  label: string,
-  used: number,
-  cap: number,
-  unitNoun: string,
-): LiveChannelGaugeView {
-  if (cap < 1 || cap > 1_000_000) throw new Error('live channel cap is out of bounds');
-  if (used > cap) throw new Error(`live channel usage exceeds its hard cap for ${label}`);
-  const percent = Math.round((used / cap) * 100);
-  return Object.freeze({
-    label,
-    used,
-    cap,
-    percent,
-    summary: `${used.toLocaleString('en-GB')} of ${cap.toLocaleString('en-GB')} ${unitNoun} used`,
-    attention: percent >= 80,
-  });
-}
-
-function readableObserved(observedAt: string | null, workerComposed: boolean): string {
-  if (!workerComposed) return 'No worker composed';
-  if (!observedAt) throw new Error('a composed worker must carry an observation instant');
-  return `Observed ${observedAt}`;
-}
-
-function requiredBoolean(value: unknown, label: string): boolean {
-  if (typeof value !== 'boolean') {
-    throw new Error(`${label} must be a proven boolean, never a truthy stand-in`);
-  }
-  return value;
-}
-
-function presentChannel(
-  source: PortalLiveChannelSnapshot,
+function presentRail(
+  source: PortalLiveChannelTruthRailSnapshot,
   illustrative: boolean,
   asOfMs: number,
 ): LiveChannelCardView {
-  const statics = CHANNEL_STATIC[source.channel];
-  if (!statics) throw new Error('live channel id is outside the controlled set');
-  requiredBoolean(source.switches.providerEffectsEnabled, 'provider effects switch');
-  requiredBoolean(source.switches.emergencyPaused, 'emergency pause switch');
-  requiredBoolean(source.dispatch.workerComposed, 'worker composition');
-  if (source.switches.deliveryEnabled !== null) {
-    requiredBoolean(source.switches.deliveryEnabled, 'delivery switch');
+  const statics = RAIL_STATIC[source.rail];
+  if (!statics) throw new Error('live channel rail is outside the controlled set');
+  if (!CONNECTION_STATES.has(source.connectionState)
+      || !INBOUND_STATES.has(source.inboundState)
+      || !OUTBOUND_STATES.has(source.outboundOrReplyState)
+      || !RECEIPT_STATES.has(source.receiptState)) {
+    throw new Error(`live channel ${source.rail} state is outside the truth contract`);
   }
-  if (source.identity.providerId !== statics.providerId) {
-    throw new Error(`live channel ${source.channel} claims a foreign provider`);
-  }
-  if (source.identity.environment !== 'live') {
-    throw new Error('live channel identity must be scoped to the live environment');
-  }
-  if (source.identity.contract !== statics.contract) {
-    throw new Error(`live channel ${source.channel} evidence is not bound to its foundation contract`);
-  }
-  if (!['active', 'missing', 'revoked'].includes(source.identity.connectionStatus)) {
-    throw new Error('live channel connection status is invalid');
-  }
-  if (source.switches.mode !== 'disabled' && source.switches.mode !== statics.liveMode) {
-    throw new Error(`live channel ${source.channel} claims a foreign execution mode`);
-  }
-  if (statics.hasDeliverySwitch === (source.switches.deliveryEnabled === null)) {
-    throw new Error(`live channel ${source.channel} delivery switch shape is invalid`);
-  }
-  if (source.caps.dailyCap !== statics.dailyCap
-      || source.caps.monthlyCap !== statics.monthlyCap
-      || source.caps.maxRecipientsPerJob !== statics.maxRecipientsPerJob
-      || source.caps.maxOperationsPerCycle !== statics.maxOperationsPerCycle) {
-    throw new Error(`live channel ${source.channel} caps do not match the foundation hard caps`);
-  }
-  const usedToday = safeCount(source.caps.usedToday, 'daily usage');
-  const usedThisMonth = safeCount(source.caps.usedThisMonth, 'monthly usage');
-  if (usedToday > usedThisMonth) {
-    throw new Error('live channel daily usage cannot exceed monthly usage');
-  }
-  const queued = safeCount(source.dispatch.queuedCount, 'queued count');
-  const inFlight = safeCount(source.dispatch.inFlightCount, 'in-flight count');
-  const awaitingProof = safeCount(source.dispatch.awaitingProofCount, 'awaiting-proof count');
-  const needsAttention = safeCount(source.dispatch.needsAttentionCount, 'needs-attention count');
-  const succeededToday = safeCount(source.dispatch.succeededTodayCount, 'succeeded-today count');
-  const failedToday = safeCount(source.dispatch.failedTodayCount, 'failed-today count');
-  if (!source.dispatch.workerComposed && (inFlight > 0)) {
-    throw new Error('an uncomposed worker cannot hold in-flight work');
-  }
-  const observedAt = source.dispatch.observedAt === null
-    ? null
-    : requiredInstant(source.dispatch.observedAt, 'dispatch observedAt');
-  if (observedAt && Date.parse(observedAt) > asOfMs) {
-    throw new Error('dispatch telemetry is newer than its snapshot');
-  }
-  if (!['granted', 'partial', 'missing', 'revoked'].includes(source.permission.state)) {
-    throw new Error('live channel permission state is invalid');
-  }
-  const permissionCheckedAt = source.permission.checkedAt === null
-    ? null
-    : requiredInstant(source.permission.checkedAt, 'permission checkedAt');
-  if (permissionCheckedAt && Date.parse(permissionCheckedAt) > asOfMs) {
-    throw new Error('permission evidence is newer than its snapshot');
-  }
-  const approvalsPending = safeCount(source.approvals.pendingCount, 'pending approvals');
-  const approvalsOldestAt = source.approvals.oldestPendingAt === null
-    ? null
-    : requiredInstant(source.approvals.oldestPendingAt, 'oldest pending approval');
-  if ((approvalsPending === 0) !== (approvalsOldestAt === null)) {
-    throw new Error('approval queue evidence is contradictory');
-  }
-  if (!Array.isArray(source.blockers) || source.blockers.length > 12) {
+  if (!Array.isArray(source.blockerCodes)
+      || source.blockerCodes.length > PORTAL_LIVE_CHANNEL_BLOCKER_CODES.length) {
     throw new Error('live channel blocker evidence is out of bounds');
   }
-  const blockerSource: readonly PortalLiveChannelSnapshot['blockers'][number][] = source.blockers;
-  const seenCodes = new Set<string>();
-  const suppliedBlockers = blockerSource.map((blocker) => {
-    if (!blocker || typeof blocker !== 'object'
-        || typeof blocker.code !== 'string' || !BLOCKER_CODE.test(blocker.code)
-        || seenCodes.has(blocker.code)
-        || typeof blocker.message !== 'string'
-        || blocker.message !== blocker.message.trim()
-        || blocker.message.length < 8 || blocker.message.length > 240) {
-      throw new Error('live channel blocker evidence is invalid');
+  const seen = new Set<string>();
+  for (const code of source.blockerCodes) {
+    if (typeof code !== 'string' || !BLOCKER_CODE_SET.has(code) || seen.has(code)) {
+      throw new Error('live channel blocker code is invalid or duplicated');
     }
-    if (LONG_OPAQUE_RUN.test(blocker.message)) {
-      throw new Error('live channel blocker message looks secret-shaped and cannot be displayed');
-    }
-    seenCodes.add(blocker.code);
-    return Object.freeze({ code: blocker.code, message: blocker.message, derived: false });
-  });
-  const gapBlockers = derivedBlockers(source, statics)
-    .filter((gap) => !seenCodes.has(gap.code))
-    .map((gap) => Object.freeze(gap));
-  const whyBlocked = Object.freeze([...suppliedBlockers, ...gapBlockers]);
-  const posture = derivePosture(source, whyBlocked);
+    seen.add(code);
+  }
+  const codes = source.blockerCodes as readonly PortalLiveChannelBlockerCode[];
+  const dailyUsed = safeCap(source.caps?.daily?.used, 'daily usage');
+  const dailyLimit = safeCap(source.caps?.daily?.limit, 'daily limit');
+  const dailyRemaining = safeCap(source.caps?.daily?.remaining, 'daily remaining');
+  const monthlyUsed = safeCap(source.caps?.monthly?.used, 'monthly usage');
+  const monthlyLimit = safeCap(source.caps?.monthly?.limit, 'monthly limit');
+  const monthlyRemaining = safeCap(source.caps?.monthly?.remaining, 'monthly remaining');
+  if (dailyLimit !== statics.dailyCap || monthlyLimit !== statics.monthlyCap) {
+    throw new Error(`live channel ${source.rail} caps do not match the foundation hard caps`);
+  }
+  if (dailyUsed > dailyLimit || monthlyUsed > monthlyLimit
+      || dailyUsed > monthlyUsed
+      || dailyRemaining !== dailyLimit - dailyUsed
+      || monthlyRemaining !== monthlyLimit - monthlyUsed) {
+    throw new Error(`live channel ${source.rail} cap windows are contradictory`);
+  }
+  const capReached = (dailyLimit > 0 && dailyUsed >= dailyLimit)
+    || (monthlyLimit > 0 && monthlyUsed >= monthlyLimit);
+  if (capReached !== (source.outboundOrReplyState === 'cap_reached')
+      || capReached !== codes.includes('CAP_REACHED')) {
+    throw new Error(`live channel ${source.rail} cap evidence is contradictory`);
+  }
+  if ((source.connectionState === 'not_configured' && !codes.includes('PROVIDER_NOT_CONFIGURED'))
+      || (source.connectionState === 'not_composed' && !codes.includes('LIVE_ADAPTER_NOT_COMPOSED'))
+      || (source.outboundOrReplyState === 'effects_disabled' && !codes.includes('EFFECTS_DISABLED'))
+      || (source.outboundOrReplyState === 'approval_required' && !codes.includes('APPROVAL_REQUIRED'))
+      || (source.receiptState === 'needs_attention' && !codes.includes('RECEIPT_NEEDS_ATTENTION'))
+      || (source.receiptState === 'outcome_unknown' && !codes.includes('OUTCOME_UNKNOWN_QUARANTINED'))) {
+    throw new Error(`live channel ${source.rail} blocker codes contradict its states`);
+  }
+  if (source.rail === 'social_dm'
+      && (source.connectionState !== 'not_composed'
+        || source.inboundState !== 'not_ready'
+        || source.outboundOrReplyState !== 'not_supported'
+        || source.receiptState !== 'none'
+        || !codes.includes('LIVE_ADAPTER_NOT_COMPOSED'))) {
+    throw new Error('the social DM rail must remain not composed with LIVE_ADAPTER_NOT_COMPOSED');
+  }
+  if (source.rail !== 'social_dm' && source.outboundOrReplyState === 'not_supported') {
+    throw new Error(`live channel ${source.rail} cannot disclaim outbound support`);
+  }
+  const latestReceipt = presentReceipt(source.latestReceipt, source.receiptState, asOfMs);
+  const hardBlocked = codes.some((code) => !SOFT_BLOCKER_CODES.has(code));
+  const posture = derivePosture(source, hardBlocked);
   if (illustrative && (posture === 'ready' || posture === 'degraded')) {
     throw new Error('an illustrative fixture can never depict a deliverable live channel');
   }
-  const latestReceipt = presentReceipt(source.latestReceipt, statics, asOfMs);
+  const whyBlocked: LiveChannelBlockerView[] = codes.map((code) => Object.freeze({
+    code,
+    message: BLOCKER_COPY[code],
+    derived: false,
+  }));
+  if (posture === 'blocked' && !hardBlocked
+      && source.connectionState === 'configured' && codes.length === 0) {
+    whyBlocked.push(Object.freeze({
+      code: 'CONNECTION_NOT_PROVEN_READY',
+      message: 'The connection is configured but has not yet been proven ready by the truth seam.',
+      derived: true,
+    }));
+  }
+  const pauseEngaged = codes.includes('EMERGENCY_PAUSED');
   return Object.freeze({
-    channel: source.channel,
-    anchorId: `live-${source.channel.replaceAll('_', '-')}`,
+    rail: source.rail,
+    anchorId: `live-${source.rail.replaceAll('_', '-')}`,
     eyebrow: statics.eyebrow,
     label: statics.label,
-    providerLabel: safeLabel(source.identity.providerLabel, 'provider label', 60),
-    accountLabel: safeLabel(source.identity.accountLabel, 'account label', 120),
-    connectionLabel: safeLabel(source.identity.connectionLabel, 'connection label', 120),
-    connectionStatusLabel: source.identity.connectionStatus === 'active'
-      ? 'Connection active'
-      : source.identity.connectionStatus === 'revoked'
-        ? 'Connection revoked'
-        : 'No live connection',
-    contract: statics.contract,
+    providerLabel: statics.providerLabel,
+    contractLabel: statics.contractLabel,
     posture,
     postureLabel: POSTURE_LABELS[posture],
     postureTone: POSTURE_TONES[posture],
-    modeLabel: source.switches.mode === 'disabled'
-      ? 'MODE · DISABLED'
-      : `MODE · ${statics.liveMode.toUpperCase()}`,
-    effectsLabel: source.switches.providerEffectsEnabled ? 'EFFECTS ON' : 'EFFECTS OFF',
-    deliveryLabel: statics.hasDeliverySwitch
-      ? (source.switches.deliveryEnabled ? 'DELIVERY ON' : 'DELIVERY OFF')
-      : null,
-    pauseEngaged: source.switches.emergencyPaused,
-    pauseLabel: source.switches.emergencyPaused ? 'ENGAGED' : 'RELEASED',
-    workerLabel: source.dispatch.workerComposed ? 'Worker composed' : 'No worker composed',
-    dispatch: Object.freeze({
-      queued,
-      inFlight,
-      awaitingProof,
-      needsAttention,
-      succeededToday,
-      failedToday,
-      observedLabel: readableObserved(observedAt, source.dispatch.workerComposed),
-    }),
-    gauges: Object.freeze([
-      gauge('Today', usedToday, statics.dailyCap, statics.unitNoun),
-      gauge('This month', usedThisMonth, statics.monthlyCap, statics.unitNoun),
+    pauseEngaged,
+    capReached,
+    stateChips: Object.freeze([
+      Object.freeze({ label: 'Connection', value: CONNECTION_LABELS[source.connectionState], tone: toneForConnection(source.connectionState) }),
+      Object.freeze({ label: 'Inbound', value: INBOUND_LABELS[source.inboundState], tone: toneForInbound(source.inboundState) }),
+      Object.freeze({
+        label: source.rail === 'whatsapp' || source.rail === 'social_dm' ? 'Reply' : 'Outbound',
+        value: OUTBOUND_LABELS[source.outboundOrReplyState],
+        tone: toneForOutbound(source.outboundOrReplyState),
+      }),
+      Object.freeze({ label: 'Receipts', value: RECEIPT_STATE_LABELS[source.receiptState], tone: toneForReceiptState(source.receiptState) }),
     ]),
-    perJobLabel: `${statics.maxRecipientsPerJob} recipient / job · ${statics.maxOperationsPerCycle} operation / cycle`,
+    gauges: Object.freeze([
+      gauge('Today', dailyUsed, dailyLimit, statics.unitNoun),
+      gauge('This month', monthlyUsed, monthlyLimit, statics.unitNoun),
+    ]),
+    perJobLabel: statics.perJobLabel,
     approvalRequirement: statics.approvalRequirement,
-    approvalsPending,
-    approvalsOldestAt,
-    permissionStateLabel: source.permission.state === 'granted'
-      ? 'Granted'
-      : source.permission.state === 'partial'
-        ? 'Partially granted'
-        : source.permission.state === 'revoked' ? 'Revoked' : 'Missing',
-    permissionTone: source.permission.state === 'granted'
-      ? 'ready'
-      : source.permission.state === 'partial' ? 'working' : 'blocked',
-    permissionDetail: safeLabel(source.permission.detail, 'permission detail', 240),
+    approvalRequired: codes.includes('APPROVAL_REQUIRED'),
     targetScope: statics.targetScope,
     latestReceipt,
-    whyBlocked,
+    whyBlocked: Object.freeze(whyBlocked),
     nextAction: nextActionFor(posture, statics, whyBlocked),
     links: statics.links,
   });
 }
 
 export function presentLiveChannels(
-  snapshot: PortalLiveChannelsSnapshot,
+  snapshot: LiveChannelsSourceSnapshot,
 ): LiveChannelsView {
   if (!snapshot
-      || (snapshot.dataset !== 'evidence' && snapshot.dataset !== 'illustrative_fixture')) {
+      || (snapshot.dataset !== 'postgres_authoritative'
+        && snapshot.dataset !== 'illustrative_fixture')) {
     throw new Error('live channels snapshot dataset is invalid');
   }
-  const workspaceId = boundedText(snapshot.workspace?.workspaceId, '', 64);
-  const workspaceName = boundedText(snapshot.workspace?.workspaceName, 'Property Predator Growth HQ');
-  const snapshotAt = instant(snapshot.workspace?.snapshotAt);
-  if (!workspaceId || !snapshotAt) throw new Error('live channels workspace boundary is invalid');
+  const workspaceId = boundedText(snapshot.workspaceId);
+  const snapshotAt = requiredInstant(snapshot.snapshotAt, 'live channels snapshotAt');
+  if (!workspaceId) throw new Error('live channels workspace boundary is invalid');
   const asOfMs = Date.parse(snapshotAt);
   const illustrative = snapshot.dataset === 'illustrative_fixture';
-  if (!Array.isArray(snapshot.channels) || snapshot.channels.length !== LIVE_CHANNEL_IDS.length) {
-    throw new Error('live channels snapshot must contain the exact channel set');
+  if (!Array.isArray(snapshot.rails)
+      || snapshot.rails.length !== PORTAL_LIVE_CHANNEL_TRUTH_RAILS.length) {
+    throw new Error('live channels snapshot must contain the exact four-rail set');
   }
-  const channelSource: readonly PortalLiveChannelSnapshot[] = snapshot.channels;
-  const byChannel = new Map(channelSource.map((channel) => [channel.channel, channel]));
-  if (byChannel.size !== LIVE_CHANNEL_IDS.length
-      || LIVE_CHANNEL_IDS.some((id) => !byChannel.has(id))) {
-    throw new Error('live channels snapshot channel set is incomplete or duplicated');
+  const railSource: readonly PortalLiveChannelTruthRailSnapshot[] = snapshot.rails;
+  const byRail = new Map(railSource.map((rail) => [rail.rail, rail]));
+  if (byRail.size !== PORTAL_LIVE_CHANNEL_TRUTH_RAILS.length
+      || PORTAL_LIVE_CHANNEL_TRUTH_RAILS.some((rail) => !byRail.has(rail))) {
+    throw new Error('live channels snapshot rail set is incomplete or duplicated');
   }
-  const channels = Object.freeze(LIVE_CHANNEL_IDS.map((id) =>
-    presentChannel(byChannel.get(id)!, illustrative, asOfMs)));
-  if (!Array.isArray(snapshot.receipts) || snapshot.receipts.length > MAX_TIMELINE) {
-    throw new Error('live channels receipt timeline is out of bounds');
-  }
-  const receiptSource: readonly PortalLiveChannelsSnapshot['receipts'][number][] = snapshot.receipts;
-  let previousMs = Number.POSITIVE_INFINITY;
-  const timeline = Object.freeze(receiptSource.map((event) => {
-    const statics = CHANNEL_STATIC[event.channel];
-    if (!statics) throw new Error('timeline receipt names an unknown channel');
-    const receipt = presentReceipt(event, statics, asOfMs);
-    if (!receipt) throw new Error('timeline receipt is empty');
-    const occurredMs = Date.parse(receipt.occurredAt);
-    if (occurredMs > previousMs) {
-      throw new Error('live channels receipt timeline must be newest first');
-    }
-    previousMs = occurredMs;
-    return Object.freeze({
-      ...receipt,
-      channel: event.channel,
-      channelLabel: statics.label,
-    });
-  }));
-  for (const channel of channels) {
-    const newestForChannel = timeline.find((event) => event.channel === channel.channel);
-    if (!newestForChannel) continue;
-    if (!channel.latestReceipt
-        || Date.parse(newestForChannel.occurredAt) > Date.parse(channel.latestReceipt.occurredAt)) {
-      throw new Error(`the ${channel.label} timeline contradicts its latest receipt`);
-    }
-  }
-  const handoff = snapshot.handoff;
-  if (!handoff || typeof handoff.conversionInboxComposed !== 'boolean'
-      || typeof handoff.lead360Composed !== 'boolean'
-      || (handoff.whatsappInboundProjection !== null
-        && handoff.whatsappInboundProjection !== 'conversion_inbox_and_lead360')) {
-    throw new Error('live channels handoff evidence is invalid');
-  }
-  const inboundLastDayCount = handoff.inboundLastDayCount === null
-    ? null
-    : safeCount(handoff.inboundLastDayCount, 'inbound last-day count');
+  const channels = Object.freeze(PORTAL_LIVE_CHANNEL_TRUTH_RAILS.map((rail) =>
+    presentRail(byRail.get(rail)!, illustrative, asOfMs)));
   const readyCount = channels.filter((channel) => channel.posture === 'ready').length;
   const pausedCount = channels.filter((channel) => channel.posture === 'paused').length;
   const blockedCount = channels.filter((channel) => channel.posture === 'blocked').length;
   const degradedCount = channels.filter((channel) => channel.posture === 'degraded').length;
   const notConnectedCount = channels.filter((channel) => channel.posture === 'not_connected').length;
+  const composed = channels.filter((channel) => channel.posture !== 'not_connected');
+  const latestReceipts = Object.freeze(channels
+    .flatMap((channel) => channel.latestReceipt
+      ? [Object.freeze({ ...channel.latestReceipt, rail: channel.rail, railLabel: channel.label })]
+      : [])
+    .sort((left, right) => Date.parse(right.recordedAt) - Date.parse(left.recordedAt)));
+  const whatsapp = byRail.get('whatsapp')!;
   const launchReadinessTone: LiveChannelToneClass = readyCount === channels.length
     ? 'ready'
     : readyCount + degradedCount > 0
@@ -741,7 +685,6 @@ export function presentLiveChannels(
       : pausedCount > 0 ? 'paused' : 'blocked';
   return Object.freeze({
     workspaceId,
-    workspaceName,
     snapshotAt,
     dataset: snapshot.dataset,
     illustrative,
@@ -755,22 +698,17 @@ export function presentLiveChannels(
       ? 'All channels live'
       : `${readyCount} of ${channels.length} channels live`,
     launchReadinessTone,
-    allPaused: channels.every((channel) => channel.pauseEngaged),
-    totalQueued: channels.reduce((total, channel) => total + channel.dispatch.queued, 0),
-    totalNeedsAttention: channels.reduce((total, channel) => total + channel.dispatch.needsAttention, 0),
-    totalApprovalsPending: channels.reduce((total, channel) => total + channel.approvalsPending, 0),
+    allComposedPaused: composed.length > 0
+      && composed.every((channel) => channel.pauseEngaged),
     totalUsedToday: channels.reduce((total, channel) => total + channel.gauges[0]!.used, 0),
     totalDailyCap: channels.reduce((total, channel) => total + channel.gauges[0]!.cap, 0),
-    timeline,
-    handoff: Object.freeze({
-      conversionInboxComposed: handoff.conversionInboxComposed,
-      lead360Composed: handoff.lead360Composed,
-      whatsappProjectionLabel: handoff.whatsappInboundProjection
-        ? 'Inbound WhatsApp projects into Conversion Inbox and Lead 360'
-        : 'Inbound WhatsApp projection is not composed',
-      inboundLastDayLabel: inboundLastDayCount === null
-        ? 'Inbound volume not measured'
-        : `${inboundLastDayCount.toLocaleString('en-GB')} inbound in the last day`,
-    }),
+    attentionRailCount: channels.filter((channel) => channel.posture === 'degraded'
+      || channel.whyBlocked.some((blocker) => blocker.code === 'RECEIPT_NEEDS_ATTENTION'
+        || blocker.code === 'OUTCOME_UNKNOWN_QUARANTINED')).length,
+    approvalRequiredRailLabels: Object.freeze(channels
+      .filter((channel) => channel.approvalRequired)
+      .map((channel) => channel.label)),
+    latestReceipts,
+    whatsappInboundReady: whatsapp.inboundState === 'ready',
   });
 }

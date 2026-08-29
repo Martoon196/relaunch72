@@ -8,9 +8,9 @@ import {
 } from '../src/portal/live-channels-presenter.js';
 import { liveChannelsNoticeToken } from '../src/portal/live-channels-actions.js';
 import type {
-  PortalLiveChannelsService,
-  PortalLiveChannelsSnapshot,
-} from '../src/portal/live-channels-service.js';
+  PortalLiveChannelTruthService,
+  PortalLiveChannelTruthSnapshot,
+} from '../src/portal/live-channel-truth-service.js';
 import type { PortalAuthService } from '../src/portal/auth-service.js';
 import type { PortalCrmService } from '../src/portal/crm-service.js';
 import { PROPERTY_PREDATOR_GROWTH_PROFILE, RELAUNCH72_PRODUCT_PROFILE } from '../src/portal/product-profile.js';
@@ -47,11 +47,16 @@ const crm: PortalCrmService = {
   completeTask: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
 };
 
-function evidenceSnapshot(): PortalLiveChannelsSnapshot {
+/** Authoritative truth snapshot: the fixture rails re-stamped by the seam's own dataset. */
+function truthSnapshot(): PortalLiveChannelTruthSnapshot {
   const data = structuredClone(createPropertyPredatorLiveChannelsFixture()) as any;
-  data.dataset = 'evidence';
-  data.channels[0].switches.emergencyPaused = false;
-  return data as PortalLiveChannelsSnapshot;
+  data.dataset = 'postgres_authoritative';
+  return {
+    workspaceId: data.workspaceId,
+    snapshotAt: data.snapshotAt,
+    dataset: 'postgres_authoritative',
+    rails: data.rails,
+  } as PortalLiveChannelTruthSnapshot;
 }
 
 function postgres(overrides: Partial<PostgresPortalDeps> = {}): PostgresPortalDeps {
@@ -130,78 +135,99 @@ test('live channels is Property Predator-only', async () => {
   assert.match(result.body, /Live Channels not connected/);
 });
 
-test('without a composed service the labelled fixture renders', async () => {
+test('production fails closed when the truth seam is not composed', async () => {
   const result = await call(LIVE_CHANNELS_ROUTE, postgres(), COOKIE);
-  assert.equal(result.statusCode, 200);
-  assert.equal(result.headers['cache-control'], 'no-store');
-  assert.match(result.body, /ILLUSTRATIVE TEST DATA/);
-  assert.match(result.body, /data-dataset="illustrative_fixture"/);
-  assert.match(result.body, /0 of 3 channels live/);
-  assert.match(result.body, /ALL RAILS PAUSED/);
-  // Every rail is paused in the fixture, so no pause form can render anywhere.
-  assert.doesNotMatch(result.body, /name="confirm_pause"/);
-  // The shell titles this page as itself, never as a sibling surface.
-  assert.match(result.body, /<title>PropertyPredator Live Channels — /);
-  // With no composed readiness cockpit, no link can dead-end on it.
-  assert.doesNotMatch(result.body, /href="\/portal\/providers\/readiness"/);
+  assert.equal(result.statusCode, 404);
+  assert.match(result.body, /truth seam is not composed/);
+  // The fixture never renders from the production route.
+  assert.doesNotMatch(result.body, /ILLUSTRATIVE TEST DATA/);
+  assert.doesNotMatch(result.body, /data-dataset/);
 });
 
-test('a composed service is called with the request identity and renders evidence', async () => {
+test('a composed truth seam is called with the request identity and renders evidence', async () => {
   const calls: unknown[] = [];
-  const service: PortalLiveChannelsService = {
+  const service: PortalLiveChannelTruthService = {
     snapshot: async (identity) => {
       calls.push(identity);
-      return { ok: true, snapshot: evidenceSnapshot() };
+      return { ok: true, snapshot: truthSnapshot() };
     },
   };
-  const result = await call(LIVE_CHANNELS_ROUTE, postgres({ liveChannels: service }), COOKIE);
+  const result = await call(LIVE_CHANNELS_ROUTE, postgres({ liveChannelTruth: service }), COOKIE);
   assert.equal(result.statusCode, 200);
-  assert.match(result.body, /OBSERVED EVIDENCE/);
-  assert.match(result.body, /Connected · ready/);
+  assert.equal(result.headers['cache-control'], 'no-store');
+  assert.match(result.body, /POSTGRES-AUTHORITATIVE EVIDENCE/);
+  assert.match(result.body, /data-dataset="postgres_authoritative"/);
+  assert.doesNotMatch(result.body, /ILLUSTRATIVE TEST DATA/);
+  assert.match(result.body, /<title>PropertyPredator Live Channels — Property Predator Growth HQ/);
+  assert.match(result.body, /0 of 4 channels live/);
+  assert.match(result.body, /LIVE_ADAPTER_NOT_COMPOSED/);
+  // No pause boundary exists, so no pause form can render in production.
+  assert.doesNotMatch(result.body, /name="confirm_pause"/);
+  assert.match(result.body, /command boundary not composed/);
   assert.deepEqual(calls, [{ sessionToken: SESSION, requestId: 'live-channels-request' }]);
 });
 
-test('service outcomes map onto honest status pages', async () => {
+test('truth seam failures map onto honest status pages', async () => {
   const forbidden = await call(LIVE_CHANNELS_ROUTE, postgres({
-    liveChannels: { snapshot: async () => ({ ok: false, kind: 'forbidden', message: 'No live channel access.' }) },
+    liveChannelTruth: { snapshot: async () => ({ ok: false, kind: 'forbidden', message: 'No live channel access.' }) },
   }), COOKIE);
   assert.equal(forbidden.statusCode, 403);
 
   const unavailable = await call(LIVE_CHANNELS_ROUTE, postgres({
-    liveChannels: { snapshot: async () => ({ ok: false, kind: 'unavailable', message: 'Evidence store unreachable. Nothing was changed.' }) },
+    liveChannelTruth: { snapshot: async () => ({ ok: false, kind: 'unavailable', message: 'Evidence store unreachable. Nothing was changed.' }) },
   }), COOKIE);
   assert.equal(unavailable.statusCode, 503);
   assert.match(unavailable.body, /Nothing was changed/);
+
+  const invalid = await call(LIVE_CHANNELS_ROUTE, postgres({
+    liveChannelTruth: { snapshot: async () => ({ ok: false, kind: 'invalid_snapshot', message: 'The stored evidence failed validation. Nothing was changed.' }) },
+  }), COOKIE);
+  assert.equal(invalid.statusCode, 503);
 });
 
 test('a snapshot that breaks the truth boundary renders 503, never a page', async () => {
-  const lying = structuredClone(createPropertyPredatorLiveChannelsFixture()) as any;
-  lying.channels[0].switches.emergencyPaused = false; // illustrative + deliverable = contradiction
-  const result = await call(LIVE_CHANNELS_ROUTE, postgres({
-    liveChannels: { snapshot: async () => ({ ok: true, snapshot: lying }) },
+  const wrongDataset = truthSnapshot() as any;
+  wrongDataset.dataset = 'illustrative_fixture';
+  const datasetResult = await call(LIVE_CHANNELS_ROUTE, postgres({
+    liveChannelTruth: { snapshot: async () => ({ ok: true, snapshot: wrongDataset }) },
   }), COOKIE);
-  assert.equal(result.statusCode, 503);
-  assert.match(result.body, /No channel, switch, credential or provider operation was changed/);
+  assert.equal(datasetResult.statusCode, 503);
+
+  const composedSocialDm = truthSnapshot() as any;
+  composedSocialDm.rails[3].connectionState = 'configured';
+  const socialDmResult = await call(LIVE_CHANNELS_ROUTE, postgres({
+    liveChannelTruth: { snapshot: async () => ({ ok: true, snapshot: composedSocialDm }) },
+  }), COOKIE);
+  assert.equal(socialDmResult.statusCode, 503);
+  assert.match(socialDmResult.body, /No channel, switch, credential or provider operation was changed/);
 });
 
 test('signed notices render and forged notices are ignored', async () => {
-  const token = liveChannelsNoticeToken(SECRET, SESSION, 'pause_engaged');
-  const signed = await call(`${LIVE_CHANNELS_ROUTE}?notice=${encodeURIComponent(token)}`, postgres(), COOKIE);
+  const service: PortalLiveChannelTruthService = {
+    snapshot: async () => ({ ok: true, snapshot: truthSnapshot() }),
+  };
+  const token = liveChannelsNoticeToken(SECRET, SESSION, 'unavailable');
+  const signed = await call(
+    `${LIVE_CHANNELS_ROUTE}?notice=${encodeURIComponent(token)}`,
+    postgres({ liveChannelTruth: service }),
+    COOKIE,
+  );
   assert.equal(signed.statusCode, 200);
-  assert.match(signed.body, /Emergency pause engaged/);
+  assert.match(signed.body, /Pause command not connected/);
 
-  const forged = await call(`${LIVE_CHANNELS_ROUTE}?notice=pause_engaged.forgery`, postgres(), COOKIE);
+  const forged = await call(
+    `${LIVE_CHANNELS_ROUTE}?notice=pause_engaged.forgery`,
+    postgres({ liveChannelTruth: service }),
+    COOKIE,
+  );
   assert.equal(forged.statusCode, 200);
   assert.doesNotMatch(forged.body, /class="plc-notice/);
 });
 
-test('pause command rejects missing confirmation, bad csrf and stray keys', async () => {
-  let engaged = 0;
-  const service: PortalLiveChannelsService = {
-    snapshot: async () => ({ ok: true, snapshot: evidenceSnapshot() }),
-    engageEmergencyPause: async () => { engaged += 1; return { ok: true, state: 'engaged' }; },
-  };
-  const deps = postgres({ liveChannels: service });
+test('pause command rejects missing confirmation, bad csrf, stray keys and bad scopes', async () => {
+  const deps = postgres({
+    liveChannelTruth: { snapshot: async () => ({ ok: true, snapshot: truthSnapshot() }) },
+  });
   const csrf = csrfFor(SESSION);
   const invalidExpected = encodeURIComponent(liveChannelsNoticeToken(SECRET, SESSION, 'invalid'));
 
@@ -212,50 +238,30 @@ test('pause command rejects missing confirmation, bad csrf and stray keys', asyn
 
   const badCsrf = await call(LIVE_CHANNELS_PAUSE_ROUTE, deps, COOKIE, 'POST',
     `_csrf=wrong&command_key=${COMMAND_KEY}&scope=all&confirm_pause=ENGAGE`);
-  assert.equal(badCsrf.statusCode, 303);
   assert.equal(badCsrf.headers.location, `${LIVE_CHANNELS_ROUTE}?notice=${invalidExpected}`);
 
   const strayKey = await call(LIVE_CHANNELS_PAUSE_ROUTE, deps, COOKIE, 'POST',
     `_csrf=${encodeURIComponent(csrf)}&command_key=${COMMAND_KEY}&scope=all&confirm_pause=ENGAGE&extra=1`);
-  assert.equal(strayKey.statusCode, 303);
   assert.equal(strayKey.headers.location, `${LIVE_CHANNELS_ROUTE}?notice=${invalidExpected}`);
 
   const badScope = await call(LIVE_CHANNELS_PAUSE_ROUTE, deps, COOKIE, 'POST',
     `_csrf=${encodeURIComponent(csrf)}&command_key=${COMMAND_KEY}&scope=everything&confirm_pause=ENGAGE`);
-  assert.equal(badScope.statusCode, 303);
   assert.equal(badScope.headers.location, `${LIVE_CHANNELS_ROUTE}?notice=${invalidExpected}`);
 
-  assert.equal(engaged, 0);
-});
-
-test('pause command without a composed seam changes nothing and says so', async () => {
-  const csrf = csrfFor(SESSION);
-  const result = await call(LIVE_CHANNELS_PAUSE_ROUTE, postgres(), COOKIE, 'POST',
-    `_csrf=${encodeURIComponent(csrf)}&command_key=${COMMAND_KEY}&scope=all&confirm_pause=ENGAGE`);
-  assert.equal(result.statusCode, 303);
-  const expected = encodeURIComponent(liveChannelsNoticeToken(SECRET, SESSION, 'unavailable'));
-  assert.equal(result.headers.location, `${LIVE_CHANNELS_ROUTE}?notice=${expected}`);
-});
-
-test('a confirmed pause command reaches the seam exactly once', async () => {
-  const commands: unknown[] = [];
-  const service: PortalLiveChannelsService = {
-    snapshot: async () => ({ ok: true, snapshot: evidenceSnapshot() }),
-    engageEmergencyPause: async (identity, input) => {
-      commands.push({ identity, input });
-      return { ok: true, state: 'engaged' };
-    },
-  };
-  const csrf = csrfFor(SESSION);
-  const result = await call(LIVE_CHANNELS_PAUSE_ROUTE, postgres({ liveChannels: service }), COOKIE, 'POST',
+  const legacyScope = await call(LIVE_CHANNELS_PAUSE_ROUTE, deps, COOKIE, 'POST',
     `_csrf=${encodeURIComponent(csrf)}&command_key=${COMMAND_KEY}&scope=customer_email_mailgun&confirm_pause=ENGAGE`);
-  assert.equal(result.statusCode, 303);
-  const expected = encodeURIComponent(liveChannelsNoticeToken(SECRET, SESSION, 'pause_engaged'));
-  assert.equal(result.headers.location, `${LIVE_CHANNELS_ROUTE}?notice=${expected}`);
-  assert.deepEqual(commands, [{
-    identity: { sessionToken: SESSION, requestId: 'live-channels-request' },
-    input: { scope: 'customer_email_mailgun', commandKey: COMMAND_KEY },
-  }]);
+  assert.equal(legacyScope.headers.location, `${LIVE_CHANNELS_ROUTE}?notice=${invalidExpected}`);
+});
+
+test('a well-formed pause command lands on the honest unavailable notice', async () => {
+  const csrf = csrfFor(SESSION);
+  const expected = encodeURIComponent(liveChannelsNoticeToken(SECRET, SESSION, 'unavailable'));
+  for (const scope of ['all', 'customer_email', 'owned_social', 'whatsapp', 'social_dm']) {
+    const result = await call(LIVE_CHANNELS_PAUSE_ROUTE, postgres(), COOKIE, 'POST',
+      `_csrf=${encodeURIComponent(csrf)}&command_key=${COMMAND_KEY}&scope=${scope}&confirm_pause=ENGAGE`);
+    assert.equal(result.statusCode, 303);
+    assert.equal(result.headers.location, `${LIVE_CHANNELS_ROUTE}?notice=${expected}`);
+  }
 });
 
 test('pause command is Property Predator-only and auth-gated', async () => {
