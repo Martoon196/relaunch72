@@ -65,6 +65,7 @@ const migration58Url = new URL('../../src/db/migrations/0058_property_predator_w
 const migration59Url = new URL('../../src/db/migrations/0059_property_predator_owned_social_activation_readiness.sql', import.meta.url);
 const migration60Url = new URL('../../src/db/migrations/0060_owned_social_function_acl_repair.sql', import.meta.url);
 const migration61Url = new URL('../../src/db/migrations/0061_property_predator_twilio_sms_founder_binding.sql', import.meta.url);
+const migration62Url = new URL('../../src/db/migrations/0062_operational_inbox_live_evidence_read_boundary.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -503,9 +504,9 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums through the Twilio SMS founder binding', async () => {
+test('bundled migration discovery orders and checksums through the operational inbox read boundary', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-55);
+  const tail = migrations.slice(-56);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0007_public_schema_hardening.sql', version: 7 },
     { filename: '0008_setup_delivery_recovery.sql', version: 8 },
@@ -562,6 +563,7 @@ test('bundled migration discovery orders and checksums through the Twilio SMS fo
     { filename: '0059_property_predator_owned_social_activation_readiness.sql', version: 59 },
     { filename: '0060_owned_social_function_acl_repair.sql', version: 60 },
     { filename: '0061_property_predator_twilio_sms_founder_binding.sql', version: 61 },
+    { filename: '0062_operational_inbox_live_evidence_read_boundary.sql', version: 62 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -619,6 +621,7 @@ test('bundled migration discovery orders and checksums through the Twilio SMS fo
     (await readFile(migration59Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration60Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration61Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration62Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
