@@ -405,8 +405,8 @@ const lead360: Lead360View = {
     responseDetail: 'Requested contact',
   }],
   consent: [
-    { channelLabel: 'Email · amelia@example.test', state: 'permitted', basis: 'Property Predator marketing · Consent · Verified endpoint', updatedAt: '2026-08-14T09:20:00.000Z' },
-    { channelLabel: 'SMS · +44 7700 900001', state: 'unknown', basis: 'No verified permission evidence', updatedAt: null },
+    { channelLabel: 'Email · amelia@example.test', state: 'permitted', basis: 'Property Predator marketing · Consent · Verified endpoint', updatedAt: '2026-08-14T09:20:00.000Z', endpoint: 'amelia@example.test', contactPointId: '61616161-6161-4161-8161-616161616161', channel: 'email', purpose: 'property_predator_marketing', evidenceSource: 'founder.written_confirmation', policyVersion: 'pp-privacy-2026-08', policyTextSha256: 'b'.repeat(64), effectiveAt: '2026-08-14T09:20:00.000Z', recordedAt: '2026-08-14T09:20:04.000Z', recordedBy: '71717171-7171-4171-8171-717171717171', suppressionState: null, suppressionReason: null },
+    { channelLabel: 'SMS · +44 7700 900001', state: 'unknown', basis: 'No verified permission evidence', updatedAt: null, endpoint: '+447700900001', contactPointId: '62626262-6262-4262-8262-626262626262', channel: 'sms', purpose: null, evidenceSource: null, policyVersion: null, policyTextSha256: null, effectiveAt: null, recordedAt: null, recordedBy: null, suppressionState: null, suppressionReason: null },
   ],
   suppressionReason: null,
   crm: {
@@ -1516,7 +1516,7 @@ export function previewLead360(card: JourneyBoardCardView): Lead360View {
       id: `offer-${card.id}`, title: card.offer.label, valueLabel: card.offer.valueLabel,
       state: card.offer.state, presentedAt: card.journey.lastAdvancedAt ?? SNAPSHOT_AT, responseAt: null, responseDetail: null,
     }] : [],
-    consent: [{ channelLabel: 'Email · preview fixture', state: 'unknown', basis: 'No real permission asserted in preview', updatedAt: null }],
+    consent: [{ channelLabel: 'Email · preview fixture', state: 'unknown', basis: 'No real permission asserted in preview', updatedAt: null, endpoint: 'preview@example.test', contactPointId: '63636363-6363-4363-8363-636363636363', channel: 'email', purpose: null, evidenceSource: null, policyVersion: null, policyTextSha256: null, effectiveAt: null, recordedAt: null, recordedBy: null, suppressionState: null, suppressionReason: null }],
     suppressionReason: null,
     crm: {
       opportunities: [{
@@ -1837,7 +1837,11 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
         : previewLead360(card);
       return {
         status: 200,
-        html: shell(`<nav aria-label="Lead 360 breadcrumb" style="margin-bottom:14px"><a class="button secondary compact" href="${JOURNEY_BOARD_ROUTE}">← Live journeys</a></nav>${renderLead360Body(caseFile)}`, 'crm', `${card.displayName} — Lead 360`),
+        html: shell(`<nav aria-label="Lead 360 breadcrumb" style="margin-bottom:14px"><a class="button secondary compact" href="${JOURNEY_BOARD_ROUTE}">← Live journeys</a></nav>${renderLead360Body(caseFile, {
+          permissionCommandAvailable: true,
+          permissionCommandKey: randomUUID(),
+          csrfToken: PREVIEW_CSRF,
+        })}`, 'crm', `${card.displayName} — Lead 360`),
       };
     }
   }

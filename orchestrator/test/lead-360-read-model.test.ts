@@ -26,6 +26,7 @@ const OFFER_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const RESPONSE_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 const POINT_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 const CONSENT_ID = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+const OPERATOR_ID = 'ab100000-0000-4000-8000-000000000001';
 const SUPPRESSION_ID = '12121212-1212-4212-8212-121212121212';
 const OPPORTUNITY_ID = '13131313-1313-4313-8313-131313131313';
 const PIPELINE_ID = '14141414-1414-4414-8414-141414141414';
@@ -187,7 +188,14 @@ function fixtures(): Record<string, Row[]> {
       consent_state: 'granted',
       lawful_basis: 'consent',
       consent_occurred_at: new Date('2026-08-20T09:00:00.000Z'),
+      consent_recorded_at: new Date('2026-08-20T09:00:03.000Z'),
+      consent_source: 'founder.written_confirmation',
+      consent_policy_version: 'pp-privacy-2026-08<script>',
+      consent_policy_sha256: 'a'.repeat(64),
+      consent_actor_kind: 'user',
+      consent_actor_user_id: OPERATOR_ID,
       suppression_event_id: SUPPRESSION_ID,
+      suppression_state: 'suppressed',
       suppression_reason: 'provider-bounce<script>',
       suppression_occurred_at: new Date('2026-08-25T10:30:00.000Z'),
     })],
@@ -338,7 +346,14 @@ test('Lead360ReadService maps and deeply freezes one narrow case file in one sco
     lawfulBasis: 'consent',
     updatedAt: '2026-08-25T10:30:00.000Z',
     consentEventId: CONSENT_ID,
+    consentSource: 'founder.written_confirmation',
+    policyVersion: 'pp-privacy-2026-08<script>',
+    policyTextSha256: 'a'.repeat(64),
+    recordedAt: '2026-08-20T09:00:03.000Z',
+    recordedByActorKind: 'user',
+    recordedByUserId: OPERATOR_ID,
     suppressionEventId: SUPPRESSION_ID,
+    suppressionState: 'suppressed',
     suppressionReason: 'provider-bounce<script>',
   });
   assert.equal(result.crm.opportunities[0]?.stageName, 'Qualified');

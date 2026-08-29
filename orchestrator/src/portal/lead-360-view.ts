@@ -7,6 +7,46 @@
  */
 
 import { escapeHtml } from './ui.js';
+import {
+  CONTACT_PERMISSION_CONFIRM_VALUE,
+  CONTACT_PERMISSION_ROUTE,
+  type ContactPermissionNotice,
+} from './contact-permission-actions.js';
+
+/** Channels this workflow binds a decision to, matching the 0063 contract. */
+const PERMISSION_CHANNELS: readonly string[] = Object.freeze(['email', 'sms', 'whatsapp']);
+
+const PERMISSION_DECISIONS: readonly (readonly [string, string])[] = Object.freeze([
+  ['granted', 'Grant permission'],
+  ['denied', 'Deny permission'],
+  ['withdrawn', 'Withdraw permission'],
+] as const);
+
+const PERMISSION_LAWFUL_BASES: readonly string[] = Object.freeze([
+  'consent', 'legitimate_interests', 'contract',
+  'legal_obligation', 'vital_interests', 'public_task',
+]);
+
+/**
+ * Witnessed evidence only. Inferred signals are deliberately absent from this
+ * list so the form cannot offer one.
+ */
+const PERMISSION_EVIDENCE_SOURCES: readonly (readonly [string, string])[] = Object.freeze([
+  ['founder.written_confirmation', 'Written confirmation from the contact'],
+  ['founder.recorded_call', 'Recorded call with the contact'],
+  ['founder.signed_form', 'Signed form from the contact'],
+  ['founder.inbound_request', 'Inbound request from the contact'],
+  ['founder.verbal_confirmation', 'Verbal confirmation, witnessed and noted'],
+] as const);
+
+export interface Lead360RenderOptions {
+  /** True only when the founder permission command boundary is composed. */
+  readonly permissionCommandAvailable?: boolean;
+  /** Fresh per-render key, so a double submit replays instead of re-deciding. */
+  readonly permissionCommandKey?: string;
+  readonly csrfToken?: string;
+  readonly notice?: ContactPermissionNotice | null;
+}
 
 export type Lead360ScoreBand = 'burning' | 'hot' | 'warm' | 'quiet' | 'unscored';
 export type Lead360StageState = 'complete' | 'current' | 'upcoming';
@@ -93,6 +133,21 @@ export interface Lead360ConsentView {
   readonly state: Lead360ConsentState;
   readonly basis: string | null;
   readonly updatedAt: string | null;
+  /** The exact endpoint the decision is bound to, shown in full. */
+  readonly endpoint: string;
+  readonly contactPointId: string;
+  readonly channel: string;
+  readonly purpose: string | null;
+  /** Evidence a human witnessed, never an inferred signal. */
+  readonly evidenceSource: string | null;
+  readonly policyVersion: string | null;
+  readonly policyTextSha256: string | null;
+  /** Effective time versus ledger time; both are shown because they differ. */
+  readonly effectiveAt: string | null;
+  readonly recordedAt: string | null;
+  readonly recordedBy: string | null;
+  readonly suppressionState: string | null;
+  readonly suppressionReason: string | null;
 }
 
 export interface Lead360OpportunityView {
@@ -312,14 +367,80 @@ function offerHistory(offers: readonly Lead360OfferView[]): string {
   return `<ol class="lead360-offers">${offers.map((offer) => `<li><div class="lead360-offer-head"><strong>${escapeHtml(offer.title)}</strong><span class="state-${offer.state}">${escapeHtml(OFFER_LABELS[offer.state])}</span></div>${offer.valueLabel ? `<div class="lead360-offer-value">${escapeHtml(offer.valueLabel)}</div>` : ''}<dl><div><dt>Presented</dt><dd>${timestamp(offer.presentedAt)}</dd></div><div><dt>Response</dt><dd>${offer.responseAt ? timestamp(offer.responseAt) : 'No response recorded'}</dd></div></dl>${offer.responseDetail ? `<p>${escapeHtml(offer.responseDetail)}</p>` : ''}</li>`).join('')}</ol>`;
 }
 
+function permissionDetail(item: Lead360ConsentView): string {
+  const row = (label: string, value: string | null, missing: string): string =>
+    `<div><dt>${escapeHtml(label)}</dt><dd>${value === null || value.trim() === ''
+      ? `<span class="lead360-time-missing">${escapeHtml(missing)}</span>`
+      : escapeHtml(value)}</dd></div>`;
+  const suppression = item.suppressionState === null
+    ? '<div><dt>Suppression</dt><dd>No suppression recorded</dd></div>'
+    : `<div><dt>Suppression</dt><dd><b class="lead360-suppression-state">${escapeHtml(item.suppressionState)}</b>${item.suppressionReason ? ` · ${escapeHtml(item.suppressionReason)}` : ''}</dd></div>`;
+  return `<dl class="lead360-permission-detail">
+    ${row('Endpoint', item.endpoint, 'Endpoint not recorded')}
+    ${row('Purpose', item.purpose, 'No purpose recorded')}
+    ${row('Evidence source', item.evidenceSource, 'No evidence source recorded')}
+    ${row('Policy version', item.policyVersion, 'No policy version recorded')}
+    ${row('Policy digest', item.policyTextSha256, 'No policy digest recorded')}
+    ${row('Effective', item.effectiveAt, 'Time not recorded')}
+    ${row('Recorded', item.recordedAt, 'Time not recorded')}
+    ${row('Recording operator', item.recordedBy, 'Operator not recorded')}
+    ${suppression}
+  </dl>`;
+}
+
 function consentStatus(consent: readonly Lead360ConsentView[], suppressionReason: string | null): string {
   const suppression = suppressionReason
     ? `<div class="lead360-suppression" role="note"><strong>Active suppression</strong><p>${escapeHtml(suppressionReason)}</p></div>`
     : '';
   if (!consent.length) {
-    return `${suppression}${emptyState('No channel evidence', 'Consent and suppression status have not been recorded for any channel.')}`;
+    return `${suppression}${emptyState('No channel evidence', 'Consent and suppression status have not been recorded for any channel. Record a decision below to start this contact’s permission history.')}`;
   }
-  return `${suppression}<ul class="lead360-consent">${consent.map((item) => `<li><div><strong>${escapeHtml(item.channelLabel)}</strong>${item.basis ? `<small>${escapeHtml(item.basis)}</small>` : '<small>No lawful-basis note recorded</small>'}</div><span class="state-${item.state}">${escapeHtml(CONSENT_LABELS[item.state])}</span>${item.updatedAt ? timestamp(item.updatedAt) : '<span class="lead360-time-missing">Time not recorded</span>'}</li>`).join('')}</ul>`;
+  return `${suppression}<ul class="lead360-consent">${consent.map((item) => `<li><div><strong>${escapeHtml(item.channelLabel)}</strong>${item.basis ? `<small>${escapeHtml(item.basis)}</small>` : '<small>No lawful-basis note recorded</small>'}</div><span class="state-${item.state}">${escapeHtml(CONSENT_LABELS[item.state])}</span>${item.updatedAt ? timestamp(item.updatedAt) : '<span class="lead360-time-missing">Time not recorded</span>'}${permissionDetail(item)}</li>`).join('')}</ul>`;
+}
+
+/** Founder-only decision form. Absent entirely unless the boundary is composed. */
+function permissionCommands(
+  view: Lead360View,
+  options: Lead360RenderOptions,
+): string {
+  const head = '<div class="lead360-section-head"><div><div class="lead360-section-label">Contact permission</div><h2 id="lead360-permission">Record a permission decision</h2></div></div>';
+  if (!options.permissionCommandAvailable) {
+    // A sentence rather than a disabled button: with no boundary composed the
+    // case file stays entirely control-free, which is the read-only guarantee
+    // the rest of this page has always made.
+    return `<section class="lead360-section" aria-labelledby="lead360-permission">${head}<div class="lead360-permission-body"><p>The contact permission boundary is not composed for this workspace, so no decision can be recorded here. This page will not imply a permission it cannot prove.</p></div></section>`;
+  }
+  const endpoints = view.consent.filter((item) => PERMISSION_CHANNELS.includes(item.channel));
+  if (!endpoints.length) {
+    return `<section class="lead360-section" aria-labelledby="lead360-permission">${head}<div class="lead360-permission-body"><p>This contact has no email, SMS or WhatsApp endpoint to bind a decision to. Add and verify an endpoint first.</p></div></section>`;
+  }
+  const csrf = escapeHtml(options.csrfToken ?? '');
+  const commandKey = escapeHtml(options.permissionCommandKey ?? '');
+  const option = (value: string, label: string): string =>
+    `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`;
+  return `<section class="lead360-section" aria-labelledby="lead360-permission">${head}
+    <div class="lead360-permission-body">
+      <p>A decision is appended to this contact’s permission history for one exact endpoint and purpose. It never queues or sends a message, and it never clears an existing suppression.</p>
+      <form method="post" action="${CONTACT_PERMISSION_ROUTE}" autocomplete="off">
+        <input type="hidden" name="_csrf" value="${csrf}">
+        <input type="hidden" name="command_key" value="${commandKey}">
+        <input type="hidden" name="contact_id" value="${escapeHtml(view.identity.contactId)}">
+        <label class="lead360-field"><span>Endpoint</span><select name="contact_point_id" required>${endpoints.map((item) => `<option value="${escapeHtml(item.contactPointId)}">${escapeHtml(`${item.channel} · ${item.endpoint}`)}</option>`).join('')}</select></label>
+        <label class="lead360-field"><span>Channel</span><select name="channel" required>${PERMISSION_CHANNELS.map((channel) => option(channel, channel)).join('')}</select></label>
+        <label class="lead360-field"><span>Purpose</span><input type="text" name="purpose" required maxlength="100" pattern="[a-z][a-z0-9_.-]{0,99}" autocomplete="off"></label>
+        <label class="lead360-field"><span>Decision</span><select name="decision" required>${PERMISSION_DECISIONS.map(([value, label]) => option(value, label)).join('')}</select></label>
+        <label class="lead360-field"><span>Lawful basis, for a grant only</span><select name="lawful_basis">${['', ...PERMISSION_LAWFUL_BASES].map((basis) => option(basis, basis === '' ? 'Not applicable' : basis)).join('')}</select></label>
+        <label class="lead360-field"><span>Evidence source</span><select name="evidence_source" required>${PERMISSION_EVIDENCE_SOURCES.map(([value, label]) => option(value, label)).join('')}</select></label>
+        <label class="lead360-field"><span>Policy version</span><input type="text" name="policy_version" maxlength="100" autocomplete="off"></label>
+        <label class="lead360-field"><span>Policy text digest, sha256 hex</span><input type="text" name="policy_text_sha256" maxlength="64" pattern="[0-9a-f]{64}" autocomplete="off"></label>
+        <label class="lead360-field"><span>Evidence reference</span><input type="text" name="source_event_id" maxlength="255" autocomplete="off"></label>
+        <label class="lead360-field"><span>Effective time, UTC instant</span><input type="text" name="occurred_at" required maxlength="40" autocomplete="off"></label>
+        <label class="lead360-permission-check"><input type="checkbox" name="confirm_permission" value="${CONTACT_PERMISSION_CONFIRM_VALUE}" required> I witnessed this decision from the contact and am recording it as evidence.</label>
+        <button class="lead360-permission-button" type="submit">Record permission decision</button>
+      </form>
+      <p class="lead360-permission-note">Permission is never inferred from a login, account creation, CRM stage, opportunity, previous send or site activity.</p>
+    </div>
+  </section>`;
 }
 
 function crmSummary(crm: Lead360CrmSummaryView): string {
@@ -346,14 +467,23 @@ const LEAD_360_STYLE = `
   .lead360-consent .state-denied,.lead360-crm-list .state-cancelled{border-color:#693b38;color:#eb7c73}.lead360-offer-head .state-requested_contact{border-color:#315c47;color:#73c99d}
   .lead360-suppression{margin-bottom:10px;border:1px solid #6a3935;background:#211413;padding:11px}.lead360-suppression strong{color:#f1847a;font:800 .59rem var(--mono,monospace);text-transform:uppercase}.lead360-suppression p{margin:4px 0 0;color:#c8a5a1;font-size:.66rem}.lead360-consent{display:grid;gap:7px}.lead360-consent li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 8px;padding:10px;border:1px solid var(--case-line);background:var(--case-panel)}.lead360-consent li>div{display:grid}.lead360-consent strong{font-size:.69rem}.lead360-consent small{color:#7e8785;font-size:.56rem}.lead360-consent time,.lead360-consent .lead360-time-missing{grid-column:1/-1;color:#737c7a;font:600 .52rem var(--mono,monospace)}
   .lead360-crm-block>h3{font:800 .59rem var(--mono,monospace);letter-spacing:.08em;text-transform:uppercase;color:#a7aeac;margin:0 0 8px}.lead360-crm-block>h3:not(:first-child){margin-top:18px}.lead360-crm-list{display:grid;gap:6px}.lead360-crm-list li{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:9px;padding:10px 11px;border-left:2px solid #414846;background:#151819}.lead360-crm-list li>div{display:grid;gap:2px}.lead360-crm-list strong{font-size:.68rem}.lead360-crm-list li>div>span{color:#858e8b;font-size:.57rem}.lead360-crm-list time{font:600 .54rem var(--mono,monospace)}
+  .lead360-notice{margin:0;padding:13px 32px;border-bottom:1px solid var(--case-line);background:#101414}.lead360-notice strong{display:block;font:800 .62rem var(--mono,monospace);letter-spacing:.08em;text-transform:uppercase}.lead360-notice p{margin:5px 0 0;color:#9aa3a1;font-size:.66rem;line-height:1.5}.lead360-notice.is-success strong{color:#7fd7a4}.lead360-notice.is-warning strong{color:#f1c66a}.lead360-notice.is-danger strong{color:#ff746a}
+  .lead360-permission-detail{grid-column:1/-1;display:grid;gap:3px;margin:8px 0 0;padding:8px 0 0;border-top:1px solid #23292a}.lead360-permission-detail>div{display:grid;grid-template-columns:minmax(96px,34%) minmax(0,1fr);gap:8px}.lead360-permission-detail dt{color:#78817f;font:600 .53rem var(--mono,monospace);text-transform:uppercase;letter-spacing:.06em}.lead360-permission-detail dd{margin:0;color:#c7ccca;font-size:.6rem;line-height:1.45;overflow-wrap:anywhere}.lead360-suppression-state{color:#f1847a;text-transform:uppercase;font:800 .55rem var(--mono,monospace)}
+  .lead360-permission-body{display:grid;gap:11px}.lead360-permission-body p{color:#8f9996;font-size:.64rem;line-height:1.5;margin:0}.lead360-permission-body form{display:grid;gap:9px}.lead360-field{display:block;color:var(--case-ink);font-size:.62rem;line-height:1.5}.lead360-field span{display:block;color:#78817f;margin:0 0 4px}.lead360-field input,.lead360-field select{display:block;width:100%;min-height:44px;box-sizing:border-box;padding:0 10px;background:var(--case-bg);border:1px solid var(--case-line);border-radius:8px;color:var(--case-ink);font:inherit}.lead360-permission-check{display:flex;align-items:flex-start;gap:9px;min-height:44px;color:#c7ccca;font-size:.62rem;line-height:1.45}.lead360-permission-check input{width:24px;height:24px;margin-top:2px;flex:none}.lead360-permission-button{min-height:44px;padding:0 16px;border:1px solid var(--case-accent);border-radius:8px;background:transparent;color:var(--case-accent);font:800 .64rem var(--mono,monospace);letter-spacing:.06em;text-transform:uppercase;cursor:pointer}.lead360-permission-button[disabled]{border-color:#3c4342;color:#6e7775;cursor:not-allowed}.lead360-permission-note{color:#78817f;font-size:.58rem;line-height:1.5;margin:0}.lead360 :is(a,button,input,select):focus-visible{outline:2px solid var(--case-accent);outline-offset:2px}
   .lead360-empty{border:1px dashed #3c4342;background:#111414;padding:18px;text-align:left}.lead360-empty strong{display:block;font-size:.7rem;color:#c7ccca}.lead360-empty p{color:#7f8886;font-size:.64rem;line-height:1.5;margin:5px 0 0}.lead360-time-missing{color:#78817f;font:600 .55rem var(--mono,monospace)}.lead360-as-of{padding:11px 32px;border-top:1px solid var(--case-line);background:#090b0c;color:#6e7775;font:600 .55rem var(--mono,monospace);text-align:right}
   @media(max-width:1120px){.lead360-layout{grid-template-columns:minmax(0,1.35fr) minmax(250px,.8fr)}.lead360-left{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px;border-bottom:1px solid var(--case-line)}.lead360-column+.lead360-column{border-left:0}.lead360-right{border-left:1px solid var(--case-line)!important}}
   @media(max-width:760px){.lead360-case-head{grid-template-columns:1fr;padding:25px 21px 21px}.lead360-score{justify-self:start}.lead360-journey{padding:17px 21px}.lead360-journey ol{display:grid;grid-template-columns:1fr;gap:8px}.lead360-journey li:not(:last-child)::after{left:14px;right:auto;top:29px;bottom:-9px;width:1px;height:auto}.lead360-journey-score{grid-template-columns:1fr}.lead360-layout{display:block}.lead360-left{display:block}.lead360-column{padding:21px}.lead360-column+.lead360-column,.lead360-right{border-left:0!important;border-top:1px solid var(--case-line)}.lead360-as-of{padding-inline:21px;text-align:left}}
   @media(forced-colors:active){.lead360,.lead360-event article,.lead360-next-move,.lead360-offers>li,.lead360-consent li{forced-color-adjust:auto}.lead360-event-mark,.lead360-stage-node{border:2px solid CanvasText}}
 `;
 
-export function renderLead360Body(view: Lead360View): string {
+export function renderLead360Body(
+  view: Lead360View,
+  options: Lead360RenderOptions = {},
+): string {
   const band = lead360ScoreBand(view.score);
+  const notice = options.notice
+    ? `<div class="lead360-notice is-${escapeHtml(options.notice.tone)}" role="status" aria-live="polite"><strong>${escapeHtml(options.notice.title)}</strong><p>${escapeHtml(options.notice.message)}</p></div>`
+    : '';
   const owner = view.identity.ownerName ? escapeHtml(view.identity.ownerName) : 'Unassigned';
   const primaryJourneyLabel = view.primaryJourneyLabel === undefined
     ? ((view.journeys?.find((journey) => journey.isPrimary) ?? view.journey).stages.length
@@ -361,7 +491,7 @@ export function renderLead360Body(view: Lead360View): string {
       : null)
     : view.primaryJourneyLabel;
   const scoreContext = primaryJourneyLabel ? `Primary route · ${primaryJourneyLabel}` : 'No primary route';
-  return `<style data-property-predator-lead-360>${LEAD_360_STYLE}</style><article class="lead360" aria-labelledby="lead360-title">
+  return `<style data-property-predator-lead-360>${LEAD_360_STYLE}</style><article class="lead360" aria-labelledby="lead360-title">${notice}
     <header class="lead360-case-head"><div><div class="lead360-kicker">Lead 360 · Evidence case file</div><h1 id="lead360-title">${escapeHtml(view.identity.displayName)}</h1><div class="lead360-contact-line">${contactLine(view.identity)}</div><span class="lead360-owner"><b>CRM owner ·</b> ${owner}</span></div>
       <div class="lead360-score is-${band}" aria-label="Primary journey score ${escapeHtml(finiteScore(view.score))}, ${escapeHtml(SCORE_LABELS[band])}. ${escapeHtml(scoreContext)}"><strong>${escapeHtml(finiteScore(view.score))}</strong><span><b>${escapeHtml(SCORE_LABELS[band])}</b><small>${escapeHtml(scoreContext)}</small></span></div>
     </header>
@@ -369,7 +499,7 @@ export function renderLead360Body(view: Lead360View): string {
     <div class="lead360-layout">
       <aside class="lead360-column lead360-left" aria-label="Lead context"><section class="lead360-section" aria-labelledby="lead360-score-reason"><div class="lead360-section-head"><div><div class="lead360-section-label">Scoring</div><h2 id="lead360-score-reason">Why this score?</h2></div></div>${view.scoreExplanation ? `<p class="lead360-case-note">${escapeHtml(view.scoreExplanation)}</p>` : emptyState('No score explanation', 'A score has not been justified by recorded evidence.')}</section><section class="lead360-section" aria-labelledby="lead360-crm"><div class="lead360-section-head"><div><div class="lead360-section-label">Saved records</div><h2 id="lead360-crm">CRM summary</h2></div></div>${crmSummary(view.crm)}</section></aside>
       <section class="lead360-column lead360-centre" aria-labelledby="lead360-evidence"><div class="lead360-section-head"><div><div class="lead360-section-label">Exact chronology</div><h2 id="lead360-evidence">Engagement evidence</h2></div><span>Newest first</span></div>${evidenceTimeline(view.evidence)}</section>
-      <aside class="lead360-column lead360-right" aria-label="Decision rail"><section class="lead360-section" aria-labelledby="lead360-next"><div class="lead360-section-head"><div><div class="lead360-section-label">Human judgement</div><h2 id="lead360-next">Best next move</h2></div></div>${nextMove(view.nextMove, primaryJourneyLabel)}</section><section class="lead360-section" aria-labelledby="lead360-offers"><div class="lead360-section-head"><div><div class="lead360-section-label">Commercial evidence</div><h2 id="lead360-offers">Offer history</h2></div></div>${offerHistory(view.offers)}</section><section class="lead360-section" aria-labelledby="lead360-consent"><div class="lead360-section-head"><div><div class="lead360-section-label">Contact safety</div><h2 id="lead360-consent">Consent + suppression</h2></div></div>${consentStatus(view.consent, view.suppressionReason)}</section></aside>
+      <aside class="lead360-column lead360-right" aria-label="Decision rail"><section class="lead360-section" aria-labelledby="lead360-next"><div class="lead360-section-head"><div><div class="lead360-section-label">Human judgement</div><h2 id="lead360-next">Best next move</h2></div></div>${nextMove(view.nextMove, primaryJourneyLabel)}</section><section class="lead360-section" aria-labelledby="lead360-offers"><div class="lead360-section-head"><div><div class="lead360-section-label">Commercial evidence</div><h2 id="lead360-offers">Offer history</h2></div></div>${offerHistory(view.offers)}</section><section class="lead360-section" aria-labelledby="lead360-consent"><div class="lead360-section-head"><div><div class="lead360-section-label">Contact safety</div><h2 id="lead360-consent">Consent + suppression</h2></div></div>${consentStatus(view.consent, view.suppressionReason)}</section>${permissionCommands(view, options)}</aside>
     </div>
     <footer class="lead360-as-of">Case file viewed as of ${timestamp(view.asOf)}</footer>
   </article>`;
