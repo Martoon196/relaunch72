@@ -7,7 +7,7 @@
  * setting names plus pass/fail state.
  */
 
-export type PilotRailId = 'customer_email' | 'whatsapp' | 'owned_social';
+export type PilotRailId = 'customer_email' | 'whatsapp' | 'owned_social' | 'sms';
 export type PilotPhase = 'mandatory-first-channel' | 'deferred';
 export type PreflightCheckState = 'pass' | 'missing' | 'invalid';
 
@@ -256,6 +256,31 @@ export const PILOT_PROVIDER_CATALOGUE: readonly ProviderSpec[] = Object.freeze([
       setting('AYRSHARE_PROFILE_LINK_COMPLETE', 'Social account-link proof', exact('true'), 'Explicit account-link completion evidence'),
     ]),
   }),
+  Object.freeze({
+    rail: 'sms', provider: 'Twilio Messaging UK SMS', phase: 'deferred', settings: Object.freeze([
+      setting('DATABASE_SMS_COMMAND_URL', 'SMS command database identity', isProductionDatabaseUrl('r72_sms_command'), 'The function-only r72_sms_command database URL'),
+      setting('DATABASE_SMS_WORKER_URL', 'SMS worker database identity', isProductionDatabaseUrl('r72_sms_worker_command'), 'The function-only r72_sms_worker_command database URL'),
+      setting('DATABASE_SMS_WEBHOOK_URL', 'SMS webhook database identity', isProductionDatabaseUrl('r72_sms_webhook_command'), 'The function-only r72_sms_webhook_command database URL'),
+      setting('PROPERTY_PREDATOR_SMS_LIVE_MODE', 'SMS live mode', exact('owned_number_live'), 'The exact owned-number live worker mode'),
+      setting('PROPERTY_PREDATOR_SMS_PROVIDER_ID', 'SMS provider binding', exact('twilio_messaging'), 'The exact twilio_messaging provider binding'),
+      setting('PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'Provider effects switch', exact('true'), 'The exact reviewed provider-effects switch'),
+      setting('PROPERTY_PREDATOR_SMS_DELIVERY_ENABLED', 'SMS delivery switch', exact('true'), 'The exact SMS delivery switch'),
+      setting('PROPERTY_PREDATOR_SMS_EMERGENCY_PAUSED', 'SMS emergency pause', exact('false'), 'The reviewed released SMS emergency pause'),
+      setting('PROPERTY_PREDATOR_SMS_RECEIPTS_CONFIRMED', 'Signed SMS receipt operator attestation', exact('true'), 'The operator attestation recorded only after signed receipt proof'),
+      setting('PROPERTY_PREDATOR_SMS_WEBHOOK_MODE', 'SMS signed webhook mode', exact('signed_live'), 'The exact signed-live webhook mode'),
+      setting('PROPERTY_PREDATOR_SMS_LIVE_WORKSPACE_ID', 'SMS workspace binding', isUuid, 'The exact owned pilot workspace UUID'),
+      setting('PROPERTY_PREDATOR_SMS_LIVE_CONNECTION_ID', 'SMS provider connection binding', isUuid, 'The exact Twilio provider connection UUID'),
+      setting('PROPERTY_PREDATOR_SMS_ACCOUNT_SID', 'Twilio account identity', matches(/^AC[a-f0-9]{32}$/), 'The exact owned Twilio account SID'),
+      setting('TWILIO_API_KEY_SID', 'Twilio restricted API key identity', matches(/^SK[a-f0-9]{32}$/), 'The worker-only restricted Twilio API key SID'),
+      setting('TWILIO_API_KEY_SECRET', 'Twilio restricted API key secret', (raw) => isSafeSecret(raw, 16), 'The worker-only restricted Twilio API key secret'),
+      setting('TWILIO_MESSAGING_SERVICE_SID', 'Twilio Messaging Service identity', matches(/^MG[a-f0-9]{32}$/), 'The exact owned Twilio Messaging Service SID'),
+      setting('TWILIO_UK_REGULATORY_BUNDLE_SID', 'Twilio UK regulatory bundle', matches(/^BU[a-f0-9]{32}$/), 'The approved Twilio UK regulatory bundle SID'),
+      setting('PROPERTY_PREDATOR_SMS_SENDER_NUMBER', 'Owned UK sender number', matches(/^\+44[0-9]{9,10}$/), 'The exact owned UK E.164 sender number'),
+      setting('PROPERTY_PREDATOR_SMS_WEBHOOK_PUBLIC_ORIGIN', 'SMS webhook public origin', (raw) => isHttpsUrl(raw, true), 'A single credential-free HTTPS SMS webhook origin'),
+      setting('TWILIO_AUTH_TOKEN', 'Twilio webhook signature key', (raw) => isSafeSecret(raw, 16), 'The webhook-only Twilio auth token'),
+      setting('TWILIO_KEY_SCOPE', 'Twilio key scope', exact('restricted-api-key'), 'A restricted-api-key-only Twilio key'),
+    ]),
+  }),
 ]);
 
 const ALL_SETTING_SPECS = Object.freeze([
@@ -358,6 +383,7 @@ export function evaluatePropertyPredatorPilotPreflight(
       'Apply credentials to their isolated services only: Mailgun sending versus webhook keys, and WhatsApp worker envelope key versus webhook app secret/verify token, must never share a process.',
       'Record the exact live provider connection, channel binding/profile, current content approval, operator authority and consent/suppression evidence in PostgreSQL.',
       'Prove the signed Mailgun and Meta webhook challenge/status/inbound paths with provider test events before releasing receipt attestations.',
+      'Prove the signed Twilio inbound and status callback paths with provider test events against the founder-owned UK test number before releasing receipt attestations.',
       'Prove the existing enqueue and durable pre-call pause/effects fences using one explicitly supplied owned internal recipient or account per rail.',
       'Stage one exact approved owned test email, parameter-free WhatsApp template and link-free X post; no customer recipient or inferred account is allowed.',
       'Record a separate channel-specific activation approval before enabling any provider effect.',

@@ -219,6 +219,22 @@ const RAIL_STATIC: Readonly<Record<PortalLiveChannelTruthRail, RailStatic>> = Ob
       Object.freeze({ href: `${CONVERSION_INBOX_ROUTE}?queue=approval`, label: 'Approval queue' }),
     ]),
   }),
+  sms: Object.freeze({
+    eyebrow: 'Direct messaging',
+    label: 'Customer SMS',
+    providerLabel: 'Twilio Messaging',
+    contractLabel: 'propertypredator.twilio-sms-live/v1',
+    dailyCap: 10,
+    monthlyCap: 50,
+    perJobLabel: '1 recipient / job · 1 concurrent provider call',
+    approvalRequirement: 'Approved message version, granted SMS consent and the full PECR specialist chain inside a 15-minute authority window.',
+    targetScope: 'One consented UK phone endpoint per job · approved, GSM-basic message text · STOP is honoured immediately and START never overrides a manual suppression.',
+    unitNoun: 'segments',
+    links: Object.freeze([
+      Object.freeze({ href: `${CONVERSION_INBOX_ROUTE}?channel=sms`, label: 'SMS conversations' }),
+      Object.freeze({ href: `${CONVERSION_INBOX_ROUTE}?queue=approval`, label: 'Approval queue' }),
+    ]),
+  }),
   social_dm: Object.freeze({
     eyebrow: 'Conversation rail',
     label: 'Social DMs',

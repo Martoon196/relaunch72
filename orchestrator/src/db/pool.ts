@@ -210,6 +210,30 @@ export function createCustomerEmailWebhookCommandDatabasePool(
   return createDatabasePool(loadDatabaseConfig('customerEmailWebhookCommand', env), hooks);
 }
 
+/** Function-only pool for founder-authorized, evidence-bound SMS enqueue. */
+export function createSmsCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('smsCommand', env), hooks);
+}
+
+/** One-connection pool for the isolated Twilio SMS dispatch worker. */
+export function createSmsWorkerCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('smsWorkerCommand', env), hooks);
+}
+
+/** Receipt-only pool for signed Twilio SMS status and inbound projection. */
+export function createSmsWebhookCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('smsWebhookCommand', env), hooks);
+}
+
 /** Function-only pool for the isolated provider-operation worker. */
 export function createWorkerDatabasePool(
   env: NodeJS.ProcessEnv = process.env,

@@ -273,7 +273,7 @@ test('0055 atomically projects verified WhatsApp inbound and fences Inbox operat
        ORDER BY rail`,
     );
     assert.deepEqual(truth.map((row) => row.rail), [
-      'customer_email', 'owned_social', 'social_dm', 'whatsapp',
+      'customer_email', 'owned_social', 'sms', 'social_dm', 'whatsapp',
     ]);
     assert.deepEqual(
       truth.find((row) => row.rail === 'social_dm')?.blocker_codes,

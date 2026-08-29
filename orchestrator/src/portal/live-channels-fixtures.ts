@@ -74,6 +74,19 @@ export function createPropertyPredatorLiveChannelsFixture(): LiveChannelsSourceS
         }),
       }),
       Object.freeze({
+        rail: 'sms',
+        connectionState: 'not_configured',
+        inboundState: 'not_ready',
+        outboundOrReplyState: 'blocked',
+        receiptState: 'none',
+        caps: Object.freeze({
+          daily: Object.freeze({ used: 0, limit: 10, remaining: 10 }),
+          monthly: Object.freeze({ used: 0, limit: 50, remaining: 50 }),
+        }),
+        blockerCodes: Object.freeze(['PROVIDER_NOT_CONFIGURED', 'INGRESS_NOT_READY']),
+        latestReceipt: null,
+      }),
+      Object.freeze({
         rail: 'social_dm',
         connectionState: 'not_composed',
         inboundState: 'not_ready',

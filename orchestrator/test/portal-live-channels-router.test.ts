@@ -159,7 +159,7 @@ test('a composed truth seam is called with the request identity and renders evid
   assert.match(result.body, /data-dataset="postgres_authoritative"/);
   assert.doesNotMatch(result.body, /ILLUSTRATIVE TEST DATA/);
   assert.match(result.body, /<title>PropertyPredator Live Channels — Property Predator Growth HQ/);
-  assert.match(result.body, /0 of 4 channels live/);
+  assert.match(result.body, /0 of 5 channels live/);
   assert.match(result.body, /LIVE_ADAPTER_NOT_COMPOSED/);
   // No pause boundary exists, so no pause form can render in production.
   assert.doesNotMatch(result.body, /name="confirm_pause"/);
@@ -194,7 +194,7 @@ test('a snapshot that breaks the truth boundary renders 503, never a page', asyn
   assert.equal(datasetResult.statusCode, 503);
 
   const composedSocialDm = truthSnapshot() as any;
-  composedSocialDm.rails[3].connectionState = 'configured';
+  composedSocialDm.rails[4].connectionState = 'configured';
   const socialDmResult = await call(LIVE_CHANNELS_ROUTE, postgres({
     liveChannelTruth: { snapshot: async () => ({ ok: true, snapshot: composedSocialDm }) },
   }), COOKIE);
