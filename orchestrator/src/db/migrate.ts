@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -213,8 +214,19 @@ async function main(): Promise<void> {
   }
 }
 
-const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
-if (invokedPath.toLowerCase() === fileURLToPath(import.meta.url).toLowerCase()) {
+function canonicalExecutablePath(candidate: string): string {
+  if (!candidate) return '';
+  const resolved = path.resolve(candidate);
+  try {
+    return realpathSync.native(resolved).toLowerCase();
+  } catch {
+    return resolved.toLowerCase();
+  }
+}
+
+const invokedPath = canonicalExecutablePath(process.argv[1] ?? '');
+const modulePath = canonicalExecutablePath(fileURLToPath(import.meta.url));
+if (invokedPath === modulePath) {
   main().catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : 'Database migration failed');
     process.exitCode = 1;

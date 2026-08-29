@@ -38,8 +38,8 @@
     "founder:reissue-setup": "tsx src/ops/property-predator-founder-setup-reissue-cli.ts",
     "snapshot:preview": "tsx src/legacy-import/property-predator-snapshot-preview-cli.ts",
     "stripe:setup": "tsx src/server/setup.ts",
-    "db:migrate": "tsx src/db/migrate.ts",
-    "db:check": "tsx src/db/migrate.ts --check"
+    "db:migrate": "node --import ./test/windows-node24-shim.mjs --import tsx src/db/migrate.ts",
+    "db:check": "node --import ./test/windows-node24-shim.mjs --import tsx src/db/migrate.ts --check"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
