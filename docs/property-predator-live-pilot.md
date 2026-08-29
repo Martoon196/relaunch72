@@ -1,22 +1,23 @@
 # Property Predator Growth HQ — controlled live pilot
 
-Status: provider decision record, 26 August 2026. No live account, credential or production rail is enabled by this document.
+Status: activation record, updated 29 August 2026. No provider effect is
+authorised by this document.
 
 ## Pilot stack
 
-| Rail | Pilot provider | Why this one first | Fixed starting cost |
-|---|---|---|---:|
-| Email | Mailgun Basic | Low-cost API delivery with cryptographically signed event webhooks while Growth HQ owns campaigns, consent and the interface | $15/month |
-| WhatsApp | 360dialog Regular | Partner-oriented WABA model and a clean route from one Property Predator number to later multi-client onboarding | €49/number/month + Meta fees |
-| UK SMS | Twilio | Mature UK KYC, delivery callbacks and subaccount isolation | $2.50/month number rental + usage |
-| Social publishing | Ayrshare Launch | Ten isolated social profiles, posting, analytics and webhooks without first owning every social developer-app review | $299/month |
-| Webinar | Whereby Embedded Build | Fully branded embedded room, signed attendance webhooks and low pilot cost | $9.99/month |
-| Calendar | Nylas Calendar/Scheduler | API-driven Google/Microsoft/Exchange/iCloud calendar layer with an EU region | $10/month including five accounts |
-| Social listening | Deferred | Brand24 with API costs more than the rest of the pilot stack combined | $0 during pilot |
+| Rail | Current provider | Current operational posture |
+|---|---|---|
+| Customer email | Mailgun EU | Account/domain configured per the founder checkpoint; permission-bound worker and signed receipt/inbound paths are built; controlled owned-recipient acceptance remains |
+| WhatsApp | Direct Meta Cloud API | Worker and raw signed webhook/challenge paths are built; exact app/WABA/phone/template and owned-test evidence remain |
+| UK SMS | Twilio Messaging | Scheduled and under active implementation; it is a separate rail from direct Meta WhatsApp |
+| Owned X publishing | Ayrshare with X credentials | Isolated worker is built; exact owned profile/account binding and one approved test post remain |
+| Social DMs | Not composed | The shared Conversion Inbox model is ready, but no live social-DM adapter may be claimed |
+| Webinar | Whereby deferred | Existing provider foundation remains outside the first activation strike |
+| Calendar | Nylas deferred | Existing provider foundation remains outside the first activation strike |
+| Social listening | Deferred | No first-pilot live adapter or spend is authorised |
 
-Expected fixed pilot base: **$336.49/month + €49/month**, before VAT, email/message usage, Meta template fees and webinar overage.
-
-Primary pricing evidence: [Mailgun](https://www.mailgun.com/pricing/), [360dialog](https://360dialog.com/pricing), [Twilio UK SMS](https://www.twilio.com/en-us/sms/pricing/gb), [Ayrshare](https://www.ayrshare.com/pricing/), [Whereby Embedded](https://whereby.com/information/embedded/pricing), [Nylas](https://www.nylas.com/pricing/).
+Provider prices are deliberately not frozen in this decision record. Confirm the
+current provider plan, tax, usage and regional terms immediately before purchase.
 
 ## Activation order
 
@@ -37,18 +38,21 @@ settings have been entered in the host secret manager. The command is deliberate
 non-mutating: it does not open a database connection, import a provider SDK, call
 a provider API, deliver a message or print a configured value.
 
-The first gate is intentionally narrow:
+The gate is intentionally exact:
 
 - Production Growth HQ foundation and least-privilege runtime database URL shapes.
-- A dedicated Property Predator workspace and a declared cap of 1–25 owned internal seed recipients; runtime enforcement remains a manual proof gate.
-- No live adapter is composed today. Before one is added, implement and test a runtime-enforced provider-effect kill switch at every composition and dispatch boundary; an environment declaration is not proof.
-- Mailgun email configuration, EU region, verified sender metadata, signed delivery-event callback and suppression synchronisation.
+- A dedicated Property Predator installation/workspace and exact function-only
+  command, worker and webhook identities.
+- Mailgun EU configuration, verified sender metadata, signed callbacks and
+  suppression synchronisation.
+- Direct Meta WhatsApp configuration and exact encrypted recipient binding.
+- Ayrshare/X owned-profile configuration and exact connection evidence.
+- Existing durable enqueue and immediate pre-call effects/pause fences.
 
-WhatsApp (360dialog), UK SMS (Twilio), social publishing (Ayrshare), webinars
-(Whereby) and calendar/scheduler (Nylas) are reported separately as deferred
-rails. Their missing configuration cannot block the email review gate; partially
-entered configuration is labelled incomplete instead of being mistaken for a
-connection.
+Twilio SMS is a separate current build. Webinars, calendar/scheduler, social DMs
+and listening remain deferred rails. Their missing configuration cannot block an
+owned email, WhatsApp or X acceptance review; partially entered configuration is
+labelled incomplete instead of being mistaken for a connection.
 
 A successful result means **ready for manual activation review**, not live-ready.
 Database schema readiness, provider-console ownership/billing, authenticated
@@ -56,11 +60,10 @@ test webhooks, seed-contact consent/opt-out evidence and a separate channel-spec
 activation approval remain mandatory. Configuration names are documented in
 `.env.example`; real values belong only in the deployment secret manager.
 
-The checked-in `render.yaml` remains the deliberately ephemeral Relaunch72
-payments test sandbox (`free`, mock builds, no PostgreSQL portal cutover). It is
-not a Property Predator production blueprint and must not be made live merely by
-adding credentials. A separately reviewed production service definition, durable
-PostgreSQL deployment and rollback plan are still required.
+The checked-in production Blueprint contains isolated web/worker slots and exact
+database identities. That composition is not permission to deploy or activate a
+provider merely by adding credentials; production migration, deployment and each
+owned-test effect still require separate founder approval.
 
 Automatic customer onboarding remains deliberately locked, and several new
 operations screens are still powered by labelled TEST fixtures. The separate
@@ -86,10 +89,15 @@ Common business evidence:
 
 Secrets/configuration to place directly into the deployment secret manager:
 
-- Mailgun API key and signing key, EU region, verified sending domain, From identities and signed-event callback.
-- 360dialog API key, Meta Portfolio/App/configuration IDs, WABA/channel IDs, number and webhook signing configuration.
-- Twilio Account SID, restricted API key, Messaging Service SID, Number SID and UK Regulatory Bundle references.
-- Ayrshare API key, per-workspace Profile Key, RSA private key, domain ID and webhook HMAC secret.
+- Mailgun domain-sending key and separate webhook signing key, EU region,
+  verified sending domain, exact From identity and signed-event callback.
+- Meta App ID, WABA ID, phone-number ID, webhook App Secret/verify token,
+  encrypted outbound access-token binding and approved parameter-free template.
+- Twilio Account SID, restricted outbound API key SID/secret, Messaging Service
+  SID, owned sender/number, webhook authentication material and applicable UK
+  regulatory evidence.
+- Ayrshare API key, encrypted profile binding/key version, X OAuth 1 API
+  key/secret and owned-profile link evidence.
 - Whereby API key, webhook secret and approved HTTPS origins.
 - Nylas application ID/API key, EU region, webhook secret, callback URLs and Google/Microsoft OAuth applications.
 
@@ -107,7 +115,8 @@ Secrets/configuration to place directly into the deployment secret manager:
 
 - Ayrshare's account-linking page can be branded but its approved Ayrshare origin cannot be completely hidden. X also requires separate OAuth/API funding and does not provide real-time direct-message webhooks under Ayrshare BYO credentials.
 - Mixpost Enterprise is the later cost-control option at $1,199 once, but it transfers every social developer app, review, token refresh and platform-policy change to us.
-- 360dialog/Meta verification and WhatsApp template approval can take days; begin this before the planned launch date.
+- Meta verification and WhatsApp template approval can take time; begin this
+  before the planned launch date. 360dialog is not the current transport.
 - Brand24 Business plus API is approximately $698–$798/month and some Meta/X listening results omit full text, so listening remains phase two.
 - Cal.com remains useful internally, but new Platform signups stopped in December 2025; it is not the multi-tenant calendar foundation.
 
