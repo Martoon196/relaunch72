@@ -257,6 +257,22 @@ import {
 } from './provider-readiness-cockpit-presenter.js';
 import { renderProviderReadinessCockpitBody } from './provider-readiness-cockpit-view.js';
 import type { PortalProviderReadinessService } from './provider-readiness-cockpit-service.js';
+import {
+  LIVE_CHANNELS_PAUSE_ROUTE,
+  LIVE_CHANNELS_ROUTE,
+  presentLiveChannels,
+  type LiveChannelsNoticeCode,
+} from './live-channels-presenter.js';
+import { renderLiveChannelsBody } from './live-channels-view.js';
+import {
+  liveChannelsNoticeFromQuery,
+  liveChannelsNoticeToken,
+} from './live-channels-actions.js';
+import { createPropertyPredatorLiveChannelsFixture } from './live-channels-fixtures.js';
+import type {
+  LiveChannelsPauseScope,
+  PortalLiveChannelsService,
+} from './live-channels-service.js';
 import { createPropertyPredatorSocialAccountControlFixture } from './social-account-control-fixtures.js';
 import {
   SOCIAL_ACCOUNT_CONTROL_ROUTE,
@@ -367,6 +383,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   affiliateCompliance?: PortalAffiliateComplianceService;
   /** Dark-only provider readiness metadata. It exposes no credential, switch or provider operation. */
   providerReadiness?: PortalProviderReadinessService;
+  /** Read-only live channel evidence plus an optional fail-safe pause command. Absent means the clearly-labelled fixture renders. */
+  liveChannels?: PortalLiveChannelsService;
   /** Durable TEST-only campaign planning and safe social calendar projection. */
   publicSocial?: PortalPublicSocialService;
   /** One real company-content generation effect; output is source-review-only and never outbound. */
@@ -762,14 +780,15 @@ function operationalPage(
   deps: PostgresPortalDeps,
   active: 'overview' | 'content' | 'affiliates' | 'inbox',
   csrfToken: string,
+  labelOverride?: string,
 ): string {
-  const label = active === 'overview'
+  const label = labelOverride ?? (active === 'overview'
     ? 'Provider Readiness'
     : active === 'content'
     ? 'Content Control'
     : active === 'affiliates'
       ? 'Affiliate Compliance'
-      : 'Conversion Inbox';
+      : 'Conversion Inbox');
   return appShell({
     title: `${deps.productProfile?.productName ?? 'Relaunch72'} ${label} — ${workspaceName}`,
     tenantName: workspaceName,
@@ -2363,6 +2382,117 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         message: 'No provider account, credential, switch, send, post or direct message was changed.',
         active: 'overview',
       }));
+    }
+  }
+
+  // ── live channels: proven evidence or the labelled fixture; pause commands only move rails towards OFF ──
+  if (deps.kind === 'postgres' && p === LIVE_CHANNELS_ROUTE && method === 'GET') {
+    if (deps.productProfile?.id !== 'property_predator_growth') {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Live Channels not connected',
+        message: 'The Property Predator live channel control room is not enabled for this workspace.',
+        active: 'overview',
+      }));
+    }
+    try {
+      let snapshot;
+      if (deps.liveChannels) {
+        const outcome = await deps.liveChannels.snapshot(crmIdentity(sessionToken, deps));
+        if (!outcome.ok) {
+          const status = outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden'
+            ? 403
+            : outcome.kind === 'not_found'
+              ? 404
+              : 503;
+          return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+            title: status === 503 ? 'Live Channels temporarily unavailable' : 'Live Channels not available',
+            message: outcome.message,
+            active: 'overview',
+          }));
+        }
+        snapshot = outcome.snapshot;
+      } else {
+        snapshot = createPropertyPredatorLiveChannelsFixture();
+      }
+      const view = presentLiveChannels(snapshot);
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      const notice = liveChannelsNoticeFromQuery(url.searchParams, deps.sessionSecret, sessionToken);
+      const railStatusAvailable = Boolean(deps.providerReadiness)
+        && (deps.productProfile?.readinessRails.some(
+          (rail) => rail.href === PROVIDER_READINESS_COCKPIT_ROUTE,
+        ) ?? false);
+      return sendHtml(res, 200, operationalPage(
+        view.workspaceName,
+        renderLiveChannelsBody(view, {
+          csrfToken,
+          pauseCommandAvailable: Boolean(deps.liveChannels?.engageEmergencyPause),
+          pauseCommandKeys: {
+            all: randomUUID(),
+            customer_email_mailgun: randomUUID(),
+            owned_public_social: randomUUID(),
+            meta_whatsapp: randomUUID(),
+          },
+          railStatusAvailable,
+          notice,
+        }),
+        deps,
+        'overview',
+        csrfToken,
+        'Live Channels',
+      ));
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Live Channels temporarily unavailable',
+        message: 'No channel, switch, credential or provider operation was changed.',
+        active: 'overview',
+      }));
+    }
+  }
+
+  if (deps.kind === 'postgres' && p === LIVE_CHANNELS_PAUSE_ROUTE && method === 'POST') {
+    if (deps.productProfile?.id !== 'property_predator_growth') {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Live Channels not connected',
+        message: 'The Property Predator live channel control room is not enabled for this workspace.',
+        active: 'overview',
+      }));
+    }
+    const liveChannelsNoticeRedirect = (code: LiveChannelsNoticeCode): void => redirect(
+      res,
+      `${LIVE_CHANNELS_ROUTE}?notice=${encodeURIComponent(liveChannelsNoticeToken(deps.sessionSecret, sessionToken, code))}`,
+      undefined,
+      303,
+    );
+    const form = await readMultiValueForm(req);
+    const allowed = new Set(['_csrf', 'command_key', 'scope', 'confirm_pause']);
+    const scope = form ? oneFormValue(form, 'scope') : null;
+    const commandKey = form ? oneFormValue(form, 'command_key') : null;
+    const scopeAllowed = scope === 'all'
+      || scope === 'customer_email_mailgun'
+      || scope === 'owned_public_social'
+      || scope === 'meta_whatsapp';
+    if (!form || !campaignFormKeysAllowed(form, allowed)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '')
+        || oneFormValue(form, 'confirm_pause') !== 'ENGAGE'
+        || !scopeAllowed
+        || !commandKey || !CRM_OBJECT_ID.test(commandKey)) {
+      return liveChannelsNoticeRedirect('invalid');
+    }
+    const engage = deps.liveChannels?.engageEmergencyPause?.bind(deps.liveChannels);
+    if (!engage) return liveChannelsNoticeRedirect('unavailable');
+    try {
+      const outcome = await engage(crmIdentity(sessionToken, deps), {
+        scope: scope as LiveChannelsPauseScope,
+        commandKey,
+      });
+      if (!outcome.ok) {
+        return liveChannelsNoticeRedirect(
+          outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden' ? 'forbidden' : 'unavailable',
+        );
+      }
+      return liveChannelsNoticeRedirect(outcome.state === 'engaged' ? 'pause_engaged' : 'pause_already');
+    } catch {
+      return liveChannelsNoticeRedirect('unavailable');
     }
   }
 

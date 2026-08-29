@@ -132,6 +132,18 @@ import {
   PROVIDER_READINESS_COCKPIT_ROUTE,
   presentProviderReadinessCockpit,
 } from '../src/portal/provider-readiness-cockpit-presenter.js';
+import {
+  LIVE_CHANNELS_PAUSE_ROUTE,
+  LIVE_CHANNELS_ROUTE,
+  presentLiveChannels,
+} from '../src/portal/live-channels-presenter.js';
+import { createPropertyPredatorLiveChannelsFixture } from '../src/portal/live-channels-fixtures.js';
+import { renderLiveChannelsBody } from '../src/portal/live-channels-view.js';
+import {
+  liveChannelsNoticeFromQuery,
+  liveChannelsNoticeToken,
+} from '../src/portal/live-channels-actions.js';
+import type { PortalLiveChannelsSnapshot } from '../src/portal/live-channels-service.js';
 import { createPropertyPredatorProviderReadinessFixture } from '../src/portal/provider-readiness-cockpit-fixtures.js';
 import { renderProviderReadinessCockpitBody } from '../src/portal/provider-readiness-cockpit-view.js';
 import { createPropertyPredatorSocialAccountControlFixture } from '../src/portal/social-account-control-fixtures.js';
@@ -470,6 +482,41 @@ const PREVIEW_INBOX_NOTICE_SECRET = 'preview-inbox-notice-secret';
 const PREVIEW_INBOX_NOTICE_SESSION = 'preview-inbox-session';
 const PREVIEW_CAMPAIGN_NOTICE_SECRET = 'preview-campaign-notice-secret';
 const PREVIEW_CAMPAIGN_NOTICE_SESSION = 'preview-campaign-session';
+const PREVIEW_LIVE_CHANNELS_NOTICE_SECRET = 'preview-live-channels-notice-secret';
+const PREVIEW_LIVE_CHANNELS_NOTICE_SESSION = 'preview-live-channels-session';
+
+/**
+ * Process-local emergency-pause rehearsal. Only rails that stay blocked or
+ * dark while unpaused may start released, so the illustrative snapshot can
+ * never depict a deliverable channel. Engaging a pause mutates this set only;
+ * no environment switch, database or provider exists behind it.
+ */
+const previewLivePauseReleased = new Set<string>(['owned_public_social']);
+
+function previewLiveChannelsSnapshot(): PortalLiveChannelsSnapshot {
+  const data = structuredClone(createPropertyPredatorLiveChannelsFixture()) as any;
+  for (const channel of data.channels) {
+    if (previewLivePauseReleased.has(channel.channel)) {
+      channel.switches.emergencyPaused = false;
+    }
+  }
+  return data as PortalLiveChannelsSnapshot;
+}
+
+function applyPreviewLivePause(form: URLSearchParams | null): 'pause_engaged' | 'pause_already' | 'invalid' {
+  const scope = form?.get('scope') ?? '';
+  const scopeAllowed = scope === 'all'
+    || scope === 'customer_email_mailgun'
+    || scope === 'owned_public_social'
+    || scope === 'meta_whatsapp';
+  if (!form || form.get('_csrf') !== PREVIEW_CSRF
+      || form.get('confirm_pause') !== 'ENGAGE' || !scopeAllowed) {
+    return 'invalid';
+  }
+  const targets = scope === 'all' ? [...previewLivePauseReleased] : [scope];
+  const engaged = targets.filter((target) => previewLivePauseReleased.delete(target));
+  return engaged.length > 0 ? 'pause_engaged' : 'pause_already';
+}
 const PREVIEW_CALENDAR_RESCHEDULE_ROUTE = '/portal/content/calendar/test-planning-targets/reschedule';
 const PREVIEW_CALENDAR_CANCEL_ROUTE = '/portal/content/calendar/test-planning-targets/cancel';
 const PREVIEW_CALENDAR_CAMPAIGN_REVISION_KEY = 'property-predator-signal-sprint:r3';
@@ -1543,7 +1590,7 @@ function previewJourneyNav(active: 'board' | 'rules'): string {
 }
 
 type PreviewOperationsRoute = 'today' | 'actions' | 'journeys' | 'campaigns' | 'content'
-  | 'compose' | 'images' | 'calendar' | 'inbox' | 'automations' | 'webinars' | 'analytics' | 'social_accounts' | 'readiness';
+  | 'compose' | 'images' | 'calendar' | 'inbox' | 'automations' | 'webinars' | 'analytics' | 'social_accounts' | 'readiness' | 'live';
 
 function previewOperationsNav(active: PreviewOperationsRoute): string {
   const links: readonly Readonly<{ key: PreviewOperationsRoute; href: string; label: string }>[] = [
@@ -1561,6 +1608,7 @@ function previewOperationsNav(active: PreviewOperationsRoute): string {
     { key: 'analytics', href: GROWTH_ANALYTICS_ROUTE, label: 'Analytics' },
     { key: 'social_accounts', href: SOCIAL_ACCOUNT_CONTROL_ROUTE, label: 'Social accounts' },
     { key: 'readiness', href: PROVIDER_READINESS_COCKPIT_ROUTE, label: 'Provider readiness' },
+    { key: 'live', href: LIVE_CHANNELS_ROUTE, label: 'Live Channels' },
   ];
   return `<nav aria-label="Growth operations" style="display:flex;gap:7px;margin:0 -2px 14px;padding:0 2px 8px;overflow-x:auto;overscroll-behavior-inline:contain;scroll-snap-type:inline proximity">${links.map((link) => `<a class="button ${link.key === active ? '' : 'secondary'} compact" style="flex:0 0 auto;scroll-snap-align:start" href="${link.href}"${link.key === active ? ' aria-current="page"' : ''}>${link.label}</a>`).join('')}</nav>`;
 }
@@ -1976,6 +2024,28 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
     html: shell(`${previewOperationsNav('readiness')}${renderProviderReadinessCockpitBody(
       presentProviderReadinessCockpit(createPropertyPredatorProviderReadinessFixture()),
     )}`, 'overview', 'Property Predator — Provider Readiness'),
+  };
+  if (path === LIVE_CHANNELS_ROUTE) return {
+    status: 200,
+    html: shell(`${previewOperationsNav('live')}${renderLiveChannelsBody(
+      presentLiveChannels(previewLiveChannelsSnapshot()),
+      {
+        csrfToken: PREVIEW_CSRF,
+        pauseCommandAvailable: true,
+        pauseCommandKeys: {
+          all: randomUUID(),
+          customer_email_mailgun: randomUUID(),
+          owned_public_social: randomUUID(),
+          meta_whatsapp: randomUUID(),
+        },
+        railStatusAvailable: true,
+        notice: liveChannelsNoticeFromQuery(
+          url.searchParams,
+          PREVIEW_LIVE_CHANNELS_NOTICE_SECRET,
+          PREVIEW_LIVE_CHANNELS_NOTICE_SESSION,
+        ),
+      },
+    )}`, 'overview', 'Property Predator — Live Channels'),
   };
   if (path === '/portal/crm/contacts') return {
     status: 200,
@@ -2419,6 +2489,22 @@ const server = createServer(async (request, response) => {
       );
     response.writeHead(303, {
       location: previewInboxReturnLocation(form, valid ? 'test_queued' : 'consent_blocked'),
+      'cache-control': 'no-store',
+    });
+    response.end();
+    return;
+  }
+
+  if (request.method === 'POST' && path === LIVE_CHANNELS_PAUSE_ROUTE) {
+    const form = await readPreviewForm(request);
+    const code = applyPreviewLivePause(form);
+    const token = liveChannelsNoticeToken(
+      PREVIEW_LIVE_CHANNELS_NOTICE_SECRET,
+      PREVIEW_LIVE_CHANNELS_NOTICE_SESSION,
+      code,
+    );
+    response.writeHead(303, {
+      location: `${LIVE_CHANNELS_ROUTE}?notice=${encodeURIComponent(token)}`,
       'cache-control': 'no-store',
     });
     response.end();
