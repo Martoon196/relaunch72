@@ -23,6 +23,17 @@ import {
 
 const SHA256 = /^[0-9a-f]{64}$/u;
 
+/**
+ * `new Date('nonsense').toISOString()` throws, so an unparseable value must be
+ * rejected before the comparison or it escapes as a RangeError instead of this
+ * module's own refusal.
+ */
+function isCanonicalInstantOrNull(value: string | null): boolean {
+  if (value === null) return true;
+  if (!Number.isFinite(Date.parse(value))) return false;
+  return new Date(value).toISOString() === value;
+}
+
 interface ReadinessRow extends QueryResultRow {
   dimension: unknown;
   ready: unknown;
@@ -50,8 +61,7 @@ export class PgOwnedSocialActivationReadinessProbe {
         || !context.userId
         || context.workspaceId !== target.workspaceId
         || !SHA256.test(target.expectedOwnedAccountSha256)
-        || (target.scheduledFor !== null
-          && new Date(target.scheduledFor).toISOString() !== target.scheduledFor)) {
+        || !isCanonicalInstantOrNull(target.scheduledFor)) {
       throw new OwnedSocialActivationError('invalid_target');
     }
     const rows = await withTransaction(this.#commandPool, context, async (transaction) => (

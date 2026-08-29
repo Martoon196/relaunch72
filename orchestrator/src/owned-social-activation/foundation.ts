@@ -283,10 +283,16 @@ export function deriveOwnedSocialPublicationRehearsal(
   input: OwnedSocialPublicationRehearsalInput,
 ): OwnedSocialPublicationRehearsal {
   const target = input.target;
+  // The schedule is folded into the identity digest, so it must be exactly the
+  // canonical instant the command would accept. Without this a caller could
+  // mint a digest for a timestamp the command boundary would refuse.
   if (!OPERATION_TAG.test(input.operationTag)
       || !SHA256.test(target.expectedOwnedAccountSha256)
       || !SHA256.test(input.expectedContentSha256)
-      || typeof input.approvedText !== 'string') {
+      || typeof input.approvedText !== 'string'
+      || (target.scheduledFor !== null
+        && (!Number.isFinite(Date.parse(target.scheduledFor))
+          || new Date(target.scheduledFor).toISOString() !== target.scheduledFor))) {
     throw new OwnedSocialActivationError('invalid_rehearsal');
   }
   const contentSha256 = createHash('sha256').update(input.approvedText, 'utf8').digest('hex');
