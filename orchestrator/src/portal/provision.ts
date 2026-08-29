@@ -28,6 +28,7 @@ import type { PortalAffiliateComplianceService } from './affiliate-compliance-se
 import type { PortalConversionInboxCommandService } from './conversion-inbox-service.js';
 import type { PortalConversionInboxOperationsService } from './conversion-inbox-operations-service.js';
 import type { PortalLiveChannelTruthService } from './live-channel-truth-service.js';
+import type { PortalLiveChannelPauseService } from './live-channel-pause-service.js';
 import type { PortalCampaignMachineService } from './campaign-machine-service.js';
 import type { PortalOwnedSeedCampaignService } from './owned-seed-campaign-service.js';
 import type { PortalOwnedSeedMessageService } from './owned-seed-message-service.js';
@@ -168,6 +169,8 @@ export interface PostgresPortalConfig {
   inboxOperations?: PortalConversionInboxOperationsService;
   /** Sanitised evidence-only channel state for founder-facing consumers. */
   liveChannelTruth?: PortalLiveChannelTruthService;
+  /** Engage-only durable emergency pause; no release command exists. */
+  liveChannelPause?: PortalLiveChannelPauseService;
   /** Authenticated immutable Campaign Machine read boundary. */
   campaignMachine?: PortalCampaignMachineService;
   /** Fixed office-seed staging boundary; no provider/network capability. */
@@ -235,6 +238,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     inboxCommands: cfg.inboxCommands,
     inboxOperations: cfg.inboxOperations,
     liveChannelTruth: cfg.liveChannelTruth,
+    liveChannelPause: cfg.liveChannelPause,
     campaignMachine: cfg.campaignMachine,
     ownedSeedCampaign: cfg.ownedSeedCampaign,
     ownedSeedMessages: cfg.ownedSeedMessages,

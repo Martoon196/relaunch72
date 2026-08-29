@@ -167,6 +167,17 @@ test('a composed truth seam is called with the request identity and renders evid
   assert.deepEqual(calls, [{ sessionToken: SESSION, requestId: 'live-channels-request' }]);
 });
 
+test('composed engage-only pause seam enables deliberate pause forms with no release control', async () => {
+  const result = await call(LIVE_CHANNELS_ROUTE, postgres({
+    liveChannelTruth: { snapshot: async () => ({ ok: true, snapshot: truthSnapshot() }) },
+    liveChannelPause: { engage: async () => ({ ok: true, disposition: 'engaged', scope: 'all' }) },
+  }), COOKIE);
+  assert.equal(result.statusCode, 200);
+  assert.match(result.body, /name="confirm_pause" value="ENGAGE"/u);
+  assert.match(result.body, /Engage emergency pause/u);
+  assert.doesNotMatch(result.body, /Release emergency pause|Resume channel/u);
+});
+
 test('truth seam failures map onto honest status pages', async () => {
   const forbidden = await call(LIVE_CHANNELS_ROUTE, postgres({
     liveChannelTruth: { snapshot: async () => ({ ok: false, kind: 'forbidden', message: 'No live channel access.' }) },
@@ -262,6 +273,30 @@ test('a well-formed pause command lands on the honest unavailable notice', async
     assert.equal(result.statusCode, 303);
     assert.equal(result.headers.location, `${LIVE_CHANNELS_ROUTE}?notice=${expected}`);
   }
+});
+
+test('a well-formed pause command calls the typed seam and maps engage/replay/denial truth', async () => {
+  const csrf = csrfFor(SESSION);
+  const calls: unknown[] = [];
+  const body = `_csrf=${encodeURIComponent(csrf)}&command_key=${COMMAND_KEY}&scope=sms&confirm_pause=ENGAGE`;
+  for (const [outcome, notice] of [
+    [{ ok: true, disposition: 'engaged', scope: 'sms' }, 'pause_engaged'],
+    [{ ok: true, disposition: 'replayed', scope: 'sms' }, 'pause_already'],
+    [{ ok: false, kind: 'forbidden' }, 'forbidden'],
+    [{ ok: false, kind: 'validation' }, 'invalid'],
+  ] as const) {
+    const result = await call(LIVE_CHANNELS_PAUSE_ROUTE, postgres({
+      liveChannelPause: { engage: async (identity, input) => {
+        calls.push({ identity, input }); return outcome;
+      } },
+    }), COOKIE, 'POST', body);
+    const expected = encodeURIComponent(liveChannelsNoticeToken(SECRET, SESSION, notice));
+    assert.equal(result.headers.location, `${LIVE_CHANNELS_ROUTE}?notice=${expected}`);
+  }
+  assert.deepEqual(calls[0], {
+    identity: { sessionToken: SESSION, requestId: 'live-channels-request' },
+    input: { scope: 'sms', commandKey: COMMAND_KEY },
+  });
 });
 
 test('pause command is Property Predator-only and auth-gated', async () => {

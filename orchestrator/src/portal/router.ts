@@ -172,6 +172,7 @@ import {
   type PortalConversionInboxOperationsService,
 } from './conversion-inbox-operations-service.js';
 import type { PortalLiveChannelTruthService } from './live-channel-truth-service.js';
+import type { PortalLiveChannelPauseService } from './live-channel-pause-service.js';
 import type { PortalOwnedSeedCampaignService } from './owned-seed-campaign-service.js';
 import type { PortalOwnedSeedMessageService } from './owned-seed-message-service.js';
 import {
@@ -390,6 +391,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   inboxOperations?: PortalConversionInboxOperationsService;
   /** Evidence-only state/caps/blockers/receipts boundary for Live Channels consumers. */
   liveChannelTruth?: PortalLiveChannelTruthService;
+  /** Founder/admin engage-only emergency pause; deliberately has no release command. */
+  liveChannelPause?: PortalLiveChannelPauseService;
   /** RLS-scoped immutable campaign templates, steps, approvals and reporting evidence. */
   campaignMachine?: PortalCampaignMachineService;
   /** Fixed-recipient Mailgun job staging only; the worker remains a separate process. */
@@ -2431,8 +2434,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         renderLiveChannelsBody(view, {
           workspaceName,
           csrfToken,
-          // No typed pause command boundary exists at the 9e26bae5 checkpoint.
-          pauseCommandAvailable: false,
+          pauseCommandAvailable: Boolean(deps.liveChannelPause),
           pauseCommandKeys: {
             all: randomUUID(),
             customer_email: randomUUID(),
@@ -2494,11 +2496,21 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         || !commandKey || !CRM_OBJECT_ID.test(commandKey)) {
       return liveChannelsNoticeRedirect('invalid');
     }
-    // No typed emergency-pause backend boundary exists at the 9e26bae5
-    // checkpoint, and this portal will not invent one. A well-formed,
-    // CSRF-proven command therefore lands on the honest unavailable notice
-    // until Codex composes the boundary.
-    return liveChannelsNoticeRedirect('unavailable');
+    if (!deps.liveChannelPause) return liveChannelsNoticeRedirect('unavailable');
+    const outcome = await deps.liveChannelPause.engage(crmIdentity(sessionToken, deps), {
+      scope,
+      commandKey,
+    });
+    if (outcome.ok) {
+      return liveChannelsNoticeRedirect(
+        outcome.disposition === 'engaged' ? 'pause_engaged' : 'pause_already',
+      );
+    }
+    return liveChannelsNoticeRedirect(
+      outcome.kind === 'forbidden' || outcome.kind === 'unauthenticated'
+        ? 'forbidden'
+        : outcome.kind === 'validation' ? 'invalid' : 'unavailable',
+    );
   }
 
   // ── exact company-content review: manager-only, read-only and source verified ──
