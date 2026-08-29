@@ -43,6 +43,12 @@ export const LIVE_CHANNELS_OWNED_SOCIAL_REVOKE_ROUTE =
   '/portal/channels/live/owned-social/revocation' as const;
 export const LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE =
   '/portal/channels/live/owned-social/staging' as const;
+export const LIVE_CHANNELS_SMS_BIND_ROUTE =
+  '/portal/channels/live/sms/sender' as const;
+export const LIVE_CHANNELS_SMS_REVOKE_ROUTE =
+  '/portal/channels/live/sms/revocation' as const;
+export const LIVE_CHANNELS_SMS_STAGE_ROUTE =
+  '/portal/channels/live/sms/staging' as const;
 
 export type LiveChannelsPauseScope = PortalLiveChannelTruthRail | 'all';
 
@@ -136,6 +142,13 @@ export type LiveChannelsNoticeCode =
   | 'owned_social_invalid'
   | 'owned_social_forbidden'
   | 'owned_social_unavailable'
+  | 'sms_sender_bound'
+  | 'sms_sender_revoked'
+  | 'sms_test_staged'
+  | 'sms_staging_blocked'
+  | 'sms_invalid'
+  | 'sms_forbidden'
+  | 'sms_unavailable'
   | 'invalid'
   | 'forbidden'
   | 'unavailable';

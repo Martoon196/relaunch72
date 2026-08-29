@@ -46,6 +46,12 @@ import {
   createPgPortalOwnedSocialBindingService,
   type PgPortalOwnedSocialBindingService,
 } from './owned-social-binding-pg-service.js';
+import {
+  createPgPortalSmsBindingService,
+  type PgPortalSmsBindingService,
+} from './sms-binding-pg-service.js';
+import { createPgTwilioSmsLiveCommandService } from '../sms-live-pg/command-service.js';
+import { assertSmsCommandBoundaryReady } from '../sms-live-pg/readiness.js';
 import { createPgOwnedPublicSocialLiveCommandService } from '../owned-public-social-pg/command-service.js';
 import { assertOwnedPublicSocialCommandBoundaryReady } from '../owned-public-social-pg/readiness.js';
 import {
@@ -146,6 +152,11 @@ export interface PgPortalPlatform {
    * r72_owned_social_command, and only after that boundary proves table-blind.
    */
   ownedSocialBinding?: PgPortalOwnedSocialBindingService;
+  /**
+   * Founder-only Twilio SMS binding and owned-test staging. Composed only from
+   * DATABASE_SMS_COMMAND_URL authenticated as r72_sms_command.
+   */
+  smsBinding?: PgPortalSmsBindingService;
   /** Bounded caller-owned runtime probe; throws without exposing connection details. */
   assertReady(): Promise<void>;
   close(): Promise<void>;
@@ -690,6 +701,54 @@ export async function buildPgPortalPlatform(
       }
     }
 
+    // The founder command seam for the Twilio SMS rail. It rides only its own
+    // least-privilege identity and stays undefined unless that identity proves
+    // its exact boundary. Both the workspace and the connection id must be
+    // pinned: the connection id is chosen before binding and is what the
+    // binding command mints.
+    let smsBinding: PgPortalSmsBindingService | undefined;
+    let smsReadinessPool: Pool | undefined;
+    if (env.DATABASE_SMS_COMMAND_URL?.trim()) {
+      let smsPool: Pool | undefined;
+      try {
+        const workspaceId = env.PROPERTY_PREDATOR_SMS_LIVE_WORKSPACE_ID
+          ?.trim().toLowerCase() ?? '';
+        const connectionId = env.PROPERTY_PREDATOR_SMS_LIVE_CONNECTION_ID
+          ?.trim().toLowerCase() ?? '';
+        if (!PORTAL_UUID.test(workspaceId) || !PORTAL_UUID.test(connectionId)) {
+          throw new Error(
+            'Twilio SMS command seam requires the exact live workspace and connection',
+          );
+        }
+        const smsConfig = requireCutoverIdentity(
+          loadDatabaseConfig('smsCommand', env),
+          'DATABASE_SMS_COMMAND_URL',
+          'r72_sms_command',
+        );
+        smsPool = createDatabasePool(smsConfig);
+        if (expectedInstallationId) {
+          await assertExpectedDatabaseInstallation(smsPool, expectedInstallationId);
+        }
+        await assertSmsCommandBoundaryReady(smsPool);
+        smsBinding = createPgPortalSmsBindingService({
+          webPool,
+          smsCommandPool: smsPool,
+          commandService: createPgTwilioSmsLiveCommandService({
+            commandPool: smsPool,
+            workspaceId,
+            providerConnectionId: connectionId,
+          }),
+          workspaceId,
+        });
+        smsReadinessPool = smsPool;
+        pools.push(smsPool);
+      } catch {
+        await smsPool?.end().catch(() => undefined);
+        smsBinding = undefined;
+        smsReadinessPool = undefined;
+      }
+    }
+
     let closed = false;
     return {
       auth: new PgPortalAuthService({ readPool: webPool, commandPool: identityPool }),
@@ -729,6 +788,7 @@ export async function buildPgPortalPlatform(
       ownedSeedCampaign,
       ownedSeedMessages,
       ownedSocialBinding,
+      smsBinding,
       async assertReady(): Promise<void> {
         await Promise.all([
           assertRuntimeSchemaCurrent(webPool),
@@ -782,6 +842,7 @@ export async function buildPgPortalPlatform(
           ...(ownedSocialReadinessPool
             ? [assertOwnedPublicSocialCommandBoundaryReady(ownedSocialReadinessPool)]
             : []),
+          ...(smsReadinessPool ? [assertSmsCommandBoundaryReady(smsReadinessPool)] : []),
         ]);
       },
       async close(): Promise<void> {

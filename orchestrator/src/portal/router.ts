@@ -174,6 +174,7 @@ import {
 import type { PortalLiveChannelTruthService } from './live-channel-truth-service.js';
 import type { PortalLiveChannelPauseService } from './live-channel-pause-service.js';
 import type { PortalOwnedSocialBindingService } from './owned-social-binding-service.js';
+import type { PortalSmsBindingService } from './sms-binding-service.js';
 import type { PortalOwnedSeedCampaignService } from './owned-seed-campaign-service.js';
 import type { PortalOwnedSeedMessageService } from './owned-seed-message-service.js';
 import {
@@ -264,6 +265,9 @@ import {
   LIVE_CHANNELS_OWNED_SOCIAL_REVOKE_ROUTE,
   LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE,
   LIVE_CHANNELS_PAUSE_ROUTE,
+  LIVE_CHANNELS_SMS_BIND_ROUTE,
+  LIVE_CHANNELS_SMS_REVOKE_ROUTE,
+  LIVE_CHANNELS_SMS_STAGE_ROUTE,
   LIVE_CHANNELS_ROUTE,
   presentLiveChannels,
   type LiveChannelsNoticeCode,
@@ -402,6 +406,11 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
    * staging. Database-only: it cannot claim a worker lease or call Ayrshare.
    */
   ownedSocialBinding?: PortalOwnedSocialBindingService;
+  /**
+   * Founder-only Twilio SMS binding and owned-test staging. Database-only: it
+   * cannot claim a worker lease or call Twilio.
+   */
+  smsBinding?: PortalSmsBindingService;
   /** RLS-scoped immutable campaign templates, steps, approvals and reporting evidence. */
   campaignMachine?: PortalCampaignMachineService;
   /** Fixed-recipient Mailgun job staging only; the worker remains a separate process. */
@@ -917,6 +926,20 @@ function ownedSocialFailureNotice(
   if (kind === 'forbidden' || kind === 'unauthenticated') return 'owned_social_forbidden';
   if (kind === 'validation' || kind === 'conflict') return 'owned_social_invalid';
   return 'owned_social_unavailable';
+}
+
+/**
+ * One mapping for every Twilio SMS failure. Deliberately distinct from the
+ * pause and owned-social codes so a founder is never told the wrong command
+ * failed.
+ */
+function smsFailureNotice(
+  kind: 'unauthenticated' | 'forbidden' | 'validation' | 'conflict' | 'blocked' | 'unavailable',
+): LiveChannelsNoticeCode {
+  if (kind === 'blocked') return 'sms_staging_blocked';
+  if (kind === 'forbidden' || kind === 'unauthenticated') return 'sms_forbidden';
+  if (kind === 'validation' || kind === 'conflict') return 'sms_invalid';
+  return 'sms_unavailable';
 }
 
 function crmIdentity(sessionToken: string, deps: PortalDeps): PortalCrmRequestIdentity {
@@ -2467,6 +2490,12 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
             revoke: randomUUID(),
             stage: randomUUID(),
           },
+          smsCommandAvailable: Boolean(deps.smsBinding),
+          smsCommandKeys: {
+            bind: randomUUID(),
+            revoke: randomUUID(),
+            stage: randomUUID(),
+          },
           pauseCommandKeys: {
             all: randomUUID(),
             customer_email: randomUUID(),
@@ -2630,6 +2659,110 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     // 'blocked' means the database refused the evidence; 'forbidden' means the
     // founder lacked authority. They are reported differently on purpose.
     return ownedSocialNotice(ownedSocialFailureNotice(outcome.kind));
+  }
+
+  // Founder-only Twilio SMS commands. Each is database-only: none can claim a
+  // worker lease or reach Twilio. No credential is accepted here — the account
+  // and messaging-service identifiers are reduced to digests by the seam.
+  if (deps.kind === 'postgres'
+      && (p === LIVE_CHANNELS_SMS_BIND_ROUTE
+        || p === LIVE_CHANNELS_SMS_REVOKE_ROUTE
+        || p === LIVE_CHANNELS_SMS_STAGE_ROUTE)
+      && method === 'POST') {
+    if (deps.productProfile?.id !== 'property_predator_growth') {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Live Channels not connected',
+        message: 'The Property Predator live channel control room is not enabled for this workspace.',
+        active: 'overview',
+      }));
+    }
+    const smsNotice = (code: LiveChannelsNoticeCode): void => redirect(
+      res,
+      `${LIVE_CHANNELS_ROUTE}?notice=${encodeURIComponent(liveChannelsNoticeToken(deps.sessionSecret, sessionToken, code))}`,
+      undefined,
+      303,
+    );
+    const allowed = p === LIVE_CHANNELS_SMS_BIND_ROUTE
+      ? new Set(['_csrf', 'command_key', 'binding_id', 'connection_id', 'endpoint_id',
+        'display_name', 'account_sid', 'messaging_service_sid', 'sender_number',
+        'regulatory_evidence', 'ownership_evidence', 'evidence_observed_at',
+        'confirm_sender'])
+      : p === LIVE_CHANNELS_SMS_REVOKE_ROUTE
+        ? new Set(['_csrf', 'command_key', 'binding_id', 'reason_code',
+          'revocation_evidence', 'confirm_sender_revoke'])
+        : new Set(['_csrf', 'command_key', 'binding_id', 'connection_id', 'endpoint_id',
+          'message_version_id', 'approval_request_id', 'approval_decision_id',
+          'person_id', 'phone_endpoint_id', 'consent_event_id', 'compliance_subject_id',
+          'policy_publication_id', 'pecr_sender_id', 'pecr_instigator_id',
+          'permission_use_id', 'operation_id', 'delivery_id', 'correlation_id',
+          'authority_valid_until', 'segment_count', 'owned_recipient', 'purpose',
+          'confirm_sms_stage']);
+    const confirmField = p === LIVE_CHANNELS_SMS_BIND_ROUTE
+      ? 'confirm_sender'
+      : p === LIVE_CHANNELS_SMS_REVOKE_ROUTE ? 'confirm_sender_revoke' : 'confirm_sms_stage';
+    const confirmValue = p === LIVE_CHANNELS_SMS_BIND_ROUTE
+      ? 'BIND'
+      : p === LIVE_CHANNELS_SMS_REVOKE_ROUTE ? 'REVOKE' : 'STAGE';
+    const form = await readMultiValueForm(req);
+    const commandKey = form ? oneFormValue(form, 'command_key') : null;
+    if (!form || !campaignFormKeysAllowed(form, allowed)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '')
+        || oneFormValue(form, confirmField) !== confirmValue
+        || !commandKey || !CRM_OBJECT_ID.test(commandKey)) {
+      return smsNotice('sms_invalid');
+    }
+    if (!deps.smsBinding) return smsNotice('sms_unavailable');
+    const identity = crmIdentity(sessionToken, deps);
+    const field = (name: string): string => oneFormValue(form, name) ?? '';
+    if (p === LIVE_CHANNELS_SMS_BIND_ROUTE) {
+      const outcome = await deps.smsBinding.bindSender(identity, {
+        bindingId: field('binding_id'),
+        providerConnectionId: field('connection_id'),
+        channelEndpointId: field('endpoint_id'),
+        displayName: field('display_name'),
+        accountSid: field('account_sid'),
+        messagingServiceSid: field('messaging_service_sid'),
+        senderNumber: field('sender_number'),
+        regulatoryEvidence: field('regulatory_evidence'),
+        ownershipEvidence: field('ownership_evidence'),
+        ownershipAttested: true,
+        evidenceObservedAt: field('evidence_observed_at'),
+      });
+      return smsNotice(outcome.ok ? 'sms_sender_bound' : smsFailureNotice(outcome.kind));
+    }
+    if (p === LIVE_CHANNELS_SMS_REVOKE_ROUTE) {
+      const outcome = await deps.smsBinding.revokeSender(identity, {
+        bindingId: field('binding_id'),
+        reasonCode: field('reason_code'),
+        revocationEvidence: field('revocation_evidence'),
+      });
+      return smsNotice(outcome.ok ? 'sms_sender_revoked' : smsFailureNotice(outcome.kind));
+    }
+    const segments = Number.parseInt(field('segment_count'), 10);
+    const outcome = await deps.smsBinding.stageOwnedTest(identity, {
+      bindingId: field('binding_id'),
+      providerConnectionId: field('connection_id'),
+      channelEndpointId: field('endpoint_id'),
+      messageVersionId: field('message_version_id'),
+      messageApprovalRequestId: field('approval_request_id'),
+      messageApprovalDecisionId: field('approval_decision_id'),
+      contactId: field('person_id'),
+      contactPointId: field('phone_endpoint_id'),
+      consentEventId: field('consent_event_id'),
+      complianceSubjectId: field('compliance_subject_id'),
+      policyPublicationEventId: field('policy_publication_id'),
+      pecrSenderDecisionEventId: field('pecr_sender_id'),
+      pecrInstigatorDecisionEventId: field('pecr_instigator_id'),
+      permissionUseReceiptId: field('permission_use_id'),
+      providerOperationId: field('operation_id'),
+      messageDeliveryId: field('delivery_id'),
+      correlationId: field('correlation_id'),
+      authorityValidUntil: field('authority_valid_until'),
+      expectedSegmentCount: Number.isNaN(segments) ? 0 : segments,
+      ownedRecipient: field('owned_recipient'),
+      purpose: field('purpose'),
+    });
+    return smsNotice(outcome.ok ? 'sms_test_staged' : smsFailureNotice(outcome.kind));
   }
 
   // ── exact company-content review: manager-only, read-only and source verified ──

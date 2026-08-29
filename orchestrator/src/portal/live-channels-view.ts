@@ -7,6 +7,9 @@ import {
   LIVE_CHANNELS_OWNED_SOCIAL_REVOKE_ROUTE,
   LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE,
   LIVE_CHANNELS_PAUSE_ROUTE,
+  LIVE_CHANNELS_SMS_BIND_ROUTE,
+  LIVE_CHANNELS_SMS_REVOKE_ROUTE,
+  LIVE_CHANNELS_SMS_STAGE_ROUTE,
   type LiveChannelCardView,
   type LiveChannelGaugeView,
   type LiveChannelLinkView,
@@ -104,6 +107,14 @@ export interface LiveChannelsRenderOptions {
   readonly ownedSocialProfileBindingComposed?: boolean;
   /** Fresh per-render command keys, one per owned-social founder command. */
   readonly ownedSocialCommandKeys?: Readonly<{
+    bind: string;
+    revoke: string;
+    stage: string;
+  }>;
+  /** True only when the Twilio SMS founder command boundary is composed. */
+  readonly smsCommandAvailable?: boolean;
+  /** Fresh per-render command keys, one per Twilio SMS founder command. */
+  readonly smsCommandKeys?: Readonly<{
     bind: string;
     revoke: string;
     stage: string;
@@ -233,6 +244,102 @@ function renderMasterStop(view: LiveChannelsView, options: LiveChannelsRenderOpt
  * The Profile Key field is write-only. It is never re-rendered, never echoed
  * back on failure and never appears in a notice.
  */
+const SMS_BIND_FIELDS: readonly (readonly [string, string])[] = Object.freeze([
+  ['binding_id', 'Binding record id'],
+  ['connection_id', 'Provider connection id'],
+  ['endpoint_id', 'Sender endpoint id'],
+  ['display_name', 'Display name'],
+  ['account_sid', 'Twilio Account SID'],
+  ['messaging_service_sid', 'Messaging Service SID'],
+  ['sender_number', 'Owned sender number, +44 E.164'],
+  ['regulatory_evidence', 'UK regulatory evidence reference'],
+  ['ownership_evidence', 'Number ownership evidence reference'],
+  ['evidence_observed_at', 'Evidence observed at, UTC instant'],
+] as const);
+
+const SMS_STAGE_FIELDS: readonly (readonly [string, string])[] = Object.freeze([
+  ['binding_id', 'Binding record id'],
+  ['connection_id', 'Provider connection id'],
+  ['endpoint_id', 'Sender endpoint id'],
+  ['message_version_id', 'Approved message version id'],
+  ['approval_request_id', 'Approval request id'],
+  ['approval_decision_id', 'Approval decision id'],
+  ['person_id', 'Owned test person id'],
+  ['phone_endpoint_id', 'Owned test phone endpoint id'],
+  ['consent_event_id', 'Consent evidence id'],
+  ['compliance_subject_id', 'Compliance subject id'],
+  ['policy_publication_id', 'Policy publication id'],
+  ['pecr_sender_id', 'PECR sender decision id'],
+  ['pecr_instigator_id', 'PECR instigator decision id'],
+  ['permission_use_id', 'Permission-use receipt id'],
+  ['operation_id', 'Provider operation id'],
+  ['delivery_id', 'Message delivery id'],
+  ['correlation_id', 'Correlation id'],
+  ['authority_valid_until', 'Authority valid until, UTC instant'],
+  ['segment_count', 'Expected segment count, 1 to 10'],
+  ['owned_recipient', 'Owned test recipient, +44 E.164'],
+  ['purpose', 'Consent purpose'],
+] as const);
+
+function smsFields(fields: readonly (readonly [string, string])[]): string {
+  return fields.map(([name, label]) =>
+    `<label class="plc-field"><span>${escapeHtml(label)}</span><input type="text" name="${escapeHtml(name)}" required maxlength="200" autocomplete="off"></label>`).join('');
+}
+
+/**
+ * Founder-only Twilio SMS commands. Reuses the existing panel and guard
+ * surface, and follows the same three-state honesty rule as the pause control.
+ * No Twilio credential is ever collected here: the Auth Token and restricted
+ * API key stay in the secret manager, held by the webhook and worker only.
+ */
+function renderSmsCommands(
+  view: LiveChannelsView,
+  options: LiveChannelsRenderOptions,
+): string {
+  const card = view.channels.find((channel) => channel.rail === 'sms');
+  if (!card) return '';
+  const head = `<div class="plc-panel-head"><h2 id="plc-sms-title">Owned SMS sender commands</h2><span>${escapeHtml(card.postureLabel)}</span></div>`;
+  if (!options.smsCommandAvailable) {
+    return `<section class="plc-panel" aria-labelledby="plc-sms-title">${head}<div class="plc-guard-body"><p>The Twilio SMS founder command boundary is not composed for this workspace, so no sender can be bound and no owned test can be staged from here. This portal will not invent one.</p><button class="plc-guard-button" type="button" disabled aria-disabled="true">Bind owned SMS sender — command boundary not composed</button></div></section>`;
+  }
+  const keys = options.smsCommandKeys ?? { bind: '', revoke: '', stage: '' };
+  const csrf = escapeHtml(options.csrfToken);
+  return `<section class="plc-panel" aria-labelledby="plc-sms-title">${head}
+    <details class="plc-guard"><summary><span>Bind one owned Twilio sender</span><b>EVIDENCE ONLY</b></summary><div class="plc-guard-body">
+      <p>The Account SID and Messaging Service SID are reduced to digests before they reach the database. No Auth Token or API key is accepted, stored or shown here.</p>
+      <form method="post" action="${LIVE_CHANNELS_SMS_BIND_ROUTE}" autocomplete="off">
+        <input type="hidden" name="_csrf" value="${csrf}">
+        <input type="hidden" name="command_key" value="${escapeHtml(keys.bind)}">
+        ${smsFields(SMS_BIND_FIELDS)}
+        <label class="plc-guard-check"><input type="checkbox" name="confirm_sender" value="BIND" required> I attest this Twilio account and UK number are company-owned and cleared for use.</label>
+        <button class="plc-guard-button" type="submit">Bind owned SMS sender</button>
+      </form>
+    </div></details>
+    <details class="plc-guard"><summary><span>Revoke a bound sender</span><b>PERMANENT</b></summary><div class="plc-guard-body">
+      <p>Revocation is append-only and disables the connection, so this rail can never dispatch through it again. A rotation is a revoke followed by binding a successor number.</p>
+      <form method="post" action="${LIVE_CHANNELS_SMS_REVOKE_ROUTE}" autocomplete="off">
+        <input type="hidden" name="_csrf" value="${csrf}">
+        <input type="hidden" name="command_key" value="${escapeHtml(keys.revoke)}">
+        <label class="plc-field"><span>Binding record id</span><input type="text" name="binding_id" required autocomplete="off"></label>
+        <label class="plc-field"><span>Reason code</span><input type="text" name="reason_code" required maxlength="100" autocomplete="off"></label>
+        <label class="plc-field"><span>Revocation evidence reference</span><input type="text" name="revocation_evidence" required maxlength="200" autocomplete="off"></label>
+        <label class="plc-guard-check"><input type="checkbox" name="confirm_sender_revoke" value="REVOKE" required> I understand this permanently ends dispatch for this owned sender.</label>
+        <button class="plc-guard-button" type="submit">Revoke owned sender</button>
+      </form>
+    </div></details>
+    <details class="plc-guard"><summary><span>Stage one owned test message</span><b>${card.capReached ? 'CAP REACHED' : 'DATABASE PROVED'}</b></summary><div class="plc-guard-body">
+      <p>Staging queues one already-approved message to one explicitly owned test number. The database re-proves the binding, sender, approval, recipient identity, current consent, latest-wins suppression, ${card.gauges.length > 0 ? escapeHtml(String(card.gauges[0]?.cap ?? 10)) : '10'} per day and 50 per month segment caps, an unreconciled-outcome check and the emergency pause first; every dimension must pass or nothing is queued. No worker lease is claimed and Twilio is not called.</p>
+      <form method="post" action="${LIVE_CHANNELS_SMS_STAGE_ROUTE}" autocomplete="off">
+        <input type="hidden" name="_csrf" value="${csrf}">
+        <input type="hidden" name="command_key" value="${escapeHtml(keys.stage)}">
+        ${smsFields(SMS_STAGE_FIELDS)}
+        <label class="plc-guard-check"><input type="checkbox" name="confirm_sms_stage" value="STAGE" required> I confirm this exact approved message may be queued to this owned test number.</label>
+        <button class="plc-guard-button" type="submit">Stage owned test message</button>
+      </form>
+    </div></details>
+  </section>`;
+}
+
 function renderOwnedSocialCommands(
   view: LiveChannelsView,
   options: LiveChannelsRenderOptions,
@@ -342,6 +449,7 @@ export function renderLiveChannelsBody(
     <div class="plc-grid">${view.channels.map((card) => renderCard(card, options)).join('')}${renderHandoffCard(view, options)}</div>
     ${renderApprovalsPanel(view)}
     ${renderOwnedSocialCommands(view, options)}
+    ${renderSmsCommands(view, options)}
     ${renderReceiptsPanel(view)}
     <footer class="plc-footer"><span><strong>Snapshot</strong> · ${escapeHtml(readableInstant(view.snapshotAt))} · ${escapeHtml(options.workspaceName)}</span><span><strong>Safety invariant</strong> · read-only evidence · no credentials · pause commands only move rails towards OFF</span></footer>
   </section>`;
