@@ -25,7 +25,7 @@ Growth HQ owns the people, attribution, consent, content, approvals, conversatio
 - CSV migration and authenticated migration-centre foundations exist; production customer data has not been imported.
 - OpenAI-backed company and affiliate generation rails are configured behind budgets, provenance and brand controls.
 - Mailgun EU is configured. The owned internal seed remains capped at **1 message per run and 3 per month**; the permission-bound customer-email rail is capped at **10 per day and 50 per month**.
-- Owned X, Meta WhatsApp and Twilio UK SMS command/worker/webhook foundations are composed with isolated identities, durable calling fences, receipts and Conversion Inbox visibility. Provider accounts and owned-test evidence are still required before any effect.
+- Owned X, Meta WhatsApp and Twilio UK SMS command/worker/webhook foundations are composed with isolated identities, durable calling fences, receipts and Conversion Inbox visibility. Owned X now also has founder-only bind, append-only revoke and readiness-gated staging commands on the existing Live Channels surface. Provider accounts and owned-test evidence are still required before any effect.
 - The operational Conversion Inbox now has unified channel/source truth, assignment, internal notes, reply drafting and approval, consent/opt-out visibility, Lead 360 and affiliate linkage, admin-call tasks, outcomes and next actions. Facebook/Instagram DM live transport is the explicit remaining inbox adapter gap.
 - A founder-only engage emergency pause now blocks every composed live worker at the durable `calling` transition. There is no release command in the application.
 - Emergency stops, idempotency, suppression, consent, audit and provider-operation boundaries are built into the effectful rails.
@@ -50,7 +50,7 @@ Growth HQ owns the people, attribution, consent, content, approvals, conversatio
   as `disabled`, `false`, `false`, `false` and `true` respectively.
 - No service was deployed and no provider call, customer write, email, SMS,
   WhatsApp message or social publication occurred. Deployment is held until
-  the exact local release tip (currently `01fd15b` before this evidence update)
+  the exact local release tip (currently `f79355b` before this evidence update)
   is published; Windows Git Credential Manager still returns
   `SEC_E_NO_CREDENTIALS`.
 
@@ -249,7 +249,7 @@ not itself authorise deployment, migration or provider effects.
 |---|---|---|
 | Customer email | Mailgun EU configured; production schema 59/59; exact command/worker/webhook identities and Render bindings proven; effects OFF, delivery OFF, receipts OFF and emergency pause ON; 10/day and 50/month caps | No new Mailgun account. Publish and deploy the exact reviewed tip, then supply the exact `office@propertypredator.com` person/endpoint, current consent and suppression-clear evidence, approved message/version hash, operator/connection IDs and one signed owned-mailbox receipt proof under separate effect approval. |
 | Meta WhatsApp | Command, one-at-a-time worker, challenge/webhook and Inbox receipt path composed | Verified Meta Business, App ID, WABA ID, phone-number ID, worker-only encrypted access-token binding, webhook-only app secret/verify token, one founder-owned UK recipient, and one approved **parameter-free** Property Predator test template. |
-| Owned X social | Ayrshare worker, cap fence and receipt projection composed | Ayrshare API key, exact linked Property Predator-owned X profile, X OAuth1 key/secret, profile-binding evidence, and one approved link-free test post/hash. |
+| Owned X social | Ayrshare worker, cap fence, receipt projection and founder-only bind/revoke/readiness-gated staging workflow composed; no provider call is reachable from the portal commands | Ayrshare API key, exact linked Property Predator-owned X profile and Profile Key, X OAuth1 key/secret, 32-byte profile-encryption key/version, connection UUID, read-write OAuth/ownership evidence, and one approved link-free test post/hash. |
 | Twilio UK SMS | Command, one-at-a-time worker, signed inbound/status webhook and Inbox receipt path composed | Twilio Account SID, restricted API key SID/secret, Messaging Service SID, approved UK regulatory bundle, owned UK sender, webhook auth token, and one founder-owned UK recipient plus approved message/consent/suppression evidence. |
 | Facebook/Instagram DMs | Unified Inbox projection exists; live adapter is intentionally reported `not-composed` | Owned Page and Instagram professional account, Meta app review/permissions and signed webhook subscription **after** the dedicated live inbound/reply adapter is built. |
 | Database proof | Static contracts and guarded disposable-Neon execution pass through `0059`; production ledger is 59/59 | Preserve the disposable branch for the final Sol Ultra master rehearsal. Production must never be used as the disposable attack-proof target. |
