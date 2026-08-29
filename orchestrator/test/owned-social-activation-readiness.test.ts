@@ -13,6 +13,7 @@ import {
   OwnedSocialActivationError,
   buildOwnedSocialActivationReadinessReport,
   deriveOwnedSocialPublicationRehearsal,
+  deriveOwnedSocialStagingIdempotencyKey,
   formatOwnedSocialActivationReadiness,
   ownedSocialAccountDigest,
   readOwnedSocialActivationTarget,
@@ -455,7 +456,6 @@ test('every identity input changes the idempotency key', () => {
     ['contentVersionId', () => rehearsal({ contentVersionId: IDS.alternate })],
     ['approvalDecisionId', () => rehearsal({ approvalDecisionId: IDS.alternate })],
     ['scheduledFor', () => rehearsal({ scheduledFor: '2026-09-01T09:00:00.000Z' })],
-    ['approvedText', () => rehearsal({}, { approvedText: 'A different approved sentence' })],
     ['operationTag', () => rehearsal({}, { operationTag: 'owned-social:other-tag' })],
   ];
   const keys = new Set<string>([baseline.idempotencyKeySha256]);
@@ -474,6 +474,43 @@ test('every identity input changes the idempotency key', () => {
     keys.add(changed.idempotencyKeySha256);
   }
   assert.equal(keys.size, identityChanges.length + 1, 'every identity change must be distinct');
+});
+
+// The staging identity is identifier-only so the founder portal can derive the
+// same key without ever reading the approved post body. The approved bytes
+// still bind the request digest.
+test('the portal staging key matches the offline rehearsal key exactly', () => {
+  const baseline = rehearsal();
+  assert.equal(
+    deriveOwnedSocialStagingIdempotencyKey(target(), OPERATION_TAG),
+    baseline.idempotencyKeySha256,
+  );
+  const scheduled = '2026-09-01T09:00:00.000Z';
+  assert.equal(
+    deriveOwnedSocialStagingIdempotencyKey(
+      target({ scheduledFor: scheduled }),
+      OPERATION_TAG,
+    ),
+    rehearsal({ scheduledFor: scheduled }).idempotencyKeySha256,
+  );
+  assert.throws(
+    () => deriveOwnedSocialStagingIdempotencyKey(target(), 'not a valid tag'),
+    (error: unknown) => error instanceof OwnedSocialActivationError,
+  );
+  assert.throws(
+    () => deriveOwnedSocialStagingIdempotencyKey(
+      target({ scheduledFor: '2026-09-01' }), OPERATION_TAG,
+    ),
+    (error: unknown) => error instanceof OwnedSocialActivationError,
+  );
+});
+
+test('the approved bytes bind the request digest but not the staging key', () => {
+  const baseline = rehearsal();
+  const changed = rehearsal({}, { approvedText: 'A different approved sentence' });
+  assert.equal(changed.idempotencyKeySha256, baseline.idempotencyKeySha256);
+  assert.notEqual(changed.requestSha256, baseline.requestSha256);
+  assert.notEqual(changed.contentSha256, baseline.contentSha256);
 });
 
 // operationTag and scheduledFor are the only variable-width identity fields and

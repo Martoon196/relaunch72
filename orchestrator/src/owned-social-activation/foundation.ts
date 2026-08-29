@@ -274,6 +274,50 @@ export interface OwnedSocialPublicationRehearsal {
 }
 
 /**
+ * The scope-bound publication identity: workspace, connection, owned profile,
+ * exact approved content version, approval decision, operation tag and
+ * schedule. It is deliberately identifier-only so the founder portal can
+ * derive the same idempotency key the offline rehearsal derives, without ever
+ * reading the approved post body. Content versions are immutable, so the
+ * version id pins the exact bytes just as tightly as their digest would.
+ */
+function ownedSocialStagingIdentity(
+  target: OwnedSocialActivationTarget,
+  operationTag: string,
+): string {
+  return [
+    OWNED_SOCIAL_ACTIVATION_CONTRACT,
+    target.workspaceId,
+    target.providerConnectionId,
+    target.profileId,
+    target.contentVersionId,
+    target.approvalDecisionId,
+    operationTag,
+    target.scheduledFor ?? '',
+  ].join(DIGEST_FIELD_SEPARATOR);
+}
+
+/**
+ * The scope-bound idempotency key a founder staging command must supply. Two
+ * stagings of the same approved post onto the same owned profile collapse onto
+ * one job; anything else is a distinct publication.
+ */
+export function deriveOwnedSocialStagingIdempotencyKey(
+  target: OwnedSocialActivationTarget,
+  operationTag: string,
+): string {
+  if (!OPERATION_TAG.test(operationTag)
+      || (target.scheduledFor !== null
+        && (!Number.isFinite(Date.parse(target.scheduledFor))
+          || new Date(target.scheduledFor).toISOString() !== target.scheduledFor))) {
+    throw new OwnedSocialActivationError('invalid_rehearsal');
+  }
+  return createHash('sha256')
+    .update(ownedSocialStagingIdentity(target, operationTag), 'utf8')
+    .digest('hex');
+}
+
+/**
  * The canonical, deterministic derivation of the two digests 0052 stores but
  * does not itself recompute. Fixing the definition here means a replay of the
  * same owned publication produces byte-identical digests, so the database
@@ -306,19 +350,10 @@ export function deriveOwnedSocialPublicationRehearsal(
   }
   if (LINK_SHAPED.test(input.approvedText)) failures.push('CONTAINS_LINK_OR_DOMAIN');
 
-  const identity = [
-    OWNED_SOCIAL_ACTIVATION_CONTRACT,
-    target.workspaceId,
-    target.providerConnectionId,
-    target.profileId,
-    target.contentVersionId,
-    contentSha256,
-    target.approvalDecisionId,
-    input.operationTag,
-    target.scheduledFor ?? '',
-  ].join(DIGEST_FIELD_SEPARATOR);
+  const identity = ownedSocialStagingIdentity(target, input.operationTag);
   const request = [
     identity,
+    contentSha256,
     target.contentItemId,
     target.approvalRequestId,
     target.sourceAttestationId,
