@@ -130,7 +130,9 @@ test('0062 gives the definer column-scoped reads and denies evidence payloads', 
   }
   for (const forbidden of [
     'body_sha256', 'sender_identity_sha256', 'payload_sha256',
-    'signature_sha256', 'recipient_sha256', 'request_sha256',
+    // 0050 names this signature_token_sha256. The invented signature_sha256
+    // failed the disposable-Neon apply with 42703, so the exact name matters.
+    'signature_token_sha256', 'recipient_sha256', 'request_sha256',
     'idempotency_key_sha256', 'opt_evidence',
   ]) {
     assert.match(sql, new RegExp(`'${forbidden}'`), `${forbidden} must be audited`);

@@ -46,47 +46,60 @@ GRANT SELECT (workspace_id, id, receipt_id, conversation_id, inbound_message_id,
 GRANT SELECT (workspace_id, message_delivery_id, operation_id)
   ON app.property_predator_sms_jobs TO r72_operational_inbox_definer;
 
+-- The candidate list is resolved against pg_attribute first, and the privilege
+-- test uses the (attrelid, attnum) overload. The name-based overload evaluates
+-- its column argument even when a guard clause would have excluded the row,
+-- because PostgreSQL does not promise WHERE-clause evaluation order, so a stale
+-- candidate raised 42703 and failed the whole apply. The attnum form cannot.
+-- A stale candidate now fails loudly below instead of silently auditing nothing.
 DO $definer_column_audit$
 DECLARE
-  forbidden record;
+  candidates constant text[][] := ARRAY[
+    ['property_predator_mailgun_inbound_receipts', 'body_sha256'],
+    ['property_predator_mailgun_inbound_receipts', 'payload_sha256'],
+    ['property_predator_mailgun_inbound_receipts', 'signature_token_sha256'],
+    ['property_predator_mailgun_inbound_receipts', 'sender_identity_sha256'],
+    ['property_predator_whatsapp_live_inbox_projections', 'body_sha256'],
+    ['property_predator_whatsapp_live_inbox_projections', 'sender_identity_sha256'],
+    ['property_predator_sms_inbox_projections', 'body_sha256'],
+    ['property_predator_sms_inbox_projections', 'sender_identity_sha256'],
+    ['property_predator_sms_inbox_projections', 'opt_evidence'],
+    ['property_predator_sms_jobs', 'recipient_sha256'],
+    ['property_predator_sms_jobs', 'request_sha256'],
+    ['property_predator_sms_jobs', 'idempotency_key_sha256']
+  ];
+  candidate_table text;
+  candidate_column text;
+  resolved_relation oid;
+  resolved_attnum smallint;
+  index integer;
 BEGIN
-  FOR forbidden IN
-    SELECT candidate.table_name, candidate.column_name
-    FROM (
-      VALUES
-        ('property_predator_mailgun_inbound_receipts', 'body_sha256'),
-        ('property_predator_mailgun_inbound_receipts', 'payload_sha256'),
-        ('property_predator_mailgun_inbound_receipts', 'signature_sha256'),
-        ('property_predator_mailgun_inbound_receipts', 'sender_identity_sha256'),
-        ('property_predator_whatsapp_live_inbox_projections', 'body_sha256'),
-        ('property_predator_whatsapp_live_inbox_projections', 'sender_identity_sha256'),
-        ('property_predator_sms_inbox_projections', 'body_sha256'),
-        ('property_predator_sms_inbox_projections', 'sender_identity_sha256'),
-        ('property_predator_sms_inbox_projections', 'opt_evidence'),
-        ('property_predator_sms_jobs', 'recipient_sha256'),
-        ('property_predator_sms_jobs', 'request_sha256'),
-        ('property_predator_sms_jobs', 'idempotency_key_sha256')
-    ) AS candidate(table_name, column_name)
-    WHERE EXISTS (
-      SELECT 1 FROM pg_catalog.pg_attribute AS attribute
-      JOIN pg_catalog.pg_class AS relation ON relation.oid = attribute.attrelid
-      JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-      WHERE namespace.nspname = 'app'
-        AND relation.relname = candidate.table_name
-        AND attribute.attname = candidate.column_name
-        AND NOT attribute.attisdropped
-    )
-    AND pg_catalog.has_column_privilege(
-      'r72_operational_inbox_definer',
-      format('app.%I', candidate.table_name),
-      candidate.column_name,
-      'SELECT'
-    )
-  LOOP
-    RAISE EXCEPTION
-      'Operational inbox definer must not read app.%.% ',
-      forbidden.table_name, forbidden.column_name
-      USING ERRCODE = '42501';
+  FOR index IN 1 .. array_length(candidates, 1) LOOP
+    candidate_table := candidates[index][1];
+    candidate_column := candidates[index][2];
+    SELECT attribute.attrelid, attribute.attnum
+      INTO resolved_relation, resolved_attnum
+    FROM pg_catalog.pg_attribute AS attribute
+    JOIN pg_catalog.pg_class AS relation ON relation.oid = attribute.attrelid
+    JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+    WHERE namespace.nspname = 'app'
+      AND relation.relname = candidate_table
+      AND attribute.attname = candidate_column
+      AND NOT attribute.attisdropped;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION
+        'Operational inbox column audit must name a real column: app.%.%',
+        candidate_table, candidate_column
+        USING ERRCODE = '42703';
+    END IF;
+    IF pg_catalog.has_column_privilege(
+         'r72_operational_inbox_definer', resolved_relation, resolved_attnum, 'SELECT'
+       ) THEN
+      RAISE EXCEPTION
+        'Operational inbox definer must not read app.%.%',
+        candidate_table, candidate_column
+        USING ERRCODE = '42501';
+    END IF;
   END LOOP;
 END
 $definer_column_audit$;
@@ -306,28 +319,36 @@ GRANT EXECUTE ON FUNCTION app_private.operational_inbox_live_delivery_linked(
 -- the outage. app.property_predator_mailgun_inbound_receipts is deliberately
 -- excluded: 0050 granted it to r72_web and Lead 360 still reads it directly, so
 -- revoking that grant belongs to a separate, wider change than this repair.
+-- Resolved through to_regclass for the same reason as the column audit: a stale
+-- table name must fail with a message that names it, not an opaque 42P01 from
+-- inside a privilege test.
 DO $web_table_blindness_audit$
 DECLARE
-  leaked text;
+  candidates constant text[] := ARRAY[
+    'property_predator_customer_email_jobs',
+    'property_predator_whatsapp_live_inbox_projections',
+    'property_predator_sms_inbox_projections',
+    'property_predator_sms_jobs'
+  ];
+  candidate_table text;
+  resolved_relation oid;
 BEGIN
-  FOR leaked IN
-    SELECT candidate.table_name
-    FROM (
-      VALUES
-        ('property_predator_customer_email_jobs'),
-        ('property_predator_whatsapp_live_inbox_projections'),
-        ('property_predator_sms_inbox_projections'),
-        ('property_predator_sms_jobs')
-    ) AS candidate(table_name)
-    WHERE pg_catalog.has_table_privilege(
-      'r72_web', format('app.%I', candidate.table_name),
-      'SELECT, INSERT, UPDATE, DELETE'
-    )
-  LOOP
-    RAISE EXCEPTION
-      'r72_web must stay table-blind on app.% after the inbox read boundary',
-      leaked
-      USING ERRCODE = '42501';
+  FOREACH candidate_table IN ARRAY candidates LOOP
+    resolved_relation := pg_catalog.to_regclass(format('app.%I', candidate_table));
+    IF resolved_relation IS NULL THEN
+      RAISE EXCEPTION
+        'Operational inbox blindness audit must name a real table: app.%',
+        candidate_table
+        USING ERRCODE = '42P01';
+    END IF;
+    IF pg_catalog.has_table_privilege(
+         'r72_web', resolved_relation, 'SELECT, INSERT, UPDATE, DELETE'
+       ) THEN
+      RAISE EXCEPTION
+        'r72_web must stay table-blind on app.% after the inbox read boundary',
+        candidate_table
+        USING ERRCODE = '42501';
+    END IF;
   END LOOP;
 END
 $web_table_blindness_audit$;
