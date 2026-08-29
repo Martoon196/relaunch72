@@ -76,8 +76,8 @@ import {
   CAMPAIGN_MACHINE_ROUTE,
   presentCampaignMachine,
 } from './campaign-machine-presenter.js';
-import { createPropertyPredatorCampaignMachineFixture } from './campaign-machine-fixtures.js';
 import { renderCampaignMachineBody } from './campaign-machine-view.js';
+import type { PortalCampaignMachineService } from './campaign-machine-service.js';
 import {
   PUBLIC_SOCIAL_CAMPAIGNS_ROUTE,
   presentPublicSocialCampaigns,
@@ -390,6 +390,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   inboxOperations?: PortalConversionInboxOperationsService;
   /** Evidence-only state/caps/blockers/receipts boundary for Live Channels consumers. */
   liveChannelTruth?: PortalLiveChannelTruthService;
+  /** RLS-scoped immutable campaign templates, steps, approvals and reporting evidence. */
+  campaignMachine?: PortalCampaignMachineService;
   /** Fixed-recipient Mailgun job staging only; the worker remains a separate process. */
   ownedSeedCampaign?: PortalOwnedSeedCampaignService;
   /** Fixed-recipient LIVE draft and human message approval; it cannot stage or send. */
@@ -3555,18 +3557,45 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         backLabel: 'Return to Campaigns',
       }));
     }
-    const fixture = createPropertyPredatorCampaignMachineFixture();
-    const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
-    return sendHtml(res, 200, operationalPage(
-      fixture.workspaceName,
-      renderCampaignMachineBody(presentCampaignMachine({
-        ...fixture,
-        asOf: new Date(now).toISOString(),
-      })),
-      deps,
-      'content',
-      csrfToken,
-    ));
+    if (!deps.campaignMachine) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Campaign Machine not connected',
+        message: 'The protected campaign evidence reader is not enabled for this workspace.',
+        active: 'content',
+        backHref: PUBLIC_SOCIAL_CAMPAIGNS_ROUTE,
+        backLabel: 'Return to Campaigns',
+      }));
+    }
+    try {
+      const outcome = await deps.campaignMachine.snapshot(crmIdentity(sessionToken, deps));
+      if (!outcome.ok) {
+        const status = outcome.kind === 'forbidden' ? 403
+          : outcome.kind === 'unauthenticated' ? 401 : 503;
+        return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+          title: 'Campaign Machine temporarily unavailable',
+          message: outcome.message,
+          active: 'content',
+          backHref: PUBLIC_SOCIAL_CAMPAIGNS_ROUTE,
+          backLabel: 'Return to Campaigns',
+        }));
+      }
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      return sendHtml(res, 200, operationalPage(
+        outcome.snapshot.workspaceName,
+        renderCampaignMachineBody(presentCampaignMachine(outcome.snapshot)),
+        deps,
+        'content',
+        csrfToken,
+      ));
+    } catch {
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Campaign Machine temporarily unavailable',
+        message: 'No campaign, approval, audience or provider state was changed. Try again shortly.',
+        active: 'content',
+        backHref: PUBLIC_SOCIAL_CAMPAIGNS_ROUTE,
+        backLabel: 'Return to Campaigns',
+      }));
+    }
   }
 
   // ── public-social campaigns: exact body-free command projection, read-only ──
@@ -3648,7 +3677,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
             && contentNavigation?.brainRoute === BRAND_BRAIN_ROUTE
           ),
           brainLabel: contentNavigation?.brainLabel,
-          campaignMachineAvailable: deps.productProfile?.id === 'property_predator_growth',
+          campaignMachineAvailable: Boolean(deps.campaignMachine),
         }),
         deps,
         'content',

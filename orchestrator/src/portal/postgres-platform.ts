@@ -39,6 +39,10 @@ import {
   type PgPortalLiveChannelTruthService,
 } from './live-channel-truth-pg-service.js';
 import {
+  createPgPortalCampaignMachineService,
+  type PgPortalCampaignMachineService,
+} from './campaign-machine-pg-service.js';
+import {
   createPgPortalOperatorActionCentreService,
   type PgPortalOperatorActionCentreService,
 } from './operator-action-centre-pg-service.js';
@@ -118,6 +122,8 @@ export interface PgPortalPlatform {
   inboxOperations: PgPortalConversionInboxOperationsService;
   /** Sanitised evidence-only channel state, caps, blockers and latest receipts. */
   liveChannelTruth: PgPortalLiveChannelTruthService;
+  /** RLS-scoped immutable Campaign Machine read model. */
+  campaignMachine: PgPortalCampaignMachineService;
   /** Optional table-blind staging command for the fixed owned office seed only. */
   ownedSeedCampaign?: PgPortalOwnedSeedCampaignService;
   /** Fixed office-seed LIVE draft plus deliberate message approval; cannot send. */
@@ -627,6 +633,7 @@ export async function buildPgPortalPlatform(
         crmCommandPool: commandPool,
       }),
       liveChannelTruth: createPgPortalLiveChannelTruthService({ webPool }),
+      campaignMachine: createPgPortalCampaignMachineService({ webPool }),
       ownedSeedCampaign,
       ownedSeedMessages,
       async assertReady(): Promise<void> {
