@@ -65,7 +65,9 @@ founder-owned acceptance target.
   built; app/WABA/phone/template evidence and an owned test number remain required.
 - ✅ Owned social — Ayrshare/X foundation and isolated worker built; exact owned
   profile evidence, credentials and one approved test post remain required.
-- **NEXT: UK SMS through Twilio Messaging.** Reuse the existing Conversion Inbox,
+- ✅ UK SMS — Twilio Messaging foundation, worker and signed webhook path built;
+  provider account, Messaging Service, UK regulatory bundle and an owned test
+  number remain required. Reuse the existing Conversion Inbox,
   consent, suppression and Lead 360 models. Build exact least-privilege command,
   one-at-a-time worker and signed inbound/status webhook identities; preserve raw
   callback authentication and replay conflict evidence; enforce current consent at

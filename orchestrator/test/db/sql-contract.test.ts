@@ -59,6 +59,7 @@ const migration52Url = new URL('../../src/db/migrations/0052_property_predator_o
 const migration53Url = new URL('../../src/db/migrations/0053_property_predator_meta_whatsapp_live_foundation.sql', import.meta.url);
 const migration54Url = new URL('../../src/db/migrations/0054_property_predator_customer_email_live_foundation.sql', import.meta.url);
 const migration55Url = new URL('../../src/db/migrations/0055_property_predator_operational_conversion_inbox.sql', import.meta.url);
+const migration56Url = new URL('../../src/db/migrations/0056_property_predator_twilio_sms_live_foundation.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -499,7 +500,7 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
 
 test('bundled migration discovery orders and checksums through the operational Conversion Inbox', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-49);
+  const tail = migrations.slice(-50);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0007_public_schema_hardening.sql', version: 7 },
     { filename: '0008_setup_delivery_recovery.sql', version: 8 },
@@ -550,6 +551,7 @@ test('bundled migration discovery orders and checksums through the operational C
     { filename: '0053_property_predator_meta_whatsapp_live_foundation.sql', version: 53 },
     { filename: '0054_property_predator_customer_email_live_foundation.sql', version: 54 },
     { filename: '0055_property_predator_operational_conversion_inbox.sql', version: 55 },
+    { filename: '0056_property_predator_twilio_sms_live_foundation.sql', version: 56 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -601,6 +603,7 @@ test('bundled migration discovery orders and checksums through the operational C
     (await readFile(migration53Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration54Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration55Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration56Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));

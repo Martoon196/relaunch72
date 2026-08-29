@@ -45,6 +45,7 @@ const RENDER = {
     customer_email: 'fa900000-0000-4000-8000-0000000000a2',
     owned_social: 'fa900000-0000-4000-8000-0000000000a3',
     whatsapp: 'fa900000-0000-4000-8000-0000000000a4',
+    sms: 'fa900000-0000-4000-8000-0000000000a6',
     social_dm: 'fa900000-0000-4000-8000-0000000000a5',
   },
   railStatusAvailable: true,
@@ -60,7 +61,7 @@ test('route constants live under /portal/channels', () => {
   assert.equal(LIVE_CHANNELS_PAUSE_ROUTE, '/portal/channels/live/emergency-pause');
 });
 
-test('fixture presents four rails with derived postures and no deliverable channel', () => {
+test('fixture presents five rails with derived postures and no deliverable channel', () => {
   const view = presentLiveChannels(createPropertyPredatorLiveChannelsFixture());
   assert.equal(view.illustrative, true);
   assert.equal(view.snapshotAt, PROPERTY_PREDATOR_LIVE_CHANNELS_AS_OF);
@@ -70,14 +71,15 @@ test('fixture presents four rails with derived postures and no deliverable chann
       ['customer_email', 'paused'],
       ['owned_social', 'blocked'],
       ['whatsapp', 'blocked'],
+      ['sms', 'not_connected'],
       ['social_dm', 'not_connected'],
     ],
   );
   assert.equal(view.readyCount, 0);
-  assert.equal(view.launchReadinessLabel, '0 of 4 channels live');
+  assert.equal(view.launchReadinessLabel, '0 of 5 channels live');
   assert.equal(view.allComposedPaused, false);
   assert.equal(view.totalUsedToday, 4);
-  assert.equal(view.totalDailyCap, 12);
+  assert.equal(view.totalDailyCap, 22);
   assert.equal(view.attentionRailCount, 1);
   assert.deepEqual(view.approvalRequiredRailLabels, ['Meta WhatsApp']);
   assert.deepEqual(
@@ -91,7 +93,7 @@ test('ready and degraded derive only from authoritative evidence', () => {
   const live = presentLiveChannels(snapshotOf(authoritative()));
   assert.equal(live.channels[0]!.posture, 'ready');
   assert.equal(live.readyCount, 1);
-  assert.equal(live.launchReadinessLabel, '1 of 4 channels live');
+  assert.equal(live.launchReadinessLabel, '1 of 5 channels live');
 
   const degraded = authoritative();
   degraded.rails[0]!.connectionState = 'degraded';
@@ -140,13 +142,13 @@ test('the exact four-rail set is required', () => {
 
 test('the social DM rail must remain not composed with LIVE_ADAPTER_NOT_COMPOSED', () => {
   const composed = mutable();
-  composed.rails[3]!.connectionState = 'configured';
+  composed.rails[4]!.connectionState = 'configured';
   assert.throws(() => presentLiveChannels(snapshotOf(composed)), /social DM rail must remain not composed/);
 
   // Stripping the code trips the generic state/code pairing guard first —
   // either path fails closed before the rail could render.
   const uncoded = mutable();
-  uncoded.rails[3]!.blockerCodes = [];
+  uncoded.rails[4]!.blockerCodes = [];
   assert.throws(() => presentLiveChannels(snapshotOf(uncoded)), /blocker codes contradict its states/);
 });
 
@@ -222,9 +224,9 @@ test('view renders the fixture truthfully with the illustrative boundary', () =>
   assert.match(html, /ILLUSTRATIVE TEST DATA/);
   assert.match(html, /NO PROVIDER WAS READ/);
   assert.match(html, /data-dataset="illustrative_fixture"/);
-  assert.match(html, /0 of 4 channels live/);
+  assert.match(html, /0 of 5 channels live/);
   assert.doesNotMatch(html, /All channels live/);
-  assert.match(html, /4 of 12 capped dispatches used/);
+  assert.match(html, /4 of 22 capped dispatches used/);
   assert.match(html, /4 \/ 10/);
   assert.match(html, /aria-current="page">Live Channels/);
   assert.match(html, /Social DMs/);
@@ -292,7 +294,7 @@ test('view carries accessible landmarks, focus and adaptive media rules', () => 
   assert.match(html, /min-height:48px/);
   assert.match(html, /min-height:44px/);
   const gaugeBars = html.match(/class="plc-gauge-track" aria-hidden="true"/g) ?? [];
-  assert.equal(gaugeBars.length, 8);
+  assert.equal(gaugeBars.length, 10);
 });
 
 test('small text tokens keep WCAG AA contrast on their dark surfaces', () => {
@@ -377,6 +379,7 @@ test('cross-surface links land on real portal routes', () => {
   const html = renderLiveChannelsBody(presentLiveChannels(createPropertyPredatorLiveChannelsFixture()), RENDER);
   assert.match(html, /href="\/portal\/inbox\?channel=email"/);
   assert.match(html, /href="\/portal\/inbox\?channel=whatsapp"/);
+  assert.match(html, /href="\/portal\/inbox\?channel=sms"/);
   assert.match(html, /href="\/portal\/inbox\?queue=approval"/);
   assert.match(html, /href="\/portal\/inbox"/);
   assert.match(html, /href="\/portal\/campaigns"/);

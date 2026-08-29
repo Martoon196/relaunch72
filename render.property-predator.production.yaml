@@ -175,6 +175,11 @@ services:
       # one serializable transaction; it cannot claim or call Mailgun.
       - key: DATABASE_CUSTOMER_EMAIL_COMMAND_URL
         sync: false
+      # Function-only 0056 founder command seam. It authorizes and enqueues one
+      # permission-bound SMS job only after exact consent, PECR and approval
+      # evidence; it cannot claim a job or call Twilio.
+      - key: DATABASE_SMS_COMMAND_URL
+        sync: false
       # Dedicated r72_mailgun_webhook_command identity. This is deliberately
       # narrower than the platform's generic webhook role.
       - key: DATABASE_MAILGUN_WEBHOOK_URL
@@ -204,6 +209,8 @@ services:
       - key: DATABASE_WHATSAPP_LIVE_COMMAND_POOL_MAX
         value: "2"
       - key: DATABASE_CUSTOMER_EMAIL_COMMAND_POOL_MAX
+        value: "2"
+      - key: DATABASE_SMS_COMMAND_POOL_MAX
         value: "2"
       - key: DATABASE_MAILGUN_WEBHOOK_POOL_MAX
         value: "2"
@@ -715,3 +722,123 @@ services:
         value: "false"
       - key: PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED
         value: "true"
+
+  # 0056 permission-bound Twilio SMS worker. It deploys dark and proves its
+  # exact database boundary without constructing the Twilio adapter or making
+  # a startup provider call. Activation is a separate reviewed change.
+  - type: worker
+    name: property-predator-twilio-sms-live
+    runtime: node
+    region: frankfurt
+    plan: starter
+    branch: codex/relaunch72-platform-foundation
+    numInstances: 1
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
+    startCommand: npm run --workspace orchestrator serve:twilio-sms-live
+    maxShutdownDelaySeconds: 120
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_SSL_MODE
+        value: verify-full
+      - key: DATABASE_SMS_WORKER_URL
+        sync: false
+      - key: DATABASE_SMS_WORKER_POOL_MAX
+        value: "1"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        value: "5000"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: "15000"
+      - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_SMS_LIVE_WORKSPACE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_SMS_LIVE_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_SMS_LIVE_MODE
+        value: disabled
+      - key: PROPERTY_PREDATOR_SMS_PROVIDER_ID
+        value: twilio_messaging
+      - key: PROPERTY_PREDATOR_SMS_LIVE_POLL_MS
+        value: "5000"
+      - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_SMS_DELIVERY_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_SMS_EMERGENCY_PAUSED
+        value: "true"
+      # Operator attestation only: release this after the separate webhook
+      # surface is deployed and its signed status route is green.
+      - key: PROPERTY_PREDATOR_SMS_RECEIPTS_CONFIRMED
+        value: "false"
+      # Twilio egress only. The account auth token is absent; the restricted
+      # API key pair is scoped to this one Messaging Service.
+      - key: TWILIO_KEY_SCOPE
+        value: restricted-api-key
+      - key: PROPERTY_PREDATOR_SMS_ACCOUNT_SID
+        sync: false
+      - key: PROPERTY_PREDATOR_SMS_SENDER_NUMBER
+        sync: false
+      - key: TWILIO_API_KEY_SID
+        sync: false
+      - key: TWILIO_API_KEY_SECRET
+        sync: false
+      - key: TWILIO_MESSAGING_SERVICE_SID
+        sync: false
+
+  # Public Twilio callback surface. This process owns only the webhook login
+  # and the Twilio signature auth token. It never receives the restricted API
+  # key secret, messaging service SID, portal session secret or any other
+  # database URL.
+  - type: web
+    name: property-predator-twilio-sms-live-webhook
+    runtime: node
+    region: frankfurt
+    plan: starter
+    branch: codex/relaunch72-platform-foundation
+    numInstances: 1
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
+    startCommand: npm run --workspace orchestrator serve:twilio-sms-live-webhook
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 60
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATABASE_SSL_MODE
+        value: verify-full
+      - key: DATABASE_SMS_WEBHOOK_URL
+        sync: false
+      - key: DATABASE_SMS_WEBHOOK_POOL_MAX
+        value: "2"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        value: "5000"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: "15000"
+      - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_SMS_WEBHOOK_MODE
+        value: disabled
+      - key: PROPERTY_PREDATOR_SMS_PROVIDER_ID
+        value: twilio_messaging
+      - key: PROPERTY_PREDATOR_SMS_LIVE_WORKSPACE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_SMS_LIVE_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_SMS_ACCOUNT_SID
+        sync: false
+      - key: PROPERTY_PREDATOR_SMS_WEBHOOK_PUBLIC_ORIGIN
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false

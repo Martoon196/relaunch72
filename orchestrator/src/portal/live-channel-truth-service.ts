@@ -1,7 +1,7 @@
 import type { PortalCrmRequestIdentity } from './crm-service.js';
 
 /**
- * The four operational rails that may appear in the shared Conversion Inbox
+ * The five operational rails that may appear in the shared Conversion Inbox
  * and the founder Live Channels control room. This is deliberately not a
  * provider list: a rail remains present when its live adapter is absent.
  */
@@ -9,6 +9,7 @@ export const PORTAL_LIVE_CHANNEL_TRUTH_RAILS = Object.freeze([
   'customer_email',
   'owned_social',
   'whatsapp',
+  'sms',
   'social_dm',
 ] as const);
 

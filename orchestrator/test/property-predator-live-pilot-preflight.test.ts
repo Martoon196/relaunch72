@@ -146,12 +146,16 @@ test('partially prepared deferred rails are visible but cannot block the Mailgun
   const env = firstChannelEnvironment();
   env.PROPERTY_PREDATOR_WHATSAPP_LIVE_PROVIDER_ID = 'meta_whatsapp_cloud';
   env.PROPERTY_PREDATOR_META_WHATSAPP_WABA_ID = '1234567890';
+  env.PROPERTY_PREDATOR_SMS_PROVIDER_ID = 'twilio_messaging';
 
   const report = runPropertyPredatorPilotPreflight(env);
   const whatsapp = report.providers.find((provider) => provider.rail === 'whatsapp');
+  const sms = report.providers.find((provider) => provider.rail === 'sms');
   assert.equal(report.result, 'ready-for-activation-review');
   assert.equal(whatsapp?.status, 'incomplete');
   assert.ok(whatsapp?.checks.every((check) => check.blocking === false));
+  assert.equal(sms?.status, 'incomplete');
+  assert.ok(sms?.checks.every((check) => check.blocking === false));
 });
 
 test('callback metadata rejects embedded credentials, query tokens and non-HTTPS URLs', () => {
@@ -179,6 +183,7 @@ test('the agreed provider catalogue is exact and keeps social listening outside 
       { rail: 'customer_email', provider: 'Mailgun EU customer email', phase: 'mandatory-first-channel' },
       { rail: 'whatsapp', provider: 'Meta WhatsApp Cloud', phase: 'deferred' },
       { rail: 'owned_social', provider: 'Ayrshare owned X', phase: 'deferred' },
+      { rail: 'sms', provider: 'Twilio Messaging UK SMS', phase: 'deferred' },
     ],
   );
   const settings = PILOT_PROVIDER_CATALOGUE.flatMap((provider) => provider.settings.map((item) => item.setting));

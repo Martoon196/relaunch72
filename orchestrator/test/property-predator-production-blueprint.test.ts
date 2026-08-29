@@ -36,10 +36,16 @@ const whatsAppLiveWebhookManifest = serviceSection(
 const customerEmailLiveWorkerManifest = serviceSection(
   'worker', 'property-predator-customer-email-live',
 );
+const smsLiveWorkerManifest = serviceSection(
+  'worker', 'property-predator-twilio-sms-live',
+);
+const smsLiveWebhookManifest = serviceSection(
+  'web', 'property-predator-twilio-sms-live-webhook',
+);
 const workerManifests = [
   emailWorkerManifest, revalidatorWorkerManifest, socialTestWorkerManifest,
   ownedSocialLiveWorkerManifest, whatsAppLiveWorkerManifest,
-  customerEmailLiveWorkerManifest,
+  customerEmailLiveWorkerManifest, smsLiveWorkerManifest,
 ] as const;
 
 function literalValue(key: string, value: string): void {
@@ -117,8 +123,8 @@ test('production Blueprint is isolated, manually deployed and narrowly fail-clos
   assert.doesNotMatch(manifest, /propertypredator\.co\.uk/);
   assert.equal(
     (manifest.match(/buildCommand: npm ci --ignore-scripts --include=dev && node scripts\/supply-chain\.mjs --check && npm run typecheck && npm test/g) ?? []).length,
-    8,
-    'all eight isolated production processes must install the locked checked toolchain',
+    10,
+    'all ten isolated production processes must install the locked checked toolchain',
   );
   assert.match(manifest, /startCommand: npm run serve/);
   assert.match(emailWorkerManifest, /name: property-predator-email-worker/);
@@ -147,6 +153,10 @@ test('production Blueprint is isolated, manually deployed and narrowly fail-clos
     /startCommand: npm run --workspace orchestrator serve:meta-whatsapp-live-webhook/);
   assert.match(customerEmailLiveWorkerManifest,
     /startCommand: npm run --workspace orchestrator serve:customer-email-live/);
+  assert.match(smsLiveWorkerManifest,
+    /startCommand: npm run --workspace orchestrator serve:twilio-sms-live(?:\r?\n|$)/);
+  assert.match(smsLiveWebhookManifest,
+    /startCommand: npm run --workspace orchestrator serve:twilio-sms-live-webhook/);
 
   literalValue('PORTAL_POSTGRES_ENABLED', 'true');
   literalValue('PORTAL_PRODUCT_PROFILE', 'property_predator_growth');
@@ -243,6 +253,15 @@ test('production Blueprint is isolated, manually deployed and narrowly fail-clos
     'PROPERTY_PREDATOR_CUSTOMER_EMAIL_EMERGENCY_PAUSED', 'true');
   literalValueIn(customerEmailLiveWorkerManifest,
     'PROPERTY_PREDATOR_CUSTOMER_EMAIL_RECEIPTS_CONFIRMED', 'false');
+  literalValueIn(smsLiveWorkerManifest, 'PROPERTY_PREDATOR_SMS_LIVE_MODE', 'disabled');
+  literalValueIn(smsLiveWorkerManifest, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'false');
+  literalValueIn(smsLiveWorkerManifest, 'PROPERTY_PREDATOR_SMS_DELIVERY_ENABLED', 'false');
+  literalValueIn(smsLiveWorkerManifest, 'PROPERTY_PREDATOR_SMS_EMERGENCY_PAUSED', 'true');
+  literalValueIn(smsLiveWorkerManifest, 'PROPERTY_PREDATOR_SMS_RECEIPTS_CONFIRMED', 'false');
+  literalValueIn(smsLiveWorkerManifest, 'PROPERTY_PREDATOR_SMS_PROVIDER_ID', 'twilio_messaging');
+  literalValueIn(smsLiveWorkerManifest, 'TWILIO_KEY_SCOPE', 'restricted-api-key');
+  literalValueIn(smsLiveWebhookManifest, 'PROPERTY_PREDATOR_SMS_WEBHOOK_MODE', 'disabled');
+  literalValueIn(smsLiveWebhookManifest, 'PROPERTY_PREDATOR_SMS_PROVIDER_ID', 'twilio_messaging');
   literalValueIn(webManifest,
     'PROPERTY_PREDATOR_CUSTOMER_EMAIL_RECEIPTS_ENABLED', 'false');
   literalValueIn(webManifest, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'true');
@@ -282,6 +301,7 @@ test('production Blueprint keeps web and worker database identities process-isol
     'DATABASE_OWNED_SOCIAL_COMMAND_URL',
     'DATABASE_WHATSAPP_LIVE_COMMAND_URL',
     'DATABASE_CUSTOMER_EMAIL_COMMAND_URL',
+    'DATABASE_SMS_COMMAND_URL',
     'DATABASE_MAILGUN_WEBHOOK_URL',
     'DATABASE_CUSTOMER_EMAIL_WEBHOOK_URL',
   ]) secretSlot(key);
@@ -292,9 +312,11 @@ test('production Blueprint keeps web and worker database identities process-isol
   secretSlot('DATABASE_WHATSAPP_LIVE_WORKER_URL');
   secretSlot('DATABASE_WHATSAPP_LIVE_WEBHOOK_URL');
   secretSlot('DATABASE_CUSTOMER_EMAIL_WORKER_URL');
+  secretSlot('DATABASE_SMS_WORKER_URL');
+  secretSlot('DATABASE_SMS_WEBHOOK_URL');
   assert.equal(
     (manifest.match(/- key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID\b/g) ?? []).length,
-    8,
+    10,
   );
   secretSlot('PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID');
 
@@ -309,6 +331,7 @@ test('production Blueprint keeps web and worker database identities process-isol
     'DATABASE_MAILGUN_WEBHOOK_URL',
     'DATABASE_OWNED_SOCIAL_COMMAND_URL',
     'DATABASE_PUBLIC_SOCIAL_COMMAND_URL',
+    'DATABASE_SMS_COMMAND_URL',
     'DATABASE_WEB_URL',
     'DATABASE_WHATSAPP_LIVE_COMMAND_URL',
   ]);
@@ -330,6 +353,12 @@ test('production Blueprint keeps web and worker database identities process-isol
   ]);
   assert.deepEqual(databaseUrlKeys(customerEmailLiveWorkerManifest), [
     'DATABASE_CUSTOMER_EMAIL_WORKER_URL',
+  ]);
+  assert.deepEqual(databaseUrlKeys(smsLiveWorkerManifest), [
+    'DATABASE_SMS_WORKER_URL',
+  ]);
+  assert.deepEqual(databaseUrlKeys(smsLiveWebhookManifest), [
+    'DATABASE_SMS_WEBHOOK_URL',
   ]);
 
   assert.doesNotMatch(webManifest, /- key: DATABASE_MAILGUN_WORKER_URL\b/);
@@ -415,6 +444,7 @@ test('Mailgun ingress and controlled internal-seed egress use disjoint exact sec
   for (const worker of [
     revalidatorWorkerManifest, socialTestWorkerManifest, ownedSocialLiveWorkerManifest,
     whatsAppLiveWorkerManifest, whatsAppLiveWebhookManifest,
+    smsLiveWorkerManifest, smsLiveWebhookManifest,
   ]) {
     assert.doesNotMatch(worker, /- key: MAILGUN_[A-Z0-9_]+\b/);
     assert.doesNotMatch(worker, /- key: PROPERTY_PREDATOR_EMAIL_[A-Z0-9_]+\b/);
@@ -435,9 +465,37 @@ test('Mailgun ingress and controlled internal-seed egress use disjoint exact sec
   );
   assert.doesNotMatch(
     manifest,
-    /- key: (?:TWILIO_[A-Z0-9_]+|WHEREBY_[A-Z0-9_]+|META_(?:ACCESS_TOKEN|APP_SECRET)|PROPERTY_PREDATOR_(?:WHATSAPP_PROVIDER|META_WHATSAPP_INGRESS_ENABLED|WHEREBY_INGRESS_ENABLED))\b/,
+    /- key: (?:WHEREBY_[A-Z0-9_]+|META_(?:ACCESS_TOKEN|APP_SECRET)|PROPERTY_PREDATOR_(?:WHATSAPP_PROVIDER|META_WHATSAPP_INGRESS_ENABLED|WHEREBY_INGRESS_ENABLED))\b/,
     'WhatsApp, social-DM and webinar provider rails must remain credential-free and dark',
   );
+  secretSlotIn(smsLiveWebhookManifest, 'TWILIO_AUTH_TOKEN');
+  for (const section of [
+    webManifest, emailWorkerManifest, revalidatorWorkerManifest, socialTestWorkerManifest,
+    ownedSocialLiveWorkerManifest, whatsAppLiveWorkerManifest, whatsAppLiveWebhookManifest,
+    customerEmailLiveWorkerManifest, smsLiveWorkerManifest,
+  ]) {
+    assert.doesNotMatch(
+      section,
+      /- key: TWILIO_AUTH_TOKEN\b/,
+      'the Twilio signature auth token must exist only in the SMS webhook service',
+    );
+  }
+  for (const key of [
+    'TWILIO_API_KEY_SECRET', 'TWILIO_API_KEY_SID', 'TWILIO_MESSAGING_SERVICE_SID',
+  ]) {
+    secretSlotIn(smsLiveWorkerManifest, key);
+    for (const section of [
+      webManifest, emailWorkerManifest, revalidatorWorkerManifest, socialTestWorkerManifest,
+      ownedSocialLiveWorkerManifest, whatsAppLiveWorkerManifest, whatsAppLiveWebhookManifest,
+      customerEmailLiveWorkerManifest, smsLiveWebhookManifest,
+    ]) {
+      assert.doesNotMatch(
+        section,
+        new RegExp(`- key: ${key}\\b`),
+        `${key} must exist only in the isolated SMS worker`,
+      );
+    }
+  }
   for (const section of [
     webManifest, emailWorkerManifest, revalidatorWorkerManifest, socialTestWorkerManifest,
   ]) assert.doesNotMatch(section, /- key: AYRSHARE_[A-Z0-9_]+\b/);

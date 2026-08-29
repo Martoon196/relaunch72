@@ -19,7 +19,7 @@ const EVIDENCE_SHA256 = 'a'.repeat(64);
 type TruthRow = Record<string, unknown>;
 
 function row(
-  rail: 'customer_email' | 'owned_social' | 'whatsapp' | 'social_dm',
+  rail: 'customer_email' | 'owned_social' | 'whatsapp' | 'sms' | 'social_dm',
   overrides: Readonly<Record<string, unknown>> = {},
 ): TruthRow {
   const defaults: Record<typeof rail, TruthRow> = {
@@ -77,6 +77,24 @@ function row(
       latestReceiptAt: RECEIPT_AT,
       latestReceiptEvidenceSha256: 'b'.repeat(64),
     },
+    sms: {
+      workspaceId: WORKSPACE_ID,
+      snapshotAt: SNAPSHOT_AT,
+      rail,
+      connectionState: 'not_configured',
+      inboundState: 'not_ready',
+      outboundOrReplyState: 'blocked',
+      receiptState: 'none',
+      dailyUsed: '0',
+      dailyLimit: '10',
+      monthlyUsed: '0',
+      monthlyLimit: '50',
+      blockerCodes: ['PROVIDER_NOT_CONFIGURED', 'INGRESS_NOT_READY'],
+      latestReceiptId: null,
+      latestReceiptOutcome: null,
+      latestReceiptAt: null,
+      latestReceiptEvidenceSha256: null,
+    },
     social_dm: {
       workspaceId: WORKSPACE_ID,
       snapshotAt: SNAPSHOT_AT,
@@ -100,7 +118,7 @@ function row(
 }
 
 function rows(): TruthRow[] {
-  return [row('whatsapp'), row('social_dm'), row('customer_email'), row('owned_social')];
+  return [row('whatsapp'), row('social_dm'), row('sms'), row('customer_email'), row('owned_social')];
 }
 
 function dependencies(
@@ -140,7 +158,7 @@ test('live-channel truth resolves the opaque session and returns one canonical s
           async query(sql: string, values?: readonly unknown[]) {
             queryText = sql;
             assert.deepEqual(values, undefined);
-            return { rows: rows(), rowCount: 4 };
+            return { rows: rows(), rowCount: 5 };
           },
         } as never);
       },
@@ -165,7 +183,7 @@ test('live-channel truth resolves the opaque session and returns one canonical s
   assert.equal(outcome.snapshot.dataset, 'postgres_authoritative');
   assert.equal(outcome.snapshot.workspaceId, WORKSPACE_ID);
   assert.deepEqual(outcome.snapshot.rails.map((entry) => entry.rail), [
-    'customer_email', 'owned_social', 'whatsapp', 'social_dm',
+    'customer_email', 'owned_social', 'whatsapp', 'sms', 'social_dm',
   ]);
   assert.deepEqual(outcome.snapshot.rails[0]?.blockerCodes, ['EFFECTS_DISABLED']);
   assert.deepEqual(outcome.snapshot.rails[0]?.caps.daily, { used: 2, limit: 10, remaining: 8 });
@@ -204,9 +222,9 @@ test('live-channel truth fails before the definer read when the session is unres
 
 test('live-channel truth rejects missing, duplicate and unknown rails', async () => {
   const invalidSets: readonly TruthRow[][] = [
-    rows().slice(0, 3),
-    [row('customer_email'), row('owned_social'), row('whatsapp'), row('whatsapp')],
-    [row('customer_email'), row('owned_social'), row('whatsapp'), row('social_dm', { rail: 'sms' })],
+    rows().slice(0, 4),
+    [row('customer_email'), row('owned_social'), row('whatsapp'), row('sms'), row('whatsapp')],
+    [row('customer_email'), row('owned_social'), row('whatsapp'), row('sms'), row('social_dm', { rail: 'pager' })],
   ];
   for (const [index, invalidRows] of invalidSets.entries()) {
     const outcome = await new PgPortalLiveChannelTruthService(dependencies(invalidRows)).snapshot({
@@ -405,7 +423,7 @@ test('production factory revalidates the session inside one serializable read-on
         return { rows: [{ active: true }], rowCount: 1 };
       }
       if (sql.includes('portal.live-channel-truth.snapshot')) {
-        return { rows: rows(), rowCount: 4 };
+        return { rows: rows(), rowCount: 5 };
       }
       throw new Error('unexpected query');
     },

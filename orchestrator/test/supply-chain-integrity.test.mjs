@@ -87,7 +87,7 @@ test('checked-in manifests contain no install lifecycle hook', async () => {
 test('Render invokes a repository-owned built-in-only Node gate before application tooling', async () => {
   for (const [manifestName, expectedServiceCount] of [
     ['render.yaml', 1],
-    ['render.property-predator.production.yaml', 8],
+    ['render.property-predator.production.yaml', 10],
   ]) {
     const manifest = await readFile(path.join(ROOT, manifestName), 'utf8');
     const commands = [...manifest.matchAll(/^\s*buildCommand:\s*(.+)$/gm)].map((match) => match[1].trim());

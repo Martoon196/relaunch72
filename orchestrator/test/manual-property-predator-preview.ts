@@ -512,6 +512,7 @@ function applyPreviewLivePause(form: URLSearchParams | null): 'pause_engaged' | 
     || scope === 'customer_email'
     || scope === 'owned_social'
     || scope === 'whatsapp'
+    || scope === 'sms'
     || scope === 'social_dm';
   if (!form || form.get('_csrf') !== PREVIEW_CSRF
       || form.get('confirm_pause') !== 'ENGAGE' || !scopeAllowed) {
@@ -2046,6 +2047,7 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
           customer_email: randomUUID(),
           owned_social: randomUUID(),
           whatsapp: randomUUID(),
+          sms: randomUUID(),
           social_dm: randomUUID(),
         },
         railStatusAvailable: true,

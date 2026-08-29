@@ -2436,6 +2436,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
             customer_email: randomUUID(),
             owned_social: randomUUID(),
             whatsapp: randomUUID(),
+            sms: randomUUID(),
             social_dm: randomUUID(),
           },
           railStatusAvailable,
@@ -2482,6 +2483,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       || scope === 'customer_email'
       || scope === 'owned_social'
       || scope === 'whatsapp'
+      || scope === 'sms'
       || scope === 'social_dm';
     if (!form || !campaignFormKeysAllowed(form, allowed)
         || !verifyPortalCsrf(deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '')

@@ -20,6 +20,8 @@
     "serve:meta-whatsapp-live-worker": "npm run --workspace orchestrator serve:meta-whatsapp-live-worker",
     "serve:meta-whatsapp-live-webhook": "npm run --workspace orchestrator serve:meta-whatsapp-live-webhook",
     "serve:customer-email-live": "npm run --workspace orchestrator serve:customer-email-live",
+    "serve:twilio-sms-live": "npm run --workspace orchestrator serve:twilio-sms-live",
+    "serve:twilio-sms-live-webhook": "npm run --workspace orchestrator serve:twilio-sms-live-webhook",
     "serve:omnichannel-test-rail": "npm run --workspace orchestrator serve:omnichannel-test-rail",
     "pilot:preflight": "npm run --workspace orchestrator pilot:preflight",
     "founder:bootstrap": "npm run --workspace orchestrator founder:bootstrap --",

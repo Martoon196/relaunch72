@@ -27,6 +27,9 @@ export const DATABASE_ROLES = [
   'customerEmailCommand',
   'customerEmailWorkerCommand',
   'customerEmailWebhookCommand',
+  'smsCommand',
+  'smsWorkerCommand',
+  'smsWebhookCommand',
   'worker',
   'webhook',
   'public',
@@ -65,6 +68,9 @@ const ROLE_URL_ENV: Record<DatabaseRole, string> = {
   customerEmailCommand: 'DATABASE_CUSTOMER_EMAIL_COMMAND_URL',
   customerEmailWorkerCommand: 'DATABASE_CUSTOMER_EMAIL_WORKER_URL',
   customerEmailWebhookCommand: 'DATABASE_CUSTOMER_EMAIL_WEBHOOK_URL',
+  smsCommand: 'DATABASE_SMS_COMMAND_URL',
+  smsWorkerCommand: 'DATABASE_SMS_WORKER_URL',
+  smsWebhookCommand: 'DATABASE_SMS_WEBHOOK_URL',
   worker: 'DATABASE_WORKER_URL',
   webhook: 'DATABASE_WEBHOOK_URL',
   public: 'DATABASE_PUBLIC_URL',
@@ -99,6 +105,9 @@ const EXPECTED_RUNTIME_USER: Partial<Record<DatabaseRole, string>> = {
   customerEmailCommand: 'r72_customer_email_command',
   customerEmailWorkerCommand: 'r72_customer_email_worker_command',
   customerEmailWebhookCommand: 'r72_customer_email_webhook_command',
+  smsCommand: 'r72_sms_command',
+  smsWorkerCommand: 'r72_sms_worker_command',
+  smsWebhookCommand: 'r72_sms_webhook_command',
   worker: 'r72_worker',
   webhook: 'r72_webhook',
   public: 'r72_public',
@@ -266,6 +275,12 @@ export function loadDatabaseConfig(
                       ? 'DATABASE_CUSTOMER_EMAIL_WORKER_POOL_MAX'
                     : role === 'customerEmailWebhookCommand'
                       ? 'DATABASE_CUSTOMER_EMAIL_WEBHOOK_POOL_MAX'
+                    : role === 'smsCommand'
+                      ? 'DATABASE_SMS_COMMAND_POOL_MAX'
+                    : role === 'smsWorkerCommand'
+                      ? 'DATABASE_SMS_WORKER_POOL_MAX'
+                    : role === 'smsWebhookCommand'
+                      ? 'DATABASE_SMS_WEBHOOK_POOL_MAX'
                   : role === 'setupDeliveryCommand'
                     ? 'DATABASE_SETUP_DELIVERY_COMMAND_POOL_MAX'
                     : role === 'setupReissueCommand'
@@ -288,9 +303,11 @@ export function loadDatabaseConfig(
     maxConnections: parseBoundedInteger(
       env[rolePoolKey] ?? env.DATABASE_POOL_MAX,
       role === 'whatsAppLiveWorkerCommand' || role === 'customerEmailWorkerCommand'
+        || role === 'smsWorkerCommand'
         ? 1 : role === 'worker' ? 10 : role === 'abuseCommand' ? 2 : 5,
       1,
       role === 'whatsAppLiveWorkerCommand' || role === 'customerEmailWorkerCommand'
+        || role === 'smsWorkerCommand'
         ? 1 : 100,
       rolePoolKey,
     ),
@@ -361,6 +378,12 @@ export function loadDatabaseConfig(
                         ? 'property-predator-customer-email-worker-command'
                       : role === 'customerEmailWebhookCommand'
                         ? 'property-predator-customer-email-webhook-command'
+                      : role === 'smsCommand'
+                        ? 'property-predator-sms-command'
+                      : role === 'smsWorkerCommand'
+                        ? 'property-predator-sms-worker-command'
+                      : role === 'smsWebhookCommand'
+                        ? 'property-predator-sms-webhook-command'
                     : role === 'setupDeliveryCommand'
                       ? 'relaunch72-setup-delivery-command'
                       : role === 'setupReissueCommand'
