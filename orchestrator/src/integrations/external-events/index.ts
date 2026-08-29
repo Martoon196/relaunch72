@@ -5,4 +5,5 @@ export * from './journey-runtime-pg.js';
 export * from './pg-service.js';
 export * from './router.js';
 export * from './runtime-store.js';
+export * from './sender.js';
 export * from './signature.js';

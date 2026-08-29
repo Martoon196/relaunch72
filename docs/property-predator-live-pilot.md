@@ -60,6 +60,16 @@ test webhooks, seed-contact consent/opt-out evidence and a separate channel-spec
 activation approval remain mandatory. Configuration names are documented in
 `.env.example`; real values belong only in the deployment secret manager.
 
+The source-side acquisition bridge now has an exact one-attempt sender for the
+frozen Property Predator v1 event catalogue. The Property Predator application
+must compose it from `PROPERTY_PREDATOR_GROWTH_HQ_EVENT_ENDPOINT`, a dedicated
+key ID and dedicated base64url HMAC secret, then call it only from its durable
+transactional outbox. Network/timeout outcomes are explicitly retryable with
+the same immutable event ID; authentication, contract and byte-conflict
+rejections are terminal. This sender library does not start a loop or emit an
+event merely by being imported. Source-application outbox wiring and one owned
+account event remain required before the acquisition bridge is called live.
+
 The checked-in production Blueprint contains isolated web/worker slots and exact
 database identities. That composition is not permission to deploy or activate a
 provider merely by adding credentials; production migration, deployment and each
