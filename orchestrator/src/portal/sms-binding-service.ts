@@ -2,7 +2,7 @@
  * Founder-only Twilio SMS binding and owned-test staging seam.
  *
  * The router depends on this interface and never on the command service, the
- * 0060 functions or the digest derivation. No Twilio credential ever enters
+ * 0061 functions or the digest derivation. No Twilio credential ever enters
  * these types: the account and messaging-service identifiers are reduced to
  * digests, and the Auth Token and restricted API key stay in the secret
  * manager, held only by the webhook and worker processes respectively.

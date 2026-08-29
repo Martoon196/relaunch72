@@ -1,12 +1,12 @@
 /**
  * Postgres implementation of the founder-only Twilio SMS seam.
  *
- * Binding and revocation go through the 0060 founder functions; staging goes
+ * Binding and revocation go through the 0061 founder functions; staging goes
  * through the existing 0056 command boundary. The Twilio account and
  * messaging-service identifiers are reduced to digests before they cross the
  * boundary and are never stored in clear, echoed, logged or returned.
  *
- * Staging refuses unless the 0060 readiness probe proves every dimension, and
+ * Staging refuses unless the 0061 readiness probe proves every dimension, and
  * derives both digests itself rather than accepting them from the caller.
  */
 

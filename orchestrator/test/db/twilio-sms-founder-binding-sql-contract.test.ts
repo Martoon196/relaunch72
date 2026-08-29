@@ -12,8 +12,8 @@ const migration56Url = new URL(
   '../../src/db/migrations/0056_property_predator_twilio_sms_live_foundation.sql',
   import.meta.url,
 );
-const migration60Url = new URL(
-  '../../src/db/migrations/0060_property_predator_twilio_sms_founder_binding.sql',
+const migration61Url = new URL(
+  '../../src/db/migrations/0061_property_predator_twilio_sms_founder_binding.sql',
   import.meta.url,
 );
 
@@ -21,8 +21,8 @@ function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-async function migration60(): Promise<string> {
-  return normalise(await readFile(migration60Url, 'utf8'));
+async function migration61(): Promise<string> {
+  return normalise(await readFile(migration61Url, 'utf8'));
 }
 
 /** The exact function bodies, so a claim about one cannot be met by another. */
@@ -34,8 +34,8 @@ function bodyOf(sql: string, signature: string): string {
   return sql.slice(start, end);
 }
 
-test('0060 widens provider_kind to admit the SMS rail and refuses a silent no-op', async () => {
-  const sql = await migration60();
+test('0061 widens provider_kind to admit the SMS rail and refuses a silent no-op', async () => {
+  const sql = await migration61();
 
   // 0056 is inert until this widening: every SMS predicate needs provider_kind
   // = 'sms', which no row could satisfy under the 0022 check.
@@ -57,8 +57,8 @@ test('0060 widens provider_kind to admit the SMS rail and refuses a silent no-op
   );
 });
 
-test('0060 gates both founder commands on the exact SMS command identity', async () => {
-  const sql = await migration60();
+test('0061 gates both founder commands on the exact SMS command identity', async () => {
+  const sql = await migration61();
   for (const signature of [
     'CREATE FUNCTION app_private.record_sms_live_binding(',
     'CREATE FUNCTION app_private.revoke_sms_live_binding(',
@@ -117,8 +117,8 @@ test('0060 gates both founder commands on the exact SMS command identity', async
   assert.deepEqual([...grantees], ['r72_sms_command']);
 });
 
-test('0060 binding creates exactly one live Twilio connection and its owned sender', async () => {
-  const sql = await migration60();
+test('0061 binding creates exactly one live Twilio connection and its owned sender', async () => {
+  const sql = await migration61();
   const body = bodyOf(sql, 'CREATE FUNCTION app_private.record_sms_live_binding(');
 
   assert.match(
@@ -143,8 +143,8 @@ test('0060 binding creates exactly one live Twilio connection and its owned send
   assert.match(body, /p_sender_number !~ '\^\\\+44\[0-9\]\{9,10\}\$'/);
 });
 
-test('0060 makes revocation one-per-binding, append-only and connection-disabling', async () => {
-  const sql = await migration60();
+test('0061 makes revocation one-per-binding, append-only and connection-disabling', async () => {
+  const sql = await migration61();
 
   // One revocation per binding: a rotation is a revoke plus a fresh binding.
   assert.match(
@@ -182,8 +182,8 @@ test('0060 makes revocation one-per-binding, append-only and connection-disablin
   assert.doesNotMatch(sql, /DELETE FROM app\.property_predator_sms_binding_revocations/);
 });
 
-test('0060 stores no Twilio secret of any kind', async () => {
-  const raw = await readFile(migration60Url, 'utf8');
+test('0061 stores no Twilio secret of any kind', async () => {
+  const raw = await readFile(migration61Url, 'utf8');
   for (const forbidden of [
     /auth_token/i,
     /TWILIO_AUTH_TOKEN/i,
@@ -212,20 +212,20 @@ test('0060 stores no Twilio secret of any kind', async () => {
   assert.match(sql, /sender_number text NOT NULL CHECK \(sender_number ~ '\^\\\+44\[0-9\]\{9,10\}\$'\)/);
 });
 
-test('0060 derives the request digest 0056 re-computes, on the same contract', async () => {
-  const sixty = await migration60();
+test('0061 derives the request digest 0056 re-computes, on the same contract', async () => {
+  const sixtyOne = await migration61();
   const fiftySix = normalise(await readFile(migration56Url, 'utf8'));
-  const body = bodyOf(sixty, 'CREATE FUNCTION app_private.derive_sms_live_request_digest(');
+  const body = bodyOf(sixtyOne, 'CREATE FUNCTION app_private.derive_sms_live_request_digest(');
 
   assert.match(body, /RETURNS bytea LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog/);
   assert.match(body, /session_user <> 'r72_sms_command'/);
   assert.match(body, /RAISE EXCEPTION 'Twilio SMS request digest derivation denied' USING ERRCODE = '42501'/);
   assert.match(
-    sixty,
+    sixtyOne,
     /GRANT EXECUTE ON FUNCTION app_private\.derive_sms_live_request_digest\( uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, timestamptz, uuid, uuid, uuid, bytea \) TO r72_sms_command/,
   );
   assert.match(
-    sixty,
+    sixtyOne,
     /REVOKE ALL ON FUNCTION app_private\.derive_sms_live_request_digest\( uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, timestamptz, uuid, uuid, uuid, bytea \) FROM PUBLIC/,
   );
 
@@ -233,7 +233,7 @@ test('0060 derives the request digest 0056 re-computes, on the same contract', a
   // command would raise a request-digest conflict for every founder staging.
   const contract = /'propertypredator\.twilio-sms-live\/v1'/;
   const instantFormat = /'YYYY-MM-DD"T"HH24:MI:SS\.MS"Z"'/;
-  for (const [label, text] of [['0060', sixty], ['0056', fiftySix]] as const) {
+  for (const [label, text] of [['0061', sixtyOne], ['0056', fiftySix]] as const) {
     assert.match(text, contract, `${label} must carry the live contract token`);
     assert.match(text, instantFormat, `${label} must carry the same instant format`);
   }
@@ -243,8 +243,8 @@ test('0060 derives the request digest 0056 re-computes, on the same contract', a
   assert.match(fiftySix, /pg_catalog\.concat_ws\(pg_catalog\.chr\(31\)/);
 });
 
-test('0060 readiness is read-only and emits every typed dimension and blocker', async () => {
-  const sql = await migration60();
+test('0061 readiness is read-only and emits every typed dimension and blocker', async () => {
+  const sql = await migration61();
   const body = bodyOf(
     sql,
     'CREATE FUNCTION app_private.property_predator_sms_activation_readiness(',
@@ -282,8 +282,8 @@ test('0060 readiness is read-only and emits every typed dimension and blocker', 
   assert.doesNotMatch(body, /RETURNS TABLE \([^)]*recipient[^)]*\)/);
 });
 
-test('0060 readiness checks the pause scopes and sums segments against the caps', async () => {
-  const sql = await migration60();
+test('0061 readiness checks the pause scopes and sums segments against the caps', async () => {
+  const sql = await migration61();
   const body = bodyOf(
     sql,
     'CREATE FUNCTION app_private.property_predator_sms_activation_readiness(',
@@ -317,8 +317,8 @@ test('0060 readiness checks the pause scopes and sums segments against the caps'
   assert.match(body, /'CAP_REACHED'/);
 });
 
-test('0060 re-proves the three SMS command roles are still table-blind', async () => {
-  const sql = await migration60();
+test('0061 re-proves the three SMS command roles are still table-blind', async () => {
+  const sql = await migration61();
 
   assert.match(
     sql,
@@ -370,9 +370,9 @@ test('every SMS segment cap constant agrees with the migrations that enforce the
   assert.deepEqual(new Set(daily), new Set([10]), 'daily segment caps diverged');
   assert.deepEqual(new Set(monthly), new Set([50]), 'monthly segment caps diverged');
 
-  // 0056 admits pre-insertion; 0060's probe reports the same ceiling.
+  // 0056 admits pre-insertion; 0061's probe reports the same ceiling.
   const enforcement = normalise(await readFile(migration56Url, 'utf8'));
-  const probe = normalise(await readFile(migration60Url, 'utf8'));
+  const probe = normalise(await readFile(migration61Url, 'utf8'));
   assert.match(enforcement, /day_segments \+ selected_segment_count > 10/);
   assert.match(enforcement, /month_segments \+ selected_segment_count > 50/);
   assert.match(probe, /day_segments \+ selected_segments <= 10/);

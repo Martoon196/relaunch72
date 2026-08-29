@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 export const SMS_ACTIVATION_CONTRACT =
   'propertypredator.twilio-sms-activation-readiness/v1' as const;
 
-/** One row per dimension, in the exact order the 0060 probe emits them. */
+/** One row per dimension, in the exact order the 0061 probe emits them. */
 export const SMS_ACTIVATION_DIMENSIONS = Object.freeze([
   'operator_authority',
   'owned_binding',
