@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Relaunch72 pipeline orchestrator — S0 intake gate, stages S1+, QA layer, run manifests, CLI",
+  "description": "Relaunch72 pipeline orchestrator \u2014 S0 intake gate, stages S1+, QA layer, run manifests, CLI",
   "scripts": {
     "pipeline": "tsx src/cli.ts",
     "content": "tsx src/content/cli.ts",
@@ -34,6 +34,7 @@
     "preview:property-predator": "node --import ./test/windows-node24-shim.mjs --import tsx test/manual-property-predator-preview.ts",
     "pilot:preflight": "node --import ./test/windows-node24-shim.mjs --import tsx src/ops/property-predator-live-pilot-preflight-cli.ts",
     "pilot:rehearse-targets": "node --import ./test/windows-node24-shim.mjs --import tsx src/ops/property-predator-owned-target-rehearsal-cli.ts",
+    "receiver:preflight": "node --import ./test/windows-node24-shim.mjs --import tsx src/ops/property-predator-source-receiver-preflight-cli.ts",
     "founder:bootstrap": "tsx src/ops/property-predator-founder-bootstrap-cli.ts",
     "founder:reissue-setup": "tsx src/ops/property-predator-founder-setup-reissue-cli.ts",
     "snapshot:preview": "tsx src/legacy-import/property-predator-snapshot-preview-cli.ts",
