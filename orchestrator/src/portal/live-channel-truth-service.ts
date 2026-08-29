@@ -34,6 +34,7 @@ export const PORTAL_LIVE_CHANNEL_BLOCKER_CODES = Object.freeze([
   'TEMPLATE_REQUIRED',
   'EMERGENCY_PAUSED',
   'OUTCOME_UNKNOWN_QUARANTINED',
+  'APPROVED_CONTENT_REQUIRED',
 ] as const);
 
 export type PortalLiveChannelBlockerCode =
