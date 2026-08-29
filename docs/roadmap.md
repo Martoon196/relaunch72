@@ -68,6 +68,11 @@ founder-owned acceptance target.
   enqueueing or calling Meta. See `docs/property-predator-whatsapp-activation.md`.
 - ✅ Owned social — Ayrshare/X foundation and isolated worker built; exact owned
   profile evidence, credentials and one approved test post remain required.
+  A zero-publication activation readiness probe now binds one supplied owned X
+  account to real profile, ownership, approval, attestation, publishable-text,
+  cap and pause evidence, and a deterministic rehearsal fixes the idempotency
+  and request digests without publishing. Founder command wiring is still the
+  open blocker. See `docs/property-predator-owned-social-activation.md`.
 - ✅ UK SMS — Twilio Messaging foundation, worker and signed webhook path built;
   provider account, Messaging Service, UK regulatory bundle and an owned test
   number remain required. Reuse the existing Conversion Inbox,

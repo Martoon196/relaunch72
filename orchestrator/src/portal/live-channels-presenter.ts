@@ -286,6 +286,7 @@ const BLOCKER_COPY: Readonly<Record<PortalLiveChannelBlockerCode, string>> = Obj
   TEMPLATE_REQUIRED: 'No provider-approved template is recorded for this rail.',
   EMERGENCY_PAUSED: 'The emergency pause is engaged; no provider call can begin on this rail.',
   OUTCOME_UNKNOWN_QUARANTINED: 'An ambiguous provider outcome is quarantined pending signed-receipt reconciliation.',
+  APPROVED_CONTENT_REQUIRED: 'No approved, current post content is recorded for this rail, so nothing can be published yet.',
 });
 
 /** Codes that keep a rail operating but demand attention; everything else hard-blocks. */
