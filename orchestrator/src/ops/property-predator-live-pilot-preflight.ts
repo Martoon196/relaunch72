@@ -7,7 +7,7 @@
  * setting names plus pass/fail state.
  */
 
-export type PilotRailId = 'email' | 'whatsapp' | 'sms' | 'social' | 'webinar' | 'calendar';
+export type PilotRailId = 'customer_email' | 'whatsapp' | 'owned_social';
 export type PilotPhase = 'mandatory-first-channel' | 'deferred';
 export type PreflightCheckState = 'pass' | 'missing' | 'invalid';
 
@@ -85,12 +85,6 @@ function isHttpsUrl(raw: string, originOnly = false): boolean {
   }
 }
 
-function isDomain(raw: string): boolean {
-  const value = raw.trim().toLowerCase();
-  return value.length <= 253
-    && /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(value);
-}
-
 function isEmail(raw: string): boolean {
   const value = raw.trim();
   return value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
@@ -99,6 +93,42 @@ function isEmail(raw: string): boolean {
 function isInternalRecipientCap(raw: string): boolean {
   const value = Number(raw.trim());
   return Number.isSafeInteger(value) && value >= 1 && value <= 25;
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const KEY_VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const META_ID = /^[1-9][0-9]{4,29}$/;
+const SAFE_SECRET = /^[\x21-\x7e]{8,2000}$/;
+
+function isUuid(raw: string): boolean {
+  return UUID.test(raw.trim());
+}
+
+function isKeyVersion(raw: string): boolean {
+  return KEY_VERSION.test(raw.trim());
+}
+
+function isMetaId(raw: string): boolean {
+  return META_ID.test(raw.trim());
+}
+
+function isSafeSecret(raw: string, minimum = 8): boolean {
+  const value = raw.trim();
+  return value.length >= minimum && SAFE_SECRET.test(value);
+}
+
+function isCanonicalBase64Key32(raw: string): boolean {
+  const value = raw.trim();
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return false;
+  const decoded = Buffer.from(value, 'base64');
+  return decoded.length === 32 && decoded.toString('base64') === value;
+}
+
+function isExactMailgunFrom(raw: string): boolean {
+  const value = raw.trim();
+  return isEmail(value)
+    && value === value.toLowerCase()
+    && value.split('@')[1] === 'mg.propertypredator.com';
 }
 
 function isProductionDatabaseUrl(expectedUser: string): (raw: string) => boolean {
@@ -149,6 +179,7 @@ const FOUNDATION_SETTINGS: readonly SettingSpec[] = Object.freeze([
   setting('DATABASE_CONTENT_ADAPTER_URL', 'Company asset metadata database identity', isProductionDatabaseUrl('r72_content_adapter'), 'The metadata-only r72_content_adapter database URL'),
   setting('DATABASE_WORKER_URL', 'Outbox worker database identity', isProductionDatabaseUrl('r72_worker'), 'The least-privilege r72_worker database URL'),
   setting('DATABASE_WEBHOOK_URL', 'Webhook database identity', isProductionDatabaseUrl('r72_webhook'), 'The least-privilege r72_webhook database URL'),
+  setting('PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID', 'Database installation identity', isUuid, 'The exact migrated database installation UUID'),
   setting('PROPERTY_PREDATOR_PILOT_WORKSPACE_ID', 'Dedicated pilot workspace', matches(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i), 'A dedicated Property Predator production workspace UUID'),
   setting('PROPERTY_PREDATOR_PILOT_STAGE', 'Internal seed stage', exact('internal-seed'), 'The internal-seed pilot stage'),
   setting('PROPERTY_PREDATOR_PILOT_RECIPIENT_SCOPE', 'Recipient safety scope', exact('owned-internal-seeds-only'), 'The owned-internal-seeds-only recipient scope'),
@@ -157,71 +188,72 @@ const FOUNDATION_SETTINGS: readonly SettingSpec[] = Object.freeze([
 
 export const PILOT_PROVIDER_CATALOGUE: readonly ProviderSpec[] = Object.freeze([
   Object.freeze({
-    rail: 'email', provider: 'Mailgun Basic', phase: 'mandatory-first-channel', settings: Object.freeze([
-      setting('PROPERTY_PREDATOR_EMAIL_PROVIDER', 'Selected email provider', exact('mailgun'), 'Mailgun as the pilot email provider'),
-      setting('MAILGUN_API_KEY', 'Mailgun API key', minLength(8), 'A secret-manager Mailgun API key'),
+    rail: 'customer_email', provider: 'Mailgun EU customer email', phase: 'mandatory-first-channel', settings: Object.freeze([
+      setting('DATABASE_CUSTOMER_EMAIL_COMMAND_URL', 'Customer-email command database identity', isProductionDatabaseUrl('r72_customer_email_command'), 'The function-only r72_customer_email_command database URL'),
+      setting('DATABASE_CUSTOMER_EMAIL_WORKER_URL', 'Customer-email worker database identity', isProductionDatabaseUrl('r72_customer_email_worker_command'), 'The function-only r72_customer_email_worker_command database URL'),
+      setting('DATABASE_CUSTOMER_EMAIL_WEBHOOK_URL', 'Customer-email receipt database identity', isProductionDatabaseUrl('r72_customer_email_webhook_command'), 'The function-only r72_customer_email_webhook_command database URL'),
+      setting('PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_MODE', 'Customer-email live mode', exact('customer_live'), 'The exact customer_live worker mode'),
+      setting('PROPERTY_PREDATOR_CUSTOMER_EMAIL_PROVIDER_ID', 'Customer-email provider binding', exact('mailgun_eu'), 'The exact mailgun_eu provider binding'),
+      setting('PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'Provider effects switch', exact('true'), 'The exact reviewed provider-effects switch'),
+      setting('PROPERTY_PREDATOR_CUSTOMER_EMAIL_DELIVERY_ENABLED', 'Customer-email delivery switch', exact('true'), 'The exact customer-email delivery switch'),
+      setting('PROPERTY_PREDATOR_CUSTOMER_EMAIL_EMERGENCY_PAUSED', 'Customer-email emergency pause', exact('false'), 'The reviewed released customer-email emergency pause'),
+      setting('PROPERTY_PREDATOR_CUSTOMER_EMAIL_RECEIPTS_ENABLED', 'Signed receipt projector', exact('true'), 'The signed customer-email receipt projector'),
+      setting('PROPERTY_PREDATOR_CUSTOMER_EMAIL_RECEIPTS_CONFIRMED', 'Signed receipt operator attestation', exact('true'), 'The operator attestation recorded only after signed receipt proof'),
+      setting('PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_WORKSPACE_ID', 'Customer-email workspace binding', isUuid, 'The exact owned pilot workspace UUID'),
+      setting('PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_CONNECTION_ID', 'Customer-email provider connection binding', isUuid, 'The exact Mailgun provider connection UUID'),
       setting('MAILGUN_SIGNING_KEY', 'Mailgun webhook signing key', minLength(24), 'A secret-manager Mailgun webhook signing key'),
       setting('MAILGUN_REGION', 'Mailgun data region', exact('eu'), 'The Mailgun EU region'),
-      setting('MAILGUN_SENDING_DOMAIN', 'Verified sending domain', isDomain, 'A verified Mailgun sending domain'),
-      setting('MAILGUN_FROM_EMAIL', 'Verified From identity', isEmail, 'A verified Mailgun From email identity'),
+      setting('MAILGUN_SENDING_DOMAIN', 'Verified sending domain', exact('mg.propertypredator.com'), 'The exact verified mg.propertypredator.com sending domain'),
+      setting('MAILGUN_KEY_SCOPE', 'Mailgun key scope', exact('domain-sending'), 'A domain-sending-only Mailgun key'),
+      setting('MAILGUN_DOMAIN_SENDING_KEY', 'Mailgun domain-sending key', (raw) => isSafeSecret(raw), 'The secret-manager domain-sending key for mg.propertypredator.com'),
+      setting('MAILGUN_FROM_EMAIL', 'Verified From identity', isExactMailgunFrom, 'A canonical verified From identity on mg.propertypredator.com'),
       setting('MAILGUN_EVENT_WEBHOOK_URL', 'Signed delivery-event callback', isHttpsUrl, 'An HTTPS Mailgun event callback'),
+      setting('PROPERTY_PREDATOR_MAILGUN_WEBHOOK_ENABLED', 'Mailgun signed webhook ingress', exact('true'), 'The canonical signed Mailgun webhook ingress'),
       setting('MAILGUN_WEBHOOK_SIGNATURE_VERIFICATION_ENABLED', 'Webhook signature verification', exact('true'), 'Cryptographic Mailgun webhook verification'),
       setting('MAILGUN_DNS_VERIFIED', 'Mailgun DNS verification evidence', exact('true'), 'Explicit Mailgun SPF/DKIM verification evidence'),
       setting('MAILGUN_SUPPRESSION_SYNC_ENABLED', 'Suppression synchronisation gate', exact('true'), 'Suppression synchronisation'),
     ]),
   }),
   Object.freeze({
-    rail: 'whatsapp', provider: '360dialog Regular', phase: 'deferred', settings: Object.freeze([
-      setting('PROPERTY_PREDATOR_WHATSAPP_PROVIDER', 'Selected WhatsApp provider', exact('360dialog'), '360dialog as the pilot WhatsApp provider'),
-      setting('DIALOG360_API_KEY', '360dialog API key', minLength(8), 'A secret-manager 360dialog API key'),
-      setting('DIALOG360_WABA_ID', 'WhatsApp Business Account identity', minLength(1), 'A verified WABA identity'),
-      setting('DIALOG360_PHONE_NUMBER_ID', 'WhatsApp number identity', minLength(1), 'A verified WhatsApp phone-number identity'),
-      setting('DIALOG360_WEBHOOK_URL', 'WhatsApp callback', isHttpsUrl, 'An HTTPS WhatsApp callback'),
-      setting('DIALOG360_WEBHOOK_AUTH_SECRET', 'WhatsApp ingress authentication secret', minLength(24), 'A dedicated WhatsApp ingress authentication secret'),
-      setting('DIALOG360_BUSINESS_VERIFIED', 'Meta business verification evidence', exact('true'), 'Explicit Meta business verification evidence'),
+    rail: 'whatsapp', provider: 'Meta WhatsApp Cloud', phase: 'deferred', settings: Object.freeze([
+      setting('DATABASE_WHATSAPP_LIVE_COMMAND_URL', 'WhatsApp command database identity', isProductionDatabaseUrl('r72_whatsapp_live_command'), 'The function-only r72_whatsapp_live_command database URL'),
+      setting('DATABASE_WHATSAPP_LIVE_WORKER_URL', 'WhatsApp worker database identity', isProductionDatabaseUrl('r72_whatsapp_live_worker_command'), 'The function-only r72_whatsapp_live_worker_command database URL'),
+      setting('DATABASE_WHATSAPP_LIVE_WEBHOOK_URL', 'WhatsApp webhook database identity', isProductionDatabaseUrl('r72_whatsapp_live_webhook_command'), 'The function-only r72_whatsapp_live_webhook_command database URL'),
+      setting('PROPERTY_PREDATOR_WHATSAPP_LIVE_MODE', 'WhatsApp live mode', exact('owned_template_live'), 'The exact owned-template live worker mode'),
+      setting('PROPERTY_PREDATOR_WHATSAPP_WEBHOOK_MODE', 'WhatsApp signed webhook mode', exact('signed_live'), 'The exact signed-live webhook mode'),
+      setting('PROPERTY_PREDATOR_WHATSAPP_LIVE_PROVIDER_ID', 'WhatsApp provider binding', exact('meta_whatsapp_cloud'), 'The exact Meta WhatsApp Cloud provider binding'),
+      setting('PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'Provider effects switch', exact('true'), 'The exact reviewed provider-effects switch'),
+      setting('PROPERTY_PREDATOR_WHATSAPP_EMERGENCY_PAUSED', 'WhatsApp emergency pause', exact('false'), 'The reviewed released WhatsApp emergency pause'),
+      setting('PROPERTY_PREDATOR_WHATSAPP_LIVE_WORKSPACE_ID', 'WhatsApp workspace binding', isUuid, 'The exact owned pilot workspace UUID'),
+      setting('PROPERTY_PREDATOR_WHATSAPP_LIVE_CONNECTION_ID', 'WhatsApp connection binding', isUuid, 'The exact Meta provider connection UUID'),
+      setting('PROPERTY_PREDATOR_WHATSAPP_LIVE_BINDING_ID', 'WhatsApp owned-number binding', isUuid, 'The exact non-revoked owned-number binding UUID'),
+      setting('PROPERTY_PREDATOR_WHATSAPP_CREDENTIAL_ENCRYPTION_KEY_BASE64', 'WhatsApp envelope key', isCanonicalBase64Key32, 'A canonical 32-byte job-envelope key'),
+      setting('PROPERTY_PREDATOR_WHATSAPP_CREDENTIAL_ENCRYPTION_KEY_VERSION', 'WhatsApp envelope key version', isKeyVersion, 'A bounded envelope key version'),
+      setting('PROPERTY_PREDATOR_META_WHATSAPP_APP_ID', 'Meta app identity', isMetaId, 'The exact owned Meta app ID'),
+      setting('PROPERTY_PREDATOR_META_WHATSAPP_WABA_ID', 'Meta WABA identity', isMetaId, 'The exact owned WABA ID'),
+      setting('PROPERTY_PREDATOR_META_WHATSAPP_PHONE_NUMBER_ID', 'Meta phone-number identity', isMetaId, 'The exact owned business phone-number ID'),
+      setting('PROPERTY_PREDATOR_META_WHATSAPP_APP_SECRET', 'Meta webhook app secret', (raw) => isSafeSecret(raw, 20), 'The webhook-only Meta app secret'),
+      setting('PROPERTY_PREDATOR_META_WHATSAPP_VERIFY_TOKEN', 'Meta webhook verify token', (raw) => isSafeSecret(raw, 20), 'The webhook-only Meta verification token'),
     ]),
   }),
   Object.freeze({
-    rail: 'sms', provider: 'Twilio UK SMS', phase: 'deferred', settings: Object.freeze([
-      setting('PROPERTY_PREDATOR_SMS_PROVIDER', 'Selected SMS provider', exact('twilio'), 'Twilio as the pilot SMS provider'),
-      setting('TWILIO_ACCOUNT_SID', 'Twilio account identity', matches(/^AC[a-f0-9]{32}$/i), 'A Twilio Account SID'),
-      setting('TWILIO_API_KEY_SID', 'Restricted Twilio API key identity', matches(/^SK[a-f0-9]{32}$/i), 'A restricted Twilio API key SID'),
-      setting('TWILIO_API_KEY_SECRET', 'Twilio API key secret', minLength(16), 'A secret-manager Twilio API key secret'),
-      setting('TWILIO_MESSAGING_SERVICE_SID', 'Messaging Service identity', matches(/^MG[a-f0-9]{32}$/i), 'A Twilio Messaging Service SID'),
-      setting('TWILIO_UK_REGULATORY_BUNDLE_SID', 'UK regulatory bundle', matches(/^BU[a-f0-9]{32}$/i), 'An approved UK regulatory bundle SID'),
-      setting('TWILIO_WEBHOOK_URL', 'SMS status callback', isHttpsUrl, 'An HTTPS Twilio status callback'),
-      setting('TWILIO_SIGNATURE_VALIDATION_ENABLED', 'Twilio signature validation', exact('true'), 'Twilio request-signature validation'),
-    ]),
-  }),
-  Object.freeze({
-    rail: 'social', provider: 'Ayrshare Launch', phase: 'deferred', settings: Object.freeze([
+    rail: 'owned_social', provider: 'Ayrshare owned X', phase: 'deferred', settings: Object.freeze([
+      setting('DATABASE_OWNED_SOCIAL_COMMAND_URL', 'Owned-social command database identity', isProductionDatabaseUrl('r72_owned_social_command'), 'The function-only r72_owned_social_command database URL'),
+      setting('DATABASE_OWNED_SOCIAL_WORKER_URL', 'Owned-social worker database identity', isProductionDatabaseUrl('r72_owned_social_worker_command'), 'The function-only r72_owned_social_worker_command database URL'),
       setting('PROPERTY_PREDATOR_SOCIAL_PROVIDER', 'Selected social provider', exact('ayrshare'), 'Ayrshare as the pilot social provider'),
-      setting('AYRSHARE_API_KEY', 'Ayrshare API key', minLength(8), 'A secret-manager Ayrshare API key'),
-      setting('AYRSHARE_PROFILE_KEY', 'Isolated social profile identity', minLength(8), 'A Property Predator Ayrshare Profile Key'),
-      setting('AYRSHARE_DOMAIN_ID', 'Branded linking domain identity', minLength(1), 'An Ayrshare domain identity'),
-      setting('AYRSHARE_WEBHOOK_URL', 'Social event callback', isHttpsUrl, 'An HTTPS Ayrshare event callback'),
-      setting('AYRSHARE_WEBHOOK_SECRET', 'Social webhook secret', minLength(24), 'A dedicated Ayrshare webhook secret'),
+      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE', 'Owned-social live mode', exact('owned_profile_live'), 'The exact owned-profile live worker mode'),
+      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_PROVIDER_ID', 'Owned-social provider binding', exact('ayrshare'), 'The exact Ayrshare provider binding'),
+      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK', 'Owned-social network binding', exact('x'), 'The exact owned X network binding'),
+      setting('PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'Provider effects switch', exact('true'), 'The exact reviewed provider-effects switch'),
+      setting('PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'Owned-social emergency pause', exact('false'), 'The reviewed released owned-social emergency pause'),
+      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_WORKSPACE_ID', 'Owned-social workspace binding', isUuid, 'The exact owned pilot workspace UUID'),
+      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_CONNECTION_ID', 'Owned-social connection binding', isUuid, 'The exact Ayrshare provider connection UUID'),
+      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_BASE64', 'Owned-social profile-envelope key', isCanonicalBase64Key32, 'A canonical 32-byte profile-envelope key'),
+      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_VERSION', 'Owned-social profile-envelope key version', isKeyVersion, 'A bounded profile-envelope key version'),
+      setting('AYRSHARE_API_KEY', 'Ayrshare API key', (raw) => isSafeSecret(raw), 'The Ayrshare account API key'),
+      setting('AYRSHARE_X_OAUTH1_API_KEY', 'Owned X OAuth1 API key', (raw) => isSafeSecret(raw), 'The OAuth1 key for the exact owned X profile'),
+      setting('AYRSHARE_X_OAUTH1_API_SECRET', 'Owned X OAuth1 API secret', (raw) => isSafeSecret(raw), 'The OAuth1 secret for the exact owned X profile'),
       setting('AYRSHARE_PROFILE_LINK_COMPLETE', 'Social account-link proof', exact('true'), 'Explicit account-link completion evidence'),
-    ]),
-  }),
-  Object.freeze({
-    rail: 'webinar', provider: 'Whereby Embedded Build', phase: 'deferred', settings: Object.freeze([
-      setting('PROPERTY_PREDATOR_WEBINAR_PROVIDER', 'Selected webinar provider', exact('whereby'), 'Whereby as the pilot webinar provider'),
-      setting('WHEREBY_API_KEY', 'Whereby API key', minLength(8), 'A secret-manager Whereby API key'),
-      setting('WHEREBY_WEBHOOK_URL', 'Attendance callback', isHttpsUrl, 'An HTTPS Whereby attendance callback'),
-      setting('WHEREBY_WEBHOOK_SECRET', 'Whereby webhook secret', minLength(24), 'A dedicated Whereby webhook secret'),
-      setting('WHEREBY_ALLOWED_ORIGIN', 'Embedded-room origin', (raw) => isHttpsUrl(raw, true), 'One approved credential-free HTTPS embedded-room origin'),
-    ]),
-  }),
-  Object.freeze({
-    rail: 'calendar', provider: 'Nylas Calendar/Scheduler', phase: 'deferred', settings: Object.freeze([
-      setting('PROPERTY_PREDATOR_CALENDAR_PROVIDER', 'Selected calendar provider', exact('nylas'), 'Nylas as the pilot calendar provider'),
-      setting('NYLAS_API_KEY', 'Nylas API key', minLength(8), 'A secret-manager Nylas API key'),
-      setting('NYLAS_APPLICATION_ID', 'Nylas application identity', minLength(1), 'A Nylas application identity'),
-      setting('NYLAS_REGION', 'Nylas data region', exact('eu'), 'The Nylas EU data region'),
-      setting('NYLAS_OAUTH_CALLBACK_URL', 'Calendar OAuth callback', isHttpsUrl, 'An HTTPS Nylas OAuth callback'),
-      setting('NYLAS_WEBHOOK_URL', 'Calendar event callback', isHttpsUrl, 'An HTTPS Nylas event callback'),
-      setting('NYLAS_WEBHOOK_SECRET', 'Nylas webhook secret', minLength(24), 'A dedicated Nylas webhook secret'),
     ]),
   }),
 ]);
@@ -284,7 +316,12 @@ export function evaluatePropertyPredatorPilotPreflight(
   const providers = Object.freeze(PILOT_PROVIDER_CATALOGUE.map((provider): PilotProviderPreflight => {
     const blocking = provider.phase === 'mandatory-first-channel';
     const checks = Object.freeze(provider.settings.map((spec) => checkFromEvidence(spec, evidence, blocking)));
-    const configuredCount = checks.filter((check) => check.state !== 'missing').length;
+    // The provider-effects switch is shared by every live worker. It must not
+    // make an otherwise untouched deferred rail look partially configured.
+    const configuredCount = checks.filter((check) => (
+      check.setting !== 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED'
+      && check.state !== 'missing'
+    )).length;
     const status = checks.every((check) => check.state === 'pass')
       ? 'configuration-ready'
       : configuredCount === 0
@@ -315,14 +352,14 @@ export function evaluatePropertyPredatorPilotPreflight(
     providers,
     blockers,
     manualProofGates: Object.freeze([
-      'Run the current production schema readiness check using the deployment identity; this preflight does not access a database.',
+      'Run schema and installation readiness through migration 0055 using each exact function-only runtime identity; this preflight does not access a database.',
       'Provision the dedicated workspace and named operator through an audited operator workflow; automatic PostgreSQL onboarding is currently locked.',
-      'Replace every pilot-facing TEST fixture projection with workspace-scoped production reads before exposing that surface.',
-      'Verify provider ownership, billing cap and domain identity in the provider consoles.',
-      'Prove authenticated, idempotent webhook receipt and reconciliation with provider test events.',
-      'Prove consent, suppression, opt-out, immutable approval and emergency-pause behaviour using owned internal seed contacts.',
-      'Prove the live dispatch boundary enforces the dedicated workspace, internal-seed stage, owned-recipient scope and declared maximum recipient count.',
-      'Implement and test a runtime-enforced provider-effect kill switch at every live adapter composition and dispatch boundary; configuration declarations are not proof.',
+      'Verify the exact Mailgun domain, Meta app/WABA/phone and Ayrshare-owned X profile in their provider consoles without inferring any customer target.',
+      'Apply credentials to their isolated services only: Mailgun sending versus webhook keys, and WhatsApp worker envelope key versus webhook app secret/verify token, must never share a process.',
+      'Record the exact live provider connection, channel binding/profile, current content approval, operator authority and consent/suppression evidence in PostgreSQL.',
+      'Prove the signed Mailgun and Meta webhook challenge/status/inbound paths with provider test events before releasing receipt attestations.',
+      'Prove the existing enqueue and durable pre-call pause/effects fences using one explicitly supplied owned internal recipient or account per rail.',
+      'Stage one exact approved owned test email, parameter-free WhatsApp template and link-free X post; no customer recipient or inferred account is allowed.',
       'Record a separate channel-specific activation approval before enabling any provider effect.',
     ]),
   });

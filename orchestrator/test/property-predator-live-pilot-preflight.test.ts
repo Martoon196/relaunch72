@@ -12,7 +12,7 @@ import {
 const DB_PASSWORD = 'database-password-that-must-never-escape';
 const SESSION_SECRET = 'session-secret-that-must-never-escape-123456';
 const ABUSE_SECRET = 'abuse-secret-that-must-never-escape-12345678';
-const MAILGUN_API_KEY = 'mailgun-api-key-that-must-never-escape';
+const MAILGUN_DOMAIN_SENDING_KEY = 'mailgun-domain-key-that-must-never-escape';
 const MAILGUN_SIGNING_KEY = 'mailgun-signing-key-that-must-never-escape';
 
 function databaseUrl(user: string): string {
@@ -38,17 +38,31 @@ function firstChannelEnvironment(): NodeJS.ProcessEnv {
     DATABASE_CONTENT_ADAPTER_URL: databaseUrl('r72_content_adapter'),
     DATABASE_WORKER_URL: databaseUrl('r72_worker'),
     DATABASE_WEBHOOK_URL: databaseUrl('r72_webhook'),
+    PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID: '7b4a838f-9b3b-4f6b-a879-3459aa3771ae',
     PROPERTY_PREDATOR_PILOT_WORKSPACE_ID: '8a4a838f-9b3b-4f6b-a879-3459aa3771ae',
     PROPERTY_PREDATOR_PILOT_STAGE: 'internal-seed',
     PROPERTY_PREDATOR_PILOT_RECIPIENT_SCOPE: 'owned-internal-seeds-only',
     PROPERTY_PREDATOR_PILOT_MAX_RECIPIENTS: '10',
-    PROPERTY_PREDATOR_EMAIL_PROVIDER: 'mailgun',
-    MAILGUN_API_KEY,
+    DATABASE_CUSTOMER_EMAIL_COMMAND_URL: databaseUrl('r72_customer_email_command'),
+    DATABASE_CUSTOMER_EMAIL_WORKER_URL: databaseUrl('r72_customer_email_worker_command'),
+    DATABASE_CUSTOMER_EMAIL_WEBHOOK_URL: databaseUrl('r72_customer_email_webhook_command'),
+    PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_MODE: 'customer_live',
+    PROPERTY_PREDATOR_CUSTOMER_EMAIL_PROVIDER_ID: 'mailgun_eu',
+    PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED: 'true',
+    PROPERTY_PREDATOR_CUSTOMER_EMAIL_DELIVERY_ENABLED: 'true',
+    PROPERTY_PREDATOR_CUSTOMER_EMAIL_EMERGENCY_PAUSED: 'false',
+    PROPERTY_PREDATOR_CUSTOMER_EMAIL_RECEIPTS_ENABLED: 'true',
+    PROPERTY_PREDATOR_CUSTOMER_EMAIL_RECEIPTS_CONFIRMED: 'true',
+    PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_WORKSPACE_ID: '8a4a838f-9b3b-4f6b-a879-3459aa3771ae',
+    PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_CONNECTION_ID: '6a4a838f-9b3b-4f6b-a879-3459aa3771ae',
     MAILGUN_SIGNING_KEY,
     MAILGUN_REGION: 'eu',
-    MAILGUN_SENDING_DOMAIN: 'mail.propertypredator.co.uk',
-    MAILGUN_FROM_EMAIL: 'growth@mail.propertypredator.co.uk',
+    MAILGUN_SENDING_DOMAIN: 'mg.propertypredator.com',
+    MAILGUN_KEY_SCOPE: 'domain-sending',
+    MAILGUN_DOMAIN_SENDING_KEY,
+    MAILGUN_FROM_EMAIL: 'growth@mg.propertypredator.com',
     MAILGUN_EVENT_WEBHOOK_URL: 'https://app.propertypredator.co.uk/webhooks/mailgun/events',
+    PROPERTY_PREDATOR_MAILGUN_WEBHOOK_ENABLED: 'true',
     MAILGUN_WEBHOOK_SIGNATURE_VERIFICATION_ENABLED: 'true',
     MAILGUN_DNS_VERIFIED: 'true',
     MAILGUN_SUPPRESSION_SYNC_ENABLED: 'true',
@@ -62,7 +76,7 @@ test('the mandatory first-channel configuration can pass while every later rail 
   assert.equal(report.liveEffectsVerified, false);
   assert.equal(report.networkCallsMade, false);
   assert.deepEqual(report.blockers, []);
-  assert.equal(report.providers[0]?.rail, 'email');
+  assert.equal(report.providers[0]?.rail, 'customer_email');
   assert.equal(report.providers[0]?.phase, 'mandatory-first-channel');
   assert.equal(report.providers[0]?.status, 'configuration-ready');
   assert.ok(report.providers.slice(1).every((provider) => provider.phase === 'deferred'));
@@ -74,11 +88,12 @@ test('missing production foundation and Mailgun settings fail closed by name', (
 
   assert.equal(report.result, 'blocked');
   assert.ok(report.blockers.some((blocker) => blocker.includes('Production runtime mode')));
-  assert.ok(report.blockers.some((blocker) => blocker.includes('Mailgun API key')));
-  assert.ok(report.manualProofGates.some((gate) => gate.includes('runtime-enforced provider-effect kill switch')));
-  assert.ok(report.manualProofGates.some((gate) => gate.includes('declared maximum recipient count')));
+  assert.ok(report.blockers.some((blocker) => blocker.includes('Mailgun domain-sending key')));
+  assert.ok(report.manualProofGates.some((gate) => gate.includes('durable pre-call pause/effects fences')));
+  assert.ok(report.manualProofGates.some((gate) => gate.includes('owned test email')));
+  assert.ok(report.manualProofGates.some((gate) => gate.includes('must never share a process')));
   assert.equal(report.providers.find((provider) => provider.rail === 'whatsapp')?.status, 'not-configured');
-  assert.ok(report.blockers.every((blocker) => !/360dialog|Twilio|Ayrshare|Whereby|Nylas/.test(blocker)));
+  assert.ok(report.blockers.every((blocker) => !/Meta WhatsApp|Ayrshare/.test(blocker)));
 });
 
 test('unsafe cutover shapes stay blocked even when all first-channel credentials exist', () => {
@@ -116,21 +131,21 @@ test('raw secrets and URLs are destroyed at the sanitizer boundary and never ren
   const serializedReport = JSON.stringify(report);
   const rendered = formatPropertyPredatorPilotPreflight(report);
 
-  for (const secret of [DB_PASSWORD, SESSION_SECRET, ABUSE_SECRET, MAILGUN_API_KEY, MAILGUN_SIGNING_KEY]) {
+  for (const secret of [DB_PASSWORD, SESSION_SECRET, ABUSE_SECRET, MAILGUN_DOMAIN_SENDING_KEY, MAILGUN_SIGNING_KEY]) {
     assert.doesNotMatch(serializedEvidence, new RegExp(secret));
     assert.doesNotMatch(serializedReport, new RegExp(secret));
     assert.doesNotMatch(rendered, new RegExp(secret));
   }
   assert.doesNotMatch(serializedEvidence, /app\.propertypredator\.co\.uk/);
-  assert.doesNotMatch(serializedReport, /growth@mail\.propertypredator\.co\.uk/);
+  assert.doesNotMatch(serializedReport, /growth@mg\.propertypredator\.com/);
   assert.match(rendered, /MAILGUN_SIGNING_KEY — Mailgun webhook signing key/);
   assert.match(rendered, /no database or provider connection was attempted/i);
 });
 
 test('partially prepared deferred rails are visible but cannot block the Mailgun review gate', () => {
   const env = firstChannelEnvironment();
-  env.PROPERTY_PREDATOR_WHATSAPP_PROVIDER = '360dialog';
-  env.DIALOG360_WABA_ID = 'waba-ready-later';
+  env.PROPERTY_PREDATOR_WHATSAPP_LIVE_PROVIDER_ID = 'meta_whatsapp_cloud';
+  env.PROPERTY_PREDATOR_META_WHATSAPP_WABA_ID = '1234567890';
 
   const report = runPropertyPredatorPilotPreflight(env);
   const whatsapp = report.providers.find((provider) => provider.rail === 'whatsapp');
@@ -161,14 +176,15 @@ test('the agreed provider catalogue is exact and keeps social listening outside 
   assert.deepEqual(
     PILOT_PROVIDER_CATALOGUE.map(({ rail, provider, phase }) => ({ rail, provider, phase })),
     [
-      { rail: 'email', provider: 'Mailgun Basic', phase: 'mandatory-first-channel' },
-      { rail: 'whatsapp', provider: '360dialog Regular', phase: 'deferred' },
-      { rail: 'sms', provider: 'Twilio UK SMS', phase: 'deferred' },
-      { rail: 'social', provider: 'Ayrshare Launch', phase: 'deferred' },
-      { rail: 'webinar', provider: 'Whereby Embedded Build', phase: 'deferred' },
-      { rail: 'calendar', provider: 'Nylas Calendar/Scheduler', phase: 'deferred' },
+      { rail: 'customer_email', provider: 'Mailgun EU customer email', phase: 'mandatory-first-channel' },
+      { rail: 'whatsapp', provider: 'Meta WhatsApp Cloud', phase: 'deferred' },
+      { rail: 'owned_social', provider: 'Ayrshare owned X', phase: 'deferred' },
     ],
   );
+  const settings = PILOT_PROVIDER_CATALOGUE.flatMap((provider) => provider.settings.map((item) => item.setting));
+  for (const stale of ['MAILGUN_API_KEY', 'DIALOG360_API_KEY', 'TWILIO_ACCOUNT_SID', 'AYRSHARE_PROFILE_KEY']) {
+    assert.equal(settings.includes(stale), false);
+  }
 });
 
 test('the preflight implementation has no network, provider SDK or database client path', () => {
