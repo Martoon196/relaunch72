@@ -298,23 +298,41 @@ function ownedSocialStagingIdentity(
 }
 
 /**
- * The scope-bound idempotency key a founder staging command must supply. Two
- * stagings of the same approved post onto the same owned profile collapse onto
- * one job; anything else is a distinct publication.
+ * The scope-bound digest pair a founder staging command supplies. Two stagings
+ * of the same approved post onto the same owned profile collapse onto one job;
+ * anything else is a distinct publication. Both digests are identifier-only so
+ * the founder portal derives exactly what the offline rehearsal derives, and a
+ * replay from either path lands on the same job rather than conflicting.
  */
-export function deriveOwnedSocialStagingIdempotencyKey(
+export function deriveOwnedSocialStagingDigests(
   target: OwnedSocialActivationTarget,
   operationTag: string,
-): string {
+): Readonly<{ idempotencyKeySha256: string; requestSha256: string }> {
   if (!OPERATION_TAG.test(operationTag)
       || (target.scheduledFor !== null
         && (!Number.isFinite(Date.parse(target.scheduledFor))
           || new Date(target.scheduledFor).toISOString() !== target.scheduledFor))) {
     throw new OwnedSocialActivationError('invalid_rehearsal');
   }
-  return createHash('sha256')
-    .update(ownedSocialStagingIdentity(target, operationTag), 'utf8')
-    .digest('hex');
+  const identity = ownedSocialStagingIdentity(target, operationTag);
+  return Object.freeze({
+    idempotencyKeySha256: createHash('sha256').update(identity, 'utf8').digest('hex'),
+    requestSha256: createHash('sha256').update([
+      identity,
+      target.contentItemId,
+      target.approvalRequestId,
+      target.sourceAttestationId,
+      target.expectedOwnedAccountSha256,
+    ].join(DIGEST_FIELD_SEPARATOR), 'utf8').digest('hex'),
+  });
+}
+
+/** Backwards-compatible accessor for the idempotency half of the pair. */
+export function deriveOwnedSocialStagingIdempotencyKey(
+  target: OwnedSocialActivationTarget,
+  operationTag: string,
+): string {
+  return deriveOwnedSocialStagingDigests(target, operationTag).idempotencyKeySha256;
 }
 
 /**
@@ -350,15 +368,9 @@ export function deriveOwnedSocialPublicationRehearsal(
   }
   if (LINK_SHAPED.test(input.approvedText)) failures.push('CONTAINS_LINK_OR_DOMAIN');
 
-  const identity = ownedSocialStagingIdentity(target, input.operationTag);
-  const request = [
-    identity,
-    contentSha256,
-    target.contentItemId,
-    target.approvalRequestId,
-    target.sourceAttestationId,
-    target.expectedOwnedAccountSha256,
-  ].join(DIGEST_FIELD_SEPARATOR);
+  // Exactly the digests the founder portal derives, so a replay staged from
+  // either path lands on the same job instead of conflicting.
+  const digests = deriveOwnedSocialStagingDigests(target, input.operationTag);
 
   return Object.freeze({
     schemaVersion: 1,
@@ -372,8 +384,8 @@ export function deriveOwnedSocialPublicationRehearsal(
     publishable: failures.length === 0,
     publishableFailures: Object.freeze(failures),
     characterCount,
-    idempotencyKeySha256: createHash('sha256').update(identity, 'utf8').digest('hex'),
-    requestSha256: createHash('sha256').update(request, 'utf8').digest('hex'),
+    idempotencyKeySha256: digests.idempotencyKeySha256,
+    requestSha256: digests.requestSha256,
     caps: Object.freeze({
       daily: OWNED_SOCIAL_DAILY_CAP,
       monthly: OWNED_SOCIAL_MONTHLY_CAP,
