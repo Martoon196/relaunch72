@@ -1,29 +1,45 @@
 # Property Predator Live Channels backend contract
 
-Audience: the founder-facing Live Channels UI implementer. This document describes the backend seams that exist at the 0052-0054 checkpoint. It does not define a browser-to-database API and does not authorise provider activation.
+Audience: the founder-facing Live Channels UI implementer. This document describes the backend seams through the 0055 operational Conversion Inbox checkpoint. It does not authorise provider activation.
+
+## 0055 UI integration contract
+
+The PostgreSQL portal now composes `liveChannelTruth` on `PostgresPortalDeps` and `PgPortalPlatform`. Claude's Live Channels service adapter should call only:
+
+```ts
+const outcome = await deps.liveChannelTruth.snapshot(identity);
+```
+
+The authoritative types are in `orchestrator/src/portal/live-channel-truth-service.ts`. A successful outcome contains `dataset: 'postgres_authoritative'`, one workspace UUID, one canonical `snapshotAt`, and exactly four rails: `customer_email`, `owned_social`, `whatsapp`, and `social_dm`. Each rail contains bounded cap counts, real connection/inbound/outbound-or-reply/receipt states, stable blocker codes, and at most one sanitised receipt reference. It contains no address, token, provider response body, customer message body, credential metadata, or activation command.
+
+Fail closed to Claude's existing unavailable/fixture posture when `outcome.ok` is false, the workspace differs, any rail is missing/duplicated, or the dataset is not `postgres_authoritative`. Do not infer readiness from environment variables in the presenter. `social_dm` must remain `not_composed` with `LIVE_ADAPTER_NOT_COMPOSED` until a forward provider adapter exists.
+
+The same composition now exposes `inboxOperations`, typed in `orchestrator/src/portal/conversion-inbox-operations-service.ts`, for the existing Conversion Inbox only. Its four provider-incapable commands are assignment, internal note, admin-call creation, and atomic call-outcome/optional-next-action recording. The command service has no enqueue, delivery, credential, webhook, provider, send, or publish method.
+
+Migration `0055_property_predator_operational_conversion_inbox.sql` is the database boundary. The Live Channels snapshot is a single `SECURITY DEFINER` function granted only to `r72_web`; operator commands are exact functions granted to `r72_crm_command`. The former 0053 hash-only WhatsApp inbound receipt grant is revoked from the webhook login, so every newly accepted signed inbound event must atomically project into the canonical conversation, message/version, Lead 360-linked urgent call task, immutable origin evidence, and receipt.
 
 ## Non-negotiable UI rules
 
 - The browser must never receive a database URL, provider secret, encrypted credential envelope, raw recipient address, webhook signing material, or provider access token.
 - The UI must call a server-side command adapter under an authenticated founder/owner session. It must not call a PostgreSQL function or repository directly.
 - `queued`, `replayed`, worker readiness, and a provider receipt are different facts. Never render `sent`, `published`, `delivered`, or `connected` from an enqueue result.
-- There is no aggregate Live Channels read/presenter API in this checkpoint. Until one is added, connection state, cap usage, approval state, blocked reasons, job state, and receipt history are **not available to the UI**. Render them as unavailable/unknown, not as ready or zero.
-- Command failures are exceptions/transaction failures, not a structured `blockedReasons` result. Do not parse database exception text in the browser. A later backend route must map reviewed failures to safe stable codes.
+- `liveChannelTruth.snapshot(identity)` is the aggregate portal-readable truth API in this checkpoint. Render positive connection, cap, blocker and latest-receipt claims only from a successful, fully validated `postgres_authoritative` snapshot; otherwise render unavailable/unknown, not ready or zero.
+- `liveChannelTruth` and `inboxOperations` return typed, browser-safe failure outcomes. Do not parse database or provider exception text in the browser, and do not reinterpret a command failure as channel readiness.
 - All three provider-effect processes are dark by default. No current startup/readiness path makes a provider network call.
 
 ## Truth ownership
 
 | UI claim | Authoritative backend fact | Current UI-readable API |
 | --- | --- | --- |
-| Connected | Exact active live `provider_connections` record plus the channel-specific non-revoked binding/profile | None |
-| Cap remaining | Durable non-cancelled job count in the database, evaluated atomically by enqueue | None; never infer from the hard-cap constant |
-| Approved | Exact content/template approval identifiers revalidated inside the enqueue transaction | None |
-| Eligible recipient | Exact verified endpoint, latest consent, no current suppression, and current PECR/operator permission evidence revalidated by the database | None |
+| Connected | Exact active live `provider_connections` record plus the channel-specific non-revoked binding/profile | `liveChannelTruth.snapshot()` connection state |
+| Cap remaining | Durable non-cancelled job count in the database, evaluated atomically by enqueue | `liveChannelTruth.snapshot()` bounded daily/monthly cap windows |
+| Approved | Exact content/template approval identifiers revalidated inside the enqueue transaction | Safe blocker state only; exact approval identifiers remain server-side |
+| Eligible recipient | Exact verified endpoint, latest consent, no current suppression, and current PECR/operator permission evidence revalidated by the database | Safe blocker state only; recipient evidence remains server-side |
 | Enqueued | Successful command result (`jobId`; plus disposition for customer email) | Server command adapter only |
-| Provider accepted/published | Durable worker receipt after the calling fence | None |
-| Delivered/read/failed | Authenticated provider receipt projected to the durable receipt ledger | None |
-| Blocked reason | Safe mapping of a command rejection or a durable `needs_attention` state | None |
-| Runtime ready | Service readiness object after schema, installation, role, and function-boundary checks | Internal process readiness only; not a portal route |
+| Provider accepted/published | Durable worker receipt after the calling fence | Latest sanitised receipt outcome when present in `liveChannelTruth.snapshot()` |
+| Delivered/read/failed | Authenticated provider receipt projected to the durable receipt ledger | Coarse receipt state/outcome only; no provider payload or full history |
+| Blocked reason | Safe mapping of a command rejection or a durable `needs_attention` state | Stable `blockerCodes` plus typed command failures |
+| Runtime ready | Service readiness object after schema, installation, role, and function-boundary checks | Coarse connection/ingress/effect state from `liveChannelTruth.snapshot()`; process internals remain private |
 
 The UI can be built against loading, unavailable, disabled, and action-pending states now. It must not manufacture positive channel truth while the read/presenter route is absent.
 
@@ -239,9 +255,9 @@ No customer address may be inferred or targeted, and activation requires explici
 
 ## What Claude can safely implement now
 
-- Premium founder-only visual states driven by explicit props: loading, unavailable, dark/paused, awaiting backend confirmation, and attention required.
-- Command forms that collect only the identifiers/evidence listed above, provided their submit handlers remain disabled until the corresponding authenticated server adapter exists.
-- Receipt and cap layouts with an unavailable state, not fabricated rows or `0 used` values.
+- Premium founder-only visual states driven by the validated `liveChannelTruth.snapshot()` result, including loading, unavailable, blocked, ready and attention-required states.
+- Existing Conversion Inbox operational forms may call `inboxOperations` through the authenticated portal route; Live Channels must not invent a pause, enqueue or provider-connect command that is absent from its typed service dependency.
+- Receipt and cap layouts sourced from the bounded snapshot, with an unavailable state whenever validation or the read fails; never fabricate rows or `0 used` values.
 - A clear separation between `enqueue accepted`, `provider accepted`, and terminal receipt states.
 
-Do not add direct database access, expose internal readiness endpoints publicly, derive readiness from Render service existence, or label a channel active merely because credentials have been entered. The missing backend presenter must be implemented and reviewed before positive connection/cap/approval/receipt truth can be shown.
+Do not add direct database access, expose internal readiness endpoints publicly, derive readiness from Render service existence, or label a channel active merely because credentials have been entered. Claude's service adapter must validate the complete typed snapshot and fail closed before its presenter shows positive connection, cap, blocker or receipt truth.

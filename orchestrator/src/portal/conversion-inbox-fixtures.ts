@@ -93,6 +93,8 @@ function summary(person: typeof PEOPLE[number], index: number): InboxConversatio
     state: 'open',
     contactId: person.contactId,
     contactName: person.name,
+    assignedUserId: index < 2 ? '70000000-0000-4000-8000-000000000001' : null,
+    assignedUserName: index < 2 ? 'Growth HQ founder' : null,
     subject: person.subject,
     unreadCount: person.unread,
     requiresApproval: index === 0,
@@ -285,6 +287,7 @@ function thread(person: typeof PEOPLE[number], index: number): ConversionInboxTh
     consents: consent(person),
     draft: draft(index),
     railActivity: railActivity(index),
+    adminCall: null,
   });
 }
 

@@ -1,7 +1,11 @@
 import { escapeHtml } from './ui.js';
 import {
   CONVERSION_INBOX_CREATE_DRAFT_ROUTE,
+  conversionInboxAdminCallRoute,
+  conversionInboxAssignmentRoute,
+  conversionInboxCallOutcomeRoute,
   conversionInboxDecisionRoute,
+  conversionInboxInternalNoteRoute,
   conversionInboxRequestApprovalRoute,
   conversionInboxReviseDraftRoute,
   conversionInboxTestQueueRoute,
@@ -24,6 +28,13 @@ export interface ConversionInboxActionSecurity {
   readonly requestApprovalKeys: Readonly<Record<string, string>>;
   readonly decisionKeys: Readonly<Record<string, string>>;
   readonly queueKeys: Readonly<Record<string, string>>;
+  readonly assignmentKeys: Readonly<Record<string, string>>;
+  readonly internalNoteKeys: Readonly<Record<string, string>>;
+  readonly adminCallKeys: Readonly<Record<string, string>>;
+  readonly callOutcomeKeys: Readonly<Record<string, string>>;
+  readonly adminCallDueAt: string;
+  readonly outcomeOccurredAt: string;
+  readonly nextActionDueAt: string;
 }
 
 export interface RenderConversionInboxOptions {
@@ -52,6 +63,8 @@ const CONVERSION_INBOX_STYLE = `
   @media(max-width:560px){.ci-head{padding:21px 17px 17px}.ci-head h1{font-size:2.3rem}.ci-truth{padding-inline:17px}.ci-toolbar{grid-template-columns:1fr;padding:12px 14px}.ci-field:first-child{grid-column:auto}.ci-button,.ci-clear{width:100%}.ci-conversation>a{min-height:118px}.ci-thread{min-height:650px}.ci-thread-head{align-items:start}.ci-test-stamp{max-width:106px}.ci-rail-activity{grid-template-columns:auto minmax(0,1fr);align-items:start;padding-inline:12px}.ci-rail-state{grid-column:2}.ci-rail-copy{grid-column:1/-1;grid-row:2}.ci-rail-trace{grid-column:1;grid-row:3}.ci-rail-time{grid-column:2;grid-row:3;justify-self:end}.ci-transcript{padding-inline:12px}.ci-message{max-width:91%}.ci-inbound-proof{flex-basis:auto}.ci-inbound-proof-detail{width:100%}.ci-composer{padding-inline:12px}.ci-composer-bar{align-items:stretch;flex-direction:column}.ci-draft-actions,.ci-review-actions{display:grid;grid-template-columns:1fr}.ci-draft-actions button,.ci-review-actions button{width:100%}.ci-review-form{grid-template-columns:1fr}.ci-context{grid-template-columns:1fr}.ci-context section,.ci-context section:last-child{grid-column:1;border-right:0}.ci-lead-grid{grid-template-columns:1fr 1fr}}
   @media(prefers-reduced-motion:reduce){.ci *{scroll-behavior:auto!important;transition:none!important}}
   @media(forced-colors:active){.ci,.ci-mode,.ci-conversation>a[aria-current="true"],.ci-message-body,.ci-channel,.ci-inbound-proof{forced-color-adjust:auto}.ci-channel,.ci-conversation>a,.ci-message-body,.ci-composer textarea,.ci-stat,.ci-consent,.ci-inbound-proof{border:1px solid CanvasText}.ci-channel[aria-current="page"],.ci-conversation>a[aria-current="true"]{border:2px solid Highlight}}
+  .ci-delivery::before{content:attr(data-environment)}
+  .ci-ops{display:grid;gap:10px}.ci-ops form{display:grid;gap:7px;border:1px solid var(--ci-line);background:#090c0e;padding:9px}.ci-ops label{display:grid;gap:4px;color:var(--ci-faint);font:750 10px var(--mono,monospace);text-transform:uppercase}.ci-ops textarea,.ci-ops input,.ci-ops select{width:100%;min-height:44px;border:1px solid var(--ci-line-strong);border-radius:6px;background:var(--ci-raised);color:var(--ci-ink);padding:8px}.ci-ops textarea{min-height:68px;resize:vertical}.ci-ops button{min-height:44px;border:1px solid var(--ci-teal);border-radius:6px;background:var(--ci-teal);color:#03110f;font-weight:850}.ci-ops-pair{display:grid;grid-template-columns:1fr 1fr;gap:7px}
 `;
 
 function safeDate(value: string | null): Date | null {
@@ -98,16 +111,16 @@ function initials(name: string | null): string {
 }
 
 function loadedConversationLabel(count: number): string {
-  return `${count} loaded test ${count === 1 ? 'conversation' : 'conversations'}`;
+  return `${count} loaded ${count === 1 ? 'conversation' : 'conversations'}`;
 }
 
 function renderChannelRail(view: ConversionInboxView): string {
   const items = view.channels.map((channel) => `
     <li><a class="ci-channel" href="${escapeHtml(queryUrl(view, { channel: channel.channel }))}"${channel.selected ? ' aria-current="page"' : ''} aria-label="${escapeHtml(channel.label)}, ${escapeHtml(loadedConversationLabel(channel.count))}">
-      <span><span class="ci-glyph" aria-hidden="true">${escapeHtml(CHANNEL_GLYPHS[channel.channel])}</span><span class="ci-channel-test">TEST</span></span>
+      <span><span class="ci-glyph" aria-hidden="true">${escapeHtml(CHANNEL_GLYPHS[channel.channel])}</span><span class="ci-channel-test">INBOX</span></span>
       <span class="ci-channel-count" aria-hidden="true">${escapeHtml(channel.count)}</span>
     </a></li>`).join('');
-  return `<nav class="ci-channels" aria-label="Test conversation channels"><ul>${items}</ul></nav>`;
+  return `<nav class="ci-channels" aria-label="Conversion Inbox channels"><ul>${items}</ul></nav>`;
 }
 
 function renderQueueItem(view: ConversionInboxView, item: ConversionInboxQueueItemView): string {
@@ -118,7 +131,7 @@ function renderQueueItem(view: ConversionInboxView, item: ConversionInboxQueueIt
       <span class="ci-avatar" aria-hidden="true">${escapeHtml(initials(name))}</span>
       <span class="ci-person">
         <span class="ci-person-line"><strong>${escapeHtml(name)}</strong>${item.unreadCount > 0 ? '<span class="ci-dot" aria-label="Unread"></span>' : ''}</span>
-        <span class="ci-subject">${escapeHtml(item.subject ?? item.stateLabel)}</span>
+        <span class="ci-subject">${escapeHtml(item.subject ?? item.stateLabel)} · ${escapeHtml(item.assignedUserName ? `Assigned to ${item.assignedUserName}` : 'Unassigned')}</span>
         <span class="ci-preview">${escapeHtml(item.preview)}</span>
       </span>
       <span class="ci-queue-meta">${dateTime(item.lastMessageAt, view.timezone, true)}<span class="ci-channel-pill">${escapeHtml(item.testProviderLabel)}</span>${item.requiresApproval ? '<span class="ci-approval-pill">Review</span>' : ''}</span>
@@ -148,12 +161,16 @@ function renderTranscript(thread: ConversionInboxSelectedThreadView, timezone: s
       ? `<span class="ci-inbound-proof" aria-label="${escapeHtml(evidence.accessibleLabel)}">${escapeHtml(evidence.label)} · ${escapeHtml(evidence.networkCode)}</span>`
       : '';
     const proofDetail = evidence
-      ? `<div class="ci-inbound-proof-detail">${evidence.kind === 'signed_mailgun_inbound' ? 'Mailgun signature and exact reply correlation verified' : 'Simulator signature verified'} · Receipt ${escapeHtml(evidence.receiptLabel)} · verified ${dateTime(evidence.verifiedAt, timezone, true)}</div>`
+      ? `<div class="ci-inbound-proof-detail">${evidence.kind === 'signed_mailgun_inbound'
+        ? 'Mailgun signature and exact reply correlation verified'
+        : evidence.kind === 'signed_meta_whatsapp_inbound'
+          ? 'Meta raw-body HMAC, owned-number binding and exact sender projection verified'
+          : 'Simulator signature verified'} · Receipt ${escapeHtml(evidence.receiptLabel)} · verified ${dateTime(evidence.verifiedAt, timezone, true)}</div>`
       : '';
     return `<li class="ci-message" data-direction="${escapeHtml(message.direction)}">
       <div class="ci-message-head"><strong>${escapeHtml(message.authorLabel)}</strong><span>·</span>${dateTime(message.occurredAt, timezone, true)}${proof}</div>
       <div class="ci-message-body">${escapeHtml(message.body)}${message.bodyTruncated ? '<span class="ci-truncated">Long body clipped at the safe display boundary.</span>' : ''}</div>
-      ${proofDetail}${message.deliveryLabel ? `<div class="ci-delivery">${escapeHtml(message.deliveryLabel)} · no real delivery occurred</div>` : ''}
+      ${proofDetail}${message.deliveryLabel ? `<div class="ci-delivery" data-environment="${thread.summary.environment === 'live' ? 'LIVE' : 'TEST'}">${escapeHtml(message.deliveryLabel)}${thread.summary.environment === 'live' ? ' · durable provider evidence' : ' · no real delivery occurred'}</div>` : ''}
     </li>`;
   }).join('');
   return `<div class="ci-transcript" id="ci-transcript" tabindex="-1"><h3 class="ci-sr">Test message transcript</h3>${truncated}<ol aria-label="Test message transcript">${items}</ol></div>`;
@@ -163,11 +180,13 @@ function renderRailActivity(thread: ConversionInboxSelectedThreadView, timezone:
   const activity = thread.railActivity;
   if (activity === null) {
     if (thread.summary.environment === 'live') {
-      return '<section class="ci-rail-activity" data-rail-state="reconciled" aria-label="Mailgun owned-office reply reconciled"><span class="ci-rail-kicker">MAILGUN INBOUND</span><strong class="ci-rail-state">Reply reconciled</strong><span class="ci-rail-copy">Lead 360 was updated, unread work was raised and an urgent admin call task was created atomically.</span></section>';
+      const whatsapp = thread.summary.channel === 'whatsapp';
+      return `<section class="ci-rail-activity" data-rail-state="reconciled" aria-label="${whatsapp ? 'Meta WhatsApp' : 'Mailgun'} inbound reconciled"><span class="ci-rail-kicker">${whatsapp ? 'META WHATSAPP INBOUND' : 'MAILGUN INBOUND'}</span><strong class="ci-rail-state">Reply reconciled</strong><span class="ci-rail-copy">The signed inbound event was projected into this canonical thread, Lead 360, unread work and an urgent admin call task atomically.</span></section>`;
     }
     return `<section class="ci-rail-activity" data-rail-state="none" aria-label="TEST rail activity"><span class="ci-rail-kicker">Latest TEST rail</span><strong class="ci-rail-state">No operation recorded</strong><span class="ci-rail-copy">Nothing is queued for this conversation.</span></section>`;
   }
-  return `<section class="ci-rail-activity" data-rail-state="${escapeHtml(activity.state)}" aria-label="TEST rail activity: ${escapeHtml(activity.label)}"><span class="ci-rail-kicker">Latest TEST rail</span><strong class="ci-rail-state">${escapeHtml(activity.label)}</strong><span class="ci-rail-copy">${escapeHtml(activity.detail)}</span><span class="ci-rail-trace">Trace ${escapeHtml(activity.correlationLabel)}</span><span class="ci-rail-time">Last change ${dateTime(activity.occurredAt, timezone, true)}</span></section>`;
+  const environment = thread.summary.environment === 'live' ? 'LIVE' : 'TEST';
+  return `<section class="ci-rail-activity" data-rail-state="${escapeHtml(activity.state)}" aria-label="${environment} rail activity: ${escapeHtml(activity.label)}"><span class="ci-rail-kicker">Latest ${environment} rail</span><strong class="ci-rail-state">${escapeHtml(activity.label)}</strong><span class="ci-rail-copy">${escapeHtml(activity.detail)}</span><span class="ci-rail-trace">Trace ${escapeHtml(activity.correlationLabel)}</span><span class="ci-rail-time">Last change ${dateTime(activity.occurredAt, timezone, true)}</span></section>`;
 }
 
 function inboxReturnFields(view: ConversionInboxView, thread: ConversionInboxSelectedThreadView): string {
@@ -258,7 +277,39 @@ function deliveryExplanation(state: ConversionInboxDeliveryState): string {
   return `The simulator recorded “${state}”. No message left Growth HQ.`;
 }
 
-function renderContext(thread: ConversionInboxSelectedThreadView, timezone: string): string {
+function renderOperations(
+  view: ConversionInboxView,
+  thread: ConversionInboxSelectedThreadView,
+  security: ConversionInboxActionSecurity | undefined,
+): string {
+  if (!security || !view.canWrite) {
+    return '<p class="ci-fact">Operational controls require an active writable workspace session.</p>';
+  }
+  const conversationId = thread.summary.conversationId;
+  const assignmentKey = security.assignmentKeys[conversationId];
+  const noteKey = security.internalNoteKeys[conversationId];
+  const callKey = security.adminCallKeys[conversationId];
+  if (!assignmentKey || !noteKey || !callKey) return '';
+  const assignment = `<form method="post" action="${escapeHtml(conversionInboxAssignmentRoute(conversationId))}">${protectedFields(view, thread, security, assignmentKey)}<input type="hidden" name="expected_row_version" value="${escapeHtml(thread.summary.rowVersion)}"><label>Canonical owner<select name="assignment"><option value="self">Assign to me</option><option value="unassigned">Unassign</option></select></label><button type="submit">Save assignment</button></form>`;
+  const note = `<form method="post" action="${escapeHtml(conversionInboxInternalNoteRoute(conversationId))}">${protectedFields(view, thread, security, noteKey)}<label>Internal note<textarea name="body" maxlength="8192" required placeholder="Visible inside Growth HQ only"></textarea></label><button type="submit">Add internal note</button></form>`;
+  const createCall = `<form method="post" action="${escapeHtml(conversionInboxAdminCallRoute(conversationId))}">${protectedFields(view, thread, security, callKey)}<input type="hidden" name="due_at" value="${escapeHtml(security.adminCallDueAt)}"><label>Admin call priority<select name="priority"><option value="urgent">Urgent · 15 minutes</option><option value="high">High</option></select></label><label>Call brief<textarea name="note" maxlength="2000" placeholder="What should the founder know before calling?"></textarea></label><button type="submit">Create Lead 360 call</button></form>`;
+  const adminCall = thread.adminCall;
+  let outcome = '';
+  if (adminCall?.taskStatus === 'open') {
+    const outcomeKey = security.callOutcomeKeys[adminCall.taskId];
+    if (outcomeKey) outcome = `<form method="post" action="${escapeHtml(conversionInboxCallOutcomeRoute(adminCall.taskId))}">${protectedFields(view, thread, security, outcomeKey)}<input type="hidden" name="expected_task_row_version" value="${escapeHtml(adminCall.taskRowVersion)}"><input type="hidden" name="occurred_at" value="${escapeHtml(security.outcomeOccurredAt)}"><input type="hidden" name="next_action_due_at" value="${escapeHtml(security.nextActionDueAt)}"><label>Call outcome<select name="outcome"><option value="connected">Connected</option><option value="voicemail">Voicemail</option><option value="no_answer">No answer</option><option value="follow_up_requested">Follow-up requested</option><option value="qualified">Qualified</option><option value="converted">Converted</option><option value="not_interested">Not interested</option><option value="wrong_number">Wrong number</option></select></label><label>Outcome summary<textarea name="summary" maxlength="4000" required></textarea></label><label>Optional next action title<input name="next_action_title" maxlength="300" placeholder="Leave blank for no next task"></label><div class="ci-ops-pair"><label>Next action<select name="next_action_kind"><option value="internal_follow_up">Internal follow-up</option><option value="call">Call</option><option value="reply_draft">Reply draft</option><option value="consent_review">Consent review</option></select></label><label>Priority<select name="next_action_priority"><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></label></div><button type="submit">Record outcome</button></form>`;
+  } else if (adminCall) {
+    outcome = `<div class="ci-delivery-card"><strong>${escapeHtml(adminCall.outcome ?? 'Completed')}</strong><p>${escapeHtml(adminCall.outcomeSummary ?? 'Outcome recorded')}${adminCall.nextTaskTitle ? ` · Next: ${escapeHtml(adminCall.nextTaskTitle)}` : ''}</p></div>`;
+  }
+  return `<div class="ci-ops">${assignment}${note}${adminCall ? outcome : createCall}</div>`;
+}
+
+function renderContext(
+  view: ConversionInboxView,
+  thread: ConversionInboxSelectedThreadView,
+  timezone: string,
+  security: ConversionInboxActionSecurity | undefined,
+): string {
   const lead = thread.lead;
   const draft = thread.draft;
   const consentComplete = draft.consentAllowsQueueing;
@@ -269,6 +320,7 @@ function renderContext(thread: ConversionInboxSelectedThreadView, timezone: stri
       <a class="ci-lead-link" href="/portal/crm/contacts/${encodeURIComponent(lead.contactId)}">Open full Lead 360</a>
     </section>
     <section aria-labelledby="ci-consent-title"><h2 id="ci-consent-title">Consent checkpoint</h2><ul class="ci-consents">${thread.consents.map((consent) => renderConsent(consent, timezone)).join('')}</ul></section>
+    <section aria-labelledby="ci-ops-title"><h2 id="ci-ops-title">Inbox operations</h2>${renderOperations(view, thread, security)}</section>
     <section aria-labelledby="ci-gate-title"><h2 id="ci-gate-title">Outbound safety gate</h2>
       <ol class="ci-gate"><li data-complete="${draft.versionNumber !== null}"><span class="ci-step">1</span><span class="ci-step-copy"><strong>Exact draft version</strong><span>${draft.versionNumber === null ? 'No immutable version yet.' : `Version ${escapeHtml(draft.versionNumber)} is the review target.`}</span></span></li><li data-complete="${draft.exactApproval}"><span class="ci-step">2</span><span class="ci-step-copy"><strong>Human approval</strong><span>${escapeHtml(draft.approvalLabel)}${draft.approvalNote ? ` · ${escapeHtml(draft.approvalNote)}` : ''}</span></span></li><li data-complete="${consentComplete}"><span class="ci-step">3</span><span class="ci-step-copy"><strong>Current consent</strong><span>${consentComplete ? 'Permitted inside the test snapshot.' : 'Gate remains closed.'}</span></span></li></ol>
       <div class="ci-delivery-card" data-delivery-state="${escapeHtml(draft.deliveryState)}"><strong>${escapeHtml(draft.deliveryLabel)}</strong><p>${escapeHtml(deliveryExplanation(draft.deliveryState))}</p></div>
@@ -285,9 +337,9 @@ function renderSelected(
   const mode = thread.summary.environment === 'live'
     ? 'LIVE OWNED-OFFICE PROOF' : 'TEST / SIMULATED';
   return `<main class="ci-thread" aria-labelledby="ci-thread-title">
-    <header class="ci-thread-head"><div class="ci-thread-person"><h2 id="ci-thread-title">${escapeHtml(thread.lead.displayName)}</h2><p>${escapeHtml(thread.summary.subject ?? thread.summary.channelLabel)} · ${escapeHtml(thread.summary.stateLabel)}</p></div><span class="ci-test-stamp">${escapeHtml(thread.summary.channelLabel)}<br>${escapeHtml(mode)}</span></header>
+    <header class="ci-thread-head"><div class="ci-thread-person"><h2 id="ci-thread-title">${escapeHtml(thread.lead.displayName)}</h2><p>${escapeHtml(thread.summary.subject ?? thread.summary.channelLabel)} · ${escapeHtml(thread.summary.stateLabel)} · ${escapeHtml(thread.summary.assignedUserName ? `Assigned to ${thread.summary.assignedUserName}` : 'Unassigned')}</p></div><span class="ci-test-stamp">${escapeHtml(thread.summary.channelLabel)}<br>${escapeHtml(mode)}</span></header>
     ${renderRailActivity(thread, view.timezone)}${renderTranscript(thread, view.timezone)}${renderComposer(view, thread, security)}
-  </main>${renderContext(thread, view.timezone)}`;
+  </main>${renderContext(view, thread, view.timezone, security)}`;
 }
 
 function renderNotice(view: ConversionInboxView): string {

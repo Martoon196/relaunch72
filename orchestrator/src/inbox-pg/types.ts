@@ -165,6 +165,9 @@ export interface InboxConversationSummary {
   readonly state: InboxConversationState;
   readonly contactId: string | null;
   readonly contactName: string | null;
+  /** Canonical conversation ownership; never inferred from Action Centre overlays. */
+  readonly assignedUserId: string | null;
+  readonly assignedUserName: string | null;
   readonly subject: string | null;
   readonly unreadCount: number;
   /** True when the exact current outbound version awaits a decision or returned rework. */

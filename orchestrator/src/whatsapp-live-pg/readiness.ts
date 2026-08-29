@@ -44,7 +44,7 @@ const ALLOWED: Record<BoundaryKind, readonly string[]> = {
   ],
   webhook: [
     'app_private.record_whatsapp_live_status(uuid,uuid,text,text,bytea,text,bytea,timestamp with time zone)',
-    'app_private.record_whatsapp_live_inbound_receipt(uuid,uuid,text,text,bytea,bytea,bytea,timestamp with time zone)',
+    'app_private.record_whatsapp_live_inbound_projection(uuid,uuid,text,text,text,text,bytea,bytea,bytea,bytea,bytea,timestamp with time zone)',
     'app_private.runtime_schema_migrations()',
     'app_private.runtime_database_installation_id()',
   ],

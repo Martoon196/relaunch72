@@ -165,6 +165,13 @@ import {
 } from './conversion-inbox-presenter.js';
 import { renderConversionInboxBody } from './conversion-inbox-view.js';
 import type { PortalConversionInboxCommandService } from './conversion-inbox-service.js';
+import {
+  CONVERSION_INBOX_CALL_OUTCOMES,
+  CONVERSION_INBOX_NEXT_ACTION_KINDS,
+  CONVERSION_INBOX_NEXT_ACTION_PRIORITIES,
+  type PortalConversionInboxOperationsService,
+} from './conversion-inbox-operations-service.js';
+import type { PortalLiveChannelTruthService } from './live-channel-truth-service.js';
 import type { PortalOwnedSeedCampaignService } from './owned-seed-campaign-service.js';
 import type { PortalOwnedSeedMessageService } from './owned-seed-message-service.js';
 import {
@@ -368,6 +375,10 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   inbox?: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval/queue commands. It has no provider dispatcher. */
   inboxCommands?: PortalConversionInboxCommandService;
+  /** Provider-incapable assignment, note and admin-call commands for the same Inbox. */
+  inboxOperations?: PortalConversionInboxOperationsService;
+  /** Evidence-only state/caps/blockers/receipts boundary for Live Channels consumers. */
+  liveChannelTruth?: PortalLiveChannelTruthService;
   /** Fixed-recipient Mailgun job staging only; the worker remains a separate process. */
   ownedSeedCampaign?: PortalOwnedSeedCampaignService;
   /** Fixed-recipient LIVE draft and human message approval; it cannot stage or send. */
@@ -1367,6 +1378,15 @@ const INBOX_RETURN_QUEUES = new Set(['all', 'unread', 'approval', 'open']);
 const INBOX_MESSAGE_VERSION_ROUTE = /^\/portal\/inbox\/messages\/([0-9a-f-]+)\/versions$/iu;
 const INBOX_APPROVAL_REQUEST_ROUTE = /^\/portal\/inbox\/messages\/([0-9a-f-]+)\/approval-requests$/iu;
 const INBOX_APPROVAL_DECISION_ROUTE = /^\/portal\/inbox\/approval-requests\/([0-9a-f-]+)\/decisions$/iu;
+const INBOX_ASSIGNMENT_ROUTE = /^\/portal\/inbox\/conversations\/([0-9a-f-]+)\/assignment$/iu;
+const INBOX_INTERNAL_NOTE_ROUTE = /^\/portal\/inbox\/conversations\/([0-9a-f-]+)\/internal-notes$/iu;
+const INBOX_ADMIN_CALL_ROUTE = /^\/portal\/inbox\/conversations\/([0-9a-f-]+)\/admin-calls$/iu;
+const INBOX_CALL_OUTCOME_ROUTE = /^\/portal\/inbox\/admin-calls\/([0-9a-f-]+)\/outcomes$/iu;
+const INBOX_CALL_OUTCOME_VALUES = new Set<string>(CONVERSION_INBOX_CALL_OUTCOMES);
+const INBOX_NEXT_ACTION_KIND_VALUES = new Set<string>(CONVERSION_INBOX_NEXT_ACTION_KINDS);
+const INBOX_NEXT_ACTION_PRIORITY_VALUES = new Set<string>(
+  CONVERSION_INBOX_NEXT_ACTION_PRIORITIES,
+);
 const INBOX_TEST_QUEUE_ROUTE = /^\/portal\/inbox\/messages\/([0-9a-f-]+)\/test-queue$/iu;
 
 function conversionInboxReturnLocation(
@@ -4256,18 +4276,32 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       const conversationIdForAction = view.selectedThread?.summary.conversationId;
       const messageIdForAction = draft?.messageId;
       const approvalRequestIdForAction = draft?.approvalRequestId;
-      const actionSecurity = deps.inboxCommands && view.canWrite ? {
+      const adminCallTaskIdForAction = view.selectedThread?.adminCall?.taskStatus === 'open'
+        ? view.selectedThread.adminCall.taskId : undefined;
+      const actionNow = new Date(deps.now?.() ?? Date.now());
+      const actionSecurity = (deps.inboxCommands || deps.inboxOperations) && view.canWrite ? {
         csrfToken,
-        createDraftKeys: conversationIdForAction && draft?.messageId === null
+        createDraftKeys: deps.inboxCommands && conversationIdForAction && draft?.messageId === null
           ? { [conversationIdForAction]: randomUUID() } : {},
-        reviseDraftKeys: messageIdForAction && draft?.lifecycle === 'draft'
+        reviseDraftKeys: deps.inboxCommands && messageIdForAction && draft?.lifecycle === 'draft'
           ? { [messageIdForAction]: randomUUID() } : {},
-        requestApprovalKeys: messageIdForAction && draft?.lifecycle === 'draft'
+        requestApprovalKeys: deps.inboxCommands && messageIdForAction && draft?.lifecycle === 'draft'
           ? { [messageIdForAction]: randomUUID() } : {},
-        decisionKeys: view.canManage && approvalRequestIdForAction && draft?.approvalState === 'pending'
+        decisionKeys: deps.inboxCommands && view.canManage && approvalRequestIdForAction && draft?.approvalState === 'pending'
           ? { [approvalRequestIdForAction]: randomUUID() } : {},
-        queueKeys: view.canManage && messageIdForAction && draft?.mayQueueTestOperation
+        queueKeys: deps.inboxCommands && view.canManage && messageIdForAction && draft?.mayQueueTestOperation
           ? { [messageIdForAction]: randomUUID() } : {},
+        assignmentKeys: deps.inboxOperations && conversationIdForAction
+          ? { [conversationIdForAction]: randomUUID() } : {},
+        internalNoteKeys: deps.inboxOperations && conversationIdForAction
+          ? { [conversationIdForAction]: randomUUID() } : {},
+        adminCallKeys: deps.inboxOperations && conversationIdForAction
+          ? { [conversationIdForAction]: randomUUID() } : {},
+        callOutcomeKeys: deps.inboxOperations && adminCallTaskIdForAction
+          ? { [adminCallTaskIdForAction]: randomUUID() } : {},
+        adminCallDueAt: new Date(actionNow.getTime() + 15 * 60_000).toISOString(),
+        outcomeOccurredAt: actionNow.toISOString(),
+        nextActionDueAt: new Date(actionNow.getTime() + 24 * 60 * 60_000).toISOString(),
       } : undefined;
       return sendHtml(res, 200, operationalPage(
         shell.workspace.name,
@@ -4284,6 +4318,129 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         backHref: '/portal',
         backLabel: 'Return to Growth HQ',
       }));
+    }
+  }
+
+  const inboxAssignmentMatch = p.match(INBOX_ASSIGNMENT_ROUTE);
+  if (deps.kind === 'postgres' && inboxAssignmentMatch && method === 'POST') {
+    const conversationId = (inboxAssignmentMatch[1] ?? '').toLowerCase();
+    const form = await readForm(req);
+    const assignment = form.assignment;
+    if (!deps.inboxOperations || !CRM_OBJECT_ID.test(conversationId)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)
+        || (assignment !== 'self' && assignment !== 'unassigned')) {
+      return conversionInboxRedirect(res, deps, sessionToken, form,
+        deps.inboxOperations ? 'invalid' : 'unavailable');
+    }
+    try {
+      const outcome = await deps.inboxOperations.assignConversation(
+        crmIdentity(sessionToken, deps),
+        {
+          commandKey: form.command_key ?? '', conversationId,
+          expectedRowVersion: form.expected_row_version ?? '', assignment,
+        },
+      );
+      return conversionInboxRedirect(res, deps, sessionToken, form,
+        outcome.ok
+          ? outcome.disposition === 'replayed' ? 'replayed' : 'assignment_saved'
+          : conversionInboxFailureNotice(outcome.kind));
+    } catch {
+      return conversionInboxRedirect(res, deps, sessionToken, form, 'unavailable');
+    }
+  }
+
+  const inboxInternalNoteMatch = p.match(INBOX_INTERNAL_NOTE_ROUTE);
+  if (deps.kind === 'postgres' && inboxInternalNoteMatch && method === 'POST') {
+    const conversationId = (inboxInternalNoteMatch[1] ?? '').toLowerCase();
+    const form = await readForm(req);
+    if (!deps.inboxOperations || !CRM_OBJECT_ID.test(conversationId)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return conversionInboxRedirect(res, deps, sessionToken, form,
+        deps.inboxOperations ? 'invalid' : 'unavailable');
+    }
+    try {
+      const outcome = await deps.inboxOperations.appendInternalNote(
+        crmIdentity(sessionToken, deps),
+        { commandKey: form.command_key ?? '', conversationId, body: form.body ?? '' },
+      );
+      return conversionInboxRedirect(res, deps, sessionToken, form,
+        outcome.ok
+          ? outcome.disposition === 'replayed' ? 'replayed' : 'note_saved'
+          : conversionInboxFailureNotice(outcome.kind));
+    } catch {
+      return conversionInboxRedirect(res, deps, sessionToken, form, 'unavailable');
+    }
+  }
+
+  const inboxAdminCallMatch = p.match(INBOX_ADMIN_CALL_ROUTE);
+  if (deps.kind === 'postgres' && inboxAdminCallMatch && method === 'POST') {
+    const conversationId = (inboxAdminCallMatch[1] ?? '').toLowerCase();
+    const form = await readForm(req);
+    const priority = form.priority;
+    if (!deps.inboxOperations || !CRM_OBJECT_ID.test(conversationId)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)
+        || (priority !== 'high' && priority !== 'urgent')) {
+      return conversionInboxRedirect(res, deps, sessionToken, form,
+        deps.inboxOperations ? 'invalid' : 'unavailable');
+    }
+    try {
+      const outcome = await deps.inboxOperations.createAdminCall(
+        crmIdentity(sessionToken, deps),
+        {
+          commandKey: form.command_key ?? '', conversationId, priority,
+          dueAt: form.due_at ?? '', note: form.note?.trim() ? form.note : null,
+        },
+      );
+      return conversionInboxRedirect(res, deps, sessionToken, form,
+        outcome.ok
+          ? outcome.disposition === 'replayed' ? 'replayed' : 'admin_call_created'
+          : conversionInboxFailureNotice(outcome.kind));
+    } catch {
+      return conversionInboxRedirect(res, deps, sessionToken, form, 'unavailable');
+    }
+  }
+
+  const inboxCallOutcomeMatch = p.match(INBOX_CALL_OUTCOME_ROUTE);
+  if (deps.kind === 'postgres' && inboxCallOutcomeMatch && method === 'POST') {
+    const taskId = (inboxCallOutcomeMatch[1] ?? '').toLowerCase();
+    const form = await readForm(req);
+    const conversationId = (form.return_conversation ?? '').toLowerCase();
+    const callOutcome = form.outcome ?? '';
+    const nextTitle = form.next_action_title?.trim() ?? '';
+    const nextKind = form.next_action_kind ?? '';
+    const nextPriority = form.next_action_priority ?? '';
+    const validNext = !nextTitle || (
+      INBOX_NEXT_ACTION_KIND_VALUES.has(nextKind)
+      && INBOX_NEXT_ACTION_PRIORITY_VALUES.has(nextPriority)
+    );
+    if (!deps.inboxOperations || !CRM_OBJECT_ID.test(taskId)
+        || !CRM_OBJECT_ID.test(conversationId)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)
+        || !INBOX_CALL_OUTCOME_VALUES.has(callOutcome) || !validNext) {
+      return conversionInboxRedirect(res, deps, sessionToken, form,
+        deps.inboxOperations ? 'invalid' : 'unavailable');
+    }
+    try {
+      const outcome = await deps.inboxOperations.recordCallOutcome(
+        crmIdentity(sessionToken, deps),
+        {
+          commandKey: form.command_key ?? '', conversationId, taskId,
+          expectedTaskRowVersion: form.expected_task_row_version ?? '',
+          outcome: callOutcome as typeof CONVERSION_INBOX_CALL_OUTCOMES[number],
+          summary: form.summary ?? '', occurredAt: form.occurred_at ?? '',
+          nextAction: nextTitle ? {
+            kind: nextKind as typeof CONVERSION_INBOX_NEXT_ACTION_KINDS[number],
+            title: nextTitle, dueAt: form.next_action_due_at ?? '',
+            priority: nextPriority as typeof CONVERSION_INBOX_NEXT_ACTION_PRIORITIES[number],
+          } : null,
+        },
+      );
+      return conversionInboxRedirect(res, deps, sessionToken, form,
+        outcome.ok
+          ? outcome.disposition === 'replayed' ? 'replayed' : 'call_outcome_saved'
+          : conversionInboxFailureNotice(outcome.kind));
+    } catch {
+      return conversionInboxRedirect(res, deps, sessionToken, form, 'unavailable');
     }
   }
 

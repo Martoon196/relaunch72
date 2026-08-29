@@ -245,6 +245,7 @@ test('challenge and signed raw webhook enforce exact secret, WABA, phone and rep
     contentType: 'application/json; charset=utf-8',
   });
   assert.equal(verified.events.length, 2);
+  assert.equal(verified.signatureSha256, signed.xHubSignature256.slice('sha256='.length));
   assert.deepEqual(verified.events.map((event) => event.kind), ['inbound', 'status']);
   assert.equal(verified.events[0]?.workspaceId, IDS.workspace);
 
@@ -283,8 +284,9 @@ test('verified inbound and statuses expose only the durable inbox/Lead360 comman
         received.push(`status:${event.status}`);
         return 'applied';
       },
-      async recordInbound({ event, payloadSha256, projection }) {
+      async recordInbound({ event, payloadSha256, signatureSha256, projection }) {
         assert.equal(payloadSha256, verified.payloadSha256);
+        assert.equal(signatureSha256, verified.signatureSha256);
         assert.equal(projection, 'conversion_inbox_and_lead360');
         received.push(`inbound:${event.bodySha256}`);
         return 'applied';

@@ -47,6 +47,8 @@ interface ConversationRow extends QueryResultRow {
   state: string;
   contactId: string | null;
   contactName: string | null;
+  assignedUserId: string | null;
+  assignedUserName: string | null;
   subject: string | null;
   unreadCount: number | string;
   requiresApproval: boolean;
@@ -90,6 +92,9 @@ function mapConversation(row: ConversationRow): InboxConversationSummary {
         || row.subject.length < 1 || row.subject.length > 500))
       || (row.contactName !== null && (typeof row.contactName !== 'string'
         || row.contactName.length < 1 || row.contactName.length > 200))
+      || ((row.assignedUserId === null) !== (row.assignedUserName === null))
+      || (row.assignedUserName !== null && (typeof row.assignedUserName !== 'string'
+        || row.assignedUserName.length < 1 || row.assignedUserName.length > 320))
       || typeof row.requiresApproval !== 'boolean') {
     throw new Error('Inbox conversation read returned invalid canonical data');
   }
@@ -124,6 +129,8 @@ function mapConversation(row: ConversationRow): InboxConversationSummary {
     state: row.state as InboxConversationState,
     contactId: nullableUuid(row.contactId, 'contactId'),
     contactName: row.contactName,
+    assignedUserId: nullableUuid(row.assignedUserId, 'assignedUserId'),
+    assignedUserName: row.assignedUserName,
     subject: row.subject,
     unreadCount: integer(row.unreadCount, 'unreadCount', 0, 1_000_000),
     requiresApproval: row.requiresApproval,
@@ -201,6 +208,9 @@ export class PgInboxReadService implements InboxReadService {
                 conversation.environment,
                 conversation.state, conversation.contact_id AS "contactId",
                 contact.display_name AS "contactName", conversation.subject,
+                conversation.assigned_user_id AS "assignedUserId",
+                coalesce(assigned_user.display_name, assigned_user.email::text)
+                  AS "assignedUserName",
                 conversation.unread_count AS "unreadCount",
                 EXISTS (
                   SELECT 1
@@ -243,8 +253,10 @@ export class PgInboxReadService implements InboxReadService {
                 latest.occurred_at AS "latestOccurredAt"
          FROM app.conversations AS conversation
          LEFT JOIN app.contacts AS contact
-           ON contact.workspace_id = conversation.workspace_id
+          ON contact.workspace_id = conversation.workspace_id
           AND contact.id = conversation.contact_id
+         LEFT JOIN app.users AS assigned_user
+           ON assigned_user.id = conversation.assigned_user_id
          LEFT JOIN LATERAL (
            SELECT message.id AS message_id, message.direction, message.lifecycle,
                   version.body_text, message.occurred_at
@@ -265,12 +277,29 @@ export class PgInboxReadService implements InboxReadService {
              conversation.environment = 'test'
              OR (
                conversation.environment = 'live'
-               AND conversation.channel = 'email'
-               AND EXISTS (
-                 SELECT 1
-                 FROM app.property_predator_mailgun_inbound_receipts AS owned_reply
-                 WHERE owned_reply.workspace_id = conversation.workspace_id
-                   AND owned_reply.conversation_id = conversation.id
+               AND (
+                 (conversation.channel = 'email' AND (
+                   EXISTS (
+                     SELECT 1
+                     FROM app.property_predator_mailgun_inbound_receipts AS owned_reply
+                     WHERE owned_reply.workspace_id = conversation.workspace_id
+                       AND owned_reply.conversation_id = conversation.id
+                   ) OR EXISTS (
+                     SELECT 1
+                     FROM app.message_deliveries AS live_delivery
+                     JOIN app.property_predator_customer_email_jobs AS live_email
+                       ON live_email.workspace_id = live_delivery.workspace_id
+                      AND live_email.message_delivery_id = live_delivery.id
+                     WHERE live_delivery.workspace_id = conversation.workspace_id
+                       AND live_delivery.conversation_id = conversation.id
+                       AND live_delivery.environment = 'live'
+                   )
+                 )) OR (conversation.channel = 'whatsapp' AND EXISTS (
+                   SELECT 1
+                   FROM app.property_predator_whatsapp_live_inbox_projections AS live_whatsapp
+                   WHERE live_whatsapp.workspace_id = conversation.workspace_id
+                     AND live_whatsapp.conversation_id = conversation.id
+                 ))
                )
              )
            )

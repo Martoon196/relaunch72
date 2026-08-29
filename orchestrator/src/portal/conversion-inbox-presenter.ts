@@ -44,8 +44,15 @@ export type ConversionInboxRailActivityState =
   | 'attention';
 
 export interface ConversionInboxSignedInboundEvidenceSnapshot {
-  readonly kind: 'signed_simulator_event' | 'signed_mailgun_inbound';
-  readonly source: 'whatsapp_simulator' | 'social_dm_simulator' | 'mailgun_eu';
+  readonly kind:
+    | 'signed_simulator_event'
+    | 'signed_mailgun_inbound'
+    | 'signed_meta_whatsapp_inbound';
+  readonly source:
+    | 'whatsapp_simulator'
+    | 'social_dm_simulator'
+    | 'mailgun_eu'
+    | 'meta_whatsapp_cloud';
   readonly network: 'email' | 'whatsapp' | 'facebook' | 'instagram';
   /** Opaque internal receipt UUID. No provider event/address data is exposed. */
   readonly receiptId: string;
@@ -118,6 +125,21 @@ export interface ConversionInboxRailActivitySnapshot {
   readonly occurredAt: string;
 }
 
+export interface ConversionInboxAdminCallSnapshot {
+  readonly taskId: string;
+  readonly taskStatus: 'open' | 'completed';
+  readonly taskPriority: 'normal' | 'high' | 'urgent';
+  readonly taskTitle: string;
+  readonly dueAt: string;
+  readonly taskRowVersion: number;
+  readonly outcome: string | null;
+  readonly outcomeSummary: string | null;
+  readonly outcomeAt: string | null;
+  readonly nextTaskId: string | null;
+  readonly nextTaskTitle: string | null;
+  readonly nextTaskDueAt: string | null;
+}
+
 export interface ConversionInboxThreadSnapshot {
   readonly conversationId: string;
   readonly environment?: 'test' | 'live';
@@ -127,6 +149,7 @@ export interface ConversionInboxThreadSnapshot {
   readonly consents: readonly ConversionInboxConsentSnapshot[];
   readonly draft: ConversionInboxDraftSnapshot;
   readonly railActivity: ConversionInboxRailActivitySnapshot | null;
+  readonly adminCall: ConversionInboxAdminCallSnapshot | null;
 }
 
 export interface ConversionInboxSnapshot {
@@ -160,7 +183,10 @@ export interface ConversionInboxTranscriptMessageView {
 
 export interface ConversionInboxSignedInboundEvidenceView
   extends ConversionInboxSignedInboundEvidenceSnapshot {
-  readonly label: 'Signed TEST inbound' | 'Signed Mailgun inbound';
+  readonly label:
+    | 'Signed TEST inbound'
+    | 'Signed Mailgun inbound'
+    | 'Signed Meta inbound';
   readonly networkLabel: 'Email' | 'WhatsApp' | 'Facebook' | 'Instagram';
   readonly networkCode: 'EM' | 'WA' | 'FB' | 'IG';
   readonly receiptLabel: string;
@@ -198,6 +224,7 @@ export interface ConversionInboxSelectedThreadView {
   readonly consents: readonly ConversionInboxConsentView[];
   readonly draft: ConversionInboxDraftView;
   readonly railActivity: ConversionInboxRailActivityView | null;
+  readonly adminCall: ConversionInboxAdminCallSnapshot | null;
 }
 
 export interface ConversionInboxChannelMetricView {
@@ -348,7 +375,18 @@ function matches(
     .some((value) => value.toLocaleLowerCase('en-GB').includes(needle));
 }
 
-function deliveryLabel(state: ConversionInboxDeliveryState): string {
+function deliveryLabel(
+  state: ConversionInboxDeliveryState,
+  environment: 'test' | 'live' = 'test',
+): string {
+  if (environment === 'live') {
+    if (state === 'not_queued') return 'Not queued';
+    if (state === 'queued') return 'Durably queued';
+    if (state === 'accepted') return 'Provider accepted';
+    if (state === 'delivered') return 'Signed delivery receipt';
+    if (state === 'read') return 'Signed read receipt';
+    return 'Delivery needs attention';
+  }
   if (state === 'not_queued') return 'Not queued';
   if (state === 'queued') return 'TEST queue only';
   if (state === 'accepted') return 'SIMULATED accepted';
@@ -369,12 +407,17 @@ function signedInboundEvidence(
   const expectedSource = evidence.network === 'email'
     ? 'mailgun_eu'
     : evidence.network === 'whatsapp'
-    ? 'whatsapp_simulator'
+    ? evidence.kind === 'signed_meta_whatsapp_inbound'
+      ? 'meta_whatsapp_cloud'
+      : 'whatsapp_simulator'
     : evidence.network === 'facebook' || evidence.network === 'instagram'
       ? 'social_dm_simulator' : null;
   if (expectedSource === null || evidence.source !== expectedSource) return null;
   const expectedKind = evidence.network === 'email'
-    ? 'signed_mailgun_inbound' : 'signed_simulator_event';
+    ? 'signed_mailgun_inbound'
+    : evidence.source === 'meta_whatsapp_cloud'
+      ? 'signed_meta_whatsapp_inbound'
+      : 'signed_simulator_event';
   if (evidence.kind !== expectedKind) return null;
   const networkLabel = evidence.network === 'email' ? 'Email'
     : evidence.network === 'whatsapp' ? 'WhatsApp'
@@ -390,18 +433,28 @@ function signedInboundEvidence(
     receiptId,
     verifiedAt: evidence.verifiedAt,
     label: evidence.kind === 'signed_mailgun_inbound'
-      ? 'Signed Mailgun inbound' : 'Signed TEST inbound',
+      ? 'Signed Mailgun inbound'
+      : evidence.kind === 'signed_meta_whatsapp_inbound'
+        ? 'Signed Meta inbound'
+        : 'Signed TEST inbound',
     networkLabel,
     networkCode,
-    receiptLabel: `${evidence.kind === 'signed_mailgun_inbound' ? 'MAIL IN' : 'TEST IN'} ${receiptId.slice(0, 8)}…${receiptId.slice(-4)}`,
+    receiptLabel: `${evidence.kind === 'signed_mailgun_inbound'
+      ? 'MAIL IN'
+      : evidence.kind === 'signed_meta_whatsapp_inbound'
+        ? 'META IN'
+        : 'TEST IN'} ${receiptId.slice(0, 8)}…${receiptId.slice(-4)}`,
     accessibleLabel: evidence.kind === 'signed_mailgun_inbound'
       ? 'Signed Mailgun email reply from the controlled owned-office proof. An admin call task was created.'
+      : evidence.kind === 'signed_meta_whatsapp_inbound'
+        ? 'Signed Meta WhatsApp inbound message projected into the canonical Conversion Inbox and Lead 360. An admin call task was created.'
       : `Signed simulated ${networkLabel} inbound event. Non-routable test only; no live account connected.`,
   });
 }
 
 function transcriptMessage(
   message: ConversionInboxTranscriptMessageSnapshot,
+  environment: 'test' | 'live',
 ): ConversionInboxTranscriptMessageView {
   const body = utf8Prefix(message.body, CONVERSION_INBOX_MAX_MESSAGE_BYTES);
   const state = message.deliveryState ?? null;
@@ -411,7 +464,7 @@ function transcriptMessage(
     body: body.value,
     bodyTruncated: body.truncated,
     deliveryState: state,
-    deliveryLabel: state === null ? null : deliveryLabel(state),
+    deliveryLabel: state === null ? null : deliveryLabel(state, environment),
     inboundEvidence: signedInboundEvidence(message),
   });
 }
@@ -445,7 +498,8 @@ function draftView(
   const consentAllowsQueueing = relevantConsent?.allowsQueueing === true;
   const purposeAllowsQueueing = isConversionInboxTestQueuePurpose(draft.purpose);
   const body = utf8Prefix(draft.body, CONVERSION_INBOX_MAX_MESSAGE_BYTES);
-  const mayQueueTestOperation = exactApproval && consentAllowsQueueing
+  const environment = summary.environment ?? 'test';
+  const mayQueueTestOperation = environment === 'test' && exactApproval && consentAllowsQueueing
     && purposeAllowsQueueing && !body.truncated && draft.deliveryState === 'not_queued';
   let gateDetail = body.truncated
     ? 'The complete draft is outside the safe review display boundary. Approval and queueing are locked.'
@@ -459,6 +513,13 @@ function draftView(
   } else if (!body.truncated && exactApproval && consentAllowsQueueing) {
     gateDetail = 'A TEST/SIMULATED operation already records this draft state.';
   }
+  if (environment === 'live') {
+    gateDetail = draft.deliveryState === 'not_queued'
+      ? exactApproval && consentAllowsQueueing
+        ? 'The exact live reply is approved and consent-evidenced. Provider authorization remains a separate server-side command.'
+        : 'Live reply authorization remains blocked until the exact approval and current channel evidence agree.'
+      : 'This live reply state comes from its durable operation and receipt evidence.';
+  }
   return Object.freeze({
     ...draft,
     messageId,
@@ -470,7 +531,7 @@ function draftView(
     approvalNote: draft.approvalNote === null
       ? null : utf8Prefix(draft.approvalNote, 2_048).value,
     approvalLabel: APPROVAL_LABELS[draft.approvalState],
-    deliveryLabel: deliveryLabel(draft.deliveryState),
+    deliveryLabel: deliveryLabel(draft.deliveryState, environment),
     exactApproval,
     consentAllowsQueueing,
     mayQueueTestOperation,
@@ -480,22 +541,31 @@ function draftView(
 
 function railActivityView(
   activity: ConversionInboxRailActivitySnapshot | null,
+  environment: 'test' | 'live',
 ): ConversionInboxRailActivityView | null {
   if (activity === null || !UUID.test(activity.correlationId)) return null;
   const occurredAt = new Date(activity.occurredAt);
   if (!Number.isFinite(occurredAt.getTime())) return null;
   const correlationId = activity.correlationId.toLowerCase();
   const labels: Readonly<Record<ConversionInboxRailActivityState, string>> = Object.freeze({
-    queued: 'Queued for simulator',
-    accepted: 'Simulator accepted',
+    queued: environment === 'live' ? 'Durably queued' : 'Queued for simulator',
+    accepted: environment === 'live' ? 'Provider accepted' : 'Simulator accepted',
     reconciled: 'Reconciled',
     attention: 'Needs attention',
   });
   const details: Readonly<Record<ConversionInboxRailActivityState, string>> = Object.freeze({
-    queued: 'Waiting for the non-routable TEST worker.',
-    accepted: 'A simulator response is durably recorded.',
-    reconciled: 'The TEST outcome was reconciled and durably recorded.',
-    attention: 'The TEST operation needs an operator decision.',
+    queued: environment === 'live'
+      ? 'The permission-bound job is waiting behind its durable calling fence.'
+      : 'Waiting for the non-routable TEST worker.',
+    accepted: environment === 'live'
+      ? 'The provider acceptance is durably recorded; final receipt remains separate.'
+      : 'A simulator response is durably recorded.',
+    reconciled: environment === 'live'
+      ? 'A signed provider outcome was reconciled and durably recorded.'
+      : 'The TEST outcome was reconciled and durably recorded.',
+    attention: environment === 'live'
+      ? 'The live job is quarantined for an operator decision; it will not retry blindly.'
+      : 'The TEST operation needs an operator decision.',
   });
   if (!Object.hasOwn(labels, activity.state)) return null;
   return Object.freeze({
@@ -504,7 +574,7 @@ function railActivityView(
     occurredAt: occurredAt.toISOString(),
     label: labels[activity.state],
     detail: details[activity.state],
-    correlationLabel: `TEST ${correlationId.slice(0, 8)}…${correlationId.slice(-4)}`,
+    correlationLabel: `${environment === 'live' ? 'LIVE' : 'TEST'} ${correlationId.slice(0, 8)}…${correlationId.slice(-4)}`,
   });
 }
 
@@ -513,6 +583,7 @@ function selectedThread(
   snapshot: ConversionInboxThreadSnapshot,
 ): ConversionInboxSelectedThreadView {
   const sourceMessages = snapshot.messages.slice(-CONVERSION_INBOX_MAX_MESSAGES);
+  const environment = summary.environment ?? 'test';
   const consents = Object.freeze(snapshot.consents.slice(0, CONVERSION_INBOX_MAX_CONSENTS).map(consentView));
   const boundedLead: ConversionInboxLeadSnapshot = Object.freeze({
     ...snapshot.lead,
@@ -533,11 +604,12 @@ function selectedThread(
     contactPointId: snapshot.contactPointId && UUID.test(snapshot.contactPointId)
       ? snapshot.contactPointId.toLowerCase() : null,
     lead: boundedLead,
-    messages: Object.freeze(sourceMessages.map(transcriptMessage)),
+    messages: Object.freeze(sourceMessages.map((message) => transcriptMessage(message, environment))),
     transcriptTruncated: snapshot.messages.length > sourceMessages.length,
     consents,
     draft: draftView(snapshot.draft, consents, summary),
-    railActivity: railActivityView(snapshot.railActivity),
+    railActivity: railActivityView(snapshot.railActivity, environment),
+    adminCall: snapshot.adminCall,
   });
 }
 

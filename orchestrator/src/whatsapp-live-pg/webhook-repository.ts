@@ -92,6 +92,7 @@ implements MetaWhatsAppLiveWebhookCommandService {
   async recordInbound(input: Readonly<{
     event: Extract<VerifiedMetaWhatsAppLiveEvent, { kind: 'inbound' }>;
     payloadSha256: string;
+    signatureSha256: string;
     projection: 'conversion_inbox_and_lead360';
   }>): Promise<WebhookOutcome> {
     const event = input.event;
@@ -102,20 +103,32 @@ implements MetaWhatsAppLiveWebhookCommandService {
       throw new Error('Meta WhatsApp inbound projection evidence is invalid');
     }
     const payloadSha256 = digest(input.payloadSha256, 'payload digest');
+    const signatureSha256 = digest(input.signatureSha256, 'signature digest');
     const senderSha256 = digest(event.senderSha256, 'sender digest');
     const bodySha256 = digest(event.bodySha256, 'body digest');
+    const eventIdentitySha256 = createHash('sha256').update([
+      event.externalEventId,
+      event.providerMessageId,
+      event.senderSha256,
+      event.bodySha256,
+      input.payloadSha256,
+      input.signatureSha256,
+    ].join('\u001f')).digest();
     return withTransaction(this.#commandPool, {
       actorKind: 'webhook', workspaceId: this.workspaceId,
       requestId: this.#requestId(event.externalEventId),
     }, async (transaction) => outcome(await transaction.query<OutcomeRow>(
-      `/* meta-whatsapp-live-webhook.record-inbound-receipt */
-       SELECT app_private.record_whatsapp_live_inbound_receipt(
-         $1::uuid, $2::uuid, $3::text, $4::text, $5::bytea, $6::bytea,
-         $7::bytea, $8::timestamptz
-       ) AS outcome`,
+      `/* meta-whatsapp-live-webhook.record-inbound-projection */
+       SELECT projection.disposition AS outcome
+       FROM app_private.record_whatsapp_live_inbound_projection(
+         $1::uuid, $2::uuid, $3::text, $4::text, $5::text, $6::text,
+         $7::bytea, $8::bytea, $9::bytea, $10::bytea, $11::bytea,
+         $12::timestamptz
+       ) AS projection`,
       [this.workspaceId, this.#bindingId, event.externalEventId,
-        event.providerMessageId, senderSha256, bodySha256,
-        payloadSha256, event.occurredAt],
+        event.providerMessageId, event.senderId, event.body, senderSha256,
+        bodySha256, payloadSha256, signatureSha256, eventIdentitySha256,
+        event.occurredAt],
     )), { isolation: 'serializable' });
   }
 

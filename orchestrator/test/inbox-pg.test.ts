@@ -555,6 +555,7 @@ class ReadClient {
       return queryResult([{
       conversationId: CONVERSATION, inboxId: INBOX, channel: 'email', environment: 'test', state: 'open',
       contactId: USER, contactName: 'Demo Lead', subject: null, unreadCount: 1,
+      assignedUserId: USER, assignedUserName: 'Demo Operator',
       requiresApproval: true,
       lastMessageAt: new Date('2026-08-26T11:59:00.000Z'),
       sortAt: new Date('2026-08-26T11:59:00.000Z'), rowVersion: 2,
@@ -576,6 +577,7 @@ test('inbox read model is bounded, omits endpoint addresses and fails closed on 
   assert.equal(page.conversations.length, 1);
   assert.equal(page.conversations[0]!.latestMessage?.body, 'Hello test inbox');
   assert.equal(page.conversations[0]!.requiresApproval, true);
+  assert.equal(page.conversations[0]!.assignedUserName, 'Demo Operator');
   assert.match(client.conversationSql, /approval_message\.lifecycle = 'approval_pending'/);
   assert.match(client.conversationSql, /approval_message\.lifecycle = 'draft'/);
   assert.match(client.conversationSql, /latest_approval\.decision = 'changes_requested'/);

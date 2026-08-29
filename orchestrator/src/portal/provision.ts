@@ -26,6 +26,8 @@ import type { PortalCompanyContentSyncService } from './company-content-sync-ser
 import type { PortalCompanyContentReviewService } from './company-content-review-service.js';
 import type { PortalAffiliateComplianceService } from './affiliate-compliance-service.js';
 import type { PortalConversionInboxCommandService } from './conversion-inbox-service.js';
+import type { PortalConversionInboxOperationsService } from './conversion-inbox-operations-service.js';
+import type { PortalLiveChannelTruthService } from './live-channel-truth-service.js';
 import type { PortalOwnedSeedCampaignService } from './owned-seed-campaign-service.js';
 import type { PortalOwnedSeedMessageService } from './owned-seed-message-service.js';
 import type { PortalOperatorActionCentreService } from './operator-action-centre-pg-service.js';
@@ -161,6 +163,10 @@ export interface PostgresPortalConfig {
   inbox?: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval queue boundary; no dispatcher capability. */
   inboxCommands?: PortalConversionInboxCommandService;
+  /** Provider-incapable operational Inbox commands. */
+  inboxOperations?: PortalConversionInboxOperationsService;
+  /** Sanitised evidence-only channel state for founder-facing consumers. */
+  liveChannelTruth?: PortalLiveChannelTruthService;
   /** Fixed office-seed staging boundary; no provider/network capability. */
   ownedSeedCampaign?: PortalOwnedSeedCampaignService;
   /** Fixed office-seed LIVE draft and explicit message approval; no provider effect. */
@@ -224,6 +230,8 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     affiliateCompliance: cfg.affiliateCompliance,
     inbox: cfg.inbox,
     inboxCommands: cfg.inboxCommands,
+    inboxOperations: cfg.inboxOperations,
+    liveChannelTruth: cfg.liveChannelTruth,
     ownedSeedCampaign: cfg.ownedSeedCampaign,
     ownedSeedMessages: cfg.ownedSeedMessages,
     publicSocial: cfg.publicSocial,

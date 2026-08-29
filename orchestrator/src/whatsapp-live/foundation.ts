@@ -426,7 +426,12 @@ export function verifyMetaWhatsAppLiveWebhook(input: Readonly<{
   rawBody: Uint8Array;
   xHubSignature256: unknown;
   contentType: unknown;
-}>): Readonly<{ payloadSha256: string; events: readonly VerifiedMetaWhatsAppLiveEvent[] }> {
+}>): Readonly<{
+  payloadSha256: string;
+  /** The exact verified HMAC digest, retained only as bounded webhook evidence. */
+  signatureSha256: string;
+  events: readonly VerifiedMetaWhatsAppLiveEvent[];
+}> {
   const binding = snapshotBinding(input.binding);
   if (!SAFE_SECRET.test(input.appSecret) || !(input.rawBody instanceof Uint8Array)) {
     fail('invalid_configuration');
@@ -505,7 +510,11 @@ export function verifyMetaWhatsAppLiveWebhook(input: Readonly<{
       }
     }
   }
-  return Object.freeze({ payloadSha256: hash(raw), events: Object.freeze(events) });
+  return Object.freeze({
+    payloadSha256: hash(raw),
+    signatureSha256: supplied.toString('hex'),
+    events: Object.freeze(events),
+  });
 }
 
 export interface MetaWhatsAppLiveWebhookCommandService {
@@ -518,15 +527,21 @@ export interface MetaWhatsAppLiveWebhookCommandService {
   recordInbound(input: Readonly<{
     event: Extract<VerifiedMetaWhatsAppLiveEvent, { kind: 'inbound' }>;
     payloadSha256: string;
+    signatureSha256: string;
     projection: 'conversion_inbox_and_lead360';
   }>): Promise<'applied' | 'replayed' | 'conflict'>;
 }
 
 export async function dispatchVerifiedMetaWhatsAppLiveEvents(input: Readonly<{
-  verified: Readonly<{ payloadSha256: string; events: readonly VerifiedMetaWhatsAppLiveEvent[] }>;
+  verified: Readonly<{
+    payloadSha256: string;
+    signatureSha256: string;
+    events: readonly VerifiedMetaWhatsAppLiveEvent[];
+  }>;
   commandService: MetaWhatsAppLiveWebhookCommandService;
 }>): Promise<Readonly<{ applied: number; replayed: number }>> {
-  if (!SHA256.test(input.verified.payloadSha256)) fail('webhook_invalid');
+  if (!SHA256.test(input.verified.payloadSha256)
+      || !SHA256.test(input.verified.signatureSha256)) fail('webhook_invalid');
   let applied = 0; let replayed = 0;
   for (const event of input.verified.events) {
     if (!VERIFIED_EVENTS.has(event as object)
@@ -535,6 +550,7 @@ export async function dispatchVerifiedMetaWhatsAppLiveEvents(input: Readonly<{
     const result = event.kind === 'status'
       ? await input.commandService.recordStatus({ event, payloadSha256: input.verified.payloadSha256 })
       : await input.commandService.recordInbound({ event, payloadSha256: input.verified.payloadSha256,
+        signatureSha256: input.verified.signatureSha256,
         projection: 'conversion_inbox_and_lead360' });
     if (result === 'conflict') fail('webhook_invalid');
     if (result === 'applied') applied += 1; else replayed += 1;

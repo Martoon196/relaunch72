@@ -7,6 +7,7 @@ import {
   CONVERSION_INBOX_MAX_CONSENTS,
   CONVERSION_INBOX_MAX_MESSAGES,
   type ConversionInboxApprovalState,
+  type ConversionInboxAdminCallSnapshot,
   type ConversionInboxConsentSnapshot,
   type ConversionInboxConsentState,
   type ConversionInboxDeliveryState,
@@ -77,6 +78,18 @@ interface ThreadCoreRow extends QueryResultRow {
   railAttemptKind: string | null;
   railAttemptState: string | null;
   railOccurredAt: string | Date | null;
+  adminCallTaskId: string | null;
+  adminCallStatus: string | null;
+  adminCallPriority: string | null;
+  adminCallTitle: string | null;
+  adminCallDueAt: string | Date | null;
+  adminCallTaskRowVersion: number | string | null;
+  adminCallOutcome: string | null;
+  adminCallOutcomeSummary: string | null;
+  adminCallOutcomeAt: string | Date | null;
+  adminCallNextTaskId: string | null;
+  adminCallNextTaskTitle: string | null;
+  adminCallNextTaskDueAt: string | Date | null;
 }
 
 interface TranscriptRow extends QueryResultRow {
@@ -134,7 +147,19 @@ SELECT conversation.id AS "conversationId",
        rail_activity.correlation_id AS "railCorrelationId",
        rail_activity.attempt_kind AS "railAttemptKind",
        rail_activity.attempt_state AS "railAttemptState",
-       rail_activity.occurred_at AS "railOccurredAt"
+       rail_activity.occurred_at AS "railOccurredAt",
+       admin_call.task_id AS "adminCallTaskId",
+       admin_call.task_status AS "adminCallStatus",
+       admin_call.task_priority AS "adminCallPriority",
+       admin_call.task_title AS "adminCallTitle",
+       admin_call.task_due_at AS "adminCallDueAt",
+       admin_call.task_row_version AS "adminCallTaskRowVersion",
+       admin_call.outcome AS "adminCallOutcome",
+       admin_call.outcome_summary AS "adminCallOutcomeSummary",
+       admin_call.outcome_at AS "adminCallOutcomeAt",
+       admin_call.next_task_id AS "adminCallNextTaskId",
+       admin_call.next_task_title AS "adminCallNextTaskTitle",
+       admin_call.next_task_due_at AS "adminCallNextTaskDueAt"
 FROM app.conversations AS conversation
 JOIN app.contacts AS contact
   ON contact.workspace_id = conversation.workspace_id
@@ -155,7 +180,7 @@ LEFT JOIN LATERAL (
    AND version.body_sha256 = message.current_body_sha256
   WHERE message.workspace_id = conversation.workspace_id
     AND message.conversation_id = conversation.id
-    AND message.environment = 'test'
+    AND message.environment = conversation.environment
     AND message.direction = 'outbound'
     AND message.lifecycle IN ('draft', 'approval_pending', 'approved')
   ORDER BY EXISTS (
@@ -295,7 +320,7 @@ LEFT JOIN LATERAL (
     AND delivery.message_version_id = draft.current_version_id
     AND delivery.version_number = draft.current_version_number
     AND delivery.body_sha256 = draft.current_body_sha256
-    AND delivery.environment = 'test'
+    AND delivery.environment = conversation.environment
   ORDER BY delivery.updated_at DESC, delivery.id DESC
   LIMIT 1
 ) AS draft_delivery ON true
@@ -324,7 +349,18 @@ LEFT JOIN LATERAL (
     ON rail_connection.workspace_id = operation.workspace_id
    AND rail_connection.id = operation.provider_connection_id
    AND rail_connection.environment = operation.environment
-   AND rail_connection.provider_id = 'test_conversation'
+   AND (
+     (conversation.environment = 'test'
+       AND rail_connection.provider_id = 'test_conversation')
+     OR (conversation.environment = 'live'
+       AND conversation.channel = 'email'
+       AND EXISTS (
+         SELECT 1
+         FROM app.property_predator_customer_email_jobs AS live_email
+         WHERE live_email.workspace_id = delivery.workspace_id
+           AND live_email.message_delivery_id = delivery.id
+       ))
+   )
   LEFT JOIN LATERAL (
     SELECT attempt.attempt_kind, attempt.state,
            attempt.completed_at, attempt.started_at
@@ -336,7 +372,7 @@ LEFT JOIN LATERAL (
   ) AS latest_attempt ON true
   WHERE delivery.workspace_id = conversation.workspace_id
     AND delivery.conversation_id = conversation.id
-    AND delivery.environment = 'test'
+    AND delivery.environment = conversation.environment
   ORDER BY operation.updated_at DESC, delivery.updated_at DESC, delivery.id DESC
   LIMIT 1
 ) AS rail_activity ON true
@@ -371,17 +407,54 @@ LEFT JOIN LATERAL (
   ORDER BY consent.occurred_at DESC, consent.recorded_at DESC, consent.id DESC
   LIMIT 1
 ) AS current_consent ON true
+LEFT JOIN LATERAL (
+  SELECT task.id AS task_id, task.status AS task_status,
+         task.priority AS task_priority, task.title AS task_title,
+         task.due_at AS task_due_at, task.row_version AS task_row_version,
+         outcome.outcome, outcome.summary AS outcome_summary,
+         outcome.occurred_at AS outcome_at,
+         next_task.id AS next_task_id, next_task.title AS next_task_title,
+         next_task.due_at AS next_task_due_at
+  FROM app.property_predator_admin_call_task_origins AS origin
+  JOIN app.tasks AS task
+    ON task.workspace_id = origin.workspace_id AND task.id = origin.task_id
+  LEFT JOIN app.property_predator_admin_call_outcomes AS outcome
+    ON outcome.workspace_id = origin.workspace_id AND outcome.origin_id = origin.id
+  LEFT JOIN app.tasks AS next_task
+    ON next_task.workspace_id = outcome.workspace_id AND next_task.id = outcome.next_task_id
+  WHERE origin.workspace_id = conversation.workspace_id
+    AND origin.conversation_id = conversation.id
+  ORDER BY (task.status = 'open') DESC, origin.recorded_at DESC, origin.id DESC
+  LIMIT 1
+) AS admin_call ON true
 WHERE conversation.id = $1
   AND (
     conversation.environment = 'test'
     OR (
       conversation.environment = 'live'
-      AND conversation.channel = 'email'
-      AND EXISTS (
-        SELECT 1
-        FROM app.property_predator_mailgun_inbound_receipts AS owned_reply
-        WHERE owned_reply.workspace_id = conversation.workspace_id
-          AND owned_reply.conversation_id = conversation.id
+      AND (
+        (conversation.channel = 'email' AND (
+          EXISTS (
+            SELECT 1
+            FROM app.property_predator_mailgun_inbound_receipts AS owned_reply
+            WHERE owned_reply.workspace_id = conversation.workspace_id
+              AND owned_reply.conversation_id = conversation.id
+          ) OR EXISTS (
+            SELECT 1
+            FROM app.message_deliveries AS live_delivery
+            JOIN app.property_predator_customer_email_jobs AS live_email
+              ON live_email.workspace_id = live_delivery.workspace_id
+             AND live_email.message_delivery_id = live_delivery.id
+            WHERE live_delivery.workspace_id = conversation.workspace_id
+              AND live_delivery.conversation_id = conversation.id
+              AND live_delivery.environment = 'live'
+          )
+        )) OR (conversation.channel = 'whatsapp' AND EXISTS (
+          SELECT 1
+          FROM app.property_predator_whatsapp_live_inbox_projections AS live_whatsapp
+          WHERE live_whatsapp.workspace_id = conversation.workspace_id
+            AND live_whatsapp.conversation_id = conversation.id
+        ))
       )
     )
   )`;
@@ -391,12 +464,16 @@ SELECT message.id AS "messageId", message.direction, message.lifecycle,
        message.source_kind AS "sourceKind",
        version.body_text AS body, message.occurred_at AS "occurredAt",
        delivery.status AS "deliveryStatus",
-       coalesce(test_inbound.receipt_id, owned_reply.id) AS "inboundReceiptId",
+       coalesce(test_inbound.receipt_id, owned_reply.id, live_whatsapp.receipt_id)
+         AS "inboundReceiptId",
        CASE WHEN owned_reply.id IS NOT NULL THEN 'mailgun_email'
+            WHEN live_whatsapp.id IS NOT NULL THEN 'meta_whatsapp_live'
             ELSE test_inbound.provider_family END AS "inboundProviderFamily",
        CASE WHEN owned_reply.id IS NOT NULL THEN 'email'
+            WHEN live_whatsapp.id IS NOT NULL THEN 'whatsapp'
             ELSE test_inbound.network END AS "inboundNetwork",
-       coalesce(test_inbound.received_at, owned_reply.received_at) AS "inboundVerifiedAt"
+       coalesce(test_inbound.received_at, owned_reply.received_at,
+                live_whatsapp.recorded_at) AS "inboundVerifiedAt"
 FROM app.messages AS message
 JOIN app.message_versions AS version
   ON version.workspace_id = message.workspace_id
@@ -414,7 +491,7 @@ LEFT JOIN LATERAL (
     AND candidate.message_version_id = message.current_version_id
     AND candidate.version_number = message.current_version_number
     AND candidate.body_sha256 = message.current_body_sha256
-    AND candidate.environment = 'test'
+    AND candidate.environment = message.environment
   ORDER BY candidate.updated_at DESC, candidate.id DESC
   LIMIT 1
 ) AS delivery ON true
@@ -432,16 +509,43 @@ LEFT JOIN app.property_predator_mailgun_inbound_receipts AS owned_reply
  AND owned_reply.workspace_id = message.workspace_id
  AND owned_reply.conversation_id = message.conversation_id
  AND owned_reply.inbound_message_id = message.id
+LEFT JOIN app.property_predator_whatsapp_live_inbox_projections AS live_whatsapp
+  ON message.environment = 'live'
+ AND message.channel = 'whatsapp'
+ AND message.direction = 'inbound'
+ AND message.lifecycle = 'received'
+ AND message.source_kind = 'verified_webhook'
+ AND live_whatsapp.workspace_id = message.workspace_id
+ AND live_whatsapp.conversation_id = message.conversation_id
+ AND live_whatsapp.inbound_message_id = message.id
 WHERE message.conversation_id = $1
   AND (
     message.environment = 'test'
     OR (
       message.environment = 'live'
-      AND EXISTS (
-        SELECT 1
-        FROM app.property_predator_mailgun_inbound_receipts AS proof
-        WHERE proof.workspace_id = message.workspace_id
-          AND proof.conversation_id = message.conversation_id
+      AND (
+        (message.channel = 'email' AND (
+          EXISTS (
+            SELECT 1
+            FROM app.property_predator_mailgun_inbound_receipts AS proof
+            WHERE proof.workspace_id = message.workspace_id
+              AND proof.conversation_id = message.conversation_id
+          ) OR EXISTS (
+            SELECT 1
+            FROM app.message_deliveries AS live_delivery
+            JOIN app.property_predator_customer_email_jobs AS live_email
+              ON live_email.workspace_id = live_delivery.workspace_id
+             AND live_email.message_delivery_id = live_delivery.id
+            WHERE live_delivery.workspace_id = message.workspace_id
+              AND live_delivery.conversation_id = message.conversation_id
+              AND live_delivery.environment = 'live'
+          )
+        )) OR (message.channel = 'whatsapp' AND EXISTS (
+          SELECT 1
+          FROM app.property_predator_whatsapp_live_inbox_projections AS proof
+          WHERE proof.workspace_id = message.workspace_id
+            AND proof.conversation_id = message.conversation_id
+        ))
       )
     )
   )
@@ -474,12 +578,29 @@ WITH target AS (
       conversation.environment = 'test'
       OR (
         conversation.environment = 'live'
-        AND conversation.channel = 'email'
-        AND EXISTS (
-          SELECT 1
-          FROM app.property_predator_mailgun_inbound_receipts AS owned_reply
-          WHERE owned_reply.workspace_id = conversation.workspace_id
-            AND owned_reply.conversation_id = conversation.id
+        AND (
+          (conversation.channel = 'email' AND (
+            EXISTS (
+              SELECT 1
+              FROM app.property_predator_mailgun_inbound_receipts AS owned_reply
+              WHERE owned_reply.workspace_id = conversation.workspace_id
+                AND owned_reply.conversation_id = conversation.id
+            ) OR EXISTS (
+              SELECT 1
+              FROM app.message_deliveries AS live_delivery
+              JOIN app.property_predator_customer_email_jobs AS live_email
+                ON live_email.workspace_id = live_delivery.workspace_id
+               AND live_email.message_delivery_id = live_delivery.id
+              WHERE live_delivery.workspace_id = conversation.workspace_id
+                AND live_delivery.conversation_id = conversation.id
+                AND live_delivery.environment = 'live'
+            )
+          )) OR (conversation.channel = 'whatsapp' AND EXISTS (
+            SELECT 1
+            FROM app.property_predator_whatsapp_live_inbox_projections AS live_whatsapp
+            WHERE live_whatsapp.workspace_id = conversation.workspace_id
+              AND live_whatsapp.conversation_id = conversation.id
+          ))
         )
       )
     )
@@ -787,6 +908,8 @@ function mapInboundEvidence(
   }
   const source = providerFamily === 'mailgun_email' && network === 'email'
     ? 'mailgun_eu'
+    : providerFamily === 'meta_whatsapp_live' && network === 'whatsapp'
+    ? 'meta_whatsapp_cloud'
     : providerFamily === 'whatsapp' && network === 'whatsapp'
     ? 'whatsapp_simulator'
     : providerFamily === 'social_dm' && (network === 'facebook' || network === 'instagram')
@@ -795,7 +918,11 @@ function mapInboundEvidence(
     throw new Error('Conversion Inbox signed inbound provider is inconsistent');
   }
   return Object.freeze({
-    kind: source === 'mailgun_eu' ? 'signed_mailgun_inbound' : 'signed_simulator_event',
+    kind: source === 'mailgun_eu'
+      ? 'signed_mailgun_inbound'
+      : source === 'meta_whatsapp_cloud'
+        ? 'signed_meta_whatsapp_inbound'
+        : 'signed_simulator_event',
     source,
     network,
     receiptId: uuid(row.inboundReceiptId, 'inboundReceiptId'),
@@ -875,6 +1002,46 @@ function mapConsents(rows: readonly ConsentRow[]): readonly ConversionInboxConse
   }));
 }
 
+function mapAdminCall(row: ThreadCoreRow): ConversionInboxAdminCallSnapshot | null {
+  if (row.adminCallTaskId === null || row.adminCallTaskId === undefined) return null;
+  const taskStatus = row.adminCallStatus;
+  const taskPriority = row.adminCallPriority;
+  if ((taskStatus !== 'open' && taskStatus !== 'completed')
+      || (taskPriority !== 'normal' && taskPriority !== 'high' && taskPriority !== 'urgent')
+      || row.adminCallTitle === null || row.adminCallDueAt === null
+      || row.adminCallTaskRowVersion === null) {
+    throw new Error('Conversion Inbox admin-call projection is invalid');
+  }
+  const outcomePresent = row.adminCallOutcome !== null;
+  if (outcomePresent !== (row.adminCallOutcomeSummary !== null && row.adminCallOutcomeAt !== null)) {
+    throw new Error('Conversion Inbox admin-call outcome projection is partial');
+  }
+  const nextPresent = row.adminCallNextTaskId !== null;
+  if (nextPresent !== (row.adminCallNextTaskTitle !== null && row.adminCallNextTaskDueAt !== null)) {
+    throw new Error('Conversion Inbox admin-call next action projection is partial');
+  }
+  return Object.freeze({
+    taskId: uuid(row.adminCallTaskId, 'adminCallTaskId'),
+    taskStatus,
+    taskPriority,
+    taskTitle: boundedText(row.adminCallTitle, 'adminCallTitle', 2_048),
+    dueAt: timestamp(row.adminCallDueAt, 'adminCallDueAt'),
+    taskRowVersion: positiveInteger(row.adminCallTaskRowVersion, 'adminCallTaskRowVersion'),
+    outcome: row.adminCallOutcome === null
+      ? null : boundedText(row.adminCallOutcome, 'adminCallOutcome', 128),
+    outcomeSummary: row.adminCallOutcomeSummary === null
+      ? null : boundedText(row.adminCallOutcomeSummary, 'adminCallOutcomeSummary', 8_000),
+    outcomeAt: row.adminCallOutcomeAt === null
+      ? null : timestamp(row.adminCallOutcomeAt, 'adminCallOutcomeAt'),
+    nextTaskId: row.adminCallNextTaskId === null
+      ? null : uuid(row.adminCallNextTaskId, 'adminCallNextTaskId'),
+    nextTaskTitle: row.adminCallNextTaskTitle === null
+      ? null : boundedText(row.adminCallNextTaskTitle, 'adminCallNextTaskTitle', 2_048),
+    nextTaskDueAt: row.adminCallNextTaskDueAt === null
+      ? null : timestamp(row.adminCallNextTaskDueAt, 'adminCallNextTaskDueAt'),
+  });
+}
+
 export class PgConversionInboxThreadReadService implements ConversionInboxThreadReadService {
   constructor(private readonly pool: Pick<Pool, 'connect'>) {}
 
@@ -920,6 +1087,7 @@ export class PgConversionInboxThreadReadService implements ConversionInboxThread
         consents: mapConsents(consentResult.rows),
         draft: mapDraft(core),
         railActivity: mapRailActivity(core),
+        adminCall: mapAdminCall(core),
       });
     }, { readOnly: true, isolation: 'repeatable read' });
   }

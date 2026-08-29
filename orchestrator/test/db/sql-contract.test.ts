@@ -58,6 +58,7 @@ const migration51Url = new URL('../../src/db/migrations/0051_property_predator_c
 const migration52Url = new URL('../../src/db/migrations/0052_property_predator_owned_public_social_live_foundation.sql', import.meta.url);
 const migration53Url = new URL('../../src/db/migrations/0053_property_predator_meta_whatsapp_live_foundation.sql', import.meta.url);
 const migration54Url = new URL('../../src/db/migrations/0054_property_predator_customer_email_live_foundation.sql', import.meta.url);
+const migration55Url = new URL('../../src/db/migrations/0055_property_predator_operational_conversion_inbox.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -496,9 +497,9 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums through the Property Predator customer-effects foundations', async () => {
+test('bundled migration discovery orders and checksums through the operational Conversion Inbox', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-48);
+  const tail = migrations.slice(-49);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0007_public_schema_hardening.sql', version: 7 },
     { filename: '0008_setup_delivery_recovery.sql', version: 8 },
@@ -548,6 +549,7 @@ test('bundled migration discovery orders and checksums through the Property Pred
     { filename: '0052_property_predator_owned_public_social_live_foundation.sql', version: 52 },
     { filename: '0053_property_predator_meta_whatsapp_live_foundation.sql', version: 53 },
     { filename: '0054_property_predator_customer_email_live_foundation.sql', version: 54 },
+    { filename: '0055_property_predator_operational_conversion_inbox.sql', version: 55 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -598,6 +600,7 @@ test('bundled migration discovery orders and checksums through the Property Pred
     (await readFile(migration52Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration53Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration54Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration55Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));

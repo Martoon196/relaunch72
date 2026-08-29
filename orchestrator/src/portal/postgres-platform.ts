@@ -31,6 +31,14 @@ import {
 } from './conversion-inbox-pg-service.js';
 import { createPgConversionInboxThreadReadService } from './conversion-inbox-thread-pg-service.js';
 import {
+  createPgPortalConversionInboxOperationsService,
+  type PgPortalConversionInboxOperationsService,
+} from './conversion-inbox-operations-pg-service.js';
+import {
+  createPgPortalLiveChannelTruthService,
+  type PgPortalLiveChannelTruthService,
+} from './live-channel-truth-pg-service.js';
+import {
   createPgPortalOperatorActionCentreService,
   type PgPortalOperatorActionCentreService,
 } from './operator-action-centre-pg-service.js';
@@ -106,6 +114,10 @@ export interface PgPortalPlatform {
   inbox: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval queue commands; it cannot dispatch. */
   inboxCommands: PgPortalConversionInboxCommandService;
+  /** Provider-incapable assignment, internal-note and admin-call workflow commands. */
+  inboxOperations: PgPortalConversionInboxOperationsService;
+  /** Sanitised evidence-only channel state, caps, blockers and latest receipts. */
+  liveChannelTruth: PgPortalLiveChannelTruthService;
   /** Optional table-blind staging command for the fixed owned office seed only. */
   ownedSeedCampaign?: PgPortalOwnedSeedCampaignService;
   /** Fixed office-seed LIVE draft plus deliberate message approval; cannot send. */
@@ -610,6 +622,11 @@ export async function buildPgPortalPlatform(
       publicSocial,
       inbox: createPgPortalInboxReadBoundary(webPool),
       inboxCommands: createPgPortalConversionInboxCommandService({ webPool, commandPool }),
+      inboxOperations: createPgPortalConversionInboxOperationsService({
+        webPool,
+        crmCommandPool: commandPool,
+      }),
+      liveChannelTruth: createPgPortalLiveChannelTruthService({ webPool }),
       ownedSeedCampaign,
       ownedSeedMessages,
       async assertReady(): Promise<void> {

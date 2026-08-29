@@ -597,6 +597,8 @@ async function main(): Promise<void> {
         publicSocial: postgresPortal.publicSocial,
         inbox: postgresPortal.inbox,
         inboxCommands: postgresPortal.inboxCommands,
+        inboxOperations: postgresPortal.inboxOperations,
+        liveChannelTruth: postgresPortal.liveChannelTruth,
         ownedSeedCampaign: postgresPortal.ownedSeedCampaign,
         ownedSeedMessages: postgresPortal.ownedSeedMessages,
         productProfile: portalProductProfile,

@@ -1687,6 +1687,21 @@ function previewConversionInbox(url: URL): string {
       queueKeys: messageId && draft?.mayQueueTestOperation
         ? { [messageId]: `preview-inbox-queue:${messageId}` }
         : {},
+      assignmentKeys: thread
+        ? { [thread.summary.conversationId]: `preview-inbox-assign:${thread.summary.conversationId}` }
+        : {},
+      internalNoteKeys: thread
+        ? { [thread.summary.conversationId]: `preview-inbox-note:${thread.summary.conversationId}` }
+        : {},
+      adminCallKeys: thread
+        ? { [thread.summary.conversationId]: `preview-inbox-call:${thread.summary.conversationId}` }
+        : {},
+      callOutcomeKeys: thread?.adminCall?.taskStatus === 'open'
+        ? { [thread.adminCall.taskId]: `preview-inbox-outcome:${thread.adminCall.taskId}` }
+        : {},
+      adminCallDueAt: '2030-01-01T00:15:00.000Z',
+      outcomeOccurredAt: '2030-01-01T00:00:00.000Z',
+      nextActionDueAt: '2030-01-02T00:00:00.000Z',
     },
   });
 }

@@ -30,6 +30,13 @@ const ACTION_SECURITY: ConversionInboxActionSecurity = {
   queueKeys: {
     '60000000-0000-4000-8000-000000000004': 'queue-command-4',
   },
+  assignmentKeys: {},
+  internalNoteKeys: {},
+  adminCallKeys: {},
+  callOutcomeKeys: {},
+  adminCallDueAt: '2030-01-01T00:15:00.000Z',
+  outcomeOccurredAt: '2030-01-01T00:00:00.000Z',
+  nextActionDueAt: '2030-01-02T00:00:00.000Z',
 };
 
 function render(
@@ -108,9 +115,9 @@ test('renders all five channel controls and real fictional test queue fixtures',
 
 test('uses singular conversation copy when a channel has one loaded fixture', () => {
   const html = render(createPropertyPredatorTestInboxSnapshot(), { channel: 'whatsapp' });
-  assert.match(html, /aria-label="WhatsApp, 1 loaded test conversation"/);
-  assert.match(html, />1 loaded test conversation matches the current filters\.<\/div>/);
-  assert.doesNotMatch(html, /1 loaded test conversations/);
+  assert.match(html, /aria-label="WhatsApp, 1 loaded conversation"/);
+  assert.match(html, />1 loaded conversation matches the current filters\.<\/div>/);
+  assert.doesNotMatch(html, /1 loaded conversations/);
 });
 
 test('shows selected transcript, draft state, approval gate, consent and simulator delivery state', () => {
@@ -241,7 +248,7 @@ test('escapes every user and source controlled field at the view boundary', () =
 
 test('uses semantic landmarks, associated controls and touch-size targets', () => {
   const html = render(createPropertyPredatorTestInboxSnapshot(), { channel: 'facebook' }, ACTION_SECURITY);
-  assert.match(html, /<nav class="ci-channels" aria-label="Test conversation channels">/);
+  assert.match(html, /<nav class="ci-channels" aria-label="Conversion Inbox channels">/);
   assert.match(html, /<main class="ci-thread" aria-labelledby="ci-thread-title">/);
   assert.match(html, /<aside class="ci-context" aria-label="Lead and safety context">/);
   assert.match(html, /<label id="ci-draft-title" for="ci-reply-draft">/);

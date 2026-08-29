@@ -171,7 +171,7 @@ test('challenge and POST routes verify exact raw bytes before dispatching receip
   await runtime.shutdown();
 });
 
-test('webhook repository writes only signed hashes through the exact receipt functions', async () => {
+test('webhook repository projects verified inbound content through the exact successor function', async () => {
   const calls: Array<{ sql: string; values?: unknown[] }> = [];
   const client = {
     async query(sql: string, values?: unknown[]) {
@@ -193,11 +193,14 @@ test('webhook repository writes only signed hashes through the exact receipt fun
     occurredAt: '2026-08-29T10:00:00.000Z',
   };
   assert.equal(await service.recordInbound({ event: inbound,
-    payloadSha256: 'a'.repeat(64), projection: 'conversion_inbox_and_lead360' }), 'applied');
-  const domain = calls.find((call) => call.sql.includes('record_whatsapp_live_inbound_receipt'));
+    payloadSha256: 'a'.repeat(64), signatureSha256: 'b'.repeat(64),
+    projection: 'conversion_inbox_and_lead360' }), 'applied');
+  const domain = calls.find((call) => call.sql.includes('record_whatsapp_live_inbound_projection'));
   assert.ok(domain);
   assert.deepEqual(domain.values?.slice(0, 2), [WORKSPACE, BINDING]);
-  assert.equal(domain.values?.includes(inbound.body), false);
-  assert.equal(domain.values?.includes(inbound.senderId), false);
+  assert.equal(domain.values?.[4], inbound.senderId);
+  assert.equal(domain.values?.[5], inbound.body);
+  assert.equal(Buffer.isBuffer(domain.values?.[10]), true);
+  assert.equal(domain.values?.includes(APP_SECRET), false);
   assert.match(calls.find((call) => call.sql.includes('set_config'))?.sql ?? '', /app[.]actor_kind/u);
 });

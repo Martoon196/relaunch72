@@ -345,7 +345,7 @@ test('thread projection reduces durable TEST operations to queued, accepted, rec
     assert.match(sql, /latest_attempt\.attempt_kind/);
     assert.match(sql, /JOIN app\.provider_connections AS rail_connection/);
     assert.match(sql, /rail_connection\.provider_id = 'test_conversation'/);
-    assert.match(sql, /delivery\.environment = 'test'/);
+    assert.match(sql, /delivery\.environment = conversation\.environment/);
     assert.doesNotMatch(sql, /operation\.provider_reference|operation\.last_summary|operation\.last_error_code/);
   }
 });

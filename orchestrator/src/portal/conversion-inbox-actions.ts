@@ -31,6 +31,22 @@ export function conversionInboxTestQueueRoute(messageId: string): string {
   return `/portal/inbox/messages/${encodeURIComponent(messageId)}/test-queue`;
 }
 
+export function conversionInboxAssignmentRoute(conversationId: string): string {
+  return `/portal/inbox/conversations/${encodeURIComponent(conversationId)}/assignment`;
+}
+
+export function conversionInboxInternalNoteRoute(conversationId: string): string {
+  return `/portal/inbox/conversations/${encodeURIComponent(conversationId)}/internal-notes`;
+}
+
+export function conversionInboxAdminCallRoute(conversationId: string): string {
+  return `/portal/inbox/conversations/${encodeURIComponent(conversationId)}/admin-calls`;
+}
+
+export function conversionInboxCallOutcomeRoute(taskId: string): string {
+  return `/portal/inbox/admin-calls/${encodeURIComponent(taskId)}/outcomes`;
+}
+
 export type ConversionInboxNoticeCode =
   | 'draft_created'
   | 'draft_saved'
@@ -39,6 +55,10 @@ export type ConversionInboxNoticeCode =
   | 'rejected'
   | 'changes_requested'
   | 'test_queued'
+  | 'assignment_saved'
+  | 'note_saved'
+  | 'admin_call_created'
+  | 'call_outcome_saved'
   | 'replayed'
   | 'consent_blocked'
   | 'forbidden'
@@ -55,7 +75,8 @@ export interface ConversionInboxNoticeView {
 
 const NOTICE_CODES = new Set<ConversionInboxNoticeCode>([
   'draft_created', 'draft_saved', 'approval_requested', 'approved', 'rejected',
-  'changes_requested', 'test_queued', 'replayed', 'consent_blocked', 'forbidden',
+  'changes_requested', 'test_queued', 'assignment_saved', 'note_saved',
+  'admin_call_created', 'call_outcome_saved', 'replayed', 'consent_blocked', 'forbidden',
   'conflict', 'missing', 'invalid', 'unavailable',
 ]);
 const NOTICE_CONTEXT = 'relaunch72:conversion-inbox-notice:v1\0';
@@ -106,6 +127,22 @@ function noticeFor(code: ConversionInboxNoticeCode): ConversionInboxNoticeView {
   if (code === 'test_queued') return {
     kind: 'success', title: 'TEST operation queued',
     message: 'A non-routable simulator operation was created. No real person, account or provider was contacted.',
+  };
+  if (code === 'assignment_saved') return {
+    kind: 'success', title: 'Assignment updated',
+    message: 'The canonical conversation owner and immutable assignment evidence were saved.',
+  };
+  if (code === 'note_saved') return {
+    kind: 'success', title: 'Internal note saved',
+    message: 'The note is now part of this conversation history and was not sent externally.',
+  };
+  if (code === 'admin_call_created') return {
+    kind: 'success', title: 'Admin call created',
+    message: 'The Lead 360-linked call task is ready. No provider or customer action was triggered.',
+  };
+  if (code === 'call_outcome_saved') return {
+    kind: 'success', title: 'Call outcome recorded',
+    message: 'The call task was completed with durable outcome evidence and its chosen next action.',
   };
   if (code === 'replayed') return {
     kind: 'info', title: 'Safe replay confirmed',
