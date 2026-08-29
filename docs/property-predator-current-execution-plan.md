@@ -2,7 +2,7 @@
 
 **Authoritative execution snapshot:** 29 August 2026
 
-**Growth HQ baseline:** `codex/relaunch72-platform-foundation`, production through migration `0059`; forward repair `0060` proven on disposable Neon only
+**Growth HQ baseline:** `codex/relaunch72-platform-foundation` at `14970cc`; production migration ledger `60/60`; Growth HQ release live with provider effects OFF, delivery OFF and emergency pause ON
 **Purpose:** one truthful sequence from the current foundation to an operational Property Predator marketing and conversion system.
 
 This document supersedes older roadmap prose for **current status, priority and sequencing**. Older handoffs, provider notes, security designs and deployment runbooks remain useful evidence, but their status labels must not be read as the present plan.
@@ -17,7 +17,7 @@ Growth HQ owns the people, attribution, consent, content, approvals, conversatio
 
 ## Foundation already completed
 
-- The production Blueprint composes Growth HQ plus isolated email, owned-social, WhatsApp and Twilio SMS workers/webhooks; deployment remains a separate release action.
+- The production Blueprint composes Growth HQ plus isolated email, owned-social, WhatsApp and Twilio SMS workers/webhooks. Growth HQ `14970cc` is live; provider-effect services remain isolated and locked.
 - Shared Property Predator login, workspace isolation, role boundaries and security controls are established.
 - CRM, Journey Board, automatic journey evidence, lead scoring and Lead 360 foundations exist.
 - Brand Brain, owned-specialist reuse, company-content adapter, immutable content versions, approvals and Campaign Wizard foundations exist.
@@ -60,16 +60,27 @@ Growth HQ owns the people, attribution, consent, content, approvals, conversatio
   `br-withered-resonance-b2u4pzab`, the ledger reached **60/60**, the PUBLIC
   execute count was zero, the exact abuse identity returned ready, and the
   Mailgun identity, table-blindness and existing binding all returned ready.
-  Production remains **59/59**: applying `0060` requires an explicit extension
-  of the production migration authority before the repaired release is deployed.
+  The same ACL-only migration was then applied to the Frankfurt production
+  branch under the guarded migration authority. Production is now **60/60**;
+  the PUBLIC execute count is zero and the exact abuse and Mailgun identities
+  both return ready.
 - The permission-bound customer-email worker deployed successfully at
   `c9f35ca` and reports `mode=disabled`, exact worker-role/schema/installation/
   function readiness, provider credentials not loaded, adapter not instantiated,
   zero readiness network calls, provider effects OFF, delivery OFF, emergency
   pause ON, dispatch loop not started, and caps of 10/day and 50/month. The
-  Growth HQ web deployment correctly failed promotion because `/ready` retained
-  the blocker above; the public web service remains unavailable until production
-  `0060` is explicitly authorised and the repaired tip is published/deployed.
+  Growth HQ web deployment at `05ba177` exposed one stale test inventory that
+  stopped at migration 0059. Commit `14970cc` added the already-reviewed 0060
+  filename and checksum to that inventory; its focused test and typecheck passed,
+  Render's complete build gate passed, and the release promoted successfully.
+  Public `/health` and `/ready` both return HTTP 200, `/ready` reports no blockers,
+  the PostgreSQL portal is ready, and both signed Mailgun ingress paths are ready.
+  `/portal` redirects to the production login and `/portal/login` returns HTTP 200.
+- A post-deploy read-only production query returned exactly **0 customer-email
+  authorities, 0 jobs, 0 leases and 0 receipts** with 60 migrations applied.
+  A stale clipboard value surfaced the old `neondb_owner` connection credential
+  during operator verification; it was never written to a service and the role
+  password was immediately rotated in Neon, invalidating that credential.
 - No provider call, customer write, email, SMS, WhatsApp message or social
   publication occurred. Provider effects and delivery remain OFF and emergency
   pause remains ON.
@@ -267,18 +278,31 @@ not itself authorise deployment, migration or provider effects.
 
 | Rail | Build position | Exact remaining external/owned proof |
 |---|---|---|
-| Customer email | Mailgun EU configured; production schema 59/59; exact command/worker/webhook identities and Render bindings proven; effects OFF, delivery OFF, receipts OFF and emergency pause ON; 10/day and 50/month caps | No new Mailgun account. Publish and deploy the exact reviewed tip, then supply the exact `office@propertypredator.com` person/endpoint, current consent and suppression-clear evidence, approved message/version hash, operator/connection IDs and one signed owned-mailbox receipt proof under separate effect approval. |
+| Customer email | Mailgun EU configured; production schema 60/60; Growth HQ live at `14970cc`; exact command/worker/webhook identities and Render bindings proven; effects OFF, delivery OFF, receipts OFF and emergency pause ON; 10/day and 50/month caps; zero authorities/jobs/leases/receipts | No new Mailgun account. Use the founder as the sole pilot customer and supply the exact `office@propertypredator.com` person/endpoint, current consent and suppression-clear evidence, approved message/version hash and operator/connection IDs. Then authorise one owned-mailbox send and signed receipt/reply proof as a separate effect. |
 | Meta WhatsApp | Command, one-at-a-time worker, challenge/webhook and Inbox receipt path composed | Verified Meta Business, App ID, WABA ID, phone-number ID, worker-only encrypted access-token binding, webhook-only app secret/verify token, one founder-owned UK recipient, and one approved **parameter-free** Property Predator test template. |
 | Owned X social | Ayrshare worker, cap fence, receipt projection and founder-only bind/revoke/readiness-gated staging workflow composed; no provider call is reachable from the portal commands | Ayrshare API key, exact linked Property Predator-owned X profile and Profile Key, X OAuth1 key/secret, 32-byte profile-encryption key/version, connection UUID, read-write OAuth/ownership evidence, and one approved link-free test post/hash. |
 | Twilio UK SMS | Command, one-at-a-time worker, signed inbound/status webhook and Inbox receipt path composed | Twilio Account SID, restricted API key SID/secret, Messaging Service SID, approved UK regulatory bundle, owned UK sender, webhook auth token, and one founder-owned UK recipient plus approved message/consent/suppression evidence. |
 | Facebook/Instagram DMs | Unified Inbox projection exists; live adapter is intentionally reported `not-composed` | Owned Page and Instagram professional account, Meta app review/permissions and signed webhook subscription **after** the dedicated live inbound/reply adapter is built. |
-| Database proof | Static contracts and guarded disposable-Neon execution pass through `0059`; production ledger is 59/59 | Preserve the disposable branch for the final Sol Ultra master rehearsal. Production must never be used as the disposable attack-proof target. |
+| Database proof | Static contracts and guarded disposable-Neon execution pass through `0060`; production ledger is 60/60; post-deploy zero-send counts are all zero | Preserve the disposable branch for the final Sol Ultra master rehearsal. Production must never be used as the disposable attack-proof target. |
 
 ## Immediate move
 
-Publish the exact reviewed Codex tip, deploy it with every effect lock retained,
-then run `npm run pilot:preflight` for the five-rail redacted readiness report
-and `npm run pilot:rehearse-targets` for the exact founder-owned target pack.
-The first authorised effect remains one owned email proof; WhatsApp, owned X and
-SMS can follow one rail at a time without further foundation work. Continue the
-main-site branch inventory in parallel only where it does not delay activation.
+Begin the customer experience with the founder as the sole production pilot:
+
+1. Sign in through the real Growth HQ customer journey and confirm the exact
+   production workspace and founder/operator identity.
+2. Create or resolve the founder-owned `office@propertypredator.com` person and
+   endpoint, then record current consent and suppression-clear evidence.
+3. Review and approve one exact customer-email version in the existing content
+   workflow and retain its approval ID and message digest.
+4. Re-run `npm run pilot:rehearse-targets` with only those owned identifiers;
+   it must pass with ZERO EFFECTS before any service switch changes.
+5. Under a separate explicit effect approval, send exactly one message to the
+   owned mailbox, require the signed Mailgun receipt and owned reply to reconcile
+   into Conversion Inbox and Lead 360, then review the customer experience and
+   correct only observed issues.
+
+WhatsApp, SMS and owned X follow one rail at a time using the same owned-founder
+pattern. Facebook/Instagram DMs remain unavailable until their dedicated live
+adapter exists. The final Sol Ultra master rehearsal remains the release-wide
+verification gate before any external customer cohort.
