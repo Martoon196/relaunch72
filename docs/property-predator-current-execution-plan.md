@@ -2,7 +2,7 @@
 
 **Authoritative execution snapshot:** 29 August 2026
 
-**Growth HQ baseline:** `codex/relaunch72-platform-foundation` at `14970cc`; production migration ledger `60/60` (forward migration `0061` is reviewed on the branch and deliberately unapplied); Growth HQ release live with provider effects OFF, delivery OFF and emergency pause ON
+**Growth HQ baseline:** `codex/relaunch72-platform-foundation` at `14970cc`; production migration ledger `60/60` (forward migrations `0061` and `0062` are reviewed on the branch and deliberately unapplied; `0062` repairs the `r72_web` Conversion Inbox read boundary and is required before `/portal/inbox` serves live rails); Growth HQ release live with provider effects OFF, delivery OFF and emergency pause ON
 **Purpose:** one truthful sequence from the current foundation to an operational Property Predator marketing and conversion system.
 
 This document supersedes older roadmap prose for **current status, priority and sequencing**. Older handoffs, provider notes, security designs and deployment runbooks remain useful evidence, but their status labels must not be read as the present plan.
