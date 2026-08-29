@@ -82,11 +82,177 @@ GRANT USAGE ON SCHEMA app, app_private TO r72_customer_email_command,
   r72_customer_email_worker_command, r72_customer_email_webhook_command,
   r72_customer_email_definer;
 
+CREATE UNIQUE INDEX campaign_template_steps_customer_email_binding_uq
+  ON app.campaign_template_steps
+    (workspace_id, template_version_id, id, content_sha256);
+
+-- Preserve the original controlled-pilot delivery path while admitting one
+-- separately owned customer-email path. The exact idempotency prefix prevents
+-- this definer from becoming a generic live-delivery bypass.
+CREATE OR REPLACE FUNCTION app_private.guard_property_predator_email_live_delivery()
+RETURNS trigger
+LANGUAGE plpgsql VOLATILE SET search_path = pg_catalog
+AS $function$
+DECLARE
+  point_kind text;
+  point_value text;
+  point_normalized text;
+  latest_consent uuid;
+  active_suppression uuid;
+BEGIN
+  IF NEW.environment <> 'live'
+     OR NEW.conversation_channel <> 'email'
+     OR NEW.consent_channel <> 'email'
+     OR NOT (
+       current_user = 'r72_mailgun_worker_definer'
+       OR (
+         current_user = 'r72_customer_email_definer'
+         AND NEW.idempotency_key ~ '^customer-email-live:[0-9a-f]{64}$'
+       )
+     )
+     OR NOT EXISTS (
+       SELECT 1 FROM app.provider_connections AS connection
+       WHERE connection.workspace_id = NEW.workspace_id
+         AND connection.id = NEW.provider_connection_id
+         AND connection.provider_id = 'mailgun_eu'
+         AND connection.provider_kind = 'email'
+         AND connection.environment = 'live'
+         AND connection.status = 'active'
+         AND (
+           current_user <> 'r72_customer_email_definer'
+           OR connection.capabilities @> '["email.send"]'::jsonb
+          )
+      ) THEN
+    RAISE EXCEPTION 'Live delivery is outside an exact Mailgun boundary'
+      USING ERRCODE = '42501';
+  END IF;
+  IF current_user = 'r72_customer_email_definer'
+     AND NOT EXISTS (
+       SELECT 1 FROM app.channel_endpoints AS endpoint
+       WHERE endpoint.workspace_id = NEW.workspace_id
+         AND endpoint.id = NEW.channel_endpoint_id
+         AND endpoint.provider_connection_id = NEW.provider_connection_id
+         AND endpoint.channel = 'email'
+         AND endpoint.environment = 'live'
+         AND endpoint.direction IN ('outbound', 'bidirectional')
+         AND endpoint.status = 'active'
+         AND endpoint.address = 'mg.propertypredator.com'
+         AND endpoint.normalized_address = 'mg.propertypredator.com'
+     ) THEN
+    RAISE EXCEPTION 'Customer email live sender endpoint is not canonical'
+      USING ERRCODE = '42501';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM app.messages AS message
+    JOIN app.message_approval_decisions AS decision
+      ON decision.workspace_id = message.workspace_id
+     AND decision.id = NEW.approval_decision_id
+     AND decision.message_id = message.id
+     AND decision.message_version_id = message.current_version_id
+     AND decision.body_sha256 = message.current_body_sha256
+     AND decision.decision = 'approved'
+    JOIN app.property_predator_email_pilot_approved_content AS approved_content
+      ON approved_content.workspace_id = decision.workspace_id
+     AND approved_content.approval_decision_id = decision.id
+     AND approved_content.message_version_id = decision.message_version_id
+     AND approved_content.body_sha256 = decision.body_sha256
+    JOIN app.provider_operations AS operation
+      ON operation.workspace_id = message.workspace_id
+     AND operation.id = NEW.provider_operation_id
+     AND operation.message_delivery_id = NEW.id
+     AND operation.provider_connection_id = NEW.provider_connection_id
+     AND operation.environment = 'live'
+     AND operation.operation_kind = 'conversation.send'
+     AND operation.state = 'queued'
+     AND (
+       current_user <> 'r72_customer_email_definer'
+       OR operation.idempotency_key = NEW.idempotency_key
+     )
+    WHERE message.workspace_id = NEW.workspace_id
+      AND message.id = NEW.message_id
+      AND message.conversation_id = NEW.conversation_id
+      AND message.contact_id = NEW.contact_id
+      AND message.contact_point_id = NEW.contact_point_id
+      AND message.direction = 'outbound'
+      AND message.lifecycle = 'approved'
+      AND message.current_version_id = NEW.message_version_id
+      AND message.current_version_number = NEW.version_number
+      AND message.current_body_sha256 = NEW.body_sha256
+  ) THEN
+    RAISE EXCEPTION 'Live delivery lost its exact immutable approval'
+      USING ERRCODE = '40001';
+  END IF;
+  SELECT point.kind, point.value, point.normalized_value
+    INTO point_kind, point_value, point_normalized
+  FROM app.contact_points AS point
+  WHERE point.workspace_id = NEW.workspace_id
+    AND point.id = NEW.contact_point_id
+    AND point.contact_id = NEW.contact_id
+    AND point.kind = 'email'
+    AND point.deleted_at IS NULL
+    AND point.is_verified
+    AND point.dedupe_state = 'normal';
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Live delivery endpoint is unavailable' USING ERRCODE = '23514';
+  END IF;
+  NEW.endpoint_identity_sha256 := public.digest(
+    point_kind || pg_catalog.chr(31) || point_value || pg_catalog.chr(31)
+      || point_normalized,
+    'sha256'
+  );
+  SELECT event.id INTO latest_consent
+  FROM app.communication_consent_events AS event
+  WHERE event.workspace_id = NEW.workspace_id
+    AND event.contact_id = NEW.contact_id
+    AND event.contact_point_id = NEW.contact_point_id
+    AND event.channel = 'email'
+    AND event.purpose = NEW.purpose
+    AND event.endpoint_identity_sha256 = NEW.endpoint_identity_sha256
+    AND event.occurred_at <= statement_timestamp() + interval '5 minutes'
+  ORDER BY event.occurred_at DESC, event.recorded_at DESC, event.id DESC
+  LIMIT 1;
+  SELECT suppression.id INTO active_suppression
+  FROM (
+    SELECT DISTINCT ON (coalesce(event.purpose, ''))
+      event.id, event.state, event.occurred_at, event.recorded_at
+    FROM app.communication_suppression_events AS event
+    WHERE event.workspace_id = NEW.workspace_id
+      AND event.contact_id = NEW.contact_id
+      AND event.contact_point_id = NEW.contact_point_id
+      AND event.channel = 'email'
+      AND (event.purpose IS NULL OR event.purpose = NEW.purpose)
+      AND event.endpoint_identity_sha256 = NEW.endpoint_identity_sha256
+      AND event.occurred_at <= statement_timestamp() + interval '5 minutes'
+    ORDER BY coalesce(event.purpose, ''), event.occurred_at DESC,
+      event.recorded_at DESC, event.id DESC
+  ) AS suppression
+  WHERE suppression.state = 'suppressed'
+  ORDER BY suppression.occurred_at DESC, suppression.recorded_at DESC,
+    suppression.id DESC
+  LIMIT 1;
+  IF active_suppression IS NOT NULL
+     OR latest_consent IS DISTINCT FROM NEW.consent_event_id
+     OR NOT EXISTS (
+       SELECT 1 FROM app.communication_consent_events AS consent
+       WHERE consent.workspace_id = NEW.workspace_id
+         AND consent.id = latest_consent AND consent.state = 'granted'
+     ) THEN
+    RAISE EXCEPTION 'Live delivery is not authorised by current consent'
+      USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END
+$function$;
+
 CREATE TABLE app.property_predator_customer_email_authorities (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id uuid NOT NULL REFERENCES app.workspaces(id) ON DELETE RESTRICT,
   provider_connection_id uuid NOT NULL,
   campaign_template_version_id uuid NOT NULL,
+  campaign_template_step_id uuid NOT NULL,
+  campaign_step_content_sha256 bytea NOT NULL
+    CHECK (octet_length(campaign_step_content_sha256) = 32),
   campaign_definition_sha256 bytea NOT NULL CHECK (octet_length(campaign_definition_sha256) = 32),
   campaign_approval_request_id uuid NOT NULL,
   campaign_approval_decision_id uuid NOT NULL,
@@ -99,11 +265,19 @@ CREATE TABLE app.property_predator_customer_email_authorities (
   contact_id uuid NOT NULL,
   contact_point_id uuid NOT NULL,
   channel_endpoint_id uuid NOT NULL,
+  sender_endpoint_normalized_address text NOT NULL CHECK (
+    sender_endpoint_normalized_address = 'mg.propertypredator.com'
+  ),
   recipient_sha256 bytea NOT NULL CHECK (octet_length(recipient_sha256) = 32),
   endpoint_identity_sha256 bytea NOT NULL CHECK (octet_length(endpoint_identity_sha256) = 32),
   consent_event_id uuid NOT NULL,
   purpose text NOT NULL CHECK (purpose ~ '^[a-z][a-z0-9_.-]{0,99}$'),
   lawful_basis text NOT NULL CHECK (lawful_basis IN ('consent', 'legitimate_interests')),
+  compliance_subject_id uuid NOT NULL,
+  policy_publication_event_id uuid NOT NULL,
+  pecr_sender_decision_event_id uuid NOT NULL,
+  pecr_instigator_decision_event_id uuid NOT NULL,
+  permission_use_receipt_id uuid NOT NULL,
   pecr_decision text NOT NULL CHECK (pecr_decision = 'eligible'),
   pecr_evidence_sha256 bytea NOT NULL CHECK (octet_length(pecr_evidence_sha256) = 32),
   operator_instigator_decision text NOT NULL CHECK (operator_instigator_decision = 'eligible'),
@@ -124,6 +298,12 @@ CREATE TABLE app.property_predator_customer_email_authorities (
   FOREIGN KEY (workspace_id, campaign_template_version_id, campaign_definition_sha256)
     REFERENCES app.campaign_template_versions (workspace_id, id, definition_sha256)
     ON DELETE RESTRICT,
+  FOREIGN KEY (
+    workspace_id, campaign_template_version_id,
+    campaign_template_step_id, campaign_step_content_sha256
+  ) REFERENCES app.campaign_template_steps (
+    workspace_id, template_version_id, id, content_sha256
+  ) ON DELETE RESTRICT,
   FOREIGN KEY (workspace_id, campaign_approval_request_id)
     REFERENCES app.campaign_template_approval_requests (workspace_id, id) ON DELETE RESTRICT,
   FOREIGN KEY (workspace_id, campaign_approval_decision_id)
@@ -145,6 +325,21 @@ CREATE TABLE app.property_predator_customer_email_authorities (
     REFERENCES app.channel_endpoints (workspace_id, id) ON DELETE RESTRICT,
   FOREIGN KEY (workspace_id, consent_event_id)
     REFERENCES app.communication_consent_events (workspace_id, id) ON DELETE RESTRICT,
+  FOREIGN KEY (workspace_id, compliance_subject_id)
+    REFERENCES app_private.affiliate_compliance_subjects (workspace_id, id)
+    ON DELETE RESTRICT,
+  FOREIGN KEY (workspace_id, policy_publication_event_id)
+    REFERENCES app_private.affiliate_compliance_policy_publication_events
+      (workspace_id, id) ON DELETE RESTRICT,
+  FOREIGN KEY (workspace_id, pecr_sender_decision_event_id)
+    REFERENCES app_private.affiliate_compliance_specialist_decision_events
+      (workspace_id, id) ON DELETE RESTRICT,
+  FOREIGN KEY (workspace_id, pecr_instigator_decision_event_id)
+    REFERENCES app_private.affiliate_compliance_specialist_decision_events
+      (workspace_id, id) ON DELETE RESTRICT,
+  FOREIGN KEY (workspace_id, permission_use_receipt_id)
+    REFERENCES app_private.affiliate_compliance_permission_use_receipts
+      (workspace_id, id) ON DELETE RESTRICT,
   FOREIGN KEY (workspace_id, operator_user_id)
     REFERENCES app.workspace_memberships (workspace_id, user_id) ON DELETE RESTRICT,
   CHECK (evaluated_at <= recorded_at + interval '30 seconds'),
@@ -328,6 +523,17 @@ BEGIN
       ON campaign_version.workspace_id = authority.workspace_id
      AND campaign_version.id = authority.campaign_template_version_id
      AND campaign_version.definition_sha256 = authority.campaign_definition_sha256
+     AND campaign_version.purpose_key = authority.purpose
+     AND NOT campaign_version.provider_effects
+    JOIN app.campaign_template_steps AS campaign_step
+      ON campaign_step.workspace_id = campaign_version.workspace_id
+     AND campaign_step.template_version_id = campaign_version.id
+     AND campaign_step.id = authority.campaign_template_step_id
+     AND campaign_step.content_sha256 = authority.campaign_step_content_sha256
+     AND campaign_step.step_kind = 'email' AND campaign_step.channel = 'email'
+     AND campaign_step.requires_human_approval
+     AND campaign_step.requires_current_permission
+     AND NOT campaign_step.provider_effects
     JOIN app.campaign_template_approval_requests AS campaign_request
       ON campaign_request.workspace_id = campaign_version.workspace_id
      AND campaign_request.id = authority.campaign_approval_request_id
@@ -351,6 +557,16 @@ BEGIN
      AND delivery.channel_endpoint_id = authority.channel_endpoint_id
      AND delivery.status = 'queued' AND delivery.environment = 'live'
      AND delivery.conversation_channel = 'email' AND delivery.purpose = authority.purpose
+    JOIN app.provider_operations AS provider_operation
+      ON provider_operation.workspace_id = delivery.workspace_id
+     AND provider_operation.id = authority.provider_operation_id
+     AND provider_operation.message_delivery_id = delivery.id
+     AND provider_operation.provider_connection_id = authority.provider_connection_id
+     AND provider_operation.operation_kind = 'conversation.send'
+     AND provider_operation.environment = 'live'
+     AND provider_operation.state = 'reconciliation_required'
+     AND provider_operation.provider_reference IS NULL
+     AND provider_operation.last_error_code = 'customer_email_live_reserved'
     JOIN app.message_versions AS message_version
       ON message_version.workspace_id = delivery.workspace_id
      AND message_version.id = delivery.message_version_id
@@ -360,18 +576,23 @@ BEGIN
      AND message.id = message_version.message_id
      AND message.current_version_id = message_version.id
      AND message.current_body_sha256 = message_version.body_sha256
-     AND message.lifecycle = 'approved' AND message.direction = 'outbound'
+     AND message.lifecycle = 'committed' AND message.direction = 'outbound'
     JOIN app.conversations AS conversation
       ON conversation.workspace_id = message.workspace_id
      AND conversation.id = message.conversation_id
      AND conversation.channel = 'email' AND conversation.environment = 'live'
      AND conversation.subject IS NOT NULL
+     AND conversation.subject = campaign_step.subject_template
+     AND message_version.body_text = campaign_step.body_template
      AND public.digest(conversation.subject, 'sha256') = authority.message_subject_sha256
     JOIN app.channel_endpoints AS endpoint
       ON endpoint.workspace_id = delivery.workspace_id AND endpoint.id = delivery.channel_endpoint_id
      AND endpoint.provider_connection_id = delivery.provider_connection_id
      AND endpoint.channel = 'email' AND endpoint.environment = 'live'
      AND endpoint.status = 'active' AND endpoint.direction IN ('outbound', 'bidirectional')
+     AND endpoint.address = authority.sender_endpoint_normalized_address
+     AND endpoint.normalized_address = authority.sender_endpoint_normalized_address
+     AND authority.sender_endpoint_normalized_address = 'mg.propertypredator.com'
     JOIN app.contact_points AS point
       ON point.workspace_id = authority.workspace_id
      AND point.id = authority.contact_point_id AND point.contact_id = authority.contact_id
@@ -389,12 +610,79 @@ BEGIN
      AND consent.channel = 'email' AND consent.purpose = authority.purpose
      AND consent.state = 'granted' AND consent.lawful_basis = authority.lawful_basis
      AND consent.endpoint_identity_sha256 = authority.endpoint_identity_sha256
+    JOIN app_private.affiliate_compliance_policy_publication_events AS publication
+      ON publication.workspace_id = authority.workspace_id
+     AND publication.id = authority.policy_publication_event_id
+     AND publication.publication_state = 'published'
+    JOIN app_private.affiliate_compliance_policy_review_events AS legal_review
+      ON legal_review.workspace_id = publication.workspace_id
+     AND legal_review.id = publication.legal_review_event_id
+     AND legal_review.policy_pack_id = publication.policy_pack_id
+     AND legal_review.bundle_sha256 = publication.bundle_sha256
+     AND legal_review.review_dimension = 'legal' AND legal_review.decision = 'approved'
+    JOIN app_private.affiliate_compliance_policy_review_events AS commercial_review
+      ON commercial_review.workspace_id = publication.workspace_id
+     AND commercial_review.id = publication.commercial_review_event_id
+     AND commercial_review.policy_pack_id = publication.policy_pack_id
+     AND commercial_review.bundle_sha256 = publication.bundle_sha256
+     AND commercial_review.review_dimension = 'commercial'
+     AND commercial_review.decision = 'approved'
+    JOIN app_private.affiliate_compliance_specialist_decision_events AS sender_route
+      ON sender_route.workspace_id = authority.workspace_id
+     AND sender_route.subject_id = authority.compliance_subject_id
+     AND sender_route.id = authority.pecr_sender_decision_event_id
+     AND sender_route.decision_kind = 'pecr_sender_route'
+     AND sender_route.decision_state = 'approved'
+     AND sender_route.action_scope_sha256 = authority.action_scope_sha256
+     AND sender_route.decision_sha256 = authority.pecr_evidence_sha256
+    JOIN app_private.affiliate_compliance_specialist_decision_events AS instigator_route
+      ON instigator_route.workspace_id = authority.workspace_id
+     AND instigator_route.subject_id = authority.compliance_subject_id
+     AND instigator_route.id = authority.pecr_instigator_decision_event_id
+     AND instigator_route.decision_kind = 'pecr_instigator_route'
+     AND instigator_route.decision_state = 'approved'
+     AND instigator_route.action_scope_sha256 = authority.action_scope_sha256
+     AND instigator_route.decision_sha256 = authority.operator_instigator_sha256
+    JOIN app_private.affiliate_compliance_permission_use_receipts AS permission_use
+      ON permission_use.workspace_id = authority.workspace_id
+     AND permission_use.subject_id = authority.compliance_subject_id
+     AND permission_use.id = authority.permission_use_receipt_id
+     AND permission_use.permission = 'email.send'
+     AND permission_use.action_scope_sha256 = authority.action_scope_sha256
+     AND permission_use.eligibility_decision = 'allow'
+     AND permission_use.use_state = 'consumed'
+     AND permission_use.provider_effects IS FALSE
+     AND permission_use.recorded_by_user_id = authority.operator_user_id
+     AND permission_use.recorded_request_id = authority.operator_request_id
+    JOIN app.workspace_memberships AS operator_membership
+      ON operator_membership.workspace_id = authority.workspace_id
+     AND operator_membership.user_id = authority.operator_user_id
+     AND operator_membership.status = 'active'
+     AND operator_membership.role IN ('owner', 'admin')
     WHERE authority.workspace_id = selected.workspace_id
       AND authority.id = selected.authority_id
       AND authority.provider_connection_id = selected.provider_connection_id
       AND authority.message_delivery_id = selected.message_delivery_id
       AND authority.recipient_sha256 = selected.recipient_sha256
       AND authority.valid_until > statement_timestamp()
+      AND authority.action_scope_sha256 = public.digest(format(
+        'email:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s', authority.workspace_id,
+        authority.provider_connection_id, authority.sender_endpoint_normalized_address,
+        authority.campaign_template_version_id,
+        authority.campaign_template_step_id,
+        pg_catalog.encode(authority.campaign_step_content_sha256, 'hex'),
+        authority.message_version_id,
+        pg_catalog.encode(authority.endpoint_identity_sha256, 'hex'),
+        authority.purpose, authority.consent_event_id
+      ), 'sha256')
+      AND publication.effective_at <= statement_timestamp()
+      AND (publication.expires_at IS NULL OR publication.expires_at > statement_timestamp())
+      AND sender_route.valid_from <= statement_timestamp()
+      AND (sender_route.valid_until IS NULL OR sender_route.valid_until > statement_timestamp())
+      AND instigator_route.valid_from <= statement_timestamp()
+      AND (instigator_route.valid_until IS NULL OR instigator_route.valid_until > statement_timestamp())
+      AND permission_use.consumed_at <= statement_timestamp()
+      AND permission_use.decision_expires_at > statement_timestamp()
       AND campaign_request.id = (
         SELECT latest.id FROM app.campaign_template_approval_requests AS latest
         WHERE latest.workspace_id = campaign_version.workspace_id
@@ -428,6 +716,58 @@ BEGIN
               AND latest.channel = suppression.channel
               AND latest.purpose IS NOT DISTINCT FROM suppression.purpose
             ORDER BY latest.occurred_at DESC, latest.recorded_at DESC, latest.id DESC LIMIT 1
+           )
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM app_private.affiliate_compliance_policy_publication_events AS successor
+        WHERE successor.workspace_id = publication.workspace_id
+          AND successor.policy_pack_id = publication.policy_pack_id
+          AND successor.supersedes_event_id = publication.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM app_private.affiliate_compliance_policy_review_events AS successor
+        WHERE successor.workspace_id = legal_review.workspace_id
+          AND successor.policy_pack_id = legal_review.policy_pack_id
+          AND successor.review_dimension = legal_review.review_dimension
+          AND successor.supersedes_event_id = legal_review.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM app_private.affiliate_compliance_policy_review_events AS successor
+        WHERE successor.workspace_id = commercial_review.workspace_id
+          AND successor.policy_pack_id = commercial_review.policy_pack_id
+          AND successor.review_dimension = commercial_review.review_dimension
+          AND successor.supersedes_event_id = commercial_review.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM app_private.affiliate_compliance_specialist_decision_events AS successor
+        WHERE successor.workspace_id = sender_route.workspace_id
+          AND successor.subject_id = sender_route.subject_id
+          AND successor.decision_kind = sender_route.decision_kind
+          AND successor.supersedes_event_id = sender_route.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM app_private.affiliate_compliance_specialist_decision_events AS successor
+        WHERE successor.workspace_id = instigator_route.workspace_id
+          AND successor.subject_id = instigator_route.subject_id
+          AND successor.decision_kind = instigator_route.decision_kind
+          AND successor.supersedes_event_id = instigator_route.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM app_private.affiliate_compliance_permission_fact_events AS block
+        WHERE block.workspace_id = permission_use.workspace_id
+          AND block.subject_id = permission_use.subject_id
+          AND block.permission = 'email.send'
+          AND block.action_scope_sha256 = authority.action_scope_sha256
+          AND block.permission_state IN ('blocked', 'revoked', 'expired')
+          AND block.valid_from <= statement_timestamp()
+          AND (block.valid_until IS NULL OR block.valid_until > statement_timestamp())
+          AND NOT EXISTS (
+            SELECT 1 FROM app_private.affiliate_compliance_permission_fact_events AS successor
+            WHERE successor.workspace_id = block.workspace_id
+              AND successor.subject_id = block.subject_id
+              AND successor.permission = block.permission
+              AND successor.action_scope_sha256 = block.action_scope_sha256
+              AND successor.supersedes_event_id = block.id
           )
       )
   ) INTO eligible;
@@ -446,6 +786,23 @@ BEGIN
   UPDATE app.property_predator_customer_email_jobs SET state = 'calling',
     calling_at = statement_timestamp(), updated_at = statement_timestamp()
   WHERE workspace_id = p_workspace_id AND id = p_job_id;
+  UPDATE app.provider_operations AS provider_operation SET
+    provider_reference = selected.expected_message_id,
+    row_version = provider_operation.row_version + 1,
+    updated_at = statement_timestamp()
+  FROM app.property_predator_customer_email_authorities AS authority
+  WHERE authority.workspace_id = selected.workspace_id
+    AND authority.id = selected.authority_id
+    AND provider_operation.workspace_id = authority.workspace_id
+    AND provider_operation.id = authority.provider_operation_id
+    AND provider_operation.message_delivery_id = selected.message_delivery_id
+    AND provider_operation.provider_connection_id = selected.provider_connection_id
+    AND provider_operation.state = 'reconciliation_required'
+    AND provider_operation.provider_reference IS NULL
+    AND provider_operation.last_error_code = 'customer_email_live_reserved';
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Customer email provider reference fence lost' USING ERRCODE = '40001';
+  END IF;
   UPDATE app.message_deliveries SET status = 'sending', updated_at = statement_timestamp()
   WHERE workspace_id = p_workspace_id AND id = selected.message_delivery_id
     AND status = 'queued';
@@ -470,6 +827,10 @@ BEGIN
      OR coalesce(current_setting('app.request_id', true), '') = ''
      OR p_status NOT IN ('accepted', 'pending', 'succeeded', 'failed', 'needs_attention')
      OR (p_status IN ('accepted', 'pending', 'succeeded') AND p_external_id IS NULL)
+     OR (p_external_id IS NOT NULL AND (
+       p_external_id <> btrim(p_external_id)
+       OR length(p_external_id) NOT BETWEEN 1 AND 500
+     ))
      OR p_retryable IS NULL OR octet_length(p_receipt_sha256) <> 32
      OR p_summary IS NULL OR p_summary <> btrim(p_summary)
      OR length(p_summary) NOT BETWEEN 1 AND 500
@@ -478,20 +839,80 @@ BEGIN
   END IF;
   SELECT job.* INTO selected
   FROM app.property_predator_customer_email_jobs AS job
-  JOIN app.property_predator_customer_email_job_leases AS lease
-    ON lease.workspace_id = job.workspace_id AND lease.job_id = job.id
-   AND lease.lease_version = job.lease_version
-   AND lease.lease_token_sha256 = public.digest(p_lease_token, 'sha256')
   WHERE job.workspace_id = p_workspace_id AND job.id = p_job_id
-    AND job.state = 'calling' AND job.lease_version = p_lease_version
   FOR UPDATE OF job;
-  IF NOT FOUND THEN RAISE EXCEPTION 'Customer email settlement lease lost' USING ERRCODE = '40001'; END IF;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Customer email settlement job lost' USING ERRCODE = '40001';
+  END IF;
+  IF selected.state <> 'calling' THEN
+    -- A verified signed webhook may win the race immediately after the worker
+    -- crosses the calling fence. Its immutable receipt is the stronger truth;
+    -- the later HTTP settlement becomes a replay-safe no-op.
+    IF EXISTS (
+      SELECT 1 FROM app.property_predator_customer_email_receipts AS receipt
+      WHERE receipt.workspace_id = p_workspace_id AND receipt.job_id = p_job_id
+        AND receipt.mailgun_webhook_event_id IS NOT NULL
+    ) THEN
+      RETURN;
+    END IF;
+    RAISE EXCEPTION 'Customer email settlement lease lost' USING ERRCODE = '40001';
+  END IF;
+  IF selected.lease_version <> p_lease_version OR NOT EXISTS (
+    SELECT 1 FROM app.property_predator_customer_email_job_leases AS lease
+    WHERE lease.workspace_id = selected.workspace_id AND lease.job_id = selected.id
+      AND lease.lease_version = selected.lease_version
+      AND lease.lease_token_sha256 = public.digest(p_lease_token, 'sha256')
+  ) THEN
+    RAISE EXCEPTION 'Customer email settlement lease lost' USING ERRCODE = '40001';
+  END IF;
   next_state := CASE WHEN p_status IN ('accepted', 'pending', 'succeeded')
     THEN 'awaiting_receipt' WHEN p_status = 'failed' THEN 'failed' ELSE 'needs_attention' END;
   event_kind := CASE WHEN next_state = 'awaiting_receipt' THEN 'dispatch_accepted'
     WHEN next_state = 'failed' THEN 'dispatch_failed' ELSE 'outcome_unknown' END;
-  safe_code := coalesce(p_error_code, CASE WHEN event_kind = 'dispatch_accepted'
-    THEN 'mailgun_customer_accepted' ELSE 'mailgun_customer_failed' END);
+  safe_code := coalesce(p_error_code, CASE event_kind
+    WHEN 'dispatch_accepted' THEN 'mailgun_customer_accepted'
+    WHEN 'dispatch_failed' THEN 'mailgun_customer_failed'
+    ELSE 'mailgun_customer_outcome_unknown' END);
+  UPDATE app.provider_operations AS operation SET
+    state = CASE WHEN next_state = 'awaiting_receipt' THEN 'accepted'
+      WHEN next_state = 'failed' THEN 'failed' ELSE 'reconciliation_required' END,
+    provider_reference = coalesce(p_external_id, selected.expected_message_id),
+    attempt_count = greatest(operation.attempt_count, 1),
+    next_attempt_at = CASE WHEN next_state = 'needs_attention'
+      THEN 'infinity'::timestamptz ELSE operation.next_attempt_at END,
+    lease_token_hash = NULL, lease_expires_at = NULL,
+    last_error_code = CASE WHEN next_state = 'awaiting_receipt' THEN NULL ELSE safe_code END,
+    last_summary = p_summary,
+    row_version = operation.row_version + 1,
+    updated_at = statement_timestamp(),
+    completed_at = CASE WHEN next_state IN ('awaiting_receipt', 'failed')
+      THEN statement_timestamp() ELSE NULL END
+  WHERE operation.workspace_id = selected.workspace_id
+    AND operation.id = selected.operation_id
+    AND operation.message_delivery_id = selected.message_delivery_id
+    AND operation.provider_connection_id = selected.provider_connection_id
+    AND operation.state = 'reconciliation_required'
+    AND operation.provider_reference = selected.expected_message_id
+    AND operation.last_error_code = 'customer_email_live_reserved'
+    AND operation.idempotency_key ~ '^customer-email-live:[0-9a-f]{64}$';
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Customer email settlement provider fence lost' USING ERRCODE = '40001';
+  END IF;
+  UPDATE app.message_deliveries SET
+    status = CASE WHEN next_state = 'awaiting_receipt' THEN 'accepted'
+      WHEN next_state = 'failed' THEN 'failed' ELSE 'reconciliation_required' END,
+    accepted_at = CASE WHEN next_state = 'awaiting_receipt'
+      THEN greatest(queued_at, p_occurred_at) ELSE NULL END,
+    failed_at = CASE WHEN next_state = 'failed'
+      THEN greatest(queued_at, p_occurred_at) ELSE NULL END,
+    updated_at = statement_timestamp()
+  WHERE workspace_id = p_workspace_id AND id = selected.message_delivery_id
+    AND provider_operation_id = selected.operation_id
+    AND provider_connection_id = selected.provider_connection_id
+    AND status = 'sending';
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Customer email settlement delivery fence lost' USING ERRCODE = '40001';
+  END IF;
   INSERT INTO app.property_predator_customer_email_receipts (
     workspace_id, job_id, provider_connection_id, message_delivery_id,
     mailgun_webhook_event_id, external_event_id, event_kind, recipient_sha256,
@@ -510,15 +931,6 @@ BEGIN
       THEN statement_timestamp() ELSE NULL END,
     updated_at = statement_timestamp()
   WHERE workspace_id = p_workspace_id AND id = p_job_id;
-  UPDATE app.message_deliveries SET
-    status = CASE WHEN next_state = 'awaiting_receipt' THEN 'accepted'
-      WHEN next_state = 'failed' THEN 'failed' ELSE 'reconciliation_required' END,
-    accepted_at = CASE WHEN next_state = 'awaiting_receipt'
-      THEN greatest(queued_at, p_occurred_at) ELSE NULL END,
-    failed_at = CASE WHEN next_state = 'failed'
-      THEN greatest(queued_at, p_occurred_at) ELSE NULL END,
-    updated_at = statement_timestamp()
-  WHERE workspace_id = p_workspace_id AND id = selected.message_delivery_id;
   DELETE FROM app.property_predator_customer_email_job_leases
   WHERE workspace_id = p_workspace_id AND job_id = p_job_id;
 END
@@ -526,10 +938,12 @@ $function$;
 
 CREATE FUNCTION app_private.record_customer_email_signed_receipt(
   p_workspace_id uuid, p_provider_connection_id uuid,
-  p_mailgun_webhook_event_id uuid
+  p_external_event_id text
 ) RETURNS text
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog AS $function$
-DECLARE selected record; existing record; next_state text;
+DECLARE selected_event app.mailgun_webhook_events%ROWTYPE;
+  selected_job app.property_predator_customer_email_jobs%ROWTYPE;
+  next_state text;
 BEGIN
   IF session_user <> 'r72_customer_email_webhook_command'
      OR current_setting('app.workspace_id', true) IS DISTINCT FROM p_workspace_id::text
@@ -538,53 +952,92 @@ BEGIN
      OR coalesce(current_setting('app.request_id', true), '') = '' THEN
     RAISE EXCEPTION 'Customer email signed receipt denied' USING ERRCODE = '42501';
   END IF;
+  IF p_external_event_id IS NULL
+     OR p_external_event_id <> btrim(p_external_event_id)
+     OR length(p_external_event_id) NOT BETWEEN 1 AND 255
+     OR p_external_event_id !~ '^[A-Za-z0-9._:+/=-]+$' THEN
+    RETURN 'not_applicable';
+  END IF;
   PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
-    format('pp-customer-email-receipt:%s:%s', p_workspace_id, p_mailgun_webhook_event_id), 0
+    format('pp-customer-email-receipt:%s:%s:%s',
+      p_workspace_id, p_provider_connection_id, p_external_event_id), 0
   ));
-  SELECT receipt.id INTO existing
-  FROM app.property_predator_customer_email_receipts AS receipt
-  WHERE receipt.workspace_id = p_workspace_id
-    AND receipt.mailgun_webhook_event_id = p_mailgun_webhook_event_id;
-  IF FOUND THEN RETURN 'replayed'; END IF;
-  SELECT job.id AS job_id, job.message_delivery_id, job.recipient_sha256,
-         event.id AS event_id, event.external_event_id, event.event_type,
-         event.payload_sha256, event.recipient_identity_sha256,
-         event.occurred_at
-    INTO selected
+  SELECT event.* INTO selected_event
   FROM app.mailgun_webhook_events AS event
-  JOIN app.property_predator_customer_email_jobs AS job
-    ON job.workspace_id = event.workspace_id
-   AND job.provider_connection_id = event.provider_connection_id
-   AND job.message_delivery_id = event.message_delivery_id
-   AND job.recipient_sha256 = event.recipient_identity_sha256
   WHERE event.workspace_id = p_workspace_id
     AND event.provider_connection_id = p_provider_connection_id
-    AND event.id = p_mailgun_webhook_event_id
-    AND job.state IN ('awaiting_receipt', 'needs_attention')
+    AND event.external_event_id = p_external_event_id;
+  IF NOT FOUND THEN RETURN 'not_applicable'; END IF;
+  PERFORM 1
+  FROM app.property_predator_customer_email_receipts AS receipt
+  WHERE receipt.workspace_id = p_workspace_id
+    AND receipt.mailgun_webhook_event_id = selected_event.id;
+  IF FOUND THEN RETURN 'replayed'; END IF;
+  SELECT job.* INTO selected_job
+  FROM app.property_predator_customer_email_jobs AS job
+  WHERE job.workspace_id = selected_event.workspace_id
+    AND job.provider_connection_id = selected_event.provider_connection_id
+    AND job.operation_id = selected_event.provider_operation_id
+    AND job.message_delivery_id = selected_event.message_delivery_id
+    AND job.recipient_sha256 = selected_event.recipient_identity_sha256
+    AND job.state IN (
+      'calling', 'awaiting_receipt', 'succeeded', 'failed', 'needs_attention'
+    )
   FOR UPDATE OF job;
-  IF selected.job_id IS NULL THEN
-    RAISE EXCEPTION 'Signed Mailgun receipt has no exact customer job' USING ERRCODE = '42501';
-  END IF;
-  next_state := CASE WHEN selected.event_type IN ('delivered', 'opened', 'clicked')
-    THEN 'succeeded' WHEN selected.event_type IN ('failed', 'complained', 'unsubscribed')
-    THEN 'failed' ELSE 'awaiting_receipt' END;
+  IF NOT FOUND THEN RETURN 'not_applicable'; END IF;
+  next_state := CASE
+    WHEN selected_event.event_type IN ('failed', 'complained', 'unsubscribed')
+      THEN 'failed'
+    WHEN selected_event.event_type IN ('delivered', 'opened', 'clicked')
+      THEN CASE WHEN selected_job.state = 'failed' THEN 'failed' ELSE 'succeeded' END
+    WHEN selected_job.state IN ('succeeded', 'failed') THEN selected_job.state
+    ELSE 'awaiting_receipt'
+  END;
   INSERT INTO app.property_predator_customer_email_receipts (
     workspace_id, job_id, provider_connection_id, message_delivery_id,
     mailgun_webhook_event_id, external_event_id, event_kind, recipient_sha256,
     payload_sha256, safe_code, provider_occurred_at
   ) VALUES (
-    p_workspace_id, selected.job_id, p_provider_connection_id,
-    selected.message_delivery_id, selected.event_id, selected.external_event_id,
-    selected.event_type, selected.recipient_sha256, selected.payload_sha256,
-    'mailgun_signed_customer_receipt', selected.occurred_at
+    p_workspace_id, selected_job.id, p_provider_connection_id,
+    selected_job.message_delivery_id, selected_event.id,
+    selected_event.external_event_id, selected_event.event_type,
+    selected_job.recipient_sha256, selected_event.payload_sha256,
+    'mailgun_signed_customer_receipt', selected_event.occurred_at
   );
   UPDATE app.property_predator_customer_email_jobs SET state = next_state,
+    lease_expires_at = NULL,
     receipt_deadline = CASE WHEN next_state = 'awaiting_receipt'
-      THEN receipt_deadline ELSE NULL END,
+      THEN coalesce(receipt_deadline, statement_timestamp() + interval '24 hours')
+      ELSE NULL END,
     settled_at = CASE WHEN next_state IN ('succeeded', 'failed')
       THEN statement_timestamp() ELSE settled_at END,
     updated_at = statement_timestamp()
-  WHERE workspace_id = p_workspace_id AND id = selected.job_id;
+  WHERE workspace_id = p_workspace_id AND id = selected_job.id;
+  UPDATE app.provider_operations AS operation SET
+    state = CASE
+      WHEN selected_event.event_type IN ('failed', 'complained', 'unsubscribed')
+        THEN 'failed'
+      WHEN selected_event.event_type IN ('delivered', 'opened', 'clicked')
+        THEN CASE WHEN operation.state = 'failed' THEN 'failed' ELSE 'succeeded' END
+      WHEN operation.state IN ('succeeded', 'failed') THEN operation.state
+      ELSE 'accepted'
+    END,
+    last_error_code = CASE
+      WHEN selected_event.event_type IN ('failed', 'complained', 'unsubscribed')
+        THEN 'mailgun_' || selected_event.event_type
+      ELSE NULL
+    END,
+    last_summary = 'Projected from exact signed Mailgun customer-email receipt',
+    row_version = operation.row_version + 1,
+    updated_at = statement_timestamp(),
+    completed_at = coalesce(operation.completed_at, statement_timestamp())
+  WHERE operation.workspace_id = p_workspace_id
+    AND operation.id = selected_job.operation_id
+    AND operation.message_delivery_id = selected_job.message_delivery_id
+    AND operation.provider_connection_id = selected_job.provider_connection_id
+    AND operation.idempotency_key ~ '^customer-email-live:[0-9a-f]{64}$';
+  DELETE FROM app.property_predator_customer_email_job_leases
+  WHERE workspace_id = p_workspace_id AND job_id = selected_job.id;
   RETURN 'applied';
 END
 $function$;
@@ -596,6 +1049,9 @@ CREATE FUNCTION app_private.claim_customer_email_live_job(
 ) RETURNS TABLE (job_id uuid, lease_version bigint)
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog AS $function$
 DECLARE selected record;
+  recovered app.property_predator_customer_email_jobs%ROWTYPE;
+  timeout_event_id text;
+  timeout_safe_code text;
 BEGIN
   IF session_user <> 'r72_customer_email_worker_command'
      OR current_setting('app.workspace_id', true) IS DISTINCT FROM p_workspace_id::text
@@ -605,38 +1061,70 @@ BEGIN
      OR octet_length(p_lease_token) <> 32 OR p_lease_seconds NOT BETWEEN 30 AND 300 THEN
     RAISE EXCEPTION 'Customer email claim denied' USING ERRCODE = '42501';
   END IF;
-  -- A lost lease before calling is safe to requeue. Once calling began, an
-  -- expired lease is outcome-unknown and can never retry automatically.
-  WITH recovered AS (
-    SELECT job.id, job.state FROM app.property_predator_customer_email_jobs AS job
+  -- A lost lease before calling is safe to requeue. Once calling began, or a
+  -- signed provider receipt failed to arrive by its deadline, append immutable
+  -- outcome-unknown evidence and quarantine every mutable projection.
+  FOR recovered IN
+    SELECT job.* FROM app.property_predator_customer_email_jobs AS job
     WHERE job.workspace_id = p_workspace_id
       AND job.provider_connection_id = p_provider_connection_id
-      AND job.state IN ('leased', 'calling')
-      AND job.lease_expires_at <= statement_timestamp()
+      AND (
+        (job.state IN ('leased', 'calling')
+          AND job.lease_expires_at <= statement_timestamp())
+        OR (job.state = 'awaiting_receipt'
+          AND job.receipt_deadline <= statement_timestamp())
+      )
     FOR UPDATE SKIP LOCKED
-  )
-  UPDATE app.property_predator_customer_email_jobs AS job SET
-    state = CASE WHEN recovered.state = 'leased' AND job.claim_count < 8
-      THEN 'queued' ELSE 'needs_attention' END,
-    available_at = CASE WHEN recovered.state = 'leased' AND job.claim_count < 8
-      THEN statement_timestamp() ELSE job.available_at END,
-    lease_expires_at = NULL,
-    settled_at = CASE WHEN recovered.state = 'calling' OR job.claim_count >= 8
-      THEN statement_timestamp() ELSE job.settled_at END,
-    updated_at = statement_timestamp()
-  FROM recovered WHERE job.workspace_id = p_workspace_id AND job.id = recovered.id;
-  DELETE FROM app.property_predator_customer_email_job_leases AS lease
-  WHERE lease.workspace_id = p_workspace_id AND NOT EXISTS (
-    SELECT 1 FROM app.property_predator_customer_email_jobs AS job
-    WHERE job.workspace_id = lease.workspace_id AND job.id = lease.job_id
-      AND job.state IN ('leased', 'calling')
-  );
-  UPDATE app.property_predator_customer_email_jobs SET state = 'needs_attention',
-    receipt_deadline = NULL, settled_at = statement_timestamp(),
-    updated_at = statement_timestamp()
-  WHERE workspace_id = p_workspace_id
-    AND provider_connection_id = p_provider_connection_id
-    AND state = 'awaiting_receipt' AND receipt_deadline <= statement_timestamp();
+  LOOP
+    IF recovered.state IN ('calling', 'awaiting_receipt') THEN
+      timeout_event_id := CASE WHEN recovered.state = 'calling'
+        THEN format('worker-timeout:%s:%s', recovered.id, recovered.lease_version)
+        ELSE format('receipt-timeout:%s', recovered.id) END;
+      timeout_safe_code := CASE WHEN recovered.state = 'calling'
+        THEN 'customer_email_call_outcome_unknown'
+        ELSE 'customer_email_receipt_outcome_unknown' END;
+      INSERT INTO app.property_predator_customer_email_receipts (
+        workspace_id, job_id, provider_connection_id, message_delivery_id,
+        mailgun_webhook_event_id, external_event_id, event_kind, recipient_sha256,
+        payload_sha256, safe_code, provider_occurred_at
+      ) VALUES (
+        recovered.workspace_id, recovered.id, recovered.provider_connection_id,
+        recovered.message_delivery_id, NULL, timeout_event_id, 'outcome_unknown',
+        recovered.recipient_sha256, public.digest(timeout_event_id, 'sha256'),
+        timeout_safe_code, statement_timestamp()
+      ) ON CONFLICT (workspace_id, provider_connection_id, external_event_id)
+        DO NOTHING;
+      UPDATE app.message_deliveries SET status = 'reconciliation_required',
+        updated_at = statement_timestamp()
+      WHERE workspace_id = recovered.workspace_id
+        AND id = recovered.message_delivery_id
+        AND status IN ('sending', 'accepted');
+      UPDATE app.provider_operations AS operation SET
+        state = 'reconciliation_required', next_attempt_at = 'infinity'::timestamptz,
+        lease_token_hash = NULL, lease_expires_at = NULL,
+        last_error_code = timeout_safe_code,
+        last_summary = 'Customer email provider outcome is unknown; manual reconciliation required',
+        row_version = operation.row_version + 1,
+        updated_at = statement_timestamp(), completed_at = NULL
+      WHERE operation.workspace_id = recovered.workspace_id
+        AND operation.id = recovered.operation_id
+        AND operation.message_delivery_id = recovered.message_delivery_id
+        AND operation.provider_connection_id = recovered.provider_connection_id
+        AND operation.idempotency_key ~ '^customer-email-live:[0-9a-f]{64}$';
+    END IF;
+    UPDATE app.property_predator_customer_email_jobs SET
+      state = CASE WHEN recovered.state = 'leased' AND recovered.claim_count < 8
+        THEN 'queued' ELSE 'needs_attention' END,
+      available_at = CASE WHEN recovered.state = 'leased' AND recovered.claim_count < 8
+        THEN statement_timestamp() ELSE recovered.available_at END,
+      lease_expires_at = NULL, receipt_deadline = NULL,
+      settled_at = CASE WHEN recovered.state = 'leased' AND recovered.claim_count < 8
+        THEN recovered.settled_at ELSE statement_timestamp() END,
+      updated_at = statement_timestamp()
+    WHERE workspace_id = recovered.workspace_id AND id = recovered.id;
+    DELETE FROM app.property_predator_customer_email_job_leases
+    WHERE workspace_id = recovered.workspace_id AND job_id = recovered.id;
+  END LOOP;
 
   SELECT job.id, job.lease_version INTO selected
   FROM app.property_predator_customer_email_jobs AS job
@@ -717,12 +1205,14 @@ $function$;
 CREATE FUNCTION app_private.load_customer_email_live_job(
   p_workspace_id uuid, p_job_id uuid, p_lease_version bigint, p_lease_token bytea
 ) RETURNS TABLE (
-  provider_connection_id uuid, operation_id uuid, correlation_id uuid,
+  provider_connection_id uuid, sending_domain text,
+  operation_id uuid, correlation_id uuid,
   request_sha256 bytea, expected_message_id text, recipient text,
   subject text, body text
 )
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $function$
-  SELECT job.provider_connection_id, job.operation_id, job.correlation_id,
+  SELECT job.provider_connection_id, authority.sender_endpoint_normalized_address,
+    job.operation_id, job.correlation_id,
     job.request_sha256, job.expected_message_id, point.normalized_value,
     conversation.subject, version.body_text
   FROM app.property_predator_customer_email_jobs AS job
@@ -734,6 +1224,21 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $function$
     ON authority.workspace_id = job.workspace_id AND authority.id = job.authority_id
    AND authority.message_delivery_id = job.message_delivery_id
    AND authority.recipient_sha256 = job.recipient_sha256
+  JOIN app.campaign_template_versions AS campaign_version
+    ON campaign_version.workspace_id = authority.workspace_id
+   AND campaign_version.id = authority.campaign_template_version_id
+   AND campaign_version.definition_sha256 = authority.campaign_definition_sha256
+   AND campaign_version.purpose_key = authority.purpose
+   AND NOT campaign_version.provider_effects
+  JOIN app.campaign_template_steps AS campaign_step
+    ON campaign_step.workspace_id = campaign_version.workspace_id
+   AND campaign_step.template_version_id = campaign_version.id
+   AND campaign_step.id = authority.campaign_template_step_id
+   AND campaign_step.content_sha256 = authority.campaign_step_content_sha256
+   AND campaign_step.step_kind = 'email' AND campaign_step.channel = 'email'
+   AND campaign_step.requires_human_approval
+   AND campaign_step.requires_current_permission
+   AND NOT campaign_step.provider_effects
   JOIN app.message_deliveries AS delivery
     ON delivery.workspace_id = authority.workspace_id
    AND delivery.id = authority.message_delivery_id
@@ -745,6 +1250,16 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $function$
    AND delivery.contact_point_id = authority.contact_point_id
    AND delivery.channel_endpoint_id = authority.channel_endpoint_id
    AND delivery.status = 'queued' AND delivery.environment = 'live'
+  JOIN app.channel_endpoints AS endpoint
+    ON endpoint.workspace_id = delivery.workspace_id
+   AND endpoint.id = delivery.channel_endpoint_id
+   AND endpoint.provider_connection_id = delivery.provider_connection_id
+   AND endpoint.channel = 'email' AND endpoint.environment = 'live'
+   AND endpoint.direction IN ('outbound', 'bidirectional')
+   AND endpoint.status = 'active'
+   AND endpoint.address = authority.sender_endpoint_normalized_address
+   AND endpoint.normalized_address = authority.sender_endpoint_normalized_address
+   AND authority.sender_endpoint_normalized_address = 'mg.propertypredator.com'
   JOIN app.message_versions AS version
     ON version.workspace_id = delivery.workspace_id
    AND version.id = delivery.message_version_id
@@ -753,12 +1268,14 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $function$
   JOIN app.messages AS message
     ON message.workspace_id = version.workspace_id AND message.id = version.message_id
    AND message.current_version_id = version.id
-   AND message.lifecycle = 'approved' AND message.direction = 'outbound'
+   AND message.lifecycle = 'committed' AND message.direction = 'outbound'
   JOIN app.conversations AS conversation
     ON conversation.workspace_id = message.workspace_id
    AND conversation.id = message.conversation_id
    AND conversation.channel = 'email' AND conversation.environment = 'live'
    AND conversation.subject IS NOT NULL
+   AND conversation.subject = campaign_step.subject_template
+   AND version.body_text = campaign_step.body_template
    AND public.digest(conversation.subject, 'sha256') = authority.message_subject_sha256
   JOIN app.contact_points AS point
     ON point.workspace_id = authority.workspace_id
@@ -774,7 +1291,16 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $function$
     AND job.workspace_id = p_workspace_id AND job.id = p_job_id
     AND job.state = 'leased' AND job.lease_version = p_lease_version
     AND job.lease_expires_at > statement_timestamp()
-    AND authority.valid_until > statement_timestamp();
+    AND authority.valid_until > statement_timestamp()
+    AND authority.action_scope_sha256 = public.digest(format(
+      'email:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s', authority.workspace_id,
+      authority.provider_connection_id, authority.sender_endpoint_normalized_address,
+      authority.campaign_template_version_id, authority.campaign_template_step_id,
+      pg_catalog.encode(authority.campaign_step_content_sha256, 'hex'),
+      authority.message_version_id,
+      pg_catalog.encode(authority.endpoint_identity_sha256, 'hex'),
+      authority.purpose, authority.consent_event_id
+    ), 'sha256');
 $function$;
 
 REVOKE ALL ON FUNCTION app_private.customer_email_live_immutable_guard() FROM PUBLIC;
@@ -857,11 +1383,13 @@ DECLARE table_name text;
 BEGIN
   FOREACH table_name IN ARRAY ARRAY[
     'provider_connections', 'workspace_memberships', 'channel_endpoints',
-    'contacts', 'contact_points', 'communication_consent_events',
+    'contact_points', 'communication_consent_events',
     'communication_suppression_events', 'campaign_template_versions',
+    'campaign_template_steps',
     'campaign_template_approval_requests', 'campaign_template_approval_decisions',
     'conversations', 'messages', 'message_versions', 'message_approval_requests',
-    'message_approval_decisions', 'provider_operations', 'message_deliveries',
+    'message_approval_decisions', 'property_predator_email_pilot_approved_content',
+    'provider_operations', 'message_deliveries',
     'mailgun_webhook_events'
   ] LOOP
     EXECUTE format(
@@ -873,18 +1401,61 @@ BEGIN
 END
 $dependency_policies$;
 
+CREATE POLICY customer_email_affiliate_policy_reviews_select
+  ON app_private.affiliate_compliance_policy_review_events
+  FOR SELECT TO r72_customer_email_definer
+  USING (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid);
+CREATE POLICY customer_email_affiliate_policy_publications_select
+  ON app_private.affiliate_compliance_policy_publication_events
+  FOR SELECT TO r72_customer_email_definer
+  USING (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid);
+CREATE POLICY customer_email_affiliate_specialist_decisions_select
+  ON app_private.affiliate_compliance_specialist_decision_events
+  FOR SELECT TO r72_customer_email_definer
+  USING (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid);
+CREATE POLICY customer_email_affiliate_permission_facts_select
+  ON app_private.affiliate_compliance_permission_fact_events
+  FOR SELECT TO r72_customer_email_definer
+  USING (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid);
+CREATE POLICY customer_email_affiliate_permission_uses_select
+  ON app_private.affiliate_compliance_permission_use_receipts
+  FOR SELECT TO r72_customer_email_definer
+  USING (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid);
+
 CREATE POLICY customer_email_message_deliveries_update
   ON app.message_deliveries FOR UPDATE TO r72_customer_email_definer
   USING (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
-    AND conversation_channel = 'email' AND environment = 'live')
+    AND conversation_channel = 'email' AND environment = 'live'
+    AND idempotency_key ~ '^customer-email-live:[0-9a-f]{64}$')
   WITH CHECK (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
-    AND conversation_channel = 'email' AND environment = 'live');
+    AND conversation_channel = 'email' AND environment = 'live'
+    AND idempotency_key ~ '^customer-email-live:[0-9a-f]{64}$');
+CREATE POLICY customer_email_message_deliveries_insert
+  ON app.message_deliveries FOR INSERT TO r72_customer_email_definer
+  WITH CHECK (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+    AND conversation_channel = 'email' AND consent_channel = 'email'
+    AND environment = 'live' AND status = 'queued'
+    AND idempotency_key ~ '^customer-email-live:[0-9a-f]{64}$');
 CREATE POLICY customer_email_provider_operations_update
   ON app.provider_operations FOR UPDATE TO r72_customer_email_definer
   USING (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
-    AND environment = 'live')
+    AND environment = 'live'
+    AND idempotency_key ~ '^customer-email-live:[0-9a-f]{64}$')
   WITH CHECK (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
-    AND environment = 'live');
+    AND environment = 'live'
+    AND idempotency_key ~ '^customer-email-live:[0-9a-f]{64}$');
+CREATE POLICY customer_email_provider_operations_insert
+  ON app.provider_operations FOR INSERT TO r72_customer_email_definer
+  WITH CHECK (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+    AND operation_kind = 'conversation.send' AND environment = 'live'
+    AND state = 'queued'
+    AND idempotency_key ~ '^customer-email-live:[0-9a-f]{64}$');
+CREATE POLICY customer_email_messages_update
+  ON app.messages FOR UPDATE TO r72_customer_email_definer
+  USING (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+    AND channel = 'email' AND environment = 'live' AND direction = 'outbound')
+  WITH CHECK (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+    AND channel = 'email' AND environment = 'live' AND direction = 'outbound');
 
 GRANT SELECT, INSERT ON app.property_predator_customer_email_authorities
   TO r72_customer_email_definer;
@@ -895,15 +1466,27 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON app.property_predator_customer_email_job
 GRANT SELECT, INSERT ON app.property_predator_customer_email_receipts
   TO r72_customer_email_definer;
 GRANT SELECT ON app.provider_connections, app.workspace_memberships,
-  app.channel_endpoints, app.contacts, app.contact_points,
+  app.channel_endpoints, app.contact_points,
   app.communication_consent_events, app.communication_suppression_events,
-  app.campaign_template_versions, app.campaign_template_approval_requests,
+  app.campaign_template_versions, app.campaign_template_steps,
+  app.campaign_template_approval_requests,
   app.campaign_template_approval_decisions, app.conversations, app.messages,
   app.message_versions, app.message_approval_requests,
-  app.message_approval_decisions, app.provider_operations, app.message_deliveries,
+  app.message_approval_decisions, app.property_predator_email_pilot_approved_content,
+  app.provider_operations, app.message_deliveries,
   app.mailgun_webhook_events TO r72_customer_email_definer;
+GRANT SELECT ON app_private.affiliate_compliance_policy_review_events,
+  app_private.affiliate_compliance_policy_publication_events,
+  app_private.affiliate_compliance_specialist_decision_events,
+  app_private.affiliate_compliance_permission_fact_events,
+  app_private.affiliate_compliance_permission_use_receipts
+  TO r72_customer_email_definer;
 GRANT UPDATE (status, accepted_at, failed_at, updated_at)
   ON app.message_deliveries TO r72_customer_email_definer;
+GRANT INSERT ON app.message_deliveries TO r72_customer_email_definer;
+GRANT UPDATE (lifecycle, row_version, updated_at)
+  ON app.messages TO r72_customer_email_definer;
+GRANT INSERT ON app.provider_operations TO r72_customer_email_definer;
 GRANT UPDATE (state, next_attempt_at, lease_token_hash, lease_version,
   lease_expires_at, provider_reference, last_error_code, last_summary,
   attempt_count, row_version, updated_at, completed_at)
@@ -914,24 +1497,34 @@ SET LOCAL ROLE r72_customer_email_definer;
 
 CREATE FUNCTION app_private.authorize_and_enqueue_customer_email_live_job(
   p_workspace_id uuid, p_provider_connection_id uuid,
-  p_campaign_template_version_id uuid, p_campaign_approval_request_id uuid,
-  p_campaign_approval_decision_id uuid, p_message_delivery_id uuid,
-  p_consent_event_id uuid, p_pecr_evidence_sha256 bytea,
-  p_operator_instigator_sha256 bytea, p_action_scope_sha256 bytea,
-  p_authority_valid_until timestamptz, p_operation_id uuid,
-  p_correlation_id uuid, p_idempotency_key_sha256 bytea,
-  p_request_sha256 bytea
-) RETURNS uuid
+  p_campaign_template_version_id uuid, p_campaign_template_step_id uuid,
+  p_campaign_step_content_sha256 bytea, p_campaign_approval_request_id uuid,
+  p_campaign_approval_decision_id uuid, p_message_version_id uuid,
+  p_message_approval_request_id uuid, p_message_approval_decision_id uuid,
+  p_channel_endpoint_id uuid, p_consent_event_id uuid,
+  p_compliance_subject_id uuid, p_policy_publication_event_id uuid,
+  p_pecr_sender_decision_event_id uuid, p_pecr_instigator_decision_event_id uuid,
+  p_permission_use_receipt_id uuid, p_authority_valid_until timestamptz,
+  p_provider_operation_id uuid, p_message_delivery_id uuid,
+  p_correlation_id uuid, p_idempotency_key_sha256 bytea, p_request_sha256 bytea
+) RETURNS TABLE (job_id uuid, disposition text)
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog AS $function$
 DECLARE
   selected_user uuid;
   selected_request_id text;
   selected_campaign_sha bytea;
+  selected_campaign_step_sha bytea;
+  selected_campaign_subject text;
+  selected_campaign_body text;
   selected_contact_id uuid;
   selected_contact_point_id uuid;
   selected_channel_endpoint_id uuid;
-  selected_provider_operation_id uuid;
+  selected_sender_domain text;
+  selected_conversation_id uuid;
+  selected_message_id uuid;
   selected_message_version_id uuid;
+  selected_message_version_number integer;
+  selected_message_body_sha bytea;
   selected_message_approval_request_id uuid;
   selected_message_approval_decision_id uuid;
   selected_message_subject_sha bytea;
@@ -940,9 +1533,12 @@ DECLARE
   selected_endpoint_sha bytea;
   selected_purpose text;
   selected_lawful_basis text;
+  selected_pecr_sha bytea;
+  selected_instigator_sha bytea;
+  expected_action_scope bytea;
   expected_request_sha bytea;
   authority_id uuid := gen_random_uuid();
-  job_id uuid := gen_random_uuid();
+  selected_job_id uuid := gen_random_uuid();
   existing record;
   day_count integer;
   month_count integer;
@@ -952,12 +1548,12 @@ BEGIN
      OR current_setting('app.actor_kind', true) IS DISTINCT FROM 'user'
      OR current_setting('app.user_id', true) !~ '^[0-9a-f-]{36}$'
      OR coalesce(current_setting('app.request_id', true), '') = ''
-     OR octet_length(p_pecr_evidence_sha256) <> 32
-     OR octet_length(p_operator_instigator_sha256) <> 32
-     OR octet_length(p_action_scope_sha256) <> 32
+     OR octet_length(p_campaign_step_content_sha256) <> 32
      OR octet_length(p_idempotency_key_sha256) <> 32
      OR octet_length(p_request_sha256) <> 32
      OR p_authority_valid_until <= statement_timestamp()
+     OR p_authority_valid_until IS DISTINCT FROM
+       date_trunc('milliseconds', p_authority_valid_until)
      OR p_authority_valid_until > statement_timestamp() + interval '15 minutes' THEN
     RAISE EXCEPTION 'Customer email enqueue denied' USING ERRCODE = '42501';
   END IF;
@@ -982,7 +1578,8 @@ BEGIN
     IF existing.request_sha256 IS DISTINCT FROM p_request_sha256 THEN
       RAISE EXCEPTION 'Customer email idempotency conflict' USING ERRCODE = '40001';
     END IF;
-    RETURN existing.id;
+    RETURN QUERY SELECT existing.id, 'replayed'::text;
+    RETURN;
   END IF;
 
   IF NOT EXISTS (
@@ -995,8 +1592,19 @@ BEGIN
       AND connection.capabilities @> '["email.send"]'::jsonb
   ) THEN RAISE EXCEPTION 'Customer email provider binding denied' USING ERRCODE = '42501'; END IF;
 
-  SELECT version.definition_sha256 INTO selected_campaign_sha
+  SELECT version.definition_sha256, version.purpose_key,
+         step.content_sha256, step.subject_template, step.body_template
+    INTO selected_campaign_sha, selected_purpose,
+         selected_campaign_step_sha, selected_campaign_subject, selected_campaign_body
   FROM app.campaign_template_versions AS version
+  JOIN app.campaign_template_steps AS step
+    ON step.workspace_id = version.workspace_id
+   AND step.template_version_id = version.id
+   AND step.id = p_campaign_template_step_id
+   AND step.content_sha256 = p_campaign_step_content_sha256
+   AND step.step_kind = 'email' AND step.channel = 'email'
+   AND step.requires_human_approval AND step.requires_current_permission
+   AND NOT step.provider_effects
   JOIN app.campaign_template_approval_requests AS request
     ON request.workspace_id = version.workspace_id
    AND request.template_version_id = version.id
@@ -1011,6 +1619,7 @@ BEGIN
    AND decision.decision = 'approved'
   WHERE version.workspace_id = p_workspace_id
     AND version.id = p_campaign_template_version_id
+    AND NOT version.provider_effects
     AND request.id = (
       SELECT latest.id FROM app.campaign_template_approval_requests AS latest
       WHERE latest.workspace_id = version.workspace_id
@@ -1023,104 +1632,117 @@ BEGIN
         AND newer.template_id = version.template_id
         AND newer.version_no > version.version_no
     );
-  IF selected_campaign_sha IS NULL THEN
+  IF selected_campaign_sha IS NULL OR selected_campaign_step_sha IS NULL THEN
     RAISE EXCEPTION 'Customer email campaign approval denied' USING ERRCODE = '42501';
   END IF;
 
-  SELECT delivery.contact_id, delivery.contact_point_id, delivery.channel_endpoint_id,
-         delivery.provider_operation_id,
-         delivery.message_version_id, delivery.approval_request_id,
-         delivery.approval_decision_id, delivery.purpose,
-         point.normalized_value,
-         public.digest(point.normalized_value, 'sha256'),
+  SELECT message.contact_id, message.contact_point_id, endpoint.id,
+         endpoint.normalized_address,
+         conversation.id, message.id, message_version.id,
+         message_version.version_number, message_version.body_sha256,
+         message_request.id, message_decision.id,
+         point.normalized_value, public.digest(point.normalized_value, 'sha256'),
          public.digest(point.kind || pg_catalog.chr(31) || point.value
            || pg_catalog.chr(31) || point.normalized_value, 'sha256'),
          consent.lawful_basis, public.digest(conversation.subject, 'sha256')
     INTO selected_contact_id, selected_contact_point_id, selected_channel_endpoint_id,
-         selected_provider_operation_id,
-         selected_message_version_id, selected_message_approval_request_id,
-         selected_message_approval_decision_id, selected_purpose,
+         selected_sender_domain,
+         selected_conversation_id, selected_message_id, selected_message_version_id,
+         selected_message_version_number, selected_message_body_sha,
+         selected_message_approval_request_id, selected_message_approval_decision_id,
          selected_recipient, selected_recipient_sha, selected_endpoint_sha,
          selected_lawful_basis, selected_message_subject_sha
-  FROM app.message_deliveries AS delivery
-  JOIN app.provider_operations AS provider_operation
-    ON provider_operation.workspace_id = delivery.workspace_id
-   AND provider_operation.id = delivery.provider_operation_id
-   AND provider_operation.message_delivery_id = delivery.id
-   AND provider_operation.provider_connection_id = delivery.provider_connection_id
-   AND provider_operation.operation_kind = 'conversation.send'
-   AND provider_operation.environment = 'live'
-   AND provider_operation.state IN ('queued', 'retry_wait')
+  FROM app.message_versions AS message_version
+  JOIN app.messages AS message
+    ON message.workspace_id = message_version.workspace_id
+   AND message.id = message_version.message_id
+   AND message.current_version_id = message_version.id
+   AND message.current_version_number = message_version.version_number
+   AND message.current_body_sha256 = message_version.body_sha256
+   AND message.lifecycle = 'approved' AND message.direction = 'outbound'
+   AND message.channel = 'email' AND message.environment = 'live'
+  JOIN app.conversations AS conversation
+    ON conversation.workspace_id = message.workspace_id
+   AND conversation.id = message.conversation_id
+   AND conversation.contact_id = message.contact_id
+   AND conversation.channel = 'email' AND conversation.environment = 'live'
+   AND conversation.subject = selected_campaign_subject
+   AND octet_length(conversation.subject) BETWEEN 1 AND 500
+  JOIN app.message_approval_requests AS message_request
+    ON message_request.workspace_id = message_version.workspace_id
+   AND message_request.id = p_message_approval_request_id
+   AND message_request.message_id = message.id
+   AND message_request.message_version_id = message_version.id
+   AND message_request.version_number = message_version.version_number
+   AND message_request.body_sha256 = message_version.body_sha256
+  JOIN app.message_approval_decisions AS message_decision
+    ON message_decision.workspace_id = message_request.workspace_id
+   AND message_decision.id = p_message_approval_decision_id
+   AND message_decision.message_id = message.id
+   AND message_decision.message_version_id = message_version.id
+   AND message_decision.approval_request_id = message_request.id
+   AND message_decision.version_number = message_version.version_number
+   AND message_decision.body_sha256 = message_version.body_sha256
+   AND message_decision.decision = 'approved'
+  JOIN app.property_predator_email_pilot_approved_content AS approved_content
+    ON approved_content.workspace_id = message_decision.workspace_id
+   AND approved_content.message_version_id = message_version.id
+   AND approved_content.approval_request_id = message_request.id
+   AND approved_content.approval_decision_id = message_decision.id
+   AND approved_content.subject_sha256 = public.digest(conversation.subject, 'sha256')
+   AND approved_content.body_sha256 = message_version.body_sha256
   JOIN app.channel_endpoints AS endpoint
-    ON endpoint.workspace_id = delivery.workspace_id
-   AND endpoint.id = delivery.channel_endpoint_id
-   AND endpoint.provider_connection_id = delivery.provider_connection_id
-   AND endpoint.channel = delivery.conversation_channel
-   AND endpoint.environment = delivery.environment
+    ON endpoint.workspace_id = message_version.workspace_id
+   AND endpoint.id = p_channel_endpoint_id
+   AND endpoint.provider_connection_id = p_provider_connection_id
+   AND endpoint.channel = 'email' AND endpoint.environment = 'live'
    AND endpoint.status = 'active' AND endpoint.direction IN ('outbound', 'bidirectional')
+   AND endpoint.address = 'mg.propertypredator.com'
+   AND endpoint.normalized_address = 'mg.propertypredator.com'
   JOIN app.contact_points AS point
-    ON point.workspace_id = delivery.workspace_id
-   AND point.id = delivery.contact_point_id AND point.contact_id = delivery.contact_id
+    ON point.workspace_id = message.workspace_id
+   AND point.id = message.contact_point_id AND point.contact_id = message.contact_id
    AND point.kind = 'email' AND point.deleted_at IS NULL
    AND point.is_verified AND point.dedupe_state = 'normal'
    AND point.normalized_value = lower(point.normalized_value)
    AND point.normalized_value ~ '^[^[:space:]@]+@[^[:space:]@]+[.][^[:space:]@]+$'
   JOIN app.communication_consent_events AS consent
-    ON consent.workspace_id = delivery.workspace_id
+    ON consent.workspace_id = message.workspace_id
    AND consent.id = p_consent_event_id
-   AND consent.contact_id = delivery.contact_id
-   AND consent.contact_point_id = delivery.contact_point_id
-   AND consent.channel = 'email' AND consent.purpose = delivery.purpose
+   AND consent.contact_id = message.contact_id
+   AND consent.contact_point_id = message.contact_point_id
+   AND consent.channel = 'email' AND consent.purpose = selected_purpose
    AND consent.state = 'granted'
    AND consent.lawful_basis IN ('consent', 'legitimate_interests')
    AND consent.endpoint_identity_sha256 = public.digest(
      point.kind || pg_catalog.chr(31) || point.value
        || pg_catalog.chr(31) || point.normalized_value, 'sha256'
    )
-  JOIN app.message_versions AS message_version
-    ON message_version.workspace_id = delivery.workspace_id
-   AND message_version.id = delivery.message_version_id
-   AND message_version.body_sha256 = delivery.body_sha256
-   AND message_version.channel = 'email' AND message_version.environment = 'live'
-   AND octet_length(message_version.body_text) BETWEEN 1 AND 8192
-  JOIN app.message_approval_decisions AS message_decision
-    ON message_decision.workspace_id = delivery.workspace_id
-   AND message_decision.id = delivery.approval_decision_id
-   AND message_decision.approval_request_id = delivery.approval_request_id
-    AND message_decision.message_version_id = delivery.message_version_id
-    AND message_decision.decision = 'approved'
-  JOIN app.messages AS message
-    ON message.workspace_id = message_version.workspace_id
-   AND message.id = message_version.message_id
-   AND message.current_version_id = message_version.id
-   AND message.current_body_sha256 = message_version.body_sha256
-   AND message.lifecycle = 'approved' AND message.direction = 'outbound'
-  JOIN app.conversations AS conversation
-    ON conversation.workspace_id = message.workspace_id
-   AND conversation.id = message.conversation_id
-   AND conversation.channel = 'email' AND conversation.environment = 'live'
-   AND conversation.subject IS NOT NULL
-   AND octet_length(conversation.subject) BETWEEN 1 AND 500
-  WHERE delivery.workspace_id = p_workspace_id
-    AND delivery.id = p_message_delivery_id
-    AND delivery.provider_connection_id = p_provider_connection_id
-    AND delivery.conversation_channel = 'email'
-    AND delivery.consent_channel = 'email'
-    AND delivery.environment = 'live' AND delivery.status = 'queued'
-    AND delivery.purpose = 'marketing'
+  WHERE message_version.workspace_id = p_workspace_id
+    AND message_version.id = p_message_version_id
+    AND message_version.channel = 'email' AND message_version.environment = 'live'
+    AND message_version.body_text = selected_campaign_body
+    AND octet_length(message_version.body_text) BETWEEN 1 AND 8192
+    AND message_request.id = (
+      SELECT latest.id FROM app.message_approval_requests AS latest
+      WHERE latest.workspace_id = message_version.workspace_id
+        AND latest.message_id = message.id
+        AND latest.message_version_id = message_version.id
+      ORDER BY latest.request_number DESC, latest.requested_at DESC, latest.id DESC LIMIT 1
+    )
     AND consent.id = (
       SELECT latest.id FROM app.communication_consent_events AS latest
-      WHERE latest.workspace_id = delivery.workspace_id
-        AND latest.contact_point_id = delivery.contact_point_id
-        AND latest.channel = 'email' AND latest.purpose = delivery.purpose
+      WHERE latest.workspace_id = message.workspace_id
+        AND latest.contact_point_id = message.contact_point_id
+        AND latest.channel = 'email' AND latest.purpose = selected_purpose
       ORDER BY latest.occurred_at DESC, latest.recorded_at DESC, latest.id DESC LIMIT 1
     )
     AND NOT EXISTS (
       SELECT 1 FROM app.communication_suppression_events AS suppression
-      WHERE suppression.workspace_id = delivery.workspace_id
-        AND suppression.contact_point_id = delivery.contact_point_id
+      WHERE suppression.workspace_id = message.workspace_id
+        AND suppression.contact_point_id = message.contact_point_id
         AND suppression.channel = 'email'
-        AND (suppression.purpose IS NULL OR suppression.purpose = delivery.purpose)
+        AND (suppression.purpose IS NULL OR suppression.purpose = selected_purpose)
         AND suppression.state = 'suppressed'
         AND suppression.id = (
           SELECT latest.id FROM app.communication_suppression_events AS latest
@@ -1135,15 +1757,152 @@ BEGIN
     RAISE EXCEPTION 'Customer email recipient consent or suppression denied' USING ERRCODE = '42501';
   END IF;
 
+  expected_action_scope := public.digest(format(
+    'email:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s', p_workspace_id,
+    p_provider_connection_id, selected_sender_domain,
+    p_campaign_template_version_id,
+    p_campaign_template_step_id, pg_catalog.encode(selected_campaign_step_sha, 'hex'),
+    selected_message_version_id, pg_catalog.encode(selected_endpoint_sha, 'hex'),
+    selected_purpose, p_consent_event_id
+  ), 'sha256');
+
+  SELECT sender_route.decision_sha256, instigator_route.decision_sha256
+    INTO selected_pecr_sha, selected_instigator_sha
+  FROM app_private.affiliate_compliance_policy_publication_events AS publication
+  JOIN app_private.affiliate_compliance_policy_review_events AS legal_review
+    ON legal_review.workspace_id = publication.workspace_id
+   AND legal_review.id = publication.legal_review_event_id
+   AND legal_review.policy_pack_id = publication.policy_pack_id
+   AND legal_review.bundle_sha256 = publication.bundle_sha256
+   AND legal_review.review_dimension = 'legal' AND legal_review.decision = 'approved'
+  JOIN app_private.affiliate_compliance_policy_review_events AS commercial_review
+    ON commercial_review.workspace_id = publication.workspace_id
+   AND commercial_review.id = publication.commercial_review_event_id
+   AND commercial_review.policy_pack_id = publication.policy_pack_id
+   AND commercial_review.bundle_sha256 = publication.bundle_sha256
+   AND commercial_review.review_dimension = 'commercial'
+   AND commercial_review.decision = 'approved'
+  JOIN app_private.affiliate_compliance_specialist_decision_events AS sender_route
+    ON sender_route.workspace_id = publication.workspace_id
+   AND sender_route.subject_id = p_compliance_subject_id
+   AND sender_route.id = p_pecr_sender_decision_event_id
+   AND sender_route.decision_kind = 'pecr_sender_route'
+   AND sender_route.decision_state = 'approved'
+   AND sender_route.action_scope_sha256 = expected_action_scope
+  JOIN app_private.affiliate_compliance_specialist_decision_events AS instigator_route
+    ON instigator_route.workspace_id = publication.workspace_id
+   AND instigator_route.subject_id = p_compliance_subject_id
+   AND instigator_route.id = p_pecr_instigator_decision_event_id
+   AND instigator_route.decision_kind = 'pecr_instigator_route'
+   AND instigator_route.decision_state = 'approved'
+   AND instigator_route.action_scope_sha256 = expected_action_scope
+  JOIN app_private.affiliate_compliance_permission_use_receipts AS permission_use
+    ON permission_use.workspace_id = publication.workspace_id
+   AND permission_use.subject_id = p_compliance_subject_id
+   AND permission_use.id = p_permission_use_receipt_id
+   AND permission_use.permission = 'email.send'
+   AND permission_use.action_scope_sha256 = expected_action_scope
+   AND permission_use.eligibility_decision = 'allow'
+   AND permission_use.use_state = 'consumed'
+   AND permission_use.provider_effects IS FALSE
+  WHERE publication.workspace_id = p_workspace_id
+    AND publication.id = p_policy_publication_event_id
+    AND publication.publication_state = 'published'
+    AND publication.effective_at <= statement_timestamp()
+    AND (publication.expires_at IS NULL OR publication.expires_at >= p_authority_valid_until)
+    AND sender_route.valid_from <= statement_timestamp()
+    AND (sender_route.valid_until IS NULL OR sender_route.valid_until >= p_authority_valid_until)
+    AND instigator_route.valid_from <= statement_timestamp()
+    AND (instigator_route.valid_until IS NULL OR instigator_route.valid_until >= p_authority_valid_until)
+    AND permission_use.recorded_by_user_id = selected_user
+    AND permission_use.recorded_request_id = selected_request_id
+    AND permission_use.consumed_at <= statement_timestamp()
+    AND permission_use.decision_expires_at >= p_authority_valid_until
+    AND NOT EXISTS (
+      SELECT 1 FROM app_private.affiliate_compliance_policy_publication_events AS successor
+      WHERE successor.workspace_id = publication.workspace_id
+        AND successor.policy_pack_id = publication.policy_pack_id
+        AND successor.supersedes_event_id = publication.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM app_private.affiliate_compliance_policy_review_events AS successor
+      WHERE successor.workspace_id = legal_review.workspace_id
+        AND successor.policy_pack_id = legal_review.policy_pack_id
+        AND successor.review_dimension = legal_review.review_dimension
+        AND successor.supersedes_event_id = legal_review.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM app_private.affiliate_compliance_policy_review_events AS successor
+      WHERE successor.workspace_id = commercial_review.workspace_id
+        AND successor.policy_pack_id = commercial_review.policy_pack_id
+        AND successor.review_dimension = commercial_review.review_dimension
+        AND successor.supersedes_event_id = commercial_review.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM app_private.affiliate_compliance_specialist_decision_events AS successor
+      WHERE successor.workspace_id = sender_route.workspace_id
+        AND successor.subject_id = sender_route.subject_id
+        AND successor.decision_kind = sender_route.decision_kind
+        AND successor.supersedes_event_id = sender_route.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM app_private.affiliate_compliance_specialist_decision_events AS successor
+      WHERE successor.workspace_id = instigator_route.workspace_id
+        AND successor.subject_id = instigator_route.subject_id
+        AND successor.decision_kind = instigator_route.decision_kind
+        AND successor.supersedes_event_id = instigator_route.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM app_private.affiliate_compliance_permission_fact_events AS block
+      WHERE block.workspace_id = permission_use.workspace_id
+        AND block.subject_id = permission_use.subject_id
+        AND block.permission = 'email.send'
+        AND block.action_scope_sha256 = expected_action_scope
+        AND block.permission_state IN ('blocked', 'revoked', 'expired')
+        AND block.valid_from <= statement_timestamp()
+        AND (block.valid_until IS NULL OR block.valid_until > statement_timestamp())
+        AND NOT EXISTS (
+          SELECT 1 FROM app_private.affiliate_compliance_permission_fact_events AS successor
+          WHERE successor.workspace_id = block.workspace_id
+            AND successor.subject_id = block.subject_id
+            AND successor.permission = block.permission
+            AND successor.action_scope_sha256 = block.action_scope_sha256
+            AND successor.supersedes_event_id = block.id
+        )
+    );
+  IF selected_pecr_sha IS NULL OR selected_instigator_sha IS NULL THEN
+    RAISE EXCEPTION 'Customer email durable legal/operator evidence denied'
+      USING ERRCODE = '42501';
+  END IF;
+
   expected_request_sha := public.digest(pg_catalog.concat_ws(pg_catalog.chr(31),
     'propertypredator.customer-email-live/v1', p_workspace_id::text,
-    p_provider_connection_id::text, p_campaign_template_version_id::text,
-    pg_catalog.encode(selected_campaign_sha, 'hex'), p_message_delivery_id::text,
-    selected_message_version_id::text, p_consent_event_id::text,
+    p_provider_connection_id::text, selected_sender_domain,
+    p_campaign_template_version_id::text,
+    pg_catalog.encode(selected_campaign_sha, 'hex'), p_campaign_template_step_id::text,
+    pg_catalog.encode(selected_campaign_step_sha, 'hex'),
+    p_campaign_approval_request_id::text, p_campaign_approval_decision_id::text,
+    selected_message_version_id::text,
+    pg_catalog.encode(selected_message_body_sha, 'hex'),
+    selected_message_approval_request_id::text,
+    selected_message_approval_decision_id::text,
+    selected_channel_endpoint_id::text, p_consent_event_id::text,
+    p_compliance_subject_id::text, p_policy_publication_event_id::text,
+    p_pecr_sender_decision_event_id::text,
+    p_pecr_instigator_decision_event_id::text,
+    p_permission_use_receipt_id::text,
+    pg_catalog.to_char(
+      p_authority_valid_until AT TIME ZONE 'UTC',
+      'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+    ),
+    p_provider_operation_id::text, p_message_delivery_id::text,
+    p_correlation_id::text, pg_catalog.encode(p_idempotency_key_sha256, 'hex'),
+    selected_contact_id::text, selected_contact_point_id::text,
+    pg_catalog.encode(selected_recipient_sha, 'hex'),
     pg_catalog.encode(selected_message_subject_sha, 'hex'),
     pg_catalog.encode(selected_endpoint_sha, 'hex'),
-    pg_catalog.encode(p_action_scope_sha256, 'hex'), p_operation_id::text,
-    p_correlation_id::text
+    selected_purpose, pg_catalog.encode(expected_action_scope, 'hex'),
+    selected_user::text, selected_request_id
   ), 'sha256');
   IF expected_request_sha IS DISTINCT FROM p_request_sha256 THEN
     RAISE EXCEPTION 'Customer email request digest conflict' USING ERRCODE = '40001';
@@ -1165,44 +1924,32 @@ BEGIN
     RAISE EXCEPTION 'Customer email hard cap reached' USING ERRCODE = '54000';
   END IF;
 
-  INSERT INTO app.property_predator_customer_email_authorities (
-    id, workspace_id, provider_connection_id, campaign_template_version_id,
-    campaign_definition_sha256, campaign_approval_request_id,
-    campaign_approval_decision_id, message_delivery_id, provider_operation_id,
-    message_version_id,
-    message_approval_request_id, message_approval_decision_id,
-    message_subject_sha256, contact_id,
-    contact_point_id, channel_endpoint_id, recipient_sha256,
-    endpoint_identity_sha256, consent_event_id, purpose, lawful_basis,
-    pecr_decision, pecr_evidence_sha256, operator_instigator_decision,
-    operator_instigator_sha256, action_scope_sha256, operator_user_id,
-    operator_request_id, evaluated_at, valid_until
+  INSERT INTO app.provider_operations (
+    id, workspace_id, provider_connection_id, message_delivery_id,
+    operation_kind, environment, state, idempotency_key, correlation_id,
+    attempt_count, max_attempts, created_by_actor_kind, created_by_user_id
   ) VALUES (
-    authority_id, p_workspace_id, p_provider_connection_id,
-    p_campaign_template_version_id, selected_campaign_sha,
-    p_campaign_approval_request_id, p_campaign_approval_decision_id,
-    p_message_delivery_id, selected_provider_operation_id,
-    selected_message_version_id,
-    selected_message_approval_request_id, selected_message_approval_decision_id,
-    selected_message_subject_sha, selected_contact_id, selected_contact_point_id,
-    selected_channel_endpoint_id,
-    selected_recipient_sha, selected_endpoint_sha, p_consent_event_id,
-    selected_purpose, selected_lawful_basis, 'eligible', p_pecr_evidence_sha256,
-    'eligible', p_operator_instigator_sha256, p_action_scope_sha256,
-    selected_user, selected_request_id, statement_timestamp(), p_authority_valid_until
+    p_provider_operation_id, p_workspace_id, p_provider_connection_id,
+    p_message_delivery_id, 'conversation.send', 'live', 'queued',
+    'customer-email-live:' || pg_catalog.encode(p_idempotency_key_sha256, 'hex'),
+    p_correlation_id, 0, 1, 'user', selected_user
   );
-  INSERT INTO app.property_predator_customer_email_jobs (
-    id, workspace_id, authority_id, provider_connection_id,
-    message_delivery_id, recipient_sha256, operation_id, correlation_id,
-    idempotency_key_sha256, request_sha256, expected_message_id,
-    utc_day, utc_month, created_by_user_id
+  INSERT INTO app.message_deliveries (
+    id, workspace_id, conversation_id, message_id, message_version_id,
+    version_number, body_sha256, approval_request_id, approval_decision_id,
+    provider_operation_id, provider_connection_id, channel_endpoint_id,
+    contact_id, contact_point_id, conversation_channel, consent_channel,
+    purpose, consent_event_id, endpoint_identity_sha256, environment,
+    status, idempotency_key, created_by_user_id
   ) VALUES (
-    job_id, p_workspace_id, authority_id, p_provider_connection_id,
-    p_message_delivery_id, selected_recipient_sha, p_operation_id, p_correlation_id,
-    p_idempotency_key_sha256, p_request_sha256,
-    '<pp-' || pg_catalog.encode(p_request_sha256, 'hex') || '@mg.propertypredator.com>',
-    (statement_timestamp() AT TIME ZONE 'UTC')::date,
-    date_trunc('month', statement_timestamp() AT TIME ZONE 'UTC')::date,
+    p_message_delivery_id, p_workspace_id, selected_conversation_id,
+    selected_message_id, selected_message_version_id, selected_message_version_number,
+    selected_message_body_sha, selected_message_approval_request_id,
+    selected_message_approval_decision_id, p_provider_operation_id,
+    p_provider_connection_id, selected_channel_endpoint_id,
+    selected_contact_id, selected_contact_point_id, 'email', 'email',
+    selected_purpose, p_consent_event_id, selected_endpoint_sha, 'live', 'queued',
+    'customer-email-live:' || pg_catalog.encode(p_idempotency_key_sha256, 'hex'),
     selected_user
   );
   UPDATE app.provider_operations SET state = 'reconciliation_required',
@@ -1211,13 +1958,77 @@ BEGIN
     last_summary = 'Reserved for exact-recipient customer email live worker',
     row_version = row_version + 1, updated_at = statement_timestamp(),
     completed_at = NULL
-  WHERE workspace_id = p_workspace_id AND id = selected_provider_operation_id
-    AND state IN ('queued', 'retry_wait');
+  WHERE workspace_id = p_workspace_id AND id = p_provider_operation_id
+    AND message_delivery_id = p_message_delivery_id
+    AND provider_connection_id = p_provider_connection_id
+    AND state = 'queued'
+    AND provider_reference IS NULL;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Customer email provider operation reservation lost'
       USING ERRCODE = '40001';
   END IF;
-  RETURN job_id;
+  UPDATE app.messages AS message SET lifecycle = 'committed',
+    row_version = message.row_version + 1, updated_at = statement_timestamp()
+  WHERE message.workspace_id = p_workspace_id AND message.id = selected_message_id
+    AND message.current_version_id = selected_message_version_id
+    AND message.current_body_sha256 = selected_message_body_sha
+    AND message.lifecycle = 'approved';
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Customer email approved message commit lost'
+      USING ERRCODE = '40001';
+  END IF;
+
+  INSERT INTO app.property_predator_customer_email_authorities (
+    id, workspace_id, provider_connection_id, campaign_template_version_id,
+    campaign_template_step_id, campaign_step_content_sha256,
+    campaign_definition_sha256, campaign_approval_request_id,
+    campaign_approval_decision_id, message_delivery_id, provider_operation_id,
+    message_version_id,
+    message_approval_request_id, message_approval_decision_id,
+    message_subject_sha256, contact_id,
+    contact_point_id, channel_endpoint_id, sender_endpoint_normalized_address,
+    recipient_sha256,
+    endpoint_identity_sha256, consent_event_id, purpose, lawful_basis,
+    compliance_subject_id, policy_publication_event_id,
+    pecr_sender_decision_event_id, pecr_instigator_decision_event_id,
+    permission_use_receipt_id,
+    pecr_decision, pecr_evidence_sha256, operator_instigator_decision,
+    operator_instigator_sha256, action_scope_sha256, operator_user_id,
+    operator_request_id, evaluated_at, valid_until
+  ) VALUES (
+    authority_id, p_workspace_id, p_provider_connection_id,
+    p_campaign_template_version_id, p_campaign_template_step_id,
+    selected_campaign_step_sha, selected_campaign_sha,
+    p_campaign_approval_request_id, p_campaign_approval_decision_id,
+    p_message_delivery_id, p_provider_operation_id,
+    selected_message_version_id,
+    selected_message_approval_request_id, selected_message_approval_decision_id,
+    selected_message_subject_sha, selected_contact_id, selected_contact_point_id,
+    selected_channel_endpoint_id, selected_sender_domain,
+    selected_recipient_sha, selected_endpoint_sha, p_consent_event_id,
+    selected_purpose, selected_lawful_basis,
+    p_compliance_subject_id, p_policy_publication_event_id,
+    p_pecr_sender_decision_event_id, p_pecr_instigator_decision_event_id,
+    p_permission_use_receipt_id,
+    'eligible', selected_pecr_sha,
+    'eligible', selected_instigator_sha, expected_action_scope,
+    selected_user, selected_request_id, statement_timestamp(), p_authority_valid_until
+  );
+  INSERT INTO app.property_predator_customer_email_jobs (
+    id, workspace_id, authority_id, provider_connection_id,
+    message_delivery_id, recipient_sha256, operation_id, correlation_id,
+    idempotency_key_sha256, request_sha256, expected_message_id,
+    utc_day, utc_month, created_by_user_id
+  ) VALUES (
+    selected_job_id, p_workspace_id, authority_id, p_provider_connection_id,
+    p_message_delivery_id, selected_recipient_sha, p_provider_operation_id, p_correlation_id,
+    p_idempotency_key_sha256, p_request_sha256,
+    '<pp-' || pg_catalog.encode(p_request_sha256, 'hex') || '@mg.propertypredator.com>',
+    (statement_timestamp() AT TIME ZONE 'UTC')::date,
+    date_trunc('month', statement_timestamp() AT TIME ZONE 'UTC')::date,
+    selected_user
+  );
+  RETURN QUERY SELECT selected_job_id, 'queued'::text;
 END
 $function$;
 
@@ -1237,13 +2048,14 @@ ALTER FUNCTION app_private.settle_customer_email_live_call(
   uuid, uuid, bigint, bytea, text, text, timestamptz,
   boolean, text, text, bytea
 ) OWNER TO r72_customer_email_definer;
-ALTER FUNCTION app_private.record_customer_email_signed_receipt(uuid, uuid, uuid)
+ALTER FUNCTION app_private.record_customer_email_signed_receipt(uuid, uuid, text)
   OWNER TO r72_customer_email_definer;
 
 REVOKE CREATE ON SCHEMA app_private FROM r72_customer_email_definer;
 REVOKE ALL ON FUNCTION app_private.authorize_and_enqueue_customer_email_live_job(
-  uuid, uuid, uuid, uuid, uuid, uuid, uuid, bytea, bytea, bytea,
-  timestamptz, uuid, uuid, bytea, bytea
+  uuid, uuid, uuid, uuid, bytea, uuid, uuid, uuid,
+  uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid,
+  uuid, timestamptz, uuid, uuid, uuid, bytea, bytea
 ) FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_private.claim_customer_email_live_job(
   uuid, uuid, bytea, integer
@@ -1259,12 +2071,13 @@ REVOKE ALL ON FUNCTION app_private.settle_customer_email_live_call(
   boolean, text, text, bytea
 ) FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_private.record_customer_email_signed_receipt(
-  uuid, uuid, uuid
+  uuid, uuid, text
 ) FROM PUBLIC;
 
 GRANT EXECUTE ON FUNCTION app_private.authorize_and_enqueue_customer_email_live_job(
-  uuid, uuid, uuid, uuid, uuid, uuid, uuid, bytea, bytea, bytea,
-  timestamptz, uuid, uuid, bytea, bytea
+  uuid, uuid, uuid, uuid, bytea, uuid, uuid, uuid,
+  uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid,
+  uuid, timestamptz, uuid, uuid, uuid, bytea, bytea
 ) TO r72_customer_email_command;
 GRANT EXECUTE ON FUNCTION app_private.claim_customer_email_live_job(
   uuid, uuid, bytea, integer
@@ -1280,8 +2093,14 @@ GRANT EXECUTE ON FUNCTION app_private.settle_customer_email_live_call(
   boolean, text, text, bytea
 ) TO r72_customer_email_worker_command;
 GRANT EXECUTE ON FUNCTION app_private.record_customer_email_signed_receipt(
-  uuid, uuid, uuid
+  uuid, uuid, text
 ) TO r72_customer_email_webhook_command;
+GRANT EXECUTE ON FUNCTION app_private.runtime_schema_migrations(),
+  app_private.runtime_database_installation_id()
+  TO r72_customer_email_command, r72_customer_email_worker_command,
+  r72_customer_email_webhook_command;
+GRANT EXECUTE ON FUNCTION app_private.lock_active_portal_session(bytea, uuid, uuid)
+  TO r72_customer_email_command;
 
 INSERT INTO app_private.workspace_table_registry (schema_name, table_name, workspace_column)
 VALUES

@@ -19,10 +19,14 @@ export const DATABASE_ROLES = [
   'publicSocialCommand',
   'publicSocialWorkerCommand',
   'publicSocialRevalidatorCommand',
+  'ownedSocialCommand',
   'ownedSocialWorkerCommand',
   'whatsAppLiveCommand',
   'whatsAppLiveWorkerCommand',
   'whatsAppLiveWebhookCommand',
+  'customerEmailCommand',
+  'customerEmailWorkerCommand',
+  'customerEmailWebhookCommand',
   'worker',
   'webhook',
   'public',
@@ -53,10 +57,14 @@ const ROLE_URL_ENV: Record<DatabaseRole, string> = {
   publicSocialCommand: 'DATABASE_PUBLIC_SOCIAL_COMMAND_URL',
   publicSocialWorkerCommand: 'DATABASE_PUBLIC_SOCIAL_WORKER_URL',
   publicSocialRevalidatorCommand: 'DATABASE_PUBLIC_SOCIAL_REVALIDATOR_URL',
+  ownedSocialCommand: 'DATABASE_OWNED_SOCIAL_COMMAND_URL',
   ownedSocialWorkerCommand: 'DATABASE_OWNED_SOCIAL_WORKER_URL',
   whatsAppLiveCommand: 'DATABASE_WHATSAPP_LIVE_COMMAND_URL',
   whatsAppLiveWorkerCommand: 'DATABASE_WHATSAPP_LIVE_WORKER_URL',
   whatsAppLiveWebhookCommand: 'DATABASE_WHATSAPP_LIVE_WEBHOOK_URL',
+  customerEmailCommand: 'DATABASE_CUSTOMER_EMAIL_COMMAND_URL',
+  customerEmailWorkerCommand: 'DATABASE_CUSTOMER_EMAIL_WORKER_URL',
+  customerEmailWebhookCommand: 'DATABASE_CUSTOMER_EMAIL_WEBHOOK_URL',
   worker: 'DATABASE_WORKER_URL',
   webhook: 'DATABASE_WEBHOOK_URL',
   public: 'DATABASE_PUBLIC_URL',
@@ -83,10 +91,14 @@ const EXPECTED_RUNTIME_USER: Partial<Record<DatabaseRole, string>> = {
   publicSocialCommand: 'r72_public_social_command',
   publicSocialWorkerCommand: 'r72_public_social_worker_command',
   publicSocialRevalidatorCommand: 'r72_public_social_revalidator_command',
+  ownedSocialCommand: 'r72_owned_social_command',
   ownedSocialWorkerCommand: 'r72_owned_social_worker_command',
   whatsAppLiveCommand: 'r72_whatsapp_live_command',
   whatsAppLiveWorkerCommand: 'r72_whatsapp_live_worker_command',
   whatsAppLiveWebhookCommand: 'r72_whatsapp_live_webhook_command',
+  customerEmailCommand: 'r72_customer_email_command',
+  customerEmailWorkerCommand: 'r72_customer_email_worker_command',
+  customerEmailWebhookCommand: 'r72_customer_email_webhook_command',
   worker: 'r72_worker',
   webhook: 'r72_webhook',
   public: 'r72_public',
@@ -238,6 +250,8 @@ export function loadDatabaseConfig(
                       ? 'DATABASE_PUBLIC_SOCIAL_WORKER_POOL_MAX'
                     : role === 'publicSocialRevalidatorCommand'
                       ? 'DATABASE_PUBLIC_SOCIAL_REVALIDATOR_POOL_MAX'
+                    : role === 'ownedSocialCommand'
+                      ? 'DATABASE_OWNED_SOCIAL_COMMAND_POOL_MAX'
                     : role === 'ownedSocialWorkerCommand'
                       ? 'DATABASE_OWNED_SOCIAL_WORKER_POOL_MAX'
                     : role === 'whatsAppLiveCommand'
@@ -246,6 +260,12 @@ export function loadDatabaseConfig(
                       ? 'DATABASE_WHATSAPP_LIVE_WORKER_POOL_MAX'
                     : role === 'whatsAppLiveWebhookCommand'
                       ? 'DATABASE_WHATSAPP_LIVE_WEBHOOK_POOL_MAX'
+                    : role === 'customerEmailCommand'
+                      ? 'DATABASE_CUSTOMER_EMAIL_COMMAND_POOL_MAX'
+                    : role === 'customerEmailWorkerCommand'
+                      ? 'DATABASE_CUSTOMER_EMAIL_WORKER_POOL_MAX'
+                    : role === 'customerEmailWebhookCommand'
+                      ? 'DATABASE_CUSTOMER_EMAIL_WEBHOOK_POOL_MAX'
                   : role === 'setupDeliveryCommand'
                     ? 'DATABASE_SETUP_DELIVERY_COMMAND_POOL_MAX'
                     : role === 'setupReissueCommand'
@@ -267,10 +287,11 @@ export function loadDatabaseConfig(
     enableChannelBinding: channelBinding === 'require',
     maxConnections: parseBoundedInteger(
       env[rolePoolKey] ?? env.DATABASE_POOL_MAX,
-      role === 'whatsAppLiveWorkerCommand'
+      role === 'whatsAppLiveWorkerCommand' || role === 'customerEmailWorkerCommand'
         ? 1 : role === 'worker' ? 10 : role === 'abuseCommand' ? 2 : 5,
       1,
-      role === 'whatsAppLiveWorkerCommand' ? 1 : 100,
+      role === 'whatsAppLiveWorkerCommand' || role === 'customerEmailWorkerCommand'
+        ? 1 : 100,
       rolePoolKey,
     ),
     connectionTimeoutMs: parseBoundedInteger(
@@ -324,6 +345,8 @@ export function loadDatabaseConfig(
                         ? 'property-predator-public-social-worker-command'
                       : role === 'publicSocialRevalidatorCommand'
                         ? 'property-predator-public-social-revalidator-command'
+                      : role === 'ownedSocialCommand'
+                        ? 'property-predator-owned-social-command'
                       : role === 'ownedSocialWorkerCommand'
                         ? 'property-predator-owned-social-worker-command'
                       : role === 'whatsAppLiveCommand'
@@ -332,6 +355,12 @@ export function loadDatabaseConfig(
                         ? 'property-predator-whatsapp-live-worker-command'
                       : role === 'whatsAppLiveWebhookCommand'
                         ? 'property-predator-whatsapp-live-webhook-command'
+                      : role === 'customerEmailCommand'
+                        ? 'property-predator-customer-email-command'
+                      : role === 'customerEmailWorkerCommand'
+                        ? 'property-predator-customer-email-worker-command'
+                      : role === 'customerEmailWebhookCommand'
+                        ? 'property-predator-customer-email-webhook-command'
                     : role === 'setupDeliveryCommand'
                       ? 'relaunch72-setup-delivery-command'
                       : role === 'setupReissueCommand'

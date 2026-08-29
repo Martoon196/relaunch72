@@ -32,6 +32,9 @@ type ScopedTestRole =
   | 'r72_test_inbox_webhook_command'
   | 'r72_public_social_command'
   | 'r72_public_social_worker_command'
+  | 'r72_customer_email_command'
+  | 'r72_customer_email_worker_command'
+  | 'r72_customer_email_webhook_command'
   | 'r72_worker'
   | 'r72_webhook';
 type UnscopedTestRole =
@@ -63,6 +66,9 @@ const TEST_ROLES = new Set<ScopedTestRole>([
   'r72_test_inbox_webhook_command',
   'r72_public_social_command',
   'r72_public_social_worker_command',
+  'r72_customer_email_command',
+  'r72_customer_email_worker_command',
+  'r72_customer_email_webhook_command',
   'r72_worker',
   'r72_webhook',
 ]);
@@ -212,12 +218,15 @@ export async function scopedQuery<T extends QueryResultRow = QueryResultRow>(
       [
         context.userId ?? '',
         context.workspaceId,
-        role === 'r72_worker' || role === 'r72_public_social_worker_command'
+        role === 'r72_worker'
+          || role === 'r72_public_social_worker_command'
+          || role === 'r72_customer_email_worker_command'
           ? 'worker'
           : role === 'r72_webhook'
             || role === 'r72_external_event_command'
             || role === 'r72_mailgun_webhook_command'
             || role === 'r72_test_inbox_webhook_command'
+            || role === 'r72_customer_email_webhook_command'
             ? 'webhook'
             : 'user',
         context.requestId ?? 'integration-test',

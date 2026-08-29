@@ -944,13 +944,14 @@ GRANT EXECUTE ON FUNCTION app_private.settle_owned_social_call(
   uuid, uuid, bigint, bytea, text, text, bytea, timestamptz, text
 ) TO r72_owned_social_worker_command;
 
--- The isolated worker must prove both the exact release schema and the exact
--- database installation before it composes a provider adapter. These two
--- security-definer probes return only migration/installation evidence and do
--- not grant table visibility.
+-- Both isolated processes prove the release schema and installation before
+-- composing. The founder command additionally crosses the same active portal
+-- session fence as every other irreversible founder mutation.
 GRANT EXECUTE ON FUNCTION app_private.runtime_schema_migrations(),
   app_private.runtime_database_installation_id()
-  TO r72_owned_social_worker_command;
+  TO r72_owned_social_command, r72_owned_social_worker_command;
+GRANT EXECUTE ON FUNCTION app_private.lock_active_portal_session(bytea, uuid, uuid)
+  TO r72_owned_social_command;
 
 DO $runtime_readiness_capability_audit$
 BEGIN
@@ -964,6 +965,21 @@ BEGIN
     'EXECUTE'
   ) THEN
     RAISE EXCEPTION 'Owned-social worker runtime readiness capability is incomplete';
+  END IF;
+  IF NOT has_function_privilege(
+    'r72_owned_social_command',
+    'app_private.runtime_schema_migrations()',
+    'EXECUTE'
+  ) OR NOT has_function_privilege(
+    'r72_owned_social_command',
+    'app_private.runtime_database_installation_id()',
+    'EXECUTE'
+  ) OR NOT has_function_privilege(
+    'r72_owned_social_command',
+    'app_private.lock_active_portal_session(bytea,uuid,uuid)',
+    'EXECUTE'
+  ) THEN
+    RAISE EXCEPTION 'Owned-social founder command runtime capability is incomplete';
   END IF;
 END
 $runtime_readiness_capability_audit$;

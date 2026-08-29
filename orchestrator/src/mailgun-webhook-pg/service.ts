@@ -8,6 +8,15 @@ import type {
 
 export interface MailgunWebhookIngressServiceDependencies {
   readonly repository: MailgunWebhookRepository;
+  /**
+   * Optional receipt-only projector. It runs only after signature verification
+   * and the generic Mailgun event journal have both succeeded. A failure is
+   * deliberately propagated so Mailgun retries instead of losing live-channel
+   * receipt evidence.
+   */
+  readonly signedReceiptProjector?: Readonly<{
+    recordSignedReceipt(externalEventId: string): Promise<unknown>;
+  }>;
   /** Dedicated Mailgun signing key from a server-side secret manager. */
   readonly signingKey: Uint8Array;
   /** Injectable clock for deterministic verification tests. */
@@ -22,11 +31,15 @@ export class MailgunWebhookIngressService {
   readonly #repository: MailgunWebhookRepository;
   readonly #signingKey: Uint8Array;
   readonly #nowSeconds?: () => number;
+  readonly #signedReceiptProjector?: Readonly<{
+    recordSignedReceipt(externalEventId: string): Promise<unknown>;
+  }>;
 
   constructor(dependencies: Readonly<MailgunWebhookIngressServiceDependencies>) {
     this.#repository = dependencies.repository;
     this.#signingKey = dependencies.signingKey;
     this.#nowSeconds = dependencies.nowSeconds;
+    this.#signedReceiptProjector = dependencies.signedReceiptProjector;
   }
 
   async handle(rawBody: Uint8Array): Promise<Readonly<MailgunWebhookIngressResult>> {
@@ -59,6 +72,7 @@ export class MailgunWebhookIngressService {
       signatureTimestamp: new Date(verified.timestampSeconds * 1_000).toISOString(),
       recipientIdentitySha256,
     });
+    await this.#signedReceiptProjector?.recordSignedReceipt(event.externalEventId);
     return Object.freeze({
       disposition: 'recorded',
       replayed: recorded.replayed,

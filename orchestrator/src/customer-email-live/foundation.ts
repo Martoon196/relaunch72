@@ -13,6 +13,7 @@ const MESSAGE_ID = /^<pp-([0-9a-f]{64})@mg[.]propertypredator[.]com>$/u;
 export const CUSTOMER_EMAIL_LIVE_CONTRACT = 'propertypredator.customer-email-live/v1' as const;
 export const CUSTOMER_EMAIL_DAILY_HARD_CAP = 10 as const;
 export const CUSTOMER_EMAIL_MONTHLY_HARD_CAP = 50 as const;
+export const CUSTOMER_EMAIL_LIVE_SENDING_DOMAIN = 'mg.propertypredator.com' as const;
 
 export class CustomerEmailLiveError extends Error {
   constructor(readonly code:
@@ -43,6 +44,10 @@ export interface CustomerEmailLiveRuntimeConfig {
   readonly providerEffectsEnabled: boolean;
   readonly emailDeliveryEnabled: boolean;
   readonly emergencyPaused: boolean;
+  /** Explicit operator attestation; this does not claim remote webhook health. */
+  readonly receiptsConfirmed: boolean;
+  readonly fromEmail: string | null;
+  readonly sendingDomain: typeof CUSTOMER_EMAIL_LIVE_SENDING_DOMAIN | null;
   readonly maximumOperationsPerCycle: 1;
   readonly maximumRecipientsPerJob: 1;
   readonly dailySendCap: typeof CUSTOMER_EMAIL_DAILY_HARD_CAP;
@@ -56,22 +61,42 @@ export function loadCustomerEmailLiveRuntimeConfig(
   const providerEffectsEnabled = env.PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED === 'true';
   const emailDeliveryEnabled = env.PROPERTY_PREDATOR_CUSTOMER_EMAIL_DELIVERY_ENABLED === 'true';
   const emergencyPaused = env.PROPERTY_PREDATOR_CUSTOMER_EMAIL_EMERGENCY_PAUSED !== 'false';
+  const receiptsAttestation = env.PROPERTY_PREDATOR_CUSTOMER_EMAIL_RECEIPTS_CONFIRMED;
+  if (receiptsAttestation !== undefined
+      && receiptsAttestation !== 'true' && receiptsAttestation !== 'false') {
+    fail('invalid_configuration');
+  }
+  const receiptsConfirmed = receiptsAttestation === 'true';
   if (mode === 'disabled') {
-    if (providerEffectsEnabled || emailDeliveryEnabled || !emergencyPaused) {
+    if (providerEffectsEnabled || emailDeliveryEnabled || !emergencyPaused || receiptsConfirmed) {
       fail('invalid_configuration');
     }
     return Object.freeze({ mode, providerEffectsEnabled: false, emailDeliveryEnabled: false,
-      emergencyPaused: true, maximumOperationsPerCycle: 1, maximumRecipientsPerJob: 1,
+      emergencyPaused: true, receiptsConfirmed: false, fromEmail: null, sendingDomain: null,
+      maximumOperationsPerCycle: 1, maximumRecipientsPerJob: 1,
       dailySendCap: CUSTOMER_EMAIL_DAILY_HARD_CAP,
       monthlySendCap: CUSTOMER_EMAIL_MONTHLY_HARD_CAP });
   }
   if (mode !== 'customer_live' || !providerEffectsEnabled || !emailDeliveryEnabled
-      || emergencyPaused
-      || env.PROPERTY_PREDATOR_CUSTOMER_EMAIL_PROVIDER_ID !== 'mailgun_eu') {
+      || emergencyPaused || !receiptsConfirmed
+      || env.PROPERTY_PREDATOR_CUSTOMER_EMAIL_PROVIDER_ID !== 'mailgun_eu'
+      || env.MAILGUN_SENDING_DOMAIN !== CUSTOMER_EMAIL_LIVE_SENDING_DOMAIN) {
+    fail('invalid_configuration');
+  }
+  let fromEmail: string;
+  try {
+    fromEmail = normalizeOwnedInternalSeedEmail(env.MAILGUN_FROM_EMAIL ?? '');
+  } catch {
+    fail('invalid_configuration');
+  }
+  if (fromEmail !== env.MAILGUN_FROM_EMAIL
+      || fromEmail.split('@')[1] !== CUSTOMER_EMAIL_LIVE_SENDING_DOMAIN) {
     fail('invalid_configuration');
   }
   return Object.freeze({ mode, providerEffectsEnabled: true, emailDeliveryEnabled: true,
-    emergencyPaused: false, maximumOperationsPerCycle: 1, maximumRecipientsPerJob: 1,
+    emergencyPaused: false, receiptsConfirmed: true, fromEmail,
+    sendingDomain: CUSTOMER_EMAIL_LIVE_SENDING_DOMAIN,
+    maximumOperationsPerCycle: 1, maximumRecipientsPerJob: 1,
     dailySendCap: CUSTOMER_EMAIL_DAILY_HARD_CAP,
     monthlySendCap: CUSTOMER_EMAIL_MONTHLY_HARD_CAP });
 }
@@ -88,6 +113,7 @@ export interface CustomerEmailLiveMaterial extends CustomerEmailLiveClaim {
   readonly correlationId: string;
   readonly requestSha256: string;
   readonly expectedMessageId: string;
+  readonly sendingDomain: string;
   readonly recipient: string;
   readonly subject: string;
   readonly text: string;
@@ -111,13 +137,20 @@ export interface CustomerEmailLiveRepository {
   }>): Promise<void>;
 }
 
-function assertMaterial(claim: CustomerEmailLiveClaim, material: CustomerEmailLiveMaterial): void {
+function assertMaterial(
+  claim: CustomerEmailLiveClaim,
+  material: CustomerEmailLiveMaterial,
+  config: CustomerEmailLiveRuntimeConfig,
+): void {
   if (material.workspaceId !== claim.workspaceId || material.connectionId !== claim.connectionId
       || material.jobId !== claim.jobId || material.leaseVersion !== claim.leaseVersion
       || !UUID.test(material.operationId) || !UUID.test(material.correlationId)
       || !SHA256.test(material.requestSha256)) fail('invalid_binding');
   const match = MESSAGE_ID.exec(material.expectedMessageId);
   if (!match || match[1] !== material.requestSha256
+      || material.sendingDomain !== CUSTOMER_EMAIL_LIVE_SENDING_DOMAIN
+      || config.sendingDomain !== material.sendingDomain
+      || config.fromEmail?.split('@')[1] !== material.sendingDomain
       || normalizeOwnedInternalSeedEmail(material.recipient) !== material.recipient
       || !material.subject || /[\r\n]/u.test(material.subject)
       || Buffer.byteLength(material.subject, 'utf8') > 500
@@ -146,11 +179,13 @@ export async function runCustomerEmailLiveOnce(input: Readonly<{
 }>): Promise<'idle' | 'settled' | 'failed_or_attention'> {
   if (input.config.mode !== 'customer_live' || !input.config.providerEffectsEnabled
       || !input.config.emailDeliveryEnabled || input.config.emergencyPaused
+      || !input.config.receiptsConfirmed || !input.config.fromEmail
+      || input.config.sendingDomain !== CUSTOMER_EMAIL_LIVE_SENDING_DOMAIN
       || input.leaseToken.length !== 32) fail('disabled');
   const claim = await input.repository.claimOne({ leaseToken: input.leaseToken, leaseSeconds: 60 });
   if (!claim) return 'idle';
   const material = await input.repository.loadClaimed({ ...claim, leaseToken: input.leaseToken });
-  assertMaterial(claim, material);
+  assertMaterial(claim, material, input.config);
   const marked = await input.repository.markCalling({ ...claim, leaseToken: input.leaseToken,
     providerEffectsEnabled: true, emailDeliveryEnabled: true, emergencyPaused: false });
   if (!marked) return 'failed_or_attention';

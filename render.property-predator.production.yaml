@@ -161,14 +161,27 @@ services:
       # call a social provider or use the worker/revalidator functions.
       - key: DATABASE_PUBLIC_SOCIAL_COMMAND_URL
         sync: false
+      # 0052 founder command seam for exact owned X profile evidence and
+      # approved enqueue only. It has no worker or provider-call capability.
+      - key: DATABASE_OWNED_SOCIAL_COMMAND_URL
+        sync: false
       # Function-only 0053 founder command seam. It can bind encrypted Meta
       # evidence, register one approved template and enqueue only after exact
       # consent/PECR/operator evidence. It cannot claim or call a provider.
       - key: DATABASE_WHATSAPP_LIVE_COMMAND_URL
         sync: false
+      # Function-only 0054 founder command seam. It resolves the exact person,
+      # endpoint, campaign step, approvals and current permission evidence in
+      # one serializable transaction; it cannot claim or call Mailgun.
+      - key: DATABASE_CUSTOMER_EMAIL_COMMAND_URL
+        sync: false
       # Dedicated r72_mailgun_webhook_command identity. This is deliberately
       # narrower than the platform's generic webhook role.
       - key: DATABASE_MAILGUN_WEBHOOK_URL
+        sync: false
+      # Receipt-only 0054 identity. It is invoked only after the canonical
+      # Mailgun route has authenticated and journalled the untouched event.
+      - key: DATABASE_CUSTOMER_EMAIL_WEBHOOK_URL
         sync: false
       - key: DATABASE_WEB_POOL_MAX
         value: "4"
@@ -186,9 +199,15 @@ services:
         value: "2"
       - key: DATABASE_PUBLIC_SOCIAL_COMMAND_POOL_MAX
         value: "2"
+      - key: DATABASE_OWNED_SOCIAL_COMMAND_POOL_MAX
+        value: "2"
       - key: DATABASE_WHATSAPP_LIVE_COMMAND_POOL_MAX
         value: "2"
+      - key: DATABASE_CUSTOMER_EMAIL_COMMAND_POOL_MAX
+        value: "2"
       - key: DATABASE_MAILGUN_WEBHOOK_POOL_MAX
+        value: "2"
+      - key: DATABASE_CUSTOMER_EMAIL_WEBHOOK_POOL_MAX
         value: "2"
       - key: DATABASE_CONNECTION_TIMEOUT_MS
         value: "5000"
@@ -202,6 +221,10 @@ services:
       - key: PROPERTY_PREDATOR_PILOT_WORKSPACE_ID
         sync: false
       - key: PROPERTY_PREDATOR_MAILGUN_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_WORKSPACE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_CONNECTION_ID
         sync: false
       - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
         sync: false
@@ -230,6 +253,10 @@ services:
       # no outbound provider effect.
       - key: PROPERTY_PREDATOR_MAILGUN_WEBHOOK_ENABLED
         value: "true"
+      # 0054 projection remains independently dark. Enabling it sends nothing;
+      # it only adds the receipt-only projector to this already signed route.
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_RECEIPTS_ENABLED
+        value: "false"
       # Exposes only the signed owned-office reply endpoint. A separately
       # configured Mailgun Route is still required; this setting sends nothing.
       - key: PROPERTY_PREDATOR_MAILGUN_INBOUND_ENABLED
@@ -350,6 +377,72 @@ services:
       - key: PROPERTY_PREDATOR_META_WHATSAPP_APP_SECRET
         sync: false
       - key: PROPERTY_PREDATOR_META_WHATSAPP_VERIFY_TOKEN
+        sync: false
+
+  # 0054 permission-bound customer-email worker. It deploys dark and proves
+  # its exact database boundary without constructing the Mailgun adapter or
+  # making a startup provider call. Activation is a separate reviewed change.
+  - type: worker
+    name: property-predator-customer-email-live
+    runtime: node
+    region: frankfurt
+    plan: starter
+    branch: codex/relaunch72-platform-foundation
+    numInstances: 1
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
+    startCommand: npm run --workspace orchestrator serve:customer-email-live
+    maxShutdownDelaySeconds: 120
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_SSL_MODE
+        value: verify-full
+      - key: DATABASE_CUSTOMER_EMAIL_WORKER_URL
+        sync: false
+      - key: DATABASE_CUSTOMER_EMAIL_WORKER_POOL_MAX
+        value: "1"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        value: "5000"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: "15000"
+      - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_WORKSPACE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_MODE
+        value: disabled
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_PROVIDER_ID
+        value: mailgun_eu
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_POLL_MS
+        value: "5000"
+      - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_DELIVERY_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_EMERGENCY_PAUSED
+        value: "true"
+      # Operator attestation only: release this after the separate web receipt
+      # projector is deployed and its protected readiness is green.
+      - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_RECEIPTS_CONFIRMED
+        value: "false"
+      # Mailgun EU egress only. The signing key and broad account API key are
+      # absent; the secret slot is scoped to this one sending domain.
+      - key: MAILGUN_REGION
+        value: eu
+      - key: MAILGUN_SENDING_DOMAIN
+        value: mg.propertypredator.com
+      - key: MAILGUN_KEY_SCOPE
+        value: domain-sending
+      - key: MAILGUN_DOMAIN_SENDING_KEY
+        sync: false
+      - key: MAILGUN_FROM_EMAIL
         sync: false
 
   # This isolated worker is the only process that may receive the domain-scoped

@@ -48,9 +48,14 @@ test('0052 keeps login roles table-blind behind exact function grants', async ()
   assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.begin_owned_social_call/u);
   assert.match(
     sql,
-    /GRANT EXECUTE ON FUNCTION app_private\.runtime_schema_migrations\(\),[\s\S]+runtime_database_installation_id\(\)[\s\S]+TO r72_owned_social_worker_command/u,
+    /GRANT EXECUTE ON FUNCTION app_private\.runtime_schema_migrations\(\),[\s\S]+runtime_database_installation_id\(\)[\s\S]+TO r72_owned_social_command, r72_owned_social_worker_command/u,
+  );
+  assert.match(
+    sql,
+    /GRANT EXECUTE ON FUNCTION app_private\.lock_active_portal_session\(bytea, uuid, uuid\)[\s\S]+TO r72_owned_social_command/u,
   );
   assert.match(sql, /Owned-social worker runtime readiness capability is incomplete/u);
+  assert.match(sql, /Owned-social founder command runtime capability is incomplete/u);
   assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.revoke_owned_social_profile/u);
   assert.match(sql, /property_predator_owned_social_profile_revocations/u);
   for (const dependency of [

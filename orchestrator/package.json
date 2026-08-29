@@ -28,6 +28,7 @@
     "serve:owned-public-social-live": "tsx src/workers/owned-public-social-live/cli.ts",
     "serve:meta-whatsapp-live-worker": "tsx src/workers/meta-whatsapp-live/cli.ts",
     "serve:meta-whatsapp-live-webhook": "tsx src/services/meta-whatsapp-live-webhook/cli.ts",
+    "serve:customer-email-live": "tsx src/workers/customer-email-live/cli.ts",
     "preview:property-predator": "node --import ./test/windows-node24-shim.mjs --import tsx test/manual-property-predator-preview.ts",
     "pilot:preflight": "node --import ./test/windows-node24-shim.mjs --import tsx src/ops/property-predator-live-pilot-preflight-cli.ts",
     "founder:bootstrap": "tsx src/ops/property-predator-founder-bootstrap-cli.ts",

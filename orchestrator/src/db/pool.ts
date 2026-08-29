@@ -146,6 +146,14 @@ export function createPublicSocialRevalidatorCommandDatabasePool(
   return createDatabasePool(loadDatabaseConfig('publicSocialRevalidatorCommand', env), hooks);
 }
 
+/** Function-only founder command pool for exact owned X profile and enqueue evidence. */
+export function createOwnedSocialCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('ownedSocialCommand', env), hooks);
+}
+
 /** Function-only pool for the capped owned-profile public-social live worker. */
 export function createOwnedSocialWorkerCommandDatabasePool(
   env: NodeJS.ProcessEnv = process.env,
@@ -176,6 +184,30 @@ export function createWhatsAppLiveWebhookCommandDatabasePool(
   hooks: DatabasePoolHooks = {},
 ): Pool {
   return createDatabasePool(loadDatabaseConfig('whatsAppLiveWebhookCommand', env), hooks);
+}
+
+/** Function-only pool for founder-authorized, evidence-bound customer-email enqueue. */
+export function createCustomerEmailCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('customerEmailCommand', env), hooks);
+}
+
+/** One-connection pool for the isolated Mailgun EU customer-email worker. */
+export function createCustomerEmailWorkerCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('customerEmailWorkerCommand', env), hooks);
+}
+
+/** Receipt-only pool for customer-email projection after Mailgun authentication. */
+export function createCustomerEmailWebhookCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('customerEmailWebhookCommand', env), hooks);
 }
 
 /** Function-only pool for the isolated provider-operation worker. */

@@ -41,10 +41,13 @@ import {
   composePropertyPredatorSso,
 } from '../portal/property-predator-sso.js';
 import {
+  createCustomerEmailWebhookCommandDatabasePool,
   createExternalEventCommandDatabasePool,
   createMailgunWebhookCommandDatabasePool,
   createWebhookDatabasePool,
 } from '../db/pool.js';
+import { assertExpectedDatabaseInstallation } from '../db/installation-identity.js';
+import { assertRuntimeSchemaCurrent } from '../db/runtime-readiness.js';
 import {
   PgPropertyPredatorGrowthEventProjector,
   PgPropertyPredatorJourneyRuntime,
@@ -62,11 +65,16 @@ import {
   PgMailgunWebhookRepository,
 } from '../mailgun-webhook-pg/index.js';
 import { assertPgMailgunWebhookIngressReady } from '../integrations/mailgun-webhook/readiness.js';
+import { loadCustomerEmailSignedReceiptConfig } from '../integrations/mailgun-webhook/customer-email-receipts.js';
 import {
   createPropertyPredatorMailgunWebhookHandler,
   loadPropertyPredatorMailgunWebhookConfig,
   type PropertyPredatorMailgunWebhookMount,
 } from '../integrations/mailgun-webhook/router.js';
+import {
+  assertCustomerEmailWebhookBoundaryReady,
+  PgCustomerEmailSignedReceiptProjector,
+} from '../customer-email-live-pg/index.js';
 import {
   PropertyPredatorMailgunInboundIngressService,
   PgPropertyPredatorMailgunInboundRepository,
@@ -309,18 +317,31 @@ async function main(): Promise<void> {
   }
 
   const mailgunWebhookConfig = loadPropertyPredatorMailgunWebhookConfig(process.env);
+  const customerEmailReceiptConfig = loadCustomerEmailSignedReceiptConfig(process.env);
+  const mailgunWebhookEnabled = mailgunWebhookConfig.enabled
+    || customerEmailReceiptConfig.enabled;
+  const mailgunWebhookBlockers = Object.freeze([
+    ...mailgunWebhookConfig.blockers,
+    ...customerEmailReceiptConfig.blockers,
+  ]);
   let mailgunWebhookPool:
     ReturnType<typeof createMailgunWebhookCommandDatabasePool> | undefined;
+  let customerEmailWebhookPool:
+    ReturnType<typeof createCustomerEmailWebhookCommandDatabasePool> | undefined;
   let propertyPredatorMailgunWebhook: PropertyPredatorMailgunWebhookMount = Object.freeze({
-    enabled: mailgunWebhookConfig.enabled,
+    enabled: mailgunWebhookEnabled,
     ready: false,
-    blockers: mailgunWebhookConfig.blockers,
+    blockers: mailgunWebhookBlockers,
   });
   if (mailgunWebhookConfig.enabled
       && mailgunWebhookConfig.configurationReady
       && mailgunWebhookConfig.workspaceId
       && mailgunWebhookConfig.providerConnectionId
-      && mailgunWebhookConfig.signingKey) {
+      && mailgunWebhookConfig.signingKey
+      && (!customerEmailReceiptConfig.enabled
+        || (customerEmailReceiptConfig.configurationReady
+          && customerEmailReceiptConfig.workspaceId
+          && customerEmailReceiptConfig.providerConnectionId))) {
     try {
       mailgunWebhookPool = createMailgunWebhookCommandDatabasePool(process.env);
       await assertPgMailgunWebhookIngressReady(
@@ -334,9 +355,27 @@ async function main(): Promise<void> {
         workspaceId: mailgunWebhookConfig.workspaceId,
         providerConnectionId: mailgunWebhookConfig.providerConnectionId,
       });
+      let signedReceiptProjector: PgCustomerEmailSignedReceiptProjector | undefined;
+      if (customerEmailReceiptConfig.enabled
+          && customerEmailReceiptConfig.workspaceId
+          && customerEmailReceiptConfig.providerConnectionId) {
+        customerEmailWebhookPool = createCustomerEmailWebhookCommandDatabasePool(process.env);
+        await assertRuntimeSchemaCurrent(customerEmailWebhookPool);
+        await assertExpectedDatabaseInstallation(
+          customerEmailWebhookPool,
+          process.env.PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID?.trim(),
+        );
+        await assertCustomerEmailWebhookBoundaryReady(customerEmailWebhookPool);
+        signedReceiptProjector = new PgCustomerEmailSignedReceiptProjector({
+          commandPool: customerEmailWebhookPool,
+          workspaceId: customerEmailReceiptConfig.workspaceId,
+          providerConnectionId: customerEmailReceiptConfig.providerConnectionId,
+        });
+      }
       const ingress = new MailgunWebhookIngressService({
         repository,
         signingKey: mailgunWebhookConfig.signingKey,
+        ...(signedReceiptProjector ? { signedReceiptProjector } : {}),
       });
       propertyPredatorMailgunWebhook = Object.freeze({
         enabled: true,
@@ -344,10 +383,16 @@ async function main(): Promise<void> {
         blockers: Object.freeze([]),
         handle: createPropertyPredatorMailgunWebhookHandler(ingress),
       });
-      console.log('Signed Mailgun delivery-evidence ingress is ready.');
+      console.log(customerEmailReceiptConfig.enabled
+        ? 'Signed Mailgun delivery-evidence and customer-email receipt ingress is ready.'
+        : 'Signed Mailgun delivery-evidence ingress is ready.');
     } catch {
-      await mailgunWebhookPool?.end();
+      await Promise.all([
+        mailgunWebhookPool?.end(),
+        customerEmailWebhookPool?.end(),
+      ]);
       mailgunWebhookPool = undefined;
+      customerEmailWebhookPool = undefined;
       propertyPredatorMailgunWebhook = Object.freeze({
         enabled: true,
         ready: false,
@@ -357,8 +402,8 @@ async function main(): Promise<void> {
       });
       console.warn('⚠  Mailgun webhook unavailable; protected readiness failed.');
     }
-  } else if (mailgunWebhookConfig.enabled) {
-    console.warn(`⚠  Mailgun webhook unavailable: ${mailgunWebhookConfig.blockers.join('; ')}`);
+  } else if (mailgunWebhookEnabled) {
+    console.warn(`⚠  Mailgun webhook unavailable: ${mailgunWebhookBlockers.join('; ')}`);
   }
   const mailgunInboundConfig = loadPropertyPredatorMailgunInboundConfig(process.env);
   let mailgunInboundPool:
@@ -623,7 +668,7 @@ async function main(): Promise<void> {
   }
 
   const buildBlockers = forceMockBuilds || process.env.ANTHROPIC_API_KEY?.trim() ? [] : ['Anthropic build key is not configured'];
-  const runtimeReadinessProbe = (postgresPortal || mailgunWebhookConfig.enabled
+  const runtimeReadinessProbe = (postgresPortal || mailgunWebhookEnabled
       || mailgunInboundConfig.enabled
       || simulatedInbound.enabled || providerIngress.enabled)
     ? createCachedRuntimeReadinessProbe({
@@ -649,6 +694,22 @@ async function main(): Promise<void> {
                 );
               } catch {
                 blockers.push('Protected Mailgun webhook runtime is unavailable');
+              }
+            }
+          }
+          if (customerEmailReceiptConfig.enabled) {
+            if (!customerEmailWebhookPool) {
+              blockers.push('Protected customer-email receipt runtime is unavailable');
+            } else {
+              try {
+                await assertRuntimeSchemaCurrent(customerEmailWebhookPool);
+                await assertExpectedDatabaseInstallation(
+                  customerEmailWebhookPool,
+                  process.env.PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID?.trim(),
+                );
+                await assertCustomerEmailWebhookBoundaryReady(customerEmailWebhookPool);
+              } catch {
+                blockers.push('Protected customer-email receipt runtime is unavailable');
               }
             }
           }
@@ -742,6 +803,7 @@ async function main(): Promise<void> {
         externalEventCommandPool?.end(),
         externalEventWebhookPool?.end(),
         mailgunWebhookPool?.end(),
+        customerEmailWebhookPool?.end(),
         mailgunInboundPool?.end(),
         simulatedInbound.close(),
       ]);

@@ -25,12 +25,16 @@ const config = () => loadCustomerEmailLiveRuntimeConfig({
   PROPERTY_PREDATOR_CUSTOMER_EMAIL_DELIVERY_ENABLED: 'true',
   PROPERTY_PREDATOR_CUSTOMER_EMAIL_EMERGENCY_PAUSED: 'false',
   PROPERTY_PREDATOR_CUSTOMER_EMAIL_PROVIDER_ID: 'mailgun_eu',
+  PROPERTY_PREDATOR_CUSTOMER_EMAIL_RECEIPTS_CONFIRMED: 'true',
+  MAILGUN_SENDING_DOMAIN: 'mg.propertypredator.com',
+  MAILGUN_FROM_EMAIL: 'updates@mg.propertypredator.com',
 });
 
 test('customer email runtime defaults OFF and requires the full exact switch tuple', () => {
   assert.deepEqual(loadCustomerEmailLiveRuntimeConfig({}), {
     mode: 'disabled', providerEffectsEnabled: false, emailDeliveryEnabled: false,
-    emergencyPaused: true, maximumOperationsPerCycle: 1, maximumRecipientsPerJob: 1,
+    emergencyPaused: true, receiptsConfirmed: false, fromEmail: null, sendingDomain: null,
+    maximumOperationsPerCycle: 1, maximumRecipientsPerJob: 1,
     dailySendCap: 10, monthlySendCap: 50,
   });
   for (const env of [
@@ -40,6 +44,34 @@ test('customer email runtime defaults OFF and requires the full exact switch tup
     { PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_MODE: 'customer_live' },
   ]) assert.throws(() => loadCustomerEmailLiveRuntimeConfig(env), CustomerEmailLiveError);
   assert.equal(config().mode, 'customer_live');
+  assert.equal(config().receiptsConfirmed, true);
+  assert.equal(config().fromEmail, 'updates@mg.propertypredator.com');
+});
+
+test('customer live rejects missing, false or malformed receipt confirmation', () => {
+  const active = {
+    PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_MODE: 'customer_live',
+    PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED: 'true',
+    PROPERTY_PREDATOR_CUSTOMER_EMAIL_DELIVERY_ENABLED: 'true',
+    PROPERTY_PREDATOR_CUSTOMER_EMAIL_EMERGENCY_PAUSED: 'false',
+    PROPERTY_PREDATOR_CUSTOMER_EMAIL_PROVIDER_ID: 'mailgun_eu',
+    MAILGUN_SENDING_DOMAIN: 'mg.propertypredator.com',
+    MAILGUN_FROM_EMAIL: 'updates@mg.propertypredator.com',
+  };
+  for (const value of [undefined, 'false', 'TRUE', ' true ', 'yes']) {
+    assert.throws(() => loadCustomerEmailLiveRuntimeConfig({
+      ...active,
+      ...(value === undefined ? {} : {
+        PROPERTY_PREDATOR_CUSTOMER_EMAIL_RECEIPTS_CONFIRMED: value,
+      }),
+    }), CustomerEmailLiveError);
+  }
+  assert.throws(() => loadCustomerEmailLiveRuntimeConfig({
+    PROPERTY_PREDATOR_CUSTOMER_EMAIL_RECEIPTS_CONFIRMED: 'true',
+  }), CustomerEmailLiveError);
+  assert.equal(loadCustomerEmailLiveRuntimeConfig({
+    PROPERTY_PREDATOR_CUSTOMER_EMAIL_RECEIPTS_CONFIRMED: 'false',
+  }).receiptsConfirmed, false);
 });
 
 class MemoryRepository implements CustomerEmailLiveRepository {
@@ -53,6 +85,7 @@ class MemoryRepository implements CustomerEmailLiveRepository {
     return Object.freeze({ ...this.claim, operationId: IDS.operation,
       correlationId: IDS.correlation, requestSha256: sha,
       expectedMessageId: `<pp-${sha}@mg.propertypredator.com>`,
+      sendingDomain: 'mg.propertypredator.com',
       recipient: 'customer@example.com', subject: 'Your Property Predator update',
       text: 'The exact approved body.' });
   }
@@ -101,6 +134,7 @@ test('material must bind the expected Message-ID to the exact request digest', a
   repository.loadClaimed = async () => ({ ...repository.claim, operationId: IDS.operation,
     correlationId: IDS.correlation, requestSha256: sha,
     expectedMessageId: `<pp-${'0'.repeat(64)}@mg.propertypredator.com>`,
+    sendingDomain: 'mg.propertypredator.com',
     recipient: 'customer@example.com', subject: 'Subject', text: 'Body' });
   await assert.rejects(() => runCustomerEmailLiveOnce({ config: config(), repository,
     leaseToken: Buffer.alloc(32, 9), transport: { async send() {
@@ -108,4 +142,31 @@ test('material must bind the expected Message-ID to the exact request digest', a
     } } }), (error: unknown) => error instanceof CustomerEmailLiveError
       && error.code === 'invalid_binding');
   assert.deepEqual(repository.order, ['claim']);
+});
+
+test('SQL sender domain and runtime From binding must match before the calling fence', async () => {
+  for (const patch of [
+    { materialDomain: 'mail.example.com', runtimeFrom: 'updates@mg.propertypredator.com' },
+    { materialDomain: 'mg.propertypredator.com', runtimeFrom: 'updates@mail.example.com' },
+  ]) {
+    const repository = new MemoryRepository();
+    repository.loadClaimed = async () => {
+      repository.order.push('load');
+      return { ...repository.claim, operationId: IDS.operation,
+        correlationId: IDS.correlation, requestSha256: sha,
+        expectedMessageId: `<pp-${sha}@mg.propertypredator.com>`,
+        sendingDomain: patch.materialDomain,
+        recipient: 'customer@example.com', subject: 'Subject', text: 'Body' };
+    };
+    let sends = 0;
+    await assert.rejects(() => runCustomerEmailLiveOnce({
+      config: { ...config(), fromEmail: patch.runtimeFrom },
+      repository,
+      leaseToken: Buffer.alloc(32, 10),
+      transport: { async send() { sends += 1; throw new Error('must not call'); } },
+    }), (error: unknown) => error instanceof CustomerEmailLiveError
+      && error.code === 'invalid_binding');
+    assert.deepEqual(repository.order, ['claim', 'load']);
+    assert.equal(sends, 0);
+  }
 });

@@ -122,6 +122,77 @@ test('valid Mailgun evidence is authenticated before one bounded repository writ
   assert.equal(publicResult.includes(record.payloadSha256.toString()), false);
 });
 
+test('customer-email receipt projection runs only after signed event persistence', async () => {
+  const order: string[] = [];
+  const memory = memoryRepository();
+  const repository: MailgunWebhookRepository = {
+    record: async (input) => {
+      order.push(`journal:${input.externalEventId}`);
+      return memory.repository.record(input);
+    },
+  };
+  const service = new MailgunWebhookIngressService({
+    repository,
+    signingKey: SIGNING_KEY,
+    nowSeconds: () => NOW,
+    signedReceiptProjector: {
+      recordSignedReceipt: async (externalEventId) => {
+        order.push(`customer-email:${externalEventId}`);
+        return 'applied';
+      },
+    },
+  });
+  await service.handle(rawEvent('delivered', { eventId: 'evt_customer_email_1' }));
+  assert.deepEqual(order, [
+    'journal:evt_customer_email_1',
+    'customer-email:evt_customer_email_1',
+  ]);
+});
+
+test('invalid signatures and failed journals never reach customer-email projection', async () => {
+  let projections = 0;
+  const memory = memoryRepository();
+  const projector = {
+    recordSignedReceipt: async () => { projections += 1; return 'applied'; },
+  };
+  const invalid = new MailgunWebhookIngressService({
+    repository: memory.repository,
+    signingKey: SIGNING_KEY,
+    nowSeconds: () => NOW,
+    signedReceiptProjector: projector,
+  });
+  await assert.rejects(
+    () => invalid.handle(rawEvent('delivered', { signature: '0'.repeat(64) })),
+    MailgunWebhookAuthenticationError,
+  );
+  assert.equal(projections, 0);
+
+  const failedJournal = new MailgunWebhookIngressService({
+    repository: { record: async () => { throw new Error('journal unavailable'); } },
+    signingKey: SIGNING_KEY,
+    nowSeconds: () => NOW,
+    signedReceiptProjector: projector,
+  });
+  await assert.rejects(() => failedJournal.handle(rawEvent('delivered')),
+    /journal unavailable/u);
+  assert.equal(projections, 0);
+});
+
+test('receipt projection failure remains retryable and is never acknowledged', async () => {
+  const memory = memoryRepository();
+  const service = new MailgunWebhookIngressService({
+    repository: memory.repository,
+    signingKey: SIGNING_KEY,
+    nowSeconds: () => NOW,
+    signedReceiptProjector: {
+      recordSignedReceipt: async () => { throw new Error('projector unavailable'); },
+    },
+  });
+  await assert.rejects(() => service.handle(rawEvent('delivered')),
+    /projector unavailable/u);
+  assert.equal(memory.records.length, 1);
+});
+
 test('Mailgun API and event Message-Id wrapper variants normalize to one identity', async () => {
   for (const messageId of [MESSAGE_ID, `<${MESSAGE_ID}>`]) {
     const memory = memoryRepository();
