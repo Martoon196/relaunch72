@@ -1697,6 +1697,12 @@ GRANT EXECUTE ON FUNCTION app_private.record_whatsapp_live_status(
 GRANT EXECUTE ON FUNCTION app_private.record_whatsapp_live_inbound_receipt(
   uuid, uuid, text, text, bytea, bytea, bytea, timestamptz
 ) TO r72_whatsapp_live_webhook_command;
+GRANT EXECUTE ON FUNCTION app_private.runtime_schema_migrations(),
+  app_private.runtime_database_installation_id()
+  TO r72_whatsapp_live_command, r72_whatsapp_live_worker_command,
+  r72_whatsapp_live_webhook_command;
+GRANT EXECUTE ON FUNCTION app_private.lock_active_portal_session(bytea, uuid, uuid)
+  TO r72_whatsapp_live_command;
 
 INSERT INTO app_private.workspace_table_registry (schema_name, table_name, workspace_column)
 VALUES

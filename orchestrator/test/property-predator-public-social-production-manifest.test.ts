@@ -181,12 +181,14 @@ test('materialized public-social operations reach only the deterministic TEST si
 
 test('social launch additions preserve the existing services and add no database or deployment mutation', () => {
   const services = [...manifest.matchAll(/^  - type: (?:web|worker)$/gmu)];
-  assert.equal(services.length, 5);
+  assert.equal(services.length, 7);
   assert.match(manifest, /name: property-predator-growth-hq/);
   assert.match(manifest, /name: property-predator-email-worker/);
   assert.match(manifest, /name: property-predator-public-social-revalidator/);
   assert.match(manifest, /name: property-predator-public-social-test-rail/);
   assert.match(manifest, /name: property-predator-owned-public-social-live/);
+  assert.match(manifest, /name: property-predator-meta-whatsapp-live-worker/);
+  assert.match(manifest, /name: property-predator-meta-whatsapp-live-webhook/);
   assert.doesNotMatch(manifest, /^databases:/mu);
   assert.doesNotMatch(manifest, /(?:preDeployCommand|initialDeployHook|afterFirstDeployCommand):/);
   assert.doesNotMatch(manifest, /postgres(?:ql)?:\/\//iu);

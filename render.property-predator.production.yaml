@@ -161,6 +161,11 @@ services:
       # call a social provider or use the worker/revalidator functions.
       - key: DATABASE_PUBLIC_SOCIAL_COMMAND_URL
         sync: false
+      # Function-only 0053 founder command seam. It can bind encrypted Meta
+      # evidence, register one approved template and enqueue only after exact
+      # consent/PECR/operator evidence. It cannot claim or call a provider.
+      - key: DATABASE_WHATSAPP_LIVE_COMMAND_URL
+        sync: false
       # Dedicated r72_mailgun_webhook_command identity. This is deliberately
       # narrower than the platform's generic webhook role.
       - key: DATABASE_MAILGUN_WEBHOOK_URL
@@ -180,6 +185,8 @@ services:
       - key: DATABASE_CONTENT_ADAPTER_POOL_MAX
         value: "2"
       - key: DATABASE_PUBLIC_SOCIAL_COMMAND_POOL_MAX
+        value: "2"
+      - key: DATABASE_WHATSAPP_LIVE_COMMAND_POOL_MAX
         value: "2"
       - key: DATABASE_MAILGUN_WEBHOOK_POOL_MAX
         value: "2"
@@ -235,6 +242,115 @@ services:
         value: https://hq.propertypredator.com/api/provider-webhooks/mailgun/events
       - key: MAILGUN_WEBHOOK_SIGNATURE_VERIFICATION_ENABLED
         value: "true"
+
+  # 0053 one-at-a-time Meta WhatsApp dispatch worker. It deploys dark, proves
+  # its exact function boundary and makes no startup provider call. The Meta
+  # access token remains inside the job-bound encrypted database envelope.
+  - type: worker
+    name: property-predator-meta-whatsapp-live-worker
+    runtime: node
+    region: frankfurt
+    plan: starter
+    branch: codex/relaunch72-platform-foundation
+    numInstances: 1
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
+    startCommand: npm run --workspace orchestrator serve:meta-whatsapp-live-worker
+    maxShutdownDelaySeconds: 120
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_SSL_MODE
+        value: verify-full
+      - key: DATABASE_WHATSAPP_LIVE_WORKER_URL
+        sync: false
+      - key: DATABASE_WHATSAPP_LIVE_WORKER_POOL_MAX
+        value: "1"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        value: "5000"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: "15000"
+      - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_WHATSAPP_LIVE_WORKSPACE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_WHATSAPP_LIVE_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_WHATSAPP_CREDENTIAL_ENCRYPTION_KEY_BASE64
+        sync: false
+      - key: PROPERTY_PREDATOR_WHATSAPP_CREDENTIAL_ENCRYPTION_KEY_VERSION
+        sync: false
+      - key: PROPERTY_PREDATOR_WHATSAPP_LIVE_MODE
+        value: disabled
+      - key: PROPERTY_PREDATOR_WHATSAPP_LIVE_PROVIDER_ID
+        value: meta_whatsapp_cloud
+      - key: PROPERTY_PREDATOR_WHATSAPP_LIVE_POLL_MS
+        value: "5000"
+      - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_WHATSAPP_EMERGENCY_PAUSED
+        value: "true"
+
+  # Public Meta callback surface. This process owns only the webhook login,
+  # app-signature secret and verification token. It never receives the outbound
+  # access token, envelope key, portal session secret or any other database URL.
+  - type: web
+    name: property-predator-meta-whatsapp-live-webhook
+    runtime: node
+    region: frankfurt
+    plan: starter
+    branch: codex/relaunch72-platform-foundation
+    numInstances: 1
+    buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
+    startCommand: npm run --workspace orchestrator serve:meta-whatsapp-live-webhook
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 60
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATABASE_SSL_MODE
+        value: verify-full
+      - key: DATABASE_WHATSAPP_LIVE_WEBHOOK_URL
+        sync: false
+      - key: DATABASE_WHATSAPP_LIVE_WEBHOOK_POOL_MAX
+        value: "2"
+      - key: DATABASE_CONNECTION_TIMEOUT_MS
+        value: "5000"
+      - key: DATABASE_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: DATABASE_STATEMENT_TIMEOUT_MS
+        value: "15000"
+      - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_WHATSAPP_WEBHOOK_MODE
+        value: disabled
+      - key: PROPERTY_PREDATOR_WHATSAPP_LIVE_PROVIDER_ID
+        value: meta_whatsapp_cloud
+      - key: PROPERTY_PREDATOR_WHATSAPP_LIVE_WORKSPACE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_WHATSAPP_LIVE_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_WHATSAPP_LIVE_BINDING_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_META_WHATSAPP_APP_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_META_WHATSAPP_WABA_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_META_WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_META_WHATSAPP_APP_SECRET
+        sync: false
+      - key: PROPERTY_PREDATOR_META_WHATSAPP_VERIFY_TOKEN
+        sync: false
 
   # This isolated worker is the only process that may receive the domain-scoped
   # Mailgun outbound key and verified sender. The Blueprint starts the reviewed

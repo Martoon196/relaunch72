@@ -352,16 +352,16 @@ export function createMetaWhatsAppLiveTransport(options: Readonly<{
 }
 
 export function verifyMetaWhatsAppLiveChallenge(
-  secrets: MetaWhatsAppSecrets,
+  secrets: Readonly<Pick<MetaWhatsAppSecrets, 'verifyToken'>>,
   input: Readonly<{ mode: unknown; verifyToken: unknown; challenge: unknown }>,
 ): Readonly<{ status: 200 | 400 | 403; body: string }> {
-  const exact = snapshotSecrets(secrets);
+  if (!SAFE_SECRET.test(secrets.verifyToken)) fail('invalid_configuration');
   if (input.mode !== 'subscribe' || typeof input.verifyToken !== 'string'
       || typeof input.challenge !== 'string' || !/^[\x21-\x7e]{1,200}$/u.test(input.challenge)) {
     return Object.freeze({ status: 400, body: '' });
   }
   const supplied = Buffer.from(input.verifyToken, 'utf8');
-  const expected = Buffer.from(exact.verifyToken, 'utf8');
+  const expected = Buffer.from(secrets.verifyToken, 'utf8');
   return supplied.length === expected.length && timingSafeEqual(supplied, expected)
     ? Object.freeze({ status: 200, body: input.challenge })
     : Object.freeze({ status: 403, body: '' });

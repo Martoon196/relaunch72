@@ -154,6 +154,30 @@ export function createOwnedSocialWorkerCommandDatabasePool(
   return createDatabasePool(loadDatabaseConfig('ownedSocialWorkerCommand', env), hooks);
 }
 
+/** Function-only command pool for binding, template and enqueue authority. */
+export function createWhatsAppLiveCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('whatsAppLiveCommand', env), hooks);
+}
+
+/** One-connection, function-only pool for the isolated Meta dispatch worker. */
+export function createWhatsAppLiveWorkerCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('whatsAppLiveWorkerCommand', env), hooks);
+}
+
+/** Function-only pool for verified Meta webhook receipt ingestion. */
+export function createWhatsAppLiveWebhookCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('whatsAppLiveWebhookCommand', env), hooks);
+}
+
 /** Function-only pool for the isolated provider-operation worker. */
 export function createWorkerDatabasePool(
   env: NodeJS.ProcessEnv = process.env,
