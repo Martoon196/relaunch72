@@ -47,13 +47,15 @@ export interface ConversionInboxSignedInboundEvidenceSnapshot {
   readonly kind:
     | 'signed_simulator_event'
     | 'signed_mailgun_inbound'
-    | 'signed_meta_whatsapp_inbound';
+    | 'signed_meta_whatsapp_inbound'
+    | 'signed_twilio_sms_inbound';
   readonly source:
     | 'whatsapp_simulator'
     | 'social_dm_simulator'
     | 'mailgun_eu'
-    | 'meta_whatsapp_cloud';
-  readonly network: 'email' | 'whatsapp' | 'facebook' | 'instagram';
+    | 'meta_whatsapp_cloud'
+    | 'twilio_sms';
+  readonly network: 'email' | 'whatsapp' | 'sms' | 'facebook' | 'instagram';
   /** Opaque internal receipt UUID. No provider event/address data is exposed. */
   readonly receiptId: string;
   /** Server-side verification time, never a caller-asserted provider timestamp. */
@@ -186,9 +188,10 @@ export interface ConversionInboxSignedInboundEvidenceView
   readonly label:
     | 'Signed TEST inbound'
     | 'Signed Mailgun inbound'
-    | 'Signed Meta inbound';
-  readonly networkLabel: 'Email' | 'WhatsApp' | 'Facebook' | 'Instagram';
-  readonly networkCode: 'EM' | 'WA' | 'FB' | 'IG';
+    | 'Signed Meta inbound'
+    | 'Signed Twilio inbound';
+  readonly networkLabel: 'Email' | 'WhatsApp' | 'SMS' | 'Facebook' | 'Instagram';
+  readonly networkCode: 'EM' | 'WA' | 'SMS' | 'FB' | 'IG';
   readonly receiptLabel: string;
   readonly accessibleLabel: string;
 }
@@ -406,6 +409,8 @@ function signedInboundEvidence(
       || new Date(evidence.verifiedAt).toISOString() !== evidence.verifiedAt) return null;
   const expectedSource = evidence.network === 'email'
     ? 'mailgun_eu'
+    : evidence.network === 'sms'
+      ? 'twilio_sms'
     : evidence.network === 'whatsapp'
     ? evidence.kind === 'signed_meta_whatsapp_inbound'
       ? 'meta_whatsapp_cloud'
@@ -415,14 +420,18 @@ function signedInboundEvidence(
   if (expectedSource === null || evidence.source !== expectedSource) return null;
   const expectedKind = evidence.network === 'email'
     ? 'signed_mailgun_inbound'
+    : evidence.source === 'twilio_sms'
+      ? 'signed_twilio_sms_inbound'
     : evidence.source === 'meta_whatsapp_cloud'
       ? 'signed_meta_whatsapp_inbound'
       : 'signed_simulator_event';
   if (evidence.kind !== expectedKind) return null;
   const networkLabel = evidence.network === 'email' ? 'Email'
+    : evidence.network === 'sms' ? 'SMS'
     : evidence.network === 'whatsapp' ? 'WhatsApp'
     : evidence.network === 'facebook' ? 'Facebook' : 'Instagram';
   const networkCode = evidence.network === 'email' ? 'EM'
+    : evidence.network === 'sms' ? 'SMS'
     : evidence.network === 'whatsapp' ? 'WA'
     : evidence.network === 'facebook' ? 'FB' : 'IG';
   const receiptId = evidence.receiptId.toLowerCase();
@@ -434,6 +443,8 @@ function signedInboundEvidence(
     verifiedAt: evidence.verifiedAt,
     label: evidence.kind === 'signed_mailgun_inbound'
       ? 'Signed Mailgun inbound'
+      : evidence.kind === 'signed_twilio_sms_inbound'
+        ? 'Signed Twilio inbound'
       : evidence.kind === 'signed_meta_whatsapp_inbound'
         ? 'Signed Meta inbound'
         : 'Signed TEST inbound',
@@ -441,11 +452,15 @@ function signedInboundEvidence(
     networkCode,
     receiptLabel: `${evidence.kind === 'signed_mailgun_inbound'
       ? 'MAIL IN'
+      : evidence.kind === 'signed_twilio_sms_inbound'
+        ? 'SMS IN'
       : evidence.kind === 'signed_meta_whatsapp_inbound'
         ? 'META IN'
         : 'TEST IN'} ${receiptId.slice(0, 8)}…${receiptId.slice(-4)}`,
     accessibleLabel: evidence.kind === 'signed_mailgun_inbound'
       ? 'Signed Mailgun email reply from the controlled owned-office proof. An admin call task was created.'
+      : evidence.kind === 'signed_twilio_sms_inbound'
+        ? 'Signed Twilio SMS inbound message projected into the canonical Conversion Inbox and Lead 360. An admin call task was created.'
       : evidence.kind === 'signed_meta_whatsapp_inbound'
         ? 'Signed Meta WhatsApp inbound message projected into the canonical Conversion Inbox and Lead 360. An admin call task was created.'
       : `Signed simulated ${networkLabel} inbound event. Non-routable test only; no live account connected.`,

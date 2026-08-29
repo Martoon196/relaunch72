@@ -360,6 +360,15 @@ LEFT JOIN LATERAL (
          WHERE live_email.workspace_id = delivery.workspace_id
            AND live_email.message_delivery_id = delivery.id
        ))
+     OR (conversation.environment = 'live'
+       AND conversation.channel = 'sms'
+       AND EXISTS (
+         SELECT 1
+         FROM app.property_predator_sms_jobs AS live_sms
+         WHERE live_sms.workspace_id = delivery.workspace_id
+           AND live_sms.message_delivery_id = delivery.id
+           AND live_sms.operation_id = operation.id
+       ))
    )
   LEFT JOIN LATERAL (
     SELECT attempt.attempt_kind, attempt.state,
@@ -454,6 +463,22 @@ WHERE conversation.id = $1
           FROM app.property_predator_whatsapp_live_inbox_projections AS live_whatsapp
           WHERE live_whatsapp.workspace_id = conversation.workspace_id
             AND live_whatsapp.conversation_id = conversation.id
+        )) OR (conversation.channel = 'sms' AND (
+          EXISTS (
+            SELECT 1
+            FROM app.property_predator_sms_inbox_projections AS live_sms
+            WHERE live_sms.workspace_id = conversation.workspace_id
+              AND live_sms.conversation_id = conversation.id
+          ) OR EXISTS (
+            SELECT 1
+            FROM app.message_deliveries AS live_delivery
+            JOIN app.property_predator_sms_jobs AS live_sms_job
+              ON live_sms_job.workspace_id = live_delivery.workspace_id
+             AND live_sms_job.message_delivery_id = live_delivery.id
+            WHERE live_delivery.workspace_id = conversation.workspace_id
+              AND live_delivery.conversation_id = conversation.id
+              AND live_delivery.environment = 'live'
+          )
         ))
       )
     )
@@ -464,16 +489,19 @@ SELECT message.id AS "messageId", message.direction, message.lifecycle,
        message.source_kind AS "sourceKind",
        version.body_text AS body, message.occurred_at AS "occurredAt",
        delivery.status AS "deliveryStatus",
-       coalesce(test_inbound.receipt_id, owned_reply.id, live_whatsapp.receipt_id)
+       coalesce(test_inbound.receipt_id, owned_reply.id, live_whatsapp.receipt_id,
+                live_sms.receipt_id)
          AS "inboundReceiptId",
        CASE WHEN owned_reply.id IS NOT NULL THEN 'mailgun_email'
             WHEN live_whatsapp.id IS NOT NULL THEN 'meta_whatsapp_live'
+            WHEN live_sms.id IS NOT NULL THEN 'twilio_sms_live'
             ELSE test_inbound.provider_family END AS "inboundProviderFamily",
        CASE WHEN owned_reply.id IS NOT NULL THEN 'email'
             WHEN live_whatsapp.id IS NOT NULL THEN 'whatsapp'
+            WHEN live_sms.id IS NOT NULL THEN 'sms'
             ELSE test_inbound.network END AS "inboundNetwork",
        coalesce(test_inbound.received_at, owned_reply.received_at,
-                live_whatsapp.recorded_at) AS "inboundVerifiedAt"
+                live_whatsapp.recorded_at, live_sms.recorded_at) AS "inboundVerifiedAt"
 FROM app.messages AS message
 JOIN app.message_versions AS version
   ON version.workspace_id = message.workspace_id
@@ -518,6 +546,15 @@ LEFT JOIN app.property_predator_whatsapp_live_inbox_projections AS live_whatsapp
  AND live_whatsapp.workspace_id = message.workspace_id
  AND live_whatsapp.conversation_id = message.conversation_id
  AND live_whatsapp.inbound_message_id = message.id
+LEFT JOIN app.property_predator_sms_inbox_projections AS live_sms
+  ON message.environment = 'live'
+ AND message.channel = 'sms'
+ AND message.direction = 'inbound'
+ AND message.lifecycle = 'received'
+ AND message.source_kind = 'verified_webhook'
+ AND live_sms.workspace_id = message.workspace_id
+ AND live_sms.conversation_id = message.conversation_id
+ AND live_sms.inbound_message_id = message.id
 WHERE message.conversation_id = $1
   AND (
     message.environment = 'test'
@@ -545,6 +582,22 @@ WHERE message.conversation_id = $1
           FROM app.property_predator_whatsapp_live_inbox_projections AS proof
           WHERE proof.workspace_id = message.workspace_id
             AND proof.conversation_id = message.conversation_id
+        )) OR (message.channel = 'sms' AND (
+          EXISTS (
+            SELECT 1
+            FROM app.property_predator_sms_inbox_projections AS proof
+            WHERE proof.workspace_id = message.workspace_id
+              AND proof.conversation_id = message.conversation_id
+          ) OR EXISTS (
+            SELECT 1
+            FROM app.message_deliveries AS live_delivery
+            JOIN app.property_predator_sms_jobs AS live_sms_job
+              ON live_sms_job.workspace_id = live_delivery.workspace_id
+             AND live_sms_job.message_delivery_id = live_delivery.id
+            WHERE live_delivery.workspace_id = message.workspace_id
+              AND live_delivery.conversation_id = message.conversation_id
+              AND live_delivery.environment = 'live'
+          )
         ))
       )
     )
@@ -600,6 +653,22 @@ WITH target AS (
             FROM app.property_predator_whatsapp_live_inbox_projections AS live_whatsapp
             WHERE live_whatsapp.workspace_id = conversation.workspace_id
               AND live_whatsapp.conversation_id = conversation.id
+          )) OR (conversation.channel = 'sms' AND (
+            EXISTS (
+              SELECT 1
+              FROM app.property_predator_sms_inbox_projections AS live_sms
+              WHERE live_sms.workspace_id = conversation.workspace_id
+                AND live_sms.conversation_id = conversation.id
+            ) OR EXISTS (
+              SELECT 1
+              FROM app.message_deliveries AS live_delivery
+              JOIN app.property_predator_sms_jobs AS live_sms_job
+                ON live_sms_job.workspace_id = live_delivery.workspace_id
+               AND live_sms_job.message_delivery_id = live_delivery.id
+              WHERE live_delivery.workspace_id = conversation.workspace_id
+                AND live_delivery.conversation_id = conversation.id
+                AND live_delivery.environment = 'live'
+            )
           ))
         )
       )
@@ -902,12 +971,14 @@ function mapInboundEvidence(
   }
   const network = row.inboundNetwork;
   const providerFamily = row.inboundProviderFamily;
-  if (network !== 'email' && network !== 'whatsapp'
+  if (network !== 'email' && network !== 'whatsapp' && network !== 'sms'
       && network !== 'facebook' && network !== 'instagram') {
     throw new Error('Conversion Inbox signed inbound network is invalid');
   }
   const source = providerFamily === 'mailgun_email' && network === 'email'
     ? 'mailgun_eu'
+    : providerFamily === 'twilio_sms_live' && network === 'sms'
+    ? 'twilio_sms'
     : providerFamily === 'meta_whatsapp_live' && network === 'whatsapp'
     ? 'meta_whatsapp_cloud'
     : providerFamily === 'whatsapp' && network === 'whatsapp'
@@ -920,6 +991,8 @@ function mapInboundEvidence(
   return Object.freeze({
     kind: source === 'mailgun_eu'
       ? 'signed_mailgun_inbound'
+      : source === 'twilio_sms'
+        ? 'signed_twilio_sms_inbound'
       : source === 'meta_whatsapp_cloud'
         ? 'signed_meta_whatsapp_inbound'
         : 'signed_simulator_event',

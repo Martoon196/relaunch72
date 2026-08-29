@@ -299,6 +299,22 @@ export class PgInboxReadService implements InboxReadService {
                    FROM app.property_predator_whatsapp_live_inbox_projections AS live_whatsapp
                    WHERE live_whatsapp.workspace_id = conversation.workspace_id
                      AND live_whatsapp.conversation_id = conversation.id
+                 )) OR (conversation.channel = 'sms' AND (
+                   EXISTS (
+                     SELECT 1
+                     FROM app.property_predator_sms_inbox_projections AS live_sms
+                     WHERE live_sms.workspace_id = conversation.workspace_id
+                       AND live_sms.conversation_id = conversation.id
+                   ) OR EXISTS (
+                     SELECT 1
+                     FROM app.message_deliveries AS live_delivery
+                     JOIN app.property_predator_sms_jobs AS live_sms_job
+                       ON live_sms_job.workspace_id = live_delivery.workspace_id
+                      AND live_sms_job.message_delivery_id = live_delivery.id
+                     WHERE live_delivery.workspace_id = conversation.workspace_id
+                       AND live_delivery.conversation_id = conversation.id
+                       AND live_delivery.environment = 'live'
+                   )
                  ))
                )
              )

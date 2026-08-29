@@ -585,6 +585,8 @@ test('inbox read model is bounded, omits endpoint addresses and fails closed on 
     /ORDER BY approval_request\.request_number DESC, approval_request\.id DESC\s+LIMIT 1/);
   assert.match(client.conversationSql,
     /latest_approval\.approval_decision_id IS NULL/);
+  assert.match(client.conversationSql, /property_predator_sms_inbox_projections/);
+  assert.match(client.conversationSql, /property_predator_sms_jobs/);
   assert.equal(Object.hasOwn(page.conversations[0]!, 'recipient'), false);
   client.invalid = true;
   await assert.rejects(service.listConversations(userContext), /latest message is invalid/);

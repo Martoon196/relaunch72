@@ -163,6 +163,8 @@ function renderTranscript(thread: ConversionInboxSelectedThreadView, timezone: s
     const proofDetail = evidence
       ? `<div class="ci-inbound-proof-detail">${evidence.kind === 'signed_mailgun_inbound'
         ? 'Mailgun signature and exact reply correlation verified'
+        : evidence.kind === 'signed_twilio_sms_inbound'
+          ? 'Twilio request signature, owned-number binding and exact sender projection verified'
         : evidence.kind === 'signed_meta_whatsapp_inbound'
           ? 'Meta raw-body HMAC, owned-number binding and exact sender projection verified'
           : 'Simulator signature verified'} · Receipt ${escapeHtml(evidence.receiptLabel)} · verified ${dateTime(evidence.verifiedAt, timezone, true)}</div>`
@@ -181,7 +183,9 @@ function renderRailActivity(thread: ConversionInboxSelectedThreadView, timezone:
   if (activity === null) {
     if (thread.summary.environment === 'live') {
       const whatsapp = thread.summary.channel === 'whatsapp';
-      return `<section class="ci-rail-activity" data-rail-state="reconciled" aria-label="${whatsapp ? 'Meta WhatsApp' : 'Mailgun'} inbound reconciled"><span class="ci-rail-kicker">${whatsapp ? 'META WHATSAPP INBOUND' : 'MAILGUN INBOUND'}</span><strong class="ci-rail-state">Reply reconciled</strong><span class="ci-rail-copy">The signed inbound event was projected into this canonical thread, Lead 360, unread work and an urgent admin call task atomically.</span></section>`;
+      const sms = thread.summary.channel === 'sms';
+      const provider = whatsapp ? 'Meta WhatsApp' : sms ? 'Twilio SMS' : 'Mailgun';
+      return `<section class="ci-rail-activity" data-rail-state="reconciled" aria-label="${provider} inbound reconciled"><span class="ci-rail-kicker">${provider.toUpperCase()} INBOUND</span><strong class="ci-rail-state">Reply reconciled</strong><span class="ci-rail-copy">The signed inbound event was projected into this canonical thread, Lead 360, unread work and an urgent admin call task atomically.</span></section>`;
     }
     return `<section class="ci-rail-activity" data-rail-state="none" aria-label="TEST rail activity"><span class="ci-rail-kicker">Latest TEST rail</span><strong class="ci-rail-state">No operation recorded</strong><span class="ci-rail-copy">Nothing is queued for this conversation.</span></section>`;
   }
