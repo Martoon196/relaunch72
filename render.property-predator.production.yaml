@@ -178,6 +178,13 @@ services:
       # quarantine, publish, generate content or perform provider operations.
       - key: DATABASE_CONTENT_ADAPTER_URL
         sync: false
+      # Signed Property Predator source events use two disjoint runtime
+      # identities: receipt-only command storage and projection-only webhook.
+      # Both values are dashboard-owned and may never fall back to DATABASE_URL.
+      - key: DATABASE_EXTERNAL_EVENT_COMMAND_URL
+        sync: false
+      - key: DATABASE_WEBHOOK_URL
+        sync: false
       # Migration 0040 campaign planning uses its own function-only command
       # role. This identity can append TEST planning intent evidence; it cannot
       # call a social provider or use the worker/revalidator functions.

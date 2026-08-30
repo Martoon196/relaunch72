@@ -186,6 +186,8 @@ test('production Blueprint is isolated, manually deployed and narrowly fail-clos
   dashboardControlledSlot('PROPERTY_PREDATOR_EXTERNAL_EVENTS_WORKSPACE_ID');
   dashboardControlledSlot('PROPERTY_PREDATOR_EXTERNAL_EVENTS_HMAC_SECRET_BASE64URL');
   dashboardControlledSlot('PROPERTY_PREDATOR_EXTERNAL_EVENTS_TRUSTED_PROXY_ADDRESSES');
+  dashboardControlledSlot('DATABASE_EXTERNAL_EVENT_COMMAND_URL');
+  dashboardControlledSlot('DATABASE_WEBHOOK_URL');
   dashboardControlledSlot('PROPERTY_PREDATOR_SSO_ENABLED');
   literalValue('PROPERTY_PREDATOR_SSO_ISSUER', 'https://propertypredator.com');
   literalValue('PROPERTY_PREDATOR_SSO_AUTHORIZE_URL', 'https://propertypredator.com/sso.html');
@@ -304,6 +306,8 @@ test('production Blueprint keeps web and worker database identities process-isol
     'DATABASE_ABUSE_COMMAND_URL',
     'DATABASE_CONTENT_COMMAND_URL',
     'DATABASE_CONTENT_ADAPTER_URL',
+    'DATABASE_EXTERNAL_EVENT_COMMAND_URL',
+    'DATABASE_WEBHOOK_URL',
     'DATABASE_PUBLIC_SOCIAL_COMMAND_URL',
     'DATABASE_OWNED_SOCIAL_COMMAND_URL',
     'DATABASE_WHATSAPP_LIVE_COMMAND_URL',
@@ -334,11 +338,13 @@ test('production Blueprint keeps web and worker database identities process-isol
     'DATABASE_CRM_COMMAND_URL',
     'DATABASE_CUSTOMER_EMAIL_COMMAND_URL',
     'DATABASE_CUSTOMER_EMAIL_WEBHOOK_URL',
+    'DATABASE_EXTERNAL_EVENT_COMMAND_URL',
     'DATABASE_IDENTITY_COMMAND_URL',
     'DATABASE_MAILGUN_WEBHOOK_URL',
     'DATABASE_OWNED_SOCIAL_COMMAND_URL',
     'DATABASE_PUBLIC_SOCIAL_COMMAND_URL',
     'DATABASE_SMS_COMMAND_URL',
+    'DATABASE_WEBHOOK_URL',
     'DATABASE_WEB_URL',
     'DATABASE_WHATSAPP_LIVE_COMMAND_URL',
   ]);
