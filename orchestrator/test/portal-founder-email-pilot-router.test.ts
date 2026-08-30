@@ -11,10 +11,13 @@ import {
 import {
   CONTACT_ENDPOINT_ATTACH_ROUTE,
   EMAIL_PILOT_AUTHORISE_ROUTE,
+  EMAIL_PILOT_AUTHORISE_COOKIE,
   EMAIL_PILOT_CONFIRM_VALUE,
   EMAIL_PILOT_POLICY_CONFIRM_VALUE,
+  EMAIL_PILOT_POLICY_COOKIE,
   EMAIL_PILOT_POLICY_ROUTE,
   EMAIL_PILOT_PREPARE_CONFIRM_VALUE,
+  EMAIL_PILOT_PREPARE_COOKIE,
   EMAIL_PILOT_PREPARE_ROUTE,
   founderEmailPilotNoticeToken,
   founderEmailPilotPreviewToken,
@@ -234,13 +237,13 @@ function deps(overrides: Partial<PostgresPortalDeps> = {}): PostgresPortalDeps {
   } as PostgresPortalDeps;
 }
 
-function request(method: string, url: string, body?: string) {
+function request(method: string, url: string, body?: string, cookie = COOKIE) {
   const req = new EventEmitter() as EventEmitter & {
     method: string; url: string; headers: Record<string, string>;
   };
   req.method = method;
   req.url = url;
-  req.headers = { cookie: COOKIE };
+  req.headers = { cookie };
   // setImmediate, not queueMicrotask: the router awaits session resolution
   // before subscribing to the body, and a microtask would hang the read.
   setImmediate(() => {
@@ -264,9 +267,15 @@ function response() {
   };
 }
 
-async function call(method: string, url: string, portal: PostgresPortalDeps, body?: string) {
+async function call(
+  method: string,
+  url: string,
+  portal: PostgresPortalDeps,
+  body?: string,
+  cookie = COOKIE,
+) {
   const res = response();
-  await handlePortal(request(method, url, body) as never, res as never, portal);
+  await handlePortal(request(method, url, body, cookie) as never, res as never, portal);
   return res;
 }
 
@@ -444,6 +453,21 @@ test('the signed send button submits the complete action without hidden fields o
   assert.equal(pilot.authoriseCalls[0]?.purpose, 'property_predator_marketing');
 });
 
+test('the rendered send button authorises through its HttpOnly action cookie and an empty form', async () => {
+  const pilot = new FakePilot();
+  const page = await call('GET', CASE_FILE, deps({ founderEmailPilot: pilot }));
+  const token = new RegExp(`${EMAIL_PILOT_AUTHORISE_COOKIE}=([^;\\n]+)`).exec(
+    page.headers['set-cookie'] ?? '',
+  )?.[1];
+  assert.ok(token);
+  const res = await call(
+    'POST', EMAIL_PILOT_AUTHORISE_ROUTE, deps({ founderEmailPilot: pilot }), '',
+    `${COOKIE}; ${EMAIL_PILOT_AUTHORISE_COOKIE}=${token}`,
+  );
+  assert.equal(noticeOf(res), founderEmailPilotNoticeToken(SECRET, SESSION, 'pilot_queued'));
+  assert.equal(pilot.authoriseCalls.length, 1);
+});
+
 test('the signed send button rejects another session and extra browser fields', async () => {
   const token = founderEmailPilotPreviewToken(SECRET, OTHER_SESSION, {
     commandKey: PILOT_COMMAND_KEY,
@@ -591,9 +615,11 @@ test('the case file shows the exact subject and full body before authorising', a
   assert.match(res.body, /v3, approved/);
   assert.match(res.body, /v2, approved/);
   assert.match(res.body, />Send this email now<\/button>/);
-  assert.match(res.body, /name="preview_token" value="[^"]+"/);
   assert.doesNotMatch(res.body, /name="confirm_send"/);
-  assert.doesNotMatch(res.body, /type="hidden" name="preview_token"/);
+  const sendHtml = res.body.match(new RegExp(
+    `<form[^>]+action="${EMAIL_PILOT_AUTHORISE_ROUTE}"[\\s\\S]*?<\\/form>`,
+  ))?.[0] ?? '';
+  assert.doesNotMatch(sendHtml, /<(input|select|textarea)\b/);
 });
 
 test('an unresolved tuple offers no send, only the blockers', async () => {
@@ -694,6 +720,26 @@ test('signed preparation buttons work without hidden fields or typed phrases', a
     signedStepForm('policy'),
   );
   assert.equal(noticeOf(policy), founderEmailPilotNoticeToken(SECRET, SESSION, 'policy_recorded'));
+  assert.equal(pilot.prepareCalls.length, 1);
+  assert.equal(pilot.policyCalls.length, 1);
+});
+
+test('rendered preparation buttons use HttpOnly action cookies and empty forms', async () => {
+  const pilot = unpreparedPilot();
+  const page = await call('GET', CASE_FILE, deps({ founderEmailPilot: pilot }));
+  const cookies = page.headers['set-cookie'] ?? '';
+  const prepareToken = new RegExp(`${EMAIL_PILOT_PREPARE_COOKIE}=([^;\\n]+)`).exec(cookies)?.[1];
+  const policyToken = new RegExp(`${EMAIL_PILOT_POLICY_COOKIE}=([^;\\n]+)`).exec(cookies)?.[1];
+  assert.ok(prepareToken);
+  assert.ok(policyToken);
+  await call(
+    'POST', EMAIL_PILOT_PREPARE_ROUTE, deps({ founderEmailPilot: pilot }), '',
+    `${COOKIE}; ${EMAIL_PILOT_PREPARE_COOKIE}=${prepareToken}`,
+  );
+  await call(
+    'POST', EMAIL_PILOT_POLICY_ROUTE, deps({ founderEmailPilot: pilot }), '',
+    `${COOKIE}; ${EMAIL_PILOT_POLICY_COOKIE}=${policyToken}`,
+  );
   assert.equal(pilot.prepareCalls.length, 1);
   assert.equal(pilot.policyCalls.length, 1);
 });
@@ -882,8 +928,7 @@ test('the case file shows the complete policy, recipient, subject and body', asy
     `<form[^>]+action="${EMAIL_PILOT_POLICY_ROUTE}"[\\s\\S]*?<\\/form>`,
   ))?.[0] ?? '';
   for (const formHtml of [prepareHtml, policyHtml]) {
-    assert.match(formHtml, /name="step_token" value="[^"]+"/);
-    assert.doesNotMatch(formHtml, /type="hidden"/);
+    assert.doesNotMatch(formHtml, /<(input|select|textarea)\b/);
     assert.doesNotMatch(formHtml, /name="confirm_(prepare|policy)"/);
   }
   // The recipient resolved from the endpoint, and the exact approved copy.

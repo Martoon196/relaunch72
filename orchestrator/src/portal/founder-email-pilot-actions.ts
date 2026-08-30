@@ -20,6 +20,11 @@ export const EMAIL_PILOT_PREPARE_ROUTE = '/portal/crm/contacts/email-pilot/prepa
 /** POST target for recording the founder and operator compliance review. */
 export const EMAIL_PILOT_POLICY_ROUTE = '/portal/crm/contacts/email-pilot/policy' as const;
 
+/** HttpOnly action cookies keep security state out of founder-facing forms. */
+export const EMAIL_PILOT_PREPARE_COOKIE = 'r72_email_pilot_prepare' as const;
+export const EMAIL_PILOT_POLICY_COOKIE = 'r72_email_pilot_policy' as const;
+export const EMAIL_PILOT_AUTHORISE_COOKIE = 'r72_email_pilot_authorise' as const;
+
 export const FOUNDER_EMAIL_PILOT_NOTICE_CODES = Object.freeze([
   'endpoint_attached',
   'endpoint_replayed',
