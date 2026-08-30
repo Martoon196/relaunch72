@@ -321,18 +321,14 @@ import {
   CONTACT_ENDPOINT_CONFIRM_VALUE,
   CONTACT_ENDPOINT_FORM_KEYS,
   EMAIL_PILOT_AUTHORISE_FORM_KEYS,
-  EMAIL_PILOT_AUTHORISE_COOKIE,
   EMAIL_PILOT_AUTHORISE_ROUTE,
   EMAIL_PILOT_CONFIRM_VALUE,
   EMAIL_PILOT_POLICY_CONFIRM_VALUE,
-  EMAIL_PILOT_POLICY_COOKIE,
   EMAIL_PILOT_POLICY_FORM_KEYS,
   EMAIL_PILOT_POLICY_ROUTE,
   EMAIL_PILOT_PREPARE_CONFIRM_VALUE,
-  EMAIL_PILOT_PREPARE_COOKIE,
   EMAIL_PILOT_PREPARE_FORM_KEYS,
   EMAIL_PILOT_PREPARE_ROUTE,
-  EMAIL_PILOT_PREVIEW_TTL_MS,
   EMAIL_PILOT_STEP_TOKEN_TTL_MS,
   founderEmailPilotNoticeFromQuery,
   founderEmailPilotNoticeToken,
@@ -526,23 +522,6 @@ function sendHtml(res: ServerResponse, code: number, body: string, cookie?: stri
   Object.assign(headers, extra);
   res.writeHead(code, headers);
   res.end(body);
-}
-
-function founderPilotActionCookie(
-  name: string,
-  value: string,
-  path: string,
-  maxAgeSeconds: number,
-  secure: boolean,
-): string {
-  return [
-    `${name}=${value}`,
-    'HttpOnly',
-    'SameSite=Strict',
-    `Path=${path}`,
-    `Max-Age=${maxAgeSeconds}`,
-    ...(secure ? ['Secure'] : []),
-  ].join('; ');
 }
 
 function sendVerifiedCompanyArtwork(
@@ -5400,15 +5379,19 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   // The two preparation acts. Neither queues anything and neither reaches a
   // provider; both are owner/admin gated at the database boundary.
   if (deps.kind === 'postgres' && method === 'POST'
-      && (p === EMAIL_PILOT_PREPARE_ROUTE || p === EMAIL_PILOT_POLICY_ROUTE)) {
-    const preparing = p === EMAIL_PILOT_PREPARE_ROUTE;
+      && (p === EMAIL_PILOT_PREPARE_ROUTE || p === EMAIL_PILOT_POLICY_ROUTE
+        || p.startsWith(`${EMAIL_PILOT_PREPARE_ROUTE}/`)
+        || p.startsWith(`${EMAIL_PILOT_POLICY_ROUTE}/`))) {
+    const preparing = p === EMAIL_PILOT_PREPARE_ROUTE
+      || p.startsWith(`${EMAIL_PILOT_PREPARE_ROUTE}/`);
     const form = await readMultiValueForm(req);
+    const pathStepToken = p.startsWith(`${preparing
+      ? EMAIL_PILOT_PREPARE_ROUTE : EMAIL_PILOT_POLICY_ROUTE}/`)
+      ? p.slice((preparing ? EMAIL_PILOT_PREPARE_ROUTE : EMAIL_PILOT_POLICY_ROUTE).length + 1)
+      : null;
     const submittedStepToken = form ? oneFormValue(form, 'step_token') : null;
-    const cookieStepToken = requestCookies[
-      preparing ? EMAIL_PILOT_PREPARE_COOKIE : EMAIL_PILOT_POLICY_COOKIE
-    ] ?? '';
     const signedStep = form ? founderEmailPilotStepClaims(
-      submittedStepToken ?? cookieStepToken, deps.sessionSecret, sessionToken, Date.now(),
+      pathStepToken ?? submittedStepToken ?? '', deps.sessionSecret, sessionToken, Date.now(),
     ) : null;
     const contactId = (signedStep?.contactId
       ?? (form ? oneFormValue(form, 'contact_id') ?? '' : '')).toLowerCase();
@@ -5432,7 +5415,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         === EMAIL_PILOT_PREPARE_CONFIRM_VALUE
       : oneFormValue(form ?? new URLSearchParams(), 'confirm_policy')
         === EMAIL_PILOT_POLICY_CONFIRM_VALUE;
-    const signedAllowed = new Set(submittedStepToken === null ? [] : ['step_token']);
+    const signedAllowed = new Set(
+      pathStepToken !== null || submittedStepToken === null ? [] : ['step_token'],
+    );
     const legacyAllowed = new Set(
       preparing ? EMAIL_PILOT_PREPARE_FORM_KEYS : EMAIL_PILOT_POLICY_FORM_KEYS,
     );
@@ -5483,11 +5468,16 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
 
   // The final founder act: authorise the capped enqueue for one already
   // approved message. It calls the existing 0054 command and never Mailgun.
-  if (deps.kind === 'postgres' && p === EMAIL_PILOT_AUTHORISE_ROUTE && method === 'POST') {
+  if (deps.kind === 'postgres'
+      && (p === EMAIL_PILOT_AUTHORISE_ROUTE || p.startsWith(`${EMAIL_PILOT_AUTHORISE_ROUTE}/`))
+      && method === 'POST') {
     const form = await readMultiValueForm(req);
+    const pathPreviewToken = p.startsWith(`${EMAIL_PILOT_AUTHORISE_ROUTE}/`)
+      ? p.slice(EMAIL_PILOT_AUTHORISE_ROUTE.length + 1)
+      : null;
     const submittedPreviewToken = form ? oneFormValue(form, 'preview_token') : null;
     const claims = form ? founderEmailPilotPreviewClaims(
-      submittedPreviewToken ?? requestCookies[EMAIL_PILOT_AUTHORISE_COOKIE] ?? '',
+      pathPreviewToken ?? submittedPreviewToken ?? '',
       deps.sessionSecret,
       sessionToken,
       Date.now(),
@@ -5515,7 +5505,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     const signedFormValid = browserBound
       && campaignFormKeysAllowed(
         form ?? new URLSearchParams(),
-        new Set(submittedPreviewToken === null ? [] : ['preview_token']),
+        new Set(
+          pathPreviewToken !== null || submittedPreviewToken === null ? [] : ['preview_token'],
+        ),
       );
     const legacyFormValid = !browserBound
       && campaignFormKeysAllowed(
@@ -5727,40 +5719,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           url.searchParams, deps.sessionSecret, sessionToken,
         ),
       })}`;
-      const actionCookies: string[] = [];
-      if (pilotPreparation) {
-        actionCookies.push(
-          founderPilotActionCookie(
-            EMAIL_PILOT_PREPARE_COOKIE,
-            pilotPreparation.prepareToken,
-            EMAIL_PILOT_PREPARE_ROUTE,
-            Math.floor(EMAIL_PILOT_STEP_TOKEN_TTL_MS / 1000),
-            deps.secure,
-          ),
-          founderPilotActionCookie(
-            EMAIL_PILOT_POLICY_COOKIE,
-            pilotPreparation.policyToken,
-            EMAIL_PILOT_POLICY_ROUTE,
-            Math.floor(EMAIL_PILOT_STEP_TOKEN_TTL_MS / 1000),
-            deps.secure,
-          ),
-        );
-      }
-      if (pilotAuthorisation) {
-        actionCookies.push(founderPilotActionCookie(
-          EMAIL_PILOT_AUTHORISE_COOKIE,
-          pilotAuthorisation.previewToken,
-          EMAIL_PILOT_AUTHORISE_ROUTE,
-          Math.floor(EMAIL_PILOT_PREVIEW_TTL_MS / 1000),
-          deps.secure,
-        ));
-      }
-      return sendHtml(
-        res,
-        200,
-        crmPage(shell, body, deps, csrfToken),
-        actionCookies.length > 0 ? actionCookies : undefined,
-      );
+      return sendHtml(res, 200, crmPage(shell, body, deps, csrfToken));
     } catch {
       return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
         title: 'Lead 360 temporarily unavailable',

@@ -575,12 +575,12 @@ function pilotPreparationPanel(
     : `<span class="lead360-pilot-step">Not yet · ${escapeHtml(label)}</span>`);
   const contentForm = preparation.contentPrepared
     ? '<p class="lead360-pilot-clear">The approved campaign version, step, message and both approvals are recorded for this endpoint.</p>'
-    : `<form method="post" action="${EMAIL_PILOT_PREPARE_ROUTE}" autocomplete="off">
+    : `<form method="post" action="${EMAIL_PILOT_PREPARE_ROUTE}/${escapeHtml(preparation.prepareToken)}" autocomplete="off">
         <button class="lead360-permission-button" type="submit">Prepare approved email</button>
       </form>`;
   const policyForm = preparation.policyRecorded
     ? '<p class="lead360-pilot-clear">The founder and operator compliance review is recorded, with ownership and control evidence marked unchecked.</p>'
-    : `<form method="post" action="${EMAIL_PILOT_POLICY_ROUTE}" autocomplete="off">
+    : `<form method="post" action="${EMAIL_PILOT_POLICY_ROUTE}/${escapeHtml(preparation.policyToken)}" autocomplete="off">
         <button class="lead360-permission-button" type="submit">Record compliance review</button>
       </form>`;
   return `<section class="lead360-section" aria-labelledby="lead360-prepare">${head}
@@ -637,7 +637,7 @@ function pilotAuthorisationPanel(
       </dl>
       <h3 class="lead360-pilot-subhead">Full message body</h3>
       <pre class="lead360-pilot-body">${escapeHtml(authorisation.bodyText)}</pre>
-      <form method="post" action="${EMAIL_PILOT_AUTHORISE_ROUTE}" autocomplete="off">
+      <form method="post" action="${EMAIL_PILOT_AUTHORISE_ROUTE}/${escapeHtml(authorisation.previewToken)}" autocomplete="off">
         <button class="lead360-permission-button" type="submit">Send this email now</button>
       </form>
       <p class="lead360-permission-note">This queues one job on the capped rail. It does not call Mailgun: the existing worker owns dispatch and the signed receipt lands in the Conversion Inbox. Submitting twice replays the same job rather than sending twice.</p>
