@@ -30,9 +30,9 @@ Owned by Growth HQ alone:
 - `PROPERTY_PREDATOR_EXTERNAL_EVENTS_TRUSTED_PROXY_ADDRESSES` — exact socket
   peers allowed to assert `X-Forwarded-Proto`. Leave empty unless a reviewed
   proxy terminates TLS in front.
-- `PROPERTY_PREDATOR_EXTERNAL_EVENTS_ENABLED` — the switch. It is a Blueprint
-  literal `false`, so a sync can never turn the bridge on; an operator flips it
-  in the dashboard.
+- `PROPERTY_PREDATOR_EXTERNAL_EVENTS_ENABLED` — the dashboard-owned switch. It
+  has no Blueprint value, so a deploy cannot overwrite the operator's explicit
+  `false` or `true` posture.
 
 Owned by Property Predator alone: `PROPERTY_PREDATOR_GROWTH_HQ_EVENT_DELIVERY_ENABLED`
 and `PROPERTY_PREDATOR_GROWTH_HQ_EVENT_TIMEOUT_SECONDS`.

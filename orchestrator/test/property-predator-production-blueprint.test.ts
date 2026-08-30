@@ -178,7 +178,7 @@ test('production Blueprint is isolated, manually deployed and narrowly fail-clos
   literalValue('PLATFORM_SUBSCRIPTIONS_ENABLED', 'false');
   literalValue('PUBLIC_LEAD_CAPTURE_ENABLED', 'false');
   literalValue('PORTAL_DEMO_SEED', 'false');
-  literalValue('PROPERTY_PREDATOR_EXTERNAL_EVENTS_ENABLED', 'false');
+  dashboardControlledSlot('PROPERTY_PREDATOR_EXTERNAL_EVENTS_ENABLED');
   // The receiver's dedicated source key is operator-owned. A Blueprint value
   // for any of these would either overwrite a bound production key on the next
   // sync or commit a secret to the repository.

@@ -109,12 +109,11 @@ services:
         value: "true"
       - key: RELAUNCH72_MAX_CONCURRENT_BUILDS
         value: "1"
-      # Property Predator conversion-event receiver. The switch stays a
-      # Blueprint literal so a dark production deploy can never be flipped on by
-      # a sync; the operator turns it on in the dashboard only after the
-      # dedicated key below is bound and the preflight passes.
+      # Property Predator conversion-event receiver. The switch is dashboard-
+      # owned so the operator can turn it on after binding and preflight. A
+      # Blueprint literal would overwrite that operated value on every deploy.
       - key: PROPERTY_PREDATOR_EXTERNAL_EVENTS_ENABLED
-        value: "false"
+        sync: false
       # Dedicated source key identity. It must match the exact key id the
       # Property Predator dispatcher signs with, and it is not a shared
       # credential: the loader refuses a secret that exactly reuses the Stripe,
