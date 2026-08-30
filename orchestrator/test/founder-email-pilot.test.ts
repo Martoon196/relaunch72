@@ -7,13 +7,21 @@ import {
   FOUNDER_EMAIL_PILOT_DIMENSIONS,
   FounderEmailPilotError,
   buildFounderEmailPilotReadinessReport,
+  deriveFounderEmailPilotIdentifiers,
   deriveFounderPilotCommandKey,
+  founderEmailPilotEvidenceDigest,
   parseAttachContactEmailEndpoint,
   type AttachContactEmailEndpointInput,
   type FounderEmailPilotDimensionResult,
+  type FounderEmailPilotEvidence,
 } from '../src/founder-email-pilot/foundation.js';
+import type { CustomerEmailLiveCommandService }
+  from '../src/customer-email-live-pg/types.js';
 import { PgPortalFounderEmailPilotService } from '../src/portal/founder-email-pilot-pg-service.js';
-import type { AttachEndpointInput } from '../src/portal/founder-email-pilot-service.js';
+import type {
+  AttachEndpointInput,
+  AuthoriseInput,
+} from '../src/portal/founder-email-pilot-service.js';
 
 const WORKSPACE = '11111111-1111-4111-8111-111111111111';
 const CONTACT = '725fb294-41a3-4806-a020-fd97cbf9c715';
@@ -29,7 +37,7 @@ function endpointInput(
 ): AttachContactEmailEndpointInput {
   return {
     contactId: CONTACT,
-    email: 'office@propertypredator.com',
+    email: 'office@example.test',
     label: 'Owned office mailbox',
     evidenceSource: 'founder.owned_mailbox',
     evidenceReference: 'owned-mailbox-attestation-1',
@@ -48,7 +56,7 @@ function allReady(): FounderEmailPilotDimensionResult[] {
 test('a witnessed endpoint parses into the exact database tuple', () => {
   const parsed = parseAttachContactEmailEndpoint(endpointInput());
   assert.equal(parsed.contactId, CONTACT);
-  assert.equal(parsed.email, 'office@propertypredator.com');
+  assert.equal(parsed.email, 'office@example.test');
   assert.equal(parsed.evidenceSource, 'founder.owned_mailbox');
   assert.equal(parsed.verifiedAt, '2026-08-30T09:00:00.000Z');
 });
@@ -180,24 +188,128 @@ class FakeClient {
     }
     if (sql.includes('founder-email-pilot.preview')) {
       return { rows: [{
-        recipient_email: 'office@propertypredator.com', recipient_verified: true,
+        recipient_email: 'office@example.test', recipient_verified: true,
         daily_used: 0, monthly_used: 0,
       }] };
+    }
+    if (sql.includes('resolve_customer_email_pilot_evidence')) {
+      return { rows: this.evidenceRows };
+    }
+    if (sql.includes('derive_customer_email_pilot_request_digest')) {
+      return { rows: [{ request_sha256: this.requestSha256 }] };
     }
     return { rows: [{ active: true }] };
   }
 
+  /** No row is how the resolver reports an unresolved or refused tuple. */
+  evidenceRows: unknown[] = [{ ...EVIDENCE_ROW }];
+  requestSha256 = 'b'.repeat(64);
+
   release(): void { /* pooled */ }
 }
 
-function service(client: FakeClient, workspaceId = WORKSPACE) {
+/** Exactly the column names and shapes the 0064 resolver returns. */
+const EVIDENCE_ROW = Object.freeze({
+  campaign_template_version_id: 'ad100000-0000-4000-8000-000000000001',
+  campaign_template_step_id: 'ad100000-0000-4000-8000-000000000002',
+  campaign_step_content_sha256: 'a'.repeat(64),
+  campaign_approval_request_id: 'ad100000-0000-4000-8000-000000000003',
+  campaign_approval_decision_id: 'ad100000-0000-4000-8000-000000000004',
+  campaign_version_no: 3,
+  message_version_id: 'ad100000-0000-4000-8000-000000000005',
+  message_approval_request_id: 'ad100000-0000-4000-8000-000000000006',
+  message_approval_decision_id: 'ad100000-0000-4000-8000-000000000007',
+  message_version_number: 2,
+  channel_endpoint_id: 'ad100000-0000-4000-8000-000000000008',
+  consent_event_id: 'ad100000-0000-4000-8000-000000000009',
+  compliance_subject_id: 'ad100000-0000-4000-8000-00000000000a',
+  policy_publication_event_id: 'ad100000-0000-4000-8000-00000000000b',
+  pecr_sender_decision_event_id: 'ad100000-0000-4000-8000-00000000000c',
+  pecr_instigator_decision_event_id: 'ad100000-0000-4000-8000-00000000000d',
+  permission_use_receipt_id: 'ad100000-0000-4000-8000-00000000000e',
+  recipient_email: 'office@example.test',
+  subject: 'Your Property Predator briefing',
+  body_text: 'Your briefing is ready.',
+});
+
+const JOB_ID = 'ac100000-0000-4000-8000-000000000001';
+
+/** Stands in for the real 0054 command, recording exactly what reaches it. */
+class FakeCommand implements CustomerEmailLiveCommandService {
+  readonly calls: unknown[] = [];
+  error: unknown = null;
+  disposition: 'queued' | 'replayed' = 'queued';
+
+  constructor(readonly workspaceId: string = WORKSPACE) {}
+
+  async authorizeAndEnqueue(_c: unknown, command: unknown): Promise<never> {
+    this.calls.push(command);
+    if (this.error) throw this.error;
+    return {
+      jobId: JOB_ID, disposition: this.disposition, providerEffects: 'none',
+      caps: { daily: 10, monthly: 50, recipientsPerJob: 1 },
+    } as never;
+  }
+}
+
+/** Fixed so the derived authority window is comparable across assertions. */
+const NOW = Date.parse('2026-08-30T12:00:00.000Z');
+
+function service(
+  client: FakeClient,
+  workspaceId = WORKSPACE,
+  commandService: CustomerEmailLiveCommandService = new FakeCommand(),
+) {
   return new PgPortalFounderEmailPilotService({
     principalResolver: {
       async resolve() { return { userId: USER, workspaceId } as never; },
     },
     commandPool: { async connect() { return client as never; } },
     providerConnectionId: CONNECTION,
+    commandService,
+    now: () => NOW,
   });
+}
+
+function authoriseInput(overrides: Partial<AuthoriseInput> = {}): AuthoriseInput {
+  return {
+    contactId: CONTACT,
+    contactPointId: POINT,
+    purpose: 'property_predator_marketing',
+    commandKey: COMMAND_KEY,
+    evidenceDigest: founderEmailPilotEvidenceDigest(
+      parseEvidenceForTest(EVIDENCE_ROW),
+    ),
+    authorityValidUntil: new Date(NOW + 4 * 60 * 1000).toISOString(),
+    operatorConfirmed: true,
+    ...overrides,
+  };
+}
+
+/** Mirrors the service's own row reading, so the digest matches what it computes. */
+function parseEvidenceForTest(row: Record<string, unknown>): FounderEmailPilotEvidence {
+  return {
+    campaignTemplateVersionId: row.campaign_template_version_id as string,
+    campaignTemplateStepId: row.campaign_template_step_id as string,
+    campaignStepContentSha256: row.campaign_step_content_sha256 as string,
+    campaignApprovalRequestId: row.campaign_approval_request_id as string,
+    campaignApprovalDecisionId: row.campaign_approval_decision_id as string,
+    campaignVersionNo: row.campaign_version_no as number,
+    messageVersionId: row.message_version_id as string,
+    messageApprovalRequestId: row.message_approval_request_id as string,
+    messageApprovalDecisionId: row.message_approval_decision_id as string,
+    messageVersionNumber: row.message_version_number as number,
+    channelEndpointId: row.channel_endpoint_id as string,
+    consentEventId: row.consent_event_id as string,
+    complianceSubjectId: row.compliance_subject_id as string,
+    policyPublicationEventId: row.policy_publication_event_id as string,
+    pecrSenderDecisionEventId: row.pecr_sender_decision_event_id as string,
+    pecrInstigatorDecisionEventId: row.pecr_instigator_decision_event_id as string,
+    permissionUseReceiptId: row.permission_use_receipt_id as string,
+    recipientEmail: row.recipient_email as string,
+    subject: row.subject as string,
+    bodyText: row.body_text as string,
+  };
 }
 
 function attachInput(overrides: Partial<AttachEndpointInput> = {}): AttachEndpointInput {
@@ -216,7 +328,7 @@ test('attaching an endpoint hands the exact tuple to the 0064 boundary', async (
   // The workspace comes from the resolved session, never the request.
   assert.equal(call.values[0], WORKSPACE);
   assert.equal(call.values[1], CONTACT);
-  assert.equal(call.values[2], 'office@propertypredator.com');
+  assert.equal(call.values[2], 'office@example.test');
   // The command key crosses only as its workspace-scoped digest.
   assert.deepEqual(
     call.values[7],
@@ -266,7 +378,7 @@ test('readiness returns the report and the exact recipient preview', async () =>
   });
   assert.ok(outcome.ok);
   assert.equal(outcome.report.result, 'ready-for-founder-authorisation');
-  assert.equal(outcome.preview?.recipientEmail, 'office@propertypredator.com');
+  assert.equal(outcome.preview?.recipientEmail, 'office@example.test');
   assert.equal(outcome.preview?.recipientVerified, true);
   assert.equal(outcome.preview?.dailyCap, 10);
   assert.equal(outcome.preview?.monthlyCap, 50);
@@ -288,16 +400,24 @@ test('readiness enqueues nothing and reaches no provider', async () => {
 
 test('an unresolved session records and reads nothing', async () => {
   const client = new FakeClient();
+  const command = new FakeCommand();
   const unresolved = new PgPortalFounderEmailPilotService({
     principalResolver: { async resolve() { return null; } },
     commandPool: { async connect() { return client as never; } },
     providerConnectionId: CONNECTION,
+    commandService: command,
+    now: () => NOW,
   });
   assert.deepEqual(
     await unresolved.attachEndpoint(IDENTITY, attachInput()),
     { ok: false, kind: 'unauthenticated' },
   );
+  assert.deepEqual(
+    await unresolved.authorise(IDENTITY, authoriseInput()),
+    { ok: false, kind: 'unauthenticated' },
+  );
   assert.deepEqual(client.calls, []);
+  assert.deepEqual(command.calls, []);
 });
 
 test('the seam requires the exact provider connection at construction', () => {
@@ -305,5 +425,203 @@ test('the seam requires the exact provider connection at construction', () => {
     principalResolver: { async resolve() { return null; } },
     commandPool: { async connect() { return new FakeClient() as never; } },
     providerConnectionId: 'not-a-uuid',
+    commandService: new FakeCommand(),
+    now: () => NOW,
   }), /exact provider connection/);
+});
+
+test('resolving an authorisation returns the exact message and never enqueues', async () => {
+  const client = new FakeClient();
+  const command = new FakeCommand();
+  const outcome = await service(client, WORKSPACE, command).resolveAuthorisation(IDENTITY, {
+    contactId: CONTACT, contactPointId: POINT,
+    purpose: 'property_predator_marketing', commandKey: COMMAND_KEY,
+  });
+  assert.ok(outcome.ok);
+  assert.equal(outcome.preview?.evidence.subject, 'Your Property Predator briefing');
+  assert.equal(outcome.preview?.evidence.bodyText, 'Your briefing is ready.');
+  assert.equal(outcome.preview?.evidence.recipientEmail, 'office@example.test');
+  assert.equal(outcome.preview?.evidence.campaignVersionNo, 3);
+  // The window is exactly what the token will carry and the enqueue will bind.
+  assert.equal(outcome.preview?.authorityValidUntil, new Date(NOW + 5 * 60 * 1000).toISOString());
+  assert.deepEqual(command.calls, [], 'a preview must never reach the enqueue');
+});
+
+test('an unresolved tuple previews nothing rather than a partial message', async () => {
+  const client = new FakeClient();
+  client.evidenceRows = [];
+  const outcome = await service(client).resolveAuthorisation(IDENTITY, {
+    contactId: CONTACT, contactPointId: POINT,
+    purpose: 'property_predator_marketing', commandKey: COMMAND_KEY,
+  });
+  assert.deepEqual(outcome, { ok: true, preview: null });
+});
+
+test('authorising hands the resolved tuple and derived identifiers to 0054', async () => {
+  const client = new FakeClient();
+  const command = new FakeCommand();
+  const outcome = await service(client, WORKSPACE, command)
+    .authorise(IDENTITY, authoriseInput());
+  assert.ok(outcome.ok);
+  assert.equal(outcome.disposition, 'queued');
+  assert.equal(outcome.jobId, JOB_ID);
+  assert.equal(outcome.providerEffects, 'none');
+  assert.equal(command.calls.length, 1);
+  const sent = command.calls[0] as Record<string, unknown>;
+  const identifiers = deriveFounderEmailPilotIdentifiers(WORKSPACE, COMMAND_KEY);
+  assert.equal(sent.messageVersionId, EVIDENCE_ROW.message_version_id);
+  assert.equal(sent.permissionUseReceiptId, EVIDENCE_ROW.permission_use_receipt_id);
+  assert.equal(sent.providerOperationId, identifiers.providerOperationId);
+  assert.equal(sent.messageDeliveryId, identifiers.messageDeliveryId);
+  assert.equal(sent.correlationId, identifiers.correlationId);
+  assert.equal(sent.idempotencyKeySha256, identifiers.idempotencyKeySha256);
+  // The digest comes from the database, never from this process.
+  assert.equal(sent.requestSha256, client.requestSha256);
+});
+
+test('a resubmitted authorisation presents identical identifiers and replays', async () => {
+  const command = new FakeCommand();
+  const first = await service(new FakeClient(), WORKSPACE, command)
+    .authorise(IDENTITY, authoriseInput());
+  command.disposition = 'replayed';
+  const second = await service(new FakeClient(), WORKSPACE, command)
+    .authorise(IDENTITY, authoriseInput());
+  assert.ok(first.ok && second.ok);
+  assert.equal(second.disposition, 'replayed');
+  assert.equal(command.calls.length, 2);
+  // Byte for byte the same command, which is what makes the second a replay
+  // rather than a second send.
+  assert.deepEqual(command.calls[0], command.calls[1]);
+});
+
+test('changed evidence under the same command key never sends the new message', async () => {
+  const client = new FakeClient();
+  const command = new FakeCommand();
+  client.evidenceRows = [{ ...EVIDENCE_ROW, body_text: 'A different body entirely.' }];
+  const outcome = await service(client, WORKSPACE, command)
+    .authorise(IDENTITY, authoriseInput());
+  assert.deepEqual(outcome, { ok: false, kind: 'stale_preview' });
+  assert.deepEqual(command.calls, []);
+});
+
+test('a database conflict on the same key surfaces as a conflict, not a send', async () => {
+  const command = new FakeCommand();
+  command.error = Object.assign(new Error('idempotency conflict'), { code: '40001' });
+  const outcome = await service(new FakeClient(), WORKSPACE, command)
+    .authorise(IDENTITY, authoriseInput());
+  assert.deepEqual(outcome, { ok: false, kind: 'conflict' });
+});
+
+test('a spent cap is a blocker the founder can act on, not an outage', async () => {
+  const command = new FakeCommand();
+  command.error = Object.assign(new Error('hard cap reached'), { code: '54000' });
+  assert.deepEqual(
+    await service(new FakeClient(), WORKSPACE, command).authorise(IDENTITY, authoriseInput()),
+    { ok: false, kind: 'blocked' },
+  );
+});
+
+test('an operator the database refuses is forbidden, never softened', async () => {
+  const command = new FakeCommand();
+  command.error = Object.assign(new Error('operator denied'), { code: '42501' });
+  assert.deepEqual(
+    await service(new FakeClient(), WORKSPACE, command).authorise(IDENTITY, authoriseInput()),
+    { ok: false, kind: 'forbidden' },
+  );
+});
+
+test('suppression or withdrawn consent stops the tuple resolving and blocks the send', async () => {
+  // The 0064 resolver returns no row when the latest suppression or consent
+  // record refuses the send, exactly as the enqueue would.
+  const client = new FakeClient();
+  const command = new FakeCommand();
+  client.evidenceRows = [];
+  assert.deepEqual(
+    await service(client, WORKSPACE, command).authorise(IDENTITY, authoriseInput()),
+    { ok: false, kind: 'blocked' },
+  );
+  assert.deepEqual(command.calls, []);
+});
+
+test('a session from another workspace is refused before the enqueue', async () => {
+  const client = new FakeClient();
+  const command = new FakeCommand(WORKSPACE);
+  const other = 'fa100000-0000-4000-8000-0000000000ff';
+  const outcome = await service(client, other, command).authorise(IDENTITY, authoriseInput());
+  assert.deepEqual(outcome, { ok: false, kind: 'forbidden' });
+  assert.deepEqual(command.calls, [], 'the enqueue must never see another workspace');
+});
+
+test('a malformed or unconfirmed authorisation never opens a transaction', async () => {
+  for (const override of [
+    { operatorConfirmed: false }, { commandKey: 'not-a-uuid' },
+    { contactPointId: 'not-a-uuid' }, { evidenceDigest: 'short' },
+    { authorityValidUntil: 'not-a-time' },
+  ] as Partial<AuthoriseInput>[]) {
+    const client = new FakeClient();
+    const command = new FakeCommand();
+    const outcome = await service(client, WORKSPACE, command)
+      .authorise(IDENTITY, authoriseInput(override));
+    assert.deepEqual(outcome, { ok: false, kind: 'validation' }, JSON.stringify(override));
+    assert.deepEqual(client.calls, [], JSON.stringify(override));
+    assert.deepEqual(command.calls, [], JSON.stringify(override));
+  }
+});
+
+test('a truncated or malformed resolver row throws rather than reading as ready', async () => {
+  for (const broken of [
+    { ...EVIDENCE_ROW, permission_use_receipt_id: null },
+    { ...EVIDENCE_ROW, campaign_step_content_sha256: 'short' },
+    { ...EVIDENCE_ROW, subject: '' },
+    { ...EVIDENCE_ROW, message_version_number: 'two' },
+  ]) {
+    const client = new FakeClient();
+    const command = new FakeCommand();
+    client.evidenceRows = [broken];
+    assert.deepEqual(
+      await service(client, WORKSPACE, command).authorise(IDENTITY, authoriseInput()),
+      { ok: false, kind: 'validation' },
+      JSON.stringify(broken.subject),
+    );
+    assert.deepEqual(command.calls, []);
+  }
+});
+
+test('more than one resolved tuple is refused rather than silently picked', async () => {
+  const client = new FakeClient();
+  client.evidenceRows = [{ ...EVIDENCE_ROW }, { ...EVIDENCE_ROW }];
+  assert.deepEqual(
+    await service(client).authorise(IDENTITY, authoriseInput()),
+    { ok: false, kind: 'validation' },
+  );
+});
+
+test('authorising reaches no provider and issues no dispatch of its own', async () => {
+  const client = new FakeClient();
+  const command = new FakeCommand();
+  await service(client, WORKSPACE, command).authorise(IDENTITY, authoriseInput());
+  const sql = client.calls.map((entry) => entry.sql).join('\n').toLowerCase();
+  for (const forbidden of [
+    'authorize_and_enqueue', 'mailgun', 'http', 'insert into', 'update app.',
+  ]) {
+    assert.equal(sql.includes(forbidden), false, `${forbidden} must not appear`);
+  }
+  // The single enqueue happens through the composed 0054 service, which is the
+  // only thing here that may write, and it is called exactly once.
+  assert.equal(command.calls.length, 1);
+});
+
+test('the preview and the authorisation share one derived request id', async () => {
+  const client = new FakeClient();
+  await service(client).resolveAuthorisation(IDENTITY, {
+    contactId: CONTACT, contactPointId: POINT,
+    purpose: 'property_predator_marketing', commandKey: COMMAND_KEY,
+  });
+  const previewSql = client.calls.map((entry) => entry.sql).join('\n');
+  const expected = deriveFounderEmailPilotIdentifiers(WORKSPACE, COMMAND_KEY).requestId;
+  assert.match(previewSql, /resolve_customer_email_pilot_evidence/);
+  // The enqueue folds the request id into the digest it compares, so a replay
+  // only matches when preview and authorisation agree on it.
+  assert.match(expected, /^pp-email-pilot:[0-9a-f]{64}$/u);
+  assert.ok(expected.length <= 128, 'the request id must fit the database contract');
 });

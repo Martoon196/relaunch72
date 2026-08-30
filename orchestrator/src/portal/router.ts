@@ -320,8 +320,13 @@ import {
   CONTACT_ENDPOINT_ATTACH_ROUTE,
   CONTACT_ENDPOINT_CONFIRM_VALUE,
   CONTACT_ENDPOINT_FORM_KEYS,
+  EMAIL_PILOT_AUTHORISE_FORM_KEYS,
+  EMAIL_PILOT_AUTHORISE_ROUTE,
+  EMAIL_PILOT_CONFIRM_VALUE,
   founderEmailPilotNoticeFromQuery,
   founderEmailPilotNoticeToken,
+  founderEmailPilotPreviewClaims,
+  founderEmailPilotPreviewToken,
   type FounderEmailPilotNoticeCode,
 } from './founder-email-pilot-actions.js';
 import {
@@ -5350,6 +5355,71 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     );
   }
 
+  // The final founder act: authorise the capped enqueue for one already
+  // approved message. It calls the existing 0054 command and never Mailgun.
+  if (deps.kind === 'postgres' && p === EMAIL_PILOT_AUTHORISE_ROUTE && method === 'POST') {
+    const form = await readMultiValueForm(req);
+    const contactId = (form ? oneFormValue(form, 'contact_id') ?? '' : '').toLowerCase();
+    if (!CRM_OBJECT_ID.test(contactId)) {
+      return redirect(res, CRM_PORTAL_ROUTES.contacts, undefined, 303);
+    }
+    const pilotNotice = (code: FounderEmailPilotNoticeCode): void => redirect(
+      res,
+      `${contactCaseFileRoute(contactId)}?notice=${encodeURIComponent(
+        founderEmailPilotNoticeToken(deps.sessionSecret, sessionToken, code),
+      )}`,
+      undefined,
+      303,
+    );
+    const commandKey = (form ? oneFormValue(form, 'command_key') ?? '' : '').toLowerCase();
+    const contactPointId = (
+      form ? oneFormValue(form, 'contact_point_id') ?? '' : ''
+    ).toLowerCase();
+    // Shape, CSRF and the explicit final confirmation, before any boundary.
+    if (!form || !campaignFormKeysAllowed(form, new Set(EMAIL_PILOT_AUTHORISE_FORM_KEYS))
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '')
+        || oneFormValue(form, 'confirm_send') !== EMAIL_PILOT_CONFIRM_VALUE
+        || !CRM_OBJECT_ID.test(commandKey) || !CRM_OBJECT_ID.test(contactPointId)) {
+      return pilotNotice('pilot_invalid');
+    }
+    // The preview token proves this session was shown this exact message under
+    // this exact command key. A forged, borrowed or expired one authorises
+    // nothing, and is refused before the enqueue identity is touched.
+    const claims = founderEmailPilotPreviewClaims(
+      oneFormValue(form, 'preview_token') ?? '',
+      deps.sessionSecret,
+      sessionToken,
+      Date.now(),
+    );
+    if (!claims || claims.commandKey !== commandKey) return pilotNotice('pilot_stale_preview');
+    if (!deps.founderEmailPilot) return pilotNotice('pilot_unavailable');
+    const outcome = await deps.founderEmailPilot.authorise(
+      crmIdentity(sessionToken, deps),
+      {
+        contactId,
+        contactPointId,
+        purpose: oneFormValue(form, 'purpose') ?? FOUNDER_PILOT_PURPOSE,
+        commandKey,
+        evidenceDigest: claims.evidenceDigest,
+        authorityValidUntil: claims.authorityValidUntil,
+        operatorConfirmed: true,
+      },
+    );
+    if (outcome.ok) {
+      return pilotNotice(
+        outcome.disposition === 'replayed' ? 'pilot_replayed' : 'pilot_queued',
+      );
+    }
+    return pilotNotice(
+      outcome.kind === 'stale_preview' ? 'pilot_stale_preview'
+        : outcome.kind === 'conflict' ? 'pilot_conflict'
+          : outcome.kind === 'blocked' ? 'pilot_blocked'
+            : outcome.kind === 'forbidden' || outcome.kind === 'unauthenticated'
+              ? 'pilot_forbidden'
+              : outcome.kind === 'validation' ? 'pilot_invalid' : 'pilot_unavailable',
+    );
+  }
+
   const lead360Match = /^\/portal\/crm\/contacts\/([^/]+)$/.exec(p);
   if (deps.crm && lead360Match && method === 'GET') {
     const contactId = lead360Match[1]!;
@@ -5408,6 +5478,44 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           };
         })()
         : null;
+      // The exact message that would be sent, resolved from the approved
+      // records. The command key is minted here and bound into the preview
+      // token, so the authorisation can only act on what was rendered.
+      const pilotCommandKey = randomUUID();
+      const pilotAuthorisation = deps.kind === 'postgres' && deps.founderEmailPilot
+        && pilotEndpoint
+        ? await (async () => {
+          const outcome = await deps.founderEmailPilot!.resolveAuthorisation(
+            crmIdentity(sessionToken, deps),
+            {
+              contactId,
+              contactPointId: pilotEndpoint.contactPointId,
+              purpose: pilotEndpoint.purpose ?? FOUNDER_PILOT_PURPOSE,
+              commandKey: pilotCommandKey,
+            },
+          );
+          if (!outcome.ok || !outcome.preview) return null;
+          return {
+            commandKey: pilotCommandKey,
+            contactPointId: pilotEndpoint.contactPointId,
+            purpose: pilotEndpoint.purpose ?? FOUNDER_PILOT_PURPOSE,
+            recipientEmail: outcome.preview.evidence.recipientEmail,
+            subject: outcome.preview.evidence.subject,
+            bodyText: outcome.preview.evidence.bodyText,
+            campaignVersionNo: outcome.preview.evidence.campaignVersionNo,
+            messageVersionNumber: outcome.preview.evidence.messageVersionNumber,
+            authorityValidUntil: outcome.preview.authorityValidUntil,
+            previewToken: founderEmailPilotPreviewToken(
+              deps.sessionSecret, sessionToken,
+              {
+                commandKey: pilotCommandKey,
+                authorityValidUntil: outcome.preview.authorityValidUntil,
+                evidenceDigest: outcome.preview.evidenceDigest,
+              },
+            ),
+          };
+        })()
+        : null;
       const body = `<nav aria-label="Lead 360 breadcrumb" style="margin-bottom:14px"><a class="button secondary compact" href="${CRM_PORTAL_ROUTES.contacts}">← All contacts</a></nav>${renderLead360Body(caseFile, {
         // The legacy JSON portal has no permission boundary, so the panel
         // renders its honest "not composed" state there rather than a form
@@ -5419,6 +5527,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           && Boolean(deps.founderEmailPilot),
         endpointCommandKey: randomUUID(),
         pilotReadiness,
+        pilotAuthorisation,
         csrfToken,
         // Either rail may have redirected here, so both notices are tried and
         // only a signature valid for this session renders.

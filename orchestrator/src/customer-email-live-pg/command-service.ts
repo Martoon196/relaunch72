@@ -47,6 +47,10 @@ export class PgCustomerEmailLiveCommandService implements CustomerEmailLiveComma
   readonly #workspaceId: string;
   readonly #providerConnectionId: string;
 
+  get workspaceId(): string {
+    return this.#workspaceId;
+  }
+
   constructor(private readonly dependencies: CustomerEmailLiveCommandServiceDependencies) {
     this.#workspaceId = uuid(dependencies.workspaceId, 'workspaceId');
     this.#providerConnectionId = uuid(

@@ -52,6 +52,12 @@ export interface AuthorizeCustomerEmailLiveResult {
 }
 
 export interface CustomerEmailLiveCommandService {
+  /**
+   * The one workspace this enqueue is bound to at construction. Exposed so a
+   * composing seam can refuse another workspace's session itself, rather than
+   * letting the refusal surface as an opaque database denial.
+   */
+  readonly workspaceId: string;
   authorizeAndEnqueue(
     context: CustomerEmailLiveUserContext,
     command: AuthorizeCustomerEmailLiveCommand,

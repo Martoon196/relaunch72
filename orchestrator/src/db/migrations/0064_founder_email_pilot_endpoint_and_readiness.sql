@@ -18,9 +18,20 @@
 -- recipient and message preview so a founder can see precisely what would be
 -- sent before authorising anything.
 --
--- Neither function enqueues, dispatches, calls Mailgun or records consent. The
--- readiness probe is STABLE and writes nothing. Suppression is never touched:
--- neither definer holds any write privilege on the suppression ledger.
+-- Third, knowing the evidence exists is not the same as holding it. The enqueue
+-- compares a request digest it rebuilds from rows the command identity cannot
+-- read, so nothing outside the database could produce a matching one. This
+-- migration adds a resolver that returns the exact tuple together with the
+-- subject and body a founder must read first, and a digest derivation whose
+-- concatenated field list is character-identical to the one 0054 compares
+-- against. Both repeat the enqueue's own predicates, so neither can produce a
+-- result for evidence the enqueue would refuse.
+--
+-- None of these functions enqueues, dispatches, calls Mailgun or records
+-- consent. The readiness probe, the resolver and the digest derivation are all
+-- STABLE and write nothing; an audit below fails the apply if the identity that
+-- calls them ever gains the enqueue itself. Suppression is never touched: no
+-- definer here holds any write privilege on the suppression ledger.
 
 DO $roles$
 DECLARE unsafe_parent text;
@@ -361,6 +372,36 @@ GRANT SELECT ON app.contact_points, app.contacts, app.channel_endpoints,
   app.property_predator_customer_email_jobs, app.workspace_memberships
   TO r72_email_pilot_readiness_definer;
 
+-- The durable legal and operator evidence the enqueue re-checks. Read only, and
+-- through the same workspace-scoped policies 0054 gave its own definer, so the
+-- resolver can never see evidence the enqueue would not accept.
+GRANT SELECT ON app_private.affiliate_compliance_policy_review_events,
+  app_private.affiliate_compliance_policy_publication_events,
+  app_private.affiliate_compliance_specialist_decision_events,
+  app_private.affiliate_compliance_permission_fact_events,
+  app_private.affiliate_compliance_permission_use_receipts
+  TO r72_email_pilot_readiness_definer;
+CREATE POLICY email_pilot_affiliate_policy_reviews_select
+  ON app_private.affiliate_compliance_policy_review_events
+  FOR SELECT TO r72_email_pilot_readiness_definer
+  USING (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid);
+CREATE POLICY email_pilot_affiliate_policy_publications_select
+  ON app_private.affiliate_compliance_policy_publication_events
+  FOR SELECT TO r72_email_pilot_readiness_definer
+  USING (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid);
+CREATE POLICY email_pilot_affiliate_specialist_decisions_select
+  ON app_private.affiliate_compliance_specialist_decision_events
+  FOR SELECT TO r72_email_pilot_readiness_definer
+  USING (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid);
+CREATE POLICY email_pilot_affiliate_permission_facts_select
+  ON app_private.affiliate_compliance_permission_fact_events
+  FOR SELECT TO r72_email_pilot_readiness_definer
+  USING (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid);
+CREATE POLICY email_pilot_affiliate_permission_uses_select
+  ON app_private.affiliate_compliance_permission_use_receipts
+  FOR SELECT TO r72_email_pilot_readiness_definer
+  USING (workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid);
+
 GRANT CREATE ON SCHEMA app_private TO r72_email_pilot_readiness_definer;
 SET LOCAL ROLE r72_email_pilot_readiness_definer;
 
@@ -560,7 +601,572 @@ BEGIN
   blocker_code := CASE WHEN ready THEN NULL ELSE 'CAP_REACHED' END;
   RETURN NEXT;
 
+  -- A current published policy pack with both reviews approved and nothing
+  -- superseding it. The enqueue re-checks the same chain against the exact
+  -- publication id; here it answers whether any such authority exists at all.
+  dimension := 'policy_authority';
+  ready := EXISTS (
+    SELECT 1
+    FROM app_private.affiliate_compliance_policy_publication_events AS publication
+    JOIN app_private.affiliate_compliance_policy_review_events AS legal_review
+      ON legal_review.workspace_id = publication.workspace_id
+     AND legal_review.id = publication.legal_review_event_id
+     AND legal_review.review_dimension = 'legal'
+     AND legal_review.decision = 'approved'
+    JOIN app_private.affiliate_compliance_policy_review_events AS commercial_review
+      ON commercial_review.workspace_id = publication.workspace_id
+     AND commercial_review.id = publication.commercial_review_event_id
+     AND commercial_review.review_dimension = 'commercial'
+     AND commercial_review.decision = 'approved'
+    WHERE publication.workspace_id = p_workspace_id
+      AND publication.publication_state = 'published'
+      AND publication.effective_at <= statement_timestamp()
+      AND (publication.expires_at IS NULL
+        OR publication.expires_at > statement_timestamp())
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app_private.affiliate_compliance_policy_publication_events AS successor
+        WHERE successor.workspace_id = publication.workspace_id
+          AND successor.policy_pack_id = publication.policy_pack_id
+          AND successor.supersedes_event_id = publication.id
+      )
+  );
+  blocker_code := CASE WHEN ready THEN NULL ELSE 'POLICY_AUTHORITY_MISSING' END;
+  RETURN NEXT;
+
+  -- Both PECR route decisions must be approved and in force. Their action scope
+  -- binds a specific send, so the resolver checks the exact digest; this asks
+  -- only whether the founder holds current route decisions to resolve against.
+  dimension := 'pecr_decisions';
+  ready := EXISTS (
+    SELECT 1
+    FROM app_private.affiliate_compliance_specialist_decision_events AS sender_route
+    JOIN app_private.affiliate_compliance_specialist_decision_events AS instigator_route
+      ON instigator_route.workspace_id = sender_route.workspace_id
+     AND instigator_route.subject_id = sender_route.subject_id
+     AND instigator_route.decision_kind = 'pecr_instigator_route'
+     AND instigator_route.decision_state = 'approved'
+     AND instigator_route.valid_from <= statement_timestamp()
+     AND (instigator_route.valid_until IS NULL
+       OR instigator_route.valid_until > statement_timestamp())
+     AND NOT EXISTS (
+       SELECT 1
+       FROM app_private.affiliate_compliance_specialist_decision_events AS successor
+       WHERE successor.workspace_id = instigator_route.workspace_id
+         AND successor.subject_id = instigator_route.subject_id
+         AND successor.decision_kind = instigator_route.decision_kind
+         AND successor.supersedes_event_id = instigator_route.id
+     )
+    WHERE sender_route.workspace_id = p_workspace_id
+      AND sender_route.decision_kind = 'pecr_sender_route'
+      AND sender_route.decision_state = 'approved'
+      AND sender_route.valid_from <= statement_timestamp()
+      AND (sender_route.valid_until IS NULL
+        OR sender_route.valid_until > statement_timestamp())
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app_private.affiliate_compliance_specialist_decision_events AS successor
+        WHERE successor.workspace_id = sender_route.workspace_id
+          AND successor.subject_id = sender_route.subject_id
+          AND successor.decision_kind = sender_route.decision_kind
+          AND successor.supersedes_event_id = sender_route.id
+      )
+  );
+  blocker_code := CASE WHEN ready THEN NULL ELSE 'PECR_DECISIONS_MISSING' END;
+  RETURN NEXT;
+
+  -- The operator consumes their own permission at the moment of authorising:
+  -- 0054 binds the receipt to this exact user AND this exact request id, so a
+  -- receipt from any earlier request can never satisfy the enqueue. This
+  -- dimension reports the truth of the current request rather than implying a
+  -- stale receipt would do.
+  dimension := 'permission_use_receipt';
+  ready := EXISTS (
+    SELECT 1
+    FROM app_private.affiliate_compliance_permission_use_receipts AS permission_use
+    WHERE permission_use.workspace_id = p_workspace_id
+      AND permission_use.permission = 'email.send'
+      AND permission_use.eligibility_decision = 'allow'
+      AND permission_use.use_state = 'consumed'
+      AND permission_use.provider_effects IS FALSE
+      AND permission_use.recorded_by_user_id = selected_user_id
+      AND permission_use.recorded_request_id = current_setting('app.request_id')
+      AND permission_use.decision_expires_at > statement_timestamp()
+  );
+  blocker_code := CASE WHEN ready THEN NULL ELSE 'PERMISSION_USE_RECEIPT_MISSING' END;
+  RETURN NEXT;
+
   RETURN;
+END
+$function$;
+
+/*
+ * Resolve the exact evidence tuple the capped enqueue demands.
+ *
+ * It selects the same rows 0054 re-validates, under the same predicates, and
+ * returns their identifiers together with the exact subject and body a founder
+ * must read before authorising. It returns no row rather than a partial one:
+ * a half-resolved tuple would let a caller enqueue against evidence nobody
+ * confirmed. When it returns nothing, the readiness probe above names why.
+ *
+ * STABLE and read-only. It cannot enqueue, dispatch or reach Mailgun.
+ */
+CREATE FUNCTION app_private.resolve_customer_email_pilot_evidence(
+  p_workspace_id uuid,
+  p_provider_connection_id uuid,
+  p_contact_id uuid,
+  p_contact_point_id uuid,
+  p_purpose text,
+  p_authority_valid_until timestamptz
+)
+RETURNS TABLE (
+  campaign_template_version_id uuid, campaign_template_step_id uuid,
+  campaign_step_content_sha256 text, campaign_approval_request_id uuid,
+  campaign_approval_decision_id uuid, campaign_version_no integer,
+  message_version_id uuid, message_approval_request_id uuid,
+  message_approval_decision_id uuid, message_version_number integer,
+  channel_endpoint_id uuid, consent_event_id uuid, compliance_subject_id uuid,
+  policy_publication_event_id uuid, pecr_sender_decision_event_id uuid,
+  pecr_instigator_decision_event_id uuid, permission_use_receipt_id uuid,
+  recipient_email text, subject text, body_text text
+)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog
+AS $function$
+DECLARE
+  selected_user_id uuid;
+  selected_campaign record;
+  selected_message record;
+  selected_compliance record;
+  expected_action_scope bytea;
+BEGIN
+  IF session_user <> 'r72_crm_command'
+     OR p_workspace_id IS NULL
+     OR current_setting('app.workspace_id', true) IS DISTINCT FROM p_workspace_id::text
+     OR current_setting('app.actor_kind', true) IS DISTINCT FROM 'user'
+     OR current_setting('app.user_id', true) !~ '^[0-9a-f-]{36}$'
+     OR coalesce(current_setting('app.request_id', true), '') = ''
+     OR p_authority_valid_until IS NULL THEN
+    RAISE EXCEPTION 'Customer email pilot evidence resolution denied'
+      USING ERRCODE = '42501';
+  END IF;
+  selected_user_id := current_setting('app.user_id')::uuid;
+  IF NOT EXISTS (
+    SELECT 1 FROM app.workspace_memberships AS membership
+    WHERE membership.workspace_id = p_workspace_id
+      AND membership.user_id = selected_user_id
+      AND membership.status = 'active' AND membership.role IN ('owner', 'admin')
+  ) THEN
+    RAISE EXCEPTION 'Customer email pilot evidence operator denied'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- Stage one: the current approved campaign step, under 0054's predicates.
+  SELECT version.id AS version_id, version.version_no, version.definition_sha256,
+         version.purpose_key, step.id AS step_id, step.content_sha256,
+         step.subject_template, step.body_template,
+         request.id AS request_id, decision.id AS decision_id
+    INTO selected_campaign
+  FROM app.campaign_template_versions AS version
+  JOIN app.campaign_template_steps AS step
+    ON step.workspace_id = version.workspace_id
+   AND step.template_version_id = version.id
+   AND step.step_kind = 'email' AND step.channel = 'email'
+   AND step.requires_human_approval AND step.requires_current_permission
+   AND NOT step.provider_effects
+  JOIN app.campaign_template_approval_requests AS request
+    ON request.workspace_id = version.workspace_id
+   AND request.template_version_id = version.id
+   AND request.template_version_sha256 = version.definition_sha256
+  JOIN app.campaign_template_approval_decisions AS decision
+    ON decision.workspace_id = request.workspace_id
+   AND decision.template_version_id = request.template_version_id
+   AND decision.approval_request_id = request.id
+   AND decision.template_version_sha256 = request.template_version_sha256
+   AND decision.decision = 'approved'
+  WHERE version.workspace_id = p_workspace_id
+    AND version.purpose_key = p_purpose
+    AND NOT version.provider_effects
+    AND request.id = (
+      SELECT latest.id FROM app.campaign_template_approval_requests AS latest
+      WHERE latest.workspace_id = version.workspace_id
+        AND latest.template_version_id = version.id
+      ORDER BY latest.request_no DESC, latest.requested_at DESC, latest.id DESC LIMIT 1
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM app.campaign_template_versions AS newer
+      WHERE newer.workspace_id = version.workspace_id
+        AND newer.template_id = version.template_id
+        AND newer.version_no > version.version_no
+    )
+  ORDER BY version.version_no DESC, version.id DESC LIMIT 1;
+  IF selected_campaign IS NULL THEN RETURN; END IF;
+
+  -- Stage two: the approved message for this exact contact endpoint, its
+  -- current consent, and a clear suppression timeline.
+  SELECT message_version.id AS message_version_id,
+         message_version.version_number, message_version.body_text,
+         message_request.id AS request_id, message_decision.id AS decision_id,
+         endpoint.id AS endpoint_id, endpoint.normalized_address,
+         consent.id AS consent_id, point.normalized_value AS recipient,
+         conversation.subject,
+         public.digest(point.kind || pg_catalog.chr(31) || point.value
+           || pg_catalog.chr(31) || point.normalized_value, 'sha256') AS endpoint_sha
+    INTO selected_message
+  FROM app.message_versions AS message_version
+  JOIN app.messages AS message
+    ON message.workspace_id = message_version.workspace_id
+   AND message.id = message_version.message_id
+   AND message.current_version_id = message_version.id
+   AND message.current_version_number = message_version.version_number
+   AND message.current_body_sha256 = message_version.body_sha256
+   AND message.lifecycle = 'approved' AND message.direction = 'outbound'
+   AND message.channel = 'email' AND message.environment = 'live'
+   AND message.contact_id = p_contact_id
+   AND message.contact_point_id = p_contact_point_id
+  JOIN app.conversations AS conversation
+    ON conversation.workspace_id = message.workspace_id
+   AND conversation.id = message.conversation_id
+   AND conversation.contact_id = message.contact_id
+   AND conversation.channel = 'email' AND conversation.environment = 'live'
+   AND conversation.subject = selected_campaign.subject_template
+  JOIN app.message_approval_requests AS message_request
+    ON message_request.workspace_id = message_version.workspace_id
+   AND message_request.message_id = message.id
+   AND message_request.message_version_id = message_version.id
+   AND message_request.version_number = message_version.version_number
+   AND message_request.body_sha256 = message_version.body_sha256
+  JOIN app.message_approval_decisions AS message_decision
+    ON message_decision.workspace_id = message_request.workspace_id
+   AND message_decision.message_id = message.id
+   AND message_decision.message_version_id = message_version.id
+   AND message_decision.approval_request_id = message_request.id
+   AND message_decision.version_number = message_version.version_number
+   AND message_decision.body_sha256 = message_version.body_sha256
+   AND message_decision.decision = 'approved'
+  JOIN app.property_predator_email_pilot_approved_content AS approved_content
+    ON approved_content.workspace_id = message_decision.workspace_id
+   AND approved_content.message_version_id = message_version.id
+   AND approved_content.approval_request_id = message_request.id
+   AND approved_content.approval_decision_id = message_decision.id
+   AND approved_content.subject_sha256 = public.digest(conversation.subject, 'sha256')
+   AND approved_content.body_sha256 = message_version.body_sha256
+  JOIN app.channel_endpoints AS endpoint
+    ON endpoint.workspace_id = message_version.workspace_id
+   AND endpoint.provider_connection_id = p_provider_connection_id
+   AND endpoint.channel = 'email' AND endpoint.environment = 'live'
+   AND endpoint.status = 'active'
+   AND endpoint.direction IN ('outbound', 'bidirectional')
+  JOIN app.contact_points AS point
+    ON point.workspace_id = message.workspace_id
+   AND point.id = message.contact_point_id AND point.contact_id = message.contact_id
+   AND point.kind = 'email' AND point.deleted_at IS NULL
+   AND point.is_verified AND point.dedupe_state = 'normal'
+  JOIN app.communication_consent_events AS consent
+    ON consent.workspace_id = message.workspace_id
+   AND consent.contact_id = message.contact_id
+   AND consent.contact_point_id = message.contact_point_id
+   AND consent.channel = 'email' AND consent.purpose = selected_campaign.purpose_key
+   AND consent.state = 'granted'
+   AND consent.lawful_basis IN ('consent', 'legitimate_interests')
+   AND consent.endpoint_identity_sha256 = public.digest(
+     point.kind || pg_catalog.chr(31) || point.value
+       || pg_catalog.chr(31) || point.normalized_value, 'sha256'
+   )
+  WHERE message_version.workspace_id = p_workspace_id
+    AND message_version.channel = 'email' AND message_version.environment = 'live'
+    AND message_version.body_text = selected_campaign.body_template
+    AND message_request.id = (
+      SELECT latest.id FROM app.message_approval_requests AS latest
+      WHERE latest.workspace_id = message_version.workspace_id
+        AND latest.message_id = message.id
+        AND latest.message_version_id = message_version.id
+      ORDER BY latest.request_number DESC, latest.requested_at DESC, latest.id DESC LIMIT 1
+    )
+    AND consent.id = (
+      SELECT latest.id FROM app.communication_consent_events AS latest
+      WHERE latest.workspace_id = message.workspace_id
+        AND latest.contact_point_id = message.contact_point_id
+        AND latest.channel = 'email'
+        AND latest.purpose = selected_campaign.purpose_key
+      ORDER BY latest.occurred_at DESC, latest.recorded_at DESC, latest.id DESC LIMIT 1
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM app.communication_suppression_events AS suppression
+      WHERE suppression.workspace_id = message.workspace_id
+        AND suppression.contact_point_id = message.contact_point_id
+        AND suppression.channel = 'email'
+        AND (suppression.purpose IS NULL
+          OR suppression.purpose = selected_campaign.purpose_key)
+        AND suppression.state = 'suppressed'
+        AND suppression.id = (
+          SELECT latest.id FROM app.communication_suppression_events AS latest
+          WHERE latest.workspace_id = suppression.workspace_id
+            AND latest.contact_point_id = suppression.contact_point_id
+            AND latest.channel = suppression.channel
+            AND latest.purpose IS NOT DISTINCT FROM suppression.purpose
+          ORDER BY latest.occurred_at DESC, latest.recorded_at DESC, latest.id DESC LIMIT 1
+        )
+    )
+  ORDER BY message_version.version_number DESC, message_version.id DESC LIMIT 1;
+  IF selected_message IS NULL THEN RETURN; END IF;
+
+  -- The same action scope 0054 binds every route decision and permission use
+  -- to, built from the resolved rows rather than anything the caller supplied.
+  expected_action_scope := public.digest(format(
+    'email:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s', p_workspace_id,
+    p_provider_connection_id, selected_message.normalized_address,
+    selected_campaign.version_id,
+    selected_campaign.step_id,
+    pg_catalog.encode(selected_campaign.content_sha256, 'hex'),
+    selected_message.message_version_id,
+    pg_catalog.encode(selected_message.endpoint_sha, 'hex'),
+    selected_campaign.purpose_key, selected_message.consent_id
+  ), 'sha256');
+
+  -- Stage three: durable legal authority, both PECR route decisions and the
+  -- operator's own permission use, all bound to that exact scope.
+  SELECT publication.id AS publication_id, sender_route.id AS sender_id,
+         instigator_route.id AS instigator_id,
+         permission_use.id AS permission_use_id,
+         permission_use.subject_id
+    INTO selected_compliance
+  FROM app_private.affiliate_compliance_policy_publication_events AS publication
+  JOIN app_private.affiliate_compliance_policy_review_events AS legal_review
+    ON legal_review.workspace_id = publication.workspace_id
+   AND legal_review.id = publication.legal_review_event_id
+   AND legal_review.review_dimension = 'legal' AND legal_review.decision = 'approved'
+  JOIN app_private.affiliate_compliance_policy_review_events AS commercial_review
+    ON commercial_review.workspace_id = publication.workspace_id
+   AND commercial_review.id = publication.commercial_review_event_id
+   AND commercial_review.review_dimension = 'commercial'
+   AND commercial_review.decision = 'approved'
+  JOIN app_private.affiliate_compliance_specialist_decision_events AS sender_route
+    ON sender_route.workspace_id = publication.workspace_id
+   AND sender_route.decision_kind = 'pecr_sender_route'
+   AND sender_route.decision_state = 'approved'
+   AND sender_route.action_scope_sha256 = expected_action_scope
+   AND sender_route.valid_from <= statement_timestamp()
+   AND (sender_route.valid_until IS NULL
+     OR sender_route.valid_until >= p_authority_valid_until)
+  JOIN app_private.affiliate_compliance_specialist_decision_events AS instigator_route
+    ON instigator_route.workspace_id = publication.workspace_id
+   AND instigator_route.subject_id = sender_route.subject_id
+   AND instigator_route.decision_kind = 'pecr_instigator_route'
+   AND instigator_route.decision_state = 'approved'
+   AND instigator_route.action_scope_sha256 = expected_action_scope
+   AND instigator_route.valid_from <= statement_timestamp()
+   AND (instigator_route.valid_until IS NULL
+     OR instigator_route.valid_until >= p_authority_valid_until)
+  JOIN app_private.affiliate_compliance_permission_use_receipts AS permission_use
+    ON permission_use.workspace_id = publication.workspace_id
+   AND permission_use.subject_id = sender_route.subject_id
+   AND permission_use.permission = 'email.send'
+   AND permission_use.action_scope_sha256 = expected_action_scope
+   AND permission_use.eligibility_decision = 'allow'
+   AND permission_use.use_state = 'consumed'
+   AND permission_use.provider_effects IS FALSE
+  WHERE publication.workspace_id = p_workspace_id
+    AND publication.publication_state = 'published'
+    AND publication.effective_at <= statement_timestamp()
+    AND (publication.expires_at IS NULL
+      OR publication.expires_at >= p_authority_valid_until)
+    AND permission_use.recorded_by_user_id = selected_user_id
+    AND permission_use.recorded_request_id = current_setting('app.request_id')
+    AND permission_use.consumed_at <= statement_timestamp()
+    AND permission_use.decision_expires_at >= p_authority_valid_until
+  ORDER BY publication.effective_at DESC, publication.id DESC LIMIT 1;
+  IF selected_compliance IS NULL THEN RETURN; END IF;
+
+  RETURN QUERY SELECT
+    selected_campaign.version_id, selected_campaign.step_id,
+    pg_catalog.encode(selected_campaign.content_sha256, 'hex'),
+    selected_campaign.request_id, selected_campaign.decision_id,
+    selected_campaign.version_no,
+    selected_message.message_version_id, selected_message.request_id,
+    selected_message.decision_id, selected_message.version_number,
+    selected_message.endpoint_id, selected_message.consent_id,
+    selected_compliance.subject_id, selected_compliance.publication_id,
+    selected_compliance.sender_id, selected_compliance.instigator_id,
+    selected_compliance.permission_use_id,
+    selected_message.recipient, selected_message.subject,
+    selected_message.body_text;
+  RETURN;
+END
+$function$;
+
+/*
+ * Derive the request digest 0054 re-computes and compares.
+ *
+ * It is built in the database because the customer email command identity is
+ * table blind: it cannot read the sender domain, the campaign and body hashes,
+ * or the recipient and endpoint digests this is made of. The resolution below
+ * repeats the enqueue's own predicates, so a digest can only be produced when
+ * exactly the same evidence chain is present, and the concatenated field list
+ * is character-identical to 0054's.
+ *
+ * STABLE and read-only. Producing a digest enqueues nothing.
+ */
+CREATE FUNCTION app_private.derive_customer_email_pilot_request_digest(
+  p_workspace_id uuid, p_provider_connection_id uuid,
+  p_campaign_template_version_id uuid, p_campaign_template_step_id uuid,
+  p_campaign_approval_request_id uuid, p_campaign_approval_decision_id uuid,
+  p_message_version_id uuid, p_channel_endpoint_id uuid, p_consent_event_id uuid,
+  p_compliance_subject_id uuid, p_policy_publication_event_id uuid,
+  p_pecr_sender_decision_event_id uuid, p_pecr_instigator_decision_event_id uuid,
+  p_permission_use_receipt_id uuid, p_authority_valid_until timestamptz,
+  p_provider_operation_id uuid, p_message_delivery_id uuid,
+  p_correlation_id uuid, p_idempotency_key_sha256 bytea
+) RETURNS bytea
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog
+AS $function$
+DECLARE
+  selected_user uuid;
+  selected_request_id text;
+  selected_campaign_sha bytea;
+  selected_campaign_step_sha bytea;
+  selected_purpose text;
+  selected_sender_domain text;
+  selected_contact_id uuid;
+  selected_contact_point_id uuid;
+  selected_channel_endpoint_id uuid;
+  selected_message_version_id uuid;
+  selected_message_body_sha bytea;
+  selected_message_approval_request_id uuid;
+  selected_message_approval_decision_id uuid;
+  selected_message_subject_sha bytea;
+  selected_recipient_sha bytea;
+  selected_endpoint_sha bytea;
+  expected_action_scope bytea;
+BEGIN
+  IF session_user <> 'r72_crm_command'
+     OR p_workspace_id IS NULL
+     OR current_setting('app.workspace_id', true) IS DISTINCT FROM p_workspace_id::text
+     OR current_setting('app.actor_kind', true) IS DISTINCT FROM 'user'
+     OR current_setting('app.user_id', true) !~ '^[0-9a-f-]{36}$'
+     OR coalesce(current_setting('app.request_id', true), '') = ''
+     OR octet_length(p_idempotency_key_sha256) <> 32
+     OR p_authority_valid_until IS DISTINCT FROM
+       date_trunc('milliseconds', p_authority_valid_until) THEN
+    RAISE EXCEPTION 'Customer email pilot request digest denied' USING ERRCODE = '42501';
+  END IF;
+  selected_user := current_setting('app.user_id')::uuid;
+  selected_request_id := current_setting('app.request_id');
+  IF NOT EXISTS (
+    SELECT 1 FROM app.workspace_memberships AS membership
+    WHERE membership.workspace_id = p_workspace_id
+      AND membership.user_id = selected_user
+      AND membership.status = 'active' AND membership.role IN ('owner', 'admin')
+  ) THEN
+    RAISE EXCEPTION 'Customer email pilot request digest operator denied'
+      USING ERRCODE = '42501';
+  END IF;
+
+  SELECT version.definition_sha256, version.purpose_key, step.content_sha256
+    INTO selected_campaign_sha, selected_purpose, selected_campaign_step_sha
+  FROM app.campaign_template_versions AS version
+  JOIN app.campaign_template_steps AS step
+    ON step.workspace_id = version.workspace_id
+   AND step.template_version_id = version.id
+   AND step.id = p_campaign_template_step_id
+  JOIN app.campaign_template_approval_decisions AS decision
+    ON decision.workspace_id = version.workspace_id
+   AND decision.template_version_id = version.id
+   AND decision.approval_request_id = p_campaign_approval_request_id
+   AND decision.id = p_campaign_approval_decision_id
+   AND decision.decision = 'approved'
+  WHERE version.workspace_id = p_workspace_id
+    AND version.id = p_campaign_template_version_id;
+
+  SELECT message.contact_id, message.contact_point_id, endpoint.id,
+         endpoint.normalized_address, message_version.id,
+         message_version.body_sha256, message_request.id, message_decision.id,
+         public.digest(point.normalized_value, 'sha256'),
+         public.digest(point.kind || pg_catalog.chr(31) || point.value
+           || pg_catalog.chr(31) || point.normalized_value, 'sha256'),
+         public.digest(conversation.subject, 'sha256')
+    INTO selected_contact_id, selected_contact_point_id, selected_channel_endpoint_id,
+         selected_sender_domain, selected_message_version_id,
+         selected_message_body_sha, selected_message_approval_request_id,
+         selected_message_approval_decision_id, selected_recipient_sha,
+         selected_endpoint_sha, selected_message_subject_sha
+  FROM app.message_versions AS message_version
+  JOIN app.messages AS message
+    ON message.workspace_id = message_version.workspace_id
+   AND message.id = message_version.message_id
+   AND message.current_version_id = message_version.id
+   AND message.lifecycle = 'approved' AND message.direction = 'outbound'
+   AND message.channel = 'email' AND message.environment = 'live'
+  JOIN app.conversations AS conversation
+    ON conversation.workspace_id = message.workspace_id
+   AND conversation.id = message.conversation_id
+  JOIN app.message_approval_decisions AS message_decision
+    ON message_decision.workspace_id = message_version.workspace_id
+   AND message_decision.message_version_id = message_version.id
+   AND message_decision.decision = 'approved'
+  JOIN app.message_approval_requests AS message_request
+    ON message_request.workspace_id = message_decision.workspace_id
+   AND message_request.id = message_decision.approval_request_id
+  JOIN app.channel_endpoints AS endpoint
+    ON endpoint.workspace_id = message_version.workspace_id
+   AND endpoint.id = p_channel_endpoint_id
+   AND endpoint.provider_connection_id = p_provider_connection_id
+  JOIN app.contact_points AS point
+    ON point.workspace_id = message.workspace_id
+   AND point.id = message.contact_point_id
+   AND point.contact_id = message.contact_id
+   AND point.kind = 'email' AND point.deleted_at IS NULL
+  JOIN app.communication_consent_events AS consent
+    ON consent.workspace_id = message.workspace_id
+   AND consent.id = p_consent_event_id
+   AND consent.contact_point_id = message.contact_point_id
+   AND consent.state = 'granted'
+  WHERE message_version.workspace_id = p_workspace_id
+    AND message_version.id = p_message_version_id;
+
+  IF selected_campaign_sha IS NULL OR selected_campaign_step_sha IS NULL
+     OR selected_recipient_sha IS NULL OR selected_sender_domain IS NULL THEN
+    RAISE EXCEPTION 'Customer email pilot request digest evidence denied'
+      USING ERRCODE = '42501';
+  END IF;
+
+  expected_action_scope := public.digest(format(
+    'email:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s', p_workspace_id,
+    p_provider_connection_id, selected_sender_domain,
+    p_campaign_template_version_id,
+    p_campaign_template_step_id, pg_catalog.encode(selected_campaign_step_sha, 'hex'),
+    selected_message_version_id, pg_catalog.encode(selected_endpoint_sha, 'hex'),
+    selected_purpose, p_consent_event_id
+  ), 'sha256');
+
+  RETURN public.digest(pg_catalog.concat_ws(pg_catalog.chr(31),
+    'propertypredator.customer-email-live/v1', p_workspace_id::text,
+    p_provider_connection_id::text, selected_sender_domain,
+    p_campaign_template_version_id::text,
+    pg_catalog.encode(selected_campaign_sha, 'hex'), p_campaign_template_step_id::text,
+    pg_catalog.encode(selected_campaign_step_sha, 'hex'),
+    p_campaign_approval_request_id::text, p_campaign_approval_decision_id::text,
+    selected_message_version_id::text,
+    pg_catalog.encode(selected_message_body_sha, 'hex'),
+    selected_message_approval_request_id::text,
+    selected_message_approval_decision_id::text,
+    selected_channel_endpoint_id::text, p_consent_event_id::text,
+    p_compliance_subject_id::text, p_policy_publication_event_id::text,
+    p_pecr_sender_decision_event_id::text,
+    p_pecr_instigator_decision_event_id::text,
+    p_permission_use_receipt_id::text,
+    pg_catalog.to_char(
+      p_authority_valid_until AT TIME ZONE 'UTC',
+      'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+    ),
+    p_provider_operation_id::text, p_message_delivery_id::text,
+    p_correlation_id::text, pg_catalog.encode(p_idempotency_key_sha256, 'hex'),
+    selected_contact_id::text, selected_contact_point_id::text,
+    pg_catalog.encode(selected_recipient_sha, 'hex'),
+    pg_catalog.encode(selected_message_subject_sha, 'hex'),
+    pg_catalog.encode(selected_endpoint_sha, 'hex'),
+    selected_purpose, pg_catalog.encode(expected_action_scope, 'hex'),
+    selected_user::text, selected_request_id
+  ), 'sha256');
 END
 $function$;
 
@@ -573,6 +1179,21 @@ REVOKE ALL ON FUNCTION app_private.customer_email_pilot_readiness(
 ) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.customer_email_pilot_readiness(
   uuid, uuid, uuid, uuid, text
+) TO r72_crm_command;
+
+REVOKE ALL ON FUNCTION app_private.resolve_customer_email_pilot_evidence(
+  uuid, uuid, uuid, uuid, text, timestamptz
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_private.resolve_customer_email_pilot_evidence(
+  uuid, uuid, uuid, uuid, text, timestamptz
+) TO r72_crm_command;
+REVOKE ALL ON FUNCTION app_private.derive_customer_email_pilot_request_digest(
+  uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid,
+  uuid, timestamptz, uuid, uuid, uuid, bytea
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_private.derive_customer_email_pilot_request_digest(
+  uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid,
+  uuid, timestamptz, uuid, uuid, uuid, bytea
 ) TO r72_crm_command;
 
 -- Attaching an endpoint must never be able to create a contact, an opportunity,
@@ -594,14 +1215,19 @@ BEGIN
 END
 $endpoint_isolation_audit$;
 
--- The readiness reader answers questions and must never change anything.
+-- The readiness reader and the evidence resolver answer questions and must
+-- never change anything, least of all the compliance ledgers they now read.
 DO $readiness_isolation_audit$
 DECLARE target text; privilege text;
 BEGIN
   FOREACH target IN ARRAY ARRAY[
     'app.contact_points', 'app.contacts', 'app.communication_consent_events',
     'app.communication_suppression_events',
-    'app.property_predator_customer_email_jobs'
+    'app.property_predator_customer_email_jobs',
+    'app.provider_operations', 'app.message_deliveries',
+    'app_private.affiliate_compliance_permission_use_receipts',
+    'app_private.affiliate_compliance_specialist_decision_events',
+    'app_private.affiliate_compliance_policy_publication_events'
   ] LOOP
     FOREACH privilege IN ARRAY ARRAY['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'] LOOP
       IF pg_catalog.has_table_privilege(
@@ -635,8 +1261,28 @@ BEGIN
      OR NOT pg_catalog.has_function_privilege(
        'r72_crm_command',
        'app_private.customer_email_pilot_readiness(uuid, uuid, uuid, uuid, text)',
+       'EXECUTE')
+     OR NOT pg_catalog.has_function_privilege(
+       'r72_crm_command',
+       'app_private.resolve_customer_email_pilot_evidence('
+         || 'uuid, uuid, uuid, uuid, text, timestamptz)', 'EXECUTE')
+     OR NOT pg_catalog.has_function_privilege(
+       'r72_crm_command',
+       'app_private.derive_customer_email_pilot_request_digest('
+         || 'uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid,'
+         || ' uuid, uuid, uuid, timestamptz, uuid, uuid, uuid, bytea)',
        'EXECUTE') THEN
     RAISE EXCEPTION 'r72_crm_command must execute the founder email pilot functions'
+      USING ERRCODE = '42501';
+  END IF;
+  -- Resolving evidence and deriving a digest must never become a way to enqueue.
+  IF pg_catalog.has_function_privilege(
+       'r72_crm_command',
+       'app_private.authorize_and_enqueue_customer_email_live_job(uuid, uuid, uuid,'
+         || ' uuid, bytea, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid,'
+         || ' uuid, uuid, uuid, timestamptz, uuid, uuid, uuid, bytea, bytea)',
+       'EXECUTE') THEN
+    RAISE EXCEPTION 'r72_crm_command must never hold the customer email enqueue'
       USING ERRCODE = '42501';
   END IF;
 END

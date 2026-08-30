@@ -776,13 +776,6 @@ export async function buildPgPortalPlatform(
       ?.trim().toLowerCase() ?? '';
     const emailConnectionId = env.PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_CONNECTION_ID
       ?.trim().toLowerCase() ?? '';
-    if (PORTAL_UUID.test(emailConnectionId)) {
-      founderEmailPilot = createPgPortalFounderEmailPilotService({
-        webPool,
-        crmCommandPool: commandPool,
-        providerConnectionId: emailConnectionId,
-      });
-    }
     if (env.DATABASE_CUSTOMER_EMAIL_COMMAND_URL?.trim()
         && PORTAL_UUID.test(emailWorkspaceId) && PORTAL_UUID.test(emailConnectionId)) {
       let emailPool: Pool | undefined;
@@ -807,6 +800,17 @@ export async function buildPgPortalPlatform(
         await emailPool?.end().catch(() => undefined);
         customerEmailCommand = undefined;
       }
+    }
+    // The pilot seam owns the founder-facing actions, and the last of them
+    // authorises a live send. It is composed only when the enqueue behind it is
+    // real, so the portal never offers an authorisation it could not honour.
+    if (PORTAL_UUID.test(emailConnectionId) && customerEmailCommand) {
+      founderEmailPilot = createPgPortalFounderEmailPilotService({
+        webPool,
+        crmCommandPool: commandPool,
+        providerConnectionId: emailConnectionId,
+        commandService: customerEmailCommand,
+      });
     }
 
     let closed = false;

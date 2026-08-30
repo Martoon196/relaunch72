@@ -28,6 +28,9 @@ export const FOUNDER_EMAIL_PILOT_DIMENSIONS = Object.freeze([
   'approved_message_version',
   'approved_pilot_content',
   'cap_headroom',
+  'policy_authority',
+  'pecr_decisions',
+  'permission_use_receipt',
 ] as const);
 
 export type FounderEmailPilotDimension = typeof FOUNDER_EMAIL_PILOT_DIMENSIONS[number];
@@ -43,6 +46,9 @@ export const FOUNDER_EMAIL_PILOT_BLOCKER_CODES = Object.freeze([
   'MESSAGE_APPROVAL_REQUIRED',
   'PILOT_CONTENT_NOT_APPROVED',
   'CAP_REACHED',
+  'POLICY_AUTHORITY_MISSING',
+  'PECR_DECISIONS_MISSING',
+  'PERMISSION_USE_RECEIPT_MISSING',
 ] as const);
 
 export type FounderEmailPilotBlockerCode = typeof FOUNDER_EMAIL_PILOT_BLOCKER_CODES[number];
@@ -71,6 +77,14 @@ export const FOUNDER_EMAIL_PILOT_BLOCKER_MESSAGES: Readonly<
     'No approved pilot content is recorded for this workspace.',
   CAP_REACHED:
     'The daily or monthly send cap is already used. Nothing more can be queued.',
+  POLICY_AUTHORITY_MISSING:
+    'No current published compliance policy pack covers this send.',
+  PECR_DECISIONS_MISSING:
+    'The PECR sender and instigator route decisions are not both approved and in force.',
+  PERMISSION_USE_RECEIPT_MISSING:
+    'No permission-use receipt is recorded for this operator on this request. '
+    + 'The enqueue binds the receipt to the exact request that authorises it, so '
+    + 'one must be consumed here rather than carried over from earlier.',
 });
 
 export interface FounderEmailPilotDimensionResult {
@@ -187,7 +201,13 @@ export interface AttachContactEmailEndpointCommand {
   readonly verifiedAt: string;
 }
 
-function isCanonicalInstant(value: unknown): value is string {
+/**
+ * True only for an exact round-tripping ISO instant.
+ *
+ * It never throws: `new Date('nonsense').toISOString()` raises a RangeError, and
+ * a guard that throws turns a plainly invalid field into a reported outage.
+ */
+export function isCanonicalInstant(value: unknown): value is string {
   if (typeof value !== 'string') return false;
   const parsed = new Date(value);
   return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
@@ -243,4 +263,159 @@ export function deriveFounderPilotCommandKey(
 
 export function isFounderPilotPurpose(value: unknown): value is string {
   return typeof value === 'string' && PURPOSE.test(value);
+}
+
+/**
+ * The exact tuple the enqueue re-validates, as the database resolved it.
+ *
+ * Subject and body are carried because a founder must read the precise words
+ * that would leave the building, not a description of them.
+ */
+export interface FounderEmailPilotEvidence {
+  readonly campaignTemplateVersionId: string;
+  readonly campaignTemplateStepId: string;
+  readonly campaignStepContentSha256: string;
+  readonly campaignApprovalRequestId: string;
+  readonly campaignApprovalDecisionId: string;
+  readonly campaignVersionNo: number;
+  readonly messageVersionId: string;
+  readonly messageApprovalRequestId: string;
+  readonly messageApprovalDecisionId: string;
+  readonly messageVersionNumber: number;
+  readonly channelEndpointId: string;
+  readonly consentEventId: string;
+  readonly complianceSubjectId: string;
+  readonly policyPublicationEventId: string;
+  readonly pecrSenderDecisionEventId: string;
+  readonly pecrInstigatorDecisionEventId: string;
+  readonly permissionUseReceiptId: string;
+  readonly recipientEmail: string;
+  readonly subject: string;
+  readonly bodyText: string;
+}
+
+/** Field order for the evidence digest. Changing it changes every token. */
+const EVIDENCE_DIGEST_FIELDS = Object.freeze([
+  'campaignTemplateVersionId', 'campaignTemplateStepId', 'campaignStepContentSha256',
+  'campaignApprovalRequestId', 'campaignApprovalDecisionId', 'messageVersionId',
+  'messageApprovalRequestId', 'messageApprovalDecisionId', 'channelEndpointId',
+  'consentEventId', 'complianceSubjectId', 'policyPublicationEventId',
+  'pecrSenderDecisionEventId', 'pecrInstigatorDecisionEventId',
+  'permissionUseReceiptId', 'recipientEmail', 'subject', 'bodyText',
+] as const satisfies readonly (keyof FounderEmailPilotEvidence)[]);
+
+/**
+ * Digest of everything a founder was shown and approved.
+ *
+ * The preview token carries this. If any of it changes between the preview and
+ * the authorisation — a new approval, a different body, another endpoint — the
+ * token no longer matches the resolved evidence and the action refuses rather
+ * than sending something the founder never read.
+ */
+export function founderEmailPilotEvidenceDigest(
+  evidence: FounderEmailPilotEvidence,
+): string {
+  return createHash('sha256').update([
+    'propertypredator.founder-email-pilot-evidence/v1',
+    ...EVIDENCE_DIGEST_FIELDS.map((field) => String(evidence[field])),
+  ].join(DIGEST_FIELD_SEPARATOR), 'utf8').digest('hex');
+}
+
+/**
+ * Identifiers the enqueue records, derived from the command key alone.
+ *
+ * Deterministic on purpose: a resubmitted authorisation must present the same
+ * delivery, provider operation, correlation id, idempotency key and request id,
+ * so the enqueue recognises it as the same act and replays it. Random ids would
+ * make every retry look like a new send.
+ */
+export interface FounderEmailPilotIdentifiers {
+  readonly providerOperationId: string;
+  readonly messageDeliveryId: string;
+  readonly correlationId: string;
+  readonly idempotencyKeySha256: string;
+  readonly requestId: string;
+}
+
+/** A stable UUID from a digest, in the version and variant the rail accepts. */
+function derivedUuid(seed: Buffer): string {
+  const bytes = Buffer.from(seed.subarray(0, 16));
+  // Version 5 and the RFC variant, so the value satisfies the same UUID shape
+  // every command boundary validates rather than being merely hex-shaped.
+  bytes[6] = ((bytes[6] as number) & 0x0f) | 0x50;
+  bytes[8] = ((bytes[8] as number) & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return [
+    hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16),
+    hex.slice(16, 20), hex.slice(20, 32),
+  ].join('-');
+}
+
+function seedFor(workspaceId: string, commandKey: string, label: string): Buffer {
+  return createHash('sha256').update([
+    'propertypredator.founder-email-pilot-identifier/v1',
+    workspaceId.toLowerCase(), commandKey.toLowerCase(), label,
+  ].join(DIGEST_FIELD_SEPARATOR), 'utf8').digest();
+}
+
+export function deriveFounderEmailPilotIdentifiers(
+  workspaceId: string,
+  commandKey: string,
+): FounderEmailPilotIdentifiers {
+  if (!UUID.test(workspaceId)) throw new FounderEmailPilotError('workspace id is invalid');
+  if (!UUID.test(commandKey)) throw new FounderEmailPilotError('command key is invalid');
+  const idempotencyKeySha256 = deriveFounderPilotCommandKey(
+    'email-pilot-authorise', workspaceId, commandKey,
+  );
+  return Object.freeze({
+    providerOperationId: derivedUuid(seedFor(workspaceId, commandKey, 'provider-operation')),
+    messageDeliveryId: derivedUuid(seedFor(workspaceId, commandKey, 'message-delivery')),
+    correlationId: derivedUuid(seedFor(workspaceId, commandKey, 'correlation')),
+    idempotencyKeySha256,
+    // The enqueue folds the request id into the digest it compares, so a replay
+    // can only match when the request id matches too. Deriving it from the
+    // command key is what makes a second submit a replay instead of a conflict.
+    requestId: `pp-email-pilot:${idempotencyKeySha256}`,
+  });
+}
+
+export interface AuthoriseFounderEmailPilotInput {
+  readonly contactId: string;
+  readonly contactPointId: string;
+  readonly purpose: string;
+  readonly commandKey: string;
+  readonly previewToken: string;
+  readonly operatorConfirmed: boolean;
+}
+
+export interface AuthoriseFounderEmailPilotCommand {
+  readonly contactId: string;
+  readonly contactPointId: string;
+  readonly purpose: string;
+  readonly commandKey: string;
+  readonly previewToken: string;
+}
+
+export function parseAuthoriseFounderEmailPilot(
+  input: AuthoriseFounderEmailPilotInput,
+): AuthoriseFounderEmailPilotCommand {
+  const fail = (reason: string): never => {
+    throw new FounderEmailPilotError(reason);
+  };
+  if (input.operatorConfirmed !== true) fail('final confirmation is required');
+  if (!UUID.test(input.contactId)) fail('contact id is invalid');
+  if (!UUID.test(input.contactPointId)) fail('contact point id is invalid');
+  if (!UUID.test(input.commandKey)) fail('command key is invalid');
+  if (!isFounderPilotPurpose(input.purpose)) fail('purpose is invalid');
+  if (typeof input.previewToken !== 'string'
+      || input.previewToken.length < 1 || input.previewToken.length > 512) {
+    fail('preview token is invalid');
+  }
+  return Object.freeze({
+    contactId: input.contactId.toLowerCase(),
+    contactPointId: input.contactPointId.toLowerCase(),
+    purpose: input.purpose,
+    commandKey: input.commandKey.toLowerCase(),
+    previewToken: input.previewToken,
+  });
 }

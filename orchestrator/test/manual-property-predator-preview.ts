@@ -1855,6 +1855,23 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
               dailyUsed: 0, dailyCap: 10, monthlyUsed: 0, monthlyCap: 50,
             },
           },
+          // The final authorisation, with the exact words that would be sent.
+          // Fixture content only: no real address and no real message.
+          pilotAuthorisation: {
+            commandKey: randomUUID(),
+            contactPointId: randomUUID(),
+            purpose: 'property_predator_marketing',
+            recipientEmail: 'office@example.test',
+            subject: 'Your Property Predator briefing is ready',
+            bodyText: 'Hi there,\n\nYour Predator Briefing is ready to read, and it '
+              + 'covers the three fastest ways to lift instructions in your patch '
+              + 'this quarter.\n\nOpen it whenever suits. If it is not useful, one '
+              + 'reply and I will stop emailing.\n\nMartin\nProperty Predator',
+            campaignVersionNo: 3,
+            messageVersionNumber: 2,
+            authorityValidUntil: new Date(Date.now() + 4 * 60 * 1000).toISOString(),
+            previewToken: 'preview-token-fixture',
+          },
           csrfToken: PREVIEW_CSRF,
         })}`, 'crm', `${card.displayName} — Lead 360`),
       };

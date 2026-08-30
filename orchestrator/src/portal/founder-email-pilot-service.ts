@@ -11,6 +11,8 @@
 
 import type {
   AttachContactEmailEndpointInput,
+  FounderEmailPilotEvidence,
+  FounderEmailPilotIdentifiers,
   FounderEmailPilotReadinessReport,
 } from '../founder-email-pilot/foundation.js';
 import type { PortalCrmRequestIdentity } from './crm-service.js';
@@ -72,6 +74,70 @@ export interface FounderEmailPilotPreview {
 
 export type PilotReadinessResult = PilotReadinessOutcome | FounderEmailPilotFailure;
 
+/**
+ * The exact message that would leave the building, resolved from the approved
+ * records rather than composed here.
+ *
+ * `authorityValidUntil` is minted with the preview and folded into the digest
+ * the enqueue compares, so the founder authorises the window they were shown.
+ */
+export interface FounderEmailPilotAuthorisationPreview {
+  readonly evidence: FounderEmailPilotEvidence;
+  readonly evidenceDigest: string;
+  readonly authorityValidUntil: string;
+  readonly identifiers: FounderEmailPilotIdentifiers;
+}
+
+export interface ResolveAuthorisationInput {
+  readonly contactId: string;
+  readonly contactPointId: string;
+  readonly purpose: string;
+  /** Fresh per-render key. It becomes the idempotency key for the enqueue. */
+  readonly commandKey: string;
+}
+
+export interface ResolveAuthorisationOutcome {
+  readonly ok: true;
+  /** Null when the exact tuple did not resolve; the readiness blockers say why. */
+  readonly preview: FounderEmailPilotAuthorisationPreview | null;
+}
+
+export type ResolveAuthorisationResult =
+  | ResolveAuthorisationOutcome
+  | FounderEmailPilotFailure;
+
+export interface AuthoriseInput {
+  readonly contactId: string;
+  readonly contactPointId: string;
+  readonly purpose: string;
+  readonly commandKey: string;
+  /** The exact evidence the founder was shown, from the verified preview token. */
+  readonly evidenceDigest: string;
+  readonly authorityValidUntil: string;
+  readonly operatorConfirmed: boolean;
+}
+
+export interface AuthoriseOutcome {
+  readonly ok: true;
+  readonly disposition: 'queued' | 'replayed';
+  readonly jobId: string;
+  /** Always none: the existing worker owns dispatch, not this action. */
+  readonly providerEffects: 'none';
+  readonly recipientEmail: string;
+  readonly subject: string;
+}
+
+/** The resolved evidence no longer matches what the founder read. */
+export interface AuthoriseStale {
+  readonly ok: false;
+  readonly kind: 'stale_preview';
+}
+
+export type AuthoriseResult =
+  | AuthoriseOutcome
+  | AuthoriseStale
+  | FounderEmailPilotFailure;
+
 export interface PortalFounderEmailPilotService {
   attachEndpoint(
     identity: PortalCrmRequestIdentity,
@@ -81,4 +147,14 @@ export interface PortalFounderEmailPilotService {
     identity: PortalCrmRequestIdentity,
     input: PilotReadinessInput,
   ): Promise<PilotReadinessResult>;
+  /** Read-only. Resolves the tuple and the exact message, and queues nothing. */
+  resolveAuthorisation(
+    identity: PortalCrmRequestIdentity,
+    input: ResolveAuthorisationInput,
+  ): Promise<ResolveAuthorisationResult>;
+  /** The one call that reaches the capped enqueue. It never calls Mailgun. */
+  authorise(
+    identity: PortalCrmRequestIdentity,
+    input: AuthoriseInput,
+  ): Promise<AuthoriseResult>;
 }
