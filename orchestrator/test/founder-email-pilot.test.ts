@@ -24,6 +24,7 @@ import type {
 } from '../src/portal/permission-use-receipt-service.js';
 import {
   FOUNDER_PILOT_AUTHORITY_DAYS,
+  FOUNDER_PILOT_POLICY_CLAUSES,
   FOUNDER_PILOT_POLICY_ASSET_KEY,
   FOUNDER_PILOT_POLICY_ASSET_VERSION,
   FOUNDER_PILOT_REVIEW_AUTHORITY,
@@ -556,6 +557,20 @@ test('recording the review passes the policy asset and nothing a browser owns', 
   // The bundle digest is computed from the clauses a founder reads, so the
   // words and the digest cannot drift apart.
   assert.deepEqual(call.values[7], Buffer.from(founderPilotPolicyBundleSha256(), 'hex'));
+  const documentRefs = JSON.parse(String(call.values[8])) as Array<Record<string, unknown>>;
+  assert.equal(documentRefs.length, FOUNDER_PILOT_POLICY_CLAUSES.length);
+  assert.deepEqual(
+    documentRefs.map((reference) => Object.keys(reference).sort()),
+    documentRefs.map(() => [
+      'contentSha256', 'documentId', 'documentType', 'documentVersion',
+    ]),
+  );
+  assert.ok(documentRefs.every((reference) =>
+    typeof reference.contentSha256 === 'string'
+      && /^[0-9a-f]{64}$/u.test(reference.contentSha256)
+      && typeof reference.documentId === 'string'
+      && typeof reference.documentType === 'string'
+      && typeof reference.documentVersion === 'string'));
   assert.equal(call.values[10], FOUNDER_PILOT_AUTHORITY_DAYS);
   // Exactly twelve parameters: no room for a caller-supplied reference.
   assert.equal(call.values.length, 12);

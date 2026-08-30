@@ -40,6 +40,13 @@ export interface FounderPilotPolicyClause {
   readonly text: string;
 }
 
+export interface FounderPilotPolicyDocumentRef {
+  readonly contentSha256: string;
+  readonly documentId: string;
+  readonly documentType: string;
+  readonly documentVersion: string;
+}
+
 /**
  * The complete policy the founder confirms. Every clause is shown before the
  * confirmation phrase is accepted; none of it is summarised at the boundary.
@@ -96,14 +103,32 @@ export const FOUNDER_PILOT_POLICY_CLAUSES: readonly FounderPilotPolicyClause[] =
     }),
   ] as const);
 
-/** Document refs the pack version records, one per clause. */
-export const FOUNDER_PILOT_POLICY_DOCUMENT_REFS: readonly string[] = Object.freeze(
-  FOUNDER_PILOT_POLICY_CLAUSES.map(
-    (clause) => `${FOUNDER_PILOT_POLICY_ASSET_VERSION}#${clause.ref}`,
-  ),
-);
-
 const UNIT = String.fromCharCode(31);
+
+/**
+ * Structured document refs the compliance pack records, one per clause.
+ *
+ * The affiliate-compliance boundary deliberately rejects raw strings. Each
+ * reference therefore carries the exact metadata shape enforced by its insert
+ * guard, while the content digest remains derived from the clause displayed to
+ * the founder.
+ */
+export const FOUNDER_PILOT_POLICY_DOCUMENT_REFS:
+readonly FounderPilotPolicyDocumentRef[] = Object.freeze(
+  FOUNDER_PILOT_POLICY_CLAUSES.map((clause) => Object.freeze({
+    contentSha256: createHash('sha256').update([
+      'propertypredator.founder-pilot-policy-clause/v1',
+      FOUNDER_PILOT_POLICY_ASSET_KEY,
+      FOUNDER_PILOT_POLICY_ASSET_VERSION,
+      clause.ref,
+      clause.heading,
+      clause.text,
+    ].join(UNIT), 'utf8').digest('hex'),
+    documentId: `${FOUNDER_PILOT_POLICY_ASSET_KEY}.${clause.ref}`,
+    documentType: clause.ref,
+    documentVersion: FOUNDER_PILOT_POLICY_ASSET_VERSION,
+  })),
+);
 
 /**
  * The bundle digest of the asset above.
