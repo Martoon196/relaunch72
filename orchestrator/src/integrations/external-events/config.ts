@@ -17,6 +17,8 @@ export interface PropertyPredatorExternalEventEnvConfig {
   readonly production: boolean;
   /** Exact socket peer addresses allowed to assert X-Forwarded-Proto. */
   readonly trustedProxyAddresses: readonly string[];
+  /** Render's documented edge contract is active for this web service. */
+  readonly renderProxyTrusted: boolean;
   /** Safe for health output. Never contains configured values. */
   readonly blockers: readonly string[];
   readonly binding?: PropertyPredatorExternalEventKeyBindingConfig;
@@ -55,6 +57,7 @@ export function loadPropertyPredatorExternalEventConfig(
       configurationReady: false,
       production,
       trustedProxyAddresses: Object.freeze([]),
+      renderProxyTrusted: false,
       blockers: Object.freeze(['Property Predator external-event bridge is disabled']),
     });
   }
@@ -68,6 +71,10 @@ export function loadPropertyPredatorExternalEventConfig(
   const trustedProxyAddresses = rawTrustedProxyAddresses
     ? rawTrustedProxyAddresses.split(',').map((address) => address.trim())
     : [];
+  const renderProxyTrusted = production
+    && env.RENDER?.trim() === 'true'
+    && env.RENDER_SERVICE_TYPE?.trim() === 'web'
+    && env.PORTAL_PROXY_MODE?.trim() === 'render';
   if (trustedProxyAddresses.some((address) => !address || isIP(address) === 0)) {
     blockers.push(
       'PROPERTY_PREDATOR_EXTERNAL_EVENTS_TRUSTED_PROXY_ADDRESSES must contain only IP addresses',
@@ -120,6 +127,7 @@ export function loadPropertyPredatorExternalEventConfig(
       configurationReady: false,
       production,
       trustedProxyAddresses: Object.freeze([...trustedProxyAddresses]),
+      renderProxyTrusted,
       blockers: Object.freeze(blockers),
     });
   }
@@ -128,6 +136,7 @@ export function loadPropertyPredatorExternalEventConfig(
     configurationReady: true,
     production,
     trustedProxyAddresses: Object.freeze([...trustedProxyAddresses]),
+    renderProxyTrusted,
     blockers: Object.freeze([]),
     binding: Object.freeze({ keyId, workspaceId, sharedSecret }),
   });

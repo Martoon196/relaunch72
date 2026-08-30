@@ -273,6 +273,7 @@ async function main(): Promise<void> {
       const handle = createPropertyPredatorExternalEventHandler({
         production: externalEventConfig.production,
         trustedProxyAddresses: externalEventConfig.trustedProxyAddresses,
+        trustRenderProxy: externalEventConfig.renderProxyTrusted,
         bindings: [{
           keyId: externalEventConfig.binding.keyId,
           sharedSecret: externalEventConfig.binding.sharedSecret,

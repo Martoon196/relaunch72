@@ -37,6 +37,8 @@ export interface PropertyPredatorExternalEventRouterOptions {
   readonly production: boolean;
   /** Exact socket peer addresses allowed to assert X-Forwarded-Proto. */
   readonly trustedProxyAddresses?: readonly string[];
+  /** Trust Render's edge-provided scheme only inside an exact Render web runtime. */
+  readonly trustRenderProxy?: boolean;
   readonly bindings: readonly PropertyPredatorExternalEventRouterBinding[];
   /** Safe health hooks; failures here must never change the HTTP contract. */
   readonly onRuntimeAvailable?: () => void;
@@ -97,12 +99,18 @@ function hasJsonContentType(req: IncomingMessage): boolean {
   return segments.slice(1).every((segment) => segment === 'charset=utf-8');
 }
 
-function isHttps(req: IncomingMessage, trustedProxyAddresses: ReadonlySet<string>): boolean {
+function isHttps(
+  req: IncomingMessage,
+  trustedProxyAddresses: ReadonlySet<string>,
+  trustRenderProxy: boolean,
+): boolean {
   if ((req.socket as TLSSocket | undefined)?.encrypted === true) return true;
+  const forwardedProto = exactSingleHeader(req, 'x-forwarded-proto');
+  if (trustRenderProxy && forwardedProto === 'https') return true;
   const remoteAddress = req.socket?.remoteAddress;
   return typeof remoteAddress === 'string'
     && trustedProxyAddresses.has(remoteAddress)
-    && exactSingleHeader(req, 'x-forwarded-proto') === 'https';
+    && forwardedProto === 'https';
 }
 
 function readRawBody(req: IncomingMessage): Promise<Buffer> {
@@ -187,7 +195,11 @@ export function createPropertyPredatorExternalEventHandler(
       sendJson(res, 404, { error: 'not_found' });
       return;
     }
-    if (options.production && !isHttps(req, trustedProxyAddresses)) {
+    if (options.production && !isHttps(
+      req,
+      trustedProxyAddresses,
+      options.trustRenderProxy === true,
+    )) {
       sendJson(res, 400, { error: 'https_required' });
       return;
     }

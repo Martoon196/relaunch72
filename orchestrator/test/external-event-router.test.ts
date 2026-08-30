@@ -135,10 +135,12 @@ function handlerWithStore(
     readonly onRuntimeAvailable?: () => void;
     readonly onRuntimeUnavailable?: () => void;
   } = {},
+  trustRenderProxy = false,
 ) {
   return createPropertyPredatorExternalEventHandler({
     production,
     trustedProxyAddresses,
+    trustRenderProxy,
     ...health,
     bindings: [{ keyId: KEY_ID, sharedSecret: SECRET, store }],
   });
@@ -330,6 +332,15 @@ test('production requires real HTTPS unless a trusted proxy is explicitly config
   );
   assert.equal(trustedProxy.statusCode, 202);
 
+  const renderProxy = response();
+  await handlerWithStore(store, true, [], {}, true)(
+    request(body, signedHeaders(body, { 'x-forwarded-proto': 'https' }), {
+      remoteAddress: '10.42.17.9',
+    }),
+    renderProxy,
+  );
+  assert.equal(renderProxy.statusCode, 202);
+
   assert.throws(
     () => handlerWithStore(store, true, ['proxy.internal']),
     /trusted proxy addresses must be exact IPv4 or IPv6 addresses/,
@@ -346,6 +357,7 @@ test('environment configuration is disabled by default and invalid enablement st
   assert.equal(disabled.configurationReady, false);
   assert.equal(disabled.binding, undefined);
   assert.deepEqual(disabled.trustedProxyAddresses, []);
+  assert.equal(disabled.renderProxyTrusted, false);
 
   const invalid = loadPropertyPredatorExternalEventConfig({
     NODE_ENV: 'production',
@@ -373,6 +385,20 @@ test('valid configuration creates one dedicated key-to-workspace binding', () =>
   assert.equal(valid.binding?.workspaceId, WORKSPACE_ID);
   assert.deepEqual(Buffer.from(valid.binding!.sharedSecret), SECRET);
   assert.deepEqual(valid.trustedProxyAddresses, ['127.0.0.1', '::1']);
+  assert.equal(valid.renderProxyTrusted, false);
+
+  const render = loadPropertyPredatorExternalEventConfig({
+    NODE_ENV: 'production',
+    RENDER: 'true',
+    RENDER_SERVICE_TYPE: 'web',
+    PORTAL_PROXY_MODE: 'render',
+    PROPERTY_PREDATOR_EXTERNAL_EVENTS_ENABLED: 'true',
+    PROPERTY_PREDATOR_EXTERNAL_EVENTS_KEY_ID: KEY_ID,
+    PROPERTY_PREDATOR_EXTERNAL_EVENTS_WORKSPACE_ID: WORKSPACE_ID,
+    PROPERTY_PREDATOR_EXTERNAL_EVENTS_HMAC_SECRET_BASE64URL: encoded,
+  });
+  assert.equal(render.configurationReady, true);
+  assert.equal(render.renderProxyTrusted, true);
 
   const invalidProxy = loadPropertyPredatorExternalEventConfig({
     PROPERTY_PREDATOR_EXTERNAL_EVENTS_ENABLED: 'true',
