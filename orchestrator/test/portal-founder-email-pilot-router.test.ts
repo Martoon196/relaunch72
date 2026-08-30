@@ -12,8 +12,13 @@ import {
   CONTACT_ENDPOINT_ATTACH_ROUTE,
   EMAIL_PILOT_AUTHORISE_ROUTE,
   EMAIL_PILOT_CONFIRM_VALUE,
+  EMAIL_PILOT_POLICY_CONFIRM_VALUE,
+  EMAIL_PILOT_POLICY_ROUTE,
+  EMAIL_PILOT_PREPARE_CONFIRM_VALUE,
+  EMAIL_PILOT_PREPARE_ROUTE,
   founderEmailPilotNoticeToken,
   founderEmailPilotPreviewToken,
+  type FounderEmailPilotNoticeCode,
 } from '../src/portal/founder-email-pilot-actions.js';
 import {
   deriveFounderEmailPilotIdentifiers,
@@ -27,8 +32,17 @@ import type {
   AuthoriseResult,
   PilotReadinessResult,
   PortalFounderEmailPilotService,
+  PrepareContentInput,
+  PrepareContentResult,
+  RecordPolicyEvidenceInput,
+  RecordPolicyEvidenceResult,
   ResolveAuthorisationResult,
 } from '../src/portal/founder-email-pilot-service.js';
+import {
+  FOUNDER_PILOT_POLICY_CLAUSES,
+  FOUNDER_PILOT_REVIEW_AUTHORITY,
+  FOUNDER_PILOT_ROUTE_CLASSIFICATION,
+} from '../src/founder-email-pilot/policy-asset.js';
 import { PROPERTY_PREDATOR_GROWTH_PROFILE } from '../src/portal/product-profile.js';
 import { handlePortal, type PostgresPortalDeps } from '../src/portal/router.js';
 import { PORTAL_COOKIE, portalCsrfToken } from '../src/portal/session.js';
@@ -173,6 +187,40 @@ class FakePilot implements PortalFounderEmailPilotService {
   async authorise(_i: unknown, input: AuthoriseInput): Promise<AuthoriseResult> {
     this.authoriseCalls.push(input);
     return this.authoriseOutcome;
+  }
+
+  readonly prepareCalls: PrepareContentInput[] = [];
+  readonly policyCalls: RecordPolicyEvidenceInput[] = [];
+  prepareOutcome: PrepareContentResult = {
+    ok: true, disposition: 'prepared',
+    campaignTemplateVersionId: EVIDENCE.campaignTemplateVersionId,
+    messageVersionId: EVIDENCE.messageVersionId,
+    approvedContentId: 'ae100000-0000-4000-8000-000000000001',
+    providerEffects: 'none',
+  };
+  policyOutcome: RecordPolicyEvidenceResult = {
+    ok: true, disposition: 'recorded',
+    policyPublicationEventId: EVIDENCE.policyPublicationEventId,
+    pecrSenderDecisionEventId: EVIDENCE.pecrSenderDecisionEventId,
+    pecrInstigatorDecisionEventId: EVIDENCE.pecrInstigatorDecisionEventId,
+    actionScopeSha256: 'f'.repeat(64),
+    reviewAuthority: FOUNDER_PILOT_REVIEW_AUTHORITY,
+    ownershipControlChecked: false,
+    providerEffects: 'none',
+  };
+
+  async prepareContent(
+    _i: unknown, input: PrepareContentInput,
+  ): Promise<PrepareContentResult> {
+    this.prepareCalls.push(input);
+    return this.prepareOutcome;
+  }
+
+  async recordPolicyEvidence(
+    _i: unknown, input: RecordPolicyEvidenceInput,
+  ): Promise<RecordPolicyEvidenceResult> {
+    this.policyCalls.push(input);
+    return this.policyOutcome;
   }
 }
 
@@ -522,6 +570,231 @@ test('the identifiers a replay depends on are derived, not random', () => {
   assert.match(IDENTIFIERS.correlationId, uuid);
   assert.notEqual(IDENTIFIERS.providerOperationId, IDENTIFIERS.messageDeliveryId);
   assert.notEqual(IDENTIFIERS.messageDeliveryId, IDENTIFIERS.correlationId);
+});
+
+function stepForm(field: string, phrase: string, overrides: Record<string, string> = {}) {
+  return new URLSearchParams({
+    _csrf: portalCsrfToken(SECRET, SESSION),
+    command_key: PILOT_COMMAND_KEY,
+    contact_id: CONTACT_ID,
+    contact_point_id: POINT_ID,
+    purpose: 'property_predator_marketing',
+    [field]: phrase,
+    ...overrides,
+  }).toString();
+}
+
+const prepareForm = (o: Record<string, string> = {}) =>
+  stepForm('confirm_prepare', EMAIL_PILOT_PREPARE_CONFIRM_VALUE, o);
+const policyForm = (o: Record<string, string> = {}) =>
+  stepForm('confirm_policy', EMAIL_PILOT_POLICY_CONFIRM_VALUE, o);
+
+function noticeOf(res: { headers: Record<string, string> }): string | null {
+  return new URL(res.headers.location ?? '', 'https://portal.test')
+    .searchParams.get('notice');
+}
+
+test('both preparation steps pass the resolved endpoint and never a typed address', async () => {
+  const pilot = new FakePilot();
+  const prepared = await call(
+    'POST', EMAIL_PILOT_PREPARE_ROUTE, deps({ founderEmailPilot: pilot }), prepareForm(),
+  );
+  assert.equal(noticeOf(prepared), founderEmailPilotNoticeToken(SECRET, SESSION, 'prepare_done'));
+  assert.equal(pilot.prepareCalls.length, 1);
+  assert.equal(pilot.prepareCalls[0]?.contactPointId, POINT_ID);
+  assert.equal(pilot.prepareCalls[0]?.purpose, 'property_predator_marketing');
+  assert.equal(pilot.prepareCalls[0]?.operatorConfirmed, true);
+
+  const recorded = await call(
+    'POST', EMAIL_PILOT_POLICY_ROUTE, deps({ founderEmailPilot: pilot }), policyForm(),
+  );
+  assert.equal(noticeOf(recorded), founderEmailPilotNoticeToken(SECRET, SESSION, 'policy_recorded'));
+  assert.equal(pilot.policyCalls.length, 1);
+  assert.equal(pilot.policyCalls[0]?.contactPointId, POINT_ID);
+});
+
+test('neither preparation step accepts a hash, id or evidence reference', async () => {
+  // The whole point of deriving server-side: there is no field a browser could
+  // use to assert a compliance fact, and an extra one is refused outright.
+  for (const [route, form, code] of [
+    [EMAIL_PILOT_PREPARE_ROUTE, prepareForm, 'prepare_invalid'],
+    [EMAIL_PILOT_POLICY_ROUTE, policyForm, 'policy_invalid'],
+  ] as const) {
+    for (const smuggled of [
+      'bundle_sha256=deadbeef', 'decision_reference=solicitor',
+      'policy_pack_id=11111111-1111-4111-8111-111111111111',
+      'action_scope_sha256=' + 'a'.repeat(64), 'ownership_control_checked=true',
+    ]) {
+      const pilot = new FakePilot();
+      const res = await call(
+        'POST', route, deps({ founderEmailPilot: pilot }), `${form()}&${smuggled}`,
+      );
+      assert.equal(noticeOf(res), founderEmailPilotNoticeToken(SECRET, SESSION, code), smuggled);
+      assert.deepEqual(pilot.prepareCalls, [], smuggled);
+      assert.deepEqual(pilot.policyCalls, [], smuggled);
+    }
+  }
+});
+
+test('each step demands its own exact phrase and never the send phrase', async () => {
+  const rejected: readonly [
+    string,
+    (overrides?: Record<string, string>) => string,
+    FounderEmailPilotNoticeCode,
+    Record<string, string>,
+  ][] = [
+    [EMAIL_PILOT_PREPARE_ROUTE, prepareForm, 'prepare_invalid', { _csrf: 'wrong' }],
+    [EMAIL_PILOT_PREPARE_ROUTE, prepareForm, 'prepare_invalid', { confirm_prepare: 'prepare' }],
+    // Typing the send phrase into a preparation form must not work.
+    [EMAIL_PILOT_PREPARE_ROUTE, prepareForm, 'prepare_invalid',
+      { confirm_prepare: EMAIL_PILOT_CONFIRM_VALUE }],
+    [EMAIL_PILOT_PREPARE_ROUTE, prepareForm, 'prepare_invalid',
+      { confirm_prepare: EMAIL_PILOT_POLICY_CONFIRM_VALUE }],
+    [EMAIL_PILOT_PREPARE_ROUTE, prepareForm, 'prepare_invalid', { command_key: 'nope' }],
+    [EMAIL_PILOT_POLICY_ROUTE, policyForm, 'policy_invalid', { _csrf: 'wrong' }],
+    [EMAIL_PILOT_POLICY_ROUTE, policyForm, 'policy_invalid',
+      { confirm_policy: EMAIL_PILOT_CONFIRM_VALUE }],
+    [EMAIL_PILOT_POLICY_ROUTE, policyForm, 'policy_invalid',
+      { confirm_policy: EMAIL_PILOT_PREPARE_CONFIRM_VALUE }],
+    [EMAIL_PILOT_POLICY_ROUTE, policyForm, 'policy_invalid', { contact_point_id: 'nope' }],
+  ];
+  for (const [route, form, code, overrides] of rejected) {
+    const pilot = new FakePilot();
+    const res = await call('POST', route, deps({ founderEmailPilot: pilot }), form(overrides));
+    assert.equal(
+      noticeOf(res), founderEmailPilotNoticeToken(SECRET, SESSION, code),
+      JSON.stringify(overrides),
+    );
+    assert.deepEqual(pilot.prepareCalls, []);
+    assert.deepEqual(pilot.policyCalls, []);
+  }
+});
+
+test('every preparation failure keeps its own honest notice', async () => {
+  for (const [kind, prepareCode, policyCode] of [
+    ['conflict', 'prepare_conflict', 'policy_conflict'],
+    ['blocked', 'prepare_blocked', 'policy_blocked'],
+    ['forbidden', 'prepare_forbidden', 'policy_forbidden'],
+    ['unauthenticated', 'prepare_forbidden', 'policy_forbidden'],
+    ['validation', 'prepare_invalid', 'policy_invalid'],
+    ['unavailable', 'prepare_unavailable', 'policy_unavailable'],
+  ] as const) {
+    const pilot = new FakePilot();
+    pilot.prepareOutcome = { ok: false, kind };
+    pilot.policyOutcome = { ok: false, kind };
+    const prepared = await call(
+      'POST', EMAIL_PILOT_PREPARE_ROUTE, deps({ founderEmailPilot: pilot }), prepareForm(),
+    );
+    assert.equal(
+      noticeOf(prepared), founderEmailPilotNoticeToken(SECRET, SESSION, prepareCode), kind,
+    );
+    const recorded = await call(
+      'POST', EMAIL_PILOT_POLICY_ROUTE, deps({ founderEmailPilot: pilot }), policyForm(),
+    );
+    assert.equal(
+      noticeOf(recorded), founderEmailPilotNoticeToken(SECRET, SESSION, policyCode), kind,
+    );
+  }
+});
+
+test('a replayed step reports the original record rather than a second one', async () => {
+  const pilot = new FakePilot();
+  pilot.prepareOutcome = { ...pilot.prepareOutcome, disposition: 'replayed' } as never;
+  pilot.policyOutcome = { ...pilot.policyOutcome, disposition: 'replayed' } as never;
+  assert.equal(
+    noticeOf(await call(
+      'POST', EMAIL_PILOT_PREPARE_ROUTE, deps({ founderEmailPilot: pilot }), prepareForm(),
+    )),
+    founderEmailPilotNoticeToken(SECRET, SESSION, 'prepare_replayed'),
+  );
+  assert.equal(
+    noticeOf(await call(
+      'POST', EMAIL_PILOT_POLICY_ROUTE, deps({ founderEmailPilot: pilot }), policyForm(),
+    )),
+    founderEmailPilotNoticeToken(SECRET, SESSION, 'policy_replayed'),
+  );
+});
+
+test('an uncomposed pilot offers no preparation and claims none', async () => {
+  assert.equal(
+    noticeOf(await call('POST', EMAIL_PILOT_PREPARE_ROUTE, deps(), prepareForm())),
+    founderEmailPilotNoticeToken(SECRET, SESSION, 'prepare_unavailable'),
+  );
+  assert.equal(
+    noticeOf(await call('POST', EMAIL_PILOT_POLICY_ROUTE, deps(), policyForm())),
+    founderEmailPilotNoticeToken(SECRET, SESSION, 'policy_unavailable'),
+  );
+  const page = await call('GET', CASE_FILE, deps());
+  assert.doesNotMatch(page.body, new RegExp(`action="${EMAIL_PILOT_PREPARE_ROUTE}"`));
+  assert.doesNotMatch(page.body, new RegExp(`action="${EMAIL_PILOT_POLICY_ROUTE}"`));
+});
+
+/** Nothing prepared and no policy recorded: both steps are still to do. */
+function unpreparedPilot(): FakePilot {
+  const pilot = new FakePilot();
+  pilot.resolveOutcome = { ok: true, preview: null };
+  pilot.readinessOutcome = {
+    ok: true,
+    report: {
+      schemaVersion: 1, result: 'blocked', enqueued: false, providerEffects: false,
+      dimensions: [],
+      blockers: ['POLICY_AUTHORITY_MISSING', 'PECR_DECISIONS_MISSING'],
+      nextStep: 'Resolve the listed blockers.',
+    },
+    preview: {
+      recipientEmail: 'office@example.test', recipientVerified: true,
+      purpose: 'property_predator_marketing', dailyUsed: 0, dailyCap: 10,
+      monthlyUsed: 0, monthlyCap: 50,
+    },
+  };
+  return pilot;
+}
+
+test('a completed step shows its record rather than offering itself again', async () => {
+  // The default fixture has content prepared and no policy blocker, so neither
+  // form is offered. Confirming that is what stops a founder re-running a step
+  // that already happened.
+  const res = await call('GET', CASE_FILE, deps({ founderEmailPilot: new FakePilot() }));
+  assert.match(res.body, /Prepare and review this pilot/);
+  assert.doesNotMatch(res.body, new RegExp(`action="${EMAIL_PILOT_PREPARE_ROUTE}"`));
+  assert.doesNotMatch(res.body, new RegExp(`action="${EMAIL_PILOT_POLICY_ROUTE}"`));
+  assert.match(res.body, /Done · approved content/);
+  assert.match(res.body, /Done · compliance review/);
+});
+
+test('the case file shows the complete policy, recipient, subject and body', async () => {
+  const res = await call('GET', CASE_FILE, deps({ founderEmailPilot: unpreparedPilot() }));
+  assert.match(res.body, new RegExp(`action="${EMAIL_PILOT_PREPARE_ROUTE}"`));
+  assert.match(res.body, new RegExp(`action="${EMAIL_PILOT_POLICY_ROUTE}"`));
+  assert.match(res.body, /Not yet · approved content/);
+  assert.match(res.body, /Not yet · compliance review/);
+  // Both phrases, exactly as typed.
+  assert.match(res.body, new RegExp(EMAIL_PILOT_PREPARE_CONFIRM_VALUE));
+  assert.match(res.body, new RegExp(EMAIL_PILOT_POLICY_CONFIRM_VALUE));
+  // The recipient resolved from the endpoint, and the exact approved copy.
+  assert.match(res.body, /office@example\.test/);
+  assert.match(res.body, /Property Predator Growth HQ — founder delivery proof/);
+  assert.match(res.body, /verified founder email endpoint shown in Lead 360/);
+  // Every policy clause, in full.
+  for (const clause of FOUNDER_PILOT_POLICY_CLAUSES) {
+    assert.ok(res.body.includes(clause.heading), clause.ref);
+  }
+  // The honest framing, and the fixed facts of this pilot.
+  assert.match(res.body, /founder and operator compliance review, not legal advice/i);
+  assert.match(res.body, new RegExp(FOUNDER_PILOT_REVIEW_AUTHORITY));
+  assert.match(res.body, new RegExp(FOUNDER_PILOT_ROUTE_CLASSIFICATION));
+  assert.match(res.body, /None supplied, recorded as unchecked/);
+  // No solicitor approval is claimed anywhere. The page says the opposite, in
+  // as many words, so assert the denial and the absence of any affirmative.
+  assert.match(res.body, /no solicitor has approved it/iu);
+  assert.doesNotMatch(res.body, /approved by a solicitor/iu);
+  assert.doesNotMatch(res.body, /solicitor approval (obtained|recorded|given)/iu);
+  assert.doesNotMatch(res.body, /legal advice (has been |was )?(given|provided|obtained)/iu);
+  // Every mention of a solicitor must sit inside a denial.
+  for (const sentence of res.body.split(/(?<=\.)\s+/u)) {
+    if (!/solicitor/iu.test(sentence)) continue;
+    assert.match(sentence, /\bno\b/iu, sentence.slice(0, 160));
+  }
 });
 
 test('the view escapes every operator and contact controlled value', () => {

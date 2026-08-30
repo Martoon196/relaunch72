@@ -22,6 +22,17 @@ import type {
   ConsumePermissionUseResult,
   PortalPermissionUseReceiptService,
 } from '../src/portal/permission-use-receipt-service.js';
+import {
+  FOUNDER_PILOT_AUTHORITY_DAYS,
+  FOUNDER_PILOT_POLICY_ASSET_KEY,
+  FOUNDER_PILOT_POLICY_ASSET_VERSION,
+  FOUNDER_PILOT_REVIEW_AUTHORITY,
+  founderPilotPolicyBundleSha256,
+} from '../src/founder-email-pilot/policy-asset.js';
+import {
+  PROPERTY_PREDATOR_OWNED_SEED_PROOF_BODY,
+  PROPERTY_PREDATOR_OWNED_SEED_PROOF_SUBJECT,
+} from '../src/portal/owned-seed-proof-email.js';
 import { PgPortalFounderEmailPilotService } from '../src/portal/founder-email-pilot-pg-service.js';
 import type {
   AttachEndpointInput,
@@ -176,7 +187,11 @@ class FakeClient {
 
   async query(sql: string, values: readonly unknown[] = []): Promise<{ rows: unknown[] }> {
     this.calls.push({ sql, values });
-    if (this.error && (sql.includes('attach_verified') || sql.includes('pilot_readiness'))) {
+    if (this.error && [
+      'attach_verified', 'pilot_readiness',
+      'prepare_founder_email_pilot_content',
+      'record_founder_pilot_compliance_evidence',
+    ].some((marker) => sql.includes(marker))) {
       throw this.error;
     }
     if (sql.includes('attach_verified_contact_email_endpoint')) {
@@ -203,12 +218,37 @@ class FakeClient {
     if (sql.includes('derive_customer_email_pilot_request_digest')) {
       return { rows: [{ request_sha256: this.requestSha256 }] };
     }
+    if (sql.includes('prepare_founder_email_pilot_content')) {
+      return { rows: [{
+        disposition: this.prepareDisposition,
+        campaign_template_version_id: EVIDENCE_ROW.campaign_template_version_id,
+        message_version_id: EVIDENCE_ROW.message_version_id,
+        approved_content_id: 'ae100000-0000-4000-8000-000000000001',
+      }] };
+    }
+    if (sql.includes('record_founder_pilot_compliance_evidence')) {
+      return { rows: [{
+        disposition: this.policyDisposition,
+        policy_publication_event_id: EVIDENCE_ROW.policy_publication_event_id,
+        pecr_sender_decision_event_id: EVIDENCE_ROW.pecr_sender_decision_event_id,
+        pecr_instigator_decision_event_id:
+          EVIDENCE_ROW.pecr_instigator_decision_event_id,
+        action_scope_sha256: 'f'.repeat(64),
+        review_authority: this.reviewAuthority,
+        ownership_control_checked: this.ownershipControlChecked,
+      }] };
+    }
     return { rows: [{ active: true }] };
   }
 
   /** No row is how the resolver reports an unresolved or refused tuple. */
   evidenceRows: unknown[] = [{ ...EVIDENCE_ROW }];
   requestSha256 = 'b'.repeat(64);
+  prepareDisposition = 'prepared';
+  policyDisposition = 'recorded';
+  reviewAuthority: unknown = FOUNDER_PILOT_REVIEW_AUTHORITY;
+  /** The database must never report this true; the seam refuses it if it does. */
+  ownershipControlChecked: unknown = false;
 
   release(): void { /* pooled */ }
 }
@@ -287,6 +327,7 @@ function service(
   workspaceId = WORKSPACE,
   commandService: CustomerEmailLiveCommandService = new FakeCommand(),
   permissionUse: PortalPermissionUseReceiptService = new FakePermissionUse(),
+  evidenceClient: FakeClient | null = client,
 ) {
   return new PgPortalFounderEmailPilotService({
     principalResolver: {
@@ -296,9 +337,18 @@ function service(
     providerConnectionId: CONNECTION,
     commandService,
     permissionUse,
+    ...(evidenceClient
+      ? { evidencePool: { async connect() { return evidenceClient as never; } } }
+      : {}),
     now: () => NOW,
   });
 }
+
+const stepInput = Object.freeze({
+  contactId: CONTACT, contactPointId: POINT,
+  purpose: 'property_predator_marketing', commandKey: COMMAND_KEY,
+  operatorConfirmed: true,
+});
 
 function authoriseInput(overrides: Partial<AuthoriseInput> = {}): AuthoriseInput {
   return {
@@ -459,6 +509,144 @@ test('the seam requires the exact provider connection at construction', () => {
     permissionUse: new FakePermissionUse(),
     now: () => NOW,
   }), /exact provider connection/);
+});
+
+test('preparing sends the deployed proof copy and the resolved endpoint id', async () => {
+  const client = new FakeClient();
+  const command = new FakeCommand();
+  const outcome = await service(client, WORKSPACE, command).prepareContent(
+    IDENTITY, stepInput,
+  );
+  assert.ok(outcome.ok);
+  assert.equal(outcome.disposition, 'prepared');
+  assert.equal(outcome.providerEffects, 'none');
+  const call = client.calls.find((e) => e.sql.includes('prepare_founder_email_pilot_content'));
+  assert.ok(call);
+  assert.equal(call.values[0], WORKSPACE);
+  assert.equal(call.values[3], POINT);
+  // The subject and body are the deployed asset, not anything a caller passed.
+  assert.equal(call.values[5], PROPERTY_PREDATOR_OWNED_SEED_PROOF_SUBJECT);
+  assert.equal(call.values[6], PROPERTY_PREDATOR_OWNED_SEED_PROOF_BODY);
+  assert.doesNotMatch(String(call.values[5]), /@/u);
+  assert.doesNotMatch(String(call.values[6]), /@/u);
+  // The command key crosses only as its workspace-scoped digest.
+  assert.deepEqual(call.values[9], Buffer.from(
+    deriveFounderPilotCommandKey('founder-pilot-prepare', WORKSPACE, COMMAND_KEY), 'hex',
+  ));
+  assert.deepEqual(command.calls, [], 'preparing must never reach the enqueue');
+});
+
+test('recording the review passes the policy asset and nothing a browser owns', async () => {
+  const client = new FakeClient();
+  const command = new FakeCommand();
+  const outcome = await service(client, WORKSPACE, command).recordPolicyEvidence(
+    IDENTITY, stepInput,
+  );
+  assert.ok(outcome.ok);
+  assert.equal(outcome.disposition, 'recorded');
+  assert.equal(outcome.ownershipControlChecked, false);
+  assert.equal(outcome.reviewAuthority, FOUNDER_PILOT_REVIEW_AUTHORITY);
+  assert.equal(outcome.providerEffects, 'none');
+  const call = client.calls.find(
+    (e) => e.sql.includes('record_founder_pilot_compliance_evidence'),
+  );
+  assert.ok(call);
+  assert.equal(call.values[5], FOUNDER_PILOT_POLICY_ASSET_KEY);
+  assert.equal(call.values[6], FOUNDER_PILOT_POLICY_ASSET_VERSION);
+  // The bundle digest is computed from the clauses a founder reads, so the
+  // words and the digest cannot drift apart.
+  assert.deepEqual(call.values[7], Buffer.from(founderPilotPolicyBundleSha256(), 'hex'));
+  assert.equal(call.values[10], FOUNDER_PILOT_AUTHORITY_DAYS);
+  // Exactly twelve parameters: no room for a caller-supplied reference.
+  assert.equal(call.values.length, 12);
+  assert.deepEqual(command.calls, []);
+});
+
+test('a database claiming checked ownership evidence is refused, not reported', async () => {
+  // Defence in depth. 0065 writes false; if a future edit ever wrote true, the
+  // seam must not relay it as a compliance fact.
+  for (const claimed of [true, 'true', 1]) {
+    const client = new FakeClient();
+    client.ownershipControlChecked = claimed;
+    assert.deepEqual(
+      await service(client).recordPolicyEvidence(IDENTITY, stepInput),
+      { ok: false, kind: 'validation' }, JSON.stringify(claimed),
+    );
+  }
+  // The same for a review authority that is not the founder review.
+  const impostor = new FakeClient();
+  impostor.reviewAuthority = 'solicitor-approved';
+  assert.deepEqual(
+    await service(impostor).recordPolicyEvidence(IDENTITY, stepInput),
+    { ok: false, kind: 'validation' },
+  );
+});
+
+test('both steps replay, and refuse without their explicit confirmation', async () => {
+  const replayed = new FakeClient();
+  replayed.prepareDisposition = 'replayed';
+  replayed.policyDisposition = 'replayed';
+  const prepared = await service(replayed).prepareContent(IDENTITY, stepInput);
+  const recorded = await service(replayed).recordPolicyEvidence(IDENTITY, stepInput);
+  assert.ok(prepared.ok && prepared.disposition === 'replayed');
+  assert.ok(recorded.ok && recorded.disposition === 'replayed');
+  for (const override of [
+    { operatorConfirmed: false }, { commandKey: 'not-a-uuid' },
+    { contactPointId: 'not-a-uuid' }, { purpose: 'Not A Purpose' },
+  ]) {
+    const client = new FakeClient();
+    const input = { ...stepInput, ...override };
+    assert.deepEqual(
+      await service(client).prepareContent(IDENTITY, input as never),
+      { ok: false, kind: 'validation' }, JSON.stringify(override),
+    );
+    assert.deepEqual(
+      await service(client).recordPolicyEvidence(IDENTITY, input as never),
+      { ok: false, kind: 'validation' }, JSON.stringify(override),
+    );
+    assert.deepEqual(client.calls, [], JSON.stringify(override));
+  }
+});
+
+test('a conflicting command key stops both steps rather than overwriting', async () => {
+  for (const [code, kind] of [
+    ['23505', 'conflict'], ['40001', 'conflict'], ['42501', 'forbidden'],
+    ['22023', 'validation'], ['08006', 'unavailable'],
+  ] as const) {
+    const client = new FakeClient();
+    client.error = Object.assign(new Error('refused'), { code });
+    for (const run of [
+      () => service(client).prepareContent(IDENTITY, stepInput),
+      () => service(client).recordPolicyEvidence(IDENTITY, stepInput),
+    ]) {
+      assert.deepEqual(await run(), { ok: false, kind }, `${code} must map to ${kind}`);
+    }
+  }
+});
+
+test('an unbound evidence identity refuses rather than skipping the review', async () => {
+  const client = new FakeClient();
+  const unbound = service(client, WORKSPACE, new FakeCommand(), new FakePermissionUse(), null);
+  assert.deepEqual(
+    await unbound.recordPolicyEvidence(IDENTITY, stepInput),
+    { ok: false, kind: 'unavailable' },
+  );
+  assert.deepEqual(client.calls, []);
+});
+
+test('neither preparation step reaches a provider or the enqueue', async () => {
+  const client = new FakeClient();
+  const command = new FakeCommand();
+  await service(client, WORKSPACE, command).prepareContent(IDENTITY, stepInput);
+  await service(client, WORKSPACE, command).recordPolicyEvidence(IDENTITY, stepInput);
+  const sql = client.calls.map((e) => e.sql).join('\n').toLowerCase();
+  for (const forbidden of [
+    'authorize_and_enqueue', 'mailgun', 'http', 'provider_operations',
+    'message_deliveries', 'customer_email_jobs',
+  ]) {
+    assert.equal(sql.includes(forbidden), false, `${forbidden} must not appear`);
+  }
+  assert.deepEqual(command.calls, []);
 });
 
 test('the permission-use receipt is consumed before the enqueue, never after', async () => {

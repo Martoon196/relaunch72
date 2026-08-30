@@ -16,6 +16,10 @@ import {
   CONTACT_ENDPOINT_ATTACH_ROUTE,
   EMAIL_PILOT_AUTHORISE_ROUTE,
   EMAIL_PILOT_CONFIRM_VALUE,
+  EMAIL_PILOT_POLICY_CONFIRM_VALUE,
+  EMAIL_PILOT_POLICY_ROUTE,
+  EMAIL_PILOT_PREPARE_CONFIRM_VALUE,
+  EMAIL_PILOT_PREPARE_ROUTE,
 } from './founder-email-pilot-actions.js';
 
 /** Witnessed evidence only, mirroring the 0064 contract. */
@@ -75,6 +79,33 @@ export interface Lead360PilotReadinessView {
   readonly preview: Lead360PilotPreviewView | null;
 }
 
+/**
+ * The two preparation steps, shown with everything they will record.
+ *
+ * The policy is rendered clause by clause, and the message is rendered in full,
+ * because a founder confirming a compliance review should read the words that
+ * go into the ledger rather than a summary of them.
+ */
+export interface Lead360PilotPreparationView {
+  readonly commandKey: string;
+  readonly contactPointId: string;
+  readonly purpose: string;
+  readonly recipientEmail: string;
+  readonly subject: string;
+  readonly bodyText: string;
+  readonly contentPrepared: boolean;
+  readonly policyRecorded: boolean;
+  /** How the ledger will describe the authority. Never a solicitor's approval. */
+  readonly reviewAuthority: string;
+  readonly routeClassification: string;
+  readonly sender: string;
+  readonly instigator: string;
+  readonly policyVersion: string;
+  readonly policyClauses: readonly {
+    readonly ref: string; readonly heading: string; readonly text: string;
+  }[];
+}
+
 /** The exact resolved message, shown in full before a founder authorises it. */
 export interface Lead360PilotAuthorisationView {
   readonly commandKey: string;
@@ -102,6 +133,8 @@ export interface Lead360RenderOptions {
   readonly pilotReadiness?: Lead360PilotReadinessView | null;
   /** Present only when the exact evidence tuple resolved and a send is offerable. */
   readonly pilotAuthorisation?: Lead360PilotAuthorisationView | null;
+  /** The two preparation steps that must precede any authorisation. */
+  readonly pilotPreparation?: Lead360PilotPreparationView | null;
   readonly csrfToken?: string;
   // Structural rather than one rail's type: the permission and pilot notices
   // have the same shape and both render here.
@@ -528,6 +561,72 @@ function pilotReadinessPanel(options: Lead360RenderOptions): string {
 }
 
 /**
+ * The two preparation steps, with everything each will record.
+ *
+ * Both forms carry only a command key, the contact, the endpoint, the purpose
+ * and a typed phrase. There is deliberately no field for a hash, an identifier
+ * or an evidence reference: all of those are derived from the deployed policy
+ * asset and the resolved records, where a browser cannot reach them.
+ */
+function pilotPreparationPanel(
+  view: Lead360View,
+  options: Lead360RenderOptions,
+): string {
+  const preparation = options.pilotPreparation;
+  if (!preparation) return '';
+  const head = '<div class="lead360-section-head"><div><div class="lead360-section-label">Founder pilot</div><h2 id="lead360-prepare">Prepare and review this pilot</h2></div></div>';
+  const csrf = escapeHtml(options.csrfToken ?? '');
+  const hidden = `<input type="hidden" name="_csrf" value="${csrf}">`
+    + `<input type="hidden" name="command_key" value="${escapeHtml(preparation.commandKey)}">`
+    + `<input type="hidden" name="contact_id" value="${escapeHtml(view.identity.contactId)}">`
+    + `<input type="hidden" name="contact_point_id" value="${escapeHtml(preparation.contactPointId)}">`
+    + `<input type="hidden" name="purpose" value="${escapeHtml(preparation.purpose)}">`;
+  const step = (done: boolean, label: string): string => (done
+    ? `<span class="lead360-pilot-step is-done">Done · ${escapeHtml(label)}</span>`
+    : `<span class="lead360-pilot-step">Not yet · ${escapeHtml(label)}</span>`);
+  const contentForm = preparation.contentPrepared
+    ? '<p class="lead360-pilot-clear">The approved campaign version, step, message and both approvals are recorded for this endpoint.</p>'
+    : `<form method="post" action="${EMAIL_PILOT_PREPARE_ROUTE}" autocomplete="off">
+        ${hidden}
+        <label class="lead360-field"><span>Type <b>${EMAIL_PILOT_PREPARE_CONFIRM_VALUE}</b> to confirm</span><input type="text" name="confirm_prepare" required maxlength="40" autocomplete="off"></label>
+        <button class="lead360-permission-button" type="submit">Prepare approved content</button>
+      </form>`;
+  const policyForm = preparation.policyRecorded
+    ? '<p class="lead360-pilot-clear">The founder and operator compliance review is recorded, with ownership and control evidence marked unchecked.</p>'
+    : `<form method="post" action="${EMAIL_PILOT_POLICY_ROUTE}" autocomplete="off">
+        ${hidden}
+        <label class="lead360-field"><span>Type <b>${EMAIL_PILOT_POLICY_CONFIRM_VALUE}</b> to confirm</span><input type="text" name="confirm_policy" required maxlength="40" autocomplete="off"></label>
+        <button class="lead360-permission-button" type="submit">Record founder compliance review</button>
+      </form>`;
+  return `<section class="lead360-section" aria-labelledby="lead360-prepare">${head}
+    <div class="lead360-permission-body">
+      <p class="lead360-pilot-warning"><b>This is a founder and operator compliance review, not legal advice.</b> No solicitor has approved it, and recording it claims no solicitor approval. Neither step below queues anything or calls Mailgun.</p>
+      <p>${step(preparation.contentPrepared, 'approved content')} ${step(preparation.policyRecorded, 'compliance review')}</p>
+      <h3 class="lead360-pilot-subhead">Step one · the exact message</h3>
+      <dl class="lead360-permission-detail">
+        <div><dt>To</dt><dd>${escapeHtml(preparation.recipientEmail)}</dd></div>
+        <div><dt>Purpose</dt><dd>${escapeHtml(preparation.purpose)}</dd></div>
+        <div><dt>Subject</dt><dd>${escapeHtml(preparation.subject)}</dd></div>
+      </dl>
+      <pre class="lead360-pilot-body">${escapeHtml(preparation.bodyText)}</pre>
+      ${contentForm}
+      <h3 class="lead360-pilot-subhead">Step two · the policy you are confirming</h3>
+      <dl class="lead360-permission-detail">
+        <div><dt>Review authority</dt><dd>${escapeHtml(preparation.reviewAuthority)}</dd></div>
+        <div><dt>PECR route</dt><dd>${escapeHtml(preparation.routeClassification)}</dd></div>
+        <div><dt>Sender</dt><dd>${escapeHtml(preparation.sender)}</dd></div>
+        <div><dt>Instigator</dt><dd>${escapeHtml(preparation.instigator)}</dd></div>
+        <div><dt>Ownership evidence</dt><dd>None supplied, recorded as unchecked</dd></div>
+        <div><dt>Policy version</dt><dd>${escapeHtml(preparation.policyVersion)}</dd></div>
+      </dl>
+      <ol class="lead360-pilot-policy">${preparation.policyClauses.map((clause) => `<li><b>${escapeHtml(clause.heading)}</b><span>${escapeHtml(clause.text)}</span></li>`).join('')}</ol>
+      ${policyForm}
+      <p class="lead360-permission-note">Every reference and digest recorded by these steps is derived from the deployed policy, the approved copy, the current permission and this session. None of it is taken from this page.</p>
+    </div>
+  </section>`;
+}
+
+/**
  * The final authorisation: the exact words that would be sent, then one act.
  *
  * The body is rendered in full and escaped. A founder authorising a live send
@@ -642,6 +741,9 @@ const LEAD_360_STYLE = `
   .lead360-permission-body{display:grid;gap:11px}.lead360-permission-body p{color:#8f9996;font-size:.64rem;line-height:1.5;margin:0}.lead360-permission-body form{display:grid;gap:9px}.lead360-field{display:block;color:var(--case-ink);font-size:.62rem;line-height:1.5}.lead360-field span{display:block;color:#78817f;margin:0 0 4px}.lead360-field input,.lead360-field select{display:block;width:100%;min-height:44px;box-sizing:border-box;padding:0 10px;background:var(--case-bg);border:1px solid var(--case-line);border-radius:8px;color:var(--case-ink);font:inherit}.lead360-permission-check{display:flex;align-items:flex-start;gap:9px;min-height:44px;color:#c7ccca;font-size:.62rem;line-height:1.45}.lead360-permission-check input{width:24px;height:24px;margin-top:2px;flex:none}.lead360-permission-button{min-height:44px;padding:0 16px;border:1px solid var(--case-accent);border-radius:8px;background:transparent;color:var(--case-accent);font:800 .64rem var(--mono,monospace);letter-spacing:.06em;text-transform:uppercase;cursor:pointer}.lead360-permission-button[disabled]{border-color:#3c4342;color:#6e7775;cursor:not-allowed}.lead360-permission-note{color:#78817f;font-size:.58rem;line-height:1.5;margin:0}.lead360 :is(a,button,input,select):focus-visible{outline:2px solid var(--case-accent);outline-offset:2px}
   .lead360-pilot-blockers{display:grid;gap:6px;margin:0;padding:0;list-style:none}.lead360-pilot-blockers li{display:grid;gap:2px;padding:8px;border:1px solid #6a3935;background:#211413}.lead360-pilot-blockers b{color:#f1847a;font:800 .55rem var(--mono,monospace);letter-spacing:.06em}.lead360-pilot-blockers span{color:#c8a5a1;font-size:.62rem;line-height:1.45}.lead360-pilot-clear{color:#7fd7a4;font-size:.64rem;line-height:1.5;margin:0}.lead360-pilot-subhead{margin:10px 0 6px;color:#78817f;font:600 .55rem var(--mono,monospace);text-transform:uppercase;letter-spacing:.06em}
   .lead360-pilot-body{margin:0 0 12px;padding:12px;border:1px solid var(--case-line);background:#0c0f0f;color:#c7ccca;font:400 .64rem/1.6 var(--mono,monospace);white-space:pre-wrap;overflow-wrap:anywhere;max-height:340px;overflow-y:auto}
+  .lead360-pilot-warning{margin:0 0 10px;padding:10px;border:1px solid #6a5935;background:#1b1608;color:#e6cf95;font-size:.64rem;line-height:1.5}.lead360-pilot-warning b{color:#f3ca73}
+  .lead360-pilot-step{display:inline-block;margin:0 6px 6px 0;padding:3px 7px;border:1px solid var(--case-line);color:#8b9491;font:700 .55rem var(--mono,monospace);letter-spacing:.05em;text-transform:uppercase}.lead360-pilot-step.is-done{border-color:#2f746c;color:#7fd7a4}
+  .lead360-pilot-policy{display:grid;gap:8px;margin:0 0 12px;padding:0 0 0 18px}.lead360-pilot-policy li{color:#9aa3a1;font-size:.63rem;line-height:1.5}.lead360-pilot-policy b{display:block;color:#c7ccca;font-size:.66rem;margin-bottom:2px}
   .lead360-empty{border:1px dashed #3c4342;background:#111414;padding:18px;text-align:left}.lead360-empty strong{display:block;font-size:.7rem;color:#c7ccca}.lead360-empty p{color:#7f8886;font-size:.64rem;line-height:1.5;margin:5px 0 0}.lead360-time-missing{color:#78817f;font:600 .55rem var(--mono,monospace)}.lead360-as-of{padding:11px 32px;border-top:1px solid var(--case-line);background:#090b0c;color:#6e7775;font:600 .55rem var(--mono,monospace);text-align:right}
   @media(max-width:1120px){.lead360-layout{grid-template-columns:minmax(0,1.35fr) minmax(250px,.8fr)}.lead360-left{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px;border-bottom:1px solid var(--case-line)}.lead360-column+.lead360-column{border-left:0}.lead360-right{border-left:1px solid var(--case-line)!important}}
   @media(max-width:760px){.lead360-case-head{grid-template-columns:1fr;padding:25px 21px 21px}.lead360-score{justify-self:start}.lead360-journey{padding:17px 21px}.lead360-journey ol{display:grid;grid-template-columns:1fr;gap:8px}.lead360-journey li:not(:last-child)::after{left:14px;right:auto;top:29px;bottom:-9px;width:1px;height:auto}.lead360-journey-score{grid-template-columns:1fr}.lead360-layout{display:block}.lead360-left{display:block}.lead360-column{padding:21px}.lead360-column+.lead360-column,.lead360-right{border-left:0!important;border-top:1px solid var(--case-line)}.lead360-as-of{padding-inline:21px;text-align:left}}
@@ -671,7 +773,7 @@ export function renderLead360Body(
     <div class="lead360-layout">
       <aside class="lead360-column lead360-left" aria-label="Lead context"><section class="lead360-section" aria-labelledby="lead360-score-reason"><div class="lead360-section-head"><div><div class="lead360-section-label">Scoring</div><h2 id="lead360-score-reason">Why this score?</h2></div></div>${view.scoreExplanation ? `<p class="lead360-case-note">${escapeHtml(view.scoreExplanation)}</p>` : emptyState('No score explanation', 'A score has not been justified by recorded evidence.')}</section><section class="lead360-section" aria-labelledby="lead360-crm"><div class="lead360-section-head"><div><div class="lead360-section-label">Saved records</div><h2 id="lead360-crm">CRM summary</h2></div></div>${crmSummary(view.crm)}</section></aside>
       <section class="lead360-column lead360-centre" aria-labelledby="lead360-evidence"><div class="lead360-section-head"><div><div class="lead360-section-label">Exact chronology</div><h2 id="lead360-evidence">Engagement evidence</h2></div><span>Newest first</span></div>${evidenceTimeline(view.evidence)}</section>
-      <aside class="lead360-column lead360-right" aria-label="Decision rail"><section class="lead360-section" aria-labelledby="lead360-next"><div class="lead360-section-head"><div><div class="lead360-section-label">Human judgement</div><h2 id="lead360-next">Best next move</h2></div></div>${nextMove(view.nextMove, primaryJourneyLabel)}</section><section class="lead360-section" aria-labelledby="lead360-offers"><div class="lead360-section-head"><div><div class="lead360-section-label">Commercial evidence</div><h2 id="lead360-offers">Offer history</h2></div></div>${offerHistory(view.offers)}</section><section class="lead360-section" aria-labelledby="lead360-consent"><div class="lead360-section-head"><div><div class="lead360-section-label">Contact safety</div><h2 id="lead360-consent">Consent + suppression</h2></div></div>${consentStatus(view.consent, view.suppressionReason)}</section>${permissionCommands(view, options)}${endpointCommands(view, options)}${pilotReadinessPanel(options)}${pilotAuthorisationPanel(view, options)}</aside>
+      <aside class="lead360-column lead360-right" aria-label="Decision rail"><section class="lead360-section" aria-labelledby="lead360-next"><div class="lead360-section-head"><div><div class="lead360-section-label">Human judgement</div><h2 id="lead360-next">Best next move</h2></div></div>${nextMove(view.nextMove, primaryJourneyLabel)}</section><section class="lead360-section" aria-labelledby="lead360-offers"><div class="lead360-section-head"><div><div class="lead360-section-label">Commercial evidence</div><h2 id="lead360-offers">Offer history</h2></div></div>${offerHistory(view.offers)}</section><section class="lead360-section" aria-labelledby="lead360-consent"><div class="lead360-section-head"><div><div class="lead360-section-label">Contact safety</div><h2 id="lead360-consent">Consent + suppression</h2></div></div>${consentStatus(view.consent, view.suppressionReason)}</section>${permissionCommands(view, options)}${endpointCommands(view, options)}${pilotReadinessPanel(options)}${pilotPreparationPanel(view, options)}${pilotAuthorisationPanel(view, options)}</aside>
     </div>
     <footer class="lead360-as-of">Case file viewed as of ${timestamp(view.asOf)}</footer>
   </article>`;

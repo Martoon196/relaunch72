@@ -878,6 +878,7 @@ export async function buildPgPortalPlatform(
         providerConnectionId: emailConnectionId,
         commandService: customerEmailCommand,
         permissionUse: permissionUseReceipts,
+        ...(founderPilotEvidencePool ? { evidencePool: founderPilotEvidencePool } : {}),
       });
     }
 

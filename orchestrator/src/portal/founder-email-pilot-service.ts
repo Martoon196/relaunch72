@@ -138,6 +138,53 @@ export type AuthoriseResult =
   | AuthoriseStale
   | FounderEmailPilotFailure;
 
+export interface PrepareContentInput {
+  readonly contactId: string;
+  readonly contactPointId: string;
+  readonly purpose: string;
+  /** Fresh per-render key, so a double submit replays instead of re-preparing. */
+  readonly commandKey: string;
+  readonly operatorConfirmed: boolean;
+}
+
+export interface PrepareContentOutcome {
+  readonly ok: true;
+  readonly disposition: 'prepared' | 'replayed';
+  readonly campaignTemplateVersionId: string;
+  readonly messageVersionId: string;
+  readonly approvedContentId: string;
+  /** Always none: preparing content creates no delivery intent whatsoever. */
+  readonly providerEffects: 'none';
+}
+
+export type PrepareContentResult = PrepareContentOutcome | FounderEmailPilotFailure;
+
+export interface RecordPolicyEvidenceInput {
+  readonly contactId: string;
+  readonly contactPointId: string;
+  readonly purpose: string;
+  readonly commandKey: string;
+  readonly operatorConfirmed: boolean;
+}
+
+export interface RecordPolicyEvidenceOutcome {
+  readonly ok: true;
+  readonly disposition: 'recorded' | 'replayed';
+  readonly policyPublicationEventId: string;
+  readonly pecrSenderDecisionEventId: string;
+  readonly pecrInstigatorDecisionEventId: string;
+  readonly actionScopeSha256: string;
+  /** How the ledger describes the authority. Never a solicitor's approval. */
+  readonly reviewAuthority: string;
+  /** Always false: no ownership or control evidence reaches this workflow. */
+  readonly ownershipControlChecked: false;
+  readonly providerEffects: 'none';
+}
+
+export type RecordPolicyEvidenceResult =
+  | RecordPolicyEvidenceOutcome
+  | FounderEmailPilotFailure;
+
 export interface PortalFounderEmailPilotService {
   attachEndpoint(
     identity: PortalCrmRequestIdentity,
@@ -147,6 +194,19 @@ export interface PortalFounderEmailPilotService {
     identity: PortalCrmRequestIdentity,
     input: PilotReadinessInput,
   ): Promise<PilotReadinessResult>;
+  /** Builds the approved campaign and message evidence. It queues nothing. */
+  prepareContent(
+    identity: PortalCrmRequestIdentity,
+    input: PrepareContentInput,
+  ): Promise<PrepareContentResult>;
+  /**
+   * Records the founder and operator compliance review. Not legal advice, and
+   * it claims no solicitor approval. It queues nothing.
+   */
+  recordPolicyEvidence(
+    identity: PortalCrmRequestIdentity,
+    input: RecordPolicyEvidenceInput,
+  ): Promise<RecordPolicyEvidenceResult>;
   /** Read-only. Resolves the tuple and the exact message, and queues nothing. */
   resolveAuthorisation(
     identity: PortalCrmRequestIdentity,

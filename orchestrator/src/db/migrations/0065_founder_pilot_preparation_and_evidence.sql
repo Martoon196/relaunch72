@@ -715,17 +715,28 @@ $evidence_policies$;
 GRANT CREATE ON SCHEMA app_private TO r72_founder_pilot_evidence_definer;
 SET LOCAL ROLE r72_founder_pilot_evidence_definer;
 
+
 /*
- * Record the durable legal and PECR evidence the enqueue re-checks.
+ * Record the founder-pilot compliance evidence the enqueue re-checks.
  *
- * It records; it does not decide. Every specialist reference, decision digest
- * and occurrence time is supplied by the founder and stored as their
- * attestation, and an absent one is a refusal rather than a default. Nothing
- * here approves anything on a solicitor's behalf.
+ * This is a founder and operator compliance review of one individually
+ * consented proof email. It is not legal advice and no solicitor approval is
+ * claimed by it: every reference this function writes names the founder review
+ * that produced it, so the ledger says who reviewed and on what authority.
  *
- * The action scope is rebuilt from the resolved content chain using the same
- * expression 0054 compares, so the route decisions bind the exact send the
- * founder is preparing and cannot be pointed at anything else.
+ * Nothing is accepted from a browser. The pack identity comes from the
+ * immutable founder-proof policy asset, and every reference and digest below is
+ * derived here from that asset, the approved subject and body, the current
+ * consent event, the acting user, the request and the verified endpoint. There
+ * is no parameter a caller could use to assert a fact it did not earn.
+ *
+ * The action scope is rebuilt from the resolved content chain with the same
+ * expression 0054 compares, so both route decisions bind the exact send being
+ * prepared and cannot be pointed at another.
+ *
+ * ownership_control_checked is written false. This workflow receives no
+ * ownership or control evidence, and recording it as checked would be an
+ * invented fact in a compliance ledger.
  */
 CREATE FUNCTION app_private.record_founder_pilot_compliance_evidence(
   p_workspace_id uuid,
@@ -733,39 +744,20 @@ CREATE FUNCTION app_private.record_founder_pilot_compliance_evidence(
   p_contact_id uuid,
   p_contact_point_id uuid,
   p_purpose text,
-  p_subject_key text,
-  p_legal_identity_sha256 bytea,
-  p_pack_key text,
-  p_pack_version text,
-  p_bundle_sha256 bytea,
-  p_document_refs jsonb,
-  p_source_commit text,
-  p_legal_specialist_reference text,
-  p_legal_decision_reference text,
-  p_legal_decision_sha256 bytea,
-  p_legal_occurred_at timestamptz,
-  p_commercial_specialist_reference text,
-  p_commercial_decision_reference text,
-  p_commercial_decision_sha256 bytea,
-  p_commercial_occurred_at timestamptz,
-  p_publication_reference text,
-  p_effective_at timestamptz,
-  p_expires_at timestamptz,
-  p_route_classification text,
-  p_party_reference text,
-  p_responsibility_reference text,
-  p_sender_specialist_reference text,
-  p_sender_decision_sha256 bytea,
-  p_instigator_specialist_reference text,
-  p_instigator_decision_sha256 bytea,
-  p_valid_until timestamptz,
+  p_policy_asset_key text,
+  p_policy_asset_version text,
+  p_policy_bundle_sha256 bytea,
+  p_policy_document_refs jsonb,
+  p_policy_source_commit text,
+  p_authority_days integer,
   p_command_key_sha256 bytea
 )
 RETURNS TABLE (
   disposition text, compliance_subject_id uuid, policy_pack_id uuid,
   legal_review_event_id uuid, commercial_review_event_id uuid,
   policy_publication_event_id uuid, pecr_sender_decision_event_id uuid,
-  pecr_instigator_decision_event_id uuid, action_scope_sha256 text
+  pecr_instigator_decision_event_id uuid, action_scope_sha256 text,
+  review_authority text, ownership_control_checked boolean
 )
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog
 AS $function$
@@ -777,6 +769,25 @@ DECLARE
   selected_receipt app.founder_pilot_evidence_receipts%ROWTYPE;
   expected_action_scope bytea;
   computed_request_sha256 bytea;
+  -- Fixed facts of this pilot. They are constants because the pilot is one
+  -- individually consented email that Property Predator both sends and
+  -- instigates; a caller cannot widen any of them.
+  fixed_review_authority constant text := 'founder-operator-review-not-legal-advice';
+  fixed_reviewer constant text := 'propertypredator.founder-operator-review';
+  fixed_route constant text := 'individual_consent';
+  fixed_party constant text := 'propertypredator.sender.property-predator';
+  fixed_responsibility constant text := 'propertypredator.instigator.property-predator';
+  derived_subject_key text;
+  derived_legal_identity bytea;
+  derived_evidence_base text;
+  derived_legal_reference text;
+  derived_commercial_reference text;
+  derived_publication_reference text;
+  derived_legal_sha bytea;
+  derived_commercial_sha bytea;
+  derived_sender_sha bytea;
+  derived_instigator_sha bytea;
+  derived_valid_until timestamptz;
   created_subject_id uuid;
   created_pack_id uuid;
   created_legal_id uuid := gen_random_uuid();
@@ -794,36 +805,23 @@ BEGIN
      OR selected_request_id IS NULL
      OR selected_request_id <> btrim(selected_request_id)
      OR length(selected_request_id) NOT BETWEEN 1 AND 128
-     -- Nothing is defaulted. A missing attestation is a refusal, because a
-     -- fabricated legal reference is worse than no pilot.
-     OR p_subject_key IS NULL OR p_pack_key IS NULL OR p_pack_version IS NULL
-     OR p_bundle_sha256 IS NULL OR octet_length(p_bundle_sha256) <> 32
-     OR p_legal_identity_sha256 IS NULL
-     OR octet_length(p_legal_identity_sha256) <> 32
-     OR p_document_refs IS NULL OR jsonb_typeof(p_document_refs) <> 'array'
-     OR p_source_commit IS NULL OR p_source_commit !~ '^[0-9a-f]{7,40}$'
-     OR p_legal_specialist_reference IS NULL OR p_legal_decision_reference IS NULL
-     OR p_legal_decision_sha256 IS NULL
-     OR octet_length(p_legal_decision_sha256) <> 32
-     OR p_legal_occurred_at IS NULL
-     OR p_commercial_specialist_reference IS NULL
-     OR p_commercial_decision_reference IS NULL
-     OR p_commercial_decision_sha256 IS NULL
-     OR octet_length(p_commercial_decision_sha256) <> 32
-     OR p_commercial_occurred_at IS NULL
-     OR p_publication_reference IS NULL OR p_effective_at IS NULL
-     OR p_route_classification IS NULL OR p_party_reference IS NULL
-     OR p_responsibility_reference IS NULL
-     OR p_sender_specialist_reference IS NULL OR p_sender_decision_sha256 IS NULL
-     OR octet_length(p_sender_decision_sha256) <> 32
-     OR p_instigator_specialist_reference IS NULL
-     OR p_instigator_decision_sha256 IS NULL
-     OR octet_length(p_instigator_decision_sha256) <> 32
-     OR p_command_key_sha256 IS NULL OR octet_length(p_command_key_sha256) <> 32
-     OR p_effective_at > statement_timestamp()
-     OR p_legal_occurred_at > statement_timestamp()
-     OR p_commercial_occurred_at > statement_timestamp() THEN
-    RAISE EXCEPTION 'Founder pilot compliance attestation is incomplete'
+     OR p_purpose IS NULL OR p_purpose !~ '^[a-z][a-z0-9_.-]{0,99}$'
+     -- The policy asset is immutable and lives in the deployed build. Its
+     -- identity is the only thing this function takes on trust, and it is
+     -- pinned by a test against the asset it is supposed to describe.
+     OR p_policy_asset_key IS NULL OR p_policy_asset_key !~ '^[a-z][a-z0-9_-]{0,99}$'
+     OR p_policy_asset_version IS NULL
+     OR p_policy_asset_version <> btrim(p_policy_asset_version)
+     OR length(p_policy_asset_version) NOT BETWEEN 1 AND 100
+     OR p_policy_bundle_sha256 IS NULL
+     OR octet_length(p_policy_bundle_sha256) <> 32
+     OR p_policy_document_refs IS NULL
+     OR jsonb_typeof(p_policy_document_refs) <> 'array'
+     OR jsonb_array_length(p_policy_document_refs) < 1
+     OR p_policy_source_commit IS NULL OR p_policy_source_commit !~ '^[0-9a-f]{7,40}$'
+     OR p_authority_days IS NULL OR p_authority_days NOT BETWEEN 1 AND 30
+     OR p_command_key_sha256 IS NULL OR octet_length(p_command_key_sha256) <> 32 THEN
+    RAISE EXCEPTION 'Founder pilot compliance evidence request is invalid'
       USING ERRCODE = '22023';
   END IF;
   selected_user_id := current_setting('app.user_id', true)::uuid;
@@ -865,7 +863,7 @@ BEGIN
   END IF;
 
   SELECT message_version.id AS message_version_id, endpoint.normalized_address,
-         consent.id AS consent_id,
+         consent.id AS consent_id, point.id AS contact_point_id,
          public.digest(point.kind || pg_catalog.chr(31) || point.value
            || pg_catalog.chr(31) || point.normalized_value, 'sha256') AS endpoint_sha
     INTO selected_message
@@ -901,6 +899,9 @@ BEGIN
    AND consent.contact_point_id = message.contact_point_id
    AND consent.channel = 'email' AND consent.purpose = selected_campaign.purpose_key
    AND consent.state = 'granted'
+   -- Individually consented, which is the route this pilot claims and the only
+   -- one it may claim. A legitimate-interests basis is refused here.
+   AND consent.lawful_basis = 'consent'
   WHERE message_version.workspace_id = p_workspace_id
     AND message_version.channel = 'email'
     AND message_version.environment = 'live'
@@ -913,9 +914,26 @@ BEGIN
         AND latest.purpose = selected_campaign.purpose_key
       ORDER BY latest.occurred_at DESC, latest.recorded_at DESC, latest.id DESC LIMIT 1
     )
+    AND NOT EXISTS (
+      SELECT 1 FROM app.communication_suppression_events AS suppression
+      WHERE suppression.workspace_id = message.workspace_id
+        AND suppression.contact_point_id = message.contact_point_id
+        AND suppression.channel = 'email'
+        AND (suppression.purpose IS NULL
+          OR suppression.purpose = selected_campaign.purpose_key)
+        AND suppression.state = 'suppressed'
+        AND suppression.id = (
+          SELECT latest.id FROM app.communication_suppression_events AS latest
+          WHERE latest.workspace_id = suppression.workspace_id
+            AND latest.contact_point_id = suppression.contact_point_id
+            AND latest.channel = suppression.channel
+            AND latest.purpose IS NOT DISTINCT FROM suppression.purpose
+          ORDER BY latest.occurred_at DESC, latest.recorded_at DESC, latest.id DESC LIMIT 1
+        )
+    )
   ORDER BY message_version.version_number DESC, message_version.id DESC LIMIT 1;
   IF selected_message IS NULL THEN
-    RAISE EXCEPTION 'Founder pilot evidence needs the approved message and current consent'
+    RAISE EXCEPTION 'Founder pilot evidence needs the approved message and individual consent'
       USING ERRCODE = '42501';
   END IF;
 
@@ -931,19 +949,45 @@ BEGIN
     selected_campaign.purpose_key, selected_message.consent_id
   ), 'sha256');
 
-  computed_request_sha256 := public.digest(pg_catalog.concat_ws(pg_catalog.chr(31),
-    'propertypredator.founder-pilot-evidence/v1', p_workspace_id::text,
-    pg_catalog.encode(expected_action_scope, 'hex'), p_subject_key,
-    p_pack_key, p_pack_version, pg_catalog.encode(p_bundle_sha256, 'hex'),
-    p_legal_decision_reference, pg_catalog.encode(p_legal_decision_sha256, 'hex'),
-    p_commercial_decision_reference,
-    pg_catalog.encode(p_commercial_decision_sha256, 'hex'),
-    p_publication_reference, p_route_classification, p_party_reference,
-    p_responsibility_reference,
-    pg_catalog.encode(p_sender_decision_sha256, 'hex'),
-    pg_catalog.encode(p_instigator_decision_sha256, 'hex'),
-    selected_user_id::text
-  ), 'sha256');
+  -- Everything below is derived. The base binds the immutable policy asset, the
+  -- exact approved copy, the endpoint, the current consent event, the operator
+  -- and the request, so no two reviews of different things can collide and none
+  -- of it can be asserted from outside.
+  derived_evidence_base := pg_catalog.concat_ws(pg_catalog.chr(31),
+    'propertypredator.founder-pilot-operator-review/v1',
+    fixed_review_authority, p_workspace_id::text,
+    p_policy_asset_key, p_policy_asset_version,
+    pg_catalog.encode(p_policy_bundle_sha256, 'hex'),
+    pg_catalog.encode(expected_action_scope, 'hex'),
+    pg_catalog.encode(selected_campaign.content_sha256, 'hex'),
+    pg_catalog.encode(selected_message.endpoint_sha, 'hex'),
+    selected_message.consent_id::text, selected_user_id::text, selected_request_id
+  );
+  derived_subject_key := 'propertypredator.founder-pilot.'
+    || pg_catalog.encode(public.digest(pg_catalog.concat_ws(pg_catalog.chr(31),
+      'propertypredator.founder-pilot-subject/v1', p_workspace_id::text,
+      pg_catalog.encode(selected_message.endpoint_sha, 'hex')
+    ), 'sha256'), 'hex');
+  derived_legal_identity := public.digest(derived_subject_key, 'sha256');
+  derived_legal_sha := public.digest(
+    derived_evidence_base || pg_catalog.chr(31) || 'review:legal', 'sha256');
+  derived_commercial_sha := public.digest(
+    derived_evidence_base || pg_catalog.chr(31) || 'review:commercial', 'sha256');
+  derived_sender_sha := public.digest(
+    derived_evidence_base || pg_catalog.chr(31) || 'pecr:sender', 'sha256');
+  derived_instigator_sha := public.digest(
+    derived_evidence_base || pg_catalog.chr(31) || 'pecr:instigator', 'sha256');
+  -- The references name the review that produced them, in full, so nobody
+  -- reading this ledger can mistake it for a solicitor's opinion.
+  derived_legal_reference := 'founder-operator-review.not-legal-advice.legal.'
+    || pg_catalog.encode(derived_legal_sha, 'hex');
+  derived_commercial_reference := 'founder-operator-review.not-legal-advice.commercial.'
+    || pg_catalog.encode(derived_commercial_sha, 'hex');
+  derived_publication_reference := 'founder-operator-review.not-legal-advice.publication.'
+    || pg_catalog.encode(public.digest(derived_evidence_base, 'sha256'), 'hex');
+  derived_valid_until := statement_timestamp() + (p_authority_days || ' days')::interval;
+
+  computed_request_sha256 := public.digest(derived_evidence_base, 'sha256');
 
   PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
     format('pp-founder-pilot-evidence:%s', p_workspace_id), 7200065
@@ -964,7 +1008,8 @@ BEGIN
       selected_receipt.policy_publication_event_id,
       selected_receipt.pecr_sender_decision_event_id,
       selected_receipt.pecr_instigator_decision_event_id,
-      pg_catalog.encode(selected_receipt.action_scope_sha256, 'hex');
+      pg_catalog.encode(selected_receipt.action_scope_sha256, 'hex'),
+      fixed_review_authority, false;
     RETURN;
   END IF;
 
@@ -972,22 +1017,24 @@ BEGIN
   FROM app_private.affiliate_compliance_subjects AS subject
   WHERE subject.workspace_id = p_workspace_id
     AND subject.source_system = 'property-predator-main'
-    AND subject.source_subject_key = p_subject_key;
+    AND subject.source_subject_key = derived_subject_key;
   IF created_subject_id IS NULL THEN
     created_subject_id := gen_random_uuid();
     INSERT INTO app_private.affiliate_compliance_subjects (
       id, workspace_id, source_system, source_subject_key,
       legal_identity_sha256, recorded_by_user_id, recorded_request_id
     ) VALUES (
-      created_subject_id, p_workspace_id, 'property-predator-main', p_subject_key,
-      p_legal_identity_sha256, selected_user_id, selected_request_id
+      created_subject_id, p_workspace_id, 'property-predator-main',
+      derived_subject_key, derived_legal_identity, selected_user_id,
+      selected_request_id
     );
   END IF;
 
   SELECT pack.id INTO created_pack_id
   FROM app_private.affiliate_compliance_policy_pack_versions AS pack
   WHERE pack.workspace_id = p_workspace_id
-    AND pack.pack_key = p_pack_key AND pack.pack_version = p_pack_version;
+    AND pack.pack_key = p_policy_asset_key
+    AND pack.pack_version = p_policy_asset_version;
   IF created_pack_id IS NULL THEN
     created_pack_id := gen_random_uuid();
     INSERT INTO app_private.affiliate_compliance_policy_pack_versions (
@@ -995,9 +1042,10 @@ BEGIN
       drafting_status, source_commit, source_commit_meaning,
       recorded_by_user_id, recorded_request_id
     ) VALUES (
-      created_pack_id, p_workspace_id, p_pack_key, p_pack_version,
-      p_bundle_sha256, p_document_refs, 'draft_complete', p_source_commit,
-      'drafting-provenance-only', selected_user_id, selected_request_id
+      created_pack_id, p_workspace_id, p_policy_asset_key, p_policy_asset_version,
+      p_policy_bundle_sha256, p_policy_document_refs, 'draft_complete',
+      p_policy_source_commit, 'drafting-provenance-only', selected_user_id,
+      selected_request_id
     );
   END IF;
 
@@ -1006,15 +1054,14 @@ BEGIN
     decision, specialist_reference, decision_reference, decision_sha256,
     occurred_at, recorded_by_user_id, recorded_request_id
   ) VALUES (
-    created_legal_id, p_workspace_id, created_pack_id, p_bundle_sha256, 'legal',
-    'approved', p_legal_specialist_reference, p_legal_decision_reference,
-    p_legal_decision_sha256, p_legal_occurred_at, selected_user_id,
-    selected_request_id
+    created_legal_id, p_workspace_id, created_pack_id, p_policy_bundle_sha256,
+    'legal', 'approved', fixed_reviewer, derived_legal_reference,
+    derived_legal_sha, statement_timestamp(), selected_user_id, selected_request_id
   ), (
-    created_commercial_id, p_workspace_id, created_pack_id, p_bundle_sha256,
-    'commercial', 'approved', p_commercial_specialist_reference,
-    p_commercial_decision_reference, p_commercial_decision_sha256,
-    p_commercial_occurred_at, selected_user_id, selected_request_id
+    created_commercial_id, p_workspace_id, created_pack_id, p_policy_bundle_sha256,
+    'commercial', 'approved', fixed_reviewer, derived_commercial_reference,
+    derived_commercial_sha, statement_timestamp(), selected_user_id,
+    selected_request_id
   );
 
   INSERT INTO app_private.affiliate_compliance_policy_publication_events (
@@ -1023,10 +1070,10 @@ BEGIN
     reacceptance_class, publication_reference, recorded_by_user_id,
     recorded_request_id
   ) VALUES (
-    created_publication_id, p_workspace_id, created_pack_id, p_bundle_sha256,
-    'published', created_legal_id, created_commercial_id, p_effective_at,
-    p_expires_at, 'affected_permissions', p_publication_reference,
-    selected_user_id, selected_request_id
+    created_publication_id, p_workspace_id, created_pack_id,
+    p_policy_bundle_sha256, 'published', created_legal_id, created_commercial_id,
+    statement_timestamp(), derived_valid_until, 'affected_permissions',
+    derived_publication_reference, selected_user_id, selected_request_id
   );
 
   INSERT INTO app_private.affiliate_compliance_specialist_decision_events (
@@ -1037,16 +1084,18 @@ BEGIN
     recorded_request_id
   ) VALUES (
     created_sender_id, p_workspace_id, created_subject_id, 'pecr_sender_route',
-    p_publication_reference, expected_action_scope, 'approved',
-    p_route_classification, p_party_reference, p_responsibility_reference,
-    p_sender_specialist_reference, p_sender_decision_sha256, true,
-    statement_timestamp(), p_valid_until, selected_user_id, selected_request_id
+    derived_publication_reference, expected_action_scope, 'approved',
+    fixed_route, fixed_party, fixed_responsibility, fixed_reviewer,
+    derived_sender_sha,
+    -- No ownership or control evidence reaches this workflow, so it is not
+    -- recorded as checked. Inventing it would corrupt the ledger it protects.
+    false,
+    statement_timestamp(), derived_valid_until, selected_user_id, selected_request_id
   ), (
     created_instigator_id, p_workspace_id, created_subject_id,
-    'pecr_instigator_route', p_publication_reference, expected_action_scope,
-    'approved', p_route_classification, p_party_reference,
-    p_responsibility_reference, p_instigator_specialist_reference,
-    p_instigator_decision_sha256, true, statement_timestamp(), p_valid_until,
+    'pecr_instigator_route', derived_publication_reference, expected_action_scope,
+    'approved', fixed_route, fixed_party, fixed_responsibility, fixed_reviewer,
+    derived_instigator_sha, false, statement_timestamp(), derived_valid_until,
     selected_user_id, selected_request_id
   );
 
@@ -1066,25 +1115,19 @@ BEGIN
   RETURN QUERY SELECT 'recorded'::text, created_subject_id, created_pack_id,
     created_legal_id, created_commercial_id, created_publication_id,
     created_sender_id, created_instigator_id,
-    pg_catalog.encode(expected_action_scope, 'hex');
+    pg_catalog.encode(expected_action_scope, 'hex'),
+    fixed_review_authority, false;
 END
 $function$;
-
 RESET ROLE;
 SET LOCAL ROLE r72_owner;
 REVOKE CREATE ON SCHEMA app_private FROM r72_founder_pilot_evidence_definer;
 
 REVOKE ALL ON FUNCTION app_private.record_founder_pilot_compliance_evidence(
-  uuid, uuid, uuid, uuid, text, text, bytea, text, text, bytea, jsonb, text,
-  text, text, bytea, timestamptz, text, text, bytea, timestamptz, text,
-  timestamptz, timestamptz, text, text, text, text, bytea, text, bytea,
-  timestamptz, bytea
+  uuid, uuid, uuid, uuid, text, text, text, bytea, jsonb, text, integer, bytea
 ) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_private.record_founder_pilot_compliance_evidence(
-  uuid, uuid, uuid, uuid, text, text, bytea, text, text, bytea, jsonb, text,
-  text, text, bytea, timestamptz, text, text, bytea, timestamptz, text,
-  timestamptz, timestamptz, text, text, text, text, bytea, text, bytea,
-  timestamptz, bytea
+  uuid, uuid, uuid, uuid, text, text, text, bytea, jsonb, text, integer, bytea
 ) TO r72_founder_pilot_evidence_command;
 
 -- Preparation exists to replace a rail that could stage a send. It must never

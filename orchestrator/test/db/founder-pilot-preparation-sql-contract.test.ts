@@ -215,27 +215,92 @@ test('0065 evidence binds the acting user and the exact request', async () => {
   assert.match(sql, /action_scope_sha256 bytea NOT NULL CHECK \(octet_length\(action_scope_sha256\) = 32\)/);
 });
 
-test('0065 records the founder attestation and invents no approval', async () => {
-  const body = bodyOf(await migration(), 'record_founder_pilot_compliance_evidence');
-  // Every specialist reference, digest and occurrence time is a parameter. An
-  // absent one refuses; none is defaulted, generated or inferred.
-  for (const supplied of [
+test('0065 never claims ownership or control evidence it was not given', async () => {
+  const sql = await migration();
+  const body = bodyOf(sql, 'record_founder_pilot_compliance_evidence');
+  // The column exists and is written. It must be written false, because this
+  // workflow receives no ownership or control evidence at all.
+  assert.match(body, /ownership_control_checked, valid_from/u);
+  assert.doesNotMatch(body, /ownership_control_checked[^;]*true/u);
+  const insert = body.slice(body.indexOf('ownership_control_checked, valid_from'));
+  assert.match(insert, /false,\s*statement_timestamp\(\), derived_valid_until/u);
+  // There is no parameter that could turn it on.
+  assert.doesNotMatch(body, /p_ownership/u);
+  // And it says so where a reader will find it. These are comments, which
+  // `normalise` strips, so they are checked against the raw file.
+  const raw = await readFile(migrationUrl, 'utf8');
+  assert.match(raw, /ownership_control_checked is written false/u);
+  assert.match(raw, /No ownership or control evidence reaches this workflow/u);
+  // The result reports it, so a caller cannot assume otherwise.
+  assert.match(sql, /review_authority text, ownership_control_checked boolean/u);
+});
+
+test('0065 derives every reference and digest, accepting none from a caller', async () => {
+  const sql = await migration();
+  const body = bodyOf(sql, 'record_founder_pilot_compliance_evidence');
+  // The only inputs are the immutable policy asset's identity and the target.
+  // No specialist reference, decision digest or occurrence time is a parameter.
+  for (const forbidden of [
     'p_legal_specialist_reference', 'p_legal_decision_reference',
     'p_legal_decision_sha256', 'p_legal_occurred_at',
-    'p_commercial_specialist_reference', 'p_commercial_decision_reference',
-    'p_commercial_decision_sha256', 'p_commercial_occurred_at',
+    'p_commercial_specialist_reference', 'p_commercial_decision_sha256',
     'p_publication_reference', 'p_sender_decision_sha256',
     'p_instigator_decision_sha256', 'p_route_classification',
+    'p_party_reference', 'p_responsibility_reference', 'p_subject_key',
+    'p_legal_identity_sha256', 'p_effective_at', 'p_action_scope',
   ]) {
-    assert.match(body, new RegExp(`${supplied} IS NULL`), `${supplied} must be required`);
+    assert.doesNotMatch(body, new RegExp(forbidden), `${forbidden} must not be a parameter`);
   }
-  assert.match(body, /Founder pilot compliance attestation is incomplete/);
-  // A decision cannot be recorded as having happened in the future.
-  assert.match(body, /p_legal_occurred_at > statement_timestamp\(\)/);
-  assert.match(body, /p_commercial_occurred_at > statement_timestamp\(\)/);
-  assert.match(body, /p_effective_at > statement_timestamp\(\)/);
+  // Each is derived from the asset, the copy, the consent, the operator and
+  // the request, which is what the evidence base binds together.
+  assert.match(body, /derived_evidence_base := pg_catalog\.concat_ws/u);
+  for (const bound of [
+    'p_policy_asset_key', 'p_policy_asset_version',
+    "pg_catalog.encode(p_policy_bundle_sha256, 'hex')",
+    "pg_catalog.encode(expected_action_scope, 'hex')",
+    "pg_catalog.encode(selected_campaign.content_sha256, 'hex')",
+    "pg_catalog.encode(selected_message.endpoint_sha, 'hex')",
+    'selected_message.consent_id::text', 'selected_user_id::text',
+    'selected_request_id',
+  ]) {
+    assert.ok(body.includes(bound), `${bound} must be bound into the derived evidence`);
+  }
+  for (const derived of [
+    'derived_legal_sha', 'derived_commercial_sha', 'derived_sender_sha',
+    'derived_instigator_sha', 'derived_publication_reference',
+    'derived_subject_key', 'derived_legal_identity',
+  ]) {
+    assert.match(body, new RegExp(`${derived} :=`), `${derived} must be derived here`);
+  }
+});
+
+test('0065 records a founder review and claims no solicitor approval', async () => {
+  const body = bodyOf(await migration(), 'record_founder_pilot_compliance_evidence');
+  // Every reference names the review that produced it, so the ledger cannot be
+  // misread as a solicitor's opinion.
+  assert.match(body, /'founder-operator-review-not-legal-advice'/u);
+  assert.match(body, /'propertypredator\.founder-operator-review'/u);
+  assert.match(body, /'founder-operator-review\.not-legal-advice\.legal\.'/u);
+  assert.match(body, /'founder-operator-review\.not-legal-advice\.commercial\.'/u);
+  assert.match(body, /'founder-operator-review\.not-legal-advice\.publication\.'/u);
+  assert.doesNotMatch(body, /solicitor/iu);
   // It records approvals; it never records a rejection as an approval.
-  assert.doesNotMatch(body, /'rejected'|'qualified_approval'|'withdrawn'/);
+  assert.doesNotMatch(body, /'rejected'|'qualified_approval'|'withdrawn'/u);
+});
+
+test('0065 fixes the pilot facts it may never widen', async () => {
+  const body = bodyOf(await migration(), 'record_founder_pilot_compliance_evidence');
+  // One individually consented email that Property Predator sends and
+  // instigates. All three are constants, not parameters.
+  assert.match(body, /fixed_route constant text := 'individual_consent'/u);
+  assert.match(body, /fixed_party constant text := 'propertypredator\.sender\.property-predator'/u);
+  assert.match(
+    body,
+    /fixed_responsibility constant text := 'propertypredator\.instigator\.property-predator'/u,
+  );
+  // Individual consent means an actual consent basis, not legitimate interests.
+  assert.match(body, /consent\.lawful_basis = 'consent'/u);
+  assert.doesNotMatch(body, /legitimate_interests/u);
 });
 
 test('0065 evidence replays on an identical retry and conflicts on changed evidence', async () => {

@@ -323,6 +323,12 @@ import {
   EMAIL_PILOT_AUTHORISE_FORM_KEYS,
   EMAIL_PILOT_AUTHORISE_ROUTE,
   EMAIL_PILOT_CONFIRM_VALUE,
+  EMAIL_PILOT_POLICY_CONFIRM_VALUE,
+  EMAIL_PILOT_POLICY_FORM_KEYS,
+  EMAIL_PILOT_POLICY_ROUTE,
+  EMAIL_PILOT_PREPARE_CONFIRM_VALUE,
+  EMAIL_PILOT_PREPARE_FORM_KEYS,
+  EMAIL_PILOT_PREPARE_ROUTE,
   founderEmailPilotNoticeFromQuery,
   founderEmailPilotNoticeToken,
   founderEmailPilotPreviewClaims,
@@ -333,6 +339,18 @@ import {
   FOUNDER_EMAIL_PILOT_BLOCKER_MESSAGES,
   type FounderEmailPilotBlockerCode,
 } from '../founder-email-pilot/foundation.js';
+import {
+  FOUNDER_PILOT_INSTIGATOR,
+  FOUNDER_PILOT_POLICY_ASSET_VERSION,
+  FOUNDER_PILOT_POLICY_CLAUSES,
+  FOUNDER_PILOT_REVIEW_AUTHORITY,
+  FOUNDER_PILOT_ROUTE_CLASSIFICATION,
+  FOUNDER_PILOT_SENDER,
+} from '../founder-email-pilot/policy-asset.js';
+import {
+  PROPERTY_PREDATOR_OWNED_SEED_PROOF_BODY,
+  PROPERTY_PREDATOR_OWNED_SEED_PROOF_SUBJECT,
+} from './owned-seed-proof-email.js';
 
 /** The canonical Property Predator marketing purpose from the shared contract. */
 const FOUNDER_PILOT_PURPOSE = 'property_predator_marketing';
@@ -5355,6 +5373,76 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     );
   }
 
+  // The two preparation acts. Neither queues anything and neither reaches a
+  // provider; both are owner/admin gated at the database boundary.
+  if (deps.kind === 'postgres' && method === 'POST'
+      && (p === EMAIL_PILOT_PREPARE_ROUTE || p === EMAIL_PILOT_POLICY_ROUTE)) {
+    const preparing = p === EMAIL_PILOT_PREPARE_ROUTE;
+    const form = await readMultiValueForm(req);
+    const contactId = (form ? oneFormValue(form, 'contact_id') ?? '' : '').toLowerCase();
+    if (!CRM_OBJECT_ID.test(contactId)) {
+      return redirect(res, CRM_PORTAL_ROUTES.contacts, undefined, 303);
+    }
+    const stepNotice = (code: FounderEmailPilotNoticeCode): void => redirect(
+      res,
+      `${contactCaseFileRoute(contactId)}?notice=${encodeURIComponent(
+        founderEmailPilotNoticeToken(deps.sessionSecret, sessionToken, code),
+      )}`,
+      undefined,
+      303,
+    );
+    const commandKey = (form ? oneFormValue(form, 'command_key') ?? '' : '').toLowerCase();
+    const contactPointId = (
+      form ? oneFormValue(form, 'contact_point_id') ?? '' : ''
+    ).toLowerCase();
+    // The phrase is specific to the act. Neither is the send phrase, so a
+    // mistyped confirmation can never fall through to a live dispatch.
+    const confirmed = preparing
+      ? oneFormValue(form ?? new URLSearchParams(), 'confirm_prepare')
+        === EMAIL_PILOT_PREPARE_CONFIRM_VALUE
+      : oneFormValue(form ?? new URLSearchParams(), 'confirm_policy')
+        === EMAIL_PILOT_POLICY_CONFIRM_VALUE;
+    const allowed = new Set(
+      preparing ? EMAIL_PILOT_PREPARE_FORM_KEYS : EMAIL_PILOT_POLICY_FORM_KEYS,
+    );
+    if (!form || !campaignFormKeysAllowed(form, allowed)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '')
+        || !confirmed
+        || !CRM_OBJECT_ID.test(commandKey) || !CRM_OBJECT_ID.test(contactPointId)) {
+      return stepNotice(preparing ? 'prepare_invalid' : 'policy_invalid');
+    }
+    if (!deps.founderEmailPilot) {
+      return stepNotice(preparing ? 'prepare_unavailable' : 'policy_unavailable');
+    }
+    const input = {
+      contactId,
+      contactPointId,
+      purpose: oneFormValue(form, 'purpose') ?? FOUNDER_PILOT_PURPOSE,
+      commandKey,
+      operatorConfirmed: true,
+    };
+    const outcome = preparing
+      ? await deps.founderEmailPilot.prepareContent(crmIdentity(sessionToken, deps), input)
+      : await deps.founderEmailPilot.recordPolicyEvidence(
+        crmIdentity(sessionToken, deps), input,
+      );
+    if (outcome.ok) {
+      const replayed = outcome.disposition === 'replayed';
+      return stepNotice(
+        preparing
+          ? (replayed ? 'prepare_replayed' : 'prepare_done')
+          : (replayed ? 'policy_replayed' : 'policy_recorded'),
+      );
+    }
+    const suffix = outcome.kind === 'conflict' ? 'conflict'
+      : outcome.kind === 'blocked' ? 'blocked'
+        : outcome.kind === 'forbidden' || outcome.kind === 'unauthenticated' ? 'forbidden'
+          : outcome.kind === 'validation' ? 'invalid' : 'unavailable';
+    return stepNotice(
+      `${preparing ? 'prepare' : 'policy'}_${suffix}` as FounderEmailPilotNoticeCode,
+    );
+  }
+
   // The final founder act: authorise the capped enqueue for one already
   // approved message. It calls the existing 0054 command and never Mailgun.
   if (deps.kind === 'postgres' && p === EMAIL_PILOT_AUTHORISE_ROUTE && method === 'POST') {
@@ -5516,6 +5604,33 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           };
         })()
         : null;
+      // The two preparation steps. They are offered whenever a verified
+      // endpoint exists, because the readiness blockers say what is missing and
+      // these are how a founder clears the content and review ones.
+      const pilotPreparation = deps.kind === 'postgres' && deps.founderEmailPilot
+        && pilotEndpoint
+        ? {
+          commandKey: randomUUID(),
+          contactPointId: pilotEndpoint.contactPointId,
+          purpose: pilotEndpoint.purpose ?? FOUNDER_PILOT_PURPOSE,
+          // Resolved from the verified endpoint on this contact, never typed.
+          recipientEmail: pilotReadiness?.preview?.recipientEmail
+            ?? pilotEndpoint.endpoint ?? '',
+          subject: PROPERTY_PREDATOR_OWNED_SEED_PROOF_SUBJECT,
+          bodyText: PROPERTY_PREDATOR_OWNED_SEED_PROOF_BODY,
+          contentPrepared: pilotAuthorisation !== null,
+          policyRecorded: (pilotReadiness?.blockers ?? []).every(
+            (blocker) => blocker.code !== 'PECR_DECISIONS_MISSING'
+              && blocker.code !== 'POLICY_AUTHORITY_MISSING',
+          ) && pilotReadiness !== null,
+          reviewAuthority: FOUNDER_PILOT_REVIEW_AUTHORITY,
+          routeClassification: FOUNDER_PILOT_ROUTE_CLASSIFICATION,
+          sender: FOUNDER_PILOT_SENDER,
+          instigator: FOUNDER_PILOT_INSTIGATOR,
+          policyVersion: FOUNDER_PILOT_POLICY_ASSET_VERSION,
+          policyClauses: FOUNDER_PILOT_POLICY_CLAUSES,
+        }
+        : null;
       const body = `<nav aria-label="Lead 360 breadcrumb" style="margin-bottom:14px"><a class="button secondary compact" href="${CRM_PORTAL_ROUTES.contacts}">← All contacts</a></nav>${renderLead360Body(caseFile, {
         // The legacy JSON portal has no permission boundary, so the panel
         // renders its honest "not composed" state there rather than a form
@@ -5527,6 +5642,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           && Boolean(deps.founderEmailPilot),
         endpointCommandKey: randomUUID(),
         pilotReadiness,
+        pilotPreparation,
         pilotAuthorisation,
         csrfToken,
         // Either rail may have redirected here, so both notices are tried and

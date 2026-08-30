@@ -61,6 +61,14 @@ import {
   PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_ITEM,
   PROPERTY_PREDATOR_OWNED_SEED_PROOF_SUBJECT,
 } from '../src/portal/owned-seed-proof-email.js';
+import {
+  FOUNDER_PILOT_INSTIGATOR,
+  FOUNDER_PILOT_POLICY_ASSET_VERSION,
+  FOUNDER_PILOT_POLICY_CLAUSES,
+  FOUNDER_PILOT_REVIEW_AUTHORITY,
+  FOUNDER_PILOT_ROUTE_CLASSIFICATION,
+  FOUNDER_PILOT_SENDER,
+} from '../src/founder-email-pilot/policy-asset.js';
 import { createPropertyPredatorTestInboxSnapshot } from '../src/portal/conversion-inbox-fixtures.js';
 import {
   CONVERSION_INBOX_ROUTE,
@@ -1872,6 +1880,24 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
           },
           // The final authorisation, with the exact words that would be sent.
           // Fixture content only: no real address and no real message.
+          // Neither step done, so both confirmation forms render here. The
+          // recipient is the fixture endpoint; no address is written in source.
+          pilotPreparation: {
+            commandKey: randomUUID(),
+            contactPointId: randomUUID(),
+            purpose: 'property_predator_marketing',
+            recipientEmail: 'office@example.test',
+            subject: PROPERTY_PREDATOR_OWNED_SEED_PROOF_SUBJECT,
+            bodyText: PROPERTY_PREDATOR_OWNED_SEED_PROOF_BODY,
+            contentPrepared: false,
+            policyRecorded: false,
+            reviewAuthority: FOUNDER_PILOT_REVIEW_AUTHORITY,
+            routeClassification: FOUNDER_PILOT_ROUTE_CLASSIFICATION,
+            sender: FOUNDER_PILOT_SENDER,
+            instigator: FOUNDER_PILOT_INSTIGATOR,
+            policyVersion: FOUNDER_PILOT_POLICY_ASSET_VERSION,
+            policyClauses: FOUNDER_PILOT_POLICY_CLAUSES,
+          },
           pilotAuthorisation: {
             commandKey: randomUUID(),
             contactPointId: randomUUID(),

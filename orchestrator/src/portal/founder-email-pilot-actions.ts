@@ -14,6 +14,12 @@ export const CONTACT_ENDPOINT_ATTACH_ROUTE = '/portal/crm/contacts/endpoint' as 
 /** POST target for the founder's final capped enqueue authorisation. */
 export const EMAIL_PILOT_AUTHORISE_ROUTE = '/portal/crm/contacts/email-pilot' as const;
 
+/** POST target for building the approved campaign and message evidence. */
+export const EMAIL_PILOT_PREPARE_ROUTE = '/portal/crm/contacts/email-pilot/prepare' as const;
+
+/** POST target for recording the founder and operator compliance review. */
+export const EMAIL_PILOT_POLICY_ROUTE = '/portal/crm/contacts/email-pilot/policy' as const;
+
 export const FOUNDER_EMAIL_PILOT_NOTICE_CODES = Object.freeze([
   'endpoint_attached',
   'endpoint_replayed',
@@ -29,6 +35,20 @@ export const FOUNDER_EMAIL_PILOT_NOTICE_CODES = Object.freeze([
   'pilot_invalid',
   'pilot_forbidden',
   'pilot_unavailable',
+  'prepare_done',
+  'prepare_replayed',
+  'prepare_conflict',
+  'prepare_blocked',
+  'prepare_invalid',
+  'prepare_forbidden',
+  'prepare_unavailable',
+  'policy_recorded',
+  'policy_replayed',
+  'policy_conflict',
+  'policy_blocked',
+  'policy_invalid',
+  'policy_forbidden',
+  'policy_unavailable',
 ] as const);
 
 export type FounderEmailPilotNoticeCode =
@@ -131,6 +151,93 @@ const NOTICES: Readonly<Record<FounderEmailPilotNoticeCode, FounderEmailPilotNot
       message: 'The enqueue boundary did not answer. Nothing was queued and '
         + 'Mailgun was not called.',
     }),
+    prepare_done: Object.freeze({
+      code: 'prepare_done', tone: 'success',
+      title: 'Approved content prepared',
+      message: 'The campaign version, step, message and both approvals are '
+        + 'recorded against this contact. Nothing was queued and no provider '
+        + 'was called.',
+    }),
+    prepare_replayed: Object.freeze({
+      code: 'prepare_replayed', tone: 'success',
+      title: 'Content already prepared',
+      message: 'That command key already prepared this exact content, so the '
+        + 'original records stand. Nothing was duplicated.',
+    }),
+    prepare_conflict: Object.freeze({
+      code: 'prepare_conflict', tone: 'warning',
+      title: 'Content changed under this command key',
+      message: 'The endpoint or the approved copy differs from what this key '
+        + 'first prepared. Nothing was written. Reload and prepare again.',
+    }),
+    prepare_blocked: Object.freeze({
+      code: 'prepare_blocked', tone: 'warning',
+      title: 'Preparation refused',
+      message: 'This contact has no verified email endpoint, or the workspace '
+        + 'has no live inbox or journey to build against. Nothing was written.',
+    }),
+    prepare_invalid: Object.freeze({
+      code: 'prepare_invalid', tone: 'danger',
+      title: 'Preparation refused',
+      message: 'The confirmation phrase or command key was incomplete. Nothing '
+        + 'was written and no provider was called.',
+    }),
+    prepare_forbidden: Object.freeze({
+      code: 'prepare_forbidden', tone: 'danger',
+      title: 'Not permitted for this account',
+      message: 'Preparing founder pilot content requires an active owner or '
+        + 'admin of this workspace. Nothing was written.',
+    }),
+    prepare_unavailable: Object.freeze({
+      code: 'prepare_unavailable', tone: 'danger',
+      title: 'Preparation boundary unavailable',
+      message: 'The preparation boundary did not answer. Nothing was written, '
+        + 'queued or sent.',
+    }),
+    policy_recorded: Object.freeze({
+      code: 'policy_recorded', tone: 'success',
+      title: 'Founder compliance review recorded',
+      message: 'The policy publication and both PECR route decisions are '
+        + 'recorded as a founder and operator review, not as legal advice, with '
+        + 'ownership and control evidence marked unchecked. Nothing was queued.',
+    }),
+    policy_replayed: Object.freeze({
+      code: 'policy_replayed', tone: 'success',
+      title: 'Review already recorded',
+      message: 'That command key already recorded this exact review, so the '
+        + 'original decisions stand. Nothing was recorded twice.',
+    }),
+    policy_conflict: Object.freeze({
+      code: 'policy_conflict', tone: 'warning',
+      title: 'Evidence changed under this command key',
+      message: 'The policy, the approved copy or the send this review binds to '
+        + 'has changed. Nothing was recorded. Reload and review the current '
+        + 'facts instead.',
+    }),
+    policy_blocked: Object.freeze({
+      code: 'policy_blocked', tone: 'warning',
+      title: 'Nothing to review yet',
+      message: 'The approved content or the individual consent this review '
+        + 'depends on is not in place. Nothing was recorded.',
+    }),
+    policy_invalid: Object.freeze({
+      code: 'policy_invalid', tone: 'danger',
+      title: 'Review refused',
+      message: 'The confirmation phrase or command key was incomplete. Nothing '
+        + 'was recorded and no provider was called.',
+    }),
+    policy_forbidden: Object.freeze({
+      code: 'policy_forbidden', tone: 'danger',
+      title: 'Not permitted for this account',
+      message: 'Recording the founder compliance review requires an active '
+        + 'owner or admin of this workspace. Nothing was recorded.',
+    }),
+    policy_unavailable: Object.freeze({
+      code: 'policy_unavailable', tone: 'danger',
+      title: 'Review boundary unavailable',
+      message: 'The compliance evidence identity is not bound, or it did not '
+        + 'answer. Nothing was recorded, queued or sent.',
+    }),
   });
 
 const NOTICE_CONTEXT = 'property-predator:founder-email-pilot-notice:v1\0';
@@ -197,6 +304,41 @@ export const EMAIL_PILOT_AUTHORISE_FORM_KEYS: readonly string[] = Object.freeze(
 
 /** Deliberately not the endpoint word: this one authorises a live send. */
 export const EMAIL_PILOT_CONFIRM_VALUE = 'SEND LIVE EMAIL' as const;
+
+/**
+ * The two preparation phrases.
+ *
+ * Each names the act it performs. Neither queues anything, and neither is the
+ * send phrase, so a founder cannot reach a live send by typing the wrong one.
+ */
+export const EMAIL_PILOT_PREPARE_CONFIRM_VALUE = 'PREPARE FOUNDER PILOT' as const;
+export const EMAIL_PILOT_POLICY_CONFIRM_VALUE = 'APPROVE FOUNDER PILOT POLICY' as const;
+
+/** The exact fields each preparation form may submit. Anything else is refused. */
+export const EMAIL_PILOT_PREPARE_FORM_KEYS: readonly string[] = Object.freeze([
+  '_csrf',
+  'command_key',
+  'contact_id',
+  'contact_point_id',
+  'purpose',
+  'confirm_prepare',
+]);
+
+/**
+ * The policy form carries no hash, id or evidence reference.
+ *
+ * Every reference and digest in the ledger is derived from the deployed policy
+ * asset and the resolved records. There is deliberately no field here a
+ * browser could use to assert a compliance fact.
+ */
+export const EMAIL_PILOT_POLICY_FORM_KEYS: readonly string[] = Object.freeze([
+  '_csrf',
+  'command_key',
+  'contact_id',
+  'contact_point_id',
+  'purpose',
+  'confirm_policy',
+]);
 
 /**
  * How long a preview stays authorisable.

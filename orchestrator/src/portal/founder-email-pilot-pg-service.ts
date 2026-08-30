@@ -32,6 +32,24 @@ import {
   type FounderEmailPilotEvidence,
   type FounderEmailPilotIdentifiers,
 } from '../founder-email-pilot/foundation.js';
+import {
+  FOUNDER_PILOT_AUTHORITY_DAYS,
+  FOUNDER_PILOT_POLICY_ASSET_KEY,
+  FOUNDER_PILOT_POLICY_ASSET_VERSION,
+  FOUNDER_PILOT_POLICY_DOCUMENT_REFS,
+  FOUNDER_PILOT_REVIEW_AUTHORITY,
+  founderPilotPolicyBundleSha256,
+  founderPilotPolicySourceCommit,
+} from '../founder-email-pilot/policy-asset.js';
+import {
+  PROPERTY_PREDATOR_OWNED_SEED_PROOF_BODY,
+  PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_ITEM,
+  PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_VERSION,
+  PROPERTY_PREDATOR_OWNED_SEED_PROOF_SUBJECT,
+} from './owned-seed-proof-email.js';
+import {
+  PROPERTY_PREDATOR_OWNED_SEED_PROOF_CONTENT_SHA256,
+} from '../company-content-pg/property-predator-owned-seed-attestation-policy.js';
 import { EMAIL_PILOT_PREVIEW_TTL_MS } from './founder-email-pilot-actions.js';
 import type { PortalPermissionUseReceiptService }
   from './permission-use-receipt-service.js';
@@ -50,6 +68,10 @@ import type {
   PilotReadinessInput,
   PilotReadinessResult,
   PortalFounderEmailPilotService,
+  PrepareContentInput,
+  PrepareContentResult,
+  RecordPolicyEvidenceInput,
+  RecordPolicyEvidenceResult,
   ResolveAuthorisationInput,
   ResolveAuthorisationResult,
 } from './founder-email-pilot-service.js';
@@ -80,6 +102,23 @@ interface PreviewRow extends QueryResultRow {
 }
 
 interface EvidenceRow extends QueryResultRow { readonly [column: string]: unknown }
+
+interface PrepareRow extends QueryResultRow {
+  readonly disposition: unknown;
+  readonly campaign_template_version_id: unknown;
+  readonly message_version_id: unknown;
+  readonly approved_content_id: unknown;
+}
+
+interface EvidenceRecordRow extends QueryResultRow {
+  readonly disposition: unknown;
+  readonly policy_publication_event_id: unknown;
+  readonly pecr_sender_decision_event_id: unknown;
+  readonly pecr_instigator_decision_event_id: unknown;
+  readonly action_scope_sha256: unknown;
+  readonly review_authority: unknown;
+  readonly ownership_control_checked: unknown;
+}
 
 interface DigestRow extends QueryResultRow { readonly request_sha256: unknown }
 
@@ -187,6 +226,11 @@ export interface PgPortalFounderEmailPilotDependencies {
    * be satisfied without it, and it can do nothing else.
    */
   readonly permissionUse: PortalPermissionUseReceiptService;
+  /**
+   * The 0065 evidence identity's pool, absent when its credential is not bound.
+   * Recording the review is refused rather than silently skipped.
+   */
+  readonly evidencePool?: Pick<Pool, 'connect'>;
   readonly now: () => number;
 }
 
@@ -407,6 +451,167 @@ export class PgPortalFounderEmailPilotService implements PortalFounderEmailPilot
     }
   }
 
+  /**
+   * Build the approved campaign and message evidence for this exact endpoint.
+   *
+   * The subject and body are the deployed proof asset, not anything a browser
+   * supplied, and the recipient is a contact point identifier. 0065 refuses an
+   * endpoint that is not already verified, and holds no privilege that would
+   * let this create a delivery intent.
+   */
+  async prepareContent(
+    identity: PortalCrmRequestIdentity,
+    input: PrepareContentInput,
+  ): Promise<PrepareContentResult> {
+    try {
+      if (input.operatorConfirmed !== true
+        || !UUID.test(input.contactId) || !UUID.test(input.contactPointId)
+        || !UUID.test(input.commandKey) || !isFounderPilotPurpose(input.purpose)) {
+        return failed('validation');
+      }
+      const resolved = await this.#context(identity);
+      if (!resolved) return failed('unauthenticated');
+      const commandKeyDigest = Buffer.from(
+        deriveFounderPilotCommandKey(
+          'founder-pilot-prepare', resolved.workspaceId, input.commandKey,
+        ),
+        'hex',
+      );
+      const row = await withTransaction(
+        this.#dependencies.commandPool, resolved.context,
+        async (client) => {
+          const result = await client.query<PrepareRow>(
+            `/* portal.founder-email-pilot.prepare-content */
+             SELECT disposition, campaign_template_version_id::text,
+                    message_version_id::text, approved_content_id::text
+             FROM app_private.prepare_founder_email_pilot_content(
+               $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::text, $6::text,
+               $7::text, $8::text, $9::bytea, $10::bytea
+             )`,
+            [
+              resolved.workspaceId, this.#dependencies.providerConnectionId,
+              input.contactId.toLowerCase(), input.contactPointId.toLowerCase(),
+              input.purpose,
+              PROPERTY_PREDATOR_OWNED_SEED_PROOF_SUBJECT,
+              PROPERTY_PREDATOR_OWNED_SEED_PROOF_BODY,
+              `${PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_ITEM}`
+                + `:${PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_VERSION}`,
+              Buffer.from(PROPERTY_PREDATOR_OWNED_SEED_PROOF_CONTENT_SHA256, 'hex'),
+              commandKeyDigest,
+            ],
+          );
+          if (result.rows.length !== 1) {
+            throw new FounderEmailPilotError('preparation returned invalid cardinality');
+          }
+          return result.rows[0] ?? null;
+        });
+      if (!row || typeof row.campaign_template_version_id !== 'string'
+        || typeof row.message_version_id !== 'string'
+        || typeof row.approved_content_id !== 'string') {
+        return failed('unavailable');
+      }
+      return Object.freeze({
+        ok: true as const,
+        disposition: row.disposition === 'replayed' ? 'replayed' as const : 'prepared' as const,
+        campaignTemplateVersionId: row.campaign_template_version_id,
+        messageVersionId: row.message_version_id,
+        approvedContentId: row.approved_content_id,
+        providerEffects: 'none' as const,
+      });
+    } catch (error) {
+      return mapFailure(error);
+    }
+  }
+
+  /**
+   * Record the founder and operator compliance review.
+   *
+   * Only the immutable policy asset's identity crosses this boundary. Every
+   * reference and digest in the ledger is derived inside 0065 from that asset,
+   * the approved copy, the current consent event, the operator, the request and
+   * the verified endpoint. No hash, id or evidence reference is accepted from a
+   * browser, and no solicitor approval is claimed.
+   */
+  async recordPolicyEvidence(
+    identity: PortalCrmRequestIdentity,
+    input: RecordPolicyEvidenceInput,
+  ): Promise<RecordPolicyEvidenceResult> {
+    try {
+      if (input.operatorConfirmed !== true
+        || !UUID.test(input.contactId) || !UUID.test(input.contactPointId)
+        || !UUID.test(input.commandKey) || !isFounderPilotPurpose(input.purpose)) {
+        return failed('validation');
+      }
+      if (!this.#dependencies.evidencePool) return failed('unavailable');
+      const resolved = await this.#context(identity);
+      if (!resolved) return failed('unauthenticated');
+      const commandKeyDigest = Buffer.from(
+        deriveFounderPilotCommandKey(
+          'founder-pilot-evidence', resolved.workspaceId, input.commandKey,
+        ),
+        'hex',
+      );
+      const row = await withTransaction(
+        this.#dependencies.evidencePool, resolved.context,
+        async (client) => {
+          const result = await client.query<EvidenceRecordRow>(
+            `/* portal.founder-email-pilot.record-policy-evidence */
+             SELECT disposition, policy_publication_event_id::text,
+                    pecr_sender_decision_event_id::text,
+                    pecr_instigator_decision_event_id::text,
+                    action_scope_sha256, review_authority, ownership_control_checked
+             FROM app_private.record_founder_pilot_compliance_evidence(
+               $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::text, $6::text,
+               $7::text, $8::bytea, $9::jsonb, $10::text, $11::integer, $12::bytea
+             )`,
+            [
+              resolved.workspaceId, this.#dependencies.providerConnectionId,
+              input.contactId.toLowerCase(), input.contactPointId.toLowerCase(),
+              input.purpose,
+              FOUNDER_PILOT_POLICY_ASSET_KEY, FOUNDER_PILOT_POLICY_ASSET_VERSION,
+              Buffer.from(founderPilotPolicyBundleSha256(), 'hex'),
+              JSON.stringify(FOUNDER_PILOT_POLICY_DOCUMENT_REFS),
+              founderPilotPolicySourceCommit(),
+              FOUNDER_PILOT_AUTHORITY_DAYS,
+              commandKeyDigest,
+            ],
+          );
+          if (result.rows.length !== 1) {
+            throw new FounderEmailPilotError('evidence returned invalid cardinality');
+          }
+          return result.rows[0] ?? null;
+        });
+      if (!row || typeof row.policy_publication_event_id !== 'string'
+        || typeof row.pecr_sender_decision_event_id !== 'string'
+        || typeof row.pecr_instigator_decision_event_id !== 'string'
+        || typeof row.action_scope_sha256 !== 'string'
+        || !SHA256.test(row.action_scope_sha256)) {
+        return failed('unavailable');
+      }
+      // A ledger claiming ownership evidence nobody supplied is not something
+      // to surface as success, whatever the database returned.
+      if (row.ownership_control_checked !== false) {
+        throw new FounderEmailPilotError('recorded evidence claims unchecked ownership');
+      }
+      if (row.review_authority !== FOUNDER_PILOT_REVIEW_AUTHORITY) {
+        throw new FounderEmailPilotError('recorded review authority is not the founder review');
+      }
+      return Object.freeze({
+        ok: true as const,
+        disposition: row.disposition === 'replayed' ? 'replayed' as const : 'recorded' as const,
+        policyPublicationEventId: row.policy_publication_event_id,
+        pecrSenderDecisionEventId: row.pecr_sender_decision_event_id,
+        pecrInstigatorDecisionEventId: row.pecr_instigator_decision_event_id,
+        actionScopeSha256: row.action_scope_sha256,
+        reviewAuthority: FOUNDER_PILOT_REVIEW_AUTHORITY,
+        ownershipControlChecked: false as const,
+        providerEffects: 'none' as const,
+      });
+    } catch (error) {
+      return mapFailure(error);
+    }
+  }
+
   async resolveAuthorisation(
     identity: PortalCrmRequestIdentity,
     input: ResolveAuthorisationInput,
@@ -601,6 +806,7 @@ export function createPgPortalFounderEmailPilotService(input: {
   readonly providerConnectionId: string;
   readonly commandService: CustomerEmailLiveCommandService;
   readonly permissionUse: PortalPermissionUseReceiptService;
+  readonly evidencePool?: Pool;
   readonly now?: () => number;
 }): PgPortalFounderEmailPilotService {
   return new PgPortalFounderEmailPilotService({
@@ -609,6 +815,7 @@ export function createPgPortalFounderEmailPilotService(input: {
     providerConnectionId: input.providerConnectionId,
     commandService: input.commandService,
     permissionUse: input.permissionUse,
+    ...(input.evidencePool ? { evidencePool: input.evidencePool } : {}),
     now: input.now ?? (() => Date.now()),
   });
 }
