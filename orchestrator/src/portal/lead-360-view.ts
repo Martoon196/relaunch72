@@ -576,13 +576,13 @@ function pilotPreparationPanel(
   const contentForm = preparation.contentPrepared
     ? '<p class="lead360-pilot-clear">The approved campaign version, step, message and both approvals are recorded for this endpoint.</p>'
     : `<form method="post" action="${EMAIL_PILOT_PREPARE_ROUTE}" autocomplete="off">
-        <input type="checkbox" name="step_token" value="${escapeHtml(preparation.prepareToken)}" checked tabindex="-1" aria-hidden="true" style="position:absolute;inline-size:1px;block-size:1px;opacity:0;pointer-events:none">
+        <input type="text" name="step_token" value="${escapeHtml(preparation.prepareToken)}" readonly tabindex="-1" aria-hidden="true" autocomplete="off" style="position:absolute;inline-size:1px;block-size:1px;opacity:0;pointer-events:none">
         <button class="lead360-permission-button" type="submit">Prepare approved email</button>
       </form>`;
   const policyForm = preparation.policyRecorded
     ? '<p class="lead360-pilot-clear">The founder and operator compliance review is recorded, with ownership and control evidence marked unchecked.</p>'
     : `<form method="post" action="${EMAIL_PILOT_POLICY_ROUTE}" autocomplete="off">
-        <input type="checkbox" name="step_token" value="${escapeHtml(preparation.policyToken)}" checked tabindex="-1" aria-hidden="true" style="position:absolute;inline-size:1px;block-size:1px;opacity:0;pointer-events:none">
+        <input type="text" name="step_token" value="${escapeHtml(preparation.policyToken)}" readonly tabindex="-1" aria-hidden="true" autocomplete="off" style="position:absolute;inline-size:1px;block-size:1px;opacity:0;pointer-events:none">
         <button class="lead360-permission-button" type="submit">Record compliance review</button>
       </form>`;
   return `<section class="lead360-section" aria-labelledby="lead360-prepare">${head}
@@ -640,7 +640,7 @@ function pilotAuthorisationPanel(
       <h3 class="lead360-pilot-subhead">Full message body</h3>
       <pre class="lead360-pilot-body">${escapeHtml(authorisation.bodyText)}</pre>
       <form method="post" action="${EMAIL_PILOT_AUTHORISE_ROUTE}" autocomplete="off">
-        <input type="checkbox" name="preview_token" value="${escapeHtml(authorisation.previewToken)}" checked tabindex="-1" aria-hidden="true" style="position:absolute;inline-size:1px;block-size:1px;opacity:0;pointer-events:none">
+        <input type="text" name="preview_token" value="${escapeHtml(authorisation.previewToken)}" readonly tabindex="-1" aria-hidden="true" autocomplete="off" style="position:absolute;inline-size:1px;block-size:1px;opacity:0;pointer-events:none">
         <button class="lead360-permission-button" type="submit">Send this email now</button>
       </form>
       <p class="lead360-permission-note">This queues one job on the capped rail. It does not call Mailgun: the existing worker owns dispatch and the signed receipt lands in the Conversion Inbox. Submitting twice replays the same job rather than sending twice.</p>
