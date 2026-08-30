@@ -220,12 +220,12 @@ export interface PgPortalFounderEmailPilotDependencies {
    * The existing 0054 capped enqueue, on its own least-privilege identity.
    * This seam composes it; it does not reimplement or bypass it.
    */
-  readonly commandService: CustomerEmailLiveCommandService;
+  readonly commandService?: CustomerEmailLiveCommandService;
   /**
    * The 0032 receipt rail, on its own append-only identity. The enqueue cannot
    * be satisfied without it, and it can do nothing else.
    */
-  readonly permissionUse: PortalPermissionUseReceiptService;
+  readonly permissionUse?: PortalPermissionUseReceiptService;
   /**
    * The 0065 evidence identity's pool, absent when its credential is not bound.
    * Recording the review is refused rather than silently skipped.
@@ -665,6 +665,13 @@ export class PgPortalFounderEmailPilotService implements PortalFounderEmailPilot
         || !isCanonicalInstant(input.authorityValidUntil)) {
         return failed('validation');
       }
+      // Endpoint attachment, readiness and content preparation are useful
+      // before the effectful enqueue identities are installed. Keep those
+      // founder actions composed, but refuse the final authorisation unless
+      // both least-privilege send boundaries are present.
+      if (!this.#dependencies.commandService || !this.#dependencies.permissionUse) {
+        return failed('unavailable');
+      }
       const session = await this.#context(identity);
       if (!session) return failed('unauthenticated');
       // The enqueue is bound to one workspace at construction. A session from
@@ -804,8 +811,8 @@ export function createPgPortalFounderEmailPilotService(input: {
   readonly webPool: Pool;
   readonly crmCommandPool: Pool;
   readonly providerConnectionId: string;
-  readonly commandService: CustomerEmailLiveCommandService;
-  readonly permissionUse: PortalPermissionUseReceiptService;
+  readonly commandService?: CustomerEmailLiveCommandService;
+  readonly permissionUse?: PortalPermissionUseReceiptService;
   readonly evidencePool?: Pool;
   readonly now?: () => number;
 }): PgPortalFounderEmailPilotService {
@@ -813,8 +820,8 @@ export function createPgPortalFounderEmailPilotService(input: {
     principalResolver: createPgPortalCrmPrincipalResolver(input.webPool),
     commandPool: input.crmCommandPool,
     providerConnectionId: input.providerConnectionId,
-    commandService: input.commandService,
-    permissionUse: input.permissionUse,
+    ...(input.commandService ? { commandService: input.commandService } : {}),
+    ...(input.permissionUse ? { permissionUse: input.permissionUse } : {}),
     ...(input.evidencePool ? { evidencePool: input.evidencePool } : {}),
     now: input.now ?? (() => Date.now()),
   });

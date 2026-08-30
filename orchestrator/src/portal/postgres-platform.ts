@@ -866,18 +866,19 @@ export async function buildPgPortalPlatform(
         founderPilotEvidencePool = undefined;
       }
     }
-    // The pilot seam owns the founder-facing actions, and the last of them
-    // authorises a live send. It is composed only when the enqueue behind it is
-    // real and the receipt rail that enqueue requires is bound, so the portal
-    // never offers an authorisation it could not honour.
-    if (PORTAL_UUID.test(emailConnectionId) && customerEmailCommand
-        && permissionUseReceipts) {
+    // Compose the founder-facing preparation seam as soon as the exact
+    // connection is known. Endpoint attachment, readiness and preparation use
+    // the existing CRM boundary and must not disappear merely because the
+    // effectful enqueue/receipt identities are still being installed. The
+    // final authorisation remains fail-closed inside the service until both
+    // least-privilege send boundaries are present.
+    if (PORTAL_UUID.test(emailConnectionId)) {
       founderEmailPilot = createPgPortalFounderEmailPilotService({
         webPool,
         crmCommandPool: commandPool,
         providerConnectionId: emailConnectionId,
-        commandService: customerEmailCommand,
-        permissionUse: permissionUseReceipts,
+        ...(customerEmailCommand ? { commandService: customerEmailCommand } : {}),
+        ...(permissionUseReceipts ? { permissionUse: permissionUseReceipts } : {}),
         ...(founderPilotEvidencePool ? { evidencePool: founderPilotEvidencePool } : {}),
       });
     }

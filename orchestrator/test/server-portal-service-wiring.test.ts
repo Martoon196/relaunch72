@@ -80,6 +80,19 @@ test('contact permission is composed by the platform and reaches the portal', as
   );
 });
 
+test('founder endpoint preparation is not hidden behind live-send credentials', async () => {
+  const platform = await readFile(platformUrl, 'utf8');
+  assert.match(
+    platform,
+    /if \(PORTAL_UUID\.test\(emailConnectionId\)\) \{\s*founderEmailPilot\s*=\s*createPgPortalFounderEmailPilotService/s,
+  );
+  assert.doesNotMatch(
+    platform,
+    /if \(PORTAL_UUID\.test\(emailConnectionId\) && customerEmailCommand\s*&& permissionUseReceipts\)/,
+    'endpoint attachment must remain available while final-send identities are absent',
+  );
+});
+
 test('the forwarded names match what the platform actually exposes', async () => {
   // Guards this test against itself: a service renamed on the platform but not
   // here would leave the assertions above passing against a stale name.
