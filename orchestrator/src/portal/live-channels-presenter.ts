@@ -555,6 +555,25 @@ function nextActionFor(
       link: Object.freeze({ href: PROVIDER_READINESS_COCKPIT_ROUTE, label: 'Open Rail status' }),
     });
   }
+  // A rail can be proven live and still be unable to dispatch. APPROVAL_REQUIRED
+  // and CAP_REACHED are soft blockers, so the posture stays ready and this used
+  // to fall through to "no action needed", sending the founder to watch an Inbox
+  // for sends that cannot arrive. The card said both things at once: the plain
+  // English named the gate while the next action denied it existed. The
+  // remaining gate is the action.
+  const remaining = blockers[0];
+  if (remaining) {
+    return Object.freeze({
+      label: 'One gate still holds this rail',
+      detail: `${remaining.message} Nothing dispatches until it clears.`,
+      link: remaining.code === 'APPROVAL_REQUIRED'
+        ? Object.freeze({
+          href: `${CONVERSION_INBOX_ROUTE}?queue=approval`,
+          label: 'Open approval queue',
+        })
+        : Object.freeze({ href: PROVIDER_READINESS_COCKPIT_ROUTE, label: 'Open Rail status' }),
+    });
+  }
   return Object.freeze({
     label: 'No action needed',
     detail: `The rail is live inside its caps. Watch receipts and the Conversion Inbox for ${statics.unitNoun} as they land.`,

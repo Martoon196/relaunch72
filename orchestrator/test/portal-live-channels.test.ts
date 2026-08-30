@@ -405,3 +405,48 @@ test('handoff card reflects only proven composition facts', () => {
   const composed = renderLiveChannelsBody(presentLiveChannels(createPropertyPredatorLiveChannelsFixture()), RENDER);
   assert.match(composed, /assignment, internal notes and admin calls are live commands/);
 });
+
+test('a live rail still gated by approval never says no action is needed', () => {
+  // The production customer-email card said both things at once: "A human
+  // approval decision is required before anything can dispatch" beside "No
+  // action needed — watch the Conversion Inbox for sends as they land". The
+  // founder would wait for sends that approval was blocking.
+  const data = authoritative();
+  data.rails[0]!.outboundOrReplyState = 'approval_required';
+  data.rails[0]!.blockerCodes = ['APPROVAL_REQUIRED'];
+  const card = presentLiveChannels(snapshotOf(data)).channels[0]!;
+  assert.equal(card.posture, 'ready', 'approval is a soft gate; the rail is still live');
+  assert.equal(card.approvalRequired, true);
+  assert.notEqual(card.nextAction.label, 'No action needed');
+  assert.match(card.nextAction.detail, /approval decision is required/);
+  assert.match(card.nextAction.detail, /Nothing dispatches until it clears\./);
+  // It must point at the gate, not at the Inbox the founder cannot make move.
+  assert.match(card.nextAction.link?.href ?? '', /queue=approval/);
+  assert.doesNotMatch(card.nextAction.detail, /as they land/);
+});
+
+test('a live rail at its cap is told the cap holds it, not to watch for sends', () => {
+  // The presenter refuses contradictory cap evidence, so the usage numbers must
+  // agree with the code. That guard is why this fixture exhausts the daily cap.
+  const data = authoritative();
+  data.rails[0]!.outboundOrReplyState = 'cap_reached';
+  data.rails[0]!.caps = {
+    daily: { used: 10, limit: 10, remaining: 0 },
+    monthly: { used: 14, limit: 50, remaining: 36 },
+  };
+  data.rails[0]!.blockerCodes = ['CAP_REACHED'];
+  const card = presentLiveChannels(snapshotOf(data)).channels[0]!;
+  assert.equal(card.posture, 'ready');
+  assert.notEqual(card.nextAction.label, 'No action needed');
+  assert.match(card.nextAction.detail, /Nothing dispatches until it clears\./);
+  assert.doesNotMatch(card.nextAction.detail, /as they land/);
+});
+
+test('a genuinely clear live rail still says no action is needed', () => {
+  // The fix must not turn every live rail into a false alarm.
+  const card = presentLiveChannels(snapshotOf(authoritative())).channels[0]!;
+  assert.equal(card.posture, 'ready');
+  assert.deepEqual(card.whyBlocked, []);
+  assert.equal(card.nextAction.label, 'No action needed');
+  assert.match(card.nextAction.detail, /as they land/);
+});
