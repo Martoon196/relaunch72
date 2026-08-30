@@ -720,7 +720,7 @@ test('signed preparation buttons work without hidden fields or typed phrases', a
   assert.equal(pilot.policyCalls.length, 1);
 });
 
-test('rendered preparation buttons use signed routes and empty forms', async () => {
+test('rendered preparation buttons use server-resolved routes and empty forms', async () => {
   const pilot = unpreparedPilot();
   const page = await call('GET', CASE_FILE, deps({ founderEmailPilot: pilot }));
   const prepareAction = new RegExp(
@@ -731,6 +731,14 @@ test('rendered preparation buttons use signed routes and empty forms', async () 
   ).exec(page.body)?.[1];
   assert.ok(prepareAction);
   assert.ok(policyAction);
+  const directAction = new RegExp(
+    `^${EMAIL_PILOT_PREPARE_ROUTE}/${CONTACT_ID}/[0-9a-f-]{36}$`,
+  );
+  assert.match(prepareAction, directAction);
+  assert.match(
+    policyAction,
+    new RegExp(`^${EMAIL_PILOT_POLICY_ROUTE}/${CONTACT_ID}/[0-9a-f-]{36}$`),
+  );
   await call(
     'POST', prepareAction, deps({ founderEmailPilot: pilot }), '',
   );
@@ -739,6 +747,31 @@ test('rendered preparation buttons use signed routes and empty forms', async () 
   );
   assert.equal(pilot.prepareCalls.length, 1);
   assert.equal(pilot.policyCalls.length, 1);
+  assert.equal(pilot.prepareCalls[0]?.contactId, CONTACT_ID);
+  assert.equal(pilot.prepareCalls[0]?.contactPointId, POINT_ID);
+  assert.equal(pilot.prepareCalls[0]?.purpose, 'property_predator_marketing');
+  assert.notEqual(pilot.prepareCalls[0]?.commandKey, pilot.policyCalls[0]?.commandKey);
+});
+
+test('a direct preparation action reopens Lead 360 and fails closed if the contact disappears', async () => {
+  const pilot = unpreparedPilot();
+  const page = await call('GET', CASE_FILE, deps({ founderEmailPilot: pilot }));
+  const prepareAction = new RegExp(
+    `<form[^>]+action="(${EMAIL_PILOT_PREPARE_ROUTE}/[^"]+)"`,
+  ).exec(page.body)?.[1];
+  assert.ok(prepareAction);
+  const missingCrm = {
+    ...crm,
+    lead360: async () => null,
+  } as unknown as PortalCrmService;
+  const result = await call(
+    'POST', prepareAction, deps({ founderEmailPilot: pilot, crm: missingCrm }), '',
+  );
+  assert.equal(
+    noticeOf(result),
+    founderEmailPilotNoticeToken(SECRET, SESSION, 'prepare_invalid'),
+  );
+  assert.deepEqual(pilot.prepareCalls, []);
 });
 
 test('signed preparation actions are session-bound, step-bound and reject extra fields', async () => {

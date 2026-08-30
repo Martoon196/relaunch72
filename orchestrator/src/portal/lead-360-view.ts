@@ -84,7 +84,7 @@ export interface Lead360PilotReadinessView {
  * go into the ledger rather than a summary of them.
  */
 export interface Lead360PilotPreparationView {
-  /** Session-bound action tokens submitted by the buttons, not hidden inputs. */
+  /** Server-resolved action suffixes submitted by empty, plain-button forms. */
   readonly prepareToken: string;
   readonly policyToken: string;
   readonly contactPointId: string;
@@ -559,9 +559,8 @@ function pilotReadinessPanel(options: Lead360RenderOptions): string {
 /**
  * The two preparation steps, with everything each will record.
  *
- * Each button carries one short-lived, session-bound action token. Contact and
- * evidence references are derived and verified server-side, where a browser
- * cannot alter them.
+ * Each button submits an empty form. Contact and evidence references are
+ * reopened and verified server-side from the authenticated workspace.
  */
 function pilotPreparationPanel(
   view: Lead360View,

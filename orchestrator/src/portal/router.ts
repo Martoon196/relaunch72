@@ -329,13 +329,11 @@ import {
   EMAIL_PILOT_PREPARE_CONFIRM_VALUE,
   EMAIL_PILOT_PREPARE_FORM_KEYS,
   EMAIL_PILOT_PREPARE_ROUTE,
-  EMAIL_PILOT_STEP_TOKEN_TTL_MS,
   founderEmailPilotNoticeFromQuery,
   founderEmailPilotNoticeToken,
   founderEmailPilotPreviewClaims,
   founderEmailPilotPreviewToken,
   founderEmailPilotStepClaims,
-  founderEmailPilotStepToken,
   type FounderEmailPilotNoticeCode,
 } from './founder-email-pilot-actions.js';
 import {
@@ -5389,11 +5387,21 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       ? EMAIL_PILOT_PREPARE_ROUTE : EMAIL_PILOT_POLICY_ROUTE}/`)
       ? p.slice((preparing ? EMAIL_PILOT_PREPARE_ROUTE : EMAIL_PILOT_POLICY_ROUTE).length + 1)
       : null;
+    // The current founder flow carries only the RLS-visible contact id and an
+    // idempotency key in the route. The endpoint and purpose are reopened from
+    // Lead 360 below. Older signed and form-based actions remain accepted for
+    // a rolling deploy, but newly rendered buttons never depend on them.
+    const directParts = pathStepToken?.split('/') ?? [];
+    const directAction = directParts.length === 2
+      && CRM_OBJECT_ID.test(directParts[0] ?? '')
+      && CRM_OBJECT_ID.test(directParts[1] ?? '');
+    const directContactId = directParts[0] ?? '';
+    const directCommandKey = directParts[1] ?? '';
     const submittedStepToken = form ? oneFormValue(form, 'step_token') : null;
-    const signedStep = form ? founderEmailPilotStepClaims(
+    const signedStep = form && !directAction ? founderEmailPilotStepClaims(
       pathStepToken ?? submittedStepToken ?? '', deps.sessionSecret, sessionToken, Date.now(),
     ) : null;
-    const contactId = (signedStep?.contactId
+    const contactId = (directAction ? directContactId : signedStep?.contactId
       ?? (form ? oneFormValue(form, 'contact_id') ?? '' : '')).toLowerCase();
     if (!CRM_OBJECT_ID.test(contactId)) {
       return redirect(res, CRM_PORTAL_ROUTES.contacts, undefined, 303);
@@ -5406,9 +5414,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       undefined,
       303,
     );
-    const commandKey = (signedStep?.commandKey
+    const commandKey = (directAction ? directCommandKey : signedStep?.commandKey
       ?? (form ? oneFormValue(form, 'command_key') ?? '' : '')).toLowerCase();
-    const contactPointId = (signedStep?.contactPointId
+    let contactPointId = (signedStep?.contactPointId
       ?? (form ? oneFormValue(form, 'contact_point_id') ?? '' : '')).toLowerCase();
     const legacyConfirmed = preparing
       ? oneFormValue(form ?? new URLSearchParams(), 'confirm_prepare')
@@ -5429,18 +5437,31 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       && verifyPortalCsrf(
         deps.sessionSecret, sessionToken, oneFormValue(form ?? new URLSearchParams(), '_csrf') ?? '',
       ) && legacyConfirmed;
-    if (!form || (!signedFormValid && !legacyFormValid)
-        || !CRM_OBJECT_ID.test(commandKey) || !CRM_OBJECT_ID.test(contactPointId)) {
+    const directFormValid = directAction
+      && campaignFormKeysAllowed(form ?? new URLSearchParams(), new Set());
+    if (!form || (!directFormValid && !signedFormValid && !legacyFormValid)
+        || !CRM_OBJECT_ID.test(commandKey)
+        || (!directAction && !CRM_OBJECT_ID.test(contactPointId))) {
       return stepNotice(preparing ? 'prepare_invalid' : 'policy_invalid');
     }
     if (!deps.founderEmailPilot) {
       return stepNotice(preparing ? 'prepare_unavailable' : 'policy_unavailable');
     }
+    let purpose = signedStep?.purpose
+      ?? oneFormValue(form, 'purpose') ?? FOUNDER_PILOT_PURPOSE;
+    if (directAction) {
+      const caseFile = await deps.crm.lead360?.(crmIdentity(sessionToken, deps), contactId);
+      const pilotEndpoint = caseFile?.consent.find((entry) => entry.channel === 'email');
+      if (!pilotEndpoint || !CRM_OBJECT_ID.test(pilotEndpoint.contactPointId)) {
+        return stepNotice(preparing ? 'prepare_invalid' : 'policy_invalid');
+      }
+      contactPointId = pilotEndpoint.contactPointId.toLowerCase();
+      purpose = pilotEndpoint.purpose ?? FOUNDER_PILOT_PURPOSE;
+    }
     const input = {
       contactId,
       contactPointId,
-      purpose: signedStep?.purpose
-        ?? oneFormValue(form, 'purpose') ?? FOUNDER_PILOT_PURPOSE,
+      purpose,
       commandKey,
       operatorConfirmed: true,
     };
@@ -5658,24 +5679,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       const pilotPreparation = deps.kind === 'postgres' && deps.founderEmailPilot
         && pilotEndpoint
         ? (() => {
-          const stepCommandKey = randomUUID();
-          const stepExpiresAt = new Date(
-            Date.now() + EMAIL_PILOT_STEP_TOKEN_TTL_MS,
-          ).toISOString();
-          const stepClaims = {
-            commandKey: stepCommandKey,
-            contactId,
-            contactPointId: pilotEndpoint.contactPointId,
-            purpose: pilotEndpoint.purpose ?? FOUNDER_PILOT_PURPOSE,
-            expiresAt: stepExpiresAt,
-          } as const;
           return {
-            prepareToken: founderEmailPilotStepToken(
-              deps.sessionSecret, sessionToken, { ...stepClaims, step: 'prepare' },
-            ),
-            policyToken: founderEmailPilotStepToken(
-              deps.sessionSecret, sessionToken, { ...stepClaims, step: 'policy' },
-            ),
+            prepareToken: `${contactId}/${randomUUID()}`,
+            policyToken: `${contactId}/${randomUUID()}`,
             contactPointId: pilotEndpoint.contactPointId,
             purpose: pilotEndpoint.purpose ?? FOUNDER_PILOT_PURPOSE,
             // Resolved from the verified endpoint on this contact, never typed.
