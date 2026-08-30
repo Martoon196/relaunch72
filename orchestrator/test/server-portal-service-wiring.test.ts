@@ -37,6 +37,7 @@ const REQUIRED_SERVICES: readonly string[] = Object.freeze([
 const OPTIONAL_SERVICES: readonly string[] = Object.freeze([
   'ownedSocialBinding',
   'smsBinding',
+  'founderEmailPilot',
   'ownedSeedCampaign',
   'ownedSeedMessages',
 ]);

@@ -67,6 +67,7 @@ const migration60Url = new URL('../../src/db/migrations/0060_owned_social_functi
 const migration61Url = new URL('../../src/db/migrations/0061_property_predator_twilio_sms_founder_binding.sql', import.meta.url);
 const migration62Url = new URL('../../src/db/migrations/0062_operational_inbox_live_evidence_read_boundary.sql', import.meta.url);
 const migration63Url = new URL('../../src/db/migrations/0063_contact_permission_founder_decisions.sql', import.meta.url);
+const migration64Url = new URL('../../src/db/migrations/0064_founder_email_pilot_endpoint_and_readiness.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -505,9 +506,9 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums through the contact permission decisions', async () => {
+test('bundled migration discovery orders and checksums through the founder email pilot', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-57);
+  const tail = migrations.slice(-58);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0007_public_schema_hardening.sql', version: 7 },
     { filename: '0008_setup_delivery_recovery.sql', version: 8 },
@@ -566,6 +567,7 @@ test('bundled migration discovery orders and checksums through the contact permi
     { filename: '0061_property_predator_twilio_sms_founder_binding.sql', version: 61 },
     { filename: '0062_operational_inbox_live_evidence_read_boundary.sql', version: 62 },
     { filename: '0063_contact_permission_founder_decisions.sql', version: 63 },
+    { filename: '0064_founder_email_pilot_endpoint_and_readiness.sql', version: 64 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -625,6 +627,7 @@ test('bundled migration discovery orders and checksums through the contact permi
     (await readFile(migration61Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration62Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration63Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration64Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));

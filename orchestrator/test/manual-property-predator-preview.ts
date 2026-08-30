@@ -1840,6 +1840,21 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
         html: shell(`<nav aria-label="Lead 360 breadcrumb" style="margin-bottom:14px"><a class="button secondary compact" href="${JOURNEY_BOARD_ROUTE}">← Live journeys</a></nav>${renderLead360Body(caseFile, {
           permissionCommandAvailable: true,
           permissionCommandKey: randomUUID(),
+          endpointCommandAvailable: true,
+          endpointCommandKey: randomUUID(),
+          pilotReadiness: {
+            ready: false,
+            blockers: [{
+              code: 'CONSENT_NOT_GRANTED',
+              message: 'The latest recorded permission for this endpoint and purpose is not a grant.',
+            }],
+            preview: {
+              recipientEmail: 'office@example.test',
+              recipientVerified: true,
+              purpose: 'property_predator_marketing',
+              dailyUsed: 0, dailyCap: 10, monthlyUsed: 0, monthlyCap: 50,
+            },
+          },
           csrfToken: PREVIEW_CSRF,
         })}`, 'crm', `${card.displayName} — Lead 360`),
       };

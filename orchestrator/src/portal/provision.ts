@@ -32,6 +32,7 @@ import type { PortalLiveChannelPauseService } from './live-channel-pause-service
 import type { PortalOwnedSocialBindingService } from './owned-social-binding-service.js';
 import type { PortalSmsBindingService } from './sms-binding-service.js';
 import type { PortalContactPermissionService } from './contact-permission-service.js';
+import type { PortalFounderEmailPilotService } from './founder-email-pilot-service.js';
 import type { PortalCampaignMachineService } from './campaign-machine-service.js';
 import type { PortalOwnedSeedCampaignService } from './owned-seed-campaign-service.js';
 import type { PortalOwnedSeedMessageService } from './owned-seed-message-service.js';
@@ -181,6 +182,7 @@ export interface PostgresPortalConfig {
   /** Founder-only Twilio SMS binding and owned-test staging. */
   smsBinding?: PortalSmsBindingService;
   contactPermission?: PortalContactPermissionService;
+  founderEmailPilot?: PortalFounderEmailPilotService;
   /** Authenticated immutable Campaign Machine read boundary. */
   campaignMachine?: PortalCampaignMachineService;
   /** Fixed office-seed staging boundary; no provider/network capability. */
@@ -254,6 +256,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     ownedSocialBinding: cfg.ownedSocialBinding,
     smsBinding: cfg.smsBinding,
     contactPermission: cfg.contactPermission,
+    founderEmailPilot: cfg.founderEmailPilot,
     campaignMachine: cfg.campaignMachine,
     ownedSeedCampaign: cfg.ownedSeedCampaign,
     ownedSeedMessages: cfg.ownedSeedMessages,

@@ -315,6 +315,22 @@ import { MIGRATION_CENTRE_CLIENT_SOURCE } from './migration-centre-client.js';
 import { renderMigrationCentreBody } from './migration-centre-view.js';
 import type { SafeTelemetryLogger } from '../ops/safe-telemetry.js';
 import type { PortalContactPermissionService } from './contact-permission-service.js';
+import type { PortalFounderEmailPilotService } from './founder-email-pilot-service.js';
+import {
+  CONTACT_ENDPOINT_ATTACH_ROUTE,
+  CONTACT_ENDPOINT_CONFIRM_VALUE,
+  CONTACT_ENDPOINT_FORM_KEYS,
+  founderEmailPilotNoticeFromQuery,
+  founderEmailPilotNoticeToken,
+  type FounderEmailPilotNoticeCode,
+} from './founder-email-pilot-actions.js';
+import {
+  FOUNDER_EMAIL_PILOT_BLOCKER_MESSAGES,
+  type FounderEmailPilotBlockerCode,
+} from '../founder-email-pilot/foundation.js';
+
+/** The canonical Property Predator marketing purpose from the shared contract. */
+const FOUNDER_PILOT_PURPOSE = 'property_predator_marketing';
 import {
   CONTACT_PERMISSION_CONFIRM_VALUE,
   CONTACT_PERMISSION_FORM_KEYS,
@@ -433,6 +449,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   smsBinding?: PortalSmsBindingService;
   /** Founder-only contact permission decisions on the Lead 360 case file. */
   contactPermission?: PortalContactPermissionService;
+  /** Founder-only endpoint attach and customer-email pilot readiness. */
+  founderEmailPilot?: PortalFounderEmailPilotService;
   /** RLS-scoped immutable campaign templates, steps, approvals and reporting evidence. */
   campaignMachine?: PortalCampaignMachineService;
   /** Fixed-recipient Mailgun job staging only; the worker remains a separate process. */
@@ -5279,6 +5297,59 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     );
   }
 
+
+  // Founder-only endpoint attach on an existing contact. It can create neither
+  // a contact nor an opportunity, and records no permission.
+  if (deps.kind === 'postgres' && p === CONTACT_ENDPOINT_ATTACH_ROUTE && method === 'POST') {
+    const form = await readMultiValueForm(req);
+    const contactId = (form ? oneFormValue(form, 'contact_id') ?? '' : '').toLowerCase();
+    if (!CRM_OBJECT_ID.test(contactId)) {
+      return redirect(res, CRM_PORTAL_ROUTES.contacts, undefined, 303);
+    }
+    const endpointNotice = (code: FounderEmailPilotNoticeCode): void => redirect(
+      res,
+      `${contactCaseFileRoute(contactId)}?notice=${encodeURIComponent(
+        founderEmailPilotNoticeToken(deps.sessionSecret, sessionToken, code),
+      )}`,
+      undefined,
+      303,
+    );
+    const commandKey = form ? oneFormValue(form, 'command_key') : null;
+    if (!form || !campaignFormKeysAllowed(form, new Set(CONTACT_ENDPOINT_FORM_KEYS))
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '')
+        || oneFormValue(form, 'confirm_endpoint') !== CONTACT_ENDPOINT_CONFIRM_VALUE
+        || !commandKey || !CRM_OBJECT_ID.test(commandKey)) {
+      return endpointNotice('endpoint_invalid');
+    }
+    if (!deps.founderEmailPilot) return endpointNotice('endpoint_unavailable');
+    const field = (name: string): string => oneFormValue(form, name) ?? '';
+    const label = field('label').trim();
+    const outcome = await deps.founderEmailPilot.attachEndpoint(
+      crmIdentity(sessionToken, deps),
+      {
+        commandKey,
+        contactId,
+        email: field('email'),
+        label: label === '' ? null : label,
+        evidenceSource: field('evidence_source'),
+        evidenceReference: field('evidence_reference'),
+        verifiedAt: field('verified_at'),
+        operatorConfirmed: true,
+      },
+    );
+    if (outcome.ok) {
+      return endpointNotice(
+        outcome.disposition === 'replayed' ? 'endpoint_replayed' : 'endpoint_attached',
+      );
+    }
+    return endpointNotice(
+      outcome.kind === 'conflict' ? 'endpoint_conflict'
+        : outcome.kind === 'forbidden' || outcome.kind === 'unauthenticated'
+          ? 'endpoint_forbidden'
+          : outcome.kind === 'validation' ? 'endpoint_invalid' : 'endpoint_unavailable',
+    );
+  }
+
   const lead360Match = /^\/portal\/crm\/contacts\/([^/]+)$/.exec(p);
   if (deps.crm && lead360Match && method === 'GET') {
     const contactId = lead360Match[1]!;
@@ -5309,6 +5380,34 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         active: 'crm', backHref: CRM_PORTAL_ROUTES.contacts, backLabel: 'Return to contacts',
       }));
       const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      // Readiness is evaluated only for an endpoint this contact actually has.
+      // Inventing one would show the founder a pilot for an address that does
+      // not exist, which is the failure this whole strike came from.
+      const pilotEndpoint = caseFile.consent.find((entry) => entry.channel === 'email');
+      const pilotReadiness = deps.kind === 'postgres' && deps.founderEmailPilot
+        && pilotEndpoint
+        ? await (async () => {
+          const outcome = await deps.founderEmailPilot!.readiness(
+            crmIdentity(sessionToken, deps),
+            {
+              contactId,
+              contactPointId: pilotEndpoint.contactPointId,
+              purpose: pilotEndpoint.purpose ?? FOUNDER_PILOT_PURPOSE,
+            },
+          );
+          if (!outcome.ok) return null;
+          return {
+            ready: outcome.report.result === 'ready-for-founder-authorisation',
+            blockers: outcome.report.blockers.map((code) => ({
+              code,
+              message: FOUNDER_EMAIL_PILOT_BLOCKER_MESSAGES[
+                code as FounderEmailPilotBlockerCode
+              ],
+            })),
+            preview: outcome.preview,
+          };
+        })()
+        : null;
       const body = `<nav aria-label="Lead 360 breadcrumb" style="margin-bottom:14px"><a class="button secondary compact" href="${CRM_PORTAL_ROUTES.contacts}">← All contacts</a></nav>${renderLead360Body(caseFile, {
         // The legacy JSON portal has no permission boundary, so the panel
         // renders its honest "not composed" state there rather than a form
@@ -5316,8 +5415,16 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         permissionCommandAvailable: deps.kind === 'postgres'
           && Boolean(deps.contactPermission),
         permissionCommandKey: randomUUID(),
+        endpointCommandAvailable: deps.kind === 'postgres'
+          && Boolean(deps.founderEmailPilot),
+        endpointCommandKey: randomUUID(),
+        pilotReadiness,
         csrfToken,
+        // Either rail may have redirected here, so both notices are tried and
+        // only a signature valid for this session renders.
         notice: contactPermissionNoticeFromQuery(
+          url.searchParams, deps.sessionSecret, sessionToken,
+        ) ?? founderEmailPilotNoticeFromQuery(
           url.searchParams, deps.sessionSecret, sessionToken,
         ),
       })}`;

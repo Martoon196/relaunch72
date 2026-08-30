@@ -605,6 +605,7 @@ async function main(): Promise<void> {
         ownedSocialBinding: postgresPortal.ownedSocialBinding,
         smsBinding: postgresPortal.smsBinding,
         contactPermission: postgresPortal.contactPermission,
+        founderEmailPilot: postgresPortal.founderEmailPilot,
         campaignMachine: postgresPortal.campaignMachine,
         ownedSeedCampaign: postgresPortal.ownedSeedCampaign,
         ownedSeedMessages: postgresPortal.ownedSeedMessages,

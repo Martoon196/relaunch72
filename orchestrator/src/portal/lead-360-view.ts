@@ -10,8 +10,19 @@ import { escapeHtml } from './ui.js';
 import {
   CONTACT_PERMISSION_CONFIRM_VALUE,
   CONTACT_PERMISSION_ROUTE,
-  type ContactPermissionNotice,
 } from './contact-permission-actions.js';
+import {
+  CONTACT_ENDPOINT_CONFIRM_VALUE,
+  CONTACT_ENDPOINT_ATTACH_ROUTE,
+} from './founder-email-pilot-actions.js';
+
+/** Witnessed evidence only, mirroring the 0064 contract. */
+const ENDPOINT_EVIDENCE_SOURCES: readonly (readonly [string, string])[] = Object.freeze([
+  ['founder.owned_mailbox', 'A mailbox this company owns and controls'],
+  ['founder.written_confirmation', 'Written confirmation from the contact'],
+  ['founder.signed_form', 'Signed form from the contact'],
+  ['founder.verified_reply', 'A verified reply received from this address'],
+] as const);
 
 /** Channels this workflow binds a decision to, matching the 0063 contract. */
 const PERMISSION_CHANNELS: readonly string[] = Object.freeze(['email', 'sms', 'whatsapp']);
@@ -39,13 +50,48 @@ const PERMISSION_EVIDENCE_SOURCES: readonly (readonly [string, string])[] = Obje
   ['founder.verbal_confirmation', 'Verbal confirmation, witnessed and noted'],
 ] as const);
 
+/** One blocker the founder must clear before the pilot can be authorised. */
+export interface Lead360PilotBlockerView {
+  readonly code: string;
+  readonly message: string;
+}
+
+/** Exactly what would be sent, shown before any authorisation. */
+export interface Lead360PilotPreviewView {
+  readonly recipientEmail: string;
+  readonly recipientVerified: boolean;
+  readonly purpose: string;
+  readonly dailyUsed: number;
+  readonly dailyCap: number;
+  readonly monthlyUsed: number;
+  readonly monthlyCap: number;
+}
+
+export interface Lead360PilotReadinessView {
+  readonly ready: boolean;
+  readonly blockers: readonly Lead360PilotBlockerView[];
+  readonly preview: Lead360PilotPreviewView | null;
+}
+
 export interface Lead360RenderOptions {
   /** True only when the founder permission command boundary is composed. */
   readonly permissionCommandAvailable?: boolean;
   /** Fresh per-render key, so a double submit replays instead of re-deciding. */
   readonly permissionCommandKey?: string;
+  /** True only when the founder endpoint/pilot boundary is composed. */
+  readonly endpointCommandAvailable?: boolean;
+  readonly endpointCommandKey?: string;
+  /** Absent when the pilot has not been evaluated for this contact. */
+  readonly pilotReadiness?: Lead360PilotReadinessView | null;
   readonly csrfToken?: string;
-  readonly notice?: ContactPermissionNotice | null;
+  // Structural rather than one rail's type: the permission and pilot notices
+  // have the same shape and both render here.
+  readonly notice?: {
+    readonly code: string;
+    readonly tone: 'success' | 'warning' | 'danger';
+    readonly title: string;
+    readonly message: string;
+  } | null;
 }
 
 export type Lead360ScoreBand = 'burning' | 'hot' | 'warm' | 'quiet' | 'unscored';
@@ -399,6 +445,69 @@ function consentStatus(consent: readonly Lead360ConsentView[], suppressionReason
 }
 
 /** Founder-only decision form. Absent entirely unless the boundary is composed. */
+/**
+ * Attach and verify an email endpoint on this existing contact.
+ *
+ * Deliberately not "Create a lead": that route would make a second contact and
+ * a second opportunity for a person who already has both.
+ */
+function endpointCommands(
+  view: Lead360View,
+  options: Lead360RenderOptions,
+): string {
+  const head = '<div class="lead360-section-head"><div><div class="lead360-section-label">Contact reach</div><h2 id="lead360-endpoint">Attach a verified email endpoint</h2></div></div>';
+  if (!options.endpointCommandAvailable) {
+    return `<section class="lead360-section" aria-labelledby="lead360-endpoint">${head}<div class="lead360-permission-body"><p>The contact endpoint boundary is not composed for this workspace, so no endpoint can be attached here.</p></div></section>`;
+  }
+  const csrf = escapeHtml(options.csrfToken ?? '');
+  const commandKey = escapeHtml(options.endpointCommandKey ?? '');
+  return `<section class="lead360-section" aria-labelledby="lead360-endpoint">${head}
+    <div class="lead360-permission-body">
+      <p>This attaches an address to the contact already open, with the evidence that verified it. It creates no second contact and no second opportunity, records no permission, and sends nothing.</p>
+      <form method="post" action="${CONTACT_ENDPOINT_ATTACH_ROUTE}" autocomplete="off">
+        <input type="hidden" name="_csrf" value="${csrf}">
+        <input type="hidden" name="command_key" value="${commandKey}">
+        <input type="hidden" name="contact_id" value="${escapeHtml(view.identity.contactId)}">
+        <label class="lead360-field"><span>Email address</span><input type="email" name="email" required maxlength="320" autocomplete="off"></label>
+        <label class="lead360-field"><span>Label, optional</span><input type="text" name="label" maxlength="50" autocomplete="off"></label>
+        <label class="lead360-field"><span>Verification evidence</span><select name="evidence_source" required>${ENDPOINT_EVIDENCE_SOURCES.map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`).join('')}</select></label>
+        <label class="lead360-field"><span>Evidence reference</span><input type="text" name="evidence_reference" required maxlength="200" autocomplete="off"></label>
+        <label class="lead360-field"><span>Verified at, UTC instant</span><input type="text" name="verified_at" required maxlength="40" autocomplete="off"></label>
+        <label class="lead360-permission-check"><input type="checkbox" name="confirm_endpoint" value="${CONTACT_ENDPOINT_CONFIRM_VALUE}" required> I verified this address belongs to this contact and recorded the evidence above.</label>
+        <button class="lead360-permission-button" type="submit">Attach and verify endpoint</button>
+      </form>
+      <p class="lead360-permission-note">Attaching an endpoint never grants permission and never clears a suppression.</p>
+    </div>
+  </section>`;
+}
+
+/** Why the capped pilot enqueue would refuse, and exactly what would be sent. */
+function pilotReadinessPanel(options: Lead360RenderOptions): string {
+  const readiness = options.pilotReadiness;
+  if (!readiness) return '';
+  const head = '<div class="lead360-section-head"><div><div class="lead360-section-label">Founder pilot</div><h2 id="lead360-pilot">Customer email pilot readiness</h2></div></div>';
+  const blockers = readiness.blockers.length === 0
+    ? '<p class="lead360-pilot-clear">Every dimension is proven. Authorising a send remains a separate, explicit act.</p>'
+    : `<ul class="lead360-pilot-blockers">${readiness.blockers.map((blocker) => `<li><b>${escapeHtml(blocker.code)}</b><span>${escapeHtml(blocker.message)}</span></li>`).join('')}</ul>`;
+  const preview = readiness.preview === null
+    ? '<p class="lead360-time-missing">No recipient is resolved, so there is nothing to preview.</p>'
+    : `<dl class="lead360-permission-detail">
+      <div><dt>Recipient</dt><dd>${escapeHtml(readiness.preview.recipientEmail)}</dd></div>
+      <div><dt>Endpoint verified</dt><dd>${readiness.preview.recipientVerified ? 'Yes' : 'No'}</dd></div>
+      <div><dt>Purpose</dt><dd>${escapeHtml(readiness.preview.purpose)}</dd></div>
+      <div><dt>Today</dt><dd>${readiness.preview.dailyUsed} of ${readiness.preview.dailyCap} sends used</dd></div>
+      <div><dt>This month</dt><dd>${readiness.preview.monthlyUsed} of ${readiness.preview.monthlyCap} sends used</dd></div>
+    </dl>`;
+  return `<section class="lead360-section" aria-labelledby="lead360-pilot">${head}
+    <div class="lead360-permission-body">
+      <p>Read-only evidence from the database. This panel cannot queue a job, call Mailgun or send anything.</p>
+      ${blockers}
+      <h3 class="lead360-pilot-subhead">Exact recipient and caps</h3>
+      ${preview}
+    </div>
+  </section>`;
+}
+
 function permissionCommands(
   view: Lead360View,
   options: Lead360RenderOptions,
@@ -470,6 +579,7 @@ const LEAD_360_STYLE = `
   .lead360-notice{margin:0;padding:13px 32px;border-bottom:1px solid var(--case-line);background:#101414}.lead360-notice strong{display:block;font:800 .62rem var(--mono,monospace);letter-spacing:.08em;text-transform:uppercase}.lead360-notice p{margin:5px 0 0;color:#9aa3a1;font-size:.66rem;line-height:1.5}.lead360-notice.is-success strong{color:#7fd7a4}.lead360-notice.is-warning strong{color:#f1c66a}.lead360-notice.is-danger strong{color:#ff746a}
   .lead360-permission-detail{grid-column:1/-1;display:grid;gap:3px;margin:8px 0 0;padding:8px 0 0;border-top:1px solid #23292a}.lead360-permission-detail>div{display:grid;grid-template-columns:minmax(96px,34%) minmax(0,1fr);gap:8px}.lead360-permission-detail dt{color:#78817f;font:600 .53rem var(--mono,monospace);text-transform:uppercase;letter-spacing:.06em}.lead360-permission-detail dd{margin:0;color:#c7ccca;font-size:.6rem;line-height:1.45;overflow-wrap:anywhere}.lead360-suppression-state{color:#f1847a;text-transform:uppercase;font:800 .55rem var(--mono,monospace)}
   .lead360-permission-body{display:grid;gap:11px}.lead360-permission-body p{color:#8f9996;font-size:.64rem;line-height:1.5;margin:0}.lead360-permission-body form{display:grid;gap:9px}.lead360-field{display:block;color:var(--case-ink);font-size:.62rem;line-height:1.5}.lead360-field span{display:block;color:#78817f;margin:0 0 4px}.lead360-field input,.lead360-field select{display:block;width:100%;min-height:44px;box-sizing:border-box;padding:0 10px;background:var(--case-bg);border:1px solid var(--case-line);border-radius:8px;color:var(--case-ink);font:inherit}.lead360-permission-check{display:flex;align-items:flex-start;gap:9px;min-height:44px;color:#c7ccca;font-size:.62rem;line-height:1.45}.lead360-permission-check input{width:24px;height:24px;margin-top:2px;flex:none}.lead360-permission-button{min-height:44px;padding:0 16px;border:1px solid var(--case-accent);border-radius:8px;background:transparent;color:var(--case-accent);font:800 .64rem var(--mono,monospace);letter-spacing:.06em;text-transform:uppercase;cursor:pointer}.lead360-permission-button[disabled]{border-color:#3c4342;color:#6e7775;cursor:not-allowed}.lead360-permission-note{color:#78817f;font-size:.58rem;line-height:1.5;margin:0}.lead360 :is(a,button,input,select):focus-visible{outline:2px solid var(--case-accent);outline-offset:2px}
+  .lead360-pilot-blockers{display:grid;gap:6px;margin:0;padding:0;list-style:none}.lead360-pilot-blockers li{display:grid;gap:2px;padding:8px;border:1px solid #6a3935;background:#211413}.lead360-pilot-blockers b{color:#f1847a;font:800 .55rem var(--mono,monospace);letter-spacing:.06em}.lead360-pilot-blockers span{color:#c8a5a1;font-size:.62rem;line-height:1.45}.lead360-pilot-clear{color:#7fd7a4;font-size:.64rem;line-height:1.5;margin:0}.lead360-pilot-subhead{margin:10px 0 6px;color:#78817f;font:600 .55rem var(--mono,monospace);text-transform:uppercase;letter-spacing:.06em}
   .lead360-empty{border:1px dashed #3c4342;background:#111414;padding:18px;text-align:left}.lead360-empty strong{display:block;font-size:.7rem;color:#c7ccca}.lead360-empty p{color:#7f8886;font-size:.64rem;line-height:1.5;margin:5px 0 0}.lead360-time-missing{color:#78817f;font:600 .55rem var(--mono,monospace)}.lead360-as-of{padding:11px 32px;border-top:1px solid var(--case-line);background:#090b0c;color:#6e7775;font:600 .55rem var(--mono,monospace);text-align:right}
   @media(max-width:1120px){.lead360-layout{grid-template-columns:minmax(0,1.35fr) minmax(250px,.8fr)}.lead360-left{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px;border-bottom:1px solid var(--case-line)}.lead360-column+.lead360-column{border-left:0}.lead360-right{border-left:1px solid var(--case-line)!important}}
   @media(max-width:760px){.lead360-case-head{grid-template-columns:1fr;padding:25px 21px 21px}.lead360-score{justify-self:start}.lead360-journey{padding:17px 21px}.lead360-journey ol{display:grid;grid-template-columns:1fr;gap:8px}.lead360-journey li:not(:last-child)::after{left:14px;right:auto;top:29px;bottom:-9px;width:1px;height:auto}.lead360-journey-score{grid-template-columns:1fr}.lead360-layout{display:block}.lead360-left{display:block}.lead360-column{padding:21px}.lead360-column+.lead360-column,.lead360-right{border-left:0!important;border-top:1px solid var(--case-line)}.lead360-as-of{padding-inline:21px;text-align:left}}
@@ -499,7 +609,7 @@ export function renderLead360Body(
     <div class="lead360-layout">
       <aside class="lead360-column lead360-left" aria-label="Lead context"><section class="lead360-section" aria-labelledby="lead360-score-reason"><div class="lead360-section-head"><div><div class="lead360-section-label">Scoring</div><h2 id="lead360-score-reason">Why this score?</h2></div></div>${view.scoreExplanation ? `<p class="lead360-case-note">${escapeHtml(view.scoreExplanation)}</p>` : emptyState('No score explanation', 'A score has not been justified by recorded evidence.')}</section><section class="lead360-section" aria-labelledby="lead360-crm"><div class="lead360-section-head"><div><div class="lead360-section-label">Saved records</div><h2 id="lead360-crm">CRM summary</h2></div></div>${crmSummary(view.crm)}</section></aside>
       <section class="lead360-column lead360-centre" aria-labelledby="lead360-evidence"><div class="lead360-section-head"><div><div class="lead360-section-label">Exact chronology</div><h2 id="lead360-evidence">Engagement evidence</h2></div><span>Newest first</span></div>${evidenceTimeline(view.evidence)}</section>
-      <aside class="lead360-column lead360-right" aria-label="Decision rail"><section class="lead360-section" aria-labelledby="lead360-next"><div class="lead360-section-head"><div><div class="lead360-section-label">Human judgement</div><h2 id="lead360-next">Best next move</h2></div></div>${nextMove(view.nextMove, primaryJourneyLabel)}</section><section class="lead360-section" aria-labelledby="lead360-offers"><div class="lead360-section-head"><div><div class="lead360-section-label">Commercial evidence</div><h2 id="lead360-offers">Offer history</h2></div></div>${offerHistory(view.offers)}</section><section class="lead360-section" aria-labelledby="lead360-consent"><div class="lead360-section-head"><div><div class="lead360-section-label">Contact safety</div><h2 id="lead360-consent">Consent + suppression</h2></div></div>${consentStatus(view.consent, view.suppressionReason)}</section>${permissionCommands(view, options)}</aside>
+      <aside class="lead360-column lead360-right" aria-label="Decision rail"><section class="lead360-section" aria-labelledby="lead360-next"><div class="lead360-section-head"><div><div class="lead360-section-label">Human judgement</div><h2 id="lead360-next">Best next move</h2></div></div>${nextMove(view.nextMove, primaryJourneyLabel)}</section><section class="lead360-section" aria-labelledby="lead360-offers"><div class="lead360-section-head"><div><div class="lead360-section-label">Commercial evidence</div><h2 id="lead360-offers">Offer history</h2></div></div>${offerHistory(view.offers)}</section><section class="lead360-section" aria-labelledby="lead360-consent"><div class="lead360-section-head"><div><div class="lead360-section-label">Contact safety</div><h2 id="lead360-consent">Consent + suppression</h2></div></div>${consentStatus(view.consent, view.suppressionReason)}</section>${permissionCommands(view, options)}${endpointCommands(view, options)}${pilotReadinessPanel(options)}</aside>
     </div>
     <footer class="lead360-as-of">Case file viewed as of ${timestamp(view.asOf)}</footer>
   </article>`;

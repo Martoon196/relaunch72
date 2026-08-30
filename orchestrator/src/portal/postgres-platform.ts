@@ -47,6 +47,13 @@ import {
   type PgPortalContactPermissionService,
 } from './contact-permission-pg-service.js';
 import {
+  createPgPortalFounderEmailPilotService,
+  type PgPortalFounderEmailPilotService,
+} from './founder-email-pilot-pg-service.js';
+import { createPgCustomerEmailLiveCommandService } from '../customer-email-live-pg/command-service.js';
+import { assertCustomerEmailCommandBoundaryReady } from '../customer-email-live-pg/readiness.js';
+import type { CustomerEmailLiveCommandService } from '../customer-email-live-pg/types.js';
+import {
   createPgPortalOwnedSocialBindingService,
   type PgPortalOwnedSocialBindingService,
 } from './owned-social-binding-pg-service.js';
@@ -163,6 +170,10 @@ export interface PgPortalPlatform {
   smsBinding?: PgPortalSmsBindingService;
   /** Founder-only contact permission decisions for the Lead 360 case file. */
   contactPermission: PgPortalContactPermissionService;
+  /** Founder Lead 360 endpoint attach and customer-email pilot readiness. */
+  founderEmailPilot?: PgPortalFounderEmailPilotService;
+  /** The permission-bound capped enqueue, on its own least-privilege identity. */
+  customerEmailCommand?: CustomerEmailLiveCommandService;
   /** Bounded caller-owned runtime probe; throws without exposing connection details. */
   assertReady(): Promise<void>;
   close(): Promise<void>;
@@ -755,6 +766,49 @@ export async function buildPgPortalPlatform(
       }
     }
 
+    // Founder customer-email pilot. The readiness and endpoint seams run on the
+    // CRM command identity because they are Lead 360 actions; the capped
+    // enqueue runs on its own r72_customer_email_command identity and is
+    // composed only when that boundary proves ready.
+    let founderEmailPilot: PgPortalFounderEmailPilotService | undefined;
+    let customerEmailCommand: CustomerEmailLiveCommandService | undefined;
+    const emailWorkspaceId = env.PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_WORKSPACE_ID
+      ?.trim().toLowerCase() ?? '';
+    const emailConnectionId = env.PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_CONNECTION_ID
+      ?.trim().toLowerCase() ?? '';
+    if (PORTAL_UUID.test(emailConnectionId)) {
+      founderEmailPilot = createPgPortalFounderEmailPilotService({
+        webPool,
+        crmCommandPool: commandPool,
+        providerConnectionId: emailConnectionId,
+      });
+    }
+    if (env.DATABASE_CUSTOMER_EMAIL_COMMAND_URL?.trim()
+        && PORTAL_UUID.test(emailWorkspaceId) && PORTAL_UUID.test(emailConnectionId)) {
+      let emailPool: Pool | undefined;
+      try {
+        const emailConfig = requireCutoverIdentity(
+          loadDatabaseConfig('customerEmailCommand', env),
+          'DATABASE_CUSTOMER_EMAIL_COMMAND_URL',
+          'r72_customer_email_command',
+        );
+        emailPool = createDatabasePool(emailConfig);
+        if (expectedInstallationId) {
+          await assertExpectedDatabaseInstallation(emailPool, expectedInstallationId);
+        }
+        await assertCustomerEmailCommandBoundaryReady(emailPool);
+        customerEmailCommand = createPgCustomerEmailLiveCommandService({
+          commandPool: emailPool,
+          workspaceId: emailWorkspaceId,
+          providerConnectionId: emailConnectionId,
+        });
+        pools.push(emailPool);
+      } catch {
+        await emailPool?.end().catch(() => undefined);
+        customerEmailCommand = undefined;
+      }
+    }
+
     let closed = false;
     return {
       auth: new PgPortalAuthService({ readPool: webPool, commandPool: identityPool }),
@@ -802,6 +856,8 @@ export async function buildPgPortalPlatform(
       ownedSeedMessages,
       ownedSocialBinding,
       smsBinding,
+      founderEmailPilot,
+      customerEmailCommand,
       async assertReady(): Promise<void> {
         await Promise.all([
           assertRuntimeSchemaCurrent(webPool),
