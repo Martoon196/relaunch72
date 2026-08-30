@@ -604,6 +604,11 @@ test('Lead 360 SQL stays parameterized, RLS-scoped and outside private payload j
   assert.match(sql, /delivery\.environment = 'live'/);
   assert.match(sql, /app\.communication_consent_events/);
   assert.match(sql, /app\.communication_suppression_events/);
+  assert.match(
+    sql,
+    /SELECT point\.id AS contact_point_id,[\s\S]*WHEN 'email' THEN 'email'[\s\S]*WHEN 'phone' THEN 'sms'[\s\S]*WHEN 'whatsapp' THEN 'whatsapp'[\s\S]*point\.is_verified[\s\S]*point\.dedupe_state = 'normal'/,
+    'verified endpoints are selectable before their first permission event exists',
+  );
   assert.match(sql, /app\.opportunities/);
   assert.match(sql, /app\.tasks/);
   assert.match(sql, /journey\.slug::text IN \(\s*'property-predator-self-serve', 'property-predator-agency-laps'\s*\)/);

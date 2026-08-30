@@ -730,6 +730,22 @@ const CONSENT_SQL = `/* conversion.lead-360.read-consent */
       AND point.contact_id = $1::uuid
       AND point.deleted_at IS NULL
   ), raw_scopes AS (
+    -- A verified endpoint must be visible before its first decision exists;
+    -- otherwise the permission form has no endpoint with which to create that
+    -- first event. Later specific consent/suppression scopes replace this
+    -- purpose-null bootstrap row in the scopes CTE below.
+    SELECT point.id AS contact_point_id,
+           CASE point.kind
+             WHEN 'email' THEN 'email'
+             WHEN 'phone' THEN 'sms'
+             WHEN 'whatsapp' THEN 'whatsapp'
+           END AS channel,
+           NULL::text AS purpose
+    FROM current_points AS point
+    WHERE point.kind IN ('email', 'phone', 'whatsapp')
+      AND point.is_verified
+      AND point.dedupe_state = 'normal'
+    UNION
     SELECT event.contact_point_id, event.channel, event.purpose
     FROM app.communication_consent_events AS event
     JOIN current_points AS point
