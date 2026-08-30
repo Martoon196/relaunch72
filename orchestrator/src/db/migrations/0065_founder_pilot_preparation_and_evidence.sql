@@ -242,7 +242,8 @@ BEGIN
     EXECUTE pg_catalog.format(
       'CREATE POLICY %I ON app.%I FOR SELECT TO r72_founder_pilot_prep_definer
        USING (workspace_id = app_private.current_workspace_id())',
-      'founder_pilot_prep_' || target || '_select', target
+      'fpp_' || pg_catalog.left(target, 24) || '_'
+        || pg_catalog.substr(pg_catalog.md5(target), 1, 8) || '_select', target
     );
   END LOOP;
   FOREACH target IN ARRAY ARRAY[
@@ -254,12 +255,14 @@ BEGIN
     EXECUTE pg_catalog.format(
       'CREATE POLICY %I ON app.%I FOR SELECT TO r72_founder_pilot_prep_definer
        USING (workspace_id = app_private.current_workspace_id())',
-      'founder_pilot_prep_' || target || '_select', target
+      'fpp_' || pg_catalog.left(target, 24) || '_'
+        || pg_catalog.substr(pg_catalog.md5(target), 1, 8) || '_select', target
     );
     EXECUTE pg_catalog.format(
       'CREATE POLICY %I ON app.%I FOR INSERT TO r72_founder_pilot_prep_definer
        WITH CHECK (workspace_id = app_private.current_workspace_id())',
-      'founder_pilot_prep_' || target || '_insert', target
+      'fpp_' || pg_catalog.left(target, 24) || '_'
+        || pg_catalog.substr(pg_catalog.md5(target), 1, 8) || '_insert', target
     );
   END LOOP;
   EXECUTE 'CREATE POLICY founder_pilot_prep_messages_update ON app.messages
@@ -686,7 +689,8 @@ BEGIN
     EXECUTE pg_catalog.format(
       'CREATE POLICY %I ON app.%I FOR SELECT TO r72_founder_pilot_evidence_definer
        USING (workspace_id = app_private.current_workspace_id())',
-      'founder_pilot_evidence_' || target || '_select', target
+      'fpe_' || pg_catalog.left(target, 24) || '_'
+        || pg_catalog.substr(pg_catalog.md5(target), 1, 8) || '_select', target
     );
   END LOOP;
   FOREACH target IN ARRAY ARRAY[
@@ -700,13 +704,15 @@ BEGIN
       'CREATE POLICY %I ON app_private.%I FOR SELECT
        TO r72_founder_pilot_evidence_definer
        USING (workspace_id = app_private.current_workspace_id())',
-      'founder_pilot_evidence_' || target || '_select', target
+      'fpe_' || pg_catalog.left(target, 24) || '_'
+        || pg_catalog.substr(pg_catalog.md5(target), 1, 8) || '_select', target
     );
     EXECUTE pg_catalog.format(
       'CREATE POLICY %I ON app_private.%I FOR INSERT
        TO r72_founder_pilot_evidence_definer
        WITH CHECK (workspace_id = app_private.current_workspace_id())',
-      'founder_pilot_evidence_' || target || '_insert', target
+      'fpe_' || pg_catalog.left(target, 24) || '_'
+        || pg_catalog.substr(pg_catalog.md5(target), 1, 8) || '_insert', target
     );
   END LOOP;
 END

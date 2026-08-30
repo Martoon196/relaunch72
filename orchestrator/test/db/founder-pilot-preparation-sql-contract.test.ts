@@ -357,3 +357,19 @@ test('0065 never records consent, releases a suppression or edits history', asyn
   // And no applied migration is edited: 0065 adds, it does not alter history.
   assert.doesNotMatch(sql, /DROP FUNCTION|DROP TABLE|ALTER TABLE app\.contact_points/);
 });
+
+test('0065 bounds generated policy names before PostgreSQL identifier truncation', async () => {
+  const sql = await migration();
+  assert.equal(
+    (sql.match(/pg_catalog\.left\(target, 24\)/gu) ?? []).length,
+    6,
+  );
+  assert.equal(
+    (sql.match(/pg_catalog\.substr\(pg_catalog\.md5\(target\), 1, 8\)/gu) ?? []).length,
+    6,
+  );
+  assert.doesNotMatch(
+    sql,
+    /'founder_pilot_(?:prep|evidence)_' \|\| target \|\| '_(?:select|insert)'/u,
+  );
+});
