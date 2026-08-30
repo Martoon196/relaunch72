@@ -73,13 +73,13 @@ const NOTICES: Readonly<Record<FounderEmailPilotNoticeCode, FounderEmailPilotNot
     endpoint_replayed: Object.freeze({
       code: 'endpoint_replayed', tone: 'success',
       title: 'Endpoint already attached',
-      message: 'That command key was already used for this exact endpoint, so the '
+      message: 'This exact endpoint was already attached, so the '
         + 'original record stands. Nothing was duplicated.',
     }),
     endpoint_conflict: Object.freeze({
       code: 'endpoint_conflict', tone: 'warning',
-      title: 'Command key conflict',
-      message: 'That command key was already used for a different endpoint. Reload '
+      title: 'This page is out of date',
+      message: 'The action on this page no longer matches the endpoint. Reload '
         + 'the case file and try again. Nothing was changed.',
     }),
     endpoint_invalid: Object.freeze({
@@ -110,14 +110,14 @@ const NOTICES: Readonly<Record<FounderEmailPilotNoticeCode, FounderEmailPilotNot
     pilot_replayed: Object.freeze({
       code: 'pilot_replayed', tone: 'success',
       title: 'Already authorised',
-      message: 'That command key already queued this exact message, so the '
+      message: 'This exact message was already queued, so the '
         + 'original job stands. Nothing was queued twice and nothing was sent.',
     }),
     pilot_conflict: Object.freeze({
       code: 'pilot_conflict', tone: 'warning',
-      title: 'Evidence changed under this command key',
-      message: 'The approved evidence no longer matches what this command key '
-        + 'first authorised. Nothing was queued. Reload the case file to see '
+      title: 'This page is out of date',
+      message: 'The approved evidence changed after this page loaded. Nothing '
+        + 'was queued. Reload the case file to see '
         + 'the current message and authorise that instead.',
     }),
     pilot_blocked: Object.freeze({
@@ -136,8 +136,8 @@ const NOTICES: Readonly<Record<FounderEmailPilotNoticeCode, FounderEmailPilotNot
     pilot_invalid: Object.freeze({
       code: 'pilot_invalid', tone: 'danger',
       title: 'Authorisation refused',
-      message: 'The confirmation, command key or preview was incomplete or '
-        + 'malformed. Nothing was queued and no provider was called.',
+      message: 'This secure action expired or could not be verified. Refresh '
+        + 'the page and try again. Nothing was queued or sent.',
     }),
     pilot_forbidden: Object.freeze({
       code: 'pilot_forbidden', tone: 'danger',
@@ -161,14 +161,14 @@ const NOTICES: Readonly<Record<FounderEmailPilotNoticeCode, FounderEmailPilotNot
     prepare_replayed: Object.freeze({
       code: 'prepare_replayed', tone: 'success',
       title: 'Content already prepared',
-      message: 'That command key already prepared this exact content, so the '
+      message: 'This exact content was already prepared, so the '
         + 'original records stand. Nothing was duplicated.',
     }),
     prepare_conflict: Object.freeze({
       code: 'prepare_conflict', tone: 'warning',
-      title: 'Content changed under this command key',
-      message: 'The endpoint or the approved copy differs from what this key '
-        + 'first prepared. Nothing was written. Reload and prepare again.',
+      title: 'This page is out of date',
+      message: 'The endpoint or approved copy changed after this page loaded. '
+        + 'Nothing was written. Reload and prepare again.',
     }),
     prepare_blocked: Object.freeze({
       code: 'prepare_blocked', tone: 'warning',
@@ -179,8 +179,8 @@ const NOTICES: Readonly<Record<FounderEmailPilotNoticeCode, FounderEmailPilotNot
     prepare_invalid: Object.freeze({
       code: 'prepare_invalid', tone: 'danger',
       title: 'Preparation refused',
-      message: 'The confirmation phrase or command key was incomplete. Nothing '
-        + 'was written and no provider was called.',
+      message: 'This secure action expired or could not be verified. Refresh '
+        + 'the page and try again. Nothing was prepared or sent.',
     }),
     prepare_forbidden: Object.freeze({
       code: 'prepare_forbidden', tone: 'danger',
@@ -204,12 +204,12 @@ const NOTICES: Readonly<Record<FounderEmailPilotNoticeCode, FounderEmailPilotNot
     policy_replayed: Object.freeze({
       code: 'policy_replayed', tone: 'success',
       title: 'Review already recorded',
-      message: 'That command key already recorded this exact review, so the '
+      message: 'This exact review was already recorded, so the '
         + 'original decisions stand. Nothing was recorded twice.',
     }),
     policy_conflict: Object.freeze({
       code: 'policy_conflict', tone: 'warning',
-      title: 'Evidence changed under this command key',
+      title: 'This page is out of date',
       message: 'The policy, the approved copy or the send this review binds to '
         + 'has changed. Nothing was recorded. Reload and review the current '
         + 'facts instead.',
@@ -223,8 +223,8 @@ const NOTICES: Readonly<Record<FounderEmailPilotNoticeCode, FounderEmailPilotNot
     policy_invalid: Object.freeze({
       code: 'policy_invalid', tone: 'danger',
       title: 'Review refused',
-      message: 'The confirmation phrase or command key was incomplete. Nothing '
-        + 'was recorded and no provider was called.',
+      message: 'This secure action expired or could not be verified. Refresh '
+        + 'the page and try again. Nothing was recorded or sent.',
     }),
     policy_forbidden: Object.freeze({
       code: 'policy_forbidden', tone: 'danger',
@@ -341,6 +341,85 @@ export const EMAIL_PILOT_POLICY_FORM_KEYS: readonly string[] = Object.freeze([
 ]);
 
 /**
+ * Browser-safe preparation token.
+ *
+ * The production browser can legitimately suppress hidden input values. A
+ * session-bound signed token on the submit button carries the same tuple
+ * without weakening CSRF or allowing a browser to assert evidence. The token
+ * is short lived, names exactly one preparation act, and is useless outside
+ * the session for which it was minted.
+ */
+export const EMAIL_PILOT_STEP_TOKEN_FORM_KEYS: readonly string[] = Object.freeze([
+  'step_token',
+  'confirm_prepare',
+  'confirm_policy',
+]);
+
+export type FounderEmailPilotStep = 'prepare' | 'policy';
+
+export interface FounderEmailPilotStepClaims {
+  readonly step: FounderEmailPilotStep;
+  readonly commandKey: string;
+  readonly contactId: string;
+  readonly contactPointId: string;
+  readonly purpose: string;
+  readonly expiresAt: string;
+}
+
+export const EMAIL_PILOT_STEP_TOKEN_TTL_MS = 15 * 60 * 1000;
+
+const STEP_CONTEXT = 'property-predator:founder-email-pilot-step:v1\0';
+const STEP_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const STEP_PURPOSE = /^[a-z][a-z0-9_.-]{0,99}$/u;
+
+function stepMac(secret: string, sessionToken: string, payload: string): string {
+  return createHmac('sha256', secret)
+    .update(STEP_CONTEXT).update(sessionToken).update('\0').update(payload)
+    .digest('base64url');
+}
+
+export function founderEmailPilotStepToken(
+  secret: string,
+  sessionToken: string,
+  claims: FounderEmailPilotStepClaims,
+): string {
+  const payload = Buffer.from([
+    claims.step, claims.commandKey, claims.contactId, claims.contactPointId,
+    claims.purpose, claims.expiresAt,
+  ].join('\0'), 'utf8').toString('base64url');
+  return `${payload}.${stepMac(secret, sessionToken, payload)}`;
+}
+
+export function founderEmailPilotStepClaims(
+  token: string,
+  secret: string,
+  sessionToken: string,
+  now: number,
+): FounderEmailPilotStepClaims | null {
+  if (typeof token !== 'string' || token.length > 1_024) return null;
+  const separator = token.lastIndexOf('.');
+  if (separator <= 0) return null;
+  const payload = token.slice(0, separator);
+  const supplied = Buffer.from(token.slice(separator + 1), 'utf8');
+  const expected = Buffer.from(stepMac(secret, sessionToken, payload), 'utf8');
+  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return null;
+  const parts = Buffer.from(payload, 'base64url').toString('utf8').split('\0');
+  if (parts.length !== 6) return null;
+  const [step, commandKey, contactId, contactPointId, purpose, expiresAt] = parts as [
+    string, string, string, string, string, string,
+  ];
+  if ((step !== 'prepare' && step !== 'policy')
+      || !STEP_UUID.test(commandKey) || !STEP_UUID.test(contactId)
+      || !STEP_UUID.test(contactPointId) || !STEP_PURPOSE.test(purpose)) return null;
+  const expiry = Date.parse(expiresAt);
+  if (!Number.isFinite(expiry) || new Date(expiry).toISOString() !== expiresAt
+      || expiry <= now || expiry > now + EMAIL_PILOT_STEP_TOKEN_TTL_MS) return null;
+  return Object.freeze({
+    step, commandKey, contactId, contactPointId, purpose, expiresAt,
+  });
+}
+
+/**
  * How long a preview stays authorisable.
  *
  * The enqueue refuses an authority more than fifteen minutes out, and a
@@ -353,6 +432,12 @@ const PREVIEW_CONTEXT = 'property-predator:founder-email-pilot-preview:v1\0';
 
 export interface FounderEmailPilotPreviewClaims {
   readonly commandKey: string;
+  /** Present on browser-safe action tokens; absent only on legacy tokens. */
+  readonly contactId?: string;
+  /** Present on browser-safe action tokens; absent only on legacy tokens. */
+  readonly contactPointId?: string;
+  /** Present on browser-safe action tokens; absent only on legacy tokens. */
+  readonly purpose?: string;
   /** Canonical ISO instant the authority expires, folded into the enqueue digest. */
   readonly authorityValidUntil: string;
   /** Digest of the exact evidence, recipient, subject and body that were shown. */
@@ -381,10 +466,11 @@ export function founderEmailPilotPreviewToken(
   sessionToken: string,
   claims: FounderEmailPilotPreviewClaims,
 ): string {
-  const payload = Buffer.from(
-    [claims.commandKey, claims.authorityValidUntil, claims.evidenceDigest].join('\0'),
-    'utf8',
-  ).toString('base64url');
+  const values = [claims.commandKey, claims.authorityValidUntil, claims.evidenceDigest];
+  if (claims.contactId && claims.contactPointId && claims.purpose) {
+    values.push(claims.contactId, claims.contactPointId, claims.purpose);
+  }
+  const payload = Buffer.from(values.join('\0'), 'utf8').toString('base64url');
   return `${payload}.${previewMac(secret, sessionToken, payload)}`;
 }
 
@@ -404,7 +490,7 @@ export function founderEmailPilotPreviewClaims(
   sessionToken: string,
   now: number,
 ): FounderEmailPilotPreviewClaims | null {
-  if (typeof token !== 'string' || token.length > 512) return null;
+  if (typeof token !== 'string' || token.length > 1_024) return null;
   const separator = token.lastIndexOf('.');
   if (separator <= 0) return null;
   const payload = token.slice(0, separator);
@@ -413,9 +499,15 @@ export function founderEmailPilotPreviewClaims(
   if (supplied.length !== expected.length) return null;
   if (!timingSafeEqual(supplied, expected)) return null;
   const parts = Buffer.from(payload, 'base64url').toString('utf8').split('\0');
-  if (parts.length !== 3) return null;
+  if (parts.length !== 3 && parts.length !== 6) return null;
   const [commandKey, authorityValidUntil, evidenceDigest] = parts as [string, string, string];
+  const contactId = parts[3];
+  const contactPointId = parts[4];
+  const purpose = parts[5];
   if (!TOKEN_UUID.test(commandKey) || !SHA256.test(evidenceDigest)) return null;
+  if (parts.length === 6 && (
+    !TOKEN_UUID.test(contactId!) || !TOKEN_UUID.test(contactPointId!) || !STEP_PURPOSE.test(purpose!)
+  )) return null;
   const expiry = Date.parse(authorityValidUntil);
   if (!Number.isFinite(expiry)
       || new Date(expiry).toISOString() !== authorityValidUntil) {
@@ -423,5 +515,10 @@ export function founderEmailPilotPreviewClaims(
   }
   // Expired, or minted with a window this build would never issue.
   if (expiry <= now || expiry > now + EMAIL_PILOT_PREVIEW_TTL_MS) return null;
-  return Object.freeze({ commandKey, authorityValidUntil, evidenceDigest });
+  return Object.freeze({
+    commandKey,
+    authorityValidUntil,
+    evidenceDigest,
+    ...(parts.length === 6 ? { contactId, contactPointId, purpose } : {}),
+  });
 }

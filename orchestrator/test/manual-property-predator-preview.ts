@@ -1883,7 +1883,8 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
           // Neither step done, so both confirmation forms render here. The
           // recipient is the fixture endpoint; no address is written in source.
           pilotPreparation: {
-            commandKey: randomUUID(),
+            prepareToken: 'prepare-step-token-fixture',
+            policyToken: 'policy-step-token-fixture',
             contactPointId: randomUUID(),
             purpose: 'property_predator_marketing',
             recipientEmail: 'office@example.test',
@@ -1899,9 +1900,6 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
             policyClauses: FOUNDER_PILOT_POLICY_CLAUSES,
           },
           pilotAuthorisation: {
-            commandKey: randomUUID(),
-            contactPointId: randomUUID(),
-            purpose: 'property_predator_marketing',
             recipientEmail: 'office@example.test',
             subject: 'Your Property Predator briefing is ready',
             bodyText: 'Hi there,\n\nYour Predator Briefing is ready to read, and it '

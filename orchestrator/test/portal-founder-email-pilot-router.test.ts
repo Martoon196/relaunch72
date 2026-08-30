@@ -18,6 +18,7 @@ import {
   EMAIL_PILOT_PREPARE_ROUTE,
   founderEmailPilotNoticeToken,
   founderEmailPilotPreviewToken,
+  founderEmailPilotStepToken,
   type FounderEmailPilotNoticeCode,
 } from '../src/portal/founder-email-pilot-actions.js';
 import {
@@ -422,6 +423,56 @@ test('authorising passes the exact verified preview claims to the enqueue seam',
   assert.equal(call1?.operatorConfirmed, true);
 });
 
+test('the signed send button submits the complete action without hidden fields or a magic phrase', async () => {
+  const pilot = new FakePilot();
+  const previewToken = founderEmailPilotPreviewToken(SECRET, SESSION, {
+    commandKey: PILOT_COMMAND_KEY,
+    authorityValidUntil: AUTHORITY_VALID_UNTIL,
+    evidenceDigest: EVIDENCE_DIGEST,
+    contactId: CONTACT_ID,
+    contactPointId: POINT_ID,
+    purpose: 'property_predator_marketing',
+  });
+  const res = await call(
+    'POST', EMAIL_PILOT_AUTHORISE_ROUTE, deps({ founderEmailPilot: pilot }),
+    new URLSearchParams({ preview_token: previewToken }).toString(),
+  );
+  assert.equal(noticeOf(res), founderEmailPilotNoticeToken(SECRET, SESSION, 'pilot_queued'));
+  assert.equal(pilot.authoriseCalls.length, 1);
+  assert.equal(pilot.authoriseCalls[0]?.contactId, CONTACT_ID);
+  assert.equal(pilot.authoriseCalls[0]?.contactPointId, POINT_ID);
+  assert.equal(pilot.authoriseCalls[0]?.purpose, 'property_predator_marketing');
+});
+
+test('the signed send button rejects another session and extra browser fields', async () => {
+  const token = founderEmailPilotPreviewToken(SECRET, OTHER_SESSION, {
+    commandKey: PILOT_COMMAND_KEY,
+    authorityValidUntil: AUTHORITY_VALID_UNTIL,
+    evidenceDigest: EVIDENCE_DIGEST,
+    contactId: CONTACT_ID,
+    contactPointId: POINT_ID,
+    purpose: 'property_predator_marketing',
+  });
+  for (const body of [
+    new URLSearchParams({ preview_token: token }).toString(),
+    new URLSearchParams({
+      preview_token: founderEmailPilotPreviewToken(SECRET, SESSION, {
+        commandKey: PILOT_COMMAND_KEY,
+        authorityValidUntil: AUTHORITY_VALID_UNTIL,
+        evidenceDigest: EVIDENCE_DIGEST,
+        contactId: CONTACT_ID,
+        contactPointId: POINT_ID,
+        purpose: 'property_predator_marketing',
+      }),
+      smuggled: '1',
+    }).toString(),
+  ]) {
+    const pilot = new FakePilot();
+    await call('POST', EMAIL_PILOT_AUTHORISE_ROUTE, deps({ founderEmailPilot: pilot }), body);
+    assert.deepEqual(pilot.authoriseCalls, []);
+  }
+});
+
 test('a replay reports the original job rather than a second send', async () => {
   const pilot = new FakePilot();
   pilot.authoriseOutcome = {
@@ -539,7 +590,10 @@ test('the case file shows the exact subject and full body before authorising', a
   assert.match(res.body, /Your briefing is ready\. &lt;not markup&gt;/);
   assert.match(res.body, /v3, approved/);
   assert.match(res.body, /v2, approved/);
-  assert.match(res.body, new RegExp(EMAIL_PILOT_CONFIRM_VALUE));
+  assert.match(res.body, />Send this email now<\/button>/);
+  assert.match(res.body, /name="preview_token" value="[^"]+"/);
+  assert.doesNotMatch(res.body, /name="confirm_send"/);
+  assert.doesNotMatch(res.body, /type="hidden" name="preview_token"/);
 });
 
 test('an unresolved tuple offers no send, only the blockers', async () => {
@@ -589,6 +643,21 @@ const prepareForm = (o: Record<string, string> = {}) =>
 const policyForm = (o: Record<string, string> = {}) =>
   stepForm('confirm_policy', EMAIL_PILOT_POLICY_CONFIRM_VALUE, o);
 
+function signedStepForm(
+  step: 'prepare' | 'policy',
+  overrides: Record<string, string> = {},
+): string {
+  const token = founderEmailPilotStepToken(SECRET, SESSION, {
+    step,
+    commandKey: PILOT_COMMAND_KEY,
+    contactId: CONTACT_ID,
+    contactPointId: POINT_ID,
+    purpose: 'property_predator_marketing',
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+  });
+  return new URLSearchParams({ step_token: token, ...overrides }).toString();
+}
+
 function noticeOf(res: { headers: Record<string, string> }): string | null {
   return new URL(res.headers.location ?? '', 'https://portal.test')
     .searchParams.get('notice');
@@ -611,6 +680,42 @@ test('both preparation steps pass the resolved endpoint and never a typed addres
   assert.equal(noticeOf(recorded), founderEmailPilotNoticeToken(SECRET, SESSION, 'policy_recorded'));
   assert.equal(pilot.policyCalls.length, 1);
   assert.equal(pilot.policyCalls[0]?.contactPointId, POINT_ID);
+});
+
+test('signed preparation buttons work without hidden fields or typed phrases', async () => {
+  const pilot = new FakePilot();
+  const prepared = await call(
+    'POST', EMAIL_PILOT_PREPARE_ROUTE, deps({ founderEmailPilot: pilot }),
+    signedStepForm('prepare'),
+  );
+  assert.equal(noticeOf(prepared), founderEmailPilotNoticeToken(SECRET, SESSION, 'prepare_done'));
+  const policy = await call(
+    'POST', EMAIL_PILOT_POLICY_ROUTE, deps({ founderEmailPilot: pilot }),
+    signedStepForm('policy'),
+  );
+  assert.equal(noticeOf(policy), founderEmailPilotNoticeToken(SECRET, SESSION, 'policy_recorded'));
+  assert.equal(pilot.prepareCalls.length, 1);
+  assert.equal(pilot.policyCalls.length, 1);
+});
+
+test('signed preparation actions are session-bound, step-bound and reject extra fields', async () => {
+  const wrongSession = founderEmailPilotStepToken(SECRET, OTHER_SESSION, {
+    step: 'prepare', commandKey: PILOT_COMMAND_KEY, contactId: CONTACT_ID,
+    contactPointId: POINT_ID, purpose: 'property_predator_marketing',
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+  });
+  for (const body of [
+    new URLSearchParams({ step_token: wrongSession }).toString(),
+    signedStepForm('policy'),
+    signedStepForm('prepare', { smuggled: '1' }),
+  ]) {
+    const pilot = new FakePilot();
+    const res = await call(
+      'POST', EMAIL_PILOT_PREPARE_ROUTE, deps({ founderEmailPilot: pilot }), body,
+    );
+    assert.deepEqual(pilot.prepareCalls, []);
+    assert.match(res.headers.location ?? '', /^\/portal\/crm\/contacts/);
+  }
 });
 
 test('neither preparation step accepts a hash, id or evidence reference', async () => {
@@ -768,9 +873,19 @@ test('the case file shows the complete policy, recipient, subject and body', asy
   assert.match(res.body, new RegExp(`action="${EMAIL_PILOT_POLICY_ROUTE}"`));
   assert.match(res.body, /Not yet · approved content/);
   assert.match(res.body, /Not yet · compliance review/);
-  // Both phrases, exactly as typed.
-  assert.match(res.body, new RegExp(EMAIL_PILOT_PREPARE_CONFIRM_VALUE));
-  assert.match(res.body, new RegExp(EMAIL_PILOT_POLICY_CONFIRM_VALUE));
+  assert.match(res.body, />Prepare approved email<\/button>/);
+  assert.match(res.body, />Record compliance review<\/button>/);
+  const prepareHtml = res.body.match(new RegExp(
+    `<form[^>]+action="${EMAIL_PILOT_PREPARE_ROUTE}"[\\s\\S]*?<\\/form>`,
+  ))?.[0] ?? '';
+  const policyHtml = res.body.match(new RegExp(
+    `<form[^>]+action="${EMAIL_PILOT_POLICY_ROUTE}"[\\s\\S]*?<\\/form>`,
+  ))?.[0] ?? '';
+  for (const formHtml of [prepareHtml, policyHtml]) {
+    assert.match(formHtml, /name="step_token" value="[^"]+"/);
+    assert.doesNotMatch(formHtml, /type="hidden"/);
+    assert.doesNotMatch(formHtml, /name="confirm_(prepare|policy)"/);
+  }
   // The recipient resolved from the endpoint, and the exact approved copy.
   assert.match(res.body, /office@example\.test/);
   assert.match(res.body, /Property Predator Growth HQ — founder delivery proof/);

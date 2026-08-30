@@ -15,10 +15,7 @@ import {
   CONTACT_ENDPOINT_CONFIRM_VALUE,
   CONTACT_ENDPOINT_ATTACH_ROUTE,
   EMAIL_PILOT_AUTHORISE_ROUTE,
-  EMAIL_PILOT_CONFIRM_VALUE,
-  EMAIL_PILOT_POLICY_CONFIRM_VALUE,
   EMAIL_PILOT_POLICY_ROUTE,
-  EMAIL_PILOT_PREPARE_CONFIRM_VALUE,
   EMAIL_PILOT_PREPARE_ROUTE,
 } from './founder-email-pilot-actions.js';
 
@@ -87,7 +84,9 @@ export interface Lead360PilotReadinessView {
  * go into the ledger rather than a summary of them.
  */
 export interface Lead360PilotPreparationView {
-  readonly commandKey: string;
+  /** Session-bound action tokens submitted by the buttons, not hidden inputs. */
+  readonly prepareToken: string;
+  readonly policyToken: string;
   readonly contactPointId: string;
   readonly purpose: string;
   readonly recipientEmail: string;
@@ -108,9 +107,6 @@ export interface Lead360PilotPreparationView {
 
 /** The exact resolved message, shown in full before a founder authorises it. */
 export interface Lead360PilotAuthorisationView {
-  readonly commandKey: string;
-  readonly contactPointId: string;
-  readonly purpose: string;
   readonly recipientEmail: string;
   readonly subject: string;
   readonly bodyText: string;
@@ -563,10 +559,9 @@ function pilotReadinessPanel(options: Lead360RenderOptions): string {
 /**
  * The two preparation steps, with everything each will record.
  *
- * Both forms carry only a command key, the contact, the endpoint, the purpose
- * and a typed phrase. There is deliberately no field for a hash, an identifier
- * or an evidence reference: all of those are derived from the deployed policy
- * asset and the resolved records, where a browser cannot reach them.
+ * Each button carries one short-lived, session-bound action token. Contact and
+ * evidence references are derived and verified server-side, where a browser
+ * cannot alter them.
  */
 function pilotPreparationPanel(
   view: Lead360View,
@@ -575,28 +570,18 @@ function pilotPreparationPanel(
   const preparation = options.pilotPreparation;
   if (!preparation) return '';
   const head = '<div class="lead360-section-head"><div><div class="lead360-section-label">Founder pilot</div><h2 id="lead360-prepare">Prepare and review this pilot</h2></div></div>';
-  const csrf = escapeHtml(options.csrfToken ?? '');
-  const hidden = `<input type="hidden" name="_csrf" value="${csrf}">`
-    + `<input type="hidden" name="command_key" value="${escapeHtml(preparation.commandKey)}">`
-    + `<input type="hidden" name="contact_id" value="${escapeHtml(view.identity.contactId)}">`
-    + `<input type="hidden" name="contact_point_id" value="${escapeHtml(preparation.contactPointId)}">`
-    + `<input type="hidden" name="purpose" value="${escapeHtml(preparation.purpose)}">`;
   const step = (done: boolean, label: string): string => (done
     ? `<span class="lead360-pilot-step is-done">Done · ${escapeHtml(label)}</span>`
     : `<span class="lead360-pilot-step">Not yet · ${escapeHtml(label)}</span>`);
   const contentForm = preparation.contentPrepared
     ? '<p class="lead360-pilot-clear">The approved campaign version, step, message and both approvals are recorded for this endpoint.</p>'
     : `<form method="post" action="${EMAIL_PILOT_PREPARE_ROUTE}" autocomplete="off">
-        ${hidden}
-        <label class="lead360-field"><span>Type <b>${EMAIL_PILOT_PREPARE_CONFIRM_VALUE}</b> to confirm</span><input type="text" name="confirm_prepare" required maxlength="40" autocomplete="off"></label>
-        <button class="lead360-permission-button" type="submit">Prepare approved content</button>
+        <button class="lead360-permission-button" type="submit" name="step_token" value="${escapeHtml(preparation.prepareToken)}">Prepare approved email</button>
       </form>`;
   const policyForm = preparation.policyRecorded
     ? '<p class="lead360-pilot-clear">The founder and operator compliance review is recorded, with ownership and control evidence marked unchecked.</p>'
     : `<form method="post" action="${EMAIL_PILOT_POLICY_ROUTE}" autocomplete="off">
-        ${hidden}
-        <label class="lead360-field"><span>Type <b>${EMAIL_PILOT_POLICY_CONFIRM_VALUE}</b> to confirm</span><input type="text" name="confirm_policy" required maxlength="40" autocomplete="off"></label>
-        <button class="lead360-permission-button" type="submit">Record founder compliance review</button>
+        <button class="lead360-permission-button" type="submit" name="step_token" value="${escapeHtml(preparation.policyToken)}">Record compliance review</button>
       </form>`;
   return `<section class="lead360-section" aria-labelledby="lead360-prepare">${head}
     <div class="lead360-permission-body">
@@ -634,13 +619,12 @@ function pilotPreparationPanel(
  * able to see that the portal is not paraphrasing.
  */
 function pilotAuthorisationPanel(
-  view: Lead360View,
+  _view: Lead360View,
   options: Lead360RenderOptions,
 ): string {
   const authorisation = options.pilotAuthorisation;
   if (!authorisation) return '';
   const head = '<div class="lead360-section-head"><div><div class="lead360-section-label">Founder pilot</div><h2 id="lead360-authorise">Authorise this exact send</h2></div></div>';
-  const csrf = escapeHtml(options.csrfToken ?? '');
   return `<section class="lead360-section" aria-labelledby="lead360-authorise">${head}
     <div class="lead360-permission-body">
       <p>Every piece of evidence the capped rail requires resolved. Read the message below: this is exactly what would be queued, to exactly this address.</p>
@@ -654,14 +638,7 @@ function pilotAuthorisationPanel(
       <h3 class="lead360-pilot-subhead">Full message body</h3>
       <pre class="lead360-pilot-body">${escapeHtml(authorisation.bodyText)}</pre>
       <form method="post" action="${EMAIL_PILOT_AUTHORISE_ROUTE}" autocomplete="off">
-        <input type="hidden" name="_csrf" value="${csrf}">
-        <input type="hidden" name="command_key" value="${escapeHtml(authorisation.commandKey)}">
-        <input type="hidden" name="contact_id" value="${escapeHtml(view.identity.contactId)}">
-        <input type="hidden" name="contact_point_id" value="${escapeHtml(authorisation.contactPointId)}">
-        <input type="hidden" name="purpose" value="${escapeHtml(authorisation.purpose)}">
-        <input type="hidden" name="preview_token" value="${escapeHtml(authorisation.previewToken)}">
-        <label class="lead360-field"><span>Type <b>${EMAIL_PILOT_CONFIRM_VALUE}</b> to confirm</span><input type="text" name="confirm_send" required maxlength="20" autocomplete="off"></label>
-        <button class="lead360-permission-button" type="submit">Authorise and queue this message</button>
+        <button class="lead360-permission-button" type="submit" name="preview_token" value="${escapeHtml(authorisation.previewToken)}">Send this email now</button>
       </form>
       <p class="lead360-permission-note">This queues one job on the capped rail. It does not call Mailgun: the existing worker owns dispatch and the signed receipt lands in the Conversion Inbox. Submitting twice replays the same job rather than sending twice.</p>
     </div>
