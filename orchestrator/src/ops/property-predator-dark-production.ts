@@ -24,7 +24,9 @@ export function propertyPredatorDarkProductionBlockers(
   exact('BILLING_ENFORCED', 'false', 'Billing enforcement');
   exact('PORTAL_DEMO_SEED', 'false', 'Portal demo seed');
   exact('RELAUNCH72_FORCE_MOCK_BUILDS', 'true', 'Build execution');
-  exact('PROPERTY_PREDATOR_EXTERNAL_EVENTS_ENABLED', 'false', 'External source events');
+  // The signed Property Predator bridge is inbound-only. Its own loader,
+  // dedicated database identities and HMAC boundary fail closed, so enabling
+  // it is not a provider effect and must not trip the outbound safety policy.
   exact(
     'PORTAL_BASE_URL',
     'https://hq.propertypredator.com',

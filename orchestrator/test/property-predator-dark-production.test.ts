@@ -41,18 +41,23 @@ test('dark production policy requires every irreversible rail to remain exact lo
     BILLING_ENFORCED: 'true',
     PORTAL_DEMO_SEED: 'true',
     RELAUNCH72_FORCE_MOCK_BUILDS: 'false',
-    PROPERTY_PREDATOR_EXTERNAL_EVENTS_ENABLED: 'true',
     PORTAL_BASE_URL: 'https://attacker.example',
     PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID: 'not-a-uuid',
     PROPERTY_PREDATOR_MAILGUN_WEBHOOK_ENABLED: 'false',
     MAILGUN_WEBHOOK_SIGNATURE_VERIFICATION_ENABLED: 'false',
   }));
-  assert.equal(unsafe.length, 13);
+  assert.equal(unsafe.length, 12);
   assert.match(unsafe.join(' '), /Provider effects/);
   assert.match(unsafe.join(' '), /Email emergency pause/);
   assert.match(unsafe.join(' '), /Portal demo seed/);
   assert.match(unsafe.join(' '), /Canonical Growth HQ origin/);
   assert.match(unsafe.join(' '), /Database installation identity/);
+});
+
+test('dark production policy permits the authenticated inbound event receiver', () => {
+  assert.deepEqual(propertyPredatorDarkProductionBlockers(locked({
+    PROPERTY_PREDATOR_EXTERNAL_EVENTS_ENABLED: 'true',
+  })), []);
 });
 
 test('public web readiness rejects every privileged credential from another process', () => {
