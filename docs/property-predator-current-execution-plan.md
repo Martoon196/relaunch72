@@ -236,6 +236,12 @@ Commercial signup, app review and account-verification lead times can run in par
 - Production migrations remain forward-only. No production reset, destructive rewrite or silent customer import is part of this plan.
 - Paid ads remain paused drafts; payments and spend activation are separate authorities.
 - Emergency pauses, volume/spend caps, suppressions, consent and least-privilege credentials remain part of the product, not temporary launch scaffolding.
+- The customer-email `10/day` and `50/month` limits are temporary founder-pilot
+  controls, not commercial throughput limits. After the first signed
+  send/receipt/reply/opt-out rehearsal and its observation window, graduate or
+  remove those aggregate caps in a forward migration while retaining
+  per-recipient consent, suppression, idempotency, outcome-unknown quarantine
+  and operator pause controls.
 
 ## Verification economy and master-rehearsal rule
 
@@ -319,13 +325,13 @@ not itself authorise deployment, migration or provider effects.
 
 | Rail | Build position | Exact remaining external/owned proof |
 |---|---|---|
-| Customer email | Mailgun EU configured; production schema 63/63; Growth HQ live at `32a6366`; exact command/worker/webhook identities and Render bindings proven; 10/day and 50/month caps | No new Mailgun account. Use the founder as the sole pilot customer and supply the exact `office@propertypredator.com` person/endpoint, current consent and suppression-clear evidence, approved message/version hash and operator/connection IDs. Then authorise one owned-mailbox send and signed receipt/reply proof as a separate effect. |
+| Customer email | Mailgun EU configured; production schema 65/65; Growth HQ web and the isolated customer-email worker live at `8b066e6`; provider credential loaded, signed receipts confirmed and dispatch active; temporary 10/day and 50/month founder-pilot caps | No new Mailgun account. Use only the founder-controlled `martin.howard1984@gmail.com` endpoint for the first proof, with the founder's written consent, suppression-clear evidence and the exact Lead 360 prepared/approved message. Complete one signed send/receipt/reply proof, observe it, then graduate or remove the aggregate pilot caps without weakening per-recipient controls. |
 | Meta WhatsApp | Command, one-at-a-time worker, challenge/webhook and Inbox receipt path composed | Verified Meta Business, App ID, WABA ID, phone-number ID, worker-only encrypted access-token binding, webhook-only app secret/verify token, one founder-owned UK recipient, and one approved **parameter-free** Property Predator test template. |
 | Owned X social | Ayrshare worker, cap fence, receipt projection and founder-only bind/revoke/readiness-gated staging workflow composed; no provider call is reachable from the portal commands | Ayrshare API key, exact linked Property Predator-owned X profile and Profile Key, X OAuth1 key/secret, 32-byte profile-encryption key/version, connection UUID, read-write OAuth/ownership evidence, and one approved link-free test post/hash. |
 | Twilio UK SMS | Command, one-at-a-time worker, signed inbound/status webhook, Inbox receipt path and founder-only bind/revoke/readiness-gated staging workflow composed; migration `0061` is applied in production | Twilio Account SID, restricted API key SID/secret, Messaging Service SID, approved UK regulatory bundle, owned UK sender, webhook auth token, and one founder-owned UK recipient plus approved message/consent/suppression evidence. |
 | Facebook/Instagram DMs | Unified Inbox projection exists; live adapter is intentionally reported `not-composed` | Owned Page and Instagram professional account, Meta app review/permissions and signed webhook subscription **after** the dedicated live inbound/reply adapter is built. |
 | Founder event bridge | Dedicated HMAC receiver, two least-privilege Growth HQ database identities, isolated Property Predator dispatcher and additive immutable outbox are live; founder fresh/replay proof is 1 receipt, 1 Growth projection, 1 Journey projection and 1 delivery attempt | No remaining code or account input for account-created events. Add future event types only when a real founder workflow supplies the authoritative source fact. |
-| Database proof | Production Growth HQ ledger is 63/63 and runtime-ready; Property Predator conversion data-plane has a recoverable pre-migration checkpoint and its live immutable one-event proof passed. Static/disposable contracts remain retained for the release-wide rehearsal | Run the final clean disposable-Neon reset/attack sweep through the complete ledger during the Sol Ultra master rehearsal. Production must never be the disposable attack-proof target. |
+| Database proof | Production Growth HQ ledger is 65/65 and runtime-ready; migrations 0064-0065 passed a clean disposable-Neon apply and hostile-role proof before production. Property Predator conversion data-plane has a recoverable pre-migration checkpoint and its live immutable one-event proof passed. | Run the final clean disposable-Neon reset/attack sweep through the complete ledger during the Sol Ultra master rehearsal. Production must never be the disposable attack-proof target. |
 
 ## Immediate move
 
@@ -333,7 +339,7 @@ Begin the customer experience with the founder as the sole production pilot:
 
 1. Sign in through the real Growth HQ customer journey and confirm the exact
    production workspace and founder/operator identity.
-2. Create or resolve the founder-owned `office@propertypredator.com` person and
+2. Create or resolve the founder-controlled `martin.howard1984@gmail.com` person and
    endpoint, then record current consent and suppression-clear evidence.
 3. Review and approve one exact customer-email version in the existing content
    workflow and retain its approval ID and message digest.
