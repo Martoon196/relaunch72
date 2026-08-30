@@ -1,8 +1,8 @@
 # Property Predator — current execution plan
 
-**Authoritative execution snapshot:** 29 August 2026
+**Authoritative execution snapshot:** 30 August 2026
 
-**Growth HQ baseline:** `codex/relaunch72-platform-foundation` at `14970cc`; production migration ledger `60/60` (forward migrations `0061` and `0062` are reviewed on the branch and deliberately unapplied; `0062` repairs the `r72_web` Conversion Inbox read boundary and is required before `/portal/inbox` serves live rails); Growth HQ release live with provider effects OFF, delivery OFF and emergency pause ON
+**Growth HQ baseline:** `codex/relaunch72-platform-foundation` at `32a6366`; production migration ledger `63/63`; Growth HQ is live and ready, the founder-only Property Predator event bridge is enabled and proven, and no customer communication rail has been activated
 **Purpose:** one truthful sequence from the current foundation to an operational Property Predator marketing and conversion system.
 
 This document supersedes older roadmap prose for **current status, priority and sequencing**. Older handoffs, provider notes, security designs and deployment runbooks remain useful evidence, but their status labels must not be read as the present plan.
@@ -17,7 +17,7 @@ Growth HQ owns the people, attribution, consent, content, approvals, conversatio
 
 ## Foundation already completed
 
-- The production Blueprint composes Growth HQ plus isolated email, owned-social, WhatsApp and Twilio SMS workers/webhooks. Growth HQ `14970cc` is live; provider-effect services remain isolated and locked.
+- The production Blueprint composes Growth HQ plus isolated email, owned-social, WhatsApp and Twilio SMS workers/webhooks. Growth HQ `32a6366` is live; customer communication effects remain separately permission-bound.
 - Shared Property Predator login, workspace isolation, role boundaries and security controls are established.
 - CRM, Journey Board, automatic journey evidence, lead scoring and Lead 360 foundations exist.
 - Brand Brain, owned-specialist reuse, company-content adapter, immutable content versions, approvals and Campaign Wizard foundations exist.
@@ -86,6 +86,31 @@ Growth HQ owns the people, attribution, consent, content, approvals, conversatio
   pause remains ON.
 
 These are foundations, not proof of a complete operating loop. The next ten strikes supply that proof.
+
+### Founder identity event bridge proof — 30 August 2026
+
+- Growth HQ migrations `0061`–`0063` are applied in EU production, `/ready`
+  reports no blockers, and the Conversion Inbox now serves its authoritative
+  empty state instead of failing closed.
+- The dedicated signed Property Predator receiver and least-privilege database
+  identities are live at `32a6366`. The isolated Property Predator dispatcher
+  is live at `52cffa8` on the approved 0.5 CPU / 512 MB Render worker.
+- A recoverable Property Predator production Neon checkpoint was created as
+  `pre-conversion-data-plane-20260830` (`br-quiet-hat-abumklct`) before the
+  additive conversion outbox/export schema and immutable-event trigger were
+  applied. Production verification returned 5 required tables, 5 indexes, 1
+  immutable trigger, sequence high-water 0 and 0 queued events before proof.
+- Only founder account `7fba8186-9fa5-4c87-9511-263d887b07ca` was reconciled.
+  Event `5786bc2a-0e03-584d-a989-a218b1c74ddc` delivered once with no error or
+  retry. An exact rerun returned `replayed` for the same event; the source still
+  held exactly 1 row and 1 delivery attempt.
+- Growth HQ persisted exactly 1 signed receipt, 1 Growth projection and 1
+  Journey projection. Lead 360 shows the founder's real account-created evidence
+  and evaluation time, and the Journey Board links the same contact and Lead
+  stage. Conversion Inbox correctly remains empty because account creation is
+  not a message thread.
+- No email, SMS, WhatsApp message or social publication occurred, and no other
+  Property Predator account was reconciled.
 
 ### Prepared Campaign Machine candidate — not deployed
 
@@ -294,12 +319,13 @@ not itself authorise deployment, migration or provider effects.
 
 | Rail | Build position | Exact remaining external/owned proof |
 |---|---|---|
-| Customer email | Mailgun EU configured; production schema 60/60; Growth HQ live at `14970cc`; exact command/worker/webhook identities and Render bindings proven; effects OFF, delivery OFF, receipts OFF and emergency pause ON; 10/day and 50/month caps; zero authorities/jobs/leases/receipts | No new Mailgun account. Use the founder as the sole pilot customer and supply the exact `office@propertypredator.com` person/endpoint, current consent and suppression-clear evidence, approved message/version hash and operator/connection IDs. Then authorise one owned-mailbox send and signed receipt/reply proof as a separate effect. |
+| Customer email | Mailgun EU configured; production schema 63/63; Growth HQ live at `32a6366`; exact command/worker/webhook identities and Render bindings proven; 10/day and 50/month caps | No new Mailgun account. Use the founder as the sole pilot customer and supply the exact `office@propertypredator.com` person/endpoint, current consent and suppression-clear evidence, approved message/version hash and operator/connection IDs. Then authorise one owned-mailbox send and signed receipt/reply proof as a separate effect. |
 | Meta WhatsApp | Command, one-at-a-time worker, challenge/webhook and Inbox receipt path composed | Verified Meta Business, App ID, WABA ID, phone-number ID, worker-only encrypted access-token binding, webhook-only app secret/verify token, one founder-owned UK recipient, and one approved **parameter-free** Property Predator test template. |
 | Owned X social | Ayrshare worker, cap fence, receipt projection and founder-only bind/revoke/readiness-gated staging workflow composed; no provider call is reachable from the portal commands | Ayrshare API key, exact linked Property Predator-owned X profile and Profile Key, X OAuth1 key/secret, 32-byte profile-encryption key/version, connection UUID, read-write OAuth/ownership evidence, and one approved link-free test post/hash. |
-| Twilio UK SMS | Command, one-at-a-time worker, signed inbound/status webhook, Inbox receipt path and founder-only bind/revoke/readiness-gated staging workflow composed; no Twilio call is reachable from the portal commands; forward migration `0061` unblocks the rail and is unapplied in production | Twilio Account SID, restricted API key SID/secret, Messaging Service SID, approved UK regulatory bundle, owned UK sender, webhook auth token, and one founder-owned UK recipient plus approved message/consent/suppression evidence. |
+| Twilio UK SMS | Command, one-at-a-time worker, signed inbound/status webhook, Inbox receipt path and founder-only bind/revoke/readiness-gated staging workflow composed; migration `0061` is applied in production | Twilio Account SID, restricted API key SID/secret, Messaging Service SID, approved UK regulatory bundle, owned UK sender, webhook auth token, and one founder-owned UK recipient plus approved message/consent/suppression evidence. |
 | Facebook/Instagram DMs | Unified Inbox projection exists; live adapter is intentionally reported `not-composed` | Owned Page and Instagram professional account, Meta app review/permissions and signed webhook subscription **after** the dedicated live inbound/reply adapter is built. |
-| Database proof | Static contracts and guarded disposable-Neon execution pass through `0060`; production ledger is 60/60; post-deploy zero-send counts are all zero. Migration `0061` is static-contract proven only and still needs a guarded disposable-Neon execution proof before any production application | Preserve the disposable branch for the final Sol Ultra master rehearsal. Production must never be used as the disposable attack-proof target. |
+| Founder event bridge | Dedicated HMAC receiver, two least-privilege Growth HQ database identities, isolated Property Predator dispatcher and additive immutable outbox are live; founder fresh/replay proof is 1 receipt, 1 Growth projection, 1 Journey projection and 1 delivery attempt | No remaining code or account input for account-created events. Add future event types only when a real founder workflow supplies the authoritative source fact. |
+| Database proof | Production Growth HQ ledger is 63/63 and runtime-ready; Property Predator conversion data-plane has a recoverable pre-migration checkpoint and its live immutable one-event proof passed. Static/disposable contracts remain retained for the release-wide rehearsal | Run the final clean disposable-Neon reset/attack sweep through the complete ledger during the Sol Ultra master rehearsal. Production must never be the disposable attack-proof target. |
 
 ## Immediate move
 
