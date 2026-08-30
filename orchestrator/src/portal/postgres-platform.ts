@@ -178,6 +178,12 @@ export interface PgPortalPlatform {
   founderEmailPilot?: PgPortalFounderEmailPilotService;
   /** The permission-bound capped enqueue, on its own least-privilege identity. */
   customerEmailCommand?: CustomerEmailLiveCommandService;
+  /**
+   * The 0065 evidence identity, composed only when its own URL is bound. It is
+   * exposed so readiness can report the boundary honestly rather than implying
+   * the compliance workflow exists when its credential is absent.
+   */
+  founderPilotEvidenceBound: boolean;
   /** Bounded caller-owned runtime probe; throws without exposing connection details. */
   assertReady(): Promise<void>;
   close(): Promise<void>;
@@ -835,6 +841,31 @@ export async function buildPgPortalPlatform(
         permissionUseReceipts = undefined;
       }
     }
+    // The 0065 evidence identity records the policy publication and PECR route
+    // decisions the founder attests. It is composed on its own URL because it
+    // may write into the compliance ledgers and must be able to do nothing
+    // else: no enqueue, no content preparation, no provider, no consent.
+    let founderPilotEvidencePool: Pool | undefined;
+    if (env.DATABASE_FOUNDER_PILOT_EVIDENCE_COMMAND_URL?.trim()
+        && PORTAL_UUID.test(emailWorkspaceId) && PORTAL_UUID.test(emailConnectionId)) {
+      try {
+        const evidenceConfig = requireCutoverIdentity(
+          loadDatabaseConfig('founderPilotEvidenceCommand', env),
+          'DATABASE_FOUNDER_PILOT_EVIDENCE_COMMAND_URL',
+          'r72_founder_pilot_evidence_command',
+        );
+        founderPilotEvidencePool = createDatabasePool(evidenceConfig);
+        if (expectedInstallationId) {
+          await assertExpectedDatabaseInstallation(
+            founderPilotEvidencePool, expectedInstallationId,
+          );
+        }
+        pools.push(founderPilotEvidencePool);
+      } catch {
+        await founderPilotEvidencePool?.end().catch(() => undefined);
+        founderPilotEvidencePool = undefined;
+      }
+    }
     // The pilot seam owns the founder-facing actions, and the last of them
     // authorises a live send. It is composed only when the enqueue behind it is
     // real and the receipt rail that enqueue requires is bound, so the portal
@@ -899,6 +930,7 @@ export async function buildPgPortalPlatform(
       smsBinding,
       founderEmailPilot,
       customerEmailCommand,
+      founderPilotEvidenceBound: founderPilotEvidencePool !== undefined,
       async assertReady(): Promise<void> {
         await Promise.all([
           assertRuntimeSchemaCurrent(webPool),

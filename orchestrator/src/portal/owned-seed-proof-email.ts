@@ -24,11 +24,12 @@ export const PROPERTY_PREDATOR_OWNED_SEED_PROOF_SUBJECT =
 /**
  * Recipient-neutral by construction.
  *
- * The previous copy named office@propertypredator.com, a mailbox the founder
- * does not own, which made the proof unusable and would have addressed a real
- * message to an address nobody had verified. The recipient is now resolved from
- * the verified endpoint on the Lead 360 contact at authorisation time and never
- * written here, so no address of any kind lives in this repository.
+ * The previous copy named a fixed office mailbox the founder does not own,
+ * which made the proof unusable and would have addressed a real message to an
+ * address nobody had verified. The recipient is now resolved from the verified
+ * endpoint on the Lead 360 contact at authorisation time and never written
+ * here, so no address of any kind lives in this file — not in the copy, and
+ * not in the comments either, which a test enforces.
  */
 export const PROPERTY_PREDATOR_OWNED_SEED_PROOF_BODY =
   `This is the founder-only delivery proof for Property Predator Growth HQ.

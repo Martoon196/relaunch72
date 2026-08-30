@@ -343,6 +343,9 @@ test('production Blueprint keeps web and worker database identities process-isol
     'DATABASE_CUSTOMER_EMAIL_COMMAND_URL',
     'DATABASE_CUSTOMER_EMAIL_WEBHOOK_URL',
     'DATABASE_EXTERNAL_EVENT_COMMAND_URL',
+    // The 0065 evidence identity. It records the policy publication and PECR
+    // route decisions the founder attests and holds exactly one function.
+    'DATABASE_FOUNDER_PILOT_EVIDENCE_COMMAND_URL',
     'DATABASE_IDENTITY_COMMAND_URL',
     'DATABASE_MAILGUN_WEBHOOK_URL',
     'DATABASE_OWNED_SOCIAL_COMMAND_URL',

@@ -68,6 +68,7 @@ const migration61Url = new URL('../../src/db/migrations/0061_property_predator_t
 const migration62Url = new URL('../../src/db/migrations/0062_operational_inbox_live_evidence_read_boundary.sql', import.meta.url);
 const migration63Url = new URL('../../src/db/migrations/0063_contact_permission_founder_decisions.sql', import.meta.url);
 const migration64Url = new URL('../../src/db/migrations/0064_founder_email_pilot_endpoint_and_readiness.sql', import.meta.url);
+const migration65Url = new URL('../../src/db/migrations/0065_founder_pilot_preparation_and_evidence.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -506,9 +507,9 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums through the founder email pilot', async () => {
+test('bundled migration discovery orders and checksums through the founder pilot preparation', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-58);
+  const tail = migrations.slice(-59);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0007_public_schema_hardening.sql', version: 7 },
     { filename: '0008_setup_delivery_recovery.sql', version: 8 },
@@ -568,6 +569,7 @@ test('bundled migration discovery orders and checksums through the founder email
     { filename: '0062_operational_inbox_live_evidence_read_boundary.sql', version: 62 },
     { filename: '0063_contact_permission_founder_decisions.sql', version: 63 },
     { filename: '0064_founder_email_pilot_endpoint_and_readiness.sql', version: 64 },
+    { filename: '0065_founder_pilot_preparation_and_evidence.sql', version: 65 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -628,7 +630,11 @@ test('bundled migration discovery orders and checksums through the founder email
     (await readFile(migration62Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration63Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration64Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration65Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
+  // A source list shorter than the discovered tail would hash `undefined` and
+  // pass nothing; make the pairing itself an assertion.
+  assert.equal(sources.length, tail.length);
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
   }

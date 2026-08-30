@@ -217,6 +217,13 @@ services:
       # this at the CRM, web or customer-email credentials.
       - key: DATABASE_AFFILIATE_RECEIPT_COMMAND_URL
         sync: false
+      # Dedicated r72_founder_pilot_evidence_command identity from 0065. It
+      # records the policy publication and PECR route decisions the founder
+      # attests, bound to the exact action scope the enqueue rebuilds. It holds
+      # one function and nothing else: it cannot enqueue, prepare content,
+      # reach a provider, or move consent or suppression.
+      - key: DATABASE_FOUNDER_PILOT_EVIDENCE_COMMAND_URL
+        sync: false
       # Dedicated r72_mailgun_webhook_command identity. This is deliberately
       # narrower than the platform's generic webhook role.
       - key: DATABASE_MAILGUN_WEBHOOK_URL
@@ -252,6 +259,9 @@ services:
       # One receipt per authorising request, and a founder authorises one send
       # at a time. Two is headroom, not throughput.
       - key: DATABASE_AFFILIATE_RECEIPT_COMMAND_POOL_MAX
+        value: "2"
+      # Evidence is recorded once per pilot, by one person, deliberately.
+      - key: DATABASE_FOUNDER_PILOT_EVIDENCE_COMMAND_POOL_MAX
         value: "2"
       - key: DATABASE_MAILGUN_WEBHOOK_POOL_MAX
         value: "2"

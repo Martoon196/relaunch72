@@ -31,6 +31,7 @@ export const DATABASE_ROLES = [
   'smsWorkerCommand',
   'smsWebhookCommand',
   'affiliateReceiptCommand',
+  'founderPilotEvidenceCommand',
   'worker',
   'webhook',
   'public',
@@ -73,6 +74,7 @@ const ROLE_URL_ENV: Record<DatabaseRole, string> = {
   smsWorkerCommand: 'DATABASE_SMS_WORKER_URL',
   smsWebhookCommand: 'DATABASE_SMS_WEBHOOK_URL',
   affiliateReceiptCommand: 'DATABASE_AFFILIATE_RECEIPT_COMMAND_URL',
+  founderPilotEvidenceCommand: 'DATABASE_FOUNDER_PILOT_EVIDENCE_COMMAND_URL',
   worker: 'DATABASE_WORKER_URL',
   webhook: 'DATABASE_WEBHOOK_URL',
   public: 'DATABASE_PUBLIC_URL',
@@ -111,6 +113,7 @@ const EXPECTED_RUNTIME_USER: Partial<Record<DatabaseRole, string>> = {
   smsWorkerCommand: 'r72_sms_worker_command',
   smsWebhookCommand: 'r72_sms_webhook_command',
   affiliateReceiptCommand: 'r72_affiliate_receipt_command',
+  founderPilotEvidenceCommand: 'r72_founder_pilot_evidence_command',
   worker: 'r72_worker',
   webhook: 'r72_webhook',
   public: 'r72_public',
@@ -286,6 +289,8 @@ export function loadDatabaseConfig(
                       ? 'DATABASE_SMS_WEBHOOK_POOL_MAX'
                     : role === 'affiliateReceiptCommand'
                       ? 'DATABASE_AFFILIATE_RECEIPT_COMMAND_POOL_MAX'
+                    : role === 'founderPilotEvidenceCommand'
+                      ? 'DATABASE_FOUNDER_PILOT_EVIDENCE_COMMAND_POOL_MAX'
                   : role === 'setupDeliveryCommand'
                     ? 'DATABASE_SETUP_DELIVERY_COMMAND_POOL_MAX'
                     : role === 'setupReissueCommand'
@@ -391,6 +396,8 @@ export function loadDatabaseConfig(
                         ? 'property-predator-sms-webhook-command'
                       : role === 'affiliateReceiptCommand'
                         ? 'property-predator-affiliate-receipt-command'
+                      : role === 'founderPilotEvidenceCommand'
+                        ? 'property-predator-founder-pilot-evidence-command'
                     : role === 'setupDeliveryCommand'
                       ? 'relaunch72-setup-delivery-command'
                       : role === 'setupReissueCommand'
