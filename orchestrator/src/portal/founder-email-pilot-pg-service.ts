@@ -33,6 +33,8 @@ import {
   type FounderEmailPilotIdentifiers,
 } from '../founder-email-pilot/foundation.js';
 import { EMAIL_PILOT_PREVIEW_TTL_MS } from './founder-email-pilot-actions.js';
+import type { PortalPermissionUseReceiptService }
+  from './permission-use-receipt-service.js';
 import {
   createPgPortalCrmPrincipalResolver,
   type PortalCrmPrincipalResolver,
@@ -180,6 +182,11 @@ export interface PgPortalFounderEmailPilotDependencies {
    * This seam composes it; it does not reimplement or bypass it.
    */
   readonly commandService: CustomerEmailLiveCommandService;
+  /**
+   * The 0032 receipt rail, on its own append-only identity. The enqueue cannot
+   * be satisfied without it, and it can do nothing else.
+   */
+  readonly permissionUse: PortalPermissionUseReceiptService;
   readonly now: () => number;
 }
 
@@ -468,12 +475,31 @@ export class PgPortalFounderEmailPilotService implements PortalFounderEmailPilot
       const bound = await this.#context(identity, identifiers.requestId);
       if (!bound) return failed('unauthenticated');
 
+      // The operator consumes their own permission here, on its own
+      // append-only identity, because 0054 binds the receipt to this exact
+      // request. It records a consumption and nothing else: provider effects
+      // stay false whatever the enqueue below decides.
+      const receipt = await this.#dependencies.permissionUse.consume(identity, {
+        contactId: input.contactId,
+        contactPointId: input.contactPointId,
+        purpose: input.purpose,
+        commandKey: input.commandKey,
+        authorityValidUntil: input.authorityValidUntil,
+      });
+      if (!receipt.ok) return failed(receipt.kind);
+
       // Re-resolve rather than trust the preview: approvals, consent and
       // suppression can all change between reading a message and authorising it.
+      // The receipt now exists for this request, so the tuple can complete.
       const evidence = await this.#resolveEvidence(
         bound.context, bound.workspaceId, input, input.authorityValidUntil,
       );
       if (evidence === null) return failed('blocked');
+      // The enqueue would refuse a receipt it did not resolve to anyway; saying
+      // so here keeps the founder-facing reason accurate.
+      if (evidence.permissionUseReceiptId !== receipt.permissionUseReceiptId.toLowerCase()) {
+        return Object.freeze({ ok: false as const, kind: 'stale_preview' as const });
+      }
       if (founderEmailPilotEvidenceDigest(evidence) !== input.evidenceDigest) {
         return Object.freeze({ ok: false as const, kind: 'stale_preview' as const });
       }
@@ -574,6 +600,7 @@ export function createPgPortalFounderEmailPilotService(input: {
   readonly crmCommandPool: Pool;
   readonly providerConnectionId: string;
   readonly commandService: CustomerEmailLiveCommandService;
+  readonly permissionUse: PortalPermissionUseReceiptService;
   readonly now?: () => number;
 }): PgPortalFounderEmailPilotService {
   return new PgPortalFounderEmailPilotService({
@@ -581,6 +608,7 @@ export function createPgPortalFounderEmailPilotService(input: {
     commandPool: input.crmCommandPool,
     providerConnectionId: input.providerConnectionId,
     commandService: input.commandService,
+    permissionUse: input.permissionUse,
     now: input.now ?? (() => Date.now()),
   });
 }

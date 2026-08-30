@@ -50,6 +50,10 @@ import {
   createPgPortalFounderEmailPilotService,
   type PgPortalFounderEmailPilotService,
 } from './founder-email-pilot-pg-service.js';
+import {
+  createPgPortalPermissionUseReceiptService,
+  type PgPortalPermissionUseReceiptService,
+} from './permission-use-receipt-pg-service.js';
 import { createPgCustomerEmailLiveCommandService } from '../customer-email-live-pg/command-service.js';
 import { assertCustomerEmailCommandBoundaryReady } from '../customer-email-live-pg/readiness.js';
 import type { CustomerEmailLiveCommandService } from '../customer-email-live-pg/types.js';
@@ -801,15 +805,48 @@ export async function buildPgPortalPlatform(
         customerEmailCommand = undefined;
       }
     }
+    // The operator's own permission-use receipt, on the dedicated 0032
+    // append-only identity. Never the CRM, web or customer-email credentials:
+    // this one may write into a compliance ledger and must be able to do
+    // nothing else at all.
+    let permissionUseReceipts: PgPortalPermissionUseReceiptService | undefined;
+    if (env.DATABASE_AFFILIATE_RECEIPT_COMMAND_URL?.trim()
+        && PORTAL_UUID.test(emailWorkspaceId) && PORTAL_UUID.test(emailConnectionId)) {
+      let receiptPool: Pool | undefined;
+      try {
+        const receiptConfig = requireCutoverIdentity(
+          loadDatabaseConfig('affiliateReceiptCommand', env),
+          'DATABASE_AFFILIATE_RECEIPT_COMMAND_URL',
+          'r72_affiliate_receipt_command',
+        );
+        receiptPool = createDatabasePool(receiptConfig);
+        if (expectedInstallationId) {
+          await assertExpectedDatabaseInstallation(receiptPool, expectedInstallationId);
+        }
+        permissionUseReceipts = createPgPortalPermissionUseReceiptService({
+          webPool,
+          receiptPool,
+          providerConnectionId: emailConnectionId,
+          workspaceId: emailWorkspaceId,
+        });
+        pools.push(receiptPool);
+      } catch {
+        await receiptPool?.end().catch(() => undefined);
+        permissionUseReceipts = undefined;
+      }
+    }
     // The pilot seam owns the founder-facing actions, and the last of them
     // authorises a live send. It is composed only when the enqueue behind it is
-    // real, so the portal never offers an authorisation it could not honour.
-    if (PORTAL_UUID.test(emailConnectionId) && customerEmailCommand) {
+    // real and the receipt rail that enqueue requires is bound, so the portal
+    // never offers an authorisation it could not honour.
+    if (PORTAL_UUID.test(emailConnectionId) && customerEmailCommand
+        && permissionUseReceipts) {
       founderEmailPilot = createPgPortalFounderEmailPilotService({
         webPool,
         crmCommandPool: commandPool,
         providerConnectionId: emailConnectionId,
         commandService: customerEmailCommand,
+        permissionUse: permissionUseReceipts,
       });
     }
 

@@ -1170,6 +1170,244 @@ BEGIN
 END
 $function$;
 
+/*
+ * Resolve everything a permission-use receipt must be bound to, before one
+ * exists.
+ *
+ * 0054 binds the receipt to the acting user AND the exact request id, so a
+ * receipt from any earlier request can never satisfy it: the operator consumes
+ * their own permission at the moment of authorising. Writing that receipt is
+ * the affiliate receipt rail's job and stays there. This function only tells
+ * that rail which subject, action scope and evidence snapshot to bind, computed
+ * from the same rows the enqueue re-validates rather than from the caller.
+ *
+ * It is therefore executable only by r72_affiliate_receipt_command, which can
+ * write nothing else that matters: no enqueue, no provider, no consent, no
+ * suppression. STABLE and read-only, like every other resolver here.
+ */
+CREATE FUNCTION app_private.resolve_customer_email_permission_use_scope(
+  p_workspace_id uuid,
+  p_provider_connection_id uuid,
+  p_contact_id uuid,
+  p_contact_point_id uuid,
+  p_purpose text
+)
+RETURNS TABLE (
+  compliance_subject_id uuid,
+  action_scope_sha256 text,
+  evidence_snapshot_sha256 text
+)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog
+AS $function$
+DECLARE
+  selected_user_id uuid;
+  selected_campaign record;
+  selected_message record;
+  selected_subject_id uuid;
+  expected_action_scope bytea;
+BEGIN
+  IF session_user <> 'r72_affiliate_receipt_command'
+     OR p_workspace_id IS NULL
+     OR current_setting('app.workspace_id', true) IS DISTINCT FROM p_workspace_id::text
+     OR current_setting('app.actor_kind', true) IS DISTINCT FROM 'user'
+     OR current_setting('app.user_id', true) !~ '^[0-9a-f-]{36}$'
+     OR coalesce(current_setting('app.request_id', true), '') = '' THEN
+    RAISE EXCEPTION 'Customer email permission scope resolution denied'
+      USING ERRCODE = '42501';
+  END IF;
+  selected_user_id := current_setting('app.user_id')::uuid;
+  IF NOT EXISTS (
+    SELECT 1 FROM app.workspace_memberships AS membership
+    WHERE membership.workspace_id = p_workspace_id
+      AND membership.user_id = selected_user_id
+      AND membership.status = 'active' AND membership.role IN ('owner', 'admin')
+  ) THEN
+    RAISE EXCEPTION 'Customer email permission scope operator denied'
+      USING ERRCODE = '42501';
+  END IF;
+
+  SELECT version.id AS version_id, version.definition_sha256, version.purpose_key,
+         step.id AS step_id, step.content_sha256, step.subject_template,
+         step.body_template
+    INTO selected_campaign
+  FROM app.campaign_template_versions AS version
+  JOIN app.campaign_template_steps AS step
+    ON step.workspace_id = version.workspace_id
+   AND step.template_version_id = version.id
+   AND step.step_kind = 'email' AND step.channel = 'email'
+   AND step.requires_human_approval AND step.requires_current_permission
+   AND NOT step.provider_effects
+  JOIN app.campaign_template_approval_requests AS request
+    ON request.workspace_id = version.workspace_id
+   AND request.template_version_id = version.id
+   AND request.template_version_sha256 = version.definition_sha256
+  JOIN app.campaign_template_approval_decisions AS decision
+    ON decision.workspace_id = request.workspace_id
+   AND decision.approval_request_id = request.id
+   AND decision.template_version_sha256 = request.template_version_sha256
+   AND decision.decision = 'approved'
+  WHERE version.workspace_id = p_workspace_id
+    AND version.purpose_key = p_purpose
+    AND NOT version.provider_effects
+    AND NOT EXISTS (
+      SELECT 1 FROM app.campaign_template_versions AS newer
+      WHERE newer.workspace_id = version.workspace_id
+        AND newer.template_id = version.template_id
+        AND newer.version_no > version.version_no
+    )
+  ORDER BY version.version_no DESC, version.id DESC LIMIT 1;
+  IF selected_campaign IS NULL THEN RETURN; END IF;
+
+  SELECT message_version.id AS message_version_id, message_version.body_sha256,
+         endpoint.normalized_address, conversation.subject,
+         public.digest(point.kind || pg_catalog.chr(31) || point.value
+           || pg_catalog.chr(31) || point.normalized_value, 'sha256') AS endpoint_sha,
+         consent.id AS consent_id
+    INTO selected_message
+  FROM app.message_versions AS message_version
+  JOIN app.messages AS message
+    ON message.workspace_id = message_version.workspace_id
+   AND message.id = message_version.message_id
+   AND message.current_version_id = message_version.id
+   AND message.lifecycle = 'approved' AND message.direction = 'outbound'
+   AND message.channel = 'email' AND message.environment = 'live'
+   AND message.contact_id = p_contact_id
+   AND message.contact_point_id = p_contact_point_id
+  JOIN app.conversations AS conversation
+    ON conversation.workspace_id = message.workspace_id
+   AND conversation.id = message.conversation_id
+   AND conversation.subject = selected_campaign.subject_template
+  JOIN app.message_approval_decisions AS message_decision
+    ON message_decision.workspace_id = message_version.workspace_id
+   AND message_decision.message_version_id = message_version.id
+   AND message_decision.decision = 'approved'
+  JOIN app.channel_endpoints AS endpoint
+    ON endpoint.workspace_id = message_version.workspace_id
+   AND endpoint.provider_connection_id = p_provider_connection_id
+   AND endpoint.channel = 'email' AND endpoint.environment = 'live'
+   AND endpoint.status = 'active'
+  JOIN app.contact_points AS point
+    ON point.workspace_id = message.workspace_id
+   AND point.id = message.contact_point_id AND point.contact_id = message.contact_id
+   AND point.kind = 'email' AND point.deleted_at IS NULL
+   AND point.is_verified AND point.dedupe_state = 'normal'
+  JOIN app.communication_consent_events AS consent
+    ON consent.workspace_id = message.workspace_id
+   AND consent.contact_point_id = message.contact_point_id
+   AND consent.channel = 'email' AND consent.purpose = selected_campaign.purpose_key
+   AND consent.state = 'granted'
+  WHERE message_version.workspace_id = p_workspace_id
+    AND message_version.channel = 'email' AND message_version.environment = 'live'
+    AND message_version.body_text = selected_campaign.body_template
+    AND consent.id = (
+      SELECT latest.id FROM app.communication_consent_events AS latest
+      WHERE latest.workspace_id = message.workspace_id
+        AND latest.contact_point_id = message.contact_point_id
+        AND latest.channel = 'email'
+        AND latest.purpose = selected_campaign.purpose_key
+      ORDER BY latest.occurred_at DESC, latest.recorded_at DESC, latest.id DESC LIMIT 1
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM app.communication_suppression_events AS suppression
+      WHERE suppression.workspace_id = message.workspace_id
+        AND suppression.contact_point_id = message.contact_point_id
+        AND suppression.channel = 'email'
+        AND (suppression.purpose IS NULL
+          OR suppression.purpose = selected_campaign.purpose_key)
+        AND suppression.state = 'suppressed'
+        AND suppression.id = (
+          SELECT latest.id FROM app.communication_suppression_events AS latest
+          WHERE latest.workspace_id = suppression.workspace_id
+            AND latest.contact_point_id = suppression.contact_point_id
+            AND latest.channel = suppression.channel
+            AND latest.purpose IS NOT DISTINCT FROM suppression.purpose
+          ORDER BY latest.occurred_at DESC, latest.recorded_at DESC, latest.id DESC LIMIT 1
+        )
+    )
+  ORDER BY message_version.version_number DESC, message_version.id DESC LIMIT 1;
+  IF selected_message IS NULL THEN RETURN; END IF;
+
+  -- Byte for byte the scope 0054 rebuilds, so a receipt bound to it is the one
+  -- the enqueue will accept and no other.
+  expected_action_scope := public.digest(format(
+    'email:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s', p_workspace_id,
+    p_provider_connection_id, selected_message.normalized_address,
+    selected_campaign.version_id,
+    selected_campaign.step_id,
+    pg_catalog.encode(selected_campaign.content_sha256, 'hex'),
+    selected_message.message_version_id,
+    pg_catalog.encode(selected_message.endpoint_sha, 'hex'),
+    selected_campaign.purpose_key, selected_message.consent_id
+  ), 'sha256');
+
+  -- The subject that already holds both current PECR route decisions for this
+  -- exact scope. A receipt on any other subject could never be used.
+  SELECT sender_route.subject_id INTO selected_subject_id
+  FROM app_private.affiliate_compliance_specialist_decision_events AS sender_route
+  JOIN app_private.affiliate_compliance_specialist_decision_events AS instigator_route
+    ON instigator_route.workspace_id = sender_route.workspace_id
+   AND instigator_route.subject_id = sender_route.subject_id
+   AND instigator_route.decision_kind = 'pecr_instigator_route'
+   AND instigator_route.decision_state = 'approved'
+   AND instigator_route.action_scope_sha256 = expected_action_scope
+   AND instigator_route.valid_from <= statement_timestamp()
+   AND (instigator_route.valid_until IS NULL
+     OR instigator_route.valid_until > statement_timestamp())
+  WHERE sender_route.workspace_id = p_workspace_id
+    AND sender_route.decision_kind = 'pecr_sender_route'
+    AND sender_route.decision_state = 'approved'
+    AND sender_route.action_scope_sha256 = expected_action_scope
+    AND sender_route.valid_from <= statement_timestamp()
+    AND (sender_route.valid_until IS NULL
+      OR sender_route.valid_until > statement_timestamp())
+    -- A live block, revocation or expiry on this permission stops the receipt
+    -- being resolvable at all, exactly as it stops the enqueue.
+    AND NOT EXISTS (
+      SELECT 1 FROM app_private.affiliate_compliance_permission_fact_events AS block
+      WHERE block.workspace_id = sender_route.workspace_id
+        AND block.subject_id = sender_route.subject_id
+        AND block.permission = 'email.send'
+        AND block.action_scope_sha256 = expected_action_scope
+        AND block.permission_state IN ('blocked', 'revoked', 'expired')
+        AND block.valid_from <= statement_timestamp()
+        AND (block.valid_until IS NULL OR block.valid_until > statement_timestamp())
+        AND NOT EXISTS (
+          SELECT 1 FROM app_private.affiliate_compliance_permission_fact_events AS successor
+          WHERE successor.workspace_id = block.workspace_id
+            AND successor.subject_id = block.subject_id
+            AND successor.permission = block.permission
+            AND successor.action_scope_sha256 = block.action_scope_sha256
+            AND successor.supersedes_event_id = block.id
+        )
+    )
+  ORDER BY sender_route.valid_from DESC, sender_route.id DESC LIMIT 1;
+  IF selected_subject_id IS NULL THEN RETURN; END IF;
+
+  RETURN QUERY SELECT
+    selected_subject_id,
+    pg_catalog.encode(expected_action_scope, 'hex'),
+    -- What was true at the moment of consumption. It changes whenever the
+    -- approved content, the recipient or the permission behind it changes, so
+    -- a stored receipt can be compared against a fresh resolution and a
+    -- mismatch refused rather than reused.
+    pg_catalog.encode(public.digest(pg_catalog.concat_ws(pg_catalog.chr(31),
+      'propertypredator.customer-email-permission-use/v1',
+      p_workspace_id::text, p_provider_connection_id::text,
+      selected_campaign.version_id::text,
+      pg_catalog.encode(selected_campaign.definition_sha256, 'hex'),
+      selected_campaign.step_id::text,
+      pg_catalog.encode(selected_campaign.content_sha256, 'hex'),
+      selected_message.message_version_id::text,
+      pg_catalog.encode(selected_message.body_sha256, 'hex'),
+      pg_catalog.encode(public.digest(selected_message.subject, 'sha256'), 'hex'),
+      pg_catalog.encode(selected_message.endpoint_sha, 'hex'),
+      selected_message.consent_id::text, selected_campaign.purpose_key,
+      pg_catalog.encode(expected_action_scope, 'hex')
+    ), 'sha256'), 'hex');
+  RETURN;
+END
+$function$;
+
 RESET ROLE;
 SET LOCAL ROLE r72_owner;
 REVOKE CREATE ON SCHEMA app_private FROM r72_email_pilot_readiness_definer;
@@ -1195,6 +1433,15 @@ GRANT EXECUTE ON FUNCTION app_private.derive_customer_email_pilot_request_digest
   uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid,
   uuid, timestamptz, uuid, uuid, uuid, bytea
 ) TO r72_crm_command;
+
+-- Only the receipt identity may ask what a receipt must be bound to, and it is
+-- the only thing that identity gains here.
+REVOKE ALL ON FUNCTION app_private.resolve_customer_email_permission_use_scope(
+  uuid, uuid, uuid, uuid, text
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_private.resolve_customer_email_permission_use_scope(
+  uuid, uuid, uuid, uuid, text
+) TO r72_affiliate_receipt_command;
 
 -- Attaching an endpoint must never be able to create a contact, an opportunity,
 -- or a permission. This is structural rather than a promise about the body.
@@ -1287,3 +1534,135 @@ BEGIN
   END IF;
 END
 $command_blindness_audit$;
+
+-- The receipt identity records that an operator consumed their own permission.
+-- That is all it may ever do here: it must not be able to enqueue, operate a
+-- provider, read a credential, or move consent or suppression under the
+-- recipient it is recording a permission for.
+DO $receipt_identity_audit$
+DECLARE target text; privilege text;
+BEGIN
+  FOREACH target IN ARRAY ARRAY[
+    'app.communication_consent_events', 'app.communication_suppression_events',
+    'app.contact_points', 'app.provider_connections', 'app.provider_operations',
+    'app.message_deliveries', 'app.property_predator_customer_email_jobs',
+    'app.property_predator_customer_email_authorities'
+  ] LOOP
+    FOREACH privilege IN ARRAY ARRAY['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'] LOOP
+      IF pg_catalog.has_table_privilege(
+           'r72_affiliate_receipt_command', target, privilege
+         ) THEN
+        RAISE EXCEPTION 'The affiliate receipt identity must never hold % on %',
+          privilege, target USING ERRCODE = '42501';
+      END IF;
+    END LOOP;
+  END LOOP;
+  IF pg_catalog.has_function_privilege(
+       'r72_affiliate_receipt_command',
+       'app_private.authorize_and_enqueue_customer_email_live_job(uuid, uuid, uuid,'
+         || ' uuid, bytea, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid, uuid,'
+         || ' uuid, uuid, uuid, timestamptz, uuid, uuid, uuid, bytea, bytea)',
+       'EXECUTE') THEN
+    RAISE EXCEPTION 'The affiliate receipt identity must never hold the enqueue'
+      USING ERRCODE = '42501';
+  END IF;
+  -- It must not be able to read the pilot evidence resolver either: resolving
+  -- what to send is not the same act as recording a permission use.
+  IF pg_catalog.has_function_privilege(
+       'r72_affiliate_receipt_command',
+       'app_private.resolve_customer_email_pilot_evidence('
+         || 'uuid, uuid, uuid, uuid, text, timestamptz)', 'EXECUTE')
+     OR pg_catalog.has_function_privilege(
+       'r72_affiliate_receipt_command',
+       'app_private.attach_verified_contact_email_endpoint(uuid, uuid, text, text,'
+         || ' text, text, timestamptz, bytea)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'The affiliate receipt identity must hold only its own resolver'
+      USING ERRCODE = '42501';
+  END IF;
+  IF NOT pg_catalog.has_function_privilege(
+       'r72_affiliate_receipt_command',
+       'app_private.resolve_customer_email_permission_use_scope('
+         || 'uuid, uuid, uuid, uuid, text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'The affiliate receipt identity must resolve its own scope'
+      USING ERRCODE = '42501';
+  END IF;
+END
+$receipt_identity_audit$;
+
+-- The founder delivery proof is recipient-neutral from here on.
+--
+-- 0049 pinned the extended attestation window to one content digest and to the
+-- metadata boundary 'fixed_owned_office'. That copy named a mailbox the founder
+-- does not own, so the proof could never actually be sent. The copy now resolves
+-- its recipient from the verified endpoint on the Lead 360 contact and names no
+-- address at all, which changes its digest and its boundary.
+--
+-- 0049 is applied, so this widens forward rather than editing history: both the
+-- historical identity and the new one are accepted, and rows already stored
+-- under the old digest stay valid. The window itself is unchanged, and neither
+-- identity gains anything beyond a longer attestation life for deterministic
+-- company-owned copy.
+ALTER TABLE app.company_content_source_attestations
+  DROP CONSTRAINT company_content_source_attestations_freshness_window;
+ALTER TABLE app.company_content_source_attestations
+  ADD CONSTRAINT company_content_source_attestations_freshness_window
+  CHECK (
+    expires_at <= checked_at + interval '15 minutes'
+    OR (
+      source_system = 'propertypredator.company-content'
+      AND source_item_id = 'growth-hq-owned-seed-delivery-proof'
+      AND (
+        source_version = 'operational-proof-v1'
+        OR source_version ~ '^operational-proof-[0-9]{17}-[0-9a-f]{16}$'
+      )
+      AND content_sha256 IN (
+        pg_catalog.decode(
+          '6dd76f99e782b91b6db96ed15d1867bdab9f70d9594719e75b33e6cafcb19148',
+          'hex'
+        ),
+        pg_catalog.decode(
+          'f2c7b711cba1afd5ea0d6f9adae8ed41233ebf31d9b8a50e2cc0fcb780d79969',
+          'hex'
+        )
+      )
+      AND blob_sha256 = content_sha256
+      AND expires_at <= checked_at + interval '24 hours'
+    )
+  );
+
+CREATE OR REPLACE FUNCTION
+  app_private.guard_property_predator_owned_seed_attestation_window()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog
+AS $function$
+BEGIN
+  IF NEW.expires_at > NEW.checked_at + interval '15 minutes'
+     AND NOT EXISTS (
+       SELECT 1
+       FROM app.company_content_versions AS version
+       WHERE version.workspace_id = NEW.workspace_id
+         AND version.content_item_id = NEW.content_item_id
+         AND version.id = NEW.content_version_id
+         AND version.source_system = NEW.source_system
+         AND version.source_item_id = NEW.source_item_id
+         AND version.source_version = NEW.source_version
+         AND version.content_sha256 = NEW.content_sha256
+         AND version.blob_sha256 = NEW.blob_sha256
+         AND version.brand_sha256 = NEW.brand_sha256
+         AND version.content_kind = 'email'
+         AND version.content_mime_type
+           = 'application/vnd.propertypredator.email-draft+json'
+         AND version.metadata ->> 'purpose' = 'owned_seed_delivery_proof'
+         AND version.metadata ->> 'recipientBoundary' IN (
+           'fixed_owned_office', 'verified_founder_endpoint'
+         )
+         AND version.metadata -> 'providerEffects' = 'false'::jsonb
+     ) THEN
+    RAISE EXCEPTION
+      'Extended source attestation is not the deterministic owned-seed proof'
+      USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END
+$function$;

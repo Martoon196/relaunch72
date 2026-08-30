@@ -331,6 +331,132 @@ test('0064 names the durable evidence blockers rather than refusing opaquely', a
   }
 });
 
+test('0064 resolves a receipt scope only for the receipt identity', async () => {
+  const sql = await migration();
+  const body = bodyOf(sql, 'resolve_customer_email_permission_use_scope');
+  // A different identity must not be able to learn what a receipt would bind.
+  assert.match(body, /session_user <> 'r72_affiliate_receipt_command'/);
+  assert.match(
+    body,
+    /membership\.status = 'active' AND membership\.role IN \('owner', 'admin'\)/,
+  );
+  assert.doesNotMatch(body, /INSERT INTO|UPDATE app\.|DELETE FROM/);
+  assert.doesNotMatch(body, /authorize_and_enqueue/);
+  assert.match(sql, new RegExp(
+    'GRANT EXECUTE ON FUNCTION app_private\\.resolve_customer_email_permission_use_scope'
+    + '\\( uuid, uuid, uuid, uuid, text \\) TO r72_affiliate_receipt_command',
+  ));
+  assert.match(sql, new RegExp(
+    'REVOKE ALL ON FUNCTION app_private\\.resolve_customer_email_permission_use_scope'
+    + '\\( uuid, uuid, uuid, uuid, text \\) FROM PUBLIC',
+  ));
+});
+
+test('0064 binds a receipt scope to the same digest the enqueue rebuilds', async () => {
+  const [pilot, live] = await Promise.all([
+    migration(),
+    readFile(
+      new URL(
+        '../../src/db/migrations/0054_property_predator_customer_email_live_foundation.sql',
+        import.meta.url,
+      ),
+      'utf8',
+    ).then(normalise),
+  ]);
+  const body = bodyOf(pilot, 'resolve_customer_email_permission_use_scope');
+  // This resolver reads its values out of plpgsql records, so it cannot be
+  // character-identical to 0054 the way the request digest is. The format
+  // string and the ordered roles are what must match, and a reorder here would
+  // bind a receipt to a scope the enqueue never accepts.
+  assert.match(live, /format\( 'email:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s'/u);
+  assert.match(body, /format\( 'email:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s'/u);
+  assert.match(body, new RegExp(
+    [
+      "format\\( 'email:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s', p_workspace_id,",
+      'p_provider_connection_id, selected_message\\.normalized_address,',
+      'selected_campaign\\.version_id, selected_campaign\\.step_id,',
+      "pg_catalog\\.encode\\(selected_campaign\\.content_sha256, 'hex'\\),",
+      'selected_message\\.message_version_id,',
+      "pg_catalog\\.encode\\(selected_message\\.endpoint_sha, 'hex'\\),",
+      'selected_campaign\\.purpose_key, selected_message\\.consent_id',
+    ].join(' '),
+    'u',
+  ));
+  // And it resolves the subject that already holds both current route
+  // decisions for that exact scope, not any subject in the workspace.
+  assert.match(body, /sender_route\.action_scope_sha256 = expected_action_scope/);
+  assert.match(body, /instigator_route\.action_scope_sha256 = expected_action_scope/);
+  assert.match(body, /permission_state IN \('blocked', 'revoked', 'expired'\)/);
+});
+
+test('0064 resolves a receipt scope only where the send itself is permitted', async () => {
+  const body = bodyOf(await migration(), 'resolve_customer_email_permission_use_scope');
+  // A receipt must not be resolvable for a recipient the send would refuse.
+  assert.match(body, /consent\.state = 'granted'/);
+  assert.match(body, /latest\.purpose IS NOT DISTINCT FROM suppression\.purpose/);
+  assert.match(body, /point\.is_verified AND point\.dedupe_state = 'normal'/);
+  assert.match(body, /message\.lifecycle = 'approved'/);
+  assert.match(body, /message_decision\.decision = 'approved'/);
+  assert.match(body, /IF selected_campaign IS NULL THEN RETURN; END IF;/);
+  assert.match(body, /IF selected_message IS NULL THEN RETURN; END IF;/);
+  assert.match(body, /IF selected_subject_id IS NULL THEN RETURN; END IF;/);
+});
+
+test('0064 keeps the receipt identity unable to send, bind or move permission', async () => {
+  const sql = await migration();
+  for (const table of [
+    'app.communication_consent_events', 'app.communication_suppression_events',
+    'app.contact_points', 'app.provider_connections', 'app.provider_operations',
+    'app.message_deliveries', 'app.property_predator_customer_email_jobs',
+  ]) {
+    assert.match(sql, new RegExp(`'${table.replace('.', '\\.')}'`), table);
+  }
+  assert.match(sql, /The affiliate receipt identity must never hold % on %/);
+  assert.match(sql, /The affiliate receipt identity must never hold the enqueue/);
+  assert.match(sql, /The affiliate receipt identity must hold only its own resolver/);
+  // It never gains the endpoint attach or the send-evidence resolver either.
+  assert.match(sql, /'app_private\.resolve_customer_email_pilot_evidence\('/);
+  // Exactly one grant reaches this identity, and it is EXECUTE on the one
+  // resolver. Anything else here would be a privilege nobody asked for.
+  const grants = sql.match(/GRANT[^;]*r72_affiliate_receipt_command/gu) ?? [];
+  assert.deepEqual(grants, [
+    'GRANT EXECUTE ON FUNCTION app_private.resolve_customer_email_permission_use_scope'
+    + '( uuid, uuid, uuid, uuid, text ) TO r72_affiliate_receipt_command',
+  ]);
+});
+
+test('0064 carries the founder proof forward without editing applied history', async () => {
+  const [pilot, historical] = await Promise.all([
+    migration(),
+    readFile(
+      new URL(
+        '../../src/db/migrations/0049_property_predator_owned_seed_attestation_window.sql',
+        import.meta.url,
+      ),
+      'utf8',
+    ).then(normalise),
+  ]);
+  // 0049 is applied in production and must stay exactly as it was.
+  assert.match(historical, /'fixed_owned_office'/);
+  assert.match(historical, /6dd76f99e782b91b6db96ed15d1867bdab9f70d9594719e75b33e6cafcb19148/);
+  assert.doesNotMatch(historical, /verified_founder_endpoint/);
+  // 0064 widens forward: both identities are accepted, so rows already stored
+  // under the old digest stay valid.
+  assert.match(pilot, /DROP CONSTRAINT company_content_source_attestations_freshness_window/);
+  assert.match(pilot, /6dd76f99e782b91b6db96ed15d1867bdab9f70d9594719e75b33e6cafcb19148/);
+  assert.match(pilot, /f2c7b711cba1afd5ea0d6f9adae8ed41233ebf31d9b8a50e2cc0fcb780d79969/);
+  assert.match(
+    pilot,
+    /'recipientBoundary' IN \( 'fixed_owned_office', 'verified_founder_endpoint' \)/,
+  );
+  // The window itself is unchanged; only which deterministic copy qualifies.
+  assert.match(pilot, /expires_at <= checked_at \+ interval '15 minutes'/);
+  assert.match(pilot, /expires_at <= checked_at \+ interval '24 hours'/);
+  assert.equal(pilot.match(/interval '24 hours'/gu)?.length, 1);
+  // No address of any kind enters the migration.
+  assert.doesNotMatch(pilot, /@propertypredator\.com/);
+});
+
 test('0064 sends nothing and calls no provider', async () => {
   // Two exclusions, both deliberate. Block comments are prose, not behaviour:
   // normalise strips only `--`, and these doc comments legitimately say the
@@ -339,7 +465,7 @@ test('0064 sends nothing and calls no provider', async () => {
   // which is the opposite of using them. Scan what executes against the data.
   const raw = await readFile(migrationUrl, 'utf8');
   const audits = [...raw.matchAll(/DO \$(\w+_audit)\$([\s\S]*?)\$\1\$;/g)];
-  assert.equal(audits.length, 3, 'every audit must be accounted for before exclusion');
+  assert.equal(audits.length, 4, 'every audit must be accounted for before exclusion');
   for (const [, name, body] of audits) {
     // An excluded block must be a privilege assertion and nothing else, so the
     // exclusion can never become a place to hide a write.

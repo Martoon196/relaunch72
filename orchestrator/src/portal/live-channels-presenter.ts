@@ -64,7 +64,18 @@ export interface LiveChannelsSourceSnapshot {
   readonly rails: readonly PortalLiveChannelTruthRailSnapshot[];
 }
 
-export type LiveChannelPosture = 'ready' | 'degraded' | 'paused' | 'blocked' | 'not_connected';
+/**
+ * `gated` is the honest state for a rail that is composed and healthy but
+ * still cannot dispatch.
+ *
+ * A soft blocker used to leave the posture `ready`, so the card read
+ * "Connected · ready" and the rail counted toward "N of M channels live" while
+ * the same card explained that an approval, a permission, a receipt or the
+ * enqueue itself was still holding everything. A rail nothing can leave is not
+ * a live sending rail, and the summary must not count it as one.
+ */
+export type LiveChannelPosture =
+  'ready' | 'gated' | 'degraded' | 'paused' | 'blocked' | 'not_connected';
 export type LiveChannelToneClass = 'ready' | 'working' | 'paused' | 'blocked' | 'muted';
 
 export interface LiveChannelGaugeView {
@@ -166,6 +177,8 @@ export interface LiveChannelsView {
   readonly illustrative: boolean;
   readonly channels: readonly LiveChannelCardView[];
   readonly readyCount: number;
+  /** Composed and healthy, but a gate stops every send. Never counted as live. */
+  readonly gatedCount: number;
   readonly pausedCount: number;
   readonly blockedCount: number;
   readonly degradedCount: number;
@@ -280,6 +293,7 @@ const RAIL_STATIC: Readonly<Record<PortalLiveChannelTruthRail, RailStatic>> = Ob
 
 const POSTURE_LABELS: Readonly<Record<LiveChannelPosture, string>> = Object.freeze({
   ready: 'Connected · ready',
+  gated: 'Connected · gated',
   degraded: 'Degraded',
   paused: 'Paused',
   blocked: 'Blocked',
@@ -288,6 +302,8 @@ const POSTURE_LABELS: Readonly<Record<LiveChannelPosture, string>> = Object.free
 
 const POSTURE_TONES: Readonly<Record<LiveChannelPosture, LiveChannelToneClass>> = Object.freeze({
   ready: 'ready',
+  // Not the ready tone: the rail is connected, but nothing leaves it yet.
+  gated: 'working',
   degraded: 'working',
   paused: 'paused',
   blocked: 'blocked',
@@ -322,6 +338,21 @@ const SOFT_BLOCKER_CODES: ReadonlySet<PortalLiveChannelBlockerCode> = new Set([
   'CAP_REACHED',
   'RECEIPT_NEEDS_ATTENTION',
   'OUTCOME_UNKNOWN_QUARANTINED',
+]);
+
+/**
+ * Gates on a connected rail: approval, permission, receipt and enqueue.
+ *
+ * These stop every send, but the connection itself is fine, so "Blocked" reads
+ * as a broken rail when the truth is a rail waiting on a human decision or a
+ * missing piece of evidence. They resolve to `gated` instead, which is not
+ * counted as live either way.
+ */
+const GATE_BLOCKER_CODES: ReadonlySet<PortalLiveChannelBlockerCode> = new Set([
+  'APPROVAL_REQUIRED',
+  'APPROVED_CONTENT_REQUIRED',
+  'OPERATOR_AUTHORITY_REQUIRED',
+  'CAP_REACHED',
 ]);
 
 const CONNECTION_STATES = new Set<PortalLiveChannelConnectionState>([
@@ -503,6 +534,15 @@ function derivePosture(
         && source.blockerCodes.includes('EMERGENCY_PAUSED')) {
       return 'paused';
     }
+    // A connected rail held only by approval, permission or enqueue gates is
+    // gated, not broken. Nothing dispatches either way, so this never makes a
+    // rail look more capable than it is.
+    if (source.connectionState === 'ready'
+        && source.outboundOrReplyState !== 'effects_disabled'
+        && source.blockerCodes.length > 0
+        && source.blockerCodes.every((code) => GATE_BLOCKER_CODES.has(code))) {
+      return 'gated';
+    }
     return 'blocked';
   }
   if (source.blockerCodes.includes('EMERGENCY_PAUSED')) return 'paused';
@@ -516,6 +556,10 @@ function derivePosture(
     // 'configured' with no blocker and no degradation is still not proven ready.
     return 'blocked';
   }
+  // Composed, healthy, and still unable to dispatch. An approval, a permission,
+  // a receipt or a spent cap each stop every send on this rail, so the rail is
+  // gated rather than live, and the summary counts it accordingly.
+  if (source.blockerCodes.length > 0) return 'gated';
   return 'ready';
 }
 
@@ -555,12 +599,9 @@ function nextActionFor(
       link: Object.freeze({ href: PROVIDER_READINESS_COCKPIT_ROUTE, label: 'Open Rail status' }),
     });
   }
-  // A rail can be proven live and still be unable to dispatch. APPROVAL_REQUIRED
-  // and CAP_REACHED are soft blockers, so the posture stays ready and this used
-  // to fall through to "no action needed", sending the founder to watch an Inbox
-  // for sends that cannot arrive. The card said both things at once: the plain
-  // English named the gate while the next action denied it existed. The
-  // remaining gate is the action.
+  // A gated rail is composed and healthy and still sends nothing. The remaining
+  // gate is the action; anything else would send the founder to watch an Inbox
+  // for messages that cannot arrive.
   const remaining = blockers[0];
   if (remaining) {
     return Object.freeze({
@@ -728,7 +769,11 @@ export function presentLiveChannels(
   }
   const channels = Object.freeze(PORTAL_LIVE_CHANNEL_TRUTH_RAILS.map((rail) =>
     presentRail(byRail.get(rail)!, illustrative, asOfMs)));
+  // Only a rail something can actually leave counts as live. A gated rail is
+  // composed and healthy and still sends nothing, so it is counted separately
+  // rather than folded into the live total.
   const readyCount = channels.filter((channel) => channel.posture === 'ready').length;
+  const gatedCount = channels.filter((channel) => channel.posture === 'gated').length;
   const pausedCount = channels.filter((channel) => channel.posture === 'paused').length;
   const blockedCount = channels.filter((channel) => channel.posture === 'blocked').length;
   const degradedCount = channels.filter((channel) => channel.posture === 'degraded').length;
@@ -742,7 +787,7 @@ export function presentLiveChannels(
   const whatsapp = byRail.get('whatsapp')!;
   const launchReadinessTone: LiveChannelToneClass = readyCount === channels.length
     ? 'ready'
-    : readyCount + degradedCount > 0
+    : readyCount + gatedCount + degradedCount > 0
       ? 'working'
       : pausedCount > 0 ? 'paused' : 'blocked';
   return Object.freeze({
@@ -752,6 +797,7 @@ export function presentLiveChannels(
     illustrative,
     channels,
     readyCount,
+    gatedCount,
     pausedCount,
     blockedCount,
     degradedCount,

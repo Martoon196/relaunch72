@@ -14,6 +14,9 @@ import {
   PROPERTY_PREDATOR_OWNED_SEED_PROOF_SUBJECT,
   propertyPredatorOwnedSeedProofEmailCommand,
 } from '../src/portal/owned-seed-proof-email.js';
+import {
+  PROPERTY_PREDATOR_OWNED_SEED_PROOF_CONTENT_SHA256,
+} from '../src/company-content-pg/property-predator-owned-seed-attestation-policy.js';
 
 const secret = 'portal-session-secret-with-sufficient-entropy';
 const session = 'portal-session-token-with-sufficient-entropy';
@@ -65,8 +68,34 @@ test('owned proof command seals exact brand copy with evidence longer than the w
   assert.equal(command.source.version, PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_VERSION);
   assert.equal(command.blob.sha256, sha256(canonical));
   assert.equal(command.metadata?.providerEffects, false);
-  assert.equal(command.metadata?.recipientBoundary, 'fixed_owned_office');
+  assert.equal(command.metadata?.recipientBoundary, 'verified_founder_endpoint');
   assert.equal(Date.parse(command.attestation.expiresAt) - Date.parse(command.attestation.checkedAt), 24 * 60 * 60 * 1_000);
+  // The sealed digest is the one the database pins, so copy and constraint
+  // cannot drift apart without a test failing here first.
+  assert.equal(command.blob.sha256, PROPERTY_PREDATOR_OWNED_SEED_PROOF_CONTENT_SHA256);
+});
+
+test('the proof copy is the exact approved bytes and names no recipient', () => {
+  // The previous copy addressed office@propertypredator.com, a mailbox the
+  // founder does not own, which made the proof unusable. The recipient is
+  // resolved from Lead 360 at authorisation time and appears nowhere here.
+  assert.equal(
+    PROPERTY_PREDATOR_OWNED_SEED_PROOF_SUBJECT,
+    'Property Predator Growth HQ — founder delivery proof',
+  );
+  assert.equal(
+    PROPERTY_PREDATOR_OWNED_SEED_PROOF_BODY,
+    'This is the founder-only delivery proof for Property Predator Growth HQ.\n'
+    + 'No customers or affiliates are included. This message is addressed only to '
+    + 'the verified founder email endpoint shown in Lead 360.\n'
+    + 'Reply RECEIVED to prove the full loop:\n'
+    + 'Mailgun EU → signed receipt → Conversion Inbox → Lead 360 → next action.\n'
+    + 'No other message is authorised by this proof.',
+  );
+  const proof = `${PROPERTY_PREDATOR_OWNED_SEED_PROOF_SUBJECT}\n`
+    + PROPERTY_PREDATOR_OWNED_SEED_PROOF_BODY;
+  assert.doesNotMatch(proof, /@/, 'the proof copy must contain no address at all');
+  assert.doesNotMatch(proof, /propertypredator\.com/i);
 });
 
 test('expired proof evidence can advance to a new immutable predecessor-bound revision', () => {

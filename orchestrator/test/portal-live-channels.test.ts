@@ -414,8 +414,16 @@ test('a live rail still gated by approval never says no action is needed', () =>
   const data = authoritative();
   data.rails[0]!.outboundOrReplyState = 'approval_required';
   data.rails[0]!.blockerCodes = ['APPROVAL_REQUIRED'];
-  const card = presentLiveChannels(snapshotOf(data)).channels[0]!;
-  assert.equal(card.posture, 'ready', 'approval is a soft gate; the rail is still live');
+  const view = presentLiveChannels(snapshotOf(data));
+  const card = view.channels[0]!;
+  // Connected, healthy, and nothing can leave it. Calling that "ready" and
+  // counting it as a live rail was the second half of the same contradiction.
+  assert.equal(card.posture, 'gated');
+  assert.equal(card.postureLabel, 'Connected · gated');
+  assert.notEqual(card.postureTone, 'ready');
+  assert.equal(view.gatedCount, 1);
+  assert.equal(view.readyCount, 0);
+  assert.doesNotMatch(view.launchReadinessLabel, /All channels live/);
   assert.equal(card.approvalRequired, true);
   assert.notEqual(card.nextAction.label, 'No action needed');
   assert.match(card.nextAction.detail, /approval decision is required/);
@@ -435,11 +443,120 @@ test('a live rail at its cap is told the cap holds it, not to watch for sends', 
     monthly: { used: 14, limit: 50, remaining: 36 },
   };
   data.rails[0]!.blockerCodes = ['CAP_REACHED'];
-  const card = presentLiveChannels(snapshotOf(data)).channels[0]!;
-  assert.equal(card.posture, 'ready');
+  const view = presentLiveChannels(snapshotOf(data));
+  const card = view.channels[0]!;
+  assert.equal(card.posture, 'gated');
+  assert.equal(card.postureLabel, 'Connected · gated');
+  assert.equal(view.readyCount, 0, 'a rail at its cap sends nothing and is not live');
   assert.notEqual(card.nextAction.label, 'No action needed');
   assert.match(card.nextAction.detail, /Nothing dispatches until it clears\./);
   assert.doesNotMatch(card.nextAction.detail, /as they land/);
+});
+
+test('every gate on customer email keeps it out of the live rail count', () => {
+  // Approval, permission, receipt and cap are four different reasons the same
+  // rail cannot send. None of them may be reported as a live sending rail.
+  // Each fixture keeps the states and codes consistent, because the presenter
+  // refuses contradictory evidence outright.
+  const gates: readonly {
+    code: string; apply: (rail: Record<string, unknown>) => void; gated: boolean;
+  }[] = [
+    {
+      code: 'APPROVAL_REQUIRED',
+      apply: (rail) => {
+        rail.outboundOrReplyState = 'approval_required';
+        rail.blockerCodes = ['APPROVAL_REQUIRED'];
+      },
+      gated: true,
+    },
+    {
+      code: 'CAP_REACHED',
+      apply: (rail) => {
+        rail.outboundOrReplyState = 'cap_reached';
+        rail.caps = {
+          daily: { used: 10, limit: 10, remaining: 0 },
+          monthly: { used: 14, limit: 50, remaining: 36 },
+        };
+        rail.blockerCodes = ['CAP_REACHED'];
+      },
+      gated: true,
+    },
+    {
+      // The operator's permission evidence. It stops every send, but the
+      // connection is fine, so "Blocked" would describe the wrong thing.
+      code: 'OPERATOR_AUTHORITY_REQUIRED',
+      apply: (rail) => { rail.blockerCodes = ['OPERATOR_AUTHORITY_REQUIRED']; },
+      gated: true,
+    },
+    {
+      code: 'RECEIPT_NEEDS_ATTENTION',
+      apply: (rail) => {
+        rail.receiptState = 'needs_attention';
+        // The receipt evidence must agree with the state, or the presenter
+        // refuses the whole snapshot before any posture is derived.
+        rail.latestReceipt = {
+          receiptId: 'fa300000-0000-4000-8000-00000000000a',
+          outcome: 'failed',
+          recordedAt: '2026-08-27T08:00:00.000Z',
+          evidenceSha256: 'e'.repeat(64),
+        };
+        rail.blockerCodes = ['RECEIPT_NEEDS_ATTENTION'];
+      },
+      gated: false,
+    },
+  ];
+  for (const gate of gates) {
+    const data = authoritative();
+    gate.apply(data.rails[0]! as unknown as Record<string, unknown>);
+    const view = presentLiveChannels(snapshotOf(data));
+    const card = view.channels[0]!;
+    assert.equal(card.rail, 'customer_email', gate.code);
+    assert.notEqual(card.posture, 'ready', gate.code);
+    assert.notEqual(card.postureLabel, 'Connected · ready', gate.code);
+    assert.equal(view.readyCount, 0, gate.code);
+    assert.doesNotMatch(view.launchReadinessLabel, /All channels live/, gate.code);
+    if (gate.gated) {
+      assert.equal(card.posture, 'gated', gate.code);
+      assert.equal(card.postureLabel, 'Connected · gated', gate.code);
+    }
+  }
+});
+
+test('a genuinely broken rail is still blocked, not softened into gated', () => {
+  // The gate set must not become a way to describe a broken connection as a
+  // rail merely waiting on a decision.
+  for (const broken of [
+    (rail: Record<string, unknown>) => {
+      rail.connectionState = 'revoked';
+      rail.blockerCodes = ['APPROVAL_REQUIRED'];
+      rail.outboundOrReplyState = 'approval_required';
+    },
+    (rail: Record<string, unknown>) => {
+      rail.outboundOrReplyState = 'effects_disabled';
+      rail.blockerCodes = ['EFFECTS_DISABLED'];
+    },
+    (rail: Record<string, unknown>) => {
+      rail.blockerCodes = ['APPROVAL_REQUIRED', 'CONSENT_REQUIRED'];
+      rail.outboundOrReplyState = 'approval_required';
+    },
+  ]) {
+    const data = authoritative();
+    broken(data.rails[0]! as unknown as Record<string, unknown>);
+    const card = presentLiveChannels(snapshotOf(data)).channels[0]!;
+    assert.equal(card.posture, 'blocked');
+  }
+});
+
+test('a gated rail is still composed, so the summary does not call it missing', () => {
+  const clean = presentLiveChannels(snapshotOf(authoritative()));
+  const data = authoritative();
+  data.rails[0]!.outboundOrReplyState = 'approval_required';
+  data.rails[0]!.blockerCodes = ['APPROVAL_REQUIRED'];
+  const view = presentLiveChannels(snapshotOf(data));
+  // Gated is a live-rail truth correction, not a claim the rail is absent.
+  assert.equal(view.notConnectedCount, clean.notConnectedCount);
+  assert.equal(view.channels[0]!.posture, 'gated');
+  assert.equal(clean.channels[0]!.posture, 'ready');
 });
 
 test('a genuinely clear live rail still says no action is needed', () => {

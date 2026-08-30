@@ -17,6 +17,11 @@ import {
 } from '../src/founder-email-pilot/foundation.js';
 import type { CustomerEmailLiveCommandService }
   from '../src/customer-email-live-pg/types.js';
+import type {
+  ConsumePermissionUseInput,
+  ConsumePermissionUseResult,
+  PortalPermissionUseReceiptService,
+} from '../src/portal/permission-use-receipt-service.js';
 import { PgPortalFounderEmailPilotService } from '../src/portal/founder-email-pilot-pg-service.js';
 import type {
   AttachEndpointInput,
@@ -255,10 +260,33 @@ class FakeCommand implements CustomerEmailLiveCommandService {
 /** Fixed so the derived authority window is comparable across assertions. */
 const NOW = Date.parse('2026-08-30T12:00:00.000Z');
 
+const RECEIPT_ID = EVIDENCE_ROW.permission_use_receipt_id;
+
+/** Stands in for the 0032 receipt rail on its own append-only identity. */
+class FakePermissionUse implements PortalPermissionUseReceiptService {
+  readonly calls: ConsumePermissionUseInput[] = [];
+  outcome: ConsumePermissionUseResult = {
+    ok: true, disposition: 'consumed', permissionUseReceiptId: RECEIPT_ID,
+    complianceSubjectId: EVIDENCE_ROW.compliance_subject_id,
+    actionScopeSha256: 'c'.repeat(64), evidenceSnapshotSha256: 'd'.repeat(64),
+    providerEffects: false,
+  };
+
+  constructor(readonly workspaceId: string = WORKSPACE) {}
+
+  async consume(
+    _i: unknown, input: ConsumePermissionUseInput,
+  ): Promise<ConsumePermissionUseResult> {
+    this.calls.push(input);
+    return this.outcome;
+  }
+}
+
 function service(
   client: FakeClient,
   workspaceId = WORKSPACE,
   commandService: CustomerEmailLiveCommandService = new FakeCommand(),
+  permissionUse: PortalPermissionUseReceiptService = new FakePermissionUse(),
 ) {
   return new PgPortalFounderEmailPilotService({
     principalResolver: {
@@ -267,6 +295,7 @@ function service(
     commandPool: { async connect() { return client as never; } },
     providerConnectionId: CONNECTION,
     commandService,
+    permissionUse,
     now: () => NOW,
   });
 }
@@ -406,6 +435,7 @@ test('an unresolved session records and reads nothing', async () => {
     commandPool: { async connect() { return client as never; } },
     providerConnectionId: CONNECTION,
     commandService: command,
+    permissionUse: new FakePermissionUse(),
     now: () => NOW,
   });
   assert.deepEqual(
@@ -426,8 +456,96 @@ test('the seam requires the exact provider connection at construction', () => {
     commandPool: { async connect() { return new FakeClient() as never; } },
     providerConnectionId: 'not-a-uuid',
     commandService: new FakeCommand(),
+    permissionUse: new FakePermissionUse(),
     now: () => NOW,
   }), /exact provider connection/);
+});
+
+test('the permission-use receipt is consumed before the enqueue, never after', async () => {
+  const receipts = new FakePermissionUse();
+  const command = new FakeCommand();
+  const outcome = await service(new FakeClient(), WORKSPACE, command, receipts)
+    .authorise(IDENTITY, authoriseInput());
+  assert.ok(outcome.ok);
+  assert.equal(receipts.calls.length, 1);
+  // Bound to the same command key and window the enqueue will use, so the
+  // receipt the enqueue re-resolves is the one recorded here.
+  assert.equal(receipts.calls[0]?.commandKey, COMMAND_KEY);
+  assert.equal(receipts.calls[0]?.authorityValidUntil, authoriseInput().authorityValidUntil);
+  assert.equal(receipts.calls[0]?.contactPointId, POINT);
+  assert.equal(command.calls.length, 1);
+  assert.equal(
+    (command.calls[0] as Record<string, unknown>).permissionUseReceiptId, RECEIPT_ID,
+  );
+});
+
+test('a receipt recorded before an enqueue refusal still claims no provider effect', async () => {
+  const receipts = new FakePermissionUse();
+  const command = new FakeCommand();
+  command.error = Object.assign(new Error('hard cap reached'), { code: '54000' });
+  const outcome = await service(new FakeClient(), WORKSPACE, command, receipts)
+    .authorise(IDENTITY, authoriseInput());
+  // The send was refused; the consumption still happened and is auditable.
+  assert.deepEqual(outcome, { ok: false, kind: 'blocked' });
+  assert.equal(receipts.calls.length, 1);
+  assert.equal(
+    receipts.outcome.ok && receipts.outcome.providerEffects, false,
+    'a receipt must never imply Mailgun was called',
+  );
+});
+
+test('a refused receipt stops the enqueue with its own reason', async () => {
+  for (const [kind, expected] of [
+    ['conflict', 'conflict'], ['blocked', 'blocked'], ['forbidden', 'forbidden'],
+    ['validation', 'validation'], ['unavailable', 'unavailable'],
+    ['unauthenticated', 'unauthenticated'],
+  ] as const) {
+    const receipts = new FakePermissionUse();
+    const command = new FakeCommand();
+    receipts.outcome = { ok: false, kind };
+    assert.deepEqual(
+      await service(new FakeClient(), WORKSPACE, command, receipts)
+        .authorise(IDENTITY, authoriseInput()),
+      { ok: false, kind: expected }, kind,
+    );
+    assert.deepEqual(command.calls, [], kind);
+  }
+});
+
+test('a receipt that is not the one the tuple resolves to never enqueues', async () => {
+  // Belt and braces against the receipt rail and the evidence resolver
+  // disagreeing: the enqueue would refuse anyway, but the founder would be
+  // told the wrong reason.
+  const receipts = new FakePermissionUse();
+  const command = new FakeCommand();
+  receipts.outcome = {
+    ok: true, disposition: 'consumed',
+    permissionUseReceiptId: 'ad100000-0000-4000-8000-0000000000ff',
+    complianceSubjectId: EVIDENCE_ROW.compliance_subject_id,
+    actionScopeSha256: 'c'.repeat(64), evidenceSnapshotSha256: 'd'.repeat(64),
+    providerEffects: false,
+  };
+  assert.deepEqual(
+    await service(new FakeClient(), WORKSPACE, command, receipts)
+      .authorise(IDENTITY, authoriseInput()),
+    { ok: false, kind: 'stale_preview' },
+  );
+  assert.deepEqual(command.calls, []);
+});
+
+test('a replayed receipt produces a byte-identical enqueue command', async () => {
+  const command = new FakeCommand();
+  const first = new FakePermissionUse();
+  await service(new FakeClient(), WORKSPACE, command, first)
+    .authorise(IDENTITY, authoriseInput());
+  const second = new FakePermissionUse();
+  // The same receipt, reported as a replay rather than a fresh consumption.
+  second.outcome = { ...first.outcome, disposition: 'replayed' } as never;
+  command.disposition = 'replayed';
+  const outcome = await service(new FakeClient(), WORKSPACE, command, second)
+    .authorise(IDENTITY, authoriseInput());
+  assert.ok(outcome.ok && outcome.disposition === 'replayed');
+  assert.deepEqual(command.calls[0], command.calls[1]);
 });
 
 test('resolving an authorisation returns the exact message and never enqueues', async () => {

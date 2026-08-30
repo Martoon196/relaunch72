@@ -248,7 +248,7 @@ export function parseAttachContactEmailEndpoint(
 
 /** Workspace-scoped idempotency digest for either founder command. */
 export function deriveFounderPilotCommandKey(
-  context: 'contact-endpoint-attach' | 'email-pilot-authorise',
+  context: 'contact-endpoint-attach' | 'email-pilot-authorise' | 'email-permission-use',
   workspaceId: string,
   commandKey: string,
 ): string {

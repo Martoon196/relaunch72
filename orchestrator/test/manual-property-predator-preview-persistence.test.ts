@@ -132,7 +132,10 @@ test('content-control exact-review links resolve to composed immutable preview p
       + '/versions/82000000-0000-4000-8000-000000000002/review',
   );
   assert.equal(ownedSeed.status, 200);
-  assert.match(ownedSeed.html, /Property Predator Growth HQ — owned-seed delivery proof/);
+  assert.match(ownedSeed.html, /Property Predator Growth HQ — founder delivery proof/);
+  // The proof no longer names a mailbox anywhere, so the preview cannot show
+  // an address the founder never verified.
+  assert.doesNotMatch(ownedSeed.html, /office@propertypredator\.com/);
   assert.match(ownedSeed.html, /Approve exact version/);
   assert.match(ownedSeed.html, /name="return_exact_item_id"/);
   assert.doesNotMatch(ownedSeed.html, /Preview page not found/);

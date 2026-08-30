@@ -333,6 +333,10 @@ test('production Blueprint keeps web and worker database identities process-isol
 
   assert.deepEqual(databaseUrlKeys(webManifest), [
     'DATABASE_ABUSE_COMMAND_URL',
+    // The 0032 receipt identity. It is append-only into three compliance
+    // ledgers and holds nothing else, which is why it gets its own slot
+    // instead of borrowing the CRM or customer-email credentials.
+    'DATABASE_AFFILIATE_RECEIPT_COMMAND_URL',
     'DATABASE_CONTENT_ADAPTER_URL',
     'DATABASE_CONTENT_COMMAND_URL',
     'DATABASE_CRM_COMMAND_URL',

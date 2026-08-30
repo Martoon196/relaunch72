@@ -493,7 +493,11 @@ const PREVIEW_LIVE_CHANNELS_NOTICE_SESSION = 'preview-live-channels-session';
  * switch, database or provider exists behind it.
  */
 const PREVIEW_LIVE_COMPOSED_RAILS = Object.freeze(['customer_email', 'owned_social', 'whatsapp'] as const);
-const previewLivePauseEngaged = new Set<string>(['customer_email']);
+// WhatsApp carries the pre-engaged pause so customer email can illustrate the
+// gated state, which is what the founder will actually see while an approval,
+// permission, receipt or enqueue blocker remains. Both rails stay
+// non-deliverable, so the invariant above still holds.
+const previewLivePauseEngaged = new Set<string>(['whatsapp']);
 
 function previewLiveChannelsSnapshot(): LiveChannelsSourceSnapshot {
   const data = structuredClone(createPropertyPredatorLiveChannelsFixture()) as any;
@@ -501,6 +505,17 @@ function previewLiveChannelsSnapshot(): LiveChannelsSourceSnapshot {
     if (previewLivePauseEngaged.has(rail.rail)
         && !rail.blockerCodes.includes('EMERGENCY_PAUSED')) {
       rail.blockerCodes = [...rail.blockerCodes, 'EMERGENCY_PAUSED'];
+    }
+    // Customer email illustrates the gated state: connected and healthy, held
+    // only by the operator's permission-use receipt. That is exactly what a
+    // founder meets until the compliance receipt rail is bound, and it is what
+    // the truth correction exists to say out loud. The rail stays
+    // non-deliverable, so the invariant above still holds.
+    if (rail.rail === 'customer_email' && !previewLivePauseEngaged.has(rail.rail)) {
+      rail.blockerCodes = [
+        ...rail.blockerCodes.filter((code: string) => code !== 'EMERGENCY_PAUSED'),
+        'OPERATOR_AUTHORITY_REQUIRED',
+      ];
     }
   }
   return data as LiveChannelsSourceSnapshot;

@@ -8,23 +8,34 @@ import {
 } from '../company-content-pg/index.js';
 import {
   PROPERTY_PREDATOR_OWNED_SEED_ATTESTATION_MAX_AGE_MS,
+  PROPERTY_PREDATOR_OWNED_SEED_PROOF_RECIPIENT_BOUNDARY,
   PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_ITEM,
   PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_SYSTEM,
   PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_VERSION,
 } from '../company-content-pg/property-predator-owned-seed-attestation-policy.js';
 
 export {
+  PROPERTY_PREDATOR_OWNED_SEED_PROOF_RECIPIENT_BOUNDARY,
   PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_ITEM,
   PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_VERSION,
 };
 export const PROPERTY_PREDATOR_OWNED_SEED_PROOF_SUBJECT =
-  'Property Predator Growth HQ — owned-seed delivery proof' as const;
+  'Property Predator Growth HQ — founder delivery proof' as const;
+/**
+ * Recipient-neutral by construction.
+ *
+ * The previous copy named office@propertypredator.com, a mailbox the founder
+ * does not own, which made the proof unusable and would have addressed a real
+ * message to an address nobody had verified. The recipient is now resolved from
+ * the verified endpoint on the Lead 360 contact at authorisation time and never
+ * written here, so no address of any kind lives in this repository.
+ */
 export const PROPERTY_PREDATOR_OWNED_SEED_PROOF_BODY =
-  `This is the internal delivery proof for Property Predator Growth HQ.
-
-No customers or affiliates are included. It is addressed only to office@propertypredator.com.
-
-Reply RECEIVED to verify that the Conversion Inbox can capture and reconcile the owned-seed response.` as const;
+  `This is the founder-only delivery proof for Property Predator Growth HQ.
+No customers or affiliates are included. This message is addressed only to the verified founder email endpoint shown in Lead 360.
+Reply RECEIVED to prove the full loop:
+Mailgun EU → signed receipt → Conversion Inbox → Lead 360 → next action.
+No other message is authorised by this proof.` as const;
 
 export interface PropertyPredatorOwnedSeedProofRevision {
   readonly contentItemId: string;
@@ -50,7 +61,7 @@ export function propertyPredatorOwnedSeedProofEmailCommand(
   const evidenceManifest = JSON.stringify({
     brandSha256: PROPERTY_PREDATOR_AI_RUNTIME_BRAND_V1_SHA256,
     contentSha256: sha256(canonical),
-    recipientBoundary: 'office@propertypredator.com',
+    recipientBoundary: PROPERTY_PREDATOR_OWNED_SEED_PROOF_RECIPIENT_BOUNDARY,
     sourceItem: PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_ITEM,
     sourceVersion: revision?.sourceVersion ?? PROPERTY_PREDATOR_OWNED_SEED_PROOF_SOURCE_VERSION,
   });
@@ -95,7 +106,7 @@ export function propertyPredatorOwnedSeedProofEmailCommand(
       evidenceSha256,
       providerEffects: false,
       purpose: 'owned_seed_delivery_proof',
-      recipientBoundary: 'fixed_owned_office',
+      recipientBoundary: PROPERTY_PREDATOR_OWNED_SEED_PROOF_RECIPIENT_BOUNDARY,
     }),
   });
 }

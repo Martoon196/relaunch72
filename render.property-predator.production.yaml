@@ -209,6 +209,14 @@ services:
       # evidence; it cannot claim a job or call Twilio.
       - key: DATABASE_SMS_COMMAND_URL
         sync: false
+      # Dedicated r72_affiliate_receipt_command identity from 0032. It inserts
+      # the operator's own permission-use receipt during the authorising
+      # request, which 0054 requires and binds to that exact request id. It is
+      # append-only into three compliance ledgers: it cannot enqueue, reach a
+      # provider, read a secret, or alter consent or suppression. Never point
+      # this at the CRM, web or customer-email credentials.
+      - key: DATABASE_AFFILIATE_RECEIPT_COMMAND_URL
+        sync: false
       # Dedicated r72_mailgun_webhook_command identity. This is deliberately
       # narrower than the platform's generic webhook role.
       - key: DATABASE_MAILGUN_WEBHOOK_URL
@@ -240,6 +248,10 @@ services:
       - key: DATABASE_CUSTOMER_EMAIL_COMMAND_POOL_MAX
         value: "2"
       - key: DATABASE_SMS_COMMAND_POOL_MAX
+        value: "2"
+      # One receipt per authorising request, and a founder authorises one send
+      # at a time. Two is headroom, not throughput.
+      - key: DATABASE_AFFILIATE_RECEIPT_COMMAND_POOL_MAX
         value: "2"
       - key: DATABASE_MAILGUN_WEBHOOK_POOL_MAX
         value: "2"
