@@ -172,3 +172,63 @@ The emergency pause control is unchanged and still engage-only.
    a partial tuple raises rather than silently downgrading.
 
 The emergency pause has no release function by design.
+
+## Zernio pilot candidate for Facebook, Instagram and LinkedIn
+
+The existing Ayrshare/X rail is not being replaced or widened implicitly.
+Zernio is the lower-cost pilot candidate for Facebook Pages, Instagram
+professional accounts and LinkedIn organisations. The provider's current
+[connection reference](https://docs.zernio.com/connect/get-connect-url) and
+[multi-tenant guide](https://docs.zernio.com/multi-tenant) document the exact
+headless OAuth start used by the local contract-test seam.
+
+`ZernioConnectionContract` is deliberately **contract-test only**. Its default
+mode is disabled and cannot perform network I/O. The branded test transport can
+only prove construction of one bounded `GET /api/v1/connect/{platform}` request
+with bearer authentication, a fixed Growth HQ callback, an exact
+workspace/connection/profile credential binding, no redirects followed and no
+OAuth browser opened. It accepts only `facebook`, `instagram` and `linkedin`.
+It does not create a Zernio profile, connect an account, persist a callback,
+select a Facebook Page or LinkedIn organisation, receive a webhook, publish,
+schedule, read analytics, reply to a comment/DM, disconnect an account or make
+any provider call from production.
+
+### Complete blockers before any real account connection
+
+1. Obtain written SaaS/embedded-use rights, DPA/subprocessor and data-region
+   evidence, support/SLA terms, platform-partner evidence and an exit/deletion
+   commitment. Public marketing is not the executed contract.
+2. Create the company-owned provider account, one workspace-scoped profile and
+   restricted API credential; bind their non-secret identities to an immutable
+   Growth HQ connection record. No shared team-wide account ID may be accepted
+   without the local workspace mapping.
+3. Add a short-lived, one-use callback receipt bound to the initiating portal
+   session, workspace, connection, profile, network and provider-state digest.
+   A browser callback is navigation evidence, never proof that an account is
+   connected.
+4. Implement the documented headless secondary-selection ceremonies for
+   Facebook Pages and LinkedIn organisations, with the provider temporary token
+   confined to the server-side command boundary. Instagram's selected login
+   method must be pinned because Facebook Login adds its own selection step.
+5. Add a separate raw-body webhook service for only `account.connected` and
+   `account.disconnected`. It must verify the lowercase-hex HMAC-SHA256
+   `X-Zernio-Signature`, require the payload ID to equal
+   `X-Zernio-Event-Id`, deduplicate at-least-once delivery, persist before `2xx`,
+   and route by the already-bound provider profile. The
+   [webhook guide](https://docs.zernio.com/webhooks) is the current signature
+   and idempotency reference.
+6. Resolve a current provider-document conflict in writing before setting retry
+   monitoring: the webhook overview says webhooks are never automatically
+   disabled, while the create-webhook reference says ten consecutive delivery
+   failures disable them. Readiness must not assume either behaviour.
+7. Add account-health reconciliation, revocation/disconnect, missed-webhook
+   recovery, cost/rate-limit fairness and migration-out tests. A signed
+   `account.connected` receipt plus an exact account-list/health reconciliation
+   is required before the portal may label a connection live.
+8. Build and review a separate publish/schedule/reconcile adapter and its
+   content, approval, cap, pause and receipt boundaries. A successful OAuth
+   connection never grants publishing permission by itself.
+
+Until all eight items are closed, Growth HQ must display Zernio as
+`adapter_contract_verified` at most. It must show zero live Zernio connections,
+offer no executable connect button and make no provider-effect claim.
