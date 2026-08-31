@@ -2476,7 +2476,15 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       network: zernioConnectMatch[1] as ZernioPilotNetwork,
     });
     if (!outcome.ok) return zernioRedirect(zernioFailureNotice(outcome.kind));
-    return redirect(res, outcome.authUrl, undefined, 303, {
+    const networkLabel = zernioConnectMatch[1]![0]!.toUpperCase()
+      + zernioConnectMatch[1]!.slice(1);
+    return sendHtml(res, 200, portalStatusPage(deps, sessionToken, {
+      title: `${networkLabel} consent ready`,
+      message: 'Growth HQ prepared a one-use provider handoff. Continue to review and approve the native account permissions.',
+      backHref: outcome.authUrl,
+      backLabel: `Continue to ${networkLabel}`,
+      active: 'content',
+    }), undefined, {
       'cache-control': 'no-store',
       'referrer-policy': 'no-referrer',
     });

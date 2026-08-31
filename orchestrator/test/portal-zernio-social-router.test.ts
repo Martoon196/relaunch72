@@ -119,13 +119,12 @@ test('founder social screen shows connection-only Zernio controls and no publish
   assert.match(result.body, /Connect Facebook/);
   assert.match(result.body, /Connect Instagram/);
   assert.match(result.body, /Connect Linkedin/);
-  assert.equal((result.body.match(/target="_blank"/g) ?? []).length, 3);
-  assert.equal((result.body.match(/rel="noopener"/g) ?? []).length, 3);
+  assert.doesNotMatch(result.body, /target="_blank"/);
   assert.match(result.body, /Publishing stays off/);
   assert.doesNotMatch(result.body, /action="[^"]*(?:publish|schedule|queue)/i);
 });
 
-test('one valid connect command prepares Zernio once and redirects to its hosted picker', async () => {
+test('one valid connect command prepares Zernio once and renders a no-store hosted-consent handoff', async () => {
   const calls: unknown[] = [];
   const zernio = service({
     begin: async (identity, input) => {
@@ -138,8 +137,11 @@ test('one valid connect command prepares Zernio once and redirects to its hosted
     confirm_connect: 'CONNECT',
   }).toString();
   const result = await call('/portal/social/accounts/connect/facebook', deps(zernio), 'POST', body);
-  assert.equal(result.statusCode, 303);
-  assert.equal(result.headers.location, 'https://zernio.com/connect/continue');
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.headers['cache-control'], 'no-store');
+  assert.match(result.body, /Facebook consent ready/);
+  assert.match(result.body, /href="https:\/\/zernio\.com\/connect\/continue"/);
+  assert.match(result.body, />Continue to Facebook</);
   assert.equal(calls.length, 1);
   const input = (calls[0] as { input: { intentId: string; network: string } }).input;
   assert.match(input.intentId, /^[0-9a-f-]{36}$/u);
