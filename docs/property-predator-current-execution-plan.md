@@ -333,6 +333,21 @@ not itself authorise deployment, migration or provider effects.
 | Founder event bridge | Dedicated HMAC receiver, two least-privilege Growth HQ database identities, isolated Property Predator dispatcher and additive immutable outbox are live; founder fresh/replay proof is 1 receipt, 1 Growth projection, 1 Journey projection and 1 delivery attempt | No remaining code or account input for account-created events. Add future event types only when a real founder workflow supplies the authoritative source fact. |
 | Database proof | Production Growth HQ ledger is 65/65 and runtime-ready; migrations 0064-0065 passed a clean disposable-Neon apply and hostile-role proof before production. Property Predator conversion data-plane has a recoverable pre-migration checkpoint and its live immutable one-event proof passed. | Run the final clean disposable-Neon reset/attack sweep through the complete ledger during the Sol Ultra master rehearsal. Production must never be the disposable attack-proof target. |
 
+## Planned multi-business social expansion
+
+Property Predator is the first isolated production social workspace, not the
+only business the platform will support. After the Property Predator pilot is
+proved, add founder-owned businesses such as **Prop Invest UK** and subsequent
+businesses as separate workspaces and separate Zernio profiles.
+
+Each business must retain its own connected-account mappings, credentials,
+permissions, brand brain, approval trail, content calendar, inbox, analytics,
+caps and provider receipts. Never reuse a Property Predator account, key,
+approval or post against Prop Invest UK—or any later business—merely because the
+same founder controls both. Adding a business is a deliberate provisioning and
+native-account-consent action; this roadmap note does not authorise any present
+connection, schedule or publication outside Property Predator.
+
 ## Immediate move
 
 Begin the customer experience with the founder as the sole production pilot:

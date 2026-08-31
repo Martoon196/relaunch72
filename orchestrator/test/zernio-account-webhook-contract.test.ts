@@ -107,7 +107,11 @@ test('connected and disconnected receipts are deterministic and distinct', () =>
   const connected = verifyZernioAccountWebhook(credential(), signed(payload()));
   const disconnectedInput = signed(payload({
     event: 'account.disconnected',
-    account: { ...payload().account, disconnectionType: 'unintentional' },
+    account: {
+      ...payload().account,
+      disconnectionType: 'unintentional',
+      reason: 'Token expired or was revoked',
+    },
   }));
   const disconnected = verifyZernioAccountWebhook(credential(), disconnectedInput);
   const replay = verifyZernioAccountWebhook(credential(), disconnectedInput);
@@ -124,6 +128,10 @@ test('unsupported fields, events, disconnect types and noncanonical times fail c
     payload({
       event: 'account.disconnected',
       account: { ...payload().account, disconnectionType: 'maybe' },
+    }),
+    payload({
+      event: 'account.disconnected',
+      account: { ...payload().account, disconnectionType: 'intentional', reason: 123 },
     }),
     payload({ account: { ...payload().account, secret: 'must-not-pass' } }),
   ];

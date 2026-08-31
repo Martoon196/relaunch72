@@ -196,7 +196,7 @@ export function verifyZernioAccountWebhook(
   }
   const account = record(payload.account, 'Zernio webhook account');
   const allowedAccountKeys = new Set([
-    'accountId', 'profileId', 'platform', 'username', 'displayName', 'disconnectionType',
+    'accountId', 'profileId', 'platform', 'username', 'displayName', 'disconnectionType', 'reason',
   ]);
   if (Object.keys(account).some((key) => !allowedAccountKeys.has(key))) {
     fail('Zernio webhook account has unexpected fields');
@@ -210,6 +210,11 @@ export function verifyZernioAccountWebhook(
       && account.disconnectionType !== 'intentional'
       && account.disconnectionType !== 'unintentional') {
     fail('Zernio webhook disconnection type is invalid');
+  }
+  if (payload.event === 'account.disconnected'
+      && account.reason !== undefined
+      && typeof account.reason !== 'string') {
+    fail('Zernio webhook disconnection reason is invalid');
   }
   const occurredAt = timestamp(payload.timestamp, 'payload.timestamp');
   const rawBodySha256 = sha256(rawBody);
