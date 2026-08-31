@@ -210,11 +210,13 @@ any provider call from production.
    Facebook Pages and LinkedIn organisations, with the provider temporary token
    confined to the server-side command boundary. Instagram's selected login
    method must be pinned because Facebook Login adds its own selection step.
-5. Add a separate raw-body webhook service for only `account.connected` and
-   `account.disconnected`. It must verify the lowercase-hex HMAC-SHA256
-   `X-Zernio-Signature`, require the payload ID to equal
-   `X-Zernio-Event-Id`, deduplicate at-least-once delivery, persist before `2xx`,
-   and route by the already-bound provider profile. The
+5. The local raw-byte verifier now accepts only `account.connected` and
+   `account.disconnected`, verifies the lowercase-hex HMAC-SHA256
+   `X-Zernio-Signature`, requires the payload ID to equal
+   `X-Zernio-Event-Id`, enforces the bound provider profile/network and reduces
+   provider identifiers to hashes. Still add a separate webhook service and
+   database receipt boundary to deduplicate at-least-once delivery, persist
+   before `2xx`, and route by the already-bound provider profile. The
    [webhook guide](https://docs.zernio.com/webhooks) is the current signature
    and idempotency reference.
 6. Resolve a current provider-document conflict in writing before setting retry
