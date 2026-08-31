@@ -4,7 +4,6 @@ import { withTransaction } from '../db/transaction.js';
 import { propertyPredatorMailgunReplyToken } from '../providers/property-predator-mailgun-reply-correlation.js';
 import {
   PROPERTY_PREDATOR_MAILGUN_REPLY_DOMAIN,
-  PROPERTY_PREDATOR_OWNED_OFFICE_EMAIL,
   PropertyPredatorMailgunInboundConflictError,
   PropertyPredatorMailgunInboundUnmatchedError,
   type PropertyPredatorMailgunInboundRecordInput,
@@ -49,7 +48,9 @@ function validate(input: Readonly<PropertyPredatorMailgunInboundRecordInput>): v
   const recipient = REPLY_ADDRESS.exec(input.normalizedRecipient);
   if (!SHA256.test(input.correlationSha256)
       || recipient?.[1] !== propertyPredatorMailgunReplyToken(input.correlationSha256)
-      || input.normalizedSender !== PROPERTY_PREDATOR_OWNED_OFFICE_EMAIL
+      || typeof input.normalizedSender !== 'string'
+      || input.normalizedSender !== input.normalizedSender.trim().toLowerCase()
+      || !/^[^\s@]+@[^\s@]+$/u.test(input.normalizedSender)
       || !input.normalizedRecipient.endsWith(`@${PROPERTY_PREDATOR_MAILGUN_REPLY_DOMAIN}`)
       || !MESSAGE_ID.test(input.providerMessageId)
       || !Number.isFinite(new Date(input.occurredAt).getTime())

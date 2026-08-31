@@ -5,7 +5,6 @@ import {
   PROPERTY_PREDATOR_MAILGUN_INBOUND_MAX_BODY_BYTES,
   PROPERTY_PREDATOR_MAILGUN_INBOUND_MAX_MESSAGE_BYTES,
   PROPERTY_PREDATOR_MAILGUN_REPLY_DOMAIN,
-  PROPERTY_PREDATOR_OWNED_OFFICE_EMAIL,
   PropertyPredatorMailgunInboundBodyTooLargeError,
   PropertyPredatorMailgunInboundContractError,
 } from './types.js';
@@ -23,7 +22,7 @@ export interface DecodedPropertyPredatorMailgunInboundForm {
 export interface ParsedPropertyPredatorMailgunInboundMessage {
   readonly correlationSha256: string;
   readonly providerMessageId: string;
-  readonly normalizedSender: typeof PROPERTY_PREDATOR_OWNED_OFFICE_EMAIL;
+  readonly normalizedSender: string;
   readonly normalizedRecipient: string;
   readonly subject: string;
   readonly bodyText: string;
@@ -125,9 +124,6 @@ export function parsePropertyPredatorMailgunInboundMessage(
     return fail('Mailgun inbound attachments are outside the owned-office proof boundary');
   }
   const sender = safeEmail(one(decoded.fields, 'sender'), 'Mailgun inbound sender');
-  if (sender !== PROPERTY_PREDATOR_OWNED_OFFICE_EMAIL) {
-    return fail('Mailgun inbound sender is outside the owned-office proof boundary');
-  }
   const recipient = safeEmail(one(decoded.fields, 'recipient'), 'Mailgun inbound recipient');
   const correlation = CORRELATED_RECIPIENT.exec(recipient);
   if (!correlation) return fail('Mailgun inbound recipient is outside the proof reply boundary');
@@ -140,7 +136,7 @@ export function parsePropertyPredatorMailgunInboundMessage(
   return Object.freeze({
     correlationSha256: propertyPredatorMailgunReplyDigest(correlation[1]!),
     providerMessageId: messageId(one(decoded.fields, 'message-headers')),
-    normalizedSender: PROPERTY_PREDATOR_OWNED_OFFICE_EMAIL,
+    normalizedSender: sender,
     normalizedRecipient: recipient,
     subject,
     bodyText: safeText(

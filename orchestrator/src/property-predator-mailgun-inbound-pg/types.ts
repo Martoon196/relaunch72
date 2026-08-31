@@ -1,12 +1,12 @@
 export const PROPERTY_PREDATOR_MAILGUN_INBOUND_MAX_BODY_BYTES = 128 * 1024;
 export const PROPERTY_PREDATOR_MAILGUN_INBOUND_MAX_MESSAGE_BYTES = 64 * 1024;
-export const PROPERTY_PREDATOR_OWNED_OFFICE_EMAIL = 'office@propertypredator.com' as const;
 export const PROPERTY_PREDATOR_MAILGUN_REPLY_DOMAIN = 'mg.propertypredator.com' as const;
 
 export interface PropertyPredatorMailgunInboundRecordInput {
   readonly correlationSha256: string;
   readonly providerMessageId: string;
-  readonly normalizedSender: typeof PROPERTY_PREDATOR_OWNED_OFFICE_EMAIL;
+  /** Bound by the recorder to the exact verified contact point used by the settled delivery. */
+  readonly normalizedSender: string;
   readonly normalizedRecipient: string;
   readonly subject: string;
   readonly bodyText: string;

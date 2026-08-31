@@ -24,6 +24,7 @@ const INSTALLATION_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const SIGNING_KEY = Buffer.from('s'.repeat(32), 'utf8');
 const NOW_SECONDS = 1_800_000_000;
 const CORRELATION = '0123456789abcdef'.repeat(4);
+const FOUNDER_EMAIL = 'martin.howard1984@gmail.com';
 
 function signedForm(overrides: Readonly<Record<string, string>> = {}): Buffer {
   const timestamp = overrides.timestamp ?? String(NOW_SECONDS);
@@ -34,13 +35,13 @@ function signedForm(overrides: Readonly<Record<string, string>> = {}): Buffer {
     timestamp,
     token,
     signature,
-    sender: 'office@propertypredator.com',
+    sender: FOUNDER_EMAIL,
     recipient: propertyPredatorMailgunReplyAddress(CORRELATION, 'mg.propertypredator.com'),
     subject: 'Re: Property Predator owned-office proof',
     'stripped-text': 'Yes, this verified reply reached the owned office.',
     'body-plain': 'quoted fallback must not win',
     'message-headers': JSON.stringify([
-      ['From', 'office@propertypredator.com'],
+      ['From', FOUNDER_EMAIL],
       ['Message-Id', '<owned-office-reply-001@example.test>'],
     ]),
     'attachment-count': '0',
@@ -95,6 +96,7 @@ test('signed owned-office Mailgun reply authenticates before parsing and retains
   assert.equal(result.disposition, 'recorded');
   assert.equal(recorded?.correlationSha256, CORRELATION);
   assert.equal(recorded?.providerMessageId, 'owned-office-reply-001@example.test');
+  assert.equal(recorded?.normalizedSender, FOUNDER_EMAIL);
   assert.equal(recorded?.bodyText, 'Yes, this verified reply reached the owned office.');
   assert.equal(recorded?.occurredAt, new Date(NOW_SECONDS * 1_000).toISOString());
   for (const digest of [
