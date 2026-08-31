@@ -12,6 +12,8 @@ test('0072 binds the signed inbound sender to the settled delivery contact point
   assert.match(sql, /CREATE OR REPLACE FUNCTION app_private\.record_property_predator_owned_seed_mailgun_inbound\(/u);
   assert.match(sql, /lower\(point\.normalized_value\) = p_normalized_sender/u);
   assert.doesNotMatch(sql, /p_normalized_sender <> 'office@propertypredator\.com'/u);
+  assert.match(sql, /p_normalized_sender !~ '\^\[\^\[:space:\]@\]\+@\[\^\[:space:\]@\]\+\$'/u);
+  assert.match(sql, /p_normalized_sender ~ '\[\[:cntrl:\]\]'/u);
   assert.match(sql, /selected_delivery\.contact_point_id/u);
   assert.match(sql, /p_sender_identity_sha256 <> public\.digest\(p_normalized_sender, 'sha256'\)/u);
   assert.match(sql, /provider_id = 'mailgun_eu'/u);

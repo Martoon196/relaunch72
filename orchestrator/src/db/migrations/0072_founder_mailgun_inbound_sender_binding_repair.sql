@@ -81,7 +81,9 @@ BEGIN
      OR p_normalized_sender IS NULL
      OR p_normalized_sender <> lower(btrim(p_normalized_sender))
      OR length(p_normalized_sender) NOT BETWEEN 3 AND 320
-     OR p_normalized_sender !~ '^[^[:space:]@]+@[^[:space:]@]+     OR p_normalized_recipient IS NULL
+     OR p_normalized_sender !~ '^[^[:space:]@]+@[^[:space:]@]+$'
+     OR p_normalized_sender ~ '[[:cntrl:]]'
+     OR p_normalized_recipient IS NULL
      OR p_subject IS NULL OR p_subject <> btrim(p_subject)
      OR octet_length(p_subject) NOT BETWEEN 1 AND 500
      OR p_subject ~ '[\r\n]'
