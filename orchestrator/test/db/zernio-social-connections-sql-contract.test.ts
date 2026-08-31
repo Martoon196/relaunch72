@@ -10,6 +10,10 @@ const readSessionAclRepairUrl = new URL(
   '../../src/db/migrations/0075_zernio_social_read_session_acl_repair.sql',
   import.meta.url,
 );
+const expiredIntentDeleteAclRepairUrl = new URL(
+  '../../src/db/migrations/0076_zernio_social_expired_intent_delete_acl_repair.sql',
+  import.meta.url,
+);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/gu, ' ').replace(/\s+/gu, ' ').trim();
@@ -68,5 +72,18 @@ test('0075 grants only the missing read-only session fence and audits the bounda
   assert.match(sql, /app_private\.read_zernio_social_accounts\(uuid,uuid,bytea\)/);
   assert.match(sql, /has_table_privilege\( 'r72_zernio_social_command', relation\.oid, 'TRUNCATE' \)/);
   assert.doesNotMatch(sql, /GRANT (?:SELECT|INSERT|UPDATE|DELETE|TRUNCATE)/);
+  assert.doesNotMatch(sql, /(?:publish|enqueue|schedule|worker_lease|claim_job)/iu);
+});
+
+test('0076 grants only expired-intent deletion and protects durable account evidence', async () => {
+  const sql = normalise(await readFile(expiredIntentDeleteAclRepairUrl, 'utf8'));
+  assert.match(
+    sql,
+    /GRANT DELETE ON app\.property_predator_zernio_connection_intents TO r72_zernio_social_definer/,
+  );
+  assert.match(sql, /property_predator_zernio_accounts', 'DELETE'/);
+  assert.match(sql, /property_predator_zernio_account_webhook_receipts', 'DELETE'/);
+  assert.match(sql, /r72_zernio_social_command', relation\.oid, 'TRUNCATE'/);
+  assert.doesNotMatch(sql, /GRANT DELETE ON app\.property_predator_zernio_(?:accounts|account_webhook_receipts)/);
   assert.doesNotMatch(sql, /(?:publish|enqueue|schedule|worker_lease|claim_job)/iu);
 });

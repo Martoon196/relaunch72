@@ -46,6 +46,7 @@ interface BoundaryRow extends QueryResultRow {
   exactRole: unknown;
   schemaUsage: unknown;
   requiredFunctions: unknown;
+  definerPrivilegesExact: unknown;
   tableBlind: unknown;
   elevatedRolesDenied: unknown;
 }
@@ -83,6 +84,17 @@ export async function assertZernioSocialCommandBoundaryReady(
          AND has_function_privilege(current_user,
            'app_private.runtime_database_installation_id()', 'EXECUTE')
            AS "requiredFunctions",
+         has_table_privilege('r72_zernio_social_definer',
+           'app.property_predator_zernio_connection_intents', 'SELECT,INSERT,UPDATE,DELETE')
+         AND has_table_privilege('r72_zernio_social_definer',
+           'app.property_predator_zernio_accounts', 'SELECT,INSERT,UPDATE')
+         AND NOT has_table_privilege('r72_zernio_social_definer',
+           'app.property_predator_zernio_accounts', 'DELETE,TRUNCATE')
+         AND has_table_privilege('r72_zernio_social_definer',
+           'app.property_predator_zernio_account_webhook_receipts', 'SELECT,INSERT')
+         AND NOT has_table_privilege('r72_zernio_social_definer',
+           'app.property_predator_zernio_account_webhook_receipts', 'UPDATE,DELETE,TRUNCATE')
+           AS "definerPrivilegesExact",
          NOT EXISTS (
            SELECT 1 FROM pg_catalog.pg_class relation
            JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace

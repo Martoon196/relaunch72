@@ -6,6 +6,7 @@ const exact = Object.freeze({
   exactRole: true,
   schemaUsage: true,
   requiredFunctions: true,
+  definerPrivilegesExact: true,
   tableBlind: true,
   elevatedRolesDenied: true,
 });
@@ -19,6 +20,9 @@ test('Zernio readiness requires both read-only and write-side portal-session fen
   assert.match(sql, /app_private\.active_portal_session\(bytea,uuid,uuid\)/u);
   assert.match(sql, /app_private\.lock_active_portal_session\(bytea,uuid,uuid\)/u);
   assert.match(sql, /app_private\.read_zernio_social_accounts\(uuid,uuid,bytea\)/u);
+  assert.match(sql, /property_predator_zernio_connection_intents', 'SELECT,INSERT,UPDATE,DELETE'/u);
+  assert.match(sql, /property_predator_zernio_accounts', 'DELETE,TRUNCATE'/u);
+  assert.match(sql, /property_predator_zernio_account_webhook_receipts', 'UPDATE,DELETE,TRUNCATE'/u);
 });
 
 test('Zernio readiness fails closed when any boundary capability is missing', async () => {
