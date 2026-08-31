@@ -347,11 +347,13 @@ BEGIN
   SELECT pg_catalog.pg_get_functiondef(recorder_oid) INTO recorder_source;
   IF recorder_oid IS NULL
      OR recorder_source IS NULL
-     OR pg_catalog.position(
-       'lower(point.normalized_value) = p_normalized_sender' IN recorder_source
+     OR pg_catalog.strpos(
+       recorder_source,
+       'lower(point.normalized_value) = p_normalized_sender'
      ) = 0
-     OR pg_catalog.position(
-       'p_normalized_sender <> ''office@propertypredator.com''' IN recorder_source
+     OR pg_catalog.strpos(
+       recorder_source,
+       'p_normalized_sender <> ''office@propertypredator.com'''
      ) <> 0
      OR NOT pg_catalog.has_function_privilege(
        'r72_mailgun_webhook_command', recorder_oid, 'EXECUTE'

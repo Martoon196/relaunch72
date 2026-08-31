@@ -24,4 +24,6 @@ test('0072 binds the signed inbound sender to the settled delivery contact point
   assert.match(sql, /owner_role\.rolname = 'r72_mailgun_webhook_definer'/u);
   assert.match(sql, /procedure\.prosecdef/u);
   assert.match(sql, /procedure\.proconfig = ARRAY\['search_path=pg_catalog'\]::text\[\]/u);
+  assert.match(sql, /pg_catalog\.strpos\(\s*recorder_source,/u);
+  assert.doesNotMatch(sql, /pg_catalog\.position\(/u);
 });
