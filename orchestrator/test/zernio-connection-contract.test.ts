@@ -37,7 +37,7 @@ const context: ZernioConnectionContext = Object.freeze({
 const request: ZernioConnectionRequest = Object.freeze({
   network: 'facebook',
   redirectUrl: CALLBACK,
-  headless: true,
+  headless: false,
 });
 
 function credential() {
@@ -92,21 +92,21 @@ test('disabled Zernio seam has no provider effects and does not inspect inputs',
 test('security metadata is the exact contract the request builder consumes', () => {
   assert.deepEqual(ZERNIO_CONNECTION_SECURITY_CONTRACT, {
     origin: 'https://zernio.com',
-    path: '/api/v1/connect/{platform}',
+    path: '/v1/connect/{platform}',
     authentication: 'bearer_header_only',
     redirectPolicy: 'error',
     responseMode: 'bounded_stream',
     maximumResponseBytes: 65_536,
     minimumTimeoutMs: 1_000,
     maximumTimeoutMs: 30_000,
-    headless: true,
+    headless: false,
     workspaceProfileBindingRequired: true,
     accountConnectedWebhookRequired: true,
     callbackUrl: CALLBACK,
   });
 });
 
-test('prepares the exact reviewed Zernio headless OAuth request without starting OAuth', async () => {
+test('prepares the exact reviewed Zernio hosted-selection OAuth request without starting OAuth', async () => {
   const authUrl = 'https://www.facebook.com/v21.0/dialog/oauth?client_id=reviewed';
   const state = 'bound-provider-state';
   const { contract, http } = setup(response({ authUrl, state }));
@@ -125,11 +125,11 @@ test('prepares the exact reviewed Zernio headless OAuth request without starting
   assert.ok(sent);
   const url = new URL(sent.url);
   assert.equal(url.origin, ZERNIO_CONNECTION_SECURITY_CONTRACT.origin);
-  assert.equal(url.pathname, '/api/v1/connect/facebook');
+  assert.equal(url.pathname, '/v1/connect/facebook');
   assert.deepEqual(Object.fromEntries(url.searchParams), {
     profileId: 'profile_abc123',
     redirect_url: CALLBACK,
-    headless: 'true',
+    headless: 'false',
   });
   assert.deepEqual(sent.headers, { Authorization: `Bearer ${API_KEY}` });
   assert.equal(sent.method, 'GET');
@@ -190,7 +190,7 @@ test('all and only the reviewed pilot networks produce their exact provider path
     const result = await current.contract.prepare(context, { ...request, network });
     assert.equal(result.status, 'ready');
     const [sent] = readPublicSocialContractHttpRequests(current.http);
-    assert.equal(new URL(sent!.url).pathname, `/api/v1/connect/${network}`);
+    assert.equal(new URL(sent!.url).pathname, `/v1/connect/${network}`);
   }
 });
 

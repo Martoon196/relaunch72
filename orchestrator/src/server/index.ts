@@ -91,6 +91,9 @@ import { createPortalRequestContextResolver } from '../portal/request-context.js
 import { createSafeTelemetryLogger } from '../ops/safe-telemetry.js';
 import { composePropertyPredatorSimulatedInbound } from '../integrations/simulated-inbound/composition.js';
 import { composePropertyPredatorProviderIngress } from '../integrations/provider-ingress/index.js';
+import {
+  composePropertyPredatorZernioAccountWebhook,
+} from '../integrations/zernio-account-webhook/router.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ORCH_ROOT = path.resolve(HERE, '../..');
@@ -603,6 +606,7 @@ async function main(): Promise<void> {
         liveChannelTruth: postgresPortal.liveChannelTruth,
         liveChannelPause: postgresPortal.liveChannelPause,
         ownedSocialBinding: postgresPortal.ownedSocialBinding,
+        zernioSocial: postgresPortal.zernioSocial,
         smsBinding: postgresPortal.smsBinding,
         contactPermission: postgresPortal.contactPermission,
         founderEmailPilot: postgresPortal.founderEmailPilot,
@@ -677,10 +681,20 @@ async function main(): Promise<void> {
       : '⚠  Meta/Whereby inbound callbacks unavailable; protected endpoints did not pass readiness.');
   }
 
+  const zernioAccountWebhook = composePropertyPredatorZernioAccountWebhook(
+    process.env,
+    postgresPortal?.zernioSocial,
+  );
+  if (zernioAccountWebhook.enabled) {
+    console.log(zernioAccountWebhook.ready
+      ? 'Signed Zernio account lifecycle ingress is ready; publishing remains off.'
+      : '⚠  Zernio account lifecycle ingress unavailable; protected binding did not compose.');
+  }
+
   const buildBlockers = forceMockBuilds || process.env.ANTHROPIC_API_KEY?.trim() ? [] : ['Anthropic build key is not configured'];
   const runtimeReadinessProbe = (postgresPortal || mailgunWebhookEnabled
       || mailgunInboundConfig.enabled
-      || simulatedInbound.enabled || providerIngress.enabled)
+      || simulatedInbound.enabled || providerIngress.enabled || zernioAccountWebhook.enabled)
     ? createCachedRuntimeReadinessProbe({
         probe: async () => {
           const blockers: string[] = [];
@@ -750,6 +764,9 @@ async function main(): Promise<void> {
           if (providerIngress.enabled && !providerIngress.ready) {
             blockers.push('Protected Meta/Whereby provider ingress is unavailable');
           }
+          if (zernioAccountWebhook.enabled && !zernioAccountWebhook.ready) {
+            blockers.push('Protected Zernio account webhook runtime is unavailable');
+          }
           return Object.freeze(blockers);
         },
       })
@@ -781,6 +798,7 @@ async function main(): Promise<void> {
     propertyPredatorSimulatedWhatsAppInbound: simulatedInbound.whatsapp,
     propertyPredatorSimulatedMetaDmInbound: simulatedInbound.metaDm,
     propertyPredatorProviderIngress: providerIngress,
+    propertyPredatorZernioAccountWebhook: zernioAccountWebhook,
   });
   const server = http.createServer((req, res) => { void app(req, res); });
   server.headersTimeout = 10_000;

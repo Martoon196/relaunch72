@@ -45,6 +45,10 @@ import {
   isPropertyPredatorProviderIngressPath,
   type PropertyPredatorProviderIngressMount,
 } from '../integrations/provider-ingress/index.js';
+import {
+  PROPERTY_PREDATOR_ZERNIO_ACCOUNT_WEBHOOK_PATH,
+  type PropertyPredatorZernioAccountWebhookMount,
+} from '../integrations/zernio-account-webhook/router.js';
 
 /** Optional marketing sync (Brevo). Both are no-ops when Brevo isn't configured. */
 export interface MarketingHooks {
@@ -104,6 +108,8 @@ export interface AppDeps {
   propertyPredatorSimulatedMetaDmInbound?: PropertyPredatorSimulatedMetaDmInboundMount;
   /** Optional, inbound-only Meta/Whereby provider callbacks; never an outbound client. */
   propertyPredatorProviderIngress?: PropertyPredatorProviderIngressMount;
+  /** Optional signed Zernio account lifecycle receipts; no outbound provider operation. */
+  propertyPredatorZernioAccountWebhook?: PropertyPredatorZernioAccountWebhookMount;
   /** Optional request-handler seam; production defaults to the bundled admin router. */
   adminHandler?: (req: IncomingMessage, res: ServerResponse, cfg: StripeConfig) => void | Promise<void>;
 }
@@ -351,6 +357,14 @@ export function createApp(deps: AppDeps) {
             blockers.push('Provider inbound is enabled but not ready');
           }
         }
+        const zernioWebhook = deps.propertyPredatorZernioAccountWebhook;
+        if (zernioWebhook?.enabled && !zernioWebhook.ready) {
+          blockers.push(...zernioWebhook.blockers.map((blocker) =>
+            `Zernio account webhook: ${blocker}`));
+          if (zernioWebhook.blockers.length === 0) {
+            blockers.push('Zernio account webhook is enabled but not ready');
+          }
+        }
         if (deps.runtimeReadinessProbe) {
           try {
             blockers.push(...await deps.runtimeReadinessProbe());
@@ -428,7 +442,29 @@ export function createApp(deps: AppDeps) {
               provider_effects_enabled: false,
             },
           } : {}),
+          ...(deps.propertyPredatorZernioAccountWebhook ? {
+            property_predator_zernio_account_webhook: {
+              enabled: deps.propertyPredatorZernioAccountWebhook.enabled,
+              ready: deps.propertyPredatorZernioAccountWebhook.ready,
+              blockers: [...deps.propertyPredatorZernioAccountWebhook.blockers],
+              provider_effects_enabled: false,
+            },
+          } : {}),
         });
+      }
+
+      if (route === `POST ${PROPERTY_PREDATOR_ZERNIO_ACCOUNT_WEBHOOK_PATH}`) {
+        const webhook = deps.propertyPredatorZernioAccountWebhook;
+        if (!webhook?.enabled) return send(res, 404, { error: 'not_found' });
+        if (!webhook.ready || !webhook.handle) {
+          return send(res, 503, { error: 'zernio_account_webhook_unavailable' });
+        }
+        try {
+          await webhook.handle(req, res);
+        } catch {
+          if (!res.headersSent) send(res, 503, { error: 'zernio_account_webhook_unavailable' });
+        }
+        return;
       }
 
       if (isPropertyPredatorProviderIngressPath(url.pathname)) {

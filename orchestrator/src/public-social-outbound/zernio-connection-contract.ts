@@ -21,14 +21,14 @@ export type ZernioPilotNetwork = typeof ZERNIO_PILOT_NETWORKS[number];
 
 export const ZERNIO_CONNECTION_SECURITY_CONTRACT = Object.freeze({
   origin: 'https://zernio.com',
-  path: '/api/v1/connect/{platform}',
+  path: '/v1/connect/{platform}',
   authentication: 'bearer_header_only',
   redirectPolicy: 'error',
   responseMode: 'bounded_stream',
   maximumResponseBytes: 65_536,
   minimumTimeoutMs: 1_000,
   maximumTimeoutMs: 30_000,
-  headless: true,
+  headless: false,
   workspaceProfileBindingRequired: true,
   accountConnectedWebhookRequired: true,
   callbackUrl: ZERNIO_CONNECTION_CALLBACK_URL,
@@ -66,7 +66,7 @@ export interface ZernioConnectionContext {
 export interface ZernioConnectionRequest {
   readonly network: ZernioPilotNetwork;
   readonly redirectUrl: string;
-  readonly headless: true;
+  readonly headless: false;
 }
 
 export interface ZernioConnectionResult {
@@ -270,13 +270,13 @@ function snapshotRequest(input: ZernioConnectionRequest, allowedRedirectUrl: str
   exactKeys(source, ['network', 'redirectUrl', 'headless'], 'Zernio connection request');
   if (!NETWORKS.has(source.network)) fail('Zernio pilot network is not supported');
   const redirectUrl = safeHttpsUrl(source.redirectUrl, 'request.redirectUrl');
-  if (redirectUrl !== allowedRedirectUrl || source.headless !== true) {
+  if (redirectUrl !== allowedRedirectUrl || source.headless !== false) {
     fail('Zernio connection request is outside the reviewed callback boundary');
   }
   return Object.freeze({
     network: source.network as ZernioPilotNetwork,
     redirectUrl,
-    headless: true,
+    headless: false,
   });
 }
 
@@ -366,7 +366,9 @@ export class ZernioConnectionContract {
     const url = new URL(path, ZERNIO_CONNECTION_SECURITY_CONTRACT.origin);
     url.searchParams.set('profileId', this.#enabled.credential.providerProfileId);
     url.searchParams.set('redirect_url', request.redirectUrl);
-    url.searchParams.set('headless', 'true');
+    // Zernio hosts secondary account selection. This avoids returning social
+    // platform tempToken/userProfile material to Growth HQ.
+    url.searchParams.set('headless', 'false');
     const httpRequest: PublicSocialHttpRequest = Object.freeze({
       method: 'GET',
       url: url.toString(),

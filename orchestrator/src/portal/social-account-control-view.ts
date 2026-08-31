@@ -7,6 +7,8 @@ import type {
   SocialAccountPermissionView,
   SocialAccountView,
 } from './social-account-control-presenter.js';
+import type { PortalZernioAccountSnapshot } from './zernio-social-connection-service.js';
+import type { ZernioSocialNotice } from './zernio-social-actions.js';
 
 const SOCIAL_ACCOUNT_CONTROL_STYLE = `
   .sac{--black:#060809;--panel:#0d1113;--lift:#12181b;--soft:#090c0e;--line:#243137;--line2:#35454b;--ink:#f4f6f2;--muted:#a8b5b4;--faint:#788887;--acid:#d7ff38;--teal:#00e6cb;--amber:#ffc45c;--red:#ff6f68;--green:#75d9a6;min-width:0;overflow:hidden;border:1px solid #020303;background:var(--black);color:var(--ink);font-family:var(--sans,ui-sans-serif,system-ui,sans-serif)}.sac *{box-sizing:border-box}.sac h1,.sac h2,.sac h3,.sac p{margin-top:0}.sac code{font-family:var(--mono,ui-monospace,monospace);overflow-wrap:anywhere}.sac-visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
@@ -92,4 +94,27 @@ export function renderSocialAccountControlBody(view: SocialAccountControlView): 
     <div class="sac-layout"><aside class="sac-sidebar">${providerPanel(view)}${ladderPanel()}</aside><section class="sac-catalog" aria-labelledby="sac-catalog-title"><header class="sac-section-head"><div><h2 id="sac-catalog-title">Social accounts</h2><p>Linking, permission, health and revocation states in one operator view.</p></div><span class="sac-count">${count(view.metrics.accounts)} slots</span></header><ul class="sac-accounts">${cards || '<li><p class="sac-truncated">No account slots exist. The social rail remains closed.</p></li>'}</ul>${truncation}</section></div>
     <footer class="sac-footer"><span><strong>${escapeHtml(view.workspaceName)}</strong> · snapshot ${moment(view.asOf)}</span><span>Dataset ${escapeHtml(view.dataset)} · no network or command boundary</span></footer>
   </article>`;
+}
+
+function zernioNotice(view: ZernioSocialNotice | undefined): string {
+  if (!view) return '';
+  return `<section class="sac-fixture" role="status" data-kind="${escapeHtml(view.kind)}"><strong>${escapeHtml(view.title)}</strong><p>${escapeHtml(view.message)}</p></section>`;
+}
+
+function zernioConnectedAccount(account: PortalZernioAccountSnapshot): string {
+  const label = account.displayName ?? account.username ?? `Connected ${account.network} account`;
+  const state = account.status === 'active' ? 'ready' : 'wait';
+  return `<li><article class="sac-account ${state}"><header class="sac-account-head"><span class="sac-network-mark" aria-hidden="true">${escapeHtml(account.network.slice(0, 2).toUpperCase())}</span><div class="sac-account-identity"><span class="sac-network">${escapeHtml(account.network)}</span><h3>${escapeHtml(label)}</h3><span class="sac-handle">${account.username ? `@${escapeHtml(account.username)}` : 'Identity awaiting provider receipt'}</span></div><span class="sac-connection ${state}">${escapeHtml(account.status)}</span></header><section class="sac-account-strip"><div class="sac-mini"><span>Provider</span><strong>Zernio</strong></div><div class="sac-mini"><span>Signed receipts</span><strong class="${account.webhookReceiptCount > 0 ? 'ready' : 'wait'}">${count(account.webhookReceiptCount)}</strong></div><div class="sac-mini"><span>Publishing</span><strong class="blocked">OFF</strong></div></section><footer class="sac-account-foot"><span>Linked ${moment(account.linkedAt)}</span><span>Checked ${moment(account.lastEventAt)}</span></footer></article></li>`;
+}
+
+export function renderZernioSocialAccountControlBody(input: Readonly<{
+  workspaceName: string;
+  accounts: readonly PortalZernioAccountSnapshot[];
+  csrfToken: string;
+  notice?: ZernioSocialNotice;
+}>): string {
+  const networks = ['facebook', 'instagram', 'linkedin'] as const;
+  const forms = networks.map((network) => `<form method="post" action="/portal/social/accounts/connect/${network}" autocomplete="off"><input type="hidden" name="_csrf" value="${escapeHtml(input.csrfToken)}"><input type="hidden" name="confirm_connect" value="CONNECT"><button class="sac-action" type="submit">Connect ${escapeHtml(network[0]!.toUpperCase() + network.slice(1))}</button></form>`).join('');
+  const accounts = input.accounts.map(zernioConnectedAccount).join('');
+  return `${renderContentWorkspaceNavigation('connections', { companyAssetsAvailable: true, composerAvailable: true, brandBrainAvailable: true, liveChannelsAvailable: true })}<style data-property-predator-social-account-control>${SOCIAL_ACCOUNT_CONTROL_STYLE}</style><article class="sac" aria-labelledby="sac-title" data-provider-effects="connection-only" data-publishing-effects="off" data-revocation-effects="off" data-command-boundary="zernio-one-use-v1"><header class="sac-hero"><div class="sac-hero-copy"><span class="sac-kicker">Property Predator · Social connections</span><h1 id="sac-title">Connect the audience.<br><em>Publishing stays off.</em></h1><p>Founder-only Facebook, Instagram and LinkedIn account connection through one-use Growth HQ intents and Zernio-hosted consent.</p></div><aside class="sac-lock"><div class="sac-lock-top"><span>Publication boundary</span><b>LOCKED</b></div><h2>Connection only</h2><p>OAuth may connect an owned account. No post can be drafted, scheduled, queued or published from this screen.</p></aside></header><section class="sac-boundary"><span class="sac-boundary-mark">Live connection</span><p><strong>Zernio owns platform consent.</strong> Growth HQ stores only bounded account identity and signed receipt evidence—not Facebook or LinkedIn temporary tokens.</p><span class="sac-boundary-badge">Publishing OFF</span></section>${zernioNotice(input.notice)}<div class="sac-layout"><aside class="sac-sidebar"><section class="sac-provider"><header class="sac-section-head"><div><h2>Connect an owned account</h2><p>Choose one network. A separate native consent window opens.</p></div></header><div class="sac-provider-hero"><div class="sac-provider-brand"><span class="sac-provider-mark">ZE</span><div><span>zernio</span><strong>Property Predator Growth HQ</strong></div></div><p class="sac-provider-status">Connection boundary ready</p></div><div style="display:grid;gap:8px;padding:18px">${forms}</div><p class="sac-provider-note"><strong>Important:</strong> connecting authorises Growth HQ to use the selected account later. It does not authorise any post.</p></section></aside><section class="sac-catalog"><header class="sac-section-head"><div><h2>Connected accounts</h2><p>Only accounts recorded through the reviewed callback appear here.</p></div><span class="sac-count">${count(input.accounts.length)} live</span></header><ul class="sac-accounts">${accounts || '<li><p class="sac-truncated">No Zernio social account is connected yet.</p></li>'}</ul></section></div><footer class="sac-footer"><span><strong>${escapeHtml(input.workspaceName)}</strong></span><span>Zernio connection v1 · publishing disabled</span></footer></article>`;
 }

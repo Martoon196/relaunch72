@@ -87,6 +87,12 @@ import {
   type PgPortalPublicSocialService,
 } from './public-social-pg-service.js';
 import {
+  assertZernioSocialCommandBoundaryReady,
+  createPgPortalZernioSocialConnectionService,
+  type PgPortalZernioSocialConnectionService,
+} from './zernio-social-connection-pg-service.js';
+import { createZernioLiveConnectionClient } from '../public-social-outbound/index.js';
+import {
   createPgPortalCompanyContentSyncService,
   loadPropertyPredatorContentSyncSourceConfig,
   type PropertyPredatorContentSyncSourceConfig,
@@ -145,6 +151,8 @@ export interface PgPortalPlatform {
   campaignDrafts?: Pick<PropertyPredatorCampaignDraftRuntime, 'generateReviewDraft'>;
   /** Durable TEST-only public-social campaign planner and safe calendar projection. */
   publicSocial?: PgPortalPublicSocialService;
+  /** One-use Zernio account connection and signed account-event evidence only. */
+  zernioSocial?: PgPortalZernioSocialConnectionService;
   /** Canonical TEST-only queue read model; it has no send or provider operation. */
   inbox: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval queue commands; it cannot dispatch. */
@@ -728,6 +736,60 @@ export async function buildPgPortalPlatform(
       }
     }
 
+    // Connection-only Zernio seam. This client may request a hosted OAuth URL
+    // and record its one-use callback, but exposes no post, queue or worker API.
+    let zernioSocial: PgPortalZernioSocialConnectionService | undefined;
+    let zernioSocialReadinessPool: Pool | undefined;
+    const zernioConfigured = [
+      env.DATABASE_ZERNIO_SOCIAL_COMMAND_URL,
+      env.PROPERTY_PREDATOR_ZERNIO_LIVE_CONNECTION_ID,
+      env.PROPERTY_PREDATOR_ZERNIO_PROVIDER_PROFILE_ID,
+      env.ZERNIO_API_KEY,
+    ].some((value) => Boolean(value?.trim()));
+    if (zernioConfigured) {
+      let zernioPool: Pool | undefined;
+      try {
+        const workspaceId = env.PROPERTY_PREDATOR_PILOT_WORKSPACE_ID?.trim().toLowerCase() ?? '';
+        const connectionId = env.PROPERTY_PREDATOR_ZERNIO_LIVE_CONNECTION_ID
+          ?.trim().toLowerCase() ?? '';
+        const providerProfileId = env.PROPERTY_PREDATOR_ZERNIO_PROVIDER_PROFILE_ID?.trim() ?? '';
+        const apiKey = env.ZERNIO_API_KEY?.trim() ?? '';
+        if (!PORTAL_UUID.test(workspaceId) || !PORTAL_UUID.test(connectionId)
+            || !/^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/u.test(providerProfileId)
+            || apiKey.length < 8) {
+          throw new Error('Zernio social connection seam is incomplete');
+        }
+        const zernioConfig = requireCutoverIdentity(
+          loadDatabaseConfig('zernioSocialCommand', env),
+          'DATABASE_ZERNIO_SOCIAL_COMMAND_URL',
+          'r72_zernio_social_command',
+        );
+        zernioPool = createDatabasePool(zernioConfig);
+        if (expectedInstallationId) {
+          await assertExpectedDatabaseInstallation(zernioPool, expectedInstallationId);
+        }
+        await assertZernioSocialCommandBoundaryReady(zernioPool);
+        zernioSocial = createPgPortalZernioSocialConnectionService({
+          webPool,
+          commandPool: zernioPool,
+          workspaceId,
+          providerConnectionId: connectionId,
+          providerProfileId,
+          liveClient: createZernioLiveConnectionClient({
+            apiKey,
+            providerProfileId,
+            fetch: globalThis.fetch,
+          }),
+        });
+        zernioSocialReadinessPool = zernioPool;
+        pools.push(zernioPool);
+      } catch {
+        await zernioPool?.end().catch(() => undefined);
+        zernioSocial = undefined;
+        zernioSocialReadinessPool = undefined;
+      }
+    }
+
     // The founder command seam for the Twilio SMS rail. It rides only its own
     // least-privilege identity and stays undefined unless that identity proves
     // its exact boundary. Both the workspace and the connection id must be
@@ -907,6 +969,7 @@ export async function buildPgPortalPlatform(
         ? campaignDraftComposition.runtime
         : undefined,
       publicSocial,
+      zernioSocial,
       inbox: createPgPortalInboxReadBoundary(webPool),
       inboxCommands: createPgPortalConversionInboxCommandService({ webPool, commandPool }),
       inboxOperations: createPgPortalConversionInboxOperationsService({
@@ -985,6 +1048,9 @@ export async function buildPgPortalPlatform(
           ...(ownedSeedMessageCore ? [ownedSeedMessageCore.assertReady()] : []),
           ...(ownedSocialReadinessPool
             ? [assertOwnedPublicSocialCommandBoundaryReady(ownedSocialReadinessPool)]
+            : []),
+          ...(zernioSocialReadinessPool
+            ? [assertZernioSocialCommandBoundaryReady(zernioSocialReadinessPool)]
             : []),
           ...(smsReadinessPool ? [assertSmsCommandBoundaryReady(smsReadinessPool)] : []),
         ]);

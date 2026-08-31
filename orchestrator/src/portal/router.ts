@@ -282,7 +282,21 @@ import {
   SOCIAL_ACCOUNT_CONTROL_ROUTE,
   presentSocialAccountControl,
 } from './social-account-control-presenter.js';
-import { renderSocialAccountControlBody } from './social-account-control-view.js';
+import {
+  renderSocialAccountControlBody,
+  renderZernioSocialAccountControlBody,
+} from './social-account-control-view.js';
+import {
+  ZERNIO_SOCIAL_CALLBACK_ROUTE,
+  type PortalZernioFailureKind,
+  type PortalZernioSocialConnectionService,
+} from './zernio-social-connection-service.js';
+import {
+  zernioSocialNoticeFromQuery,
+  zernioSocialNoticeToken,
+  type ZernioSocialNoticeCode,
+} from './zernio-social-actions.js';
+import type { ZernioPilotNetwork } from '../public-social-outbound/index.js';
 import type {
   PortalPublicSocialService,
   PortalPublicSocialSnapshot,
@@ -449,6 +463,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   providerReadiness?: PortalProviderReadinessService;
   /** Durable TEST-only campaign planning and safe social calendar projection. */
   publicSocial?: PortalPublicSocialService;
+  /** Founder-only one-use Zernio account connection; contains no publication operation. */
+  zernioSocial?: PortalZernioSocialConnectionService;
   /** One real company-content generation effect; output is source-review-only and never outbound. */
   campaignDrafts?: Pick<PropertyPredatorCampaignDraftRuntime, 'generateReviewDraft'>;
   /** TEST-only conversion queue. Thread detail remains a separate optional projection. */
@@ -1004,6 +1020,14 @@ function smsFailureNotice(
   if (kind === 'forbidden' || kind === 'unauthenticated') return 'sms_forbidden';
   if (kind === 'validation' || kind === 'conflict') return 'sms_invalid';
   return 'sms_unavailable';
+}
+
+function zernioFailureNotice(kind: PortalZernioFailureKind): ZernioSocialNoticeCode {
+  if (kind === 'billing_required' || kind === 'rate_limited'
+      || kind === 'provider_rejected') return kind;
+  if (kind === 'forbidden' || kind === 'unauthenticated') return 'forbidden';
+  if (kind === 'validation' || kind === 'conflict') return 'invalid';
+  return 'unavailable';
 }
 
 function crmIdentity(sessionToken: string, deps: PortalDeps): PortalCrmRequestIdentity {
@@ -2422,7 +2446,96 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
   }
 
-  // ── provider readiness: bounded evidence only; every external effect stays off ──
+  // Founder-only connection preparation. The POST can obtain a Zernio-hosted
+  // consent URL; it cannot schedule, queue or publish content.
+  const zernioConnectMatch = p.match(/^\/portal\/social\/accounts\/connect\/(facebook|instagram|linkedin)$/u);
+  if (deps.kind === 'postgres' && zernioConnectMatch && method === 'POST') {
+    const zernioRedirect = (code: ZernioSocialNoticeCode): void => redirect(
+      res,
+      `${SOCIAL_ACCOUNT_CONTROL_ROUTE}?notice=${encodeURIComponent(
+        zernioSocialNoticeToken(deps.sessionSecret, sessionToken, code),
+      )}`,
+      undefined,
+      303,
+      { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' },
+    );
+    if (deps.productProfile?.id !== 'property_predator_growth' || !deps.zernioSocial) {
+      return zernioRedirect('unavailable');
+    }
+    const form = await readMultiValueForm(req);
+    if (!form
+        || !campaignFormKeysAllowed(form, new Set(['_csrf', 'confirm_connect']))
+        || !verifyPortalCsrf(
+          deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '',
+        )
+        || oneFormValue(form, 'confirm_connect') !== 'CONNECT') {
+      return zernioRedirect('invalid');
+    }
+    const outcome = await deps.zernioSocial.begin(crmIdentity(sessionToken, deps), {
+      intentId: randomUUID(),
+      network: zernioConnectMatch[1] as ZernioPilotNetwork,
+    });
+    if (!outcome.ok) return zernioRedirect(zernioFailureNotice(outcome.kind));
+    return redirect(res, outcome.authUrl, undefined, 303, {
+      'cache-control': 'no-store',
+      'referrer-policy': 'no-referrer',
+    });
+  }
+
+  // Zernio returns only the one-use intent plus bounded account identity. The
+  // expected network is read from the server-side intent, never trusted from
+  // the callback query.
+  if (deps.kind === 'postgres' && p === ZERNIO_SOCIAL_CALLBACK_ROUTE && method === 'GET') {
+    const callbackRedirect = (code: ZernioSocialNoticeCode): void => redirect(
+      res,
+      `${SOCIAL_ACCOUNT_CONTROL_ROUTE}?notice=${encodeURIComponent(
+        zernioSocialNoticeToken(deps.sessionSecret, sessionToken, code),
+      )}`,
+      undefined,
+      303,
+      { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' },
+    );
+    if (deps.productProfile?.id !== 'property_predator_growth' || !deps.zernioSocial) {
+      return callbackRedirect('unavailable');
+    }
+    const allowed = new Set(['intent', 'connected', 'profileId', 'accountId', 'username']);
+    const singleton = (key: string): string | null => {
+      const values = url.searchParams.getAll(key);
+      return values.length === 1 ? values[0]! : null;
+    };
+    const intentId = singleton('intent');
+    const connected = singleton('connected');
+    const providerProfileId = singleton('profileId');
+    const providerAccountId = singleton('accountId');
+    const username = singleton('username');
+    if ([...url.searchParams.keys()].some((key) => !allowed.has(key))
+        || !intentId
+        || (connected !== 'facebook' && connected !== 'instagram' && connected !== 'linkedin')
+        || !providerProfileId
+        || !providerAccountId || !username) {
+      return callbackRedirect('invalid');
+    }
+    const canonicalCallback = JSON.stringify({
+      accountId: providerAccountId,
+      connected,
+      intent: intentId,
+      profileId: providerProfileId,
+      username,
+    });
+    const outcome = await deps.zernioSocial.callback(crmIdentity(sessionToken, deps), {
+      intentId,
+      network: connected,
+      providerProfileId,
+      providerAccountId,
+      username,
+      linkedAt: new Date(now).toISOString(),
+      canonicalCallback,
+    });
+    if (!outcome.ok) return callbackRedirect(zernioFailureNotice(outcome.kind));
+    return callbackRedirect(outcome.disposition === 'recorded' ? 'connected' : 'replayed');
+  }
+
+  // ── provider readiness: bounded evidence only; publishing remains off ──
   if (deps.kind === 'postgres' && p === SOCIAL_ACCOUNT_CONTROL_ROUTE && method === 'GET') {
     if (deps.productProfile?.id !== 'property_predator_growth') {
       return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
@@ -2432,6 +2545,34 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       }));
     }
     try {
+      if (deps.zernioSocial) {
+        const outcome = await deps.zernioSocial.snapshot(crmIdentity(sessionToken, deps));
+        if (!outcome.ok) {
+          const status = outcome.kind === 'forbidden' || outcome.kind === 'unauthenticated'
+            ? 403 : 503;
+          return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+            title: status === 403 ? 'Social accounts restricted' : 'Social accounts temporarily unavailable',
+            message: 'No account, permission, provider connection or publication state was changed.',
+            active: 'content',
+          }));
+        }
+        const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+        const notice = zernioSocialNoticeFromQuery(
+          url.searchParams, deps.sessionSecret, sessionToken,
+        );
+        return sendHtml(res, 200, operationalPage(
+          'PropertyPredator Growth HQ',
+          renderZernioSocialAccountControlBody({
+            workspaceName: 'PropertyPredator Growth HQ',
+            accounts: outcome.accounts,
+            csrfToken,
+            ...(notice ? { notice } : {}),
+          }),
+          deps,
+          'content',
+          csrfToken,
+        ));
+      }
       const view = presentSocialAccountControl(createPropertyPredatorSocialAccountControlFixture());
       const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
       return sendHtml(res, 200, operationalPage(
