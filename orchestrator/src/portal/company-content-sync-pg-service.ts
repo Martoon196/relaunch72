@@ -281,6 +281,18 @@ function outcome(
   });
 }
 
+function safeSyncDiagnostic(error: unknown): string {
+  if (!(error instanceof Error)) return 'unknown_error';
+  const candidate = error as Error & { code?: unknown };
+  const code = typeof candidate.code === 'string' ? ` code=${candidate.code.slice(0, 20)}` : '';
+  const message = error.message
+    .replace(/(?:postgres(?:ql)?|https?):\/\/[^\s]+/giu, '[redacted-url]')
+    .replace(/(?:password|token|secret|apikey|api_key)\s*[=:]\s*[^\s,;]+/giu, '$1=[redacted]')
+    .replace(/[\r\n\t]+/gu, ' ')
+    .slice(0, 300);
+  return `${error.name}${code}${message ? ` message=${message}` : ''}`;
+}
+
 export class PgPortalCompanyContentSyncService implements PortalCompanyContentSyncService {
   constructor(private readonly dependencies: PgPortalCompanyContentSyncDependencies) {}
 
@@ -323,9 +335,11 @@ export class PgPortalCompanyContentSyncService implements PortalCompanyContentSy
   async sync(
     identity: PortalCompanyContentSyncRequestIdentity,
   ): Promise<PortalCompanyContentSyncOutcome> {
+    let stage = 'authorize';
     try {
       const authorization = await this.authorized(identity);
       if ('ok' in authorization) return authorization;
+      stage = 'consume_command';
       const commandDisposition = await this.dependencies.commandGuard.consume(authorization.context);
       if (commandDisposition === 'replayed') {
         return failure(
@@ -339,6 +353,7 @@ export class PgPortalCompanyContentSyncService implements PortalCompanyContentSy
           'The protected source-sync command ledger is temporarily unavailable.',
         );
       }
+      stage = 'workspace_lock_and_sync';
       const locked = await this.dependencies.syncLock.run(
         authorization.context.workspaceId,
         () => this.dependencies.coordinator.sync(authorization.context),
@@ -351,6 +366,7 @@ export class PgPortalCompanyContentSyncService implements PortalCompanyContentSy
       }
       return outcome(authorization.workspace, locked.value);
     } catch (error) {
+      console.error(`[company-content-sync] stage=${stage} ${safeSyncDiagnostic(error)}`);
       return this.readFailure(error);
     }
   }

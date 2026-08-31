@@ -5,6 +5,7 @@ export type ZernioSocialNoticeCode =
   | 'billing_required' | 'rate_limited' | 'provider_rejected';
 
 export interface ZernioSocialNotice {
+  readonly code: ZernioSocialNoticeCode;
   readonly kind: 'success' | 'info' | 'error';
   readonly title: string;
   readonly message: string;
@@ -30,35 +31,35 @@ export function zernioSocialNoticeToken(
 
 function notice(code: ZernioSocialNoticeCode): ZernioSocialNotice {
   if (code === 'connected') return Object.freeze({
-    kind: 'success', title: 'Social account connected',
+    code, kind: 'success', title: 'Social account connected',
     message: 'Growth HQ recorded the selected Zernio account. Nothing was scheduled or published.',
   });
   if (code === 'replayed') return Object.freeze({
-    kind: 'info', title: 'Connection already recorded',
+    code, kind: 'info', title: 'Connection already recorded',
     message: 'This exact callback was already accepted. No duplicate account or provider action was created.',
   });
   if (code === 'billing_required') return Object.freeze({
-    kind: 'error', title: 'Zernio billing boundary reached',
+    code, kind: 'error', title: 'Zernio billing boundary reached',
     message: 'Zernio did not open the connection flow because its current account allowance requires billing attention.',
   });
   if (code === 'rate_limited') return Object.freeze({
-    kind: 'error', title: 'Zernio is temporarily busy',
+    code, kind: 'error', title: 'Zernio is temporarily busy',
     message: 'The provider rate-limited connection preparation. No OAuth window was opened.',
   });
   if (code === 'forbidden') return Object.freeze({
-    kind: 'error', title: 'Connection not permitted',
+    code, kind: 'error', title: 'Connection not permitted',
     message: 'This session or workspace role cannot connect the requested account. Nothing changed.',
   });
   if (code === 'unavailable') return Object.freeze({
-    kind: 'error', title: 'Connection boundary unavailable',
+    code, kind: 'error', title: 'Connection boundary unavailable',
     message: 'Growth HQ could not prove its dedicated Zernio command boundary. Nothing was connected.',
   });
   if (code === 'provider_rejected') return Object.freeze({
-    kind: 'error', title: 'Zernio rejected the connection',
+    code, kind: 'error', title: 'Zernio rejected the connection',
     message: 'The provider response did not match the reviewed connection contract. No OAuth window was opened.',
   });
   return Object.freeze({
-    kind: 'error', title: 'Connection request rejected',
+    code, kind: 'error', title: 'Connection request rejected',
     message: 'The request, callback or confirmation failed verification. Nothing was connected or published.',
   });
 }

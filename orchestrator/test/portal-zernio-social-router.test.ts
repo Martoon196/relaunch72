@@ -7,6 +7,7 @@ import { PROPERTY_PREDATOR_GROWTH_PROFILE } from '../src/portal/product-profile.
 import { handlePortal, type PostgresPortalDeps } from '../src/portal/router.js';
 import { PORTAL_COOKIE, portalCsrfToken } from '../src/portal/session.js';
 import type { PortalZernioSocialConnectionService } from '../src/portal/zernio-social-connection-service.js';
+import { zernioSocialNoticeToken } from '../src/portal/zernio-social-actions.js';
 
 const SECRET = 'zernio-social-router-secret';
 const SESSION = Buffer.alloc(32, 71).toString('base64url');
@@ -122,6 +123,31 @@ test('founder social screen shows connection-only Zernio controls and no publish
   assert.doesNotMatch(result.body, /target="_blank"/);
   assert.match(result.body, /Publishing stays off/);
   assert.doesNotMatch(result.body, /action="[^"]*(?:publish|schedule|queue)/i);
+});
+
+test('a signed lifecycle receipt reconciles an incomplete Instagram browser return', async () => {
+  const zernio = service({
+    snapshot: async () => ({
+      ok: true,
+      accounts: [{
+        accountId: '55555555-5555-4555-8555-555555555555',
+        network: 'instagram',
+        username: null,
+        displayName: null,
+        status: 'active',
+        linkedAt: '2026-08-31T12:00:00.000Z',
+        lastEventAt: '2026-08-31T12:00:01.000Z',
+        webhookReceiptCount: 1,
+      }],
+    }),
+  });
+  const notice = zernioSocialNoticeToken(SECRET, SESSION, 'invalid');
+  const result = await call(`/portal/social/accounts?notice=${encodeURIComponent(notice)}`, deps(zernio));
+  assert.equal(result.statusCode, 200);
+  assert.match(result.body, /Connection reconciled by signed receipt/);
+  assert.match(result.body, /Identity verified by signed provider receipt/);
+  assert.doesNotMatch(result.body, /Connection request rejected/);
+  assert.match(result.body, /Publishing<\/span><strong class="blocked">OFF/);
 });
 
 test('one valid connect command prepares Zernio once and renders a no-store hosted-consent handoff', async () => {
