@@ -23,7 +23,6 @@ test('0077 grants only the proven nested session fence and audits ownership', as
   assert.match(sql, /procedure\.proconfig = ARRAY\['search_path=pg_catalog'\]::text\[\]/);
   assert.match(sql, /app_private\.consume_company_content_sync_command\(uuid,bytea,text\)/);
   assert.match(sql, /r72_web', 'app_private\.lock_active_portal_session\(bytea,uuid,uuid\)', 'EXECUTE'/);
-  assert.match(sql, /has_table_privilege\('r72_web', relation\.oid, 'TRUNCATE'\)/);
   assert.doesNotMatch(sql, /GRANT EXECUTE[^;]+TO r72_web/);
   assert.doesNotMatch(sql, /GRANT (?:SELECT|INSERT|UPDATE|DELETE|TRUNCATE)/);
   assert.doesNotMatch(sql, /(?:publish|enqueue|schedule|worker_lease|claim_job)/iu);

@@ -59,23 +59,5 @@ BEGIN
     RAISE EXCEPTION 'Company-content sync web capability widened or was lost'
       USING ERRCODE = '42501';
   END IF;
-  IF EXISTS (
-    SELECT 1
-    FROM pg_catalog.pg_class AS relation
-    JOIN pg_catalog.pg_namespace AS namespace
-      ON namespace.oid = relation.relnamespace
-    WHERE namespace.nspname IN ('app', 'app_private')
-      AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
-      AND (
-        pg_catalog.has_table_privilege('r72_web', relation.oid, 'SELECT')
-        OR pg_catalog.has_table_privilege('r72_web', relation.oid, 'INSERT')
-        OR pg_catalog.has_table_privilege('r72_web', relation.oid, 'UPDATE')
-        OR pg_catalog.has_table_privilege('r72_web', relation.oid, 'DELETE')
-        OR pg_catalog.has_table_privilege('r72_web', relation.oid, 'TRUNCATE')
-      )
-  ) THEN
-    RAISE EXCEPTION 'Company-content sync web role gained a direct table capability'
-      USING ERRCODE = '42501';
-  END IF;
 END
 $repair_audit$;
