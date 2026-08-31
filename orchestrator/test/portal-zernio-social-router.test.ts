@@ -119,6 +119,8 @@ test('founder social screen shows connection-only Zernio controls and no publish
   assert.match(result.body, /Connect Facebook/);
   assert.match(result.body, /Connect Instagram/);
   assert.match(result.body, /Connect Linkedin/);
+  assert.equal((result.body.match(/target="_blank"/g) ?? []).length, 3);
+  assert.equal((result.body.match(/rel="noopener"/g) ?? []).length, 3);
   assert.match(result.body, /Publishing stays off/);
   assert.doesNotMatch(result.body, /action="[^"]*(?:publish|schedule|queue)/i);
 });
