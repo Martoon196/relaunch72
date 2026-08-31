@@ -21,7 +21,7 @@ export type ZernioPilotNetwork = typeof ZERNIO_PILOT_NETWORKS[number];
 
 export const ZERNIO_CONNECTION_SECURITY_CONTRACT = Object.freeze({
   origin: 'https://zernio.com',
-  path: '/v1/connect/{platform}',
+  path: '/api/v1/connect/{platform}',
   authentication: 'bearer_header_only',
   redirectPolicy: 'error',
   responseMode: 'bounded_stream',

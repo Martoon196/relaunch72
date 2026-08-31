@@ -92,7 +92,7 @@ test('disabled Zernio seam has no provider effects and does not inspect inputs',
 test('security metadata is the exact contract the request builder consumes', () => {
   assert.deepEqual(ZERNIO_CONNECTION_SECURITY_CONTRACT, {
     origin: 'https://zernio.com',
-    path: '/v1/connect/{platform}',
+    path: '/api/v1/connect/{platform}',
     authentication: 'bearer_header_only',
     redirectPolicy: 'error',
     responseMode: 'bounded_stream',
@@ -125,7 +125,7 @@ test('prepares the exact reviewed Zernio hosted-selection OAuth request without 
   assert.ok(sent);
   const url = new URL(sent.url);
   assert.equal(url.origin, ZERNIO_CONNECTION_SECURITY_CONTRACT.origin);
-  assert.equal(url.pathname, '/v1/connect/facebook');
+  assert.equal(url.pathname, '/api/v1/connect/facebook');
   assert.deepEqual(Object.fromEntries(url.searchParams), {
     profileId: 'profile_abc123',
     redirect_url: CALLBACK,
@@ -190,7 +190,7 @@ test('all and only the reviewed pilot networks produce their exact provider path
     const result = await current.contract.prepare(context, { ...request, network });
     assert.equal(result.status, 'ready');
     const [sent] = readPublicSocialContractHttpRequests(current.http);
-    assert.equal(new URL(sent!.url).pathname, `/v1/connect/${network}`);
+    assert.equal(new URL(sent!.url).pathname, `/api/v1/connect/${network}`);
   }
 });
 

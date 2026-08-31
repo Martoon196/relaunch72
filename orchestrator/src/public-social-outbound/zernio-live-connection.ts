@@ -154,8 +154,10 @@ export function createZernioLiveConnectionClient(
         fail('provider_rejected');
       }
       const redirectUrl = callbackUrl(input.intentId);
-      const endpoint = new URL(`/v1/connect/${input.network}`,
-        ZERNIO_CONNECTION_SECURITY_CONTRACT.origin);
+      const endpoint = new URL(
+        ZERNIO_CONNECTION_SECURITY_CONTRACT.path.replace('{platform}', input.network),
+        ZERNIO_CONNECTION_SECURITY_CONTRACT.origin,
+      );
       endpoint.searchParams.set('profileId', providerProfileId);
       endpoint.searchParams.set('redirect_url', redirectUrl);
       // Zernio hosts secondary account selection. Growth HQ never receives

@@ -26,7 +26,7 @@ test('live Zernio preparation uses the documented hosted-selection endpoint', as
   const sent = requests[0]!;
   const url = new URL(sent.url);
   assert.equal(url.origin, 'https://zernio.com');
-  assert.equal(url.pathname, '/v1/connect/facebook');
+  assert.equal(url.pathname, '/api/v1/connect/facebook');
   assert.equal(url.searchParams.get('profileId'), '6a95a6ae41c1829b085cbe28');
   assert.equal(url.searchParams.get('headless'), 'false');
   assert.equal(
