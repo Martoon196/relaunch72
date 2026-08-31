@@ -6,6 +6,10 @@ const migrationUrl = new URL(
   '../../src/db/migrations/0074_property_predator_zernio_social_connections.sql',
   import.meta.url,
 );
+const readSessionAclRepairUrl = new URL(
+  '../../src/db/migrations/0075_zernio_social_read_session_acl_repair.sql',
+  import.meta.url,
+);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/gu, ' ').replace(/\s+/gu, ' ').trim();
@@ -50,5 +54,19 @@ test('0074 creates a table-blind founder-only Zernio connection boundary', async
   assert.match(sql, /has_table_privilege\('r72_zernio_social_command'/);
   assert.doesNotMatch(sql, /GRANT (?:SELECT|INSERT|UPDATE|DELETE|TRUNCATE)[^;]+ TO r72_zernio_social_command/);
   assert.doesNotMatch(sql, /GRANT EXECUTE[^;]+ TO PUBLIC/);
+  assert.doesNotMatch(sql, /(?:publish|enqueue|schedule|worker_lease|claim_job)/iu);
+});
+
+test('0075 grants only the missing read-only session fence and audits the boundary', async () => {
+  const sql = normalise(await readFile(readSessionAclRepairUrl, 'utf8'));
+  assert.match(
+    sql,
+    /GRANT EXECUTE ON FUNCTION app_private\.active_portal_session\(bytea, uuid, uuid\) TO r72_zernio_social_command/,
+  );
+  assert.match(sql, /has_function_privilege\( 'r72_zernio_social_command', 'app_private\.active_portal_session\(bytea,uuid,uuid\)', 'EXECUTE' \)/);
+  assert.match(sql, /app_private\.lock_active_portal_session\(bytea,uuid,uuid\)/);
+  assert.match(sql, /app_private\.read_zernio_social_accounts\(uuid,uuid,bytea\)/);
+  assert.match(sql, /has_table_privilege\( 'r72_zernio_social_command', relation\.oid, 'TRUNCATE' \)/);
+  assert.doesNotMatch(sql, /GRANT (?:SELECT|INSERT|UPDATE|DELETE|TRUNCATE)/);
   assert.doesNotMatch(sql, /(?:publish|enqueue|schedule|worker_lease|claim_job)/iu);
 });

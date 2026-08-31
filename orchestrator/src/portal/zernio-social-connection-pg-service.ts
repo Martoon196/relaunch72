@@ -75,6 +75,8 @@ export async function assertZernioSocialCommandBoundaryReady(
          AND has_function_privilege(current_user,
            'app_private.read_zernio_social_accounts(uuid,uuid,bytea)', 'EXECUTE')
          AND has_function_privilege(current_user,
+           'app_private.active_portal_session(bytea,uuid,uuid)', 'EXECUTE')
+         AND has_function_privilege(current_user,
            'app_private.lock_active_portal_session(bytea,uuid,uuid)', 'EXECUTE')
          AND has_function_privilege(current_user,
            'app_private.runtime_schema_migrations()', 'EXECUTE')
