@@ -414,6 +414,36 @@ test('thread projection reduces durable TEST operations to queued, accepted, rec
   }
 });
 
+test('thread projection accepts live channel-specific receipt evidence without a TEST attempt row', async () => {
+  const cases = [
+    { delivery: 'accepted', operation: 'accepted', expected: 'accepted' },
+    { delivery: 'delivered', operation: 'succeeded', expected: 'reconciled' },
+    { delivery: 'read', operation: 'succeeded', expected: 'reconciled' },
+  ] as const;
+
+  for (const item of cases) {
+    const client = new ThreadReadClient();
+    client.coreRows = [core({
+      environment: 'live',
+      railDeliveryStatus: item.delivery,
+      railOperationState: item.operation,
+      railCorrelationId: CORRELATION,
+      railAttemptKind: null,
+      railAttemptState: null,
+      railOccurredAt: new Date('2026-08-31T11:37:51.000Z'),
+    })];
+    const service = new PgConversionInboxThreadReadService({
+      connect: async () => client,
+    } as unknown as Pick<Pool, 'connect'>);
+
+    assert.deepEqual((await service.thread(context, CONVERSATION))?.railActivity, {
+      state: item.expected,
+      correlationId: CORRELATION,
+      occurredAt: '2026-08-31T11:37:51.000Z',
+    });
+  }
+});
+
 test('thread projection rejects partial or contradictory TEST rail evidence', async () => {
   const client = new ThreadReadClient();
   const service = new PgConversionInboxThreadReadService({

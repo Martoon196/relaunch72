@@ -782,6 +782,22 @@ function mapRailActivity(row: ThreadCoreRow): ConversionInboxRailActivitySnapsho
   let state: ConversionInboxRailActivitySnapshot['state'];
   if (needsAttention) {
     state = 'attention';
+  } else if (row.environment === 'live'
+      && row.railAttemptKind === null && row.railAttemptState === null
+      && ['delivered', 'read'].includes(row.railDeliveryStatus)
+      && ['accepted', 'succeeded'].includes(row.railOperationState)) {
+    // Live rails keep their attempts in channel-specific, table-blind ledgers.
+    // The bounded live-delivery definer above has already proved that this
+    // delivery belongs to the exact channel job. A terminal delivery/read
+    // state is therefore signed-receipt evidence even though the shared TEST
+    // attempt table intentionally has no row for it.
+    state = 'reconciled';
+  } else if (row.environment === 'live'
+      && row.railAttemptKind === null && row.railAttemptState === null
+      && row.railDeliveryStatus === 'accepted'
+      && ['accepted', 'succeeded'].includes(row.railOperationState)) {
+    // Provider acceptance remains distinct from final delivery evidence.
+    state = 'accepted';
   } else if (row.railAttemptKind === 'reconcile'
       && ['accepted', 'succeeded'].includes(row.railAttemptState ?? '')
       && ['accepted', 'succeeded'].includes(row.railOperationState)
