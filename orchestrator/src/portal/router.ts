@@ -297,10 +297,19 @@ import {
   type ZernioSocialNoticeCode,
 } from './zernio-social-actions.js';
 import {
+  ZERNIO_MESSAGING_APPROVAL_DECISION_ROUTE,
+  ZERNIO_MESSAGING_APPROVAL_REQUEST_ROUTE,
+  ZERNIO_MESSAGING_DRAFT_ROUTE,
   ZERNIO_MESSAGING_ROUTE,
+  ZERNIO_MESSAGING_SEND_ROUTE,
   type PortalZernioMessagingService,
 } from './zernio-messaging-service.js';
 import { renderZernioMessagingBody } from './zernio-messaging-view.js';
+import {
+  zernioMessagingNoticeFromQuery,
+  zernioMessagingNoticeToken,
+  type ZernioMessagingNoticeCode,
+} from './zernio-messaging-actions.js';
 import type { ZernioPilotNetwork } from '../public-social-outbound/index.js';
 import type {
   PortalPublicSocialService,
@@ -4856,7 +4865,109 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
   }
 
-  // ── Zernio live social inbox: authenticated read-only provider projection ──
+  // ── Zernio live social replies: draft → approval → one-shot send ──
+  if (deps.kind === 'postgres' && method === 'POST' && [
+    ZERNIO_MESSAGING_DRAFT_ROUTE,
+    ZERNIO_MESSAGING_APPROVAL_REQUEST_ROUTE,
+    ZERNIO_MESSAGING_APPROVAL_DECISION_ROUTE,
+    ZERNIO_MESSAGING_SEND_ROUTE,
+  ].includes(p as typeof ZERNIO_MESSAGING_DRAFT_ROUTE)) {
+    const messagingRedirect = (code: ZernioMessagingNoticeCode, conversationId = ''): void => {
+      const query = new URLSearchParams({
+        notice: zernioMessagingNoticeToken(deps.sessionSecret, sessionToken, code),
+      });
+      if (conversationId.length > 0) query.set('conversation', conversationId);
+      redirect(res, `${ZERNIO_MESSAGING_ROUTE}?${query.toString()}`, undefined, 303, {
+        'cache-control': 'no-store', 'referrer-policy': 'no-referrer',
+      });
+    };
+    if (!deps.zernioMessaging || deps.productProfile?.id !== 'property_predator_growth') {
+      return messagingRedirect('unavailable');
+    }
+    const form = await readMultiValueForm(req);
+    const common = new Set(['_csrf', 'account_id', 'conversation_id']);
+    const allowed = p === ZERNIO_MESSAGING_DRAFT_ROUTE
+      ? new Set([...common, 'draft_id', 'body'])
+      : p === ZERNIO_MESSAGING_APPROVAL_REQUEST_ROUTE
+        ? new Set([...common, 'draft_id', 'approval_request_id'])
+        : p === ZERNIO_MESSAGING_APPROVAL_DECISION_ROUTE
+          ? new Set([...common, 'approval_request_id', 'decision_id', 'decision', 'confirm_decision'])
+          : new Set([...common, 'draft_id', 'delivery_id', 'lease_token', 'confirm_send']);
+    const accountId = form ? oneFormValue(form, 'account_id') ?? '' : '';
+    const conversationId = form ? oneFormValue(form, 'conversation_id') ?? '' : '';
+    const safeOpaque = (value: string): boolean => value.length >= 1 && value.length <= 500
+      && !/[\u0000-\u001f\u007f]/u.test(value);
+    if (!form || !campaignFormKeysAllowed(form, allowed)
+        || !verifyPortalCsrf(
+          deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '',
+        )
+        || !safeOpaque(accountId) || !safeOpaque(conversationId)) {
+      return messagingRedirect('invalid', safeOpaque(conversationId) ? conversationId : '');
+    }
+    const identity = crmIdentity(sessionToken, deps);
+    let outcome;
+    if (p === ZERNIO_MESSAGING_DRAFT_ROUTE) {
+      const draftId = (oneFormValue(form, 'draft_id') ?? '').toLowerCase();
+      const body = oneFormValue(form, 'body') ?? '';
+      if (!CRM_OBJECT_ID.test(draftId) || body !== body.trim()
+          || Buffer.byteLength(body, 'utf8') < 1 || Buffer.byteLength(body, 'utf8') > 10_000) {
+        return messagingRedirect('invalid', conversationId);
+      }
+      outcome = await deps.zernioMessaging.createDraft(identity, {
+        draftId, accountId, providerConversationId: conversationId, body,
+      });
+    } else if (p === ZERNIO_MESSAGING_APPROVAL_REQUEST_ROUTE) {
+      const draftId = (oneFormValue(form, 'draft_id') ?? '').toLowerCase();
+      const approvalRequestId = (oneFormValue(form, 'approval_request_id') ?? '').toLowerCase();
+      if (!CRM_OBJECT_ID.test(draftId) || !CRM_OBJECT_ID.test(approvalRequestId)) {
+        return messagingRedirect('invalid', conversationId);
+      }
+      outcome = await deps.zernioMessaging.requestApproval(identity, {
+        draftId, approvalRequestId,
+      });
+    } else if (p === ZERNIO_MESSAGING_APPROVAL_DECISION_ROUTE) {
+      const approvalRequestId = (oneFormValue(form, 'approval_request_id') ?? '').toLowerCase();
+      const decisionId = (oneFormValue(form, 'decision_id') ?? '').toLowerCase();
+      const decision = oneFormValue(form, 'decision');
+      if (!CRM_OBJECT_ID.test(approvalRequestId) || !CRM_OBJECT_ID.test(decisionId)
+          || (decision !== 'approved' && decision !== 'rejected')
+          || oneFormValue(form, 'confirm_decision') !== 'yes') {
+        return messagingRedirect('invalid', conversationId);
+      }
+      outcome = await deps.zernioMessaging.decideApproval(identity, {
+        approvalRequestId, decisionId, decision,
+      });
+    } else {
+      const draftId = (oneFormValue(form, 'draft_id') ?? '').toLowerCase();
+      const deliveryId = (oneFormValue(form, 'delivery_id') ?? '').toLowerCase();
+      const leaseToken = (oneFormValue(form, 'lease_token') ?? '').toLowerCase();
+      if (!CRM_OBJECT_ID.test(draftId) || !CRM_OBJECT_ID.test(deliveryId)
+          || !CRM_OBJECT_ID.test(leaseToken)
+          || oneFormValue(form, 'confirm_send') !== 'yes') {
+        return messagingRedirect('invalid', conversationId);
+      }
+      outcome = await deps.zernioMessaging.sendApproved(identity, {
+        draftId, deliveryId, leaseToken, accountId,
+        providerConversationId: conversationId,
+      });
+    }
+    if (outcome.ok) {
+      const code: ZernioMessagingNoticeCode = outcome.disposition === 'created'
+        ? 'draft_created' : outcome.disposition === 'requested'
+          ? 'approval_requested' : outcome.disposition === 'sent'
+            ? 'sent' : outcome.disposition;
+      return messagingRedirect(code, conversationId);
+    }
+    const code: ZernioMessagingNoticeCode = outcome.kind === 'validation'
+      ? 'invalid' : outcome.kind === 'conflict' ? 'conflict'
+        : outcome.kind === 'forbidden' || outcome.kind === 'unauthenticated'
+          ? 'forbidden' : outcome.kind === 'outcome_unknown'
+            ? 'outcome_unknown' : outcome.kind === 'provider_unavailable'
+              || outcome.kind === 'unavailable' ? 'unavailable' : 'provider_rejected';
+    return messagingRedirect(code, conversationId);
+  }
+
+  // ── Zernio live social inbox: authenticated provider projection ──
   if (deps.kind === 'postgres' && p === ZERNIO_MESSAGING_ROUTE && method === 'GET') {
     if (!deps.zernioMessaging) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
       title: 'Social messages not connected',
@@ -4878,9 +4989,18 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         active: 'inbox', backHref: '/portal', backLabel: 'Return to Growth HQ',
       }));
       const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      const notice = zernioMessagingNoticeFromQuery(
+        url.searchParams, deps.sessionSecret, sessionToken,
+      );
       return sendHtml(res, 200, operationalPage(
         shell.workspace.name,
-        renderZernioMessagingBody(snapshot),
+        renderZernioMessagingBody(snapshot, {
+          ...(notice ? { notice } : {}),
+          security: {
+            csrfToken, draftId: randomUUID(), approvalRequestId: randomUUID(),
+            decisionId: randomUUID(), deliveryId: randomUUID(), leaseToken: randomUUID(),
+          },
+        }),
         deps,
         'inbox',
         csrfToken,

@@ -76,6 +76,21 @@ export async function assertZernioSocialCommandBoundaryReady(
          AND has_function_privilege(current_user,
            'app_private.read_zernio_social_accounts(uuid,uuid,bytea)', 'EXECUTE')
          AND has_function_privilege(current_user,
+           'app_private.create_zernio_reply_draft(uuid,uuid,uuid,bytea,bytea,bytea,text,bytea)',
+           'EXECUTE')
+         AND has_function_privilege(current_user,
+           'app_private.request_zernio_reply_approval(uuid,uuid,uuid)', 'EXECUTE')
+         AND has_function_privilege(current_user,
+           'app_private.decide_zernio_reply_approval(uuid,uuid,uuid,text)', 'EXECUTE')
+         AND has_function_privilege(current_user,
+           'app_private.read_zernio_reply_state(uuid,uuid,bytea,bytea,bytea)', 'EXECUTE')
+         AND has_function_privilege(current_user,
+           'app_private.claim_zernio_reply_send(uuid,uuid,uuid,uuid,bytea,bytea,bytea,bytea,bytea)',
+           'EXECUTE')
+         AND has_function_privilege(current_user,
+           'app_private.settle_zernio_reply_send(uuid,uuid,bytea,text,bytea,bytea,text)',
+           'EXECUTE')
+         AND has_function_privilege(current_user,
            'app_private.active_portal_session(bytea,uuid,uuid)', 'EXECUTE')
          AND has_function_privilege(current_user,
            'app_private.lock_active_portal_session(bytea,uuid,uuid)', 'EXECUTE')
@@ -94,6 +109,22 @@ export async function assertZernioSocialCommandBoundaryReady(
            'app.property_predator_zernio_account_webhook_receipts', 'SELECT,INSERT')
          AND NOT has_table_privilege('r72_zernio_social_definer',
            'app.property_predator_zernio_account_webhook_receipts', 'UPDATE,DELETE,TRUNCATE')
+         AND has_table_privilege('r72_zernio_social_definer',
+           'app.property_predator_zernio_reply_drafts', 'SELECT,INSERT')
+         AND NOT has_table_privilege('r72_zernio_social_definer',
+           'app.property_predator_zernio_reply_drafts', 'UPDATE,DELETE,TRUNCATE')
+         AND has_table_privilege('r72_zernio_social_definer',
+           'app.property_predator_zernio_reply_approval_requests', 'SELECT,INSERT')
+         AND NOT has_table_privilege('r72_zernio_social_definer',
+           'app.property_predator_zernio_reply_approval_requests', 'UPDATE,DELETE,TRUNCATE')
+         AND has_table_privilege('r72_zernio_social_definer',
+           'app.property_predator_zernio_reply_approval_decisions', 'SELECT,INSERT')
+         AND NOT has_table_privilege('r72_zernio_social_definer',
+           'app.property_predator_zernio_reply_approval_decisions', 'UPDATE,DELETE,TRUNCATE')
+         AND has_table_privilege('r72_zernio_social_definer',
+           'app.property_predator_zernio_reply_deliveries', 'SELECT,INSERT,UPDATE')
+         AND NOT has_table_privilege('r72_zernio_social_definer',
+           'app.property_predator_zernio_reply_deliveries', 'DELETE,TRUNCATE')
            AS "definerPrivilegesExact",
          NOT EXISTS (
            SELECT 1 FROM pg_catalog.pg_class relation

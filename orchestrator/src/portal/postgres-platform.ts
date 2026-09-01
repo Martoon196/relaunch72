@@ -99,6 +99,7 @@ import {
   LivePortalZernioMessagingService,
   type PortalZernioMessagingService,
 } from './zernio-messaging-service.js';
+import { createPgZernioMessagingReplyStore } from './zernio-messaging-pg-store.js';
 import {
   createPgPortalCompanyContentSyncService,
   loadPropertyPredatorContentSyncSourceConfig,
@@ -805,6 +806,11 @@ export async function buildPgPortalPlatform(
           zernioMessaging = new LivePortalZernioMessagingService({
             accounts: zernioSocial,
             client: messagingClient,
+            sender: messagingClient,
+            replies: createPgZernioMessagingReplyStore({
+              webPool, commandPool: zernioPool, workspaceId,
+              providerConnectionId: connectionId, providerProfileId,
+            }),
             allowedAccountIds: messagingAccountIds,
           });
         }
