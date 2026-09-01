@@ -265,7 +265,9 @@ export class InboxPgRepository {
          state, unread_count, last_message_at, created_at, updated_at
        ) VALUES (
          $1, app_private.current_workspace_id(), $2, $3, 'test', $4,
-         'open', 0, NULL, least($5::timestamptz, $6::timestamptz), $6::timestamptz
+         'open', 0, NULL,
+         least($5::timestamptz, $6::timestamptz, statement_timestamp()),
+         statement_timestamp()
        )`,
       [input.id, input.inboxId, input.channel, input.contactId,
         input.firstMessageAt, input.at],

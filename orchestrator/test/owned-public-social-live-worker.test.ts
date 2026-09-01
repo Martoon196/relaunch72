@@ -61,6 +61,15 @@ test('worker config defaults to a dark paused runtime and rejects mixed activati
     ...activeEnv(), AYRSHARE_API_KEY: undefined,
   }), /AYRSHARE_API_KEY is unavailable/u);
   assert.throws(() => loadOwnedPublicSocialWorkerConfig({
+    ...activeEnv(),
+    PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK: 'instagram_linkedin',
+  }), /PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN is required/u);
+  assert.throws(() => loadOwnedPublicSocialWorkerConfig({
+    ...activeEnv(),
+    PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK: 'instagram_linkedin',
+    PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN: 'http://not-provider-fetchable.example',
+  }), /PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN is invalid/u);
+  assert.throws(() => loadOwnedPublicSocialWorkerConfig({
     ...darkEnv(), DATABASE_WEB_URL: DATABASE_URL,
   }), /another database identity/u);
   assert.throws(() => loadOwnedPublicSocialWorkerConfig({
@@ -154,18 +163,63 @@ test('active worker composes without a startup provider call and serializes cycl
   await runtime.shutdown();
 });
 
+test('default media resolver turns the approved Property Predator asset route into one HTTPS URL', async () => {
+  let resolved: readonly string[] | undefined;
+  const runtime = await startOwnedPublicSocialLiveWorker({
+    env: {
+      ...activeEnv(),
+      PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK: 'instagram_linkedin',
+      PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN: 'https://propertypredator.com',
+    },
+    autoStart: false,
+    createPool: () => ({
+      query: async () => ({ rows: [] }),
+      end: async () => undefined,
+    }) as never,
+    assertSchemaCurrent: async () => undefined,
+    assertInstallationReady: async () => undefined,
+    assertBoundaryReady: async () => undefined,
+    createRepository: () => ({}) as never,
+    createTransport: () => ({}) as never,
+    randomToken: () => Buffer.alloc(32, 9),
+    runCycle: async (input) => {
+      resolved = await input.mediaResolver?.resolve({
+        workspaceId: WORKSPACE,
+        jobId: '44444444-4444-4444-8444-444444444444',
+        scheduledFor: '2026-09-02T09:30:00.000Z',
+        media: Object.freeze([Object.freeze({
+          storageKey: '/api/internal/company-content/assets/77777777-7777-4777-8777-777777777777/file',
+          blobSha256: 'a'.repeat(64),
+          mimeType: 'image/png',
+        })]),
+      });
+      return 'idle';
+    },
+    writeReadiness: () => undefined,
+  });
+  await runtime.runOnce();
+  assert.deepEqual(resolved, [
+    'https://propertypredator.com/api/internal/company-content/assets/77777777-7777-4777-8777-777777777777/file',
+  ]);
+  await runtime.shutdown();
+});
+
 test('database boundary probe requires the exact worker functions and table blindness', async () => {
   let sql = '';
   const exact = {
     exactRole: true,
     schemaUsage: true,
-    claimExecute: true,
-    loadExecute: true,
-    beginExecute: true,
+    legacyClaimDenied: true,
+    claimV2Execute: true,
+    legacyLoadDenied: true,
+    loadV2Execute: true,
+    legacyBeginDenied: true,
+    beginV2Execute: true,
     settleExecute: true,
     ledgerExecute: true,
     installationExecute: true,
     commandFunctionsDenied: true,
+    commandV2FunctionsDenied: true,
     tableBlind: true,
     elevatedRolesDenied: true,
   };
@@ -175,10 +229,43 @@ test('database boundary probe requires the exact worker functions and table blin
       return { rows: [exact] } as never;
     },
   } as never);
-  assert.match(sql, /claim_owned_social_job/u);
+  assert.match(
+    sql,
+    /'app_private\.claim_owned_social_job_v2\(uuid,uuid,text\[\],bytea,integer\)'/u,
+  );
+  assert.match(
+    sql,
+    /'app_private\.load_owned_social_job_v2\(uuid,uuid,bigint,bytea\)'/u,
+  );
+  assert.match(
+    sql,
+    /'app_private\.begin_owned_social_call_v2\(uuid,uuid,bigint,bytea,boolean,boolean\)'/u,
+  );
+  assert.match(
+    sql,
+    /NOT has_function_privilege\(\s*current_user,\s*'app_private\.claim_owned_social_job\(uuid,uuid,bytea,integer\)'/u,
+  );
+  assert.match(
+    sql,
+    /NOT has_function_privilege\(\s*current_user,\s*'app_private\.load_owned_social_job\(uuid,uuid,bigint,bytea\)'/u,
+  );
+  assert.match(
+    sql,
+    /NOT has_function_privilege\(\s*current_user,\s*'app_private\.begin_owned_social_call\(uuid,uuid,bigint,bytea,boolean,boolean\)'/u,
+  );
+  assert.match(
+    sql,
+    /NOT has_function_privilege\(\s*current_user,\s*'app_private\.record_owned_social_profile_v2\(/u,
+  );
+  assert.match(
+    sql,
+    /NOT has_function_privilege\(\s*current_user,\s*'app_private\.enqueue_owned_social_job_v2\(/u,
+  );
   assert.match(sql, /runtime_schema_migrations/u);
   assert.match(sql, /NOT EXISTS/u);
-  await assert.rejects(assertOwnedPublicSocialWorkerBoundaryReady({
-    async query() { return { rows: [{ ...exact, tableBlind: false }] } as never; },
-  } as never), /database boundary is not exact/u);
+  for (const field of Object.keys(exact)) {
+    await assert.rejects(assertOwnedPublicSocialWorkerBoundaryReady({
+      async query() { return { rows: [{ ...exact, [field]: false }] } as never; },
+    } as never), /database boundary is not exact/u, `expected ${field}: false to be refused`);
+  }
 });

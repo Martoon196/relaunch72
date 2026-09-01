@@ -314,6 +314,7 @@ test('Content Calendar validates optional durable planning and JIT provenance ag
   assert.equal(stageUrl.pathname, '/portal/channels/live');
   assert.equal(stageUrl.searchParams.get('network'), 'linkedin');
   assert.equal(stageUrl.searchParams.get('planning_intent_id'), planning.intentId);
+  assert.equal(stageUrl.searchParams.get('planning_target_id'), planning.targetId);
   assert.equal(stageUrl.searchParams.get('scheduled_for'), planning.desiredFor);
   assert.match(renderContentCalendarBody(exact), /Schedule live on LinkedIn/);
 

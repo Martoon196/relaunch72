@@ -14,7 +14,7 @@ test('repository keeps every SQL operation bound to its constructor workspace an
       return {
         async query(sql: string, values: unknown[] = []) {
           calls.push({ sql, values });
-          return sql.includes('claim_owned_social_job')
+          return sql.includes('claim_owned_social_job_v2')
             ? { rows: [{ jobId: JOB, profileId: PROFILE, leaseVersion: '1', attemptKind: 'publish' }] }
             : { rows: [] };
         },
@@ -26,13 +26,18 @@ test('repository keeps every SQL operation bound to its constructor workspace an
     workspaceId: WORKSPACE, connectionId: CONNECTION,
   });
   const lease = Buffer.alloc(32, 1);
-  const claim = await repository.claimOne({ leaseToken: lease, leaseSeconds: 60 });
+  const claim = await repository.claimOne({
+    leaseToken: lease,
+    leaseSeconds: 60,
+    networks: ['instagram', 'linkedin'],
+  });
   assert.equal(claim?.workspaceId, WORKSPACE);
   assert.equal(claim?.connectionId, CONNECTION);
   assert.match(calls[0]?.sql ?? '', /BEGIN/u);
   assert.deepEqual(calls[1]?.values, ['', WORKSPACE, 'worker', `owned-social:claim:${CONNECTION}`]);
-  const domain = calls.find((call) => call.sql.includes('claim_owned_social_job'));
+  const domain = calls.find((call) => call.sql.includes('claim_owned_social_job_v2'));
   assert.deepEqual(domain?.values.slice(0, 2), [WORKSPACE, CONNECTION]);
+  assert.deepEqual(domain?.values[2], ['instagram', 'linkedin']);
   assert.match(calls.at(-1)?.sql ?? '', /COMMIT/u);
 });
 
@@ -48,6 +53,36 @@ test('repository rejects cross-workspace claims before touching SQL', async () =
     providerEffectsEnabled: true, emergencyPaused: false,
   }));
   assert.equal(called, false);
+});
+
+test('repository crosses the provider-call boundary only through the v2 effect-time fence', async () => {
+  const calls: Array<{ sql: string; values: unknown[] }> = [];
+  const leaseToken = Buffer.alloc(32, 7);
+  const repository = new PgOwnedPublicSocialLiveRepository({
+    async connect() {
+      return {
+        async query(sql: string, values: unknown[] = []) {
+          calls.push({ sql, values });
+          return sql.includes('begin_owned_social_call_v2')
+            ? { rows: [{ marked: true }] }
+            : { rows: [] };
+        },
+        release() { return undefined; },
+      };
+    },
+  } as never, { workspaceId: WORKSPACE, connectionId: CONNECTION });
+
+  const marked = await repository.markCalling({
+    workspaceId: WORKSPACE, connectionId: CONNECTION, profileId: PROFILE, jobId: JOB,
+    leaseVersion: 4, attemptKind: 'publish', leaseToken,
+    providerEffectsEnabled: true, emergencyPaused: false,
+  });
+
+  assert.equal(marked, true);
+  const boundary = calls.find((call) => call.sql.includes('begin_owned_social_call_v2'));
+  assert.ok(boundary);
+  assert.doesNotMatch(boundary.sql, /begin_owned_social_call\(/u);
+  assert.deepEqual(boundary.values, [WORKSPACE, JOB, 4, leaseToken, true, false]);
 });
 
 test('repository loads one exact Instagram job with immutable approved media', async () => {
@@ -66,7 +101,8 @@ test('repository loads one exact Instagram job with immutable approved media', a
             textBody: 'Approved Instagram post.', textSha256: '4'.repeat(64),
             scheduledFor: '2026-09-02T09:30:00.000Z', providerExternalId: null,
             network: 'instagram', media: [{
-              storageKey: 'approved/social/instagram-one.png', blobSha256: '5'.repeat(64),
+              storageKey: '/api/internal/company-content/assets/77777777-7777-4777-8777-777777777777/file',
+              blobSha256: '5'.repeat(64),
               mimeType: 'image/png',
             }],
           }] };
@@ -82,7 +118,8 @@ test('repository loads one exact Instagram job with immutable approved media', a
   });
   assert.equal(material.network, 'instagram');
   assert.deepEqual(material.media, [{
-    storageKey: 'approved/social/instagram-one.png', blobSha256: '5'.repeat(64),
+    storageKey: '/api/internal/company-content/assets/77777777-7777-4777-8777-777777777777/file',
+    blobSha256: '5'.repeat(64),
     mimeType: 'image/png',
   }]);
 });

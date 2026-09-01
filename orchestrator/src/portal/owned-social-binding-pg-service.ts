@@ -16,7 +16,10 @@ import type { Pool } from 'pg';
 import { requestDatabaseContext, type DatabaseRequestContext } from '../db/rls.js';
 import { InactivePortalSessionError } from '../db/transaction.js';
 import { encryptOwnedProfileKey } from '../public-social-outbound/owned-live-foundation.js';
-import type { OwnedPublicSocialLiveCommandService } from '../owned-public-social-pg/command-types.js';
+import type {
+  EnqueueOwnedPublicSocialJobCommand,
+  OwnedPublicSocialLiveCommandService,
+} from '../owned-public-social-pg/command-types.js';
 import { PgOwnedSocialActivationReadinessProbe } from '../owned-social-activation-pg/probe.js';
 import {
   deriveOwnedSocialStagingDigests,
@@ -206,6 +209,7 @@ export class PgPortalOwnedSocialBindingService implements PortalOwnedSocialBindi
     const selectedNetwork = input.network ?? 'x';
     if (!UUID.test(input.profileId) || !liveNetwork(selectedNetwork)
         || (input.planningIntentId !== undefined && !UUID.test(input.planningIntentId))
+        || (input.planningTargetId !== undefined && !UUID.test(input.planningTargetId))
         || !UUID.test(input.contentItemId)
         || !UUID.test(input.contentVersionId) || !UUID.test(input.approvalRequestId)
         || !UUID.test(input.approvalDecisionId) || !UUID.test(input.sourceAttestationId)
@@ -220,6 +224,7 @@ export class PgPortalOwnedSocialBindingService implements PortalOwnedSocialBindi
         workspaceId: context.workspaceId,
         network: selectedNetwork,
         planningIntentId: input.planningIntentId?.toLowerCase(),
+        planningTargetId: input.planningTargetId?.toLowerCase(),
         providerConnectionId: this.providerConnectionId,
         profileId: input.profileId.toLowerCase(),
         contentItemId: input.contentItemId.toLowerCase(),
@@ -243,8 +248,10 @@ export class PgPortalOwnedSocialBindingService implements PortalOwnedSocialBindi
     const selectedNetwork = input.network ?? 'x';
     if (!UUID.test(input.profileId) || !liveNetwork(selectedNetwork)
         || (input.planningIntentId !== undefined && !UUID.test(input.planningIntentId))
+        || (input.planningTargetId !== undefined && !UUID.test(input.planningTargetId))
         || ((selectedNetwork === 'instagram' || selectedNetwork === 'linkedin')
-          && (input.planningIntentId === undefined || input.scheduledFor === null))
+          && (input.planningIntentId === undefined || input.planningTargetId === undefined
+            || input.scheduledFor === null))
         || !UUID.test(input.contentItemId)
         || !UUID.test(input.contentVersionId) || !UUID.test(input.approvalRequestId)
         || !UUID.test(input.approvalDecisionId) || !UUID.test(input.sourceAttestationId)
@@ -262,6 +269,7 @@ export class PgPortalOwnedSocialBindingService implements PortalOwnedSocialBindi
         workspaceId: context.workspaceId,
         network: selectedNetwork,
         planningIntentId: input.planningIntentId?.toLowerCase(),
+        planningTargetId: input.planningTargetId?.toLowerCase(),
         providerConnectionId: this.providerConnectionId,
         profileId: input.profileId.toLowerCase(),
         contentItemId: input.contentItemId.toLowerCase(),
@@ -284,10 +292,7 @@ export class PgPortalOwnedSocialBindingService implements PortalOwnedSocialBindi
       // Derived here, never accepted from the caller, so the key is provably
       // bound to this exact owned profile and approved version.
       const digests = deriveOwnedSocialStagingDigests(target, input.operationTag);
-      const outcome = await this.#dependencies.commandService.enqueue(context as never, {
-        ...(input.network === undefined ? {} : { network: selectedNetwork }),
-        ...(input.planningIntentId === undefined
-          ? {} : { planningIntentId: input.planningIntentId.toLowerCase() }),
+      const commonCommand = {
         profileId: input.profileId.toLowerCase(),
         contentItemId: input.contentItemId.toLowerCase(),
         contentVersionId: input.contentVersionId.toLowerCase(),
@@ -298,7 +303,20 @@ export class PgPortalOwnedSocialBindingService implements PortalOwnedSocialBindi
         idempotencyKeySha256: digests.idempotencyKeySha256,
         requestSha256: digests.requestSha256,
         scheduledFor: input.scheduledFor,
-      });
+      } as const;
+      const enqueueCommand: EnqueueOwnedPublicSocialJobCommand = selectedNetwork === 'x'
+        ? commonCommand
+        : {
+          ...commonCommand,
+          network: selectedNetwork,
+          planningIntentId: input.planningIntentId!.toLowerCase(),
+          planningTargetId: input.planningTargetId!.toLowerCase(),
+          expectedOwnedAccountSha256: target.expectedOwnedAccountSha256,
+        };
+      const outcome = await this.#dependencies.commandService.enqueue(
+        context as never,
+        enqueueCommand,
+      );
       return Object.freeze({
         ok: true,
         jobId: outcome.jobId,

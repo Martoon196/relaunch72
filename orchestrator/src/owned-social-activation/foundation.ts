@@ -118,6 +118,7 @@ export function ownedSocialAccountDigest(accountReference: string): string {
 export interface OwnedSocialActivationTarget {
   readonly network?: OwnedPublicSocialNetwork;
   readonly planningIntentId?: string;
+  readonly planningTargetId?: string;
   readonly workspaceId: string;
   readonly providerConnectionId: string;
   readonly profileId: string;
@@ -278,8 +279,9 @@ export interface OwnedSocialPublicationRehearsal {
 
 /**
  * The scope-bound publication identity: workspace, connection, owned profile,
- * exact approved content version, approval decision, operation tag and
- * schedule. It is deliberately identifier-only so the founder portal can
+ * exact calendar target, approved content version, approval decision,
+ * operation tag and schedule. It is deliberately identifier-only so the
+ * founder portal can
  * derive the same idempotency key the offline rehearsal derives, without ever
  * reading the approved post body. Content versions are immutable, so the
  * version id pins the exact bytes just as tightly as their digest would.
@@ -295,6 +297,7 @@ function ownedSocialStagingIdentity(
     target.profileId,
     target.network ?? 'x',
     target.planningIntentId ?? '',
+    target.planningTargetId ?? '',
     target.contentVersionId,
     target.approvalDecisionId,
     operationTag,

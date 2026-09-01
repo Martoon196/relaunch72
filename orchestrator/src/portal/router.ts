@@ -1362,6 +1362,7 @@ function campaignCanonicalInstant(value: string | null): value is string {
 function ownedSocialCalendarPrefill(query: URLSearchParams): Readonly<{
   network: 'instagram' | 'linkedin';
   planningIntentId: string;
+  planningTargetId: string;
   contentItemId: string;
   contentVersionId: string;
   approvalRequestId: string;
@@ -1372,7 +1373,7 @@ function ownedSocialCalendarPrefill(query: URLSearchParams): Readonly<{
 }> | undefined {
   if (query.get('stage') !== 'owned_social') return undefined;
   const names = [
-    'network', 'planning_intent_id', 'content_item_id', 'content_version_id', 'approval_request_id',
+    'network', 'planning_intent_id', 'planning_target_id', 'content_item_id', 'content_version_id', 'approval_request_id',
     'approval_decision_id', 'source_attestation_id', 'scheduled_for', 'operation_tag',
   ] as const;
   if (names.some((name) => query.getAll(name).length !== 1)) return undefined;
@@ -1380,6 +1381,7 @@ function ownedSocialCalendarPrefill(query: URLSearchParams): Readonly<{
   const values = {
     network: value('network'),
     planning_intent_id: value('planning_intent_id'),
+    planning_target_id: value('planning_target_id'),
     content_item_id: value('content_item_id'),
     content_version_id: value('content_version_id'),
     approval_request_id: value('approval_request_id'),
@@ -1390,6 +1392,7 @@ function ownedSocialCalendarPrefill(query: URLSearchParams): Readonly<{
   };
   if ((values.network !== 'instagram' && values.network !== 'linkedin')
       || !CRM_OBJECT_ID.test(values.planning_intent_id)
+      || !CRM_OBJECT_ID.test(values.planning_target_id)
       || !CRM_OBJECT_ID.test(values.content_item_id)
       || !CRM_OBJECT_ID.test(values.content_version_id)
       || !CRM_OBJECT_ID.test(values.approval_request_id)
@@ -1402,6 +1405,7 @@ function ownedSocialCalendarPrefill(query: URLSearchParams): Readonly<{
   return Object.freeze({
     network: values.network as 'instagram' | 'linkedin',
     planningIntentId: values.planning_intent_id,
+    planningTargetId: values.planning_target_id,
     contentItemId: values.content_item_id,
     contentVersionId: values.content_version_id,
     approvalRequestId: values.approval_request_id,
@@ -2886,7 +2890,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         ? new Set(['_csrf', 'command_key', 'profile_id', 'reason_code',
           'revocation_evidence', 'confirm_revoke'])
         : new Set(['_csrf', 'command_key', 'profile_id', 'content_item_id',
-          'network', 'planning_intent_id',
+          'network', 'planning_intent_id', 'planning_target_id',
           'content_version_id', 'approval_request_id', 'approval_decision_id',
           'source_attestation_id', 'owned_account', 'operation_tag', 'scheduled_for',
           'confirm_stage']);
@@ -2941,6 +2945,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         : {}),
       ...(oneFormValue(form, 'planning_intent_id')
         ? { planningIntentId: oneFormValue(form, 'planning_intent_id')! }
+        : {}),
+      ...(oneFormValue(form, 'planning_target_id')
+        ? { planningTargetId: oneFormValue(form, 'planning_target_id')! }
         : {}),
       contentItemId: oneFormValue(form, 'content_item_id') ?? '',
       contentVersionId: oneFormValue(form, 'content_version_id') ?? '',

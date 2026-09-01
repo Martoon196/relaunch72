@@ -220,7 +220,9 @@ implements OwnedPublicSocialLiveCommandService {
     if (!command || typeof command !== 'object' || !OPERATION_TAG.test(command.operationTag)) {
       fail('enqueue command is invalid');
     }
-    const legacy = command.network === undefined && command.planningIntentId === undefined;
+    const legacy = command.network === undefined
+      && command.planningIntentId === undefined
+      && command.planningTargetId === undefined;
     const values = legacy
       ? [this.workspaceId, this.providerConnectionId,
         uuid(command.profileId, 'profileId'),
@@ -235,7 +237,9 @@ implements OwnedPublicSocialLiveCommandService {
         optionalTimestamp(command.scheduledFor, 'scheduledFor')]
       : [this.workspaceId, this.providerConnectionId,
         uuid(command.profileId, 'profileId'), network(command.network),
+        digest(command.expectedOwnedAccountSha256, 'expectedOwnedAccountSha256'),
         uuid(command.planningIntentId, 'planningIntentId'),
+        uuid(command.planningTargetId, 'planningTargetId'),
         uuid(command.contentItemId, 'contentItemId'),
         uuid(command.contentVersionId, 'contentVersionId'),
         uuid(command.approvalRequestId, 'approvalRequestId'),
@@ -256,9 +260,10 @@ implements OwnedPublicSocialLiveCommandService {
        ) AS id`
         : `/* owned-public-social-command.enqueue-v2 */
        SELECT app_private.enqueue_owned_social_job_v2(
-         $1::uuid, $2::uuid, $3::uuid, $4::text, $5::uuid,
+         $1::uuid, $2::uuid, $3::uuid, $4::text, $5::bytea,
          $6::uuid, $7::uuid, $8::uuid, $9::uuid, $10::uuid,
-         $11::text, $12::bytea, $13::bytea, $14::timestamptz
+         $11::uuid, $12::uuid, $13::text, $14::bytea, $15::bytea,
+         $16::timestamptz
        ) AS id`,
       values,
       'jobId',

@@ -95,7 +95,8 @@ function socialMedia(value: unknown): OwnedPublicSocialJobMaterial['media'] {
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) fail('media');
     const row = candidate as Record<string, unknown>;
     if (typeof row.storageKey !== 'string'
-        || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,499}$/u.test(row.storageKey)
+        || !/^\/?[A-Za-z0-9][A-Za-z0-9._/-]{0,499}$/u.test(row.storageKey)
+        || row.storageKey.length > 500
         || row.storageKey.includes('..') || row.storageKey.includes('//')
         || typeof row.blobSha256 !== 'string' || !SHA256.test(row.blobSha256)
         || typeof row.mimeType !== 'string'
@@ -159,9 +160,15 @@ export class PgOwnedPublicSocialLiveRepository implements OwnedPublicSocialLiveR
   async claimOne(input: Readonly<{
     leaseToken: Buffer;
     leaseSeconds: number;
+    networks: readonly ('instagram' | 'linkedin' | 'x')[];
   }>): Promise<OwnedPublicSocialClaim | null> {
     if (input.leaseToken.length !== 32 || !Number.isSafeInteger(input.leaseSeconds)
         || input.leaseSeconds < 30 || input.leaseSeconds > 300) fail('claim input');
+    if (!Array.isArray(input.networks) || input.networks.length < 1 || input.networks.length > 3) {
+      fail('claim networks');
+    }
+    const networks = input.networks.map(socialNetwork);
+    if (new Set(networks).size !== networks.length) fail('claim networks');
     return withTransaction(
       this.commandPool,
       {
@@ -173,8 +180,10 @@ export class PgOwnedPublicSocialLiveRepository implements OwnedPublicSocialLiveR
           `/* owned-social.claim-one */
            SELECT job_id AS "jobId", profile_id AS "profileId",
                   lease_version AS "leaseVersion", attempt_kind AS "attemptKind"
-           FROM app_private.claim_owned_social_job($1::uuid, $2::uuid, $3::bytea, $4::integer)`,
-          [this.#workspaceId, this.#connectionId, input.leaseToken, input.leaseSeconds],
+           FROM app_private.claim_owned_social_job_v2(
+             $1::uuid, $2::uuid, $3::text[], $4::bytea, $5::integer
+           )`,
+          [this.#workspaceId, this.#connectionId, networks, input.leaseToken, input.leaseSeconds],
         );
         return exactClaim(this.#workspaceId, this.#connectionId, result.rows);
       },
@@ -255,7 +264,7 @@ export class PgOwnedPublicSocialLiveRepository implements OwnedPublicSocialLiveR
       async (transaction) => {
         const result = await transaction.query<{ marked: unknown } & QueryResultRow>(
           `/* owned-social.begin-call */
-           SELECT app_private.begin_owned_social_call(
+           SELECT app_private.begin_owned_social_call_v2(
              $1::uuid, $2::uuid, $3::bigint, $4::bytea, $5::boolean, $6::boolean
            ) AS marked`,
           [input.workspaceId, input.jobId, input.leaseVersion, input.leaseToken, true, false],

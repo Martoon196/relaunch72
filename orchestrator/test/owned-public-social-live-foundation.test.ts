@@ -237,8 +237,12 @@ class MemoryRepository implements OwnedPublicSocialLiveRepository {
   });
   calling = false;
   result: AyrshareOwnedResult | null = null;
+  claimedNetworks: readonly string[] = Object.freeze([]);
 
-  async claimOne(): Promise<OwnedPublicSocialClaim> { return this.claim; }
+  async claimOne(input: Readonly<{ networks: readonly string[] }>): Promise<OwnedPublicSocialClaim> {
+    this.claimedNetworks = Object.freeze([...input.networks]);
+    return this.claim;
+  }
   async loadClaimed(): Promise<OwnedPublicSocialJobMaterial> {
     return Object.freeze({
       ...this.claim, envelope: ENVELOPE, operationTag: 'pp-owned-proof-1',
@@ -252,7 +256,7 @@ class MemoryRepository implements OwnedPublicSocialLiveRepository {
   }>): Promise<void> { this.result = input.result; }
 }
 
-test('one worker cycle marks the durable calling fence before the only provider invocation', async () => {
+test('one worker cycle resolves local media before marking the durable provider-call fence', async () => {
   const order: string[] = [];
   const repository = new MemoryRepository();
   const originalMark = repository.markCalling.bind(repository);
@@ -281,10 +285,76 @@ test('one worker cycle marks the durable calling fence before the only provider 
     }),
     repository, transport, encryptionKey: KEY, encryptionKeyVersion: 'render-kms-v1',
     leaseToken: LEASE,
+    mediaResolver: Object.freeze({
+      async resolve() { order.push('resolve'); return Object.freeze([]); },
+    }),
   });
   assert.equal(result, 'published_or_pending');
-  assert.deepEqual(order, ['calling', 'publish']);
+  assert.deepEqual(order, ['resolve', 'calling', 'publish']);
+  assert.deepEqual(repository.claimedNetworks, ['x']);
   assert.equal(repository.result?.state, 'accepted');
+});
+
+test('deterministic local media failure stays pre-call and safely lease-retryable', async () => {
+  const order: string[] = [];
+  const repository = new MemoryRepository();
+  const instagramEnvelope = encryptOwnedProfileKey({
+    workspaceId: IDS.workspace,
+    connectionId: IDS.connection,
+    profileId: IDS.profile,
+    profileKey: PROFILE_KEY,
+    keyVersion: 'render-kms-v1',
+    encryptionKey: KEY,
+    iv: Buffer.alloc(12, 5),
+    network: 'instagram',
+  });
+  repository.loadClaimed = async () => Object.freeze({
+    ...repository.claim,
+    network: 'instagram' as const,
+    envelope: instagramEnvelope,
+    operationTag: 'pp-instagram-calendar-local-failure',
+    idempotencyKey: digest('instagram-calendar-local-failure'),
+    text: 'Approved Instagram post.',
+    textSha256: digest('Approved Instagram post.'),
+    scheduledFor: '2026-09-02T09:00:00.000Z',
+    externalId: null,
+    media: Object.freeze([Object.freeze({
+      storageKey: 'approved/calendar-missing.png',
+      blobSha256: digest('calendar-missing'),
+      mimeType: 'image/png',
+    })]),
+  });
+  const originalMark = repository.markCalling.bind(repository);
+  repository.markCalling = async () => { order.push('calling'); return originalMark(); };
+  const transport = {
+    contract: 'propertypredator.owned-public-social-live/v1' as const,
+    providerId: 'ayrshare' as const,
+    executionMode: 'owned_profile_live' as const,
+    async publish(): Promise<never> { order.push('publish'); throw new Error('not expected'); },
+    async reconcile(): Promise<never> { throw new Error('not expected'); },
+  };
+
+  await assert.rejects(runOwnedPublicSocialLiveOnce({
+    config: loadOwnedPublicSocialLiveRuntimeConfig({
+      PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE: 'owned_profile_live',
+      PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED: 'true',
+      PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED: 'false',
+      PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_PROVIDER_ID: 'ayrshare',
+      PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK: 'instagram_linkedin',
+    }),
+    repository, transport, encryptionKey: KEY, encryptionKeyVersion: 'render-kms-v1',
+    leaseToken: LEASE,
+    mediaResolver: Object.freeze({
+      async resolve(): Promise<never> {
+        order.push('resolve');
+        throw new Error('local media unavailable');
+      },
+    }),
+  }), /local media unavailable/u);
+
+  assert.deepEqual(order, ['resolve']);
+  assert.equal(repository.calling, false);
+  assert.equal(repository.result, null, 'no provider-style settlement may be recorded');
 });
 
 test('a due Instagram calendar job publishes now instead of rescheduling a past instant', async () => {
@@ -352,6 +422,7 @@ test('a due Instagram calendar job publishes now instead of rescheduling a past 
   assert.equal(result, 'published_or_pending');
   assert.equal(request?.scheduledFor, null);
   assert.equal(request?.network, 'instagram');
+  assert.deepEqual(repository.claimedNetworks, ['instagram', 'linkedin']);
   assert.deepEqual(request?.mediaUrls, [
     'https://propertypredator.com/media/approved/calendar-one.png',
   ]);

@@ -1,12 +1,49 @@
 # Property Predator — owned public social activation readiness
 
-> Current launch target: **Instagram + LinkedIn through Ayrshare and the Growth HQ calendar**. Migration `0066` extends the original `0052` X-only foundation with network-specific profile evidence, exact planning-intent binding and immutable approved media. X is retained only as a backwards-compatible code path and is deferred from the production manifest until an owned X account and its separate BYOK/OAuth requirements are available.
+> Current launch target: **Instagram + LinkedIn through Ayrshare and the Growth HQ calendar**. Migration `0066` extends the original `0052` X-only foundation with network-specific profile evidence, exact planning-intent and planning-target binding, exact owned-account confirmation and immutable approved media. X is retained only as a backwards-compatible code path and is deferred from the production manifest until an owned X account and its separate BYOK/OAuth requirements are available.
 
-For the Instagram/LinkedIn launch, Render uses `PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK=instagram_linkedin`, `AYRSHARE_API_KEY`, the profile-envelope key/version and `PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN`. The X OAuth1 secrets described later in this historical foundation section are **not** required or present for the current launch. Each calendar publication is admitted only when its exact immutable planning intent, matching network target, current content approval, fresh source attestation and approved media set pass the `0066` database command.
+For the Instagram/LinkedIn launch, Render uses `PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK=instagram_linkedin`, `AYRSHARE_API_KEY`, the profile-envelope key/version and `PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN`. The X OAuth1 secrets described later in this historical foundation section are **not** required or present for the current launch. Enqueue requires the exact immutable planning intent and target, matching network and owned-profile account digest, current approval, current source attestation and exact approved media set. At the provider boundary, the original short-lived source attestation is immutable provenance rather than live authority: the current exact `0040` revalidation proof and proof-media must still match the intent, content, approval, media and blob/brand digests and remain unexpired.
 
 This rail is composed and dark. Nothing in this document publishes a post,
 connects an account or enables a provider effect. A first owned-account
 publication remains a separate, explicitly authorised decision.
+
+## Current Instagram/LinkedIn release boundary
+
+The reviewed rail is safe to commit, push and deploy dark with
+`PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE=disabled`,
+`PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED=false` and
+`PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED=true`.
+
+The sole remaining code blocker to enabling Instagram/LinkedIn provider effects
+is provider-fetchable media delivery. `PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN`
+cannot merely prefix the authenticated
+`/api/internal/company-content/assets/.../file` route: Ayrshare fetches media
+without the private `asset:read` bearer and client headers that route requires.
+The resolver must instead produce a credential-free, short-lived signed URL
+bound to the exact workspace/job, immutable content version and blob digest.
+The URL must live long enough for the provider fetch without exposing a service
+credential or creating a permanent public asset.
+
+Activation remains blocked until a black-box provider-style check proves all of
+the following:
+
+- an unauthenticated GET of the signed URL returns the exact approved bytes and
+  MIME type;
+- the returned bytes reproduce the stored blob SHA-256;
+- expired, tampered, wrong-job and wrong-version URLs fail closed; and
+- neither the URL nor worker telemetry contains an internal bearer, client
+  token or other reusable credential.
+
+Owned Ayrshare account credentials, exact Instagram/LinkedIn profile bindings,
+owned-account evidence and a separately authorised owned test post remain
+external activation inputs, not reasons to weaken this media boundary.
+
+## Historical X-only foundation reference
+
+The remaining sections preserve the original X foundation and rehearsal
+contracts. They are useful compatibility history, but they are not the current
+Instagram/LinkedIn activation authority described above.
 
 ## What is already proven in code
 
@@ -112,7 +149,7 @@ memory for a single leased operation.
   the intended publication moment.
 - The post text must satisfy the X v1 rule above.
 
-## Known gaps before a first authorised effect
+## Historical X gaps before a first authorised effect
 
 1. ~~No founder command runtime wiring.~~ **Closed.** The command service is now
    composed into the portal from `DATABASE_OWNED_SOCIAL_COMMAND_URL` alone, and
@@ -158,7 +195,7 @@ the router.
 
 The emergency pause control is unchanged and still engage-only.
 
-## Activation order
+## Historical X activation order
 
 1. Supply the Ayrshare account values into the Render secret slots. The worker
    stays dark: `PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE=disabled`,

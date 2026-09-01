@@ -171,6 +171,7 @@ test('an exact calendar handoff opens the Instagram stage form with immutable ev
   const params = new URLSearchParams({
     stage: 'owned_social', network: 'instagram',
     planning_intent_id: '11111111-1111-4111-8111-111111111111',
+    planning_target_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     content_item_id: '22222222-2222-4222-8222-222222222222',
     content_version_id: '33333333-3333-4333-8333-333333333333',
     approval_request_id: '44444444-4444-4444-8444-444444444444',
@@ -193,6 +194,7 @@ test('an exact calendar handoff opens the Instagram stage form with immutable ev
   assert.match(result.body, /id="plc-owned-social-stage" open/u);
   assert.match(result.body, /name="network" value="instagram"/u);
   assert.match(result.body, /name="planning_intent_id" value="11111111-1111-4111-8111-111111111111"/u);
+  assert.match(result.body, /name="planning_target_id" value="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"/u);
   assert.match(result.body, /name="scheduled_for" value="2026-09-02T09:30:00.000Z"/u);
   assert.match(result.body, /Arm calendar publication/u);
 });

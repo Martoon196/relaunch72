@@ -170,11 +170,20 @@ function exactEncryptionKey(raw: string | undefined): Buffer {
   return decoded;
 }
 
-function defaultMediaResolver(env: NodeJS.ProcessEnv): OwnedPublicSocialMediaResolver {
-  const origin = (env.PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN ?? '').trim().replace(/\/+$/u, '');
-  if (origin && !/^https:\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:\/[A-Za-z0-9._~/-]*)?$/u.test(origin)) {
+function exactMediaOrigin(raw: string | undefined, required: boolean): string {
+  const origin = (raw ?? '').trim().replace(/\/+$/u, '');
+  if (!origin) {
+    if (required) throw new Error('PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN is required');
+    return '';
+  }
+  if (!/^https:\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:\/[A-Za-z0-9._~\/-]*)?$/u.test(origin)) {
     throw new Error('PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN is invalid');
   }
+  return origin;
+}
+
+function defaultMediaResolver(env: NodeJS.ProcessEnv): OwnedPublicSocialMediaResolver {
+  const origin = exactMediaOrigin(env.PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN, false);
   return Object.freeze({
     async resolve(input: Readonly<{
       workspaceId: string;
@@ -185,7 +194,7 @@ function defaultMediaResolver(env: NodeJS.ProcessEnv): OwnedPublicSocialMediaRes
       if (input.media.length === 0) return Object.freeze([]);
       if (!origin) throw new Error('Owned public-social media origin is unavailable');
       return Object.freeze(input.media.map((item) => {
-        const path = item.storageKey.split('/').map(encodeURIComponent).join('/');
+        const path = item.storageKey.replace(/^\//u, '').split('/').map(encodeURIComponent).join('/');
         return `${origin}/${path}`;
       }));
     },
@@ -237,6 +246,9 @@ export function loadOwnedPublicSocialWorkerConfig(
   }
   if (env.NODE_ENV?.trim().toLowerCase() !== 'production') {
     throw new Error('Owned public-social live mode requires NODE_ENV=production');
+  }
+  if (runtime.network === 'instagram_linkedin') {
+    exactMediaOrigin(env.PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN, true);
   }
   const encryptionKeyVersion = env
     .PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_VERSION?.trim() ?? '';

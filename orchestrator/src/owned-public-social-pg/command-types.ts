@@ -41,9 +41,7 @@ export interface RevokeOwnedPublicSocialProfileCommand {
   readonly reasonCode: string;
 }
 
-export interface EnqueueOwnedPublicSocialJobCommand {
-  readonly network?: OwnedPublicSocialNetwork;
-  readonly planningIntentId?: string;
+interface EnqueueOwnedPublicSocialJobBase {
   readonly profileId: string;
   readonly contentItemId: string;
   readonly contentVersionId: string;
@@ -55,6 +53,26 @@ export interface EnqueueOwnedPublicSocialJobCommand {
   readonly requestSha256: string;
   readonly scheduledFor: string | null;
 }
+
+/**
+ * Legacy X staging has no 0040 planning identity. Every v2 calendar enqueue
+ * must instead carry all three exact target/account bindings together.
+ */
+export type EnqueueOwnedPublicSocialJobCommand =
+  EnqueueOwnedPublicSocialJobBase & (
+    | Readonly<{
+      readonly network?: undefined;
+      readonly planningIntentId?: undefined;
+      readonly planningTargetId?: undefined;
+      readonly expectedOwnedAccountSha256?: undefined;
+    }>
+    | Readonly<{
+      readonly network: OwnedPublicSocialNetwork;
+      readonly planningIntentId: string;
+      readonly planningTargetId: string;
+      readonly expectedOwnedAccountSha256: string;
+    }>
+  );
 
 export interface RecordOwnedPublicSocialProfileResult {
   readonly profileId: string;

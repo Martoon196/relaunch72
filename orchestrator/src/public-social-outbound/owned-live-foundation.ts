@@ -562,7 +562,11 @@ export interface OwnedPublicSocialMediaResolver {
 }
 
 export interface OwnedPublicSocialLiveRepository {
-  claimOne(input: Readonly<{ leaseToken: Buffer; leaseSeconds: number }>): Promise<OwnedPublicSocialClaim | null>;
+  claimOne(input: Readonly<{
+    leaseToken: Buffer;
+    leaseSeconds: number;
+    networks: readonly OwnedPublicSocialNetwork[];
+  }>): Promise<OwnedPublicSocialClaim | null>;
   loadClaimed(input: OwnedPublicSocialClaim & Readonly<{ leaseToken: Buffer }>): Promise<OwnedPublicSocialJobMaterial>;
   markCalling(input: OwnedPublicSocialClaim & Readonly<{
     leaseToken: Buffer;
@@ -588,7 +592,14 @@ export async function runOwnedPublicSocialLiveOnce(input: Readonly<{
       || !input.config.providerEffectsEnabled || input.config.emergencyPaused
       || input.transport.executionMode !== 'owned_profile_live'
       || input.encryptionKey.length !== 32 || input.leaseToken.length !== 32) fail('disabled');
-  const claim = await input.repository.claimOne({ leaseToken: input.leaseToken, leaseSeconds: 60 });
+  const claimNetworks: readonly OwnedPublicSocialNetwork[] = input.config.network === 'instagram_linkedin'
+    ? Object.freeze(['instagram', 'linkedin'])
+    : Object.freeze([input.config.network]);
+  const claim = await input.repository.claimOne({
+    leaseToken: input.leaseToken,
+    leaseSeconds: 60,
+    networks: claimNetworks,
+  });
   if (!claim) return 'idle';
   const material = await input.repository.loadClaimed({ ...claim, leaseToken: input.leaseToken });
   if (material.workspaceId !== claim.workspaceId
@@ -608,6 +619,20 @@ export async function runOwnedPublicSocialLiveOnce(input: Readonly<{
     expectedKeyVersion: input.encryptionKeyVersion,
     network: material.network ?? 'x',
   });
+  // Finish deterministic local preparation while the job is still only
+  // leased. A resolution failure can then be safely returned to the queue by
+  // lease recovery because no provider effect could have happened. `calling`
+  // is reserved for the genuinely ambiguous provider-call window.
+  const resolvedMedia = material.attemptKind === 'publish'
+    ? await (input.mediaResolver ?? {
+      async resolve() { return Object.freeze([]); },
+    }).resolve({
+      workspaceId: material.workspaceId,
+      jobId: material.jobId,
+      scheduledFor: material.scheduledFor,
+      media: material.media ?? [],
+    })
+    : [];
   const calling = await input.repository.markCalling({
     ...claim, leaseToken: input.leaseToken,
     providerEffectsEnabled: true, emergencyPaused: false,
@@ -615,16 +640,6 @@ export async function runOwnedPublicSocialLiveOnce(input: Readonly<{
   if (!calling) return 'failed_or_attention';
   let result: AyrshareOwnedResult;
   try {
-    const resolvedMedia = material.attemptKind === 'publish'
-      ? await (input.mediaResolver ?? {
-        async resolve() { return Object.freeze([]); },
-      }).resolve({
-        workspaceId: material.workspaceId,
-        jobId: material.jobId,
-        scheduledFor: material.scheduledFor,
-        media: material.media ?? [],
-      })
-      : [];
     result = material.attemptKind === 'publish'
       ? await input.transport.publish({
         workspaceId: material.workspaceId,

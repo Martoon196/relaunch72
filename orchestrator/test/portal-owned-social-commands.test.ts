@@ -52,6 +52,7 @@ const SOURCE_ATTESTATION_ID = 'fc700000-0000-4000-8000-000000000121';
 const REVOCATION_ID = 'fc800000-0000-4000-8000-000000000131';
 const JOB_ID = 'fc900000-0000-4000-8000-000000000141';
 const PLANNING_INTENT_ID = 'fca00000-0000-4000-8000-000000000151';
+const PLANNING_TARGET_ID = 'fcb00000-0000-4000-8000-000000000161';
 
 /** A deliberately recognisable clear Profile Key. It must never be echoed. */
 const PROFILE_KEY = 'SUPERSECRETPROFILEKEY123';
@@ -207,6 +208,7 @@ function calendarStageFields(): Record<string, string> {
     ...stageFields(),
     network: 'instagram',
     planning_intent_id: PLANNING_INTENT_ID,
+    planning_target_id: PLANNING_TARGET_ID,
   };
 }
 
@@ -745,6 +747,7 @@ test('a ready verdict enqueues one job with self-derived, distinct scope digests
   assert.notEqual(command.idempotencyKeySha256, command.requestSha256);
   assert.equal(command.scheduledFor, null);
   assert.equal(command.operationTag, OPERATION_TAG);
+  assert.equal(command.expectedOwnedAccountSha256, undefined);
 
   // The digests are derived, never accepted from the caller.
   const expected = deriveOwnedSocialStagingDigests({
@@ -787,6 +790,7 @@ test('calendar staging forwards the exact Instagram intent and UTC time to the s
     identity: { sessionToken: SESSION, requestId: REQUEST_ID },
     input: {
       network: 'instagram', planningIntentId: PLANNING_INTENT_ID,
+      planningTargetId: PLANNING_TARGET_ID,
       profileId: PROFILE_ID, contentItemId: CONTENT_ITEM_ID,
       contentVersionId: CONTENT_VERSION_ID, approvalRequestId: APPROVAL_REQUEST_ID,
       approvalDecisionId: APPROVAL_DECISION_ID, sourceAttestationId: SOURCE_ATTESTATION_ID,
@@ -815,12 +819,18 @@ test('Instagram calendar staging relies on the atomic v2 enqueue instead of lega
   const service = serviceUnder({ commands, readiness: 'blocked', readinessCalls });
   const scheduledFor = '2026-09-02T09:00:00.000Z';
   const outcome = await service.stagePublication(IDENTITY, stageInput({
-    network: 'instagram', planningIntentId: PLANNING_INTENT_ID, scheduledFor,
+    network: 'instagram', planningIntentId: PLANNING_INTENT_ID,
+    planningTargetId: PLANNING_TARGET_ID, scheduledFor,
   }));
   assert.equal(outcome.ok, true);
   assert.deepEqual(readinessCalls, []);
   assert.equal(commands.enqueued[0]?.network, 'instagram');
   assert.equal(commands.enqueued[0]?.planningIntentId, PLANNING_INTENT_ID);
+  assert.equal(commands.enqueued[0]?.planningTargetId, PLANNING_TARGET_ID);
+  assert.equal(
+    commands.enqueued[0]?.expectedOwnedAccountSha256,
+    createHash('sha256').update(OWNED_ACCOUNT, 'utf8').digest('hex'),
+  );
   assert.equal(commands.enqueued[0]?.scheduledFor, scheduledFor);
 });
 
@@ -830,7 +840,25 @@ test('Instagram and LinkedIn calendar staging requires the exact calendar instan
     const readinessCalls: unknown[] = [];
     const service = serviceUnder({ commands, readinessCalls });
     const outcome = await service.stagePublication(IDENTITY, stageInput({
-      network, planningIntentId: PLANNING_INTENT_ID, scheduledFor: null,
+      network, planningIntentId: PLANNING_INTENT_ID,
+      planningTargetId: PLANNING_TARGET_ID, scheduledFor: null,
+    }));
+    assert.deepEqual(outcome, { ok: false, kind: 'validation' });
+    assert.deepEqual(readinessCalls, []);
+    assert.deepEqual(commands.enqueued, []);
+  }
+});
+
+test('Instagram and LinkedIn calendar staging requires one exact planning target', async () => {
+  for (const network of ['instagram', 'linkedin'] as const) {
+    const commands = commandServiceProbe();
+    const readinessCalls: unknown[] = [];
+    const service = serviceUnder({ commands, readinessCalls });
+    const outcome = await service.stagePublication(IDENTITY, stageInput({
+      network,
+      planningIntentId: PLANNING_INTENT_ID,
+      planningTargetId: undefined,
+      scheduledFor: '2026-09-02T09:00:00.000Z',
     }));
     assert.deepEqual(outcome, { ok: false, kind: 'validation' });
     assert.deepEqual(readinessCalls, []);

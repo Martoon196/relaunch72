@@ -71,6 +71,8 @@ export interface PortalOwnedSocialStageInput {
   readonly network?: OwnedPublicSocialNetwork;
   /** Immutable calendar intent that supplies the network and approved media set. */
   readonly planningIntentId?: string;
+  /** Exact immutable target inside the calendar intent; required for live calendar rails. */
+  readonly planningTargetId?: string;
   readonly profileId: string;
   readonly contentItemId: string;
   readonly contentVersionId: string;

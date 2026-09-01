@@ -30,7 +30,10 @@ const UUID_A = '11111111-1111-4111-8111-111111111111';
 const HASH_A = 'a'.repeat(64);
 
 async function fixture(): Promise<{ raw: Buffer; inventory: PropertyPredatorAiInventory }> {
-  const raw = await readFile(fixtureUrl);
+  const checkoutBytes = await readFile(fixtureUrl);
+  // Git may materialize the repository's final LF as CRLF on Windows. Pin the
+  // trusted inventory's repository-canonical bytes, not a checkout convention.
+  const raw = Buffer.from(checkoutBytes.toString('utf8').replaceAll('\r\n', '\n'), 'utf8');
   return { raw, inventory: parsePropertyPredatorAiInventory(JSON.parse(raw.toString('utf8'))) };
 }
 

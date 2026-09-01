@@ -115,6 +115,7 @@ export interface LiveChannelsRenderOptions {
   readonly ownedSocialStagePrefill?: Readonly<{
     network: 'instagram' | 'linkedin';
     planningIntentId: string;
+    planningTargetId: string;
     contentItemId: string;
     contentVersionId: string;
     approvalRequestId: string;
@@ -407,6 +408,7 @@ function renderOwnedSocialCommands(
         <input type="hidden" name="command_key" value="${escapeHtml(keys.stage)}">
         <input type="hidden" name="network"${value(prefill?.network)}>
         <input type="hidden" name="planning_intent_id"${value(prefill?.planningIntentId)}>
+        <input type="hidden" name="planning_target_id"${value(prefill?.planningTargetId)}>
         <label class="plc-field"><span>Profile record id</span><input type="text" name="profile_id" required autocomplete="off"></label>
         <label class="plc-field"><span>Content item id</span><input type="text" name="content_item_id"${value(prefill?.contentItemId)} required autocomplete="off"></label>
         <label class="plc-field"><span>Approved content version id</span><input type="text" name="content_version_id"${value(prefill?.contentVersionId)} required autocomplete="off"></label>

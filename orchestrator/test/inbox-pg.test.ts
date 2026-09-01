@@ -540,6 +540,39 @@ test('inbox repository serializes receipts as JSON and safely maps PostgreSQL bi
   }), /Revised message row version is invalid/);
 });
 
+test('new inbound conversations clamp application time to the PostgreSQL update clock', async () => {
+  let insertSql = '';
+  let insertValues: readonly unknown[] = [];
+  const executor: SqlExecutor = {
+    async query<T extends Record<string, unknown>>(
+      sql: string,
+      values: readonly unknown[] = [],
+    ): Promise<SqlResult<T>> {
+      insertSql = sql;
+      insertValues = values;
+      return { rows: [], rowCount: 1 };
+    },
+  };
+  await new InboxPgRepository(executor).insertConversation({
+    id: CONVERSATION,
+    inboxId: INBOX,
+    channel: 'email',
+    contactId: USER,
+    firstMessageAt: '2026-08-26T12:00:00.250Z',
+    at: '2026-08-26T12:00:00.500Z',
+  });
+
+  assert.match(
+    insertSql,
+    /least\(\$5::timestamptz, \$6::timestamptz, statement_timestamp\(\)\)/u,
+  );
+  assert.match(insertSql, /statement_timestamp\(\)\s*\n\s*\)/u);
+  assert.deepEqual(insertValues.slice(-2), [
+    '2026-08-26T12:00:00.250Z',
+    '2026-08-26T12:00:00.500Z',
+  ]);
+});
+
 class ReadClient {
   invalid = false;
   conversationSql = '';

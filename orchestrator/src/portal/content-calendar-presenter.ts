@@ -687,6 +687,7 @@ function ownedSocialStageHref(
     stage: 'owned_social',
     network: slot.channel,
     planning_intent_id: slot.planning.intentId,
+    planning_target_id: slot.planning.targetId,
     content_item_id: item.contentItemId,
     content_version_id: item.contentVersionId,
     approval_request_id: item.approvalRequestId,

@@ -18,6 +18,7 @@ const IDS = Object.freeze({
   attestation: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
   job: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
   planningIntent: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+  planningTarget: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
 });
 
 const sha = (value: string): string => createHash('sha256').update(value).digest('hex');
@@ -152,6 +153,7 @@ test('revoke and enqueue return exact durable identifiers and never claim a prov
 test('Instagram calendar enqueue uses the v2 function with every parameter in exact order', async () => {
   const mocked = commandPool(async (sql) => {
     assert.match(sql, /enqueue_owned_social_job_v2/u);
+    assert.match(sql, /\$4::text, \$5::bytea,\s+\$6::uuid/u);
     assert.doesNotMatch(sql, /\$10::uuid, \$10::uuid/u);
     return { rows: [{ id: IDS.job }] };
   });
@@ -163,6 +165,8 @@ test('Instagram calendar enqueue uses the v2 function with every parameter in ex
   const scheduledFor = '2026-09-02T09:30:00.000Z';
   await service.enqueue(context, {
     network: 'instagram', planningIntentId: IDS.planningIntent,
+    planningTargetId: IDS.planningTarget,
+    expectedOwnedAccountSha256: sha('instagram-owned-account'),
     profileId: IDS.profile, contentItemId: IDS.contentItem,
     contentVersionId: IDS.contentVersion, approvalRequestId: IDS.approvalRequest,
     approvalDecisionId: IDS.approvalDecision, sourceAttestationId: IDS.attestation,
@@ -172,7 +176,8 @@ test('Instagram calendar enqueue uses the v2 function with every parameter in ex
   });
   const command = mocked.calls.find((call) => call.sql.includes('enqueue_owned_social_job_v2'));
   assert.deepEqual(command?.values, [
-    IDS.workspace, IDS.connection, IDS.profile, 'instagram', IDS.planningIntent,
+    IDS.workspace, IDS.connection, IDS.profile, 'instagram',
+    Buffer.from(sha('instagram-owned-account'), 'hex'), IDS.planningIntent, IDS.planningTarget,
     IDS.contentItem, IDS.contentVersion, IDS.approvalRequest, IDS.approvalDecision,
     IDS.attestation, 'pp-calendar-instagram-1',
     Buffer.from(sha('instagram-calendar-idempotency'), 'hex'),
@@ -213,6 +218,28 @@ test('cross-workspace, missing-session and malformed evidence fail before pool a
     requestSha256: sha('request'),
     scheduledFor: null,
   }), /idempotencyKeySha256/u);
+  await assert.rejects(service.enqueue(context, {
+    network: 'instagram', planningIntentId: IDS.planningIntent,
+    expectedOwnedAccountSha256: sha('instagram-owned-account'),
+    profileId: IDS.profile, contentItemId: IDS.contentItem,
+    contentVersionId: IDS.contentVersion, approvalRequestId: IDS.approvalRequest,
+    approvalDecisionId: IDS.approvalDecision, sourceAttestationId: IDS.attestation,
+    operationTag: 'pp-calendar-instagram-1',
+    idempotencyKeySha256: sha('instagram-calendar-idempotency'),
+    requestSha256: sha('instagram-calendar-request'),
+    scheduledFor: '2026-09-02T09:30:00.000Z',
+  } as never), /planningTargetId/u);
+  await assert.rejects(service.enqueue(context, {
+    network: 'instagram', planningIntentId: IDS.planningIntent,
+    planningTargetId: IDS.planningTarget,
+    profileId: IDS.profile, contentItemId: IDS.contentItem,
+    contentVersionId: IDS.contentVersion, approvalRequestId: IDS.approvalRequest,
+    approvalDecisionId: IDS.approvalDecision, sourceAttestationId: IDS.attestation,
+    operationTag: 'pp-calendar-instagram-1',
+    idempotencyKeySha256: sha('instagram-calendar-idempotency'),
+    requestSha256: sha('instagram-calendar-request'),
+    scheduledFor: '2026-09-02T09:30:00.000Z',
+  } as never), /expectedOwnedAccountSha256/u);
   assert.equal(connections, 0);
 });
 

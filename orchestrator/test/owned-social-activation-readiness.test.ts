@@ -454,6 +454,7 @@ test('every identity input changes the idempotency key', () => {
     ['workspaceId', () => rehearsal({ workspaceId: IDS.otherWorkspace })],
     ['providerConnectionId', () => rehearsal({ providerConnectionId: IDS.alternate })],
     ['profileId', () => rehearsal({ profileId: IDS.alternate })],
+    ['planningTargetId', () => rehearsal({ planningTargetId: IDS.alternate })],
     ['contentVersionId', () => rehearsal({ contentVersionId: IDS.alternate })],
     ['approvalDecisionId', () => rehearsal({ approvalDecisionId: IDS.alternate })],
     ['scheduledFor', () => rehearsal({ scheduledFor: '2026-09-01T09:00:00.000Z' })],
@@ -1082,13 +1083,16 @@ const EXACT_COMMAND_BOUNDARY = Object.freeze({
   exactRole: true,
   schemaUsage: true,
   recordProfileExecute: true,
+  recordProfileV2Execute: true,
   revokeProfileExecute: true,
   enqueueExecute: true,
+  enqueueV2Execute: true,
   activationReadinessExecute: true,
   sessionLockExecute: true,
   ledgerExecute: true,
   installationExecute: true,
   workerFunctionsDenied: true,
+  workerV2FunctionsDenied: true,
   tableBlind: true,
   elevatedRolesDenied: true,
 });
@@ -1120,10 +1124,18 @@ test('the command boundary probe resolves for an exact all-true boundary', async
   );
   assert.match(sql, /AS "activationReadinessExecute"/u);
   assert.match(sql, /'app_private\.record_owned_social_profile\(/u);
+  assert.match(
+    sql,
+    /'app_private\.record_owned_social_profile_v2\(uuid,uuid,uuid,text,text,bytea,bytea,text,bytea,bytea,bytea,bytea,bytea,bytea,timestamp with time zone,timestamp with time zone\)'/u,
+  );
   assert.match(sql, /'app_private\.revoke_owned_social_profile\(uuid,uuid,uuid,bytea,text\)'/u);
   assert.match(
     sql,
     /'app_private\.enqueue_owned_social_job\(uuid,uuid,uuid,uuid,uuid,uuid,uuid,uuid,text,bytea,bytea,timestamp with time zone\)'/u,
+  );
+  assert.match(
+    sql,
+    /'app_private\.enqueue_owned_social_job_v2\(uuid,uuid,uuid,text,bytea,uuid,uuid,uuid,uuid,uuid,uuid,uuid,text,bytea,bytea,timestamp with time zone\)'/u,
   );
   assert.match(sql, /'app_private\.lock_active_portal_session\(bytea,uuid,uuid\)'/u);
   assert.match(sql, /app_private\.runtime_schema_migrations\(\)/u);
@@ -1157,6 +1169,25 @@ test('the command boundary probe denies all four worker dispatch functions', asy
   assert.equal(workerFunctions.length, 4);
 });
 
+test('the command boundary probe denies every v2 worker dispatch function', async () => {
+  const fake = boundaryPool([{ ...EXACT_COMMAND_BOUNDARY }]);
+  await assertOwnedPublicSocialCommandBoundaryReady(fake.pool as never);
+  const sql = fake.sql();
+  const workerV2Functions = [
+    'claim_owned_social_job_v2\\(uuid,uuid,text\\[\\],bytea,integer\\)',
+    'load_owned_social_job_v2\\(uuid,uuid,bigint,bytea\\)',
+    'begin_owned_social_call_v2\\(uuid,uuid,bigint,bytea,boolean,boolean\\)',
+  ];
+  for (const fn of workerV2Functions) {
+    assert.match(
+      sql,
+      new RegExp(`NOT has_function_privilege\\(\\s*current_user,\\s*'app_private\\.${fn}'`, 'u'),
+      `expected ${fn} to be explicitly denied`,
+    );
+  }
+  assert.match(sql, /AS "workerV2FunctionsDenied"/u);
+});
+
 test('the command boundary probe asserts table blindness and denies the definer roles', async () => {
   const fake = boundaryPool([{ ...EXACT_COMMAND_BOUNDARY }]);
   await assertOwnedPublicSocialCommandBoundaryReady(fake.pool as never);
@@ -1179,7 +1210,7 @@ test('the command boundary probe asserts table blindness and denies the definer 
 
 test('any single false boundary field makes the command boundary inexact', async () => {
   const fields = Object.keys(EXACT_COMMAND_BOUNDARY);
-  assert.equal(fields.length, 12);
+  assert.equal(fields.length, 15);
   for (const field of fields) {
     const fake = boundaryPool([{ ...EXACT_COMMAND_BOUNDARY, [field]: false }]);
     await assert.rejects(
