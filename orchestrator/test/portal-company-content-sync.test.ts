@@ -542,7 +542,6 @@ test('PostgreSQL command guard commits durable consumption before returning acce
   const client = {
     async query(sql: string, values?: readonly unknown[]) {
       queries.push({ sql, ...(values ? { values } : {}) });
-      if (sql.includes('database.lock-portal-session')) return { rows: [{ active: true }] };
       if (sql.includes('consume-command')) return { rows: [{ disposition: 'accepted' }] };
       return { rows: [] };
     },
@@ -560,15 +559,15 @@ test('PostgreSQL command guard commits durable consumption before returning acce
   });
   assert.equal(disposition, 'accepted');
   assert.match(queries[0]!.sql, /BEGIN/);
-  assert.match(queries[1]!.sql, /lock-portal-session/);
-  assert.match(queries[2]!.sql, /set_config/);
-  assert.match(queries[3]!.sql, /consume_company_content_sync_command/);
-  assert.deepEqual(queries[3]!.values, [
+  assert.doesNotMatch(queries.map(({ sql }) => sql).join('\n'), /lock-portal-session/);
+  assert.match(queries[1]!.sql, /set_config/);
+  assert.match(queries[2]!.sql, /consume_company_content_sync_command/);
+  assert.deepEqual(queries[2]!.values, [
     WORKSPACE_ID,
     Buffer.alloc(32, 73),
     'company-content-sync-durable-command',
   ]);
-  assert.match(queries[4]!.sql, /COMMIT/);
+  assert.match(queries[3]!.sql, /COMMIT/);
   assert.deepEqual(releases, [false]);
 });
 

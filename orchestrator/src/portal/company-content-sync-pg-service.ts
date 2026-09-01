@@ -153,16 +153,20 @@ implements PortalCompanyContentSyncCommandGuard {
   constructor(private readonly pool: Pool) {}
 
   async consume(context: DatabaseRequestContext): Promise<PortalCompanyContentSyncCommandDisposition> {
-    if (!context.portalSessionTokenHash) {
+    const { portalSessionTokenHash, ...commandContext } = context;
+    if (!portalSessionTokenHash) {
       throw new InactivePortalSessionError();
     }
-    return withTransaction(this.pool, context, async (transaction) => {
+    // The command function owns the authoritative lock-and-revalidate step.
+    // Do not ask the generic transaction wrapper to call that private session
+    // fence directly as r72_web before the SECURITY DEFINER command can run.
+    return withTransaction(this.pool, commandContext, async (transaction) => {
       const result = await transaction.query<CommandConsumeRow>(
         `/* portal.company-content-sync.consume-command */
          SELECT app_private.consume_company_content_sync_command(
            $1::uuid, $2::bytea, $3::text
          ) AS disposition`,
-        [context.workspaceId, context.portalSessionTokenHash, context.requestId],
+        [context.workspaceId, portalSessionTokenHash, context.requestId],
       );
       const disposition = result.rows[0]?.disposition;
       if (result.rows.length !== 1
