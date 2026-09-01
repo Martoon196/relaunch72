@@ -32,6 +32,7 @@ import {
 
 const SOURCE_SYSTEM = 'propertypredator.company-content';
 const MAX_SOURCE_ITEMS = 500;
+const MAX_LOCAL_RELEASE_ITEMS = 50;
 const SOURCE_PROOF_MS = 10 * 60_000;
 const MAX_RETRY_MS = 5 * 60_000;
 // Both independently authenticated source components must describe the same
@@ -571,7 +572,7 @@ export class PropertyPredatorContentSyncCoordinator {
         [localItems, localContent] = await Promise.all([
           this.dependencies.assets.listItems(context, {
             sourceReleaseId: staged.sourceReleaseId,
-            limit: MAX_SOURCE_ITEMS,
+            limit: MAX_LOCAL_RELEASE_ITEMS,
           }),
           localCatalog(this.dependencies.content, context),
         ]);

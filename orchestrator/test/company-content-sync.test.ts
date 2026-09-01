@@ -315,6 +315,7 @@ function harness(input: Readonly<{
   let bridgeCalls = 0;
   let resourceCalls = 0;
   let stageCalls = 0;
+  const assetQueries: unknown[] = [];
   const catalogQueries: unknown[] = [];
   let clock = new Date(input.clockAt ?? CHECKED_AT);
   const coordinator = new PropertyPredatorContentSyncCoordinator({
@@ -377,7 +378,8 @@ function harness(input: Readonly<{
           providerEffects: false as const,
         });
       },
-      async listItems() {
+      async listItems(_context, query) {
+        assetQueries.push(query);
         const baseItem = decisionItem(fixture, input.quarantined);
         const item = Object.freeze({ ...baseItem, ...input.decisionOverride });
         return Object.freeze({
@@ -435,7 +437,7 @@ function harness(input: Readonly<{
   });
   return {
     coordinator, fixture, created, refreshed,
-    catalogQueries,
+    assetQueries, catalogQueries,
     get bridgeCalls() { return bridgeCalls; },
     get resourceCalls() { return resourceCalls; },
     get stageCalls() { return stageCalls; },
@@ -459,6 +461,7 @@ test('imports only the exact canonical company-owned bytes through the effects-o
   assert.equal(subject.created[0]?.metadata?.exactResourceVerified, true);
   assert.equal(subject.created[0]?.source.system, 'propertypredator.company-content');
   assert.equal(subject.refreshed.length, 0);
+  assert.deepEqual(subject.assetQueries, [{ sourceReleaseId: RELEASE_ROW_ID, limit: 50 }]);
   assert.deepEqual(subject.catalogQueries, [{
     limit: 100,
     cursor: null,
