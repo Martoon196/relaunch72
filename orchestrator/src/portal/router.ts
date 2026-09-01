@@ -296,6 +296,11 @@ import {
   zernioSocialNoticeToken,
   type ZernioSocialNoticeCode,
 } from './zernio-social-actions.js';
+import {
+  ZERNIO_MESSAGING_ROUTE,
+  type PortalZernioMessagingService,
+} from './zernio-messaging-service.js';
+import { renderZernioMessagingBody } from './zernio-messaging-view.js';
 import type { ZernioPilotNetwork } from '../public-social-outbound/index.js';
 import type {
   PortalPublicSocialService,
@@ -465,6 +470,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   publicSocial?: PortalPublicSocialService;
   /** Founder-only one-use Zernio account connection; contains no publication operation. */
   zernioSocial?: PortalZernioSocialConnectionService;
+  /** Live read-only social conversation projection inside the Messaging area. */
+  zernioMessaging?: PortalZernioMessagingService;
   /** One real company-content generation effect; output is source-review-only and never outbound. */
   campaignDrafts?: Pick<PropertyPredatorCampaignDraftRuntime, 'generateReviewDraft'>;
   /** TEST-only conversion queue. Thread detail remains a separate optional projection. */
@@ -4846,6 +4853,45 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       );
     } catch {
       return contentControlRedirect(res, deps, sessionToken, form, 'unavailable');
+    }
+  }
+
+  // ── Zernio live social inbox: authenticated read-only provider projection ──
+  if (deps.kind === 'postgres' && p === ZERNIO_MESSAGING_ROUTE && method === 'GET') {
+    if (!deps.zernioMessaging) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+      title: 'Social messages not connected',
+      message: 'The dedicated Zernio Messaging key is not active for this workspace.',
+      active: 'inbox', backHref: CONVERSION_INBOX_ROUTE, backLabel: 'Return to Messaging',
+    }));
+    const requested = url.searchParams.get('conversation') ?? '';
+    const providerConversationId = requested.length > 0 && requested.length <= 500
+      && !/[\u0000-\u001f\u007f]/u.test(requested) ? requested : undefined;
+    const identity = crmIdentity(sessionToken, deps);
+    try {
+      const [shell, snapshot] = await Promise.all([
+        deps.crm.workspaceShell ? deps.crm.workspaceShell(identity) : deps.crm.snapshot(identity),
+        deps.zernioMessaging.snapshot(identity, { providerConversationId }),
+      ]);
+      if (!shell) return sendHtml(res, 403, portalStatusPage(deps, sessionToken, {
+        title: 'Messaging workspace unavailable',
+        message: 'This session cannot read the current Growth HQ social inbox.',
+        active: 'inbox', backHref: '/portal', backLabel: 'Return to Growth HQ',
+      }));
+      const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+      return sendHtml(res, 200, operationalPage(
+        shell.workspace.name,
+        renderZernioMessagingBody(snapshot),
+        deps,
+        'inbox',
+        csrfToken,
+      ));
+    } catch (error) {
+      deps.telemetry?.emit('error', 'portal.inbox.read_failed', { error });
+      return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
+        title: 'Social messages temporarily unavailable',
+        message: 'No provider action ran. Refresh shortly.',
+        active: 'inbox', backHref: CONVERSION_INBOX_ROUTE, backLabel: 'Return to Messaging',
+      }));
     }
   }
 

@@ -91,7 +91,14 @@ import {
   createPgPortalZernioSocialConnectionService,
   type PgPortalZernioSocialConnectionService,
 } from './zernio-social-connection-pg-service.js';
-import { createZernioLiveConnectionClient } from '../public-social-outbound/index.js';
+import {
+  createZernioLiveConnectionClient,
+  createZernioMessagingClient,
+} from '../public-social-outbound/index.js';
+import {
+  LivePortalZernioMessagingService,
+  type PortalZernioMessagingService,
+} from './zernio-messaging-service.js';
 import {
   createPgPortalCompanyContentSyncService,
   loadPropertyPredatorContentSyncSourceConfig,
@@ -153,6 +160,8 @@ export interface PgPortalPlatform {
   publicSocial?: PgPortalPublicSocialService;
   /** One-use Zernio account connection and signed account-event evidence only. */
   zernioSocial?: PgPortalZernioSocialConnectionService;
+  /** Authenticated, account-bound live social inbox reads; no provider effect. */
+  zernioMessaging?: PortalZernioMessagingService;
   /** Canonical TEST-only queue read model; it has no send or provider operation. */
   inbox: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval queue commands; it cannot dispatch. */
@@ -739,6 +748,7 @@ export async function buildPgPortalPlatform(
     // Connection-only Zernio seam. This client may request a hosted OAuth URL
     // and record its one-use callback, but exposes no post, queue or worker API.
     let zernioSocial: PgPortalZernioSocialConnectionService | undefined;
+    let zernioMessaging: PortalZernioMessagingService | undefined;
     let zernioSocialReadinessPool: Pool | undefined;
     const zernioConfigured = [
       env.DATABASE_ZERNIO_SOCIAL_COMMAND_URL,
@@ -782,10 +792,27 @@ export async function buildPgPortalPlatform(
           }),
         });
         zernioSocialReadinessPool = zernioPool;
+        const messagingApiKey = env.ZERNIO_MESSAGING_API_KEY?.trim() ?? '';
+        const messagingAccountIds = (env.PROPERTY_PREDATOR_ZERNIO_MESSAGING_ACCOUNT_IDS ?? '')
+          .split(',').map((value) => value.trim()).filter(Boolean);
+        if (messagingApiKey.length >= 8 && messagingAccountIds.length > 0) {
+          const messagingClient = createZernioMessagingClient({
+            apiKey: messagingApiKey,
+            providerProfileId,
+            allowedAccountIds: messagingAccountIds,
+            fetch: globalThis.fetch,
+          });
+          zernioMessaging = new LivePortalZernioMessagingService({
+            accounts: zernioSocial,
+            client: messagingClient,
+            allowedAccountIds: messagingAccountIds,
+          });
+        }
         pools.push(zernioPool);
       } catch {
         await zernioPool?.end().catch(() => undefined);
         zernioSocial = undefined;
+        zernioMessaging = undefined;
         zernioSocialReadinessPool = undefined;
       }
     }
@@ -970,6 +997,7 @@ export async function buildPgPortalPlatform(
         : undefined,
       publicSocial,
       zernioSocial,
+      zernioMessaging,
       inbox: createPgPortalInboxReadBoundary(webPool),
       inboxCommands: createPgPortalConversionInboxCommandService({ webPool, commandPool }),
       inboxOperations: createPgPortalConversionInboxOperationsService({

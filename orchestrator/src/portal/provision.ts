@@ -31,6 +31,7 @@ import type { PortalLiveChannelTruthService } from './live-channel-truth-service
 import type { PortalLiveChannelPauseService } from './live-channel-pause-service.js';
 import type { PortalOwnedSocialBindingService } from './owned-social-binding-service.js';
 import type { PortalZernioSocialConnectionService } from './zernio-social-connection-service.js';
+import type { PortalZernioMessagingService } from './zernio-messaging-service.js';
 import type { PortalSmsBindingService } from './sms-binding-service.js';
 import type { PortalContactPermissionService } from './contact-permission-service.js';
 import type { PortalFounderEmailPilotService } from './founder-email-pilot-service.js';
@@ -182,6 +183,8 @@ export interface PostgresPortalConfig {
   ownedSocialBinding?: PortalOwnedSocialBindingService;
   /** Founder-only Zernio account connection; no publishing operation. */
   zernioSocial?: PortalZernioSocialConnectionService;
+  /** Read-only live Instagram conversation projection inside Messaging. */
+  zernioMessaging?: PortalZernioMessagingService;
   /** Founder-only Twilio SMS binding and owned-test staging. */
   smsBinding?: PortalSmsBindingService;
   contactPermission?: PortalContactPermissionService;
@@ -223,7 +226,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
   }
   if ((cfg.companyContentSync || cfg.companyContentReview || cfg.brandBrain || cfg.campaignDrafts
       || cfg.ownedSeedMessages || cfg.ownedSeedCampaign || cfg.ownedSocialBinding
-      || cfg.zernioSocial
+      || cfg.zernioSocial || cfg.zernioMessaging
       || cfg.smsBinding)
       && productProfile.id !== 'property_predator_growth') {
     throw new Error(
@@ -259,6 +262,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     liveChannelPause: cfg.liveChannelPause,
     ownedSocialBinding: cfg.ownedSocialBinding,
     zernioSocial: cfg.zernioSocial,
+    zernioMessaging: cfg.zernioMessaging,
     smsBinding: cfg.smsBinding,
     contactPermission: cfg.contactPermission,
     founderEmailPilot: cfg.founderEmailPilot,

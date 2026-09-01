@@ -607,6 +607,7 @@ async function main(): Promise<void> {
         liveChannelPause: postgresPortal.liveChannelPause,
         ownedSocialBinding: postgresPortal.ownedSocialBinding,
         zernioSocial: postgresPortal.zernioSocial,
+        zernioMessaging: postgresPortal.zernioMessaging,
         smsBinding: postgresPortal.smsBinding,
         contactPermission: postgresPortal.contactPermission,
         founderEmailPilot: postgresPortal.founderEmailPilot,
