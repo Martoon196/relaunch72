@@ -165,10 +165,11 @@ test('an already-claimed social reply never calls the provider again', async () 
       webhookReceiptCount: 1,
     }] }; } },
     client: client(),
-    sender: { async sendMessage() { sends += 1; return sender.sendMessage({
-      accountId: ACCOUNT, providerConversationId: 'conversation-1',
-      body: 'x', idempotencyKey: 'reply:00000000-0000-4000-8000-000000000001',
-    }); } },
+    sender: { async sendMessage() {
+      sends += 1;
+      return { accepted: true as const, providerMessageId: 'provider-message-2',
+        responseSha256: 'b'.repeat(64), idempotentReplay: false };
+    } },
     replies: {
       ...replies(),
       async claim() { return { ok: true as const, value: {
