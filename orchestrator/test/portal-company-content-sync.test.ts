@@ -333,10 +333,16 @@ test('portal composition rejects an injected Source Sync service outside the bra
   assert.equal(exact.companyContentSync, service);
 });
 
-test('operator service resolves workspace server-side and passes only an RLS user context', async () => {
+test('operator service consumes the active session before passing a session-free adapter context', async () => {
   const captured: DatabaseRequestContext[] = [];
+  const guarded: DatabaseRequestContext[] = [];
   const service = new PgPortalCompanyContentSyncService({
-    commandGuard: acceptedCommandGuard,
+    commandGuard: {
+      async consume(context) {
+        guarded.push(context);
+        return 'accepted';
+      },
+    },
     syncLock: acquiredSyncLock,
     principalResolver: {
       async resolve(sessionToken) {
@@ -372,8 +378,9 @@ test('operator service resolves workspace server-side and passes only an RLS use
   assert.equal(exactContext.workspaceId, WORKSPACE_ID);
   assert.equal(exactContext.userId, USER_ID);
   assert.equal(exactContext.requestId, 'portal-sync-1');
-  assert.equal(exactContext.portalSessionTokenHash?.length, 32);
-  assert.notEqual(exactContext.portalSessionTokenHash?.toString('utf8'), 'opaque-session');
+  assert.equal(exactContext.portalSessionTokenHash, undefined);
+  assert.equal(guarded[0]?.portalSessionTokenHash?.length, 32);
+  assert.notEqual(guarded[0]?.portalSessionTokenHash?.toString('utf8'), 'opaque-session');
   if (result.ok) {
     assert.equal(result.snapshot.providerEffects, false);
     assert.equal(result.snapshot.sync.artworkBytesCopied, false);

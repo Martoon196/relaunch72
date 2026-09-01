@@ -357,10 +357,18 @@ export class PgPortalCompanyContentSyncService implements PortalCompanyContentSy
           'The protected source-sync command ledger is temporarily unavailable.',
         );
       }
+      const { portalSessionTokenHash: _consumedSessionHash, ...adapterContext }
+        = authorization.context;
       stage = 'workspace_lock_and_sync';
       const locked = await this.dependencies.syncLock.run(
         authorization.context.workspaceId,
-        () => this.dependencies.coordinator.sync(authorization.context),
+        // The command guard above has already locked and revalidated the
+        // portal session, then durably consumed this exact request. Adapter
+        // writes use r72_content_adapter, whose deliberate session capability
+        // is read-only; carrying the hash into a write transaction would make
+        // the generic wrapper request the forbidden lock function a second
+        // time before any content could be staged.
+        () => this.dependencies.coordinator.sync(adapterContext),
       );
       if (!locked.acquired) {
         return failure(
