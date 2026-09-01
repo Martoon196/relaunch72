@@ -466,19 +466,32 @@ test('imports only the exact canonical company-owned bytes through the effects-o
   }]);
 });
 
-test('rejects stale, future and mismatched source observations before any local staging', async () => {
+test('accepts independently timed source reads when their immutable tuples remain coherent', async () => {
+  const subject = harness({
+    catalogGeneratedAt: '2026-08-28T09:59:59.000Z',
+    releaseGeneratedAt: '2026-08-28T09:59:59.750Z',
+  });
+  const result = await subject.coordinator.sync(CONTEXT);
+
+  assert.equal(result.state, 'current');
+  assert.equal(result.sourceFresh, true);
+  assert.equal(subject.stageCalls, 2);
+  assert.equal(subject.created.length, 1);
+});
+
+test('rejects a stale or future observation from either source read before local staging', async () => {
   const cases = [
     harness({
       catalogGeneratedAt: '2026-08-28T09:54:59.999Z',
+    }),
+    harness({
+      releaseGeneratedAt: '2026-08-28T10:00:30.001Z',
+    }),
+    harness({
       releaseGeneratedAt: '2026-08-28T09:54:59.999Z',
     }),
     harness({
       catalogGeneratedAt: '2026-08-28T10:00:30.001Z',
-      releaseGeneratedAt: '2026-08-28T10:00:30.001Z',
-    }),
-    harness({
-      catalogGeneratedAt: '2026-08-28T09:59:59.000Z',
-      releaseGeneratedAt: CHECKED_AT,
     }),
   ];
   for (const subject of cases) {

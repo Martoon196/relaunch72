@@ -288,11 +288,21 @@ function assertCoherentRelease(
   observedAt: Date,
 ): void {
   const observedMs = observedAt.getTime();
-  const sourceMs = Date.parse(catalog.generatedAt);
-  if (!Number.isFinite(observedMs) || !Number.isFinite(sourceMs)
-      || release.generatedAt !== catalog.generatedAt
-      || sourceMs > observedMs + SOURCE_OBSERVATION_FUTURE_SKEW_MS
-      || observedMs - sourceMs > SOURCE_OBSERVATION_MAX_AGE_MS) {
+  const catalogObservedMs = Date.parse(catalog.generatedAt);
+  const releaseObservedMs = Date.parse(release.generatedAt);
+  const observationIsInvalid = (sourceMs: number): boolean => (
+    !Number.isFinite(sourceMs)
+    || sourceMs > observedMs + SOURCE_OBSERVATION_FUTURE_SKEW_MS
+    || observedMs - sourceMs > SOURCE_OBSERVATION_MAX_AGE_MS
+  );
+  // The bridge and catalogue are separate authenticated reads. Their source
+  // timestamps will normally differ by a few milliseconds, so coherence must
+  // be bound by the immutable catalogue hash and exact item tuples below—not
+  // by impossible timestamp equality. Both observations still fail closed if
+  // either is stale or future-dated.
+  if (!Number.isFinite(observedMs)
+      || observationIsInvalid(catalogObservedMs)
+      || observationIsInvalid(releaseObservedMs)) {
     throw new Error('source_observation_invalid');
   }
   if (release.sourceCatalogSha256 !== catalog.catalogSha256
