@@ -80,6 +80,23 @@ test('Zernio Messaging reads an exact conversation without causing a read receip
   assert.equal(url.searchParams.get('sortOrder'), 'asc');
 });
 
+test('Zernio Messaging renders attachment-only provider events without weakening identity checks', async () => {
+  const client = createZernioMessagingClient({
+    apiKey: 'zrk_test_messaging_secret', providerProfileId: PROFILE,
+    allowedAccountIds: [ACCOUNT],
+    fetch: async () => json({
+      messages: [message({ message: '', attachments: [{ type: 'image' }] })],
+      pagination: { hasMore: false }, sortOrderApplied: 'asc',
+    }),
+  });
+  const result = await client.listMessages({
+    accountId: ACCOUNT, providerConversationId: 'ig-conversation-1',
+  });
+  assert.equal(result.messages[0]?.body, '[Attachment]');
+  assert.equal(result.messages[0]?.providerConversationId, 'ig-conversation-1');
+  assert.equal(result.messages[0]?.accountId, ACCOUNT);
+});
+
 test('Zernio Messaging rejects account or conversation substitution before provider I/O', async () => {
   let called = false;
   const client = createZernioMessagingClient({

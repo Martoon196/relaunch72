@@ -208,11 +208,14 @@ function message(value: unknown, allowed: ReadonlySet<string>): ZernioMessageSna
   if (!allowed.has(accountId)) fail('unbound_target');
   const direction = text(source.direction, 20);
   if (direction !== 'incoming' && direction !== 'outgoing') fail('invalid_provider_response');
+  const messageBody = source.message === '' || source.message === null || source.message === undefined
+    ? '[Attachment]'
+    : source.message;
   return Object.freeze({
     providerMessageId: opaqueId(source.id),
     providerConversationId: opaqueId(source.conversationId), accountId,
     platform: platform as 'instagram' | 'facebook',
-    body: text(source.message ?? '[Attachment]', 65_536),
+    body: text(messageBody, 65_536),
     senderId: opaqueId(source.senderId),
     senderName: text(source.senderName ?? 'Unknown social contact', 500),
     direction, occurredAt: timestamp(source.createdAt),
