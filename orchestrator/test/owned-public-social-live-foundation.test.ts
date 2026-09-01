@@ -9,6 +9,7 @@ import {
   loadOwnedPublicSocialLiveRuntimeConfig,
   runOwnedPublicSocialLiveOnce,
   type AyrshareOwnedResult,
+  type AyrshareOwnedPublishRequest,
   type OwnedPublicSocialClaim,
   type OwnedPublicSocialJobMaterial,
   type OwnedPublicSocialLiveRepository,
@@ -81,6 +82,13 @@ test('runtime defaults dark and rejects every partial live switch combination', 
       PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_PROVIDER_ID: 'ayrshare',
     },
   ]) assert.throws(() => loadOwnedPublicSocialLiveRuntimeConfig(env), OwnedPublicSocialLiveError);
+  assert.equal(loadOwnedPublicSocialLiveRuntimeConfig({
+    PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE: 'owned_profile_live',
+    PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED: 'true',
+    PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED: 'false',
+    PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_PROVIDER_ID: 'ayrshare',
+    PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK: 'instagram_linkedin',
+  }).network, 'instagram_linkedin');
 });
 
 test('bounded live transport exists only behind both switches and uses exact Ayrshare request contract', async () => {
@@ -117,6 +125,50 @@ test('bounded live transport exists only behind both switches and uses exact Ayr
   assert.equal(calls[0]?.init.redirect, 'error');
   assert.equal((calls[0]?.init.headers as Record<string, string>)['Profile-Key'], PROFILE_KEY);
   assert.match(String(calls[0]?.init.body), /"platforms":\["twitter"\]/u);
+});
+
+test('Instagram and LinkedIn use their exact Ayrshare platforms and approved media without X credentials', async () => {
+  const calls: Array<{ headers: Record<string, string>; body: Record<string, unknown> }> = [];
+  const transport = createAyrshareOwnedLiveTransport({
+    fetch: async (_input, init = {}) => {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      const platform = (body.platforms as string[])[0]!;
+      calls.push({
+        headers: init.headers as Record<string, string>,
+        body,
+      });
+      return new Response(JSON.stringify({
+        status: 'success', id: `${platform}_proof_1`,
+        postIds: [{ status: 'success', id: `${platform}_post_1`, platform }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+    secrets: { apiKey: 'api-key-12345678' },
+    providerEffectsEnabled: true,
+    emergencyPaused: false,
+    now: () => new Date('2026-08-29T10:00:00.000Z'),
+  });
+  const common = {
+    workspaceId: IDS.workspace, connectionId: IDS.connection, profileId: IDS.profile,
+    profileKey: PROFILE_KEY, operationTag: 'pp-calendar-live-1',
+    idempotencyKey: digest('calendar-operation'), scheduledFor: null,
+  } as const;
+  assert.equal((await transport.publish({
+    ...common, network: 'instagram', text: 'Instagram calendar post.',
+    mediaUrls: ['https://propertypredator.com/media/approved-one.png'],
+  })).state, 'accepted');
+  assert.equal((await transport.publish({
+    ...common, network: 'linkedin', text: 'LinkedIn calendar post.', mediaUrls: [],
+  })).state, 'accepted');
+  assert.deepEqual(calls.map(({ body }) => body.platforms), [['instagram'], ['linkedin']]);
+  assert.deepEqual(calls[0]?.body.mediaUrls, ['https://propertypredator.com/media/approved-one.png']);
+  for (const call of calls) {
+    assert.equal(call.headers['X-Twitter-OAuth1-Api-Key'], undefined);
+    assert.equal(call.headers['X-Twitter-OAuth1-Api-Secret'], undefined);
+  }
+  await assert.rejects(() => transport.publish({
+    ...common, network: 'instagram', text: 'Instagram requires approved media.', mediaUrls: [],
+  }), (error: unknown) => error instanceof OwnedPublicSocialLiveError
+    && error.code === 'invalid_request');
 });
 
 test('live transport rejects a simulator-shaped postIds object instead of treating it as proof', async () => {
@@ -233,4 +285,74 @@ test('one worker cycle marks the durable calling fence before the only provider 
   assert.equal(result, 'published_or_pending');
   assert.deepEqual(order, ['calling', 'publish']);
   assert.equal(repository.result?.state, 'accepted');
+});
+
+test('a due Instagram calendar job publishes now instead of rescheduling a past instant', async () => {
+  const repository = new MemoryRepository();
+  const instagramEnvelope = encryptOwnedProfileKey({
+    workspaceId: IDS.workspace,
+    connectionId: IDS.connection,
+    profileId: IDS.profile,
+    profileKey: PROFILE_KEY,
+    keyVersion: 'render-kms-v1',
+    encryptionKey: KEY,
+    iv: Buffer.alloc(12, 4),
+    network: 'instagram',
+  });
+  repository.loadClaimed = async () => Object.freeze({
+    ...repository.claim,
+    network: 'instagram' as const,
+    envelope: instagramEnvelope,
+    operationTag: 'pp-instagram-calendar-1',
+    idempotencyKey: digest('instagram-calendar-operation'),
+    text: 'Instagram calendar post.',
+    textSha256: digest('Instagram calendar post.'),
+    scheduledFor: '2026-09-02T09:00:00.000Z',
+    externalId: null,
+    media: Object.freeze([Object.freeze({
+      storageKey: 'approved/calendar-one.png',
+      blobSha256: digest('calendar-one'),
+      mimeType: 'image/png',
+    })]),
+  });
+  let request: AyrshareOwnedPublishRequest | undefined;
+  const transport = {
+    contract: 'propertypredator.owned-public-social-live/v1' as const,
+    providerId: 'ayrshare' as const,
+    executionMode: 'owned_profile_live' as const,
+    async publish(input: AyrshareOwnedPublishRequest) {
+      request = input;
+      return Object.freeze({
+        state: 'accepted' as const, externalId: 'instagram-proof-1',
+        receiptSha256: digest('instagram-receipt'),
+        occurredAt: '2026-09-02T09:00:00.250Z', safeCode: 'ayrshare_accepted',
+      });
+    },
+    async reconcile(): Promise<never> { throw new Error('not expected'); },
+  };
+  const result = await runOwnedPublicSocialLiveOnce({
+    config: loadOwnedPublicSocialLiveRuntimeConfig({
+      PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE: 'owned_profile_live',
+      PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED: 'true',
+      PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED: 'false',
+      PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_PROVIDER_ID: 'ayrshare',
+      PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK: 'instagram_linkedin',
+    }),
+    repository,
+    transport,
+    encryptionKey: KEY,
+    encryptionKeyVersion: 'render-kms-v1',
+    leaseToken: LEASE,
+    mediaResolver: Object.freeze({
+      async resolve() {
+        return Object.freeze(['https://propertypredator.com/media/approved/calendar-one.png']);
+      },
+    }),
+  });
+  assert.equal(result, 'published_or_pending');
+  assert.equal(request?.scheduledFor, null);
+  assert.equal(request?.network, 'instagram');
+  assert.deepEqual(request?.mediaUrls, [
+    'https://propertypredator.com/media/approved/calendar-one.png',
+  ]);
 });

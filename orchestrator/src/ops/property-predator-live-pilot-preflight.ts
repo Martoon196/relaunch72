@@ -238,13 +238,13 @@ export const PILOT_PROVIDER_CATALOGUE: readonly ProviderSpec[] = Object.freeze([
     ]),
   }),
   Object.freeze({
-    rail: 'owned_social', provider: 'Ayrshare owned X', phase: 'deferred', settings: Object.freeze([
+    rail: 'owned_social', provider: 'Ayrshare Instagram + LinkedIn', phase: 'deferred', settings: Object.freeze([
       setting('DATABASE_OWNED_SOCIAL_COMMAND_URL', 'Owned-social command database identity', isProductionDatabaseUrl('r72_owned_social_command'), 'The function-only r72_owned_social_command database URL'),
       setting('DATABASE_OWNED_SOCIAL_WORKER_URL', 'Owned-social worker database identity', isProductionDatabaseUrl('r72_owned_social_worker_command'), 'The function-only r72_owned_social_worker_command database URL'),
       setting('PROPERTY_PREDATOR_SOCIAL_PROVIDER', 'Selected social provider', exact('ayrshare'), 'Ayrshare as the pilot social provider'),
       setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE', 'Owned-social live mode', exact('owned_profile_live'), 'The exact owned-profile live worker mode'),
       setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_PROVIDER_ID', 'Owned-social provider binding', exact('ayrshare'), 'The exact Ayrshare provider binding'),
-      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK', 'Owned-social network binding', exact('x'), 'The exact owned X network binding'),
+      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK', 'Owned-social network binding', exact('instagram_linkedin'), 'The exact Instagram + LinkedIn network binding'),
       setting('PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'Provider effects switch', exact('true'), 'The exact reviewed provider-effects switch'),
       setting('PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'Owned-social emergency pause', exact('false'), 'The reviewed released owned-social emergency pause'),
       setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_WORKSPACE_ID', 'Owned-social workspace binding', isUuid, 'The exact owned pilot workspace UUID'),
@@ -252,8 +252,7 @@ export const PILOT_PROVIDER_CATALOGUE: readonly ProviderSpec[] = Object.freeze([
       setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_BASE64', 'Owned-social profile-envelope key', isCanonicalBase64Key32, 'A canonical 32-byte profile-envelope key'),
       setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_VERSION', 'Owned-social profile-envelope key version', isKeyVersion, 'A bounded profile-envelope key version'),
       setting('AYRSHARE_API_KEY', 'Ayrshare API key', (raw) => isSafeSecret(raw), 'The Ayrshare account API key'),
-      setting('AYRSHARE_X_OAUTH1_API_KEY', 'Owned X OAuth1 API key', (raw) => isSafeSecret(raw), 'The OAuth1 key for the exact owned X profile'),
-      setting('AYRSHARE_X_OAUTH1_API_SECRET', 'Owned X OAuth1 API secret', (raw) => isSafeSecret(raw), 'The OAuth1 secret for the exact owned X profile'),
+      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN', 'Approved social-media origin', (raw) => isHttpsUrl(raw, true), 'The exact credential-free HTTPS origin for approved social media'),
       setting('AYRSHARE_PROFILE_LINK_COMPLETE', 'Social account-link proof', exact('true'), 'Explicit account-link completion evidence'),
     ]),
   }),

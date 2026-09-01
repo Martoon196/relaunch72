@@ -111,6 +111,18 @@ export interface LiveChannelsRenderOptions {
     revoke: string;
     stage: string;
   }>;
+  /** Evidence-only values carried from an exact durable calendar slot. */
+  readonly ownedSocialStagePrefill?: Readonly<{
+    network: 'instagram' | 'linkedin';
+    planningIntentId: string;
+    contentItemId: string;
+    contentVersionId: string;
+    approvalRequestId: string;
+    approvalDecisionId: string;
+    sourceAttestationId: string;
+    scheduledFor: string;
+    operationTag: string;
+  }>;
   /** True only when the Twilio SMS founder command boundary is composed. */
   readonly smsCommandAvailable?: boolean;
   /** Fresh per-render command keys, one per Twilio SMS founder command. */
@@ -346,30 +358,34 @@ function renderOwnedSocialCommands(
 ): string {
   const card = view.channels.find((channel) => channel.rail === 'owned_social');
   if (!card) return '';
-  const head = `<div class="plc-panel-head"><h2 id="plc-owned-social-title">Owned X account commands</h2><span>${escapeHtml(card.postureLabel)}</span></div>`;
+  const head = `<div class="plc-panel-head"><h2 id="plc-owned-social-title">Instagram &amp; LinkedIn publishing</h2><span>${escapeHtml(card.postureLabel)}</span></div>`;
   if (!options.ownedSocialCommandAvailable) {
-    return `<section class="plc-panel" aria-labelledby="plc-owned-social-title">${head}<div class="plc-guard-body"><p>The owned-social founder command boundary is not composed for this workspace, so no profile can be bound and no publication can be staged from here. This portal will not invent one.</p><button class="plc-guard-button" type="button" disabled aria-disabled="true">Bind owned X profile — command boundary not composed</button></div></section>`;
+    return `<section class="plc-panel" aria-labelledby="plc-owned-social-title">${head}<div class="plc-guard-body"><p>The social command boundary is not composed for this workspace, so no account can be bound and no publication can be staged from here.</p><button class="plc-guard-button" type="button" disabled aria-disabled="true">Connect social account — command boundary not composed</button></div></section>`;
   }
   const keys = options.ownedSocialCommandKeys ?? { bind: '', revoke: '', stage: '' };
+  const prefill = options.ownedSocialStagePrefill;
+  const value = (exact: string | undefined): string => exact
+    ? ` value="${escapeHtml(exact)}"` : '';
   const csrf = escapeHtml(options.csrfToken);
   const bind = options.ownedSocialProfileBindingComposed
     ? `<form method="post" action="${LIVE_CHANNELS_OWNED_SOCIAL_BIND_ROUTE}" autocomplete="off">
       <input type="hidden" name="_csrf" value="${csrf}">
       <input type="hidden" name="command_key" value="${escapeHtml(keys.bind)}">
+      <label class="plc-field"><span>Network</span><select name="network" required><option value="instagram">Instagram</option><option value="linkedin">LinkedIn</option></select></label>
       <label class="plc-field"><span>Profile record id</span><input type="text" name="profile_id" required autocomplete="off"></label>
       <label class="plc-field"><span>Display name</span><input type="text" name="display_name" required maxlength="120" autocomplete="off"></label>
       <label class="plc-field"><span>Ayrshare profile reference</span><input type="text" name="profile_reference" required maxlength="200" autocomplete="off"></label>
-      <label class="plc-field"><span>Owned X account reference</span><input type="text" name="owned_account" required maxlength="200" autocomplete="off"></label>
+      <label class="plc-field"><span>Owned account reference</span><input type="text" name="owned_account" required maxlength="200" autocomplete="off"></label>
       <label class="plc-field"><span>Ayrshare Profile Key, sealed immediately and never stored here</span><input type="password" name="profile_credential" required maxlength="500" autocomplete="off"></label>
       <label class="plc-field"><span>OAuth link evidence reference</span><input type="text" name="oauth_evidence" required maxlength="200" autocomplete="off"></label>
       <label class="plc-field"><span>Linked at, UTC instant</span><input type="text" name="linked_at" required maxlength="40" autocomplete="off"></label>
       <label class="plc-field"><span>Evidence observed at, UTC instant</span><input type="text" name="evidence_observed_at" required maxlength="40" autocomplete="off"></label>
-      <label class="plc-guard-check"><input type="checkbox" name="confirm_owned" value="OWNED" required> I attest this X account is founder-owned and its OAuth link carries read_write permission.</label>
-      <button class="plc-guard-button" type="submit">Bind owned X profile</button>
+      <label class="plc-guard-check"><input type="checkbox" name="confirm_owned" value="OWNED" required> I attest this account is company-owned and linked with publishing permission.</label>
+      <button class="plc-guard-button" type="submit">Connect owned social profile</button>
     </form>`
-    : `<p>This process does not hold the owned-social profile-key encryption contract, so it will not accept a Profile Key it could not seal. Nothing is stored.</p><button class="plc-guard-button" type="button" disabled aria-disabled="true">Bind owned X profile — encryption contract not composed</button>`;
+    : `<p>This process does not hold the social profile-key encryption contract, so it will not accept a Profile Key it could not seal. Nothing is stored.</p><button class="plc-guard-button" type="button" disabled aria-disabled="true">Connect social profile — encryption contract not composed</button>`;
   return `<section class="plc-panel" aria-labelledby="plc-owned-social-title">${head}
-    <details class="plc-guard"><summary><span>Bind one owned X profile</span><b>${options.ownedSocialProfileBindingComposed ? 'READY' : 'UNAVAILABLE'}</b></summary><div class="plc-guard-body">
+    <details class="plc-guard"><summary><span>Connect Instagram or LinkedIn</span><b>${options.ownedSocialProfileBindingComposed ? 'READY' : 'UNAVAILABLE'}</b></summary><div class="plc-guard-body">
       <p>The Profile Key is encrypted with the existing owned-social contract before it reaches the database. It is never stored in the clear, echoed back, logged or shown again.</p>${bind}
     </div></details>
     <details class="plc-guard"><summary><span>Revoke a bound profile</span><b>PERMANENT</b></summary><div class="plc-guard-body">
@@ -384,21 +400,24 @@ function renderOwnedSocialCommands(
         <button class="plc-guard-button" type="submit">Revoke owned profile</button>
       </form>
     </div></details>
-    <details class="plc-guard"><summary><span>Stage one approved publication</span><b>${card.capReached ? 'CAP REACHED' : 'DATABASE PROVED'}</b></summary><div class="plc-guard-body">
+    <details class="plc-guard" id="plc-owned-social-stage"${prefill ? ' open' : ''}><summary><span>Stage one approved publication</span><b>${card.capReached ? 'CAP REACHED' : 'DATABASE PROVED'}</b></summary><div class="plc-guard-body">
       <p>Staging queues one already-approved post behind the command boundary. The database re-proves the owned profile, content hash, approval, source attestation, caps and pause posture first; every dimension must pass or nothing is queued. No worker lease is claimed and Ayrshare is not called.</p>
       <form method="post" action="${LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE}" autocomplete="off">
         <input type="hidden" name="_csrf" value="${csrf}">
         <input type="hidden" name="command_key" value="${escapeHtml(keys.stage)}">
+        <input type="hidden" name="network"${value(prefill?.network)}>
+        <input type="hidden" name="planning_intent_id"${value(prefill?.planningIntentId)}>
         <label class="plc-field"><span>Profile record id</span><input type="text" name="profile_id" required autocomplete="off"></label>
-        <label class="plc-field"><span>Content item id</span><input type="text" name="content_item_id" required autocomplete="off"></label>
-        <label class="plc-field"><span>Approved content version id</span><input type="text" name="content_version_id" required autocomplete="off"></label>
-        <label class="plc-field"><span>Approval request id</span><input type="text" name="approval_request_id" required autocomplete="off"></label>
-        <label class="plc-field"><span>Approval decision id</span><input type="text" name="approval_decision_id" required autocomplete="off"></label>
-        <label class="plc-field"><span>Source attestation id</span><input type="text" name="source_attestation_id" required autocomplete="off"></label>
-        <label class="plc-field"><span>Owned X account reference</span><input type="text" name="owned_account" required maxlength="200" autocomplete="off"></label>
-        <label class="plc-field"><span>Operation tag</span><input type="text" name="operation_tag" required maxlength="100" autocomplete="off"></label>
-        <label class="plc-guard-check"><input type="checkbox" name="confirm_stage" value="STAGE" required> I confirm this exact approved post may be queued for the owned X account.</label>
-        <button class="plc-guard-button" type="submit">Stage approved publication</button>
+        <label class="plc-field"><span>Content item id</span><input type="text" name="content_item_id"${value(prefill?.contentItemId)} required autocomplete="off"></label>
+        <label class="plc-field"><span>Approved content version id</span><input type="text" name="content_version_id"${value(prefill?.contentVersionId)} required autocomplete="off"></label>
+        <label class="plc-field"><span>Approval request id</span><input type="text" name="approval_request_id"${value(prefill?.approvalRequestId)} required autocomplete="off"></label>
+        <label class="plc-field"><span>Approval decision id</span><input type="text" name="approval_decision_id"${value(prefill?.approvalDecisionId)} required autocomplete="off"></label>
+        <label class="plc-field"><span>Source attestation id</span><input type="text" name="source_attestation_id"${value(prefill?.sourceAttestationId)} required autocomplete="off"></label>
+        <label class="plc-field"><span>Owned account reference</span><input type="text" name="owned_account" required maxlength="200" autocomplete="off"></label>
+        <label class="plc-field"><span>Operation tag</span><input type="text" name="operation_tag"${value(prefill?.operationTag)} required maxlength="100" autocomplete="off"></label>
+        <label class="plc-field"><span>Scheduled publish time (exact UTC ISO instant from the calendar)</span><input type="text" name="scheduled_for"${value(prefill?.scheduledFor)} maxlength="40" placeholder="2026-09-02T09:00:00.000Z" autocomplete="off"></label>
+        <label class="plc-guard-check"><input type="checkbox" name="confirm_stage" value="STAGE" required> I confirm this exact approved calendar post may be queued for the selected owned account.</label>
+        <button class="plc-guard-button" type="submit">Arm calendar publication</button>
       </form>
     </div></details>
   </section>`;

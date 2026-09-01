@@ -134,6 +134,8 @@ export interface ContentCalendarSlotView {
   readonly gateDetail: string;
   readonly publicSocial: ContentCalendarPublicSocialView | null;
   readonly planning: ContentCalendarPlanningView | null;
+  /** Safe evidence-only handoff into the Instagram/LinkedIn live staging seam. */
+  readonly ownedSocialStageHref: string | null;
 }
 
 export interface ContentCalendarPlanningView extends ContentCalendarPlanningProvenance {
@@ -672,6 +674,30 @@ function gateDetail(input: Readonly<{
   return 'Exact version, approval and source proof agree. Simulation only; no provider call is possible here.';
 }
 
+function ownedSocialStageHref(
+  slot: ContentCalendarSlotSnapshot,
+  item: CompanyContentCatalogItem | undefined,
+  eligible: boolean,
+): string | null {
+  if (!eligible || (slot.channel !== 'instagram' && slot.channel !== 'linkedin')
+      || !slot.planning || !item
+      || !item.approvalRequestId || !item.approvalDecisionId
+      || !item.sourceAttestationId) return null;
+  const query = new URLSearchParams({
+    stage: 'owned_social',
+    network: slot.channel,
+    planning_intent_id: slot.planning.intentId,
+    content_item_id: item.contentItemId,
+    content_version_id: item.contentVersionId,
+    approval_request_id: item.approvalRequestId,
+    approval_decision_id: item.approvalDecisionId,
+    source_attestation_id: item.sourceAttestationId,
+    scheduled_for: slot.scheduledFor,
+    operation_tag: `calendar:${slot.planning.intentId}`,
+  });
+  return `/portal/channels/live?${query.toString()}#plc-owned-social-stage`;
+}
+
 function presentSlot(
   slot: ContentCalendarSlotSnapshot,
   item: CompanyContentCatalogItem | undefined,
@@ -742,6 +768,7 @@ function presentSlot(
               : gateDetail({ item, versionMatches, approved, fresh, eligible: contentEligible }),
     publicSocial: publicSocialResult?.view ?? null,
     planning,
+    ownedSocialStageHref: ownedSocialStageHref(slot, item, simulationEligible),
   });
 }
 

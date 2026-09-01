@@ -520,8 +520,9 @@ test('Mailgun ingress and controlled internal-seed egress use disjoint exact sec
     webManifest, emailWorkerManifest, revalidatorWorkerManifest, socialTestWorkerManifest,
   ]) assert.doesNotMatch(section, /- key: AYRSHARE_[A-Z0-9_]+\b/);
   for (const key of [
-    'AYRSHARE_API_KEY', 'AYRSHARE_X_OAUTH1_API_KEY', 'AYRSHARE_X_OAUTH1_API_SECRET',
+    'AYRSHARE_API_KEY', 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN',
   ]) secretSlotIn(ownedSocialLiveWorkerManifest, key);
+  assert.doesNotMatch(ownedSocialLiveWorkerManifest, /- key: AYRSHARE_X_OAUTH1_/);
   assert.doesNotMatch(manifest, /MAILGUN_(?:API_KEY|SIGNING_KEY):\s*\S+/);
 });
 

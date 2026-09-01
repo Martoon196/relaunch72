@@ -49,3 +49,40 @@ test('repository rejects cross-workspace claims before touching SQL', async () =
   }));
   assert.equal(called, false);
 });
+
+test('repository loads one exact Instagram job with immutable approved media', async () => {
+  const leaseToken = Buffer.alloc(32, 6);
+  const repository = new PgOwnedPublicSocialLiveRepository({
+    async connect() {
+      return {
+        async query(sql: string) {
+          if (sql.includes('load_owned_social_job_v2')) return { rows: [{
+            workspaceId: WORKSPACE, providerConnectionId: CONNECTION, profileId: PROFILE, jobId: JOB,
+            leaseVersion: '1', attemptKind: 'publish', secretAlgorithm: 'aes-256-gcm-v1',
+            secretKeyVersion: 'render-kms-v1', profileKeyIv: Buffer.alloc(12),
+            profileKeyCiphertext: Buffer.alloc(16), profileKeyAuthTag: Buffer.alloc(16),
+            profileKeyAadSha256: Buffer.alloc(32, 1), profileKeySha256: Buffer.alloc(32, 2),
+            operationTag: 'pp-calendar-instagram-1', idempotencyKey: '3'.repeat(64),
+            textBody: 'Approved Instagram post.', textSha256: '4'.repeat(64),
+            scheduledFor: '2026-09-02T09:30:00.000Z', providerExternalId: null,
+            network: 'instagram', media: [{
+              storageKey: 'approved/social/instagram-one.png', blobSha256: '5'.repeat(64),
+              mimeType: 'image/png',
+            }],
+          }] };
+          return { rows: [] };
+        },
+        release() { return undefined; },
+      };
+    },
+  } as never, { workspaceId: WORKSPACE, connectionId: CONNECTION });
+  const material = await repository.loadClaimed({
+    workspaceId: WORKSPACE, connectionId: CONNECTION, profileId: PROFILE, jobId: JOB,
+    leaseVersion: 1, attemptKind: 'publish', leaseToken,
+  });
+  assert.equal(material.network, 'instagram');
+  assert.deepEqual(material.media, [{
+    storageKey: 'approved/social/instagram-one.png', blobSha256: '5'.repeat(64),
+    mimeType: 'image/png',
+  }]);
+});

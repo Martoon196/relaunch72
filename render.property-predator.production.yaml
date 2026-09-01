@@ -716,10 +716,12 @@ services:
       - key: PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED
         value: "true"
 
-  # 0052 owned-profile live worker. The service can be deployed in dark mode to
+  # 0052/0066 owned-profile live worker. One lease-fenced worker handles the
+  # two currently owned networks and selects the exact network from each job.
+  # The service can be deployed in dark mode to
   # prove its exact database boundary without loading an adapter or making a
   # provider call. Activation requires changing the three interlocked safety
-  # values together after the owned Ayrshare/X profile evidence is reviewed.
+  # values together after the owned Instagram/LinkedIn evidence is reviewed.
   - type: worker
     name: property-predator-owned-public-social-live
     runtime: node
@@ -767,9 +769,7 @@ services:
         sync: false
       - key: AYRSHARE_API_KEY
         sync: false
-      - key: AYRSHARE_X_OAUTH1_API_KEY
-        sync: false
-      - key: AYRSHARE_X_OAUTH1_API_SECRET
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN
         sync: false
 
       # Dark defaults. No live adapter is instantiated and no dispatch loop is
@@ -779,7 +779,7 @@ services:
       - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_PROVIDER_ID
         value: ayrshare
       - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK
-        value: x
+        value: instagram_linkedin
       - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_POLL_MS
         value: "5000"
       - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED

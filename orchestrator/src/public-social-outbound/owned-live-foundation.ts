@@ -12,12 +12,32 @@ const SHA256 = /^[0-9a-f]{64}$/u;
 const SAFE_EXTERNAL_ID = /^[A-Za-z0-9_-]{1,200}$/u;
 const SAFE_SECRET = /^[\x21-\x7e]{8,500}$/u;
 const SAFE_OPERATION_TAG = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/u;
-const SAFE_X_TEXT = /^[\r\n\x20-\x7e]{1,280}$/u;
+const SAFE_SOCIAL_TEXT = /^[^\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]{1,3000}$/u;
 const LINK_LIKE = /(?:\/\/|\b[a-z][a-z0-9+.-]*:|\bwww\.|\b[a-z0-9](?:[a-z0-9-]{0,62})\.(?:[a-z]{2,63})(?:[/?#][^\s]*)?)/iu;
 const MAX_RESPONSE_BYTES = 65_536;
 
 export const OWNED_PUBLIC_SOCIAL_LIVE_CONTRACT =
   'propertypredator.owned-public-social-live/v1' as const;
+
+export type OwnedPublicSocialNetwork = 'instagram' | 'linkedin' | 'x';
+
+const AYRSHARE_PLATFORM: Readonly<Record<OwnedPublicSocialNetwork, string>> = Object.freeze({
+  instagram: 'instagram',
+  linkedin: 'linkedin',
+  x: 'twitter',
+});
+
+const NETWORK_TEXT_LIMIT: Readonly<Record<OwnedPublicSocialNetwork, number>> = Object.freeze({
+  instagram: 2_200,
+  linkedin: 3_000,
+  x: 280,
+});
+
+const NETWORK_MEDIA_LIMIT: Readonly<Record<OwnedPublicSocialNetwork, number>> = Object.freeze({
+  instagram: 10,
+  linkedin: 9,
+  x: 4,
+});
 
 export class OwnedPublicSocialLiveError extends Error {
   constructor(readonly code:
@@ -61,14 +81,19 @@ function sameUtcInstant(value: unknown, expected: string): boolean {
   return Number.isFinite(parsed) && parsed === Date.parse(expected);
 }
 
-function canonicalAad(workspaceId: string, connectionId: string, profileId: string): Buffer {
+function canonicalAad(
+  workspaceId: string,
+  connectionId: string,
+  profileId: string,
+  network: OwnedPublicSocialNetwork,
+): Buffer {
   return Buffer.from(JSON.stringify({
     contract: OWNED_PUBLIC_SOCIAL_LIVE_CONTRACT,
     workspaceId: uuid(workspaceId),
     connectionId: uuid(connectionId),
     profileId: uuid(profileId),
     providerId: 'ayrshare',
-    network: 'x',
+    network,
   }), 'utf8');
 }
 
@@ -90,13 +115,16 @@ export function encryptOwnedProfileKey(input: Readonly<{
   keyVersion: string;
   encryptionKey: Buffer;
   iv?: Buffer;
+  network?: OwnedPublicSocialNetwork;
 }>): OwnedProfileKeyEnvelope {
   if (!SAFE_SECRET.test(input.profileKey)
       || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(input.keyVersion)
       || input.encryptionKey.length !== 32) fail('invalid_configuration');
   const iv = input.iv ? Buffer.from(input.iv) : randomBytes(12);
   if (iv.length !== 12) fail('invalid_configuration');
-  const aad = canonicalAad(input.workspaceId, input.connectionId, input.profileId);
+  const aad = canonicalAad(
+    input.workspaceId, input.connectionId, input.profileId, input.network ?? 'x',
+  );
   const cipher = createCipheriv('aes-256-gcm', input.encryptionKey, iv);
   cipher.setAAD(aad);
   const ciphertext = Buffer.concat([
@@ -131,6 +159,7 @@ export function decryptOwnedProfileKey(input: Readonly<{
   envelope: OwnedProfileKeyEnvelope;
   encryptionKey: Buffer;
   expectedKeyVersion: string;
+  network?: OwnedPublicSocialNetwork;
 }>): string {
   const envelope = input.envelope;
   if (envelope.algorithm !== 'aes-256-gcm-v1'
@@ -138,7 +167,9 @@ export function decryptOwnedProfileKey(input: Readonly<{
       || input.encryptionKey.length !== 32
       || !SHA256.test(envelope.aadSha256)
       || !SHA256.test(envelope.profileKeySha256)) fail('invalid_binding');
-  const aad = canonicalAad(input.workspaceId, input.connectionId, input.profileId);
+  const aad = canonicalAad(
+    input.workspaceId, input.connectionId, input.profileId, input.network ?? 'x',
+  );
   const aadHash = Buffer.from(sha256(aad), 'hex');
   const expectedAadHash = Buffer.from(envelope.aadSha256, 'hex');
   if (!timingSafeEqual(aadHash, expectedAadHash)) fail('invalid_binding');
@@ -168,7 +199,7 @@ export interface OwnedPublicSocialLiveRuntimeConfig {
   readonly providerEffectsEnabled: boolean;
   readonly emergencyPaused: boolean;
   readonly providerId: 'ayrshare';
-  readonly network: 'x';
+  readonly network: OwnedPublicSocialNetwork | 'instagram_linkedin';
   readonly maximumOperationsPerCycle: 1;
   readonly dailyPublishCap: 1;
   readonly monthlyPublishCap: 3;
@@ -190,19 +221,24 @@ export function loadOwnedPublicSocialLiveRuntimeConfig(
   }
   if (executionMode !== 'owned_profile_live'
       || env.PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_PROVIDER_ID !== 'ayrshare'
-      || env.PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK !== 'x'
+      || !['instagram', 'linkedin', 'instagram_linkedin', 'x'].includes(
+        env.PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK ?? '',
+      )
       || !effects || paused) fail('invalid_configuration');
   return Object.freeze({
     executionMode, providerEffectsEnabled: true, emergencyPaused: false,
-    providerId: 'ayrshare', network: 'x', maximumOperationsPerCycle: 1,
+    providerId: 'ayrshare',
+    network: env.PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK as
+      OwnedPublicSocialNetwork | 'instagram_linkedin',
+    maximumOperationsPerCycle: 1,
     dailyPublishCap: 1, monthlyPublishCap: 3,
   });
 }
 
 export interface AyrshareOwnedLiveSecrets {
   readonly apiKey: string;
-  readonly xOAuth1ApiKey: string;
-  readonly xOAuth1ApiSecret: string;
+  readonly xOAuth1ApiKey?: string;
+  readonly xOAuth1ApiSecret?: string;
 }
 
 export interface AyrshareOwnedPublishRequest {
@@ -214,6 +250,8 @@ export interface AyrshareOwnedPublishRequest {
   readonly idempotencyKey: string;
   readonly text: string;
   readonly scheduledFor: string | null;
+  readonly network?: OwnedPublicSocialNetwork;
+  readonly mediaUrls?: readonly string[];
 }
 
 export interface AyrshareOwnedReconcileRequest {
@@ -224,6 +262,7 @@ export interface AyrshareOwnedReconcileRequest {
   readonly externalId: string;
   readonly textSha256: string;
   readonly operationTag: string;
+  readonly network?: OwnedPublicSocialNetwork;
 }
 
 export type AyrshareOwnedResult = Readonly<{
@@ -267,8 +306,12 @@ async function boundedBody(response: Response): Promise<string> {
 }
 
 function safeSecrets(input: AyrshareOwnedLiveSecrets): AyrshareOwnedLiveSecrets {
-  if (!SAFE_SECRET.test(input.apiKey) || !SAFE_SECRET.test(input.xOAuth1ApiKey)
-      || !SAFE_SECRET.test(input.xOAuth1ApiSecret)) fail('invalid_configuration');
+  if (!SAFE_SECRET.test(input.apiKey)
+      || ((input.xOAuth1ApiKey === undefined) !== (input.xOAuth1ApiSecret === undefined))
+      || (input.xOAuth1ApiKey !== undefined && !SAFE_SECRET.test(input.xOAuth1ApiKey))
+      || (input.xOAuth1ApiSecret !== undefined && !SAFE_SECRET.test(input.xOAuth1ApiSecret))) {
+    fail('invalid_configuration');
+  }
   return Object.freeze({ ...input });
 }
 
@@ -289,18 +332,31 @@ function externalId(value: unknown): string | null {
   return typeof value === 'string' && SAFE_EXTERNAL_ID.test(value) ? value : null;
 }
 
-function exactTwitterPostIds(value: unknown): boolean {
+function exactPostIds(value: unknown, platform: string): boolean {
   if (!Array.isArray(value) || value.length !== 1) return false;
   const item = value[0];
   if (typeof item !== 'object' || item === null || Array.isArray(item)) return false;
   const post = item as Record<string, unknown>;
-  return post.platform === 'twitter'
+  return post.platform === platform
     && post.status === 'success'
     && externalId(post.id) !== null;
 }
 
-function exactTwitterPlatforms(value: unknown): boolean {
-  return Array.isArray(value) && value.length === 1 && value[0] === 'twitter';
+function exactPlatforms(value: unknown, platform: string): boolean {
+  return Array.isArray(value) && value.length === 1 && value[0] === platform;
+}
+
+function network(value: unknown): OwnedPublicSocialNetwork {
+  if (value !== 'instagram' && value !== 'linkedin' && value !== 'x') fail('invalid_request');
+  return value;
+}
+
+function mediaUrls(value: readonly string[], selected: OwnedPublicSocialNetwork): readonly string[] {
+  if (!Array.isArray(value) || value.length > NETWORK_MEDIA_LIMIT[selected]
+      || (selected === 'instagram' && value.length === 0)
+      || value.some((url) => typeof url !== 'string' || url.length > 2_048
+        || !/^https:\/\/[^\s]+$/u.test(url))) fail('invalid_request');
+  return Object.freeze([...value]);
 }
 
 export function createAyrshareOwnedLiveTransport(options: Readonly<{
@@ -324,12 +380,22 @@ export function createAyrshareOwnedLiveTransport(options: Readonly<{
     path: '/api/post' | `/api/history/${string}`,
     method: 'GET' | 'POST',
     profileKey: string,
+    selectedNetwork: OwnedPublicSocialNetwork,
     body: string | undefined,
   ): Promise<Readonly<{ status: number; body: string; occurredAt: string }>> => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const url = `${AYRSHARE_ORIGIN}${path}`;
+      const xHeaders = selectedNetwork === 'x'
+        ? (() => {
+          if (!secrets.xOAuth1ApiKey || !secrets.xOAuth1ApiSecret) fail('invalid_configuration');
+          return {
+            'X-Twitter-OAuth1-Api-Key': secrets.xOAuth1ApiKey,
+            'X-Twitter-OAuth1-Api-Secret': secrets.xOAuth1ApiSecret,
+          };
+        })()
+        : {};
       const response = await options.fetch(url, {
         method,
         redirect: 'error',
@@ -339,8 +405,7 @@ export function createAyrshareOwnedLiveTransport(options: Readonly<{
           Authorization: `Bearer ${secrets.apiKey}`,
           'Content-Type': 'application/json',
           'Profile-Key': profileKey,
-          'X-Twitter-OAuth1-Api-Key': secrets.xOAuth1ApiKey,
-          'X-Twitter-OAuth1-Api-Secret': secrets.xOAuth1ApiSecret,
+          ...xHeaders,
         },
         ...(body === undefined ? {} : { body }),
       });
@@ -363,19 +428,27 @@ export function createAyrshareOwnedLiveTransport(options: Readonly<{
     executionMode: 'owned_profile_live' as const,
     async publish(request: AyrshareOwnedPublishRequest): Promise<AyrshareOwnedResult> {
       validateCommon(request);
+      const selectedNetwork = network(request.network ?? 'x');
+      const platform = AYRSHARE_PLATFORM[selectedNetwork];
+      const selectedMediaUrls = mediaUrls(request.mediaUrls ?? [], selectedNetwork);
       if (!SAFE_OPERATION_TAG.test(request.operationTag)
           || request.idempotencyKey.length < 16 || request.idempotencyKey.length > 200
-          || !SAFE_X_TEXT.test(request.text) || LINK_LIKE.test(request.text)) fail('invalid_request');
+          || !SAFE_SOCIAL_TEXT.test(request.text)
+          || [...request.text].length > NETWORK_TEXT_LIMIT[selectedNetwork]
+          || (selectedNetwork === 'x' && LINK_LIKE.test(request.text))) fail('invalid_request');
       if (request.scheduledFor !== null) exactTimestamp(request.scheduledFor);
       const body = JSON.stringify({
         post: request.text,
-        platforms: ['twitter'],
+        platforms: [platform],
         idempotencyKey: request.idempotencyKey,
         notes: request.operationTag,
         shortenLinks: false,
+        ...(selectedMediaUrls.length === 0 ? {} : { mediaUrls: selectedMediaUrls }),
         ...(request.scheduledFor === null ? {} : { scheduleDate: request.scheduledFor }),
       });
-      const response = await call('/api/post', 'POST', request.profileKey, body);
+      const response = await call(
+        '/api/post', 'POST', request.profileKey, selectedNetwork, body,
+      );
       const payload = safeJson(response.body);
       const id = externalId(payload?.id);
       const receiptSha256 = sha256(response.body);
@@ -392,7 +465,7 @@ export function createAyrshareOwnedLiveTransport(options: Readonly<{
       if (!payload || id === null
           || (request.scheduledFor === null
             ? (payload.status !== 'success'
-              || !exactTwitterPostIds(payload.postIds))
+              || !exactPostIds(payload.postIds, platform))
             : (payload.status !== 'scheduled'
               || !sameUtcInstant(payload.scheduleDate, request.scheduledFor)))) {
         return Object.freeze({
@@ -407,12 +480,15 @@ export function createAyrshareOwnedLiveTransport(options: Readonly<{
     },
     async reconcile(request: AyrshareOwnedReconcileRequest): Promise<AyrshareOwnedResult> {
       validateCommon(request);
+      const selectedNetwork = network(request.network ?? 'x');
+      const platform = AYRSHARE_PLATFORM[selectedNetwork];
       if (!SAFE_EXTERNAL_ID.test(request.externalId) || !SHA256.test(request.textSha256)
           || !SAFE_OPERATION_TAG.test(request.operationTag)) {
         fail('invalid_request');
       }
       const response = await call(
-        `/api/history/${request.externalId}`, 'GET', request.profileKey, undefined,
+        `/api/history/${request.externalId}`, 'GET', request.profileKey,
+        selectedNetwork, undefined,
       );
       const payload = safeJson(response.body);
       const id = externalId(payload?.id);
@@ -434,8 +510,8 @@ export function createAyrshareOwnedLiveTransport(options: Readonly<{
         occurredAt: response.occurredAt, safeCode: 'ayrshare_reconcile_content_mismatch',
       });
       if ((payload.status === 'success' || payload.status === 'published')
-          && exactTwitterPlatforms(payload.platforms)
-          && exactTwitterPostIds(payload.postIds)) return Object.freeze({
+          && exactPlatforms(payload.platforms, platform)
+          && exactPostIds(payload.postIds, platform)) return Object.freeze({
         state: 'published', externalId: id, receiptSha256,
         occurredAt: response.occurredAt, safeCode: 'ayrshare_published',
       });
@@ -461,6 +537,7 @@ export interface OwnedPublicSocialClaim {
 }
 
 export interface OwnedPublicSocialJobMaterial extends OwnedPublicSocialClaim {
+  readonly network?: OwnedPublicSocialNetwork;
   readonly envelope: OwnedProfileKeyEnvelope;
   readonly operationTag: string;
   readonly idempotencyKey: string;
@@ -468,6 +545,20 @@ export interface OwnedPublicSocialJobMaterial extends OwnedPublicSocialClaim {
   readonly textSha256: string;
   readonly scheduledFor: string | null;
   readonly externalId: string | null;
+  readonly media?: readonly Readonly<{
+    storageKey: string;
+    blobSha256: string;
+    mimeType: string;
+  }>[];
+}
+
+export interface OwnedPublicSocialMediaResolver {
+  resolve(input: Readonly<{
+    workspaceId: string;
+    jobId: string;
+    scheduledFor: string | null;
+    media: NonNullable<OwnedPublicSocialJobMaterial['media']>;
+  }>): Promise<readonly string[]>;
 }
 
 export interface OwnedPublicSocialLiveRepository {
@@ -491,6 +582,7 @@ export async function runOwnedPublicSocialLiveOnce(input: Readonly<{
   encryptionKey: Buffer;
   encryptionKeyVersion: string;
   leaseToken: Buffer;
+  mediaResolver?: OwnedPublicSocialMediaResolver;
 }>): Promise<'idle' | 'published_or_pending' | 'failed_or_attention'> {
   if (input.config.executionMode !== 'owned_profile_live'
       || !input.config.providerEffectsEnabled || input.config.emergencyPaused
@@ -503,7 +595,10 @@ export async function runOwnedPublicSocialLiveOnce(input: Readonly<{
       || material.connectionId !== claim.connectionId
       || material.profileId !== claim.profileId
       || material.jobId !== claim.jobId || material.leaseVersion !== claim.leaseVersion
-      || material.attemptKind !== claim.attemptKind) fail('invalid_binding');
+      || material.attemptKind !== claim.attemptKind
+      || (input.config.network === 'instagram_linkedin'
+        ? ((material.network ?? 'x') !== 'instagram' && (material.network ?? 'x') !== 'linkedin')
+        : (material.network ?? 'x') !== input.config.network)) fail('invalid_binding');
   const profileKey = decryptOwnedProfileKey({
     workspaceId: material.workspaceId,
     connectionId: material.connectionId,
@@ -511,6 +606,7 @@ export async function runOwnedPublicSocialLiveOnce(input: Readonly<{
     envelope: material.envelope,
     encryptionKey: input.encryptionKey,
     expectedKeyVersion: input.encryptionKeyVersion,
+    network: material.network ?? 'x',
   });
   const calling = await input.repository.markCalling({
     ...claim, leaseToken: input.leaseToken,
@@ -519,6 +615,16 @@ export async function runOwnedPublicSocialLiveOnce(input: Readonly<{
   if (!calling) return 'failed_or_attention';
   let result: AyrshareOwnedResult;
   try {
+    const resolvedMedia = material.attemptKind === 'publish'
+      ? await (input.mediaResolver ?? {
+        async resolve() { return Object.freeze([]); },
+      }).resolve({
+        workspaceId: material.workspaceId,
+        jobId: material.jobId,
+        scheduledFor: material.scheduledFor,
+        media: material.media ?? [],
+      })
+      : [];
     result = material.attemptKind === 'publish'
       ? await input.transport.publish({
         workspaceId: material.workspaceId,
@@ -528,7 +634,15 @@ export async function runOwnedPublicSocialLiveOnce(input: Readonly<{
         operationTag: material.operationTag,
         idempotencyKey: material.idempotencyKey,
         text: material.text,
-        scheduledFor: material.scheduledFor,
+        // The database does not release a calendar job until its exact
+        // available_at instant. Once claimed, the calendar is the clock and
+        // Ayrshare should publish immediately instead of being asked to
+        // schedule for an instant that has already arrived.
+        scheduledFor: (material.network === 'instagram' || material.network === 'linkedin')
+          ? null
+          : material.scheduledFor,
+        network: material.network ?? 'x',
+        mediaUrls: resolvedMedia,
       })
       : await input.transport.reconcile({
         workspaceId: material.workspaceId,
@@ -538,6 +652,7 @@ export async function runOwnedPublicSocialLiveOnce(input: Readonly<{
         externalId: material.externalId ?? '',
         textSha256: material.textSha256,
         operationTag: material.operationTag,
+        network: material.network ?? 'x',
       });
   } catch {
     result = Object.freeze({

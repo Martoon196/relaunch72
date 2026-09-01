@@ -309,6 +309,13 @@ test('Content Calendar validates optional durable planning and JIT provenance ag
   const exactSlot = exact.days.flatMap((day) => day.slots)[0];
   assert.equal(exactSlot?.planning?.identityProofValid, true);
   assert.equal(exactSlot?.planning?.statusLabel, 'JIT proof waiting');
+  assert.ok(exactSlot?.ownedSocialStageHref);
+  const stageUrl = new URL(exactSlot.ownedSocialStageHref, 'https://hq.propertypredator.com');
+  assert.equal(stageUrl.pathname, '/portal/channels/live');
+  assert.equal(stageUrl.searchParams.get('network'), 'linkedin');
+  assert.equal(stageUrl.searchParams.get('planning_intent_id'), planning.intentId);
+  assert.equal(stageUrl.searchParams.get('scheduled_for'), planning.desiredFor);
+  assert.match(renderContentCalendarBody(exact), /Schedule live on LinkedIn/);
 
   const contradicted = present({
     catalog: page([item]),
@@ -318,6 +325,7 @@ test('Content Calendar validates optional durable planning and JIT provenance ag
   assert.equal(locked?.planning?.identityProofValid, false);
   assert.equal(locked?.planning?.statusTone, 'blocked');
   assert.equal(locked?.simulationEligible, false);
+  assert.equal(locked?.ownedSocialStageHref, null);
 });
 
 test('Content Calendar escapes hostile catalogue and planning labels', () => {

@@ -38,6 +38,8 @@ interface MaterialRow extends QueryResultRow {
   textSha256: unknown;
   scheduledFor: unknown;
   providerExternalId: unknown;
+  network: unknown;
+  media: unknown;
 }
 
 function fail(label: string): never {
@@ -76,6 +78,36 @@ function optionalExternalId(value: unknown): string | null {
   if (value === null) return null;
   if (typeof value !== 'string' || !SAFE_EXTERNAL_ID.test(value)) fail('external id');
   return value;
+}
+
+function socialNetwork(value: unknown): 'instagram' | 'linkedin' | 'x' {
+  if (value !== 'instagram' && value !== 'linkedin' && value !== 'x') fail('network');
+  return value;
+}
+
+function socialMedia(value: unknown): OwnedPublicSocialJobMaterial['media'] {
+  let source = value;
+  if (typeof source === 'string') {
+    try { source = JSON.parse(source) as unknown; } catch { fail('media'); }
+  }
+  if (!Array.isArray(source) || source.length > 10) fail('media');
+  return Object.freeze(source.map((candidate) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) fail('media');
+    const row = candidate as Record<string, unknown>;
+    if (typeof row.storageKey !== 'string'
+        || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,499}$/u.test(row.storageKey)
+        || row.storageKey.includes('..') || row.storageKey.includes('//')
+        || typeof row.blobSha256 !== 'string' || !SHA256.test(row.blobSha256)
+        || typeof row.mimeType !== 'string'
+        || !/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/u.test(row.mimeType)) {
+      fail('media');
+    }
+    return Object.freeze({
+      storageKey: row.storageKey,
+      blobSha256: row.blobSha256,
+      mimeType: row.mimeType,
+    });
+  }));
 }
 
 function exactClaim(
@@ -171,8 +203,9 @@ export class PgOwnedPublicSocialLiveRepository implements OwnedPublicSocialLiveR
                   profile_key_sha256 AS "profileKeySha256", operation_tag AS "operationTag",
                   idempotency_key AS "idempotencyKey", text_body AS "textBody",
                   encode(text_sha256, 'hex') AS "textSha256", scheduled_for AS "scheduledFor",
-                  provider_external_id AS "providerExternalId"
-           FROM app_private.load_owned_social_job($1::uuid, $2::uuid, $3::bigint, $4::bytea)`,
+                  provider_external_id AS "providerExternalId",
+                  network, media
+           FROM app_private.load_owned_social_job_v2($1::uuid, $2::uuid, $3::bigint, $4::bytea)`,
           [input.workspaceId, input.jobId, input.leaseVersion, input.leaseToken],
         );
         if (result.rows.length !== 1 || !result.rows[0]) fail('material cardinality');
@@ -183,7 +216,7 @@ export class PgOwnedPublicSocialLiveRepository implements OwnedPublicSocialLiveR
             || row.attemptKind !== input.attemptKind) fail('material binding');
         if (typeof row.operationTag !== 'string' || !OPERATION_TAG.test(row.operationTag)
             || typeof row.idempotencyKey !== 'string' || !SHA256.test(row.idempotencyKey)
-            || typeof row.textBody !== 'string' || row.textBody.length < 1 || row.textBody.length > 280
+            || typeof row.textBody !== 'string' || row.textBody.length < 1 || row.textBody.length > 3_000
             || typeof row.textSha256 !== 'string' || !SHA256.test(row.textSha256)) {
           fail('material payload');
         }
@@ -198,6 +231,8 @@ export class PgOwnedPublicSocialLiveRepository implements OwnedPublicSocialLiveR
           textSha256: row.textSha256,
           scheduledFor: optionalTimestamp(row.scheduledFor, 'scheduled time'),
           externalId: optionalExternalId(row.providerExternalId),
+          network: socialNetwork(row.network),
+          media: socialMedia(row.media),
         });
       },
     );

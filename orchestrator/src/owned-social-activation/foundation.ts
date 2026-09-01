@@ -13,6 +13,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import type { OwnedPublicSocialNetwork } from '../public-social-outbound/owned-live-foundation.js';
 
 export const OWNED_SOCIAL_ACTIVATION_CONTRACT =
   'propertypredator.owned-social-activation-readiness/v1' as const;
@@ -115,6 +116,8 @@ export function ownedSocialAccountDigest(accountReference: string): string {
 }
 
 export interface OwnedSocialActivationTarget {
+  readonly network?: OwnedPublicSocialNetwork;
+  readonly planningIntentId?: string;
   readonly workspaceId: string;
   readonly providerConnectionId: string;
   readonly profileId: string;
@@ -290,6 +293,8 @@ function ownedSocialStagingIdentity(
     target.workspaceId,
     target.providerConnectionId,
     target.profileId,
+    target.network ?? 'x',
+    target.planningIntentId ?? '',
     target.contentVersionId,
     target.approvalDecisionId,
     operationTag,

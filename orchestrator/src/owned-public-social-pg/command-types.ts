@@ -1,6 +1,9 @@
 import type { Pool } from 'pg';
 import type { DatabaseRequestContext } from '../db/rls.js';
-import type { OwnedProfileKeyEnvelope } from '../public-social-outbound/owned-live-foundation.js';
+import type {
+  OwnedProfileKeyEnvelope,
+  OwnedPublicSocialNetwork,
+} from '../public-social-outbound/owned-live-foundation.js';
 
 export const OWNED_PUBLIC_SOCIAL_COMMAND_DATABASE_ROLE =
   'r72_owned_social_command' as const;
@@ -19,12 +22,15 @@ export type OwnedPublicSocialLiveUserContext = DatabaseRequestContext & Readonly
  * profile key.
  */
 export interface RecordOwnedPublicSocialProfileCommand {
+  readonly network?: OwnedPublicSocialNetwork;
   readonly profileId: string;
   readonly displayName: string;
   readonly providerProfileRefSha256: string;
   readonly ownedAccountRefSha256: string;
   readonly envelope: OwnedProfileKeyEnvelope;
-  readonly xOAuthLinkEvidenceSha256: string;
+  readonly providerLinkEvidenceSha256?: string;
+  /** Legacy alias accepted only while old X fixtures are retired. */
+  readonly xOAuthLinkEvidenceSha256?: string;
   readonly linkedAt: string;
   readonly evidenceObservedAt: string;
 }
@@ -36,6 +42,8 @@ export interface RevokeOwnedPublicSocialProfileCommand {
 }
 
 export interface EnqueueOwnedPublicSocialJobCommand {
+  readonly network?: OwnedPublicSocialNetwork;
+  readonly planningIntentId?: string;
   readonly profileId: string;
   readonly contentItemId: string;
   readonly contentVersionId: string;

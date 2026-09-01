@@ -16,7 +16,9 @@ import {
   type AyrshareOwnedLiveTransport,
   type OwnedPublicSocialLiveRepository,
   type OwnedPublicSocialLiveRuntimeConfig,
+  type OwnedPublicSocialMediaResolver,
 } from '../../public-social-outbound/owned-live-foundation.js';
+import type { OwnedPublicSocialJobMaterial } from '../../public-social-outbound/owned-live-foundation.js';
 
 export const OWNED_PUBLIC_SOCIAL_LIVE_WORKER_SERVICE =
   'property-predator-owned-public-social-live';
@@ -74,7 +76,7 @@ export interface OwnedPublicSocialWorkerReadiness {
   readonly mode: 'disabled' | 'owned_profile_live';
   readonly provider: Readonly<{
     id: 'ayrshare';
-    network: 'x';
+    network: 'instagram' | 'linkedin' | 'instagram_linkedin' | 'x';
     credentialScope: 'single-owned-profile';
     credentialsLoaded: boolean;
     adapterInstantiated: boolean;
@@ -127,6 +129,7 @@ export interface OwnedPublicSocialWorkerDependencies {
   readonly createTransport?: (
     secrets: AyrshareOwnedLiveSecrets,
   ) => AyrshareOwnedLiveTransport;
+  readonly createMediaResolver?: (env: NodeJS.ProcessEnv) => OwnedPublicSocialMediaResolver;
   readonly runCycle?: typeof runOwnedPublicSocialLiveOnce;
   readonly randomToken?: () => Uint8Array;
   readonly writeReadiness?: (line: string) => void;
@@ -165,6 +168,28 @@ function exactEncryptionKey(raw: string | undefined): Buffer {
     throw new Error('Owned public-social profile encryption key is invalid');
   }
   return decoded;
+}
+
+function defaultMediaResolver(env: NodeJS.ProcessEnv): OwnedPublicSocialMediaResolver {
+  const origin = (env.PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN ?? '').trim().replace(/\/+$/u, '');
+  if (origin && !/^https:\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:\/[A-Za-z0-9._~/-]*)?$/u.test(origin)) {
+    throw new Error('PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN is invalid');
+  }
+  return Object.freeze({
+    async resolve(input: Readonly<{
+      workspaceId: string;
+      jobId: string;
+      scheduledFor: string | null;
+      media: NonNullable<OwnedPublicSocialJobMaterial['media']>;
+    }>) {
+      if (input.media.length === 0) return Object.freeze([]);
+      if (!origin) throw new Error('Owned public-social media origin is unavailable');
+      return Object.freeze(input.media.map((item) => {
+        const path = item.storageKey.split('/').map(encodeURIComponent).join('/');
+        return `${origin}/${path}`;
+      }));
+    },
+  });
 }
 
 function assertExactDatabaseIdentity(env: NodeJS.ProcessEnv): void {
@@ -237,14 +262,16 @@ export function loadOwnedPublicSocialWorkerConfig(
     encryptionKeyVersion,
     secrets: Object.freeze({
       apiKey: exactSecret(env.AYRSHARE_API_KEY, 'AYRSHARE_API_KEY'),
-      xOAuth1ApiKey: exactSecret(
-        env.AYRSHARE_X_OAUTH1_API_KEY,
-        'AYRSHARE_X_OAUTH1_API_KEY',
-      ),
-      xOAuth1ApiSecret: exactSecret(
-        env.AYRSHARE_X_OAUTH1_API_SECRET,
-        'AYRSHARE_X_OAUTH1_API_SECRET',
-      ),
+      ...(runtime.network === 'x' ? {
+        xOAuth1ApiKey: exactSecret(
+          env.AYRSHARE_X_OAUTH1_API_KEY,
+          'AYRSHARE_X_OAUTH1_API_KEY',
+        ),
+        xOAuth1ApiSecret: exactSecret(
+          env.AYRSHARE_X_OAUTH1_API_SECRET,
+          'AYRSHARE_X_OAUTH1_API_SECRET',
+        ),
+      } : {}),
     }),
   });
 }
@@ -280,7 +307,7 @@ function readinessFor(
     mode: config.mode,
     provider: Object.freeze({
       id: 'ayrshare',
-      network: 'x',
+      network: config.runtime.network,
       credentialScope: 'single-owned-profile',
       credentialsLoaded: active,
       adapterInstantiated: active,
@@ -340,6 +367,7 @@ export async function startOwnedPublicSocialLiveWorker(
 
   let repository: OwnedPublicSocialLiveRepository | null = null;
   let transport: AyrshareOwnedLiveTransport | null = null;
+  let mediaResolver: OwnedPublicSocialMediaResolver | null = null;
   if (config.mode === 'owned_profile_live') {
     try {
       repository = (dependencies.createRepository
@@ -354,6 +382,7 @@ export async function startOwnedPublicSocialLiveWorker(
           providerEffectsEnabled: true,
           emergencyPaused: false,
         })))(config.secrets);
+      mediaResolver = (dependencies.createMediaResolver ?? defaultMediaResolver)(env);
     } catch (error) {
       await pool.end().catch(() => undefined);
       throw error;
@@ -382,7 +411,7 @@ export async function startOwnedPublicSocialLiveWorker(
     if (stopping) return Promise.reject(new Error('Owned public-social worker is stopping'));
     if (inFlight) return inFlight;
     if (config.mode === 'disabled') return Promise.resolve('disabled');
-    if (!repository || !transport) {
+    if (!repository || !transport || !mediaResolver) {
       return Promise.reject(new Error('Owned public-social live composition is incomplete'));
     }
     const token = (dependencies.randomToken ?? (() => randomBytes(32)))();
@@ -396,6 +425,7 @@ export async function startOwnedPublicSocialLiveWorker(
       encryptionKey: config.encryptionKey,
       encryptionKeyVersion: config.encryptionKeyVersion,
       leaseToken: Buffer.from(token),
+      mediaResolver,
     }).finally(() => { inFlight = undefined; });
     return inFlight;
   };

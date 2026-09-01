@@ -51,6 +51,7 @@ const APPROVAL_DECISION_ID = 'fc600000-0000-4000-8000-000000000111';
 const SOURCE_ATTESTATION_ID = 'fc700000-0000-4000-8000-000000000121';
 const REVOCATION_ID = 'fc800000-0000-4000-8000-000000000131';
 const JOB_ID = 'fc900000-0000-4000-8000-000000000141';
+const PLANNING_INTENT_ID = 'fca00000-0000-4000-8000-000000000151';
 
 /** A deliberately recognisable clear Profile Key. It must never be echoed. */
 const PROFILE_KEY = 'SUPERSECRETPROFILEKEY123';
@@ -196,7 +197,16 @@ function stageFields(): Record<string, string> {
     source_attestation_id: SOURCE_ATTESTATION_ID,
     owned_account: OWNED_ACCOUNT,
     operation_tag: OPERATION_TAG,
+    scheduled_for: '2026-09-02T09:00:00.000Z',
     confirm_stage: 'STAGE',
+  };
+}
+
+function calendarStageFields(): Record<string, string> {
+  return {
+    ...stageFields(),
+    network: 'instagram',
+    planning_intent_id: PLANNING_INTENT_ID,
   };
 }
 
@@ -472,6 +482,20 @@ test('the bind seam receives exactly the request identity and the parsed fields'
   }]);
 });
 
+test('the Instagram bind route attests publish permission instead of legacy X OAuth permission', async () => {
+  const { service, calls } = fakeBinding();
+  await call(
+    LIVE_CHANNELS_OWNED_SOCIAL_BIND_ROUTE,
+    postgres({ ownedSocialBinding: service }),
+    COOKIE,
+    'POST',
+    encodeForm({ ...bindFields(), network: 'instagram' }),
+  );
+  assert.equal(calls.length, 1);
+  assert.equal((calls[0]?.input as { network?: string }).network, 'instagram');
+  assert.equal((calls[0]?.input as { oauthPermissions?: string }).oauthPermissions, 'publish');
+});
+
 test('the revoke and staging seams receive exactly the request identity and parsed fields', async () => {
   const revoke = fakeBinding();
   await call(
@@ -511,6 +535,7 @@ test('the revoke and staging seams receive exactly the request identity and pars
       sourceAttestationId: SOURCE_ATTESTATION_ID,
       ownedAccountReference: OWNED_ACCOUNT,
       operationTag: OPERATION_TAG,
+      scheduledFor: '2026-09-02T09:00:00.000Z',
     },
   }]);
 });
@@ -603,6 +628,7 @@ function stageInput(overrides: Record<string, unknown> = {}) {
     sourceAttestationId: SOURCE_ATTESTATION_ID,
     operationTag: OPERATION_TAG,
     ownedAccountReference: OWNED_ACCOUNT,
+    scheduledFor: null,
     ...overrides,
   } as never;
 }
@@ -661,13 +687,16 @@ test('a bound profile travels as ciphertext and digests, never as the clear key'
   for (const digest of [
     command.providerProfileRefSha256,
     command.ownedAccountRefSha256,
-    command.xOAuthLinkEvidenceSha256,
+    command.providerLinkEvidenceSha256 ?? command.xOAuthLinkEvidenceSha256 ?? '',
   ]) {
     assert.match(digest, SHA256_HEX);
   }
   assert.equal(command.providerProfileRefSha256, sha(PROFILE_REFERENCE));
   assert.equal(command.ownedAccountRefSha256, sha(OWNED_ACCOUNT));
-  assert.equal(command.xOAuthLinkEvidenceSha256, sha(OAUTH_EVIDENCE));
+  assert.equal(
+    command.providerLinkEvidenceSha256 ?? command.xOAuthLinkEvidenceSha256,
+    sha(OAUTH_EVIDENCE),
+  );
 
   // Nothing the command boundary receives contains the clear key or account.
   const serialised = JSON.stringify(command);
@@ -678,6 +707,18 @@ test('a bound profile travels as ciphertext and digests, never as the clear key'
   const returned = JSON.stringify(outcome);
   assert.equal(returned.includes(PROFILE_KEY), false);
   assert.equal(returned.includes(OWNED_ACCOUNT), false);
+});
+
+test('an Instagram profile is sealed with network-bound AAD and generic link evidence', async () => {
+  const commands = commandServiceProbe();
+  const service = serviceUnder({ commands });
+  const outcome = await service.recordProfile(IDENTITY, recordInput({
+    network: 'instagram', oauthPermissions: 'publish',
+  }));
+  assert.equal(outcome.ok, true);
+  assert.equal(commands.recorded[0]?.network, 'instagram');
+  assert.match(commands.recorded[0]?.providerLinkEvidenceSha256 ?? '', SHA256_HEX);
+  assert.equal(commands.recorded[0]?.xOAuthLinkEvidenceSha256, undefined);
 });
 
 test('a blocked readiness verdict stops staging before the enqueue is attempted', async () => {
@@ -730,6 +771,85 @@ test('a ready verdict enqueues one job with self-derived, distinct scope digests
     idempotencyKeySha256: expected.idempotencyKeySha256,
     caps: { daily: 1, monthly: 3 },
   });
+});
+
+test('calendar staging forwards the exact Instagram intent and UTC time to the seam', async () => {
+  const stage = fakeBinding();
+  await call(
+    LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE,
+    postgres({ ownedSocialBinding: stage.service }),
+    COOKIE,
+    'POST',
+    encodeForm(calendarStageFields()),
+  );
+  assert.deepEqual(stage.calls, [{
+    method: 'stagePublication',
+    identity: { sessionToken: SESSION, requestId: REQUEST_ID },
+    input: {
+      network: 'instagram', planningIntentId: PLANNING_INTENT_ID,
+      profileId: PROFILE_ID, contentItemId: CONTENT_ITEM_ID,
+      contentVersionId: CONTENT_VERSION_ID, approvalRequestId: APPROVAL_REQUEST_ID,
+      approvalDecisionId: APPROVAL_DECISION_ID, sourceAttestationId: SOURCE_ATTESTATION_ID,
+      ownedAccountReference: OWNED_ACCOUNT, operationTag: OPERATION_TAG,
+      scheduledFor: '2026-09-02T09:00:00.000Z',
+    },
+  }]);
+});
+
+test('a canonical calendar instant is preserved through readiness, digesting and enqueue', async () => {
+  const commands = commandServiceProbe();
+  const readinessCalls: unknown[] = [];
+  const service = serviceUnder({ commands, readinessCalls });
+  const scheduledFor = '2026-09-02T09:00:00.000Z';
+
+  const outcome = await service.stagePublication(IDENTITY, stageInput({ scheduledFor }));
+
+  assert.equal(outcome.ok, true);
+  assert.equal((readinessCalls[0] as { scheduledFor: string }).scheduledFor, scheduledFor);
+  assert.equal(commands.enqueued[0]?.scheduledFor, scheduledFor);
+});
+
+test('Instagram calendar staging relies on the atomic v2 enqueue instead of legacy X readiness', async () => {
+  const commands = commandServiceProbe();
+  const readinessCalls: unknown[] = [];
+  const service = serviceUnder({ commands, readiness: 'blocked', readinessCalls });
+  const scheduledFor = '2026-09-02T09:00:00.000Z';
+  const outcome = await service.stagePublication(IDENTITY, stageInput({
+    network: 'instagram', planningIntentId: PLANNING_INTENT_ID, scheduledFor,
+  }));
+  assert.equal(outcome.ok, true);
+  assert.deepEqual(readinessCalls, []);
+  assert.equal(commands.enqueued[0]?.network, 'instagram');
+  assert.equal(commands.enqueued[0]?.planningIntentId, PLANNING_INTENT_ID);
+  assert.equal(commands.enqueued[0]?.scheduledFor, scheduledFor);
+});
+
+test('Instagram and LinkedIn calendar staging requires the exact calendar instant', async () => {
+  for (const network of ['instagram', 'linkedin'] as const) {
+    const commands = commandServiceProbe();
+    const readinessCalls: unknown[] = [];
+    const service = serviceUnder({ commands, readinessCalls });
+    const outcome = await service.stagePublication(IDENTITY, stageInput({
+      network, planningIntentId: PLANNING_INTENT_ID, scheduledFor: null,
+    }));
+    assert.deepEqual(outcome, { ok: false, kind: 'validation' });
+    assert.deepEqual(readinessCalls, []);
+    assert.deepEqual(commands.enqueued, []);
+  }
+});
+
+test('a non-canonical calendar instant fails before readiness or enqueue', async () => {
+  const commands = commandServiceProbe();
+  const readinessCalls: unknown[] = [];
+  const service = serviceUnder({ commands, readinessCalls });
+
+  const outcome = await service.stagePublication(IDENTITY, stageInput({
+    scheduledFor: '2026-09-02T10:00:00+01:00',
+  }));
+
+  assert.deepEqual(outcome, { ok: false, kind: 'validation' });
+  assert.deepEqual(readinessCalls, []);
+  assert.deepEqual(commands.enqueued, []);
 });
 
 test('postgres failures map onto one honest kind each and never leak the error', async () => {

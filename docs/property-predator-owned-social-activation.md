@@ -1,4 +1,8 @@
-# Property Predator — owned public social (Ayrshare/X) activation readiness
+# Property Predator — owned public social activation readiness
+
+> Current launch target: **Instagram + LinkedIn through Ayrshare and the Growth HQ calendar**. Migration `0066` extends the original `0052` X-only foundation with network-specific profile evidence, exact planning-intent binding and immutable approved media. X is retained only as a backwards-compatible code path and is deferred from the production manifest until an owned X account and its separate BYOK/OAuth requirements are available.
+
+For the Instagram/LinkedIn launch, Render uses `PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK=instagram_linkedin`, `AYRSHARE_API_KEY`, the profile-envelope key/version and `PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN`. The X OAuth1 secrets described later in this historical foundation section are **not** required or present for the current launch. Each calendar publication is admitted only when its exact immutable planning intent, matching network target, current content approval, fresh source attestation and approved media set pass the `0066` database command.
 
 This rail is composed and dark. Nothing in this document publishes a post,
 connects an account or enables a provider effect. A first owned-account

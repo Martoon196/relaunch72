@@ -1359,6 +1359,59 @@ function campaignCanonicalInstant(value: string | null): value is string {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
 }
 
+function ownedSocialCalendarPrefill(query: URLSearchParams): Readonly<{
+  network: 'instagram' | 'linkedin';
+  planningIntentId: string;
+  contentItemId: string;
+  contentVersionId: string;
+  approvalRequestId: string;
+  approvalDecisionId: string;
+  sourceAttestationId: string;
+  scheduledFor: string;
+  operationTag: string;
+}> | undefined {
+  if (query.get('stage') !== 'owned_social') return undefined;
+  const names = [
+    'network', 'planning_intent_id', 'content_item_id', 'content_version_id', 'approval_request_id',
+    'approval_decision_id', 'source_attestation_id', 'scheduled_for', 'operation_tag',
+  ] as const;
+  if (names.some((name) => query.getAll(name).length !== 1)) return undefined;
+  const value = (name: typeof names[number]): string => query.get(name) ?? '';
+  const values = {
+    network: value('network'),
+    planning_intent_id: value('planning_intent_id'),
+    content_item_id: value('content_item_id'),
+    content_version_id: value('content_version_id'),
+    approval_request_id: value('approval_request_id'),
+    approval_decision_id: value('approval_decision_id'),
+    source_attestation_id: value('source_attestation_id'),
+    scheduled_for: value('scheduled_for'),
+    operation_tag: value('operation_tag'),
+  };
+  if ((values.network !== 'instagram' && values.network !== 'linkedin')
+      || !CRM_OBJECT_ID.test(values.planning_intent_id)
+      || !CRM_OBJECT_ID.test(values.content_item_id)
+      || !CRM_OBJECT_ID.test(values.content_version_id)
+      || !CRM_OBJECT_ID.test(values.approval_request_id)
+      || !CRM_OBJECT_ID.test(values.approval_decision_id)
+      || !CRM_OBJECT_ID.test(values.source_attestation_id)
+      || !campaignCanonicalInstant(values.scheduled_for)
+      || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/u.test(values.operation_tag)) {
+    return undefined;
+  }
+  return Object.freeze({
+    network: values.network as 'instagram' | 'linkedin',
+    planningIntentId: values.planning_intent_id,
+    contentItemId: values.content_item_id,
+    contentVersionId: values.content_version_id,
+    approvalRequestId: values.approval_request_id,
+    approvalDecisionId: values.approval_decision_id,
+    sourceAttestationId: values.source_attestation_id,
+    scheduledFor: values.scheduled_for,
+    operationTag: values.operation_tag,
+  });
+}
+
 function crmSnapshotRequest(path: string, query: URLSearchParams): PortalCrmSnapshotRequest {
   const cursorValues = query.getAll(CRM_PAGE_QUERY_KEY);
   if (cursorValues.length > 1) throw new PortalCrmPageCursorError();
@@ -2719,6 +2772,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
             revoke: randomUUID(),
             stage: randomUUID(),
           },
+          ownedSocialStagePrefill: ownedSocialCalendarPrefill(url.searchParams),
           smsCommandAvailable: Boolean(deps.smsBinding),
           smsCommandKeys: {
             bind: randomUUID(),
@@ -2826,14 +2880,16 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     );
     const allowed = p === LIVE_CHANNELS_OWNED_SOCIAL_BIND_ROUTE
       ? new Set(['_csrf', 'command_key', 'profile_id', 'display_name', 'profile_reference',
-        'owned_account', 'profile_credential', 'oauth_evidence', 'linked_at',
+        'network', 'owned_account', 'profile_credential', 'oauth_evidence', 'linked_at',
         'evidence_observed_at', 'confirm_owned'])
       : p === LIVE_CHANNELS_OWNED_SOCIAL_REVOKE_ROUTE
         ? new Set(['_csrf', 'command_key', 'profile_id', 'reason_code',
           'revocation_evidence', 'confirm_revoke'])
         : new Set(['_csrf', 'command_key', 'profile_id', 'content_item_id',
+          'network', 'planning_intent_id',
           'content_version_id', 'approval_request_id', 'approval_decision_id',
-          'source_attestation_id', 'owned_account', 'operation_tag', 'confirm_stage']);
+          'source_attestation_id', 'owned_account', 'operation_tag', 'scheduled_for',
+          'confirm_stage']);
     const confirmField = p === LIVE_CHANNELS_OWNED_SOCIAL_BIND_ROUTE
       ? 'confirm_owned'
       : p === LIVE_CHANNELS_OWNED_SOCIAL_REVOKE_ROUTE ? 'confirm_revoke' : 'confirm_stage';
@@ -2852,14 +2908,18 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     const identity = crmIdentity(sessionToken, deps);
     const profileId = oneFormValue(form, 'profile_id') ?? '';
     if (p === LIVE_CHANNELS_OWNED_SOCIAL_BIND_ROUTE) {
+      const selectedNetwork = oneFormValue(form, 'network');
       const outcome = await deps.ownedSocialBinding.recordProfile(identity, {
         profileId,
+        ...(selectedNetwork
+          ? { network: selectedNetwork as 'instagram' | 'linkedin' }
+          : {}),
         displayName: oneFormValue(form, 'display_name') ?? '',
         providerProfileReference: oneFormValue(form, 'profile_reference') ?? '',
         ownedAccountReference: oneFormValue(form, 'owned_account') ?? '',
         profileKey: oneFormValue(form, 'profile_credential') ?? '',
         ownershipAttested: true,
-        oauthPermissions: 'read_write',
+        oauthPermissions: selectedNetwork ? 'publish' : 'read_write',
         oauthLinkEvidence: oneFormValue(form, 'oauth_evidence') ?? '',
         linkedAt: oneFormValue(form, 'linked_at') ?? '',
         evidenceObservedAt: oneFormValue(form, 'evidence_observed_at') ?? '',
@@ -2876,6 +2936,12 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
     const outcome = await deps.ownedSocialBinding.stagePublication(identity, {
       profileId,
+      ...(oneFormValue(form, 'network')
+        ? { network: oneFormValue(form, 'network') as 'instagram' | 'linkedin' }
+        : {}),
+      ...(oneFormValue(form, 'planning_intent_id')
+        ? { planningIntentId: oneFormValue(form, 'planning_intent_id')! }
+        : {}),
       contentItemId: oneFormValue(form, 'content_item_id') ?? '',
       contentVersionId: oneFormValue(form, 'content_version_id') ?? '',
       approvalRequestId: oneFormValue(form, 'approval_request_id') ?? '',
@@ -2883,6 +2949,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       sourceAttestationId: oneFormValue(form, 'source_attestation_id') ?? '',
       ownedAccountReference: oneFormValue(form, 'owned_account') ?? '',
       operationTag: oneFormValue(form, 'operation_tag') ?? '',
+      scheduledFor: oneFormValue(form, 'scheduled_for') || null,
     });
     if (outcome.ok) return ownedSocialNotice('publication_staged');
     // 'blocked' means the database refused the evidence; 'forbidden' means the

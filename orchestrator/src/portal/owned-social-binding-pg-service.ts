@@ -45,6 +45,10 @@ const REASON_CODE = /^[a-z][a-z0-9_.:-]{0,99}$/u;
 const OPERATION_TAG = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/u;
 const REFERENCE = /^[\x21-\x7e]{1,200}$/u;
 
+function liveNetwork(value: unknown): value is 'instagram' | 'linkedin' | 'x' {
+  return value === 'instagram' || value === 'linkedin' || value === 'x';
+}
+
 function failed(kind: PortalOwnedSocialFailure['kind']): PortalOwnedSocialFailure {
   return Object.freeze({ ok: false, kind });
 }
@@ -118,10 +122,11 @@ export class PgPortalOwnedSocialBindingService implements PortalOwnedSocialBindi
     const encryption = this.#dependencies.profileEncryption;
     if (!encryption) return failed('unavailable');
     const displayName = typeof input.displayName === 'string' ? input.displayName.trim() : '';
-    if (!UUID.test(input.profileId)
+    const selectedNetwork = input.network ?? 'x';
+    if (!UUID.test(input.profileId) || !liveNetwork(selectedNetwork)
         || displayName.length < 1 || displayName.length > 120
         || input.ownershipAttested !== true
-        || input.oauthPermissions !== 'read_write'
+        || input.oauthPermissions !== (selectedNetwork === 'x' ? 'read_write' : 'publish')
         || !REFERENCE.test(input.providerProfileReference)
         || !REFERENCE.test(input.ownedAccountReference)
         || !REFERENCE.test(input.oauthLinkEvidence)
@@ -142,14 +147,18 @@ export class PgPortalOwnedSocialBindingService implements PortalOwnedSocialBindi
         profileKey: input.profileKey,
         keyVersion: encryption.keyVersion,
         encryptionKey: encryption.key,
+        network: selectedNetwork,
       });
       const outcome = await this.#dependencies.commandService.recordProfile(context as never, {
+        ...(input.network === undefined ? {} : { network: selectedNetwork }),
         profileId: input.profileId.toLowerCase(),
         displayName,
         providerProfileRefSha256: digestOf(input.providerProfileReference.trim()),
         ownedAccountRefSha256: ownedSocialAccountDigest(input.ownedAccountReference),
         envelope,
-        xOAuthLinkEvidenceSha256: digestOf(input.oauthLinkEvidence.trim()),
+        ...(input.network === undefined
+          ? { xOAuthLinkEvidenceSha256: digestOf(input.oauthLinkEvidence.trim()) }
+          : { providerLinkEvidenceSha256: digestOf(input.oauthLinkEvidence.trim()) }),
         linkedAt: input.linkedAt,
         evidenceObservedAt: input.evidenceObservedAt,
       });
@@ -194,10 +203,14 @@ export class PgPortalOwnedSocialBindingService implements PortalOwnedSocialBindi
     identity: PortalCrmRequestIdentity,
     input: Omit<PortalOwnedSocialStageInput, 'operationTag'>,
   ): Promise<PortalOwnedSocialReadinessResult> {
-    if (!UUID.test(input.profileId) || !UUID.test(input.contentItemId)
+    const selectedNetwork = input.network ?? 'x';
+    if (!UUID.test(input.profileId) || !liveNetwork(selectedNetwork)
+        || (input.planningIntentId !== undefined && !UUID.test(input.planningIntentId))
+        || !UUID.test(input.contentItemId)
         || !UUID.test(input.contentVersionId) || !UUID.test(input.approvalRequestId)
         || !UUID.test(input.approvalDecisionId) || !UUID.test(input.sourceAttestationId)
-        || !REFERENCE.test(input.ownedAccountReference)) {
+        || !REFERENCE.test(input.ownedAccountReference)
+        || (input.scheduledFor !== null && !canonicalInstant(input.scheduledFor))) {
       return failed('validation');
     }
     try {
@@ -205,6 +218,8 @@ export class PgPortalOwnedSocialBindingService implements PortalOwnedSocialBindi
       if (!context) return failed('unauthenticated');
       const report = await this.#dependencies.readinessProbe.readiness(context, {
         workspaceId: context.workspaceId,
+        network: selectedNetwork,
+        planningIntentId: input.planningIntentId?.toLowerCase(),
         providerConnectionId: this.providerConnectionId,
         profileId: input.profileId.toLowerCase(),
         contentItemId: input.contentItemId.toLowerCase(),
@@ -213,7 +228,7 @@ export class PgPortalOwnedSocialBindingService implements PortalOwnedSocialBindi
         approvalDecisionId: input.approvalDecisionId.toLowerCase(),
         sourceAttestationId: input.sourceAttestationId.toLowerCase(),
         expectedOwnedAccountSha256: ownedSocialAccountDigest(input.ownedAccountReference),
-        scheduledFor: null,
+        scheduledFor: input.scheduledFor,
       });
       return Object.freeze({ ok: true, report });
     } catch (error) {
@@ -225,11 +240,17 @@ export class PgPortalOwnedSocialBindingService implements PortalOwnedSocialBindi
     identity: PortalCrmRequestIdentity,
     input: PortalOwnedSocialStageInput,
   ): Promise<PortalOwnedSocialStageResult> {
-    if (!UUID.test(input.profileId) || !UUID.test(input.contentItemId)
+    const selectedNetwork = input.network ?? 'x';
+    if (!UUID.test(input.profileId) || !liveNetwork(selectedNetwork)
+        || (input.planningIntentId !== undefined && !UUID.test(input.planningIntentId))
+        || ((selectedNetwork === 'instagram' || selectedNetwork === 'linkedin')
+          && (input.planningIntentId === undefined || input.scheduledFor === null))
+        || !UUID.test(input.contentItemId)
         || !UUID.test(input.contentVersionId) || !UUID.test(input.approvalRequestId)
         || !UUID.test(input.approvalDecisionId) || !UUID.test(input.sourceAttestationId)
         || !OPERATION_TAG.test(input.operationTag)
-        || !REFERENCE.test(input.ownedAccountReference)) {
+        || !REFERENCE.test(input.ownedAccountReference)
+        || (input.scheduledFor !== null && !canonicalInstant(input.scheduledFor))) {
       return failed('validation');
     }
     try {
@@ -237,8 +258,10 @@ export class PgPortalOwnedSocialBindingService implements PortalOwnedSocialBindi
       if (!context) return failed('unauthenticated');
       // The database is the only authority on whether this may publish. A
       // blocked readiness verdict stops the enqueue before it is attempted.
-      const readiness = await this.#dependencies.readinessProbe.readiness(context, {
+      const target = {
         workspaceId: context.workspaceId,
+        network: selectedNetwork,
+        planningIntentId: input.planningIntentId?.toLowerCase(),
         providerConnectionId: this.providerConnectionId,
         profileId: input.profileId.toLowerCase(),
         contentItemId: input.contentItemId.toLowerCase(),
@@ -247,29 +270,24 @@ export class PgPortalOwnedSocialBindingService implements PortalOwnedSocialBindi
         approvalDecisionId: input.approvalDecisionId.toLowerCase(),
         sourceAttestationId: input.sourceAttestationId.toLowerCase(),
         expectedOwnedAccountSha256: ownedSocialAccountDigest(input.ownedAccountReference),
-        scheduledFor: null,
-      });
-      // Distinct from 'forbidden': the founder had the authority to ask, the
-      // evidence simply is not there. Conflating them would report a genuine
-      // permission denial as missing readiness evidence.
-      if (readiness.result !== 'ready-for-separately-authorised-owned-test') {
-        return failed('blocked');
+        scheduledFor: input.scheduledFor,
+      } as const;
+      // The legacy readiness report is X-specific. Instagram/LinkedIn are
+      // proven atomically by enqueue_owned_social_job_v2 instead, against the
+      // exact calendar intent and its approved media rows.
+      if (selectedNetwork === 'x') {
+        const readiness = await this.#dependencies.readinessProbe.readiness(context, target);
+        if (readiness.result !== 'ready-for-separately-authorised-owned-test') {
+          return failed('blocked');
+        }
       }
       // Derived here, never accepted from the caller, so the key is provably
       // bound to this exact owned profile and approved version.
-      const digests = deriveOwnedSocialStagingDigests({
-        workspaceId: context.workspaceId,
-        providerConnectionId: this.providerConnectionId,
-        profileId: input.profileId.toLowerCase(),
-        contentItemId: input.contentItemId.toLowerCase(),
-        contentVersionId: input.contentVersionId.toLowerCase(),
-        approvalRequestId: input.approvalRequestId.toLowerCase(),
-        approvalDecisionId: input.approvalDecisionId.toLowerCase(),
-        sourceAttestationId: input.sourceAttestationId.toLowerCase(),
-        expectedOwnedAccountSha256: ownedSocialAccountDigest(input.ownedAccountReference),
-        scheduledFor: null,
-      }, input.operationTag);
+      const digests = deriveOwnedSocialStagingDigests(target, input.operationTag);
       const outcome = await this.#dependencies.commandService.enqueue(context as never, {
+        ...(input.network === undefined ? {} : { network: selectedNetwork }),
+        ...(input.planningIntentId === undefined
+          ? {} : { planningIntentId: input.planningIntentId.toLowerCase() }),
         profileId: input.profileId.toLowerCase(),
         contentItemId: input.contentItemId.toLowerCase(),
         contentVersionId: input.contentVersionId.toLowerCase(),
@@ -279,7 +297,7 @@ export class PgPortalOwnedSocialBindingService implements PortalOwnedSocialBindi
         operationTag: input.operationTag,
         idempotencyKeySha256: digests.idempotencyKeySha256,
         requestSha256: digests.requestSha256,
-        scheduledFor: null,
+        scheduledFor: input.scheduledFor,
       });
       return Object.freeze({
         ok: true,

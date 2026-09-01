@@ -12,6 +12,7 @@
  */
 
 import type { OwnedSocialActivationReadinessReport } from '../owned-social-activation/foundation.js';
+import type { OwnedPublicSocialNetwork } from '../public-social-outbound/owned-live-foundation.js';
 import type { PortalCrmRequestIdentity } from './crm-service.js';
 
 export type PortalOwnedSocialFailureKind =
@@ -34,6 +35,7 @@ export interface PortalOwnedSocialFailure {
  * die inside the implementation.
  */
 export interface PortalOwnedSocialRecordProfileInput {
+  readonly network?: OwnedPublicSocialNetwork;
   readonly profileId: string;
   readonly displayName: string;
   readonly providerProfileReference: string;
@@ -66,6 +68,9 @@ export interface PortalOwnedSocialRevokeProfileOutcome {
 
 /** The exact approved publication a founder is staging. */
 export interface PortalOwnedSocialStageInput {
+  readonly network?: OwnedPublicSocialNetwork;
+  /** Immutable calendar intent that supplies the network and approved media set. */
+  readonly planningIntentId?: string;
   readonly profileId: string;
   readonly contentItemId: string;
   readonly contentVersionId: string;
@@ -74,6 +79,8 @@ export interface PortalOwnedSocialStageInput {
   readonly sourceAttestationId: string;
   readonly operationTag: string;
   readonly ownedAccountReference: string;
+  /** Exact UTC calendar instant. Null means publish as soon as the worker is enabled. */
+  readonly scheduledFor: string | null;
 }
 
 export interface PortalOwnedSocialStageOutcome {

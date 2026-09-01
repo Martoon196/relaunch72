@@ -183,7 +183,7 @@ test('the agreed provider catalogue is exact and keeps social listening outside 
     [
       { rail: 'customer_email', provider: 'Mailgun EU customer email', phase: 'mandatory-first-channel' },
       { rail: 'whatsapp', provider: 'Meta WhatsApp Cloud', phase: 'deferred' },
-      { rail: 'owned_social', provider: 'Ayrshare owned X', phase: 'deferred' },
+        { rail: 'owned_social', provider: 'Ayrshare Instagram + LinkedIn', phase: 'deferred' },
       { rail: 'sms', provider: 'Twilio Messaging UK SMS', phase: 'deferred' },
       { rail: 'social_dm', provider: 'Meta Facebook and Instagram DMs', phase: 'deferred' },
     ],

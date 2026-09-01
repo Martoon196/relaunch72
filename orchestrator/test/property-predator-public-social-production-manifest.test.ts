@@ -119,7 +119,7 @@ test('0052 owned-profile worker is deployable dark with one exact live identity'
   literal(ownedLiveRail, 'DATABASE_OWNED_SOCIAL_WORKER_POOL_MAX', '1');
   literal(ownedLiveRail, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE', 'disabled');
   literal(ownedLiveRail, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_PROVIDER_ID', 'ayrshare');
-  literal(ownedLiveRail, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK', 'x');
+  literal(ownedLiveRail, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK', 'instagram_linkedin');
   literal(ownedLiveRail, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_POLL_MS', '5000');
   for (const key of [
     'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_WORKSPACE_ID',
@@ -127,9 +127,9 @@ test('0052 owned-profile worker is deployable dark with one exact live identity'
     'PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_BASE64',
     'PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_VERSION',
     'AYRSHARE_API_KEY',
-    'AYRSHARE_X_OAUTH1_API_KEY',
-    'AYRSHARE_X_OAUTH1_API_SECRET',
+    'PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN',
   ]) valueLessSlot(ownedLiveRail, key);
+  assert.doesNotMatch(ownedLiveRail, /- key: AYRSHARE_X_OAUTH1_/);
   assert.doesNotMatch(
     ownedLiveRail,
     /- key: (?:DATABASE_URL|TEST_DATABASE_URL|DATABASE_MIGRATOR_URL|DATABASE_WEB_URL|DATABASE_PUBLIC_SOCIAL_(?:COMMAND|REVALIDATOR|WORKER)_URL|SESSION_SECRET|MAILGUN_[A-Z0-9_]+|STRIPE_[A-Z0-9_]+|META_[A-Z0-9_]+|LINKEDIN_[A-Z0-9_]+)\b/,

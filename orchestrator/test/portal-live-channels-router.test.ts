@@ -167,6 +167,36 @@ test('a composed truth seam is called with the request identity and renders evid
   assert.deepEqual(calls, [{ sessionToken: SESSION, requestId: 'live-channels-request' }]);
 });
 
+test('an exact calendar handoff opens the Instagram stage form with immutable evidence prefilled', async () => {
+  const params = new URLSearchParams({
+    stage: 'owned_social', network: 'instagram',
+    planning_intent_id: '11111111-1111-4111-8111-111111111111',
+    content_item_id: '22222222-2222-4222-8222-222222222222',
+    content_version_id: '33333333-3333-4333-8333-333333333333',
+    approval_request_id: '44444444-4444-4444-8444-444444444444',
+    approval_decision_id: '55555555-5555-4555-8555-555555555555',
+    source_attestation_id: '66666666-6666-4666-8666-666666666666',
+    scheduled_for: '2026-09-02T09:30:00.000Z',
+    operation_tag: 'calendar:11111111-1111-4111-8111-111111111111',
+  });
+  const unavailable = async () => ({ ok: false as const, kind: 'unavailable' as const });
+  const result = await call(`${LIVE_CHANNELS_ROUTE}?${params}`, postgres({
+    liveChannelTruth: { snapshot: async () => ({ ok: true, snapshot: truthSnapshot() }) },
+    ownedSocialBinding: {
+      providerConnectionId: '77777777-7777-4777-8777-777777777777',
+      profileBindingComposed: true,
+      recordProfile: unavailable, revokeProfile: unavailable,
+      readiness: unavailable, stagePublication: unavailable,
+    },
+  }), COOKIE);
+  assert.equal(result.statusCode, 200);
+  assert.match(result.body, /id="plc-owned-social-stage" open/u);
+  assert.match(result.body, /name="network" value="instagram"/u);
+  assert.match(result.body, /name="planning_intent_id" value="11111111-1111-4111-8111-111111111111"/u);
+  assert.match(result.body, /name="scheduled_for" value="2026-09-02T09:30:00.000Z"/u);
+  assert.match(result.body, /Arm calendar publication/u);
+});
+
 test('composed engage-only pause seam enables deliberate pause forms with no release control', async () => {
   const result = await call(LIVE_CHANNELS_ROUTE, postgres({
     liveChannelTruth: { snapshot: async () => ({ ok: true, snapshot: truthSnapshot() }) },

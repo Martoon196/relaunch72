@@ -83,6 +83,7 @@ const migration76Url = new URL('../../src/db/migrations/0076_zernio_social_expir
 const migration77Url = new URL('../../src/db/migrations/0077_company_content_sync_session_acl_repair.sql', import.meta.url);
 const migration78Url = new URL('../../src/db/migrations/0078_company_content_adapter_catalog_acl_repair.sql', import.meta.url);
 const migration79Url = new URL('../../src/db/migrations/0079_property_predator_zernio_reply_lifecycle.sql', import.meta.url);
+const calendarMigrationUrl = new URL('../../src/db/migrations/0066_instagram_linkedin_calendar_live_rail.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -521,9 +522,9 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums through the Zernio reply lifecycle', async () => {
+test('bundled migration discovery orders and checksums through the social calendar live rail', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-73);
+  const tail = migrations.slice(-74);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0007_public_schema_hardening.sql', version: 7 },
     { filename: '0008_setup_delivery_recovery.sql', version: 8 },
@@ -598,6 +599,7 @@ test('bundled migration discovery orders and checksums through the Zernio reply 
     { filename: '0077_company_content_sync_session_acl_repair.sql', version: 77 },
     { filename: '0078_company_content_adapter_catalog_acl_repair.sql', version: 78 },
     { filename: '0079_property_predator_zernio_reply_lifecycle.sql', version: 79 },
+    { filename: '0066_instagram_linkedin_calendar_live_rail.sql', version: 66 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -673,6 +675,7 @@ test('bundled migration discovery orders and checksums through the Zernio reply 
     (await readFile(migration77Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration78Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration79Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(calendarMigrationUrl, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.

@@ -25,7 +25,7 @@ Growth HQ owns the people, attribution, consent, content, approvals, conversatio
 - CSV migration and authenticated migration-centre foundations exist; production customer data has not been imported.
 - OpenAI-backed company and affiliate generation rails are configured behind budgets, provenance and brand controls.
 - Mailgun EU is configured. The owned internal seed remains capped at **1 message per run and 3 per month**; the permission-bound customer-email rail is capped at **10 per day and 50 per month**.
-- Owned X, Meta WhatsApp and Twilio UK SMS command/worker/webhook foundations are composed with isolated identities, durable calling fences, receipts and Conversion Inbox visibility. Owned X and Twilio UK SMS now also have founder-only bind, append-only revoke and readiness-gated staging commands on the existing Live Channels surface. Provider accounts and owned-test evidence are still required before any effect.
+- Instagram and LinkedIn now share the Ayrshare owned-profile worker with calendar-bound scheduling, immutable approved-media evidence, durable calling fences and receipts. Meta WhatsApp and Twilio UK SMS retain their isolated command/worker/webhook foundations. Provider account linking and owned-test evidence are still required before any effect; X is deliberately deferred.
 - The operational Conversion Inbox now has unified channel/source truth, assignment, internal notes, reply drafting and approval, consent/opt-out visibility, Lead 360 and affiliate linkage, admin-call tasks, outcomes and next actions. Facebook/Instagram DM live transport is the explicit remaining inbox adapter gap.
 - A founder-only engage emergency pause now blocks every composed live worker at the durable `calling` transition. There is no release command in the application.
 - Emergency stops, idempotency, suppression, consent, audit and provider-operation boundaries are built into the effectful rails.
@@ -149,15 +149,15 @@ Turn the existing inbox foundation into the team's daily workspace: real email t
 
 **Build status:** backend and route workflows are complete through email, WhatsApp, social-DM projections and SMS. Remaining proof is the owned-seed round trip and production migration/readiness evidence—not another inbox implementation.
 
-### 3. Connect one owned social profile
+### 3. Connect the owned Instagram and LinkedIn profiles
 
-Select the quickest commercially sensible first transport—use the existing Ayrshare seam for speed or complete the lower-cost Zernio route if its live contract is ready. Connect one Property Predator-owned profile with explicit workspace/resource binding.
+Use the existing Ayrshare seam for speed. Connect the Property Predator-owned Instagram professional account and LinkedIn organisation/profile with separate explicit workspace, network and profile bindings.
 
 **Done when:** Growth HQ can validate the owned connection, prepare one approved test post and reconcile the provider result without exposing credentials or enabling any other profile.
 
-### 4. Deliver the Hootsuite-quality public-social surface
+### 4. Deliver the Hootsuite-quality Instagram + LinkedIn surface
 
-Operationalise Facebook, Instagram and LinkedIn first: channel previews, crop/aspect checks, scheduling, calendar movement, approval, partial failures, correction/retry, delivery receipts and useful analytics. Add TikTok and X only after their account and API constraints are confirmed.
+Operationalise Instagram and LinkedIn first: channel previews, crop/aspect checks, calendar scheduling, approval, partial failures, correction/retry, delivery receipts and useful analytics. Add Facebook publishing, TikTok and X only after their account and API constraints are confirmed.
 
 **Done when:** one campaign can become channel-correct approved variants, publish through controlled rails and report truthful per-channel outcomes.
 
@@ -216,7 +216,7 @@ Make “every lead gets called” an accountable operating system: queues, SLA c
 |---|---|---|
 | AI copy and imagery | Configured behind Brand Brain, budgets and approvals | Maintain funded restricted OpenAI project/key and approved company assets; no consumer GPT session is an application API |
 | Email | Mailgun EU owned-seed rail ready and tightly capped | Strike 1 needs no new account; customer delivery later needs approved audience, consent/suppression evidence and a separately reviewed cap increase |
-| Public social | Dark adapters, workers and account-linking seams exist | Choose first provider; obtain its key/profile binding and connect one owned Meta/LinkedIn profile |
+| Public social | Migration `0066`, calendar enqueue, approved-media resolution and the shared Instagram/LinkedIn Ayrshare worker are built | Ayrshare API key; exact linked Instagram and LinkedIn Profile Keys; approved public media origin; connection/profile bindings; one owned test post per network |
 | WhatsApp | Effects-off Meta contract exists | Verified Meta Business, WABA, owned number, app/permissions, approved templates, webhook and opt-in evidence |
 | Facebook/Instagram DMs | Effects-off Meta contract exists | Owned Page + Instagram professional account, correct app review/permissions and signed webhook subscription |
 | SMS | Twilio UK command, worker, webhook, receipts, Inbox projection and founder-only bind/revoke/readiness-gated staging composed | Owned Twilio account/sender, restricted key, Messaging Service, UK regulatory bundle, signed webhook secret and one founder-owned UK recipient with consent |
@@ -327,7 +327,8 @@ not itself authorise deployment, migration or provider effects.
 |---|---|---|
 | Customer email | Mailgun EU configured; production schema 65/65; Growth HQ web and the isolated customer-email worker live at `8b066e6`; provider credential loaded, signed receipts confirmed and dispatch active; temporary 10/day and 50/month founder-pilot caps | No new Mailgun account. Use only the founder-controlled `martin.howard1984@gmail.com` endpoint for the first proof, with the founder's written consent, suppression-clear evidence and the exact Lead 360 prepared/approved message. Complete one signed send/receipt/reply proof, observe it, then graduate or remove the aggregate pilot caps without weakening per-recipient controls. |
 | Meta WhatsApp | Command, one-at-a-time worker, challenge/webhook and Inbox receipt path composed | Verified Meta Business, App ID, WABA ID, phone-number ID, worker-only encrypted access-token binding, webhook-only app secret/verify token, one founder-owned UK recipient, and one approved **parameter-free** Property Predator test template. |
-| Owned X social | Ayrshare worker, cap fence, receipt projection and founder-only bind/revoke/readiness-gated staging workflow composed; no provider call is reachable from the portal commands | Ayrshare API key, exact linked Property Predator-owned X profile and Profile Key, X OAuth1 key/secret, 32-byte profile-encryption key/version, connection UUID, read-write OAuth/ownership evidence, and one approved link-free test post/hash. |
+| Instagram + LinkedIn social | Migration `0066` binds exact calendar intent, network target, current approval, source attestation and approved media to the Ayrshare job; one worker handles both networks and records per-job provider evidence | Ayrshare API key, exact linked owned Instagram and LinkedIn profiles/Profile Keys, approved credential-free HTTPS media origin, 32-byte profile-encryption key/version, connection/profile UUIDs, ownership/link evidence and one approved owned test post per network. |
+| X social — later build | Not active and intentionally absent from the current production manifest | Create/confirm the owned X account and developer/API funding, complete Ayrshare BYOK/OAuth1 requirements, then add X-specific profile binding, text/media contract, calendar placement, receipt proof and controlled owned-account acceptance as a separate strike. |
 | Twilio UK SMS | Command, one-at-a-time worker, signed inbound/status webhook, Inbox receipt path and founder-only bind/revoke/readiness-gated staging workflow composed; migration `0061` is applied in production | Twilio Account SID, restricted API key SID/secret, Messaging Service SID, approved UK regulatory bundle, owned UK sender, webhook auth token, and one founder-owned UK recipient plus approved message/consent/suppression evidence. |
 | Facebook/Instagram DMs | Unified Inbox projection exists; live adapter is intentionally reported `not-composed` | Owned Page and Instagram professional account, Meta app review/permissions and signed webhook subscription **after** the dedicated live inbound/reply adapter is built. |
 | Founder event bridge | Dedicated HMAC receiver, two least-privilege Growth HQ database identities, isolated Property Predator dispatcher and additive immutable outbox are live; founder fresh/replay proof is 1 receipt, 1 Growth projection, 1 Journey projection and 1 delivery attempt | No remaining code or account input for account-created events. Add future event types only when a real founder workflow supplies the authoritative source fact. |
@@ -365,7 +366,8 @@ Begin the customer experience with the founder as the sole production pilot:
    into Conversion Inbox and Lead 360, then review the customer experience and
    correct only observed issues.
 
-WhatsApp, SMS and owned X follow one rail at a time using the same owned-founder
-pattern. Facebook/Instagram DMs remain unavailable until their dedicated live
+Instagram and LinkedIn follow next through the calendar-bound owned-account
+proof. WhatsApp and SMS then follow one rail at a time. X stays on the later-build
+list until its account and API requirements exist. Facebook/Instagram DMs remain unavailable until their dedicated live
 adapter exists. The final Sol Ultra master rehearsal remains the release-wide
 verification gate before any external customer cohort.
