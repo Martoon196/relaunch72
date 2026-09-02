@@ -43,6 +43,7 @@ export interface RenderConversionInboxOptions {
 
 const CHANNEL_GLYPHS: Readonly<Record<ConversionInboxChannelFilter, string>> = Object.freeze({
   all: 'HQ', email: 'EM', whatsapp: 'WA', sms: 'SM', instagram: 'IG', facebook: 'FB',
+  linkedin: 'LI',
 });
 
 const CONVERSION_INBOX_STYLE = `
@@ -167,6 +168,8 @@ function renderTranscript(thread: ConversionInboxSelectedThreadView, timezone: s
           ? 'Twilio request signature, owned-number binding and exact sender projection verified'
         : evidence.kind === 'signed_meta_whatsapp_inbound'
           ? 'Meta raw-body HMAC, owned-number binding and exact sender projection verified'
+        : evidence.kind === 'signed_zernio_inbound'
+          ? 'Zernio signature, exact account binding and immutable inbound projection verified'
           : 'Simulator signature verified'} · Receipt ${escapeHtml(evidence.receiptLabel)} · verified ${dateTime(evidence.verifiedAt, timezone, true)}</div>`
       : '';
     return `<li class="ci-message" data-direction="${escapeHtml(message.direction)}">
@@ -184,8 +187,14 @@ function renderRailActivity(thread: ConversionInboxSelectedThreadView, timezone:
     if (thread.summary.environment === 'live') {
       const whatsapp = thread.summary.channel === 'whatsapp';
       const sms = thread.summary.channel === 'sms';
-      const provider = whatsapp ? 'Meta WhatsApp' : sms ? 'Twilio SMS' : 'Mailgun';
-      return `<section class="ci-rail-activity" data-rail-state="reconciled" aria-label="${provider} inbound reconciled"><span class="ci-rail-kicker">${provider.toUpperCase()} INBOUND</span><strong class="ci-rail-state">Reply reconciled</strong><span class="ci-rail-copy">The signed inbound event was projected into this canonical thread, Lead 360, unread work and an urgent admin call task atomically.</span></section>`;
+      const linkedin = thread.summary.channel === 'linkedin';
+      const instagram = thread.summary.channel === 'instagram';
+      const provider = whatsapp ? 'Meta WhatsApp' : sms ? 'Twilio SMS'
+        : linkedin ? 'Zernio LinkedIn' : instagram ? 'Zernio Instagram' : 'Mailgun';
+      const detail = linkedin
+        ? 'The signed inbound event was projected into this canonical thread and Lead 360. This rail is evidence-only: reply, assignment, note and send actions remain unavailable.'
+        : 'The signed inbound event was projected into this canonical thread, Lead 360, unread work and an urgent admin call task atomically.';
+      return `<section class="ci-rail-activity" data-rail-state="reconciled" aria-label="${provider} inbound reconciled"><span class="ci-rail-kicker">${provider.toUpperCase()} INBOUND</span><strong class="ci-rail-state">Reply reconciled</strong><span class="ci-rail-copy">${escapeHtml(detail)}</span></section>`;
     }
     return `<section class="ci-rail-activity" data-rail-state="none" aria-label="TEST rail activity"><span class="ci-rail-kicker">Latest TEST rail</span><strong class="ci-rail-state">No operation recorded</strong><span class="ci-rail-copy">Nothing is queued for this conversation.</span></section>`;
   }
@@ -258,6 +267,9 @@ function renderComposer(
   thread: ConversionInboxSelectedThreadView,
   security: ConversionInboxActionSecurity | undefined,
 ): string {
+  if (thread.summary.channel === 'linkedin') {
+    return '<section class="ci-composer" aria-labelledby="ci-draft-title"><div class="ci-composer-top"><strong id="ci-draft-title">LinkedIn conversation</strong><span class="ci-version">LIVE ZERNIO · READ ONLY</span></div><div class="ci-composer-bar"><div class="ci-gate-copy"><strong>Evidence visible · actions unavailable</strong>This signed Zernio conversation can be reviewed here, but Growth HQ does not expose reply, approval, queue or send controls for LinkedIn.</div></div></section>';
+  }
   if (thread.summary.environment === 'live') {
     return '<section class="ci-composer" aria-labelledby="ci-draft-title"><div class="ci-composer-top"><strong id="ci-draft-title">Operator follow-up</strong><span class="ci-version">LIVE OWNED-OFFICE PROOF</span></div><div class="ci-composer-bar"><div class="ci-gate-copy"><strong>Urgent admin call task created</strong>Use Lead 360 or Action Centre to record the call outcome and next move. No automatic customer reply is sent from this proof.</div><div class="ci-draft-actions"><a class="ci-primary" href="/portal/actions">Open Action Centre</a></div></div></section>';
   }
@@ -286,6 +298,9 @@ function renderOperations(
   thread: ConversionInboxSelectedThreadView,
   security: ConversionInboxActionSecurity | undefined,
 ): string {
+  if (thread.summary.channel === 'linkedin') {
+    return '<p class="ci-fact"><b>LinkedIn is read-only.</b> Assignment, internal-note, admin-call and reply actions are unavailable from this Zernio evidence rail.</p>';
+  }
   if (!security || !view.canWrite) {
     return '<p class="ci-fact">Operational controls require an active writable workspace session.</p>';
   }
@@ -317,6 +332,10 @@ function renderContext(
   const lead = thread.lead;
   const draft = thread.draft;
   const consentComplete = draft.consentAllowsQueueing;
+  const gate = thread.summary.channel === 'linkedin'
+    ? '<p class="ci-fact"><b>Read-only rail.</b> Consent is shown as social evidence only. It does not unlock drafting, approval, reply or provider delivery.</p><div class="ci-delivery-card" data-delivery-state="not_queued"><strong>Provider effects unavailable</strong><p>No outbound LinkedIn capability is exposed by Growth HQ.</p></div>'
+    : `<ol class="ci-gate"><li data-complete="${draft.versionNumber !== null}"><span class="ci-step">1</span><span class="ci-step-copy"><strong>Exact draft version</strong><span>${draft.versionNumber === null ? 'No immutable version yet.' : `Version ${escapeHtml(draft.versionNumber)} is the review target.`}</span></span></li><li data-complete="${draft.exactApproval}"><span class="ci-step">2</span><span class="ci-step-copy"><strong>Human approval</strong><span>${escapeHtml(draft.approvalLabel)}${draft.approvalNote ? ` · ${escapeHtml(draft.approvalNote)}` : ''}</span></span></li><li data-complete="${consentComplete}"><span class="ci-step">3</span><span class="ci-step-copy"><strong>Current consent</strong><span>${consentComplete ? 'Permitted inside the test snapshot.' : 'Gate remains closed.'}</span></span></li></ol>
+      <div class="ci-delivery-card" data-delivery-state="${escapeHtml(draft.deliveryState)}"><strong>${escapeHtml(draft.deliveryLabel)}</strong><p>${escapeHtml(deliveryExplanation(draft.deliveryState))}</p></div>`;
   return `<aside class="ci-context" aria-label="Lead and safety context">
     <section aria-labelledby="ci-lead-title"><h2 id="ci-lead-title">Lead 360 context</h2><span class="ci-lead-name">${escapeHtml(lead.displayName)}</span>${lead.companyName ? `<span class="ci-company">${escapeHtml(lead.companyName)}</span>` : ''}
       <div class="ci-lead-grid"><div class="ci-stat"><span>Journey stage</span><strong>${escapeHtml(lead.stageLabel)}</strong></div><div class="ci-stat"><span>Lead score</span><strong class="ci-score">${lead.score === null ? '—' : escapeHtml(Math.round(Math.max(0, Math.min(100, lead.score))))}</strong></div></div>
@@ -326,8 +345,7 @@ function renderContext(
     <section aria-labelledby="ci-consent-title"><h2 id="ci-consent-title">Consent checkpoint</h2><ul class="ci-consents">${thread.consents.map((consent) => renderConsent(consent, timezone)).join('')}</ul></section>
     <section aria-labelledby="ci-ops-title"><h2 id="ci-ops-title">Inbox operations</h2>${renderOperations(view, thread, security)}</section>
     <section aria-labelledby="ci-gate-title"><h2 id="ci-gate-title">Outbound safety gate</h2>
-      <ol class="ci-gate"><li data-complete="${draft.versionNumber !== null}"><span class="ci-step">1</span><span class="ci-step-copy"><strong>Exact draft version</strong><span>${draft.versionNumber === null ? 'No immutable version yet.' : `Version ${escapeHtml(draft.versionNumber)} is the review target.`}</span></span></li><li data-complete="${draft.exactApproval}"><span class="ci-step">2</span><span class="ci-step-copy"><strong>Human approval</strong><span>${escapeHtml(draft.approvalLabel)}${draft.approvalNote ? ` · ${escapeHtml(draft.approvalNote)}` : ''}</span></span></li><li data-complete="${consentComplete}"><span class="ci-step">3</span><span class="ci-step-copy"><strong>Current consent</strong><span>${consentComplete ? 'Permitted inside the test snapshot.' : 'Gate remains closed.'}</span></span></li></ol>
-      <div class="ci-delivery-card" data-delivery-state="${escapeHtml(draft.deliveryState)}"><strong>${escapeHtml(draft.deliveryLabel)}</strong><p>${escapeHtml(deliveryExplanation(draft.deliveryState))}</p></div>
+      ${gate}
     </section>
   </aside>`;
 }
@@ -338,8 +356,10 @@ function renderSelected(
 ): string {
   const thread = view.selectedThread;
   if (!thread) return '<section class="ci-empty-thread"><div><h2>Select a loaded test conversation</h2><p>The thread, Lead 360 context, consent check and approval gate will appear here. No provider is connected.</p></div></section>';
-  const mode = thread.summary.environment === 'live'
-    ? 'LIVE OWNED-OFFICE PROOF' : 'TEST / SIMULATED';
+  const mode = thread.summary.channel === 'linkedin'
+    ? 'LIVE ZERNIO · READ ONLY'
+    : thread.summary.environment === 'live'
+      ? 'LIVE OWNED-OFFICE PROOF' : 'TEST / SIMULATED';
   return `<main class="ci-thread" aria-labelledby="ci-thread-title">
     <header class="ci-thread-head"><div class="ci-thread-person"><h2 id="ci-thread-title">${escapeHtml(thread.lead.displayName)}</h2><p>${escapeHtml(thread.summary.subject ?? thread.summary.channelLabel)} · ${escapeHtml(thread.summary.stateLabel)} · ${escapeHtml(thread.summary.assignedUserName ? `Assigned to ${thread.summary.assignedUserName}` : 'Unassigned')}</p></div><span class="ci-test-stamp">${escapeHtml(thread.summary.channelLabel)}<br>${escapeHtml(mode)}</span></header>
     ${renderRailActivity(thread, view.timezone)}${renderTranscript(thread, view.timezone)}${renderComposer(view, thread, security)}
@@ -360,13 +380,18 @@ export function renderConversionInboxBody(
     { value: 'approval', label: 'Approval & rework' }, { value: 'open', label: 'Open' },
   ];
   const hasLive = view.conversations.some((item) => item.environment === 'live');
+  const hasLinkedIn = view.conversations.some((item) => item.channel === 'linkedin');
   const mode = hasLive ? 'CONTROLLED PROOF + SIMULATED' : 'TEST / SIMULATED';
   const modeDetail = hasLive
-    ? 'Only an exact signed owned-office Mailgun reply may appear as LIVE; every other loaded channel remains simulated.'
+    ? hasLinkedIn
+      ? 'Signed owned-office provider replies and exact Zernio LinkedIn projections may appear as LIVE. LinkedIn remains read-only.'
+      : 'Only exact signed owned-office provider replies may appear as LIVE; every other loaded channel remains simulated.'
     : 'Contact records may be workspace CRM data. Provider adapters are non-routable; no message here has contacted anyone.';
   const truthTitle = hasLive ? 'Evidence boundary' : 'Safety boundary';
   const truthDetail = hasLive
-    ? 'LIVE labels require an immutable Mailgun receipt bound to the owned office, exact outbound digest and one settled delivery. Simulated delivery labels remain non-routable.'
+    ? hasLinkedIn
+      ? 'LinkedIn LIVE labels require an exact signed Zernio event bound to its canonical conversation and message. No LinkedIn command or provider-effect control is exposed.'
+      : 'LIVE labels require immutable provider evidence bound to the exact conversation. Simulated delivery labels remain non-routable.'
     : 'Delivery labels describe simulator outcomes only. An approved draft is still blocked unless current channel consent also agrees.';
   return `<section class="ci" data-property-predator-conversion-inbox data-environment="${hasLive ? 'controlled' : 'test'}">
     <style>${CONVERSION_INBOX_STYLE}</style><a class="ci-skip" href="#ci-transcript">Skip to transcript</a>

@@ -381,6 +381,7 @@ LEFT JOIN LATERAL (
     AND consent.channel = CASE conversation.channel
       WHEN 'instagram' THEN 'social'
       WHEN 'facebook' THEN 'social'
+      WHEN 'linkedin' THEN 'social'
       ELSE conversation.channel
     END
     AND consent.endpoint_identity_sha256 = public.digest(
@@ -499,6 +500,7 @@ WITH target AS (
          CASE conversation.channel
            WHEN 'instagram' THEN 'social'
            WHEN 'facebook' THEN 'social'
+           WHEN 'linkedin' THEN 'social'
            ELSE conversation.channel
          END AS channel,
          point.is_verified AND point.dedupe_state = 'normal'
@@ -838,7 +840,7 @@ function mapInboundEvidence(
   const network = row.inboundNetwork;
   const providerFamily = row.inboundProviderFamily;
   if (network !== 'email' && network !== 'whatsapp' && network !== 'sms'
-      && network !== 'facebook' && network !== 'instagram') {
+      && network !== 'facebook' && network !== 'instagram' && network !== 'linkedin') {
     throw new Error('Conversion Inbox signed inbound network is invalid');
   }
   const source = providerFamily === 'mailgun_email' && network === 'email'
@@ -850,7 +852,10 @@ function mapInboundEvidence(
     : providerFamily === 'whatsapp' && network === 'whatsapp'
     ? 'whatsapp_simulator'
     : providerFamily === 'social_dm' && (network === 'facebook' || network === 'instagram')
-      ? 'social_dm_simulator' : null;
+      ? 'social_dm_simulator'
+    : providerFamily === 'zernio_social_live'
+        && (network === 'instagram' || network === 'linkedin')
+      ? 'zernio' : null;
   if (source === null) {
     throw new Error('Conversion Inbox signed inbound provider is inconsistent');
   }
@@ -861,6 +866,8 @@ function mapInboundEvidence(
         ? 'signed_twilio_sms_inbound'
       : source === 'meta_whatsapp_cloud'
         ? 'signed_meta_whatsapp_inbound'
+      : source === 'zernio'
+        ? 'signed_zernio_inbound'
         : 'signed_simulator_event',
     source,
     network,

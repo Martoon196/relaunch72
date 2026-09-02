@@ -11,7 +11,7 @@ import type {
 } from './types.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const CHANNELS = new Set(['email', 'sms', 'whatsapp', 'instagram', 'facebook']);
+const CHANNELS = new Set(['email', 'sms', 'whatsapp', 'instagram', 'facebook', 'linkedin']);
 const STATES = new Set(['open', 'snoozed', 'closed', 'quarantined']);
 const DIRECTIONS = new Set(['inbound', 'outbound', 'internal_note']);
 const LIFECYCLES = new Set(['received', 'draft', 'approval_pending', 'approved', 'committed']);

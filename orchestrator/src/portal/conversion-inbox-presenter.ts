@@ -48,14 +48,16 @@ export interface ConversionInboxSignedInboundEvidenceSnapshot {
     | 'signed_simulator_event'
     | 'signed_mailgun_inbound'
     | 'signed_meta_whatsapp_inbound'
-    | 'signed_twilio_sms_inbound';
+    | 'signed_twilio_sms_inbound'
+    | 'signed_zernio_inbound';
   readonly source:
     | 'whatsapp_simulator'
     | 'social_dm_simulator'
     | 'mailgun_eu'
     | 'meta_whatsapp_cloud'
-    | 'twilio_sms';
-  readonly network: 'email' | 'whatsapp' | 'sms' | 'facebook' | 'instagram';
+    | 'twilio_sms'
+    | 'zernio';
+  readonly network: 'email' | 'whatsapp' | 'sms' | 'facebook' | 'instagram' | 'linkedin';
   /** Opaque internal receipt UUID. No provider event/address data is exposed. */
   readonly receiptId: string;
   /** Server-side verification time, never a caller-asserted provider timestamp. */
@@ -189,9 +191,10 @@ export interface ConversionInboxSignedInboundEvidenceView
     | 'Signed TEST inbound'
     | 'Signed Mailgun inbound'
     | 'Signed Meta inbound'
-    | 'Signed Twilio inbound';
-  readonly networkLabel: 'Email' | 'WhatsApp' | 'SMS' | 'Facebook' | 'Instagram';
-  readonly networkCode: 'EM' | 'WA' | 'SMS' | 'FB' | 'IG';
+    | 'Signed Twilio inbound'
+    | 'Signed Zernio inbound';
+  readonly networkLabel: 'Email' | 'WhatsApp' | 'SMS' | 'Facebook' | 'Instagram' | 'LinkedIn';
+  readonly networkCode: 'EM' | 'WA' | 'SMS' | 'FB' | 'IG' | 'LI';
   readonly receiptLabel: string;
   readonly accessibleLabel: string;
 }
@@ -263,7 +266,7 @@ export interface PresentConversionInboxOptions {
 }
 
 const CHANNELS = new Set<ConversionInboxChannelFilter>([
-  'all', 'email', 'whatsapp', 'sms', 'instagram', 'facebook',
+  'all', 'email', 'whatsapp', 'sms', 'instagram', 'facebook', 'linkedin',
 ]);
 const QUEUES = new Set<ConversionInboxQueueFilter>(['all', 'unread', 'approval', 'open']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -274,6 +277,7 @@ const CHANNEL_LABELS: Readonly<Record<ConversationChannel, string>> = Object.fre
   sms: 'SMS',
   instagram: 'Instagram',
   facebook: 'Facebook',
+  linkedin: 'LinkedIn',
 });
 const CONSENT_LABELS: Readonly<Record<ConversionInboxConsentSnapshot['channel'], string>> = Object.freeze({
   email: 'Email',
@@ -358,7 +362,11 @@ function queueItem(
     preview: `${preview.value}${preview.truncated ? '…' : ''}`,
     requiresApproval: thread === undefined ? summary.requiresApproval : needsApproval(thread),
     testProviderLabel: summary.environment === 'live'
-      ? `${CHANNEL_LABELS[summary.channel]} · LIVE OWNED-OFFICE PROOF`
+      ? summary.channel === 'linkedin'
+        ? 'LinkedIn · LIVE ZERNIO READ-ONLY'
+        : summary.channel === 'instagram'
+          ? 'Instagram · LIVE ZERNIO INBOUND'
+          : `${CHANNEL_LABELS[summary.channel]} · LIVE OWNED-OFFICE PROOF`
       : `${CHANNEL_LABELS[summary.channel]} · TEST / SIMULATED`,
   });
 }
@@ -415,8 +423,13 @@ function signedInboundEvidence(
     ? evidence.kind === 'signed_meta_whatsapp_inbound'
       ? 'meta_whatsapp_cloud'
       : 'whatsapp_simulator'
-    : evidence.network === 'facebook' || evidence.network === 'instagram'
-      ? 'social_dm_simulator' : null;
+    : evidence.network === 'linkedin'
+      ? 'zernio'
+    : evidence.network === 'facebook'
+      ? 'social_dm_simulator'
+    : evidence.network === 'instagram'
+      ? evidence.kind === 'signed_zernio_inbound' ? 'zernio' : 'social_dm_simulator'
+      : null;
   if (expectedSource === null || evidence.source !== expectedSource) return null;
   const expectedKind = evidence.network === 'email'
     ? 'signed_mailgun_inbound'
@@ -424,16 +437,20 @@ function signedInboundEvidence(
       ? 'signed_twilio_sms_inbound'
     : evidence.source === 'meta_whatsapp_cloud'
       ? 'signed_meta_whatsapp_inbound'
+    : evidence.source === 'zernio'
+      ? 'signed_zernio_inbound'
       : 'signed_simulator_event';
   if (evidence.kind !== expectedKind) return null;
   const networkLabel = evidence.network === 'email' ? 'Email'
     : evidence.network === 'sms' ? 'SMS'
     : evidence.network === 'whatsapp' ? 'WhatsApp'
-    : evidence.network === 'facebook' ? 'Facebook' : 'Instagram';
+    : evidence.network === 'facebook' ? 'Facebook'
+    : evidence.network === 'instagram' ? 'Instagram' : 'LinkedIn';
   const networkCode = evidence.network === 'email' ? 'EM'
     : evidence.network === 'sms' ? 'SMS'
     : evidence.network === 'whatsapp' ? 'WA'
-    : evidence.network === 'facebook' ? 'FB' : 'IG';
+    : evidence.network === 'facebook' ? 'FB'
+    : evidence.network === 'instagram' ? 'IG' : 'LI';
   const receiptId = evidence.receiptId.toLowerCase();
   return Object.freeze({
     kind: evidence.kind,
@@ -447,6 +464,8 @@ function signedInboundEvidence(
         ? 'Signed Twilio inbound'
       : evidence.kind === 'signed_meta_whatsapp_inbound'
         ? 'Signed Meta inbound'
+      : evidence.kind === 'signed_zernio_inbound'
+        ? 'Signed Zernio inbound'
         : 'Signed TEST inbound',
     networkLabel,
     networkCode,
@@ -456,6 +475,8 @@ function signedInboundEvidence(
         ? 'SMS IN'
       : evidence.kind === 'signed_meta_whatsapp_inbound'
         ? 'META IN'
+      : evidence.kind === 'signed_zernio_inbound'
+        ? 'ZERNIO IN'
         : 'TEST IN'} ${receiptId.slice(0, 8)}…${receiptId.slice(-4)}`,
     accessibleLabel: evidence.kind === 'signed_mailgun_inbound'
       ? 'Signed Mailgun email reply from the controlled owned-office proof. An admin call task was created.'
@@ -463,6 +484,8 @@ function signedInboundEvidence(
         ? 'Signed Twilio SMS inbound message projected into the canonical Conversion Inbox and Lead 360. An admin call task was created.'
       : evidence.kind === 'signed_meta_whatsapp_inbound'
         ? 'Signed Meta WhatsApp inbound message projected into the canonical Conversion Inbox and Lead 360. An admin call task was created.'
+      : evidence.kind === 'signed_zernio_inbound'
+        ? `Signed Zernio ${networkLabel} inbound event projected into the canonical Conversion Inbox and Lead 360. This conversation is read-only in Growth HQ.`
       : `Signed simulated ${networkLabel} inbound event. Non-routable test only; no live account connected.`,
   });
 }
@@ -500,6 +523,7 @@ function draftView(
   summary: InboxConversationSummary,
 ): ConversionInboxDraftView {
   const consentChannel = summary.channel === 'instagram' || summary.channel === 'facebook'
+    || summary.channel === 'linkedin'
     ? 'social' : summary.channel;
   const relevantConsent = consents.find((consent) => consent.channel === consentChannel);
   const messageId = draft.messageId && UUID.test(draft.messageId) ? draft.messageId.toLowerCase() : null;
@@ -514,7 +538,8 @@ function draftView(
   const purposeAllowsQueueing = isConversionInboxTestQueuePurpose(draft.purpose);
   const body = utf8Prefix(draft.body, CONVERSION_INBOX_MAX_MESSAGE_BYTES);
   const environment = summary.environment ?? 'test';
-  const mayQueueTestOperation = environment === 'test' && exactApproval && consentAllowsQueueing
+  const mayQueueTestOperation = summary.channel !== 'linkedin'
+    && environment === 'test' && exactApproval && consentAllowsQueueing
     && purposeAllowsQueueing && !body.truncated && draft.deliveryState === 'not_queued';
   let gateDetail = body.truncated
     ? 'The complete draft is outside the safe review display boundary. Approval and queueing are locked.'
@@ -528,7 +553,9 @@ function draftView(
   } else if (!body.truncated && exactApproval && consentAllowsQueueing) {
     gateDetail = 'A TEST/SIMULATED operation already records this draft state.';
   }
-  if (environment === 'live') {
+  if (summary.channel === 'linkedin') {
+    gateDetail = 'LinkedIn is a signed Zernio read-only evidence rail. Reply, approval and queue actions are not available.';
+  } else if (environment === 'live') {
     gateDetail = draft.deliveryState === 'not_queued'
       ? exactApproval && consentAllowsQueueing
         ? 'The exact live reply is approved and consent-evidenced. Provider authorization remains a separate server-side command.'
@@ -623,7 +650,8 @@ function selectedThread(
     transcriptTruncated: snapshot.messages.length > sourceMessages.length,
     consents,
     draft: draftView(snapshot.draft, consents, summary),
-    railActivity: railActivityView(snapshot.railActivity, environment),
+    railActivity: summary.channel === 'linkedin'
+      ? null : railActivityView(snapshot.railActivity, environment),
     adminCall: snapshot.adminCall,
   });
 }
@@ -655,7 +683,7 @@ export function presentConversionInbox(
     && selectedSnapshot.lead.contactId === selectedSummary.contactId
     ? selectedThread(selectedSummary, selectedSnapshot) : null;
   const channelOrder: readonly ConversionInboxChannelFilter[] = [
-    'all', 'email', 'whatsapp', 'sms', 'instagram', 'facebook',
+    'all', 'email', 'whatsapp', 'sms', 'instagram', 'facebook', 'linkedin',
   ];
   const channels = channelOrder.map((channel) => Object.freeze({
     channel,

@@ -50,6 +50,10 @@ import {
   type PropertyPredatorZernioAccountWebhookMount,
 } from '../integrations/zernio-account-webhook/router.js';
 import {
+  PROPERTY_PREDATOR_ZERNIO_INBOUND_PATH,
+  type PropertyPredatorZernioInboundMount,
+} from '../integrations/zernio-inbound/index.js';
+import {
   isPropertyPredatorApprovedSocialMediaPath,
   type PropertyPredatorApprovedSocialMediaGateway,
 } from '../public-social-outbound/approved-social-media-gateway.js';
@@ -114,6 +118,8 @@ export interface AppDeps {
   propertyPredatorProviderIngress?: PropertyPredatorProviderIngressMount;
   /** Optional signed Zernio account lifecycle receipts; no outbound provider operation. */
   propertyPredatorZernioAccountWebhook?: PropertyPredatorZernioAccountWebhookMount;
+  /** Optional signed Zernio Instagram DM/comment receipts; no outbound provider operation. */
+  propertyPredatorZernioInbound?: PropertyPredatorZernioInboundMount;
   /** Public signed exact-byte gateway; it never exposes the source adapter bearer. */
   propertyPredatorApprovedSocialMediaGateway?: PropertyPredatorApprovedSocialMediaGateway;
   /** Optional request-handler seam; production defaults to the bundled admin router. */
@@ -382,6 +388,14 @@ export function createApp(deps: AppDeps) {
             blockers.push('Zernio account webhook is enabled but not ready');
           }
         }
+        const zernioInbound = deps.propertyPredatorZernioInbound;
+        if (zernioInbound?.enabled && !zernioInbound.ready) {
+          blockers.push(...zernioInbound.blockers.map((blocker) =>
+            `Zernio inbound: ${blocker}`));
+          if (zernioInbound.blockers.length === 0) {
+            blockers.push('Zernio inbound is enabled but not ready');
+          }
+        }
         if (deps.runtimeReadinessProbe) {
           try {
             blockers.push(...await deps.runtimeReadinessProbe());
@@ -467,6 +481,14 @@ export function createApp(deps: AppDeps) {
               provider_effects_enabled: false,
             },
           } : {}),
+          ...(deps.propertyPredatorZernioInbound ? {
+            property_predator_zernio_inbound: {
+              enabled: deps.propertyPredatorZernioInbound.enabled,
+              ready: deps.propertyPredatorZernioInbound.ready,
+              blockers: [...deps.propertyPredatorZernioInbound.blockers],
+              provider_effects_enabled: false,
+            },
+          } : {}),
           approved_social_media_gateway: {
             ready: Boolean(deps.propertyPredatorApprovedSocialMediaGateway),
             credential_exposure: false,
@@ -485,6 +507,20 @@ export function createApp(deps: AppDeps) {
           await webhook.handle(req, res);
         } catch {
           if (!res.headersSent) send(res, 503, { error: 'zernio_account_webhook_unavailable' });
+        }
+        return;
+      }
+
+      if (route === `POST ${PROPERTY_PREDATOR_ZERNIO_INBOUND_PATH}`) {
+        const webhook = deps.propertyPredatorZernioInbound;
+        if (!webhook?.enabled) return send(res, 404, { error: 'not_found' });
+        if (!webhook.ready || !webhook.handle) {
+          return send(res, 503, { error: 'zernio_inbound_unavailable' });
+        }
+        try {
+          await webhook.handle(req, res);
+        } catch {
+          if (!res.headersSent) send(res, 503, { error: 'zernio_inbound_unavailable' });
         }
         return;
       }

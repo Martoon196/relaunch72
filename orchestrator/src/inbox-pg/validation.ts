@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { DatabaseRequestContext } from '../db/rls.js';
 import { validateDatabaseContext } from '../db/rls.js';
-import type { ConversationChannel } from '../providers/contracts.js';
+import type { ConversationSendChannel } from '../providers/contracts.js';
 import {
   InboxValidationError,
   type ConfigureTestInboxCommand,
@@ -20,7 +20,7 @@ const SHA256 = /^[0-9a-f]{64}$/;
 const COMMAND_KEY = /^[\x21-\x7e]{1,200}$/;
 const PURPOSE = /^[a-z][a-z0-9_.-]{0,99}$/;
 const ERROR_CODE = /^[a-z][a-z0-9_.:-]{0,99}$/;
-const CHANNELS = new Set<ConversationChannel>([
+const CHANNELS = new Set<ConversationSendChannel>([
   'email', 'sms', 'whatsapp', 'instagram', 'facebook',
 ]);
 const DECISIONS = new Set<InboxApprovalDecision>([
@@ -38,7 +38,7 @@ export interface NormalizedSourceContent {
 
 export interface NormalizedConfigureTestInboxCommand {
   readonly commandKey: string;
-  readonly channel: ConversationChannel;
+  readonly channel: ConversationSendChannel;
   readonly name: string;
   readonly endpointAddress: string;
   readonly endpointDisplayName: string;

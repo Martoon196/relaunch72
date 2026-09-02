@@ -198,6 +198,16 @@ services:
       # has function-only command authority and no worker claim capability.
       - key: DATABASE_ZERNIO_SOCIAL_COMMAND_URL
         sync: false
+      # 0090/0091 Daily Outreach and Creator Watch use disjoint table-blind
+      # read/command identities. Neither identity can call a provider.
+      - key: DATABASE_DAILY_OUTREACH_READ_URL
+        sync: false
+      - key: DATABASE_DAILY_OUTREACH_COMMAND_URL
+        sync: false
+      # 0092 receives signed Zernio DMs/comments through an inbound-only
+      # identity. It is deliberately independent of the outbound API key.
+      - key: DATABASE_ZERNIO_INBOUND_WEBHOOK_URL
+        sync: false
       # Function-only 0053 founder command seam. It can bind encrypted Meta
       # evidence, register one approved template and enqueue only after exact
       # consent/PECR/operator evidence. It cannot claim or call a provider.
@@ -255,6 +265,12 @@ services:
       - key: DATABASE_OWNED_SOCIAL_COMMAND_POOL_MAX
         value: "2"
       - key: DATABASE_ZERNIO_SOCIAL_COMMAND_POOL_MAX
+        value: "2"
+      - key: DATABASE_DAILY_OUTREACH_READ_POOL_MAX
+        value: "2"
+      - key: DATABASE_DAILY_OUTREACH_COMMAND_POOL_MAX
+        value: "2"
+      - key: DATABASE_ZERNIO_INBOUND_WEBHOOK_POOL_MAX
         value: "2"
       - key: DATABASE_WHATSAPP_LIVE_COMMAND_POOL_MAX
         value: "2"
@@ -336,6 +352,21 @@ services:
       - key: PROPERTY_PREDATOR_ZERNIO_COMMENT_ACCOUNT_BINDINGS
         sync: false
       - key: ZERNIO_API_KEY
+        sync: false
+      # Signed inbound DMs/comments remain a separate no-effect boundary.
+      # Activation requires a dedicated HMAC secret and exact connected-account
+      # binding; it never reads ZERNIO_API_KEY.
+      - key: PROPERTY_PREDATOR_DAILY_OUTREACH_PROGRAMME_KEY
+        value: founder_daily_linkedin
+      - key: PROPERTY_PREDATOR_ZERNIO_INBOUND_ENABLED
+        value: "false"
+      - key: PROPERTY_PREDATOR_ZERNIO_INBOUND_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_ZERNIO_INBOUND_PROVIDER_PROFILE_ID
+        sync: false
+      - key: ZERNIO_INBOUND_WEBHOOK_CREDENTIAL_VERSION
+        sync: false
+      - key: ZERNIO_INBOUND_WEBHOOK_SECRET
         sync: false
       # Shared only with the isolated Zernio calendar worker. It signs a
       # short-lived exact-asset URL; the company-content READ bearer stays in

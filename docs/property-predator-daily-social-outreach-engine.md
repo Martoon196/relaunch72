@@ -219,7 +219,57 @@ owned-account Zernio response, see the conversation in Conversion Inbox and Lead
 cross-workspace or unsupported automated attempt must fail closed with a useful
 reason.
 
+## Deployment handoff
+
+The production manifest now carries explicit, unset slots for the two Daily
+Outreach logins and the isolated Zernio inbound login. A cutover is complete
+only when all of the following are true:
+
+1. forward migrations 0090–0092 are present in the exact database ledger;
+2. `DATABASE_DAILY_OUTREACH_READ_URL` authenticates only as
+   `r72_daily_outreach_read` and `DATABASE_DAILY_OUTREACH_COMMAND_URL` only as
+   `r72_daily_outreach_command`;
+3. `DATABASE_ZERNIO_INBOUND_WEBHOOK_URL` authenticates only as
+   `r72_zernio_inbound_webhook_command`;
+4. the inbound route is bound to the exact workspace, Zernio connection and
+   provider profile through the dedicated `PROPERTY_PREDATOR_ZERNIO_INBOUND_*`
+   settings;
+5. Zernio signs the raw request bytes with the separate
+   `ZERNIO_INBOUND_WEBHOOK_SECRET` at
+   `https://hq.propertypredator.com/webhooks/zernio/inbound`; and
+6. a signed owned/test event proves projection or quarantine before
+   `PROPERTY_PREDATOR_ZERNIO_INBOUND_ENABLED` changes from `false` to `true`.
+
+The inbound process does not receive or require `ZERNIO_API_KEY`. Receiving a
+reply therefore cannot silently gain posting, DM-send or comment-send power.
+
 ## Current external constraints
+
+### Zernio capability truth pinned for implementation
+
+The provider surface was rechecked on 2 September 2026 so the product does not
+promise one generic "social automation" capability where the networks expose
+different actions:
+
+- **LinkedIn:** scheduled personal/company posting and company-page comment
+  reads/replies are supported. LinkedIn DMs are not available through Zernio,
+  so a cold LinkedIn first touch remains an operator task and receipt.
+- **Instagram:** owned-account DMs, comment reads/replies, keyword
+  comment-to-DM and story-reply automations are supported. A free-form reply is
+  constrained by Meta's conversation window; a private reply to a commenter is
+  available only for a comment on an owned post, once per comment and within the
+  provider's stated seven-day window.
+- **Realtime intake:** the comment-list surface may be cached for up to ten
+  minutes. `comment.received` webhooks are therefore the primary realtime seam;
+  polling is bounded reconciliation, not the source of instant truth.
+- **Creator Watch:** an operator-supplied LinkedIn activity identifier can be
+  read through the supported comment surface. Growth HQ still defaults the
+  resulting third-party comment to `review_only`; provider reachability alone
+  does not authorise an unattended public comment.
+
+These are capability facts, not permission decisions. Every effect still needs
+the exact account binding, eligibility, immutable approved version, cooldown,
+cap and receipt required by the Growth HQ command boundary.
 
 - LinkedIn User Agreement and automation guidance:
   <https://www.linkedin.com/legal/user-agreement> and

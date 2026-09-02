@@ -356,6 +356,67 @@ test('thread projection admits only receipt-gated LIVE Twilio SMS provenance', a
   assert.doesNotMatch(sql, /signature_sha256|sender_identity_sha256|recipient_identity_sha256/);
 });
 
+test('thread projection maps exact LIVE Zernio LinkedIn provenance and social consent read-only', async () => {
+  const client = new ThreadReadClient();
+  client.coreRows = [core({
+    environment: 'live',
+    draftMessageId: null,
+    draftBody: null,
+    draftLifecycle: null,
+    draftVersionNumber: null,
+    draftRowVersion: null,
+    draftUpdatedAt: null,
+    approvalRequestId: null,
+    approvalDecision: null,
+    approvalNote: null,
+    deliveryStatus: null,
+    deliveryPurpose: null,
+    consentPurpose: null,
+  })];
+  client.transcriptRows = [transcript({
+    messageId: INBOUND,
+    direction: 'inbound',
+    lifecycle: 'received',
+    sourceKind: 'verified_webhook',
+    body: 'Can I see the full walkthrough?',
+    occurredAt: new Date('2026-09-02T08:05:00.000Z'),
+    deliveryStatus: null,
+    inboundReceiptId: INBOUND_RECEIPT,
+    inboundProviderFamily: 'zernio_social_live',
+    inboundNetwork: 'linkedin',
+    inboundVerifiedAt: new Date('2026-09-02T08:05:01.000Z'),
+  })];
+  client.consentRows = [{
+    channel: 'social', consentState: 'granted', lawfulBasis: 'consent',
+    purpose: 'social_conversation_reply',
+    consentAt: new Date('2026-09-02T08:00:00.000Z'),
+    suppressionState: null, suppressionAt: null, endpointAvailable: true,
+  }];
+  const service = new PgConversionInboxThreadReadService({
+    connect: async () => client,
+  } as unknown as Pick<Pool, 'connect'>);
+
+  const snapshot = await service.thread(context, CONVERSATION);
+  assert.equal(snapshot?.environment, 'live');
+  assert.deepEqual(snapshot?.messages[0]?.inboundEvidence, {
+    kind: 'signed_zernio_inbound',
+    source: 'zernio',
+    network: 'linkedin',
+    receiptId: INBOUND_RECEIPT,
+    verifiedAt: '2026-09-02T08:05:01.000Z',
+  });
+  assert.deepEqual(snapshot?.consents, [{
+    channel: 'social',
+    state: 'permitted',
+    basis: 'consent · social_conversation_reply',
+    updatedAt: '2026-09-02T08:00:00.000Z',
+  }]);
+  const sql = client.calls.map((call) => call.sql).join('\n');
+  assert.match(sql, /WHEN 'linkedin' THEN 'social'/);
+  assert.match(sql, /app_private\.operational_inbox_live_message_provenance\(/);
+  assert.doesNotMatch(sql, /property_predator_zernio_inbound_projections/);
+});
+
 test('thread projection reduces durable TEST operations to queued, accepted, reconciled or attention', async () => {
   const cases = [
     {

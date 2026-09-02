@@ -289,3 +289,27 @@ export function createSetupReissueCommandDatabasePool(
 ): Pool {
   return createDatabasePool(loadDatabaseConfig('setupReissueCommand', env), hooks);
 }
+
+/** Function-only command pool for Daily Outreach queue and outcome receipts. */
+export function createDailyOutreachCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('dailyOutreachCommand', env), hooks);
+}
+
+/** Table-blind read pool for the bounded Daily Outreach cockpit projection. */
+export function createDailyOutreachReadDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('dailyOutreachRead', env), hooks);
+}
+
+/** Function-only command pool for signed Zernio inbound receipts. */
+export function createZernioInboundWebhookCommandDatabasePool(
+  env: NodeJS.ProcessEnv = process.env,
+  hooks: DatabasePoolHooks = {},
+): Pool {
+  return createDatabasePool(loadDatabaseConfig('zernioInboundWebhookCommand', env), hooks);
+}

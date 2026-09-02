@@ -276,6 +276,9 @@ test('production Blueprint is isolated, manually deployed and narrowly fail-clos
   literalValueIn(webManifest, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'false');
   literalValueIn(webManifest, 'PROPERTY_PREDATOR_SOCIAL_PROVIDER', 'zernio');
   secretSlotIn(webManifest, 'DATABASE_ZERNIO_SOCIAL_COMMAND_URL');
+  secretSlotIn(webManifest, 'DATABASE_DAILY_OUTREACH_READ_URL');
+  secretSlotIn(webManifest, 'DATABASE_DAILY_OUTREACH_COMMAND_URL');
+  secretSlotIn(webManifest, 'DATABASE_ZERNIO_INBOUND_WEBHOOK_URL');
   secretSlotIn(webManifest, 'PROPERTY_PREDATOR_ZERNIO_LIVE_CONNECTION_ID');
   secretSlotIn(webManifest, 'PROPERTY_PREDATOR_ZERNIO_PROVIDER_PROFILE_ID');
   secretSlotIn(webManifest, 'PROPERTY_PREDATOR_ZERNIO_INSTAGRAM_ACCOUNT_ID');
@@ -283,6 +286,13 @@ test('production Blueprint is isolated, manually deployed and narrowly fail-clos
   secretSlotIn(webManifest, 'PROPERTY_PREDATOR_ZERNIO_MESSAGING_ACCOUNT_IDS');
   secretSlotIn(webManifest, 'PROPERTY_PREDATOR_ZERNIO_COMMENT_ACCOUNT_BINDINGS');
   secretSlotIn(webManifest, 'ZERNIO_API_KEY');
+  literalValueIn(webManifest, 'PROPERTY_PREDATOR_DAILY_OUTREACH_PROGRAMME_KEY',
+    'founder_daily_linkedin');
+  literalValueIn(webManifest, 'PROPERTY_PREDATOR_ZERNIO_INBOUND_ENABLED', 'false');
+  secretSlotIn(webManifest, 'PROPERTY_PREDATOR_ZERNIO_INBOUND_CONNECTION_ID');
+  secretSlotIn(webManifest, 'PROPERTY_PREDATOR_ZERNIO_INBOUND_PROVIDER_PROFILE_ID');
+  secretSlotIn(webManifest, 'ZERNIO_INBOUND_WEBHOOK_CREDENTIAL_VERSION');
+  secretSlotIn(webManifest, 'ZERNIO_INBOUND_WEBHOOK_SECRET');
   for (const section of [revalidatorWorkerManifest, socialTestWorkerManifest]) {
     literalValueIn(section, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'false');
     literalValueIn(section, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'true');
@@ -334,6 +344,9 @@ test('production Blueprint keeps web and worker database identities process-isol
     'DATABASE_SMS_COMMAND_URL',
     'DATABASE_MAILGUN_WEBHOOK_URL',
     'DATABASE_CUSTOMER_EMAIL_WEBHOOK_URL',
+    'DATABASE_DAILY_OUTREACH_READ_URL',
+    'DATABASE_DAILY_OUTREACH_COMMAND_URL',
+    'DATABASE_ZERNIO_INBOUND_WEBHOOK_URL',
   ]) secretSlot(key);
   secretSlot('DATABASE_MAILGUN_WORKER_URL');
   secretSlot('DATABASE_PUBLIC_SOCIAL_REVALIDATOR_URL');
@@ -361,6 +374,8 @@ test('production Blueprint keeps web and worker database identities process-isol
     'DATABASE_CRM_COMMAND_URL',
     'DATABASE_CUSTOMER_EMAIL_COMMAND_URL',
     'DATABASE_CUSTOMER_EMAIL_WEBHOOK_URL',
+    'DATABASE_DAILY_OUTREACH_COMMAND_URL',
+    'DATABASE_DAILY_OUTREACH_READ_URL',
     'DATABASE_EXTERNAL_EVENT_COMMAND_URL',
     // The 0065 evidence identity. It records the policy publication and PECR
     // route decisions the founder attests and holds exactly one function.
@@ -373,6 +388,7 @@ test('production Blueprint keeps web and worker database identities process-isol
     'DATABASE_WEBHOOK_URL',
     'DATABASE_WEB_URL',
     'DATABASE_WHATSAPP_LIVE_COMMAND_URL',
+    'DATABASE_ZERNIO_INBOUND_WEBHOOK_URL',
     'DATABASE_ZERNIO_SOCIAL_COMMAND_URL',
   ]);
   assert.deepEqual(databaseUrlKeys(emailWorkerManifest), ['DATABASE_MAILGUN_WORKER_URL']);

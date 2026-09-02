@@ -33,6 +33,9 @@ const APP_ROLES = [
   'r72_customer_email_definer',
   'r72_customer_email_webhook_command',
   'r72_customer_email_worker_command',
+  'r72_daily_outreach_command',
+  'r72_daily_outreach_definer',
+  'r72_daily_outreach_read',
   'r72_external_event_definer',
   'r72_external_event_command',
   'r72_email_pilot_readiness_definer',
@@ -87,6 +90,8 @@ const APP_ROLES = [
   'r72_worker',
   'r72_zernio_social_command',
   'r72_zernio_social_definer',
+  'r72_zernio_inbound_webhook_command',
+  'r72_zernio_inbound_definer',
 ] as const;
 
 const rawUrl = process.env.TEST_DATABASE_URL?.trim();

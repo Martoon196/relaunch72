@@ -287,6 +287,23 @@ import {
   renderSocialAccountControlBody,
   renderZernioSocialAccountControlBody,
 } from './social-account-control-view.js';
+import { createPropertyPredatorDailyOutreachFixture } from './daily-outreach-fixtures.js';
+import {
+  DAILY_OUTREACH_ROUTE,
+  presentDailyOutreach,
+} from './daily-outreach-presenter.js';
+import { renderDailyOutreachBody } from './daily-outreach-view.js';
+import type { PortalDailyOutreachService } from './daily-outreach-service.js';
+import {
+  DAILY_OUTREACH_MANUAL_ATTEMPT_ROUTE,
+  DAILY_OUTREACH_OUTCOME_ROUTE,
+  renderDailyOutreachLiveBody,
+} from './daily-outreach-live-view.js';
+import {
+  CREATOR_WATCH_RELEVANCE_ROUTE,
+  type PortalCreatorWatchService,
+} from './creator-watch-service.js';
+import { renderCreatorWatchFragment } from './creator-watch-view.js';
 import {
   ZERNIO_SOCIAL_CALLBACK_ROUTE,
   type PortalZernioFailureKind,
@@ -519,6 +536,10 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   ownedSeedMessages?: PortalOwnedSeedMessageService;
   /** Founder/admin effects-free CSV preview. No live importer or customer-write executor. */
   migrations?: PortalMigrationCentreService;
+  /** Table-blind PostgreSQL Daily Outreach cockpit and evidence commands. */
+  dailyOutreach?: PortalDailyOutreachService;
+  /** Human relevance review for the bounded Creator Watch queue. */
+  creatorWatch?: PortalCreatorWatchService;
 }
 
 /**
@@ -894,12 +915,14 @@ function operationalPage(
   workspaceName: string,
   body: string,
   deps: PostgresPortalDeps,
-  active: 'overview' | 'content' | 'affiliates' | 'inbox',
+  active: 'overview' | 'actions' | 'content' | 'affiliates' | 'inbox',
   csrfToken: string,
   labelOverride?: string,
 ): string {
   const label = labelOverride ?? (active === 'overview'
     ? 'Provider Readiness'
+    : active === 'actions'
+      ? 'Daily Outreach'
     : active === 'content'
     ? 'Content Control'
     : active === 'affiliates'
@@ -1602,7 +1625,9 @@ function companyAssetsFailureNotice(kind: string): CompanyAssetsNoticeCode {
   return 'unavailable';
 }
 
-const INBOX_RETURN_CHANNELS = new Set(['all', 'email', 'whatsapp', 'sms', 'instagram', 'facebook']);
+const INBOX_RETURN_CHANNELS = new Set([
+  'all', 'email', 'whatsapp', 'sms', 'instagram', 'facebook', 'linkedin',
+]);
 const INBOX_RETURN_QUEUES = new Set(['all', 'unread', 'approval', 'open']);
 const INBOX_MESSAGE_VERSION_ROUTE = /^\/portal\/inbox\/messages\/([0-9a-f-]+)\/versions$/iu;
 const INBOX_APPROVAL_REQUEST_ROUTE = /^\/portal\/inbox\/messages\/([0-9a-f-]+)\/approval-requests$/iu;
@@ -2338,6 +2363,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         csrfToken,
         body: renderGrowthHomeBody(snapshot, profile, growth ?? undefined, {
           actionCentreAvailable: Boolean(deps.operatorActions),
+          dailyOutreachAvailable: profile.id === 'property_predator_growth',
         }),
       }));
     } catch {
@@ -2674,6 +2700,178 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         active: 'content',
       }));
     }
+  }
+
+  // ── Daily Outreach: authoritative when its two least-privilege identities are ready ──
+  if (deps.kind === 'postgres' && p === DAILY_OUTREACH_ROUTE && method === 'GET') {
+    if (deps.productProfile?.id !== 'property_predator_growth') {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Daily Outreach not available',
+        message: 'The Property Predator Daily Outreach cockpit is not enabled for this product profile.',
+        active: 'actions',
+      }));
+    }
+    const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
+    if (deps.dailyOutreach) {
+      const outcome = await deps.dailyOutreach.snapshot(crmIdentity(sessionToken, deps));
+      if (!outcome.ok) {
+        const status = outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden'
+          ? 403 : outcome.kind === 'not_found' ? 404 : 503;
+        return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+          title: status === 503
+            ? 'Daily Outreach temporarily unavailable'
+            : 'Daily Outreach not available',
+          message: outcome.message,
+          active: 'actions',
+        }));
+      }
+      const creatorOutcome = deps.creatorWatch
+        ? await deps.creatorWatch.snapshot(crmIdentity(sessionToken, deps))
+        : undefined;
+      const creatorWatchBody = creatorOutcome?.ok
+        ? renderCreatorWatchFragment(creatorOutcome.snapshot, {
+          csrfToken,
+          nextCommandKey: randomUUID,
+        })
+        : deps.creatorWatch
+          ? '<section class="panel" aria-label="Creator Watch unavailable"><div class="panel-body"><h2>Creator Watch is temporarily unavailable</h2><p>No relevance decision, comment assignment or provider action was changed.</p></div></section>'
+          : '';
+      return sendHtml(res, 200, operationalPage(
+        'Property Predator Growth HQ',
+        renderDailyOutreachLiveBody(outcome.snapshot, {
+          csrfToken,
+          nextCommandKey: randomUUID,
+        }) + creatorWatchBody,
+        deps,
+        'actions',
+        csrfToken,
+      ));
+    }
+    const view = presentDailyOutreach(createPropertyPredatorDailyOutreachFixture());
+    return sendHtml(res, 200, operationalPage(
+      view.workspaceName,
+      renderDailyOutreachBody(view),
+      deps,
+      'actions',
+      csrfToken,
+    ));
+  }
+
+  if (deps.kind === 'postgres'
+      && p === CREATOR_WATCH_RELEVANCE_ROUTE
+      && method === 'POST') {
+    if (deps.productProfile?.id !== 'property_predator_growth' || !deps.creatorWatch) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Creator Watch command not available',
+        message: 'The review-only Creator Watch command boundary is not installed.',
+        active: 'actions',
+      }));
+    }
+    const form = await readMultiValueForm(req);
+    const allowed = new Set([
+      '_csrf', 'command_key', 'observed_post_id', 'previous_decision_id',
+      'decision', 'comment_purpose', 'no_comment_reason',
+    ]);
+    if (!form || !campaignFormKeysAllowed(form, allowed)
+        || !verifyPortalCsrf(
+          deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '',
+        )) {
+      return sendHtml(res, 400, portalStatusPage(deps, sessionToken, {
+        title: 'Creator Watch action rejected',
+        message: 'Refresh Daily Outreach before trying that review again.',
+        active: 'actions',
+      }));
+    }
+    const previousDecisionId = oneFormValue(form, 'previous_decision_id') ?? '';
+    const outcome = await deps.creatorWatch.recordRelevance(
+      crmIdentity(sessionToken, deps),
+      {
+        observedPostId: oneFormValue(form, 'observed_post_id') ?? '',
+        previousDecisionId: previousDecisionId || null,
+        decision: (oneFormValue(form, 'decision') ?? '') as never,
+        commentPurpose: (oneFormValue(form, 'comment_purpose') || null) as never,
+        noCommentReason: (oneFormValue(form, 'no_comment_reason') || null) as never,
+        commandKey: oneFormValue(form, 'command_key') ?? '',
+      },
+    );
+    if (!outcome.ok) {
+      const status = outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden'
+        ? 403 : outcome.kind === 'not_found' ? 404
+          : outcome.kind === 'unavailable' ? 503 : 409;
+      return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+        title: status === 503
+          ? 'Creator Watch temporarily unavailable'
+          : 'Creator Watch decision not recorded',
+        message: outcome.message,
+        backHref: DAILY_OUTREACH_ROUTE,
+        backLabel: 'Refresh Daily Outreach',
+        active: 'actions',
+      }));
+    }
+    return redirect(res, `${DAILY_OUTREACH_ROUTE}#creator-watch-title`, undefined, 303, {
+      'cache-control': 'no-store',
+    });
+  }
+
+  if (deps.kind === 'postgres'
+      && (p === DAILY_OUTREACH_MANUAL_ATTEMPT_ROUTE || p === DAILY_OUTREACH_OUTCOME_ROUTE)
+      && method === 'POST') {
+    if (deps.productProfile?.id !== 'property_predator_growth' || !deps.dailyOutreach) {
+      return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
+        title: 'Daily Outreach command not available',
+        message: 'The authoritative Daily Outreach command boundary is not installed.',
+        active: 'actions',
+      }));
+    }
+    const form = await readMultiValueForm(req);
+    const manual = p === DAILY_OUTREACH_MANUAL_ATTEMPT_ROUTE;
+    const allowed = manual
+      ? new Set(['_csrf', 'command_key', 'allocation_id'])
+      : new Set([
+        '_csrf', 'command_key', 'attempt_receipt_id',
+        'previous_outcome_event_id', 'outcome',
+      ]);
+    if (!form || !campaignFormKeysAllowed(form, allowed)
+        || !verifyPortalCsrf(
+          deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '',
+        )) {
+      return sendHtml(res, 400, portalStatusPage(deps, sessionToken, {
+        title: 'Daily Outreach action rejected',
+        message: 'Refresh the cockpit before trying that action again.',
+        active: 'actions',
+      }));
+    }
+    const commandKey = oneFormValue(form, 'command_key') ?? '';
+    const identity = crmIdentity(sessionToken, deps);
+    const occurredAt = new Date(deps.now ? deps.now() : Date.now()).toISOString();
+    const outcome = manual
+      ? await deps.dailyOutreach.recordManualAttempt(identity, {
+        allocationId: oneFormValue(form, 'allocation_id') ?? '',
+        attemptedAt: occurredAt,
+        commandKey,
+      })
+      : await deps.dailyOutreach.recordOutcome(identity, {
+        attemptReceiptId: oneFormValue(form, 'attempt_receipt_id') ?? '',
+        previousOutcomeEventId: oneFormValue(form, 'previous_outcome_event_id') ?? '',
+        outcome: (oneFormValue(form, 'outcome') ?? '') as never,
+        occurredAt,
+        commandKey,
+      });
+    if (!outcome.ok) {
+      const status = outcome.kind === 'unauthenticated' || outcome.kind === 'forbidden'
+        ? 403 : outcome.kind === 'not_found' ? 404
+          : outcome.kind === 'unavailable' ? 503 : 409;
+      return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
+        title: status === 503
+          ? 'Daily Outreach temporarily unavailable'
+          : 'Daily Outreach action not recorded',
+        message: outcome.message,
+        backHref: DAILY_OUTREACH_ROUTE,
+        backLabel: 'Refresh Daily Outreach',
+        active: 'actions',
+      }));
+    }
+    return redirect(res, DAILY_OUTREACH_ROUTE, undefined, 303, { 'cache-control': 'no-store' });
   }
 
   // ── provider readiness: bounded evidence only; every external effect stays off ──
@@ -5247,26 +5445,32 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       const conversationIdForAction = view.selectedThread?.summary.conversationId;
       const messageIdForAction = draft?.messageId;
       const approvalRequestIdForAction = draft?.approvalRequestId;
+      const selectedReadOnlyLinkedIn = view.selectedThread?.summary.channel === 'linkedin';
       const adminCallTaskIdForAction = view.selectedThread?.adminCall?.taskStatus === 'open'
-        ? view.selectedThread.adminCall.taskId : undefined;
+        && !selectedReadOnlyLinkedIn ? view.selectedThread.adminCall.taskId : undefined;
       const actionNow = new Date(deps.now?.() ?? Date.now());
       const actionSecurity = (deps.inboxCommands || deps.inboxOperations) && view.canWrite ? {
         csrfToken,
-        createDraftKeys: deps.inboxCommands && conversationIdForAction && draft?.messageId === null
+        createDraftKeys: deps.inboxCommands && !selectedReadOnlyLinkedIn
+          && conversationIdForAction && draft?.messageId === null
           ? { [conversationIdForAction]: randomUUID() } : {},
-        reviseDraftKeys: deps.inboxCommands && messageIdForAction && draft?.lifecycle === 'draft'
+        reviseDraftKeys: deps.inboxCommands && !selectedReadOnlyLinkedIn
+          && messageIdForAction && draft?.lifecycle === 'draft'
           ? { [messageIdForAction]: randomUUID() } : {},
-        requestApprovalKeys: deps.inboxCommands && messageIdForAction && draft?.lifecycle === 'draft'
+        requestApprovalKeys: deps.inboxCommands && !selectedReadOnlyLinkedIn
+          && messageIdForAction && draft?.lifecycle === 'draft'
           ? { [messageIdForAction]: randomUUID() } : {},
-        decisionKeys: deps.inboxCommands && view.canManage && approvalRequestIdForAction && draft?.approvalState === 'pending'
+        decisionKeys: deps.inboxCommands && !selectedReadOnlyLinkedIn
+          && view.canManage && approvalRequestIdForAction && draft?.approvalState === 'pending'
           ? { [approvalRequestIdForAction]: randomUUID() } : {},
-        queueKeys: deps.inboxCommands && view.canManage && messageIdForAction && draft?.mayQueueTestOperation
+        queueKeys: deps.inboxCommands && !selectedReadOnlyLinkedIn
+          && view.canManage && messageIdForAction && draft?.mayQueueTestOperation
           ? { [messageIdForAction]: randomUUID() } : {},
-        assignmentKeys: deps.inboxOperations && conversationIdForAction
+        assignmentKeys: deps.inboxOperations && !selectedReadOnlyLinkedIn && conversationIdForAction
           ? { [conversationIdForAction]: randomUUID() } : {},
-        internalNoteKeys: deps.inboxOperations && conversationIdForAction
+        internalNoteKeys: deps.inboxOperations && !selectedReadOnlyLinkedIn && conversationIdForAction
           ? { [conversationIdForAction]: randomUUID() } : {},
-        adminCallKeys: deps.inboxOperations && conversationIdForAction
+        adminCallKeys: deps.inboxOperations && !selectedReadOnlyLinkedIn && conversationIdForAction
           ? { [conversationIdForAction]: randomUUID() } : {},
         callOutcomeKeys: deps.inboxOperations && adminCallTaskIdForAction
           ? { [adminCallTaskIdForAction]: randomUUID() } : {},

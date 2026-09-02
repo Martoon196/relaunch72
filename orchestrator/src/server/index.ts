@@ -45,6 +45,7 @@ import {
   createExternalEventCommandDatabasePool,
   createMailgunWebhookCommandDatabasePool,
   createWebhookDatabasePool,
+  createZernioInboundWebhookCommandDatabasePool,
 } from '../db/pool.js';
 import { assertExpectedDatabaseInstallation } from '../db/installation-identity.js';
 import { assertRuntimeSchemaCurrent } from '../db/runtime-readiness.js';
@@ -94,6 +95,18 @@ import { composePropertyPredatorProviderIngress } from '../integrations/provider
 import {
   composePropertyPredatorZernioAccountWebhook,
 } from '../integrations/zernio-account-webhook/router.js';
+import {
+  PROPERTY_PREDATOR_ZERNIO_INBOUND_PATH,
+  PropertyPredatorZernioInboundIngress,
+  createPropertyPredatorZernioInboundHandler,
+  loadPropertyPredatorZernioInboundConfig,
+  type PropertyPredatorZernioInboundMount,
+} from '../integrations/zernio-inbound/index.js';
+import {
+  PgZernioInboundRepository,
+  assertZernioInboundCommandBoundaryReady,
+  createZernioInboundWebhookCredential,
+} from '../zernio-inbound-pg/index.js';
 import {
   createPropertyPredatorApprovedResourceTransport,
 } from '../company-content-adapter/property-predator-resources.js';
@@ -649,6 +662,8 @@ async function main(): Promise<void> {
         campaignMachine: postgresPortal.campaignMachine,
         ownedSeedCampaign: postgresPortal.ownedSeedCampaign,
         ownedSeedMessages: postgresPortal.ownedSeedMessages,
+        dailyOutreach: postgresPortal.dailyOutreach,
+        creatorWatch: postgresPortal.creatorWatch,
         productProfile: portalProductProfile,
       });
       console.log(`Canonical PostgreSQL client portal mounted at /portal; JSON portal stores are not composed; Property Predator SSO ${propertyPredatorSso ? 'ready' : 'disabled'}.`);
@@ -727,10 +742,62 @@ async function main(): Promise<void> {
       : '⚠  Zernio account lifecycle ingress unavailable; protected binding did not compose.');
   }
 
+  const zernioInboundConfig = loadPropertyPredatorZernioInboundConfig(process.env);
+  let zernioInboundPool:
+    ReturnType<typeof createZernioInboundWebhookCommandDatabasePool> | undefined;
+  let zernioInbound: PropertyPredatorZernioInboundMount = Object.freeze({
+    enabled: zernioInboundConfig.enabled,
+    ready: false,
+    blockers: zernioInboundConfig.blockers,
+  });
+  if (zernioInboundConfig.enabled && zernioInboundConfig.configurationReady
+      && zernioInboundConfig.workspaceId && zernioInboundConfig.providerConnectionId
+      && zernioInboundConfig.providerProfileId && zernioInboundConfig.credentialVersion
+      && zernioInboundConfig.webhookSecret) {
+    try {
+      zernioInboundPool = createZernioInboundWebhookCommandDatabasePool(process.env);
+      await assertRuntimeSchemaCurrent(zernioInboundPool);
+      await assertExpectedDatabaseInstallation(
+        zernioInboundPool,
+        process.env.PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID?.trim(),
+      );
+      await assertZernioInboundCommandBoundaryReady(zernioInboundPool);
+      const credential = createZernioInboundWebhookCredential({
+        workspaceId: zernioInboundConfig.workspaceId,
+        providerConnectionId: zernioInboundConfig.providerConnectionId,
+        providerProfileId: zernioInboundConfig.providerProfileId,
+        credentialVersion: zernioInboundConfig.credentialVersion,
+        webhookSecret: zernioInboundConfig.webhookSecret,
+      });
+      const ingress = new PropertyPredatorZernioInboundIngress({
+        credential,
+        repository: new PgZernioInboundRepository(zernioInboundPool),
+      });
+      zernioInbound = Object.freeze({
+        enabled: true,
+        ready: true,
+        blockers: Object.freeze([]),
+        handle: createPropertyPredatorZernioInboundHandler(ingress),
+      });
+      console.log(`Signed Zernio DM/comment ingress is ready at ${PROPERTY_PREDATOR_ZERNIO_INBOUND_PATH}; provider effects remain off.`);
+    } catch {
+      await zernioInboundPool?.end().catch(() => undefined);
+      zernioInboundPool = undefined;
+      zernioInbound = Object.freeze({
+        enabled: true,
+        ready: false,
+        blockers: Object.freeze([
+          'Zernio inbound did not pass protected database readiness',
+        ]),
+      });
+    }
+  }
+
   const buildBlockers = forceMockBuilds || process.env.ANTHROPIC_API_KEY?.trim() ? [] : ['Anthropic build key is not configured'];
   const runtimeReadinessProbe = (postgresPortal || mailgunWebhookEnabled
       || mailgunInboundConfig.enabled
-      || simulatedInbound.enabled || providerIngress.enabled || zernioAccountWebhook.enabled)
+      || simulatedInbound.enabled || providerIngress.enabled || zernioAccountWebhook.enabled
+      || zernioInbound.enabled)
     ? createCachedRuntimeReadinessProbe({
         probe: async () => {
           const blockers: string[] = [];
@@ -803,6 +870,17 @@ async function main(): Promise<void> {
           if (zernioAccountWebhook.enabled && !zernioAccountWebhook.ready) {
             blockers.push('Protected Zernio account webhook runtime is unavailable');
           }
+          if (zernioInbound.enabled) {
+            if (!zernioInbound.ready || !zernioInboundPool) {
+              blockers.push('Protected Zernio inbound runtime is unavailable');
+            } else {
+              try {
+                await assertZernioInboundCommandBoundaryReady(zernioInboundPool);
+              } catch {
+                blockers.push('Protected Zernio inbound runtime is unavailable');
+              }
+            }
+          }
           return Object.freeze(blockers);
         },
       })
@@ -835,6 +913,7 @@ async function main(): Promise<void> {
     propertyPredatorSimulatedMetaDmInbound: simulatedInbound.metaDm,
     propertyPredatorProviderIngress: providerIngress,
     propertyPredatorZernioAccountWebhook: zernioAccountWebhook,
+    propertyPredatorZernioInbound: zernioInbound,
     propertyPredatorApprovedSocialMediaGateway,
   });
   const server = http.createServer((req, res) => { void app(req, res); });
@@ -870,6 +949,7 @@ async function main(): Promise<void> {
         mailgunWebhookPool?.end(),
         customerEmailWebhookPool?.end(),
         mailgunInboundPool?.end(),
+        zernioInboundPool?.end(),
         simulatedInbound.close(),
       ]);
     } catch (error) {

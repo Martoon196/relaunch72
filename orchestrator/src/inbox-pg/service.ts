@@ -352,6 +352,9 @@ export class InboxCommandService {
             'The exact immutable draft exceeds the complete human-review boundary',
           );
         }
+        if (message.channel === 'linkedin') {
+          throw new InboxValidationError('LinkedIn conversations are read-only');
+        }
         const consentChannel = message.channel === 'instagram' || message.channel === 'facebook'
           ? 'social' : message.channel;
         const eligibility = await evaluateEndpointInTransaction(repository.executor, {

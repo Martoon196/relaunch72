@@ -108,13 +108,16 @@ test('Growth HQ advertises the Action Centre only when its route is mounted', ()
   assert.match(unavailable, /href="#hot-list">Work the hot list/);
   assert.match(unavailable, /href="\/portal\/crm\/contacts">Open CRM/);
   assert.match(unavailable, /href="\/portal\/crm\/tasks">Tasks →/);
+  assert.doesNotMatch(unavailable, /href="\/portal\/outreach\/daily"/);
 
   const available = renderGrowthHomeBody(snapshot(), PROPERTY_PREDATOR_GROWTH_PROFILE, growth(), {
     actionCentreAvailable: true,
+    dailyOutreachAvailable: true,
   });
   assert.equal((available.match(/href="\/portal\/actions"/g) ?? []).length, 2);
   assert.match(available, /Open Action Centre/);
   assert.match(available, /Action Centre →/);
+  assert.match(available, /href="\/portal\/outreach\/daily">Daily Outreach/);
   assert.doesNotMatch(available, /href="\/portal\/crm\/tasks">Tasks →/);
 });
 

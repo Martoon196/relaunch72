@@ -141,6 +141,18 @@ import {
   createPgPortalOwnedSeedMessageService,
   type PgPortalOwnedSeedMessageService,
 } from './owned-seed-message-pg-service.js';
+import {
+  assertDailyOutreachCommandBoundaryReady,
+  assertDailyOutreachReadBoundaryReady,
+  createPgPortalDailyOutreachService,
+  type PgPortalDailyOutreachService,
+} from './daily-outreach-pg-service.js';
+import {
+  assertCreatorWatchCommandBoundaryReady,
+  assertCreatorWatchReadBoundaryReady,
+  createPgPortalCreatorWatchService,
+  type PgPortalCreatorWatchService,
+} from './creator-watch-pg-service.js';
 
 export interface PgPortalPlatform {
   auth: PgPortalAuthService;
@@ -186,6 +198,10 @@ export interface PgPortalPlatform {
   ownedSeedCampaign?: PgPortalOwnedSeedCampaignService;
   /** Fixed office-seed LIVE draft plus deliberate message approval; cannot send. */
   ownedSeedMessages?: PgPortalOwnedSeedMessageService;
+  /** Table-blind authoritative Daily Outreach cockpit and evidence commands. */
+  dailyOutreach?: PgPortalDailyOutreachService;
+  /** Review-only Creator Watch queue on the same least-privilege boundaries. */
+  creatorWatch?: PgPortalCreatorWatchService;
   /**
    * Founder-only owned Ayrshare/X binding and approved-publication staging.
    * Composed only from DATABASE_OWNED_SOCIAL_COMMAND_URL authenticated as
@@ -1024,6 +1040,102 @@ export async function buildPgPortalPlatform(
       });
     }
 
+    let dailyOutreach: PgPortalDailyOutreachService | undefined;
+    let creatorWatch: PgPortalCreatorWatchService | undefined;
+    let creatorWatchReadReady = false;
+    let creatorWatchCommandReady = false;
+    let dailyOutreachReadinessPool: Pool | undefined;
+    let dailyOutreachCommandReadinessPool: Pool | undefined;
+    const dailyOutreachConfigured = Boolean(
+      env.DATABASE_DAILY_OUTREACH_READ_URL?.trim()
+      || env.DATABASE_DAILY_OUTREACH_COMMAND_URL?.trim(),
+    );
+    if (env.DATABASE_DAILY_OUTREACH_COMMAND_URL?.trim()
+        && !env.DATABASE_DAILY_OUTREACH_READ_URL?.trim()) {
+      throw new Error(
+        'DATABASE_DAILY_OUTREACH_COMMAND_URL requires DATABASE_DAILY_OUTREACH_READ_URL',
+      );
+    }
+    if (dailyOutreachConfigured && !propertyPredatorGrowthProfile) {
+      throw new Error('Daily Outreach is forbidden outside property_predator_growth');
+    }
+    if (env.DATABASE_DAILY_OUTREACH_READ_URL?.trim()) {
+      let outreachReadPool: Pool | undefined;
+      let outreachCommandPool: Pool | undefined;
+      try {
+        const outreachReadConfig = requireCutoverIdentity(
+          loadDatabaseConfig('dailyOutreachRead', env),
+          'DATABASE_DAILY_OUTREACH_READ_URL',
+          'r72_daily_outreach_read',
+        );
+        outreachReadPool = createDatabasePool(outreachReadConfig);
+        await assertDailyOutreachReadBoundaryReady(outreachReadPool);
+        if (expectedInstallationId) {
+          await assertExpectedDatabaseInstallation(outreachReadPool, expectedInstallationId);
+        }
+        if (env.DATABASE_DAILY_OUTREACH_COMMAND_URL?.trim()) {
+          const outreachCommandConfig = requireCutoverIdentity(
+            loadDatabaseConfig('dailyOutreachCommand', env),
+            'DATABASE_DAILY_OUTREACH_COMMAND_URL',
+            'r72_daily_outreach_command',
+          );
+          outreachCommandPool = createDatabasePool(outreachCommandConfig);
+          await assertDailyOutreachCommandBoundaryReady(outreachCommandPool);
+          if (expectedInstallationId) {
+            await assertExpectedDatabaseInstallation(outreachCommandPool, expectedInstallationId);
+          }
+        }
+        dailyOutreach = createPgPortalDailyOutreachService({
+          webPool,
+          readPool: outreachReadPool,
+          ...(outreachCommandPool ? { commandPool: outreachCommandPool } : {}),
+          programmeKey: env.PROPERTY_PREDATOR_DAILY_OUTREACH_PROGRAMME_KEY?.trim()
+            || 'founder_daily_linkedin',
+        });
+        try {
+          await assertCreatorWatchReadBoundaryReady(outreachReadPool);
+          let creatorCommandPool: Pool | undefined;
+          if (outreachCommandPool) {
+            try {
+              await assertCreatorWatchCommandBoundaryReady(outreachCommandPool);
+              creatorCommandPool = outreachCommandPool;
+              creatorWatchCommandReady = true;
+            } catch {
+              creatorWatchCommandReady = false;
+            }
+          }
+          creatorWatch = createPgPortalCreatorWatchService({
+            webPool,
+            readPool: outreachReadPool,
+            ...(creatorCommandPool ? { commandPool: creatorCommandPool } : {}),
+          });
+          creatorWatchReadReady = true;
+        } catch {
+          creatorWatch = undefined;
+          creatorWatchReadReady = false;
+          creatorWatchCommandReady = false;
+        }
+        dailyOutreachReadinessPool = outreachReadPool;
+        dailyOutreachCommandReadinessPool = outreachCommandPool;
+        pools.push(outreachReadPool);
+        if (outreachCommandPool) pools.push(outreachCommandPool);
+      } catch {
+        await Promise.allSettled([
+          outreachReadPool?.end(), outreachCommandPool?.end(),
+        ].filter((operation): operation is Promise<void> => Boolean(operation)));
+        dailyOutreach = undefined;
+        creatorWatch = undefined;
+        creatorWatchReadReady = false;
+        creatorWatchCommandReady = false;
+        dailyOutreachReadinessPool = undefined;
+        dailyOutreachCommandReadinessPool = undefined;
+        // These identities are an explicit cutover declaration. Silently
+        // replacing a failed authoritative boundary with the fictional portal
+        // preview would make an operational outage look like a working queue.
+        throw new Error('Configured Daily Outreach boundaries did not pass readiness');
+      }
+    }
+
     let closed = false;
     return {
       auth: new PgPortalAuthService({ readPool: webPool, commandPool: identityPool }),
@@ -1051,6 +1163,8 @@ export async function buildPgPortalPlatform(
       zernioSocial,
       zernioMessaging,
       zernioCalendar,
+      dailyOutreach,
+      creatorWatch,
       inbox: createPgPortalInboxReadBoundary(webPool),
       inboxCommands: createPgPortalConversionInboxCommandService({ webPool, commandPool }),
       inboxOperations: createPgPortalConversionInboxOperationsService({
@@ -1101,6 +1215,12 @@ export async function buildPgPortalPlatform(
                 ...(ownedSeedMessageReadinessPool
                   ? [assertExpectedDatabaseInstallation(ownedSeedMessageReadinessPool, expectedInstallationId)]
                   : []),
+                ...(dailyOutreachReadinessPool
+                  ? [assertExpectedDatabaseInstallation(dailyOutreachReadinessPool, expectedInstallationId)]
+                  : []),
+                ...(dailyOutreachCommandReadinessPool
+                  ? [assertExpectedDatabaseInstallation(dailyOutreachCommandReadinessPool, expectedInstallationId)]
+                  : []),
               ]
             : []),
           identityPool.query('/* portal.identity-runtime-readiness */ SELECT 1'),
@@ -1134,6 +1254,14 @@ export async function buildPgPortalPlatform(
             ? [assertZernioSocialCommandBoundaryReady(zernioSocialReadinessPool)]
             : []),
           ...(smsReadinessPool ? [assertSmsCommandBoundaryReady(smsReadinessPool)] : []),
+          ...(dailyOutreachReadinessPool
+            ? [assertDailyOutreachReadBoundaryReady(dailyOutreachReadinessPool)] : []),
+          ...(dailyOutreachCommandReadinessPool
+            ? [assertDailyOutreachCommandBoundaryReady(dailyOutreachCommandReadinessPool)] : []),
+          ...(creatorWatchReadReady && dailyOutreachReadinessPool
+            ? [assertCreatorWatchReadBoundaryReady(dailyOutreachReadinessPool)] : []),
+          ...(creatorWatchCommandReady && dailyOutreachCommandReadinessPool
+            ? [assertCreatorWatchCommandBoundaryReady(dailyOutreachCommandReadinessPool)] : []),
         ]);
       },
       async close(): Promise<void> {

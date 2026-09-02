@@ -40,6 +40,8 @@ const OPTIONAL_SERVICES: readonly string[] = Object.freeze([
   'founderEmailPilot',
   'ownedSeedCampaign',
   'ownedSeedMessages',
+  'dailyOutreach',
+  'creatorWatch',
 ]);
 
 async function serverSource(): Promise<string> {

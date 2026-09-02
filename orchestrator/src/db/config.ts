@@ -33,6 +33,9 @@ export const DATABASE_ROLES = [
   'affiliateReceiptCommand',
   'founderPilotEvidenceCommand',
   'zernioSocialCommand',
+  'zernioInboundWebhookCommand',
+  'dailyOutreachCommand',
+  'dailyOutreachRead',
   'worker',
   'webhook',
   'public',
@@ -77,6 +80,9 @@ const ROLE_URL_ENV: Record<DatabaseRole, string> = {
   affiliateReceiptCommand: 'DATABASE_AFFILIATE_RECEIPT_COMMAND_URL',
   founderPilotEvidenceCommand: 'DATABASE_FOUNDER_PILOT_EVIDENCE_COMMAND_URL',
   zernioSocialCommand: 'DATABASE_ZERNIO_SOCIAL_COMMAND_URL',
+  zernioInboundWebhookCommand: 'DATABASE_ZERNIO_INBOUND_WEBHOOK_URL',
+  dailyOutreachCommand: 'DATABASE_DAILY_OUTREACH_COMMAND_URL',
+  dailyOutreachRead: 'DATABASE_DAILY_OUTREACH_READ_URL',
   worker: 'DATABASE_WORKER_URL',
   webhook: 'DATABASE_WEBHOOK_URL',
   public: 'DATABASE_PUBLIC_URL',
@@ -117,6 +123,9 @@ const EXPECTED_RUNTIME_USER: Partial<Record<DatabaseRole, string>> = {
   affiliateReceiptCommand: 'r72_affiliate_receipt_command',
   founderPilotEvidenceCommand: 'r72_founder_pilot_evidence_command',
   zernioSocialCommand: 'r72_zernio_social_command',
+  zernioInboundWebhookCommand: 'r72_zernio_inbound_webhook_command',
+  dailyOutreachCommand: 'r72_daily_outreach_command',
+  dailyOutreachRead: 'r72_daily_outreach_read',
   worker: 'r72_worker',
   webhook: 'r72_webhook',
   public: 'r72_public',
@@ -274,6 +283,12 @@ export function loadDatabaseConfig(
                       ? 'DATABASE_OWNED_SOCIAL_WORKER_POOL_MAX'
                     : role === 'zernioSocialCommand'
                       ? 'DATABASE_ZERNIO_SOCIAL_COMMAND_POOL_MAX'
+                    : role === 'zernioInboundWebhookCommand'
+                      ? 'DATABASE_ZERNIO_INBOUND_WEBHOOK_POOL_MAX'
+                    : role === 'dailyOutreachCommand'
+                      ? 'DATABASE_DAILY_OUTREACH_COMMAND_POOL_MAX'
+                    : role === 'dailyOutreachRead'
+                      ? 'DATABASE_DAILY_OUTREACH_READ_POOL_MAX'
                     : role === 'whatsAppLiveCommand'
                       ? 'DATABASE_WHATSAPP_LIVE_COMMAND_POOL_MAX'
                     : role === 'whatsAppLiveWorkerCommand'
@@ -403,6 +418,12 @@ export function loadDatabaseConfig(
                         ? 'property-predator-affiliate-receipt-command'
                       : role === 'founderPilotEvidenceCommand'
                         ? 'property-predator-founder-pilot-evidence-command'
+                      : role === 'zernioInboundWebhookCommand'
+                        ? 'property-predator-zernio-inbound-webhook-command'
+                      : role === 'dailyOutreachCommand'
+                        ? 'property-predator-daily-outreach-command'
+                      : role === 'dailyOutreachRead'
+                        ? 'property-predator-daily-outreach-read'
                     : role === 'setupDeliveryCommand'
                       ? 'relaunch72-setup-delivery-command'
                       : role === 'setupReissueCommand'

@@ -40,6 +40,8 @@ import type { PortalOwnedSeedCampaignService } from './owned-seed-campaign-servi
 import type { PortalOwnedSeedMessageService } from './owned-seed-message-service.js';
 import type { PortalOperatorActionCentreService } from './operator-action-centre-pg-service.js';
 import type { PortalCompanyAssetsService } from './company-assets-service.js';
+import type { PortalDailyOutreachService } from './daily-outreach-service.js';
+import type { PortalCreatorWatchService } from './creator-watch-service.js';
 import type { SubscriptionStore } from '../server/subscriptions.js';
 import { canonicalIntake } from '../intake/canonical.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
@@ -199,6 +201,10 @@ export interface PostgresPortalConfig {
   ownedSeedMessages?: PortalOwnedSeedMessageService;
   /** Durable TEST-only public-social planning boundary. */
   publicSocial?: NonNullable<PostgresPortalDeps['publicSocial']>;
+  /** Table-blind authoritative Daily Outreach read/command boundary. */
+  dailyOutreach?: PortalDailyOutreachService;
+  /** Review-only Creator Watch relevance boundary; it has no provider client. */
+  creatorWatch?: PortalCreatorWatchService;
   productProfile?: PortalProductProfile;
   /** Distributed fail-closed guard required by the PostgreSQL portal. */
   abuse: NonNullable<PostgresPortalDeps['abuse']>;
@@ -229,7 +235,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
   if ((cfg.companyContentSync || cfg.companyContentReview || cfg.brandBrain || cfg.campaignDrafts
       || cfg.ownedSeedMessages || cfg.ownedSeedCampaign || cfg.ownedSocialBinding
       || cfg.zernioSocial || cfg.zernioMessaging || cfg.zernioCalendar
-      || cfg.smsBinding)
+      || cfg.smsBinding || cfg.dailyOutreach || cfg.creatorWatch)
       && productProfile.id !== 'property_predator_growth') {
     throw new Error(
       'Property Predator company-content sync is forbidden outside property_predator_growth',
@@ -273,6 +279,8 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     ownedSeedCampaign: cfg.ownedSeedCampaign,
     ownedSeedMessages: cfg.ownedSeedMessages,
     publicSocial: cfg.publicSocial,
+    dailyOutreach: cfg.dailyOutreach,
+    creatorWatch: cfg.creatorWatch,
     productProfile,
     trustedClientAddress: cfg.trustedClientAddress,
     now: cfg.now,

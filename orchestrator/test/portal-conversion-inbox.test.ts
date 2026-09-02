@@ -182,6 +182,63 @@ test('renders a receipt-gated owned-office Mailgun reply as LIVE without exposin
   assert.doesNotMatch(html, /cccccccc-cccc-4ccc-8ccc-cccccccccccc/);
 });
 
+test('renders signed LinkedIn Zernio evidence with no reply, assignment, note or call action', () => {
+  const base = createPropertyPredatorTestInboxSnapshot();
+  const summary = base.page.conversations[0]!;
+  const thread = base.threads[0]!;
+  const inbound = thread.messages.find((message) => message.direction === 'inbound')!;
+  const snapshot: ConversionInboxSnapshot = {
+    page: {
+      ...base.page,
+      conversations: [{
+        ...summary,
+        channel: 'linkedin',
+        environment: 'live',
+        subject: 'LinkedIn owned-post comment',
+        requiresApproval: false,
+      }],
+    },
+    threads: [{
+      ...thread,
+      environment: 'live',
+      messages: [{
+        ...inbound,
+        inboundEvidence: {
+          kind: 'signed_zernio_inbound',
+          source: 'zernio',
+          network: 'linkedin',
+          receiptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          verifiedAt: '2026-08-26T08:37:01.000Z',
+        },
+      }],
+      consents: [{
+        channel: 'social', state: 'permitted', basis: 'Existing social evidence',
+        updatedAt: '2026-08-26T08:00:00.000Z',
+      }],
+    }],
+  };
+  const security: ConversionInboxActionSecurity = {
+    ...ACTION_SECURITY,
+    createDraftKeys: { [summary.conversationId]: 'do-not-render-create' },
+    assignmentKeys: { [summary.conversationId]: 'do-not-render-assignment' },
+    internalNoteKeys: { [summary.conversationId]: 'do-not-render-note' },
+    adminCallKeys: { [summary.conversationId]: 'do-not-render-call' },
+  };
+  const html = render(snapshot, { channel: 'linkedin' }, security);
+  assert.match(html, />LI</);
+  assert.match(html, /LinkedIn · LIVE ZERNIO READ-ONLY/);
+  assert.match(html, /LIVE ZERNIO · READ ONLY/);
+  assert.match(html, /Signed Zernio inbound · LI/);
+  assert.match(html, /Zernio signature, exact account binding and immutable inbound projection verified/);
+  assert.match(html, /Social messaging/);
+  assert.match(html, /Consent is shown as social evidence only/);
+  assert.match(html, /Provider effects unavailable/);
+  assert.doesNotMatch(html, /method="post"|Open Action Centre|Create TEST draft|Queue TEST operation/);
+  assert.doesNotMatch(html, /do-not-render-create|do-not-render-assignment|do-not-render-note|do-not-render-call/);
+  assert.doesNotMatch(html, /\/assignment|\/internal-notes|\/admin-calls|\/approval-requests/);
+  assert.doesNotMatch(html, /cccccccc-cccc-4ccc-8ccc-cccccccccccc/);
+});
+
 test('approved social reply remains visibly locked when consent is unknown', () => {
   const html = render(createPropertyPredatorTestInboxSnapshot(), { channel: 'instagram' });
   assert.match(html, /Marcus Reed/);

@@ -196,6 +196,12 @@ import {
 } from '../src/portal/operator-action-centre-presenter.js';
 import { createPropertyPredatorOperatorActionCentreFixture } from '../src/portal/operator-action-centre-fixtures.js';
 import { renderOperatorActionCentreBody } from '../src/portal/operator-action-centre-view.js';
+import { createPropertyPredatorDailyOutreachFixture } from '../src/portal/daily-outreach-fixtures.js';
+import {
+  DAILY_OUTREACH_ROUTE,
+  presentDailyOutreach,
+} from '../src/portal/daily-outreach-presenter.js';
+import { renderDailyOutreachBody } from '../src/portal/daily-outreach-view.js';
 import { createPropertyPredatorAffiliateComplianceFixture } from '../src/portal/affiliate-compliance-fixtures.js';
 import {
   AFFILIATE_COMPLIANCE_ROUTE,
@@ -1621,13 +1627,14 @@ function previewJourneyNav(active: 'board' | 'rules'): string {
   return `<nav aria-label="Journey workspace" style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap"><a class="button ${active === 'board' ? '' : 'secondary'} compact" href="${JOURNEY_BOARD_ROUTE}"${active === 'board' ? ' aria-current="page"' : ''}>Live board</a><a class="button ${active === 'rules' ? '' : 'secondary'} compact" href="/portal/journeys"${active === 'rules' ? ' aria-current="page"' : ''}>Journey rules</a></nav>`;
 }
 
-type PreviewOperationsRoute = 'today' | 'actions' | 'journeys' | 'campaigns' | 'content'
+type PreviewOperationsRoute = 'today' | 'actions' | 'outreach' | 'journeys' | 'campaigns' | 'content'
   | 'compose' | 'images' | 'calendar' | 'inbox' | 'automations' | 'webinars' | 'analytics' | 'social_accounts' | 'readiness' | 'live';
 
 function previewOperationsNav(active: PreviewOperationsRoute): string {
   const links: readonly Readonly<{ key: PreviewOperationsRoute; href: string; label: string }>[] = [
     { key: 'today', href: '/portal', label: 'Today' },
     { key: 'actions', href: OPERATOR_ACTION_CENTRE_ROUTE, label: 'Action centre' },
+    { key: 'outreach', href: DAILY_OUTREACH_ROUTE, label: 'Daily Outreach' },
     { key: 'journeys', href: JOURNEY_BOARD_ROUTE, label: 'Live journeys' },
     { key: 'campaigns', href: PUBLIC_SOCIAL_CAMPAIGNS_ROUTE, label: 'Campaigns' },
     { key: 'content', href: CONTENT_CONTROL_ROOM_ROUTE, label: 'Content' },
@@ -1792,6 +1799,7 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
     status: 200,
     html: shell(renderGrowthHomeBody(snapshot, PROPERTY_PREDATOR_GROWTH_PROFILE, growth, {
       actionCentreAvailable: true,
+      dailyOutreachAvailable: true,
     }), 'overview', 'Property Predator — Growth HQ'),
   };
   if (path === OPERATOR_ACTION_CENTRE_ROUTE) return {
@@ -1799,6 +1807,12 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
     html: shell(`${previewOperationsNav('actions')}${renderOperatorActionCentreBody(presentOperatorActionCentre(
       createPropertyPredatorOperatorActionCentreFixture(),
     ))}`, 'actions', 'Property Predator — Action Centre'),
+  };
+  if (path === DAILY_OUTREACH_ROUTE) return {
+    status: 200,
+    html: shell(`${previewOperationsNav('outreach')}${renderDailyOutreachBody(presentDailyOutreach(
+      createPropertyPredatorDailyOutreachFixture(),
+    ))}`, 'actions', 'Property Predator — Daily Outreach'),
   };
   if (path === AFFILIATE_COMPLIANCE_ROUTE) return {
     status: 200,

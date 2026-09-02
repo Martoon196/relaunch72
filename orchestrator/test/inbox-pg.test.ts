@@ -80,6 +80,10 @@ test('inbox normalization is actor-bound, canonical and test destinations fail c
     commandKey: 'unsafe', channel: 'email', name: 'Unsafe',
     endpointAddress: 'real@example.com', endpointDisplayName: 'Unsafe',
   }), /reserved non-routable/);
+  assert.throws(() => normalizeConfigureTestInbox({
+    commandKey: 'linkedin-not-sendable', channel: 'linkedin', name: 'LinkedIn',
+    endpointAddress: 'test:linkedin', endpointDisplayName: 'LinkedIn',
+  } as never), /channel is invalid/);
   assert.throws(() => normalizeCreateDraft({
     commandKey: 'draft', conversationId: CONVERSATION, contactPointId: ENDPOINT,
     body: 'Safe body', sourceContent: {
@@ -353,6 +357,7 @@ class ApprovalBoundarySql implements SqlExecutor {
   constructor(
     private readonly bodyBytes: number,
     private readonly lifecycle: 'approval_pending' | 'approved' = 'approval_pending',
+    private readonly channel: 'email' | 'linkedin' = 'email',
   ) {}
 
   async query<T extends Record<string, unknown>>(
@@ -374,7 +379,7 @@ class ApprovalBoundarySql implements SqlExecutor {
           conversationId: CONVERSATION,
           providerConnectionId: CONNECTION,
           channelEndpointId: ENDPOINT,
-          channel: 'email',
+          channel: this.channel,
           environment: 'test',
           contactId: USER,
           contactPointId: ENDPOINT,
@@ -573,6 +578,17 @@ test('new inbound conversations clamp application time to the PostgreSQL update 
   ]);
 });
 
+test('approved LinkedIn evidence cannot enter the outbound queue', async () => {
+  const sql = new ApprovalBoundarySql(128, 'approved', 'linkedin');
+  await assert.rejects(approvalBoundaryService(sql).queueApprovedMessage(userContext, {
+    commandKey: 'linkedin-read-only-queue',
+    messageId: MESSAGE,
+    expectedRowVersion: 2,
+    purpose: 'marketing',
+  }), /LinkedIn conversations are read-only/);
+  assert.deepEqual(sql.writes, []);
+});
+
 test('queued provider work clamps application time to the PostgreSQL update clock', async () => {
   let operationSql = '';
   let deliverySql = '';
@@ -639,6 +655,7 @@ test('queued provider work clamps application time to the PostgreSQL update cloc
 
 class ReadClient {
   invalid = false;
+  channel = 'email';
   conversationSql = '';
   async query<TRow extends QueryResultRow>(sql: string): Promise<QueryResult<TRow>> {
     if (sql.startsWith('BEGIN') || sql === 'COMMIT' || sql === 'ROLLBACK'
@@ -650,7 +667,7 @@ class ReadClient {
     if (sql.includes('inbox.list-conversations')) {
       this.conversationSql = sql;
       return queryResult([{
-      conversationId: CONVERSATION, inboxId: INBOX, channel: 'email', environment: 'test', state: 'open',
+      conversationId: CONVERSATION, inboxId: INBOX, channel: this.channel, environment: 'test', state: 'open',
       contactId: USER, contactName: 'Demo Lead', subject: null, unreadCount: 1,
       assignedUserId: USER, assignedUserName: 'Demo Operator',
       requiresApproval: true,
@@ -697,4 +714,15 @@ test('inbox read model is bounded, omits endpoint addresses and fails closed on 
   client.invalid = true;
   await assert.rejects(service.listConversations(userContext), /latest message is invalid/);
   await assert.rejects(service.listConversations(userContext, { limit: 51 }), /limit/);
+});
+
+test('inbox read model admits LinkedIn only as a canonical read channel', async () => {
+  const client = new ReadClient();
+  client.channel = 'linkedin';
+  const pool = { connect: async () => client } as unknown as Pick<Pool, 'connect'>;
+  const page = await new PgInboxReadService(pool).listConversations(userContext, {
+    channel: 'linkedin', limit: 1,
+  });
+  assert.equal(page.conversations[0]?.channel, 'linkedin');
+  assert.match(client.conversationSql, /operational_inbox_live_conversation_visible/);
 });

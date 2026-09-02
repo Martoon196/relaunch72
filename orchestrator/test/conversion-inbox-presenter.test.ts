@@ -24,6 +24,7 @@ test('normalises channel, queue and Unicode-safe bounded search filters', () => 
   assert.equal([...filters.query].length, CONVERSION_INBOX_MAX_QUERY_LENGTH);
   assert.equal(filters.channel, 'whatsapp');
   assert.equal(filters.queue, 'approval');
+  assert.equal(normaliseConversionInboxFilters({ channel: 'linkedin' }).channel, 'linkedin');
   assert.deepEqual(normaliseConversionInboxFilters({ channel: 'telegram', queue: 'mine' }), {
     query: '', channel: 'all', queue: 'all',
   });
@@ -38,6 +39,7 @@ test('projects the canonical inbox page into a channel-aware conversion queue', 
   assert.equal(view.totalUnreadCount, 6);
   assert.deepEqual(view.channels.map(({ channel, count }) => [channel, count]), [
     ['all', 5], ['email', 1], ['whatsapp', 1], ['sms', 1], ['instagram', 1], ['facebook', 1],
+    ['linkedin', 0],
   ]);
   assert.equal(view.selectedThread?.lead.displayName, 'Aisha Rahman');
   assert.equal(view.selectedThread?.summary.channel, 'email');
@@ -117,6 +119,70 @@ test('projects only exact signed simulator evidence for a received inbound messa
   });
   assert.equal(hidden.selectedThread?.messages.find((message) => message.direction === 'inbound')
     ?.inboundEvidence, null);
+});
+
+test('projects exact signed Zernio LinkedIn evidence as a read-only social conversation', () => {
+  const base = createPropertyPredatorTestInboxSnapshot();
+  const summary = base.page.conversations[0]!;
+  const thread = base.threads[0]!;
+  const inbound = thread.messages.find((message) => message.direction === 'inbound')!;
+  const snapshot: ConversionInboxSnapshot = {
+    page: {
+      ...base.page,
+      conversations: [{
+        ...summary,
+        channel: 'linkedin',
+        environment: 'live',
+        subject: 'LinkedIn owned-post comment',
+        requiresApproval: false,
+      }],
+    },
+    threads: [{
+      ...thread,
+      environment: 'live',
+      messages: [{
+        ...inbound,
+        inboundEvidence: {
+          kind: 'signed_zernio_inbound',
+          source: 'zernio',
+          network: 'linkedin',
+          receiptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          verifiedAt: '2026-08-26T08:37:01.000Z',
+        },
+      }],
+      consents: [{
+        channel: 'social', state: 'permitted', basis: 'Existing social evidence',
+        updatedAt: '2026-08-26T08:00:00.000Z',
+      }],
+      railActivity: {
+        state: 'accepted', correlationId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        occurredAt: '2026-08-26T08:37:02.000Z',
+      },
+    }],
+  };
+  const view = presentConversionInbox(snapshot, {
+    workspaceName: WORKSPACE,
+    filters: { channel: 'linkedin' },
+  });
+  assert.equal(view.filters.channel, 'linkedin');
+  assert.equal(view.selectedThread?.summary.testProviderLabel,
+    'LinkedIn · LIVE ZERNIO READ-ONLY');
+  assert.equal(view.selectedThread?.draft.consentAllowsQueueing, true);
+  assert.equal(view.selectedThread?.draft.mayQueueTestOperation, false);
+  assert.match(view.selectedThread?.draft.gateDetail ?? '', /read-only evidence rail/i);
+  assert.equal(view.selectedThread?.railActivity, null);
+  assert.deepEqual(view.selectedThread?.messages[0]?.inboundEvidence, {
+    kind: 'signed_zernio_inbound',
+    source: 'zernio',
+    network: 'linkedin',
+    receiptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    verifiedAt: '2026-08-26T08:37:01.000Z',
+    label: 'Signed Zernio inbound',
+    networkLabel: 'LinkedIn',
+    networkCode: 'LI',
+    receiptLabel: 'ZERNIO IN cccccccc…cccc',
+    accessibleLabel: 'Signed Zernio LinkedIn inbound event projected into the canonical Conversion Inbox and Lead 360. This conversation is read-only in Growth HQ.',
+  });
 });
 
 test('projects only coarse TEST rail activity and an opaque correlation label', () => {
@@ -277,7 +343,7 @@ test('bounds conversation, transcript and UTF-8 message rendering', () => {
   assert.equal(view.selectedThread?.draft.bodyTruncated, true);
 });
 
-test('fixture remains explicitly fictional and spans every supported conversation channel', () => {
+test('fixture remains explicitly fictional and spans every command-capable conversation channel', () => {
   const snapshot = createPropertyPredatorTestInboxSnapshot();
   assert.deepEqual(new Set(snapshot.page.conversations.map((item) => item.channel)), new Set([
     'email', 'whatsapp', 'sms', 'instagram', 'facebook',

@@ -97,10 +97,18 @@ export interface SocialListeningProvider {
   ): Promise<SocialListeningPage>;
 }
 
-export type ConversationChannel = 'whatsapp' | 'sms' | 'email' | 'instagram' | 'facebook';
+export type ConversationChannel =
+  | 'whatsapp'
+  | 'sms'
+  | 'email'
+  | 'instagram'
+  | 'facebook'
+  | 'linkedin';
+export type ConversationSendChannel = Exclude<ConversationChannel, 'linkedin'>;
 
 export interface ConversationMessageRequest {
-  readonly channel: ConversationChannel;
+  /** LinkedIn is intentionally absent until a separately approved outbound rail exists. */
+  readonly channel: ConversationSendChannel;
   /** CRM contact/channel address resolved inside the workspace. */
   readonly recipient: string;
   readonly text: string;

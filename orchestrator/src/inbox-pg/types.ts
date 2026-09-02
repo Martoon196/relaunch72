@@ -1,6 +1,6 @@
 import type { DatabaseRequestContext } from '../db/rls.js';
 import type { SqlExecutor } from '../crm-pg/types.js';
-import type { ConversationChannel, ConversationMessageRequest,
+import type { ConversationChannel, ConversationMessageRequest, ConversationSendChannel,
   WorkspaceOwnedProviderConnectionRecord } from '../providers/contracts.js';
 
 export type InboxEnvironment = 'test';
@@ -25,7 +25,7 @@ export interface InboxTransactionRunner {
 
 export interface ConfigureTestInboxCommand {
   readonly commandKey: string;
-  readonly channel: ConversationChannel;
+  readonly channel: ConversationSendChannel;
   readonly name: string;
   readonly endpointAddress: string;
   readonly endpointDisplayName: string;
@@ -36,7 +36,7 @@ export interface ConfigureTestInboxResult {
   readonly providerConnectionId: string;
   readonly channelEndpointId: string;
   readonly inboxId: string;
-  readonly channel: ConversationChannel;
+  readonly channel: ConversationSendChannel;
   readonly environment: InboxEnvironment;
 }
 
@@ -160,7 +160,7 @@ export interface InboxConversationSummary {
   readonly conversationId: string;
   readonly inboxId: string;
   readonly channel: ConversationChannel;
-  /** LIVE is admitted only for the exact owned-office Mailgun proof receipt. */
+  /** LIVE is admitted only through an exact channel-specific signed evidence projection. */
   readonly environment?: InboxConversationReadEnvironment;
   readonly state: InboxConversationState;
   readonly contactId: string | null;

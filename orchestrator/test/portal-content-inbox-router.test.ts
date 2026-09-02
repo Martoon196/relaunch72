@@ -388,6 +388,65 @@ test('Conversion Inbox passes bounded filters, loads only the selected visible t
   assert.deepEqual(threadCalls, [selectedId]);
 });
 
+test('Conversion Inbox routes signed LinkedIn projections read-only and generates no action controls', async () => {
+  const summary = fixture.page.conversations[0]!;
+  const baseThread = fixture.threads[0]!;
+  const inbound = baseThread.messages.find((message) => message.direction === 'inbound')!;
+  const linkedInSummary = {
+    ...summary,
+    channel: 'linkedin' as const,
+    environment: 'live' as const,
+    subject: 'LinkedIn owned-post comment',
+    requiresApproval: false,
+  };
+  const linkedInThread = {
+    ...baseThread,
+    environment: 'live' as const,
+    messages: [{
+      ...inbound,
+      inboundEvidence: {
+        kind: 'signed_zernio_inbound' as const,
+        source: 'zernio' as const,
+        network: 'linkedin' as const,
+        receiptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        verifiedAt: '2026-08-26T08:37:01.000Z',
+      },
+    }],
+    consents: [{
+      channel: 'social' as const, state: 'permitted' as const,
+      basis: 'Existing social evidence', updatedAt: '2026-08-26T08:00:00.000Z',
+    }],
+  };
+  const queries: InboxConversationQuery[] = [];
+  const inbox: PortalInboxReadBoundary = {
+    listConversations: async (_identity, query = {}) => {
+      queries.push(query);
+      return { ...fixture.page, conversations: [linkedInSummary] };
+    },
+    thread: async () => linkedInThread,
+  };
+  const result = await call(
+    `/portal/inbox?channel=linkedin&conversation=${summary.conversationId}`,
+    postgres({
+      inbox,
+      inboxCommands: {} as PortalConversionInboxCommandService,
+      inboxOperations: {} as never,
+    }),
+    COOKIE,
+  );
+
+  assert.equal(result.statusCode, 200);
+  assert.deepEqual(queries, [{
+    limit: 50, channel: 'linkedin', state: null, search: null,
+  }]);
+  assert.match(result.body, /LinkedIn · LIVE ZERNIO READ-ONLY/);
+  assert.match(result.body, /Evidence visible · actions unavailable/);
+  assert.match(result.body, /Signed Zernio inbound · LI/);
+  assert.doesNotMatch(result.body, /Open Action Centre|Create TEST draft|Queue TEST operation/);
+  assert.doesNotMatch(result.body, /\/assignment|\/internal-notes|\/admin-calls|\/test-queue/);
+  assert.doesNotMatch(result.body, /cccccccc-cccc-4ccc-8ccc-cccccccccccc/);
+});
+
 test('canonical Conversion Inbox approval queue selects a summary backed by an undecided exact approval', async () => {
   const threadCalls: string[] = [];
   const inbox: PortalInboxReadBoundary = {

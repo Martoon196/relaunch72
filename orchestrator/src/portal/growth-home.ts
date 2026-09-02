@@ -2,6 +2,7 @@ import type { CrmOpportunityView, CrmTaskView, CrmWorkspaceSnapshot } from './cr
 import type { GrowthFunnelView, GrowthIntelligenceView, GrowthLeadView } from './growth-intelligence.js';
 import { emptyGrowthIntelligence } from './growth-intelligence.js';
 import type { PortalProductProfile } from './product-profile.js';
+import { DAILY_OUTREACH_ROUTE } from './daily-outreach-presenter.js';
 import { escapeHtml, icon } from './ui.js';
 
 const GROWTH_HOME_STYLE = `
@@ -139,7 +140,10 @@ export function renderGrowthHomeBody(
   snapshot: CrmWorkspaceSnapshot,
   profile: PortalProductProfile,
   suppliedGrowth?: GrowthIntelligenceView,
-  options: Readonly<{ actionCentreAvailable?: boolean }> = {},
+  options: Readonly<{
+    actionCentreAvailable?: boolean;
+    dailyOutreachAvailable?: boolean;
+  }> = {},
 ): string {
   const growth = suppliedGrowth ?? emptyGrowthIntelligence(snapshot.workspace.snapshotAt);
   const openStageIds = new Set(snapshot.stages.filter((stage) => !stage.isClosed).map((stage) => stage.id));
@@ -162,9 +166,19 @@ export function renderGrowthHomeBody(
     ? 'See what every <em>lead</em> is hiding.'
     : escapeHtml(profile.home.title);
   const actionCentreAvailable = options.actionCentreAvailable === true;
-  const heroActions = actionCentreAvailable
-    ? '<a class="button" href="/portal/actions">Open Action Centre</a><a class="button secondary" href="#hot-list">Work the hot list</a>'
-    : '<a class="button" href="#hot-list">Work the hot list</a><a class="button secondary" href="/portal/crm/contacts">Open CRM</a>';
+  const dailyOutreachAvailable = options.dailyOutreachAvailable === true
+    && profile.id === 'property_predator_growth';
+  const heroActions = [
+    actionCentreAvailable
+      ? '<a class="button" href="/portal/actions">Open Action Centre</a>'
+      : '<a class="button" href="#hot-list">Work the hot list</a>',
+    ...(dailyOutreachAvailable
+      ? [`<a class="button secondary" href="${DAILY_OUTREACH_ROUTE}">Daily Outreach</a>`]
+      : []),
+    actionCentreAvailable
+      ? '<a class="button secondary" href="#hot-list">Work the hot list</a>'
+      : '<a class="button secondary" href="/portal/crm/contacts">Open CRM</a>',
+  ].join('');
   const attentionCopy = actionCentreAvailable
     ? 'Up to four loaded CRM items: most overdue, then nearest due, then longest unworked. The full evidence-backed queue is in Action Centre.'
     : 'A bounded overview preview, not the complete workspace queue: most overdue, then nearest due, then longest-unworked open opportunities.';
