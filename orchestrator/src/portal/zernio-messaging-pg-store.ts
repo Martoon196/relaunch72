@@ -14,6 +14,8 @@ const HEX = /^[0-9a-f]{64}$/u;
 export type ZernioReplyStoreFailure =
   | 'unauthenticated' | 'forbidden' | 'validation' | 'conflict' | 'unavailable';
 
+export type ZernioReplyNetwork = 'instagram' | 'linkedin';
+
 export interface ZernioReplyState {
   readonly draftId: string;
   readonly body: string;
@@ -170,9 +172,12 @@ export class PgZernioMessagingReplyStore {
   }
 
   async create(identity: PortalCrmRequestIdentity, input: Readonly<{
-    draftId: string; accountId: string; providerConversationId: string; body: string;
+    draftId: string; network: ZernioReplyNetwork; accountId: string;
+    providerConversationId: string; body: string;
   }>): Promise<ZernioReplyStoreResult<'created' | 'replayed'>> {
-    if (!UUID.test(input.draftId) || !input.body || input.body !== input.body.trim()
+    if (!UUID.test(input.draftId)
+        || (input.network !== 'instagram' && input.network !== 'linkedin')
+        || !input.body || input.body !== input.body.trim()
         || Buffer.byteLength(input.body, 'utf8') > 10_000) {
       return Object.freeze({ ok: false, kind: 'validation' });
     }
@@ -184,11 +189,11 @@ export class PgZernioMessagingReplyStore {
         client.query<DispositionRow>(
           `/* portal.zernio-messaging.create-draft */
            SELECT disposition FROM app_private.create_zernio_reply_draft(
-             $1::uuid,$2::uuid,$3::uuid,$4::bytea,$5::bytea,$6::bytea,$7::text,$8::bytea
+             $1::uuid,$2::uuid,$3::uuid,$4::text,$5::bytea,$6::bytea,$7::bytea,$8::text,$9::bytea
            )`,
           [context.workspaceId, this.dependencies.providerConnectionId, input.draftId,
-            this.#profileHash, sha256(input.accountId), sha256(input.providerConversationId),
-            input.body, bodyHash],
+            input.network, this.#profileHash, sha256(input.accountId),
+            sha256(input.providerConversationId), input.body, bodyHash],
         ), { isolation: 'serializable' });
       const disposition = result.rows[0]?.disposition;
       if (result.rows.length !== 1 || (disposition !== 'created' && disposition !== 'replayed')) {
@@ -249,12 +254,13 @@ export class PgZernioMessagingReplyStore {
   }
 
   async claim(identity: PortalCrmRequestIdentity, input: Readonly<{
-    draftId: string; deliveryId: string; accountId: string;
+    draftId: string; deliveryId: string; network: ZernioReplyNetwork; accountId: string;
     providerConversationId: string; idempotencyKey: string; leaseToken: string;
   }>): Promise<ZernioReplyStoreResult<Readonly<{
     disposition: string; body: string | null; bodySha256: string;
   }>>> {
     if (!UUID.test(input.draftId) || !UUID.test(input.deliveryId)
+        || (input.network !== 'instagram' && input.network !== 'linkedin')
         || !UUID.test(input.leaseToken) || !input.idempotencyKey) {
       return Object.freeze({ ok: false, kind: 'validation' });
     }
@@ -265,10 +271,10 @@ export class PgZernioMessagingReplyStore {
         client.query<ClaimRow>(
           `/* portal.zernio-messaging.claim-send */
            SELECT * FROM app_private.claim_zernio_reply_send(
-             $1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::bytea,$6::bytea,$7::bytea,$8::bytea,$9::bytea
+             $1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::text,$6::bytea,$7::bytea,$8::bytea,$9::bytea,$10::bytea
            )`,
           [context.workspaceId, this.dependencies.providerConnectionId, input.draftId,
-            input.deliveryId, this.#profileHash, sha256(input.accountId),
+            input.deliveryId, input.network, this.#profileHash, sha256(input.accountId),
             sha256(input.providerConversationId), sha256(input.idempotencyKey),
             sha256(input.leaseToken)],
         ), { isolation: 'serializable' });

@@ -185,6 +185,8 @@ export interface PostgresPortalConfig {
   zernioSocial?: PortalZernioSocialConnectionService;
   /** Read-only live Instagram conversation projection inside Messaging. */
   zernioMessaging?: PortalZernioMessagingService;
+  /** Exact calendar-to-Zernio database staging; no provider client is exposed. */
+  zernioCalendar?: NonNullable<PostgresPortalDeps['zernioCalendar']>;
   /** Founder-only Twilio SMS binding and owned-test staging. */
   smsBinding?: PortalSmsBindingService;
   contactPermission?: PortalContactPermissionService;
@@ -226,7 +228,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
   }
   if ((cfg.companyContentSync || cfg.companyContentReview || cfg.brandBrain || cfg.campaignDrafts
       || cfg.ownedSeedMessages || cfg.ownedSeedCampaign || cfg.ownedSocialBinding
-      || cfg.zernioSocial || cfg.zernioMessaging
+      || cfg.zernioSocial || cfg.zernioMessaging || cfg.zernioCalendar
       || cfg.smsBinding)
       && productProfile.id !== 'property_predator_growth') {
     throw new Error(
@@ -263,6 +265,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     ownedSocialBinding: cfg.ownedSocialBinding,
     zernioSocial: cfg.zernioSocial,
     zernioMessaging: cfg.zernioMessaging,
+    zernioCalendar: cfg.zernioCalendar,
     smsBinding: cfg.smsBinding,
     contactPermission: cfg.contactPermission,
     founderEmailPilot: cfg.founderEmailPilot,

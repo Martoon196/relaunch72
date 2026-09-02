@@ -194,6 +194,10 @@ services:
       # approved enqueue only. It has no worker or provider-call capability.
       - key: DATABASE_OWNED_SOCIAL_COMMAND_URL
         sync: false
+      # Current Zernio connection, calendar-stage and reply-approval seam. It
+      # has function-only command authority and no worker claim capability.
+      - key: DATABASE_ZERNIO_SOCIAL_COMMAND_URL
+        sync: false
       # Function-only 0053 founder command seam. It can bind encrypted Meta
       # evidence, register one approved template and enqueue only after exact
       # consent/PECR/operator evidence. It cannot claim or call a provider.
@@ -250,6 +254,8 @@ services:
         value: "2"
       - key: DATABASE_OWNED_SOCIAL_COMMAND_POOL_MAX
         value: "2"
+      - key: DATABASE_ZERNIO_SOCIAL_COMMAND_POOL_MAX
+        value: "2"
       - key: DATABASE_WHATSAPP_LIVE_COMMAND_POOL_MAX
         value: "2"
       - key: DATABASE_CUSTOMER_EMAIL_COMMAND_POOL_MAX
@@ -284,8 +290,8 @@ services:
         sync: false
       - key: PROPERTY_PREDATOR_CUSTOMER_EMAIL_LIVE_CONNECTION_ID
         sync: false
-      # 0052/0059 owned Ayrshare/X founder command seam. The connection id
-      # binds the command service to one exact Ayrshare connection.
+      # 0052/0059/0080 owned Ayrshare founder command and Instagram/LinkedIn
+      # calendar seam. The connection id binds both to one exact connection.
       - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_CONNECTION_ID
         sync: false
       # The owned-social profile-key encryption contract. These stay UNSET.
@@ -306,12 +312,38 @@ services:
       - key: PROPERTY_PREDATOR_PILOT_MAX_RECIPIENTS
         value: "10"
 
-      # Provider effects are triply fail-closed. A later activation requires a
-      # separate user approval plus a reviewed configuration change.
+      # Social read/reply and calendar effects are explicitly activated for the
+      # bound Zernio accounts. Email, WhatsApp, SMS and payment rails retain
+      # their own disabled switches and isolated credentials.
       - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
-        value: "false"
-      - key: PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED
         value: "true"
+      - key: PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED
+        value: "false"
+      - key: PROPERTY_PREDATOR_SOCIAL_PROVIDER
+        value: zernio
+      # Zernio connection/account truth. These dashboard-owned values are
+      # copied from the already connected owned profile and never logged.
+      - key: PROPERTY_PREDATOR_ZERNIO_LIVE_CONNECTION_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_ZERNIO_PROVIDER_PROFILE_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_ZERNIO_INSTAGRAM_ACCOUNT_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_ZERNIO_LINKEDIN_ACCOUNT_ID
+        sync: false
+      - key: PROPERTY_PREDATOR_ZERNIO_MESSAGING_ACCOUNT_IDS
+        sync: false
+      - key: PROPERTY_PREDATOR_ZERNIO_COMMENT_ACCOUNT_BINDINGS
+        sync: false
+      - key: ZERNIO_API_KEY
+        sync: false
+      # Shared only with the isolated Zernio calendar worker. It signs a
+      # short-lived exact-asset URL; the company-content READ bearer stays in
+      # this web service and never enters the worker or URL.
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_SIGNING_KEY_BASE64URL
+        sync: false
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_URL_TTL_SECONDS
+        value: "900"
       - key: PROPERTY_PREDATOR_EMAIL_DELIVERY_ENABLED
         value: "false"
       - key: PROPERTY_PREDATOR_EMAIL_EMERGENCY_PAUSED
@@ -716,12 +748,9 @@ services:
       - key: PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED
         value: "true"
 
-  # 0052/0066 owned-profile live worker. One lease-fenced worker handles the
-  # two currently owned networks and selects the exact network from each job.
-  # The service can be deployed in dark mode to
-  # prove its exact database boundary without loading an adapter or making a
-  # provider call. Activation requires changing the three interlocked safety
-  # values together after the owned Instagram/LinkedIn evidence is reviewed.
+  # 0085 Zernio calendar worker. One lease-fenced process handles the two owned
+  # networks, selects the exact account from each job and publishes at most one
+  # due operation per cycle. Historical Ayrshare code remains dormant.
   - type: worker
     name: property-predator-owned-public-social-live
     runtime: node
@@ -730,7 +759,7 @@ services:
     branch: codex/relaunch72-platform-foundation
     numInstances: 1
     buildCommand: npm ci --ignore-scripts --include=dev && node scripts/supply-chain.mjs --check && npm run typecheck && npm test
-    startCommand: npm run --workspace orchestrator serve:owned-public-social-live
+    startCommand: npm run --workspace orchestrator serve:zernio-calendar-live
     maxShutdownDelaySeconds: 120
     autoDeployTrigger: off
     envVars:
@@ -739,8 +768,8 @@ services:
       - key: NODE_ENV
         value: production
 
-      # One exact 0052 function-only login. It can claim/load/begin/settle one
-      # owned-profile job and has no direct table, web or planner capability.
+      # One exact 0085 function-only login. It can claim/load/begin/settle one
+      # Zernio calendar job and has no direct table, web or planner capability.
       - key: DATABASE_SSL_MODE
         value: verify-full
       - key: DATABASE_OWNED_SOCIAL_WORKER_URL
@@ -756,36 +785,43 @@ services:
       - key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID
         sync: false
 
-      # Tenant/account binding and envelope key are secret-manager values. The
-      # plaintext Ayrshare profile key remains encrypted in Neon and is exposed
-      # only in memory for the single leased operation.
+      # Tenant and provider account bindings are secret-manager values. The
+      # Zernio key is independently supplied to this isolated worker; the web
+      # service also receives it for the separately gated OAuth/inbox seam.
       - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_WORKSPACE_ID
         sync: false
-      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_CONNECTION_ID
+      - key: PROPERTY_PREDATOR_ZERNIO_LIVE_CONNECTION_ID
         sync: false
-      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_BASE64
+      - key: PROPERTY_PREDATOR_ZERNIO_INSTAGRAM_ACCOUNT_ID
         sync: false
-      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_VERSION
+      - key: PROPERTY_PREDATOR_ZERNIO_LINKEDIN_ACCOUNT_ID
         sync: false
-      - key: AYRSHARE_API_KEY
+      - key: ZERNIO_API_KEY
         sync: false
       - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN
         sync: false
+      # Same canonical 32-byte base64url key as the Growth HQ web slot. This
+      # worker can mint short-lived exact-media URLs but cannot read the private
+      # company-content source directly.
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_SIGNING_KEY_BASE64URL
+        sync: false
+      - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_URL_TTL_SECONDS
+        value: "900"
 
-      # Dark defaults. No live adapter is instantiated and no dispatch loop is
-      # started while this exact trio remains in place.
+      # Current provider activation. Runtime account hashes, database binding,
+      # caps and emergency pause must still agree before any provider call.
       - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE
-        value: disabled
+        value: zernio_live
       - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_PROVIDER_ID
-        value: ayrshare
+        value: zernio
       - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK
         value: instagram_linkedin
       - key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_POLL_MS
         value: "5000"
       - key: PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED
-        value: "false"
-      - key: PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED
         value: "true"
+      - key: PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED
+        value: "false"
 
   # 0056 permission-bound Twilio SMS worker. It deploys dark and proves its
   # exact database boundary without constructing the Twilio adapter or making

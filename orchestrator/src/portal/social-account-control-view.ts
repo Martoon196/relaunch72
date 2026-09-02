@@ -82,7 +82,7 @@ function ladderPanel(): string {
 export function renderSocialAccountControlBody(view: SocialAccountControlView): string {
   const cards = view.accounts.map(accountCard).join('');
   const fixture = view.illustrative
-    ? '<section class="sac-fixture" role="status" aria-label="Illustrative data boundary"><strong>FICTIONAL ACCOUNT REHEARSAL</strong><p>Every handle, profile binding, permission and health observation below is invented test data. Nothing was read from Ayrshare or any social network.</p></section>'
+    ? '<section class="sac-fixture" role="status" aria-label="Illustrative data boundary"><strong>FICTIONAL ACCOUNT REHEARSAL</strong><p>Every handle, account binding, permission and health observation below is invented test data. Nothing was read from Zernio or any social network.</p></section>'
     : '';
   const truncation = view.inputTruncated
     ? '<p class="sac-truncated">The account catalogue exceeded its safe display bound. Extra accounts are hidden and cannot qualify as ready.</p>'
@@ -119,7 +119,8 @@ export function renderZernioSocialAccountControlBody(input: Readonly<{
   notice?: ZernioSocialNotice;
 }>): string {
   const networks = ['facebook', 'instagram', 'linkedin'] as const;
-  const forms = networks.map((network) => `<form method="post" action="/portal/social/accounts/connect/${network}" autocomplete="off"><input type="hidden" name="_csrf" value="${escapeHtml(input.csrfToken)}"><input type="hidden" name="confirm_connect" value="CONNECT"><button class="sac-action" type="submit">Connect ${escapeHtml(network[0]!.toUpperCase() + network.slice(1))}</button></form>`).join('');
+  const publishingBoundary = '<p class="sac-provider-note"><strong>One verified Zernio connection, separate permissions:</strong> the same owned Instagram and LinkedIn accounts can power the calendar and inbox. Connecting proves account ownership; every scheduled post or reply still requires its own approved content and command gate.</p>';
+  const forms = `${publishingBoundary}${networks.map((network) => `<form method="post" action="/portal/social/accounts/connect/${network}" autocomplete="off"><input type="hidden" name="_csrf" value="${escapeHtml(input.csrfToken)}"><input type="hidden" name="confirm_connect" value="CONNECT"><button class="sac-action" type="submit">Connect ${escapeHtml(network[0]!.toUpperCase() + network.slice(1))}</button></form>`).join('')}`;
   const accounts = input.accounts.map(zernioConnectedAccount).join('');
   const notice = input.notice?.code === 'invalid'
       && input.accounts.some((account) => account.status === 'active' && account.webhookReceiptCount > 0)

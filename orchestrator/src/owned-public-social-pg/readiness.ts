@@ -261,3 +261,142 @@ export async function assertOwnedPublicSocialWorkerBoundaryReady(
     throw new Error('Owned public-social worker database boundary is not exact');
   }
 }
+
+interface ZernioCalendarWorkerBoundaryRow extends QueryResultRow {
+  exactRole: unknown;
+  schemaUsage: unknown;
+  claimExecute: unknown;
+  beginExecute: unknown;
+  loadExecute: unknown;
+  settleExecute: unknown;
+  ayrshareWorkerFunctionsDenied: unknown;
+  zernioCommandFunctionsDenied: unknown;
+  ayrshareCommandFunctionsDenied: unknown;
+  ledgerExecute: unknown;
+  installationExecute: unknown;
+  tableBlind: unknown;
+  elevatedRolesDenied: unknown;
+}
+
+/**
+ * Prove migration 0085 left the shared worker login with only the provider-
+ * qualified Zernio calendar dispatch surface. The historical Ayrshare code
+ * remains in the repository, but its mutable database functions are dormant
+ * until a future provider-isolation migration makes them safe to re-enable.
+ */
+export async function assertZernioCalendarWorkerBoundaryReady(
+  pool: Pick<Pool, 'query'>,
+): Promise<void> {
+  let rows: readonly ZernioCalendarWorkerBoundaryRow[];
+  try {
+    const result = await pool.query<ZernioCalendarWorkerBoundaryRow>(
+      `/* zernio-calendar.worker-runtime-boundary */
+       SELECT
+         current_user = 'r72_owned_social_worker_command' AS "exactRole",
+         has_schema_privilege(current_user, 'app_private', 'USAGE') AS "schemaUsage",
+         has_function_privilege(
+           current_user,
+           'app_private.claim_zernio_calendar_job(uuid,uuid,text[],bytea,integer)',
+           'EXECUTE'
+         ) AS "claimExecute",
+         has_function_privilege(
+           current_user,
+           'app_private.begin_zernio_calendar_call(uuid,uuid,bigint,bytea,boolean,boolean)',
+           'EXECUTE'
+         ) AS "beginExecute",
+         has_function_privilege(
+           current_user,
+           'app_private.load_zernio_calendar_job(uuid,uuid,bigint,bytea)',
+           'EXECUTE'
+         ) AS "loadExecute",
+         has_function_privilege(
+           current_user,
+           'app_private.settle_zernio_calendar_call(uuid,uuid,bigint,bytea,text,text,bytea,timestamp with time zone,text)',
+           'EXECUTE'
+         ) AS "settleExecute",
+         NOT has_function_privilege(
+           current_user,
+           'app_private.claim_owned_social_job(uuid,uuid,bytea,integer)',
+           'EXECUTE'
+         ) AND NOT has_function_privilege(
+           current_user,
+           'app_private.load_owned_social_job(uuid,uuid,bigint,bytea)',
+           'EXECUTE'
+         ) AND NOT has_function_privilege(
+           current_user,
+           'app_private.begin_owned_social_call(uuid,uuid,bigint,bytea,boolean,boolean)',
+           'EXECUTE'
+         ) AND NOT has_function_privilege(
+           current_user,
+           'app_private.claim_owned_social_job_v2(uuid,uuid,text[],bytea,integer)',
+           'EXECUTE'
+         ) AND NOT has_function_privilege(
+           current_user,
+           'app_private.load_owned_social_job_v2(uuid,uuid,bigint,bytea)',
+           'EXECUTE'
+         ) AND NOT has_function_privilege(
+           current_user,
+           'app_private.begin_owned_social_call_v2(uuid,uuid,bigint,bytea,boolean,boolean)',
+           'EXECUTE'
+         ) AND NOT has_function_privilege(
+           current_user,
+           'app_private.settle_owned_social_call(uuid,uuid,bigint,bytea,text,text,bytea,timestamp with time zone,text)',
+           'EXECUTE'
+         ) AS "ayrshareWorkerFunctionsDenied",
+         NOT has_function_privilege(
+           current_user,
+           'app_private.record_zernio_calendar_publish_binding(uuid,uuid,uuid,uuid,text,bytea,bytea,bytea,bytea,timestamp with time zone)',
+           'EXECUTE'
+         ) AND NOT has_function_privilege(
+           current_user,
+           'app_private.revoke_zernio_calendar_publish_binding(uuid,uuid,uuid,uuid,bytea,text)',
+           'EXECUTE'
+         ) AND NOT has_function_privilege(
+           current_user,
+           'app_private.enqueue_zernio_calendar_job(uuid,uuid,uuid,uuid,text,bytea,bytea,uuid,uuid,uuid,uuid,uuid,uuid,uuid,text,bytea,bytea,timestamp with time zone)',
+           'EXECUTE'
+         ) AS "zernioCommandFunctionsDenied",
+         NOT has_function_privilege(
+           current_user,
+           'app_private.record_owned_social_profile_v2(uuid,uuid,uuid,text,text,bytea,bytea,text,bytea,bytea,bytea,bytea,bytea,bytea,timestamp with time zone,timestamp with time zone)',
+           'EXECUTE'
+         ) AND NOT has_function_privilege(
+           current_user,
+           'app_private.enqueue_owned_social_job_v2(uuid,uuid,uuid,text,bytea,uuid,uuid,uuid,uuid,uuid,uuid,uuid,text,bytea,bytea,timestamp with time zone)',
+           'EXECUTE'
+         ) AS "ayrshareCommandFunctionsDenied",
+         has_function_privilege(
+           current_user, 'app_private.runtime_schema_migrations()', 'EXECUTE'
+         ) AS "ledgerExecute",
+         has_function_privilege(
+           current_user, 'app_private.runtime_database_installation_id()', 'EXECUTE'
+         ) AS "installationExecute",
+         NOT EXISTS (
+           SELECT 1
+           FROM pg_catalog.pg_class AS relation
+           JOIN pg_catalog.pg_namespace AS namespace
+             ON namespace.oid = relation.relnamespace
+           WHERE namespace.nspname IN ('app', 'app_private')
+             AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+             AND (
+               has_table_privilege(current_user, relation.oid, 'SELECT')
+               OR has_table_privilege(current_user, relation.oid, 'INSERT')
+               OR has_table_privilege(current_user, relation.oid, 'UPDATE')
+               OR has_table_privilege(current_user, relation.oid, 'DELETE')
+               OR has_table_privilege(current_user, relation.oid, 'TRUNCATE')
+             )
+         ) AS "tableBlind",
+         NOT pg_has_role(current_user, 'r72_owner', 'MEMBER')
+           AND NOT pg_has_role(current_user, 'r72_security_definer', 'MEMBER')
+           AND NOT pg_has_role(current_user, 'r72_owned_social_definer', 'MEMBER')
+           AS "elevatedRolesDenied"`,
+    );
+    rows = result.rows;
+  } catch {
+    throw new Error('Zernio calendar worker database boundary could not be verified');
+  }
+  const row = rows[0];
+  if (rows.length !== 1 || !row || Object.values(row).some((value) => value !== true)) {
+    throw new Error('Zernio calendar worker database boundary is not exact');
+  }
+}

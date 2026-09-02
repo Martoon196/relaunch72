@@ -35,6 +35,32 @@ function message(overrides: Record<string, unknown> = {}): Record<string, unknow
   };
 }
 
+function commentedPost(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'ig-post-1', platform: 'instagram', accountId: ACCOUNT,
+    accountUsername: 'propertypredator', content: 'The two-minute deal-finder walkthrough.',
+    picture: 'https://cdn.example.test/post.jpg',
+    permalink: 'https://www.instagram.com/p/ig-post-1/',
+    createdTime: '2026-09-01T00:30:00.000Z', commentCount: 4, likeCount: 21,
+    isAd: false, ...overrides,
+  };
+}
+
+function comment(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'ig-comment-1', message: 'Where can I see the full walkthrough?',
+    createdTime: '2026-09-01T01:10:00.000Z',
+    from: {
+      id: 'participant-1', name: 'Property Hunter', username: 'propertyhunter',
+      picture: 'https://cdn.example.test/contact.jpg', isOwner: false, verifiedType: null,
+    },
+    likeCount: 2, replyCount: 0, platform: 'instagram',
+    url: 'https://www.instagram.com/p/ig-post-1/c/ig-comment-1/', replies: [],
+    repliesHasMore: false, canReply: true, parentId: null,
+    ...overrides,
+  };
+}
+
 test('Zernio Messaging lists only an explicitly bound account and uses the dedicated bearer boundary', async () => {
   const requests: Array<{ url: string; init: RequestInit }> = [];
   const client = createZernioMessagingClient({
@@ -171,6 +197,244 @@ test('Zernio Messaging treats transport failure during a send as outcome unknown
       accountId: ACCOUNT, providerConversationId: 'ig-conversation-1',
       body: 'Approved exact reply', idempotencyKey: 'reply:00000000-0000-4000-8000-000000000002',
     }),
+    (error: unknown) => error instanceof ZernioMessagingError && error.code === 'outcome_unknown',
+  );
+});
+
+test('Zernio Messaging quarantines a malformed successful send response as outcome unknown', async () => {
+  const client = createZernioMessagingClient({
+    apiKey: 'zrk_test_messaging_secret', providerProfileId: PROFILE,
+    allowedAccountIds: [ACCOUNT], fetch: async () => json({ data: {} }),
+  });
+  await assert.rejects(
+    client.sendMessage({
+      accountId: ACCOUNT, providerConversationId: 'ig-conversation-1',
+      body: 'Approved exact reply', idempotencyKey: 'reply:00000000-0000-4000-8000-000000000006',
+    }),
+    (error: unknown) => error instanceof ZernioMessagingError && error.code === 'outcome_unknown',
+  );
+});
+
+test('Zernio Messaging lists an exact account organic comment feed with opaque cursor paging', async () => {
+  const requests: string[] = [];
+  const client = createZernioMessagingClient({
+    apiKey: 'zrk_test_messaging_secret', providerProfileId: PROFILE,
+    allowedAccountIds: [ACCOUNT], now: () => new Date('2026-09-01T01:20:00Z'),
+    fetch: async (url, init) => {
+      assert.equal(init?.method, 'GET');
+      requests.push(String(url));
+      return json({
+        data: [commentedPost(), commentedPost()],
+        pagination: { hasMore: true, nextCursor: 'opaque/+cursor==' },
+        meta: { accountsQueried: 1, accountsFailed: 0, failedAccounts: [] },
+      });
+    },
+  });
+  const result = await client.listCommentedPosts({
+    accountId: ACCOUNT, platform: 'instagram', cursor: 'incoming/+cursor==',
+  });
+  assert.equal(result.posts.length, 1, 'the client deduplicates moving-window pages by post id');
+  assert.equal(result.posts[0]?.commentCount, 4);
+  assert.equal(result.posts[0]?.pictureUrl, 'https://cdn.example.test/post.jpg');
+  assert.equal(result.checkedAt, '2026-09-01T01:20:00.000Z');
+  assert.equal(result.hasMore, true);
+  assert.equal(result.nextCursor, 'opaque/+cursor==');
+  const url = new URL(requests[0]!);
+  assert.equal(url.pathname, '/api/v1/inbox/comments');
+  assert.equal(url.searchParams.get('profileId'), PROFILE);
+  assert.equal(url.searchParams.get('accountId'), ACCOUNT);
+  assert.equal(url.searchParams.get('platform'), 'instagram');
+  assert.equal(url.searchParams.get('sortBy'), 'date');
+  assert.equal(url.searchParams.get('sortOrder'), 'desc');
+  assert.equal(url.searchParams.get('limit'), '100');
+  assert.equal(url.searchParams.get('cursor'), 'incoming/+cursor==');
+});
+
+test('Zernio Messaging reads one account-bound post thread including bounded replies', async () => {
+  const requests: string[] = [];
+  const client = createZernioMessagingClient({
+    apiKey: 'zrk_test_messaging_secret', providerProfileId: PROFILE,
+    allowedAccountIds: [ACCOUNT],
+    fetch: async (url, init) => {
+      assert.equal(init?.method, 'GET');
+      requests.push(String(url));
+      return json({
+        status: 'success',
+        comments: [comment({
+          replyCount: 1,
+          replies: [comment({
+            id: 'ig-comment-reply-1', message: 'The link is in our profile.',
+            from: {
+              id: ACCOUNT, name: 'Property Predator', username: 'propertypredator',
+              picture: null, isOwner: true, verifiedType: 'blue',
+            },
+            parentId: 'ig-comment-1',
+          })],
+        })],
+        pagination: { hasMore: false, cursor: null },
+        meta: { platform: 'instagram', postId: 'native-ig-post-1', accountId: ACCOUNT },
+      });
+    },
+  });
+  const result = await client.listPostComments({
+    accountId: ACCOUNT, platform: 'instagram', providerPostId: 'ig-post-1',
+  });
+  assert.equal(result.comments.length, 1);
+  assert.equal(result.comments[0]?.providerPostId, 'ig-post-1');
+  assert.equal(result.comments[0]?.author.providerAuthorId, 'participant-1');
+  assert.equal(result.comments[0]?.replies[0]?.providerCommentId, 'ig-comment-reply-1');
+  assert.equal(result.comments[0]?.replies[0]?.author.isOwner, true);
+  assert.equal(result.hasMore, false);
+  assert.equal(result.nextCursor, null);
+  const url = new URL(requests[0]!);
+  assert.equal(url.pathname, '/api/v1/inbox/comments/ig-post-1');
+  assert.equal(url.searchParams.get('accountId'), ACCOUNT);
+  assert.equal(url.searchParams.get('limit'), '100');
+});
+
+test('Zernio Messaging posts only an exact approved public reply with required idempotency', async () => {
+  const requests: Array<{ url: string; init: RequestInit }> = [];
+  const client = createZernioMessagingClient({
+    apiKey: 'zrk_test_messaging_secret', providerProfileId: PROFILE,
+    allowedAccountIds: [ACCOUNT],
+    fetch: async (url, init) => {
+      requests.push({ url: String(url), init: init ?? {} });
+      return json({
+        success: true, data: { commentId: 'ig-comment-reply-2', isReply: true, cid: null },
+      }, 200, { 'idempotent-replayed': 'true' });
+    },
+  });
+  const result = await client.replyToComment({
+    accountId: ACCOUNT, platform: 'instagram', providerPostId: 'ig-post-1',
+    providerCommentId: 'ig-comment-1', body: 'The full walkthrough is linked in our profile.',
+    idempotencyKey: 'comment-reply:00000000-0000-4000-8000-000000000003',
+  });
+  assert.equal(result.accepted, true);
+  assert.equal(result.providerReplyCommentId, 'ig-comment-reply-2');
+  assert.equal(result.idempotentReplay, true);
+  assert.match(result.responseSha256, /^[0-9a-f]{64}$/u);
+  assert.equal(requests.length, 1);
+  assert.equal(new URL(requests[0]!.url).pathname, '/api/v1/inbox/comments/ig-post-1');
+  assert.equal(requests[0]!.init.method, 'POST');
+  assert.equal((requests[0]!.init.headers as Record<string, string>)['idempotency-key'],
+    'comment-reply:00000000-0000-4000-8000-000000000003');
+  assert.deepEqual(JSON.parse(String(requests[0]!.init.body)), {
+    accountId: ACCOUNT,
+    message: 'The full walkthrough is linked in our profile.',
+    commentId: 'ig-comment-1',
+  });
+});
+
+test('Zernio Messaging rejects comment target substitution before provider I/O', async () => {
+  let called = false;
+  const client = createZernioMessagingClient({
+    apiKey: 'zrk_test_messaging_secret', providerProfileId: PROFILE,
+    allowedAccountIds: [ACCOUNT], fetch: async () => { called = true; return json({}); },
+  });
+  await assert.rejects(
+    client.listCommentedPosts({ accountId: 'attacker-account', platform: 'instagram' }),
+    (error: unknown) => error instanceof ZernioMessagingError && error.code === 'unbound_target',
+  );
+  await assert.rejects(
+    client.listPostComments({
+      accountId: ACCOUNT, platform: 'linkedin', providerPostId: 'line\nbreak',
+    }),
+    (error: unknown) => error instanceof ZernioMessagingError && error.code === 'unbound_target',
+  );
+  await assert.rejects(
+    client.replyToComment({
+      accountId: ACCOUNT, platform: 'instagram', providerPostId: 'ig-post-1',
+      providerCommentId: 'ig-comment-1', body: 'Approved body',
+      idempotencyKey: undefined as never,
+    }),
+    (error: unknown) => error instanceof ZernioMessagingError && error.code === 'unbound_target',
+  );
+  assert.equal(called, false);
+});
+
+test('Zernio Messaging fails closed when a comment feed crosses account or platform boundaries', async () => {
+  const crossedAccount = createZernioMessagingClient({
+    apiKey: 'zrk_test_messaging_secret', providerProfileId: PROFILE,
+    allowedAccountIds: [ACCOUNT],
+    fetch: async () => json({
+      data: [commentedPost({ accountId: 'attacker-account' })],
+      pagination: { hasMore: false },
+    }),
+  });
+  await assert.rejects(
+    crossedAccount.listCommentedPosts({ accountId: ACCOUNT, platform: 'instagram' }),
+    (error: unknown) => error instanceof ZernioMessagingError && error.code === 'unbound_target',
+  );
+  const crossedPlatform = createZernioMessagingClient({
+    apiKey: 'zrk_test_messaging_secret', providerProfileId: PROFILE,
+    allowedAccountIds: [ACCOUNT],
+    fetch: async () => json({
+      comments: [comment({ platform: 'linkedin' })],
+      pagination: { hasMore: false },
+      meta: { platform: 'linkedin', postId: 'ig-post-1', accountId: ACCOUNT },
+    }),
+  });
+  await assert.rejects(
+    crossedPlatform.listPostComments({
+      accountId: ACCOUNT, platform: 'instagram', providerPostId: 'ig-post-1',
+    }),
+    (error: unknown) => error instanceof ZernioMessagingError && error.code === 'unbound_target',
+  );
+});
+
+test('Zernio Messaging treats a transport failure during a comment reply as outcome unknown', async () => {
+  const client = createZernioMessagingClient({
+    apiKey: 'zrk_test_messaging_secret', providerProfileId: PROFILE,
+    allowedAccountIds: [ACCOUNT], fetch: async () => { throw new Error('timeout'); },
+  });
+  await assert.rejects(
+    client.replyToComment({
+      accountId: ACCOUNT, platform: 'instagram', providerPostId: 'ig-post-1',
+      providerCommentId: 'ig-comment-1', body: 'Approved exact reply',
+      idempotencyKey: 'comment-reply:00000000-0000-4000-8000-000000000004',
+    }),
+    (error: unknown) => error instanceof ZernioMessagingError && error.code === 'outcome_unknown',
+  );
+});
+
+test('Zernio Messaging quarantines a malformed successful comment reply as outcome unknown', async () => {
+  const client = createZernioMessagingClient({
+    apiKey: 'zrk_test_messaging_secret', providerProfileId: PROFILE,
+    allowedAccountIds: [ACCOUNT], fetch: async () => json({ success: true, data: { isReply: true } }),
+  });
+  await assert.rejects(
+    client.replyToComment({
+      accountId: ACCOUNT, platform: 'instagram', providerPostId: 'ig-post-1',
+      providerCommentId: 'ig-comment-1', body: 'Approved exact reply',
+      idempotencyKey: 'comment-reply:00000000-0000-4000-8000-000000000006',
+    }),
+    (error: unknown) => error instanceof ZernioMessagingError && error.code === 'outcome_unknown',
+  );
+});
+
+test('Zernio Messaging fails closed on in-flight and ambiguous provider comment replies', async () => {
+  const input = {
+    accountId: ACCOUNT,
+    platform: 'instagram' as const,
+    providerPostId: 'ig-post-1',
+    providerCommentId: 'ig-comment-1',
+    body: 'Approved exact reply',
+    idempotencyKey: 'comment-reply:00000000-0000-4000-8000-000000000005',
+  };
+  const inFlight = createZernioMessagingClient({
+    apiKey: 'zrk_test_messaging_secret', providerProfileId: PROFILE,
+    allowedAccountIds: [ACCOUNT], fetch: async () => new Response(null, { status: 409 }),
+  });
+  await assert.rejects(
+    inFlight.replyToComment(input),
+    (error: unknown) => error instanceof ZernioMessagingError && error.code === 'provider_rejected',
+  );
+  const ambiguous = createZernioMessagingClient({
+    apiKey: 'zrk_test_messaging_secret', providerProfileId: PROFILE,
+    allowedAccountIds: [ACCOUNT], fetch: async () => new Response(null, { status: 502 }),
+  });
+  await assert.rejects(
+    ambiguous.replyToComment(input),
     (error: unknown) => error instanceof ZernioMessagingError && error.code === 'outcome_unknown',
   );
 });

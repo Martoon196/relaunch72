@@ -83,7 +83,16 @@ const migration76Url = new URL('../../src/db/migrations/0076_zernio_social_expir
 const migration77Url = new URL('../../src/db/migrations/0077_company_content_sync_session_acl_repair.sql', import.meta.url);
 const migration78Url = new URL('../../src/db/migrations/0078_company_content_adapter_catalog_acl_repair.sql', import.meta.url);
 const migration79Url = new URL('../../src/db/migrations/0079_property_predator_zernio_reply_lifecycle.sql', import.meta.url);
-const calendarMigrationUrl = new URL('../../src/db/migrations/0066_instagram_linkedin_calendar_live_rail.sql', import.meta.url);
+const migration80Url = new URL('../../src/db/migrations/0080_instagram_linkedin_calendar_live_rail.sql', import.meta.url);
+const migration81Url = new URL('../../src/db/migrations/0081_founder_mailgun_inbound_dual_job_correlation.sql', import.meta.url);
+const migration82Url = new URL('../../src/db/migrations/0082_founder_email_pilot_readiness_membership_rls_repair.sql', import.meta.url);
+const migration83Url = new URL('../../src/db/migrations/0083_founder_email_pilot_readiness_membership_rls_tightening.sql', import.meta.url);
+const migration84Url = new URL('../../src/db/migrations/0084_founder_email_pilot_readiness_app_rls_repair.sql', import.meta.url);
+const migration85Url = new URL('../../src/db/migrations/0085_property_predator_zernio_calendar_publishing.sql', import.meta.url);
+const migration86Url = new URL('../../src/db/migrations/0086_property_predator_zernio_linkedin_comment_replies.sql', import.meta.url);
+const migration87Url = new URL('../../src/db/migrations/0087_property_predator_zernio_live_channel_truth.sql', import.meta.url);
+const migration88Url = new URL('../../src/db/migrations/0088_property_predator_zernio_calendar_command.sql', import.meta.url);
+const migration89Url = new URL('../../src/db/migrations/0089_property_predator_zernio_social_dm_truth.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -522,9 +531,9 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums through the social calendar live rail', async () => {
+test('bundled migration discovery orders and checksums through the Zernio social DM truth repair', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-74);
+  const tail = migrations.slice(-83);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0007_public_schema_hardening.sql', version: 7 },
     { filename: '0008_setup_delivery_recovery.sql', version: 8 },
@@ -599,7 +608,16 @@ test('bundled migration discovery orders and checksums through the social calend
     { filename: '0077_company_content_sync_session_acl_repair.sql', version: 77 },
     { filename: '0078_company_content_adapter_catalog_acl_repair.sql', version: 78 },
     { filename: '0079_property_predator_zernio_reply_lifecycle.sql', version: 79 },
-    { filename: '0066_instagram_linkedin_calendar_live_rail.sql', version: 66 },
+    { filename: '0080_instagram_linkedin_calendar_live_rail.sql', version: 80 },
+    { filename: '0081_founder_mailgun_inbound_dual_job_correlation.sql', version: 81 },
+    { filename: '0082_founder_email_pilot_readiness_membership_rls_repair.sql', version: 82 },
+    { filename: '0083_founder_email_pilot_readiness_membership_rls_tightening.sql', version: 83 },
+    { filename: '0084_founder_email_pilot_readiness_app_rls_repair.sql', version: 84 },
+    { filename: '0085_property_predator_zernio_calendar_publishing.sql', version: 85 },
+    { filename: '0086_property_predator_zernio_linkedin_comment_replies.sql', version: 86 },
+    { filename: '0087_property_predator_zernio_live_channel_truth.sql', version: 87 },
+    { filename: '0088_property_predator_zernio_calendar_command.sql', version: 88 },
+    { filename: '0089_property_predator_zernio_social_dm_truth.sql', version: 89 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -675,7 +693,16 @@ test('bundled migration discovery orders and checksums through the social calend
     (await readFile(migration77Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration78Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration79Url, 'utf8')).replace(/\r\n?/g, '\n'),
-    (await readFile(calendarMigrationUrl, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration80Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration81Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration82Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration83Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration84Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration85Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration86Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration87Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration88Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration89Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.

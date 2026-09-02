@@ -701,7 +701,8 @@ export class InboxPgRepository {
        ) VALUES (
          $1, app_private.current_workspace_id(), $2, 'conversation.send',
          $3, 'test', 'queued', $4, $5, 'user', $6,
-         $7::timestamptz, $7::timestamptz
+         least($7::timestamptz, statement_timestamp()),
+         statement_timestamp()
        )`,
       [input.operationId, input.message.providerConnectionId, input.deliveryId,
         operationKey, input.operationId, input.actorUserId, input.at],
@@ -723,7 +724,8 @@ export class InboxPgRepository {
          $1, app_private.current_workspace_id(), $2, $3, $4, $5,
          decode($6, 'hex'), $7, $8, 'approved', $9, $10, $11, $12,
          $13, $14, $15, $16, $17, NULL, 'test', 'queued', $18, $19,
-         $20::timestamptz, $20::timestamptz
+         least($20::timestamptz, statement_timestamp()),
+         statement_timestamp()
        )`,
       [input.deliveryId, input.message.conversationId, input.message.messageId,
         input.message.messageVersionId, input.message.versionNumber,

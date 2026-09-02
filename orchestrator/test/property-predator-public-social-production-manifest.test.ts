@@ -47,7 +47,13 @@ function databaseUrlKeys(section: string): string[] {
     .sort();
 }
 
-function assertWorkerEnvelope(section: string, startCommand: string): void {
+function assertWorkerEnvelope(
+  section: string,
+  startCommand: string,
+  safety: Readonly<{ effects: 'true' | 'false'; paused: 'true' | 'false' }> = {
+    effects: 'false', paused: 'true',
+  },
+): void {
   assert.match(section, /runtime: node/);
   assert.match(section, /region: frankfurt/);
   assert.match(section, /plan: starter/);
@@ -66,8 +72,8 @@ function assertWorkerEnvelope(section: string, startCommand: string): void {
   literal(section, 'DATABASE_CONNECTION_TIMEOUT_MS', '5000');
   literal(section, 'DATABASE_IDLE_TIMEOUT_MS', '30000');
   literal(section, 'DATABASE_STATEMENT_TIMEOUT_MS', '15000');
-  literal(section, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'false');
-  literal(section, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'true');
+  literal(section, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', safety.effects);
+  literal(section, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', safety.paused);
   valueLessSlot(section, 'PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID');
   assert.doesNotMatch(section, /(?:preDeployCommand|initialDeployHook|afterFirstDeployCommand):/);
 }
@@ -88,8 +94,19 @@ test('Growth HQ web receives the planner identity and one exact read-only compan
   literal(web, 'PROPERTY_PREDATOR_CAMPAIGN_GENERATION_PROVIDER_EFFECTS_ENABLED', 'true');
   literal(web, 'PROPERTY_PREDATOR_CAMPAIGN_GENERATION_EMERGENCY_PAUSED', 'false');
   valueLessSlot(web, 'PROPERTY_PREDATOR_COMPANY_CONTENT_GENERATE_TOKEN');
-  literal(web, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'false');
-  literal(web, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'true');
+  literal(web, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'true');
+  literal(web, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'false');
+  literal(web, 'PROPERTY_PREDATOR_SOCIAL_PROVIDER', 'zernio');
+  valueLessSlot(web, 'DATABASE_ZERNIO_SOCIAL_COMMAND_URL');
+  valueLessSlot(web, 'PROPERTY_PREDATOR_ZERNIO_LIVE_CONNECTION_ID');
+  valueLessSlot(web, 'PROPERTY_PREDATOR_ZERNIO_PROVIDER_PROFILE_ID');
+  valueLessSlot(web, 'PROPERTY_PREDATOR_ZERNIO_INSTAGRAM_ACCOUNT_ID');
+  valueLessSlot(web, 'PROPERTY_PREDATOR_ZERNIO_LINKEDIN_ACCOUNT_ID');
+  valueLessSlot(web, 'PROPERTY_PREDATOR_ZERNIO_MESSAGING_ACCOUNT_IDS');
+  valueLessSlot(web, 'PROPERTY_PREDATOR_ZERNIO_COMMENT_ACCOUNT_BINDINGS');
+  valueLessSlot(web, 'ZERNIO_API_KEY');
+  valueLessSlot(web, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_SIGNING_KEY_BASE64URL');
+  literal(web, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_URL_TTL_SECONDS', '900');
   assert.doesNotMatch(
     web,
     /- key: DATABASE_PUBLIC_SOCIAL_(?:REVALIDATOR|WORKER)_URL\b/,
@@ -107,28 +124,36 @@ test('Growth HQ web receives the planner identity and one exact read-only compan
   }
 });
 
-test('0052 owned-profile worker is deployable dark with one exact live identity', () => {
+test('0085 owned-account Zernio worker is deployable with one exact live identity', () => {
   assertWorkerEnvelope(
     ownedLiveRail,
-    'npm run --workspace orchestrator serve:owned-public-social-live',
+    'npm run --workspace orchestrator serve:zernio-calendar-live',
+    { effects: 'true', paused: 'false' },
   );
   assert.deepEqual(databaseUrlKeys(ownedLiveRail), [
     'DATABASE_OWNED_SOCIAL_WORKER_URL',
   ]);
   valueLessSlot(ownedLiveRail, 'DATABASE_OWNED_SOCIAL_WORKER_URL');
   literal(ownedLiveRail, 'DATABASE_OWNED_SOCIAL_WORKER_POOL_MAX', '1');
-  literal(ownedLiveRail, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE', 'disabled');
-  literal(ownedLiveRail, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_PROVIDER_ID', 'ayrshare');
+  literal(ownedLiveRail, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE', 'zernio_live');
+  literal(ownedLiveRail, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_PROVIDER_ID', 'zernio');
   literal(ownedLiveRail, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK', 'instagram_linkedin');
   literal(ownedLiveRail, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_POLL_MS', '5000');
   for (const key of [
     'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_WORKSPACE_ID',
-    'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_CONNECTION_ID',
-    'PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_BASE64',
-    'PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_VERSION',
-    'AYRSHARE_API_KEY',
+    'PROPERTY_PREDATOR_ZERNIO_LIVE_CONNECTION_ID',
+    'PROPERTY_PREDATOR_ZERNIO_INSTAGRAM_ACCOUNT_ID',
+    'PROPERTY_PREDATOR_ZERNIO_LINKEDIN_ACCOUNT_ID',
+    'ZERNIO_API_KEY',
     'PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN',
+    'PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_SIGNING_KEY_BASE64URL',
   ]) valueLessSlot(ownedLiveRail, key);
+  literal(ownedLiveRail, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_URL_TTL_SECONDS', '900');
+  assert.doesNotMatch(
+    ownedLiveRail,
+    /- key: PROPERTY_PREDATOR_COMPANY_CONTENT_READ_TOKEN\b/,
+    'the provider worker must never receive the private company-content bearer',
+  );
   assert.doesNotMatch(ownedLiveRail, /- key: AYRSHARE_X_OAUTH1_/);
   assert.doesNotMatch(
     ownedLiveRail,

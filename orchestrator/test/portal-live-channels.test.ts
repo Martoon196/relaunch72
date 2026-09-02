@@ -140,16 +140,19 @@ test('the exact four-rail set is required', () => {
   assert.throws(() => presentLiveChannels(snapshotOf(duplicated)), /incomplete or duplicated/);
 });
 
-test('the social DM rail must remain not composed with LIVE_ADAPTER_NOT_COMPOSED', () => {
-  const composed = mutable();
-  composed.rails[4]!.connectionState = 'configured';
-  assert.throws(() => presentLiveChannels(snapshotOf(composed)), /social DM rail must remain not composed/);
+test('the social DM rail accepts composed Zernio evidence and rejects retired adapter claims', () => {
+  const ready = authoritative();
+  ready.rails[4]!.connectionState = 'ready';
+  ready.rails[4]!.inboundState = 'ready';
+  ready.rails[4]!.outboundOrReplyState = 'ready';
+  ready.rails[4]!.blockerCodes = [];
+  assert.equal(presentLiveChannels(snapshotOf(ready)).channels[4]!.posture, 'ready');
 
-  // Stripping the code trips the generic state/code pairing guard first —
-  // either path fails closed before the rail could render.
-  const uncoded = mutable();
-  uncoded.rails[4]!.blockerCodes = [];
-  assert.throws(() => presentLiveChannels(snapshotOf(uncoded)), /blocker codes contradict its states/);
+  const retired = mutable();
+  retired.rails[4]!.connectionState = 'not_composed';
+  retired.rails[4]!.outboundOrReplyState = 'not_supported';
+  retired.rails[4]!.blockerCodes = ['LIVE_ADAPTER_NOT_COMPOSED'];
+  assert.throws(() => presentLiveChannels(snapshotOf(retired)), /composed Zernio account and reply evidence/);
 });
 
 test('caps must match the foundation hard caps and stay internally consistent', () => {
@@ -230,7 +233,7 @@ test('view renders the fixture truthfully with the illustrative boundary', () =>
   assert.match(html, /4 \/ 10/);
   assert.match(html, /aria-current="page">Live Channels/);
   assert.match(html, /Social DMs/);
-  assert.match(html, /LIVE_ADAPTER_NOT_COMPOSED/);
+  assert.match(html, /PROVIDER_NOT_CONFIGURED/);
   assert.match(html, /PAUSE ENGAGED/);
   assert.match(html, /not yet readable/);
   assert.doesNotMatch(html, /api[_-]?key|secret=|bearer/i);

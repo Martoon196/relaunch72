@@ -99,15 +99,15 @@ function row(
       workspaceId: WORKSPACE_ID,
       snapshotAt: SNAPSHOT_AT,
       rail,
-      connectionState: 'not_composed',
+      connectionState: 'not_configured',
       inboundState: 'not_ready',
-      outboundOrReplyState: 'not_supported',
+      outboundOrReplyState: 'blocked',
       receiptState: 'none',
       dailyUsed: 0,
       dailyLimit: 0,
       monthlyUsed: 0,
       monthlyLimit: 0,
-      blockerCodes: ['LIVE_ADAPTER_NOT_COMPOSED'],
+      blockerCodes: ['PROVIDER_NOT_CONFIGURED', 'INGRESS_NOT_READY'],
       latestReceiptId: null,
       latestReceiptOutcome: null,
       latestReceiptAt: null,
@@ -361,8 +361,8 @@ test('live-channel truth requires stable blockers for each blocking operational 
   }
 });
 
-test('social DM cannot claim a composed live adapter or ready ingress', async () => {
-  const fabricated = rows().map((entry) => entry.rail === 'social_dm'
+test('social DM accepts composed Zernio truth and rejects the retired not-composed claim', async () => {
+  const composed = rows().map((entry) => entry.rail === 'social_dm'
     ? row('social_dm', {
         connectionState: 'ready',
         inboundState: 'ready',
@@ -370,12 +370,26 @@ test('social DM cannot claim a composed live adapter or ready ingress', async ()
         blockerCodes: [],
       })
     : entry);
-  const outcome = await new PgPortalLiveChannelTruthService(dependencies(fabricated)).snapshot({
+  const readyOutcome = await new PgPortalLiveChannelTruthService(dependencies(composed)).snapshot({
     sessionToken: SESSION,
-    requestId: 'channel-truth-social-dm',
+    requestId: 'channel-truth-social-dm-ready',
   });
-  assert.equal(outcome.ok, false);
-  if (!outcome.ok) assert.equal(outcome.kind, 'invalid_snapshot');
+  assert.equal(readyOutcome.ok, true);
+
+  const retired = rows().map((entry) => entry.rail === 'social_dm'
+    ? row('social_dm', {
+        connectionState: 'not_composed',
+        inboundState: 'not_ready',
+        outboundOrReplyState: 'not_supported',
+        blockerCodes: ['LIVE_ADAPTER_NOT_COMPOSED'],
+      })
+    : entry);
+  const retiredOutcome = await new PgPortalLiveChannelTruthService(dependencies(retired)).snapshot({
+    sessionToken: SESSION,
+    requestId: 'channel-truth-social-dm-retired',
+  });
+  assert.equal(retiredOutcome.ok, false);
+  if (!retiredOutcome.ok) assert.equal(retiredOutcome.kind, 'invalid_snapshot');
 });
 
 test('live-channel truth maps inactive, permission and unknown failures without exception detail', async () => {

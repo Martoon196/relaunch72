@@ -120,6 +120,8 @@ test('founder social screen shows connection-only Zernio controls and no publish
   assert.match(result.body, /Connect Facebook/);
   assert.match(result.body, /Connect Instagram/);
   assert.match(result.body, /Connect Linkedin/);
+  assert.match(result.body, /One verified Zernio connection, separate permissions/);
+  assert.match(result.body, /same owned Instagram and LinkedIn accounts can power the calendar and inbox/);
   assert.doesNotMatch(result.body, /target="_blank"/);
   assert.match(result.body, /Publishing stays off/);
   assert.doesNotMatch(result.body, /action="[^"]*(?:publish|schedule|queue)/i);

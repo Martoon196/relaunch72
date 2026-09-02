@@ -94,6 +94,16 @@ import { composePropertyPredatorProviderIngress } from '../integrations/provider
 import {
   composePropertyPredatorZernioAccountWebhook,
 } from '../integrations/zernio-account-webhook/router.js';
+import {
+  createPropertyPredatorApprovedResourceTransport,
+} from '../company-content-adapter/property-predator-resources.js';
+import {
+  loadPropertyPredatorContentSyncSourceConfig,
+} from '../portal/company-content-sync-pg-service.js';
+import {
+  createPropertyPredatorApprovedSocialMediaGateway,
+  loadApprovedSocialMediaSigningConfig,
+} from '../public-social-outbound/approved-social-media-gateway.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ORCH_ROOT = path.resolve(HERE, '../..');
@@ -524,6 +534,30 @@ async function main(): Promise<void> {
 
   const requirePostgresPortal = postgresPortalEnabled(process.env);
   const portalProductProfile = resolvePortalProductProfile(process.env.PORTAL_PRODUCT_PROFILE);
+  const approvedMediaSigning = loadApprovedSocialMediaSigningConfig(process.env);
+  let propertyPredatorApprovedSocialMediaGateway:
+    ReturnType<typeof createPropertyPredatorApprovedSocialMediaGateway> | undefined;
+  if (approvedMediaSigning) {
+    if (process.env.PORTAL_PRODUCT_PROFILE?.trim() !== 'property_predator_growth') {
+      throw new Error('Property Predator approved-media gateway requires the exact product profile');
+    }
+    const source = loadPropertyPredatorContentSyncSourceConfig(process.env);
+    if (!source) {
+      throw new Error('Property Predator approved-media gateway requires the exact source adapter');
+    }
+    propertyPredatorApprovedSocialMediaGateway =
+      createPropertyPredatorApprovedSocialMediaGateway({
+        signingKey: approvedMediaSigning.key,
+        resources: createPropertyPredatorApprovedResourceTransport({
+          baseUrl: source.sourceOrigin,
+          clientId: source.sourceClientId,
+          readToken: source.sourceReadToken,
+          timeoutMs: source.sourceTimeoutMs,
+          allowLocalHttp: source.allowLocalHttp,
+        }),
+      });
+    console.log('Signed exact-byte social media gateway is ready; the source bearer remains private.');
+  }
   let postgresPortal: PgPortalPlatform | undefined;
   let portalAbuseRuntime: PortalAbuseRuntimeConfig | undefined;
   if (requirePostgresPortal) {
@@ -608,6 +642,7 @@ async function main(): Promise<void> {
         ownedSocialBinding: postgresPortal.ownedSocialBinding,
         zernioSocial: postgresPortal.zernioSocial,
         zernioMessaging: postgresPortal.zernioMessaging,
+        zernioCalendar: postgresPortal.zernioCalendar,
         smsBinding: postgresPortal.smsBinding,
         contactPermission: postgresPortal.contactPermission,
         founderEmailPilot: postgresPortal.founderEmailPilot,
@@ -688,7 +723,7 @@ async function main(): Promise<void> {
   );
   if (zernioAccountWebhook.enabled) {
     console.log(zernioAccountWebhook.ready
-      ? 'Signed Zernio account lifecycle ingress is ready; publishing remains off.'
+      ? 'Signed Zernio account lifecycle ingress is ready; publication remains governed by the separate worker gates.'
       : '⚠  Zernio account lifecycle ingress unavailable; protected binding did not compose.');
   }
 
@@ -800,6 +835,7 @@ async function main(): Promise<void> {
     propertyPredatorSimulatedMetaDmInbound: simulatedInbound.metaDm,
     propertyPredatorProviderIngress: providerIngress,
     propertyPredatorZernioAccountWebhook: zernioAccountWebhook,
+    propertyPredatorApprovedSocialMediaGateway,
   });
   const server = http.createServer((req, res) => { void app(req, res); });
   server.headersTimeout = 10_000;

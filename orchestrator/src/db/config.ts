@@ -272,6 +272,8 @@ export function loadDatabaseConfig(
                       ? 'DATABASE_OWNED_SOCIAL_COMMAND_POOL_MAX'
                     : role === 'ownedSocialWorkerCommand'
                       ? 'DATABASE_OWNED_SOCIAL_WORKER_POOL_MAX'
+                    : role === 'zernioSocialCommand'
+                      ? 'DATABASE_ZERNIO_SOCIAL_COMMAND_POOL_MAX'
                     : role === 'whatsAppLiveCommand'
                       ? 'DATABASE_WHATSAPP_LIVE_COMMAND_POOL_MAX'
                     : role === 'whatsAppLiveWorkerCommand'

@@ -4,24 +4,64 @@ import test from 'node:test';
 
 const runnerUrl = new URL('./require-integration.ts', import.meta.url);
 const helperUrl = new URL('./database-helper.ts', import.meta.url);
+const resetUrl = new URL('./reset-disposable.ts', import.meta.url);
 const packageUrl = new URL('../../package.json', import.meta.url);
+const migrationsUrl = new URL('../../src/db/migrations/', import.meta.url);
 
 async function sources(): Promise<{
   runner: string;
   helper: string;
+  reset: string;
   packageJson: { scripts?: Record<string, string> };
 }> {
-  const [runner, helper, rawPackage] = await Promise.all([
+  const [runner, helper, reset, rawPackage] = await Promise.all([
     readFile(runnerUrl, 'utf8'),
     readFile(helperUrl, 'utf8'),
+    readFile(resetUrl, 'utf8'),
     readFile(packageUrl, 'utf8'),
   ]);
   return {
     runner: runner.replace(/\r\n?/g, '\n'),
     helper: helper.replace(/\r\n?/g, '\n'),
+    reset: reset.replace(/\r\n?/g, '\n'),
     packageJson: JSON.parse(rawPackage) as { scripts?: Record<string, string> },
   };
 }
+
+test('disposable reset allowlist exactly covers every application role used by migrations', async () => {
+  const { reset } = await sources();
+  const migrationFiles = (await readdir(migrationsUrl, { withFileTypes: true }))
+    .filter(
+      (entry) => entry.isFile() && /^\d{4}_.+\.sql$/.test(entry.name),
+    )
+    .map((entry) => entry.name)
+    .sort();
+  assert.ok(migrationFiles.some((filename) => filename.startsWith('0084_')));
+
+  const migrationSources = await Promise.all(
+    migrationFiles.map((filename) => readFile(new URL(filename, migrationsUrl), 'utf8')),
+  );
+  const migrationRoles = [
+    ...new Set(
+      migrationSources.flatMap((source) => {
+        const executableSql = source
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/--[^\n]*/g, '');
+        return executableSql.match(/\br72_[a-z0-9_]+\b/g) ?? [];
+      }),
+    ),
+  ].sort();
+
+  const allowlistBlock = /const APP_ROLES = \[([\s\S]*?)\] as const;/.exec(reset);
+  assert.ok(allowlistBlock, 'reset must expose one fixed APP_ROLES allowlist');
+  const resetRoles = [
+    ...(allowlistBlock[1]?.matchAll(/'(?<role>r72_[a-z0-9_]+)'/g) ?? []),
+  ].map((match) => match.groups?.role ?? '');
+
+  assert.equal(new Set(resetRoles).size, resetRoles.length, 'APP_ROLES must not contain duplicates');
+  assert.ok(resetRoles.every((role) => /^r72_[a-z0-9_]+$/.test(role)));
+  assert.deepEqual([...resetRoles].sort(), migrationRoles);
+});
 
 test('explicit integration entrypoint preflights the disposable URL and reset acknowledgement before execution', async () => {
   const { runner, helper, packageJson } = await sources();

@@ -20,6 +20,7 @@ import {
 } from './live-channels-presenter.js';
 import { CONVERSION_INBOX_ROUTE } from './conversion-inbox-presenter.js';
 import { PROVIDER_READINESS_COCKPIT_ROUTE } from './provider-readiness-cockpit-presenter.js';
+import { SOCIAL_ACCOUNT_CONTROL_ROUTE } from './social-account-control-presenter.js';
 
 const STYLE = `
   .plc{--plc-bg:#060809;--plc-panel:#0c1013;--plc-lift:#12181c;--plc-line:#263038;--plc-line-2:#39474f;--plc-ink:#f3f6f5;--plc-muted:#a2aeb2;--plc-faint:#7b898f;--plc-teal:#00e5cc;--plc-green:#6fdaa4;--plc-amber:#f2b84b;--plc-red:#ff7169;min-width:0;overflow:hidden;border:1px solid #020304;background:var(--plc-bg);color:var(--plc-ink)}.plc *{box-sizing:border-box}.plc h1,.plc h2,.plc h3,.plc p{margin-top:0}.plc-mono{font-family:var(--mono,ui-monospace,monospace)}
@@ -99,6 +100,10 @@ export interface LiveChannelsRenderOptions {
   readonly notice?: LiveChannelsNoticeView;
   /** True only when the owned-social founder command boundary is composed. */
   readonly ownedSocialCommandAvailable?: boolean;
+  /** True only when staging resolves an already-connected Zernio account server-side. */
+  readonly zernioCalendarCommandAvailable?: boolean;
+  /** Networks with an exact deployment-configured Zernio account binding. */
+  readonly zernioCalendarConfiguredNetworks?: readonly ('instagram' | 'linkedin')[];
   /**
    * True only when this process also holds the owned-social profile-key
    * encryption contract. Without it the portal will not accept a Profile Key
@@ -368,6 +373,41 @@ function renderOwnedSocialCommands(
   const value = (exact: string | undefined): string => exact
     ? ` value="${escapeHtml(exact)}"` : '';
   const csrf = escapeHtml(options.csrfToken);
+  if (options.zernioCalendarCommandAvailable) {
+    const configuredNetworks = options.zernioCalendarConfiguredNetworks ?? [];
+    const networkOptions = configuredNetworks.map((network) => {
+      const selected = prefill?.network === network ? ' selected' : '';
+      const label = network === 'instagram' ? 'Instagram' : 'LinkedIn';
+      return `<option value="${network}"${selected}>${label}</option>`;
+    }).join('');
+    const field = (name: string, label: string, exact: string | undefined, maximum = 100): string =>
+      `<label class="plc-field"><span>${escapeHtml(label)}</span><input type="text" name="${escapeHtml(name)}"${value(exact)} required maxlength="${maximum}" autocomplete="off"></label>`;
+    return `<section class="plc-panel" aria-labelledby="plc-owned-social-title">${head}
+      <details class="plc-guard"><summary><span>Zernio connected accounts</span><b>${configuredNetworks.length > 0 ? 'CONNECTED' : 'UNAVAILABLE'}</b></summary><div class="plc-guard-body">
+        <p>Account linking and permission evidence live in the Zernio connection centre. The calendar never accepts or exposes a provider profile, account id or API key.</p>
+        <a class="plc-guard-button" href="${SOCIAL_ACCOUNT_CONTROL_ROUTE}">Manage connected accounts</a>
+      </div></details>
+      <details class="plc-guard" id="plc-owned-social-stage"${prefill ? ' open' : ''}><summary><span>Stage one approved calendar publication</span><b>${card.capReached ? 'CAP REACHED' : 'ZERNIO READY'}</b></summary><div class="plc-guard-body">
+        <p>The database re-proves the connected Zernio account, exact content version, approval, source attestation, 1-per-day / 3-per-month cap and pause posture. This action only stages the job; it does not claim a worker lease or call Zernio.</p>
+        <form method="post" action="${LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE}" autocomplete="off">
+          <input type="hidden" name="_csrf" value="${csrf}">
+          <input type="hidden" name="command_key" value="${escapeHtml(keys.stage)}">
+          <label class="plc-field"><span>Connected network</span><select name="network" required>${networkOptions}</select></label>
+          ${field('planning_intent_id', 'Calendar planning intent id', prefill?.planningIntentId)}
+          ${field('planning_target_id', 'Calendar planning target id', prefill?.planningTargetId)}
+          ${field('content_item_id', 'Content item id', prefill?.contentItemId)}
+          ${field('content_version_id', 'Approved content version id', prefill?.contentVersionId)}
+          ${field('approval_request_id', 'Approval request id', prefill?.approvalRequestId)}
+          ${field('approval_decision_id', 'Approval decision id', prefill?.approvalDecisionId)}
+          ${field('source_attestation_id', 'Source attestation id', prefill?.sourceAttestationId)}
+          ${field('operation_tag', 'Operation tag', prefill?.operationTag)}
+          ${field('scheduled_for', 'Scheduled publish time (exact UTC instant)', prefill?.scheduledFor, 40)}
+          <label class="plc-guard-check"><input type="checkbox" name="confirm_stage" value="STAGE" required> I confirm this exact approved calendar post may be queued to the server-selected owned account.</label>
+          <button class="plc-guard-button" type="submit"${configuredNetworks.length > 0 ? '' : ' disabled aria-disabled="true"'}>Arm Zernio calendar publication</button>
+        </form>
+      </div></details>
+    </section>`;
+  }
   const bind = options.ownedSocialProfileBindingComposed
     ? `<form method="post" action="${LIVE_CHANNELS_OWNED_SOCIAL_BIND_ROUTE}" autocomplete="off">
       <input type="hidden" name="_csrf" value="${csrf}">
@@ -449,7 +489,7 @@ export function renderLiveChannelsBody(
   options: LiveChannelsRenderOptions,
 ): string {
   const boundary = view.illustrative
-    ? '<strong>ILLUSTRATIVE TEST DATA</strong><p>Every state, count and receipt on this page is invented to demonstrate the operating view in the local preview. Nothing was read from Mailgun, Ayrshare, Meta or any database, and nothing here can authorise a send.</p>'
+    ? '<strong>ILLUSTRATIVE TEST DATA</strong><p>Every state, count and receipt on this page is invented to demonstrate the operating view in the local preview. Nothing was read from Mailgun, Zernio, Meta or any database, and nothing here can authorise a send.</p>'
     : '<strong>POSTGRES-AUTHORITATIVE EVIDENCE</strong><p>Every state, cap, blocker and receipt below is read from the durable truth seam. This page cannot load a credential, flip an effect switch on, or create a provider operation.</p>';
   const notice = options.notice
     ? `<div class="plc-notice ${escapeHtml(options.notice.kind)}" role="${options.notice.kind === 'error' ? 'alert' : 'status'}"><strong>${escapeHtml(options.notice.title)}</strong><span>${escapeHtml(options.notice.message)}</span></div>`

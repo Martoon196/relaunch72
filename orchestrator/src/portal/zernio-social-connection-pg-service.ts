@@ -46,6 +46,7 @@ interface BoundaryRow extends QueryResultRow {
   exactRole: unknown;
   schemaUsage: unknown;
   requiredFunctions: unknown;
+  legacyReplyFunctionsDenied: unknown;
   definerPrivilegesExact: unknown;
   tableBlind: unknown;
   elevatedRolesDenied: unknown;
@@ -76,7 +77,10 @@ export async function assertZernioSocialCommandBoundaryReady(
          AND has_function_privilege(current_user,
            'app_private.read_zernio_social_accounts(uuid,uuid,bytea)', 'EXECUTE')
          AND has_function_privilege(current_user,
-           'app_private.create_zernio_reply_draft(uuid,uuid,uuid,bytea,bytea,bytea,text,bytea)',
+           'app_private.zernio_reply_channel_truth(uuid,uuid,bytea,bytea,text)',
+           'EXECUTE')
+         AND has_function_privilege(current_user,
+           'app_private.create_zernio_reply_draft(uuid,uuid,uuid,text,bytea,bytea,bytea,text,bytea)',
            'EXECUTE')
          AND has_function_privilege(current_user,
            'app_private.request_zernio_reply_approval(uuid,uuid,uuid)', 'EXECUTE')
@@ -85,10 +89,13 @@ export async function assertZernioSocialCommandBoundaryReady(
          AND has_function_privilege(current_user,
            'app_private.read_zernio_reply_state(uuid,uuid,bytea,bytea,bytea)', 'EXECUTE')
          AND has_function_privilege(current_user,
-           'app_private.claim_zernio_reply_send(uuid,uuid,uuid,uuid,bytea,bytea,bytea,bytea,bytea)',
+           'app_private.claim_zernio_reply_send(uuid,uuid,uuid,uuid,text,bytea,bytea,bytea,bytea,bytea)',
            'EXECUTE')
          AND has_function_privilege(current_user,
            'app_private.settle_zernio_reply_send(uuid,uuid,bytea,text,bytea,bytea,text)',
+           'EXECUTE')
+         AND has_function_privilege(current_user,
+           'app_private.enqueue_zernio_calendar_from_connected_account(uuid,uuid,text,bytea,bytea,uuid,uuid,uuid,uuid,uuid,uuid,uuid,text,timestamp with time zone)',
            'EXECUTE')
          AND has_function_privilege(current_user,
            'app_private.active_portal_session(bytea,uuid,uuid)', 'EXECUTE')
@@ -99,6 +106,12 @@ export async function assertZernioSocialCommandBoundaryReady(
          AND has_function_privilege(current_user,
            'app_private.runtime_database_installation_id()', 'EXECUTE')
            AS "requiredFunctions",
+         NOT has_function_privilege(current_user,
+           'app_private.create_zernio_reply_draft(uuid,uuid,uuid,bytea,bytea,bytea,text,bytea)',
+           'EXECUTE')
+         AND NOT has_function_privilege(current_user,
+           'app_private.claim_zernio_reply_send(uuid,uuid,uuid,uuid,bytea,bytea,bytea,bytea,bytea)',
+           'EXECUTE') AS "legacyReplyFunctionsDenied",
          has_table_privilege('r72_zernio_social_definer',
            'app.property_predator_zernio_connection_intents', 'SELECT,INSERT,UPDATE,DELETE')
          AND has_table_privilege('r72_zernio_social_definer',

@@ -178,6 +178,11 @@ test('GET /health reports test mode + configured', async () => {
     service_readiness_blockers: [],
     portal_ready: false,
     portal_blockers: ['client portal is not mounted'],
+    approved_social_media_gateway: {
+      ready: false,
+      credential_exposure: false,
+      exact_bytes: true,
+    },
   });
 });
 

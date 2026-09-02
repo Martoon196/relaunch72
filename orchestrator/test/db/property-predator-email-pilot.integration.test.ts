@@ -75,6 +75,110 @@ async function openMailgunWorkerLoginPool(ownerPool: Pool): Promise<Pool> {
   });
 }
 
+async function openExactRoleLoginPool(
+  ownerPool: Pool,
+  role: string,
+  options: Readonly<{ temporarilyEnableLogin?: boolean }> = {},
+): Promise<Pool> {
+  const rawUrl = process.env.TEST_DATABASE_URL?.trim();
+  if (!rawUrl) throw new Error('TEST_DATABASE_URL is required');
+  const password = `mailgun-inbound-${randomUUID()}`;
+  const ownerClient = await ownerPool.connect();
+  try {
+    const statement = await ownerClient.query<{ sql: string }>(
+      `SELECT pg_catalog.format(
+         CASE WHEN $3::boolean
+           THEN 'ALTER ROLE %I LOGIN PASSWORD %L'
+           ELSE 'ALTER ROLE %I PASSWORD %L'
+         END,
+         $1::text, $2::text
+       ) AS sql`,
+      [role, password, options.temporarilyEnableLogin === true],
+    );
+    await ownerClient.query(statement.rows[0]!.sql);
+  } finally {
+    ownerClient.release();
+  }
+  const roleUrl = new URL(rawUrl);
+  roleUrl.username = role;
+  roleUrl.password = password;
+  return new Pool({
+    connectionString: roleUrl.toString(),
+    max: 1,
+    application_name: `relaunch72-disposable-${role}-inbound-test`,
+  });
+}
+
+async function restoreExactRoleNoLogin(ownerPool: Pool, role: string): Promise<void> {
+  const ownerClient = await ownerPool.connect();
+  try {
+    const statement = await ownerClient.query<{ sql: string }>(
+      `SELECT pg_catalog.format('ALTER ROLE %I NOLOGIN', $1::text) AS sql`,
+      [role],
+    );
+    await ownerClient.query(statement.rows[0]!.sql);
+  } finally {
+    ownerClient.release();
+  }
+}
+
+async function clearExactRoleLoginPasswords(
+  ownerPool: Pool,
+  roles: readonly string[],
+): Promise<void> {
+  const ownerClient = await ownerPool.connect();
+  try {
+    for (const role of roles) {
+      const statement = await ownerClient.query<{ sql: string }>(
+        `SELECT pg_catalog.format('ALTER ROLE %I PASSWORD NULL', $1::text) AS sql`,
+        [role],
+      );
+      await ownerClient.query(statement.rows[0]!.sql);
+    }
+  } finally {
+    ownerClient.release();
+  }
+}
+
+async function loginScopedQuery<T>(
+  pool: Pool,
+  context: Readonly<{
+    workspaceId: string;
+    userId: string;
+    requestId: string;
+    portalSessionTokenHash?: Buffer;
+  }>,
+  sql: string,
+  values: readonly unknown[] = [],
+): Promise<T[]> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    if (context.portalSessionTokenHash) {
+      const active = await client.query<{ active: boolean }>(
+        `SELECT app_private.lock_active_portal_session($1, $2, $3) AS active`,
+        [context.portalSessionTokenHash, context.userId, context.workspaceId],
+      );
+      assert.equal(active.rows[0]?.active, true);
+    }
+    await client.query(
+      `SELECT set_config('app.user_id', $1, true),
+              set_config('app.workspace_id', $2, true),
+              set_config('app.actor_kind', 'user', true),
+              set_config('app.request_id', $3, true)`,
+      [context.userId, context.workspaceId, context.requestId],
+    );
+    const result = await client.query(sql, [...values]);
+    await client.query('COMMIT');
+    return result.rows as T[];
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function clearMailgunWorkerLoginPassword(ownerPool: Pool): Promise<void> {
   const ownerClient = await ownerPool.connect();
   try {
@@ -186,6 +290,10 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
 }, async () => {
   const pool = await openTestDatabase();
   let workerPool: Pool | undefined;
+  let crmCommandPool: Pool | undefined;
+  let evidenceCommandPool: Pool | undefined;
+  let affiliateReceiptCommandPool: Pool | undefined;
+  let customerEmailCommandPool: Pool | undefined;
   const organizationId = randomUUID();
   const workspaceId = randomUUID();
   const ownerId = randomUUID();
@@ -200,6 +308,11 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
   const approvalRequestId = randomUUID();
   const approvalDecisionId = randomUUID();
   const consentId = randomUUID();
+  const journeyId = randomUUID();
+  const journeyVersionId = randomUUID();
+  const entryMilestoneId = randomUUID();
+  const targetMilestoneId = randomUUID();
+  const portalSessionTokenHash = Buffer.from(sha(`portal-${ownerId}`), 'hex');
   const subject = 'Your owned Property Predator seed briefing';
   const body = 'This approved integration message can reach only one owned internal seed.';
   const recipient = 'office@propertypredator.com';
@@ -208,6 +321,17 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
 
   try {
     workerPool = await openMailgunWorkerLoginPool(pool);
+    crmCommandPool = await openExactRoleLoginPool(pool, 'r72_crm_command');
+    evidenceCommandPool = await openExactRoleLoginPool(
+      pool, 'r72_founder_pilot_evidence_command',
+      { temporarilyEnableLogin: true },
+    );
+    affiliateReceiptCommandPool = await openExactRoleLoginPool(
+      pool, 'r72_affiliate_receipt_command',
+    );
+    customerEmailCommandPool = await openExactRoleLoginPool(
+      pool, 'r72_customer_email_command',
+    );
     await resetIdentityTables(pool);
     await ownerQuery(pool,
       `INSERT INTO app.organizations (id, name, slug, kind, status)
@@ -226,6 +350,38 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
          workspace_id, organization_id, user_id, role, status
        ) VALUES ($1, $2, $3, 'owner', 'active')`,
       [workspaceId, organizationId, ownerId]);
+    await ownerQuery(pool,
+      `INSERT INTO app.user_sessions (
+         token_hash, csrf_secret_hash, user_id, selected_workspace_id, expires_at
+       ) VALUES (
+         $1, digest($2, 'sha256'), $3, $4, statement_timestamp() + interval '1 hour'
+       )`,
+      [portalSessionTokenHash, `csrf-${ownerId}`, ownerId, workspaceId]);
+    await withOwnerClient(pool, async (client) => {
+      await client.query('SET CONSTRAINTS ALL DEFERRED');
+      await client.query(
+        `INSERT INTO app.conversion_journeys (
+           id, workspace_id, slug, name, status, created_by_user_id
+         ) VALUES ($1, $2, $3, 'Founder proof journey', 'draft', $4)`,
+        [journeyId, workspaceId, `founder-proof-${journeyId.slice(0, 8)}`, ownerId],
+      );
+      await client.query(
+        `INSERT INTO app.conversion_journey_versions (
+           id, workspace_id, journey_id, version_no, definition_sha256,
+           created_by_user_id
+         ) VALUES ($1, $2, $3, 1, digest($4, 'sha256'), $5)`,
+        [journeyVersionId, workspaceId, journeyId, `journey-${journeyId}`, ownerId],
+      );
+      await client.query(
+        `INSERT INTO app.conversion_journey_milestones (
+           id, workspace_id, journey_version_id, milestone_key, name,
+           position, semantic, is_completion
+         ) VALUES
+           ($1, $3, $4, 'lead', 'Lead', 1, 'lead', false),
+           ($2, $3, $4, 'sale', 'Sale', 2, 'sale', true)`,
+        [entryMilestoneId, targetMilestoneId, workspaceId, journeyVersionId],
+      );
+    });
     await ownerQuery(pool,
       `INSERT INTO app.contacts (
          id, workspace_id, display_name, lifecycle_status, source
@@ -252,7 +408,7 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
          direction, address, normalized_address, display_name, status
        ) VALUES (
          $1, $2, $3, 'email', 'live', 'bidirectional',
-         'mail.propertypredator.co.uk', 'mail.propertypredator.co.uk',
+         'mg.propertypredator.com', 'mg.propertypredator.com',
          'Property Predator email', 'active'
        )`,
       [endpointId, workspaceId, connectionId]);
@@ -909,6 +1065,308 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
       PropertyPredatorMailgunInboundConflictError,
     );
 
+    // The current customer-email preparation route reuses an existing open
+    // contact/inbox conversation by design. Close the historical pilot thread
+    // so this proof creates an independently attributable current-rail thread.
+    await ownerQuery(pool,
+      `UPDATE app.conversations
+       SET state = 'closed', row_version = row_version + 1,
+           updated_at = statement_timestamp()
+       WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId, conversationId]);
+
+    if (!crmCommandPool || !evidenceCommandPool || !affiliateReceiptCommandPool
+        || !customerEmailCommandPool) {
+      throw new Error('Current customer-email role pools are unavailable');
+    }
+    const currentSubject = 'Current customer email reply proof';
+    const currentBody = 'This exact current-rail message proves reply correlation after cutover.';
+    const currentRequestId = `customer-email-current-${randomUUID()}`;
+    const prepared = await loginScopedQuery<{
+      disposition: string;
+      campaign_template_version_id: string;
+      campaign_template_step_id: string;
+      campaign_approval_request_id: string;
+      campaign_approval_decision_id: string;
+      conversation_id: string;
+      message_version_id: string;
+      message_approval_request_id: string;
+      message_approval_decision_id: string;
+    }>(crmCommandPool, {
+      workspaceId, userId: ownerId, requestId: `prepare-${randomUUID()}`,
+    },
+    `SELECT disposition, campaign_template_version_id::text,
+            campaign_template_step_id::text,
+            campaign_approval_request_id::text,
+            campaign_approval_decision_id::text, conversation_id::text,
+            message_version_id::text, message_approval_request_id::text,
+            message_approval_decision_id::text
+     FROM app_private.prepare_founder_email_pilot_content(
+       $1, $2, $3, $4, 'marketing', $5, $6, $7, $8, $9
+     )`, [
+      workspaceId, connectionId, contactId, contactPointId,
+      currentSubject, currentBody, 'integration.current-customer-email/v1',
+      Buffer.from(sha(currentBody), 'hex'), Buffer.from(sha(`prep-${workspaceId}`), 'hex'),
+    ]);
+    assert.equal(prepared.length, 1);
+    assert.equal(prepared[0]?.disposition, 'prepared');
+    const current = prepared[0]!;
+    const stepHash = await ownerQuery<{ content_sha256: string }>(pool,
+      `SELECT encode(content_sha256, 'hex') AS content_sha256
+       FROM app.campaign_template_steps
+       WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId, current.campaign_template_step_id]);
+    assert.equal(stepHash.length, 1);
+
+    const currentPolicyDocumentRefs = JSON.stringify([
+      { documentType: 'terms', documentVersion: 'integration-v1',
+        documentId: 'integration-terms-v1', contentSha256: sha('integration-terms') },
+      { documentType: 'conduct', documentVersion: 'integration-v1',
+        documentId: 'integration-conduct-v1', contentSha256: sha('integration-conduct') },
+      { documentType: 'privacy', documentVersion: 'integration-v1',
+        documentId: 'integration-privacy-v1', contentSha256: sha('integration-privacy') },
+      { documentType: 'recruitment', documentVersion: 'integration-v1',
+        documentId: 'integration-recruitment-v1', contentSha256: sha('integration-recruitment') },
+      { documentType: 'marketing', documentVersion: 'integration-v1',
+        documentId: 'integration-marketing-v1', contentSha256: sha('integration-marketing') },
+    ]);
+    const evidence = await loginScopedQuery<{
+      compliance_subject_id: string;
+      policy_publication_event_id: string;
+      pecr_sender_decision_event_id: string;
+      pecr_instigator_decision_event_id: string;
+      action_scope_sha256: string;
+    }>(evidenceCommandPool, {
+      workspaceId, userId: ownerId, requestId: `evidence-${randomUUID()}`,
+    },
+    `SELECT compliance_subject_id::text, policy_publication_event_id::text,
+            pecr_sender_decision_event_id::text,
+            pecr_instigator_decision_event_id::text, action_scope_sha256
+     FROM app_private.record_founder_pilot_compliance_evidence(
+       $1, $2, $3, $4, 'marketing', 'founder_email_pilot', 'integration-v1',
+       $5, $6::jsonb, 'abcdef1', 1, $7
+     )`, [
+      workspaceId, connectionId, contactId, contactPointId,
+      Buffer.from(sha('integration-policy'), 'hex'),
+      currentPolicyDocumentRefs,
+      Buffer.from(sha(`evidence-${workspaceId}`), 'hex'),
+    ]);
+    assert.equal(evidence.length, 1);
+    const currentEvidence = evidence[0]!;
+    const permissionUseReceiptId = randomUUID();
+    const authorityValidUntil = new Date(Date.now() + 2 * 60_000).toISOString();
+    await loginScopedQuery(affiliateReceiptCommandPool, {
+      workspaceId, userId: ownerId, requestId: currentRequestId,
+    },
+      `INSERT INTO app_private.affiliate_compliance_permission_use_receipts (
+         id, workspace_id, subject_id, permission, action_scope_sha256,
+         evidence_snapshot_sha256, decision_nonce_sha256, evaluated_at,
+         decision_expires_at, consumed_at, recorded_by_user_id,
+         recorded_request_id
+       ) VALUES (
+         $1, $2, $3, 'email.send', decode($4, 'hex'),
+         decode($5, 'hex'), decode($6, 'hex'), statement_timestamp(),
+         $7::timestamptz, statement_timestamp(), $8, $9
+       )`, [
+        permissionUseReceiptId, workspaceId, currentEvidence.compliance_subject_id,
+        currentEvidence.action_scope_sha256, sha('current-evidence-snapshot'),
+        sha(`current-permission-${workspaceId}`), authorityValidUntil, ownerId,
+        currentRequestId,
+      ]);
+
+    const currentOperationId = randomUUID();
+    const currentDeliveryId = randomUUID();
+    const currentCorrelationId = randomUUID();
+    const currentIdempotencySha = sha(`current-idempotency-${workspaceId}`);
+    const requestDigest = await loginScopedQuery<{ request_sha256: string }>(
+      crmCommandPool,
+      { workspaceId, userId: ownerId, requestId: currentRequestId },
+      `SELECT encode(app_private.derive_customer_email_pilot_request_digest(
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+         $14, $15::timestamptz, $16, $17, $18, decode($19, 'hex')
+       ), 'hex') AS request_sha256`, [
+        workspaceId, connectionId,
+        current.campaign_template_version_id, current.campaign_template_step_id,
+        current.campaign_approval_request_id, current.campaign_approval_decision_id,
+        current.message_version_id, endpointId, consentId,
+        currentEvidence.compliance_subject_id,
+        currentEvidence.policy_publication_event_id,
+        currentEvidence.pecr_sender_decision_event_id,
+        currentEvidence.pecr_instigator_decision_event_id,
+        permissionUseReceiptId, authorityValidUntil, currentOperationId,
+        currentDeliveryId, currentCorrelationId, currentIdempotencySha,
+      ],
+    );
+    assert.equal(requestDigest.length, 1);
+    const currentRequestSha = requestDigest[0]!.request_sha256;
+    const currentJob = await loginScopedQuery<{ job_id: string; disposition: string }>(
+      customerEmailCommandPool,
+      {
+        workspaceId, userId: ownerId, requestId: currentRequestId,
+        portalSessionTokenHash,
+      },
+      `SELECT job_id::text, disposition
+       FROM app_private.authorize_and_enqueue_customer_email_live_job(
+         $1, $2, $3, $4, decode($5, 'hex'), $6, $7, $8, $9, $10,
+         $11, $12, $13, $14, $15, $16, $17, $18::timestamptz,
+         $19, $20, $21, decode($22, 'hex'), decode($23, 'hex')
+       )`, [
+        workspaceId, connectionId,
+        current.campaign_template_version_id, current.campaign_template_step_id,
+        stepHash[0]!.content_sha256,
+        current.campaign_approval_request_id, current.campaign_approval_decision_id,
+        current.message_version_id, current.message_approval_request_id,
+        current.message_approval_decision_id, endpointId, consentId,
+        currentEvidence.compliance_subject_id,
+        currentEvidence.policy_publication_event_id,
+        currentEvidence.pecr_sender_decision_event_id,
+        currentEvidence.pecr_instigator_decision_event_id,
+        permissionUseReceiptId, authorityValidUntil, currentOperationId,
+        currentDeliveryId, currentCorrelationId, currentIdempotencySha,
+        currentRequestSha,
+      ],
+    );
+    assert.deepEqual(currentJob.map((row) => row.disposition), ['queued']);
+    const currentExpectedMessageId = `<pp-${currentRequestSha}@mg.propertypredator.com>`;
+    await ownerQuery(pool,
+      `UPDATE app.property_predator_customer_email_jobs
+       SET state = 'succeeded', provider_external_id = $3,
+           settled_at = statement_timestamp(), updated_at = statement_timestamp()
+       WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId, currentJob[0]!.job_id, currentExpectedMessageId]);
+    await ownerQuery(pool,
+      `UPDATE app.message_deliveries
+       SET status = 'delivered', accepted_at = statement_timestamp(),
+           delivered_at = statement_timestamp(), updated_at = statement_timestamp()
+       WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId, currentDeliveryId]);
+
+    const currentInboundMessageId = `current-customer-reply-${randomUUID()}@propertypredator.com`;
+    const currentInboundToken = `current-customer-inbound-${randomUUID()}`;
+    // Mailgun timestamps have one-second precision. Keep this synthetic reply
+    // safely after the conversation row created during the same fast test run.
+    const currentInboundTimestamp = String(Number(inboundTimestamp) + 60);
+    const currentRecipient = `reply+${propertyPredatorMailgunReplyToken(
+      currentRequestSha,
+    )}@mg.propertypredator.com`;
+    const currentInboundPayload = Buffer.from(new URLSearchParams({
+      timestamp: currentInboundTimestamp,
+      token: currentInboundToken,
+      signature: createHmac('sha256', SIGNING_KEY)
+        .update(currentInboundTimestamp + currentInboundToken, 'ascii').digest('hex'),
+      sender: recipient,
+      recipient: currentRecipient,
+      subject: `Re: ${currentSubject}`,
+      'stripped-text': 'The current customer-email rail reply is verified.',
+      'message-headers': JSON.stringify([
+        ['Message-Id', `<${currentInboundMessageId}>`],
+      ]),
+      'attachment-count': '0',
+    }).toString(), 'utf8');
+    const currentInboundRecorded = await inbound.handle(currentInboundPayload);
+    assert.equal(currentInboundRecorded.conversationId, current.conversation_id);
+    assert.deepEqual(await ownerQuery<{
+      customer_email_job_id: string | null;
+      legacy_mailgun_job_id: string | null;
+    }>(pool,
+      `SELECT customer_email_job_id, legacy_mailgun_job_id
+       FROM app.property_predator_mailgun_inbound_receipts
+       WHERE workspace_id = $1 AND provider_message_id = $2`,
+      [workspaceId, currentInboundMessageId]), [{
+      customer_email_job_id: currentJob[0]!.job_id,
+      legacy_mailgun_job_id: null,
+    }]);
+
+    // Build the deliberate ambiguity with two distinct conversations so the
+    // correlation conflict is caused only by the shared request digest—not by
+    // the inbox's one-open-conversation invariant.
+    await ownerQuery(pool,
+      `UPDATE app.conversations
+       SET state = 'closed', row_version = row_version + 1,
+           updated_at = statement_timestamp()
+       WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId, current.conversation_id]);
+    await ownerQuery(pool,
+      `UPDATE app.conversations
+       SET state = 'open', row_version = row_version + 1,
+           updated_at = statement_timestamp()
+       WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId, conversationId]);
+
+    const overlapApproval = await createApprovedEmailFixture(pool, {
+      workspaceId, conversationId, contactId, contactPointId, ownerId, subject,
+      body: 'This approved overlap fixture proves ambiguous cross-rail evidence fails closed.',
+    });
+    const overlapInput = makeInput(randomUUID(), 'dual-match-overlap', {
+      approval: overlapApproval,
+      requestSha256: currentRequestSha,
+    });
+    const overlap = await boundary.authorizeImmediatelyBeforeProviderCall(overlapInput);
+    assert.equal(overlap.disposition, 'authorized');
+    if (overlap.disposition !== 'authorized') throw new Error('Overlap fixture was not authorized');
+    await boundary.settleProviderCall(overlap.reservationId, overlap.requestSha256, {
+      status: 'accepted', externalId: currentExpectedMessageId,
+      occurredAt: new Date().toISOString(), retryable: false,
+      errorCode: null, summary: 'Ambiguous dual-rail fixture accepted',
+    });
+    const overlapDelivery = await ownerQuery<{ message_delivery_id: string }>(pool,
+      `SELECT message_delivery_id
+       FROM app.property_predator_email_pilot_reservations
+       WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId, overlap.reservationId]);
+    const overlapLegacyJobId = randomUUID();
+    await ownerQuery(pool,
+      `INSERT INTO app.property_predator_mailgun_jobs (
+         id, workspace_id, provider_connection_id, operation_id, correlation_id,
+         idempotency_key_sha256, request_sha256, run_id, utc_month,
+         message_version_id, approval_request_id, approval_decision_id,
+         approved_content_sha256, contact_point_id, consent_event_id,
+         email_sha256, estimated_spend_usd_micros, state, reservation_id,
+         message_delivery_id, expected_message_id, claim_count, provider_status,
+         provider_external_id, provider_occurred_at, provider_retryable,
+         provider_summary, settled_at
+       ) VALUES (
+         $1, $2, $3, $4, $5, decode($6, 'hex'), decode($7, 'hex'), $8,
+         date_trunc('month', statement_timestamp() AT TIME ZONE 'UTC')::date,
+         $9, $10, $11, decode($12, 'hex'), $13, $14, decode($15, 'hex'),
+         1500, 'settled', $16, $17, $18, 1, 'accepted', $18,
+         statement_timestamp(), false, 'Dual-rail ambiguity fixture',
+         statement_timestamp()
+       )`, [
+        overlapLegacyJobId, workspaceId, connectionId, overlapInput.operationId,
+        overlapInput.correlationId, overlapInput.idempotencyKeySha256,
+        currentRequestSha, overlapInput.runId, overlapApproval.messageVersionId,
+        overlapApproval.approvalRequestId, overlapApproval.approvalDecisionId,
+        overlapApproval.approvedContentSha256, contactPointId, consentId, emailSha,
+        overlap.reservationId, overlapDelivery[0]!.message_delivery_id,
+        currentExpectedMessageId,
+      ]);
+    const ambiguousInboundMessageId = `dual-match-${randomUUID()}@propertypredator.com`;
+    const ambiguousInboundToken = `dual-match-token-${randomUUID()}`;
+    const ambiguousPayload = Buffer.from(new URLSearchParams({
+      timestamp: currentInboundTimestamp,
+      token: ambiguousInboundToken,
+      signature: createHmac('sha256', SIGNING_KEY)
+        .update(currentInboundTimestamp + ambiguousInboundToken, 'ascii').digest('hex'),
+      sender: recipient,
+      recipient: currentRecipient,
+      subject: `Re: ${currentSubject}`,
+      'stripped-text': 'Ambiguous evidence must not create an inbox message.',
+      'message-headers': JSON.stringify([
+        ['Message-Id', `<${ambiguousInboundMessageId}>`],
+      ]),
+      'attachment-count': '0',
+    }).toString(), 'utf8');
+    await assert.rejects(
+      inbound.handle(ambiguousPayload),
+      PropertyPredatorMailgunInboundConflictError,
+    );
+    assert.deepEqual(await ownerQuery<{ receipt_count: number }>(pool,
+      `SELECT count(*)::integer AS receipt_count
+       FROM app.property_predator_mailgun_inbound_receipts
+       WHERE workspace_id = $1 AND provider_message_id = $2`,
+      [workspaceId, ambiguousInboundMessageId]), [{ receipt_count: 0 }]);
+
     const wrongWorkspaceInbound = new PropertyPredatorMailgunInboundIngressService({
       repository: new PgPropertyPredatorMailgunInboundRepository({
         commandPool: roleConnectPool(pool, 'r72_mailgun_webhook_command'),
@@ -928,6 +1386,68 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
       { workspaceId, requestId: 'mailgun-inbound-table-blindness' },
       'SELECT id FROM app.property_predator_mailgun_inbound_receipts',
     ), '42501');
+    for (const jobTable of [
+      'property_predator_customer_email_jobs',
+      'property_predator_mailgun_jobs',
+    ] as const) {
+      await expectPostgresError(scopedQuery(
+        pool,
+        'r72_mailgun_webhook_command',
+        { workspaceId, requestId: `mailgun-inbound-${jobTable}-blindness` },
+        `SELECT id FROM app.${jobTable}`,
+      ), '42501');
+    }
+    assert.deepEqual(await ownerQuery<{
+      command_reads_current: boolean;
+      command_reads_legacy: boolean;
+      command_executes_recorder: boolean;
+      definer_reads_current: boolean;
+      definer_reads_legacy: boolean;
+      definer_writes_current: boolean;
+      definer_writes_legacy: boolean;
+    }>(pool,
+      `SELECT
+         has_table_privilege(
+           'r72_mailgun_webhook_command',
+           'app.property_predator_customer_email_jobs', 'SELECT'
+         ) AS command_reads_current,
+         has_table_privilege(
+           'r72_mailgun_webhook_command',
+           'app.property_predator_mailgun_jobs', 'SELECT'
+         ) AS command_reads_legacy,
+         has_function_privilege(
+           'r72_mailgun_webhook_command',
+           to_regprocedure(
+             'app_private.record_property_predator_owned_seed_mailgun_inbound(uuid,uuid,text,text,text,text,text,text,timestamp with time zone,bytea,bytea,bytea,timestamp with time zone,bytea,bytea,bytea,bytea)'
+           ), 'EXECUTE'
+         ) AS command_executes_recorder,
+         has_table_privilege(
+           'r72_mailgun_webhook_definer',
+           'app.property_predator_customer_email_jobs', 'SELECT'
+         ) AS definer_reads_current,
+         has_table_privilege(
+           'r72_mailgun_webhook_definer',
+           'app.property_predator_mailgun_jobs', 'SELECT'
+         ) AS definer_reads_legacy,
+         has_table_privilege(
+           'r72_mailgun_webhook_definer',
+           'app.property_predator_customer_email_jobs',
+           'INSERT,UPDATE,DELETE,TRUNCATE'
+         ) AS definer_writes_current,
+         has_table_privilege(
+           'r72_mailgun_webhook_definer',
+           'app.property_predator_mailgun_jobs',
+           'INSERT,UPDATE,DELETE,TRUNCATE'
+         ) AS definer_writes_legacy`,
+    ), [{
+      command_reads_current: false,
+      command_reads_legacy: false,
+      command_executes_recorder: true,
+      definer_reads_current: true,
+      definer_reads_legacy: true,
+      definer_writes_current: false,
+      definer_writes_legacy: false,
+    }]);
     assert.deepEqual(await ownerQuery<{
       unread_count: number;
       assigned_user_id: string;
@@ -938,6 +1458,8 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
       task_status: string;
       activity_type: string;
       receipt_count: number;
+      customer_email_job_id: string | null;
+      legacy_mailgun_job_id: string | null;
     }>(
       pool,
       `SELECT conversation.unread_count,
@@ -948,7 +1470,9 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
               task.priority AS task_priority,
               task.status AS task_status,
               activity.activity_type,
-              count(receipt.id) OVER ()::integer AS receipt_count
+              count(receipt.id) OVER ()::integer AS receipt_count,
+              receipt.customer_email_job_id,
+              receipt.legacy_mailgun_job_id
        FROM app.property_predator_mailgun_inbound_receipts AS receipt
        JOIN app.conversations AS conversation
          ON conversation.workspace_id = receipt.workspace_id
@@ -979,9 +1503,22 @@ test('controlled live email is subject-pinned, policy-capped, singular and webho
       task_status: 'open',
       activity_type: 'inbox.email.reply_received',
       receipt_count: 1,
+      customer_email_job_id: null,
+      legacy_mailgun_job_id: mailgunJobId,
     }]);
   } finally {
+    await customerEmailCommandPool?.end();
+    await affiliateReceiptCommandPool?.end();
+    await evidenceCommandPool?.end();
+    await crmCommandPool?.end();
     await workerPool?.end();
+    await clearExactRoleLoginPasswords(pool, [
+      'r72_crm_command',
+      'r72_founder_pilot_evidence_command',
+      'r72_affiliate_receipt_command',
+      'r72_customer_email_command',
+    ]);
+    await restoreExactRoleNoLogin(pool, 'r72_founder_pilot_evidence_command');
     await clearMailgunWorkerLoginPassword(pool);
     await pool.end();
   }

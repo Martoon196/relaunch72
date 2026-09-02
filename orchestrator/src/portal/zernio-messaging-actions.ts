@@ -3,7 +3,8 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 export type ZernioMessagingNoticeCode =
   | 'draft_created' | 'approval_requested' | 'approved' | 'rejected'
   | 'sent' | 'replayed' | 'invalid' | 'forbidden' | 'conflict'
-  | 'unavailable' | 'provider_rejected' | 'outcome_unknown';
+  | 'unavailable' | 'provider_rejected' | 'outcome_unknown'
+  | 'effects_disabled' | 'emergency_paused';
 
 export interface ZernioMessagingNotice {
   readonly code: ZernioMessagingNoticeCode;
@@ -16,6 +17,7 @@ const CONTEXT = 'property-predator:zernio-messaging-notice:v1\0';
 const CODES = new Set<ZernioMessagingNoticeCode>([
   'draft_created', 'approval_requested', 'approved', 'rejected', 'sent', 'replayed',
   'invalid', 'forbidden', 'conflict', 'unavailable', 'provider_rejected', 'outcome_unknown',
+  'effects_disabled', 'emergency_paused',
 ]);
 
 function mac(secret: string, sessionToken: string, code: ZernioMessagingNoticeCode): string {
@@ -48,8 +50,16 @@ function notice(code: ZernioMessagingNoticeCode): ZernioMessagingNotice {
     message: 'The draft is closed and cannot be sent. Create a new draft to change the copy.',
   });
   if (code === 'sent') return Object.freeze({
-    code, kind: 'success', title: 'Instagram reply accepted',
+    code, kind: 'success', title: 'Social reply accepted',
     message: 'Zernio accepted one exact approved reply and Growth HQ recorded the receipt.',
+  });
+  if (code === 'effects_disabled') return Object.freeze({
+    code, kind: 'info', title: 'Outbound effects are off',
+    message: 'The approved reply remains sealed in Growth HQ. No provider call began.',
+  });
+  if (code === 'emergency_paused') return Object.freeze({
+    code, kind: 'info', title: 'Social replies are paused',
+    message: 'The emergency pause blocked the provider boundary before any send began.',
   });
   if (code === 'replayed') return Object.freeze({
     code, kind: 'info', title: 'Exact command already recorded',

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const migrationUrl = new URL(
-  '../../src/db/migrations/0066_instagram_linkedin_calendar_live_rail.sql',
+  '../../src/db/migrations/0080_instagram_linkedin_calendar_live_rail.sql',
   import.meta.url,
 );
 
@@ -19,7 +19,7 @@ function between(source: string, start: string, end: string): string {
   return source.slice(from, to);
 }
 
-test('0066 widens the live rail only to Instagram, LinkedIn and the deferred X identity', async () => {
+test('0080 widens the live rail only to Instagram, LinkedIn and the deferred X identity', async () => {
   const source = await sql();
   assert.match(source, /CHECK \(network IN \('instagram', 'linkedin', 'x'\)\)/u);
   assert.match(source, /p_network NOT IN \('instagram', 'linkedin'\)/u);
@@ -28,7 +28,7 @@ test('0066 widens the live rail only to Instagram, LinkedIn and the deferred X i
   assert.doesNotMatch(source, /p_network (?:=|IN \()[^;]{0,120}'x'/u);
 });
 
-test('0066 binds one calendar job to exact immutable planning, approval and media evidence', async () => {
+test('0080 binds one calendar job to exact immutable planning, approval and media evidence', async () => {
   const source = await sql();
   assert.match(source, /CREATE FUNCTION app_private\.enqueue_owned_social_job_v2/u);
   assert.match(
@@ -81,7 +81,7 @@ test('0066 binds one calendar job to exact immutable planning, approval and medi
   assert.match(source, /CREATE TRIGGER property_predator_owned_social_jobs_calendar_identity_immutable/u);
 });
 
-test('0066 revalidates the exact active target and latest approved bytes at provider-call time', async () => {
+test('0080 revalidates the exact active target and latest approved bytes at provider-call time', async () => {
   const source = await sql();
   const effect = between(
     source,
@@ -145,7 +145,7 @@ test('0066 revalidates the exact active target and latest approved bytes at prov
   );
 });
 
-test('0066 registers the new workspace-scoped media table', async () => {
+test('0080 registers the new workspace-scoped media table', async () => {
   const source = await sql();
   assert.match(
     source,
@@ -153,7 +153,7 @@ test('0066 registers the new workspace-scoped media table', async () => {
   );
 });
 
-test('0066 accepts the real Property Predator asset route for an Instagram media enqueue', async () => {
+test('0080 accepts the real Property Predator asset route for an Instagram media enqueue', async () => {
   const source = await sql();
   const realAssetPath = '/api/internal/company-content/assets/77777777-7777-4777-8777-777777777777/file';
   const storagePattern = source.match(/blob_storage_key ~ '([^']+)'/u)?.[1];
@@ -200,7 +200,7 @@ test('0066 accepts the real Property Predator asset route for an Instagram media
   assert.equal(new RegExp(helperPattern).test(`${'a'.repeat(500)}/`), false);
 });
 
-test('0066 preserves legacy X profile recording while filling provider-neutral evidence', async () => {
+test('0080 preserves legacy X profile recording while filling provider-neutral evidence', async () => {
   const source = await sql();
   const legacy = between(
     source,
@@ -215,7 +215,7 @@ test('0066 preserves legacy X profile recording while filling provider-neutral e
   );
 });
 
-test('0066 serializes 0040 lifecycle changes with the exact live target and removes v1 worker bypasses', async () => {
+test('0080 serializes 0040 lifecycle changes with the exact live target and removes v1 worker bypasses', async () => {
   const source = await sql();
   const lifecycle = between(
     source,
@@ -244,7 +244,7 @@ test('0066 serializes 0040 lifecycle changes with the exact live target and remo
   );
 });
 
-test('0066 keeps the calendar command and worker table-blind behind exact functions', async () => {
+test('0080 keeps the calendar command and worker table-blind behind exact functions', async () => {
   const source = await sql();
   assert.match(source, /SECURITY DEFINER SET search_path = pg_catalog/u);
   assert.match(source, /session_user <> 'r72_owned_social_command'/u);

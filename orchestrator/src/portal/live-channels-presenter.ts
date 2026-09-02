@@ -277,13 +277,13 @@ const RAIL_STATIC: Readonly<Record<PortalLiveChannelTruthRail, RailStatic>> = Ob
   social_dm: Object.freeze({
     eyebrow: 'Conversation rail',
     label: 'Social DMs',
-    providerLabel: 'No live adapter registered',
-    contractLabel: 'No live contract · adapter not composed',
+    providerLabel: 'Zernio',
+    contractLabel: 'r72-zernio-messaging-v1',
     dailyCap: 0,
     monthlyCap: 0,
-    perJobLabel: null,
-    approvalRequirement: 'A live social-DM adapter, its contract and its approval chain must be composed before any requirement can be stated.',
-    targetScope: 'No target is permitted: the rail is present in the Conversion Inbox but has no live delivery adapter.',
+    perJobLabel: 'Conversation replies only · no cold bulk-send allowance',
+    approvalRequirement: 'An exact connected Zernio account, an immutable reply draft and a matching human approval are required before a reply can be claimed.',
+    targetScope: 'Connected Instagram conversations plus Instagram and LinkedIn comment threads owned by the configured company accounts.',
     unitNoun: 'messages',
     links: Object.freeze([
       Object.freeze({ href: CONVERSION_INBOX_ROUTE, label: 'Conversion Inbox' }),
@@ -676,13 +676,25 @@ function presentRail(
       || (source.receiptState === 'outcome_unknown' && !codes.includes('OUTCOME_UNKNOWN_QUARANTINED'))) {
     throw new Error(`live channel ${source.rail} blocker codes contradict its states`);
   }
-  if (source.rail === 'social_dm'
-      && (source.connectionState !== 'not_composed'
-        || source.inboundState !== 'not_ready'
-        || source.outboundOrReplyState !== 'not_supported'
-        || source.receiptState !== 'none'
-        || !codes.includes('LIVE_ADAPTER_NOT_COMPOSED'))) {
-    throw new Error('the social DM rail must remain not composed with LIVE_ADAPTER_NOT_COMPOSED');
+  if (source.rail === 'social_dm') {
+    const accountReady = source.connectionState === 'ready' && source.inboundState === 'ready';
+    const accountMissing = (source.connectionState === 'not_configured'
+      || source.connectionState === 'configured')
+      && source.inboundState === 'not_ready'
+      && source.outboundOrReplyState === 'blocked';
+    const safelyBlocked = source.outboundOrReplyState !== 'blocked'
+      || codes.includes('EMERGENCY_PAUSED')
+      || codes.includes('OUTCOME_UNKNOWN_QUARANTINED');
+    if ((source.connectionState !== 'ready' && source.connectionState !== 'configured'
+          && source.connectionState !== 'not_configured')
+        || (source.outboundOrReplyState !== 'ready'
+          && source.outboundOrReplyState !== 'approval_required'
+          && source.outboundOrReplyState !== 'blocked')
+        || (!accountReady && !accountMissing)
+        || (accountReady && !safelyBlocked)
+        || codes.includes('LIVE_ADAPTER_NOT_COMPOSED')) {
+      throw new Error('the social DM rail must match composed Zernio account and reply evidence');
+    }
   }
   if (source.rail !== 'social_dm' && source.outboundOrReplyState === 'not_supported') {
     throw new Error(`live channel ${source.rail} cannot disclaim outbound support`);

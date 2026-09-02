@@ -6,6 +6,7 @@ const exact = Object.freeze({
   exactRole: true,
   schemaUsage: true,
   requiredFunctions: true,
+  legacyReplyFunctionsDenied: true,
   definerPrivilegesExact: true,
   tableBlind: true,
   elevatedRolesDenied: true,
@@ -20,11 +21,18 @@ test('Zernio readiness requires both read-only and write-side portal-session fen
   assert.match(sql, /app_private\.active_portal_session\(bytea,uuid,uuid\)/u);
   assert.match(sql, /app_private\.lock_active_portal_session\(bytea,uuid,uuid\)/u);
   assert.match(sql, /app_private\.read_zernio_social_accounts\(uuid,uuid,bytea\)/u);
-  assert.match(sql, /app_private\.create_zernio_reply_draft\(uuid,uuid,uuid,bytea,bytea,bytea,text,bytea\)/u);
+  assert.match(sql, /app_private\.zernio_reply_channel_truth\(uuid,uuid,bytea,bytea,text\)/u);
+  assert.match(sql, /app_private\.create_zernio_reply_draft\(uuid,uuid,uuid,text,bytea,bytea,bytea,text,bytea\)/u);
   assert.match(sql, /app_private\.request_zernio_reply_approval\(uuid,uuid,uuid\)/u);
   assert.match(sql, /app_private\.decide_zernio_reply_approval\(uuid,uuid,uuid,text\)/u);
-  assert.match(sql, /app_private\.claim_zernio_reply_send\(uuid,uuid,uuid,uuid,bytea,bytea,bytea,bytea,bytea\)/u);
+  assert.match(sql, /app_private\.claim_zernio_reply_send\(uuid,uuid,uuid,uuid,text,bytea,bytea,bytea,bytea,bytea\)/u);
+  assert.match(sql, /NOT has_function_privilege\(current_user,[\s\S]*?create_zernio_reply_draft\(uuid,uuid,uuid,bytea,bytea,bytea,text,bytea\)/u);
+  assert.match(sql, /NOT has_function_privilege\(current_user,[\s\S]*?claim_zernio_reply_send\(uuid,uuid,uuid,uuid,bytea,bytea,bytea,bytea,bytea\)/u);
   assert.match(sql, /app_private\.settle_zernio_reply_send\(uuid,uuid,bytea,text,bytea,bytea,text\)/u);
+  assert.match(
+    sql,
+    /app_private\.enqueue_zernio_calendar_from_connected_account\(uuid,uuid,text,bytea,bytea,uuid,uuid,uuid,uuid,uuid,uuid,uuid,text,timestamp with time zone\)/u,
+  );
   assert.match(sql, /property_predator_zernio_connection_intents', 'SELECT,INSERT,UPDATE,DELETE'/u);
   assert.match(sql, /property_predator_zernio_accounts', 'DELETE,TRUNCATE'/u);
   assert.match(sql, /property_predator_zernio_account_webhook_receipts', 'UPDATE,DELETE,TRUNCATE'/u);

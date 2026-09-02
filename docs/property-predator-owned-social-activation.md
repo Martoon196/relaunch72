@@ -1,51 +1,81 @@
 # Property Predator — owned public social activation readiness
 
-> Current launch target: **Instagram + LinkedIn through Ayrshare and the Growth HQ calendar**. Migration `0066` extends the original `0052` X-only foundation with network-specific profile evidence, exact planning-intent and planning-target binding, exact owned-account confirmation and immutable approved media. X is retained only as a backwards-compatible code path and is deferred from the production manifest until an owned X account and its separate BYOK/OAuth requirements are available.
+> Current launch target: **Instagram + LinkedIn through Zernio**. Growth HQ uses
+> the Zernio rail for calendar publishing and reconciliation, supported DMs,
+> comment inbox reads and approval-gated comment replies. Ayrshare is retained
+> as dormant historical/replacement-provider code; it is not the current
+> execution route. X remains deferred until its separate account and API
+> requirements exist.
 
-For the Instagram/LinkedIn launch, Render uses `PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK=instagram_linkedin`, `AYRSHARE_API_KEY`, the profile-envelope key/version and `PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN`. The X OAuth1 secrets described later in this historical foundation section are **not** required or present for the current launch. Enqueue requires the exact immutable planning intent and target, matching network and owned-profile account digest, current approval, current source attestation and exact approved media set. At the provider boundary, the original short-lived source attestation is immutable provenance rather than live authority: the current exact `0040` revalidation proof and proof-media must still match the intent, content, approval, media and blob/brand digests and remain unexpired.
+Migration `0080` remains the hardened calendar foundation: exact planning
+intent/target, current approval and attestation, immutable approved media,
+effect-time revalidation, cancellation/reschedule coordination and durable
+receipts. Migrations `0085`–`0089` put the current Zernio authority around that
+foundation:
 
-This rail is composed and dark. Nothing in this document publishes a post,
-connects an account or enables a provider effect. A first owned-account
-publication remains a separate, explicitly authorised decision.
+| Migration | Current authority |
+| --- | --- |
+| `0085` | Zernio-qualified Instagram/LinkedIn account bindings, enqueue, leases, publish/reconcile receipts and hard proof caps |
+| `0086` | Network-qualified immutable reply ledger for both Instagram and LinkedIn comments |
+| `0087` | Provider-qualified live-channel truth; only active, non-revoked Zernio evidence and Zernio receipts can make the owned-social row ready |
+| `0088` | Atomic calendar-to-Zernio command that selects the exact connected account, derives the binding and enqueues through `0085` |
+| `0089` | Exact Zernio social-DM control-room truth, including connection/account, approval, delivery, receipt and pause evidence without provider identifiers, message text or PII |
 
-## Current Instagram/LinkedIn release boundary
+The proof ceiling is deliberately small: **one publication per UTC day and
+three per UTC month, per exact Zernio account and network**. Both enqueue and
+effect-time begin enforce the caps; `0087` reports the same usage grain.
 
-The reviewed rail is safe to commit, push and deploy dark with
+This rail is composed. The current production candidate selects the active,
+capped Zernio tuple for the exact owned Instagram and LinkedIn accounts; the
+runtime still cannot call Zernio without the matching secret-manager values,
+database binding, current content approval, due calendar job and cap/pause
+proof. Nothing in this document itself publishes a post or connects an account.
+The already approved controlled owned-account proof is the only current effect
+scope; cold outreach, unsolicited comments and customer communications are not.
+
+## Current Zernio Instagram/LinkedIn release boundary
+
+The reviewed rail can be returned to a fully dark rollback posture with
 `PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE=disabled`,
 `PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED=false` and
 `PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED=true`.
 
-The sole remaining code blocker to enabling Instagram/LinkedIn provider effects
-is provider-fetchable media delivery. `PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN`
-cannot merely prefix the authenticated
-`/api/internal/company-content/assets/.../file` route: Ayrshare fetches media
-without the private `asset:read` bearer and client headers that route requires.
-The resolver must instead produce a credential-free, short-lived signed URL
-bound to the exact workspace/job, immutable content version and blob digest.
-The URL must live long enough for the provider fetch without exposing a service
-credential or creating a permanent public asset.
+The active worker tuple must be exact, not partial:
+`PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE=zernio_live`, provider id `zernio`,
+the explicitly selected Instagram/LinkedIn network set, provider effects ON,
+emergency pause OFF, exact workspace/connection/account bindings and the
+restricted `ZERNIO_API_KEY`. Instagram also requires the shared media-signing
+key in the web and worker secret managers so the provider can fetch a short-lived
+URL bound to the exact approved workspace, job, storage key, digest, MIME and
+expiry. The worker never receives the private company-content bearer. The same global effects switch and emergency pause gate
+outbound DM and comment replies; inbox reads may remain available while sends
+are disabled or paused.
 
-Activation remains blocked until a black-box provider-style check proves all of
-the following:
+Before the controlled owned-account proof, verify all of the following:
 
-- an unauthenticated GET of the signed URL returns the exact approved bytes and
-  MIME type;
-- the returned bytes reproduce the stored blob SHA-256;
-- expired, tampered, wrong-job and wrong-version URLs fail closed; and
-- neither the URL nor worker telemetry contains an internal bearer, client
-  token or other reusable credential.
+- the exact Zernio Instagram and LinkedIn account IDs match the immutable
+  connected-account and publish-binding evidence;
+- an unauthenticated provider-style GET of each signed approved-media URL
+  returns the exact MIME type and blob SHA-256 during its 15-minute validity,
+  while expired, tampered or wrong assets return the same generic not-found response;
+- the calendar command reaches the `0085` Zernio job path, not a historical
+  Ayrshare function;
+- provider receipts reconcile only to the exact Zernio job/account/network;
+- the 1/day and 3/month proof caps are visible and enforced; and
+- provider keys, internal bearers and client tokens never appear in URLs,
+  rendered pages, receipts or telemetry.
 
-Owned Ayrshare account credentials, exact Instagram/LinkedIn profile bindings,
-owned-account evidence and a separately authorised owned test post remain
-external activation inputs, not reasons to weaken this media boundary.
+This document describes readiness; it does not itself connect an account or
+publish/reply. Those remain controlled runtime decisions inside the approved
+owned-account proof ceiling.
 
-## Historical X-only foundation reference
+## Historical dormant Ayrshare/X foundation reference
 
-The remaining sections preserve the original X foundation and rehearsal
-contracts. They are useful compatibility history, but they are not the current
-Instagram/LinkedIn activation authority described above.
+The remaining Ayrshare/X sections preserve useful implementation history,
+rehearsal contracts and a replacement-provider option. They are dormant and
+are **not** current Instagram/LinkedIn launch instructions.
 
-## What is already proven in code
+## Historical Ayrshare/X capability record
 
 | Capability | Where | State |
 | --- | --- | --- |
@@ -111,7 +141,10 @@ the expected receipt contract (`accepted` → `reconciliation_pending`,
 > forces a different caller to use the same definition. Enforcing it would
 > require changing the `enqueue_owned_social_job` contract.
 
-## Remaining provider and account inputs
+## Historical X-only provider and account inputs (deferred)
+
+These inputs belong only to the deferred X compatibility path below. They are
+not the current Instagram/LinkedIn calendar activation instructions.
 
 None of these exist in this repository or in any environment inspected here.
 
@@ -167,7 +200,7 @@ memory for a single leased operation.
    rail, a stray `GRANT EXECUTE` on an unrelated `app_private` function to
    `r72_owned_social_worker_command` would pass readiness silently.
 
-## The founder workflow now usable
+## Historical X founder workflow now composed
 
 All three commands live on the existing Live Channels control room at
 `/portal/channels/live`, under **Owned X account commands**. Each is a
@@ -214,64 +247,65 @@ The emergency pause control is unchanged and still engage-only.
 
 The emergency pause has no release function by design.
 
-## Zernio pilot candidate for Facebook, Instagram and LinkedIn
+## Current Zernio publishing and messaging foundation
 
-The existing Ayrshare/X rail is not being replaced or widened implicitly.
-Zernio is the lower-cost pilot candidate for Facebook Pages, Instagram
-professional accounts and LinkedIn organisations. The provider's current
-[connection reference](https://docs.zernio.com/connect/get-connect-url) and
-[multi-tenant guide](https://docs.zernio.com/multi-tenant) document the exact
-headless OAuth start used by the local contract-test seam.
+Migrations `0074`–`0079` compose the Zernio connected-account, signed webhook,
+inbox-read and original Instagram reply foundation. The current launch suffix
+then closes the provider split:
 
-`ZernioConnectionContract` is deliberately **contract-test only**. Its default
-mode is disabled and cannot perform network I/O. The branded test transport can
-only prove construction of one bounded `GET /api/v1/connect/{platform}` request
-with bearer authentication, a fixed Growth HQ callback, an exact
-workspace/connection/profile credential binding, no redirects followed and no
-OAuth browser opened. It accepts only `facebook`, `instagram` and `linkedin`.
-It does not create a Zernio profile, connect an account, persist a callback,
-select a Facebook Page or LinkedIn organisation, receive a webhook, publish,
-schedule, read analytics, reply to a comment/DM, disconnect an account or make
-any provider call from production.
+- `0085` routes Instagram and LinkedIn calendar jobs through the Zernio posting
+  and reconciliation client while retaining `0080`'s immutable content,
+  approval, media, lease, pause and receipt controls;
+- `0086` extends the same immutable draft → approval → decision → claim → settle
+  ledger to exact LinkedIn comment targets without rewriting the Instagram
+  history;
+- `0087` makes the control-room owned-social truth Zernio-qualified and reports
+  its exact connection, binding, caps, pause and receipt blockers; and
+- `0088` gives the portal one atomic, account-qualified calendar command rather
+  than trusting caller-supplied publish capability; and
+- `0089` replaces the central `social_dm` row with exact Zernio connection,
+  account, approval, delivery, receipt and pause truth while retaining only
+  hash evidence and zero publication caps for the reply-only rail.
 
-### Complete blockers before any real account connection
+The Growth HQ social inbox may read configured Zernio DMs, comment posts and
+comment threads. Outbound DMs and Instagram/LinkedIn comment replies use the
+immutable approval ledger and require provider effects ON plus the emergency
+pause OFF before any provider call. Reads do not require outbound effects.
+Every outbound target remains bound to its exact provider connection, network,
+account and conversation/comment reference.
 
-1. Obtain written SaaS/embedded-use rights, DPA/subprocessor and data-region
-   evidence, support/SLA terms, platform-partner evidence and an exit/deletion
-   commitment. Public marketing is not the executed contract.
-2. Create the company-owned provider account, one workspace-scoped profile and
-   restricted API credential; bind their non-secret identities to an immutable
-   Growth HQ connection record. No shared team-wide account ID may be accepted
-   without the local workspace mapping.
-3. Add a short-lived, one-use callback receipt bound to the initiating portal
-   session, workspace, connection, profile, network and provider-state digest.
-   A browser callback is navigation evidence, never proof that an account is
-   connected.
-4. Implement the documented headless secondary-selection ceremonies for
-   Facebook Pages and LinkedIn organisations, with the provider temporary token
-   confined to the server-side command boundary. Instagram's selected login
-   method must be pinned because Facebook Login adds its own selection step.
-5. The local raw-byte verifier now accepts only `account.connected` and
-   `account.disconnected`, verifies the lowercase-hex HMAC-SHA256
-   `X-Zernio-Signature`, requires the payload ID to equal
-   `X-Zernio-Event-Id`, enforces the bound provider profile/network and reduces
-   provider identifiers to hashes. Still add a separate webhook service and
-   database receipt boundary to deduplicate at-least-once delivery, persist
-   before `2xx`, and route by the already-bound provider profile. The
-   [webhook guide](https://docs.zernio.com/webhooks) is the current signature
-   and idempotency reference.
-6. Resolve a current provider-document conflict in writing before setting retry
-   monitoring: the webhook overview says webhooks are never automatically
-   disabled, while the create-webhook reference says ten consecutive delivery
-   failures disable them. Readiness must not assume either behaviour.
-7. Add account-health reconciliation, revocation/disconnect, missed-webhook
-   recovery, cost/rate-limit fairness and migration-out tests. A signed
-   `account.connected` receipt plus an exact account-list/health reconciliation
-   is required before the portal may label a connection live.
-8. Build and review a separate publish/schedule/reconcile adapter and its
-   content, approval, cap, pause and receipt boundaries. A successful OAuth
-   connection never grants publishing permission by itself.
+### Current controlled-proof inputs
 
-Until all eight items are closed, Growth HQ must display Zernio as
-`adapter_contract_verified` at most. It must show zero live Zernio connections,
-offer no executable connect button and make no provider-effect claim.
+1. Apply the reviewed migration chain through `0089`; do not skip from `0080`
+   directly to the worker.
+2. Supply the restricted Zernio credential through the runtime secret manager,
+   plus the exact live connection/profile and Instagram/LinkedIn account IDs.
+3. Reconcile those account IDs against active, non-revoked database evidence
+   and an exact ownership/link proof.
+4. Supply the same high-entropy media-signing key to the Growth HQ web and
+   Zernio worker secret managers, then prove the short-lived provider URL
+   returns the exact approved bytes, MIME type and digest.
+5. Confirm the control-room truth names `zernio`, shows no ambiguous receipt,
+   reports cap headroom and has the emergency pause state expected for the
+   proof.
+6. Use only separately authorised owned-account proofs. The database and worker
+   allow no more than **1 publication per UTC day and 3 per UTC month for each
+   account/network**.
+7. Reconcile the provider post ID and per-platform status/URL, or quarantine an
+   ambiguous outcome instead of guessing that it failed.
+
+Procurement and operational evidence still matters: retain the executed
+embedded-use rights, DPA/subprocessor and data-region evidence, support/SLA and
+exit/deletion commitments; rehearse account-health reconciliation,
+disconnect/revocation, missed-webhook recovery, idempotency and rate-limit
+fairness against owned accounts.
+
+## Dormant Ayrshare replacement path
+
+The earlier Ayrshare tables, functions, worker and X compatibility contracts
+remain deliberately intact. They are useful provenance and a replacement-
+provider option, but they must not be configured alongside the Zernio launch
+tuple or represented as the current calendar authority. Re-activating Ayrshare
+would require its own reviewed account bindings, secrets, readiness proof and
+separate effects authorisation; no Zernio connection or receipt may be treated
+as Ayrshare evidence, or vice versa.

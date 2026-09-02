@@ -88,15 +88,15 @@ export function createPropertyPredatorLiveChannelsFixture(): LiveChannelsSourceS
       }),
       Object.freeze({
         rail: 'social_dm',
-        connectionState: 'not_composed',
+        connectionState: 'not_configured',
         inboundState: 'not_ready',
-        outboundOrReplyState: 'not_supported',
+        outboundOrReplyState: 'blocked',
         receiptState: 'none',
         caps: Object.freeze({
           daily: Object.freeze({ used: 0, limit: 0, remaining: 0 }),
           monthly: Object.freeze({ used: 0, limit: 0, remaining: 0 }),
         }),
-        blockerCodes: Object.freeze(['LIVE_ADAPTER_NOT_COMPOSED']),
+        blockerCodes: Object.freeze(['PROVIDER_NOT_CONFIGURED', 'INGRESS_NOT_READY']),
         latestReceipt: null,
       }),
     ]),

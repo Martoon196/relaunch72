@@ -573,6 +573,70 @@ test('new inbound conversations clamp application time to the PostgreSQL update 
   ]);
 });
 
+test('queued provider work clamps application time to the PostgreSQL update clock', async () => {
+  let operationSql = '';
+  let deliverySql = '';
+  const executor: SqlExecutor = {
+    async query<T extends Record<string, unknown>>(
+      sql: string,
+    ): Promise<SqlResult<T>> {
+      if (sql.includes('inbox.insert-provider-operation')) {
+        operationSql = sql;
+        return { rows: [], rowCount: 1 };
+      }
+      if (sql.includes('inbox.insert-message-delivery')) {
+        deliverySql = sql;
+        return { rows: [], rowCount: 1 };
+      }
+      if (sql.includes('inbox.commit-approved-message')) {
+        return {
+          rows: [{ rowVersion: 3 }] as unknown as T[],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`Unexpected queue SQL: ${sql}`);
+    },
+  };
+
+  await new InboxPgRepository(executor).queueApprovedMessage({
+    operationId: OPERATION,
+    deliveryId: DELIVERY,
+    message: {
+      conversationId: CONVERSATION,
+      providerConnectionId: CONNECTION,
+      channelEndpointId: ENDPOINT,
+      channel: 'email',
+      environment: 'test',
+      contactId: USER,
+      contactPointId: ENDPOINT,
+      messageId: MESSAGE,
+      messageVersionId: VERSION,
+      versionNumber: 1,
+      bodySha256: createHash('sha256').update('Approved copy').digest('hex'),
+      bodyBytes: 13,
+      lifecycle: 'approved',
+      rowVersion: 2,
+      approvalRequestId: CONSENT,
+      requestNumber: 1,
+      approvalDecisionId: WORKER,
+      decision: 'approved',
+    },
+    purpose: 'marketing',
+    consentEventId: CONSENT,
+    actorUserId: USER,
+    at: '2026-08-26T12:00:00.500Z',
+  });
+
+  assert.match(
+    operationSql,
+    /least\(\$7::timestamptz, statement_timestamp\(\)\),\s*statement_timestamp\(\)/u,
+  );
+  assert.match(
+    deliverySql,
+    /least\(\$20::timestamptz, statement_timestamp\(\)\),\s*statement_timestamp\(\)/u,
+  );
+});
+
 class ReadClient {
   invalid = false;
   conversationSql = '';

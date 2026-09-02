@@ -281,12 +281,25 @@ function parseRail(
       || capReached !== blockers.includes('CAP_REACHED')) {
     throw new InvalidLiveChannelTruthSnapshotError();
   }
-  if (rail === 'social_dm'
-      && (connectionState !== 'not_composed'
-        || inboundState !== 'not_ready'
-        || outboundOrReplyState !== 'not_supported'
-        || !blockers.includes('LIVE_ADAPTER_NOT_COMPOSED'))) {
-    throw new InvalidLiveChannelTruthSnapshotError();
+  if (rail === 'social_dm') {
+    const accountReady = connectionState === 'ready' && inboundState === 'ready';
+    const accountMissing = (connectionState === 'not_configured' || connectionState === 'configured')
+      && inboundState === 'not_ready' && outboundOrReplyState === 'blocked';
+    const safelyBlocked = outboundOrReplyState !== 'blocked'
+      || blockers.includes('EMERGENCY_PAUSED')
+      || blockers.includes('OUTCOME_UNKNOWN_QUARANTINED');
+    if ((connectionState !== 'ready' && connectionState !== 'configured'
+          && connectionState !== 'not_configured')
+        || (outboundOrReplyState !== 'ready'
+          && outboundOrReplyState !== 'approval_required'
+          && outboundOrReplyState !== 'blocked')
+        || (!accountReady && !accountMissing)
+        || (accountReady && !safelyBlocked)
+        || dailyUsed !== 0 || dailyLimit !== 0
+        || monthlyUsed !== 0 || monthlyLimit !== 0
+        || blockers.includes('LIVE_ADAPTER_NOT_COMPOSED')) {
+      throw new InvalidLiveChannelTruthSnapshotError();
+    }
   }
   return Object.freeze({
     snapshotAt,

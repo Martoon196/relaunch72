@@ -49,6 +49,10 @@ import {
   PROPERTY_PREDATOR_ZERNIO_ACCOUNT_WEBHOOK_PATH,
   type PropertyPredatorZernioAccountWebhookMount,
 } from '../integrations/zernio-account-webhook/router.js';
+import {
+  isPropertyPredatorApprovedSocialMediaPath,
+  type PropertyPredatorApprovedSocialMediaGateway,
+} from '../public-social-outbound/approved-social-media-gateway.js';
 
 /** Optional marketing sync (Brevo). Both are no-ops when Brevo isn't configured. */
 export interface MarketingHooks {
@@ -110,6 +114,8 @@ export interface AppDeps {
   propertyPredatorProviderIngress?: PropertyPredatorProviderIngressMount;
   /** Optional signed Zernio account lifecycle receipts; no outbound provider operation. */
   propertyPredatorZernioAccountWebhook?: PropertyPredatorZernioAccountWebhookMount;
+  /** Public signed exact-byte gateway; it never exposes the source adapter bearer. */
+  propertyPredatorApprovedSocialMediaGateway?: PropertyPredatorApprovedSocialMediaGateway;
   /** Optional request-handler seam; production defaults to the bundled admin router. */
   adminHandler?: (req: IncomingMessage, res: ServerResponse, cfg: StripeConfig) => void | Promise<void>;
 }
@@ -272,6 +278,17 @@ export function createApp(deps: AppDeps) {
         'cache-control': 'no-store',
       });
       res.end();
+      return;
+    }
+
+    // Zernio fetches approved Instagram/LinkedIn media server-to-server. This
+    // public route has no cookie or adapter credential: the short-lived signed
+    // path is bound to one immutable source key/hash/MIME tuple.
+    if (isPropertyPredatorApprovedSocialMediaPath(url.pathname)) {
+      if (!deps.propertyPredatorApprovedSocialMediaGateway) {
+        return send(res, 404, { error: 'not found' });
+      }
+      await deps.propertyPredatorApprovedSocialMediaGateway.handle(req, res, url);
       return;
     }
 
@@ -450,6 +467,11 @@ export function createApp(deps: AppDeps) {
               provider_effects_enabled: false,
             },
           } : {}),
+          approved_social_media_gateway: {
+            ready: Boolean(deps.propertyPredatorApprovedSocialMediaGateway),
+            credential_exposure: false,
+            exact_bytes: true,
+          },
         });
       }
 

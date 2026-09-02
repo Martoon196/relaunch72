@@ -277,7 +277,7 @@ test('0055 atomically projects verified WhatsApp inbound and fences Inbox operat
     ]);
     assert.deepEqual(
       truth.find((row) => row.rail === 'social_dm')?.blocker_codes,
-      ['LIVE_ADAPTER_NOT_COMPOSED'],
+      ['PROVIDER_NOT_CONFIGURED', 'INGRESS_NOT_READY'],
     );
 
     const capabilities = await ownerQuery<{

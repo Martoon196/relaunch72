@@ -26,6 +26,7 @@
     "serve:public-social-test-rail": "tsx src/workers/public-social-test-rail/cli.ts",
     "serve:public-social-revalidator": "tsx src/workers/public-social-revalidator/cli.ts",
     "serve:owned-public-social-live": "tsx src/workers/owned-public-social-live/cli.ts",
+    "serve:zernio-calendar-live": "tsx src/workers/zernio-calendar-live/cli.ts",
     "serve:meta-whatsapp-live-worker": "tsx src/workers/meta-whatsapp-live/cli.ts",
     "serve:meta-whatsapp-live-webhook": "tsx src/services/meta-whatsapp-live-webhook/cli.ts",
     "serve:customer-email-live": "tsx src/workers/customer-email-live/cli.ts",

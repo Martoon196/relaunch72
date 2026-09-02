@@ -145,7 +145,7 @@ test('production Blueprint is isolated, manually deployed and narrowly fail-clos
   );
   assert.match(
     ownedSocialLiveWorkerManifest,
-    /startCommand: npm run --workspace orchestrator serve:owned-public-social-live/,
+    /startCommand: npm run --workspace orchestrator serve:zernio-calendar-live/,
   );
   assert.match(whatsAppLiveWorkerManifest,
     /startCommand: npm run --workspace orchestrator serve:meta-whatsapp-live-worker/);
@@ -217,7 +217,7 @@ test('production Blueprint is isolated, manually deployed and narrowly fail-clos
       assert.doesNotMatch(worker, new RegExp(`- key: ${key}\\b`));
     }
   }
-  literalValueIn(webManifest, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'false');
+  literalValueIn(webManifest, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'true');
   literalValueIn(webManifest, 'PROPERTY_PREDATOR_CAMPAIGN_GENERATION_ENABLED', 'true');
   literalValueIn(
     webManifest,
@@ -273,14 +273,33 @@ test('production Blueprint is isolated, manually deployed and narrowly fail-clos
   literalValueIn(smsLiveWebhookManifest, 'PROPERTY_PREDATOR_SMS_PROVIDER_ID', 'twilio_messaging');
   literalValueIn(webManifest,
     'PROPERTY_PREDATOR_CUSTOMER_EMAIL_RECEIPTS_ENABLED', 'false');
-  literalValueIn(webManifest, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'true');
-  for (const section of [
-    revalidatorWorkerManifest, socialTestWorkerManifest, ownedSocialLiveWorkerManifest,
-  ]) {
+  literalValueIn(webManifest, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'false');
+  literalValueIn(webManifest, 'PROPERTY_PREDATOR_SOCIAL_PROVIDER', 'zernio');
+  secretSlotIn(webManifest, 'DATABASE_ZERNIO_SOCIAL_COMMAND_URL');
+  secretSlotIn(webManifest, 'PROPERTY_PREDATOR_ZERNIO_LIVE_CONNECTION_ID');
+  secretSlotIn(webManifest, 'PROPERTY_PREDATOR_ZERNIO_PROVIDER_PROFILE_ID');
+  secretSlotIn(webManifest, 'PROPERTY_PREDATOR_ZERNIO_INSTAGRAM_ACCOUNT_ID');
+  secretSlotIn(webManifest, 'PROPERTY_PREDATOR_ZERNIO_LINKEDIN_ACCOUNT_ID');
+  secretSlotIn(webManifest, 'PROPERTY_PREDATOR_ZERNIO_MESSAGING_ACCOUNT_IDS');
+  secretSlotIn(webManifest, 'PROPERTY_PREDATOR_ZERNIO_COMMENT_ACCOUNT_BINDINGS');
+  secretSlotIn(webManifest, 'ZERNIO_API_KEY');
+  for (const section of [revalidatorWorkerManifest, socialTestWorkerManifest]) {
     literalValueIn(section, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'false');
     literalValueIn(section, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'true');
     assert.doesNotMatch(section, /- key: PROPERTY_PREDATOR_EMAIL_(?:DELIVERY_ENABLED|EMERGENCY_PAUSED)\b/);
   }
+  literalValueIn(
+    ownedSocialLiveWorkerManifest, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'true',
+  );
+  literalValueIn(
+    ownedSocialLiveWorkerManifest, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'false',
+  );
+  literalValueIn(
+    ownedSocialLiveWorkerManifest, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE', 'zernio_live',
+  );
+  literalValueIn(
+    ownedSocialLiveWorkerManifest, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_PROVIDER_ID', 'zernio',
+  );
   for (const section of [webManifest, emailWorkerManifest]) {
     literalValueIn(section, 'PROPERTY_PREDATOR_PILOT_STAGE', 'internal-seed');
     literalValueIn(section, 'PROPERTY_PREDATOR_PILOT_RECIPIENT_SCOPE', 'owned-internal-seeds-only');
@@ -354,6 +373,7 @@ test('production Blueprint keeps web and worker database identities process-isol
     'DATABASE_WEBHOOK_URL',
     'DATABASE_WEB_URL',
     'DATABASE_WHATSAPP_LIVE_COMMAND_URL',
+    'DATABASE_ZERNIO_SOCIAL_COMMAND_URL',
   ]);
   assert.deepEqual(databaseUrlKeys(emailWorkerManifest), ['DATABASE_MAILGUN_WORKER_URL']);
   assert.deepEqual(databaseUrlKeys(revalidatorWorkerManifest), [
@@ -518,11 +538,23 @@ test('Mailgun ingress and controlled internal-seed egress use disjoint exact sec
   }
   for (const section of [
     webManifest, emailWorkerManifest, revalidatorWorkerManifest, socialTestWorkerManifest,
+    ownedSocialLiveWorkerManifest,
   ]) assert.doesNotMatch(section, /- key: AYRSHARE_[A-Z0-9_]+\b/);
   for (const key of [
-    'AYRSHARE_API_KEY', 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN',
+    'ZERNIO_API_KEY', 'PROPERTY_PREDATOR_ZERNIO_INSTAGRAM_ACCOUNT_ID',
+    'PROPERTY_PREDATOR_ZERNIO_LINKEDIN_ACCOUNT_ID',
+    'PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN',
+    'PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_SIGNING_KEY_BASE64URL',
   ]) secretSlotIn(ownedSocialLiveWorkerManifest, key);
-  assert.doesNotMatch(ownedSocialLiveWorkerManifest, /- key: AYRSHARE_X_OAUTH1_/);
+  secretSlotIn(
+    webManifest,
+    'PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_SIGNING_KEY_BASE64URL',
+  );
+  assert.doesNotMatch(
+    ownedSocialLiveWorkerManifest,
+    /- key: PROPERTY_PREDATOR_COMPANY_CONTENT_READ_TOKEN\b/,
+  );
+  assert.doesNotMatch(ownedSocialLiveWorkerManifest, /- key: AYRSHARE_[A-Z0-9_]+/);
   assert.doesNotMatch(manifest, /MAILGUN_(?:API_KEY|SIGNING_KEY):\s*\S+/);
 });
 

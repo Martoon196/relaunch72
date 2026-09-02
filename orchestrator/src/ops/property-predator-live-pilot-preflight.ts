@@ -125,6 +125,13 @@ function isCanonicalBase64Key32(raw: string): boolean {
   return decoded.length === 32 && decoded.toString('base64') === value;
 }
 
+function isCanonicalBase64UrlKey32(raw: string): boolean {
+  const value = raw.trim();
+  if (!/^[A-Za-z0-9_-]{43}$/.test(value)) return false;
+  const decoded = Buffer.from(value, 'base64url');
+  return decoded.length === 32 && decoded.toString('base64url') === value;
+}
+
 function isExactMailgunFrom(raw: string): boolean {
   const value = raw.trim();
   return isEmail(value)
@@ -238,22 +245,23 @@ export const PILOT_PROVIDER_CATALOGUE: readonly ProviderSpec[] = Object.freeze([
     ]),
   }),
   Object.freeze({
-    rail: 'owned_social', provider: 'Ayrshare Instagram + LinkedIn', phase: 'deferred', settings: Object.freeze([
-      setting('DATABASE_OWNED_SOCIAL_COMMAND_URL', 'Owned-social command database identity', isProductionDatabaseUrl('r72_owned_social_command'), 'The function-only r72_owned_social_command database URL'),
+    rail: 'owned_social', provider: 'Zernio Instagram + LinkedIn', phase: 'mandatory-first-channel', settings: Object.freeze([
+      setting('DATABASE_ZERNIO_SOCIAL_COMMAND_URL', 'Zernio command database identity', isProductionDatabaseUrl('r72_zernio_social_command'), 'The function-only r72_zernio_social_command database URL'),
       setting('DATABASE_OWNED_SOCIAL_WORKER_URL', 'Owned-social worker database identity', isProductionDatabaseUrl('r72_owned_social_worker_command'), 'The function-only r72_owned_social_worker_command database URL'),
-      setting('PROPERTY_PREDATOR_SOCIAL_PROVIDER', 'Selected social provider', exact('ayrshare'), 'Ayrshare as the pilot social provider'),
-      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE', 'Owned-social live mode', exact('owned_profile_live'), 'The exact owned-profile live worker mode'),
-      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_PROVIDER_ID', 'Owned-social provider binding', exact('ayrshare'), 'The exact Ayrshare provider binding'),
+      setting('PROPERTY_PREDATOR_SOCIAL_PROVIDER', 'Selected social provider', exact('zernio'), 'Zernio as the current owned-account social provider'),
+      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE', 'Owned-social live mode', exact('zernio_live'), 'The exact Zernio live worker mode'),
+      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_PROVIDER_ID', 'Owned-social provider binding', exact('zernio'), 'The exact Zernio provider binding'),
       setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK', 'Owned-social network binding', exact('instagram_linkedin'), 'The exact Instagram + LinkedIn network binding'),
       setting('PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'Provider effects switch', exact('true'), 'The exact reviewed provider-effects switch'),
       setting('PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'Owned-social emergency pause', exact('false'), 'The reviewed released owned-social emergency pause'),
       setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_WORKSPACE_ID', 'Owned-social workspace binding', isUuid, 'The exact owned pilot workspace UUID'),
-      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_CONNECTION_ID', 'Owned-social connection binding', isUuid, 'The exact Ayrshare provider connection UUID'),
-      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_BASE64', 'Owned-social profile-envelope key', isCanonicalBase64Key32, 'A canonical 32-byte profile-envelope key'),
-      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_PROFILE_ENCRYPTION_KEY_VERSION', 'Owned-social profile-envelope key version', isKeyVersion, 'A bounded profile-envelope key version'),
-      setting('AYRSHARE_API_KEY', 'Ayrshare API key', (raw) => isSafeSecret(raw), 'The Ayrshare account API key'),
+      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_CONNECTION_ID', 'Owned-social connection binding', isUuid, 'The exact Zernio provider connection UUID'),
+      setting('PROPERTY_PREDATOR_ZERNIO_INSTAGRAM_ACCOUNT_ID', 'Owned Instagram account binding', matches(/^[a-f0-9]{24}$/u), 'The exact Zernio Instagram account ID'),
+      setting('PROPERTY_PREDATOR_ZERNIO_LINKEDIN_ACCOUNT_ID', 'Owned LinkedIn account binding', matches(/^[a-f0-9]{24}$/u), 'The exact Zernio LinkedIn account ID'),
+      setting('ZERNIO_API_KEY', 'Zernio API key', matches(/^sk_[a-f0-9]{64}$/u), 'The Zernio API key held only by the web and social worker services'),
       setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN', 'Approved social-media origin', (raw) => isHttpsUrl(raw, true), 'The exact credential-free HTTPS origin for approved social media'),
-      setting('AYRSHARE_PROFILE_LINK_COMPLETE', 'Social account-link proof', exact('true'), 'Explicit account-link completion evidence'),
+      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_SIGNING_KEY_BASE64URL', 'Approved-media signing key', isCanonicalBase64UrlKey32, 'One canonical 32-byte key shared only by Growth HQ web and the Zernio calendar worker'),
+      setting('PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_URL_TTL_SECONDS', 'Approved-media URL TTL', exact('900'), 'A short-lived 15-minute exact-asset URL'),
     ]),
   }),
   Object.freeze({

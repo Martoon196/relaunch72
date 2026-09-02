@@ -6,11 +6,17 @@ export const ZERNIO_MESSAGING_ORIGIN = 'https://zernio.com' as const;
 const MAX_RESPONSE_BYTES = 1_048_576;
 const MAX_CONVERSATIONS = 100;
 const MAX_MESSAGES = 100;
+const MAX_COMMENTED_POSTS = 100;
+const MAX_COMMENTS = 100;
+const MAX_COMMENT_REPLY_DEPTH = 2;
 const SAFE_OPAQUE_ID = /^[\x21-\x7e]{1,500}$/u;
 const SAFE_PROFILE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/u;
 const SAFE_SECRET = /^[\x21-\x7e]{8,500}$/u;
 const SAFE_IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,254}$/u;
 const SUPPORTED_DM_PLATFORMS = new Set(['instagram', 'facebook']);
+const SUPPORTED_COMMENT_PLATFORMS = new Set(['instagram', 'linkedin']);
+
+export type ZernioCommentPlatform = 'instagram' | 'linkedin';
 
 export type ZernioMessagingFailureCode =
   | 'unauthorised'
@@ -57,6 +63,45 @@ export interface ZernioMessageSnapshot {
   readonly sentVia: string | null;
 }
 
+export interface ZernioCommentedPostSnapshot {
+  readonly providerPostId: string;
+  readonly platform: ZernioCommentPlatform;
+  readonly accountId: string;
+  readonly accountUsername: string;
+  readonly content: string;
+  readonly pictureUrl: string | null;
+  readonly permalinkUrl: string | null;
+  readonly createdAt: string;
+  readonly commentCount: number;
+  readonly likeCount: number;
+}
+
+export interface ZernioCommentAuthorSnapshot {
+  readonly providerAuthorId: string;
+  readonly name: string;
+  readonly username: string;
+  readonly pictureUrl: string | null;
+  readonly isOwner: boolean;
+  readonly verifiedType: string | null;
+}
+
+export interface ZernioCommentSnapshot {
+  readonly providerCommentId: string;
+  readonly providerPostId: string;
+  readonly platform: ZernioCommentPlatform;
+  readonly accountId: string;
+  readonly body: string;
+  readonly createdAt: string;
+  readonly author: ZernioCommentAuthorSnapshot;
+  readonly likeCount: number;
+  readonly replyCount: number;
+  readonly url: string | null;
+  readonly parentCommentId: string | null;
+  readonly canReply: boolean;
+  readonly repliesHaveMore: boolean;
+  readonly replies: readonly ZernioCommentSnapshot[];
+}
+
 export interface ZernioMessagingClient {
   readonly contract: typeof ZERNIO_MESSAGING_CONTRACT;
   listConversations(input: Readonly<{ accountIds: readonly string[] }>): Promise<Readonly<{
@@ -80,6 +125,40 @@ export interface ZernioMessagingClient {
   }>): Promise<Readonly<{
     accepted: true;
     providerMessageId: string;
+    responseSha256: string;
+    idempotentReplay: boolean;
+  }>>;
+  listCommentedPosts(input: Readonly<{
+    accountId: string;
+    platform: ZernioCommentPlatform;
+    cursor?: string;
+  }>): Promise<Readonly<{
+    posts: readonly ZernioCommentedPostSnapshot[];
+    checkedAt: string;
+    hasMore: boolean;
+    nextCursor: string | null;
+  }>>;
+  listPostComments(input: Readonly<{
+    accountId: string;
+    platform: ZernioCommentPlatform;
+    providerPostId: string;
+    cursor?: string;
+  }>): Promise<Readonly<{
+    comments: readonly ZernioCommentSnapshot[];
+    checkedAt: string;
+    hasMore: boolean;
+    nextCursor: string | null;
+  }>>;
+  replyToComment(input: Readonly<{
+    accountId: string;
+    platform: ZernioCommentPlatform;
+    providerPostId: string;
+    providerCommentId: string;
+    body: string;
+    idempotencyKey: string;
+  }>): Promise<Readonly<{
+    accepted: true;
+    providerReplyCommentId: string;
     responseSha256: string;
     idempotentReplay: boolean;
   }>>;
@@ -137,6 +216,27 @@ function nullableUrl(value: unknown): string | null {
   try { url = new URL(parsed); } catch { fail('invalid_provider_response'); }
   if (url.protocol !== 'https:' || url.username || url.password) fail('invalid_provider_response');
   return url.toString();
+}
+
+function nullableText(value: unknown, max: number): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  return text(value, max);
+}
+
+function booleanValue(value: unknown): boolean {
+  if (typeof value !== 'boolean') fail('invalid_provider_response');
+  return value;
+}
+
+function commentPlatform(value: unknown): ZernioCommentPlatform {
+  const parsed = text(value, 30);
+  if (!SUPPORTED_COMMENT_PLATFORMS.has(parsed)) fail('invalid_provider_response');
+  return parsed as ZernioCommentPlatform;
+}
+
+function cursor(value: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  return text(value, 4_096);
 }
 
 async function boundedJson(response: Response): Promise<Readonly<{
@@ -226,6 +326,86 @@ function message(value: unknown, allowed: ReadonlySet<string>): ZernioMessageSna
   });
 }
 
+function commentedPost(
+  value: unknown,
+  expectedAccountId: string,
+  expectedPlatform: ZernioCommentPlatform,
+): ZernioCommentedPostSnapshot {
+  const source = record(value);
+  const platform = commentPlatform(source.platform);
+  const accountId = opaqueId(source.accountId);
+  if (accountId !== expectedAccountId || platform !== expectedPlatform) fail('unbound_target');
+  if (source.isAd === true) fail('unbound_target');
+  if (source.isAd !== undefined && source.isAd !== false) fail('invalid_provider_response');
+  return Object.freeze({
+    providerPostId: opaqueId(source.id), platform, accountId,
+    accountUsername: text(source.accountUsername ?? '', 500, true),
+    content: text(source.content ?? '', 65_536, true),
+    pictureUrl: nullableUrl(source.picture),
+    permalinkUrl: nullableUrl(source.permalink),
+    createdAt: timestamp(source.createdTime),
+    commentCount: boundedInteger(source.commentCount),
+    likeCount: boundedInteger(source.likeCount),
+  });
+}
+
+function commentAuthor(value: unknown): ZernioCommentAuthorSnapshot {
+  const source = record(value);
+  return Object.freeze({
+    providerAuthorId: opaqueId(source.id),
+    name: text(source.name ?? 'Unknown social contact', 500),
+    username: text(source.username ?? '', 500, true),
+    pictureUrl: nullableUrl(source.picture),
+    isOwner: booleanValue(source.isOwner),
+    verifiedType: nullableText(source.verifiedType, 100),
+  });
+}
+
+function commentSnapshot(
+  value: unknown,
+  binding: Readonly<{
+    accountId: string;
+    platform: ZernioCommentPlatform;
+    providerPostId: string;
+  }>,
+  depth: number,
+  counter: { value: number },
+): ZernioCommentSnapshot {
+  counter.value += 1;
+  if (counter.value > 500 || depth > MAX_COMMENT_REPLY_DEPTH) fail('invalid_provider_response');
+  const source = record(value);
+  const platform = commentPlatform(source.platform);
+  if (platform !== binding.platform) fail('unbound_target');
+  const providerCommentId = opaqueId(source.id);
+  const rawReplies = source.replies ?? [];
+  if (!Array.isArray(rawReplies) || rawReplies.length > MAX_COMMENTS) fail('invalid_provider_response');
+  if (depth === MAX_COMMENT_REPLY_DEPTH && rawReplies.length > 0) fail('invalid_provider_response');
+  const replies = rawReplies.map((reply) => commentSnapshot(
+    reply,
+    binding,
+    depth + 1,
+    counter,
+  ));
+  return Object.freeze({
+    providerCommentId,
+    providerPostId: binding.providerPostId,
+    platform,
+    accountId: binding.accountId,
+    body: text(source.message ?? '', 65_536, true),
+    createdAt: timestamp(source.createdTime),
+    author: commentAuthor(source.from),
+    likeCount: boundedInteger(source.likeCount),
+    replyCount: boundedInteger(source.replyCount),
+    url: nullableUrl(source.url),
+    parentCommentId: source.parentId === null || source.parentId === undefined || source.parentId === ''
+      ? null : opaqueId(source.parentId),
+    canReply: booleanValue(source.canReply),
+    repliesHaveMore: source.repliesHasMore === undefined
+      ? false : booleanValue(source.repliesHasMore),
+    replies: Object.freeze(replies),
+  });
+}
+
 export function createZernioMessagingClient(options: ZernioMessagingClientOptions): ZernioMessagingClient {
   if (!options || typeof options !== 'object' || Array.isArray(options)
       || typeof options.apiKey !== 'string' || !SAFE_SECRET.test(options.apiKey)
@@ -259,8 +439,8 @@ export function createZernioMessagingClient(options: ZernioMessagingClientOption
       });
     } catch { fail('provider_unavailable'); }
     finally { clearTimeout(timer); }
-    const parsed = await boundedJson(response);
     if (!response.ok) mapFailure(response.status);
+    const parsed = await boundedJson(response);
     return Object.freeze({ response, ...parsed });
   }
 
@@ -288,6 +468,7 @@ export function createZernioMessagingClient(options: ZernioMessagingClientOption
       providerConversationId: string;
     }>) {
       if (!input || typeof input !== 'object' || !allowed.has(input.accountId)
+          || typeof input.providerConversationId !== 'string'
           || !SAFE_OPAQUE_ID.test(input.providerConversationId)) fail('unbound_target');
       const url = new URL(`/api/v1/inbox/conversations/${encodeURIComponent(input.providerConversationId)}/messages`, ZERNIO_MESSAGING_ORIGIN);
       url.searchParams.set('accountId', input.accountId);
@@ -308,30 +489,175 @@ export function createZernioMessagingClient(options: ZernioMessagingClientOption
       idempotencyKey: string;
     }>) {
       if (!input || typeof input !== 'object' || !allowed.has(input.accountId)
+          || typeof input.providerConversationId !== 'string'
           || !SAFE_OPAQUE_ID.test(input.providerConversationId)
           || typeof input.body !== 'string' || input.body.trim() !== input.body
           || Buffer.byteLength(input.body, 'utf8') < 1 || Buffer.byteLength(input.body, 'utf8') > 10_000
+          || typeof input.idempotencyKey !== 'string'
           || !SAFE_IDEMPOTENCY_KEY.test(input.idempotencyKey)) fail('unbound_target');
       const path = `/api/v1/inbox/conversations/${encodeURIComponent(input.providerConversationId)}/messages`;
-      let result: Awaited<ReturnType<typeof request>>;
       try {
-        result = await request(path, {
+        const result = await request(path, {
           method: 'POST', headers: Object.freeze({
             'content-type': 'application/json', 'idempotency-key': input.idempotencyKey,
           }),
           body: JSON.stringify({ accountId: input.accountId, message: input.body }),
         });
+        const data = record(result.body.data ?? result.body);
+        const providerMessageId = opaqueId(data.messageId ?? data.id);
+        return Object.freeze({
+          accepted: true as const, providerMessageId,
+          responseSha256: createHash('sha256').update(result.bytes).digest('hex'),
+          idempotentReplay: result.response.headers.get('idempotent-replayed') === 'true',
+        });
       } catch (error) {
-        if (error instanceof ZernioMessagingError && error.code === 'provider_unavailable') fail('outcome_unknown');
+        if (error instanceof ZernioMessagingError
+            && (error.code === 'provider_unavailable' || error.code === 'invalid_provider_response')) {
+          fail('outcome_unknown');
+        }
         throw error;
       }
-      const data = record(result.body.data ?? result.body);
-      const providerMessageId = opaqueId(data.messageId ?? data.id);
+    },
+    async listCommentedPosts(input: Readonly<{
+      accountId: string;
+      platform: ZernioCommentPlatform;
+      cursor?: string;
+    }>) {
+      if (!input || typeof input !== 'object' || !allowed.has(input.accountId)
+          || !SUPPORTED_COMMENT_PLATFORMS.has(input.platform)
+          || (input.cursor !== undefined
+            && (typeof input.cursor !== 'string' || input.cursor.length < 1 || input.cursor.length > 4_096))) {
+        fail('unbound_target');
+      }
+      const url = new URL('/api/v1/inbox/comments', ZERNIO_MESSAGING_ORIGIN);
+      url.searchParams.set('profileId', options.providerProfileId);
+      url.searchParams.set('accountId', input.accountId);
+      url.searchParams.set('platform', input.platform);
+      url.searchParams.set('sortBy', 'date');
+      url.searchParams.set('sortOrder', 'desc');
+      url.searchParams.set('limit', String(MAX_COMMENTED_POSTS));
+      if (input.cursor !== undefined) url.searchParams.set('cursor', input.cursor);
+      const { body } = await request(`${url.pathname}${url.search}`, { method: 'GET' });
+      if (!Array.isArray(body.data) || body.data.length > MAX_COMMENTED_POSTS) {
+        fail('invalid_provider_response');
+      }
+      const seen = new Set<string>();
+      const posts: ZernioCommentedPostSnapshot[] = [];
+      for (const value of body.data) {
+        const parsed = commentedPost(value, input.accountId, input.platform);
+        if (seen.has(parsed.providerPostId)) continue;
+        seen.add(parsed.providerPostId);
+        posts.push(parsed);
+      }
+      if (body.meta !== undefined) {
+        const meta = record(body.meta);
+        if (meta.accountsFailed !== undefined && boundedInteger(meta.accountsFailed) > 0) {
+          fail('provider_unavailable');
+        }
+      }
+      const pagination = record(body.pagination ?? {});
+      const hasMore = pagination.hasMore === undefined
+        ? false : booleanValue(pagination.hasMore);
+      const nextCursor = cursor(pagination.nextCursor);
+      if (hasMore && nextCursor === null) fail('invalid_provider_response');
       return Object.freeze({
-        accepted: true as const, providerMessageId,
-        responseSha256: createHash('sha256').update(result.bytes).digest('hex'),
-        idempotentReplay: result.response.headers.get('idempotent-replayed') === 'true',
+        posts: Object.freeze(posts), checkedAt: now().toISOString(), hasMore, nextCursor,
       });
+    },
+    async listPostComments(input: Readonly<{
+      accountId: string;
+      platform: ZernioCommentPlatform;
+      providerPostId: string;
+      cursor?: string;
+    }>) {
+      if (!input || typeof input !== 'object' || !allowed.has(input.accountId)
+          || !SUPPORTED_COMMENT_PLATFORMS.has(input.platform)
+          || typeof input.providerPostId !== 'string'
+          || !SAFE_OPAQUE_ID.test(input.providerPostId)
+          || (input.cursor !== undefined
+            && (typeof input.cursor !== 'string' || input.cursor.length < 1 || input.cursor.length > 4_096))) {
+        fail('unbound_target');
+      }
+      const url = new URL(
+        `/api/v1/inbox/comments/${encodeURIComponent(input.providerPostId)}`,
+        ZERNIO_MESSAGING_ORIGIN,
+      );
+      url.searchParams.set('accountId', input.accountId);
+      url.searchParams.set('limit', String(MAX_COMMENTS));
+      if (input.cursor !== undefined) url.searchParams.set('cursor', input.cursor);
+      const { body } = await request(`${url.pathname}${url.search}`, { method: 'GET' });
+      if (!Array.isArray(body.comments) || body.comments.length > MAX_COMMENTS) {
+        fail('invalid_provider_response');
+      }
+      const meta = record(body.meta);
+      const metaAccountId = opaqueId(meta.accountId);
+      const metaPlatform = commentPlatform(meta.platform);
+      if (metaAccountId !== input.accountId || metaPlatform !== input.platform) fail('unbound_target');
+      opaqueId(meta.postId);
+      const counter = { value: 0 };
+      const binding = Object.freeze({
+        accountId: input.accountId,
+        platform: input.platform,
+        providerPostId: input.providerPostId,
+      });
+      const comments = body.comments.map((value) => commentSnapshot(value, binding, 0, counter));
+      const pagination = record(body.pagination ?? {});
+      const hasMore = pagination.hasMore === undefined
+        ? false : booleanValue(pagination.hasMore);
+      const nextCursor = cursor(pagination.cursor);
+      if (hasMore && nextCursor === null) fail('invalid_provider_response');
+      return Object.freeze({
+        comments: Object.freeze(comments), checkedAt: now().toISOString(), hasMore, nextCursor,
+      });
+    },
+    async replyToComment(input: Readonly<{
+      accountId: string;
+      platform: ZernioCommentPlatform;
+      providerPostId: string;
+      providerCommentId: string;
+      body: string;
+      idempotencyKey: string;
+    }>) {
+      if (!input || typeof input !== 'object' || !allowed.has(input.accountId)
+          || !SUPPORTED_COMMENT_PLATFORMS.has(input.platform)
+          || typeof input.providerPostId !== 'string'
+          || !SAFE_OPAQUE_ID.test(input.providerPostId)
+          || typeof input.providerCommentId !== 'string'
+          || !SAFE_OPAQUE_ID.test(input.providerCommentId)
+          || typeof input.body !== 'string' || input.body.trim() !== input.body
+          || Buffer.byteLength(input.body, 'utf8') < 1 || Buffer.byteLength(input.body, 'utf8') > 10_000
+          || typeof input.idempotencyKey !== 'string'
+          || !SAFE_IDEMPOTENCY_KEY.test(input.idempotencyKey)) fail('unbound_target');
+      const path = `/api/v1/inbox/comments/${encodeURIComponent(input.providerPostId)}`;
+      try {
+        const result = await request(path, {
+          method: 'POST',
+          headers: Object.freeze({
+            'content-type': 'application/json',
+            'idempotency-key': input.idempotencyKey,
+          }),
+          body: JSON.stringify({
+            accountId: input.accountId,
+            message: input.body,
+            commentId: input.providerCommentId,
+          }),
+        });
+        if (result.body.success !== true) fail('invalid_provider_response');
+        const data = record(result.body.data);
+        if (data.isReply !== true) fail('invalid_provider_response');
+        return Object.freeze({
+          accepted: true as const,
+          providerReplyCommentId: opaqueId(data.commentId),
+          responseSha256: createHash('sha256').update(result.bytes).digest('hex'),
+          idempotentReplay: result.response.headers.get('idempotent-replayed') === 'true',
+        });
+      } catch (error) {
+        if (error instanceof ZernioMessagingError
+            && (error.code === 'provider_unavailable' || error.code === 'invalid_provider_response')) {
+          fail('outcome_unknown');
+        }
+        throw error;
+      }
     },
   });
 }

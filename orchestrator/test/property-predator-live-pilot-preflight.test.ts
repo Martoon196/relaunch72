@@ -14,6 +14,8 @@ const SESSION_SECRET = 'session-secret-that-must-never-escape-123456';
 const ABUSE_SECRET = 'abuse-secret-that-must-never-escape-12345678';
 const MAILGUN_DOMAIN_SENDING_KEY = 'mailgun-domain-key-that-must-never-escape';
 const MAILGUN_SIGNING_KEY = 'mailgun-signing-key-that-must-never-escape';
+const ZERNIO_API_KEY = `sk_${'a'.repeat(64)}`;
+const MEDIA_SIGNING_KEY = Buffer.alloc(32, 7).toString('base64url');
 
 function databaseUrl(user: string): string {
   return `postgresql://${user}:${DB_PASSWORD}@pilot-db.example/property_predator?sslmode=verify-full`;
@@ -66,10 +68,25 @@ function firstChannelEnvironment(): NodeJS.ProcessEnv {
     MAILGUN_WEBHOOK_SIGNATURE_VERIFICATION_ENABLED: 'true',
     MAILGUN_DNS_VERIFIED: 'true',
     MAILGUN_SUPPRESSION_SYNC_ENABLED: 'true',
+    DATABASE_ZERNIO_SOCIAL_COMMAND_URL: databaseUrl('r72_zernio_social_command'),
+    DATABASE_OWNED_SOCIAL_WORKER_URL: databaseUrl('r72_owned_social_worker_command'),
+    PROPERTY_PREDATOR_SOCIAL_PROVIDER: 'zernio',
+    PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_MODE: 'zernio_live',
+    PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_PROVIDER_ID: 'zernio',
+    PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_NETWORK: 'instagram_linkedin',
+    PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED: 'false',
+    PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_WORKSPACE_ID: '8a4a838f-9b3b-4f6b-a879-3459aa3771ae',
+    PROPERTY_PREDATOR_PUBLIC_SOCIAL_LIVE_CONNECTION_ID: '5a4a838f-9b3b-4f6b-a879-3459aa3771ae',
+    PROPERTY_PREDATOR_ZERNIO_INSTAGRAM_ACCOUNT_ID: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+    PROPERTY_PREDATOR_ZERNIO_LINKEDIN_ACCOUNT_ID: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+    ZERNIO_API_KEY,
+    PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN: 'https://hq.propertypredator.com',
+    PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_SIGNING_KEY_BASE64URL: MEDIA_SIGNING_KEY,
+    PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_URL_TTL_SECONDS: '900',
   };
 }
 
-test('the mandatory first-channel configuration can pass while every later rail remains deferred', () => {
+test('the mandatory email and owned-social configuration can pass while later rails remain deferred', () => {
   const report = runPropertyPredatorPilotPreflight(firstChannelEnvironment());
 
   assert.equal(report.result, 'ready-for-activation-review');
@@ -79,8 +96,12 @@ test('the mandatory first-channel configuration can pass while every later rail 
   assert.equal(report.providers[0]?.rail, 'customer_email');
   assert.equal(report.providers[0]?.phase, 'mandatory-first-channel');
   assert.equal(report.providers[0]?.status, 'configuration-ready');
-  assert.ok(report.providers.slice(1).every((provider) => provider.phase === 'deferred'));
-  assert.ok(report.providers.slice(1, -1).every((provider) => provider.status === 'not-configured'));
+  assert.equal(report.providers.find((provider) => provider.rail === 'owned_social')?.phase, 'mandatory-first-channel');
+  assert.equal(report.providers.find((provider) => provider.rail === 'owned_social')?.status, 'configuration-ready');
+  assert.ok(report.providers.filter((provider) => ['whatsapp', 'sms', 'social_dm'].includes(provider.rail))
+    .every((provider) => provider.phase === 'deferred'));
+  assert.ok(report.providers.filter((provider) => ['whatsapp', 'sms'].includes(provider.rail))
+    .every((provider) => provider.status === 'not-configured'));
   assert.equal(report.providers.at(-1)?.status, 'not-composed');
 });
 
@@ -94,6 +115,7 @@ test('missing production foundation and Mailgun settings fail closed by name', (
   assert.ok(report.manualProofGates.some((gate) => gate.includes('owned test email')));
   assert.ok(report.manualProofGates.some((gate) => gate.includes('must never share a process')));
   assert.equal(report.providers.find((provider) => provider.rail === 'whatsapp')?.status, 'not-configured');
+  assert.ok(report.blockers.some((blocker) => /Zernio/.test(blocker)));
   assert.ok(report.blockers.every((blocker) => !/Meta WhatsApp|Ayrshare/.test(blocker)));
 });
 
@@ -132,7 +154,10 @@ test('raw secrets and URLs are destroyed at the sanitizer boundary and never ren
   const serializedReport = JSON.stringify(report);
   const rendered = formatPropertyPredatorPilotPreflight(report);
 
-  for (const secret of [DB_PASSWORD, SESSION_SECRET, ABUSE_SECRET, MAILGUN_DOMAIN_SENDING_KEY, MAILGUN_SIGNING_KEY]) {
+  for (const secret of [
+    DB_PASSWORD, SESSION_SECRET, ABUSE_SECRET, MAILGUN_DOMAIN_SENDING_KEY,
+    MAILGUN_SIGNING_KEY, ZERNIO_API_KEY,
+  ]) {
     assert.doesNotMatch(serializedEvidence, new RegExp(secret));
     assert.doesNotMatch(serializedReport, new RegExp(secret));
     assert.doesNotMatch(rendered, new RegExp(secret));
@@ -183,7 +208,7 @@ test('the agreed provider catalogue is exact and keeps social listening outside 
     [
       { rail: 'customer_email', provider: 'Mailgun EU customer email', phase: 'mandatory-first-channel' },
       { rail: 'whatsapp', provider: 'Meta WhatsApp Cloud', phase: 'deferred' },
-        { rail: 'owned_social', provider: 'Ayrshare Instagram + LinkedIn', phase: 'deferred' },
+      { rail: 'owned_social', provider: 'Zernio Instagram + LinkedIn', phase: 'mandatory-first-channel' },
       { rail: 'sms', provider: 'Twilio Messaging UK SMS', phase: 'deferred' },
       { rail: 'social_dm', provider: 'Meta Facebook and Instagram DMs', phase: 'deferred' },
     ],

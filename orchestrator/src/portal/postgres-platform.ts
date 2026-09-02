@@ -101,6 +101,11 @@ import {
 } from './zernio-messaging-service.js';
 import { createPgZernioMessagingReplyStore } from './zernio-messaging-pg-store.js';
 import {
+  createPgPortalZernioCalendarCommandService,
+  type PgPortalZernioCalendarCommandService,
+  type PortalZernioCalendarConfiguredAccount,
+} from './zernio-calendar-command-pg-service.js';
+import {
   createPgPortalCompanyContentSyncService,
   loadPropertyPredatorContentSyncSourceConfig,
   type PropertyPredatorContentSyncSourceConfig,
@@ -163,6 +168,8 @@ export interface PgPortalPlatform {
   zernioSocial?: PgPortalZernioSocialConnectionService;
   /** Authenticated, account-bound live social inbox reads; no provider effect. */
   zernioMessaging?: PortalZernioMessagingService;
+  /** Calendar-to-Zernio database staging; provider account ids are deployment configuration only. */
+  zernioCalendar?: PgPortalZernioCalendarCommandService;
   /** Canonical TEST-only queue read model; it has no send or provider operation. */
   inbox: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval queue commands; it cannot dispatch. */
@@ -750,6 +757,7 @@ export async function buildPgPortalPlatform(
     // and record its one-use callback, but exposes no post, queue or worker API.
     let zernioSocial: PgPortalZernioSocialConnectionService | undefined;
     let zernioMessaging: PortalZernioMessagingService | undefined;
+    let zernioCalendar: PgPortalZernioCalendarCommandService | undefined;
     let zernioSocialReadinessPool: Pool | undefined;
     const zernioConfigured = [
       env.DATABASE_ZERNIO_SOCIAL_COMMAND_URL,
@@ -793,14 +801,29 @@ export async function buildPgPortalPlatform(
           }),
         });
         zernioSocialReadinessPool = zernioPool;
-        const messagingApiKey = env.ZERNIO_MESSAGING_API_KEY?.trim() ?? '';
+        const messagingApiKey = env.ZERNIO_MESSAGING_API_KEY?.trim() || apiKey;
         const messagingAccountIds = (env.PROPERTY_PREDATOR_ZERNIO_MESSAGING_ACCOUNT_IDS ?? '')
           .split(',').map((value) => value.trim()).filter(Boolean);
-        if (messagingApiKey.length >= 8 && messagingAccountIds.length > 0) {
+        const commentBindingSpec = env.PROPERTY_PREDATOR_ZERNIO_COMMENT_ACCOUNT_BINDINGS?.trim() ?? '';
+        const commentAccountBindings = commentBindingSpec
+          ? commentBindingSpec.split(',').map((entry) => {
+            const match = /^(instagram|linkedin):(.+)$/u.exec(entry.trim());
+            if (!match?.[1] || !match[2]) throw new Error('Invalid Zernio comment account binding');
+            return Object.freeze({
+              platform: match[1] as 'instagram' | 'linkedin', accountId: match[2],
+            });
+          })
+          : messagingAccountIds.map((accountId) => Object.freeze({
+            platform: 'instagram' as const, accountId,
+          }));
+        const allowedMessagingAccountIds = [...new Set([
+          ...messagingAccountIds, ...commentAccountBindings.map((binding) => binding.accountId),
+        ])];
+        if (messagingApiKey.length >= 8 && allowedMessagingAccountIds.length > 0) {
           const messagingClient = createZernioMessagingClient({
             apiKey: messagingApiKey,
             providerProfileId,
-            allowedAccountIds: messagingAccountIds,
+            allowedAccountIds: allowedMessagingAccountIds,
             fetch: globalThis.fetch,
           });
           zernioMessaging = new LivePortalZernioMessagingService({
@@ -812,6 +835,28 @@ export async function buildPgPortalPlatform(
               providerConnectionId: connectionId, providerProfileId,
             }),
             allowedAccountIds: messagingAccountIds,
+            commentAccountBindings,
+            providerEffectsEnabled: env.PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED?.trim() === 'true',
+            emergencyPaused: env.PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED?.trim() !== 'false',
+          });
+        }
+        const calendarAccounts: PortalZernioCalendarConfiguredAccount[] = [];
+        const instagramAccountId = env.PROPERTY_PREDATOR_ZERNIO_INSTAGRAM_ACCOUNT_ID?.trim();
+        const linkedInAccountId = env.PROPERTY_PREDATOR_ZERNIO_LINKEDIN_ACCOUNT_ID?.trim();
+        if (instagramAccountId) {
+          calendarAccounts.push({ network: 'instagram', providerAccountId: instagramAccountId });
+        }
+        if (linkedInAccountId) {
+          calendarAccounts.push({ network: 'linkedin', providerAccountId: linkedInAccountId });
+        }
+        if (calendarAccounts.length > 0) {
+          zernioCalendar = createPgPortalZernioCalendarCommandService({
+            webPool,
+            commandPool: zernioPool,
+            workspaceId,
+            providerConnectionId: connectionId,
+            providerProfileId,
+            accounts: calendarAccounts,
           });
         }
         pools.push(zernioPool);
@@ -819,6 +864,7 @@ export async function buildPgPortalPlatform(
         await zernioPool?.end().catch(() => undefined);
         zernioSocial = undefined;
         zernioMessaging = undefined;
+        zernioCalendar = undefined;
         zernioSocialReadinessPool = undefined;
       }
     }
@@ -1004,6 +1050,7 @@ export async function buildPgPortalPlatform(
       publicSocial,
       zernioSocial,
       zernioMessaging,
+      zernioCalendar,
       inbox: createPgPortalInboxReadBoundary(webPool),
       inboxCommands: createPgPortalConversionInboxCommandService({ webPool, commandPool }),
       inboxOperations: createPgPortalConversionInboxOperationsService({
