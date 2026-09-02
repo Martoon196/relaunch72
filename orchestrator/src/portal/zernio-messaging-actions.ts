@@ -51,7 +51,7 @@ function notice(code: ZernioMessagingNoticeCode): ZernioMessagingNotice {
   });
   if (code === 'sent') return Object.freeze({
     code, kind: 'success', title: 'Social reply accepted',
-    message: 'Zernio accepted one exact approved reply and Growth HQ recorded the receipt.',
+    message: 'The social network accepted one exact approved reply and Growth HQ recorded the receipt.',
   });
   if (code === 'effects_disabled') return Object.freeze({
     code, kind: 'info', title: 'Outbound effects are off',
@@ -78,7 +78,7 @@ function notice(code: ZernioMessagingNoticeCode): ZernioMessagingNotice {
     message: 'The draft or approval is no longer in the expected state. Refresh before acting.',
   });
   if (code === 'provider_rejected') return Object.freeze({
-    code, kind: 'error', title: 'Zernio rejected the reply',
+    code, kind: 'error', title: 'The social network rejected the reply',
     message: 'The provider refused the one approved attempt. Growth HQ recorded the failure and did not retry.',
   });
   if (code === 'unavailable') return Object.freeze({

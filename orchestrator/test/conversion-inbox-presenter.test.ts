@@ -166,7 +166,7 @@ test('projects exact signed Zernio LinkedIn evidence as a read-only social conve
   });
   assert.equal(view.filters.channel, 'linkedin');
   assert.equal(view.selectedThread?.summary.testProviderLabel,
-    'LinkedIn · LIVE ZERNIO READ-ONLY');
+    'LinkedIn · LIVE SOCIAL READ-ONLY');
   assert.equal(view.selectedThread?.draft.consentAllowsQueueing, true);
   assert.equal(view.selectedThread?.draft.mayQueueTestOperation, false);
   assert.match(view.selectedThread?.draft.gateDetail ?? '', /read-only evidence rail/i);
@@ -177,11 +177,11 @@ test('projects exact signed Zernio LinkedIn evidence as a read-only social conve
     network: 'linkedin',
     receiptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
     verifiedAt: '2026-08-26T08:37:01.000Z',
-    label: 'Signed Zernio inbound',
+    label: 'Signed social inbound',
     networkLabel: 'LinkedIn',
     networkCode: 'LI',
-    receiptLabel: 'ZERNIO IN cccccccc…cccc',
-    accessibleLabel: 'Signed Zernio LinkedIn inbound event projected into the canonical Conversion Inbox and Lead 360. This conversation is read-only in Growth HQ.',
+    receiptLabel: 'SOCIAL IN cccccccc…cccc',
+    accessibleLabel: 'Signed LinkedIn social event projected into the canonical Conversion Inbox and Lead 360. This conversation is read-only in Growth HQ.',
   });
 });
 

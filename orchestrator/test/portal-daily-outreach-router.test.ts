@@ -151,7 +151,7 @@ test('Daily Outreach route is authenticated and Property Predator scoped', async
   assert.match(result.body, /Fill the tank/);
   assert.match(result.body, /FICTIONAL TEST DATA/);
   assert.match(result.body, /MANUAL FIRST TOUCH/);
-  assert.match(result.body, /ZERNIO-SUPPORTED/);
+  assert.match(result.body, /SOCIAL REPLY SUPPORTED/);
   assert.match(result.body, /Creator Watch · Authority Commenter preview/);
 
   const home = await call('/portal', postgres(), COOKIE);

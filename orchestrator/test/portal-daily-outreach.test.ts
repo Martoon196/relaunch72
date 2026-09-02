@@ -63,7 +63,7 @@ test('Daily Outreach presents the daily fuel target and next fictional prospect 
   });
 });
 
-test('Daily Outreach keeps manual, Zernio-supported and blocked execution truth distinct', () => {
+test('Daily Outreach keeps manual, social-reply-supported and blocked execution truth distinct', () => {
   const view = presentDailyOutreach(fixture());
   assert.deepEqual(view.prospects.map((prospect) => prospect.actionMode), [
     'manual_first_touch',
@@ -73,7 +73,7 @@ test('Daily Outreach keeps manual, Zernio-supported and blocked execution truth 
   ]);
   const supported = view.prospects.find((prospect) => prospect.actionMode === 'zernio_reply_eligible');
   assert.ok(supported);
-  assert.equal(supported.actionModeLabel, 'ZERNIO-SUPPORTED');
+  assert.equal(supported.actionModeLabel, 'SOCIAL REPLY SUPPORTED');
   assert.equal(supported.draft.status, 'approved_exact_version');
   assert.equal(supported.draft.statusLabel, 'APPROVED · EXACT VERSION');
   assert.match(supported.actionModeReason, /no provider operation/);
@@ -209,7 +209,7 @@ test('Daily Outreach renders premium responsive, touch and keyboard-accessible z
   assert.match(html, /Next best fictional prospect/);
   assert.match(html, /Why this target/);
   assert.match(html, /MANUAL FIRST TOUCH/);
-  assert.match(html, /ZERNIO-SUPPORTED/);
+  assert.match(html, /SOCIAL REPLY SUPPORTED/);
   assert.match(html, />BLOCKED<\/span>/);
   assert.match(html, /Immutable message evidence/);
   assert.match(html, /DRAFT · LOCKED/);

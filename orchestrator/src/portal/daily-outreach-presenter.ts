@@ -340,7 +340,7 @@ const CHANNEL_LABELS: Readonly<Record<DailyOutreachChannel, string>> = Object.fr
 
 const ACTION_MODE_LABELS: Readonly<Record<DailyOutreachActionMode, string>> = Object.freeze({
   manual_first_touch: 'MANUAL FIRST TOUCH',
-  zernio_reply_eligible: 'ZERNIO-SUPPORTED',
+  zernio_reply_eligible: 'SOCIAL REPLY SUPPORTED',
   blocked: 'BLOCKED',
 });
 

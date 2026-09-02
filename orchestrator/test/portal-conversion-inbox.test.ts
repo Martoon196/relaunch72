@@ -182,7 +182,7 @@ test('renders a receipt-gated owned-office Mailgun reply as LIVE without exposin
   assert.doesNotMatch(html, /cccccccc-cccc-4ccc-8ccc-cccccccccccc/);
 });
 
-test('renders signed LinkedIn Zernio evidence with no reply, assignment, note or call action', () => {
+test('renders signed LinkedIn social evidence with no reply, assignment, note or call action', () => {
   const base = createPropertyPredatorTestInboxSnapshot();
   const summary = base.page.conversations[0]!;
   const thread = base.threads[0]!;
@@ -226,10 +226,11 @@ test('renders signed LinkedIn Zernio evidence with no reply, assignment, note or
   };
   const html = render(snapshot, { channel: 'linkedin' }, security);
   assert.match(html, />LI</);
-  assert.match(html, /LinkedIn · LIVE ZERNIO READ-ONLY/);
-  assert.match(html, /LIVE ZERNIO · READ ONLY/);
-  assert.match(html, /Signed Zernio inbound · LI/);
-  assert.match(html, /Zernio signature, exact account binding and immutable inbound projection verified/);
+  assert.match(html, /LinkedIn · LIVE SOCIAL READ-ONLY/);
+  assert.match(html, /LIVE SOCIAL · READ ONLY/);
+  assert.match(html, /Signed social inbound · LI/);
+  assert.match(html, /Provider signature, exact account binding and immutable inbound projection verified/);
+  assert.doesNotMatch(html, /zernio/i);
   assert.match(html, /Social messaging/);
   assert.match(html, /Consent is shown as social evidence only/);
   assert.match(html, /Provider effects unavailable/);

@@ -32,18 +32,18 @@ export function zernioSocialNoticeToken(
 function notice(code: ZernioSocialNoticeCode): ZernioSocialNotice {
   if (code === 'connected') return Object.freeze({
     code, kind: 'success', title: 'Social account connected',
-    message: 'Growth HQ recorded the selected Zernio account. Nothing was scheduled or published.',
+    message: 'Growth HQ recorded the selected social account. Nothing was scheduled or published.',
   });
   if (code === 'replayed') return Object.freeze({
     code, kind: 'info', title: 'Connection already recorded',
     message: 'This exact callback was already accepted. No duplicate account or provider action was created.',
   });
   if (code === 'billing_required') return Object.freeze({
-    code, kind: 'error', title: 'Zernio billing boundary reached',
-    message: 'Zernio did not open the connection flow because its current account allowance requires billing attention.',
+    code, kind: 'error', title: 'Social connection allowance reached',
+    message: 'The social connection service did not open the connection flow because the current account allowance requires billing attention.',
   });
   if (code === 'rate_limited') return Object.freeze({
-    code, kind: 'error', title: 'Zernio is temporarily busy',
+    code, kind: 'error', title: 'Social connections are temporarily busy',
     message: 'The provider rate-limited connection preparation. No OAuth window was opened.',
   });
   if (code === 'forbidden') return Object.freeze({
@@ -52,10 +52,10 @@ function notice(code: ZernioSocialNoticeCode): ZernioSocialNotice {
   });
   if (code === 'unavailable') return Object.freeze({
     code, kind: 'error', title: 'Connection boundary unavailable',
-    message: 'Growth HQ could not prove its dedicated Zernio command boundary. Nothing was connected.',
+    message: 'Growth HQ could not prove its dedicated social connection boundary. Nothing was connected.',
   });
   if (code === 'provider_rejected') return Object.freeze({
-    code, kind: 'error', title: 'Zernio rejected the connection',
+    code, kind: 'error', title: 'The social network rejected the connection',
     message: 'The provider response did not match the reviewed connection contract. No OAuth window was opened.',
   });
   return Object.freeze({

@@ -217,7 +217,7 @@ test('LinkedIn comments preserve their real network as a native read-only inbox 
     'conversion_inbox_read_only');
   assert.equal(batch.threads[0]?.outreachResponses[0]?.disposition, 'unlinked');
   assert.equal(batch.threads[0]?.lead360Evidence[0]?.sourceLabel,
-    'Zernio · LinkedIn comment');
+    'LinkedIn comment');
 });
 
 test('Facebook Page DMs preserve their real network and provider identity', async () => {
@@ -233,7 +233,7 @@ test('Facebook Page DMs preserve their real network and provider identity', asyn
   assert.equal(batch.threads[0]?.conversation.channelCompatibility,
     'conversion_inbox_native');
   assert.equal(batch.threads[0]?.lead360Evidence[0]?.sourceLabel,
-    'Zernio · Facebook Page DM');
+    'Facebook Page DM');
 });
 
 test('exact provider replays deduplicate while conflicting replays quarantine fail closed', async () => {

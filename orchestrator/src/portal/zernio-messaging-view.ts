@@ -64,7 +64,7 @@ function replyComposer(
     return '<p class="zmsg-note">Reply commands are unavailable. No provider action can run.</p>';
   }
   if (selected.kind === 'comment' && !snapshot.selectedComment?.canReply) {
-    return '<p class="zmsg-readonly">Zernio reports that this comment cannot be replied to. No draft or provider action is available.</p>';
+    return '<p class="zmsg-readonly">The social network reports that this comment cannot be replied to. No draft or external action is available.</p>';
   }
   const target = targetFields(selected) + hidden('_csrf', security.csrfToken);
   const reply = snapshot.reply;
@@ -154,5 +154,5 @@ export function renderZernioMessagingBody(
       : '<div class="zmsg-empty">Choose a DM or commented post to view its thread.</div>';
   const outboundStatus = !snapshot.outboundEffectsEnabled
     ? 'OUTBOUND EFFECTS OFF' : snapshot.emergencyPaused ? 'EMERGENCY PAUSED' : 'APPROVAL-GATED SEND';
-  return `${style()}<section class="zmsg">${notice}<header class="zmsg-head"><div><div class="zmsg-kicker">Growth HQ · Zernio live inbox</div><h1>Social messages &amp; comments</h1><p class="zmsg-sub">Read Facebook and Instagram DMs plus Facebook, Instagram and LinkedIn organisation comment threads in one queue. Every available reply uses an immutable draft and approval boundary before any provider action.</p></div><span class="zmsg-badge">LIVE READ · ${outboundStatus}</span></header><nav class="zmsg-tabs"><a href="/portal/inbox">Email &amp; rails</a><a href="${ZERNIO_MESSAGING_ROUTE}" aria-current="page">Social messages</a></nav><div class="zmsg-grid"><section class="zmsg-panel"><h2>DMs &amp; comments · ${snapshot.conversations.length + snapshot.commentPosts.length}${snapshot.queueTruncated ? '+' : ''}</h2>${queue ? `<ul class="zmsg-list">${queue}</ul>` : '<div class="zmsg-empty">No social conversations or commented posts are available yet.</div>'}</section><section class="zmsg-panel zmsg-thread">${thread}</section></div></section>`;
+  return `${style()}<section class="zmsg">${notice}<header class="zmsg-head"><div><div class="zmsg-kicker">Growth HQ · Live social inbox</div><h1>Social messages &amp; comments</h1><p class="zmsg-sub">Read Facebook and Instagram DMs plus Facebook, Instagram and LinkedIn organisation comment threads in one queue. Every available reply uses an immutable draft and approval boundary before any external action.</p></div><span class="zmsg-badge">LIVE READ · ${outboundStatus}</span></header><nav class="zmsg-tabs"><a href="/portal/inbox">Email &amp; rails</a><a href="${ZERNIO_MESSAGING_ROUTE}" aria-current="page">Social messages</a></nav><div class="zmsg-grid"><section class="zmsg-panel"><h2>DMs &amp; comments · ${snapshot.conversations.length + snapshot.commentPosts.length}${snapshot.queueTruncated ? '+' : ''}</h2>${queue ? `<ul class="zmsg-list">${queue}</ul>` : '<div class="zmsg-empty">No social conversations or commented posts are available yet.</div>'}</section><section class="zmsg-panel zmsg-thread">${thread}</section></div></section>`;
 }

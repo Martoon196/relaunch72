@@ -113,7 +113,7 @@ async function call(url: string, dependencies: PostgresPortalDeps, method = 'GET
   return res;
 }
 
-test('founder social screen shows connection-only Zernio controls and no publishing form', async () => {
+test('founder social screen shows private-provider connection controls and no publishing form', async () => {
   const result = await call('/portal/social/accounts', deps());
   assert.equal(result.statusCode, 200);
   assert.match(result.body, /data-provider-effects="connection-only"/);
@@ -127,6 +127,7 @@ test('founder social screen shows connection-only Zernio controls and no publish
   assert.doesNotMatch(result.body, /target="_blank"/);
   assert.match(result.body, /No post can be drafted, scheduled, queued or published from this screen/);
   assert.doesNotMatch(result.body, /action="[^"]*(?:publish|schedule|queue)/i);
+  assert.doesNotMatch(result.body, /zernio/i);
 });
 
 test('a signed lifecycle receipt reconciles an incomplete Instagram browser return', async () => {
@@ -152,6 +153,7 @@ test('a signed lifecycle receipt reconciles an incomplete Instagram browser retu
   assert.match(result.body, /Identity verified by signed provider receipt/);
   assert.doesNotMatch(result.body, /Connection request rejected/);
   assert.match(result.body, /Publishing<\/span><strong class="blocked">OFF/);
+  assert.doesNotMatch(result.body, /zernio/i);
 });
 
 test('one valid connect command prepares Zernio once and renders a no-store hosted-consent handoff', async () => {

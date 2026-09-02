@@ -383,12 +383,12 @@ function renderOwnedSocialCommands(
     const field = (name: string, label: string, exact: string | undefined, maximum = 100): string =>
       `<label class="plc-field"><span>${escapeHtml(label)}</span><input type="text" name="${escapeHtml(name)}"${value(exact)} required maxlength="${maximum}" autocomplete="off"></label>`;
     return `<section class="plc-panel" aria-labelledby="plc-owned-social-title">${head}
-      <details class="plc-guard"><summary><span>Zernio connected accounts</span><b>${configuredNetworks.length > 0 ? 'CONNECTED' : 'UNAVAILABLE'}</b></summary><div class="plc-guard-body">
-        <p>Account linking and permission evidence live in the Zernio connection centre. The calendar never accepts or exposes a provider profile, account id or API key.</p>
+      <details class="plc-guard"><summary><span>Connected social accounts</span><b>${configuredNetworks.length > 0 ? 'CONNECTED' : 'UNAVAILABLE'}</b></summary><div class="plc-guard-body">
+        <p>Account linking and permission evidence live in the social connection centre. The calendar never accepts or exposes an external profile, account id or API key.</p>
         <a class="plc-guard-button" href="${SOCIAL_ACCOUNT_CONTROL_ROUTE}">Manage connected accounts</a>
       </div></details>
-      <details class="plc-guard" id="plc-owned-social-stage"${prefill ? ' open' : ''}><summary><span>Stage one approved calendar publication</span><b>${card.capReached ? 'CAP REACHED' : 'ZERNIO READY'}</b></summary><div class="plc-guard-body">
-        <p>The database re-proves the connected Zernio account, exact content version, approval, source attestation, 1-per-day / 3-per-month cap and pause posture. This action only stages the job; it does not claim a worker lease or call Zernio.</p>
+      <details class="plc-guard" id="plc-owned-social-stage"${prefill ? ' open' : ''}><summary><span>Stage one approved calendar publication</span><b>${card.capReached ? 'CAP REACHED' : 'ACCOUNT READY'}</b></summary><div class="plc-guard-body">
+        <p>The database re-proves the connected social account, exact content version, approval, source attestation, 1-per-day / 3-per-month cap and pause posture. This action only stages the job; it does not claim a worker lease or contact the external network.</p>
         <form method="post" action="${LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE}" autocomplete="off">
           <input type="hidden" name="_csrf" value="${csrf}">
           <input type="hidden" name="command_key" value="${escapeHtml(keys.stage)}">
@@ -403,7 +403,7 @@ function renderOwnedSocialCommands(
           ${field('operation_tag', 'Operation tag', prefill?.operationTag)}
           ${field('scheduled_for', 'Scheduled publish time (exact UTC instant)', prefill?.scheduledFor, 40)}
           <label class="plc-guard-check"><input type="checkbox" name="confirm_stage" value="STAGE" required> I confirm this exact approved calendar post may be queued to the server-selected owned account.</label>
-          <button class="plc-guard-button" type="submit"${configuredNetworks.length > 0 ? '' : ' disabled aria-disabled="true"'}>Arm Zernio calendar publication</button>
+          <button class="plc-guard-button" type="submit"${configuredNetworks.length > 0 ? '' : ' disabled aria-disabled="true"'}>Arm calendar publication</button>
         </form>
       </div></details>
     </section>`;
@@ -489,7 +489,7 @@ export function renderLiveChannelsBody(
   options: LiveChannelsRenderOptions,
 ): string {
   const boundary = view.illustrative
-    ? '<strong>ILLUSTRATIVE TEST DATA</strong><p>Every state, count and receipt on this page is invented to demonstrate the operating view in the local preview. Nothing was read from Mailgun, Zernio, Meta or any database, and nothing here can authorise a send.</p>'
+    ? '<strong>ILLUSTRATIVE TEST DATA</strong><p>Every state, count and receipt on this page is invented to demonstrate the operating view in the local preview. Nothing was read from an external provider or database, and nothing here can authorise a send.</p>'
     : '<strong>POSTGRES-AUTHORITATIVE EVIDENCE</strong><p>Every state, cap, blocker and receipt below is read from the durable truth seam. This page cannot load a credential, flip an effect switch on, or create a provider operation.</p>';
   const notice = options.notice
     ? `<div class="plc-notice ${escapeHtml(options.notice.kind)}" role="${options.notice.kind === 'error' ? 'alert' : 'status'}"><strong>${escapeHtml(options.notice.title)}</strong><span>${escapeHtml(options.notice.message)}</span></div>`

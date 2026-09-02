@@ -340,14 +340,14 @@ function buildThread(events: readonly AcceptedEvent[]): ZernioInboundThreadProje
       : event.inboundKind === 'facebook_dm'
         ? 'Facebook Page DM received'
         : `${event.network === 'linkedin' ? 'LinkedIn' : event.network === 'facebook' ? 'Facebook' : 'Instagram'} comment received`,
-    detail: 'Provider-shaped fixture reconciled through the Zernio inbound boundary.',
+    detail: 'Provider-shaped fixture reconciled through the signed social inbound boundary.',
     progressBasisPoints: null,
     occurredAt: event.occurredAt,
     sourceLabel: event.inboundKind === 'instagram_dm'
-      ? 'Zernio · Instagram DM'
+      ? 'Instagram DM'
       : event.inboundKind === 'facebook_dm'
-        ? 'Zernio · Facebook Page DM'
-        : `Zernio · ${event.network === 'linkedin' ? 'LinkedIn' : event.network === 'facebook' ? 'Facebook' : 'Instagram'} comment`,
+        ? 'Facebook Page DM'
+        : `${event.network === 'linkedin' ? 'LinkedIn' : event.network === 'facebook' ? 'Facebook' : 'Instagram'} comment`,
   })));
   const outreachResponses = Object.freeze(ordered.map((event) => Object.freeze({
     contactId: event.person.contactId,

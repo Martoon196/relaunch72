@@ -93,7 +93,7 @@ test('social-account control renders premium, touch-ready controls with all effe
   assert.match(html, /Plug in the audience\.<br><em>Keep the power off\.<\/em>/);
   assert.match(html, /A Hootsuite-class account control room/);
   assert.match(html, /FICTIONAL ACCOUNT REHEARSAL/);
-  assert.match(html, /Nothing was read from Zernio or any social network/);
+  assert.match(html, /Nothing was read from an external social provider or network/);
   assert.match(html, /Emergency pause engaged/);
   assert.match(html, /4 effects switches OFF/);
   assert.match(html, /Ayrshare public-social bridge/);

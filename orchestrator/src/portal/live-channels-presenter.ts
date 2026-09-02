@@ -277,12 +277,12 @@ const RAIL_STATIC: Readonly<Record<PortalLiveChannelTruthRail, RailStatic>> = Ob
   social_dm: Object.freeze({
     eyebrow: 'Conversation rail',
     label: 'Social DMs',
-    providerLabel: 'Zernio',
-    contractLabel: 'r72-zernio-messaging-v1',
+    providerLabel: 'Social connection',
+    contractLabel: 'r72-social-messaging-v1',
     dailyCap: 0,
     monthlyCap: 0,
     perJobLabel: 'Conversation replies only · no cold bulk-send allowance',
-    approvalRequirement: 'An exact connected Zernio account, an immutable reply draft and a matching human approval are required before a reply can be claimed.',
+    approvalRequirement: 'An exact connected social account, an immutable reply draft and a matching human approval are required before a reply can be claimed.',
     targetScope: 'Connected Instagram conversations plus Instagram and LinkedIn comment threads owned by the configured company accounts.',
     unitNoun: 'messages',
     links: Object.freeze([
@@ -693,7 +693,7 @@ function presentRail(
         || (!accountReady && !accountMissing)
         || (accountReady && !safelyBlocked)
         || codes.includes('LIVE_ADAPTER_NOT_COMPOSED')) {
-      throw new Error('the social DM rail must match composed Zernio account and reply evidence');
+      throw new Error('the social DM rail must match composed social account and reply evidence');
     }
   }
   if (source.rail !== 'social_dm' && source.outboundOrReplyState === 'not_supported') {

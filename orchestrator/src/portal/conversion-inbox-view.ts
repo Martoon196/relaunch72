@@ -169,7 +169,7 @@ function renderTranscript(thread: ConversionInboxSelectedThreadView, timezone: s
         : evidence.kind === 'signed_meta_whatsapp_inbound'
           ? 'Meta raw-body HMAC, owned-number binding and exact sender projection verified'
         : evidence.kind === 'signed_zernio_inbound'
-          ? 'Zernio signature, exact account binding and immutable inbound projection verified'
+          ? 'Provider signature, exact account binding and immutable inbound projection verified'
           : 'Simulator signature verified'} · Receipt ${escapeHtml(evidence.receiptLabel)} · verified ${dateTime(evidence.verifiedAt, timezone, true)}</div>`
       : '';
     return `<li class="ci-message" data-direction="${escapeHtml(message.direction)}">
@@ -190,7 +190,7 @@ function renderRailActivity(thread: ConversionInboxSelectedThreadView, timezone:
       const linkedin = thread.summary.channel === 'linkedin';
       const instagram = thread.summary.channel === 'instagram';
       const provider = whatsapp ? 'Meta WhatsApp' : sms ? 'Twilio SMS'
-        : linkedin ? 'Zernio LinkedIn' : instagram ? 'Zernio Instagram' : 'Mailgun';
+        : linkedin ? 'LinkedIn social' : instagram ? 'Instagram social' : 'Email';
       const detail = linkedin
         ? 'The signed inbound event was projected into this canonical thread and Lead 360. This rail is evidence-only: reply, assignment, note and send actions remain unavailable.'
         : 'The signed inbound event was projected into this canonical thread, Lead 360, unread work and an urgent admin call task atomically.';
@@ -268,7 +268,7 @@ function renderComposer(
   security: ConversionInboxActionSecurity | undefined,
 ): string {
   if (thread.summary.channel === 'linkedin') {
-    return '<section class="ci-composer" aria-labelledby="ci-draft-title"><div class="ci-composer-top"><strong id="ci-draft-title">LinkedIn conversation</strong><span class="ci-version">LIVE ZERNIO · READ ONLY</span></div><div class="ci-composer-bar"><div class="ci-gate-copy"><strong>Evidence visible · actions unavailable</strong>This signed Zernio conversation can be reviewed here, but Growth HQ does not expose reply, approval, queue or send controls for LinkedIn.</div></div></section>';
+    return '<section class="ci-composer" aria-labelledby="ci-draft-title"><div class="ci-composer-top"><strong id="ci-draft-title">LinkedIn conversation</strong><span class="ci-version">LIVE SOCIAL · READ ONLY</span></div><div class="ci-composer-bar"><div class="ci-gate-copy"><strong>Evidence visible · actions unavailable</strong>This signed social conversation can be reviewed here, but Growth HQ does not expose reply, approval, queue or send controls for LinkedIn.</div></div></section>';
   }
   if (thread.summary.environment === 'live') {
     return '<section class="ci-composer" aria-labelledby="ci-draft-title"><div class="ci-composer-top"><strong id="ci-draft-title">Operator follow-up</strong><span class="ci-version">LIVE OWNED-OFFICE PROOF</span></div><div class="ci-composer-bar"><div class="ci-gate-copy"><strong>Urgent admin call task created</strong>Use Lead 360 or Action Centre to record the call outcome and next move. No automatic customer reply is sent from this proof.</div><div class="ci-draft-actions"><a class="ci-primary" href="/portal/actions">Open Action Centre</a></div></div></section>';
@@ -299,7 +299,7 @@ function renderOperations(
   security: ConversionInboxActionSecurity | undefined,
 ): string {
   if (thread.summary.channel === 'linkedin') {
-    return '<p class="ci-fact"><b>LinkedIn is read-only.</b> Assignment, internal-note, admin-call and reply actions are unavailable from this Zernio evidence rail.</p>';
+    return '<p class="ci-fact"><b>LinkedIn is read-only.</b> Assignment, internal-note, admin-call and reply actions are unavailable from this signed social evidence rail.</p>';
   }
   if (!security || !view.canWrite) {
     return '<p class="ci-fact">Operational controls require an active writable workspace session.</p>';
@@ -357,7 +357,7 @@ function renderSelected(
   const thread = view.selectedThread;
   if (!thread) return '<section class="ci-empty-thread"><div><h2>Select a loaded test conversation</h2><p>The thread, Lead 360 context, consent check and approval gate will appear here. No provider is connected.</p></div></section>';
   const mode = thread.summary.channel === 'linkedin'
-    ? 'LIVE ZERNIO · READ ONLY'
+    ? 'LIVE SOCIAL · READ ONLY'
     : thread.summary.environment === 'live'
       ? 'LIVE OWNED-OFFICE PROOF' : 'TEST / SIMULATED';
   return `<main class="ci-thread" aria-labelledby="ci-thread-title">
@@ -384,13 +384,13 @@ export function renderConversionInboxBody(
   const mode = hasLive ? 'CONTROLLED PROOF + SIMULATED' : 'TEST / SIMULATED';
   const modeDetail = hasLive
     ? hasLinkedIn
-      ? 'Signed owned-office provider replies and exact Zernio LinkedIn projections may appear as LIVE. LinkedIn remains read-only.'
+      ? 'Signed owned-office replies and exact LinkedIn social projections may appear as LIVE. LinkedIn remains read-only.'
       : 'Only exact signed owned-office provider replies may appear as LIVE; every other loaded channel remains simulated.'
     : 'Contact records may be workspace CRM data. Provider adapters are non-routable; no message here has contacted anyone.';
   const truthTitle = hasLive ? 'Evidence boundary' : 'Safety boundary';
   const truthDetail = hasLive
     ? hasLinkedIn
-      ? 'LinkedIn LIVE labels require an exact signed Zernio event bound to its canonical conversation and message. No LinkedIn command or provider-effect control is exposed.'
+      ? 'LinkedIn LIVE labels require an exact signed social event bound to its canonical conversation and message. No LinkedIn command or external-action control is exposed.'
       : 'LIVE labels require immutable provider evidence bound to the exact conversation. Simulated delivery labels remain non-routable.'
     : 'Delivery labels describe simulator outcomes only. An approved draft is still blocked unless current channel consent also agrees.';
   return `<section class="ci" data-property-predator-conversion-inbox data-environment="${hasLive ? 'controlled' : 'test'}">

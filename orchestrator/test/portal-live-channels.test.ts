@@ -140,7 +140,7 @@ test('the exact four-rail set is required', () => {
   assert.throws(() => presentLiveChannels(snapshotOf(duplicated)), /incomplete or duplicated/);
 });
 
-test('the social DM rail accepts composed Zernio evidence and rejects retired adapter claims', () => {
+test('the social DM rail accepts composed provider evidence and rejects retired adapter claims', () => {
   const ready = authoritative();
   ready.rails[4]!.connectionState = 'ready';
   ready.rails[4]!.inboundState = 'ready';
@@ -152,7 +152,7 @@ test('the social DM rail accepts composed Zernio evidence and rejects retired ad
   retired.rails[4]!.connectionState = 'not_composed';
   retired.rails[4]!.outboundOrReplyState = 'not_supported';
   retired.rails[4]!.blockerCodes = ['LIVE_ADAPTER_NOT_COMPOSED'];
-  assert.throws(() => presentLiveChannels(snapshotOf(retired)), /composed Zernio account and reply evidence/);
+  assert.throws(() => presentLiveChannels(snapshotOf(retired)), /composed social account and reply evidence/);
 });
 
 test('caps must match the foundation hard caps and stay internally consistent', () => {
@@ -227,6 +227,7 @@ test('view renders the fixture truthfully with the illustrative boundary', () =>
   assert.match(html, /ILLUSTRATIVE TEST DATA/);
   assert.match(html, /NO PROVIDER WAS READ/);
   assert.match(html, /data-dataset="illustrative_fixture"/);
+  assert.doesNotMatch(html, /zernio/i);
   assert.match(html, /0 of 5 channels live/);
   assert.doesNotMatch(html, /All channels live/);
   assert.match(html, /4 of 22 capped dispatches used/);
@@ -244,6 +245,7 @@ test('view renders authoritative evidence with its own boundary copy', () => {
   assert.match(html, /POSTGRES-AUTHORITATIVE EVIDENCE/);
   assert.match(html, /READ-ONLY EVIDENCE/);
   assert.match(html, /data-dataset="postgres_authoritative"/);
+  assert.doesNotMatch(html, /zernio/i);
   assert.doesNotMatch(html, /ILLUSTRATIVE TEST DATA/);
   assert.match(html, /Connected · ready/);
 });

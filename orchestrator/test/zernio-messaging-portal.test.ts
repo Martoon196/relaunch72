@@ -212,6 +212,7 @@ test('social Messaging view escapes provider content and withholds send until ap
   assert.match(html, /Save immutable draft/u);
   assert.doesNotMatch(html, /Send approved reply now/u);
   assert.match(html, /OUTBOUND EFFECTS OFF/u);
+  assert.doesNotMatch(html, /zernio/i);
 });
 
 test('approved social reply claims once, calls the provider once and settles accepted evidence', async () => {

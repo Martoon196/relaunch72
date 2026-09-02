@@ -5313,7 +5313,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   if (deps.kind === 'postgres' && p === ZERNIO_MESSAGING_ROUTE && method === 'GET') {
     if (!deps.zernioMessaging) return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
       title: 'Social messages not connected',
-      message: 'The dedicated Zernio Messaging key is not active for this workspace.',
+      message: 'The secure social inbox connection is not active for this workspace.',
       active: 'inbox', backHref: CONVERSION_INBOX_ROUTE, backLabel: 'Return to Messaging',
     }));
     const requested = url.searchParams.get('conversation') ?? '';

@@ -192,7 +192,7 @@ export interface ConversionInboxSignedInboundEvidenceView
     | 'Signed Mailgun inbound'
     | 'Signed Meta inbound'
     | 'Signed Twilio inbound'
-    | 'Signed Zernio inbound';
+    | 'Signed social inbound';
   readonly networkLabel: 'Email' | 'WhatsApp' | 'SMS' | 'Facebook' | 'Instagram' | 'LinkedIn';
   readonly networkCode: 'EM' | 'WA' | 'SMS' | 'FB' | 'IG' | 'LI';
   readonly receiptLabel: string;
@@ -363,9 +363,9 @@ function queueItem(
     requiresApproval: thread === undefined ? summary.requiresApproval : needsApproval(thread),
     testProviderLabel: summary.environment === 'live'
       ? summary.channel === 'linkedin'
-        ? 'LinkedIn · LIVE ZERNIO READ-ONLY'
+        ? 'LinkedIn · LIVE SOCIAL READ-ONLY'
         : summary.channel === 'instagram'
-          ? 'Instagram · LIVE ZERNIO INBOUND'
+          ? 'Instagram · LIVE SOCIAL INBOUND'
           : `${CHANNEL_LABELS[summary.channel]} · LIVE OWNED-OFFICE PROOF`
       : `${CHANNEL_LABELS[summary.channel]} · TEST / SIMULATED`,
   });
@@ -465,7 +465,7 @@ function signedInboundEvidence(
       : evidence.kind === 'signed_meta_whatsapp_inbound'
         ? 'Signed Meta inbound'
       : evidence.kind === 'signed_zernio_inbound'
-        ? 'Signed Zernio inbound'
+        ? 'Signed social inbound'
         : 'Signed TEST inbound',
     networkLabel,
     networkCode,
@@ -476,7 +476,7 @@ function signedInboundEvidence(
       : evidence.kind === 'signed_meta_whatsapp_inbound'
         ? 'META IN'
       : evidence.kind === 'signed_zernio_inbound'
-        ? 'ZERNIO IN'
+        ? 'SOCIAL IN'
         : 'TEST IN'} ${receiptId.slice(0, 8)}…${receiptId.slice(-4)}`,
     accessibleLabel: evidence.kind === 'signed_mailgun_inbound'
       ? 'Signed Mailgun email reply from the controlled owned-office proof. An admin call task was created.'
@@ -485,7 +485,7 @@ function signedInboundEvidence(
       : evidence.kind === 'signed_meta_whatsapp_inbound'
         ? 'Signed Meta WhatsApp inbound message projected into the canonical Conversion Inbox and Lead 360. An admin call task was created.'
       : evidence.kind === 'signed_zernio_inbound'
-        ? `Signed Zernio ${networkLabel} inbound event projected into the canonical Conversion Inbox and Lead 360. This conversation is read-only in Growth HQ.`
+        ? `Signed ${networkLabel} social event projected into the canonical Conversion Inbox and Lead 360. This conversation is read-only in Growth HQ.`
       : `Signed simulated ${networkLabel} inbound event. Non-routable test only; no live account connected.`,
   });
 }
@@ -554,7 +554,7 @@ function draftView(
     gateDetail = 'A TEST/SIMULATED operation already records this draft state.';
   }
   if (summary.channel === 'linkedin') {
-    gateDetail = 'LinkedIn is a signed Zernio read-only evidence rail. Reply, approval and queue actions are not available.';
+    gateDetail = 'LinkedIn is a signed social read-only evidence rail. Reply, approval and queue actions are not available.';
   } else if (environment === 'live') {
     gateDetail = draft.deliveryState === 'not_queued'
       ? exactApproval && consentAllowsQueueing
