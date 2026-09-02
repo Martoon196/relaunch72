@@ -2,7 +2,7 @@
 
 **Authoritative execution snapshot:** 2 September 2026
 
-**Growth HQ baseline:** `codex/relaunch72-platform-foundation`, with the reviewed calendar, Zernio publishing and social-conversation candidate extending the migration ledger through `0089`. The final complete local suite and clean disposable-Neon reset/migration/regression are green: 2,837 application/contract tests with 2,802 passing and 35 intentional skips, plus 55/55 real-Postgres integration/attack tests after a clean 89-migration apply. The production ledger and provider proof must still be re-verified during deployment. This plan does not itself authorise a cold message, unsolicited comment or customer communication.
+**Growth HQ baseline:** `codex/relaunch72-platform-foundation`, with local `HEAD` and the GitHub branch tip both at exact commit `80ee590f794032d4440acbf83394fa7cfd707e56`, extending the migration ledger through `0092`. This candidate adds the PostgreSQL Daily Outreach cockpit and manager reporting, manual LinkedIn first-touch evidence with outcomes, cooldowns and tasks, Creator Watch with controlled approved message families, signed Zernio Instagram DM and Instagram/LinkedIn comment ingestion, account-scoped identity and ownership bindings, and read-only LinkedIn evidence inside Conversion Inbox. Verified on this candidate: typecheck clean; 2,931 application/contract tests with **2,893 passing and 0 failing**, plus 38 opt-in PostgreSQL integrations skipped when `TEST_DATABASE_URL` is absent; browser acceptance 6/6 across desktop, tablet and mobile. **The disposable-PostgreSQL proof is not green.** Against a clean disposable Neon reset those 38 integration and attack tests could not run at all, because migration `0090` fails to apply; see the 2 September 2026 checkpoint below. This candidate is **built and pushed, not deployed**, and production migrations `0090`-`0092` are **not applied**. This plan does not itself authorise a cold message, unsolicited comment or customer communication.
 
 **Purpose:** one truthful sequence from the current foundation to an operational Property Predator marketing and conversion system.
 
@@ -112,6 +112,69 @@ These are foundations, not proof of a complete operating loop. The next ten stri
   not a message thread.
 - No email, SMS, WhatsApp message or social publication occurred, and no other
   Property Predator account was reconciled.
+
+### Release-candidate `80ee590` disposable-PostgreSQL proof — 2 September 2026
+
+Branch `codex/relaunch72-platform-foundation`, local `HEAD` and the GitHub tip are
+all at exact commit `80ee590f794032d4440acbf83394fa7cfd707e56`. The worktree is
+clean and its remote-tracking reference matches. Nothing was amended, rebased,
+force-pushed or reset.
+
+Re-verified locally on this candidate:
+
+- `npm run typecheck` — clean.
+- `npm test` — 2,931 tests, **2,893 passing, 0 failing**, 38 skipped. The figure
+  previously reported as 2,892 passing was one short; 2,893 is the measured count.
+- Browser acceptance — 6/6 desktop, tablet and mobile, carried forward from the
+  candidate's own verification and deliberately not re-run, as no UI code changed.
+
+**The 38 opt-in PostgreSQL integration and attack tests still have not run.** They
+are *not* blocked by a missing `TEST_DATABASE_URL`: the approved disposable Neon
+database was available and was used. They are blocked because migration `0090`
+cannot apply. Two independent defects were found, both invisible to typecheck and
+to the 2,893 non-database tests:
+
+1. **Blanket function revoke — fixed in this block.** `0090` ran
+   `REVOKE ALL ON ALL FUNCTIONS IN SCHEMA app_private` under
+   `SET LOCAL ROLE r72_owner`. That form requires ownership or grant option on
+   every function in the schema, and `app_private` holds 211 functions owned by 28
+   other definer roles. `r72_owner` is a member of 26 of them but **not** of
+   `r72_owned_social_definer` (created in `0052`) or `r72_zernio_social_definer`
+   (created in `0074`), which own 39 functions between them, so the statement
+   aborted with `42501`. `0090` is the first migration since `0056` to use the
+   blanket form, which is why a latent gap dating to `0052` and `0074` only
+   surfaced now. The revoke is now scoped to functions the executing role can act
+   for. The three daily-outreach roles are created by this migration, so no
+   unrelated definer-owned function could ever hold a grant to them. Verified:
+   `0090` now proceeds past that statement.
+
+2. **Neon platform role membership versus `0090`'s own assertion — OPEN.** `0090`
+   asserts that `r72_owner` is the sole inbound member of the daily-outreach roles.
+   On Neon that invariant is unachievable. When `neondb_owner` creates a role, the
+   platform grants that role back to `neondb_owner` with `grantor = cloud_admin`,
+   `admin_option = true` and `set_option = false`. The migration's strip loop
+   cannot remove it, because a `REVOKE` issued by a non-grantor is a warning rather
+   than an error, and an explicit `REVOKE ... GRANTED BY cloud_admin` fails with
+   `42501 permission denied to revoke privileges granted by role "cloud_admin"`.
+   The migration therefore aborts at its own guard with
+   `Daily Outreach role has unsafe inbound membership: r72_daily_outreach_definer<-neondb_owner`.
+
+Defect 2 is a security-model decision and has deliberately **not** been patched.
+Resolving it means either relaxing `0090`'s invariant to tolerate the
+platform-owner grant — noting `set_option = false`, so `neondb_owner` cannot
+`SET ROLE` into the identity, though it does hold `ADMIN` — or changing how the
+daily-outreach roles are provisioned so that the platform grant never applies.
+**If production runs on Neon, migration `0090` will fail there in exactly the same
+way.** Migration application is transactional, so an attempt would roll back
+cleanly rather than corrupt the ledger, but the deployment would not succeed.
+
+Status of this candidate: **built and pushed; not deployed; production migrations
+`0090`-`0092` not applied; the disposable-PostgreSQL proof blocked by defect 2.**
+No production database, customer record or provider effect was touched.
+
+The exact activation sequence is held in
+`docs/property-predator-0090-0092-production-cutover-checklist.md`, which must not
+begin until defect 2 is resolved and the 38 tests pass.
 
 ### Prepared Campaign Machine candidate — not deployed
 

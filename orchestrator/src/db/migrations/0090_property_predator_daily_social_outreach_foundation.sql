@@ -95,9 +95,32 @@ REVOKE ALL ON ALL TABLES IN SCHEMA app, app_private
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA app, app_private
   FROM r72_daily_outreach_definer, r72_daily_outreach_command,
     r72_daily_outreach_read;
-REVOKE ALL ON ALL FUNCTIONS IN SCHEMA app_private
-  FROM r72_daily_outreach_definer, r72_daily_outreach_command,
-    r72_daily_outreach_read;
+-- `REVOKE ... ON ALL FUNCTIONS IN SCHEMA` requires ownership or grant option on
+-- every function in the schema. app_private holds definer-owned functions that
+-- r72_owner cannot act for, so the blanket form aborts with 42501. The three
+-- daily-outreach roles are created by this migration, so only a function whose
+-- owner this role can act for could ever hold a grant to them. Revoke exactly
+-- those and leave every unrelated definer boundary untouched.
+DO $daily_outreach_function_revoke$
+DECLARE
+  target_function text;
+BEGIN
+  FOR target_function IN
+    SELECT candidate.oid::regprocedure::text
+    FROM pg_catalog.pg_proc AS candidate
+    JOIN pg_catalog.pg_namespace AS candidate_schema
+      ON candidate_schema.oid = candidate.pronamespace
+    WHERE candidate_schema.nspname = 'app_private'
+      AND pg_catalog.pg_has_role(current_user, candidate.proowner, 'USAGE')
+  LOOP
+    EXECUTE pg_catalog.format(
+      'REVOKE ALL ON FUNCTION %s FROM r72_daily_outreach_definer,'
+      || ' r72_daily_outreach_command, r72_daily_outreach_read',
+      target_function
+    );
+  END LOOP;
+END
+$daily_outreach_function_revoke$;
 REVOKE CREATE ON SCHEMA public
   FROM r72_daily_outreach_definer, r72_daily_outreach_command,
     r72_daily_outreach_read;
