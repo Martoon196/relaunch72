@@ -2,7 +2,7 @@
 
 **Authoritative execution snapshot:** 2 September 2026
 
-**Growth HQ baseline:** `codex/relaunch72-platform-foundation`, with local `HEAD` and the GitHub branch tip both at exact commit `80ee590f794032d4440acbf83394fa7cfd707e56`, extending the migration ledger through `0092`. This candidate adds the PostgreSQL Daily Outreach cockpit and manager reporting, manual LinkedIn first-touch evidence with outcomes, cooldowns and tasks, Creator Watch with controlled approved message families, signed Zernio Instagram DM and Instagram/LinkedIn comment ingestion, account-scoped identity and ownership bindings, and read-only LinkedIn evidence inside Conversion Inbox. Verified on this candidate: typecheck clean; 2,931 application/contract tests with **2,893 passing and 0 failing**, plus 38 opt-in PostgreSQL integrations skipped when `TEST_DATABASE_URL` is absent; browser acceptance 6/6 across desktop, tablet and mobile. **The disposable-PostgreSQL proof is not green.** Against a clean disposable Neon reset those 38 integration and attack tests could not run at all, because migration `0090` fails to apply; see the 2 September 2026 checkpoint below. This candidate is **built and pushed, not deployed**, and production migrations `0090`-`0092` are **not applied**. This plan does not itself authorise a cold message, unsolicited comment or customer communication.
+**Growth HQ baseline:** `codex/relaunch72-platform-foundation`. Local checkpoint `c794bd6` extends the migration ledger through `0093`; the last independently observed GitHub tip was `80ee590`. The new local checkpoint widens the existing Zernio engagement rail to multiple explicitly configured Facebook Pages: Facebook Page DMs and Facebook Page comment threads now use the same live social inbox, immutable draft, approval, exact-account and one-shot reply boundary as Instagram and LinkedIn. Focused verification is 95/95 and typecheck is clean. It is **built locally, not deployed**, and `0093` has not been applied to production. Personal Facebook profiles remain unavailable because the official Facebook/Zernio API supports Pages, not personal-profile automation. This plan does not itself authorise a cold message, unsolicited comment or customer communication.
 
 **Purpose:** one truthful sequence from the current foundation to an operational Property Predator marketing and conversion system.
 
@@ -27,7 +27,7 @@ Growth HQ owns the people, attribution, consent, content, approvals, conversatio
 - OpenAI-backed company and affiliate generation rails are configured behind budgets, provenance and brand controls.
 - Mailgun EU is configured. The owned internal seed remains capped at **1 message per run and 3 per month**; the permission-bound customer-email rail is capped at **10 per day and 50 per month**.
 - Instagram and LinkedIn now share the Zernio calendar worker with exact owned-account binding, immutable approved-media evidence, a short-lived signed public-media gateway, durable calling fences, reconciliation and receipts. The gateway is bound to the workspace, job, storage key, digest, MIME type and expiry; the worker never receives the private company-content bearer. Ayrshare remains dormant replacement-provider code; X is deliberately deferred. Exact owned-account linking and controlled proof are still required before this candidate is called live.
-- The operational Conversion Inbox now has unified channel/source truth, assignment, internal notes, reply drafting and approval, consent/opt-out visibility, Lead 360 and affiliate linkage, admin-call tasks, outcomes and next actions. Zernio DMs, comment feeds, threads and approval-gated Instagram/LinkedIn replies are composed through the same account-bound evidence and provider boundary. Migration `0089` makes the central `social_dm` control-room row report only that exact connection/account, approval, delivery, receipt and pause evidence.
+- The operational Conversion Inbox now has unified channel/source truth, assignment, internal notes, reply drafting and approval, consent/opt-out visibility, Lead 360 and affiliate linkage, admin-call tasks, outcomes and next actions. The Zernio live inbox now reads Facebook Page and Instagram DMs plus Facebook Page, Instagram and LinkedIn organisation comments across explicit account lists. Every reply uses the existing account-bound immutable draft, approval and one-shot provider boundary. Signed central-inbox ingestion remains Instagram/LinkedIn until the Facebook event-contract extension is separately proved.
 - The global provider-effects switch and emergency pause fence every Zernio send before its one-shot durable claim. Reads may remain available during a pause; writes remain blocked unless the exact runtime tuple, account binding, approval and effect gates all agree. There is no release command in the application.
 - Emergency stops, idempotency, suppression, consent, audit and provider-operation boundaries are built into the effectful rails.
 
@@ -213,15 +213,15 @@ Turn the existing inbox foundation into the team's daily workspace: real email t
 
 **Build status:** backend and route workflows are complete through email, WhatsApp, social-DM projections and SMS. Remaining proof is the owned-seed round trip and production migration/readiness evidence—not another inbox implementation.
 
-### 3. Connect the owned Instagram and LinkedIn profiles
+### 3. Connect the owned Facebook Pages, Instagram and LinkedIn organisations
 
-Use the current Zernio seam. Connect the Property Predator-owned Instagram professional account and LinkedIn organisation/profile with separate explicit workspace, network and account bindings. Retain the earlier Ayrshare implementation as dormant replacement-provider code only; it is not the current execution route.
+Use the current Zernio seam. Connect each Property Predator-owned Facebook Page, Instagram professional account and LinkedIn organisation with a separate explicit workspace, network and account binding. Multiple Page/account IDs are supported by the inbox configuration. Retain the earlier Ayrshare implementation as dormant replacement-provider code only; it is not the current execution route. Do not represent a personal Facebook profile as connectable.
 
-**Done when:** Growth HQ can validate the owned connection, prepare one approved test post and reconcile the provider result without exposing credentials or enabling any other profile.
+**Done when:** Growth HQ validates every selected owned account, proves a read/reply against one owned test conversation, then prepares one approved test post and reconciles its provider result without exposing credentials or enabling any other account.
 
-### 4. Deliver the Hootsuite-quality Instagram + LinkedIn surface
+### 4. Deliver the Hootsuite-quality Facebook Page + Instagram + LinkedIn surface
 
-Operationalise Instagram and LinkedIn first: channel previews, crop/aspect checks, calendar scheduling, approval, partial failures, correction/retry, delivery receipts and useful analytics. Add Facebook publishing, TikTok and X only after their account and API constraints are confirmed.
+Operationalise Facebook Pages, Instagram and LinkedIn organisations through Zernio: channel previews, crop/aspect checks, calendar scheduling, approval, partial failures, correction/retry, delivery receipts and useful analytics. The current calendar worker remains Instagram/LinkedIn until a forward migration makes account selection multi-account and Facebook-qualified. TikTok and X remain later additions.
 
 **Done when:** one campaign can become channel-correct approved variants, publish through controlled rails and report truthful per-channel outcomes.
 
@@ -231,9 +231,9 @@ Connect an owned Property Predator number to the native Growth HQ inbox. Impleme
 
 **Done when:** an owned-number/owned-recipient pilot completes both directions and every message is visible, attributable and stoppable in Growth HQ.
 
-### 6. Connect Facebook and Instagram DMs
+### 6. Prove Facebook Page and Instagram DMs/comments live
 
-Finish the existing Zernio connection, signed-webhook, inbox-read and Instagram reply foundation. Validate callback state, reconcile the provider-owned account, apply the global provider-effects and emergency-pause fences, then connect one owned Page and Instagram professional account. Bring messages, comments and mentions into the Conversion Inbox; let AI propose replies while a human remains the approval boundary.
+The live-read and approval-gated reply foundation now covers Facebook Page and Instagram DMs plus Facebook Page, Instagram and LinkedIn organisation comments. Validate callback state, reconcile each provider-owned account, extend the signed webhook projection to Facebook events, then prove one owned Page and one Instagram professional account. Bring signed messages, comments and mentions into the Conversion Inbox; let AI propose replies while a human remains the approval boundary.
 
 **Done when:** signed inbound events deduplicate correctly and one approved owned-account reply reconciles to its original conversation.
 
@@ -397,10 +397,10 @@ not itself authorise deployment, migration or provider effects.
 |---|---|---|
 | Customer email | Mailgun EU configured; production schema 65/65; Growth HQ web and the isolated customer-email worker live at `8b066e6`; provider credential loaded, signed receipts confirmed and dispatch active; temporary 10/day and 50/month founder-pilot caps | No new Mailgun account. Use only the founder-controlled `martin.howard1984@gmail.com` endpoint for the first proof, with the founder's written consent, suppression-clear evidence and the exact Lead 360 prepared/approved message. Complete one signed send/receipt/reply proof, observe it, then graduate or remove the aggregate pilot caps without weakening per-recipient controls. |
 | Meta WhatsApp | Command, one-at-a-time worker, challenge/webhook and Inbox receipt path composed | Verified Meta Business, App ID, WABA ID, phone-number ID, worker-only encrypted access-token binding, webhook-only app secret/verify token, one founder-owned UK recipient, and one approved **parameter-free** Property Predator test template. |
-| Instagram + LinkedIn social | Migration `0080` binds exact calendar intent, network target, current approval, source attestation and approved media; the provider-qualified suffix routes the current worker through Zernio and records per-job provider evidence; the signed media gateway supplies only the exact approved bytes for a short-lived provider fetch | Restricted Zernio API key, exact connected owned Instagram and LinkedIn account IDs, shared media-signing key in the web and worker secret managers, connection/account UUIDs, ownership/link evidence and one approved owned test post per network. |
+| Facebook Page + Instagram + LinkedIn social | Zernio account linking is built for all three. The live social inbox now supports multiple explicit Facebook/Instagram DM accounts and Facebook/Instagram/LinkedIn organisation comment accounts with immutable approval-gated replies. Calendar publishing and signed central-inbox ingestion remain Instagram/LinkedIn on the deployed boundary until their Facebook-qualified forward migrations land. | Restricted Zernio API key; exact owned Facebook Page, Instagram professional and LinkedIn organisation account IDs; callback/ownership evidence; one founder-controlled test conversation/comment per selected account. For publishing, also bind the media-signing key and one approved owned test post per network. |
 | X social — later build | Not active and intentionally absent from the current production manifest | Create/confirm the owned X account and developer/API funding, then add the selected provider's X-specific account binding, text/media contract, calendar placement, receipt proof and controlled owned-account acceptance as a separate strike. |
 | Twilio UK SMS | Command, one-at-a-time worker, signed inbound/status webhook, Inbox receipt path and founder-only bind/revoke/readiness-gated staging workflow composed; migration `0061` is applied in production | Twilio Account SID, restricted API key SID/secret, Messaging Service SID, approved UK regulatory bundle, owned UK sender, webhook auth token, and one founder-owned UK recipient plus approved message/consent/suppression evidence. |
-| Facebook/Instagram DMs | Zernio connection/webhook/inbox, DM and network-qualified comment-reply lifecycles are composed behind the global provider-effect/emergency-pause fences | Supply and prove the exact callback/account reconciliation, restricted Zernio credential and one owned Page/Instagram proof before calling the rail operational. |
+| Facebook/Instagram DMs | Multi-account Zernio live read and approval-gated reply are built for Facebook Pages and Instagram. Signed central-inbox projection is still Instagram-only for DMs. | Supply and prove the exact callback/account reconciliation, restricted Zernio credential, and one founder-controlled Page/Instagram conversation before calling the rail operational. |
 | Founder event bridge | Dedicated HMAC receiver, two least-privilege Growth HQ database identities, isolated Property Predator dispatcher and additive immutable outbox are live; founder fresh/replay proof is 1 receipt, 1 Growth projection, 1 Journey projection and 1 delivery attempt | No remaining code or account input for account-created events. Add future event types only when a real founder workflow supplies the authoritative source fact. |
 | Database proof | Production Growth HQ ledger is 65/65 and runtime-ready; migrations 0064-0065 passed a clean disposable-Neon apply and hostile-role proof before production. Property Predator conversion data-plane has a recoverable pre-migration checkpoint and its live immutable one-event proof passed. | Run the final clean disposable-Neon reset/attack sweep through the complete ledger during the Sol Ultra master rehearsal. Production must never be the disposable attack-proof target. |
 
@@ -430,6 +430,15 @@ approval or post against another portfolio business merely because the
 same founder controls both. Adding a business is a deliberate provisioning and
 native-account-consent action; this roadmap note does not authorise any present
 connection, schedule or publication outside Property Predator.
+
+Zernio remains the active provider while the Property Predator account set is
+small enough for its current plan. Ayrshare is a later commercial/provider
+switch, not an immediate dependency and not a one-off unlimited purchase: its
+current Business offering is profile-priced, with one social account per network
+inside each profile. Re-evaluate the two providers only when the exact portfolio
+account count makes the price or capability difference material. Keep provider
+adapters replaceable so changing transport does not fork the inbox, calendar,
+approvals or analytics model.
 
 The shared platform should provide a **Portfolio HQ** above those isolated
 workspaces: reusable modules, founder-level roll-up reporting and explicit

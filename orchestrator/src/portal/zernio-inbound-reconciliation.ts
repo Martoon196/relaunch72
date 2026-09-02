@@ -23,8 +23,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const CANONICAL_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 
 type SuccessfulZernioSnapshot = Extract<PortalZernioMessagingSnapshot, { ok: true }>;
-export type ZernioInboundNetwork = 'instagram' | 'linkedin';
-export type ZernioInboundKind = 'instagram_dm' | 'owned_post_comment';
+export type ZernioInboundNetwork = 'facebook' | 'instagram' | 'linkedin';
+export type ZernioInboundKind = 'facebook_dm' | 'instagram_dm' | 'owned_post_comment';
 export type ZernioInboundReconciliationBlocker =
   | 'history_truncated'
   | 'queue_truncated'
@@ -224,21 +224,22 @@ function eventIdentity(candidate: CandidateEvent): string {
 function dmCandidates(snapshot: SuccessfulZernioSnapshot): readonly CandidateEvent[] {
   const conversation = snapshot.selectedConversation;
   if (!conversation) return Object.freeze([]);
-  if (conversation.platform !== 'instagram') {
+  if (conversation.platform !== 'facebook' && conversation.platform !== 'instagram') {
     return fail('Zernio DM reconciliation received an unsupported network');
   }
   return Object.freeze(snapshot.messages
     .filter((message) => message.direction === 'incoming')
     .map((message: ZernioMessageSnapshot): CandidateEvent => {
-      if (message.platform !== 'instagram'
+      if (message.platform !== conversation.platform
           || message.accountId !== conversation.accountId
           || message.providerConversationId !== conversation.providerConversationId
           || message.senderId !== conversation.participantId) {
         return fail('Zernio DM reconciliation received a mismatched provider binding');
       }
       return Object.freeze({
-        inboundKind: 'instagram_dm' as const,
-        network: 'instagram' as const,
+        inboundKind: conversation.platform === 'facebook'
+          ? 'facebook_dm' as const : 'instagram_dm' as const,
+        network: conversation.platform,
         accountId: message.accountId,
         providerThreadId: message.providerConversationId,
         providerEventId: message.providerMessageId,
@@ -336,13 +337,17 @@ function buildThread(events: readonly AcceptedEvent[]): ZernioInboundThreadProje
     kind: 'reply' as const,
     title: event.inboundKind === 'instagram_dm'
       ? 'Instagram DM received'
-      : `${event.network === 'linkedin' ? 'LinkedIn' : 'Instagram'} comment received`,
+      : event.inboundKind === 'facebook_dm'
+        ? 'Facebook Page DM received'
+        : `${event.network === 'linkedin' ? 'LinkedIn' : event.network === 'facebook' ? 'Facebook' : 'Instagram'} comment received`,
     detail: 'Provider-shaped fixture reconciled through the Zernio inbound boundary.',
     progressBasisPoints: null,
     occurredAt: event.occurredAt,
     sourceLabel: event.inboundKind === 'instagram_dm'
       ? 'Zernio · Instagram DM'
-      : `Zernio · ${event.network === 'linkedin' ? 'LinkedIn' : 'Instagram'} comment`,
+      : event.inboundKind === 'facebook_dm'
+        ? 'Zernio · Facebook Page DM'
+        : `Zernio · ${event.network === 'linkedin' ? 'LinkedIn' : event.network === 'facebook' ? 'Facebook' : 'Instagram'} comment`,
   })));
   const outreachResponses = Object.freeze(ordered.map((event) => Object.freeze({
     contactId: event.person.contactId,
@@ -393,7 +398,9 @@ function buildThread(events: readonly AcceptedEvent[]): ZernioInboundThreadProje
     assignedUserName: null,
     subject: first.inboundKind === 'instagram_dm'
       ? 'Instagram direct message'
-      : `${first.network === 'linkedin' ? 'LinkedIn' : 'Instagram'} post comment`,
+      : first.inboundKind === 'facebook_dm'
+        ? 'Facebook Page direct message'
+        : `${first.network === 'linkedin' ? 'LinkedIn' : first.network === 'facebook' ? 'Facebook' : 'Instagram'} post comment`,
     unreadCount: ordered.length,
     requiresApproval: false,
     lastMessageAt: latest.occurredAt,

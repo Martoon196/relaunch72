@@ -36,6 +36,7 @@ function person(overrides: Partial<{
 }
 
 function dmSnapshot(overrides: Readonly<{
+  platform?: 'facebook' | 'instagram';
   body?: string;
   messageId?: string;
   direction?: 'incoming' | 'outgoing';
@@ -44,9 +45,10 @@ function dmSnapshot(overrides: Readonly<{
   queueTruncated?: boolean;
   checkedAt?: string;
 }> = {}): SuccessfulSnapshot {
+  const platform = overrides.platform ?? 'instagram';
   const conversation = Object.freeze({
     providerConversationId: 'conversation-1',
-    platform: 'instagram' as const,
+    platform,
     accountId: ACCOUNT,
     accountUsername: 'propertypredator',
     participantId: 'person-1',
@@ -55,13 +57,13 @@ function dmSnapshot(overrides: Readonly<{
     updatedAt: '2026-09-02T08:00:00.000Z',
     status: 'active' as const,
     unreadCount: 1,
-    url: 'https://www.instagram.com/direct/t/1/',
+    url: `https://example.test/${platform}/direct/1`,
   });
   const message = Object.freeze({
     providerMessageId: overrides.messageId ?? 'message-1',
     providerConversationId: conversation.providerConversationId,
     accountId: ACCOUNT,
-    platform: 'instagram' as const,
+    platform,
     body: overrides.body ?? 'Can you show me the Deal Analyser?',
     senderId: overrides.senderId ?? 'person-1',
     senderName: 'Amelia Hart',
@@ -85,6 +87,7 @@ function dmSnapshot(overrides: Readonly<{
     selectedTarget: Object.freeze({
       kind: 'dm' as const,
       accountId: ACCOUNT,
+      platform,
       providerConversationId: conversation.providerConversationId,
     }),
     messages: Object.freeze([message]),
@@ -215,6 +218,22 @@ test('LinkedIn comments preserve their real network as a native read-only inbox 
   assert.equal(batch.threads[0]?.outreachResponses[0]?.disposition, 'unlinked');
   assert.equal(batch.threads[0]?.lead360Evidence[0]?.sourceLabel,
     'Zernio · LinkedIn comment');
+});
+
+test('Facebook Page DMs preserve their real network and provider identity', async () => {
+  const batch = await reconcileZernioInboundFixtures({
+    fixtureAttestation: ZERNIO_INBOUND_FIXTURE_ATTESTATION,
+    snapshots: [dmSnapshot({ platform: 'facebook' })],
+  }, { async resolve() { return person({ outreachAttemptReceiptId: null }); } });
+
+  assert.equal(batch.acceptedEventCount, 1);
+  assert.deepEqual(batch.blockers, []);
+  assert.equal(batch.threads[0]?.conversation.channel, 'facebook');
+  assert.equal(batch.threads[0]?.conversation.inboundKind, 'facebook_dm');
+  assert.equal(batch.threads[0]?.conversation.channelCompatibility,
+    'conversion_inbox_native');
+  assert.equal(batch.threads[0]?.lead360Evidence[0]?.sourceLabel,
+    'Zernio · Facebook Page DM');
 });
 
 test('exact provider replays deduplicate while conflicting replays quarantine fail closed', async () => {

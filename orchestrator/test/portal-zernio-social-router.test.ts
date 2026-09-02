@@ -118,12 +118,14 @@ test('founder social screen shows connection-only Zernio controls and no publish
   assert.equal(result.statusCode, 200);
   assert.match(result.body, /data-provider-effects="connection-only"/);
   assert.match(result.body, /Connect Facebook/);
+  assert.match(result.body, /Connect or add another/);
+  assert.match(result.body, /Facebook personal profiles are not available through the official API/);
   assert.match(result.body, /Connect Instagram/);
   assert.match(result.body, /Connect Linkedin/);
-  assert.match(result.body, /One verified Zernio connection, separate permissions/);
-  assert.match(result.body, /same owned Instagram and LinkedIn accounts can power the calendar and inbox/);
+  assert.match(result.body, /Connect every account you own/);
+  assert.match(result.body, /add another Facebook Page, Instagram professional account or LinkedIn organisation/);
   assert.doesNotMatch(result.body, /target="_blank"/);
-  assert.match(result.body, /Publishing stays off/);
+  assert.match(result.body, /No post can be drafted, scheduled, queued or published from this screen/);
   assert.doesNotMatch(result.body, /action="[^"]*(?:publish|schedule|queue)/i);
 });
 
