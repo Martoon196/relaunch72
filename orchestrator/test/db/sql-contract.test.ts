@@ -96,6 +96,7 @@ const migration89Url = new URL('../../src/db/migrations/0089_property_predator_z
 const migration90Url = new URL('../../src/db/migrations/0090_property_predator_daily_social_outreach_foundation.sql', import.meta.url);
 const migration91Url = new URL('../../src/db/migrations/0091_property_predator_creator_watch_and_message_families.sql', import.meta.url);
 const migration92Url = new URL('../../src/db/migrations/0092_property_predator_zernio_inbound_data_plane.sql', import.meta.url);
+const migration93Url = new URL('../../src/db/migrations/0093_property_predator_zernio_facebook_engagement.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -534,9 +535,9 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums through the Daily Outreach foundation', async () => {
+test('bundled migration discovery orders and checksums through Zernio Facebook engagement', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-86);
+  const tail = migrations.slice(-87);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0007_public_schema_hardening.sql', version: 7 },
     { filename: '0008_setup_delivery_recovery.sql', version: 8 },
@@ -624,6 +625,7 @@ test('bundled migration discovery orders and checksums through the Daily Outreac
     { filename: '0090_property_predator_daily_social_outreach_foundation.sql', version: 90 },
     { filename: '0091_property_predator_creator_watch_and_message_families.sql', version: 91 },
     { filename: '0092_property_predator_zernio_inbound_data_plane.sql', version: 92 },
+    { filename: '0093_property_predator_zernio_facebook_engagement.sql', version: 93 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -712,6 +714,7 @@ test('bundled migration discovery orders and checksums through the Daily Outreac
     (await readFile(migration90Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration91Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration92Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration93Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.

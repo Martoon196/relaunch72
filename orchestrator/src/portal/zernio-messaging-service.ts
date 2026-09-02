@@ -4,6 +4,7 @@ import type {
   ZernioCommentPlatform,
   ZernioCommentSnapshot,
   ZernioConversationSnapshot,
+  ZernioDmPlatform,
   ZernioMessageSnapshot,
   ZernioMessagingClient,
 } from '../public-social-outbound/zernio-messaging-client.js';
@@ -28,6 +29,7 @@ export type PortalZernioMessagingFailureKind =
 export type PortalZernioMessagingReplyTarget = Readonly<{
   kind: 'dm';
   accountId: string;
+  platform: ZernioDmPlatform;
   providerConversationId: string;
 }> | Readonly<{
   kind: 'comment';
@@ -46,6 +48,7 @@ export type PortalZernioMessagingCommentSelection = Readonly<{
 
 export type PortalZernioMessagingSelection = Readonly<{
   providerConversationId?: string;
+  conversationPlatform?: ZernioDmPlatform;
   comment?: PortalZernioMessagingCommentSelection;
 }>;
 
@@ -129,7 +132,7 @@ export function zernioMessagingTargetReference(target: PortalZernioMessagingRepl
 function zernioMessagingTargetNetwork(
   target: PortalZernioMessagingReplyTarget,
 ): ZernioCommentPlatform {
-  return target.kind === 'dm' ? 'instagram' : target.platform;
+  return target.platform;
 }
 
 function findComment(
@@ -176,14 +179,14 @@ export class LivePortalZernioMessagingService implements PortalZernioMessagingSe
     const accountTruth = await this.dependencies.accounts.snapshot(identity);
     if (!accountTruth.ok) return null;
     if (target.kind === 'dm') {
-      if (!accountTruth.accounts.some((account) => account.network === 'instagram'
+      if (!accountTruth.accounts.some((account) => account.network === target.platform
           && account.status === 'active')) return null;
       const queue = await this.dependencies.client.listConversations({
         accountIds: this.dependencies.allowedAccountIds,
       });
       return queue.conversations.some((item) => item.accountId === target.accountId
         && item.providerConversationId === target.providerConversationId
-        && item.platform === 'instagram') ? target : null;
+        && item.platform === target.platform) ? target : null;
     }
     if (!accountTruth.accounts.some((account) => account.network === target.platform
           && account.status === 'active')
@@ -218,13 +221,14 @@ export class LivePortalZernioMessagingService implements PortalZernioMessagingSe
       .filter((account) => account.status === 'active').map((account) => account.network));
     const activeCommentBindings = this.dependencies.commentAccountBindings.filter((binding) =>
       activeNetworks.has(binding.platform));
-    const canReadDms = activeNetworks.has('instagram')
+    const canReadDms = (activeNetworks.has('instagram') || activeNetworks.has('facebook'))
       && this.dependencies.allowedAccountIds.length > 0;
     if (!canReadDms && activeCommentBindings.length === 0) {
       return Object.freeze({ ok: false as const, kind: 'unavailable' as const, providerEffects: false as const });
     }
     try {
-      if (input.providerConversationId && input.comment) {
+      if ((input.providerConversationId && input.comment)
+          || Boolean(input.providerConversationId) !== Boolean(input.conversationPlatform)) {
         return Object.freeze({ ok: false as const, kind: 'forbidden' as const, providerEffects: false as const });
       }
       const [queue, ...commentFeeds] = await Promise.all([
@@ -239,7 +243,7 @@ export class LivePortalZernioMessagingService implements PortalZernioMessagingSe
         ...activeCommentBindings.map((binding) =>
           this.dependencies.client.listCommentedPosts(binding)),
       ]);
-      const dmConversations = queue.conversations.filter((item) => item.platform === 'instagram');
+      const dmConversations = queue.conversations.filter((item) => activeNetworks.has(item.platform));
       const seenPosts = new Set<string>();
       const commentPosts: ZernioCommentedPostSnapshot[] = [];
       for (const feed of commentFeeds) {
@@ -252,7 +256,8 @@ export class LivePortalZernioMessagingService implements PortalZernioMessagingSe
       }
       const requestedConversation = input.providerConversationId;
       const selectedConversation = requestedConversation
-        ? dmConversations.find((item) => item.providerConversationId === requestedConversation) ?? null
+        ? dmConversations.find((item) => item.providerConversationId === requestedConversation
+          && item.platform === input.conversationPlatform) ?? null
         : input.comment ? null : dmConversations[0] ?? null;
       if (requestedConversation && !selectedConversation) {
         return Object.freeze({ ok: false as const, kind: 'forbidden' as const, providerEffects: false as const });
@@ -288,6 +293,7 @@ export class LivePortalZernioMessagingService implements PortalZernioMessagingSe
       const selectedTarget: PortalZernioMessagingReplyTarget | null = selectedConversation
         ? Object.freeze({
           kind: 'dm' as const, accountId: selectedConversation.accountId,
+          platform: selectedConversation.platform,
           providerConversationId: selectedConversation.providerConversationId,
         })
         : selectedCommentPost && selectedComment

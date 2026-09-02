@@ -102,7 +102,8 @@ function messaging(overrides: Partial<PortalZernioMessagingService> = {}): Porta
       },
       commentPosts: [], selectedCommentPost: null, selectedComment: null,
       selectedTarget: {
-        kind: 'dm', accountId: ACCOUNT, providerConversationId: CONVERSATION,
+        kind: 'dm', accountId: ACCOUNT, platform: 'instagram',
+        providerConversationId: CONVERSATION,
       },
       messages: [], comments: [], reply: null,
       conversationHistoryTruncated: false, queueTruncated: false,
@@ -164,7 +165,10 @@ async function call(url: string, dependencies: PostgresPortalDeps, method = 'GET
 }
 
 test('live Messaging renders draft authoring but no send control before approval', async () => {
-  const result = await call(`${ZERNIO_MESSAGING_ROUTE}?conversation=${CONVERSATION}`, deps(messaging()));
+  const result = await call(
+    `${ZERNIO_MESSAGING_ROUTE}?conversation=${CONVERSATION}&platform=instagram`,
+    deps(messaging()),
+  );
   assert.equal(result.statusCode, 200);
   assert.match(result.body, /Save immutable draft/u);
   assert.doesNotMatch(result.body, /Send approved reply now/u);
@@ -179,14 +183,18 @@ test('a valid draft command records exact target and copy without a provider eff
   } });
   const body = new URLSearchParams({
     _csrf: portalCsrfToken(SECRET, SESSION), target_kind: 'dm', account_id: ACCOUNT,
-    conversation_id: CONVERSATION, draft_id: DRAFT, body: 'Exact reply copy',
+    platform: 'instagram', conversation_id: CONVERSATION,
+    draft_id: DRAFT, body: 'Exact reply copy',
   }).toString();
   const result = await call(ZERNIO_MESSAGING_DRAFT_ROUTE, deps(service), 'POST', body);
   assert.equal(result.statusCode, 303);
   assert.equal(calls.length, 1);
   assert.deepEqual((calls[0] as { input: unknown }).input, {
     draftId: DRAFT,
-    target: { kind: 'dm', accountId: ACCOUNT, providerConversationId: CONVERSATION },
+    target: {
+      kind: 'dm', accountId: ACCOUNT, platform: 'instagram',
+      providerConversationId: CONVERSATION,
+    },
     body: 'Exact reply copy',
   });
   assert.match(result.headers.location ?? '', /notice=draft_created\./u);
@@ -199,7 +207,8 @@ test('send requires exact CSRF and explicit confirmation before the provider bou
     return { ok: true, disposition: 'sent', providerEffects: 'one_message_accepted' };
   } });
   const base = {
-    target_kind: 'dm', account_id: ACCOUNT, conversation_id: CONVERSATION,
+    target_kind: 'dm', account_id: ACCOUNT, platform: 'instagram',
+    conversation_id: CONVERSATION,
     draft_id: DRAFT, delivery_id: DELIVERY, lease_token: LEASE,
   };
   await call(ZERNIO_MESSAGING_SEND_ROUTE, deps(service), 'POST',
@@ -212,7 +221,10 @@ test('send requires exact CSRF and explicit confirmation before the provider bou
   assert.equal(calls.length, 1);
   assert.deepEqual((calls[0] as { input: unknown }).input, {
     draftId: DRAFT, deliveryId: DELIVERY, leaseToken: LEASE,
-    target: { kind: 'dm', accountId: ACCOUNT, providerConversationId: CONVERSATION },
+    target: {
+      kind: 'dm', accountId: ACCOUNT, platform: 'instagram',
+      providerConversationId: CONVERSATION,
+    },
   });
   assert.equal(result.statusCode, 303);
   assert.match(result.headers.location ?? '', /notice=sent\./u);

@@ -38,9 +38,15 @@ function hidden(name: string, value: string): string {
   return `<input type="hidden" name="${escapeHtml(name)}" value="${escapeHtml(value)}">`;
 }
 
+function platformLabel(platform: 'facebook' | 'instagram' | 'linkedin'): string {
+  if (platform === 'facebook') return 'Facebook';
+  return platform === 'linkedin' ? 'LinkedIn' : 'Instagram';
+}
+
 function targetFields(target: NonNullable<Extract<PortalZernioMessagingSnapshot, { ok: true }>['selectedTarget']>): string {
   if (target.kind === 'dm') {
     return hidden('target_kind', 'dm') + hidden('account_id', target.accountId)
+      + hidden('platform', target.platform)
       + hidden('conversation_id', target.providerConversationId);
   }
   return hidden('target_kind', 'comment') + hidden('account_id', target.accountId)
@@ -64,7 +70,7 @@ function replyComposer(
   const reply = snapshot.reply;
   const mayReplace = reply?.approvalDecision === 'rejected' || reply?.deliveryState === 'failed';
   if (!reply || mayReplace) {
-    return `<form class="zmsg-compose" method="post" action="${ZERNIO_MESSAGING_DRAFT_ROUTE}">${target}${hidden('draft_id', security.draftId)}<label for="zmsg-reply"><strong>${reply ? 'Replacement reply draft' : 'Reply draft'}</strong></label><textarea id="zmsg-reply" name="body" required maxlength="10000" placeholder="Write the exact ${selected.kind === 'comment' ? 'public comment' : 'Instagram DM'} reply..."></textarea><button type="submit">Save immutable draft</button><p class="zmsg-note">Saving does not send. The exact copy and target are sealed before approval.</p></form>`;
+    return `<form class="zmsg-compose" method="post" action="${ZERNIO_MESSAGING_DRAFT_ROUTE}">${target}${hidden('draft_id', security.draftId)}<label for="zmsg-reply"><strong>${reply ? 'Replacement reply draft' : 'Reply draft'}</strong></label><textarea id="zmsg-reply" name="body" required maxlength="10000" placeholder="Write the exact ${selected.kind === 'comment' ? 'public comment' : `${platformLabel(selected.platform)} DM`} reply..."></textarea><button type="submit">Save immutable draft</button><p class="zmsg-note">Saving does not send. The exact copy and target are sealed before approval.</p></form>`;
   }
   const state = reply.deliveryState ?? reply.approvalDecision
     ?? (reply.approvalRequestId ? 'pending' : 'draft');
@@ -78,7 +84,7 @@ function replyComposer(
       ? '<p class="zmsg-readonly">This exact reply is approved, but the provider-effects switch is OFF. It cannot leave Growth HQ.</p>'
       : snapshot.emergencyPaused
         ? '<p class="zmsg-readonly">This exact reply is approved, but the social emergency pause is engaged. It cannot leave Growth HQ.</p>'
-        : `<form method="post" action="${ZERNIO_MESSAGING_SEND_ROUTE}">${target}${hidden('draft_id', reply.draftId)}${hidden('delivery_id', security.deliveryId)}${hidden('lease_token', security.leaseToken)}<label class="zmsg-check"><input type="checkbox" name="confirm_send" value="yes" required> Send this one approved ${selected.kind === 'comment' ? 'public comment' : 'Instagram DM'} reply now</label><button class="zmsg-action send" type="submit">Send approved reply now</button><p class="zmsg-note">This is the only provider-effect action. It has a one-shot lease and cannot blind-retry an uncertain result.</p></form>`;
+        : `<form method="post" action="${ZERNIO_MESSAGING_SEND_ROUTE}">${target}${hidden('draft_id', reply.draftId)}${hidden('delivery_id', security.deliveryId)}${hidden('lease_token', security.leaseToken)}<label class="zmsg-check"><input type="checkbox" name="confirm_send" value="yes" required> Send this one approved ${selected.kind === 'comment' ? 'public comment' : `${platformLabel(selected.platform)} DM`} reply now</label><button class="zmsg-action send" type="submit">Send approved reply now</button><p class="zmsg-note">This is the only provider-effect action. It has a one-shot lease and cannot blind-retry an uncertain result.</p></form>`;
   }
   return `<section class="zmsg-draft"><strong>Exact sealed reply · ${escapeHtml(state)}</strong><pre>${escapeHtml(reply.body)}</pre>${action}</section>`;
 }
@@ -125,25 +131,28 @@ export function renderZernioMessagingBody(
   const selectedConversation = snapshot.selectedConversation;
   const selectedPost = snapshot.selectedCommentPost;
   const dmQueue = snapshot.conversations.map((item) => {
-    const href = `${ZERNIO_MESSAGING_ROUTE}?conversation=${encodeURIComponent(item.providerConversationId)}`;
-    return `<li><a href="${escapeHtml(href)}"${selectedConversation?.providerConversationId === item.providerConversationId ? ' aria-current="page"' : ''}><span class="zmsg-row"><strong><span class="zmsg-kind">DM</span>${escapeHtml(item.participantName)}</strong>${item.unreadCount > 0 ? `<span class="zmsg-count">${item.unreadCount}</span>` : ''}</span><span class="zmsg-preview">${escapeHtml(item.lastMessage || 'No text preview')}</span><span class="zmsg-meta">Instagram · ${escapeHtml(time(item.updatedAt))}</span></a></li>`;
+    const query = new URLSearchParams({
+      conversation: item.providerConversationId, platform: item.platform,
+    });
+    const href = `${ZERNIO_MESSAGING_ROUTE}?${query.toString()}`;
+    return `<li><a href="${escapeHtml(href)}"${selectedConversation?.providerConversationId === item.providerConversationId && selectedConversation.platform === item.platform ? ' aria-current="page"' : ''}><span class="zmsg-row"><strong><span class="zmsg-kind">DM</span>${escapeHtml(item.participantName)}</strong>${item.unreadCount > 0 ? `<span class="zmsg-count">${item.unreadCount}</span>` : ''}</span><span class="zmsg-preview">${escapeHtml(item.lastMessage || 'No text preview')}</span><span class="zmsg-meta">${platformLabel(item.platform)} · ${escapeHtml(time(item.updatedAt))}</span></a></li>`;
   }).join('');
   const commentQueue = snapshot.commentPosts.map((item) => {
     const href = commentHref(item);
     const current = selectedPost?.accountId === item.accountId
       && selectedPost.platform === item.platform
       && selectedPost.providerPostId === item.providerPostId;
-    return `<li><a href="${escapeHtml(href)}"${current ? ' aria-current="page"' : ''}><span class="zmsg-row"><strong><span class="zmsg-kind">Comment</span>${escapeHtml(item.accountUsername || 'Property Predator')}</strong><span class="zmsg-count">${item.commentCount}</span></span><span class="zmsg-preview">${escapeHtml(item.content || 'Media post')}</span><span class="zmsg-meta">${item.platform === 'linkedin' ? 'LinkedIn' : 'Instagram'} · ${escapeHtml(time(item.createdAt))}</span></a></li>`;
+    return `<li><a href="${escapeHtml(href)}"${current ? ' aria-current="page"' : ''}><span class="zmsg-row"><strong><span class="zmsg-kind">Comment</span>${escapeHtml(item.accountUsername || 'Property Predator')}</strong><span class="zmsg-count">${item.commentCount}</span></span><span class="zmsg-preview">${escapeHtml(item.content || 'Media post')}</span><span class="zmsg-meta">${platformLabel(item.platform)} · ${escapeHtml(time(item.createdAt))}</span></a></li>`;
   }).join('');
   const queue = dmQueue + commentQueue;
   const dmTranscript = snapshot.messages.map((item) => `<li class="zmsg-bubble${item.direction === 'outgoing' ? ' out' : ''}">${escapeHtml(item.body)}<span class="zmsg-meta">${item.direction === 'outgoing' ? 'Property Predator' : escapeHtml(item.senderName)} · ${escapeHtml(time(item.occurredAt))}</span></li>`).join('');
   const commentTranscript = renderCommentThread(snapshot, snapshot.comments);
   const thread = selectedConversation
-    ? `<div class="zmsg-thread-head"><h2>${escapeHtml(selectedConversation.participantName)}</h2><div class="zmsg-meta">Instagram DM · @${escapeHtml(selectedConversation.accountUsername)} · ${selectedConversation.unreadCount} unread · checked ${escapeHtml(time(snapshot.checkedAt))}</div></div><ol class="zmsg-transcript">${dmTranscript || '<li class="zmsg-empty">No messages returned for this conversation.</li>'}</ol>${replyComposer(snapshot, options)}`
+    ? `<div class="zmsg-thread-head"><h2>${escapeHtml(selectedConversation.participantName)}</h2><div class="zmsg-meta">${platformLabel(selectedConversation.platform)} DM · @${escapeHtml(selectedConversation.accountUsername)} · ${selectedConversation.unreadCount} unread · checked ${escapeHtml(time(snapshot.checkedAt))}</div></div><ol class="zmsg-transcript">${dmTranscript || '<li class="zmsg-empty">No messages returned for this conversation.</li>'}</ol>${replyComposer(snapshot, options)}`
     : selectedPost
-      ? `<div class="zmsg-thread-head"><h2>${selectedPost.platform === 'linkedin' ? 'LinkedIn' : 'Instagram'} comments</h2><div class="zmsg-meta">@${escapeHtml(selectedPost.accountUsername)} · ${selectedPost.commentCount} comments · checked ${escapeHtml(time(snapshot.checkedAt))}</div><p>${escapeHtml(selectedPost.content || 'Media post')}</p></div><ol class="zmsg-comments">${commentTranscript || '<li class="zmsg-empty">No comments returned for this post.</li>'}</ol>${snapshot.selectedComment ? replyComposer(snapshot, options) : '<p class="zmsg-note">Choose a comment before drafting a reply.</p>'}`
+      ? `<div class="zmsg-thread-head"><h2>${platformLabel(selectedPost.platform)} comments</h2><div class="zmsg-meta">@${escapeHtml(selectedPost.accountUsername)} · ${selectedPost.commentCount} comments · checked ${escapeHtml(time(snapshot.checkedAt))}</div><p>${escapeHtml(selectedPost.content || 'Media post')}</p></div><ol class="zmsg-comments">${commentTranscript || '<li class="zmsg-empty">No comments returned for this post.</li>'}</ol>${snapshot.selectedComment ? replyComposer(snapshot, options) : '<p class="zmsg-note">Choose a comment before drafting a reply.</p>'}`
       : '<div class="zmsg-empty">Choose a DM or commented post to view its thread.</div>';
   const outboundStatus = !snapshot.outboundEffectsEnabled
     ? 'OUTBOUND EFFECTS OFF' : snapshot.emergencyPaused ? 'EMERGENCY PAUSED' : 'APPROVAL-GATED SEND';
-  return `${style()}<section class="zmsg">${notice}<header class="zmsg-head"><div><div class="zmsg-kicker">Growth HQ · Zernio live inbox</div><h1>Social messages &amp; comments</h1><p class="zmsg-sub">Read Instagram DMs and Instagram or LinkedIn comment threads in one queue. Every available reply uses an immutable draft and approval boundary before any provider action.</p></div><span class="zmsg-badge">LIVE READ · ${outboundStatus}</span></header><nav class="zmsg-tabs"><a href="/portal/inbox">Email &amp; rails</a><a href="${ZERNIO_MESSAGING_ROUTE}" aria-current="page">Social messages</a></nav><div class="zmsg-grid"><section class="zmsg-panel"><h2>DMs &amp; comments · ${snapshot.conversations.length + snapshot.commentPosts.length}${snapshot.queueTruncated ? '+' : ''}</h2>${queue ? `<ul class="zmsg-list">${queue}</ul>` : '<div class="zmsg-empty">No social conversations or commented posts are available yet.</div>'}</section><section class="zmsg-panel zmsg-thread">${thread}</section></div></section>`;
+  return `${style()}<section class="zmsg">${notice}<header class="zmsg-head"><div><div class="zmsg-kicker">Growth HQ · Zernio live inbox</div><h1>Social messages &amp; comments</h1><p class="zmsg-sub">Read Facebook and Instagram DMs plus Facebook, Instagram and LinkedIn organisation comment threads in one queue. Every available reply uses an immutable draft and approval boundary before any provider action.</p></div><span class="zmsg-badge">LIVE READ · ${outboundStatus}</span></header><nav class="zmsg-tabs"><a href="/portal/inbox">Email &amp; rails</a><a href="${ZERNIO_MESSAGING_ROUTE}" aria-current="page">Social messages</a></nav><div class="zmsg-grid"><section class="zmsg-panel"><h2>DMs &amp; comments · ${snapshot.conversations.length + snapshot.commentPosts.length}${snapshot.queueTruncated ? '+' : ''}</h2>${queue ? `<ul class="zmsg-list">${queue}</ul>` : '<div class="zmsg-empty">No social conversations or commented posts are available yet.</div>'}</section><section class="zmsg-panel zmsg-thread">${thread}</section></div></section>`;
 }

@@ -65,7 +65,7 @@ test('PG reply claim sends the same exact network to the 0086 one-shot claim ove
 test('PG reply commands reject an unrecognised network before opening a transaction', async () => {
   const fixture = store(() => { throw new Error('must not query'); });
   const result = await fixture.value.create(identity, {
-    draftId: DRAFT, network: 'facebook' as never, accountId: 'facebook-account-1',
+    draftId: DRAFT, network: 'twitter' as never, accountId: 'twitter-account-1',
     providerConversationId: 'conversation-1', body: 'Blocked reply',
   });
   assert.deepEqual(result, { ok: false, kind: 'validation' });

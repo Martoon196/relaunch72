@@ -823,10 +823,10 @@ export async function buildPgPortalPlatform(
         const commentBindingSpec = env.PROPERTY_PREDATOR_ZERNIO_COMMENT_ACCOUNT_BINDINGS?.trim() ?? '';
         const commentAccountBindings = commentBindingSpec
           ? commentBindingSpec.split(',').map((entry) => {
-            const match = /^(instagram|linkedin):(.+)$/u.exec(entry.trim());
+            const match = /^(facebook|instagram|linkedin):(.+)$/u.exec(entry.trim());
             if (!match?.[1] || !match[2]) throw new Error('Invalid Zernio comment account binding');
             return Object.freeze({
-              platform: match[1] as 'instagram' | 'linkedin', accountId: match[2],
+              platform: match[1] as 'facebook' | 'instagram' | 'linkedin', accountId: match[2],
             });
           })
           : messagingAccountIds.map((accountId) => Object.freeze({

@@ -14,7 +14,7 @@ const HEX = /^[0-9a-f]{64}$/u;
 export type ZernioReplyStoreFailure =
   | 'unauthenticated' | 'forbidden' | 'validation' | 'conflict' | 'unavailable';
 
-export type ZernioReplyNetwork = 'instagram' | 'linkedin';
+export type ZernioReplyNetwork = 'facebook' | 'instagram' | 'linkedin';
 
 export interface ZernioReplyState {
   readonly draftId: string;
@@ -176,7 +176,8 @@ export class PgZernioMessagingReplyStore {
     providerConversationId: string; body: string;
   }>): Promise<ZernioReplyStoreResult<'created' | 'replayed'>> {
     if (!UUID.test(input.draftId)
-        || (input.network !== 'instagram' && input.network !== 'linkedin')
+        || (input.network !== 'facebook' && input.network !== 'instagram'
+          && input.network !== 'linkedin')
         || !input.body || input.body !== input.body.trim()
         || Buffer.byteLength(input.body, 'utf8') > 10_000) {
       return Object.freeze({ ok: false, kind: 'validation' });
@@ -260,7 +261,8 @@ export class PgZernioMessagingReplyStore {
     disposition: string; body: string | null; bodySha256: string;
   }>>> {
     if (!UUID.test(input.draftId) || !UUID.test(input.deliveryId)
-        || (input.network !== 'instagram' && input.network !== 'linkedin')
+        || (input.network !== 'facebook' && input.network !== 'instagram'
+          && input.network !== 'linkedin')
         || !UUID.test(input.leaseToken) || !input.idempotencyKey) {
       return Object.freeze({ ok: false, kind: 'validation' });
     }

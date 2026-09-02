@@ -14,9 +14,10 @@ const SAFE_PROFILE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/u;
 const SAFE_SECRET = /^[\x21-\x7e]{8,500}$/u;
 const SAFE_IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,254}$/u;
 const SUPPORTED_DM_PLATFORMS = new Set(['instagram', 'facebook']);
-const SUPPORTED_COMMENT_PLATFORMS = new Set(['instagram', 'linkedin']);
+const SUPPORTED_COMMENT_PLATFORMS = new Set(['facebook', 'instagram', 'linkedin']);
 
-export type ZernioCommentPlatform = 'instagram' | 'linkedin';
+export type ZernioDmPlatform = 'facebook' | 'instagram';
+export type ZernioCommentPlatform = 'facebook' | 'instagram' | 'linkedin';
 
 export type ZernioMessagingFailureCode =
   | 'unauthorised'
@@ -37,7 +38,7 @@ export class ZernioMessagingError extends Error {
 
 export interface ZernioConversationSnapshot {
   readonly providerConversationId: string;
-  readonly platform: 'instagram' | 'facebook';
+  readonly platform: ZernioDmPlatform;
   readonly accountId: string;
   readonly accountUsername: string;
   readonly participantId: string;
@@ -53,7 +54,7 @@ export interface ZernioMessageSnapshot {
   readonly providerMessageId: string;
   readonly providerConversationId: string;
   readonly accountId: string;
-  readonly platform: 'instagram' | 'facebook';
+  readonly platform: ZernioDmPlatform;
   readonly body: string;
   readonly senderId: string;
   readonly senderName: string;
@@ -290,7 +291,7 @@ function conversation(value: unknown, allowed: ReadonlySet<string>): ZernioConve
   if (status !== 'active' && status !== 'archived') fail('invalid_provider_response');
   return Object.freeze({
     providerConversationId: opaqueId(source.id),
-    platform: platform as 'instagram' | 'facebook', accountId,
+    platform: platform as ZernioDmPlatform, accountId,
     accountUsername: text(source.accountUsername ?? '', 500, true),
     participantId: opaqueId(source.participantId),
     participantName: text(source.participantName ?? 'Unknown social contact', 500),
@@ -314,7 +315,7 @@ function message(value: unknown, allowed: ReadonlySet<string>): ZernioMessageSna
   return Object.freeze({
     providerMessageId: opaqueId(source.id),
     providerConversationId: opaqueId(source.conversationId), accountId,
-    platform: platform as 'instagram' | 'facebook',
+    platform: platform as ZernioDmPlatform,
     body: text(messageBody, 65_536),
     senderId: opaqueId(source.senderId),
     senderName: text(source.senderName ?? 'Unknown social contact', 500),

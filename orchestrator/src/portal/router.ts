@@ -5190,6 +5190,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       });
       if (target?.kind === 'dm') {
         query.set('conversation', target.providerConversationId);
+        query.set('platform', target.platform);
       } else if (target?.kind === 'comment') {
         query.set('kind', 'comment');
         query.set('account', target.accountId);
@@ -5226,10 +5227,11 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       && !/[\u0000-\u001f\u007f]/u.test(value);
     const target: PortalZernioMessagingReplyTarget | null = targetKind === 'dm'
       && safeOpaque(accountId) && safeOpaque(conversationId)
-      && platform === '' && providerPostId === '' && providerCommentId === ''
-      ? Object.freeze({ kind: 'dm', accountId, providerConversationId: conversationId })
+      && (platform === 'facebook' || platform === 'instagram')
+      && providerPostId === '' && providerCommentId === ''
+      ? Object.freeze({ kind: 'dm', accountId, platform, providerConversationId: conversationId })
       : targetKind === 'comment' && safeOpaque(accountId)
-        && (platform === 'instagram' || platform === 'linkedin')
+        && (platform === 'facebook' || platform === 'instagram' || platform === 'linkedin')
         && safeOpaque(providerPostId) && safeOpaque(providerCommentId) && conversationId === ''
         ? Object.freeze({
           kind: 'comment', accountId, platform,
@@ -5323,8 +5325,11 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     const providerPostId = url.searchParams.get('post') ?? '';
     const providerCommentId = url.searchParams.get('comment') ?? '';
     if ((kind !== '' && kind !== 'comment')
+        || (kind === '' && requested !== ''
+          && (platform !== 'facebook' && platform !== 'instagram'))
+        || (kind === '' && requested === '' && platform !== '')
         || (kind === 'comment' && (requested !== '' || !safeOpaque(accountId)
-          || (platform !== 'instagram' && platform !== 'linkedin')
+          || (platform !== 'facebook' && platform !== 'instagram' && platform !== 'linkedin')
           || !safeOpaque(providerPostId)
           || (providerCommentId !== '' && !safeOpaque(providerCommentId))))) {
       return sendHtml(res, 400, portalStatusPage(deps, sessionToken, {
@@ -5335,15 +5340,18 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
     const providerConversationId = kind === '' && safeOpaque(requested) ? requested : undefined;
     const comment = kind === 'comment' ? Object.freeze({
-      accountId, platform: platform as 'instagram' | 'linkedin', providerPostId,
+      accountId, platform: platform as 'facebook' | 'instagram' | 'linkedin', providerPostId,
       ...(providerCommentId ? { providerCommentId } : {}),
     }) : undefined;
+    const conversationPlatform = providerConversationId
+      ? platform as 'facebook' | 'instagram' : undefined;
     const identity = crmIdentity(sessionToken, deps);
     try {
       const [shell, snapshot] = await Promise.all([
         deps.crm.workspaceShell ? deps.crm.workspaceShell(identity) : deps.crm.snapshot(identity),
         deps.zernioMessaging.snapshot(identity, {
           ...(providerConversationId ? { providerConversationId } : {}),
+          ...(conversationPlatform ? { conversationPlatform } : {}),
           ...(comment ? { comment } : {}),
         }),
       ]);

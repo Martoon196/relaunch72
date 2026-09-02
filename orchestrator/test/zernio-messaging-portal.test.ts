@@ -111,7 +111,9 @@ test('portal social Messaging authenticates through the durable connected-accoun
     client: client(), sender, replies: replies(), allowedAccountIds: [ACCOUNT],
     commentAccountBindings, providerEffectsEnabled: false, emergencyPaused: true,
   });
-  const result = await service.snapshot(identity, { providerConversationId: 'conversation-1' });
+  const result = await service.snapshot(identity, {
+    providerConversationId: 'conversation-1', conversationPlatform: 'instagram',
+  });
   assert.equal(result.ok, true);
   if (!result.ok) return;
   assert.equal(result.providerEffects, false);
@@ -137,12 +139,12 @@ test('portal social Messaging refuses provider reads when the Instagram connecti
   assert.equal(providerCalled, false);
 });
 
-test('portal social Messaging excludes Facebook DMs from the Instagram-only reply rail', async () => {
+test('portal social Messaging reads and sends an approved Facebook Page DM through the same exact rail', async () => {
   let claims = 0;
   const facebookConversation = Object.freeze({ ...conversation, platform: 'facebook' as const });
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: '00000000-0000-4000-8000-000000000001', network: 'instagram' as const,
+      accountId: '00000000-0000-4000-8000-000000000001', network: 'facebook' as const,
       username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
@@ -152,6 +154,10 @@ test('portal social Messaging excludes Facebook DMs from the Instagram-only repl
       async listConversations() {
         return { conversations: [facebookConversation], checkedAt: '2026-09-01T01:01:00.000Z',
           hasMore: false };
+      },
+      async listMessages() {
+        return { messages: [Object.freeze({ ...message, platform: 'facebook' as const })],
+          checkedAt: '2026-09-01T01:01:01.000Z', hasMore: false };
       },
       async listCommentedPosts() {
         return { posts: [], checkedAt: '2026-09-01T01:01:00.000Z',
@@ -167,16 +173,18 @@ test('portal social Messaging excludes Facebook DMs from the Instagram-only repl
   const snapshot = await service.snapshot(identity, {});
   assert.equal(snapshot.ok, true);
   if (!snapshot.ok) return;
-  assert.deepEqual(snapshot.conversations, []);
-  assert.equal(snapshot.selectedConversation, null);
+  assert.equal(snapshot.conversations.length, 1);
+  assert.equal(snapshot.selectedConversation?.platform, 'facebook');
+  const html = renderZernioMessagingBody(snapshot);
+  assert.match(html, /Facebook DM/u);
   const send = await service.sendApproved(identity, {
     draftId: '00000000-0000-4000-8000-000000000006',
     deliveryId: '00000000-0000-4000-8000-000000000007',
     leaseToken: '00000000-0000-4000-8000-000000000008',
-    target: { kind: 'dm', accountId: ACCOUNT, providerConversationId: 'conversation-1' },
+    target: { kind: 'dm', accountId: ACCOUNT, platform: 'facebook', providerConversationId: 'conversation-1' },
   });
-  assert.deepEqual(send, { ok: false, kind: 'forbidden', providerEffects: 'none' });
-  assert.equal(claims, 0);
+  assert.deepEqual(send, { ok: true, disposition: 'sent', providerEffects: 'one_message_accepted' });
+  assert.equal(claims, 1);
 });
 
 test('social Messaging view escapes provider content and withholds send until approval', () => {
@@ -186,7 +194,7 @@ test('social Messaging view escapes provider content and withholds send until ap
     checkedAt: '2026-09-01T01:01:01.000Z', conversations: [conversation],
     commentPosts: [commentedPost], selectedConversation: conversation,
     selectedCommentPost: null, selectedComment: null,
-    selectedTarget: { kind: 'dm', accountId: ACCOUNT, providerConversationId: 'conversation-1' },
+    selectedTarget: { kind: 'dm', accountId: ACCOUNT, platform: 'instagram', providerConversationId: 'conversation-1' },
     messages: [message], comments: [],
     reply: null,
     conversationHistoryTruncated: false, queueTruncated: false,
@@ -236,7 +244,7 @@ test('approved social reply claims once, calls the provider once and settles acc
     draftId: '00000000-0000-4000-8000-000000000010',
     deliveryId: '00000000-0000-4000-8000-000000000011',
     leaseToken: '00000000-0000-4000-8000-000000000012',
-    target: { kind: 'dm', accountId: ACCOUNT, providerConversationId: 'conversation-1' },
+    target: { kind: 'dm', accountId: ACCOUNT, platform: 'instagram', providerConversationId: 'conversation-1' },
   });
   assert.deepEqual(result, {
     ok: true, disposition: 'sent', providerEffects: 'one_message_accepted',
@@ -274,7 +282,7 @@ test('a malformed successful provider response is quarantined instead of marked 
     draftId: '00000000-0000-4000-8000-000000000013',
     deliveryId: '00000000-0000-4000-8000-000000000014',
     leaseToken: '00000000-0000-4000-8000-000000000015',
-    target: { kind: 'dm', accountId: ACCOUNT, providerConversationId: 'conversation-1' },
+    target: { kind: 'dm', accountId: ACCOUNT, platform: 'instagram', providerConversationId: 'conversation-1' },
   });
   assert.deepEqual(result, { ok: false, kind: 'outcome_unknown', providerEffects: 'unknown' });
   assert.equal(settlements.length, 1);
@@ -305,7 +313,7 @@ test('an accepted provider response stays outcome unknown when evidence settleme
     draftId: '00000000-0000-4000-8000-000000000016',
     deliveryId: '00000000-0000-4000-8000-000000000017',
     leaseToken: '00000000-0000-4000-8000-000000000018',
-    target: { kind: 'dm', accountId: ACCOUNT, providerConversationId: 'conversation-1' },
+    target: { kind: 'dm', accountId: ACCOUNT, platform: 'instagram', providerConversationId: 'conversation-1' },
   });
   assert.deepEqual(result, { ok: false, kind: 'outcome_unknown', providerEffects: 'unknown' });
 });
@@ -338,7 +346,7 @@ test('an already-claimed social reply never calls the provider again', async () 
     draftId: '00000000-0000-4000-8000-000000000020',
     deliveryId: '00000000-0000-4000-8000-000000000021',
     leaseToken: '00000000-0000-4000-8000-000000000022',
-    target: { kind: 'dm', accountId: ACCOUNT, providerConversationId: 'conversation-1' },
+    target: { kind: 'dm', accountId: ACCOUNT, platform: 'instagram', providerConversationId: 'conversation-1' },
   });
   assert.deepEqual(result, { ok: false, kind: 'conflict', providerEffects: 'none' });
   assert.equal(sends, 0);
@@ -611,7 +619,7 @@ test('effects and emergency pause block all social sends before claim or provide
     draftId: '00000000-0000-4000-8000-000000000040',
     deliveryId: '00000000-0000-4000-8000-000000000041',
     leaseToken: '00000000-0000-4000-8000-000000000042',
-    target: { kind: 'dm' as const, accountId: ACCOUNT, providerConversationId: 'conversation-1' },
+    target: { kind: 'dm' as const, accountId: ACCOUNT, platform: 'instagram' as const, providerConversationId: 'conversation-1' },
   };
   assert.deepEqual(await make(false, false).sendApproved(identity, input), {
     ok: false, kind: 'effects_disabled', providerEffects: 'none',

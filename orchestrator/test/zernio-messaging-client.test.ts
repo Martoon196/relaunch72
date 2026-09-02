@@ -250,6 +250,30 @@ test('Zernio Messaging lists an exact account organic comment feed with opaque c
   assert.equal(url.searchParams.get('cursor'), 'incoming/+cursor==');
 });
 
+test('Zernio Messaging accepts Facebook Page conversations and owned-post comments', async () => {
+  const responses = [
+    json({ data: [conversation({
+      id: 'fb-conversation-1', platform: 'facebook',
+      url: 'https://www.facebook.com/messages/t/1/',
+    })], pagination: { hasMore: false } }),
+    json({ data: [commentedPost({
+      id: 'fb-post-1', platform: 'facebook',
+      permalink: 'https://www.facebook.com/propertypredator/posts/1',
+    })], pagination: { hasMore: false, nextCursor: null } }),
+  ];
+  const client = createZernioMessagingClient({
+    apiKey: 'zrk_test_messaging_secret', providerProfileId: PROFILE,
+    allowedAccountIds: [ACCOUNT], fetch: async () => responses.shift()!,
+  });
+  const inbox = await client.listConversations({ accountIds: [ACCOUNT] });
+  assert.equal(inbox.conversations[0]?.platform, 'facebook');
+  const comments = await client.listCommentedPosts({
+    accountId: ACCOUNT, platform: 'facebook',
+  });
+  assert.equal(comments.posts[0]?.platform, 'facebook');
+  assert.equal(comments.posts[0]?.providerPostId, 'fb-post-1');
+});
+
 test('Zernio Messaging reads one account-bound post thread including bounded replies', async () => {
   const requests: string[] = [];
   const client = createZernioMessagingClient({
