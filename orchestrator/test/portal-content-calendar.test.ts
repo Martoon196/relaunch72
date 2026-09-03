@@ -266,6 +266,10 @@ test('live scheduler offers exact minutes, smart choices and optional media with
   assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /method: 'PUT', body: file/u);
   assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /addEventListener\('drop'/u);
   assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /data-drag-active/u);
+  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /file\.name \+ ' · uploading…'/u);
+  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /mediaPreview\.dataset\.uploadState = 'ready'/u);
+  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /mediaPreview\.dataset\.uploadState = 'failed'/u);
+  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /setLiveStatus\('Upload failed: ' \+ reason\)/u);
   assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /setClockMinutes/u);
   assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /renderDatePicker/u);
 });

@@ -564,7 +564,10 @@ export const CONTENT_CALENDAR_CLIENT_SOURCE = String.raw`(() => {
         if (mediaUrl) mediaUrl.value = '';
         if (mediaVisual) mediaVisual.replaceChildren();
         if (mediaName) mediaName.textContent = '';
-        if (mediaPreview) mediaPreview.hidden = true;
+        if (mediaPreview) {
+          mediaPreview.hidden = true;
+          mediaPreview.removeAttribute('data-upload-state');
+        }
         setLiveStatus('Media removed. The post will be text only.');
       };
       const firstChoice = nextSuggested('17:35');
@@ -707,10 +710,27 @@ export const CONTENT_CALENDAR_CLIENT_SOURCE = String.raw`(() => {
           setLiveStatus('Choose a supported image or video up to 500 MB.');
           return;
         }
+        if (mediaType) mediaType.value = '';
+        if (mediaUrl) mediaUrl.value = '';
+        if (previewUrl) window.URL.revokeObjectURL(previewUrl);
+        previewUrl = window.URL.createObjectURL(file);
+        if (mediaVisual) {
+          const visual = document.createElement(file.type.startsWith('image/') ? 'img' : 'video');
+          visual.src = previewUrl;
+          visual.alt = file.type.startsWith('image/') ? 'Selected post image preview' : '';
+          if (!file.type.startsWith('image/')) visual.muted = true;
+          mediaVisual.replaceChildren(visual);
+        }
+        if (mediaName) mediaName.textContent = file.name + ' · uploading…';
+        if (mediaPreview) {
+          mediaPreview.hidden = false;
+          mediaPreview.dataset.uploadState = 'uploading';
+        }
         const endpoint = sameOriginUrl(liveForm.dataset.mediaUploadUrl);
         if (!endpoint || !window.fetch) {
-          clearMedia();
-          setLiveStatus('Media upload is temporarily unavailable.');
+          if (mediaName) mediaName.textContent = file.name + ' · upload unavailable';
+          if (mediaPreview) mediaPreview.dataset.uploadState = 'failed';
+          setLiveStatus('Upload failed: media upload is temporarily unavailable.');
           return;
         }
         uploadBusy = true;
@@ -739,21 +759,16 @@ export const CONTENT_CALENDAR_CLIENT_SOURCE = String.raw`(() => {
           if (!uploaded.ok) throw new Error('The media upload did not complete.');
           if (mediaType) mediaType.value = prepared.mediaType;
           if (mediaUrl) mediaUrl.value = prepared.publicUrl;
-          if (previewUrl) window.URL.revokeObjectURL(previewUrl);
-          previewUrl = window.URL.createObjectURL(file);
-          if (mediaVisual) {
-            const visual = document.createElement(prepared.mediaType === 'image' ? 'img' : 'video');
-            visual.src = previewUrl;
-            visual.alt = prepared.mediaType === 'image' ? 'Selected post image preview' : '';
-            if (prepared.mediaType === 'video') visual.muted = true;
-            mediaVisual.replaceChildren(visual);
-          }
           if (mediaName) mediaName.textContent = file.name + ' · ready';
-          if (mediaPreview) mediaPreview.hidden = false;
+          if (mediaPreview) mediaPreview.dataset.uploadState = 'ready';
           setLiveStatus('Media ready. Choose the exact date and time, then schedule your post.');
         } catch (error) {
-          clearMedia();
-          setLiveStatus(error instanceof Error ? error.message : 'The media upload could not complete.');
+          if (mediaType) mediaType.value = '';
+          if (mediaUrl) mediaUrl.value = '';
+          if (mediaName) mediaName.textContent = file.name + ' · upload failed';
+          if (mediaPreview) mediaPreview.dataset.uploadState = 'failed';
+          const reason = error instanceof Error ? error.message : 'The media upload could not complete.';
+          setLiveStatus('Upload failed: ' + reason);
         } finally {
           uploadBusy = false;
           if (liveSubmit) liveSubmit.disabled = false;
