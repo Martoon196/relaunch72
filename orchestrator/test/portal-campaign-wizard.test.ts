@@ -156,3 +156,16 @@ test('Campaign Wizard PRG notices are session-bound and never expose raw errors'
     'session-a',
   ), undefined);
 });
+
+test('live calendar permission notice is plain English and never labels the action TEST', () => {
+  const query = new URLSearchParams({
+    notice: campaignWizardNoticeToken('notice-secret', 'session-a', 'schedule_forbidden'),
+  });
+  const outcome = campaignWizardNoticeFromQuery(query, 'notice-secret', 'session-a');
+  assert.deepEqual(outcome, {
+    kind: 'error',
+    title: 'Scheduling access required',
+    detail: 'Only a workspace owner or admin can schedule a live company post. Nothing was scheduled or published.',
+  });
+  assert.doesNotMatch(`${outcome?.title} ${outcome?.detail}`, /TEST/u);
+});

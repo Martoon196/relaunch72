@@ -45,6 +45,7 @@ export type CampaignWizardNoticeCode =
   | 'scheduled_live'
   | 'schedule_replayed'
   | 'schedule_invalid'
+  | 'schedule_forbidden'
   | 'account_not_ready'
   | 'replayed'
   | 'cancelled'
@@ -56,7 +57,7 @@ export type CampaignWizardNoticeCode =
   | 'unavailable';
 
 const NOTICE_CODES = new Set<CampaignWizardNoticeCode>([
-  'planned', 'scheduled_live', 'schedule_replayed', 'schedule_invalid', 'account_not_ready',
+  'planned', 'scheduled_live', 'schedule_replayed', 'schedule_invalid', 'schedule_forbidden', 'account_not_ready',
   'replayed', 'cancelled', 'rescheduled', 'forbidden', 'conflict', 'invalid', 'missing', 'unavailable',
 ]);
 const NOTICE_CONTEXT = 'relaunch72:campaign-wizard-notice:v1\0';
@@ -93,6 +94,10 @@ function noticeFor(code: CampaignWizardNoticeCode): CampaignWizardOperationOutco
   if (code === 'schedule_invalid') return Object.freeze({
     kind: 'error', title: 'Check the post details',
     detail: 'Add your post and choose a valid future date and exact time. Nothing was scheduled.',
+  });
+  if (code === 'schedule_forbidden') return Object.freeze({
+    kind: 'error', title: 'Scheduling access required',
+    detail: 'Only a workspace owner or admin can schedule a live company post. Nothing was scheduled or published.',
   });
   if (code === 'account_not_ready') return Object.freeze({
     kind: 'error', title: 'LinkedIn connection needs attention',

@@ -211,6 +211,26 @@ test('the friendly calendar form schedules the exact LinkedIn account and redire
   });
 });
 
+test('live calendar authorization failures use live scheduling language, never TEST command copy', async () => {
+  const service: PortalZernioCalendarCommandService = {
+    configuredNetworks: ['linkedin'],
+    stage: async () => ({ ok: false, kind: 'unavailable' }),
+    scheduleDirect: async () => ({ ok: false, kind: 'forbidden' }),
+  };
+  const body = encodeForm({
+    _csrf: portalCsrfToken(SECRET, SESSION), command_key: COMMAND_KEY,
+    network: 'linkedin', timezone: 'Europe/London',
+    content: 'A useful Property Predator post.',
+    scheduled_for_local: '2026-09-04T12:01', media_type: '', media_url: '',
+  });
+  const res = response();
+  await handlePortal(request(body, '/portal/content/calendar/live-schedules') as never,
+    res as never, postgres(service));
+  assert.equal(res.statusCode, 303);
+  assert.equal(res.headers.location,
+    `${CONTENT_CALENDAR_ROUTE}?notice=${encodeURIComponent(campaignWizardNoticeToken(SECRET, SESSION, 'schedule_forbidden'))}`);
+});
+
 test('calendar media preparation is CSRF-bound and returns one safe upload contract', async () => {
   const calls: unknown[] = [];
   const service: PortalZernioCalendarCommandService = {

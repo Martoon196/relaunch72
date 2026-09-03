@@ -4261,7 +4261,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       );
       if (!outcome.ok) {
         const code: CampaignWizardNoticeCode = outcome.kind === 'forbidden'
-          || outcome.kind === 'unauthenticated' ? 'forbidden'
+          || outcome.kind === 'unauthenticated' ? 'schedule_forbidden'
           : outcome.kind === 'validation' ? 'schedule_invalid'
             : outcome.kind === 'account_not_ready' ? 'account_not_ready'
               : outcome.kind === 'conflict' ? 'conflict' : 'unavailable';
