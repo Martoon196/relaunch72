@@ -70,11 +70,26 @@ BEGIN
   FROM pg_catalog.pg_auth_members AS membership
   JOIN pg_catalog.pg_roles AS member ON member.oid = membership.member
   JOIN pg_catalog.pg_roles AS parent ON parent.oid = membership.roleid
-  WHERE (
-    parent.rolname = 'r72_zernio_inbound_webhook_command'
-    OR (parent.rolname = 'r72_zernio_inbound_definer'
-        AND member.rolname <> 'r72_owner')
+  WHERE parent.rolname IN (
+    'r72_zernio_inbound_webhook_command', 'r72_zernio_inbound_definer'
   )
+    AND NOT (
+      (
+        parent.rolname = 'r72_zernio_inbound_definer'
+        AND member.rolname = 'r72_owner'
+      )
+      OR (
+        -- PostgreSQL 16+ managed CREATEROLE bootstrap membership is safe only
+        -- when it cannot inherit or SET ROLE into the runtime identity.
+        member.rolname = session_user
+        AND membership.admin_option
+        AND NOT membership.inherit_option
+        AND coalesce(
+          (pg_catalog.to_jsonb(membership)->>'set_option')::boolean,
+          true
+        ) IS NOT TRUE
+      )
+    )
   LIMIT 1;
   IF unsafe_member IS NOT NULL THEN
     RAISE EXCEPTION 'Unsafe Zernio inbound role member: %', unsafe_member
@@ -1875,18 +1890,38 @@ BEGIN
        'r72_zernio_inbound_webhook_command',
        'app_private.resolve_zernio_inbound_account(uuid,uuid,text,bytea,bytea,bytea,bytea)',
        'EXECUTE'
-     ) OR pg_catalog.has_function_privilege(
-       'PUBLIC',
-       'app_private.resolve_zernio_inbound_account(uuid,uuid,text,bytea,bytea,bytea,bytea)',
-       'EXECUTE'
+     ) OR EXISTS (
+       SELECT 1
+       FROM pg_catalog.pg_proc AS checked_function
+       CROSS JOIN LATERAL pg_catalog.aclexplode(
+         coalesce(
+           checked_function.proacl,
+           pg_catalog.acldefault('f', checked_function.proowner)
+         )
+       ) AS privilege
+       WHERE checked_function.oid = pg_catalog.to_regprocedure(
+         'app_private.resolve_zernio_inbound_account(uuid,uuid,text,bytea,bytea,bytea,bytea)'
+       )
+         AND privilege.grantee = 0
+         AND privilege.privilege_type = 'EXECUTE'
      ) OR NOT pg_catalog.has_function_privilege(
        'r72_zernio_inbound_webhook_command',
        'app_private.record_zernio_signed_inbound(uuid,uuid,uuid,text,text,bytea,bytea,bytea,bytea,bytea,bytea,bytea,text,bytea,bytea,bytea,bytea,text,timestamptz,timestamptz)',
        'EXECUTE'
-     ) OR pg_catalog.has_function_privilege(
-       'PUBLIC',
-       'app_private.record_zernio_signed_inbound(uuid,uuid,uuid,text,text,bytea,bytea,bytea,bytea,bytea,bytea,bytea,text,bytea,bytea,bytea,bytea,text,timestamptz,timestamptz)',
-       'EXECUTE'
+     ) OR EXISTS (
+       SELECT 1
+       FROM pg_catalog.pg_proc AS checked_function
+       CROSS JOIN LATERAL pg_catalog.aclexplode(
+         coalesce(
+           checked_function.proacl,
+           pg_catalog.acldefault('f', checked_function.proowner)
+         )
+       ) AS privilege
+       WHERE checked_function.oid = pg_catalog.to_regprocedure(
+         'app_private.record_zernio_signed_inbound(uuid,uuid,uuid,text,text,bytea,bytea,bytea,bytea,bytea,bytea,bytea,text,bytea,bytea,bytea,bytea,text,timestamptz,timestamptz)'
+       )
+         AND privilege.grantee = 0
+         AND privilege.privilege_type = 'EXECUTE'
      ) THEN
     RAISE EXCEPTION 'Zernio inbound exact function ACL is not intact'
       USING ERRCODE = '42501';
