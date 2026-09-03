@@ -51,7 +51,10 @@ export type PortalZernioWebhookResult =
 
 export interface PortalZernioSocialConnectionService {
   readonly providerConnectionId: string;
+  /** Primary profile used for new connection handoffs. */
   readonly providerProfileId: string;
+  /** Exact profile allowlist admitted by reads and signed lifecycle receipts. */
+  readonly providerProfileIds?: readonly string[];
   snapshot(identity: PortalCrmRequestIdentity): Promise<PortalZernioSnapshotResult>;
   begin(identity: PortalCrmRequestIdentity, input: Readonly<{
     intentId: string;

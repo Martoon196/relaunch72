@@ -230,6 +230,8 @@ export class PgPortalZernioSocialConnectionService
 implements PortalZernioSocialConnectionService {
   readonly providerConnectionId: string;
   readonly providerProfileId: string;
+  readonly providerProfileIds: readonly string[];
+  readonly #providerProfileHashes: ReadonlySet<string>;
 
   constructor(private readonly dependencies: Readonly<{
     principalResolver: Pick<PortalCrmPrincipalResolver, 'resolve'>;
@@ -238,14 +240,26 @@ implements PortalZernioSocialConnectionService {
     workspaceId: string;
     providerConnectionId: string;
     providerProfileId: string;
+    providerProfileIds?: readonly string[];
   }>) {
+    const providerProfileIds = dependencies.providerProfileIds
+      ?? Object.freeze([dependencies.providerProfileId]);
     if (!UUID.test(dependencies.workspaceId)
         || !UUID.test(dependencies.providerConnectionId)
-        || !PROVIDER_ID.test(dependencies.providerProfileId)) {
+        || !PROVIDER_ID.test(dependencies.providerProfileId)
+        || !Array.isArray(providerProfileIds)
+        || providerProfileIds.length < 1 || providerProfileIds.length > 16
+        || providerProfileIds[0] !== dependencies.providerProfileId
+        || providerProfileIds.some((profileId) => !PROVIDER_ID.test(profileId))
+        || new Set(providerProfileIds).size !== providerProfileIds.length) {
       throw new Error('Zernio social binding is invalid');
     }
     this.providerConnectionId = dependencies.providerConnectionId;
     this.providerProfileId = dependencies.providerProfileId;
+    this.providerProfileIds = Object.freeze([...providerProfileIds]);
+    this.#providerProfileHashes = new Set(
+      this.providerProfileIds.map((profileId) => sha256(profileId).toString('hex')),
+    );
   }
 
   async #context(identity: PortalCrmRequestIdentity) {
@@ -262,13 +276,23 @@ implements PortalZernioSocialConnectionService {
     try {
       const context = await this.#context(identity);
       if (!context) return failure('unauthenticated');
-      const rows = await withTransaction(this.dependencies.commandPool, context, async (client) =>
-        client.query<AccountRow>(
-          `/* portal.zernio-social.snapshot */
-           SELECT * FROM app_private.read_zernio_social_accounts($1::uuid,$2::uuid,$3::bytea)`,
-          [context.workspaceId, this.providerConnectionId, sha256(this.providerProfileId)],
-        ), { readOnly: true, isolation: 'repeatable read' });
-      return Object.freeze({ ok: true, accounts: Object.freeze(rows.rows.map(accountRow)) });
+      const rows = await withTransaction(this.dependencies.commandPool, context, async (client) => {
+        const accounts: AccountRow[] = [];
+        for (const profileId of this.providerProfileIds) {
+          const result = await client.query<AccountRow>(
+            `/* portal.zernio-social.snapshot */
+             SELECT * FROM app_private.read_zernio_social_accounts($1::uuid,$2::uuid,$3::bytea)`,
+            [context.workspaceId, this.providerConnectionId, sha256(profileId)],
+          );
+          accounts.push(...result.rows);
+        }
+        return accounts;
+      }, { readOnly: true, isolation: 'repeatable read' });
+      const accounts = rows.map(accountRow);
+      if (new Set(accounts.map((account) => account.accountId)).size !== accounts.length) {
+        throw new Error('Duplicate Zernio account across provider profiles');
+      }
+      return Object.freeze({ ok: true, accounts: Object.freeze(accounts) });
     } catch (error) {
       return mapFailure(error);
     }
@@ -373,7 +397,10 @@ implements PortalZernioSocialConnectionService {
 
   async recordWebhook(input: VerifiedZernioAccountWebhook): Promise<PortalZernioWebhookResult> {
     if (input.workspaceId !== this.dependencies.workspaceId
-        || input.connectionId !== this.providerConnectionId) return failure('forbidden');
+        || input.connectionId !== this.providerConnectionId
+        || !this.#providerProfileHashes.has(input.providerProfileIdSha256)) {
+      return failure('forbidden');
+    }
     try {
       const context = Object.freeze({
         actorKind: 'webhook' as const,
@@ -412,6 +439,7 @@ export function createPgPortalZernioSocialConnectionService(input: Readonly<{
   workspaceId: string;
   providerConnectionId: string;
   providerProfileId: string;
+  providerProfileIds?: readonly string[];
 }>): PgPortalZernioSocialConnectionService {
   return new PgPortalZernioSocialConnectionService({
     principalResolver: createPgPortalCrmPrincipalResolver(input.webPool),
@@ -420,5 +448,6 @@ export function createPgPortalZernioSocialConnectionService(input: Readonly<{
     workspaceId: input.workspaceId,
     providerConnectionId: input.providerConnectionId,
     providerProfileId: input.providerProfileId,
+    ...(input.providerProfileIds ? { providerProfileIds: input.providerProfileIds } : {}),
   });
 }

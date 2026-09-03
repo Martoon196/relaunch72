@@ -83,21 +83,24 @@ export function composePropertyPredatorZernioAccountWebhook(
   if (!configured) return Object.freeze({ enabled: false, ready: false, blockers: Object.freeze([]) });
   const blockers: string[] = [];
   if (!service) blockers.push('Zernio connection database boundary is unavailable');
-  let credential: ReturnType<typeof createZernioAccountWebhookCredential> | undefined;
+  let credentials: readonly ReturnType<typeof createZernioAccountWebhookCredential>[] | undefined;
   if (service) {
     try {
-      credential = createZernioAccountWebhookCredential({
-        workspaceId: env.PROPERTY_PREDATOR_PILOT_WORKSPACE_ID?.trim() ?? '',
-        connectionId: service.providerConnectionId,
-        providerProfileId: service.providerProfileId,
-        credentialVersion: env.ZERNIO_WEBHOOK_CREDENTIAL_VERSION?.trim() ?? '',
-        webhookSecret: env.ZERNIO_WEBHOOK_SECRET?.trim() ?? '',
-      });
+      credentials = Object.freeze(
+        (service.providerProfileIds ?? [service.providerProfileId]).map((providerProfileId) =>
+          createZernioAccountWebhookCredential({
+            workspaceId: env.PROPERTY_PREDATOR_PILOT_WORKSPACE_ID?.trim() ?? '',
+            connectionId: service.providerConnectionId,
+            providerProfileId,
+            credentialVersion: env.ZERNIO_WEBHOOK_CREDENTIAL_VERSION?.trim() ?? '',
+            webhookSecret: env.ZERNIO_WEBHOOK_SECRET?.trim() ?? '',
+          })),
+      );
     } catch {
       blockers.push('Zernio webhook credential binding is invalid');
     }
   }
-  if (!service || !credential || blockers.length > 0) {
+  if (!service || !credentials || credentials.length < 1 || blockers.length > 0) {
     return Object.freeze({
       enabled: true,
       ready: false,
@@ -105,7 +108,7 @@ export function composePropertyPredatorZernioAccountWebhook(
     });
   }
   const boundService = service;
-  const boundCredential = credential;
+  const boundCredentials = credentials;
   return Object.freeze({
     enabled: true,
     ready: true,
@@ -121,14 +124,21 @@ export function composePropertyPredatorZernioAccountWebhook(
       let rawBody: Buffer;
       try { rawBody = await readBody(req); }
       catch { return send(res, 413, { error: 'invalid_request' }); }
-      let verified;
-      try {
-        verified = verifyZernioAccountWebhook(boundCredential, {
-          rawBody,
-          signatureHeader: signature,
-          eventIdHeader: eventId,
-        });
-      } catch {
+      let verified: ReturnType<typeof verifyZernioAccountWebhook> | undefined;
+      for (const credential of boundCredentials) {
+        try {
+          verified = verifyZernioAccountWebhook(credential, {
+            rawBody,
+            signatureHeader: signature,
+            eventIdHeader: eventId,
+          });
+          break;
+        } catch {
+          // The signature and exact profile binding must both match one member
+          // of the bounded profile allowlist.
+        }
+      }
+      if (!verified) {
         return send(res, 401, { error: 'invalid_signature_or_payload' });
       }
       const outcome = await boundService.recordWebhook(verified);

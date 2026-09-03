@@ -188,6 +188,7 @@ test('production Blueprint is isolated, manually deployed and narrowly fail-clos
   dashboardControlledSlot('PROPERTY_PREDATOR_EXTERNAL_EVENTS_TRUSTED_PROXY_ADDRESSES');
   dashboardControlledSlot('DATABASE_EXTERNAL_EVENT_COMMAND_URL');
   dashboardControlledSlot('DATABASE_WEBHOOK_URL');
+  dashboardControlledSlot('PROPERTY_PREDATOR_ZERNIO_PROVIDER_PROFILE_IDS');
   dashboardControlledSlot('PROPERTY_PREDATOR_SSO_ENABLED');
   literalValue('PROPERTY_PREDATOR_SSO_ISSUER', 'https://propertypredator.com');
   literalValue('PROPERTY_PREDATOR_SSO_AUTHORIZE_URL', 'https://propertypredator.com/sso.html');

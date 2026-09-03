@@ -246,6 +246,11 @@ services:
       # Mailgun route has authenticated and journalled the untouched event.
       - key: DATABASE_CUSTOMER_EMAIL_WEBHOOK_URL
         sync: false
+      # Primary connection target remains in the existing dashboard variable.
+      # Additional provider profiles are an explicit bounded allowlist so a
+      # personal account and its company page can coexist in one HQ workspace.
+      - key: PROPERTY_PREDATOR_ZERNIO_PROVIDER_PROFILE_IDS
+        sync: false
       - key: DATABASE_WEB_POOL_MAX
         value: "4"
       - key: DATABASE_IDENTITY_COMMAND_POOL_MAX

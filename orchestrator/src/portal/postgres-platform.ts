@@ -260,6 +260,26 @@ export function propertyPredatorContentSyncSourceForProfile(
 
 const PORTAL_UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const ZERNIO_PROVIDER_PROFILE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/u;
+
+/**
+ * Preserve the original single-profile variable as the primary connection
+ * target while allowing a bounded, explicit set of additional profile IDs.
+ */
+export function propertyPredatorZernioProviderProfileIds(
+  env: NodeJS.ProcessEnv,
+): readonly string[] {
+  const primary = env.PROPERTY_PREDATOR_ZERNIO_PROVIDER_PROFILE_ID?.trim() ?? '';
+  const configured = (env.PROPERTY_PREDATOR_ZERNIO_PROVIDER_PROFILE_IDS ?? '')
+    .split(',').map((value) => value.trim()).filter(Boolean);
+  const profileIds = [primary, ...configured.filter((value) => value !== primary)];
+  if (!primary || profileIds.length > 16
+      || profileIds.some((profileId) => !ZERNIO_PROVIDER_PROFILE_ID.test(profileId))
+      || new Set(profileIds).size !== profileIds.length) {
+    throw new Error('Zernio provider profile allowlist is invalid');
+  }
+  return Object.freeze(profileIds);
+}
 
 /**
  * The owned-social profile-key encryption contract, if this process has been
@@ -779,6 +799,7 @@ export async function buildPgPortalPlatform(
       env.DATABASE_ZERNIO_SOCIAL_COMMAND_URL,
       env.PROPERTY_PREDATOR_ZERNIO_LIVE_CONNECTION_ID,
       env.PROPERTY_PREDATOR_ZERNIO_PROVIDER_PROFILE_ID,
+      env.PROPERTY_PREDATOR_ZERNIO_PROVIDER_PROFILE_IDS,
       env.ZERNIO_API_KEY,
     ].some((value) => Boolean(value?.trim()));
     if (zernioConfigured) {
@@ -787,10 +808,10 @@ export async function buildPgPortalPlatform(
         const workspaceId = env.PROPERTY_PREDATOR_PILOT_WORKSPACE_ID?.trim().toLowerCase() ?? '';
         const connectionId = env.PROPERTY_PREDATOR_ZERNIO_LIVE_CONNECTION_ID
           ?.trim().toLowerCase() ?? '';
-        const providerProfileId = env.PROPERTY_PREDATOR_ZERNIO_PROVIDER_PROFILE_ID?.trim() ?? '';
+        const providerProfileIds = propertyPredatorZernioProviderProfileIds(env);
+        const providerProfileId = providerProfileIds[0]!;
         const apiKey = env.ZERNIO_API_KEY?.trim() ?? '';
         if (!PORTAL_UUID.test(workspaceId) || !PORTAL_UUID.test(connectionId)
-            || !/^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/u.test(providerProfileId)
             || apiKey.length < 8) {
           throw new Error('Zernio social connection seam is incomplete');
         }
@@ -810,6 +831,7 @@ export async function buildPgPortalPlatform(
           workspaceId,
           providerConnectionId: connectionId,
           providerProfileId,
+          providerProfileIds,
           liveClient: createZernioLiveConnectionClient({
             apiKey,
             providerProfileId,
