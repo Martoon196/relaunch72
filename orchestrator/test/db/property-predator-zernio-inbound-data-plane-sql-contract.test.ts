@@ -35,6 +35,11 @@ const TABLES = [
 
 test('0092 creates registered, forced-RLS and append-only Zernio inbound evidence', async () => {
   const source = await sql();
+  assert.match(source, /member\.rolname = session_user/u);
+  assert.match(source, /membership\.admin_option/u);
+  assert.match(source, /NOT membership\.inherit_option/u);
+  assert.doesNotMatch(source, /has_function_privilege\( 'PUBLIC'/u);
+  assert.match(source, /privilege\.grantee = 0/u);
   for (const table of TABLES) {
     assert.match(source, new RegExp(`CREATE TABLE app\\.${table}`, 'u'));
     assert.match(source, new RegExp(`ALTER TABLE app\\.%I ENABLE ROW LEVEL SECURITY`, 'u'));
