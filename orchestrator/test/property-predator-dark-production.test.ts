@@ -6,7 +6,7 @@ function locked(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     NODE_ENV: 'production',
     PORTAL_PRODUCT_PROFILE: 'property_predator_growth',
-    PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED: 'false',
+    PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED: 'true',
     PROPERTY_PREDATOR_EMAIL_DELIVERY_ENABLED: 'false',
     PROPERTY_PREDATOR_EMAIL_EMERGENCY_PAUSED: 'true',
     PUBLIC_LEAD_CAPTURE_ENABLED: 'false',
