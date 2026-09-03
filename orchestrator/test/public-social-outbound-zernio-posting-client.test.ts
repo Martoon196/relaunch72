@@ -116,6 +116,34 @@ test('publishes one due Instagram and LinkedIn job through the exact Zernio boun
   });
 });
 
+test('schedules a post through Zernio without publishing it immediately', async () => {
+  let body: Record<string, unknown> | undefined;
+  const posting = client(async (_url, init) => {
+    body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return json({ post: post({
+      status: 'scheduled',
+      platforms: [{
+        platform: 'linkedin', accountId: LINKEDIN_ACCOUNT, status: 'pending',
+      }],
+    }) }, 201);
+  });
+  const scheduledFor = new Date(Date.now() + 60 * 60_000).toISOString();
+  const result = await posting.schedule({
+    requestId: REQUEST_ID,
+    content: 'Scheduled from Growth HQ.',
+    targets: [{ network: 'linkedin', accountId: LINKEDIN_ACCOUNT }],
+    scheduledFor,
+  });
+  assert.equal(result.status, 'scheduled');
+  assert.deepEqual(body, {
+    content: 'Scheduled from Growth HQ.',
+    platforms: [{ platform: 'linkedin', accountId: LINKEDIN_ACCOUNT }],
+    scheduledFor,
+    timezone: 'UTC',
+  });
+  assert.equal('publishNow' in (body ?? {}), false);
+});
+
 test('accepts only the documented x-request-id replay envelope', async () => {
   const posting = client(async () => json({ existingPost: post() }, 200));
   const result = await posting.publishDue(publishInput({ mediaItems: [] }));

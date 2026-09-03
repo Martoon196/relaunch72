@@ -1106,6 +1106,7 @@ function contentCalendarReadRange(selectedDate: string): Readonly<{ from: string
 }
 
 const CONTENT_CALENDAR_CREATE_TEST_ROUTE = '/portal/content/calendar/test-planning-intents';
+const CONTENT_CALENDAR_LIVE_SCHEDULE_ROUTE = '/portal/content/calendar/live-schedules';
 const CONTENT_CALENDAR_RESCHEDULE_TEST_ROUTE = '/portal/content/calendar/test-reschedule';
 const CONTENT_CALENDAR_CANCEL_TEST_ROUTE = '/portal/content/calendar/test-cancel';
 const COMPANY_CONTENT_EXACT_REVIEW_ROUTE = /^\/portal\/content\/items\/([0-9a-f-]+)\/versions\/([0-9a-f-]+)\/review$/iu;
@@ -4169,6 +4170,56 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
   }
 
+  if (deps.kind === 'postgres' && p === CONTENT_CALENDAR_LIVE_SCHEDULE_ROUTE && method === 'POST') {
+    if (!deps.zernioCalendar?.scheduleDirect
+        || !deps.zernioCalendar.configuredNetworks.includes('linkedin')) {
+      return campaignNoticeRedirect(res, deps, sessionToken, 'unavailable', CONTENT_CALENDAR_ROUTE);
+    }
+    const form = await readMultiValueForm(req);
+    const allowed = new Set([
+      '_csrf', 'command_key', 'network', 'timezone', 'content',
+      'scheduled_for_local', 'confirm_schedule',
+    ]);
+    if (!form || !campaignFormKeysAllowed(form, allowed)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '')
+        || oneFormValue(form, 'network') !== 'linkedin'
+        || oneFormValue(form, 'confirm_schedule') !== 'confirmed') {
+      return campaignNoticeRedirect(res, deps, sessionToken, 'invalid', CONTENT_CALENDAR_ROUTE);
+    }
+    const content = campaignFormText(oneFormValue(form, 'content'), 12_000);
+    const commandKey = campaignCommandKey(form);
+    const timeForm = new URLSearchParams();
+    timeForm.set('desired_for_local', oneFormValue(form, 'scheduled_for_local') ?? '');
+    timeForm.set('timezone', oneFormValue(form, 'timezone') ?? '');
+    const scheduledFor = campaignDesiredInstant(
+      timeForm,
+      oneFormValue(form, 'timezone') ?? '',
+    );
+    if (!content || !commandKey || !scheduledFor) {
+      return campaignNoticeRedirect(res, deps, sessionToken, 'invalid', CONTENT_CALENDAR_ROUTE);
+    }
+    try {
+      const outcome = await deps.zernioCalendar.scheduleDirect(
+        crmIdentity(sessionToken, deps),
+        { network: 'linkedin', content, scheduledFor, commandKey },
+      );
+      if (!outcome.ok) {
+        const code: CampaignWizardNoticeCode = outcome.kind === 'forbidden'
+          || outcome.kind === 'unauthenticated' ? 'forbidden'
+          : outcome.kind === 'validation' ? 'invalid'
+            : outcome.kind === 'conflict' ? 'conflict' : 'unavailable';
+        return campaignNoticeRedirect(res, deps, sessionToken, code, CONTENT_CALENDAR_ROUTE);
+      }
+      return campaignNoticeRedirect(
+        res, deps, sessionToken,
+        outcome.disposition === 'replayed' ? 'replayed' : 'scheduled_live',
+        CONTENT_CALENDAR_ROUTE,
+      );
+    } catch {
+      return campaignNoticeRedirect(res, deps, sessionToken, 'unavailable', CONTENT_CALENDAR_ROUTE);
+    }
+  }
+
   if (deps.kind === 'postgres' && p === CONTENT_CALENDAR_CREATE_TEST_ROUTE && method === 'POST') {
     if (!deps.publicSocial?.plan) {
       return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
@@ -4580,6 +4631,21 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         view,
         url.searchParams,
       );
+      const directSchedules = deps.zernioCalendar?.listDirect
+        && deps.zernioCalendar.configuredNetworks.includes('linkedin')
+        ? await deps.zernioCalendar.listDirect(identity, { from: range.from, to: range.to })
+        : null;
+      const liveScheduler = directSchedules?.ok ? Object.freeze({
+        actionUrl: CONTENT_CALENDAR_LIVE_SCHEDULE_ROUTE,
+        csrfToken,
+        commandKey: randomUUID(),
+        items: directSchedules.items.map((item) => Object.freeze({
+          scheduleId: item.scheduleId,
+          content: item.content,
+          scheduledFor: item.scheduledFor,
+          state: item.state,
+        })),
+      }) : undefined;
       return sendHtml(res, 200, operationalPage(
         social.workspace.workspaceName,
         renderContentCalendarBody(view, {
@@ -4594,6 +4660,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           ),
           brainLabel: contentNavigation?.brainLabel,
           mutations,
+          liveScheduler,
         }),
         deps,
         'content',

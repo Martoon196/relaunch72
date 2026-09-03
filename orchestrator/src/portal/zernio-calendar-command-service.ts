@@ -48,6 +48,39 @@ export type PortalZernioCalendarCommandResult =
   | PortalZernioCalendarCommandOutcome
   | PortalZernioCalendarCommandFailure;
 
+export interface PortalZernioDirectScheduleInput {
+  readonly network: 'linkedin';
+  readonly content: string;
+  readonly scheduledFor: string;
+  readonly commandKey: string;
+}
+
+export interface PortalZernioDirectScheduleItem {
+  readonly scheduleId: string;
+  readonly network: 'linkedin';
+  readonly content: string;
+  readonly scheduledFor: string;
+  readonly state: 'reserved' | 'scheduled' | 'failed' | 'outcome_unknown' | 'cancelled';
+  readonly providerPostId: string | null;
+  readonly safeCode: string | null;
+}
+
+export interface PortalZernioDirectScheduleOutcome {
+  readonly ok: true;
+  readonly scheduleId: string;
+  readonly providerPostId: string;
+  readonly scheduledFor: string;
+  readonly disposition: 'applied' | 'replayed';
+}
+
+export type PortalZernioDirectScheduleResult =
+  | PortalZernioDirectScheduleOutcome
+  | PortalZernioCalendarCommandFailure;
+
+export type PortalZernioDirectScheduleListResult =
+  | Readonly<{ ok: true; items: readonly PortalZernioDirectScheduleItem[] }>
+  | PortalZernioCalendarCommandFailure;
+
 export interface PortalZernioCalendarCommandService {
   /** Networks with one exact deployment-configured Zernio account binding. */
   readonly configuredNetworks: readonly PortalZernioCalendarNetwork[];
@@ -55,4 +88,12 @@ export interface PortalZernioCalendarCommandService {
     identity: PortalCrmRequestIdentity,
     input: PortalZernioCalendarCommandInput,
   ): Promise<PortalZernioCalendarCommandResult>;
+  scheduleDirect?(
+    identity: PortalCrmRequestIdentity,
+    input: PortalZernioDirectScheduleInput,
+  ): Promise<PortalZernioDirectScheduleResult>;
+  listDirect?(
+    identity: PortalCrmRequestIdentity,
+    input: Readonly<{ from: string; to: string }>,
+  ): Promise<PortalZernioDirectScheduleListResult>;
 }

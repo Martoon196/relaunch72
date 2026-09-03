@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import { liveChannelsNoticeToken } from '../src/portal/live-channels-actions.js';
+import { campaignWizardNoticeToken } from '../src/portal/campaign-wizard-actions.js';
+import { CONTENT_CALENDAR_ROUTE } from '../src/portal/content-calendar-presenter.js';
 import { createPropertyPredatorLiveChannelsFixture } from '../src/portal/live-channels-fixtures.js';
 import {
   LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE,
@@ -60,12 +62,12 @@ function postgres(zernioCalendar: PortalZernioCalendarCommandService): PostgresP
   };
 }
 
-function request(body: string) {
+function request(body: string, url: string = LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE) {
   const req = new EventEmitter() as EventEmitter & {
     method: string; url: string; headers: Record<string, string>;
   };
   req.method = 'POST';
-  req.url = LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE;
+  req.url = url;
   req.headers = {
     cookie: COOKIE,
     'content-type': 'application/x-www-form-urlencoded',
@@ -174,4 +176,37 @@ test('live-channel panel exposes calendar evidence but no provider identity fiel
   assert.doesNotMatch(html, /name="(?:profile_id|owned_account|provider_profile_id|profile_credential)"/u);
   assert.doesNotMatch(html, /Ayrshare Profile Key/u);
   assert.doesNotMatch(html, /zernio/i);
+});
+
+test('the friendly calendar form schedules the exact LinkedIn account and redirects safely', async () => {
+  const calls: unknown[] = [];
+  const service: PortalZernioCalendarCommandService = {
+    configuredNetworks: ['linkedin'],
+    stage: async () => ({ ok: false, kind: 'unavailable' }),
+    scheduleDirect: async (identity, input) => {
+      calls.push({ identity, input });
+      return {
+        ok: true, scheduleId: 'fc900000-0000-4000-8000-000000000141',
+        providerPostId: 'zernio-post-1', scheduledFor: input.scheduledFor,
+        disposition: 'applied',
+      };
+    },
+  };
+  const body = encodeForm({
+    _csrf: portalCsrfToken(SECRET, SESSION), command_key: COMMAND_KEY,
+    network: 'linkedin', timezone: 'Europe/London',
+    content: 'A useful Property Predator post.',
+    scheduled_for_local: '2026-09-04T12:00', confirm_schedule: 'confirmed',
+  });
+  const res = response();
+  await handlePortal(request(body, '/portal/content/calendar/live-schedules') as never,
+    res as never, postgres(service));
+  assert.equal(res.statusCode, 303);
+  assert.equal(res.headers.location,
+    `${CONTENT_CALENDAR_ROUTE}?notice=${encodeURIComponent(campaignWizardNoticeToken(SECRET, SESSION, 'scheduled_live'))}`);
+  assert.equal(calls.length, 1);
+  assert.deepEqual((calls[0] as { input: unknown }).input, {
+    network: 'linkedin', content: 'A useful Property Predator post.',
+    scheduledFor: '2026-09-04T11:00:00.000Z', commandKey: COMMAND_KEY,
+  });
 });

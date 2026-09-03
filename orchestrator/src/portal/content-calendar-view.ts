@@ -96,6 +96,17 @@ export interface ContentCalendarMutationView {
   readonly outcome?: ContentCalendarOperationOutcomeView;
 }
 
+export interface ContentCalendarLiveScheduleView {
+  readonly scheduleId: string;
+  readonly content: string;
+  readonly scheduledFor: string;
+  readonly state: 'reserved' | 'scheduled' | 'failed' | 'outcome_unknown' | 'cancelled';
+}
+
+export interface ContentCalendarLiveSchedulerView extends ContentCalendarCommandActionView {
+  readonly items: readonly ContentCalendarLiveScheduleView[];
+}
+
 const CONTENT_CALENDAR_STYLE = `
   .ccal{--cal-bg:#07090b;--cal-panel:#0d1114;--cal-raised:#12181c;--cal-soft:#090c0e;--cal-line:#263238;--cal-line2:#39474e;--cal-ink:#f2f6f5;--cal-muted:#a6b2b5;--cal-faint:#75868b;--cal-teal:#00e5cc;--cal-teal-soft:#062b26;--cal-amber:#f4ba4c;--cal-red:#ff736b;--cal-blue:#77a8ff;min-width:0;overflow:hidden;border:1px solid #020304;background:var(--cal-bg);color:var(--cal-ink);font-family:var(--sans,ui-sans-serif,system-ui,sans-serif)}
   .ccal *{box-sizing:border-box}.ccal h1,.ccal h2,.ccal h3,.ccal p{margin-top:0}.ccal a{text-decoration:none}.ccal button{font:inherit}.ccal code{font-family:var(--mono,ui-monospace,monospace);overflow-wrap:anywhere}.ccal-visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
@@ -120,6 +131,8 @@ const CONTENT_CALENDAR_STYLE = `
   @media(max-width:520px){.ccal-hero h1{font-size:2.45rem}.ccal-toolbar{grid-template-columns:1fr}.ccal-mode,.ccal-draft-action,.ccal-create,.ccal-create>summary{width:100%;justify-self:stretch}.ccal-mode a{flex:1}.ccal-draft-action,.ccal-create{grid-row:3}.ccal-create-panel{position:fixed;inset:auto 8px 8px;width:auto;max-height:calc(100vh - 16px);overflow-y:auto}.ccal-metrics{grid-template-columns:1fr}.ccal-metric,.ccal-metric:nth-child(2){border-right:0}.ccal-metric:nth-child(n+2){border-top:1px solid var(--cal-line)}.ccal-section-head{flex-direction:column}.ccal-weekdays,.ccal-grid{grid-template-columns:repeat(7,minmax(145px,1fr));min-width:1015px}.ccal-local-truth{align-items:flex-start;flex-direction:column}.ccal-local-truth span:last-child{white-space:normal}.ccal-sheet-grid,.ccal-sheet-actions,.ccal-command-grid{grid-template-columns:1fr}.ccal-move-sheet{padding:8px}.ccal-footer{gap:7px}}
   @media(forced-colors:active){.ccal,.ccal-slot,.ccal-calendar,.ccal-backlog,.ccal-test-card,.ccal-chip,.ccal-channel-code,.ccal-move-sheet-panel{forced-color-adjust:auto}.ccal-slot{border-left-width:5px}.ccal-draft-action,.ccal-sim-action,.ccal-move-handle,.ccal-move-sheet-button{border:2px solid GrayText}.ccal-day[data-preview-drop-target="true"]{outline:4px solid Highlight}}
   @media(prefers-reduced-motion:reduce){.ccal *{scroll-behavior:auto!important;transition:none!important}}
+  .ccal-live-scheduler{margin:12px;border:1px solid #337a72;background:linear-gradient(135deg,#0d1819,#091011);padding:18px}.ccal-live-scheduler-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,.7fr);gap:18px}.ccal-live-scheduler h2{margin:0;font-size:20px}.ccal-live-scheduler header p{margin:6px 0 15px;color:var(--cal-muted);font-size:12px;line-height:1.5}.ccal-live-scheduler textarea{min-height:110px}.ccal-live-list{list-style:none;margin:0;padding:0;border:1px solid var(--cal-line)}.ccal-live-list li{padding:10px;border-bottom:1px solid var(--cal-line)}.ccal-live-list li:last-child{border-bottom:0}.ccal-live-list strong{display:block;font-size:12px}.ccal-live-list p{margin:5px 0;color:var(--cal-muted);font-size:11px;line-height:1.4}.ccal-live-list time{color:var(--cal-teal);font:800 10px var(--mono,monospace)}
+  @media(max-width:800px){.ccal-live-scheduler-grid{grid-template-columns:1fr}}
 `;
 
 function safeCount(value: number): string {
@@ -347,6 +360,20 @@ export interface RenderContentCalendarOptions {
   readonly brandBrainAvailable?: boolean;
   readonly brainLabel?: string;
   readonly mutations?: ContentCalendarMutationView;
+  readonly liveScheduler?: ContentCalendarLiveSchedulerView;
+}
+
+function liveScheduler(
+  action: ContentCalendarLiveSchedulerView | undefined,
+  timezone: string,
+): string {
+  if (!commandReady(action)) return '';
+  const items = action.items.slice(0, 20).map((item) => {
+    const summary = safeOperationText(item.content, 'Scheduled LinkedIn post', 3000);
+    const short = summary.length > 180 ? `${summary.slice(0, 177)}…` : summary;
+    return `<li><strong>${item.state === 'scheduled' ? 'Scheduled' : escapeHtml(item.state.replace('_', ' '))}</strong><p>${escapeHtml(short)}</p>${isoTime(item.scheduledFor)}</li>`;
+  }).join('');
+  return `<section class="ccal-live-scheduler" aria-labelledby="ccal-live-title"><div class="ccal-live-scheduler-grid"><div><header><h2 id="ccal-live-title">Schedule a LinkedIn post</h2><p>Write it, choose the date and time, and Growth HQ will add it to your Property Predator company schedule.</p></header><form class="ccal-command-form" method="post" action="${escapeHtml(action.actionUrl)}">${actionFields(action)}${hidden('network', 'linkedin')}${hidden('timezone', timezone)}<label class="ccal-command-field">What do you want to say?<textarea name="content" maxlength="3000" required placeholder="Write your Property Predator post…"></textarea></label><label class="ccal-command-field">When should it go out?<input type="datetime-local" name="scheduled_for_local" step="300" required></label><label class="ccal-command-confirm"><input type="checkbox" name="confirm_schedule" value="confirmed" required><span>Yes, add this post to the live LinkedIn schedule.</span></label><button class="ccal-command-submit" type="submit">Schedule post</button><p class="ccal-command-status" role="status">Nothing will publish before the time you choose.</p></form></div><div><header><h2>Coming up</h2><p>Your latest live LinkedIn schedules.</p></header>${items ? `<ol class="ccal-live-list">${items}</ol>` : '<p class="ccal-empty-backlog">Nothing scheduled yet. Your first post will appear here.</p>'}</div></div></section>`;
 }
 
 export function renderContentCalendarBody(
@@ -373,14 +400,15 @@ export function renderContentCalendarBody(
   const lastDate = view.days[view.days.length - 1]?.date ?? view.filters.date;
   const durableControls = Boolean(options.mutations?.create
     || (options.mutations?.slots && Object.keys(options.mutations.slots).length > 0));
+  const live = commandReady(options.liveScheduler);
   return `${renderContentWorkspaceNavigation('calendar', {
     companyAssetsAvailable: options.companyAssetsAvailable,
     assetsLabel: options.assetsLabel,
     brandBrainAvailable: options.brandBrainAvailable ?? false,
     brainLabel: options.brainLabel,
-  })}<style data-property-predator-content-calendar>${CONTENT_CALENDAR_STYLE}</style><article class="ccal" aria-labelledby="ccal-title" data-provider-effects="none" data-content-calendar data-calendar-mode="${escapeHtml(view.filters.mode)}" data-calendar-timezone="${escapeHtml(view.timezone)}" data-source-truncated="${view.sourceTruncated ? 'true' : 'false'}" data-preview-dirty="false">
-    <header class="ccal-hero"><div><div class="ccal-kicker">Growth HQ · Campaign command</div><h1 id="ccal-title">Own the week. <em>Control the signal.</em></h1><p>Turn approved Property Predator assets into a calm, channel-aware campaign rhythm. Every placement remains tied to one exact immutable version, with the approval and source proof visible before any future outbound rail can exist.</p></div><aside class="ccal-test-card" aria-label="Planner safety mode"><strong>TEST planner · zero delivery</strong><span>${escapeHtml(view.workspaceName)}</span><small>${escapeHtml(view.timezone)} planning label · snapshot ${isoTime(view.asOf)}. No social, email or webinar provider is connected by this view.</small></aside></header>
-    <section class="ccal-safety" aria-label="Planner truth boundary"><span class="ccal-safety-mark">Truth boundary</span><p><strong>A durable TEST plan is not a provider schedule.</strong> “Simulation ready” means only that exact version, approval and source provenance agree. Desired times advance solely through audited just-in-time revalidation; provider effects remain none.</p><span class="ccal-safety-badge">No provider calls</span></section>
+  })}<style data-property-predator-content-calendar>${CONTENT_CALENDAR_STYLE}</style><article class="ccal" aria-labelledby="ccal-title" data-provider-effects="${live ? 'explicit-form-only' : 'none'}" data-content-calendar data-calendar-mode="${escapeHtml(view.filters.mode)}" data-calendar-timezone="${escapeHtml(view.timezone)}" data-source-truncated="${view.sourceTruncated ? 'true' : 'false'}" data-preview-dirty="false">
+    <header class="ccal-hero"><div><div class="ccal-kicker">Growth HQ · Campaign calendar</div><h1 id="ccal-title">Own the week. <em>Control the signal.</em></h1><p>${live ? 'Create and schedule Property Predator company posts from one clear calendar.' : 'Turn approved Property Predator assets into a calm, channel-aware campaign rhythm.'}</p></div><aside class="ccal-test-card" aria-label="Calendar connection"><strong>${live ? 'LinkedIn connected' : 'Planning workspace'}</strong><span>${escapeHtml(view.workspaceName)}</span><small>${escapeHtml(view.timezone)} · snapshot ${isoTime(view.asOf)}.${live ? ' Scheduling is live only when you press Schedule post.' : ''}</small></aside></header>
+    ${live ? liveScheduler(options.liveScheduler, view.timezone) : '<section class="ccal-safety" aria-label="Planner truth boundary"><span class="ccal-safety-mark">Planning only</span><p>The live scheduling connection is not available yet.</p><span class="ccal-safety-badge">No provider calls</span></section>'}
     ${operationOutcome(options.mutations?.outcome)}
     <div class="ccal-toolbar">${modeNav(view)}<div class="ccal-period"><a href="${plannerHref(view, { date: view.previousDate })}" aria-label="Previous ${escapeHtml(view.filters.mode)}">‹</a><div class="ccal-period-title"><strong>${escapeHtml(view.periodLabel)}</strong><span>${escapeHtml(view.timezone)} · durable TEST truth</span></div><a href="${plannerHref(view, { date: view.nextDate })}" aria-label="Next ${escapeHtml(view.filters.mode)}">›</a></div>${createCalendarControl(options.mutations?.create, view.timezone)}</div>
     ${channelNav(view)}

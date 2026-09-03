@@ -42,6 +42,7 @@ export interface CampaignWizardOperationOutcome {
 
 export type CampaignWizardNoticeCode =
   | 'planned'
+  | 'scheduled_live'
   | 'replayed'
   | 'cancelled'
   | 'rescheduled'
@@ -52,7 +53,7 @@ export type CampaignWizardNoticeCode =
   | 'unavailable';
 
 const NOTICE_CODES = new Set<CampaignWizardNoticeCode>([
-  'planned', 'replayed', 'cancelled', 'rescheduled', 'forbidden',
+  'planned', 'scheduled_live', 'replayed', 'cancelled', 'rescheduled', 'forbidden',
   'conflict', 'invalid', 'missing', 'unavailable',
 ]);
 const NOTICE_CONTEXT = 'relaunch72:campaign-wizard-notice:v1\0';
@@ -76,6 +77,11 @@ export function campaignWizardNoticeToken(
 }
 
 function noticeFor(code: CampaignWizardNoticeCode): CampaignWizardOperationOutcome {
+  if (code === 'scheduled_live') return Object.freeze({
+    kind: 'success', title: 'Post scheduled',
+    detail: 'Zernio accepted the LinkedIn company post and it now appears in your live schedule.',
+    disposition: 'applied',
+  });
   if (code === 'planned') return Object.freeze({
     kind: 'success', title: 'Durable TEST campaign planned',
     detail: 'The exact copy, approved media, targets and desired time were recorded. No provider was called.',

@@ -38,6 +38,8 @@ class FakeClient {
     daily_publish_cap: 1,
     monthly_publish_cap: 3,
   }];
+  directReserveRows: unknown[] = [];
+  directListRows: unknown[] = [];
 
   async query(sql: string, values: readonly unknown[] = []): Promise<{ rows: unknown[] }> {
     this.calls.push({ sql, values });
@@ -46,6 +48,9 @@ class FakeClient {
       if (this.functionError) throw this.functionError;
       return { rows: this.functionRows };
     }
+    if (sql.includes('reserve_zernio_direct_schedule')) return { rows: this.directReserveRows };
+    if (sql.includes('settle_zernio_direct_schedule')) return { rows: [{ disposition: 'applied' }] };
+    if (sql.includes('list_zernio_direct_schedules')) return { rows: this.directListRows };
     return { rows: [] };
   }
 
@@ -135,6 +140,65 @@ test('the service hashes configured provider references and runs one serializabl
   assert.equal(renderedCalls.includes(PROVIDER_PROFILE_ID), false);
   assert.equal(renderedCalls.includes(INSTAGRAM_ACCOUNT_ID), false);
   assert.equal(renderedCalls.includes(LINKEDIN_ACCOUNT_ID), false);
+});
+
+test('direct scheduling reserves, calls the exact LinkedIn account once and settles its receipt', async () => {
+  const client = new FakeClient();
+  const scheduledFor = new Date(Date.now() + 60 * 60_000).toISOString();
+  client.directReserveRows = [{
+    schedule_id: JOB_ID, current_state: 'reserved', provider_external_id: null,
+    scheduled_for: scheduledFor, created_now: true,
+  }];
+  const providerCalls: unknown[] = [];
+  const service = new PgPortalZernioCalendarCommandService(dependencies(client, {
+    postingClient: {
+      async schedule(value) {
+        providerCalls.push(value);
+        return {
+          providerPostId: 'zernio-post-1', status: 'scheduled', idempotentReplay: false,
+          responseSha256: 'b'.repeat(64),
+          platforms: [{ network: 'linkedin', accountId: LINKEDIN_ACCOUNT_ID,
+            status: 'pending', platformPostUrl: null }],
+        };
+      },
+    },
+  }));
+  const result = await service.scheduleDirect(identity, {
+    network: 'linkedin', content: 'A useful Property Predator post.',
+    scheduledFor, commandKey: 'calendar-command-key-1',
+  });
+  assert.deepEqual(result, {
+    ok: true, scheduleId: JOB_ID, providerPostId: 'zernio-post-1',
+    scheduledFor, disposition: 'applied',
+  });
+  assert.deepEqual(providerCalls, [{
+    requestId: JOB_ID, content: 'A useful Property Predator post.',
+    targets: [{ network: 'linkedin', accountId: LINKEDIN_ACCOUNT_ID }],
+    scheduledFor,
+  }]);
+  assert.equal(client.calls.filter((call) => call.sql.includes('settle_zernio_direct_schedule')).length, 1);
+});
+
+test('direct schedule replay returns the original provider post without another provider call', async () => {
+  const client = new FakeClient();
+  const scheduledFor = new Date(Date.now() + 60 * 60_000).toISOString();
+  client.directReserveRows = [{
+    schedule_id: JOB_ID, current_state: 'scheduled', provider_external_id: 'zernio-post-1',
+    scheduled_for: scheduledFor, created_now: false,
+  }];
+  let providerCalls = 0;
+  const service = new PgPortalZernioCalendarCommandService(dependencies(client, {
+    postingClient: { async schedule(): Promise<never> { providerCalls += 1; throw new Error(); } },
+  }));
+  const result = await service.scheduleDirect(identity, {
+    network: 'linkedin', content: 'A useful Property Predator post.',
+    scheduledFor, commandKey: 'calendar-command-key-1',
+  });
+  assert.deepEqual(result, {
+    ok: true, scheduleId: JOB_ID, providerPostId: 'zernio-post-1',
+    scheduledFor, disposition: 'replayed',
+  });
+  assert.equal(providerCalls, 0);
 });
 
 test('the request cannot choose provider profile or account identifiers', async () => {

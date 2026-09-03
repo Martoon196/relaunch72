@@ -98,6 +98,13 @@ export interface ZernioPostingPublishResult extends ZernioPostingSnapshot {
 
 export interface ZernioPostingClient {
   readonly contract: typeof ZERNIO_POSTING_CONTRACT;
+  schedule(input: Readonly<{
+    requestId: string;
+    content: string;
+    targets: readonly ZernioPostingTarget[];
+    scheduledFor: string;
+    mediaItems?: readonly ZernioPostingMediaItem[];
+  }>): Promise<ZernioPostingPublishResult>;
   publishDue(input: Readonly<{
     requestId: string;
     content: string;
@@ -386,47 +393,99 @@ export function createZernioPostingClient(
     return targets;
   }
 
+  function exactPostInput(
+    input: Readonly<{
+      requestId: string;
+      content: string;
+      targets: readonly ZernioPostingTarget[];
+      mediaItems?: readonly ZernioPostingMediaItem[];
+    }>,
+    allowedKeys: readonly string[],
+  ): Readonly<{
+    requestId: string;
+    content: string;
+    targets: readonly ZernioPostingTarget[];
+    mediaItems: readonly ZernioPostingMediaItem[];
+  }> {
+    if (!isRecord(input)
+        || !exactKeys(input, allowedKeys)
+        || typeof input.requestId !== 'string'
+        || !SAFE_REQUEST_ID.test(input.requestId)
+        || typeof input.content !== 'string'
+        || input.content.trim() !== input.content
+        || Buffer.byteLength(input.content, 'utf8') < 1
+        || Buffer.byteLength(input.content, 'utf8') > MAX_CONTENT_BYTES) {
+      fail('invalid_request');
+    }
+    return Object.freeze({
+      requestId: input.requestId,
+      content: input.content,
+      targets: exactAllowedTargets(input.targets),
+      mediaItems: parseMediaItems(input.mediaItems),
+    });
+  }
+
+  async function createPost(input: Readonly<{
+    requestId: string;
+    content: string;
+    targets: readonly ZernioPostingTarget[];
+    mediaItems: readonly ZernioPostingMediaItem[];
+    scheduledFor?: string;
+  }>): Promise<ZernioPostingPublishResult> {
+    const requestBody = JSON.stringify({
+      content: input.content,
+      platforms: input.targets.map((target) => ({
+        platform: target.network,
+        accountId: target.accountId,
+      })),
+      ...(input.mediaItems.length === 0 ? {} : { mediaItems: input.mediaItems }),
+      ...(input.scheduledFor ? { scheduledFor: input.scheduledFor, timezone: 'UTC' } : {
+        publishNow: true,
+      }),
+    });
+    if (Buffer.byteLength(requestBody, 'utf8') > MAX_REQUEST_BYTES) {
+      fail('invalid_request');
+    }
+    const result = await request(CREATE_POST_PATH, {
+      method: 'POST',
+      headers: Object.freeze({
+        'content-type': 'application/json',
+        'x-request-id': input.requestId,
+      }),
+      body: requestBody,
+    }, true);
+    const idempotentReplay = result.response.status === 200;
+    if (result.response.status !== 201 && !idempotentReplay) fail('invalid_provider_response');
+    const post = idempotentReplay ? result.body.existingPost : result.body.post;
+    const parsed = parsePost(post, input.targets, responseSha256(result.bytes));
+    return Object.freeze({ ...parsed, idempotentReplay });
+  }
+
   return Object.freeze({
     contract: ZERNIO_POSTING_CONTRACT,
 
+    async schedule(input: Parameters<ZernioPostingClient['schedule']>[0]) {
+      const parsed = exactPostInput(
+        input,
+        ['requestId', 'content', 'targets', 'scheduledFor', 'mediaItems'],
+      );
+      if (typeof input.scheduledFor !== 'string') fail('invalid_request');
+      const scheduled = new Date(input.scheduledFor);
+      if (!Number.isFinite(scheduled.getTime())
+          || scheduled.toISOString() !== input.scheduledFor
+          || scheduled.getTime() < Date.now() + 4 * 60_000
+          || scheduled.getTime() > Date.now() + 366 * 24 * 60 * 60_000) {
+        fail('invalid_request');
+      }
+      return createPost({ ...parsed, scheduledFor: input.scheduledFor });
+    },
+
     async publishDue(input: Parameters<ZernioPostingClient['publishDue']>[0]) {
-      if (!isRecord(input)
-          || !exactKeys(input, ['requestId', 'content', 'targets', 'mediaItems'])
-          || typeof input.requestId !== 'string'
-          || !SAFE_REQUEST_ID.test(input.requestId)
-          || typeof input.content !== 'string'
-          || input.content.trim() !== input.content
-          || Buffer.byteLength(input.content, 'utf8') < 1
-          || Buffer.byteLength(input.content, 'utf8') > MAX_CONTENT_BYTES) {
-        fail('invalid_request');
-      }
-      const targets = exactAllowedTargets(input.targets);
-      const mediaItems = parseMediaItems(input.mediaItems);
-      const requestBody = JSON.stringify({
-        content: input.content,
-        platforms: targets.map((target) => ({
-          platform: target.network,
-          accountId: target.accountId,
-        })),
-        ...(mediaItems.length === 0 ? {} : { mediaItems }),
-        publishNow: true,
-      });
-      if (Buffer.byteLength(requestBody, 'utf8') > MAX_REQUEST_BYTES) {
-        fail('invalid_request');
-      }
-      const result = await request(CREATE_POST_PATH, {
-        method: 'POST',
-        headers: Object.freeze({
-          'content-type': 'application/json',
-          'x-request-id': input.requestId,
-        }),
-        body: requestBody,
-      }, true);
-      const idempotentReplay = result.response.status === 200;
-      if (result.response.status !== 201 && !idempotentReplay) fail('invalid_provider_response');
-      const post = idempotentReplay ? result.body.existingPost : result.body.post;
-      const parsed = parsePost(post, targets, responseSha256(result.bytes));
-      return Object.freeze({ ...parsed, idempotentReplay });
+      const parsed = exactPostInput(
+        input,
+        ['requestId', 'content', 'targets', 'mediaItems'],
+      );
+      return createPost(parsed);
     },
 
     async reconcile(input: Parameters<ZernioPostingClient['reconcile']>[0]) {
