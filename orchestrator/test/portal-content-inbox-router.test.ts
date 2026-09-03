@@ -388,7 +388,7 @@ test('Conversion Inbox passes bounded filters, loads only the selected visible t
   assert.deepEqual(threadCalls, [selectedId]);
 });
 
-test('Conversion Inbox routes signed LinkedIn projections read-only and generates no action controls', async () => {
+test('Conversion Inbox routes signed LinkedIn social projections read-only and generates no action controls', async () => {
   const summary = fixture.page.conversations[0]!;
   const baseThread = fixture.threads[0]!;
   const inbound = baseThread.messages.find((message) => message.direction === 'inbound')!;
@@ -439,9 +439,10 @@ test('Conversion Inbox routes signed LinkedIn projections read-only and generate
   assert.deepEqual(queries, [{
     limit: 50, channel: 'linkedin', state: null, search: null,
   }]);
-  assert.match(result.body, /LinkedIn · LIVE ZERNIO READ-ONLY/);
+  assert.match(result.body, /LinkedIn · LIVE SOCIAL READ-ONLY/);
   assert.match(result.body, /Evidence visible · actions unavailable/);
-  assert.match(result.body, /Signed Zernio inbound · LI/);
+  assert.match(result.body, /Signed social inbound · LI/);
+  assert.doesNotMatch(result.body, /zernio/i);
   assert.doesNotMatch(result.body, /Open Action Centre|Create TEST draft|Queue TEST operation/);
   assert.doesNotMatch(result.body, /\/assignment|\/internal-notes|\/admin-calls|\/test-queue/);
   assert.doesNotMatch(result.body, /cccccccc-cccc-4ccc-8ccc-cccccccccccc/);
