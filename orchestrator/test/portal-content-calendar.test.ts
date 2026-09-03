@@ -245,19 +245,29 @@ test('live scheduler offers exact minutes, smart choices and optional media with
   assert.match(html, /Build your next LinkedIn post/u);
   assert.match(html, /data-calendar-live-date[^>]+required/u);
   assert.match(html, /data-calendar-live-time required/u);
-  assert.match(html, /type="time" step="60"/u);
+  assert.match(html, /type="text" inputmode="numeric" pattern="\(\?:\[01\]\\d\|2\[0-3\]\):\[0-5\]\\d"/u);
+  assert.match(html, /data-calendar-date-trigger aria-expanded="false"/u);
+  assert.match(html, /data-calendar-date-grid role="grid"/u);
+  assert.match(html, /data-calendar-time-step="-1" aria-label="One minute earlier"/u);
+  assert.match(html, /data-calendar-time-step="1" aria-label="One minute later"/u);
   assert.match(html, /Morning · 08:17/u);
   assert.match(html, /Lunch · 12:23/u);
   assert.match(html, /After work · 17:35/u);
   assert.match(html, /data-calendar-live-date-label>Choose a date</u);
   assert.match(html, /aria-label="Choose publication date"/u);
   assert.match(html, /type="file" accept="image\/jpeg,[^"]+video\/webm"/u);
+  assert.match(html, /Drop your image or video here/u);
+  assert.match(html, /Drag &amp; drop, or choose a file/u);
   assert.match(html, /data-media-upload-url="\/portal\/content\/calendar\/media-uploads"/u);
   assert.match(html, /Schedule LinkedIn post/u);
   assert.doesNotMatch(html, /confirm_schedule|Yes, add this post/u);
   assert.doesNotMatch(html, /Zernio/u);
   assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /data-calendar-live-form/u);
   assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /method: 'PUT', body: file/u);
+  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /addEventListener\('drop'/u);
+  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /data-drag-active/u);
+  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /setClockMinutes/u);
+  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /renderDatePicker/u);
 });
 
 test('Content Calendar renders injected native create, reschedule and cancel TEST commands without a provider rail', () => {

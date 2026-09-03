@@ -489,8 +489,17 @@ export const CONTENT_CALENDAR_CLIENT_SOURCE = String.raw`(() => {
     if (liveForm) {
       const dateField = liveForm.querySelector('[data-calendar-live-date]');
       const dateLabel = liveForm.querySelector('[data-calendar-live-date-label]');
+      const dateTrigger = liveForm.querySelector('[data-calendar-date-trigger]');
+      const datePopover = liveForm.querySelector('[data-calendar-date-popover]');
+      const dateGrid = liveForm.querySelector('[data-calendar-date-grid]');
+      const dateMonth = liveForm.querySelector('[data-calendar-date-month]');
+      const datePrevious = liveForm.querySelector('[data-calendar-date-previous]');
+      const dateNext = liveForm.querySelector('[data-calendar-date-next]');
+      const dateToday = liveForm.querySelector('[data-calendar-date-today]');
       const timeField = liveForm.querySelector('[data-calendar-live-time]');
       const scheduledField = liveForm.querySelector('[name="scheduled_for_local"]');
+      const mediaDrop = liveForm.querySelector('[data-calendar-media-drop]');
+      const mediaChoose = liveForm.querySelector('[data-calendar-media-choose]');
       const mediaInput = liveForm.querySelector('[data-calendar-media-input]');
       const mediaType = liveForm.querySelector('[name="media_type"]');
       const mediaUrl = liveForm.querySelector('[name="media_url"]');
@@ -515,6 +524,21 @@ export const CONTENT_CALENDAR_CLIENT_SOURCE = String.raw`(() => {
         if (choice.getTime() < Date.now() + 5 * 60 * 1000) choice.setDate(choice.getDate() + 1);
         return choice;
       };
+      const clockMinutes = (clock) => {
+        const match = /^(\d{2}):(\d{2})$/.exec(String(clock || '').trim());
+        if (!match) return null;
+        const hour = Number(match[1]);
+        const minute = Number(match[2]);
+        return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59
+          ? (hour * 60) + minute : null;
+      };
+      const setClockMinutes = (minutes) => {
+        if (!timeField) return;
+        const bounded = ((minutes % 1440) + 1440) % 1440;
+        timeField.value = String(Math.floor(bounded / 60)).padStart(2, '0') + ':'
+          + String(bounded % 60).padStart(2, '0');
+        syncSchedule();
+      };
       const syncSchedule = () => {
         if (dateLabel && dateField && dateField.value) {
           const parts = dateField.value.split('-').map(Number);
@@ -523,8 +547,9 @@ export const CONTENT_CALENDAR_CLIENT_SOURCE = String.raw`(() => {
             weekday: 'long', day: 'numeric', month: 'long'
           }).format(localChoice);
         }
-        if (scheduledField) scheduledField.value = dateField && timeField && dateField.value && timeField.value
-          ? dateField.value + 'T' + timeField.value
+        const validClock = timeField ? clockMinutes(timeField.value) !== null : false;
+        if (scheduledField) scheduledField.value = dateField && timeField && dateField.value && validClock
+          ? dateField.value + 'T' + timeField.value.trim()
           : '';
       };
       const setLiveStatus = (message) => {
@@ -543,6 +568,53 @@ export const CONTENT_CALENDAR_CLIENT_SOURCE = String.raw`(() => {
         setLiveStatus('Media removed. The post will be text only.');
       };
       const firstChoice = nextSuggested('17:35');
+      let dateCursor = new Date(firstChoice.getFullYear(), firstChoice.getMonth(), 1);
+      const closeDatePicker = (restoreFocus) => {
+        if (!datePopover || datePopover.hidden) return;
+        datePopover.hidden = true;
+        if (dateTrigger) {
+          dateTrigger.setAttribute('aria-expanded', 'false');
+          if (restoreFocus) dateTrigger.focus();
+        }
+      };
+      const renderDatePicker = () => {
+        if (!dateGrid || !dateMonth || !dateField) return;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const first = new Date(dateCursor.getFullYear(), dateCursor.getMonth(), 1);
+        const offset = (first.getDay() + 6) % 7;
+        const start = new Date(first.getFullYear(), first.getMonth(), 1 - offset);
+        dateMonth.textContent = new Intl.DateTimeFormat('en-GB', {
+          month: 'long', year: 'numeric'
+        }).format(first);
+        dateGrid.replaceChildren();
+        for (let index = 0; index < 42; index += 1) {
+          const day = new Date(start.getFullYear(), start.getMonth(), start.getDate() + index);
+          const value = localDate(day);
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'ccal-date-day';
+          button.textContent = String(day.getDate());
+          button.dataset.otherMonth = String(day.getMonth() !== first.getMonth());
+          button.setAttribute('aria-label', new Intl.DateTimeFormat('en-GB', {
+            weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+          }).format(day));
+          button.setAttribute('aria-pressed', String(value === dateField.value));
+          button.disabled = day.getTime() < today.getTime();
+          button.addEventListener('click', () => {
+            dateField.value = value;
+            dateCursor = new Date(day.getFullYear(), day.getMonth(), 1);
+            syncSchedule();
+            closeDatePicker(true);
+            setLiveStatus('Publication date selected. Choose any exact minute.');
+          });
+          dateGrid.appendChild(button);
+        }
+        if (datePrevious) {
+          datePrevious.disabled = first.getFullYear() === today.getFullYear()
+            && first.getMonth() <= today.getMonth();
+        }
+      };
       if (dateField) {
         dateField.min = localDate(new Date());
         dateField.value = localDate(firstChoice);
@@ -551,7 +623,67 @@ export const CONTENT_CALENDAR_CLIENT_SOURCE = String.raw`(() => {
       if (timeField) {
         timeField.value = String(firstChoice.getHours()).padStart(2, '0') + ':'
           + String(firstChoice.getMinutes()).padStart(2, '0');
+        timeField.addEventListener('input', syncSchedule);
         timeField.addEventListener('change', syncSchedule);
+        timeField.addEventListener('keydown', (event) => {
+          if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+          const current = clockMinutes(timeField.value);
+          if (current === null) return;
+          event.preventDefault();
+          setClockMinutes(current + (event.key === 'ArrowUp' ? 1 : -1));
+        });
+      }
+      liveForm.querySelectorAll('[data-calendar-time-step]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const current = clockMinutes(timeField && timeField.value);
+          const delta = Number(button.dataset.calendarTimeStep);
+          if (current === null || !Number.isSafeInteger(delta)) return;
+          setClockMinutes(current + delta);
+          setLiveStatus(delta > 0 ? 'Moved one minute later.' : 'Moved one minute earlier.');
+        });
+      });
+      if (dateTrigger && datePopover) {
+        dateTrigger.addEventListener('click', () => {
+          const opening = datePopover.hidden;
+          if (!opening) {
+            closeDatePicker(false);
+            return;
+          }
+          const selected = dateField && dateField.value ? new Date(dateField.value + 'T12:00:00') : firstChoice;
+          dateCursor = new Date(selected.getFullYear(), selected.getMonth(), 1);
+          renderDatePicker();
+          datePopover.hidden = false;
+          dateTrigger.setAttribute('aria-expanded', 'true');
+          const selectedButton = dateGrid && dateGrid.querySelector('[aria-pressed="true"]');
+          if (selectedButton) selectedButton.focus();
+        });
+        datePrevious?.addEventListener('click', () => {
+          dateCursor = new Date(dateCursor.getFullYear(), dateCursor.getMonth() - 1, 1);
+          renderDatePicker();
+        });
+        dateNext?.addEventListener('click', () => {
+          dateCursor = new Date(dateCursor.getFullYear(), dateCursor.getMonth() + 1, 1);
+          renderDatePicker();
+        });
+        dateToday?.addEventListener('click', () => {
+          const today = new Date();
+          dateField.value = localDate(today);
+          dateCursor = new Date(today.getFullYear(), today.getMonth(), 1);
+          syncSchedule();
+          closeDatePicker(true);
+          setLiveStatus('Today selected. Choose any exact minute.');
+        });
+        document.addEventListener('pointerdown', (event) => {
+          if (!datePopover.hidden && !datePopover.contains(event.target)
+              && !dateTrigger.contains(event.target)) closeDatePicker(false);
+        });
+        liveForm.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape' && !datePopover.hidden) {
+            event.preventDefault();
+            closeDatePicker(true);
+          }
+        });
+        liveForm.classList.add('ccal-live-controls-ready');
       }
       syncSchedule();
       liveForm.querySelectorAll('[data-calendar-suggestion-time]').forEach((button) => {
@@ -566,8 +698,7 @@ export const CONTENT_CALENDAR_CLIENT_SOURCE = String.raw`(() => {
         });
       });
       if (mediaRemove) mediaRemove.addEventListener('click', clearMedia);
-      if (mediaInput) mediaInput.addEventListener('change', async () => {
-        const file = mediaInput.files && mediaInput.files[0];
+      const uploadMediaFile = async (file) => {
         if (!file) return;
         const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif',
           'video/mp4', 'video/quicktime', 'video/webm'];
@@ -626,8 +757,41 @@ export const CONTENT_CALENDAR_CLIENT_SOURCE = String.raw`(() => {
         } finally {
           uploadBusy = false;
           if (liveSubmit) liveSubmit.disabled = false;
+          if (mediaDrop) mediaDrop.removeAttribute('data-drag-active');
         }
+      };
+      if (mediaChoose && mediaInput) {
+        mediaChoose.addEventListener('click', () => mediaInput.click());
+      }
+      if (mediaInput) mediaInput.addEventListener('change', () => {
+        void uploadMediaFile(mediaInput.files && mediaInput.files[0]);
       });
+      if (mediaDrop) {
+        const acceptsFiles = (event) => Array.from(event.dataTransfer?.types || []).includes('Files');
+        mediaDrop.addEventListener('dragenter', (event) => {
+          if (!acceptsFiles(event)) return;
+          event.preventDefault();
+          mediaDrop.setAttribute('data-drag-active', 'true');
+          setLiveStatus('Drop the image or video to add it to this post.');
+        });
+        mediaDrop.addEventListener('dragover', (event) => {
+          if (!acceptsFiles(event)) return;
+          event.preventDefault();
+          if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+          mediaDrop.setAttribute('data-drag-active', 'true');
+        });
+        mediaDrop.addEventListener('dragleave', (event) => {
+          if (event.relatedTarget && mediaDrop.contains(event.relatedTarget)) return;
+          mediaDrop.removeAttribute('data-drag-active');
+        });
+        mediaDrop.addEventListener('drop', (event) => {
+          if (!acceptsFiles(event)) return;
+          event.preventDefault();
+          mediaDrop.removeAttribute('data-drag-active');
+          const files = event.dataTransfer && event.dataTransfer.files;
+          void uploadMediaFile(files && files[0]);
+        });
+      }
       liveForm.addEventListener('submit', (event) => {
         syncSchedule();
         if (uploadBusy || !scheduledField || !scheduledField.value) {
