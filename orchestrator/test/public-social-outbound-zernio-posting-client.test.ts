@@ -144,6 +144,52 @@ test('schedules a post through Zernio without publishing it immediately', async 
   assert.equal('publishNow' in (body ?? {}), false);
 });
 
+test('probes the exact healthy posting account and binds it to its profile', async () => {
+  const profileId = '6a95e99a77555aae01643ae4';
+  const requests: string[] = [];
+  const posting = client(async (url) => {
+    requests.push(String(url));
+    if (String(url).endsWith('/health')) return json({
+      accountId: LINKEDIN_ACCOUNT, platform: 'linkedin', username: 'propertypredator',
+      displayName: 'Property Predator', status: 'healthy', permissions: { canPost: true },
+    });
+    return json({ accounts: [{ _id: LINKEDIN_ACCOUNT, platform: 'linkedin',
+      profileId: { _id: profileId, name: 'Property Predator' },
+      username: 'propertypredator', displayName: 'Property Predator', isActive: true }] });
+  });
+  const result = await posting.probeAccount({
+    requestId: REQUEST_ID,
+    target: { network: 'linkedin', accountId: LINKEDIN_ACCOUNT },
+  });
+  assert.equal(result.profileId, profileId);
+  assert.equal(result.canPost, true);
+  assert.match(result.responseSha256, /^[a-f0-9]{64}$/u);
+  assert.deepEqual(requests, [
+    `https://zernio.com/api/v1/accounts/${LINKEDIN_ACCOUNT}/health`,
+    'https://zernio.com/api/v1/accounts?includeOverLimit=true',
+  ]);
+});
+
+test('prepares a bounded media upload without sending file bytes through the service', async () => {
+  let requestBody = '';
+  const posting = client(async (url, init) => {
+    assert.equal(String(url), 'https://zernio.com/api/v1/media/presign');
+    requestBody = String(init?.body);
+    return json({
+      uploadUrl: 'https://uploads.r2.cloudflarestorage.com/signed-put',
+      publicUrl: 'https://media.zernio.com/temp/property-predator.png',
+      key: 'temp/property-predator.png', expiresIn: 3600,
+    });
+  });
+  const result = await posting.prepareMediaUpload({
+    requestId: REQUEST_ID, filename: 'property-predator.png', contentType: 'image/png', size: 12345,
+  });
+  assert.equal(result.publicUrl, 'https://media.zernio.com/temp/property-predator.png');
+  assert.deepEqual(JSON.parse(requestBody), {
+    filename: 'property-predator.png', contentType: 'image/png', size: 12345,
+  });
+});
+
 test('accepts only the documented x-request-id replay envelope', async () => {
   const posting = client(async () => json({ existingPost: post() }, 200));
   const result = await posting.publishDue(publishInput({ mediaItems: [] }));

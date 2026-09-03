@@ -14,6 +14,7 @@ export const ZERNIO_POSTING_CONTRACT = 'r72-zernio-posting-v1' as const;
 export const ZERNIO_POSTING_ORIGIN = 'https://zernio.com' as const;
 
 const CREATE_POST_PATH = '/api/v1/posts';
+const MEDIA_PRESIGN_PATH = '/api/v1/media/presign';
 const MAX_RESPONSE_BYTES = 65_536;
 const MAX_REQUEST_BYTES = 131_072;
 const MAX_CONTENT_BYTES = 50_000;
@@ -23,6 +24,7 @@ const SAFE_API_KEY = /^[\x21-\x7e]{8,500}$/u;
 const SAFE_ACCOUNT_ID = /^[a-f0-9]{24}$/u;
 const SAFE_POST_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/u;
 const SAFE_REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const SAFE_MEDIA_FILENAME = /^[^\u0000-\u001f\u007f\\/]{1,180}$/u;
 const SAFE_PUBLIC_HOST = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/u;
 const SUPPORTED_NETWORKS = new Set(['instagram', 'linkedin']);
 const SUPPORTED_POST_STATUSES = new Set([
@@ -96,8 +98,35 @@ export interface ZernioPostingPublishResult extends ZernioPostingSnapshot {
   readonly idempotentReplay: boolean;
 }
 
+export interface ZernioPostingAccountProbe {
+  readonly accountId: string;
+  readonly profileId: string;
+  readonly network: ZernioPostingNetwork;
+  readonly username: string | null;
+  readonly displayName: string | null;
+  readonly canPost: true;
+  readonly responseSha256: string;
+}
+
+export interface ZernioPostingMediaUpload {
+  readonly uploadUrl: string;
+  readonly publicUrl: string;
+  readonly expiresIn: number;
+}
+
 export interface ZernioPostingClient {
   readonly contract: typeof ZERNIO_POSTING_CONTRACT;
+  probeAccount(input: Readonly<{
+    requestId: string;
+    target: ZernioPostingTarget;
+  }>): Promise<ZernioPostingAccountProbe>;
+  prepareMediaUpload(input: Readonly<{
+    requestId: string;
+    filename: string;
+    contentType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
+      | 'video/mp4' | 'video/quicktime' | 'video/webm';
+    size: number;
+  }>): Promise<ZernioPostingMediaUpload>;
   schedule(input: Readonly<{
     requestId: string;
     content: string;
@@ -463,6 +492,95 @@ export function createZernioPostingClient(
 
   return Object.freeze({
     contract: ZERNIO_POSTING_CONTRACT,
+
+    async probeAccount(input: Parameters<ZernioPostingClient['probeAccount']>[0]) {
+      if (!isRecord(input) || !exactKeys(input, ['requestId', 'target'])
+          || typeof input.requestId !== 'string' || !SAFE_REQUEST_ID.test(input.requestId)) {
+        fail('invalid_request');
+      }
+      const target = parseInputTarget(input.target, 'invalid_request');
+      if (!allowed.has(targetKey(target))) fail('unbound_target');
+      const result = await request(`/api/v1/accounts/${target.accountId}/health`, {
+        method: 'GET', headers: Object.freeze({ 'x-request-id': input.requestId }),
+      }, false);
+      const body = result.body;
+      const accountId = providerText(body.accountId, 24);
+      if (accountId !== target.accountId || body.platform !== target.network
+          || body.status !== 'healthy' || !isRecord(body.permissions)
+          || body.permissions.canPost !== true) fail('provider_rejected');
+      const listed = await request('/api/v1/accounts?includeOverLimit=true', {
+        method: 'GET', headers: Object.freeze({ 'x-request-id': input.requestId }),
+      }, false);
+      if (!Array.isArray(listed.body.accounts) || listed.body.accounts.length > 500) {
+        fail('invalid_provider_response');
+      }
+      const exactAccount = listed.body.accounts.find((candidate) => {
+        if (!isRecord(candidate)) return false;
+        const id = candidate._id ?? candidate.id ?? candidate.accountId;
+        return id === target.accountId;
+      });
+      if (!isRecord(exactAccount) || exactAccount.platform !== target.network
+          || exactAccount.isActive === false) fail('invalid_provider_response');
+      const profileSource = exactAccount.profileId;
+      const profileId = typeof profileSource === 'string'
+        ? profileSource
+        : isRecord(profileSource) ? String(profileSource._id ?? profileSource.id ?? '') : '';
+      if (!SAFE_ACCOUNT_ID.test(profileId)) fail('invalid_provider_response');
+      const optionalName = (value: unknown): string | null => {
+        if (value === undefined || value === null || value === '') return null;
+        const name = providerText(value, 160).trim();
+        if (!name || /[\u0000-\u001f\u007f]/u.test(name)) fail('invalid_provider_response');
+        return name;
+      };
+      return Object.freeze({
+        accountId,
+        profileId,
+        network: target.network,
+        username: optionalName(body.username),
+        displayName: optionalName(body.displayName),
+        canPost: true as const,
+        responseSha256: createHash('sha256')
+          .update(result.bytes).update(listed.bytes).digest('hex'),
+      });
+    },
+
+    async prepareMediaUpload(input: Parameters<ZernioPostingClient['prepareMediaUpload']>[0]) {
+      if (!isRecord(input) || !exactKeys(input, ['requestId', 'filename', 'contentType', 'size'])
+          || typeof input.requestId !== 'string' || !SAFE_REQUEST_ID.test(input.requestId)
+          || typeof input.filename !== 'string' || !SAFE_MEDIA_FILENAME.test(input.filename)
+          || !['image/jpeg', 'image/png', 'image/webp', 'image/gif',
+            'video/mp4', 'video/quicktime', 'video/webm'].includes(String(input.contentType))
+          || !Number.isSafeInteger(input.size) || input.size < 1 || input.size > 500_000_000) {
+        fail('invalid_request');
+      }
+      const result = await request(MEDIA_PRESIGN_PATH, {
+        method: 'POST',
+        headers: Object.freeze({
+          'content-type': 'application/json',
+          'x-request-id': input.requestId,
+        }),
+        body: JSON.stringify({
+          filename: input.filename,
+          contentType: input.contentType,
+          size: input.size,
+        }),
+      }, false);
+      if (result.response.status !== 200) fail('invalid_provider_response');
+      const uploadUrl = publicMediaUrl(result.body.uploadUrl, 'invalid_provider_response');
+      const publicUrl = publicMediaUrl(result.body.publicUrl, 'invalid_provider_response');
+      const uploadHost = new URL(uploadUrl).hostname.toLowerCase();
+      if (!uploadHost.endsWith('.r2.cloudflarestorage.com')
+          || new URL(publicUrl).hostname.toLowerCase() !== 'media.zernio.com'
+          || !Number.isSafeInteger(result.body.expiresIn)
+          || Number(result.body.expiresIn) < 60 || Number(result.body.expiresIn) > 3_600) {
+        fail('invalid_provider_response');
+      }
+      return Object.freeze({
+        uploadUrl,
+        publicUrl,
+        expiresIn: Number(result.body.expiresIn),
+      });
+    },
 
     async schedule(input: Parameters<ZernioPostingClient['schedule']>[0]) {
       const parsed = exactPostInput(

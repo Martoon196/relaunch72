@@ -43,6 +43,9 @@ export interface CampaignWizardOperationOutcome {
 export type CampaignWizardNoticeCode =
   | 'planned'
   | 'scheduled_live'
+  | 'schedule_replayed'
+  | 'schedule_invalid'
+  | 'account_not_ready'
   | 'replayed'
   | 'cancelled'
   | 'rescheduled'
@@ -53,8 +56,8 @@ export type CampaignWizardNoticeCode =
   | 'unavailable';
 
 const NOTICE_CODES = new Set<CampaignWizardNoticeCode>([
-  'planned', 'scheduled_live', 'replayed', 'cancelled', 'rescheduled', 'forbidden',
-  'conflict', 'invalid', 'missing', 'unavailable',
+  'planned', 'scheduled_live', 'schedule_replayed', 'schedule_invalid', 'account_not_ready',
+  'replayed', 'cancelled', 'rescheduled', 'forbidden', 'conflict', 'invalid', 'missing', 'unavailable',
 ]);
 const NOTICE_CONTEXT = 'relaunch72:campaign-wizard-notice:v1\0';
 
@@ -79,8 +82,21 @@ export function campaignWizardNoticeToken(
 function noticeFor(code: CampaignWizardNoticeCode): CampaignWizardOperationOutcome {
   if (code === 'scheduled_live') return Object.freeze({
     kind: 'success', title: 'Post scheduled',
-    detail: 'Zernio accepted the LinkedIn company post and it now appears in your live schedule.',
+    detail: 'Your LinkedIn company post is booked and now appears in your live schedule.',
     disposition: 'applied',
+  });
+  if (code === 'schedule_replayed') return Object.freeze({
+    kind: 'info', title: 'Already scheduled',
+    detail: 'That exact post was already booked, so Growth HQ did not create a duplicate.',
+    disposition: 'replayed',
+  });
+  if (code === 'schedule_invalid') return Object.freeze({
+    kind: 'error', title: 'Check the post details',
+    detail: 'Add your post and choose a valid future date and exact time. Nothing was scheduled.',
+  });
+  if (code === 'account_not_ready') return Object.freeze({
+    kind: 'error', title: 'LinkedIn connection needs attention',
+    detail: 'The selected LinkedIn account and its publishing access do not match yet. Nothing was scheduled. Reconnect the exact Property Predator company account in Social accounts, then try again.',
   });
   if (code === 'planned') return Object.freeze({
     kind: 'success', title: 'Durable TEST campaign planned',

@@ -231,6 +231,35 @@ test('Content Calendar renders a premium accessible planner and fails closed wit
   assert.equal((html.match(/executionMode|providerToken|accessToken|apiKey/g) ?? []).length, 0);
 });
 
+test('live scheduler offers exact minutes, smart choices and optional media without redundant confirmation', () => {
+  const html = renderContentCalendarBody(present(), {
+    liveScheduler: {
+      actionUrl: '/portal/content/calendar/live-schedules',
+      mediaUploadUrl: '/portal/content/calendar/media-uploads',
+      csrfToken: 'csrf-calendar-live-token-123456',
+      commandKey: 'calendar-live-command-001',
+      mediaCommandKey: 'calendar-media-command-001',
+      items: [],
+    },
+  });
+  assert.match(html, /Build your next LinkedIn post/u);
+  assert.match(html, /data-calendar-live-date[^>]+required/u);
+  assert.match(html, /data-calendar-live-time required/u);
+  assert.match(html, /type="time" step="60"/u);
+  assert.match(html, /Morning · 08:17/u);
+  assert.match(html, /Lunch · 12:23/u);
+  assert.match(html, /After work · 17:35/u);
+  assert.match(html, /data-calendar-live-date-label>Choose a date</u);
+  assert.match(html, /aria-label="Choose publication date"/u);
+  assert.match(html, /type="file" accept="image\/jpeg,[^"]+video\/webm"/u);
+  assert.match(html, /data-media-upload-url="\/portal\/content\/calendar\/media-uploads"/u);
+  assert.match(html, /Schedule LinkedIn post/u);
+  assert.doesNotMatch(html, /confirm_schedule|Yes, add this post/u);
+  assert.doesNotMatch(html, /Zernio/u);
+  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /data-calendar-live-form/u);
+  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /method: 'PUT', body: file/u);
+});
+
 test('Content Calendar renders injected native create, reschedule and cancel TEST commands without a provider rail', () => {
   const view = present();
   const first = view.days.flatMap((day) => day.slots)[0];

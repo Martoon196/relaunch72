@@ -485,6 +485,158 @@ export const CONTENT_CALENDAR_CLIENT_SOURCE = String.raw`(() => {
       return body ? JSON.parse(body) : {};
     };
 
+    const liveForm = root.querySelector('[data-calendar-live-form]');
+    if (liveForm) {
+      const dateField = liveForm.querySelector('[data-calendar-live-date]');
+      const dateLabel = liveForm.querySelector('[data-calendar-live-date-label]');
+      const timeField = liveForm.querySelector('[data-calendar-live-time]');
+      const scheduledField = liveForm.querySelector('[name="scheduled_for_local"]');
+      const mediaInput = liveForm.querySelector('[data-calendar-media-input]');
+      const mediaType = liveForm.querySelector('[name="media_type"]');
+      const mediaUrl = liveForm.querySelector('[name="media_url"]');
+      const mediaPreview = liveForm.querySelector('[data-calendar-media-preview]');
+      const mediaVisual = liveForm.querySelector('[data-calendar-media-visual]');
+      const mediaName = liveForm.querySelector('[data-calendar-media-name]');
+      const mediaRemove = liveForm.querySelector('[data-calendar-media-remove]');
+      const liveStatus = liveForm.querySelector('[data-calendar-live-status]');
+      const liveSubmit = liveForm.querySelector('[data-calendar-live-submit]');
+      let previewUrl = '';
+      let uploadBusy = false;
+      const localDate = (date) => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return year + '-' + month + '-' + day;
+      };
+      const nextSuggested = (clock) => {
+        const parts = clock.split(':').map(Number);
+        const choice = new Date();
+        choice.setHours(parts[0], parts[1], 0, 0);
+        if (choice.getTime() < Date.now() + 5 * 60 * 1000) choice.setDate(choice.getDate() + 1);
+        return choice;
+      };
+      const syncSchedule = () => {
+        if (dateLabel && dateField && dateField.value) {
+          const parts = dateField.value.split('-').map(Number);
+          const localChoice = new Date(parts[0], parts[1] - 1, parts[2]);
+          dateLabel.textContent = new Intl.DateTimeFormat('en-GB', {
+            weekday: 'long', day: 'numeric', month: 'long'
+          }).format(localChoice);
+        }
+        if (scheduledField) scheduledField.value = dateField && timeField && dateField.value && timeField.value
+          ? dateField.value + 'T' + timeField.value
+          : '';
+      };
+      const setLiveStatus = (message) => {
+        if (liveStatus) liveStatus.textContent = message;
+        announce(message);
+      };
+      const clearMedia = () => {
+        if (previewUrl) window.URL.revokeObjectURL(previewUrl);
+        previewUrl = '';
+        if (mediaInput) mediaInput.value = '';
+        if (mediaType) mediaType.value = '';
+        if (mediaUrl) mediaUrl.value = '';
+        if (mediaVisual) mediaVisual.replaceChildren();
+        if (mediaName) mediaName.textContent = '';
+        if (mediaPreview) mediaPreview.hidden = true;
+        setLiveStatus('Media removed. The post will be text only.');
+      };
+      const firstChoice = nextSuggested('17:35');
+      if (dateField) {
+        dateField.min = localDate(new Date());
+        dateField.value = localDate(firstChoice);
+        dateField.addEventListener('change', syncSchedule);
+      }
+      if (timeField) {
+        timeField.value = String(firstChoice.getHours()).padStart(2, '0') + ':'
+          + String(firstChoice.getMinutes()).padStart(2, '0');
+        timeField.addEventListener('change', syncSchedule);
+      }
+      syncSchedule();
+      liveForm.querySelectorAll('[data-calendar-suggestion-time]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const clock = button.dataset.calendarSuggestionTime || '';
+          if (!/^\d{2}:\d{2}$/.test(clock)) return;
+          const choice = nextSuggested(clock);
+          if (dateField) dateField.value = localDate(choice);
+          if (timeField) timeField.value = clock;
+          syncSchedule();
+          setLiveStatus(button.textContent.trim() + ' selected. You can still edit the exact minute.');
+        });
+      });
+      if (mediaRemove) mediaRemove.addEventListener('click', clearMedia);
+      if (mediaInput) mediaInput.addEventListener('change', async () => {
+        const file = mediaInput.files && mediaInput.files[0];
+        if (!file) return;
+        const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif',
+          'video/mp4', 'video/quicktime', 'video/webm'];
+        if (!allowed.includes(file.type) || file.size < 1 || file.size > 500000000) {
+          clearMedia();
+          setLiveStatus('Choose a supported image or video up to 500 MB.');
+          return;
+        }
+        const endpoint = sameOriginUrl(liveForm.dataset.mediaUploadUrl);
+        if (!endpoint || !window.fetch) {
+          clearMedia();
+          setLiveStatus('Media upload is temporarily unavailable.');
+          return;
+        }
+        uploadBusy = true;
+        if (liveSubmit) liveSubmit.disabled = true;
+        setLiveStatus('Preparing and uploading ' + file.name + '…');
+        try {
+          const request = new window.URLSearchParams();
+          request.set('_csrf', (liveForm.querySelector('[name="_csrf"]') || {}).value || '');
+          request.set('command_key', liveForm.dataset.mediaCommandKey || '');
+          request.set('filename', file.name);
+          request.set('content_type', file.type);
+          request.set('size', String(file.size));
+          const preparedResponse = await window.fetch(endpoint.href, {
+            method: 'POST', body: request, credentials: 'same-origin',
+            headers: { Accept: 'application/json', 'X-Requested-With': 'ContentCalendarMedia' },
+          });
+          const prepared = await parseBoundedJson(preparedResponse);
+          if (!preparedResponse.ok || prepared.ok !== true
+              || typeof prepared.uploadUrl !== 'string' || typeof prepared.publicUrl !== 'string'
+              || !['image', 'video'].includes(prepared.mediaType)) {
+            throw new Error(safeResponseMessage(prepared.message, 'The media could not be prepared.'));
+          }
+          const uploaded = await window.fetch(prepared.uploadUrl, {
+            method: 'PUT', body: file, headers: { 'Content-Type': file.type },
+          });
+          if (!uploaded.ok) throw new Error('The media upload did not complete.');
+          if (mediaType) mediaType.value = prepared.mediaType;
+          if (mediaUrl) mediaUrl.value = prepared.publicUrl;
+          if (previewUrl) window.URL.revokeObjectURL(previewUrl);
+          previewUrl = window.URL.createObjectURL(file);
+          if (mediaVisual) {
+            const visual = document.createElement(prepared.mediaType === 'image' ? 'img' : 'video');
+            visual.src = previewUrl;
+            visual.alt = prepared.mediaType === 'image' ? 'Selected post image preview' : '';
+            if (prepared.mediaType === 'video') visual.muted = true;
+            mediaVisual.replaceChildren(visual);
+          }
+          if (mediaName) mediaName.textContent = file.name + ' · ready';
+          if (mediaPreview) mediaPreview.hidden = false;
+          setLiveStatus('Media ready. Choose the exact date and time, then schedule your post.');
+        } catch (error) {
+          clearMedia();
+          setLiveStatus(error instanceof Error ? error.message : 'The media upload could not complete.');
+        } finally {
+          uploadBusy = false;
+          if (liveSubmit) liveSubmit.disabled = false;
+        }
+      });
+      liveForm.addEventListener('submit', (event) => {
+        syncSchedule();
+        if (uploadBusy || !scheduledField || !scheduledField.value) {
+          event.preventDefault();
+          setLiveStatus(uploadBusy ? 'Wait for the media upload to finish.' : 'Choose a date and exact time.');
+        }
+      });
+    }
+
     root.addEventListener('submit', async (event) => {
       const form = event.target && event.target.closest
         ? event.target.closest('[data-calendar-command-form]')

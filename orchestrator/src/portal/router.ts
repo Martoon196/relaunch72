@@ -1041,11 +1041,12 @@ function portalStatusPage(
  * denial into a generic rejection.
  */
 function ownedSocialFailureNotice(
-  kind: 'unauthenticated' | 'forbidden' | 'validation' | 'conflict' | 'blocked' | 'unavailable',
+  kind: 'unauthenticated' | 'forbidden' | 'validation' | 'conflict' | 'blocked'
+    | 'account_not_ready' | 'unavailable',
 ): LiveChannelsNoticeCode {
   // Deliberately distinct from the pause codes: an owned-social failure must
   // never be reported to a founder in pause language.
-  if (kind === 'blocked') return 'staging_blocked';
+  if (kind === 'blocked' || kind === 'account_not_ready') return 'staging_blocked';
   if (kind === 'forbidden' || kind === 'unauthenticated') return 'owned_social_forbidden';
   if (kind === 'validation' || kind === 'conflict') return 'owned_social_invalid';
   return 'owned_social_unavailable';
@@ -1107,6 +1108,7 @@ function contentCalendarReadRange(selectedDate: string): Readonly<{ from: string
 
 const CONTENT_CALENDAR_CREATE_TEST_ROUTE = '/portal/content/calendar/test-planning-intents';
 const CONTENT_CALENDAR_LIVE_SCHEDULE_ROUTE = '/portal/content/calendar/live-schedules';
+const CONTENT_CALENDAR_MEDIA_UPLOAD_ROUTE = '/portal/content/calendar/media-uploads';
 const CONTENT_CALENDAR_RESCHEDULE_TEST_ROUTE = '/portal/content/calendar/test-reschedule';
 const CONTENT_CALENDAR_CANCEL_TEST_ROUTE = '/portal/content/calendar/test-cancel';
 const COMPANY_CONTENT_EXACT_REVIEW_ROUTE = /^\/portal\/content\/items\/([0-9a-f-]+)\/versions\/([0-9a-f-]+)\/review$/iu;
@@ -4170,6 +4172,51 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
   }
 
+  if (deps.kind === 'postgres' && p === CONTENT_CALENDAR_MEDIA_UPLOAD_ROUTE && method === 'POST') {
+    if (!deps.zernioCalendar?.prepareMediaUpload
+        || !deps.zernioCalendar.configuredNetworks.includes('linkedin')) {
+      return sendJson(res, 503, { ok: false, code: 'account_not_ready',
+        message: 'The LinkedIn connection needs attention before media can be added.' });
+    }
+    const form = await readMultiValueForm(req);
+    const allowed = new Set(['_csrf', 'command_key', 'filename', 'content_type', 'size']);
+    const size = Number(oneFormValue(form ?? new URLSearchParams(), 'size'));
+    const contentType = oneFormValue(form ?? new URLSearchParams(), 'content_type') ?? '';
+    if (!form || !campaignFormKeysAllowed(form, allowed)
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '')
+        || !['image/jpeg', 'image/png', 'image/webp', 'image/gif',
+          'video/mp4', 'video/quicktime', 'video/webm'].includes(contentType)) {
+      return sendJson(res, 400, { ok: false, code: 'invalid_media',
+        message: 'Choose a supported image or video and try again.' });
+    }
+    let outcome;
+    try {
+      outcome = await deps.zernioCalendar.prepareMediaUpload(
+        crmIdentity(sessionToken, deps),
+        {
+          commandKey: oneFormValue(form, 'command_key') ?? '',
+          filename: oneFormValue(form, 'filename') ?? '',
+          contentType: contentType as import('./zernio-calendar-command-service.js').PortalZernioMediaContentType,
+          size,
+        },
+      );
+    } catch {
+      return sendJson(res, 503, { ok: false, code: 'unavailable',
+        message: 'The media could not be prepared. Nothing was scheduled.' });
+    }
+    if (!outcome.ok) {
+      const status = outcome.kind === 'unauthenticated' ? 401
+        : outcome.kind === 'forbidden' ? 403
+          : outcome.kind === 'validation' ? 400
+            : outcome.kind === 'account_not_ready' ? 409 : 503;
+      return sendJson(res, status, { ok: false, code: outcome.kind,
+        message: outcome.kind === 'account_not_ready'
+          ? 'Reconnect the exact Property Predator LinkedIn company account, then try again.'
+          : 'The media could not be prepared. Nothing was scheduled.' });
+    }
+    return sendJson(res, 200, outcome);
+  }
+
   if (deps.kind === 'postgres' && p === CONTENT_CALENDAR_LIVE_SCHEDULE_ROUTE && method === 'POST') {
     if (!deps.zernioCalendar?.scheduleDirect
         || !deps.zernioCalendar.configuredNetworks.includes('linkedin')) {
@@ -4178,13 +4225,12 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     const form = await readMultiValueForm(req);
     const allowed = new Set([
       '_csrf', 'command_key', 'network', 'timezone', 'content',
-      'scheduled_for_local', 'confirm_schedule',
+      'scheduled_for_local', 'media_type', 'media_url',
     ]);
     if (!form || !campaignFormKeysAllowed(form, allowed)
         || !verifyPortalCsrf(deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '')
-        || oneFormValue(form, 'network') !== 'linkedin'
-        || oneFormValue(form, 'confirm_schedule') !== 'confirmed') {
-      return campaignNoticeRedirect(res, deps, sessionToken, 'invalid', CONTENT_CALENDAR_ROUTE);
+        || oneFormValue(form, 'network') !== 'linkedin') {
+      return campaignNoticeRedirect(res, deps, sessionToken, 'schedule_invalid', CONTENT_CALENDAR_ROUTE);
     }
     const content = campaignFormText(oneFormValue(form, 'content'), 12_000);
     const commandKey = campaignCommandKey(form);
@@ -4196,23 +4242,34 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       oneFormValue(form, 'timezone') ?? '',
     );
     if (!content || !commandKey || !scheduledFor) {
-      return campaignNoticeRedirect(res, deps, sessionToken, 'invalid', CONTENT_CALENDAR_ROUTE);
+      return campaignNoticeRedirect(res, deps, sessionToken, 'schedule_invalid', CONTENT_CALENDAR_ROUTE);
+    }
+    const mediaType = oneFormValue(form, 'media_type') ?? '';
+    const mediaUrl = oneFormValue(form, 'media_url') ?? '';
+    const media = mediaType || mediaUrl
+      ? (['image', 'video'].includes(mediaType) && /^https:\/\/media[.]zernio[.]com\//u.test(mediaUrl)
+        ? { type: mediaType as 'image' | 'video', url: mediaUrl }
+        : undefined)
+      : null;
+    if (media === undefined) {
+      return campaignNoticeRedirect(res, deps, sessionToken, 'schedule_invalid', CONTENT_CALENDAR_ROUTE);
     }
     try {
       const outcome = await deps.zernioCalendar.scheduleDirect(
         crmIdentity(sessionToken, deps),
-        { network: 'linkedin', content, scheduledFor, commandKey },
+        { network: 'linkedin', content, scheduledFor, commandKey, media },
       );
       if (!outcome.ok) {
         const code: CampaignWizardNoticeCode = outcome.kind === 'forbidden'
           || outcome.kind === 'unauthenticated' ? 'forbidden'
-          : outcome.kind === 'validation' ? 'invalid'
-            : outcome.kind === 'conflict' ? 'conflict' : 'unavailable';
+          : outcome.kind === 'validation' ? 'schedule_invalid'
+            : outcome.kind === 'account_not_ready' ? 'account_not_ready'
+              : outcome.kind === 'conflict' ? 'conflict' : 'unavailable';
         return campaignNoticeRedirect(res, deps, sessionToken, code, CONTENT_CALENDAR_ROUTE);
       }
       return campaignNoticeRedirect(
         res, deps, sessionToken,
-        outcome.disposition === 'replayed' ? 'replayed' : 'scheduled_live',
+        outcome.disposition === 'replayed' ? 'schedule_replayed' : 'scheduled_live',
         CONTENT_CALENDAR_ROUTE,
       );
     } catch {
@@ -4637,8 +4694,10 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         : null;
       const liveScheduler = directSchedules?.ok ? Object.freeze({
         actionUrl: CONTENT_CALENDAR_LIVE_SCHEDULE_ROUTE,
+        mediaUploadUrl: CONTENT_CALENDAR_MEDIA_UPLOAD_ROUTE,
         csrfToken,
         commandKey: randomUUID(),
+        mediaCommandKey: randomUUID(),
         items: directSchedules.items.map((item) => Object.freeze({
           scheduleId: item.scheduleId,
           content: item.content,
@@ -4666,7 +4725,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         'content',
         csrfToken,
       ), undefined, {
-        'content-security-policy': "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        'content-security-policy': "default-src 'none'; script-src 'self'; connect-src 'self' https://*.r2.cloudflarestorage.com; img-src 'self' blob: https://media.zernio.com; media-src 'self' blob: https://media.zernio.com; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
       });
     } catch {
       return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {

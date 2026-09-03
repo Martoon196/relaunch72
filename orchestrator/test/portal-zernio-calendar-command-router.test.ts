@@ -196,7 +196,7 @@ test('the friendly calendar form schedules the exact LinkedIn account and redire
     _csrf: portalCsrfToken(SECRET, SESSION), command_key: COMMAND_KEY,
     network: 'linkedin', timezone: 'Europe/London',
     content: 'A useful Property Predator post.',
-    scheduled_for_local: '2026-09-04T12:00', confirm_schedule: 'confirmed',
+    scheduled_for_local: '2026-09-04T12:01', media_type: '', media_url: '',
   });
   const res = response();
   await handlePortal(request(body, '/portal/content/calendar/live-schedules') as never,
@@ -207,6 +207,32 @@ test('the friendly calendar form schedules the exact LinkedIn account and redire
   assert.equal(calls.length, 1);
   assert.deepEqual((calls[0] as { input: unknown }).input, {
     network: 'linkedin', content: 'A useful Property Predator post.',
-    scheduledFor: '2026-09-04T11:00:00.000Z', commandKey: COMMAND_KEY,
+    scheduledFor: '2026-09-04T11:01:00.000Z', commandKey: COMMAND_KEY, media: null,
+  });
+});
+
+test('calendar media preparation is CSRF-bound and returns one safe upload contract', async () => {
+  const calls: unknown[] = [];
+  const service: PortalZernioCalendarCommandService = {
+    configuredNetworks: ['linkedin'],
+    stage: async () => ({ ok: false, kind: 'unavailable' }),
+    prepareMediaUpload: async (identity, input) => {
+      calls.push({ identity, input });
+      return { ok: true, uploadUrl: 'https://bucket.r2.cloudflarestorage.com/upload',
+        publicUrl: 'https://media.zernio.com/post.png', mediaType: 'image', expiresIn: 900 };
+    },
+  };
+  const body = encodeForm({
+    _csrf: portalCsrfToken(SECRET, SESSION), command_key: COMMAND_KEY,
+    filename: 'post.png', content_type: 'image/png', size: '12345',
+  });
+  const res = response();
+  await handlePortal(request(body, '/portal/content/calendar/media-uploads') as never,
+    res as never, postgres(service));
+  assert.equal(res.statusCode, 200);
+  assert.equal(JSON.parse(res.body).publicUrl, 'https://media.zernio.com/post.png');
+  assert.equal(calls.length, 1);
+  assert.deepEqual((calls[0] as { input: unknown }).input, {
+    commandKey: COMMAND_KEY, filename: 'post.png', contentType: 'image/png', size: 12345,
   });
 });

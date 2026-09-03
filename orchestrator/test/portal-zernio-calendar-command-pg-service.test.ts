@@ -39,6 +39,7 @@ class FakeClient {
     monthly_publish_cap: 3,
   }];
   directReserveRows: unknown[] = [];
+  directReserveErrors: unknown[] = [];
   directListRows: unknown[] = [];
 
   async query(sql: string, values: readonly unknown[] = []): Promise<{ rows: unknown[] }> {
@@ -48,7 +49,12 @@ class FakeClient {
       if (this.functionError) throw this.functionError;
       return { rows: this.functionRows };
     }
-    if (sql.includes('reserve_zernio_direct_schedule')) return { rows: this.directReserveRows };
+    if (sql.includes('reserve_zernio_direct_schedule')) {
+      const error = this.directReserveErrors.shift();
+      if (error) throw error;
+      return { rows: this.directReserveRows };
+    }
+    if (sql.includes('record_zernio_calendar_account_probe')) return { rows: [{ disposition: 'recorded' }] };
     if (sql.includes('settle_zernio_direct_schedule')) return { rows: [{ disposition: 'applied' }] };
     if (sql.includes('list_zernio_direct_schedules')) return { rows: this.directListRows };
     return { rows: [] };
@@ -152,6 +158,12 @@ test('direct scheduling reserves, calls the exact LinkedIn account once and sett
   const providerCalls: unknown[] = [];
   const service = new PgPortalZernioCalendarCommandService(dependencies(client, {
     postingClient: {
+      async probeAccount() {
+        return { accountId: LINKEDIN_ACCOUNT_ID, profileId: PROVIDER_PROFILE_ID,
+          network: 'linkedin', username: 'propertypredator', displayName: 'Property Predator',
+          canPost: true, responseSha256: 'c'.repeat(64) };
+      },
+      async prepareMediaUpload(): Promise<never> { throw new Error('not used'); },
       async schedule(value) {
         providerCalls.push(value);
         return {
@@ -165,7 +177,7 @@ test('direct scheduling reserves, calls the exact LinkedIn account once and sett
   }));
   const result = await service.scheduleDirect(identity, {
     network: 'linkedin', content: 'A useful Property Predator post.',
-    scheduledFor, commandKey: 'calendar-command-key-1',
+    scheduledFor, commandKey: 'calendar-command-key-1', media: null,
   });
   assert.deepEqual(result, {
     ok: true, scheduleId: JOB_ID, providerPostId: 'zernio-post-1',
@@ -174,7 +186,7 @@ test('direct scheduling reserves, calls the exact LinkedIn account once and sett
   assert.deepEqual(providerCalls, [{
     requestId: JOB_ID, content: 'A useful Property Predator post.',
     targets: [{ network: 'linkedin', accountId: LINKEDIN_ACCOUNT_ID }],
-    scheduledFor,
+    scheduledFor, mediaItems: [],
   }]);
   assert.equal(client.calls.filter((call) => call.sql.includes('settle_zernio_direct_schedule')).length, 1);
 });
@@ -188,17 +200,56 @@ test('direct schedule replay returns the original provider post without another 
   }];
   let providerCalls = 0;
   const service = new PgPortalZernioCalendarCommandService(dependencies(client, {
-    postingClient: { async schedule(): Promise<never> { providerCalls += 1; throw new Error(); } },
+    postingClient: {
+      async probeAccount() {
+        return { accountId: LINKEDIN_ACCOUNT_ID, profileId: PROVIDER_PROFILE_ID,
+          network: 'linkedin', username: null, displayName: null,
+          canPost: true, responseSha256: 'c'.repeat(64) };
+      },
+      async prepareMediaUpload(): Promise<never> { throw new Error('not used'); },
+      async schedule(): Promise<never> { providerCalls += 1; throw new Error(); },
+    },
   }));
   const result = await service.scheduleDirect(identity, {
     network: 'linkedin', content: 'A useful Property Predator post.',
-    scheduledFor, commandKey: 'calendar-command-key-1',
+    scheduledFor, commandKey: 'calendar-command-key-1', media: null,
   });
   assert.deepEqual(result, {
     ok: true, scheduleId: JOB_ID, providerPostId: 'zernio-post-1',
     scheduledFor, disposition: 'replayed',
   });
   assert.equal(providerCalls, 0);
+});
+
+test('a missing account proof triggers one exact provider probe, records it, then reserves', async () => {
+  const client = new FakeClient();
+  const scheduledFor = new Date(Date.now() + 60 * 60_000).toISOString();
+  client.directReserveErrors = [{ code: '55000' }];
+  client.directReserveRows = [{
+    schedule_id: JOB_ID, current_state: 'scheduled', provider_external_id: 'zernio-post-1',
+    scheduled_for: scheduledFor, created_now: false,
+  }];
+  let probes = 0;
+  const service = new PgPortalZernioCalendarCommandService(dependencies(client, {
+    postingClient: {
+      async probeAccount() {
+        probes += 1;
+        return { accountId: LINKEDIN_ACCOUNT_ID, profileId: PROVIDER_PROFILE_ID,
+          network: 'linkedin', username: 'propertypredator', displayName: 'Property Predator',
+          canPost: true, responseSha256: 'c'.repeat(64) };
+      },
+      async prepareMediaUpload(): Promise<never> { throw new Error('not used'); },
+      async schedule(): Promise<never> { throw new Error('not used'); },
+    },
+  }));
+  const result = await service.scheduleDirect(identity, {
+    network: 'linkedin', content: 'A useful Property Predator post.',
+    scheduledFor, commandKey: 'calendar-command-key-2', media: null,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(probes, 1);
+  assert.equal(client.calls.filter((call) => call.sql.includes('reserve_zernio_direct_schedule')).length, 2);
+  assert.equal(client.calls.filter((call) => call.sql.includes('record_zernio_calendar_account_probe')).length, 1);
 });
 
 test('the request cannot choose provider profile or account identifiers', async () => {

@@ -29,6 +29,7 @@ import type {
   PortalZernioDirectScheduleInput,
   PortalZernioDirectScheduleListResult,
   PortalZernioDirectScheduleResult,
+  PortalZernioMediaUploadResult,
 } from './zernio-calendar-command-service.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -75,6 +76,20 @@ interface DirectListRow extends QueryResultRow {
   readonly safe_code: unknown;
 }
 
+const MEDIA_CONTENT_TYPES = new Set([
+  'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+  'video/mp4', 'video/quicktime', 'video/webm',
+]);
+
+function publicMediaUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length < 10 || value.length > 2_048) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password && !url.hash
+      && (!url.port || url.port === '443') && url.hostname.toLowerCase() === 'media.zernio.com';
+  } catch { return false; }
+}
+
 export interface PortalZernioCalendarConfiguredAccount {
   readonly network: PortalZernioCalendarNetwork;
   readonly providerAccountId: string;
@@ -87,7 +102,7 @@ export interface PgPortalZernioCalendarCommandDependencies {
   readonly providerConnectionId: string;
   readonly providerProfileId: string;
   readonly accounts: readonly PortalZernioCalendarConfiguredAccount[];
-  readonly postingClient?: Pick<ZernioPostingClient, 'schedule'>;
+  readonly postingClient?: Pick<ZernioPostingClient, 'schedule' | 'probeAccount' | 'prepareMediaUpload'>;
 }
 
 function sha256(value: string): Buffer {
@@ -111,6 +126,7 @@ function mapFailure(error: unknown): PortalZernioCalendarCommandFailure {
   if (error instanceof InactivePortalSessionError) return failed('unauthenticated');
   const code = postgresCode(error);
   if (code === '42501') return failed('forbidden');
+  if (code === '55000') return failed('account_not_ready');
   if (code === '40001' || code === '23505') return failed('conflict');
   if (code === '22023' || code === '23514' || code === '23503') {
     return failed('validation');
@@ -156,7 +172,7 @@ implements PortalZernioCalendarCommandService {
   readonly #providerProfileIdSha256: Buffer;
   readonly #accountSha256ByNetwork: ReadonlyMap<PortalZernioCalendarNetwork, Buffer>;
   readonly #providerAccountIdByNetwork: ReadonlyMap<PortalZernioCalendarNetwork, string>;
-  readonly #postingClient: Pick<ZernioPostingClient, 'schedule'>;
+  readonly #postingClient: Pick<ZernioPostingClient, 'schedule' | 'probeAccount' | 'prepareMediaUpload'>;
 
   constructor(dependencies: PgPortalZernioCalendarCommandDependencies) {
     if (!UUID.test(dependencies.workspaceId)
@@ -191,6 +207,12 @@ implements PortalZernioCalendarCommandService {
       async schedule(): Promise<never> {
         throw new ZernioPostingError('invalid_configuration');
       },
+      async probeAccount(): Promise<never> {
+        throw new ZernioPostingError('invalid_configuration');
+      },
+      async prepareMediaUpload(): Promise<never> {
+        throw new ZernioPostingError('invalid_configuration');
+      },
     });
     this.configuredNetworks = Object.freeze([...accountDigests.keys()].sort());
   }
@@ -200,13 +222,19 @@ implements PortalZernioCalendarCommandService {
     input: PortalZernioDirectScheduleInput,
   ): Promise<PortalZernioDirectScheduleResult> {
     if (Object.getPrototypeOf(input) !== Object.prototype
-        || Object.keys(input).sort().join(',') !== 'commandKey,content,network,scheduledFor'
+        || Object.keys(input).sort().join(',') !== 'commandKey,content,media,network,scheduledFor'
         || input.network !== 'linkedin'
         || typeof input.content !== 'string' || input.content.trim() !== input.content
         || Buffer.byteLength(input.content, 'utf8') < 1
         || Buffer.byteLength(input.content, 'utf8') > 12_000
         || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(input.content)
         || !canonicalUtcInstant(input.scheduledFor)
+        || (input.media !== null && (
+          Object.getPrototypeOf(input.media) !== Object.prototype
+          || Object.keys(input.media).sort().join(',') !== 'type,url'
+          || (input.media.type !== 'image' && input.media.type !== 'video')
+          || !publicMediaUrl(input.media.url)
+        ))
         || !/^[!-~]{8,200}$/u.test(input.commandKey)) return failed('validation');
     const accountDigest = this.#accountSha256ByNetwork.get('linkedin');
     const accountId = this.#providerAccountIdByNetwork.get('linkedin');
@@ -214,24 +242,14 @@ implements PortalZernioCalendarCommandService {
     try {
       const context = await this.#context(identity);
       if (!context) return failed('unauthenticated');
-      const reserved = await withTransaction(this.#commandPool, context, async (client) => {
-        const result = await client.query<DirectReserveRow>(
-          `/* portal.zernio-calendar.reserve-direct */
-           SELECT schedule_id::text, current_state, provider_external_id,
-             scheduled_for::text, created_now
-           FROM app_private.reserve_zernio_direct_schedule(
-             $1::uuid,$2::uuid,$3::text,$4::bytea,$5::text,$6::timestamptz,$7::text
-           )`,
-          [this.#workspaceId, this.#providerConnectionId, 'linkedin', accountDigest, input.content,
-            input.scheduledFor, input.commandKey],
-        );
-        const row = result.rows[0];
-        if (result.rows.length !== 1 || !row || typeof row.schedule_id !== 'string'
-            || !UUID.test(row.schedule_id) || typeof row.current_state !== 'string'
-            || typeof row.scheduled_for !== 'string' || !canonicalUtcInstant(row.scheduled_for)
-            || typeof row.created_now !== 'boolean') throw new Error('Invalid direct reserve result');
-        return row;
-      }, { isolation: 'serializable' });
+      let reserved: DirectReserveRow;
+      try {
+        reserved = await this.#reserveDirect(context, accountDigest, input);
+      } catch (error) {
+        if (postgresCode(error) !== '55000'
+            || !await this.#reconcileConfiguredAccount(context, input.commandKey)) throw error;
+        reserved = await this.#reserveDirect(context, accountDigest, input);
+      }
       if (!reserved.created_now) {
         if (reserved.current_state === 'scheduled'
             && typeof reserved.provider_external_id === 'string') {
@@ -252,6 +270,7 @@ implements PortalZernioCalendarCommandService {
           content: input.content,
           targets: Object.freeze([{ network: 'linkedin', accountId }]),
           scheduledFor: input.scheduledFor,
+          mediaItems: input.media ? Object.freeze([input.media]) : Object.freeze([]),
         });
         if (provider.status !== 'scheduled' || provider.platforms.length !== 1
             || provider.platforms[0]?.network !== 'linkedin'
@@ -291,6 +310,110 @@ implements PortalZernioCalendarCommandService {
         disposition: 'applied' as const });
     } catch (error) {
       return mapFailure(error);
+    }
+  }
+
+  async prepareMediaUpload(
+    identity: PortalCrmRequestIdentity,
+    input: Readonly<{
+      commandKey: string;
+      filename: string;
+      contentType: import('./zernio-calendar-command-service.js').PortalZernioMediaContentType;
+      size: number;
+    }>,
+  ): Promise<PortalZernioMediaUploadResult> {
+    if (Object.getPrototypeOf(input) !== Object.prototype
+        || Object.keys(input).sort().join(',') !== 'commandKey,contentType,filename,size'
+        || !/^[!-~]{8,200}$/u.test(input.commandKey)
+        || typeof input.filename !== 'string' || input.filename !== input.filename.trim()
+        || !input.filename || input.filename.length > 180
+        || /[\u0000-\u001f\u007f\\/]/u.test(input.filename)
+        || !MEDIA_CONTENT_TYPES.has(input.contentType)
+        || !Number.isSafeInteger(input.size) || input.size < 1 || input.size > 500_000_000) {
+      return failed('validation');
+    }
+    try {
+      const context = await this.#context(identity);
+      if (!context) return failed('unauthenticated');
+      if (!await this.#reconcileConfiguredAccount(context, input.commandKey)) {
+        return failed('account_not_ready');
+      }
+      const upload = await this.#postingClient.prepareMediaUpload({
+        requestId: context.requestId,
+        filename: input.filename,
+        contentType: input.contentType,
+        size: input.size,
+      });
+      return Object.freeze({
+        ok: true,
+        uploadUrl: upload.uploadUrl,
+        publicUrl: upload.publicUrl,
+        mediaType: input.contentType.startsWith('image/') ? 'image' : 'video',
+        expiresIn: upload.expiresIn,
+      });
+    } catch (error) {
+      if (error instanceof ZernioPostingError
+          && ['forbidden', 'unauthorised', 'not_found', 'provider_rejected',
+            'unbound_target'].includes(error.code)) return failed('account_not_ready');
+      if (error instanceof ZernioPostingError && error.code === 'invalid_request') {
+        return failed('validation');
+      }
+      return failed('unavailable');
+    }
+  }
+
+  async #reserveDirect(
+    context: DatabaseRequestContext,
+    accountDigest: Buffer,
+    input: PortalZernioDirectScheduleInput,
+  ): Promise<DirectReserveRow> {
+    return withTransaction(this.#commandPool, context, async (client) => {
+      const result = await client.query<DirectReserveRow>(
+        `/* portal.zernio-calendar.reserve-direct */
+         SELECT schedule_id::text, current_state, provider_external_id,
+           scheduled_for::text, created_now
+         FROM app_private.reserve_zernio_direct_schedule_v2(
+           $1::uuid,$2::uuid,$3::text,$4::bytea,$5::text,$6::text,$7::text,
+           $8::timestamptz,$9::text
+         )`,
+        [this.#workspaceId, this.#providerConnectionId, 'linkedin', accountDigest, input.content,
+          input.media?.type ?? null, input.media?.url ?? null, input.scheduledFor, input.commandKey],
+      );
+      const row = result.rows[0];
+      if (result.rows.length !== 1 || !row || typeof row.schedule_id !== 'string'
+          || !UUID.test(row.schedule_id) || typeof row.current_state !== 'string'
+          || typeof row.scheduled_for !== 'string' || !canonicalUtcInstant(row.scheduled_for)
+          || typeof row.created_now !== 'boolean') throw new Error('Invalid direct reserve result');
+      return row;
+    }, { isolation: 'serializable' });
+  }
+
+  async #reconcileConfiguredAccount(
+    context: DatabaseRequestContext,
+    commandKey: string,
+  ): Promise<boolean> {
+    const accountId = this.#providerAccountIdByNetwork.get('linkedin');
+    const accountDigest = this.#accountSha256ByNetwork.get('linkedin');
+    if (!accountId || !accountDigest) return false;
+    try {
+      const probe = await this.#postingClient.probeAccount({
+        requestId: context.requestId,
+        target: Object.freeze({ network: 'linkedin', accountId }),
+      });
+      const result = await withTransaction(this.#commandPool, context, async (client) => client.query(
+        `/* portal.zernio-calendar.record-account-probe */
+         SELECT app_private.record_zernio_calendar_account_probe(
+           $1::uuid,$2::uuid,$3::text,$4::bytea,$5::bytea,$6::text,$7::text,$8::bytea,$9::text
+         ) AS disposition`,
+        [this.#workspaceId, this.#providerConnectionId, 'linkedin',
+          sha256(probe.profileId), accountDigest, probe.username, probe.displayName,
+          Buffer.from(probe.responseSha256, 'hex'), commandKey],
+      ), { isolation: 'serializable' });
+      return ['recorded', 'replayed'].includes(String(result.rows[0]?.disposition));
+    } catch (error) {
+      if (error instanceof ZernioPostingError) return false;
+      if (postgresCode(error) === '42501' || postgresCode(error) === '55000') return false;
+      throw error;
     }
   }
 
@@ -425,7 +548,7 @@ export function createPgPortalZernioCalendarCommandService(input: Readonly<{
   providerConnectionId: string;
   providerProfileId: string;
   accounts: readonly PortalZernioCalendarConfiguredAccount[];
-  postingClient: Pick<ZernioPostingClient, 'schedule'>;
+  postingClient: Pick<ZernioPostingClient, 'schedule' | 'probeAccount' | 'prepareMediaUpload'>;
 }>): PgPortalZernioCalendarCommandService {
   return new PgPortalZernioCalendarCommandService({
     principalResolver: createPgPortalCrmPrincipalResolver(input.webPool),

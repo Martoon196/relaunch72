@@ -15,6 +15,7 @@ export type PortalZernioCalendarCommandFailureKind =
   | 'forbidden'
   | 'validation'
   | 'conflict'
+  | 'account_not_ready'
   | 'unavailable';
 
 export interface PortalZernioCalendarCommandFailure {
@@ -53,6 +54,10 @@ export interface PortalZernioDirectScheduleInput {
   readonly content: string;
   readonly scheduledFor: string;
   readonly commandKey: string;
+  readonly media: Readonly<{
+    readonly type: 'image' | 'video';
+    readonly url: string;
+  }> | null;
 }
 
 export interface PortalZernioDirectScheduleItem {
@@ -81,6 +86,20 @@ export type PortalZernioDirectScheduleListResult =
   | Readonly<{ ok: true; items: readonly PortalZernioDirectScheduleItem[] }>
   | PortalZernioCalendarCommandFailure;
 
+export type PortalZernioMediaContentType =
+  | 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'
+  | 'video/mp4' | 'video/quicktime' | 'video/webm';
+
+export type PortalZernioMediaUploadResult =
+  | Readonly<{
+      ok: true;
+      uploadUrl: string;
+      publicUrl: string;
+      mediaType: 'image' | 'video';
+      expiresIn: number;
+    }>
+  | PortalZernioCalendarCommandFailure;
+
 export interface PortalZernioCalendarCommandService {
   /** Networks with one exact deployment-configured Zernio account binding. */
   readonly configuredNetworks: readonly PortalZernioCalendarNetwork[];
@@ -92,6 +111,15 @@ export interface PortalZernioCalendarCommandService {
     identity: PortalCrmRequestIdentity,
     input: PortalZernioDirectScheduleInput,
   ): Promise<PortalZernioDirectScheduleResult>;
+  prepareMediaUpload?(
+    identity: PortalCrmRequestIdentity,
+    input: Readonly<{
+      commandKey: string;
+      filename: string;
+      contentType: PortalZernioMediaContentType;
+      size: number;
+    }>,
+  ): Promise<PortalZernioMediaUploadResult>;
   listDirect?(
     identity: PortalCrmRequestIdentity,
     input: Readonly<{ from: string; to: string }>,
