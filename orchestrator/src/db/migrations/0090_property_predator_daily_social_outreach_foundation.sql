@@ -4639,16 +4639,32 @@ BEGIN
     'r72_daily_outreach_command',
     'r72_daily_outreach_read'
   )
-    AND (
-      NOT (
+    AND NOT (
+      (
         granted.rolname = 'r72_daily_outreach_definer'
         AND member.rolname = 'r72_owner'
+        AND NOT membership.admin_option
+        AND coalesce(
+          (pg_catalog.to_jsonb(membership)->>'set_option')::boolean,
+          true
+        ) IS TRUE
       )
-      OR membership.admin_option
-      OR coalesce(
-        (pg_catalog.to_jsonb(membership)->>'set_option')::boolean,
-        true
-      ) IS NOT TRUE
+      OR (
+        -- PostgreSQL 16+ gives a non-superuser CREATEROLE session an
+        -- unavoidable bootstrap grant on every role it creates. Neon exposes
+        -- that grant as ADMIN TRUE, INHERIT FALSE, SET FALSE: it can administer
+        -- the role but cannot assume its privileges. Accept only that exact
+        -- non-effective tuple for the migration session. The managed platform
+        -- may record its bootstrap administrator, rather than the session, as
+        -- grantor.
+        member.rolname = session_user
+        AND membership.admin_option
+        AND NOT membership.inherit_option
+        AND coalesce(
+          (pg_catalog.to_jsonb(membership)->>'set_option')::boolean,
+          true
+        ) IS NOT TRUE
+      )
     )
   LIMIT 1;
   IF unsafe_membership IS NOT NULL THEN
