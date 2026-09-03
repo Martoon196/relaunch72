@@ -184,6 +184,9 @@ test('0091 serialises cooldown and frequency limits without creating an effect',
 
 test('0091 exposes exact table-blind command/read functions only', async () => {
   const source = await sql();
+  assert.match(source, /member\.rolname = session_user/u);
+  assert.match(source, /membership\.admin_option/u);
+  assert.match(source, /NOT membership\.inherit_option/u);
   assert.match(source, /Creator Watch login role has direct table capability/u);
   assert.match(source, /has_any_column_privilege/u);
   assert.match(source, /Creator Watch exact command\/read ACL is not intact/u);
