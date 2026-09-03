@@ -200,8 +200,9 @@ test('Content Calendar renders a premium accessible planner and fails closed wit
   assert.match(html, /href="\/portal\/content\/calendar" aria-current="page">Calendar/);
   assert.match(html, /<article class="ccal" aria-labelledby="ccal-title" data-provider-effects="none" data-content-calendar data-calendar-mode="week" data-calendar-timezone="Europe\/London" data-source-truncated="false" data-preview-dirty="false">/);
   assert.match(html, /Own the week\. <em>Control the signal\.<\/em>/);
-  assert.match(html, /TEST planner · zero delivery/);
-  assert.match(html, /A durable TEST plan is not a provider schedule/);
+  assert.match(html, /Planning workspace/);
+  assert.doesNotMatch(html, /Schedule a LinkedIn post/);
+  assert.match(html, /The live scheduling connection is not available yet/);
   assert.match(html, /aria-label="Calendar view"/);
   assert.match(html, /aria-label="Filter planner by channel"/);
   assert.match(html, /aria-label="Scrollable week content calendar"/);
