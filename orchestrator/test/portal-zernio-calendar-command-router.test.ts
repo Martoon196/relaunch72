@@ -152,7 +152,7 @@ test('Zernio calendar staging accepts immutable evidence and rejects browser pro
   assert.equal(calls.length, 1);
 });
 
-test('Zernio live-channel panel exposes calendar evidence but no provider identity fields', () => {
+test('live-channel panel exposes calendar evidence but no provider identity fields', () => {
   const html = renderLiveChannelsBody(presentLiveChannels(createPropertyPredatorLiveChannelsFixture()), {
     workspaceName: 'Property Predator Growth HQ',
     csrfToken: 'csrf',
@@ -168,9 +168,10 @@ test('Zernio live-channel panel exposes calendar evidence but no provider identi
     zernioCalendarConfiguredNetworks: ['instagram', 'linkedin'],
     ownedSocialCommandKeys: { bind: COMMAND_KEY, revoke: COMMAND_KEY, stage: COMMAND_KEY },
   });
-  assert.match(html, /Arm Zernio calendar publication/u);
+  assert.match(html, /Arm calendar publication/u);
   assert.match(html, /Manage connected accounts/u);
   assert.match(html, /1-per-day \/ 3-per-month cap/u);
   assert.doesNotMatch(html, /name="(?:profile_id|owned_account|provider_profile_id|profile_credential)"/u);
   assert.doesNotMatch(html, /Ayrshare Profile Key/u);
+  assert.doesNotMatch(html, /zernio/i);
 });
