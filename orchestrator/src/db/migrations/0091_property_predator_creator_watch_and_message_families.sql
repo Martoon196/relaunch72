@@ -48,8 +48,22 @@ BEGIN
     JOIN pg_catalog.pg_roles AS parent ON parent.oid = membership.roleid
     WHERE parent.rolname = role_name
       AND NOT (
-        role_name = 'r72_daily_outreach_definer'
-        AND member.rolname = 'r72_owner'
+        (
+          role_name = 'r72_daily_outreach_definer'
+          AND member.rolname = 'r72_owner'
+        )
+        OR (
+          -- Neon/PostgreSQL 16+ retains one non-effective creator grant:
+          -- ADMIN TRUE, INHERIT FALSE, SET FALSE. It cannot assume runtime
+          -- privileges, so accept only that exact tuple for this session.
+          member.rolname = session_user
+          AND membership.admin_option
+          AND NOT membership.inherit_option
+          AND coalesce(
+            (pg_catalog.to_jsonb(membership)->>'set_option')::boolean,
+            true
+          ) IS NOT TRUE
+        )
       )
     LIMIT 1;
     IF unsafe_member IS NOT NULL THEN
