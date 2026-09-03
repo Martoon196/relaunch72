@@ -1,8 +1,9 @@
 /**
- * First-deploy control-plane policy for Property Predator Growth HQ.
+ * Production control-plane policy for Property Predator Growth HQ.
  *
- * This is deliberately narrower than the future activation policy. It proves
- * the public web process cannot send, charge, import or run live generators.
+ * Social read/reply and calendar effects are activated in the public web
+ * process. Every communication, payment, import and generation rail remains
+ * independently gated and privileged worker credentials remain forbidden.
  */
 export function propertyPredatorDarkProductionBlockers(
   env: NodeJS.ProcessEnv,
@@ -16,7 +17,11 @@ export function propertyPredatorDarkProductionBlockers(
   const exact = (name: string, expected: string, label: string): void => {
     if (env[name]?.trim() !== expected) blockers.push(`${label} is not locked to ${expected}`);
   };
-  exact('PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'false', 'Provider effects');
+  // This shared prerequisite must agree with the production Blueprint. The
+  // individual email, WhatsApp, SMS, payment, import and generation switches
+  // below still fail closed; requiring `false` here made the activated social
+  // Blueprint impossible to boot.
+  exact('PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'true', 'Provider effects');
   exact('PROPERTY_PREDATOR_EMAIL_DELIVERY_ENABLED', 'false', 'Email delivery');
   exact('PROPERTY_PREDATOR_EMAIL_EMERGENCY_PAUSED', 'true', 'Email emergency pause');
   exact('PUBLIC_LEAD_CAPTURE_ENABLED', 'false', 'Public lead capture');
