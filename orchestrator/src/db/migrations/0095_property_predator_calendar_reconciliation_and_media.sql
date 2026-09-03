@@ -47,11 +47,14 @@ CREATE INDEX zernio_calendar_account_probes_current_idx
 ALTER TABLE app.property_predator_zernio_calendar_account_probes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app.property_predator_zernio_calendar_account_probes FORCE ROW LEVEL SECURITY;
 REVOKE ALL ON app.property_predator_zernio_calendar_account_probes FROM PUBLIC;
-GRANT SELECT, INSERT ON app.property_predator_zernio_calendar_account_probes TO r72_zernio_social_definer;
+GRANT SELECT, INSERT ON app.property_predator_zernio_calendar_account_probes
+  TO r72_zernio_social_definer, r72_owned_social_definer;
 CREATE POLICY zernio_calendar_account_probes_definer_all
-  ON app.property_predator_zernio_calendar_account_probes FOR ALL TO r72_zernio_social_definer
+  ON app.property_predator_zernio_calendar_account_probes FOR ALL
+  TO r72_zernio_social_definer, r72_owned_social_definer
   USING (true) WITH CHECK (true);
 
+GRANT CREATE ON SCHEMA app_private TO r72_zernio_social_definer;
 SET LOCAL ROLE r72_zernio_social_definer;
 
 CREATE FUNCTION app_private.record_zernio_calendar_account_probe(
@@ -153,6 +156,19 @@ BEGIN
   RETURN 'recorded';
 END
 $function$;
+
+REVOKE ALL ON FUNCTION app_private.record_zernio_calendar_account_probe(
+  uuid,uuid,text,bytea,bytea,text,text,bytea,text
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_private.record_zernio_calendar_account_probe(
+  uuid,uuid,text,bytea,bytea,text,text,bytea,text
+) TO r72_zernio_social_command;
+
+RESET ROLE;
+SET LOCAL ROLE r72_owner;
+REVOKE CREATE ON SCHEMA app_private FROM r72_zernio_social_definer;
+GRANT CREATE ON SCHEMA app_private TO r72_owned_social_definer;
+SET LOCAL ROLE r72_owned_social_definer;
 
 CREATE FUNCTION app_private.reserve_zernio_direct_schedule_v2(
   p_workspace_id uuid,
@@ -296,24 +312,19 @@ BEGIN
 END
 $function$;
 
-RESET ROLE;
-SET LOCAL ROLE r72_owner;
-
-REVOKE ALL ON FUNCTION app_private.record_zernio_calendar_account_probe(
-  uuid,uuid,text,bytea,bytea,text,text,bytea,text
-) FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_private.reserve_zernio_direct_schedule_v2(
   uuid,uuid,text,bytea,text,text,text,timestamptz,text
 ) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app_private.record_zernio_calendar_account_probe(
-  uuid,uuid,text,bytea,bytea,text,text,bytea,text
-) TO r72_zernio_social_command;
 GRANT EXECUTE ON FUNCTION app_private.reserve_zernio_direct_schedule_v2(
   uuid,uuid,text,bytea,text,text,text,timestamptz,text
 ) TO r72_zernio_social_command;
 REVOKE EXECUTE ON FUNCTION app_private.reserve_zernio_direct_schedule(
   uuid,uuid,text,bytea,text,timestamptz,text
 ) FROM r72_zernio_social_command;
+
+RESET ROLE;
+SET LOCAL ROLE r72_owner;
+REVOKE CREATE ON SCHEMA app_private FROM r72_owned_social_definer;
 
 DO $audit$
 BEGIN

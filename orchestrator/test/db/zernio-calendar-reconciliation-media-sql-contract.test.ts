@@ -18,6 +18,9 @@ test('0095 binds media and a current exact-account probe to direct schedules', a
   assert.match(source, /CREATE TABLE app\.property_predator_zernio_calendar_account_probes/u);
   assert.match(source, /CREATE FUNCTION app_private\.record_zernio_calendar_account_probe/u);
   assert.match(source, /CREATE FUNCTION app_private\.reserve_zernio_direct_schedule_v2/u);
+  assert.match(source, /GRANT CREATE ON SCHEMA app_private TO r72_zernio_social_definer; SET LOCAL ROLE r72_zernio_social_definer;[\s\S]+CREATE FUNCTION app_private\.record_zernio_calendar_account_probe/u);
+  assert.match(source, /REVOKE CREATE ON SCHEMA app_private FROM r72_zernio_social_definer; GRANT CREATE ON SCHEMA app_private TO r72_owned_social_definer; SET LOCAL ROLE r72_owned_social_definer;[\s\S]+CREATE FUNCTION app_private\.reserve_zernio_direct_schedule_v2/u);
+  assert.match(source, /REVOKE CREATE ON SCHEMA app_private FROM r72_owned_social_definer/u);
   assert.match(source, /probe\.probed_at >= statement_timestamp\(\) - interval '24 hours'/u);
   assert.match(source, /p_media_url !~ '\^https:\/\/media\[\.\]zernio\[\.\]com\/'/u);
   assert.match(source, /RAISE EXCEPTION 'Zernio direct calendar account not ready' USING ERRCODE = '55000'/u);
