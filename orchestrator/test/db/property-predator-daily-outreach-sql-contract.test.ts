@@ -277,6 +277,10 @@ test('0090 exposes exact table-blind command and safe-read boundaries only', asy
   assert.match(source, /has_any_column_privilege/u);
   assert.match(source, /has_sequence_privilege/u);
   assert.match(source, /unsafe inbound membership/u);
+  assert.match(source, /member\.rolname = session_user/u);
+  assert.match(source, /membership\.admin_option/u);
+  assert.match(source, /NOT membership\.inherit_option/u);
+  assert.match(source, /set_option[^;]+IS NOT TRUE/su);
   assert.match(source, /procedure\.oid = ANY\(owned_functions\)/u);
   assert.match(source, /owner\.rolname <> 'r72_daily_outreach_definer'/u);
   assert.match(source, /Daily Outreach gained provider-effect capability/u);
