@@ -269,6 +269,8 @@ test('live scheduler offers exact minutes, smart choices and optional media with
   assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /file\.name \+ ' · uploading…'/u);
   assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /mediaPreview\.dataset\.uploadState = 'ready'/u);
   assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /mediaPreview\.dataset\.uploadState = 'failed'/u);
+  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /mediaName\.textContent = 'Upload failed — ' \+ reason/u);
+  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /mediaName\.title = file\.name/u);
   assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /setLiveStatus\('Upload failed: ' \+ reason\)/u);
   assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /setClockMinutes/u);
   assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /renderDatePicker/u);

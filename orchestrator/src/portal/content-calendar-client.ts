@@ -728,7 +728,10 @@ export const CONTENT_CALENDAR_CLIENT_SOURCE = String.raw`(() => {
         }
         const endpoint = sameOriginUrl(liveForm.dataset.mediaUploadUrl);
         if (!endpoint || !window.fetch) {
-          if (mediaName) mediaName.textContent = file.name + ' · upload unavailable';
+          if (mediaName) {
+            mediaName.textContent = 'Upload failed — media upload is temporarily unavailable.';
+            mediaName.title = file.name;
+          }
           if (mediaPreview) mediaPreview.dataset.uploadState = 'failed';
           setLiveStatus('Upload failed: media upload is temporarily unavailable.');
           return;
@@ -765,9 +768,12 @@ export const CONTENT_CALENDAR_CLIENT_SOURCE = String.raw`(() => {
         } catch (error) {
           if (mediaType) mediaType.value = '';
           if (mediaUrl) mediaUrl.value = '';
-          if (mediaName) mediaName.textContent = file.name + ' · upload failed';
-          if (mediaPreview) mediaPreview.dataset.uploadState = 'failed';
           const reason = error instanceof Error ? error.message : 'The media upload could not complete.';
+          if (mediaName) {
+            mediaName.textContent = 'Upload failed — ' + reason;
+            mediaName.title = file.name;
+          }
+          if (mediaPreview) mediaPreview.dataset.uploadState = 'failed';
           setLiveStatus('Upload failed: ' + reason);
         } finally {
           uploadBusy = false;
