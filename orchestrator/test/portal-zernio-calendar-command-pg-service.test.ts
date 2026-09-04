@@ -153,7 +153,7 @@ test('direct scheduling reserves, calls the exact LinkedIn account once and sett
   const scheduledFor = new Date(Date.now() + 60 * 60_000).toISOString();
   client.directReserveRows = [{
     schedule_id: JOB_ID, current_state: 'reserved', provider_external_id: null,
-    scheduled_for: scheduledFor, created_now: true,
+    scheduled_for: scheduledFor.replace('T', ' ').replace('.000Z', '+00'), created_now: true,
   }];
   const providerCalls: unknown[] = [];
   const service = new PgPortalZernioCalendarCommandService(dependencies(client, {
@@ -189,6 +189,36 @@ test('direct scheduling reserves, calls the exact LinkedIn account once and sett
     scheduledFor, mediaItems: [],
   }]);
   assert.equal(client.calls.filter((call) => call.sql.includes('settle_zernio_direct_schedule')).length, 1);
+});
+
+test('calendar reads normalise PostgreSQL timestamp text at the database boundary', async () => {
+  const client = new FakeClient();
+  client.directListRows = [{
+    schedule_id: JOB_ID,
+    network: 'linkedin',
+    content_body: 'A useful Property Predator post.',
+    scheduled_for: '2026-09-04 17:35:00+00',
+    state: 'scheduled',
+    provider_external_id: 'zernio-post-1',
+    safe_code: 'scheduled',
+  }];
+  const service = new PgPortalZernioCalendarCommandService(dependencies(client));
+
+  assert.deepEqual(await service.listDirect(identity, {
+    from: '2026-09-01T00:00:00.000Z',
+    to: '2026-10-01T00:00:00.000Z',
+  }), {
+    ok: true,
+    items: [{
+      scheduleId: JOB_ID,
+      network: 'linkedin',
+      content: 'A useful Property Predator post.',
+      scheduledFor: '2026-09-04T17:35:00.000Z',
+      state: 'scheduled',
+      providerPostId: 'zernio-post-1',
+      safeCode: 'scheduled',
+    }],
+  });
 });
 
 test('direct schedule replay returns the original provider post without another provider call', async () => {

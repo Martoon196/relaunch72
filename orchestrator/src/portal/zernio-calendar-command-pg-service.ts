@@ -140,6 +140,11 @@ function canonicalUtcInstant(value: unknown): value is string {
   return Number.isFinite(instant.getTime()) && instant.toISOString() === value;
 }
 
+function databaseUtcInstant(value: unknown): string | null {
+  const instant = value instanceof Date ? value : typeof value === 'string' ? new Date(value) : null;
+  return instant && Number.isFinite(instant.getTime()) ? instant.toISOString() : null;
+}
+
 function validCommand(input: PortalZernioCalendarCommandInput): boolean {
   const prototype = Object.getPrototypeOf(input) as unknown;
   const descriptors = Object.getOwnPropertyDescriptors(input);
@@ -380,11 +385,12 @@ implements PortalZernioCalendarCommandService {
           input.media?.type ?? null, input.media?.url ?? null, input.scheduledFor, input.commandKey],
       );
       const row = result.rows[0];
+      const scheduledFor = databaseUtcInstant(row?.scheduled_for);
       if (result.rows.length !== 1 || !row || typeof row.schedule_id !== 'string'
           || !UUID.test(row.schedule_id) || typeof row.current_state !== 'string'
-          || typeof row.scheduled_for !== 'string' || !canonicalUtcInstant(row.scheduled_for)
+          || !scheduledFor
           || typeof row.created_now !== 'boolean') throw new Error('Invalid direct reserve result');
-      return row;
+      return Object.freeze({ ...row, scheduled_for: scheduledFor });
     }, { isolation: 'serializable' });
   }
 
@@ -437,16 +443,17 @@ implements PortalZernioCalendarCommandService {
           [this.#workspaceId, input.from, input.to],
         );
         return result.rows.map((row) => {
+          const scheduledFor = databaseUtcInstant(row.scheduled_for);
           if (typeof row.schedule_id !== 'string' || !UUID.test(row.schedule_id)
               || row.network !== 'linkedin' || typeof row.content_body !== 'string'
-              || typeof row.scheduled_for !== 'string' || !canonicalUtcInstant(row.scheduled_for)
+              || !scheduledFor
               || !['reserved', 'scheduled', 'failed', 'outcome_unknown', 'cancelled'].includes(String(row.state))
               || (row.provider_external_id !== null && typeof row.provider_external_id !== 'string')
               || (row.safe_code !== null && (typeof row.safe_code !== 'string' || !SAFE_CODE.test(row.safe_code)))) {
             throw new Error('Invalid direct calendar row');
           }
           return Object.freeze({ scheduleId: row.schedule_id as string, network: 'linkedin' as const,
-            content: row.content_body, scheduledFor: row.scheduled_for as string,
+            content: row.content_body, scheduledFor,
             state: row.state as 'reserved' | 'scheduled' | 'failed' | 'outcome_unknown' | 'cancelled',
             providerPostId: row.provider_external_id as string | null,
             safeCode: row.safe_code as string | null });
