@@ -276,6 +276,58 @@ test('live scheduler offers exact minutes, smart choices and optional media with
   assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /renderDatePicker/u);
 });
 
+test('live LinkedIn schedules appear on the correct calendar day in the workspace timezone', () => {
+  const view = present(undefined, { mode: 'week', date: '2026-09-04', channel: 'all' });
+  const html = renderContentCalendarBody(view, {
+    liveScheduler: {
+      actionUrl: '/portal/content/calendar/live-schedules',
+      mediaUploadUrl: '/portal/content/calendar/media-uploads',
+      csrfToken: 'csrf-calendar-live-token-123456',
+      commandKey: 'calendar-live-command-001',
+      mediaCommandKey: 'calendar-media-command-001',
+      items: [{
+        scheduleId: 'hq-founder-post-001',
+        content: 'Scout is free — three real lookups a month, on real property. <script>alert(1)</script>',
+        scheduledFor: '2026-09-04T10:10:00.000Z',
+        state: 'scheduled',
+      }],
+    },
+  });
+  const friday = html.match(/data-calendar-day data-date="2026-09-04"[\s\S]*?(?=<section class="ccal-day[^>]*data-calendar-day data-date="2026-09-05")/u)?.[0] ?? '';
+  assert.match(friday, /data-calendar-live-slot/u);
+  assert.match(friday, /Scheduled live/u);
+  assert.match(friday, /<time class="ccal-time"[^>]*>11:10<\/time>/u);
+  assert.match(friday, /Real provider schedule · Europe\/London/u);
+  assert.match(html, /4 Sept 2026, 11:10 Europe\/London/u);
+  assert.match(html, /1 live · 0 TEST/u);
+  assert.match(html, /live schedules \+ durable TEST plans/u);
+  assert.match(html, /live cards are real provider schedules; TEST cards remain simulated/u);
+  assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/u);
+  assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/u);
+});
+
+test('live LinkedIn calendar cards obey the channel filter without hiding the scheduler', () => {
+  const view = present(undefined, { mode: 'month', date: '2026-09-04', channel: 'instagram' });
+  const html = renderContentCalendarBody(view, {
+    liveScheduler: {
+      actionUrl: '/portal/content/calendar/live-schedules',
+      mediaUploadUrl: '/portal/content/calendar/media-uploads',
+      csrfToken: 'csrf-calendar-live-token-123456',
+      commandKey: 'calendar-live-command-001',
+      mediaCommandKey: 'calendar-media-command-001',
+      items: [{
+        scheduleId: 'hq-founder-post-001',
+        content: 'Founder schedule',
+        scheduledFor: '2026-09-04T10:10:00.000Z',
+        state: 'scheduled',
+      }],
+    },
+  });
+  assert.match(html, /Build your next LinkedIn post/u);
+  assert.match(html, /0 live · 0 TEST/u);
+  assert.doesNotMatch(html, /data-calendar-live-slot/u);
+});
+
 test('Content Calendar renders injected native create, reschedule and cancel TEST commands without a provider rail', () => {
   const view = present();
   const first = view.days.flatMap((day) => day.slots)[0];

@@ -119,6 +119,7 @@ const CONTENT_CALENDAR_STYLE = `
   .ccal-workspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(285px,330px);gap:12px;padding:12px}.ccal-calendar,.ccal-backlog{min-width:0;border:1px solid var(--cal-line);background:var(--cal-panel)}.ccal-section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:14px 16px;border-bottom:1px solid var(--cal-line)}.ccal-section-head h2{margin:0;font-size:15px}.ccal-section-head p{margin:4px 0 0;color:var(--cal-muted);font-size:12px;line-height:1.45}.ccal-count{border:1px solid var(--cal-line2);padding:4px 8px;color:var(--cal-muted);font:850 12px var(--mono,monospace);white-space:nowrap}
   .ccal-scroll{max-width:100%;overflow-x:auto;scrollbar-color:var(--cal-line2) var(--cal-soft)}.ccal-weekdays{display:grid;grid-template-columns:repeat(7,minmax(155px,1fr));min-width:1085px;border-bottom:1px solid var(--cal-line);background:var(--cal-soft)}.ccal-weekday{padding:8px 10px;border-right:1px solid var(--cal-line);color:var(--cal-faint);font:800 12px var(--mono,monospace);letter-spacing:.06em;text-transform:uppercase}.ccal-weekday:last-child{border-right:0}.ccal-grid{display:grid;grid-template-columns:repeat(7,minmax(155px,1fr));min-width:1085px}.ccal-day{min-width:0;min-height:410px;border-right:1px solid var(--cal-line);background:#0c1012}.ccal-day:last-child{border-right:0}.ccal-day-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px;border-bottom:1px solid var(--cal-line)}.ccal-day-head strong{font:900 16px var(--mono,monospace)}.ccal-day-head span{color:var(--cal-faint);font-size:12px}.ccal-day.today .ccal-day-head{box-shadow:inset 0 -2px var(--cal-teal)}.ccal-day.today .ccal-day-head strong{color:var(--cal-teal)}.ccal-day.outside{opacity:.48}.ccal-day-slots{display:grid;gap:7px;padding:7px}.ccal-empty-day{min-height:74px;display:grid;place-items:center;border:1px dashed var(--cal-line);color:var(--cal-faint);font-size:12px;text-align:center;padding:8px}
   .ccal-slot{position:relative;min-width:0;border:1px solid var(--cal-line2);border-left:3px solid var(--cal-teal);border-radius:7px;background:var(--cal-raised);overflow:hidden}.ccal-slot.locked{border-left-color:var(--cal-amber)}.ccal-slot.attention{border-left-color:var(--cal-red);box-shadow:inset 0 0 0 1px rgba(255,115,107,.2)}.ccal-slot-top{display:flex;align-items:center;justify-content:space-between;gap:7px;padding:8px 9px;border-bottom:1px solid var(--cal-line)}.ccal-channel{display:inline-flex;align-items:center;gap:6px;min-width:0;color:var(--cal-muted);font-size:12px;font-weight:850}.ccal-channel-code{width:23px;height:23px;display:grid;place-items:center;border:1px solid currentColor;border-radius:5px;color:var(--cal-blue);font:900 10px var(--mono,monospace);text-transform:uppercase}.ccal-channel-code.instagram{color:#e38ad9}.ccal-channel-code.facebook{color:#91aeff}.ccal-channel-code.tiktok{color:#74f0e3}.ccal-channel-code.x{color:#e4e9eb}.ccal-channel-code.youtube{color:#ff8179}.ccal-channel-code.google-business{color:#78b5ff}.ccal-channel-code.threads{color:#d2d7d9}.ccal-channel-code.pinterest{color:#ff8b88}.ccal-channel-code.email{color:#e6c477}.ccal-channel-code.webinar{color:#bb92ff}.ccal-time{color:var(--cal-ink);font:900 12px var(--mono,monospace)}.ccal-slot-body{padding:9px}.ccal-slot-state{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:7px}.ccal-chip{display:inline-flex;align-items:center;min-height:22px;border:1px solid var(--cal-line2);border-radius:999px;padding:2px 6px;color:var(--cal-faint);font:800 10px var(--mono,monospace);letter-spacing:.03em;text-transform:uppercase}.ccal-chip.test{border-color:#2d756d;background:var(--cal-teal-soft);color:var(--cal-teal)}.ccal-chip.durable.planned{border-color:#39716b;color:#8fe8dc}.ccal-chip.durable.working{border-color:#675b35;color:var(--cal-amber)}.ccal-chip.durable.complete{border-color:#357a61;color:#89efb9}.ccal-chip.durable.cancelled{border-color:#596369;color:#a8b1b4}.ccal-chip.durable.attention{border-color:#7b3f3b;background:#24100e;color:#ff948d}.ccal-slot h3{margin:0;font-size:12px;line-height:1.4}.ccal-variant{margin:5px 0 0;color:var(--cal-muted);font-size:11px;line-height:1.4}.ccal-social-line{margin:7px 0 0;color:var(--cal-faint);font:800 9px/1.45 var(--mono,monospace)}.ccal-campaign-link{min-height:44px;display:inline-flex;align-items:center;margin-top:6px;color:var(--cal-teal);font-size:10px;font-weight:900}.ccal-campaign-link:focus-visible{outline:3px solid rgba(0,229,204,.3);outline-offset:2px}.ccal-gate{display:flex;align-items:center;gap:6px;margin-top:8px;color:var(--cal-teal);font-size:11px;font-weight:900}.ccal-gate::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}.ccal-slot.locked .ccal-gate{color:var(--cal-amber)}.ccal-slot.attention .ccal-gate{color:var(--cal-red)}.ccal-slot details{border-top:1px solid var(--cal-line)}.ccal-slot summary{min-height:40px;display:flex;align-items:center;justify-content:space-between;gap:7px;list-style:none;padding:0 9px;color:var(--cal-faint);font:800 10px var(--mono,monospace);cursor:pointer;text-transform:uppercase}.ccal-slot summary::-webkit-details-marker{display:none}.ccal-slot summary::after{content:"+";color:var(--cal-teal);font-size:15px}.ccal-slot details[open] summary::after{content:"−"}.ccal-proof{display:grid;gap:6px;padding:0 9px 9px}.ccal-proof-row{display:grid;grid-template-columns:62px minmax(0,1fr);gap:5px;color:var(--cal-muted);font-size:10px;line-height:1.35}.ccal-proof-row span{color:var(--cal-faint)}.ccal-proof-row code{color:var(--cal-ink)}.ccal-proof-note{margin:2px 0 0;color:var(--cal-muted);font-size:10px;line-height:1.45}.ccal-social-proof{display:grid;gap:6px;margin-top:3px;padding-top:8px;border-top:1px dashed var(--cal-line2)}.ccal-social-proof>strong{color:var(--cal-teal);font-size:10px}.ccal-social-proof.attention>strong{color:var(--cal-red)}
+  .ccal-live-slot{border-color:#2f776f;border-left-color:var(--cal-teal);background:linear-gradient(145deg,#10201e,#101619)}.ccal-live-slot.working{border-left-color:var(--cal-amber)}.ccal-live-slot.attention{border-left-color:var(--cal-red)}.ccal-live-slot.cancelled{border-left-color:var(--cal-faint);opacity:.72}.ccal-chip.live{border-color:#2d897e;background:var(--cal-teal-soft);color:var(--cal-teal)}.ccal-chip.live.working{border-color:#675b35;color:var(--cal-amber)}.ccal-chip.live.attention{border-color:#7b3f3b;background:#24100e;color:#ff948d}.ccal-chip.live.cancelled{border-color:#596369;color:#a8b1b4}
   .ccal-slot-move{display:none;grid-template-columns:44px minmax(0,1fr);gap:6px;padding:7px 8px;border-top:1px solid var(--cal-line);background:var(--cal-soft)}.ccal-enhanced .ccal-slot-move{display:grid}.ccal-move-handle,.ccal-move-sheet-button{min-height:44px;border:1px solid var(--cal-line2);border-radius:6px;background:#101619;color:var(--cal-muted);font-size:11px;font-weight:900}.ccal-move-handle{min-width:44px;padding:0;color:var(--cal-teal);font:900 15px var(--mono,monospace);cursor:grab;touch-action:none}.ccal-move-handle[aria-pressed="true"]{cursor:grabbing;background:var(--cal-teal-soft);box-shadow:inset 0 0 0 2px var(--cal-teal)}.ccal-move-sheet-button{padding:0 9px}.ccal-move-handle:focus-visible,.ccal-move-sheet-button:focus-visible,.ccal-sheet-button:focus-visible{outline:3px solid rgba(0,229,204,.3);outline-offset:2px}.ccal-slot[data-preview-moving="true"]{opacity:.76;box-shadow:0 0 0 2px var(--cal-teal)}.ccal-day[data-preview-drop-target="true"]{background:#0a2521;box-shadow:inset 0 0 0 2px var(--cal-teal)}.ccal-local-truth{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:0 12px 12px;padding:10px 12px;border:1px solid #2f6963;background:#071b19;color:var(--cal-muted);font-size:11px;line-height:1.5}.ccal-local-truth strong{color:var(--cal-teal)}.ccal-local-truth span:last-child{color:var(--cal-faint);font:800 10px var(--mono,monospace);white-space:nowrap}.ccal[data-preview-dirty="true"] .ccal-local-truth{border-color:var(--cal-amber)}.ccal[data-preview-dirty="true"] .ccal-local-truth strong{color:var(--cal-amber)}
   .ccal-move-sheet[hidden]{display:none!important}.ccal-move-sheet{position:fixed;z-index:1000;inset:0;display:grid;place-items:end center;padding:18px;background:rgba(0,0,0,.72)}.ccal-move-sheet-panel{width:min(100%,480px);border:1px solid var(--cal-line2);border-radius:13px;background:#101619;box-shadow:0 25px 80px rgba(0,0,0,.55);padding:18px}.ccal-move-sheet-panel h2{margin:0;font-size:18px}.ccal-move-sheet-panel>p{margin:6px 0 15px;color:var(--cal-muted);font-size:12px;line-height:1.5}.ccal-sheet-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.ccal-sheet-grid label{display:grid;gap:6px;color:var(--cal-muted);font-size:11px;font-weight:850}.ccal-sheet-grid input{width:100%;min-height:46px;border:1px solid var(--cal-line2);border-radius:7px;background:#090d0f;color:var(--cal-ink);padding:8px 10px;font:800 12px var(--mono,monospace);color-scheme:dark}.ccal-sheet-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px}.ccal-sheet-button{min-height:46px;border:1px solid var(--cal-line2);border-radius:7px;background:#141b1e;color:var(--cal-muted);font-size:11px;font-weight:900}.ccal-sheet-button.primary{border-color:#337a72;background:#08211e;color:var(--cal-teal)}.ccal-live{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
   .ccal-grid.month .ccal-day{min-height:160px}.ccal-grid.month .ccal-day-head{padding:7px 8px}.ccal-grid.month .ccal-day-head span{display:none}.ccal-grid.month .ccal-day-slots{gap:4px;padding:5px}.ccal-grid.month .ccal-slot-top{padding:5px 6px}.ccal-grid.month .ccal-channel span:last-child,.ccal-grid.month .ccal-variant,.ccal-grid.month .ccal-social-line,.ccal-grid.month .ccal-slot details{display:none}.ccal-grid.month .ccal-slot-state .ccal-chip:not(.durable){display:none}.ccal-grid.month .ccal-slot-body{padding:6px}.ccal-grid.month .ccal-slot h3{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2}.ccal-grid.month .ccal-gate{margin-top:5px}.ccal-grid.month .ccal-empty-day{min-height:55px;border:0}.ccal-grid.month .ccal-slot-move{grid-template-columns:44px 1fr;padding:5px}.ccal-grid.month .ccal-move-sheet-button{font-size:10px}
@@ -152,6 +153,42 @@ function isoTime(value: string | null, fallback = 'Not recorded'): string {
     dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC',
   }).format(date);
   return `<time datetime="${escapeHtml(date.toISOString())}">${escapeHtml(label)} UTC</time>`;
+}
+
+interface ZonedScheduleInstant {
+  readonly date: string;
+  readonly time: string;
+  readonly markup: string;
+}
+
+function zonedScheduleInstant(value: string, timezone: string): ZonedScheduleInstant | null {
+  const instant = new Date(value);
+  if (!Number.isFinite(instant.getTime())) return null;
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: timezone,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(instant);
+    const part = (type: Intl.DateTimeFormatPartTypes): string => parts.find((entry) => entry.type === type)?.value ?? '';
+    const year = part('year');
+    const month = part('month');
+    const day = part('day');
+    const hour = part('hour');
+    const minute = part('minute');
+    if (!/^\d{4}$/u.test(year) || !/^\d{2}$/u.test(month) || !/^\d{2}$/u.test(day)
+      || !/^\d{2}$/u.test(hour) || !/^\d{2}$/u.test(minute)) return null;
+    const label = new Intl.DateTimeFormat('en-GB', {
+      dateStyle: 'medium', timeStyle: 'short', timeZone: timezone,
+    }).format(instant);
+    return Object.freeze({
+      date: `${year}-${month}-${day}`,
+      time: `${hour}:${minute}`,
+      markup: `<time datetime="${escapeHtml(instant.toISOString())}">${escapeHtml(label)} ${escapeHtml(timezone)}</time>`,
+    });
+  } catch {
+    return null;
+  }
 }
 
 function safePortalPath(value: unknown): value is string {
@@ -331,14 +368,37 @@ function slotCard(
   </article>`;
 }
 
+function liveScheduleCard(item: ContentCalendarLiveScheduleView, timezone: string): string {
+  const instant = zonedScheduleInstant(item.scheduledFor, timezone);
+  if (!instant) return '';
+  const summary = safeOperationText(item.content, 'Scheduled LinkedIn post', 3000);
+  const short = summary.length > 150 ? `${summary.slice(0, 147)}…` : summary;
+  const state = item.state === 'scheduled'
+    ? Object.freeze({ label: 'Scheduled live', tone: 'ready' })
+    : item.state === 'reserved'
+      ? Object.freeze({ label: 'Booking', tone: 'working' })
+      : item.state === 'cancelled'
+        ? Object.freeze({ label: 'Cancelled', tone: 'cancelled' })
+        : item.state === 'failed'
+          ? Object.freeze({ label: 'Failed', tone: 'attention' })
+          : Object.freeze({ label: 'Check outcome', tone: 'attention' });
+  return `<article class="ccal-slot ccal-live-slot ${state.tone}" aria-label="Live LinkedIn schedule at ${escapeHtml(instant.time)}" data-calendar-live-slot data-schedule-id="${escapeHtml(item.scheduleId)}" data-scheduled-for="${escapeHtml(item.scheduledFor)}"><header class="ccal-slot-top"><span class="ccal-channel"><span class="ccal-channel-code linkedin" aria-hidden="true">in</span><span>LinkedIn</span></span><time class="ccal-time" datetime="${escapeHtml(item.scheduledFor)}">${escapeHtml(instant.time)}</time></header><div class="ccal-slot-body"><div class="ccal-slot-state"><span class="ccal-chip live ${escapeHtml(state.tone)}">${escapeHtml(state.label)}</span></div><h3>${escapeHtml(short)}</h3><p class="ccal-variant">Real provider schedule · ${escapeHtml(timezone)}</p></div></article>`;
+}
+
 function dayColumn(
   day: ContentCalendarDayView,
   mode: ContentCalendarMode,
   filters: ContentCalendarFiltersView,
   mutations: ContentCalendarMutationView | undefined,
+  liveItems: readonly ContentCalendarLiveScheduleView[],
+  timezone: string,
+  liveCalendar: boolean,
 ): string {
-  const slots = day.slots.map((slot) => slotCard(slot, day.date, filters, mutations)).join('');
-  return `<section class="ccal-day${day.isToday ? ' today' : ''}${day.inPrimaryPeriod ? '' : ' outside'}" aria-label="${escapeHtml(day.fullDateLabel)}" data-calendar-day data-date="${escapeHtml(day.date)}"><header class="ccal-day-head"><strong>${escapeHtml(day.dayNumber)}</strong><span>${day.isToday ? 'Today · TEST' : escapeHtml(day.weekdayLabel)}</span></header><div class="ccal-day-slots">${slots || `<div class="ccal-empty-day"><span>${mode === 'month' ? '—' : 'No TEST plans'}</span></div>`}</div></section>`;
+  const liveSlots = liveItems.map((item) => liveScheduleCard(item, timezone)).join('');
+  const testSlots = day.slots.map((slot) => slotCard(slot, day.date, filters, mutations)).join('');
+  const slots = `${liveSlots}${testSlots}`;
+  const emptyLabel = liveCalendar ? 'Nothing scheduled' : mode === 'month' ? '—' : 'No TEST plans';
+  return `<section class="ccal-day${day.isToday ? ' today' : ''}${day.inPrimaryPeriod ? '' : ' outside'}" aria-label="${escapeHtml(day.fullDateLabel)}" data-calendar-day data-date="${escapeHtml(day.date)}"><header class="ccal-day-head"><strong>${escapeHtml(day.dayNumber)}</strong><span>${day.isToday ? (liveCalendar ? 'Today' : 'Today · TEST') : escapeHtml(day.weekdayLabel)}</span></header><div class="ccal-day-slots">${slots || `<div class="ccal-empty-day"><span>${emptyLabel}</span></div>`}</div></section>`;
 }
 
 function backlogItem(item: ContentCalendarBacklogItemView): string {
@@ -376,7 +436,8 @@ function liveScheduler(
   const items = action.items.slice(0, 20).map((item) => {
     const summary = safeOperationText(item.content, 'Scheduled LinkedIn post', 3000);
     const short = summary.length > 180 ? `${summary.slice(0, 177)}…` : summary;
-    return `<li><strong>${item.state === 'scheduled' ? 'Scheduled' : escapeHtml(item.state.replace('_', ' '))}</strong><p>${escapeHtml(short)}</p>${isoTime(item.scheduledFor)}</li>`;
+    const instant = zonedScheduleInstant(item.scheduledFor, timezone);
+    return `<li><strong>${item.state === 'scheduled' ? 'Scheduled' : escapeHtml(item.state.replace('_', ' '))}</strong><p>${escapeHtml(short)}</p>${instant?.markup ?? 'Schedule time unavailable'}</li>`;
   }).join('');
   return `<section class="ccal-live-scheduler" aria-labelledby="ccal-live-title"><div class="ccal-live-scheduler-grid"><div><header><span class="ccal-kicker">Live company publishing</span><h2 id="ccal-live-title">Build your next LinkedIn post</h2><p>Write the post, add optional media and pick the exact minute. One click books it into your company schedule.</p></header><form class="ccal-command-form ccal-live-form" method="post" action="${escapeHtml(action.actionUrl)}" data-calendar-live-form data-media-upload-url="${escapeHtml(action.mediaUploadUrl)}" data-media-command-key="${escapeHtml(action.mediaCommandKey)}">${actionFields(action)}${hidden('network', 'linkedin')}${hidden('timezone', timezone)}${hidden('scheduled_for_local', '')}${hidden('media_type', '')}${hidden('media_url', '')}<label class="ccal-command-field"><span class="ccal-live-field-label"><strong>Post copy</strong><small>Up to 3,000 characters</small></span><textarea name="content" maxlength="3000" required placeholder="Share something genuinely useful with property investors…"></textarea></label><div class="ccal-command-field"><span class="ccal-live-field-label"><strong>Image or video</strong><small>Optional</small></span><div class="ccal-media-drop" data-calendar-media-drop><span class="ccal-media-icon" aria-hidden="true">＋</span><span class="ccal-media-copy"><strong>Drop your image or video here</strong><span class="ccal-media-drop-note">Drag &amp; drop, or choose a file</span><span>JPG, PNG, WebP, GIF, MP4, MOV or WebM · up to 500 MB</span></span><button class="ccal-media-pick" type="button" data-calendar-media-choose>Choose file</button><input class="ccal-media-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm" data-calendar-media-input aria-label="Choose post image or video"></div><div class="ccal-media-preview" data-calendar-media-preview hidden><span data-calendar-media-visual></span><p data-calendar-media-name></p><button class="ccal-media-remove" type="button" data-calendar-media-remove>Remove</button></div></div><fieldset class="ccal-live-when"><legend>When should it go out?</legend><div class="ccal-live-time-grid"><div class="ccal-date-control"><button class="ccal-date-card ccal-date-trigger" type="button" data-calendar-date-trigger aria-expanded="false" aria-controls="ccal-date-picker"><span>Date</span><strong data-calendar-live-date-label>Choose a date</strong></button><label class="ccal-command-field ccal-date-native">Choose publication date<input type="date" data-calendar-live-date aria-label="Choose publication date" required></label><div class="ccal-date-popover" id="ccal-date-picker" data-calendar-date-popover hidden><div class="ccal-date-picker-head"><button class="ccal-date-nav" type="button" data-calendar-date-previous aria-label="Previous month">‹</button><strong data-calendar-date-month></strong><button class="ccal-date-nav" type="button" data-calendar-date-next aria-label="Next month">›</button></div><div class="ccal-date-weekdays" aria-hidden="true"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div><div class="ccal-date-grid" data-calendar-date-grid role="grid" aria-label="Publication dates"></div><button class="ccal-date-today" type="button" data-calendar-date-today>Jump to today</button></div></div><div class="ccal-time-control"><label for="ccal-live-time">Exact time</label><div class="ccal-time-stepper"><button class="ccal-time-step" type="button" data-calendar-time-step="-1" aria-label="One minute earlier">−</button><input id="ccal-live-time" type="text" inputmode="numeric" pattern="(?:[01]\\d|2[0-3]):[0-5]\\d" maxlength="5" placeholder="HH:MM" data-calendar-live-time required><button class="ccal-time-step" type="button" data-calendar-time-step="1" aria-label="One minute later">＋</button></div></div></div><div class="ccal-suggested-times"><span>Smart starting points</span><div class="ccal-suggestion-list"><button class="ccal-time-suggestion" type="button" data-calendar-suggestion-time="08:17">Morning · 08:17</button><button class="ccal-time-suggestion" type="button" data-calendar-suggestion-time="12:23">Lunch · 12:23</button><button class="ccal-time-suggestion" type="button" data-calendar-suggestion-time="17:35">After work · 17:35</button></div><p class="ccal-suggestion-note">Starting points, not invented performance claims. Growth HQ will personalise these once your own post results build up.</p></div></fieldset><button class="ccal-command-submit ccal-live-submit" type="submit" data-calendar-live-submit>Schedule LinkedIn post</button><p class="ccal-command-status ccal-live-status" data-calendar-live-status role="status" aria-live="polite">Choose any exact minute. Nothing publishes before your selected time.</p></form></div><div><header><h2>Coming up</h2><p>Your latest live LinkedIn schedules.</p></header>${items ? `<ol class="ccal-live-list">${items}</ol>` : '<p class="ccal-empty-backlog">Nothing scheduled yet. Your first post will appear here.</p>'}</div></div></section>`;
 }
@@ -386,11 +447,26 @@ export function renderContentCalendarBody(
   options: RenderContentCalendarOptions = {},
 ): string {
   const weekdays = view.days.slice(0, 7).map((day) => `<div class="ccal-weekday">${escapeHtml(day.weekdayLabel)}</div>`).join('');
+  const live = commandReady(options.liveScheduler);
+  const liveItems = live && (view.filters.channel === 'all' || view.filters.channel === 'linkedin')
+    ? options.liveScheduler.items.slice(0, 20)
+    : [];
+  const liveItemsByDate = new Map<string, ContentCalendarLiveScheduleView[]>();
+  for (const item of liveItems) {
+    const instant = zonedScheduleInstant(item.scheduledFor, view.timezone);
+    if (!instant) continue;
+    const current = liveItemsByDate.get(instant.date) ?? [];
+    current.push(item);
+    liveItemsByDate.set(instant.date, current);
+  }
   const days = view.days.map((day) => dayColumn(
     day,
     view.filters.mode,
     view.filters,
     options.mutations,
+    liveItemsByDate.get(day.date) ?? [],
+    view.timezone,
+    live,
   )).join('');
   const warning = view.hasUnknownVersion
     ? '<p class="ccal-warning" role="alert"><strong>Fail-closed planner:</strong> at least one draft slot points to an unavailable or mismatched immutable version. It remains locked.</p>'
@@ -405,7 +481,10 @@ export function renderContentCalendarBody(
   const lastDate = view.days[view.days.length - 1]?.date ?? view.filters.date;
   const durableControls = Boolean(options.mutations?.create
     || (options.mutations?.slots && Object.keys(options.mutations.slots).length > 0));
-  const live = commandReady(options.liveScheduler);
+  const visibleDates = new Set(view.days.map((day) => day.date));
+  const liveVisibleCount = [...liveItemsByDate.entries()]
+    .filter(([date]) => visibleDates.has(date))
+    .reduce((count, [, items]) => count + items.length, 0);
   return `${renderContentWorkspaceNavigation('calendar', {
     companyAssetsAvailable: options.companyAssetsAvailable,
     assetsLabel: options.assetsLabel,
@@ -415,14 +494,14 @@ export function renderContentCalendarBody(
     <header class="ccal-hero"><div><div class="ccal-kicker">Growth HQ · Campaign calendar</div><h1 id="ccal-title">Own the week. <em>Control the signal.</em></h1><p>${live ? 'Create and schedule Property Predator company posts from one clear calendar.' : 'Turn approved Property Predator assets into a calm, channel-aware campaign rhythm.'}</p></div><aside class="ccal-test-card" aria-label="Calendar connection"><strong>${live ? 'LinkedIn connected' : 'Planning workspace'}</strong><span>${escapeHtml(view.workspaceName)}</span><small>${escapeHtml(view.timezone)} · snapshot ${isoTime(view.asOf)}.${live ? ' Scheduling is live only when you press Schedule post.' : ''}</small></aside></header>
     ${live ? liveScheduler(options.liveScheduler, view.timezone) : '<section class="ccal-safety" aria-label="Planner truth boundary"><span class="ccal-safety-mark">Planning only</span><p>The live scheduling connection is not available yet.</p><span class="ccal-safety-badge">No provider calls</span></section>'}
     ${operationOutcome(options.mutations?.outcome)}
-    <div class="ccal-toolbar">${modeNav(view)}<div class="ccal-period"><a href="${plannerHref(view, { date: view.previousDate })}" aria-label="Previous ${escapeHtml(view.filters.mode)}">‹</a><div class="ccal-period-title"><strong>${escapeHtml(view.periodLabel)}</strong><span>${escapeHtml(view.timezone)} · durable TEST truth</span></div><a href="${plannerHref(view, { date: view.nextDate })}" aria-label="Next ${escapeHtml(view.filters.mode)}">›</a></div>${createCalendarControl(options.mutations?.create, view.timezone)}</div>
+    <div class="ccal-toolbar">${modeNav(view)}<div class="ccal-period"><a href="${plannerHref(view, { date: view.previousDate })}" aria-label="Previous ${escapeHtml(view.filters.mode)}">‹</a><div class="ccal-period-title"><strong>${escapeHtml(view.periodLabel)}</strong><span>${escapeHtml(view.timezone)} · ${live ? 'live schedules + durable TEST plans' : 'durable TEST truth'}</span></div><a href="${plannerHref(view, { date: view.nextDate })}" aria-label="Next ${escapeHtml(view.filters.mode)}">›</a></div>${createCalendarControl(options.mutations?.create, view.timezone)}</div>
     ${channelNav(view)}
     <section class="ccal-metrics" aria-label="${loaded}planner summary"><div class="ccal-metric"><small>${loaded}draft placements</small><strong>${safeCount(view.metrics.plannedSlots)}</strong><span>No provider jobs created</span></div><div class="ccal-metric ready"><small>${loaded}simulation ready</small><strong>${safeCount(view.metrics.simulationReady)}</strong><span>Exact gates agree</span></div><div class="ccal-metric blocked"><small>${loaded}gate locked</small><strong>${safeCount(view.metrics.blocked)}</strong><span>Fails closed before outbound</span></div><div class="ccal-metric"><small>${loaded}active rails</small><strong>${safeCount(view.metrics.activeChannels)}</strong><span>Planning variants only</span></div></section>
-    <div class="ccal-workspace"><section class="ccal-calendar" aria-labelledby="ccal-calendar-title"><header class="ccal-section-head"><div><h2 id="ccal-calendar-title">${view.filters.mode === 'week' ? 'Weekly signal board' : 'Monthly campaign map'}</h2><p>Channel placements around approved company content. Scroll sideways on compact screens.</p></div><span class="ccal-count">${view.inputTruncated ? 'Loaded ' : ''}${safeCount(view.visibleSlotCount)} TEST plan${view.visibleSlotCount === 1 ? '' : 's'}</span></header><div class="ccal-scroll" tabindex="0" aria-label="Scrollable ${escapeHtml(view.filters.mode)} content calendar"><div class="ccal-weekdays" aria-hidden="true">${weekdays}</div><div class="ccal-grid ${escapeHtml(view.filters.mode)}">${days}</div></div></section>${backlog(view)}</div>
+    <div class="ccal-workspace"><section class="ccal-calendar" aria-labelledby="ccal-calendar-title"><header class="ccal-section-head"><div><h2 id="ccal-calendar-title">${view.filters.mode === 'week' ? 'Weekly signal board' : 'Monthly campaign map'}</h2><p>${live ? 'Live provider schedules and approved planning placements. Scroll sideways on compact screens.' : 'Channel placements around approved company content. Scroll sideways on compact screens.'}</p></div><span class="ccal-count">${live ? `${safeCount(liveVisibleCount)} live · ` : ''}${view.inputTruncated ? 'Loaded ' : ''}${safeCount(view.visibleSlotCount)} TEST</span></header><div class="ccal-scroll" tabindex="0" aria-label="Scrollable ${escapeHtml(view.filters.mode)} content calendar"><div class="ccal-weekdays" aria-hidden="true">${weekdays}</div><div class="ccal-grid ${escapeHtml(view.filters.mode)}">${days}</div></div></section>${backlog(view)}</div>
     <aside class="ccal-local-truth" role="status"><span><strong>${durableControls ? 'Protected TEST commands available.' : 'Browser-only movement.'}</strong> Drag, use the keyboard handle or choose a date and time. ${durableControls ? 'Durable slots open confirmation before saving; unavailable slots remain local previews.' : 'Nothing is saved; reloading restores this exact snapshot.'}</span><span>TEST plan · zero external effects</span></aside>
     ${warning}
     <div class="ccal-move-sheet" data-calendar-move-sheet role="dialog" aria-modal="true" aria-labelledby="ccal-move-sheet-title" hidden><section class="ccal-move-sheet-panel"><h2 id="ccal-move-sheet-title">Move TEST plan</h2><p data-calendar-sheet-copy>Choose a date visible in this loaded calendar and a time. Durable slots require confirmation before the protected TEST command runs.</p><div class="ccal-sheet-grid"><label>Date<input type="date" min="${escapeHtml(firstDate)}" max="${escapeHtml(lastDate)}" data-calendar-sheet-date></label><label>Time<input type="time" step="1800" data-calendar-sheet-time></label></div><div data-calendar-sheet-durable-fields hidden><label class="ccal-command-field">Reason<textarea maxlength="500" data-calendar-sheet-reason placeholder="Why is this TEST time changing?"></textarea></label><label class="ccal-command-confirm"><input type="checkbox" data-calendar-sheet-confirm><span>Confirm a new immutable TEST planning intent should supersede this target time.</span></label></div><div class="ccal-sheet-actions"><button class="ccal-sheet-button" type="button" data-calendar-sheet-cancel>Cancel</button><button class="ccal-sheet-button primary" type="button" data-calendar-sheet-apply>Review TEST move</button></div></section></div>
     <div class="ccal-live" data-calendar-live role="status" aria-live="polite" aria-atomic="true"></div>
-    <footer class="ccal-footer"><span><strong>Draft/simulated throughout:</strong> no posts, messages, webinar registrations or provider schedules are created here.${escapeHtml(bounded)}</span><span>${safeCount(view.catalogCount)} owned catalogue versions inspected · generated output: 0</span></footer>
+    <footer class="ccal-footer"><span>${live ? '<strong>Two clear truths:</strong> live cards are real provider schedules; TEST cards remain simulated and cannot publish.' : '<strong>Draft/simulated throughout:</strong> no posts, messages, webinar registrations or provider schedules are created here.'}${escapeHtml(bounded)}</span><span>${safeCount(view.catalogCount)} owned catalogue versions inspected · generated output: 0</span></footer>
   </article><script src="${CONTENT_CALENDAR_CLIENT_ROUTE}" defer></script>`;
 }
