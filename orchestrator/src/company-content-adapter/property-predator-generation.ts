@@ -3,7 +3,7 @@ import { canonicalCompanyContentJson } from '../company-content-pg/validation.js
 
 const ENDPOINT_PATH = '/api/internal/company-content/generate';
 const GENERATION_SCHEMA = 'propertypredator.company-content/v1';
-const MAX_REQUEST_BYTES = 8 * 1024;
+const MAX_REQUEST_BYTES = 32 * 1024;
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const SHA256 = /^[0-9a-f]{64}$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -404,7 +404,7 @@ function command(input: unknown): Readonly<{
     throw bridgeError('invalid_request');
   }
   const platform = safeText(rawBrief.platform, 0, 40, true);
-  const topic = safeText(rawBrief.topic, 1, 400, false);
+  const topic = safeText(rawBrief.topic, 1, 20_000, false);
   const tone = safeText(rawBrief.tone, 0, 60, true);
   for (const text of [platform, topic, tone]) assertNoPrivateOrAttributedText(text, false);
   const brief = Object.freeze({

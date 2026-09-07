@@ -69,9 +69,10 @@ import { planPropertyPredatorMarketingDraft } from '../company-content-adapter/p
 import {
   PropertyPredatorCampaignDraftRuntimeError,
   type PropertyPredatorCampaignDraftApprovedVersionEvidence,
+  type PropertyPredatorReviewCampaignDraft,
   type PropertyPredatorCampaignDraftRuntime,
 } from '../company-content-adapter/property-predator-campaign-draft-runtime.js';
-import { renderCampaignDraftReviewBody } from './campaign-draft-review-view.js';
+import { renderCampaignDraftPackReviewBody } from './campaign-draft-review-view.js';
 import {
   CAMPAIGN_MACHINE_ROUTE,
   presentCampaignMachine,
@@ -3964,13 +3965,15 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     const commandKey = campaignCommandKey(form);
     const expectedPlanSha256 = oneFormValue(form, 'expected_plan_sha256');
     const selection = campaignFormText(oneFormValue(form, 'laps'), 200);
-    const platform = oneFormValue(form, 'platform');
+    const platforms = form.getAll('platform');
     const tone = oneFormValue(form, 'tone');
-    const topic = campaignFormText(oneFormValue(form, 'topic'), 1_600);
+    const topic = campaignFormText(oneFormValue(form, 'topic'), 20_000);
     const factVersionIds = campaignUuidValues(form, 'approved_fact_version_id', 1, 1);
     const assetVersionIds = campaignUuidValues(form, 'approved_asset_version_id', 1, 1);
     if (!commandKey || !expectedPlanSha256 || !/^[0-9a-f]{64}$/u.test(expectedPlanSha256)
-        || !selection || !platform || !CAMPAIGN_REVIEW_DRAFT_PLATFORMS.has(platform)
+        || !selection || platforms.length < 1 || platforms.length > 4
+        || new Set(platforms).size !== platforms.length
+        || platforms.some((platform) => !CAMPAIGN_REVIEW_DRAFT_PLATFORMS.has(platform))
         || !tone || !CAMPAIGN_REVIEW_DRAFT_TONES.has(tone) || !topic
         || !factVersionIds || !assetVersionIds) {
       return sendHtml(res, 400, portalStatusPage(deps, sessionToken, {
@@ -4046,15 +4049,13 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           backLabel: 'Refresh Campaign Builder',
         }));
       }
-      const result = await deps.campaignDrafts.generateReviewDraft(Object.freeze({
-        idempotencyKey: commandKey,
+      const common = Object.freeze({
         expectedPlanSha256,
         maximumCostMinor: CAMPAIGN_REVIEW_DRAFT_MAXIMUM_COST_MINOR,
-        providerEffects: 'generation_only',
-        brief: Object.freeze({ platform, topic, tone }),
+        providerEffects: 'generation_only' as const,
         draftPlan: Object.freeze({ selection, brandBrainSnapshot }),
         brandBrain: Object.freeze({
-          sourceSystem: 'property-predator',
+          sourceSystem: 'property-predator' as const,
           sourceReleaseId: plan.brandBrain.sourceReleaseId,
           manifestSha256: plan.brandBrain.manifestSha256,
           runtimeBrandSha256: plan.brandBrain.runtimeBrandSha256,
@@ -4062,11 +4063,29 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         }),
         approvedFacts: Object.freeze([fact]),
         approvedAssets: Object.freeze([asset]),
-      }));
+      });
+      const results: PropertyPredatorReviewCampaignDraft[] = [];
+      const failedPlatforms: string[] = [];
+      for (const platform of platforms) {
+        const idempotencyKey = `campaign-pack:${createHash('sha256')
+          .update(commandKey).update('\0').update(platform).digest('hex')}`;
+        try {
+          results.push(await deps.campaignDrafts.generateReviewDraft(Object.freeze({
+            ...common,
+            idempotencyKey,
+            brief: Object.freeze({ platform, topic, tone }),
+          })));
+        } catch {
+          failedPlatforms.push(platform);
+        }
+      }
+      if (results.length < 1) {
+        throw new PropertyPredatorCampaignDraftRuntimeError('integrity_mismatch');
+      }
       const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
-      return sendHtml(res, 201, operationalPage(
+      return sendHtml(res, failedPlatforms.length > 0 ? 207 : 201, operationalPage(
         content.workspace.workspaceName,
-        renderCampaignDraftReviewBody(result),
+        renderCampaignDraftPackReviewBody(results, failedPlatforms),
         deps,
         'content',
         csrfToken,

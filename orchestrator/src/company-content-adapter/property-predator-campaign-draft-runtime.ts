@@ -285,7 +285,7 @@ function safeBrief(input: PropertyPredatorCampaignDraftCommand['brief']): Readon
       || typeof input.platform !== 'string' || input.platform !== input.platform.trim()
       || input.platform.length < 1 || input.platform.length > 40
       || typeof input.topic !== 'string' || input.topic !== input.topic.trim()
-      || input.topic.length < 1 || input.topic.length > 400
+      || input.topic.length < 1 || input.topic.length > 20_000
       || typeof input.tone !== 'string' || input.tone !== input.tone.trim()
       || input.tone.length > 60) {
     fail('invalid_command');

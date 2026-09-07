@@ -327,7 +327,7 @@ test('rejects non-exact, private, attributed and unbounded requests before polic
     { ...COMMAND, brief: { ...COMMAND.brief, topic: 'Use our affiliate link' } },
     { ...COMMAND, brief: { ...COMMAND.brief, topic: 'Review https://example.com/private' } },
     { ...COMMAND, brief: { ...COMMAND.brief, topic: '<strong>Generate this</strong>' } },
-    { ...COMMAND, brief: { ...COMMAND.brief, topic: 'x'.repeat(401) } },
+    { ...COMMAND, brief: { ...COMMAND.brief, topic: 'x'.repeat(20_001) } },
     { ...COMMAND, brief: { ...COMMAND.brief, extra: 'unsupported' } },
   ];
   for (const input of invalid) {
@@ -637,7 +637,7 @@ test('source surface is generate-only, default-deny, bounded and free of provide
   );
   assert.match(source, /\/api\/internal\/company-content\/generate/);
   assert.match(source, /if \(!policy\) throw bridgeError\('effects_disabled'\)/);
-  assert.match(source, /MAX_REQUEST_BYTES = 8 \* 1024/);
+  assert.match(source, /MAX_REQUEST_BYTES = 32 \* 1024/);
   assert.match(source, /MAX_RESPONSE_BYTES = 64 \* 1024/);
   assert.doesNotMatch(source, /Anthropic|response\.json\(\)|console\.|publish\(|sendMessage\(|loadCatalog\(|loadRelease\(/i);
   assert.doesNotMatch(source, /COMPANY_CONTENT_READ_TOKEN|COMPANY_CONTENT_SYNC_TOKEN|readToken|syncToken/);

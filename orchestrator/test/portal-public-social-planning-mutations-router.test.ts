@@ -584,7 +584,12 @@ test('Campaign Wizard exposes one exact generation-only form only when the runti
 
   assert.equal(result.statusCode, 200);
   assert.match(result.body, new RegExp(`action="${CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE}"`));
-  assert.match(result.body, /Generate one real review draft/);
+  assert.match(result.body, /Turn one source into a channel pack/);
+  assert.match(result.body, /name="platform" value="linkedin" checked/);
+  assert.match(result.body, /name="platform" value="facebook" checked/);
+  assert.match(result.body, /name="platform" value="instagram" checked/);
+  assert.match(result.body, /name="platform" value="x" checked/);
+  assert.match(result.body, /name="topic" maxlength="20000"/);
   assert.match(result.body, /name="approved_fact_version_id"/);
   assert.match(result.body, /name="approved_asset_version_id"/);
   assert.match(result.body, /name="provider_effects" value="generation_only"/);
@@ -608,7 +613,7 @@ test('authenticated CSRF-bound campaign generation re-reads exact evidence and r
   assert.equal(generationCalls[0]!.maximumCostMinor, 250);
   assert.equal(generationCalls[0]!.brief.kind, 'post');
   assert.equal(generationCalls[0]!.brief.platform, 'linkedin');
-  assert.match(result.body, /Generated\. <em>Not unleashed\.<\/em>/);
+  assert.match(result.body, /One source\. <em>1 native draft\.<\/em>/);
   assert.match(result.body, /The headline gets attention\. The evidence earns the next decision\./);
   assert.match(result.body, /data-review-required="true"/);
   assert.match(result.body, /data-publishable="false"/);
@@ -618,6 +623,36 @@ test('authenticated CSRF-bound campaign generation re-reads exact evidence and r
   assert.match(result.body, new RegExp(IDS.contentVersion));
   assert.match(result.body, new RegExp(IDS.mediaOne));
   assert.doesNotMatch(result.body, /provider-request-review-router-0001/);
+});
+
+test('one source creates a native four-channel pack without any outbound effect', async () => {
+  const brain = readyBrandBrainSnapshot();
+  const generationCalls: PropertyPredatorGenerateDraftCommand[] = [];
+  const form = baseReviewDraftForm();
+  form.append('platform', 'facebook');
+  form.append('platform', 'instagram');
+  form.append('platform', 'x');
+  form.set('topic', `${'A useful Property Predator source paragraph. '.repeat(20)}\nKeep the same claim.`);
+  const result = await call('POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, postgres({
+    companyContent: contentService(brain.brain.runtimeBrandSha256),
+    brandBrain: readyBrandBrainService(),
+    campaignDrafts: campaignGenerationRuntime(generationCalls),
+  }), form);
+
+  assert.equal(result.statusCode, 201);
+  assert.deepEqual(generationCalls.map((call) => call.brief.platform), [
+    'linkedin', 'facebook', 'instagram', 'x',
+  ]);
+  assert.equal(new Set(generationCalls.map((call) => call.idempotencyKey)).size, 4);
+  assert.ok(generationCalls.every((call) => call.brief.topic === form.get('topic')));
+  assert.match(result.body, /One source\. <em>4 native drafts\.<\/em>/);
+  assert.match(result.body, /data-channel-pack/);
+  assert.match(result.body, /Nothing published/);
+  assert.match(result.body, /LinkedIn/i);
+  assert.match(result.body, /Facebook/i);
+  assert.match(result.body, /Instagram/i);
+  assert.match(result.body, />x</i);
+  assert.match(result.body, /data-outbound-effects="false"/);
 });
 
 test('campaign generation rejects invalid CSRF and changed exact evidence before the provider runtime', async () => {
