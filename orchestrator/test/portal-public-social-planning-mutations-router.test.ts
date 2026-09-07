@@ -36,6 +36,7 @@ import type {
   SocialPlannerTargetProjection,
   SocialPlanningCalendarProjection,
 } from '../src/social-campaign-pg/types.js';
+import type { PortalZernioCalendarCommandService } from '../src/portal/zernio-calendar-command-service.js';
 
 const SECRET = 'planning-mutations-router-session-secret';
 const SESSION = Buffer.alloc(32, 73).toString('base64url');
@@ -575,11 +576,17 @@ test('Campaign Wizard stays operational and makes Brand Brain failure a visible 
 test('Campaign Wizard exposes one exact generation-only form only when the runtime and evidence align', async () => {
   const brain = readyBrandBrainSnapshot();
   const generationCalls: PropertyPredatorGenerateDraftCommand[] = [];
+  const zernioCalendar: PortalZernioCalendarCommandService = {
+    configuredNetworks: ['linkedin'],
+    async stage() { throw new Error('not used'); },
+    async prepareMediaUpload() { throw new Error('not used'); },
+  };
   const result = await call('GET', CAMPAIGN_WIZARD_ROUTE, postgres({
     publicSocial: socialService(freshCalls()),
     companyContent: contentService(brain.brain.runtimeBrandSha256),
     brandBrain: readyBrandBrainService(),
     campaignDrafts: campaignGenerationRuntime(generationCalls),
+    zernioCalendar,
   }));
 
   assert.equal(result.statusCode, 200);
@@ -589,6 +596,12 @@ test('Campaign Wizard exposes one exact generation-only form only when the runti
   assert.match(result.body, /name="platform" value="facebook" checked/);
   assert.match(result.body, /name="platform" value="instagram" checked/);
   assert.match(result.body, /name="platform" value="x" checked/);
+  assert.match(result.body, /name="platform" value="tiktok" checked/);
+  assert.match(result.body, /data-channel-pack-form/);
+  assert.match(result.body, /data-pack-media-drop/);
+  assert.match(result.body, /landscape for LinkedIn, Facebook and X/);
+  assert.match(result.body, /tall for Instagram and TikTok/);
+  assert.match(result.body, /src="\/portal\/assets\/campaign-wizard\.js"/);
   assert.match(result.body, /name="topic" maxlength="20000"/);
   assert.match(result.body, /name="approved_fact_version_id"/);
   assert.match(result.body, /name="approved_asset_version_id"/);
@@ -625,13 +638,14 @@ test('authenticated CSRF-bound campaign generation re-reads exact evidence and r
   assert.doesNotMatch(result.body, /provider-request-review-router-0001/);
 });
 
-test('one source creates a native four-channel pack without any outbound effect', async () => {
+test('one source creates a native five-channel pack without any outbound effect', async () => {
   const brain = readyBrandBrainSnapshot();
   const generationCalls: PropertyPredatorGenerateDraftCommand[] = [];
   const form = baseReviewDraftForm();
   form.append('platform', 'facebook');
   form.append('platform', 'instagram');
   form.append('platform', 'x');
+  form.append('platform', 'tiktok');
   form.set('topic', `${'A useful Property Predator source paragraph. '.repeat(20)}\nKeep the same claim.`);
   const result = await call('POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, postgres({
     companyContent: contentService(brain.brain.runtimeBrandSha256),
@@ -641,17 +655,18 @@ test('one source creates a native four-channel pack without any outbound effect'
 
   assert.equal(result.statusCode, 201);
   assert.deepEqual(generationCalls.map((call) => call.brief.platform), [
-    'linkedin', 'facebook', 'instagram', 'x',
+    'linkedin', 'facebook', 'instagram', 'x', 'tiktok',
   ]);
-  assert.equal(new Set(generationCalls.map((call) => call.idempotencyKey)).size, 4);
+  assert.equal(new Set(generationCalls.map((call) => call.idempotencyKey)).size, 5);
   assert.ok(generationCalls.every((call) => call.brief.topic === form.get('topic')));
-  assert.match(result.body, /One source\. <em>4 native drafts\.<\/em>/);
+  assert.match(result.body, /One source\. <em>5 native drafts\.<\/em>/);
   assert.match(result.body, /data-channel-pack/);
   assert.match(result.body, /Nothing published/);
   assert.match(result.body, /LinkedIn/i);
   assert.match(result.body, /Facebook/i);
   assert.match(result.body, /Instagram/i);
   assert.match(result.body, />x</i);
+  assert.match(result.body, /TikTok/i);
   assert.match(result.body, /data-outbound-effects="false"/);
 });
 

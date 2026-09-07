@@ -27,6 +27,9 @@ export interface CampaignWizardGenerateReviewDraftAction {
   readonly commandKey: string;
   /** Server-owned reservation ceiling. The browser can display but not alter it. */
   readonly maximumCostMinor: number;
+  /** Same-origin preparation endpoint; it uploads media only and never creates a post. */
+  readonly mediaUploadUrl?: string;
+  readonly mediaCommandKey?: string;
 }
 
 export type CampaignWizardOutcomeKind = 'success' | 'info' | 'error';
@@ -205,5 +208,10 @@ export function isCampaignWizardGenerateReviewDraftActionReady(
     && COMMAND_KEY.test(action.commandKey)
     && Number.isSafeInteger(action.maximumCostMinor)
     && action.maximumCostMinor >= 1
-    && action.maximumCostMinor <= 25_000);
+    && action.maximumCostMinor <= 25_000
+    && (action.mediaUploadUrl === undefined
+      || (isSafeCampaignWizardPortalPath(action.mediaUploadUrl)
+        && action.mediaUploadUrl === '/portal/content/calendar/media-uploads'))
+    && (action.mediaCommandKey === undefined || COMMAND_KEY.test(action.mediaCommandKey))
+    && ((action.mediaUploadUrl === undefined) === (action.mediaCommandKey === undefined)));
 }

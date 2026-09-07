@@ -65,6 +65,14 @@ import {
   type CampaignWizardContentSnapshot,
 } from './campaign-wizard-presenter.js';
 import { renderCampaignWizardBody } from './campaign-wizard-view.js';
+import {
+  CAMPAIGN_WIZARD_CLIENT_ROUTE,
+  CAMPAIGN_WIZARD_CLIENT_SOURCE,
+} from './campaign-wizard-client.js';
+import {
+  CAMPAIGN_PACK_PLATFORMS,
+  parseCampaignMediaVariants,
+} from './campaign-media-variants.js';
 import { planPropertyPredatorMarketingDraft } from '../company-content-adapter/property-predator-marketing-draft-plan.js';
 import {
   PropertyPredatorCampaignDraftRuntimeError,
@@ -1121,7 +1129,7 @@ const CAMPAIGN_RETURN_CHANNELS = new Set([
   'google_business_profile', 'threads', 'pinterest', 'email', 'webinar',
 ]);
 const CAMPAIGN_REVIEW_DRAFT_MAXIMUM_COST_MINOR = 250;
-const CAMPAIGN_REVIEW_DRAFT_PLATFORMS = new Set(['linkedin', 'instagram', 'facebook', 'x']);
+const CAMPAIGN_REVIEW_DRAFT_PLATFORMS = new Set<string>(CAMPAIGN_PACK_PLATFORMS);
 const CAMPAIGN_REVIEW_DRAFT_TONES = new Set([
   'direct and useful',
   'educational and evidence-led',
@@ -1828,6 +1836,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   }
   if (p === CONTENT_CALENDAR_CLIENT_ROUTE && method === 'GET') {
     return sendJavaScript(res, CONTENT_CALENDAR_CLIENT_SOURCE);
+  }
+  if (p === CAMPAIGN_WIZARD_CLIENT_ROUTE && method === 'GET') {
+    return sendJavaScript(res, CAMPAIGN_WIZARD_CLIENT_SOURCE);
   }
   if (p === MIGRATION_CENTRE_CLIENT_ROUTE && method === 'GET') {
     return sendJavaScript(res, MIGRATION_CENTRE_CLIENT_SOURCE, 'private, no-store, max-age=0');
@@ -3902,6 +3913,11 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
                 csrfToken,
                 commandKey: randomUUID(),
                 maximumCostMinor: CAMPAIGN_REVIEW_DRAFT_MAXIMUM_COST_MINOR,
+                ...(deps.zernioCalendar?.prepareMediaUpload
+                  && deps.zernioCalendar.configuredNetworks.includes('linkedin') ? {
+                    mediaUploadUrl: CONTENT_CALENDAR_MEDIA_UPLOAD_ROUTE,
+                    mediaCommandKey: randomUUID(),
+                  } : {}),
               },
             } : {}),
           outcome: campaignWizardNoticeFromQuery(
@@ -3921,7 +3937,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         deps,
         'content',
         csrfToken,
-      ));
+      ), undefined, {
+        'content-security-policy': "default-src 'none'; script-src 'self'; connect-src 'self' https://*.r2.cloudflarestorage.com; img-src 'self' blob:; media-src 'self' blob:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      });
     } catch {
       return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
         title: 'Campaign Builder temporarily unavailable',
@@ -3948,7 +3966,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     const allowed = new Set([
       '_csrf', 'command_key', 'expected_plan_sha256', 'laps', 'provider_effects',
       'platform', 'tone', 'topic', 'approved_fact_version_id',
-      'approved_asset_version_id', 'confirm_generation_only',
+      'approved_asset_version_id', 'media_variant', 'confirm_generation_only',
     ]);
     if (!form || !campaignFormKeysAllowed(form, allowed)
         || !verifyPortalCsrf(deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '')
@@ -3970,12 +3988,18 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     const topic = campaignFormText(oneFormValue(form, 'topic'), 20_000);
     const factVersionIds = campaignUuidValues(form, 'approved_fact_version_id', 1, 1);
     const assetVersionIds = campaignUuidValues(form, 'approved_asset_version_id', 1, 1);
+    let mediaVariants: ReturnType<typeof parseCampaignMediaVariants> | null;
+    try {
+      mediaVariants = parseCampaignMediaVariants(form.getAll('media_variant'), platforms);
+    } catch {
+      mediaVariants = null;
+    }
     if (!commandKey || !expectedPlanSha256 || !/^[0-9a-f]{64}$/u.test(expectedPlanSha256)
-        || !selection || platforms.length < 1 || platforms.length > 4
+        || !selection || platforms.length < 1 || platforms.length > 5
         || new Set(platforms).size !== platforms.length
         || platforms.some((platform) => !CAMPAIGN_REVIEW_DRAFT_PLATFORMS.has(platform))
         || !tone || !CAMPAIGN_REVIEW_DRAFT_TONES.has(tone) || !topic
-        || !factVersionIds || !assetVersionIds) {
+        || !factVersionIds || !assetVersionIds || mediaVariants === null) {
       return sendHtml(res, 400, portalStatusPage(deps, sessionToken, {
         title: 'Review draft command rejected',
         message: 'Choose one exact fact, one exact asset and a valid bounded brief. Nothing was generated.',
@@ -4085,11 +4109,13 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
       return sendHtml(res, failedPlatforms.length > 0 ? 207 : 201, operationalPage(
         content.workspace.workspaceName,
-        renderCampaignDraftPackReviewBody(results, failedPlatforms),
+        renderCampaignDraftPackReviewBody(results, failedPlatforms, mediaVariants),
         deps,
         'content',
         csrfToken,
-      ));
+      ), undefined, {
+        'content-security-policy': "default-src 'none'; img-src 'self' https://media.zernio.com; media-src 'self' https://media.zernio.com; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      });
     } catch (error) {
       const status = error instanceof PropertyPredatorCampaignDraftRuntimeError
         && (error.code === 'invalid_command' || error.code === 'evidence_invalid') ? 400
