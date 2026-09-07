@@ -395,11 +395,15 @@ function readyBrandBrainService(): PortalBrandBrainService {
   return { snapshot: async () => ({ ok: true, snapshot: readyBrandBrainSnapshot() }) };
 }
 
-function campaignGenerationRuntime(calls: PropertyPredatorGenerateDraftCommand[]) {
+function campaignGenerationRuntime(
+  calls: PropertyPredatorGenerateDraftCommand[],
+  beforeReturn?: (command: PropertyPredatorGenerateDraftCommand) => Promise<void>,
+) {
   return new PropertyPredatorCampaignDraftRuntime({
     generation: {
       generateDraft: async (command) => {
         calls.push(command);
+        await beforeReturn?.(command);
         const payload = Object.freeze({
           body: 'The headline gets attention. The evidence earns the next decision.',
           contextSha256: command.contextSha256,
@@ -758,6 +762,36 @@ test('campaign generation rejects invalid CSRF and changed exact evidence before
   );
   assert.equal(changed.statusCode, 409);
   assert.equal(calls.length, 0);
+});
+
+test('five-channel generation runs as one bounded concurrent pack instead of multiplying request time', async () => {
+  const brain = readyBrandBrainSnapshot();
+  const generationCalls: PropertyPredatorGenerateDraftCommand[] = [];
+  let releaseGeneration!: () => void;
+  const generationGate = new Promise<void>((resolve) => { releaseGeneration = resolve; });
+  const form = baseReviewDraftForm();
+  form.append('platform', 'facebook');
+  form.append('platform', 'instagram');
+  form.append('platform', 'x');
+  form.append('platform', 'tiktok');
+
+  const pending = call('POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, postgres({
+    companyContent: contentService(brain.brain.runtimeBrandSha256),
+    brandBrain: readyBrandBrainService(),
+    campaignDrafts: campaignGenerationRuntime(generationCalls, async () => generationGate),
+  }), form);
+  for (let attempt = 0; attempt < 20 && generationCalls.length < 5; attempt += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  const callsStartedBeforeAnyCompleted = generationCalls.length;
+  releaseGeneration();
+  const result = await pending;
+
+  assert.equal(callsStartedBeforeAnyCompleted, 5);
+  assert.equal(result.statusCode, 201);
+  assert.deepEqual(generationCalls.map((call) => call.brief.platform), [
+    'linkedin', 'facebook', 'instagram', 'x', 'tiktok',
+  ]);
 });
 
 test('campaign generation explains an unusable source without inventing an evidence mismatch', async () => {

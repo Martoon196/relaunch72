@@ -223,12 +223,21 @@ test('production factory keeps session/workspace reads on web and Brand Brain re
   const adapterSql: string[] = [];
   let webReleases = 0;
   let adapterReleases = 0;
+  let adapterSnapshotReadActive = false;
 
   function transactionClient(kind: 'web' | 'adapter') {
     const statements = kind === 'web' ? webSql : adapterSql;
     return {
       async query(sql: string) {
         statements.push(sql);
+        const guardedSnapshotRead = kind === 'adapter'
+          && /brand-brain\.latest-snapshot-(?:sources|specialists|reviews)/u.test(sql);
+        if (guardedSnapshotRead) {
+          assert.equal(adapterSnapshotReadActive, false, 'one pg client must not receive overlapping queries');
+          adapterSnapshotReadActive = true;
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          adapterSnapshotReadActive = false;
+        }
         if (sql.startsWith('BEGIN ') || sql === 'COMMIT' || sql === 'ROLLBACK'
             || sql.includes("set_config('app.user_id'")) {
           return { rows: [], rowCount: 0 };

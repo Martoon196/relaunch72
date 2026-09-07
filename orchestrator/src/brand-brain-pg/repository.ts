@@ -568,8 +568,10 @@ export class BrandBrainPgRepository {
     );
     const release = releaseResult.rows[0];
     if (!release) return null;
-    const [sourceResult, specialistResult, reviewResult] = await Promise.all([
-      this.transaction.query<SourceRow>(
+    // A transaction runner gives this repository one checked-out pg client.
+    // Keep its reads sequential: overlapping client.query() calls are deprecated
+    // by pg and can leave a live portal request waiting behind an unsafe queue.
+    const sourceResult = await this.transaction.query<SourceRow>(
         `/* brand-brain.latest-snapshot-sources */
          SELECT source_id AS "sourceId", asset_role AS "assetRole",
                 authority_status AS "authorityStatus",
@@ -580,8 +582,8 @@ export class BrandBrainPgRepository {
          FROM app_private.brand_brain_source_version_refs
          WHERE source_release_id = $1 ORDER BY source_id`,
         [release.sourceReleaseId],
-      ),
-      this.transaction.query<SpecialistRow>(
+      );
+    const specialistResult = await this.transaction.query<SpecialistRow>(
         `/* brand-brain.latest-snapshot-specialists */
          SELECT profile_id AS "profileId", profile_name AS name, capabilities,
                 encode(runtime_brand_sha256, 'hex') AS "runtimeBrandSha256",
@@ -590,15 +592,14 @@ export class BrandBrainPgRepository {
          FROM app_private.brand_brain_specialist_profile_refs
          WHERE source_release_id = $1 ORDER BY recorded_at, id`,
         [release.sourceReleaseId],
-      ),
-      this.transaction.query<ReviewRow>(
+      );
+    const reviewResult = await this.transaction.query<ReviewRow>(
         `/* brand-brain.latest-snapshot-reviews */
          SELECT id::text AS id, review_dimension AS dimension, decision
          FROM app_private.brand_brain_review_decisions
          WHERE source_release_id = $1 ORDER BY review_dimension`,
         [release.sourceReleaseId],
-      ),
-    ]);
+      );
     const visualConflict = release.visualPolicyConflict === true;
     const sources: readonly BrandBrainSourceSummary[] = Object.freeze(sourceResult.rows.map((row) => Object.freeze({ ...row })));
     const specialists: readonly BrandBrainSpecialistSummary[] = Object.freeze(specialistResult.rows.map((row) => {

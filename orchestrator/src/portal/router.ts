@@ -4049,21 +4049,34 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         approvedFacts: Object.freeze(fact ? [fact] : []),
         approvedAssets: Object.freeze(asset ? [asset] : []),
       });
-      const results: PropertyPredatorReviewCampaignDraft[] = [];
-      const failedPlatforms: string[] = [];
-      let lastFailure: unknown;
-      for (const platform of platforms) {
+      // Each channel is a separate, idempotent generation-only request. Run the
+      // bounded pack together so five selected channels do not multiply the
+      // browser-facing request time and overrun the hosting proxy deadline.
+      const generationOutcomes = await Promise.all(platforms.map(async (platform) => {
         const idempotencyKey = `campaign-pack:${createHash('sha256')
           .update(commandKey).update('\0').update(platform).digest('hex')}`;
         try {
-          results.push(await deps.campaignDrafts.generateReviewDraft(Object.freeze({
+          return Object.freeze({
+            ok: true as const,
+            platform,
+            draft: await deps.campaignDrafts.generateReviewDraft(Object.freeze({
             ...common,
             idempotencyKey,
             brief: Object.freeze({ platform, topic, tone }),
-          })));
+            })),
+          });
         } catch (error) {
-          failedPlatforms.push(platform);
-          lastFailure = error;
+          return Object.freeze({ ok: false as const, platform, error });
+        }
+      }));
+      const results: PropertyPredatorReviewCampaignDraft[] = [];
+      const failedPlatforms: string[] = [];
+      let lastFailure: unknown;
+      for (const outcome of generationOutcomes) {
+        if (outcome.ok) results.push(outcome.draft);
+        else {
+          failedPlatforms.push(outcome.platform);
+          lastFailure = outcome.error;
         }
       }
       if (results.length < 1) {
