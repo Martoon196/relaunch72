@@ -211,6 +211,21 @@ test('result and nested review evidence are frozen and the runtime has no outbou
   );
 });
 
+test('review-only generation accepts founder source text without pre-existing catalogue evidence', async () => {
+  const calls: PropertyPredatorGenerateDraftCommand[] = [];
+  const result = await runtime(calls).generateReviewDraft(command({
+    approvedFacts: Object.freeze([]),
+    approvedAssets: Object.freeze([]),
+  }));
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(result.evidence.approvedFacts, []);
+  assert.deepEqual(result.evidence.approvedAssets, []);
+  assert.equal(result.reviewRequired, true);
+  assert.equal(result.publishable, false);
+  assert.equal(result.outboundEffects, false);
+});
+
 test('exact fact and asset version hashes are part of the provider context digest', async () => {
   const calls: PropertyPredatorGenerateDraftCommand[] = [];
   const service = runtime(calls);

@@ -15,6 +15,10 @@ import {
   PROPERTY_PREDATOR_MARKETING_SOURCE_FILE_COUNT,
   PROPERTY_PREDATOR_MARKETING_SOURCE_INVENTORY_SHA256,
 } from './property-predator-marketing-pack-registry.js';
+import {
+  PROPERTY_PREDATOR_AI_INVENTORY_V1_PACKAGE_SHA256,
+  PROPERTY_PREDATOR_AI_RUNTIME_BRAND_V1_SHA256,
+} from './property-predator-ai-inventory.js';
 
 const SHA256 = /^[0-9a-f]{64}$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -273,11 +277,17 @@ function validateBrandBrain(
     addBlocker(blockers, 'brand_brain_metadata_invalid', 'Brand Brain release metadata or digest evidence is invalid.');
     return { metadata: null, visualPolicyConflict: false };
   }
-  if (brain.sourceSystem !== 'property-predator' || brain.providerEffects !== false) {
+  if (brain.sourceSystem !== 'property-predator' || brain.providerEffects !== false
+      || brain.manifestSha256 !== PROPERTY_PREDATOR_AI_INVENTORY_V1_PACKAGE_SHA256
+      || brain.runtimeBrandSha256 !== PROPERTY_PREDATOR_AI_RUNTIME_BRAND_V1_SHA256) {
     addBlocker(blockers, 'brand_brain_scope_mismatch', 'Brand Brain is not an effects-off Property Predator release.');
   }
-  if (brain.activated !== true || brain.sourceFresh !== true || brain.evaluationPassed !== true) {
-    addBlocker(blockers, 'brand_brain_not_ready', 'Brand Brain must be activated, source-fresh and evaluation-passed before drafting.');
+  // Generation is review-only and rebinds the exact immutable manifest and
+  // runtime-brand hashes above. A short-lived source-sync attestation may
+  // expire without invalidating an already activated, evaluation-passed
+  // release; otherwise the founder composer would relock every 15 minutes.
+  if (brain.activated !== true || brain.evaluationPassed !== true) {
+    addBlocker(blockers, 'brand_brain_not_ready', 'Brand Brain must be activated and evaluation-passed before drafting.');
   }
   const decisions = new Map<string, unknown>();
   for (const candidateReview of brain.reviews) {

@@ -268,7 +268,11 @@ function approvedVersions(
   expectedKind: 'fact' | 'asset',
 ): readonly PropertyPredatorCampaignDraftApprovedVersionEvidence[] {
   const maximum = expectedKind === 'fact' ? MAX_FACTS : MAX_ASSETS;
-  if (!Array.isArray(input) || input.length < 1 || input.length > maximum) fail('evidence_invalid');
+  // Approved catalogue evidence strengthens a draft when present, but the
+  // founder may also supply source copy and media directly. This boundary is
+  // generation-only and every result remains human-review-required, so an
+  // empty evidence set is honest and safer than blocking the composer.
+  if (!Array.isArray(input) || input.length > maximum) fail('evidence_invalid');
   const versions = input.map((entry) => approvedVersion(entry, expectedBrandSha256, expectedKind));
   const identities = new Set(versions.map((entry) => entry.contentVersionId));
   if (identities.size !== versions.length) fail('evidence_invalid');

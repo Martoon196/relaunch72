@@ -89,6 +89,20 @@ test('marketing draft recipe is deterministic, hash-bound and permanently effect
   assert.equal(Object.isFrozen(left.handoffs), true);
 });
 
+test('activated exact-hash social recipe stays ready after the short source-sync attestation expires', () => {
+  const current = readyBrandBrain();
+  const snapshot = {
+    ...current,
+    brain: { ...current.brain, sourceFresh: false, visualPolicyConflict: true },
+  };
+  const plan = planPropertyPredatorMarketingDraft({ brandBrainSnapshot: snapshot });
+
+  assert.equal(plan.readiness, 'draft_recipe_ready');
+  assert.equal(plan.blockers.length, 0);
+  assert.equal(plan.brandBrain?.specialistProfileId, 'propertypredator.owned.social/v1');
+  assert.equal(plan.handoffs.at(-1)?.status, 'optional-visual-blocked');
+});
+
 test('marketing draft recipe fails closed on unknown scope, pack tampering and registration mismatch', () => {
   const tamperedPack = mutable(PROPERTY_PREDATOR_MARKETING_PACK) as unknown as Record<string, unknown>;
   tamperedPack.packageSha256 = '0'.repeat(64);

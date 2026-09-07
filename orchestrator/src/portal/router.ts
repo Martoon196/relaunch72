@@ -3869,13 +3869,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
             && content.workspace.canManage
             && brandBrainSnapshot?.workspace.canManage
             && draftPlan.readiness === 'draft_recipe_ready'
-            && draftPlan.brandBrain
-            && content.catalog.items.some((item) => item.kind === 'social_post'
-              && item.brandSha256 === draftPlan.brandBrain!.runtimeBrandSha256
-              && campaignDraftEvidence(item) !== null)
-            && content.catalog.items.some((item) => (item.kind === 'image' || item.kind === 'video')
-              && item.brandSha256 === draftPlan.brandBrain!.runtimeBrandSha256
-              && campaignDraftEvidence(item) !== null) ? {
+            && draftPlan.brandBrain ? {
               draftGenerationAction: {
                 actionUrl: CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE,
                 csrfToken,
@@ -3949,8 +3943,8 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     const platforms = form.getAll('platform');
     const tone = oneFormValue(form, 'tone');
     const topic = campaignFormText(oneFormValue(form, 'topic'), 20_000);
-    const factVersionIds = campaignUuidValues(form, 'approved_fact_version_id', 1, 1);
-    const assetVersionIds = campaignUuidValues(form, 'approved_asset_version_id', 1, 1);
+    const factVersionIds = campaignUuidValues(form, 'approved_fact_version_id', 0, 1);
+    const assetVersionIds = campaignUuidValues(form, 'approved_asset_version_id', 0, 1);
     let mediaVariants: ReturnType<typeof parseCampaignMediaVariants> | null;
     try {
       mediaVariants = parseCampaignMediaVariants(form.getAll('media_variant'), platforms);
@@ -3965,7 +3959,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         || !factVersionIds || !assetVersionIds || mediaVariants === null) {
       return sendHtml(res, 400, portalStatusPage(deps, sessionToken, {
         title: 'Review draft command rejected',
-        message: 'Choose one exact fact, one exact asset and a valid bounded brief. Nothing was generated.',
+        message: 'Choose valid channels and provide a bounded source brief. Nothing was generated.',
         active: 'content',
         backHref: CAMPAIGN_WIZARD_ROUTE,
         backLabel: 'Return to Campaign Builder',
@@ -4018,16 +4012,18 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           backLabel: 'Refresh Campaign Builder',
         }));
       }
-      const factItem = content.catalog.items.find((item) =>
-        item.contentVersionId === factVersionIds[0] && item.kind === 'social_post');
-      const assetItem = content.catalog.items.find((item) =>
+      const factItem = factVersionIds[0] ? content.catalog.items.find((item) =>
+        item.contentVersionId === factVersionIds[0] && item.kind === 'social_post') : undefined;
+      const assetItem = assetVersionIds[0] ? content.catalog.items.find((item) =>
         item.contentVersionId === assetVersionIds[0]
-          && (item.kind === 'image' || item.kind === 'video'));
+          && (item.kind === 'image' || item.kind === 'video'))
+        : undefined;
       const fact = factItem ? campaignDraftEvidence(factItem) : null;
       const asset = assetItem ? campaignDraftEvidence(assetItem) : null;
-      if (!fact || !asset
-          || fact.brandSha256 !== plan.brandBrain.runtimeBrandSha256
-          || asset.brandSha256 !== plan.brandBrain.runtimeBrandSha256) {
+      if ((factVersionIds.length > 0 && !fact)
+          || (assetVersionIds.length > 0 && !asset)
+          || (fact && fact.brandSha256 !== plan.brandBrain.runtimeBrandSha256)
+          || (asset && asset.brandSha256 !== plan.brandBrain.runtimeBrandSha256)) {
         return sendHtml(res, 409, portalStatusPage(deps, sessionToken, {
           title: 'Approved campaign evidence changed',
           message: 'The exact fact or asset version is no longer approved, fresh and Brand Brain-aligned.',
@@ -4048,8 +4044,8 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           runtimeBrandSha256: plan.brandBrain.runtimeBrandSha256,
           specialistProfileId: plan.brandBrain.specialistProfileId,
         }),
-        approvedFacts: Object.freeze([fact]),
-        approvedAssets: Object.freeze([asset]),
+        approvedFacts: Object.freeze(fact ? [fact] : []),
+        approvedAssets: Object.freeze(asset ? [asset] : []),
       });
       const results: PropertyPredatorReviewCampaignDraft[] = [];
       const failedPlatforms: string[] = [];

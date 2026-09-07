@@ -12,7 +12,7 @@ import {
   PROPERTY_PREDATOR_BRAND_BRAIN_EXTERNAL_PROFILES,
 } from './brand-brain-registry.js';
 
-const RUNTIME_BRAND_SHA256 = 'b8e342f5473dd1be7dbaf0bcd80269a38b2bf15c8e4634aa66ea4f5e21c9c60e';
+const RUNTIME_BRAND_SHA256 = 'd77b0306d110075571dedd716d012c8752a302eb39ea9198e71ecd43cc089abc';
 
 function source(
   sourceId: string,
@@ -112,7 +112,7 @@ const REVIEWS: readonly BrandBrainReviewSummary[] = Object.freeze([
 export function createPropertyPredatorBrandBrainFixture(): PortalBrandBrainSnapshot {
   const brain: BrandBrainSnapshot = Object.freeze({
     sourceReleaseId: 'b1000000-0000-4000-8000-000000000001',
-    manifestSha256: '87af0778a10534854628281387190bb5221112fe1c306df0ab83cb6ad5ee9759',
+    manifestSha256: 'd55afac02ac995f6157749181cf230ea8acc23b7b129dd6f92f63bcd04b57300',
     runtimeBrandSha256: RUNTIME_BRAND_SHA256,
     sourceSystem: 'property-predator',
     sources: SOURCES,

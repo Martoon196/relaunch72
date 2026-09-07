@@ -310,7 +310,7 @@ function freshCalls(): SocialCalls {
   return { snapshots: [], plans: [], reschedules: [], cancels: [] };
 }
 
-function contentService(brandSha256?: string): PortalCompanyContentService {
+function contentService(brandSha256?: string, empty = false): PortalCompanyContentService {
   const fixture = createPropertyPredatorContentCatalogFixture();
   const copy = fixture.items[0]!;
   const artwork = fixture.items[2]!;
@@ -326,7 +326,7 @@ function contentService(brandSha256?: string): PortalCompanyContentService {
           canManage: true,
         },
         catalog: {
-          items: [
+          items: empty ? [] : [
             Object.freeze({
               ...copy,
               contentItemId: IDS.contentItem,
@@ -603,6 +603,27 @@ test('Campaign Wizard exposes one exact generation-only form only when the runti
   assert.equal(generationCalls.length, 0);
 });
 
+test('Campaign Wizard exposes the five-channel review composer without pre-seeded catalogue evidence', async () => {
+  const brain = readyBrandBrainSnapshot();
+  brain.brain.sourceFresh = false;
+  brain.brain.visualPolicyConflict = true;
+  const generationCalls: PropertyPredatorGenerateDraftCommand[] = [];
+  const result = await call('GET', CAMPAIGN_WIZARD_ROUTE, postgres({
+    publicSocial: socialService(freshCalls()),
+    companyContent: contentService(brain.brain.runtimeBrandSha256, true),
+    brandBrain: { snapshot: async () => ({ ok: true, snapshot: brain }) },
+    campaignDrafts: campaignGenerationRuntime(generationCalls),
+  }));
+
+  assert.equal(result.statusCode, 200);
+  assert.match(result.body, /Turn one source into a channel pack/);
+  assert.match(result.body, /name="platform" value="tiktok" checked/);
+  assert.match(result.body, /No approved fact pack is attached/);
+  assert.match(result.body, /No approved library asset is attached/);
+  assert.doesNotMatch(result.body, /brand brain not ready/);
+  assert.equal(generationCalls.length, 0);
+});
+
 test('authenticated CSRF-bound campaign generation re-reads exact evidence and renders an unsendable review result', async () => {
   const brain = readyBrandBrainSnapshot();
   const generationCalls: PropertyPredatorGenerateDraftCommand[] = [];
@@ -660,6 +681,34 @@ test('one source creates a native five-channel pack without any outbound effect'
   assert.match(result.body, />x</i);
   assert.match(result.body, /TikTok/i);
   assert.match(result.body, /data-outbound-effects="false"/);
+});
+
+test('one source creates a five-channel review pack with no catalogue evidence', async () => {
+  const brain = readyBrandBrainSnapshot();
+  brain.brain.sourceFresh = false;
+  brain.brain.visualPolicyConflict = true;
+  const generationCalls: PropertyPredatorGenerateDraftCommand[] = [];
+  const form = baseReviewDraftForm();
+  form.set('expected_plan_sha256', planPropertyPredatorMarketingDraft({
+    selection: 'property-predator-self-serve:activated',
+    brandBrainSnapshot: brain,
+  }).planSha256);
+  form.delete('approved_fact_version_id');
+  form.delete('approved_asset_version_id');
+  form.append('platform', 'facebook');
+  form.append('platform', 'instagram');
+  form.append('platform', 'x');
+  form.append('platform', 'tiktok');
+  const result = await call('POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, postgres({
+    companyContent: contentService(brain.brain.runtimeBrandSha256, true),
+    brandBrain: { snapshot: async () => ({ ok: true, snapshot: brain }) },
+    campaignDrafts: campaignGenerationRuntime(generationCalls),
+  }), form);
+
+  assert.equal(result.statusCode, 201);
+  assert.equal(generationCalls.length, 5);
+  assert.match(result.body, /One source\. <em>5 native drafts\.<\/em>/);
+  assert.match(result.body, /Nothing published/);
 });
 
 test('campaign generation rejects invalid CSRF and changed exact evidence before the provider runtime', async () => {
