@@ -94,7 +94,6 @@ import {
 import {
   createZernioLiveConnectionClient,
   createZernioMessagingClient,
-  createZernioPostingClient,
 } from '../public-social-outbound/index.js';
 import {
   LivePortalZernioMessagingService,
@@ -889,14 +888,6 @@ export async function buildPgPortalPlatform(
           calendarAccounts.push({ network: 'linkedin', providerAccountId: linkedInAccountId });
         }
         if (calendarAccounts.length > 0) {
-          const postingClient = createZernioPostingClient({
-            apiKey,
-            allowedTargets: calendarAccounts.map((account) => ({
-              network: account.network,
-              accountId: account.providerAccountId,
-            })),
-            fetch: globalThis.fetch,
-          });
           zernioCalendar = createPgPortalZernioCalendarCommandService({
             webPool,
             commandPool: zernioPool,
@@ -904,7 +895,6 @@ export async function buildPgPortalPlatform(
             providerConnectionId: connectionId,
             providerProfileId,
             accounts: calendarAccounts,
-            postingClient,
           });
         }
         pools.push(zernioPool);

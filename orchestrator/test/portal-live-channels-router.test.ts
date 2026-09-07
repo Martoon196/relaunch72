@@ -189,10 +189,16 @@ test('an exact calendar handoff opens the Instagram stage form with immutable ev
       recordProfile: unavailable, revokeProfile: unavailable,
       readiness: unavailable, stagePublication: unavailable,
     },
+    zernioCalendar: {
+      configuredNetworks: ['instagram', 'linkedin'],
+      stage: unavailable,
+      listScheduled: async () => ({ ok: true, items: [] }),
+      bootstrapPlannerTargets: unavailable,
+    },
   }), COOKIE);
   assert.equal(result.statusCode, 200);
   assert.match(result.body, /id="plc-owned-social-stage" open/u);
-  assert.match(result.body, /name="network" value="instagram"/u);
+  assert.match(result.body, /<option value="instagram" selected>Instagram<\/option>/u);
   assert.match(result.body, /name="planning_intent_id" value="11111111-1111-4111-8111-111111111111"/u);
   assert.match(result.body, /name="planning_target_id" value="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"/u);
   assert.match(result.body, /name="scheduled_for" value="2026-09-02T09:30:00.000Z"/u);

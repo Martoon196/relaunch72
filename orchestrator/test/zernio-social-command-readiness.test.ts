@@ -7,6 +7,7 @@ const exact = Object.freeze({
   schemaUsage: true,
   requiredFunctions: true,
   legacyReplyFunctionsDenied: true,
+  unsafeCalendarFunctionsDenied: true,
   definerPrivilegesExact: true,
   tableBlind: true,
   elevatedRolesDenied: true,
@@ -33,6 +34,22 @@ test('Zernio readiness requires both read-only and write-side portal-session fen
     sql,
     /app_private\.enqueue_zernio_calendar_from_connected_account\(uuid,uuid,text,bytea,bytea,uuid,uuid,uuid,uuid,uuid,uuid,uuid,text,timestamp with time zone\)/u,
   );
+  assert.match(
+    sql,
+    /app_private\.bootstrap_zernio_calendar_planner_target\(uuid,uuid,text,bytea,bytea\)/u,
+  );
+  assert.match(
+    sql,
+    /app_private\.list_zernio_calendar_jobs\(uuid,timestamp with time zone,timestamp with time zone,integer\)/u,
+  );
+  assert.match(
+    sql,
+    /NOT has_function_privilege\(current_user,[\s\S]*?enqueue_zernio_calendar_job\(uuid,uuid,uuid,uuid,text,bytea,bytea,uuid,uuid,uuid,uuid,uuid,uuid,uuid,text,bytea,bytea,timestamp with time zone\)/u,
+  );
+  assert.match(sql, /NOT has_function_privilege\(current_user,[\s\S]*?reserve_zernio_direct_schedule\(uuid,uuid,text,bytea,text,timestamp with time zone,text\)/u);
+  assert.match(sql, /NOT has_function_privilege\(current_user,[\s\S]*?reserve_zernio_direct_schedule_v2\(uuid,uuid,text,bytea,text,text,text,timestamp with time zone,text\)/u);
+  assert.match(sql, /NOT has_function_privilege\(current_user,[\s\S]*?settle_zernio_direct_schedule\(uuid,uuid,text,text,bytea,text,timestamp with time zone\)/u);
+  assert.match(sql, /NOT has_function_privilege\(current_user,[\s\S]*?record_zernio_calendar_account_probe\(uuid,uuid,text,bytea,bytea,text,text,bytea,text\)/u);
   assert.match(sql, /property_predator_zernio_connection_intents', 'SELECT,INSERT,UPDATE,DELETE'/u);
   assert.match(sql, /property_predator_zernio_accounts', 'DELETE,TRUNCATE'/u);
   assert.match(sql, /property_predator_zernio_account_webhook_receipts', 'UPDATE,DELETE,TRUNCATE'/u);

@@ -16,6 +16,7 @@ import { handlePortal, type PostgresPortalDeps } from '../src/portal/router.js';
 import { PORTAL_COOKIE, portalCsrfToken } from '../src/portal/session.js';
 import type { PortalAuthService } from '../src/portal/auth-service.js';
 import type { PortalCrmService } from '../src/portal/crm-service.js';
+import type { PortalOwnedSocialBindingService } from '../src/portal/owned-social-binding-service.js';
 import type { PortalZernioCalendarCommandService } from '../src/portal/zernio-calendar-command-service.js';
 
 const SECRET = 'zernio-calendar-router-secret';
@@ -53,12 +54,30 @@ const crm: PortalCrmService = {
   completeTask: async () => ({ ok: false, kind: 'unavailable', message: 'not used' }),
 };
 
-function postgres(zernioCalendar: PortalZernioCalendarCommandService): PostgresPortalDeps {
+function baseService(
+  overrides: Partial<PortalZernioCalendarCommandService> = {},
+): PortalZernioCalendarCommandService {
+  return {
+    configuredNetworks: ['instagram', 'linkedin'],
+    stage: async () => ({ ok: false, kind: 'unavailable' }),
+    listScheduled: async () => ({ ok: true, items: [] }),
+    bootstrapPlannerTargets: async () => ({ ok: false, kind: 'unavailable' }),
+    ...overrides,
+  };
+}
+
+function postgres(
+  zernioCalendar?: PortalZernioCalendarCommandService,
+  publicSocial?: unknown,
+  ownedSocialBinding?: PortalOwnedSocialBindingService,
+): PostgresPortalDeps {
   return {
     kind: 'postgres', sessionSecret: SECRET, secure: false, auth, crm,
     requestId: () => 'zernio-calendar-router-request',
     productProfile: PROPERTY_PREDATOR_GROWTH_PROFILE,
-    zernioCalendar,
+    ...(zernioCalendar ? { zernioCalendar } : {}),
+    ...(publicSocial ? { publicSocial: publicSocial as never } : {}),
+    ...(ownedSocialBinding ? { ownedSocialBinding } : {}),
   };
 }
 
@@ -115,8 +134,7 @@ function encodeForm(input: Readonly<Record<string, string>>): string {
 
 test('Zernio calendar staging accepts immutable evidence and rejects browser provider identity', async () => {
   const calls: unknown[] = [];
-  const service: PortalZernioCalendarCommandService = {
-    configuredNetworks: ['instagram', 'linkedin'],
+  const service = baseService({
     stage: async (identity, input) => {
       calls.push({ identity, input });
       return {
@@ -128,7 +146,7 @@ test('Zernio calendar staging accepts immutable evidence and rejects browser pro
         workerLeaseClaimed: false,
       };
     },
-  };
+  });
   const res = response();
   await handlePortal(request(encodeForm(fields())) as never, res as never, postgres(service));
   assert.equal(res.statusCode, 303);
@@ -152,6 +170,38 @@ test('Zernio calendar staging accepts immutable evidence and rejects browser pro
   assert.equal(forged.statusCode, 303);
   assert.equal(forged.headers.location, `${LIVE_CHANNELS_ROUTE}?notice=${encodeURIComponent(liveChannelsNoticeToken(SECRET, SESSION, 'owned_social_invalid'))}`);
   assert.equal(calls.length, 1);
+});
+
+test('calendar staging fails closed without the Zernio seam and never falls back to the legacy queue', async () => {
+  const legacyCalls: unknown[] = [];
+  const legacyBinding: PortalOwnedSocialBindingService = {
+    providerConnectionId: 'fc100000-0000-4000-8000-0000000000c1',
+    profileBindingComposed: true,
+    recordProfile: async () => ({ ok: false, kind: 'unavailable' }),
+    revokeProfile: async () => ({ ok: false, kind: 'unavailable' }),
+    readiness: async () => ({ ok: false, kind: 'unavailable' }),
+    stagePublication: async (identity, input) => {
+      legacyCalls.push({ identity, input });
+      return {
+        ok: true,
+        jobId: 'fc900000-0000-4000-8000-000000000141',
+        idempotencyKeySha256: 'b'.repeat(64),
+        caps: { daily: 1, monthly: 3 },
+        providerEffects: 'none',
+        workerLeaseClaimed: false,
+      };
+    },
+  };
+  const res = response();
+  await handlePortal(request(encodeForm({
+    ...fields(),
+    profile_id: 'fc200000-0000-4000-8000-0000000000d1',
+    owned_account: '@propertypredator',
+  })) as never, res as never, postgres(undefined, undefined, legacyBinding));
+  assert.equal(res.statusCode, 303);
+  assert.equal(res.headers.location,
+    `${LIVE_CHANNELS_ROUTE}?notice=${encodeURIComponent(liveChannelsNoticeToken(SECRET, SESSION, 'owned_social_unavailable'))}`);
+  assert.deepEqual(legacyCalls, []);
 });
 
 test('live-channel panel exposes calendar evidence but no provider identity fields', () => {
@@ -178,81 +228,103 @@ test('live-channel panel exposes calendar evidence but no provider identity fiel
   assert.doesNotMatch(html, /zernio/i);
 });
 
-test('the friendly calendar form schedules the exact LinkedIn account and redirects safely', async () => {
+test('live-channel panel renders no legacy staging form when the Zernio seam is unavailable', () => {
+  const html = renderLiveChannelsBody(presentLiveChannels(createPropertyPredatorLiveChannelsFixture()), {
+    workspaceName: 'Property Predator Growth HQ',
+    csrfToken: 'csrf',
+    pauseCommandAvailable: true,
+    pauseCommandKeys: {
+      all: COMMAND_KEY, customer_email: COMMAND_KEY, owned_social: COMMAND_KEY,
+      whatsapp: COMMAND_KEY, sms: COMMAND_KEY, social_dm: COMMAND_KEY,
+    },
+    railStatusAvailable: true,
+    handoff: { conversionInboxComposed: true, inboxOperationsComposed: true, lead360Composed: true },
+    ownedSocialCommandAvailable: true,
+    zernioCalendarCommandAvailable: false,
+    ownedSocialProfileBindingComposed: true,
+    ownedSocialCommandKeys: { bind: COMMAND_KEY, revoke: COMMAND_KEY, stage: COMMAND_KEY },
+  });
+  assert.match(html, /Calendar staging unavailable/u);
+  assert.match(html, /No legacy provider route is offered/u);
+  assert.doesNotMatch(html, new RegExp(`action="${LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE}"`, 'u'));
+  assert.doesNotMatch(html, /name="confirm_stage"/u);
+});
+
+test('legacy direct schedule and media-upload routes are unavailable and invoke no calendar command', async () => {
+  let calls = 0;
+  const service = baseService({
+    stage: async () => { calls += 1; return { ok: false, kind: 'unavailable' }; },
+    listScheduled: async () => { calls += 1; return { ok: true, items: [] }; },
+    bootstrapPlannerTargets: async () => { calls += 1; return { ok: false, kind: 'unavailable' }; },
+  });
+  for (const route of [
+    '/portal/content/calendar/live-schedules',
+    '/portal/content/calendar/media-uploads',
+  ]) {
+    const res = response();
+    await handlePortal(request(encodeForm({
+      _csrf: portalCsrfToken(SECRET, SESSION), command_key: COMMAND_KEY,
+    }), route) as never, res as never, postgres(service));
+    assert.equal(res.statusCode, 404);
+    assert.match(res.body, /Not available/u);
+  }
+  assert.equal(calls, 0);
+});
+
+test('explicit calendar foundation activation creates TEST targets without a provider effect', async () => {
   const calls: unknown[] = [];
-  const service: PortalZernioCalendarCommandService = {
-    configuredNetworks: ['linkedin'],
-    stage: async () => ({ ok: false, kind: 'unavailable' }),
-    scheduleDirect: async (identity, input) => {
-      calls.push({ identity, input });
+  const service = baseService({
+    bootstrapPlannerTargets: async (identity) => {
+      calls.push(identity);
       return {
-        ok: true, scheduleId: 'fc900000-0000-4000-8000-000000000141',
-        providerPostId: 'zernio-post-1', scheduledFor: input.scheduledFor,
-        disposition: 'applied',
+        ok: true,
+        targets: [
+          { network: 'instagram', targetId: PLANNING_TARGET_ID, disposition: 'applied' },
+          { network: 'linkedin', targetId: SOURCE_ATTESTATION_ID, disposition: 'applied' },
+        ],
+        providerEffects: 'none',
       };
     },
-  };
-  const body = encodeForm({
-    _csrf: portalCsrfToken(SECRET, SESSION), command_key: COMMAND_KEY,
-    network: 'linkedin', timezone: 'Europe/London',
-    content: 'A useful Property Predator post.',
-    scheduled_for_local: '2026-09-04T12:01', media_type: '', media_url: '',
   });
+  const publicSocial = {
+    snapshot: async () => ({
+      ok: true,
+      snapshot: {
+        workspace: { canManage: true },
+        planning: {
+          targets: {
+            items: [{ network: 'instagram', targetId: PLANNING_TARGET_ID }],
+            hasMore: false,
+          },
+        },
+      },
+    }),
+  };
   const res = response();
-  await handlePortal(request(body, '/portal/content/calendar/live-schedules') as never,
-    res as never, postgres(service));
+  await handlePortal(request(encodeForm({
+    _csrf: portalCsrfToken(SECRET, SESSION), command_key: COMMAND_KEY,
+    confirm_foundation: 'confirmed',
+  }), '/portal/content/calendar/foundation') as never, res as never, postgres(service, publicSocial));
   assert.equal(res.statusCode, 303);
   assert.equal(res.headers.location,
-    `${CONTENT_CALENDAR_ROUTE}?notice=${encodeURIComponent(campaignWizardNoticeToken(SECRET, SESSION, 'scheduled_live'))}`);
+    `${CONTENT_CALENDAR_ROUTE}?notice=${encodeURIComponent(campaignWizardNoticeToken(SECRET, SESSION, 'calendar_foundation_ready'))}`);
   assert.equal(calls.length, 1);
-  assert.deepEqual((calls[0] as { input: unknown }).input, {
-    network: 'linkedin', content: 'A useful Property Predator post.',
-    scheduledFor: '2026-09-04T11:01:00.000Z', commandKey: COMMAND_KEY, media: null,
-  });
 });
 
-test('live calendar authorization failures use live scheduling language, never TEST command copy', async () => {
-  const service: PortalZernioCalendarCommandService = {
-    configuredNetworks: ['linkedin'],
-    stage: async () => ({ ok: false, kind: 'unavailable' }),
-    scheduleDirect: async () => ({ ok: false, kind: 'forbidden' }),
-  };
-  const body = encodeForm({
-    _csrf: portalCsrfToken(SECRET, SESSION), command_key: COMMAND_KEY,
-    network: 'linkedin', timezone: 'Europe/London',
-    content: 'A useful Property Predator post.',
-    scheduled_for_local: '2026-09-04T12:01', media_type: '', media_url: '',
-  });
-  const res = response();
-  await handlePortal(request(body, '/portal/content/calendar/live-schedules') as never,
-    res as never, postgres(service));
-  assert.equal(res.statusCode, 303);
-  assert.equal(res.headers.location,
-    `${CONTENT_CALENDAR_ROUTE}?notice=${encodeURIComponent(campaignWizardNoticeToken(SECRET, SESSION, 'schedule_forbidden'))}`);
-});
-
-test('calendar media preparation is CSRF-bound and returns one safe upload contract', async () => {
-  const calls: unknown[] = [];
-  const service: PortalZernioCalendarCommandService = {
-    configuredNetworks: ['linkedin'],
-    stage: async () => ({ ok: false, kind: 'unavailable' }),
-    prepareMediaUpload: async (identity, input) => {
-      calls.push({ identity, input });
-      return { ok: true, uploadUrl: 'https://bucket.r2.cloudflarestorage.com/upload',
-        publicUrl: 'https://media.zernio.com/post.png', mediaType: 'image', expiresIn: 900 };
+test('calendar foundation activation is CSRF-bound and requires explicit confirmation', async () => {
+  let calls = 0;
+  const service = baseService({
+    bootstrapPlannerTargets: async () => {
+      calls += 1;
+      return { ok: true, targets: [], providerEffects: 'none' };
     },
-  };
-  const body = encodeForm({
-    _csrf: portalCsrfToken(SECRET, SESSION), command_key: COMMAND_KEY,
-    filename: 'post.png', content_type: 'image/png', size: '12345',
   });
   const res = response();
-  await handlePortal(request(body, '/portal/content/calendar/media-uploads') as never,
-    res as never, postgres(service));
-  assert.equal(res.statusCode, 200);
-  assert.equal(JSON.parse(res.body).publicUrl, 'https://media.zernio.com/post.png');
-  assert.equal(calls.length, 1);
-  assert.deepEqual((calls[0] as { input: unknown }).input, {
-    commandKey: COMMAND_KEY, filename: 'post.png', contentType: 'image/png', size: 12345,
-  });
+  await handlePortal(request(encodeForm({
+    _csrf: portalCsrfToken(SECRET, SESSION), command_key: COMMAND_KEY,
+  }), '/portal/content/calendar/foundation') as never, res as never, postgres(service, {}));
+  assert.equal(res.statusCode, 303);
+  assert.equal(res.headers.location,
+    `${CONTENT_CALENDAR_ROUTE}?notice=${encodeURIComponent(campaignWizardNoticeToken(SECRET, SESSION, 'invalid'))}`);
+  assert.equal(calls, 0);
 });

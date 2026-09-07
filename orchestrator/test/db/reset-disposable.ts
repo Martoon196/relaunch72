@@ -88,6 +88,7 @@ const APP_ROLES = [
   'r72_whatsapp_live_webhook_command',
   'r72_whatsapp_live_worker_command',
   'r72_worker',
+  'r72_zernio_calendar_bootstrap_definer',
   'r72_zernio_social_command',
   'r72_zernio_social_definer',
   'r72_zernio_inbound_webhook_command',

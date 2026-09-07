@@ -441,26 +441,9 @@ function renderOwnedSocialCommands(
         <button class="plc-guard-button" type="submit">Revoke owned profile</button>
       </form>
     </div></details>
-    <details class="plc-guard" id="plc-owned-social-stage"${prefill ? ' open' : ''}><summary><span>Stage one approved publication</span><b>${card.capReached ? 'CAP REACHED' : 'DATABASE PROVED'}</b></summary><div class="plc-guard-body">
-      <p>Staging queues one already-approved post behind the command boundary. The database re-proves the owned profile, content hash, approval, source attestation, caps and pause posture first; every dimension must pass or nothing is queued. No worker lease is claimed and Ayrshare is not called.</p>
-      <form method="post" action="${LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE}" autocomplete="off">
-        <input type="hidden" name="_csrf" value="${csrf}">
-        <input type="hidden" name="command_key" value="${escapeHtml(keys.stage)}">
-        <input type="hidden" name="network"${value(prefill?.network)}>
-        <input type="hidden" name="planning_intent_id"${value(prefill?.planningIntentId)}>
-        <input type="hidden" name="planning_target_id"${value(prefill?.planningTargetId)}>
-        <label class="plc-field"><span>Profile record id</span><input type="text" name="profile_id" required autocomplete="off"></label>
-        <label class="plc-field"><span>Content item id</span><input type="text" name="content_item_id"${value(prefill?.contentItemId)} required autocomplete="off"></label>
-        <label class="plc-field"><span>Approved content version id</span><input type="text" name="content_version_id"${value(prefill?.contentVersionId)} required autocomplete="off"></label>
-        <label class="plc-field"><span>Approval request id</span><input type="text" name="approval_request_id"${value(prefill?.approvalRequestId)} required autocomplete="off"></label>
-        <label class="plc-field"><span>Approval decision id</span><input type="text" name="approval_decision_id"${value(prefill?.approvalDecisionId)} required autocomplete="off"></label>
-        <label class="plc-field"><span>Source attestation id</span><input type="text" name="source_attestation_id"${value(prefill?.sourceAttestationId)} required autocomplete="off"></label>
-        <label class="plc-field"><span>Owned account reference</span><input type="text" name="owned_account" required maxlength="200" autocomplete="off"></label>
-        <label class="plc-field"><span>Operation tag</span><input type="text" name="operation_tag"${value(prefill?.operationTag)} required maxlength="100" autocomplete="off"></label>
-        <label class="plc-field"><span>Scheduled publish time (exact UTC ISO instant from the calendar)</span><input type="text" name="scheduled_for"${value(prefill?.scheduledFor)} maxlength="40" placeholder="2026-09-02T09:00:00.000Z" autocomplete="off"></label>
-        <label class="plc-guard-check"><input type="checkbox" name="confirm_stage" value="STAGE" required> I confirm this exact approved calendar post may be queued for the selected owned account.</label>
-        <button class="plc-guard-button" type="submit">Arm calendar publication</button>
-      </form>
+    <details class="plc-guard" id="plc-owned-social-stage"${prefill ? ' open' : ''}><summary><span>Stage one approved calendar publication</span><b>UNAVAILABLE</b></summary><div class="plc-guard-body">
+      <p>The reviewed calendar command boundary is not composed, so publication staging is disabled. No legacy provider route is offered and nothing can be queued from this panel.</p>
+      <button class="plc-guard-button" type="button" disabled aria-disabled="true">Calendar staging unavailable</button>
     </div></details>
   </section>`;
 }

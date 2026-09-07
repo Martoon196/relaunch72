@@ -18,6 +18,9 @@ const REQUEST_ID = '18000000-0000-4000-8000-000000000008';
 const DECISION_ID = '19000000-0000-4000-8000-000000000009';
 const ATTESTATION_ID = '1a000000-0000-4000-8000-00000000000a';
 const JOB_ID = '1b000000-0000-4000-8000-00000000000b';
+const INSTAGRAM_TARGET_ID = '1c000000-0000-4000-8000-00000000000c';
+const LINKEDIN_TARGET_ID = '1d000000-0000-4000-8000-00000000000d';
+const TEST_CONNECTION_ID = '1e000000-0000-4000-8000-00000000000e';
 const SESSION_TOKEN = 'portal-session-token';
 const PROVIDER_PROFILE_ID = 'propertypredator-profile';
 const INSTAGRAM_ACCOUNT_ID = 'propertypredator-instagram';
@@ -38,25 +41,31 @@ class FakeClient {
     daily_publish_cap: 1,
     monthly_publish_cap: 3,
   }];
-  directReserveRows: unknown[] = [];
-  directReserveErrors: unknown[] = [];
-  directListRows: unknown[] = [];
+  scheduledRows: unknown[] = [];
+  bootstrapRows = new Map<string, unknown[]>([
+    ['instagram', [{ test_provider_connection_id: TEST_CONNECTION_ID,
+      test_target_id: INSTAGRAM_TARGET_ID, test_account_ref_sha256: 'b'.repeat(64),
+      disposition: 'applied' }]],
+    ['linkedin', [{ test_provider_connection_id: TEST_CONNECTION_ID,
+      test_target_id: LINKEDIN_TARGET_ID, test_account_ref_sha256: 'c'.repeat(64),
+      disposition: 'replayed' }]],
+  ]);
 
   async query(sql: string, values: readonly unknown[] = []): Promise<{ rows: unknown[] }> {
     this.calls.push({ sql, values });
-    if (sql.includes('lock_active_portal_session')) return { rows: [{ active: true }] };
+    if (sql.includes('active_portal_session')) return { rows: [{ active: true }] };
     if (sql.includes('enqueue_zernio_calendar_from_connected_account')) {
       if (this.functionError) throw this.functionError;
       return { rows: this.functionRows };
     }
-    if (sql.includes('reserve_zernio_direct_schedule')) {
-      const error = this.directReserveErrors.shift();
-      if (error) throw error;
-      return { rows: this.directReserveRows };
+    if (sql.includes('bootstrap_zernio_calendar_planner_target')) {
+      if (this.functionError) throw this.functionError;
+      return { rows: this.bootstrapRows.get(String(values[2])) ?? [] };
     }
-    if (sql.includes('record_zernio_calendar_account_probe')) return { rows: [{ disposition: 'recorded' }] };
-    if (sql.includes('settle_zernio_direct_schedule')) return { rows: [{ disposition: 'applied' }] };
-    if (sql.includes('list_zernio_direct_schedules')) return { rows: this.directListRows };
+    if (sql.includes('list_zernio_calendar_jobs')) {
+      if (this.functionError) throw this.functionError;
+      return { rows: this.scheduledRows };
+    }
     return { rows: [] };
   }
 
@@ -112,7 +121,7 @@ function commandCall(client: FakeClient): Call {
   return call;
 }
 
-test('the service hashes configured provider references and runs one serializable command', async () => {
+test('the service hashes configured provider references and runs one serializable stage command', async () => {
   const client = new FakeClient();
   const service = new PgPortalZernioCalendarCommandService(dependencies(client));
   const outcome = await service.stage(identity, input());
@@ -130,14 +139,8 @@ test('the service hashes configured provider references and runs one serializabl
   assert.equal(call.values[0], WORKSPACE_ID);
   assert.equal(call.values[1], CONNECTION_ID);
   assert.equal(call.values[2], 'instagram');
-  assert.deepEqual(
-    call.values[3],
-    createHash('sha256').update(PROVIDER_PROFILE_ID, 'utf8').digest(),
-  );
-  assert.deepEqual(
-    call.values[4],
-    createHash('sha256').update(INSTAGRAM_ACCOUNT_ID, 'utf8').digest(),
-  );
+  assert.deepEqual(call.values[3], createHash('sha256').update(PROVIDER_PROFILE_ID).digest());
+  assert.deepEqual(call.values[4], createHash('sha256').update(INSTAGRAM_ACCOUNT_ID).digest());
   assert.deepEqual(call.values.slice(5), [
     INTENT_ID, TARGET_ID, CONTENT_ID, VERSION_ID, REQUEST_ID, DECISION_ID,
     ATTESTATION_ID, 'calendar.approved', '2026-09-03T09:00:00.000Z',
@@ -148,138 +151,76 @@ test('the service hashes configured provider references and runs one serializabl
   assert.equal(renderedCalls.includes(LINKEDIN_ACCOUNT_ID), false);
 });
 
-test('direct scheduling reserves, calls the exact LinkedIn account once and settles its receipt', async () => {
+test('calendar reads normalise and sanitize worker-backed Instagram and LinkedIn job state', async () => {
   const client = new FakeClient();
-  const scheduledFor = new Date(Date.now() + 60 * 60_000).toISOString();
-  client.directReserveRows = [{
-    schedule_id: JOB_ID, current_state: 'reserved', provider_external_id: null,
-    scheduled_for: scheduledFor.replace('T', ' ').replace('.000Z', '+00'), created_now: true,
-  }];
-  const providerCalls: unknown[] = [];
-  const service = new PgPortalZernioCalendarCommandService(dependencies(client, {
-    postingClient: {
-      async probeAccount() {
-        return { accountId: LINKEDIN_ACCOUNT_ID, profileId: PROVIDER_PROFILE_ID,
-          network: 'linkedin', username: 'propertypredator', displayName: 'Property Predator',
-          canPost: true, responseSha256: 'c'.repeat(64) };
-      },
-      async prepareMediaUpload(): Promise<never> { throw new Error('not used'); },
-      async schedule(value) {
-        providerCalls.push(value);
-        return {
-          providerPostId: 'zernio-post-1', status: 'scheduled', idempotentReplay: false,
-          responseSha256: 'b'.repeat(64),
-          platforms: [{ network: 'linkedin', accountId: LINKEDIN_ACCOUNT_ID,
-            status: 'pending', platformPostUrl: null }],
-        };
-      },
+  client.scheduledRows = [
+    {
+      job_id: JOB_ID, network: 'instagram', content_body: 'Garden Goldmine.',
+      scheduled_for: '2026-09-04 17:35:00+00', state: 'queued',
+      provider_external_id: null, safe_code: null, created_at: '2026-09-03 08:00:00+00',
     },
-  }));
-  const result = await service.scheduleDirect(identity, {
-    network: 'linkedin', content: 'A useful Property Predator post.',
-    scheduledFor, commandKey: 'calendar-command-key-1', media: null,
-  });
-  assert.deepEqual(result, {
-    ok: true, scheduleId: JOB_ID, providerPostId: 'zernio-post-1',
-    scheduledFor, disposition: 'applied',
-  });
-  assert.deepEqual(providerCalls, [{
-    requestId: JOB_ID, content: 'A useful Property Predator post.',
-    targets: [{ network: 'linkedin', accountId: LINKEDIN_ACCOUNT_ID }],
-    scheduledFor, mediaItems: [],
-  }]);
-  assert.equal(client.calls.filter((call) => call.sql.includes('settle_zernio_direct_schedule')).length, 1);
-});
-
-test('calendar reads normalise PostgreSQL timestamp text at the database boundary', async () => {
-  const client = new FakeClient();
-  client.directListRows = [{
-    schedule_id: JOB_ID,
-    network: 'linkedin',
-    content_body: 'A useful Property Predator post.',
-    scheduled_for: '2026-09-04 17:35:00+00',
-    state: 'scheduled',
-    provider_external_id: 'zernio-post-1',
-    safe_code: 'scheduled',
-  }];
+    {
+      job_id: LINKEDIN_TARGET_ID, network: 'linkedin', content_body: 'Find small plots.',
+      scheduled_for: new Date('2026-09-05T08:17:00.000Z'), state: 'succeeded',
+      provider_external_id: 'zernio-post-1', safe_code: 'published',
+      created_at: new Date('2026-09-03T08:01:00.000Z'),
+    },
+  ];
   const service = new PgPortalZernioCalendarCommandService(dependencies(client));
 
-  assert.deepEqual(await service.listDirect(identity, {
+  assert.deepEqual(await service.listScheduled(identity, {
     from: '2026-09-01T00:00:00.000Z',
     to: '2026-10-01T00:00:00.000Z',
   }), {
     ok: true,
-    items: [{
-      scheduleId: JOB_ID,
-      network: 'linkedin',
-      content: 'A useful Property Predator post.',
-      scheduledFor: '2026-09-04T17:35:00.000Z',
-      state: 'scheduled',
-      providerPostId: 'zernio-post-1',
-      safeCode: 'scheduled',
-    }],
+    items: [
+      { jobId: JOB_ID, network: 'instagram', content: 'Garden Goldmine.',
+        scheduledFor: '2026-09-04T17:35:00.000Z', state: 'queued',
+        providerPostId: null, safeCode: null, createdAt: '2026-09-03T08:00:00.000Z' },
+      { jobId: LINKEDIN_TARGET_ID, network: 'linkedin', content: 'Find small plots.',
+        scheduledFor: '2026-09-05T08:17:00.000Z', state: 'succeeded',
+        providerPostId: 'zernio-post-1', safeCode: 'published',
+        createdAt: '2026-09-03T08:01:00.000Z' },
+    ],
   });
+  const call = client.calls.find((entry) => entry.sql.includes('list_zernio_calendar_jobs'));
+  assert.equal(client.calls[0]?.sql, 'BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY');
+  assert.deepEqual(call?.values, [WORKSPACE_ID,
+    '2026-09-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z']);
+  assert.match(call?.sql ?? '', /list_zernio_calendar_jobs\(\$1::uuid,\$2::timestamptz,\$3::timestamptz,100\)/u);
 });
 
-test('direct schedule replay returns the original provider post without another provider call', async () => {
+test('planner bootstrap creates deterministic TEST targets only and never receives clear provider ids', async () => {
   const client = new FakeClient();
-  const scheduledFor = new Date(Date.now() + 60 * 60_000).toISOString();
-  client.directReserveRows = [{
-    schedule_id: JOB_ID, current_state: 'scheduled', provider_external_id: 'zernio-post-1',
-    scheduled_for: scheduledFor, created_now: false,
-  }];
-  let providerCalls = 0;
-  const service = new PgPortalZernioCalendarCommandService(dependencies(client, {
-    postingClient: {
-      async probeAccount() {
-        return { accountId: LINKEDIN_ACCOUNT_ID, profileId: PROVIDER_PROFILE_ID,
-          network: 'linkedin', username: null, displayName: null,
-          canPost: true, responseSha256: 'c'.repeat(64) };
-      },
-      async prepareMediaUpload(): Promise<never> { throw new Error('not used'); },
-      async schedule(): Promise<never> { providerCalls += 1; throw new Error(); },
-    },
-  }));
-  const result = await service.scheduleDirect(identity, {
-    network: 'linkedin', content: 'A useful Property Predator post.',
-    scheduledFor, commandKey: 'calendar-command-key-1', media: null,
+  const service = new PgPortalZernioCalendarCommandService(dependencies(client));
+
+  assert.deepEqual(await service.bootstrapPlannerTargets(identity), {
+    ok: true,
+    targets: [
+      { network: 'instagram', targetId: INSTAGRAM_TARGET_ID, disposition: 'applied' },
+      { network: 'linkedin', targetId: LINKEDIN_TARGET_ID, disposition: 'replayed' },
+    ],
+    providerEffects: 'none',
   });
-  assert.deepEqual(result, {
-    ok: true, scheduleId: JOB_ID, providerPostId: 'zernio-post-1',
-    scheduledFor, disposition: 'replayed',
-  });
-  assert.equal(providerCalls, 0);
+  const calls = client.calls.filter((entry) =>
+    entry.sql.includes('bootstrap_zernio_calendar_planner_target'));
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map((call) => call.values.slice(0, 3)), [
+    [WORKSPACE_ID, CONNECTION_ID, 'instagram'],
+    [WORKSPACE_ID, CONNECTION_ID, 'linkedin'],
+  ]);
+  assert.deepEqual(calls[0]?.values[3], createHash('sha256').update(PROVIDER_PROFILE_ID).digest());
+  assert.deepEqual(calls[0]?.values[4], createHash('sha256').update(INSTAGRAM_ACCOUNT_ID).digest());
+  assert.equal(JSON.stringify(client.calls).includes(PROVIDER_PROFILE_ID), false);
+  assert.equal(JSON.stringify(client.calls).includes(INSTAGRAM_ACCOUNT_ID), false);
 });
 
-test('a missing account proof triggers one exact provider probe, records it, then reserves', async () => {
-  const client = new FakeClient();
-  const scheduledFor = new Date(Date.now() + 60 * 60_000).toISOString();
-  client.directReserveErrors = [{ code: '55000' }];
-  client.directReserveRows = [{
-    schedule_id: JOB_ID, current_state: 'scheduled', provider_external_id: 'zernio-post-1',
-    scheduled_for: scheduledFor, created_now: false,
-  }];
-  let probes = 0;
-  const service = new PgPortalZernioCalendarCommandService(dependencies(client, {
-    postingClient: {
-      async probeAccount() {
-        probes += 1;
-        return { accountId: LINKEDIN_ACCOUNT_ID, profileId: PROVIDER_PROFILE_ID,
-          network: 'linkedin', username: 'propertypredator', displayName: 'Property Predator',
-          canPost: true, responseSha256: 'c'.repeat(64) };
-      },
-      async prepareMediaUpload(): Promise<never> { throw new Error('not used'); },
-      async schedule(): Promise<never> { throw new Error('not used'); },
-    },
-  }));
-  const result = await service.scheduleDirect(identity, {
-    network: 'linkedin', content: 'A useful Property Predator post.',
-    scheduledFor, commandKey: 'calendar-command-key-2', media: null,
-  });
-  assert.equal(result.ok, true);
-  assert.equal(probes, 1);
-  assert.equal(client.calls.filter((call) => call.sql.includes('reserve_zernio_direct_schedule')).length, 2);
-  assert.equal(client.calls.filter((call) => call.sql.includes('record_zernio_calendar_account_probe')).length, 1);
+test('the portal service exposes no direct provider scheduling or media-upload methods', () => {
+  const service = new PgPortalZernioCalendarCommandService(dependencies(new FakeClient()));
+  const unsafe = service as unknown as Record<string, unknown>;
+  assert.equal(unsafe.scheduleDirect, undefined);
+  assert.equal(unsafe.prepareMediaUpload, undefined);
+  assert.equal(unsafe.listDirect, undefined);
 });
 
 test('the request cannot choose provider profile or account identifiers', async () => {
@@ -292,14 +233,9 @@ test('the request cannot choose provider profile or account identifiers', async 
   const client = new FakeClient();
   const service = new PgPortalZernioCalendarCommandService(dependencies(client));
   const injected = {
-    ...input(),
-    providerProfileId: 'manual-profile',
-    providerAccountId: 'manual-account',
+    ...input(), providerProfileId: 'manual-profile', providerAccountId: 'manual-account',
   } as PortalZernioCalendarCommandInput;
-  assert.deepEqual(await service.stage(identity, injected), {
-    ok: false,
-    kind: 'validation',
-  });
+  assert.deepEqual(await service.stage(identity, injected), { ok: false, kind: 'validation' });
   assert.deepEqual(client.calls, []);
 });
 
@@ -307,11 +243,8 @@ test('each network uses only its deployment-configured account digest', async ()
   const client = new FakeClient();
   const service = new PgPortalZernioCalendarCommandService(dependencies(client));
   await service.stage(identity, input({ network: 'linkedin' }));
-  const call = commandCall(client);
-  assert.deepEqual(
-    call.values[4],
-    createHash('sha256').update(LINKEDIN_ACCOUNT_ID, 'utf8').digest(),
-  );
+  assert.deepEqual(commandCall(client).values[4],
+    createHash('sha256').update(LINKEDIN_ACCOUNT_ID).digest());
 });
 
 test('malformed or unconfigured calendar evidence never opens a transaction', async () => {
@@ -329,26 +262,25 @@ test('malformed or unconfigured calendar evidence never opens a transaction', as
         accounts: [{ network: 'instagram', providerAccountId: INSTAGRAM_ACCOUNT_ID }],
       } : {},
     ));
-    assert.deepEqual(await service.stage(identity, input(value)), {
-      ok: false,
-      kind: 'validation',
-    });
+    assert.deepEqual(await service.stage(identity, input(value)), { ok: false, kind: 'validation' });
     assert.deepEqual(client.calls, []);
   }
 });
 
-test('an unresolved or cross-workspace portal session cannot stage a job', async () => {
+test('an unresolved or cross-workspace portal session cannot stage, list or bootstrap', async () => {
   for (const principal of [null, {
-    workspaceId: '99000000-0000-4000-8000-000000000099',
-    userId: USER_ID,
+    workspaceId: '99000000-0000-4000-8000-000000000099', userId: USER_ID,
   }]) {
     const client = new FakeClient();
     const service = new PgPortalZernioCalendarCommandService(dependencies(client, {
       principalResolver: { async resolve() { return principal as never; } },
     }));
-    assert.deepEqual(await service.stage(identity, input()), {
-      ok: false,
-      kind: 'unauthenticated',
+    assert.deepEqual(await service.stage(identity, input()), { ok: false, kind: 'unauthenticated' });
+    assert.deepEqual(await service.listScheduled(identity, {
+      from: '2026-09-01T00:00:00.000Z', to: '2026-10-01T00:00:00.000Z',
+    }), { ok: false, kind: 'unauthenticated' });
+    assert.deepEqual(await service.bootstrapPlannerTargets(identity), {
+      ok: false, kind: 'unauthenticated',
     });
     assert.deepEqual(client.calls, []);
   }
@@ -356,12 +288,8 @@ test('an unresolved or cross-workspace portal session cannot stage a job', async
 
 test('database failures map without leaking details', async () => {
   for (const [code, kind] of [
-    ['42501', 'forbidden'],
-    ['40001', 'conflict'],
-    ['23505', 'conflict'],
-    ['22023', 'validation'],
-    ['23514', 'validation'],
-    ['23503', 'validation'],
+    ['42501', 'forbidden'], ['40001', 'conflict'], ['23505', 'conflict'],
+    ['22023', 'validation'], ['23514', 'validation'], ['23503', 'validation'],
     ['08006', 'unavailable'],
   ] as const) {
     const client = new FakeClient();
@@ -384,13 +312,23 @@ test('invalid database output fails closed', async () => {
     const client = new FakeClient();
     client.functionRows = row === null ? [] : [row];
     const service = new PgPortalZernioCalendarCommandService(dependencies(client));
-    assert.deepEqual(await service.stage(identity, input()), {
-      ok: false,
-      kind: 'unavailable',
-    });
+    assert.deepEqual(await service.stage(identity, input()), { ok: false, kind: 'unavailable' });
     assert.equal(client.calls.some((call) => call.sql === 'ROLLBACK'), true);
     assert.equal(client.calls.some((call) => call.sql === 'COMMIT'), false);
   }
+});
+
+test('invalid worker projection rows fail closed without leaking raw state', async () => {
+  const client = new FakeClient();
+  client.scheduledRows = [{
+    job_id: JOB_ID, network: 'facebook', content_body: 'forged',
+    scheduled_for: '2026-09-04T17:35:00.000Z', state: 'queued',
+    provider_external_id: null, safe_code: null, created_at: '2026-09-03T08:00:00.000Z',
+  }];
+  const service = new PgPortalZernioCalendarCommandService(dependencies(client));
+  assert.deepEqual(await service.listScheduled(identity, {
+    from: '2026-09-01T00:00:00.000Z', to: '2026-10-01T00:00:00.000Z',
+  }), { ok: false, kind: 'unavailable' });
 });
 
 test('configuration rejects duplicate or unsupported account bindings', () => {
@@ -402,6 +340,6 @@ test('configuration rejects duplicate or unsupported account bindings', () => {
     ],
   })), /account configuration/u);
   assert.throws(() => new PgPortalZernioCalendarCommandService(dependencies(client, {
-    accounts: [] },
-  )), /command configuration/u);
+    accounts: [],
+  })), /command configuration/u);
 });

@@ -36,7 +36,6 @@ import type {
   SocialPlannerTargetProjection,
   SocialPlanningCalendarProjection,
 } from '../src/social-campaign-pg/types.js';
-import type { PortalZernioCalendarCommandService } from '../src/portal/zernio-calendar-command-service.js';
 
 const SECRET = 'planning-mutations-router-session-secret';
 const SESSION = Buffer.alloc(32, 73).toString('base64url');
@@ -576,17 +575,11 @@ test('Campaign Wizard stays operational and makes Brand Brain failure a visible 
 test('Campaign Wizard exposes one exact generation-only form only when the runtime and evidence align', async () => {
   const brain = readyBrandBrainSnapshot();
   const generationCalls: PropertyPredatorGenerateDraftCommand[] = [];
-  const zernioCalendar: PortalZernioCalendarCommandService = {
-    configuredNetworks: ['linkedin'],
-    async stage() { throw new Error('not used'); },
-    async prepareMediaUpload() { throw new Error('not used'); },
-  };
   const result = await call('GET', CAMPAIGN_WIZARD_ROUTE, postgres({
     publicSocial: socialService(freshCalls()),
     companyContent: contentService(brain.brain.runtimeBrandSha256),
     brandBrain: readyBrandBrainService(),
     campaignDrafts: campaignGenerationRuntime(generationCalls),
-    zernioCalendar,
   }));
 
   assert.equal(result.statusCode, 200);
@@ -598,10 +591,9 @@ test('Campaign Wizard exposes one exact generation-only form only when the runti
   assert.match(result.body, /name="platform" value="x" checked/);
   assert.match(result.body, /name="platform" value="tiktok" checked/);
   assert.match(result.body, /data-channel-pack-form/);
-  assert.match(result.body, /data-pack-media-drop/);
-  assert.match(result.body, /landscape for LinkedIn, Facebook and X/);
-  assert.match(result.body, /tall for Instagram and TikTok/);
-  assert.match(result.body, /src="\/portal\/assets\/campaign-wizard\.js"/);
+  assert.doesNotMatch(result.body, /data-pack-media-drop/);
+  assert.doesNotMatch(result.body, /data-media-upload-url/);
+  assert.doesNotMatch(result.body, /src="\/portal\/assets\/campaign-wizard\.js"/);
   assert.match(result.body, /name="topic" maxlength="20000"/);
   assert.match(result.body, /name="approved_fact_version_id"/);
   assert.match(result.body, /name="approved_asset_version_id"/);

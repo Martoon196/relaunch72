@@ -202,7 +202,9 @@ test('Content Calendar renders a premium accessible planner and fails closed wit
   assert.match(html, /Own the week\. <em>Control the signal\.<\/em>/);
   assert.match(html, /Planning workspace/);
   assert.doesNotMatch(html, /Schedule a LinkedIn post/);
-  assert.match(html, /The live scheduling connection is not available yet/);
+  assert.match(html, /Create → approve → plan → stage/);
+  assert.match(html, /Live calendar foundation is not configured/);
+  assert.match(html, /No provider call is available from this page/);
   assert.match(html, /aria-label="Calendar view"/);
   assert.match(html, /aria-label="Filter planner by channel"/);
   assert.match(html, /aria-label="Scrollable week content calendar"/);
@@ -217,7 +219,7 @@ test('Content Calendar renders a premium accessible planner and fails closed wit
   assert.match(html, /Nothing is saved; reloading restores this exact snapshot/);
   assert.match(html, /data-calendar-live role="status" aria-live="polite"/);
   assert.match(html, /disabled aria-disabled="true"/);
-  assert.match(html, /No provider calls/);
+  assert.match(html, /cannot call the social provider/u);
   assert.match(html, /min-height:44px/);
   assert.match(html, /href="\/portal\/campaigns\?campaign=a1000000-0000-4000-8000-000000000001&amp;calendar_mode=week&amp;calendar_date=2026-08-26&amp;calendar_channel=all"/);
   assert.match(html, /aria-label="Open exact campaign Property Predator Signal Sprint for LinkedIn TEST rail"/);
@@ -231,100 +233,83 @@ test('Content Calendar renders a premium accessible planner and fails closed wit
   assert.equal((html.match(/executionMode|providerToken|accessToken|apiKey/g) ?? []).length, 0);
 });
 
-test('live scheduler offers exact minutes, smart choices and optional media without redundant confirmation', () => {
+test('live calendar exposes the approval workflow and explicit effects-free foundation activation', () => {
   const html = renderContentCalendarBody(present(), {
-    liveScheduler: {
-      actionUrl: '/portal/content/calendar/live-schedules',
-      mediaUploadUrl: '/portal/content/calendar/media-uploads',
-      csrfToken: 'csrf-calendar-live-token-123456',
-      commandKey: 'calendar-live-command-001',
-      mediaCommandKey: 'calendar-media-command-001',
+    liveSchedules: {
+      status: 'ready',
+      configuredNetworks: ['instagram', 'linkedin'],
       items: [],
+      activation: {
+        actionUrl: '/portal/content/calendar/foundation',
+        csrfToken: 'csrf-calendar-live-token-123456',
+        commandKey: 'calendar-live-command-001',
+      },
     },
   });
-  assert.match(html, /Build your next LinkedIn post/u);
-  assert.match(html, /data-calendar-live-date[^>]+required/u);
-  assert.match(html, /data-calendar-live-time required/u);
-  assert.match(html, /type="text" inputmode="numeric" pattern="\(\?:\[01\]\\d\|2\[0-3\]\):\[0-5\]\\d"/u);
-  assert.match(html, /data-calendar-date-trigger aria-expanded="false"/u);
-  assert.match(html, /data-calendar-date-grid role="grid"/u);
-  assert.match(html, /data-calendar-time-step="-1" aria-label="One minute earlier"/u);
-  assert.match(html, /data-calendar-time-step="1" aria-label="One minute later"/u);
-  assert.match(html, /Morning · 08:17/u);
-  assert.match(html, /Lunch · 12:23/u);
-  assert.match(html, /After work · 17:35/u);
-  assert.match(html, /data-calendar-live-date-label>Choose a date</u);
-  assert.match(html, /aria-label="Choose publication date"/u);
-  assert.match(html, /type="file" accept="image\/jpeg,[^"]+video\/webm"/u);
-  assert.match(html, /Drop your image or video here/u);
-  assert.match(html, /Drag &amp; drop, or choose a file/u);
-  assert.match(html, /data-media-upload-url="\/portal\/content\/calendar\/media-uploads"/u);
-  assert.match(html, /Schedule LinkedIn post/u);
-  assert.doesNotMatch(html, /confirm_schedule|Yes, add this post/u);
+  assert.match(html, /Create → approve → plan → stage/u);
+  assert.match(html, /Create channel drafts/u);
+  assert.match(html, /Review &amp; approve/u);
+  assert.match(html, /Plan campaign time/u);
+  assert.match(html, /action="\/portal\/content\/calendar\/foundation"/u);
+  assert.match(html, /name="confirm_foundation" value="confirmed" required/u);
+  assert.match(html, /Activate safe calendar foundation/u);
+  assert.match(html, /No post is queued or sent/u);
+  assert.match(html, /Instagram/u);
+  assert.match(html, /LinkedIn/u);
+  assert.match(html, /No worker-backed jobs in this window/u);
+  assert.doesNotMatch(html, /data-calendar-live-form|data-media-upload-url/u);
+  assert.doesNotMatch(html, /type="file"|scheduled_for_local|media_url/u);
+  assert.doesNotMatch(html, /Schedule LinkedIn post/u);
   assert.doesNotMatch(html, /Zernio/u);
-  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /data-calendar-live-form/u);
-  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /method: 'PUT', body: file/u);
-  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /addEventListener\('drop'/u);
-  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /data-drag-active/u);
-  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /file\.name \+ ' · uploading…'/u);
-  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /mediaPreview\.dataset\.uploadState = 'ready'/u);
-  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /mediaPreview\.dataset\.uploadState = 'failed'/u);
-  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /mediaName\.textContent = 'Upload failed — ' \+ reason/u);
-  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /mediaName\.title = file\.name/u);
-  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /setLiveStatus\('Upload failed: ' \+ reason\)/u);
-  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /setClockMinutes/u);
-  assert.match(CONTENT_CALENDAR_CLIENT_SOURCE, /renderDatePicker/u);
+  assert.match(html, /data-provider-effects="none"/u);
 });
 
-test('live LinkedIn schedules appear on the correct calendar day in the workspace timezone', () => {
+test('worker-backed Instagram schedules appear on the correct calendar day in the workspace timezone', () => {
   const view = present(undefined, { mode: 'week', date: '2026-09-04', channel: 'all' });
   const html = renderContentCalendarBody(view, {
-    liveScheduler: {
-      actionUrl: '/portal/content/calendar/live-schedules',
-      mediaUploadUrl: '/portal/content/calendar/media-uploads',
-      csrfToken: 'csrf-calendar-live-token-123456',
-      commandKey: 'calendar-live-command-001',
-      mediaCommandKey: 'calendar-media-command-001',
+    liveSchedules: {
+      status: 'ready',
+      configuredNetworks: ['instagram', 'linkedin'],
       items: [{
-        scheduleId: 'hq-founder-post-001',
+        jobId: 'hq-founder-post-001',
+        network: 'instagram',
         content: 'Scout is free — three real lookups a month, on real property. <script>alert(1)</script>',
         scheduledFor: '2026-09-04T10:10:00.000Z',
-        state: 'scheduled',
+        state: 'queued',
       }],
     },
   });
   const friday = html.match(/data-calendar-day data-date="2026-09-04"[\s\S]*?(?=<section class="ccal-day[^>]*data-calendar-day data-date="2026-09-05")/u)?.[0] ?? '';
   assert.match(friday, /data-calendar-live-slot/u);
-  assert.match(friday, /Scheduled live/u);
+  assert.match(friday, /Queued for worker/u);
+  assert.match(friday, /Instagram/u);
   assert.match(friday, /<time class="ccal-time"[^>]*>11:10<\/time>/u);
-  assert.match(friday, /Real provider schedule · Europe\/London/u);
+  assert.match(friday, /Approval-gated worker job · Europe\/London/u);
   assert.match(html, /4 Sept 2026, 11:10 Europe\/London/u);
-  assert.match(html, /1 live · 0 TEST/u);
-  assert.match(html, /live schedules \+ durable TEST plans/u);
-  assert.match(html, /live cards are real provider schedules; TEST cards remain simulated/u);
+  assert.match(html, /1 worker · 0 TEST/u);
+  assert.match(html, /worker jobs \+ durable TEST plans/u);
+  assert.match(html, /worker cards are read-only job evidence; TEST cards remain simulated/u);
   assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/u);
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/u);
 });
 
-test('live LinkedIn calendar cards obey the channel filter without hiding the scheduler', () => {
+test('worker-backed calendar cards obey the channel filter without hiding the safe workflow', () => {
   const view = present(undefined, { mode: 'month', date: '2026-09-04', channel: 'instagram' });
   const html = renderContentCalendarBody(view, {
-    liveScheduler: {
-      actionUrl: '/portal/content/calendar/live-schedules',
-      mediaUploadUrl: '/portal/content/calendar/media-uploads',
-      csrfToken: 'csrf-calendar-live-token-123456',
-      commandKey: 'calendar-live-command-001',
-      mediaCommandKey: 'calendar-media-command-001',
+    liveSchedules: {
+      status: 'ready',
+      configuredNetworks: ['instagram', 'linkedin'],
       items: [{
-        scheduleId: 'hq-founder-post-001',
+        jobId: 'hq-founder-post-001',
+        network: 'linkedin',
         content: 'Founder schedule',
         scheduledFor: '2026-09-04T10:10:00.000Z',
-        state: 'scheduled',
+        state: 'queued',
       }],
     },
   });
-  assert.match(html, /Build your next LinkedIn post/u);
-  assert.match(html, /0 live · 0 TEST/u);
+  assert.match(html, /Create → approve → plan → stage/u);
+  assert.match(html, /0 worker · 0 TEST/u);
   assert.doesNotMatch(html, /data-calendar-live-slot/u);
 });
 
@@ -509,6 +494,10 @@ test('Content Calendar client progressively enhances native TEST forms with conf
   assert.match(CONTENT_CALENDAR_CLIENT_SCRIPT, /reload discards these changes/);
   assert.match(CONTENT_CALENDAR_CLIENT_SCRIPT, /const wallTime = date \+ 'T' \+ label/);
   assert.match(CONTENT_CALENDAR_CLIENT_SCRIPT, /workspace wall time/);
+  assert.doesNotMatch(
+    CONTENT_CALENDAR_CLIENT_SCRIPT,
+    /data-calendar-live-form|data-calendar-media|media-upload|method: 'PUT'/u,
+  );
   assert.doesNotMatch(CONTENT_CALENDAR_CLIENT_SCRIPT, /getUTCHours|getUTCMinutes|:00\.000Z/);
   assert.doesNotMatch(CONTENT_CALENDAR_CLIENT_SCRIPT, /XMLHttpRequest|sendBeacon|WebSocket|innerHTML|insertAdjacentHTML/);
 });

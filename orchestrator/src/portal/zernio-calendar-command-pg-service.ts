@@ -4,17 +4,15 @@
  * Clear provider profile/account references are accepted only as constructor
  * configuration and immediately reduced to SHA-256 digests. They are never
  * stored on the service, returned, logged, rendered or accepted from a portal
- * request. The API key is deliberately absent from every type in this module.
+ * request. The API key and provider client are deliberately absent from every
+ * type in this module: the portal can stage an immutable job and read its safe
+ * state, while only the dedicated worker can call Zernio.
  */
 
 import { createHash } from 'node:crypto';
 import type { Pool, QueryResultRow } from 'pg';
 import { requestDatabaseContext, type DatabaseRequestContext } from '../db/rls.js';
 import { InactivePortalSessionError, withTransaction } from '../db/transaction.js';
-import {
-  ZernioPostingError,
-  type ZernioPostingClient,
-} from '../public-social-outbound/zernio-posting-client.js';
 import {
   createPgPortalCrmPrincipalResolver,
   type PortalCrmPrincipalResolver,
@@ -25,11 +23,11 @@ import type {
   PortalZernioCalendarCommandInput,
   PortalZernioCalendarCommandResult,
   PortalZernioCalendarCommandService,
+  PortalZernioCalendarJobState,
   PortalZernioCalendarNetwork,
-  PortalZernioDirectScheduleInput,
-  PortalZernioDirectScheduleListResult,
-  PortalZernioDirectScheduleResult,
-  PortalZernioMediaUploadResult,
+  PortalZernioCalendarPlannerBootstrapResult,
+  PortalZernioCalendarPlannerTarget,
+  PortalZernioCalendarScheduledListResult,
 } from './zernio-calendar-command-service.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -37,7 +35,12 @@ const PROVIDER_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/u;
 const OPERATION_TAG = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const SAFE_CODE = /^[a-z][a-z0-9_.:-]{0,99}$/u;
+const CONTROL_OR_BIDI = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u;
 const NETWORKS = new Set<unknown>(['instagram', 'linkedin']);
+const JOB_STATES = new Set<unknown>([
+  'queued', 'leased', 'calling', 'reconciliation_pending',
+  'succeeded', 'failed', 'needs_attention', 'cancelled',
+]);
 const COMMAND_KEYS = Object.freeze([
   'approvalDecisionId',
   'approvalRequestId',
@@ -58,36 +61,22 @@ interface CommandRow extends QueryResultRow {
   readonly monthly_publish_cap: unknown;
 }
 
-interface DirectReserveRow extends QueryResultRow {
-  readonly schedule_id: unknown;
-  readonly current_state: unknown;
-  readonly provider_external_id: unknown;
-  readonly scheduled_for: unknown;
-  readonly created_now: unknown;
-}
-
-interface DirectListRow extends QueryResultRow {
-  readonly schedule_id: unknown;
+interface ScheduledListRow extends QueryResultRow {
+  readonly job_id: unknown;
   readonly network: unknown;
   readonly content_body: unknown;
   readonly scheduled_for: unknown;
   readonly state: unknown;
   readonly provider_external_id: unknown;
   readonly safe_code: unknown;
+  readonly created_at: unknown;
 }
 
-const MEDIA_CONTENT_TYPES = new Set([
-  'image/jpeg', 'image/png', 'image/webp', 'image/gif',
-  'video/mp4', 'video/quicktime', 'video/webm',
-]);
-
-function publicMediaUrl(value: unknown): value is string {
-  if (typeof value !== 'string' || value.length < 10 || value.length > 2_048) return false;
-  try {
-    const url = new URL(value);
-    return url.protocol === 'https:' && !url.username && !url.password && !url.hash
-      && (!url.port || url.port === '443') && url.hostname.toLowerCase() === 'media.zernio.com';
-  } catch { return false; }
+interface PlannerTargetBootstrapRow extends QueryResultRow {
+  readonly test_provider_connection_id: unknown;
+  readonly test_target_id: unknown;
+  readonly test_account_ref_sha256: unknown;
+  readonly disposition: unknown;
 }
 
 export interface PortalZernioCalendarConfiguredAccount {
@@ -102,7 +91,6 @@ export interface PgPortalZernioCalendarCommandDependencies {
   readonly providerConnectionId: string;
   readonly providerProfileId: string;
   readonly accounts: readonly PortalZernioCalendarConfiguredAccount[];
-  readonly postingClient?: Pick<ZernioPostingClient, 'schedule' | 'probeAccount' | 'prepareMediaUpload'>;
 }
 
 function sha256(value: string): Buffer {
@@ -176,8 +164,6 @@ implements PortalZernioCalendarCommandService {
   readonly #providerConnectionId: string;
   readonly #providerProfileIdSha256: Buffer;
   readonly #accountSha256ByNetwork: ReadonlyMap<PortalZernioCalendarNetwork, Buffer>;
-  readonly #providerAccountIdByNetwork: ReadonlyMap<PortalZernioCalendarNetwork, string>;
-  readonly #postingClient: Pick<ZernioPostingClient, 'schedule' | 'probeAccount' | 'prepareMediaUpload'>;
 
   constructor(dependencies: PgPortalZernioCalendarCommandDependencies) {
     if (!UUID.test(dependencies.workspaceId)
@@ -188,7 +174,6 @@ implements PortalZernioCalendarCommandService {
       throw new Error('Zernio calendar command configuration is invalid');
     }
     const accountDigests = new Map<PortalZernioCalendarNetwork, Buffer>();
-    const accountIds = new Map<PortalZernioCalendarNetwork, string>();
     for (const account of dependencies.accounts) {
       if (!NETWORKS.has(account.network)
           || !PROVIDER_REFERENCE.test(account.providerAccountId)
@@ -196,237 +181,67 @@ implements PortalZernioCalendarCommandService {
         throw new Error('Zernio calendar account configuration is invalid');
       }
       accountDigests.set(account.network, sha256(account.providerAccountId));
-      accountIds.set(account.network, account.providerAccountId);
     }
 
-    // Store only non-secret UUIDs and one-way digests. In particular, do not
-    // retain `dependencies`, which contains the clear configured references.
     this.#principalResolver = dependencies.principalResolver;
     this.#commandPool = dependencies.commandPool;
     this.#workspaceId = dependencies.workspaceId;
     this.#providerConnectionId = dependencies.providerConnectionId;
     this.#providerProfileIdSha256 = sha256(dependencies.providerProfileId);
     this.#accountSha256ByNetwork = accountDigests;
-    this.#providerAccountIdByNetwork = accountIds;
-    this.#postingClient = dependencies.postingClient ?? Object.freeze({
-      async schedule(): Promise<never> {
-        throw new ZernioPostingError('invalid_configuration');
-      },
-      async probeAccount(): Promise<never> {
-        throw new ZernioPostingError('invalid_configuration');
-      },
-      async prepareMediaUpload(): Promise<never> {
-        throw new ZernioPostingError('invalid_configuration');
-      },
-    });
     this.configuredNetworks = Object.freeze([...accountDigests.keys()].sort());
   }
 
-  async scheduleDirect(
+  async bootstrapPlannerTargets(
     identity: PortalCrmRequestIdentity,
-    input: PortalZernioDirectScheduleInput,
-  ): Promise<PortalZernioDirectScheduleResult> {
-    if (Object.getPrototypeOf(input) !== Object.prototype
-        || Object.keys(input).sort().join(',') !== 'commandKey,content,media,network,scheduledFor'
-        || input.network !== 'linkedin'
-        || typeof input.content !== 'string' || input.content.trim() !== input.content
-        || Buffer.byteLength(input.content, 'utf8') < 1
-        || Buffer.byteLength(input.content, 'utf8') > 12_000
-        || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(input.content)
-        || !canonicalUtcInstant(input.scheduledFor)
-        || (input.media !== null && (
-          Object.getPrototypeOf(input.media) !== Object.prototype
-          || Object.keys(input.media).sort().join(',') !== 'type,url'
-          || (input.media.type !== 'image' && input.media.type !== 'video')
-          || !publicMediaUrl(input.media.url)
-        ))
-        || !/^[!-~]{8,200}$/u.test(input.commandKey)) return failed('validation');
-    const accountDigest = this.#accountSha256ByNetwork.get('linkedin');
-    const accountId = this.#providerAccountIdByNetwork.get('linkedin');
-    if (!accountDigest || !accountId) return failed('validation');
+  ): Promise<PortalZernioCalendarPlannerBootstrapResult> {
     try {
       const context = await this.#context(identity);
       if (!context) return failed('unauthenticated');
-      let reserved: DirectReserveRow;
-      try {
-        reserved = await this.#reserveDirect(context, accountDigest, input);
-      } catch (error) {
-        if (postgresCode(error) !== '55000'
-            || !await this.#reconcileConfiguredAccount(context, input.commandKey)) throw error;
-        reserved = await this.#reserveDirect(context, accountDigest, input);
-      }
-      if (!reserved.created_now) {
-        if (reserved.current_state === 'scheduled'
-            && typeof reserved.provider_external_id === 'string') {
-          return Object.freeze({ ok: true, scheduleId: reserved.schedule_id as string,
-            providerPostId: reserved.provider_external_id, scheduledFor: reserved.scheduled_for as string,
-            disposition: 'replayed' as const });
+      const targets = await withTransaction(this.#commandPool, context, async (client) => {
+        const created: PortalZernioCalendarPlannerTarget[] = [];
+        for (const network of this.configuredNetworks) {
+          const accountSha256 = this.#accountSha256ByNetwork.get(network);
+          if (!accountSha256) throw new Error('Configured calendar account digest unavailable');
+          const result = await client.query<PlannerTargetBootstrapRow>(
+            `/* portal.zernio-calendar.bootstrap-planner-target */
+             SELECT test_provider_connection_id::text, test_target_id::text,
+               encode(test_account_ref_sha256, 'hex') AS test_account_ref_sha256,
+               disposition
+             FROM app_private.bootstrap_zernio_calendar_planner_target(
+               $1::uuid,$2::uuid,$3::text,$4::bytea,$5::bytea
+             )`,
+            [this.#workspaceId, this.#providerConnectionId, network,
+              this.#providerProfileIdSha256, accountSha256],
+          );
+          const row = result.rows[0];
+          if (result.rows.length !== 1 || !row
+              || typeof row.test_provider_connection_id !== 'string'
+              || !UUID.test(row.test_provider_connection_id)
+              || typeof row.test_target_id !== 'string' || !UUID.test(row.test_target_id)
+              || typeof row.test_account_ref_sha256 !== 'string'
+              || !SHA256.test(row.test_account_ref_sha256)
+              || (row.disposition !== 'applied' && row.disposition !== 'replayed')) {
+            throw new Error('Invalid Zernio planner target bootstrap result');
+          }
+          created.push(Object.freeze({
+            network,
+            targetId: row.test_target_id,
+            disposition: row.disposition,
+          }));
         }
-        return failed('conflict');
-      }
-
-      let outcome: 'scheduled' | 'failed' | 'outcome_unknown' = 'scheduled';
-      let providerPostId: string | null = null;
-      let receiptSha256: string;
-      let safeCode = 'scheduled';
-      try {
-        const provider = await this.#postingClient.schedule({
-          requestId: reserved.schedule_id as string,
-          content: input.content,
-          targets: Object.freeze([{ network: 'linkedin', accountId }]),
-          scheduledFor: input.scheduledFor,
-          mediaItems: input.media ? Object.freeze([input.media]) : Object.freeze([]),
-        });
-        if (provider.status !== 'scheduled' || provider.platforms.length !== 1
-            || provider.platforms[0]?.network !== 'linkedin'
-            || provider.platforms[0].accountId !== accountId) {
-          throw new ZernioPostingError('invalid_provider_response');
-        }
-        providerPostId = provider.providerPostId;
-        receiptSha256 = provider.responseSha256;
-      } catch (error) {
-        const providerCode = error instanceof ZernioPostingError ? error.code : 'outcome_unknown';
-        outcome = providerCode === 'outcome_unknown' ? 'outcome_unknown' : 'failed';
-        safeCode = `zernio.${providerCode}`;
-        receiptSha256 = createHash('sha256').update(
-          `propertypredator.zernio-direct-calendar/failure/v1|${reserved.schedule_id as string}|${safeCode}`,
-          'utf8',
-        ).digest('hex');
-      }
-      const providerOccurredAt = new Date().toISOString();
-      await withTransaction(this.#commandPool, context, async (client) => {
-        const result = await client.query<{ disposition: unknown }>(
-          `/* portal.zernio-calendar.settle-direct */
-           SELECT app_private.settle_zernio_direct_schedule(
-             $1::uuid,$2::uuid,$3::text,$4::text,$5::bytea,$6::text,$7::timestamptz
-           ) AS disposition`,
-          [this.#workspaceId, reserved.schedule_id, outcome, providerPostId,
-            Buffer.from(receiptSha256, 'hex'), safeCode, providerOccurredAt],
-        );
-        if (!['applied', 'replayed'].includes(String(result.rows[0]?.disposition))) {
-          throw new Error('Invalid direct settlement result');
-        }
+        return Object.freeze(created);
       }, { isolation: 'serializable' });
-      if (outcome !== 'scheduled' || !providerPostId) {
-        return failed(outcome === 'outcome_unknown' ? 'conflict' : 'unavailable');
-      }
-      return Object.freeze({ ok: true, scheduleId: reserved.schedule_id as string,
-        providerPostId, scheduledFor: reserved.scheduled_for as string,
-        disposition: 'applied' as const });
+      return Object.freeze({ ok: true, targets, providerEffects: 'none' });
     } catch (error) {
       return mapFailure(error);
     }
   }
 
-  async prepareMediaUpload(
-    identity: PortalCrmRequestIdentity,
-    input: Readonly<{
-      commandKey: string;
-      filename: string;
-      contentType: import('./zernio-calendar-command-service.js').PortalZernioMediaContentType;
-      size: number;
-    }>,
-  ): Promise<PortalZernioMediaUploadResult> {
-    if (Object.getPrototypeOf(input) !== Object.prototype
-        || Object.keys(input).sort().join(',') !== 'commandKey,contentType,filename,size'
-        || !/^[!-~]{8,200}$/u.test(input.commandKey)
-        || typeof input.filename !== 'string' || input.filename !== input.filename.trim()
-        || !input.filename || input.filename.length > 180
-        || /[\u0000-\u001f\u007f\\/]/u.test(input.filename)
-        || !MEDIA_CONTENT_TYPES.has(input.contentType)
-        || !Number.isSafeInteger(input.size) || input.size < 1 || input.size > 500_000_000) {
-      return failed('validation');
-    }
-    try {
-      const context = await this.#context(identity);
-      if (!context) return failed('unauthenticated');
-      if (!await this.#reconcileConfiguredAccount(context, input.commandKey)) {
-        return failed('account_not_ready');
-      }
-      const upload = await this.#postingClient.prepareMediaUpload({
-        requestId: context.requestId,
-        filename: input.filename,
-        contentType: input.contentType,
-        size: input.size,
-      });
-      return Object.freeze({
-        ok: true,
-        uploadUrl: upload.uploadUrl,
-        publicUrl: upload.publicUrl,
-        mediaType: input.contentType.startsWith('image/') ? 'image' : 'video',
-        expiresIn: upload.expiresIn,
-      });
-    } catch (error) {
-      if (error instanceof ZernioPostingError
-          && ['forbidden', 'unauthorised', 'not_found', 'provider_rejected',
-            'unbound_target'].includes(error.code)) return failed('account_not_ready');
-      if (error instanceof ZernioPostingError && error.code === 'invalid_request') {
-        return failed('validation');
-      }
-      return failed('unavailable');
-    }
-  }
-
-  async #reserveDirect(
-    context: DatabaseRequestContext,
-    accountDigest: Buffer,
-    input: PortalZernioDirectScheduleInput,
-  ): Promise<DirectReserveRow> {
-    return withTransaction(this.#commandPool, context, async (client) => {
-      const result = await client.query<DirectReserveRow>(
-        `/* portal.zernio-calendar.reserve-direct */
-         SELECT schedule_id::text, current_state, provider_external_id,
-           scheduled_for::text, created_now
-         FROM app_private.reserve_zernio_direct_schedule_v2(
-           $1::uuid,$2::uuid,$3::text,$4::bytea,$5::text,$6::text,$7::text,
-           $8::timestamptz,$9::text
-         )`,
-        [this.#workspaceId, this.#providerConnectionId, 'linkedin', accountDigest, input.content,
-          input.media?.type ?? null, input.media?.url ?? null, input.scheduledFor, input.commandKey],
-      );
-      const row = result.rows[0];
-      const scheduledFor = databaseUtcInstant(row?.scheduled_for);
-      if (result.rows.length !== 1 || !row || typeof row.schedule_id !== 'string'
-          || !UUID.test(row.schedule_id) || typeof row.current_state !== 'string'
-          || !scheduledFor
-          || typeof row.created_now !== 'boolean') throw new Error('Invalid direct reserve result');
-      return Object.freeze({ ...row, scheduled_for: scheduledFor });
-    }, { isolation: 'serializable' });
-  }
-
-  async #reconcileConfiguredAccount(
-    context: DatabaseRequestContext,
-    commandKey: string,
-  ): Promise<boolean> {
-    const accountId = this.#providerAccountIdByNetwork.get('linkedin');
-    const accountDigest = this.#accountSha256ByNetwork.get('linkedin');
-    if (!accountId || !accountDigest) return false;
-    try {
-      const probe = await this.#postingClient.probeAccount({
-        requestId: context.requestId,
-        target: Object.freeze({ network: 'linkedin', accountId }),
-      });
-      const result = await withTransaction(this.#commandPool, context, async (client) => client.query(
-        `/* portal.zernio-calendar.record-account-probe */
-         SELECT app_private.record_zernio_calendar_account_probe(
-           $1::uuid,$2::uuid,$3::text,$4::bytea,$5::bytea,$6::text,$7::text,$8::bytea,$9::text
-         ) AS disposition`,
-        [this.#workspaceId, this.#providerConnectionId, 'linkedin',
-          sha256(probe.profileId), accountDigest, probe.username, probe.displayName,
-          Buffer.from(probe.responseSha256, 'hex'), commandKey],
-      ), { isolation: 'serializable' });
-      return ['recorded', 'replayed'].includes(String(result.rows[0]?.disposition));
-    } catch (error) {
-      if (error instanceof ZernioPostingError) return false;
-      if (postgresCode(error) === '42501' || postgresCode(error) === '55000') return false;
-      throw error;
-    }
-  }
-
-  async listDirect(
+  async listScheduled(
     identity: PortalCrmRequestIdentity,
     input: Readonly<{ from: string; to: string }>,
-  ): Promise<PortalZernioDirectScheduleListResult> {
+  ): Promise<PortalZernioCalendarScheduledListResult> {
     if (Object.getPrototypeOf(input) !== Object.prototype
         || Object.keys(input).sort().join(',') !== 'from,to'
         || !canonicalUtcInstant(input.from) || !canonicalUtcInstant(input.to)
@@ -435,30 +250,39 @@ implements PortalZernioCalendarCommandService {
       const context = await this.#context(identity);
       if (!context) return failed('unauthenticated');
       const items = await withTransaction(this.#commandPool, context, async (client) => {
-        const result = await client.query<DirectListRow>(
-          `/* portal.zernio-calendar.list-direct */
-           SELECT schedule_id::text, network, content_body, scheduled_for::text,
-             state, provider_external_id, safe_code
-           FROM app_private.list_zernio_direct_schedules($1::uuid,$2::timestamptz,$3::timestamptz,100)`,
+        const result = await client.query<ScheduledListRow>(
+          `/* portal.zernio-calendar.list-scheduled */
+           SELECT job_id::text, network, content_body, scheduled_for::text,
+             state, provider_external_id, safe_code, created_at::text
+           FROM app_private.list_zernio_calendar_jobs($1::uuid,$2::timestamptz,$3::timestamptz,100)`,
           [this.#workspaceId, input.from, input.to],
         );
         return result.rows.map((row) => {
           const scheduledFor = databaseUtcInstant(row.scheduled_for);
-          if (typeof row.schedule_id !== 'string' || !UUID.test(row.schedule_id)
-              || row.network !== 'linkedin' || typeof row.content_body !== 'string'
-              || !scheduledFor
-              || !['reserved', 'scheduled', 'failed', 'outcome_unknown', 'cancelled'].includes(String(row.state))
+          const createdAt = databaseUtcInstant(row.created_at);
+          if (typeof row.job_id !== 'string' || !UUID.test(row.job_id)
+              || !NETWORKS.has(row.network) || typeof row.content_body !== 'string'
+              || Buffer.byteLength(row.content_body, 'utf8') < 1
+              || Buffer.byteLength(row.content_body, 'utf8') > 12_000
+              || CONTROL_OR_BIDI.test(row.content_body)
+              || !scheduledFor || !createdAt || !JOB_STATES.has(row.state)
               || (row.provider_external_id !== null && typeof row.provider_external_id !== 'string')
-              || (row.safe_code !== null && (typeof row.safe_code !== 'string' || !SAFE_CODE.test(row.safe_code)))) {
-            throw new Error('Invalid direct calendar row');
+              || (row.safe_code !== null
+                && (typeof row.safe_code !== 'string' || !SAFE_CODE.test(row.safe_code)))) {
+            throw new Error('Invalid Zernio calendar job row');
           }
-          return Object.freeze({ scheduleId: row.schedule_id as string, network: 'linkedin' as const,
-            content: row.content_body, scheduledFor,
-            state: row.state as 'reserved' | 'scheduled' | 'failed' | 'outcome_unknown' | 'cancelled',
+          return Object.freeze({
+            jobId: row.job_id,
+            network: row.network as PortalZernioCalendarNetwork,
+            content: row.content_body,
+            scheduledFor,
+            state: row.state as PortalZernioCalendarJobState,
             providerPostId: row.provider_external_id as string | null,
-            safeCode: row.safe_code as string | null });
+            safeCode: row.safe_code as string | null,
+            createdAt,
+          });
         });
-      });
+      }, { readOnly: true });
       return Object.freeze({ ok: true, items: Object.freeze(items) });
     } catch (error) {
       return mapFailure(error);
@@ -555,7 +379,6 @@ export function createPgPortalZernioCalendarCommandService(input: Readonly<{
   providerConnectionId: string;
   providerProfileId: string;
   accounts: readonly PortalZernioCalendarConfiguredAccount[];
-  postingClient: Pick<ZernioPostingClient, 'schedule' | 'probeAccount' | 'prepareMediaUpload'>;
 }>): PgPortalZernioCalendarCommandService {
   return new PgPortalZernioCalendarCommandService({
     principalResolver: createPgPortalCrmPrincipalResolver(input.webPool),
@@ -564,6 +387,5 @@ export function createPgPortalZernioCalendarCommandService(input: Readonly<{
     providerConnectionId: input.providerConnectionId,
     providerProfileId: input.providerProfileId,
     accounts: input.accounts,
-    postingClient: input.postingClient,
   });
 }

@@ -313,7 +313,7 @@ test('owned-social command routes are Property Predator-only even for an invalid
 
 test('each owned-social route rejects unconfirmed, forged, stray and keyless commands', async () => {
   const invalid = noticeLocation('owned_social_invalid');
-  for (const { name, route, confirmField, fields } of ROUTE_CASES) {
+  for (const { name, route, confirmField, fields } of ROUTE_CASES.filter(({ name }) => name !== 'staging')) {
     const { service, calls } = fakeBinding();
     const deps = postgres({ ownedSocialBinding: service });
 
@@ -399,34 +399,18 @@ test('revoke outcomes map onto exactly one signed notice each', async () => {
   }
 });
 
-test('a refused staging readiness verdict reports blocked, never a generic rejection', async () => {
-  const cases: ReadonlyArray<readonly [PortalOwnedSocialStageResult, string]> = [
-    [{
-      ok: true,
-      jobId: JOB_ID,
-      providerEffects: 'none',
-      workerLeaseClaimed: false,
-      idempotencyKeySha256: 'b'.repeat(64),
-      caps: { daily: 1, monthly: 3 },
-    }, 'publication_staged'],
-    [{ ok: false, kind: 'blocked' }, 'staging_blocked'],
-    [{ ok: false, kind: 'unauthenticated' }, 'owned_social_forbidden'],
-    [{ ok: false, kind: 'validation' }, 'owned_social_invalid'],
-    [{ ok: false, kind: 'conflict' }, 'owned_social_invalid'],
-    [{ ok: false, kind: 'unavailable' }, 'owned_social_unavailable'],
-  ];
-  for (const [outcome, notice] of cases) {
-    const { service } = fakeBinding({ stage: outcome });
-    const result = await call(
-      LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE,
-      postgres({ ownedSocialBinding: service }),
-      COOKIE,
-      'POST',
-      encodeForm(stageFields()),
-    );
-    assert.equal(result.statusCode, 303);
-    assert.equal(result.headers.location, noticeLocation(notice as never));
-  }
+test('the cutover staging route cannot reach the legacy owned-social queue', async () => {
+  const legacy = fakeBinding();
+  const result = await call(
+    LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE,
+    postgres({ ownedSocialBinding: legacy.service }),
+    COOKIE,
+    'POST',
+    encodeForm(stageFields()),
+  );
+  assert.equal(result.statusCode, 303);
+  assert.equal(result.headers.location, noticeLocation('owned_social_unavailable'));
+  assert.deepEqual(legacy.calls, []);
 });
 
 test('the clear Profile Key reaches the seam and is never echoed back to the browser', async () => {
@@ -498,7 +482,7 @@ test('the Instagram bind route attests publish permission instead of legacy X OA
   assert.equal((calls[0]?.input as { oauthPermissions?: string }).oauthPermissions, 'publish');
 });
 
-test('the revoke and staging seams receive exactly the request identity and parsed fields', async () => {
+test('the revoke seam receives exactly the request identity while legacy staging remains unreachable', async () => {
   const revoke = fakeBinding();
   await call(
     LIVE_CHANNELS_OWNED_SOCIAL_REVOKE_ROUTE,
@@ -518,28 +502,15 @@ test('the revoke and staging seams receive exactly the request identity and pars
   }]);
 
   const stage = fakeBinding();
-  await call(
+  const result = await call(
     LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE,
     postgres({ ownedSocialBinding: stage.service }),
     COOKIE,
     'POST',
     encodeForm(stageFields()),
   );
-  assert.deepEqual(stage.calls, [{
-    method: 'stagePublication',
-    identity: { sessionToken: SESSION, requestId: REQUEST_ID },
-    input: {
-      profileId: PROFILE_ID,
-      contentItemId: CONTENT_ITEM_ID,
-      contentVersionId: CONTENT_VERSION_ID,
-      approvalRequestId: APPROVAL_REQUEST_ID,
-      approvalDecisionId: APPROVAL_DECISION_ID,
-      sourceAttestationId: SOURCE_ATTESTATION_ID,
-      ownedAccountReference: OWNED_ACCOUNT,
-      operationTag: OPERATION_TAG,
-      scheduledFor: '2026-09-02T09:00:00.000Z',
-    },
-  }]);
+  assert.equal(result.headers.location, noticeLocation('owned_social_unavailable'));
+  assert.deepEqual(stage.calls, []);
 });
 
 /* ------------------------------------------------------------------ *
@@ -776,28 +747,17 @@ test('a ready verdict enqueues one job with self-derived, distinct scope digests
   });
 });
 
-test('calendar staging forwards the exact Instagram intent and UTC time to the seam', async () => {
+test('calendar-shaped input cannot revive the legacy staging seam', async () => {
   const stage = fakeBinding();
-  await call(
+  const result = await call(
     LIVE_CHANNELS_OWNED_SOCIAL_STAGE_ROUTE,
     postgres({ ownedSocialBinding: stage.service }),
     COOKIE,
     'POST',
     encodeForm(calendarStageFields()),
   );
-  assert.deepEqual(stage.calls, [{
-    method: 'stagePublication',
-    identity: { sessionToken: SESSION, requestId: REQUEST_ID },
-    input: {
-      network: 'instagram', planningIntentId: PLANNING_INTENT_ID,
-      planningTargetId: PLANNING_TARGET_ID,
-      profileId: PROFILE_ID, contentItemId: CONTENT_ITEM_ID,
-      contentVersionId: CONTENT_VERSION_ID, approvalRequestId: APPROVAL_REQUEST_ID,
-      approvalDecisionId: APPROVAL_DECISION_ID, sourceAttestationId: SOURCE_ATTESTATION_ID,
-      ownedAccountReference: OWNED_ACCOUNT, operationTag: OPERATION_TAG,
-      scheduledFor: '2026-09-02T09:00:00.000Z',
-    },
-  }]);
+  assert.equal(result.headers.location, noticeLocation('owned_social_unavailable'));
+  assert.deepEqual(stage.calls, []);
 });
 
 test('a canonical calendar instant is preserved through readiness, digesting and enqueue', async () => {

@@ -47,6 +47,7 @@ interface BoundaryRow extends QueryResultRow {
   schemaUsage: unknown;
   requiredFunctions: unknown;
   legacyReplyFunctionsDenied: unknown;
+  unsafeCalendarFunctionsDenied: unknown;
   definerPrivilegesExact: unknown;
   tableBlind: unknown;
   elevatedRolesDenied: unknown;
@@ -98,6 +99,12 @@ export async function assertZernioSocialCommandBoundaryReady(
            'app_private.enqueue_zernio_calendar_from_connected_account(uuid,uuid,text,bytea,bytea,uuid,uuid,uuid,uuid,uuid,uuid,uuid,text,timestamp with time zone)',
            'EXECUTE')
          AND has_function_privilege(current_user,
+           'app_private.bootstrap_zernio_calendar_planner_target(uuid,uuid,text,bytea,bytea)',
+           'EXECUTE')
+         AND has_function_privilege(current_user,
+           'app_private.list_zernio_calendar_jobs(uuid,timestamp with time zone,timestamp with time zone,integer)',
+           'EXECUTE')
+         AND has_function_privilege(current_user,
            'app_private.active_portal_session(bytea,uuid,uuid)', 'EXECUTE')
          AND has_function_privilege(current_user,
            'app_private.lock_active_portal_session(bytea,uuid,uuid)', 'EXECUTE')
@@ -112,6 +119,21 @@ export async function assertZernioSocialCommandBoundaryReady(
          AND NOT has_function_privilege(current_user,
            'app_private.claim_zernio_reply_send(uuid,uuid,uuid,uuid,bytea,bytea,bytea,bytea,bytea)',
            'EXECUTE') AS "legacyReplyFunctionsDenied",
+         NOT has_function_privilege(current_user,
+           'app_private.enqueue_zernio_calendar_job(uuid,uuid,uuid,uuid,text,bytea,bytea,uuid,uuid,uuid,uuid,uuid,uuid,uuid,text,bytea,bytea,timestamp with time zone)',
+           'EXECUTE')
+         AND NOT has_function_privilege(current_user,
+           'app_private.reserve_zernio_direct_schedule(uuid,uuid,text,bytea,text,timestamp with time zone,text)',
+           'EXECUTE')
+         AND NOT has_function_privilege(current_user,
+           'app_private.reserve_zernio_direct_schedule_v2(uuid,uuid,text,bytea,text,text,text,timestamp with time zone,text)',
+           'EXECUTE')
+         AND NOT has_function_privilege(current_user,
+           'app_private.settle_zernio_direct_schedule(uuid,uuid,text,text,bytea,text,timestamp with time zone)',
+           'EXECUTE')
+         AND NOT has_function_privilege(current_user,
+           'app_private.record_zernio_calendar_account_probe(uuid,uuid,text,bytea,bytea,text,text,bytea,text)',
+           'EXECUTE') AS "unsafeCalendarFunctionsDenied",
          has_table_privilege('r72_zernio_social_definer',
            'app.property_predator_zernio_connection_intents', 'SELECT,INSERT,UPDATE,DELETE')
          AND has_table_privilege('r72_zernio_social_definer',

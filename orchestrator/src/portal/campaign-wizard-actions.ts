@@ -45,6 +45,8 @@ export interface CampaignWizardOperationOutcome {
 
 export type CampaignWizardNoticeCode =
   | 'planned'
+  | 'calendar_foundation_ready'
+  | 'calendar_foundation_replayed'
   | 'scheduled_live'
   | 'schedule_replayed'
   | 'schedule_invalid'
@@ -60,7 +62,8 @@ export type CampaignWizardNoticeCode =
   | 'unavailable';
 
 const NOTICE_CODES = new Set<CampaignWizardNoticeCode>([
-  'planned', 'scheduled_live', 'schedule_replayed', 'schedule_invalid', 'schedule_forbidden', 'account_not_ready',
+  'planned', 'calendar_foundation_ready', 'calendar_foundation_replayed',
+  'scheduled_live', 'schedule_replayed', 'schedule_invalid', 'schedule_forbidden', 'account_not_ready',
   'replayed', 'cancelled', 'rescheduled', 'forbidden', 'conflict', 'invalid', 'missing', 'unavailable',
 ]);
 const NOTICE_CONTEXT = 'relaunch72:campaign-wizard-notice:v1\0';
@@ -84,6 +87,16 @@ export function campaignWizardNoticeToken(
 }
 
 function noticeFor(code: CampaignWizardNoticeCode): CampaignWizardOperationOutcome {
+  if (code === 'calendar_foundation_ready') return Object.freeze({
+    kind: 'success', title: 'Safe calendar foundation ready',
+    detail: 'The configured connected social accounts now have deterministic TEST planning targets. No post was queued or sent.',
+    disposition: 'applied',
+  });
+  if (code === 'calendar_foundation_replayed') return Object.freeze({
+    kind: 'info', title: 'Safe calendar foundation already ready',
+    detail: 'The exact configured TEST planning targets already existed, so Growth HQ created no duplicates. No post was queued or sent.',
+    disposition: 'replayed',
+  });
   if (code === 'scheduled_live') return Object.freeze({
     kind: 'success', title: 'Post scheduled',
     detail: 'Your LinkedIn company post is booked and now appears in your live schedule.',

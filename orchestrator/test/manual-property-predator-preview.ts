@@ -2031,13 +2031,15 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
       },
     ), {
       mutations: previewCalendarMutations(url),
-      liveScheduler: {
-        actionUrl: '/portal/content/calendar/live-schedules',
-        mediaUploadUrl: '/portal/content/calendar/media-uploads',
-        csrfToken: PREVIEW_CSRF,
-        commandKey: 'preview-live-calendar-command',
-        mediaCommandKey: 'preview-live-media-command',
+      liveSchedules: {
+        status: 'ready',
+        configuredNetworks: ['instagram', 'linkedin'],
         items: [],
+        activation: {
+          actionUrl: '/portal/content/calendar/foundation',
+          csrfToken: PREVIEW_CSRF,
+          commandKey: 'preview-live-calendar-command',
+        },
       },
     })}`, 'content', 'Property Predator — Content Calendar'),
     scripted: true,
