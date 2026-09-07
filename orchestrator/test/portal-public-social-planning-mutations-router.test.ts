@@ -591,9 +591,9 @@ test('Campaign Wizard exposes one exact generation-only form only when the runti
   assert.match(result.body, /name="platform" value="x" checked/);
   assert.match(result.body, /name="platform" value="tiktok" checked/);
   assert.match(result.body, /data-channel-pack-form/);
-  assert.doesNotMatch(result.body, /data-pack-media-drop/);
+  assert.match(result.body, /data-pack-media-drop/);
   assert.doesNotMatch(result.body, /data-media-upload-url/);
-  assert.doesNotMatch(result.body, /src="\/portal\/assets\/campaign-wizard\.js"/);
+  assert.match(result.body, /src="\/portal\/assets\/campaign-wizard\.js"/);
   assert.match(result.body, /name="topic" maxlength="20000"/);
   assert.match(result.body, /name="approved_fact_version_id"/);
   assert.match(result.body, /name="approved_asset_version_id"/);
@@ -620,6 +620,8 @@ test('Campaign Wizard exposes the five-channel review composer without pre-seede
   assert.match(result.body, /name="platform" value="tiktok" checked/);
   assert.match(result.body, /No approved fact pack is attached/);
   assert.match(result.body, /No approved library asset is attached/);
+  assert.match(result.body, /data-pack-media-drop/);
+  assert.match(result.body, /two prepared shapes stay in this browser/i);
   assert.doesNotMatch(result.body, /brand brain not ready/);
   assert.equal(generationCalls.length, 0);
 });

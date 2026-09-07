@@ -15,6 +15,7 @@ export const CAMPAIGN_WIZARD_CLIENT_SOURCE = String.raw`(() => {
   const status = form.querySelector('[data-pack-media-status]');
   const previews = form.querySelector('[data-pack-media-previews]');
   const submit = form.querySelector('[type="submit"]');
+  const remoteUpload = Boolean(form.dataset.mediaUploadUrl && form.dataset.mediaCommandKey);
   let file = null;
   let busy = false;
   let generation = 0;
@@ -72,10 +73,12 @@ export const CAMPAIGN_WIZARD_CLIENT_SOURCE = String.raw`(() => {
       'image/webp', 0.9,
     ));
   };
-  const addVariant = (variant, previewBlob) => {
-    const hidden = document.createElement('input');
-    hidden.type = 'hidden'; hidden.name = 'media_variant'; hidden.dataset.packMediaVariant = 'true';
-    hidden.value = JSON.stringify(variant); form.appendChild(hidden);
+  const addVariant = (variant, previewBlob, filename) => {
+    if (variant.url) {
+      const hidden = document.createElement('input');
+      hidden.type = 'hidden'; hidden.name = 'media_variant'; hidden.dataset.packMediaVariant = 'true';
+      hidden.value = JSON.stringify(variant); form.appendChild(hidden);
+    }
     if (!previews) return;
     const item = document.createElement('figure');
     const visual = document.createElement(variant.mediaType === 'image' ? 'img' : 'video');
@@ -84,7 +87,9 @@ export const CAMPAIGN_WIZARD_CLIENT_SOURCE = String.raw`(() => {
     else { visual.muted = true; visual.controls = true; }
     const caption = document.createElement('figcaption');
     caption.textContent = variant.platform + ' · ' + variant.width + '×' + variant.height;
-    item.append(visual, caption); previews.appendChild(item);
+    const download = document.createElement('a');
+    download.href = localUrl; download.download = filename; download.textContent = 'Download';
+    item.append(visual, caption, download); previews.appendChild(item);
   };
   const videoDimensions = (source) => new Promise((resolve, reject) => {
     const video = document.createElement('video'); const url = URL.createObjectURL(source);
@@ -115,21 +120,24 @@ export const CAMPAIGN_WIZARD_CLIENT_SOURCE = String.raw`(() => {
           if (current !== generation) return;
           const blob = await imageBlob(bitmap, group.width, group.height);
           const label = group.width > group.height ? 'landscape' : 'tall';
-          const url = await upload(blob, 'property-predator-' + label + '.webp', 'image/webp', label, current);
+          const filename = 'property-predator-' + label + '.webp';
+          const url = remoteUpload ? await upload(blob, filename, 'image/webp', label, current) : '';
           const contentSha256 = await digest(blob);
           group.platforms.forEach((platform) => addVariant({ platform, mediaType: 'image', url,
             width: group.width, height: group.height, contentSha256,
-            treatment: 'browser_cover_crop' }, blob));
+            treatment: 'browser_cover_crop' }, blob, filename));
         }
         bitmap.close();
       } else {
         const [width, height] = await videoDimensions(source);
-        const url = await upload(source, source.name, source.type, 'video', current);
+        const url = remoteUpload ? await upload(source, source.name, source.type, 'video', current) : '';
         const contentSha256 = await digest(source);
         platforms.forEach((platform) => addVariant({ platform, mediaType: 'video', url, width, height,
-          contentSha256, treatment: 'original_video' }, source));
+          contentSha256, treatment: 'original_video' }, source, source.name));
       }
-      say(platforms.length + ' media version' + (platforms.length === 1 ? '' : 's') + ' ready. Nothing has been scheduled or published.', 'ready');
+      say(remoteUpload
+        ? platforms.length + ' media version' + (platforms.length === 1 ? '' : 's') + ' ready. Nothing has been scheduled or published.'
+        : 'Two reusable media shapes are ready in this browser. Preview or download them; nothing was uploaded, scheduled or published.', 'ready');
     } catch (error) {
       clearVariants();
       say('Media preparation failed — ' + (error instanceof Error ? error.message : 'try again.'), 'failed');
@@ -149,7 +157,7 @@ export const CAMPAIGN_WIZARD_CLIENT_SOURCE = String.raw`(() => {
     if (file) void prepare(file);
   }));
   form.addEventListener('submit', (event) => {
-    if (busy || (file && form.querySelectorAll('[data-pack-media-variant]').length !== selectedPlatforms().length)) {
+    if (busy || (remoteUpload && file && form.querySelectorAll('[data-pack-media-variant]').length !== selectedPlatforms().length)) {
       event.preventDefault(); say(busy ? 'Wait for the media versions to finish.' : 'Prepare the selected media again.', 'failed');
     }
   });
