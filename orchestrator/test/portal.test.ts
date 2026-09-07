@@ -385,6 +385,11 @@ test('distributed source admission runs before session resolution and fails clos
   assert.equal(response.statusCode, 429);
   assert.equal(response.headers['retry-after'], '7');
   assert.equal(response.headers['cache-control'], 'no-store');
+  assert.match(response.body, /One moment — Growth HQ is catching up/);
+  assert.match(response.body, /Nothing new was started/);
+  assert.match(response.body, /Wait 7 seconds/);
+  assert.match(response.body, /Return to your workspace/);
+  assert.doesNotMatch(response.body, /Too many requests were received/);
   assert.equal(resolves, 0);
   assert.deepEqual(guard.admissions[0]?.dimensions.map(({ name }) => name), ['source', 'source_daily']);
 });

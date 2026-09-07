@@ -598,6 +598,10 @@ test('Campaign Wizard exposes one exact generation-only form only when the runti
   assert.doesNotMatch(result.body, /data-media-upload-url/);
   assert.match(result.body, /src="\/portal\/assets\/campaign-wizard\.js"/);
   assert.match(result.body, /name="topic" maxlength="20000"/);
+  assert.match(result.body, /What do you want to talk about\?/);
+  assert.match(result.body, /Type a rough idea or paste notes, a transcript, an article or a post\./);
+  assert.doesNotMatch(result.body, /Paste your original content/);
+  assert.match(result.body, /data-draft-generation-progress role="status" aria-live="polite" hidden/);
   assert.match(result.body, /name="approved_fact_version_id"/);
   assert.match(result.body, /name="approved_asset_version_id"/);
   assert.match(result.body, /name="provider_effects" value="generation_only"/);
@@ -607,6 +611,19 @@ test('Campaign Wizard exposes one exact generation-only form only when the runti
   assert.match(result.body, /data-outbound-effects="none"/);
   assert.doesNotMatch(result.body, /name="(?:workspace_id|provider_id|credential|send|schedule|publish)"/i);
   assert.equal(generationCalls.length, 0);
+});
+
+test('Campaign Wizard locks a valid draft generation submit before the browser can send it twice', async () => {
+  const result = await call('GET', '/portal/assets/campaign-wizard.js', postgres());
+
+  assert.equal(result.statusCode, 200);
+  assert.match(result.body, /let submitted = false/);
+  assert.match(result.body, /if \(submitted\) \{ event\.preventDefault\(\); return; \}/);
+  assert.match(result.body, /submitted = true/);
+  assert.match(result.body, /form\.setAttribute\('aria-busy', 'true'\)/);
+  assert.match(result.body, /submit\.disabled = true/);
+  assert.match(result.body, /Creating your drafts… You can stay on this page while we work\./);
+  assert.match(result.body, /seconds elapsed/);
 });
 
 test('Campaign Wizard exposes the five-channel review composer without pre-seeded catalogue evidence', async () => {

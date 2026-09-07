@@ -615,13 +615,14 @@ function sendAbuseStatus(
   code: 429 | 503,
   retryAfterSeconds: number,
 ): void {
-  const title = code === 429 ? 'Please slow down' : 'Workspace temporarily unavailable';
+  const retry = Math.max(1, Math.ceil(retryAfterSeconds));
+  const title = code === 429 ? 'One moment — Growth HQ is catching up' : 'Workspace temporarily unavailable';
   const message = code === 429
-    ? 'Too many requests were received. Wait briefly and try again.'
+    ? `Growth HQ briefly paused this request to keep your workspace responsive. Nothing new was started. Wait ${retry} second${retry === 1 ? '' : 's'}, then return to your workspace.`
     : 'The protected request boundary is temporarily unavailable. Try again shortly.';
-  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head><body><main><h1>${title}</h1><p>${message}</p></main></body></html>`;
+  const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>body{margin:0;background:#050708;color:#f2f7f6;font:16px/1.55 system-ui,sans-serif}main{min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(560px,100%);box-sizing:border-box;border:1px solid #263638;border-radius:18px;background:#0b1113;padding:32px;box-shadow:0 18px 55px #0008}.eyebrow{color:#23e8d0;font-size:12px;font-weight:850;letter-spacing:.09em;text-transform:uppercase}h1{margin:12px 0 10px;font-size:clamp(1.6rem,5vw,2.25rem);line-height:1.12}p{margin:0 0 24px;color:#b9c8c7}a{display:inline-flex;min-height:46px;align-items:center;border-radius:10px;background:#23e8d0;color:#03110f;padding:0 18px;font-weight:850;text-decoration:none}a:focus-visible{outline:3px solid #fff;outline-offset:3px}</style></head><body><main><section class="card" aria-labelledby="abuse-title"><span class="eyebrow">Growth HQ</span><h1 id="abuse-title">${title}</h1><p>${message}</p><a href="/portal">Return to your workspace</a></section></main></body></html>`;
   sendHtml(res, code, body, undefined, {
-    'retry-after': String(Math.max(1, Math.ceil(retryAfterSeconds))),
+    'retry-after': String(retry),
   });
 }
 

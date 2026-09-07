@@ -15,9 +15,11 @@ export const CAMPAIGN_WIZARD_CLIENT_SOURCE = String.raw`(() => {
   const status = form.querySelector('[data-pack-media-status]');
   const previews = form.querySelector('[data-pack-media-previews]');
   const submit = form.querySelector('[type="submit"]');
+  const generationProgress = form.querySelector('[data-draft-generation-progress]');
   const remoteUpload = Boolean(form.dataset.mediaUploadUrl && form.dataset.mediaCommandKey);
   let file = null;
   let busy = false;
+  let submitted = false;
   let generation = 0;
   let objectUrls = [];
 
@@ -159,6 +161,30 @@ export const CAMPAIGN_WIZARD_CLIENT_SOURCE = String.raw`(() => {
   form.addEventListener('submit', (event) => {
     if (busy || (remoteUpload && file && form.querySelectorAll('[data-pack-media-variant]').length !== selectedPlatforms().length)) {
       event.preventDefault(); say(busy ? 'Wait for the media versions to finish.' : 'Prepare the selected media again.', 'failed');
+      return;
     }
+    if (submitted) { event.preventDefault(); return; }
+    submitted = true;
+    form.setAttribute('aria-busy', 'true');
+    if (submit) {
+      submit.disabled = true;
+      submit.setAttribute('aria-disabled', 'true');
+      submit.textContent = 'Creating your drafts…';
+    }
+    if (generationProgress) {
+      generationProgress.hidden = false;
+      const platformCount = selectedPlatforms().length;
+      let elapsed = 1;
+      const progressText = generationProgress.querySelector('[data-draft-generation-progress-text]');
+      const updateProgress = () => {
+        if (progressText) progressText.textContent = 'Building ' + platformCount
+          + ' channel draft' + (platformCount === 1 ? '' : 's')
+          + '… ' + elapsed + ' seconds elapsed.';
+        elapsed += 1;
+      };
+      updateProgress();
+      window.setInterval(updateProgress, 1000);
+    }
+    say('Creating your drafts… You can stay on this page while we work.', 'working');
   });
 })();`;
