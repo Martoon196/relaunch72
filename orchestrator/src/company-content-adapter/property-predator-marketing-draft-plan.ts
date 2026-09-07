@@ -300,7 +300,11 @@ function validateBrandBrain(
   const social = brain.specialists
     .map(plainRecord)
     .find((profile) => profile?.profileId === SOCIAL_SPECIALIST_ID);
-  if (!social || social.runtimeReady !== true
+  const socialReadyForReviewDraft = social?.runtimeReady === true
+    || (brain.sourceFresh === false
+      && social?.sourceStatus === 'source-current'
+      && social?.blockedReason === null);
+  if (!social || !socialReadyForReviewDraft
       || social.runtimeBrandSha256 !== brain.runtimeBrandSha256
       || !Array.isArray(social.capabilities) || !social.capabilities.includes('post')) {
     addBlocker(blockers, 'brand_brain_social_specialist_not_ready', 'The owned social specialist is not runtime-ready for a social-post draft.');

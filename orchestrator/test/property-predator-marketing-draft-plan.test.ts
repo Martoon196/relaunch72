@@ -93,7 +93,15 @@ test('activated exact-hash social recipe stays ready after the short source-sync
   const current = readyBrandBrain();
   const snapshot = {
     ...current,
-    brain: { ...current.brain, sourceFresh: false, visualPolicyConflict: true },
+    brain: {
+      ...current.brain,
+      sourceFresh: false,
+      visualPolicyConflict: true,
+      specialists: current.brain.specialists.map((profile) =>
+        profile.profileId === 'propertypredator.owned.social/v1'
+          ? { ...profile, runtimeReady: false, sourceStatus: 'source-current', blockedReason: null }
+          : profile),
+    },
   };
   const plan = planPropertyPredatorMarketingDraft({ brandBrainSnapshot: snapshot });
 
