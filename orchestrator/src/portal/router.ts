@@ -80,6 +80,7 @@ import {
   type PropertyPredatorReviewCampaignDraft,
   type PropertyPredatorCampaignDraftRuntime,
 } from '../company-content-adapter/property-predator-campaign-draft-runtime.js';
+import { PropertyPredatorGenerationBridgeError } from '../company-content-adapter/property-predator-generation.js';
 import { renderCampaignDraftPackReviewBody } from './campaign-draft-review-view.js';
 import {
   CAMPAIGN_MACHINE_ROUTE,
@@ -4049,6 +4050,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       });
       const results: PropertyPredatorReviewCampaignDraft[] = [];
       const failedPlatforms: string[] = [];
+      let lastFailure: unknown;
       for (const platform of platforms) {
         const idempotencyKey = `campaign-pack:${createHash('sha256')
           .update(commandKey).update('\0').update(platform).digest('hex')}`;
@@ -4058,12 +4060,13 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
             idempotencyKey,
             brief: Object.freeze({ platform, topic, tone }),
           })));
-        } catch {
+        } catch (error) {
           failedPlatforms.push(platform);
+          lastFailure = error;
         }
       }
       if (results.length < 1) {
-        throw new PropertyPredatorCampaignDraftRuntimeError('integrity_mismatch');
+        throw lastFailure ?? new PropertyPredatorCampaignDraftRuntimeError('integrity_mismatch');
       }
       const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
       return sendHtml(res, failedPlatforms.length > 0 ? 207 : 201, operationalPage(
@@ -4076,16 +4079,20 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         'content-security-policy': "default-src 'none'; img-src 'self' https://media.zernio.com; media-src 'self' https://media.zernio.com; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
       });
     } catch (error) {
-      const status = error instanceof PropertyPredatorCampaignDraftRuntimeError
-        && (error.code === 'invalid_command' || error.code === 'evidence_invalid') ? 400
-        : error instanceof PropertyPredatorCampaignDraftRuntimeError
-          && (error.code === 'stale_plan' || error.code === 'integrity_mismatch') ? 409
-          : 503;
+      const sourceRejected = error instanceof PropertyPredatorGenerationBridgeError
+        && (error.code === 'invalid_request' || error.code === 'upstream_rejected');
+      const evidenceChanged = error instanceof PropertyPredatorCampaignDraftRuntimeError
+        && (error.code === 'invalid_command' || error.code === 'evidence_invalid'
+          || error.code === 'stale_plan');
+      const status = sourceRejected ? 400 : evidenceChanged ? 409 : 503;
+      const message = sourceRejected
+        ? 'We could not use that source. Remove any private contact details or active HTML, then try again.'
+        : evidenceChanged
+          ? 'Something changed while the drafts were being created. Refresh the builder and try once more.'
+          : 'The writing assistant did not answer properly. Your content was not posted or scheduled. Please try again.';
       return sendHtml(res, status, portalStatusPage(deps, sessionToken, {
-        title: status === 503 ? 'Review draft temporarily unavailable' : 'Review draft rejected',
-        message: status === 503
-          ? 'The generation command did not return a confirmed draft. No message was sent and nothing was scheduled or published.'
-          : 'The exact review-only generation evidence did not match. Refresh before trying again.',
+        title: 'We could not create your drafts',
+        message,
         active: 'content',
         backHref: CAMPAIGN_WIZARD_ROUTE,
         backLabel: 'Return to Campaign Builder',

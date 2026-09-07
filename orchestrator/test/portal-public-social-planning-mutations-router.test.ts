@@ -16,7 +16,10 @@ import {
   campaignWizardNoticeToken,
 } from '../src/portal/campaign-wizard-actions.js';
 import { PropertyPredatorCampaignDraftRuntime } from '../src/company-content-adapter/property-predator-campaign-draft-runtime.js';
-import type { PropertyPredatorGenerateDraftCommand } from '../src/company-content-adapter/property-predator-generation.js';
+import {
+  PropertyPredatorGenerationBridgeError,
+  type PropertyPredatorGenerateDraftCommand,
+} from '../src/company-content-adapter/property-predator-generation.js';
 import { planPropertyPredatorMarketingDraft } from '../src/company-content-adapter/property-predator-marketing-draft-plan.js';
 import { canonicalCompanyContentJson } from '../src/company-content-pg/validation.js';
 import type { PortalCompanyContentService } from '../src/portal/company-content-service.js';
@@ -527,7 +530,7 @@ test('GET campaign wizard joins safe company content and TEST targets into one p
 
   assert.equal(result.statusCode, 200);
   assert.equal(result.headers['cache-control'], 'no-store');
-  assert.match(result.body, /Build the rhythm\. <em>Keep control\.<\/em>/);
+  assert.match(result.body, /One idea\. <em>Every channel\.<\/em>/);
   assert.match(result.body, new RegExp(`action="${CAMPAIGN_WIZARD_CREATE_TEST_ROUTE}"`));
   assert.match(result.body, new RegExp(`name="content_version_id" value="${IDS.contentVersion}"`));
   assert.match(result.body, new RegExp(`name="media_version_ids" value="${IDS.mediaOne}"`));
@@ -536,10 +539,10 @@ test('GET campaign wizard joins safe company content and TEST targets into one p
   assert.match(result.body, /data-environment="test"/);
   assert.match(result.body, /data-provider-effects="none"/);
   assert.match(result.body, /data-marketing-draft-preflight/);
-  assert.match(result.body, /Appointment → Presentation/);
+  assert.match(result.body, /Your chosen goal[\s\S]*Presentation/);
   assert.match(result.body, /value="property-predator-agency-laps:presentation" selected/);
   assert.match(result.body, /Offer Architect/);
-  assert.match(result.body, /Adapted internal methods/);
+  assert.match(result.body, /Writing methods/);
   assert.doesNotMatch(result.body, /Generate with AI|Run specialist|Call model/i);
   assert.doesNotMatch(
     result.body,
@@ -584,7 +587,7 @@ test('Campaign Wizard exposes one exact generation-only form only when the runti
 
   assert.equal(result.statusCode, 200);
   assert.match(result.body, new RegExp(`action="${CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE}"`));
-  assert.match(result.body, /Turn one source into a channel pack/);
+  assert.match(result.body, /Create posts for every channel/);
   assert.match(result.body, /name="platform" value="linkedin" checked/);
   assert.match(result.body, /name="platform" value="facebook" checked/);
   assert.match(result.body, /name="platform" value="instagram" checked/);
@@ -598,6 +601,9 @@ test('Campaign Wizard exposes one exact generation-only form only when the runti
   assert.match(result.body, /name="approved_fact_version_id"/);
   assert.match(result.body, /name="approved_asset_version_id"/);
   assert.match(result.body, /name="provider_effects" value="generation_only"/);
+  assert.match(result.body, /name="confirm_generation_only" value="confirmed"/);
+  assert.match(result.body, />Create my drafts<\/button>/);
+  assert.match(result.body, /<summary>Advanced source settings<\/summary>/);
   assert.match(result.body, /data-outbound-effects="none"/);
   assert.doesNotMatch(result.body, /name="(?:workspace_id|provider_id|credential|send|schedule|publish)"/i);
   assert.equal(generationCalls.length, 0);
@@ -616,12 +622,12 @@ test('Campaign Wizard exposes the five-channel review composer without pre-seede
   }));
 
   assert.equal(result.statusCode, 200);
-  assert.match(result.body, /Turn one source into a channel pack/);
+  assert.match(result.body, /Create posts for every channel/);
   assert.match(result.body, /name="platform" value="tiktok" checked/);
   assert.match(result.body, /No approved fact pack is attached/);
   assert.match(result.body, /No approved library asset is attached/);
   assert.match(result.body, /data-pack-media-drop/);
-  assert.match(result.body, /two prepared shapes stay in this browser/i);
+  assert.match(result.body, /Nothing will be posted until you review it/i);
   assert.doesNotMatch(result.body, /brand brain not ready/);
   assert.equal(generationCalls.length, 0);
 });
@@ -735,6 +741,30 @@ test('campaign generation rejects invalid CSRF and changed exact evidence before
   );
   assert.equal(changed.statusCode, 409);
   assert.equal(calls.length, 0);
+});
+
+test('campaign generation explains an unusable source without inventing an evidence mismatch', async () => {
+  const brain = readyBrandBrainSnapshot();
+  const campaignDrafts = new PropertyPredatorCampaignDraftRuntime({
+    generation: {
+      generateDraft: async () => {
+        throw new PropertyPredatorGenerationBridgeError('upstream_rejected');
+      },
+    },
+    providerEffectsEnabled: true,
+    emergencyPaused: false,
+    hardMaximumCostMinor: 500,
+  });
+  const result = await call('POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, postgres({
+    companyContent: contentService(brain.brain.runtimeBrandSha256),
+    brandBrain: readyBrandBrainService(),
+    campaignDrafts,
+  }), baseReviewDraftForm());
+
+  assert.equal(result.statusCode, 400);
+  assert.match(result.body, /We could not create your drafts/);
+  assert.match(result.body, /Remove any private contact details or active HTML/);
+  assert.doesNotMatch(result.body, /evidence did not match|integrity mismatch/i);
 });
 
 test('production calendar CSP permits its same-origin protected mutation enhancement', async () => {

@@ -80,7 +80,7 @@ test('Campaign Wizard presents only exact eligible copy, media and owned TEST ta
 
 test('Campaign Wizard renders a native protected POST with separate copy and approved media selections', () => {
   const html = renderCampaignWizardBody(view(), { action: ACTION });
-  assert.match(html, /Build the rhythm\. <em>Keep control\.<\/em>/);
+  assert.match(html, /One idea\. <em>Every channel\.<\/em>/);
   assert.match(html, /<form class="cwiz-form" method="post" action="\/portal\/campaigns\/test-planning-intents" data-campaign-wizard-form>/);
   assert.match(html, /name="_csrf" value="csrf-campaign-wizard-token-1234"/);
   assert.match(html, /name="command_key" value="campaign:wizard:create:001"/);
@@ -97,12 +97,13 @@ test('Campaign Wizard renders a native protected POST with separate copy and app
   assert.match(html, /<form class="cwiz-brain-control" method="get" action="\/portal\/campaigns\/new">/);
   assert.match(html, /name="laps"/);
   assert.match(html, /value="property-predator-agency-laps:appointment" selected/);
-  assert.match(html, /Lead → Appointment/);
+  assert.match(html, /Your chosen goal[\s\S]*Appointment/);
   assert.match(html, /Offer Architect/);
   assert.match(html, /Direct Response Copywriter/);
   assert.match(html, /Social Media Manager/);
-  assert.match(html, /Draft recipe blocked/);
-  assert.match(html, /No model is called, nothing is persisted by the campaign command/);
+  assert.match(html, /Needs attention/);
+  assert.match(html, /The writing assistant is not ready yet/);
+  assert.match(html, /<summary>Advanced campaign planner<\/summary>/);
   assert.doesNotMatch(html, /Generate with AI|Run specialist|Call model/i);
   assert.match(html, /@media\(max-width:580px\)/);
   assert.match(html, /@media\(forced-colors:active\)/);
