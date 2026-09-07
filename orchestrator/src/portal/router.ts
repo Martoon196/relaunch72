@@ -32,7 +32,7 @@ import {
 } from './session.js';
 import type { InMemoryLoginThrottle } from './session.js';
 import { accountSetupPage, accountSetupUnavailablePage, loginPage, dashboardPage, billingPage } from './views.js';
-import { appShell, escapeHtml } from './ui.js';
+import { appShell, escapeHtml, PORTAL_APPEARANCE_CLIENT_SOURCE } from './ui.js';
 import { renderGrowthHomeBody } from './growth-home.js';
 import { renderLead360Body } from './lead-360-view.js';
 import { JOURNEY_BOARD_CLIENT_SOURCE } from './journey-board-client.js';
@@ -580,7 +580,7 @@ function sendHtml(res: ServerResponse, code: number, body: string, cookie?: stri
     'cache-control': 'no-store',
     'referrer-policy': 'no-referrer',
     'x-content-type-options': 'nosniff',
-    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
     'permissions-policy': 'camera=(), microphone=(), geolocation=()',
   };
   if (cookie) headers['set-cookie'] = cookie;
@@ -912,6 +912,8 @@ function journeySubnav(active: 'board' | 'rules'): string {
 function optionalPortalCapabilities(deps: PortalDeps): readonly PlatformCapability[] {
   if (deps.kind !== 'postgres') return [];
   return [
+    // Results is the existing reporting section of the authenticated overview.
+    'analytics.read',
     ...(deps.operatorActions ? ['actions.read'] as const : []),
     ...(deps.companyContent || deps.brandBrain || deps.companyAssets
         || deps.companyContentSync || deps.publicSocial
@@ -1788,6 +1790,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   const url = new URL(req.url ?? '/', 'http://localhost');
   const p = url.pathname.replace(/\/+$/, '') || '/portal';
   const method = req.method ?? 'GET';
+  if (p === '/portal/appearance.js' && method === 'GET') {
+    return sendJavaScript(res, PORTAL_APPEARANCE_CLIENT_SOURCE);
+  }
   const now = deps.now ? deps.now() : Date.now();
   const routeClass = classifyPortalAbuseRoute(p, method);
   const resolvedRequestContext = deps.requestContext?.(req) ?? null;
@@ -3366,7 +3371,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         'content',
         csrfToken,
       ), undefined, {
-        'content-security-policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        'content-security-policy': "default-src 'none'; script-src 'self'; img-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
       });
     } catch {
       return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
@@ -3921,6 +3926,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         backLabel: 'Return to Campaign Builder',
       }));
     }
+    const campaignDrafts = deps.campaignDrafts;
     const form = await readMultiValueForm(req);
     const allowed = new Set([
       '_csrf', 'command_key', 'expected_plan_sha256', 'laps', 'provider_effects',
@@ -4059,7 +4065,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           return Object.freeze({
             ok: true as const,
             platform,
-            draft: await deps.campaignDrafts.generateReviewDraft(Object.freeze({
+            draft: await campaignDrafts.generateReviewDraft(Object.freeze({
             ...common,
             idempotencyKey,
             brief: Object.freeze({ platform, topic, tone }),
@@ -4090,7 +4096,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         'content',
         csrfToken,
       ), undefined, {
-        'content-security-policy': "default-src 'none'; img-src 'self' https://media.zernio.com; media-src 'self' https://media.zernio.com; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        'content-security-policy': "default-src 'none'; script-src 'self'; img-src 'self' https://media.zernio.com; media-src 'self' https://media.zernio.com; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
       });
     } catch (error) {
       const sourceRejected = error instanceof PropertyPredatorGenerationBridgeError

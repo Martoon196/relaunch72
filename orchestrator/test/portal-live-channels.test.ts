@@ -232,7 +232,7 @@ test('view renders the fixture truthfully with the illustrative boundary', () =>
   assert.doesNotMatch(html, /All channels live/);
   assert.match(html, /4 of 22 capped dispatches used/);
   assert.match(html, /4 \/ 10/);
-  assert.match(html, /aria-current="page">Live Channels/);
+  assert.match(html, /aria-current="page">Delivery details/);
   assert.match(html, /Social DMs/);
   assert.match(html, /PROVIDER_NOT_CONFIGURED/);
   assert.match(html, /PAUSE ENGAGED/);

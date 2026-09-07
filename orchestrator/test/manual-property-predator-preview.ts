@@ -1617,7 +1617,7 @@ function shell(
     capabilities: new Set([
       'workspace.overview.read', 'crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read',
       'actions.read', 'journeys.read', 'content.drafts.read', 'conversations.read',
-      'affiliates.compliance.read',
+      'affiliates.compliance.read', 'analytics.read',
     ]),
     crmAvailable: true, mode: 'crm', csrfToken: PREVIEW_CSRF,
   });

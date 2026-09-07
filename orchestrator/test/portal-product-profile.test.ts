@@ -70,7 +70,7 @@ test('product profiles fail closed and cannot carry authorization state', () => 
   assert.equal('capabilities' in PROPERTY_PREDATOR_GROWTH_PROFILE.contentWorkspace!, false);
   assert.deepEqual(
     PROPERTY_PREDATOR_GROWTH_PROFILE.visibleNavigation,
-    ['overview', 'actions', 'crm', 'journeys', 'content', 'affiliates', 'inbox'],
+    ['overview', 'crm', 'inbox', 'content', 'analytics'],
   );
 });
 
@@ -93,12 +93,10 @@ test('Property Predator sign-in advertises only its visible workspace modules', 
   const html = loginPage(undefined, '', 'csrf', PROPERTY_PREDATOR_GROWTH_PROFILE);
   const genericHtml = loginPage(undefined, '', 'csrf', RELAUNCH72_PRODUCT_PROFILE);
   assert.match(html, /<span>Today<\/span>/);
-  assert.match(html, /<span>Actions<\/span>/);
-  assert.match(html, /<span>Leads<\/span>/);
-  assert.match(html, /<span>Journeys<\/span>/);
-  assert.match(html, /<span>Content<\/span>/);
-  assert.match(html, /<span class="planned">Affiliates · preview<\/span>/);
+  assert.match(html, /<span>People<\/span>/);
   assert.match(html, /<span class="planned">Inbox · preview<\/span>/);
+  assert.match(html, /<span>Content<\/span>/);
+  assert.match(html, /<span class="planned">Results · preview<\/span>/);
   assert.match(html, /fonts\.googleapis\.com\/css2\?family=Cormorant\+Garamond/);
   assert.match(html, /family=Syne/);
   assert.match(html, /family=IBM\+Plex\+Mono/);

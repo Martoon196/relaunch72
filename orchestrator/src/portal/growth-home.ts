@@ -15,6 +15,8 @@ const GROWTH_HOME_STYLE = `
   @media(max-width:1180px){.pp-metrics{grid-template-columns:repeat(3,1fr)}.pp-metric:nth-child(3){border-right:0}.pp-metric:nth-child(n+4){border-top:1px solid var(--line)}.pp-grid{grid-template-columns:1fr}.pp-lead{grid-template-columns:52px minmax(150px,1fr) minmax(130px,.7fr) minmax(180px,1fr)}.pp-next-move{grid-column:2/-1;border-left:0;border-top:1px solid var(--line);padding:9px 0 0}}
   @media(max-width:760px){.pp-hero::after{display:none}.pp-metrics{grid-template-columns:repeat(2,1fr)}.pp-metric,.pp-metric:nth-child(3){border-right:1px solid var(--line);border-top:1px solid var(--line)}.pp-metric:nth-child(-n+2){border-top:0}.pp-metric:nth-child(even){border-right:0}.pp-metric:last-child{grid-column:1/-1}.pp-funnel-rail{grid-template-columns:repeat(2,1fr)}.pp-funnel-stage:nth-child(2)::after{display:none}.pp-lead{grid-template-columns:48px 1fr}.pp-lead-stage,.pp-evidence,.pp-next-move{grid-column:2}.pp-next-move{border-top:1px solid var(--line);padding-top:9px}.pp-panel-head{padding:15px}.pp-panel-body{padding:15px}}
   @media(max-width:480px){.pp-metrics{grid-template-columns:1fr}.pp-metric,.pp-metric:nth-child(3),.pp-metric:nth-child(even){border-right:0}.pp-metric:nth-child(n+2){border-top:1px solid var(--line)}.pp-funnel-rail{grid-template-columns:1fr}.pp-funnel-stage::after{display:none}.pp-hero-actions .button{width:100%}.pp-evidence-grid{grid-template-columns:1fr 1fr}}
+  .pp-hero{padding:clamp(20px,3vw,34px);min-height:0}.pp-hero h1{font-size:clamp(2rem,4vw,3.8rem);line-height:1;margin:15px 0 12px}.pp-hero-actions{margin-top:20px}.pp-hero-proof{margin-top:20px;padding-top:15px}.pp-today-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(300px,.65fr);gap:16px;align-items:start}.pp-reporting{border:1px solid var(--line);border-radius:14px;background:var(--panel)}.pp-reporting>summary{cursor:pointer;list-style:none;padding:15px 18px;color:var(--muted);font-size:.72rem;font-weight:750}.pp-reporting>summary::-webkit-details-marker{display:none}.pp-reporting>summary::after{content:"Show";float:right;color:var(--accent-deep)}.pp-reporting[open]>summary::after{content:"Hide"}.pp-reporting .pp-metrics{margin:0 16px 16px}.pp-reporting .pp-grid{padding:0 16px 16px}.pp-reporting .pp-grid .pp-stack{grid-column:1/-1}
+  @media(max-width:900px){.pp-today-grid{grid-template-columns:1fr}}
 `;
 
 function dateTime(value: string, timezone: string): string {
@@ -163,8 +165,11 @@ export function renderGrowthHomeBody(
       ? 'Exact recorded journey, content and offer evidence only'
       : 'CRM records are live · conversion evidence has not landed yet';
   const heroTitle = profile.id === 'property_predator_growth'
-    ? 'See what every <em>lead</em> is hiding.'
+    ? 'Today’s <em>next moves</em>.'
     : escapeHtml(profile.home.title);
+  const heroSummary = profile.id === 'property_predator_growth'
+    ? 'Start with the people and conversations that need attention. Reporting and system detail stay available below.'
+    : profile.home.summary;
   const actionCentreAvailable = options.actionCentreAvailable === true;
   const dailyOutreachAvailable = options.dailyOutreachAvailable === true
     && profile.id === 'property_predator_growth';
@@ -190,11 +195,13 @@ export function renderGrowthHomeBody(
     <section class="pp-hero" aria-labelledby="growth-home-title"><div class="pp-hero-copy">
       <div class="pp-live-line ${stateClass}"><span class="pp-live-dot"></span>${escapeHtml(stateLabel)} · ${escapeHtml(growth.windowLabel)}</div>
       <h1 id="growth-home-title">${heroTitle}</h1>
-      <p>${escapeHtml(profile.home.summary)}</p>
+      <p>${escapeHtml(heroSummary)}</p>
       <div class="pp-hero-actions">${heroActions}</div>
-      <div class="pp-hero-proof"><span><i></i>${escapeHtml(stateTruth)}</span><span><i></i>Sale requires collected payment</span><span><i></i>Consent never adds score</span></div>
+      <div class="pp-hero-proof"><span><i></i>${escapeHtml(stateTruth)}</span><span><i></i>Actions remain bound to the exact person, account and approval</span><span><i></i>Sale requires collected payment</span></div>
     </div></section>
-    <section class="pp-metrics" aria-label="Conversion evidence snapshot">
+    <div class="pp-today-grid"><section class="pp-panel" aria-labelledby="attention-title"><div class="pp-panel-head"><div><div class="pp-panel-kicker">Needs you now</div><h2 id="attention-title">The next work to do</h2><p>${attentionCopy}</p></div>${attentionLink}</div><div class="pp-panel-body">${attentionQueue(snapshot, openStageIds)}</div></section>
+      <section class="pp-panel" id="hot-list" aria-labelledby="hot-list-title"><div class="pp-panel-head"><div><div class="pp-panel-kicker">People</div><h2 id="hot-list-title">Next conversations</h2><p>Who, the latest evidence and the next useful move.</p></div><a class="pp-panel-action" href="/portal/crm/contacts">All people →</a></div><div class="pp-panel-body">${hotList(growth, snapshot.workspace.timezone)}</div></section></div>
+    <details class="pp-reporting" id="analytics"><summary>Results and operating detail</summary><section class="pp-metrics" aria-label="Conversion evidence snapshot">
       <article class="pp-metric"><small>Route leads</small><strong>${leadCount}</strong><span>Distinct within each journey · routes may overlap</span></article>
       <article class="pp-metric"><small>Activated</small><strong>${selfActivated}</strong><span>Distinct self-serve contacts with recorded activation evidence</span></article>
       <article class="pp-metric"><small>Priced / presented</small><strong>${priced}</strong><span>Offer evidence, not an assumed intent</span></article>
@@ -203,11 +210,9 @@ export function renderGrowthHomeBody(
     </section>
     <div class="pp-grid"><div class="pp-stack">
       <section class="pp-panel" aria-labelledby="funnel-title"><div class="pp-panel-head"><div><div class="pp-panel-kicker">Measured conversion</div><h2 id="funnel-title">Two routes. No fake stages.</h2><p>Self-serve and agency buying journeys stay distinct.</p></div><span class="pp-panel-action">As of ${escapeHtml(dateTime(growth.asOf, snapshot.workspace.timezone))}</span></div><div class="pp-panel-body"><div class="pp-funnels">${growth.funnels.map((item) => funnel(item, growth.windowLabel)).join('')}</div></div></section>
-      <section class="pp-panel" id="hot-list" aria-labelledby="hot-list-title"><div class="pp-panel-head"><div><div class="pp-panel-kicker">Case files</div><h2 id="hot-list-title">Who needs the next move?</h2><p>Score, exact last evidence and a human-readable action.</p></div><a class="pp-panel-action" href="/portal/crm/contacts">All leads →</a></div><div class="pp-panel-body">${hotList(growth, snapshot.workspace.timezone)}</div></section>
     </div><aside class="pp-stack" aria-label="Evidence and action rails">
       <section class="pp-panel" aria-labelledby="evidence-title"><div class="pp-panel-head"><div><div class="pp-panel-kicker">Consumption + intent</div><h2 id="evidence-title">Evidence captured</h2></div></div><div class="pp-panel-body">${evidenceTotals(growth)}</div></section>
-      <section class="pp-panel" aria-labelledby="attention-title"><div class="pp-panel-head"><div><div class="pp-panel-kicker">Human work</div><h2 id="attention-title">Needs attention</h2><p>${attentionCopy}</p></div>${attentionLink}</div><div class="pp-panel-body">${attentionQueue(snapshot, openStageIds)}</div></section>
       <section class="pp-panel" aria-labelledby="machine-title"><div class="pp-panel-head"><div><div class="pp-panel-kicker">Modular machine</div><h2 id="machine-title">Rails</h2></div></div><div class="pp-panel-body">${readiness(profile)}</div></section>
-    </aside></div>
+    </aside></div></details>
   </div>`;
 }

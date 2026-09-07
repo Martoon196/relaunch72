@@ -245,7 +245,7 @@ test('Action Centre renders the authoritative PostgreSQL queue and active Proper
   assert.match(result.body, /data-command-boundary="ready"/);
   assert.match(result.body, /Call the hot acquisition lead/);
   assert.match(result.body, /Measured workspace facts/);
-  assert.match(result.body, /<a class="nav-item" href="\/portal\/actions" aria-current="page">/);
+  assert.match(result.body, /<a class="command-link" href="\/portal\/actions" aria-current="page">/);
   assert.match(result.body, new RegExp(`/portal/actions/${encodeURIComponent(ACTION_ID)}/assignment`));
   assert.match(result.body, new RegExp(`/portal/actions/${encodeURIComponent(ACTION_ID)}/snooze`));
   assert.doesNotMatch(result.body, /FICTIONAL FIXTURE|Operationally shaped TEST data only/);

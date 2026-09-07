@@ -218,10 +218,9 @@ export const PROPERTY_PREDATOR_GROWTH_PROFILE = createProfile({
     accent: '#00e5cc', accentDeep: '#00e5cc', accentSoft: '#0a2c2c',
     nav: '#050608', navRaised: '#111318', navLine: '#1e2430', navText: '#eef1f7', navMuted: '#9aa6ba',
   },
-  visibleNavigation: ['overview', 'actions', 'crm', 'journeys', 'content', 'affiliates', 'inbox'],
+  visibleNavigation: ['overview', 'crm', 'inbox', 'content', 'analytics'],
   moduleLabels: {
-    overview: 'Today', actions: 'Actions', crm: 'Leads', journeys: 'Journeys',
-    content: 'Content', affiliates: 'Affiliates', inbox: 'Inbox',
+    overview: 'Today', crm: 'People', inbox: 'Inbox', content: 'Content', analytics: 'Results',
   },
   journeyBlueprints: [
     {

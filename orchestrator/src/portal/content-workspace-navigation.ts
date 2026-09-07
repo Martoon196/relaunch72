@@ -29,10 +29,10 @@ export type ContentWorkspaceNavigationTarget =
   | 'sync';
 
 const CONTENT_WORKSPACE_NAVIGATION_STYLE = `
-  .pp-content-nav{display:flex;align-items:center;gap:6px;max-width:100%;margin:0 0 14px;padding:6px;border:1px solid #253238;border-radius:10px;background:#090d0f;overflow-x:auto;scrollbar-width:thin;scrollbar-color:#39474e #090d0f}
-  .pp-content-nav a{flex:0 0 auto;min-height:44px;display:inline-flex;align-items:center;justify-content:center;border:1px solid transparent;border-radius:7px;padding:0 12px;color:#96a5a9;font-size:12px;font-weight:850;line-height:1.2;text-decoration:none;white-space:nowrap}
-  .pp-content-nav a:hover{border-color:#3b4b51;color:#f3f7f6}.pp-content-nav a[aria-current="page"]{border-color:#318178;background:#08211e;color:#65f3e3;box-shadow:inset 0 -2px #00e5cc}
-  .pp-content-nav a[data-content-action="create"]{border-color:#2f746c;background:#09201e;color:#74f4e5}.pp-content-nav a[data-content-action="create"]:hover{border-color:#00e5cc;background:#0b2a27;color:#fff}
+  .pp-content-nav{display:flex;align-items:center;flex-wrap:wrap;gap:6px;max-width:100%;margin:0 0 18px;padding:6px;border:1px solid var(--line);border-radius:11px;background:var(--panel-subtle)}
+  .pp-content-nav a{min-height:44px;display:inline-flex;align-items:center;justify-content:center;border:1px solid transparent;border-radius:8px;padding:0 12px;color:var(--muted);font-size:12px;font-weight:800;line-height:1.2;text-decoration:none}
+  .pp-content-nav a:hover{border-color:var(--line-strong);color:var(--ink)}.pp-content-nav a[aria-current="page"]{border-color:var(--line-strong);background:var(--panel);color:var(--accent-deep);box-shadow:inset 0 -2px var(--accent)}
+  .pp-content-nav a[data-content-action="create"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-deep)}.pp-content-nav a[data-content-action="create"]:hover{background:var(--panel);color:var(--ink)}
   .pp-content-nav a:focus-visible{outline:3px solid rgba(0,229,204,.34);outline-offset:2px}
   @media(max-width:560px){.pp-content-nav{margin-inline:-2px;padding:5px}.pp-content-nav a{padding-inline:10px}}
   @media(forced-colors:active){.pp-content-nav,.pp-content-nav a{forced-color-adjust:auto}.pp-content-nav a[aria-current="page"]{border:3px solid Highlight}}
@@ -45,12 +45,9 @@ const CONTENT_WORKSPACE_LINKS: readonly Readonly<{
 }>[] = Object.freeze([
   { target: 'create', href: CAMPAIGN_WIZARD_ROUTE, label: '+ New campaign' },
   { target: 'campaigns', href: CAMPAIGN_COMMAND_ROUTE, label: 'Campaigns' },
-  { target: 'sequences', href: CAMPAIGN_MACHINE_ROUTE, label: 'Sequences' },
   { target: 'calendar', href: CONTENT_CALENDAR_ROUTE, label: 'Calendar' },
-  { target: 'connections', href: SOCIAL_ACCOUNT_CONTROL_ROUTE, label: 'Social accounts' },
-  { target: 'readiness', href: PROVIDER_READINESS_COCKPIT_ROUTE, label: 'Rail status' },
-  { target: 'live', href: LIVE_CHANNELS_ROUTE, label: 'Live Channels' },
-  { target: 'library', href: CONTENT_CONTROL_ROOM_ROUTE, label: 'Content Control' },
+  { target: 'composer', href: SOCIAL_COMPOSER_ROUTE, label: 'Drafts' },
+  { target: 'library', href: CONTENT_CONTROL_ROOM_ROUTE, label: 'Library' },
 ]);
 
 export function renderContentWorkspaceNavigation(
@@ -83,12 +80,13 @@ export function renderContentWorkspaceNavigation(
     && (link.target !== 'live'
       || options.liveChannelsAvailable === true
       || active === 'live')
+    && (link.target !== 'composer'
+      || options.composerAvailable === true
+      || active === 'composer')
   )).map((link) => (
     `<a href="${link.href}"${link.target === 'create' ? ' data-content-action="create"' : ''}${active === link.target ? ' aria-current="page"' : ''}>${link.label}</a>`
   )).join('');
-  const composer = options.composerAvailable || active === 'composer'
-    ? `<a href="${SOCIAL_COMPOSER_ROUTE}"${active === 'composer' ? ' aria-current="page"' : ''}>Composer</a>`
-    : '';
+  const composer = '';
   const images = (options.imageStudioAvailable
       ?? (options.companyAssetsAvailable && options.brandBrainAvailable)) || active === 'images'
     ? `<a href="${IMAGE_STUDIO_ROUTE}"${active === 'images' ? ' aria-current="page"' : ''}>Image Studio</a>`
@@ -102,5 +100,16 @@ export function renderContentWorkspaceNavigation(
   const sync = options.companyContentSyncAvailable
     ? `<a href="${COMPANY_CONTENT_SYNC_ROUTE}"${active === 'sync' ? ' aria-current="page"' : ''}>Source Sync</a>`
     : '';
-  return `<style data-property-predator-content-workspace-navigation>${CONTENT_WORKSPACE_NAVIGATION_STYLE}</style><nav class="pp-content-nav" aria-label="Content operations">${links}${composer}${images}${assets}${brain}${sync}</nav>`;
+  const sequences = options.campaignMachineAvailable || active === 'sequences'
+    ? `<a href="${CAMPAIGN_MACHINE_ROUTE}"${active === 'sequences' ? ' aria-current="page"' : ''}>Sequences</a>`
+    : '';
+  const connections = `<a href="${SOCIAL_ACCOUNT_CONTROL_ROUTE}"${active === 'connections' ? ' aria-current="page"' : ''}>Social accounts</a>`;
+  const readiness = options.providerReadinessAvailable || active === 'readiness'
+    ? `<a href="${PROVIDER_READINESS_COCKPIT_ROUTE}"${active === 'readiness' ? ' aria-current="page"' : ''}>Delivery readiness</a>`
+    : '';
+  const live = options.liveChannelsAvailable || active === 'live'
+    ? `<a href="${LIVE_CHANNELS_ROUTE}"${active === 'live' ? ' aria-current="page"' : ''}>Delivery details</a>`
+    : '';
+  const tools = sequences + connections + readiness + live + images + assets + brain + sync;
+  return `<style data-property-predator-content-workspace-navigation>${CONTENT_WORKSPACE_NAVIGATION_STYLE}</style><nav class="pp-content-nav" aria-label="Content workspace">${links}</nav>${tools ? `<details class="pp-content-tools"><summary>Content tools and settings</summary><nav class="pp-content-nav" aria-label="Content tools">${tools}</nav></details>` : ''}`;
 }

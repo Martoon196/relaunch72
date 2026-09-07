@@ -196,7 +196,8 @@ test('exact review GET passes only opaque session identity and exact release ite
   );
   assert.equal(result.statusCode, 200);
   assert.match(result.headers['content-security-policy'] ?? '', /img-src 'self'/u);
-  assert.doesNotMatch(result.headers['content-security-policy'] ?? '', /script-src/u);
+  assert.match(result.headers['content-security-policy'] ?? '', /script-src 'self'/u);
+  assert.doesNotMatch(result.headers['content-security-policy'] ?? '', /script-src[^;]*'unsafe-inline'/u);
   assert.match(result.body.toString(), /Evidence before emotion/);
   assert.match(result.body.toString(), /Not Growth HQ approval|Source provenance only/);
   assert.doesNotMatch(result.body.toString(), /filename|assetFilePath|\/api\/internal|Publish now/i);

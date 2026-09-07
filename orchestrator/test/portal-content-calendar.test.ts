@@ -195,7 +195,7 @@ test('Content Calendar rejects unknown versions and never substitutes another ca
 
 test('Content Calendar renders a premium accessible planner and fails closed without injected TEST commands', () => {
   const html = renderContentCalendarBody(present());
-  assert.match(html, /<nav class="pp-content-nav" aria-label="Content operations">/);
+  assert.match(html, /<nav class="pp-content-nav" aria-label="Content workspace">/);
   assert.doesNotMatch(html, /href="\/portal\/content\/compose"/);
   assert.match(html, /href="\/portal\/content\/calendar" aria-current="page">Calendar/);
   assert.match(html, /<article class="ccal" aria-labelledby="ccal-title" data-provider-effects="none" data-content-calendar data-calendar-mode="week" data-calendar-timezone="Europe\/London" data-source-truncated="false" data-preview-dirty="false">/);

@@ -4,7 +4,7 @@ import { accountSetupPage, accountSetupUnavailablePage, billingPage, dashboardPa
 import { PROPERTY_PREDATOR_GROWTH_PROFILE } from '../src/portal/product-profile.js';
 import { planOptions } from '../src/portal/billing.js';
 import { CORE_PLATFORM_MODULES } from '../src/platform/modules.js';
-import { PORTAL_STYLE } from '../src/portal/ui.js';
+import { appShell, PORTAL_APPEARANCE_CLIENT_SOURCE, PORTAL_STYLE } from '../src/portal/ui.js';
 import type { DashboardData } from '../src/portal/data.js';
 
 function colourToken(name: string): string {
@@ -201,4 +201,41 @@ test('account setup screens use the active Property Predator product profile', (
   }
   assert.match(setup, /private PropertyPredator Growth HQ/);
   assert.match(unavailable, /Ask the PropertyPredator team/);
+});
+
+test('Property Predator appearance supports persistent light, dark and system choices', () => {
+  const html = loginPage(undefined, '', 'csrf', PROPERTY_PREDATOR_GROWTH_PROFILE);
+  const shell = appShell({ title: 'Today', tenantName: 'Property Predator', active: 'overview', body: '', productProfile: PROPERTY_PREDATOR_GROWTH_PROFILE });
+  assert.match(html, /<html lang="en" data-theme="light">/);
+  assert.match(html, /<script src="\/portal\/appearance\.js"><\/script>/);
+  assert.match(html, /html\[data-theme="light"\]/);
+  assert.match(html, /prefers-color-scheme:light/);
+  assert.match(PORTAL_APPEARANCE_CLIENT_SOURCE, /property-predator-appearance/);
+  assert.match(PORTAL_APPEARANCE_CLIENT_SOURCE, /try \{ saved = localStorage\.getItem/);
+  assert.match(PORTAL_APPEARANCE_CLIENT_SOURCE, /try \{ localStorage\.setItem/);
+  assert.match(PORTAL_APPEARANCE_CLIENT_SOURCE, /new Set\(\['system', 'light', 'dark'\]\)/);
+  assert.match(PORTAL_APPEARANCE_CLIENT_SOURCE, /location\.hash !== '#analytics'/);
+  assert.match(shell, /<select id="portal-theme" aria-label="Appearance">/);
+  assert.match(shell, /value="system">System<\/option>.*value="light">Light<\/option>.*value="dark">Dark<\/option>/s);
+});
+
+test('Property Predator primary jobs stay ordered and specialist routes remain reachable with their capabilities', () => {
+  const options = {
+    title: 'Today', tenantName: 'Property Predator', active: 'actions' as const, body: '',
+    productProfile: PROPERTY_PREDATOR_GROWTH_PROFILE, crmAvailable: true,
+  };
+  const html = appShell({ ...options, capabilities: new Set([
+    'workspace.overview.read', 'content.drafts.read', 'conversations.read', 'analytics.read',
+    'actions.read', 'journeys.read', 'affiliates.compliance.read',
+  ]) });
+  const primary = html.match(/<nav class="primary-nav"[^>]*>(.*?)<\/nav>/s)![1]!;
+  assert.deepEqual([...primary.matchAll(/<span>(Today|People|Inbox|Content|Results)<\/span>/g)].map((match) => match[1]),
+    ['Today', 'People', 'Inbox', 'Content', 'Results']);
+  assert.match(primary, /href="\/portal#analytics"/);
+  assert.doesNotMatch(primary, /href="\/portal\/(?:actions|affiliates|journeys)/);
+  assert.match(html, /class="command-link" href="\/portal\/actions" aria-current="page"/);
+  assert.match(html, /class="command-link" href="\/portal\/affiliates\/compliance"/);
+  assert.match(html, /class="command-link" href="\/portal\/journeys\/board"/);
+  const disconnected = appShell(options);
+  assert.doesNotMatch(disconnected, /href="\/portal\/(?:actions|affiliates|journeys)/);
 });

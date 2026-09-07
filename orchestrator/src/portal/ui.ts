@@ -16,6 +16,32 @@ export function escapeHtml(value: unknown): string {
   }[char]!));
 }
 
+export const PORTAL_APPEARANCE_CLIENT_SOURCE = `(() => {
+  const key = 'property-predator-appearance';
+  const allowed = new Set(['system', 'light', 'dark']);
+  let saved = null;
+  try { saved = localStorage.getItem(key); } catch { /* private storage may be unavailable */ }
+  const theme = saved && allowed.has(saved) ? saved : 'light';
+  document.documentElement.dataset.theme = theme;
+  addEventListener('DOMContentLoaded', () => {
+    const control = document.getElementById('portal-theme');
+    if (!(control instanceof HTMLSelectElement)) return;
+    control.value = theme;
+    control.addEventListener('change', () => {
+      if (!allowed.has(control.value)) return;
+      try { localStorage.setItem(key, control.value); } catch { /* keep the in-memory choice */ }
+      document.documentElement.dataset.theme = control.value;
+    });
+    const revealResults = () => {
+      if (location.hash !== '#analytics') return;
+      const results = document.getElementById('analytics');
+      if (results instanceof HTMLDetailsElement) results.open = true;
+    };
+    revealResults();
+    addEventListener('hashchange', revealResults);
+  });
+})();`;
+
 type IconName = 'activity' | 'automation' | 'billing' | 'calendar' | 'chevron' | 'contacts' | 'content' |
   'inbox' | 'listening' | 'lock' | 'logout' | 'overview' | 'pipeline' | 'search' | 'social' | 'sparkles';
 
@@ -67,6 +93,7 @@ export const PORTAL_STYLE = `
     --mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
   }
   *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--canvas);color:var(--ink);font-family:var(--sans);line-height:1.5;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  html[data-theme="dark"]{color-scheme:dark}html[data-theme="light"]{color-scheme:light}
   button,input,summary{font:inherit}button,a,summary{-webkit-tap-highlight-color:transparent}a{color:inherit;text-decoration:none}button{color:inherit}h1,h2,h3,h4,p{margin-top:0;overflow-wrap:anywhere}.icon{width:18px;height:18px;flex:0 0 auto}.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
   :focus-visible{outline:3px solid rgba(237,156,36,.72);outline-offset:3px}.skip-link{position:fixed;z-index:100;top:10px;left:12px;transform:translateY(-150%);background:var(--ink);color:#fff;padding:9px 13px;border-radius:9px;font-weight:750}.skip-link:focus{transform:none}
 
@@ -77,7 +104,7 @@ export const PORTAL_STYLE = `
   .workspace-popover{position:absolute;z-index:30;top:calc(100% + 7px);left:0;right:0;background:#fff;color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:8px;box-shadow:var(--shadow-lg)}.workspace-current{display:flex;align-items:center;gap:9px;padding:8px;border-radius:8px;background:var(--panel-subtle);font-size:.78rem;font-weight:750}.workspace-popover p{margin:7px 6px 3px;color:var(--muted);font-size:.68rem;line-height:1.4}
   .nav-label{color:#6f8097;font-family:var(--mono);font-size:.61rem;font-weight:750;letter-spacing:.11em;text-transform:uppercase;margin:15px 11px 7px}.primary-nav{display:flex;flex-direction:column;gap:3px;min-height:0;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#37465d transparent}.nav-item{width:100%;min-height:40px;border:0;border-radius:10px;display:flex;align-items:center;gap:11px;padding:9px 10px;background:transparent;color:var(--nav-muted);font-size:.82rem;font-weight:650;text-align:left}.nav-item:hover{background:rgba(255,255,255,.055);color:#fff}.nav-item[aria-current="page"]{color:#fff;background:rgba(237,156,36,.13);box-shadow:inset 3px 0 var(--accent)}.nav-item[aria-current="page"] .icon{color:var(--accent)}.nav-locked{cursor:not-allowed;color:#748398}.nav-locked:hover{color:#8796aa;background:rgba(255,255,255,.025)}.module-state{margin-left:auto;display:inline-flex;align-items:center;gap:4px;color:#77879c;font-family:var(--mono);font-size:.54rem;letter-spacing:.04em;text-transform:uppercase}.module-state .icon{width:11px;height:11px}.sidebar-foot{margin-top:auto;border-top:1px solid var(--nav-line);padding:13px 5px 2px}.sandbox-note{display:flex;gap:9px;align-items:flex-start;color:var(--nav-muted);font-size:.69rem;line-height:1.4;padding:5px}.sandbox-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px rgba(237,156,36,.1);margin:5px 2px 0;flex:0 0 auto}.sandbox-note strong{display:block;color:#d8e0eb;font-size:.7rem;margin-bottom:1px}
 
-  .workspace{min-height:100vh;margin-left:264px}.topbar{height:70px;position:sticky;top:0;z-index:15;background:rgba(244,246,248,.9);backdrop-filter:blur(14px);border-bottom:1px solid rgba(203,211,223,.82);display:flex;align-items:center;justify-content:space-between;padding:0 34px;gap:16px}.mobile-brand{display:none}.top-actions{display:flex;align-items:center;gap:9px}.top-icon-button{width:38px;height:38px;border:1px solid var(--line);border-radius:11px;background:var(--panel);display:grid;place-items:center;cursor:pointer}.top-icon-button:hover{border-color:var(--line-strong);background:var(--panel-subtle)}
+  .workspace{min-height:100vh;margin-left:264px}.topbar{height:70px;position:sticky;top:0;z-index:15;background:color-mix(in srgb,var(--canvas) 90%,transparent);backdrop-filter:blur(14px);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 34px;gap:16px}.mobile-brand{display:none}.top-actions{display:flex;align-items:center;gap:9px}.theme-picker{display:flex;align-items:center;gap:7px}.theme-picker label{font-size:.68rem;color:var(--muted);font-weight:700}.theme-picker select{height:38px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);padding:0 28px 0 10px;font:700 .72rem var(--sans)}.top-icon-button{width:38px;height:38px;border:1px solid var(--line);border-radius:11px;background:var(--panel);display:grid;place-items:center;cursor:pointer}.top-icon-button:hover{border-color:var(--line-strong);background:var(--panel-subtle)}
   .quick-menu{position:relative;width:min(420px,42vw)}.quick-menu summary{list-style:none;cursor:pointer;height:40px;border:1px solid var(--line);border-radius:11px;background:var(--panel);display:flex;align-items:center;gap:10px;color:var(--muted);padding:0 11px;box-shadow:var(--shadow-sm)}.quick-menu summary::-webkit-details-marker{display:none}.quick-menu summary:hover{border-color:var(--line-strong)}.quick-menu summary span{font-size:.82rem}.quick-menu summary kbd{margin-left:auto;border:1px solid var(--line);border-bottom-color:var(--line-strong);border-radius:6px;background:var(--panel-subtle);padding:2px 7px;font:600 .63rem var(--mono);color:var(--faint)}.command-popover{position:absolute;z-index:40;top:calc(100% + 8px);left:0;width:min(480px,calc(100vw - 36px));background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:9px;box-shadow:var(--shadow-lg)}.command-title{font:750 .61rem var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--faint);padding:7px 9px 5px}.command-link{display:flex;align-items:center;gap:10px;padding:9px;border-radius:9px;font-size:.8rem;font-weight:650}.command-link:hover{background:var(--panel-subtle)}.command-link small{margin-left:auto;color:var(--faint);font:650 .61rem var(--mono)}.command-link.locked{color:var(--muted);cursor:not-allowed}.command-link.locked small{display:flex;align-items:center;gap:4px;text-transform:uppercase}.command-link.locked .icon:last-child{width:11px;height:11px}
   .main{max-width:1420px;margin:0 auto;padding:32px 34px 78px}.page-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:25px}.eyebrow{display:flex;align-items:center;gap:7px;margin-bottom:8px;color:var(--accent-deep);font:750 .66rem var(--mono);letter-spacing:.095em;text-transform:uppercase}.eyebrow .icon{width:14px;height:14px}.page-heading h1{font-size:clamp(1.65rem,2.4vw,2.25rem);line-height:1.14;letter-spacing:-.035em;margin:0}.page-heading p{max-width:700px;color:var(--muted);font-size:.91rem;margin:8px 0 0}.page-heading-actions{display:flex;align-items:center;gap:9px;flex:0 0 auto}
   .button{appearance:none;border:1px solid transparent;border-radius:11px;min-height:42px;padding:9px 15px;display:inline-flex;align-items:center;justify-content:center;gap:8px;background:var(--accent);color:#1b2028;font-weight:800;font-size:.82rem;cursor:pointer;box-shadow:0 5px 15px rgba(237,156,36,.16)}.button:hover{background:#f3a832;transform:translateY(-1px)}.button:active{transform:translateY(0)}.button.secondary{background:var(--panel);color:var(--ink);border-color:var(--line);box-shadow:var(--shadow-sm);font-weight:700}.button.secondary:hover{background:var(--panel-subtle);border-color:var(--line-strong)}.button.compact{min-height:36px;padding:7px 11px;font-size:.75rem}.button .icon{width:16px;height:16px}.run-helper{color:var(--faint);font-size:.69rem;margin-top:7px;text-align:right}
@@ -108,13 +135,15 @@ export const PORTAL_STYLE = `
 function profileTheme(profile: PortalProductProfile): string {
   const theme = profile.theme;
   const predator = profile.id === 'property_predator_growth'
-    ? `:root{color-scheme:dark;--sans:Syne,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--mono:"IBM Plex Mono","SFMono-Regular",Consolas,monospace;--display:"Cormorant Garamond",Georgia,serif;--success:#22c55e;--success-soft:#10291d;--danger:#ef4444;--danger-soft:#321719;--info:#72a7ff;--info-soft:#121f34;--shadow-sm:none;--shadow-lg:none;--radius:14px;--radius-sm:10px}
-      .topbar{background:rgba(5,6,8,.91);border-bottom-color:var(--line)}.sidebar{border-right-color:var(--line)}
+    ? `:root{color-scheme:dark;--accent-ink:#03110f;--sans:Syne,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--mono:"IBM Plex Mono","SFMono-Regular",Consolas,monospace;--display:"Cormorant Garamond",Georgia,serif;--success:#22c55e;--success-soft:#10291d;--danger:#ef4444;--danger-soft:#321719;--info:#72a7ff;--info-soft:#121f34;--shadow-sm:none;--shadow-lg:none;--radius:14px;--radius-sm:10px}
+      html[data-theme="light"]{color-scheme:light;--accent-ink:#ffffff;--canvas:#f4f7f6;--panel:#ffffff;--panel-subtle:#f7faf9;--panel-strong:#e9f0ee;--ink:#14201f;--muted:#536765;--faint:#667b78;--line:#d8e2df;--line-strong:#b9cbc7;--accent:#087f72;--accent-deep:#05675d;--accent-soft:#dff5f1;--nav:#10201e;--nav-raised:#18302d;--nav-line:#294641;--nav-text:#f5fbfa;--nav-muted:#afc4c0;--success:#087653;--success-soft:#e2f5ed;--danger:#ad3038;--danger-soft:#fcebed;--info:#285fa7;--info-soft:#eaf1fb;--shadow-sm:0 1px 2px rgba(20,32,31,.05);--shadow-lg:0 18px 48px rgba(20,32,31,.16)}
+      @media(prefers-color-scheme:light){html[data-theme="system"]{color-scheme:light;--accent-ink:#ffffff;--canvas:#f4f7f6;--panel:#ffffff;--panel-subtle:#f7faf9;--panel-strong:#e9f0ee;--ink:#14201f;--muted:#536765;--faint:#667b78;--line:#d8e2df;--line-strong:#b9cbc7;--accent:#087f72;--accent-deep:#05675d;--accent-soft:#dff5f1;--nav:#10201e;--nav-raised:#18302d;--nav-line:#294641;--nav-text:#f5fbfa;--nav-muted:#afc4c0;--success:#087653;--success-soft:#e2f5ed;--danger:#ad3038;--danger-soft:#fcebed;--info:#285fa7;--info-soft:#eaf1fb;--shadow-sm:0 1px 2px rgba(20,32,31,.05);--shadow-lg:0 18px 48px rgba(20,32,31,.16)}}
+      .topbar{background:var(--panel);border-bottom-color:var(--line)}.sidebar{border-right-color:var(--line)}
       .brand-name{font-family:var(--display);font-size:1.06rem;font-weight:600;letter-spacing:-.01em}.brand-name .brand-accent{color:var(--accent)}.brand-name small{font-family:var(--mono);font-size:.54rem;letter-spacing:.14em;margin-top:4px}
       .brand-mark{background:var(--nav);box-shadow:none;border-radius:0;color:var(--accent)}.brand-mark svg{width:31px;height:31px}
       .workspace-avatar{background:var(--panel-strong);color:var(--ink)}.workspace-popover{background:var(--panel);color:var(--ink)}
-      .nav-item[aria-current="page"]{color:var(--ink);background:rgba(0,229,204,.07);box-shadow:inset 2px 0 var(--accent)}.nav-item[aria-current="page"] .icon{color:var(--accent)}
-      .button{color:#03110f;box-shadow:none}.button:hover{background:#00ffde}.button.secondary{color:var(--ink)}
+      .nav-item[aria-current="page"]{color:var(--nav-text);background:rgba(0,229,204,.07);box-shadow:inset 2px 0 var(--accent)}.nav-item[aria-current="page"] .icon{color:var(--accent)}
+      .button{color:var(--accent-ink);box-shadow:none}.button:hover{background:var(--accent-deep)}.button.secondary{color:var(--ink)}.button.secondary:hover{background:var(--panel-strong)}.sidebar .brand-accent,.sidebar .brand-mark,.nav-item[aria-current="page"] .icon{color:#00e5cc}
       .status-badge{border-color:#185047}.panel,.metric,.growth-metric,.crm-panel{box-shadow:none}
       .field input,.crm-field input,.crm-field select,.crm-move-field select{background:var(--panel-strong);color:var(--ink);border-color:var(--line-strong)}
       .auth-story h2,.growth-hero h1,.pp-display{font-family:var(--display);font-weight:600;letter-spacing:-.025em}
@@ -141,7 +170,10 @@ export function pageHead(title: string, productProfile: PortalProductProfile = R
   const brandFonts = productProfile.id === 'property_predator_growth'
     ? '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Syne:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">'
     : '';
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="${productProfile.theme.nav}"><meta name="referrer" content="no-referrer"><title>${escapeHtml(title)}</title>${brandFonts}<style>${PORTAL_STYLE}${profileTheme(productProfile)}</style></head>`;
+  const themeBoot = productProfile.id === 'property_predator_growth'
+    ? '<script src="/portal/appearance.js"></script>'
+    : '';
+  return `<!doctype html><html lang="en"${productProfile.id === 'property_predator_growth' ? ' data-theme="light"' : ''}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="${productProfile.theme.nav}"><meta name="referrer" content="no-referrer"><title>${escapeHtml(title)}</title>${themeBoot}${brandFonts}<style>${PORTAL_STYLE}${profileTheme(productProfile)}</style></head>`;
 }
 
 export interface AppShellOptions {
@@ -183,8 +215,15 @@ export function appShell(opts: AppShellOptions): string {
   }
   if (opts.billingAvailable) capabilities.add('billing.read');
   const resolvedModules = platformModules.navigation({ capabilities });
-  const visibleIds = new Set(profile.visibleNavigation);
-  const workingModules = resolvedModules.filter((module) => visibleIds.has(module.id) && module.state !== 'planned' && module.route);
+  const workingModules = profile.visibleNavigation.flatMap((id) => {
+    const module = resolvedModules.find((candidate) => candidate.id === id);
+    return module && module.state !== 'planned' && module.route ? [module] : [];
+  });
+  // Keep specialist routes discoverable after simplifying the primary menu.
+  const quickModules = profile.id === 'property_predator_growth'
+    ? [...workingModules, ...resolvedModules.filter((module) =>
+      !profile.visibleNavigation.includes(module.id) && module.state !== 'planned' && module.route)]
+    : workingModules;
   const moduleLabel = (module: PlatformModuleManifest): string => profile.moduleLabels[module.id] ?? module.shortLabel;
   const isCurrent = (id: PlatformModuleId): boolean =>
     (opts.active === 'overview' && id === 'overview')
@@ -204,9 +243,9 @@ export function appShell(opts: AppShellOptions): string {
     }
     return `<a class="nav-item" href="${escapeHtml(module.route!)}"${current ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}<span>${escapeHtml(moduleLabel(module))}</span>${state}</a>`;
   }).join('');
-  const quickWorking = workingModules.map((module) => module.state === 'setup_required' || module.state === 'unavailable'
+  const quickWorking = quickModules.map((module) => module.state === 'setup_required' || module.state === 'unavailable'
     ? `<span class="command-link locked" role="link" aria-disabled="true">${portalModuleIcon(module.id)}${escapeHtml(module.label)}<small>${icon('lock')}Setup</small></span>`
-    : `<a class="command-link" href="${escapeHtml(module.route!)}">${portalModuleIcon(module.id)}${escapeHtml(module.label)}<small>${module.state === 'preview' ? 'Preview' : module.group}</small></a>`).join('');
+    : `<a class="command-link" href="${escapeHtml(module.route!)}"${isCurrent(module.id) ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}${escapeHtml(module.label)}<small>${module.state === 'preview' ? 'Preview' : module.group}</small></a>`).join('');
   const mobileModules = workingModules.filter((module) => module.state === 'ready' || module.state === 'preview');
   const mobileNav = mobileModules.map((module) => `<a href="${escapeHtml(module.route!)}"${isCurrent(module.id) ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}${escapeHtml(moduleLabel(module))}</a>`).join('');
   const csrfField = opts.csrfToken
@@ -228,7 +267,7 @@ export function appShell(opts: AppShellOptions): string {
         <div class="nav-label">Workspace</div>
         ${workingNav}
       </nav>
-      <div class="sidebar-foot"><div class="sandbox-note"><span class="sandbox-dot"></span><span><strong>${crmMode ? 'Private workspace' : 'Private sandbox'}</strong>${crmMode ? (capabilities.has('conversations.read') ? 'Saved CRM records · TEST channel rails only' : 'Saved CRM records · live channel rails locked') : 'Mock generation only · no publishing'}</span></div></div>
+      <div class="sidebar-foot"><div class="sandbox-note"><span class="sandbox-dot"></span><span><strong>${crmMode ? 'Private workspace' : 'Private preview'}</strong>${crmMode ? 'Connection, permission and confirmed outcomes are shown separately' : 'Preview records · no publishing'}</span></div></div>
     </aside>
     <div class="workspace">
       <header class="topbar">
@@ -240,7 +279,7 @@ export function appShell(opts: AppShellOptions): string {
             ${quickWorking}
           </nav>
         </details>
-        <div class="top-actions"><span class="status-badge"><span class="dot"></span>${crmMode ? (capabilities.has('conversations.read') ? 'CRM + TEST rails' : 'CRM records') : 'Mock workspace'}</span><form method="post" action="/portal/logout">${csrfField}<button class="top-icon-button" type="submit" aria-label="Sign out" title="Sign out">${icon('logout')}</button></form></div>
+        <div class="top-actions">${profile.id === 'property_predator_growth' ? '<div class="theme-picker"><label for="portal-theme">Appearance</label><select id="portal-theme" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>' : ''}<span class="status-badge"><span class="dot"></span>${crmMode ? 'Private workspace' : 'Preview workspace'}</span><form method="post" action="/portal/logout">${csrfField}<button class="top-icon-button" type="submit" aria-label="Sign out" title="Sign out">${icon('logout')}</button></form></div>
       </header>
       <main class="main" id="main-content" tabindex="-1">${opts.body}</main>
     </div>

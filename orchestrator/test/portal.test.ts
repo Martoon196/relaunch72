@@ -295,6 +295,15 @@ function setupPost(flow: { cookie: string; csrf: string }, values: Record<string
   };
 }
 
+test('appearance client is available before authentication with a locked-down script response', async () => {
+  const response = await call('GET', '/portal/appearance.js', deps());
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.headers['content-type'], 'text/javascript; charset=utf-8');
+  assert.match(response.headers['content-security-policy'] ?? '', /default-src 'none'/);
+  assert.match(response.body, /property-predator-appearance/);
+  assert.match(response.body, /private storage may be unavailable/);
+});
+
 test('GET /portal without a session redirects to login', async () => {
   const res = await call('GET', '/portal', deps());
   assert.equal(res.statusCode, 302);

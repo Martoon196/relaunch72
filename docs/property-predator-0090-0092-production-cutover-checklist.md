@@ -4,6 +4,13 @@
 **Prepared:** 2 September 2026
 **Status:** **BLOCKED - do not begin.**
 
+> **Historical status amendment — 7 September 2026:** this checklist records the
+> 2 September incident and is not the current migration runbook. The verified
+> Neon ledger is now contiguous at **97/97 with matching checksums**. The original
+> `0090` blocker was resolved in later work. Preserve the analysis below for its
+> security lessons; do not repeat its reset/apply steps against the current
+> database or infer present deployment state from this older candidate.
+
 > ## Blocking precondition
 >
 > Migration `0090` currently **cannot apply to a Neon database**. Its own guard
