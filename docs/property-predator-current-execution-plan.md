@@ -16,6 +16,32 @@ One system should take an attributable lead from first signal to sale and onboar
 
 Growth HQ owns the people, attribution, consent, content, approvals, conversations, journeys, evidence and reporting. External services are replaceable transport rails.
 
+## Product decision — one source, tenant-trained channel packs
+
+**Decision recorded 4 September 2026.** Property Predator is the first operating tenant. A founder may supply one source asset — a LinkedIn post, article, blog, transcript, campaign brief or approved company-content version — and ask Growth HQ to create a coordinated channel pack. The active Property Predator Brand Brain, approved facts and owned specialists adapt that source for LinkedIn, Facebook, Instagram, X and other connected rails. This is not blind copy-and-paste: each channel version keeps the same core claim and CTA while changing only the structure, length, hook and interaction style that genuinely need to differ.
+
+Every generated channel version remains a separate immutable draft with its own platform, source identity, Brand Brain release, evidence digest, usage receipt and approval state. Generation does not imply approval; approval does not imply scheduling; scheduling remains an explicit operator action against an exact connected account. Partial generation or publication failures must remain visible per channel and must never cause successful channels to be repeated automatically.
+
+For Property Predator now:
+
+- reuse the already-activated Property Predator Brand Brain, marketing pack, approved company-content catalogue and generation bridge;
+- accept one bounded source body or exact approved source version;
+- offer a sensible default platform pack, with the operator free to remove channels before generation;
+- create reviewable platform variants together, retain the original source unchanged and show the differences clearly;
+- allow approved variants to flow into the same company-content review and calendar surfaces; and
+- meter real model usage in the existing immutable generation evidence without waiting for Relaunch72 billing work.
+
+For Relaunch72 commercial tenants later:
+
+- onboarding must build a workspace-isolated, versioned tenant Brand Brain from the tenant's own documents, URLs, questionnaires, examples, approved claims, offers and channel rules;
+- activation requires an explicit tenant review of the training inventory and generated evaluation samples; one tenant can never inherit Property Predator or another tenant's private training;
+- each paid tier includes a stated monthly allowance of AI usage credits, with a small trial allowance where commercially approved;
+- every generation atomically reserves credits before the model call, records actual provider usage where available, settles or releases the reservation, and prevents replay from charging twice;
+- the product must show included, used, reserved and remaining credits in plain language, with top-ups or metered overage available only under an explicit commercial configuration; and
+- tenant credit pricing, expiry, refunds, overage and hard-spend rules require an approved commercial version before sale. Raw provider token prices are cost evidence, not the customer-facing product definition.
+
+The tenant-training and billing control plane is deliberately sequenced after the Property Predator repurposing proof. It must not delay the founder using the same workflow now.
+
 ## Foundation already completed
 
 - The production Blueprint composes Growth HQ plus isolated email, owned-social, WhatsApp and Twilio SMS workers/webhooks. The last verified production release remains live; the reviewed `0080`–`0089` suffix is the current forward-only candidate and customer communication effects remain separately permission-bound.
