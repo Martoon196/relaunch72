@@ -54,8 +54,8 @@ test('renders a dense Predator-branded omnichannel conversion workspace', () => 
   const html = render();
   assert.match(html, /data-property-predator-conversion-inbox/);
   assert.match(html, /data-environment="test"/);
-  assert.match(html, /Growth HQ · Conversion Inbox/);
-  assert.match(html, /Every channel\. <em>One human queue\.<\/em>/);
+  assert.match(html, /Growth HQ · Inbox/);
+  assert.match(html, /Conversations that <em>need you\.<\/em>/);
   assert.match(html, /--ci-teal:#00e5cc/);
   assert.match(html, /grid-template-columns:76px minmax\(280px,350px\) minmax\(420px,1fr\) minmax\(270px,315px\)/);
   assert.match(html, /Rahman Property Partners/);

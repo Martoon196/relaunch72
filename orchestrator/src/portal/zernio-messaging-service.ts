@@ -24,7 +24,7 @@ export const ZERNIO_MESSAGING_APPROVAL_DECISION_ROUTE = '/portal/inbox/social/re
 export const ZERNIO_MESSAGING_SEND_ROUTE = '/portal/inbox/social/replies/send' as const;
 
 export type PortalZernioMessagingFailureKind =
-  | 'unauthenticated' | 'forbidden' | 'provider_unavailable' | 'unavailable';
+  | 'unauthenticated' | 'forbidden' | 'not_connected' | 'provider_unavailable' | 'unavailable';
 
 export type PortalZernioMessagingReplyTarget = Readonly<{
   kind: 'dm';
@@ -178,24 +178,29 @@ export class LivePortalZernioMessagingService implements PortalZernioMessagingSe
   ): Promise<PortalZernioMessagingReplyTarget | null> {
     const accountTruth = await this.dependencies.accounts.snapshot(identity);
     if (!accountTruth.ok) return null;
+    const activeAccountIds = new Set(accountTruth.accounts
+      .filter((account) => account.status === 'active').map((account) => account.accountId));
+    if (!activeAccountIds.has(target.accountId)) return null;
     if (target.kind === 'dm') {
-      if (!accountTruth.accounts.some((account) => account.network === target.platform
-          && account.status === 'active')) return null;
+      if (!this.dependencies.allowedAccountIds.includes(target.accountId)
+          || !accountTruth.accounts.some((account) => account.accountId === target.accountId
+          && account.network === target.platform && account.status === 'active')) return null;
       const queue = await this.dependencies.client.listConversations({
-        accountIds: this.dependencies.allowedAccountIds,
+        accountIds: this.dependencies.allowedAccountIds.filter((id) => activeAccountIds.has(id)),
       });
       return queue.conversations.some((item) => item.accountId === target.accountId
         && item.providerConversationId === target.providerConversationId
         && item.platform === target.platform) ? target : null;
     }
-    if (!accountTruth.accounts.some((account) => account.network === target.platform
-          && account.status === 'active')
+    if (!accountTruth.accounts.some((account) => account.accountId === target.accountId
+          && account.network === target.platform && account.status === 'active')
         || !this.dependencies.commentAccountBindings.some((binding) =>
           binding.accountId === target.accountId && binding.platform === target.platform)) return null;
     const feed = await this.dependencies.client.listCommentedPosts({
       accountId: target.accountId, platform: target.platform,
     });
-    if (!feed.posts.some((post) => post.providerPostId === target.providerPostId)) return null;
+    if (!feed.posts.some((post) => post.providerPostId === target.providerPostId
+      && post.accountId === target.accountId && post.platform === target.platform)) return null;
     const thread = await this.dependencies.client.listPostComments({
       accountId: target.accountId, platform: target.platform,
       providerPostId: target.providerPostId,
@@ -217,14 +222,19 @@ export class LivePortalZernioMessagingService implements PortalZernioMessagingSe
         providerEffects: false as const,
       });
     }
-    const activeNetworks = new Set(accountTruth.accounts
-      .filter((account) => account.status === 'active').map((account) => account.network));
+    const activeAccounts = accountTruth.accounts.filter((account) => account.status === 'active');
+    const activeAccountIds = new Set(activeAccounts.map((account) => account.accountId));
+    const activeNetworks = new Set(activeAccounts.map((account) => account.network));
+    const activeDmAccountIds = this.dependencies.allowedAccountIds
+      .filter((accountId) => activeAccountIds.has(accountId));
     const activeCommentBindings = this.dependencies.commentAccountBindings.filter((binding) =>
-      activeNetworks.has(binding.platform));
+      activeAccountIds.has(binding.accountId)
+      && activeAccounts.some((account) => account.accountId === binding.accountId
+        && account.network === binding.platform));
     const canReadDms = (activeNetworks.has('instagram') || activeNetworks.has('facebook'))
-      && this.dependencies.allowedAccountIds.length > 0;
+      && activeDmAccountIds.length > 0;
     if (!canReadDms && activeCommentBindings.length === 0) {
-      return Object.freeze({ ok: false as const, kind: 'unavailable' as const, providerEffects: false as const });
+      return Object.freeze({ ok: false as const, kind: 'not_connected' as const, providerEffects: false as const });
     }
     try {
       if ((input.providerConversationId && input.comment)
@@ -234,7 +244,7 @@ export class LivePortalZernioMessagingService implements PortalZernioMessagingSe
       const [queue, ...commentFeeds] = await Promise.all([
         canReadDms
           ? this.dependencies.client.listConversations({
-            accountIds: this.dependencies.allowedAccountIds,
+            accountIds: activeDmAccountIds,
           })
           : Promise.resolve(Object.freeze({
             conversations: Object.freeze([]) as readonly ZernioConversationSnapshot[],
@@ -243,11 +253,17 @@ export class LivePortalZernioMessagingService implements PortalZernioMessagingSe
         ...activeCommentBindings.map((binding) =>
           this.dependencies.client.listCommentedPosts(binding)),
       ]);
-      const dmConversations = queue.conversations.filter((item) => activeNetworks.has(item.platform));
+      const dmConversations = queue.conversations.filter((item) => activeAccountIds.has(item.accountId)
+        && activeDmAccountIds.includes(item.accountId)
+        && activeAccounts.some((account) => account.accountId === item.accountId
+          && account.network === item.platform));
       const seenPosts = new Set<string>();
       const commentPosts: ZernioCommentedPostSnapshot[] = [];
       for (const feed of commentFeeds) {
         for (const post of feed.posts) {
+          if (!activeAccountIds.has(post.accountId)
+              || !activeCommentBindings.some((binding) => binding.accountId === post.accountId
+                && binding.platform === post.platform)) continue;
           const key = `${post.platform}\0${post.accountId}\0${post.providerPostId}`;
           if (seenPosts.has(key)) continue;
           seenPosts.add(key);

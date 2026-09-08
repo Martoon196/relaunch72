@@ -335,6 +335,11 @@ import {
 } from './zernio-messaging-service.js';
 import { renderZernioMessagingBody } from './zernio-messaging-view.js';
 import {
+  conversionInboxStatus,
+  socialMessagingStatus,
+  socialUncheckedStatus,
+} from './inbox-source-status.js';
+import {
   zernioMessagingNoticeFromQuery,
   zernioMessagingNoticeToken,
   type ZernioMessagingNoticeCode,
@@ -5487,6 +5492,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
             csrfToken, draftId: randomUUID(), approvalRequestId: randomUUID(),
             decisionId: randomUUID(), deliveryId: randomUUID(), leaseToken: randomUUID(),
           },
+          sourceStatuses: [conversionInboxStatus(Boolean(deps.inbox)), socialMessagingStatus(snapshot)],
         }),
         deps,
         'inbox',
@@ -5603,7 +5609,13 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       } : undefined;
       return sendHtml(res, 200, operationalPage(
         shell.workspace.name,
-        renderConversionInboxBody(view, { security: actionSecurity }),
+        renderConversionInboxBody(view, {
+          security: actionSecurity,
+          sourceStatuses: [
+            conversionInboxStatus(true),
+            socialUncheckedStatus(Boolean(deps.zernioMessaging)),
+          ],
+        }),
         deps,
         'inbox',
         csrfToken,

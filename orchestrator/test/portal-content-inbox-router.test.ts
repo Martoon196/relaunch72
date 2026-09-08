@@ -367,7 +367,7 @@ test('Conversion Inbox passes bounded filters, loads only the selected visible t
   );
 
   assert.equal(result.statusCode, 200);
-  assert.match(result.body, /Growth HQ · Conversion Inbox/);
+  assert.match(result.body, /Growth HQ · Inbox/);
   assert.match(result.body, /Priya Nair/);
   assert.doesNotMatch(result.body, /Aisha Rahman/);
   assert.match(result.body, /TEST \/ SIMULATED/);
@@ -716,4 +716,30 @@ test('Conversion Inbox rejects cross-workspace pages before rendering any conver
   assert.equal(result.statusCode, 403);
   assert.match(result.body, /cannot read a matching workspace-scoped TEST conversation queue/);
   assert.doesNotMatch(result.body, /Aisha Rahman|Priya Nair|Reply draft/);
+});
+
+test('Conversion Inbox shows social check-on-open without reading social status', async () => {
+  const inbox: PortalInboxReadBoundary = {
+    listConversations: async () => fixture.page,
+    thread: async () => null,
+  };
+  let socialReads = 0;
+  const result = await call('/portal/inbox', postgres({
+    inbox,
+    zernioMessaging: {} as never,
+    zernioSocial: {
+      providerConnectionId: '72000000-0000-4000-8000-000000000001',
+      providerProfileId: 'preview-profile',
+      snapshot: async () => { socialReads += 1; throw new Error('status store offline'); },
+      begin: async () => ({ ok: false, kind: 'unavailable' }),
+      callback: async () => ({ ok: false, kind: 'unavailable' }),
+      recordWebhook: async () => ({ ok: false, kind: 'unavailable' }),
+    },
+  }), COOKIE);
+  assert.equal(result.statusCode, 200);
+  assert.equal(socialReads, 0);
+  assert.match(result.body, /Check on open/);
+  assert.match(result.body, /Open Live social to check/);
+  assert.match(result.body, /Conversation queue/);
+  assert.doesNotMatch(result.body, /No social conversations or commented posts are available yet/);
 });
