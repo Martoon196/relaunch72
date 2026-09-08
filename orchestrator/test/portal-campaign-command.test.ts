@@ -142,7 +142,7 @@ test('Campaign Command bounds oversized inputs and fails closed despite visible 
 test('Campaign Command renders premium responsive command UX with disabled TEST controls only', () => {
   const html = renderCampaignCommandBody(present());
   assert.match(html, /<nav class="pp-content-nav" aria-label="Content workspace">/);
-  assert.match(html, /href="\/portal\/campaigns" aria-current="page">Campaigns/);
+  assert.match(html, /aria-label="Content tools"[\s\S]*href="\/portal\/campaigns" aria-current="page">TEST campaign evidence/);
   assert.match(html, /data-property-predator-campaign-command/);
   assert.match(html, /<article class="ccm" aria-labelledby="ccm-title" data-environment="test" data-provider-effects="none" data-command-boundary="absent">/);
   assert.match(html, /A campaign is a system\. <em>Command it\.<\/em>/);

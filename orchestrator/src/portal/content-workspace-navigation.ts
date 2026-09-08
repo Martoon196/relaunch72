@@ -43,11 +43,9 @@ const CONTENT_WORKSPACE_LINKS: readonly Readonly<{
   href: string;
   label: string;
 }>[] = Object.freeze([
-  { target: 'create', href: CAMPAIGN_WIZARD_ROUTE, label: '+ New campaign' },
-  { target: 'campaigns', href: CAMPAIGN_COMMAND_ROUTE, label: 'Campaigns' },
-  { target: 'calendar', href: CONTENT_CALENDAR_ROUTE, label: 'Calendar' },
-  { target: 'composer', href: SOCIAL_COMPOSER_ROUTE, label: 'Drafts' },
-  { target: 'library', href: CONTENT_CONTROL_ROOM_ROUTE, label: 'Library' },
+  { target: 'create', href: CAMPAIGN_WIZARD_ROUTE, label: 'Create drafts' },
+  { target: 'calendar', href: CONTENT_CALENDAR_ROUTE, label: 'Plan &amp; schedule' },
+  { target: 'library', href: CONTENT_CONTROL_ROOM_ROUTE, label: 'Your library' },
 ]);
 
 export function renderContentWorkspaceNavigation(
@@ -86,7 +84,9 @@ export function renderContentWorkspaceNavigation(
   )).map((link) => (
     `<a href="${link.href}"${link.target === 'create' ? ' data-content-action="create"' : ''}${active === link.target ? ' aria-current="page"' : ''}>${link.label}</a>`
   )).join('');
-  const composer = '';
+  const campaigns = `<a href="${CAMPAIGN_COMMAND_ROUTE}"${active === 'campaigns' ? ' aria-current="page"' : ''}>TEST campaign evidence</a>`;
+  const composer = options.composerAvailable || active === 'composer'
+    ? `<a href="${SOCIAL_COMPOSER_ROUTE}"${active === 'composer' ? ' aria-current="page"' : ''}>Advanced draft composer</a>` : '';
   const images = (options.imageStudioAvailable
       ?? (options.companyAssetsAvailable && options.brandBrainAvailable)) || active === 'images'
     ? `<a href="${IMAGE_STUDIO_ROUTE}"${active === 'images' ? ' aria-current="page"' : ''}>Image Studio</a>`
@@ -110,6 +110,6 @@ export function renderContentWorkspaceNavigation(
   const live = options.liveChannelsAvailable || active === 'live'
     ? `<a href="${LIVE_CHANNELS_ROUTE}"${active === 'live' ? ' aria-current="page"' : ''}>Delivery details</a>`
     : '';
-  const tools = sequences + connections + readiness + live + images + assets + brain + sync;
+  const tools = campaigns + composer + sequences + connections + readiness + live + images + assets + brain + sync;
   return `<style data-property-predator-content-workspace-navigation>${CONTENT_WORKSPACE_NAVIGATION_STYLE}</style><nav class="pp-content-nav" aria-label="Content workspace">${links}</nav>${tools ? `<details class="pp-content-tools"><summary>Content tools and settings</summary><nav class="pp-content-nav" aria-label="Content tools">${tools}</nav></details>` : ''}`;
 }

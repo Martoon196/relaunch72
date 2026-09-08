@@ -702,6 +702,7 @@ test('one source creates a native five-channel pack without any outbound effect'
   assert.equal(new Set(generationCalls.map((call) => call.idempotencyKey)).size, 5);
   assert.ok(generationCalls.every((call) => call.brief.topic === form.get('topic')));
   assert.match(result.body, /One source\. <em>5 native drafts\.<\/em>/);
+  assert.match(result.body, /html\[data-theme="light"\] \.cdr/);
   assert.match(result.body, /data-channel-pack/);
   assert.match(result.body, /Nothing published/);
   assert.match(result.body, /LinkedIn/i);

@@ -115,7 +115,7 @@ test('Social Composer fails one variant closed when its immutable version lineag
 test('Social Composer renders premium touch-responsive editing and preview without an outbound boundary', () => {
   const html = renderSocialComposerBody(present());
   assert.match(html, /<nav class="pp-content-nav" aria-label="Content workspace">/);
-  assert.match(html, /href="\/portal\/content\/compose" aria-current="page">Drafts/);
+  assert.match(html, /href="\/portal\/content\/compose" aria-current="page">Advanced draft composer/);
   assert.match(html, /href="\/portal\/content\/images">Image Studio/);
   assert.match(html, /<article class="scomp" aria-labelledby="scomp-title" data-provider-effects="none" data-command-boundary="absent" data-social-composer data-local-dirty="false">/);
   assert.match(html, /One truth\. <em>Five perfect cuts\.<\/em>/);

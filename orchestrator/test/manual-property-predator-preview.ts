@@ -7,7 +7,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { appShell } from '../src/portal/ui.js';
+import { appShell, PORTAL_APPEARANCE_CLIENT_SOURCE } from '../src/portal/ui.js';
 import { createPropertyPredatorContentCatalogFixture } from '../src/portal/content-control-room-fixtures.js';
 import {
   canonicalCompanyContentEmailDraft,
@@ -108,6 +108,11 @@ import {
   type CampaignWizardTargetSnapshot,
 } from '../src/portal/campaign-wizard-presenter.js';
 import { renderCampaignWizardBody } from '../src/portal/campaign-wizard-view.js';
+import type { PropertyPredatorReviewCampaignDraft } from '../src/company-content-adapter/property-predator-campaign-draft-runtime.js';
+import {
+  renderCampaignDraftPackReviewBody,
+  renderCampaignDraftReviewBody,
+} from '../src/portal/campaign-draft-review-view.js';
 import {
   CAMPAIGN_MACHINE_ROUTE,
   presentCampaignMachine,
@@ -1688,6 +1693,51 @@ function previewContentControl(url: URL): string {
   });
 }
 
+function previewCampaignReview(platform: 'linkedin' | 'instagram'): PropertyPredatorReviewCampaignDraft {
+  const digit = platform === 'linkedin' ? '1' : '2';
+  const sha = digit.repeat(64);
+  return {
+    schema: 'propertypredator.review-campaign-draft/v1',
+    status: 'source_review_required', approvalStatus: 'unrequested', reviewRequired: true,
+    publishable: false, sendable: false, schedulable: false,
+    providerEffects: 'generation_only', outboundEffects: false,
+    planSha256: 'a'.repeat(64), evidenceSha256: 'b'.repeat(64),
+    contextSha256: 'c'.repeat(64), idempotencyKeySha256: 'd'.repeat(64),
+    maximumCostMinor: 25, spendAccounting: 'maximum_reserved_provider_tokens_unpriced',
+    evidence: {
+      schema: 'propertypredator.campaign-draft-context/v1',
+      plan: {
+        selectionKey: 'lead-capture', planSha256: 'a'.repeat(64),
+        packSha256: '7'.repeat(64), journeyDefinitionSha256: '6'.repeat(64),
+        targetMilestoneKey: 'briefing_requested',
+      },
+      brandBrain: {
+        sourceSystem: 'property-predator', sourceReleaseId: 'preview-release',
+        manifestSha256: 'e'.repeat(64), runtimeBrandSha256: 'f'.repeat(64),
+        specialistProfileId: 'propertypredator.owned.social/v1',
+      },
+      approvedFacts: [], approvedAssets: [],
+      generationLimit: { requestCount: 1, maximumCostMinor: 25, quotaAuthority: 'generation_bridge_atomic_policy' },
+    } as PropertyPredatorReviewCampaignDraft['evidence'],
+    immutableSource: {
+      draftId: `d1000000-0000-4000-8000-00000000000${digit}`,
+      versionId: `d2000000-0000-4000-8000-00000000000${digit}`,
+      itemVersion: 1, contentSha256: sha, brandSha256: 'f'.repeat(64), usageSha256: '9'.repeat(64),
+    },
+    draft: {
+      payload: {
+        platform,
+        title: platform === 'linkedin' ? 'A faster first pass on a property lead' : 'Check the evidence before the viewing',
+        body: platform === 'linkedin'
+          ? 'Start with the address, numbers and checks that change the decision. Save the result, then return to the exact scenario when the facts change.'
+          : 'One address. Clear assumptions. The checks that deserve your attention before you commit.',
+        cta_url: 'https://propertypredator.com/',
+      },
+    } as PropertyPredatorReviewCampaignDraft['draft'],
+    resultSha256: '8'.repeat(64),
+  };
+}
+
 export function previewExactCompanyContentReview(
   contentItemId: string,
   contentVersionId: string,
@@ -1942,7 +1992,37 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
   if (path === CONTENT_CONTROL_ROOM_ROUTE) return {
     status: 200,
     html: shell(`${previewOperationsNav('content')}${previewContentControl(url)}`, 'content', 'Property Predator — Content Control'),
+    scripted: true,
   };
+  if (path === '/preview/content-empty') {
+    const source = createPropertyPredatorContentCatalogFixture();
+    const view = presentContentControlRoom({ ...source, items: [] }, {
+      workspaceName: snapshot.workspace.name,
+      asOf: '2026-08-26T08:42:00.000Z',
+      canWrite: true,
+      canManage: true,
+      filters: {},
+    });
+    return {
+      status: 200,
+      html: shell(`${previewOperationsNav('content')}${renderContentControlRoomBody(view, {
+        companyAssetsAvailable: true,
+        companyAssetsLabel: PROPERTY_PREDATOR_GROWTH_PROFILE.contentWorkspace?.assetsLabel,
+      })}`, 'content', 'Property Predator — Empty Content Library'),
+      scripted: true,
+    };
+  }
+  if (path === '/preview/campaign-review') {
+    const linkedin = previewCampaignReview('linkedin');
+    const body = url.searchParams.get('mode') === 'single'
+      ? renderCampaignDraftReviewBody(linkedin)
+      : renderCampaignDraftPackReviewBody([linkedin, previewCampaignReview('instagram')]);
+    return {
+      status: 200,
+      html: shell(`${previewOperationsNav('content')}${body}`, 'content', 'Property Predator — Campaign Review'),
+      scripted: true,
+    };
+  }
   if (path === BRAND_BRAIN_ROUTE) return {
     status: 200,
     html: shell(
@@ -2331,6 +2411,16 @@ function previewCampaignResponse(
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? '/portal', 'http://127.0.0.1');
   const path = url.pathname.replace(/\/+$/, '') || '/portal';
+  if (request.method === 'GET' && path === '/portal/appearance.js') {
+    response.writeHead(200, {
+      'content-type': 'text/javascript; charset=utf-8',
+      'content-length': String(Buffer.byteLength(PORTAL_APPEARANCE_CLIENT_SOURCE)),
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    });
+    response.end(PORTAL_APPEARANCE_CLIENT_SOURCE);
+    return;
+  }
   if (request.method === 'GET' && path === JOURNEY_BOARD_CLIENT_ROUTE) {
     response.writeHead(200, {
       'content-type': 'text/javascript; charset=utf-8',

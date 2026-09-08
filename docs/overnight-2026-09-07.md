@@ -1,6 +1,12 @@
 # Property Predator Growth HQ — overnight release handover
 
-## Authority and current baseline
+## Content flow follow-up — 8 September 2026
+
+The first interface release `a1bee92792edea528379e159ce8bc6855b8cef6b` is verified live. This follow-up makes Content start with Create drafts, Plan & schedule, and Your library. The empty library leaves useful next steps visible and keeps technical details collapsed. Specialist controls stay available under Content tools and settings with their existing permissions. Campaign creation and draft review support Light, Dark and System appearance. The mobile header fits narrow phones and keeps its icon link labelled.
+
+Full regression: **2,951 passed, 0 failed, 38 database cases skipped**. Final focused content, portal and fixture checks: **81 passed**; typecheck and supply-chain checks passed. Independent browser review inspected the populated and empty library, real single/channel-pack draft renderers, persisted Dark selection across routes, light contrast and the 360px layout. Preview routes use fictional records and cause no generation or outbound action. Production deployment remains a separate exact-revision check. No schema, publishing permission or provider command changed.
+
+## Original interface release baseline (historical)
 
 On 7 September 2026 the founder authorised implementation, testing, documentation and verified GitHub, Render, Neon and Zernio release work. Existing tenant isolation, exact-account binding, version-specific approval, consent, suppression, idempotency and unknown-outcome protections remain mandatory.
 

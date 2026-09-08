@@ -159,8 +159,8 @@ test('Content Control Room truth labels keep stale approval and expired source p
   assert.match(html, /exact hash-bound review representation is available/i);
   assert.equal((html.match(/Publishable gate<\/span><strong>Eligible/g) ?? []).length, 1);
   assert.equal((html.match(/Publishable gate<\/span><strong>Locked/g) ?? []).length, 3);
-  assert.match(html, /Exact review is available; outbound remains separate/);
-  assert.match(html, /No post, message, schedule or provider call happens from this catalogue/);
+  assert.match(html, /Approval and delivery stay separate/);
+  assert.match(html, /approvals change review state only; no scheduling, sending or publishing happens here/);
 });
 
 test('Content Control Room fails a contradictory stored publishable claim closed', () => {
@@ -355,4 +355,20 @@ test('Content Control Room distinguishes an empty source catalogue from empty fi
   assert.match(noMatches, /The loaded catalogue is intact/);
   assert.match(noMatches, /href="\/portal\/content">Clear all filters/);
   assert.doesNotMatch(noMatches, /No company content has landed yet/);
+});
+
+test('Content library starts with real creation, calendar and review jobs while technical evidence is secondary', () => {
+  const html = renderContentControlRoomBody(present([item()]), { brandBrainAvailable: true });
+  assert.match(html, /aria-label="Content jobs"/);
+  assert.match(html, /href="\/portal\/campaigns\/new"[\s\S]*Create channel drafts/);
+  assert.match(html, /href="\/portal\/content\/calendar"[\s\S]*Plan and schedule/);
+  assert.match(html, /<details class="ccr-library-details" id="content-library" open>/);
+  assert.match(html, /Content tools and settings[\s\S]*TEST campaign evidence/);
+});
+
+test('an empty library keeps useful jobs visible and technical details collapsed', () => {
+  const html = renderContentControlRoomBody(present([]));
+  assert.match(html, /Create channel drafts/);
+  assert.match(html, /<details class="ccr-library-details" id="content-library">/);
+  assert.doesNotMatch(html, /id="content-library" open/);
 });

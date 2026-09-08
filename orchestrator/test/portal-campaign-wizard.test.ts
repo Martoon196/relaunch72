@@ -81,6 +81,8 @@ test('Campaign Wizard presents only exact eligible copy, media and owned TEST ta
 test('Campaign Wizard renders a native protected POST with separate copy and approved media selections', () => {
   const html = renderCampaignWizardBody(view(), { action: ACTION });
   assert.match(html, /One idea\. <em>Every channel\.<\/em>/);
+  assert.match(html, /html\[data-theme="light"\] \.cwiz/);
+  assert.match(html, /prefers-color-scheme:light/);
   assert.match(html, /<form class="cwiz-form" method="post" action="\/portal\/campaigns\/test-planning-intents" data-campaign-wizard-form>/);
   assert.match(html, /name="_csrf" value="csrf-campaign-wizard-token-1234"/);
   assert.match(html, /name="command_key" value="campaign:wizard:create:001"/);

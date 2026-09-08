@@ -197,7 +197,7 @@ test('Content Calendar renders a premium accessible planner and fails closed wit
   const html = renderContentCalendarBody(present());
   assert.match(html, /<nav class="pp-content-nav" aria-label="Content workspace">/);
   assert.doesNotMatch(html, /href="\/portal\/content\/compose"/);
-  assert.match(html, /href="\/portal\/content\/calendar" aria-current="page">Calendar/);
+  assert.match(html, /href="\/portal\/content\/calendar" aria-current="page">Plan &amp; schedule/);
   assert.match(html, /<article class="ccal" aria-labelledby="ccal-title" data-provider-effects="none" data-content-calendar data-calendar-mode="week" data-calendar-timezone="Europe\/London" data-source-truncated="false" data-preview-dirty="false">/);
   assert.match(html, /Own the week\. <em>Control the signal\.<\/em>/);
   assert.match(html, /Planning workspace/);

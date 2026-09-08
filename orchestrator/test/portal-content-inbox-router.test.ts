@@ -194,11 +194,11 @@ test('Content Control renders the immutable catalogue with bounded filters and p
   );
 
   assert.equal(result.statusCode, 200);
-  assert.match(result.body, /Growth HQ · Content control/);
+  assert.match(result.body, /Growth HQ · Content/);
   assert.match(result.body, /Predator Briefing: mixed-use intelligence follow-up/);
   assert.doesNotMatch(result.body, /The postcode is not the opportunity/);
   assert.match(result.body, /href="\/portal\/content" aria-current="page"/);
-  assert.match(result.body, /Exact review is available; outbound remains separate/);
+  assert.match(result.body, /Approval and delivery stay separate/);
   assert.match(result.body, /action="\/portal\/content\/approval-decisions"/);
   assert.match(result.body, /name="approval_request_id"/);
   assert.match(result.body, /name="_csrf"/);
