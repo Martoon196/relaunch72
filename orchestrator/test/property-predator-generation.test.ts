@@ -275,6 +275,71 @@ test('accepts only the exact structured CTA when the provider repeats it in the 
   }
 });
 
+test('accepts the production launch draft envelope returned by Property Predator', async () => {
+  const productionContextSha256 = '9b3d7736a0db39089d9cc020bcd8fe17d5e2ae1c3dcea22f5056278b9d7e70ea';
+  const productionBrandSha256 = 'd77b0306d110075571dedd716d012c8752a302eb39ea9198e71ecd43cc089abc';
+  const productionCommand = {
+    ...COMMAND,
+    contextSha256: productionContextSha256,
+    expectedBrandSha256: productionBrandSha256,
+  };
+  const acceptedPayload = generatedPayload({
+    body: `**The appraisal should work for you. Not the other way around.**
+
+We've rebuilt the PropertyPredator decision journey from the ground up.
+
+On the map, property selection stays front and centre — no clutter, no distraction, just the deal.
+
+In appraisal, the inputs that matter most appear first. Buying costs, finance and valuation assumptions are there when you need them, out of the way when you don't. Your work survives a session refresh, so an interrupted appraisal picks up where you left it.
+
+The goal hasn't changed: start with a property, keep your assumptions visible, and reach a reasoned BUY, BUY-IF or PASS — backed by evidence, not instinct.
+
+Light mode, dark mode, or system default. Your call.
+
+Run a deal and see where the number lands.
+
+👉 https://propertypredator.com
+
+---
+
+**VISUAL:** Product Proof (Archetype B) — cropped appraisal screen showing the tiered input layout, with a Predator Verdict panel visible. Mono eyebrow: \`REBUILT · JULY 2026\`. One cyan annotation marking the collapsed buying costs accordion. No personal data visible.
+
+---
+
+#UKProperty #PropertyInvestment #PropertyDevelopment #PropertySourcing #PropertyTech`,
+    cta_url: 'https://propertypredator.com',
+    contextSha256: productionContextSha256,
+    title: 'We rebuilt the PropertyPredator decision journey to make it easier to use. On the map, property sele',
+  });
+  const controls = allowedPolicy();
+  assert.equal(
+    digest(canonicalCompanyContentJson(acceptedPayload)),
+    '30f01bda6f897bd7a39889af7c77773949bcf35872425be5689b1a2e08ceb1a7',
+  );
+  const transport = createPropertyPredatorGenerationTransport(baseOptions(
+    controls.policy,
+    async () => generatedResponse(generatedFixture({
+      brandSha256: productionBrandSha256,
+      contextSha256: productionContextSha256,
+      draftId: '1c4dd2b9-4400-4c95-9bfc-edcfa1f64e7e',
+      payload: acceptedPayload,
+      contentSha256: '30f01bda6f897bd7a39889af7c77773949bcf35872425be5689b1a2e08ceb1a7',
+      usage: {
+        accountingState: 'provider_tokens_unpriced',
+        inputTokens: 9424,
+        model: 'claude-sonnet-4-6',
+        outputTokens: 301,
+        providerRequestId: 'msg_011CerfBG59meLyWmBoN6xbc',
+      },
+      usageSha256: 'd26db8c3f10d3d36296861c4cff57c25385da678bf3f16af1a77916e239e708a',
+      versionId: 'bcb5271d-08ab-43ba-8aa6-c467d47befe4',
+    })),
+  ));
+  const draft = await transport.generateDraft(productionCommand);
+  assert.equal(draft.payload.body, acceptedPayload.body);
+  assert.equal(controls.outcomes[0]?.outcome, 'accepted');
+});
+
 test('requires a distinct strong generate credential and a clean immutable origin', () => {
   const base = baseOptions(allowedPolicy().policy, async () => generatedResponse(generatedFixture()));
   const invalid: unknown[] = [

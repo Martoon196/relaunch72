@@ -45,14 +45,16 @@ function context(identity: PortalCompanyContentRequestIdentity, principal: {
 
 function safeCampaignDraftDiagnostic(error: unknown): string {
   if (!(error instanceof Error)) return 'unknown_error';
-  const candidate = error as Error & { code?: unknown };
+  const candidate = error as Error & { code?: unknown; validationStage?: unknown };
   const code = typeof candidate.code === 'string' ? ` code=${candidate.code.slice(0, 20)}` : '';
+  const validationStage = typeof candidate.validationStage === 'string'
+    ? ` validation_stage=${candidate.validationStage.slice(0, 40)}` : '';
   const message = error.message
     .replace(/(?:postgres(?:ql)?|https?):\/\/[^\s]+/giu, '[redacted-url]')
     .replace(/(?:password|token|secret|apikey|api_key)\s*[=:]\s*[^\s,;]+/giu, '$1=[redacted]')
     .replace(/[\r\n\t]+/gu, ' ')
     .slice(0, 300);
-  return `${error.name}${code}${message ? ` message=${message}` : ''}`;
+  return `${error.name}${code}${validationStage}${message ? ` message=${message}` : ''}`;
 }
 
 export class PgPortalCampaignDraftService implements PortalCampaignDraftService {

@@ -213,14 +213,20 @@ const ERROR_MESSAGES: Readonly<Record<PropertyPredatorGenerationBridgeErrorCode,
   });
 
 export class PropertyPredatorGenerationBridgeError extends Error {
-  constructor(readonly code: PropertyPredatorGenerationBridgeErrorCode) {
+  constructor(
+    readonly code: PropertyPredatorGenerationBridgeErrorCode,
+    readonly validationStage?: string,
+  ) {
     super(ERROR_MESSAGES[code]);
     this.name = 'PropertyPredatorGenerationBridgeError';
   }
 }
 
-function bridgeError(code: PropertyPredatorGenerationBridgeErrorCode): PropertyPredatorGenerationBridgeError {
-  return new PropertyPredatorGenerationBridgeError(code);
+function bridgeError(
+  code: PropertyPredatorGenerationBridgeErrorCode,
+  validationStage?: string,
+): PropertyPredatorGenerationBridgeError {
+  return new PropertyPredatorGenerationBridgeError(code, validationStage);
 }
 
 function dataRecord(
@@ -640,12 +646,17 @@ function parseGeneratedDraft(
     brief: PropertyPredatorGenerationBrief;
   }>,
 ): PropertyPredatorGeneratedDraft {
-  const value = dataRecord(input, [
-    'brandSha256', 'contentSha256', 'contextSha256', 'draftId', 'itemVersion', 'ok', 'payload',
-    'schemaVersion', 'status', 'usage', 'usageSha256', 'versionId',
-  ], 'invalid_response');
+  let value: Readonly<Record<string, unknown>>;
+  try {
+    value = dataRecord(input, [
+      'brandSha256', 'contentSha256', 'contextSha256', 'draftId', 'itemVersion', 'ok', 'payload',
+      'schemaVersion', 'status', 'usage', 'usageSha256', 'versionId',
+    ], 'invalid_response');
+  } catch {
+    throw bridgeError('invalid_response', 'envelope_shape');
+  }
   if (value.ok !== true || value.schemaVersion !== 1 || value.status !== 'source_review_required') {
-    throw bridgeError('invalid_response');
+    throw bridgeError('invalid_response', 'envelope_state');
   }
   const brandSha256 = canonicalSha(value.brandSha256, 'invalid_response');
   const contentSha256 = canonicalSha(value.contentSha256, 'invalid_response');
@@ -657,15 +668,20 @@ function parseGeneratedDraft(
       || typeof value.versionId !== 'string' || !UUID.test(value.versionId)
       || !Number.isSafeInteger(value.itemVersion)
       || value.itemVersion !== 1) {
-    throw bridgeError('invalid_response');
+    throw bridgeError('invalid_response', 'envelope_identity');
   }
-  const rawPayload = dataRecord(value.payload, [
-    'body', 'contextSha256', 'cta_url', 'kind', 'platform', 'schema', 'title', 'type',
-  ], 'invalid_response');
+  let rawPayload: Readonly<Record<string, unknown>>;
+  try {
+    rawPayload = dataRecord(value.payload, [
+      'body', 'contextSha256', 'cta_url', 'kind', 'platform', 'schema', 'title', 'type',
+    ], 'invalid_response');
+  } catch {
+    throw bridgeError('invalid_response', 'payload_shape');
+  }
   if (rawPayload.type !== 'generated' || rawPayload.schema !== GENERATION_SCHEMA
       || rawPayload.kind !== expected.brief.kind || rawPayload.platform !== expected.brief.platform
       || rawPayload.contextSha256 !== contextSha256) {
-    throw bridgeError('integrity_mismatch');
+    throw bridgeError('integrity_mismatch', 'payload_identity');
   }
   const title = responseText(rawPayload.title, 1, 300);
   const body = responseText(rawPayload.body, 1, 20_000);
@@ -673,18 +689,26 @@ function parseGeneratedDraft(
   const ctaUrl = cleanHttpsUrl(rawPayload.cta_url, expected.approvedCtaHosts);
   if (MARKUP.test(title) || MARKUP.test(body) || MARKUP.test(platform)
       || FIRST_PERSON_RESULT.test(title) || FIRST_PERSON_RESULT.test(body)) {
-    throw bridgeError('invalid_response');
+    throw bridgeError('invalid_response', 'payload_policy');
   }
   for (const text of [title, platform]) {
     try {
       assertNoPrivateOrAttributedText(text, false);
     } catch {
-      throw bridgeError('invalid_response');
+      throw bridgeError('invalid_response', 'payload_text_policy');
     }
   }
   // The model may repeat the separately verified structured CTA in its copy.
   // Every other URL, including an appended path/query or lookalike host, stays blocked.
-  assertNoUnexpectedBodyUrl(body, ctaUrl);
+  try {
+    assertNoUnexpectedBodyUrl(body, ctaUrl);
+  } catch (error) {
+    if (error instanceof PropertyPredatorGenerationBridgeError
+        && error.code === 'invalid_response') {
+      throw bridgeError('invalid_response', 'payload_body_url');
+    }
+    throw error;
+  }
   const payload = Object.freeze({
     body,
     contextSha256,
@@ -696,9 +720,18 @@ function parseGeneratedDraft(
     type: 'generated' as const,
   });
   if (sha256(canonicalCompanyContentJson(payload)) !== contentSha256) {
-    throw bridgeError('integrity_mismatch');
+    throw bridgeError('integrity_mismatch', 'payload_hash');
   }
-  const accounting = parseUsage(value.usage, value.usageSha256);
+  let accounting: ReturnType<typeof parseUsage>;
+  try {
+    accounting = parseUsage(value.usage, value.usageSha256);
+  } catch (error) {
+    if (error instanceof PropertyPredatorGenerationBridgeError
+        && error.code === 'invalid_response') {
+      throw bridgeError('invalid_response', 'usage');
+    }
+    throw error;
+  }
   return Object.freeze({
     ok: true,
     schemaVersion: 1,
