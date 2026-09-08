@@ -119,6 +119,7 @@ import type { PropertyPredatorReviewCampaignDraft } from '../src/company-content
 import {
   renderCampaignDraftPackReviewBody,
   renderCampaignDraftReviewBody,
+  renderStagedCampaignDraftPackReviewBody,
 } from '../src/portal/campaign-draft-review-view.js';
 import {
   CAMPAIGN_MACHINE_ROUTE,
@@ -2047,12 +2048,31 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
   }
   if (path === '/preview/campaign-review') {
     const linkedin = previewCampaignReview('linkedin');
-    const body = url.searchParams.get('mode') === 'single'
+    const mode = url.searchParams.get('mode');
+    const staged = (platform: 'linkedin' | 'instagram', ordinal: number): any => ({
+      status: 'draft', approvalStatus: 'unrequested', reviewRequired: true,
+      publishable: false, providerEffects: false, disposition: 'applied',
+      sourceItemId: `d1000000-0000-4000-8000-${String(ordinal).padStart(12, '0')}`,
+      sourceDraftId: `d1000000-0000-4000-8000-${String(ordinal).padStart(12, '0')}`,
+      sourceVersionId: `d2000000-0000-4000-8000-${String(ordinal).padStart(12, '0')}`,
+      sourceItemVersion: 1, planSha256: 'a'.repeat(64), brandSha256: 'b'.repeat(64),
+      usageSha256: 'c'.repeat(64), generationContextSha256: 'd'.repeat(64),
+      draft: { payload: { platform, title: `${platform} property decision draft`, body: 'A saved local fixture showing the exact durable review layout. No provider was called.', cta_url: 'https://propertypredator.com', kind: 'post', schema: 'propertypredator.generated-content/v1', type: 'generated', contextSha256: 'd'.repeat(64) } },
+      reviewTarget: { contentItemId: `e1000000-0000-4000-8000-${String(ordinal).padStart(12, '0')}`, contentVersionId: `e2000000-0000-4000-8000-${String(ordinal).padStart(12, '0')}`, versionNumber: 1, contentSha256: 'e'.repeat(64) },
+    });
+    const body = mode === 'staged' || mode === 'staged-partial'
+      ? renderStagedCampaignDraftPackReviewBody(
+        [staged('linkedin', 1), ...(mode === 'staged' ? [staged('instagram', 2)] : [])],
+        mode === 'staged-partial' ? ['instagram'] : [],
+        [],
+        mode === 'staged-partial' ? { csrfToken: 'preview-csrf', commandKey: 'preview-retry-failed', expectedPlanSha256: 'a'.repeat(64), expectedEvidenceSha256: 'f'.repeat(64), selection: 'property-predator-self-serve:activated', tone: 'direct and useful', topic: 'Local preview topic', factVersionIds: [], assetVersionIds: [] } : undefined,
+      )
+      : mode === 'single'
       ? renderCampaignDraftReviewBody(linkedin)
       : renderCampaignDraftPackReviewBody([linkedin, previewCampaignReview('instagram')]);
     return {
       status: 200,
-      html: shell(`${previewOperationsNav('content')}${body}`, 'content', 'Property Predator — Campaign Review'),
+      html: shell(`${mode?.startsWith('staged') ? '' : previewOperationsNav('content')}${body}`, 'content', 'Property Predator — Campaign Review'),
       scripted: true,
     };
   }
