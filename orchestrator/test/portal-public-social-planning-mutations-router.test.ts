@@ -999,6 +999,53 @@ test('campaign generation explains an unusable source without inventing an evide
   assert.doesNotMatch(result.body, /evidence did not match|integrity mismatch/i);
 });
 
+test('rejected source and changed-evidence outcomes explain the required correction instead of blind retry', async () => {
+  const brain = readyBrandBrainSnapshot();
+  for (const [kind, expectedStatus, guidance] of [
+    ['validation', 400, /Remove private contact details or active HTML/],
+    ['conflict', 409, /Refresh the campaign evidence/],
+    ['forbidden', 403, /Workspace owner or admin access is required/],
+    ['unauthenticated', 403, /Sign in again/],
+  ] as const) {
+    const result = await call('POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, postgres({
+      companyContent: contentService(brain.brain.runtimeBrandSha256),
+      brandBrain: readyBrandBrainService(),
+      campaignDrafts: { generateAndStage: async () => ({
+        ok: false as const, kind, message: 'INTERNAL_DETAIL_MUST_NOT_BE_RENDERED',
+      }) },
+    }), baseReviewDraftForm());
+    assert.equal(result.statusCode, expectedStatus);
+    assert.match(result.body, guidance);
+    assert.doesNotMatch(result.body, /Retry only failed channels|INTERNAL_DETAIL_MUST_NOT_BE_RENDERED/);
+  }
+});
+
+test('a mixed draft pack retries only unavailable channels and retains saved versions and correction guidance', async () => {
+  const brain = readyBrandBrainSnapshot();
+  const baseRuntime = campaignGenerationRuntime([]);
+  const form = baseReviewDraftForm();
+  form.append('platform', 'facebook');
+  form.append('platform', 'instagram');
+  const result = await call('POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, postgres({
+    companyContent: contentService(brain.brain.runtimeBrandSha256),
+    brandBrain: readyBrandBrainService(),
+    campaignDrafts: { generateAndStage: async (identity, input) => {
+      if (input.generation.brief.platform === 'facebook') {
+        return { ok: false as const, kind: 'validation' as const, message: 'Brief rejected' };
+      }
+      if (input.generation.brief.platform === 'instagram') {
+        return { ok: false as const, kind: 'unavailable' as const, message: 'Save unavailable' };
+      }
+      return baseRuntime.generateAndStage(identity, input);
+    } },
+  }), form);
+  assert.equal(result.statusCode, 207);
+  assert.match(result.body, /Review saved version/);
+  assert.match(result.body, /Remove private contact details or active HTML/);
+  assert.match(result.body, /name="platform" value="instagram"/);
+  assert.doesNotMatch(result.body, /name="platform" value="facebook"|name="platform" value="linkedin"/);
+});
+
 test('production calendar CSP permits its same-origin protected mutation enhancement', async () => {
   const calls = freshCalls();
   const result = await call('GET', CONTENT_CALENDAR_ROUTE, postgres({

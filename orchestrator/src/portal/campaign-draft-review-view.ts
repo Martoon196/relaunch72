@@ -4,6 +4,20 @@ import { CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, CAMPAIGN_WIZARD_ROUTE } fr
 import { renderContentWorkspaceNavigation } from './content-workspace-navigation.js';
 import { escapeHtml } from './ui.js';
 import type { CampaignMediaVariant } from './campaign-media-variants.js';
+import type { PortalCampaignDraftOutcome } from './campaign-draft-service.js';
+
+export interface CampaignDraftChannelFailure {
+  readonly platform: string;
+  readonly kind: Extract<PortalCampaignDraftOutcome, { ok: false }>['kind'];
+}
+
+const CHANNEL_FAILURE_GUIDANCE: Readonly<Record<CampaignDraftChannelFailure['kind'], string>> = Object.freeze({
+  validation: 'Update the source brief before trying this channel again. Remove private contact details or active HTML.',
+  conflict: 'The evidence changed. Refresh the campaign evidence before starting another request.',
+  forbidden: 'Workspace owner or admin access is required. Check your workspace access before continuing.',
+  unauthenticated: 'Your session ended. Sign in again before continuing.',
+  unavailable: 'The draft could not be saved safely. Retry this same request.',
+});
 
 const STYLE = `
   .cdr{--cdr-bg:#07090b;--cdr-panel:#0e1417;--cdr-line:#2a383e;--cdr-ink:#f3f7f6;--cdr-muted:#a7b4b7;--cdr-faint:#78898e;--cdr-teal:#00e5cc;--cdr-amber:#f2b94b;overflow:hidden;border:1px solid #020304;background:var(--cdr-bg);color:var(--cdr-ink)}.cdr>*{--bg:var(--cdr-bg);--panel:var(--cdr-panel);--line:var(--cdr-line);--ink:var(--cdr-ink);--muted:var(--cdr-muted);--faint:var(--cdr-faint);--teal:var(--cdr-teal);--amber:var(--cdr-amber)}
@@ -93,6 +107,7 @@ export function renderStagedCampaignDraftPackReviewBody(
   failedPlatforms: readonly string[],
   mediaVariants: readonly CampaignMediaVariant[] = [],
   retry?: Readonly<{ csrfToken: string; commandKey: string; expectedPlanSha256: string; expectedEvidenceSha256: string; selection: string; tone: string; topic: string; factVersionIds: readonly string[]; assetVersionIds: readonly string[] }>,
+  failureDetails: readonly CampaignDraftChannelFailure[] = [],
 ): string {
   const cards = results.map((result, index) => {
     const payload = result.draft.payload;
@@ -103,10 +118,19 @@ export function renderStagedCampaignDraftPackReviewBody(
     const mediaMarkup = media ? `<figure class="cdr-pack-media">${media.mediaType === 'image' ? `<img src="${escapeHtml(media.url)}" alt="${escapeHtml(media.platform)} prepared media preview">` : `<video src="${escapeHtml(media.url)}" controls preload="metadata"></video>`}<figcaption>${escapeHtml(media.platform)} ${escapeHtml(mediaPlacementLabel(media))} · media preview · not saved with this text version</figcaption></figure>` : '';
     return `<article aria-labelledby="cdr-saved-${index}"><header class="cdr-pack-head"><strong>${escapeHtml(payload.platform)}</strong><span>Saved · review required</span></header>${mediaMarkup}<h2 id="cdr-saved-${index}">${escapeHtml(payload.title)}</h2><div class="cdr-body">${escapeHtml(payload.body)}</div>${cta}<section class="cdr-card"><h2>Saved version</h2><dl><div><dt>Version</dt><dd>v${result.reviewTarget.versionNumber.toLocaleString('en-GB')}</dd></div><div><dt>Approval</dt><dd>Not requested</dd></div></dl></section><a class="cdr-button" href="${href}">Review saved version</a></article>`;
   }).join('');
+  const channelFailures = failedPlatforms.map((platform) => ({
+    platform,
+    kind: failureDetails.find((failure) => failure.platform === platform)?.kind ?? 'unavailable',
+  }));
+  const retryPlatforms = channelFailures.filter((failure) => failure.kind === 'unavailable')
+    .map((failure) => failure.platform);
+  const correctionRequired = retryPlatforms.length !== failedPlatforms.length;
   const hidden = (name: string, value: string) => `<input type="hidden" name="${name}" value="${escapeHtml(value)}">`;
-  const retryForm = retry && failedPlatforms.length > 0 ? `<form method="post" action="${CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE}" class="cdr-actions">${hidden('_csrf', retry.csrfToken)}${hidden('command_key', retry.commandKey)}${hidden('expected_plan_sha256', retry.expectedPlanSha256)}${hidden('expected_evidence_sha256', retry.expectedEvidenceSha256)}${hidden('laps', retry.selection)}${hidden('tone', retry.tone)}${hidden('topic', retry.topic)}${hidden('provider_effects', 'generation_only')}${hidden('confirm_generation_only', 'confirmed')}${failedPlatforms.map((p) => hidden('platform', p)).join('')}${retry.factVersionIds.map((v) => hidden('approved_fact_version_id', v)).join('')}${retry.assetVersionIds.map((v) => hidden('approved_asset_version_id', v)).join('')}${mediaVariants.filter((m) => failedPlatforms.includes(m.platform)).map((m) => hidden('media_variant', JSON.stringify(m))).join('')}<button class="cdr-button" type="submit">Retry only failed channels</button><span>Your saved drafts stay in the library. Only the channels listed above will be retried.</span></form>` : '';
+  const retryForm = retry && retryPlatforms.length > 0 ? `<form method="post" action="${CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE}" class="cdr-actions">${hidden('_csrf', retry.csrfToken)}${hidden('command_key', retry.commandKey)}${hidden('expected_plan_sha256', retry.expectedPlanSha256)}${hidden('expected_evidence_sha256', retry.expectedEvidenceSha256)}${hidden('laps', retry.selection)}${hidden('tone', retry.tone)}${hidden('topic', retry.topic)}${hidden('provider_effects', 'generation_only')}${hidden('confirm_generation_only', 'confirmed')}${retryPlatforms.map((p) => hidden('platform', p)).join('')}${retry.factVersionIds.map((v) => hidden('approved_fact_version_id', v)).join('')}${retry.assetVersionIds.map((v) => hidden('approved_asset_version_id', v)).join('')}${mediaVariants.filter((m) => retryPlatforms.includes(m.platform)).map((m) => hidden('media_variant', JSON.stringify(m))).join('')}<button class="cdr-button" type="submit">Retry only failed channels</button><span>Retry: ${retryPlatforms.map(escapeHtml).join(', ')}. Your saved drafts stay in the library.</span></form>` : '';
   const failures = failedPlatforms.length > 0
-    ? `<p class="cdr-failures" role="status"><strong>Some channels could not be saved:</strong> ${failedPlatforms.map(escapeHtml).join(', ')}. Saved channels remain available in your library.</p>`
+    ? `<section class="cdr-failures" role="status"><strong>Some channels could not be saved:</strong><ul>${channelFailures.map((failure) => `<li><strong>${escapeHtml(failure.platform)}</strong>: ${escapeHtml(CHANNEL_FAILURE_GUIDANCE[failure.kind])}</li>`).join('')}</ul><p>Saved channels remain available in your library.</p></section>`
     : '';
-  return `${renderContentWorkspaceNavigation('create', { companyAssetsAvailable: true, brandBrainAvailable: true })}<style data-property-predator-campaign-draft-review>${STYLE}</style><article class="cdr" aria-labelledby="cdr-title" data-review-required="true" data-publishable="false" data-sendable="false" data-schedulable="false"><header class="cdr-hero"><div><span class="cdr-kicker">Property Predator content studio</span><h1 id="cdr-title">${results.length ? 'Drafts saved. <em>Review next.</em>' : 'Drafts could not be saved.'}</h1><p>${results.length ? 'Each successful channel is now a saved content version. Open a version to review its exact words and request approval before planning it.' : 'Nothing was approved, scheduled or posted. Retry the same request below without changing its intent.'}</p></div><aside class="cdr-gate"><strong>Nothing was posted</strong><span>Approval is unrequested. No channel was scheduled or published.</span></aside></header>${failures}<section class="cdr-pack" aria-label="Saved channel drafts">${cards}</section>${retryForm}<footer class="cdr-actions"><a class="cdr-button secondary" href="/portal/content">Open your library</a></footer></article>`;
+  const correctionLink = correctionRequired
+    ? `<a class="cdr-button secondary" href="${CAMPAIGN_WIZARD_ROUTE}${retry ? `?laps=${encodeURIComponent(retry.selection)}` : ''}">Review campaign source and evidence</a>` : '';
+  return `${renderContentWorkspaceNavigation('create', { companyAssetsAvailable: true, brandBrainAvailable: true })}<style data-property-predator-campaign-draft-review>${STYLE}</style><article class="cdr" aria-labelledby="cdr-title" data-review-required="true" data-publishable="false" data-sendable="false" data-schedulable="false"><header class="cdr-hero"><div><span class="cdr-kicker">Property Predator content studio</span><h1 id="cdr-title">${results.length ? 'Drafts saved. <em>Review next.</em>' : 'Drafts could not be saved.'}</h1><p>${results.length ? 'Each successful channel is now a saved content version. Open a version to review its exact words and request approval before planning it.' : 'Nothing was approved, scheduled or posted. Check the channel guidance below before continuing.'}</p></div><aside class="cdr-gate"><strong>Nothing was posted</strong><span>Approval is unrequested. No channel was scheduled or published.</span></aside></header>${failures}<section class="cdr-pack" aria-label="Saved channel drafts">${cards}</section>${retryForm}<footer class="cdr-actions">${correctionLink}<a class="cdr-button secondary" href="/portal/content">Open your library</a></footer></article>`;
 }

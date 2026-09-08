@@ -80,7 +80,7 @@ import {
 import { PropertyPredatorGenerationBridgeError } from '../company-content-adapter/property-predator-generation.js';
 import { canonicalCompanyContentJson } from '../company-content-pg/validation.js';
 import type { StagedPropertyPredatorGeneratedDraft } from '../company-content-adapter/property-predator-generation-approval.js';
-import { renderStagedCampaignDraftPackReviewBody } from './campaign-draft-review-view.js';
+import { renderStagedCampaignDraftPackReviewBody, type CampaignDraftChannelFailure } from './campaign-draft-review-view.js';
 import type { PortalCampaignDraftService } from './campaign-draft-service.js';
 import {
   CAMPAIGN_MACHINE_ROUTE,
@@ -336,6 +336,7 @@ import {
 import { renderZernioMessagingBody } from './zernio-messaging-view.js';
 import {
   conversionInboxStatus,
+  conversionUncheckedStatus,
   socialMessagingStatus,
   socialUncheckedStatus,
 } from './inbox-source-status.js';
@@ -4118,10 +4119,15 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       }));
       const results: StagedPropertyPredatorGeneratedDraft[] = [];
       const failedPlatforms: string[] = [];
+      const channelFailures: CampaignDraftChannelFailure[] = [];
       for (const outcome of generationOutcomes) {
         if (outcome.ok && outcome.draft.ok) results.push(outcome.draft.draft);
         else {
           failedPlatforms.push(outcome.platform);
+          channelFailures.push({
+            platform: outcome.platform,
+            kind: outcome.ok && !outcome.draft.ok ? outcome.draft.kind : 'unavailable',
+          });
         }
       }
       const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
@@ -4137,9 +4143,12 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           target.contentItemId, target.contentVersionId, { notice },
         ), undefined, 303, { 'cache-control': 'no-store' });
       }
-      return sendHtml(res, results.length === 0 ? 503 : failedPlatforms.length > 0 ? 207 : 201, operationalPage(
+      const failedStatus = channelFailures.some((failure) => failure.kind === 'unauthenticated' || failure.kind === 'forbidden')
+        ? 403 : channelFailures.some((failure) => failure.kind === 'conflict')
+          ? 409 : channelFailures.some((failure) => failure.kind === 'validation') ? 400 : 503;
+      return sendHtml(res, results.length === 0 ? failedStatus : failedPlatforms.length > 0 ? 207 : 201, operationalPage(
         content.workspace.workspaceName,
-        renderStagedCampaignDraftPackReviewBody(results, failedPlatforms, mediaVariants, retry),
+        renderStagedCampaignDraftPackReviewBody(results, failedPlatforms, mediaVariants, retry, channelFailures),
         deps,
         'content',
         csrfToken,
@@ -5533,7 +5542,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
             csrfToken, draftId: randomUUID(), approvalRequestId: randomUUID(),
             decisionId: randomUUID(), deliveryId: randomUUID(), leaseToken: randomUUID(),
           },
-          sourceStatuses: [conversionInboxStatus(Boolean(deps.inbox)), socialMessagingStatus(snapshot)],
+          sourceStatuses: [conversionUncheckedStatus(Boolean(deps.inbox)), socialMessagingStatus(snapshot)],
         }),
         deps,
         'inbox',

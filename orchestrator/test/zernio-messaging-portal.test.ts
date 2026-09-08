@@ -139,6 +139,38 @@ test('portal social Messaging refuses provider reads when the Instagram connecti
   assert.equal(providerCalled, false);
 });
 
+test('an empty comments-only source retains the actual successful read time', async () => {
+  let dmReads = 0;
+  let commentReads = 0;
+  const checkedAt = '2026-09-08T09:42:00.000Z';
+  const service = new LivePortalZernioMessagingService({
+    accounts: { async snapshot() { return { ok: true as const, accounts: [{
+      accountId: ACCOUNT, network: 'linkedin' as const,
+      username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
+      linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
+      webhookReceiptCount: 1,
+    }] }; } },
+    client: {
+      ...client(),
+      async listConversations() { dmReads += 1; throw new Error('No DM account is configured'); },
+      async listCommentedPosts() {
+        commentReads += 1;
+        return { posts: [], checkedAt, hasMore: false, nextCursor: null };
+      },
+    },
+    sender, replies: replies(), allowedAccountIds: [],
+    commentAccountBindings: [{ accountId: ACCOUNT, platform: 'linkedin' }],
+    providerEffectsEnabled: false, emergencyPaused: true,
+  });
+  const result = await service.snapshot(identity, {});
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.checkedAt, checkedAt);
+  assert.deepEqual(result.commentPosts, []);
+  assert.equal(commentReads, 1);
+  assert.equal(dmReads, 0);
+});
+
 test('same-platform foreign account records cannot be read or used for a reply', async () => {
   const foreign = 'foreign-instagram-account';
   let requestedAccountIds: readonly string[] = [];

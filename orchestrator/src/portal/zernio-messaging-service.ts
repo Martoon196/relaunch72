@@ -335,7 +335,8 @@ export class LivePortalZernioMessagingService implements PortalZernioMessagingSe
         outboundEffectsEnabled: this.dependencies.providerEffectsEnabled,
         emergencyPaused: this.dependencies.emergencyPaused,
         checkedAt: dmThread?.checkedAt ?? commentThread?.checkedAt
-          ?? queue.checkedAt ?? commentFeeds[0]?.checkedAt ?? '1970-01-01T00:00:00.000Z',
+          ?? (canReadDms ? queue.checkedAt : commentFeeds[0]?.checkedAt)
+          ?? '1970-01-01T00:00:00.000Z',
         conversations: Object.freeze(dmConversations),
         commentPosts: Object.freeze(commentPosts),
         selectedConversation,

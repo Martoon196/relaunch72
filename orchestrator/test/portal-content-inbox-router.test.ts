@@ -743,3 +743,23 @@ test('Conversion Inbox shows social check-on-open without reading social status'
   assert.match(result.body, /Conversation queue/);
   assert.doesNotMatch(result.body, /No social conversations or commented posts are available yet/);
 });
+
+test('Live social does not claim an unread conversion source is ready', async () => {
+  let conversionReads = 0;
+  const result = await call('/portal/inbox/social', postgres({
+    inbox: { listConversations: async () => {
+      conversionReads += 1;
+      throw new Error('Conversion source is unavailable');
+    } },
+    zernioMessaging: {
+      snapshot: async () => ({ ok: false, kind: 'not_connected', providerEffects: false }),
+      createDraft: async () => ({ ok: false, kind: 'unavailable', providerEffects: 'none' }),
+      requestApproval: async () => ({ ok: false, kind: 'unavailable', providerEffects: 'none' }),
+      decideApproval: async () => ({ ok: false, kind: 'unavailable', providerEffects: 'none' }),
+      sendApproved: async () => ({ ok: false, kind: 'unavailable', providerEffects: 'none' }),
+    },
+  }), COOKIE);
+  assert.equal(conversionReads, 0);
+  assert.match(result.body, /Check on open/);
+  assert.doesNotMatch(result.body, /The workspace conversation records are available/);
+});

@@ -23,6 +23,13 @@ export function conversionInboxStatus(ready: boolean): InboxSourceStatus {
   });
 }
 
+export function conversionUncheckedStatus(configured: boolean): InboxSourceStatus {
+  const base = { id: 'conversion' as const, label: 'Messages & follow-ups', href: '/portal/inbox' };
+  return configured
+    ? Object.freeze({ ...base, state: 'check_on_open' as const, checkedAt: null, lastKnownAt: null, readDetail: 'Open Messages & follow-ups to check the workspace conversation records.', replyDetail: 'Each record shows its own draft, approval and delivery state.' })
+    : Object.freeze({ ...base, state: 'not_available' as const, checkedAt: null, lastKnownAt: null, readDetail: 'Messages & follow-ups is not available in this workspace.', replyDetail: 'No conversation action is available.' });
+}
+
 export function socialUncheckedStatus(configured: boolean): InboxSourceStatus {
   const base = { id: 'social' as const, label: 'Live social', href: '/portal/inbox/social' };
   return configured
