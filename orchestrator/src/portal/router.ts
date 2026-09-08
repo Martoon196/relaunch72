@@ -75,13 +75,13 @@ import {
 } from './campaign-media-variants.js';
 import { planPropertyPredatorMarketingDraft } from '../company-content-adapter/property-predator-marketing-draft-plan.js';
 import {
-  PropertyPredatorCampaignDraftRuntimeError,
   type PropertyPredatorCampaignDraftApprovedVersionEvidence,
-  type PropertyPredatorReviewCampaignDraft,
-  type PropertyPredatorCampaignDraftRuntime,
 } from '../company-content-adapter/property-predator-campaign-draft-runtime.js';
 import { PropertyPredatorGenerationBridgeError } from '../company-content-adapter/property-predator-generation.js';
-import { renderCampaignDraftPackReviewBody } from './campaign-draft-review-view.js';
+import { canonicalCompanyContentJson } from '../company-content-pg/validation.js';
+import type { StagedPropertyPredatorGeneratedDraft } from '../company-content-adapter/property-predator-generation-approval.js';
+import { renderStagedCampaignDraftPackReviewBody } from './campaign-draft-review-view.js';
+import type { PortalCampaignDraftService } from './campaign-draft-service.js';
 import {
   CAMPAIGN_MACHINE_ROUTE,
   presentCampaignMachine,
@@ -511,7 +511,7 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   /** Live read-only social conversation projection inside the Messaging area. */
   zernioMessaging?: PortalZernioMessagingService;
   /** One real company-content generation effect; output is source-review-only and never outbound. */
-  campaignDrafts?: Pick<PropertyPredatorCampaignDraftRuntime, 'generateReviewDraft'>;
+  campaignDrafts?: PortalCampaignDraftService;
   /** TEST-only conversion queue. Thread detail remains a separate optional projection. */
   inbox?: PortalInboxReadBoundary;
   /** Durable TEST-only draft/approval/queue commands. It has no provider dispatcher. */
@@ -3932,6 +3932,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       '_csrf', 'command_key', 'expected_plan_sha256', 'laps', 'provider_effects',
       'platform', 'tone', 'topic', 'approved_fact_version_id',
       'approved_asset_version_id', 'media_variant', 'confirm_generation_only',
+      'expected_evidence_sha256',
     ]);
     if (!form || !campaignFormKeysAllowed(form, allowed)
         || !verifyPortalCsrf(deps.sessionSecret, sessionToken, oneFormValue(form, '_csrf') ?? '')
@@ -3947,6 +3948,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
     const commandKey = campaignCommandKey(form);
     const expectedPlanSha256 = oneFormValue(form, 'expected_plan_sha256');
+    const expectedEvidenceSha256 = oneFormValue(form, 'expected_evidence_sha256');
     const selection = campaignFormText(oneFormValue(form, 'laps'), 200);
     const platforms = form.getAll('platform');
     const tone = oneFormValue(form, 'tone');
@@ -3960,6 +3962,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       mediaVariants = null;
     }
     if (!commandKey || !expectedPlanSha256 || !/^[0-9a-f]{64}$/u.test(expectedPlanSha256)
+        || (form.has('expected_evidence_sha256') && (!expectedEvidenceSha256 || !/^[0-9a-f]{64}$/u.test(expectedEvidenceSha256)))
         || !selection || platforms.length < 1 || platforms.length > 5
         || new Set(platforms).size !== platforms.length
         || platforms.some((platform) => !CAMPAIGN_REVIEW_DRAFT_PLATFORMS.has(platform))
@@ -4020,6 +4023,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           backLabel: 'Refresh Campaign Builder',
         }));
       }
+      const runtimeBrandSha256 = plan.brandBrain.runtimeBrandSha256;
       const factItem = factVersionIds[0] ? content.catalog.items.find((item) =>
         item.contentVersionId === factVersionIds[0] && item.kind === 'social_post') : undefined;
       const assetItem = assetVersionIds[0] ? content.catalog.items.find((item) =>
@@ -4041,57 +4045,96 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         }));
       }
       const common = Object.freeze({
-        expectedPlanSha256,
-        maximumCostMinor: CAMPAIGN_REVIEW_DRAFT_MAXIMUM_COST_MINOR,
-        providerEffects: 'generation_only' as const,
         draftPlan: Object.freeze({ selection, brandBrainSnapshot }),
-        brandBrain: Object.freeze({
-          sourceSystem: 'property-predator' as const,
-          sourceReleaseId: plan.brandBrain.sourceReleaseId,
-          manifestSha256: plan.brandBrain.manifestSha256,
-          runtimeBrandSha256: plan.brandBrain.runtimeBrandSha256,
-          specialistProfileId: plan.brandBrain.specialistProfileId,
+        approvedEvidenceCheckedAt: content.workspace.snapshotAt,
+        approvedEvidence: Object.freeze({
+          facts: Object.freeze(fact ? [{
+            contentItemId: fact.contentItemId,
+            versionId: fact.contentVersionId,
+            contentSha256: fact.contentSha256,
+            brandSha256: fact.brandSha256,
+            approvalRequestId: fact.approvalRequestId,
+            approvalDecisionId: fact.approvalDecisionId,
+          }] : []),
+          assets: Object.freeze(asset ? [{
+            contentItemId: asset.contentItemId,
+            versionId: asset.contentVersionId,
+            contentSha256: asset.contentSha256,
+            brandSha256: asset.brandSha256,
+            approvalRequestId: asset.approvalRequestId,
+            approvalDecisionId: asset.approvalDecisionId,
+          }] : []),
         }),
-        approvedFacts: Object.freeze(fact ? [fact] : []),
-        approvedAssets: Object.freeze(asset ? [asset] : []),
       });
       // Each channel is a separate, idempotent generation-only request. Run the
       // bounded pack together so five selected channels do not multiply the
       // browser-facing request time and overrun the hosting proxy deadline.
+      const evidenceSha256 = createHash('sha256').update(canonicalCompanyContentJson({
+        workspaceId: content.workspace.workspaceId,
+        approvedEvidence: common.approvedEvidence,
+      })).digest('hex');
+      if (expectedEvidenceSha256 && expectedEvidenceSha256 !== evidenceSha256) {
+        return sendHtml(res, 409, portalStatusPage(deps, sessionToken, {
+          title: 'The evidence for this retry changed',
+          message: 'An approval or source version changed after the original attempt. No new draft was generated. Review the updated evidence before starting another request.',
+          active: 'content', backHref: CAMPAIGN_WIZARD_ROUTE, backLabel: 'Review campaign evidence',
+        }));
+      }
       const generationOutcomes = await Promise.all(platforms.map(async (platform) => {
-        const idempotencyKey = `campaign-pack:${createHash('sha256')
-          .update(commandKey).update('\0').update(platform).digest('hex')}`;
+        const intentSha256 = createHash('sha256').update(canonicalCompanyContentJson({
+          workspaceId: content.workspace.workspaceId,
+          commandKey,
+          platform,
+          topic,
+          tone,
+          planSha256: expectedPlanSha256,
+          brandSha256: runtimeBrandSha256,
+          approvedEvidence: common.approvedEvidence,
+        })).digest('hex');
+        const idempotencyKey = `campaign-pack:${intentSha256}`;
         try {
           return Object.freeze({
             ok: true as const,
             platform,
-            draft: await campaignDrafts.generateReviewDraft(Object.freeze({
-            ...common,
-            idempotencyKey,
-            brief: Object.freeze({ platform, topic, tone }),
+            draft: await campaignDrafts.generateAndStage(identity, Object.freeze({
+              ...common,
+              persistenceCommandKey: `campaign-stage:${intentSha256}`,
+              generation: Object.freeze({
+                idempotencyKey,
+                expectedBrandSha256: runtimeBrandSha256,
+                maximumCostMinor: CAMPAIGN_REVIEW_DRAFT_MAXIMUM_COST_MINOR,
+                brief: Object.freeze({ kind: 'post' as const, platform, topic, tone }),
+              }),
             })),
           });
         } catch (error) {
           return Object.freeze({ ok: false as const, platform, error });
         }
       }));
-      const results: PropertyPredatorReviewCampaignDraft[] = [];
+      const results: StagedPropertyPredatorGeneratedDraft[] = [];
       const failedPlatforms: string[] = [];
-      let lastFailure: unknown;
       for (const outcome of generationOutcomes) {
-        if (outcome.ok) results.push(outcome.draft);
+        if (outcome.ok && outcome.draft.ok) results.push(outcome.draft.draft);
         else {
           failedPlatforms.push(outcome.platform);
-          lastFailure = outcome.error;
         }
       }
-      if (results.length < 1) {
-        throw lastFailure ?? new PropertyPredatorCampaignDraftRuntimeError('integrity_mismatch');
-      }
       const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
-      return sendHtml(res, failedPlatforms.length > 0 ? 207 : 201, operationalPage(
+      const retry = Object.freeze({ csrfToken, commandKey, expectedPlanSha256, expectedEvidenceSha256: evidenceSha256, selection, tone, topic, factVersionIds, assetVersionIds });
+      // A bare text draft can go straight to its durable exact-version review.
+      // Prepared browser media is validated but deliberately not persisted as a
+      // new blob or folded into approval scope here, so keep its review response
+      // visible instead of losing it through the text-only 303 destination.
+      if (results.length === 1 && platforms.length === 1 && mediaVariants.length === 0) {
+        const target = results[0]!.reviewTarget;
+        const notice = contentControlNoticeToken(deps.sessionSecret, sessionToken, 'draft_created');
+        return redirect(res, exactCompanyContentReviewLocation(
+          target.contentItemId, target.contentVersionId, { notice },
+        ), undefined, 303, { 'cache-control': 'no-store' });
+      }
+      return sendHtml(res, results.length === 0 ? 503 : failedPlatforms.length > 0 ? 207 : 201, operationalPage(
         content.workspace.workspaceName,
-        renderCampaignDraftPackReviewBody(results, failedPlatforms, mediaVariants),
+        renderStagedCampaignDraftPackReviewBody(results, failedPlatforms, mediaVariants, retry),
         deps,
         'content',
         csrfToken,
@@ -4101,9 +4144,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     } catch (error) {
       const sourceRejected = error instanceof PropertyPredatorGenerationBridgeError
         && (error.code === 'invalid_request' || error.code === 'upstream_rejected');
-      const evidenceChanged = error instanceof PropertyPredatorCampaignDraftRuntimeError
-        && (error.code === 'invalid_command' || error.code === 'evidence_invalid'
-          || error.code === 'stale_plan');
+      const evidenceChanged = false;
       const status = sourceRejected ? 400 : evidenceChanged ? 409 : 503;
       const message = sourceRejected
         ? 'We could not use that source. Remove any private contact details or active HTML, then try again.'

@@ -135,6 +135,30 @@ function translateContentWriteError(error: unknown): never {
   throw error;
 }
 
+function createVersionIdempotencyPayload(
+  input: ReturnType<typeof normalizeCompanyContentVersionCommand>,
+): unknown {
+  if (input.sourceSystem !== 'property_predator_generation') return input;
+  const metadata = input.metadata as Record<string, unknown>;
+  const marketing = metadata.marketing && typeof metadata.marketing === 'object'
+    ? metadata.marketing as Record<string, unknown> : null;
+  return Object.freeze({
+    ...input,
+    // Observation times describe the first successful save. They must not turn
+    // an otherwise identical retry into a different generation/persistence command.
+    sourceCheckedAt: null,
+    sourceExpiresAt: null,
+    metadata: Object.freeze({
+      ...metadata,
+      ...(marketing ? { marketing: Object.freeze({
+        ...marketing,
+        approvedEvidenceCheckedAt: null,
+        approvedEvidenceRecheck: null,
+      }) } : {}),
+    }),
+  });
+}
+
 export class CompanyContentService {
   readonly #nextId: () => string;
   readonly #now: () => Date;
@@ -150,7 +174,11 @@ export class CompanyContentService {
   ): Promise<CreateCompanyContentVersionResult> {
     validateCompanyContentUserContext(context);
     const input = normalizeCompanyContentVersionCommand(command);
-    const requestHash = companyContentRequestHash(context, CREATE_VERSION, input);
+    const requestHash = companyContentRequestHash(
+      context,
+      CREATE_VERSION,
+      createVersionIdempotencyPayload(input),
+    );
     try {
       return await this.dependencies.transactionRunner.run(context, async (transaction) => {
         const repository = new CompanyContentPgRepository(transaction);
@@ -579,5 +607,16 @@ export class CompanyContentService {
         }) : null,
       });
     }, { readOnly: true });
+  }
+
+  async listCatalogWithSnapshot(
+    context: DatabaseRequestContext,
+    query: CompanyContentCatalogQuery = {},
+  ): Promise<Readonly<{ page: CompanyContentCatalogPage; snapshotAt: string }>> {
+    const page = await this.listCatalog(context, query);
+    const snapshotAt = await this.dependencies.transactionRunner.run(context, async (transaction) => (
+      new CompanyContentPgRepository(transaction).snapshotAt()
+    ), { readOnly: true });
+    return Object.freeze({ page, snapshotAt });
   }
 }

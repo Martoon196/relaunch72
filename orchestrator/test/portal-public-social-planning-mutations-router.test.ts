@@ -15,7 +15,6 @@ import {
   campaignWizardNoticeFromQuery,
   campaignWizardNoticeToken,
 } from '../src/portal/campaign-wizard-actions.js';
-import { PropertyPredatorCampaignDraftRuntime } from '../src/company-content-adapter/property-predator-campaign-draft-runtime.js';
 import {
   PropertyPredatorGenerationBridgeError,
   type PropertyPredatorGenerateDraftCommand,
@@ -313,7 +312,12 @@ function freshCalls(): SocialCalls {
   return { snapshots: [], plans: [], reschedules: [], cancels: [] };
 }
 
-function contentService(brandSha256?: string, empty = false): PortalCompanyContentService {
+function contentService(
+  brandSha256?: string,
+  empty = false,
+  workspaceId: string = IDS.workspace,
+  approvalDecisionId?: string,
+): PortalCompanyContentService {
   const fixture = createPropertyPredatorContentCatalogFixture();
   const copy = fixture.items[0]!;
   const artwork = fixture.items[2]!;
@@ -322,7 +326,7 @@ function contentService(brandSha256?: string, empty = false): PortalCompanyConte
       ok: true,
       snapshot: {
         workspace: {
-          workspaceId: IDS.workspace,
+          workspaceId,
           workspaceName: 'Property Predator Growth HQ',
           snapshotAt: NOW,
           canWrite: true,
@@ -336,6 +340,7 @@ function contentService(brandSha256?: string, empty = false): PortalCompanyConte
               contentVersionId: IDS.contentVersion,
               contentSha256: 'a'.repeat(64),
               ...(brandSha256 ? { brandSha256 } : {}),
+              ...(approvalDecisionId ? { approvalDecisionId } : {}),
               sourceCheckedAt: '2026-08-27T11:55:00.000Z',
               sourceExpiresAt: '2026-08-27T12:05:00.000Z',
               sourceFresh: true,
@@ -399,9 +404,12 @@ function campaignGenerationRuntime(
   calls: PropertyPredatorGenerateDraftCommand[],
   beforeReturn?: (command: PropertyPredatorGenerateDraftCommand) => Promise<void>,
 ) {
-  return new PropertyPredatorCampaignDraftRuntime({
-    generation: {
-      generateDraft: async (command) => {
+  return {
+    generateAndStage: async (_identity: unknown, input: any) => {
+        const command: PropertyPredatorGenerateDraftCommand = {
+          ...input.generation,
+          contextSha256: digest(canonicalCompanyContentJson(input.draftPlan)),
+        };
         calls.push(command);
         await beforeReturn?.(command);
         const payload = Object.freeze({
@@ -421,7 +429,7 @@ function campaignGenerationRuntime(
           model: 'test-company-content-model',
           providerRequestId: 'provider-request-review-router-0001',
         });
-        return {
+        const draft = {
           ok: true as const,
           schemaVersion: 1 as const,
           brandSha256: command.expectedBrandSha256,
@@ -435,12 +443,33 @@ function campaignGenerationRuntime(
           usageSha256: digest(canonicalCompanyContentJson(usage)),
           versionId: 'd2000000-0000-4000-8000-000000000001',
         };
-      },
+        const ordinal = ['linkedin', 'facebook', 'instagram', 'x', 'tiktok']
+          .indexOf(command.brief.platform) + 1;
+        return { ok: true as const, draft: {
+          status: 'draft' as const,
+          approvalStatus: 'unrequested' as const,
+          reviewRequired: true as const,
+          publishable: false as const,
+          providerEffects: false as const,
+          disposition: 'applied' as const,
+          sourceItemId: draft.draftId,
+          sourceDraftId: draft.draftId,
+          sourceVersionId: draft.versionId,
+          sourceItemVersion: 1,
+          planSha256: digest('plan'),
+          brandSha256: draft.brandSha256,
+          usageSha256: draft.usageSha256,
+          generationContextSha256: command.contextSha256,
+          draft,
+          reviewTarget: {
+            contentItemId: `97000000-0000-4000-8000-${String(ordinal).padStart(12, '0')}`,
+            contentVersionId: `98000000-0000-4000-8000-${String(ordinal).padStart(12, '0')}`,
+            versionNumber: 1,
+            contentSha256: draft.contentSha256,
+          },
+        }};
     },
-    providerEffectsEnabled: true,
-    emergencyPaused: false,
-    hardMaximumCostMinor: 500,
-  });
+  };
 }
 
 function brandBrainService(calls: PortalBrandBrainRequestIdentity[]): PortalBrandBrainService {
@@ -662,22 +691,38 @@ test('authenticated CSRF-bound campaign generation re-reads exact evidence and r
     campaignDrafts: campaignGenerationRuntime(generationCalls),
   }), baseReviewDraftForm());
 
-  assert.equal(result.statusCode, 201);
+  assert.equal(result.statusCode, 303);
   assert.equal(result.headers['cache-control'], 'no-store');
   assert.equal(generationCalls.length, 1);
   assert.equal(generationCalls[0]!.maximumCostMinor, 250);
   assert.equal(generationCalls[0]!.brief.kind, 'post');
   assert.equal(generationCalls[0]!.brief.platform, 'linkedin');
-  assert.match(result.body, /One source\. <em>1 native draft\.<\/em>/);
-  assert.match(result.body, /The headline gets attention\. The evidence earns the next decision\./);
-  assert.match(result.body, /data-review-required="true"/);
-  assert.match(result.body, /data-publishable="false"/);
-  assert.match(result.body, /data-sendable="false"/);
-  assert.match(result.body, /data-schedulable="false"/);
-  assert.match(result.body, /data-provider-effects="generation-only"/);
-  assert.match(result.body, new RegExp(IDS.contentVersion));
-  assert.match(result.body, new RegExp(IDS.mediaOne));
-  assert.doesNotMatch(result.body, /provider-request-review-router-0001/);
+  assert.match(result.headers.location ?? '', /^\/portal\/content\/items\/97000000-0000-4000-8000-000000000001\/versions\/98000000-0000-4000-8000-000000000001\/review\?notice=/);
+});
+
+test('a validated prepared media variant remains visible beside a saved single-channel draft', async () => {
+  const brain = readyBrandBrainSnapshot();
+  const generationCalls: PropertyPredatorGenerateDraftCommand[] = [];
+  const form = baseReviewDraftForm();
+  form.append('media_variant', JSON.stringify({
+    platform: 'linkedin', mediaType: 'image',
+    url: 'https://media.zernio.com/prepared/linkedin.png',
+    width: 1200, height: 630, contentSha256: '7'.repeat(64),
+    treatment: 'browser_cover_crop',
+  }));
+  const result = await call('POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, postgres({
+    companyContent: contentService(brain.brain.runtimeBrandSha256),
+    brandBrain: readyBrandBrainService(),
+    campaignDrafts: campaignGenerationRuntime(generationCalls),
+  }), form);
+
+  assert.equal(result.statusCode, 201);
+  assert.equal(result.headers.location, undefined);
+  assert.equal(generationCalls.length, 1);
+  assert.match(result.body, /https:\/\/media\.zernio\.com\/prepared\/linkedin\.png/);
+  assert.match(result.body, /linkedin feed post · media preview · not saved with this text version/i);
+  assert.match(result.body, /Review saved version/);
+  assert.match(result.body, /Nothing was posted/);
 });
 
 test('one source creates a native five-channel pack without any outbound effect', async () => {
@@ -701,16 +746,16 @@ test('one source creates a native five-channel pack without any outbound effect'
   ]);
   assert.equal(new Set(generationCalls.map((call) => call.idempotencyKey)).size, 5);
   assert.ok(generationCalls.every((call) => call.brief.topic === form.get('topic')));
-  assert.match(result.body, /One source\. <em>5 native drafts\.<\/em>/);
+  assert.match(result.body, /Drafts saved\. <em>Review next\.<\/em>/);
   assert.match(result.body, /html\[data-theme="light"\] \.cdr/);
-  assert.match(result.body, /data-channel-pack/);
-  assert.match(result.body, /Nothing published/);
+  assert.match(result.body, /Saved · review required/);
+  assert.match(result.body, /Nothing was posted/);
   assert.match(result.body, /LinkedIn/i);
   assert.match(result.body, /Facebook/i);
   assert.match(result.body, /Instagram/i);
   assert.match(result.body, />x</i);
   assert.match(result.body, /TikTok/i);
-  assert.match(result.body, /data-outbound-effects="false"/);
+  assert.match(result.body, /Review saved version/);
 });
 
 test('one source creates a five-channel review pack with no catalogue evidence', async () => {
@@ -737,8 +782,8 @@ test('one source creates a five-channel review pack with no catalogue evidence',
 
   assert.equal(result.statusCode, 201);
   assert.equal(generationCalls.length, 5);
-  assert.match(result.body, /One source\. <em>5 native drafts\.<\/em>/);
-  assert.match(result.body, /Nothing published/);
+  assert.match(result.body, /Drafts saved\. <em>Review next\.<\/em>/);
+  assert.match(result.body, /Nothing was posted/);
 });
 
 test('campaign generation rejects invalid CSRF and changed exact evidence before the provider runtime', async () => {
@@ -795,27 +840,162 @@ test('five-channel generation runs as one bounded concurrent pack instead of mul
   ]);
 });
 
-test('campaign generation explains an unusable source without inventing an evidence mismatch', async () => {
+test('a channel failure keeps successful saved versions reviewable without claiming the pack completed', async () => {
   const brain = readyBrandBrainSnapshot();
-  const campaignDrafts = new PropertyPredatorCampaignDraftRuntime({
-    generation: {
-      generateDraft: async () => {
-        throw new PropertyPredatorGenerationBridgeError('upstream_rejected');
+  const generationCalls: PropertyPredatorGenerateDraftCommand[] = [];
+  const form = baseReviewDraftForm();
+  form.append('platform', 'facebook');
+  const result = await call('POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, postgres({
+    companyContent: contentService(brain.brain.runtimeBrandSha256),
+    brandBrain: readyBrandBrainService(),
+    campaignDrafts: campaignGenerationRuntime(generationCalls, async (command) => {
+      if (command.brief.platform === 'facebook') throw new Error('synthetic save failure');
+    }),
+  }), form);
+
+  assert.equal(result.statusCode, 207);
+  assert.equal(generationCalls.length, 2);
+  assert.match(result.body, /Some channels could not be saved/);
+  assert.match(result.body, /facebook/i);
+  assert.match(result.body, /Review saved version/);
+  assert.doesNotMatch(result.body, /Facebook<\/strong><span>Saved/);
+  assert.match(result.body, /Retry only failed channels/);
+  assert.match(result.body, /name="command_key" value="campaign-review-draft-command-0001"/);
+  assert.match(result.body, /name="platform" value="facebook"/);
+  assert.doesNotMatch(result.body, /name="platform" value="linkedin"/);
+});
+
+test('failed-channel retry reuses exact generation and persistence identities without rerunning saved channels', async () => {
+  const brain = readyBrandBrainSnapshot();
+  const observed: Array<{ platform: string; generation: string; persistence: string }> = [];
+  let failFacebookSave = true;
+  const baseRuntime = campaignGenerationRuntime([]);
+  const campaignDrafts = {
+    generateAndStage: async (identity: any, input: any) => {
+      observed.push({
+        platform: input.generation.brief.platform,
+        generation: input.generation.idempotencyKey,
+        persistence: input.persistenceCommandKey,
+      });
+      if (input.generation.brief.platform === 'facebook' && failFacebookSave) {
+        return { ok: false as const, kind: 'unavailable' as const, message: 'Save unavailable.' };
+      }
+      return baseRuntime.generateAndStage(identity, input);
+    },
+  };
+  const initial = baseReviewDraftForm();
+  initial.append('platform', 'facebook');
+  const first = await call('POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, postgres({
+    companyContent: contentService(brain.brain.runtimeBrandSha256),
+    brandBrain: readyBrandBrainService(), campaignDrafts,
+  }), initial);
+  assert.equal(first.statusCode, 207);
+
+  failFacebookSave = false;
+  const retry = baseReviewDraftForm();
+  retry.delete('platform');
+  retry.append('platform', 'facebook');
+  const evidenceHash = first.body.match(/name="expected_evidence_sha256" value="([0-9a-f]{64})"/)?.[1];
+  assert.ok(evidenceHash);
+  retry.set('expected_evidence_sha256', evidenceHash);
+  const second = await call('POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, postgres({
+    companyContent: contentService(brain.brain.runtimeBrandSha256),
+    brandBrain: readyBrandBrainService(), campaignDrafts,
+  }), retry);
+  assert.equal(second.statusCode, 303);
+
+  assert.deepEqual(observed.map((item) => item.platform), ['linkedin', 'facebook', 'facebook']);
+  assert.equal(observed[1]!.generation, observed[2]!.generation);
+  assert.equal(observed[1]!.persistence, observed[2]!.persistence);
+  assert.equal(observed.filter((item) => item.platform === 'linkedin').length, 1);
+
+  const changedEvidence = await call('POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, postgres({
+    companyContent: contentService(brain.brain.runtimeBrandSha256, false, IDS.workspace,
+      '99000000-0000-4000-8000-000000000099'),
+    brandBrain: readyBrandBrainService(), campaignDrafts,
+  }), retry);
+  assert.equal(changedEvidence.statusCode, 409);
+  assert.match(changedEvidence.body, /evidence for this retry changed/);
+  assert.equal(observed.length, 3, 'a changed approval cannot turn a retry into a newly charged generation');
+});
+
+test('draft replay keys bind workspace, topic and exact approved evidence so changed intent cannot alias', async () => {
+  const brain = readyBrandBrainSnapshot();
+  const observed: Array<{ generation: string; persistence: string }> = [];
+  const service = campaignGenerationRuntime([]);
+  const capturing = {
+    generateAndStage: async (identity: any, input: any) => {
+      observed.push({ generation: input.generation.idempotencyKey, persistence: input.persistenceCommandKey });
+      return service.generateAndStage(identity, input);
+    },
+  };
+  const base = baseReviewDraftForm();
+  await call('POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, postgres({
+    companyContent: contentService(brain.brain.runtimeBrandSha256), brandBrain: readyBrandBrainService(), campaignDrafts: capturing,
+  }), base);
+  const laterSnapshotService = contentService(brain.brain.runtimeBrandSha256);
+  await call('POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, postgres({
+    companyContent: {
+      ...laterSnapshotService,
+      snapshot: async (identity) => {
+        const outcome = await laterSnapshotService.snapshot(identity);
+        return outcome.ok ? { ...outcome, snapshot: {
+          ...outcome.snapshot,
+          workspace: { ...outcome.snapshot.workspace, snapshotAt: '2026-09-08T04:05:06.000Z' },
+        } } : outcome;
       },
     },
-    providerEffectsEnabled: true,
-    emergencyPaused: false,
-    hardMaximumCostMinor: 500,
-  });
+    brandBrain: readyBrandBrainService(), campaignDrafts: capturing,
+  }), baseReviewDraftForm());
+  const changedTopic = baseReviewDraftForm();
+  changedTopic.set('topic', 'A materially different source topic.');
+  await call('POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, postgres({
+    companyContent: contentService(brain.brain.runtimeBrandSha256), brandBrain: readyBrandBrainService(), campaignDrafts: capturing,
+  }), changedTopic);
+  await call('POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, postgres({
+    companyContent: contentService(brain.brain.runtimeBrandSha256, false, '91000000-0000-4000-8000-000000000002'),
+    brandBrain: { snapshot: async () => ({ ok: true as const, snapshot: {
+      ...readyBrandBrainSnapshot(),
+      workspace: { ...readyBrandBrainSnapshot().workspace, workspaceId: '91000000-0000-4000-8000-000000000002' },
+    } }) },
+    campaignDrafts: capturing,
+  }), baseReviewDraftForm());
+
+  await call('POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, postgres({
+    companyContent: contentService(
+      brain.brain.runtimeBrandSha256,
+      false,
+      IDS.workspace,
+      '99000000-0000-4000-8000-000000000099',
+    ),
+    brandBrain: readyBrandBrainService(),
+    campaignDrafts: capturing,
+  }), baseReviewDraftForm());
+
+  assert.equal(new Set(observed.map((item) => item.generation)).size, 4);
+  assert.equal(new Set(observed.map((item) => item.persistence)).size, 4);
+  assert.deepEqual(observed[1], observed[0]);
+});
+
+test('campaign generation explains an unusable source without inventing an evidence mismatch', async () => {
+  const brain = readyBrandBrainSnapshot();
+  const campaignDrafts = {
+    generateAndStage: async () => ({
+      ok: false as const,
+      kind: 'unavailable' as const,
+      message: new PropertyPredatorGenerationBridgeError('upstream_rejected').message,
+    }),
+  };
   const result = await call('POST', CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE, postgres({
     companyContent: contentService(brain.brain.runtimeBrandSha256),
     brandBrain: readyBrandBrainService(),
     campaignDrafts,
   }), baseReviewDraftForm());
 
-  assert.equal(result.statusCode, 400);
-  assert.match(result.body, /We could not create your drafts/);
-  assert.match(result.body, /Remove any private contact details or active HTML/);
+  assert.equal(result.statusCode, 503);
+  assert.match(result.body, /Drafts could not be saved/);
+  assert.match(result.body, /Retry only failed channels/);
+  assert.match(result.body, /name="command_key" value="campaign-review-draft-command-0001"/);
   assert.doesNotMatch(result.body, /evidence did not match|integrity mismatch/i);
 });
 

@@ -405,6 +405,16 @@ function catalogItem(row: CatalogRow): CompanyContentCatalogItem {
 export class CompanyContentPgRepository {
   constructor(private readonly transaction: SqlExecutor) {}
 
+  async snapshotAt(): Promise<string> {
+    const result = await this.transaction.query<{ snapshotAt: string }>(
+      `/* company-content.snapshot-at */ SELECT statement_timestamp()::text AS "snapshotAt"`,
+    );
+    if (result.rows.length !== 1 || !result.rows[0]?.snapshotAt) {
+      throw new Error('Company content snapshot time was unavailable');
+    }
+    return result.rows[0].snapshotAt;
+  }
+
   async claimCommand(input: {
     readonly id: string;
     readonly commandName: string;
