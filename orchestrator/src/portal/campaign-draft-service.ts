@@ -43,6 +43,18 @@ function context(identity: PortalCompanyContentRequestIdentity, principal: {
   });
 }
 
+function safeCampaignDraftDiagnostic(error: unknown): string {
+  if (!(error instanceof Error)) return 'unknown_error';
+  const candidate = error as Error & { code?: unknown };
+  const code = typeof candidate.code === 'string' ? ` code=${candidate.code.slice(0, 20)}` : '';
+  const message = error.message
+    .replace(/(?:postgres(?:ql)?|https?):\/\/[^\s]+/giu, '[redacted-url]')
+    .replace(/(?:password|token|secret|apikey|api_key)\s*[=:]\s*[^\s,;]+/giu, '$1=[redacted]')
+    .replace(/[\r\n\t]+/gu, ' ')
+    .slice(0, 300);
+  return `${error.name}${code}${message ? ` message=${message}` : ''}`;
+}
+
 export class PgPortalCampaignDraftService implements PortalCampaignDraftService {
   constructor(private readonly dependencies: Readonly<{
     principalResolver: Pick<PortalCrmPrincipalResolver, 'resolve'>;
@@ -55,10 +67,12 @@ export class PgPortalCampaignDraftService implements PortalCampaignDraftService 
     identity: PortalCompanyContentRequestIdentity,
     input: StagePropertyPredatorGeneratedDraftInput,
   ): Promise<PortalCampaignDraftOutcome> {
+    let stage = 'resolve_principal';
     try {
       const principal = await this.dependencies.principalResolver.resolve(identity.sessionToken);
       if (!principal) return Object.freeze({ ok: false, kind: 'unauthenticated', message: 'This portal session is no longer active.' });
       const databaseContext = context(identity, principal);
+      stage = 'load_access';
       const access = await this.dependencies.accessReader.load(databaseContext);
       if (!access || access.workspaceId !== principal.workspaceId.toLowerCase()) {
         return Object.freeze({ ok: false, kind: 'forbidden', message: 'This workspace is not available to the current portal session.' });
@@ -66,6 +80,7 @@ export class PgPortalCampaignDraftService implements PortalCampaignDraftService 
       if (!access.canManage) {
         return Object.freeze({ ok: false, kind: 'forbidden', message: 'Only a workspace owner or admin can create saved campaign drafts.' });
       }
+      stage = 'generate_and_persist';
       return Object.freeze({
         ok: true,
         draft: await this.dependencies.lifecycle.generateAndStage(databaseContext, input),
@@ -78,6 +93,7 @@ export class PgPortalCampaignDraftService implements PortalCampaignDraftService 
       if (error instanceof PropertyPredatorGeneratedDraftLifecycleError) {
         return Object.freeze({ ok: false, kind: 'conflict', message: 'The campaign evidence changed while the draft was being saved. Refresh and try again.' });
       }
+      console.error(`[campaign-draft] stage=${stage} ${safeCampaignDraftDiagnostic(error)}`);
       return Object.freeze({ ok: false, kind: 'unavailable', message: 'The draft could not be saved safely. Nothing was approved, scheduled or posted.' });
     }
   }
