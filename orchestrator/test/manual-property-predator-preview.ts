@@ -75,6 +75,13 @@ import {
   presentConversionInbox,
 } from '../src/portal/conversion-inbox-presenter.js';
 import { renderConversionInboxBody } from '../src/portal/conversion-inbox-view.js';
+import type { PortalZernioMessagingSnapshot } from '../src/portal/zernio-messaging-service.js';
+import { renderZernioMessagingBody } from '../src/portal/zernio-messaging-view.js';
+import {
+  conversionInboxStatus,
+  socialMessagingStatus,
+  socialUncheckedStatus,
+} from '../src/portal/inbox-source-status.js';
 import {
   CONVERSION_INBOX_CREATE_DRAFT_ROUTE,
   conversionInboxNoticeFromQuery,
@@ -1807,6 +1814,10 @@ function previewConversionInbox(url: URL): string {
   const messageId = draft?.messageId;
   const approvalRequestId = draft?.approvalRequestId;
   return renderConversionInboxBody(view, {
+    sourceStatuses: [
+      conversionInboxStatus(true),
+      socialUncheckedStatus(true),
+    ],
     security: {
       csrfToken: PREVIEW_CSRF,
       createDraftKeys: thread && draft?.messageId === null
@@ -1840,6 +1851,28 @@ function previewConversionInbox(url: URL): string {
       outcomeOccurredAt: '2030-01-01T00:00:00.000Z',
       nextActionDueAt: '2030-01-02T00:00:00.000Z',
     },
+  });
+}
+
+function previewSocialSnapshot(): Extract<PortalZernioMessagingSnapshot, { ok: true }> {
+  return {
+    ok: true, provider: 'zernio', providerEffects: false,
+    outboundEffectsEnabled: false, emergencyPaused: false,
+    checkedAt: '2026-09-08T09:42:00.000Z', conversations: [], commentPosts: [],
+    selectedConversation: null, selectedCommentPost: null, selectedComment: null,
+    selectedTarget: null, messages: [], comments: [], reply: null,
+    conversationHistoryTruncated: false, queueTruncated: false,
+  };
+}
+
+function previewSocialInbox(state: string | null): string {
+  const source: PortalZernioMessagingSnapshot = state === 'failure'
+    ? { ok: false, kind: 'provider_unavailable', providerEffects: false }
+    : state === 'permission'
+      ? { ok: false, kind: 'forbidden', providerEffects: false }
+      : previewSocialSnapshot();
+  return renderZernioMessagingBody(source, {
+    sourceStatuses: [conversionInboxStatus(true), socialMessagingStatus(source)],
   });
 }
 
@@ -2173,6 +2206,10 @@ function page(url: URL): { status: number; html: string; board?: boolean; script
   if (path === CONVERSION_INBOX_ROUTE) return {
     status: 200,
     html: shell(`${previewOperationsNav('inbox')}${previewConversionInbox(url)}`, 'inbox', 'Property Predator — Conversion Inbox'),
+  };
+  if (path === '/preview/inbox/social' || path === '/portal/inbox/social') return {
+    status: 200,
+    html: shell(`${previewOperationsNav('inbox')}${previewSocialInbox(url.searchParams.get('state'))}`, 'inbox', 'Property Predator — Live Social Inbox'),
   };
   if (path === AUTOMATION_STUDIO_ROUTE) return {
     status: 200,
@@ -2740,6 +2777,17 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (request.method === 'GET' && path === '/portal/appearance.js') {
+    response.writeHead(200, {
+      'content-type': 'text/javascript; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+      'content-security-policy': "default-src 'none'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+    });
+    response.end(PORTAL_APPEARANCE_CLIENT_SOURCE);
+    return;
+  }
+
   if (request.method !== 'GET') {
     response.writeHead(405, { allow: 'GET, POST', 'cache-control': 'no-store' });
     response.end();
@@ -2755,7 +2803,7 @@ const server = createServer(async (request, response) => {
       ? "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
       : rendered.scripted
         ? "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
-        : "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        : "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
   });
   response.end(rendered.html);
 });

@@ -102,7 +102,7 @@ test('portal social Messaging authenticates through the durable connected-accoun
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() {
       return { ok: true as const, accounts: [{
-        accountId: '00000000-0000-4000-8000-000000000001', network: 'instagram' as const,
+        accountId: ACCOUNT, network: 'instagram' as const,
         username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
         linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
         webhookReceiptCount: 1,
@@ -135,8 +135,108 @@ test('portal social Messaging refuses provider reads when the Instagram connecti
     commentAccountBindings, providerEffectsEnabled: false, emergencyPaused: true,
   });
   const result = await service.snapshot(identity, {});
-  assert.deepEqual(result, { ok: false, kind: 'unavailable', providerEffects: false });
+  assert.deepEqual(result, { ok: false, kind: 'not_connected', providerEffects: false });
   assert.equal(providerCalled, false);
+});
+
+test('same-platform foreign account records cannot be read or used for a reply', async () => {
+  const foreign = 'foreign-instagram-account';
+  let requestedAccountIds: readonly string[] = [];
+  let sends = 0;
+  const service = new LivePortalZernioMessagingService({
+    accounts: { async snapshot() { return { ok: true as const, accounts: [{
+      accountId: ACCOUNT, network: 'instagram' as const,
+      username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
+      linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
+      webhookReceiptCount: 1,
+    }] }; } },
+    client: {
+      ...client(),
+      async listConversations(input) {
+        requestedAccountIds = input.accountIds;
+        return { conversations: [{ ...conversation, accountId: foreign }],
+          checkedAt: '2026-09-01T01:01:00.000Z', hasMore: false };
+      },
+      async listCommentedPosts() {
+        return { posts: [{ ...commentedPost, accountId: foreign }],
+          checkedAt: '2026-09-01T01:01:00.000Z', hasMore: false, nextCursor: null };
+      },
+    },
+    sender: { ...sender, async sendMessage() { sends += 1; return sender.sendMessage(); } },
+    replies: replies(), allowedAccountIds: [ACCOUNT, foreign],
+    commentAccountBindings: [
+      ...commentAccountBindings,
+      { accountId: foreign, platform: 'instagram' as const },
+    ],
+    providerEffectsEnabled: true, emergencyPaused: false,
+  });
+  const snapshot = await service.snapshot(identity, {});
+  assert.equal(snapshot.ok, true);
+  if (!snapshot.ok) return;
+  assert.deepEqual(requestedAccountIds, [ACCOUNT]);
+  assert.equal(snapshot.conversations.length, 0);
+  assert.equal(snapshot.commentPosts.length, 0);
+  const draft = await service.createDraft(identity, {
+    draftId: '00000000-0000-4000-8000-000000000009',
+    target: { kind: 'dm', accountId: foreign, platform: 'instagram', providerConversationId: 'conversation-1' },
+    body: 'Never stored',
+  });
+  assert.deepEqual(draft, { ok: false, kind: 'forbidden', providerEffects: 'none' });
+  const send = await service.sendApproved(identity, {
+    draftId: '00000000-0000-4000-8000-000000000010',
+    deliveryId: '00000000-0000-4000-8000-000000000011',
+    leaseToken: '00000000-0000-4000-8000-000000000012',
+    target: { kind: 'dm', accountId: foreign, platform: 'instagram', providerConversationId: 'conversation-1' },
+  });
+  assert.deepEqual(send, { ok: false, kind: 'forbidden', providerEffects: 'none' });
+  assert.equal(sends, 0);
+});
+
+test('active but unconfigured DM accounts and misbound comment posts cannot reach the reply ledger', async () => {
+  for (const kind of ['dm', 'comment'] as const) {
+    let touchedLedger = 0;
+    let sends = 0;
+    const service = new LivePortalZernioMessagingService({
+      accounts: { async snapshot() { return { ok: true as const, accounts: [{
+        accountId: ACCOUNT, network: 'instagram' as const,
+        username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
+        linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
+        webhookReceiptCount: 1,
+      }] }; } },
+      client: {
+        ...client(),
+        async listCommentedPosts() {
+          return { posts: [{ ...commentedPost, accountId: 'another-account' }],
+            checkedAt: '2026-09-01T01:01:00.000Z', hasMore: false, nextCursor: null };
+        },
+      },
+      sender: {
+        async sendMessage() { sends += 1; return sender.sendMessage(); },
+        async replyToComment() { sends += 1; return sender.replyToComment(); },
+      },
+      replies: {
+        ...replies(),
+        async create() { touchedLedger += 1; return replies().create(); },
+        async claim() { touchedLedger += 1; return replies().claim(); },
+      },
+      allowedAccountIds: [], commentAccountBindings,
+      providerEffectsEnabled: true, emergencyPaused: false,
+    });
+    const target = kind === 'dm'
+      ? { kind, accountId: ACCOUNT, platform: 'instagram' as const, providerConversationId: 'conversation-1' }
+      : { kind, accountId: ACCOUNT, platform: 'instagram' as const,
+          providerPostId: 'ig-post-1', providerCommentId: 'ig-comment-1' };
+    assert.deepEqual(await service.createDraft(identity, {
+      draftId: '00000000-0000-4000-8000-000000000060', target, body: 'Do not store',
+    }), { ok: false, kind: 'forbidden', providerEffects: 'none' });
+    assert.deepEqual(await service.sendApproved(identity, {
+      draftId: '00000000-0000-4000-8000-000000000060',
+      deliveryId: '00000000-0000-4000-8000-000000000061',
+      leaseToken: '00000000-0000-4000-8000-000000000062', target,
+    }), { ok: false, kind: 'forbidden', providerEffects: 'none' });
+    assert.equal(touchedLedger, 0);
+    assert.equal(sends, 0);
+  }
 });
 
 test('portal social Messaging reads and sends an approved Facebook Page DM through the same exact rail', async () => {
@@ -144,7 +244,7 @@ test('portal social Messaging reads and sends an approved Facebook Page DM throu
   const facebookConversation = Object.freeze({ ...conversation, platform: 'facebook' as const });
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: '00000000-0000-4000-8000-000000000001', network: 'facebook' as const,
+      accountId: ACCOUNT, network: 'facebook' as const,
       username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
@@ -220,7 +320,7 @@ test('approved social reply claims once, calls the provider once and settles acc
   const settlements: unknown[] = [];
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: '00000000-0000-4000-8000-000000000001', network: 'instagram' as const,
+      accountId: ACCOUNT, network: 'instagram' as const,
       username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
@@ -259,7 +359,7 @@ test('a malformed successful provider response is quarantined instead of marked 
   const settlements: unknown[] = [];
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: '00000000-0000-4000-8000-000000000001', network: 'instagram' as const,
+      accountId: ACCOUNT, network: 'instagram' as const,
       username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
@@ -298,7 +398,7 @@ test('a malformed successful provider response is quarantined instead of marked 
 test('an accepted provider response stays outcome unknown when evidence settlement is unavailable', async () => {
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: '00000000-0000-4000-8000-000000000001', network: 'instagram' as const,
+      accountId: ACCOUNT, network: 'instagram' as const,
       username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
@@ -323,7 +423,7 @@ test('an already-claimed social reply never calls the provider again', async () 
   let sends = 0;
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: '00000000-0000-4000-8000-000000000001', network: 'instagram' as const,
+      accountId: ACCOUNT, network: 'instagram' as const,
       username: null, displayName: null, status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
@@ -357,7 +457,7 @@ test('Instagram comment posts and exact threads join the inbox while reads stay 
   const reads: unknown[] = [];
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: '00000000-0000-4000-8000-000000000001', network: 'instagram' as const,
+      accountId: ACCOUNT, network: 'instagram' as const,
       username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
@@ -416,7 +516,7 @@ test('LinkedIn comment posts and threads enter the network-qualified immutable l
   const ledgerCreates: unknown[] = [];
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: '00000000-0000-4000-8000-000000000002', network: 'linkedin' as const,
+      accountId: linkedinAccount, network: 'linkedin' as const,
       username: 'propertypredator-linkedin', displayName: 'Property Predator', status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
@@ -496,7 +596,7 @@ test('an approved LinkedIn comment reply claims and sends with exact network and
   };
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: '00000000-0000-4000-8000-000000000002', network: 'linkedin' as const,
+      accountId: linkedinAccount, network: 'linkedin' as const,
       username: 'propertypredator-linkedin', displayName: 'Property Predator', status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
@@ -563,7 +663,7 @@ test('an approved Instagram comment reply reuses the immutable ledger and exact 
   };
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: '00000000-0000-4000-8000-000000000001', network: 'instagram' as const,
+      accountId: ACCOUNT, network: 'instagram' as const,
       username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
