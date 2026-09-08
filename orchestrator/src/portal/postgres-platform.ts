@@ -18,6 +18,7 @@ import {
 import type { PortalCrmRequestIdentity } from './crm-service.js';
 import {
   createPgPortalCompanyContentService,
+  PgPortalCompanyContentWorkspaceAccessReader,
   type PgPortalCompanyContentService,
 } from './company-content-pg-service.js';
 import {
@@ -122,9 +123,9 @@ import {
 import {
   composePropertyPredatorCampaignDraftRuntime,
 } from './property-predator-campaign-draft-composition.js';
-import type {
-  PropertyPredatorCampaignDraftRuntime,
-} from '../company-content-adapter/property-predator-campaign-draft-runtime.js';
+import { CompanyContentService, createCompanyContentTransactionRunner } from '../company-content-pg/index.js';
+import { PropertyPredatorGeneratedDraftLifecycle } from '../company-content-adapter/property-predator-generation-approval.js';
+import { PgPortalCampaignDraftService, type PortalCampaignDraftService } from './campaign-draft-service.js';
 import {
   createPropertyPredatorOwnedSeedCampaignService,
   type PropertyPredatorOwnedSeedCampaignService,
@@ -173,7 +174,7 @@ export interface PgPortalPlatform {
   /** Product-scoped, metadata-only Brand Brain read boundary. */
   brandBrain?: PgPortalBrandBrainService;
   /** Exact-evidence, review-only source generation; no send/publish surface. */
-  campaignDrafts?: Pick<PropertyPredatorCampaignDraftRuntime, 'generateReviewDraft'>;
+  campaignDrafts?: PortalCampaignDraftService;
   /** Durable TEST-only public-social campaign planner and safe calendar projection. */
   publicSocial?: PgPortalPublicSocialService;
   /** One-use Zernio account connection and signed account-event evidence only. */
@@ -419,6 +420,27 @@ async function assertBrandBrainRoleCapabilities(adapterPool: Pool): Promise<void
   }
 }
 
+async function assertGeneratedDraftLifecycleRoleCapabilities(adapterPool: Pool): Promise<void> {
+  const result = await adapterPool.query<{ ready: boolean }>(
+    `/* portal.generated-draft-lifecycle-role-readiness */
+     SELECT current_user = 'r72_content_adapter'
+        AND pg_catalog.has_table_privilege(current_user, 'app.company_content_items', 'SELECT,INSERT')
+        AND pg_catalog.has_table_privilege(current_user, 'app.company_content_versions', 'SELECT,INSERT')
+        AND pg_catalog.has_table_privilege(current_user, 'app.company_content_source_attestations', 'SELECT,INSERT')
+        AND pg_catalog.has_table_privilege(current_user, 'app.command_receipts', 'SELECT,INSERT')
+        AND pg_catalog.has_column_privilege(current_user, 'app.command_receipts', 'result', 'UPDATE')
+        AND pg_catalog.has_column_privilege(current_user, 'app.command_receipts', 'status', 'UPDATE')
+        AND pg_catalog.has_column_privilege(current_user, 'app.command_receipts', 'response_status', 'UPDATE')
+        AND pg_catalog.has_column_privilege(current_user, 'app.command_receipts', 'completed_at', 'UPDATE')
+        AND NOT pg_catalog.has_table_privilege(current_user, 'app.company_content_items', 'UPDATE,DELETE')
+        AND NOT pg_catalog.has_table_privilege(current_user, 'app.company_content_approval_requests', 'INSERT')
+        AND NOT pg_catalog.has_table_privilege(current_user, 'app.provider_operations', 'INSERT') AS ready`,
+  );
+  if (result.rows.length !== 1 || result.rows[0]?.ready !== true) {
+    throw new Error('Generated draft lifecycle adapter capabilities are incomplete');
+  }
+}
+
 export function postgresPortalEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env.PORTAL_POSTGRES_ENABLED?.trim().toLowerCase() ?? '';
   if (!raw || raw === '0' || raw === 'false' || raw === 'no') return false;
@@ -541,6 +563,7 @@ export async function buildPgPortalPlatform(
     let companyContentSync: PgPortalCompanyContentSyncService | undefined;
     let companyContentReview: PgPortalCompanyContentReviewService | undefined;
     let brandBrain: PgPortalBrandBrainService | undefined;
+    let campaignDrafts: PortalCampaignDraftService | undefined;
     let publicSocial: PgPortalPublicSocialService | undefined;
     let ownedSeedCampaign: PgPortalOwnedSeedCampaignService | undefined;
     let ownedSeedCampaignCore: PropertyPredatorOwnedSeedCampaignService | undefined;
@@ -597,6 +620,9 @@ export async function buildPgPortalPlatform(
         await assertCompanyAssetRoleCapabilities(contentAdapterPool, contentCommandPool);
         if (propertyPredatorGrowthProfile) {
           await assertBrandBrainRoleCapabilities(contentAdapterPool);
+          if (campaignDraftComposition.generation) {
+            await assertGeneratedDraftLifecycleRoleCapabilities(contentAdapterPool);
+          }
         }
         companyAssets = createPgPortalCompanyAssetsService({
           webPool,
@@ -625,6 +651,39 @@ export async function buildPgPortalPlatform(
             webPool,
             adapterPool: contentAdapterPool,
           });
+          if (campaignDraftComposition.generation) {
+            const webRunner = createCompanyContentTransactionRunner(webPool);
+            const webContent = new CompanyContentService({ transactionRunner: webRunner });
+            campaignDrafts = new PgPortalCampaignDraftService({
+              principalResolver: createPgPortalCrmPrincipalResolver(webPool),
+              accessReader: new PgPortalCompanyContentWorkspaceAccessReader(webRunner),
+              lifecycle: new PropertyPredatorGeneratedDraftLifecycle({
+                generation: campaignDraftComposition.generation,
+                content: new CompanyContentService({
+                  transactionRunner: createCompanyContentTransactionRunner(contentAdapterPool),
+                }),
+                revalidateEvidence: async (context, evidence) => {
+                  const current = await webContent.listCatalogWithSnapshot(context, { limit: 100 });
+                  return Object.freeze({
+                    valid: [...evidence.facts, ...evidence.assets].every((expected) => {
+                    const item = current.page.items.find((candidate) => (
+                      candidate.contentItemId === expected.contentItemId
+                      && candidate.contentVersionId === expected.versionId
+                    ));
+                    return Boolean(item
+                      && item.contentSha256 === expected.contentSha256
+                      && item.brandSha256 === expected.brandSha256
+                      && item.approvalRequestId === expected.approvalRequestId
+                      && item.approvalDecisionId === expected.approvalDecisionId
+                      && item.approvalStatus === 'approved'
+                      && !item.approvalStale && item.sourceFresh && item.publishable);
+                    }),
+                    checkedAt: current.snapshotAt,
+                  });
+                },
+              }),
+            });
+          }
         }
         assetReadinessPool = contentAdapterPool;
         pools.push(contentAdapterPool);
@@ -634,6 +693,7 @@ export async function buildPgPortalPlatform(
         companyContentSync = undefined;
         companyContentReview = undefined;
         brandBrain = undefined;
+        campaignDrafts = undefined;
         if (requireCompanyContent) {
           throw new Error('Property Predator production company-assets controls did not pass readiness');
         }
@@ -1178,9 +1238,7 @@ export async function buildPgPortalPlatform(
       companyContentSync,
       companyContentReview,
       brandBrain,
-      campaignDrafts: companyContent && brandBrain
-        ? campaignDraftComposition.runtime
-        : undefined,
+      campaignDrafts: companyContent && brandBrain ? campaignDrafts : undefined,
       publicSocial,
       zernioSocial,
       zernioMessaging,

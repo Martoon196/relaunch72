@@ -156,7 +156,7 @@ test('the local policy is a deterministic one-call ceiling, not a restart-sensit
   });
 });
 
-test('PostgreSQL and server composition pass the review-only runtime into the portal', async () => {
+test('PostgreSQL and server composition pass the durable draft lifecycle into the portal', async () => {
   const [platform, provision, server] = await Promise.all([
     readFile(new URL('../src/portal/postgres-platform.ts', import.meta.url), 'utf8'),
     readFile(new URL('../src/portal/provision.ts', import.meta.url), 'utf8'),
@@ -165,8 +165,9 @@ test('PostgreSQL and server composition pass the review-only runtime into the po
   assert.match(platform, /composePropertyPredatorCampaignDraftRuntime\(env\)/u);
   assert.match(
     platform,
-    /campaignDrafts:\s*companyContent\s*&&\s*brandBrain\s*\?\s*campaignDraftComposition\.runtime/u,
+    /campaignDrafts:\s*companyContent\s*&&\s*brandBrain\s*\?\s*campaignDrafts/u,
   );
+  assert.match(platform, /new PropertyPredatorGeneratedDraftLifecycle/u);
   assert.match(provision, /campaignDrafts:\s*cfg\.campaignDrafts/u);
   assert.match(server, /campaignDrafts:\s*postgresPortal\.campaignDrafts/u);
 });

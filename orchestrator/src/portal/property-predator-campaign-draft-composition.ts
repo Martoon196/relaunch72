@@ -6,6 +6,7 @@ import {
   type PropertyPredatorGenerationPolicyDecision,
   type PropertyPredatorGenerationPolicyOutcome,
   type PropertyPredatorGenerationPolicyRequest,
+  type PropertyPredatorGenerationTransport,
 } from '../company-content-adapter/property-predator-generation.js';
 import { PropertyPredatorCampaignDraftRuntime } from
   '../company-content-adapter/property-predator-campaign-draft-runtime.js';
@@ -68,6 +69,8 @@ export interface PropertyPredatorCampaignDraftCompositionReadiness {
 export interface PropertyPredatorCampaignDraftComposition {
   readonly readiness: PropertyPredatorCampaignDraftCompositionReadiness;
   readonly runtime?: PropertyPredatorCampaignDraftRuntime;
+  /** Same fenced transport used by the runtime; callers must invoke only one path per command. */
+  readonly generation?: Pick<PropertyPredatorGenerationTransport, 'generateDraft'>;
 }
 
 export interface PropertyPredatorCampaignDraftCompositionDependencies {
@@ -287,6 +290,7 @@ export function composePropertyPredatorCampaignDraftRuntime(
   });
   return Object.freeze({
     readiness: readyReadiness(),
+    generation,
     runtime: new PropertyPredatorCampaignDraftRuntime({
       generation,
       providerEffectsEnabled: true,

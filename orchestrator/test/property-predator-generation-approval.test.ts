@@ -318,6 +318,7 @@ test('stages an exact generated social draft as immutable review-required versio
   assert.equal(setup.generationCalls[0]?.contextSha256, staged.generationContextSha256);
   assert.equal(staged.brandSha256, setup.brandSha256);
   assert.equal(staged.sourceItemId, staged.sourceDraftId);
+  assert.equal(staged.draft.payload.body, JSON.parse(setup.content.versions[0]!.command.content).body);
 
   const command = setup.content.versions[0]!.command;
   assert.equal(command.origin, 'generated');
@@ -375,6 +376,108 @@ test('stages an exact generated social draft as immutable review-required versio
     assert.notEqual(digest(canonicalCompanyContentJson(tampered)), staged.generationContextSha256);
   }
   assert.doesNotMatch(JSON.stringify(metadata), /investment property|growth-hq-stage-generation/i);
+});
+
+test('holds a generated result unsaved when selected approval evidence changes during generation', async () => {
+  const setup = fixture();
+  let rechecks = 0;
+  const lifecycle = new PropertyPredatorGeneratedDraftLifecycle({
+    generation: { generateDraft: async (command) => generatedDraft(1, setup.brandSha256, command.contextSha256) },
+    content: setup.content,
+    revalidateEvidence: async () => {
+      rechecks += 1;
+      return { valid: false, checkedAt: '2026-09-08T03:04:05.000Z' };
+    },
+  });
+  await assert.rejects(lifecycle.generateAndStage(CONTEXT, {
+    persistenceCommandKey: 'persist-generated-raced-evidence',
+    generation: setup.generation,
+    draftPlan: { selection: 'property-predator-agency-laps:presentation', brandBrainSnapshot: setup.brain },
+    approvedEvidence: { facts: [{
+      contentItemId: 'a1000000-0000-4000-8000-000000000001',
+      versionId: 'a2000000-0000-4000-8000-000000000001',
+      contentSha256: '1'.repeat(64), brandSha256: setup.brandSha256,
+      approvalRequestId: 'a3000000-0000-4000-8000-000000000001',
+      approvalDecisionId: 'a4000000-0000-4000-8000-000000000001',
+    }], assets: [] },
+  }), (error: unknown) => error instanceof PropertyPredatorGeneratedDraftLifecycleError
+    && error.code === 'approval_conflict');
+  assert.equal(rechecks, 1);
+  assert.equal(setup.content.versions.length, 0);
+});
+
+test('records approved inputs as historical preflight evidence separately from generated-source attestation', async () => {
+  const setup = fixture();
+  const lifecycle = new PropertyPredatorGeneratedDraftLifecycle({
+    generation: { generateDraft: async (command) => generatedDraft(1, setup.brandSha256, command.contextSha256) },
+    content: setup.content,
+    revalidateEvidence: async () => ({ valid: true, checkedAt: '2026-09-08T03:04:05.000Z' }),
+    now: () => NOW,
+  });
+  await lifecycle.generateAndStage(CONTEXT, {
+    persistenceCommandKey: 'persist-generated-historical-evidence',
+    generation: setup.generation,
+    draftPlan: { selection: 'property-predator-agency-laps:presentation', brandBrainSnapshot: setup.brain },
+    approvedEvidenceCheckedAt: '2026-09-08T03:00:00.000Z',
+    approvedEvidence: { facts: [{
+      contentItemId: 'a1000000-0000-4000-8000-000000000001',
+      versionId: 'a2000000-0000-4000-8000-000000000001',
+      contentSha256: '1'.repeat(64), brandSha256: setup.brandSha256,
+      approvalRequestId: 'a3000000-0000-4000-8000-000000000001',
+      approvalDecisionId: 'a4000000-0000-4000-8000-000000000001',
+    }], assets: [] },
+  });
+  const command = setup.content.versions[0]!.command;
+  const marketing = (command.metadata as any).marketing;
+  assert.equal(marketing.generationContext.approvedEvidenceStatus, 'approved_at_preflight');
+  assert.equal(marketing.approvedEvidenceCheckedAt, '2026-09-08T03:00:00.000Z');
+  assert.deepEqual(marketing.approvedEvidenceRecheck, {
+    status: 'approved_at_post_generation_check', checkedAt: '2026-09-08T03:04:05.000Z',
+  });
+  assert.equal(command.attestation.checkedAt, NOW.toISOString());
+  assert.notEqual(command.attestation.checkedAt, marketing.approvedEvidenceCheckedAt);
+});
+
+test('recovers source success after a save failure without a second paid effect as clocks advance', async () => {
+  const setup = fixture();
+  let transportCalls = 0;
+  let paidEffects = 0;
+  let savedDraft: ReturnType<typeof generatedDraft> | undefined;
+  let saveAttempts = 0;
+  let clock = new Date('2026-09-08T03:00:00.000Z');
+  const lifecycle = new PropertyPredatorGeneratedDraftLifecycle({
+    generation: { generateDraft: async (command) => {
+      transportCalls += 1;
+      if (!savedDraft) {
+        paidEffects += 1;
+        savedDraft = generatedDraft(1, setup.brandSha256, command.contextSha256);
+      }
+      return savedDraft;
+    } },
+    content: {
+      createVersion: async (context, command) => {
+        saveAttempts += 1;
+        if (saveAttempts === 1) throw new Error('synthetic database interruption');
+        return setup.content.createVersion(context, command);
+      },
+      listVersionApprovalStates: (...args) => setup.content.listVersionApprovalStates(...args),
+      requestApproval: (...args) => setup.content.requestApproval(...args),
+      decideApproval: (...args) => setup.content.decideApproval(...args),
+    },
+    now: () => clock,
+  });
+  const input = {
+    persistenceCommandKey: 'persist-after-interrupted-save',
+    generation: setup.generation,
+    draftPlan: { selection: 'property-predator-agency-laps:presentation', brandBrainSnapshot: setup.brain },
+  } as const;
+  await assert.rejects(lifecycle.generateAndStage(CONTEXT, input), /synthetic database interruption/);
+  clock = new Date('2026-09-08T03:05:00.000Z');
+  const recovered = await lifecycle.generateAndStage(CONTEXT, input);
+  assert.equal(recovered.status, 'draft');
+  assert.equal(transportCalls, 2);
+  assert.equal(paidEffects, 1);
+  assert.equal(setup.content.versions.length, 1);
 });
 
 test('joins request, rejection and exact revision while preserving the first decision as stale history', async () => {

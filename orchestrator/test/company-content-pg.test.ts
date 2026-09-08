@@ -19,6 +19,8 @@ import {
   type CreateCompanyContentEmailDraftVersionCommand,
   type CreateCompanyContentVersionCommand,
 } from '../src/company-content-pg/index.js';
+import { PropertyPredatorGeneratedDraftLifecycle } from '../src/company-content-adapter/property-predator-generation-approval.js';
+import { createPropertyPredatorBrandBrainFixture } from '../src/portal/brand-brain-fixtures.js';
 
 const context: DatabaseRequestContext = {
   actorKind: 'user',
@@ -483,6 +485,99 @@ function ids(): () => string {
   return () => `${String(next++).padStart(8, '0')}-3333-4333-8333-${String(next).padStart(12, '0')}`;
 }
 
+test('generated lifecycle persists into the real catalogue and exact-review repository paths', async () => {
+  const database = new InMemoryContentSql();
+  const content = new CompanyContentService({
+    transactionRunner: runner(database),
+    nextId: ids(),
+    now: () => new Date('2026-08-28T14:00:00.000Z'),
+  });
+  const fixture = JSON.parse(JSON.stringify(createPropertyPredatorBrandBrainFixture())) as ReturnType<typeof createPropertyPredatorBrandBrainFixture>;
+  const brain = {
+    ...fixture,
+    brain: {
+      ...fixture.brain,
+      evaluationPassed: true,
+      activated: true,
+      visualPolicyConflict: false,
+      reviews: [...fixture.brain.reviews, {
+        dimension: 'brand_readiness' as const,
+        decision: 'approved' as const,
+        decisionId: 'b3000000-0000-4000-8000-000000000003',
+      }],
+      specialists: fixture.brain.specialists.map((profile) => profile.profileId === 'propertypredator.owned.social/v1'
+        ? { ...profile, capabilities: ['post', 'thread'], runtimeReady: true, blockedReason: null }
+        : profile),
+    },
+  };
+  let generationCalls = 0;
+  const lifecycle = new PropertyPredatorGeneratedDraftLifecycle({
+    content,
+    now: () => new Date('2026-08-28T14:00:00.000Z'),
+    generation: {
+      async generateDraft(command) {
+        generationCalls += 1;
+        const payload = Object.freeze({
+          body: 'A saved Property Predator draft for exact review.',
+          contextSha256: command.contextSha256,
+          cta_url: 'https://propertypredator.com/learn',
+          kind: 'post' as const,
+          platform: 'linkedin',
+          schema: 'propertypredator.company-content/v1' as const,
+          title: 'Review this saved draft',
+          type: 'generated' as const,
+        });
+        const usage = Object.freeze({
+          accountingState: 'provider_tokens_unpriced' as const,
+          inputTokens: 20,
+          outputTokens: 30,
+          model: 'offline-fixture',
+          providerRequestId: 'offline-provider-request',
+        });
+        return Object.freeze({
+          ok: true as const,
+          schemaVersion: 1 as const,
+          brandSha256: command.expectedBrandSha256,
+          contentSha256: createHash('sha256').update(canonicalCompanyContentJson(payload)).digest('hex'),
+          contextSha256: command.contextSha256,
+          draftId: 'd1000000-0000-4000-8000-000000000001',
+          itemVersion: 1,
+          payload,
+          status: 'source_review_required' as const,
+          usage,
+          usageSha256: createHash('sha256').update(canonicalCompanyContentJson(usage)).digest('hex'),
+          versionId: 'd2000000-0000-4000-8000-000000000001',
+        });
+      },
+    },
+  });
+
+  const staged = await lifecycle.generateAndStage(context, {
+    persistenceCommandKey: 'campaign-stage-real-repository-1',
+    draftPlan: {
+      selection: 'property-predator-agency-laps:presentation',
+      brandBrainSnapshot: brain,
+    },
+    generation: {
+      idempotencyKey: 'campaign-generate-real-repository-1',
+      expectedBrandSha256: brain.brain.runtimeBrandSha256,
+      maximumCostMinor: 250,
+      brief: { kind: 'post', platform: 'linkedin', topic: 'Useful evidence', tone: 'direct' },
+    },
+  });
+
+  assert.equal(generationCalls, 1);
+  const catalogue = await content.listCatalog(context, { limit: 10 });
+  assert.equal(catalogue.items.length, 1);
+  assert.equal(catalogue.items[0]?.contentItemId, staged.reviewTarget.contentItemId);
+  assert.equal(catalogue.items[0]?.contentVersionId, staged.reviewTarget.contentVersionId);
+  assert.equal(catalogue.items[0]?.kind, 'social_post');
+  const review = await content.getExactReview(context, staged.reviewTarget);
+  assert.equal(review?.canonicalContent, canonicalCompanyContentJson(staged.draft.payload));
+  assert.equal(review?.approvalStatus, 'unrequested');
+  assert.equal(review?.approvalStale, false);
+});
+
 test('normalization computes exact content SHA and rejects malformed provenance hashes', () => {
   const normalized = normalizeCompanyContentVersionCommand(command());
   assert.equal(
@@ -726,6 +821,29 @@ test('exact command replay returns stored result while changed input conflicts',
     CompanyContentIdempotencyConflictError,
   );
   assert.equal(database.versions.length, 1);
+});
+
+test('generated draft replay preserves its first observation proof when only clocks advance', async () => {
+  const database = new InMemoryContentSql();
+  const service = new CompanyContentService({ transactionRunner: runner(database), nextId: ids() });
+  const firstCommand = command({
+    commandKey: 'generated-clock-stable-replay',
+    source: { system: 'property_predator_generation', itemId: 'draft-1', version: 'v1' },
+    attestation: { catalogSha256: '33'.repeat(32), checkedAt: '2026-09-08T03:00:00.000Z', expiresAt: '2026-09-08T03:10:00.000Z' },
+    metadata: { marketing: { approvedEvidenceCheckedAt: '2026-09-08T02:59:00.000Z' } },
+  });
+  const first = await service.createVersion(context, firstCommand);
+  const replayed = await service.createVersion(context, {
+    ...firstCommand,
+    attestation: { catalogSha256: '33'.repeat(32), checkedAt: '2026-09-08T03:05:00.000Z', expiresAt: '2026-09-08T03:15:00.000Z' },
+    metadata: { marketing: {
+      approvedEvidenceCheckedAt: '2026-09-08T03:04:00.000Z',
+      approvedEvidenceRecheck: { status: 'approved_at_post_generation_check', checkedAt: '2026-09-08T03:04:30.000Z' },
+    } },
+  });
+  assert.deepEqual(replayed, { ...first, disposition: 'replayed' });
+  assert.equal(database.versions.length, 1);
+  assert.equal([...database.attestations.values()][0]?.checkedAt, '2026-09-08T03:00:00.000Z');
 });
 
 test('source sync atomically resolves one logical item and appends the next source version', async () => {
