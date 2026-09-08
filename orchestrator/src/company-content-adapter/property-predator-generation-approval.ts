@@ -691,8 +691,22 @@ export class PropertyPredatorGeneratedDraftLifecycle {
     const match = /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):v([1-9][0-9]*)$/u
       .exec(state.source.version);
     if (!match) fail('integrity_mismatch');
+    const source = state.sourceMetadata;
+    if (!source || typeof source !== 'object' || Array.isArray(source)) fail('integrity_mismatch');
+    const evidence = source as Record<string, unknown>;
+    if (evidence.schema !== 'propertypredator.generated-draft-source/v1'
+        || evidence.sourceItemId !== state.source.itemId
+        || evidence.sourceVersionId !== match[1]
+        || evidence.sourceItemVersion !== Number(match[2])
+        || evidence.contentSha256 !== state.contentSha256
+        || evidence.brandSha256 !== state.brandSha256
+        || typeof evidence.sourceDraftId !== 'string' || !UUID.test(evidence.sourceDraftId)) {
+      fail('integrity_mismatch');
+    }
     const proof = await this.dependencies.generatedSource.verify(Object.freeze({
-      sourceItemId: uuid(state.source.itemId),
+      // A revision keeps the logical HQ item, but each generation has its own
+      // upstream draft ID. Read that exact ID from this immutable version.
+      sourceItemId: evidence.sourceDraftId,
       sourceVersionId: match[1]!,
       sourceItemVersion: Number(match[2]),
       contentSha256: state.contentSha256,

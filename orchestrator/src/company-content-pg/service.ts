@@ -382,7 +382,15 @@ export class CompanyContentService {
   ): Promise<RefreshCompanyContentSourceAttestationResult> {
     validateCompanyContentUserContext(context);
     const input = normalizeRefreshCompanyContentSourceAttestationCommand(command);
-    const requestHash = companyContentRequestHash(context, REFRESH_SOURCE_ATTESTATION, input);
+    const requestHash = companyContentRequestHash(context, REFRESH_SOURCE_ATTESTATION,
+      input.sourceSystem === 'property_predator_generation' ? {
+        ...input,
+        // A retried portal command re-observes the same immutable source. Its
+        // first committed proof and expiry must be replayed, never extended.
+        sourceCheckedAt: null,
+        sourceExpiresAt: null,
+        sourceFreshnessMs: Date.parse(input.sourceExpiresAt) - Date.parse(input.sourceCheckedAt),
+      } : input);
     try {
       return await this.dependencies.transactionRunner.run(context, async (transaction) => {
         const repository = new CompanyContentPgRepository(transaction);

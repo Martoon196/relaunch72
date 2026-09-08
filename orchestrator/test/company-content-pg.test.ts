@@ -104,6 +104,7 @@ interface Version {
   sourceSystem: string;
   sourceItemId: string;
   sourceVersion: string;
+  metadata: Record<string, unknown>;
   contentSha256: string;
   blobSha256: string;
   brandSha256: string;
@@ -227,6 +228,7 @@ class InMemoryContentSql implements SqlExecutor {
         contentSha256: createHash('sha256').update(String(values[11]), 'utf8').digest('hex'),
         blobSha256: String(values[13]),
         brandSha256: String(values[15]),
+        metadata: JSON.parse(String(values[16])) as Record<string, unknown>,
         createdAt: String(values[19]),
       };
       this.versions.push(version);
@@ -361,6 +363,7 @@ class InMemoryContentSql implements SqlExecutor {
             sourceSystem: version.sourceSystem,
             sourceItemId: version.sourceItemId,
             sourceVersion: version.sourceVersion,
+            sourceMetadata: version.metadata.source,
             contentSha256: version.contentSha256,
             blobSha256: version.blobSha256,
             brandSha256: version.brandSha256,
@@ -844,6 +847,58 @@ test('generated draft replay preserves its first observation proof when only clo
   assert.deepEqual(replayed, { ...first, disposition: 'replayed' });
   assert.equal(database.versions.length, 1);
   assert.equal([...database.attestations.values()][0]?.checkedAt, '2026-09-08T03:00:00.000Z');
+});
+
+test('generated source refresh retries preserve the first committed proof and expiry', async () => {
+  const database = new InMemoryContentSql();
+  const service = new CompanyContentService({ transactionRunner: runner(database), nextId: ids() });
+  const sourceMetadata = { sourceDraftId: 'd1000000-0000-4000-8000-000000000002' };
+  const version = await service.createVersion(context, command({
+    source: { system: 'property_predator_generation', itemId: 'draft-1', version: 'v2' },
+    metadata: { source: sourceMetadata },
+  }));
+  const state = (await service.listVersionApprovalStates(context, version.contentItemId))[0]!;
+  assert.deepEqual(state.sourceMetadata, sourceMetadata);
+  const refreshCommand = {
+    commandKey: 'generated-refresh-clock-stable-replay',
+    contentItemId: version.contentItemId,
+    contentVersionId: version.contentVersionId,
+    expected: {
+      source: state.source, contentSha256: state.contentSha256,
+      blobSha256: state.blobSha256, brandSha256: state.brandSha256,
+    },
+    attestation: {
+      catalogSha256: '44'.repeat(32),
+      checkedAt: '2026-09-09T03:00:00.000Z',
+      expiresAt: '2026-09-09T03:10:00.000Z',
+    },
+  };
+  const first = await service.refreshSourceAttestation(context, refreshCommand);
+  const proof = database.attestations.get(version.contentVersionId);
+  const retry = { ...refreshCommand, attestation: {
+    ...refreshCommand.attestation,
+    checkedAt: '2026-09-09T03:05:00.000Z',
+    expiresAt: '2026-09-09T03:15:00.000Z',
+  } };
+  assert.deepEqual(await service.refreshSourceAttestation(context, retry), {
+    ...first, disposition: 'replayed',
+  });
+  assert.deepEqual(database.attestations.get(version.contentVersionId), proof);
+  for (const changed of [
+    { ...retry, attestation: { ...retry.attestation, catalogSha256: '55'.repeat(32) } },
+    { ...retry, attestation: { ...retry.attestation, expiresAt: '2026-09-09T03:14:00.000Z' } },
+    { ...retry, expected: { ...retry.expected, contentSha256: '66'.repeat(32) } },
+    { ...retry, expected: { ...retry.expected, source: { ...state.source, version: 'v3' } } },
+  ]) {
+    await assert.rejects(service.refreshSourceAttestation(context, changed), CompanyContentIdempotencyConflictError);
+  }
+  assert.deepEqual(database.attestations.get(version.contentVersionId), proof);
+  const renewed = await service.refreshSourceAttestation(context, {
+    ...retry, commandKey: 'new-generated-source-observation',
+  });
+  assert.equal(renewed.disposition, 'applied');
+  assert.notEqual(renewed.sourceAttestationId, first.sourceAttestationId);
+  assert.equal(renewed.sourceAttestationExpiresAt, retry.attestation.expiresAt);
 });
 
 test('source sync atomically resolves one logical item and appends the next source version', async () => {

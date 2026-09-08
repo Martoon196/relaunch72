@@ -12,6 +12,10 @@ import type {
   PropertyPredatorGeneratedPayload,
 } from '../src/company-content-adapter/property-predator-generation.js';
 import { canonicalCompanyContentJson } from '../src/company-content-pg/validation.js';
+import {
+  createPropertyPredatorGeneratedSourceRevalidator,
+  PropertyPredatorGeneratedSourceError,
+} from '../src/company-content-adapter/property-predator-generated-source.js';
 import type {
   CompanyContentApprovalDecision,
   CompanyContentVersionApprovalState,
@@ -189,6 +193,7 @@ class FakeContentLifecycle implements PropertyPredatorGeneratedDraftContentServi
         title: version.command.title,
         origin: version.command.origin,
         source: version.command.source,
+        sourceMetadata: version.command.metadata?.source,
         contentSha256: version.contentSha256,
         blobSha256: version.command.blob.sha256,
         brandSha256: version.command.brand.sha256,
@@ -427,6 +432,86 @@ test('revalidates one approved current generated version without generation or d
   assert.equal(setup.content.refreshes.length, 1);
   assert.equal(setup.content.refreshes[0].expected.source.system, 'property_predator_generation');
   assert.equal(setup.content.refreshes[0].expected.contentSha256, staged.reviewTarget.contentSha256);
+});
+
+test('refreshes an approved revision using its own immutable upstream draft identity', async () => {
+  const setup = fixture();
+  const first = await setup.lifecycle.generateAndStage(CONTEXT, {
+    persistenceCommandKey: 'refresh-revision-first',
+    generation: setup.generation,
+    draftPlan: { brandBrainSnapshot: setup.brain },
+  });
+  setup.drafts.push((contextSha256) => generatedDraft(2, setup.brandSha256, contextSha256));
+  const second = await setup.lifecycle.generateAndStage(CONTEXT, {
+    persistenceCommandKey: 'refresh-revision-second',
+    generation: { ...setup.generation, idempotencyKey: 'refresh-revision-generation-0002' },
+    draftPlan: { brandBrainSnapshot: setup.brain },
+    revision: {
+      sourceItemId: first.sourceItemId,
+      contentItemId: first.reviewTarget.contentItemId,
+      previousVersionId: first.reviewTarget.contentVersionId,
+      previousVersionNumber: first.reviewTarget.versionNumber,
+      previousContentSha256: first.reviewTarget.contentSha256,
+    },
+  });
+  assert.equal(second.sourceItemId, first.sourceItemId);
+  assert.notEqual(second.sourceDraftId, second.sourceItemId);
+  const stored = setup.content.versions[1]!;
+  stored.approvalStatus = 'approved';
+  stored.approvalRequestId = APPROVAL_REQUEST_IDS[1];
+  stored.approvalDecisionId = APPROVAL_DECISION_IDS[1];
+  let returnedDraftId = second.sourceDraftId;
+  let reads = 0;
+  const source = createPropertyPredatorGeneratedSourceRevalidator({
+    baseUrl: 'https://propertypredator.com', clientId: 'revision-test',
+    readToken: 'read-token-0000000000000000000000000001',
+    fetchImpl: async (url) => {
+      reads += 1;
+      assert.equal(String(url), `https://propertypredator.com/api/internal/company-content/generated/${second.sourceVersionId}`);
+      return new Response(JSON.stringify({
+        schemaVersion: 1, item: { ...second.draft, draftId: returnedDraftId },
+      }), { status: 200, headers: {
+        'content-type': 'application/json', 'cache-control': 'no-store',
+        'x-company-content-version': second.sourceVersionId,
+        'x-content-sha256': second.reviewTarget.contentSha256,
+        'x-brand-sha256': second.brandSha256,
+      } });
+    },
+  });
+  const lifecycle = new PropertyPredatorGeneratedDraftLifecycle({
+    generation: { generateDraft: async () => { throw new Error('must not regenerate'); } },
+    content: setup.content, generatedSource: source, now: () => NOW,
+  });
+  const input = { commandKey: 'refresh-approved-revision-v2', reviewTarget: second.reviewTarget };
+  const refreshed = await lifecycle.refreshApprovedSource(CONTEXT, input);
+  assert.equal(refreshed.contentVersionId, second.reviewTarget.contentVersionId);
+  assert.equal(refreshed.providerEffects, false);
+  assert.equal(setup.content.refreshes[0].expected.source.itemId, first.sourceItemId);
+  assert.equal(setup.content.versions.length, 2);
+  assert.equal(setup.generationCalls.length, 2);
+
+  // Matching version/body/brand cannot substitute a different upstream draft.
+  returnedDraftId = first.sourceDraftId;
+  await assert.rejects(lifecycle.refreshApprovedSource(CONTEXT, {
+    ...input, commandKey: 'refresh-revision-wrong-draft',
+  }), PropertyPredatorGeneratedSourceError);
+  assert.equal(reads, 2);
+  assert.equal(setup.content.refreshes.length, 1);
+
+  const originalRead = setup.content.listVersionApprovalStates.bind(setup.content);
+  for (const invalid of [undefined, {
+    ...(stored.command.metadata?.source as Record<string, unknown>),
+    sourceVersionId: first.sourceVersionId,
+  }]) {
+    setup.content.listVersionApprovalStates = async (context, contentItemId) => (
+      (await originalRead(context, contentItemId)).map((state) => ({ ...state, sourceMetadata: invalid }))
+    );
+    await assert.rejects(lifecycle.refreshApprovedSource(CONTEXT, input),
+      (error: unknown) => error instanceof PropertyPredatorGeneratedDraftLifecycleError
+        && error.code === 'integrity_mismatch');
+  }
+  assert.equal(reads, 2, 'missing or mismatched immutable evidence stops before a source read');
+  assert.equal(setup.content.refreshes.length, 1);
 });
 
 test('does not revalidate changed, revoked or foreign generated source state', async () => {

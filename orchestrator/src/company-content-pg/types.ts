@@ -212,6 +212,8 @@ export interface CompanyContentVersionApprovalState {
   readonly title: string;
   readonly origin: CompanyContentOrigin;
   readonly source: CompanyContentSourceProvenance;
+  /** Immutable adapter-specific source evidence, validated by the owning adapter. */
+  readonly sourceMetadata?: unknown;
   readonly contentSha256: string;
   readonly blobSha256: string;
   readonly brandSha256: string;

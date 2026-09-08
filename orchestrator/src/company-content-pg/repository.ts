@@ -107,6 +107,7 @@ interface ApprovalStateRow extends QueryResultRow {
   sourceSystem: string;
   sourceItemId: string;
   sourceVersion: string;
+  sourceMetadata?: unknown;
   contentSha256: string;
   blobSha256: string;
   brandSha256: string;
@@ -936,6 +937,7 @@ export class CompanyContentPgRepository {
               version.source_system AS "sourceSystem",
               version.source_item_id AS "sourceItemId",
               version.source_version AS "sourceVersion",
+              version.metadata -> 'source' AS "sourceMetadata",
               encode(version.content_sha256, 'hex') AS "contentSha256",
               encode(version.blob_sha256, 'hex') AS "blobSha256",
               encode(version.brand_sha256, 'hex') AS "brandSha256",
@@ -980,6 +982,7 @@ export class CompanyContentPgRepository {
         itemId: row.sourceItemId,
         version: row.sourceVersion,
       }),
+      ...(row.sourceMetadata == null ? {} : { sourceMetadata: row.sourceMetadata }),
       contentSha256: row.contentSha256,
       blobSha256: row.blobSha256,
       brandSha256: row.brandSha256,
