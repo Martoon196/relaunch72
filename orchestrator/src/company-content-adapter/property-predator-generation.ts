@@ -24,6 +24,7 @@ const AFFILIATE_MARKER = /(?:\{\{link\}\}|#ad\b|partner link|affiliate link|affi
 const FIRST_PERSON_RESULT = /\b(?:i|i've|i’d|i'd)\s+(?:use|used|found|saved|made|earned|stopped|avoided|overpaid|offered|bought|sold|invested|negotiated|achieved)\b|\bmy\s+(?:deal|property|portfolio|offer|investment|result|return|yield)\b/iu;
 const MARKUP = /[<>]/u;
 const WEB_URL = /\bhttps?:\/\/|\bwww\./iu;
+const BODY_URL = /https?:\/\/[^\s<>"']+|\bwww\.[^\s<>"']+/giu;
 
 export const PROPERTY_PREDATOR_GENERATE_CREDENTIAL_BOUNDARY =
   'property-predator-company-content-generate/v1' as const;
@@ -363,6 +364,15 @@ function assertNoPrivateOrAttributedText(value: string, allowUrl: boolean): void
   }
 }
 
+function assertNoUnexpectedBodyUrl(value: string, approvedCtaUrl: string): void {
+  const matches = value.match(BODY_URL) ?? [];
+  for (const match of matches) {
+    const candidate = match.replace(/[\])},.!?;:]+$/gu, '');
+    if (candidate !== approvedCtaUrl) throw bridgeError('invalid_response');
+  }
+  assertNoPrivateOrAttributedText(value.replace(BODY_URL, ''), false);
+}
+
 const GENERATION_KINDS = new Set<PropertyPredatorGenerationKind>([
   'post', 'thread', 'email', 'script', 'article', 'ad', 'image',
 ]);
@@ -660,23 +670,25 @@ function parseGeneratedDraft(
   const title = responseText(rawPayload.title, 1, 300);
   const body = responseText(rawPayload.body, 1, 20_000);
   const platform = responseText(rawPayload.platform, 0, 40);
+  const ctaUrl = cleanHttpsUrl(rawPayload.cta_url, expected.approvedCtaHosts);
   if (MARKUP.test(title) || MARKUP.test(body) || MARKUP.test(platform)
       || FIRST_PERSON_RESULT.test(title) || FIRST_PERSON_RESULT.test(body)) {
     throw bridgeError('invalid_response');
   }
-  for (const text of [title, body, platform]) {
+  for (const text of [title, platform]) {
     try {
-      // The structured CTA is the only permitted destination. Raw body links
-      // would bypass the exact Property Predator host registry.
       assertNoPrivateOrAttributedText(text, false);
     } catch {
       throw bridgeError('invalid_response');
     }
   }
+  // The model may repeat the separately verified structured CTA in its copy.
+  // Every other URL, including an appended path/query or lookalike host, stays blocked.
+  assertNoUnexpectedBodyUrl(body, ctaUrl);
   const payload = Object.freeze({
     body,
     contextSha256,
-    cta_url: cleanHttpsUrl(rawPayload.cta_url, expected.approvedCtaHosts),
+    cta_url: ctaUrl,
     kind: rawPayload.kind as PropertyPredatorGenerationKind,
     platform,
     schema: GENERATION_SCHEMA,

@@ -238,6 +238,43 @@ test('uses the exact generate-only POST boundary and returns an immutable hash-v
   assert.doesNotMatch(controlJson, /investment property|test-only-company-content|growth-hq-draft/i);
 });
 
+test('accepts only the exact structured CTA when the provider repeats it in the body', async () => {
+  const acceptedPayload = generatedPayload({
+    body: 'Run the numbers, then visit https://propertypredator.com/learn.',
+  });
+  const controls = allowedPolicy();
+  const transport = createPropertyPredatorGenerationTransport(baseOptions(
+    controls.policy,
+    async () => generatedResponse(generatedFixture({
+      payload: acceptedPayload,
+      contentSha256: digest(canonicalCompanyContentJson(acceptedPayload)),
+    })),
+  ));
+  const draft = await transport.generateDraft(COMMAND);
+  assert.equal(draft.payload.body, acceptedPayload.body);
+  assert.equal(controls.outcomes[0]?.outcome, 'accepted');
+
+  for (const body of [
+    'Visit https://propertypredator.com/learn/more',
+    'Visit https://propertypredator.com/learn?ref=other',
+    'Visit https://propertypredator.com.evil/learn',
+    'Visit www.propertypredator.com/learn',
+  ]) {
+    const blockedPayload = generatedPayload({ body });
+    const blockedControls = allowedPolicy();
+    const blocked = createPropertyPredatorGenerationTransport(baseOptions(
+      blockedControls.policy,
+      async () => generatedResponse(generatedFixture({
+        payload: blockedPayload,
+        contentSha256: digest(canonicalCompanyContentJson(blockedPayload)),
+      })),
+    ));
+    await assert.rejects(blocked.generateDraft(COMMAND), (error: unknown) => (
+      error instanceof PropertyPredatorGenerationBridgeError && error.code === 'invalid_response'
+    ));
+  }
+});
+
 test('requires a distinct strong generate credential and a clean immutable origin', () => {
   const base = baseOptions(allowedPolicy().policy, async () => generatedResponse(generatedFixture()));
   const invalid: unknown[] = [
