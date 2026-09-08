@@ -527,15 +527,22 @@ type DeadlineRace = <T>(operation: Promise<T>) => Promise<T>;
 
 async function boundedBody(response: Response, beforeDeadline: DeadlineRace): Promise<string> {
   const declaredRaw = response.headers.get('content-length');
+  const contentEncoding = response.headers.get('content-encoding');
+  const isEncoded = contentEncoding !== null && contentEncoding.trim().toLowerCase() !== 'identity';
+  if (isEncoded && !/^(?:br|deflate|gzip)(?:\s*,\s*(?:br|deflate|gzip))*$/iu.test(contentEncoding!)) {
+    throw bridgeError('invalid_response', 'body_encoding');
+  }
   let declared: number | null = null;
   if (declaredRaw !== null) {
-    if (!/^(?:0|[1-9][0-9]{0,7})$/u.test(declaredRaw)) throw bridgeError('invalid_response');
+    if (!/^(?:0|[1-9][0-9]{0,7})$/u.test(declaredRaw)) {
+      throw bridgeError('invalid_response', 'body_length');
+    }
     declared = Number(declaredRaw);
     if (!Number.isSafeInteger(declared) || declared > MAX_RESPONSE_BYTES) {
-      throw bridgeError('invalid_response');
+      throw bridgeError('invalid_response', 'body_length');
     }
   }
-  if (!response.body) throw bridgeError('invalid_response');
+  if (!response.body) throw bridgeError('invalid_response', 'body_stream');
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let bytes = 0;
@@ -543,30 +550,33 @@ async function boundedBody(response: Response, beforeDeadline: DeadlineRace): Pr
     for (;;) {
       const next = await beforeDeadline(reader.read());
       if (next.done) break;
-      if (!(next.value instanceof Uint8Array)) throw bridgeError('invalid_response');
+      if (!(next.value instanceof Uint8Array)) throw bridgeError('invalid_response', 'body_stream');
       bytes += next.value.byteLength;
       if (!Number.isSafeInteger(bytes) || bytes > MAX_RESPONSE_BYTES) {
         void reader.cancel().catch(() => undefined);
-        throw bridgeError('invalid_response');
+        throw bridgeError('invalid_response', 'body_size');
       }
       chunks.push(Uint8Array.from(next.value));
     }
   } catch (error) {
     void reader.cancel().catch(() => undefined);
     if (error instanceof PropertyPredatorGenerationBridgeError) throw error;
-    throw bridgeError('invalid_response');
+    throw bridgeError('invalid_response', 'body_stream');
   } finally {
     try { reader.releaseLock(); } catch { /* An untrusted stream cannot retain the caller. */ }
   }
-  if (bytes === 0 || (declared !== null && declared !== bytes)) {
-    throw bridgeError('invalid_response');
+  // Fetch transparently decompresses HTTP bodies while retaining the wire
+  // Content-Length. Compare lengths only for identity responses; the decoded
+  // byte counter above remains the authoritative safety bound for compressed responses.
+  if (bytes === 0 || (!isEncoded && declared !== null && declared !== bytes)) {
+    throw bridgeError('invalid_response', 'body_length');
   }
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(
       Uint8Array.from(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)))),
     );
   } catch {
-    throw bridgeError('invalid_response');
+    throw bridgeError('invalid_response', 'body_utf8');
   }
 }
 
@@ -848,18 +858,20 @@ export function createPropertyPredatorGenerationTransport(
           if (error instanceof PropertyPredatorGenerationBridgeError) throw error;
           throw bridgeError('transport_failed');
         }
-        if (!(response instanceof Response) || response.redirected) throw bridgeError('invalid_response');
+        if (!(response instanceof Response) || response.redirected) {
+          throw bridgeError('invalid_response', 'response_identity');
+        }
         if (response.status !== 201) throw bridgeError('upstream_rejected');
         if (!validJsonMediaType(response.headers.get('content-type'))
             || !hasNoStore(response.headers.get('cache-control'))) {
-          throw bridgeError('invalid_response');
+          throw bridgeError('invalid_response', 'response_headers');
         }
         const raw = await boundedBody(response, beforeDeadline);
         let parsed: unknown;
         try {
           parsed = JSON.parse(raw) as unknown;
         } catch {
-          throw bridgeError('invalid_response');
+          throw bridgeError('invalid_response', 'response_json');
         }
         const draft = parseGeneratedDraft(parsed, {
           approvedCtaHosts,

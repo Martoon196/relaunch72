@@ -275,6 +275,23 @@ test('accepts only the exact structured CTA when the provider repeats it in the 
   }
 });
 
+test('accepts a transparently decompressed response with the encoded wire length', async () => {
+  const controls = allowedPolicy();
+  const responseBody = JSON.stringify(generatedFixture());
+  const transport = createPropertyPredatorGenerationTransport({
+    ...baseOptions(controls.policy, async () => generatedResponse(generatedFixture(), {
+      body: responseBody,
+      headers: {
+        'content-encoding': 'gzip',
+        'content-length': String(Buffer.byteLength(responseBody, 'utf8') - 1),
+      },
+    })),
+  });
+
+  const draft = await transport.generateDraft(COMMAND);
+  assert.equal(draft.contentSha256, generatedFixture().contentSha256);
+});
+
 test('accepts the production launch draft envelope returned by Property Predator', async () => {
   const productionContextSha256 = '9b3d7736a0db39089d9cc020bcd8fe17d5e2ae1c3dcea22f5056278b9d7e70ea';
   const productionBrandSha256 = 'd77b0306d110075571dedd716d012c8752a302eb39ea9198e71ecd43cc089abc';
