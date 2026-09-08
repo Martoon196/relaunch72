@@ -335,7 +335,7 @@ async function assertCompanyAssetRoleCapabilities(
                 'app_private.active_portal_session(bytea,uuid,uuid)',
                 'EXECUTE'
               )
-          AND NOT pg_catalog.has_function_privilege(
+          AND pg_catalog.has_function_privilege(
                 current_user,
                 'app_private.lock_active_portal_session(bytea,uuid,uuid)',
                 'EXECUTE'
@@ -406,7 +406,7 @@ async function assertBrandBrainRoleCapabilities(adapterPool: Pool): Promise<void
               'app_private.active_portal_session(bytea,uuid,uuid)',
               'EXECUTE'
             )
-        AND NOT pg_catalog.has_function_privilege(
+        AND pg_catalog.has_function_privilege(
               current_user,
               'app_private.lock_active_portal_session(bytea,uuid,uuid)',
               'EXECUTE'
@@ -432,6 +432,11 @@ async function assertGeneratedDraftLifecycleRoleCapabilities(adapterPool: Pool):
         AND pg_catalog.has_column_privilege(current_user, 'app.command_receipts', 'status', 'UPDATE')
         AND pg_catalog.has_column_privilege(current_user, 'app.command_receipts', 'response_status', 'UPDATE')
         AND pg_catalog.has_column_privilege(current_user, 'app.command_receipts', 'completed_at', 'UPDATE')
+        AND pg_catalog.has_function_privilege(
+              current_user,
+              'app_private.lock_active_portal_session(bytea,uuid,uuid)',
+              'EXECUTE'
+            )
         AND NOT pg_catalog.has_table_privilege(current_user, 'app.company_content_items', 'UPDATE,DELETE')
         AND NOT pg_catalog.has_table_privilege(current_user, 'app.company_content_approval_requests', 'INSERT')
         AND NOT pg_catalog.has_table_privilege(current_user, 'app.provider_operations', 'INSERT') AS ready`,
