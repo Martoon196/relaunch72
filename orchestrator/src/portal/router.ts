@@ -117,6 +117,7 @@ import { renderContentControlRoomBody } from './content-control-room-view.js';
 import {
   CONTENT_APPROVAL_DECISION_ROUTE,
   CONTENT_APPROVAL_REQUEST_ROUTE,
+  GENERATED_SOURCE_REFRESH_ROUTE,
   contentControlNoticeFromQuery,
   contentControlNoticeToken,
   exactReviewApprovalToken,
@@ -5215,6 +5216,11 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
             decisionKeys: Object.fromEntries(view.items.flatMap((item) => (
               item.approvalRequestId ? [[item.approvalRequestId, randomUUID()]] : []
             ))),
+            sourceRefreshKeys: Object.fromEntries(view.items.flatMap((item) => (
+              item.sourceSystem === 'property_predator_generation'
+                && item.approvalStatus === 'approved' && !item.approvalStale && !item.sourceFresh
+                ? [[item.contentVersionId, randomUUID()]] : []
+            ))),
           } : undefined,
         }),
         deps,
@@ -5229,6 +5235,39 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         backHref: '/portal',
         backLabel: 'Return to Growth HQ',
       }));
+    }
+  }
+
+  if (deps.kind === 'postgres' && p === GENERATED_SOURCE_REFRESH_ROUTE && method === 'POST') {
+    const form = await readForm(req);
+    if (!deps.campaignDrafts?.refreshApprovedSource
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return contentControlRedirect(res, deps, sessionToken, form, 'invalid');
+    }
+    const contentItemId = (form.content_item_id ?? '').trim().toLowerCase();
+    const contentVersionId = (form.content_version_id ?? '').trim().toLowerCase();
+    const contentSha256 = (form.content_sha256 ?? '').trim().toLowerCase();
+    const versionNumber = Number(form.version_number);
+    if (!CRM_OBJECT_ID.test(contentItemId) || !CRM_OBJECT_ID.test(contentVersionId)
+        || !/^[0-9a-f]{64}$/u.test(contentSha256)
+        || !Number.isSafeInteger(versionNumber) || versionNumber < 1) {
+      return contentControlRedirect(res, deps, sessionToken, form, 'invalid');
+    }
+    try {
+      const outcome = await deps.campaignDrafts.refreshApprovedSource(
+        crmIdentity(sessionToken, deps),
+        {
+          commandKey: form.command_key ?? '',
+          reviewTarget: { contentItemId, contentVersionId, versionNumber, contentSha256 },
+        },
+      );
+      return contentControlRedirect(res, deps, sessionToken, form,
+        outcome.ok
+          ? outcome.result.disposition === 'replayed' ? 'replayed' : 'source_refreshed'
+          : outcome.kind === 'forbidden' ? 'forbidden'
+            : outcome.kind === 'conflict' ? 'conflict' : 'unavailable');
+    } catch {
+      return contentControlRedirect(res, deps, sessionToken, form, 'unavailable');
     }
   }
 

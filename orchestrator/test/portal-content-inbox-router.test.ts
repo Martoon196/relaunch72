@@ -14,6 +14,7 @@ import {
   type PostgresPortalDeps,
 } from '../src/portal/router.js';
 import { PORTAL_COOKIE, portalCsrfToken } from '../src/portal/session.js';
+import { GENERATED_SOURCE_REFRESH_ROUTE } from '../src/portal/content-control-room-actions.js';
 import type { InboxConversationQuery } from '../src/inbox-pg/read-model.js';
 
 const SECRET = 'content-inbox-router-secret';
@@ -288,6 +289,48 @@ test('Content approval POSTs are CSRF-bound, workspace-derived and preserve filt
       decisionNote: 'Replace the unsupported superlative.',
     },
   }]);
+});
+
+test('generated source refresh POST is exact, CSRF-bound and does not accept workspace identity', async () => {
+  const calls: unknown[] = [];
+  const campaignDrafts = {
+    generateAndStage: async () => ({ ok: false as const, kind: 'unavailable' as const, message: 'not used' }),
+    refreshApprovedSource: async (identity: unknown, input: unknown) => {
+      calls.push({ identity, input });
+      return { ok: true as const, result: {
+        disposition: 'applied' as const,
+        contentItemId: '75000000-0000-4000-8000-000000000001',
+        contentVersionId: '76000000-0000-4000-8000-000000000001',
+        sourceAttestationId: '77000000-0000-4000-8000-000000000001',
+        sourceAttestationExpiresAt: '2026-08-26T09:00:00.000Z', providerEffects: false as const,
+      } };
+    },
+  };
+  const result = await post(GENERATED_SOURCE_REFRESH_ROUTE, {
+    _csrf: portalCsrfToken(SECRET, SESSION), command_key: 'refresh-generated-source-0001',
+    content_item_id: '75000000-0000-4000-8000-000000000001',
+    content_version_id: '76000000-0000-4000-8000-000000000001', version_number: '3',
+    content_sha256: '11'.repeat(32), workspace_id: 'attacker-workspace',
+  }, postgres({ campaignDrafts }), COOKIE);
+  assert.equal(result.statusCode, 303);
+  assert.match(result.headers.location ?? '', /^\/portal\/content\?notice=source_refreshed\./);
+  assert.deepEqual(calls, [{
+    identity: { sessionToken: SESSION, requestId: 'router-request-1' },
+    input: { commandKey: 'refresh-generated-source-0001', reviewTarget: {
+      contentItemId: '75000000-0000-4000-8000-000000000001',
+      contentVersionId: '76000000-0000-4000-8000-000000000001',
+      versionNumber: 3, contentSha256: '11'.repeat(32),
+    } },
+  }]);
+
+  const bad = await post(GENERATED_SOURCE_REFRESH_ROUTE, {
+    command_key: 'refresh-generated-source-0002',
+    content_item_id: '75000000-0000-4000-8000-000000000001',
+    content_version_id: '76000000-0000-4000-8000-000000000001', version_number: '3',
+    content_sha256: '11'.repeat(32),
+  }, postgres({ campaignDrafts }), COOKIE);
+  assert.equal(bad.statusCode, 303);
+  assert.equal(calls.length, 1);
 });
 
 test('Content approval POSTs fail closed before commands on missing CSRF, invalid decisions or unavailable review content', async () => {

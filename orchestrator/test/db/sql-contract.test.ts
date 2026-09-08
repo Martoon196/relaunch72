@@ -101,6 +101,7 @@ const migration94Url = new URL('../../src/db/migrations/0094_property_predator_z
 const migration95Url = new URL('../../src/db/migrations/0095_property_predator_calendar_reconciliation_and_media.sql', import.meta.url);
 const migration96Url = new URL('../../src/db/migrations/0096_zernio_direct_calendar_lock_repair.sql', import.meta.url);
 const migration97Url = new URL('../../src/db/migrations/0097_property_predator_zernio_calendar_safe_cutover.sql', import.meta.url);
+const migration98Url = new URL('../../src/db/migrations/0098_zernio_messaging_provider_account_binding.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -539,9 +540,9 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums through safe calendar cutover', async () => {
+test('bundled migration discovery orders and checksums through messaging account binding', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-91);
+  const tail = migrations.slice(-92);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0007_public_schema_hardening.sql', version: 7 },
     { filename: '0008_setup_delivery_recovery.sql', version: 8 },
@@ -634,6 +635,7 @@ test('bundled migration discovery orders and checksums through safe calendar cut
     { filename: '0095_property_predator_calendar_reconciliation_and_media.sql', version: 95 },
     { filename: '0096_zernio_direct_calendar_lock_repair.sql', version: 96 },
     { filename: '0097_property_predator_zernio_calendar_safe_cutover.sql', version: 97 },
+    { filename: '0098_zernio_messaging_provider_account_binding.sql', version: 98 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -727,6 +729,7 @@ test('bundled migration discovery orders and checksums through safe calendar cut
     (await readFile(migration95Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration96Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration97Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration98Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.

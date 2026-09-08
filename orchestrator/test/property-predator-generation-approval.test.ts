@@ -144,6 +144,7 @@ interface StoredVersion {
 class FakeContentLifecycle implements PropertyPredatorGeneratedDraftContentService {
   readonly versions: StoredVersion[] = [];
   readonly requests = new Map<string, StoredVersion>();
+  readonly refreshes: any[] = [];
 
   async createVersion(_context: DatabaseRequestContext, command: CreateCompanyContentVersionCommand) {
     const versionNumber = this.versions.length + 1;
@@ -250,6 +251,18 @@ class FakeContentLifecycle implements PropertyPredatorGeneratedDraftContentServi
       contentVersionId: version.contentVersionId,
       decision: command.decision,
       contentSha256: version.contentSha256,
+    };
+  }
+
+  async refreshSourceAttestation(_context: DatabaseRequestContext, command: any) {
+    this.refreshes.push(command);
+    return {
+      disposition: 'applied' as const,
+      contentItemId: command.contentItemId,
+      contentVersionId: command.contentVersionId,
+      sourceAttestationId: 'a5000000-0000-4000-8000-000000000099',
+      sourceAttestationExpiresAt: command.attestation.expiresAt,
+      providerEffects: false as const,
     };
   }
 }
@@ -376,6 +389,69 @@ test('stages an exact generated social draft as immutable review-required versio
     assert.notEqual(digest(canonicalCompanyContentJson(tampered)), staged.generationContextSha256);
   }
   assert.doesNotMatch(JSON.stringify(metadata), /investment property|growth-hq-stage-generation/i);
+});
+
+test('revalidates one approved current generated version without generation or duplication', async () => {
+  const setup = fixture();
+  const staged = await setup.lifecycle.generateAndStage(CONTEXT, {
+    persistenceCommandKey: 'persist-generated-refreshable-v1',
+    generation: setup.generation,
+    draftPlan: { brandBrainSnapshot: setup.brain },
+  });
+  const stored = setup.content.versions[0]!;
+  stored.approvalStatus = 'approved';
+  stored.approvalRequestId = APPROVAL_REQUEST_IDS[0];
+  stored.approvalDecisionId = APPROVAL_DECISION_IDS[0];
+  let sourceReads = 0;
+  const lifecycle = new PropertyPredatorGeneratedDraftLifecycle({
+    generation: { generateDraft: async () => { throw new Error('must not regenerate'); } },
+    content: setup.content,
+    generatedSource: { verify: async (target) => {
+      sourceReads += 1;
+      assert.equal(target.sourceItemId, staged.sourceItemId);
+      assert.equal(target.sourceVersionId, staged.sourceVersionId);
+      assert.equal(target.contentSha256, staged.reviewTarget.contentSha256);
+      return { catalogSha256: digest('exact generated source proof') };
+    } },
+    now: () => NOW,
+  });
+  const result = await lifecycle.refreshApprovedSource(CONTEXT, {
+    commandKey: 'refresh-approved-generated-v1',
+    reviewTarget: staged.reviewTarget,
+  });
+  assert.equal(result.providerEffects, false);
+  assert.equal(result.contentVersionId, staged.reviewTarget.contentVersionId);
+  assert.equal(sourceReads, 1);
+  assert.equal(setup.content.versions.length, 1);
+  assert.equal(setup.generationCalls.length, 1);
+  assert.equal(setup.content.refreshes.length, 1);
+  assert.equal(setup.content.refreshes[0].expected.source.system, 'property_predator_generation');
+  assert.equal(setup.content.refreshes[0].expected.contentSha256, staged.reviewTarget.contentSha256);
+});
+
+test('does not revalidate changed, revoked or foreign generated source state', async () => {
+  const setup = fixture();
+  const staged = await setup.lifecycle.generateAndStage(CONTEXT, {
+    persistenceCommandKey: 'persist-generated-locked-v1',
+    generation: setup.generation,
+    draftPlan: { brandBrainSnapshot: setup.brain },
+  });
+  const stored = setup.content.versions[0]!;
+  stored.approvalStatus = 'changes_requested';
+  stored.approvalRequestId = APPROVAL_REQUEST_IDS[0];
+  stored.approvalDecisionId = APPROVAL_DECISION_IDS[0];
+  let sourceReads = 0;
+  const lifecycle = new PropertyPredatorGeneratedDraftLifecycle({
+    generation: { generateDraft: async () => { throw new Error('must not regenerate'); } },
+    content: setup.content,
+    generatedSource: { verify: async () => { sourceReads += 1; return { catalogSha256: digest('x') }; } },
+  });
+  await assert.rejects(lifecycle.refreshApprovedSource(CONTEXT, {
+    commandKey: 'blocked-generated-refresh', reviewTarget: staged.reviewTarget,
+  }), (error: unknown) => error instanceof PropertyPredatorGeneratedDraftLifecycleError
+    && error.code === 'approval_conflict');
+  assert.equal(sourceReads, 0);
+  assert.equal(setup.content.refreshes.length, 0);
 });
 
 test('holds a generated result unsaved when selected approval evidence changes during generation', async () => {

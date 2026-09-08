@@ -156,6 +156,17 @@ function firstComment(comments: readonly ZernioCommentSnapshot[]): ZernioComment
   return comments[0] ?? null;
 }
 
+function providerAccountHash(accountId: string): string {
+  return createHash('sha256').update(accountId, 'utf8').digest('hex');
+}
+
+function activeProviderAccounts(
+  accounts: readonly import('./zernio-social-connection-service.js').PortalZernioAccountSnapshot[],
+): ReadonlyMap<string, import('./zernio-social-connection-service.js').PortalZernioAccountSnapshot> {
+  return new Map(accounts.filter((account) => account.status === 'active')
+    .map((account) => [account.providerAccountIdSha256, account]));
+}
+
 export class LivePortalZernioMessagingService implements PortalZernioMessagingService {
   constructor(private readonly dependencies: Readonly<{
     accounts: Pick<PortalZernioSocialConnectionService, 'snapshot'>;
@@ -178,22 +189,21 @@ export class LivePortalZernioMessagingService implements PortalZernioMessagingSe
   ): Promise<PortalZernioMessagingReplyTarget | null> {
     const accountTruth = await this.dependencies.accounts.snapshot(identity);
     if (!accountTruth.ok) return null;
-    const activeAccountIds = new Set(accountTruth.accounts
-      .filter((account) => account.status === 'active').map((account) => account.accountId));
-    if (!activeAccountIds.has(target.accountId)) return null;
+    const activeByProviderHash = activeProviderAccounts(accountTruth.accounts);
+    const activeAccount = activeByProviderHash.get(providerAccountHash(target.accountId));
+    if (!activeAccount) return null;
     if (target.kind === 'dm') {
       if (!this.dependencies.allowedAccountIds.includes(target.accountId)
-          || !accountTruth.accounts.some((account) => account.accountId === target.accountId
-          && account.network === target.platform && account.status === 'active')) return null;
+          || activeAccount.network !== target.platform) return null;
       const queue = await this.dependencies.client.listConversations({
-        accountIds: this.dependencies.allowedAccountIds.filter((id) => activeAccountIds.has(id)),
+        accountIds: this.dependencies.allowedAccountIds.filter((id) =>
+          activeByProviderHash.has(providerAccountHash(id))),
       });
       return queue.conversations.some((item) => item.accountId === target.accountId
         && item.providerConversationId === target.providerConversationId
         && item.platform === target.platform) ? target : null;
     }
-    if (!accountTruth.accounts.some((account) => account.accountId === target.accountId
-          && account.network === target.platform && account.status === 'active')
+    if (activeAccount.network !== target.platform
         || !this.dependencies.commentAccountBindings.some((binding) =>
           binding.accountId === target.accountId && binding.platform === target.platform)) return null;
     const feed = await this.dependencies.client.listCommentedPosts({
@@ -223,14 +233,12 @@ export class LivePortalZernioMessagingService implements PortalZernioMessagingSe
       });
     }
     const activeAccounts = accountTruth.accounts.filter((account) => account.status === 'active');
-    const activeAccountIds = new Set(activeAccounts.map((account) => account.accountId));
+    const activeByProviderHash = activeProviderAccounts(activeAccounts);
     const activeNetworks = new Set(activeAccounts.map((account) => account.network));
     const activeDmAccountIds = this.dependencies.allowedAccountIds
-      .filter((accountId) => activeAccountIds.has(accountId));
+      .filter((accountId) => activeByProviderHash.has(providerAccountHash(accountId)));
     const activeCommentBindings = this.dependencies.commentAccountBindings.filter((binding) =>
-      activeAccountIds.has(binding.accountId)
-      && activeAccounts.some((account) => account.accountId === binding.accountId
-        && account.network === binding.platform));
+      activeByProviderHash.get(providerAccountHash(binding.accountId))?.network === binding.platform);
     const canReadDms = (activeNetworks.has('instagram') || activeNetworks.has('facebook'))
       && activeDmAccountIds.length > 0;
     if (!canReadDms && activeCommentBindings.length === 0) {
@@ -253,15 +261,14 @@ export class LivePortalZernioMessagingService implements PortalZernioMessagingSe
         ...activeCommentBindings.map((binding) =>
           this.dependencies.client.listCommentedPosts(binding)),
       ]);
-      const dmConversations = queue.conversations.filter((item) => activeAccountIds.has(item.accountId)
+      const dmConversations = queue.conversations.filter((item) => activeByProviderHash.has(providerAccountHash(item.accountId))
         && activeDmAccountIds.includes(item.accountId)
-        && activeAccounts.some((account) => account.accountId === item.accountId
-          && account.network === item.platform));
+        && activeByProviderHash.get(providerAccountHash(item.accountId))?.network === item.platform);
       const seenPosts = new Set<string>();
       const commentPosts: ZernioCommentedPostSnapshot[] = [];
       for (const feed of commentFeeds) {
         for (const post of feed.posts) {
-          if (!activeAccountIds.has(post.accountId)
+          if (!activeByProviderHash.has(providerAccountHash(post.accountId))
               || !activeCommentBindings.some((binding) => binding.accountId === post.accountId
                 && binding.platform === post.platform)) continue;
           const key = `${post.platform}\0${post.accountId}\0${post.providerPostId}`;

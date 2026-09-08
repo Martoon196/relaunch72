@@ -10,6 +10,7 @@ import { escapeHtml } from './ui.js';
 import {
   CONTENT_APPROVAL_DECISION_ROUTE,
   CONTENT_APPROVAL_REQUEST_ROUTE,
+  GENERATED_SOURCE_REFRESH_ROUTE,
   type ContentControlNoticeView,
 } from './content-control-room-actions.js';
 import {
@@ -30,6 +31,8 @@ export interface ContentControlRoomActionSecurity {
   readonly requestApprovalKeys: Readonly<Record<string, string>>;
   /** Exact approval-request id to server-created decision command key. */
   readonly decisionKeys: Readonly<Record<string, string>>;
+  /** Exact generated content-version id to server-created revalidation command key. */
+  readonly sourceRefreshKeys?: Readonly<Record<string, string>>;
 }
 
 export interface RenderContentControlRoomOptions {
@@ -155,6 +158,15 @@ function contentActions(
       return '<section class="ccr-actions" aria-label="Content review controls"><div class="ccr-action-head"><strong>Review action unavailable</strong><span>Fail closed</span></div><p class="ccr-action-lock">Refresh the page to obtain a protected command. Nothing changed.</p></section>';
     }
     return `<section class="ccr-actions" aria-label="Content review controls"><div class="ccr-action-head"><strong>Submit this exact version for review</strong><span>Version locked</span></div>${exactReviewLink}<form class="ccr-action-form" method="post" action="${CONTENT_APPROVAL_REQUEST_ROUTE}"><input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}"><input type="hidden" name="command_key" value="${escapeHtml(commandKey)}"><input type="hidden" name="content_item_id" value="${escapeHtml(item.contentItemId)}"><input type="hidden" name="content_version_id" value="${escapeHtml(item.contentVersionId)}">${returnFilterFields(view, item)}<label>Review brief<textarea name="review_note" maxlength="4000" placeholder="What should the reviewer verify?"></textarea></label><div class="ccr-action-buttons"><button class="ccr-action-button primary" type="submit">Request human approval</button></div></form><p class="ccr-action-lock">The request is pinned to v${safeCount(item.versionNumber)} and its SHA-256 content digest.</p></section>`;
+  }
+
+  if (item.approvalStatus === 'approved' && !item.approvalStale && !item.sourceFresh
+      && item.sourceSystem === 'property_predator_generation') {
+    const commandKey = security?.sourceRefreshKeys?.[item.contentVersionId];
+    if (!view.canManage || !validCommandKey(commandKey)) {
+      return `<section class="ccr-actions" aria-label="Content review controls"><div class="ccr-action-head"><strong>Source proof expired</strong><span>Manager gate</span></div><p class="ccr-action-lock">A workspace owner or admin must re-check the exact generated source.</p>${exactReviewLink}</section>`;
+    }
+    return `<section class="ccr-actions" aria-label="Content review controls"><div class="ccr-action-head"><strong>Renew this saved version</strong><span>No regeneration</span></div><form class="ccr-action-form" method="post" action="${GENERATED_SOURCE_REFRESH_ROUTE}"><input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}"><input type="hidden" name="command_key" value="${escapeHtml(commandKey)}"><input type="hidden" name="content_item_id" value="${escapeHtml(item.contentItemId)}"><input type="hidden" name="content_version_id" value="${escapeHtml(item.contentVersionId)}"><input type="hidden" name="version_number" value="${safeCount(item.versionNumber)}"><input type="hidden" name="content_sha256" value="${escapeHtml(item.contentSha256)}">${returnFilterFields(view, item)}<div><p class="ccr-action-lock">Re-check Property Predator’s immutable source and refresh this exact approval for scheduling.</p>${exactReviewLink}</div><div class="ccr-action-buttons"><button class="ccr-action-button primary" type="submit">Refresh source proof</button></div></form></section>`;
   }
 
   return `<section class="ccr-actions" aria-label="Content review controls"><div class="ccr-action-head"><strong>${item.publishable ? 'Review complete' : 'Approval recorded'}</strong><span>${item.publishable ? 'Outbound eligible' : 'Review gate locked'}</span></div><p class="ccr-action-lock">${escapeHtml(item.publishableDetail)}</p>${exactReviewLink}</section>`;

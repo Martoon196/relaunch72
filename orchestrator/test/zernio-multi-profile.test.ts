@@ -36,6 +36,7 @@ class FakeClient {
         account_id: company
           ? '66666666-6666-4666-8666-666666666666'
           : '55555555-5555-4555-8555-555555555555',
+        provider_account_id_sha256: Buffer.alloc(32, company ? 6 : 5),
         network: 'linkedin', username: company ? 'Property Predator' : 'Martin Howard',
         display_name: company ? 'Property Predator' : 'Martin Howard', status: 'active',
         linked_at: '2026-09-03T10:00:00.000Z', last_event_at: '2026-09-03T10:01:00.000Z',

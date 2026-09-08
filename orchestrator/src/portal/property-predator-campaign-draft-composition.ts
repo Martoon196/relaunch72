@@ -10,6 +10,8 @@ import {
 } from '../company-content-adapter/property-predator-generation.js';
 import { PropertyPredatorCampaignDraftRuntime } from
   '../company-content-adapter/property-predator-campaign-draft-runtime.js';
+import { createPropertyPredatorGeneratedSourceRevalidator } from
+  '../company-content-adapter/property-predator-generated-source.js';
 
 const EXACT_PRODUCT_PROFILE = 'property_predator_growth';
 const EXACT_PRODUCTION_SOURCE_ORIGIN = 'https://propertypredator.com';
@@ -71,6 +73,7 @@ export interface PropertyPredatorCampaignDraftComposition {
   readonly runtime?: PropertyPredatorCampaignDraftRuntime;
   /** Same fenced transport used by the runtime; callers must invoke only one path per command. */
   readonly generation?: Pick<PropertyPredatorGenerationTransport, 'generateDraft'>;
+  readonly generatedSource?: ReturnType<typeof createPropertyPredatorGeneratedSourceRevalidator>;
 }
 
 export interface PropertyPredatorCampaignDraftCompositionDependencies {
@@ -164,6 +167,7 @@ function exactSourceOrigin(env: NodeJS.ProcessEnv): Readonly<{
 function exactCredential(env: NodeJS.ProcessEnv): Readonly<{
   sourceClientId: string;
   generateToken: string;
+  readToken: string;
   readCredentialSha256: string;
   syncCredentialSha256: string;
 }> {
@@ -189,6 +193,7 @@ function exactCredential(env: NodeJS.ProcessEnv): Readonly<{
   return Object.freeze({
     sourceClientId,
     generateToken,
+    readToken,
     // Derive separation evidence from the exact credentials already mounted in
     // this process. Only their digests enter the generate bridge object.
     readCredentialSha256: sha256(readToken),
@@ -288,9 +293,18 @@ export function composePropertyPredatorCampaignDraftRuntime(
     fetchImpl: dependencies.fetchImpl,
     allowLocalHttp: source.allowLocalHttp,
   });
+  const generatedSource = createPropertyPredatorGeneratedSourceRevalidator({
+    baseUrl: source.sourceOrigin,
+    clientId: credential.sourceClientId,
+    readToken: credential.readToken,
+    timeoutMs: boundedTimeout(env.PROPERTY_PREDATOR_COMPANY_CONTENT_TIMEOUT_MS),
+    fetchImpl: dependencies.fetchImpl,
+    allowLocalHttp: source.allowLocalHttp,
+  });
   return Object.freeze({
     readiness: readyReadiness(),
     generation,
+    generatedSource,
     runtime: new PropertyPredatorCampaignDraftRuntime({
       generation,
       providerEffectsEnabled: true,

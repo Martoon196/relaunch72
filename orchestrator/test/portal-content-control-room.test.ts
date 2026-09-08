@@ -15,6 +15,7 @@ import { renderContentControlRoomBody } from '../src/portal/content-control-room
 import {
   CONTENT_APPROVAL_DECISION_ROUTE,
   CONTENT_APPROVAL_REQUEST_ROUTE,
+  GENERATED_SOURCE_REFRESH_ROUTE,
   contentControlNoticeFromQuery,
   contentControlNoticeToken,
 } from '../src/portal/content-control-room-actions.js';
@@ -291,6 +292,40 @@ test('Content Control Room exposes protected approval commands only to authorise
   });
   assert.doesNotMatch(readOnly, /method="post"/);
   assert.match(readOnly, /Your current workspace role can inspect immutable evidence/);
+});
+
+test('approved expired generated drafts expose exact source renewal without regeneration', () => {
+  const generated = item({
+    origin: 'generated', sourceFresh: false, publishable: false,
+    source: {
+      system: 'property_predator_generation',
+      itemId: 'd1000000-0000-4000-8000-000000000001',
+      version: 'd2000000-0000-4000-8000-000000000001:v1',
+    },
+  });
+  const view = presentContentControlRoom(page([generated]), {
+    workspaceName: 'Property Predator Growth HQ', asOf: '2026-08-26T08:20:00.000Z',
+    canWrite: true, canManage: true,
+  });
+  const html = renderContentControlRoomBody(view, { security: {
+    csrfToken: 'content-csrf-token-0000000000000001', requestApprovalKeys: {}, decisionKeys: {},
+    sourceRefreshKeys: { [generated.contentVersionId]: 'refresh-generated-source-0001' },
+  } });
+  assert.match(html, new RegExp(`action="${GENERATED_SOURCE_REFRESH_ROUTE}"`));
+  assert.match(html, /Refresh source proof/);
+  assert.match(html, /No regeneration/);
+  assert.doesNotMatch(html, /Generate new|Publish now/);
+
+  const restricted = renderContentControlRoomBody(presentContentControlRoom(page([{
+    ...generated, approvalStatus: 'changes_requested', approvalDecisionId: null,
+  }]), { workspaceName: 'Growth HQ', asOf: '2026-08-26T08:20:00.000Z', canWrite: true, canManage: true }), {
+    security: { csrfToken: 'content-csrf-token-0000000000000001', requestApprovalKeys: {
+      [generated.contentVersionId]: 'request-review-again-0001',
+    }, decisionKeys: {}, sourceRefreshKeys: {
+      [generated.contentVersionId]: 'refresh-must-not-show-0001',
+    } },
+  });
+  assert.doesNotMatch(restricted, new RegExp(`action="${GENERATED_SOURCE_REFRESH_ROUTE}"`));
 });
 
 test('Content Control notices are session-bound and never claim publishing occurred', () => {

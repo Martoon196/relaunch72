@@ -14,6 +14,8 @@ export type PortalZernioFailure = Readonly<{ ok: false; kind: PortalZernioFailur
 
 export interface PortalZernioAccountSnapshot {
   readonly accountId: string;
+  /** SHA-256 of the provider account ID. The clear provider ID remains runtime configuration only. */
+  readonly providerAccountIdSha256: string;
   readonly network: ZernioPilotNetwork;
   readonly username: string | null;
   readonly displayName: string | null;

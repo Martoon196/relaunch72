@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 
 export const CONTENT_APPROVAL_REQUEST_ROUTE = '/portal/content/approval-requests' as const;
 export const CONTENT_APPROVAL_DECISION_ROUTE = '/portal/content/approval-decisions' as const;
+export const GENERATED_SOURCE_REFRESH_ROUTE = '/portal/content/generated-source-refresh' as const;
 
 export type ContentControlNoticeCode =
   | 'draft_created'
@@ -10,6 +11,7 @@ export type ContentControlNoticeCode =
   | 'rejected'
   | 'changes_requested'
   | 'replayed'
+  | 'source_refreshed'
   | 'forbidden'
   | 'conflict'
   | 'missing'
@@ -24,7 +26,7 @@ export interface ContentControlNoticeView {
 }
 
 const NOTICE_CODES = new Set<ContentControlNoticeCode>([
-  'draft_created', 'requested', 'approved', 'rejected', 'changes_requested', 'replayed',
+  'draft_created', 'requested', 'approved', 'rejected', 'changes_requested', 'replayed', 'source_refreshed',
   'forbidden', 'conflict', 'missing', 'invalid', 'review_unavailable', 'unavailable',
 ]);
 const NOTICE_CONTEXT = 'relaunch72:content-control-notice:v1\0';
@@ -153,6 +155,11 @@ function noticeFor(code: ContentControlNoticeCode): ContentControlNoticeView {
     kind: 'info',
     title: 'Safe replay confirmed',
     message: 'This exact protected command had already completed, so no duplicate request or decision was created.',
+  };
+  if (code === 'source_refreshed') return {
+    kind: 'success',
+    title: 'Exact source proof refreshed',
+    message: 'The saved approved version is eligible again. No new draft was generated and nothing was posted.',
   };
   if (code === 'forbidden') return {
     kind: 'error',

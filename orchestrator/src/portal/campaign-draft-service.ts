@@ -4,6 +4,8 @@ import { requestDatabaseContext } from '../db/rls.js';
 import {
   PropertyPredatorGeneratedDraftLifecycle,
   PropertyPredatorGeneratedDraftLifecycleError,
+  type RefreshApprovedPropertyPredatorGeneratedSourceInput,
+  type RefreshedApprovedPropertyPredatorGeneratedSource,
   type StagePropertyPredatorGeneratedDraftInput,
   type StagedPropertyPredatorGeneratedDraft,
 } from '../company-content-adapter/property-predator-generation-approval.js';
@@ -16,11 +18,19 @@ export type PortalCampaignDraftOutcome =
   | Readonly<{ ok: true; draft: StagedPropertyPredatorGeneratedDraft }>
   | Readonly<{ ok: false; kind: 'unauthenticated' | 'forbidden' | 'validation' | 'conflict' | 'unavailable'; message: string }>;
 
+export type PortalGeneratedSourceRefreshOutcome =
+  | Readonly<{ ok: true; result: RefreshedApprovedPropertyPredatorGeneratedSource }>
+  | Readonly<{ ok: false; kind: 'unauthenticated' | 'forbidden' | 'validation' | 'conflict' | 'unavailable'; message: string }>;
+
 export interface PortalCampaignDraftService {
   generateAndStage(
     identity: PortalCompanyContentRequestIdentity,
     input: StagePropertyPredatorGeneratedDraftInput,
   ): Promise<PortalCampaignDraftOutcome>;
+  refreshApprovedSource?(
+    identity: PortalCompanyContentRequestIdentity,
+    input: RefreshApprovedPropertyPredatorGeneratedSourceInput,
+  ): Promise<PortalGeneratedSourceRefreshOutcome>;
 }
 
 function context(identity: PortalCompanyContentRequestIdentity, principal: {
@@ -37,7 +47,8 @@ export class PgPortalCampaignDraftService implements PortalCampaignDraftService 
   constructor(private readonly dependencies: Readonly<{
     principalResolver: Pick<PortalCrmPrincipalResolver, 'resolve'>;
     accessReader: PortalCompanyContentWorkspaceAccessReader;
-    lifecycle: Pick<PropertyPredatorGeneratedDraftLifecycle, 'generateAndStage'>;
+    lifecycle: Pick<PropertyPredatorGeneratedDraftLifecycle, 'generateAndStage'>
+      & Partial<Pick<PropertyPredatorGeneratedDraftLifecycle, 'refreshApprovedSource'>>;
   }>) {}
 
   async generateAndStage(
@@ -68,6 +79,36 @@ export class PgPortalCampaignDraftService implements PortalCampaignDraftService 
         return Object.freeze({ ok: false, kind: 'conflict', message: 'The campaign evidence changed while the draft was being saved. Refresh and try again.' });
       }
       return Object.freeze({ ok: false, kind: 'unavailable', message: 'The draft could not be saved safely. Nothing was approved, scheduled or posted.' });
+    }
+  }
+
+  async refreshApprovedSource(
+    identity: PortalCompanyContentRequestIdentity,
+    input: RefreshApprovedPropertyPredatorGeneratedSourceInput,
+  ): Promise<PortalGeneratedSourceRefreshOutcome> {
+    try {
+      if (!this.dependencies.lifecycle.refreshApprovedSource) {
+        return Object.freeze({ ok: false, kind: 'unavailable', message: 'Generated source revalidation is not configured.' });
+      }
+      const principal = await this.dependencies.principalResolver.resolve(identity.sessionToken);
+      if (!principal) return Object.freeze({ ok: false, kind: 'unauthenticated', message: 'This portal session is no longer active.' });
+      const databaseContext = context(identity, principal);
+      const access = await this.dependencies.accessReader.load(databaseContext);
+      if (!access || access.workspaceId !== principal.workspaceId.toLowerCase()) {
+        return Object.freeze({ ok: false, kind: 'forbidden', message: 'This workspace is not available to the current portal session.' });
+      }
+      if (!access.canManage) {
+        return Object.freeze({ ok: false, kind: 'forbidden', message: 'Only a workspace owner or admin can refresh generated source proof.' });
+      }
+      return Object.freeze({
+        ok: true,
+        result: await this.dependencies.lifecycle.refreshApprovedSource(databaseContext, input),
+      });
+    } catch (error) {
+      if (error instanceof PropertyPredatorGeneratedDraftLifecycleError) {
+        return Object.freeze({ ok: false, kind: 'conflict', message: 'The approved version or its exact source changed. Refresh before trying again.' });
+      }
+      return Object.freeze({ ok: false, kind: 'unavailable', message: 'The exact generated source could not be revalidated. Nothing was scheduled or posted.' });
     }
   }
 }

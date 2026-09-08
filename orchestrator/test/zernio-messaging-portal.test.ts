@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import {
   type ZernioMessagingClient,
@@ -12,6 +13,7 @@ import {
 import { renderZernioMessagingBody } from '../src/portal/zernio-messaging-view.js';
 
 const ACCOUNT = '6a95e99a77555aae01643ae2';
+const ACCOUNT_SHA256 = createHash('sha256').update(ACCOUNT).digest('hex');
 const identity = Object.freeze({
   sessionToken: 'session-token', requestId: 'request-1',
 });
@@ -102,7 +104,8 @@ test('portal social Messaging authenticates through the durable connected-accoun
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() {
       return { ok: true as const, accounts: [{
-        accountId: ACCOUNT, network: 'instagram' as const,
+        accountId: '55555555-5555-4555-8555-555555555555',
+        providerAccountIdSha256: ACCOUNT_SHA256, network: 'instagram' as const,
         username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
         linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
         webhookReceiptCount: 1,
@@ -145,7 +148,7 @@ test('an empty comments-only source retains the actual successful read time', as
   const checkedAt = '2026-09-08T09:42:00.000Z';
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: ACCOUNT, network: 'linkedin' as const,
+      accountId: ACCOUNT, providerAccountIdSha256: ACCOUNT_SHA256, network: 'linkedin' as const,
       username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
@@ -177,7 +180,7 @@ test('same-platform foreign account records cannot be read or used for a reply',
   let sends = 0;
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: ACCOUNT, network: 'instagram' as const,
+      accountId: ACCOUNT, providerAccountIdSha256: ACCOUNT_SHA256, network: 'instagram' as const,
       username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
@@ -230,7 +233,7 @@ test('active but unconfigured DM accounts and misbound comment posts cannot reac
     let sends = 0;
     const service = new LivePortalZernioMessagingService({
       accounts: { async snapshot() { return { ok: true as const, accounts: [{
-        accountId: ACCOUNT, network: 'instagram' as const,
+        accountId: ACCOUNT, providerAccountIdSha256: ACCOUNT_SHA256, network: 'instagram' as const,
         username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
         linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
         webhookReceiptCount: 1,
@@ -276,7 +279,7 @@ test('portal social Messaging reads and sends an approved Facebook Page DM throu
   const facebookConversation = Object.freeze({ ...conversation, platform: 'facebook' as const });
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: ACCOUNT, network: 'facebook' as const,
+      accountId: ACCOUNT, providerAccountIdSha256: ACCOUNT_SHA256, network: 'facebook' as const,
       username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
@@ -352,7 +355,7 @@ test('approved social reply claims once, calls the provider once and settles acc
   const settlements: unknown[] = [];
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: ACCOUNT, network: 'instagram' as const,
+      accountId: ACCOUNT, providerAccountIdSha256: ACCOUNT_SHA256, network: 'instagram' as const,
       username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
@@ -391,7 +394,7 @@ test('a malformed successful provider response is quarantined instead of marked 
   const settlements: unknown[] = [];
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: ACCOUNT, network: 'instagram' as const,
+      accountId: ACCOUNT, providerAccountIdSha256: ACCOUNT_SHA256, network: 'instagram' as const,
       username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
@@ -430,7 +433,7 @@ test('a malformed successful provider response is quarantined instead of marked 
 test('an accepted provider response stays outcome unknown when evidence settlement is unavailable', async () => {
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: ACCOUNT, network: 'instagram' as const,
+      accountId: ACCOUNT, providerAccountIdSha256: ACCOUNT_SHA256, network: 'instagram' as const,
       username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
@@ -455,7 +458,7 @@ test('an already-claimed social reply never calls the provider again', async () 
   let sends = 0;
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: ACCOUNT, network: 'instagram' as const,
+      accountId: ACCOUNT, providerAccountIdSha256: ACCOUNT_SHA256, network: 'instagram' as const,
       username: null, displayName: null, status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
@@ -489,7 +492,7 @@ test('Instagram comment posts and exact threads join the inbox while reads stay 
   const reads: unknown[] = [];
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: ACCOUNT, network: 'instagram' as const,
+      accountId: ACCOUNT, providerAccountIdSha256: ACCOUNT_SHA256, network: 'instagram' as const,
       username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
@@ -548,7 +551,9 @@ test('LinkedIn comment posts and threads enter the network-qualified immutable l
   const ledgerCreates: unknown[] = [];
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: linkedinAccount, network: 'linkedin' as const,
+      accountId: linkedinAccount,
+      providerAccountIdSha256: createHash('sha256').update(linkedinAccount).digest('hex'),
+      network: 'linkedin' as const,
       username: 'propertypredator-linkedin', displayName: 'Property Predator', status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
@@ -628,7 +633,9 @@ test('an approved LinkedIn comment reply claims and sends with exact network and
   };
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: linkedinAccount, network: 'linkedin' as const,
+      accountId: linkedinAccount,
+      providerAccountIdSha256: createHash('sha256').update(linkedinAccount).digest('hex'),
+      network: 'linkedin' as const,
       username: 'propertypredator-linkedin', displayName: 'Property Predator', status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,
@@ -695,7 +702,7 @@ test('an approved Instagram comment reply reuses the immutable ledger and exact 
   };
   const service = new LivePortalZernioMessagingService({
     accounts: { async snapshot() { return { ok: true as const, accounts: [{
-      accountId: ACCOUNT, network: 'instagram' as const,
+      accountId: ACCOUNT, providerAccountIdSha256: ACCOUNT_SHA256, network: 'instagram' as const,
       username: 'propertypredator', displayName: 'Property Predator', status: 'active' as const,
       linkedAt: '2026-08-31T20:00:00.000Z', lastEventAt: '2026-08-31T20:00:00.000Z',
       webhookReceiptCount: 1,

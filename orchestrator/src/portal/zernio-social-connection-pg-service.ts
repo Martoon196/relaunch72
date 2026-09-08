@@ -30,6 +30,7 @@ const NETWORKS = new Set<unknown>(['facebook', 'instagram', 'linkedin']);
 
 interface AccountRow extends QueryResultRow {
   account_id: unknown;
+  provider_account_id_sha256: unknown;
   network: unknown;
   username: unknown;
   display_name: unknown;
@@ -227,6 +228,8 @@ function timestamp(value: unknown): string {
 
 function accountRow(row: AccountRow): PortalZernioAccountSnapshot {
   if (typeof row.account_id !== 'string' || !UUID.test(row.account_id)
+      || !Buffer.isBuffer(row.provider_account_id_sha256)
+      || row.provider_account_id_sha256.length !== 32
       || !NETWORKS.has(row.network)
       || (row.username !== null && (typeof row.username !== 'string' || !USERNAME.test(row.username)))
       || (row.display_name !== null
@@ -238,6 +241,7 @@ function accountRow(row: AccountRow): PortalZernioAccountSnapshot {
   if (!Number.isSafeInteger(receipts) || receipts < 0) throw new Error('Invalid Zernio receipt count');
   return Object.freeze({
     accountId: row.account_id,
+    providerAccountIdSha256: row.provider_account_id_sha256.toString('hex'),
     network: row.network as ZernioPilotNetwork,
     username: row.username as string | null,
     displayName: row.display_name as string | null,

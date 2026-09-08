@@ -7,6 +7,8 @@ import type {
   CreateCompanyContentVersionResult,
   DecideCompanyContentApprovalResult,
   RequestCompanyContentApprovalResult,
+  RefreshCompanyContentSourceAttestationCommand,
+  RefreshCompanyContentSourceAttestationResult,
 } from '../company-content-pg/types.js';
 import { canonicalCompanyContentJson } from '../company-content-pg/validation.js';
 import {
@@ -19,6 +21,7 @@ import type {
   PropertyPredatorGeneratedDraft,
   PropertyPredatorGenerationTransport,
 } from './property-predator-generation.js';
+import type { PropertyPredatorGeneratedSourceRevalidator } from './property-predator-generated-source.js';
 
 const SOURCE_SYSTEM = 'property_predator_generation';
 const CONTENT_MIME_TYPE = 'application/vnd.propertypredator.company-content+json';
@@ -221,6 +224,10 @@ export interface PropertyPredatorGeneratedDraftContentService {
       decisionNote?: string | null;
     }>,
   ): Promise<DecideCompanyContentApprovalResult>;
+  refreshSourceAttestation?(
+    context: DatabaseRequestContext,
+    command: RefreshCompanyContentSourceAttestationCommand,
+  ): Promise<RefreshCompanyContentSourceAttestationResult>;
 }
 
 export interface PropertyPredatorGeneratedDraftLifecycleDependencies {
@@ -231,7 +238,23 @@ export interface PropertyPredatorGeneratedDraftLifecycleDependencies {
     context: DatabaseRequestContext,
     evidence: NonNullable<StagePropertyPredatorGeneratedDraftInput['approvedEvidence']>,
   ) => Promise<Readonly<{ valid: boolean; checkedAt: string }>>;
+  /** Exact, read-only source lookup used to renew approved generated drafts. */
+  readonly generatedSource?: Pick<PropertyPredatorGeneratedSourceRevalidator, 'verify'>;
   readonly now?: () => Date;
+}
+
+export interface RefreshApprovedPropertyPredatorGeneratedSourceInput {
+  readonly commandKey: string;
+  readonly reviewTarget: PropertyPredatorGeneratedDraftReviewTarget;
+}
+
+export interface RefreshedApprovedPropertyPredatorGeneratedSource {
+  readonly disposition: 'applied' | 'replayed';
+  readonly contentItemId: string;
+  readonly contentVersionId: string;
+  readonly sourceAttestationId: string;
+  readonly sourceAttestationExpiresAt: string;
+  readonly providerEffects: false;
 }
 
 function revisionTarget(
@@ -648,5 +671,53 @@ export class PropertyPredatorGeneratedDraftLifecycle {
       approvalRequestId: decided.approvalRequestId,
       reviewTarget: target,
     });
+  }
+
+  async refreshApprovedSource(
+    context: DatabaseRequestContext,
+    input: RefreshApprovedPropertyPredatorGeneratedSourceInput,
+  ): Promise<RefreshedApprovedPropertyPredatorGeneratedSource> {
+    if (!input || typeof input !== 'object'
+        || !this.dependencies.generatedSource
+        || !this.dependencies.content.refreshSourceAttestation) fail('invalid_input');
+    const target = reviewTarget(input.reviewTarget);
+    const state = exactCurrentVersion(
+      await this.dependencies.content.listVersionApprovalStates(context, target.contentItemId),
+      target,
+    );
+    if (state.approvalStatus !== 'approved' || state.approvalStale
+        || !state.approvalRequestId || !state.approvalDecisionId
+        || state.source.system !== SOURCE_SYSTEM) fail('approval_conflict');
+    const match = /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):v([1-9][0-9]*)$/u
+      .exec(state.source.version);
+    if (!match) fail('integrity_mismatch');
+    const proof = await this.dependencies.generatedSource.verify(Object.freeze({
+      sourceItemId: uuid(state.source.itemId),
+      sourceVersionId: match[1]!,
+      sourceItemVersion: Number(match[2]),
+      contentSha256: state.contentSha256,
+      brandSha256: state.brandSha256,
+    }));
+    const checkedAt = instant(this.#now());
+    const refreshed = await this.dependencies.content.refreshSourceAttestation(context, {
+      commandKey: commandKey(input.commandKey),
+      contentItemId: target.contentItemId,
+      contentVersionId: target.contentVersionId,
+      expected: Object.freeze({
+        source: state.source,
+        contentSha256: state.contentSha256,
+        blobSha256: state.blobSha256,
+        brandSha256: state.brandSha256,
+      }),
+      attestation: Object.freeze({
+        catalogSha256: digest(proof.catalogSha256),
+        checkedAt: checkedAt.toISOString(),
+        expiresAt: new Date(checkedAt.getTime() + ATTESTATION_FRESHNESS_MS).toISOString(),
+      }),
+    });
+    if (refreshed.contentItemId !== target.contentItemId
+        || refreshed.contentVersionId !== target.contentVersionId
+        || refreshed.providerEffects !== false) fail('integrity_mismatch');
+    return Object.freeze({ ...refreshed, providerEffects: false });
   }
 }

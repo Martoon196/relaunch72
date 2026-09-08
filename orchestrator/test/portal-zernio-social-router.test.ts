@@ -136,6 +136,7 @@ test('a signed lifecycle receipt reconciles an incomplete Instagram browser retu
       ok: true,
       accounts: [{
         accountId: '55555555-5555-4555-8555-555555555555',
+        providerAccountIdSha256: 'a'.repeat(64),
         network: 'instagram',
         username: null,
         displayName: null,

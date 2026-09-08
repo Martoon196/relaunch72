@@ -662,6 +662,7 @@ export async function buildPgPortalPlatform(
                 content: new CompanyContentService({
                   transactionRunner: createCompanyContentTransactionRunner(contentAdapterPool),
                 }),
+                generatedSource: campaignDraftComposition.generatedSource,
                 revalidateEvidence: async (context, evidence) => {
                   const current = await webContent.listCatalogWithSnapshot(context, { limit: 100 });
                   return Object.freeze({
