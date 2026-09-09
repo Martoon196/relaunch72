@@ -95,12 +95,12 @@ BEGIN
     'selected_version.publication_copy, p_scheduled_for'
   );
   IF replacement = function_definition
-     OR pg_catalog.position('selected_version.publication_copy' IN replacement) = 0
-     OR pg_catalog.position(
-       'public.digest(selected_version.content_body, ''sha256'')' IN replacement
+     OR pg_catalog.strpos(replacement, 'selected_version.publication_copy') = 0
+     OR pg_catalog.strpos(
+       replacement, 'public.digest(selected_version.content_body, ''sha256'')'
      ) > 0
-     OR pg_catalog.position(
-       'selected_version.content_body, p_scheduled_for' IN replacement
+     OR pg_catalog.strpos(
+       replacement, 'selected_version.content_body, p_scheduled_for'
      ) > 0 THEN
     RAISE EXCEPTION 'Zernio calendar inner command publication-copy patch incomplete';
   END IF;

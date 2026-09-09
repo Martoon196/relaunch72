@@ -14,6 +14,10 @@ test('0100 keeps artwork instructions in review evidence and sends publication c
   assert.match(sql, /'artwork_instructions'/);
   assert.match(sql, /digest\(app_private\.company_content_social_publication_copy\(version\.content_body\), ''sha256''\)/);
   assert.match(sql, /selected_version\.publication_copy, p_scheduled_for/);
-  assert.match(sql, /position\([\s\S]*'selected_version\.content_body, p_scheduled_for'[\s\S]*\) > 0 THEN/);
+  // Use the ordinary two-argument function here. PostgreSQL's SQL-special
+  // POSITION(substring IN string) grammar cannot be schema-qualified inside
+  // this PL/pgSQL expression.
+  assert.match(sql, /pg_catalog\.strpos\(\s*replacement, 'selected_version\.content_body, p_scheduled_for'/);
+  assert.doesNotMatch(sql, /pg_catalog\.position\(/);
   assert.match(sql, /REVOKE ALL ON FUNCTION app_private\.company_content_social_publication_copy\(text\) FROM PUBLIC/);
 });
