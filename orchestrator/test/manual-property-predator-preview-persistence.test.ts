@@ -123,7 +123,7 @@ test('content-control exact-review links resolve to composed immutable preview p
       + '/versions/82000000-0000-4000-8000-000000000001/review',
   );
   assert.equal(first.status, 200);
-  assert.match(first.html, /Approve what/);
+  assert.match(first.html, /separate message approval and capped delivery gate still apply/);
   assert.match(first.html, /The postcode is not the opportunity/);
   assert.doesNotMatch(first.html, /Preview page not found/);
 

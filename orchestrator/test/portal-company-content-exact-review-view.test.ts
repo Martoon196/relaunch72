@@ -126,6 +126,39 @@ test('exact review falls back to complete canonical bytes for non-email content'
   assert.match(body, /Exact document bytes/);
 });
 
+test('social review separates readable publication copy and artwork from one technical payload', () => {
+  const canonical = '{"artwork_instructions":"Warm daylight exterior. No fake UI or claims.","body":"Your next deal should survive the numbers before it reaches your shortlist.","cta_url":"https://propertypredator.com","kind":"social_post","platform":"linkedin","schema":"propertypredator.company-content/v1","title":"Numbers first","type":"post"}';
+  const body = renderPortalCompanyContentReviewBody(exactSnapshot(Object.freeze({
+    ...approvedReview,
+    kind: 'social_post' as const,
+    contentMimeType: 'application/json',
+    canonicalContent: canonical,
+    canonicalByteLength: Buffer.byteLength(canonical, 'utf8'),
+    email: null,
+    social: Object.freeze({
+      schema: 'propertypredator.company-content/v1' as const,
+      type: 'post',
+      kind: 'social_post',
+      platform: 'linkedin',
+      title: 'Numbers first',
+      publicationCopy: 'Your next deal should survive the numbers before it reaches your shortlist.',
+      artworkInstructions: 'Warm daylight exterior. No fake UI or claims.',
+      ctaUrl: 'https://propertypredator.com',
+      contextSha256: null,
+      legacyCombined: false,
+      publicationCopySha256: '1'.repeat(64),
+      artworkInstructionsSha256: '2'.repeat(64),
+    }),
+  })));
+
+  assert.match(body, /Social post/);
+  assert.match(body, /Publication copy/);
+  assert.match(body, /Artwork instructions/);
+  assert.match(body, /Technical evidence/);
+  assert.match(body, /Plan this exact version/);
+  assert.equal(body.split('propertypredator.company-content/v1').length - 1, 1);
+});
+
 test('pending exact review renders approval only with its short-lived exact-review capability', () => {
   const body = renderPortalCompanyContentReviewBody({
     workspace: Object.freeze({

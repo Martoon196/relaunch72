@@ -117,11 +117,14 @@ import { renderContentControlRoomBody } from './content-control-room-view.js';
 import {
   CONTENT_APPROVAL_DECISION_ROUTE,
   CONTENT_APPROVAL_REQUEST_ROUTE,
+  CONTENT_SOCIAL_REVISION_ROUTE,
   GENERATED_SOURCE_REFRESH_ROUTE,
   contentControlNoticeFromQuery,
   contentControlNoticeToken,
   exactReviewApprovalToken,
+  exactReviewRevisionToken,
   verifyExactReviewApprovalToken,
+  verifyExactReviewRevisionToken,
   type ContentControlNoticeCode,
 } from './content-control-room-actions.js';
 import {
@@ -4718,6 +4721,14 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         view,
         url.searchParams,
       );
+      const requestedContentVersionId = (url.searchParams.get('content_version') ?? '')
+        .trim().toLowerCase();
+      const selectedContentVersionId = CRM_OBJECT_ID.test(requestedContentVersionId)
+        && mutations?.create?.contentVersions.some(
+          (choice) => choice.value === requestedContentVersionId,
+        )
+        ? requestedContentVersionId
+        : undefined;
       const scheduledJobs = deps.zernioCalendar
         ? await deps.zernioCalendar.listScheduled(identity, { from: range.from, to: range.to })
         : null;
@@ -4765,6 +4776,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           brainLabel: contentNavigation?.brainLabel,
           mutations,
           liveSchedules,
+          selectedContentVersionId,
         }),
         deps,
         'content',
@@ -5109,6 +5121,21 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
               : {}),
             ownedSeedCommandKey: randomUUID(),
             ownedSeedRunId: randomUUID(),
+            ...(review.social && review.isLatest && !review.approvalStale
+              ? {
+                  revisionCommandKey: randomUUID(),
+                  exactRevisionToken: exactReviewRevisionToken(
+                    deps.sessionSecret,
+                    sessionToken,
+                    {
+                      contentItemId: review.contentItemId,
+                      contentVersionId: review.contentVersionId,
+                      contentSha256: review.contentSha256,
+                    },
+                    now,
+                  ),
+                }
+              : {}),
             ...(review.approvalStatus === 'pending' && review.approvalRequestId
               ? {
                   decisionCommandKey: randomUUID(),
@@ -5266,6 +5293,69 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           ? outcome.result.disposition === 'replayed' ? 'replayed' : 'source_refreshed'
           : outcome.kind === 'forbidden' ? 'forbidden'
             : outcome.kind === 'conflict' ? 'conflict' : 'unavailable');
+    } catch {
+      return contentControlRedirect(res, deps, sessionToken, form, 'unavailable');
+    }
+  }
+
+  if (deps.kind === 'postgres' && p === CONTENT_SOCIAL_REVISION_ROUTE && method === 'POST') {
+    const form = await readForm(req);
+    if (!deps.companyContent?.createSocialRevision
+        || !verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
+      return contentControlRedirect(res, deps, sessionToken, form, 'invalid');
+    }
+    const contentItemId = (form.content_item_id ?? '').trim().toLowerCase();
+    const previousVersionId = (form.previous_version_id ?? '').trim().toLowerCase();
+    const expectedContentSha256 = (form.expected_content_sha256 ?? '').trim().toLowerCase();
+    const publicationCopy = form.publication_copy ?? '';
+    const artworkInstructions = form.artwork_instructions ?? '';
+    if (!CRM_OBJECT_ID.test(contentItemId) || !CRM_OBJECT_ID.test(previousVersionId)
+        || !/^[0-9a-f]{64}$/u.test(expectedContentSha256)
+        || publicationCopy.trim().length < 1
+        || Buffer.byteLength(publicationCopy, 'utf8') > 900_000
+        || Buffer.byteLength(artworkInstructions, 'utf8') > 50_000
+        || !verifyExactReviewRevisionToken(
+          deps.sessionSecret,
+          sessionToken,
+          form.exact_revision_token,
+          { contentItemId, contentVersionId: previousVersionId, contentSha256: expectedContentSha256 },
+          now,
+        )) {
+      return contentControlRedirect(res, deps, sessionToken, form, 'invalid');
+    }
+    try {
+      const outcome = await deps.companyContent.createSocialRevision(
+        crmIdentity(sessionToken, deps),
+        {
+          commandKey: form.command_key ?? '',
+          contentItemId,
+          previousVersionId,
+          expectedContentSha256,
+          publicationCopy,
+          artworkInstructions: artworkInstructions || null,
+        },
+      );
+      if (!outcome.ok) {
+        return contentControlRedirect(
+          res,
+          deps,
+          sessionToken,
+          form,
+          contentFailureNotice(outcome.kind),
+        );
+      }
+      const notice = contentControlNoticeToken(
+        deps.sessionSecret,
+        sessionToken,
+        outcome.disposition === 'replayed' ? 'replayed' : 'revision_created',
+      );
+      return redirect(
+        res,
+        exactCompanyContentReviewLocation(outcome.contentItemId, outcome.contentVersionId, { notice }),
+        undefined,
+        303,
+        { 'cache-control': 'no-store' },
+      );
     } catch {
       return contentControlRedirect(res, deps, sessionToken, form, 'unavailable');
     }

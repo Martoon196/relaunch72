@@ -4,8 +4,10 @@ import { validateDatabaseContext } from '../db/rls.js';
 import {
   COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE,
   COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA,
+  COMPANY_CONTENT_SOCIAL_DRAFT_SCHEMA,
   CompanyContentValidationError,
   type CompanyContentEmailDraftPayload,
+  type CompanyContentExactSocialReview,
   type CompanyContentApprovalDecision,
   type CompanyContentKind,
   type CompanyContentOrigin,
@@ -213,6 +215,116 @@ export function parseCompanyContentEmailDraft(
     throw new CompanyContentValidationError('Email draft content is not canonical');
   }
   return payload;
+}
+
+const SOCIAL_TEXT_UNSAFE = /[\u0000\u202a-\u202e\u2066-\u2069]/u;
+
+function socialText(value: unknown, field: string, maximumBytes: number): string {
+  if (typeof value !== 'string' || value.trim().length < 1
+      || Buffer.byteLength(value, 'utf8') > maximumBytes || SOCIAL_TEXT_UNSAFE.test(value)) {
+    throw new CompanyContentValidationError(
+      `${field} must contain 1-${maximumBytes} safe UTF-8 bytes`,
+    );
+  }
+  return value;
+}
+
+function nullableSocialText(value: unknown, field: string, maximumBytes: number): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  return socialText(value, field, maximumBytes);
+}
+
+/**
+ * Parse the immutable Property Predator social payload into human review fields.
+ * Both the original combined-body shape and the split artwork shape remain
+ * byte-verifiable; newly edited versions always use the split shape.
+ */
+export function parseCompanyContentSocialDraft(
+  canonicalContent: string,
+): Omit<CompanyContentExactSocialReview,
+  'publicationCopySha256' | 'artworkInstructionsSha256'> {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(canonicalContent) as unknown;
+  } catch {
+    throw new CompanyContentValidationError('Social draft content is not valid canonical JSON');
+  }
+  if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
+    throw new CompanyContentValidationError('Social draft content has an invalid shape');
+  }
+  const candidate = decoded as Record<string, unknown>;
+  const required = ['body', 'cta_url', 'kind', 'platform', 'schema', 'title', 'type'];
+  const allowed = new Set([...required, 'artwork_instructions', 'contextSha256']);
+  const keys = Object.keys(candidate);
+  if (required.some((key) => !(key in candidate)) || keys.some((key) => !allowed.has(key))) {
+    throw new CompanyContentValidationError('Social draft content has an invalid shape');
+  }
+  if (candidate.schema !== COMPANY_CONTENT_SOCIAL_DRAFT_SCHEMA) {
+    throw new CompanyContentValidationError('Social draft content has an invalid schema');
+  }
+  const ctaUrl = nullableSocialText(candidate.cta_url, 'cta_url', 2_048);
+  if (ctaUrl && !/^https:\/\/[^\s]+$/u.test(ctaUrl)) {
+    throw new CompanyContentValidationError('cta_url must be an HTTPS URL');
+  }
+  const contextSha256 = nullableSocialText(candidate.contextSha256, 'contextSha256', 64);
+  if (contextSha256 && !SHA256.test(contextSha256)) {
+    throw new CompanyContentValidationError('contextSha256 must be a lowercase SHA-256 digest');
+  }
+  const artworkInstructions = nullableSocialText(
+    candidate.artwork_instructions,
+    'artwork_instructions',
+    50_000,
+  );
+  if (canonicalCompanyContentJson(candidate) !== canonicalContent) {
+    throw new CompanyContentValidationError('Social draft content is not canonical');
+  }
+  return Object.freeze({
+    schema: COMPANY_CONTENT_SOCIAL_DRAFT_SCHEMA,
+    type: socialText(candidate.type, 'type', 100),
+    kind: socialText(candidate.kind, 'kind', 100),
+    platform: socialText(candidate.platform, 'platform', 100),
+    title: socialText(candidate.title, 'title', 500),
+    publicationCopy: socialText(candidate.body, 'body', 900_000),
+    artworkInstructions,
+    ctaUrl,
+    contextSha256,
+    legacyCombined: !Object.prototype.hasOwnProperty.call(candidate, 'artwork_instructions'),
+  });
+}
+
+export function canonicalCompanyContentSocialDraft(input: Readonly<{
+  type: string;
+  kind: string;
+  platform: string;
+  title: string;
+  publicationCopy: string;
+  artworkInstructions?: string | null;
+  ctaUrl?: string | null;
+  contextSha256?: string | null;
+}>): string {
+  const contextSha256 = nullableSocialText(input.contextSha256, 'contextSha256', 64);
+  if (contextSha256 && !SHA256.test(contextSha256)) {
+    throw new CompanyContentValidationError('contextSha256 must be a lowercase SHA-256 digest');
+  }
+  const ctaUrl = nullableSocialText(input.ctaUrl, 'cta_url', 2_048);
+  if (ctaUrl && !/^https:\/\/[^\s]+$/u.test(ctaUrl)) {
+    throw new CompanyContentValidationError('cta_url must be an HTTPS URL');
+  }
+  return canonicalCompanyContentJson({
+    artwork_instructions: nullableSocialText(
+      input.artworkInstructions,
+      'artwork_instructions',
+      50_000,
+    ) ?? '',
+    body: socialText(input.publicationCopy, 'body', 900_000),
+    cta_url: ctaUrl ?? '',
+    ...(contextSha256 ? { contextSha256 } : {}),
+    kind: socialText(input.kind, 'kind', 100),
+    platform: socialText(input.platform, 'platform', 100),
+    schema: COMPANY_CONTENT_SOCIAL_DRAFT_SCHEMA,
+    title: socialText(input.title, 'title', 500),
+    type: socialText(input.type, 'type', 100),
+  });
 }
 
 function deepFreezeCanonicalJson(value: unknown): unknown {

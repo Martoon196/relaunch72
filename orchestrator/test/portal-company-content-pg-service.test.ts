@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE,
   COMPANY_CONTENT_EMAIL_DRAFT_SCHEMA,
+  COMPANY_CONTENT_SOCIAL_DRAFT_SCHEMA,
   CompanyContentApprovalConflictError,
   CompanyContentCommandInProgressError,
   CompanyContentIdempotencyConflictError,
@@ -13,6 +14,7 @@ import {
   type CompanyContentCatalogPage,
   type CompanyContentExactReview,
   type CompanyContentTransactionRunner,
+  canonicalCompanyContentSocialDraft,
 } from '../src/company-content-pg/index.js';
 import type { DatabaseRequestContext } from '../src/db/rls.js';
 import { InactivePortalSessionError } from '../src/db/transaction.js';
@@ -66,6 +68,29 @@ const EXACT_EMAIL_REVIEW: CompanyContentExactReview = Object.freeze({
     bodySha256: 'e'.repeat(64),
   }),
   createdAt: '2026-08-28T14:00:00.000Z',
+});
+
+const EXACT_SOCIAL_REVIEW: CompanyContentExactReview = Object.freeze({
+  ...EXACT_EMAIL_REVIEW,
+  kind: 'social_post',
+  title: 'LinkedIn evidence post',
+  contentMimeType: 'application/vnd.propertypredator.company-content+json',
+  canonicalContent: '{"body":"Old publication copy","contextSha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","cta_url":"https://propertypredator.com","kind":"post","platform":"LinkedIn","schema":"propertypredator.company-content/v1","title":"LinkedIn evidence post","type":"generated"}',
+  email: null,
+  social: Object.freeze({
+    schema: COMPANY_CONTENT_SOCIAL_DRAFT_SCHEMA,
+    type: 'generated',
+    kind: 'post',
+    platform: 'LinkedIn',
+    title: 'LinkedIn evidence post',
+    publicationCopy: 'Old publication copy',
+    artworkInstructions: null,
+    ctaUrl: 'https://propertypredator.com',
+    contextSha256: 'c'.repeat(64),
+    legacyCombined: true,
+    publicationCopySha256: 'd'.repeat(64),
+    artworkInstructionsSha256: null,
+  }),
 });
 
 function identity(overrides: Partial<PortalCompanyContentRequestIdentity> = {}): PortalCompanyContentRequestIdentity {
@@ -369,6 +394,81 @@ test('manager-only portal seam persists one server-assembled email draft without
   assert.equal(denied.ok, false);
   if (!denied.ok) assert.equal(denied.kind, 'forbidden');
   assert.equal(commands, 0);
+});
+
+test('social correction appends one split immutable revision and refuses stale or read-only input', async () => {
+  let capturedContext: DatabaseRequestContext | null = null;
+  let capturedInput: any;
+  const service = new PgPortalCompanyContentService(dependencies({
+    readService: {
+      listCatalog: async () => EMPTY_CATALOG,
+      getExactReview: async () => EXACT_SOCIAL_REVIEW,
+    },
+    draftService: {
+      createVersion: async (context, command) => {
+        capturedContext = context;
+        capturedInput = command;
+        return Object.freeze({
+          disposition: 'applied' as const,
+          contentItemId: CONTENT_ITEM_ID,
+          contentVersionId: '77777777-7777-4777-8777-777777777777',
+          versionNumber: 2,
+          contentSha256: createHash('sha256').update(command.content).digest('hex'),
+          sourceAttestationId: '88888888-8888-4888-8888-888888888888',
+          sourceAttestationExpiresAt: '2026-09-09T12:15:00.000Z',
+        });
+      },
+    },
+  }));
+  const input = {
+    commandKey: 'social-revision-command-0001',
+    contentItemId: CONTENT_ITEM_ID,
+    previousVersionId: CONTENT_VERSION_ID,
+    expectedContentSha256: CONTENT_SHA,
+    publicationCopy: 'The corrected words people will actually read.',
+    artworkInstructions: 'A bright, human photo of a buyer checking a house before viewing.',
+  };
+
+  const outcome = await service.createSocialRevision(identity(), input);
+  assert.equal(outcome.ok, true);
+  assert.ok(capturedContext);
+  assertRlsContext(capturedContext);
+  assert.equal(capturedInput.previousVersionId, CONTENT_VERSION_ID);
+  assert.equal(capturedInput.origin, 'edited');
+  assert.equal(capturedInput.kind, 'social_post');
+  assert.equal(capturedInput.metadata.providerEffects, false);
+  assert.equal(capturedInput.content, canonicalCompanyContentSocialDraft({
+    type: 'generated',
+    kind: 'post',
+    platform: 'LinkedIn',
+    title: 'LinkedIn evidence post',
+    publicationCopy: input.publicationCopy,
+    artworkInstructions: input.artworkInstructions,
+    ctaUrl: 'https://propertypredator.com',
+    contextSha256: 'c'.repeat(64),
+  }));
+
+  let writes = 0;
+  const stale = new PgPortalCompanyContentService(dependencies({
+    readService: {
+      listCatalog: async () => EMPTY_CATALOG,
+      getExactReview: async () => Object.freeze({ ...EXACT_SOCIAL_REVIEW, isLatest: false }),
+    },
+    draftService: { createVersion: async () => { writes += 1; throw new Error('must not run'); } },
+  }));
+  const staleOutcome = await stale.createSocialRevision(identity(), input);
+  assert.equal(staleOutcome.ok, false);
+  if (!staleOutcome.ok) assert.equal(staleOutcome.kind, 'version_conflict');
+
+  const readOnly = new PgPortalCompanyContentService(dependencies({
+    accessReader: { load: async () => workspaceAccess({ canWrite: false }) },
+    readService: { listCatalog: async () => EMPTY_CATALOG, getExactReview: async () => EXACT_SOCIAL_REVIEW },
+    draftService: { createVersion: async () => { writes += 1; throw new Error('must not run'); } },
+  }));
+  const denied = await readOnly.createSocialRevision(identity(), input);
+  assert.equal(denied.ok, false);
+  if (!denied.ok) assert.equal(denied.kind, 'forbidden');
+  assert.equal(writes, 0);
 });
 
 test('read-only membership cannot request approval and never reaches the command service', async () => {

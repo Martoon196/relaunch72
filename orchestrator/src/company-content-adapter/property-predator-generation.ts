@@ -131,6 +131,7 @@ export interface PropertyPredatorGenerationPolicy {
 }
 
 export interface PropertyPredatorGeneratedPayload {
+  readonly artwork_instructions?: string;
   readonly body: string;
   readonly contextSha256: string;
   readonly cta_url: string;
@@ -682,7 +683,11 @@ function parseGeneratedDraft(
   }
   let rawPayload: Readonly<Record<string, unknown>>;
   try {
+    const supplied = value.payload as Readonly<Record<string, unknown>>;
+    const hasArtwork = Boolean(supplied && typeof supplied === 'object'
+      && Object.prototype.hasOwnProperty.call(supplied, 'artwork_instructions'));
     rawPayload = dataRecord(value.payload, [
+      ...(hasArtwork ? ['artwork_instructions'] : []),
       'body', 'contextSha256', 'cta_url', 'kind', 'platform', 'schema', 'title', 'type',
     ], 'invalid_response');
   } catch {
@@ -695,10 +700,16 @@ function parseGeneratedDraft(
   }
   const title = responseText(rawPayload.title, 1, 300);
   const body = responseText(rawPayload.body, 1, 20_000);
+  const artworkInstructions = Object.prototype.hasOwnProperty.call(
+    rawPayload,
+    'artwork_instructions',
+  ) ? responseText(rawPayload.artwork_instructions, 0, 20_000) : undefined;
   const platform = responseText(rawPayload.platform, 0, 40);
   const ctaUrl = cleanHttpsUrl(rawPayload.cta_url, expected.approvedCtaHosts);
   if (MARKUP.test(title) || MARKUP.test(body) || MARKUP.test(platform)
-      || FIRST_PERSON_RESULT.test(title) || FIRST_PERSON_RESULT.test(body)) {
+      || (artworkInstructions !== undefined && MARKUP.test(artworkInstructions))
+      || FIRST_PERSON_RESULT.test(title) || FIRST_PERSON_RESULT.test(body)
+      || (artworkInstructions !== undefined && FIRST_PERSON_RESULT.test(artworkInstructions))) {
     throw bridgeError('invalid_response', 'payload_policy');
   }
   for (const text of [title, platform]) {
@@ -706,6 +717,14 @@ function parseGeneratedDraft(
       assertNoPrivateOrAttributedText(text, false);
     } catch {
       throw bridgeError('invalid_response', 'payload_text_policy');
+    }
+  }
+  if (artworkInstructions) {
+    try {
+      assertNoPrivateOrAttributedText(artworkInstructions, false);
+      assertNoUnexpectedBodyUrl(artworkInstructions, '');
+    } catch {
+      throw bridgeError('invalid_response', 'payload_artwork_policy');
     }
   }
   // The model may repeat the separately verified structured CTA in its copy.
@@ -720,6 +739,7 @@ function parseGeneratedDraft(
     throw error;
   }
   const payload = Object.freeze({
+    ...(artworkInstructions !== undefined ? { artwork_instructions: artworkInstructions } : {}),
     body,
     contextSha256,
     cta_url: ctaUrl,

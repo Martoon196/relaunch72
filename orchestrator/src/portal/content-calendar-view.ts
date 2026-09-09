@@ -255,11 +255,14 @@ function actionFields(action: ContentCalendarCommandActionView): string {
   return `${hidden('_csrf', action.csrfToken)}${hidden('command_key', action.commandKey)}`;
 }
 
-function choiceOptions(choices: readonly ContentCalendarChoiceView[]): string {
+function choiceOptions(
+  choices: readonly ContentCalendarChoiceView[],
+  selectedValue?: string,
+): string {
   return choices.slice(0, 80).map((choice) => {
     const label = safeOperationText(choice.label, 'Unavailable option', 160);
     const detail = choice.detail ? ` · ${safeOperationText(choice.detail, 'Gate detail unavailable', 160)}` : '';
-    return `<option value="${escapeHtml(choice.value)}">${escapeHtml(label + detail)}</option>`;
+    return `<option value="${escapeHtml(choice.value)}"${choice.value === selectedValue ? ' selected' : ''}>${escapeHtml(label + detail)}</option>`;
   }).join('');
 }
 
@@ -291,6 +294,7 @@ function campaignHref(slot: ContentCalendarSlotView, filters: ContentCalendarFil
 function createCalendarControl(
   create: ContentCalendarCreateActionView | undefined,
   timezone: string,
+  selectedContentVersionId?: string,
 ): string {
   if (!commandReady(create)
       || create.campaignRevisions.length === 0
@@ -299,7 +303,7 @@ function createCalendarControl(
     return `<a class="ccal-draft-action" href="${CAMPAIGN_WIZARD_ROUTE}">+ Build campaign</a>`;
   }
   const targetSize = Math.max(2, Math.min(5, create.targets.length));
-  return `<details class="ccal-create"><summary>+ New TEST plan</summary><section class="ccal-create-panel"><h2>Create a durable planning intent</h2><p>This records a desired TEST time and exact IDs. It cannot call or schedule a social provider.</p><form class="ccal-command-form" method="post" action="${escapeHtml(create.actionUrl)}" data-calendar-command-form data-command-kind="create">${actionFields(create)}${hidden('environment', 'test')}${hidden('timezone', timezone)}<div class="ccal-command-grid"><label class="ccal-command-field wide">Campaign revision<select name="campaign_revision_key" required>${choiceOptions(create.campaignRevisions)}</select></label><label class="ccal-command-field wide">Exact content version<select name="content_version_id" required>${choiceOptions(create.contentVersions)}</select></label><label class="ccal-command-field wide">Owned TEST targets<select name="target_ids" multiple required size="${targetSize}">${choiceOptions(create.targets)}</select></label><label class="ccal-command-field">Desired TEST time<input type="datetime-local" name="desired_for_local" step="300" required></label><label class="ccal-command-field">Maximum attempts<select name="max_attempts"><option value="1" selected>1 · deliberate</option><option value="2">2 · one retry</option><option value="3">3 · maximum</option></select></label></div><label class="ccal-command-confirm"><input type="checkbox" name="confirm_test_only" value="confirmed" required><span>I understand this creates durable TEST planning evidence, not an external schedule or publication.</span></label><button class="ccal-command-submit" type="submit">Create durable TEST plan</button><p class="ccal-command-status" data-calendar-form-status role="status" aria-live="polite">Ready · provider effects none.</p></form></section></details>`;
+  return `<details class="ccal-create" id="new-plan"${selectedContentVersionId ? ' open' : ''}><summary>+ New TEST plan</summary><section class="ccal-create-panel"><h2>Create a durable planning intent</h2><p>This records a desired TEST time and exact IDs. It cannot call or schedule a social provider.</p><form class="ccal-command-form" method="post" action="${escapeHtml(create.actionUrl)}" data-calendar-command-form data-command-kind="create">${actionFields(create)}${hidden('environment', 'test')}${hidden('timezone', timezone)}<div class="ccal-command-grid"><label class="ccal-command-field wide">Campaign revision<select name="campaign_revision_key" required>${choiceOptions(create.campaignRevisions)}</select></label><label class="ccal-command-field wide">Exact content version<select name="content_version_id" required>${choiceOptions(create.contentVersions, selectedContentVersionId)}</select></label><label class="ccal-command-field wide">Owned TEST targets<select name="target_ids" multiple required size="${targetSize}">${choiceOptions(create.targets)}</select></label><label class="ccal-command-field">Desired TEST time<input type="datetime-local" name="desired_for_local" step="300" required></label><label class="ccal-command-field">Maximum attempts<select name="max_attempts"><option value="1" selected>1 · deliberate</option><option value="2">2 · one retry</option><option value="3">3 · maximum</option></select></label></div><label class="ccal-command-confirm"><input type="checkbox" name="confirm_test_only" value="confirmed" required><span>I understand this creates durable TEST planning evidence, not an external schedule or publication.</span></label><button class="ccal-command-submit" type="submit">Create durable TEST plan</button><p class="ccal-command-status" data-calendar-form-status role="status" aria-live="polite">Ready · provider effects none.</p></form></section></details>`;
 }
 
 function slotJitStatus(slot: ContentCalendarSlotView, actions: ContentCalendarSlotActionView | undefined): string {
@@ -445,6 +449,7 @@ export interface RenderContentCalendarOptions {
   readonly brainLabel?: string;
   readonly mutations?: ContentCalendarMutationView;
   readonly liveSchedules?: ContentCalendarLiveScheduleProjectionView;
+  readonly selectedContentVersionId?: string;
 }
 
 function liveScheduler(
@@ -538,7 +543,7 @@ export function renderContentCalendarBody(
     <header class="ccal-hero"><div><div class="ccal-kicker">Growth HQ · Campaign calendar</div><h1 id="ccal-title">Own the week. <em>Control the signal.</em></h1><p>Build the rhythm here, then move only exact approved versions into the capped publishing worker.</p></div><aside class="ccal-test-card" aria-label="Calendar connection"><strong>${live ? 'Worker calendar ready' : configuredNetworks.length ? 'Worker state unavailable' : 'Planning workspace'}</strong><span>${escapeHtml(view.workspaceName)}</span><small>${escapeHtml(view.timezone)} · snapshot ${isoTime(view.asOf)}. This page never calls a social provider.</small></aside></header>
     ${liveScheduler(options.liveSchedules, view.timezone)}
     ${operationOutcome(options.mutations?.outcome)}
-    <div class="ccal-toolbar">${modeNav(view)}<div class="ccal-period"><a href="${plannerHref(view, { date: view.previousDate })}" aria-label="Previous ${escapeHtml(view.filters.mode)}">‹</a><div class="ccal-period-title"><strong>${escapeHtml(view.periodLabel)}</strong><span>${escapeHtml(view.timezone)} · ${live ? 'worker jobs + durable TEST plans' : 'durable TEST truth'}</span></div><a href="${plannerHref(view, { date: view.nextDate })}" aria-label="Next ${escapeHtml(view.filters.mode)}">›</a></div>${createCalendarControl(options.mutations?.create, view.timezone)}</div>
+    <div class="ccal-toolbar">${modeNav(view)}<div class="ccal-period"><a href="${plannerHref(view, { date: view.previousDate })}" aria-label="Previous ${escapeHtml(view.filters.mode)}">‹</a><div class="ccal-period-title"><strong>${escapeHtml(view.periodLabel)}</strong><span>${escapeHtml(view.timezone)} · ${live ? 'worker jobs + durable TEST plans' : 'durable TEST truth'}</span></div><a href="${plannerHref(view, { date: view.nextDate })}" aria-label="Next ${escapeHtml(view.filters.mode)}">›</a></div>${createCalendarControl(options.mutations?.create, view.timezone, options.selectedContentVersionId)}</div>
     ${channelNav(view)}
     <section class="ccal-metrics" aria-label="${loaded}planner summary"><div class="ccal-metric"><small>${loaded}draft placements</small><strong>${safeCount(view.metrics.plannedSlots)}</strong><span>No provider jobs created</span></div><div class="ccal-metric ready"><small>${loaded}simulation ready</small><strong>${safeCount(view.metrics.simulationReady)}</strong><span>Exact gates agree</span></div><div class="ccal-metric blocked"><small>${loaded}gate locked</small><strong>${safeCount(view.metrics.blocked)}</strong><span>Fails closed before outbound</span></div><div class="ccal-metric"><small>${loaded}active rails</small><strong>${safeCount(view.metrics.activeChannels)}</strong><span>Planning variants only</span></div></section>
     <div class="ccal-workspace"><section class="ccal-calendar" aria-labelledby="ccal-calendar-title"><header class="ccal-section-head"><div><h2 id="ccal-calendar-title">${view.filters.mode === 'week' ? 'Weekly signal board' : 'Monthly campaign map'}</h2><p>${live ? 'Worker-backed jobs and approved planning placements. Scroll sideways on compact screens.' : 'Channel placements around approved company content. Scroll sideways on compact screens.'}</p></div><span class="ccal-count">${live ? `${safeCount(liveVisibleCount)} worker · ` : ''}${view.inputTruncated ? 'Loaded ' : ''}${safeCount(view.visibleSlotCount)} TEST</span></header><div class="ccal-scroll" tabindex="0" aria-label="Scrollable ${escapeHtml(view.filters.mode)} content calendar"><div class="ccal-weekdays" aria-hidden="true">${weekdays}</div><div class="ccal-grid ${escapeHtml(view.filters.mode)}">${days}</div></div></section>${backlog(view)}</div>

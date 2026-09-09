@@ -3,9 +3,11 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 export const CONTENT_APPROVAL_REQUEST_ROUTE = '/portal/content/approval-requests' as const;
 export const CONTENT_APPROVAL_DECISION_ROUTE = '/portal/content/approval-decisions' as const;
 export const GENERATED_SOURCE_REFRESH_ROUTE = '/portal/content/generated-source-refresh' as const;
+export const CONTENT_SOCIAL_REVISION_ROUTE = '/portal/content/social-revisions' as const;
 
 export type ContentControlNoticeCode =
   | 'draft_created'
+  | 'revision_created'
   | 'requested'
   | 'approved'
   | 'rejected'
@@ -26,12 +28,74 @@ export interface ContentControlNoticeView {
 }
 
 const NOTICE_CODES = new Set<ContentControlNoticeCode>([
-  'draft_created', 'requested', 'approved', 'rejected', 'changes_requested', 'replayed', 'source_refreshed',
+  'draft_created', 'revision_created', 'requested', 'approved', 'rejected', 'changes_requested', 'replayed', 'source_refreshed',
   'forbidden', 'conflict', 'missing', 'invalid', 'review_unavailable', 'unavailable',
 ]);
 const NOTICE_CONTEXT = 'relaunch72:content-control-notice:v1\0';
 const EXACT_REVIEW_APPROVAL_CONTEXT = 'relaunch72:content-control-exact-review-approval:v1\0';
 const EXACT_REVIEW_APPROVAL_TTL_MS = 15 * 60 * 1_000;
+const EXACT_REVIEW_REVISION_CONTEXT = 'relaunch72:content-control-exact-review-revision:v1\0';
+const EXACT_REVIEW_REVISION_TTL_MS = 15 * 60 * 1_000;
+
+export interface ExactReviewRevisionTokenInput {
+  readonly contentItemId: string;
+  readonly contentVersionId: string;
+  readonly contentSha256: string;
+}
+
+function exactReviewRevisionPayload(input: ExactReviewRevisionTokenInput, expiresAt: number): string {
+  return [
+    input.contentItemId.toLowerCase(),
+    input.contentVersionId.toLowerCase(),
+    input.contentSha256.toLowerCase(),
+    String(expiresAt),
+  ].join('.');
+}
+
+function exactReviewRevisionMac(secret: string, sessionToken: string, payload: string): string {
+  return createHmac('sha256', secret)
+    .update(EXACT_REVIEW_REVISION_CONTEXT)
+    .update(sessionToken)
+    .update('\0')
+    .update(payload)
+    .digest('base64url');
+}
+
+export function exactReviewRevisionToken(
+  secret: string,
+  sessionToken: string,
+  input: ExactReviewRevisionTokenInput,
+  now: number,
+): string {
+  if (!secret || !sessionToken || !Number.isFinite(now)) return '';
+  const expiresAt = Math.floor(now + EXACT_REVIEW_REVISION_TTL_MS);
+  const payload = exactReviewRevisionPayload(input, expiresAt);
+  return `${payload}.${exactReviewRevisionMac(secret, sessionToken, payload)}`;
+}
+
+export function verifyExactReviewRevisionToken(
+  secret: string,
+  sessionToken: string,
+  supplied: string | undefined,
+  input: ExactReviewRevisionTokenInput,
+  now: number,
+): boolean {
+  if (!secret || !sessionToken || !supplied || supplied.length > 768 || !Number.isFinite(now)) return false;
+  const parts = supplied.split('.');
+  if (parts.length !== 5) return false;
+  const [contentItemId, contentVersionId, contentSha256, rawExpiry, actualMac] = parts;
+  const expiresAt = Number(rawExpiry);
+  if (!contentItemId || !contentVersionId || !contentSha256 || !actualMac
+      || !Number.isSafeInteger(expiresAt) || expiresAt < now
+      || expiresAt > now + EXACT_REVIEW_REVISION_TTL_MS) return false;
+  const expectedPayload = exactReviewRevisionPayload(input, expiresAt);
+  const suppliedPayload = [contentItemId, contentVersionId, contentSha256, rawExpiry].join('.');
+  if (suppliedPayload !== expectedPayload) return false;
+  const expectedMac = exactReviewRevisionMac(secret, sessionToken, expectedPayload);
+  const actualBytes = Buffer.from(actualMac);
+  const expectedBytes = Buffer.from(expectedMac);
+  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+}
 
 export interface ExactReviewApprovalTokenInput {
   readonly contentItemId: string;
@@ -130,6 +194,11 @@ function noticeFor(code: ContentControlNoticeCode): ContentControlNoticeView {
     kind: 'success',
     title: 'Owned-seed proof draft created',
     message: 'The exact internal subject and body are immutable and ready for human review. Nothing was sent.',
+  };
+  if (code === 'revision_created') return {
+    kind: 'success',
+    title: 'New version saved',
+    message: 'Your correction is a new immutable version. Previous approval evidence remains attached only to the older copy.',
   };
   if (code === 'requested') return {
     kind: 'success',

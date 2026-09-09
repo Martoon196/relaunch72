@@ -577,6 +577,9 @@ test('generated lifecycle persists into the real catalogue and exact-review repo
   assert.equal(catalogue.items[0]?.kind, 'social_post');
   const review = await content.getExactReview(context, staged.reviewTarget);
   assert.equal(review?.canonicalContent, canonicalCompanyContentJson(staged.draft.payload));
+  assert.equal(review?.social?.publicationCopy, staged.draft.payload.body);
+  assert.equal(review?.social?.platform, 'linkedin');
+  assert.equal(review?.social?.legacyCombined, true);
   assert.equal(review?.approvalStatus, 'unrequested');
   assert.equal(review?.approvalStale, false);
 });

@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   exactReviewApprovalToken,
+  exactReviewRevisionToken,
   verifyExactReviewApprovalToken,
+  verifyExactReviewRevisionToken,
 } from '../src/portal/content-control-room-actions.js';
 
 const SECRET = 'test-session-secret-with-enough-entropy';
@@ -13,6 +15,12 @@ const exact = Object.freeze({
   contentVersionId: '22222222-2222-4222-8222-222222222222',
   approvalRequestId: '33333333-3333-4333-8333-333333333333',
   contentSha256: 'a'.repeat(64),
+});
+
+const revision = Object.freeze({
+  contentItemId: exact.contentItemId,
+  contentVersionId: exact.contentVersionId,
+  contentSha256: exact.contentSha256,
 });
 
 test('exact-review approval capability is session and immutable-version bound', () => {
@@ -41,4 +49,22 @@ test('exact-review approval capability expires and rejects malformed input', () 
   ), false);
   assert.equal(verifyExactReviewApprovalToken(SECRET, SESSION, `${token}x`, exact, NOW), false);
   assert.equal(verifyExactReviewApprovalToken(SECRET, SESSION, undefined, exact, NOW), false);
+});
+
+test('exact-review revision capability is short-lived and exact-version bound', () => {
+  const token = exactReviewRevisionToken(SECRET, SESSION, revision, NOW);
+  assert.match(token, /^[A-Za-z0-9._-]+$/u);
+  assert.equal(verifyExactReviewRevisionToken(SECRET, SESSION, token, revision, NOW), true);
+  assert.equal(verifyExactReviewRevisionToken(SECRET, 'another-session', token, revision, NOW), false);
+  assert.equal(verifyExactReviewRevisionToken(SECRET, SESSION, token, {
+    ...revision,
+    contentVersionId: '44444444-4444-4444-8444-444444444444',
+  }, NOW), false);
+  assert.equal(verifyExactReviewRevisionToken(
+    SECRET,
+    SESSION,
+    token,
+    revision,
+    NOW + (15 * 60 * 1_000) + 1,
+  ), false);
 });

@@ -15,12 +15,19 @@ import type {
   CompanyContentTransactionRunner,
   CompanyContentVersionApprovalState,
 } from './types.js';
-import { COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE } from './types.js';
+import {
+  COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE,
+  COMPANY_CONTENT_SOCIAL_DRAFT_MIME_TYPE,
+  COMPANY_CONTENT_SOCIAL_DRAFT_SCHEMA,
+} from './types.js';
 import type {
   NormalizedCompanyContentVersionCommand,
   NormalizedRefreshCompanyContentSourceAttestationCommand,
 } from './validation.js';
-import { parseCompanyContentEmailDraft } from './validation.js';
+import {
+  parseCompanyContentEmailDraft,
+  parseCompanyContentSocialDraft,
+} from './validation.js';
 
 interface ReceiptRow extends QueryResultRow {
   id: string;
@@ -224,6 +231,10 @@ function exactReview(row: ExactReviewRow): CompanyContentExactReview {
   const emailPayload = row.kind === 'email'
     && row.contentMimeType === COMPANY_CONTENT_EMAIL_DRAFT_MIME_TYPE
     ? parseCompanyContentEmailDraft(row.canonicalContent) : null;
+  const socialPayload = row.kind === 'social_post'
+    && [COMPANY_CONTENT_SOCIAL_DRAFT_MIME_TYPE, 'application/json'].includes(row.contentMimeType)
+    && row.canonicalContent.includes(COMPANY_CONTENT_SOCIAL_DRAFT_SCHEMA)
+    ? parseCompanyContentSocialDraft(row.canonicalContent) : null;
   return Object.freeze({
     contentItemId: row.contentItemId,
     contentVersionId: row.contentVersionId,
@@ -251,6 +262,12 @@ function exactReview(row: ExactReviewRow): CompanyContentExactReview {
       ...emailPayload,
       subjectSha256: sha256(emailPayload.subject),
       bodySha256: sha256(emailPayload.bodyText),
+    }) : null,
+    social: socialPayload ? Object.freeze({
+      ...socialPayload,
+      publicationCopySha256: sha256(socialPayload.publicationCopy),
+      artworkInstructionsSha256: socialPayload.artworkInstructions
+        ? sha256(socialPayload.artworkInstructions) : null,
     }) : null,
     createdAt: new Date(row.createdAt).toISOString(),
   });

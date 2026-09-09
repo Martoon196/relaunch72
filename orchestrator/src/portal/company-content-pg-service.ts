@@ -8,6 +8,8 @@ import {
   CompanyContentService,
   CompanyContentValidationError,
   CompanyContentVersionConflictError,
+  COMPANY_CONTENT_SOCIAL_DRAFT_MIME_TYPE,
+  canonicalCompanyContentSocialDraft,
   createCompanyContentTransactionRunner,
   type CompanyContentCatalogPage,
   type CompanyContentCatalogQuery,
@@ -31,6 +33,8 @@ import type {
   PortalCompanyContentWorkspaceAccess,
   PortalCreateCompanyContentEmailDraftVersionInput,
   PortalCreateCompanyContentEmailDraftVersionOutcome,
+  PortalCreateCompanyContentSocialRevisionInput,
+  PortalCreateCompanyContentSocialRevisionOutcome,
   PortalDecideCompanyContentApprovalInput,
   PortalDecideExactReviewedCompanyContentApprovalInput,
   PortalDecideCompanyContentApprovalOutcome,
@@ -123,7 +127,9 @@ export interface PgPortalCompanyContentDependencies {
   /** Must use the dedicated company-content command role in production. */
   readonly commandService: Pick<CompanyContentServiceShape, 'requestApproval' | 'decideApproval'>;
   /** Must use the append-only company-content adapter role; never r72_web or r72_content_command. */
-  readonly draftService?: Pick<CompanyContentServiceShape, 'createEmailDraftVersion'>;
+  readonly draftService?: Partial<
+    Pick<CompanyContentServiceShape, 'createEmailDraftVersion' | 'createVersion'>
+  >;
 }
 
 function databaseContext(
@@ -297,6 +303,88 @@ export class PgPortalCompanyContentService implements PortalCompanyContentServic
         return failure('unavailable', 'Email draft persistence is temporarily unavailable.');
       }
       const result = await createEmailDraft.call(this.dependencies.draftService, context, input);
+      return Object.freeze({ ok: true, ...result });
+    } catch (error) {
+      return commandFailure(error);
+    }
+  }
+
+  async createSocialRevision(
+    identity: PortalCompanyContentRequestIdentity,
+    input: PortalCreateCompanyContentSocialRevisionInput,
+  ): Promise<PortalCreateCompanyContentSocialRevisionOutcome> {
+    try {
+      const context = await this.context(identity);
+      if (!context) return failure('unauthenticated', 'This portal session is no longer active.');
+      const access = await this.dependencies.accessReader.load(context);
+      if (!access) return failure('forbidden', 'This workspace is not available to the current portal session.');
+      if (!access.canWrite) {
+        return failure('forbidden', 'Your workspace role has read-only company content access.');
+      }
+      const exactReview = this.dependencies.readService.getExactReview;
+      const createVersion = this.dependencies.draftService?.createVersion;
+      if (!exactReview || !createVersion) {
+        return failure('unavailable', 'Social revision persistence is temporarily unavailable.');
+      }
+      const review = await exactReview.call(this.dependencies.readService, context, {
+        contentItemId: input.contentItemId,
+        contentVersionId: input.previousVersionId,
+      });
+      if (!review || !review.isLatest || review.approvalStale
+          || review.contentSha256 !== input.expectedContentSha256.toLowerCase()
+          || !review.social || review.kind !== 'social_post') {
+        return failure('version_conflict', 'That social draft changed. Refresh before saving a new version.');
+      }
+      const content = canonicalCompanyContentSocialDraft({
+        type: review.social.type,
+        kind: review.social.kind,
+        platform: review.social.platform,
+        title: review.social.title,
+        publicationCopy: input.publicationCopy,
+        artworkInstructions: input.artworkInstructions,
+        ctaUrl: review.social.ctaUrl,
+        contextSha256: review.social.contextSha256,
+      });
+      const contentSha256 = createHash('sha256').update(content, 'utf8').digest('hex');
+      const checkedAt = new Date().toISOString();
+      const expiresAt = new Date(Date.parse(checkedAt) + (15 * 60 * 1_000)).toISOString();
+      const sourceVersion = `${review.source.version.slice(0, 430)}:edit:${contentSha256.slice(0, 16)}`;
+      const result = await createVersion.call(this.dependencies.draftService, context, {
+        commandKey: input.commandKey,
+        contentItemId: review.contentItemId,
+        previousVersionId: review.contentVersionId,
+        origin: 'edited',
+        kind: 'social_post',
+        title: review.title,
+        contentMimeType: COMPANY_CONTENT_SOCIAL_DRAFT_MIME_TYPE,
+        content,
+        source: Object.freeze({
+          system: review.source.system,
+          itemId: review.source.itemId,
+          version: sourceVersion,
+        }),
+        blob: Object.freeze({
+          storageKey: `inline://company-content/${review.contentItemId}/${contentSha256}.json`,
+          sha256: contentSha256,
+        }),
+        brand: Object.freeze({
+          snapshotRef: `sha256:${review.brandSha256}`,
+          sha256: review.brandSha256,
+        }),
+        attestation: Object.freeze({
+          catalogSha256: createHash('sha256')
+            .update(`${review.contentVersionId}\0${review.contentSha256}\0${contentSha256}`, 'utf8')
+            .digest('hex'),
+          checkedAt,
+          expiresAt,
+        }),
+        metadata: Object.freeze({
+          editor: 'growth_hq_exact_review',
+          previousContentVersionId: review.contentVersionId,
+          previousContentSha256: review.contentSha256,
+          providerEffects: false,
+        }),
+      });
       return Object.freeze({ ok: true, ...result });
     } catch (error) {
       return commandFailure(error);

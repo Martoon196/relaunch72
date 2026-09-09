@@ -115,6 +115,27 @@ export interface CompanyContentExactEmailReview {
   readonly bodySha256: string;
 }
 
+export const COMPANY_CONTENT_SOCIAL_DRAFT_SCHEMA =
+  'propertypredator.company-content/v1' as const;
+export const COMPANY_CONTENT_SOCIAL_DRAFT_MIME_TYPE =
+  'application/vnd.propertypredator.company-content+json' as const;
+
+export interface CompanyContentExactSocialReview {
+  readonly schema: typeof COMPANY_CONTENT_SOCIAL_DRAFT_SCHEMA;
+  readonly type: string;
+  readonly kind: string;
+  readonly platform: string;
+  readonly title: string;
+  readonly publicationCopy: string;
+  readonly artworkInstructions: string | null;
+  readonly ctaUrl: string | null;
+  readonly contextSha256: string | null;
+  /** Older versions stored copy and art direction in one body. They remain reviewable. */
+  readonly legacyCombined: boolean;
+  readonly publicationCopySha256: string;
+  readonly artworkInstructionsSha256: string | null;
+}
+
 /**
  * One complete immutable version. The canonical bytes and their digest are
  * returned together so a human review surface never approves a title/hash
@@ -140,6 +161,7 @@ export interface CompanyContentExactReview {
   readonly approvalStatus: CompanyContentApprovalStatus;
   readonly approvalStale: boolean;
   readonly email: CompanyContentExactEmailReview | null;
+  readonly social?: CompanyContentExactSocialReview | null;
   readonly createdAt: string;
 }
 

@@ -4,6 +4,7 @@ import type {
   CompanyContentCatalogQuery,
   CompanyContentExactReview,
   CreateCompanyContentEmailDraftVersionCommand,
+  CreateCompanyContentVersionResult,
 } from '../company-content-pg/types.js';
 
 /**
@@ -100,6 +101,19 @@ export type PortalCreateCompanyContentEmailDraftVersionOutcome =
     }
   | PortalCompanyContentFailure;
 
+export interface PortalCreateCompanyContentSocialRevisionInput {
+  readonly commandKey: string;
+  readonly contentItemId: string;
+  readonly previousVersionId: string;
+  readonly expectedContentSha256: string;
+  readonly publicationCopy: string;
+  readonly artworkInstructions?: string | null;
+}
+
+export type PortalCreateCompanyContentSocialRevisionOutcome =
+  | ({ readonly ok: true } & CreateCompanyContentVersionResult)
+  | PortalCompanyContentFailure;
+
 /** Both ids are mandatory: the portal can never submit an implicit "latest" approval. */
 export interface PortalRequestCompanyContentApprovalInput {
   readonly commandKey: string;
@@ -167,6 +181,11 @@ export interface PortalCompanyContentService {
     identity: PortalCompanyContentRequestIdentity,
     input: PortalCreateCompanyContentEmailDraftVersionInput,
   ): Promise<PortalCreateCompanyContentEmailDraftVersionOutcome>;
+
+  createSocialRevision?(
+    identity: PortalCompanyContentRequestIdentity,
+    input: PortalCreateCompanyContentSocialRevisionInput,
+  ): Promise<PortalCreateCompanyContentSocialRevisionOutcome>;
 
   requestApproval(
     identity: PortalCompanyContentRequestIdentity,
