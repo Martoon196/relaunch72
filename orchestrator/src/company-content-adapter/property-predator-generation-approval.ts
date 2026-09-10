@@ -300,6 +300,81 @@ function exactCurrentVersion(
   return latest;
 }
 
+interface GeneratedSourceRenewalTarget {
+  readonly sourceItemId: string;
+  readonly sourceVersionId: string;
+  readonly sourceItemVersion: number;
+  readonly contentSha256: string;
+  readonly brandSha256: string;
+}
+
+function generatedSourceRenewalTarget(
+  states: readonly CompanyContentVersionApprovalState[],
+  current: CompanyContentVersionApprovalState,
+): GeneratedSourceRenewalTarget {
+  if (states.length > 100) fail('integrity_mismatch');
+  const byId = new Map<string, CompanyContentVersionApprovalState>();
+  const versionNumbers = new Set<number>();
+  for (const candidate of states) {
+    const id = candidate.contentVersionId.toLowerCase();
+    if (byId.has(id) || versionNumbers.has(candidate.versionNumber)) fail('integrity_mismatch');
+    byId.set(id, candidate);
+    versionNumbers.add(candidate.versionNumber);
+  }
+  const visited = new Set<string>();
+  let candidate = current;
+  while (true) {
+    const candidateId = candidate.contentVersionId.toLowerCase();
+    if (visited.has(candidateId)) fail('integrity_mismatch');
+    visited.add(candidateId);
+    if (candidate.origin === 'generated') {
+      const match = /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):v([1-9][0-9]*)$/u
+        .exec(candidate.source.version);
+      const source = candidate.sourceMetadata;
+      if (!match || !source || typeof source !== 'object' || Array.isArray(source)) {
+        fail('integrity_mismatch');
+      }
+      const evidence = source as Record<string, unknown>;
+      if (evidence.schema !== 'propertypredator.generated-draft-source/v1'
+          || evidence.sourceItemId !== candidate.source.itemId
+          || evidence.sourceVersionId !== match[1]
+          || evidence.sourceItemVersion !== Number(match[2])
+          || evidence.contentSha256 !== candidate.contentSha256
+          || evidence.brandSha256 !== candidate.brandSha256
+          || typeof evidence.sourceDraftId !== 'string' || !UUID.test(evidence.sourceDraftId)) {
+        fail('integrity_mismatch');
+      }
+      return Object.freeze({
+        sourceItemId: evidence.sourceDraftId,
+        sourceVersionId: match[1]!,
+        sourceItemVersion: Number(match[2]),
+        contentSha256: candidate.contentSha256,
+        brandSha256: candidate.brandSha256,
+      });
+    }
+    if (candidate.origin !== 'edited'
+        || candidate.editor !== 'growth_hq_exact_review'
+        || !candidate.previousVersionId || !UUID.test(candidate.previousVersionId)
+        || !candidate.previousContentVersionId || !UUID.test(candidate.previousContentVersionId)
+        || candidate.previousVersionId.toLowerCase() !== candidate.previousContentVersionId.toLowerCase()
+        || !candidate.previousContentSha256 || !SHA256.test(candidate.previousContentSha256)) {
+      fail('integrity_mismatch');
+    }
+    const predecessor = byId.get(candidate.previousVersionId.toLowerCase());
+    if (!predecessor
+        || predecessor.contentItemId.toLowerCase() !== candidate.contentItemId.toLowerCase()
+        || predecessor.versionNumber + 1 !== candidate.versionNumber
+        || predecessor.contentSha256 !== candidate.previousContentSha256
+        || predecessor.source.system !== candidate.source.system
+        || predecessor.source.itemId !== candidate.source.itemId
+        || predecessor.brandSha256 !== candidate.brandSha256
+        || candidate.source.version !== `${predecessor.source.version.slice(0, 430)}:edit:${candidate.contentSha256.slice(0, 16)}`) {
+      fail('integrity_mismatch');
+    }
+    candidate = predecessor;
+  }
+}
+
 function assertReadyPlan(
   plan: PropertyPredatorMarketingDraftPlan,
   generation: Omit<PropertyPredatorGenerateDraftCommand, 'contextSha256'>,
@@ -681,37 +756,14 @@ export class PropertyPredatorGeneratedDraftLifecycle {
         || !this.dependencies.generatedSource
         || !this.dependencies.content.refreshSourceAttestation) fail('invalid_input');
     const target = reviewTarget(input.reviewTarget);
-    const state = exactCurrentVersion(
-      await this.dependencies.content.listVersionApprovalStates(context, target.contentItemId),
-      target,
-    );
+    const states = await this.dependencies.content.listVersionApprovalStates(context, target.contentItemId);
+    const state = exactCurrentVersion(states, target);
     if (state.approvalStatus !== 'approved' || state.approvalStale
         || !state.approvalRequestId || !state.approvalDecisionId
         || state.source.system !== SOURCE_SYSTEM) fail('approval_conflict');
-    const match = /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):v([1-9][0-9]*)$/u
-      .exec(state.source.version);
-    if (!match) fail('integrity_mismatch');
-    const source = state.sourceMetadata;
-    if (!source || typeof source !== 'object' || Array.isArray(source)) fail('integrity_mismatch');
-    const evidence = source as Record<string, unknown>;
-    if (evidence.schema !== 'propertypredator.generated-draft-source/v1'
-        || evidence.sourceItemId !== state.source.itemId
-        || evidence.sourceVersionId !== match[1]
-        || evidence.sourceItemVersion !== Number(match[2])
-        || evidence.contentSha256 !== state.contentSha256
-        || evidence.brandSha256 !== state.brandSha256
-        || typeof evidence.sourceDraftId !== 'string' || !UUID.test(evidence.sourceDraftId)) {
-      fail('integrity_mismatch');
-    }
-    const proof = await this.dependencies.generatedSource.verify(Object.freeze({
-      // A revision keeps the logical HQ item, but each generation has its own
-      // upstream draft ID. Read that exact ID from this immutable version.
-      sourceItemId: evidence.sourceDraftId,
-      sourceVersionId: match[1]!,
-      sourceItemVersion: Number(match[2]),
-      contentSha256: state.contentSha256,
-      brandSha256: state.brandSha256,
-    }));
+    const proof = await this.dependencies.generatedSource.verify(
+      generatedSourceRenewalTarget(states, state),
+    );
     const checkedAt = instant(this.#now());
     const refreshed = await this.dependencies.content.refreshSourceAttestation(context, {
       commandKey: commandKey(input.commandKey),

@@ -36,14 +36,20 @@ const CONTENT_ITEM_ID = 'a1000000-0000-4000-8000-000000000001';
 const VERSION_IDS = [
   'a2000000-0000-4000-8000-000000000001',
   'a2000000-0000-4000-8000-000000000002',
+  'a2000000-0000-4000-8000-000000000003',
+  'a2000000-0000-4000-8000-000000000004',
 ] as const;
 const APPROVAL_REQUEST_IDS = [
   'a3000000-0000-4000-8000-000000000001',
   'a3000000-0000-4000-8000-000000000002',
+  'a3000000-0000-4000-8000-000000000003',
+  'a3000000-0000-4000-8000-000000000004',
 ] as const;
 const APPROVAL_DECISION_IDS = [
   'a4000000-0000-4000-8000-000000000001',
   'a4000000-0000-4000-8000-000000000002',
+  'a4000000-0000-4000-8000-000000000003',
+  'a4000000-0000-4000-8000-000000000004',
 ] as const;
 
 function digest(value: string): string {
@@ -190,10 +196,18 @@ class FakeContentLifecycle implements PropertyPredatorGeneratedDraftContentServi
         contentItemId: version.contentItemId,
         contentVersionId: version.contentVersionId,
         versionNumber: version.versionNumber,
+        previousVersionId: version.command.previousVersionId ?? null,
         title: version.command.title,
         origin: version.command.origin,
         source: version.command.source,
         sourceMetadata: version.command.metadata?.source,
+        editor: typeof version.command.metadata?.editor === 'string'
+          ? version.command.metadata.editor : null,
+        previousContentVersionId:
+          typeof version.command.metadata?.previousContentVersionId === 'string'
+            ? version.command.metadata.previousContentVersionId : null,
+        previousContentSha256: typeof version.command.metadata?.previousContentSha256 === 'string'
+          ? version.command.metadata.previousContentSha256 : null,
         contentSha256: version.contentSha256,
         blobSha256: version.command.blob.sha256,
         brandSha256: version.command.brand.sha256,
@@ -434,6 +448,218 @@ test('revalidates one approved current generated version without generation or d
   assert.equal(setup.content.refreshes[0].expected.contentSha256, staged.reviewTarget.contentSha256);
 });
 
+test('revalidates the exact legacy edited-v2 shape against its generated predecessor', async () => {
+  const setup = fixture();
+  const generated = await setup.lifecycle.generateAndStage(CONTEXT, {
+    persistenceCommandKey: 'legacy-edit-generated-v1',
+    generation: setup.generation,
+    draftPlan: { brandBrainSnapshot: setup.brain },
+  });
+  const predecessor = setup.content.versions[0]!;
+  const content = canonicalCompanyContentJson({
+    ...generated.draft.payload,
+    body: 'Corrected immutable publication copy.',
+  });
+  const contentSha256 = digest(content);
+  const edited = await setup.content.createVersion(CONTEXT, {
+    ...predecessor.command,
+    commandKey: 'legacy-edit-v2',
+    contentItemId: generated.reviewTarget.contentItemId,
+    previousVersionId: generated.reviewTarget.contentVersionId,
+    origin: 'edited',
+    content,
+    source: {
+      ...predecessor.command.source,
+      version: `${predecessor.command.source.version.slice(0, 430)}:edit:${contentSha256.slice(0, 16)}`,
+    },
+    blob: {
+      storageKey: `inline://company-content/${generated.reviewTarget.contentItemId}/${contentSha256}.json`,
+      sha256: contentSha256,
+    },
+    metadata: {
+      editor: 'growth_hq_exact_review',
+      previousContentVersionId: generated.reviewTarget.contentVersionId,
+      previousContentSha256: generated.reviewTarget.contentSha256,
+      providerEffects: false,
+    },
+  });
+  const stored = setup.content.versions[1]!;
+  stored.approvalStatus = 'approved';
+  stored.approvalRequestId = APPROVAL_REQUEST_IDS[1];
+  stored.approvalDecisionId = APPROVAL_DECISION_IDS[1];
+  let verified: unknown;
+  const lifecycle = new PropertyPredatorGeneratedDraftLifecycle({
+    generation: { generateDraft: async () => { throw new Error('must not regenerate'); } },
+    content: setup.content,
+    generatedSource: {
+      verify: async (target) => {
+        verified = target;
+        return { catalogSha256: digest('legacy edited generated proof') };
+      },
+    },
+    now: () => NOW,
+  });
+  const refreshed = await lifecycle.refreshApprovedSource(CONTEXT, {
+    commandKey: 'refresh-legacy-edited-v2',
+    reviewTarget: {
+      contentItemId: edited.contentItemId,
+      contentVersionId: edited.contentVersionId,
+      versionNumber: edited.versionNumber,
+      contentSha256: edited.contentSha256,
+    },
+  });
+  assert.deepEqual(verified, {
+    sourceItemId: generated.sourceDraftId,
+    sourceVersionId: generated.sourceVersionId,
+    sourceItemVersion: generated.sourceItemVersion,
+    contentSha256: generated.reviewTarget.contentSha256,
+    brandSha256: generated.brandSha256,
+  });
+  assert.equal(refreshed.contentVersionId, edited.contentVersionId);
+  assert.equal(refreshed.providerEffects, false);
+  assert.equal(refreshed.sourceAttestationExpiresAt,
+    new Date(NOW.getTime() + 10 * 60_000).toISOString());
+  assert.equal(setup.content.refreshes[0].expected.contentSha256, edited.contentSha256);
+  assert.equal(setup.content.versions.length, 2);
+});
+
+test('walks consecutive edits to the nearest generated revision upstream identity', async () => {
+  const setup = fixture();
+  const first = await setup.lifecycle.generateAndStage(CONTEXT, {
+    persistenceCommandKey: 'nearest-generated-v1', generation: setup.generation,
+    draftPlan: { brandBrainSnapshot: setup.brain },
+  });
+  setup.drafts.push((contextSha256) => generatedDraft(2, setup.brandSha256, contextSha256));
+  const generatedRevision = await setup.lifecycle.generateAndStage(CONTEXT, {
+    persistenceCommandKey: 'nearest-generated-v2',
+    generation: { ...setup.generation, idempotencyKey: 'nearest-generated-upstream-v2' },
+    draftPlan: { brandBrainSnapshot: setup.brain },
+    revision: {
+      sourceItemId: first.sourceItemId,
+      contentItemId: first.reviewTarget.contentItemId,
+      previousVersionId: first.reviewTarget.contentVersionId,
+      previousVersionNumber: first.reviewTarget.versionNumber,
+      previousContentSha256: first.reviewTarget.contentSha256,
+    },
+  });
+  const appendEdit = async (index: 2 | 3, body: string) => {
+    const predecessor = setup.content.versions[index - 1]!;
+    const content = canonicalCompanyContentJson({ ...generatedRevision.draft.payload, body });
+    const contentSha256 = digest(content);
+    return setup.content.createVersion(CONTEXT, {
+      ...predecessor.command,
+      commandKey: `nearest-edit-v${index + 1}`,
+      contentItemId: predecessor.contentItemId,
+      previousVersionId: predecessor.contentVersionId,
+      origin: 'edited', content,
+      source: { ...predecessor.command.source,
+        version: `${predecessor.command.source.version.slice(0, 430)}:edit:${contentSha256.slice(0, 16)}` },
+      blob: { storageKey: `inline://company-content/${predecessor.contentItemId}/${contentSha256}.json`, sha256: contentSha256 },
+      metadata: { editor: 'growth_hq_exact_review',
+        previousContentVersionId: predecessor.contentVersionId,
+        previousContentSha256: predecessor.contentSha256, providerEffects: false },
+    });
+  };
+  await appendEdit(2, 'First exact-review edit.');
+  const secondEdit = await appendEdit(3, 'Second exact-review edit.');
+  const current = setup.content.versions[3]!;
+  current.approvalStatus = 'approved';
+  current.approvalRequestId = APPROVAL_REQUEST_IDS[3];
+  current.approvalDecisionId = APPROVAL_DECISION_IDS[3];
+  let verified: unknown;
+  const lifecycle = new PropertyPredatorGeneratedDraftLifecycle({
+    generation: { generateDraft: async () => { throw new Error('must not regenerate'); } },
+    content: setup.content,
+    generatedSource: { verify: async (target) => {
+      verified = target;
+      return { catalogSha256: digest('nearest generated revision proof') };
+    } }, now: () => NOW,
+  });
+  await lifecycle.refreshApprovedSource(CONTEXT, {
+    commandKey: 'refresh-second-edit',
+    reviewTarget: { contentItemId: secondEdit.contentItemId,
+      contentVersionId: secondEdit.contentVersionId, versionNumber: secondEdit.versionNumber,
+      contentSha256: secondEdit.contentSha256 },
+  });
+  assert.deepEqual(verified, {
+    sourceItemId: generatedRevision.sourceDraftId,
+    sourceVersionId: generatedRevision.sourceVersionId,
+    sourceItemVersion: generatedRevision.sourceItemVersion,
+    contentSha256: generatedRevision.reviewTarget.contentSha256,
+    brandSha256: generatedRevision.brandSha256,
+  });
+  assert.equal(setup.content.refreshes[0].expected.contentSha256, secondEdit.contentSha256);
+  assert.equal(setup.content.refreshes[0].expected.source.version, current.command.source.version);
+  assert.equal(setup.content.versions.length, 4);
+});
+
+test('edited generated renewal rejects malformed or ambiguous lineage before source/read write effects', async () => {
+  const setup = fixture();
+  const generated = await setup.lifecycle.generateAndStage(CONTEXT, {
+    persistenceCommandKey: 'negative-lineage-generated-v1', generation: setup.generation,
+    draftPlan: { brandBrainSnapshot: setup.brain },
+  });
+  const predecessor = setup.content.versions[0]!;
+  const content = canonicalCompanyContentJson({ ...generated.draft.payload, body: 'Edited bytes.' });
+  const contentSha256 = digest(content);
+  const edited = await setup.content.createVersion(CONTEXT, {
+    ...predecessor.command, commandKey: 'negative-lineage-edit-v2',
+    contentItemId: predecessor.contentItemId, previousVersionId: predecessor.contentVersionId,
+    origin: 'edited', content,
+    source: { ...predecessor.command.source,
+      version: `${predecessor.command.source.version.slice(0, 430)}:edit:${contentSha256.slice(0, 16)}` },
+    blob: { storageKey: `inline://company-content/${predecessor.contentItemId}/${contentSha256}.json`, sha256: contentSha256 },
+    metadata: { editor: 'growth_hq_exact_review',
+      previousContentVersionId: predecessor.contentVersionId,
+      previousContentSha256: predecessor.contentSha256, providerEffects: false },
+  });
+  const stored = setup.content.versions[1]!;
+  stored.approvalStatus = 'approved'; stored.approvalRequestId = APPROVAL_REQUEST_IDS[1];
+  stored.approvalDecisionId = APPROVAL_DECISION_IDS[1];
+  const target = { contentItemId: edited.contentItemId, contentVersionId: edited.contentVersionId,
+    versionNumber: edited.versionNumber, contentSha256: edited.contentSha256 };
+  const originalRead = setup.content.listVersionApprovalStates.bind(setup.content);
+  const cases: ReadonlyArray<readonly [string, (states: CompanyContentVersionApprovalState[]) => CompanyContentVersionApprovalState[]]> = [
+    ['absent predecessor', (states) => states.slice(0, 1)],
+    ['absent predecessor metadata', (states) => states.map((state, index) => index === 0
+      ? { ...state, previousContentVersionId: null } : state)],
+    ['wrong predecessor id', (states) => states.map((state, index) => index === 0
+      ? { ...state, previousVersionId: 'a2000000-0000-4000-8000-000000000099' } : state)],
+    ['wrong predecessor hash', (states) => states.map((state, index) => index === 0
+      ? { ...state, previousContentSha256: 'f'.repeat(64) } : state)],
+    ['wrong source', (states) => states.map((state, index) => index === 1
+      ? { ...state, source: { ...state.source, itemId: 'foreign-source' } } : state)],
+    ['wrong brand', (states) => states.map((state, index) => index === 1
+      ? { ...state, brandSha256: 'e'.repeat(64) } : state)],
+    ['wrong edit emitter', (states) => states.map((state, index) => index === 0
+      ? { ...state, source: { ...state.source,
+        version: `${states[1]!.source.version.slice(0, 430)}:edit:${'0'.repeat(16)}` } } : state)],
+    ['wrong editor', (states) => states.map((state, index) => index === 0
+      ? { ...state, editor: 'another_editor' } : state)],
+    ['cycle', (states) => states.map((state, index) => index === 0
+      ? { ...state, previousVersionId: state.contentVersionId,
+        previousContentVersionId: state.contentVersionId } : state)],
+    ['ambiguous version number', (states) => [...states, { ...states[1]!,
+      contentVersionId: 'a2000000-0000-4000-8000-000000000099' }]],
+  ];
+  let sourceReads = 0;
+  const lifecycle = new PropertyPredatorGeneratedDraftLifecycle({
+    generation: { generateDraft: async () => { throw new Error('must not regenerate'); } },
+    content: setup.content,
+    generatedSource: { verify: async () => { sourceReads += 1; return { catalogSha256: digest('x') }; } },
+  });
+  for (const [label, mutateStates] of cases) {
+    setup.content.listVersionApprovalStates = async (context, itemId) =>
+      mutateStates(await originalRead(context, itemId));
+    await assert.rejects(lifecycle.refreshApprovedSource(CONTEXT, {
+      commandKey: `reject-${label.replaceAll(' ', '-')}`, reviewTarget: target,
+    }), (error: unknown) => error instanceof PropertyPredatorGeneratedDraftLifecycleError
+      && error.code === 'integrity_mismatch', label);
+  }
+  assert.equal(sourceReads, 0);
+  assert.equal(setup.content.refreshes.length, 0);
+});
+
 test('refreshes an approved revision using its own immutable upstream draft identity', async () => {
   const setup = fixture();
   const first = await setup.lifecycle.generateAndStage(CONTEXT, {
@@ -535,6 +761,26 @@ test('does not revalidate changed, revoked or foreign generated source state', a
     commandKey: 'blocked-generated-refresh', reviewTarget: staged.reviewTarget,
   }), (error: unknown) => error instanceof PropertyPredatorGeneratedDraftLifecycleError
     && error.code === 'approval_conflict');
+  assert.equal(sourceReads, 0);
+  assert.equal(setup.content.refreshes.length, 0);
+
+  setup.drafts.push((contextSha256) => generatedDraft(2, setup.brandSha256, contextSha256));
+  await setup.lifecycle.generateAndStage(CONTEXT, {
+    persistenceCommandKey: 'superseding-generated-v2',
+    generation: { ...setup.generation, idempotencyKey: 'superseding-generation-v2' },
+    draftPlan: { brandBrainSnapshot: setup.brain },
+    revision: {
+      sourceItemId: staged.sourceItemId,
+      contentItemId: staged.reviewTarget.contentItemId,
+      previousVersionId: staged.reviewTarget.contentVersionId,
+      previousVersionNumber: staged.reviewTarget.versionNumber,
+      previousContentSha256: staged.reviewTarget.contentSha256,
+    },
+  });
+  await assert.rejects(lifecycle.refreshApprovedSource(CONTEXT, {
+    commandKey: 'superseded-generated-refresh', reviewTarget: staged.reviewTarget,
+  }), (error: unknown) => error instanceof PropertyPredatorGeneratedDraftLifecycleError
+    && error.code === 'revision_conflict');
   assert.equal(sourceReads, 0);
   assert.equal(setup.content.refreshes.length, 0);
 });

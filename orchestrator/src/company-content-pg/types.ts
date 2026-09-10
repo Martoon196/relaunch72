@@ -231,11 +231,17 @@ export interface CompanyContentVersionApprovalState {
   readonly contentItemId: string;
   readonly contentVersionId: string;
   readonly versionNumber: number;
+  /** Immutable relational predecessor; null only for the first version. */
+  readonly previousVersionId: string | null;
   readonly title: string;
   readonly origin: CompanyContentOrigin;
   readonly source: CompanyContentSourceProvenance;
   /** Immutable adapter-specific source evidence, validated by the owning adapter. */
   readonly sourceMetadata?: unknown;
+  /** Immutable exact-review edit lineage projected from persisted metadata. */
+  readonly editor: string | null;
+  readonly previousContentVersionId: string | null;
+  readonly previousContentSha256: string | null;
   readonly contentSha256: string;
   readonly blobSha256: string;
   readonly brandSha256: string;

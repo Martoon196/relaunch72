@@ -96,6 +96,7 @@ interface Version {
   id: string;
   itemId: string;
   versionNumber: number;
+  previousVersionId: string | null;
   origin: string;
   kind: string;
   title: string;
@@ -217,6 +218,7 @@ class InMemoryContentSql implements SqlExecutor {
         id: String(values[0]),
         itemId: String(values[1]),
         versionNumber: Number(values[2]),
+        previousVersionId: values[3] == null ? null : String(values[3]),
         origin: String(values[4]),
         kind: String(values[5]),
         title: String(values[6]),
@@ -358,12 +360,20 @@ class InMemoryContentSql implements SqlExecutor {
             contentItemId: itemId,
             contentVersionId: version.id,
             versionNumber: version.versionNumber,
+            previousVersionId: version.previousVersionId,
             title: version.title,
             origin: version.origin,
             sourceSystem: version.sourceSystem,
             sourceItemId: version.sourceItemId,
             sourceVersion: version.sourceVersion,
             sourceMetadata: version.metadata.source,
+            editor: typeof version.metadata.editor === 'string' ? version.metadata.editor : null,
+            previousContentVersionId:
+              typeof version.metadata.previousContentVersionId === 'string'
+                ? version.metadata.previousContentVersionId : null,
+            previousContentSha256:
+              typeof version.metadata.previousContentSha256 === 'string'
+                ? version.metadata.previousContentSha256 : null,
             contentSha256: version.contentSha256,
             blobSha256: version.blobSha256,
             brandSha256: version.brandSha256,
@@ -778,10 +788,28 @@ test('version, approval and edit flow preserves old approval as explicitly stale
     origin: 'edited',
     content: '# Launch plan\nCorrected fixture bytes.',
     source: { system: 'property_predator', itemId: 'launch-plan', version: 'edit-v2' },
+    metadata: {
+      editor: 'growth_hq_exact_review',
+      previousContentVersionId: first.contentVersionId,
+      previousContentSha256: first.contentSha256,
+      providerEffects: false,
+    },
   }));
   assert.equal(second.versionNumber, 2);
+  const projected = await service.listVersionApprovalStates(context, first.contentItemId);
+  assert.deepEqual({
+    previousVersionId: projected[0]!.previousVersionId,
+    editor: projected[0]!.editor,
+    previousContentVersionId: projected[0]!.previousContentVersionId,
+    previousContentSha256: projected[0]!.previousContentSha256,
+  }, {
+    previousVersionId: first.contentVersionId,
+    editor: 'growth_hq_exact_review',
+    previousContentVersionId: first.contentVersionId,
+    previousContentSha256: first.contentSha256,
+  });
   assert.deepEqual(
-    (await service.listVersionApprovalStates(context, first.contentItemId)).map((version) => ({
+    projected.map((version) => ({
       version: version.versionNumber,
       approval: version.approvalStatus,
       stale: version.approvalStale,

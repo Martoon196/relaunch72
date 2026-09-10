@@ -109,12 +109,16 @@ interface ApprovalStateRow extends QueryResultRow {
   contentItemId: string;
   contentVersionId: string;
   versionNumber: number | string;
+  previousVersionId: string | null;
   title: string;
   origin: CompanyContentOrigin;
   sourceSystem: string;
   sourceItemId: string;
   sourceVersion: string;
   sourceMetadata?: unknown;
+  editor: string | null;
+  previousContentVersionId: string | null;
+  previousContentSha256: string | null;
   contentSha256: string;
   blobSha256: string;
   brandSha256: string;
@@ -950,11 +954,15 @@ export class CompanyContentPgRepository {
        SELECT version.content_item_id AS "contentItemId",
               version.id AS "contentVersionId",
               version.version_number AS "versionNumber",
+              version.previous_version_id AS "previousVersionId",
               version.title, version.origin,
               version.source_system AS "sourceSystem",
               version.source_item_id AS "sourceItemId",
               version.source_version AS "sourceVersion",
               version.metadata -> 'source' AS "sourceMetadata",
+              version.metadata ->> 'editor' AS editor,
+              version.metadata ->> 'previousContentVersionId' AS "previousContentVersionId",
+              version.metadata ->> 'previousContentSha256' AS "previousContentSha256",
               encode(version.content_sha256, 'hex') AS "contentSha256",
               encode(version.blob_sha256, 'hex') AS "blobSha256",
               encode(version.brand_sha256, 'hex') AS "brandSha256",
@@ -992,6 +1000,7 @@ export class CompanyContentPgRepository {
       contentItemId: row.contentItemId,
       contentVersionId: row.contentVersionId,
       versionNumber: Number(row.versionNumber),
+      previousVersionId: row.previousVersionId,
       title: row.title,
       origin: row.origin,
       source: Object.freeze({
@@ -1000,6 +1009,9 @@ export class CompanyContentPgRepository {
         version: row.sourceVersion,
       }),
       ...(row.sourceMetadata == null ? {} : { sourceMetadata: row.sourceMetadata }),
+      editor: row.editor,
+      previousContentVersionId: row.previousContentVersionId,
+      previousContentSha256: row.previousContentSha256,
       contentSha256: row.contentSha256,
       blobSha256: row.blobSha256,
       brandSha256: row.brandSha256,
