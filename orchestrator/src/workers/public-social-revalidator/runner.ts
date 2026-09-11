@@ -4,6 +4,7 @@ import {
   createPropertyPredatorApprovedResourceTransport,
   type PropertyPredatorApprovedResourceTransport,
 } from '../../company-content-adapter/property-predator-resources.js';
+import { createPropertyPredatorGeneratedSourceRevalidator } from '../../company-content-adapter/property-predator-generated-source.js';
 import { assertExpectedDatabaseInstallation } from '../../db/installation-identity.js';
 import {
   createPublicSocialRevalidatorCommandDatabasePool,
@@ -102,6 +103,7 @@ export interface PublicSocialRevalidatorRunnerDependencies {
   readonly createRevalidator?: (
     revalidatorPool: RuntimePool,
     transport: PropertyPredatorApprovedResourceTransport,
+    config: PublicSocialRevalidatorConfig,
   ) => Revalidator;
   readonly createLease?: () => PublicSocialRevalidationLease;
   readonly assertSchemaCurrent?: (pool: Pick<Pool, 'query'>) => Promise<void>;
@@ -284,12 +286,21 @@ function defaultTransport(
 function defaultRevalidator(
   revalidatorPool: RuntimePool,
   transport: PropertyPredatorApprovedResourceTransport,
+  config: PublicSocialRevalidatorConfig,
 ): Revalidator {
+  const generatedSource = createPropertyPredatorGeneratedSourceRevalidator({
+    baseUrl: config.sourceOrigin,
+    clientId: config.sourceClientId,
+    readToken: config.sourceReadToken,
+    timeoutMs: config.sourceTimeoutMs,
+    allowLocalHttp: config.allowLocalHttp,
+  });
   return new PublicSocialJitRevalidator({
     queue: new PgPublicSocialRevalidationQueue(revalidatorPool),
     attestor: new PgPropertyPredatorJitSourceAttestor({
       pool: revalidatorPool,
       transport,
+      generatedSource,
     }),
   });
 }
@@ -347,6 +358,7 @@ export async function startPublicSocialRevalidatorRunner(
     revalidator = (dependencies.createRevalidator ?? defaultRevalidator)(
       revalidatorPool,
       transport,
+      config,
     );
     lease = (dependencies.createLease ?? (() => Object.freeze({
       workerId: randomUUID(),

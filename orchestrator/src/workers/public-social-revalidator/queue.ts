@@ -26,7 +26,7 @@ export interface PublicSocialRevalidationMediaClaim {
   readonly brandSha256: string;
 }
 
-export interface PublicSocialRevalidationClaim {
+interface PublicSocialRevalidationClaimBase {
   readonly jobId: string;
   readonly workspaceId: string;
   readonly intentId: string;
@@ -37,23 +37,49 @@ export interface PublicSocialRevalidationClaim {
   readonly sourceSystem: string;
   readonly sourceItemId: string;
   readonly sourceVersion: string;
-  readonly sourceResourceVersionId: string;
-  readonly sourceApprovalId: string;
-  readonly sourceApprovedAt: string;
   readonly contentSha256: string;
   readonly blobSha256: string;
   readonly brandSha256: string;
   readonly media: readonly PublicSocialRevalidationMediaClaim[];
 }
 
+export interface LegacyPublicSocialRevalidationClaim extends PublicSocialRevalidationClaimBase {
+  readonly evidenceType: 'legacy';
+  readonly sourceResourceVersionId: string;
+  readonly sourceApprovalId: string;
+  readonly sourceApprovedAt: string;
+}
+
+export interface GeneratedPublicSocialRevalidationClaim extends PublicSocialRevalidationClaimBase {
+  readonly evidenceType: 'generated';
+  readonly generatedSourceItemId: string;
+  readonly generatedSourceVersionId: string;
+  readonly generatedSourceItemVersion: number;
+  readonly generatedContentSha256: string;
+  readonly generatedBrandSha256: string;
+  readonly generatedLineage: readonly Readonly<Record<string, unknown>>[];
+}
+
+export type PublicSocialRevalidationClaim =
+  | LegacyPublicSocialRevalidationClaim
+  | GeneratedPublicSocialRevalidationClaim;
+
 export interface PublicSocialRevalidationSourceProof {
   readonly sourceCatalogSha256: string;
   readonly checkedAt: string;
   readonly expiresAt: string;
   readonly content: Readonly<{
+    evidenceType: 'legacy';
     sourceResourceVersionId: string;
     sourceApprovalId: string;
     sourceApprovedAt: string;
+  } | {
+    evidenceType: 'generated';
+    generatedSourceItemId: string;
+    generatedSourceVersionId: string;
+    generatedSourceItemVersion: number;
+    generatedContentSha256: string;
+    generatedBrandSha256: string;
   }>;
   readonly media: readonly Readonly<{
     sourceResourceVersionId: string;
@@ -83,6 +109,13 @@ interface ClaimRow extends QueryResultRow {
   sourceResourceVersionId: unknown;
   sourceApprovalId: unknown;
   sourceApprovedAt: unknown;
+  evidenceType: unknown;
+  generatedSourceItemId: unknown;
+  generatedSourceVersionId: unknown;
+  generatedSourceItemVersion: unknown;
+  generatedContentSha256: unknown;
+  generatedBrandSha256: unknown;
+  generatedLineage: unknown;
   contentSha256: unknown;
   blobSha256: unknown;
   brandSha256: unknown;
@@ -169,7 +202,7 @@ function claim(row: ClaimRow): PublicSocialRevalidationClaim {
   if (!Array.isArray(row.media) || row.media.length > 10) {
     throw new Error('Revalidation media evidence is invalid');
   }
-  return Object.freeze({
+  const common = {
     jobId: uuid(row.jobId, 'job id'),
     workspaceId: uuid(row.workspaceId, 'workspace id'),
     intentId: uuid(row.intentId, 'intent id'),
@@ -180,14 +213,37 @@ function claim(row: ClaimRow): PublicSocialRevalidationClaim {
     sourceSystem: source(row.sourceSystem, 'source system'),
     sourceItemId: source(row.sourceItemId, 'source item'),
     sourceVersion: source(row.sourceVersion, 'source version'),
-    sourceResourceVersionId: uuid(row.sourceResourceVersionId, 'source resource version'),
-    sourceApprovalId: uuid(row.sourceApprovalId, 'source approval'),
-    sourceApprovedAt: sourceInstant(row.sourceApprovedAt, 'source approval time'),
     contentSha256: sha(row.contentSha256, 'content digest'),
     blobSha256: sha(row.blobSha256, 'blob digest'),
     brandSha256: sha(row.brandSha256, 'brand digest'),
     media: Object.freeze(row.media.map(mediaClaim)),
-  });
+  };
+  if (row.evidenceType === 'legacy') {
+    if (row.generatedSourceItemId != null || row.generatedSourceVersionId != null
+        || row.generatedSourceItemVersion != null || row.generatedContentSha256 != null
+        || row.generatedBrandSha256 != null || row.generatedLineage != null) {
+      throw new Error('Revalidation claim mixes legacy and generated evidence');
+    }
+    return Object.freeze({ ...common, evidenceType: 'legacy' as const,
+      sourceResourceVersionId: uuid(row.sourceResourceVersionId, 'source resource version'),
+      sourceApprovalId: uuid(row.sourceApprovalId, 'source approval'),
+      sourceApprovedAt: sourceInstant(row.sourceApprovedAt, 'source approval time') });
+  }
+  if (row.evidenceType !== 'generated' || row.sourceResourceVersionId != null
+      || row.sourceApprovalId != null || row.sourceApprovedAt != null
+      || !Array.isArray(row.generatedLineage)) {
+    throw new Error('Revalidation claim evidence discriminator is invalid');
+  }
+  return Object.freeze({ ...common, evidenceType: 'generated' as const,
+    generatedSourceItemId: uuid(row.generatedSourceItemId, 'generated source item'),
+    generatedSourceVersionId: uuid(row.generatedSourceVersionId, 'generated source version'),
+    generatedSourceItemVersion: safeInteger(row.generatedSourceItemVersion, 'generated source item version'),
+    generatedContentSha256: sha(row.generatedContentSha256, 'generated content digest'),
+    generatedBrandSha256: sha(row.generatedBrandSha256, 'generated brand digest'),
+    generatedLineage: Object.freeze(row.generatedLineage.map((item) => {
+      if (!plainRecord(item)) throw new Error('Revalidation generated lineage is invalid');
+      return Object.freeze({ ...item });
+    })) });
 }
 
 export function publicSocialRevalidationLeaseHash(
@@ -217,12 +273,19 @@ export class PgPublicSocialRevalidationQueue {
               content_version_id AS "contentVersionId",
               source_system AS "sourceSystem", source_item_id AS "sourceItemId",
               source_version AS "sourceVersion",
+              evidence_type AS "evidenceType",
               source_resource_version_id AS "sourceResourceVersionId",
               source_approval_id AS "sourceApprovalId",
               source_approved_at AS "sourceApprovedAt",
+              generated_source_item_id AS "generatedSourceItemId",
+              generated_source_version_id AS "generatedSourceVersionId",
+              generated_source_item_version AS "generatedSourceItemVersion",
+              generated_content_sha256 AS "generatedContentSha256",
+              generated_brand_sha256 AS "generatedBrandSha256",
+              generated_lineage AS "generatedLineage",
               content_sha256 AS "contentSha256",
               blob_sha256 AS "blobSha256", brand_sha256 AS "brandSha256", media
-      FROM app_private.claim_due_test_social_revalidations($1, $2, 1, $3)`,
+      FROM app_private.claim_due_test_social_revalidations_v2($1, $2, 1, $3)`,
       [lease.workerId, publicSocialRevalidationLeaseHash(lease), leaseSeconds],
     );
     if (result.rows.length > 1) throw new Error('Revalidation claim exceeded its bound');
@@ -266,12 +329,17 @@ export class PgPublicSocialRevalidationQueue {
     const checkedAt = instant(sourceProof.checkedAt, 'proof check time');
     const expiresAt = instant(sourceProof.expiresAt, 'proof expiry');
     const sourceCatalogSha256 = sha(sourceProof.sourceCatalogSha256, 'source catalog digest');
-    if (uuid(sourceProof.content.sourceResourceVersionId, 'proof source resource version')
-          !== current.sourceResourceVersionId
-        || uuid(sourceProof.content.sourceApprovalId, 'proof source approval')
-          !== current.sourceApprovalId
-        || sourceInstant(sourceProof.content.sourceApprovedAt, 'proof source approval time')
-          !== current.sourceApprovedAt
+    if (sourceProof.content.evidenceType !== current.evidenceType
+        || (current.evidenceType === 'legacy' && (sourceProof.content.evidenceType !== 'legacy'
+          || uuid(sourceProof.content.sourceResourceVersionId, 'proof source resource version') !== current.sourceResourceVersionId
+          || uuid(sourceProof.content.sourceApprovalId, 'proof source approval') !== current.sourceApprovalId
+          || sourceInstant(sourceProof.content.sourceApprovedAt, 'proof source approval time') !== current.sourceApprovedAt))
+        || (current.evidenceType === 'generated' && (sourceProof.content.evidenceType !== 'generated'
+          || uuid(sourceProof.content.generatedSourceItemId, 'proof generated source item') !== current.generatedSourceItemId
+          || uuid(sourceProof.content.generatedSourceVersionId, 'proof generated source version') !== current.generatedSourceVersionId
+          || safeInteger(sourceProof.content.generatedSourceItemVersion, 'proof generated source item version') !== current.generatedSourceItemVersion
+          || sha(sourceProof.content.generatedContentSha256, 'proof generated content digest') !== current.generatedContentSha256
+          || sha(sourceProof.content.generatedBrandSha256, 'proof generated brand digest') !== current.generatedBrandSha256))
         || sourceProof.media.length !== current.media.length
         || sourceProof.media.some((item, index) => {
           const expected = current.media[index];
@@ -291,19 +359,26 @@ export class PgPublicSocialRevalidationQueue {
       `/* public-social-revalidator.complete-and-materialize */
        SELECT proof_id AS "proofId", post_id AS "postId",
               operation_ids AS "operationIds", disposition
-       FROM app_private.complete_and_materialize_test_social_revalidation(
+       FROM app_private.complete_and_materialize_test_social_revalidation_v2(
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
          $11::uuid[], $12::uuid[], $13::timestamptz[], decode($14, 'hex'),
-         $15, $16
+         $15, $16, $17, $18, $19, $20, decode($21, 'hex'), decode($22, 'hex')
        )`,
       [current.workspaceId, current.jobId, lease.workerId,
         publicSocialRevalidationLeaseHash(lease), current.leaseVersion,
-        proofId, postId, sourceProof.content.sourceResourceVersionId,
-        sourceProof.content.sourceApprovalId, sourceProof.content.sourceApprovedAt,
+        proofId, postId,
+        sourceProof.content.evidenceType === 'legacy' ? sourceProof.content.sourceResourceVersionId : null,
+        sourceProof.content.evidenceType === 'legacy' ? sourceProof.content.sourceApprovalId : null,
+        sourceProof.content.evidenceType === 'legacy' ? sourceProof.content.sourceApprovedAt : null,
         sourceProof.media.map((item) => item.sourceResourceVersionId),
         sourceProof.media.map((item) => item.sourceApprovalId),
         sourceProof.media.map((item) => item.sourceApprovedAt), sourceCatalogSha256,
-        checkedAt, expiresAt],
+        checkedAt, expiresAt, sourceProof.content.evidenceType,
+        sourceProof.content.evidenceType === 'generated' ? sourceProof.content.generatedSourceItemId : null,
+        sourceProof.content.evidenceType === 'generated' ? sourceProof.content.generatedSourceVersionId : null,
+        sourceProof.content.evidenceType === 'generated' ? sourceProof.content.generatedSourceItemVersion : null,
+        sourceProof.content.evidenceType === 'generated' ? sourceProof.content.generatedContentSha256 : null,
+        sourceProof.content.evidenceType === 'generated' ? sourceProof.content.generatedBrandSha256 : null],
     );
     const row = completed.rows[0];
     if (completed.rows.length !== 1 || uuid(row?.proofId, 'proof result') !== proofId

@@ -65,6 +65,7 @@ function lease(): PublicSocialRevalidationLease {
 
 function claimed(): PublicSocialRevalidationClaim {
   return Object.freeze({
+    evidenceType: 'legacy',
     jobId: JOB,
     workspaceId: WORKSPACE,
     intentId: INTENT,
@@ -201,7 +202,9 @@ test('JIT dispatcher materializes verified evidence and records fail-closed retr
       async fail() { throw new Error('unexpected fail'); },
       async completeAndMaterialize(_claim, _lease, attestations, proofId, postId) {
         calls.push('materialize');
-        assert.equal(attestations.content.sourceResourceVersionId, SOURCE_VERSION);
+        assert.equal(attestations.content.evidenceType, 'legacy');
+        assert.equal(attestations.content.evidenceType === 'legacy'
+          ? attestations.content.sourceResourceVersionId : null, SOURCE_VERSION);
         assert.equal(proofId, PROOF);
         assert.equal(postId, POST);
         return { proofId, postId, operationIds: [OPERATION], disposition: 'applied' };
@@ -215,6 +218,7 @@ test('JIT dispatcher materializes verified evidence and records fail-closed retr
         checkedAt: '2026-08-27T12:00:00.000Z',
         expiresAt: '2026-08-27T12:15:00.000Z',
         content: {
+          evidenceType: 'legacy',
           sourceResourceVersionId: SOURCE_VERSION,
           sourceApprovalId: SOURCE_APPROVAL,
           sourceApprovedAt: '2026-08-27T10:00:00.000Z',

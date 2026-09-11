@@ -104,6 +104,7 @@ const migration97Url = new URL('../../src/db/migrations/0097_property_predator_z
 const migration98Url = new URL('../../src/db/migrations/0098_zernio_messaging_provider_account_binding.sql', import.meta.url);
 const migration99Url = new URL('../../src/db/migrations/0099_generated_draft_adapter_session_lock.sql', import.meta.url);
 const migration100Url = new URL('../../src/db/migrations/0100_social_publication_copy_delivery.sql', import.meta.url);
+const migration101Url = new URL('../../src/db/migrations/0101_generated_social_planning_compatibility.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -542,9 +543,9 @@ test('0005 preserves active membership checks, lifecycle locks, and least-privil
   assert.doesNotMatch(sql, /GRANT EXECUTE ON FUNCTION app_private\.upgrade_portal_password_hash/);
 });
 
-test('bundled migration discovery orders and checksums through generated draft adapter session lock', async () => {
+test('bundled migration discovery orders and checksums through generated social planning compatibility', async () => {
   const migrations = await discoverMigrations();
-  const tail = migrations.slice(-94);
+  const tail = migrations.slice(-95);
   assert.deepEqual(tail.map(({ filename, version }) => ({ filename, version })), [
     { filename: '0007_public_schema_hardening.sql', version: 7 },
     { filename: '0008_setup_delivery_recovery.sql', version: 8 },
@@ -640,6 +641,7 @@ test('bundled migration discovery orders and checksums through generated draft a
     { filename: '0098_zernio_messaging_provider_account_binding.sql', version: 98 },
     { filename: '0099_generated_draft_adapter_session_lock.sql', version: 99 },
     { filename: '0100_social_publication_copy_delivery.sql', version: 100 },
+    { filename: '0101_generated_social_planning_compatibility.sql', version: 101 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -736,6 +738,7 @@ test('bundled migration discovery orders and checksums through generated draft a
     (await readFile(migration98Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration99Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration100Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration101Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.

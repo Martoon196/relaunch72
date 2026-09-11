@@ -300,7 +300,7 @@ function exactCurrentVersion(
   return latest;
 }
 
-interface GeneratedSourceRenewalTarget {
+export interface GeneratedSourceRenewalTarget {
   readonly sourceItemId: string;
   readonly sourceVersionId: string;
   readonly sourceItemVersion: number;
@@ -308,7 +308,7 @@ interface GeneratedSourceRenewalTarget {
   readonly brandSha256: string;
 }
 
-function generatedSourceRenewalTarget(
+export function generatedSourceRenewalTarget(
   states: readonly CompanyContentVersionApprovalState[],
   current: CompanyContentVersionApprovalState,
 ): GeneratedSourceRenewalTarget {

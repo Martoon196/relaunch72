@@ -4,6 +4,9 @@ import type {
   PropertyPredatorApprovedResourceTransport,
   PropertyPredatorApprovedVersionResource,
 } from '../../company-content-adapter/property-predator-resources.js';
+import type { PropertyPredatorGeneratedSourceRevalidator } from '../../company-content-adapter/property-predator-generated-source.js';
+import { generatedSourceRenewalTarget } from '../../company-content-adapter/property-predator-generation-approval.js';
+import type { CompanyContentVersionApprovalState } from '../../company-content-pg/types.js';
 import { canonicalCompanyContentJson } from '../../company-content-pg/validation.js';
 import type {
   PublicSocialRevalidationSourceProof,
@@ -38,6 +41,16 @@ interface VersionRow extends QueryResultRow {
   sourceApprovedAt: unknown;
 }
 
+interface GeneratedVersionRow extends VersionRow {
+  evidenceType: unknown;
+  generatedSourceItemId: unknown;
+  generatedSourceVersionId: unknown;
+  generatedSourceItemVersion: unknown;
+  generatedContentSha256: unknown;
+  generatedBrandSha256: unknown;
+  generatedLineage: unknown;
+}
+
 interface ExactVersion {
   readonly resourceOrdinal: number;
   readonly contentItemId: string;
@@ -64,6 +77,7 @@ export interface PropertyPredatorJitAttestorDependencies {
    */
   readonly pool: RevalidatorCapabilityPool;
   readonly transport: PropertyPredatorApprovedResourceTransport;
+  readonly generatedSource?: Pick<PropertyPredatorGeneratedSourceRevalidator, 'verify'>;
   readonly now?: () => Date;
 }
 
@@ -180,7 +194,7 @@ export class PgPropertyPredatorJitSourceAttestor {
   }
 
   async #loadExactVersions(
-    claim: PublicSocialRevalidationClaim,
+    claim: Extract<PublicSocialRevalidationClaim, { readonly evidenceType: 'legacy' }>,
     lease: PublicSocialRevalidationLease,
   ): Promise<readonly ExactVersion[]> {
     const expected: readonly (ClaimedEvidence & { readonly resourceOrdinal: number })[] = Object.freeze([
@@ -218,7 +232,7 @@ export class PgPropertyPredatorJitSourceAttestor {
               source_resource_version_id AS "sourceResourceVersionId",
               source_approval_id AS "sourceApprovalId",
               source_approved_at AS "sourceApprovedAt"
-       FROM app_private.load_leased_test_social_source_versions($1, $2, $3, $4)`,
+       FROM app_private.load_leased_test_social_source_versions_v2($1, $2, $3, $4)`,
       [claim.jobId, lease.workerId, publicSocialRevalidationLeaseHash(lease),
         claim.leaseVersion],
     )).rows.map(parseVersion);
@@ -233,6 +247,93 @@ export class PgPropertyPredatorJitSourceAttestor {
       }
       return row;
     }));
+  }
+
+
+  async #attestGenerated(
+    claim: Extract<PublicSocialRevalidationClaim, { readonly evidenceType: 'generated' }>,
+    lease: PublicSocialRevalidationLease,
+  ): Promise<PublicSocialRevalidationSourceProof> {
+    const result = await this.dependencies.pool.query<GeneratedVersionRow>(
+      `/* public-social-revalidator.load-leased-generated-source-proof */
+       SELECT resource_ordinal AS "resourceOrdinal",
+              content_item_id AS "contentItemId", content_version_id AS "contentVersionId",
+              source_system AS "sourceSystem", source_item_id AS "sourceItemId",
+              source_version AS "sourceVersion", content_sha256 AS "contentSha256",
+              body_sha256 AS "bodySha256", blob_sha256 AS "blobSha256",
+              brand_sha256 AS "brandSha256", evidence_type AS "evidenceType",
+              source_resource_version_id AS "sourceResourceVersionId",
+              source_approval_id AS "sourceApprovalId", source_approved_at AS "sourceApprovedAt",
+              generated_source_item_id AS "generatedSourceItemId",
+              generated_source_version_id AS "generatedSourceVersionId",
+              generated_source_item_version AS "generatedSourceItemVersion",
+              generated_content_sha256 AS "generatedContentSha256",
+              generated_brand_sha256 AS "generatedBrandSha256",
+              generated_lineage AS "generatedLineage"
+       FROM app_private.load_leased_test_social_source_versions_v2($1, $2, $3, $4)`,
+      [claim.jobId, lease.workerId, publicSocialRevalidationLeaseHash(lease), claim.leaseVersion],
+    );
+    const main = result.rows.find((row) => Number(row.resourceOrdinal) === 0);
+    if (!main || result.rows.filter((row) => Number(row.resourceOrdinal) === 0).length !== 1
+        || main.evidenceType !== 'generated' || !Array.isArray(main.generatedLineage)
+        || uuid(main.contentItemId, 'content item') !== claim.contentItemId
+        || uuid(main.contentVersionId, 'content version') !== claim.contentVersionId
+        || sha(main.contentSha256, 'content digest') !== claim.contentSha256
+        || sha(main.bodySha256, 'body digest') !== claim.contentSha256
+        || uuid(main.generatedSourceItemId, 'generated source item') !== claim.generatedSourceItemId
+        || uuid(main.generatedSourceVersionId, 'generated source version') !== claim.generatedSourceVersionId
+        || Number(main.generatedSourceItemVersion) !== claim.generatedSourceItemVersion
+        || sha(main.generatedContentSha256, 'generated content digest') !== claim.generatedContentSha256
+        || sha(main.generatedBrandSha256, 'generated brand digest') !== claim.generatedBrandSha256
+        || canonicalCompanyContentJson(main.generatedLineage) !== canonicalCompanyContentJson(claim.generatedLineage)) {
+      throw new Error('JIT generated source evidence changed');
+    }
+    const lineage = main.generatedLineage as unknown as CompanyContentVersionApprovalState[];
+    const current = lineage.find((item) => item.contentVersionId?.toLowerCase() === claim.contentVersionId);
+    if (!current) throw new Error('JIT generated source lineage is incomplete');
+    const ancestor = generatedSourceRenewalTarget(lineage, current);
+    if (ancestor.sourceItemId !== claim.generatedSourceItemId
+        || ancestor.sourceVersionId !== claim.generatedSourceVersionId
+        || ancestor.sourceItemVersion !== claim.generatedSourceItemVersion
+        || ancestor.contentSha256 !== claim.generatedContentSha256
+        || ancestor.brandSha256 !== claim.generatedBrandSha256) {
+      throw new Error('JIT generated source ancestry changed');
+    }
+    if (!this.dependencies.generatedSource) throw new Error('JIT generated source verifier is unavailable');
+    const proof = await this.dependencies.generatedSource.verify(ancestor);
+    const mediaRows = result.rows.filter((row) => Number(row.resourceOrdinal) !== 0).map(parseVersion);
+    if (mediaRows.length !== claim.media.length) throw new Error('JIT source version set is incomplete');
+    const verifiedMedia = await this.#verifyRemote(mediaRows.map((row, index) => {
+      const expected = claim.media[index];
+      if (!expected || row.resourceOrdinal !== expected.ordinal || !sameEvidence(row, expected)) {
+        throw new Error('JIT source evidence changed');
+      }
+      return row;
+    }));
+    const checkedAt = this.#now();
+    const expiresAt = new Date(checkedAt.getTime() + ATTESTATION_LIFETIME_MS);
+    if (!Number.isFinite(checkedAt.getTime())
+        || expiresAt.getTime() <= Date.parse(claim.desiredFor) + REQUIRED_POST_SLOT_MARGIN_MS) {
+      throw new Error('JIT source proof cannot cover the desired TEST slot');
+    }
+    const sourceCatalogSha256 = createHash('sha256').update(canonicalCompanyContentJson({
+      contract: 'property-predator-public-social-jit-source/v2',
+      generatedCatalogSha256: proof.catalogSha256,
+      intentId: claim.intentId, jobId: claim.jobId,
+      current: { contentVersionId: claim.contentVersionId, contentSha256: claim.contentSha256 },
+      ancestor,
+      media: verifiedMedia.map((item) => ({ contentVersionId: item.contentVersionId,
+        sourceResourceVersionId: item.sourceResourceVersionId,
+        sourceApprovalId: item.sourceApprovalId, sourceApprovedAt: item.sourceApprovedAt })),
+    }), 'utf8').digest('hex');
+    return Object.freeze({ sourceCatalogSha256, checkedAt: checkedAt.toISOString(),
+      expiresAt: expiresAt.toISOString(), content: Object.freeze({ evidenceType: 'generated' as const,
+        generatedSourceItemId: ancestor.sourceItemId, generatedSourceVersionId: ancestor.sourceVersionId,
+        generatedSourceItemVersion: ancestor.sourceItemVersion,
+        generatedContentSha256: ancestor.contentSha256, generatedBrandSha256: ancestor.brandSha256 }),
+      media: Object.freeze(verifiedMedia.map((item) => Object.freeze({
+        sourceResourceVersionId: item.sourceResourceVersionId,
+        sourceApprovalId: item.sourceApprovalId, sourceApprovedAt: item.sourceApprovedAt }))) });
   }
 
   async #verifyRemote(versions: readonly ExactVersion[]): Promise<readonly VerifiedVersion[]> {
@@ -267,6 +368,7 @@ export class PgPropertyPredatorJitSourceAttestor {
     claim: PublicSocialRevalidationClaim,
     lease: PublicSocialRevalidationLease,
   ): Promise<PublicSocialRevalidationSourceProof> {
+    if (claim.evidenceType === 'generated') return this.#attestGenerated(claim, lease);
     const exact = await this.#loadExactVersions(claim, lease);
     const verified = await this.#verifyRemote(exact);
     const checkedAt = this.#now();
@@ -277,6 +379,7 @@ export class PgPropertyPredatorJitSourceAttestor {
     }
     const catalogSha256 = evidenceDigest(claim, verified);
     const provenance = verified.map((version) => Object.freeze({
+      evidenceType: 'legacy' as const,
       sourceResourceVersionId: version.sourceResourceVersionId,
       sourceApprovalId: version.sourceApprovalId,
       sourceApprovedAt: version.sourceApprovedAt,

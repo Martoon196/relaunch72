@@ -35,6 +35,7 @@ function lease(): PublicSocialRevalidationLease {
 
 function claim(media = false): PublicSocialRevalidationClaim {
   return Object.freeze({
+    evidenceType: 'legacy',
     jobId: JOB,
     workspaceId: WORKSPACE,
     intentId: INTENT,
@@ -74,6 +75,7 @@ function sourceProof(media = false) {
     checkedAt: '2026-08-27T12:00:00.000Z',
     expiresAt: '2026-08-27T12:15:00.000Z',
     content: Object.freeze({
+      evidenceType: 'legacy' as const,
       sourceResourceVersionId: SOURCE_VERSION,
       sourceApprovalId: APPROVAL,
       sourceApprovedAt: APPROVED_AT,
@@ -103,6 +105,13 @@ test('queue hashes leases, parses immutable source approval evidence and uses on
           sourceSystem: 'propertypredator.company-content',
           sourceItemId: 'media:campaign-1',
           sourceVersion: '1',
+          evidenceType: 'legacy',
+          generatedSourceItemId: null,
+          generatedSourceVersionId: null,
+          generatedSourceItemVersion: null,
+          generatedContentSha256: null,
+          generatedBrandSha256: null,
+          generatedLineage: null,
           sourceResourceVersionId: SOURCE_VERSION,
           sourceApprovalId: APPROVAL,
           sourceApprovedAt: APPROVED_AT,
@@ -238,11 +247,13 @@ test('source verifier rereads only the leased tuple function and returns system 
   });
   const result = await attestor.attest(claim(true), lease());
   assert.deepEqual(result.content, {
+    evidenceType: 'legacy',
     sourceResourceVersionId: SOURCE_VERSION,
     sourceApprovalId: APPROVAL,
     sourceApprovedAt: APPROVED_AT,
   });
   assert.deepEqual(result.media, [{
+    evidenceType: 'legacy',
     sourceResourceVersionId: MEDIA_SOURCE_VERSION,
     sourceApprovalId: APPROVAL,
     sourceApprovedAt: APPROVED_AT,
@@ -305,4 +316,64 @@ test('source verifier rejects remote approval drift and effect-shaped transports
       async publish() { return undefined; },
     } as never,
   }), /forbidden effect method/);
+});
+
+test('generated source verifier binds edited bytes to the nearest genuine generated ancestor', async () => {
+  const generatedVersion = 'abababab-abab-4bab-8bab-abababababab';
+  const generatedDraft = 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd';
+  const originalSha = '6'.repeat(64);
+  const editedSha = '7'.repeat(64);
+  const lineage = [{
+    contentItemId: ITEM, contentVersionId: VERSION, versionNumber: 2,
+    previousVersionId: generatedVersion, title: 'Edited', origin: 'edited',
+    source: { system: 'property_predator_generation', itemId: generatedDraft,
+      version: `${generatedVersion}:v1:edit:${editedSha.slice(0, 16)}` },
+    editor: 'growth_hq_exact_review', previousContentVersionId: generatedVersion,
+    previousContentSha256: originalSha, contentSha256: editedSha, blobSha256: editedSha,
+    brandSha256: BRAND_SHA, approvalRequestId: null, approvalDecisionId: null,
+    approvalStatus: 'unrequested', approvalStale: false,
+  }, {
+    contentItemId: ITEM, contentVersionId: generatedVersion, versionNumber: 1,
+    previousVersionId: null, title: 'Original', origin: 'generated',
+    source: { system: 'property_predator_generation', itemId: generatedDraft,
+      version: `${generatedVersion}:v1` },
+    sourceMetadata: { schema: 'propertypredator.generated-draft-source/v1',
+      sourceItemId: generatedDraft, sourceDraftId: generatedDraft,
+      sourceVersionId: generatedVersion, sourceItemVersion: 1,
+      contentSha256: originalSha, brandSha256: BRAND_SHA },
+    editor: null, previousContentVersionId: null, previousContentSha256: null,
+    contentSha256: originalSha, blobSha256: originalSha, brandSha256: BRAND_SHA,
+    approvalRequestId: null, approvalDecisionId: null,
+    approvalStatus: 'unrequested', approvalStale: false,
+  }];
+  const generatedCalls: unknown[] = [];
+  const attestor = new PgPropertyPredatorJitSourceAttestor({
+    pool: { async query() { return { rows: [{ resourceOrdinal: 0,
+      contentItemId: ITEM, contentVersionId: VERSION,
+      sourceSystem: 'property_predator_generation', sourceItemId: generatedDraft,
+      sourceVersion: `${generatedVersion}:v1:edit:${editedSha.slice(0, 16)}`,
+      contentSha256: editedSha, bodySha256: editedSha, blobSha256: editedSha,
+      brandSha256: BRAND_SHA, evidenceType: 'generated', sourceResourceVersionId: null,
+      sourceApprovalId: null, sourceApprovedAt: null, generatedSourceItemId: generatedDraft,
+      generatedSourceVersionId: generatedVersion, generatedSourceItemVersion: 1,
+      generatedContentSha256: originalSha, generatedBrandSha256: BRAND_SHA,
+      generatedLineage: lineage }] }; } } as unknown as Pick<Pool, 'query'>,
+    transport: { async loadVersion() { throw new Error('legacy source not expected'); },
+      async loadAsset() { throw new Error('legacy media not expected'); } },
+    generatedSource: { async verify(target) { generatedCalls.push(target); return { catalogSha256: '8'.repeat(64) }; } },
+    now: () => new Date('2026-08-27T12:00:00.000Z'),
+  });
+  const generatedClaim = Object.freeze({ ...claim(), evidenceType: 'generated' as const,
+    desiredFor: '2026-08-27T12:05:00.000Z', contentSha256: editedSha, blobSha256: editedSha,
+    sourceSystem: 'property_predator_generation', sourceItemId: generatedDraft,
+    sourceVersion: `${generatedVersion}:v1:edit:${editedSha.slice(0, 16)}`,
+    generatedSourceItemId: generatedDraft, generatedSourceVersionId: generatedVersion,
+    generatedSourceItemVersion: 1, generatedContentSha256: originalSha,
+    generatedBrandSha256: BRAND_SHA, generatedLineage: lineage,
+    sourceResourceVersionId: undefined, sourceApprovalId: undefined, sourceApprovedAt: undefined,
+  });
+  const proof = await attestor.attest(generatedClaim as unknown as PublicSocialRevalidationClaim, lease());
+  assert.equal(proof.content.evidenceType, 'generated');
+  assert.deepEqual(generatedCalls, [{ sourceItemId: generatedDraft, sourceVersionId: generatedVersion,
+    sourceItemVersion: 1, contentSha256: originalSha, brandSha256: BRAND_SHA }]);
 });
