@@ -214,7 +214,7 @@ export const PROPERTY_PREDATOR_GROWTH_PROFILE = createProfile({
   },
   theme: {
     canvas: '#050608', panel: '#111318', panelSubtle: '#0b0d11', panelStrong: '#161a21',
-    ink: '#eef1f7', muted: '#9aa6ba', faint: '#6e7a90', line: '#1e2430', lineStrong: '#303949',
+    ink: '#eef1f7', muted: '#bcc7d8', faint: '#acb9cc', line: '#1e2430', lineStrong: '#303949',
     accent: '#00e5cc', accentDeep: '#00e5cc', accentSoft: '#0a2c2c',
     nav: '#050608', navRaised: '#111318', navLine: '#1e2430', navText: '#eef1f7', navMuted: '#9aa6ba',
   },
