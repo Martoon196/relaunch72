@@ -199,8 +199,8 @@ test('Content Calendar renders a premium accessible planner and fails closed wit
   assert.doesNotMatch(html, /href="\/portal\/content\/compose"/);
   assert.match(html, /href="\/portal\/content\/calendar" aria-current="page">Calendar/);
   assert.match(html, /<article class="ccal" aria-labelledby="ccal-title" data-provider-effects="none" data-content-calendar data-calendar-mode="week" data-calendar-timezone="Europe\/London" data-source-truncated="false" data-preview-dirty="false">/);
-  assert.match(html, /Own the week\. <em>Control the signal\.<\/em>/);
-  assert.match(html, /Planning workspace/);
+  assert.match(html, /Your <em>calendar\.<\/em>/);
+  assert.match(html, /Setup needed/);
   assert.doesNotMatch(html, /Schedule a LinkedIn post/);
   assert.match(html, /Create → approve → plan → stage/);
   assert.match(html, /Live calendar foundation is not configured/);
@@ -286,8 +286,8 @@ test('worker-backed Instagram schedules appear on the correct calendar day in th
   assert.match(friday, /<time class="ccal-time"[^>]*>11:10<\/time>/u);
   assert.match(friday, /Approval-gated worker job · Europe\/London/u);
   assert.match(html, /4 Sept 2026, 11:10 Europe\/London/u);
-  assert.match(html, /1 worker · 0 TEST/u);
-  assert.match(html, /worker jobs \+ durable TEST plans/u);
+  assert.match(html, /1 delivery records · 0 plans/u);
+  assert.match(html, /UK time/u);
   assert.match(html, /worker cards are read-only job evidence; TEST cards remain simulated/u);
   assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/u);
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/u);
@@ -309,7 +309,7 @@ test('worker-backed calendar cards obey the channel filter without hiding the sa
     },
   });
   assert.match(html, /Create → approve → plan → stage/u);
-  assert.match(html, /0 worker · 0 TEST/u);
+  assert.match(html, /0 delivery records · 0 plans/u);
   assert.doesNotMatch(html, /data-calendar-live-slot/u);
 });
 
@@ -399,7 +399,7 @@ test('Content Calendar validates optional durable planning and JIT provenance ag
   assert.equal(stageUrl.searchParams.get('planning_intent_id'), planning.intentId);
   assert.equal(stageUrl.searchParams.get('planning_target_id'), planning.targetId);
   assert.equal(stageUrl.searchParams.get('scheduled_for'), planning.desiredFor);
-  assert.match(renderContentCalendarBody(exact), /Schedule live on LinkedIn/);
+  assert.match(renderContentCalendarBody(exact), /Confirm publishing on LinkedIn/);
 
   const contradicted = present({
     catalog: page([item]),

@@ -4260,6 +4260,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         sessionToken,
         outcome.result.disposition === 'replayed' ? 'replayed' : 'planned',
         destination,
+        destination === CONTENT_CALENDAR_ROUTE
+          ? new URLSearchParams({ date: (oneFormValue(form, 'desired_for_local') ?? '').slice(0, 10) })
+          : undefined,
       );
     } catch {
       return campaignNoticeRedirect(res, deps, sessionToken, 'unavailable', CAMPAIGN_WIZARD_ROUTE);
@@ -4728,10 +4731,29 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       const requestedContentVersionId = (url.searchParams.get('content_version') ?? '')
         .trim().toLowerCase();
       const selectedContentVersionId = CRM_OBJECT_ID.test(requestedContentVersionId)
-        && mutations?.create?.contentVersions.some(
-          (choice) => choice.value === requestedContentVersionId,
-        )
+        && view.backlog.some((item) => item.contentVersionId === requestedContentVersionId)
         ? requestedContentVersionId
+        : undefined;
+      // First-post planning uses the existing atomic command: it must not depend
+      // on a campaign revision already being present in this calendar window.
+      const planningContent = view.backlog.filter((item) => item.simulationEligible
+        && content.catalog.items.some((source) => source.contentVersionId === item.contentVersionId
+          && source.kind === 'social_post'));
+      const planningTargets = (social.planning?.targets.items ?? []).filter((target) =>
+        deps.zernioCalendar?.configuredNetworks.some((network) => network === target.network));
+      const postPlan = social.workspace.canManage && deps.publicSocial.createCampaignPlan
+        && planningContent.length > 0 && planningTargets.length > 0
+        ? Object.freeze({
+            actionUrl: CAMPAIGN_WIZARD_CREATE_TEST_ROUTE,
+            csrfToken,
+            commandKey: randomUUID(),
+            contentVersions: Object.freeze(planningContent.map((item) => ({
+              value: item.contentVersionId, label: item.title,
+            }))),
+            targets: Object.freeze(planningTargets.map((target) => ({
+              value: target.targetId, label: `${target.network === 'linkedin' ? 'LinkedIn' : 'Instagram'} · ${target.targetLabel.replace(/\s+planner \(TEST\)$/u, '')}`,
+            }))),
+          })
         : undefined;
       const scheduledJobs = deps.zernioCalendar
         ? await deps.zernioCalendar.listScheduled(identity, { from: range.from, to: range.to })
@@ -4781,6 +4803,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           mutations,
           liveSchedules,
           selectedContentVersionId,
+          postPlan,
         }),
         deps,
         'content',

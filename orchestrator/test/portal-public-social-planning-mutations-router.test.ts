@@ -312,6 +312,75 @@ function freshCalls(): SocialCalls {
   return { snapshots: [], plans: [], reschedules: [], cancels: [] };
 }
 
+test('first approved post can be planned without an existing campaign revision and never stages on GET', async () => {
+  const calls = freshCalls();
+  const social = socialService(calls);
+  const originalSnapshot = social.snapshot;
+  social.snapshot = async (...args) => {
+    const outcome = await originalSnapshot(...args);
+    if (!outcome.ok || !outcome.snapshot.planning) return outcome;
+    return { ...outcome, snapshot: { ...outcome.snapshot, planning: {
+      ...outcome.snapshot.planning, calendar: {items: [], hasMore: false},
+    } } };
+  };
+  const company = contentService();
+  const originalContent = company.snapshot;
+  company.snapshot = async (...args) => {
+    const outcome = await originalContent(...args);
+    if (!outcome.ok) return outcome;
+    return {...outcome, snapshot:{...outcome.snapshot, catalog:{...outcome.snapshot.catalog,
+      items: outcome.snapshot.catalog.items.map(item => item.contentVersionId === IDS.contentVersion
+        ? {...item, kind:'social_post' as const} : item),
+    }}};
+  };
+  const zernio: NonNullable<PostgresPortalDeps['zernioCalendar']> = {
+    configuredNetworks: ['linkedin'],
+    listScheduled: async () => ({ok:true, items:[]}),
+    stage: async () => { throw new Error('GET must never stage a publication'); },
+    bootstrapPlannerTargets: async () => { throw new Error('GET must not activate accounts'); },
+  };
+  const deps = postgres({publicSocial:social, companyContent:company, zernioCalendar:zernio});
+  const page = await call('GET', `${CONTENT_CALENDAR_ROUTE}?content_version=${IDS.contentVersion}`, deps);
+  assert.equal(page.statusCode, 200);
+  const form = page.body.match(/<form[^>]*data-calendar-post-plan>[\s\S]*?<\/form>/)?.[0];
+  assert.ok(form, 'first-post form is present without prior revisions');
+  assert.match(form, new RegExp(`value="${IDS.contentVersion}" selected`));
+  assert.match(form, new RegExp(`value="${IDS.targetOne}"`));
+  assert.doesNotMatch(form, new RegExp(IDS.targetTwo));
+  assert.match(form, /name="environment" value="test"/);
+  assert.match(form, /name="confirm_test_only" value="confirmed" required/);
+  assert.match(form, /Save plan/);
+  assert.doesNotMatch(form, /name="campaign_revision_key"/);
+  assert.equal(calls.plans.length, 0);
+  const unknown = await call('GET', `${CONTENT_CALENDAR_ROUTE}?content_version=${IDS.mediaTwo}`, deps);
+  assert.doesNotMatch(unknown.body.match(/<form[^>]*data-calendar-post-plan>[\s\S]*?<\/form>/)?.[0] ?? '', /" selected[ >]/);
+  const noNetwork = await call('GET', CONTENT_CALENDAR_ROUTE, {...deps, zernioCalendar:{...zernio, configuredNetworks:[]}});
+  assert.doesNotMatch(noNetwork.body, /data-calendar-post-plan/);
+  const original = social.snapshot;
+  social.snapshot = async (...args) => {
+    const out = await original(...args);
+    return out.ok ? {...out,snapshot:{...out.snapshot,workspace:{...out.snapshot.workspace,canManage:false}}} : out;
+  };
+  const readOnly = await call('GET', CONTENT_CALENDAR_ROUTE, deps);
+  assert.doesNotMatch(readOnly.body, /data-calendar-post-plan/);
+  assert.equal(calls.plans.length, 0);
+});
+
+test('saving a plan returns to its chosen local date without calling a publication command', async () => {
+  const calls = freshCalls();
+  const form = baseCreateForm();
+  form.set('return_to', CONTENT_CALENDAR_ROUTE);
+  form.set('desired_for_local', '2026-09-18T14:30');
+  const result = await call('POST', CAMPAIGN_WIZARD_CREATE_TEST_ROUTE,
+    postgres({publicSocial:socialService(calls),companyContent:contentService()}), form);
+  assert.equal(result.statusCode, 303);
+  const location = new URL(result.headers.location!, 'https://example.test');
+  assert.equal(location.pathname, CONTENT_CALENDAR_ROUTE);
+  assert.equal(location.searchParams.get('date'), '2026-09-18');
+  assert.equal(calls.plans.length, 1);
+  assert.equal(calls.plans[0]?.input.desiredFor, '2026-09-18T13:30:00.000Z');
+});
+
 function contentService(
   brandSha256?: string,
   empty = false,
@@ -1068,7 +1137,9 @@ test('atomic wizard POST preserves repeated targets/media and exposes only brows
   }), baseCreateForm());
 
   assert.equal(result.statusCode, 303);
-  assert.match(result.headers.location ?? '', /^\/portal\/content\/calendar\?notice=planned\./);
+  const redirectUrl = new URL(result.headers.location!, 'https://example.test');
+  assert.equal(redirectUrl.pathname, CONTENT_CALENDAR_ROUTE);
+  assert.match(redirectUrl.searchParams.get('notice') ?? '', /^planned\./);
   assert.equal(calls.plans.length, 1);
   assert.deepEqual(calls.plans[0], {
     identity: {

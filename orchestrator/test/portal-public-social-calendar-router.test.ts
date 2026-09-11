@@ -295,14 +295,14 @@ test('calendar uses one opaque identity, bounded reads and renders exact TEST/co
   assert.deepEqual(contentCalls[0]?.[1], { limit: 100 });
   assert.equal(Object.hasOwn(socialCalls[0]?.[1] as object, 'workspaceId'), false);
 
-  assert.match(result.body, /Own the week/);
+  assert.match(result.body, /Your <em>calendar/);
   assert.match(result.body, /Evidence Week TEST campaign/);
   assert.match(result.body, /Facebook owned TEST rail/);
   assert.match(result.body, /TEST plan queued/);
   assert.match(result.body, /The postcode is not the opportunity\. The evidence is\./);
   assert.match(result.body, /aaaaaaaaaa…/);
   assert.match(result.body, /data-provider-effects="none"/);
-  assert.match(result.body, /Simulation ready/);
+  assert.match(result.body, /Plan · not scheduled/);
   assert.doesNotMatch(result.body, /browser-forgery|test-account:|body[_ -]?text|storage[_ -]?key|connection[_ -]?id|credential|calendar-router-session-secret/i);
 });
 
