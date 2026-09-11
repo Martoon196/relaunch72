@@ -474,7 +474,9 @@ function planPost(view: ContentCalendarView, options: RenderContentCalendarOptio
   if (!commandReady(plan) || !plan.contentVersions.length || !plan.targets.length) {
     const message = view.backlog.some(item => item.simulationEligible)
       ? 'Your approved post is saved. Planning is not available for this account yet. Check the publishing setup below; you do not need to create your post again.'
-      : 'Approve a post with its picture first, then come back here to choose where and when it should appear.';
+      : view.backlog.some(item => item.approvalLabel === 'Exact approval')
+        ? 'Your approval is saved. Open your content and choose Check for scheduling. This checks the saved source without changing your words or picture.'
+        : 'Approve a post with its picture first, then come back here to choose where and when it should appear.';
     return `<section class="ccal-live-scheduler" id="new-plan"><h2>Plan a post</h2><p>${message}</p><a class="ccal-campaign-link" href="${CONTENT_CONTROL_ROOM_ROUTE}">Open your content</a></section>`;
   }
   return `<section class="ccal-live-scheduler" id="new-plan" aria-labelledby="ccal-plan-title"><h2 id="ccal-plan-title">Plan your post</h2><p>Choose an account and a time. Saving prepares your post; you will confirm publishing separately.</p><form class="ccal-command-form" method="post" action="${escapeHtml(plan.actionUrl)}" data-calendar-post-plan>${actionFields(plan)}${hidden('environment', 'test')}${hidden('timezone', view.timezone)}${hidden('return_to', CONTENT_CALENDAR_ROUTE)}${hidden('title', 'Social post')}${hidden('objective', 'Prepare the selected approved post for the chosen account and time.')}${hidden('max_attempts', '1')}<div class="ccal-command-grid"><label class="ccal-command-field wide">Your approved post<select name="content_version_id" required><option value="">Choose a post</option>${choiceOptions(plan.contentVersions, selected)}</select></label><label class="ccal-command-field">Where should it appear?<select name="target_ids" required><option value="">Choose an account</option>${choiceOptions(plan.targets)}</select></label><label class="ccal-command-field">Date and time<input type="datetime-local" name="desired_for_local" step="300" required><span>${escapeHtml(view.timezone === 'Europe/London' ? 'UK time' : view.timezone)}</span></label></div><label class="ccal-command-confirm"><input type="checkbox" name="confirm_test_only" value="confirmed" required><span>Save this plan only. I will confirm publishing on the next step.</span></label><button class="ccal-command-submit" type="submit">Save plan</button></form></section>`;
@@ -484,10 +486,13 @@ function yourPosts(view: ContentCalendarView, options: RenderContentCalendarOpti
   const items = view.backlog.map(item => {
     const review = `/portal/content/items/${encodeURIComponent(item.contentItemId)}/versions/${encodeURIComponent(item.contentVersionId)}/review`;
     const canPlan = options.postPlan?.contentVersions.some(choice => choice.value === item.contentVersionId);
-    const status = canPlan ? 'Ready to plan' : item.simulationEligible ? 'Approved' : 'Needs review';
+    const approved = item.approvalLabel === 'Exact approval';
+    const status = canPlan ? 'Ready to plan' : approved ? 'Approved · needs a scheduling check' : 'Needs review';
     const action = canPlan
       ? `<a class="ccal-campaign-link" href="${CONTENT_CALENDAR_ROUTE}?content_version=${encodeURIComponent(item.contentVersionId)}#new-plan">Choose account and time →</a>`
-      : `<a class="ccal-campaign-link" href="${review}">Review this post →</a>`;
+      : approved
+        ? `<a class="ccal-campaign-link" href="${CONTENT_CONTROL_ROOM_ROUTE}">Open scheduling check →</a>`
+        : `<a class="ccal-campaign-link" href="${review}">Review this post →</a>`;
     return `<li class="ccal-backlog-item"><article><span class="ccal-chip">${status}</span><h3>${escapeHtml(item.title)}</h3>${action}<details><summary>Support details</summary><p>${escapeHtml(item.gateDetail)}</p><code>${escapeHtml(item.shortHash)}</code></details></article></li>`;
   }).join('');
   return `<aside class="ccal-backlog" aria-label="Posts to plan"><header class="ccal-section-head"><div><h2>Your posts</h2><p>Choose what you want to plan next.</p></div></header>${items ? `<ol class="ccal-backlog-list">${items}</ol>` : '<p class="ccal-empty-backlog">No unplanned posts here. You can find your saved work in Your content.</p>'}</aside>`;

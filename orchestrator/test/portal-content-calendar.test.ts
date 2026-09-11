@@ -47,6 +47,18 @@ function firstCatalogItem(): CompanyContentCatalogItem {
   return item;
 }
 
+test('approved source-locked post keeps its approval and points to the existing library check', () => {
+  const base = present();
+  const item = base.backlog[0];
+  assert.ok(item);
+  const html = renderContentCalendarBody({ ...base, backlog: [{ ...item, approvalLabel: 'Exact approval', simulationEligible: false }] });
+  assert.match(html, /Your approval is saved/);
+  assert.match(html, /choose Check for scheduling/);
+  assert.match(html, /href="\/portal\/content">Open scheduling check/);
+  assert.doesNotMatch(html, /Approve a post with its picture first/);
+  assert.doesNotMatch(html, /data-calendar-post-plan/);
+});
+
 function page(items: readonly CompanyContentCatalogItem[]): CompanyContentCatalogPage {
   return Object.freeze({ items: Object.freeze(items), nextCursor: null });
 }
