@@ -19,7 +19,8 @@ const jpeg = await page.evaluate(() => {
   ctx.fillStyle='#00e5cc';ctx.font='32px sans-serif';ctx.fillText('LOCAL TEST IMAGE — NOT FOR POSTING',45,300);
   return c.toDataURL('image/jpeg',0.9);
 });
-const pp = await readFile(new URL('../../../astra-pp-image-008-20260911/frontend/admin.html',import.meta.url),'utf8');
+const pp = await readFile(new URL('../../../astra-pp-login-009-20260911/frontend/image-maker.html',import.meta.url),'utf8');
+const ppScript = await readFile(new URL('../../../astra-pp-login-009-20260911/frontend/image-maker.js',import.meta.url),'utf8');
 let image: ReturnType<typeof socialImageFromDataUrl> | undefined;
 let saves=0, generated=0;
 const item='11111111-1111-4111-8111-111111111111',version='22222222-2222-4222-8222-222222222222';
@@ -44,7 +45,9 @@ await context.addInitScript(() => {
 await context.route('**/*',async route=>{
   const request=route.request(),url=new URL(request.url());
   if(url.hostname==='propertypredator.com') {
-    if(url.pathname==='/admin.html')return route.fulfill({contentType:'text/html',body:pp});
+    if(url.pathname==='/image-maker.html')return route.fulfill({contentType:'text/html',body:pp,headers:{
+      'content-security-policy':"default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; img-src blob:; frame-ancestors https://hq.propertypredator.com"}});
+    if(url.pathname==='/image-maker.js')return route.fulfill({contentType:'text/javascript',body:ppScript});
     if(url.pathname==='/api/auth/refresh')return route.fulfill({json:{access_token:'LOCAL_TEST_ONLY',refresh_token:'LOCAL_TEST_SESSION'}});
     if(url.pathname==='/api/admin/me')return route.fulfill({json:{email:'fixture@example.invalid'}});
     if(url.pathname==='/api/admin/generate-image'){generated++;return route.fulfill({json:{ok:true,image:jpeg,model:'LOCAL_FIXTURE'}});}
@@ -61,19 +64,19 @@ await context.route('**/*',async route=>{
     return route.fulfill({contentType:'text/html',body:render()});
   }
   return route.fulfill({contentType:'text/html',body:render(),headers:{
-    'content-security-policy':"default-src 'none'; script-src 'self'; img-src 'self' blob:; style-src 'unsafe-inline'; form-action 'self'"}});
+    'content-security-policy':"default-src 'none'; script-src 'self'; img-src 'self' blob:; frame-src https://propertypredator.com/image-maker.html; style-src 'unsafe-inline'; form-action 'self'"}});
 });
 try {
   await page.goto('https://hq.propertypredator.com/review');
   assert.equal(await page.getByRole('heading',{name:'Add the image first'}).count(),1);
-  const popupPromise=page.waitForEvent('popup');
+  page.on('popup',()=>{throw new Error('Unexpected popup');});
   await page.getByRole('button',{name:'Create image',exact:true}).click();
-  const popup=await popupPromise;
-  await popup.locator('#aiImgPrompt').waitFor({state:'visible'});
-  await popup.waitForFunction(()=> (document.querySelector('#aiImgPrompt') as HTMLTextAreaElement).value==='Abstract test image');
-  await popup.locator('#aiImgGo').click();
-  await popup.locator('#aiImgPrev').waitFor({state:'visible'});
-  await popup.getByRole('button',{name:'Use this image',exact:true}).click();
+  const maker=page.frameLocator('#post-image-frame');
+  await maker.locator('#prompt').waitFor({state:'visible'});
+  assert.equal(await maker.locator('#prompt').inputValue(),'Abstract test image');
+  await maker.getByRole('button',{name:'Create picture',exact:true}).click();
+  await maker.locator('#preview').waitFor({state:'visible'});
+  await maker.getByRole('button',{name:'Use this image',exact:true}).click();
   await page.locator('#post-image-selection').waitFor({state:'visible'});
   await page.getByLabel('Describe the picture for people who cannot see it').fill('Local test graphic');
   await page.getByRole('button',{name:'Save image with this post'}).click();
@@ -82,16 +85,16 @@ try {
   assert.equal(await page.locator('#post-image img').first().evaluate((img:HTMLImageElement)=>img.naturalWidth),800);
   assert.equal(saves,1);assert.equal(generated,1);
   assert.equal(await page.getByRole('button',{name:'Send for approval',exact:true}).count(),1);
-  await page.screenshot({path:'../../../overnight-build-2026-09-07/_verification/hq-image-008-desktop.png',fullPage:true});
+  await page.screenshot({path:'../../../overnight-build-2026-09-07/_verification/hq-login-009-desktop.png',fullPage:true});
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),390);
-  await page.screenshot({path:'../../../overnight-build-2026-09-07/_verification/hq-image-008-mobile.png',fullPage:true});
-  console.log(JSON.stringify({task:'HQ-IMAGE-008',browserChecks:7,passed:7,failed:0,
+  await page.screenshot({path:'../../../overnight-build-2026-09-07/_verification/hq-login-009-mobile.png',fullPage:true});
+  console.log(JSON.stringify({task:'HQ-LOGIN-009',browserChecks:7,passed:7,failed:0,
     realNetworkRequests:0,providerCalls:0,productionChanges:0,
-    verified:'Real browser popup handshake, existing generator handler, image decode, save, reload, approval availability, mobile width'}));
+    verified:'Real browser in-page frame handshake, existing generator endpoint, image decode, save, reload, approval availability, mobile width'}));
 } catch(error) {
   console.log(JSON.stringify({saves,generated,url:page.url(),imagePersisted:!!image,
     status:await page.locator('#post-image-status').textContent().catch(()=>null)}));
-  await page.screenshot({path:'../../../overnight-build-2026-09-07/_verification/hq-image-008-browser-failure.png',fullPage:true});
+  await page.screenshot({path:'../../../overnight-build-2026-09-07/_verification/hq-login-009-browser-failure.png',fullPage:true});
   throw error;
 } finally {await browser.close();}

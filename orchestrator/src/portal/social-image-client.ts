@@ -8,13 +8,18 @@ export const SOCIAL_IMAGE_CLIENT_SOURCE = String.raw`(() => {
   const data = document.getElementById('post-image-data');
   const alt = document.getElementById('post-image-alt');
   const file = document.getElementById('post-image-file');
-  let popup = null, nonce = null, selectedUrl = null, busy = false;
+  const maker = document.getElementById('post-image-maker');
+  const frame = document.getElementById('post-image-frame');
+  const drop = document.getElementById('post-image-drop');
+  let nonce = null, selectedUrl = null, busy = false;
   async function selectImage(blob) {
     if (busy) return;
     busy = true;
     status.textContent = 'Preparing your image…';
     try {
       if (!blob || blob.size > 15000000) throw new Error('Choose an image smaller than 15 MB.');
+      if (!['image/png', 'image/jpeg', 'image/webp'].includes(blob.type))
+        throw new Error('Choose a JPG, PNG or WebP picture.');
       const bitmap = await createImageBitmap(blob);
       try {
         if (bitmap.width < 200 || bitmap.height < 200 || bitmap.width * bitmap.height > 40000000)
@@ -45,26 +50,35 @@ export const SOCIAL_IMAGE_CLIENT_SOURCE = String.raw`(() => {
   }
   file.addEventListener('change', () => { if (file.files[0]) selectImage(file.files[0]); });
   document.getElementById('post-image-choose').addEventListener('click', () => file.click());
+  drop.addEventListener('dragover', (event) => { event.preventDefault(); drop.style.borderStyle = 'solid'; });
+  drop.addEventListener('dragleave', () => { drop.style.borderStyle = 'dashed'; });
+  drop.addEventListener('drop', (event) => {
+    event.preventDefault(); drop.style.borderStyle = 'dashed';
+    if (event.dataTransfer.files.length !== 1) { status.textContent = 'Drop one picture at a time.'; return; }
+    selectImage(event.dataTransfer.files[0]);
+  });
   document.getElementById('post-image-create').addEventListener('click', () => {
-    nonce = crypto.randomUUID();
-    popup = window.open('https://propertypredator.com/admin.html?hqImage=' + nonce + '#ai-image-maker',
-      'property-predator-image', 'width=850,height=850');
-    status.textContent = popup ? 'Create your picture in the image-maker window, then choose Use this image.'
-      : 'Allow the image-maker window in your browser, then click Create image again.';
+    if (!nonce) {
+      nonce = crypto.randomUUID();
+      frame.src = 'https://propertypredator.com/image-maker.html?hqImage=' + nonce;
+    }
+    maker.hidden = false;
+    status.textContent = 'Create your picture below, then choose Use this image. Nothing is published.';
   });
   window.addEventListener('message', (event) => {
-    if (event.origin !== 'https://propertypredator.com' || !popup || event.source !== popup
+    if (event.origin !== 'https://propertypredator.com' || !nonce || event.source !== frame.contentWindow
         || !event.data || event.data.nonce !== nonce) return;
     if (event.data.type === 'pp-image-ready') {
-      popup.postMessage({type:'pp-image-brief', nonce,
-        prompt: form.elements.artwork_instructions.value.slice(0,1800)}, 'https://propertypredator.com');
+      const notes = document.querySelector('#edit-version textarea[name="artwork_instructions"]');
+      frame.contentWindow.postMessage({type:'pp-image-brief', nonce,
+        prompt: (notes ? notes.value : form.elements.artwork_instructions.value).slice(0,1800)}, 'https://propertypredator.com');
     }
     if (event.data.type === 'pp-image-selected' && typeof event.data.image === 'string'
         && event.data.image.length <= 20000000
         && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+=*$/.test(event.data.image)) {
       const bytes = Uint8Array.from(atob(event.data.image.split(',')[1]), c => c.charCodeAt(0));
       selectImage(new Blob([bytes], {type: event.data.image.split(';')[0].slice(5)}));
-      popup.close(); popup = null; nonce = null;
+      maker.hidden = true;
     }
   });
   form.addEventListener('submit', (event) => {

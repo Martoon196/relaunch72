@@ -5176,7 +5176,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         'content',
         csrfToken,
       ), undefined, {
-        'content-security-policy': "default-src 'none'; script-src 'self'; img-src 'self' blob:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        'content-security-policy': "default-src 'none'; script-src 'self'; img-src 'self' blob:; frame-src https://propertypredator.com/image-maker.html; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
       });
     } catch {
       return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {

@@ -9,13 +9,15 @@ function browserFixture() {
   const sent: any[] = [];
   const nodes = new Map<string, any>();
   for (const id of ['post-image-form','post-image-status','post-image-selection','post-image-preview',
-    'post-image-data','post-image-alt','post-image-file','post-image-create','post-image-choose']) {
+    'post-image-data','post-image-alt','post-image-file','post-image-create','post-image-choose',
+    'post-image-drop','post-image-maker','post-image-frame']) {
     nodes.set(id, { value:'', textContent:'', hidden:true, style:{}, focus() {},
       addEventListener(kind:string, fn:any) { listeners.set(`${id}:${kind}`, fn); } });
   }
   nodes.get('post-image-form').elements = { artwork_instructions:{value:'A real screenshot'}, publication_copy:{value:'Saved words'} };
   const popup = { closed:false, postMessage(message:any, origin:string) { sent.push({message,origin}); }, close(){this.closed=true;} };
-  const window = { open:()=>popup, addEventListener:(kind:string, fn:any)=>listeners.set(`window:${kind}`,fn) };
+  nodes.get('post-image-frame').contentWindow=popup;
+  const window = { open:()=>{throw new Error('No image popup allowed');}, addEventListener:(kind:string, fn:any)=>listeners.set(`window:${kind}`,fn) };
   let decodes=0;
   const context = vm.createContext({ window, document: {
     getElementById:(id:string)=>nodes.get(id), querySelector:()=>null,
@@ -28,7 +30,7 @@ function browserFixture() {
   return {nodes,listeners,popup,sent,decodes:()=>decodes};
 }
 
-test('image handoff accepts only the opened PP window, exact origin and current nonce', () => {
+test('image handoff accepts only the embedded PP frame, exact origin and current nonce', () => {
   const b=browserFixture(); b.listeners.get('post-image-create:click')!();
   const data={type:'pp-image-ready',nonce:'11111111-1111-4111-8111-111111111111'};
   const message=b.listeners.get('window:message')!;
@@ -50,8 +52,35 @@ test('returned image is decoded and finished locally; selecting does not submit 
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(b.decodes(),1); assert.equal(b.nodes.get('post-image-data').value,JPEG_FIXTURE);
   assert.equal(b.nodes.get('post-image-selection').hidden,false);
-  assert.equal(b.popup.closed,true);
+  assert.equal(b.nodes.get('post-image-maker').hidden,true);
   assert.match(b.nodes.get('post-image-status').textContent,/then save/);
+});
+
+test('drag and drop uses the same local image preparation without a popup', async () => {
+  const b=browserFixture(); let prevented=false;
+  b.listeners.get('post-image-drop:drop')!({preventDefault(){prevented=true;},
+    dataTransfer:{files:[new Blob(['fixture'],{type:'image/png'})]}});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(prevented,true);assert.equal(b.decodes(),1);
+  assert.equal(b.nodes.get('post-image-data').value,JPEG_FIXTURE);
+});
+
+test('multiple files and unsupported file types give helpful errors', async () => {
+  const b=browserFixture();
+  b.listeners.get('post-image-drop:drop')!({preventDefault(){},dataTransfer:{files:[{},{}]}});
+  assert.match(b.nodes.get('post-image-status').textContent,/one picture/);
+  b.listeners.get('post-image-drop:drop')!({preventDefault(){},dataTransfer:{files:[new Blob(['svg'],{type:'image/svg+xml'})]}});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(b.decodes(),0);assert.match(b.nodes.get('post-image-status').textContent,/JPG, PNG or WebP/);
+});
+
+test('reopening the in-page maker preserves the existing generation frame', () => {
+  const b=browserFixture();b.listeners.get('post-image-create:click')!();
+  const url=b.nodes.get('post-image-frame').src;
+  assert.match(url,/\/image-maker.html\?hqImage=/);
+  b.listeners.get('post-image-create:click')!();
+  assert.equal(b.nodes.get('post-image-frame').src,url);
+  assert.equal(b.nodes.get('post-image-maker').hidden,false);
 });
 
 test('unsupported returned content is ignored and no-picture submit is blocked', () => {

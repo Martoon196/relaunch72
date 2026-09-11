@@ -26,12 +26,18 @@ export function socialImageView(snapshot: PortalCompanyContentReviewSnapshot,
     ${hidden('return_exact_item_id', review.contentItemId)}${hidden('return_exact_version_id', review.contentVersionId)}
     ${hidden('publication_copy', review.social.publicationCopy)}${hidden('artwork_instructions', review.social.artworkInstructions ?? '')}
     <input type="hidden" name="image_data_url" id="post-image-data">
+    <div id="post-image-drop" style="border:2px dashed #537c77;border-radius:12px;padding:20px;margin:16px 0;background:#f3faf8;color:#153e39">
+    <p><strong>Drop a picture here</strong>, or choose one from your device.</p>
     <div style="display:flex;flex-wrap:wrap;gap:12px;margin:16px 0">
       <button type="button" class="pcr-action-link" id="post-image-create">${image ? 'Try another image' : 'Create image'}</button>
       <button type="button" class="pcr-action-link" id="post-image-choose">Choose a picture</button>
       <input type="file" id="post-image-file" accept="image/png,image/jpeg,image/webp" hidden>
     </div>
-    <p class="pcr-help">Use a real screenshot for product demonstrations. The image maker opens in a small window and uses your existing Property Predator sign-in.</p>
+    <p class="pcr-help" style="color:inherit">JPG, PNG or WebP, up to 15 MB. Use a real screenshot when showing how Property Predator works.</p>
+    </div>
+    <div id="post-image-maker" hidden>
+      <iframe id="post-image-frame" title="Create your post image" allow="identity-credentials-get" style="display:block;box-sizing:border-box;width:100%;height:760px;border:1px solid #537c77;border-radius:12px"></iframe>
+    </div>
     <div id="post-image-selection" hidden>
       <img id="post-image-preview" alt="Selected image, not saved yet" style="display:block;max-width:100%;max-height:500px">
       <label for="post-image-alt">Describe the picture for people who cannot see it</label>
