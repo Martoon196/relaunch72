@@ -20,17 +20,20 @@ export type ContentControlRoomChannel =
   | 'library';
 
 export type ContentControlRoomFormat = 'all' | CompanyContentKind;
+export type ContentControlRoomStatus = 'all' | 'attention' | 'approved' | 'ready';
 
 export interface ContentControlRoomFilterInput {
   readonly query?: unknown;
   readonly channel?: unknown;
   readonly format?: unknown;
+  readonly status?: unknown;
 }
 
 export interface ContentControlRoomFiltersView {
   readonly query: string;
   readonly channel: ContentControlRoomChannel;
   readonly format: ContentControlRoomFormat;
+  readonly status: ContentControlRoomStatus;
 }
 
 export type ContentApprovalTone =
@@ -177,6 +180,8 @@ export function normaliseContentControlRoomFilters(
     ? input.format as ContentControlRoomFormat
     : 'all';
   return Object.freeze({
+    status: typeof input.status === 'string' && ['attention', 'approved', 'ready'].includes(input.status)
+      ? input.status as ContentControlRoomStatus : 'all',
     query: boundedFilterText(input.query),
     channel,
     format,
@@ -342,6 +347,10 @@ function matchesFilters(
 ): boolean {
   if (filters.channel !== 'all' && item.channel !== filters.channel) return false;
   if (filters.format !== 'all' && item.kind !== filters.format) return false;
+  if (filters.status === 'attention' && item.reviewReason === null) return false;
+  if (filters.status === 'ready' && !item.publishable) return false;
+  if (filters.status === 'approved' && (item.approvalStatus !== 'approved'
+      || item.approvalStale || !item.approvalRequestId || !item.approvalDecisionId)) return false;
   if (!filters.query) return true;
   const needle = filters.query.toLowerCase();
   return [

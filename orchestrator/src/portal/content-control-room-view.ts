@@ -8,15 +8,12 @@
 
 import { escapeHtml } from './ui.js';
 import {
-  CONTENT_APPROVAL_DECISION_ROUTE,
-  CONTENT_APPROVAL_REQUEST_ROUTE,
   GENERATED_SOURCE_REFRESH_ROUTE,
   type ContentControlNoticeView,
 } from './content-control-room-actions.js';
 import {
   CONTENT_CONTROL_ROOM_MAX_QUERY_LENGTH,
   CONTENT_CONTROL_ROOM_ROUTE,
-  type ContentApprovalTone,
   type ContentControlRoomChannel,
   type ContentControlRoomFormat,
   type ContentControlRoomItemView,
@@ -90,6 +87,16 @@ const CONTENT_CONTROL_ROOM_STYLE = `
   @media(prefers-color-scheme:light){html[data-theme="system"] .ccr-hero,html[data-theme="system"] .ccr-snapshot,html[data-theme="system"] .ccr-truth,html[data-theme="system"] .ccr-filterbar,html[data-theme="system"] .ccr-actions,html[data-theme="system"] .ccr-footer{background:var(--ccr-panel)}html[data-theme="system"] .ccr-notice{background:var(--ccr-teal-soft)}html[data-theme="system"] .ccr-notice[data-kind="info"],html[data-theme="system"] .ccr-publish-state.locked{background:var(--ccr-soft)}html[data-theme="system"] .ccr-notice[data-kind="error"]{background:var(--danger-soft)}html[data-theme="system"] .ccr-exact-link:hover{background:var(--ccr-teal-soft)}html[data-theme="system"] .ccr-filter-button,html[data-theme="system"] .ccr-action-button.primary{color:#fff;background:var(--ccr-teal)}}
   html[data-theme="light"] .ccr-hero{background:radial-gradient(circle at 86% 8%,var(--accent-soft),transparent 35%),linear-gradient(135deg,var(--panel),var(--panel-subtle) 68%)}html[data-theme="light"] .ccr-safety,html[data-theme="light"] .ccr-toolbar,html[data-theme="light"] .ccr-filterbar,html[data-theme="light"] .ccr-footer{background:var(--panel-subtle)}html[data-theme="light"] .ccr-card,html[data-theme="light"] .ccr-panel,html[data-theme="light"] .ccr-metric{background:var(--panel)}
   @media(prefers-color-scheme:light){html[data-theme="system"] .ccr-hero{background:radial-gradient(circle at 86% 8%,var(--accent-soft),transparent 35%),linear-gradient(135deg,var(--panel),var(--panel-subtle) 68%)}html[data-theme="system"] .ccr-safety,html[data-theme="system"] .ccr-toolbar,html[data-theme="system"] .ccr-filterbar,html[data-theme="system"] .ccr-footer{background:var(--panel-subtle)}html[data-theme="system"] .ccr-card,html[data-theme="system"] .ccr-panel,html[data-theme="system"] .ccr-metric{background:var(--panel)}}
+
+  .ccr{border-radius:16px}.ccr-hero{display:flex;align-items:center;justify-content:space-between;padding:28px;gap:20px;background:var(--ccr-panel)}.ccr-hero::after{display:none}.ccr-hero h1{font-size:32px;line-height:1.15;letter-spacing:-.025em}.ccr-hero-copy>p{font-size:15px;max-width:620px}.ccr-kicker{font:600 12px var(--sans,system-ui);letter-spacing:0;text-transform:none;color:var(--ccr-muted)}
+  .ccr .ccr-action-button,.ccr-exact-link{display:inline-flex;align-items:center;justify-content:center;min-height:46px;font-size:14px;font-weight:700;padding:10px 18px;border-radius:9px}.ccr-exact-link{margin:0;background:var(--ccr-teal);color:var(--ccr-bg)}.ccr-exact-link:hover{background:var(--ccr-teal-soft);color:var(--ccr-ink)}
+  .ccr-metrics{gap:8px;padding:16px 24px;border:0}.ccr-metric{border:1px solid var(--ccr-line);border-radius:10px;padding:14px 16px;color:var(--ccr-ink)}.ccr-metric:last-child{border-right:1px solid var(--ccr-line)}.ccr-metric:hover,.ccr-metric[aria-current="page"]{border-color:var(--ccr-teal);background:var(--ccr-teal-soft)}.ccr-metric small{font:600 14px var(--sans,system-ui);letter-spacing:0;text-transform:none;color:var(--ccr-muted)}.ccr-metric strong{font:750 24px var(--sans,system-ui)}
+  .ccr-filterbar{padding:8px 24px 20px;background:var(--ccr-panel)}.ccr-field label{font:600 13px var(--sans,system-ui);text-transform:none;letter-spacing:0}.ccr-layout{display:block;padding:0 24px 24px}.ccr-catalog{border:0}.ccr-items{padding:0;gap:14px}.ccr-section-head{padding:18px 0;border:0}.ccr-section-head h2{font-size:20px}.ccr-card{border:1px solid var(--ccr-line);border-radius:12px;background:var(--ccr-panel)}.ccr-card-head{display:block;padding:20px 20px 12px;border:0}.ccr-card h3{font-size:19px;line-height:1.5;margin:8px 0}.ccr-title-link{color:var(--ccr-ink);text-decoration:underline!important;text-underline-offset:4px;text-decoration-color:var(--ccr-line)!important}.ccr-title-link:hover{color:var(--ccr-teal)}
+  .ccr-card-meta{font-size:13px;color:var(--ccr-muted);gap:12px}.ccr-status-label{font-weight:650;color:var(--ccr-ink)}.ccr-next{margin:4px 0 0;color:var(--ccr-muted);font-size:14px;line-height:1.6}.ccr-actions{padding:0 20px 18px;background:var(--ccr-panel);border:0}.ccr-action-form{margin:0;display:block}.ccr-action-lock{font:400 13px/1.6 var(--sans,system-ui);margin:8px 0}.ccr-card-foot{padding:0 20px 12px;display:block}.ccr-proof summary{justify-content:flex-start;font:500 13px var(--sans,system-ui);text-transform:none;color:var(--ccr-muted)}.ccr-proof-grid{padding:8px 0}.ccr-footer{background:var(--ccr-panel);font-size:13px}.ccr-admin{margin:0 24px 20px}.ccr-admin>summary{cursor:pointer;min-height:44px;padding:12px;color:var(--ccr-muted)}
+  .ccr a:focus-visible,.ccr summary:focus-visible{outline:3px solid var(--ccr-teal);outline-offset:3px}
+  @media(max-width:820px){.ccr-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.ccr-hero{align-items:flex-start;flex-direction:column;padding:20px}.ccr-hero h1{font-size:28px}.ccr-layout{padding:0 12px 16px}.ccr-metrics{padding:12px}.ccr-filterbar{padding:8px 12px 16px}}
+  @media(max-width:520px){.ccr-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.ccr-metric{padding:12px}.ccr-card-head{padding:16px}.ccr-actions,.ccr-card-foot{padding-left:16px;padding-right:16px}.ccr-exact-link{width:100%}.ccr-hero>.ccr-action-button{width:100%}}
+
   @media(prefers-reduced-motion:reduce){.ccr *{scroll-behavior:auto!important;transition:none!important}}
 `;
 
@@ -113,152 +120,90 @@ function time(value: string | null, fallback = 'Not recorded'): string {
   return `<time datetime="${escapeHtml(date.toISOString())}">${escapeHtml(label)} UTC</time>`;
 }
 
-function approvalTone(value: ContentApprovalTone): string {
-  return ['approved', 'pending', 'warning', 'rejected', 'neutral'].includes(value)
-    ? value
-    : 'neutral';
-}
 
 function validSecurityToken(value: string | undefined): value is string {
   return typeof value === 'string' && value.length >= 16 && value.length <= 512;
 }
-
 function validCommandKey(value: string | undefined): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u.test(value);
 }
-
-function returnFilterFields(view: ContentControlRoomView, item: ContentControlRoomItemView): string {
-  return `<input type="hidden" name="return_q" value="${escapeHtml(view.filters.query)}"><input type="hidden" name="return_channel" value="${escapeHtml(view.filters.channel)}"><input type="hidden" name="return_format" value="${escapeHtml(view.filters.format)}"><input type="hidden" name="return_anchor" value="${escapeHtml(item.anchorId)}">`;
+function reviewHref(item: ContentControlRoomItemView): string {
+  return `/portal/content/items/${encodeURIComponent(item.contentItemId)}/versions/${encodeURIComponent(item.contentVersionId)}/review`;
 }
-
-function contentActions(
-  view: ContentControlRoomView,
-  item: ContentControlRoomItemView,
-  security: ContentControlRoomActionSecurity | undefined,
-): string {
-  const exactReviewHref = `/portal/content/items/${encodeURIComponent(item.contentItemId)}`
-    + `/versions/${encodeURIComponent(item.contentVersionId)}/review`;
-  const exactReviewLink = `<a class="ccr-exact-link" href="${escapeHtml(exactReviewHref)}">Open exact copy &amp; review →</a>`;
-  const csrfToken = security?.csrfToken;
-  if (!view.canWrite || !validSecurityToken(csrfToken)) {
-    return `<section class="ccr-actions" aria-label="Content review controls"><div class="ccr-action-head"><strong>Review controls</strong><span>Read only</span></div><p class="ccr-action-lock">Your current workspace role can inspect immutable evidence but cannot change approval state.</p>${exactReviewLink}</section>`;
-  }
-
-  if (item.approvalStatus === 'pending' && item.approvalRequestId) {
-    const commandKey = security?.decisionKeys[item.approvalRequestId];
-    if (!view.canManage || !validCommandKey(commandKey)) {
-      return `<section class="ccr-actions" aria-label="Content review controls"><div class="ccr-action-head"><strong>Review decision required</strong><span>Manager gate</span></div><p class="ccr-action-lock">Open the exact immutable copy before making the decision.</p>${exactReviewLink}</section>`;
-    }
-    return `<section class="ccr-actions" aria-label="Content review controls"><div class="ccr-action-head"><strong>Approval locked on this summary</strong><span>Exact review required</span></div>${exactReviewLink}<form class="ccr-action-form" method="post" action="${CONTENT_APPROVAL_DECISION_ROUTE}"><input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}"><input type="hidden" name="command_key" value="${escapeHtml(commandKey)}"><input type="hidden" name="approval_request_id" value="${escapeHtml(item.approvalRequestId)}">${returnFilterFields(view, item)}<label>Decision note<textarea name="decision_note" maxlength="4000" required placeholder="Explain the required change or rejection"></textarea></label><div class="ccr-action-buttons"><button class="ccr-action-button warn" type="submit" name="decision" value="changes_requested">Request changes</button><button class="ccr-action-button danger" type="submit" name="decision" value="rejected">Reject</button></div></form><p class="ccr-action-lock">Approve is available only beside the exact hash-bound bytes. Rejection and changes remain available here.</p></section>`;
-  }
-
-  if (['unrequested', 'rejected', 'changes_requested', 'stale'].includes(item.approvalStatus)) {
-    const commandKey = security?.requestApprovalKeys[item.contentVersionId];
-    if (!validCommandKey(commandKey)) {
-      return '<section class="ccr-actions" aria-label="Content review controls"><div class="ccr-action-head"><strong>Review action unavailable</strong><span>Fail closed</span></div><p class="ccr-action-lock">Refresh the page to obtain a protected command. Nothing changed.</p></section>';
-    }
-    return `<section class="ccr-actions" aria-label="Content review controls"><div class="ccr-action-head"><strong>Submit this exact version for review</strong><span>Version locked</span></div>${exactReviewLink}<form class="ccr-action-form" method="post" action="${CONTENT_APPROVAL_REQUEST_ROUTE}"><input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}"><input type="hidden" name="command_key" value="${escapeHtml(commandKey)}"><input type="hidden" name="content_item_id" value="${escapeHtml(item.contentItemId)}"><input type="hidden" name="content_version_id" value="${escapeHtml(item.contentVersionId)}">${returnFilterFields(view, item)}<label>Review brief<textarea name="review_note" maxlength="4000" placeholder="What should the reviewer verify?"></textarea></label><div class="ccr-action-buttons"><button class="ccr-action-button primary" type="submit">Request human approval</button></div></form><p class="ccr-action-lock">The request is pinned to v${safeCount(item.versionNumber)} and its SHA-256 content digest.</p></section>`;
-  }
-
+function postStatus(item: ContentControlRoomItemView): string {
+  if (item.approvalStale || item.approvalStatus === 'stale') return 'Review updated version';
+  if (item.approvalStatus === 'changes_requested') return 'Changes requested';
+  if (item.approvalStatus === 'rejected') return 'Not approved';
+  if (item.approvalStatus === 'pending') return 'Awaiting approval';
+  if (item.approvalStatus === 'unrequested') return 'Draft';
+  if (item.publishable) return 'Ready to plan';
+  if (!item.sourceFresh) return 'Needs a quick check';
+  return 'Needs attention';
+}
+function nextStep(item: ContentControlRoomItemView): string {
+  if (!item.reviewRepresentationAvailable) return 'The preview is unavailable. Try opening this post again shortly.';
+  if (item.approvalStale || item.approvalStatus === 'stale') return 'This post has changed. Review the updated version before using it.';
+  if (item.approvalStatus === 'unrequested') return 'Open this post to read it, make changes or send it for approval.';
+  if (item.approvalStatus === 'pending') return 'This post is waiting for a decision. Open it to review the wording.';
+  if (item.approvalStatus === 'changes_requested') return 'Open this post and make the requested changes.';
+  if (item.approvalStatus === 'rejected') return 'This version was not approved. Open it to make changes.';
+  if (!item.sourceFresh) return 'Your approval is saved. Check the saved source again before planning.';
+  return item.publishable ? 'Approved and checked. Open the post to continue to your calendar.' : 'Open the post to see what still needs attention.';
+}
+function contentActions(view: ContentControlRoomView, item: ContentControlRoomItemView,
+  security: ContentControlRoomActionSecurity | undefined): string {
+  const label = item.approvalStatus === 'pending' && view.canManage ? 'Review & approve'
+    : item.publishable ? 'Open approved post' : 'Open post';
+  const open = `<a class="ccr-exact-link" href="${reviewHref(item)}">${escapeHtml(label)} <span aria-hidden="true">→</span></a>`;
+  const key = security?.sourceRefreshKeys?.[item.contentVersionId];
   if (item.approvalStatus === 'approved' && !item.approvalStale && !item.sourceFresh
-      && item.sourceSystem === 'property_predator_generation') {
-    const commandKey = security?.sourceRefreshKeys?.[item.contentVersionId];
-    if (!view.canManage || !validCommandKey(commandKey)) {
-      return `<section class="ccr-actions" aria-label="Content review controls"><div class="ccr-action-head"><strong>Source proof expired</strong><span>Manager gate</span></div><p class="ccr-action-lock">A workspace owner or admin must re-check the exact generated source.</p>${exactReviewLink}</section>`;
-    }
-    return `<section class="ccr-actions" aria-label="Content review controls"><div class="ccr-action-head"><strong>Renew this saved version</strong><span>No regeneration</span></div><form class="ccr-action-form" method="post" action="${GENERATED_SOURCE_REFRESH_ROUTE}"><input type="hidden" name="_csrf" value="${escapeHtml(csrfToken)}"><input type="hidden" name="command_key" value="${escapeHtml(commandKey)}"><input type="hidden" name="content_item_id" value="${escapeHtml(item.contentItemId)}"><input type="hidden" name="content_version_id" value="${escapeHtml(item.contentVersionId)}"><input type="hidden" name="version_number" value="${safeCount(item.versionNumber)}"><input type="hidden" name="content_sha256" value="${escapeHtml(item.contentSha256)}">${returnFilterFields(view, item)}<div><p class="ccr-action-lock">Re-check Property Predator’s immutable source and refresh this exact approval for scheduling.</p>${exactReviewLink}</div><div class="ccr-action-buttons"><button class="ccr-action-button primary" type="submit">Refresh source proof</button></div></form></section>`;
+      && item.sourceSystem === 'property_predator_generation' && view.canWrite && view.canManage
+      && validSecurityToken(security?.csrfToken) && validCommandKey(key)) {
+    return `<section class="ccr-actions" aria-label="Next step"><form class="ccr-action-form" method="post" action="${GENERATED_SOURCE_REFRESH_ROUTE}"><input type="hidden" name="_csrf" value="${escapeHtml(security.csrfToken)}"><input type="hidden" name="command_key" value="${escapeHtml(key)}"><input type="hidden" name="content_item_id" value="${escapeHtml(item.contentItemId)}"><input type="hidden" name="content_version_id" value="${escapeHtml(item.contentVersionId)}"><input type="hidden" name="version_number" value="${safeCount(item.versionNumber)}"><input type="hidden" name="content_sha256" value="${escapeHtml(item.contentSha256)}"><input type="hidden" name="return_q" value="${escapeHtml(view.filters.query)}"><input type="hidden" name="return_channel" value="${escapeHtml(view.filters.channel)}"><input type="hidden" name="return_format" value="${escapeHtml(view.filters.format)}"><input type="hidden" name="return_anchor" value="${escapeHtml(item.anchorId)}"><button class="ccr-action-button primary" type="submit">Check for scheduling</button> <a class="ccr-clear" href="${reviewHref(item)}">View post</a></form><p class="ccr-action-lock">Checks the saved source. Your wording stays the same.</p></section>`;
   }
-
-  return `<section class="ccr-actions" aria-label="Content review controls"><div class="ccr-action-head"><strong>${item.publishable ? 'Review complete' : 'Approval recorded'}</strong><span>${item.publishable ? 'Outbound eligible' : 'Review gate locked'}</span></div><p class="ccr-action-lock">${escapeHtml(item.publishableDetail)}</p>${exactReviewLink}</section>`;
+  return `<section class="ccr-actions" aria-label="Next step">${open}${!view.canWrite ? '<p class="ccr-action-lock">You can view this content. Ask a workspace editor to make changes.</p>' : ''}</section>`;
 }
-
 function notice(view: ContentControlNoticeView | undefined): string {
   if (!view) return '';
   return `<section class="ccr-notice" data-kind="${escapeHtml(view.kind)}" role="status"><strong>${escapeHtml(view.title)}</strong><p>${escapeHtml(view.message)}</p></section>`;
 }
 
 function fullProof(item: ContentControlRoomItemView): string {
-  return `<details class="ccr-proof"><summary>Integrity proof</summary><div class="ccr-proof-grid">
-    <div class="ccr-proof-block"><strong>Immutable identity</strong><div class="ccr-proof-row"><span>Item</span><code>${escapeHtml(item.contentItemId)}</code></div><div class="ccr-proof-row"><span>Version</span><code>${escapeHtml(item.contentVersionId)}</code></div><div class="ccr-proof-row"><span>Created</span>${time(item.createdAt)}</div></div>
+  return `<details class="ccr-proof"><summary>Technical details</summary><div class="ccr-proof-grid">
+    <div class="ccr-proof-block"><strong>Version history</strong><div class="ccr-proof-row"><span>Item</span><code>${escapeHtml(item.contentItemId)}</code></div><div class="ccr-proof-row"><span>Version</span><code>${escapeHtml(item.contentVersionId)}</code></div><div class="ccr-proof-row"><span>Created</span>${time(item.createdAt)}</div></div>
     <div class="ccr-proof-block"><strong>Approval ledger</strong><div class="ccr-proof-row"><span>Request</span><code>${escapeHtml(item.approvalRequestId ?? 'No request')}</code></div><div class="ccr-proof-row"><span>Decision</span><code>${escapeHtml(item.approvalDecisionId ?? 'No decision')}</code></div><div class="ccr-proof-row"><span>Status</span><code>${escapeHtml(item.approvalStatus)}</code></div></div>
     <div class="ccr-proof-block"><strong>Source attestation</strong><div class="ccr-proof-row"><span>Attestation</span><code>${escapeHtml(item.sourceAttestationId ?? 'Not recorded')}</code></div><div class="ccr-proof-row"><span>Checked</span>${time(item.sourceCheckedAt)}</div><div class="ccr-proof-row"><span>Expires</span>${time(item.sourceExpiresAt)}</div></div>
-    <div class="ccr-proof-block"><strong>Exact source</strong><div class="ccr-proof-row"><span>System</span><code>${escapeHtml(item.sourceSystem)}</code></div><div class="ccr-proof-row"><span>Item</span><code>${escapeHtml(item.sourceItemId)}</code></div><div class="ccr-proof-row"><span>Revision</span><code>${escapeHtml(item.sourceVersion)}</code></div></div>
+    <div class="ccr-proof-block"><strong>Source record</strong><div class="ccr-proof-row"><span>File type</span><code>${escapeHtml(item.contentMimeType)}</code></div><div class="ccr-proof-row"><span>System</span><code>${escapeHtml(item.sourceSystem)}</code></div><div class="ccr-proof-row"><span>Item</span><code>${escapeHtml(item.sourceItemId)}</code></div><div class="ccr-proof-row"><span>Revision</span><code>${escapeHtml(item.sourceVersion)}</code></div></div>
     <div class="ccr-proof-block wide"><strong>SHA-256 chain</strong><div class="ccr-proof-row"><span>Content</span><code>${escapeHtml(item.contentSha256)}</code></div><div class="ccr-proof-row"><span>Blob</span><code>${escapeHtml(item.blobSha256)}</code></div><div class="ccr-proof-row"><span>Brand</span><code>${escapeHtml(item.brandSha256)}</code></div></div>
   </div></details>`;
 }
 
-function contentCard(
-  view: ContentControlRoomView,
-  item: ContentControlRoomItemView,
-  security: ContentControlRoomActionSecurity | undefined,
-): string {
-  const publishTone = item.publishable ? 'eligible' : 'locked';
-  const sourceTone = item.sourceFresh ? 'fresh' : 'warning';
-  return `<li><article class="ccr-card ${publishTone}" id="${escapeHtml(item.anchorId)}" aria-labelledby="${escapeHtml(item.anchorId)}-title">
-    <header class="ccr-card-head"><div class="ccr-card-identity"><div class="ccr-card-meta"><span class="ccr-chip version">Immutable v${safeCount(item.versionNumber)}</span><span class="ccr-chip">${escapeHtml(item.channelLabel)}</span><span class="ccr-chip">${escapeHtml(item.kindLabel)}</span><span class="ccr-chip">${escapeHtml(item.originLabel)}</span></div><h3 id="${escapeHtml(item.anchorId)}-title">${escapeHtml(item.title)}</h3><p class="ccr-source-line"><span>Source</span><code>${escapeHtml(item.sourceSystem)}</code><span>·</span><code>${escapeHtml(item.sourceItemId)}</code><span>· revision</span><code>${escapeHtml(item.sourceVersion)}</code></p></div><div class="ccr-publish-state ${publishTone}" aria-label="Publishable gate: ${escapeHtml(item.publishableLabel)}"><span>Publishable gate</span><strong>${escapeHtml(item.publishableLabel)}</strong></div></header>
-    <div class="ccr-gates" aria-label="Version safety gates"><section class="ccr-gate"><span class="ccr-gate-label">Exact approval</span><strong class="ccr-gate-state ${approvalTone(item.approvalTone)}">${escapeHtml(item.approvalLabel)}</strong><p>${escapeHtml(item.approvalDetail)}</p>${item.approvalStale ? '<span class="ccr-stale-flag">Stale · newer version exists</span>' : ''}</section><section class="ccr-gate"><span class="ccr-gate-label">Review representation</span><strong class="ccr-gate-state ${item.reviewRepresentationAvailable ? 'fresh' : 'warning'}">${escapeHtml(item.reviewRepresentationLabel)}</strong><p>${escapeHtml(item.reviewRepresentationDetail)}</p></section><section class="ccr-gate"><span class="ccr-gate-label">Source freshness</span><strong class="ccr-gate-state ${sourceTone}">${escapeHtml(item.sourceFreshnessLabel)}</strong><p>${escapeHtml(item.sourceFreshnessDetail)}</p></section><section class="ccr-gate"><span class="ccr-gate-label">Outbound eligibility</span><strong class="ccr-gate-state ${publishTone}">${escapeHtml(item.publishableLabel)}</strong><p>${escapeHtml(item.publishableDetail)}</p></section></div>${contentActions(view, item, security)}
-    <footer class="ccr-card-foot"><span>${escapeHtml(item.contentMimeType)} · captured ${time(item.createdAt)}</span>${fullProof(item)}</footer>
-  </article></li>`;
-}
 
+function contentCard(view: ContentControlRoomView, item: ContentControlRoomItemView,
+  security: ContentControlRoomActionSecurity | undefined): string {
+  return `<li><article class="ccr-card ${item.publishable ? 'eligible' : 'locked'}" id="${escapeHtml(item.anchorId)}" aria-labelledby="${escapeHtml(item.anchorId)}-title"><header class="ccr-card-head"><div class="ccr-card-meta"><span>${escapeHtml(item.kindLabel)}</span><span class="ccr-status-label">${escapeHtml(postStatus(item))}</span></div><h3 id="${escapeHtml(item.anchorId)}-title"><a class="ccr-title-link" href="${reviewHref(item)}">${escapeHtml(item.title)}</a></h3><p class="ccr-next">${escapeHtml(nextStep(item))}</p></header>${contentActions(view, item, security)}<footer class="ccr-card-foot">${fullProof(item)}</footer></article></li>`;
+}
 function emptyState(view: ContentControlRoomView): string {
-  if (view.catalogEmpty) {
-    return '<div class="ccr-empty" role="status"><span class="ccr-empty-mark" aria-hidden="true">00</span><strong>No company content has landed yet.</strong><p>The control room stays honest until an owned, source-attested version is imported. Nothing has been invented and no customer-private content is shown.</p></div>';
-  }
-  return `<div class="ccr-empty" role="status"><span class="ccr-empty-mark" aria-hidden="true">0</span><strong>No content matches these filters.</strong><p>The loaded catalogue is intact. Clear the channel, format or search filter to see the current versions again.</p><a href="${CONTENT_CONTROL_ROOM_ROUTE}">Clear all filters</a></div>`;
+  return view.catalogEmpty
+    ? '<div class="ccr-empty" role="status"><strong>Your first post starts here.</strong><p>Create a draft, then come back to review it.</p><a href="/portal/campaigns/new">Create a post →</a></div>'
+    : `<div class="ccr-empty" role="status"><strong>No content in this view.</strong><p>Try another status or clear your filters.</p><a href="${CONTENT_CONTROL_ROOM_ROUTE}">Show all content</a></div>`;
 }
-
-function reviewQueue(view: ContentControlRoomView): string {
-  const items = view.reviewQueue.map((item, index) => `<li class="ccr-review-item"><a class="ccr-review-link" href="#${escapeHtml(item.anchorId)}"><span class="ccr-review-index" aria-hidden="true">${String(index + 1).padStart(2, '0')}</span><span class="ccr-review-copy"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.reason)}</span></span><span class="ccr-review-version">v${safeCount(item.versionNumber)}</span><span class="ccr-visually-hidden">${escapeHtml(item.approvalLabel)}. Source ${item.sourceFresh ? 'fresh' : 'stale'}.</span></a></li>`).join('');
-  const body = items
-    ? `<ol class="ccr-review-list">${items}</ol>`
-    : `<div class="ccr-empty" role="status"><span class="ccr-empty-mark" aria-hidden="true">✓</span><strong>${view.matchingCount === 0 ? 'Nothing in this filtered view.' : 'No review blockers here.'}</strong><p>${view.matchingCount === 0 ? 'Change the current filters to inspect another slice.' : 'Every matching item has exact approval and fresh source proof.'}</p></div>`;
-  const bounded = view.matchingAttentionCount > view.reviewQueue.length
-    ? `Showing first ${safeCount(view.reviewQueue.length)} of ${safeCount(view.matchingAttentionCount)} matching attention items.`
-    : `${safeCount(view.matchingAttentionCount)} matching item${view.matchingAttentionCount === 1 ? ' needs' : 's need'} attention.`;
-  return `<aside class="ccr-review" aria-labelledby="ccr-review-title"><header class="ccr-section-head"><div><h2 id="ccr-review-title">Review queue</h2><p>Prioritised by stale version, pending decision, then source proof.</p></div><span class="ccr-result-count">${safeCount(view.matchingAttentionCount)}</span></header>${body}<p class="ccr-review-note"><strong>Protected workflow.</strong> ${escapeHtml(bounded)} Approval actions record immutable review evidence and never trigger a provider.</p></aside>`;
-}
-
 function filters(view: ContentControlRoomView): string {
-  const channels = CHANNEL_OPTIONS.map((entry) => option(entry.value, entry.label, view.filters.channel)).join('');
-  const formats = FORMAT_OPTIONS.map((entry) => option(entry.value, entry.label, view.filters.format)).join('');
-  return `<form class="ccr-filterbar" method="get" action="${CONTENT_CONTROL_ROOM_ROUTE}" aria-label="Filter company content"><div class="ccr-field search"><label for="ccr-query">Search content or source</label><input id="ccr-query" name="q" type="search" maxlength="${CONTENT_CONTROL_ROOM_MAX_QUERY_LENGTH}" autocomplete="off" value="${escapeHtml(view.filters.query)}" placeholder="Title, source item or revision"></div><div class="ccr-field"><label for="ccr-channel">Channel</label><select id="ccr-channel" name="channel">${channels}</select></div><div class="ccr-field"><label for="ccr-format">Format</label><select id="ccr-format" name="format">${formats}</select></div><button class="ccr-filter-button" type="submit">Apply filters</button><a class="ccr-clear" href="${CONTENT_CONTROL_ROOM_ROUTE}">Clear</a></form>`;
+  return `<form class="ccr-filterbar" method="get" action="${CONTENT_CONTROL_ROOM_ROUTE}" aria-label="Filter company content"><input type="hidden" name="status" value="${escapeHtml(view.filters.status)}"><div class="ccr-field search"><label for="ccr-query">Find a post</label><input id="ccr-query" name="q" type="search" maxlength="${CONTENT_CONTROL_ROOM_MAX_QUERY_LENGTH}" autocomplete="off" value="${escapeHtml(view.filters.query)}" placeholder="Search your content"></div><div class="ccr-field"><label for="ccr-channel">Channel</label><select id="ccr-channel" name="channel">${CHANNEL_OPTIONS.map(entry => option(entry.value, entry.label, view.filters.channel)).join('')}</select></div><div class="ccr-field"><label for="ccr-format">Format</label><select id="ccr-format" name="format">${FORMAT_OPTIONS.map(entry => option(entry.value, entry.label, view.filters.format)).join('')}</select></div><button class="ccr-filter-button" type="submit">Find</button><a class="ccr-clear" href="${CONTENT_CONTROL_ROOM_ROUTE}">Clear</a></form>`;
 }
-
-export function renderContentControlRoomBody(
-  view: ContentControlRoomView,
-  options: RenderContentControlRoomOptions = {},
-): string {
-  const cards = view.items.map((item) => contentCard(view, item, options.security)).join('');
-  const pageTruth = view.hasMore
-    ? 'This is a bounded latest-version page; more catalogue records are available.'
-    : 'This is the complete bounded latest-version page returned for this workspace.';
-  const truncationTruth = view.inputTruncated
-    ? ' The presenter rejected unbounded output and rendered only the first 100 records.'
-    : '';
-  const workspaceNavigation = options.companyAssetsAvailable || options.brandBrainAvailable
-      || options.companyContentSyncAvailable
-    ? renderContentWorkspaceNavigation('library', {
-        companyAssetsAvailable: options.companyAssetsAvailable === true,
-        assetsLabel: options.companyAssetsLabel,
-        brandBrainAvailable: options.brandBrainAvailable === true,
-        brainLabel: options.brandBrainLabel,
-        companyContentSyncAvailable: options.companyContentSyncAvailable === true,
-      })
-    : '';
-  const ownedSeedProofAction = options.ownedSeedProofAvailable
-    && view.canManage
-    && validSecurityToken(options.security?.csrfToken)
-    && validCommandKey(options.ownedSeedPrepareCommandKey)
-    ? `<section class="ccr-actions" aria-label="Owned-seed proof campaign"><div class="ccr-action-head"><div><strong>Run the complete owned-seed proof</strong><p class="ccr-action-lock">Create one immutable internal email, review it here, then move it through a separate LIVE message approval and capped office-only staging gate.</p></div><span>office@propertypredator.com only</span></div><form method="post" action="${OWNED_SEED_PROOF_PREPARE_ROUTE}" style="margin-top:10px"><input type="hidden" name="_csrf" value="${escapeHtml(options.security!.csrfToken)}"><input type="hidden" name="command_key" value="${escapeHtml(options.ownedSeedPrepareCommandKey!)}"><button class="ccr-action-button primary" type="submit">Prepare exact proof email →</button></form></section>`
-    : '';
-  return `${workspaceNavigation}<style data-property-predator-content-control>${CONTENT_CONTROL_ROOM_STYLE}</style><article class="ccr" aria-labelledby="ccr-title">
-    <header class="ccr-hero"><div class="ccr-hero-copy"><div class="ccr-kicker">Growth HQ · Content</div><h1 id="ccr-title">Create a post. <em>Plan your week.</em></h1><p>Turn one idea into drafts for each channel, review what is ready, and plan it on your calendar.</p></div><aside class="ccr-snapshot" aria-label="Saved content summary"><span>Your saved content</span><strong>${escapeHtml(view.workspaceName)}</strong><small>${safeCount(view.loadedCount)} latest version${view.loadedCount === 1 ? '' : 's'} · viewed ${time(view.asOf)}</small></aside></header>${notice(view.notice)}
-    <nav class="ccr-jobs" aria-label="Content jobs"><a class="ccr-job" href="/portal/campaigns/new"><small>01 · Create</small><strong>Create channel drafts</strong><span>Turn an idea into drafts tailored to each channel.</span><b>Open content studio →</b></a><a class="ccr-job" href="/portal/content/calendar"><small>02 · Plan</small><strong>Plan and schedule</strong><span>Choose dates and check which posts are ready to go.</span><b>Open calendar →</b></a><a class="ccr-job" href="#content-library"><small>03 · Review</small><strong>Your library</strong><span>Find saved content, review the details and request changes.</span><b>Browse versions ↓</b></a></nav>${ownedSeedProofAction}
-    <details class="ccr-library-details" id="content-library"${view.catalogEmpty ? '' : ' open'}><summary>Your library details<span>${view.catalogEmpty ? 'Your saved content versions will appear here.' : `${safeCount(view.loadedCount)} latest version${view.loadedCount === 1 ? '' : 's'} ready to inspect.`}</span></summary><section class="ccr-truth" aria-label="Content approval and delivery state"><span class="ccr-truth-mark">Review before delivery</span><p><strong>Approval and delivery stay separate.</strong> This library records the exact saved version and its review state. Scheduling or sending happens only through its own gated step.</p><span class="ccr-readonly">${view.canManage ? 'Review controls' : view.canWrite ? 'Submit for review' : 'View only'}</span></section>
-    <section class="ccr-metrics" aria-label="Loaded catalogue summary"><div class="ccr-metric"><small>Latest versions loaded</small><strong>${safeCount(view.metrics.loaded)}</strong><span>Bounded to 100 exact records</span></div><div class="ccr-metric"><small>Recorded approvals</small><strong>${safeCount(view.metrics.exactApproved)}</strong><span>Decisions bound to immutable hashes</span></div><div class="ccr-metric eligible"><small>Outbound eligible</small><strong>${safeCount(view.metrics.publishable)}</strong><span>Fresh exact approvals only</span></div><div class="ccr-metric attention"><small>Needs attention</small><strong>${safeCount(view.metrics.needsAttention)}</strong><span>Review state or source proof blocked</span></div></section>
-    ${filters(view)}
-    <div class="ccr-layout"><section class="ccr-catalog" aria-labelledby="ccr-catalog-title"><header class="ccr-section-head"><div><h2 id="ccr-catalog-title">Version catalogue</h2><p>Latest immutable version per owned source item.</p></div><span class="ccr-result-count">${safeCount(view.matchingCount)} / ${safeCount(view.loadedCount)}</span></header>${cards ? `<ol class="ccr-items">${cards}</ol>` : emptyState(view)}<div class="ccr-page-note"><span>${escapeHtml(pageTruth)}${escapeHtml(truncationTruth)}</span><span>Filters apply to this loaded page.</span></div></section>${reviewQueue(view)}</div>
-    </details><footer class="ccr-footer"><span><strong>Zero provider effects:</strong> approvals change review state only; no scheduling, sending or publishing happens here.</span><span>Snapshot ${time(view.asOf)}</span></footer>
-  </article>`;
+export function renderContentControlRoomBody(view: ContentControlRoomView,
+  options: RenderContentControlRoomOptions = {}): string {
+  const workspaceNavigation = options.companyAssetsAvailable || options.brandBrainAvailable || options.companyContentSyncAvailable
+    ? renderContentWorkspaceNavigation('library', { companyAssetsAvailable: options.companyAssetsAvailable === true,
+      assetsLabel: options.companyAssetsLabel, brandBrainAvailable: options.brandBrainAvailable === true,
+      brainLabel: options.brandBrainLabel, companyContentSyncAvailable: options.companyContentSyncAvailable === true }) : '';
+  const tabs = [
+    { value: 'all', label: 'All content', count: view.metrics.loaded },
+    { value: 'attention', label: 'Needs attention', count: view.metrics.needsAttention },
+    { value: 'approved', label: 'Approved', count: view.metrics.exactApproved },
+    { value: 'ready', label: 'Ready to plan', count: view.metrics.publishable },
+  ].map(tab => `<a class="ccr-metric" href="${CONTENT_CONTROL_ROOM_ROUTE}?status=${tab.value}#content-library"${view.filters.status === tab.value ? ' aria-current="page"' : ''}><small>${tab.label}</small><strong>${safeCount(tab.count)}</strong></a>`).join('');
+  const admin = options.ownedSeedProofAvailable && view.canManage && validSecurityToken(options.security?.csrfToken) && validCommandKey(options.ownedSeedPrepareCommandKey)
+    ? `<details class="ccr-admin"><summary>Internal email test</summary><p>Prepare a draft for the office-only email test.</p><form method="post" action="${OWNED_SEED_PROOF_PREPARE_ROUTE}"><input type="hidden" name="_csrf" value="${escapeHtml(options.security!.csrfToken)}"><input type="hidden" name="command_key" value="${escapeHtml(options.ownedSeedPrepareCommandKey)}"><button class="ccr-action-button" type="submit">Prepare test email</button></form></details>` : '';
+  return `${workspaceNavigation}<style data-property-predator-content-control>${CONTENT_CONTROL_ROOM_STYLE}</style><article class="ccr" aria-labelledby="ccr-title"><header class="ccr-hero"><div class="ccr-hero-copy"><div class="ccr-kicker">${escapeHtml(view.workspaceName)}</div><h1 id="ccr-title">Your content</h1><p>Open a post to read it, edit it or get it ready for your calendar.</p></div><a class="ccr-action-button primary" href="/portal/campaigns/new">+ Create a post</a></header>${notice(view.notice)}<nav class="ccr-metrics" aria-label="Content status">${tabs}</nav>${filters(view)}<div class="ccr-layout" id="content-library"><section class="ccr-catalog" aria-labelledby="ccr-catalog-title"><header class="ccr-section-head"><h2 id="ccr-catalog-title">${view.filters.status === 'attention' ? 'Needs your attention' : view.filters.status === 'approved' ? 'Approved content' : view.filters.status === 'ready' ? 'Ready for your calendar' : 'Saved content'}</h2><span class="ccr-result-count">${safeCount(view.matchingCount)} item${view.matchingCount === 1 ? '' : 's'}</span></header>${view.items.length ? `<ol class="ccr-items">${view.items.map(item => contentCard(view, item, options.security)).join('')}</ol>` : emptyState(view)}</section></div>${admin}<footer class="ccr-footer"><span>Approving a post does not publish it.</span><span>${view.hasMore || view.inputTruncated ? 'Showing the latest 100 items. Counts and filters cover these items.' : `${safeCount(view.loadedCount)} saved item${view.loadedCount === 1 ? '' : 's'}`}</span></footer></article>`;
 }

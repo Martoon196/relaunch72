@@ -43,9 +43,9 @@ const CONTENT_WORKSPACE_LINKS: readonly Readonly<{
   href: string;
   label: string;
 }>[] = Object.freeze([
-  { target: 'create', href: CAMPAIGN_WIZARD_ROUTE, label: 'Create drafts' },
-  { target: 'calendar', href: CONTENT_CALENDAR_ROUTE, label: 'Plan &amp; schedule' },
-  { target: 'library', href: CONTENT_CONTROL_ROOM_ROUTE, label: 'Your library' },
+  { target: 'create', href: CAMPAIGN_WIZARD_ROUTE, label: 'Create a post' },
+  { target: 'calendar', href: CONTENT_CALENDAR_ROUTE, label: 'Calendar' },
+  { target: 'library', href: CONTENT_CONTROL_ROOM_ROUTE, label: 'Your content' },
 ]);
 
 export function renderContentWorkspaceNavigation(

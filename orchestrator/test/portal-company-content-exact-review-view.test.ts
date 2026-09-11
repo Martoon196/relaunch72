@@ -92,13 +92,13 @@ test('exact email review renders subject, body and hash proof without executable
     review,
   });
 
-  assert.match(body, /Exact email draft/);
+  assert.match(body, /Email preview/);
   assert.match(body, /A &amp; B &lt;today&gt;/);
   assert.match(body, /Hi &lt;script&gt;alert\(1\)&lt;\/script&gt; &amp; review/);
   assert.match(body, new RegExp(review.contentSha256));
   assert.match(body, new RegExp(review.email!.subjectSha256));
   assert.match(body, new RegExp(review.email!.bodySha256));
-  assert.match(body, /Review page · no direct call/);
+  assert.match(body, /Approval saves your decision/);
   assert.doesNotMatch(body, /<script\b/i);
   assert.doesNotMatch(body, /<form\b|<button\b|action=/i);
   assert.doesNotMatch(body, /Send now|Publish now|Schedule now/i);
@@ -122,7 +122,7 @@ test('exact review falls back to complete canonical bytes for non-email content'
       email: null,
     }),
   });
-  assert.match(body, /Exact immutable content/);
+  assert.match(body, /Content preview/);
   assert.match(body, /Exact document bytes/);
 });
 
@@ -151,11 +151,11 @@ test('social review separates readable publication copy and artwork from one tec
     }),
   })));
 
-  assert.match(body, /Social post/);
-  assert.match(body, /Publication copy/);
-  assert.match(body, /Artwork instructions/);
-  assert.match(body, /Technical evidence/);
-  assert.match(body, /Plan this exact version/);
+  assert.match(body, /Your post/);
+  assert.match(body, /Your next deal should survive/);
+  assert.match(body, /Image or video notes/);
+  assert.match(body, /Technical details &amp; history/);
+  assert.match(body, /Open calendar/);
   assert.equal(body.split('propertypredator.company-content/v1').length - 1, 1);
 });
 
@@ -176,7 +176,7 @@ test('pending exact review renders approval only with its short-lived exact-revi
       exactApprovalToken: `${review.contentItemId}.${review.contentVersionId}.${review.approvalRequestId}.${review.contentSha256}.1787994900000.capability_mac_value`,
     },
   });
-  assert.match(body, /Approve exact version/);
+  assert.match(body, /Approve post/);
   assert.match(body, /name="exact_approval_token"/);
   assert.match(body, /name="review_content_sha256"/);
   assert.doesNotMatch(body, /Send now|Publish now|Schedule now/i);
@@ -203,8 +203,8 @@ test('historical or stale exact versions remain read-only even with protected fo
         exactApprovalToken: `${review.contentItemId}.${review.contentVersionId}.${review.approvalRequestId}.${review.contentSha256}.1787994900000.capability_mac_value`,
       },
     });
-    assert.match(body, /Historical version · read only/);
-    assert.doesNotMatch(body, /<form\b|Approve exact version|Request human approval/i);
+    assert.match(body, /Older version/);
+    assert.doesNotMatch(body, /<form\b|Approve post|Send for approval/i);
   }
 });
 

@@ -1680,6 +1680,7 @@ function previewContentControl(url: URL): string {
       query: url.searchParams.get('q'),
       channel: url.searchParams.get('channel'),
       format: url.searchParams.get('format'),
+      status: url.searchParams.get('status'),
     },
   });
   return renderContentControlRoomBody(view, {

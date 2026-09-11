@@ -189,25 +189,30 @@ test('Content Control renders the immutable catalogue with bounded filters and p
     };
   });
   const result = await call(
-    '/portal/content?q=follow-up&channel=email&format=email',
+    '/portal/content?q=follow-up&channel=email&format=email&status=attention',
     postgres({ companyContent }),
     COOKIE,
   );
 
   assert.equal(result.statusCode, 200);
-  assert.match(result.body, /Growth HQ · Content/);
+  assert.match(result.body, /Your content/);
   assert.match(result.body, /Predator Briefing: mixed-use intelligence follow-up/);
   assert.doesNotMatch(result.body, /The postcode is not the opportunity/);
   assert.match(result.body, /href="\/portal\/content" aria-current="page"/);
-  assert.match(result.body, /Approval and delivery stay separate/);
-  assert.match(result.body, /action="\/portal\/content\/approval-decisions"/);
-  assert.match(result.body, /name="approval_request_id"/);
+  assert.match(result.body, /Approving a post does not publish it/);
+  assert.match(result.body, /name="status" value="attention"/);
+  assert.match(result.body, /Review &amp; approve/);
+  assert.doesNotMatch(result.body, /action="\/portal\/content\/approval-decisions"/);
   assert.match(result.body, /name="_csrf"/);
   assert.doesNotMatch(result.body, /Publish now|Schedule now|Connect provider/i);
   assert.deepEqual(queries, [{
     identity: { sessionToken: SESSION, requestId: 'router-request-1' },
     query: { limit: 100 },
   }]);
+  const approved = await call('/portal/content?status=approved', postgres({ companyContent }), COOKIE);
+  assert.equal(approved.statusCode, 200);
+  assert.match(approved.body, /The postcode is not the opportunity/);
+  assert.doesNotMatch(approved.body, /Predator Briefing: mixed-use intelligence follow-up/);
 });
 
 test('Content approval POSTs are CSRF-bound, workspace-derived and preserve filtered return context', async () => {

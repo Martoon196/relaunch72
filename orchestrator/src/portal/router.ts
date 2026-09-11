@@ -5207,6 +5207,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           query: url.searchParams.get('q') ?? '',
           channel: url.searchParams.get('channel') ?? '',
           format: url.searchParams.get('format') ?? '',
+          status: url.searchParams.get('status') ?? '',
         },
       });
       return sendHtml(res, 200, operationalPage(

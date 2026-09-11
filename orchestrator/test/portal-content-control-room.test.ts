@@ -13,8 +13,6 @@ import {
 } from '../src/portal/content-control-room-presenter.js';
 import { renderContentControlRoomBody } from '../src/portal/content-control-room-view.js';
 import {
-  CONTENT_APPROVAL_DECISION_ROUTE,
-  CONTENT_APPROVAL_REQUEST_ROUTE,
   GENERATED_SOURCE_REFRESH_ROUTE,
   contentControlNoticeFromQuery,
   contentControlNoticeToken,
@@ -61,7 +59,7 @@ function page(items: readonly CompanyContentCatalogItem[]): CompanyContentCatalo
 
 function present(
   items: readonly CompanyContentCatalogItem[],
-  filters: Readonly<{ query?: unknown; channel?: unknown; format?: unknown }> = {},
+  filters: Readonly<{ query?: unknown; channel?: unknown; format?: unknown; status?: unknown }> = {},
 ) {
   return presentContentControlRoom(page(items), {
     workspaceName: 'Property Predator Growth HQ',
@@ -153,15 +151,13 @@ test('Content Control Room truth labels keep stale approval and expired source p
     'Decision waiting',
     'Refresh source proof',
   ]);
-  assert.match(html, /Stale approval/);
-  assert.match(html, /Stale · newer version exists/);
-  assert.match(html, /An older decision does not cover immutable v4/);
-  assert.match(html, /Source proof stale/);
-  assert.match(html, /exact hash-bound review representation is available/i);
-  assert.equal((html.match(/Publishable gate<\/span><strong>Eligible/g) ?? []).length, 1);
-  assert.equal((html.match(/Publishable gate<\/span><strong>Locked/g) ?? []).length, 3);
-  assert.match(html, /Approval and delivery stay separate/);
-  assert.match(html, /approvals change review state only; no scheduling, sending or publishing happens here/);
+  assert.match(html, /Review updated version/);
+  assert.match(html, /This post has changed/);
+  assert.match(html, /Needs a quick check/);
+  assert.match(html, /Awaiting approval/);
+  assert.equal((html.match(/class="ccr-card eligible"/g) ?? []).length, 1);
+  assert.equal((html.match(/class="ccr-card locked"/g) ?? []).length, 3);
+  assert.match(html, /Approving a post does not publish it/);
 });
 
 test('Content Control Room fails a contradictory stored publishable claim closed', () => {
@@ -175,7 +171,7 @@ test('Content Control Room fails a contradictory stored publishable claim closed
   assert.equal(view.items[0]?.publishableLabel, 'Locked');
   assert.equal(view.metrics.publishable, 0);
   assert.equal(view.reviewQueue[0]?.reason, 'Decision waiting');
-  assert.match(renderContentControlRoomBody(view), /An exact approval decision is required/i);
+  assert.match(renderContentControlRoomBody(view), /waiting for a decision/i);
 });
 
 test('Content Control Room escapes every supplied display and audit field', () => {
@@ -226,21 +222,21 @@ test('Content Control Room has labelled, touch-sized, responsive review semantic
 
   assert.match(html, /<article class="ccr" aria-labelledby="ccr-title">/);
   assert.match(html, /<form class="ccr-filterbar" method="get" action="\/portal\/content" aria-label="Filter company content">/);
-  assert.match(html, /<label for="ccr-query">Search content or source<\/label>/);
+  assert.match(html, /<label for="ccr-query">Find a post<\/label>/);
   assert.match(html, /<label for="ccr-channel">Channel<\/label>/);
   assert.match(html, /<label for="ccr-format">Format<\/label>/);
-  assert.match(html, /<div class="ccr-gates" aria-label="Version safety gates">/);
-  assert.match(html, /<aside class="ccr-review" aria-labelledby="ccr-review-title">/);
-  assert.match(html, /<details class="ccr-proof"><summary>Integrity proof<\/summary>/);
+  assert.match(html, /<nav class="ccr-metrics" aria-label="Content status">/);
+  assert.doesNotMatch(html, /<aside class="ccr-review"/);
+  assert.match(html, /<details class="ccr-proof"><summary>Technical details<\/summary>/);
   assert.match(html, /min-height:44px/);
   assert.match(html, /@media\(max-width:820px\)/);
   assert.match(html, /@media\(max-width:520px\)/);
   assert.match(html, /@media\(forced-colors:active\)/);
   assert.doesNotMatch(html, /method="post"|Connect provider|Publish now|Schedule now/i);
-  assert.match(html, /Zero provider effects/);
+  assert.match(html, /Approving a post does not publish it/);
 });
 
-test('Content Control Room exposes protected approval commands only to authorised roles', () => {
+test('Content Control Room links to full review instead of offering blind library approvals', () => {
   const pending = item({
     approvalStatus: 'pending',
     approvalDecisionId: null,
@@ -272,16 +268,10 @@ test('Content Control Room exposes protected approval commands only to authorise
     },
   });
 
-  assert.match(html, new RegExp(`method="post" action="${CONTENT_APPROVAL_REQUEST_ROUTE}"`));
-  assert.match(html, new RegExp(`method="post" action="${CONTENT_APPROVAL_DECISION_ROUTE}"`));
-  assert.match(html, /name="content_item_id" value="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"/);
-  assert.match(html, /name="content_version_id" value="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"/);
-  assert.match(html, /name="approval_request_id" value="33333333-3333-4333-8333-333333333333"/);
-  assert.doesNotMatch(html, /name="decision" value="approved"|Approve exact v3/);
-  assert.match(html, /name="decision" value="changes_requested">Request changes/);
-  assert.match(html, /name="decision" value="rejected">Reject/);
-  assert.match(html, /Open exact copy &amp; review/);
-  assert.match(html, /Exact review required/i);
+  assert.doesNotMatch(html, /method="post"|name="decision"/);
+  assert.match(html, /Review &amp; approve/);
+  assert.ok(html.includes(`href="/portal/content/items/${pending.contentItemId}/versions/${pending.contentVersionId}/review"`));
+  assert.ok(html.includes(`href="/portal/content/items/${unrequested.contentItemId}/versions/${unrequested.contentVersionId}/review"`));
 
   const readOnly = renderContentControlRoomBody(present([pending, unrequested]), {
     security: {
@@ -291,7 +281,7 @@ test('Content Control Room exposes protected approval commands only to authorise
     },
   });
   assert.doesNotMatch(readOnly, /method="post"/);
-  assert.match(readOnly, /Your current workspace role can inspect immutable evidence/);
+  assert.match(readOnly, /Ask a workspace editor to make changes/);
 });
 
 test('approved expired generated drafts expose exact source renewal without regeneration', () => {
@@ -312,8 +302,10 @@ test('approved expired generated drafts expose exact source renewal without rege
     sourceRefreshKeys: { [generated.contentVersionId]: 'refresh-generated-source-0001' },
   } });
   assert.match(html, new RegExp(`action="${GENERATED_SOURCE_REFRESH_ROUTE}"`));
-  assert.match(html, /Refresh source proof/);
-  assert.match(html, /No regeneration/);
+  assert.match(html, /Check for scheduling/);
+  assert.match(html, /Your wording stays the same/);
+  assert.ok(html.includes(`name="content_sha256" value="${generated.contentSha256}"`));
+  assert.match(html, /name="_csrf" value="content-csrf-token-0000000000000001"/);
   assert.doesNotMatch(html, /Generate new|Publish now/);
 
   const restricted = renderContentControlRoomBody(presentContentControlRoom(page([{
@@ -326,6 +318,11 @@ test('approved expired generated drafts expose exact source renewal without rege
     } },
   });
   assert.doesNotMatch(restricted, new RegExp(`action="${GENERATED_SOURCE_REFRESH_ROUTE}"`));
+  const inspectOnly = renderContentControlRoomBody({ ...view, canWrite: false }, { security: {
+    csrfToken: 'content-csrf-token-0000000000000001', requestApprovalKeys: {}, decisionKeys: {},
+    sourceRefreshKeys: { [generated.contentVersionId]: 'refresh-generated-source-0001' },
+  } });
+  assert.doesNotMatch(inspectOnly, /method="post"/);
 });
 
 test('Content Control notices are session-bound and never claim publishing occurred', () => {
@@ -344,8 +341,8 @@ test('Content Control notices are session-bound and never claim publishing occur
   const locked = contentControlNoticeFromQuery(lockedQuery, secret, session);
   assert.deepEqual(locked, {
     kind: 'error',
-    title: 'Approval locked safely',
-    message: 'The exact hash-bound text or artwork is not available to inspect, so approval and outbound eligibility remain locked.',
+    title: 'Preview unavailable',
+    message: 'We cannot show a verified preview right now. Open the post again shortly. It cannot be approved or published until the preview is available.',
   });
 });
 
@@ -376,34 +373,53 @@ test('Content Control Room bounds query, catalogue and review output and fails i
   assert.equal(view.inputTruncated, true);
   assert.equal(view.hasMore, true);
   assert.equal((html.match(/class="ccr-card locked"/g) ?? []).length, CONTENT_CONTROL_ROOM_MAX_ITEMS);
-  assert.match(html, /presenter rejected unbounded output and rendered only the first 100 records/);
-  assert.match(html, /Showing first 12 of 100 matching attention items/);
+  assert.match(html, /Showing the latest 100 items/);
+  assert.match(html, /Counts and filters cover these items/);
 });
 
 test('Content Control Room distinguishes an empty source catalogue from empty filter results', () => {
   const empty = renderContentControlRoomBody(present([]));
-  assert.match(empty, /No company content has landed yet/);
-  assert.match(empty, /Nothing has been invented and no customer-private content is shown/);
+  assert.match(empty, /Your first post starts here/);
+  assert.match(empty, /Create a draft, then come back to review it/);
 
   const noMatches = renderContentControlRoomBody(present([item()], { query: 'definitely absent' }));
-  assert.match(noMatches, /No content matches these filters/);
-  assert.match(noMatches, /The loaded catalogue is intact/);
-  assert.match(noMatches, /href="\/portal\/content">Clear all filters/);
-  assert.doesNotMatch(noMatches, /No company content has landed yet/);
+  assert.match(noMatches, /No content in this view/);
+  assert.match(noMatches, /Try another status or clear your filters/);
+  assert.match(noMatches, /href="\/portal\/content">Show all content/);
+  assert.doesNotMatch(noMatches, /Your first post starts here/);
 });
 
-test('Content library starts with real creation, calendar and review jobs while technical evidence is secondary', () => {
+
+test('Content library has real status links and hides support details by default', () => {
   const html = renderContentControlRoomBody(present([item()]), { brandBrainAvailable: true });
-  assert.match(html, /aria-label="Content jobs"/);
-  assert.match(html, /href="\/portal\/campaigns\/new"[\s\S]*Create channel drafts/);
-  assert.match(html, /href="\/portal\/content\/calendar"[\s\S]*Plan and schedule/);
-  assert.match(html, /<details class="ccr-library-details" id="content-library" open>/);
-  assert.match(html, /Content tools and settings[\s\S]*TEST campaign evidence/);
+  assert.match(html, /aria-label="Content status"/);
+  assert.ok(html.includes('href="/portal/campaigns/new">+ Create a post'));
+  assert.ok(html.includes('href="/portal/content?status=attention#content-library"'));
+  assert.ok(html.includes('href="/portal/content?status=approved#content-library"'));
+  assert.ok(html.includes('href="/portal/content?status=ready#content-library"'));
+  assert.match(html, /<details class="ccr-proof"><summary>Technical details/);
+  assert.doesNotMatch(html, /<details[^>]* open|Version catalogue|Publishable gate|Immutable v/);
+  assert.match(html, /Content tools and settings/);
 });
 
-test('an empty library keeps useful jobs visible and technical details collapsed', () => {
+test('empty library offers a real first action', () => {
   const html = renderContentControlRoomBody(present([]));
-  assert.match(html, /Create channel drafts/);
-  assert.match(html, /<details class="ccr-library-details" id="content-library">/);
-  assert.doesNotMatch(html, /id="content-library" open/);
+  assert.ok(html.includes('href="/portal/campaigns/new">Create a post'));
+  assert.match(html, /Your first post starts here/);
+});
+
+test('status links filter the real items, preserve total counts and reject invalid statuses', () => {
+  const ready = item({ title: 'Ready post' });
+  const expired = item({ title: 'Expired post', sourceFresh: false, publishable: false });
+  const draft = item({ title: 'New draft', approvalStatus: 'unrequested', approvalRequestId: null, approvalDecisionId: null, publishable: false });
+  const items = [ready, expired, draft];
+  assert.deepEqual(present(items, { status: 'ready' }).items.map(i => i.title), ['Ready post']);
+  assert.deepEqual(present(items, { status: 'approved' }).items.map(i => i.title), ['Ready post', 'Expired post']);
+  assert.deepEqual(present(items, { status: 'attention' }).items.map(i => i.title), ['Expired post', 'New draft']);
+  assert.equal(present(items, { status: 'attention', query: 'new' }).items.length, 1);
+  assert.equal(present(items, { status: 'approved' }).metrics.loaded, 3);
+  assert.equal(present(items, { status: 'bad<script>' }).filters.status, 'all');
+  const html = renderContentControlRoomBody(present(items, { status: 'ready' }));
+  assert.ok(html.includes('href="/portal/content?status=ready#content-library" aria-current="page"'));
+  assert.ok(html.includes('name="status" value="ready"'));
 });
