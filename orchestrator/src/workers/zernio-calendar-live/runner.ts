@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { createCombinedSocialImageMediaResolver } from '../../public-social-outbound/combined-social-image-media.js';
 import type { Pool } from 'pg';
 import { assertExpectedDatabaseInstallation } from '../../db/installation-identity.js';
 import { createOwnedSocialWorkerCommandDatabasePool } from '../../db/pool.js';
@@ -168,11 +169,18 @@ function exactAccountId(raw: string | undefined, network: ZernioPostingNetwork):
 
 function defaultMediaResolver(env: NodeJS.ProcessEnv): ZernioCalendarMediaResolver {
   const signing = loadApprovedSocialMediaSigningConfig(env, true)!;
-  return createApprovedSocialMediaUrlResolver({
+  const legacy = createApprovedSocialMediaUrlResolver({
     publicOrigin: env.PROPERTY_PREDATOR_PUBLIC_SOCIAL_MEDIA_ORIGIN?.trim() ?? '',
     signingKey: signing.key,
     ttlSeconds: signing.ttlSeconds,
   });
+  const config = loadZernioCalendarWorkerConfig(env);
+  if (config.mode !== 'zernio_live') throw new Error('Image delivery requires the live job boundary');
+  return createCombinedSocialImageMediaResolver({ legacy,
+    posting: createZernioPostingClient({ apiKey: config.apiKey,
+      allowedTargets: config.accountBindings.map((binding) => ({ network: binding.network,
+        accountId: binding.providerAccountId })), fetch: globalThis.fetch }),
+    fetch: globalThis.fetch });
 }
 
 function assertExactDatabaseIdentity(env: NodeJS.ProcessEnv): void {

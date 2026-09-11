@@ -121,6 +121,7 @@ export const COMPANY_CONTENT_SOCIAL_DRAFT_MIME_TYPE =
   'application/vnd.propertypredator.company-content+json' as const;
 
 export interface CompanyContentExactSocialReview {
+  readonly image?: import('./social-image.js').CompanyContentSocialImage | null;
   readonly schema: typeof COMPANY_CONTENT_SOCIAL_DRAFT_SCHEMA;
   readonly type: string;
   readonly kind: string;

@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { socialImageFromDataUrl } from '../company-content-pg/social-image.js';
+import { socialImageCreationPaused } from './social-image-recovery.js';
 import type { Pool, QueryResultRow } from 'pg';
 import {
   CompanyContentApprovalConflictError,
@@ -314,6 +316,9 @@ export class PgPortalCompanyContentService implements PortalCompanyContentServic
     input: PortalCreateCompanyContentSocialRevisionInput,
   ): Promise<PortalCreateCompanyContentSocialRevisionOutcome> {
     try {
+      if (input.imageDataUrl && socialImageCreationPaused()) {
+        return failure('unavailable', 'Adding new pictures is temporarily paused. Your saved post is safe.');
+      }
       const context = await this.context(identity);
       if (!context) return failure('unauthenticated', 'This portal session is no longer active.');
       const access = await this.dependencies.accessReader.load(context);
@@ -342,6 +347,9 @@ export class PgPortalCompanyContentService implements PortalCompanyContentServic
         title: review.social.title,
         publicationCopy: input.publicationCopy,
         artworkInstructions: input.artworkInstructions,
+        image: input.imageDataUrl
+          ? socialImageFromDataUrl(input.imageDataUrl, input.imageAlt ?? '')
+          : review.social.image,
         ctaUrl: review.social.ctaUrl,
         contextSha256: review.social.contextSha256,
       });
@@ -443,10 +451,11 @@ export class PgPortalCompanyContentService implements PortalCompanyContentServic
           || review.contentSha256 !== input.contentSha256.toLowerCase()
           || review.approvalStatus !== 'pending'
           || review.approvalStale
+          || (review.social?.artworkInstructions && !review.social.image)
           || review.approvalRequestId !== input.approvalRequestId.toLowerCase()) {
         return failure(
           'review_unavailable',
-          'The exact reviewed version or pending approval changed. Refresh before approving.',
+          'Check the current post and its image before approving. Add the picture if only image instructions are present.',
         );
       }
       const result = await this.dependencies.commandService.decideApproval(context, {

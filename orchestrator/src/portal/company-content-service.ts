@@ -107,6 +107,9 @@ export interface PortalCreateCompanyContentSocialRevisionInput {
   readonly previousVersionId: string;
   readonly expectedContentSha256: string;
   readonly publicationCopy: string;
+  /** Omitted keeps the existing image. Only a replacement creates new image bytes. */
+  readonly imageDataUrl?: string;
+  readonly imageAlt?: string;
   readonly artworkInstructions?: string | null;
 }
 

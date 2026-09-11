@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { JPEG_FIXTURE, IMAGE_FIXTURE } from './social-image-fixture.js';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 import {
@@ -161,6 +162,53 @@ function assertRlsContext(context: DatabaseRequestContext): void {
     createHash('sha256').update('opaque-portal-session').digest(),
   );
 }
+
+test('image revision preserves words, binds real bytes, and retains the image on later text edits', async () => {
+  let saved: any;
+  let current = EXACT_SOCIAL_REVIEW;
+  const service = new PgPortalCompanyContentService(dependencies({
+    readService: { listCatalog: async () => EMPTY_CATALOG, getExactReview: async () => current },
+    draftService: { createVersion: async (_context, command) => {
+      saved = command;
+      return { disposition: 'applied', contentItemId: CONTENT_ITEM_ID,
+        contentVersionId: CONTENT_VERSION_ID, versionNumber: 2,
+        contentSha256: 'f'.repeat(64), sourceAttestationId: CONTENT_ITEM_ID,
+        sourceAttestationExpiresAt: '2026-09-11T12:00:00Z' };
+    } },
+  }));
+  const input = { commandKey: 'image-command-001', contentItemId: CONTENT_ITEM_ID,
+    previousVersionId: CONTENT_VERSION_ID, expectedContentSha256: CONTENT_SHA,
+    publicationCopy: 'Finished words', artworkInstructions: 'A screenshot' };
+  assert.equal((await service.createSocialRevision(identity(), { ...input,
+    imageDataUrl: JPEG_FIXTURE, imageAlt: IMAGE_FIXTURE.alt })).ok, true);
+  assert.deepEqual(JSON.parse(saved.content).image, IMAGE_FIXTURE);
+  assert.equal(JSON.parse(saved.content).body, input.publicationCopy);
+  assert.equal(saved.previousVersionId, CONTENT_VERSION_ID);
+  current = { ...current, social: { ...current.social!, image: IMAGE_FIXTURE } };
+  assert.equal((await service.createSocialRevision(identity(), input)).ok, true);
+  assert.deepEqual(JSON.parse(saved.content).image, IMAGE_FIXTURE);
+});
+
+test('image instructions without the actual picture cannot receive exact approval', async () => {
+  let decisions = 0;
+  const base = dependencies();
+  const service = new PgPortalCompanyContentService(dependencies({
+    readService: { listCatalog: async () => EMPTY_CATALOG, getExactReview: async () => ({
+      ...EXACT_SOCIAL_REVIEW, social: { ...EXACT_SOCIAL_REVIEW.social!, artworkInstructions: 'Use a screenshot' },
+    }) },
+    commandService: { ...base.commandService, decideApproval: async (...args) => {
+      decisions++; return base.commandService.decideApproval(...args);
+    } },
+  }));
+  const result = await service.decideExactReviewedApproval(identity(), {
+    commandKey: 'approve-image-001', contentItemId: CONTENT_ITEM_ID,
+    decision: 'approved',
+    contentVersionId: CONTENT_VERSION_ID, contentSha256: CONTENT_SHA,
+    approvalRequestId: APPROVAL_REQUEST_ID,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(decisions, 0);
+});
 
 test('portal company content snapshot resolves one server-owned RLS context and returns capabilities with the bounded catalog', async () => {
   const contexts: DatabaseRequestContext[] = [];

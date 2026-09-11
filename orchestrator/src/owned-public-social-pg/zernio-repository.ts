@@ -1,4 +1,5 @@
 import type { Pool, QueryResultRow } from 'pg';
+import { parseCompanyContentSocialImage } from '../company-content-pg/social-image.js';
 import { withTransaction } from '../db/transaction.js';
 import type {
   ZernioCalendarClaim,
@@ -98,6 +99,8 @@ function media(value: unknown): ZernioCalendarJobMaterial['media'] {
     }
     return Object.freeze({
       storageKey: row.storageKey, blobSha256: row.blobSha256, mimeType: row.mimeType,
+      ...(row.inlineImage !== undefined
+        ? { inlineImage: parseCompanyContentSocialImage(row.inlineImage) } : {}),
     });
   }));
 }

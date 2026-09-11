@@ -239,6 +239,8 @@ function nullableSocialText(value: unknown, field: string, maximumBytes: number)
  * Both the original combined-body shape and the split artwork shape remain
  * byte-verifiable; newly edited versions always use the split shape.
  */
+import { parseCompanyContentSocialImage, type CompanyContentSocialImage } from './social-image.js';
+
 export function parseCompanyContentSocialDraft(
   canonicalContent: string,
 ): Omit<CompanyContentExactSocialReview,
@@ -254,7 +256,7 @@ export function parseCompanyContentSocialDraft(
   }
   const candidate = decoded as Record<string, unknown>;
   const required = ['body', 'cta_url', 'kind', 'platform', 'schema', 'title', 'type'];
-  const allowed = new Set([...required, 'artwork_instructions', 'contextSha256']);
+  const allowed = new Set([...required, 'artwork_instructions', 'contextSha256', 'image']);
   const keys = Object.keys(candidate);
   if (required.some((key) => !(key in candidate)) || keys.some((key) => !allowed.has(key))) {
     throw new CompanyContentValidationError('Social draft content has an invalid shape');
@@ -286,6 +288,7 @@ export function parseCompanyContentSocialDraft(
     title: socialText(candidate.title, 'title', 500),
     publicationCopy: socialText(candidate.body, 'body', 900_000),
     artworkInstructions,
+    ...(candidate.image !== undefined ? { image: parseCompanyContentSocialImage(candidate.image) } : {}),
     ctaUrl,
     contextSha256,
     legacyCombined: !Object.prototype.hasOwnProperty.call(candidate, 'artwork_instructions'),
@@ -301,6 +304,7 @@ export function canonicalCompanyContentSocialDraft(input: Readonly<{
   artworkInstructions?: string | null;
   ctaUrl?: string | null;
   contextSha256?: string | null;
+  image?: CompanyContentSocialImage | null;
 }>): string {
   const contextSha256 = nullableSocialText(input.contextSha256, 'contextSha256', 64);
   if (contextSha256 && !SHA256.test(contextSha256)) {
@@ -317,6 +321,7 @@ export function canonicalCompanyContentSocialDraft(input: Readonly<{
       50_000,
     ) ?? '',
     body: socialText(input.publicationCopy, 'body', 900_000),
+    ...(input.image ? { image: parseCompanyContentSocialImage(input.image) } : {}),
     cta_url: ctaUrl ?? '',
     ...(contextSha256 ? { contextSha256 } : {}),
     kind: socialText(input.kind, 'kind', 100),

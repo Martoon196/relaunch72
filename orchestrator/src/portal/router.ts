@@ -131,6 +131,7 @@ import {
   type PortalCompanyContentService,
 } from './company-content-service.js';
 import { renderPortalCompanyContentReviewBody } from './company-content-review-view.js';
+import { SOCIAL_IMAGE_CLIENT_SOURCE } from './social-image-client.js';
 import { BRAND_BRAIN_ROUTE } from './brand-brain-actions.js';
 import { presentBrandBrain } from './brand-brain-presenter.js';
 import type {
@@ -779,7 +780,7 @@ function redirect(
   res.writeHead(code, headers);
   res.end();
 }
-function readForm(req: IncomingMessage): Promise<Record<string, string>> {
+function readForm(req: IncomingMessage, maximumBytes = 64 * 1024): Promise<Record<string, string>> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -791,7 +792,7 @@ function readForm(req: IncomingMessage): Promise<Record<string, string>> {
     };
     req.on('data', (c: Buffer) => {
       size += c.length;
-      if (size > 64 * 1024) { chunks.length = 0; finish({}); return; }
+      if (size > maximumBytes) { chunks.length = 0; finish({}); return; }
       if (!settled) chunks.push(c);
     });
     req.on('end', () => {
@@ -1855,6 +1856,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   }
   if (p === CAMPAIGN_WIZARD_CLIENT_ROUTE && method === 'GET') {
     return sendJavaScript(res, CAMPAIGN_WIZARD_CLIENT_SOURCE);
+  }
+  if (p === '/portal/content/social-image.js' && method === 'GET') {
+    return sendJavaScript(res, SOCIAL_IMAGE_CLIENT_SOURCE, 'private, no-store, max-age=0');
   }
   if (p === MIGRATION_CENTRE_CLIENT_ROUTE && method === 'GET') {
     return sendJavaScript(res, MIGRATION_CENTRE_CLIENT_SOURCE, 'private, no-store, max-age=0');
@@ -5020,6 +5024,20 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   }
 
   // ── exact company-content review: complete immutable bytes beside the decision ──
+  const socialImageRoute = p.match(/^\/portal\/content\/items\/([0-9a-f-]+)\/versions\/([0-9a-f-]+)\/image$/u);
+  if (deps.kind === 'postgres' && socialImageRoute && method === 'GET') {
+    const [, contentItemId = '', contentVersionId = ''] = socialImageRoute;
+    if (!deps.companyContent?.review || !CRM_OBJECT_ID.test(contentItemId)
+        || !CRM_OBJECT_ID.test(contentVersionId)) { res.writeHead(404); res.end(); return; }
+    try {
+      const result = await deps.companyContent.review(crmIdentity(sessionToken, deps),
+        { contentItemId, contentVersionId });
+      const image = result.ok ? result.snapshot.review.social?.image : null;
+      if (!image) { res.writeHead(404, { 'cache-control': 'no-store' }); res.end(); return; }
+      return sendVerifiedCompanyArtwork(res, { mediaType: image.mimeType,
+        sha256: image.sha256, bytes: Buffer.from(image.base64, 'base64') });
+    } catch { res.writeHead(503, { 'cache-control': 'no-store' }); res.end(); return; }
+  }
   const exactCompanyContentReview = p.match(COMPANY_CONTENT_EXACT_REVIEW_ROUTE);
   if (deps.kind === 'postgres' && exactCompanyContentReview && method === 'GET') {
     const contentItemId = (exactCompanyContentReview[1] ?? '').toLowerCase();
@@ -5157,7 +5175,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         deps,
         'content',
         csrfToken,
-      ));
+      ), undefined, {
+        'content-security-policy': "default-src 'none'; script-src 'self'; img-src 'self' blob:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      });
     } catch {
       return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
         title: 'Exact content review temporarily unavailable',
@@ -5300,7 +5320,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   }
 
   if (deps.kind === 'postgres' && p === CONTENT_SOCIAL_REVISION_ROUTE && method === 'POST') {
-    const form = await readForm(req);
+    const form = await readForm(req, 2 * 1024 * 1024);
     if (!deps.companyContent?.createSocialRevision
         || !verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) {
       return contentControlRedirect(res, deps, sessionToken, form, 'invalid');
@@ -5334,6 +5354,8 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           expectedContentSha256,
           publicationCopy,
           artworkInstructions: artworkInstructions || null,
+          ...(form.image_data_url ? { imageDataUrl: form.image_data_url,
+            imageAlt: form.image_alt ?? '' } : {}),
         },
       );
       if (!outcome.ok) {

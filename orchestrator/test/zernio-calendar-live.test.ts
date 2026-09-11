@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { IMAGE_FIXTURE } from './social-image-fixture.js';
 import test from 'node:test';
 import {
   loadZernioCalendarRuntimeConfig,
@@ -98,6 +99,36 @@ test('calendar is the clock and one approved Instagram job publishes now through
   });
   assert.equal(settled[0]?.state, 'published');
   assert.equal(settled[0]?.safeCode, 'zernio_published');
+});
+
+test('a denied final job gate prevents even image upload', async () => {
+  let uploads=0;
+  const result=await runZernioCalendarLiveOnce({config:activeConfig(),
+    accountBindings:[{network:'instagram',providerAccountId:ACCOUNT_ID}],
+    repository:repository({settled:[],calling:false}),leaseToken:LEASE,
+    mediaResolver:{resolve:async()=>{uploads++;return ['https://media.zernio.com/image.jpg'];}},
+    posting:{publishDue:async()=>{throw new Error('not allowed');},reconcile:async()=>{throw new Error('not allowed');}},
+  });
+  assert.equal(result,'failed_or_attention');assert.equal(uploads,0);
+});
+
+test('reconciling a combined image post does not upload the image a second time', async () => {
+  let uploads=0,reconciles=0;
+  const settled:ZernioCalendarSettlement[]=[];
+  const selected={...claim,attemptKind:'reconcile' as const};
+  const loaded={...material,attemptKind:'reconcile' as const,providerPostId:'existing-post',
+    media:[{storageKey:`hq-social-image/${IMAGE_FIXTURE.sha256}`,blobSha256:IMAGE_FIXTURE.sha256,
+      mimeType:IMAGE_FIXTURE.mimeType,inlineImage:IMAGE_FIXTURE}]};
+  await runZernioCalendarLiveOnce({config:activeConfig(),
+    accountBindings:[{network:'instagram',providerAccountId:ACCOUNT_ID}],
+    repository:repository({settled,selected,loaded}),leaseToken:LEASE,
+    mediaResolver:{resolve:async()=>{uploads++;throw new Error('must not upload');}},
+    posting:{publishDue:async()=>{throw new Error('must not publish again');},reconcile:async()=>{
+      reconciles++;return {providerPostId:'existing-post',status:'published',responseSha256:'a'.repeat(64),
+        platforms:[{network:'instagram',accountId:ACCOUNT_ID,status:'published',platformPostUrl:null}]};
+    }},
+  });
+  assert.equal(uploads,0);assert.equal(reconciles,1);assert.equal(settled[0]?.state,'published');
 });
 
 test('fails before the provider call when the runtime account does not match database evidence', async () => {

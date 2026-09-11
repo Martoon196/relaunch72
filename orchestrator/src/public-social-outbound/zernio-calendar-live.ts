@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { parseCompanyContentSocialImage, type CompanyContentSocialImage } from '../company-content-pg/social-image.js';
 import {
   ZernioPostingError,
   type ZernioPostingClient,
@@ -52,6 +53,7 @@ export interface ZernioCalendarJobMaterial extends ZernioCalendarClaim {
     storageKey: string;
     blobSha256: string;
     mimeType: string;
+    inlineImage?: CompanyContentSocialImage;
   }>[];
 }
 
@@ -188,6 +190,13 @@ function validateMaterial(claim: ZernioCalendarClaim, material: ZernioCalendarJo
         || !SHA256.test(item.blobSha256) || typeof item.mimeType !== 'string')) {
     fail('invalid_binding');
   }
+  for (const item of material.media) {
+    if (item.inlineImage !== undefined) {
+      const verified = parseCompanyContentSocialImage(item.inlineImage);
+      if (verified.sha256 !== item.blobSha256 || verified.mimeType !== item.mimeType
+          || item.storageKey !== `hq-social-image/${verified.sha256}`) fail('invalid_binding');
+    }
+  }
 }
 
 function mediaType(mimeType: string): ZernioPostingMediaItem['type'] {
@@ -267,11 +276,6 @@ export async function runZernioCalendarLiveOnce(input: Readonly<{
   if (!target || sha256(target.providerAccountId) !== material.providerAccountIdSha256) {
     fail('invalid_binding');
   }
-  const urls = material.attemptKind === 'publish'
-    ? await input.mediaResolver.resolve({
-      workspaceId: material.workspaceId, jobId: material.jobId, media: material.media,
-    }) : Object.freeze([]);
-  if (urls.length !== material.media.length) fail('invalid_binding');
   const calling = await input.repository.markCalling({
     ...claim, leaseToken: input.leaseToken,
     providerEffectsEnabled: true, emergencyPaused: false,
@@ -284,6 +288,13 @@ export async function runZernioCalendarLiveOnce(input: Readonly<{
   });
   let result: ZernioCalendarSettlement;
   try {
+    // Upload only after the exact job's last permission/lease check. Reconcile
+    // never uploads or requires media URLs again.
+    const urls = material.attemptKind === 'publish'
+      ? await input.mediaResolver.resolve({
+        workspaceId: material.workspaceId, jobId: material.jobId, media: material.media,
+      }) : Object.freeze([]);
+    if (material.attemptKind === 'publish' && urls.length !== material.media.length) fail('invalid_binding');
     const snapshot = material.attemptKind === 'publish'
       ? await input.posting.publishDue({
         requestId: material.jobId,
