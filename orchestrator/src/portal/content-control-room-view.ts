@@ -165,7 +165,7 @@ function contentActions(view: ContentControlRoomView, item: ContentControlRoomIt
 }
 function notice(view: ContentControlNoticeView | undefined): string {
   if (!view) return '';
-  return `<section class="ccr-notice" data-kind="${escapeHtml(view.kind)}" role="status"><strong>${escapeHtml(view.title)}</strong><p>${escapeHtml(view.message)}</p></section>`;
+  return `<section class="ccr-notice" id="ccr-notice" style="scroll-margin-top:100px" data-kind="${escapeHtml(view.kind)}" role="status"><strong>${escapeHtml(view.title)}</strong><p>${escapeHtml(view.message)}</p></section>`;
 }
 
 function fullProof(item: ContentControlRoomItemView): string {

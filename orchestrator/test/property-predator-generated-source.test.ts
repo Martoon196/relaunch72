@@ -13,6 +13,19 @@ const BRAND = 'b'.repeat(64);
 const TOKEN = 'read-token-0000000000000000000000000001';
 const digest = (value: string): string => createHash('sha256').update(value).digest('hex');
 
+test('source failure reports only safe stage and HTTP status, never upstream body', async () => {
+  const service = createPropertyPredatorGeneratedSourceRevalidator({
+    baseUrl: 'https://propertypredator.com', clientId: 'relaunch72-test', readToken: TOKEN,
+    fetchImpl: async () => new Response('private upstream detail', { status: 403 }),
+  });
+  await assert.rejects(service.verify({ sourceItemId: ITEM_ID, sourceVersionId: VERSION_ID,
+    sourceItemVersion: 1, contentSha256: 'a'.repeat(64), brandSha256: BRAND }), (error: unknown) => {
+    assert.ok(error instanceof PropertyPredatorGeneratedSourceError);
+    assert.equal(error.stage, 'source_http'); assert.equal(error.status, 403);
+    assert.doesNotMatch(error.message, /private|token/); return true;
+  });
+});
+
 function fixture() {
   const payload = {
     body: 'Inspect the evidence before the viewing.',

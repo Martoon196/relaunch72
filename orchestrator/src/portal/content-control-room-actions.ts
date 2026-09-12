@@ -14,6 +14,7 @@ export type ContentControlNoticeCode =
   | 'changes_requested'
   | 'replayed'
   | 'source_refreshed'
+  | 'source_unavailable'
   | 'forbidden'
   | 'conflict'
   | 'missing'
@@ -29,7 +30,7 @@ export interface ContentControlNoticeView {
 
 const NOTICE_CODES = new Set<ContentControlNoticeCode>([
   'draft_created', 'revision_created', 'requested', 'approved', 'rejected', 'changes_requested', 'replayed', 'source_refreshed',
-  'forbidden', 'conflict', 'missing', 'invalid', 'review_unavailable', 'unavailable',
+  'forbidden', 'conflict', 'missing', 'invalid', 'review_unavailable', 'unavailable', 'source_unavailable',
 ]);
 const NOTICE_CONTEXT = 'relaunch72:content-control-notice:v1\0';
 const EXACT_REVIEW_APPROVAL_CONTEXT = 'relaunch72:content-control-exact-review-approval:v1\0';
@@ -190,6 +191,11 @@ export function contentControlNoticeToken(
 }
 
 function noticeFor(code: ContentControlNoticeCode): ContentControlNoticeView {
+  if (code === 'source_unavailable') return {
+    kind: 'error',
+    title: 'Scheduling check could not finish',
+    message: 'Your post, picture and approval are saved. We could not verify the saved source. Nothing was scheduled or published; you do not need to recreate or reapprove your post.',
+  };
   if (code === 'draft_created') return {
     kind: 'success',
     title: 'Test email created',

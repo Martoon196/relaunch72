@@ -126,6 +126,10 @@ export class PgPortalCampaignDraftService implements PortalCampaignDraftService 
       if (error instanceof PropertyPredatorGeneratedDraftLifecycleError) {
         return Object.freeze({ ok: false, kind: 'conflict', message: 'The approved version or its exact source changed. Refresh before trying again.' });
       }
+      // Values only, never upstream messages, response bodies, credentials or post content.
+      const diagnostic = error as { name?: unknown; code?: unknown; stage?: unknown; status?: unknown } | null;
+      const token = (value: unknown) => typeof value === 'string' && /^[A-Za-z0-9_]{1,80}$/u.test(value) ? value : 'unknown';
+      console.error(`[generated-source-refresh] name=${token(diagnostic?.name)} code=${token(diagnostic?.code)} stage=${token(diagnostic?.stage)} status=${Number.isInteger(diagnostic?.status) ? diagnostic?.status : 'unknown'}`);
       return Object.freeze({ ok: false, kind: 'unavailable', message: 'The exact generated source could not be revalidated. Nothing was scheduled or posted.' });
     }
   }

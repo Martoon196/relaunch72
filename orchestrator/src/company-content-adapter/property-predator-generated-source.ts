@@ -23,13 +23,13 @@ export interface PropertyPredatorGeneratedSourceRevalidator {
 }
 
 export class PropertyPredatorGeneratedSourceError extends Error {
-  constructor() {
+  constructor(readonly stage = 'validation', readonly status?: number) {
     super('Property Predator generated source could not be revalidated');
     this.name = 'PropertyPredatorGeneratedSourceError';
   }
 }
 
-function fail(): never { throw new PropertyPredatorGeneratedSourceError(); }
+function fail(stage?: string, status?: number): never { throw new PropertyPredatorGeneratedSourceError(stage, status); }
 
 function sha256(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
@@ -90,6 +90,7 @@ export function createPropertyPredatorGeneratedSourceRevalidator(options: Readon
           || !SHA256.test(target.contentSha256) || !SHA256.test(target.brandSha256)) fail();
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
+      let stage = 'source_request';
       try {
         const endpoint = new URL(
           `/api/internal/company-content/generated/${encodeURIComponent(target.sourceVersionId)}`,
@@ -105,13 +106,18 @@ export function createPropertyPredatorGeneratedSourceRevalidator(options: Readon
           cache: 'no-store', credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer',
           signal: controller.signal,
         });
-        if (!(response instanceof Response) || response.redirected || response.status !== 200
+        if (!(response instanceof Response)) fail('source_response');
+        if (response.status !== 200) fail('source_http', response.status);
+        stage = 'source_headers';
+        if (response.redirected
             || !JSON_MEDIA_TYPE.test(response.headers.get('content-type') ?? '')
-            || !/(?:^|,)\s*no-store\s*(?:,|$)/iu.test(response.headers.get('cache-control') ?? '')) fail();
+            || !/(?:^|,)\s*no-store\s*(?:,|$)/iu.test(response.headers.get('cache-control') ?? '')) fail(stage);
+        stage = 'source_body';
         const body = record(await boundedJson(response));
         const item = record(body.item);
         const payload = record(item.payload);
         const usage = record(item.usage);
+        stage = 'source_integrity';
         if (body.schemaVersion !== 1 || item.status !== 'source_review_required'
             || item.draftId !== target.sourceItemId || item.versionId !== target.sourceVersionId
             || item.itemVersion !== target.sourceItemVersion
@@ -122,7 +128,7 @@ export function createPropertyPredatorGeneratedSourceRevalidator(options: Readon
             || sha256(canonicalCompanyContentJson(usage)) !== item.usageSha256
             || response.headers.get('x-company-content-version') !== target.sourceVersionId
             || response.headers.get('x-content-sha256') !== target.contentSha256
-            || response.headers.get('x-brand-sha256') !== target.brandSha256) fail();
+            || response.headers.get('x-brand-sha256') !== target.brandSha256) fail(stage);
         return Object.freeze({
           catalogSha256: sha256(canonicalCompanyContentJson(Object.freeze({
             schema: 'propertypredator.generated-source-revalidation/v1',
@@ -135,8 +141,8 @@ export function createPropertyPredatorGeneratedSourceRevalidator(options: Readon
           }))),
         });
       } catch (error) {
-        if (error instanceof PropertyPredatorGeneratedSourceError) throw error;
-        fail();
+        if (error instanceof PropertyPredatorGeneratedSourceError && error.stage !== 'validation') throw error;
+        fail(stage);
       } finally {
         clearTimeout(timer);
       }

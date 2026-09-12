@@ -1555,7 +1555,8 @@ function contentControlRedirect(
   code: ContentControlNoticeCode,
 ): void {
   const noticeToken = contentControlNoticeToken(deps.sessionSecret, sessionToken, code);
-  redirect(res, contentControlReturnLocation(form, noticeToken), undefined, 303);
+  const location = contentControlReturnLocation(form, noticeToken);
+  redirect(res, code === 'source_unavailable' ? `${location.split('#')[0]}#ccr-notice` : location, undefined, 303);
 }
 
 function exactCompanyContentReviewLocation(
@@ -5336,9 +5337,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         outcome.ok
           ? outcome.result.disposition === 'replayed' ? 'replayed' : 'source_refreshed'
           : outcome.kind === 'forbidden' ? 'forbidden'
-            : outcome.kind === 'conflict' ? 'conflict' : 'unavailable');
+            : outcome.kind === 'conflict' ? 'conflict' : 'source_unavailable');
     } catch {
-      return contentControlRedirect(res, deps, sessionToken, form, 'unavailable');
+      return contentControlRedirect(res, deps, sessionToken, form, 'source_unavailable');
     }
   }
 

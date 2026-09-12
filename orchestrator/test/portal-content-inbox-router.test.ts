@@ -336,6 +336,18 @@ test('generated source refresh POST is exact, CSRF-bound and does not accept wor
   }, postgres({ campaignDrafts }), COOKIE);
   assert.equal(bad.statusCode, 303);
   assert.equal(calls.length, 1);
+
+  const unavailable = await post(GENERATED_SOURCE_REFRESH_ROUTE, {
+    _csrf: portalCsrfToken(SECRET, SESSION), command_key: 'refresh-generated-source-0003',
+    content_item_id: '75000000-0000-4000-8000-000000000001',
+    content_version_id: '76000000-0000-4000-8000-000000000001', version_number: '3',
+    content_sha256: '11'.repeat(32), return_anchor: 'ccr-content-1',
+  }, postgres({ campaignDrafts: { ...campaignDrafts, refreshApprovedSource: async () => ({
+    ok: false as const, kind: 'unavailable' as const, message: 'private upstream detail',
+  }) } }), COOKIE);
+  assert.equal(unavailable.statusCode, 303);
+  assert.match(unavailable.headers.location ?? '', /notice=source_unavailable\.[^#]+#ccr-notice$/);
+  assert.doesNotMatch(unavailable.headers.location ?? '', /private|ccr-content-1/);
 });
 
 test('Content approval POSTs fail closed before commands on missing CSRF, invalid decisions or unavailable review content', async () => {
