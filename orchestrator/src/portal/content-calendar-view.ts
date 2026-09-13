@@ -121,6 +121,13 @@ export interface ContentCalendarLiveScheduleProjectionView {
 }
 
 const CONTENT_CALENDAR_STYLE = `
+  .ccal-saved-list{list-style:none;margin:16px 0 0;padding:0;display:grid;gap:16px;min-width:0}
+  .ccal-saved-card{padding:20px;border:2px solid var(--cal-teal);border-radius:12px;background:var(--cal-panel);color:var(--cal-ink);min-width:0;overflow-wrap:anywhere}
+  .ccal-saved-card h3{font-size:20px;line-height:1.4;margin:10px 0}
+  .ccal-saved-card p,.ccal-saved-card strong,.ccal-saved-card a{font-size:16px;line-height:1.6}
+  .ccal-saved-card>div{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+  .ccal-saved-card .ccal-command-submit{display:inline-flex;align-items:center;min-height:48px;white-space:normal;text-decoration:none}
+  .ccal-saved-plans{scroll-margin-top:90px}.ccal-saved-plans h2{scroll-margin-top:90px}
   .ccal{--cal-bg:var(--canvas);--cal-panel:var(--panel);--cal-raised:var(--panel-strong);--cal-soft:var(--panel-subtle);--cal-line:var(--line);--cal-line2:var(--line-strong);--cal-ink:var(--ink);--cal-muted:var(--muted);--cal-faint:var(--faint);--cal-teal:var(--accent);--cal-teal-soft:var(--accent-soft);--cal-amber:var(--accent-deep);--cal-red:var(--danger);--cal-blue:var(--info);min-width:0;overflow:hidden;border:1px solid var(--line);background:var(--cal-bg);color:var(--cal-ink);font-family:var(--sans,ui-sans-serif,system-ui,sans-serif)}
   .ccal *{box-sizing:border-box}.ccal h1,.ccal h2,.ccal h3,.ccal p{margin-top:0}.ccal a{text-decoration:none}.ccal button{font:inherit}.ccal code{font-family:var(--mono,ui-monospace,monospace);overflow-wrap:anywhere}.ccal-visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
   .ccal-hero{position:relative;display:grid;grid-template-columns:minmax(0,1fr) minmax(255px,335px);gap:28px;align-items:end;padding:28px 30px 25px;border-bottom:1px solid var(--cal-line);background:radial-gradient(circle at 79% -15%,rgba(0,229,204,.17),transparent 34%),linear-gradient(135deg,var(--cal-panel),var(--cal-soft) 67%);overflow:hidden}.ccal-hero::before{content:"";position:absolute;width:260px;height:260px;right:18%;top:-190px;border:1px solid rgba(0,229,204,.19);transform:rotate(45deg)}.ccal-kicker{position:relative;color:var(--cal-teal);font:850 14px/1.2 var(--mono,monospace);letter-spacing:.14em;text-transform:uppercase}.ccal-hero h1{position:relative;margin:9px 0 9px;font-family:var(--display,var(--sans));font-size:clamp(2.3rem,4.6vw,4.8rem);font-weight:600;line-height:.91;letter-spacing:-.05em}.ccal-hero h1 em{color:var(--cal-teal);font-style:normal}.ccal-hero p{position:relative;max-width:790px;margin:0;color:var(--cal-muted);font-size:14px;line-height:1.65}.ccal-test-card{position:relative;border:1px solid #36756e;background:var(--cal-soft);padding:15px}.ccal-test-card strong{display:block;color:var(--cal-teal);font:900 14px var(--mono,monospace);letter-spacing:.08em;text-transform:uppercase}.ccal-test-card span{display:block;margin:8px 0 5px;font-size:14px;font-weight:800}.ccal-test-card small{display:block;color:var(--cal-muted);font-size:14px;line-height:1.5}
@@ -470,10 +477,25 @@ export interface ContentCalendarPostPlanView extends ContentCalendarCommandActio
   readonly targets: readonly ContentCalendarChoiceView[];
 }
 
+function savedPlans(view: ContentCalendarView): string {
+  const plans = view.days.flatMap(day => day.slots).filter(slot => slot.planning
+    && !['cancelled', 'complete'].includes(slot.planning.statusTone));
+  if (!plans.length) return '';
+  const cards = plans.map(slot => {
+    const review = `/portal/content/items/${encodeURIComponent(slot.contentItemId)}/versions/${encodeURIComponent(slot.contentVersionId)}/review`;
+    const next = slot.ownedSocialStageHref
+      ? `<a class="ccal-command-submit" href="${escapeHtml(slot.ownedSocialStageHref)}">Confirm publishing on ${escapeHtml(slot.channelLabel)} →</a>`
+      : `<a class="ccal-campaign-link" href="${review}">Check this post →</a>`;
+    return `<li class="ccal-saved-card" data-saved-plan><strong>${escapeHtml(slot.channelLabel)} · Plan saved</strong><h3>${escapeHtml(slot.title)}</h3><p>${zonedScheduleInstant(slot.scheduledFor, view.timezone)?.markup ?? escapeHtml(slot.timeLabel)} · ${escapeHtml(view.timezone === 'Europe/London' ? 'UK time' : view.timezone)}</p><p>Not scheduled to send. ${slot.ownedSocialStageHref ? 'Your next step is to confirm publishing.' : 'Open the post to check what needs attention.'}</p><div>${next} <a class="ccal-campaign-link" href="${review}">View post and picture</a></div></li>`;
+  }).join('');
+  return `<section class="ccal-live-scheduler ccal-saved-plans" aria-labelledby="saved-plans-title"><h2 id="saved-plans-title">Your saved plans</h2><p>Your post is already in the calendar. You do not need to create it again or drag it anywhere.</p><ul class="ccal-saved-list">${cards}</ul></section>`;
+}
+
 function planPost(view: ContentCalendarView, options: RenderContentCalendarOptions): string {
   const plan = options.postPlan;
   const selected = options.selectedContentVersionId;
   if (!commandReady(plan) || !plan.contentVersions.length || !plan.targets.length) {
+    if (!view.backlog.length && view.days.some(day => day.slots.some(slot => slot.planning))) return '';
     const message = view.backlog.some(item => item.simulationEligible)
       ? 'Your approved post is saved. Planning is not available for this account yet. Check the publishing setup below; you do not need to create your post again.'
       : view.backlog.some(item => item.approvalLabel === 'Exact approval')
@@ -601,6 +623,7 @@ export function renderContentCalendarBody(
   })}<style data-property-predator-content-calendar>${CONTENT_CALENDAR_STYLE}</style><article class="ccal" aria-labelledby="ccal-title" data-provider-effects="none" data-content-calendar data-calendar-mode="${escapeHtml(view.filters.mode)}" data-calendar-timezone="${escapeHtml(view.timezone)}" data-source-truncated="${view.sourceTruncated ? 'true' : 'false'}" data-preview-dirty="false">
     <header class="ccal-hero"><div><div class="ccal-kicker">Your content</div><h1 id="ccal-title">Your <em>calendar.</em></h1><p>Plan your posts and see what is scheduled.</p></div><aside class="ccal-test-card" aria-label="Calendar connection"><strong>${live ? 'Calendar available' : configuredNetworks.length ? 'Calendar unavailable' : 'Setup needed'}</strong><span>${escapeHtml(view.workspaceName)}</span><small>${escapeHtml(view.timezone === 'Europe/London' ? 'All times shown in UK time' : view.timezone)}</small></aside></header>
     ${operationOutcome(options.mutations?.outcome)}
+    ${savedPlans(view)}
     ${planPost(view, options)}
     ${scheduledPosts(options.liveSchedules, view.timezone)}
     <div class="ccal-toolbar">${modeNav(view)}<div class="ccal-period"><a href="${plannerHref(view, { date: view.previousDate })}" aria-label="Previous ${escapeHtml(view.filters.mode)}">‹</a><div class="ccal-period-title"><strong>${escapeHtml(view.periodLabel)}</strong><span>${escapeHtml(view.timezone === 'Europe/London' ? 'UK time' : view.timezone)}</span></div><a href="${plannerHref(view, { date: view.nextDate })}" aria-label="Next ${escapeHtml(view.filters.mode)}">›</a></div><a class="ccal-draft-action" href="#new-plan">Plan a post</a></div>

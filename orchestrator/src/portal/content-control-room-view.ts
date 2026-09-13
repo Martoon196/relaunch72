@@ -136,7 +136,7 @@ function postStatus(item: ContentControlRoomItemView): string {
   if (item.approvalStatus === 'rejected') return 'Not approved';
   if (item.approvalStatus === 'pending') return 'Awaiting approval';
   if (item.approvalStatus === 'unrequested') return 'Draft';
-  if (item.publishable) return 'Ready to plan';
+  if (item.publishable) return 'Approved and checked';
   if (!item.sourceFresh) return 'Needs a quick check';
   return 'Needs attention';
 }
@@ -148,13 +148,15 @@ function nextStep(item: ContentControlRoomItemView): string {
   if (item.approvalStatus === 'changes_requested') return 'Open this post and make the requested changes.';
   if (item.approvalStatus === 'rejected') return 'This version was not approved. Open it to make changes.';
   if (!item.sourceFresh) return 'Your approval is saved. Check the saved source again before planning.';
-  return item.publishable ? 'Approved and checked. Open the post to continue to your calendar.' : 'Open the post to see what still needs attention.';
+  return item.publishable ? 'Open Calendar to see your saved plan or choose when to post.' : 'Open the post to see what still needs attention.';
 }
 function contentActions(view: ContentControlRoomView, item: ContentControlRoomItemView,
   security: ContentControlRoomActionSecurity | undefined): string {
   const label = item.approvalStatus === 'pending' && view.canManage ? 'Review & approve'
     : item.publishable ? 'Open approved post' : 'Open post';
-  const open = `<a class="ccr-exact-link" href="${reviewHref(item)}">${escapeHtml(label)} <span aria-hidden="true">→</span></a>`;
+  const open = item.publishable && item.kind === 'social_post'
+    ? `<a class="ccr-exact-link" href="/portal/content/calendar?content_version=${encodeURIComponent(item.contentVersionId)}#saved-plans-title">Open calendar →</a> <a class="ccr-clear" href="${reviewHref(item)}">View post and picture</a>`
+    : `<a class="ccr-exact-link" href="${reviewHref(item)}">${escapeHtml(label)} <span aria-hidden="true">→</span></a>`;
   const key = security?.sourceRefreshKeys?.[item.contentVersionId];
   if (item.approvalStatus === 'approved' && !item.approvalStale && !item.sourceFresh
       && item.sourceSystem === 'property_predator_generation' && view.canWrite && view.canManage
@@ -201,7 +203,7 @@ export function renderContentControlRoomBody(view: ContentControlRoomView,
     { value: 'all', label: 'All content', count: view.metrics.loaded },
     { value: 'attention', label: 'Needs attention', count: view.metrics.needsAttention },
     { value: 'approved', label: 'Approved', count: view.metrics.exactApproved },
-    { value: 'ready', label: 'Ready to plan', count: view.metrics.publishable },
+    { value: 'ready', label: 'Approved and checked', count: view.metrics.publishable },
   ].map(tab => `<a class="ccr-metric" href="${CONTENT_CONTROL_ROOM_ROUTE}?status=${tab.value}#content-library"${view.filters.status === tab.value ? ' aria-current="page"' : ''}><small>${tab.label}</small><strong>${safeCount(tab.count)}</strong></a>`).join('');
   const admin = options.ownedSeedProofAvailable && view.canManage && validSecurityToken(options.security?.csrfToken) && validCommandKey(options.ownedSeedPrepareCommandKey)
     ? `<details class="ccr-admin"><summary>Internal email test</summary><p>Prepare a draft for the office-only email test.</p><form method="post" action="${OWNED_SEED_PROOF_PREPARE_ROUTE}"><input type="hidden" name="_csrf" value="${escapeHtml(options.security!.csrfToken)}"><input type="hidden" name="command_key" value="${escapeHtml(options.ownedSeedPrepareCommandKey)}"><button class="ccr-action-button" type="submit">Prepare test email</button></form></details>` : '';

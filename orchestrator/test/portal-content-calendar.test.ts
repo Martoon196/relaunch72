@@ -434,6 +434,16 @@ test('Content Calendar validates optional durable planning and JIT provenance ag
   assert.equal(stageUrl.searchParams.get('planning_target_id'), planning.targetId);
   assert.equal(stageUrl.searchParams.get('scheduled_for'), planning.desiredFor);
   assert.match(renderContentCalendarBody(exact), /Confirm publishing on LinkedIn/);
+  const savedHtml = renderContentCalendarBody(exact);
+  const savedSection = savedHtml.match(/<section[^>]*ccal-saved-plans[\s\S]*?<\/section>/u)?.[0];
+  assert.ok(savedSection);
+  assert.match(savedSection, /Your saved plans/u);
+  assert.match(savedSection, /data-saved-plan/u);
+  assert.match(savedSection, /Confirm publishing on LinkedIn/u);
+  assert.match(savedSection, /View post and picture/u);
+  assert.doesNotMatch(savedHtml, /Approve a post with its picture first/u);
+  assert.ok(savedHtml.indexOf('id="saved-plans-title"') < savedHtml.indexOf('class="ccal-toolbar"'));
+  assert.match(savedHtml, /\.ccal-saved-list\{[^}]*min-width:0/u);
 
   const contradicted = present({
     catalog: page([item]),

@@ -22,6 +22,15 @@ const HASH_A = '11'.repeat(32);
 const HASH_B = '22'.repeat(32);
 const HASH_C = '33'.repeat(32);
 
+test('approved social content goes straight to calendar without claiming it is unplanned', () => {
+  const html = renderContentControlRoomBody(present([item()]));
+  assert.match(html, /Approved and checked/u);
+  assert.match(html, /href="\/portal\/content\/calendar\?content_version=22222222-2222-4222-8222-222222222222#saved-plans-title"/u);
+  assert.match(html, /Open calendar/u);
+  assert.match(html, /View post and picture/u);
+  assert.doesNotMatch(html, /Ready to plan|Open approved post/u);
+});
+
 function item(overrides: Partial<CompanyContentCatalogItem> = {}): CompanyContentCatalogItem {
   return {
     contentItemId: '11111111-1111-4111-8111-111111111111',
