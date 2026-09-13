@@ -348,7 +348,8 @@ test('first approved post can be planned without an existing campaign revision a
   assert.match(form, new RegExp(`value="${IDS.targetOne}"`));
   assert.doesNotMatch(form, new RegExp(IDS.targetTwo));
   assert.match(form, /name="environment" value="test"/);
-  assert.match(form, /name="confirm_test_only" value="confirmed" required/);
+  assert.match(form, /type="hidden" name="confirm_test_only" value="confirmed"/);
+  assert.doesNotMatch(form, /type="checkbox"/);
   assert.match(form, /Save plan/);
   assert.doesNotMatch(form, /name="campaign_revision_key"/);
   assert.equal(calls.plans.length, 0);
@@ -1219,16 +1220,20 @@ test('wizard POST rejects CSRF, duplicate singleton, unknown fields and DST gap/
 
 test('a denied calendar save keeps the selected post instead of restarting the new-post wizard', async () => {
   const calls = freshCalls();
+  const form = baseCreateForm();
+  form.set('desired_for_local', '2026-09-13T13:57');
   const result = await call('POST', CAMPAIGN_WIZARD_CREATE_TEST_ROUTE, postgres({
     publicSocial: { ...socialService(calls), createCampaignPlan: async () => ({
       ok: false as const, kind: 'forbidden' as const, message: 'private database detail',
     }) },
     companyContent: contentService(),
-  }), baseCreateForm());
+  }), form);
   assert.equal(result.statusCode, 303);
   const returned = new URL(result.headers.location!, 'https://example.test');
   assert.equal(returned.pathname, CONTENT_CALENDAR_ROUTE);
   assert.equal(returned.searchParams.get('content_version'), IDS.contentVersion);
+  assert.equal(returned.searchParams.get('desired_for_local'), '2026-09-13T13:57');
+  assert.equal(returned.searchParams.get('target'), form.getAll('target_ids').length === 1 ? form.get('target_ids') : null);
   assert.match(returned.searchParams.get('notice') ?? '', /^forbidden\./);
   const notice = campaignWizardNoticeFromQuery(returned.searchParams, SECRET, SESSION);
   assert.equal(notice?.title, 'Your plan could not be saved');

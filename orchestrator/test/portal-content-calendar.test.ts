@@ -59,6 +59,28 @@ test('approved source-locked post keeps its approval and points to the existing 
   assert.doesNotMatch(html, /data-calendar-post-plan/);
 });
 
+test('simple saved-post planner accepts every minute, restores inputs and needs no confirmation checkbox', () => {
+  const html = renderContentCalendarBody(present(), {
+    selectedContentVersionId: 'saved-post',
+    selectedTargetId: 'linkedin-target',
+    desiredForLocal: '2026-09-13T13:57',
+    postPlan: {
+      actionUrl: '/portal/campaigns/test-planning-intents',
+      csrfToken: 'csrf-calendar-token-123456',
+      commandKey: 'calendar-plan-017',
+      contentVersions: [{ value: 'saved-post', label: 'Approved post' }],
+      targets: [{ value: 'linkedin-target', label: 'LinkedIn' }],
+    },
+  });
+  const form = html.match(/<form[^>]*data-calendar-post-plan>[\s\S]*?<\/form>/u)?.[0];
+  assert.ok(form);
+  assert.match(form, /value="2026-09-13T13:57" step="60"/u);
+  assert.match(form, /value="linkedin-target" selected/u);
+  assert.match(form, /type="hidden" name="confirm_test_only" value="confirmed"/u);
+  assert.doesNotMatch(form, /type="checkbox"|step="300"/u);
+  assert.match(form, /Saving does not publish your post/u);
+});
+
 function page(items: readonly CompanyContentCatalogItem[]): CompanyContentCatalogPage {
   return Object.freeze({ items: Object.freeze(items), nextCursor: null });
 }

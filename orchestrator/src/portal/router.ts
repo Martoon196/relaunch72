@@ -4219,7 +4219,12 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
     const returnToCalendar = oneFormValue(form, 'return_to') === CONTENT_CALENDAR_ROUTE;
     const failureDestination = returnToCalendar ? CONTENT_CALENDAR_ROUTE : CAMPAIGN_WIZARD_ROUTE;
-    const failureQuery = returnToCalendar ? new URLSearchParams({ content_version: contentVersionId }) : undefined;
+    const failureQuery = returnToCalendar ? new URLSearchParams({
+      content_version: contentVersionId,
+      ...(targetIds.length === 1 ? { target: targetIds[0]! } : {}),
+      ...(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/u.test(oneFormValue(form, 'desired_for_local') ?? '')
+        ? { desired_for_local: oneFormValue(form, 'desired_for_local')! } : {}),
+    }) : undefined;
     try {
       const workspaceOutcome = await campaignCommandSnapshot(
         deps.publicSocial,
@@ -4808,6 +4813,10 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           liveSchedules,
           selectedContentVersionId,
           postPlan,
+          selectedTargetId: planningTargets.some(target => target.targetId === url.searchParams.get('target'))
+            ? url.searchParams.get('target')! : undefined,
+          desiredForLocal: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/u.test(url.searchParams.get('desired_for_local') ?? '')
+            ? url.searchParams.get('desired_for_local')! : undefined,
         }),
         deps,
         'content',

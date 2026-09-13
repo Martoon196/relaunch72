@@ -720,7 +720,9 @@ export async function buildPgPortalPlatform(
         }
         const ready = await publicSocialCommandPool.query<{ ready: boolean }>(
           `/* portal.public-social-command-role-readiness */
-           SELECT app_private.public_social_campaign_boundary_ready() AS ready`,
+           SELECT app_private.public_social_campaign_boundary_ready()
+             AND has_function_privilege(current_user,
+               'app_private.lock_active_portal_session(bytea,uuid,uuid)', 'EXECUTE') AS ready`,
         );
         if (ready.rows.length !== 1 || ready.rows[0]?.ready !== true) {
           throw new Error('Public-social TEST boundary is not ready');
