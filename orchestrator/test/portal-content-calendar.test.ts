@@ -445,6 +445,17 @@ test('Content Calendar validates optional durable planning and JIT provenance ag
   assert.ok(savedHtml.indexOf('id="saved-plans-title"') < savedHtml.indexOf('class="ccal-toolbar"'));
   assert.match(savedHtml, /\.ccal-saved-list\{[^}]*min-width:0/u);
 
+  // Preparation completion is not publication: keep its next action visible.
+  const prepared = present({ catalog: page([item]), slots: [slot(item, {
+    planning: { ...planning, planningState: 'materialized' },
+  })] });
+  assert.equal(prepared.days.flatMap(day => day.slots)[0]?.planning?.statusTone, 'complete');
+  const preparedSection = renderContentCalendarBody(prepared)
+    .match(/<section[^>]*ccal-saved-plans[\s\S]*?<\/section>/u)?.[0];
+  assert.ok(preparedSection);
+  assert.match(preparedSection, /Confirm publishing on LinkedIn/u);
+  assert.match(preparedSection, /Not scheduled to send/u);
+
   const contradicted = present({
     catalog: page([item]),
     slots: [slot(item, { planning: { ...planning, desiredFor: '2026-08-27T09:00:00.000Z' } })],

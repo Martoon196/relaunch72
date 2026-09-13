@@ -479,7 +479,7 @@ export interface ContentCalendarPostPlanView extends ContentCalendarCommandActio
 
 function savedPlans(view: ContentCalendarView): string {
   const plans = view.days.flatMap(day => day.slots).filter(slot => slot.planning
-    && !['cancelled', 'complete'].includes(slot.planning.statusTone));
+    && slot.planning.statusTone !== 'cancelled');
   if (!plans.length) return '';
   const cards = plans.map(slot => {
     const review = `/portal/content/items/${encodeURIComponent(slot.contentItemId)}/versions/${encodeURIComponent(slot.contentVersionId)}/review`;
