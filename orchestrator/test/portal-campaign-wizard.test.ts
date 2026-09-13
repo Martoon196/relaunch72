@@ -78,9 +78,29 @@ test('Campaign Wizard presents only exact eligible copy, media and owned TEST ta
   assert.equal(result.content[1]?.gateLabel, 'Exact approval required');
 });
 
+test('saved post continuation remains visible when its scheduling source check expires', () => {
+  const html = renderCampaignWizardBody(view({ ...SNAPSHOT,
+    content: [{ ...COPY, sourceFresh: false }],
+  }), { action: ACTION });
+  assert.match(html, /Continue a saved post/);
+  assert.match(html, new RegExp(`/portal/content/items/${COPY.contentItemId}/versions/${COPY.contentVersionId}/review`));
+  assert.match(html, /Keep its words, picture and approval/);
+  assert.ok(html.indexOf('id="cwiz-saved-title"') < html.indexOf('data-marketing-draft-preflight'));
+  assert.match(html, /Change the campaign goal \(optional\)/);
+  assert.match(html, /Your post and picture/);
+});
+
+test('reported dark boxes use theme surfaces and normal-sized reading text', () => {
+  const html = renderCampaignWizardBody(view(), { action: ACTION });
+  assert.match(html, /\.cwiz \.cwiz-outcome\[data-kind\]/);
+  assert.match(html, /\.cwiz \.cwiz-pack-media/);
+  assert.match(html, /\.cwiz \.cwiz-generate-option:has\(input:checked\)\{background:var\(--w-raised\)/);
+  assert.match(html, /font-size:16px;line-height:1\.6/);
+});
+
 test('Campaign Wizard renders a native protected POST with separate copy and approved media selections', () => {
   const html = renderCampaignWizardBody(view(), { action: ACTION });
-  assert.match(html, /One idea\. <em>Every channel\.<\/em>/);
+  assert.match(html, /Your <em>posts\.<\/em>/);
   assert.match(html, /html\[data-theme="light"\] \.cwiz/);
   assert.match(html, /prefers-color-scheme:light/);
   assert.match(html, /<form class="cwiz-form" method="post" action="\/portal\/campaigns\/test-planning-intents" data-campaign-wizard-form>/);

@@ -4217,6 +4217,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         || !targetIds || !mediaVersionIds || maxAttempts === null) {
       return campaignNoticeRedirect(res, deps, sessionToken, 'invalid', CAMPAIGN_WIZARD_ROUTE);
     }
+    const returnToCalendar = oneFormValue(form, 'return_to') === CONTENT_CALENDAR_ROUTE;
+    const failureDestination = returnToCalendar ? CONTENT_CALENDAR_ROUTE : CAMPAIGN_WIZARD_ROUTE;
+    const failureQuery = returnToCalendar ? new URLSearchParams({ content_version: contentVersionId }) : undefined;
     try {
       const workspaceOutcome = await campaignCommandSnapshot(
         deps.publicSocial,
@@ -4225,12 +4228,12 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       );
       if (!workspaceOutcome.ok) {
         return campaignNoticeRedirect(
-          res, deps, sessionToken, campaignFailureNotice(workspaceOutcome.kind), CAMPAIGN_WIZARD_ROUTE,
+          res, deps, sessionToken, campaignFailureNotice(workspaceOutcome.kind), failureDestination, failureQuery,
         );
       }
       const desiredFor = campaignDesiredInstant(form, workspaceOutcome.snapshot.workspace.timezone);
       if (!desiredFor) {
-        return campaignNoticeRedirect(res, deps, sessionToken, 'invalid', CAMPAIGN_WIZARD_ROUTE);
+        return campaignNoticeRedirect(res, deps, sessionToken, 'invalid', failureDestination, failureQuery);
       }
       const outcome = await deps.publicSocial.createCampaignPlan(
         crmIdentity(sessionToken, deps),
@@ -4247,7 +4250,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       );
       if (!outcome.ok) {
         return campaignNoticeRedirect(
-          res, deps, sessionToken, campaignFailureNotice(outcome.kind), CAMPAIGN_WIZARD_ROUTE,
+          res, deps, sessionToken, campaignFailureNotice(outcome.kind), failureDestination, failureQuery,
         );
       }
       const requestedReturn = oneFormValue(form, 'return_to');
@@ -4266,7 +4269,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           : undefined,
       );
     } catch {
-      return campaignNoticeRedirect(res, deps, sessionToken, 'unavailable', CAMPAIGN_WIZARD_ROUTE);
+      return campaignNoticeRedirect(res, deps, sessionToken, 'unavailable', failureDestination, failureQuery);
     }
   }
 

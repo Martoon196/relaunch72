@@ -632,7 +632,7 @@ test('GET campaign wizard joins safe company content and TEST targets into one p
 
   assert.equal(result.statusCode, 200);
   assert.equal(result.headers['cache-control'], 'no-store');
-  assert.match(result.body, /One idea\. <em>Every channel\.<\/em>/);
+  assert.match(result.body, /Your <em>posts\.<\/em>/);
   assert.match(result.body, new RegExp(`action="${CAMPAIGN_WIZARD_CREATE_TEST_ROUTE}"`));
   assert.match(result.body, new RegExp(`name="content_version_id" value="${IDS.contentVersion}"`));
   assert.match(result.body, new RegExp(`name="media_version_ids" value="${IDS.mediaOne}"`));
@@ -689,19 +689,23 @@ test('Campaign Wizard exposes one exact generation-only form only when the runti
 
   assert.equal(result.statusCode, 200);
   assert.match(result.body, new RegExp(`action="${CAMPAIGN_WIZARD_GENERATE_REVIEW_DRAFT_ROUTE}"`));
-  assert.match(result.body, /Create posts for every channel/);
+  assert.match(result.body, /Create a new post/);
   assert.match(result.body, /name="platform" value="linkedin" checked/);
-  assert.match(result.body, /name="platform" value="facebook" checked/);
-  assert.match(result.body, /name="platform" value="instagram" checked/);
-  assert.match(result.body, /name="platform" value="x" checked/);
-  assert.match(result.body, /name="platform" value="tiktok" checked/);
+  assert.match(result.body, /name="platform" value="facebook"/);
+  assert.doesNotMatch(result.body, /name="platform" value="facebook" checked/);
+  assert.match(result.body, /name="platform" value="instagram"/);
+  assert.doesNotMatch(result.body, /name="platform" value="instagram" checked/);
+  assert.match(result.body, /name="platform" value="x"/);
+  assert.doesNotMatch(result.body, /name="platform" value="x" checked/);
+  assert.match(result.body, /name="platform" value="tiktok"/);
+  assert.doesNotMatch(result.body, /name="platform" value="tiktok" checked/);
   assert.match(result.body, /data-channel-pack-form/);
   assert.match(result.body, /data-pack-media-drop/);
   assert.doesNotMatch(result.body, /data-media-upload-url/);
   assert.match(result.body, /src="\/portal\/assets\/campaign-wizard\.js"/);
   assert.match(result.body, /name="topic" maxlength="20000"/);
-  assert.match(result.body, /What do you want to talk about\?/);
-  assert.match(result.body, /Type a rough idea or paste notes, a transcript, an article or a post\./);
+  assert.match(result.body, /Your original post or idea/);
+  assert.match(result.body, /Paste the original post here, or write a new idea\./);
   assert.doesNotMatch(result.body, /Paste your original content/);
   assert.match(result.body, /data-draft-generation-progress role="status" aria-live="polite" hidden/);
   assert.match(result.body, /name="approved_fact_version_id"/);
@@ -741,8 +745,9 @@ test('Campaign Wizard exposes the five-channel review composer without pre-seede
   }));
 
   assert.equal(result.statusCode, 200);
-  assert.match(result.body, /Create posts for every channel/);
-  assert.match(result.body, /name="platform" value="tiktok" checked/);
+  assert.match(result.body, /Create a new post/);
+  assert.match(result.body, /name="platform" value="tiktok"/);
+  assert.doesNotMatch(result.body, /name="platform" value="tiktok" checked/);
   assert.match(result.body, /No approved fact pack is attached/);
   assert.match(result.body, /No approved library asset is attached/);
   assert.match(result.body, /data-pack-media-drop/);
@@ -1195,7 +1200,14 @@ test('wizard POST rejects CSRF, duplicate singleton, unknown fields and DST gap/
       companyContent: contentService(),
     }), form);
     assert.equal(result.statusCode, 303);
-    assert.match(result.headers.location ?? '', /^\/portal\/campaigns\/new\?notice=invalid\./);
+    if (form === springGap || form === autumnFold) {
+      const returned = new URL(result.headers.location ?? '', 'https://hq.example');
+      assert.equal(returned.pathname, '/portal/content/calendar');
+      assert.equal(returned.searchParams.get('content_version'), form.get('content_version_id'));
+      assert.match(returned.searchParams.get('notice') ?? '', /^invalid\./);
+    } else {
+      assert.match(result.headers.location ?? '', /^\/portal\/campaigns\/new\?notice=invalid\./);
+    }
     assert.doesNotMatch(result.headers.location ?? '', /live-provider-forgery|Attacker-selected/);
   }
 
@@ -1203,6 +1215,25 @@ test('wizard POST rejects CSRF, duplicate singleton, unknown fields and DST gap/
   assert.equal(calls.snapshots.length, 2, 'only the two structurally valid DST forms may read timezone truth');
   assert.equal(calls.reschedules.length, 0);
   assert.equal(calls.cancels.length, 0);
+});
+
+test('a denied calendar save keeps the selected post instead of restarting the new-post wizard', async () => {
+  const calls = freshCalls();
+  const result = await call('POST', CAMPAIGN_WIZARD_CREATE_TEST_ROUTE, postgres({
+    publicSocial: { ...socialService(calls), createCampaignPlan: async () => ({
+      ok: false as const, kind: 'forbidden' as const, message: 'private database detail',
+    }) },
+    companyContent: contentService(),
+  }), baseCreateForm());
+  assert.equal(result.statusCode, 303);
+  const returned = new URL(result.headers.location!, 'https://example.test');
+  assert.equal(returned.pathname, CONTENT_CALENDAR_ROUTE);
+  assert.equal(returned.searchParams.get('content_version'), IDS.contentVersion);
+  assert.match(returned.searchParams.get('notice') ?? '', /^forbidden\./);
+  const notice = campaignWizardNoticeFromQuery(returned.searchParams, SECRET, SESSION);
+  assert.equal(notice?.title, 'Your plan could not be saved');
+  assert.match(notice?.detail ?? '', /You do not need to create your post again/);
+  assert.doesNotMatch(result.headers.location!, /private database detail/);
 });
 
 test('PRG mutation notices are allowlisted, signed and bound to the authenticated session', async () => {

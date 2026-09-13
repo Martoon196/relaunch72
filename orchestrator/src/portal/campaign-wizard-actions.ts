@@ -140,8 +140,8 @@ function noticeFor(code: CampaignWizardNoticeCode): CampaignWizardOperationOutco
     disposition: 'applied',
   });
   if (code === 'forbidden') return Object.freeze({
-    kind: 'error', title: 'Campaign access required',
-    detail: 'Your current workspace role cannot run that protected TEST command. Nothing changed.',
+    kind: 'error', title: 'Your plan could not be saved',
+    detail: 'Planning access needs checking. Your post, picture and approval are unchanged. Nothing has been scheduled. You do not need to create your post again.',
   });
   if (code === 'conflict') return Object.freeze({
     kind: 'error', title: 'Campaign state changed safely',
