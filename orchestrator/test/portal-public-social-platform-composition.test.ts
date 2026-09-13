@@ -36,7 +36,7 @@ test('public-social web composition is optional and fails closed around its exac
   );
   assert.match(
     block,
-    /SELECT app_private\.public_social_campaign_boundary_ready\(\) AS ready/,
+    /SELECT app_private\.public_social_campaign_boundary_ready\(\) AND has_function_privilege\(current_user, 'app_private\.lock_active_portal_session\(bytea,uuid,uuid\)', 'EXECUTE'\) AS ready/,
   );
   assert.match(block, /ready\.rows\.length !== 1 \|\| ready\.rows\[0\]\?\.ready !== true/);
   assert.match(
@@ -48,7 +48,7 @@ test('public-social web composition is optional and fails closed around its exac
     'assertExpectedDatabaseInstallation(publicSocialCommandPool, expectedInstallationId)',
   );
   const boundaryCheck = block.indexOf(
-    'SELECT app_private.public_social_campaign_boundary_ready() AS ready',
+    'SELECT app_private.public_social_campaign_boundary_ready()',
   );
   const exposure = block.indexOf('publicSocial = createPgPortalPublicSocialService');
   const retainedPool = block.indexOf('pools.push(publicSocialCommandPool)');
