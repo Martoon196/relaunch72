@@ -65,7 +65,8 @@ const ICON_PATHS: Record<IconName, string> = {
 };
 
 const MODULE_ICONS: Record<PlatformModuleId, IconName> = {
-  overview: 'overview', actions: 'activity', crm: 'contacts', journeys: 'automation', content: 'content', affiliates: 'contacts', social: 'social', inbox: 'inbox',
+  overview: 'overview', actions: 'activity', crm: 'contacts', journeys: 'automation',
+  leadrelay: 'automation', content: 'content', affiliates: 'contacts', social: 'social', inbox: 'inbox',
   listening: 'listening', webinars: 'calendar', automations: 'automation', analytics: 'activity', settings: 'billing',
 };
 

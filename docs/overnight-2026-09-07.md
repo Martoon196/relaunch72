@@ -35,3 +35,26 @@ The HQ usability package provides a persisted Light/Dark/System appearance contr
 This is a first interface release. Deeper specialist pages still contain existing preview controls and technical wording. Theme preference is remembered separately on the HQ and main-product origins. This package does not claim the full CRM, social sending or entire nine-phase plan complete.
 
 Release verification must record the exact committed SHA, authoritative remote SHA, Render deployed SHA and Neon ledger separately. A successful build or push is not a deployment claim. No outbound communication should be replayed merely to recreate proof.
+
+## LeadRelay integration candidate — 25 October 2026
+
+The existing LeadRelay server bridge and browser panel are reused under
+`orchestrator/src/integrations/leadrelay`. `/portal/leadrelay` runs behind the
+canonical portal session and abuse boundary. Every API action additionally
+requires explicit user/workspace/installation grants. Writes use the existing
+session-bound CSRF verifier. No registry defaults, shared sign-in, browser API
+keys or supplier activation. Empty configuration lists no installations.
+
+Runtime configuration is deployment-owned: `LEADRELAY_INSTALLATIONS_JSON`
+contains id, label, base_url, key_env (actual deployed HTTPS origin only);
+`LEADRELAY_GRANTS_JSON` contains userId, workspaceId, installationId, actions.
+The key named by key_env stays server-side. Configure through secure Render
+settings, never this public repository. Actions are those exported by the reused
+node-gateway.mjs; no call-placement operation is exposed.
+
+Local release checks: typecheck, supply-chain gate and 3,029 tests passed / 40
+skips. Integration grants and authenticated page/CSP have regression coverage.
+Actual LeadRelay hosting and supplier acceptance remain blocked/unverified;
+no existing CRM history, channel worker, outbox backlog or provider is activated.
+The private LeadRelay repository records rollout/rollback details. Previous live
+HQ commit is 3c0bf104b0812c80d1955d066150c25af0168ff7. No HQ schema migration.

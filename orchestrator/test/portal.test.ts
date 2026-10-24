@@ -1541,3 +1541,24 @@ test('POST /portal/run under enforcement runs for an active subscriber', async (
   assert.equal(res.headers.location, '/portal');
   assert.equal(ran, 1);
 });
+
+test('LeadRelay page and assets use existing portal sign-in and same-origin policy', async () => {
+  const opaque=Buffer.alloc(32,47).toString('base64url');
+  const auth: PortalAuthService={
+    resolve:async token=>token===opaque?{sessionToken:token,userId:USER_ID,workspaceId:WORKSPACE_ID,userEmail:'owner@example.com'}:null,
+    login:async()=>null,revoke:async()=>undefined,
+  };
+  const d=postgresDeps(auth);
+  const anonymous=await call('GET','/portal/leadrelay',d);
+  assert.equal(anonymous.statusCode,302);
+  const page=await call('GET','/portal/leadrelay',d,{cookie:`${PORTAL_COOKIE}=${opaque}`});
+  assert.equal(page.statusCode,200);
+  assert.match(page.body,/id="leadrelay-panel"/);
+  assert.match(page.body,/data-csrf="[^"]+"/);
+  assert.match(page.headers['content-security-policy']!,/connect-src 'self'/);
+  assert.match(page.headers['content-security-policy']!,/style-src 'self'/);
+  assert.doesNotMatch(page.body,/Bearer|LEADRELAY_GRANTS_JSON|LEADRELAY_INSTALLATIONS_JSON/);
+  const api=await call('GET','/portal/api/leadrelay/installations',d,{cookie:`${PORTAL_COOKIE}=${opaque}`});
+  assert.equal(api.statusCode,200);
+  assert.deepEqual(JSON.parse(api.body),[]);
+});

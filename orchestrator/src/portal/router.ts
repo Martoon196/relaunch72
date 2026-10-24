@@ -5,6 +5,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { handleLeadRelay, panelSource, panelCss, panelBoot } from '../integrations/leadrelay/mount.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PlatformCapability } from '../platform/capabilities.js';
 import type { CompanyContentCatalogItem } from '../company-content-pg/types.js';
@@ -2263,6 +2264,30 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     sessionToken ? '/portal/login?reason=session-ended' : '/portal/login',
     sessionToken ? clearPortalCookie(deps.secure) : undefined,
   );
+
+  // This runs after canonical identity resolution and the existing abuse gate.
+  if (p === '/portal/api/leadrelay' || p.startsWith('/portal/api/leadrelay/')) {
+    await handleLeadRelay(req, res, portalIdentity, sessionToken, deps.sessionSecret);
+    return;
+  }
+  if (p.startsWith('/portal/leadrelay') && method === 'GET') {
+    if (p === '/portal/leadrelay/panel.js') return sendJavaScript(res, panelSource, 'private, no-store');
+    if (p === '/portal/leadrelay/boot.js') return sendJavaScript(res, panelBoot, 'private, no-store');
+    if (p === '/portal/leadrelay/panel.css') {
+      res.writeHead(200, {'content-type':'text/css; charset=utf-8','cache-control':'no-store'});
+      res.end(panelCss); return;
+    }
+    if (p === '/portal/leadrelay') {
+      const body = `<link rel="stylesheet" href="/portal/leadrelay/panel.css"><div id="leadrelay-panel" data-csrf="${escapeHtml(portalCsrfToken(deps.sessionSecret, sessionToken))}"></div><script type="module" src="/portal/leadrelay/boot.js"></script>`;
+      return sendHtml(res, 200, portalStatusPage(deps, sessionToken, {
+        title:'LeadRelay', message:'Only installations explicitly granted to your HQ identity are available.',
+        active:'crm', backHref:'/portal', backLabel:'Growth HQ',
+      }).replace('</main>', body+'</main>'), undefined, {
+        'cache-control':'no-store',
+        'content-security-policy': "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      });
+    }
+  }
 
   if (deps.kind === 'postgres' && p === MIGRATION_CENTRE_ROUTE) {
     if (method !== 'GET') {
