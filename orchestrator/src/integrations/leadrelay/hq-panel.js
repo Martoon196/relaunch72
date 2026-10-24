@@ -12,12 +12,16 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
   root.replaceChildren(title, intro, selection, controls, message, content);
   const can = action => current?.actions.includes(action);
   const error = e => { message.textContent = e.message || 'Request failed'; message.setAttribute('role', 'alert'); };
-  async function request(path, method = 'GET', body) {
+  async function request(path, method = 'GET', body, installationId = current?.id) {
+    const unchanged = () => { if (installationId !== current?.id) throw Error('Installation changed; use the refreshed controls'); };
+    unchanged();
     const headers = {'Content-Type': 'application/json'};
     if (method !== 'GET') {
       const token = await csrfToken(); if (!token) throw Error('Your HQ session needs a valid CSRF token before changes are allowed');
+      unchanged();
       headers[csrfHeader] = token;
     }
+    unchanged();
     const r = await fetch(apiBase + path, {method, credentials: 'same-origin', headers, body: body === undefined ? undefined : JSON.stringify(body)});
     const data = await r.json().catch(() => ({detail: 'Unreadable gateway response'}));
     if (!r.ok) throw Error(typeof data.detail === 'string' ? data.detail : `Control request failed (${r.status})`);
@@ -72,10 +76,15 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
     action('Export configuration', async () => { download(await request(path('pack-export'), 'POST', {})); message.textContent = 'Exported without brief or knowledge. Review scripts before sharing.'; }, packs, can('POST:pack-export'));
     const file = node('input'); file.type = 'file'; file.accept = '.json,application/json'; file.setAttribute('aria-label', 'Business pack JSON'); file.disabled = !can('POST:pack-import'); packs.append(file);
     action('Import paused setup', async () => {
+      const installationId = current.id;
+      const importPath = '/installations/' + encodeURIComponent(installationId) + '/pack-import';
+      const unchanged = () => { if (disposed || current?.id !== installationId) throw Error('Installation changed; import cancelled'); };
       const f = file.files[0]; if (!f || f.size > 750000) throw Error('Choose a JSON pack below 750 KB');
       const pack = JSON.parse(await f.text());
+      unchanged();
       if (!confirm(`Import ${pack.name || 'this setup'} into ${data.business_name}? The target must be fresh. Processing stays paused.`)) return;
-      await request(path('pack-import'), 'POST', {pack, confirmation: 'IMPORT INTO FRESH WORKSPACE'}); await refresh();
+      unchanged();
+      await request(importPath, 'POST', {pack, confirmation: 'IMPORT INTO FRESH WORKSPACE'}, installationId); await refresh();
     }, packs, can('POST:pack-import'));
     content.append(node('p', 'No contacts, users or credentials are transferred. Imported scripts require review; sequences remain disabled and knowledge is unapproved.', 'lrhq-note'));
   }
