@@ -58,3 +58,20 @@ Actual LeadRelay hosting and supplier acceptance remain blocked/unverified;
 no existing CRM history, channel worker, outbox backlog or provider is activated.
 The private LeadRelay repository records rollout/rollback details. Previous live
 HQ commit is 3c0bf104b0812c80d1955d066150c25af0168ff7. No HQ schema migration.
+
+### LeadRelay installation-grant setup identity
+
+`GET /portal/api/leadrelay/identity` is a session-authenticated, read-only setup
+endpoint. It returns only the current canonical `userId` and `workspaceId` from
+the existing PostgreSQL portal session resolver. It ignores client identity
+headers/query fields, rejects anonymous and legacy-only identities, and uses
+Cache-Control no-store. It returns no email, session token, provider key or other
+accounts. It creates no installation grant; all existing grant checks remain.
+The IDs are not added to normal product UI. Configure grants through authorised
+secure deployment settings after independently reviewing the returned context.
+
+Validation: typecheck, supply-chain gate and full local suite passed with 3,033
+passes / 40 skips, including unauthorized, canonical-context, read-only method
+and header/query spoofing regression coverage. Deployment is left to the
+supervising task; previous live fixed panel is 9f10a792bb46454e40d0b5778a6cfd8cbf89978e
+at dep-dbekce7b9u1s73a163c0. Original rollback remains dep-daj9v56k1f9s73cqpbag.

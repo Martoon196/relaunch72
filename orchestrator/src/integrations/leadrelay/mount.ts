@@ -34,6 +34,21 @@ mountLeadRelay(root,{apiBase:'/portal/api/leadrelay',csrfToken:()=>root.dataset.
 export async function handleLeadRelay(req: IncomingMessage, res: ServerResponse, identity: PortalSessionIdentity | null, sessionToken: string, sessionSecret: string): Promise<boolean> {
   const path = new URL(req.url ?? '/', 'https://hq.invalid').pathname;
   if (!path.startsWith('/portal/api/leadrelay')) return false;
+  // Setup-only read of the canonical resolved session. No registry or grant is
+  // consulted or created, and browser identity headers/query fields are ignored.
+  if (path === '/portal/api/leadrelay/identity') {
+    const status = !identity ? 401 : req.method !== 'GET' ? 405 : 200;
+    res.writeHead(status, {
+      'content-type':'application/json; charset=utf-8',
+      'cache-control':'no-store',
+      'x-content-type-options':'nosniff',
+      ...(status === 405 ? {allow:'GET'} : {}),
+    });
+    res.end(JSON.stringify(status === 200
+      ? {userId:identity!.userId, workspaceId:identity!.workspaceId}
+      : {detail:status === 401 ? 'Sign in to Growth HQ' : 'Read-only setup endpoint'}));
+    return true;
+  }
   // Construct only on this route: absent bindings do not break unrelated HQ pages.
   const installations = loadInstallations();
   const grants = loadGrants(process.env.LEADRELAY_GRANTS_JSON);

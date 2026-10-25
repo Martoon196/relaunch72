@@ -1562,3 +1562,29 @@ test('LeadRelay page and assets use existing portal sign-in and same-origin poli
   assert.equal(api.statusCode,200);
   assert.deepEqual(JSON.parse(api.body),[]);
 });
+
+test('LeadRelay setup identity refuses unauthenticated or legacy tenant authority',async()=>{
+  const auth:PortalAuthService={resolve:async()=>null,login:async()=>null,revoke:async()=>undefined};
+  const anonymous=await call('GET','/portal/api/leadrelay/identity',postgresDeps(auth));
+  assert.equal(anonymous.statusCode,401);
+  assert.equal(anonymous.headers['cache-control'],'no-store');
+  assert.deepEqual(JSON.parse(anonymous.body),{detail:'Sign in to Growth HQ'});
+  const legacy=await call('GET','/portal/api/leadrelay/identity',deps(),{cookie:cookieFor('t1')});
+  assert.equal(legacy.statusCode,401);
+});
+
+test('LeadRelay setup identity returns only server-resolved context, ignoring spoofed headers and query',async()=>{
+  const opaque=Buffer.alloc(32,51).toString('base64url');
+  const auth:PortalAuthService={resolve:async token=>token===opaque?{
+    sessionToken:opaque,userId:USER_ID,workspaceId:WORKSPACE_ID,userEmail:'private@example.com',
+  }:null,login:async()=>null,revoke:async()=>undefined};
+  const req=mkReq('GET','/portal/api/leadrelay/identity?userId=spoof&workspaceId=other',{cookie:`${PORTAL_COOKIE}=${opaque}`});
+  req.headers['x-user-id']='spoof';req.headers['x-workspace-id']='other';req.headers.authorization='Bearer not-authority';
+  const res=mkRes();await handlePortal(req as never,res as never,postgresDeps(auth));
+  assert.equal(res.statusCode,200);
+  assert.deepEqual(JSON.parse(res.body),{userId:USER_ID,workspaceId:WORKSPACE_ID});
+  assert.equal(res.headers['cache-control'],'no-store');
+  assert.doesNotMatch(res.body,/private@example|sessionToken|Bearer|spoof|other/);
+  const denied=await call('POST','/portal/api/leadrelay/identity',postgresDeps(auth),{cookie:`${PORTAL_COOKIE}=${opaque}`});
+  assert.equal(denied.statusCode,405);assert.equal(denied.headers.allow,'GET');
+});

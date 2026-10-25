@@ -2258,6 +2258,13 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     return redirect(res, '/portal/login', clearPortalCookie(deps.secure));
   }
 
+  // Canonical setup identity has an API 401 boundary rather than an HTML login
+  // redirect. Resolution and the standard request/abuse checks already ran above.
+  if (p === '/portal/api/leadrelay/identity') {
+    await handleLeadRelay(req, res, portalIdentity, sessionToken, deps.sessionSecret);
+    return;
+  }
+
   // ── everything below requires a tenant session ──
   if (!tenantId && !portalIdentity) return redirect(
     res,
