@@ -28,7 +28,8 @@ test('Agent setup actions require individually recorded canonical grants', () =>
 test('Native provider connection grants are explicit and remain bound to canonical identity', () => {
   const old = loadGrants(JSON.stringify([{userId:'owner',workspaceId:'growth',installationId:'pilot',actions:['POST:agent-publish','PUT:settings']}]));
   assert.equal(installationActions(old,{userId:'owner',workspaceId:'growth'},'pilot').includes('POST:agent-connect'),false);
-  const actions=['GET:agent-connection','POST:agent-voices','POST:agent-connect'];
+  assert.equal(installationActions(old,{userId:'owner',workspaceId:'growth'},'pilot').includes('POST:agent-phone-numbers'),false);
+  const actions=['GET:agent-connection','POST:agent-voices','POST:agent-phone-numbers','POST:agent-connect'];
   const grants=loadGrants(JSON.stringify([{userId:'owner',workspaceId:'growth',installationId:'pilot',actions}]));
   assert.deepEqual(installationActions(grants,{userId:'owner',workspaceId:'growth'},'pilot'),actions);
   assert.deepEqual(installationActions(grants,{userId:'owner',workspaceId:'another'},'pilot'),[]);

@@ -163,6 +163,7 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
     const routes = Object.freeze({
       'GET:/api/agent-builder/connection':'agent-connection',
       'POST:/api/agent-builder/connection/voices':'agent-voices',
+      'POST:/api/agent-builder/connection/phone-numbers':'agent-phone-numbers',
       'POST:/api/agent-builder/connection/verify':'agent-connect',
     });
     const api = async (apiPath, options = {}) => {
@@ -181,6 +182,7 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
     const mounted = await module.mountProviderSetup(providerRoot, api, {
       canRead:allowed.has('GET:agent-connection'),
       canListVoices:allowed.has('POST:agent-voices'),
+      canListNumbers:allowed.has('POST:agent-phone-numbers'),
       canVerify:allowed.has('POST:agent-connect'),
       isCurrent,
       onVerified: () => {

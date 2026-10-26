@@ -12,6 +12,7 @@ const OPERATIONS = Object.freeze({
   'GET:agent-status':'/api/agent-builder',
   'GET:agent-connection':'/api/agent-builder/connection',
   'POST:agent-voices':'/api/agent-builder/connection/voices',
+  'POST:agent-phone-numbers':'/api/agent-builder/connection/phone-numbers',
   'POST:agent-connect':'/api/agent-builder/connection/verify',
   'POST:agent-scan':'/api/agent-builder/scan',
   'POST:agent-approve':'/api/agent-builder/approve',
@@ -26,14 +27,14 @@ export class GatewayError extends Error { constructor(status,detail){super(detai
 const deny=(status,detail)=>{throw new GatewayError(status,detail);};
 
 const CONNECTION_PATH = '/api/agent-builder/connection';
-const connectionPaths = new Set([CONNECTION_PATH, CONNECTION_PATH+'/voices', CONNECTION_PATH+'/verify']);
+const connectionPaths = new Set([CONNECTION_PATH, CONNECTION_PATH+'/voices', CONNECTION_PATH+'/phone-numbers', CONNECTION_PATH+'/verify']);
 const isRecord = value => !!value && typeof value === 'object' && !Array.isArray(value);
 function validateConnectionBody(path, body) {
   if (path === CONNECTION_PATH) {
     if (body !== undefined) deny(400,'Connection status does not accept a payload');
     return;
   }
-  const allowed = path.endsWith('/voices') ? ['secret'] : ['secret','webhook_secret','voice_id','from_number'];
+  const allowed = path.endsWith('/voices') || path.endsWith('/phone-numbers') ? ['secret'] : ['secret','webhook_secret','voice_id','from_number'];
   if (!isRecord(body) || Object.keys(body).some(key=>!allowed.includes(key))) deny(400,'Unsupported provider setup fields');
   for (const field of ['secret','webhook_secret']) {
     if (Object.hasOwn(body,field) && (typeof body[field] !== 'string' || body[field].trim().length < 10 || body[field].length > 10000 || /[\r\n]/.test(body[field]))) deny(400,'Invalid provider setup credential');
@@ -73,6 +74,15 @@ function safeConnectionResponse(path, data, credentials) {
       for (const field of ['provider','gender','accent','age','language']) if (Object.hasOwn(voice,field)) row[field] = text(voice[field]);
       return row;
     }),outreach_started:false};
+  } else if (path.endsWith('/phone-numbers')) {
+    if (data.provider !== 'retell' || !Array.isArray(data.phone_numbers) || data.phone_numbers.length > 200 || typeof data.truncated !== 'boolean') invalid();
+    result = {provider:'retell',phone_numbers:data.phone_numbers.map(number=>{
+      if (!isRecord(number)) invalid();
+      const row = {phone_number:text(number.phone_number,20)};
+      if (!/^\+[1-9]\d{6,14}$/.test(row.phone_number)) invalid();
+      for (const field of ['nickname','number_type']) if (Object.hasOwn(number,field)) row[field] = text(number[field]);
+      return row;
+    }),truncated:data.truncated,outreach_started:false};
   } else {
     if (typeof data.verified !== 'boolean') invalid();
     result = {verified:data.verified,config:config(data.config),outreach_started:false};
@@ -128,7 +138,7 @@ export async function sendControl(installation,method,path,body,fetchImpl=fetch)
       body:payload,redirect:'error',signal:AbortSignal.timeout(path === '/api/agent-builder/chat' ? 15_000 : 10_000)});
     if(!r.ok){
       await r.body?.cancel();
-      if(connectionPaths.has(path) && r.status===400) deny(400,'Provider connection could not be verified; check the selected voice and credentials');
+      if(connectionPaths.has(path) && r.status===400) deny(400,path.endsWith('/phone-numbers') ? 'Owned caller numbers could not be read; check the Retell connection and permissions' : 'Provider connection could not be verified; check the selected voice and credentials');
       const allowed=[401,403,409,422,429];
       deny(allowed.includes(r.status)?r.status:502,'LeadRelay rejected this control request; check connection and permissions');
     }

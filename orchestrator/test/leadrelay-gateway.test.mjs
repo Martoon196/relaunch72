@@ -155,3 +155,58 @@ test('Provider setup failure discards supplier bodies and does not automatically
   await assert.rejects(sendControl(installs().get('key-properties'),'POST','/api/agent-builder/connection/verify',{secret:providerSecret,voice_id:'voice-a'},async()=>{calls++;return new Response(providerSecret,{status:400});}),e=>e.status===400&&/could not be verified/.test(e.message)&&!e.message.includes(providerSecret));
   assert.equal(calls,1);
 });
+
+test('Owned caller inventory requires its own grant, canonical tenant and HQ CSRF',async()=>{
+  const path='/installations/key-properties/agent-phone-numbers';
+  let sent=0;const transport=async()=>{sent++;return {};};
+  await assert.rejects(build({authorize:async()=>['GET:agent-connection','POST:agent-connect'],transport})({identity,method:'POST',path,body:{}}),e=>e.status===403);
+  await assert.rejects(build({verifyCsrf:async()=>false,transport})({identity,method:'POST',path,body:{secret:providerSecret}}),e=>e.status===403);
+  await assert.rejects(build({transport})({identity:{...identity,workspaceId:'other'},method:'POST',path,body:{}}),e=>e.status===404);
+  await assert.rejects(build({transport})({method:'POST',path,body:{}}),e=>e.status===401);
+  assert.equal(sent,0);
+  const result=await build({authorize:async()=>['POST:agent-phone-numbers']})({identity,method:'POST',path,body:{secret:providerSecret}});
+  assert.equal(result.path,'/api/agent-builder/connection/phone-numbers');
+  for(const field of ['workspaceId','userId','base_url','headers','webhook_secret','phone_number','from_number','to_number','agent_id','page_token']) {
+    await assert.rejects(build()({identity,method:'POST',path,body:{[field]:'override'}}),e=>e.status===400);
+  }
+});
+
+test('Owned caller inventory is a fixed read-only route and projects only bounded safe metadata',async()=>{
+  let observed;
+  const result=await sendControl(installs().get('key-properties'),'POST','/api/agent-builder/connection/phone-numbers',{secret:providerSecret},async(url,options)=>{
+    observed={url,options};
+    return jsonResponse({provider:'retell',phone_numbers:[{phone_number:'+447700900123',nickname:'Office',number_type:'custom',secret:providerSecret,outbound_agent_id:'private-binding',sip_trunk_auth_password:'private-sip'}],truncated:false,outreach_started:false,secret:providerSecret});
+  });
+  assert.deepEqual(result,{provider:'retell',phone_numbers:[{phone_number:'+447700900123',nickname:'Office',number_type:'custom'}],truncated:false,outreach_started:false});
+  assert.equal(observed.url,'https://leadrelay.example.com/api/agent-builder/connection/phone-numbers');
+  assert.equal(observed.options.method,'POST');assert.equal(observed.options.redirect,'error');
+  assert.deepEqual(JSON.parse(observed.options.body),{secret:providerSecret});
+  assert.equal(observed.options.headers.authorization,'Bearer '+key);
+  let fetched=false;
+  for(const [method,path] of [['GET','/api/agent-builder/connection/phone-numbers'],['POST','/api/agent-builder/connection/purchase-number'],['POST','/api/agent-builder/connection/create-call']]) {
+    await assert.rejects(sendControl(installs().get('key-properties'),method,path,{},async()=>{fetched=true;}),e=>e.status===404);
+  }
+  assert.equal(fetched,false);
+});
+
+test('Owned caller inventory rejects unsafe metadata, credential echoes and unknown truncation',async()=>{
+  const path='/api/agent-builder/connection/phone-numbers';
+  for(const payload of [
+    {provider:'retell',phone_numbers:[{phone_number:'not-e164'}],truncated:false,outreach_started:false},
+    {provider:'retell',phone_numbers:[],outreach_started:false},
+    {provider:'retell',phone_numbers:[],truncated:'false',outreach_started:false},
+    {provider:'retell',phone_numbers:Array.from({length:201},()=>({phone_number:'+447700900123'})),truncated:true,outreach_started:false},
+    {provider:'retell',phone_numbers:[{phone_number:'+447700900123',nickname:providerSecret}],truncated:false,outreach_started:false},
+    {provider:'retell',phone_numbers:[{phone_number:'+447700900123',nickname:key}],truncated:false,outreach_started:false},
+    {provider:'retell',phone_numbers:[{phone_number:'+447700900123',number_type:'x'.repeat(121)}],truncated:false,outreach_started:false},
+    {provider:'retell',phone_numbers:[],truncated:false,outreach_started:true},
+  ]) await assert.rejects(sendControl(installs().get('key-properties'),'POST',path,{secret:providerSecret},async()=>jsonResponse(payload)),e=>e.status===502&&!e.message.includes(providerSecret));
+  const empty=await sendControl(installs().get('key-properties'),'POST',path,{},async()=>jsonResponse({provider:'retell',phone_numbers:[],truncated:false,outreach_started:false}));
+  assert.deepEqual(empty.phone_numbers,[]);
+});
+
+test('Owned caller lookup failures never echo supplier credentials or retry',async()=>{
+  let calls=0;
+  await assert.rejects(sendControl(installs().get('key-properties'),'POST','/api/agent-builder/connection/phone-numbers',{secret:providerSecret},async()=>{calls++;return new Response(providerSecret,{status:400});}),e=>e.status===400&&/numbers could not be read/.test(e.message)&&!e.message.includes(providerSecret));
+  assert.equal(calls,1);
+});

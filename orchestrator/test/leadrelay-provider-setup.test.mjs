@@ -27,6 +27,7 @@ const submit = root => form(root).onsubmit({ preventDefault() {} });
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { resolve, reject, promise }; };
 const disconnected = { provider: 'retell', verified: false, has_secret: false, has_webhook_secret: false, config: {}, outreach_started: false };
 const voiceList = { provider: 'retell', voices: [{ voice_id: 'voice-a', voice_name: 'Alex', accent: 'British', gender: 'female' }], outreach_started: false };
+const numberList = { provider: 'retell', phone_numbers: [{ phone_number: '+447700900123', nickname: 'Synthetic caller', number_type: 'custom' }], truncated: false, outreach_started: false };
 const verified = { verified: true, config: { voice_id: 'voice-a', from_number: '', verified_at: 123 }, outreach_started: false };
 function globals() {
   const original = { document: globalThis.document, MutationObserver: globalThis.MutationObserver };
@@ -305,5 +306,140 @@ test('one-time API instructions name the provider key screen and keep agent conf
     assert.match(steps[2].textContent, /Load available voices.*Verify and save connection/);
     assert.equal(text(h.root, 'Open Retell to copy API access keys').href, 'https://dashboard.retellai.com/');
     assert.doesNotMatch(h.root.textContent, /Growth HQ then/);
+  } finally { h.restore(); }
+});
+
+test('caller inventory uses only returned owned numbers and explicit verify saves the selected caller without dialing', async () => {
+  const initial = { ...disconnected, verified: true, has_secret: true, has_webhook_secret: true, config: { voice_id: 'voice-a', from_number: '' } };
+  const h = await harness({ initial, onWrite: async (path, request) => path.endsWith('/phone-numbers') ? numberList : { ...verified, config: { ...verified.config, from_number: request.body.from_number } } });
+  try {
+    assert.equal(field(h.root, 'from_number').tag, 'select');
+    await text(h.root, 'Load my caller numbers').onclick();
+    assert.equal(h.writes[0].path, '/api/agent-builder/connection/phone-numbers');
+    assert.deepEqual(h.writes[0].body, {});
+    assert.equal(typeof h.writes[0].guard, 'function');
+    const options = all(field(h.root, 'from_number')).filter(node => node.tag === 'option');
+    assert.deepEqual(options.map(node => node.value), ['', '+447700900123']);
+    assert.equal(field(h.root, 'from_number').value, '');
+    field(h.root, 'from_number').value = '+447700900123'; field(h.root, 'from_number').onchange();
+    await submit(h.root);
+    assert.deepEqual(h.writes[1].body, { voice_id: 'voice-a', from_number: '+447700900123' });
+    assert.equal(field(h.root, 'from_number').value, '+447700900123');
+    assert.ok(h.writes.every(write => /\/(phone-numbers|verify)$/.test(write.path)));
+  } finally { h.restore(); }
+});
+
+test('arbitrary caller values are held instead of being forwarded for verification', async () => {
+  const h = await harness({ initial: { ...disconnected, verified: true, has_secret: true, has_webhook_secret: true, config: { voice_id: 'voice-a' } } });
+  try {
+    field(h.root, 'from_number').value = '+447700900124';
+    await submit(h.root);
+    assert.deepEqual(h.writes, []);
+    assert.match(find(h.root, node => node.className === 'provider-setup-notice').textContent, /Choose an owned caller number returned for this account/);
+  } finally { h.restore(); }
+});
+
+test('an empty inventory explains the number requirement while private chat can still be verified with a blank caller', async () => {
+  const initial = { ...disconnected, verified: true, has_secret: true, has_webhook_secret: true, config: { voice_id: 'voice-a' } };
+  const h = await harness({ initial, onWrite: async path => path.endsWith('/phone-numbers') ? { ...numberList, phone_numbers: [] } : verified });
+  try {
+    await text(h.root, 'Load my caller numbers').onclick();
+    const status = find(h.root, node => node.className === 'provider-setup-caller-status');
+    assert.match(status.textContent, /No existing caller number found.*Private chat works without one.*separate owner approval/);
+    assert.equal(field(h.root, 'from_number').value, '');
+    await submit(h.root);
+    assert.equal(h.writes[1].body.from_number, '');
+    assert.ok(h.writes.every(write => !/create|purchase|call\//.test(write.path)));
+  } finally { h.restore(); }
+});
+
+test('partial caller inventory is labelled as partial and does not imply it lists the full account', async () => {
+  const h = await harness({ initial: { ...disconnected, has_secret: true }, onWrite: async () => ({ ...numberList, truncated: true }) });
+  try {
+    await text(h.root, 'Load my caller numbers').onclick();
+    assert.match(find(h.root, node => node.className === 'provider-setup-caller-status').textContent, /partial list.*more numbers/);
+  } finally { h.restore(); }
+});
+
+test('a saved verified caller remains selectable until deliberately changed and is never auto-replaced by inventory', async () => {
+  const initial = { ...disconnected, verified: true, has_secret: true, has_webhook_secret: true, config: { voice_id: 'voice-a', from_number: '+447700900124' } };
+  const h = await harness({ initial, onWrite: async () => numberList });
+  try {
+    assert.equal(field(h.root, 'from_number').value, '+447700900124');
+    await text(h.root, 'Load my caller numbers').onclick();
+    assert.equal(field(h.root, 'from_number').value, '+447700900124');
+    assert.ok(all(field(h.root, 'from_number')).some(node => node.value === '+447700900123'));
+    assert.ok(all(field(h.root, 'from_number')).some(node => node.value === '+447700900124'));
+  } finally { h.restore(); }
+});
+
+test('changing API credentials invalidates old caller numbers and fences an inventory request awaiting CSRF', async () => {
+  const wait = deferred();
+  const h = await harness({ initial: { ...disconnected, has_secret: true }, onWrite: async () => wait.promise });
+  try {
+    const operation = text(h.root, 'Load my caller numbers').onclick();
+    assert.equal(h.writes[0].guard(), true);
+    field(h.root, 'secret').value = 'replacement-provider-key'; field(h.root, 'secret').oninput();
+    assert.equal(h.writes[0].guard(), false);
+    wait.resolve(numberList); await operation;
+    assert.equal(field(h.root, 'from_number').value, '');
+    assert.equal(all(field(h.root, 'from_number')).some(node => node.value === '+447700900123'), false);
+    assert.equal(field(h.root, 'secret').value, 'replacement-provider-key');
+  } finally { h.restore(); }
+});
+
+test('caller inventory is explicitly granted and cannot be read through voice-only permission', async () => {
+  const h = await harness({ initial: { ...disconnected, has_secret: true }, options: { canConfigure: false, canListVoices: true } });
+  try {
+    const button = text(h.root, 'Load my caller numbers');
+    assert.equal(button.disabled, true);
+    await button.onclick();
+    assert.deepEqual(h.writes, []);
+  } finally { h.restore(); }
+});
+
+test('detaching a caller-inventory request clears credentials and cannot populate another installation', async () => {
+  const wait = deferred(); const h = await harness({ onWrite: async () => wait.promise });
+  try {
+    field(h.root, 'secret').value = 'new-provider-api-secret'; field(h.root, 'webhook_secret').value = 'documented-webhook-key';
+    const secret = field(h.root, 'secret'), webhook = field(h.root, 'webhook_secret');
+    const operation = text(h.root, 'Load my caller numbers').onclick();
+    h.root.isConnected = false; h.observers[0].callback();
+    assert.equal(secret.value, ''); assert.equal(webhook.value, '');
+    assert.equal(h.writes[0].guard(), false);
+    wait.resolve(numberList); await operation;
+    assert.equal(all(field(h.root, 'from_number')).some(node => node.value === '+447700900123'), false);
+  } finally { h.restore(); }
+});
+
+test('a fresh second business has its own editable API setup without inheriting the first connection', async () => {
+  const first = { ...disconnected, verified: true, has_secret: true, has_webhook_secret: true, config: { voice_id: 'voice-a', from_number: '+447700900123' } };
+  const h = await harness({ initial: first });
+  const secondWrites = [];
+  try {
+    assert.ok(text(h.root, 'Connected and verified'));
+    const previousKey = field(h.root, 'secret'), previousWebhook = field(h.root, 'webhook_secret');
+    previousKey.value = 'first-business-unsaved-key'; previousWebhook.value = 'first-business-unsaved-webhook';
+    const secondApi = async (path, request) => {
+      if (!request) return disconnected;
+      secondWrites.push({ path, ...request }); return voiceList;
+    };
+    await mountProviderSetup(h.root, secondApi, { canRead: true, canConfigure: true });
+    assert.equal(previousKey.value, ''); assert.equal(previousWebhook.value, '');
+    assert.equal(text(h.root, 'Connected and verified'), undefined);
+    assert.equal(field(h.root, 'secret').value, '');
+    assert.equal(field(h.root, 'secret').disabled, false);
+    assert.equal(field(h.root, 'webhook_secret').disabled, false);
+    assert.equal(field(h.root, 'from_number').value, '');
+    assert.equal(field(h.root, 'voice_id').value, '');
+    assert.equal(text(h.root, 'Load available voices').disabled, false);
+    assert.match(h.root.textContent, /saved per business.*never copies credentials.*scan and review its website first/);
+    field(h.root, 'secret').value = 'second-business-api-key'; field(h.root, 'secret').oninput();
+    await text(h.root, 'Load available voices').onclick();
+    assert.equal(secondWrites.length, 1);
+    assert.equal(secondWrites[0].path, '/api/agent-builder/connection/voices');
+    assert.deepEqual(secondWrites[0].body, { secret: 'second-business-api-key' });
+    assert.equal(field(h.root, 'voice_id').disabled, false);
+    assert.deepEqual(h.writes, []);
   } finally { h.restore(); }
 });

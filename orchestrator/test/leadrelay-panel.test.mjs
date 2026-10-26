@@ -132,7 +132,7 @@ test('native provider shim maps only granted fixed routes and never serializes i
   const h=await harness(async()=> 'csrf',{actions:['GET:status','GET:agent-connection','POST:agent-voices'],loadProvider:async()=>({mountProviderSetup:async(_root,call,opts)=>{api=call;options=opts;}})});
   try {
     await find(h.root,n=>n.textContent==='AI connection').onclick();
-    assert.equal(options.canRead,true);assert.equal(options.canListVoices,true);assert.equal(options.canVerify,false);
+    assert.equal(options.canRead,true);assert.equal(options.canListVoices,true);assert.equal(options.canListNumbers,false);assert.equal(options.canVerify,false);
     await api('/api/agent-builder/connection/voices',{method:'POST',body:{secret:'fictional-api-key'},guard:()=>true});
     const sent=h.requests.at(-1);
     assert.equal(sent.url,'/api/leadrelay/installations/a/agent-voices');
@@ -141,6 +141,7 @@ test('native provider shim maps only granted fixed routes and never serializes i
     assert.equal(sent.opts.headers['X-CSRF-Token'],'csrf');
     assert.equal(sent.opts.credentials,'same-origin');
     await assert.rejects(api('/api/agent-builder/connection/verify',{method:'POST',body:{voice_id:'a'}}),/role/);
+    await assert.rejects(api('/api/agent-builder/connection/phone-numbers',{method:'POST',body:{}}),/role/);
     await assert.rejects(api('https://evil.invalid',{method:'POST',body:{}}),/not supported/);
     await assert.rejects(api('/api/agent-builder/connection/voices',{method:'POST',headers:{authorization:'override'},body:{}}),/override/);
     await assert.rejects(api('/api/agent-builder/connection/voices',{method:'POST',guard:true,body:{}}),/guard must be a function/);
@@ -159,6 +160,18 @@ test('provider view guard is checked before and after asynchronous HQ CSRF',asyn
     const pending=api('/api/agent-builder/connection/verify',{method:'POST',body:{voice_id:'a',secret:'fictional-api-key'},guard:()=>current});
     await entered.promise;current=false;csrf.resolve('csrf');
     await assert.rejects(pending,/changed/);assert.equal(csrfRequests,1);assert.deepEqual(h.posts,[]);
+  } finally {h.restore();}
+});
+
+test('owned number loading uses its own explicitly granted native connection operation',async()=>{
+  let api,options;
+  const h=await harness(async()=> 'csrf',{actions:['GET:status','GET:agent-connection','POST:agent-phone-numbers'],loadProvider:async()=>({mountProviderSetup:async(_root,call,opts)=>{api=call;options=opts;}})});
+  try {
+    await find(h.root,n=>n.textContent==='AI connection').onclick();
+    assert.equal(options.canListNumbers,true);assert.equal(options.canListVoices,false);assert.equal(options.canVerify,false);
+    await api('/api/agent-builder/connection/phone-numbers',{method:'POST',body:{},guard:()=>true});
+    assert.deepEqual(h.posts,['/api/leadrelay/installations/a/agent-phone-numbers']);
+    await assert.rejects(api('/api/agent-builder/connection/purchase-number',{method:'POST',body:{}}),/not supported/);
   } finally {h.restore();}
 });
 

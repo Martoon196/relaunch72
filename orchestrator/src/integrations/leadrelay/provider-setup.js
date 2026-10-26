@@ -36,6 +36,7 @@ export async function mountProviderSetup(root, api, options = {}) {
   title.append(el('h2', 'Connect the AI provider'), el('p', 'Connect Retell here. LeadRelay then creates your chat and call agents through its API using your approved business knowledge.'));
   const badge = el('span', 'Not connected'); badge.className = 'provider-setup-badge';
   heading.append(title, badge); card.append(heading);
+  card.append(el('p', 'Connections and caller numbers are saved per business. Switching businesses keeps their connections intact and never copies credentials. A new business needs its own API setup; you can scan and review its website first.'));
   card.append(el('p', 'Retell browser login does not connect this workspace to its API. The check below reads only the API connection already saved here.'));
   const steps = el('ol');
   steps.append(
@@ -53,6 +54,7 @@ export async function mountProviderSetup(root, api, options = {}) {
   card.append(notice, refresh); root.replaceChildren(card);
   const canRead = options.canRead === true;
   const canList = options.canListVoices === true || options.canConfigure === true;
+  const canListNumbers = options.canListNumbers === true || options.canConfigure === true;
   const canVerify = options.canVerify === true || options.canConfigure === true;
   if (!canRead) {
     notice.textContent = 'Your role has no connection access for this business. Ask its owner to grant access.';
@@ -61,7 +63,7 @@ export async function mountProviderSetup(root, api, options = {}) {
   }
   let saved = { verified: false, has_secret: false, has_webhook_secret: false, config: {} };
   let loaded = false, busy = false, revision = 0, checks = 0;
-  let voices = [];
+  let voices = [], phoneNumbers = [];
   const form = el('form'); form.className = 'provider-setup-form';
   const field = (name, label, type = 'text') => {
     const wrapper = el('label'); wrapper.className = 'field';
@@ -80,10 +82,14 @@ export async function mountProviderSetup(root, api, options = {}) {
   const voiceLabel = el('label'); voiceLabel.className = 'field';
   const voice = el('select'); voice.name = 'voice_id'; voice.required = true;
   voiceLabel.append(el('span', 'Agent voice'), voice); form.append(voiceLabel);
-  const caller = field('from_number', 'Existing owned caller number · optional for chat', 'tel'); caller.maxLength = 20;
-  form.append(el('p', 'Leave the caller number blank for private chat. Phone tests need an existing authorised number; this connection step buys no number and starts no call.'));
+  const numbers = el('button', 'Load my caller numbers'); numbers.type = 'button'; numbers.className = 'btn'; form.append(numbers);
+  const callerLabel = el('label'); callerLabel.className = 'field';
+  const caller = el('select'); caller.name = 'from_number';
+  callerLabel.append(el('span', 'Owned caller number · optional for private chat'), caller); form.append(callerLabel);
+  const callerStatus = el('p', 'Load your existing Retell caller numbers to prepare a phone test. Leave this blank for private chat. This step buys no number and starts no call.');
+  callerStatus.className = 'provider-setup-caller-status'; callerStatus.setAttribute('role', 'status'); callerStatus.setAttribute('aria-live', 'polite'); form.append(callerStatus);
   const verify = el('button', 'Verify and save connection'); verify.type = 'submit'; verify.className = 'btn primary'; form.append(verify);
-  if (canList || canVerify) card.append(form);
+  if (canList || canListNumbers || canVerify) card.append(form);
   else card.append(el('p', 'Connection details are read-only for your role.'));
   function message(text, error = false) {
     notice.textContent = text;
@@ -101,6 +107,7 @@ export async function mountProviderSetup(root, api, options = {}) {
     key.disabled = webhook.disabled = caller.disabled = busy || !loaded;
     voice.disabled = busy || !loaded || (!voices.length && !voice.value);
     list.disabled = busy || !loaded || !canList;
+    numbers.disabled = busy || !loaded || !canListNumbers;
     verify.disabled = busy || !loaded || !canVerify || !voice.value;
     const typedCredentials = !!(key.value.trim() || webhook.value.trim());
     refresh.disabled = busy || typedCredentials;
@@ -118,6 +125,25 @@ export async function mountProviderSetup(root, api, options = {}) {
     }
     voice.replaceChildren(...entries); voice.value = selected;
   }
+  function allowedCallers() {
+    const result = new Set(phoneNumbers.map(item => item.phone_number));
+    if (!key.value.trim() && saved.config.from_number) result.add(saved.config.from_number);
+    return result;
+  }
+  function callerOptions(selected = '') {
+    const blank = el('option', 'No caller number · private chat only'); blank.value = '';
+    const entries = [blank];
+    for (const item of phoneNumbers) {
+      const option = el('option', [item.nickname || item.phone_number, item.nickname ? item.phone_number : ''].filter(Boolean).join(' · '));
+      option.value = item.phone_number; entries.push(option);
+    }
+    const storedCaller = !key.value.trim() && saved.config.from_number;
+    if (storedCaller && !phoneNumbers.some(item => item.phone_number === storedCaller)) {
+      const option = el('option', `Saved caller · ${storedCaller}`); option.value = storedCaller; entries.push(option);
+    }
+    caller.replaceChildren(...entries);
+    caller.value = allowedCallers().has(selected) ? selected : '';
+  }
   function showStatus() {
     const verified = saved.verified === true && saved.has_secret === true && typeof saved.config?.voice_id === 'string' && !!saved.config.voice_id;
     card.classList.toggle('provider-setup-verified', verified);
@@ -132,7 +158,7 @@ export async function mountProviderSetup(root, api, options = {}) {
       const response = await api('/api/agent-builder/connection');
       if (!active()) return;
       saved = { verified: response.verified === true, has_secret: response.has_secret === true, has_webhook_secret: response.has_webhook_secret === true, config: response.config || {} };
-      loaded = true; voiceOptions(saved.config.voice_id || ''); caller.value = saved.config.from_number || '';
+      loaded = true; voiceOptions(saved.config.voice_id || ''); callerOptions(saved.config.from_number || '');
       checks++;
       showStatus();
       const result = badge.textContent === 'Connected and verified'
@@ -149,7 +175,8 @@ export async function mountProviderSetup(root, api, options = {}) {
     // A typed verification key belongs to the prior credential entry. Never
     // accidentally pair it with a newly entered API account/key.
     webhook.value = '';
-    revision++; voices = []; voiceOptions(''); controls();
+    revision++; voices = []; phoneNumbers = []; voiceOptions(''); callerOptions(''); controls();
+    callerStatus.textContent = 'API key changed. Load caller numbers for this account before selecting a number.';
     badge.textContent = 'Changes not verified'; card.classList.toggle('provider-setup-verified', false);
     message('Load voices for this API key before saving the connection.');
   };
@@ -161,6 +188,11 @@ export async function mountProviderSetup(root, api, options = {}) {
     message('Verification key changed. Verify and save the connection to apply it.');
   };
   voice.onchange = controls;
+  caller.onchange = () => {
+    if (!active()) return;
+    badge.textContent = 'Changes not verified'; card.classList.toggle('provider-setup-verified', false);
+    controls(); message('Caller selection changed. Verify and save to apply it; no call has started.');
+  };
   list.onclick = async () => {
     if (!active() || busy || !loaded || !canList) return;
     const capturedRevision = revision, secret = key.value.trim();
@@ -177,6 +209,29 @@ export async function mountProviderSetup(root, api, options = {}) {
     } catch (error) { if (requestCurrent()) message(failureText(error, [secret]), true); }
     finally { busy = false; if (active()) controls(); }
   };
+  numbers.onclick = async () => {
+    if (!active() || busy || !loaded || !canListNumbers) return;
+    const capturedRevision = revision, secret = key.value.trim();
+    const requestCurrent = () => active() && capturedRevision === revision && key.value.trim() === secret;
+    if (!secret && !saved.has_secret) { message('Enter your Retell API key securely first.', true); return; }
+    busy = true; controls(); callerStatus.textContent = 'Reading your existing caller numbers from Retell…';
+    try {
+      const result = await api('/api/agent-builder/connection/phone-numbers', { method: 'POST', body: secret ? { secret } : {}, guard: requestCurrent });
+      if (!requestCurrent()) return;
+      if (!Array.isArray(result.phone_numbers) || result.phone_numbers.length > 100 || typeof result.truncated !== 'boolean' || result.outreach_started === true
+          || result.phone_numbers.some(item => !item || typeof item.phone_number !== 'string' || !/^\+[1-9]\d{6,14}$/.test(item.phone_number))) throw Error('Retell did not return a valid caller-number list. No connection was changed.');
+      phoneNumbers = result.phone_numbers;
+      const selected = caller.value;
+      callerOptions(selected);
+      callerStatus.textContent = phoneNumbers.length
+        ? `${phoneNumbers.length} existing caller number(s) loaded.${result.truncated ? ' This is a partial list; Retell reports more numbers in the account.' : ''} Select one and verify/save before a phone test. No number was bought and no call was started.`
+        : result.truncated
+          ? 'No caller numbers were returned on this page, but Retell reports more inventory. Check the account inventory; private chat still works without a caller number.'
+          : 'No existing caller number found in this Retell account. Private chat works without one. Adding or buying a caller number needs separate owner approval; no purchase was made here.';
+      message('Caller-number inventory checked. The saved connection is unchanged until you verify and save.');
+    } catch (error) { if (requestCurrent()) { callerStatus.textContent = failureText(error, [secret]); message('Caller numbers could not be loaded. No connection was changed.', true); } }
+    finally { busy = false; if (active()) controls(); }
+  };
   form.onsubmit = async event => {
     event.preventDefault();
     if (!active() || busy || !loaded || !canVerify) return;
@@ -186,6 +241,7 @@ export async function mountProviderSetup(root, api, options = {}) {
     if (!secret && !saved.has_secret) { message('Enter your Retell API key securely first.', true); return; }
     if (!webhookSecret && !saved.has_webhook_secret) { message('Enter the designated Retell webhook verification key securely.', true); return; }
     if (!voice.value) { message('Load the available voices and choose one before saving.', true); return; }
+    if (caller.value && !allowedCallers().has(caller.value)) { message('Choose an owned caller number returned for this account, or leave the number blank for private chat.', true); return; }
     const body = { voice_id: voice.value, from_number: caller.value.trim() };
     const requestCurrent = () => active() && capturedRevision === revision && key.value.trim() === secret
       && webhook.value.trim() === webhookSecret && voice.value === body.voice_id && caller.value.trim() === body.from_number;
@@ -200,7 +256,7 @@ export async function mountProviderSetup(root, api, options = {}) {
       }
       if (result.verified !== true || !result.config?.voice_id || result.outreach_started === true) throw Error('The server did not confirm this connection. Refresh its status before continuing.');
       clearSecrets(); saved = { verified: true, has_secret: true, has_webhook_secret: true, config: result.config };
-      voiceOptions(result.config.voice_id); caller.value = result.config.from_number || ''; showStatus();
+      voiceOptions(result.config.voice_id); callerOptions(result.config.from_number || ''); showStatus();
       message('Connection verified and saved. You can now create your chat and call agents from the approved business facts.');
       if (options.onVerified) {
         try { await options.onVerified(result); }
@@ -216,8 +272,8 @@ export async function mountProviderSetup(root, api, options = {}) {
       message('Your typed credentials are not saved. Use Load available voices and Verify and save connection, or clear the credential fields before checking the saved API connection.');
       return;
     }
-    revision++; voices = []; await loadStatus();
+    revision++; voices = []; phoneNumbers = []; await loadStatus();
   };
-  voiceOptions(); controls(); await loadStatus();
+  voiceOptions(); callerOptions(); controls(); await loadStatus();
   return { dispose };
 }
