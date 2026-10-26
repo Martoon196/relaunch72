@@ -79,8 +79,6 @@ function assertWorkerEnvelope(
 }
 
 const web = serviceSection('web', 'property-predator-growth-hq');
-const revalidator = serviceSection('worker', 'property-predator-public-social-revalidator');
-const testRail = serviceSection('worker', 'property-predator-public-social-test-rail');
 const ownedLiveRail = serviceSection('worker', 'property-predator-owned-public-social-live');
 
 test('Growth HQ web receives the planner identity and one exact read-only company-content source', () => {
@@ -116,7 +114,7 @@ test('Growth HQ web receives the planner identity and one exact read-only compan
     /- key: PROPERTY_PREDATOR_(?:PUBLIC_SOCIAL_REVALIDATOR|PUBLIC_SOCIAL_RAIL)_/,
   );
   assert.doesNotMatch(web, /- key: (?:COMPANY_CONTENT_GENERATE_TOKEN|ADMIN_TOKEN)\b/);
-  for (const worker of [revalidator, testRail, ownedLiveRail]) {
+  for (const worker of [ownedLiveRail]) {
     assert.doesNotMatch(
       worker,
       /- key: PROPERTY_PREDATOR_(?:CAMPAIGN_GENERATION_[A-Z0-9_]+|COMPANY_CONTENT_GENERATE_TOKEN)\b/,
@@ -161,56 +159,30 @@ test('0085 owned-account Zernio worker is deployable with one exact live identit
   );
 });
 
-test('0040 JIT revalidator has one function-only database identity and one read-only source credential', () => {
-  assertWorkerEnvelope(
-    revalidator,
-    'npm run --workspace orchestrator serve:public-social-revalidator',
-  );
-  assert.deepEqual(databaseUrlKeys(revalidator), [
-    'DATABASE_PUBLIC_SOCIAL_REVALIDATOR_URL',
-  ]);
-  valueLessSlot(revalidator, 'DATABASE_PUBLIC_SOCIAL_REVALIDATOR_URL');
-  literal(revalidator, 'DATABASE_PUBLIC_SOCIAL_REVALIDATOR_POOL_MAX', '1');
-  literal(revalidator, 'PROPERTY_PREDATOR_COMPANY_CONTENT_ORIGIN', 'https://propertypredator.com');
-  literal(revalidator, 'PROPERTY_PREDATOR_COMPANY_CONTENT_CLIENT_ID', 'relaunch72');
-  valueLessSlot(revalidator, 'PROPERTY_PREDATOR_COMPANY_CONTENT_READ_TOKEN');
-  literal(revalidator, 'PROPERTY_PREDATOR_COMPANY_CONTENT_TIMEOUT_MS', '8000');
-  literal(revalidator, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_REVALIDATOR_ENVIRONMENT', 'test');
-  literal(revalidator, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_REVALIDATOR_POLL_MS', '1000');
-  assert.doesNotMatch(
-    revalidator,
-    /- key: (?:DATABASE_URL|TEST_DATABASE_URL|DATABASE_MIGRATOR_URL|DATABASE_PUBLIC_SOCIAL_WORKER_URL|DATABASE_CONTENT_ADAPTER_URL|DATABASE_CONTENT_ADAPTER_POOL_MAX|PROPERTY_PREDATOR_PUBLIC_SOCIAL_REVALIDATOR_USER_ID|COMPANY_CONTENT_GENERATE_TOKEN|ADMIN_TOKEN|SESSION_SECRET|MAILGUN_[A-Z0-9_]+|STRIPE_[A-Z0-9_]+|AYRSHARE_[A-Z0-9_]+|META_[A-Z0-9_]+|LINKEDIN_[A-Z0-9_]+)\b/,
-  );
+test('retired TEST social processes and their exclusive worker credentials stay out of production', () => {
+  for (const name of [
+    'property-predator-public-social-revalidator',
+    'property-predator-public-social-test-rail',
+  ]) assert.doesNotMatch(manifest, new RegExp(`^    name: ${name}\\r?$`, 'mu'));
+  assert.doesNotMatch(manifest, /startCommand: npm run --workspace orchestrator serve:public-social-(?:revalidator|test-rail)\b/);
+  assert.doesNotMatch(manifest, /- key: DATABASE_PUBLIC_SOCIAL_(?:REVALIDATOR|WORKER)_URL\b/);
+  assert.doesNotMatch(manifest, /- key: PROPERTY_PREDATOR_PUBLIC_SOCIAL_(?:REVALIDATOR|RAIL)_/);
 });
 
-test('materialized public-social operations reach only the deterministic TEST simulator worker', () => {
-  assertWorkerEnvelope(
-    testRail,
-    'npm run --workspace orchestrator serve:public-social-test-rail',
-  );
-  assert.deepEqual(databaseUrlKeys(testRail), ['DATABASE_PUBLIC_SOCIAL_WORKER_URL']);
-  valueLessSlot(testRail, 'DATABASE_PUBLIC_SOCIAL_WORKER_URL');
-  literal(testRail, 'DATABASE_PUBLIC_SOCIAL_WORKER_POOL_MAX', '1');
-  literal(testRail, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_RAIL_ENVIRONMENT', 'test');
-  literal(
-    testRail,
-    'PROPERTY_PREDATOR_PUBLIC_SOCIAL_RAIL_PROVIDER_ID',
-    'public_social_dark_simulator',
-  );
-  literal(testRail, 'PROPERTY_PREDATOR_PUBLIC_SOCIAL_RAIL_POLL_MS', '1000');
-  assert.doesNotMatch(
-    testRail,
-    /- key: (?:DATABASE_URL|TEST_DATABASE_URL|DATABASE_MIGRATOR_URL|DATABASE_PUBLIC_SOCIAL_REVALIDATOR_URL|DATABASE_CONTENT_ADAPTER_URL|SESSION_SECRET|MAILGUN_[A-Z0-9_]+|STRIPE_[A-Z0-9_]+|AYRSHARE_[A-Z0-9_]+|META_[A-Z0-9_]+|LINKEDIN_[A-Z0-9_]+)\b/,
-  );
-});
-
-test('social launch additions preserve the existing services and add no database or deployment mutation', () => {
-  const services = [...manifest.matchAll(/^  - type: (?:web|worker)$/gmu)];
-  assert.equal(services.length, 10);
+test('TEST social retirement retains every other production service and adds no database or deployment mutation', () => {
+  const services = [...manifest.matchAll(/^    name: (.+)$/gmu)].map(match => match[1]).sort();
+  assert.deepEqual(services, [
+    'property-predator-growth-hq',
+    'property-predator-email-worker',
+    'property-predator-owned-public-social-live',
+    'property-predator-meta-whatsapp-live-worker',
+    'property-predator-meta-whatsapp-live-webhook',
+    'property-predator-customer-email-live',
+    'property-predator-twilio-sms-live',
+    'property-predator-twilio-sms-live-webhook',
+  ].sort());
   assert.match(manifest, /name: property-predator-growth-hq/);
   assert.match(manifest, /name: property-predator-email-worker/);
-  assert.match(manifest, /name: property-predator-public-social-revalidator/);
-  assert.match(manifest, /name: property-predator-public-social-test-rail/);
   assert.match(manifest, /name: property-predator-owned-public-social-live/);
   assert.match(manifest, /name: property-predator-meta-whatsapp-live-worker/);
   assert.match(manifest, /name: property-predator-meta-whatsapp-live-webhook/);

@@ -18,12 +18,6 @@ function serviceSection(type: 'web' | 'worker', name: string): string {
 
 const webManifest = serviceSection('web', 'property-predator-growth-hq');
 const emailWorkerManifest = serviceSection('worker', 'property-predator-email-worker');
-const revalidatorWorkerManifest = serviceSection(
-  'worker', 'property-predator-public-social-revalidator',
-);
-const socialTestWorkerManifest = serviceSection(
-  'worker', 'property-predator-public-social-test-rail',
-);
 const ownedSocialLiveWorkerManifest = serviceSection(
   'worker', 'property-predator-owned-public-social-live',
 );
@@ -43,7 +37,7 @@ const smsLiveWebhookManifest = serviceSection(
   'web', 'property-predator-twilio-sms-live-webhook',
 );
 const workerManifests = [
-  emailWorkerManifest, revalidatorWorkerManifest, socialTestWorkerManifest,
+  emailWorkerManifest,
   ownedSocialLiveWorkerManifest, whatsAppLiveWorkerManifest,
   customerEmailLiveWorkerManifest, smsLiveWorkerManifest,
 ] as const;
@@ -123,8 +117,8 @@ test('production Blueprint is isolated, manually deployed and narrowly fail-clos
   assert.doesNotMatch(manifest, /propertypredator\.co\.uk/);
   assert.equal(
     (manifest.match(/buildCommand: npm ci --ignore-scripts --include=dev && node scripts\/supply-chain\.mjs --check && npm run typecheck && npm test/g) ?? []).length,
-    10,
-    'all ten isolated production processes must install the locked checked toolchain',
+    8,
+    'all eight retained production processes must install the locked checked toolchain',
   );
   assert.match(manifest, /startCommand: npm run serve/);
   assert.match(emailWorkerManifest, /name: property-predator-email-worker/);
@@ -134,14 +128,6 @@ test('production Blueprint is isolated, manually deployed and narrowly fail-clos
   assert.match(
     emailWorkerManifest,
     /startCommand: npm run --workspace orchestrator serve:property-predator-email-worker/,
-  );
-  assert.match(
-    revalidatorWorkerManifest,
-    /startCommand: npm run --workspace orchestrator serve:public-social-revalidator/,
-  );
-  assert.match(
-    socialTestWorkerManifest,
-    /startCommand: npm run --workspace orchestrator serve:public-social-test-rail/,
   );
   assert.match(
     ownedSocialLiveWorkerManifest,
@@ -294,11 +280,6 @@ test('production Blueprint is isolated, manually deployed and narrowly fail-clos
   secretSlotIn(webManifest, 'PROPERTY_PREDATOR_ZERNIO_INBOUND_PROVIDER_PROFILE_ID');
   secretSlotIn(webManifest, 'ZERNIO_INBOUND_WEBHOOK_CREDENTIAL_VERSION');
   secretSlotIn(webManifest, 'ZERNIO_INBOUND_WEBHOOK_SECRET');
-  for (const section of [revalidatorWorkerManifest, socialTestWorkerManifest]) {
-    literalValueIn(section, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'false');
-    literalValueIn(section, 'PROPERTY_PREDATOR_SOCIAL_EMERGENCY_PAUSED', 'true');
-    assert.doesNotMatch(section, /- key: PROPERTY_PREDATOR_EMAIL_(?:DELIVERY_ENABLED|EMERGENCY_PAUSED)\b/);
-  }
   literalValueIn(
     ownedSocialLiveWorkerManifest, 'PROPERTY_PREDATOR_PROVIDER_EFFECTS_ENABLED', 'true',
   );
@@ -350,8 +331,6 @@ test('production Blueprint keeps web and worker database identities process-isol
     'DATABASE_ZERNIO_INBOUND_WEBHOOK_URL',
   ]) secretSlot(key);
   secretSlot('DATABASE_MAILGUN_WORKER_URL');
-  secretSlot('DATABASE_PUBLIC_SOCIAL_REVALIDATOR_URL');
-  secretSlot('DATABASE_PUBLIC_SOCIAL_WORKER_URL');
   secretSlot('DATABASE_OWNED_SOCIAL_WORKER_URL');
   secretSlot('DATABASE_WHATSAPP_LIVE_WORKER_URL');
   secretSlot('DATABASE_WHATSAPP_LIVE_WEBHOOK_URL');
@@ -360,7 +339,7 @@ test('production Blueprint keeps web and worker database identities process-isol
   secretSlot('DATABASE_SMS_WEBHOOK_URL');
   assert.equal(
     (manifest.match(/- key: PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID\b/g) ?? []).length,
-    10,
+    8,
   );
   secretSlot('PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID');
 
@@ -393,12 +372,6 @@ test('production Blueprint keeps web and worker database identities process-isol
     'DATABASE_ZERNIO_SOCIAL_COMMAND_URL',
   ]);
   assert.deepEqual(databaseUrlKeys(emailWorkerManifest), ['DATABASE_MAILGUN_WORKER_URL']);
-  assert.deepEqual(databaseUrlKeys(revalidatorWorkerManifest), [
-    'DATABASE_PUBLIC_SOCIAL_REVALIDATOR_URL',
-  ]);
-  assert.deepEqual(databaseUrlKeys(socialTestWorkerManifest), [
-    'DATABASE_PUBLIC_SOCIAL_WORKER_URL',
-  ]);
   assert.deepEqual(databaseUrlKeys(ownedSocialLiveWorkerManifest), [
     'DATABASE_OWNED_SOCIAL_WORKER_URL',
   ]);
@@ -429,14 +402,6 @@ test('production Blueprint keeps web and worker database identities process-isol
   assert.doesNotMatch(
     emailWorkerManifest,
     /- key: DATABASE_(?:WEB|IDENTITY_COMMAND|CRM_COMMAND|ABUSE_COMMAND|CONTENT_COMMAND|CONTENT_ADAPTER|MAILGUN_WEBHOOK)_URL\b/,
-  );
-  assert.doesNotMatch(
-    revalidatorWorkerManifest,
-    /- key: DATABASE_(?:WEB|IDENTITY_COMMAND|CRM_COMMAND|ABUSE_COMMAND|CONTENT_COMMAND|MAILGUN_WEBHOOK|MAILGUN_WORKER|PUBLIC_SOCIAL_COMMAND|PUBLIC_SOCIAL_WORKER)_URL\b/,
-  );
-  assert.doesNotMatch(
-    socialTestWorkerManifest,
-    /- key: DATABASE_(?:WEB|IDENTITY_COMMAND|CRM_COMMAND|ABUSE_COMMAND|CONTENT_COMMAND|CONTENT_ADAPTER|MAILGUN_WEBHOOK|MAILGUN_WORKER|PUBLIC_SOCIAL_COMMAND|PUBLIC_SOCIAL_REVALIDATOR)_URL\b/,
   );
   assert.doesNotMatch(
     ownedSocialLiveWorkerManifest,
@@ -499,7 +464,7 @@ test('Mailgun ingress and controlled internal-seed egress use disjoint exact sec
     'Blueprint activation must not enqueue or stage a customer email',
   );
   for (const worker of [
-    revalidatorWorkerManifest, socialTestWorkerManifest, ownedSocialLiveWorkerManifest,
+    ownedSocialLiveWorkerManifest,
     whatsAppLiveWorkerManifest, whatsAppLiveWebhookManifest,
     smsLiveWorkerManifest, smsLiveWebhookManifest,
   ]) {
@@ -527,7 +492,7 @@ test('Mailgun ingress and controlled internal-seed egress use disjoint exact sec
   );
   secretSlotIn(smsLiveWebhookManifest, 'TWILIO_AUTH_TOKEN');
   for (const section of [
-    webManifest, emailWorkerManifest, revalidatorWorkerManifest, socialTestWorkerManifest,
+    webManifest, emailWorkerManifest,
     ownedSocialLiveWorkerManifest, whatsAppLiveWorkerManifest, whatsAppLiveWebhookManifest,
     customerEmailLiveWorkerManifest, smsLiveWorkerManifest,
   ]) {
@@ -542,7 +507,7 @@ test('Mailgun ingress and controlled internal-seed egress use disjoint exact sec
   ]) {
     secretSlotIn(smsLiveWorkerManifest, key);
     for (const section of [
-      webManifest, emailWorkerManifest, revalidatorWorkerManifest, socialTestWorkerManifest,
+      webManifest, emailWorkerManifest,
       ownedSocialLiveWorkerManifest, whatsAppLiveWorkerManifest, whatsAppLiveWebhookManifest,
       customerEmailLiveWorkerManifest, smsLiveWebhookManifest,
     ]) {
@@ -554,7 +519,7 @@ test('Mailgun ingress and controlled internal-seed egress use disjoint exact sec
     }
   }
   for (const section of [
-    webManifest, emailWorkerManifest, revalidatorWorkerManifest, socialTestWorkerManifest,
+    webManifest, emailWorkerManifest,
     ownedSocialLiveWorkerManifest,
   ]) assert.doesNotMatch(section, /- key: AYRSHARE_[A-Z0-9_]+\b/);
   for (const key of [

@@ -548,3 +548,42 @@ service. The earlier Pro-plus-one-service spending approval remains pending; no
 purchase has been made. Existing HQ can carry this default-denied UI independently.
 Rollback remains the original retained deployment `dep-daj9v56k1f9s73cqpbag` /
 `3c0bf104...`, plus the immediate previous reviewed HQ release `43ab245...`.
+
+
+### 26 October 2026 — owner-approved retirement of the old social TEST pair
+
+The founder explicitly approved retiring only these Render workers:
+
+- `property-predator-public-social-test-rail`, `srv-da8avop42hec73dev1gg`, last
+  deployed source [5dc2e4cb029155433dfd66083b0580d9f635c1bc](https://github.com/Martoon196/relaunch72/commit/5dc2e4cb029155433dfd66083b0580d9f635c1bc).
+- `property-predator-public-social-revalidator`, `srv-da8avop42hec73dev1h0`, last
+  deployed source [acee78255c7ed995bde45a42a2fd2eb3453af20c](https://github.com/Martoon196/relaunch72/commit/acee78255c7ed995bde45a42a2fd2eb3453af20c).
+
+Both exact deployed sources enforce a TEST-only environment with provider effects
+off. The real Zernio calendar worker is separate and remains declared unchanged.
+The two TEST service definitions are removed from the production Blueprint so a
+future sync does not recreate them. All other eight service definitions, runtime
+code, database migrations/roles/functions and evidence are retained.
+
+The read-only EU HQ aggregate audit found one simulated operation waiting for
+TEST time, zero in-flight/uncertain operations and one materialised revalidation
+job, with no active leases. Preserve these records; they are not customer
+outreach and must never be replayed as live sends. Main HQ readiness checks schema
+and TEST/provider invariants rather than either worker heartbeat.
+
+Actual Render retirement is **pending the supervising task's authorised provider
+workflow**. Removing a Blueprint definition alone does not delete its resource;
+first publish/sync this removal, preserve runtime configuration securely, then
+delete only the two exact services. No successful deletion, service-count change
+or cost saving is claimed by this source change. No secrets belong in this public
+repository. All other workers/webhooks and provider configuration are unchanged.
+
+Rollback/recreation reference: the pre-retirement Blueprint remains at
+[63a44010261d70edd7947d7f71d2869654c380c6](https://github.com/Martoon196/relaunch72/blob/63a44010261d70edd7947d7f71d2869654c380c6/render.property-predator.production.yaml).
+Recreation would require explicit owner approval and secure re-establishment of
+the function-only database identities and read-only source credential, keeping
+TEST environment, effects off and pause on. Do not restore all old services or
+apply historical backlogs as a rollback. Render service IDs change on recreation.
+
+Render documents the remove/sync-then-delete order in
+[Managing Blueprint resources](https://render.com/docs/infrastructure-as-code#deleting-resources).
