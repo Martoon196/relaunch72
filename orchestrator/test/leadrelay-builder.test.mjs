@@ -222,15 +222,15 @@ test('a failed status refresh preserves form layout and edits with a visible ret
   } finally { h.restore(); }
 });
 
-test('unconnected provider has explicit signup and secure setup instructions without preventing review', async () => {
+test('unconnected provider has explicit API setup instructions without preventing review', async () => {
   const h = await harness({ draft: readyDraft, website: 'https://business.example/', requirements: [{ id: 'retell', complete: false }] });
   try {
     assert.ok(formFor(h.root, 'review_confirmed'));
     const setup = find(h.root, node => node.className === 'helper amber agent-builder-provider-setup');
-    assert.match(setup.textContent, /scan websites and approve facts now/);
-    assert.match(setup.textContent, /verify its key in secure Live connections/);
-    assert.equal(byText(setup, 'Open Retell signup →').href, 'https://dashboard.retellai.com');
-    assert.equal(byText(setup, 'Open secure Live connections →').href, '#live');
+    assert.match(setup.textContent, /Website scanning and approval need no provider account/);
+    assert.match(setup.textContent, /this app creates and configures the chat and call agents/);
+    assert.equal(byText(setup, 'Retell account / one-time API access →').href, 'https://dashboard.retellai.com');
+    assert.equal(byText(setup, 'Connect Retell here →').href, '#live');
     h.setStatus({ website: 'https://business.example/' });
     await mountAgentBuilder(h.root, h.api);
     assert.equal(input(h.root, 'url').value, 'https://business.example/');
@@ -393,5 +393,54 @@ test('HQ embedding can provide real LeadRelay section URLs without hash navigati
     assert.equal(byText(h.root, 'Secure connections →').href, 'https://leadrelay.example/#live');
     assert.equal(byText(h.root, 'Review the configured own number and permissions →').href, 'https://leadrelay.example/#live');
     assert.equal(byText(h.root, 'Manage existing approved knowledge →').href, 'https://leadrelay.example/#knowledge');
+  } finally { h.restore(); }
+});
+
+test('native connection callback opens setup without links or replacing the current edited review', async () => {
+  const h = await harness({ draft: readyDraft, requirements: [{ id: 'retell', complete: false }] });
+  let calls = 0, guard;
+  try {
+    await mountAgentBuilder(h.root, h.api, { onOpenConnections: options => { calls++; guard = options.isCurrent; } });
+    input(h.root, 'content_0').value = 'Keep these unsaved edits';
+    const review = formFor(h.root, 'review_confirmed');
+    const connect = byText(h.root, 'Connect Retell here →');
+    assert.equal(connect.tag, 'button'); assert.equal(connect.href, undefined);
+    await connect.onclick({ preventDefault() {} });
+    assert.equal(calls, 1); assert.equal(guard(), true);
+    assert.equal(formFor(h.root, 'review_confirmed'), review);
+    assert.equal(input(h.root, 'content_0').value, 'Keep these unsaved edits');
+    assert.deepEqual(h.writes, []);
+  } finally { h.restore(); }
+});
+
+test('native connection failures preserve review edits and show feedback beside the current view', async () => {
+  const h = await harness({ draft: readyDraft });
+  try {
+    await mountAgentBuilder(h.root, h.api, { onOpenConnections: async () => { throw Error('Connection access needs review'); } });
+    input(h.root, 'content_0').value = 'Preserve this review';
+    const connect = byText(h.root, 'Secure connections →');
+    await connect.onclick();
+    assert.equal(input(h.root, 'content_0').value, 'Preserve this review');
+    assert.match(find(h.root, node => node.className === 'agent-builder-message').textContent, /Connection access needs review/);
+    assert.equal(find(h.root, node => node.className === 'agent-builder-message').attributes['data-error'], 'true');
+    assert.equal(connect.disabled, false);
+  } finally { h.restore(); }
+});
+
+test('pending native connection opens are single and cannot alter a newly selected or detached view', async () => {
+  const wait = deferred(); const h = await harness({});
+  let calls = 0, guard;
+  try {
+    await mountAgentBuilder(h.root, h.api, { onOpenConnections: async options => { calls++; guard = options.isCurrent; return wait.promise; } });
+    const connect = byText(h.root, 'Secure connections →');
+    const operation = connect.onclick(); await connect.onclick();
+    assert.equal(calls, 1); assert.equal(connect.disabled, true);
+    await mountAgentBuilder(h.root, h.api, { onOpenConnections: async () => { calls++; } });
+    assert.equal(guard(), false);
+    wait.reject(Error('Old connection request failed')); await operation;
+    assert.equal(find(h.root, node => node.className === 'agent-builder-message').textContent, '');
+    h.root.isConnected = false;
+    await byText(h.root, 'Secure connections →').onclick();
+    assert.equal(calls, 1);
   } finally { h.restore(); }
 });

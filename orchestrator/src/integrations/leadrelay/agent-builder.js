@@ -115,6 +115,27 @@ export async function mountAgentBuilder(root, api, options = {}) {
   const copy = el('div');
   copy.append(el('h1', 'Create your business agent'), el('p', 'One approved business knowledge version for website chat and AI calls.'));
   function sectionLink(label, section) {
+    if (section === 'live' && typeof options.onOpenConnections === 'function') {
+      const button = el('button', label);
+      button.type = 'button';
+      button.className = 'btn small';
+      let pending = false;
+      button.onclick = async event => {
+        event?.preventDefault?.();
+        if (!active() || pending) return;
+        pending = true; button.disabled = true;
+        try { await options.onOpenConnections({ isCurrent: active }); }
+        catch (error) {
+          if (active()) {
+            message.textContent = error?.message || 'The connection setup could not be opened. Your current agent setup is preserved.';
+            message.setAttribute('role', 'alert');
+            message.setAttribute('data-error', 'true');
+            message.removeAttribute?.('data-success');
+          }
+        } finally { pending = false; if (active()) button.disabled = false; }
+      };
+      return button;
+    }
     let href = options.sectionUrl ? options.sectionUrl(section) : options.links?.[section];
     if (typeof href !== 'string') href = '#' + section;
     if (!href.startsWith('#')) {
@@ -353,7 +374,7 @@ export async function mountAgentBuilder(root, api, options = {}) {
   if (providerMissing) {
     const setup = el('div');
     setup.className = 'helper amber agent-builder-provider-setup';
-    setup.append(el('strong', 'Retell account not connected'), el('p', 'You can scan websites and approve facts now. For AI chat and calls, create a Retell account, then add and verify its key in secure Live connections. Provider usage may incur charges; no purchase is made here.'), link('Open Retell signup →', 'https://dashboard.retellai.com'), sectionLink('Open secure Live connections →', 'live'));
+    setup.append(el('strong', 'Retell API access not connected'), el('p', 'Connect your Retell API access here; this app creates and configures the chat and call agents from your approved business facts. Website scanning and approval need no provider account. Provider usage may incur charges; no purchase is made here.'), sectionLink('Connect Retell here →', 'live'), link('Retell account / one-time API access →', 'https://dashboard.retellai.com'));
     provider.append(setup);
   }
   if (version) {

@@ -10,6 +10,9 @@ const OPERATIONS = Object.freeze({
   'PUT:settings':'settings','PUT:provider':'provider',
   'POST:pack-export':'business-pack/export','POST:pack-import':'business-pack/import',
   'GET:agent-status':'/api/agent-builder',
+  'GET:agent-connection':'/api/agent-builder/connection',
+  'POST:agent-voices':'/api/agent-builder/connection/voices',
+  'POST:agent-connect':'/api/agent-builder/connection/verify',
   'POST:agent-scan':'/api/agent-builder/scan',
   'POST:agent-approve':'/api/agent-builder/approve',
   'POST:agent-publish':'/api/agent-builder/publish',
@@ -21,6 +24,68 @@ export const READ_ACTIONS = Object.freeze(Object.keys(OPERATIONS).filter(k=>k.st
 export const ALL_ACTIONS = Object.freeze(Object.keys(OPERATIONS));
 export class GatewayError extends Error { constructor(status,detail){super(detail);this.status=status;} }
 const deny=(status,detail)=>{throw new GatewayError(status,detail);};
+
+const CONNECTION_PATH = '/api/agent-builder/connection';
+const connectionPaths = new Set([CONNECTION_PATH, CONNECTION_PATH+'/voices', CONNECTION_PATH+'/verify']);
+const isRecord = value => !!value && typeof value === 'object' && !Array.isArray(value);
+function validateConnectionBody(path, body) {
+  if (path === CONNECTION_PATH) {
+    if (body !== undefined) deny(400,'Connection status does not accept a payload');
+    return;
+  }
+  const allowed = path.endsWith('/voices') ? ['secret'] : ['secret','webhook_secret','voice_id','from_number'];
+  if (!isRecord(body) || Object.keys(body).some(key=>!allowed.includes(key))) deny(400,'Unsupported provider setup fields');
+  for (const field of ['secret','webhook_secret']) {
+    if (Object.hasOwn(body,field) && (typeof body[field] !== 'string' || body[field].trim().length < 10 || body[field].length > 10000 || /[\r\n]/.test(body[field]))) deny(400,'Invalid provider setup credential');
+  }
+  if (path.endsWith('/verify')) {
+    if (typeof body.voice_id !== 'string' || !body.voice_id.trim() || body.voice_id.length > 120 || /[\r\n]/.test(body.voice_id)) deny(400,'Select a provider voice');
+    if (Object.hasOwn(body,'from_number') && (typeof body.from_number !== 'string' || body.from_number.length > 20 || /[\r\n]/.test(body.from_number))) deny(400,'Invalid existing caller number');
+  }
+}
+
+function safeConnectionResponse(path, data, credentials) {
+  // The credential-entry endpoints are deliberately narrower than the regular
+  // control response. Provider keys and unknown supplier fields never return.
+  const invalid = () => deny(502,'Unexpected provider setup response');
+  if (!isRecord(data) || data.outreach_started !== false) invalid();
+  const text = (value,max=120) => {
+    if (typeof value !== 'string' || value.length > max || /[\r\n]/.test(value)) invalid();
+    return value;
+  };
+  const config = raw => {
+    if (!isRecord(raw)) invalid();
+    const result = {};
+    for (const field of ['voice_id','voice_name','from_number']) if (Object.hasOwn(raw,field)) result[field] = text(raw[field],field==='from_number'?20:120);
+    if (Object.hasOwn(raw,'verified_at')) {
+      if (!Number.isSafeInteger(raw.verified_at) || raw.verified_at < 0) invalid();
+      result.verified_at = raw.verified_at;
+    }
+    return result;
+  };
+  let result;
+  if (path.endsWith('/voices')) {
+    if (data.provider !== 'retell' || !Array.isArray(data.voices) || data.voices.length > 200) invalid();
+    result = {provider:'retell',voices:data.voices.map(voice=>{
+      if (!isRecord(voice)) invalid();
+      const row = {voice_id:text(voice.voice_id),voice_name:text(voice.voice_name)};
+      if (!row.voice_id || !row.voice_name) invalid();
+      for (const field of ['provider','gender','accent','age','language']) if (Object.hasOwn(voice,field)) row[field] = text(voice[field]);
+      return row;
+    }),outreach_started:false};
+  } else {
+    if (typeof data.verified !== 'boolean') invalid();
+    result = {verified:data.verified,config:config(data.config),outreach_started:false};
+    if (path === CONNECTION_PATH) {
+      if (data.provider !== 'retell' || typeof data.has_secret !== 'boolean' || typeof data.has_webhook_secret !== 'boolean') invalid();
+      Object.assign(result,{provider:'retell',has_secret:data.has_secret,has_webhook_secret:data.has_webhook_secret});
+    }
+  }
+  const secrets = credentials.filter(value=>typeof value === 'string' && value.length >= 10).flatMap(value=>[value,value.trim()]);
+  const exposed = value => typeof value === 'string' ? secrets.some(secret=>value.includes(secret)) : value && typeof value === 'object' ? Object.values(value).some(exposed) : false;
+  if (exposed(result)) invalid();
+  return result;
+}
 
 export function loadInstallations(raw, env=process.env) {
   const rows=JSON.parse(raw ?? env.LEADRELAY_INSTALLATIONS_JSON ?? '[]');
@@ -53,6 +118,7 @@ export async function sendControl(installation,method,path,body,fetchImpl=fetch)
   // The operation table is the complete routing authority. No caller/body/header
   // may supply an upstream origin, path, query, credential or method override.
   if (!Object.entries(OPERATIONS).some(([action,target]) => action.startsWith(method+':') && target === path)) deny(404,'Control operation not found');
+  if (connectionPaths.has(path)) validateConnectionBody(path,body);
   const upstreamPath = path.startsWith('/api/agent-builder') ? path : '/api/control/'+path;
   const payload=body===undefined?undefined:JSON.stringify(body);
   if(payload&&Buffer.byteLength(payload)>MAX_BYTES) deny(413,'Request exceeds limit');
@@ -62,13 +128,14 @@ export async function sendControl(installation,method,path,body,fetchImpl=fetch)
       body:payload,redirect:'error',signal:AbortSignal.timeout(path === '/api/agent-builder/chat' ? 15_000 : 10_000)});
     if(!r.ok){
       await r.body?.cancel();
+      if(connectionPaths.has(path) && r.status===400) deny(400,'Provider connection could not be verified; check the selected voice and credentials');
       const allowed=[401,403,409,422,429];
       deny(allowed.includes(r.status)?r.status:502,'LeadRelay rejected this control request; check connection and permissions');
     }
     if(!(r.headers.get('content-type')||'').startsWith('application/json')){await r.body?.cancel();deny(502,'Unexpected LeadRelay response type');}
     const data=JSON.parse(await boundedResponse(r));
     // Never forward any upstream headers/cookies, raw error bodies or credentials.
-    return data;
+    return connectionPaths.has(path) ? safeConnectionResponse(path,data,[installation.key,body?.secret,body?.webhook_secret]) : data;
   }catch(e){if(e instanceof GatewayError)throw e;deny(502,'LeadRelay unavailable; no automatic retry was attempted');}
 }
 
@@ -95,7 +162,8 @@ export function createDispatcher({installations,authorize,verifyCsrf,transport=s
       if(!(await verifyCsrf(identity,request)))deny(403,'Invalid HQ CSRF token');
       if(!body||typeof body!=='object'||Array.isArray(body))deny(400,'Expected a JSON object');
       if(Buffer.byteLength(JSON.stringify(body))>MAX_BYTES)deny(413,'Request exceeds limit');
-      if(match[2].startsWith('agent-') && ['installationId','workspaceId','userId','base_url','key','key_env','secret','provider_key','to_number','phone','own_phone','recipient'].some(key => Object.hasOwn(body,key))) deny(400,'Agent authority, credentials and call destination are server-controlled');
+      if (connectionPaths.has(OPERATIONS[action])) validateConnectionBody(OPERATIONS[action],body);
+      else if(match[2].startsWith('agent-') && ['installationId','workspaceId','userId','base_url','key','key_env','secret','webhook_secret','provider_key','from_number','to_number','phone','own_phone','recipient'].some(key => Object.hasOwn(body,key))) deny(400,'Agent authority, credentials and call destination are server-controlled');
     }
     return transport(grant.item,method,OPERATIONS[action],body);
   };

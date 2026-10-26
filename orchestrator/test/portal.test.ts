@@ -1563,6 +1563,34 @@ test('LeadRelay page and assets use existing portal sign-in and same-origin poli
   assert.deepEqual(JSON.parse(api.body),[]);
 });
 
+test('Native LeadRelay provider assets require the existing session and remain private no-store', async () => {
+  const opaque=Buffer.alloc(32,53).toString('base64url');
+  const auth:PortalAuthService={
+    resolve:async token=>token===opaque?{sessionToken:token,userId:USER_ID,workspaceId:WORKSPACE_ID,userEmail:'owner@example.com'}:null,
+    login:async()=>null,revoke:async()=>undefined,
+  };
+  const d=postgresDeps(auth);
+  for (const path of ['/portal/leadrelay/provider-setup.js','/portal/leadrelay/panel.css']) {
+    const anonymous=await call('GET',path,d);
+    assert.equal(anonymous.statusCode,302);
+    assert.equal(anonymous.headers.location,'/portal/login');
+    assert.doesNotMatch(anonymous.body,/mountProviderSetup|provider-setup-card/);
+    const asset=await call('GET',path,d,{cookie:`${PORTAL_COOKIE}=${opaque}`});
+    assert.equal(asset.statusCode,200);
+    assert.match(asset.headers['cache-control']!,/no-store/);
+    if (path.endsWith('.js')) {
+      assert.match(asset.headers['content-type']!,/javascript/);
+      assert.match(asset.body,/export async function mountProviderSetup/);
+      assert.doesNotMatch(asset.body,/LEADRELAY_INSTALLATIONS_JSON|LEADRELAY_GRANTS_JSON/);
+    } else {
+      assert.match(asset.headers['content-type']!,/text\/css/);
+      assert.match(asset.body,/\.lrhq/);
+      assert.match(asset.body,/\.agent-builder/);
+      assert.match(asset.body,/\.provider-setup/);
+    }
+  }
+});
+
 test('LeadRelay setup identity refuses unauthenticated or legacy tenant authority',async()=>{
   const auth:PortalAuthService={resolve:async()=>null,login:async()=>null,revoke:async()=>undefined};
   const anonymous=await call('GET','/portal/api/leadrelay/identity',postgresDeps(auth));

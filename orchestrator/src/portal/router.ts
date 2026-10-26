@@ -5,7 +5,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { handleLeadRelay, panelSource, panelCss, panelBoot, builderSource, builderCss } from '../integrations/leadrelay/mount.js';
+import { handleLeadRelay, panelSource, panelCss, panelBoot, builderSource, builderCss, providerSource, providerCss } from '../integrations/leadrelay/mount.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PlatformCapability } from '../platform/capabilities.js';
 import type { CompanyContentCatalogItem } from '../company-content-pg/types.js';
@@ -2285,10 +2285,11 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   if (p.startsWith('/portal/leadrelay') && method === 'GET') {
     if (p === '/portal/leadrelay/panel.js') return sendJavaScript(res, panelSource, 'private, no-store');
     if (p === '/portal/leadrelay/builder.js') return sendJavaScript(res, builderSource, 'private, no-store');
+    if (p === '/portal/leadrelay/provider-setup.js') return sendJavaScript(res, providerSource, 'private, no-store');
     if (p === '/portal/leadrelay/boot.js') return sendJavaScript(res, panelBoot, 'private, no-store');
     if (p === '/portal/leadrelay/panel.css') {
       res.writeHead(200, {'content-type':'text/css; charset=utf-8','cache-control':'no-store'});
-      res.end(panelCss+'\n'+builderCss); return;
+      res.end(panelCss+'\n'+builderCss+'\n'+providerCss); return;
     }
     if (p === '/portal/leadrelay') {
       const body = `<link rel="stylesheet" href="/portal/leadrelay/panel.css"><div id="leadrelay-panel" data-csrf="${escapeHtml(portalCsrfToken(deps.sessionSecret, sessionToken))}"></div><script type="module" src="/portal/leadrelay/boot.js"></script>`;

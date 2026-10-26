@@ -24,3 +24,15 @@ test('Agent setup actions require individually recorded canonical grants', () =>
   assert.deepEqual(installationActions(grants,{userId:'martin',workspaceId:'other'},'pilot'),[]);
   assert.equal(installationActions(grants,{userId:'martin',workspaceId:'growth'},'pilot').includes('POST:agent-test-call'),false);
 });
+
+test('Native provider connection grants are explicit and remain bound to canonical identity', () => {
+  const old = loadGrants(JSON.stringify([{userId:'owner',workspaceId:'growth',installationId:'pilot',actions:['POST:agent-publish','PUT:settings']}]));
+  assert.equal(installationActions(old,{userId:'owner',workspaceId:'growth'},'pilot').includes('POST:agent-connect'),false);
+  const actions=['GET:agent-connection','POST:agent-voices','POST:agent-connect'];
+  const grants=loadGrants(JSON.stringify([{userId:'owner',workspaceId:'growth',installationId:'pilot',actions}]));
+  assert.deepEqual(installationActions(grants,{userId:'owner',workspaceId:'growth'},'pilot'),actions);
+  assert.deepEqual(installationActions(grants,{userId:'owner',workspaceId:'another'},'pilot'),[]);
+  assert.deepEqual(installationActions(grants,{userId:'another',workspaceId:'growth'},'pilot'),[]);
+  assert.deepEqual(installationActions(grants,{userId:'owner',workspaceId:'growth'},'other-installation'),[]);
+  assert.deepEqual(installationActions(loadGrants(),{userId:'owner',workspaceId:'growth'},'pilot'),[]);
+});

@@ -1,9 +1,15 @@
 /* Native, dependency-free Growth HQ module. Serve from HQ's own assets origin.
    No LeadRelay bearer token, browser storage, iframe or public CORS connection. */
-export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csrfHeader = 'X-CSRF-Token', loadBuilder = () => import('/portal/leadrelay/builder.js')} = {}) {
+export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csrfHeader = 'X-CSRF-Token', loadBuilder = () => import('/portal/leadrelay/builder.js'), loadProvider = () => import('/portal/leadrelay/provider-setup.js')} = {}) {
   if (!(root instanceof HTMLElement) || typeof csrfToken !== 'function') throw Error('A container and existing HQ CSRF-token accessor are required');
   if (!/^\/[a-zA-Z0-9/_-]+$/.test(apiBase) || apiBase.startsWith('//')) throw Error('Use a same-origin API path');
   let registry = [], current = null, disposed = false;
+  let view = {}, providerView = null, currentStatus = null;
+  function beginView() {
+    providerView?.dispose(); providerView = null;
+    view = {}; return view;
+  }
+  const viewIsCurrent = (token, id) => !disposed && current?.id === id && view === token;
   const node = (tag, text = '', className = '') => { const x = document.createElement(tag); x.textContent = text; if (className) x.className = className; return x; };
   root.classList.add('lrhq');
   const title = node('h2', 'LeadRelay'), intro = node('p', 'Sales follow-up · Growth HQ control module');
@@ -12,8 +18,12 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
   root.replaceChildren(title, intro, selection, controls, message, content);
   const can = action => current?.actions.includes(action);
   const error = e => { message.textContent = e.message || 'Request failed'; message.setAttribute('role', 'alert'); };
-  async function request(path, method = 'GET', body, installationId = current?.id) {
-    const unchanged = () => { if (disposed || installationId !== current?.id) throw Error('Installation changed; use the refreshed controls'); };
+  async function request(path, method = 'GET', body, installationId = current?.id, guard) {
+    if (guard !== undefined && typeof guard !== 'function') throw Error('Setup guard must be a function');
+    const unchanged = () => {
+      if (disposed || installationId !== current?.id) throw Error('Installation changed; use the refreshed controls');
+      if (guard && guard() !== true) throw Error('Setup view changed; request cancelled');
+    };
     unchanged();
     const headers = {'Content-Type': 'application/json'};
     if (method !== 'GET') {
@@ -24,6 +34,7 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
     unchanged();
     const r = await fetch(apiBase + path, {method, credentials: 'same-origin', headers, body: body === undefined ? undefined : JSON.stringify(body)});
     const data = await r.json().catch(() => ({detail: 'Unreadable gateway response'}));
+    unchanged();
     if (!r.ok) throw Error(typeof data.detail === 'string' ? data.detail : `Control request failed (${r.status})`);
     return data;
   }
@@ -47,8 +58,10 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
   async function refresh() {
     if (!current || disposed) return;
     const activeId = current.id;
-    const data = await request(path('status'));
-    if (disposed || current.id !== activeId) return;
+    const token = beginView();
+    const data = await request(path('status'), 'GET', undefined, activeId);
+    if (!viewIsCurrent(token, activeId)) return;
+    currentStatus = {id:activeId,data};
     controls.replaceChildren(); content.replaceChildren(); message.textContent = '';
     action('Refresh', refresh);
     action('Pause processing', async () => { await request(path('pause'), 'POST', {reason: 'Paused from Growth HQ'}); await refresh(); }, controls, can('POST:pause'));
@@ -56,6 +69,7 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
       if (confirm('Resume simulation processing? Live outreach remains disabled.')) { await request(path('resume-simulation'), 'POST', {confirmation: 'RESUME SIMULATION ONLY'}); await refresh(); }
     }, controls, can('POST:resume-simulation'));
     action('Business setup', setup, controls, can('GET:settings'));
+    if (can('GET:agent-connection')) action('AI connection', () => openProviderSetup(data), controls);
     if (can('GET:agent-status')) action('Create an agent', () => openAgentBuilder(data), controls);
     const banner = node('p', `${data.paused ? 'PAUSED' : data.live_outreach ? 'OWN-CONTACT LIVE PILOT' : 'SIMULATION AVAILABLE'} · ${data.business_name} · ${data.live_outreach ? 'Only authorised test contacts' : 'No live calling authorised'}`, 'lrhq-banner'); content.append(banner);
     const stats = node('div', '', 'lrhq-grid'); content.append(stats);
@@ -71,7 +85,7 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
     content.append(node('h3', 'Setup and working areas'));
     const sections = node('div', '', 'lrhq-links'); content.append(sections);
     for (const section of data.sections || []) link(section.title, section.url, sections);
-    content.append(node('p', 'Detailed areas open LeadRelay with its own login. This is not shared sign-in. No iframe or browser API key is used.', 'lrhq-note'));
+    content.append(node('p', 'AI connection and agent creation stay in Growth HQ. Other detailed areas open LeadRelay with its own login. No LeadRelay server key is sent to the browser.', 'lrhq-note'));
     const checklist = node('ul'); for (const step of data.setup || []) checklist.append(node('li', `${step.complete ? '✓' : '○'} ${step.title}`)); content.append(checklist);
     const packs = node('div', '', 'lrhq-toolbar'); content.append(node('h3', 'Portable business setup'), packs);
     action('Export configuration', async () => { download(await request(path('pack-export'), 'POST', {})); message.textContent = 'Exported without brief or knowledge. Review scripts before sharing.'; }, packs, can('POST:pack-export'));
@@ -92,6 +106,7 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
   async function openAgentBuilder(status) {
     const installationId = current.id;
     const allowed = new Set(current.actions);
+    const previousView = view;
     const routes = Object.freeze({
       'GET:/api/agent-builder':'agent-status',
       'POST:/api/agent-builder/scan':'agent-scan',
@@ -101,10 +116,12 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
       'POST:/api/agent-builder/test-call':'agent-test-call',
       'POST:/api/agent-builder/deploy':'agent-deploy',
     });
-    const unchanged = () => { if (disposed || current?.id !== installationId) throw Error('Installation changed; agent setup cancelled'); };
     const module = await loadBuilder();
-    unchanged();
-    if (typeof module.mountAgentBuilder !== 'function') throw Error('Agent setup module is unavailable');
+    if (!viewIsCurrent(previousView, installationId)) throw Error('Installation changed; agent setup cancelled');
+    if (typeof module?.mountAgentBuilder !== 'function') throw Error('Agent setup module is unavailable');
+    // Keep the visible module usable until its replacement has actually loaded.
+    const token = beginView();
+    const unchanged = () => { if (!viewIsCurrent(token, installationId)) throw Error('Installation changed; agent setup cancelled'); };
     // A removed child invalidates the builder's own pending render/poll handlers.
     const builderRoot = node('div'); content.replaceChildren(builderRoot);
     const api = async (apiPath, options = {}) => {
@@ -113,9 +130,11 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
       const operation = routes[method+':'+apiPath];
       if (!operation) throw Error('Agent setup operation is not supported');
       if (!allowed.has(method+':'+operation)) throw Error('Your HQ role does not permit this agent action');
-      if (Object.keys(options).some(key => !['method','body'].includes(key))) throw Error('Agent setup accepts no header, credential or target override');
+      if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => !['method','body','guard'].includes(key))) throw Error('Agent setup accepts no header, credential or target override');
+      if (options.guard !== undefined && typeof options.guard !== 'function') throw Error('Setup guard must be a function');
       const boundPath = '/installations/'+encodeURIComponent(installationId)+'/'+operation;
-      const result = await request(boundPath, method, options.body, installationId);
+      const guard = () => viewIsCurrent(token, installationId) && (options.guard ? options.guard() === true : true);
+      const result = await request(boundPath, method, options.body, installationId, guard);
       unchanged();
       return result;
     };
@@ -126,12 +145,60 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
         try { const u = new URL(section.url); if (u.protocol === 'https:') links[id] = u.href; } catch {}
       }
     }
-    await module.mountAgentBuilder(builderRoot, api, {links});
+    const onOpenConnections = allowed.has('GET:agent-connection') ? () => { unchanged(); return openProviderSetup(status); } : undefined;
+    await module.mountAgentBuilder(builderRoot, api, {links, onOpenConnections});
+  }
+  async function openProviderSetup(status) {
+    const installationId = current.id;
+    const allowed = new Set(current.actions);
+    const previousView = view;
+    const module = await loadProvider();
+    if (!viewIsCurrent(previousView, installationId)) throw Error('Installation changed; AI connection setup cancelled');
+    if (typeof module?.mountProviderSetup !== 'function') throw Error('AI connection setup module is unavailable');
+    const token = beginView();
+    const isCurrent = () => viewIsCurrent(token, installationId);
+    const unchanged = () => { if (!isCurrent()) throw Error('Installation changed; AI connection setup cancelled'); };
+    const providerRoot = node('div'), next = node('div', '', 'lrhq-toolbar');
+    content.replaceChildren(providerRoot, next);
+    const routes = Object.freeze({
+      'GET:/api/agent-builder/connection':'agent-connection',
+      'POST:/api/agent-builder/connection/voices':'agent-voices',
+      'POST:/api/agent-builder/connection/verify':'agent-connect',
+    });
+    const api = async (apiPath, options = {}) => {
+      unchanged();
+      if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => !['method','body','guard'].includes(key))) throw Error('AI connection accepts no header, credential or target override');
+      if (options.guard !== undefined && typeof options.guard !== 'function') throw Error('Setup guard must be a function');
+      const method = options.method || 'GET';
+      const operation = routes[method+':'+apiPath];
+      if (!operation) throw Error('AI connection operation is not supported');
+      if (!allowed.has(method+':'+operation)) throw Error('Your HQ role does not permit this AI connection action');
+      const guard = () => isCurrent() && (options.guard ? options.guard() === true : true);
+      const result = await request('/installations/'+encodeURIComponent(installationId)+'/'+operation, method, options.body, installationId, guard);
+      unchanged(); return result;
+    };
+    let nextButton;
+    const mounted = await module.mountProviderSetup(providerRoot, api, {
+      canRead:allowed.has('GET:agent-connection'),
+      canListVoices:allowed.has('POST:agent-voices'),
+      canVerify:allowed.has('POST:agent-connect'),
+      isCurrent,
+      onVerified: () => {
+        unchanged();
+        message.setAttribute('role','status');
+        message.textContent = 'AI connection verified and saved. Agent creation is the next explicit step.';
+        if (!nextButton && allowed.has('GET:agent-status')) nextButton = action('Continue to Create an agent', () => openAgentBuilder(status), next);
+      },
+    });
+    if (!isCurrent()) { mounted?.dispose(); return; }
+    providerView = mounted;
   }
   async function setup() {
     const id = current.id;
+    const token = beginView();
     const [cfg, ports] = await Promise.all([request(path('settings')), request(path('providers'))]);
-    if (current.id !== id || disposed) return;
+    if (!viewIsCurrent(token,id)) return;
+    const status = currentStatus?.id === id ? currentStatus.data : {sections:[]};
     content.replaceChildren(node('h3', 'Business settings'));
     const form = node('form', '', 'lrhq-form'), inputs = new Map(); content.append(form);
     for (const [name, label, type] of [['business_name','Business name','text'],['app_label','Application label','text'],['website','Website','url'],['booking_url','Booking link','url'],['privacy_url','Privacy URL','url'],['timezone','Timezone','text'],['start_hour','Contact start hour','number'],['end_hour','Contact end hour','number'],['max_contacts_per_lead_day','Daily contacts per lead','number'],['daily_budget_pence','Estimated daily budget · pence','number'],['brand_accent','Brand accent','color']]) {
@@ -146,14 +213,28 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
     for (const entry of ports) {
       const wrap = node('div', '', 'lrhq-port'), choice = node('select'); choice.setAttribute('aria-label', entry.definition.name);
       for (const p of entry.definition.providers) { const option = node('option', p.name); option.value = p.id; option.selected = p.id === entry.selected; choice.append(option); }
+      choice.value = entry.definition.providers.some(p => p.id === entry.selected) ? entry.selected : entry.definition.providers[0]?.id || '';
       wrap.append(node('strong', entry.definition.name), choice);
       const links = node('div', '', 'lrhq-links');
-      const showLinks = () => { links.replaceChildren(); const p = entry.definition.providers.find(p => p.id === choice.value); if (p?.setup_url) link('Provider account', p.setup_url, links); if (p?.docs_url) link('Setup documentation', p.docs_url, links); };
+      let savePreference;
+      const showLinks = () => {
+        links.replaceChildren();
+        const p = entry.definition.providers.find(p => p.id === choice.value);
+        const nativeRetell = entry.definition.port === 'voice' && choice.value === 'retell';
+        if (nativeRetell) {
+          links.append(node('p','Retell account verification and voice selection are managed in the native AI connection view.'));
+          action('Verify Retell API connection', () => openProviderSetup(status), links, can('GET:agent-connection'));
+        } else {
+          if (p?.setup_url) link('Provider account', p.setup_url, links);
+          if (p?.docs_url) link('Setup documentation', p.docs_url, links);
+        }
+        if (savePreference) savePreference.disabled = !can('PUT:provider') || nativeRetell;
+      };
+      savePreference = action('Save preference', async () => { await request(path('provider'), 'PUT', {port: entry.definition.port, provider: choice.value}); message.textContent = 'Preference saved. Adapter remains disconnected.'; }, wrap, can('PUT:provider'));
       choice.onchange = showLinks; showLinks();
-      action('Save preference', async () => { await request(path('provider'), 'PUT', {port: entry.definition.port, provider: choice.value}); message.textContent = 'Preference saved. Adapter remains disconnected.'; }, wrap, can('PUT:provider'));
       wrap.append(links); content.append(wrap);
     }
-    content.append(node('p', 'Provider credentials must be added in LeadRelay by an authorised administrator later. Saving a choice neither verifies a key nor installs an adapter.', 'lrhq-note'));
+    content.append(node('p', 'Retell verification happens in AI connection. Other selections save disconnected preferences until their supplier setup is completed; saving a choice never verifies a key or starts outreach.', 'lrhq-note'));
   }
   selection.onchange = async () => { current = registry.find(i => i.id === selection.value); try { await refresh(); } catch (e) { error(e); } };
   const ready = (async () => {
@@ -165,5 +246,5 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
       current = registry[0]; await refresh();
     } catch (e) { error(e); }
   })();
-  return {ready, refresh, destroy() { disposed = true; root.replaceChildren(); }};
+  return {ready, refresh, destroy() { disposed = true; beginView(); root.replaceChildren(); }};
 }
