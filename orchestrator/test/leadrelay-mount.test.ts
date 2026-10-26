@@ -16,3 +16,11 @@ test('LeadRelay configuration refuses unknown actions and authority fields', () 
   assert.match(panelBoot,/\/portal\/api\/leadrelay/);
   assert.doesNotMatch(panelBoot,/Bearer|localStorage/);
 });
+
+
+test('Agent setup actions require individually recorded canonical grants', () => {
+  const grants = loadGrants(JSON.stringify([{userId:'martin',workspaceId:'growth',installationId:'pilot',actions:['GET:agent-status','POST:agent-scan']} ]));
+  assert.deepEqual(installationActions(grants,{userId:'martin',workspaceId:'growth'},'pilot'),['GET:agent-status','POST:agent-scan']);
+  assert.deepEqual(installationActions(grants,{userId:'martin',workspaceId:'other'},'pilot'),[]);
+  assert.equal(installationActions(grants,{userId:'martin',workspaceId:'growth'},'pilot').includes('POST:agent-test-call'),false);
+});

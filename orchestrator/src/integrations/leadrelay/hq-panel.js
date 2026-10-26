@@ -1,6 +1,6 @@
 /* Native, dependency-free Growth HQ module. Serve from HQ's own assets origin.
    No LeadRelay bearer token, browser storage, iframe or public CORS connection. */
-export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csrfHeader = 'X-CSRF-Token'} = {}) {
+export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csrfHeader = 'X-CSRF-Token', loadBuilder = () => import('/portal/leadrelay/builder.js')} = {}) {
   if (!(root instanceof HTMLElement) || typeof csrfToken !== 'function') throw Error('A container and existing HQ CSRF-token accessor are required');
   if (!/^\/[a-zA-Z0-9/_-]+$/.test(apiBase) || apiBase.startsWith('//')) throw Error('Use a same-origin API path');
   let registry = [], current = null, disposed = false;
@@ -13,7 +13,7 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
   const can = action => current?.actions.includes(action);
   const error = e => { message.textContent = e.message || 'Request failed'; message.setAttribute('role', 'alert'); };
   async function request(path, method = 'GET', body, installationId = current?.id) {
-    const unchanged = () => { if (installationId !== current?.id) throw Error('Installation changed; use the refreshed controls'); };
+    const unchanged = () => { if (disposed || installationId !== current?.id) throw Error('Installation changed; use the refreshed controls'); };
     unchanged();
     const headers = {'Content-Type': 'application/json'};
     if (method !== 'GET') {
@@ -56,6 +56,7 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
       if (confirm('Resume simulation processing? Live outreach remains disabled.')) { await request(path('resume-simulation'), 'POST', {confirmation: 'RESUME SIMULATION ONLY'}); await refresh(); }
     }, controls, can('POST:resume-simulation'));
     action('Business setup', setup, controls, can('GET:settings'));
+    if (can('GET:agent-status')) action('Create an agent', () => openAgentBuilder(data), controls);
     const banner = node('p', `${data.paused ? 'PAUSED' : data.live_outreach ? 'OWN-CONTACT LIVE PILOT' : 'SIMULATION AVAILABLE'} · ${data.business_name} · ${data.live_outreach ? 'Only authorised test contacts' : 'No live calling authorised'}`, 'lrhq-banner'); content.append(banner);
     const stats = node('div', '', 'lrhq-grid'); content.append(stats);
     card('Real leads', data.lead_count, stats); card('Confirmed purchases', data.confirmed_purchases, stats);
@@ -87,6 +88,45 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
       await request(importPath, 'POST', {pack, confirmation: 'IMPORT INTO FRESH WORKSPACE'}, installationId); await refresh();
     }, packs, can('POST:pack-import'));
     content.append(node('p', 'No contacts, users or credentials are transferred. Imported scripts require review; sequences remain disabled and knowledge is unapproved.', 'lrhq-note'));
+  }
+  async function openAgentBuilder(status) {
+    const installationId = current.id;
+    const allowed = new Set(current.actions);
+    const routes = Object.freeze({
+      'GET:/api/agent-builder':'agent-status',
+      'POST:/api/agent-builder/scan':'agent-scan',
+      'POST:/api/agent-builder/approve':'agent-approve',
+      'POST:/api/agent-builder/publish':'agent-publish',
+      'POST:/api/agent-builder/chat':'agent-chat',
+      'POST:/api/agent-builder/test-call':'agent-test-call',
+      'POST:/api/agent-builder/deploy':'agent-deploy',
+    });
+    const unchanged = () => { if (disposed || current?.id !== installationId) throw Error('Installation changed; agent setup cancelled'); };
+    const module = await loadBuilder();
+    unchanged();
+    if (typeof module.mountAgentBuilder !== 'function') throw Error('Agent setup module is unavailable');
+    // A removed child invalidates the builder's own pending render/poll handlers.
+    const builderRoot = node('div'); content.replaceChildren(builderRoot);
+    const api = async (apiPath, options = {}) => {
+      unchanged();
+      const method = options.method || 'GET';
+      const operation = routes[method+':'+apiPath];
+      if (!operation) throw Error('Agent setup operation is not supported');
+      if (!allowed.has(method+':'+operation)) throw Error('Your HQ role does not permit this agent action');
+      if (Object.keys(options).some(key => !['method','body'].includes(key))) throw Error('Agent setup accepts no header, credential or target override');
+      const boundPath = '/installations/'+encodeURIComponent(installationId)+'/'+operation;
+      const result = await request(boundPath, method, options.body, installationId);
+      unchanged();
+      return result;
+    };
+    const links = {};
+    for (const section of status.sections || []) {
+      const id = section.id || (() => { try { return new URL(section.url).hash.slice(1); } catch { return ''; } })();
+      if (['live','activity','settings','control'].includes(id)) {
+        try { const u = new URL(section.url); if (u.protocol === 'https:') links[id] = u.href; } catch {}
+      }
+    }
+    await module.mountAgentBuilder(builderRoot, api, {links});
   }
   async function setup() {
     const id = current.id;
@@ -120,7 +160,7 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
     try {
       registry = await request('/installations');
       if (disposed) return;
-      if (!registry.length) { message.textContent = 'No LeadRelay installations are assigned to your HQ account.'; return; }
+      if (!registry.length) { selection.hidden = true; message.textContent = 'No LeadRelay installations are assigned to your HQ account. An owner must connect the hosted LeadRelay installation and grant setup access securely before website scanning or agent tests are available.'; return; }
       for (const entry of registry) { const option = node('option', entry.label); option.value = entry.id; selection.append(option); }
       current = registry[0]; await refresh();
     } catch (e) { error(e); }

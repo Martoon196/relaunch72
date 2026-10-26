@@ -27,6 +27,8 @@ export function installationActions(grants: readonly InstallationGrant[], identi
 }
 export const panelSource = readFileSync(new URL('./hq-panel.js', import.meta.url), 'utf8');
 export const panelCss = readFileSync(new URL('./hq-panel.css', import.meta.url), 'utf8');
+export const builderSource = readFileSync(new URL('./agent-builder.js', import.meta.url), 'utf8');
+export const builderCss = readFileSync(new URL('./agent-builder.css', import.meta.url), 'utf8');
 export const panelBoot = `import {mountLeadRelay} from '/portal/leadrelay/panel.js';
 const root=document.getElementById('leadrelay-panel');
 mountLeadRelay(root,{apiBase:'/portal/api/leadrelay',csrfToken:()=>root.dataset.csrf});`;

@@ -8,7 +8,14 @@ const OPERATIONS = Object.freeze({
   'GET:status':'status','GET:manifest':'manifest','GET:settings':'settings','GET:providers':'providers',
   'POST:pause':'pause','POST:resume-simulation':'resume-simulation',
   'PUT:settings':'settings','PUT:provider':'provider',
-  'POST:pack-export':'business-pack/export','POST:pack-import':'business-pack/import'
+  'POST:pack-export':'business-pack/export','POST:pack-import':'business-pack/import',
+  'GET:agent-status':'/api/agent-builder',
+  'POST:agent-scan':'/api/agent-builder/scan',
+  'POST:agent-approve':'/api/agent-builder/approve',
+  'POST:agent-publish':'/api/agent-builder/publish',
+  'POST:agent-chat':'/api/agent-builder/chat',
+  'POST:agent-test-call':'/api/agent-builder/test-call',
+  'POST:agent-deploy':'/api/agent-builder/deploy'
 });
 export const READ_ACTIONS = Object.freeze(Object.keys(OPERATIONS).filter(k=>k.startsWith('GET:')));
 export const ALL_ACTIONS = Object.freeze(Object.keys(OPERATIONS));
@@ -43,12 +50,16 @@ async function boundedResponse(response){
   return Buffer.concat(parts).toString('utf8');
 }
 export async function sendControl(installation,method,path,body,fetchImpl=fetch){
+  // The operation table is the complete routing authority. No caller/body/header
+  // may supply an upstream origin, path, query, credential or method override.
+  if (!Object.entries(OPERATIONS).some(([action,target]) => action.startsWith(method+':') && target === path)) deny(404,'Control operation not found');
+  const upstreamPath = path.startsWith('/api/agent-builder') ? path : '/api/control/'+path;
   const payload=body===undefined?undefined:JSON.stringify(body);
   if(payload&&Buffer.byteLength(payload)>MAX_BYTES) deny(413,'Request exceeds limit');
   try{
-    const r=await fetchImpl(installation.origin+'/api/control/'+path,{method,
+    const r=await fetchImpl(installation.origin+upstreamPath,{method,
       headers:{authorization:'Bearer '+installation.key,'content-type':'application/json',accept:'application/json'},
-      body:payload,redirect:'error',signal:AbortSignal.timeout(10_000)});
+      body:payload,redirect:'error',signal:AbortSignal.timeout(path === '/api/agent-builder/chat' ? 15_000 : 10_000)});
     if(!r.ok){
       await r.body?.cancel();
       const allowed=[401,403,409,422,429];
@@ -84,6 +95,7 @@ export function createDispatcher({installations,authorize,verifyCsrf,transport=s
       if(!(await verifyCsrf(identity,request)))deny(403,'Invalid HQ CSRF token');
       if(!body||typeof body!=='object'||Array.isArray(body))deny(400,'Expected a JSON object');
       if(Buffer.byteLength(JSON.stringify(body))>MAX_BYTES)deny(413,'Request exceeds limit');
+      if(match[2].startsWith('agent-') && ['installationId','workspaceId','userId','base_url','key','key_env','secret','provider_key','to_number','phone','own_phone','recipient'].some(key => Object.hasOwn(body,key))) deny(400,'Agent authority, credentials and call destination are server-controlled');
     }
     return transport(grant.item,method,OPERATIONS[action],body);
   };

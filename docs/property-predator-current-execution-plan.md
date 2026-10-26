@@ -515,3 +515,36 @@ proof. WhatsApp and SMS then follow one rail at a time. X stays on the later-bui
 list until its account and API requirements exist. Facebook/Instagram DMs remain controlled until the composed Zernio
 foundation has exact production callback/account reconciliation and one approved owned-account reply proof. The final Sol Ultra master rehearsal remains the release-wide
 verification gate before any external customer cohort.
+
+
+### 26 October 2026 — reviewed website-to-agent LeadRelay integration
+
+The founder supplied Claude’s Growth HQ briefing and requested a website URL →
+reviewed facts → shared AI chat/voice brain → own-contact test → deployment flow.
+The briefing identifies this same `relaunch72` Growth HQ. LeadRelay remains the
+separate runtime and sole sales follow-up scheduler; this change creates no CRM,
+HQ schema migration, startup worker, dependency or model credential in HQ.
+
+The existing `/portal/leadrelay` mount now serves the shared builder component
+and seven fixed gateway operations with individually granted canonical-session
+actions and CSRF. Scans, provisioning and chat turns enqueue durable runtime work
+and poll; the shared web-server timeout is unchanged. No arbitrary upstream,
+credential or call destination is accepted. Source facts need approval; public
+chat activation and one paid own-contact call remain separate explicit actions.
+Registry and grants stay default-denied; the existing bootstrap control key does
+not acquire new authority. The initial empty state explains the missing secure
+installation rather than presenting an empty selector as a working integration.
+
+Validation: full HQ suite 3,068 passed / 40 skipped; typecheck and the 67-package
+supply-chain gate passed. Includes shared builder UI, granular-grant, cross-tenant,
+CSRF and deferred selection/teardown tests. The private LeadRelay release records
+its separate PostgreSQL/provider-contract tests and additive runtime migration.
+No provider account, lead, call, message, booking, old channel worker or secret
+configuration was changed by these tests.
+
+The dedicated LeadRelay runtime still requires approved hosting and secure owner
+configuration. My Workspace was rechecked at 25 services with no LeadRelay
+service. The earlier Pro-plus-one-service spending approval remains pending; no
+purchase has been made. Existing HQ can carry this default-denied UI independently.
+Rollback remains the original retained deployment `dep-daj9v56k1f9s73cqpbag` /
+`3c0bf104...`, plus the immediate previous reviewed HQ release `43ab245...`.
