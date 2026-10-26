@@ -8,6 +8,7 @@ const { mountAgentBuilder } = await import(`data:text/javascript;base64,${Buffer
 class Element {
   constructor(tag) {
     this.tag = tag;
+    this.tagName = tag.toUpperCase();
     this.children = [];
     this.classList = { add() {} };
     this.isConnected = true;
@@ -15,6 +16,7 @@ class Element {
     this.checked = false;
     this.disabled = false;
     this.attributes = {};
+    this.style = {};
   }
   set textContent(value) { this.text = String(value); this.children = []; }
   get textContent() { return this.text || this.children.map(child => child.textContent).join(' '); }
@@ -22,6 +24,8 @@ class Element {
   replaceChildren(...children) { this.children = children; this.text = ''; }
   setAttribute(name, value) { this.attributes[name] = value; }
   reportValidity() { return true; }
+  focus(options) { this.focused = true; this.focusOptions = options; }
+  scrollIntoView(options) { this.scrollOptions = options; }
 }
 const all = node => [node, ...node.children.flatMap(all)];
 const find = (node, predicate) => all(node).find(predicate);
@@ -29,14 +33,16 @@ const byText = (root, text) => find(root, node => node.textContent === text);
 const input = (root, name) => find(root, node => node.name === name);
 const formFor = (root, name) => find(root, node => node.tag === 'form' && input(node, name));
 const submit = form => form.onsubmit({ preventDefault() {} });
-const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { resolve, promise }; };
+const deferred = () => { let resolve, reject; const promise = new Promise((done, fail) => { resolve = done; reject = fail; }); return { resolve, reject, promise }; };
 const readyDraft = { id: 'draft-a', status: 'ready', source_url: 'https://example.com/', pages: [{ url: 'https://example.com/', title: 'A business', content: 'Reviewed business facts.' }] };
 
 async function harness(initial, onWrite = async () => ({})) {
-  const saved = { document: globalThis.document, setTimeout: globalThis.setTimeout };
+  const saved = { document: globalThis.document, setTimeout: globalThis.setTimeout, scrollTo: globalThis.scrollTo, scrollX: globalThis.scrollX, scrollY: globalThis.scrollY };
   globalThis.document = { createElement: tag => new Element(tag) };
   const timers = [];
   globalThis.setTimeout = fn => { timers.push(fn); return timers.length; };
+  const scrolls = [];
+  globalThis.scrollTo = options => { scrolls.push(options); };
   let status = initial;
   const writes = [];
   const api = async (path, options) => {
@@ -46,7 +52,7 @@ async function harness(initial, onWrite = async () => ({})) {
   };
   const root = new Element('root');
   await mountAgentBuilder(root, api);
-  return { root, api, writes, timers, setStatus: next => { status = next; }, restore: () => Object.assign(globalThis, saved) };
+  return { root, api, writes, timers, scrolls, setStatus: next => { status = next; }, restore: () => Object.assign(globalThis, saved) };
 }
 
 test('ready website facts require explicit review and stay text, never HTML', async () => {
@@ -90,6 +96,162 @@ test('pending scan submit is single and cannot replace a newly selected workspac
     assert.equal(formFor(h.root, 'url'), currentForm);
     assert.equal(input(currentForm, 'url').value, 'https://business-b.example/');
     assert.equal(h.writes[0].body.url, 'https://business-a.example/');
+  } finally { h.restore(); }
+});
+
+test('approval shows a persistent saved result and keeps submitted edited facts read-only without jumping', async () => {
+  const version = { id: 'approved-a', draft_id: 'draft-a', status: 'approved', business_name: 'Reviewed name', agent_name: 'Sam' };
+  const requirements = [{ id: 'retell', title: 'Retell verified', complete: false }];
+  let h;
+  h = await harness({ draft: readyDraft, requirements }, async () => {
+    h.setStatus({ draft: readyDraft, version, requirements });
+    return { version, outreach_started: false };
+  });
+  try {
+    const form = formFor(h.root, 'review_confirmed');
+    input(form, 'review_confirmed').checked = true;
+    input(form, 'business_name').value = 'Reviewed name';
+    input(form, 'agent_name').value = 'Sam';
+    input(form, 'content_0').value = 'Corrected business facts';
+    globalThis.scrollY = 1450;
+    globalThis.scrollX = 0;
+    await submit(form);
+    const saved = find(h.root, node => node.className === 'helper agent-builder-approved');
+    assert.match(saved.textContent, /Website facts saved and approved.*Reviewed name.*Sam/);
+    assert.equal(saved.focused, true);
+    assert.equal(saved.scrollOptions, undefined);
+    assert.deepEqual(saved.focusOptions, { preventScroll: true });
+    assert.deepEqual(h.scrolls.at(-1), { top: 1450, left: 0, behavior: 'instant' });
+    assert.equal(formFor(h.root, 'review_confirmed'), undefined);
+    assert.equal(input(h.root, 'saved_content_0').value, 'Corrected business facts');
+    assert.equal(input(h.root, 'saved_content_0').readOnly, true);
+    assert.equal(input(h.root, 'saved_business_name').value, 'Reviewed name');
+    assert.doesNotMatch(saved.textContent, /Reviewed business facts\./);
+    assert.match(saved.textContent, /connect Retell/);
+    assert.equal(byText(h.root, 'Create my chat and call agents').disabled, true);
+    await mountAgentBuilder(h.root, h.api);
+    assert.ok(byText(h.root, 'Website facts saved and approved'));
+    assert.equal(input(h.root, 'saved_content_0'), undefined);
+    assert.equal(formFor(h.root, 'review_confirmed'), undefined);
+    assert.equal(h.writes.length, 1);
+  } finally { h.restore(); }
+});
+
+test('approval pending and failure stay beside the form and preserve typed facts', async () => {
+  const pending = deferred();
+  const h = await harness({ draft: readyDraft }, () => pending.promise);
+  try {
+    const form = formFor(h.root, 'review_confirmed');
+    input(form, 'review_confirmed').checked = true;
+    input(form, 'business_name').value = 'Typed name';
+    input(form, 'content_0').value = 'Facts edited before saving';
+    const operation = submit(form);
+    const feedback = find(form, node => node.className === 'agent-builder-form-message');
+    assert.match(feedback.textContent, /Saving your approved/);
+    assert.equal(feedback.hidden, false);
+    assert.equal(byText(form, 'Approve a shared knowledge version').disabled, true);
+    await submit(form);
+    assert.equal(h.writes.length, 1);
+    pending.reject(Error('Approval could not be saved; try again'));
+    await operation;
+    assert.equal(formFor(h.root, 'review_confirmed'), form);
+    assert.equal(input(form, 'business_name').value, 'Typed name');
+    assert.equal(input(form, 'content_0').value, 'Facts edited before saving');
+    assert.equal(feedback.attributes.role, 'alert');
+    assert.match(feedback.textContent, /could not be saved/);
+    assert.equal(feedback.focused, true);
+    assert.equal(feedback.scrollOptions, undefined);
+    assert.deepEqual(feedback.focusOptions, { preventScroll: true });
+    assert.equal(byText(form, 'Approve a shared knowledge version').disabled, false);
+  } finally { h.restore(); }
+});
+
+test('a delayed approval result cannot replace a different installation selection', async () => {
+  const pending = deferred();
+  const h = await harness({ draft: readyDraft }, () => pending.promise);
+  try {
+    const form = formFor(h.root, 'review_confirmed');
+    input(form, 'review_confirmed').checked = true;
+    const operation = submit(form);
+    h.setStatus({ draft: { ...readyDraft, id: 'draft-b' }, business_name: 'Business B' });
+    await mountAgentBuilder(h.root, h.api);
+    const currentForm = formFor(h.root, 'review_confirmed');
+    input(currentForm, 'business_name').value = 'Business B changed';
+    pending.resolve({ version: { id: 'approved-a' } });
+    await operation;
+    assert.equal(formFor(h.root, 'review_confirmed'), currentForm);
+    assert.equal(input(currentForm, 'business_name').value, 'Business B changed');
+    assert.equal(byText(h.root, 'Website facts saved and approved'), undefined);
+  } finally { h.restore(); }
+});
+
+test('same-installation refresh retains the form layout while status loads', async () => {
+  const h = await harness({ draft: readyDraft });
+  try {
+    const currentForm = formFor(h.root, 'review_confirmed');
+    const pending = deferred();
+    h.setStatus(pending.promise);
+    const operation = byText(h.root, 'Refresh status').onclick();
+    assert.equal(formFor(h.root, 'review_confirmed'), currentForm);
+    pending.resolve({ draft: readyDraft });
+    await operation;
+    assert.ok(formFor(h.root, 'review_confirmed'));
+  } finally { h.restore(); }
+});
+
+test('a failed status refresh preserves form layout and edits with a visible retry path', async () => {
+  const h = await harness({ draft: readyDraft });
+  try {
+    const form = formFor(h.root, 'review_confirmed');
+    input(form, 'content_0').value = 'Facts to preserve during a failed read';
+    const pending = deferred();
+    h.setStatus(pending.promise);
+    const operation = byText(h.root, 'Refresh status').onclick();
+    pending.reject(Error('Status service unavailable'));
+    await operation;
+    assert.equal(formFor(h.root, 'review_confirmed'), form);
+    assert.equal(input(form, 'content_0').value, 'Facts to preserve during a failed read');
+    assert.equal(input(form, 'content_0').disabled, true);
+    const message = find(h.root, node => node.className === 'agent-builder-message');
+    assert.equal(message.attributes.role, 'alert');
+    assert.equal(message.attributes['data-error'], 'true');
+    assert.match(message.textContent, /displayed facts are preserved/);
+    h.setStatus({ draft: readyDraft });
+    await byText(h.root, 'Refresh status').onclick();
+    assert.equal(input(formFor(h.root, 'review_confirmed'), 'content_0').disabled, false);
+  } finally { h.restore(); }
+});
+
+test('unconnected provider has explicit signup and secure setup instructions without preventing review', async () => {
+  const h = await harness({ draft: readyDraft, website: 'https://business.example/', requirements: [{ id: 'retell', complete: false }] });
+  try {
+    assert.ok(formFor(h.root, 'review_confirmed'));
+    const setup = find(h.root, node => node.className === 'helper amber agent-builder-provider-setup');
+    assert.match(setup.textContent, /scan websites and approve facts now/);
+    assert.match(setup.textContent, /verify its key in secure Live connections/);
+    assert.equal(byText(setup, 'Open Retell signup →').href, 'https://dashboard.retellai.com');
+    assert.equal(byText(setup, 'Open secure Live connections →').href, '#live');
+    h.setStatus({ website: 'https://business.example/' });
+    await mountAgentBuilder(h.root, h.api);
+    assert.equal(input(h.root, 'url').value, 'https://business.example/');
+  } finally { h.restore(); }
+});
+
+test('completed module badges distinguish saved setup from an actual verified private chat response', async () => {
+  const version = { id: 'version-a', draft_id: 'draft-a', status: 'published', business_name: 'Business', agent_name: 'Sam' };
+  const h = await harness({ draft: readyDraft, version, deployment: { version_id: 'version-a' } }, async () => ({ ai_generated: true, reply: 'An actual provider reply', chat_id: 'chat-a' }));
+  const section = title => find(h.root, node => node.tag === 'section' && byText(node, title));
+  try {
+    assert.equal(section('Scan your website').attributes['data-complete'], 'true');
+    assert.equal(section('Review your business knowledge').attributes['data-complete'], 'true');
+    assert.equal(section('Create chat and voice agents').attributes['data-complete'], 'true');
+    assert.equal(section('Deploy when you are ready').attributes['data-complete'], 'true');
+    assert.equal(section('Test your agent').attributes['data-complete'], undefined);
+    const form = formFor(h.root, 'message');
+    input(form, 'message').value = 'What do you do?';
+    await submit(form);
+    assert.equal(section('Test your agent').attributes['data-complete'], 'true');
+    assert.ok(byText(section('Test your agent'), 'Private chat verified'));
   } finally { h.restore(); }
 });
 

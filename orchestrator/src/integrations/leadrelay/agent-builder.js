@@ -57,14 +57,58 @@ function card(root, step, title, description) {
   return section;
 }
 
+function completed(section, label) {
+  section.classList.add('agent-builder-complete');
+  section.setAttribute('data-complete', 'true');
+  if (section.completionBadge) section.completionBadge.textContent = label;
+  else {
+    const badge = el('span', label);
+    badge.className = 'agent-builder-completion';
+    section.children[0].append(badge);
+    section.completionBadge = badge;
+  }
+}
+
+function viewport(root) {
+  const containers = [];
+  for (let node = root; node; node = node.parentElement) {
+    if (typeof node.scrollTop === 'number') containers.push({ node, top: node.scrollTop, left: node.scrollLeft });
+  }
+  return { top: globalThis.scrollY || 0, left: globalThis.scrollX || 0, containers };
+}
+
+function restoreViewport(position) {
+  if (!position) return;
+  for (const item of position.containers) {
+    item.node.scrollTop = item.top;
+    item.node.scrollLeft = item.left;
+  }
+  globalThis.scrollTo?.({ top: position.top, left: position.left, behavior: 'instant' });
+}
+
+function disableStaleForms(node, insideForm = false) {
+  const inForm = insideForm || node.tagName?.toLowerCase() === 'form';
+  if (inForm && 'disabled' in node) node.disabled = true;
+  for (const child of node.children || []) disableStaleForms(child, inForm);
+}
+
 function stateLabel(status) {
   return String(status || 'not ready').replaceAll('_', ' ');
 }
 
 export async function mountAgentBuilder(root, api, options = {}) {
+  // Only an internal refresh of this same mounted installation may keep the
+  // existing layout while loading. A new external mount still clears old data.
+  const restore = options.restore;
+  const preserveLayout = restore?.token === renderTokens.get(root) && !!restore?.token;
+  const notice = options.notice;
+  options = { ...options };
+  delete options.restore;
+  delete options.notice;
   const token = {};
   renderTokens.set(root, token);
   const active = () => renderTokens.get(root) === token && root.isConnected !== false;
+  const remount = extra => mountAgentBuilder(root, api, { ...options, ...extra, restore: { token, viewport: viewport(root), ...extra?.restore } });
   root.classList.add('agent-builder');
   const title = el('div');
   title.className = 'page-head';
@@ -89,7 +133,7 @@ export async function mountAgentBuilder(root, api, options = {}) {
   refresh.onclick = async () => {
     if (!active()) return;
     pollStarted.delete(root);
-    await mountAgentBuilder(root, api, options);
+    await remount();
   };
   actions.append(refresh, sectionLink('Secure connections →', 'live'));
   title.append(copy, actions);
@@ -97,19 +141,32 @@ export async function mountAgentBuilder(root, api, options = {}) {
   message.className = 'agent-builder-message';
   message.setAttribute('role', 'status');
   message.setAttribute('aria-live', 'polite');
-  root.replaceChildren(title, message, el('p', 'Loading your agent setup…'));
+  if (notice) message.textContent = notice;
+  if (!preserveLayout) root.replaceChildren(title, message, el('p', 'Loading your agent setup…'));
   let data;
   try {
     data = await api('/api/agent-builder');
   } catch (error) {
     if (active()) {
-      message.textContent = error.message || 'Agent setup could not be loaded.';
-      root.replaceChildren(title, message, sectionLink('Return to secure connections →', 'live'));
+      message.textContent = `${notice ? notice + ' ' : ''}${error.message || 'Agent setup could not be loaded.'} Use Refresh status to check again.`;
+      message.setAttribute('role', 'alert');
+      message.setAttribute('data-error', 'true');
+      if (preserveLayout) {
+        const sections = Array.from(root.children).slice(2);
+        for (const section of sections) disableStaleForms(section);
+        message.textContent += ' Your displayed facts are preserved; refresh successfully before continuing.';
+        root.replaceChildren(title, message, ...sections);
+        restoreViewport(restore.viewport);
+      } else root.replaceChildren(title, message, sectionLink('Return to secure connections →', 'live'));
     }
     return;
   }
   if (!active()) return;
   root.replaceChildren(title, message);
+  if (notice) {
+    message.setAttribute('data-success', 'true');
+    setTimeout(() => { if (active() && message.textContent === notice) { message.textContent = ''; message.removeAttribute?.('data-success'); } }, 7000);
+  }
 
   const draft = data.draft || data.current_draft;
   const version = data.version || data.current_version;
@@ -117,6 +174,8 @@ export async function mountAgentBuilder(root, api, options = {}) {
   const scanning = ['queued', 'processing'].includes(draft?.status);
   const creating = ['queued', 'processing'].includes(version?.status);
   const blockers = Array.isArray(data.blockers) ? data.blockers : [];
+  const providerMissing = data.requirements?.find(requirement => requirement.id === 'retell')?.complete === false;
+  const approvedDraft = !!draft && !!version && version.draft_id === draft.id;
   const intro = el('div');
   intro.className = 'helper';
   intro.append(el('strong', 'Start with your website. You control what goes live.'), el('p', 'Scanning creates a draft. Review the facts before creating provider agents. A test call uses only your authorised own-contact pilot; it never starts a lead-list campaign.'));
@@ -143,17 +202,22 @@ export async function mountAgentBuilder(root, api, options = {}) {
     pollStarted.set(root, started);
     if (Date.now() - started < 90000) {
       setTimeout(() => {
-        if (active()) mountAgentBuilder(root, api, options).catch(error => { if (root.isConnected !== false) message.textContent = error.message; });
+        if (active()) remount().catch(error => { if (root.isConnected !== false) message.textContent = error.message; });
       }, 2000);
     } else message.textContent += ' Processing is taking longer than expected. Refresh to check again.';
   } else pollStarted.delete(root);
 
-  function submit(form, label, action, { disabled = false } = {}) {
+  function submit(form, label, action, { disabled = false, pendingLabel = 'Working…' } = {}) {
+    const feedback = el('p');
+    feedback.className = 'agent-builder-form-message';
+    feedback.setAttribute('role', 'status');
+    feedback.setAttribute('aria-live', 'polite');
+    feedback.hidden = true;
     const button = el('button', label);
     button.type = 'submit';
     button.className = 'btn primary';
     button.disabled = disabled;
-    form.append(button);
+    form.append(feedback, button);
     let pending = false;
     form.onsubmit = async event => {
       event.preventDefault();
@@ -162,10 +226,22 @@ export async function mountAgentBuilder(root, api, options = {}) {
       pending = true;
       button.disabled = true;
       message.textContent = '';
+      feedback.hidden = false;
+      feedback.className = 'agent-builder-form-message';
+      feedback.setAttribute('role', 'status');
+      feedback.textContent = pendingLabel;
       try {
         await action();
+        if (active()) feedback.textContent = message.textContent;
       } catch (error) {
-        if (active()) message.textContent = error.message || 'The request could not be completed.';
+        if (active()) {
+          message.textContent = error.message || 'The request could not be completed.';
+          feedback.textContent = message.textContent;
+          feedback.className = 'agent-builder-form-message helper amber';
+          feedback.setAttribute('role', 'alert');
+          feedback.tabIndex = -1;
+          feedback.focus?.({ preventScroll: true });
+        }
       } finally {
         pending = false;
         if (active()) button.disabled = disabled;
@@ -175,8 +251,9 @@ export async function mountAgentBuilder(root, api, options = {}) {
   }
 
   const scan = card(root, 1, 'Scan your website', 'Add the final public HTTPS address. We read a small set of pages on that site; we do not log in or submit forms.');
+  if (draft?.status === 'ready') completed(scan, 'Scanned');
   const scanForm = el('form');
-  const url = field(scanForm, 'url', 'Business website', draft?.source_url || '', 'url');
+  const url = field(scanForm, 'url', 'Business website', draft?.source_url || data.website || '', 'url');
   url.required = true;
   url.placeholder = 'https://your-business.com/';
   url.maxLength = 1000;
@@ -184,13 +261,55 @@ export async function mountAgentBuilder(root, api, options = {}) {
     const capturedUrl = url.value.trim();
     message.textContent = 'Reading public pages. This can take a few moments…';
     await api('/api/agent-builder/scan', { method: 'POST', body: { url: capturedUrl } });
-    if (active()) await mountAgentBuilder(root, api, options);
+    if (active()) await remount();
   }, { disabled: scanning });
   scan.append(scanForm);
   if (draft?.status === 'failed' && draft.detail) scan.append(el('p', draft.detail));
 
   const review = card(root, 2, 'Review your business knowledge', 'Check services, pricing, promises and contact details. Website instructions are untrusted until you approve the business facts.');
-  if (draft?.status === 'ready' && draft.pages?.length) {
+  let approvedNotice;
+  if (approvedDraft) {
+    completed(review, 'Approved');
+    // Preserve the successful operation's exact edited facts and layout. The
+    // raw scan is not an approved snapshot. A fresh page load uses the compact
+    // persisted summary because the status API deliberately omits that snapshot.
+    const saved = options.approvedFacts;
+    if (saved?.version_id === version.id && saved?.draft_id === draft.id) {
+      const readOnly = el('div');
+      readOnly.className = 'agent-builder-saved-facts';
+      field(readOnly, 'saved_business_name', 'Business name', saved.business_name).readOnly = true;
+      field(readOnly, 'saved_agent_name', 'Agent name', saved.agent_name).readOnly = true;
+      for (const [index, page] of saved.pages.entries()) {
+        const details = el('details');
+        details.className = 'agent-builder-source';
+        details.open = page.open;
+        details.append(el('summary', page.title || page.url), sourceLink(page.url));
+        field(details, `saved_title_${index}`, 'Page title', page.title).readOnly = true;
+        const content = field(details, `saved_content_${index}`, 'Approved business facts · saved', page.content, 'textarea');
+        content.rows = 10;
+        content.readOnly = true;
+        if (page.height && content.style) content.style.height = page.height + 'px';
+        readOnly.append(details);
+      }
+      const confirmed = field(readOnly, 'saved_review_confirmed', 'These reviewed facts are saved and approved.', '', 'checkbox');
+      confirmed.checked = true;
+      confirmed.disabled = true;
+      const done = el('button', 'Saved and approved');
+      done.type = 'button';
+      done.className = 'btn';
+      done.disabled = true;
+      readOnly.append(done);
+      review.append(readOnly);
+    }
+    approvedNotice = el('div');
+    approvedNotice.className = 'helper agent-builder-approved';
+    approvedNotice.setAttribute('role', 'status');
+    approvedNotice.setAttribute('aria-live', 'polite');
+    approvedNotice.tabIndex = -1;
+    approvedNotice.append(el('strong', 'Website facts saved and approved'), el('p', `${version.business_name || 'Your business'} · Agent: ${version.agent_name || 'your assistant'}. This approved knowledge version is saved.`));
+    approvedNotice.append(el('p', providerMissing ? 'Next, connect Retell in Live connections. Website scanning and fact approval do not require a provider account.' : published ? 'Your chat and voice agents use this saved knowledge. Continue with the private tests below.' : 'Next, create your chat and voice agents below. Verified provider access is required before creation.'));
+    review.append(approvedNotice, sectionLink('Review your saved facts in Knowledge →', 'knowledge'), el('p', 'To approve different facts for a new agent version, scan a new draft above.'));
+  } else if (draft?.status === 'ready' && draft.pages?.length) {
     const reviewForm = el('form');
     const businessName = field(reviewForm, 'business_name', 'Business name', version?.business_name || version?.snapshot?.business_name || data.business_name || '');
     businessName.maxLength = 120;
@@ -211,7 +330,7 @@ export async function mountAgentBuilder(root, api, options = {}) {
       content.maxLength = 50000;
       content.required = true;
       reviewForm.append(details);
-      pages.push({ url: page.url, title: titleInput, content });
+      pages.push({ url: page.url, title: titleInput, content, details });
     }
     const skipped = draft.skipped || draft.evidence?.skipped;
     if (skipped?.length) reviewForm.append(el('p', `${skipped.length} page(s) were skipped. Only the source text shown above is included.`));
@@ -221,15 +340,22 @@ export async function mountAgentBuilder(root, api, options = {}) {
     submit(reviewForm, 'Approve a shared knowledge version', async () => {
       if (!reviewed.checked) throw Error('Review and approve the business facts first.');
       const body = { draft_id: capturedDraftId, business_name: businessName.value.trim(), agent_name: agentName.value.trim(), review_confirmed: true, pages: pages.map(page => ({ url: page.url, title: page.title.value.trim(), content: page.content.value.trim() })) };
-      await api('/api/agent-builder/approve', { method: 'POST', body });
-      if (active()) await mountAgentBuilder(root, api, options);
-    });
+      const approved = await api('/api/agent-builder/approve', { method: 'POST', body });
+      if (active()) await remount({ notice: 'Website facts saved and approved. Continue with provider setup below.', approvedFacts: { ...body, version_id: approved.version?.id, pages: body.pages.map((page, index) => ({ ...page, open: pages[index].details.open, height: pages[index].content.getBoundingClientRect?.().height })) }, restore: { focus: 'review' } });
+    }, { pendingLabel: 'Saving your approved website facts…' });
     review.append(reviewForm);
   } else {
     review.append(el('p', draft?.status === 'failed' ? 'The scan failed. Review the source URL and try again, or manage your knowledge directly.' : 'Your scanned pages will appear here as an editable draft. No scanned content is approved automatically.'), sectionLink('Manage existing approved knowledge →', 'knowledge'));
   }
 
   const provider = card(root, 3, 'Create chat and voice agents', 'Both agents use the same approved knowledge version. Creating agents does not call anyone or enable your public website widget.');
+  if (published) completed(provider, 'Created');
+  if (providerMissing) {
+    const setup = el('div');
+    setup.className = 'helper amber agent-builder-provider-setup';
+    setup.append(el('strong', 'Retell account not connected'), el('p', 'You can scan websites and approve facts now. For AI chat and calls, create a Retell account, then add and verify its key in secure Live connections. Provider usage may incur charges; no purchase is made here.'), link('Open Retell signup →', 'https://dashboard.retellai.com'), sectionLink('Open secure Live connections →', 'live'));
+    provider.append(setup);
+  }
   if (version) {
     const status = el('p', `Knowledge version: ${String(version.id)} · ${stateLabel(version.status)}`);
     status.className = 'agent-builder-status';
@@ -247,8 +373,8 @@ export async function mountAgentBuilder(root, api, options = {}) {
       submit(publishForm, 'Create my chat and call agents', async () => {
         if (!confirm.checked) throw Error('Confirm provider agent creation first.');
         await api('/api/agent-builder/publish', { method: 'POST', body: { version_id: capturedVersionId, confirmation: 'CREATE DEDICATED VOICE AND CHAT AGENTS' } });
-        if (active()) await mountAgentBuilder(root, api, options);
-      });
+        if (active()) await remount();
+      }, { disabled: providerMissing });
       provider.append(publishForm);
     }
   } else provider.append(el('p', 'Approve the website facts to create the first shared knowledge version.'));
@@ -299,6 +425,7 @@ export async function mountAgentBuilder(root, api, options = {}) {
     const reply = response.reply || response.message;
     if (response.ai_generated !== true || typeof reply !== 'string' || !reply.trim()) throw Error('The provider did not return a verified AI chat reply. No generated answer is available.');
     chatLog.append(el('p', `You: ${capturedMessage}`), el('p', `Agent: ${reply}`));
+    completed(testSection, 'Private chat verified');
     chatPending = false;
     pendingQuestion = undefined;
     requestId = undefined;
@@ -328,6 +455,7 @@ export async function mountAgentBuilder(root, api, options = {}) {
   if (published && data.pilot_ready !== true) testSection.append(el('p', 'Complete the verified own-contact pilot setup before requesting a real test call.'));
 
   const deployment = card(root, 5, 'Deploy when you are ready', 'Publication creates provider agents. Customer-facing chat and sales follow-up have separate activation controls.');
+  if (version && data.deployment?.version_id === version.id) completed(deployment, 'Deployed');
   if (data.deployment?.version_id) deployment.append(el('p', `Current deployment: public AI chat is ${data.deployment.chat_enabled ? 'enabled on reviewed website origins' : 'off'}. Sales calls retain the own-contact pilot and pause controls.`));
   deployment.append(el('p', 'A successful test requires an actual provider call result. A booking requires a real calendar reservation; the agent cannot mark one booked simply by saying it is.'), sectionLink('Review website origins, widget and business settings →', 'settings'), sectionLink('Review eligible enquiries, pause controls and stops →', 'control'));
   const deployForm = el('form');
@@ -363,6 +491,12 @@ export async function mountAgentBuilder(root, api, options = {}) {
   }, { disabled: !published });
   deployment.append(deployForm, embed);
   if (data.deployment?.message) deployment.append(el('p', data.deployment.message));
+  if (restore?.focus === 'review') {
+    const target = approvedNotice || review;
+    target.tabIndex = -1;
+    target.focus?.({ preventScroll: true });
+  }
+  if (preserveLayout) restoreViewport(restore.viewport);
 }
 
 export const renderAgentBuilder = mountAgentBuilder;
