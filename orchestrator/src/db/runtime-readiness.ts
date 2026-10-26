@@ -10,6 +10,9 @@ interface RuntimeMigrationRow extends QueryResultRow {
   checksum: string;
 }
 
+const FINANCE_COMPATIBILITY_MIGRATION = '0106_finance_planning_drafts.sql';
+const FINANCE_COMPATIBILITY_CHECKSUM = '422d1766390910417b397bb34607f74a56c8d7744c3f88a84c4ae46e39ae40ba';
+
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
  * with this release. The safe SQL function exists only from migration 0004, so
@@ -31,6 +34,16 @@ export async function assertRuntimeSchemaCurrent(
       throw new Error('Database returned an invalid runtime migration ledger');
     }
     applied.set(row.filename, row.checksum);
+  }
+
+  // This pre-finance recovery build supports only the reviewed additive 0106.
+  // A release which bundles 0106 takes the normal strict path and requires it.
+  // The database ledger is read-only; all earlier and unknown rows still pass
+  // through the existing exact-checksum and contiguous-prefix validation.
+  if (migrations.length === 105
+      && migrations[104]?.filename === '0105_public_social_planner_session_lock.sql'
+      && applied.get(FINANCE_COMPATIBILITY_MIGRATION) === FINANCE_COMPATIBILITY_CHECKSUM) {
+    applied.delete(FINANCE_COMPATIBILITY_MIGRATION);
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
