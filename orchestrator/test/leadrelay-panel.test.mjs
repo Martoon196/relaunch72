@@ -291,3 +291,19 @@ test('same-installation view changes fence pending builder and provider imports'
     } finally {h.restore();}
   }
 });
+
+test('native Call me forwards a stable owner intent through only the existing test action',async()=>{
+  let api;
+  const h=await harness(async()=> 'csrf',{actions:['GET:status','GET:agent-status','POST:agent-test-call'],loadBuilder:async()=>({mountAgentBuilder:async(_root,call)=>{api=call;}})});
+  try {
+    await find(h.root,n=>n.textContent==='Create an agent').onclick();
+    const body={version_id:'version-a',own_contact_confirmed:true,ai_call_consent:true,
+      confirmation:'PLACE ONE PAID TEST CALL TO MY OWN NUMBER',mode:'call_me',request_id:'9aca7ecd-9a94-43e0-9414-8af424b29c13'};
+    await api('/api/agent-builder/test-call',{method:'POST',body,guard:()=>true});
+    assert.deepEqual(h.posts,['/api/leadrelay/installations/a/agent-test-call']);
+    assert.deepEqual(JSON.parse(h.requests.at(-1).opts.body),body);
+    assert.equal(h.requests.at(-1).opts.headers['X-CSRF-Token'],'csrf');
+    assert.equal(Object.hasOwn(h.requests.at(-1).opts,'guard'),false);
+    await assert.rejects(api('/api/control/settings',{method:'PUT',body:{paused:false}}),/not supported/);
+  } finally {h.restore();}
+});
