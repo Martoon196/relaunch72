@@ -400,7 +400,27 @@ export async function mountAgentBuilder(root, api, options = {}) {
     }
   } else provider.append(el('p', 'Approve the website facts to create the first shared knowledge version.'));
 
-  const testSection = card(root, 4, 'Test your agent', 'Try a private chat, then request one paid call to your configured own number. Calls keep the two-minute delay, quiet hours, stop controls and pilot limits.');
+  const testSection = card(root, 4, 'Test your agent', 'Request one paid call to your configured own number. Private chat is optional and can be skipped. Calls keep the two-minute delay, quiet hours, stop controls and pilot limits.');
+  testSection.append(el('h3', 'Call my own number'));
+  const callForm = el('form');
+  callForm.className = 'agent-builder-call';
+  const own = field(callForm, 'own_contact_confirmed', 'Call only my configured own-contact pilot number.', '', 'checkbox');
+  own.required = true;
+  const consent = field(callForm, 'ai_call_consent', 'I request this paid automated AI test call and agree to the configured call disclosure and recording policy.', '', 'checkbox');
+  consent.required = true;
+  const capturedVersionId = version?.id;
+  submit(callForm, 'Queue one call to me', async () => {
+    if (!own.checked || !consent.checked) throw Error('Confirm your own-contact test and AI call permission.');
+    const result = await api('/api/agent-builder/test-call', { method: 'POST', body: { version_id: capturedVersionId, own_contact_confirmed: true, ai_call_consent: true, confirmation: 'PLACE ONE PAID TEST CALL TO MY OWN NUMBER' } });
+    if (!active()) return;
+    message.textContent = `Test queued; earliest call in two minutes, subject to eligibility and contact hours.${result.job_id ? ` Job: ${result.job_id}.` : ''} A queued job is not proof that a call was made.`;
+    own.checked = false;
+    consent.checked = false;
+  }, { disabled: !published || data.pilot_ready !== true });
+  testSection.append(callForm, sectionLink('Review the configured own number and permissions →', 'live'), sectionLink('See actual queue and call outcomes →', 'activity'));
+  if (published && data.pilot_ready !== true) testSection.append(el('p', 'Complete the verified own-contact pilot setup before requesting a real test call.'));
+
+  testSection.append(el('h3', 'Optional private chat'));
   const chatForm = el('form');
   const question = field(chatForm, 'message', 'Ask your agent about your business', '', 'textarea');
   question.rows = 3;
@@ -457,23 +477,7 @@ export async function mountAgentBuilder(root, api, options = {}) {
   }, { disabled: !published });
   testSection.append(chatForm, chatLog);
   if (!published) testSection.append(el('p', 'Private AI chat becomes available after the provider confirms agent publication.'));
-  const callForm = el('form');
-  callForm.className = 'agent-builder-call';
-  const own = field(callForm, 'own_contact_confirmed', 'Call only my configured own-contact pilot number.', '', 'checkbox');
-  own.required = true;
-  const consent = field(callForm, 'ai_call_consent', 'I request this paid automated AI test call and agree to the configured call disclosure and recording policy.', '', 'checkbox');
-  consent.required = true;
-  const capturedVersionId = version?.id;
-  submit(callForm, 'Queue one call to me', async () => {
-    if (!own.checked || !consent.checked) throw Error('Confirm your own-contact test and AI call permission.');
-    const result = await api('/api/agent-builder/test-call', { method: 'POST', body: { version_id: capturedVersionId, own_contact_confirmed: true, ai_call_consent: true, confirmation: 'PLACE ONE PAID TEST CALL TO MY OWN NUMBER' } });
-    if (!active()) return;
-    message.textContent = `Test queued; earliest call in two minutes, subject to eligibility and contact hours.${result.job_id ? ` Job: ${result.job_id}.` : ''} A queued job is not proof that a call was made.`;
-    own.checked = false;
-    consent.checked = false;
-  }, { disabled: !published || data.pilot_ready !== true });
-  testSection.append(callForm, sectionLink('Review the configured own number and permissions →', 'live'), sectionLink('See actual queue and call outcomes →', 'activity'));
-  if (published && data.pilot_ready !== true) testSection.append(el('p', 'Complete the verified own-contact pilot setup before requesting a real test call.'));
+
 
   const deployment = card(root, 5, 'Deploy when you are ready', 'Publication creates provider agents. Customer-facing chat and sales follow-up have separate activation controls.');
   if (version && data.deployment?.version_id === version.id) completed(deployment, 'Deployed');

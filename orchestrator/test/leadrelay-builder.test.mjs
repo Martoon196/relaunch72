@@ -346,6 +346,26 @@ test('lost initial chat response is recovered with the same request ID and origi
   } finally { h.restore(); }
 });
 
+test('phone test is first and can queue without sending an optional private chat', async () => {
+  const h = await harness({ version: { id: 'version-a', status: 'published' }, pilot_ready: true }, async () => ({ queued: true }));
+  try {
+    const section = find(h.root, node => node.tag === 'section' && byText(node, 'Test your agent'));
+    const callForm = formFor(section, 'own_contact_confirmed');
+    const chatForm = formFor(section, 'message');
+    assert.ok(section.children.indexOf(callForm) < section.children.indexOf(chatForm));
+    assert.ok(byText(section, 'Optional private chat'));
+    assert.match(section.textContent, /Private chat is optional and can be skipped/);
+    assert.equal(input(chatForm, 'message').value, '');
+    assert.equal(byText(callForm, 'Queue one call to me').disabled, false);
+    input(callForm, 'own_contact_confirmed').checked = true;
+    input(callForm, 'ai_call_consent').checked = true;
+    await submit(callForm);
+    assert.deepEqual(h.writes.map(write => write.path), ['/api/agent-builder/test-call']);
+    assert.equal(input(chatForm, 'message').value, '');
+    assert.equal(find(section, node => node.className === 'agent-builder-chat').children.length, 0);
+  } finally { h.restore(); }
+});
+
 test('paid test call cannot post before both explicit own-contact and AI permissions', async () => {
   const h = await harness({ version: { id: 'version-a', status: 'published' }, pilot_ready: true }, async () => ({ job_id: 'job-a' }));
   try {
