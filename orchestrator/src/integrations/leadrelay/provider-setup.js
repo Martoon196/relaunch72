@@ -33,15 +33,23 @@ export async function mountProviderSetup(root, api, options = {}) {
   const card = el('section'); card.className = 'card provider-setup-card';
   const heading = el('div'); heading.className = 'provider-setup-heading';
   const title = el('div');
-  title.append(el('h2', 'Connect the AI provider'), el('p', 'Connect Retell here. Growth HQ then creates your chat and call agents through its API using your approved business knowledge.'));
+  title.append(el('h2', 'Connect the AI provider'), el('p', 'Connect Retell here. LeadRelay then creates your chat and call agents through its API using your approved business knowledge.'));
   const badge = el('span', 'Not connected'); badge.className = 'provider-setup-badge';
   heading.append(title, badge); card.append(heading);
-  card.append(el('p', 'A Retell account and API access are the one-time account step. Agent setup, voice selection and creation are managed here; provider billing and account verification remain with Retell.'));
-  const account = el('a', 'Open Retell account / API access');
+  card.append(el('p', 'Retell browser login does not connect this workspace to its API. The check below reads only the API connection already saved here.'));
+  const steps = el('ol');
+  steps.append(
+    el('li', 'In Retell, open System Settings → API Keys and copy your API key.'),
+    el('li', 'Return here and paste the API key and designated webhook verification key into their separate secure fields.'),
+    el('li', 'Load available voices, choose your agent voice, then Verify and save connection.')
+  );
+  card.append(steps);
+  const account = el('a', 'Open Retell to copy API access keys');
   account.href = 'https://dashboard.retellai.com/'; account.target = '_blank'; account.rel = 'noopener noreferrer';
   card.append(account);
   const notice = el('p'); notice.className = 'provider-setup-notice'; notice.setAttribute('role', 'status'); notice.setAttribute('aria-live', 'polite');
-  const refresh = el('button', 'Refresh connection'); refresh.type = 'button'; refresh.className = 'btn small';
+  const refreshLabel = 'Check saved API connection';
+  const refresh = el('button', refreshLabel); refresh.type = 'button'; refresh.className = 'btn small';
   card.append(notice, refresh); root.replaceChildren(card);
   const canRead = options.canRead === true;
   const canList = options.canListVoices === true || options.canConfigure === true;
@@ -52,7 +60,7 @@ export async function mountProviderSetup(root, api, options = {}) {
     return { dispose };
   }
   let saved = { verified: false, has_secret: false, has_webhook_secret: false, config: {} };
-  let loaded = false, busy = false, revision = 0;
+  let loaded = false, busy = false, revision = 0, checks = 0;
   let voices = [];
   const form = el('form'); form.className = 'provider-setup-form';
   const field = (name, label, type = 'text') => {
@@ -64,6 +72,9 @@ export async function mountProviderSetup(root, api, options = {}) {
   };
   key = field('secret', 'Retell API key · blank reuses the encrypted saved key', 'password'); key.maxLength = 10000;
   webhook = field('webhook_secret', 'Retell webhook verification key · blank keeps the saved key', 'password'); webhook.maxLength = 10000;
+  const draftNotice = el('p', 'These typed credentials are not saved yet. Use Load available voices, choose a voice, then Verify and save connection. The saved-connection check is disabled so it cannot discard your entry.');
+  draftNotice.hidden = true;
+  form.append(draftNotice);
   form.append(el('p', 'Use the API key designated by Retell for webhook verification. It may be the same designated key, but it is not inferred from another API key. Credentials are encrypted server-side and never shown again.'));
   const list = el('button', 'Load available voices'); list.type = 'button'; list.className = 'btn'; form.append(list);
   const voiceLabel = el('label'); voiceLabel.className = 'field';
@@ -91,7 +102,9 @@ export async function mountProviderSetup(root, api, options = {}) {
     voice.disabled = busy || !loaded || (!voices.length && !voice.value);
     list.disabled = busy || !loaded || !canList;
     verify.disabled = busy || !loaded || !canVerify || !voice.value;
-    refresh.disabled = busy;
+    const typedCredentials = !!(key.value.trim() || webhook.value.trim());
+    refresh.disabled = busy || typedCredentials;
+    draftNotice.hidden = !typedCredentials;
   }
   function voiceOptions(selected = '') {
     const placeholder = el('option', voices.length ? 'Select a voice' : 'Load voices to choose'); placeholder.value = '';
@@ -114,15 +127,22 @@ export async function mountProviderSetup(root, api, options = {}) {
   }
   async function loadStatus() {
     if (!active() || busy) return;
-    busy = true; controls(); message('Checking the saved connection…');
+    busy = true; controls(); refresh.textContent = 'Checking saved API connection…'; message('Checking only this workspace’s saved API connection…');
     try {
       const response = await api('/api/agent-builder/connection');
       if (!active()) return;
       saved = { verified: response.verified === true, has_secret: response.has_secret === true, has_webhook_secret: response.has_webhook_secret === true, config: response.config || {} };
       loaded = true; voiceOptions(saved.config.voice_id || ''); caller.value = saved.config.from_number || '';
-      showStatus(); message(badge.textContent === 'Connected and verified' ? 'Saved Retell connection verified. Agent creation remains a separate explicit step.' : 'Connect your account, choose a voice, then verify and save. No agent or call starts during verification.');
+      checks++;
+      showStatus();
+      const result = badge.textContent === 'Connected and verified'
+        ? 'Saved Retell API connection is verified. Agent creation remains a separate explicit step.'
+        : !saved.has_secret
+          ? 'No Retell API key saved. Retell browser login does not connect this workspace. Copy your key from System Settings → API Keys in Retell, paste it below, load voices and verify.'
+          : 'An encrypted API key is saved, but this connection is not verified. Choose a voice and verify the connection below.';
+      message(`Saved API check #${checks} complete. ${result}`);
     } catch (error) { if (active()) message(failureText(error), true); }
-    finally { busy = false; if (active()) controls(); }
+    finally { busy = false; if (active()) { refresh.textContent = refreshLabel; controls(); } }
   }
   key.oninput = () => {
     if (!active()) return;
@@ -137,6 +157,7 @@ export async function mountProviderSetup(root, api, options = {}) {
     if (!active()) return;
     revision++;
     badge.textContent = 'Changes not verified'; card.classList.toggle('provider-setup-verified', false);
+    controls();
     message('Verification key changed. Verify and save the connection to apply it.');
   };
   voice.onchange = controls;
@@ -174,7 +195,7 @@ export async function mountProviderSetup(root, api, options = {}) {
     try {
       const result = await api('/api/agent-builder/connection/verify', { method: 'POST', body, guard: requestCurrent });
       if (!requestCurrent()) {
-        if (active()) message('The setup changed while verification was pending. Refresh connection to check the saved result before continuing.', true);
+        if (active()) message('The setup changed while verification was pending. Check the saved API connection after clearing unsaved credential entries to confirm its saved result.', true);
         return;
       }
       if (result.verified !== true || !result.config?.voice_id || result.outreach_started === true) throw Error('The server did not confirm this connection. Refresh its status before continuing.');
@@ -188,7 +209,15 @@ export async function mountProviderSetup(root, api, options = {}) {
     } catch (error) { if (requestCurrent()) message(failureText(error, [secret, webhookSecret]), true); }
     finally { busy = false; if (active()) controls(); }
   };
-  refresh.onclick = async () => { clearSecrets(); revision++; voices = []; await loadStatus(); };
+  refresh.onclick = async () => {
+    if (!active() || busy) return;
+    if (key.value.trim() || webhook.value.trim()) {
+      controls();
+      message('Your typed credentials are not saved. Use Load available voices and Verify and save connection, or clear the credential fields before checking the saved API connection.');
+      return;
+    }
+    revision++; voices = []; await loadStatus();
+  };
   voiceOptions(); controls(); await loadStatus();
   return { dispose };
 }

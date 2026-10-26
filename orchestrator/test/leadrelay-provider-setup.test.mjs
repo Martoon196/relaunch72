@@ -268,12 +268,42 @@ test('voice-list-only permission cannot save a provider connection', async () =>
   } finally { h.restore(); }
 });
 
-test('a connection refresh clears typed secrets without creating agents or calling any provider mutation route', async () => {
+test('a saved-connection check preserves unsaved credentials and directs the user to voice loading and verification', async () => {
   const h = await harness();
   try {
     field(h.root, 'secret').value = 'new-provider-api-secret'; field(h.root, 'webhook_secret').value = 'documented-webhook-key';
-    await text(h.root, 'Refresh connection').onclick();
-    assert.equal(field(h.root, 'secret').value, ''); assert.equal(field(h.root, 'webhook_secret').value, '');
+    field(h.root, 'webhook_secret').oninput();
+    const check = text(h.root, 'Check saved API connection');
+    assert.equal(check.disabled, true);
+    await check.onclick();
+    assert.equal(field(h.root, 'secret').value, 'new-provider-api-secret');
+    assert.equal(field(h.root, 'webhook_secret').value, 'documented-webhook-key');
+    assert.match(find(h.root, node => node.className === 'provider-setup-notice').textContent, /typed credentials are not saved.*Load available voices/);
+    assert.equal(h.reads.length, 1); assert.deepEqual(h.writes, []);
+  } finally { h.restore(); }
+});
+
+test('repeated saved API checks visibly complete while browser login alone never implies connection', async () => {
+  const h = await harness();
+  try {
+    const notice = find(h.root, node => node.className === 'provider-setup-notice');
+    assert.match(notice.textContent, /Saved API check #1 complete.*No Retell API key saved.*Retell browser login does not connect/);
+    await text(h.root, 'Check saved API connection').onclick();
+    assert.match(notice.textContent, /Saved API check #2 complete.*No Retell API key saved/);
+    assert.equal(text(h.root, 'Connected and verified'), undefined);
     assert.equal(h.reads.length, 2); assert.deepEqual(h.writes, []);
+  } finally { h.restore(); }
+});
+
+test('one-time API instructions name the provider key screen and keep agent configuration inside LeadRelay', async () => {
+  const h = await harness();
+  try {
+    const steps = all(h.root).filter(node => node.tag === 'li');
+    assert.equal(steps.length, 3);
+    assert.match(steps[0].textContent, /System Settings → API Keys/);
+    assert.match(steps[1].textContent, /separate secure fields/);
+    assert.match(steps[2].textContent, /Load available voices.*Verify and save connection/);
+    assert.equal(text(h.root, 'Open Retell to copy API access keys').href, 'https://dashboard.retellai.com/');
+    assert.doesNotMatch(h.root.textContent, /Growth HQ then/);
   } finally { h.restore(); }
 });
