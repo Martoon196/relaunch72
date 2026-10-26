@@ -109,6 +109,7 @@ const migration102Url = new URL('../../src/db/migrations/0102_combined_social_po
 const migration103Url = new URL('../../src/db/migrations/0103_content_source_refresh_receipts.sql', import.meta.url);
 const migration104Url = new URL('../../src/db/migrations/0104_combined_social_planning_validation.sql', import.meta.url);
 const migration105Url = new URL('../../src/db/migrations/0105_public_social_planner_session_lock.sql', import.meta.url);
+const migration106Url = new URL('../../src/db/migrations/0106_finance_planning_drafts.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -650,6 +651,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: '0103_content_source_refresh_receipts.sql', version: 103 },
     { filename: '0104_combined_social_planning_validation.sql', version: 104 },
     { filename: '0105_public_social_planner_session_lock.sql', version: 105 },
+    { filename: '0106_finance_planning_drafts.sql', version: 106 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -751,6 +753,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration103Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration104Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration105Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration106Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.

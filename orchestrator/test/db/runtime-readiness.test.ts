@@ -16,7 +16,10 @@ async function fixtureDirectory(): Promise<string> {
 
 function runtimePool(rows: Array<{ filename: string; checksum: string }>): Pick<Pool, 'query'> {
   return {
-    query: (async () => ({ rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] } as QueryResult)) as Pool['query'],
+    query: (async (sql: string) => {
+      assert.equal(sql.trim(), '/* database.runtime-schema-readiness */\n     SELECT filename, checksum\n     FROM app_private.runtime_schema_migrations()');
+      return { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] } as QueryResult;
+    }) as Pool['query'],
   };
 }
 
@@ -30,4 +33,100 @@ test('least-privilege runtime readiness accepts only the exact bundled migration
     { ...exact[0]!, checksum: '0'.repeat(64) }, exact[1]!,
   ]), directory), /checksum changed/);
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...exact, exact[0]!]), directory), /invalid runtime migration ledger/);
+});
+
+const approvedFinance = {
+  filename: '0106_finance_planning_drafts.sql',
+  checksum: '422d1766390910417b397bb34607f74a56c8d7744c3f88a84c4ae46e39ae40ba',
+};
+
+async function compatibilityFixture(includeFinance = false, lastFilename = '0105_public_social_planner_session_lock.sql') {
+  const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-finance-compat-'));
+  const existing = (await discoverMigrations()).slice(0, 105);
+  assert.equal(existing.length, 105);
+  assert.equal(existing[104]?.filename, '0105_public_social_planner_session_lock.sql');
+  await Promise.all(existing.map((migration) =>
+    writeFile(path.join(directory, migration.version === 105 ? lastFilename : migration.filename), migration.sql, 'utf8')));
+  if (includeFinance) {
+    // The known-migration path must use the bundled checksum, never the bridge
+    // exception. This fixture is read as source only; no SQL is executed.
+    await writeFile(path.join(directory, approvedFinance.filename), 'SELECT 106;\n', 'utf8');
+  }
+  const migrations = await discoverMigrations(directory);
+  return { directory, rows: migrations.map(({ filename, checksum }) => ({ filename, checksum })) };
+}
+
+let bridgeFixture: ReturnType<typeof compatibilityFixture> | undefined;
+function bridge() { return bridgeFixture ??= compatibilityFixture(); }
+
+test('105 bridge is ready before finance migration with its exact existing ledger', async () => {
+  const { directory, rows } = await bridge();
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows), directory));
+});
+
+test('105 bridge is ready after only the exact approved finance migration', async () => {
+  const { directory, rows } = await bridge();
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool([...rows, approvedFinance]), directory));
+});
+
+test('105 bridge rejects a different finance checksum', async () => {
+  const { directory, rows } = await bridge();
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
+    ...rows, { ...approvedFinance, checksum: '0'.repeat(64) },
+  ]), directory), /migration not present in this release/);
+});
+
+test('approved finance does not excuse a missing earlier migration', async () => {
+  const { directory, rows } = await bridge();
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
+    ...rows.slice(0, -1), approvedFinance,
+  ]), directory), /schema is behind by 1 migration/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
+    ...rows.slice(1), approvedFinance,
+  ]), directory), /not a contiguous prefix/);
+});
+
+test('approved finance does not excuse a changed earlier checksum', async () => {
+  const { directory, rows } = await bridge();
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
+    { ...rows[0]!, checksum: '0'.repeat(64) }, ...rows.slice(1), approvedFinance,
+  ]), directory), /checksum changed/);
+});
+
+test('105 bridge rejects unknown migration 107 even alongside approved finance', async () => {
+  const { directory, rows } = await bridge();
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
+    ...rows, approvedFinance, { filename: '0107_unknown.sql', checksum: 'a'.repeat(64) },
+  ]), directory), /migration not present in this release/);
+});
+
+test('105 bridge rejects duplicate finance ledger rows before compatibility handling', async () => {
+  const { directory, rows } = await bridge();
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
+    ...rows, approvedFinance, approvedFinance,
+  ]), directory), /invalid runtime migration ledger/);
+});
+
+test('finance compatibility is unavailable to a different bundled prefix', async () => {
+  const directory = await fixtureDirectory();
+  const rows = (await discoverMigrations(directory)).map(({ filename, checksum }) => ({ filename, checksum }));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
+    ...rows, approvedFinance,
+  ]), directory), /migration not present in this release/);
+});
+
+test('105 bridge requires the exact approved final bundled migration name', async () => {
+  const { directory, rows } = await compatibilityFixture(false, '0105_other.sql');
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
+    ...rows, approvedFinance,
+  ]), directory), /migration not present in this release/);
+});
+
+test('full 106 application still requires its exact bundled finance migration', async () => {
+  const { directory, rows } = await compatibilityFixture(true);
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows), directory));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, -1)), directory), /schema is behind by 1 migration/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
+    ...rows.slice(0, -1), approvedFinance,
+  ]), directory), /checksum changed/);
 });

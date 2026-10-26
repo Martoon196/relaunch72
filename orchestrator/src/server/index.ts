@@ -638,6 +638,7 @@ async function main(): Promise<void> {
         }),
         propertyPredatorSso,
         crm: postgresPortal.crm,
+        financeDrafts: postgresPortal.financeDrafts,
         journeys: postgresPortal.journeys,
         operatorActions: postgresPortal.operatorActions,
         companyContent: postgresPortal.companyContent,

@@ -118,6 +118,7 @@ export interface Lead360PilotAuthorisationView {
 }
 
 export interface Lead360RenderOptions {
+  readonly financeAvailable?: boolean;
   /** True only when the founder permission command boundary is composed. */
   readonly permissionCommandAvailable?: boolean;
   /** Fresh per-render key, so a double submit replays instead of re-deciding. */
@@ -688,9 +689,9 @@ function permissionCommands(
   </section>`;
 }
 
-function crmSummary(crm: Lead360CrmSummaryView): string {
+function crmSummary(crm: Lead360CrmSummaryView, financeAvailable = false): string {
   const opportunities = crm.opportunities.length
-    ? `<ul class="lead360-crm-list">${crm.opportunities.map((item) => `<li><div><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.stageLabel)}${item.valueLabel ? ` · ${escapeHtml(item.valueLabel)}` : ''}</span></div><span class="state-${item.state}">${escapeHtml(item.state)}</span></li>`).join('')}</ul>`
+    ? `<ul class="lead360-crm-list">${crm.opportunities.map((item) => `<li><div><strong>${escapeHtml(item.title)}</strong>${financeAvailable ? `<a href="/portal/crm/opportunities/${encodeURIComponent(item.id)}/finance">Indicative finance</a>` : ''}<span>${escapeHtml(item.stageLabel)}${item.valueLabel ? ` · ${escapeHtml(item.valueLabel)}` : ''}</span></div><span class="state-${item.state}">${escapeHtml(item.state)}</span></li>`).join('')}</ul>`
     : emptyState('No CRM opportunities', 'This contact has no saved opportunity.');
   const tasks = crm.tasks.length
     ? `<ul class="lead360-crm-list lead360-task-list">${crm.tasks.map((item) => `<li><div><strong>${escapeHtml(item.title)}</strong><span>${item.dueAt ? timestamp(item.dueAt) : 'No due time recorded'}</span></div><span class="state-${item.state}">${item.state === 'complete' ? 'Complete' : item.state === 'cancelled' ? 'Cancelled' : 'Open'}</span></li>`).join('')}</ul>`
@@ -747,7 +748,7 @@ export function renderLead360Body(
     </header>
     ${journeyRails(view)}
     <div class="lead360-layout">
-      <aside class="lead360-column lead360-left" aria-label="Lead context"><section class="lead360-section" aria-labelledby="lead360-score-reason"><div class="lead360-section-head"><div><div class="lead360-section-label">Scoring</div><h2 id="lead360-score-reason">Why this score?</h2></div></div>${view.scoreExplanation ? `<p class="lead360-case-note">${escapeHtml(view.scoreExplanation)}</p>` : emptyState('No score explanation', 'A score has not been justified by recorded evidence.')}</section><section class="lead360-section" aria-labelledby="lead360-crm"><div class="lead360-section-head"><div><div class="lead360-section-label">Saved records</div><h2 id="lead360-crm">CRM summary</h2></div></div>${crmSummary(view.crm)}</section></aside>
+      <aside class="lead360-column lead360-left" aria-label="Lead context"><section class="lead360-section" aria-labelledby="lead360-score-reason"><div class="lead360-section-head"><div><div class="lead360-section-label">Scoring</div><h2 id="lead360-score-reason">Why this score?</h2></div></div>${view.scoreExplanation ? `<p class="lead360-case-note">${escapeHtml(view.scoreExplanation)}</p>` : emptyState('No score explanation', 'A score has not been justified by recorded evidence.')}</section><section class="lead360-section" aria-labelledby="lead360-crm"><div class="lead360-section-head"><div><div class="lead360-section-label">Saved records</div><h2 id="lead360-crm">CRM summary</h2></div></div>${crmSummary(view.crm, options.financeAvailable)}</section></aside>
       <section class="lead360-column lead360-centre" aria-labelledby="lead360-evidence"><div class="lead360-section-head"><div><div class="lead360-section-label">Exact chronology</div><h2 id="lead360-evidence">Engagement evidence</h2></div><span>Newest first</span></div>${evidenceTimeline(view.evidence)}</section>
       <aside class="lead360-column lead360-right" aria-label="Decision rail"><section class="lead360-section" aria-labelledby="lead360-next"><div class="lead360-section-head"><div><div class="lead360-section-label">Human judgement</div><h2 id="lead360-next">Best next move</h2></div></div>${nextMove(view.nextMove, primaryJourneyLabel)}</section><section class="lead360-section" aria-labelledby="lead360-offers"><div class="lead360-section-head"><div><div class="lead360-section-label">Commercial evidence</div><h2 id="lead360-offers">Offer history</h2></div></div>${offerHistory(view.offers)}</section><section class="lead360-section" aria-labelledby="lead360-consent"><div class="lead360-section-head"><div><div class="lead360-section-label">Contact safety</div><h2 id="lead360-consent">Consent + suppression</h2></div></div>${consentStatus(view.consent, view.suppressionReason)}</section>${permissionCommands(view, options)}${endpointCommands(view, options)}${pilotReadinessPanel(options)}${pilotPreparationPanel(view, options)}${pilotAuthorisationPanel(view, options)}</aside>
     </div>
