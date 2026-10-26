@@ -155,11 +155,15 @@ import {
   type PgPortalCreatorWatchService,
 } from './creator-watch-pg-service.js';
 
+import { createPgFinanceDraftsService } from './finance-drafts-pg-service.js';
+import type { FinanceDraftsService } from './finance-drafts-service.js';
+
 export interface PgPortalPlatform {
   auth: PgPortalAuthService;
   /** Distributed, function-only admission guard shared by every web instance. */
   abuse: PgPortalAbuseGuard;
   crm: PgPortalCrmService;
+  financeDrafts: FinanceDraftsService;
   journeys: PgPortalJourneyManagerService;
   /** RLS-scoped authoritative operator queue with assignment/snooze overlays only. */
   operatorActions: PgPortalOperatorActionCentreService;
@@ -1235,6 +1239,7 @@ export async function buildPgPortalPlatform(
         commandPool,
         cursorSecret: env.SESSION_SECRET?.trim() ?? '',
       }),
+      financeDrafts: createPgFinanceDraftsService({ webPool, commandPool, secret: env.SESSION_SECRET?.trim() ?? '' }),
       journeys: createPgPortalJourneyManagerService({ webPool, commandPool }),
       operatorActions: createPgPortalOperatorActionCentreService({
         webPool,

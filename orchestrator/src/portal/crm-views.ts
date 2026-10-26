@@ -150,6 +150,7 @@ export interface ContactsPageOptions extends CrmMutationContext {
 }
 
 export interface PipelinePageOptions extends CrmMutationContext {
+  financeAvailable?: boolean;
   notice?: CrmNotice;
 }
 
@@ -482,7 +483,7 @@ function opportunityMoveForm(opportunity: CrmOpportunityView, stages: readonly C
   </form><p class="crm-card-note">Saves the CRM stage and activity only · no contact is notified.</p>`;
 }
 
-function pipelineBoard(snapshot: CrmWorkspaceSnapshot, csrfToken: string): string {
+function pipelineBoard(snapshot: CrmWorkspaceSnapshot, csrfToken: string, financeAvailable = false): string {
   const stages = [...snapshot.stages].sort((left, right) => left.position - right.position);
   if (stages.length === 0) {
     const message = snapshot.workspace.canWrite
@@ -497,19 +498,19 @@ function pipelineBoard(snapshot: CrmWorkspaceSnapshot, csrfToken: string): strin
       ? '<p class="crm-stage-empty">No opportunities in this stage.</p>'
       : opportunities.map((opportunity) => {
         const index = cardIndex++;
-        return opportunityCardWithToken(opportunity, stages, snapshot, csrfToken, index);
+        return opportunityCardWithToken(opportunity, stages, snapshot, csrfToken, index, financeAvailable);
       }).join('');
     return `<section class="crm-stage-column crm-stage-tone-${stageIndex % 6}" aria-labelledby="crm-stage-${stageIndex}-title"><div class="crm-stage-head"><h2 id="crm-stage-${stageIndex}-title">${escapeHtml(stage.name)}</h2><span class="crm-stage-total" aria-label="${count(opportunities.length)} opportunities shown on this page">${count(opportunities.length)}</span></div><div class="crm-stage-cards">${cards}</div></section>`;
   });
   const orphaned = snapshot.opportunities.filter((opportunity) => !stages.some((stage) => stage.id === opportunity.stageId));
   if (orphaned.length > 0) {
-    const cards = orphaned.map((opportunity) => opportunityCardWithToken(opportunity, stages, snapshot, csrfToken, cardIndex++)).join('');
+    const cards = orphaned.map((opportunity) => opportunityCardWithToken(opportunity, stages, snapshot, csrfToken, cardIndex++, financeAvailable)).join('');
     columns.push(`<section class="crm-stage-column crm-stage-tone-4" aria-labelledby="crm-stage-needs-review"><div class="crm-stage-head"><h2 id="crm-stage-needs-review">Stage needs review</h2><span class="crm-stage-total">${count(orphaned.length)}</span></div><p class="crm-card-note">These records reference a stage that is no longer available. Move each one to a saved stage.</p><div class="crm-stage-cards">${cards}</div></section>`);
   }
   return `<div class="crm-board" role="region" tabindex="0" aria-label="Opportunity stages" aria-describedby="crm-board-keyboard-help">${columns.join('')}</div>`;
 }
 
-function opportunityCardWithToken(opportunity: CrmOpportunityView, stages: readonly CrmStageView[], snapshot: CrmWorkspaceSnapshot, csrfToken: string, index: number): string {
+function opportunityCardWithToken(opportunity: CrmOpportunityView, stages: readonly CrmStageView[], snapshot: CrmWorkspaceSnapshot, csrfToken: string, index: number, financeAvailable = false): string {
   const nextTask = opportunity.nextTaskAt
     ? `${isOverdue(opportunity.nextTaskAt, snapshot.workspace.snapshotAt) ? '<span class="crm-visually-hidden">Overdue: </span>' : ''}${dateTime(opportunity.nextTaskAt, snapshot.workspace.timezone)}`
     : 'No next task';
@@ -518,7 +519,7 @@ function opportunityCardWithToken(opportunity: CrmOpportunityView, stages: reado
     <div class="crm-meta-item"><span>Owner</span><strong>${escapeHtml(opportunity.ownerName?.trim() || 'Unassigned')}</strong></div>
     <div class="crm-meta-item"><span>Expected close</span><strong>${calendarDate(opportunity.expectedCloseDate)}</strong></div>
     <div class="crm-meta-item"><span>Next task</span><strong>${nextTask}</strong></div>
-  </div>${opportunityMoveForm(opportunity, stages, csrfToken, index, snapshot.workspace.canWrite)}</article>`;
+  </div>${financeAvailable && snapshot.workspace.canWrite ? `<p><a class="button secondary compact" href="/portal/crm/opportunities/${encodeURIComponent(opportunity.id)}/finance">Indicative finance</a></p>` : ''}${opportunityMoveForm(opportunity, stages, csrfToken, index, snapshot.workspace.canWrite)}</article>`;
 }
 
 /** Renders the accessible, form-driven Opportunity pipeline body fragment. */
@@ -531,7 +532,7 @@ export function renderCrmPipelineBody(snapshot: CrmWorkspaceSnapshot, options: P
     ${pageHeading(snapshot.workspace, 'pipeline', 'Opportunity pipeline', 'Move saved opportunities through the pipeline with explicit, reviewable form submissions.')}
     ${crmNav('pipeline')}
     ${notice(options.notice)}
-    <section class="crm-panel" aria-labelledby="crm-board-title"><div class="crm-panel-head crm-board-intro"><div><h2 id="crm-board-title">Pipeline board</h2><p>${pipelineSummary}</p></div><p class="crm-board-help" id="crm-board-keyboard-help">Swipe horizontally, or focus the board and use arrow keys, to move between stages. Use the labelled “Move to” form on a card to save a change; there is no pretend drag and drop.</p></div><div class="crm-panel-body">${pipelineBoard(snapshot, options.csrfToken)}${collectionPagination(pipelinePage, CRM_PORTAL_ROUTES.pipeline)}</div></section>
+    <section class="crm-panel" aria-labelledby="crm-board-title"><div class="crm-panel-head crm-board-intro"><div><h2 id="crm-board-title">Pipeline board</h2><p>${pipelineSummary}</p></div><p class="crm-board-help" id="crm-board-keyboard-help">Swipe horizontally, or focus the board and use arrow keys, to move between stages. Use the labelled “Move to” form on a card to save a change; there is no pretend drag and drop.</p></div><div class="crm-panel-body">${pipelineBoard(snapshot, options.csrfToken, options.financeAvailable)}${collectionPagination(pipelinePage, CRM_PORTAL_ROUTES.pipeline)}</div></section>
     ${timelinePanel(snapshot)}
   </div>`;
 }

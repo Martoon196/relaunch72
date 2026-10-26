@@ -146,6 +146,7 @@ export interface PortalBundle {
 }
 
 export interface PostgresPortalConfig {
+  financeDrafts?: PostgresPortalDeps['financeDrafts'];
   sessionSecret: string;
   secure: boolean;
   /** Optional sanitised service telemetry for fail-closed read paths. */
@@ -254,6 +255,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     auth: cfg.auth,
     propertyPredatorSso: cfg.propertyPredatorSso,
     crm: cfg.crm,
+    financeDrafts: cfg.financeDrafts,
     journeys: cfg.journeys,
     operatorActions: cfg.operatorActions,
     companyContent: cfg.companyContent,

@@ -36,6 +36,10 @@ import { accountSetupPage, accountSetupUnavailablePage, loginPage, dashboardPage
 import { appShell, escapeHtml, PORTAL_APPEARANCE_CLIENT_SOURCE } from './ui.js';
 import { renderGrowthHomeBody } from './growth-home.js';
 import { renderLead360Body } from './lead-360-view.js';
+import type { PortalFinanceDraftsService } from './finance-drafts-service.js';
+import { planningFromForm } from './finance-drafts-service.js';
+import { FIELDS, FinanceError } from '../integrations/mh196/planning-client.js';
+import { FINANCE_CLIENT_ROUTE, FINANCE_CLIENT_SOURCE, renderFinanceForm, renderFinanceReview, renderFinanceSaved } from './finance-drafts-view.js';
 import { JOURNEY_BOARD_CLIENT_SOURCE } from './journey-board-client.js';
 import {
   CONTENT_CALENDAR_CLIENT_ROUTE,
@@ -498,6 +502,7 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   /** Exact Property Predator authorization-code bridge; absent means no SSO routes or UI. */
   propertyPredatorSso?: PropertyPredatorSsoClient;
   crm: PortalCrmService;
+  financeDrafts?: PortalFinanceDraftsService;
   /** Exact, read-mostly conversion definition manager. Omitted until composed and ready. */
   journeys?: PortalJourneyManagerService;
   /** Authoritative cross-module operator queue; only assignment and snooze mutate its overlay. */
@@ -6798,6 +6803,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         // The legacy JSON portal has no permission boundary, so the panel
         // renders its honest "not composed" state there rather than a form
         // that could not record anything.
+        financeAvailable: deps.kind === 'postgres' && Boolean(deps.financeDrafts) && shell.workspace.canWrite,
         permissionCommandAvailable: deps.kind === 'postgres'
           && Boolean(deps.contactPermission),
         permissionCommandKey: randomUUID(),
@@ -6826,6 +6832,51 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
   }
 
+  if (deps.kind === 'postgres' && deps.financeDrafts && p === FINANCE_CLIENT_ROUTE && method === 'GET') {
+    res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' });
+    res.end(FINANCE_CLIENT_SOURCE); return;
+  }
+  const financeMatch = /^\/portal\/crm\/opportunities\/([^/]+)\/finance(?:\/(calculate|save))?$/.exec(p);
+  if (deps.kind === 'postgres' && deps.financeDrafts && financeMatch) {
+    const opportunityId = financeMatch[1]!, action = financeMatch[2];
+    const identity = crmIdentity(sessionToken, deps), csrf = portalCsrfToken(deps.sessionSecret, sessionToken);
+    try {
+      if (method === 'GET' && !action) {
+        const version = url.searchParams.has('version') ? Number(url.searchParams.get('version')) : undefined;
+        const snapshot = await deps.financeDrafts.snapshot(identity, opportunityId, version);
+        const shell = (deps.crm.workspaceShell ? await deps.crm.workspaceShell(identity) : await deps.crm.snapshot(identity));
+        if (!shell) throw new FinanceError(403, 'Your CRM workspace is no longer available.');
+        const body = url.searchParams.get('prepare') === '1'
+          ? renderFinanceForm(snapshot, await deps.financeDrafts.catalog(identity, opportunityId), url.searchParams.get('model') ?? 'btl', csrf)
+          : renderFinanceSaved(snapshot, version);
+        return sendHtml(res, 200, crmPage(shell, body, deps, csrf));
+      }
+      if (method === 'POST' && action) {
+        if (!String(req.headers['content-type'] ?? '').startsWith('application/x-www-form-urlencoded')) throw new FinanceError(415, 'Use the secure finance form.');
+        const form = await readForm(req, 256 * 1024);
+        if (!verifyPortalCsrf(deps.sessionSecret, sessionToken, form._csrf)) throw new FinanceError(403, 'Refresh the secure finance form. Nothing was saved.');
+        if (action === 'save') {
+          const saved = await deps.financeDrafts.save(identity, opportunityId, form.review_token ?? '');
+          res.writeHead(303, { location: `/portal/crm/opportunities/${opportunityId}/finance?version=${saved.version}`, 'cache-control': 'private, no-store' }); res.end(); return;
+        }
+        const snapshot = await deps.financeDrafts.snapshot(identity, opportunityId);
+        const shell = (deps.crm.workspaceShell ? await deps.crm.workspaceShell(identity) : await deps.crm.snapshot(identity));
+        if (!shell) throw new FinanceError(403, 'Your CRM workspace is no longer available.');
+        try {
+          const review = await deps.financeDrafts.calculate(identity, opportunityId, planningFromForm(form, FIELDS), form.assumptions_as_of ?? '', Number(form.opportunity_version), Number(form.latest_version));
+          return sendHtml(res, 200, crmPage(shell, renderFinanceReview(review, csrf), deps, csrf));
+        } catch (error) {
+          if (error instanceof FinanceError && error.status === 400) return sendHtml(res, 400, crmPage(shell, renderFinanceForm(snapshot, await deps.financeDrafts.catalog(identity, opportunityId), form.model ?? 'btl', csrf, form, error.message), deps, csrf));
+          throw error;
+        }
+      }
+      throw new FinanceError(405, 'Use the finance page controls for this action.');
+    } catch (error) {
+      const status = error instanceof FinanceError ? error.status : 503;
+      return sendHtml(res, status, portalStatusPage(deps, sessionToken, { title: 'Finance review not completed', message: error instanceof FinanceError ? error.message : 'Finance is temporarily unavailable. Your saved records have not been replaced.', active: 'crm', backHref: CRM_PORTAL_ROUTES.pipeline, backLabel: 'Return to pipeline' }));
+    }
+  }
+
   if (deps.crm && method === 'GET' && [CRM_PORTAL_ROUTES.contacts, CRM_PORTAL_ROUTES.pipeline, CRM_PORTAL_ROUTES.tasks].includes(p as never)) {
     const identity = crmIdentity(sessionToken, deps);
     try {
@@ -6839,7 +6890,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       const body = p === CRM_PORTAL_ROUTES.contacts
         ? renderCrmContactsBody(snapshot, { csrfToken, createLeadCommandKey: randomUUID(), notice })
         : p === CRM_PORTAL_ROUTES.pipeline
-          ? renderCrmPipelineBody(snapshot, { csrfToken, notice })
+          ? renderCrmPipelineBody(snapshot, { csrfToken, notice, financeAvailable: deps.kind === 'postgres' && Boolean(deps.financeDrafts) })
           : renderCrmTasksBody(snapshot, {
             csrfToken,
             notice,
