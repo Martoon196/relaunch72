@@ -400,25 +400,43 @@ export async function mountAgentBuilder(root, api, options = {}) {
     }
   } else provider.append(el('p', 'Approve the website facts to create the first shared knowledge version.'));
 
-  const testSection = card(root, 4, 'Test your agent', 'Request one paid call to your configured own number. Private chat is optional and can be skipped. Calls keep the two-minute delay, quiet hours, stop controls and pilot limits.');
+  const testSection = card(root, 4, 'Test your agent', 'Request one paid call to your saved own number now. Private chat is optional and can be skipped. This requests one test only; new-enquiry follow-up still waits at least two minutes.');
   testSection.append(el('h3', 'Call my own number'));
   const callForm = el('form');
   callForm.className = 'agent-builder-call';
-  const own = field(callForm, 'own_contact_confirmed', 'Call only my configured own-contact pilot number.', '', 'checkbox');
+  const own = field(callForm, 'own_contact_confirmed', 'Call only my saved, verified own test number.', '', 'checkbox');
   own.required = true;
   const consent = field(callForm, 'ai_call_consent', 'I request this paid automated AI test call and agree to the configured call disclosure and recording policy.', '', 'checkbox');
   consent.required = true;
   const capturedVersionId = version?.id;
-  submit(callForm, 'Queue one call to me', async () => {
-    if (!own.checked || !consent.checked) throw Error('Confirm your own-contact test and AI call permission.');
-    const result = await api('/api/agent-builder/test-call', { method: 'POST', body: { version_id: capturedVersionId, own_contact_confirmed: true, ai_call_consent: true, confirmation: 'PLACE ONE PAID TEST CALL TO MY OWN NUMBER' } });
+  let callRequestId;
+  const callButton = submit(callForm, 'Call me', async () => {
+    if (!callRequestId) {
+      if (!own.checked || !consent.checked) throw Error('Confirm your own-contact test and AI call permission.');
+      if (!globalThis.crypto?.randomUUID) throw Error('Open this page in a secure HTTPS browser before requesting a call.');
+      callRequestId = globalThis.crypto.randomUUID();
+      own.disabled = true;
+      consent.disabled = true;
+    }
+    callButton.textContent = 'Check this call request';
+    const result = await api('/api/agent-builder/test-call', { method: 'POST', body: { version_id: capturedVersionId, own_contact_confirmed: true, ai_call_consent: true, confirmation: 'PLACE ONE PAID TEST CALL TO MY OWN NUMBER', mode: 'call_me', request_id: callRequestId }, guard: active });
     if (!active()) return;
-    message.textContent = `Test queued; earliest call in two minutes, subject to eligibility and contact hours.${result.job_id ? ` Job: ${result.job_id}.` : ''} A queued job is not proof that a call was made.`;
+    if (result.one_call_only !== true || result.operation_id !== callRequestId || typeof result.job_id !== 'string') throw Error('The server did not confirm this one-call request. Use this button to check the same request or review Activity; no new request ID will be created.');
+    const status = result.status;
+    if (['blocked', 'failed', 'cancelled', 'uncertain'].includes(status)) {
+      message.textContent = `This call request is ${stateLabel(status)}. Review Activity & queue before requesting another call. Request: ${result.job_id}.`;
+    } else if (status === 'completed') {
+      message.textContent = `This one-call request is complete. Open Activity & queue for its actual provider result. Request: ${result.job_id}.`;
+    } else if (status === 'awaiting_outcome') {
+      message.textContent = `Your one-call test was submitted and is awaiting its verified provider outcome. Request: ${result.job_id}.`;
+    } else if (['queued', 'processing'].includes(status)) {
+      message.textContent = `One call requested to your saved test number. It will run as soon as its final eligibility checks pass. Request: ${result.job_id}. A queued request is not proof that a call was made.`;
+    } else throw Error('The call request has an unknown status. Check the same request or Activity before continuing.');
     own.checked = false;
     consent.checked = false;
-  }, { disabled: !published || data.pilot_ready !== true });
-  testSection.append(callForm, sectionLink('Review the configured own number and permissions →', 'live'), sectionLink('See actual queue and call outcomes →', 'activity'));
-  if (published && data.pilot_ready !== true) testSection.append(el('p', 'Complete the verified own-contact pilot setup before requesting a real test call.'));
+  }, { disabled: !published || data.call_me_ready !== true, pendingLabel: 'Checking your one-call request…' });
+  testSection.append(callForm, sectionLink('See actual queue and call outcomes →', 'activity'));
+  if (published && data.call_me_ready !== true) testSection.append(el('p', data.call_me_blocker || 'Verify the caller and save your own-contact attestation before requesting this one-call test.'));
 
   testSection.append(el('h3', 'Optional private chat'));
   const chatForm = el('form');

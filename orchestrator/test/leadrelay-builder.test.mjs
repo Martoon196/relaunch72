@@ -35,6 +35,7 @@ const formFor = (root, name) => find(root, node => node.tag === 'form' && input(
 const submit = form => form.onsubmit({ preventDefault() {} });
 const deferred = () => { let resolve, reject; const promise = new Promise((done, fail) => { resolve = done; reject = fail; }); return { resolve, reject, promise }; };
 const readyDraft = { id: 'draft-a', status: 'ready', source_url: 'https://example.com/', pages: [{ url: 'https://example.com/', title: 'A business', content: 'Reviewed business facts.' }] };
+const callReceipt = request => ({ queued: true, job_id: 'job-a', operation_id: request.body.request_id, status: 'queued', earliest_delay_seconds: 0, maximum_call_seconds: 180, paid_provider_usage: true, one_call_only: true });
 
 async function harness(initial, onWrite = async () => ({})) {
   const saved = { document: globalThis.document, setTimeout: globalThis.setTimeout, scrollTo: globalThis.scrollTo, scrollX: globalThis.scrollX, scrollY: globalThis.scrollY };
@@ -346,8 +347,8 @@ test('lost initial chat response is recovered with the same request ID and origi
   } finally { h.restore(); }
 });
 
-test('phone test is first and can queue without sending an optional private chat', async () => {
-  const h = await harness({ version: { id: 'version-a', status: 'published' }, pilot_ready: true }, async () => ({ queued: true }));
+test('Call me is first and works from server-owned readiness without an optional chat or settings journey', async () => {
+  const h = await harness({ version: { id: 'version-a', status: 'published' }, call_me_ready: true, pilot_ready: false }, async (_path, request) => callReceipt(request));
   try {
     const section = find(h.root, node => node.tag === 'section' && byText(node, 'Test your agent'));
     const callForm = formFor(section, 'own_contact_confirmed');
@@ -356,7 +357,9 @@ test('phone test is first and can queue without sending an optional private chat
     assert.ok(byText(section, 'Optional private chat'));
     assert.match(section.textContent, /Private chat is optional and can be skipped/);
     assert.equal(input(chatForm, 'message').value, '');
-    assert.equal(byText(callForm, 'Queue one call to me').disabled, false);
+    assert.equal(byText(callForm, 'Call me').disabled, false);
+    assert.match(section.textContent, /new-enquiry follow-up still waits at least two minutes/);
+    assert.equal(byText(section, 'Review the configured own number and permissions →'), undefined);
     input(callForm, 'own_contact_confirmed').checked = true;
     input(callForm, 'ai_call_consent').checked = true;
     await submit(callForm);
@@ -366,8 +369,8 @@ test('phone test is first and can queue without sending an optional private chat
   } finally { h.restore(); }
 });
 
-test('paid test call cannot post before both explicit own-contact and AI permissions', async () => {
-  const h = await harness({ version: { id: 'version-a', status: 'published' }, pilot_ready: true }, async () => ({ job_id: 'job-a' }));
+test('paid Call me request cannot post before both explicit own-contact and AI permissions', async () => {
+  const h = await harness({ version: { id: 'version-a', status: 'published' }, call_me_ready: true }, async (_path, request) => callReceipt(request));
   try {
     const form = formFor(h.root, 'own_contact_confirmed');
     await submit(form);
@@ -375,8 +378,71 @@ test('paid test call cannot post before both explicit own-contact and AI permiss
     input(form, 'own_contact_confirmed').checked = true;
     input(form, 'ai_call_consent').checked = true;
     await submit(form);
-    assert.deepEqual(h.writes[0].body, { version_id: 'version-a', own_contact_confirmed: true, ai_call_consent: true, confirmation: 'PLACE ONE PAID TEST CALL TO MY OWN NUMBER' });
+    assert.deepEqual(h.writes[0].body, { version_id: 'version-a', own_contact_confirmed: true, ai_call_consent: true, confirmation: 'PLACE ONE PAID TEST CALL TO MY OWN NUMBER', mode: 'call_me', request_id: h.writes[0].body.request_id });
+    assert.match(h.writes[0].body.request_id, /^[a-f0-9-]{36}$/);
     assert.match(find(h.root, node => node.className === 'agent-builder-message').textContent, /queued.*not proof/);
+  } finally { h.restore(); }
+});
+
+test('Call me holds when authoritative readiness is absent or a verified caller/contact prerequisite is blocked', async () => {
+  for (const state of [{ pilot_ready: true }, { call_me_ready: false, call_me_blocker: 'Verify the saved owned caller first' }]) {
+    const h = await harness({ version: { id: 'version-a', status: 'published' }, ...state });
+    try {
+      const form = formFor(h.root, 'own_contact_confirmed');
+      assert.equal(byText(form, 'Call me').disabled, true);
+      input(form, 'own_contact_confirmed').checked = true; input(form, 'ai_call_consent').checked = true;
+      await submit(form); assert.deepEqual(h.writes, []);
+      if (state.call_me_blocker) assert.ok(byText(h.root, state.call_me_blocker));
+    } finally { h.restore(); }
+  }
+});
+
+test('a lost Call me response retains one stable request ID for checking instead of creating another call intent', async () => {
+  let requests = 0;
+  const h = await harness({ version: { id: 'version-a', status: 'published' }, call_me_ready: true }, async (_path, request) => {
+    if (++requests === 1) throw Error('Call request response was lost');
+    return callReceipt(request);
+  });
+  try {
+    const form = formFor(h.root, 'own_contact_confirmed');
+    input(form, 'own_contact_confirmed').checked = true; input(form, 'ai_call_consent').checked = true;
+    await submit(form);
+    const original = h.writes[0].body;
+    assert.ok(byText(form, 'Check this call request'));
+    assert.equal(input(form, 'own_contact_confirmed').disabled, true);
+    assert.equal(input(form, 'ai_call_consent').disabled, true);
+    await submit(form);
+    assert.deepEqual(h.writes[1].body, original);
+    assert.equal(h.writes[1].body.mode, 'call_me');
+    assert.match(find(h.root, node => node.className === 'agent-builder-message').textContent, /One call requested/);
+  } finally { h.restore(); }
+});
+
+test('pending Call me is single flight and a different mounted business cannot receive its result', async () => {
+  const wait = deferred();
+  const h = await harness({ version: { id: 'version-a', status: 'published' }, call_me_ready: true }, async () => wait.promise);
+  try {
+    const form = formFor(h.root, 'own_contact_confirmed');
+    input(form, 'own_contact_confirmed').checked = true; input(form, 'ai_call_consent').checked = true;
+    const pending = submit(form); await submit(form);
+    assert.equal(h.writes.length, 1);
+    assert.equal(h.writes[0].guard(), true);
+    h.setStatus({ business_name: 'Another business' }); await mountAgentBuilder(h.root, h.api);
+    assert.equal(h.writes[0].guard(), false);
+    wait.resolve(callReceipt(h.writes[0])); await pending;
+    assert.equal(find(h.root, node => node.className === 'agent-builder-message').textContent, '');
+  } finally { h.restore(); }
+});
+
+test('Call me does not present an unbound or non-one-shot receipt as a successful request', async () => {
+  const h = await harness({ version: { id: 'version-a', status: 'published' }, call_me_ready: true }, async (_path, request) => ({ ...callReceipt(request), operation_id: 'different-operation' }));
+  try {
+    const form = formFor(h.root, 'own_contact_confirmed');
+    input(form, 'own_contact_confirmed').checked = true; input(form, 'ai_call_consent').checked = true;
+    await submit(form);
+    assert.match(find(h.root, node => node.className === 'agent-builder-message').textContent, /did not confirm this one-call request/);
+    const section = find(h.root, node => node.tag === 'section' && byText(node, 'Test your agent'));
+    assert.equal(section.attributes['data-complete'], undefined);
   } finally { h.restore(); }
 });
 
@@ -411,7 +477,6 @@ test('HQ embedding can provide real LeadRelay section URLs without hash navigati
   try {
     await mountAgentBuilder(h.root, h.api, { sectionUrl: section => `https://leadrelay.example/#${section}` });
     assert.equal(byText(h.root, 'Secure connections →').href, 'https://leadrelay.example/#live');
-    assert.equal(byText(h.root, 'Review the configured own number and permissions →').href, 'https://leadrelay.example/#live');
     assert.equal(byText(h.root, 'Manage existing approved knowledge →').href, 'https://leadrelay.example/#knowledge');
   } finally { h.restore(); }
 });

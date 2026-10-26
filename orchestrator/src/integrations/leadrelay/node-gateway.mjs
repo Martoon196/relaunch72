@@ -28,7 +28,32 @@ const deny=(status,detail)=>{throw new GatewayError(status,detail);};
 
 const CONNECTION_PATH = '/api/agent-builder/connection';
 const connectionPaths = new Set([CONNECTION_PATH, CONNECTION_PATH+'/voices', CONNECTION_PATH+'/phone-numbers', CONNECTION_PATH+'/verify']);
+const TEST_CALL_PATH = '/api/agent-builder/test-call';
 const isRecord = value => !!value && typeof value === 'object' && !Array.isArray(value);
+function validateOwnerCallBody(body) {
+  // Legacy queued tests keep their existing server contract. The one-shot mode
+  // has no authority to choose contacts, caller bindings or temporary settings.
+  if (!isRecord(body) || !Object.hasOwn(body,'mode')) return;
+  const allowed = ['version_id','own_contact_confirmed','ai_call_consent','confirmation','mode','request_id'];
+  if (body.mode !== 'call_me' || Object.keys(body).some(key=>!allowed.includes(key))) deny(400,'Unsupported owner call fields');
+  if (typeof body.version_id !== 'string' || !body.version_id.trim() || body.version_id.length > 36
+      || body.own_contact_confirmed !== true || body.ai_call_consent !== true
+      || body.confirmation !== 'PLACE ONE PAID TEST CALL TO MY OWN NUMBER'
+      || typeof body.request_id !== 'string' || !/^[A-Za-z0-9_-]{16,100}$/.test(body.request_id)) deny(400,'Explicit own-contact call confirmation and a stable request identifier are required');
+}
+
+function safeOwnerCallReceipt(data, body, serverKey) {
+  const invalid = () => deny(502,'Unexpected own-contact call receipt; check the same request before retrying');
+  const states = ['queued','processing','awaiting_outcome','completed','cancelled','blocked','failed','uncertain'];
+  if (!isRecord(data) || data.queued !== true || data.operation_id !== body.request_id
+      || typeof data.job_id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(data.job_id)
+      || !states.includes(data.status) || data.earliest_delay_seconds !== 0
+      || data.maximum_call_seconds !== 180 || data.paid_provider_usage !== true || data.one_call_only !== true) invalid();
+  const result = {queued:true,job_id:data.job_id,operation_id:data.operation_id,status:data.status,
+    earliest_delay_seconds:0,maximum_call_seconds:180,paid_provider_usage:true,one_call_only:true};
+  if (typeof serverKey === 'string' && Object.values(result).some(value=>typeof value === 'string' && value.includes(serverKey))) invalid();
+  return result;
+}
 function validateConnectionBody(path, body) {
   if (path === CONNECTION_PATH) {
     if (body !== undefined) deny(400,'Connection status does not accept a payload');
@@ -129,6 +154,7 @@ export async function sendControl(installation,method,path,body,fetchImpl=fetch)
   // may supply an upstream origin, path, query, credential or method override.
   if (!Object.entries(OPERATIONS).some(([action,target]) => action.startsWith(method+':') && target === path)) deny(404,'Control operation not found');
   if (connectionPaths.has(path)) validateConnectionBody(path,body);
+  if (path === TEST_CALL_PATH) validateOwnerCallBody(body);
   const upstreamPath = path.startsWith('/api/agent-builder') ? path : '/api/control/'+path;
   const payload=body===undefined?undefined:JSON.stringify(body);
   if(payload&&Buffer.byteLength(payload)>MAX_BYTES) deny(413,'Request exceeds limit');
@@ -145,7 +171,9 @@ export async function sendControl(installation,method,path,body,fetchImpl=fetch)
     if(!(r.headers.get('content-type')||'').startsWith('application/json')){await r.body?.cancel();deny(502,'Unexpected LeadRelay response type');}
     const data=JSON.parse(await boundedResponse(r));
     // Never forward any upstream headers/cookies, raw error bodies or credentials.
-    return connectionPaths.has(path) ? safeConnectionResponse(path,data,[installation.key,body?.secret,body?.webhook_secret]) : data;
+    if (connectionPaths.has(path)) return safeConnectionResponse(path,data,[installation.key,body?.secret,body?.webhook_secret]);
+    if (path === TEST_CALL_PATH && body?.mode === 'call_me') return safeOwnerCallReceipt(data,body,installation.key);
+    return data;
   }catch(e){if(e instanceof GatewayError)throw e;deny(502,'LeadRelay unavailable; no automatic retry was attempted');}
 }
 
@@ -173,6 +201,7 @@ export function createDispatcher({installations,authorize,verifyCsrf,transport=s
       if(!body||typeof body!=='object'||Array.isArray(body))deny(400,'Expected a JSON object');
       if(Buffer.byteLength(JSON.stringify(body))>MAX_BYTES)deny(413,'Request exceeds limit');
       if (connectionPaths.has(OPERATIONS[action])) validateConnectionBody(OPERATIONS[action],body);
+      else if (OPERATIONS[action] === TEST_CALL_PATH && Object.hasOwn(body,'mode')) validateOwnerCallBody(body);
       else if(match[2].startsWith('agent-') && ['installationId','workspaceId','userId','base_url','key','key_env','secret','webhook_secret','provider_key','from_number','to_number','phone','own_phone','recipient'].some(key => Object.hasOwn(body,key))) deny(400,'Agent authority, credentials and call destination are server-controlled');
     }
     return transport(grant.item,method,OPERATIONS[action],body);

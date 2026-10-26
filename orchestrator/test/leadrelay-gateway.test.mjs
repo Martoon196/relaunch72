@@ -210,3 +210,64 @@ test('Owned caller lookup failures never echo supplier credentials or retry',asy
   await assert.rejects(sendControl(installs().get('key-properties'),'POST','/api/agent-builder/connection/phone-numbers',{secret:providerSecret},async()=>{calls++;return new Response(providerSecret,{status:400});}),e=>e.status===400&&/numbers could not be read/.test(e.message)&&!e.message.includes(providerSecret));
   assert.equal(calls,1);
 });
+
+const callMeBody={version_id:'version-a',own_contact_confirmed:true,ai_call_consent:true,
+  confirmation:'PLACE ONE PAID TEST CALL TO MY OWN NUMBER',mode:'call_me',request_id:'9aca7ecd-9a94-43e0-9414-8af424b29c13'};
+const callMeReceipt={queued:true,job_id:'job-a',operation_id:callMeBody.request_id,status:'queued',
+  earliest_delay_seconds:0,maximum_call_seconds:180,paid_provider_usage:true,one_call_only:true};
+test('Call me reuses only the explicit existing test grant and CSRF without any settings authority',async()=>{
+  const path='/installations/key-properties/agent-test-call';let sends=0;
+  const transport=async(_i,_m,target,body)=>{sends++;return {target,body};};
+  const allowed=build({authorize:async who=>who.workspaceId==='approved-workspace'?['POST:agent-test-call']:[],transport});
+  const result=await allowed({identity,method:'POST',path,body:callMeBody});
+  assert.equal(result.target,'/api/agent-builder/test-call');assert.deepEqual(result.body,callMeBody);
+  assert.equal(sends,1);
+  for(const options of [
+    {authorize:async()=>['PUT:settings','POST:agent-publish']},
+    {authorize:async()=>['POST:agent-test-call'],verifyCsrf:async()=>false},
+  ]) await assert.rejects(build({...options,transport})({identity,method:'POST',path,body:callMeBody}),e=>e.status===403);
+  await assert.rejects(allowed({identity:{...identity,workspaceId:'other'},method:'POST',path,body:callMeBody}),e=>e.status===404);
+  assert.equal(sends,1);
+});
+
+test('Call me permits no destination, binding or temporary-control override and requires a stable intent',async()=>{
+  const fn=build(),path='/installations/key-properties/agent-test-call';
+  for(const field of ['phone','own_phone','to_number','from_number','recipient','workspaceId','userId','secret','provider_key','agent_id','calendar_id','paused','start_hour','weekdays','daily_call_limit','live_outreach','maximum_call_seconds']) {
+    await assert.rejects(fn({identity,method:'POST',path,body:{...callMeBody,[field]:'override'}}),e=>e.status===400);
+  }
+  for(const values of [{mode:'immediate'},{request_id:undefined},{request_id:'short'},{request_id:'invalid request identifier'},{own_contact_confirmed:false},{ai_call_consent:false},{confirmation:'call someone'},{version_id:''}]) {
+    const body=JSON.parse(JSON.stringify({...callMeBody,...values}));
+    await assert.rejects(fn({identity,method:'POST',path,body}),e=>e.status===400);
+  }
+  const {mode,request_id,...legacy}=callMeBody;
+  const queued=await fn({identity,method:'POST',path,body:legacy});
+  assert.deepEqual(queued.body,legacy); // The ordinary two-minute route is unchanged.
+});
+
+test('Call me projects only a bounded matching receipt and preserves the same stable request identifier',async()=>{
+  let request;
+  const result=await sendControl(installs().get('key-properties'),'POST','/api/agent-builder/test-call',callMeBody,async(url,options)=>{
+    request={url,options};
+    return jsonResponse({...callMeReceipt,bindings:{secret:key},secret:key,own_phone:'+447700900123',previous_settings:{paused:true},provider_call_id:'unverified-extra-id'});
+  });
+  assert.deepEqual(result,callMeReceipt);
+  assert.equal(request.url,'https://leadrelay.example.com/api/agent-builder/test-call');
+  assert.deepEqual(JSON.parse(request.options.body),callMeBody);
+  assert.equal(request.options.redirect,'error');assert.equal(request.options.headers.authorization,'Bearer '+key);
+  assert.equal(Object.hasOwn(result,'bindings'),false);assert.equal(Object.hasOwn(result,'own_phone'),false);
+  for(const status of ['queued','processing','awaiting_outcome','completed','cancelled','blocked','failed','uncertain']) {
+    const replay=await sendControl(installs().get('key-properties'),'POST','/api/agent-builder/test-call',callMeBody,async()=>jsonResponse({...callMeReceipt,status}));
+    assert.equal(replay.operation_id,callMeBody.request_id);assert.equal(replay.status,status);
+  }
+});
+
+test('Call me refuses mismatched or unsafe receipts without retrying provider submission',async()=>{
+  for(const change of [{operation_id:'another-operation'}, {job_id:key}, {status:'call_started_without_receipt'}, {queued:false}, {earliest_delay_seconds:120}, {maximum_call_seconds:3600}, {paid_provider_usage:false}, {one_call_only:false}]) {
+    let sends=0;
+    await assert.rejects(sendControl(installs().get('key-properties'),'POST','/api/agent-builder/test-call',callMeBody,async()=>{sends++;return jsonResponse({...callMeReceipt,...change});}),e=>e.status===502&&!e.message.includes(key));
+    assert.equal(sends,1);
+  }
+  let fetched=false;
+  await assert.rejects(sendControl(installs().get('key-properties'),'POST','/api/agent-builder/test-call',{...callMeBody,paused:false},async()=>{fetched=true;}),e=>e.status===400);
+  assert.equal(fetched,false);
+});
