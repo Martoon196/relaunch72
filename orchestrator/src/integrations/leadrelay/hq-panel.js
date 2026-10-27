@@ -143,7 +143,7 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
     const links = {};
     for (const section of status.sections || []) {
       const id = section.id || (() => { try { return new URL(section.url).hash.slice(1); } catch { return ''; } })();
-      if (['live','activity','settings','control'].includes(id)) {
+      if (['live','activity','calls','settings','control'].includes(id)) {
         try { const u = new URL(section.url); if (u.protocol === 'https:') links[id] = u.href; } catch {}
       }
     }

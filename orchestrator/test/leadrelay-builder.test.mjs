@@ -45,15 +45,16 @@ async function harness(initial, onWrite = async () => ({})) {
   const scrolls = [];
   globalThis.scrollTo = options => { scrolls.push(options); };
   let status = initial;
+  const reads = [];
   const writes = [];
   const api = async (path, options) => {
-    if (!options) return status;
+    if (!options) { reads.push(path); return status; }
     writes.push({ path, ...options });
     return onWrite(path, options);
   };
   const root = new Element('root');
   await mountAgentBuilder(root, api);
-  return { root, api, writes, timers, scrolls, setStatus: next => { status = next; }, restore: () => Object.assign(globalThis, saved) };
+  return { root, api, reads, writes, timers, scrolls, setStatus: next => { status = next; }, restore: () => Object.assign(globalThis, saved) };
 }
 
 test('ready website facts require explicit review and stay text, never HTML', async () => {
@@ -395,6 +396,125 @@ test('Call me holds when authoritative readiness is absent or a verified caller/
       if (state.call_me_blocker) assert.ok(byText(h.root, state.call_me_blocker));
     } finally { h.restore(); }
   }
+});
+
+test('section 4 refresh enables authoritative readiness with a GET while preserving permissions and the viewport', async () => {
+  const version = { id: 'version-a', status: 'published' };
+  const h = await harness({ version, call_me_ready: false, call_me_blocker: 'Another call request is outstanding; reconcile it before requesting another' });
+  try {
+    const form = formFor(h.root, 'own_contact_confirmed');
+    const button = byText(form, 'Call me');
+    input(form, 'own_contact_confirmed').checked = true;
+    input(form, 'ai_call_consent').checked = true;
+    globalThis.scrollY = 2000;
+    assert.equal(button.disabled, true);
+    assert.equal(byText(h.root, 'Refresh an outstanding provider result in Calls →').href, '#calls');
+    h.setStatus({ version, call_me_ready: true, pilot_ready: false });
+    await byText(h.root, 'Refresh call readiness').onclick();
+    assert.equal(formFor(h.root, 'own_contact_confirmed'), form);
+    assert.equal(button.disabled, false);
+    assert.equal(input(form, 'own_contact_confirmed').checked, true);
+    assert.equal(input(form, 'ai_call_consent').checked, true);
+    assert.deepEqual(h.reads, ['/api/agent-builder', '/api/agent-builder']);
+    assert.deepEqual(h.writes, []);
+    assert.deepEqual(h.scrolls, []);
+    assert.equal(globalThis.scrollY, 2000);
+    assert.match(h.root.textContent, /Ready for one paid call/);
+  } finally { h.restore(); }
+});
+
+test('section 4 readiness refresh is single flight and cannot update a different business selection', async () => {
+  const h = await harness({ version: { id: 'version-a', status: 'published' }, call_me_ready: false });
+  try {
+    const pending = deferred();
+    h.setStatus(pending.promise);
+    const refresh = byText(h.root, 'Refresh call readiness');
+    const operation = refresh.onclick();
+    await refresh.onclick();
+    assert.equal(refresh.disabled, true);
+    assert.equal(h.reads.length, 2);
+    h.setStatus({ business_name: 'Business B', version: { id: 'version-b', status: 'published' }, call_me_ready: false, call_me_blocker: 'Business B needs its own verified caller' });
+    await mountAgentBuilder(h.root, h.api);
+    const current = formFor(h.root, 'own_contact_confirmed');
+    pending.resolve({ version: { id: 'version-a', status: 'published' }, call_me_ready: true });
+    await operation;
+    assert.equal(formFor(h.root, 'own_contact_confirmed'), current);
+    assert.equal(byText(current, 'Call me').disabled, true);
+    assert.ok(byText(h.root, 'Business B needs its own verified caller'));
+    assert.deepEqual(h.writes, []);
+  } finally { h.restore(); }
+});
+
+test('readiness refresh preserves an existing lost-response request and never generates or posts another nonce', async () => {
+  const version = { id: 'version-a', status: 'published' };
+  let requests = 0;
+  const h = await harness({ version, call_me_ready: true }, async (_path, request) => {
+    if (++requests === 1) throw Error('Call request response was lost');
+    return callReceipt(request);
+  });
+  try {
+    const form = formFor(h.root, 'own_contact_confirmed');
+    input(form, 'own_contact_confirmed').checked = true;
+    input(form, 'ai_call_consent').checked = true;
+    await submit(form);
+    const original = structuredClone(h.writes[0].body);
+    h.setStatus({ version, call_me_ready: false, call_me_blocker: 'Another call is outstanding' });
+    await byText(h.root, 'Refresh call readiness').onclick();
+    assert.equal(h.writes.length, 1);
+    assert.equal(byText(form, 'Check this call request').disabled, false);
+    assert.match(h.root.textContent, /existing one-call request is preserved/);
+    await submit(form);
+    assert.deepEqual(h.writes[1].body, original);
+    assert.equal(input(form, 'own_contact_confirmed').disabled, true);
+    assert.equal(input(form, 'ai_call_consent').disabled, true);
+  } finally { h.restore(); }
+});
+
+test('failed readiness refresh holds fresh calls, preserves the form and offers a read-only retry', async () => {
+  const version = { id: 'version-a', status: 'published' };
+  const h = await harness({ version, call_me_ready: true });
+  try {
+    const form = formFor(h.root, 'own_contact_confirmed');
+    input(form, 'own_contact_confirmed').checked = true;
+    const pending = deferred(); h.setStatus(pending.promise);
+    const operation = byText(h.root, 'Refresh call readiness').onclick();
+    pending.reject(Error('Readiness service unavailable'));
+    await operation;
+    assert.equal(formFor(h.root, 'own_contact_confirmed'), form);
+    assert.equal(input(form, 'own_contact_confirmed').checked, true);
+    assert.equal(byText(form, 'Call me').disabled, true);
+    const feedback = find(h.root, node => node.attributes.role === 'alert' && /Readiness service unavailable/.test(node.textContent));
+    assert.ok(feedback);
+    h.setStatus({ version, call_me_ready: true });
+    await byText(h.root, 'Refresh call readiness').onclick();
+    assert.equal(feedback.attributes.role, 'status');
+    assert.equal(byText(form, 'Call me').disabled, false);
+    assert.deepEqual(h.writes, []);
+  } finally { h.restore(); }
+});
+
+test('section 4 explains unpublished agents and refresh does not silently bind a changed version', async () => {
+  const h = await harness({ version: { id: 'version-a', status: 'approved' }, call_me_ready: false });
+  try {
+    const form = formFor(h.root, 'own_contact_confirmed');
+    assert.equal(byText(form, 'Call me').disabled, true);
+    assert.match(h.root.textContent, /Create and publish your approved agent in section 3/);
+    h.setStatus({ version: { id: 'version-b', status: 'published' }, call_me_ready: true });
+    await byText(h.root, 'Refresh call readiness').onclick();
+    assert.equal(formFor(h.root, 'own_contact_confirmed'), form);
+    assert.equal(byText(form, 'Call me').disabled, true);
+    assert.match(h.root.textContent, /agent version changed.*Refresh status/);
+    assert.deepEqual(h.writes, []);
+  } finally { h.restore(); }
+});
+
+test('section 4 provider-result link uses the configured installation link', async () => {
+  const h = await harness({ version: { id: 'version-a', status: 'published' }, call_me_ready: false });
+  try {
+    await mountAgentBuilder(h.root, h.api, { links: { calls: 'https://leadrelay.example/#calls' } });
+    assert.equal(byText(h.root, 'Refresh an outstanding provider result in Calls →').href, 'https://leadrelay.example/#calls');
+    assert.deepEqual(h.writes, []);
+  } finally { h.restore(); }
 });
 
 test('a lost Call me response retains one stable request ID for checking instead of creating another call intent', async () => {

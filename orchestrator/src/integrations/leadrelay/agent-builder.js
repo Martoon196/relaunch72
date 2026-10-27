@@ -230,6 +230,7 @@ export async function mountAgentBuilder(root, api, options = {}) {
   } else pollStarted.delete(root);
 
   function submit(form, label, action, { disabled = false, pendingLabel = 'Working…' } = {}) {
+    const isDisabled = () => typeof disabled === 'function' ? disabled() : disabled;
     const feedback = el('p');
     feedback.className = 'agent-builder-form-message';
     feedback.setAttribute('role', 'status');
@@ -238,7 +239,7 @@ export async function mountAgentBuilder(root, api, options = {}) {
     const button = el('button', label);
     button.type = 'submit';
     button.className = 'btn primary';
-    button.disabled = disabled;
+    button.disabled = isDisabled();
     form.append(feedback, button);
     let pending = false;
     form.onsubmit = async event => {
@@ -266,7 +267,7 @@ export async function mountAgentBuilder(root, api, options = {}) {
         }
       } finally {
         pending = false;
-        if (active()) button.disabled = disabled;
+        if (active()) button.disabled = isDisabled();
       }
     };
     return button;
@@ -411,6 +412,9 @@ export async function mountAgentBuilder(root, api, options = {}) {
   consent.required = true;
   const capturedVersionId = version?.id;
   let callRequestId;
+  let callReady = data.call_me_ready === true;
+  let callPublished = published;
+  let checkingCallReadiness = false;
   const callButton = submit(callForm, 'Call me', async () => {
     if (!callRequestId) {
       if (!own.checked || !consent.checked) throw Error('Confirm your own-contact test and AI call permission.');
@@ -438,9 +442,60 @@ export async function mountAgentBuilder(root, api, options = {}) {
     } else throw Error('The call request has an unknown status. Check the same request or Activity before continuing.');
     own.checked = false;
     consent.checked = false;
-  }, { disabled: !published || data.call_me_ready !== true, pendingLabel: 'Checking your one-call request…' });
-  testSection.append(callForm, sectionLink('See actual queue and call outcomes →', 'activity'));
-  if (published && data.call_me_ready !== true) testSection.append(el('p', data.call_me_blocker || 'Verify the caller and save your own-contact attestation before requesting this one-call test.'));
+  }, { disabled: () => checkingCallReadiness || (!callRequestId && (!callPublished || !callReady)), pendingLabel: 'Checking your one-call request…' });
+  const callReadiness = el('p');
+  callReadiness.setAttribute('role', 'status');
+  callReadiness.setAttribute('aria-live', 'polite');
+  const callReadinessText = state => {
+    if (callRequestId) return 'Your existing one-call request is preserved. Use Check this call request to read its status; it will not create another request.';
+    if (!callPublished) return 'Create and publish your approved agent in section 3 before requesting a call. Your latest changes must be published too.';
+    return callReady
+      ? 'Ready for one paid call to your saved own number. Confirm both permissions, then click Call me.'
+      : state.call_me_blocker || 'Verify the caller and save your own-contact attestation before requesting this one-call test.';
+  };
+  callReadiness.textContent = callReadinessText(data);
+  const refreshCallReadiness = el('button', 'Refresh call readiness');
+  refreshCallReadiness.type = 'button';
+  refreshCallReadiness.className = 'btn small';
+  refreshCallReadiness.onclick = async () => {
+    if (!active() || checkingCallReadiness) return;
+    checkingCallReadiness = true;
+    refreshCallReadiness.disabled = true;
+    callButton.disabled = true;
+    callReadiness.setAttribute('role', 'status');
+    callReadiness.textContent = 'Checking whether your saved agent can receive another own-contact test. No call is being placed.';
+    try {
+      const current = await api('/api/agent-builder');
+      if (!active()) return;
+      const currentVersion = current.version || current.current_version;
+      if (currentVersion?.id !== capturedVersionId) {
+        callReady = false;
+        callPublished = false;
+        callReadiness.textContent = callRequestId
+          ? callReadinessText(current)
+          : 'Your agent version changed. Use Refresh status to load the current version before requesting a call.';
+      } else {
+        callPublished = currentVersion?.status === 'published';
+        callReady = current.call_me_ready === true;
+        callReadiness.textContent = callReadinessText(current);
+      }
+    } catch (error) {
+      if (active()) {
+        callReady = false;
+        callReadiness.textContent = `${error?.message || 'Call readiness could not be checked.'} Refresh call readiness again before requesting a new call. Your existing request, if any, is preserved.`;
+        callReadiness.setAttribute('role', 'alert');
+      }
+    } finally {
+      checkingCallReadiness = false;
+      if (active()) {
+        refreshCallReadiness.disabled = false;
+        callButton.disabled = !callRequestId && (!callPublished || !callReady);
+      }
+    }
+  };
+  testSection.append(callForm, callReadiness, refreshCallReadiness,
+    sectionLink('Refresh an outstanding provider result in Calls →', 'calls'),
+    sectionLink('See actual queue and call outcomes →', 'activity'));
 
   testSection.append(el('h3', 'Optional private chat'));
   const chatForm = el('form');
