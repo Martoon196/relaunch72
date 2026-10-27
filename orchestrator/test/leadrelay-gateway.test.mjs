@@ -255,10 +255,15 @@ test('Call me projects only a bounded matching receipt and preserves the same st
   assert.deepEqual(JSON.parse(request.options.body),callMeBody);
   assert.equal(request.options.redirect,'error');assert.equal(request.options.headers.authorization,'Bearer '+key);
   assert.equal(Object.hasOwn(result,'bindings'),false);assert.equal(Object.hasOwn(result,'own_phone'),false);
-  for(const status of ['queued','processing','awaiting_outcome','completed','cancelled','blocked','failed','uncertain']) {
-    const replay=await sendControl(installs().get('key-properties'),'POST','/api/agent-builder/test-call',callMeBody,async()=>jsonResponse({...callMeReceipt,status}));
+  for(const status of ['queued','processing','awaiting_outcome','completed','cancelled','blocked','failed','uncertain','skipped']) {
+    const queued=['queued','processing','awaiting_outcome'].includes(status);
+    const replay=await sendControl(installs().get('key-properties'),'POST','/api/agent-builder/test-call',callMeBody,async()=>jsonResponse({...callMeReceipt,status,queued}));
     assert.equal(replay.operation_id,callMeBody.request_id);assert.equal(replay.status,status);
+    assert.equal(replay.queued,queued);
   }
+  const {job_id,...cancelled}=callMeReceipt;
+  const expired=await sendControl(installs().get('key-properties'),'POST','/api/agent-builder/test-call',callMeBody,async()=>jsonResponse({...cancelled,queued:false,status:'cancelled'}));
+  assert.equal(expired.queued,false);assert.equal(expired.status,'cancelled');assert.equal(Object.hasOwn(expired,'job_id'),false);
 });
 
 test('Call me refuses mismatched or unsafe receipts without retrying provider submission',async()=>{
@@ -270,4 +275,136 @@ test('Call me refuses mismatched or unsafe receipts without retrying provider su
   let fetched=false;
   await assert.rejects(sendControl(installs().get('key-properties'),'POST','/api/agent-builder/test-call',{...callMeBody,paused:false},async()=>{fetched=true;}),e=>e.status===400);
   assert.equal(fetched,false);
+});
+
+const trainingProfile={objective:null,reply_length:'existing',one_question:null,sales_guidance:false,signup_url:'',payment_url:'',instructions:'',business_capabilities:'',knowledge_ids:[],executable_tools:null};
+const trainingVersion={id:'version-a',draft_id:'draft-a',status:'published',step:'publish_chat',content_digest:'e'.repeat(64),business_name:'Business A',agent_name:'Alex',approved_at:1,created_at:1,updated_at:1};
+const trainingSource={category:'general',source_id:'source-a',title:'Reviewed facts',media_type:'text/plain',status:'ready',approved:false,sha256:'b'.repeat(64),created_at:1,knowledge_id:'knowledge-a',content:'Unapproved source text'};
+const trainingState={profile:trainingProfile,saved:false,saved_at:null,profile_digest:'c'.repeat(64),review_digest:'d'.repeat(64),latest_version:trainingVersion,published_version:trainingVersion,applied_version_id:null,executable_tool_catalog:[{id:'offer_signup_link',title:'Offer approved signup',description:'An approved link, not account creation',execution:'approved_link',requires:'signup_url'}],approval_required:true,provider_publication_required:true,legacy_sales_brief:'Existing unapproved sales notes'};
+const trainingWriteBodies={
+  'agent-training-source':{title:'Draft',content:'Facts'},
+  'agent-training-upload':{filename:'facts.txt',content_base64:Buffer.from('Facts').toString('base64')},
+  'agent-training-review':{source_id:'source-a',title:'Reviewed',content:'Approved facts',approved:true},
+  'agent-training-profile':trainingProfile,
+  'agent-training-approve':{source_version_id:'version-a',review_digest:'d'.repeat(64),confirmation:'APPROVE THIS TRAINING VERSION'},
+};
+test('Training actions require explicit grants and existing HQ CSRF for each separate write',async()=>{
+  let sends=0;const transport=async()=>{sends++;return {};};
+  for(const [action,body] of Object.entries(trainingWriteBodies)){
+    const request={identity,method:'POST',path:'/installations/key-properties/'+action,body};
+    await assert.rejects(build({authorize:async()=>['PUT:settings','POST:agent-approve','POST:agent-publish','POST:agent-connect'],transport})(request),e=>e.status===403);
+    await assert.rejects(build({verifyCsrf:async()=>false,transport})(request),e=>e.status===403);
+    await assert.rejects(build({transport})({...request,identity:{...identity,workspaceId:'other'}}),e=>e.status===404);
+  }
+  assert.equal(sends,0);
+  for(const [action,body] of Object.entries(trainingWriteBodies)) {
+    const result=await build({authorize:async()=>['POST:'+action]})({identity,method:'POST',path:'/installations/key-properties/'+action,body});
+    assert.match(result.path,/^\/api\/agent-builder\/training\/(source|upload|source-review|profile|approve)$/);
+  }
+});
+test('Training payloads are bounded and cannot add identities, credentials or arbitrary executable tools',async()=>{
+  for(const [action,body] of Object.entries(trainingWriteBodies))for(const field of ['workspaceId','userId','base_url','secret','provider_key','url','headers']) {
+    await assert.rejects(build()({identity,method:'POST',path:'/installations/key-properties/'+action,body:{...body,[field]:'override'}}),e=>e.status===400);
+  }
+  const bad=[
+    ['agent-training-source',{title:'Draft',content:'x'.repeat(50001)}],
+    ['agent-training-upload',{filename:'../facts.txt',content_base64:'RmFjdHM='}],
+    ['agent-training-upload',{filename:'run.html',content_base64:'RmFjdHM='}],
+    ['agent-training-upload',{filename:'facts.txt',content_base64:Buffer.alloc(524289).toString('base64')}],
+    ['agent-training-upload',{filename:'facts.txt',content_base64:'not base64'}],
+    ['agent-training-review',{...trainingWriteBodies['agent-training-review'],approved:false}],
+    ['agent-training-profile',{...trainingProfile,executable_tools:['fetch_arbitrary_url']}],
+    ['agent-training-profile',{...trainingProfile,knowledge_ids:Array(21).fill('knowledge-a')}],
+    ['agent-training-profile',{...trainingProfile,signup_url:'https://user:password@business.example/'}],
+    ['agent-training-profile',{...trainingProfile,instructions:'x'.repeat(8001)}],
+    ['agent-training-approve',{...trainingWriteBodies['agent-training-approve'],review_digest:'stale'}],
+  ];
+  for(const [action,body] of bad)await assert.rejects(build()({identity,method:'POST',path:'/installations/key-properties/'+action,body}),e=>e.status===400);
+});
+test('Training source responses contain only business-scoped metadata and reviewed text, never upload bytes or secrets',async()=>{
+  const source=await sendControl(installs().get('key-properties'),'POST','/api/agent-builder/training/source',trainingWriteBodies['agent-training-source'],async()=>jsonResponse({source:{...trainingSource,encrypted_secret:key,content_base64:'private-upload',workspace_id:'other'},outreach_started:false}));
+  assert.deepEqual(source,{source:trainingSource,outreach_started:false});
+  const list=await sendControl(installs().get('key-properties'),'GET','/api/agent-builder/training/sources',undefined,async()=>jsonResponse({sources:[trainingSource],outreach_started:false,secret:key}));
+  assert.deepEqual(list,{sources:[trainingSource],outreach_started:false});
+  await assert.rejects(sendControl(installs().get('key-properties'),'GET','/api/agent-builder/training/sources',undefined,async()=>jsonResponse({sources:Array(21).fill(trainingSource),outreach_started:false})),e=>e.status===502);
+});
+test('Training draft and approval metadata preserve explicit review/publication boundaries and strip provider bindings',async()=>{
+  const dirty={...trainingState,latest_version:{...trainingVersion,bindings:{secret:key}},published_version:{...trainingVersion,bindings:{voice:{agent_id:'supplier-binding'}}},secret:key};
+  const state=await sendControl(installs().get('key-properties'),'GET','/api/agent-builder/training/profile',undefined,async()=>jsonResponse(dirty));
+  assert.deepEqual(state,trainingState);
+  const approval=await sendControl(installs().get('key-properties'),'POST','/api/agent-builder/training/approve',trainingWriteBodies['agent-training-approve'],async()=>jsonResponse({version:{...trainingVersion,bindings:{secret:key}},draft_id:'draft-a',outreach_started:false,published_version_unchanged:true,provider_publication_required:true}));
+  assert.equal(Object.hasOwn(approval.version,'bindings'),false);assert.equal(approval.published_version_unchanged,true);
+  await assert.rejects(sendControl(installs().get('key-properties'),'GET','/api/agent-builder/training/profile',undefined,async()=>jsonResponse({...trainingState,legacy_sales_brief:key})),e=>e.status===502&&!e.message.includes(key));
+});
+const voiceApplyBody={version_id:'version-a',request_id:'9aca7ecd-9a94-43e0-9414-8af424b29c13',confirmation:'APPLY VERIFIED VOICE TO MY AGENT'};
+test('Voice apply uses an explicit action and a saved verified choice, never a client-selected voice or caller',async()=>{
+  const path='/installations/key-properties/agent-voice-apply';
+  await assert.rejects(build({authorize:async()=>['POST:agent-connect','POST:agent-publish']})({identity,method:'POST',path,body:voiceApplyBody}),e=>e.status===403);
+  await assert.rejects(build({verifyCsrf:async()=>false})({identity,method:'POST',path,body:voiceApplyBody}),e=>e.status===403);
+  for(const field of ['voice_id','secret','from_number','to_number','workspaceId','bindings'])await assert.rejects(build()({identity,method:'POST',path,body:{...voiceApplyBody,[field]:'override'}}),e=>e.status===400);
+  const raw={version_id:'new-version',operation_id:voiceApplyBody.request_id,status:'queued',queued:true,unchanged:false,outreach_started:false,bindings:{secret:key}};
+  const result=await sendControl(installs().get('key-properties'),'POST','/api/agent-builder/voice-apply',voiceApplyBody,async()=>jsonResponse(raw));
+  assert.deepEqual(result,{version_id:'new-version',operation_id:voiceApplyBody.request_id,status:'queued',queued:true,unchanged:false,outreach_started:false});
+  await assert.rejects(sendControl(installs().get('key-properties'),'POST','/api/agent-builder/voice-apply',voiceApplyBody,async()=>jsonResponse({...raw,operation_id:'other-operation'})),e=>e.status===502);
+});
+test('Voice catalog keeps pre-page filtering explicit and safely projects supported voices and facets',async()=>{
+  const body={provider:'cartesia',gender:'female',accent:'British',query:'Eve',offset:0};
+  const raw={provider:'retell',voices:[{voice_id:'voice-eve',voice_name:'Eve',provider:'cartesia',gender:'female',accent:'British',supported:true,preview_audio_url:'https://supplier.invalid/private',secret:key}],facets:{providers:['cartesia'],genders:['female'],accents:['British']},total:1,offset:0,next_offset:null,truncated:false,outreach_started:false};
+  let sent;
+  const result=await sendControl(installs().get('key-properties'),'POST','/api/agent-builder/voice-catalog',body,async(url,options)=>{sent={url,options};return jsonResponse(raw);});
+  assert.equal(result.voices[0].voice_name,'Eve');assert.equal(result.voices[0].supported,true);assert.equal(Object.hasOwn(result.voices[0],'preview_audio_url'),false);
+  assert.deepEqual(JSON.parse(sent.options.body),body);assert.equal(sent.url,'https://leadrelay.example.com/api/agent-builder/voice-catalog');
+  for(const change of [{offset:-1},{offset:2001},{url:'https://evil.invalid'},{secret:providerSecret},{query:'x'.repeat(121)}])await assert.rejects(build()({identity,method:'POST',path:'/installations/key-properties/agent-voice-catalog',body:{...body,...change}}),e=>e.status===400);
+});
+test('Voice previews contain bounded audio bytes only and reject targets, credentials and active content',async()=>{
+  const body={voice_id:'voice-eve'},audio=Buffer.from('RIFF synthetic audio WAVE').toString('base64');
+  const result=await sendControl(installs().get('key-properties'),'POST','/api/agent-builder/voice-preview',body,async()=>jsonResponse({provider:'retell',voice_id:'voice-eve',mime:'audio/wav',audio_base64:audio,outreach_started:false,preview_audio_url:'https://supplier.invalid/private'}));
+  assert.deepEqual(result,{provider:'retell',voice_id:'voice-eve',mime:'audio/wav',audio_base64:audio,outreach_started:false});
+  for(const change of [{url:'https://evil.invalid'},{from_number:'+447700900123'},{secret:providerSecret}])await assert.rejects(build()({identity,method:'POST',path:'/installations/key-properties/agent-voice-preview',body:{...body,...change}}),e=>e.status===400);
+  for(const change of [{mime:'text/html'},{audio_base64:Buffer.alloc(524289).toString('base64')},{voice_id:'different'},{audio_base64:Buffer.from(key).toString('base64')},{outreach_started:true}])await assert.rejects(sendControl(installs().get('key-properties'),'POST','/api/agent-builder/voice-preview',body,async()=>jsonResponse({...result,...change})),e=>e.status===502);
+});
+
+test('New voice read, catalog, preview and choice actions never inherit older connection grants',async()=>{
+  let sends=0;const transport=async()=>{sends++;return {};};
+  const old=build({authorize:async()=>['GET:agent-connection','POST:agent-voices','POST:agent-connect','POST:agent-publish'],transport});
+  for(const [method,action,body] of [['GET','agent-voice-settings',undefined],['POST','agent-voice-catalog',{}],['POST','agent-voice-preview',{voice_id:'voice-a'}],['POST','agent-voice-choice',{voice_id:'voice-a'}]]){
+    await assert.rejects(old({identity,method,path:'/installations/key-properties/'+action,body}),e=>e.status===403);
+    if(method==='POST')await assert.rejects(build({verifyCsrf:async()=>false,transport})({identity,method,path:'/installations/key-properties/'+action,body}),e=>e.status===403);
+  }
+  assert.equal(sends,0);
+});
+test('Saving a voice choice accepts no caller or credential override and returns only the matching choice',async()=>{
+  const path='/api/agent-builder/voice-choice',body={voice_id:'voice-eve'};
+  for(const field of ['from_number','secret','webhook_secret','version_id','workspaceId','bindings'])await assert.rejects(build()({identity,method:'POST',path:'/installations/key-properties/agent-voice-choice',body:{...body,[field]:'override'}}),e=>e.status===400);
+  const result=await sendControl(installs().get('key-properties'),'POST',path,body,async()=>jsonResponse({provider:'retell',saved:true,voice_id:'voice-eve',voice_name:'Eve',outreach_started:false,caller:'+447700900123',bindings:{secret:key}}));
+  assert.deepEqual(result,{provider:'retell',saved:true,voice_id:'voice-eve',voice_name:'Eve',outreach_started:false});
+  await assert.rejects(sendControl(installs().get('key-properties'),'POST',path,body,async()=>jsonResponse({...result,voice_id:'other-voice'})),e=>e.status===502);
+});
+
+
+test('Training categories are exact metadata on source/upload and cannot rewrite a reviewed source category',async()=>{
+  for(const category of ['general','brand_guidelines','brand_voice'])for(const action of ['agent-training-source','agent-training-upload']){
+    const body={...trainingWriteBodies[action],category};
+    const accepted=await build()({identity,method:'POST',path:'/installations/key-properties/'+action,body});
+    assert.equal(accepted.body.category,category);
+  }
+  for(const category of ['',null,'brand','agent.train',{workspaceId:'other'}])for(const action of ['agent-training-source','agent-training-upload'])
+    await assert.rejects(build()({identity,method:'POST',path:'/installations/key-properties/'+action,body:{...trainingWriteBodies[action],category}}),e=>e.status===400);
+  await assert.rejects(build()({identity,method:'POST',path:'/installations/key-properties/agent-training-review',body:{...trainingWriteBodies['agent-training-review'],category:'brand_voice'}}),e=>e.status===400);
+  const legacy={...trainingSource};delete legacy.category;
+  const result=await sendControl(installs().get('key-properties'),'GET','/api/agent-builder/training/sources',undefined,async()=>jsonResponse({sources:[legacy,{...trainingSource,category:'brand_guidelines'},{...trainingSource,category:'brand_voice'}],outreach_started:false}));
+  assert.deepEqual(result.sources.map(row=>row.category),['general','brand_guidelines','brand_voice']);
+  await assert.rejects(sendControl(installs().get('key-properties'),'GET','/api/agent-builder/training/sources',undefined,async()=>jsonResponse({sources:[{...trainingSource,category:'unsupported'}],outreach_started:false})),e=>e.status===502);
+});
+
+
+test('Existing builder read safely projects scoped website installer metadata without new permissions',async()=>{
+  const details={workspace_id:'business-a',script_url:'https://leadrelay.example.com/widget.js',runtime_enabled:true,worker_enabled:true,business_enabled:true,chat_enabled:true,origins:['https://business.example/'],deployed_version_id:'version-a',paused:false,available:true};
+  const request={identity,path:'/installations/key-properties/agent-status'};
+  const allowed=await build({authorize:async()=>['GET:agent-status']})(request);assert.equal(allowed.path,'/api/agent-builder');
+  const result=await sendControl(installs().get('key-properties'),'GET','/api/agent-builder',undefined,async()=>jsonResponse({business_name:'A',website_chat:{...details,secret:key,provider_bindings:{private:key}}}));
+  assert.deepEqual(result,{business_name:'A',website_chat:{...details,origins:['https://business.example']}});
+  for(const change of [{script_url:'javascript:alert(1)'},{script_url:'https://user:password@leadrelay.example.com/widget.js'},{script_url:'https://leadrelay.example.com/other.js'},{origins:['https://business.example/path']},{origins:Array(21).fill('https://business.example')},{paused:true},{worker_enabled:false},{workspace_id:key},{available:'true'},{deployed_version_id:null}])
+    await assert.rejects(sendControl(installs().get('key-properties'),'GET','/api/agent-builder',undefined,async()=>jsonResponse({website_chat:{...details,...change}})),e=>e.status===502&&!e.message.includes(key));
+  assert.deepEqual(await sendControl(installs().get('key-properties'),'GET','/api/agent-builder',undefined,async()=>jsonResponse({business_name:'Old version'})),{business_name:'Old version'});
 });

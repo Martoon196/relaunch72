@@ -115,7 +115,8 @@ export async function mountAgentBuilder(root, api, options = {}) {
   const copy = el('div');
   copy.append(el('h1', 'Create your business agent'), el('p', 'One approved business knowledge version for website chat and AI calls.'));
   function sectionLink(label, section) {
-    if (section === 'live' && typeof options.onOpenConnections === 'function') {
+    const openSection = section === 'live' ? options.onOpenConnections : section === 'agent-settings' ? (options.onOpenSettings || options.onOpenAgentSettings) : undefined;
+    if (typeof openSection === 'function') {
       const button = el('button', label);
       button.type = 'button';
       button.className = 'btn small';
@@ -124,10 +125,10 @@ export async function mountAgentBuilder(root, api, options = {}) {
         event?.preventDefault?.();
         if (!active() || pending) return;
         pending = true; button.disabled = true;
-        try { await options.onOpenConnections({ isCurrent: active }); }
+        try { await openSection({ isCurrent: active }); }
         catch (error) {
           if (active()) {
-            message.textContent = error?.message || 'The connection setup could not be opened. Your current agent setup is preserved.';
+            message.textContent = error?.message || 'That setup page could not be opened. Your current agent setup is preserved.';
             message.setAttribute('role', 'alert');
             message.setAttribute('data-error', 'true');
             message.removeAttribute?.('data-success');
@@ -156,7 +157,7 @@ export async function mountAgentBuilder(root, api, options = {}) {
     pollStarted.delete(root);
     await remount();
   };
-  actions.append(refresh, sectionLink('Secure connections →', 'live'));
+  actions.append(refresh, sectionLink('Agent settings →', 'agent-settings'), sectionLink('Secure connections →', 'live'));
   title.append(copy, actions);
   const message = el('p');
   message.className = 'agent-builder-message';
@@ -421,9 +422,12 @@ export async function mountAgentBuilder(root, api, options = {}) {
     callButton.textContent = 'Check this call request';
     const result = await api('/api/agent-builder/test-call', { method: 'POST', body: { version_id: capturedVersionId, own_contact_confirmed: true, ai_call_consent: true, confirmation: 'PLACE ONE PAID TEST CALL TO MY OWN NUMBER', mode: 'call_me', request_id: callRequestId }, guard: active });
     if (!active()) return;
-    if (result.one_call_only !== true || result.operation_id !== callRequestId || typeof result.job_id !== 'string') throw Error('The server did not confirm this one-call request. Use this button to check the same request or review Activity; no new request ID will be created.');
+    const hasJob = typeof result.job_id === 'string' && !!result.job_id;
+    if (result.one_call_only !== true || result.operation_id !== callRequestId || (!hasJob && result.status !== 'cancelled')) throw Error('The server did not confirm this one-call request. Use this button to check the same request or review Activity; no new request ID will be created.');
     const status = result.status;
-    if (['blocked', 'failed', 'cancelled', 'uncertain'].includes(status)) {
+    if (status === 'cancelled' && !hasJob) {
+      message.textContent = 'This one-call request was cancelled before a call was queued. Review Activity before requesting another call.';
+    } else if (['blocked', 'failed', 'cancelled', 'uncertain', 'skipped'].includes(status)) {
       message.textContent = `This call request is ${stateLabel(status)}. Review Activity & queue before requesting another call. Request: ${result.job_id}.`;
     } else if (status === 'completed') {
       message.textContent = `This one-call request is complete. Open Activity & queue for its actual provider result. Request: ${result.job_id}.`;

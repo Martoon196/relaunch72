@@ -1,6 +1,6 @@
 /* Native, dependency-free Growth HQ module. Serve from HQ's own assets origin.
    No LeadRelay bearer token, browser storage, iframe or public CORS connection. */
-export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csrfHeader = 'X-CSRF-Token', loadBuilder = () => import('/portal/leadrelay/builder.js'), loadProvider = () => import('/portal/leadrelay/provider-setup.js')} = {}) {
+export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csrfHeader = 'X-CSRF-Token', loadBuilder = () => import('/portal/leadrelay/builder.js'), loadProvider = () => import('/portal/leadrelay/provider-setup.js'), loadSettings = () => import('/portal/leadrelay/agent-settings.js')} = {}) {
   if (!(root instanceof HTMLElement) || typeof csrfToken !== 'function') throw Error('A container and existing HQ CSRF-token accessor are required');
   if (!/^\/[a-zA-Z0-9/_-]+$/.test(apiBase) || apiBase.startsWith('//')) throw Error('Use a same-origin API path');
   let registry = [], current = null, disposed = false;
@@ -69,6 +69,7 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
       if (confirm('Resume simulation processing? Live outreach remains disabled.')) { await request(path('resume-simulation'), 'POST', {confirmation: 'RESUME SIMULATION ONLY'}); await refresh(); }
     }, controls, can('POST:resume-simulation'));
     action('Business setup', setup, controls, can('GET:settings'));
+    if (can('GET:agent-status') || can('GET:agent-voice-settings') || (can('GET:agent-training-profile') && can('GET:agent-training-sources'))) action('Agent settings', () => openAgentSettings(data), controls);
     if (can('GET:agent-connection')) action('AI connection', () => openProviderSetup(data), controls);
     if (can('GET:agent-status')) action('Create an agent', () => openAgentBuilder(data), controls);
     const banner = node('p', `${data.paused ? 'PAUSED' : data.live_outreach ? 'OWN-CONTACT LIVE PILOT' : 'SIMULATION AVAILABLE'} · ${data.business_name} · ${data.live_outreach ? 'Only authorised test contacts' : 'No live calling authorised'}`, 'lrhq-banner'); content.append(banner);
@@ -103,10 +104,11 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
     }, packs, can('POST:pack-import'));
     content.append(node('p', 'No contacts, users or credentials are transferred. Imported scripts require review; sequences remain disabled and knowledge is unapproved.', 'lrhq-note'));
   }
-  async function openAgentBuilder(status) {
+  async function openAgentBuilder(status, parentGuard) {
     const installationId = current.id;
     const allowed = new Set(current.actions);
     const previousView = view;
+    if(parentGuard!==undefined&&(typeof parentGuard!=='function'||parentGuard()!==true))throw Error('Setup view changed; agent setup cancelled');
     const routes = Object.freeze({
       'GET:/api/agent-builder':'agent-status',
       'POST:/api/agent-builder/scan':'agent-scan',
@@ -117,7 +119,7 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
       'POST:/api/agent-builder/deploy':'agent-deploy',
     });
     const module = await loadBuilder();
-    if (!viewIsCurrent(previousView, installationId)) throw Error('Installation changed; agent setup cancelled');
+    if (!viewIsCurrent(previousView, installationId) || (parentGuard && parentGuard()!==true)) throw Error('Installation changed; agent setup cancelled');
     if (typeof module?.mountAgentBuilder !== 'function') throw Error('Agent setup module is unavailable');
     // Keep the visible module usable until its replacement has actually loaded.
     const token = beginView();
@@ -145,15 +147,21 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
         try { const u = new URL(section.url); if (u.protocol === 'https:') links[id] = u.href; } catch {}
       }
     }
-    const onOpenConnections = allowed.has('GET:agent-connection') ? () => { unchanged(); return openProviderSetup(status); } : undefined;
-    await module.mountAgentBuilder(builderRoot, api, {links, onOpenConnections});
+    const onOpenConnections = allowed.has('GET:agent-connection') ? (context={}) => { unchanged(); return openProviderSetup(status,context.isCurrent); } : undefined;
+    const onOpenSettings = (context={}) => {
+      unchanged();
+      if(!allowed.has('GET:agent-status')&&!allowed.has('GET:agent-voice-settings')&&!(allowed.has('GET:agent-training-profile')&&allowed.has('GET:agent-training-sources')))throw Error('Your HQ role does not permit Agent settings for this business');
+      return openAgentSettings(status,context.isCurrent);
+    };
+    await module.mountAgentBuilder(builderRoot, api, {links, onOpenConnections, onOpenSettings, onOpenAgentSettings:onOpenSettings});
   }
-  async function openProviderSetup(status) {
+  async function openProviderSetup(status, parentGuard) {
     const installationId = current.id;
     const allowed = new Set(current.actions);
     const previousView = view;
+    if(parentGuard!==undefined&&(typeof parentGuard!=='function'||parentGuard()!==true))throw Error('Setup view changed; connection setup cancelled');
     const module = await loadProvider();
-    if (!viewIsCurrent(previousView, installationId)) throw Error('Installation changed; AI connection setup cancelled');
+    if (!viewIsCurrent(previousView, installationId) || (parentGuard && parentGuard()!==true)) throw Error('Installation changed; AI connection setup cancelled');
     if (typeof module?.mountProviderSetup !== 'function') throw Error('AI connection setup module is unavailable');
     const token = beginView();
     const isCurrent = () => viewIsCurrent(token, installationId);
@@ -194,6 +202,52 @@ export function mountLeadRelay(root, {apiBase = '/api/leadrelay', csrfToken, csr
     });
     if (!isCurrent()) { mounted?.dispose(); return; }
     providerView = mounted;
+  }
+  async function openAgentSettings(status, parentGuard) {
+    const installationId=current.id, allowed=new Set(current.actions), previousView=view;
+    if(parentGuard!==undefined&&(typeof parentGuard!=='function'||parentGuard()!==true))throw Error('Setup view changed; agent settings cancelled');
+    const module=await loadSettings();
+    if(!viewIsCurrent(previousView,installationId)||(parentGuard&&parentGuard()!==true))throw Error('Installation changed; agent settings cancelled');
+    if(typeof module?.mountAgentSettings!=='function')throw Error('Agent settings module is unavailable');
+    const token=beginView(), isCurrent=()=>viewIsCurrent(token,installationId);
+    const unchanged=()=>{if(!isCurrent())throw Error('Installation changed; agent settings cancelled');};
+    const settingsRoot=node('div');content.replaceChildren(settingsRoot);
+    const routes=Object.freeze({
+      'GET:/api/agent-builder':'agent-status',
+      'GET:/api/agent-builder/voice-settings':'agent-voice-settings',
+      'POST:/api/agent-builder/voice-choice':'agent-voice-choice',
+      'POST:/api/agent-builder/voice-apply':'agent-voice-apply',
+      'POST:/api/agent-builder/voice-catalog':'agent-voice-catalog',
+      'POST:/api/agent-builder/voice-preview':'agent-voice-preview',
+      'GET:/api/agent-builder/training/sources':'agent-training-sources',
+      'POST:/api/agent-builder/training/source':'agent-training-source',
+      'POST:/api/agent-builder/training/upload':'agent-training-upload',
+      'POST:/api/agent-builder/training/source-review':'agent-training-review',
+      'GET:/api/agent-builder/training/profile':'agent-training-profile',
+      'POST:/api/agent-builder/training/profile':'agent-training-profile',
+      'POST:/api/agent-builder/training/approve':'agent-training-approve',
+    });
+    const api=async(apiPath,options={})=>{
+      unchanged();
+      if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(key=>!['method','body','guard'].includes(key)))throw Error('Agent settings accepts no header, credential or target override');
+      if(options.guard!==undefined&&typeof options.guard!=='function')throw Error('Setup guard must be a function');
+      const method=options.method||'GET',operation=routes[method+':'+apiPath];
+      if(!operation)throw Error('Agent settings operation is not supported');
+      if(!allowed.has(method+':'+operation))throw Error('Your HQ role does not permit this agent settings action');
+      const guard=()=>isCurrent()&&(options.guard?options.guard()===true:true);
+      const result=await request('/installations/'+encodeURIComponent(installationId)+'/'+operation,method,options.body,installationId,guard);
+      unchanged();return result;
+    };
+    const trainingWrites=['POST:agent-training-source','POST:agent-training-upload','POST:agent-training-review','POST:agent-training-profile','POST:agent-training-approve'];
+    const onOpenConnections=allowed.has('GET:agent-connection')?(context={})=>{unchanged();return openProviderSetup(status,context.isCurrent);}:undefined;
+    const onReturnBuilder=allowed.has('GET:agent-status')?(context={})=>{unchanged();return openAgentBuilder(status,context.isCurrent);}:undefined;
+    const mounted=await module.mountAgentSettings(settingsRoot,api,{
+      voice:{canRead:allowed.has('GET:agent-voice-settings'),canListVoices:allowed.has('POST:agent-voices'),canCatalog:allowed.has('POST:agent-voice-catalog'),canPreview:allowed.has('POST:agent-voice-preview'),canSaveChoice:allowed.has('POST:agent-voice-choice'),canApplyVoice:allowed.has('POST:agent-voice-apply')},
+      training:{canRead:allowed.has('GET:agent-training-sources')&&allowed.has('GET:agent-training-profile'),canTrain:trainingWrites.every(action=>allowed.has(action))},
+      websiteChat:{canRead:allowed.has('GET:agent-status')},
+      isCurrent,onOpenConnections,onReturnBuilder,
+    });
+    if(!isCurrent()){mounted?.dispose();return;}providerView=mounted;
   }
   async function setup() {
     const id = current.id;

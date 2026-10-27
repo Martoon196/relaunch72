@@ -23,7 +23,7 @@ async function harness(csrfToken,extra={}){
       url.endsWith('/providers') ? [{definition:{port:'voice',name:'Voice',providers:[{id:'retell',name:'Retell',setup_url:'https://dashboard.retellai.com/'}]},selected:'retell'}] :
       {business_name:url.includes('/a/')?'Business A':'Business B',jobs:{},sections:[],setup:[]}};
   };
-  const root=new Element('root');const panel=mountLeadRelay(root,{csrfToken,...(extra.loadBuilder ? {loadBuilder:extra.loadBuilder} : {}),...(extra.loadProvider ? {loadProvider:extra.loadProvider} : {})});await panel.ready;
+  const root=new Element('root');const panel=mountLeadRelay(root,{csrfToken,...(extra.loadBuilder ? {loadBuilder:extra.loadBuilder} : {}),...(extra.loadProvider ? {loadProvider:extra.loadProvider} : {}),...(extra.loadSettings ? {loadSettings:extra.loadSettings} : {})});await panel.ready;
   return {root,panel,posts,requests,confirms:()=>confirms,restore:()=>Object.assign(globalThis,old)};
 }
 
@@ -305,5 +305,110 @@ test('native Call me forwards a stable owner intent through only the existing te
     assert.equal(h.requests.at(-1).opts.headers['X-CSRF-Token'],'csrf');
     assert.equal(Object.hasOwn(h.requests.at(-1).opts,'guard'),false);
     await assert.rejects(api('/api/control/settings',{method:'PUT',body:{paused:false}}),/not supported/);
+  } finally {h.restore();}
+});
+
+test('Agent settings require their own read grants and expose only explicitly granted capabilities',async()=>{
+  const denied=await harness(async()=> 'csrf');
+  try {assert.equal(find(denied.root,n=>n.textContent==='Agent settings'),undefined);}finally{denied.restore();}
+  let api,options;
+  const actions=['GET:status','GET:agent-voice-settings','POST:agent-voice-catalog','GET:agent-training-profile','GET:agent-training-sources','POST:agent-training-source'];
+  const h=await harness(async()=> 'csrf',{actions,loadSettings:async()=>({mountAgentSettings:async(_root,call,opts)=>{api=call;options=opts;}})});
+  try {
+    await find(h.root,n=>n.textContent==='Agent settings').onclick();
+    assert.deepEqual(options.voice,{canRead:true,canListVoices:false,canCatalog:true,canPreview:false,canSaveChoice:false,canApplyVoice:false});
+    assert.deepEqual(options.training,{canRead:true,canTrain:false});
+    await api('/api/agent-builder/voice-catalog',{method:'POST',body:{query:'Eve'}});
+    await api('/api/agent-builder/training/source',{method:'POST',body:{title:'Draft',content:'Facts'}});
+    assert.deepEqual(h.posts,['/api/leadrelay/installations/a/agent-voice-catalog','/api/leadrelay/installations/a/agent-training-source']);
+    await assert.rejects(api('/api/agent-builder/voice-preview',{method:'POST',body:{voice_id:'a'}}),/role/);
+    await assert.rejects(api('/api/agent-builder/training/profile',{method:'POST',body:{}}),/role/);
+    await assert.rejects(api('/api/agent-builder/publish',{method:'POST',body:{}}),/not supported/);
+    await assert.rejects(api('https://evil.invalid',{method:'POST',body:{}}),/not supported/);
+    await assert.rejects(api('/api/agent-builder/voice-catalog',{method:'POST',headers:{authorization:'other'},body:{}}),/override/);
+  }finally{h.restore();}
+});
+
+test('Training edit controls require every individually granted training write',async()=>{
+  let options;
+  const actions=['GET:status','GET:agent-training-profile','GET:agent-training-sources',...['source','upload','review','profile','approve'].map(name=>'POST:agent-training-'+name)];
+  const h=await harness(async()=> 'csrf',{actions,loadSettings:async()=>({mountAgentSettings:async(_root,_api,opts)=>{options=opts;}})});
+  try{
+    await find(h.root,n=>n.textContent==='Agent settings').onclick();
+    assert.equal(options.training.canTrain,true);assert.equal(options.voice.canRead,false);
+  }finally{h.restore();}
+});
+
+test('Training file guards are rechecked after asynchronous CSRF without serializing them',async()=>{
+  let api,current=true;const csrf=deferred(),entered=deferred();
+  const h=await harness(()=>{entered.resolve();return csrf.promise;},{actions:['GET:status','GET:agent-training-profile','GET:agent-training-sources','POST:agent-training-upload'],loadSettings:async()=>({mountAgentSettings:async(_root,call)=>{api=call;}})});
+  try{
+    await find(h.root,n=>n.textContent==='Agent settings').onclick();
+    const pending=api('/api/agent-builder/training/upload',{method:'POST',body:{filename:'facts.txt',content_base64:'RmFjdHM='},guard:()=>current});
+    await entered.promise;current=false;csrf.resolve('csrf');
+    await assert.rejects(pending,/changed/);assert.deepEqual(h.posts,[]);
+  }finally{h.restore();}
+});
+
+test('A failed settings import leaves the existing provider usable',async()=>{
+  let api,isCurrent,disposals=0;
+  const h=await harness(async()=> 'csrf',{actions:['GET:status','GET:agent-voice-settings','GET:agent-connection','POST:agent-voices'],loadProvider:async()=>({mountProviderSetup:async(_root,call,options)=>{api=call;isCurrent=options.isCurrent;return {dispose(){disposals++;}};}}),loadSettings:async()=>{throw Error('Settings module load failed');}});
+  try{
+    await find(h.root,n=>n.textContent==='AI connection').onclick();
+    await find(h.root,n=>n.textContent==='Agent settings').onclick();
+    assert.equal(isCurrent(),true);assert.equal(disposals,0);
+    await api('/api/agent-builder/connection/voices',{method:'POST',body:{secret:'fictional-api-key'}});
+    assert.equal(h.posts.length,1);
+  }finally{h.restore();}
+});
+
+test('Installation changes fence a pending settings import',async()=>{
+  const load=deferred();let mounts=0;
+  const h=await harness(async()=> 'csrf',{actions:['GET:status','GET:agent-voice-settings'],loadSettings:()=>load.promise});
+  try{
+    const pending=find(h.root,n=>n.textContent==='Agent settings').onclick();
+    const select=find(h.root,n=>n.tag==='select');select.value='b';await select.onchange();
+    load.resolve({mountAgentSettings:async()=>{mounts++;}});await pending;
+    assert.equal(mounts,0);
+  }finally{h.restore();}
+});
+
+test('Settings child guards cancel callback navigation after a tab change during import',async()=>{
+  for(const destination of ['builder','provider']){
+    const load=deferred();let options,current=true,mounts=0;
+    const h=await harness(async()=> 'csrf',{actions:['GET:status','GET:agent-status','GET:agent-connection','GET:agent-voice-settings'],loadSettings:async()=>({mountAgentSettings:async(_root,_api,opts)=>{options=opts;}}),loadBuilder:()=>load.promise,loadProvider:()=>load.promise});
+    try{
+      await find(h.root,n=>n.textContent==='Agent settings').onclick();
+      const pending=(destination==='builder'?options.onReturnBuilder:options.onOpenConnections)({isCurrent:()=>current});
+      current=false;
+      load.resolve(destination==='builder'?{mountAgentBuilder:async()=>{mounts++;}}:{mountProviderSetup:async()=>{mounts++;}});
+      await assert.rejects(pending,/changed/);assert.equal(mounts,0);
+      assert.equal(options.isCurrent(),true);
+    }finally{h.restore();}
+  }
+});
+
+test('Builder Agent settings callbacks open the native wrapper',async()=>{
+  let options,mounts=0;
+  const h=await harness(async()=> 'csrf',{actions:['GET:status','GET:agent-status','GET:agent-voice-settings'],loadBuilder:async()=>({mountAgentBuilder:async(_root,_api,opts)=>{options=opts;}}),loadSettings:async()=>({mountAgentSettings:async()=>{mounts++;}})});
+  try{
+    await find(h.root,n=>n.textContent==='Create an agent').onclick();
+    assert.equal(typeof options.onOpenSettings,'function');
+    assert.equal(options.onOpenAgentSettings,options.onOpenSettings);
+    await options.onOpenSettings({isCurrent:()=>true});assert.equal(mounts,1);
+  }finally{h.restore();}
+});
+
+
+test('Existing builder read permits only the read-only Website chatbot tab without new voice or training actions',async()=>{
+  let builderOptions,settingsOptions,settingsApi,loads=0;
+  const h=await harness(async()=> 'csrf',{actions:['GET:status','GET:agent-status'],loadBuilder:async()=>({mountAgentBuilder:async(_root,_api,value)=>{builderOptions=value;}}),loadSettings:async()=>{loads++;return {mountAgentSettings:async(_root,api,value)=>{settingsApi=api;settingsOptions=value;}};}});
+  try {
+    await find(h.root,n=>n.textContent==='Create an agent').onclick();
+    await builderOptions.onOpenSettings({isCurrent:()=>true}); assert.equal(loads,1);
+    assert.equal(settingsOptions.websiteChat.canRead,true);assert.equal(settingsOptions.voice.canRead,false);assert.equal(settingsOptions.training.canRead,false);
+    await settingsApi('/api/agent-builder');
+    await assert.rejects(settingsApi('/api/agent-builder/deploy',{method:'POST',body:{}}),/not supported/);
+    assert.deepEqual(h.posts,[]);
   } finally {h.restore();}
 });

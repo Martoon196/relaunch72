@@ -446,6 +446,20 @@ test('Call me does not present an unbound or non-one-shot receipt as a successfu
   } finally { h.restore(); }
 });
 
+test('an authoritative expired Call me receipt without a job is shown as cancelled without queueing another intent', async () => {
+  const h = await harness({ version: { id: 'version-a', status: 'published' }, call_me_ready: true }, async (_path, request) => {
+    const result = { ...callReceipt(request), status: 'cancelled', queued: false }; delete result.job_id; return result;
+  });
+  try {
+    const form = formFor(h.root, 'own_contact_confirmed');
+    input(form, 'own_contact_confirmed').checked = true; input(form, 'ai_call_consent').checked = true;
+    await submit(form);
+    assert.match(find(h.root, node => node.className === 'agent-builder-message').textContent, /cancelled before a call was queued/);
+    await submit(form);
+    assert.equal(h.writes[1].body.request_id, h.writes[0].body.request_id);
+  } finally { h.restore(); }
+});
+
 test('public AI chat activation is a separate explicit deployment with reviewed origins', async () => {
   const h = await harness({ version: { id: 'version-a', status: 'published' }, deployment: { origins: ['https://example.com'], chat_enabled: false } }, async () => ({ public_chat_enabled: true, widget_script: '<script src="https://leadrelay.example/widget.js"></script>' }));
   try {
@@ -528,4 +542,24 @@ test('pending native connection opens are single and cannot alter a newly select
     await byText(h.root, 'Secure connections →').onclick();
     assert.equal(calls, 1);
   } finally { h.restore(); }
+});
+
+
+test('Agent settings opens the guarded native callback and preserves edited builder facts', async () => {
+  const h = await harness({ draft: readyDraft }); let calls = 0, guard;
+  try {
+    await mountAgentBuilder(h.root, h.api, { onOpenSettings: context => { calls++; guard = context.isCurrent; } });
+    input(h.root, 'content_0').value = 'Keep this unsaved review';
+    const settings = byText(h.root, 'Agent settings →');
+    assert.equal(settings.tag, 'button'); assert.equal(settings.href, undefined);
+    await settings.onclick(); assert.equal(calls, 1); assert.equal(guard(), true);
+    assert.equal(input(h.root, 'content_0').value, 'Keep this unsaved review'); assert.deepEqual(h.writes, []);
+    h.root.isConnected = false; assert.equal(guard(), false); await settings.onclick(); assert.equal(calls, 1);
+  } finally { h.restore(); }
+});
+
+test('standalone builder links directly to the local Agent settings view', async () => {
+  const h = await harness({});
+  try { assert.equal(byText(h.root, 'Agent settings →').href, '#agent-settings'); }
+  finally { h.restore(); }
 });

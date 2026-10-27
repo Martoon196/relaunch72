@@ -5,7 +5,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { handleLeadRelay, panelSource, panelCss, panelBoot, builderSource, builderCss, providerSource, providerCss } from '../integrations/leadrelay/mount.js';
+import { handleLeadRelay, panelSource, panelCss, panelBoot, builderSource, builderCss, providerSource, providerCss, trainingSource, trainingCss, voiceSource, voiceCss, agentSettingsSource, agentSettingsCss, websiteChatSource, websiteChatCss } from '../integrations/leadrelay/mount.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PlatformCapability } from '../platform/capabilities.js';
 import type { CompanyContentCatalogItem } from '../company-content-pg/types.js';
@@ -2286,10 +2286,14 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     if (p === '/portal/leadrelay/panel.js') return sendJavaScript(res, panelSource, 'private, no-store');
     if (p === '/portal/leadrelay/builder.js') return sendJavaScript(res, builderSource, 'private, no-store');
     if (p === '/portal/leadrelay/provider-setup.js') return sendJavaScript(res, providerSource, 'private, no-store');
+    if (p === '/portal/leadrelay/agent-training.js') return sendJavaScript(res, trainingSource, 'private, no-store');
+    if (p === '/portal/leadrelay/voice-settings.js') return sendJavaScript(res, voiceSource, 'private, no-store');
+    if (p === '/portal/leadrelay/agent-settings.js') return sendJavaScript(res, agentSettingsSource, 'private, no-store');
+    if (p === '/portal/leadrelay/website-chat-settings.js') return sendJavaScript(res, websiteChatSource, 'private, no-store');
     if (p === '/portal/leadrelay/boot.js') return sendJavaScript(res, panelBoot, 'private, no-store');
     if (p === '/portal/leadrelay/panel.css') {
       res.writeHead(200, {'content-type':'text/css; charset=utf-8','cache-control':'no-store'});
-      res.end(panelCss+'\n'+builderCss+'\n'+providerCss); return;
+      res.end(panelCss+'\n'+builderCss+'\n'+providerCss+'\n'+trainingCss+'\n'+voiceCss+'\n'+agentSettingsCss+'\n'+websiteChatCss); return;
     }
     if (p === '/portal/leadrelay') {
       const body = `<link rel="stylesheet" href="/portal/leadrelay/panel.css"><div id="leadrelay-panel" data-csrf="${escapeHtml(portalCsrfToken(deps.sessionSecret, sessionToken))}"></div><script type="module" src="/portal/leadrelay/boot.js"></script>`;
@@ -2298,7 +2302,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         active:'crm', backHref:'/portal', backLabel:'Growth HQ',
       }).replace('</main>', body+'</main>'), undefined, {
         'cache-control':'no-store',
-        'content-security-policy': "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        'content-security-policy': "default-src 'none'; script-src 'self'; connect-src 'self'; media-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
       });
     }
   }

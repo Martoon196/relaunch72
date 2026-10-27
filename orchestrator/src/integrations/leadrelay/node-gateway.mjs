@@ -3,6 +3,7 @@
  * Node 20+; no package dependencies. Supply existing auth, tenant grants and CSRF.
  */
 import { isIP } from 'node:net';
+import {validateTrainingBody,projectTraining,validateVoiceBody,projectVoice,projectWebsiteChat} from './node-gateway-contracts.mjs';
 export const MAX_BYTES = 800_000;
 const OPERATIONS = Object.freeze({
   'GET:status':'status','GET:manifest':'manifest','GET:settings':'settings','GET:providers':'providers',
@@ -13,6 +14,18 @@ const OPERATIONS = Object.freeze({
   'GET:agent-connection':'/api/agent-builder/connection',
   'POST:agent-voices':'/api/agent-builder/connection/voices',
   'POST:agent-phone-numbers':'/api/agent-builder/connection/phone-numbers',
+  'GET:agent-voice-settings':'/api/agent-builder/voice-settings',
+  'POST:agent-voice-apply':'/api/agent-builder/voice-apply',
+  'POST:agent-voice-catalog':'/api/agent-builder/voice-catalog',
+  'POST:agent-voice-preview':'/api/agent-builder/voice-preview',
+  'POST:agent-voice-choice':'/api/agent-builder/voice-choice',
+  'GET:agent-training-sources':'/api/agent-builder/training/sources',
+  'POST:agent-training-source':'/api/agent-builder/training/source',
+  'POST:agent-training-upload':'/api/agent-builder/training/upload',
+  'POST:agent-training-review':'/api/agent-builder/training/source-review',
+  'GET:agent-training-profile':'/api/agent-builder/training/profile',
+  'POST:agent-training-profile':'/api/agent-builder/training/profile',
+  'POST:agent-training-approve':'/api/agent-builder/training/approve',
   'POST:agent-connect':'/api/agent-builder/connection/verify',
   'POST:agent-scan':'/api/agent-builder/scan',
   'POST:agent-approve':'/api/agent-builder/approve',
@@ -29,6 +42,8 @@ const deny=(status,detail)=>{throw new GatewayError(status,detail);};
 const CONNECTION_PATH = '/api/agent-builder/connection';
 const connectionPaths = new Set([CONNECTION_PATH, CONNECTION_PATH+'/voices', CONNECTION_PATH+'/phone-numbers', CONNECTION_PATH+'/verify']);
 const TEST_CALL_PATH = '/api/agent-builder/test-call';
+const voicePaths = new Set(['voice-settings','voice-apply','voice-catalog','voice-preview','voice-choice'].map(name=>'/api/agent-builder/'+name));
+const trainingPath = path => path.startsWith('/api/agent-builder/training/');
 const isRecord = value => !!value && typeof value === 'object' && !Array.isArray(value);
 function validateOwnerCallBody(body) {
   // Legacy queued tests keep their existing server contract. The one-shot mode
@@ -44,12 +59,12 @@ function validateOwnerCallBody(body) {
 
 function safeOwnerCallReceipt(data, body, serverKey) {
   const invalid = () => deny(502,'Unexpected own-contact call receipt; check the same request before retrying');
-  const states = ['queued','processing','awaiting_outcome','completed','cancelled','blocked','failed','uncertain'];
-  if (!isRecord(data) || data.queued !== true || data.operation_id !== body.request_id
-      || typeof data.job_id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(data.job_id)
+  const states = ['queued','processing','awaiting_outcome','completed','cancelled','blocked','failed','uncertain','skipped'];
+  if (!isRecord(data) || data.queued !== ['queued','processing','awaiting_outcome'].includes(data.status) || data.operation_id !== body.request_id
+      || (data.job_id !== undefined ? typeof data.job_id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(data.job_id) : data.status !== 'cancelled')
       || !states.includes(data.status) || data.earliest_delay_seconds !== 0
       || data.maximum_call_seconds !== 180 || data.paid_provider_usage !== true || data.one_call_only !== true) invalid();
-  const result = {queued:true,job_id:data.job_id,operation_id:data.operation_id,status:data.status,
+  const result = {queued:data.queued,...(data.job_id !== undefined ? {job_id:data.job_id} : {}),operation_id:data.operation_id,status:data.status,
     earliest_delay_seconds:0,maximum_call_seconds:180,paid_provider_usage:true,one_call_only:true};
   if (typeof serverKey === 'string' && Object.values(result).some(value=>typeof value === 'string' && value.includes(serverKey))) invalid();
   return result;
@@ -154,6 +169,8 @@ export async function sendControl(installation,method,path,body,fetchImpl=fetch)
   // may supply an upstream origin, path, query, credential or method override.
   if (!Object.entries(OPERATIONS).some(([action,target]) => action.startsWith(method+':') && target === path)) deny(404,'Control operation not found');
   if (connectionPaths.has(path)) validateConnectionBody(path,body);
+  if (voicePaths.has(path)) validateVoiceBody(path,body,()=>deny(400,'Unsupported voice settings fields'));
+  if (trainingPath(path)) validateTrainingBody(path,body,()=>deny(400,'Unsupported or oversized training fields'));
   if (path === TEST_CALL_PATH) validateOwnerCallBody(body);
   const upstreamPath = path.startsWith('/api/agent-builder') ? path : '/api/control/'+path;
   const payload=body===undefined?undefined:JSON.stringify(body);
@@ -171,7 +188,10 @@ export async function sendControl(installation,method,path,body,fetchImpl=fetch)
     if(!(r.headers.get('content-type')||'').startsWith('application/json')){await r.body?.cancel();deny(502,'Unexpected LeadRelay response type');}
     const data=JSON.parse(await boundedResponse(r));
     // Never forward any upstream headers/cookies, raw error bodies or credentials.
+    if (path === '/api/agent-builder' && isRecord(data) && Object.hasOwn(data,'website_chat')) return {...data,website_chat:projectWebsiteChat(data.website_chat,installation.key,()=>deny(502,'Unexpected website chat installation details'))};
     if (connectionPaths.has(path)) return safeConnectionResponse(path,data,[installation.key,body?.secret,body?.webhook_secret]);
+    if (voicePaths.has(path)) return projectVoice(path,data,body,installation.key,()=>deny(502,'Unexpected voice settings response'));
+    if (trainingPath(path)) return projectTraining(path,data,installation.key,()=>deny(502,'Unexpected training response'));
     if (path === TEST_CALL_PATH && body?.mode === 'call_me') return safeOwnerCallReceipt(data,body,installation.key);
     return data;
   }catch(e){if(e instanceof GatewayError)throw e;deny(502,'LeadRelay unavailable; no automatic retry was attempted');}
@@ -201,6 +221,8 @@ export function createDispatcher({installations,authorize,verifyCsrf,transport=s
       if(!body||typeof body!=='object'||Array.isArray(body))deny(400,'Expected a JSON object');
       if(Buffer.byteLength(JSON.stringify(body))>MAX_BYTES)deny(413,'Request exceeds limit');
       if (connectionPaths.has(OPERATIONS[action])) validateConnectionBody(OPERATIONS[action],body);
+      else if (voicePaths.has(OPERATIONS[action])) validateVoiceBody(OPERATIONS[action],body,()=>deny(400,'Unsupported voice settings fields'));
+      else if (trainingPath(OPERATIONS[action])) validateTrainingBody(OPERATIONS[action],body,()=>deny(400,'Unsupported or oversized training fields'));
       else if (OPERATIONS[action] === TEST_CALL_PATH && Object.hasOwn(body,'mode')) validateOwnerCallBody(body);
       else if(match[2].startsWith('agent-') && ['installationId','workspaceId','userId','base_url','key','key_env','secret','webhook_secret','provider_key','from_number','to_number','phone','own_phone','recipient'].some(key => Object.hasOwn(body,key))) deny(400,'Agent authority, credentials and call destination are server-controlled');
     }
