@@ -140,21 +140,25 @@ export async function mountAgentTraining(root, api, options = {}) {
   const addText = el('button', 'Add text for review'); addText.type = 'submit'; addText.className = 'btn'; textForm.append(addText); track(addText);
   const textFeedback = feedback(textForm);
   const uploadForms = [];
+  const sourceGroups = new Map();
   const uploadDescriptions = {
     general: 'Products, services, FAQs and other business facts.',
     brand_guidelines: 'Brand rules, positioning and approved messages.',
     brand_voice: 'Tone, wording and examples of how your business speaks. This does not change the audio voice.',
   };
   for (const [category, label] of categories) {
-    const form = el('form'); form.className = 'agent-training-upload-area'; form.setAttribute('data-source-category', category);
+    const area = el('section'); area.className = 'agent-training-upload-area'; area.setAttribute('data-source-category', category);
+    const form = el('form'); form.className = 'agent-training-upload-form'; form.setAttribute('data-source-category', category);
     form.append(el('h3', label), el('p', uploadDescriptions[category]));
     const input = field(form, category === 'general' ? 'training_file' : category + '_file', 'Upload ' + label.toLowerCase(), 'file');
     input.accept = '.txt,.md,.pdf,.docx'; input.required = true; fileInputs.add(input);
     form.append(el('p', 'TXT, Markdown, PDF or DOCX · up to 512 KB and 50,000 extracted characters per file.'));
     const button = el('button', 'Add file for review'); button.type = 'submit'; button.className = 'btn'; form.append(button); track(button);
     const uploadFeedback = feedback(form);
-    uploadForms.push({ form, input, category, button, uploadFeedback, tracking: { sourceId: null } });
-    if (canTrain) sourceForms.append(form);
+    const group = el('div'); group.className = 'agent-training-source-group'; group.setAttribute('data-source-category', category);
+    area.append(form, group); sourceGroups.set(category, group);
+    uploadForms.push({ form, input, category, button, uploadFeedback, tracking: { sourceId: null, filename: null } });
+    if (canTrain) sourceForms.append(area);
   }
   if (canTrain) {
     const optional = el('details'); optional.className = 'agent-training-optional-text';
@@ -336,11 +340,12 @@ export async function mountAgentTraining(root, api, options = {}) {
     sourceButtons.clear();
     const rows = sources.map(source => {
       const row = el('div'); row.className = 'agent-training-source';
+      row.setAttribute('data-source-id', source.source_id);
       row.append(el('strong', source.title || source.filename || 'Training source'));
       const labels = { queued: 'Waiting for extraction', extracting: 'Reading document', ready: 'Ready for your review', reviewed: 'Reviewed and approved', failed: 'Could not extract this document' };
       row.append(el('span', labels[source.status] || 'Status unavailable'));
       row.setAttribute('data-state', source.status === 'failed' ? 'error' : source.approved === true ? 'complete' : ['queued', 'extracting'].includes(source.status) ? 'working' : 'todo');
-      if (source.filename) row.append(el('small', source.filename));
+      if (source.filename && source.filename !== source.title) row.append(el('small', source.filename));
       if (source.status === 'failed') row.append(el('p', 'This file could not be extracted. Check that it is readable and within the limits, or add its text as an optional source. No source was approved.'));
       if (['ready', 'reviewed'].includes(source.status) && typeof source.content === 'string') {
         const button = el('button', source.approved ? 'Review saved source' : 'Review this source'); button.type = 'button'; button.className = 'btn small';
@@ -352,20 +357,29 @@ export async function mountAgentTraining(root, api, options = {}) {
     });
     sourceList.replaceChildren();
     for (const [category, label] of categories) {
-      const group = el('div'); group.className = 'agent-training-source-group'; group.setAttribute('data-source-category', category);
-      group.append(el('h3', label));
+      const group = sourceGroups.get(category);
+      group.replaceChildren(el('h3', canTrain ? 'Saved documents' : label));
       const matching = rows.filter((_, index) => (categories.some(([id]) => id === sources[index].category) ? sources[index].category : 'general') === category);
-      group.append(...(matching.length ? matching : [el('p', 'No ' + label.toLowerCase() + ' sources yet.')])); sourceList.append(group);
+      group.append(...(matching.length ? matching : [el('p', 'No ' + label.toLowerCase() + ' sources yet.')]));
+      if (!canTrain) sourceList.append(group);
     }
     for (const { tracking, uploadFeedback } of uploadForms) {
       const source = sources.find(item => item.source_id === tracking.sourceId);
       if (!source) continue;
-      if (['queued', 'extracting'].includes(source.status)) uploadFeedback('Document received. Reading its text; review and approval come next.', false, true);
-      else if (source.status === 'failed') uploadFeedback('This document could not be extracted. Check its source status below, or add readable text instead. Nothing was approved or published.', true);
-      else if (source.approved === true) uploadFeedback('Document source reviewed and approved. Select it under Approved sources for this draft, then save and approve the training version.');
-      else if (source.status === 'ready') uploadFeedback('Document text is ready. Click Review this source below, approve it, then select it for your settings draft.');
+      const state = uploadedState(source, tracking.filename);
+      uploadFeedback(state.text, state.error, state.pending);
     }
     renderSourceChoices(); status(); pollSources();
+  }
+  function uploadedState(source, selectedFilename) {
+    const name = source.filename || source.title || 'Document';
+    const saved = (selectedFilename && selectedFilename !== source.filename
+      ? `${selectedFilename} is saved as the source "${name}" below.`
+      : `${name} is saved below.`) + ' The file picker is clear so you can add another document.';
+    if (['queued', 'extracting'].includes(source.status)) return { text: `${saved} Reading its text; review and approval come next.`, pending: true };
+    if (source.status === 'failed') return { text: `${saved} This document could not be extracted. Check that it is readable and within the limits, or add its text instead. Nothing was approved or published.`, error: true };
+    if (source.approved === true) return { text: `${saved} This source is already reviewed and approved. Select it under Approved sources for this draft, then save and approve the training version.`, pending: false };
+    return { text: `${saved} Document text is ready. Click Review this source below, approve it, then select it for your settings draft.`, pending: false };
   }
   function updateSource(source) {
     sourceRead++;
@@ -445,12 +459,17 @@ export async function mountAgentTraining(root, api, options = {}) {
       const body = { filename: file.name, content_base64: btoa(binary), category };
       const result = await api('/api/agent-builder/training/upload', { method: 'POST', body, guard: currentFile });
       if (!currentFile()) return false;
-      if (!result.source?.source_id) throw Error('The server did not confirm this upload.');
+      const source = result.source;
+      if (result.outreach_started !== false || !source || typeof source.source_id !== 'string' || !/^[A-Za-z0-9_-]{1,36}$/.test(source.source_id)
+        || !['queued', 'extracting', 'ready', 'reviewed', 'failed'].includes(source.status) || typeof source.approved !== 'boolean'
+        || (source.category ?? 'general') !== category
+        || (['ready', 'reviewed'].includes(source.status) && (typeof source.content !== 'string' || typeof source.knowledge_id !== 'string' || !/^[A-Za-z0-9_-]{1,36}$/.test(source.knowledge_id)))
+        || (source.status === 'reviewed' && source.approved !== true)) throw Error('The server did not confirm this upload. Your file selection is preserved; refresh sources before trying again.');
       tracking.sourceId = result.source.source_id;
+      tracking.filename = file.name;
       updateSource(result.source); fileInput.value = '';
-      if (result.source.status === 'failed') message('This document could not be extracted. Check its source status below, or add readable text instead. Nothing was approved or published.', true);
-      else if (result.source.status === 'ready') message('Document text is ready. Review and approve its source below, then select it for this draft. It has not been published.');
-      else message('Document added for extraction. Review the extracted text before approving it. It has not been selected or published.', false, true);
+      const state = uploadedState(result.source, file.name);
+      message(state.text, state.error, state.pending);
     }, { feedback: uploadFeedback, button, pendingLabel: 'Preparing and uploading your document for review…', buttonLabel: 'Adding document…' });
   };
   profileForm.onsubmit = async event => {

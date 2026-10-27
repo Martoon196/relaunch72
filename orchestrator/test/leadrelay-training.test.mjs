@@ -465,7 +465,7 @@ test('upload feedback stays beside the chosen category through reading, extracti
     fileRead.resolve(Uint8Array.from([65, 66, 67]).buffer); await pending;
     assert.equal(text(form, 'Add file for review').disabled, false);
     assert.equal(feedback.attributes['data-state'], 'working');
-    assert.match(feedback.textContent, /added for extraction/);
+    assert.match(feedback.textContent, /brand-voice\.md is saved below.*picker is clear.*Reading its text/);
     h.setSources([{ ...readySource, source_id: 'file-source', category: 'brand_voice', filename: 'brand-voice.md' }]);
     await h.timers[0]();
     assert.equal(feedback.attributes['data-state'], 'success');
@@ -598,6 +598,121 @@ test('a delayed draft result cannot replace a newly selected business or show su
     assert.equal(formFor(h.root, 'objective'), current);
     assert.equal(field(current, 'instructions').value, 'New business instructions');
     assert.doesNotMatch(find(current, node => node.className === 'agent-training-form-message').textContent, /Settings draft saved/);
+    assert.equal(h.writes.length, 1);
+  } finally { h.restore(); }
+});
+
+test('accepted uploads stay visible in their own category after the picker clears and become reviewable there', async () => {
+  const h = await harness();
+  try {
+    const input = field(h.root, 'brand_voice_file'), form = formFor(h.root, 'brand_voice_file');
+    const area = find(h.root, node => node.className === 'agent-training-upload-area' && node.attributes['data-source-category'] === 'brand_voice');
+    input.files = [{ name: 'tone.md', size: 3, arrayBuffer: async () => Uint8Array.from([65, 66, 67]).buffer }]; input.value = 'tone.md';
+    await submit(form);
+    assert.equal(input.value, '');
+    assert.match(area.textContent, /tone\.md.*saved below.*picker is clear/);
+    assert.ok(find(area, node => node.className === 'agent-training-source' && node.attributes['data-source-id'] === 'file-source'));
+    assert.ok(text(area, 'Waiting for extraction'));
+    h.setSources([{ ...readySource, source_id: 'file-source', category: 'brand_voice', title: 'tone.md', filename: 'tone.md' }]);
+    await h.timers[0]();
+    assert.ok(text(area, 'Ready for your review'));
+    await text(area, 'Review this source').onclick();
+    const review = formFor(area, 'review_source_title'); assert.ok(review);
+    for (let parent = review.parentElement; parent; parent = parent.parentElement) assert.notEqual(parent.tag, 'form');
+    field(review, 'review_source_content').value = 'Unsaved owner review';
+    await text(h.root, 'Refresh sources').onclick();
+    assert.equal(formFor(area, 'review_source_title'), review);
+    assert.equal(field(review, 'review_source_content').value, 'Unsaved owner review');
+    assert.equal(h.writes.length, 1); assert.equal(field(h.root, 'knowledge_knowledge-a'), undefined);
+  } finally { h.restore(); }
+});
+
+test('saved filenames and actual statuses hydrate beside all three upload forms after reopening', async () => {
+  const sources = [
+    { ...readySource, category: 'general', filename: 'facts.md', title: 'facts.md' },
+    { ...readySource, source_id: 'rules-source', knowledge_id: 'rules-knowledge', category: 'brand_guidelines', filename: 'rules.md', title: 'rules.md', status: 'failed', approved: false },
+    { ...approvedSource, category: 'brand_voice', filename: 'tone.md', title: 'Reviewed tone' },
+  ];
+  const h = await harness({ sources });
+  try {
+    for (const [category, filename, status] of [['general', 'facts.md', 'Ready for your review'], ['brand_guidelines', 'rules.md', 'Could not extract this document'], ['brand_voice', 'tone.md', 'Reviewed and approved']]) {
+      const area = find(h.root, node => node.className === 'agent-training-upload-area' && node.attributes['data-source-category'] === category);
+      assert.ok(text(area, filename)); assert.ok(text(area, status));
+    }
+    assert.ok(text(find(h.root, node => node.className === 'agent-training-upload-area' && node.attributes['data-source-category'] === 'general'), 'Review this source'));
+    assert.ok(text(find(h.root, node => node.className === 'agent-training-upload-area' && node.attributes['data-source-category'] === 'brand_voice'), 'Review saved source'));
+    assert.equal(field(h.root, 'knowledge_knowledge-b').checked, false);
+    assert.deepEqual(h.writes, []);
+    await mountAgentTraining(h.root, h.api, { canRead: true, canTrain: true });
+    assert.ok(text(find(h.root, node => node.className === 'agent-training-upload-area' && node.attributes['data-source-category'] === 'general'), 'facts.md'));
+    assert.deepEqual(h.writes, []);
+  } finally { h.restore(); }
+});
+
+test('a duplicate reviewed upload reports its saved source without reverting it to extraction or selecting it', async () => {
+  const saved = { ...approvedSource, category: 'general', filename: 'original.md' };
+  const h = await harness({ sources: [saved], onWrite: async () => ({ source: saved, outreach_started: false }) });
+  try {
+    const input = field(h.root, 'training_file');
+    input.files = [{ name: 'same-content.md', size: 3, arrayBuffer: async () => Uint8Array.from([65, 66, 67]).buffer }]; input.value = 'same-content.md';
+    await submit(formFor(h.root, 'training_file'));
+    const area = find(h.root, node => node.className === 'agent-training-upload-area' && node.attributes['data-source-category'] === 'general');
+    const feedback = find(area, node => node.className === 'agent-training-form-message');
+    assert.equal(input.value, '');
+    assert.match(feedback.textContent, /same-content\.md.*original\.md.*already reviewed and approved/);
+    assert.doesNotMatch(feedback.textContent, /added for extraction|Reading its text/);
+    assert.equal(feedback.attributes['data-state'], 'success');
+    assert.equal(all(area).filter(node => node.className === 'agent-training-source').length, 1);
+    assert.equal(field(h.root, 'knowledge_knowledge-b').checked, false);
+    assert.equal(h.writes.length, 1);
+  } finally { h.restore(); }
+});
+
+test('failed extraction receipts stay visible in their category and never claim a queued or approved document', async () => {
+  const failed = { source_id: 'failed-source', title: 'unreadable.pdf', filename: 'unreadable.pdf', category: 'brand_guidelines', status: 'failed', approved: false };
+  const h = await harness({ onWrite: async () => ({ source: failed, outreach_started: false }) });
+  try {
+    const input = field(h.root, 'brand_guidelines_file');
+    input.files = [{ name: 'unreadable.pdf', size: 3, arrayBuffer: async () => Uint8Array.from([65, 66, 67]).buffer }]; input.value = 'unreadable.pdf';
+    await submit(formFor(h.root, 'brand_guidelines_file'));
+    const area = find(h.root, node => node.className === 'agent-training-upload-area' && node.attributes['data-source-category'] === 'brand_guidelines');
+    assert.ok(text(area, 'unreadable.pdf')); assert.ok(text(area, 'Could not extract this document'));
+    const feedback = find(area, node => node.className === 'agent-training-form-message');
+    assert.equal(feedback.attributes['role'], 'alert'); assert.equal(feedback.attributes['data-state'], 'error');
+    assert.doesNotMatch(feedback.textContent, /Reading its text|already reviewed/);
+    assert.equal(text(area, 'Review this source'), undefined); assert.equal(h.writes.length, 1);
+  } finally { h.restore(); }
+});
+
+test('rejected or unconfirmed upload receipts preserve the chosen file and show the failure beside it', async () => {
+  for (const response of [Error('Upload could not be saved'), { source: { source_id: 'wrong-category', category: 'brand_voice', status: 'queued', approved: false }, outreach_started: false }, { source: { source_id: 'missing-status' }, outreach_started: false }]) {
+    const h = await harness({ onWrite: async () => { if (response instanceof Error) throw response; return response; } });
+    try {
+      const input = field(h.root, 'training_file');
+      const file = { name: 'facts.md', size: 3, arrayBuffer: async () => Uint8Array.from([65, 66, 67]).buffer };
+      input.files = [file]; input.value = 'facts.md';
+      await submit(formFor(h.root, 'training_file'));
+      const form = formFor(h.root, 'training_file'), feedback = find(form, node => node.className === 'agent-training-form-message');
+      assert.equal(input.value, 'facts.md'); assert.equal(input.files[0], file);
+      assert.equal(feedback.attributes['role'], 'alert'); assert.equal(feedback.attributes['data-state'], 'error');
+      assert.equal(all(h.root).filter(node => node.className === 'agent-training-source').length, 0);
+      assert.equal(h.writes.length, 1);
+    } finally { h.restore(); }
+  }
+});
+
+test('a late accepted upload cannot put a prior business filename into the newly selected business', async () => {
+  const wait = deferred(), h = await harness({ onWrite: async () => wait.promise });
+  try {
+    const input = field(h.root, 'training_file');
+    input.files = [{ name: 'old-business.md', size: 3, arrayBuffer: async () => Uint8Array.from([65, 66, 67]).buffer }]; input.value = 'old-business.md';
+    const pending = submit(formFor(h.root, 'training_file'));
+    await Promise.resolve(); await Promise.resolve();
+    h.setSources([]); await mountAgentTraining(h.root, h.api, { canRead: true, canTrain: true });
+    wait.resolve({ source: { source_id: 'old-source', filename: 'old-business.md', title: 'old-business.md', category: 'general', status: 'queued', approved: false }, outreach_started: false });
+    await pending;
+    assert.doesNotMatch(h.root.textContent, /old-business\.md/);
+    assert.equal(all(h.root).filter(node => node.className === 'agent-training-source').length, 0);
     assert.equal(h.writes.length, 1);
   } finally { h.restore(); }
 });
