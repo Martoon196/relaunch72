@@ -337,6 +337,44 @@ test('Training draft and approval metadata preserve explicit review/publication 
   await assert.rejects(sendControl(installs().get('key-properties'),'GET','/api/agent-builder/training/profile',undefined,async()=>jsonResponse({...trainingState,legacy_sales_brief:key})),e=>e.status===502&&!e.message.includes(key));
 });
 const voiceApplyBody={version_id:'version-a',request_id:'9aca7ecd-9a94-43e0-9414-8af424b29c13',confirmation:'APPLY VERIFIED VOICE TO MY AGENT'};
+test('Training progress projects current approved and published evidence without receipt contents',async()=>{
+  const progress={approval_current:true,approved_version_id:'version-a',approved_version_status:'published',training_published:true};
+  const data={...trainingState,...progress,approval_receipt:{secret:key},provider_bindings:{secret:key}};
+  const result=await sendControl(installs().get('key-properties'),'GET','/api/agent-builder/training/profile',undefined,async()=>jsonResponse(data));
+  assert.deepEqual(result,{...trainingState,...progress});
+  const changed={approval_current:false,approved_version_id:null,approved_version_status:null,training_published:false};
+  const draft=await sendControl(installs().get('key-properties'),'GET','/api/agent-builder/training/profile',undefined,async()=>jsonResponse({...trainingState,...changed}));
+  assert.equal(draft.approval_current,false);assert.equal(draft.training_published,false);
+});
+test('Training progress rejects partial contradictory unsafe or unsupported publication evidence',async()=>{
+  const progress={approval_current:true,approved_version_id:'version-a',approved_version_status:'published',training_published:true};
+  for(const change of [
+    {approval_current:false},{approved_version_id:null},{approved_version_status:'queued'},
+    {approved_version_status:'invented'},{approved_version_id:key},{training_published:'yes'},
+  ])await assert.rejects(sendControl(installs().get('key-properties'),'GET','/api/agent-builder/training/profile',undefined,async()=>jsonResponse({...trainingState,...progress,...change})),e=>e.status===502&&!e.message.includes(key));
+  await assert.rejects(sendControl(installs().get('key-properties'),'GET','/api/agent-builder/training/profile',undefined,async()=>jsonResponse({...trainingState,approval_current:true})),e=>e.status===502);
+});
+const voiceSettingsState={provider:'retell',verified:true,saved_voice:{voice_id:'voice-new',voice_name:'New voice'},published:{version_id:'version-a',voice_id:'voice-old',status:'published'},can_apply:false,blocker:'A voice change is pending.',outreach_started:false};
+const voiceProgress={operation_id:voiceApplyBody.request_id,parent_version_id:'version-a',version_id:'version-b',status:'queued',step:'voice',unchanged:false};
+test('Voice progress returns only a bounded existing operation and never posts while checking',async()=>{
+  const seen=[];
+  const result=await sendControl(installs().get('key-properties'),'GET','/api/agent-builder/voice-settings',undefined,async(_url,options)=>{seen.push(options.method);return jsonResponse({...voiceSettingsState,voice_operation:{...voiceProgress,secret:key,from_number:'+447700900123',bindings:{secret:key}}});});
+  assert.deepEqual(result,{...voiceSettingsState,voice_operation:voiceProgress});assert.deepEqual(seen,['GET']);
+  for(const status of ['processing','uncertain','failed','reconciling']){
+    const response=await sendControl(installs().get('key-properties'),'GET','/api/agent-builder/voice-settings',undefined,async()=>jsonResponse({...voiceSettingsState,voice_operation:{...voiceProgress,status}}));
+    assert.equal(response.voice_operation.status,status);
+  }
+  const published={...voiceSettingsState,published:{version_id:'version-b',voice_id:'voice-new',status:'published'},voice_operation:{...voiceProgress,status:'published',step:'complete'}};
+  assert.equal((await sendControl(installs().get('key-properties'),'GET','/api/agent-builder/voice-settings',undefined,async()=>jsonResponse(published))).voice_operation.status,'published');
+  assert.equal((await sendControl(installs().get('key-properties'),'GET','/api/agent-builder/voice-settings',undefined,async()=>jsonResponse({...voiceSettingsState,voice_operation:null}))).voice_operation,null);
+});
+test('Voice progress holds mismatched publication malformed IDs unknown states and credential exposure',async()=>{
+  for(const change of [{operation_id:'short'},{operation_id:key},{parent_version_id:'version-b'},{status:'published',step:'complete'},{status:'not-real'},{step:'create_brain'},{unchanged:true}]){
+    let requests=0;
+    await assert.rejects(sendControl(installs().get('key-properties'),'GET','/api/agent-builder/voice-settings',undefined,async()=>{requests++;return jsonResponse({...voiceSettingsState,voice_operation:{...voiceProgress,...change}});}),e=>e.status===502&&!e.message.includes(key));
+    assert.equal(requests,1);
+  }
+});
 test('Voice apply uses an explicit action and a saved verified choice, never a client-selected voice or caller',async()=>{
   const path='/installations/key-properties/agent-voice-apply';
   await assert.rejects(build({authorize:async()=>['POST:agent-connect','POST:agent-publish']})({identity,method:'POST',path,body:voiceApplyBody}),e=>e.status===403);

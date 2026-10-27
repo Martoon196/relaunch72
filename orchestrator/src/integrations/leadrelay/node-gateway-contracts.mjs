@@ -4,6 +4,7 @@ const TRAINING=BASE+'training/';
 const TOOL_IDS=['calendar_availability','calendar_book','offer_signup_link','offer_booking_link','offer_payment_link'];
 const SOURCE_CATEGORIES=['general','brand_guidelines','brand_voice'];
 const PROFILE_FIELDS=['objective','reply_length','one_question','sales_guidance','signup_url','payment_url','instructions','business_capabilities','knowledge_ids','executable_tools'];
+const VERSION_STATUSES=['approved','queued','processing','published','failed','uncertain','reconciling'];
 const record=value=>!!value&&typeof value==='object'&&!Array.isArray(value);
 function contracts(fail) {
   const text=(value,max,min=0)=>{if(typeof value!=='string'||Array.from(value).length<min||Array.from(value).length>max)fail();return value;};
@@ -98,6 +99,17 @@ export function projectTraining(path,data,key,fail){
       })};
     if(Object.hasOwn(data,'legacy_sales_brief'))result.legacy_sales_brief=c.text(data.legacy_sales_brief,20000);
     if(Object.hasOwn(data,'approval_blocker'))result.approval_blocker=c.text(data.approval_blocker,1000);
+    const progressFields=['approval_current','approved_version_id','approved_version_status','training_published'];
+    if(progressFields.some(field=>Object.hasOwn(data,field))){
+      if(!progressFields.every(field=>Object.hasOwn(data,field)))fail();
+      const current=c.bool(data.approval_current),published=c.bool(data.training_published);
+      const id=data.approved_version_id===null?null:c.identity(data.approved_version_id);
+      const status=data.approved_version_status;
+      if(status!==null&&!VERSION_STATUSES.includes(status))fail();
+      if(current?(!id||status===null):(id!==null||status!==null||published))fail();
+      if(published&&status!=='published')fail();
+      Object.assign(result,{approval_current:current,approved_version_id:id,approved_version_status:status,training_published:published});
+    }
     if(Object.hasOwn(data,'outreach_started')){if(data.outreach_started!==false)fail();result.outreach_started=false;}
   }else{
     if(data.outreach_started!==false)fail();
@@ -143,6 +155,18 @@ export function projectVoice(path,data,body,key,fail){
     let published=null;
     if(data.published!==null){if(!record(data.published))fail();published={...voice(data.published),version_id:c.identity(data.published.version_id),status:c.text(data.published.status,40)};}
     result={provider:'retell',verified:c.bool(data.verified),saved_voice:voice(data.saved_voice),published,can_apply:c.bool(data.can_apply),blocker:data.blocker===null?null:c.text(data.blocker,1000),outreach_started:false};
+    if(Object.hasOwn(data,'voice_operation')){
+      const operation=data.voice_operation;
+      if(operation===null)result.voice_operation=null;
+      else{
+        if(!record(operation)||typeof operation.operation_id!=='string'||!/^[A-Za-z0-9_-]{16,100}$/.test(operation.operation_id)
+          ||!VERSION_STATUSES.includes(operation.status)||!['voice','publish_voice','complete'].includes(operation.step))fail();
+        const row={operation_id:operation.operation_id,parent_version_id:c.identity(operation.parent_version_id),version_id:c.identity(operation.version_id),status:operation.status,step:operation.step,unchanged:c.bool(operation.unchanged)};
+        if(row.unchanged||row.parent_version_id===row.version_id)fail();
+        if(row.status==='published'&&published?.version_id!==row.version_id)fail();
+        result.voice_operation=row;
+      }
+    }
   }else if(path===BASE+'voice-apply'){
     if(data.operation_id!==body.request_id||!['approved','queued','processing','published','failed','uncertain','reconciling'].includes(data.status))fail();
     if(data.queued!==['queued','processing'].includes(data.status))fail();

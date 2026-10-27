@@ -12,7 +12,7 @@ class Element {
   }
   set textContent(value) { this.text = String(value); this.children = []; }
   get textContent() { return this.text || this.children.map(child => child.textContent).join(' '); }
-  append(...children) { for (const child of children) { child.parentElement = this; this.children.push(child); } }
+  append(...children) { for (const child of children) { const prior = child.parentElement; if (prior) { const index = prior.children.indexOf(child); if (index >= 0) prior.children.splice(index, 1); } child.parentElement = this; child.isConnected = true; this.children.push(child); } }
   replaceChildren(...children) { for (const child of this.children) child.isConnected = false; this.children = []; this.text = ''; this.append(...children); }
   setAttribute(name, value) { this.attributes[name] = value; }
   reportValidity() { return true; }
@@ -260,7 +260,7 @@ test('pending draft save freezes current controls and source selection and remai
     assert.equal(h.writes.length, 1);
     assert.equal(field(h.root, 'instructions').disabled, true);
     assert.equal(field(h.root, 'knowledge_knowledge-b').disabled, true);
-    assert.equal(text(h.root, 'Save settings draft').disabled, true);
+    assert.equal(text(h.root, 'Saving settings…').disabled, true);
     wait.resolve(profileMetadata(h.writes[0].body, { saved: true })); await pending;
     assert.equal(field(h.root, 'instructions').disabled, false);
     assert.equal(field(h.root, 'instructions').value, 'Preserve this current draft');
@@ -430,5 +430,174 @@ test('detaching during brand-voice reading clears every selection and does not s
     wait.resolve(new ArrayBuffer(3)); await pending;
     for (const name of ['training_file', 'brand_guidelines_file', 'brand_voice_file']) assert.equal(field(h.root, name).value, '');
     assert.deepEqual(h.writes, []);
+  } finally { h.restore(); }
+});
+
+test('the training workflow explains three uploads, separate instructions and optional text without requiring extra fields', async () => {
+  const h = await harness();
+  try {
+    const optional = find(h.root, node => node.tag === 'details' && node.className === 'agent-training-optional-text');
+    assert.ok(optional); assert.notEqual(optional.open, true);
+    assert.equal(formFor(h.root, 'source_title').parentElement, optional);
+    assert.match(h.root.textContent, /do not need to paste these same documents into the other text boxes/);
+    assert.match(h.root.textContent, /separate agent-instructions document belongs in Your instructions/);
+    assert.match(h.root.textContent, /no category or optional text box must be filled/);
+    assert.equal(field(h.root, 'instructions').required, undefined);
+    const sources = find(h.root, node => node.attributes['data-step'] === 'sources');
+    assert.equal(sources.attributes['data-state'], 'optional');
+    await submit(formFor(h.root, 'objective'));
+    assert.equal(h.writes.length, 1); assert.deepEqual(h.writes[0].body.knowledge_ids, []);
+    assert.equal(text(h.root, 'Approve new training version').disabled, false);
+  } finally { h.restore(); }
+});
+
+test('upload feedback stays beside the chosen category through reading, extraction and ready-for-review without autoapproval', async () => {
+  const fileRead = deferred(); const h = await harness();
+  try {
+    const form = formFor(h.root, 'brand_voice_file'), input = field(form, 'brand_voice_file');
+    input.files = [{ name: 'brand-voice.md', size: 3, arrayBuffer: () => fileRead.promise }];
+    const pending = submit(form);
+    const feedback = find(form, node => node.className === 'agent-training-form-message');
+    assert.equal(feedback.hidden, false); assert.equal(feedback.attributes['data-state'], 'working');
+    assert.match(feedback.textContent, /Preparing and uploading/);
+    assert.equal(text(form, 'Adding document…').disabled, true);
+    assert.equal(h.writes.length, 0);
+    fileRead.resolve(Uint8Array.from([65, 66, 67]).buffer); await pending;
+    assert.equal(text(form, 'Add file for review').disabled, false);
+    assert.equal(feedback.attributes['data-state'], 'working');
+    assert.match(feedback.textContent, /added for extraction/);
+    h.setSources([{ ...readySource, source_id: 'file-source', category: 'brand_voice', filename: 'brand-voice.md' }]);
+    await h.timers[0]();
+    assert.equal(feedback.attributes['data-state'], 'success');
+    assert.match(feedback.textContent, /Document text is ready.*Review this source/);
+    assert.equal(formFor(h.root, 'brand_voice_file'), form);
+    assert.equal(field(h.root, 'knowledge_knowledge-a'), undefined);
+    assert.equal(h.writes.length, 1); assert.equal(h.writes[0].path, '/api/agent-builder/training/upload');
+  } finally { h.restore(); }
+});
+
+test('draft-save feedback is local, immediate and persistent while preserving the form and viewport', async () => {
+  const wait = deferred(), h = await harness({ onWrite: async () => wait.promise });
+  const previousScroll = globalThis.scrollTo; let scrolls = 0;
+  globalThis.scrollTo = () => { scrolls++; };
+  try {
+    const form = formFor(h.root, 'objective'), instructions = field(form, 'instructions');
+    instructions.value = 'A saved behaviour instruction'; instructions.oninput();
+    const pending = submit(form);
+    const feedback = find(form, node => node.className === 'agent-training-form-message');
+    assert.equal(feedback.attributes['data-state'], 'working'); assert.match(feedback.textContent, /Saving these settings/);
+    assert.equal(text(form, 'Saving settings…').attributes['aria-busy'], 'true');
+    wait.resolve(profileMetadata(h.writes[0].body, { saved: true })); await pending;
+    assert.equal(formFor(h.root, 'objective'), form); assert.equal(field(form, 'instructions'), instructions);
+    assert.equal(instructions.value, 'A saved behaviour instruction'); assert.equal(scrolls, 0);
+    assert.equal(feedback.attributes['data-state'], 'success'); assert.equal(feedback.hidden, false);
+    assert.match(feedback.textContent, /Settings draft saved.*published agent is unchanged/);
+    assert.equal(text(form, 'Save settings draft').attributes['aria-busy'], 'false');
+    assert.equal(find(h.root, node => node.attributes['data-step'] === 'save').attributes['data-state'], 'complete');
+    assert.notEqual(find(h.root, node => node.attributes['data-step'] === 'publish').attributes['data-state'], 'complete');
+  } finally { globalThis.scrollTo = previousScroll; h.restore(); }
+});
+
+test('save failure stays beside the action, restores its button and retains the unsaved owner edits', async () => {
+  const wait = deferred(), h = await harness({ onWrite: async () => wait.promise });
+  try {
+    const form = formFor(h.root, 'objective'), instructions = field(form, 'instructions');
+    instructions.value = 'Keep this after failure'; instructions.oninput();
+    const pending = submit(form);
+    wait.reject(Error('This draft could not be saved; check it and try again')); await pending;
+    const feedback = find(form, node => node.className === 'agent-training-form-message');
+    assert.equal(feedback.attributes.role, 'alert'); assert.equal(feedback.attributes['data-state'], 'error');
+    assert.match(feedback.textContent, /could not be saved/); assert.equal(feedback.hidden, false);
+    assert.equal(formFor(h.root, 'objective'), form); assert.equal(instructions.value, 'Keep this after failure');
+    assert.equal(text(form, 'Save settings draft').disabled, false);
+    assert.equal(text(h.root, 'Approve new training version').disabled, true);
+  } finally { h.restore(); }
+});
+
+test('review opens within its source row and source refresh preserves the currently edited review form', async () => {
+  const h = await harness({ sources: [readySource] });
+  try {
+    const row = find(h.root, node => node.className === 'agent-training-source');
+    await text(row, 'Review this source').onclick();
+    const editor = find(row, node => node.className === 'agent-training-source-editor');
+    assert.ok(editor);
+    const form = formFor(editor, 'review_source_title');
+    field(form, 'review_source_content').value = 'Preserve this review edit';
+    await text(h.root, 'Refresh sources').onclick();
+    const current = find(h.root, node => node.className === 'agent-training-source');
+    assert.equal(find(current, node => node.className === 'agent-training-source-editor'), editor);
+    assert.equal(formFor(editor, 'review_source_title'), form);
+    assert.equal(field(form, 'review_source_content').value, 'Preserve this review edit');
+    assert.deepEqual(h.writes, []);
+  } finally { h.restore(); }
+});
+
+test('reload uses confirmed training publication metadata and local changes remove only the current-draft completion', async () => {
+  const h = await harness({ metadata: profileMetadata(defaults, { saved: true, approval_current: true, approved_version_id: 'version-base', approved_version_status: 'published', training_published: true }) });
+  try {
+    assert.match(h.root.textContent, /This training version is published/);
+    assert.equal(find(h.root, node => node.attributes['data-step'] === 'approve').attributes['data-state'], 'complete');
+    assert.equal(find(h.root, node => node.attributes['data-step'] === 'publish').attributes['data-state'], 'complete');
+    assert.equal(text(h.root, 'Approve new training version').disabled, true);
+    field(h.root, 'instructions').value = 'A new draft change'; field(h.root, 'instructions').oninput();
+    assert.match(h.root.textContent, /Unsaved settings draft/);
+    assert.notEqual(find(h.root, node => node.attributes['data-step'] === 'publish').attributes['data-state'], 'complete');
+    assert.match(h.root.textContent, /Published agent: Synthetic business/);
+    assert.deepEqual(h.writes, []);
+  } finally { h.restore(); }
+});
+
+test('old applied IDs and a published baseline cannot mark an unapproved current draft published', async () => {
+  const h = await harness({ metadata: profileMetadata(defaults, { saved: true, applied_version_id: 'version-base', approval_current: false, approved_version_id: null, approved_version_status: null, training_published: false }) });
+  try {
+    assert.notEqual(find(h.root, node => node.attributes['data-step'] === 'publish').attributes['data-state'], 'complete');
+    assert.doesNotMatch(h.root.textContent, /This training version is published|Confirmed published for these approved settings/);
+    assert.equal(text(h.root, 'Approve new training version').disabled, false);
+    assert.deepEqual(h.writes, []);
+  } finally { h.restore(); }
+});
+
+test('approved, processing and uncertain publication states remain distinct from confirmed publication on reload', async () => {
+  for (const [status, state, wording] of [['approved', 'todo', /ready for publication/], ['processing', 'working', /publication is processing/], ['uncertain', 'error', /publication needs review/]]) {
+    const h = await harness({ metadata: profileMetadata(defaults, { saved: true, approval_current: true, approved_version_id: 'version-trained', approved_version_status: status, training_published: false }) });
+    try {
+      const publication = find(h.root, node => node.attributes['data-step'] === 'publish');
+      assert.equal(publication.attributes['data-state'], state); assert.match(publication.textContent, wording);
+      assert.equal(text(h.root, 'Approve new training version').disabled, true);
+      assert.doesNotMatch(h.root.textContent, /This training version is published/);
+      assert.deepEqual(h.writes, []);
+    } finally { h.restore(); }
+  }
+});
+
+test('approval progress and success stay at the approval action and do not mark provider publication complete', async () => {
+  const wait = deferred(), h = await harness({ metadata: profileMetadata(defaults, { saved: true }), onWrite: async () => wait.promise });
+  try {
+    const form = formFor(h.root, 'training_confirmed'); field(form, 'training_confirmed').checked = true;
+    const pending = submit(form);
+    const feedback = find(form, node => node.className === 'agent-training-form-message');
+    assert.match(feedback.textContent, /Approving the reviewed training version/);
+    assert.equal(feedback.attributes['data-state'], 'working'); assert.equal(text(form, 'Approving training…').disabled, true);
+    wait.resolve({ version: { ...latestVersion, id: 'version-new', status: 'approved' }, outreach_started: false, published_version_unchanged: true, provider_publication_required: true }); await pending;
+    assert.equal(feedback.attributes['data-state'], 'success'); assert.match(feedback.textContent, /approved.*published agent is unchanged/);
+    assert.equal(find(h.root, node => node.attributes['data-step'] === 'approve').attributes['data-state'], 'complete');
+    assert.notEqual(find(h.root, node => node.attributes['data-step'] === 'publish').attributes['data-state'], 'complete');
+    assert.equal(h.writes.length, 1); assert.equal(h.writes[0].path, '/api/agent-builder/training/approve');
+  } finally { h.restore(); }
+});
+
+test('a delayed draft result cannot replace a newly selected business or show success in its new training form', async () => {
+  const wait = deferred(), h = await harness({ onWrite: async () => wait.promise });
+  try {
+    const old = formFor(h.root, 'objective'); field(old, 'instructions').value = 'Old business draft';
+    const pending = submit(old);
+    h.setMetadata(profileMetadata({ ...defaults, instructions: 'New business instructions' }, { latest_version: { ...latestVersion, id: 'new-business-version' } }));
+    await mountAgentTraining(h.root, h.api, { canRead: true, canTrain: true });
+    const current = formFor(h.root, 'objective');
+    wait.resolve(profileMetadata(h.writes[0].body, { saved: true })); await pending;
+    assert.equal(formFor(h.root, 'objective'), current);
+    assert.equal(field(current, 'instructions').value, 'New business instructions');
+    assert.doesNotMatch(find(current, node => node.className === 'agent-training-form-message').textContent, /Settings draft saved/);
+    assert.equal(h.writes.length, 1);
   } finally { h.restore(); }
 });
