@@ -288,6 +288,45 @@ const trainingWriteBodies={
   'agent-training-profile':trainingProfile,
   'agent-training-approve':{source_version_id:'version-a',review_digest:'d'.repeat(64),confirmation:'APPROVE THIS TRAINING VERSION'},
 };
+test('Training signup contract round-trips only public product and promo selectors',async()=>{
+  for(const plan of ['pro_buyer','pro_investor','pro_business'])for(const suffix of ['', '&promo=PUBLIC-6']){
+    const url=`https://propertypredator.com/app?plan=${plan}${suffix}`;
+    const profile={...trainingProfile,signup_url:url};
+    const written=await build()({identity,method:'POST',path:'/installations/key-properties/agent-training-profile',body:profile});
+    assert.equal(written.body.signup_url,url);
+    const state=await sendControl(installs().get('key-properties'),'GET','/api/agent-builder/training/profile',undefined,async()=>jsonResponse({...trainingState,profile}));
+    assert.equal(state.profile.signup_url,url);
+    await assert.rejects(build()({identity,method:'POST',path:'/installations/key-properties/agent-training-profile',body:{...trainingProfile,payment_url:url}}),e=>e.status===400);
+  }
+});
+test('Training gateway rejects secret, encoded, duplicate or off-contract signup queries in both directions',async()=>{
+  const query='plan=pro_investor&promo=APEX6';
+  for(const url of [
+    'https://example.com/app?'+query,'https://www.propertypredator.com/app?'+query,
+    'https://propertypredator.com.evil.example/app?'+query,'https://propertypredator.com:8443/app?'+query,
+    'https://propertypredator.com/other/../app?'+query,'https://propertypredator.com/app/?'+query,
+    'https://propertypredator.com/app?promo=APEX6','https://propertypredator.com/app?'+query+'&promo=OTHER6',
+    'https://propertypredator.com/app?'+query+'&plan=pro_buyer','https://propertypredator.com/app?'+query+'&token=private',
+    'https://propertypredator.com/app?plan=pro_investor&email=person@example.com',
+    'https://propertypredator.com/app?%70lan=pro_investor&promo=APEX6',
+    'https://propertypredator.com/app?plan=pro_investor&promo=%41PEX6',
+    'https://propertypredator.com/app?plan=pro_investor&promo=apex6',
+    'https://propertypredator.com/app?plan=pro_investor&promo=AB',
+    'https://propertypredator.com/app?plan=pro_investor&promo=-APEX6',
+    'https://propertypredator.com/app?plan=pro_investor&promo=---',
+    'https://propertypredator.com/app?plan=pro_investor&promo='+'A'.repeat(65),
+    'https://propertypredator.com/app?plan=pro_investor_annual&promo=APEX6',
+    'https://propertypredator.com/app?'+query+'#','https://propertypredator.com/app?'+query+'#private',
+    'https://user:secret@propertypredator.com/app?'+query,
+    'https://%70ropertypredator.com/app?'+query,
+    'https://127.0.0.1/','https://127.1/','https://0177.0.0.1/','https://0x7f.1/','https://localhost/','https://host.internal/',
+  ]){
+    const profile={...trainingProfile,signup_url:url};let sent=false;
+    await assert.rejects(build({transport:async()=>{sent=true;}})({identity,method:'POST',path:'/installations/key-properties/agent-training-profile',body:profile}),e=>e.status===400);
+    assert.equal(sent,false);
+    await assert.rejects(sendControl(installs().get('key-properties'),'GET','/api/agent-builder/training/profile',undefined,async()=>jsonResponse({...trainingState,profile})),e=>e.status===502);
+  }
+});
 test('Training actions require explicit grants and existing HQ CSRF for each separate write',async()=>{
   let sends=0;const transport=async()=>{sends++;return {};};
   for(const [action,body] of Object.entries(trainingWriteBodies)){

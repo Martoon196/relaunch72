@@ -6,6 +6,24 @@ const SOURCE_CATEGORIES=['general','brand_guidelines','brand_voice'];
 const PROFILE_FIELDS=['objective','reply_length','one_question','sales_guidance','signup_url','payment_url','instructions','business_capabilities','knowledge_ids','executable_tools'];
 const VERSION_STATUSES=['approved','queued','processing','published','failed','uncertain','reconciling'];
 const record=value=>!!value&&typeof value==='object'&&!Array.isArray(value);
+function reviewedPublicLink(value,signup=false){
+  if(!value)return '';
+  if(/[\x00-\x1f\x7f\\#]/.test(value))throw Error('Invalid reviewed link');
+  const url=new URL(value),hostname=url.hostname.replace(/\.$/,'').toLowerCase();
+  const labels=hostname.split('.');
+  if(url.protocol!=='https:'||url.username||url.password||url.port
+    ||labels.length<2||/\.(?:local|internal|localhost)$/.test(hostname)||/^\d+\.\d+\.\d+\.\d+$/.test(hostname)
+    ||labels.some(label=>!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)))throw Error('Invalid reviewed link');
+  if(value.includes('?')){
+    const raw=value.match(/^https:\/\/([^/?#]+)(\/[^?#]*)?(?:\?[^#]*)?$/i);
+    const query=value.slice(value.indexOf('?')+1);
+    if(!signup||hostname!=='propertypredator.com'||raw?.[2]!=='/app'
+      ||!/^propertypredator\.com(?::443)?$/i.test(raw?.[1]||'')
+      ||!/^plan=pro_(?:buyer|investor|business)(?:&promo=[A-Z0-9][A-Z0-9-]{2,63})?$/.test(query))throw Error('Invalid reviewed link');
+  }
+  url.hostname=hostname;
+  return url.href;
+}
 function contracts(fail) {
   const text=(value,max,min=0)=>{if(typeof value!=='string'||Array.from(value).length<min||Array.from(value).length>max)fail();return value;};
   const integer=(value,max=Number.MAX_SAFE_INTEGER)=>{if(!Number.isSafeInteger(value)||value<0||value>max)fail();return value;};
@@ -34,7 +52,7 @@ function contracts(fail) {
         if(v!==null&&(!Array.isArray(v)||v.length>5||new Set(v).size!==v.length||v.some(id=>!TOOL_IDS.includes(id))))fail();out[field]=v;
       } else if(field==='signup_url'||field==='payment_url'){
         out[field]=text(v,500);
-        if(v){try{const url=new URL(v);if(url.protocol!=='https:'||url.username||url.password)fail();}catch{fail();}}
+        if(v){try{out[field]=reviewedPublicLink(v,field==='signup_url');}catch{fail();}}
       } else out[field]=text(v,field==='instructions'?8000:4000);
     }
     return out;
