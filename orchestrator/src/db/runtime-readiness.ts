@@ -12,6 +12,16 @@ interface RuntimeMigrationRow extends QueryResultRow {
 
 const FINANCE_COMPATIBILITY_MIGRATION = '0106_finance_planning_drafts.sql';
 const FINANCE_COMPATIBILITY_CHECKSUM = '422d1766390910417b397bb34607f74a56c8d7744c3f88a84c4ae46e39ae40ba';
+// MHP-DESK-001 bridge only: unchanged 112 application before/after the atomic
+// reviewed suffix. Never accept a partly applied suffix or a different body.
+const MHP_BRIDGE_SUFFIX = [
+  ['0113_mhp_brand.sql', 'df6d62f511d81188f68ba61565cac6384964045c64fbe35940ab26fe5cec64a7'],
+  ['0114_mhp_commerce.sql', 'f6d0e928954b533f1b0116c4dfbac10900c830c0a8e070d4fde5d439af861900'],
+  ['0115_mhp_auth.sql', 'f338b8b61a147a9ab2848ca60c9c45f34c990abaa15c8fd2aed48e09720ab535'],
+  ['0116_mhp_members.sql', 'f0d4c7b923ed04982216c48e2846348ee59de8c38b8290f6610e7554cd6e4758'],
+  ['0117_mhp_manual_grants.sql', 'e5a5ac94fce23e17383b77e24fe29613a94a3e606c8ee863cde45000e58cd53b'],
+  ['0118_mhp_catalogue_v3.sql', 'ec3e5f7ae69779f80752da7037135f35bace765012d95b582dacef70235e5fa7'],
+] as const;
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -47,6 +57,13 @@ export async function assertRuntimeSchemaCurrent(
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
+  if (migrations.length === 118 && applied.size === 112 && pending.length === 6
+      && migrations[111]?.filename === '0112_investor_email_replies.sql'
+      && MHP_BRIDGE_SUFFIX.every(([filename, checksum], index) =>
+        migrations[112 + index]?.filename === filename && migrations[112 + index]?.checksum === checksum
+        && pending[index]?.filename === filename)) {
+    return;
+  }
   if (pending.length > 0) {
     throw new Error(`Database schema is behind by ${pending.length} migration(s); first pending: ${pending[0]!.filename}`);
   }

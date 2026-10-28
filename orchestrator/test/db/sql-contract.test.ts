@@ -664,6 +664,12 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: '0110_investor_email_workflow.sql', version: 110 },
     { filename: '0111_investor_email_dispatch.sql', version: 111 },
     { filename: '0112_investor_email_replies.sql', version: 112 },
+    { filename: '0113_mhp_brand.sql', version: 113 },
+    { filename: '0114_mhp_commerce.sql', version: 114 },
+    { filename: '0115_mhp_auth.sql', version: 115 },
+    { filename: '0116_mhp_members.sql', version: 116 },
+    { filename: '0117_mhp_manual_grants.sql', version: 117 },
+    { filename: '0118_mhp_catalogue_v3.sql', version: 118 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -772,6 +778,12 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration110Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration111Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration112Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(new URL('../../src/db/migrations/0113_mhp_brand.sql', import.meta.url), 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(new URL('../../src/db/migrations/0114_mhp_commerce.sql', import.meta.url), 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(new URL('../../src/db/migrations/0115_mhp_auth.sql', import.meta.url), 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(new URL('../../src/db/migrations/0116_mhp_members.sql', import.meta.url), 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(new URL('../../src/db/migrations/0117_mhp_manual_grants.sql', import.meta.url), 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(new URL('../../src/db/migrations/0118_mhp_catalogue_v3.sql', import.meta.url), 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.
