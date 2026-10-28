@@ -157,11 +157,7 @@ function profileTheme(profile: PortalProductProfile): string {
       .auth-story h2,.growth-hero h1,.pp-display{font-family:var(--display);font-weight:600;letter-spacing:-.025em}
       .mobile-nav{background:rgba(5,6,8,.96)!important}`
     : ':root{--display:Georgia,serif}';
-  const memberDesk = profile.id === 'martin_howard_property'
-    ? `.app-shell .iv-heading .eyebrow,.app-shell .iv-section-title a,.app-shell .iv-task-mark,.app-shell .iv-avatar,.app-shell .iv-task time{color:var(--accent-deep)}
-       .app-shell .iv-task.overdue time{color:#9b4b18}`
-    : '';
-  return `:root{--canvas:${theme.canvas};--panel:${theme.panel};--panel-subtle:${theme.panelSubtle};--panel-strong:${theme.panelStrong};--ink:${theme.ink};--muted:${theme.muted};--faint:${theme.faint};--line:${theme.line};--line-strong:${theme.lineStrong};--accent:${theme.accent};--accent-deep:${theme.accentDeep};--accent-soft:${theme.accentSoft};--nav:${theme.nav};--nav-raised:${theme.navRaised};--nav-line:${theme.navLine};--nav-text:${theme.navText};--nav-muted:${theme.navMuted}}${predator}${memberDesk}`;
+  return `:root{--canvas:${theme.canvas};--panel:${theme.panel};--panel-subtle:${theme.panelSubtle};--panel-strong:${theme.panelStrong};--ink:${theme.ink};--muted:${theme.muted};--faint:${theme.faint};--line:${theme.line};--line-strong:${theme.lineStrong};--accent:${theme.accent};--accent-deep:${theme.accentDeep};--accent-soft:${theme.accentSoft};--nav:${theme.nav};--nav-raised:${theme.navRaised};--nav-line:${theme.navLine};--nav-text:${theme.navText};--nav-muted:${theme.navMuted}}${predator}`;
 }
 
 function predatorMark(): string {
@@ -238,7 +234,6 @@ export function appShell(opts: AppShellOptions): string {
       !profile.visibleNavigation.includes(module.id) && module.state !== 'planned' && module.route)]
     : workingModules;
   const moduleLabel = (module: PlatformModuleManifest): string => profile.moduleLabels[module.id] ?? module.shortLabel;
-  const descriptiveModuleLabel = (module: PlatformModuleManifest): string => profile.id === 'martin_howard_property' ? moduleLabel(module) : module.label;
   const moduleRoute = (module: PlatformModuleManifest): string => profile.investorWorkspace&&module.id==='inbox'?'/portal/investors/email':module.route!;
   const mobileLabel = (module: PlatformModuleManifest): string => profile.investorWorkspace?({inbox:'Messages',leadrelay:'AI team'} as Record<string,string>)[module.id]??moduleLabel(module):moduleLabel(module);
   const isCurrent = (id: PlatformModuleId): boolean =>
@@ -256,13 +251,13 @@ export function appShell(opts: AppShellOptions): string {
     const stateLabel = module.state === 'preview' ? 'Preview' : module.state === 'setup_required' ? 'Setup' : '';
     const state = stateLabel ? `<span class="module-state">${escapeHtml(stateLabel)}</span>` : '';
     if (module.state === 'setup_required' || module.state === 'unavailable') {
-      return `<span class="nav-item nav-locked" role="link" aria-disabled="true" title="${escapeHtml(descriptiveModuleLabel(module))} is not connected in this workspace">${portalModuleIcon(module.id)}<span>${escapeHtml(moduleLabel(module))}</span>${state}</span>`;
+      return `<span class="nav-item nav-locked" role="link" aria-disabled="true" title="${escapeHtml(module.label)} is not connected in this workspace">${portalModuleIcon(module.id)}<span>${escapeHtml(moduleLabel(module))}</span>${state}</span>`;
     }
     return `<a class="nav-item" href="${escapeHtml(moduleRoute(module))}"${current ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}<span>${escapeHtml(moduleLabel(module))}</span>${state}</a>`;
   }).join('');
   const quickWorking = quickModules.map((module) => module.state === 'setup_required' || module.state === 'unavailable'
-    ? `<span class="command-link locked" role="link" aria-disabled="true">${portalModuleIcon(module.id)}${escapeHtml(descriptiveModuleLabel(module))}<small>${icon('lock')}Setup</small></span>`
-    : `<a class="command-link" href="${escapeHtml(moduleRoute(module))}"${isCurrent(module.id) ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}${escapeHtml(descriptiveModuleLabel(module))}<small>${module.state === 'preview' ? 'Preview' : module.group}</small></a>`).join('');
+    ? `<span class="command-link locked" role="link" aria-disabled="true">${portalModuleIcon(module.id)}${escapeHtml(module.label)}<small>${icon('lock')}Setup</small></span>`
+    : `<a class="command-link" href="${escapeHtml(moduleRoute(module))}"${isCurrent(module.id) ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}${escapeHtml(module.label)}<small>${module.state === 'preview' ? 'Preview' : module.group}</small></a>`).join('');
   const mobileModules = workingModules.filter((module) => module.state === 'ready' || module.state === 'preview');
   const mobileNav = mobileModules.map((module) => `<a href="${escapeHtml(moduleRoute(module))}"${isCurrent(module.id) ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}${escapeHtml(mobileLabel(module))}</a>`).join('');
   const csrfField = opts.csrfToken

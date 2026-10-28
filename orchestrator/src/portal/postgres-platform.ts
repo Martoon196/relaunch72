@@ -25,7 +25,6 @@ import {
   type InboxConversationQuery,
 } from '../inbox-pg/index.js';
 import { PgPortalAuthService } from './auth-pg-service.js';
-import { buildMhpRuntime, type MhpRuntime } from '../mhp/runtime.js';
 import {
   createPgPortalCrmPrincipalResolver,
   createPgPortalCrmService,
@@ -175,7 +174,6 @@ import { createPgFinanceDraftsService } from './finance-drafts-pg-service.js';
 import type { FinanceDraftsService } from './finance-drafts-service.js';
 
 export interface PgPortalPlatform {
-  mhp?: MhpRuntime;
   auth: PgPortalAuthService;
   /** Distributed, function-only admission guard shared by every web instance. */
   abuse: PgPortalAbuseGuard;
@@ -1249,17 +1247,8 @@ export async function buildPgPortalPlatform(
       }
     }
 
-    let mhp: MhpRuntime | undefined;
-    try {
-      mhp = await buildMhpRuntime({ env, webPool, identityPool, commandPool, registerPool: pool => pools.push(pool) });
-    } catch {
-      // A separate brand's missing credentials must not replace the established
-      // PP application. Its own host mount remains unavailable and fails /ready.
-      console.warn('MHP member application did not compose; its host remains unavailable.');
-    }
     let closed = false;
     return {
-      mhp,
       auth: new PgPortalAuthService({ readPool: webPool, commandPool: identityPool }),
       abuse,
       crm: createPgPortalCrmService({

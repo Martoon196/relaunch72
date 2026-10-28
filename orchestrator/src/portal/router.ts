@@ -447,14 +447,6 @@ import {
 interface PortalCommonDeps {
   sessionSecret: string;
   secure: boolean;
-  sessionCookieName?: 'r72_portal' | '__Host-mhp_session';
-  /** Brand membership guard runs before any authenticated application route. */
-  authorizeMemberRequest?: (input: {
-    sessionToken: string;
-    identity: PortalSessionIdentity;
-    path: string;
-    method: string;
-  }) => Promise<{ allowed: true } | { allowed: false; status: 403 | 404; message: string; redirect?: '/app/account' }>;
   /** Deployment-owned presentation. It never grants permissions or provider readiness. */
   productProfile?: PortalProductProfile;
   /** Trusted deployment origin for private account setup links. */
@@ -1890,7 +1882,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   }
   let productProfile = deps.productProfile ?? RELAUNCH72_PRODUCT_PROFILE;
   const requestCookies = parseCookies(req.headers.cookie);
-  const sessionToken = requestCookies[deps.sessionCookieName ?? PORTAL_COOKIE] ?? '';
+  const sessionToken = requestCookies[PORTAL_COOKIE] ?? '';
   const portalHome = '/portal';
   let tenantId: string | null = null;
   let portalIdentity: PortalSessionIdentity | null = null;
@@ -2048,7 +2040,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         : 24 * 60 * 60;
       await completeAbuseLease(ssoAbuseLease, 'success');
       return redirect(res, portalHome, [
-        portalCookie(authenticated.sessionToken, deps.secure, ssoSessionMaxAge, deps.sessionCookieName),
+        portalCookie(authenticated.sessionToken, deps.secure, ssoSessionMaxAge),
         sso.clearCookie(),
       ], 303, {
         'cache-control': 'no-store',
@@ -2189,7 +2181,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       ? signTenant(deps.sessionSecret, completed, now)
       : completed.sessionToken;
     return redirect(res, portalHome, [
-      portalCookie(completedToken, deps.secure, undefined, deps.sessionCookieName),
+      portalCookie(completedToken, deps.secure),
       clearPortalSetupCookie(deps.secure),
     ], 303);
   }
@@ -2259,7 +2251,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     const authenticatedToken = typeof authenticated === 'string'
       ? signTenant(deps.sessionSecret, authenticated, now)
       : authenticated.sessionToken;
-    return redirect(res, portalHome, portalCookie(authenticatedToken, deps.secure, undefined, deps.sessionCookieName));
+    return redirect(res, portalHome, portalCookie(authenticatedToken, deps.secure));
   }
   if (p === '/portal/logout' && method === 'POST') {
     const form = await readForm(req);
@@ -2278,22 +2270,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         }));
       }
     }
-    return redirect(res, '/portal/login', clearPortalCookie(deps.secure, deps.sessionCookieName));
-  }
-
-  if (portalIdentity && deps.authorizeMemberRequest) {
-    const access = await deps.authorizeMemberRequest({ sessionToken, identity: portalIdentity, path: p, method });
-    if (!access.allowed) {
-      if (access.redirect && method === 'GET') return redirect(res, access.redirect);
-      if (p.startsWith('/portal/api/')) {
-        res.writeHead(access.status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-        res.end(JSON.stringify({ error: access.message }));
-        return;
-      }
-      return sendHtml(res, access.status, portalStatusPage(deps, sessionToken, {
-        title: 'Your Desk access', message: access.message, backHref: '/app/account', backLabel: 'Your membership',
-      }), undefined, { 'cache-control': 'no-store' });
-    }
+    return redirect(res, '/portal/login', clearPortalCookie(deps.secure));
   }
 
   // Canonical setup identity has an API 401 boundary rather than an HTML login
@@ -2307,7 +2284,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   if (!tenantId && !portalIdentity) return redirect(
     res,
     sessionToken ? '/portal/login?reason=session-ended' : '/portal/login',
-    sessionToken ? clearPortalCookie(deps.secure, deps.sessionCookieName) : undefined,
+    sessionToken ? clearPortalCookie(deps.secure) : undefined,
   );
 
   // Presentation is request-local. Never mutate a shared deployment profile or
@@ -2372,7 +2349,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         if (!verifyPortalCsrf(deps.sessionSecret,sessionToken,form._csrf)) throw new InvestorError(403,'Refresh this page before saving. Your workspace may have changed.');
         if(p===INVESTOR_ROUTE+'/switch') {
           const token=await service.switchWorkspace(identity,form.workspaceId ?? '');
-          return redirect(res,INVESTOR_ROUTE,portalCookie(token,deps.secure,undefined,deps.sessionCookieName));
+          return redirect(res,INVESTOR_ROUTE,portalCookie(token,deps.secure));
         }
         if(p.startsWith(INVESTOR_ROUTE+'/mail/')) {
           const mail=deps.investorMail;if(!mail)throw new InvestorError(503,'Email setup is not connected.');
@@ -2409,7 +2386,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       const view=p.includes('/mail/')||p.endsWith('/branding')||p.endsWith('/site')?'settings':p.endsWith('/access')||p.endsWith('/create')?'programme':url.searchParams.get('view')??'today';
       const site=current&&view==='settings'?await service.site(identity):undefined;
       const mail=current&&view==='settings'?await deps.investorMail?.snapshot(identity):undefined;
-      return sendHtml(res,200,investorPage({programme,csrf:portalCsrfToken(deps.sessionSecret,sessionToken),email:portalIdentity.userEmail,crm,requirements,message,setupPath,view,site,mail,productProfile:deps.productProfile}),undefined,{'cache-control':'no-store','referrer-policy':'no-referrer'});
+      return sendHtml(res,200,investorPage({programme,csrf:portalCsrfToken(deps.sessionSecret,sessionToken),email:portalIdentity.userEmail,crm,requirements,message,setupPath,view,site,mail}),undefined,{'cache-control':'no-store','referrer-policy':'no-referrer'});
     } catch(error) {
       const failure=investorFailure(error);
       return sendHtml(res,failure.status,portalStatusPage(deps,sessionToken,{title:'Investor Desk',message:failure.message,active:'crm',backHref:INVESTOR_ROUTE,backLabel:'Return to Investor Desk'}));
@@ -7199,11 +7176,11 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
 
   // The PostgreSQL branch returned above, so only the explicit local-demo
   // composition can reach JSON dashboards, billing and mock campaign runs.
-  if (!tenantId) return redirect(res, '/portal/login?reason=session-ended', clearPortalCookie(deps.secure, deps.sessionCookieName));
+  if (!tenantId) return redirect(res, '/portal/login?reason=session-ended', clearPortalCookie(deps.secure));
 
   if (p === '/portal' && method === 'GET') {
     const data = await deps.dashboard(tenantId);
-    if (!data) return redirect(res, '/portal/login?reason=workspace-unavailable', clearPortalCookie(deps.secure, deps.sessionCookieName)); // stale bridge
+    if (!data) return redirect(res, '/portal/login?reason=workspace-unavailable', clearPortalCookie(deps.secure)); // stale bridge
     const billing = deps.billing ? await deps.billing(tenantId) : null;
     return sendHtml(res, 200, dashboardPage(data, billing ?? undefined, {
       crmAvailable: !!deps.crm,
