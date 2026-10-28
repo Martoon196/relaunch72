@@ -45,6 +45,8 @@ const APP_ROLES = [
   'r72_growth_projector_definer',
   'r72_identity_command',
   'r72_import_command',
+  'r72_investor_programme_definer',
+  'r72_investor_email_definer',
   'r72_journey_projector_definer',
   'r72_legacy_materializer_definer',
   'r72_mailgun_webhook_command',

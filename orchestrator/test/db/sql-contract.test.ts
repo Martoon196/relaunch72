@@ -110,6 +110,12 @@ const migration103Url = new URL('../../src/db/migrations/0103_content_source_ref
 const migration104Url = new URL('../../src/db/migrations/0104_combined_social_planning_validation.sql', import.meta.url);
 const migration105Url = new URL('../../src/db/migrations/0105_public_social_planner_session_lock.sql', import.meta.url);
 const migration106Url = new URL('../../src/db/migrations/0106_finance_planning_drafts.sql', import.meta.url);
+const migration107Url = new URL('../../src/db/migrations/0107_investor_programme.sql', import.meta.url);
+const migration108Url = new URL('../../src/db/migrations/0108_investor_sites.sql', import.meta.url);
+const migration109Url = new URL('../../src/db/migrations/0109_investor_mail_connections.sql', import.meta.url);
+const migration110Url = new URL('../../src/db/migrations/0110_investor_email_workflow.sql', import.meta.url);
+const migration111Url = new URL('../../src/db/migrations/0111_investor_email_dispatch.sql', import.meta.url);
+const migration112Url = new URL('../../src/db/migrations/0112_investor_email_replies.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -652,6 +658,12 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: '0104_combined_social_planning_validation.sql', version: 104 },
     { filename: '0105_public_social_planner_session_lock.sql', version: 105 },
     { filename: '0106_finance_planning_drafts.sql', version: 106 },
+    { filename: '0107_investor_programme.sql', version: 107 },
+    { filename: '0108_investor_sites.sql', version: 108 },
+    { filename: '0109_investor_mail_connections.sql', version: 109 },
+    { filename: '0110_investor_email_workflow.sql', version: 110 },
+    { filename: '0111_investor_email_dispatch.sql', version: 111 },
+    { filename: '0112_investor_email_replies.sql', version: 112 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -754,6 +766,12 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration104Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration105Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration106Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration107Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration108Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration109Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration110Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration111Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration112Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.
