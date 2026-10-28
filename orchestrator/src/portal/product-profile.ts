@@ -1,6 +1,6 @@
 import type { PlatformModuleId } from '../platform/modules.js';
 
-export type PortalProductProfileId = 'relaunch72' | 'property_predator_growth';
+export type PortalProductProfileId = 'relaunch72' | 'property_predator_growth' | 'martin_howard_property';
 
 export interface PortalThemeTokens {
   canvas: string;
@@ -269,9 +269,39 @@ export const PROPERTY_PREDATOR_GROWTH_PROFILE = createProfile({
   },
 });
 
+export const MARTIN_HOWARD_PROPERTY_PROFILE = createProfile({
+  id: 'martin_howard_property',
+  productName: 'Martin Howard Property',
+  compactMark: 'MH',
+  suiteLabel: 'Your Desk',
+  investorWorkspace: true,
+  home: {
+    eyebrow: 'Your property business, in focus',
+    title: 'Make your next move count.',
+    summary: 'Your investors, your conversations and a clear next step. Build your business with the guidance to keep moving.',
+  },
+  auth: {
+    lead: 'Sign in to your Martin Howard Property workspace.',
+    storyKicker: 'Martin Howard Property',
+    storyTitle: 'Your ambition. A place to build it.',
+    storyBody: 'Bring your investor relationships into one private workspace, with practical tools and guidance for your next move.',
+  },
+  theme: {
+    canvas: '#f5f3ed', panel: '#ffffff', panelSubtle: '#f8f6ef', panelStrong: '#efede4',
+    ink: '#142019', muted: '#526154', faint: '#657265', line: '#dedfd5', lineStrong: '#bac5b8',
+    accent: '#E8A33D', accentDeep: '#83510c', accentSoft: '#fff2dc',
+    nav: '#142019', navRaised: '#213126', navLine: '#35483a', navText: '#f7f5ed', navMuted: '#b6c6b8',
+  },
+  visibleNavigation: ['investors', 'crm'],
+  moduleLabels: { investors: 'Your Desk', crm: 'Investors', inbox: 'Conversations', leadrelay: 'Your AI team' },
+  journeyBlueprints: [],
+  readinessRails: [],
+});
+
 const PROFILES: Readonly<Record<PortalProductProfileId, PortalProductProfile>> = Object.freeze({
   relaunch72: RELAUNCH72_PRODUCT_PROFILE,
   property_predator_growth: PROPERTY_PREDATOR_GROWTH_PROFILE,
+  martin_howard_property: MARTIN_HOWARD_PROPERTY_PROFILE,
 });
 
 export function resolvePortalProductProfile(value?: string | null): PortalProductProfile {

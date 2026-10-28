@@ -103,6 +103,12 @@ export interface AppDeps {
   runtimeReadinessProbe?: () => Promise<readonly string[]>;
   /** Exact public Host accepted for every route other than liveness/readiness. */
   canonicalHost?: string;
+  /** Independent host-bound member application. It never falls through to PP routes. */
+  mhp?: {
+    readonly hostname: 'app.martinhowardproperty.co.uk';
+    handle(req: IncomingMessage, res: ServerResponse): Promise<void>;
+    readiness(): Promise<readonly string[]>;
+  };
   /** Truthful execution mode exposed by health for accepted builds. */
   buildMode?: 'mock' | 'live';
   /** Optional, disabled-by-default Property Predator receipt-only source bridge. */
@@ -261,18 +267,32 @@ export function createApp(deps: AppDeps) {
   return async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const route = `${req.method} ${url.pathname}`;
+    const rawHost = typeof req.headers.host === 'string' ? req.headers.host.toLowerCase() : '';
+    // Host is a routing boundary. Do not trust Forwarded/X-Forwarded-Host, URLs
+    // with userinfo, whitespace or duplicate hosts, even behind Render's proxy.
+    const requestHost = /^[a-z0-9.-]+(?::[0-9]{1,5})?$/.test(rawHost)
+      ? rawHost.replace(/:\d+$/, '') : '';
+    const mhpRequest = deps.mhp !== undefined && requestHost === deps.mhp.hostname;
 
     // Render's health probes must remain available before custom-DNS cutover,
     // but every operational surface is host-bound. Never redirect a mismatched
     // Host: a fixed 421 avoids reflecting attacker-controlled proxy headers.
     if (deps.canonicalHost && route !== 'GET /health' && route !== 'GET /ready') {
-      const rawHost = typeof req.headers.host === 'string'
-        ? req.headers.host.trim().toLowerCase()
-        : '';
-      const requestHost = rawHost.replace(/:\d+$/, '');
-      if (requestHost !== deps.canonicalHost) {
+      if (requestHost !== deps.canonicalHost && !mhpRequest) {
         return send(res, 421, { error: 'misdirected request' });
       }
+    }
+
+    if (mhpRequest && route !== 'GET /ready' && route !== 'GET /health') {
+      if (activePortalRequests >= portalMaxConcurrentRequests) {
+        sendPortalRuntimeStatus(res, 429);
+        return;
+      }
+      activePortalRequests += 1;
+      try { await deps.mhp!.handle(req, res); }
+      catch { if (!res.headersSent) sendPortalRuntimeStatus(res, 503); }
+      finally { activePortalRequests -= 1; }
+      return;
     }
 
     // The custom domain is the front door to Growth HQ. Keep the bare origin
@@ -342,6 +362,10 @@ export function createApp(deps: AppDeps) {
 
       if (route === 'GET /ready') {
         const blockers = [...(deps.serviceReadinessBlockers ?? [])];
+        if (mhpRequest) {
+          try { blockers.push(...await deps.mhp!.readiness()); }
+          catch { blockers.push('MHP member application is unavailable'); }
+        }
         if (!deps.portal) {
           blockers.push(...(deps.portalBlockers ?? ['client portal is not mounted']));
         }
