@@ -48,6 +48,8 @@ const APP_ROLES = [
   'r72_investor_programme_definer',
   'r72_investor_email_definer',
   'r72_journey_projector_definer',
+  'r72_leadrelay_stop_definer',
+  'r72_leadrelay_stop_runtime',
   'r72_legacy_materializer_definer',
   'r72_mailgun_webhook_command',
   'r72_mailgun_webhook_definer',
