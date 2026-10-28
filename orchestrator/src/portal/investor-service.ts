@@ -13,6 +13,8 @@ export interface InvestorBusiness {
   accentColor: string; signature: string; senderEmail: string;
   accessState: 'test' | 'pending_payment' | 'active' | 'suspended';
   version: number; paymentReference: string | null;
+  productProfileId?: 'martin_howard_property';
+  features?: { crm: boolean; enquirySite: boolean; emailWorkflow: boolean; emailWritable: boolean; leadrelay: boolean; readOnly: boolean; endsAt: string | null };
 }
 export interface InvestorProgramme {
   isAdmin: boolean; selectedWorkspaceId: string;

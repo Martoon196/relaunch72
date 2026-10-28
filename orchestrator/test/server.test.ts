@@ -47,6 +47,63 @@ function fakeStripe(created: Array<Record<string, unknown>>, opts: { url?: strin
 }
 
 // ─── pure logic ──────────────────────────────────────────────────────────────
+test('MHP owns every operational route on its exact host without PP payment fallthrough', async () => {
+  const handled: string[] = [];
+  const { handler, created } = app({
+    canonicalHost: 'hq.propertypredator.com',
+    mhp: {
+      hostname: 'app.martinhowardproperty.co.uk',
+      readiness: async () => [],
+      handle: async (request, response) => {
+        handled.push(request.url!);
+        response.writeHead(404); response.end('MHP route only');
+      },
+    },
+  });
+  for (const route of ['/api/checkout', '/api/stripe/webhook', '/admin', '/portal']) {
+    const response = res();
+    await handler(req('POST', route, '{"tier":"core"}', { host: 'app.martinhowardproperty.co.uk' }), response);
+    assert.equal(response.statusCode, 404);
+    assert.equal(response._body, 'MHP route only');
+  }
+  assert.equal(created.length, 0);
+  assert.equal(handled.length, 4);
+  const pp = res();
+  await handler(req('GET', '/', '', { host: 'hq.propertypredator.com' }), pp);
+  assert.equal(pp.statusCode, 302);
+  assert.equal(pp._headers.location, '/portal');
+});
+
+test('MHP host cannot be selected with forwarded headers, hostname suffixes or whitespace', async () => {
+  let calls = 0;
+  const { handler } = app({
+    canonicalHost: 'hq.propertypredator.com',
+    mhp: { hostname: 'app.martinhowardproperty.co.uk', readiness: async () => [], handle: async () => { calls++; } },
+  });
+  for (const host of ['attacker.example', 'app.martinhowardproperty.co.uk.evil.test', ' app.martinhowardproperty.co.uk', 'app.martinhowardproperty.co.uk,hq.propertypredator.com']) {
+    const response = res();
+    await handler(req('GET', '/portal', '', { host, 'x-forwarded-host': 'app.martinhowardproperty.co.uk' }), response);
+    assert.equal(response.statusCode, 421);
+  }
+  assert.equal(calls, 0);
+});
+
+test('MHP readiness retains the shared dependency gate and adds its own failures', async () => {
+  let checks = 0;
+  const { handler } = app({
+    canonicalHost: 'hq.propertypredator.com',
+    runtimeReadinessProbe: async () => ['Shared database unavailable'],
+    mhp: { hostname: 'app.martinhowardproperty.co.uk', readiness: async () => { checks++; return ['MHP identity unavailable']; }, handle: async () => {} },
+  });
+  const response = res();
+  await handler(req('GET', '/ready', '', { host: 'app.martinhowardproperty.co.uk' }), response);
+  assert.equal(response.statusCode, 503);
+  const result = JSON.parse(response._body);
+  assert.ok(result.blockers.includes('Shared database unavailable'));
+  assert.ok(result.blockers.includes('MHP identity unavailable'));
+  assert.equal(checks, 1);
+});
+
 test('priceKeyFor: core + bump collapses to core_bump; others map 1:1', () => {
   assert.equal(priceKeyFor({ tier: 'core', bump: true }), 'core_bump');
   assert.equal(priceKeyFor({ tier: 'core' }), 'core');

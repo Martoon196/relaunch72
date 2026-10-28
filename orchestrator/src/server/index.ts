@@ -22,7 +22,13 @@ import {
 } from './config.js';
 import { fileOrderStore, type Order } from './orders.js';
 import { fileSubscriptionStore } from './subscriptions.js';
-import { createApp, type MarketingHooks } from './app.js';
+import { createApp, type AppDeps, type MarketingHooks } from './app.js';
+import { createMhpMount, unavailableMhpMount } from '../mhp/mount.js';
+import { createMhpAuthMount } from '../mhp/auth-router.js';
+import { MHP_AUTH_ORIGIN, MHP_SESSION_COOKIE } from '../mhp/auth-service.js';
+import { MARTIN_HOWARD_PROPERTY_PROFILE } from '../portal/product-profile.js';
+import { authorizeMhpMemberRoute } from '../mhp/member-service.js';
+import { startMhpScheduleReconciler } from '../mhp/schedule-reconciler.js';
 import { makeStripe } from './stripe-client.js';
 import { createSubscriptionCheckout, createBillingPortalUrl, type StripeLike } from './stripe.js';
 import { ensureCatalogPrices, ensurePlanPrices, type StripeCatalogLike } from './catalog.js';
@@ -889,6 +895,44 @@ async function main(): Promise<void> {
         },
       })
     : undefined;
+  let mhp: AppDeps['mhp'];
+  if (process.env.MHP_ENABLED === 'true') {
+    mhp = unavailableMhpMount();
+    const runtime = postgresPortal?.mhp;
+    if (runtime && postgresPortal && portal?.kind === 'postgres' && portalAbuseRuntime) {
+      try {
+        // Compose only the member tools. PP SSO, company marketing, webhook
+        // ingress and legacy billing objects are intentionally not copied.
+        const mhpPortal = buildPostgresPortalDeps({
+          sessionSecret: cfg.sessionSecret, secure: true, telemetry: SERVICE_TELEMETRY,
+          auth: runtime.auth, abuse: postgresPortal.abuse,
+          abuseHashSecret: portalAbuseRuntime.hashSecret, requestContext: portal.requestContext!,
+          crm: postgresPortal.crm, investors: runtime.investors, investorMail: runtime.investorMail,
+          portalBaseUrl: MHP_AUTH_ORIGIN, productProfile: MARTIN_HOWARD_PROPERTY_PROFILE,
+        });
+        mhpPortal.sessionCookieName = MHP_SESSION_COOKIE;
+        mhpPortal.authorizeMemberRequest = async ({ sessionToken, identity, path, method }) => {
+          const access = await runtime.members.snapshot(sessionToken);
+          if (access.userId !== identity.userId || access.workspaceId !== identity.workspaceId) {
+            return { allowed: false, status: 403, message: 'Sign in to your member workspace again.' };
+          }
+          if (path === '/portal' && method === 'GET' && !access.crm) {
+            return { allowed: false, status: 403, message: 'Open your membership account.', redirect: '/app/account' };
+          }
+          return authorizeMhpMemberRoute(access, { path, method });
+        };
+        mhp = createMhpMount({
+          portal: mhpPortal, commerce: runtime.commerce, hq: runtime.hq, desk: runtime.desk,
+          authMount: createMhpAuthMount({
+            auth: runtime.auth, mail: runtime.mail, sessionSecret: cfg.sessionSecret,
+            abuse: postgresPortal.abuse, abuseHashSecret: portalAbuseRuntime.hashSecret,
+            requestContext: portal.requestContext!,
+          }),
+          readiness: () => runtime.readiness(),
+        });
+      } catch { console.warn('MHP host composition is unavailable; Property Predator remains mounted.'); }
+    }
+  }
   const app = createApp({
     stripe,
     cfg,
@@ -899,6 +943,7 @@ async function main(): Promise<void> {
     serviceReadinessBlockers,
     runtimeReadinessProbe,
     canonicalHost,
+    mhp,
     buildMode: forceMockBuilds ? 'mock' : 'live',
     now: () => new Date().toISOString(),
     marketing,
@@ -921,6 +966,13 @@ async function main(): Promise<void> {
     propertyPredatorApprovedSocialMediaGateway,
   });
   const server = http.createServer((req, res) => { void app(req, res); });
+  const stopMhpSchedules = postgresPortal?.mhp?.commerce.billingEnabled
+    ? startMhpScheduleReconciler(postgresPortal.mhp.commerce, {
+        onResult: result => {
+          if (result.failures > 0) console.warn(`MHP instalment reconciliation needs attention: ${result.failures} checks failed.`);
+        },
+      })
+    : () => {};
   server.headersTimeout = 10_000;
   server.requestTimeout = 30_000;
   server.timeout = 30_000;
@@ -941,6 +993,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
+    stopMhpSchedules();
     console.log(`Received ${signal}; draining HTTP requests and closing database pools.`);
     try {
       await new Promise<void>((resolve, reject) => {
