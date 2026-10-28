@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Relaunch72 pipeline orchestrator \u2014 S0 intake gate, stages S1+, QA layer, run manifests, CLI",
+  "description": "Relaunch72 pipeline orchestrator — S0 intake gate, stages S1+, QA layer, run manifests, CLI",
   "scripts": {
     "pipeline": "tsx src/cli.ts",
     "content": "tsx src/content/cli.ts",
@@ -48,13 +48,18 @@
     "ajv": "^8.17.1",
     "dotenv": "^16.4.5",
     "https-proxy-agent": "^9.1.0",
+    "imapflow": "2.9.1",
+    "mailparser": "3.12.4",
+    "nodemailer": "10.2.1",
     "pg": "^8.23.0",
     "playwright-core": "^1.61.1",
     "stripe": "^22.3.0",
     "tsx": "^4.19.0"
   },
   "devDependencies": {
+    "@types/mailparser": "3.9.0",
     "@types/node": "^22.10.0",
+    "@types/nodemailer": "8.0.2",
     "@types/pg": "^8.23.1",
     "typescript": "^5.7.0"
   }

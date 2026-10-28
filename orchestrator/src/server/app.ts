@@ -20,6 +20,7 @@ import { runS0 } from '../intake/s0.js';
 import type { Intake } from '../types.js';
 import { handleAdmin } from './admin/router.js';
 import { handlePortal, type PortalDeps } from '../portal/router.js';
+import { handleInvestorPublicSite,INVESTOR_SITES_ROUTE } from '../portal/investor-site.js';
 import { entitlementForOrder, type BuildEntitlement } from './entitlements.js';
 import { oneOffCheckoutBlockers, subscriptionCheckoutBlockers } from './readiness.js';
 import { canonicalIntake } from '../intake/canonical.js';
@@ -303,6 +304,15 @@ export function createApp(deps: AppDeps) {
     if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
       try { await (deps.adminHandler ?? handleAdmin)(req, res, deps.cfg); }
       catch { if (!res.headersSent) send(res, 500, SAFE_ERROR.internal); }
+      return;
+    }
+
+    if (url.pathname.startsWith(INVESTOR_SITES_ROUTE+'/')) {
+      if(deps.portal?.kind!=='postgres'||!deps.portal.investors){send(res,404,{error:'not found'});return;}
+      if(activePortalRequests>=portalMaxConcurrentRequests){sendPortalRuntimeStatus(res,429);return;}
+      activePortalRequests+=1;
+      try {await handleInvestorPublicSite(req,res,deps.portal.investors,deps.portal.sessionSecret);}
+      finally {activePortalRequests-=1;}
       return;
     }
 

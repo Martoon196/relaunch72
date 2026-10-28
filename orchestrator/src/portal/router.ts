@@ -6,6 +6,12 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { handleLeadRelay, panelSource, panelCss, panelBoot, builderSource, builderCss, providerSource, providerCss, trainingSource, trainingCss, voiceSource, voiceCss, agentSettingsSource, agentSettingsCss, websiteChatSource, websiteChatCss } from '../integrations/leadrelay/mount.js';
+import { InvestorService, INVESTOR_ROUTE, InvestorError, investorFailure } from './investor-service.js';
+import { investorPage, investorProfile } from './investor-view.js';
+import { investorEmailPage } from './investor-email-centre.js';
+import { INVESTOR_CLIENT_SOURCE } from './investor-client.js';
+import { investorSitePage } from './investor-site.js';
+import type { InvestorMailService } from './investor-mail-service.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PlatformCapability } from '../platform/capabilities.js';
 import type { CompanyContentCatalogItem } from '../company-content-pg/types.js';
@@ -443,6 +449,8 @@ interface PortalCommonDeps {
   secure: boolean;
   /** Deployment-owned presentation. It never grants permissions or provider readiness. */
   productProfile?: PortalProductProfile;
+  /** Trusted deployment origin for private account setup links. */
+  portalBaseUrl?: string;
   /** Process-local login limiter; replace with a shared implementation at multi-instance scale. */
   loginThrottle?: Pick<InMemoryLoginThrottle, 'reserve' | 'release' | 'failure' | 'success'>;
   /** Process-local setup limiter; keys are hashed source and token fingerprints only. */
@@ -503,6 +511,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   propertyPredatorSso?: PropertyPredatorSsoClient;
   crm: PortalCrmService;
   financeDrafts?: PortalFinanceDraftsService;
+  investors?: InvestorService;
+  investorMail?: InvestorMailService;
   /** Exact, read-mostly conversion definition manager. Omitted until composed and ready. */
   journeys?: PortalJourneyManagerService;
   /** Authoritative cross-module operator queue; only assignment and snooze mutate its overlay. */
@@ -1870,7 +1880,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   if (p === MIGRATION_CENTRE_CLIENT_ROUTE && method === 'GET') {
     return sendJavaScript(res, MIGRATION_CENTRE_CLIENT_SOURCE, 'private, no-store, max-age=0');
   }
-  const productProfile = deps.productProfile ?? RELAUNCH72_PRODUCT_PROFILE;
+  let productProfile = deps.productProfile ?? RELAUNCH72_PRODUCT_PROFILE;
   const requestCookies = parseCookies(req.headers.cookie);
   const sessionToken = requestCookies[PORTAL_COOKIE] ?? '';
   const portalHome = '/portal';
@@ -2276,6 +2286,112 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     sessionToken ? '/portal/login?reason=session-ended' : '/portal/login',
     sessionToken ? clearPortalCookie(deps.secure) : undefined,
   );
+
+  // Presentation is request-local. Never mutate a shared deployment profile or
+  // accept a tenant/brand from the browser; the session chooses its workspace.
+  if (deps.kind === 'postgres' && deps.investors && portalIdentity && (method === 'GET' || method === 'POST') && !p.startsWith('/portal/api/')) {
+    try {
+      const programme = await deps.investors.snapshot(crmIdentity(sessionToken,deps));
+      const business = programme.businesses.find(b=>b.workspaceId===programme.selectedWorkspaceId);
+      if (business) {
+        deps = {...deps,productProfile:investorProfile(business)};
+        productProfile=deps.productProfile!;
+        if (p === '/portal') return redirect(res,INVESTOR_ROUTE);
+      }
+    } catch (error) {
+      const failure=investorFailure(error);
+      return sendHtml(res,failure.status,portalStatusPage(deps,sessionToken,{title:'Workspace unavailable',message:failure.message}));
+    }
+  }
+
+  if (p === INVESTOR_ROUTE || p.startsWith(INVESTOR_ROUTE + '/')) {
+    if (deps.kind !== 'postgres' || !deps.investors || !portalIdentity) return sendHtml(res,404,portalStatusPage(deps,sessionToken,{title:'Investor Desk unavailable',message:'Investor Desk has not been connected to this installation.'}));
+    if (p === INVESTOR_ROUTE+'/client.js' && method === 'GET') return sendJavaScript(res,INVESTOR_CLIENT_SOURCE,'private, no-store');
+    const service=deps.investors, identity=crmIdentity(sessionToken,deps);
+    let message: string | undefined, setupPath: string | null = null;
+    try {
+      if(p===INVESTOR_ROUTE+'/email'||p.startsWith(INVESTOR_ROUTE+'/email/')) {
+        const mail=deps.investorMail;
+        if(!mail)throw new InvestorError(503,'Conversations are not connected.');
+        const programme=await service.snapshot(identity),business=programme.businesses.find(b=>b.workspaceId===programme.selectedWorkspaceId);
+        if(!business)throw new InvestorError(403,'Open your investor business first.');
+        let selected=url.searchParams.get('message')??url.searchParams.get('reply')??undefined;
+        let notice:string|undefined;
+        if(method==='POST') {
+          const form=await readForm(req,128*1024);
+          if(!verifyPortalCsrf(deps.sessionSecret,sessionToken,form._csrf))throw new InvestorError(403,'Refresh this page before saving. Your workspace may have changed.');
+          selected=form.messageId||undefined;
+          if(p===INVESTOR_ROUTE+'/email/draft')return redirect(res,INVESTOR_ROUTE+'/email?message='+encodeURIComponent(await mail.draft(identity,form)));
+          else if(p===INVESTOR_ROUTE+'/email/approve'){await mail.approve(identity,form);return redirect(res,INVESTOR_ROUTE+'/email?message='+encodeURIComponent(selected??''));}
+          else if(p===INVESTOR_ROUTE+'/email/permission'){await mail.permission(identity,form);return redirect(res,INVESTOR_ROUTE+'/email?message='+encodeURIComponent(selected??''));}
+          else if(p===INVESTOR_ROUTE+'/email/send')notice=await mail.send(identity,form)==='accepted'?'Your email was accepted by the provider. Delivery has not been confirmed.':'The send outcome is uncertain. Check your mailbox before taking any further action; this message will not be retried automatically.';
+          else if(p===INVESTOR_ROUTE+'/email/sync'){const result=await mail.sync(identity);notice=`Reply sync: ${result.imported} imported, ${result.duplicates} already saved, ${result.unmatched} unmatched and ${result.skipped} too large or unsupported. Other mail stays in your mailbox.`;}
+          else throw new InvestorError(404,'Conversation action not found.');
+        }else if(method!=='GET'||p!==INVESTOR_ROUTE+'/email')throw new InvestorError(405,'Use the controls on Conversations.');
+        const [centre,connection]=await Promise.all([mail.centre(identity,selected),mail.snapshot(identity)]);
+        return sendHtml(res,200,investorEmailPage({business,centre,connection,csrf:portalCsrfToken(deps.sessionSecret,sessionToken),template:url.searchParams.get('template')??undefined,reply:url.searchParams.has('reply'),notice}),undefined,{'cache-control':'no-store','referrer-policy':'no-referrer'});
+      }
+      if(p===INVESTOR_ROUTE+'/mail/callback'&&method==='GET') {
+        if(!deps.investorMail||url.searchParams.has('error'))throw new InvestorError(400,'Email authorisation was not completed. You can start again from Business setup.');
+        const programme=await service.snapshot(identity),business=programme.businesses.find(b=>b.workspaceId===programme.selectedWorkspaceId);
+        if(!business)throw new InvestorError(403,'Open your investor business first.');
+        await deps.investorMail.finishOAuth(identity,url.searchParams.get('state')??'',url.searchParams.get('code')??'',business.brandName);
+        return redirect(res,INVESTOR_ROUTE+'?view=settings');
+      }
+      if(p===INVESTOR_ROUTE+'/site-preview'&&method==='GET') {
+        const [programme,site]=await Promise.all([service.snapshot(identity),service.site(identity)]);
+        const business=programme.businesses.find(b=>b.workspaceId===programme.selectedWorkspaceId);
+        if(!business||!site)throw new InvestorError(404,'Save your website draft before previewing it.');
+        return sendHtml(res,200,investorSitePage({slug:site.slug,headline:site.headline,introduction:site.introduction,locations:site.locations,contactEmail:site.contact_email,privacyUrl:site.privacy_url,brandName:business.brandName,accentColor:business.accentColor},'',true),undefined,{'cache-control':'no-store'});
+      }
+      if (method === 'POST') {
+        const form=await readForm(req,16*1024);
+        if (!verifyPortalCsrf(deps.sessionSecret,sessionToken,form._csrf)) throw new InvestorError(403,'Refresh this page before saving. Your workspace may have changed.');
+        if(p===INVESTOR_ROUTE+'/switch') {
+          const token=await service.switchWorkspace(identity,form.workspaceId ?? '');
+          return redirect(res,INVESTOR_ROUTE,portalCookie(token,deps.secure));
+        }
+        if(p.startsWith(INVESTOR_ROUTE+'/mail/')) {
+          const mail=deps.investorMail;if(!mail)throw new InvestorError(503,'Email setup is not connected.');
+          if(p.endsWith('/save')){await mail.saveCustom(identity,form);message='Email settings saved securely. Check the connection before using it.';}
+          else if(p.endsWith('/verify')){await mail.verify(identity);message='Mailbox connection checked. No email was sent.';}
+          else if(p.endsWith('/disconnect')){await mail.disconnect(identity,form.version??'');message='Email disconnected from this business.';}
+          else if(p.endsWith('/connect'))return redirect(res,await mail.beginOAuth(identity,form.provider??''));
+          else throw new InvestorError(404,'Email action not found.');
+        }
+        else if(p===INVESTOR_ROUTE+'/create') { await service.create(identity,form); message='Business created. Open it below to continue setup.'; }
+        else if(p===INVESTOR_ROUTE+'/branding') { await service.branding(identity,form); message='Branding saved. Sender verification is separate.'; }
+        else if(p===INVESTOR_ROUTE+'/access') {
+          // Refuse before activation if the installation cannot produce a usable invitation.
+          if (form.state==='active' && !deps.portalBaseUrl) throw new InvestorError(503,'The secure account setup address needs configuring before access can be activated.');
+          const path=await service.access(identity,form);
+          setupPath=path?new URL(path,deps.portalBaseUrl).toString():null;
+          message='Access updated. No payment was collected and no email was sent.';
+        }
+        else if(p===INVESTOR_ROUTE+'/requirements') { await service.saveRequirements(identity,form); message='Investor requirements saved.'; }
+        else if(p===INVESTOR_ROUTE+'/site') {await service.saveSite(identity,form);message=form.publish==='yes'?'Website published. Enquiries will be saved to this business’s investor records.':'Website saved as a private draft.';}
+        else throw new InvestorError(404,'Investor action not found.');
+      } else if(method!=='GET' || p!==INVESTOR_ROUTE) throw new InvestorError(405,'Use the controls on Investor Desk.');
+      const programme=await service.snapshot(identity);
+      const current=programme.businesses.find(b=>b.workspaceId===programme.selectedWorkspaceId);
+      const contact=new URL(req.url ?? INVESTOR_ROUTE,'http://localhost').searchParams.get('contact');
+      const requirements=contact?await service.requirements(identity,contact):undefined;
+      const parts=current?await Promise.all([
+        deps.crm.snapshot(identity,{section:'contacts'}),
+        deps.crm.snapshot(identity,{section:'pipeline'}),
+        deps.crm.snapshot(identity,{section:'tasks',filter:'open'}),
+      ]):[];
+      const crm=parts[0]?{...parts[0],opportunities:parts[1]?.opportunities ?? [],stages:parts[1]?.stages ?? [],tasks:parts[2]?.tasks ?? []}:null;
+      // Setup links use the trusted deployment origin, never the request Host.
+      const view=p.includes('/mail/')||p.endsWith('/branding')||p.endsWith('/site')?'settings':p.endsWith('/access')||p.endsWith('/create')?'programme':url.searchParams.get('view')??'today';
+      const site=current&&view==='settings'?await service.site(identity):undefined;
+      const mail=current&&view==='settings'?await deps.investorMail?.snapshot(identity):undefined;
+      return sendHtml(res,200,investorPage({programme,csrf:portalCsrfToken(deps.sessionSecret,sessionToken),email:portalIdentity.userEmail,crm,requirements,message,setupPath,view,site,mail}),undefined,{'cache-control':'no-store','referrer-policy':'no-referrer'});
+    } catch(error) {
+      const failure=investorFailure(error);
+      return sendHtml(res,failure.status,portalStatusPage(deps,sessionToken,{title:'Investor Desk',message:failure.message,active:'crm',backHref:INVESTOR_ROUTE,backLabel:'Return to Investor Desk'}));
+    }
+  }
 
   // This runs after canonical identity resolution and the existing abuse gate.
   if (p === '/portal/api/leadrelay' || p.startsWith('/portal/api/leadrelay/')) {
@@ -4791,8 +4907,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       const planningContent = view.backlog.filter((item) => item.simulationEligible
         && content.catalog.items.some((source) => source.contentVersionId === item.contentVersionId
           && source.kind === 'social_post'));
+      const configuredCalendarNetworks = deps.zernioCalendar?.configuredNetworks;
       const planningTargets = (social.planning?.targets.items ?? []).filter((target) =>
-        deps.zernioCalendar?.configuredNetworks.some((network) => network === target.network));
+        configuredCalendarNetworks?.some((network) => network === target.network));
       const postPlan = social.workspace.canManage && deps.publicSocial.createCampaignPlan
         && planningContent.length > 0 && planningTargets.length > 0
         ? Object.freeze({

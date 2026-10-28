@@ -6,6 +6,7 @@ export type PlatformModuleId =
   | 'crm'
   | 'journeys'
   | 'leadrelay'
+  | 'investors'
   | 'content'
   | 'affiliates'
   | 'social'
@@ -53,7 +54,7 @@ export interface PlatformModuleRegistry {
   navigation(context: ModuleRuntimeContext): readonly ResolvedPlatformModule[];
 }
 
-const MODULE_IDS = new Set<PlatformModuleId>(['overview', 'actions', 'crm', 'journeys', 'leadrelay', 'content', 'affiliates', 'social', 'inbox', 'listening', 'webinars', 'automations', 'analytics', 'settings']);
+const MODULE_IDS = new Set<PlatformModuleId>(['overview', 'actions', 'crm', 'journeys', 'investors', 'leadrelay', 'content', 'affiliates', 'social', 'inbox', 'listening', 'webinars', 'automations', 'analytics', 'settings']);
 const MODULE_GROUPS = new Set<PlatformModuleGroup>(['work', 'channels', 'intelligence', 'system']);
 const MODULE_STAGES = new Set<PlatformModuleStage>(['available', 'preview', 'planned']);
 const MODULE_ICONS = new Set<PlatformModuleManifest['icon']>(['home', 'users', 'sparkles', 'send', 'inbox', 'radar', 'video', 'workflow', 'chart', 'settings']);
@@ -179,6 +180,7 @@ export const CORE_PLATFORM_MODULES: readonly PlatformModuleManifest[] = Object.f
   { id: 'actions', label: 'Operator Action Centre', shortLabel: 'Actions', description: 'One evidence-backed queue for urgent work, ownership and safe snoozing.', icon: 'workflow', group: 'work', order: 15, route: '/portal/actions', stage: 'available', requiredCapabilities: ['actions.read'], dependsOn: ['overview'] },
   { id: 'crm', label: 'CRM', shortLabel: 'CRM', description: 'Private contacts, opportunities, tasks and recorded CRM activity.', icon: 'users', group: 'work', order: 20, route: '/portal/crm/contacts', stage: 'available', requiredCapabilities: ['crm.contacts.read', 'crm.pipeline.read', 'crm.tasks.read'], dependsOn: ['overview'] },
   { id: 'journeys', label: 'Live journeys', shortLabel: 'Journeys', description: 'Operational lead lanes beside evidence-led milestones, scores and next moves.', icon: 'workflow', group: 'work', order: 25, route: '/portal/journeys/board', stage: 'available', requiredCapabilities: ['journeys.read'], dependsOn: ['crm'] },
+  { id: 'investors', label: 'Investor Desk', shortLabel: 'Investors', description: 'Investor relationships, business branding and founder-managed mentee access.', icon: 'users', group: 'work', order: 26, route: '/portal/investors', stage: 'preview', requiredCapabilities: ['crm.contacts.read'], dependsOn: ['crm'] },
   { id: 'leadrelay', label: 'LeadRelay', shortLabel: 'LeadRelay', description: 'Installation-scoped follow-up controls and verified outcomes.', icon: 'workflow', group: 'work', order: 27, route: '/portal/leadrelay', stage: 'preview', requiredCapabilities: ['workspace.overview.read'], dependsOn: ['overview'] },
   { id: 'content', label: 'Content control', shortLabel: 'Content', description: 'Immutable on-brand versions, source proof and exact approvals.', icon: 'sparkles', group: 'work', order: 30, route: '/portal/content', stage: 'available', requiredCapabilities: ['content.drafts.read'], dependsOn: ['overview'] },
   { id: 'affiliates', label: 'Affiliate compliance', shortLabel: 'Affiliates', description: 'Legal packs, acceptance, training, channel authority, cases and fail-closed eligibility.', icon: 'users', group: 'work', order: 35, route: '/portal/affiliates/compliance', stage: 'preview', requiredCapabilities: ['affiliates.compliance.read'], dependsOn: ['overview'] },

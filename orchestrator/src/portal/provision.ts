@@ -146,6 +146,8 @@ export interface PortalBundle {
 }
 
 export interface PostgresPortalConfig {
+  investors?: PostgresPortalDeps['investors'];
+  investorMail?: PostgresPortalDeps['investorMail'];
   financeDrafts?: PostgresPortalDeps['financeDrafts'];
   sessionSecret: string;
   secure: boolean;
@@ -207,6 +209,7 @@ export interface PostgresPortalConfig {
   /** Review-only Creator Watch relevance boundary; it has no provider client. */
   creatorWatch?: PortalCreatorWatchService;
   productProfile?: PortalProductProfile;
+  portalBaseUrl?: string;
   /** Distributed fail-closed guard required by the PostgreSQL portal. */
   abuse: NonNullable<PostgresPortalDeps['abuse']>;
   /** Once-per-request trusted proxy/HMAC boundary. */
@@ -256,6 +259,9 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     propertyPredatorSso: cfg.propertyPredatorSso,
     crm: cfg.crm,
     financeDrafts: cfg.financeDrafts,
+    investors: cfg.investors,
+    investorMail: cfg.investorMail,
+    portalBaseUrl: cfg.portalBaseUrl,
     journeys: cfg.journeys,
     operatorActions: cfg.operatorActions,
     companyContent: cfg.companyContent,

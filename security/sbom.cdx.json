@@ -843,6 +843,36 @@
       "version": "0.28.1"
     },
     {
+      "bom-ref": "npm:@pinojs/redact@0.4.0#node_modules/@pinojs/redact",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "@pinojs/redact",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/@pinojs/redact"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/@pinojs/redact/-/redact-0.4.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "0.4.0"
+    },
+    {
       "bom-ref": "npm:@relaunch72/orchestrator@0.1.0#node_modules/@relaunch72/orchestrator",
       "name": "@relaunch72/orchestrator",
       "properties": [
@@ -858,6 +888,36 @@
       "scope": "required",
       "type": "application",
       "version": "0.1.0"
+    },
+    {
+      "bom-ref": "npm:@selderee/plugin-htmlparser2@0.12.0#node_modules/@selderee/plugin-htmlparser2",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "oELmoyA6ML9jDRMV3kgcMQFKxUfBU0yFVn6yTctVaLT5ygXnxH52I3TZEgV9EhXJC68/uFvE5Daj1/25c0Xa/A=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "@selderee/plugin-htmlparser2",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/@selderee/plugin-htmlparser2"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/@selderee/plugin-htmlparser2/-/plugin-htmlparser2-0.12.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "0.12.0"
     },
     {
       "bom-ref": "npm:@stablelib/base64@1.0.1#node_modules/@stablelib/base64",
@@ -890,6 +950,36 @@
       "version": "1.0.1"
     },
     {
+      "bom-ref": "npm:@types/mailparser@3.9.0#node_modules/@types/mailparser",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "YnhrRiRVDiEAphFvd72hKa1n8y2b9Q3rgSQiONZQyhQz67h5g4MZHNApET3XWXVEFdInWtHqDHKEwnyjxU3QVw=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "@types/mailparser",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/@types/mailparser"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/@types/mailparser/-/mailparser-3.9.0.tgz"
+        }
+      ],
+      "scope": "optional",
+      "type": "library",
+      "version": "3.9.0"
+    },
+    {
       "bom-ref": "npm:@types/node@22.20.0#node_modules/@types/node",
       "hashes": [
         {
@@ -920,6 +1010,36 @@
       "version": "22.20.0"
     },
     {
+      "bom-ref": "npm:@types/nodemailer@8.0.2#node_modules/@types/nodemailer",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "c7M5ox8p0nEOfbJ2E9Qcmt8/QCu/VzsiAhzBiZbvky2PhKZDHpKB3sQHBM5MEZNkCfBOaS6S9//AGPRTNB7IaA=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "@types/nodemailer",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/@types/nodemailer"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/@types/nodemailer/-/nodemailer-8.0.2.tgz"
+        }
+      ],
+      "scope": "optional",
+      "type": "library",
+      "version": "8.0.2"
+    },
+    {
       "bom-ref": "npm:@types/pg@8.23.1#node_modules/@types/pg",
       "hashes": [
         {
@@ -948,6 +1068,36 @@
       "scope": "optional",
       "type": "library",
       "version": "8.23.1"
+    },
+    {
+      "bom-ref": "npm:@zone-eu/mailsplit@5.4.29#node_modules/@zone-eu/mailsplit",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "CCUNycmUjrV5M0wNf23waWAt9eOHczhjLbUQS7k0FNJvR0py9VSqHFt+tSl/D0+XI73VLG0U+PwYtq9R0zsm9Q=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "(MIT OR EUPL-1.1+)"
+          }
+        }
+      ],
+      "name": "@zone-eu/mailsplit",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/@zone-eu/mailsplit"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/@zone-eu/mailsplit/-/mailsplit-5.4.29.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "5.4.29"
     },
     {
       "bom-ref": "npm:agent-base@9.0.0#node_modules/agent-base",
@@ -1010,6 +1160,36 @@
       "version": "8.20.0"
     },
     {
+      "bom-ref": "npm:atomic-sleep@1.0.0#node_modules/atomic-sleep",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "kNOjDqAh7px0XWNI+4QbzoiR/nTkHAWNud2uvnJquD1/x5a7EQZMJT0AczqK0Qn67oY/TTQ1LbUKajZpp3I9tQ=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "atomic-sleep",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/atomic-sleep"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/atomic-sleep/-/atomic-sleep-1.0.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "1.0.0"
+    },
+    {
       "bom-ref": "npm:debug@4.4.3#node_modules/debug",
       "hashes": [
         {
@@ -1040,6 +1220,156 @@
       "version": "4.4.3"
     },
     {
+      "bom-ref": "npm:deepmerge-ts@8.0.2#node_modules/deepmerge-ts",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "uqbvqLUMrc6p0MO+WBRtTxY55hmyh94WRwI5a++PZe54X+bfVh59FSN7uWCBCW1CCVjzjnrwzfI8zidE2obMMw=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "deepmerge-ts",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/deepmerge-ts"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/deepmerge-ts/-/deepmerge-ts-8.0.2.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "8.0.2"
+    },
+    {
+      "bom-ref": "npm:dom-serializer@2.0.0#node_modules/dom-serializer",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "wIkAryiqt/nV5EQKqQpo3SToSOV9J0DnbJqwK7Wv/Trc92zIAYZ4FlMu+JPFW1DfGFt81ZTCGgDEabffXeLyJg=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "dom-serializer",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/dom-serializer"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/dom-serializer/-/dom-serializer-2.0.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "2.0.0"
+    },
+    {
+      "bom-ref": "npm:domelementtype@2.3.0#node_modules/domelementtype",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "OLETBj6w0OsagBwdXnPdN0cnMfF9opN69co+7ZrbfPGrdpPVNBUj02spi6B1N7wChLQiPn4CSH/zJvXw56gmHw=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "domelementtype",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/domelementtype"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/domelementtype/-/domelementtype-2.3.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "2.3.0"
+    },
+    {
+      "bom-ref": "npm:domhandler@5.0.3#node_modules/domhandler",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "cgwlv/1iFQiFnU96XXgROh8xTeetsnJiDsTc7TYCLFd9+/WNkIqPTxiM/8pSd8VIrhXGTf1Ny1q1hquVqDJB5w=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "domhandler",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/domhandler"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/domhandler/-/domhandler-5.0.3.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "5.0.3"
+    },
+    {
+      "bom-ref": "npm:domutils@3.2.2#node_modules/domutils",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "6kZKyUajlDuqlHKVX1w7gyslj9MPIXzIFiz/rGu35uC1wMi+kMhQwGhl4lt9unC9Vb9INnY9Z3/ZA3+FhASLaw=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "domutils",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/domutils"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/domutils/-/domutils-3.2.2.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "3.2.2"
+    },
+    {
       "bom-ref": "npm:dotenv@16.6.1#node_modules/dotenv",
       "hashes": [
         {
@@ -1068,6 +1398,96 @@
       "scope": "required",
       "type": "library",
       "version": "16.6.1"
+    },
+    {
+      "bom-ref": "npm:encoding-japanese@2.4.0#node_modules/encoding-japanese",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "PE0KjlsDy9JSsoU4C2Q8NXb1kC4c+bZRac9ZvHXUE4q1Ht63gScKMdEy9jst9+Fi3M4eDkqzkEhBZvix4blP2A=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "encoding-japanese",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/encoding-japanese"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/encoding-japanese/-/encoding-japanese-2.4.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "2.4.0"
+    },
+    {
+      "bom-ref": "npm:entities@4.5.0#node_modules/entities",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "V0hjH4dGPh9Ao5p0MoRY6BVqtwCjhz6vI5LT8AJ55H+4g9/4vbHx1I54fS0XuclLhDHArPQCiMjDxjaL8fPxhw=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "entities",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/entities"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/entities/-/entities-4.5.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "4.5.0"
+    },
+    {
+      "bom-ref": "npm:entities@7.0.1#node_modules/htmlparser2/node_modules/entities",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "BSD-2-Clause"
+          }
+        }
+      ],
+      "name": "entities",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/htmlparser2/node_modules/entities"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/entities/-/entities-7.0.1.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "7.0.1"
     },
     {
       "bom-ref": "npm:esbuild@0.28.1#node_modules/esbuild",
@@ -1220,6 +1640,96 @@
       "version": "2.3.3"
     },
     {
+      "bom-ref": "npm:he@1.2.0#node_modules/he",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "F/1DnUGPopORZi0ni+CvrCgHQ5FyEAHRLSApuYWMmrbSwoN2Mn/7k+Gl38gJnR7yyDZk6WLXwiGod1JOWNDKGw=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "he",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/he"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/he/-/he-1.2.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "1.2.0"
+    },
+    {
+      "bom-ref": "npm:html-to-text@10.0.1#node_modules/html-to-text",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "GiVhRI1BatGARSCmlXWNCjDT0cWrwBWoeduLoV0WSKAgaV/wa+hUWy5LiQLUs4UwiUrE52ZCMfBGiKD87TDPrg=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "html-to-text",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/html-to-text"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/html-to-text/-/html-to-text-10.0.1.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "10.0.1"
+    },
+    {
+      "bom-ref": "npm:htmlparser2@10.1.0#node_modules/htmlparser2",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "VTZkM9GWRAtEpveh7MSF6SjjrpNVNNVJfFup7xTY3UpFtm67foy9HDVXneLtFVt4pMz5kZtgNcvCniNFb1hlEQ=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "htmlparser2",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/htmlparser2"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/htmlparser2/-/htmlparser2-10.1.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "10.1.0"
+    },
+    {
       "bom-ref": "npm:https-proxy-agent@9.1.0#node_modules/https-proxy-agent",
       "hashes": [
         {
@@ -1248,6 +1758,126 @@
       "scope": "required",
       "type": "library",
       "version": "9.1.0"
+    },
+    {
+      "bom-ref": "npm:iconv-lite@0.6.3#node_modules/@types/mailparser/node_modules/iconv-lite",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "4fCk79wshMdzMp2rH06qWrJE4iolqLhCUH+OiuIgU++RB0+94NlDL81atO7GX55uUKueo0txHNtvEyI6D7WdMw=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "iconv-lite",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/@types/mailparser/node_modules/iconv-lite"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/iconv-lite/-/iconv-lite-0.6.3.tgz"
+        }
+      ],
+      "scope": "optional",
+      "type": "library",
+      "version": "0.6.3"
+    },
+    {
+      "bom-ref": "npm:iconv-lite@0.7.3#node_modules/iconv-lite",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "IKXpvIzjnC9XTAUbVBcMfGS0EPaIXtW6v+zr+RRp+hqULEpo0owZax6wyRwPOJbWbzjYspQwusTsfVr0ifh4uQ=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "iconv-lite",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/iconv-lite"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/iconv-lite/-/iconv-lite-0.7.3.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "0.7.3"
+    },
+    {
+      "bom-ref": "npm:imapflow@2.9.1#node_modules/imapflow",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "hOq2/+T+WnQzRy7D40gYlio25nG+c9bhtrxowokOQM57SwZFqRbqAtxFQcIpx82lhYBPQEEVVjmkYpd9Fplj7g=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "imapflow",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/imapflow"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/imapflow/-/imapflow-2.9.1.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "2.9.1"
+    },
+    {
+      "bom-ref": "npm:ip-address@10.7.5#node_modules/ip-address",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "t2v0rkILYv9WXmSL7TpAaU3HXgaFYOPUcH3QHgwQ++gpJuH3bqyMy4Fvt/DJCTKwzH3Cf+bAp5W/mFL39KPLzA=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "ip-address",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/ip-address"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/ip-address/-/ip-address-10.7.5.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "10.7.5"
     },
     {
       "bom-ref": "npm:json-schema-to-ts@3.1.1#node_modules/json-schema-to-ts",
@@ -1310,6 +1940,186 @@
       "version": "1.0.0"
     },
     {
+      "bom-ref": "npm:leac@0.7.0#node_modules/leac",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "qMrZeyEekgdRQ9o6a4NAB2EQZrv827GJdn1vnapwSJ90hWRB4TzUSunvacPkxQ2TnNqHNI1/zSt0hlo0crG8Jw=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "leac",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/leac"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/leac/-/leac-0.7.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "0.7.0"
+    },
+    {
+      "bom-ref": "npm:libbase64@1.4.1#node_modules/libbase64",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "Nyh3H90B3gRtrcxIe56Ayy7635J0jmh6AbxbQgQae8wrSPQMH5wFqJChiMTB13yKG512L3YspbA5DzumhFTITA=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "libbase64",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/libbase64"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/libbase64/-/libbase64-1.4.1.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "1.4.1"
+    },
+    {
+      "bom-ref": "npm:libmime@5.6.3#node_modules/libmime",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "cuTUW/Jybvh5O4/U9p61gyutHOjDtZyGQYuY99+bfnaFwqcDf2Nb+R6hMHY6DDen2H9wLKQSMpofWUgn2TI5JQ=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "libmime",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/libmime"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/libmime/-/libmime-5.6.3.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "5.6.3"
+    },
+    {
+      "bom-ref": "npm:libqp@3.0.1#node_modules/libqp",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "7QZxpPX25pga1WiMueduWxmrHMVBFrZPH6ZUaozGYa/H98JH6NVBSET3qVw+4NxzoraIW7rJ81YxSU9IalvCpg=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "libqp",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/libqp"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/libqp/-/libqp-3.0.1.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "3.0.1"
+    },
+    {
+      "bom-ref": "npm:linkify-it@5.0.2#node_modules/linkify-it",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "ONTm2jCMAVZjgQa/Fy1kScXsuOoF5NPTsoFBdE1KVIZ2vAh/r9+Bqo+0jINCBYnavTPQZz38QzFTme79ENoN3Q=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "linkify-it",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/linkify-it"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/linkify-it/-/linkify-it-5.0.2.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "5.0.2"
+    },
+    {
+      "bom-ref": "npm:mailparser@3.12.4#node_modules/mailparser",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "FdoMF+S89/AQaJHY7StwTfABPHZ8Vey+CDyUno5j+TO0jF0UxM+la4Pe9MeqKqBO4Y9ZMB2eomdyg5i+jzpfZw=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "mailparser",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/mailparser"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/mailparser/-/mailparser-3.12.4.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "3.12.4"
+    },
+    {
       "bom-ref": "npm:ms@2.1.3#node_modules/ms",
       "hashes": [
         {
@@ -1338,6 +2148,126 @@
       "scope": "required",
       "type": "library",
       "version": "2.1.3"
+    },
+    {
+      "bom-ref": "npm:nodemailer@10.2.1#node_modules/nodemailer",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "ZrDNsPFoDMwefNs7sJwrYiEJ/CG4ClJWDZv05iNJsEBWa8GRDry1QJHTJxsuTAY9eDDKjX4k+q3SxslXJOao7w=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT-0"
+          }
+        }
+      ],
+      "name": "nodemailer",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/nodemailer"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/nodemailer/-/nodemailer-10.2.1.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "10.2.1"
+    },
+    {
+      "bom-ref": "npm:on-exit-leak-free@2.1.2#node_modules/on-exit-leak-free",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "0eJJY6hXLGf1udHwfNftBqH+g73EU4B504nZeKpz1sYRKafAghwxEJunB2O7rDZkL4PGfsMVnTXZ2EjibbqcsA=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "on-exit-leak-free",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/on-exit-leak-free"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/on-exit-leak-free/-/on-exit-leak-free-2.1.2.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "2.1.2"
+    },
+    {
+      "bom-ref": "npm:parseley@0.13.1#node_modules/parseley",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "uNBJZzmb60l6p6VWLTmevizNAGnE0xoSf1n0B4q3ntegDNzcS68NRCcBDZTcyXHxt2XhBChsCuqj4M+nChvE/A=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "parseley",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/parseley"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/parseley/-/parseley-0.13.1.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "0.13.1"
+    },
+    {
+      "bom-ref": "npm:peberminta@0.10.0#node_modules/peberminta",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "80B2AsU+I4Qdb0ZAPSfe9UwvGzwkM37IKIFEvdS3D/3Ndgv2bsuJ0bfG1+iEYO+l7Gfd4EUJmuRyq7efLgRMzQ=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "peberminta",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/peberminta"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/peberminta/-/peberminta-0.10.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "0.10.0"
     },
     {
       "bom-ref": "npm:pg-cloudflare@1.4.0#node_modules/pg-cloudflare",
@@ -1580,6 +2510,96 @@
       "version": "1.0.5"
     },
     {
+      "bom-ref": "npm:pino-abstract-transport@3.0.0#node_modules/pino-abstract-transport",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "wlfUczU+n7Hy/Ha5j9a/gZNy7We5+cXp8YL+X+PG8S0KXxw7n/JXA3c46Y0zQznIJ83URJiwy7Lh56WLokNuxg=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "pino-abstract-transport",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/pino-abstract-transport"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/pino-abstract-transport/-/pino-abstract-transport-3.0.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "3.0.0"
+    },
+    {
+      "bom-ref": "npm:pino-std-serializers@7.1.0#node_modules/pino-std-serializers",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "BndPH67/JxGExRgiX1dX0w1FvZck5Wa4aal9198SrRhZjH3GxKQUKIBnYJTdj2HDN3UQAS06HlfcSbQj2OHmaw=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "pino-std-serializers",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/pino-std-serializers"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/pino-std-serializers/-/pino-std-serializers-7.1.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "7.1.0"
+    },
+    {
+      "bom-ref": "npm:pino@10.3.1#node_modules/pino",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "r34yH/GlQpKZbU1BvFFqOjhISRo1MNx1tWYsYvmj6KIRHSPMT2+yHOEb1SG6NMvRoHRF0a07kCOox/9yakl1vg=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "pino",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/pino"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/pino/-/pino-10.3.1.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "10.3.1"
+    },
+    {
       "bom-ref": "npm:playwright-core@1.61.1#node_modules/playwright-core",
       "hashes": [
         {
@@ -1730,6 +2750,36 @@
       "version": "1.2.0"
     },
     {
+      "bom-ref": "npm:process-warning@5.1.1#node_modules/process-warning",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "oCkNVj4OKnKEcocVBcDfiIugN1/cE6rgfT3nCtzeqZPA8+rIxMaQ0xXzIkGP8Gj2qUaP1UR7uhJ1VD8lUCpzCg=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "process-warning",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/process-warning"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/process-warning/-/process-warning-5.1.1.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "5.1.1"
+    },
+    {
       "bom-ref": "npm:proxy-agent-negotiate@1.1.0#node_modules/proxy-agent-negotiate",
       "hashes": [
         {
@@ -1760,6 +2810,126 @@
       "version": "1.1.0"
     },
     {
+      "bom-ref": "npm:punycode.js@2.3.1#node_modules/punycode.js",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "uxFIHU0YlHYhDQtV4R9J6a52SLx28BCjT+4ieh7IGbgwVJWO+km431c4yRlREUAsAmt/uMjQUyQHNEPf0M39CA=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "punycode.js",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/punycode.js"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/punycode.js/-/punycode.js-2.3.1.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "2.3.1"
+    },
+    {
+      "bom-ref": "npm:quick-format-unescaped@4.0.4#node_modules/quick-format-unescaped",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "tYC1Q1hgyRuHgloV/YXs2w15unPVh8qfu/qCTfhTYamaw7fyhumKa2yGpdSo87vY32rIclj+4fWYQXUMs9EHvg=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "quick-format-unescaped",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/quick-format-unescaped"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/quick-format-unescaped/-/quick-format-unescaped-4.0.4.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "4.0.4"
+    },
+    {
+      "bom-ref": "npm:real-require@0.2.0#node_modules/real-require",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "57frrGM/OCTLqLOAh0mhVA9VBMHd+9U7Zb2THMGdBUoZVOtGbJzjxsYGDJ3A9AYYCP4hn6y1TVbaOfzWtm5GFg=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "real-require",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/real-require"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/real-require/-/real-require-0.2.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "0.2.0"
+    },
+    {
+      "bom-ref": "npm:real-require@1.0.0#node_modules/thread-stream/node_modules/real-require",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "P4nbQYQfePJxRSmY+v/KINxVucm4NF3p3s7pJveMTtom52FR4YGltUQLB8idDXwDDWW+eYrWDFbuzUnjoWHF7g=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "real-require",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/thread-stream/node_modules/real-require"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/real-require/-/real-require-1.0.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "1.0.0"
+    },
+    {
       "bom-ref": "npm:require-from-string@2.0.2#node_modules/require-from-string",
       "hashes": [
         {
@@ -1788,6 +2958,186 @@
       "scope": "required",
       "type": "library",
       "version": "2.0.2"
+    },
+    {
+      "bom-ref": "npm:safe-stable-stringify@2.5.0#node_modules/safe-stable-stringify",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "b3rppTKm9T+PsVCBEOUR46GWI7fdOs00VKZ1+9c1EWDaDMvjQc6tUwuFyIprgGgTcWoVHSKrU8H31ZHA2e0RHA=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "safe-stable-stringify",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/safe-stable-stringify"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/safe-stable-stringify/-/safe-stable-stringify-2.5.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "2.5.0"
+    },
+    {
+      "bom-ref": "npm:safer-buffer@2.1.2#node_modules/safer-buffer",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "safer-buffer",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/safer-buffer"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/safer-buffer/-/safer-buffer-2.1.2.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "2.1.2"
+    },
+    {
+      "bom-ref": "npm:selderee@0.12.0#node_modules/selderee",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "b1YMh3+DHZp59DLna3qVwQ5iOla/nrI6mLBNW02XxU77M3046Df6VLkoaJyFz20VsGIG5kkp+FK0kg4K4HnUFw=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "selderee",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/selderee"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/selderee/-/selderee-0.12.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "0.12.0"
+    },
+    {
+      "bom-ref": "npm:smart-buffer@4.2.0#node_modules/smart-buffer",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "94hK0Hh8rPqQl2xXc3HsaBoOXKV20MToPkcXvwbISWLEs+64sBq5kFgn2kJDHb1Pry9yrP0dxrCI9RRci7RXKg=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "smart-buffer",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/smart-buffer"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/smart-buffer/-/smart-buffer-4.2.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "4.2.0"
+    },
+    {
+      "bom-ref": "npm:socks@2.8.10#node_modules/socks",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "e0VyvkVTwVYViNovRkZ9aodhxVlyoMn7eJhVUPxZ+eK9P/7CBkxvvsBOHqFPEH416726W8tLXXXjKwqgTErrCQ=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "socks",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/socks"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/socks/-/socks-2.8.10.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "2.8.10"
+    },
+    {
+      "bom-ref": "npm:sonic-boom@4.2.1#node_modules/sonic-boom",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "w6AxtubXa2wTXAUsZMMWERrsIRAdrK0Sc+FUytWvYAhBJLyuI4llrMIC1DtlNSdI99EI86KZum2MMq3EAZlF9Q=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "sonic-boom",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/sonic-boom"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/sonic-boom/-/sonic-boom-4.2.1.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "4.2.1"
     },
     {
       "bom-ref": "npm:split2@4.2.0#node_modules/split2",
@@ -1880,6 +3230,66 @@
       "version": "22.3.0"
     },
     {
+      "bom-ref": "npm:thread-stream@4.2.0#node_modules/thread-stream",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "e2zZ96wSChazBsbENf/Pcm/4swHt2cEKQ92rhUjkL9GCKiTDJIaTBenjE/m9DXi0QBmTMDkFDdOomUy20A1tDQ=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "thread-stream",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/thread-stream"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/thread-stream/-/thread-stream-4.2.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "4.2.0"
+    },
+    {
+      "bom-ref": "npm:tlds@1.261.0#node_modules/tlds",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "QXqwfEl9ddlGBaRFXIvNKK6OhipSiLXuRuLJX5DErz0o0Q0rYxulWLdFryTkV5PkdZct5iMInwYEGe/eR++1AA=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "tlds",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/tlds"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/tlds/-/tlds-1.261.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "1.261.0"
+    },
+    {
       "bom-ref": "npm:ts-algebra@2.0.0#node_modules/ts-algebra",
       "hashes": [
         {
@@ -1968,6 +3378,36 @@
       "scope": "optional",
       "type": "library",
       "version": "5.9.3"
+    },
+    {
+      "bom-ref": "npm:uc.micro@2.1.0#node_modules/uc.micro",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "ARDJmphmdvUk6Glw7y9DQ2bFkKBHwQHLi2lsaH6PPmz/Ka9sFOBsBluozhDltWmnv9u/cF6Rt87znRTPV+yp/A=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "uc.micro",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/uc.micro"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/uc.micro/-/uc.micro-2.1.0.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "2.1.0"
     },
     {
       "bom-ref": "npm:undici-types@6.21.0#node_modules/undici-types",
@@ -2153,13 +3593,22 @@
       "ref": "npm:@esbuild/win32-x64@0.28.1#node_modules/@esbuild/win32-x64"
     },
     {
+      "dependsOn": [],
+      "ref": "npm:@pinojs/redact@0.4.0#node_modules/@pinojs/redact"
+    },
+    {
       "dependsOn": [
         "npm:@anthropic-ai/sdk@0.110.0#node_modules/@anthropic-ai/sdk",
+        "npm:@types/mailparser@3.9.0#node_modules/@types/mailparser",
         "npm:@types/node@22.20.0#node_modules/@types/node",
+        "npm:@types/nodemailer@8.0.2#node_modules/@types/nodemailer",
         "npm:@types/pg@8.23.1#node_modules/@types/pg",
         "npm:ajv@8.20.0#node_modules/ajv",
         "npm:dotenv@16.6.1#node_modules/dotenv",
         "npm:https-proxy-agent@9.1.0#node_modules/https-proxy-agent",
+        "npm:imapflow@2.9.1#node_modules/imapflow",
+        "npm:mailparser@3.12.4#node_modules/mailparser",
+        "npm:nodemailer@10.2.1#node_modules/nodemailer",
         "npm:pg@8.23.0#node_modules/pg",
         "npm:playwright-core@1.61.1#node_modules/playwright-core",
         "npm:stripe@22.3.0#node_modules/stripe",
@@ -2169,8 +3618,22 @@
       "ref": "npm:@relaunch72/orchestrator@0.1.0#node_modules/@relaunch72/orchestrator"
     },
     {
+      "dependsOn": [
+        "npm:domelementtype@2.3.0#node_modules/domelementtype",
+        "npm:domhandler@5.0.3#node_modules/domhandler"
+      ],
+      "ref": "npm:@selderee/plugin-htmlparser2@0.12.0#node_modules/@selderee/plugin-htmlparser2"
+    },
+    {
       "dependsOn": [],
       "ref": "npm:@stablelib/base64@1.0.1#node_modules/@stablelib/base64"
+    },
+    {
+      "dependsOn": [
+        "npm:@types/node@22.20.0#node_modules/@types/node",
+        "npm:iconv-lite@0.7.3#node_modules/iconv-lite"
+      ],
+      "ref": "npm:@types/mailparser@3.9.0#node_modules/@types/mailparser"
     },
     {
       "dependsOn": [
@@ -2180,11 +3643,25 @@
     },
     {
       "dependsOn": [
+        "npm:@types/node@22.20.0#node_modules/@types/node"
+      ],
+      "ref": "npm:@types/nodemailer@8.0.2#node_modules/@types/nodemailer"
+    },
+    {
+      "dependsOn": [
         "npm:@types/node@22.20.0#node_modules/@types/node",
         "npm:pg-protocol@1.16.0#node_modules/pg-protocol",
         "npm:pg-types@2.2.0#node_modules/pg-types"
       ],
       "ref": "npm:@types/pg@8.23.1#node_modules/@types/pg"
+    },
+    {
+      "dependsOn": [
+        "npm:libbase64@1.4.1#node_modules/libbase64",
+        "npm:libmime@5.6.3#node_modules/libmime",
+        "npm:libqp@3.0.1#node_modules/libqp"
+      ],
+      "ref": "npm:@zone-eu/mailsplit@5.4.29#node_modules/@zone-eu/mailsplit"
     },
     {
       "dependsOn": [],
@@ -2200,6 +3677,10 @@
       "ref": "npm:ajv@8.20.0#node_modules/ajv"
     },
     {
+      "dependsOn": [],
+      "ref": "npm:atomic-sleep@1.0.0#node_modules/atomic-sleep"
+    },
+    {
       "dependsOn": [
         "npm:ms@2.1.3#node_modules/ms"
       ],
@@ -2207,7 +3688,49 @@
     },
     {
       "dependsOn": [],
+      "ref": "npm:deepmerge-ts@8.0.2#node_modules/deepmerge-ts"
+    },
+    {
+      "dependsOn": [
+        "npm:domelementtype@2.3.0#node_modules/domelementtype",
+        "npm:domhandler@5.0.3#node_modules/domhandler",
+        "npm:entities@4.5.0#node_modules/entities"
+      ],
+      "ref": "npm:dom-serializer@2.0.0#node_modules/dom-serializer"
+    },
+    {
+      "dependsOn": [],
+      "ref": "npm:domelementtype@2.3.0#node_modules/domelementtype"
+    },
+    {
+      "dependsOn": [
+        "npm:domelementtype@2.3.0#node_modules/domelementtype"
+      ],
+      "ref": "npm:domhandler@5.0.3#node_modules/domhandler"
+    },
+    {
+      "dependsOn": [
+        "npm:dom-serializer@2.0.0#node_modules/dom-serializer",
+        "npm:domelementtype@2.3.0#node_modules/domelementtype",
+        "npm:domhandler@5.0.3#node_modules/domhandler"
+      ],
+      "ref": "npm:domutils@3.2.2#node_modules/domutils"
+    },
+    {
+      "dependsOn": [],
       "ref": "npm:dotenv@16.6.1#node_modules/dotenv"
+    },
+    {
+      "dependsOn": [],
+      "ref": "npm:encoding-japanese@2.4.0#node_modules/encoding-japanese"
+    },
+    {
+      "dependsOn": [],
+      "ref": "npm:entities@4.5.0#node_modules/entities"
+    },
+    {
+      "dependsOn": [],
+      "ref": "npm:entities@7.0.1#node_modules/htmlparser2/node_modules/entities"
     },
     {
       "dependsOn": [
@@ -2257,12 +3780,64 @@
       "ref": "npm:fsevents@2.3.3#node_modules/fsevents"
     },
     {
+      "dependsOn": [],
+      "ref": "npm:he@1.2.0#node_modules/he"
+    },
+    {
+      "dependsOn": [
+        "npm:@selderee/plugin-htmlparser2@0.12.0#node_modules/@selderee/plugin-htmlparser2",
+        "npm:deepmerge-ts@8.0.2#node_modules/deepmerge-ts",
+        "npm:dom-serializer@2.0.0#node_modules/dom-serializer",
+        "npm:htmlparser2@10.1.0#node_modules/htmlparser2",
+        "npm:selderee@0.12.0#node_modules/selderee"
+      ],
+      "ref": "npm:html-to-text@10.0.1#node_modules/html-to-text"
+    },
+    {
+      "dependsOn": [
+        "npm:domelementtype@2.3.0#node_modules/domelementtype",
+        "npm:domhandler@5.0.3#node_modules/domhandler",
+        "npm:domutils@3.2.2#node_modules/domutils",
+        "npm:entities@4.5.0#node_modules/entities"
+      ],
+      "ref": "npm:htmlparser2@10.1.0#node_modules/htmlparser2"
+    },
+    {
       "dependsOn": [
         "npm:agent-base@9.0.0#node_modules/agent-base",
         "npm:debug@4.4.3#node_modules/debug",
         "npm:proxy-agent-negotiate@1.1.0#node_modules/proxy-agent-negotiate"
       ],
       "ref": "npm:https-proxy-agent@9.1.0#node_modules/https-proxy-agent"
+    },
+    {
+      "dependsOn": [
+        "npm:safer-buffer@2.1.2#node_modules/safer-buffer"
+      ],
+      "ref": "npm:iconv-lite@0.6.3#node_modules/@types/mailparser/node_modules/iconv-lite"
+    },
+    {
+      "dependsOn": [
+        "npm:safer-buffer@2.1.2#node_modules/safer-buffer"
+      ],
+      "ref": "npm:iconv-lite@0.7.3#node_modules/iconv-lite"
+    },
+    {
+      "dependsOn": [
+        "npm:@zone-eu/mailsplit@5.4.29#node_modules/@zone-eu/mailsplit",
+        "npm:encoding-japanese@2.4.0#node_modules/encoding-japanese",
+        "npm:iconv-lite@0.7.3#node_modules/iconv-lite",
+        "npm:libbase64@1.4.1#node_modules/libbase64",
+        "npm:libmime@5.6.3#node_modules/libmime",
+        "npm:libqp@3.0.1#node_modules/libqp",
+        "npm:pino@10.3.1#node_modules/pino",
+        "npm:socks@2.8.10#node_modules/socks"
+      ],
+      "ref": "npm:imapflow@2.9.1#node_modules/imapflow"
+    },
+    {
+      "dependsOn": [],
+      "ref": "npm:ip-address@10.7.5#node_modules/ip-address"
     },
     {
       "dependsOn": [
@@ -2277,7 +3852,66 @@
     },
     {
       "dependsOn": [],
+      "ref": "npm:leac@0.7.0#node_modules/leac"
+    },
+    {
+      "dependsOn": [],
+      "ref": "npm:libbase64@1.4.1#node_modules/libbase64"
+    },
+    {
+      "dependsOn": [
+        "npm:encoding-japanese@2.4.0#node_modules/encoding-japanese",
+        "npm:iconv-lite@0.7.3#node_modules/iconv-lite",
+        "npm:libbase64@1.4.1#node_modules/libbase64",
+        "npm:libqp@3.0.1#node_modules/libqp"
+      ],
+      "ref": "npm:libmime@5.6.3#node_modules/libmime"
+    },
+    {
+      "dependsOn": [],
+      "ref": "npm:libqp@3.0.1#node_modules/libqp"
+    },
+    {
+      "dependsOn": [
+        "npm:uc.micro@2.1.0#node_modules/uc.micro"
+      ],
+      "ref": "npm:linkify-it@5.0.2#node_modules/linkify-it"
+    },
+    {
+      "dependsOn": [
+        "npm:@zone-eu/mailsplit@5.4.29#node_modules/@zone-eu/mailsplit",
+        "npm:he@1.2.0#node_modules/he",
+        "npm:html-to-text@10.0.1#node_modules/html-to-text",
+        "npm:libmime@5.6.3#node_modules/libmime",
+        "npm:linkify-it@5.0.2#node_modules/linkify-it",
+        "npm:nodemailer@10.2.1#node_modules/nodemailer",
+        "npm:punycode.js@2.3.1#node_modules/punycode.js",
+        "npm:tlds@1.261.0#node_modules/tlds"
+      ],
+      "ref": "npm:mailparser@3.12.4#node_modules/mailparser"
+    },
+    {
+      "dependsOn": [],
       "ref": "npm:ms@2.1.3#node_modules/ms"
+    },
+    {
+      "dependsOn": [],
+      "ref": "npm:nodemailer@10.2.1#node_modules/nodemailer"
+    },
+    {
+      "dependsOn": [],
+      "ref": "npm:on-exit-leak-free@2.1.2#node_modules/on-exit-leak-free"
+    },
+    {
+      "dependsOn": [
+        "npm:leac@0.7.0#node_modules/leac",
+        "npm:peberminta@0.10.0#node_modules/peberminta"
+      ],
+      "ref": "npm:parseley@0.13.1#node_modules/parseley"
+    },
+    {
+      "dependsOn": [],
+      "ref": "npm:peberminta@0.10.0#node_modules/peberminta"
     },
     {
       "dependsOn": [],
@@ -2327,6 +3961,32 @@
       "ref": "npm:pgpass@1.0.5#node_modules/pgpass"
     },
     {
+      "dependsOn": [
+        "npm:split2@4.2.0#node_modules/split2"
+      ],
+      "ref": "npm:pino-abstract-transport@3.0.0#node_modules/pino-abstract-transport"
+    },
+    {
+      "dependsOn": [],
+      "ref": "npm:pino-std-serializers@7.1.0#node_modules/pino-std-serializers"
+    },
+    {
+      "dependsOn": [
+        "npm:@pinojs/redact@0.4.0#node_modules/@pinojs/redact",
+        "npm:atomic-sleep@1.0.0#node_modules/atomic-sleep",
+        "npm:on-exit-leak-free@2.1.2#node_modules/on-exit-leak-free",
+        "npm:pino-abstract-transport@3.0.0#node_modules/pino-abstract-transport",
+        "npm:pino-std-serializers@7.1.0#node_modules/pino-std-serializers",
+        "npm:process-warning@5.1.1#node_modules/process-warning",
+        "npm:quick-format-unescaped@4.0.4#node_modules/quick-format-unescaped",
+        "npm:real-require@0.2.0#node_modules/real-require",
+        "npm:safe-stable-stringify@2.5.0#node_modules/safe-stable-stringify",
+        "npm:sonic-boom@4.2.1#node_modules/sonic-boom",
+        "npm:thread-stream@4.2.0#node_modules/thread-stream"
+      ],
+      "ref": "npm:pino@10.3.1#node_modules/pino"
+    },
+    {
       "dependsOn": [],
       "ref": "npm:playwright-core@1.61.1#node_modules/playwright-core"
     },
@@ -2350,11 +4010,62 @@
     },
     {
       "dependsOn": [],
+      "ref": "npm:process-warning@5.1.1#node_modules/process-warning"
+    },
+    {
+      "dependsOn": [],
       "ref": "npm:proxy-agent-negotiate@1.1.0#node_modules/proxy-agent-negotiate"
     },
     {
       "dependsOn": [],
+      "ref": "npm:punycode.js@2.3.1#node_modules/punycode.js"
+    },
+    {
+      "dependsOn": [],
+      "ref": "npm:quick-format-unescaped@4.0.4#node_modules/quick-format-unescaped"
+    },
+    {
+      "dependsOn": [],
+      "ref": "npm:real-require@0.2.0#node_modules/real-require"
+    },
+    {
+      "dependsOn": [],
+      "ref": "npm:real-require@1.0.0#node_modules/thread-stream/node_modules/real-require"
+    },
+    {
+      "dependsOn": [],
       "ref": "npm:require-from-string@2.0.2#node_modules/require-from-string"
+    },
+    {
+      "dependsOn": [],
+      "ref": "npm:safe-stable-stringify@2.5.0#node_modules/safe-stable-stringify"
+    },
+    {
+      "dependsOn": [],
+      "ref": "npm:safer-buffer@2.1.2#node_modules/safer-buffer"
+    },
+    {
+      "dependsOn": [
+        "npm:parseley@0.13.1#node_modules/parseley"
+      ],
+      "ref": "npm:selderee@0.12.0#node_modules/selderee"
+    },
+    {
+      "dependsOn": [],
+      "ref": "npm:smart-buffer@4.2.0#node_modules/smart-buffer"
+    },
+    {
+      "dependsOn": [
+        "npm:ip-address@10.7.5#node_modules/ip-address",
+        "npm:smart-buffer@4.2.0#node_modules/smart-buffer"
+      ],
+      "ref": "npm:socks@2.8.10#node_modules/socks"
+    },
+    {
+      "dependsOn": [
+        "npm:atomic-sleep@1.0.0#node_modules/atomic-sleep"
+      ],
+      "ref": "npm:sonic-boom@4.2.1#node_modules/sonic-boom"
     },
     {
       "dependsOn": [],
@@ -2370,6 +4081,16 @@
     {
       "dependsOn": [],
       "ref": "npm:stripe@22.3.0#node_modules/stripe"
+    },
+    {
+      "dependsOn": [
+        "npm:real-require@0.2.0#node_modules/real-require"
+      ],
+      "ref": "npm:thread-stream@4.2.0#node_modules/thread-stream"
+    },
+    {
+      "dependsOn": [],
+      "ref": "npm:tlds@1.261.0#node_modules/tlds"
     },
     {
       "dependsOn": [],
@@ -2388,6 +4109,10 @@
     },
     {
       "dependsOn": [],
+      "ref": "npm:uc.micro@2.1.0#node_modules/uc.micro"
+    },
+    {
+      "dependsOn": [],
       "ref": "npm:undici-types@6.21.0#node_modules/undici-types"
     },
     {
@@ -2402,7 +4127,7 @@
       "properties": [
         {
           "name": "relaunch72:canonical-package-lock-sha256",
-          "value": "fd51a64272c4873a7112bb95bd879067f954dc49cb5ea45f8d8cf0da7a6321f6"
+          "value": "dd4759bd0b57aef6f8d2f31f88586c1697a9e6bc1619be825ac5e116b34a81c1"
         },
         {
           "name": "relaunch72:supply-chain-policy-version",

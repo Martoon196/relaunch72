@@ -1,4 +1,19 @@
 import { createHash } from 'node:crypto';
+import { InvestorService } from './investor-service.js';
+import { InvestorMailService } from './investor-mail-service.js';
+import { InvestorMailVault } from '../investor-mail/vault.js';
+import type { MailOAuthConfig } from '../investor-mail/oauth.js';
+
+function investorMailVault(env:NodeJS.ProcessEnv):InvestorMailVault|undefined {
+  const value=env.INVESTOR_MAIL_ENCRYPTION_KEY?.trim();if(!value)return undefined;
+  const key=Buffer.from(value,'base64');if(key.length!==32||key.toString('base64')!==value)throw new Error('INVESTOR_MAIL_ENCRYPTION_KEY must encode 32 bytes');
+  return new InvestorMailVault(key);
+}
+function investorOAuthConfig(env:NodeJS.ProcessEnv):MailOAuthConfig|undefined {
+  const base=env.PORTAL_BASE_URL?.trim();if(!base)return undefined;
+  const app=(prefix:string)=>env[prefix+'_CLIENT_ID']&&env[prefix+'_CLIENT_SECRET']?{clientId:env[prefix+'_CLIENT_ID']!,clientSecret:env[prefix+'_CLIENT_SECRET']!}:undefined;
+  return {redirectUri:new URL('/portal/investors/mail/callback',base).toString(),google:app('INVESTOR_GOOGLE'),microsoft:app('INVESTOR_MICROSOFT')};
+}
 import type { Pool } from 'pg';
 import { createDatabasePool } from '../db/pool.js';
 import { loadDatabaseConfig, type DatabaseConfig } from '../db/config.js';
@@ -164,6 +179,8 @@ export interface PgPortalPlatform {
   abuse: PgPortalAbuseGuard;
   crm: PgPortalCrmService;
   financeDrafts: FinanceDraftsService;
+  investors: InvestorService;
+  investorMail: InvestorMailService;
   journeys: PgPortalJourneyManagerService;
   /** RLS-scoped authoritative operator queue with assignment/snooze overlays only. */
   operatorActions: PgPortalOperatorActionCentreService;
@@ -1240,6 +1257,8 @@ export async function buildPgPortalPlatform(
         cursorSecret: env.SESSION_SECRET?.trim() ?? '',
       }),
       financeDrafts: createPgFinanceDraftsService({ webPool, commandPool, secret: env.SESSION_SECRET?.trim() ?? '' }),
+      investors: new InvestorService(webPool, identityPool, commandPool),
+      investorMail: new InvestorMailService(webPool,identityPool,investorMailVault(env),investorOAuthConfig(env),env.INVESTOR_MAIL_DELIVERY_ENABLED==='true'),
       journeys: createPgPortalJourneyManagerService({ webPool, commandPool }),
       operatorActions: createPgPortalOperatorActionCentreService({
         webPool,

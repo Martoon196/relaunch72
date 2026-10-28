@@ -1,0 +1,90 @@
+[
+  {
+    "name": "desktop",
+    "width": 1440,
+    "height": 1100,
+    "overflow": false,
+    "errors": [],
+    "heading": "Northstar Property"
+  },
+  {
+    "name": "mobile",
+    "width": 390,
+    "height": 844,
+    "overflow": false,
+    "errors": [],
+    "heading": "Northstar Property"
+  },
+  {
+    "name": "empty",
+    "width": 1440,
+    "height": 1100,
+    "overflow": false,
+    "errors": [],
+    "heading": "Northstar Property"
+  },
+  {
+    "name": "admin",
+    "width": 1440,
+    "height": 1100,
+    "overflow": false,
+    "errors": [],
+    "heading": "Your investor command centre."
+  },
+  {
+    "name": "email",
+    "width": 1440,
+    "height": 1100,
+    "overflow": false,
+    "errors": [],
+    "heading": "Keep the conversation moving."
+  },
+  {
+    "name": "email-mobile",
+    "width": 390,
+    "height": 844,
+    "overflow": false,
+    "errors": [],
+    "heading": "Keep the conversation moving."
+  },
+  {
+    "name": "settings",
+    "width": 1440,
+    "height": 1100,
+    "overflow": false,
+    "errors": [],
+    "heading": "Northstar Property"
+  },
+  {
+    "name": "settings-mobile",
+    "width": 390,
+    "height": 844,
+    "overflow": false,
+    "errors": [],
+    "heading": "Northstar Property"
+  },
+  {
+    "name": "playbook",
+    "width": 1440,
+    "height": 1100,
+    "overflow": false,
+    "errors": [],
+    "heading": "Northstar Property"
+  },
+  {
+    "name": "site",
+    "width": 1440,
+    "height": 1100,
+    "overflow": false,
+    "errors": [],
+    "heading": "Your next property investment starts with a conversation."
+  },
+  {
+    "name": "site-mobile",
+    "width": 390,
+    "height": 844,
+    "overflow": false,
+    "errors": [],
+    "heading": "Your next property investment starts with a conversation."
+  }
+]

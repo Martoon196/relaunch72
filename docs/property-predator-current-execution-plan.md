@@ -1,5 +1,7 @@
 # Property Predator — current execution plan
 
+**Investor CRM amendment, 27 October 2026 — INV-CRM-001:** the founder authorised an investor CRM on Relaunch72 with Martin as sole programme administrator, self-service test-business setup, later paid mentee activation, individual branding, email choices and branded investor sites. This bounded lane starts from upstream `d01e1f865d8e95e801179aedead38cdc619e3e98` and reuses canonical CRM/identity/inbox and existing LeadRelay. It does not reopen the older Property Predator lanes below. [Scope and evidence](investor-crm-pilot-checkpoint.md); [pilot operation and release limits](investor-crm-pilot.md). Candidate only; no production release or provider effects claimed.
+
 **Original execution snapshot:** 2 September 2026. **Current status amendment:** 7 September 2026.
 
 **Current Growth HQ baseline (verified 7 September 2026):** the live Render service was observed at `016f102104c6727bba80b74a7ad352c41435938a`. The authoritative GitHub branch tip is `11adb48a347568ed0406e642315e78569f721ae0`, which directly descends from that live revision. Neon reports a contiguous **97/97** applied-migration ledger with matching checksums. The 2 September `0090` role-membership failure and statements that `0093` was local or unapplied remain useful incident history, but no longer describe the current database or release baseline. Current implementation work starts from `worktrees/astra-overnight-hq-current` and records deployment SHA, source SHA and migration evidence separately.

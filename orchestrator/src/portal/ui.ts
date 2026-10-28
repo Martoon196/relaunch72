@@ -8,7 +8,7 @@ import { CORE_PLATFORM_MODULES, platformModules, type PlatformModuleId, type Pla
 import type { PlatformCapability } from '../platform/capabilities.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
 
-export type PortalSection = 'overview' | 'actions' | 'crm' | 'journeys' | 'content' | 'affiliates' | 'inbox' | 'billing';
+export type PortalSection = 'overview' | 'actions' | 'crm' | 'investors' | 'journeys' | 'content' | 'affiliates' | 'inbox' | 'billing';
 
 export function escapeHtml(value: unknown): string {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -66,7 +66,7 @@ const ICON_PATHS: Record<IconName, string> = {
 
 const MODULE_ICONS: Record<PlatformModuleId, IconName> = {
   overview: 'overview', actions: 'activity', crm: 'contacts', journeys: 'automation',
-  leadrelay: 'automation', content: 'content', affiliates: 'contacts', social: 'social', inbox: 'inbox',
+  leadrelay: 'automation', investors: 'contacts', content: 'content', affiliates: 'contacts', social: 'social', inbox: 'inbox',
   listening: 'listening', webinars: 'calendar', automations: 'automation', analytics: 'activity', settings: 'billing',
 };
 
@@ -213,6 +213,7 @@ function plannedNav(module: PlatformModuleManifest): string {
 
 export function appShell(opts: AppShellOptions): string {
   const profile = opts.productProfile ?? RELAUNCH72_PRODUCT_PROFILE;
+  if (profile.investorWorkspace) opts = {...opts,tenantName:profile.productName};
   const tenant = escapeHtml(opts.tenantName);
   const crmMode = opts.mode === 'crm';
   const capabilities = new Set<PlatformCapability>(opts.capabilities ?? ['workspace.overview.read']);
@@ -233,10 +234,13 @@ export function appShell(opts: AppShellOptions): string {
       !profile.visibleNavigation.includes(module.id) && module.state !== 'planned' && module.route)]
     : workingModules;
   const moduleLabel = (module: PlatformModuleManifest): string => profile.moduleLabels[module.id] ?? module.shortLabel;
+  const moduleRoute = (module: PlatformModuleManifest): string => profile.investorWorkspace&&module.id==='inbox'?'/portal/investors/email':module.route!;
+  const mobileLabel = (module: PlatformModuleManifest): string => profile.investorWorkspace?({inbox:'Messages',leadrelay:'AI team'} as Record<string,string>)[module.id]??moduleLabel(module):moduleLabel(module);
   const isCurrent = (id: PlatformModuleId): boolean =>
     (opts.active === 'overview' && id === 'overview')
     || (opts.active === 'actions' && id === 'actions')
     || (opts.active === 'crm' && id === 'crm')
+    || (opts.active === 'investors' && id === 'investors')
     || (opts.active === 'journeys' && id === 'journeys')
     || (opts.active === 'content' && id === 'content')
     || (opts.active === 'affiliates' && id === 'affiliates')
@@ -249,13 +253,13 @@ export function appShell(opts: AppShellOptions): string {
     if (module.state === 'setup_required' || module.state === 'unavailable') {
       return `<span class="nav-item nav-locked" role="link" aria-disabled="true" title="${escapeHtml(module.label)} is not connected in this workspace">${portalModuleIcon(module.id)}<span>${escapeHtml(moduleLabel(module))}</span>${state}</span>`;
     }
-    return `<a class="nav-item" href="${escapeHtml(module.route!)}"${current ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}<span>${escapeHtml(moduleLabel(module))}</span>${state}</a>`;
+    return `<a class="nav-item" href="${escapeHtml(moduleRoute(module))}"${current ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}<span>${escapeHtml(moduleLabel(module))}</span>${state}</a>`;
   }).join('');
   const quickWorking = quickModules.map((module) => module.state === 'setup_required' || module.state === 'unavailable'
     ? `<span class="command-link locked" role="link" aria-disabled="true">${portalModuleIcon(module.id)}${escapeHtml(module.label)}<small>${icon('lock')}Setup</small></span>`
-    : `<a class="command-link" href="${escapeHtml(module.route!)}"${isCurrent(module.id) ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}${escapeHtml(module.label)}<small>${module.state === 'preview' ? 'Preview' : module.group}</small></a>`).join('');
+    : `<a class="command-link" href="${escapeHtml(moduleRoute(module))}"${isCurrent(module.id) ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}${escapeHtml(module.label)}<small>${module.state === 'preview' ? 'Preview' : module.group}</small></a>`).join('');
   const mobileModules = workingModules.filter((module) => module.state === 'ready' || module.state === 'preview');
-  const mobileNav = mobileModules.map((module) => `<a href="${escapeHtml(module.route!)}"${isCurrent(module.id) ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}${escapeHtml(moduleLabel(module))}</a>`).join('');
+  const mobileNav = mobileModules.map((module) => `<a href="${escapeHtml(moduleRoute(module))}"${isCurrent(module.id) ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}${escapeHtml(mobileLabel(module))}</a>`).join('');
   const csrfField = opts.csrfToken
     ? `<input type="hidden" name="_csrf" value="${escapeHtml(opts.csrfToken)}">`
     : '';
@@ -269,7 +273,7 @@ export function appShell(opts: AppShellOptions): string {
       <a class="brand-lockup" href="/portal" aria-label="${productName} overview"><span class="brand-mark">${compactMark}</span><span class="brand-name">${brandName}<small>${suiteLabel}</small></span></a>
       <details class="workspace-menu">
         <summary aria-label="Workspace menu: ${tenant}"><span class="workspace-avatar">${workspaceInitial(opts.tenantName)}</span><span class="workspace-copy"><strong>${tenant}</strong><small>Current workspace</small></span>${icon('chevron', 'chev')}</summary>
-        <div class="workspace-popover"><div class="workspace-current"><span class="workspace-avatar">${workspaceInitial(opts.tenantName)}</span><span>${tenant}</span></div><p>One workspace is connected. Multi-workspace switching is planned.</p></div>
+        <div class="workspace-popover"><div class="workspace-current"><span class="workspace-avatar">${workspaceInitial(opts.tenantName)}</span><span>${tenant}</span></div><p>${profile.investorWorkspace ? '<a href="/portal/investors#iv-workspace-switch">Switch business</a>' : 'You are viewing the current workspace.'}</p></div>
       </details>
       <nav class="primary-nav" aria-label="Primary">
         <div class="nav-label">Workspace</div>

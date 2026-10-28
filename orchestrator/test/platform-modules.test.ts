@@ -8,7 +8,7 @@ import { createProviderOperationContext, type SocialPublishingProvider } from '.
 
 test('core modules have stable unique ids/routes and uncluttered ordering', () => {
   assert.deepEqual(platformModules.modules.map((module) => module.id), [
-    'overview', 'actions', 'crm', 'journeys', 'leadrelay', 'content', 'affiliates', 'social', 'inbox', 'listening', 'webinars', 'automations', 'analytics', 'settings',
+    'overview', 'actions', 'crm', 'journeys', 'investors', 'leadrelay', 'content', 'affiliates', 'social', 'inbox', 'listening', 'webinars', 'automations', 'analytics', 'settings',
   ]);
   assert.equal(new Set(platformModules.modules.map((module) => module.id)).size, platformModules.modules.length);
   const routes = platformModules.modules.flatMap((module) => module.route ? [module.route] : []);

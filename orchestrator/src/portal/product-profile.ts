@@ -50,6 +50,8 @@ export interface PortalContentWorkspaceNavigation {
 export interface PortalProductProfile {
   id: PortalProductProfileId;
   productName: string;
+  /** Selected canonical investor workspace presentation, never authority. */
+  investorWorkspace?: boolean;
   compactMark: string;
   suiteLabel: string;
   home: {
