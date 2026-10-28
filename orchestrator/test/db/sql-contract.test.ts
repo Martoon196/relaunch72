@@ -116,6 +116,12 @@ const migration109Url = new URL('../../src/db/migrations/0109_investor_mail_conn
 const migration110Url = new URL('../../src/db/migrations/0110_investor_email_workflow.sql', import.meta.url);
 const migration111Url = new URL('../../src/db/migrations/0111_investor_email_dispatch.sql', import.meta.url);
 const migration112Url = new URL('../../src/db/migrations/0112_investor_email_replies.sql', import.meta.url);
+const migration113Url = new URL('../../src/db/migrations/0113_mhp_brand.sql', import.meta.url);
+const migration114Url = new URL('../../src/db/migrations/0114_mhp_commerce.sql', import.meta.url);
+const migration115Url = new URL('../../src/db/migrations/0115_mhp_auth.sql', import.meta.url);
+const migration116Url = new URL('../../src/db/migrations/0116_mhp_members.sql', import.meta.url);
+const migration117Url = new URL('../../src/db/migrations/0117_mhp_manual_grants.sql', import.meta.url);
+const migration118Url = new URL('../../src/db/migrations/0118_mhp_catalogue_v3.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -778,12 +784,12 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration110Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration111Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration112Url, 'utf8')).replace(/\r\n?/g, '\n'),
-    (await readFile(new URL('../../src/db/migrations/0113_mhp_brand.sql', import.meta.url), 'utf8')).replace(/\r\n?/g, '\n'),
-    (await readFile(new URL('../../src/db/migrations/0114_mhp_commerce.sql', import.meta.url), 'utf8')).replace(/\r\n?/g, '\n'),
-    (await readFile(new URL('../../src/db/migrations/0115_mhp_auth.sql', import.meta.url), 'utf8')).replace(/\r\n?/g, '\n'),
-    (await readFile(new URL('../../src/db/migrations/0116_mhp_members.sql', import.meta.url), 'utf8')).replace(/\r\n?/g, '\n'),
-    (await readFile(new URL('../../src/db/migrations/0117_mhp_manual_grants.sql', import.meta.url), 'utf8')).replace(/\r\n?/g, '\n'),
-    (await readFile(new URL('../../src/db/migrations/0118_mhp_catalogue_v3.sql', import.meta.url), 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration113Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration114Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration115Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration116Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration117Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration118Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.
