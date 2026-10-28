@@ -73,7 +73,7 @@ async function route(method:string,path:string,body:string,cookie=identity.sessi
   const deps:PostgresPortalDeps={kind:'postgres',sessionSecret:'test-secret',secure:true,productProfile:PROPERTY_PREDATOR_GROWTH_PROFILE,investors:s.service,investorMail:mail,
     auth:{resolve:async token=>token===identity.sessionToken?{...identity,userId:workspace,workspaceId:workspace,userEmail:'owner@example.invalid'}:null,login:async()=>null,revoke:async()=>{}},
     crm:{snapshot:async()=>crmValidation?{workspace:{id:workspace,name:business.brandName,timezone:'Europe/London',snapshotAt:'2026-10-28T00:00:00Z',canWrite:true},contacts:[],stages:[],opportunities:[],tasks:[],timeline:[]}:null,
-      createLead:async()=>crmValidation?{ok:false,kind:'validation',fieldErrors:{displayName:'Enter a name.'}}:{ok:true,disposition:'applied'},
+      createLead:async()=>crmValidation?{ok:false,kind:'validation',message:'Enter a name.'}:{ok:true,disposition:'applied'},
       moveOpportunity:async()=>({ok:true,disposition:'applied'}),completeTask:async()=>({ok:true,disposition:'applied'})}};
   const run=handlePortal(req,res,deps);
   setImmediate(()=>{req.emit('data',Buffer.from(body));req.emit('end');});await run;
