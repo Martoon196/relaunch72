@@ -27,13 +27,15 @@ function freshCsrfCookie(value: string | undefined, now: number): value is strin
     && issuedAt <= now + 60_000 && now - issuedAt <= TTL;
 }
 
-function securityHeaders(res: ServerResponse): void {
+function securityHeaders(res: ServerResponse, pathname: string): void {
   res.setHeader('cache-control', 'no-store');
-  res.setHeader('referrer-policy', 'no-referrer');
+  // Native form POSTs need their same-origin Origin; token-bearing redirects stay private.
+  res.setHeader('referrer-policy', pathname === '/portal/auth/verify' ? 'no-referrer' : 'same-origin');
   res.setHeader('x-content-type-options', 'nosniff');
   res.setHeader('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
 }
 function redirect(res: ServerResponse, target: string, cookies: string[] = []): void {
+  res.setHeader('referrer-policy', 'no-referrer');
   if (cookies.length) res.setHeader('set-cookie', cookies);
   res.writeHead(303, { location: target }); res.end();
 }
@@ -99,7 +101,7 @@ export function createMhpAuthMount(deps: MhpAuthMountDeps): { handle(req: Incomi
   if (deps.sessionSecret.length < 32 || deps.abuseHashSecret.length < 32) throw new Error('MHP authentication secrets are not ready');
   return { async handle(req, res, url): Promise<boolean> {
     if (!PATHS.has(url.pathname) && !url.pathname.startsWith('/portal/auth/property-predator')) return false;
-    securityHeaders(res);
+    securityHeaders(res, url.pathname);
     if (typeof req.headers.host !== 'string' || ![MHP_AUTH_HOST, `${MHP_AUTH_HOST}:443`].includes(req.headers.host.toLowerCase())) {
       page(res, 421, 'Use your member address', '<p>Open app.martinhowardproperty.co.uk to sign in.</p>'); return true;
     }

@@ -115,7 +115,7 @@ function cookieHeader(res: ReturnType<typeof response>): string { const values =
 test('MHP sign-in page is branded, host-only, no-store and rejects PP setup/SSO', async () => {
   const h = harness(); const { res } = await h.run('GET', '/portal/login');
   assert.match(res.body, /MARTIN HOWARD/); assert.match(res.body, /#142019/); assert.match(res.body, /#e8a33d/);
-  assert.equal(res.headers['cache-control'], 'no-store'); assert.equal(res.headers['referrer-policy'], 'no-referrer');
+  assert.equal(res.headers['cache-control'], 'no-store'); assert.equal(res.headers['referrer-policy'], 'same-origin');
   const cookies = res.headers['set-cookie'] as string[];
   assert.ok(cookies.every(value => value.includes('Secure') && value.includes('HttpOnly') && !value.includes('Domain=')));
   assert.equal((await h.run('GET', '/portal/login', '', { host: 'hq.propertypredator.com' })).res.statusCode, 421);
@@ -127,6 +127,7 @@ test('MHP rejects cross-origin, missing CSRF, duplicate values, and missing trus
   const h = harness(); const first = (await h.run('GET', '/portal/login')).res; const cookies = cookieHeader(first);
   const body = new URLSearchParams({ _auth_csrf: csrf(first.body), email: ROW.user_email, password: 'password' }).toString();
   assert.equal((await h.run('POST', '/portal/login', body, { cookie: cookies, origin: 'https://evil.invalid' })).res.statusCode, 403);
+  assert.equal((await h.run('POST', '/portal/login', body, { cookie: cookies, origin: 'null' })).res.statusCode, 403);
   assert.equal((await h.run('POST', '/portal/login', body)).res.statusCode, 403);
   assert.equal((await h.run('POST', '/portal/login', `${body}&email=other@example.invalid`, { cookie: cookies })).res.statusCode, 400);
   const expired = harness({ now: () => NOW + 16 * 60_000 });
@@ -149,9 +150,11 @@ test('MHP password login sets only its host cookie and server-owned account redi
 test('Magic-link GET strips token without consuming it, explicit CSRF POST consumes, and sealed cookie expires', async () => {
   const h = harness(); const { res: received } = await h.run('GET', `/portal/auth/verify?token=${TOKEN}&purpose=magic`);
   assert.equal(received.statusCode, 303); assert.equal(received.headers.location, '/portal/auth/complete');
+  assert.equal(received.headers['referrer-policy'], 'no-referrer');
   assert.deepEqual(h.calls, []); assert.doesNotMatch(cookieHeader(received), new RegExp(TOKEN));
   const cookie = cookieHeader(received); const complete = (await h.run('GET', '/portal/auth/complete', '', { cookie })).res;
   assert.equal(complete.statusCode, 200); assert.doesNotMatch(complete.body, new RegExp(TOKEN));
+  assert.equal(complete.headers['referrer-policy'], 'same-origin');
   assert.equal((await h.run('POST', '/portal/auth/complete', new URLSearchParams({ _auth_csrf: csrf(complete.body) }).toString(), { cookie })).res.statusCode, 303);
   assert.deepEqual(h.calls, ['consume']);
   const expired = harness({ now: () => NOW + 16 * 60_000 });

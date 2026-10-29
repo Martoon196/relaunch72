@@ -17,7 +17,7 @@ export interface MhpDeskDependencies {
 const known = /^\/(?:app\/(?:desk|verdict|calculators\/(?:brrr|hmo|sa|auction|residual)|deals\/(?:[0-9a-f-]{36}|archive)|account\/course-checkout)|hq\/verdicts(?:\/review)?)$/i;
 function send(res: ServerResponse, status: number, content: string, html = false): void {
   res.writeHead(status, { 'content-type': html ? 'text/html; charset=utf-8' : 'text/plain; charset=utf-8', 'cache-control': 'no-store',
-    'content-length': String(Buffer.byteLength(content)), 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff',
+    'content-length': String(Buffer.byteLength(content)), 'referrer-policy': html ? 'same-origin' : 'no-referrer', 'x-content-type-options': 'nosniff',
     'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" });
   res.end(content);
 }

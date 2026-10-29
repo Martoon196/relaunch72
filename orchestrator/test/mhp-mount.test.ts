@@ -73,6 +73,7 @@ test('kit-only member can view their account while PP cookies cannot authenticat
   const account = await f.request('GET', '/app/account');
   assert.equal(account.status, 200); assert.match(account.body, /Martin Howard Property/);
   assert.equal(account.headers['cache-control'], 'no-store');
+  assert.equal(account.headers['referrer-policy'], 'same-origin');
   const copied = await f.request('GET', '/app/account', '', { cookie: `r72_portal=${TOKEN}` });
   assert.equal(copied.status, 303); assert.equal(copied.headers.location, '/portal/login');
   assert.deepEqual(f.calls, ['snapshot']);

@@ -49,6 +49,7 @@ test('MHP Deal Desk requires its own host and cookie and releases all admissions
   assert.equal((await f.request('GET', '/app/desk', '', { cookie: `r72_portal=${TOKEN}` })).headers.location, '/portal/login');
   const page = await f.request('GET', '/app/desk');
   assert.equal(page.status, 200); assert.equal(page.headers['cache-control'], 'no-store'); assert.match(page.body, /3 lifetime files/);
+  assert.equal(page.headers['referrer-policy'], 'same-origin');
   assert.equal(f.released.length, 3);
 });
 test('all five calculators work only for a member with calculator access', async () => {

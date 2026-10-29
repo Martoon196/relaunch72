@@ -25,7 +25,7 @@ function respond(res: ServerResponse, status: number, body: string, html = false
   res.writeHead(status, {
     'content-type': html ? 'text/html; charset=utf-8' : 'text/plain; charset=utf-8',
     'content-length': String(Buffer.byteLength(body)), 'cache-control': 'no-store',
-    'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff',
+    'referrer-policy': html ? 'same-origin' : 'no-referrer', 'x-content-type-options': 'nosniff',
     'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
   });
   res.end(body);
