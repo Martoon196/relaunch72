@@ -46,7 +46,8 @@ export function authorizeMhpMemberRoute(access: MhpMemberAccess, request: { meth
   }
   if ((path === '/portal/investors/create' || path === '/portal/investors/access') && !access.isAdmin) return deny('Programme administration is required.');
   if (path === '/portal/investors/site' && !access.enquirySite) return deny('An active enquiry-site entitlement is required.');
-  if (path === '/portal' || path === '/portal/investors' || path === '/portal/investors/client.js'
+  if ((path === '/portal/mhp-crm.js' && (method === 'GET' || method === 'HEAD'))
+      || path === '/portal' || path === '/portal/investors' || path === '/portal/investors/client.js'
       || /^\/portal\/investors\/(branding|requirements|site|site-preview|switch|create|access)$/.test(path)
       || crmRoute.test(path)) return { allowed: true };
   return deny('This page is not part of your Martin Howard Property workspace.', 404);

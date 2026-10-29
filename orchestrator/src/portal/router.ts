@@ -44,6 +44,7 @@ import { renderGrowthHomeBody } from './growth-home.js';
 import { renderLead360Body } from './lead-360-view.js';
 import { renderMhpContactBody } from '../mhp/contact-view.js';
 import { renderMhpCrmBody } from '../mhp/crm-view.js';
+import { MHP_CRM_CLIENT_SOURCE } from '../mhp/crm-client.js';
 import type { PortalFinanceDraftsService } from './finance-drafts-service.js';
 import { planningFromForm } from './finance-drafts-service.js';
 import { FIELDS, FinanceError } from '../integrations/mh196/planning-client.js';
@@ -2354,7 +2355,13 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           else throw new InvestorError(404,'Conversation action not found.');
         }else if(method!=='GET'||p!==INVESTOR_ROUTE+'/email')throw new InvestorError(405,'Use the controls on Conversations.');
         const [centre,connection]=await Promise.all([mail.centre(identity,selected),mail.snapshot(identity)]);
-        return sendHtml(res,200,investorEmailPage({business,centre,connection,csrf:portalCsrfToken(deps.sessionSecret,sessionToken),template:url.searchParams.get('template')??undefined,reply:url.searchParams.has('reply'),notice}),undefined,{'cache-control':'no-store','referrer-policy':'no-referrer'});
+        let selectedPoint: string | undefined;
+        const requestedContact=url.searchParams.get('contact');
+        if(method==='GET' && !selected && requestedContact && CRM_OBJECT_ID.test(requestedContact)) {
+          const pointId=await service.emailContactPoint(identity,requestedContact).catch(()=>null);
+          if(pointId && centre.contacts.some(point=>point.id===pointId))selectedPoint=pointId;
+        }
+        return sendHtml(res,200,investorEmailPage({business,centre,connection,csrf:portalCsrfToken(deps.sessionSecret,sessionToken),template:url.searchParams.get('template')??undefined,reply:url.searchParams.has('reply'),selectedPoint,notice}),undefined,{'cache-control':'no-store','referrer-policy':'no-referrer'});
       }
       if(p===INVESTOR_ROUTE+'/mail/callback'&&method==='GET') {
         if(!deps.investorMail||url.searchParams.has('error'))throw new InvestorError(400,'Email authorisation was not completed. You can start again from Business setup.');
@@ -7026,6 +7033,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
   }
 
+  if (deps.productProfile?.id === 'martin_howard_property' && p === '/portal/mhp-crm.js' && method === 'GET') {
+    return sendJavaScript(res, MHP_CRM_CLIENT_SOURCE, 'private, no-store');
+  }
   if (deps.crm && method === 'GET' && [CRM_PORTAL_ROUTES.contacts, CRM_PORTAL_ROUTES.pipeline, CRM_PORTAL_ROUTES.tasks].includes(p as never)) {
     const identity = crmIdentity(sessionToken, deps);
     try {
@@ -7036,17 +7046,27 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       }));
       const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
       const notice = crmNoticeFromQuery(url.searchParams, deps.sessionSecret, sessionToken);
+      const mhpCrm = deps.productProfile?.id === 'martin_howard_property';
+      const mhpPipeline = mhpCrm && p === CRM_PORTAL_ROUTES.pipeline;
+      const mhpInvestors = deps.kind === 'postgres' ? deps.investors : undefined;
+      const programme = mhpCrm && mhpInvestors ? await mhpInvestors.snapshot(identity).catch(() => null) : null;
+      const currentBusiness = programme?.businesses.find(business => business.workspaceId === programme.selectedWorkspaceId);
+      const conversationsAvailable = currentBusiness?.features?.emailWorkflow === true;
+      const investorDetails = mhpPipeline && mhpInvestors
+        ? await mhpInvestors.requirementSummaries(identity, snapshot.opportunities.map(opportunity => opportunity.contactId))
+          .catch(() => ({}))
+        : undefined;
       const body = p === CRM_PORTAL_ROUTES.contacts
         ? renderCrmContactsBody(snapshot, { csrfToken, createLeadCommandKey: randomUUID(), notice })
         : p === CRM_PORTAL_ROUTES.pipeline
-          ? renderCrmPipelineBody(snapshot, { csrfToken, notice, financeAvailable: deps.kind === 'postgres' && Boolean(deps.financeDrafts) })
+          ? renderCrmPipelineBody(snapshot, { csrfToken, notice, financeAvailable: deps.kind === 'postgres' && Boolean(deps.financeDrafts), mhpInvestorCards: mhpPipeline, investorDetails, conversationsAvailable })
           : renderCrmTasksBody(snapshot, {
             csrfToken,
             notice,
             filter: readRequest.section === 'tasks' ? readRequest.filter : 'open',
           });
-      const renderedBody = deps.productProfile?.id === 'martin_howard_property'
-        ? renderMhpCrmBody(body, p === CRM_PORTAL_ROUTES.contacts ? 'contacts' : p === CRM_PORTAL_ROUTES.pipeline ? 'pipeline' : 'tasks')
+      const renderedBody = mhpCrm
+        ? renderMhpCrmBody(body, p === CRM_PORTAL_ROUTES.contacts ? 'contacts' : p === CRM_PORTAL_ROUTES.pipeline ? 'pipeline' : 'tasks', conversationsAvailable)
         : body;
       return sendHtml(res, 200, crmPage(snapshot, renderedBody, deps, csrfToken));
     } catch (error) {

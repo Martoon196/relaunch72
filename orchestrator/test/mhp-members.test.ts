@@ -17,6 +17,8 @@ const route=(a:MhpMemberAccess,path:string,method='GET')=>authorizeMhpMemberRout
 
 test('course members can work CRM but cannot reach email, provider configuration or AI mounts',()=>{
   for(const path of ['/portal/investors','/portal/crm/contacts','/portal/crm/opportunities','/portal/crm/tasks']) assert.equal(route(access,path).allowed,true,path);
+  assert.equal(route(access,'/portal/mhp-crm.js').allowed,true);
+  assert.equal(route(access,'/portal/mhp-crm.js','POST').allowed,false);
   assert.equal(route(access,'/portal/crm/leads','POST').allowed,true);
   for(const path of ['/portal/investors/email','/portal/investors/mail/save','/portal/leadrelay','/portal/api/leadrelay/v1/chat','/portal/providers/readiness','/portal/crm/opportunities/'+ws+'/finance']) assert.equal(route(access,path).allowed,false,path);
 });
@@ -53,6 +55,18 @@ test('active course preserves CRM writes while refunded mentoring permits only s
   const conversations=investorEmailPage({business:member,centre:{selected:null,contacts:[],messages:[]},connection,csrf:'csrf'});
   assert.match(conversations,/saved conversations are read-only/);
   assert.ok(!conversations.includes('action="/portal/investors/email/'));
+});
+test('a card conversation preselects its exact contact point and explains the test-email permission step',()=>{
+  const member={...business,features:{...access,emailWorkflow:true,emailWritable:true}};
+  const connection:InvestorMailView={account:{provider:'smtp',address:'owner@example.invalid',status:'verified',version:1,verifiedAt:null,settings:{}},customAvailable:true,googleAvailable:false,microsoftAvailable:false,deliveryEnabled:true};
+  const point='71111111-0000-4000-8000-000000000010';
+  const compose=investorEmailPage({business:member,centre:{selected:null,contacts:[{id:point,name:'Martin Test Investor',address:'owner@example.invalid',verified:true}],messages:[]},connection,csrf:'csrf',selectedPoint:point});
+  assert.match(compose,/New message to Martin Test Investor/);
+  assert.match(compose,/value="71111111-0000-4000-8000-000000000010" selected/);
+  const approved=investorEmailPage({business:member,centre:{selected:{id:'71111111-0000-4000-8000-000000000011',version:2,bodyHash:'a'.repeat(64),reviewHash:'b'.repeat(64),subject:'Test',text:'A test',to:'owner@example.invalid',from:'sender@example.invalid',contactName:'Martin Test Investor',contactPointId:point,lifecycle:'approved',state:'approved',direction:'outbound',internetMessageId:'<test@example.invalid>',permissionRecorded:false},contacts:[],messages:[]},connection,csrf:'csrf'});
+  assert.match(approved,/Email request and permission/);
+  assert.match(approved,/including my own test address/);
+  assert.doesNotMatch(approved,/Send approved email/);
 });
 test('programme mutations require an administrator even when other features are enabled',()=>{
   assert.equal(route(access,'/portal/investors/create','POST').allowed,false);

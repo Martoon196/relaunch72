@@ -141,6 +141,28 @@ export class InvestorService {
       return r.rows[0] as InvestorRequirements;
     },{readOnly:true});
   }
+  async requirementSummaries(identity: PortalCrmRequestIdentity, contactIds: readonly string[]): Promise<Record<string,{capital:string;interests:string}>> {
+    const ids=[...new Set(contactIds.map(investorUuid))];
+    if(!ids.length)return {};
+    const context=await this.context(identity);
+    return withTransaction(this.readPool,context,async tx=>{
+      const rows=await tx.query<{id:string;capital:string;interests:string}>(`SELECT c.id::text AS id,COALESCE(r.capital_notes,'') AS capital,COALESCE(r.interests,'') AS interests
+        FROM app.contacts c LEFT JOIN app.investor_requirements r ON r.workspace_id=c.workspace_id AND r.contact_id=c.id
+        WHERE c.workspace_id=app_private.current_workspace_id() AND c.id=ANY($1::uuid[]) AND c.deleted_at IS NULL`,[ids]);
+      return Object.fromEntries(rows.rows.map(row=>[row.id,{capital:row.capital,interests:row.interests}]));
+    },{readOnly:true});
+  }
+  async emailContactPoint(identity: PortalCrmRequestIdentity, contactId: string): Promise<string|null> {
+    const context=await this.context(identity);
+    return withTransaction(this.readPool,context,async tx=>{
+      const result=await tx.query<{id:string}>(`SELECT p.id::text AS id FROM app.contact_points p
+        JOIN app.contacts c ON c.workspace_id=p.workspace_id AND c.id=p.contact_id
+        WHERE c.workspace_id=app_private.current_workspace_id() AND c.id=$1 AND c.deleted_at IS NULL
+          AND p.kind='email' AND p.deleted_at IS NULL AND p.dedupe_state='normal'
+        ORDER BY p.is_primary DESC,p.created_at,p.id LIMIT 1`,[investorUuid(contactId)]);
+      return result.rows[0]?.id??null;
+    },{readOnly:true});
+  }
   async saveRequirements(identity: PortalCrmRequestIdentity, form: Record<string,string>): Promise<void> {
     const id = investorUuid(form.contactId ?? ''), expected = version(form.version ?? '');
     const values = [text(form.capital,'capital available',500,true),text(form.locations,'locations',1000,true),text(form.interests,'investment interests',1000,true),text(form.timeframe,'timing',500,true),text(form.notes,'notes',4000,true)];
