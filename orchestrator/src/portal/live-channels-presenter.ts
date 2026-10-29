@@ -49,6 +49,10 @@ export const LIVE_CHANNELS_SMS_REVOKE_ROUTE =
   '/portal/channels/live/sms/revocation' as const;
 export const LIVE_CHANNELS_SMS_STAGE_ROUTE =
   '/portal/channels/live/sms/staging' as const;
+export const LIVE_CHANNELS_SMS_VERIFY_REQUEST_ROUTE =
+  '/portal/channels/live/sms/verify/request' as const;
+export const LIVE_CHANNELS_SMS_VERIFY_CONFIRM_ROUTE =
+  '/portal/channels/live/sms/verify/confirm' as const;
 
 export type LiveChannelsPauseScope = PortalLiveChannelTruthRail | 'all';
 
@@ -156,6 +160,9 @@ export type LiveChannelsNoticeCode =
   | 'sms_sender_bound'
   | 'sms_sender_revoked'
   | 'sms_test_staged'
+  | 'sms_verification_requested'
+  | 'sms_verification_confirmed'
+  | 'sms_verification_pending'
   | 'sms_staging_blocked'
   | 'sms_invalid'
   | 'sms_forbidden'

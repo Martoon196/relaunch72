@@ -45,6 +45,11 @@ const SESSION_LOCK =
   'app_private.lock_active_portal_session(bytea,uuid,uuid)';
 const SESSION_READ =
   'app_private.active_portal_session(bytea,uuid,uuid)';
+const VERIFY_REQUEST = 'app_private.request_sms_phone_challenge(uuid,uuid,text,text)';
+const VERIFY_CONFIRM = 'app_private.confirm_sms_phone_challenge(uuid,uuid,text)';
+const VERIFY_CLAIM = 'app_private.claim_sms_phone_challenge(uuid,uuid,text)';
+const VERIFY_ARM = 'app_private.arm_sms_phone_challenge(uuid,uuid,text)';
+const VERIFY_SETTLE = 'app_private.settle_sms_phone_challenge(uuid,uuid,text,text)';
 
 interface RoleContract {
   readonly role: SmsRuntimeRole;
@@ -55,16 +60,19 @@ interface RoleContract {
 const CONTRACTS: Readonly<Record<SmsRuntimeRole, RoleContract>> = Object.freeze({
   [SMS_COMMAND_DATABASE_ROLE]: Object.freeze({
     role: SMS_COMMAND_DATABASE_ROLE,
-    required: Object.freeze([AUTHORIZE, SESSION_LOCK]),
+    required: Object.freeze([AUTHORIZE, SESSION_LOCK, VERIFY_REQUEST, VERIFY_CONFIRM]),
     forbidden: Object.freeze([
       CLAIM, LOAD, BEGIN, SETTLE, STATUS_RECEIPT, INBOUND_PROJECTION, SESSION_READ,
+      VERIFY_CLAIM, VERIFY_ARM, VERIFY_SETTLE,
     ]),
   }),
   [SMS_WORKER_DATABASE_ROLE]: Object.freeze({
     role: SMS_WORKER_DATABASE_ROLE,
-    required: Object.freeze([CLAIM, LOAD, BEGIN, SETTLE]),
+    required: Object.freeze([CLAIM, LOAD, BEGIN, SETTLE,
+      VERIFY_CLAIM, VERIFY_ARM, VERIFY_SETTLE]),
     forbidden: Object.freeze([
       AUTHORIZE, SESSION_LOCK, SESSION_READ, STATUS_RECEIPT, INBOUND_PROJECTION,
+      VERIFY_REQUEST, VERIFY_CONFIRM,
     ]),
   }),
   [SMS_WEBHOOK_DATABASE_ROLE]: Object.freeze({
@@ -72,6 +80,7 @@ const CONTRACTS: Readonly<Record<SmsRuntimeRole, RoleContract>> = Object.freeze(
     required: Object.freeze([STATUS_RECEIPT, INBOUND_PROJECTION]),
     forbidden: Object.freeze([
       AUTHORIZE, SESSION_LOCK, SESSION_READ, CLAIM, LOAD, BEGIN, SETTLE,
+      VERIFY_REQUEST, VERIFY_CONFIRM, VERIFY_CLAIM, VERIFY_ARM, VERIFY_SETTLE,
     ]),
   }),
 });

@@ -14,6 +14,7 @@ const NOTICE_CODES = new Set<LiveChannelsNoticeCode>([
   'publication_staged', 'staging_blocked', 'owned_social_invalid',
   'owned_social_forbidden', 'owned_social_unavailable',
   'sms_sender_bound', 'sms_sender_revoked', 'sms_test_staged',
+  'sms_verification_requested', 'sms_verification_confirmed', 'sms_verification_pending',
   'sms_staging_blocked', 'sms_invalid', 'sms_forbidden', 'sms_unavailable',
   'invalid', 'forbidden', 'unavailable',
 ]);
@@ -81,6 +82,18 @@ function noticeFor(code: LiveChannelsNoticeCode): LiveChannelsNoticeView {
     kind: 'success',
     title: 'Owned test SMS staged',
     message: 'One owned-recipient message is queued behind the command boundary. No worker lease was claimed and Twilio was not called.',
+  };
+  if (code === 'sms_verification_requested') return {
+    kind: 'success', title: 'Verification code requested',
+    message: 'A single code is queued for the owned test number. Enter it below after the SMS arrives. This does not give marketing permission.',
+  };
+  if (code === 'sms_verification_confirmed') return {
+    kind: 'success', title: 'Phone number verified',
+    message: 'The code matched and the CRM recorded a phone-possession receipt. SMS marketing permission is still a separate step.',
+  };
+  if (code === 'sms_verification_pending') return {
+    kind: 'error', title: 'Code not confirmed',
+    message: 'The code may be wrong or the SMS may not have been accepted yet. Check the number and try the code while it is valid.',
   };
   if (code === 'sms_staging_blocked') return {
     kind: 'error',

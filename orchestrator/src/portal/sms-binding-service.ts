@@ -108,6 +108,17 @@ export type PortalSmsReadinessResult = PortalSmsReadinessOutcome | PortalSmsFail
 export interface PortalSmsBindingService {
   /** The exact workspace this seam is bound to. */
   readonly workspaceId: string;
+  /** The sole founder-owned recipient admitted to the verification pilot. */
+  readonly verificationPhone?: string;
+  readonly verificationContactId?: string;
+  requestPhoneVerification?(
+    identity: PortalCrmRequestIdentity,
+    input: Readonly<{ contactId: string; phone: string; commandKey: string }>,
+  ): Promise<Readonly<{ ok: true; challengeId: string }> | PortalSmsFailure>;
+  confirmPhoneVerification?(
+    identity: PortalCrmRequestIdentity,
+    input: Readonly<{ challengeId: string; code: string }>,
+  ): Promise<Readonly<{ ok: true; contactPointId: string | null }> | PortalSmsFailure>;
   bindSender(
     identity: PortalCrmRequestIdentity,
     input: PortalSmsBindSenderInput,

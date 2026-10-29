@@ -298,6 +298,8 @@ import {
   LIVE_CHANNELS_SMS_BIND_ROUTE,
   LIVE_CHANNELS_SMS_REVOKE_ROUTE,
   LIVE_CHANNELS_SMS_STAGE_ROUTE,
+  LIVE_CHANNELS_SMS_VERIFY_REQUEST_ROUTE,
+  LIVE_CHANNELS_SMS_VERIFY_CONFIRM_ROUTE,
   LIVE_CHANNELS_ROUTE,
   presentLiveChannels,
   type LiveChannelsNoticeCode,
@@ -3215,10 +3217,15 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           },
           ownedSocialStagePrefill: ownedSocialCalendarPrefill(url.searchParams),
           smsCommandAvailable: Boolean(deps.smsBinding),
+          smsVerificationPhone: deps.smsBinding?.verificationPhone,
+          smsVerificationContactId: deps.smsBinding?.verificationContactId,
+          smsVerificationChallengeId: CRM_OBJECT_ID.test(url.searchParams.get('challenge') ?? '')
+            ? url.searchParams.get('challenge') ?? undefined : undefined,
           smsCommandKeys: {
             bind: randomUUID(),
             revoke: randomUUID(),
             stage: randomUUID(),
+            verify: randomUUID(),
           },
           pauseCommandKeys: {
             all: randomUUID(),
@@ -3407,7 +3414,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   if (deps.kind === 'postgres'
       && (p === LIVE_CHANNELS_SMS_BIND_ROUTE
         || p === LIVE_CHANNELS_SMS_REVOKE_ROUTE
-        || p === LIVE_CHANNELS_SMS_STAGE_ROUTE)
+        || p === LIVE_CHANNELS_SMS_STAGE_ROUTE
+        || p === LIVE_CHANNELS_SMS_VERIFY_REQUEST_ROUTE
+        || p === LIVE_CHANNELS_SMS_VERIFY_CONFIRM_ROUTE)
       && method === 'POST') {
     if (deps.productProfile?.id !== 'property_predator_growth') {
       return sendHtml(res, 404, portalStatusPage(deps, sessionToken, {
@@ -3416,13 +3425,17 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         active: 'overview',
       }));
     }
-    const smsNotice = (code: LiveChannelsNoticeCode): void => redirect(
+    const smsNotice = (code: LiveChannelsNoticeCode, challengeId?: string): void => redirect(
       res,
-      `${LIVE_CHANNELS_ROUTE}?notice=${encodeURIComponent(liveChannelsNoticeToken(deps.sessionSecret, sessionToken, code))}`,
+      `${LIVE_CHANNELS_ROUTE}?notice=${encodeURIComponent(liveChannelsNoticeToken(deps.sessionSecret, sessionToken, code))}${challengeId && CRM_OBJECT_ID.test(challengeId) ? `&challenge=${encodeURIComponent(challengeId)}` : ''}`,
       undefined,
       303,
     );
-    const allowed = p === LIVE_CHANNELS_SMS_BIND_ROUTE
+    const allowed = p === LIVE_CHANNELS_SMS_VERIFY_REQUEST_ROUTE
+      ? new Set(['_csrf', 'command_key', 'phone', 'confirm_verify'])
+      : p === LIVE_CHANNELS_SMS_VERIFY_CONFIRM_ROUTE
+        ? new Set(['_csrf', 'command_key', 'challenge_id', 'code', 'confirm_verify'])
+      : p === LIVE_CHANNELS_SMS_BIND_ROUTE
       ? new Set(['_csrf', 'command_key', 'binding_id', 'connection_id', 'endpoint_id',
         'display_name', 'account_sid', 'messaging_service_sid', 'sender_number',
         'regulatory_evidence', 'ownership_evidence', 'evidence_observed_at',
@@ -3437,10 +3450,14 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           'permission_use_id', 'operation_id', 'delivery_id', 'correlation_id',
           'authority_valid_until', 'segment_count', 'owned_recipient', 'purpose',
           'confirm_sms_stage']);
-    const confirmField = p === LIVE_CHANNELS_SMS_BIND_ROUTE
+    const confirmField = p === LIVE_CHANNELS_SMS_VERIFY_REQUEST_ROUTE
+      || p === LIVE_CHANNELS_SMS_VERIFY_CONFIRM_ROUTE ? 'confirm_verify'
+      : p === LIVE_CHANNELS_SMS_BIND_ROUTE
       ? 'confirm_sender'
       : p === LIVE_CHANNELS_SMS_REVOKE_ROUTE ? 'confirm_sender_revoke' : 'confirm_sms_stage';
-    const confirmValue = p === LIVE_CHANNELS_SMS_BIND_ROUTE
+    const confirmValue = p === LIVE_CHANNELS_SMS_VERIFY_REQUEST_ROUTE
+      || p === LIVE_CHANNELS_SMS_VERIFY_CONFIRM_ROUTE ? 'VERIFY'
+      : p === LIVE_CHANNELS_SMS_BIND_ROUTE
       ? 'BIND'
       : p === LIVE_CHANNELS_SMS_REVOKE_ROUTE ? 'REVOKE' : 'STAGE';
     const form = await readMultiValueForm(req);
@@ -3454,6 +3471,24 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     if (!deps.smsBinding) return smsNotice('sms_unavailable');
     const identity = crmIdentity(sessionToken, deps);
     const field = (name: string): string => oneFormValue(form, name) ?? '';
+    if (p === LIVE_CHANNELS_SMS_VERIFY_REQUEST_ROUTE) {
+      const outcome = await deps.smsBinding.requestPhoneVerification?.(identity, {
+        contactId: deps.smsBinding.verificationContactId ?? '',
+        phone: field('phone'), commandKey,
+      });
+      if (!outcome) return smsNotice('sms_unavailable');
+      return smsNotice(outcome.ok ? 'sms_verification_requested'
+        : smsFailureNotice(outcome.kind), outcome.ok ? outcome.challengeId : undefined);
+    }
+    if (p === LIVE_CHANNELS_SMS_VERIFY_CONFIRM_ROUTE) {
+      const outcome = await deps.smsBinding.confirmPhoneVerification?.(identity, {
+        challengeId: field('challenge_id'), code: field('code'),
+      });
+      if (!outcome) return smsNotice('sms_unavailable');
+      return smsNotice(outcome.ok
+        ? outcome.contactPointId ? 'sms_verification_confirmed' : 'sms_verification_pending'
+        : smsFailureNotice(outcome.kind), field('challenge_id'));
+    }
     if (p === LIVE_CHANNELS_SMS_BIND_ROUTE) {
       const outcome = await deps.smsBinding.bindSender(identity, {
         bindingId: field('binding_id'),

@@ -24,6 +24,7 @@ import {
   SMS_WORKER_DATABASE_ROLE,
 } from '../../sms-live-pg/readiness.js';
 import { createTwilioMessagingHttpAdapterFromRestrictedKeyEnvironment } from '../../providers/twilio-messaging-http-adapter.js';
+import { runSmsPhoneVerificationOnce } from '../../sms-live-pg/phone-verification.js';
 import { assertRuntimeSchemaCurrent } from '../../db/runtime-readiness.js';
 import { assertExpectedDatabaseInstallation } from '../../db/installation-identity.js';
 
@@ -51,7 +52,7 @@ export interface TwilioSmsLiveWorkerReadiness {
   readonly schemaVersion: 1;
   readonly event: 'ready';
   readonly service: typeof TWILIO_SMS_LIVE_WORKER_SERVICE;
-  readonly mode: 'disabled' | 'owned_number_live';
+  readonly mode: 'disabled' | 'verification_only' | 'owned_number_live';
   readonly provider: Readonly<{
     id: typeof TWILIO_SMS_PROVIDER_ID;
     credentialScope: 'restricted-api-key';
@@ -78,7 +79,9 @@ export interface TwilioSmsLiveWorkerReadiness {
   readonly safety: Readonly<{
     providerEffectsEnabled: boolean;
     smsDeliveryEnabled: boolean;
+    phoneVerificationEnabled: boolean;
     emergencyPaused: boolean;
+    marketingEmergencyPaused: boolean;
     dispatchLoopStarted: boolean;
     recipientsPerJob: 1;
     dailySegmentCap: 10;
@@ -102,8 +105,16 @@ export interface ActiveTwilioSmsWorkerConfig extends WorkerConfigBase {
   readonly connectionId: string;
 }
 
+export interface VerificationOnlySmsWorkerConfig extends WorkerConfigBase {
+  readonly mode: 'verification_only';
+  readonly workspaceId: string;
+  readonly connectionId: string;
+  readonly verificationPhone: string;
+}
+
 export type TwilioSmsWorkerConfig =
   | DisabledTwilioSmsWorkerConfig
+  | VerificationOnlySmsWorkerConfig
   | ActiveTwilioSmsWorkerConfig;
 
 export type TwilioSmsWorkerCycleResult =
@@ -179,6 +190,27 @@ export function loadTwilioSmsWorkerConfig(
     assertActiveTwilioBinding(env);
   }
   const runtime = loadTwilioSmsLiveRuntimeConfig(env);
+  if (env.PROPERTY_PREDATOR_SMS_VERIFICATION_MODE === 'owned_number') {
+    if (runtime.mode !== 'disabled') {
+      throw new Error('Phone verification and marketing SMS modes must be isolated');
+    }
+    if (env.PROPERTY_PREDATOR_SMS_VERIFICATION_ENABLED !== 'true'
+        || env.PROPERTY_PREDATOR_SMS_VERIFICATION_PAUSED !== 'false') {
+      throw new Error('Phone verification requires its own explicit enabled and unpaused switches');
+    }
+    assertActiveTwilioBinding(env);
+    const workspaceId = env.PROPERTY_PREDATOR_SMS_LIVE_WORKSPACE_ID?.trim().toLowerCase() ?? '';
+    const connectionId = env.PROPERTY_PREDATOR_SMS_LIVE_CONNECTION_ID?.trim().toLowerCase() ?? '';
+    const verificationPhone = env.PROPERTY_PREDATOR_SMS_VERIFY_TEST_NUMBER?.trim() ?? '';
+    if (!UUID.test(workspaceId) || !UUID.test(connectionId)
+        || !/^\+44[0-9]{9,10}$/u.test(verificationPhone)) {
+      throw new Error('Phone verification needs exact owned workspace, connection and UK phone');
+    }
+    return Object.freeze({
+      mode: 'verification_only', installationId, pollIntervalMs, runtime,
+      workspaceId, connectionId, verificationPhone,
+    });
+  }
   if (runtime.mode === 'disabled') {
     return Object.freeze({ mode: 'disabled', installationId, pollIntervalMs, runtime });
   }
@@ -293,13 +325,16 @@ export async function startTwilioSmsLiveWorker(
     );
     transport = (dependencies.createTransport
       ?? createTwilioMessagingHttpAdapterFromRestrictedKeyEnvironment)(env);
+  } else if (config.mode === 'verification_only') {
+    transport = (dependencies.createTransport
+      ?? createTwilioMessagingHttpAdapterFromRestrictedKeyEnvironment)(env);
   }
 
   const readiness: TwilioSmsLiveWorkerReadiness = Object.freeze({
     schemaVersion: 1,
     event: 'ready',
     service: TWILIO_SMS_LIVE_WORKER_SERVICE,
-    mode: config.runtime.mode,
+    mode: config.mode,
     provider: Object.freeze({
       id: TWILIO_SMS_PROVIDER_ID,
       credentialScope: 'restricted-api-key' as const,
@@ -323,10 +358,12 @@ export async function startTwilioSmsLiveWorker(
       remoteHealthCheckedAtReadiness: false as const,
     }),
     safety: Object.freeze({
-      providerEffectsEnabled: config.runtime.providerEffectsEnabled,
+      providerEffectsEnabled: config.runtime.providerEffectsEnabled || config.mode === 'verification_only',
       smsDeliveryEnabled: config.runtime.smsDeliveryEnabled,
-      emergencyPaused: config.runtime.emergencyPaused,
-      dispatchLoopStarted: config.mode === 'owned_number_live',
+      phoneVerificationEnabled: config.mode === 'verification_only',
+      emergencyPaused: config.mode === 'verification_only' ? false : config.runtime.emergencyPaused,
+      marketingEmergencyPaused: config.runtime.emergencyPaused,
+      dispatchLoopStarted: config.mode !== 'disabled',
       recipientsPerJob: 1 as const,
       dailySegmentCap: 10 as const,
       monthlySegmentCap: 50 as const,
@@ -346,17 +383,26 @@ export async function startTwilioSmsLiveWorker(
   const executeCycle = (): Promise<TwilioSmsWorkerCycleResult> => {
     if (stopping) return Promise.reject(new Error('Twilio SMS worker is stopping'));
     if (inFlight) return inFlight;
-    if (config.mode !== 'owned_number_live' || !repository || !transport) {
-      return Promise.resolve('disabled');
-    }
-    const boundRepository = repository;
+    if (!transport || config.mode === 'disabled') return Promise.resolve('disabled');
     const boundTransport = transport;
-    inFlight = (async () => runTwilioSmsLiveOnce({
+    if (config.mode === 'verification_only') {
+      inFlight = runSmsPhoneVerificationOnce(pool, boundTransport, {
+        workspaceId: config.workspaceId,
+        connectionId: config.connectionId,
+        phone: config.verificationPhone,
+      }).then((result) => result === 'sent' ? 'settled'
+        : result === 'idle' ? 'idle' : 'failed_or_attention')
+        .finally(() => { inFlight = null; });
+      return inFlight;
+    }
+    if (!repository) return Promise.resolve('disabled');
+    const boundRepository = repository;
+    inFlight = runTwilioSmsLiveOnce({
       config: config.runtime,
       repository: boundRepository,
       transport: boundTransport,
       leaseToken: randomBytes(32),
-    }))().finally(() => { inFlight = null; });
+    }).finally(() => { inFlight = null; });
     return inFlight;
   };
 
@@ -370,9 +416,9 @@ export async function startTwilioSmsLiveWorker(
         ));
       }).finally(schedule);
     }, config.pollIntervalMs);
-    if (typeof timer === 'object' && 'unref' in timer) timer.unref();
+    if (config.mode === 'disabled' && typeof timer === 'object' && 'unref' in timer) timer.unref();
   };
-  if (config.mode === 'owned_number_live') schedule();
+  if (config.mode !== 'disabled') schedule();
 
   const shutdown = async (): Promise<void> => {
     if (stopping) return;

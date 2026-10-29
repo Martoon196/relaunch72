@@ -178,13 +178,29 @@ test('approved 0121 cannot hide a missing or changed 0120 ledger row', async () 
 
 test('121 release takes the strict bundled migration path', async () => {
   const migrations = await discoverMigrations();
-  assert.equal(migrations.length, 121);
+  assert.equal(migrations.length, 122);
   assert.equal(migrations[120]?.filename, approvedMhpGrowth.filename);
   assert.equal(migrations[120]?.checksum, approvedMhpGrowth.checksum);
-  const rows = migrations.map(({ filename, checksum }) => ({ filename, checksum }));
-  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, -1))), /schema is behind by 1 migration/);
+  const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-121-compat-'));
+  await Promise.all(migrations.slice(0, 121).map((migration) =>
+    writeFile(path.join(directory, migration.filename), migration.sql, 'utf8')));
+  const rows = migrations.slice(0, 121).map(({ filename, checksum }) => ({ filename, checksum }));
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows), directory));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, -1)), directory), /schema is behind by 1 migration/);
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
     ...rows.slice(0, -1), { ...approvedMhpGrowth, checksum: '0'.repeat(64) },
-  ])), /checksum changed/);
+  ]), directory), /checksum changed/);
+  const approvedSmsPhone = {
+    filename: '0122_property_predator_sms_phone_verification.sql',
+    checksum: '52904bc9e50db657c537f6033814455db185e30877091196b47ea586aed60e8d',
+  };
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(
+    runtimePool([...rows, approvedSmsPhone]), directory));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
+    ...rows, { ...approvedSmsPhone, checksum: '0'.repeat(64) },
+  ]), directory), /migration not present in this release/);
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(
+    runtimePool(migrations.map(({ filename, checksum }) => ({ filename, checksum })))));
+  await assert.rejects(assertRuntimeSchemaCurrent(
+    runtimePool(rows)), /schema is behind by 1 migration/);
 });

@@ -10,6 +10,8 @@ import {
   LIVE_CHANNELS_SMS_BIND_ROUTE,
   LIVE_CHANNELS_SMS_REVOKE_ROUTE,
   LIVE_CHANNELS_SMS_STAGE_ROUTE,
+  LIVE_CHANNELS_SMS_VERIFY_REQUEST_ROUTE,
+  LIVE_CHANNELS_SMS_VERIFY_CONFIRM_ROUTE,
   type LiveChannelCardView,
   type LiveChannelGaugeView,
   type LiveChannelLinkView,
@@ -131,11 +133,15 @@ export interface LiveChannelsRenderOptions {
   }>;
   /** True only when the Twilio SMS founder command boundary is composed. */
   readonly smsCommandAvailable?: boolean;
+  readonly smsVerificationPhone?: string;
+  readonly smsVerificationContactId?: string;
+  readonly smsVerificationChallengeId?: string;
   /** Fresh per-render command keys, one per Twilio SMS founder command. */
   readonly smsCommandKeys?: Readonly<{
     bind: string;
     revoke: string;
     stage: string;
+    verify?: string;
   }>;
 }
 
@@ -320,9 +326,29 @@ function renderSmsCommands(
   if (!options.smsCommandAvailable) {
     return `<section class="plc-panel" aria-labelledby="plc-sms-title">${head}<div class="plc-guard-body"><p>The Twilio SMS founder command boundary is not composed for this workspace, so no sender can be bound and no owned test can be staged from here. This portal will not invent one.</p><button class="plc-guard-button" type="button" disabled aria-disabled="true">Bind owned SMS sender — command boundary not composed</button></div></section>`;
   }
-  const keys = options.smsCommandKeys ?? { bind: '', revoke: '', stage: '' };
+  const keys = options.smsCommandKeys ?? { bind: '', revoke: '', stage: '', verify: '' };
   const csrf = escapeHtml(options.csrfToken);
+  const verification = options.smsVerificationPhone && options.smsVerificationContactId
+    ? `<details class="plc-guard" open><summary><span>Verify your test phone</span><b>OWNED NUMBER</b></summary><div class="plc-guard-body">
+      <p>Send one short code to ${escapeHtml(options.smsVerificationPhone)}. Entering it proves you have this number. It does not permit marketing SMS or start a follow-up programme.</p>
+      <form method="post" action="${LIVE_CHANNELS_SMS_VERIFY_REQUEST_ROUTE}" autocomplete="off">
+        <input type="hidden" name="_csrf" value="${csrf}">
+        <input type="hidden" name="command_key" value="${escapeHtml(keys.verify ?? '')}">
+        <input type="hidden" name="phone" value="${escapeHtml(options.smsVerificationPhone)}">
+        <input type="hidden" name="confirm_verify" value="VERIFY">
+        <button class="plc-guard-button" type="submit">Text me a verification code</button>
+      </form>
+      ${options.smsVerificationChallengeId ? `<form method="post" action="${LIVE_CHANNELS_SMS_VERIFY_CONFIRM_ROUTE}" autocomplete="off">
+        <input type="hidden" name="_csrf" value="${csrf}">
+        <input type="hidden" name="command_key" value="${escapeHtml(keys.verify ?? '')}">
+        <input type="hidden" name="challenge_id" value="${escapeHtml(options.smsVerificationChallengeId)}">
+        <input type="hidden" name="confirm_verify" value="VERIFY">
+        <label class="plc-field"><span>Six-digit code</span><input type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="one-time-code"></label>
+        <button class="plc-guard-button" type="submit">Verify this phone</button>
+      </form>` : ''}
+    </div></details>` : '';
   return `<section class="plc-panel" aria-labelledby="plc-sms-title">${head}
+    ${verification}
     <details class="plc-guard"><summary><span>Bind one owned Twilio sender</span><b>EVIDENCE ONLY</b></summary><div class="plc-guard-body">
       <p>The Account SID and Messaging Service SID are reduced to digests before they reach the database. No Auth Token or API key is accepted, stored or shown here.</p>
       <form method="post" action="${LIVE_CHANNELS_SMS_BIND_ROUTE}" autocomplete="off">

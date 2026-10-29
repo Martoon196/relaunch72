@@ -86,18 +86,92 @@ export interface PgPortalSmsBindingDependencies {
   readonly commandService: Pick<PgTwilioSmsLiveCommandService, 'authorizeAndEnqueue'>;
   readonly readinessProbe: Pick<PgSmsActivationReadinessProbe, 'readiness' | 'requestDigest'>;
   readonly workspaceId: string;
+  readonly verificationPhone?: string;
+  readonly verificationContactId?: string;
 }
 
 export class PgPortalSmsBindingService implements PortalSmsBindingService {
   readonly workspaceId: string;
+  readonly verificationPhone?: string;
+  readonly verificationContactId?: string;
   readonly #dependencies: PgPortalSmsBindingDependencies;
 
   constructor(dependencies: PgPortalSmsBindingDependencies) {
     if (!UUID.test(dependencies.workspaceId)) {
       throw new Error('Twilio SMS binding seam requires the exact workspace id');
     }
+    if (dependencies.verificationPhone !== undefined
+        && !UK_E164.test(dependencies.verificationPhone)) {
+      throw new Error('Twilio SMS verification target must be one UK phone');
+    }
+    if (dependencies.verificationContactId !== undefined
+        && !UUID.test(dependencies.verificationContactId)) {
+      throw new Error('Twilio SMS verification contact must be one exact CRM person');
+    }
     this.#dependencies = dependencies;
     this.workspaceId = dependencies.workspaceId;
+    this.verificationPhone = dependencies.verificationPhone;
+    this.verificationContactId = dependencies.verificationContactId;
+  }
+
+  async requestPhoneVerification(
+    identity: PortalCrmRequestIdentity,
+    input: Readonly<{ contactId: string; phone: string; commandKey: string }>,
+  ): Promise<Readonly<{ ok: true; challengeId: string }> | PortalSmsFailure> {
+    if (!this.verificationPhone || !this.verificationContactId
+        || input.contactId !== this.verificationContactId
+        || input.phone !== this.verificationPhone
+        || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(input.commandKey)) {
+      return failed('validation');
+    }
+    try {
+      const context = await this.#context(identity);
+      if (!context) return failed('unauthenticated');
+      const id = await withTransaction(this.#dependencies.commandPool, context,
+        async (client) => {
+          const result = await client.query<IdRow>(
+            `/* portal.twilio-sms.request-phone-verification */
+             SELECT app_private.request_sms_phone_challenge(
+               $1::uuid,$2::uuid,$3::text,$4::text
+             ) AS id`,
+            [context.workspaceId,input.contactId.toLowerCase(),input.phone,input.commandKey],
+          );
+          return result.rows[0]?.id;
+        }, { isolation: 'serializable' });
+      if (typeof id !== 'string' || !UUID.test(id)) return failed('unavailable');
+      return Object.freeze({ ok: true, challengeId: id });
+    } catch (error) {
+      return mapFailure(error);
+    }
+  }
+
+  async confirmPhoneVerification(
+    identity: PortalCrmRequestIdentity,
+    input: Readonly<{ challengeId: string; code: string }>,
+  ): Promise<Readonly<{ ok: true; contactPointId: string | null }> | PortalSmsFailure> {
+    if (!this.verificationPhone || !UUID.test(input.challengeId)
+        || !/^[0-9]{6}$/u.test(input.code)) return failed('validation');
+    try {
+      const context = await this.#context(identity);
+      if (!context) return failed('unauthenticated');
+      const id = await withTransaction(this.#dependencies.commandPool, context,
+        async (client) => {
+          const result = await client.query<IdRow>(
+            `/* portal.twilio-sms.confirm-phone-verification */
+             SELECT app_private.confirm_sms_phone_challenge(
+               $1::uuid,$2::uuid,$3::text
+             ) AS id`,
+            [context.workspaceId,input.challengeId.toLowerCase(),input.code],
+          );
+          return result.rows[0]?.id ?? null;
+        }, { isolation: 'serializable' });
+      if (id !== null && (typeof id !== 'string' || !UUID.test(id))) {
+        return failed('unavailable');
+      }
+      return Object.freeze({ ok: true, contactPointId: id });
+    } catch (error) {
+      return mapFailure(error);
+    }
   }
 
   async #context(identity: PortalCrmRequestIdentity): Promise<DatabaseRequestContext | null> {
@@ -345,6 +419,8 @@ export function createPgPortalSmsBindingService(input: Readonly<{
   smsCommandPool: Pool;
   commandService: Pick<PgTwilioSmsLiveCommandService, 'authorizeAndEnqueue'>;
   workspaceId: string;
+  verificationPhone?: string;
+  verificationContactId?: string;
 }>): PgPortalSmsBindingService {
   return new PgPortalSmsBindingService({
     principalResolver: createPgPortalCrmPrincipalResolver(input.webPool),
@@ -352,5 +428,7 @@ export function createPgPortalSmsBindingService(input: Readonly<{
     commandService: input.commandService,
     readinessProbe: new PgSmsActivationReadinessProbe({ commandPool: input.smsCommandPool }),
     workspaceId: input.workspaceId,
+    ...(input.verificationPhone ? { verificationPhone: input.verificationPhone } : {}),
+    ...(input.verificationContactId ? { verificationContactId: input.verificationContactId } : {}),
   });
 }

@@ -8,6 +8,8 @@ import {
   LIVE_CHANNELS_SMS_BIND_ROUTE,
   LIVE_CHANNELS_SMS_REVOKE_ROUTE,
   LIVE_CHANNELS_SMS_STAGE_ROUTE,
+  LIVE_CHANNELS_SMS_VERIFY_REQUEST_ROUTE,
+  LIVE_CHANNELS_SMS_VERIFY_CONFIRM_ROUTE,
 } from '../src/portal/live-channels-presenter.js';
 import { liveChannelsNoticeToken } from '../src/portal/live-channels-actions.js';
 import type { PortalAuthService } from '../src/portal/auth-service.js';
@@ -59,6 +61,7 @@ const DELIVERY_ID = 'ed000000-0000-4000-8000-0000000001b1';
 const CORRELATION_ID = 'ed100000-0000-4000-8000-0000000001c1';
 const REVOCATION_ID = 'ed200000-0000-4000-8000-0000000001d1';
 const JOB_ID = 'ed300000-0000-4000-8000-0000000001e1';
+const CHALLENGE_ID = 'ed400000-0000-4000-8000-0000000001f1';
 
 /**
  * Deliberately recognisable Twilio identifiers. They are not credentials, but
@@ -290,6 +293,44 @@ function fakeBinding(results: Readonly<{
   };
   return { service, calls };
 }
+
+test('owner phone check is pinned to the configured contact and keeps a wrong code retryable', async () => {
+  const calls: unknown[] = [];
+  const service: PortalSmsBindingService = {
+    ...fakeBinding().service,
+    verificationPhone: OWNED_RECIPIENT,
+    verificationContactId: CONTACT_ID,
+    requestPhoneVerification: async (_identity, input) => {
+      calls.push(input);
+      return { ok: true, challengeId: CHALLENGE_ID };
+    },
+    confirmPhoneVerification: async (_identity, input) => {
+      calls.push(input);
+      return { ok: true, contactPointId: null };
+    },
+  };
+  const requestForm = encodeForm({ _csrf: csrfFor(SESSION), command_key: COMMAND_KEY,
+    phone: OWNED_RECIPIENT, confirm_verify: 'VERIFY' });
+  const requested = await call(LIVE_CHANNELS_SMS_VERIFY_REQUEST_ROUTE,
+    postgres({ smsBinding: service }), COOKIE, 'POST', requestForm);
+  assert.equal(requested.statusCode, 303);
+  assert.equal(requested.headers.location,
+    `${noticeLocation('sms_verification_requested')}&challenge=${CHALLENGE_ID}`);
+  assert.deepEqual(calls[0], { contactId: CONTACT_ID,
+    phone: OWNED_RECIPIENT, commandKey: COMMAND_KEY });
+  const retryForm = encodeForm({ _csrf: csrfFor(SESSION), command_key: COMMAND_KEY,
+    challenge_id: CHALLENGE_ID, code: '000000', confirm_verify: 'VERIFY' });
+  const retry = await call(LIVE_CHANNELS_SMS_VERIFY_CONFIRM_ROUTE,
+    postgres({ smsBinding: service }), COOKIE, 'POST', retryForm);
+  assert.equal(retry.headers.location,
+    `${noticeLocation('sms_verification_pending')}&challenge=${CHALLENGE_ID}`);
+  assert.deepEqual(calls[1], { challengeId: CHALLENGE_ID, code: '000000' });
+  const crossBrand = await call(LIVE_CHANNELS_SMS_VERIFY_REQUEST_ROUTE,
+    postgres({ productProfile: RELAUNCH72_PRODUCT_PROFILE, smsBinding: service }),
+    COOKIE, 'POST', requestForm);
+  assert.equal(crossBrand.statusCode, 404);
+  assert.equal(calls.length, 2);
+});
 
 /** A report the foundation itself validates, so no test can invent a shape. */
 function readinessReport(blocked = false): SmsActivationReadinessReport {

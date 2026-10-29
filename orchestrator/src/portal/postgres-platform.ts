@@ -1038,6 +1038,12 @@ export async function buildPgPortalPlatform(
             providerConnectionId: connectionId,
           }),
           workspaceId,
+          ...(env.PROPERTY_PREDATOR_SMS_VERIFY_TEST_NUMBER?.trim()
+            ? { verificationPhone: env.PROPERTY_PREDATOR_SMS_VERIFY_TEST_NUMBER.trim() }
+            : {}),
+          ...(env.PROPERTY_PREDATOR_SMS_VERIFY_CONTACT_ID?.trim()
+            ? { verificationContactId: env.PROPERTY_PREDATOR_SMS_VERIFY_CONTACT_ID.trim() }
+            : {}),
         });
         smsReadinessPool = smsPool;
         pools.push(smsPool);
