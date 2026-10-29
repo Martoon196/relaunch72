@@ -130,3 +130,41 @@ test('full 106 application still requires its exact bundled finance migration', 
     ...rows.slice(0, -1), approvedFinance,
   ]), directory), /checksum changed/);
 });
+
+const approvedMhpGrowth = {
+  filename: '0121_mhp_prospects_learning.sql',
+  checksum: 'a39051a348303ffc752ed449322ffee2df5d8dbd2b1a0c49673c7c918500362f',
+};
+
+async function mhpGrowthBridgeRows() {
+  const migrations = await discoverMigrations();
+  assert.equal(migrations.length, 120);
+  assert.equal(migrations[119]?.filename, '0120_mhp_deal_desk_credit.sql');
+  return migrations.map(({ filename, checksum }) => ({ filename, checksum }));
+}
+
+test('120 bridge accepts the exact 0120 ledger and approved 0121', async () => {
+  const rows = await mhpGrowthBridgeRows();
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool([...rows, approvedMhpGrowth])));
+});
+
+test('120 bridge rejects a wrong 0121 checksum and an unknown 0122', async () => {
+  const rows = await mhpGrowthBridgeRows();
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
+    ...rows, { ...approvedMhpGrowth, checksum: '0'.repeat(64) },
+  ])), /migration not present in this release/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
+    ...rows, approvedMhpGrowth, { filename: '0122_unknown.sql', checksum: 'a'.repeat(64) },
+  ])), /migration not present in this release/);
+});
+
+test('approved 0121 cannot hide a missing or changed 0120 ledger row', async () => {
+  const rows = await mhpGrowthBridgeRows();
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
+    ...rows.slice(0, -1), approvedMhpGrowth,
+  ])), /schema is behind by 1 migration/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
+    ...rows.slice(0, -1), { ...rows[119]!, checksum: '0'.repeat(64) }, approvedMhpGrowth,
+  ])), /checksum changed/);
+});

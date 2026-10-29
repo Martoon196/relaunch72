@@ -12,6 +12,8 @@ interface RuntimeMigrationRow extends QueryResultRow {
 
 const FINANCE_COMPATIBILITY_MIGRATION = '0106_finance_planning_drafts.sql';
 const FINANCE_COMPATIBILITY_CHECKSUM = '422d1766390910417b397bb34607f74a56c8d7744c3f88a84c4ae46e39ae40ba';
+const MHP_GROWTH_COMPATIBILITY_MIGRATION = '0121_mhp_prospects_learning.sql';
+const MHP_GROWTH_COMPATIBILITY_CHECKSUM = 'a39051a348303ffc752ed449322ffee2df5d8dbd2b1a0c49673c7c918500362f';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -44,6 +46,13 @@ export async function assertRuntimeSchemaCurrent(
       && migrations[104]?.filename === '0105_public_social_planner_session_lock.sql'
       && applied.get(FINANCE_COMPATIBILITY_MIGRATION) === FINANCE_COMPATIBILITY_CHECKSUM) {
     applied.delete(FINANCE_COMPATIBILITY_MIGRATION);
+  }
+  // Allow the exact reviewed additive 0121 while this 0120 release stays live
+  // during the MHP cutover. A release bundling 0121 takes the strict path.
+  if (migrations.length === 120
+      && migrations[119]?.filename === '0120_mhp_deal_desk_credit.sql'
+      && applied.get(MHP_GROWTH_COMPATIBILITY_MIGRATION) === MHP_GROWTH_COMPATIBILITY_CHECKSUM) {
+    applied.delete(MHP_GROWTH_COMPATIBILITY_MIGRATION);
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
