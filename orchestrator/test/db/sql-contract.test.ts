@@ -124,6 +124,7 @@ const migration117Url = new URL('../../src/db/migrations/0117_mhp_manual_grants.
 const migration118Url = new URL('../../src/db/migrations/0118_mhp_catalogue_v3.sql', import.meta.url);
 const migration119Url = new URL('../../src/db/migrations/0119_mhp_deal_desk.sql', import.meta.url);
 const migration120Url = new URL('../../src/db/migrations/0120_mhp_deal_desk_credit.sql', import.meta.url);
+const migration121Url = new URL('../../src/db/migrations/0121_mhp_prospects_learning.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -680,6 +681,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: '0118_mhp_catalogue_v3.sql', version: 118 },
     { filename: '0119_mhp_deal_desk.sql', version: 119 },
     { filename: '0120_mhp_deal_desk_credit.sql', version: 120 },
+    { filename: '0121_mhp_prospects_learning.sql', version: 121 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -796,6 +798,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration118Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration119Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration120Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration121Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.
@@ -803,6 +806,20 @@ test('bundled migration discovery orders and checksums through source refresh re
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
   }
+});
+
+test('0121 keeps prospects, stories, sends and course text behind definer functions', async () => {
+  const sql = normalise(await readFile(migration121Url, 'utf8'));
+  for (const table of ['mhp_prospects', 'mhp_prospect_signups', 'mhp_marketing_sends', 'mhp_member_stories', 'mhp_lesson_progress', 'mhp_course_modules', 'mhp_course_lessons']) {
+    assert.match(sql, new RegExp(`'${table}'`));
+  }
+  assert.match(sql, /FORCE ROW LEVEL SECURITY/);
+  assert.match(sql, /REVOKE CREATE ON SCHEMA app_private FROM r72_mhp_prospect_definer/);
+  assert.doesNotMatch(sql, /GRANT (SELECT|INSERT|UPDATE|DELETE)[^;]* TO r72_(web|identity_command)\b/);
+  assert.match(sql, /number_text !~ '£'/);
+  assert.match(sql, /mhp_course_content\(bytea,text\) TO r72_web/);
+  assert.match(sql, /app_private\.mhp_import_course\(bytea,jsonb\) TO r72_identity_command/);
+  assert.match(sql, /IF tier='desk' AND left\(p_lesson,2\) NOT IN\('00','01'\)/);
 });
 
 test('0009 stabilises session defaults and grants only the claim-lock capability', async () => {

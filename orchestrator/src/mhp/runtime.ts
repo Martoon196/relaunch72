@@ -12,6 +12,9 @@ import { InvestorMailService } from '../portal/investor-mail-service.js';
 import { InvestorMailVault } from '../investor-mail/vault.js';
 import { PgMhpHqService } from './hq-service.js';
 import { PgMhpDeskService } from './desk-service.js';
+import { PgMhpGrowthService, mhpWebinarConfig } from './growth-service.js';
+import { PgMhpLearningService } from './learning-service.js';
+import { mhpMarketingConfig, type MhpMarketingConfig } from './marketing-mail.js';
 
 export interface MhpRuntime {
   auth: PgMhpAuthService;
@@ -22,6 +25,9 @@ export interface MhpRuntime {
   commerce: PgMhpCommerceService;
   hq: PgMhpHqService;
   desk: PgMhpDeskService;
+  growth: PgMhpGrowthService;
+  learning: PgMhpLearningService;
+  marketing: MhpMarketingConfig | null;
   readiness(): Promise<readonly string[]>;
 }
 
@@ -58,6 +64,8 @@ export async function buildMhpRuntime(input: {
   const stripe = config ? new Stripe(config.secretKey, { maxNetworkRetries: 1, timeout: 8_000 }) : null;
   const commerce = new PgMhpCommerceService(webPool, identityPool, webhookPool, stripe, config);
   const mail = createMhpTransactionalMailer(env);
+  const marketing = mhpMarketingConfig(env);
+  const webinar = mhpWebinarConfig(env);
   const rawVaultKey = env.INVESTOR_MAIL_ENCRYPTION_KEY?.trim();
   const vaultKey = rawVaultKey ? Buffer.from(rawVaultKey, 'base64') : undefined;
   if (vaultKey && (vaultKey.length !== 32 || vaultKey.toString('base64') !== rawVaultKey)) {
@@ -77,6 +85,9 @@ export async function buildMhpRuntime(input: {
     commerce,
     hq: new PgMhpHqService(webPool, identityPool),
     desk: new PgMhpDeskService(webPool, identityPool),
+    growth: new PgMhpGrowthService(webPool, identityPool, webinar),
+    learning: new PgMhpLearningService(webPool, identityPool),
+    marketing,
     async readiness(): Promise<readonly string[]> {
       const blockers: string[] = [];
       if (!mail.configured) blockers.push('MHP transactional email is not configured');
