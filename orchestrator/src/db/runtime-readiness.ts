@@ -14,6 +14,8 @@ const FINANCE_COMPATIBILITY_MIGRATION = '0106_finance_planning_drafts.sql';
 const FINANCE_COMPATIBILITY_CHECKSUM = '422d1766390910417b397bb34607f74a56c8d7744c3f88a84c4ae46e39ae40ba';
 const MHP_GROWTH_COMPATIBILITY_MIGRATION = '0121_mhp_prospects_learning.sql';
 const MHP_GROWTH_COMPATIBILITY_CHECKSUM = 'a39051a348303ffc752ed449322ffee2df5d8dbd2b1a0c49673c7c918500362f';
+const SMS_PHONE_COMPATIBILITY_MIGRATION = '0122_property_predator_sms_phone_verification.sql';
+const SMS_PHONE_COMPATIBILITY_CHECKSUM = '52904bc9e50db657c537f6033814455db185e30877091196b47ea586aed60e8d';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -53,6 +55,14 @@ export async function assertRuntimeSchemaCurrent(
       && migrations[119]?.filename === '0120_mhp_deal_desk_credit.sql'
       && applied.get(MHP_GROWTH_COMPATIBILITY_MIGRATION) === MHP_GROWTH_COMPATIBILITY_CHECKSUM) {
     applied.delete(MHP_GROWTH_COMPATIBILITY_MIGRATION);
+  }
+  // Keep the 0121 release ready during the additive 0122 SMS verification
+  // cutover. This admits only the exact reviewed file checksum. A release
+  // bundling 0122 returns to strict migration matching automatically.
+  if (migrations.length === 121
+      && migrations[120]?.filename === '0121_mhp_prospects_learning.sql'
+      && applied.get(SMS_PHONE_COMPATIBILITY_MIGRATION) === SMS_PHONE_COMPATIBILITY_CHECKSUM) {
+    applied.delete(SMS_PHONE_COMPATIBILITY_MIGRATION);
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
