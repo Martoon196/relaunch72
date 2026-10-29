@@ -43,6 +43,7 @@ import { appShell, escapeHtml, PORTAL_APPEARANCE_CLIENT_SOURCE } from './ui.js';
 import { renderGrowthHomeBody } from './growth-home.js';
 import { renderLead360Body } from './lead-360-view.js';
 import { renderMhpContactBody } from '../mhp/contact-view.js';
+import { renderMhpCrmBody } from '../mhp/crm-view.js';
 import type { PortalFinanceDraftsService } from './finance-drafts-service.js';
 import { planningFromForm } from './finance-drafts-service.js';
 import { FIELDS, FinanceError } from '../integrations/mh196/planning-client.js';
@@ -7044,7 +7045,10 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
             notice,
             filter: readRequest.section === 'tasks' ? readRequest.filter : 'open',
           });
-      return sendHtml(res, 200, crmPage(snapshot, body, deps, csrfToken));
+      const renderedBody = deps.productProfile?.id === 'martin_howard_property'
+        ? renderMhpCrmBody(body, p === CRM_PORTAL_ROUTES.contacts ? 'contacts' : p === CRM_PORTAL_ROUTES.pipeline ? 'pipeline' : 'tasks')
+        : body;
+      return sendHtml(res, 200, crmPage(snapshot, renderedBody, deps, csrfToken));
     } catch (error) {
       if (error instanceof PortalCrmPageCursorError) {
         return sendHtml(res, 400, portalStatusPage(deps, sessionToken, {
