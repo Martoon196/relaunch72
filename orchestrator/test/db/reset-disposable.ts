@@ -56,6 +56,7 @@ const APP_ROLES = [
   'r72_mhp_auth_definer',
   'r72_mhp_commerce_definer',
   'r72_mhp_member_definer',
+  'r72_mhp_prospect_definer',
   'r72_onboarding_definer',
   'r72_owned_social_command',
   'r72_owned_social_definer',

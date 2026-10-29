@@ -29,6 +29,7 @@ import { MHP_AUTH_ORIGIN, MHP_SESSION_COOKIE } from '../mhp/auth-service.js';
 import { MARTIN_HOWARD_PROPERTY_PROFILE } from '../portal/product-profile.js';
 import { authorizeMhpMemberRoute } from '../mhp/member-service.js';
 import { startMhpScheduleReconciler } from '../mhp/schedule-reconciler.js';
+import { createMhpMarketingSender, startMhpMarketingDispatcher } from '../mhp/marketing-mail.js';
 import { makeStripe } from './stripe-client.js';
 import { createSubscriptionCheckout, createBillingPortalUrl, type StripeLike } from './stripe.js';
 import { ensureCatalogPrices, ensurePlanPrices, type StripeCatalogLike } from './catalog.js';
@@ -923,6 +924,8 @@ async function main(): Promise<void> {
         };
         mhp = createMhpMount({
           portal: mhpPortal, commerce: runtime.commerce, hq: runtime.hq, desk: runtime.desk,
+          growth: { growth: runtime.growth, learning: runtime.learning, unsubscribeSecret: cfg.sessionSecret,
+            marketingMode: runtime.marketing?.mode ?? 'off' },
           authMount: createMhpAuthMount({
             auth: runtime.auth, mail: runtime.mail, sessionSecret: cfg.sessionSecret,
             abuse: postgresPortal.abuse, abuseHashSecret: portalAbuseRuntime.hashSecret,
@@ -974,6 +977,12 @@ async function main(): Promise<void> {
         },
       })
     : () => {};
+  const mhpMarketing = postgresPortal?.mhp?.marketing;
+  const stopMhpMarketing = mhpMarketing && postgresPortal?.mhp && process.env.MHP_ENABLED === 'true'
+    ? startMhpMarketingDispatcher(postgresPortal.mhp.growth, createMhpMarketingSender(mhpMarketing, cfg.sessionSecret), mhpMarketing, {
+        onResult: result => { if (result.failed > 0) console.warn(`MHP sign-up emails: ${result.sent} sent, ${result.failed} need a retry.`); },
+      })
+    : () => {};
   server.headersTimeout = 10_000;
   server.requestTimeout = 30_000;
   server.timeout = 30_000;
@@ -995,6 +1004,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     stopMhpSchedules();
+    stopMhpMarketing();
     console.log(`Received ${signal}; draining HTTP requests and closing database pools.`);
     try {
       await new Promise<void>((resolve, reject) => {
