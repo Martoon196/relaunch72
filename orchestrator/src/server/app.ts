@@ -78,6 +78,8 @@ export interface AppDeps {
   marketing?: MarketingHooks;
   /** Optional client portal; absent = /portal 404s (payments still work). */
   portal?: PortalDeps;
+  /** PP-only, fixed-scope read bridge for the founder's Group HQ. */
+  groupHqCrm?: { handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> };
   /** Per-process no-queue shield in front of the distributed portal guard. */
   portalMaxConcurrentRequests?: number;
   /** Safe operator-facing reasons the optional portal could not be mounted. */
@@ -291,6 +293,18 @@ export function createApp(deps: AppDeps) {
       activePortalRequests += 1;
       try { await deps.mhp!.handle(req, res); }
       catch { if (!res.headersSent) sendPortalRuntimeStatus(res, 503); }
+      finally { activePortalRequests -= 1; }
+      return;
+    }
+
+    if (url.pathname === '/api/group-hq/crm/leads') {
+      if (!deps.groupHqCrm) { send(res, 404, { error: 'not found' }); return; }
+      if (activePortalRequests >= portalMaxConcurrentRequests) {
+        sendPortalRuntimeStatus(res, 429); return;
+      }
+      activePortalRequests += 1;
+      try { await deps.groupHqCrm.handle(req, res, url); }
+      catch { if (!res.headersSent) send(res, 503, { error: 'temporarily unavailable' }); }
       finally { activePortalRequests -= 1; }
       return;
     }

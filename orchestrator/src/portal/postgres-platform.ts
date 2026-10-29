@@ -20,6 +20,7 @@ import { loadDatabaseConfig, type DatabaseConfig } from '../db/config.js';
 import { assertRuntimeSchemaCurrent } from '../db/runtime-readiness.js';
 import { assertExpectedDatabaseInstallation } from '../db/installation-identity.js';
 import { requestDatabaseContext } from '../db/rls.js';
+import { createGroupHqCrmReadMount, loadGroupHqCrmConfig } from '../integrations/group-hq-crm/read.js';
 import {
   createPgInboxReadService,
   type InboxConversationQuery,
@@ -175,6 +176,7 @@ import { createPgFinanceDraftsService } from './finance-drafts-pg-service.js';
 import type { FinanceDraftsService } from './finance-drafts-service.js';
 
 export interface PgPortalPlatform {
+  groupHqCrm?: ReturnType<typeof createGroupHqCrmReadMount>;
   mhp?: MhpRuntime;
   auth: PgPortalAuthService;
   /** Distributed, function-only admission guard shared by every web instance. */
@@ -1257,8 +1259,17 @@ export async function buildPgPortalPlatform(
       // PP application. Its own host mount remains unavailable and fails /ready.
       console.warn('MHP member application did not compose; its host remains unavailable.');
     }
+    let groupHqCrm: ReturnType<typeof createGroupHqCrmReadMount> | undefined;
+    try {
+      const groupHqConfig = loadGroupHqCrmConfig(env);
+      if (groupHqConfig) groupHqCrm = createGroupHqCrmReadMount(webPool, groupHqConfig);
+    } catch {
+      // An optional founder read bridge must never unmount the customer portal.
+      console.warn('Group HQ CRM read bridge is unavailable; Property Predator portal remains mounted.');
+    }
     let closed = false;
     return {
+      groupHqCrm,
       mhp,
       auth: new PgPortalAuthService({ readPool: webPool, commandPool: identityPool }),
       abuse,

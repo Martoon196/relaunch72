@@ -948,6 +948,7 @@ async function main(): Promise<void> {
     now: () => new Date().toISOString(),
     marketing,
     portal,
+    groupHqCrm: postgresPortal?.groupHqCrm,
     portalMaxConcurrentRequests: 32,
     portalBlockers: portal
       ? undefined

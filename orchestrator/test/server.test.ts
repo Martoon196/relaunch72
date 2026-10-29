@@ -259,6 +259,33 @@ test('operational routes are pinned to the canonical host while probes remain av
   assert.equal(canonical.statusCode, 404);
 });
 
+test('Group HQ CRM read route is host-bound and cannot fall through to MHP', async () => {
+  let reads = 0;
+  let mhpCalls = 0;
+  const { handler } = app({
+    canonicalHost: 'hq.propertypredator.com',
+    groupHqCrm: { async handle(_request, response) { reads += 1; response.writeHead(200); response.end('pp'); } },
+    mhp: {
+      hostname: 'app.martinhowardproperty.co.uk',
+      readiness: async () => [],
+      async handle(_request, response) { mhpCalls += 1; response.writeHead(404); response.end('mhp'); },
+    },
+  });
+  const pp = res();
+  await handler(req('GET', '/api/group-hq/crm/leads?brand=pp', '', { host: 'hq.propertypredator.com' }), pp);
+  assert.equal(pp.statusCode, 200);
+  assert.equal(reads, 1);
+  const mhp = res();
+  await handler(req('GET', '/api/group-hq/crm/leads?brand=pp', '', { host: 'app.martinhowardproperty.co.uk' }), mhp);
+  assert.equal(mhp.statusCode, 404);
+  assert.equal(mhpCalls, 1);
+  assert.equal(reads, 1);
+  const wrong = res();
+  await handler(req('GET', '/api/group-hq/crm/leads?brand=pp', '', { host: 'attacker.example' }), wrong);
+  assert.equal(wrong.statusCode, 421);
+  assert.equal(reads, 1);
+});
+
 test('GET / sends a human visitor to the secure portal without caching the redirect', async () => {
   const { handler } = app({ canonicalHost: 'hq.propertypredator.com' });
   const response = res();
