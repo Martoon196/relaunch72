@@ -177,7 +177,9 @@ test('approved 0121 cannot hide a missing or changed 0120 ledger row', async () 
 });
 
 test('121 release takes the strict bundled migration path', async () => {
-  const migrations = await discoverMigrations();
+  const allMigrations = await discoverMigrations();
+  assert.equal(allMigrations.length, 123);
+  const migrations = allMigrations.slice(0, 122);
   assert.equal(migrations.length, 122);
   assert.equal(migrations[120]?.filename, approvedMhpGrowth.filename);
   assert.equal(migrations[120]?.checksum, approvedMhpGrowth.checksum);
@@ -202,5 +204,22 @@ test('121 release takes the strict bundled migration path', async () => {
   await assert.doesNotReject(assertRuntimeSchemaCurrent(
     runtimePool(migrations.map(({ filename, checksum }) => ({ filename, checksum })))));
   await assert.rejects(assertRuntimeSchemaCurrent(
-    runtimePool(rows)), /schema is behind by 1 migration/);
+    runtimePool(rows)), /schema is behind by 2 migration/);
+});
+
+test('123 ACL repair accepts exact 122 cutover and requires the eventual exact ledger', async () => {
+  const migrations = await discoverMigrations();
+  const rows = migrations.map(({ filename, checksum }) => ({ filename, checksum }));
+  assert.equal(rows.length, 123);
+  assert.deepEqual(rows[122], {
+    filename: '0123_sms_phone_receipt_trigger_acl.sql',
+    checksum: '094d3118a85131c099749ecd000c4c4b9141ea6ba00e8c643190fa5cf5a1554d',
+  });
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 122))));
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
+    ...rows.slice(0, 122), { ...rows[122]!, checksum: '0'.repeat(64) },
+  ])), /checksum changed/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 121))),
+    /schema is behind by 2 migration/);
 });

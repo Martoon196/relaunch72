@@ -16,6 +16,8 @@ const MHP_GROWTH_COMPATIBILITY_MIGRATION = '0121_mhp_prospects_learning.sql';
 const MHP_GROWTH_COMPATIBILITY_CHECKSUM = 'a39051a348303ffc752ed449322ffee2df5d8dbd2b1a0c49673c7c918500362f';
 const SMS_PHONE_COMPATIBILITY_MIGRATION = '0122_property_predator_sms_phone_verification.sql';
 const SMS_PHONE_COMPATIBILITY_CHECKSUM = '52904bc9e50db657c537f6033814455db185e30877091196b47ea586aed60e8d';
+const SMS_TRIGGER_ACL_REPAIR_MIGRATION = '0123_sms_phone_receipt_trigger_acl.sql';
+const SMS_TRIGGER_ACL_REPAIR_CHECKSUM = '094d3118a85131c099749ecd000c4c4b9141ea6ba00e8c643190fa5cf5a1554d';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -66,6 +68,18 @@ export async function assertRuntimeSchemaCurrent(
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
+  // 0123 only revokes an unintended PUBLIC execute grant on an internal SMS
+  // receipt trigger. The production ACL was repaired before this source was
+  // published; allow that exact 0122 ledger during the additive cutover.
+  // Existing portal and provider-specific readiness gates still enforce the
+  // closed role boundary before any customer journey is mounted.
+  if (pending.length === 1
+      && migrations.length === 123
+      && pending[0]?.filename === SMS_TRIGGER_ACL_REPAIR_MIGRATION
+      && pending[0]?.checksum === SMS_TRIGGER_ACL_REPAIR_CHECKSUM
+      && applied.get(SMS_PHONE_COMPATIBILITY_MIGRATION) === SMS_PHONE_COMPATIBILITY_CHECKSUM) {
+    return;
+  }
   if (pending.length > 0) {
     throw new Error(`Database schema is behind by ${pending.length} migration(s); first pending: ${pending[0]!.filename}`);
   }
