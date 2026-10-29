@@ -2347,6 +2347,10 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           const form=await readForm(req,128*1024);
           if(!verifyPortalCsrf(deps.sessionSecret,sessionToken,form._csrf))throw new InvestorError(403,'Refresh this page before saving. Your workspace may have changed.');
           selected=form.messageId||undefined;
+          if(p===INVESTOR_ROUTE+'/email/ready'){
+            if(business.productProfileId!=='martin_howard_property')throw new InvestorError(404,'Conversation action not found.');
+            return redirect(res,INVESTOR_ROUTE+'/email?message='+encodeURIComponent(await mail.readyToSend(identity,form)));
+          }
           if(p===INVESTOR_ROUTE+'/email/draft')return redirect(res,INVESTOR_ROUTE+'/email?message='+encodeURIComponent(await mail.draft(identity,form)));
           else if(p===INVESTOR_ROUTE+'/email/approve'){await mail.approve(identity,form);return redirect(res,INVESTOR_ROUTE+'/email?message='+encodeURIComponent(selected??''));}
           else if(p===INVESTOR_ROUTE+'/email/permission'){await mail.permission(identity,form);return redirect(res,INVESTOR_ROUTE+'/email?message='+encodeURIComponent(selected??''));}

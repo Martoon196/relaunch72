@@ -32,6 +32,14 @@ export class InvestorMailService {
     const r=await this.commandPool.query<{id:string}>('SELECT app_private.draft_investor_email($1,$2,$3,$4,$5,$6) AS id',[hash(identity.sessionToken),investorUuid(form.commandKey??''),investorUuid(form.contactPointId??''),subject,body,form.inReplyTo||null]);
     if(!r.rows[0]?.id)throw new InvestorError(503,'Saving the draft was not confirmed.');return r.rows[0].id;
   }
+  async readyToSend(identity:PortalCrmRequestIdentity,form:Record<string,string>):Promise<string> {
+    if(form.confirmation!=='review_exact_message')throw new InvestorError(400,'Check the recipient and message before continuing.');
+    const id=await this.draft(identity,form);
+    const review=(await this.centre(identity,id)).selected;
+    if(!review||review.id!==id||review.lifecycle!=='draft')throw new InvestorError(503,'The saved draft could not be reviewed. No email was sent.');
+    await this.approve(identity,{messageId:id,version:String(review.version),reviewHash:review.reviewHash,confirmation:'approve_exact_message'});
+    return id;
+  }
   async approve(identity:PortalCrmRequestIdentity,form:Record<string,string>):Promise<void> {
     if(form.confirmation!=='approve_exact_message'||!/^\d+$/.test(form.version??'')||!/^[a-f0-9]{64}$/.test(form.reviewHash??''))throw new InvestorError(400,'Review the exact recipient and complete message before approving.');
     await this.commandPool.query('SELECT app_private.approve_investor_email($1,$2,$3,$4,$5)',[hash(identity.sessionToken),investorUuid(form.messageId??''),Number(form.version),Buffer.from(form.reviewHash!,'hex'),form.confirmation]);
@@ -64,7 +72,8 @@ export class InvestorMailService {
     let accepted;
     try {
       if(Number(claim.accountVersion)!==Number(loaded.account.version)||claim.address!==loaded.account.address)throw new Error('Connection changed');
-      accepted=await this.transport(loaded.credentials).send({...claim,inReplyTo:claim.inReplyTo||undefined});
+      const displayName=loaded.credentials.displayName.replace(/\s*·\s*Your Desk\s*$/i,'').trim()||loaded.credentials.displayName;
+      accepted=await this.transport({...loaded.credentials,displayName}).send({...claim,inReplyTo:claim.inReplyTo||undefined});
     }catch {await settle(false,null).catch(()=>{});return 'unknown';}
     try {await settle(true,accepted.providerId);return 'accepted';}
     catch{throw new InvestorError(503,'The provider accepted the message, but saving its receipt was not confirmed. Check its status before taking any further action.');}

@@ -46,7 +46,7 @@ test('active course preserves CRM writes while refunded mentoring permits only s
   assert.equal(route(overlap,'/portal/crm/leads','POST').allowed,true);
   assert.equal(route(overlap,'/portal/investors/branding','POST').allowed,true);
   assert.equal(route(overlap,'/portal/investors/email').allowed,true);
-  for(const [path,method] of [['/portal/investors/email/draft','POST'],['/portal/investors/email/send','POST'],['/portal/investors/email/sync','POST'],['/portal/investors/mail/save','POST'],['/portal/investors/mail/connect','POST'],['/portal/investors/mail/callback','GET']]) assert.equal(route(overlap,path!,method!).allowed,false,path);
+  for(const [path,method] of [['/portal/investors/email/draft','POST'],['/portal/investors/email/ready','POST'],['/portal/investors/email/send','POST'],['/portal/investors/email/sync','POST'],['/portal/investors/mail/save','POST'],['/portal/investors/mail/connect','POST'],['/portal/investors/mail/callback','GET']]) assert.equal(route(overlap,path!,method!).allowed,false,path);
   const member={...business,features:overlap};
   const connection:InvestorMailView={account:{provider:'smtp',address:business.ownerEmail,status:'verified',version:1,verifiedAt:null,settings:{}},customAvailable:true,googleAvailable:true,microsoftAvailable:true,deliveryEnabled:true};
   const settings=investorPage({programme:{...programme,businesses:[member]},csrf:'csrf',email:business.ownerEmail,view:'settings',mail:connection});
@@ -63,6 +63,9 @@ test('a card conversation preselects its exact contact point and explains the te
   const compose=investorEmailPage({business:member,centre:{selected:null,contacts:[{id:point,name:'Martin Test Investor',address:'owner@example.invalid',verified:true}],messages:[]},connection,csrf:'csrf',selectedPoint:point});
   assert.match(compose,/New message to Martin Test Investor/);
   assert.match(compose,/value="71111111-0000-4000-8000-000000000010" selected/);
+  assert.match(compose,/action="\/portal\/investors\/email\/ready"/);
+  assert.match(compose,/Continue to send/);
+  assert.doesNotMatch(compose,/Save draft for review/);
   const approved=investorEmailPage({business:member,centre:{selected:{id:'71111111-0000-4000-8000-000000000011',version:2,bodyHash:'a'.repeat(64),reviewHash:'b'.repeat(64),subject:'Test',text:'A test',to:'owner@example.invalid',from:'sender@example.invalid',contactName:'Martin Test Investor',contactPointId:point,lifecycle:'approved',state:'approved',direction:'outbound',internetMessageId:'<test@example.invalid>',permissionRecorded:false},contacts:[],messages:[]},connection,csrf:'csrf'});
   assert.match(approved,/Email request and permission/);
   assert.match(approved,/including my own test address/);
