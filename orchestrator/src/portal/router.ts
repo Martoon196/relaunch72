@@ -42,6 +42,7 @@ import { accountSetupPage, accountSetupUnavailablePage, loginPage, dashboardPage
 import { appShell, escapeHtml, PORTAL_APPEARANCE_CLIENT_SOURCE } from './ui.js';
 import { renderGrowthHomeBody } from './growth-home.js';
 import { renderLead360Body } from './lead-360-view.js';
+import { renderMhpContactBody } from '../mhp/contact-view.js';
 import type { PortalFinanceDraftsService } from './finance-drafts-service.js';
 import { planningFromForm } from './finance-drafts-service.js';
 import { FIELDS, FinanceError } from '../integrations/mh196/planning-client.js';
@@ -6944,7 +6945,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           };
         })()
         : null;
-      const body = `<nav aria-label="Lead 360 breadcrumb" style="margin-bottom:14px"><a class="button secondary compact" href="${CRM_PORTAL_ROUTES.contacts}">← All contacts</a></nav>${renderLead360Body(caseFile, {
+      const body = deps.productProfile?.id === 'martin_howard_property'
+        ? renderMhpContactBody(caseFile)
+        : `<nav aria-label="Lead 360 breadcrumb" style="margin-bottom:14px"><a class="button secondary compact" href="${CRM_PORTAL_ROUTES.contacts}">← All contacts</a></nav>${renderLead360Body(caseFile, {
         // The legacy JSON portal has no permission boundary, so the panel
         // renders its honest "not composed" state there rather than a form
         // that could not record anything.
