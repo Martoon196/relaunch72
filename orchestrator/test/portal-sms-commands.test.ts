@@ -620,6 +620,8 @@ function harness(options: Readonly<{
   throws?: unknown;
   blocked?: boolean;
   principalWorkspaceId?: string;
+  principalUserId?: string;
+  verificationOwnerUserId?: string;
   enqueueThrows?: unknown;
 }> = {}): Harness {
   const calls: Call[] = [];
@@ -642,7 +644,7 @@ function harness(options: Readonly<{
   const service = new PgPortalSmsBindingService({
     principalResolver: {
       resolve: async () => ({
-        userId: USER_ID,
+        userId: options.principalUserId ?? USER_ID,
         workspaceId: options.principalWorkspaceId ?? WORKSPACE_ID,
       }),
     },
@@ -670,9 +672,23 @@ function harness(options: Readonly<{
       },
     },
     workspaceId: WORKSPACE_ID,
+    ...(options.verificationOwnerUserId ? {
+      verificationPhone: OWNED_RECIPIENT,
+      verificationContactId: CONTACT_ID,
+      verificationOwnerUserId: options.verificationOwnerUserId,
+    } : {}),
   });
   return { service, calls, enqueued, digestCalls, readinessCalls };
 }
+
+test('phone verification refuses another signed-in user before any SMS command SQL', async () => {
+  const other = harness({ verificationOwnerUserId: 'ff100000-0000-4000-8000-000000000001' });
+  const result = await other.service.requestPhoneVerification(IDENTITY, {
+    contactId: CONTACT_ID, phone: OWNED_RECIPIENT, commandKey: COMMAND_KEY,
+  });
+  assert.deepEqual(result, { ok: false, kind: 'forbidden' });
+  assert.equal(other.calls.length, 0);
+});
 
 function bindInput(overrides: Record<string, unknown> = {}) {
   return {

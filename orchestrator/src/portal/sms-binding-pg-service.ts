@@ -88,12 +88,14 @@ export interface PgPortalSmsBindingDependencies {
   readonly workspaceId: string;
   readonly verificationPhone?: string;
   readonly verificationContactId?: string;
+  readonly verificationOwnerUserId?: string;
 }
 
 export class PgPortalSmsBindingService implements PortalSmsBindingService {
   readonly workspaceId: string;
   readonly verificationPhone?: string;
   readonly verificationContactId?: string;
+  readonly verificationOwnerUserId?: string;
   readonly #dependencies: PgPortalSmsBindingDependencies;
 
   constructor(dependencies: PgPortalSmsBindingDependencies) {
@@ -108,10 +110,15 @@ export class PgPortalSmsBindingService implements PortalSmsBindingService {
         && !UUID.test(dependencies.verificationContactId)) {
       throw new Error('Twilio SMS verification contact must be one exact CRM person');
     }
+    if (dependencies.verificationOwnerUserId !== undefined
+        && !UUID.test(dependencies.verificationOwnerUserId)) {
+      throw new Error('Twilio SMS verification owner must be one exact portal user');
+    }
     this.#dependencies = dependencies;
     this.workspaceId = dependencies.workspaceId;
     this.verificationPhone = dependencies.verificationPhone;
     this.verificationContactId = dependencies.verificationContactId;
+    this.verificationOwnerUserId = dependencies.verificationOwnerUserId;
   }
 
   async requestPhoneVerification(
@@ -119,6 +126,7 @@ export class PgPortalSmsBindingService implements PortalSmsBindingService {
     input: Readonly<{ contactId: string; phone: string; commandKey: string }>,
   ): Promise<Readonly<{ ok: true; challengeId: string }> | PortalSmsFailure> {
     if (!this.verificationPhone || !this.verificationContactId
+        || !this.verificationOwnerUserId
         || input.contactId !== this.verificationContactId
         || input.phone !== this.verificationPhone
         || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(input.commandKey)) {
@@ -127,6 +135,7 @@ export class PgPortalSmsBindingService implements PortalSmsBindingService {
     try {
       const context = await this.#context(identity);
       if (!context) return failed('unauthenticated');
+      if (context.userId !== this.verificationOwnerUserId) return failed('forbidden');
       const id = await withTransaction(this.#dependencies.commandPool, context,
         async (client) => {
           const result = await client.query<IdRow>(
@@ -149,11 +158,13 @@ export class PgPortalSmsBindingService implements PortalSmsBindingService {
     identity: PortalCrmRequestIdentity,
     input: Readonly<{ challengeId: string; code: string }>,
   ): Promise<Readonly<{ ok: true; contactPointId: string | null }> | PortalSmsFailure> {
-    if (!this.verificationPhone || !UUID.test(input.challengeId)
+    if (!this.verificationPhone || !this.verificationOwnerUserId
+        || !UUID.test(input.challengeId)
         || !/^[0-9]{6}$/u.test(input.code)) return failed('validation');
     try {
       const context = await this.#context(identity);
       if (!context) return failed('unauthenticated');
+      if (context.userId !== this.verificationOwnerUserId) return failed('forbidden');
       const id = await withTransaction(this.#dependencies.commandPool, context,
         async (client) => {
           const result = await client.query<IdRow>(
@@ -421,6 +432,7 @@ export function createPgPortalSmsBindingService(input: Readonly<{
   workspaceId: string;
   verificationPhone?: string;
   verificationContactId?: string;
+  verificationOwnerUserId?: string;
 }>): PgPortalSmsBindingService {
   return new PgPortalSmsBindingService({
     principalResolver: createPgPortalCrmPrincipalResolver(input.webPool),
@@ -430,5 +442,6 @@ export function createPgPortalSmsBindingService(input: Readonly<{
     workspaceId: input.workspaceId,
     ...(input.verificationPhone ? { verificationPhone: input.verificationPhone } : {}),
     ...(input.verificationContactId ? { verificationContactId: input.verificationContactId } : {}),
+    ...(input.verificationOwnerUserId ? { verificationOwnerUserId: input.verificationOwnerUserId } : {}),
   });
 }

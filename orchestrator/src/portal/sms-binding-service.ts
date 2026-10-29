@@ -111,6 +111,7 @@ export interface PortalSmsBindingService {
   /** The sole founder-owned recipient admitted to the verification pilot. */
   readonly verificationPhone?: string;
   readonly verificationContactId?: string;
+  readonly verificationOwnerUserId?: string;
   requestPhoneVerification?(
     identity: PortalCrmRequestIdentity,
     input: Readonly<{ contactId: string; phone: string; commandKey: string }>,

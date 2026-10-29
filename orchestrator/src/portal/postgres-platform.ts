@@ -1044,6 +1044,9 @@ export async function buildPgPortalPlatform(
           ...(env.PROPERTY_PREDATOR_SMS_VERIFY_CONTACT_ID?.trim()
             ? { verificationContactId: env.PROPERTY_PREDATOR_SMS_VERIFY_CONTACT_ID.trim() }
             : {}),
+          ...(env.PROPERTY_PREDATOR_SMS_VERIFY_OWNER_USER_ID?.trim()
+            ? { verificationOwnerUserId: env.PROPERTY_PREDATOR_SMS_VERIFY_OWNER_USER_ID.trim() }
+            : {}),
         });
         smsReadinessPool = smsPool;
         pools.push(smsPool);

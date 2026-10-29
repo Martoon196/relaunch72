@@ -3217,8 +3217,10 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           },
           ownedSocialStagePrefill: ownedSocialCalendarPrefill(url.searchParams),
           smsCommandAvailable: Boolean(deps.smsBinding),
-          smsVerificationPhone: deps.smsBinding?.verificationPhone,
-          smsVerificationContactId: deps.smsBinding?.verificationContactId,
+          smsVerificationPhone: portalIdentity?.userId === deps.smsBinding?.verificationOwnerUserId
+            ? deps.smsBinding?.verificationPhone : undefined,
+          smsVerificationContactId: portalIdentity?.userId === deps.smsBinding?.verificationOwnerUserId
+            ? deps.smsBinding?.verificationContactId : undefined,
           smsVerificationChallengeId: CRM_OBJECT_ID.test(url.searchParams.get('challenge') ?? '')
             ? url.searchParams.get('challenge') ?? undefined : undefined,
           smsCommandKeys: {
