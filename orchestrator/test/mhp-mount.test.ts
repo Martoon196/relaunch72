@@ -8,6 +8,7 @@ import type { PostgresPortalDeps } from '../src/portal/router.js';
 import type { PortalCrmService } from '../src/portal/crm-service.js';
 import type { PortalSessionIdentity } from '../src/portal/auth-service.js';
 import { MhpCommerceError } from '../src/mhp/commerce-service.js';
+import { MARTIN_HOWARD_PROPERTY_PROFILE } from '../src/portal/product-profile.js';
 
 const HOST = 'app.martinhowardproperty.co.uk';
 const ORIGIN = `https://${HOST}`;
@@ -24,10 +25,11 @@ function response() {
   } as unknown as ServerResponse;
   return { captured, res };
 }
-function fixture(owner = true) {
+function fixture(owner = true, mhpProfile = false) {
   const calls: string[] = [];
   const portal: PostgresPortalDeps = {
     kind: 'postgres', secure: true, sessionSecret: SECRET, sessionCookieName: '__Host-mhp_session',
+    productProfile: mhpProfile ? MARTIN_HOWARD_PROPERTY_PROFILE : undefined,
     auth: { resolve: async token => token === TOKEN ? identity : null, login: async () => null, revoke: async () => {} },
     crm: {} as PortalCrmService,
     abuseHashSecret: 'different-mhp-mount-abuse-secret-with-32-characters',
@@ -59,6 +61,14 @@ function fixture(owner = true) {
   };
   return { calls, request };
 }
+
+test('MHP host serves the authenticated pipeline interaction script', async () => {
+  const f=fixture(true,true);
+  const result=await f.request('GET','/portal/mhp-crm.js');
+  assert.equal(result.status,200);
+  assert.match(result.body,/form\.requestSubmit\(submit\)/);
+  assert.equal((await f.request('GET','/portal/mhp-crm.js','',{cookie:'__Host-mhp_session=invalid'})).status,302);
+});
 
 test('MHP cookie is distinct, host-only and requires Secure even when rotated or cleared', () => {
   const cookie = portalCookie(TOKEN, true, undefined, '__Host-mhp_session');

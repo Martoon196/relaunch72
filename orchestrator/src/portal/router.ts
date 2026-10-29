@@ -2417,7 +2417,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       // Setup links use the trusted deployment origin, never the request Host.
       const view=p.includes('/mail/')||p.endsWith('/branding')||p.endsWith('/site')?'settings':p.endsWith('/access')||p.endsWith('/create')?'programme':url.searchParams.get('view')??'today';
       const site=current&&view==='settings'?await service.site(identity):undefined;
-      const mail=current&&view==='settings'?await deps.investorMail?.snapshot(identity):undefined;
+      const mhpBusiness=deps.productProfile?.id==='martin_howard_property';
+      const mail=current&&((!mhpBusiness&&view==='settings')||(mhpBusiness&&current.features?.emailWorkflow===true&&(view==='settings'||view==='today')))
+        ? await deps.investorMail?.snapshot(identity):undefined;
       return sendHtml(res,200,investorPage({programme,csrf:portalCsrfToken(deps.sessionSecret,sessionToken),email:portalIdentity.userEmail,crm,requirements,message,setupPath,view,site,mail,productProfile:deps.productProfile}),undefined,{'cache-control':'no-store','referrer-policy':'no-referrer'});
     } catch(error) {
       const failure=investorFailure(error);

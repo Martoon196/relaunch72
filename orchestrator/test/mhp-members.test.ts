@@ -80,6 +80,24 @@ test('MHP profile and feature navigation are request-local and preserve the exis
   assert.equal(resolvePortalProductProfile('martin_howard_property'),MARTIN_HOWARD_PROPERTY_PROFILE);
   assert.equal(PROPERTY_PREDATOR_GROWTH_PROFILE.productName,'PropertyPredator');
 });
+test('MHP Conversations menu is clickable only with the business email entitlement',()=>{
+  const noEmail=investorPage({programme,csrf:'csrf',email:business.ownerEmail});
+  assert.doesNotMatch(noEmail,/class="nav-item" href="\/portal\/investors\/email"/);
+  const member={...business,features:{...access,emailWorkflow:true,emailWritable:true}};
+  const yesEmail=investorPage({programme:{...programme,businesses:[member]},csrf:'csrf',email:business.ownerEmail});
+  assert.match(yesEmail,/class="nav-item" href="\/portal\/investors\/email"/);
+  assert.doesNotMatch(yesEmail,/Conversations<\/span><span class="module-state">Setup/);
+});
+test('MHP dashboard contains the connected mailbox and setup controls',()=>{
+  const member={...business,features:{...access,emailWorkflow:true,emailWritable:true}};
+  const connection:InvestorMailView={account:{provider:'smtp',address:'martin@propinvestuk.co.uk',status:'verified',version:1,verifiedAt:'2026-10-29T10:00:00Z',settings:{}},customAvailable:true,googleAvailable:false,microsoftAvailable:false,deliveryEnabled:true};
+  const html=investorPage({programme:{...programme,businesses:[member]},csrf:'csrf',email:business.ownerEmail,mail:connection});
+  assert.match(html,/id="iv-email-setup"/);
+  assert.match(html,/Email connected: <strong>martin@propinvestuk\.co\.uk<\/strong>/);
+  assert.match(html,/href="\/portal\/investors\/email">Open Conversations<\/a>/);
+  assert.match(html,/Manage your email connection/);
+  assert.match(html,/action="\/portal\/investors\/mail\/verify"/);
+});
 test('MHP pages use Your Desk, hide unentitled controls and render the refund read-only state',()=>{
   const html=investorPage({programme,csrf:'csrf',email:business.ownerEmail,view:'settings'});
   assert.match(html,/Your Desk/); assert.ok(!html.includes('Investor Desk')); assert.ok(!html.includes('action="/portal/investors/mail/save"'));

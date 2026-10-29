@@ -4,7 +4,7 @@
  * anchors) instead of pretending that client-side application state exists.
  */
 
-import { CORE_PLATFORM_MODULES, platformModules, type PlatformModuleId, type PlatformModuleManifest } from '../platform/modules.js';
+import { CORE_PLATFORM_MODULES, platformModules, type PlatformModuleId, type PlatformModuleManifest, type ResolvedPlatformModule } from '../platform/modules.js';
 import type { PlatformCapability } from '../platform/capabilities.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
 
@@ -251,19 +251,26 @@ export function appShell(opts: AppShellOptions): string {
     || (opts.active === 'affiliates' && id === 'affiliates')
     || (opts.active === 'inbox' && id === 'inbox')
     || (opts.active === 'billing' && id === 'settings');
+  // Investor pages add conversations.read only for an entitled business, and
+  // investorProfile includes inbox in visibleNavigation only for that business.
+  const entitledMhpInbox = (module: ResolvedPlatformModule): boolean =>
+    profile.id === 'martin_howard_property' && module.id === 'inbox'
+    && capabilities.has('conversations.read') && profile.visibleNavigation.includes('inbox');
+  const moduleLocked = (module: ResolvedPlatformModule): boolean =>
+    !entitledMhpInbox(module) && (module.state === 'setup_required' || module.state === 'unavailable');
   const workingNav = workingModules.map((module) => {
     const current = isCurrent(module.id);
-    const stateLabel = module.state === 'preview' ? 'Preview' : module.state === 'setup_required' ? 'Setup' : '';
+    const stateLabel = entitledMhpInbox(module) ? '' : module.state === 'preview' ? 'Preview' : moduleLocked(module) && module.state === 'setup_required' ? 'Setup' : '';
     const state = stateLabel ? `<span class="module-state">${escapeHtml(stateLabel)}</span>` : '';
-    if (module.state === 'setup_required' || module.state === 'unavailable') {
+    if (moduleLocked(module)) {
       return `<span class="nav-item nav-locked" role="link" aria-disabled="true" title="${escapeHtml(descriptiveModuleLabel(module))} is not connected in this workspace">${portalModuleIcon(module.id)}<span>${escapeHtml(moduleLabel(module))}</span>${state}</span>`;
     }
     return `<a class="nav-item" href="${escapeHtml(moduleRoute(module))}"${current ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}<span>${escapeHtml(moduleLabel(module))}</span>${state}</a>`;
   }).join('');
-  const quickWorking = quickModules.map((module) => module.state === 'setup_required' || module.state === 'unavailable'
+  const quickWorking = quickModules.map((module) => moduleLocked(module)
     ? `<span class="command-link locked" role="link" aria-disabled="true">${portalModuleIcon(module.id)}${escapeHtml(descriptiveModuleLabel(module))}<small>${icon('lock')}Setup</small></span>`
-    : `<a class="command-link" href="${escapeHtml(moduleRoute(module))}"${isCurrent(module.id) ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}${escapeHtml(descriptiveModuleLabel(module))}<small>${module.state === 'preview' ? 'Preview' : module.group}</small></a>`).join('');
-  const mobileModules = workingModules.filter((module) => module.state === 'ready' || module.state === 'preview');
+    : `<a class="command-link" href="${escapeHtml(moduleRoute(module))}"${isCurrent(module.id) ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}${escapeHtml(descriptiveModuleLabel(module))}<small>${module.state === 'preview' && !entitledMhpInbox(module) ? 'Preview' : module.group}</small></a>`).join('');
+  const mobileModules = workingModules.filter((module) => !moduleLocked(module));
   const mobileNav = mobileModules.map((module) => `<a href="${escapeHtml(moduleRoute(module))}"${isCurrent(module.id) ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}${escapeHtml(mobileLabel(module))}</a>`).join('');
   const csrfField = opts.csrfToken
     ? `<input type="hidden" name="_csrf" value="${escapeHtml(opts.csrfToken)}">`

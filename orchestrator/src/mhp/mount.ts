@@ -45,7 +45,7 @@ async function body(req: IncomingMessage, maximum: number): Promise<Buffer> {
   return Buffer.concat(parts, length);
 }
 function portalPath(path: string): boolean {
-  return path === '/portal' || path === '/portal/appearance.js'
+  return path === '/portal' || path === '/portal/appearance.js' || path === '/portal/mhp-crm.js'
     || path === '/portal/crm' || path.startsWith('/portal/crm/')
     || path === '/portal/investors' || path.startsWith('/portal/investors/')
     || path === '/portal/leadrelay' || path.startsWith('/portal/leadrelay/')
