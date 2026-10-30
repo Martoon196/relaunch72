@@ -1,9 +1,9 @@
 type MhpCrmSection = 'contacts' | 'pipeline' | 'tasks';
 
 /** Keep the shared CRM actions and records, with a readable MHP working surface. */
-export function renderMhpCrmBody(body: string, active: MhpCrmSection, conversationsAvailable = false): string {
+export function renderMhpCrmBody(body: string, active: MhpCrmSection, conversationsAvailable = false, marketingWorkspace = false): string {
   const links: readonly [string, string, MhpCrmSection | 'conversations'][] = [
-    ['Investors', '/portal/crm/contacts', 'contacts'],
+    [marketingWorkspace ? 'Enquiries' : 'Investors', '/portal/crm/contacts', 'contacts'],
     ['Pipeline', '/portal/crm/opportunities', 'pipeline'],
     ['Follow-ups', '/portal/crm/tasks', 'tasks'],
     ['Conversations', '/portal/investors/email', 'conversations'],
@@ -32,10 +32,12 @@ export function renderMhpCrmBody(body: string, active: MhpCrmSection, conversati
     .mhp-crm .crm-task{padding:16px}.mhp-crm .crm-notice p,.mhp-crm .crm-empty strong,.mhp-crm .crm-legend{font-size:16px}
     .mhp-crm .mhp-investor-card{cursor:pointer}.mhp-crm .mhp-investor-card:focus-visible{outline:3px solid #83510c;outline-offset:3px}
     .mhp-crm .mhp-investor-card[draggable="true"]{cursor:grab}.mhp-crm .mhp-investor-card.mhp-dragging{opacity:.55;cursor:grabbing}
+    .mhp-crm .mhp-marketing-card{cursor:pointer}.mhp-crm .mhp-marketing-card:focus-visible{outline:3px solid #83510c;outline-offset:3px}
+    .mhp-crm .mhp-marketing-card[draggable="true"]{cursor:grab}.mhp-crm .mhp-marketing-card.mhp-dragging{opacity:.55;cursor:grabbing}
     .mhp-crm .crm-stage-column.mhp-drop-target{outline:3px solid #E8A33D;outline-offset:-3px;background:#fff4df}
     .mhp-crm .mhp-card-actions{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px}
     .mhp-crm .mhp-card-actions a{display:inline-flex;align-items:center;min-height:42px;padding:8px 10px;border:1px solid #b9c5b8;border-radius:8px;background:#fff;color:#142019;font-size:14px;font-weight:700;text-decoration:none}
     .mhp-crm .mhp-card-actions a:hover{background:#fff2dc}.mhp-crm .crm-meta-item:last-child:nth-child(3){grid-column:1/-1}
     @media(max-width:640px){.mhp-crm .crm-board{grid-auto-columns:minmax(285px,88vw)}.mhp-crm .crm-table td::before{font-size:13px}.mhp-crm-nav a{flex:1 1 140px;justify-content:center}}
-  </style><div class="mhp-crm"><nav class="mhp-crm-nav" aria-label="Your Desk CRM">${links.filter(([, , section]) => section !== 'conversations' || conversationsAvailable).map(([label, href, section]) => `<a href="${href}"${active === section ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>${body}</div>${active === 'pipeline' ? '<script defer src="/portal/mhp-crm.js"></script>' : ''}`;
+  </style><div class="mhp-crm"><nav class="mhp-crm-nav" aria-label="${marketingWorkspace ? 'MHP marketing CRM' : 'Your Desk CRM'}">${links.filter(([, , section]) => section !== 'conversations' || (conversationsAvailable && !marketingWorkspace)).map(([label, href, section]) => `<a href="${href}"${active === section ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>${body}</div>${active === 'pipeline' ? '<script defer src="/portal/mhp-crm.js"></script>' : ''}`;
 }

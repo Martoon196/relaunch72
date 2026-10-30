@@ -4,13 +4,14 @@ export const MHP_CRM_CLIENT_SOURCE = `(() => {
   if (!board) return;
   const interactive = target => target instanceof Element && !!target.closest('a,button,input,select,textarea,label,form');
   const editable = target => target instanceof Element && !!target.closest('button,input,select,textarea,label,form');
-  const cardFor = target => target instanceof Element ? target.closest('.mhp-investor-card') : null;
+  const cardSelector = '.mhp-investor-card,.mhp-marketing-card';
+  const cardFor = target => target instanceof Element ? target.closest(cardSelector) : null;
   board.addEventListener('click', event => {
     const card = cardFor(event.target);
     if (card && !interactive(event.target) && card.dataset.contactHref) location.assign(card.dataset.contactHref);
   });
   board.addEventListener('keydown', event => {
-    if ((event.key === 'Enter' || event.key === ' ') && event.target instanceof Element && event.target.matches('.mhp-investor-card')) {
+    if ((event.key === 'Enter' || event.key === ' ') && event.target instanceof Element && event.target.matches(cardSelector)) {
       event.preventDefault();
       if (event.target.dataset.contactHref) location.assign(event.target.dataset.contactHref);
     }

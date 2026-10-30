@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import { InvestorError, InvestorService, investorUuid, type InvestorProgramme } from '../portal/investor-service.js';
 import type { PortalCrmRequestIdentity } from '../portal/crm-service.js';
 import type { PublicInvestorSite } from '../portal/investor-site.js';
+import { MHP_MARKETING_WORKSPACE_ID } from './marketing-workspace-service.js';
 
 export interface MhpMemberAccess {
   userId: string;
@@ -15,8 +16,9 @@ export interface MhpMemberAccess {
   leadrelay: boolean;
   readOnly: boolean;
   endsAt: string | null;
+  marketingWorkspace?: boolean;
 }
-export type MhpMemberRouteDecision = { allowed: true } | { allowed: false; status: 403 | 404; message: string };
+export type MhpMemberRouteDecision = { allowed: true; workspacePresentation?: 'mhp_marketing' } | { allowed: false; status: 403 | 404; message: string };
 const hash = (value: string): Buffer => createHash('sha256').update(value).digest();
 const validOpaqueToken = /^[A-Za-z0-9_-]{43}$/;
 const uuid = '[0-9a-fA-F-]{36}';
@@ -29,6 +31,13 @@ export function authorizeMhpMemberRoute(access: MhpMemberAccess, request: { meth
   if ((path === '/portal/logout' && method === 'POST')
       || path === '/app/account' || path.startsWith('/app/account/')) return { allowed: true };
   if (!['GET', 'HEAD', 'POST'].includes(method)) return deny('Use the controls in Your Desk.', 404);
+  if (access.marketingWorkspace === true) {
+    if (!access.isAdmin || !access.crm || access.readOnly) return deny('Owner marketing access is required.');
+    return path === '/portal' || crmRoute.test(path)
+      || (path === '/portal/mhp-crm.js' && (method === 'GET' || method === 'HEAD'))
+      ? { allowed: true, workspacePresentation: 'mhp_marketing' }
+      : deny('Return to your personal Desk to use investor tools.', 404);
+  }
   const isLeadRelay = path === '/portal/leadrelay' || path.startsWith('/portal/leadrelay/')
     || path === '/portal/api/leadrelay' || path.startsWith('/portal/api/leadrelay/');
   const isEmail = path === '/portal/investors/email' || path.startsWith('/portal/investors/email/')
@@ -68,6 +77,10 @@ export class PgMhpMemberService {
     }
     if (access.endsAt !== null && (typeof access.endsAt !== 'string' || !Number.isFinite(Date.parse(access.endsAt)))) {
       throw new InvestorError(503, 'Membership information is temporarily unavailable.');
+    }
+    if ((access.marketingWorkspace !== undefined && typeof access.marketingWorkspace !== 'boolean')
+        || (access.marketingWorkspace === true && access.workspaceId !== MHP_MARKETING_WORKSPACE_ID)) {
+      throw new InvestorError(503, 'Workspace information is temporarily unavailable.');
     }
     return Object.freeze({ ...access });
   }
