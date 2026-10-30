@@ -924,6 +924,7 @@ async function main(): Promise<void> {
         };
         mhp = createMhpMount({
           portal: mhpPortal, commerce: runtime.commerce, hq: runtime.hq, desk: runtime.desk,
+          marketingWorkspace: runtime.marketingWorkspace,
           growth: { growth: runtime.growth, learning: runtime.learning, unsubscribeSecret: cfg.sessionSecret,
             marketingMode: runtime.marketing?.mode ?? 'off' },
           authMount: createMhpAuthMount({

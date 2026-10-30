@@ -127,6 +127,7 @@ const migration120Url = new URL('../../src/db/migrations/0120_mhp_deal_desk_cred
 const migration121Url = new URL('../../src/db/migrations/0121_mhp_prospects_learning.sql', import.meta.url);
 const migration122Url = new URL('../../src/db/migrations/0122_property_predator_sms_phone_verification.sql', import.meta.url);
 const migration123Url = new URL('../../src/db/migrations/0123_sms_phone_receipt_trigger_acl.sql', import.meta.url);
+const migration124Url = new URL('../../src/db/migrations/0124_mhp_brand_marketing_workspace.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -686,6 +687,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: '0121_mhp_prospects_learning.sql', version: 121 },
     { filename: '0122_property_predator_sms_phone_verification.sql', version: 122 },
     { filename: '0123_sms_phone_receipt_trigger_acl.sql', version: 123 },
+    { filename: '0124_mhp_brand_marketing_workspace.sql', version: 124 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -805,6 +807,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration121Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration122Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration123Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration124Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.

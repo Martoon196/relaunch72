@@ -14,6 +14,7 @@ import { PgMhpHqService } from './hq-service.js';
 import { PgMhpDeskService } from './desk-service.js';
 import { PgMhpGrowthService, mhpWebinarConfig } from './growth-service.js';
 import { PgMhpLearningService } from './learning-service.js';
+import { PgMhpMarketingWorkspaceService } from './marketing-workspace-service.js';
 import { mhpMarketingConfig, type MhpMarketingConfig } from './marketing-mail.js';
 
 export interface MhpRuntime {
@@ -27,6 +28,7 @@ export interface MhpRuntime {
   desk: PgMhpDeskService;
   growth: PgMhpGrowthService;
   learning: PgMhpLearningService;
+  marketingWorkspace: PgMhpMarketingWorkspaceService;
   marketing: MhpMarketingConfig | null;
   readiness(): Promise<readonly string[]>;
 }
@@ -87,6 +89,7 @@ export async function buildMhpRuntime(input: {
     desk: new PgMhpDeskService(webPool, identityPool),
     growth: new PgMhpGrowthService(webPool, identityPool, webinar),
     learning: new PgMhpLearningService(webPool, identityPool),
+    marketingWorkspace: new PgMhpMarketingWorkspaceService(webPool, identityPool),
     marketing,
     async readiness(): Promise<readonly string[]> {
       const blockers: string[] = [];

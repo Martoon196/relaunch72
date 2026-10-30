@@ -45,6 +45,8 @@ import { renderLead360Body } from './lead-360-view.js';
 import { renderMhpContactBody } from '../mhp/contact-view.js';
 import { renderMhpCrmBody } from '../mhp/crm-view.js';
 import { MHP_CRM_CLIENT_SOURCE } from '../mhp/crm-client.js';
+import { MHP_MARKETING_WORKSPACE_PROFILE } from './product-profile.js';
+import { marketingReturnControl } from '../mhp/marketing-workspace-view.js';
 import type { PortalFinanceDraftsService } from './finance-drafts-service.js';
 import { planningFromForm } from './finance-drafts-service.js';
 import { FIELDS, FinanceError } from '../integrations/mh196/planning-client.js';
@@ -459,7 +461,7 @@ interface PortalCommonDeps {
     identity: PortalSessionIdentity;
     path: string;
     method: string;
-  }) => Promise<{ allowed: true } | { allowed: false; status: 403 | 404; message: string; redirect?: '/app/account' }>;
+  }) => Promise<{ allowed: true; workspacePresentation?: 'mhp_marketing' } | { allowed: false; status: 403 | 404; message: string; redirect?: '/app/account' }>;
   /** Deployment-owned presentation. It never grants permissions or provider readiness. */
   productProfile?: PortalProductProfile;
   /** Trusted deployment origin for private account setup links. */
@@ -895,7 +897,9 @@ function crmPage(
     crmAvailable: true,
     mode: 'crm',
     csrfToken,
-    body,
+    body: deps.productProfile?.marketingWorkspace
+      ? `<section aria-label="MHP marketing workspace" style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-bottom:24px"><div><strong>Martin Howard Property · Marketing</strong><p>Brand enquiries and follow-ups · <a href="/hq/growth">Webinar status</a></p></div>${marketingReturnControl(csrfToken, randomUUID())}</section>${body}`
+      : body,
   });
 }
 
@@ -2299,6 +2303,12 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         title: 'Your Desk access', message: access.message, backHref: '/app/account', backLabel: 'Your membership',
       }), undefined, { 'cache-control': 'no-store' });
     }
+    if (access.workspacePresentation === 'mhp_marketing'
+        && deps.productProfile?.id === 'martin_howard_property') {
+      // A request-local presentation copy; authority remains the actual selected session.
+      deps = { ...deps, productProfile: MHP_MARKETING_WORKSPACE_PROFILE };
+      if (p === '/portal' && method === 'GET') return redirect(res, CRM_PORTAL_ROUTES.pipeline);
+    }
   }
 
   // Canonical setup identity has an API 401 boundary rather than an HTML login
@@ -2317,7 +2327,8 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
 
   // Presentation is request-local. Never mutate a shared deployment profile or
   // accept a tenant/brand from the browser; the session chooses its workspace.
-  if (deps.kind === 'postgres' && deps.investors && portalIdentity && (method === 'GET' || method === 'POST') && !p.startsWith('/portal/api/')) {
+  if (deps.kind === 'postgres' && deps.investors && portalIdentity && !deps.productProfile?.marketingWorkspace
+      && (method === 'GET' || method === 'POST') && !p.startsWith('/portal/api/')) {
     try {
       const programme = await deps.investors.snapshot(crmIdentity(sessionToken,deps));
       const business = programme.businesses.find(b=>b.workspaceId===programme.selectedWorkspaceId);
@@ -6997,7 +7008,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         })()
         : null;
       const body = deps.productProfile?.id === 'martin_howard_property'
-        ? renderMhpContactBody(caseFile)
+        ? renderMhpContactBody(caseFile, deps.productProfile.marketingWorkspace === true)
         : `<nav aria-label="Lead 360 breadcrumb" style="margin-bottom:14px"><a class="button secondary compact" href="${CRM_PORTAL_ROUTES.contacts}">← All contacts</a></nav>${renderLead360Body(caseFile, {
         // The legacy JSON portal has no permission boundary, so the panel
         // renders its honest "not composed" state there rather than a form
@@ -7090,8 +7101,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
       const notice = crmNoticeFromQuery(url.searchParams, deps.sessionSecret, sessionToken);
       const mhpCrm = deps.productProfile?.id === 'martin_howard_property';
-      const mhpPipeline = mhpCrm && p === CRM_PORTAL_ROUTES.pipeline;
-      const mhpInvestors = deps.kind === 'postgres' ? deps.investors : undefined;
+      const mhpMarketing = deps.productProfile?.marketingWorkspace === true;
+      const mhpPipeline = mhpCrm && !mhpMarketing && p === CRM_PORTAL_ROUTES.pipeline;
+      const mhpInvestors = deps.kind === 'postgres' && !mhpMarketing ? deps.investors : undefined;
       const programme = mhpCrm && mhpInvestors ? await mhpInvestors.snapshot(identity).catch(() => null) : null;
       const currentBusiness = programme?.businesses.find(business => business.workspaceId === programme.selectedWorkspaceId);
       const conversationsAvailable = currentBusiness?.features?.emailWorkflow === true;
@@ -7102,14 +7114,14 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       const body = p === CRM_PORTAL_ROUTES.contacts
         ? renderCrmContactsBody(snapshot, { csrfToken, createLeadCommandKey: randomUUID(), notice })
         : p === CRM_PORTAL_ROUTES.pipeline
-          ? renderCrmPipelineBody(snapshot, { csrfToken, notice, financeAvailable: deps.kind === 'postgres' && Boolean(deps.financeDrafts), mhpInvestorCards: mhpPipeline, investorDetails, conversationsAvailable })
+          ? renderCrmPipelineBody(snapshot, { csrfToken, notice, financeAvailable: deps.kind === 'postgres' && Boolean(deps.financeDrafts), mhpInvestorCards: mhpPipeline, mhpMarketingCards: mhpMarketing, investorDetails, conversationsAvailable })
           : renderCrmTasksBody(snapshot, {
             csrfToken,
             notice,
             filter: readRequest.section === 'tasks' ? readRequest.filter : 'open',
           });
       const renderedBody = mhpCrm
-        ? renderMhpCrmBody(body, p === CRM_PORTAL_ROUTES.contacts ? 'contacts' : p === CRM_PORTAL_ROUTES.pipeline ? 'pipeline' : 'tasks', conversationsAvailable)
+        ? renderMhpCrmBody(body, p === CRM_PORTAL_ROUTES.contacts ? 'contacts' : p === CRM_PORTAL_ROUTES.pipeline ? 'pipeline' : 'tasks', conversationsAvailable, mhpMarketing)
         : body;
       return sendHtml(res, 200, crmPage(snapshot, renderedBody, deps, csrfToken));
     } catch (error) {

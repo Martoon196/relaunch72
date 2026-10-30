@@ -178,7 +178,6 @@ test('approved 0121 cannot hide a missing or changed 0120 ledger row', async () 
 
 test('121 release takes the strict bundled migration path', async () => {
   const allMigrations = await discoverMigrations();
-  assert.equal(allMigrations.length, 123);
   const migrations = allMigrations.slice(0, 122);
   assert.equal(migrations.length, 122);
   assert.equal(migrations[120]?.filename, approvedMhpGrowth.filename);
@@ -201,25 +200,87 @@ test('121 release takes the strict bundled migration path', async () => {
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
     ...rows, { ...approvedSmsPhone, checksum: '0'.repeat(64) },
   ]), directory), /migration not present in this release/);
+  const previousRelease = await marketingBridge();
   await assert.doesNotReject(assertRuntimeSchemaCurrent(
-    runtimePool(migrations.map(({ filename, checksum }) => ({ filename, checksum })))));
+    runtimePool(migrations.map(({ filename, checksum }) => ({ filename, checksum }))), previousRelease.directory));
   await assert.rejects(assertRuntimeSchemaCurrent(
-    runtimePool(rows)), /schema is behind by 2 migration/);
+    runtimePool(rows), previousRelease.directory), /schema is behind by 2 migration/);
 });
 
 test('123 ACL repair accepts exact 122 cutover and requires the eventual exact ledger', async () => {
-  const migrations = await discoverMigrations();
-  const rows = migrations.map(({ filename, checksum }) => ({ filename, checksum }));
+  const { rows, directory } = await marketingBridge();
   assert.equal(rows.length, 123);
   assert.deepEqual(rows[122], {
     filename: '0123_sms_phone_receipt_trigger_acl.sql',
     checksum: '094d3118a85131c099749ecd000c4c4b9141ea6ba00e8c643190fa5cf5a1554d',
   });
-  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 122))));
-  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 122)), directory));
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows), directory));
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
     ...rows.slice(0, 122), { ...rows[122]!, checksum: '0'.repeat(64) },
-  ])), /checksum changed/);
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 121))),
+  ]), directory), /checksum changed/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 121)), directory),
     /schema is behind by 2 migration/);
+});
+
+const approvedMarketing = {
+  filename: '0124_mhp_brand_marketing_workspace.sql',
+  checksum: '6d17547dc37070b736f23e2a7906dc40739b66c50de262eacdbe9ace7e011209',
+};
+let marketingFixture: Promise<{ directory: string; rows: Array<{ filename: string; checksum: string }> }> | undefined;
+function marketingBridge() {
+  return marketingFixture ??= (async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-mhp-marketing-compat-'));
+    const prefix = (await discoverMigrations()).slice(0, 123);
+    assert.equal(prefix.length, 123);
+    await Promise.all(prefix.map(migration => writeFile(path.join(directory, migration.filename), migration.sql, 'utf8')));
+    return { directory, rows: prefix.map(({ filename, checksum }) => ({ filename, checksum })) };
+  })();
+}
+
+test('123 marketing bridge accepts exact123 and only the approved124 ledger', async () => {
+  const { directory, rows } = await marketingBridge();
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows), directory));
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool([...rows, approvedMarketing]), directory));
+});
+
+test('123 marketing bridge rejects wrong124 checksum, duplicate124 and unknown125', async () => {
+  const { directory, rows } = await marketingBridge();
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows,
+    { ...approvedMarketing, checksum: '0'.repeat(64) }]), directory), /migration not present in this release/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, approvedMarketing, approvedMarketing]), directory), /invalid runtime migration ledger/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, approvedMarketing,
+    { filename: '0125_unknown.sql', checksum: 'a'.repeat(64) }]), directory), /migration not present in this release/);
+});
+
+test('marketing124 cannot hide a missing123, changed prefix or non-contiguous ledger', async () => {
+  const { directory, rows } = await marketingBridge();
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(0, 122), approvedMarketing]), directory), /migration not present in this release/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
+    { ...rows[0]!, checksum: '0'.repeat(64) }, ...rows.slice(1), approvedMarketing]), directory), /checksum changed/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(1), approvedMarketing]), directory), /not a contiguous prefix/);
+});
+
+test('marketing bridge requires the exact bundled123 tail and is unavailable to other releases', async () => {
+  const { rows } = await marketingBridge();
+  const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-marketing-wrong-tail-'));
+  const prefix = (await discoverMigrations()).slice(0, 123);
+  await Promise.all(prefix.map(migration => writeFile(path.join(directory, migration.filename),
+    migration.version === 123 ? 'SELECT 123;\n' : migration.sql, 'utf8')));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, approvedMarketing]), directory), /checksum changed|migration not present/);
+  const unrelated = await fixtureDirectory();
+  const unrelatedRows = (await discoverMigrations(unrelated)).map(({ filename, checksum }) => ({ filename, checksum }));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...unrelatedRows, approvedMarketing]), unrelated), /migration not present/);
+});
+
+test('final124 application strictly requires its exact bundled124 and all earlier migrations', async () => {
+  const migrations = await discoverMigrations();
+  const rows = migrations.map(({ filename, checksum }) => ({ filename, checksum }));
+  assert.equal(rows.length, 124);
+  assert.deepEqual(rows[123], approvedMarketing);
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 123))), /schema is behind by 1 migration/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 122))), /schema is behind by 2 migration/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
+    ...rows.slice(0, 123), { ...approvedMarketing, checksum: '0'.repeat(64) }])), /checksum changed/);
 });

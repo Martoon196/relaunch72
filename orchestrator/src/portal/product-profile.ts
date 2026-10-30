@@ -52,6 +52,8 @@ export interface PortalProductProfile {
   productName: string;
   /** Selected canonical investor workspace presentation, never authority. */
   investorWorkspace?: boolean;
+  /** Selected canonical owner brand workspace; presentation only. */
+  marketingWorkspace?: boolean;
   compactMark: string;
   suiteLabel: string;
   home: {
@@ -296,6 +298,14 @@ export const MARTIN_HOWARD_PROPERTY_PROFILE = createProfile({
   moduleLabels: { investors: 'Your Desk', crm: 'Investors', inbox: 'Conversations', leadrelay: 'Your AI team' },
   journeyBlueprints: [],
   readinessRails: [],
+});
+
+export const MHP_MARKETING_WORKSPACE_PROFILE = createProfile({
+  ...MARTIN_HOWARD_PROPERTY_PROFILE,
+  suiteLabel: 'MHP marketing', investorWorkspace: false, marketingWorkspace: true,
+  home: { eyebrow: 'MHP brand workspace', title: 'Enquiries and follow-ups',
+    summary: 'Manage brand enquiries, relationships and the next follow-up.' },
+  visibleNavigation: ['crm'], moduleLabels: { crm: 'Enquiries' },
 });
 
 const PROFILES: Readonly<Record<PortalProductProfileId, PortalProductProfile>> = Object.freeze({

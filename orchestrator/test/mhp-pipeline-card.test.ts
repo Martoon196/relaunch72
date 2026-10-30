@@ -42,6 +42,15 @@ test('shared CRM remains form-driven and shows its original owner tile',()=>{
   assert.match(html,/there is no pretend drag and drop/);
 });
 
+test('marketing cards hide member finance controls while eligible shared CRM cards retain them',()=>{
+  const options={csrfToken:'csrf-test',financeAvailable:true};
+  const marketing=renderCrmPipelineBody(snapshot,{...options,mhpMarketingCards:true});
+  assert.doesNotMatch(marketing,/Indicative finance|href="\/portal\/crm\/opportunities\/[^\"]+\/finance"/);
+  assert.match(marketing,/data-opportunity-id=/);
+  const shared=renderCrmPipelineBody(snapshot,options);
+  assert.match(shared,/href="\/portal\/crm\/opportunities\/41111111-1111-4111-8111-111111111111\/finance">Indicative finance/);
+});
+
 test('MHP client script is valid and submits the existing stage form',()=>{
   assert.doesNotThrow(()=>new Script(MHP_CRM_CLIENT_SOURCE));
   assert.match(MHP_CRM_CLIENT_SOURCE,/form\.requestSubmit\(submit\)/);

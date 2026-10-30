@@ -153,6 +153,7 @@ export interface PipelinePageOptions extends CrmMutationContext {
   financeAvailable?: boolean;
   notice?: CrmNotice;
   mhpInvestorCards?: boolean;
+  mhpMarketingCards?: boolean;
   conversationsAvailable?: boolean;
   investorDetails?: Readonly<Record<string,{capital:string;interests:string}>>;
 }
@@ -486,7 +487,7 @@ function opportunityMoveForm(opportunity: CrmOpportunityView, stages: readonly C
   </form><p class="crm-card-note">Saves the CRM stage and activity only · no contact is notified.</p>`;
 }
 
-function pipelineBoard(snapshot: CrmWorkspaceSnapshot, csrfToken: string, financeAvailable = false, mhpInvestorCards = false, investorDetails: Readonly<Record<string,{capital:string;interests:string}>> = {}, conversationsAvailable = false): string {
+function pipelineBoard(snapshot: CrmWorkspaceSnapshot, csrfToken: string, financeAvailable = false, mhpInvestorCards = false, investorDetails: Readonly<Record<string,{capital:string;interests:string}>> = {}, conversationsAvailable = false, mhpMarketingCards = false): string {
   const stages = [...snapshot.stages].sort((left, right) => left.position - right.position);
   if (stages.length === 0) {
     const message = snapshot.workspace.canWrite
@@ -501,19 +502,19 @@ function pipelineBoard(snapshot: CrmWorkspaceSnapshot, csrfToken: string, financ
       ? '<p class="crm-stage-empty">No opportunities in this stage.</p>'
       : opportunities.map((opportunity) => {
         const index = cardIndex++;
-        return opportunityCardWithToken(opportunity, stages, snapshot, csrfToken, index, financeAvailable, mhpInvestorCards, investorDetails[opportunity.contactId], conversationsAvailable);
+        return opportunityCardWithToken(opportunity, stages, snapshot, csrfToken, index, financeAvailable, mhpInvestorCards, investorDetails[opportunity.contactId], conversationsAvailable, mhpMarketingCards);
       }).join('');
-    return `<section class="crm-stage-column crm-stage-tone-${stageIndex % 6}"${mhpInvestorCards ? ` data-stage-id="${escapeHtml(stage.id)}"` : ''} aria-labelledby="crm-stage-${stageIndex}-title"><div class="crm-stage-head"><h2 id="crm-stage-${stageIndex}-title">${escapeHtml(stage.name)}</h2><span class="crm-stage-total" aria-label="${count(opportunities.length)} opportunities shown on this page">${count(opportunities.length)}</span></div><div class="crm-stage-cards">${cards}</div></section>`;
+    return `<section class="crm-stage-column crm-stage-tone-${stageIndex % 6}"${mhpInvestorCards || mhpMarketingCards ? ` data-stage-id="${escapeHtml(stage.id)}"` : ''} aria-labelledby="crm-stage-${stageIndex}-title"><div class="crm-stage-head"><h2 id="crm-stage-${stageIndex}-title">${escapeHtml(stage.name)}</h2><span class="crm-stage-total" aria-label="${count(opportunities.length)} opportunities shown on this page">${count(opportunities.length)}</span></div><div class="crm-stage-cards">${cards}</div></section>`;
   });
   const orphaned = snapshot.opportunities.filter((opportunity) => !stages.some((stage) => stage.id === opportunity.stageId));
   if (orphaned.length > 0) {
-    const cards = orphaned.map((opportunity) => opportunityCardWithToken(opportunity, stages, snapshot, csrfToken, cardIndex++, financeAvailable, mhpInvestorCards, investorDetails[opportunity.contactId], conversationsAvailable)).join('');
+    const cards = orphaned.map((opportunity) => opportunityCardWithToken(opportunity, stages, snapshot, csrfToken, cardIndex++, financeAvailable, mhpInvestorCards, investorDetails[opportunity.contactId], conversationsAvailable, mhpMarketingCards)).join('');
     columns.push(`<section class="crm-stage-column crm-stage-tone-4" aria-labelledby="crm-stage-needs-review"><div class="crm-stage-head"><h2 id="crm-stage-needs-review">Stage needs review</h2><span class="crm-stage-total">${count(orphaned.length)}</span></div><p class="crm-card-note">These records reference a stage that is no longer available. Move each one to a saved stage.</p><div class="crm-stage-cards">${cards}</div></section>`);
   }
   return `<div class="crm-board" role="region" tabindex="0" aria-label="Opportunity stages" aria-describedby="crm-board-keyboard-help">${columns.join('')}</div>`;
 }
 
-function opportunityCardWithToken(opportunity: CrmOpportunityView, stages: readonly CrmStageView[], snapshot: CrmWorkspaceSnapshot, csrfToken: string, index: number, financeAvailable = false, mhpInvestorCard = false, investorDetail?: {capital:string;interests:string}, conversationsAvailable = false): string {
+function opportunityCardWithToken(opportunity: CrmOpportunityView, stages: readonly CrmStageView[], snapshot: CrmWorkspaceSnapshot, csrfToken: string, index: number, financeAvailable = false, mhpInvestorCard = false, investorDetail?: {capital:string;interests:string}, conversationsAvailable = false, mhpMarketingCard = false): string {
   const nextTask = opportunity.nextTaskAt
     ? `${isOverdue(opportunity.nextTaskAt, snapshot.workspace.snapshotAt) ? '<span class="crm-visually-hidden">Overdue: </span>' : ''}${dateTime(opportunity.nextTaskAt, snapshot.workspace.timezone)}`
     : 'No next task';
@@ -526,12 +527,12 @@ function opportunityCardWithToken(opportunity: CrmOpportunityView, stages: reado
       <div class="crm-meta-item"><span>Next follow-up</span><strong>${nextTask}</strong></div>
     </div><nav class="mhp-card-actions" aria-label="${escapeHtml(opportunity.contactName)} actions"><a href="/portal/investors?contact=${encodeURIComponent(opportunity.contactId)}">Edit investor details</a>${conversationsAvailable ? `<a href="/portal/investors/email?contact=${encodeURIComponent(opportunity.contactId)}#compose">Conversation →</a>` : ''}</nav>${opportunityMoveForm(opportunity, stages, csrfToken, index, snapshot.workspace.canWrite)}</article>`;
   }
-  return `<article class="crm-opportunity" aria-labelledby="crm-opportunity-${index}-title"><h3 id="crm-opportunity-${index}-title">${escapeHtml(opportunity.title)}</h3><p class="crm-opportunity-contact"><a class="crm-contact-name" href="${contactHref}">${escapeHtml(opportunity.contactName)}</a>${opportunity.companyName ? ` · ${escapeHtml(opportunity.companyName)}` : ''}</p><div class="crm-opportunity-meta">
+  return `<article class="crm-opportunity${mhpMarketingCard ? ' mhp-marketing-card' : ''}"${mhpMarketingCard ? ` data-opportunity-id="${escapeHtml(opportunity.id)}" data-contact-href="${contactHref}"${snapshot.workspace.canWrite ? ' draggable="true"' : ''} tabindex="0" aria-label="Open ${escapeHtml(opportunity.contactName)} contact record"` : ''} aria-labelledby="crm-opportunity-${index}-title"><h3 id="crm-opportunity-${index}-title">${escapeHtml(opportunity.title)}</h3><p class="crm-opportunity-contact"><a class="crm-contact-name" href="${contactHref}">${escapeHtml(opportunity.contactName)}</a>${opportunity.companyName ? ` · ${escapeHtml(opportunity.companyName)}` : ''}</p><div class="crm-opportunity-meta">
     <div class="crm-meta-item"><span>Value</span><strong>${escapeHtml(formatMoney(opportunity.valueMinor, opportunity.currency))}</strong></div>
     <div class="crm-meta-item"><span>Owner</span><strong>${escapeHtml(opportunity.ownerName?.trim() || 'Unassigned')}</strong></div>
     <div class="crm-meta-item"><span>Expected close</span><strong>${calendarDate(opportunity.expectedCloseDate)}</strong></div>
     <div class="crm-meta-item"><span>Next task</span><strong>${nextTask}</strong></div>
-  </div>${financeAvailable && snapshot.workspace.canWrite ? `<p><a class="button secondary compact" href="/portal/crm/opportunities/${encodeURIComponent(opportunity.id)}/finance">Indicative finance</a></p>` : ''}${opportunityMoveForm(opportunity, stages, csrfToken, index, snapshot.workspace.canWrite)}</article>`;
+  </div>${financeAvailable && snapshot.workspace.canWrite && !mhpMarketingCard ? `<p><a class="button secondary compact" href="/portal/crm/opportunities/${encodeURIComponent(opportunity.id)}/finance">Indicative finance</a></p>` : ''}${opportunityMoveForm(opportunity, stages, csrfToken, index, snapshot.workspace.canWrite)}</article>`;
 }
 
 /** Renders the accessible, form-driven Opportunity pipeline body fragment. */
@@ -544,7 +545,7 @@ export function renderCrmPipelineBody(snapshot: CrmWorkspaceSnapshot, options: P
     ${pageHeading(snapshot.workspace, 'pipeline', 'Opportunity pipeline', 'Move saved opportunities through the pipeline with explicit, reviewable form submissions.')}
     ${crmNav('pipeline')}
     ${notice(options.notice)}
-    <section class="crm-panel" aria-labelledby="crm-board-title"><div class="crm-panel-head crm-board-intro"><div><h2 id="crm-board-title">Pipeline board</h2><p>${pipelineSummary}</p></div><p class="crm-board-help" id="crm-board-keyboard-help">${options.mhpInvestorCards ? 'Drag a card to another stage, or use its Move to form. The change is saved only after the server confirms it.' : 'Swipe horizontally, or focus the board and use arrow keys, to move between stages. Use the labelled “Move to” form on a card to save a change; there is no pretend drag and drop.'}</p></div><div class="crm-panel-body">${pipelineBoard(snapshot, options.csrfToken, options.financeAvailable, options.mhpInvestorCards, options.investorDetails, options.conversationsAvailable)}${collectionPagination(pipelinePage, CRM_PORTAL_ROUTES.pipeline)}</div></section>
+    <section class="crm-panel" aria-labelledby="crm-board-title"><div class="crm-panel-head crm-board-intro"><div><h2 id="crm-board-title">Pipeline board</h2><p>${pipelineSummary}</p></div><p class="crm-board-help" id="crm-board-keyboard-help">${options.mhpInvestorCards || options.mhpMarketingCards ? 'Drag a card to another stage, or use its Move to form. The change is saved only after the server confirms it.' : 'Swipe horizontally, or focus the board and use arrow keys, to move between stages. Use the labelled “Move to” form on a card to save a change; there is no pretend drag and drop.'}</p></div><div class="crm-panel-body">${pipelineBoard(snapshot, options.csrfToken, options.financeAvailable, options.mhpInvestorCards, options.investorDetails, options.conversationsAvailable, options.mhpMarketingCards)}${collectionPagination(pipelinePage, CRM_PORTAL_ROUTES.pipeline)}</div></section>
     ${timelinePanel(snapshot)}
   </div>`;
 }

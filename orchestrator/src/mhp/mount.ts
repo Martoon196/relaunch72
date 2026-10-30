@@ -12,6 +12,7 @@ import type { PgMhpHqService } from './hq-service.js';
 import type { PgMhpDeskService } from './desk-service.js';
 import { handleMhpDesk } from './desk-router.js';
 import { handleMhpGrowth, type MhpGrowthRouterDependencies } from './growth-router.js';
+import { handleMhpMarketingWorkspace, type MhpMarketingWorkspaceDependencies } from './marketing-workspace-router.js';
 
 interface MhpMountDependencies {
   portal: PostgresPortalDeps;
@@ -20,6 +21,7 @@ interface MhpMountDependencies {
   desk?: Pick<PgMhpDeskService, 'snapshot' | 'save' | 'archive' | 'submitVerdict' | 'queue' | 'review'>;
   hq: Pick<PgMhpHqService, 'snapshot' | 'grant' | 'isOwner'>;
   growth?: Omit<MhpGrowthRouterDependencies, 'portal'>;
+  marketingWorkspace?: MhpMarketingWorkspaceDependencies['marketingWorkspace'];
   readiness(): Promise<readonly string[]>;
 }
 
@@ -68,6 +70,8 @@ export function createMhpMount(deps: MhpMountDependencies) {
       const url = new URL(req.url ?? '/', MHP_AUTH_ORIGIN);
       const path = url.pathname.replace(/\/+$/, '') || '/';
       if (await deps.authMount.handle(req, res, url)) return;
+      if (deps.marketingWorkspace && await handleMhpMarketingWorkspace(req, res, url,
+        { portal, marketingWorkspace: deps.marketingWorkspace })) return;
       if (deps.growth && await handleMhpGrowth(req, res, url, { portal, ...deps.growth })) return;
       if (deps.desk && commerce.creditSnapshot && commerce.courseCheckout && await handleMhpDesk(req, res, url, {
         portal, desk: deps.desk, commerce: { billingEnabled: commerce.billingEnabled,
