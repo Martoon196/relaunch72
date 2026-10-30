@@ -297,7 +297,7 @@ export function createApp(deps: AppDeps) {
       return;
     }
 
-    if (url.pathname === '/api/group-hq/crm/leads') {
+    if (url.pathname === '/api/group-hq/crm/leads' || url.pathname === '/api/group-hq/channels/whatsapp') {
       if (!deps.groupHqCrm) { send(res, 404, { error: 'not found' }); return; }
       if (activePortalRequests >= portalMaxConcurrentRequests) {
         sendPortalRuntimeStatus(res, 429); return;

@@ -80,3 +80,79 @@ test('Group HQ CRM requires configured owner rights and returns a fixed PP lead 
   await mount.handle(request(`Bearer ${token}`) as never, denied as never, url);
   assert.equal(denied.status, 403);
 });
+
+test('WhatsApp read bridge rejects missing auth, arbitrary scope and writes before database access', async () => {
+  const mount = createGroupHqCrmReadMount({ connect() { throw new Error('must not connect'); } } as never, config);
+  for (const [auth, query, method, expected] of [
+    [undefined, '?brand=pp', 'GET', 401],
+    [`Bearer ${token}`, '?brand=other', 'GET', 400],
+    [`Bearer ${token}`, '?brand=pp&brand=mhp', 'GET', 400],
+    [`Bearer ${token}`, '?brand=pp&workspaceId=arbitrary', 'GET', 400],
+    [`Bearer ${token}`, '?brand=pp', 'POST', 404],
+  ] as const) {
+    const res = response();
+    await mount.handle({ ...request(auth), method } as never, res as never,
+      new URL(`https://hq.propertypredator.com/api/group-hq/channels/whatsapp${query}`));
+    assert.equal(res.status, expected);
+  }
+  const mhp = response();
+  await mount.handle(request(`Bearer ${token}`) as never, mhp as never,
+    new URL('https://hq.propertypredator.com/api/group-hq/channels/whatsapp?brand=mhp'));
+  assert.deepEqual(JSON.parse(mhp.body), { brand: 'mhp', channel: 'whatsapp', availability: 'not_connected' });
+});
+
+test('WhatsApp bridge uses selected fixed workspace, saved truth and read-only owner authority', async () => {
+  const mhp = { workspaceId: '93c3bca1-c112-4ecb-981b-568358d9bef1', organizationId: '57787df3-aa08-4f2c-83b6-80b15ab554ce' };
+  const calls: Array<{ sql: string; values?: unknown[] }> = [];
+  let allowed = true;
+  let corrupt = false;
+  const client = {
+    async query(sql: string, values?: unknown[]) {
+      calls.push({ sql, values });
+      if (sql.includes('can_manage_workspace')) return { rows: [{ allowed }] };
+      if (sql.includes('group-hq.whatsapp.readiness')) return { rows: [{
+        snapshot_at: new Date('2026-10-30T01:00:00Z'), connection_state: 'not_configured', inbound_state: 'not_ready',
+        outbound_or_reply_state: 'blocked', receipt_state: 'none', latest_receipt_at: null,
+        blocker_codes: corrupt ? ['PRIVATE_PROVIDER_ERROR'] : ['PROVIDER_NOT_CONFIGURED'],
+      }] };
+      return { rows: [] };
+    }, release() {},
+  };
+  const mount = createGroupHqCrmReadMount({ connect: async () => client } as never, { ...config, mhp });
+  for (const brand of ['pp', 'mhp']) {
+    calls.length = 0;
+    const res = response();
+    await mount.handle(request(`Bearer ${token}`) as never, res as never,
+      new URL(`https://hq.propertypredator.com/api/group-hq/channels/whatsapp?brand=${brand}`));
+    assert.equal(res.status, 200);
+    assert.equal(res.headers['cache-control'], 'no-store');
+    const body = JSON.parse(res.body);
+    assert.equal(body.brand, brand);
+    assert.deepEqual(body.blockerCodes, ['PROVIDER_NOT_CONFIGURED']);
+    assert.equal(Object.keys(body).length, 10);
+    assert.equal(calls.some(c => c.sql.includes('READ ONLY')), true);
+    assert.deepEqual(calls.find(c => c.sql.includes('can_manage_workspace'))?.values,
+      [ownerUserId, brand === 'pp' ? workspaceId : mhp.workspaceId, brand === 'pp' ? organizationId : mhp.organizationId]);
+    assert.equal(calls.some(c => /INSERT|UPDATE|DELETE|enqueue/iu.test(c.sql)), false);
+  }
+  allowed = false;
+  const forbidden = response();
+  await mount.handle(request(`Bearer ${token}`) as never, forbidden as never,
+    new URL('https://hq.propertypredator.com/api/group-hq/channels/whatsapp?brand=mhp'));
+  assert.equal(forbidden.status, 403);
+  allowed = true; corrupt = true;
+  const unavailable = response();
+  await mount.handle(request(`Bearer ${token}`) as never, unavailable as never,
+    new URL('https://hq.propertypredator.com/api/group-hq/channels/whatsapp?brand=pp'));
+  assert.equal(unavailable.status, 503);
+  assert.equal(unavailable.body.includes('PRIVATE_PROVIDER_ERROR'), false);
+});
+
+test('MHP mapping must be complete and distinct from the PP workspace and organisation', () => {
+  const env = { PORTAL_PRODUCT_PROFILE: 'property_predator_growth', R72_GROUP_HQ_CRM_TOKEN: token,
+    R72_GROUP_HQ_CRM_PP_WORKSPACE_ID: workspaceId, R72_GROUP_HQ_CRM_PP_ORGANIZATION_ID: organizationId,
+    R72_GROUP_HQ_CRM_OWNER_USER_ID: ownerUserId };
+  assert.throws(() => loadGroupHqCrmConfig({ ...env, R72_GROUP_HQ_CRM_MHP_WORKSPACE_ID: workspaceId }), /incomplete/);
+  assert.throws(() => loadGroupHqCrmConfig({ ...env, R72_GROUP_HQ_CRM_MHP_WORKSPACE_ID: workspaceId,
+    R72_GROUP_HQ_CRM_MHP_ORGANIZATION_ID: organizationId }), /overlaps/);
+});
