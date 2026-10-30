@@ -17,6 +17,7 @@ import type { CrmWorkspaceSnapshot } from '../src/portal/crm-views.js';
 import type { Lead360View } from '../src/portal/lead-360-view.js';
 import { handlePortal, type PortalDeps } from '../src/portal/router.js';
 import { PORTAL_COOKIE, portalCsrfToken, signTenant } from '../src/portal/session.js';
+import { MARTIN_HOWARD_PROPERTY_PROFILE, PROPERTY_PREDATOR_GROWTH_PROFILE } from '../src/portal/product-profile.js';
 
 const SECRET = 'crm-router-secret';
 const NOW = 1_000_000;
@@ -203,6 +204,20 @@ async function call(method: string, url: string, portal: PortalDeps, body?: stri
   await handlePortal(request(method, url, body) as never, res as never, portal);
   return res;
 }
+
+test('personal MHP and PP CRM pages retain matching no-referrer header and meta policy', async () => {
+  for (const profile of [MARTIN_HOWARD_PROPERTY_PROFILE, PROPERTY_PREDATOR_GROWTH_PROFILE]) {
+    const portal = { ...deps(new FakeCrm()), productProfile: profile };
+    for (const route of ['/portal/crm/opportunities', '/portal/crm/contacts', '/portal/crm/tasks', `/portal/crm/contacts/${CONTACT_ID}`]) {
+      const result = await call('GET', route, portal);
+      assert.equal(result.statusCode, 200, `${profile.id} ${route}`);
+      assert.equal(result.headers['referrer-policy'], 'no-referrer');
+      assert.equal(result.headers['cache-control'], 'no-store');
+      assert.match(result.body, /<meta name="referrer" content="no-referrer">/);
+      assert.doesNotMatch(result.body, /<meta name="referrer" content="same-origin">/);
+    }
+  }
+});
 
 test('CRM remains truthfully locked when no durable service is composed', async () => {
   const dashboard = await call('GET', '/portal', deps());

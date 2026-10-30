@@ -39,7 +39,7 @@ import {
 } from './session.js';
 import type { InMemoryLoginThrottle } from './session.js';
 import { accountSetupPage, accountSetupUnavailablePage, loginPage, dashboardPage, billingPage } from './views.js';
-import { appShell, escapeHtml, PORTAL_APPEARANCE_CLIENT_SOURCE } from './ui.js';
+import { appShell, crmPageReferrerPolicy, escapeHtml, PORTAL_APPEARANCE_CLIENT_SOURCE } from './ui.js';
 import { renderGrowthHomeBody } from './growth-home.js';
 import { renderLead360Body } from './lead-360-view.js';
 import { renderMhpContactBody } from '../mhp/contact-view.js';
@@ -900,6 +900,13 @@ function crmPage(
     body: deps.productProfile?.marketingWorkspace
       ? `<section aria-label="MHP marketing workspace" style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-bottom:24px"><div><strong>Martin Howard Property · Marketing</strong><p>Brand enquiries and follow-ups · <a href="/hq/growth">Webinar status</a></p></div>${marketingReturnControl(csrfToken, randomUUID())}</section>${body}`
       : body,
+  });
+}
+
+function sendCrmPage(res: ServerResponse, code: number, shell: Pick<CrmWorkspaceSnapshot, 'workspace'>,
+  body: string, deps: PortalDeps, csrfToken: string): void {
+  sendHtml(res, code, crmPage(shell, body, deps, csrfToken), undefined, {
+    'referrer-policy': crmPageReferrerPolicy(deps.productProfile),
   });
 }
 
@@ -7032,7 +7039,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           url.searchParams, deps.sessionSecret, sessionToken,
         ),
       })}`;
-      return sendHtml(res, 200, crmPage(shell, body, deps, csrfToken));
+      return sendCrmPage(res, 200, shell, body, deps, csrfToken);
     } catch {
       return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
         title: 'Lead 360 temporarily unavailable',
@@ -7059,7 +7066,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         const body = url.searchParams.get('prepare') === '1'
           ? renderFinanceForm(snapshot, await deps.financeDrafts.catalog(identity, opportunityId), url.searchParams.get('model') ?? 'btl', csrf)
           : renderFinanceSaved(snapshot, version);
-        return sendHtml(res, 200, crmPage(shell, body, deps, csrf));
+        return sendCrmPage(res, 200, shell, body, deps, csrf);
       }
       if (method === 'POST' && action) {
         if (!String(req.headers['content-type'] ?? '').startsWith('application/x-www-form-urlencoded')) throw new FinanceError(415, 'Use the secure finance form.');
@@ -7074,9 +7081,9 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         if (!shell) throw new FinanceError(403, 'Your CRM workspace is no longer available.');
         try {
           const review = await deps.financeDrafts.calculate(identity, opportunityId, planningFromForm(form, FIELDS), form.assumptions_as_of ?? '', Number(form.opportunity_version), Number(form.latest_version));
-          return sendHtml(res, 200, crmPage(shell, renderFinanceReview(review, csrf), deps, csrf));
+          return sendCrmPage(res, 200, shell, renderFinanceReview(review, csrf), deps, csrf);
         } catch (error) {
-          if (error instanceof FinanceError && error.status === 400) return sendHtml(res, 400, crmPage(shell, renderFinanceForm(snapshot, await deps.financeDrafts.catalog(identity, opportunityId), form.model ?? 'btl', csrf, form, error.message), deps, csrf));
+          if (error instanceof FinanceError && error.status === 400) return sendCrmPage(res, 400, shell, renderFinanceForm(snapshot, await deps.financeDrafts.catalog(identity, opportunityId), form.model ?? 'btl', csrf, form, error.message), deps, csrf);
           throw error;
         }
       }
@@ -7123,7 +7130,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       const renderedBody = mhpCrm
         ? renderMhpCrmBody(body, p === CRM_PORTAL_ROUTES.contacts ? 'contacts' : p === CRM_PORTAL_ROUTES.pipeline ? 'pipeline' : 'tasks', conversationsAvailable, mhpMarketing)
         : body;
-      return sendHtml(res, 200, crmPage(snapshot, renderedBody, deps, csrfToken));
+      return sendCrmPage(res, 200, snapshot, renderedBody, deps, csrfToken);
     } catch (error) {
       if (error instanceof PortalCrmPageCursorError) {
         return sendHtml(res, 400, portalStatusPage(deps, sessionToken, {
@@ -7194,7 +7201,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       });
       const status = outcome.kind === 'forbidden' ? 403 : outcome.kind === 'unavailable' ? 503 : 400;
       const csrfToken = portalCsrfToken(deps.sessionSecret, sessionToken);
-      return sendHtml(res, status, crmPage(snapshot, body, deps, csrfToken));
+      return sendCrmPage(res, status, snapshot, body, deps, csrfToken);
     } catch {
       return sendHtml(res, 503, portalStatusPage(deps, sessionToken, {
         title: 'CRM temporarily unavailable', message: 'No lead was saved. Try again after returning to contacts.', active: 'crm', backHref: CRM_PORTAL_ROUTES.contacts, backLabel: 'Return to contacts',

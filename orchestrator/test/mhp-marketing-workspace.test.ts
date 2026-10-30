@@ -9,7 +9,8 @@ import { authorizeMhpMemberRoute } from '../src/mhp/member-service.js';
 import { MhpCommerceError } from '../src/mhp/commerce-service.js';
 import { portalCsrfToken } from '../src/portal/session.js';
 import type { PostgresPortalDeps } from '../src/portal/router.js';
-import { MARTIN_HOWARD_PROPERTY_PROFILE } from '../src/portal/product-profile.js';
+import { MARTIN_HOWARD_PROPERTY_PROFILE, MHP_MARKETING_WORKSPACE_PROFILE } from '../src/portal/product-profile.js';
+import { appShell, pageHead } from '../src/portal/ui.js';
 
 const HOST='app.martinhowardproperty.co.uk', ORIGIN=`https://${HOST}`;
 const SECRET='mhp-marketing-synthetic-session-secret-at-least-32';
@@ -39,6 +40,11 @@ function fixture(owner=true) {
       createLead:async request=>{assert.equal(request.sessionToken,currentToken);calls.push('create');return {ok:true,disposition:'applied'};},
       moveOpportunity:async request=>{assert.equal(request.sessionToken,currentToken);calls.push('move');return {ok:true,disposition:'applied'};},
       completeTask:async request=>{assert.equal(request.sessionToken,currentToken);calls.push('complete');return {ok:true,disposition:'applied'};},
+      lead360:async(request,contactId)=>{assert.equal(request.sessionToken,currentToken);return {
+        identity:{contactId,displayName:'Synthetic enquiry',companyName:null,primaryEmail:null,primaryPhone:null,ownerName:null},
+        score:0,scoreExplanation:'No saved signals',journey:{label:'Enquiry',stages:[]},evidence:[],nextMove:{label:'Follow up',reason:'Saved enquiry',dueAt:null},
+        offers:[],consent:[],suppressionReason:null,crm:{opportunities:[],tasks:[]},asOf:new Date(NOW).toISOString(),
+      };},
     } as PostgresPortalDeps['crm'],
     investors:{snapshot:async()=>{calls.push('investor-programme');throw new Error('brand must not invoke investor programme');},
       requirementSummaries:async()=>{calls.push('requirements');throw new Error('brand must not invoke investor requirements');}} as unknown as PostgresPortalDeps['investors'],
@@ -114,6 +120,31 @@ test('rotated token and old CSRF fail; current brand session reaches shared stag
   assert.equal((await f.request('POST',`/portal/crm/tasks/${COMMAND}/complete`,common,{origin:ORIGIN})).status,302);
   for(const path of ['/portal/investors','/portal/investors/email','/portal/investors/site','/portal/leadrelay','/portal/api/leadrelay/v1/chat',`/portal/crm/opportunities/${COMMAND}/finance`])assert.equal((await f.request('GET',path)).status,404,path);
   assert.deepEqual(f.calls,['open','move','complete']);
+});
+
+test('every selected marketing CRM page uses matching same-origin header and head policy for native return',async()=>{
+  const f=fixture();
+  await f.request('POST','/hq/marketing/open',f.form(),{origin:ORIGIN});
+  for(const path of ['/portal/crm/opportunities','/portal/crm/contacts','/portal/crm/tasks',`/portal/crm/contacts/${USER}`]){
+    const page=await f.request('GET',path);
+    assert.equal(page.status,200,path);
+    assert.equal(page.headers['referrer-policy'],'same-origin',path);
+    assert.equal(page.headers['cache-control'],'no-store',path);
+    assert.match(page.body,/<meta name="referrer" content="same-origin">/,path);
+    assert.doesNotMatch(page.body,/<meta name="referrer" content="no-referrer">/,path);
+    assert.match(page.body,/action="\/hq\/marketing\/return"/,path);
+  }
+  for(const origin of ['null','', 'https://hq.propertypredator.com']){
+    assert.equal((await f.request('POST','/hq/marketing/return',f.form(),{origin})).status,403);
+  }
+  assert.equal((await f.request('POST','/hq/marketing/return',f.form().replace(/csrf=[^&]+/,'csrf=wrong'),{origin:ORIGIN})).status,403);
+  assert.equal((await f.request('POST','/hq/marketing/return',f.form(),{origin:ORIGIN})).status,303);
+  assert.equal(f.portal.productProfile,MARTIN_HOWARD_PROPERTY_PROFILE);
+});
+
+test('marketing presentation does not change non-CRM page-head or shell policy',()=>{
+  assert.match(pageHead('Unrelated page',MHP_MARKETING_WORKSPACE_PROFILE),/<meta name="referrer" content="no-referrer">/);
+  assert.match(appShell({title:'Unrelated page',tenantName:'Synthetic',active:'overview',body:'',productProfile:MHP_MARKETING_WORKSPACE_PROFILE}),/<meta name="referrer" content="no-referrer">/);
 });
 
 test('service sends only session hashes, fixed action and entropy to existing SQL capability',async()=>{
