@@ -18,6 +18,8 @@ const SMS_PHONE_COMPATIBILITY_MIGRATION = '0122_property_predator_sms_phone_veri
 const SMS_PHONE_COMPATIBILITY_CHECKSUM = '52904bc9e50db657c537f6033814455db185e30877091196b47ea586aed60e8d';
 const SMS_TRIGGER_ACL_REPAIR_MIGRATION = '0123_sms_phone_receipt_trigger_acl.sql';
 const SMS_TRIGGER_ACL_REPAIR_CHECKSUM = '094d3118a85131c099749ecd000c4c4b9141ea6ba00e8c643190fa5cf5a1554d';
+const MHP_MARKETING_COMPATIBILITY_MIGRATION = '0124_mhp_brand_marketing_workspace.sql';
+const MHP_MARKETING_COMPATIBILITY_CHECKSUM = '6d17547dc37070b736f23e2a7906dc40739b66c50de262eacdbe9ace7e011209';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -65,6 +67,17 @@ export async function assertRuntimeSchemaCurrent(
       && migrations[120]?.filename === '0121_mhp_prospects_learning.sql'
       && applied.get(SMS_PHONE_COMPATIBILITY_MIGRATION) === SMS_PHONE_COMPATIBILITY_CHECKSUM) {
     applied.delete(SMS_PHONE_COMPATIBILITY_MIGRATION);
+  }
+  // The base123 bridge can remain live/recover after only this reviewed124.
+  // The final application bundles124 and therefore takes the strict path.
+  // Require the exact123 tail in both source and database; the older122
+  // transition allowance below must not hide a gap during this cutover.
+  if (migrations.length === 123
+      && migrations[122]?.filename === SMS_TRIGGER_ACL_REPAIR_MIGRATION
+      && migrations[122]?.checksum === SMS_TRIGGER_ACL_REPAIR_CHECKSUM
+      && applied.get(SMS_TRIGGER_ACL_REPAIR_MIGRATION) === SMS_TRIGGER_ACL_REPAIR_CHECKSUM
+      && applied.get(MHP_MARKETING_COMPATIBILITY_MIGRATION) === MHP_MARKETING_COMPATIBILITY_CHECKSUM) {
+    applied.delete(MHP_MARKETING_COMPATIBILITY_MIGRATION);
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
