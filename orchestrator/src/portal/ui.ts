@@ -178,14 +178,20 @@ export function productBrandName(profile: PortalProductProfile): string {
     : escapeHtml(profile.productName);
 }
 
-export function pageHead(title: string, productProfile: PortalProductProfile = RELAUNCH72_PRODUCT_PROFILE): string {
+/** Derived only from the server-selected CRM presentation, never request fields. */
+export function crmPageReferrerPolicy(profile?: PortalProductProfile): 'same-origin' | 'no-referrer' {
+  return profile?.id === 'martin_howard_property' && profile.marketingWorkspace === true ? 'same-origin' : 'no-referrer';
+}
+
+export function pageHead(title: string, productProfile: PortalProductProfile = RELAUNCH72_PRODUCT_PROFILE,
+  referrerPolicy: 'same-origin' | 'no-referrer' = 'no-referrer'): string {
   const brandFonts = productProfile.id === 'property_predator_growth'
     ? '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Syne:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">'
     : '';
   const themeBoot = productProfile.id === 'property_predator_growth'
     ? '<script src="/portal/appearance.js"></script>'
     : '';
-  return `<!doctype html><html lang="en"${productProfile.id === 'property_predator_growth' ? ' data-theme="light"' : ''}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="${productProfile.theme.nav}"><meta name="referrer" content="no-referrer"><title>${escapeHtml(title)}</title>${themeBoot}${brandFonts}<style>${PORTAL_STYLE}${profileTheme(productProfile)}</style></head>`;
+  return `<!doctype html><html lang="en"${productProfile.id === 'property_predator_growth' ? ' data-theme="light"' : ''}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="${productProfile.theme.nav}"><meta name="referrer" content="${referrerPolicy}"><title>${escapeHtml(title)}</title>${themeBoot}${brandFonts}<style>${PORTAL_STYLE}${profileTheme(productProfile)}</style></head>`;
 }
 
 export interface AppShellOptions {
@@ -279,7 +285,7 @@ export function appShell(opts: AppShellOptions): string {
   const compactMark = productBrandMark(profile);
   const brandName = productBrandName(profile);
   const suiteLabel = escapeHtml(profile.suiteLabel);
-  return `${pageHead(opts.title, profile)}<body><a class="skip-link" href="#main-content">Skip to main content</a>
+  return `${pageHead(opts.title, profile, crmMode ? crmPageReferrerPolicy(profile) : 'no-referrer')}<body><a class="skip-link" href="#main-content">Skip to main content</a>
   <div class="app-shell">
     <aside class="sidebar" aria-label="Workspace navigation">
       <a class="brand-lockup" href="/portal" aria-label="${productName} overview"><span class="brand-mark">${compactMark}</span><span class="brand-name">${brandName}<small>${suiteLabel}</small></span></a>
