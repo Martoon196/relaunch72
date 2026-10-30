@@ -4,14 +4,15 @@ import { portalCsrfToken, verifyPortalCsrf } from '../portal/session.js';
 import { parseCookies } from '../server/admin/session.js';
 import { principalAbuseAdmission, sourceAbuseAdmission, type PortalAbuseRouteClass } from '../portal/abuse.js';
 import { MHP_AUTH_ORIGIN, MHP_SESSION_COOKIE } from './auth-service.js';
-import { MHP_SITE_ORIGIN, MhpGrowthError, parseMhpSignup, parseMhpStory, verifyMhpUnsubscribeToken, type PgMhpGrowthService } from './growth-service.js';
+import { MHP_SITE_ORIGIN, MhpGrowthError, parseMhpApplication, parseMhpEvent, parseMhpSignup, parseMhpStory, verifyMhpUnsubscribeToken,
+  type PgMhpGrowthService } from './growth-service.js';
 import { MhpLearningError, parseMhpCourseBundle, type PgMhpLearningService } from './learning-service.js';
 import { learnHomePage, learnLessonPage, learnModulePage } from './learning-view.js';
-import { hqCoursePage, hqGrowthPage, publicMessagePage, unsubscribeConfirmPage } from './growth-view.js';
+import { hqApplicationsPage, hqCoursePage, hqGrowthPage, publicMessagePage, unsubscribeConfirmPage } from './growth-view.js';
 
 export interface MhpGrowthRouterDependencies {
   portal: PostgresPortalDeps;
-  growth: Pick<PgMhpGrowthService, 'capture' | 'story' | 'unsubscribe' | 'summary'>;
+  growth: Pick<PgMhpGrowthService, 'capture' | 'story' | 'unsubscribe' | 'summary' | 'apply' | 'event' | 'listApplications'>;
   learning: Pick<PgMhpLearningService, 'outline' | 'content' | 'saveProgress' | 'importCourse'>;
   unsubscribeSecret: string;
   marketingMode: string;
@@ -72,12 +73,43 @@ export function parseMultipart(body: Buffer, contentType: string): Map<string, B
 }
 
 const LEARN = /^\/app\/learn(?:\/([0-9]{2})(?:\/([0-9]{2}))?)?$/;
-const known = (path: string): boolean => path === '/api/mhp/subscribe' || path === '/api/mhp/story' || path === '/email/unsubscribe'
-  || path === '/hq/growth' || path === '/hq/course' || LEARN.test(path);
+const known = (path: string): boolean => path === '/api/mhp/subscribe' || path === '/api/mhp/story' || path === '/api/mhp/apply'
+  || path === '/email/unsubscribe' || path === '/hq/growth' || path === '/hq/course' || path === '/hq/applications' || LEARN.test(path);
+
+/**
+ * Cookieless page-event beacon from the site (navigator.sendBeacon). Always 204,
+ * whether counted or ignored, so it reveals nothing and never retries.
+ * "Page opened" is a page load, not proof anyone watched.
+ */
+async function handleMhpEvent(req: IncomingMessage, res: ServerResponse, deps: MhpGrowthRouterDependencies): Promise<void> {
+  const { portal } = deps;
+  const leases: Buffer[] = [];
+  try {
+    const context = portal.requestContext?.(req);
+    const contentType = String(req.headers['content-type'] ?? '');
+    if (req.method !== 'POST' || !SITE_ORIGINS.has(String(req.headers.origin ?? '')) || !context || !portal.abuse
+      || !/^(?:text\/plain|application\/x-www-form-urlencoded)(?:;|$)/i.test(contentType)) return;
+    const admission = sourceAbuseAdmission(context, 'read.page', portal.now?.() ?? Date.now());
+    if (!admission) return;
+    const decision = await portal.abuse.admit(admission);
+    if (decision.leaseHash) leases.push(decision.leaseHash);
+    if (!decision.allowed) return;
+    const event = parseMhpEvent((await readBody(req, 512)).toString('utf8'));
+    if (event) await deps.growth.event(event.name, event.path);
+  } catch { /* Ignored events are still answered with 204. */ }
+  finally {
+    await Promise.allSettled(leases.map(lease => portal.abuse!.complete(lease, 'success')));
+    if (!res.headersSent) {
+      res.writeHead(204, { 'access-control-allow-origin': MHP_SITE_ORIGIN, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', vary: 'Origin' });
+      res.end();
+    }
+  }
+}
 
 /** Called only after the MHP mount's exact-host guard. */
 export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse, url: URL, deps: MhpGrowthRouterDependencies): Promise<boolean> {
   const path = url.pathname.replace(/\/+$/, '') || '/';
+  if (path === '/api/mhp/event') { await handleMhpEvent(req, res, deps); return true; }
   if (!known(path)) return false;
   const { portal } = deps;
   const leases: Buffer[] = [];
@@ -98,11 +130,16 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
     };
     await reserve(sourceAbuseAdmission(context, routeClass, now));
 
-    if (path === '/api/mhp/subscribe' || path === '/api/mhp/story') {
+    if (path === '/api/mhp/subscribe' || path === '/api/mhp/story' || path === '/api/mhp/apply') {
       if (method !== 'POST') { redirect(res, `${MHP_SITE_ORIGIN}/`); return true; }
       if (!SITE_ORIGINS.has(String(req.headers.origin ?? ''))) throw new HttpError(403, 'Please use the form on martinhowardproperty.co.uk.');
-      const fields = await urlencoded(req, path === '/api/mhp/story' ? 32_768 : 8_192);
+      const fields = await urlencoded(req, path === '/api/mhp/story' ? 32_768 : path === '/api/mhp/apply' ? 16_384 : 8_192);
       const source = context.sourceHash ? Buffer.from(context.sourceHash) : null;
+      if (path === '/api/mhp/apply') {
+        const application = parseMhpApplication(fields);
+        if (application !== 'honeypot') await deps.growth.apply(application, source);
+        redirect(res, `${MHP_SITE_ORIGIN}/webinar/application-received/`); return true;
+      }
       if (path === '/api/mhp/story') {
         await deps.growth.story(parseMhpStory(fields), source);
         redirect(res, `${MHP_SITE_ORIGIN}/thanks/?for=story`); return true;
@@ -139,6 +176,10 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
     if (path === '/hq/growth') {
       if (method !== 'GET') throw new HttpError(405, 'Use the controls in HQ.');
       send(res, 200, hqGrowthPage(await deps.growth.summary(token), deps.marketingMode)); return true;
+    }
+    if (path === '/hq/applications') {
+      if (method !== 'GET') throw new HttpError(405, 'Use the controls in HQ.');
+      send(res, 200, hqApplicationsPage(await deps.growth.listApplications(token))); return true;
     }
     if (path === '/hq/course') {
       if (method === 'GET') {
