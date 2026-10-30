@@ -176,9 +176,20 @@ test('approved 0121 cannot hide a missing or changed 0120 ledger row', async () 
   ]), directory), /checksum changed/);
 });
 
+// Writes the first `count` bundled migrations to a directory, standing in for
+// the release that bundled exactly those files.
+async function bundleOf(count: number): Promise<string> {
+  const migrations = (await discoverMigrations()).slice(0, count);
+  assert.equal(migrations.length, count);
+  const directory = await mkdtemp(path.join(tmpdir(), `r72-runtime-${count}-bundle-`));
+  await Promise.all(migrations.map((migration) => writeFile(path.join(directory, migration.filename), migration.sql, 'utf8')));
+  return directory;
+}
+
 test('121 release takes the strict bundled migration path', async () => {
   const allMigrations = await discoverMigrations();
-  assert.equal(allMigrations.length, 123);
+  assert.ok(allMigrations.length >= 123);
+  const bundle123 = await bundleOf(123);
   const migrations = allMigrations.slice(0, 122);
   assert.equal(migrations.length, 122);
   assert.equal(migrations[120]?.filename, approvedMhpGrowth.filename);
@@ -202,24 +213,35 @@ test('121 release takes the strict bundled migration path', async () => {
     ...rows, { ...approvedSmsPhone, checksum: '0'.repeat(64) },
   ]), directory), /migration not present in this release/);
   await assert.doesNotReject(assertRuntimeSchemaCurrent(
-    runtimePool(migrations.map(({ filename, checksum }) => ({ filename, checksum })))));
+    runtimePool(migrations.map(({ filename, checksum }) => ({ filename, checksum }))), bundle123));
   await assert.rejects(assertRuntimeSchemaCurrent(
-    runtimePool(rows)), /schema is behind by 2 migration/);
+    runtimePool(rows), bundle123), /schema is behind by 2 migration/);
 });
 
 test('123 ACL repair accepts exact 122 cutover and requires the eventual exact ledger', async () => {
-  const migrations = await discoverMigrations();
-  const rows = migrations.map(({ filename, checksum }) => ({ filename, checksum }));
-  assert.equal(rows.length, 123);
+  const bundle123 = await bundleOf(123);
+  const rows = (await discoverMigrations()).slice(0, 123).map(({ filename, checksum }) => ({ filename, checksum }));
   assert.deepEqual(rows[122], {
     filename: '0123_sms_phone_receipt_trigger_acl.sql',
     checksum: '094d3118a85131c099749ecd000c4c4b9141ea6ba00e8c643190fa5cf5a1554d',
   });
-  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 122))));
-  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 122)), bundle123));
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows), bundle123));
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
     ...rows.slice(0, 122), { ...rows[122]!, checksum: '0'.repeat(64) },
-  ])), /checksum changed/);
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 121))),
+  ]), bundle123), /checksum changed/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 121)), bundle123),
     /schema is behind by 2 migration/);
+});
+
+test('124 release takes the strict path: no cutover allowance for 0123 or 0124', async () => {
+  const migrations = await discoverMigrations();
+  const rows = migrations.map(({ filename, checksum }) => ({ filename, checksum }));
+  assert.equal(rows.length, 124);
+  assert.equal(rows[123]?.filename, '0124_mhp_applications_events.sql');
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 123))), /schema is behind by 1 migration/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 122))), /schema is behind by 2 migration/);
+  // The live 0123 build does not know 0124: migrate and deploy close together.
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows), await bundleOf(123)), /migration not present in this release/);
 });

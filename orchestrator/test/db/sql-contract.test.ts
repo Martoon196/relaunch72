@@ -127,6 +127,7 @@ const migration120Url = new URL('../../src/db/migrations/0120_mhp_deal_desk_cred
 const migration121Url = new URL('../../src/db/migrations/0121_mhp_prospects_learning.sql', import.meta.url);
 const migration122Url = new URL('../../src/db/migrations/0122_property_predator_sms_phone_verification.sql', import.meta.url);
 const migration123Url = new URL('../../src/db/migrations/0123_sms_phone_receipt_trigger_acl.sql', import.meta.url);
+const migration124Url = new URL('../../src/db/migrations/0124_mhp_applications_events.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -686,6 +687,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: '0121_mhp_prospects_learning.sql', version: 121 },
     { filename: '0122_property_predator_sms_phone_verification.sql', version: 122 },
     { filename: '0123_sms_phone_receipt_trigger_acl.sql', version: 123 },
+    { filename: '0124_mhp_applications_events.sql', version: 124 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -805,6 +807,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration121Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration122Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration123Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration124Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.
@@ -826,6 +829,22 @@ test('0121 keeps prospects, stories, sends and course text behind definer functi
   assert.match(sql, /mhp_course_content\(bytea,text\) TO r72_web/);
   assert.match(sql, /app_private\.mhp_import_course\(bytea,jsonb\) TO r72_identity_command/);
   assert.match(sql, /IF tier='desk' AND left\(p_lesson,2\) NOT IN\('00','01'\)/);
+});
+
+test('0124 keeps applications and event counts behind definer functions', async () => {
+  const sql = normalise(await readFile(migration124Url, 'utf8'));
+  for (const table of ['mhp_applications', 'mhp_event_counts']) assert.match(sql, new RegExp(`'${table}'`));
+  assert.match(sql, /FORCE ROW LEVEL SECURITY/);
+  assert.match(sql, /SET LOCAL ROLE r72_mhp_prospect_definer/);
+  assert.match(sql, /REVOKE CREATE ON SCHEMA app_private FROM r72_mhp_prospect_definer/);
+  assert.doesNotMatch(sql, /GRANT (SELECT|INSERT|UPDATE|DELETE)[^;]* TO r72_(web|identity_command)\b/);
+  assert.doesNotMatch(sql, /SECURITY DEFINER(?! SET search_path=pg_catalog)/);
+  assert.match(sql, /CHECK\(kind IN\('sheet','webinar','waitlist','application','diagnostic'\)\)/);
+  assert.match(sql, /template_key IN\('webinar_followup','webinar_90days','webinar_casestudy'\)/);
+  assert.match(sql, /app_private\.mhp_record_event\(text,text\) TO r72_identity_command/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.mhp_list_applications\(bytea\) TO r72_web/);
+  // No identifiers in the funnel counters.
+  assert.doesNotMatch(/CREATE TABLE app_private\.mhp_event_counts \(([^;]*)\);/.exec(sql)?.[1] ?? 'missing', /source_hash|email|prospect|user_id|\bip\b/);
 });
 
 test('0009 stabilises session defaults and grants only the claim-lock capability', async () => {
