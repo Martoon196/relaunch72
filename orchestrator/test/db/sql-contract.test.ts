@@ -135,6 +135,7 @@ const migration128Url = new URL('../../src/db/migrations/0128_mhp_sequence_captu
 const migration129Url = new URL('../../src/db/migrations/0129_mhp_local_channel_drafts.sql', import.meta.url);
 const migration130Url = new URL('../../src/db/migrations/0130_mhp_owned_sms_pilot.sql', import.meta.url);
 const migration131Url = new URL('../../src/db/migrations/0131_mhp_event_sms_programme.sql', import.meta.url);
+const migration132Url = new URL('../../src/db/migrations/0132_mhp_owned_whatsapp_pilot.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -702,6 +703,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: '0129_mhp_local_channel_drafts.sql', version: 129 },
     { filename: '0130_mhp_owned_sms_pilot.sql', version: 130 },
     { filename: '0131_mhp_event_sms_programme.sql', version: 131 },
+    { filename: '0132_mhp_owned_whatsapp_pilot.sql', version: 132 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -829,12 +831,14 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration129Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration130Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration131Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration132Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.
   assert.equal(sources.length, tail.length);
-  assert.equal(tail.at(-2)?.checksum, 'e6bb5be3a87e0fde3e29d3f47edde1c5daf8492f4c368f80e2e4335f5b239797');
-  assert.equal(tail.at(-1)?.checksum, 'c3bf409ea54d4311d0c750ba58719db905988d21878c8760fe041f56d25ef278');
+  assert.equal(tail.at(-3)?.checksum, 'e6bb5be3a87e0fde3e29d3f47edde1c5daf8492f4c368f80e2e4335f5b239797');
+  assert.equal(tail.at(-2)?.checksum, 'c3bf409ea54d4311d0c750ba58719db905988d21878c8760fe041f56d25ef278');
+  assert.equal(tail.at(-1)?.checksum, '737e355ec93a29c97e9c5c61e2c27717d421e75938d2f9cb287faea942f6033c');
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
   }

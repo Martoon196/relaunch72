@@ -34,6 +34,11 @@ const ALLOWED: Record<BoundaryKind, readonly string[]> = {
     'app_private.runtime_schema_migrations()',
     'app_private.runtime_database_installation_id()',
     'app_private.lock_active_portal_session(bytea,uuid,uuid)',
+    // 0132 MHP owner connection, template pin and owned test (owner session only).
+    'app_private.mhp_whatsapp_snapshot(bytea,uuid,text)',
+    'app_private.mhp_whatsapp_connect(bytea,uuid,uuid,uuid,text,text,text,text,text,bytea,bytea,bytea,bytea,bytea,text,boolean)',
+    'app_private.mhp_whatsapp_record_template(bytea,uuid,uuid,uuid,uuid,bytea,text,text,text,boolean)',
+    'app_private.mhp_owned_whatsapp_send(bytea,uuid,uuid,uuid,uuid,text,boolean,boolean)',
   ],
   worker: [
     'app_private.claim_whatsapp_live_job(uuid,uuid,bytea,integer)',

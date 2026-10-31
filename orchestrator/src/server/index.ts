@@ -931,6 +931,7 @@ async function main(): Promise<void> {
           sequences: runtime.sequences,
           ownedSms: runtime.ownedSms,
           eventSms: runtime.eventSms,
+          ownedWhatsApp: runtime.ownedWhatsApp,
           growth: { growth: runtime.growth, learning: runtime.learning, unsubscribeSecret: cfg.sessionSecret,
             marketingMode: runtime.marketing?.mode ?? 'off' },
           authMount: createMhpAuthMount({

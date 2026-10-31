@@ -32,6 +32,8 @@ import { assertSmsCommandBoundaryReady } from '../sms-live-pg/readiness.js';
 import { MhpOwnedSmsService, PgMhpOwnedSmsRepository, mhpOwnedSmsConfig, assertMhpOwnedSmsBoundaryReady, refreshMhpOwnedSmsObservation } from './owned-sms-service.js';
 import { MHP_MARKETING_WORKSPACE_ID } from './marketing-workspace-service.js';
 import { MhpEventSmsOwnerService, PgMhpEventSmsPublicService, PgMhpEventSmsRepository, assertMhpEventSmsBoundaryReady, mhpEventSmsEnabled } from './event-sms-service.js';
+import { MhpOwnedWhatsAppService, PgMhpOwnedWhatsAppRepository, mhpOwnedWhatsAppConfig } from './owned-whatsapp-service.js';
+import { assertMetaWhatsAppLiveCommandBoundaryReady } from '../whatsapp-live-pg/readiness.js';
 
 export interface MhpRuntime {
   auth: PgMhpAuthService;
@@ -52,6 +54,7 @@ export interface MhpRuntime {
   sequenceDispatch?: PgMhpSequenceDispatch;
   ownedSms?: MhpOwnedSmsService;
   eventSms?: { optins: PgMhpEventSmsPublicService; owner?: MhpEventSmsOwnerService };
+  ownedWhatsApp?: MhpOwnedWhatsAppService;
   marketing: MhpMarketingConfig | null;
   readiness(): Promise<readonly string[]>;
 }
@@ -108,6 +111,7 @@ export async function buildMhpRuntime(input: {
     smsReady: false, whatsappReady: false, automaticEntryAvailable: Boolean(sequences) }));
   let ownedSms: MhpOwnedSmsService | undefined;
   let eventSmsOwner: MhpEventSmsOwnerService | undefined;
+  let ownedWhatsApp: MhpOwnedWhatsAppService | undefined;
   const smsPilot = mhpOwnedSmsConfig(env);
   if (smsPilot.enabled && sequences && input.contentAdapterPool && input.contentCommandPool) {
     let smsPool: Pool | undefined;
@@ -147,6 +151,24 @@ export async function buildMhpRuntime(input: {
           observe: (context, detail, commandId, now) => refreshMhpOwnedSmsObservation({ context, detail, commandId, now, transactions: adapterRunner, adapter: smsAdapter }) });
       } catch { eventSmsOwner = undefined; }
     }
+    const whatsappPilot = mhpOwnedWhatsAppConfig(env);
+    if (whatsappPilot.enabled) {
+      let whatsappPool: Pool | undefined;
+      const whatsappBlockers = [...whatsappPilot.blockers];
+      if (env.DATABASE_WHATSAPP_LIVE_COMMAND_URL?.trim()) {
+        try {
+          const database = loadDatabaseConfig('whatsAppLiveCommand', env);
+          if (database.sourceEnv !== 'DATABASE_WHATSAPP_LIVE_COMMAND_URL' || database.expectedDatabaseUser !== 'r72_whatsapp_live_command') throw new Error('MHP WhatsApp identity is invalid');
+          whatsappPool = createDatabasePool(database);
+          if (env.PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID?.trim()) await assertExpectedDatabaseInstallation(whatsappPool, env.PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID.trim());
+          await assertMetaWhatsAppLiveCommandBoundaryReady(whatsappPool);
+          input.registerPool(whatsappPool);
+        } catch { await whatsappPool?.end().catch(() => undefined); whatsappPool = undefined; whatsappBlockers.push('The MHP WhatsApp command connection is unavailable.'); }
+      } else whatsappBlockers.push('The MHP WhatsApp command connection needs configuring.');
+      ownedWhatsApp = new MhpOwnedWhatsAppService({ marketingWorkspace, authorize: (identity, requestId) => sequences.contentContext(identity, requestId),
+        config: whatsappPilot.config, blockers: whatsappBlockers, messages,
+        ...(whatsappPool ? { repository: new PgMhpOwnedWhatsAppRepository(whatsappPool) } : {}) });
+    }
   }
   const eventSms = mhpEventSmsEnabled(env) ? { optins: new PgMhpEventSmsPublicService(identityPool, webinar.campaign), owner: eventSmsOwner } : undefined;
   console.info(JSON.stringify({ event: 'mhp.event-sms.readiness', publicOptInMounted: Boolean(eventSms), ownerReviewReady: Boolean(eventSmsOwner) }));
@@ -178,6 +200,7 @@ export async function buildMhpRuntime(input: {
     sequences,
     ownedSms,
     eventSms,
+    ownedWhatsApp,
     sequenceDispatch: sequences ? new PgMhpSequenceDispatch(identityPool) : undefined,
     webinarLeads: new MhpWebinarLeadService({ marketingWorkspace, reader: new PgMhpWebinarLeadReader(webPool),
       transactions, commands: new CrmCommandService({ transactionRunner: transactions }),
