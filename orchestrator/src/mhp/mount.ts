@@ -9,6 +9,7 @@ import { MhpCommerceError, type PgMhpCommerceService } from './commerce-service.
 import { accountPage } from './account-view.js';
 import { hqPage } from './hq-view.js';
 import type { PgMhpHqService } from './hq-service.js';
+import type { MhpTransactionalMailer } from './transactional-mail.js';
 import type { PgMhpDeskService } from './desk-service.js';
 import { handleMhpDesk } from './desk-router.js';
 import { handleMhpGrowth, type MhpGrowthRouterDependencies } from './growth-router.js';
@@ -26,6 +27,7 @@ interface MhpMountDependencies {
   commerce: Pick<PgMhpCommerceService, 'snapshot' | 'refund' | 'billingPortal' | 'webhook' | 'billingEnabled'> & Partial<Pick<PgMhpCommerceService, 'creditSnapshot' | 'courseCheckout'>>;
   desk?: Pick<PgMhpDeskService, 'snapshot' | 'save' | 'archive' | 'submitVerdict' | 'queue' | 'review'>;
   hq: Pick<PgMhpHqService, 'snapshot' | 'grant' | 'isOwner'>;
+  mail?: Pick<MhpTransactionalMailer, 'sendAccessInvite' | 'configured'>;
   growth?: Omit<MhpGrowthRouterDependencies, 'portal'>;
   marketingWorkspace?: MhpMarketingWorkspaceDependencies['marketingWorkspace'];
   webinarLeads?: MhpMarketingWorkspaceDependencies['webinarLeads'];
@@ -107,8 +109,8 @@ export function createMhpMount(deps: MhpMountDependencies) {
         await handleInvestorPublicSite(req, res, portal.investors, portal.sessionSecret); return;
       }
       if (path === '/' && req.method === 'GET') { redirect(res, '/portal'); return; }
-      if (path === '/app/account' || path === '/app/account/refund' || path === '/app/account/billing' || path === '/hq' || path === '/hq/grant') {
-        const isHq = path === '/hq' || path === '/hq/grant';
+      if (path === '/app/account' || path === '/app/account/refund' || path === '/app/account/billing' || path === '/hq' || path === '/hq/grant' || path === '/hq/invite') {
+        const isHq = path === '/hq' || path === '/hq/grant' || path === '/hq/invite';
         const leases: Buffer[] = [];
         let outcome: 'success' | 'service_error' = 'success';
         try {
@@ -132,17 +134,38 @@ export function createMhpMount(deps: MhpMountDependencies) {
             if (req.method === 'GET' && path === '/hq') {
               const search = url.searchParams.get('q') ?? '';
               respond(res, 200, hqPage({ snapshot: await deps.hq.snapshot(token, search), search,
-                csrf: portalCsrfToken(portal.sessionSecret, token), granted: url.searchParams.get('result') === 'granted' }), true);
+                csrf: portalCsrfToken(portal.sessionSecret, token), result: url.searchParams.get('result') ?? '' }), true);
               return;
             }
-            if (req.method !== 'POST' || path !== '/hq/grant') throw new MhpCommerceError(405, 'Use the controls in HQ.');
+            if (req.method !== 'POST' || (path !== '/hq/grant' && path !== '/hq/invite')) throw new MhpCommerceError(405, 'Use the controls in HQ.');
             if (req.headers.origin !== MHP_AUTH_ORIGIN) throw new MhpCommerceError(403, 'Refresh HQ before continuing.');
             if (!/^application\/x-www-form-urlencoded(?:;|$)/i.test(String(req.headers['content-type'] ?? ''))) throw new MhpCommerceError(415, 'Use the grant access form.');
             const fields = new URLSearchParams((await body(req, 12_288)).toString('utf8'));
-            if ([...fields.keys()].some(key => !['csrf', 'commandId', 'targetEmail', 'targetName', 'productId', 'endsAt', 'note'].includes(key) || fields.getAll(key).length !== 1)
+            const allowedFields = path === '/hq/grant' ? ['csrf', 'commandId', 'targetEmail', 'targetName', 'productId', 'endsAt', 'note'] : ['csrf', 'grantId', 'targetEmail'];
+            if ([...fields.keys()].some(key => !allowedFields.includes(key) || fields.getAll(key).length !== 1)
                 || !verifyPortalCsrf(portal.sessionSecret, token, fields.get('csrf') ?? '')) throw new MhpCommerceError(403, 'Refresh HQ before continuing.');
-            await deps.hq.grant(token, Object.fromEntries(fields), now);
-            redirect(res, '/hq?result=granted');
+            if (path === '/hq/invite') {
+              const recipient = (fields.get('targetEmail') ?? '').trim().toLowerCase();
+              const grantId = fields.get('grantId') ?? '';
+              if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(recipient) || !/^[0-9a-f-]{36}$/i.test(grantId)) throw new MhpCommerceError(400, 'Choose a saved access grant.');
+              const grant = (await deps.hq.snapshot(token, recipient)).grants.find(item => item.id === grantId && item.email === recipient);
+              if (!grant || (grant.endsAt && Date.parse(grant.endsAt) <= now)) throw new MhpCommerceError(404, 'This access grant is no longer available.');
+              if (!deps.mail?.configured) { redirect(res, '/hq?result=invite-failed'); return; }
+              try { await deps.mail.sendAccessInvite(recipient, grant.name || recipient.split('@')[0]!, grant.productName); }
+              catch { redirect(res, '/hq?result=invite-failed'); return; }
+              redirect(res, '/hq?result=invite-sent'); return;
+            }
+            const grantId = await deps.hq.grant(token, Object.fromEntries(fields), now);
+            const recipient = (fields.get('targetEmail') ?? '').trim().toLowerCase();
+            let invited = false;
+            if (deps.mail?.configured) {
+              try {
+                const granted = (await deps.hq.snapshot(token, recipient)).grants.find(grant => grant.id === grantId);
+                await deps.mail.sendAccessInvite(recipient, granted?.name || (fields.get('targetName') ?? '').trim() || recipient.split('@')[0]!, granted?.productName || 'Martin Howard Property membership');
+                invited = true;
+              } catch { /* The access grant is committed; HQ must report the invite failure plainly. */ }
+            }
+            redirect(res, invited ? '/hq?result=invited' : '/hq?result=invite-failed');
             return;
           }
           if (req.method === 'GET' && path === '/app/account') {

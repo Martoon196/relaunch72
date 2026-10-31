@@ -262,11 +262,15 @@ export function appShell(opts: AppShellOptions): string {
   const entitledMhpInbox = (module: ResolvedPlatformModule): boolean =>
     profile.id === 'martin_howard_property' && module.id === 'inbox'
     && capabilities.has('conversations.read') && profile.visibleNavigation.includes('inbox');
+  const workingMhpModule = (module: ResolvedPlatformModule): boolean =>
+    profile.id === 'martin_howard_property' && profile.visibleNavigation.includes(module.id)
+    && (module.id === 'investors' || module.id === 'leadrelay');
+  const entitledModule = (module: ResolvedPlatformModule): boolean => entitledMhpInbox(module) || workingMhpModule(module);
   const moduleLocked = (module: ResolvedPlatformModule): boolean =>
-    !entitledMhpInbox(module) && (module.state === 'setup_required' || module.state === 'unavailable');
+    !entitledModule(module) && (module.state === 'setup_required' || module.state === 'unavailable');
   const workingNav = workingModules.map((module) => {
     const current = isCurrent(module.id);
-    const stateLabel = entitledMhpInbox(module) ? '' : module.state === 'preview' ? 'Preview' : moduleLocked(module) && module.state === 'setup_required' ? 'Setup' : '';
+    const stateLabel = entitledModule(module) ? '' : module.state === 'preview' ? 'Preview' : moduleLocked(module) && module.state === 'setup_required' ? 'Setup' : '';
     const state = stateLabel ? `<span class="module-state">${escapeHtml(stateLabel)}</span>` : '';
     if (moduleLocked(module)) {
       return `<span class="nav-item nav-locked" role="link" aria-disabled="true" title="${escapeHtml(descriptiveModuleLabel(module))} is not connected in this workspace">${portalModuleIcon(module.id)}<span>${escapeHtml(moduleLabel(module))}</span>${state}</span>`;
@@ -275,7 +279,7 @@ export function appShell(opts: AppShellOptions): string {
   }).join('');
   const quickWorking = quickModules.map((module) => moduleLocked(module)
     ? `<span class="command-link locked" role="link" aria-disabled="true">${portalModuleIcon(module.id)}${escapeHtml(descriptiveModuleLabel(module))}<small>${icon('lock')}Setup</small></span>`
-    : `<a class="command-link" href="${escapeHtml(moduleRoute(module))}"${isCurrent(module.id) ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}${escapeHtml(descriptiveModuleLabel(module))}<small>${module.state === 'preview' && !entitledMhpInbox(module) ? 'Preview' : module.group}</small></a>`).join('');
+    : `<a class="command-link" href="${escapeHtml(moduleRoute(module))}"${isCurrent(module.id) ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}${escapeHtml(descriptiveModuleLabel(module))}<small>${module.state === 'preview' && !entitledModule(module) ? 'Preview' : module.group}</small></a>`).join('');
   const mobileModules = workingModules.filter((module) => !moduleLocked(module));
   const mobileNav = mobileModules.map((module) => `<a href="${escapeHtml(moduleRoute(module))}"${isCurrent(module.id) ? ' aria-current="page"' : ''}>${portalModuleIcon(module.id)}${escapeHtml(mobileLabel(module))}</a>`).join('');
   const csrfField = opts.csrfToken

@@ -101,7 +101,7 @@ function harness(overrides: Partial<MhpAuthMountDeps> = {}) {
     requestLink: async () => { calls.push('request'); return { email: ROW.user_email, url: `${MHP_AUTH_ORIGIN}/portal/auth/verify?purpose=magic&token=${TOKEN}` }; },
     consumeLink: async () => { calls.push('consume'); return SESSION; }, revoke: async () => { calls.push('revoke'); },
   };
-  const deps: MhpAuthMountDeps = { auth, sessionSecret: SECRET, abuseHashSecret: SECRET, mail: { configured: true, sendAuthLink: async () => { calls.push('mail'); } },
+  const deps: MhpAuthMountDeps = { auth, sessionSecret: SECRET, abuseHashSecret: SECRET, mail: { configured: true, sendAuthLink: async () => { calls.push('mail'); }, sendAccessInvite: async () => {} },
     requestContext: () => ({ requestId: 'mhp-test', requestHash: Buffer.alloc(32, 24), sourceHash: CONTEXT.sourceHash }), now: () => NOW,
     abuse: { admit: async () => ({ allowed: true, retryAfterSeconds: 0, leaseHash: randomBytes(32) }), complete: async () => {}, assertReady: async () => {}, close: async () => {} }, ...overrides };
   const mount = createMhpAuthMount(deps);
@@ -141,7 +141,7 @@ test('MHP password login sets only its host cookie and server-owned account redi
   const h = harness(); const first = (await h.run('GET', '/portal/login')).res;
   const body = new URLSearchParams({ _auth_csrf: csrf(first.body), email: ROW.user_email, password: 'password', next: 'https://evil.invalid' }).toString();
   const { res } = await h.run('POST', '/portal/login', body, { cookie: cookieHeader(first) });
-  assert.equal(res.statusCode, 303); assert.equal(res.headers.location, '/app/account');
+  assert.equal(res.statusCode, 303); assert.equal(res.headers.location, '/portal');
   assert.match((res.headers['set-cookie'] as string[])[0]!, /^__Host-mhp_session=/);
   assert.doesNotMatch((res.headers['set-cookie'] as string[]).join(' '), /r72_portal|Domain=/);
   assert.deepEqual(h.calls, ['login']);
@@ -172,7 +172,7 @@ test('Link requests hide unknown accounts and delivery failure; missing provider
     const { res } = await h.run('POST', '/portal/auth/magic', body, { cookie: cookieHeader(first) });
     assert.equal(res.statusCode, 200); assert.match(res.body, /If this email is linked to an eligible account/); assert.doesNotMatch(res.body, /provider secret/);
   }
-  const missing = harness({ mail: { configured: false, sendAuthLink: async () => { throw new Error('must not send'); } } });
+  const missing = harness({ mail: { configured: false, sendAuthLink: async () => { throw new Error('must not send'); }, sendAccessInvite: async () => {} } });
   const first = (await missing.run('GET', '/portal/auth/magic')).res;
   const body = new URLSearchParams({ _auth_csrf: csrf(first.body), email: ROW.user_email }).toString();
   assert.equal((await missing.run('POST', '/portal/auth/magic', body, { cookie: cookieHeader(first) })).res.statusCode, 503);
@@ -192,7 +192,7 @@ test('MHP auth distributed limiter declines before password/mail work; logout re
 test('An eligible link request does not wait for the provider and expose mailbox eligibility through provider latency', async () => {
   let finish!: () => void;
   const delivery = new Promise<void>(resolve => { finish = resolve; });
-  const h = harness({ mail: { configured: true, sendAuthLink: () => delivery } });
+  const h = harness({ mail: { configured: true, sendAuthLink: () => delivery, sendAccessInvite: async () => {} } });
   const first = (await h.run('GET', '/portal/auth/magic')).res;
   const body = new URLSearchParams({ _auth_csrf: csrf(first.body), email: ROW.user_email }).toString();
   const { res } = await h.run('POST', '/portal/auth/magic', body, { cookie: cookieHeader(first) });
@@ -218,6 +218,18 @@ test('Transactional MHP Postmark disables tracking and redacts failures', async 
   const mailer = createMhpTransactionalMailer({ MHP_POSTMARK_SERVER_TOKEN: 'test-postmark-token', MHP_POSTMARK_FROM: 'verified@example.invalid' }, fetcher);
   await assert.rejects(mailer.sendAuthLink(ROW.user_email, `${MHP_AUTH_ORIGIN}/portal/auth/verify?purpose=reset&token=${TOKEN}`, 'reset'), error => error instanceof Error && error.message === 'MHP transactional delivery unavailable');
   const body = JSON.parse(String(calls[0]!.body)); assert.equal(body.TrackLinks, 'None'); assert.equal(body.TrackOpens, false);
+});
+
+test('MHP access invite uses the transactional stream, fixed sign-in page and escaped member details', async () => {
+  const sent: RequestInit[] = [];
+  const fetcher = (async (_url: unknown, options: RequestInit) => { sent.push(options); return new Response('{}', { status: 200 }); }) as typeof fetch;
+  const mailer = createMhpTransactionalMailer({ MHP_POSTMARK_SERVER_TOKEN: 'test-postmark-token', MHP_POSTMARK_FROM: 'verified@example.invalid' }, fetcher);
+  await mailer.sendAccessInvite('member@example.invalid', '<Mentee>', 'Property Mentoring');
+  const body = JSON.parse(String(sent[0]!.body));
+  assert.equal(body.MessageStream, 'outbound'); assert.equal(body.Tag, 'mhp-access');
+  assert.match(body.TextBody, /https:\/\/app\.martinhowardproperty\.co\.uk\/portal\/auth\/magic/);
+  assert.match(body.HtmlBody, /&lt;Mentee&gt;/); assert.doesNotMatch(body.HtmlBody, /<Mentee>/);
+  assert.doesNotMatch(body.HtmlBody, /portal\/auth\/verify\?token=/);
 });
 
 test('Detached MHP mail has a hard in-flight cap and releases capacity after delivery', async () => {

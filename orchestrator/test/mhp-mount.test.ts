@@ -25,7 +25,7 @@ function response() {
   } as unknown as ServerResponse;
   return { captured, res };
 }
-function fixture(owner = true, mhpProfile = false) {
+function fixture(owner = true, mhpProfile = false, mailFails = false) {
   const calls: string[] = [];
   const portal: PostgresPortalDeps = {
     kind: 'postgres', secure: true, sessionSecret: SECRET, sessionCookieName: '__Host-mhp_session',
@@ -38,9 +38,13 @@ function fixture(owner = true, mhpProfile = false) {
       complete: async () => {}, assertReady: async () => {}, close: async () => {} },
   };
   const mount = createMhpMount({ portal, authMount: { handle: async () => false }, readiness: async () => [],
+    mail: { configured: true, sendAccessInvite: async (email, name, product) => {
+      calls.push('invite'); assert.equal(email, 'test@example.invalid'); assert.equal(name, 'Test'); assert.equal(product, 'Property Mentoring');
+      if (mailFails) throw new Error('provider unavailable');
+    } },
     hq: {
       isOwner: async () => owner,
-      snapshot: async () => { if (!owner) throw new MhpCommerceError(403, 'Owner access is required for HQ.'); calls.push('hq'); return { people: [], products: [], grants: [] }; },
+      snapshot: async () => { if (!owner) throw new MhpCommerceError(403, 'Owner access is required for HQ.'); calls.push('hq'); return { people: [], products: [], grants: [{ id: ID, accountId: ID, name: 'Test', email: 'test@example.invalid', productName: 'Property Mentoring', startsAt: '', endsAt: null, note: '', grantedBy: '', grantedAt: '' }] }; },
       grant: async (_token, form) => { if (!owner) throw new MhpCommerceError(403, 'Owner access is required for HQ.'); assert.equal(form.note, 'Test account'); calls.push('grant'); return ID; },
     },
     commerce: {
@@ -131,6 +135,20 @@ test('manual grant requires owner, exact origin, CSRF and unique form fields wit
   assert.equal((await f.request('POST', '/hq/grant', form.replace(/csrf=[^&]+/, 'csrf=bad'), { origin: ORIGIN })).status, 403);
   assert.equal((await fixture(false).request('POST', '/hq/grant', form, { origin: ORIGIN })).status, 403);
   const result = await f.request('POST', '/hq/grant', form, { origin: ORIGIN });
-  assert.equal(result.status, 303); assert.equal(result.headers.location, '/hq?result=granted');
-  assert.deepEqual(f.calls, ['grant']);
+  assert.equal(result.status, 303); assert.equal(result.headers.location, '/hq?result=invited');
+  assert.deepEqual(f.calls, ['grant', 'hq', 'invite']);
+  const failed = fixture(true, false, true);
+  const failResult = await failed.request('POST', '/hq/grant', form, { origin: ORIGIN });
+  assert.equal(failResult.status, 303); assert.equal(failResult.headers.location, '/hq?result=invite-failed');
+  assert.deepEqual(failed.calls, ['grant', 'hq', 'invite']);
+});
+
+test('owner can resend a saved invite, but cannot send from an unsaved grant or cross-origin form', async () => {
+  const f = fixture();
+  const form = new URLSearchParams({ csrf: portalCsrfToken(SECRET, TOKEN), grantId: ID, targetEmail: 'test@example.invalid' }).toString();
+  assert.equal((await f.request('POST', '/hq/invite', form, { origin: 'https://other.invalid' })).status, 403);
+  assert.equal((await f.request('POST', '/hq/invite', form.replace(ID, '00000000-0000-4000-8000-000000000000'), { origin: ORIGIN })).status, 404);
+  const result = await f.request('POST', '/hq/invite', form, { origin: ORIGIN });
+  assert.equal(result.status, 303); assert.equal(result.headers.location, '/hq?result=invite-sent');
+  assert.deepEqual(f.calls, ['hq', 'hq', 'invite']);
 });

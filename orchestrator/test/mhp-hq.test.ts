@@ -55,8 +55,10 @@ test('HQ escapes audit/person content and labels grants separately from purchase
     products: [{ id, sku: 'mhp_course', name: 'Course & coaching' }],
     grants: [{ id, accountId: id, name: '<img src=x>', email: 'test@example.invalid', productName: 'Course & coaching',
       startsAt: '2026-10-28T12:00:00Z', endsAt: null, note: '<script>audit</script>', grantedBy: 'owner@example.invalid', grantedAt: '2026-10-28T12:00:00Z' }] };
-  const html = hqPage({ snapshot, csrf: 'safe', granted: true });
+  const html = hqPage({ snapshot, csrf: 'safe', result: 'invited' });
   assert.doesNotMatch(html, /<script>|<img src=x>/); assert.match(html, /&lt;script&gt;audit/);
   assert.match(html, /name="commandId"/); assert.match(html, /No expiry/); assert.match(html, /no checkout is needed/);
   assert.match(html, /name="note" required/); assert.match(html, /action="\/hq\/grant"/);
+  assert.match(html, /action="\/hq\/invite"/);
+  assert.match(hqPage({ snapshot, csrf: 'safe', result: 'invite-failed' }), /The invitation email could not be sent/);
 });

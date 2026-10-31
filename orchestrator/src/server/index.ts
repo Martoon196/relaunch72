@@ -924,7 +924,7 @@ async function main(): Promise<void> {
           return authorizeMhpMemberRoute(access, { path, method });
         };
         mhp = createMhpMount({
-          portal: mhpPortal, commerce: runtime.commerce, hq: runtime.hq, desk: runtime.desk,
+          portal: mhpPortal, commerce: runtime.commerce, hq: runtime.hq, mail: runtime.mail, desk: runtime.desk,
           marketingWorkspace: runtime.marketingWorkspace,
           webinarLeads: runtime.webinarLeads,
           ownerEmail: runtime.ownerEmail,

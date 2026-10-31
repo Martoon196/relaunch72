@@ -156,7 +156,7 @@ export function createMhpAuthMount(deps: MhpAuthMountDeps): { handle(req: Incomi
     const signIn = (session: PortalAuthenticatedSession): void => {
       const ttl = Math.min(86_400, Math.max(1, Math.floor((Date.parse(session.expiresAt ?? '') - now) / 1000)));
       if (!Number.isFinite(ttl)) throw new Error('MHP session expiry unavailable');
-      redirect(res, '/app/account', [cookie(MHP_SESSION_COOKIE, session.sessionToken, ttl), cookie(INTENT_COOKIE, '', 0), cookie(CSRF_COOKIE, '', 0)]);
+      redirect(res, '/portal', [cookie(MHP_SESSION_COOKIE, session.sessionToken, ttl), cookie(INTENT_COOKIE, '', 0), cookie(CSRF_COOKIE, '', 0)]);
     };
     try {
       if (!await admit()) return true;
