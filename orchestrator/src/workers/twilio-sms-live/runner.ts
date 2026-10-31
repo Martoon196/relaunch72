@@ -24,7 +24,7 @@ import {
   SMS_WORKER_DATABASE_ROLE,
 } from '../../sms-live-pg/readiness.js';
 import { createTwilioMessagingHttpAdapterFromRestrictedKeyEnvironment } from '../../providers/twilio-messaging-http-adapter.js';
-import { runSmsPhoneVerificationOnce } from '../../sms-live-pg/phone-verification.js';
+import { runSmsPhoneVerificationOnce, smsVerificationDisplayBrand } from '../../sms-live-pg/phone-verification.js';
 import { assertRuntimeSchemaCurrent } from '../../db/runtime-readiness.js';
 import { assertExpectedDatabaseInstallation } from '../../db/installation-identity.js';
 
@@ -110,6 +110,7 @@ export interface VerificationOnlySmsWorkerConfig extends WorkerConfigBase {
   readonly workspaceId: string;
   readonly connectionId: string;
   readonly verificationPhone: string;
+  readonly verificationDisplayBrand: string;
 }
 
 export type TwilioSmsWorkerConfig =
@@ -209,6 +210,7 @@ export function loadTwilioSmsWorkerConfig(
     return Object.freeze({
       mode: 'verification_only', installationId, pollIntervalMs, runtime,
       workspaceId, connectionId, verificationPhone,
+      verificationDisplayBrand: smsVerificationDisplayBrand(env.PROPERTY_PREDATOR_SMS_VERIFICATION_DISPLAY_BRAND),
     });
   }
   if (runtime.mode === 'disabled') {
@@ -390,6 +392,7 @@ export async function startTwilioSmsLiveWorker(
         workspaceId: config.workspaceId,
         connectionId: config.connectionId,
         phone: config.verificationPhone,
+        displayBrand: config.verificationDisplayBrand,
       }).then((result) => result === 'sent' ? 'settled'
         : result === 'idle' ? 'idle' : 'failed_or_attention')
         .finally(() => { inFlight = null; });

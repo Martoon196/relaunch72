@@ -929,6 +929,7 @@ async function main(): Promise<void> {
           webinarLeads: runtime.webinarLeads,
           ownerEmail: runtime.ownerEmail,
           sequences: runtime.sequences,
+          ownedSms: runtime.ownedSms,
           growth: { growth: runtime.growth, learning: runtime.learning, unsubscribeSecret: cfg.sessionSecret,
             marketingMode: runtime.marketing?.mode ?? 'off' },
           authMount: createMhpAuthMount({
