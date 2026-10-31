@@ -418,13 +418,14 @@ export async function startTwilioSmsLiveWorker(
       transport: boundTransport,
       leaseToken: randomBytes(32),
     });
-    // At most one provider call per cycle: a pending opt-in code goes first,
-    // and the marketing queue runs only when no code is waiting.
-    inFlight = (config.mhpEventCodes && !config.runtime.emergencyPaused
-      ? runMhpEventSmsCodeOnce(pool, boundTransport, { workspaceId: config.workspaceId, connectionId: config.connectionId })
-        .then((result): Promise<TwilioSmsWorkerCycleResult> | TwilioSmsWorkerCycleResult => result === 'idle' ? marketing()
-          : result === 'sent' ? 'settled' : 'failed_or_attention')
-      : marketing()).finally(() => { inFlight = null; });
+    // At most one provider call per cycle. Queued owner texts carry a 4-minute
+    // authority, so they always go first; an opt-in code is sent only when the
+    // marketing queue is empty.
+    inFlight = marketing().then(async (result): Promise<TwilioSmsWorkerCycleResult> => {
+      if (result !== 'idle' || !config.mhpEventCodes || config.runtime.emergencyPaused) return result;
+      const code = await runMhpEventSmsCodeOnce(pool, boundTransport, { workspaceId: config.workspaceId, connectionId: config.connectionId });
+      return code === 'idle' ? 'idle' : code === 'sent' ? 'settled' : 'failed_or_attention';
+    }).finally(() => { inFlight = null; });
     return inFlight;
   };
 

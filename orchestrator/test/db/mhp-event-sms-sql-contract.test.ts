@@ -44,7 +44,9 @@ test('public functions run only as the existing public capture role and never cr
     assert.doesNotMatch(body, /app\.user_id/u);
   }
   assert.match(request, /p_consent_text_sha256 IS DISTINCT FROM public\.digest\(consent_text,'sha256'\)/u, 'the exact shown wording is required');
-  assert.match(request, /RETURN jsonb_build_object\('optinId',gen_random_uuid\(\)\)/u, 'unknown emails get an unstored decoy');
+  assert.match(request, /CASE WHEN signup IS NULL THEN 'decoy' ELSE 'pending' END/u, 'unknown emails become stored decoys');
+  assert.doesNotMatch(request, /gen_random_uuid\(\)\)/u, 'no unstored ids that behave differently on repeat');
+  assert.match(confirm, /matched:=o\.state IN\('sent','verified'\)/u, 'decoys and unsent rows answer like a wrong code');
   assert.match(request, /p_phone!~'\^\\\+447\[0-9\]\{9\}\$'/u, 'UK mobiles only');
   assert.match(confirm, /o\.attempts>=5/u);
   assert.match(text, /GRANT EXECUTE ON FUNCTION app_private\.mhp_event_sms_optin_request\(text,text,text,text,bytea,bytea,text\), ?app_private\.mhp_event_sms_optin_confirm\(uuid,text\) TO r72_identity_command;/u);
@@ -56,8 +58,11 @@ test('verification codes are worker-only, capped per day and per phone, and fail
   assert.match(claim, /session_user<>'r72_sms_worker_command'/u);
   assert.match(claim, /current_setting\('app\.actor_kind',true\) IS DISTINCT FROM 'worker'/u);
   assert.match(claim, /coalesce\(current_setting\('app\.user_id',true\),''\)<>''/u, 'a worker claim carries no user identity');
-  assert.match(claim, /WHERE o\.claimed_at>=day_start\)>=20 THEN RETURN/u, '20 codes per UTC day');
-  assert.match(claim, /s\.claimed_at>=day_start\)<3/u, '3 codes per phone per day');
+  assert.match(claim, /hashtextextended\(format\('pp-sms:%s:%s',p_workspace,p_connection\),0\)/u, 'the 0056 per-connection lock');
+  assert.match(claim, /used\.codes_today>=5 OR used\.day_used>=10 OR used\.month_used>=50 THEN RETURN/u, 'codes share the founder caps');
+  assert.match(claim, /SET state='failed' WHERE o\.state='pending' AND app_private\.mhp_event_sms_phone_suppressed\(o\.phone_e164\)/u,
+    'never a code to a STOP number');
+  assert.match(claim, /s\.phone_e164=o\.phone_e164 AND s\.claimed_at>=day_start\)<3/u, '3 codes per phone per day');
   assert.match(claim, /SET state='failed' WHERE o\.state='claimed'/u);
   assert.match(claim, /SET state='needs_attention' WHERE o\.state='armed'/u, 'an unsettled send is never retried');
   assert.match(text, /GRANT EXECUTE ON FUNCTION app_private\.mhp_event_sms_code_claim\(uuid,uuid\), ?app_private\.mhp_event_sms_code_arm\(uuid,uuid,text\), ?app_private\.mhp_event_sms_code_settle\(uuid,uuid,text,text\) TO r72_sms_worker_command;/u);
@@ -70,27 +75,34 @@ test('the owner batch send is the only send, runs in the live owner session and 
   assert.match(send, /session_user<>'r72_sms_command'/u);
   assert.match(send, /current_setting\('app\.user_id',true\) IS DISTINCT FROM actor::text/u);
   assert.match(send, /p_confirmed IS DISTINCT FROM true/u);
-  assert.match(send, /mhp_event_sms_batch_digest\(p_campaign,p_content_version,p_content_sha256\) IS DISTINCT FROM p_batch_sha256 THEN RAISE EXCEPTION 'The reviewed batch changed' USING ERRCODE='40001'/u);
+  assert.match(send, /ready:=app_private\.mhp_event_sms_ready_set\(p_campaign,p_content_version\); IF app_private\.mhp_event_sms_digest_of\(p_campaign,p_content_version,p_content_sha256,ready\) IS DISTINCT FROM p_batch_sha256 THEN RAISE EXCEPTION 'The reviewed batch changed' USING ERRCODE='40001'/u,
+    'the hash and the loop use one captured set');
+  assert.match(send, /FOR r IN SELECT \* FROM jsonb_to_recordset\(ready\)/u);
+  assert.match(send, /IF app_private\.mhp_event_sms_phone_suppressed\(r\.phone\) THEN RAISE EXCEPTION/u);
   assert.match(send, /exact:=app_private\.mhp_owned_sms_content\(p_content_version,p_content_sha256\)/u, 'the ratified 0130 content gate');
   assert.match(send, /position\('STOP' IN body\)=0/u);
-  assert.match(send, /recipients\*segments>10 OR day_used\+recipients\*segments>10 OR month_used\+recipients\*segments>50/u);
+  assert.match(send, /recipients\*segments>10 OR used\.day_used\+recipients\*segments>10 OR used\.month_used\+recipients\*segments>50/u);
   assert.match(send, /app_private\.authorize_and_enqueue_sms_live_job\(/u, 'the unchanged 0056 enqueue');
   assert.match(send, /expiry:=prepared\+interval '4 minutes'/u);
   assert.match(send, /IF p_lookup_only THEN RETURN jsonb_build_object\('not_started',true\)/u, 'lookup before any mutation');
   // The registrant's consent is theirs, recorded by the system, never as the owner.
-  assert.match(send, /'mhp\.event-sms\.public-optin','mhp\.event-sms\/v1', r\.consent_text_sha256,'optin:'\|\|r\.optin_id::text,'system',NULL/u);
+  assert.match(send, /'mhp\.event-sms\.public-optin','mhp\.event-sms\/v1', consent_sha,'optin:'\|\|r\."optinId"::text,'system',NULL/u);
   assert.match(text, /GRANT EXECUTE ON FUNCTION app_private\.mhp_event_sms_batch_snapshot\(bytea,text,uuid,bytea\), ?app_private\.mhp_event_sms_batch_send\(bytea,uuid,text,uuid,bytea,bytea,boolean,boolean\) TO r72_sms_command;/u);
 });
 
 test('only ready candidates can be sent and every exclusion is explicit', async () => {
   const text = await sql();
   const candidates = bodyOf(text, 'CREATE FUNCTION app_private.mhp_event_sms_batch_candidates(');
-  for (const status of ['email_unsubscribed', 'phone_shared', 'needs_import', 'contact_ambiguous', 'opted_out', 'consent_changed', 'already_sent', 'ready']) {
+  for (const status of ['email_unsubscribed', 'phone_shared', 'needs_import', 'contact_ambiguous', 'opted_out', 'consent_changed', 'already_sent', 'multiple_numbers', 'ready']) {
     assert.match(candidates, new RegExp(`'${status}'`, 'u'));
   }
-  const send = bodyOf(text, 'CREATE FUNCTION app_private.mhp_event_sms_batch_send(');
-  assert.match(send, /FOR r IN SELECT \* FROM app_private\.mhp_event_sms_batch_candidates\(p_campaign,p_content_version\) c WHERE c\.status='ready'/u);
-  assert.match(text, /UNIQUE\(optin_id,content_version_id\)/u, 'one text version per registrant, ever');
+  assert.match(candidates, /WHEN app_private\.mhp_event_sms_phone_suppressed\(c\.phone_e164\) THEN 'opted_out'/u, 'a STOP on any point holding the number');
+  assert.match(candidates, /WHERE o\.prospect_id=c\.prospect_id AND r\.content_version_id=p_content_version\) THEN 'already_sent'/u, 'per person, not per opt-in');
+  const ready = bodyOf(text, 'CREATE FUNCTION app_private.mhp_event_sms_ready_set(');
+  assert.match(ready, /WHERE c\.status='ready'/u);
+  const suppressed = bodyOf(text, 'CREATE FUNCTION app_private.mhp_event_sms_phone_suppressed(');
+  assert.doesNotMatch(suppressed, /deleted_at|dedupe_state/u, 'deleted and quarantined points still count');
+  assert.match(text, /UNIQUE\(optin_id,content_version_id\)/u, 'one text version per opt-in, ever');
   assert.match(text, /CREATE FUNCTION app_private\.mhp_event_sms_verified_optins[^$]*\$f\$[^$]*session_user='r72_sms_command'/u);
   assert.match(text, /GRANT EXECUTE ON FUNCTION app_private\.mhp_event_sms_verified_optins\(text\) TO r72_sms_definer;/u);
 });

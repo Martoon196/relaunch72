@@ -45,6 +45,7 @@ const STATUS_TEXT: Record<MhpEventSmsRecipientStatus, string> = {
   ready: 'Ready', email_unsubscribed: 'Unsubscribed from emails, so not texted', phone_shared: 'Number also claimed by someone else, so not texted',
   needs_import: 'Import webinar sign-ups to the CRM first', contact_ambiguous: 'More than one CRM contact has this email', opted_out: 'Replied STOP before, so never texted',
   consent_changed: 'Text permission changed since they opted in', already_sent: 'Already sent this text',
+  multiple_numbers: 'Confirmed more than one mobile, so held for you to check',
 };
 export function mhpEventSmsOwnerPage(input: { snapshot: MhpEventSmsOwnerSnapshot; csrf: string; commandId: string; result?: MhpEventSmsSendResult; notice?: string }): string {
   const { database, detail, choices } = input.snapshot;
@@ -67,9 +68,9 @@ export function mhpEventSmsOwnerPage(input: { snapshot: MhpEventSmsOwnerSnapshot
     + `${input.notice ? `<p role="status" class="status">${esc(input.notice)}</p>` : ''}${input.result ? `<p role="status" class="status">${input.result.replayed ? 'This is the saved outcome of your earlier send. Nothing new was queued.' : `${esc(input.result.recipientCount)} texts queued.`}</p>` : ''}`
     + `${database.bindingReady ? '' : '<p class="status">The MHP sender is not connected. Connect it on the phone test page first.</p>'}`
     + `<section><h2>1. Choose the saved text</h2>${choices.length ? `<p>${choices.map(c => `<a href="${MHP_EVENT_SMS_OWNER_ROUTE}?item=${encodeURIComponent(c.itemId)}&amp;version=${encodeURIComponent(c.versionId)}">${esc(c.label)}</a>`).join(' · ')}</p>` : '<p>Save a text on the phone test page first.</p>'}`
-    + `${detail ? `<blockquote>${esc(detail.payload.bodyText)}</blockquote><p class="small">${esc(segments)} segment(s) each · ${esc(total)} for this batch · ${esc(dayLeft)} left today · ${esc(monthLeft)} left this month.</p>` : ''}</section>`
+    + `${detail ? `<blockquote>${esc(detail.payload.bodyText)}</blockquote><p class="small">${esc(segments)} segment(s) each · ${esc(total)} for this batch · ${esc(dayLeft)} left today · ${esc(monthLeft)} left this month. Verification codes count too.</p>` : ''}</section>`
     + `<section><h2>2. Check who gets it</h2>${rows ? `<table><thead><tr><th>Registrant</th><th>Mobile</th><th>Confirmed</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>` : '<p>Nobody has confirmed a mobile yet.</p>'}`
-    + `<p class="small">Each person proved the number is theirs with a code. The phone step does not prove they own the email address. This is your owner review, not external legal advice.</p></section>`
+    + `<p class="small">Each person proved the number is theirs with a code. The phone step does not prove they own the email address, so check anything that looks wrong before sending. This is your owner review, not external legal advice.</p></section>`
     + `${detail ? `<section><h2>3. Send</h2>${database.readyCount === 0 ? '<p>Nobody is ready for this text.</p>' : total > dayLeft || total > monthLeft ? '<p class="status">This batch is bigger than the remaining text allowance. It cannot be sent today.</p>' : ''}${send}</section>` : ''}`
     + batches, true);
 }

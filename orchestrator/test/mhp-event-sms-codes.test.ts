@@ -99,7 +99,7 @@ test('the worker switch is off by default and refuses any other workspace or a d
   /owned-number live worker/u);
 });
 
-test('a live cycle sends a waiting code first and only then runs the marketing queue, one provider call per cycle', async () => {
+test('a live cycle drains the marketing queue first and sends a code only when it is empty, one provider call per cycle', async () => {
   const { pool, seen } = fakePool();
   let claim = true, marketingClaims = 0;
   const realConnect = (pool as unknown as { connect: () => Promise<{ query: (sql: string, params?: readonly unknown[]) => Promise<unknown> }> }).connect;
@@ -117,11 +117,11 @@ test('a live cycle sends a waiting code first and only then runs the marketing q
   try {
     assert.equal(runtime.readiness.safety.mhpEventCodesEnabled, true);
     assert.equal(await runtime.runOnce(), 'settled');
-    assert.equal(seen.settles.length, 1);
-    assert.equal(marketingClaims, 0, 'the code used this cycle; marketing waits');
+    assert.equal(marketingClaims, 1, 'the marketing queue was checked first');
+    assert.equal(seen.settles.length, 1, 'then one code was sent');
     claim = false;
     assert.equal(await runtime.runOnce(), 'idle');
     assert.equal(seen.settles.length, 1, 'no second code');
-    assert.equal(marketingClaims, 1, 'with no code waiting, the marketing queue runs');
+    assert.equal(marketingClaims, 2);
   } finally { await runtime.shutdown(); }
 });

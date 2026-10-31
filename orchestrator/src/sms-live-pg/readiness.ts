@@ -59,8 +59,9 @@ const EVENT_CODE_ARM = 'app_private.mhp_event_sms_code_arm(uuid,uuid,text)';
 const EVENT_CODE_SETTLE = 'app_private.mhp_event_sms_code_settle(uuid,uuid,text,text)';
 const EVENT_BATCH_SNAPSHOT = 'app_private.mhp_event_sms_batch_snapshot(bytea,text,uuid,bytea)';
 const EVENT_BATCH_SEND = 'app_private.mhp_event_sms_batch_send(bytea,uuid,text,uuid,bytea,bytea,boolean,boolean)';
-const EVENT_INTERNAL = ['app_private.mhp_event_sms_batch_candidates(text,uuid)', 'app_private.mhp_event_sms_batch_digest(text,uuid,bytea)',
-  'app_private.mhp_event_sms_verified_optins(text)'] as const;
+const EVENT_INTERNAL = ['app_private.mhp_event_sms_batch_candidates(text,uuid)', 'app_private.mhp_event_sms_ready_set(text,uuid)',
+  'app_private.mhp_event_sms_digest_of(text,uuid,bytea,jsonb)', 'app_private.mhp_event_sms_verified_optins(text)',
+  'app_private.mhp_event_sms_phone_suppressed(text)', 'app_private.mhp_event_sms_usage(uuid)'] as const;
 
 interface RoleContract {
   readonly role: SmsRuntimeRole;
