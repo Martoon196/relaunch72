@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { createPortalFollowupFlowService, type PortalFollowupFlowService } from './followup-flow-service.js';
 import { InvestorService } from './investor-service.js';
 import { InvestorMailService } from './investor-mail-service.js';
 import { InvestorMailVault } from '../investor-mail/vault.js';
@@ -190,6 +191,7 @@ export interface PgPortalPlatform {
   operatorActions: PgPortalOperatorActionCentreService;
   /** Omitted unless the dedicated r72_content_command identity passes readiness. */
   companyContent?: PgPortalCompanyContentService;
+  followupFlows?: PortalFollowupFlowService;
   /** Omitted unless adapter reads and founder command writes both pass readiness. */
   companyAssets?: PgPortalCompanyAssetsService;
   /** Effects-off, operator-triggered source verification and immutable import. */
@@ -1260,6 +1262,9 @@ export async function buildPgPortalPlatform(
       }
     }
 
+    const ppFlowWorkspace = env.PROPERTY_PREDATOR_PILOT_WORKSPACE_ID?.trim().toLowerCase() ?? '';
+    const followupFlows = assetReadinessPool && contentCommandPool && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(ppFlowWorkspace)
+      ? createPortalFollowupFlowService({ webPool, adapterPool: assetReadinessPool, commandPool: contentCommandPool, workspaceId: ppFlowWorkspace }) : undefined;
     let mhp: MhpRuntime | undefined;
     try {
       mhp = await buildMhpRuntime({ env, webPool, identityPool, commandPool,
@@ -1299,6 +1304,7 @@ export async function buildPgPortalPlatform(
         environment: env.NODE_ENV?.trim() === 'production' ? 'production' : 'test',
       }),
       companyContent,
+      followupFlows,
       companyAssets,
       companyContentSync,
       companyContentReview,

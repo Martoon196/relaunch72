@@ -15,6 +15,8 @@ import type { InvestorMailService } from './investor-mail-service.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { PlatformCapability } from '../platform/capabilities.js';
 import type { CompanyContentCatalogItem } from '../company-content-pg/types.js';
+import type { PortalFollowupFlowService } from './followup-flow-service.js';
+import { handlePortalFollowupFlow } from './followup-flow-router.js';
 import { parseCookies } from '../server/admin/session.js';
 import {
   PORTAL_COOKIE,
@@ -534,6 +536,7 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   operatorActions?: PortalOperatorActionCentreService;
   /** Company-owned immutable content catalogue. It exposes no provider or publish operation. */
   companyContent?: PortalCompanyContentService;
+  followupFlows?: Pick<PortalFollowupFlowService, 'snapshot' | 'review' | 'save' | 'publish' | 'preview' | 'simulate' | 'message'>;
   /** Read-only owned-intelligence metadata. It exposes no review, activation or model operation. */
   brandBrain?: PortalBrandBrainService;
   /** Migration 0033 metadata and founder quarantine-only commands. */
@@ -1946,6 +1949,11 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     trackAbuseLease(lease);
   }
 
+  if (deps.kind === 'postgres' && (p === '/portal/follow-ups' || p.startsWith('/portal/follow-ups/'))) {
+    if (!deps.followupFlows) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('PP flow authoring is unavailable.'); return; }
+    if (!resolvedRequestContext || !deps.abuse || !deps.abuseHashSecret) { res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('Native flow access is temporarily unavailable.'); return; }
+    await handlePortalFollowupFlow(req, res, url, { portal: deps, flows: deps.followupFlows, identity: portalIdentity, requestId: resolvedRequestContext.requestId }); return;
+  }
   // ── one-time account setup / login / logout (no auth) ──
   if (p === PROPERTY_PREDATOR_SSO_START_ROUTE && method === 'GET') {
     if (tenantId || portalIdentity) return redirect(res, portalHome);
@@ -2617,6 +2625,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         body: renderGrowthHomeBody(snapshot, profile, growth ?? undefined, {
           actionCentreAvailable: Boolean(deps.operatorActions),
           dailyOutreachAvailable: profile.id === 'property_predator_growth',
+          followupFlowsAvailable: Boolean(deps.followupFlows),
         }),
       }));
     } catch {

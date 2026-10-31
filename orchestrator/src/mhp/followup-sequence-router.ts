@@ -9,39 +9,32 @@ import { MhpCommerceError } from './commerce-service.js';
 import type { MhpSequenceAction, MhpSequenceSaveInput, MhpSequenceService } from './followup-sequence-service.js';
 import { mhpSequenceNewDraft, mhpSequencePage, type MhpSequencePageInput } from './followup-sequence-view.js';
 import { MHP_SEQUENCE_EDITOR_SCRIPT } from './followup-sequence-client.js';
+import { readNativeFlowForm, FLOW_NATIVE_CSP } from '../followup-sequences/http.js';
 import { followupEntryExpiry } from '../followup-sequences/entry.js';
+import { FlowWorkspaceError } from '../followup-sequences/workspace.js';
+import { FlowDraftValidationError } from '../followup-sequences/channel-drafts.js';
 
 const BASE = '/hq/marketing/sequences';
-const ACTIONS = ['save', 'preview', 'publish', 'enrol', 'pause', 'resume', 'cancel', 'stop', 'entry-activate', 'entry-off'] as const;
-const PATHS = new Set([BASE, `${BASE}/editor.js`, ...ACTIONS.map(action => `${BASE}/${action}`)]);
+const ACTIONS = ['save', 'preview', 'simulate', 'publish', 'enrol', 'pause', 'resume', 'cancel', 'stop', 'entry-activate', 'entry-off'] as const;
+const PATHS = new Set([BASE, `${BASE}/editor.js`, `${BASE}/message`, ...ACTIONS.map(action => `${BASE}/${action}`)]);
 const DRAFT = ['csrf', 'commandId', 'contentItemId', 'previousVersionId', 'definition'];
 const SAVED = ['csrf', 'commandId', 'itemId', 'versionId'];
 const CONTROL = [...SAVED, 'runId', 'ackProofId'];
 const ENTRY_ACTIVATE = [...SAVED, 'expiresAt'];
 const ENTRY_OFF = [...SAVED, 'ruleId'];
-const CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+const CSP = FLOW_NATIVE_CSP;
 function respond(res: ServerResponse, status: number, body: string, type = 'text/plain; charset=utf-8'): void {
   res.writeHead(status, { 'content-type': type, 'content-length': String(Buffer.byteLength(body)), 'cache-control': 'no-store',
     'referrer-policy': 'same-origin', 'content-security-policy': CSP, 'x-content-type-options': 'nosniff' }); res.end(body);
 }
 function redirect(res: ServerResponse, location: string): void { res.writeHead(303, { location, 'cache-control': 'no-store', 'referrer-policy': 'same-origin' }); res.end(); }
-async function form(req: IncomingMessage, keys: readonly string[]): Promise<URLSearchParams> {
-  if (!/^application\/x-www-form-urlencoded(?:;\s*charset=utf-8)?$/iu.test(String(req.headers['content-type'] ?? ''))) throw new MhpCommerceError(415, 'Use the sequence form.');
-  const maximum = keys === DRAFT ? 140_000 : 4096;
-  if (Number(req.headers['content-length'] ?? 0) > maximum) throw new MhpCommerceError(413, 'This sequence form is too large.');
-  const chunks: Buffer[] = []; let size = 0;
-  for await (const raw of req) { const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw); size += chunk.length;
-    if (size > maximum) throw new MhpCommerceError(413, 'This sequence form is too large.'); chunks.push(chunk); }
-  const fields = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
-  if (fields.size !== keys.length || [...fields.keys()].some(key => !keys.includes(key) || fields.getAll(key).length !== 1)) throw new MhpCommerceError(400, 'Refresh the sequence form before continuing.');
-  return fields;
-}
+const form = (req: IncomingMessage, keys: readonly string[]) => readNativeFlowForm(req, keys, keys === DRAFT);
 export async function handleMhpSequence(req: IncomingMessage, res: ServerResponse, url: URL,
-  deps: { portal: PostgresPortalDeps; sequences: Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command'> & Partial<Pick<MhpSequenceService, 'entryCommand'>> }): Promise<boolean> {
+  deps: { portal: PostgresPortalDeps; sequences: Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command'> & Partial<Pick<MhpSequenceService, 'entryCommand' | 'message' | 'simulate'>> }): Promise<boolean> {
   const path = url.pathname.replace(/\/+$/, ''); if (!PATHS.has(path)) return false;
   const { portal, sequences } = deps, leases: Buffer[] = []; let outcome: 'success' | 'service_error' = 'success';
   try {
-    const method = req.method ?? 'GET', reading = path === BASE || path === `${BASE}/editor.js`;
+    const method = req.method ?? 'GET', reading = path === BASE || path === `${BASE}/editor.js` || path === `${BASE}/message`;
     if (method !== (reading ? 'GET' : 'POST')) throw new MhpCommerceError(405, 'Use the sequence controls.');
     const context = portal.requestContext?.(req);
     if (!context || !portal.abuse || !portal.abuseHashSecret) throw new MhpCommerceError(503, 'Sequence access is temporarily unavailable.');
@@ -62,6 +55,12 @@ export async function handleMhpSequence(req: IncomingMessage, res: ServerRespons
       if (url.search !== '') throw new MhpCommerceError(400, 'Use the sequence editor script.');
       respond(res, 200, MHP_SEQUENCE_EDITOR_SCRIPT, 'text/javascript; charset=utf-8'); return true;
     }
+    if (path === `${BASE}/message`) {
+      if (!sequences.message || url.searchParams.size !== 3 || [...url.searchParams.keys()].some(key => !['item', 'version', 'channel'].includes(key) || url.searchParams.getAll(key).length !== 1)
+          || !['email', 'sms', 'whatsapp'].includes(url.searchParams.get('channel') ?? '')) throw new MhpCommerceError(400, 'Choose an exact local message.');
+      const value = await sequences.message(identity, context.requestId, url.searchParams.get('channel') as 'email' | 'sms' | 'whatsapp', url.searchParams.get('item')!, url.searchParams.get('version')!);
+      respond(res, 200, JSON.stringify(value), 'application/json; charset=utf-8'); return true;
+    }
     if (reading) {
       if ([...url.searchParams.keys()].some(key => !['new', 'item', 'version'].includes(key) || url.searchParams.getAll(key).length !== 1)) throw new MhpCommerceError(400, 'Use one sequence link at a time.');
       const item = url.searchParams.get('item'), version = url.searchParams.get('version'), fresh = url.searchParams.get('new');
@@ -72,15 +71,22 @@ export async function handleMhpSequence(req: IncomingMessage, res: ServerRespons
         draft: fresh ? mhpSequenceNewDraft(snapshot.database.campaign, randomUUID()) : undefined }), 'text/html; charset=utf-8'); return true;
     }
     if (url.search !== '' || req.headers.origin !== MHP_AUTH_ORIGIN || (req.headers['sec-fetch-site'] !== undefined && req.headers['sec-fetch-site'] !== 'same-origin')) throw new MhpCommerceError(403, 'Refresh the sequence form before continuing.');
-    const action = path.slice(BASE.length + 1), editing = action === 'save' || action === 'preview';
+    const action = path.slice(BASE.length + 1), editing = action === 'save' || action === 'preview' || action === 'simulate';
     const fields = await form(req, editing ? DRAFT : action === 'publish' ? SAVED : action === 'entry-activate' ? ENTRY_ACTIVATE : action === 'entry-off' ? ENTRY_OFF : CONTROL), field = (key: string) => fields.get(key) ?? '';
     if (!verifyPortalCsrf(portal.sessionSecret, token, field('csrf'))) throw new MhpCommerceError(403, 'Refresh the sequence form before continuing.');
     if (editing) {
       let definition: unknown; try { definition = JSON.parse(field('definition')); } catch { throw new MhpCommerceError(400, 'Check the sequence steps before saving.'); }
-      const input: MhpSequenceSaveInput = { commandId: field('commandId'), contentItemId: field('contentItemId'), previousVersionId: field('previousVersionId'), definition };
+      let inlineMessages: unknown; if (fields.has('inlineMessages')) try { inlineMessages = JSON.parse(field('inlineMessages')); } catch { throw new MhpCommerceError(400, 'Check the inline message drafts.'); }
+      if (fields.has('simulationCase') && !['happy', 'pause', 'reply', 'booked', 'purchased', 'unsubscribe', 'failed', 'unknown'].includes(field('simulationCase'))) throw new MhpCommerceError(400, 'Choose a simulation scenario.');
+      const input: MhpSequenceSaveInput = { commandId: field('commandId'), contentItemId: field('contentItemId'), previousVersionId: field('previousVersionId'), definition, ...(inlineMessages === undefined ? {} : { inlineMessages }) };
       if (action === 'save') { const saved = await sequences.save(identity, context.requestId, input, now);
         redirect(res, `${BASE}?item=${encodeURIComponent(saved.contentItemId)}&version=${encodeURIComponent(saved.contentVersionId)}`); return true; }
-      const preview = await sequences.preview(identity, context.requestId, definition);
+      if (action === 'simulate') {
+        if (!sequences.simulate) throw new MhpCommerceError(503, 'Flow simulation is unavailable.');
+        const result = await sequences.simulate(identity, context.requestId, definition, inlineMessages, field('simulationCase') || 'happy');
+        respond(res, 200, await page({ draft: input, preview: result, simulation: result.simulation }), 'text/html; charset=utf-8'); return true;
+      }
+      const preview = await sequences.preview(identity, context.requestId, definition, inlineMessages);
       respond(res, 200, await page({ draft: input, preview }), 'text/html; charset=utf-8'); return true;
     }
     let message: string;
@@ -103,7 +109,8 @@ export async function handleMhpSequence(req: IncomingMessage, res: ServerRespons
     }
     const detail = await sequences.review(identity, context.requestId, field('itemId'), field('versionId'));
     respond(res, 200, await page({ detail, message }), 'text/html; charset=utf-8'); return true;
-  } catch (error) { outcome = 'service_error'; respond(res, error instanceof MhpCommerceError ? error.status : 503, error instanceof MhpCommerceError ? error.message : 'Sequence controls are temporarily unavailable.'); }
+  } catch (error) { outcome = 'service_error'; const known = error instanceof MhpCommerceError || error instanceof FlowWorkspaceError;
+    respond(res, known ? error.status : error instanceof FlowDraftValidationError ? 400 : 503, known || error instanceof FlowDraftValidationError ? error.message : 'Sequence controls are temporarily unavailable.'); }
   finally { await Promise.allSettled(leases.map(lease => portal.abuse!.complete(lease, outcome))); }
   return true;
 }

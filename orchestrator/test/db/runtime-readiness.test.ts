@@ -320,18 +320,19 @@ test('reader125 bridge is unavailable to the old123 prefix', async () => {
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, approvedMarketing, approvedWebinarReader]), directory), /migration not present/);
 });
 
-test('final128 capture-entry runtime strictly requires exact128 and every earlier migration', async () => {
+test('final129 local-channel runtime strictly requires exact129 and every earlier migration', async () => {
   const rows = (await discoverMigrations()).map(({ filename, checksum }) => ({ filename, checksum }));
-  assert.equal(rows.length, 128);
+  assert.equal(rows.length, 129);
   assert.deepEqual(rows[127], { filename: '0128_mhp_sequence_capture_entry.sql', checksum: '09b35b4eaf6e934c8f560e8d9d645bd3b9f37a34268f77f4afd974ecd1b54e97' });
+  assert.deepEqual(rows[128], { filename: '0129_mhp_local_channel_drafts.sql', checksum: '649ba68b60954b6e76d4e702511321e59eff0785128051ed7b81f968abe1b57a' });
   await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 127))), /schema is behind by 1 migration/);
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 126))), /schema is behind by 2 migration/);
-  for (const at of [0, 124, 125, 126, 127]) {
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 128))), /schema is behind by 1 migration/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 127))), /schema is behind by 2 migration/);
+  for (const at of [0, 124, 125, 126, 127, 128]) {
     const corrupt = rows.map((row, index) => index === at ? { ...row, checksum: '0'.repeat(64) } : row);
     await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(corrupt)), /checksum changed/);
   }
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(0, 126), rows[127]!])), /not a contiguous prefix/);
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, rows[127]!])), /invalid runtime migration ledger/);
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { filename: '0129_unknown.sql', checksum: 'a'.repeat(64) }])), /migration not present/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(0, 127), rows[128]!])), /not a contiguous prefix/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, rows[128]!])), /invalid runtime migration ledger/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { filename: '0130_unknown.sql', checksum: 'a'.repeat(64) }])), /migration not present/);
 });

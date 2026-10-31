@@ -652,6 +652,7 @@ async function main(): Promise<void> {
         journeys: postgresPortal.journeys,
         operatorActions: postgresPortal.operatorActions,
         companyContent: postgresPortal.companyContent,
+        followupFlows: postgresPortal.followupFlows,
         companyAssets: postgresPortal.companyAssets,
         companyContentSync: postgresPortal.companyContentSync,
         companyContentReview: postgresPortal.companyContentReview,
