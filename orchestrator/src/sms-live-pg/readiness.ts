@@ -50,6 +50,17 @@ const VERIFY_CONFIRM = 'app_private.confirm_sms_phone_challenge(uuid,uuid,text)'
 const VERIFY_CLAIM = 'app_private.claim_sms_phone_challenge(uuid,uuid,text)';
 const VERIFY_ARM = 'app_private.arm_sms_phone_challenge(uuid,uuid,text)';
 const VERIFY_SETTLE = 'app_private.settle_sms_phone_challenge(uuid,uuid,text,text)';
+// 0131 MHP webinar texts: public opt-in is for the public capture role only;
+// code delivery is worker-only; the batch snapshot/send is owner-command-only.
+const EVENT_OPTIN_REQUEST = 'app_private.mhp_event_sms_optin_request(text,text,text,text,bytea,bytea,text)';
+const EVENT_OPTIN_CONFIRM = 'app_private.mhp_event_sms_optin_confirm(uuid,text)';
+const EVENT_CODE_CLAIM = 'app_private.mhp_event_sms_code_claim(uuid,uuid)';
+const EVENT_CODE_ARM = 'app_private.mhp_event_sms_code_arm(uuid,uuid,text)';
+const EVENT_CODE_SETTLE = 'app_private.mhp_event_sms_code_settle(uuid,uuid,text,text)';
+const EVENT_BATCH_SNAPSHOT = 'app_private.mhp_event_sms_batch_snapshot(bytea,text,uuid,bytea)';
+const EVENT_BATCH_SEND = 'app_private.mhp_event_sms_batch_send(bytea,uuid,text,uuid,bytea,bytea,boolean,boolean)';
+const EVENT_INTERNAL = ['app_private.mhp_event_sms_batch_candidates(text,uuid)', 'app_private.mhp_event_sms_batch_digest(text,uuid,bytea)',
+  'app_private.mhp_event_sms_verified_optins(text)'] as const;
 
 interface RoleContract {
   readonly role: SmsRuntimeRole;
@@ -64,6 +75,7 @@ const CONTRACTS: Readonly<Record<SmsRuntimeRole, RoleContract>> = Object.freeze(
     forbidden: Object.freeze([
       CLAIM, LOAD, BEGIN, SETTLE, STATUS_RECEIPT, INBOUND_PROJECTION, SESSION_READ,
       VERIFY_CLAIM, VERIFY_ARM, VERIFY_SETTLE,
+      EVENT_OPTIN_REQUEST, EVENT_OPTIN_CONFIRM, EVENT_CODE_CLAIM, EVENT_CODE_ARM, EVENT_CODE_SETTLE, ...EVENT_INTERNAL,
     ]),
   }),
   [SMS_WORKER_DATABASE_ROLE]: Object.freeze({
@@ -73,6 +85,7 @@ const CONTRACTS: Readonly<Record<SmsRuntimeRole, RoleContract>> = Object.freeze(
     forbidden: Object.freeze([
       AUTHORIZE, SESSION_LOCK, SESSION_READ, STATUS_RECEIPT, INBOUND_PROJECTION,
       VERIFY_REQUEST, VERIFY_CONFIRM,
+      EVENT_OPTIN_REQUEST, EVENT_OPTIN_CONFIRM, EVENT_BATCH_SNAPSHOT, EVENT_BATCH_SEND, ...EVENT_INTERNAL,
     ]),
   }),
   [SMS_WEBHOOK_DATABASE_ROLE]: Object.freeze({
@@ -81,6 +94,8 @@ const CONTRACTS: Readonly<Record<SmsRuntimeRole, RoleContract>> = Object.freeze(
     forbidden: Object.freeze([
       AUTHORIZE, SESSION_LOCK, SESSION_READ, CLAIM, LOAD, BEGIN, SETTLE,
       VERIFY_REQUEST, VERIFY_CONFIRM, VERIFY_CLAIM, VERIFY_ARM, VERIFY_SETTLE,
+      EVENT_OPTIN_REQUEST, EVENT_OPTIN_CONFIRM, EVENT_CODE_CLAIM, EVENT_CODE_ARM, EVENT_CODE_SETTLE,
+      EVENT_BATCH_SNAPSHOT, EVENT_BATCH_SEND, ...EVENT_INTERNAL,
     ]),
   }),
 });
