@@ -16,6 +16,8 @@ import { PgMhpGrowthService, mhpWebinarConfig } from './growth-service.js';
 import { PgMhpLearningService } from './learning-service.js';
 import { PgMhpMarketingWorkspaceService } from './marketing-workspace-service.js';
 import { mhpMarketingConfig, type MhpMarketingConfig } from './marketing-mail.js';
+import { CrmCommandService, createPgCrmTransactionRunner } from '../crm-pg/index.js';
+import { MhpWebinarLeadService, PgMhpWebinarLeadReader } from './webinar-leads-service.js';
 
 export interface MhpRuntime {
   auth: PgMhpAuthService;
@@ -29,6 +31,7 @@ export interface MhpRuntime {
   growth: PgMhpGrowthService;
   learning: PgMhpLearningService;
   marketingWorkspace: PgMhpMarketingWorkspaceService;
+  webinarLeads: MhpWebinarLeadService;
   marketing: MhpMarketingConfig | null;
   readiness(): Promise<readonly string[]>;
 }
@@ -68,6 +71,8 @@ export async function buildMhpRuntime(input: {
   const mail = createMhpTransactionalMailer(env);
   const marketing = mhpMarketingConfig(env);
   const webinar = mhpWebinarConfig(env);
+  const marketingWorkspace = new PgMhpMarketingWorkspaceService(webPool, identityPool);
+  const transactions = createPgCrmTransactionRunner(commandPool);
   const rawVaultKey = env.INVESTOR_MAIL_ENCRYPTION_KEY?.trim();
   const vaultKey = rawVaultKey ? Buffer.from(rawVaultKey, 'base64') : undefined;
   if (vaultKey && (vaultKey.length !== 32 || vaultKey.toString('base64') !== rawVaultKey)) {
@@ -89,7 +94,10 @@ export async function buildMhpRuntime(input: {
     desk: new PgMhpDeskService(webPool, identityPool),
     growth: new PgMhpGrowthService(webPool, identityPool, webinar),
     learning: new PgMhpLearningService(webPool, identityPool),
-    marketingWorkspace: new PgMhpMarketingWorkspaceService(webPool, identityPool),
+    marketingWorkspace,
+    webinarLeads: new MhpWebinarLeadService({ marketingWorkspace, reader: new PgMhpWebinarLeadReader(webPool),
+      transactions, commands: new CrmCommandService({ transactionRunner: transactions }),
+      campaign: webinar.campaign, cursorSecret: env.SESSION_SECRET?.trim() ?? '' }),
     marketing,
     async readiness(): Promise<readonly string[]> {
       const blockers: string[] = [];

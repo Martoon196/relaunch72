@@ -11,6 +11,7 @@ import { portalCsrfToken } from '../src/portal/session.js';
 import type { PostgresPortalDeps } from '../src/portal/router.js';
 import { MARTIN_HOWARD_PROPERTY_PROFILE, MHP_MARKETING_WORKSPACE_PROFILE } from '../src/portal/product-profile.js';
 import { appShell, pageHead } from '../src/portal/ui.js';
+import type { MhpWebinarLeadService } from '../src/mhp/webinar-leads-service.js';
 
 const HOST='app.martinhowardproperty.co.uk', ORIGIN=`https://${HOST}`;
 const SECRET='mhp-marketing-synthetic-session-secret-at-least-32';
@@ -20,7 +21,7 @@ const COMMAND='12400000-0000-4000-8000-000000000003', STAGE='12400000-0000-4000-
 const NOW=Date.parse('2026-10-30T12:00:00Z');
 const hash=(value:string)=>createHash('sha256').update(value).digest();
 
-function fixture(owner=true) {
+function fixture(owner=true, webinarLeads?: Pick<MhpWebinarLeadService, 'importBatch'>) {
   let selected=PERSONAL, currentToken=TOKEN;
   const calls:string[]=[];
   const identity=()=>({sessionToken:currentToken,userId:USER,workspaceId:selected,userEmail:'owner@example.invalid'});
@@ -49,7 +50,7 @@ function fixture(owner=true) {
     investors:{snapshot:async()=>{calls.push('investor-programme');throw new Error('brand must not invoke investor programme');},
       requirementSummaries:async()=>{calls.push('requirements');throw new Error('brand must not invoke investor requirements');}} as unknown as PostgresPortalDeps['investors'],
   };
-  const mount=createMhpMount({portal,authMount:{handle:async()=>false},readiness:async()=>[],
+  const mount=createMhpMount({portal,webinarLeads,authMount:{handle:async()=>false},readiness:async()=>[],
     hq:{isOwner:async()=>owner,snapshot:async()=>({people:[],products:[],grants:[]}),grant:async()=>COMMAND},
     commerce:{billingEnabled:false,snapshot:async()=>{throw new Error('excluded commerce');},refund:async()=>{},billingPortal:async()=>'',webhook:async()=>{}},
     marketingWorkspace:{snapshot:async input=>{
@@ -145,6 +146,32 @@ test('every selected marketing CRM page uses matching same-origin header and hea
 test('marketing presentation does not change non-CRM page-head or shell policy',()=>{
   assert.match(pageHead('Unrelated page',MHP_MARKETING_WORKSPACE_PROFILE),/<meta name="referrer" content="no-referrer">/);
   assert.match(appShell({title:'Unrelated page',tenantName:'Synthetic',active:'overview',body:'',productProfile:MHP_MARKETING_WORKSPACE_PROFILE}),/<meta name="referrer" content="no-referrer">/);
+});
+
+test('webinar import is an explicit selected-owner POST with native Origin/CSRF and no browser actor or campaign',async()=>{
+  let imported=0;
+  const f=fixture(true,{importBatch:async(who,requestId,cursor,now)=>{
+    imported++;assert.equal(who.workspaceId,BRAND);assert.equal(who.userId,USER);assert.equal(who.sessionToken,NEXT);
+    assert.equal(requestId,COMMAND);assert.equal(cursor,'');assert.equal(now,NOW);
+    return {campaign:'webinar-2026-11-04',added:1,replayed:2,failed:false,processed:3,hasMore:false,cursor:null};
+  }});
+  const importForm=()=>{const fields=new URLSearchParams(f.form());fields.delete('commandId');fields.set('cursor','');return fields.toString();};
+  assert.doesNotMatch((await f.request('GET','/hq/marketing')).body,/action="\/hq\/marketing\/webinar-leads"/);
+  assert.equal((await f.request('POST','/hq/marketing/webinar-leads',importForm(),{origin:ORIGIN})).status,403);
+  await f.request('POST','/hq/marketing/open',f.form(),{origin:ORIGIN});
+  const entry=await f.request('GET','/hq/marketing');assert.match(entry.body,/Bring webinar sign-ups into Leads/);
+  for(const origin of ['null','','https://hq.propertypredator.com']){
+    assert.equal((await f.request('POST','/hq/marketing/webinar-leads',importForm(),{origin})).status,403);
+  }
+  assert.equal((await f.request('POST','/hq/marketing/webinar-leads',importForm().replace(/csrf=[^&]+/,'csrf=wrong'),{origin:ORIGIN})).status,403);
+  for(const extra of ['&campaign=another','&workspaceId='+PERSONAL,'&userId='+USER,'&cursor=duplicate']){
+    assert.equal((await f.request('POST','/hq/marketing/webinar-leads',importForm()+extra,{origin:ORIGIN})).status,400);
+  }
+  assert.equal((await f.request('GET','/hq/marketing/webinar-leads')).status,405);
+  assert.equal(imported,0);
+  const result=await f.request('POST','/hq/marketing/webinar-leads',importForm(),{origin:ORIGIN});
+  assert.equal(result.status,200);assert.equal(result.headers['cache-control'],'no-store');assert.equal(result.headers['referrer-policy'],'same-origin');
+  assert.match(result.body,/1 added to Leads · 2 already imported/);assert.match(result.body,/This scan is complete/);assert.equal(imported,1);
 });
 
 test('service sends only session hashes, fixed action and entropy to existing SQL capability',async()=>{
