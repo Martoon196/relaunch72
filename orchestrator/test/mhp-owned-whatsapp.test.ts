@@ -53,18 +53,21 @@ test('the seal CLI reads the token from stdin, never echoes it, and refuses with
 test('the WhatsApp pilot is off by default and reuses the owner number from the SMS pilot settings', () => {
   assert.equal(mhpOwnedWhatsAppConfig({}).enabled, false);
   assert.equal(mhpOwnedWhatsAppConfig({ MHP_WHATSAPP_PILOT_ENABLED: 'true' }).config, null);
-  const on = mhpOwnedWhatsAppConfig({ MHP_WHATSAPP_PILOT_ENABLED: 'true', MHP_SMS_PILOT_OWNER_USER_ID: ids.user, MHP_SMS_PILOT_CONTACT_ID: ids.prospect, MHP_SMS_PILOT_PHONE: '+447700900999' });
-  assert.deepEqual(on.config, { ownerUserId: ids.user, contactId: ids.prospect, phone: '+447700900999' });
+  const settings = { MHP_WHATSAPP_PILOT_ENABLED: 'true', MHP_SMS_PILOT_OWNER_USER_ID: ids.user, MHP_SMS_PILOT_CONTACT_ID: ids.prospect, MHP_SMS_PILOT_PHONE: '+447700900999' };
+  const on = mhpOwnedWhatsAppConfig(settings);
+  assert.deepEqual(on.config, { ownerUserId: ids.user, contactId: ids.prospect, phone: '+447700900999', workerLive: false });
+  assert.match(on.blockers.join(' '), /worker is live/u);
+  assert.deepEqual(mhpOwnedWhatsAppConfig({ ...settings, MHP_WHATSAPP_WORKER_LIVE_CONFIRMED: 'true' }).blockers, []);
 });
 
-function serviceFixture(options: { approved?: boolean; binding?: boolean; replay?: boolean; body?: string } = {}) {
+function serviceFixture(options: { approved?: boolean; binding?: boolean; replay?: boolean; body?: string; workerLive?: boolean } = {}) {
   const calls: string[] = [];
   const database = (): MhpOwnedWhatsAppDatabaseSnapshot => ({ bindingId: options.binding === false ? null : ids.approval, connectionId: ids.send,
     senderNumber: '+447861935832', wabaId: ids3.wabaId, phoneNumberId: ids3.phoneNumberId, templates: [], possessionProven: true,
     whatsappPointId: null, whatsappPointVerified: false, suppressed: false, lastResult: null });
   const sha = createHash('sha256').update('draft').digest('hex');
   const dependencies: MhpOwnedWhatsAppDependencies = {
-    config: { ownerUserId: ids.user, contactId: ids.prospect, phone: '+447700900999' }, blockers: [],
+    config: { ownerUserId: ids.user, contactId: ids.prospect, phone: '+447700900999', workerLive: options.workerLive ?? true }, blockers: [],
     marketingWorkspace: { snapshot: async given => ({ userId: given.userId, selectedWorkspaceId: given.workspaceId, personalWorkspaceId: ids.prospect,
       marketingWorkspaceId: identity.workspaceId, marketingSelected: given.workspaceId === identity.workspaceId }) },
     authorize: async (given, requestId) => requestDatabaseContext({ userId: given.userId, workspaceId: given.workspaceId, requestId,
@@ -95,7 +98,9 @@ test('owner actions: connect parses the sealed text, the template step publishes
   await assert.rejects(f.service.connect(identity, ids.request, { commandId: ids.command, envelopeText: JSON.stringify(sealed()), senderNumber: '07861 935832',
     ownershipEvidence: 'Meta Business Manager WABA owned by MH196 Ltd', confirmed: true }), { status: 400 });
   const template = { commandId: ids.command, templateId: ids.item, itemId: ids.item, versionId: ids.version, sha256: f.sha, category: 'marketing',
-    metaTemplateId: '1441099094827445', approvalReference: 'WhatsApp Manager shows Approved', confirmed: true };
+    metaTemplateId: '1441099094827445', approvalReference: 'WhatsApp Manager shows Approved', confirmed: true, contentApproved: true };
+  await assert.rejects(f.service.recordTemplate(identity, ids.request, { ...template, contentApproved: false }, now), { status: 400 },
+    'pinning needs the owner to approve the exact text explicitly');
   await f.service.recordTemplate(identity, ids.request, template, now);
   assert.ok(f.calls.includes('template:1441099094827445') && !f.calls.includes('publish'));
   const unapproved = serviceFixture({ approved: false });
@@ -110,6 +115,10 @@ test('owner actions: connect parses the sealed text, the template step publishes
   assert.equal((await replay.service.send(identity, ids.request, { commandId: ids.command, templateId: ids.item, agreed: true })).replayed, true);
   assert.deepEqual(replay.calls, ['snapshot', 'lookup']);
   await assert.rejects(send.service.send(identity, ids.request, { commandId: ids.command, templateId: ids.item, agreed: false }), { status: 400 });
+  const dark = serviceFixture({ workerLive: false });
+  await assert.rejects(dark.service.send(identity, ids.request, { commandId: ids.command, templateId: ids.item, agreed: true }), { status: 409 },
+    'no send while the worker is dark, so a monthly slot is never wasted');
+  assert.ok(!dark.calls.includes('send'));
   await assert.rejects(send.service.send({ ...identity, userId: ids.proof }, ids.request, { commandId: ids.command, templateId: ids.item, agreed: true }), { status: 403 });
 });
 

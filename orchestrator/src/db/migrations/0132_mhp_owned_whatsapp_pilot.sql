@@ -269,6 +269,17 @@ BEGIN
  RETURN actor;
 END $f$;
 
+-- Internal: a WhatsApp STOP on any point holding this number, in either stored
+-- form (with or without the leading plus), including deleted or quarantined ones.
+CREATE FUNCTION app_private.mhp_whatsapp_number_suppressed(p_phone text) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+ SELECT EXISTS(SELECT 1 FROM app.contact_points p
+  WHERE p.workspace_id='2789228d-55a6-4688-b1e8-2f70abca990b' AND p.kind='whatsapp' AND p.normalized_value IN(p_phone,substr(p_phone,2))
+   AND EXISTS(SELECT 1 FROM (SELECT DISTINCT ON(coalesce(s.purpose,'')) s.state FROM app.communication_suppression_events s
+     WHERE s.workspace_id=p.workspace_id AND s.contact_point_id=p.id AND s.channel='whatsapp' AND (s.purpose IS NULL OR s.purpose='marketing')
+     ORDER BY coalesce(s.purpose,''),s.occurred_at DESC,s.recorded_at DESC,s.id DESC) l WHERE l.state='suppressed'))
+$f$;
+
 CREATE FUNCTION app_private.mhp_whatsapp_snapshot(p_session bytea,p_contact uuid,p_phone text) RETURNS jsonb
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE ws constant uuid:='2789228d-55a6-4688-b1e8-2f70abca990b'; actor uuid; binding app.property_predator_whatsapp_live_bindings%ROWTYPE;
@@ -290,9 +301,7 @@ BEGIN
  -- 0053 matches WhatsApp points on digits only (no leading plus).
  SELECT p.* INTO point FROM app.contact_points p WHERE p.workspace_id=ws AND p.contact_id=p_contact AND p.kind='whatsapp'
   AND p.normalized_value=substr(p_phone,2) AND p.deleted_at IS NULL AND p.dedupe_state='normal';
- SELECT coalesce(bool_or(l.state='suppressed'),false) INTO suppressed FROM (SELECT DISTINCT ON(coalesce(s.purpose,'')) s.state
-  FROM app.communication_suppression_events s WHERE s.workspace_id=ws AND s.contact_point_id=point.id AND s.channel='whatsapp'
-   AND (s.purpose IS NULL OR s.purpose='marketing') ORDER BY coalesce(s.purpose,''),s.occurred_at DESC,s.recorded_at DESC,s.id DESC) l;
+ suppressed:=app_private.mhp_whatsapp_number_suppressed(p_phone);
  SELECT c.result||jsonb_build_object('state',j.state,'replayed',true) INTO saved FROM app.command_receipts c
  JOIN app.property_predator_whatsapp_live_jobs j ON j.workspace_id=c.workspace_id AND j.id=(c.result->>'jobId')::uuid
  WHERE c.workspace_id=ws AND c.actor_user_id=actor AND c.command_name='mhp.whatsapp.owned-test' AND c.status='succeeded'
@@ -423,8 +432,16 @@ BEGIN
    AND r.phone_identity_sha256=public.digest(p.normalized_value,'sha256') AND r.verified_by_user_id=actor
   WHERE p.workspace_id=ws AND p.contact_id=p_contact AND p.kind='phone' AND p.normalized_value=p_phone AND p.is_verified AND p.deleted_at IS NULL)
  THEN RAISE EXCEPTION 'Verify your own number first' USING ERRCODE='42501'; END IF;
- -- 0053 matches WhatsApp points on digits only (no leading plus).
- SELECT p.id INTO point FROM app.contact_points p WHERE p.workspace_id=ws AND p.kind='whatsapp' AND p.normalized_value=substr(p_phone,2) AND p.deleted_at IS NULL AND p.dedupe_state='normal';
+ -- 0053 matches WhatsApp points on digits only: its '^\\+' never strips a plus
+ -- (a latent 0053 defect), while the CRM stores WhatsApp numbers with one. A
+ -- plus-form point for this number could carry another contact or an opt-out the
+ -- rail would never see, so its existence blocks the test.
+ IF EXISTS(SELECT 1 FROM app.contact_points p WHERE p.workspace_id=ws AND p.kind='whatsapp' AND p.normalized_value=p_phone AND p.deleted_at IS NULL)
+ THEN RAISE EXCEPTION 'A CRM WhatsApp entry for this number uses a format the rail cannot honour' USING ERRCODE='42501'; END IF;
+ IF app_private.mhp_whatsapp_number_suppressed(p_phone) THEN RAISE EXCEPTION 'WhatsApp opt-out is active for this number' USING ERRCODE='42501'; END IF;
+ SELECT p.id INTO point FROM app.contact_points p WHERE p.workspace_id=ws AND p.kind='whatsapp' AND p.normalized_value=substr(p_phone,2) AND p.deleted_at IS NULL;
+ IF point IS NOT NULL AND NOT EXISTS(SELECT 1 FROM app.contact_points p WHERE p.workspace_id=ws AND p.id=point AND p.dedupe_state='normal')
+ THEN RAISE EXCEPTION 'That WhatsApp number is shared or quarantined' USING ERRCODE='42501'; END IF;
  IF point IS NOT NULL AND NOT EXISTS(SELECT 1 FROM app.contact_points p WHERE p.workspace_id=ws AND p.id=point AND p.contact_id=p_contact)
  THEN RAISE EXCEPTION 'That WhatsApp number belongs to another contact' USING ERRCODE='42501'; END IF;
  IF point IS NULL THEN
@@ -486,7 +503,7 @@ BEGIN
  RETURN outcome;
 END $f$;
 
-REVOKE ALL ON FUNCTION app_private.mhp_whatsapp_owner(bytea),app_private.mhp_whatsapp_snapshot(bytea,uuid,text),
+REVOKE ALL ON FUNCTION app_private.mhp_whatsapp_owner(bytea),app_private.mhp_whatsapp_number_suppressed(text),app_private.mhp_whatsapp_snapshot(bytea,uuid,text),
  app_private.mhp_whatsapp_connect(bytea,uuid,uuid,uuid,text,text,text,text,text,bytea,bytea,bytea,bytea,bytea,text,boolean),
  app_private.mhp_whatsapp_record_template(bytea,uuid,uuid,uuid,uuid,bytea,text,text,text,boolean),
  app_private.mhp_owned_whatsapp_send(bytea,uuid,uuid,uuid,uuid,text,boolean,boolean) FROM PUBLIC;

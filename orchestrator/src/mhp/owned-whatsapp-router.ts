@@ -12,7 +12,7 @@ import { MHP_OWNED_WHATSAPP_ROUTE, mhpOwnedWhatsAppPage } from './owned-whatsapp
 type Service = Pick<MhpOwnedWhatsAppService, 'snapshot' | 'connect' | 'recordTemplate' | 'send'>;
 const FIELDS: Readonly<Record<string, readonly string[]>> = {
   connect: ['envelope', 'senderNumber', 'ownershipEvidence', 'confirmed'],
-  template: ['templateId', 'itemId', 'versionId', 'sha256', 'metaTemplateId', 'category', 'approvalReference', 'confirmed'],
+  template: ['templateId', 'itemId', 'versionId', 'sha256', 'metaTemplateId', 'category', 'approvalReference', 'confirmed', 'contentApproved'],
   send: ['templateId', 'agreed'],
 };
 const CSP = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
@@ -69,7 +69,7 @@ export async function handleMhpOwnedWhatsApp(req: IncomingMessage, res: ServerRe
     } else if (action === 'template') {
       await whatsapp.recordTemplate(identity, context.requestId, { commandId: field('commandId'), templateId: field('templateId'), itemId: field('itemId'),
         versionId: field('versionId'), sha256: field('sha256'), category: field('category'), metaTemplateId: field('metaTemplateId'),
-        approvalReference: field('approvalReference'), confirmed: field('confirmed') === 'yes' }, now);
+        approvalReference: field('approvalReference'), confirmed: field('confirmed') === 'yes', contentApproved: field('contentApproved') === 'yes' }, now);
       respond(res, 200, await page({ notice: 'Approved template pinned. You can send your one test.' }), true);
     } else {
       const result = await whatsapp.send(identity, context.requestId, { commandId: field('commandId'), templateId: field('templateId'), agreed: field('agreed') === 'yes' });

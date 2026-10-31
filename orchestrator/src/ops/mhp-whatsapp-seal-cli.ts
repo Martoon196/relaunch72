@@ -1,7 +1,12 @@
 import { sealKeyFromEnvironment, sealMhpWhatsAppBinding } from './mhp-whatsapp-seal.js';
 
-// Usage (token on stdin, never argv):
-//   npm run --workspace orchestrator mhp:whatsapp:seal -- --app-id N --waba-id N --phone-number-id N < token.txt
+// Usage: pipe the token in from your password manager or clipboard, never type it,
+// never save it to a file, never pass it as an argument. For example on macOS:
+//   pbpaste | npm run --workspace orchestrator mhp:whatsapp:seal -- --app-id N --waba-id N --phone-number-id N
+if (process.stdin.isTTY) {
+  process.stderr.write('Seal refused: pipe the token in (for example from pbpaste); typing it would echo it to the terminal.\n');
+  process.exit(1);
+}
 const args = new Map<string, string>();
 for (let i = 2; i < process.argv.length; i += 2) args.set(process.argv[i] ?? '', process.argv[i + 1] ?? '');
 const chunks: Buffer[] = [];

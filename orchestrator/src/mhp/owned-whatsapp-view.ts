@@ -18,8 +18,9 @@ export function mhpOwnedWhatsAppPage(input: { snapshot: MhpOwnedWhatsAppSnapshot
     + `<label>Meta template ID<input name="metaTemplateId" required inputmode="numeric" maxlength="30"></label>`
     + `<label>Category<select name="category"><option value="marketing">Marketing</option><option value="utility">Utility</option></select></label>`
     + `<label>Approval reference<input name="approvalReference" required minlength="8" maxlength="500" placeholder="WhatsApp Manager shows Approved on ..."></label>`
+    + `<label class="check"><input type="checkbox" name="contentApproved" value="yes" required>I approve this exact text as the MHP WhatsApp template.</label>`
     + `<label class="check"><input type="checkbox" name="confirmed" value="yes" required>Meta shows this exact template as Approved.</label><button>Pin approved template</button>`) : '';
-  const ready = connected && template && database?.possessionProven && !database.suppressed;
+  const ready = connected && template && database?.possessionProven && !database.suppressed && !blockers.length;
   const send = template ? form('send', `${hidden('templateId', template.templateId)}<p>Sends template <strong>${esc(template.name)}</strong> once to your own number ${esc(phone ?? '')}. WhatsApp allows one test a day and three a month.</p>`
     + `<label class="check"><input type="checkbox" name="agreed" value="yes" required>${esc(MHP_OWNED_WHATSAPP_PERMISSION)}</label><button${ready ? '' : ' disabled'}>Send my one WhatsApp test</button>`) : '';
   const result = input.result ?? database?.lastResult;

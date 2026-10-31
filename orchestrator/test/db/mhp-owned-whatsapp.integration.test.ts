@@ -106,6 +106,17 @@ test('MHP009C: owner connects WhatsApp, pins the approved template and sends one
     const send = (command: string, confirmed = true) => as<{ v: Record<string, unknown> }>(cmd, 'owner',
       'SELECT app_private.mhp_owned_whatsapp_send($1,$2,$3,$4,$5,$6,$7,false) AS v', [SESSION, command, bindingId, templateId, CONTACT, PHONE, confirmed]);
     await expectPostgresError(send(randomUUID(), false), '42501');
+    // A CRM-style WhatsApp point stored with the plus is invisible to 0053, so it blocks the test.
+    await ownerQuery(owner, `INSERT INTO app.contact_points(workspace_id,contact_id,kind,value,normalized_value) VALUES($1,$2,'whatsapp',$3,$3)`, [WS, CONTACT, PHONE]);
+    await expectPostgresError(send(randomUUID()), '42501');
+    // A WhatsApp STOP recorded on that plus-form point would hold too.
+    await ownerQuery(owner, `INSERT INTO app.communication_suppression_events(workspace_id,contact_id,contact_point_id,channel,purpose,state,reason,source,actor_kind,endpoint_identity_sha256,occurred_at)
+      SELECT workspace_id,contact_id,id,'whatsapp',NULL,'suppressed','manual_opt_out','integration-test','system',public.digest(kind||chr(31)||value||chr(31)||normalized_value,'sha256'),clock_timestamp()
+      FROM app.contact_points WHERE workspace_id=$1 AND kind='whatsapp' AND normalized_value=$2`, [WS, PHONE]);
+    const blocked = (await as<{ v: Record<string, unknown> }>(cmd, 'owner', 'SELECT app_private.mhp_whatsapp_snapshot($1,$2,$3) AS v', [SESSION, CONTACT, PHONE]))[0]!.v;
+    assert.equal(blocked.suppressed, true, 'the page shows the opt-out the rail would otherwise miss');
+    await ownerQuery(owner, `DELETE FROM app.communication_suppression_events WHERE channel='whatsapp'`);
+    await ownerQuery(owner, `DELETE FROM app.contact_points WHERE workspace_id=$1 AND kind='whatsapp' AND normalized_value=$2`, [WS, PHONE]);
     await expectPostgresError(as(cmd, 'owner', 'SELECT app_private.mhp_owned_whatsapp_send($1,$2,$3,$4,$5,$6,true,false)',
       [SESSION, randomUUID(), bindingId, templateId, CONTACT, '+447700900111']), '42501');
     const command = randomUUID();
