@@ -162,6 +162,8 @@ export interface PostgresPortalConfig {
   operatorActions?: PortalOperatorActionCentreService;
   /** Omitted unless the dedicated company-content command identity is ready. */
   companyContent?: PortalCompanyContentService;
+  /** Native local flow authoring; no enrolment or provider capability. */
+  followupFlows?: PostgresPortalDeps['followupFlows'];
   /** Omitted unless both company-asset least-privilege identities are ready. */
   companyAssets?: PortalCompanyAssetsService;
   /** Effects-off company-owned source sync. */
@@ -265,6 +267,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     journeys: cfg.journeys,
     operatorActions: cfg.operatorActions,
     companyContent: cfg.companyContent,
+    followupFlows: cfg.followupFlows,
     companyAssets: cfg.companyAssets,
     companyContentSync: cfg.companyContentSync,
     companyContentReview: cfg.companyContentReview,

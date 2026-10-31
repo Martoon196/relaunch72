@@ -9,6 +9,7 @@ import type { PostgresPortalDeps } from '../src/portal/router.js';
 import { MARTIN_HOWARD_PROPERTY_PROFILE } from '../src/portal/product-profile.js';
 import type { MhpSequenceService } from '../src/mhp/followup-sequence-service.js';
 import { followupTimeline } from '../src/followup-sequences/definition.js';
+import { simulateFollowupFlow, flowSimulationPreset } from '../src/followup-sequences/simulation.js';
 import { ids, identity, token, now } from './helpers/mhp-owner-email-fixture.js';
 import { sequenceIds, sequenceDefinition as definition, sequenceSnapshot as snapshot, sequenceDetail as detail } from './helpers/mhp-sequence-fixture.js';
 const HOST = 'app.martinhowardproperty.co.uk', ORIGIN = `https://${HOST}`, SECRET = 'synthetic-followup-sequence-native-secret-at-least-32';
@@ -16,10 +17,13 @@ const BASE = '/hq/marketing/sequences';
 function fixture() {
   const state = { authenticated: true, allowed: true, calls: [] as string[], input: null as unknown, published: false, entryReplay: false };
   const authorise = (given: { sessionToken: string; workspaceId: string }) => { assert.equal(given.sessionToken, token); assert.equal(given.workspaceId, identity.workspaceId); if (!state.allowed) throw new MhpCommerceError(403, 'Open the owner workspace.'); };
-  const sequences: Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command' | 'entryCommand'> = {
+  const sequences: Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command' | 'entryCommand' | 'message' | 'simulate'> = {
     snapshot: async given => { authorise(given); return { ...snapshot, entryAvailable: true }; },
     review: async (given, _request, item, version) => { authorise(given); assert.equal(item, sequenceIds.item); assert.equal(version, sequenceIds.version); return { ...detail, review: { ...detail.review, approvalStatus: state.published ? 'approved' : 'unrequested' } }; },
     preview: async (given, _request, value) => { authorise(given); state.calls.push('preview'); state.input = value; return { definition, timeline: followupTimeline(definition), blockers: [] }; },
+    simulate: async (given, _request, _value, _inline, scenario = 'happy') => { authorise(given); state.calls.push('simulate'); return { definition, timeline: followupTimeline(definition), blockers: [], messagePreviews: [],
+      simulation: simulateFollowupFlow(definition, { email: false, sms: false, whatsapp: false, reply: false, booked: false, purchased: false }, flowSimulationPreset(scenario, definition)) }; },
+    message: async (given, _request, channel, item, version) => { authorise(given); state.calls.push('message'); return { channel, title: 'Saved exact message', contentItemId: item, contentVersionId: version, contentSha256: '0'.repeat(64), payload: { schema: 'propertypredator.email-draft/v1', subject: 'Preview', bodyText: 'Hello {{FIRSTNAME}}' } }; },
     save: async (given, _request, value) => { authorise(given); state.calls.push('save'); state.input = value; return { contentItemId: sequenceIds.item, contentVersionId: sequenceIds.version, replayed: false }; },
     publish: async given => { authorise(given); state.calls.push('publish'); state.published = true; },
     command: async (given, _request, value) => { authorise(given); state.calls.push(value.action); state.input = value; return { action: value.action, contentItemId: sequenceIds.item, contentVersionId: sequenceIds.version, changed: 3, remaining: 2, blocked: 1, inFlight: 1, replayed: false }; },
@@ -57,6 +61,25 @@ test('native marketing entry exposes sequence builder and exact owner page/scrip
 test('save creates an immutable-version redirect, preview preserves draft and invokes no enrolment', async () => {
   const f = fixture(); const saved = await f.request('POST', `${BASE}/save`, f.draft()); assert.equal(saved.status, 303); assert.equal(saved.headers.location, `${BASE}?item=${sequenceIds.item}&version=${sequenceIds.version}`);
   const preview = await f.request('POST', `${BASE}/preview`, f.draft()); assert.equal(preview.status, 200); assert.match(preview.body, /Sequence timeline/u); assert.deepEqual(f.state.calls, ['save', 'preview']);
+});
+
+test('MHP shared message read and simulation use native owner routes without enrolment or entry effects', async () => {
+  const f = fixture();
+  const message = await f.request('GET', `${BASE}/message?channel=email&item=${sequenceIds.item}&version=${sequenceIds.version}`);
+  assert.equal(message.status, 200); assert.match(message.headers['content-type']!, /application\/json/u); assert.equal(JSON.parse(message.body).title, 'Saved exact message');
+  const simulated = await f.request('POST', `${BASE}/simulate`, f.draft({ inlineMessages: '{}', simulationCase: 'unknown' }));
+  assert.equal(simulated.status, 200); assert.match(simulated.body, /Simulation only/u); assert.match(simulated.body, /Nothing was sent/u); assert.deepEqual(f.state.calls, ['message', 'simulate']);
+  for (const suffix of ['message?channel=call', `message?channel=email&item=${sequenceIds.item}&version=${sequenceIds.version}&workspaceId=${ids.prospect}`]) assert.equal((await f.request('GET', `${BASE}/${suffix}`)).status, 400);
+  assert.equal((await f.request('POST', `${BASE}/simulate`, f.draft({ inlineMessages: '{}', simulationCase: 'unknown', csrf: 'forged' }))).status, 403);
+  f.state.allowed = false; assert.equal((await f.request('GET', `${BASE}/message?channel=email&item=${sequenceIds.item}&version=${sequenceIds.version}`)).status, 403);
+});
+
+test('MHP inline save transport retains expanded bounds while rejecting duplicate or foreign fields', async () => {
+  const f = fixture(); const result = await f.request('POST', `${BASE}/save`, f.draft({ inlineMessages: '{}', simulationCase: 'happy' }));
+  assert.equal(result.status, 303); assert.deepEqual((f.state.input as { inlineMessages: unknown }).inlineMessages, {});
+  assert.equal((await f.request('POST', `${BASE}/save`, f.draft({ inlineMessages: '{}' }) + '&inlineMessages=%7B%7D')).status, 400);
+  assert.equal((await f.request('POST', `${BASE}/save`, f.draft({ inlineMessages: '{}', recipient: 'synthetic@example.invalid' }))).status, 400);
+  assert.equal((await f.request('POST', `${BASE}/save`, f.draft({ inlineMessages: '{}' }), { 'content-length': '240001' })).status, 413);
 });
 test('Publish never enrols; Start is explicit and controls preserve exact run/proof acknowledgement', async () => {
   const f = fixture(); const published = await f.request('POST', `${BASE}/publish`, f.saved()); assert.equal(published.status, 200); assert.match(published.body, /No one was enrolled/u); assert.deepEqual(f.state.calls, ['publish']);

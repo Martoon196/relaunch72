@@ -67,3 +67,11 @@ test('view escapes names/content references and new draft starts with no fake sa
   assert.doesNotMatch(html, /<script>bad<\/script>/u); assert.match(html, /&lt;script&gt;/u);
   assert.deepEqual((mhpSequenceNewDraft(definition.campaign, 'synthetic').definition as { steps: unknown[] }).steps, []);
 });
+
+test('old mixed history is displayed with proper-channel review guidance and no Start', () => {
+  const mixed = parseFollowupSequence({ ...definition, steps: [{ ...definition.steps[0]!, kind: 'sms' }] });
+  const html = mhpSequencePage({ snapshot, detail: { ...detail, definition: mixed, local: { ...detail.local, valid: false, exact: null },
+    blockers: ['email_version_not_ready', 'sms_not_connected'], timeline: followupTimeline(mixed) }, csrf: 'synthetic', commandId: 'synthetic', returnCommandId: 'synthetic' });
+  assert.match(html, /Text message/u); assert.match(html, /proper current local message version for each channel/u);
+  assert.doesNotMatch(html, /action="\/hq\/marketing\/sequences\/enrol"/u);
+});

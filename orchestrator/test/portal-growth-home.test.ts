@@ -5,6 +5,13 @@ import { PROPERTY_PREDATOR_GROWTH_PROFILE } from '../src/portal/product-profile.
 import type { CrmWorkspaceSnapshot } from '../src/portal/crm-views.js';
 import type { GrowthIntelligenceView } from '../src/portal/growth-intelligence.js';
 
+test('native main PP workspace exposes follow-up authoring only when its real facade is composed', () => {
+  const shown = renderGrowthHomeBody(snapshot(), PROPERTY_PREDATOR_GROWTH_PROFILE, growth(), { followupFlowsAvailable: true });
+  assert.match(shown, /href="\/portal\/follow-ups"/u);
+  const unavailable = renderGrowthHomeBody(snapshot(), PROPERTY_PREDATOR_GROWTH_PROFILE, growth(), { followupFlowsAvailable: false });
+  assert.doesNotMatch(unavailable, /href="\/portal\/follow-ups"/u);
+});
+
 function snapshot(): CrmWorkspaceSnapshot {
   return {
     workspace: {

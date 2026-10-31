@@ -11,6 +11,12 @@ import { parseMhpOwnerEmailBrand } from './owner-email-content.js';
 import { canonicalFollowupSequence, FOLLOWUP_SEQUENCE_MIME, FOLLOWUP_SEQUENCE_SOURCE, FOLLOWUP_SEQUENCE_UUID, followupActivationBlockers,
   followupSequenceSha, followupTimeline, followupEntryIntent, parseFollowupSequence, readCanonicalFollowupSequence, type FollowupMessage, type FollowupSequenceDefinition, type FollowupSequenceReadiness } from '../followup-sequences/definition.js';
 import type { FollowupRunState } from '../followup-sequences/state.js';
+import { flowCommandUuid, parseFlowComposition, resolveFlowComposition, type FlowSavedMessageRef } from '../followup-sequences/composition.js';
+import { previewFlowMessage } from '../followup-sequences/channel-drafts.js';
+import { LocalFlowMessages, type FlowMessageReview } from '../followup-sequences/messages.js';
+import { FlowLocalStore } from '../followup-sequences/local-store.js';
+import { FlowWorkspaceError } from '../followup-sequences/workspace.js';
+import { simulateFollowupFlow, flowSimulationPreset } from '../followup-sequences/simulation.js';
 import type { FollowupEntryRule } from '../followup-sequences/entry.js';
 
 const hash = (value: string): Buffer => createHash('sha256').update(value).digest();
@@ -106,21 +112,22 @@ export class PgMhpSequenceRepository implements MhpSequenceRepository {
     } catch (error) { return failure(error); }
   }
 }
-export interface MhpSequenceSaveInput { commandId: string; contentItemId: string; previousVersionId: string; definition: unknown }
+export interface MhpSequenceSaveInput { commandId: string; contentItemId: string; previousVersionId: string; definition: unknown; inlineMessages?: unknown }
 export class MhpSequenceService {
   constructor(private readonly dependencies: {
     marketingWorkspace: Pick<PgMhpMarketingWorkspaceService, 'snapshot'>; repository: MhpSequenceRepository;
     reader: Pick<CompanyContentService, 'listCatalog' | 'getExactReview'>;
     adapter: Pick<CompanyContentService, 'createVersion' | 'refreshSourceAttestation'>;
     approvals: Pick<CompanyContentService, 'requestApproval' | 'decideApproval'>; adapterTransactions: CompanyContentTransactionRunner;
-    emails: Pick<MhpOwnerEmailService, 'snapshot' | 'status' | 'review'>; campaign: string;
+    emails: Pick<MhpOwnerEmailService, 'snapshot' | 'status' | 'review'>; campaign: string; messages?: Pick<LocalFlowMessages, 'choices' | 'review' | 'save' | 'publish'>;
   }) {}
-  private async context(identity: PortalSessionIdentity, requestId: string): Promise<DatabaseRequestContext> {
+  async contentContext(identity: PortalSessionIdentity, requestId: string): Promise<DatabaseRequestContext> {
     const workspace = await this.dependencies.marketingWorkspace.snapshot(identity);
     if (!MHP_OPAQUE_TOKEN.test(identity.sessionToken) || identity.workspaceId !== MHP_MARKETING_WORKSPACE_ID || workspace.userId !== identity.userId
         || workspace.selectedWorkspaceId !== identity.workspaceId || !workspace.marketingSelected) throw new MhpCommerceError(403, 'Open the MHP marketing workspace first.');
     return requestDatabaseContext({ userId: identity.userId, workspaceId: identity.workspaceId, requestId, portalSessionTokenHash: hash(identity.sessionToken) });
   }
+  private context(identity: PortalSessionIdentity, requestId: string) { return this.contentContext(identity, requestId); }
   private checked(value: unknown): FollowupSequenceDefinition {
     let definition: FollowupSequenceDefinition;
     try { definition = parseFollowupSequence(value); } catch (error) { throw new MhpCommerceError(400, (error as Error).message); }
@@ -136,7 +143,8 @@ export class MhpSequenceService {
     const [database, catalog, emails] = await Promise.all([this.dependencies.repository.snapshot(identity, this.dependencies.campaign),
       this.dependencies.reader.listCatalog(context, { limit: 50, sourceSystem: FOLLOWUP_SEQUENCE_SOURCE }), this.dependencies.emails.snapshot(identity, requestId)]);
     return { database, catalog, emailCatalog: emails.catalog, readiness: this.readiness, mode: this.dependencies.emails.status.mode,
-      entryAvailable: Boolean(this.dependencies.repository.entryCommand) };
+      entryAvailable: Boolean(this.dependencies.repository.entryCommand),
+      ...(this.dependencies.messages ? { messageChoices: await this.dependencies.messages.choices(identity, requestId) } : {}) };
   }
   async review(identity: PortalSessionIdentity, requestId: string, itemId: string, versionId: string) {
     if (!uuid(itemId) || !uuid(versionId)) throw new MhpCommerceError(400, 'Choose a saved sequence.');
@@ -146,23 +154,57 @@ export class MhpSequenceService {
       throw new MhpCommerceError(404, 'This sequence was not found in the MHP workspace.');
     const definition = this.checked(readCanonicalFollowupSequence(review.canonicalContent));
     const blockers = new Set(followupActivationBlockers(definition, this.readiness));
-    const selected = new Map(definition.steps.filter((step): step is FollowupMessage => step.kind === 'email').map(step => [step.contentVersionId, step]));
+    const selected = new Map(definition.steps.filter((step): step is FollowupMessage => step.kind !== 'wait' && (Boolean(this.dependencies.messages) || step.kind === 'email')).map(step => [step.contentVersionId, step]));
+    const messages: FlowMessageReview[] = [];
     for (const step of selected.values()) {
       try {
-        const email = await this.dependencies.emails.review(identity, requestId, step.contentItemId, step.contentVersionId);
-        if (!email.review.isLatest || email.review.approvalStatus !== 'approved' || email.review.approvalStale || !email.local.valid
-            || email.review.contentSha256 !== step.contentSha256) blockers.add('email_version_not_ready');
-      } catch (error) { if (error instanceof MhpCommerceError && [404, 409].includes(error.status)) blockers.add('email_version_not_ready'); else throw error; }
+        if (this.dependencies.messages) {
+          const message = await this.dependencies.messages.review(identity, requestId, step.kind, step.contentItemId, step.contentVersionId); messages.push(message);
+          if (!message.review.isLatest || message.review.approvalStatus !== 'approved' || message.review.approvalStale || !message.valid || message.review.contentSha256 !== step.contentSha256) blockers.add('email_version_not_ready');
+        } else {
+          const email = await this.dependencies.emails.review(identity, requestId, step.contentItemId, step.contentVersionId);
+          if (!email.review.isLatest || email.review.approvalStatus !== 'approved' || email.review.approvalStale || !email.local.valid || email.review.contentSha256 !== step.contentSha256) blockers.add('email_version_not_ready');
+        }
+      } catch (error) { if ((error instanceof MhpCommerceError || error instanceof FlowWorkspaceError) && [404, 409].includes(error.status)) blockers.add('email_version_not_ready'); else throw error; }
     }
-    return { review, local, definition, blockers: [...blockers], timeline: followupTimeline(definition) };
+    return { review, local, definition, blockers: [...blockers], timeline: followupTimeline(definition), ...(this.dependencies.messages ? { messages } : {}) };
   }
-  async preview(identity: PortalSessionIdentity, requestId: string, value: unknown) {
-    await this.context(identity, requestId); const definition = this.checked(value);
-    return { definition, timeline: followupTimeline(definition), blockers: followupActivationBlockers(definition, this.readiness) };
+  async preview(identity: PortalSessionIdentity, requestId: string, value: unknown, inlineMessages?: unknown) {
+    await this.context(identity, requestId); const composition = inlineMessages === undefined ? null : parseFlowComposition(value, inlineMessages), definition = this.checked(composition?.definition ?? value);
+    const previews: ReturnType<typeof previewFlowMessage>[] = [];
+    for (const step of definition.steps) if (step.kind !== 'wait') {
+      const inline = composition?.inlineMessages[step.key];
+      if (inline) previews.push(previewFlowMessage(step.kind, inline.payload));
+      else if (this.dependencies.messages) {
+        const message = await this.dependencies.messages.review(identity, requestId, step.kind, step.contentItemId, step.contentVersionId);
+        if (message.review.contentSha256 !== step.contentSha256) throw new MhpCommerceError(409, 'Choose the exact saved message version before previewing.');
+        previews.push(previewFlowMessage(step.kind, message.payload));
+      }
+    }
+    return { definition, timeline: followupTimeline(definition), blockers: followupActivationBlockers(definition, this.readiness),
+      ...(composition || this.dependencies.messages ? { messagePreviews: previews } : {}) };
+  }
+  async simulate(identity: PortalSessionIdentity, requestId: string, value: unknown, inlineMessages?: unknown, simulationCase = 'happy') {
+    const preview = await this.preview(identity, requestId, value, inlineMessages);
+    return { ...preview, simulation: simulateFollowupFlow(preview.definition, this.readiness, flowSimulationPreset(simulationCase, preview.definition)) };
+  }
+  async message(identity: PortalSessionIdentity, requestId: string, channel: 'email' | 'sms' | 'whatsapp', itemId: string, versionId: string) {
+    await this.context(identity, requestId);
+    if (!this.dependencies.messages) throw new MhpCommerceError(503, 'The inline message library is unavailable.');
+    const detail = await this.dependencies.messages.review(identity, requestId, channel, itemId, versionId);
+    return { channel, title: detail.review.title, contentItemId: detail.review.contentItemId, contentVersionId: detail.review.contentVersionId, contentSha256: detail.review.contentSha256, payload: detail.payload };
   }
   async save(identity: PortalSessionIdentity, requestId: string, input: MhpSequenceSaveInput, now = Date.now()) {
     if (!uuid(input.commandId) || Boolean(input.contentItemId) !== Boolean(input.previousVersionId)) throw new MhpCommerceError(400, 'Refresh the sequence form before saving.');
-    const context = await this.context(identity, requestId), definition = this.checked(input.definition), canonical = canonicalFollowupSequence(definition);
+    const context = await this.context(identity, requestId), composition = input.inlineMessages === undefined ? null : parseFlowComposition(input.definition, input.inlineMessages);
+    let definition = this.checked(composition?.definition ?? input.definition);
+    if (composition && Object.keys(composition.inlineMessages).length) {
+      if (!this.dependencies.messages) throw new MhpCommerceError(503, 'The inline message editor is unavailable.');
+      const saved: Record<string, FlowSavedMessageRef> = {};
+      for (const [key, message] of Object.entries(composition.inlineMessages)) saved[key] = await this.dependencies.messages.save(identity, requestId, flowCommandUuid(input.commandId, key), message, now);
+      definition = this.checked(resolveFlowComposition(composition, saved));
+    }
+    const canonical = canonicalFollowupSequence(definition);
     const replay = async () => {
       const saved = await this.dependencies.repository.local(identity, null, `edit:${input.commandId}`);
       if (!saved) return null;
@@ -190,6 +232,13 @@ export class MhpSequenceService {
     if (!uuid(commandId)) throw new MhpCommerceError(400, 'Refresh the sequence form.');
     const context = await this.context(identity, requestId), detail = await this.review(identity, requestId, itemId, versionId), exact = detail.local.exact;
     if (!detail.review.isLatest || !detail.local.valid || !exact) throw new MhpCommerceError(409, 'Save a fresh sequence with the current brand before publishing.');
+    if (this.dependencies.messages) {
+      const selected = detail.definition.steps.filter((step): step is FollowupMessage => step.kind !== 'wait');
+      if ((detail.messages?.length ?? 0) !== new Set(selected.map(step => step.contentVersionId)).size
+          || detail.messages?.some(message => !message.valid || !message.review.isLatest)) throw new MhpCommerceError(409, 'Choose current exact local message versions before publishing this blueprint.');
+      const done = new Set<string>();
+      for (const step of selected) if (!done.has(step.contentVersionId)) { await this.dependencies.messages.publish(identity, requestId, step.kind, step.contentItemId, step.contentVersionId, flowCommandUuid(commandId, step.key), now); done.add(step.contentVersionId); }
+    }
     if (detail.review.approvalStatus === 'approved' && !detail.review.approvalStale) return;
     const key = `mhp.sequence.publish.${commandId}.refresh`, brand = parseMhpOwnerEmailBrand(exact.brand);
     const recorded = () => this.dependencies.adapterTransactions.run(context, async transaction => {
@@ -231,10 +280,16 @@ export class MhpSequenceService {
   }
 }
 export function createMhpSequenceService(input: { web: Pool; identity: Pool; adapter: Pool; approvals: Pool; marketingWorkspace: Pick<PgMhpMarketingWorkspaceService, 'snapshot'>; emails: MhpOwnerEmailService; campaign: string }): MhpSequenceService {
-  const transactions = mhpOwnerEmailContentRunner(input.adapter);
-  return new MhpSequenceService({ marketingWorkspace: input.marketingWorkspace, repository: new PgMhpSequenceRepository(input.web, input.identity),
-    reader: new CompanyContentService({ transactionRunner: mhpOwnerEmailContentRunner(input.web) }), adapter: new CompanyContentService({ transactionRunner: transactions }),
-    approvals: new CompanyContentService({ transactionRunner: mhpOwnerEmailContentRunner(input.approvals) }), adapterTransactions: transactions, emails: input.emails, campaign: input.campaign });
+  const transactions = mhpOwnerEmailContentRunner(input.adapter), webTransactions = mhpOwnerEmailContentRunner(input.web);
+  const repository = new PgMhpSequenceRepository(input.web, input.identity), reader = new CompanyContentService({ transactionRunner: webTransactions });
+  const adapter = new CompanyContentService({ transactionRunner: transactions }), approvals = new CompanyContentService({ transactionRunner: mhpOwnerEmailContentRunner(input.approvals) });
+  let service!: MhpSequenceService;
+  const messages = new LocalFlowMessages({ brand: 'mhp', authorize: (identity, requestId) => service.contentContext(identity, requestId),
+    brandSnapshot: async (_context, identity) => parseMhpOwnerEmailBrand((await repository.snapshot(identity, input.campaign)).brand),
+    reader, adapter, approvals, transactions, local: new FlowLocalStore(webTransactions), mhpEmail: input.emails });
+  service = new MhpSequenceService({ marketingWorkspace: input.marketingWorkspace, repository, reader, adapter, approvals,
+    adapterTransactions: transactions, emails: input.emails, campaign: input.campaign, messages });
+  return service;
 }
 export type MhpSequenceSnapshot = Awaited<ReturnType<MhpSequenceService['snapshot']>>;
 export type MhpSequenceReview = Awaited<ReturnType<MhpSequenceService['review']>>;

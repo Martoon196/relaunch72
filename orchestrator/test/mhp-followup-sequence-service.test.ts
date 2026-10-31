@@ -61,6 +61,17 @@ test('personal/non-owner, wrong brand/campaign and stale publish fail before mut
   f.state.review = { ...f.state.review, isLatest: false }; await assert.rejects(f.service.publish(identity, ids.request, sequenceIds.item, sequenceIds.version, ids.command), { status: 409 });
   assert.deepEqual(f.state.calls, []);
 });
+
+test('old mixed-channel history remains readable when129 marks its legacy email reference invalid', async () => {
+  const f = fixture(), mixed = { ...definition, steps: [{ ...definition.steps[0]!, kind: 'sms' }] }, canonical = canonicalFollowupSequence(mixed), sha = followupSequenceSha(canonical);
+  f.state.review = { ...f.state.review, canonicalContent: canonical, contentSha256: sha };
+  f.state.local = { ...f.state.local, canonicalContent: canonical, contentSha256: sha, valid: false, exact: null };
+  const result = await f.service.review(identity, ids.request, sequenceIds.item, sequenceIds.version);
+  assert.equal(result.definition.steps[0]!.kind, 'sms'); assert.equal(result.local.valid, false); assert.equal(result.local.canonicalContent, canonical);
+  assert.ok(result.blockers.includes('sms_not_connected'));
+  await assert.rejects(f.service.publish(identity, ids.request, sequenceIds.item, sequenceIds.version, ids.command), { status: 409 });
+  await assert.rejects(f.service.command(identity, ids.request, action), { status: 409 }); assert.deepEqual(f.state.calls, []);
+});
 test('Start/resume refuse unavailable delivery while pause/cancel remain usable', async () => {
   const f = fixture(); f.state.status = { ...f.state.status, mode: 'off', providerReady: false };
   await assert.rejects(f.service.command(identity, ids.request, action), { status: 409 });
