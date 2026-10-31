@@ -274,13 +274,56 @@ test('marketing bridge requires the exact bundled123 tail and is unavailable to 
 });
 
 test('final124 application strictly requires its exact bundled124 and all earlier migrations', async () => {
-  const migrations = await discoverMigrations();
-  const rows = migrations.map(({ filename, checksum }) => ({ filename, checksum }));
+  const { directory, rows } = await webinarBridge();
   assert.equal(rows.length, 124);
   assert.deepEqual(rows[123], approvedMarketing);
-  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 123))), /schema is behind by 1 migration/);
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 122))), /schema is behind by 2 migration/);
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows), directory));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 123)), directory), /schema is behind by 1 migration/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 122)), directory), /schema is behind by 2 migration/);
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([
-    ...rows.slice(0, 123), { ...approvedMarketing, checksum: '0'.repeat(64) }])), /checksum changed/);
+    ...rows.slice(0, 123), { ...approvedMarketing, checksum: '0'.repeat(64) }]), directory), /checksum changed/);
+});
+
+const approvedWebinarReader = {
+  filename: '0125_mhp_webinar_lead_candidates.sql',
+  checksum: '91bd726210fe34fa4edf46565f6c5f48d9005a6a177d735d808101d44f41c259',
+};
+let webinarFixture: Promise<{ directory: string; rows: Array<{ filename: string; checksum: string }> }> | undefined;
+function webinarBridge() {
+  return webinarFixture ??= (async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-mhp-webinar-compat-'));
+    const prefix = (await discoverMigrations()).slice(0, 124);
+    assert.equal(prefix.length, 124);
+    await Promise.all(prefix.map(migration => writeFile(path.join(directory, migration.filename), migration.sql, 'utf8')));
+    return { directory, rows: prefix.map(({ filename, checksum }) => ({ filename, checksum })) };
+  })();
+}
+
+test('124 reader bridge accepts exact124 and exact125 while rejecting changed, duplicate and future rows', async () => {
+  const { directory, rows } = await webinarBridge();
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows), directory));
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool([...rows, approvedWebinarReader]), directory));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { ...approvedWebinarReader, checksum: '0'.repeat(64) }]), directory), /migration not present/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, approvedWebinarReader, approvedWebinarReader]), directory), /invalid runtime migration ledger/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, approvedWebinarReader, { filename: '0126_unknown.sql', checksum: 'a'.repeat(64) }]), directory), /migration not present/);
+});
+
+test('reader125 cannot hide missing124 or corrupt earlier ledger rows', async () => {
+  const { directory, rows } = await webinarBridge();
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(0, 123), approvedWebinarReader]), directory), /migration not present/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([{ ...rows[0]!, checksum: '0'.repeat(64) }, ...rows.slice(1), approvedWebinarReader]), directory), /checksum changed/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(1), approvedWebinarReader]), directory), /not a contiguous prefix/);
+});
+
+test('reader125 bridge is unavailable to the old123 prefix', async () => {
+  const { directory, rows } = await marketingBridge();
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, approvedMarketing, approvedWebinarReader]), directory), /migration not present/);
+});
+
+test('final125 application requires its exact bundled reader and all earlier migrations', async () => {
+  const rows = (await discoverMigrations()).map(({ filename, checksum }) => ({ filename, checksum }));
+  assert.equal(rows.length, 125);assert.deepEqual(rows[124], approvedWebinarReader);
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 124))), /schema is behind by 1 migration/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(0, 124), { ...approvedWebinarReader, checksum: '0'.repeat(64) }])), /checksum changed/);
 });

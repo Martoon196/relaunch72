@@ -8,12 +8,14 @@ import { MHP_AUTH_ORIGIN, MHP_SESSION_COOKIE } from './auth-service.js';
 import { MhpCommerceError } from './commerce-service.js';
 import type { PgMhpMarketingWorkspaceService } from './marketing-workspace-service.js';
 import { marketingWorkspacePage } from './marketing-workspace-view.js';
+import type { MhpWebinarLeadService } from './webinar-leads-service.js';
 
 export interface MhpMarketingWorkspaceDependencies {
   portal: PostgresPortalDeps;
   marketingWorkspace: Pick<PgMhpMarketingWorkspaceService, 'snapshot' | 'select'>;
+  webinarLeads?: Pick<MhpWebinarLeadService, 'importBatch'>;
 }
-const PATHS = new Set(['/hq/marketing', '/hq/marketing/open', '/hq/marketing/return']);
+const PATHS = new Set(['/hq/marketing', '/hq/marketing/open', '/hq/marketing/return', '/hq/marketing/webinar-leads']);
 const CSP = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 function send(res: ServerResponse, status: number, body: string, html = false): void {
   res.writeHead(status, { 'content-type': html ? 'text/html; charset=utf-8' : 'text/plain; charset=utf-8',
@@ -25,7 +27,7 @@ function redirect(res: ServerResponse, target: string, cookie?: string): void {
   if (cookie) res.setHeader('set-cookie', cookie);
   res.writeHead(303, { location: target, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); res.end();
 }
-async function form(req: IncomingMessage): Promise<URLSearchParams> {
+async function form(req: IncomingMessage, keys: readonly string[]): Promise<URLSearchParams> {
   if (!/^application\/x-www-form-urlencoded(?:;\s*charset=utf-8)?$/iu.test(String(req.headers['content-type'] ?? ''))) {
     throw new MhpCommerceError(415, 'Use the marketing workspace form.');
   }
@@ -37,8 +39,8 @@ async function form(req: IncomingMessage): Promise<URLSearchParams> {
     chunks.push(chunk);
   }
   const fields = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
-  if ([...fields.keys()].some(key => !['csrf', 'commandId'].includes(key) || fields.getAll(key).length !== 1)
-      || fields.size !== 2) throw new MhpCommerceError(400, 'Refresh the marketing workspace form.');
+  if ([...fields.keys()].some(key => !keys.includes(key) || fields.getAll(key).length !== 1)
+      || fields.size !== keys.length) throw new MhpCommerceError(400, 'Refresh the marketing workspace form.');
   return fields;
 }
 
@@ -70,16 +72,27 @@ export async function handleMhpMarketingWorkspace(req: IncomingMessage, res: Ser
     await reserve(principalAbuseAdmission(context, routeClass, portal.abuseHashSecret, identity, now));
     const snapshot = await deps.marketingWorkspace.snapshot(identity);
     if (method === 'GET') {
-      send(res, 200, marketingWorkspacePage(snapshot, portalCsrfToken(portal.sessionSecret, token), randomUUID()), true);
+      send(res, 200, marketingWorkspacePage(snapshot, portalCsrfToken(portal.sessionSecret, token), randomUUID(),
+        { enabled: Boolean(deps.webinarLeads) }), true);
       return true;
     }
     if (req.headers.origin !== MHP_AUTH_ORIGIN
         || (req.headers['sec-fetch-site'] !== undefined && req.headers['sec-fetch-site'] !== 'same-origin')) {
       throw new MhpCommerceError(403, 'Refresh the marketing workspace before continuing.');
     }
-    const fields = await form(req);
+    const importing = path === '/hq/marketing/webinar-leads';
+    const fields = await form(req, importing ? ['csrf', 'cursor'] : ['csrf', 'commandId']);
     if (!verifyPortalCsrf(portal.sessionSecret, token, fields.get('csrf') ?? '')) {
       throw new MhpCommerceError(403, 'Refresh the marketing workspace before continuing.');
+    }
+    if (importing) {
+      if (!snapshot.marketingSelected) throw new MhpCommerceError(403, 'Open the MHP marketing workspace before importing sign-ups.');
+      if (!deps.webinarLeads) throw new MhpCommerceError(503, 'Webinar import is temporarily unavailable.');
+      const result = await deps.webinarLeads.importBatch(identity, context.requestId, fields.get('cursor') ?? '', now);
+      if (result.failed) outcome = 'service_error';
+      send(res, result.failed ? 503 : 200, marketingWorkspacePage(snapshot, portalCsrfToken(portal.sessionSecret, token), randomUUID(),
+        { enabled: true, result }), true);
+      return true;
     }
     const action = path === '/hq/marketing/open' ? 'open' : 'return';
     if (action === 'return' && !snapshot.marketingSelected) throw new MhpCommerceError(409, 'The marketing workspace is not selected.');
