@@ -22,6 +22,8 @@ const MHP_MARKETING_COMPATIBILITY_MIGRATION = '0124_mhp_brand_marketing_workspac
 const MHP_MARKETING_COMPATIBILITY_CHECKSUM = '6d17547dc37070b736f23e2a7906dc40739b66c50de262eacdbe9ace7e011209';
 const MHP_WEBINAR_READER_MIGRATION = '0125_mhp_webinar_lead_candidates.sql';
 const MHP_WEBINAR_READER_CHECKSUM = '91bd726210fe34fa4edf46565f6c5f48d9005a6a177d735d808101d44f41c259';
+const MHP_OWNER_EMAIL_MIGRATION = '0126_mhp_owner_email_editor.sql';
+const MHP_OWNER_EMAIL_CHECKSUM = '317555ffd745918305f4d9209112ed4abf7eca8ed283e7db3ceb0bffcd2aef76';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -89,6 +91,16 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(MHP_MARKETING_COMPATIBILITY_MIGRATION) === MHP_MARKETING_COMPATIBILITY_CHECKSUM
       && applied.get(MHP_WEBINAR_READER_MIGRATION) === MHP_WEBINAR_READER_CHECKSUM) {
     applied.delete(MHP_WEBINAR_READER_MIGRATION);
+  }
+  // The125 bridge supports only this reviewed additive126. Its SQL installs
+  // complete v1 owner-row exclusions before capable code can enqueue owner
+  // mail. Bundled126 uses strict matching and never takes this allowance.
+  if (migrations.length === 125
+      && migrations[124]?.filename === MHP_WEBINAR_READER_MIGRATION
+      && migrations[124]?.checksum === MHP_WEBINAR_READER_CHECKSUM
+      && applied.get(MHP_WEBINAR_READER_MIGRATION) === MHP_WEBINAR_READER_CHECKSUM
+      && applied.get(MHP_OWNER_EMAIL_MIGRATION) === MHP_OWNER_EMAIL_CHECKSUM) {
+    applied.delete(MHP_OWNER_EMAIL_MIGRATION);
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
