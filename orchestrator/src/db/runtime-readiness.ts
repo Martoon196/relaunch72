@@ -24,6 +24,8 @@ const MHP_WEBINAR_READER_MIGRATION = '0125_mhp_webinar_lead_candidates.sql';
 const MHP_WEBINAR_READER_CHECKSUM = '91bd726210fe34fa4edf46565f6c5f48d9005a6a177d735d808101d44f41c259';
 const MHP_OWNER_EMAIL_MIGRATION = '0126_mhp_owner_email_editor.sql';
 const MHP_OWNER_EMAIL_CHECKSUM = '317555ffd745918305f4d9209112ed4abf7eca8ed283e7db3ceb0bffcd2aef76';
+const MHP_FOLLOWUP_SEQUENCE_MIGRATION = '0127_mhp_followup_sequences.sql';
+const MHP_FOLLOWUP_SEQUENCE_CHECKSUM = 'bfd4319fe4a0f07b93d54d528b54f3468ae0857ad53e53a8b7a038ebb1a76f23';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -101,6 +103,16 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(MHP_WEBINAR_READER_MIGRATION) === MHP_WEBINAR_READER_CHECKSUM
       && applied.get(MHP_OWNER_EMAIL_MIGRATION) === MHP_OWNER_EMAIL_CHECKSUM) {
     applied.delete(MHP_OWNER_EMAIL_MIGRATION);
+  }
+  // The126 recovery bridge supports only this reviewed additive127. Its SQL
+  // excludes sequence rows from every old owner claim/maintenance/standalone
+  // boundary before any capable code can enrol them. Bundled127 stays strict.
+  if (migrations.length === 126
+      && migrations[125]?.filename === MHP_OWNER_EMAIL_MIGRATION
+      && migrations[125]?.checksum === MHP_OWNER_EMAIL_CHECKSUM
+      && applied.get(MHP_OWNER_EMAIL_MIGRATION) === MHP_OWNER_EMAIL_CHECKSUM
+      && applied.get(MHP_FOLLOWUP_SEQUENCE_MIGRATION) === MHP_FOLLOWUP_SEQUENCE_CHECKSUM) {
+    applied.delete(MHP_FOLLOWUP_SEQUENCE_MIGRATION);
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
