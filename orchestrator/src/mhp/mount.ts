@@ -15,6 +15,8 @@ import { handleMhpGrowth, type MhpGrowthRouterDependencies } from './growth-rout
 import { handleMhpMarketingWorkspace, type MhpMarketingWorkspaceDependencies } from './marketing-workspace-router.js';
 import { handleMhpOwnerEmail } from './owner-email-router.js';
 import type { MhpOwnerEmailService } from './owner-email-service.js';
+import { handleMhpSequence } from './followup-sequence-router.js';
+import type { MhpSequenceService } from './followup-sequence-service.js';
 
 interface MhpMountDependencies {
   portal: PostgresPortalDeps;
@@ -26,6 +28,7 @@ interface MhpMountDependencies {
   marketingWorkspace?: MhpMarketingWorkspaceDependencies['marketingWorkspace'];
   webinarLeads?: MhpMarketingWorkspaceDependencies['webinarLeads'];
   ownerEmail?: Pick<MhpOwnerEmailService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'queue' | 'test'>;
+  sequences?: Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command'>;
   readiness(): Promise<readonly string[]>;
 }
 
@@ -74,9 +77,10 @@ export function createMhpMount(deps: MhpMountDependencies) {
       const url = new URL(req.url ?? '/', MHP_AUTH_ORIGIN);
       const path = url.pathname.replace(/\/+$/, '') || '/';
       if (await deps.authMount.handle(req, res, url)) return;
+      if (deps.sequences && await handleMhpSequence(req, res, url, { portal, sequences: deps.sequences })) return;
       if (deps.ownerEmail && await handleMhpOwnerEmail(req, res, url, { portal, emails: deps.ownerEmail })) return;
       if (deps.marketingWorkspace && await handleMhpMarketingWorkspace(req, res, url,
-        { portal, marketingWorkspace: deps.marketingWorkspace, webinarLeads: deps.webinarLeads, emailEditorEnabled: Boolean(deps.ownerEmail) })) return;
+        { portal, marketingWorkspace: deps.marketingWorkspace, webinarLeads: deps.webinarLeads, emailEditorEnabled: Boolean(deps.ownerEmail), sequenceEditorEnabled: Boolean(deps.sequences) })) return;
       if (deps.growth && await handleMhpGrowth(req, res, url, { portal, ...deps.growth })) return;
       if (deps.desk && commerce.creditSnapshot && commerce.courseCheckout && await handleMhpDesk(req, res, url, {
         portal, desk: deps.desk, commerce: { billingEnabled: commerce.billingEnabled,
