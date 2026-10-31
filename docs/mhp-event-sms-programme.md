@@ -18,7 +18,9 @@ Astra must reconcile this against the ratified design before integration.
    "decoy" row, so repeats, wrong-code answers and rate limits look identical.
    One signal cannot be removed: someone who enters their own mobile learns an
    email is registered when a code arrives. Decoys are deleted after 24 hours and
-   unverified rows after 30 days.
+   every other unverified row after 30 days (never one claimed in the current
+   month), in small batches on later public requests. If the page goes unused,
+   rows wait until it is next used or the prospect is erased.
 2. **Owner review = send (founder).** `/hq/marketing/event-texts` shows the exact
    current batch: every verified opt-in for the campaign, each with a status
    (ready, needs import, phone shared, opted out, already sent this text, and so
@@ -92,6 +94,15 @@ type) and is left for Astra's decision. No such change is made here.
   the opt-in page from it, or from an email, is the founder's content decision.
   The active email programme is not touched.
 - WhatsApp: nothing.
+
+## Accepted risks recorded by the independent review
+
+- The ratified 0130 owner self-test can push a day to at most 13 segments when codes ran that day.
+- A STOP replied to a code text relies on Twilio Advanced Opt-Out, attested by the operator.
+- Email ownership is unproven; an attacker can attach their own number to someone else's registration.
+- One person with their own registration and phone can use up the 3-a-day and 15-a-month code budget,
+  locking genuine registrants out of codes (never out of the owner's allowance).
+- The 15-second poll limit is enforced only while codes are switched on.
 
 ## Assumptions to reconcile with the ratified design
 
