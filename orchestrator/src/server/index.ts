@@ -927,6 +927,7 @@ async function main(): Promise<void> {
           marketingWorkspace: runtime.marketingWorkspace,
           webinarLeads: runtime.webinarLeads,
           ownerEmail: runtime.ownerEmail,
+          sequences: runtime.sequences,
           growth: { growth: runtime.growth, learning: runtime.learning, unsubscribeSecret: cfg.sessionSecret,
             marketingMode: runtime.marketing?.mode ?? 'off' },
           authMount: createMhpAuthMount({
@@ -985,6 +986,8 @@ async function main(): Promise<void> {
   const stopMhpMarketing = mhpMarketing && postgresPortal?.mhp && process.env.MHP_ENABLED === 'true'
     ? startMhpMarketingDispatcher(postgresPortal.mhp.growth, mhpMarketingSender!, mhpMarketing, {
         owner: postgresPortal.mhp.ownerEmailDispatch ? { queue: postgresPortal.mhp.ownerEmailDispatch,
+          sender: mhpMarketingSender!, unsubscribeSecret: cfg.sessionSecret } : undefined,
+        sequences: postgresPortal.mhp.sequenceDispatch ? { queue: postgresPortal.mhp.sequenceDispatch,
           sender: mhpMarketingSender!, unsubscribeSecret: cfg.sessionSecret } : undefined,
         onResult: result => { if (result.failed > 0) console.warn(`MHP sign-up emails: ${result.sent} sent, ${result.failed} need a retry.`); },
       })

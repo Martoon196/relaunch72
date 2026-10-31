@@ -2,6 +2,7 @@ import { normalizeMhpEmail } from './auth-service.js';
 import { MHP_SITE_ORIGIN, mhpUnsubscribeUrl, type MhpClaimedSend, type MhpTemplateKey, type PgMhpGrowthService } from './growth-service.js';
 import { MHP_MARKETING_TEMPLATES } from './marketing-templates.js';
 import { dispatchMhpOwnerEmails, type MhpOwnerEmailDispatch } from './owner-email-dispatch.js';
+import { dispatchMhpSequenceEmails, type MhpSequenceDispatch } from './followup-sequence-dispatch.js';
 
 /**
  * Sends the queued sign-up emails through a Postmark broadcast stream.
@@ -94,7 +95,8 @@ export function createMhpMarketingSender(config: MhpMarketingConfig, unsubscribe
 /** One minute sweeps on the existing process. Counts only reach the logs. */
 export function startMhpMarketingDispatcher(growth: Pick<PgMhpGrowthService, 'claim' | 'settle'>, sender: MhpMarketingSender,
   config: Pick<MhpMarketingConfig, 'testRecipients'>, options: { intervalMs?: number; onResult?: (result: { sent: number; failed: number }) => void;
-    owner?: { queue: MhpOwnerEmailDispatch; sender: MhpRenderedMarketingSender; unsubscribeSecret: string } } = {}): () => void {
+    owner?: { queue: MhpOwnerEmailDispatch; sender: MhpRenderedMarketingSender; unsubscribeSecret: string };
+    sequences?: { queue: MhpSequenceDispatch; sender: MhpRenderedMarketingSender; unsubscribeSecret: string } } = {}): () => void {
   let stopped = false, running = false;
   const runOnce = async (): Promise<void> => {
     if (running || stopped) return;
@@ -117,6 +119,10 @@ export function startMhpMarketingDispatcher(growth: Pick<PgMhpGrowthService, 'cl
       if (options.owner && !stopped) {
         const owner = await dispatchMhpOwnerEmails({ ...options.owner, testRecipients: config.testRecipients, stopped: () => stopped });
         sent += owner.sent; failed += owner.failed;
+      }
+      if (options.sequences && !stopped) {
+        const sequences = await dispatchMhpSequenceEmails({ ...options.sequences, testRecipients: config.testRecipients, stopped: () => stopped });
+        sent += sequences.sent; failed += sequences.failed + sequences.unknown;
       }
     } catch { failed++; }
     finally {

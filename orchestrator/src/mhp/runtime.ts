@@ -20,6 +20,8 @@ import { CrmCommandService, createPgCrmTransactionRunner } from '../crm-pg/index
 import { MhpWebinarLeadService, PgMhpWebinarLeadReader } from './webinar-leads-service.js';
 import { createMhpOwnerEmailService, mhpOwnerEmailTestConfig, type MhpOwnerEmailService } from './owner-email-service.js';
 import { PgMhpOwnerEmailDispatch } from './owner-email-dispatch.js';
+import { createMhpSequenceService, type MhpSequenceService } from './followup-sequence-service.js';
+import { PgMhpSequenceDispatch } from './followup-sequence-dispatch.js';
 
 export interface MhpRuntime {
   auth: PgMhpAuthService;
@@ -36,6 +38,8 @@ export interface MhpRuntime {
   webinarLeads: MhpWebinarLeadService;
   ownerEmail?: MhpOwnerEmailService;
   ownerEmailDispatch?: PgMhpOwnerEmailDispatch;
+  sequences?: MhpSequenceService;
+  sequenceDispatch?: PgMhpSequenceDispatch;
   marketing: MhpMarketingConfig | null;
   readiness(): Promise<readonly string[]>;
 }
@@ -84,6 +88,12 @@ export async function buildMhpRuntime(input: {
     sender: marketing ? createMhpMarketingSender(marketing, env.SESSION_SECRET?.trim() ?? '') : undefined,
   }) : undefined;
   console.info(JSON.stringify({ event: 'mhp.owner-email.readiness', editorReady: Boolean(ownerEmail), ...mhpOwnerEmailTestConfig(env, marketing).status }));
+  const sequences = ownerEmail && input.contentAdapterPool && input.contentCommandPool ? createMhpSequenceService({
+    web: webPool, identity: identityPool, adapter: input.contentAdapterPool, approvals: input.contentCommandPool,
+    marketingWorkspace, emails: ownerEmail, campaign: webinar.campaign,
+  }) : undefined;
+  console.info(JSON.stringify({ event: 'mhp.sequence.readiness', editorReady: Boolean(sequences), emailReady: sequences?.readiness.email ?? false,
+    smsReady: false, whatsappReady: false, automaticEntryEnabled: false }));
   const transactions = createPgCrmTransactionRunner(commandPool);
   const rawVaultKey = env.INVESTOR_MAIL_ENCRYPTION_KEY?.trim();
   const vaultKey = rawVaultKey ? Buffer.from(rawVaultKey, 'base64') : undefined;
@@ -109,6 +119,8 @@ export async function buildMhpRuntime(input: {
     marketingWorkspace,
     ownerEmail,
     ownerEmailDispatch: new PgMhpOwnerEmailDispatch(identityPool),
+    sequences,
+    sequenceDispatch: sequences ? new PgMhpSequenceDispatch(identityPool) : undefined,
     webinarLeads: new MhpWebinarLeadService({ marketingWorkspace, reader: new PgMhpWebinarLeadReader(webPool),
       transactions, commands: new CrmCommandService({ transactionRunner: transactions }),
       campaign: webinar.campaign, cursorSecret: env.SESSION_SECRET?.trim() ?? '' }),

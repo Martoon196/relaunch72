@@ -16,29 +16,34 @@ export interface MhpOwnerEmailDispatch {
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const uuid = (value: unknown): value is string => typeof value === 'string' && MHP_OWNER_EMAIL_UUID.test(value);
 
+export function parseMhpOwnerEmailLeases(jobs: unknown, limit: number): readonly MhpOwnerEmailLease[] {
+  if (!Array.isArray(jobs) || jobs.length > limit || !jobs.every(job => record(job) && uuid(job.id) && uuid(job.leaseId)
+      && typeof job.leaseUntil === 'string' && Number.isFinite(Date.parse(job.leaseUntil)))) throw new Error('Invalid owner email lease batch');
+  return jobs as MhpOwnerEmailLease[];
+}
+export function parseMhpOwnerEmailPrepared(value: unknown, lease: MhpOwnerEmailLease): MhpOwnerEmailPrepared | null {
+  if (value === null) return null;
+  if (!record(value) || value.id !== lease.id || value.leaseId !== lease.leaseId || !uuid(value.proofId) || !uuid(value.prospectId)
+      || typeof value.leaseUntil !== 'string' || Date.parse(value.leaseUntil) !== Date.parse(lease.leaseUntil)
+      || typeof value.email !== 'string' || !(value.firstName === null || typeof value.firstName === 'string')
+      || !record(value.context) || !record(value.exact) || !uuid(value.exact.contentVersionId) || !uuid(value.exact.approvalDecisionId)
+      || typeof value.exact.canonicalContent !== 'string' || typeof value.exact.contentSha256 !== 'string'
+      || !/^[0-9a-f]{64}$/u.test(value.exact.contentSha256)) throw new Error('Invalid pinned owner email proof');
+  parseMhpOwnerEmailBrand(value.exact.brand);
+  return value as unknown as MhpOwnerEmailPrepared;
+}
+
 /** Table-blind capabilities on the existing dispatch identity, never an owner context. */
 export class PgMhpOwnerEmailDispatch implements MhpOwnerEmailDispatch {
   constructor(private readonly pool: Pick<Pool, 'query'>) {}
   async claim(limit: number, leaseSeconds: number, onlyEmails: readonly string[] | null): Promise<readonly MhpOwnerEmailLease[]> {
     const result = await this.pool.query<{ jobs: unknown }>('SELECT app_private.mhp_claim_owner_marketing_sends($1,$2,$3) AS jobs',
       [limit, leaseSeconds, onlyEmails ? [...onlyEmails] : null]);
-    const jobs = result.rows[0]?.jobs;
-    if (!Array.isArray(jobs) || jobs.length > limit || !jobs.every(job => record(job) && uuid(job.id) && uuid(job.leaseId)
-        && typeof job.leaseUntil === 'string' && Number.isFinite(Date.parse(job.leaseUntil)))) throw new Error('Invalid owner email lease batch');
-    return jobs as MhpOwnerEmailLease[];
+    return parseMhpOwnerEmailLeases(result.rows[0]?.jobs, limit);
   }
   async prepare(lease: MhpOwnerEmailLease): Promise<MhpOwnerEmailPrepared | null> {
     const result = await this.pool.query<{ prepared: unknown }>('SELECT app_private.mhp_prepare_owner_marketing_send($1,$2) AS prepared', [lease.id, lease.leaseId]);
-    const value = result.rows[0]?.prepared;
-    if (value === null) return null;
-    if (!record(value) || value.id !== lease.id || value.leaseId !== lease.leaseId || !uuid(value.proofId) || !uuid(value.prospectId)
-        || typeof value.leaseUntil !== 'string' || Date.parse(value.leaseUntil) !== Date.parse(lease.leaseUntil)
-        || typeof value.email !== 'string' || !(value.firstName === null || typeof value.firstName === 'string')
-        || !record(value.context) || !record(value.exact) || !uuid(value.exact.contentVersionId) || !uuid(value.exact.approvalDecisionId)
-        || typeof value.exact.canonicalContent !== 'string' || typeof value.exact.contentSha256 !== 'string'
-        || !/^[0-9a-f]{64}$/u.test(value.exact.contentSha256)) throw new Error('Invalid pinned owner email proof');
-    parseMhpOwnerEmailBrand(value.exact.brand);
-    return value as unknown as MhpOwnerEmailPrepared;
+    return parseMhpOwnerEmailPrepared(result.rows[0]?.prepared, lease);
   }
   async settle(lease: MhpOwnerEmailLease, accepted: boolean, reference: string | null): Promise<void> {
     await this.pool.query('SELECT app_private.mhp_settle_owner_marketing_send($1,$2,$3,$4)', [lease.id, lease.leaseId, accepted, reference]);
