@@ -13,17 +13,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout the exact capable follow-up sequence source
+      - name: Checkout the exact signup-entry recovery bridge
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Martoon196/relaunch72
-          ref: 62755d70ae503d8d3312176b1cd976222391173a
+          ref: aa5cd675a831a72ecc7f52f2e71c4b26ac39efe0
           persist-credentials: false
       - name: Assert exact source identity
         shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = 62755d70ae503d8d3312176b1cd976222391173a
-          test "$(git rev-parse 'HEAD^{tree}')" = e832ecea59f5ef2ba5d529391539f2e96093f6c2
+          test "$(git rev-parse HEAD)" = aa5cd675a831a72ecc7f52f2e71c4b26ac39efe0
+          test "$(git rev-parse 'HEAD^{tree}')" = 3098b6c0a8f80d06c0d50613913fc7e55adc10a6
           test -z "$(git status --porcelain)"
           git rev-parse HEAD 'HEAD^{tree}'
       - name: Match the Render Node runtime
