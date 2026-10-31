@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { handlePortal, type PostgresPortalDeps } from '../src/portal/router.js';
+import { buildPostgresPortalDeps } from '../src/portal/provision.js';
 import { PORTAL_COOKIE, portalCsrfToken } from '../src/portal/session.js';
 import { PROPERTY_PREDATOR_GROWTH_PROFILE } from '../src/portal/product-profile.js';
 import { PortalFollowupFlowService, PP_FOLLOWUP_CAMPAIGN, PP_FOLLOWUP_ROUTE as BASE } from '../src/portal/followup-flow-service.js';
@@ -21,7 +22,8 @@ export function flowRouterFixture() {
   const authorise = () => { if (!state.owner) throw new FlowWorkspaceError(403, 'Owner/admin required'); };
   const snapshot = { brand: { canonical: '{}', sha256: '0'.repeat(64), ref: 'synthetic-native-brand', productName: 'Property Predator', primaryColor: '#123b48', accentColor: '#e8a33d' },
     catalog: { items: [], nextCursor: null }, messageChoices: [], readiness, executable: false as const, workspaceId: identity.workspaceId, campaign: PP_FOLLOWUP_CAMPAIGN };
-  const detail = { ...sequenceDetail, definition, brand: snapshot.brand, valid: true, manifestSha256: '0'.repeat(64), blockers: ['email_not_connected'],
+  const detail = { ...sequenceDetail, local: { ...sequenceDetail.local, authorAllowed: true,
+    blobStorageKey: `inline:pp.followup-sequence:${sequenceDetail.review.contentSha256}`, brandSnapshotRef: snapshot.brand.ref }, definition, brand: snapshot.brand, valid: true, manifestSha256: '0'.repeat(64), blockers: ['email_not_connected'],
     messages: [], review: { ...sequenceDetail.review, source: { ...sequenceDetail.review.source, system: 'pp.followup-sequence' } } };
   const flows: Pick<PortalFollowupFlowService, 'snapshot' | 'review' | 'save' | 'publish' | 'preview' | 'simulate' | 'message'> = {
     snapshot: async () => { authorise(); return snapshot; }, review: async () => { authorise(); return { ...detail, review: { ...detail.review, approvalStatus: state.published ? 'approved' : 'unrequested' } }; },
@@ -53,6 +55,19 @@ test('actual PP portal mounts the shared editor with honest disconnected state a
   assert.match(page.body, /\/portal\/channels\/live/u); assert.match(page.headers['content-security-policy']!, /connect-src 'self'/u);
   const script = await f.request('GET', '/editor.js'); assert.equal(script.status, 200); assert.match(script.body, /inlineEditor/u); assert.equal(f.state.leases, f.state.completed);
 });
+
+test('real Postgres portal composition forwards the exact optional flow facade to its native route', async () => {
+  const f = flowRouterFixture(), facade = f.deps.followupFlows;
+  const config = { secure: true, sessionSecret: SECRET, auth: f.deps.auth, crm: f.deps.crm,
+    productProfile: PROPERTY_PREDATOR_GROWTH_PROFILE, portalBaseUrl: ORIGIN, now: () => now,
+    abuse: f.deps.abuse!, requestContext: f.deps.requestContext!, abuseHashSecret: 'separate-synthetic-flow-abuse-secret-at-least32' };
+  const composed = buildPostgresPortalDeps({ ...config, followupFlows: facade });
+  assert.equal(composed.followupFlows, facade);
+  Object.assign(f.deps, composed);
+  assert.equal((await f.request('GET', '?new=1')).status, 200);
+  assert.equal((await f.request('POST', '/preview', f.draft())).status, 200); assert.deepEqual(f.state.calls, ['preview']);
+  assert.equal(buildPostgresPortalDeps(config).followupFlows, undefined);
+});
 test('native save persists through the facade; preview/simulation and Publish invoke no activation', async () => {
   const f = flowRouterFixture(); assert.equal((await f.request('POST', '/preview', f.draft())).status, 200);
   const simulation = await f.request('POST', '/simulate', f.draft({ simulationCase: 'unknown' })); assert.equal(simulation.status, 200); assert.match(simulation.body, /Simulation only/u); assert.match(simulation.body, /Nothing was sent/u);
@@ -65,7 +80,8 @@ test('PP forms reject foreign/null Origin, CSRF, extra identity/destination fiel
   const f = flowRouterFixture();
   for (const origin of ['null', 'https://app.martinhowardproperty.co.uk', 'https://example.invalid']) assert.equal((await f.request('POST', '/save', f.draft(), { origin })).status, 403);
   assert.equal((await f.request('POST', '/save', f.draft({ csrf: 'forged' }))).status, 403);
-  for (const extra of [{ workspaceId: ids.prospect }, { recipient: 'forged@example.invalid' }, { brand: 'mhp' }]) assert.equal((await f.request('POST', '/save', f.draft(extra))).status, 400);
+  const forged: Record<string, string>[] = [{ workspaceId: ids.prospect }, { recipient: 'forged@example.invalid' }, { brand: 'mhp' }];
+  for (const extra of forged) assert.equal((await f.request('POST', '/save', f.draft(extra))).status, 400);
   assert.equal((await f.request('POST', '/save', f.draft() + '&commandId=' + ids.command)).status, 400);
   assert.equal((await f.request('GET', '/save')).status, 405); assert.equal((await f.request('POST', '/save', f.draft(), { 'content-length': '240001' })).status, 413); assert.deepEqual(f.state.calls, []);
 });
