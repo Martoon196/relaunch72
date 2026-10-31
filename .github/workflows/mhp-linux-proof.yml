@@ -13,17 +13,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout the exact shared-flow compatibility bridge
+      - name: Checkout the exact shared MHP and PP flow editor
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Martoon196/relaunch72
-          ref: 213799b39d4fee735efa19482dedde92e1834bed
+          ref: 978fc4a9a17a70ae5701a8469f27ca05101f975f
           persist-credentials: false
       - name: Assert exact source identity
         shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = 213799b39d4fee735efa19482dedde92e1834bed
-          test "$(git rev-parse 'HEAD^{tree}')" = 5bed182561990a433ba0df32a612f922411a7d85
+          test "$(git rev-parse HEAD)" = 978fc4a9a17a70ae5701a8469f27ca05101f975f
+          test "$(git rev-parse 'HEAD^{tree}')" = 8e06154cd76d659401fa8555ef90faf9b76eaf59
           test -z "$(git status --porcelain)"
           git rev-parse HEAD 'HEAD^{tree}'
       - name: Match the Render Node runtime
