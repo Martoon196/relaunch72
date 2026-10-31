@@ -214,8 +214,11 @@ export class MhpOwnedSmsService {
     if (previous) return previous;
     const detail = await this.review(identity, requestId, input.itemId, input.versionId);
     if (detail.review.contentSha256 !== input.sha256) throw new MhpCommerceError(409, 'The reviewed text changed. Refresh before sending.');
-    await this.dependencies.observe(context, detail, input.commandId, now);
-    await this.dependencies.messages.publish(identity, requestId, 'sms', input.itemId, input.versionId, input.commandId, now);
+    if (detail.review.approvalStatus === 'approved' && !detail.review.approvalStale) {
+      await this.dependencies.observe(context, detail, input.commandId, now);
+    } else {
+      await this.dependencies.messages.publish(identity, requestId, 'sms', input.itemId, input.versionId, input.commandId, now);
+    }
     return repository.send(context, identity, command);
   }
 }
