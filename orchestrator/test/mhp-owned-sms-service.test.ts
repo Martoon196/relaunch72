@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
-import { MhpOwnedSmsService, mhpOwnedSmsConfig, assertMhpOwnedSmsBoundaryReady, MHP_OWNED_SMS_DEFAULT_BODY, type MhpOwnedSmsConfig, type MhpOwnedSmsDependencies, type MhpOwnedSmsSendResult } from '../src/mhp/owned-sms-service.js';
+import { MhpOwnedSmsService, mhpOwnedSmsConfig, assertMhpOwnedSmsBoundaryReady, refreshMhpOwnedSmsObservation, MHP_OWNED_SMS_DEFAULT_BODY, type MhpOwnedSmsConfig, type MhpOwnedSmsDependencies, type MhpOwnedSmsSendResult } from '../src/mhp/owned-sms-service.js';
+import type { CompanyContentService, CompanyContentTransactionRunner } from '../src/company-content-pg/index.js';
+import { LocalFlowMessages } from '../src/followup-sequences/messages.js';
+import { FlowLocalStore, type FlowStoredLocal } from '../src/followup-sequences/local-store.js';
+import { flowMessageVersionCommand } from '../src/followup-sequences/content.js';
 import { smsVerificationDisplayBrand } from '../src/sms-live-pg/phone-verification.js';
 import { requestDatabaseContext } from '../src/db/rls.js';
-import { ids, identity, review } from './helpers/mhp-owner-email-fixture.js';
+import { ids, identity, review, brand, now } from './helpers/mhp-owner-email-fixture.js';
 const canonical = JSON.stringify({ bodyText: MHP_OWNED_SMS_DEFAULT_BODY, schema: 'growthhq.sms-draft/v1' });
 const sha = createHash('sha256').update(canonical).digest('hex');
 const config: MhpOwnedSmsConfig = { ownerUserId: ids.user, contactId: ids.prospect, phone: '+447510243096', connectionId: ids.send,
@@ -42,7 +46,47 @@ test('owned MHP send checks historical outcome before current source and does no
 });
 test('new MHP self-test reviews and publishes exact existing0021 source before one composite operation', async () => {
   const f = ownedSmsServiceFixture(); const result = await f.service.send(identity, ids.request, sendInput);
-  assert.equal(result.jobId, ids.send); assert.deepEqual(f.calls, ['lookup', 'review', 'observe', 'publish', 'send']);
+  assert.equal(result.jobId, ids.send); assert.deepEqual(f.calls, ['lookup', 'review', 'publish', 'send']);
+});
+
+for (const initial of ['unrequested', 'approved', 'stale-approved'] as const) test(`owned Send composes the real local publisher with one observation for ${initial} source`, async () => {
+  const f = ownedSmsServiceFixture(), observations = new Set<string>();
+  const receipts = new Map<string, { status: string; result: { contentItemId: string; contentVersionId: string; sourceAttestationExpiresAt: string } }>();
+  const state = { approved: initial !== 'unrequested', stale: initial === 'stale-approved', approvals: 0, refreshes: 0 };
+  const command = flowMessageVersionCommand({ brand: 'mhp', workspaceId: identity.workspaceId, snapshot: brand, channel: 'sms', commandId: ids.command,
+    title: 'MHP owned test', payload: { schema: 'growthhq.sms-draft/v1', bodyText: MHP_OWNED_SMS_DEFAULT_BODY }, previous: null, now });
+  const local: FlowStoredLocal = { contentItemId: ids.item, contentVersionId: ids.version, previousVersionId: null, sourceItemId: command.source.itemId,
+    sourceVersion: command.source.version, canonicalContent: canonical, contentSha256: sha, title: command.title, authorAllowed: true,
+    blobStorageKey: command.blob.storageKey, brandSnapshotRef: brand.ref, metadata: command.metadata ?? {} };
+  const transactions: CompanyContentTransactionRunner = { run: async (_context, operation) => operation({ query: async (sql: string, values: readonly unknown[]) =>
+    ({ rows: sql.includes('followup-flow.local-version') ? [local] : receipts.has(String(values[0])) ? [receipts.get(String(values[0]))] : [] }) } as never) };
+  const adapter: Pick<CompanyContentService, 'createVersion' | 'refreshSourceAttestation'> = {
+    createVersion: async () => { throw Error('No new content version during Send'); },
+    refreshSourceAttestation: async (_context, input) => {
+      const tuple = [identity.workspaceId, input.contentVersionId, input.attestation.catalogSha256, input.attestation.checkedAt].join(':');
+      if (observations.has(tuple)) throw Object.assign(Error('Duplicate source observation tuple'), { code: '23505' });
+      observations.add(tuple); state.refreshes++;
+      const result = { contentItemId: ids.item, contentVersionId: ids.version, sourceAttestationExpiresAt: input.attestation.expiresAt };
+      receipts.set(input.commandKey, { status: 'succeeded', result });
+      return { disposition: 'applied', ...result, sourceAttestationId: ids.approval, providerEffects: false };
+    },
+  };
+  const messages = new LocalFlowMessages({ brand: 'mhp', authorize: f.dependencies.authorize, brandSnapshot: async () => brand,
+    reader: { listCatalog: async () => ({ items: [], nextCursor: null }), getExactReview: async () => ({ ...review, kind: 'other',
+      contentMimeType: command.contentMimeType, source: command.source, canonicalContent: canonical, contentSha256: sha, blobSha256: sha,
+      approvalStatus: state.approved ? 'approved' : 'unrequested', approvalStale: state.stale }) }, adapter, transactions, local: new FlowLocalStore(transactions),
+    approvals: {
+      requestApproval: async () => ({ disposition: 'applied', approvalRequestId: ids.request, contentItemId: ids.item, contentVersionId: ids.version, requestNumber: 1, contentSha256: sha }),
+      decideApproval: async () => { state.approvals++; state.approved = true; state.stale = false;
+        return { disposition: 'applied', approvalDecisionId: ids.approval, approvalRequestId: ids.request, contentItemId: ids.item, contentVersionId: ids.version, decision: 'approved', contentSha256: sha }; },
+    },
+  });
+  const service = new MhpOwnedSmsService({ ...f.dependencies, messages,
+    observe: async (context, detail, commandId, checkedAt) => refreshMhpOwnedSmsObservation({ context, detail, commandId, now: checkedAt, transactions, adapter }) });
+  assert.equal((await service.send(identity, ids.request, sendInput, now)).jobId, ids.send);
+  assert.equal(state.refreshes, 1); assert.equal(observations.size, 1); assert.equal(state.approvals, initial === 'approved' ? 0 : 1);
+  f.state.replay = true; const before = { ...state };
+  assert.equal((await service.send(identity, ids.request, sendInput, now + 1000)).replayed, true); assert.deepEqual(state, before);
 });
 test('missing one-test agreement has no publication, consent or queue effect', async () => {
   const f = ownedSmsServiceFixture(); await assert.rejects(f.service.send(identity, ids.request, { ...sendInput, agreed: false }), /agree/u); assert.deepEqual(f.calls, []);
