@@ -41,7 +41,8 @@
     "snapshot:preview": "tsx src/legacy-import/property-predator-snapshot-preview-cli.ts",
     "stripe:setup": "tsx src/server/setup.ts",
     "db:migrate": "node --import ./test/windows-node24-shim.mjs --import tsx src/db/migrate.ts",
-    "db:check": "node --import ./test/windows-node24-shim.mjs --import tsx src/db/migrate.ts --check"
+    "db:check": "node --import ./test/windows-node24-shim.mjs --import tsx src/db/migrate.ts --check",
+    "mhp:whatsapp:seal": "tsx src/ops/mhp-whatsapp-seal-cli.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",

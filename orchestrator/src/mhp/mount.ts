@@ -20,6 +20,8 @@ import type { MhpOwnerEmailService } from './owner-email-service.js';
 import { handleMhpSequence } from './followup-sequence-router.js';
 import type { MhpSequenceService } from './followup-sequence-service.js';
 import { handleMhpEventSmsOwner, handleMhpEventSmsPublic } from './event-sms-router.js';
+import { handleMhpOwnedWhatsApp } from './owned-whatsapp-router.js';
+import type { MhpOwnedWhatsAppService } from './owned-whatsapp-service.js';
 import type { MhpEventSmsOwnerService, MhpEventSmsPublic } from './event-sms-service.js';
 
 interface MhpMountDependencies {
@@ -35,6 +37,7 @@ interface MhpMountDependencies {
   ownedSms?: Pick<MhpOwnedSmsService, 'snapshot' | 'review' | 'save' | 'bind' | 'requestCode' | 'confirmCode' | 'send'>;
   sequences?: Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command'> & Partial<Pick<MhpSequenceService, 'entryCommand' | 'message' | 'simulate'>>;
   eventSms?: { optins: MhpEventSmsPublic; owner?: Pick<MhpEventSmsOwnerService, 'snapshot' | 'send'> };
+  ownedWhatsApp?: Pick<MhpOwnedWhatsAppService, 'snapshot' | 'connect' | 'recordTemplate' | 'send'>;
   readiness(): Promise<readonly string[]>;
 }
 
@@ -85,11 +88,12 @@ export function createMhpMount(deps: MhpMountDependencies) {
       if (await deps.authMount.handle(req, res, url)) return;
       if (deps.eventSms && await handleMhpEventSmsPublic(req, res, url, { portal, optins: deps.eventSms.optins })) return;
       if (deps.eventSms?.owner && await handleMhpEventSmsOwner(req, res, url, { portal, owner: deps.eventSms.owner })) return;
+      if (deps.ownedWhatsApp && await handleMhpOwnedWhatsApp(req, res, url, { portal, whatsapp: deps.ownedWhatsApp })) return;
       if (deps.ownedSms && await handleMhpOwnedSms(req, res, url, { portal, sms: deps.ownedSms })) return;
       if (deps.sequences && await handleMhpSequence(req, res, url, { portal, sequences: deps.sequences })) return;
       if (deps.ownerEmail && await handleMhpOwnerEmail(req, res, url, { portal, emails: deps.ownerEmail })) return;
       if (deps.marketingWorkspace && await handleMhpMarketingWorkspace(req, res, url,
-        { portal, marketingWorkspace: deps.marketingWorkspace, webinarLeads: deps.webinarLeads, emailEditorEnabled: Boolean(deps.ownerEmail), sequenceEditorEnabled: Boolean(deps.sequences), ownedSmsEnabled: Boolean(deps.ownedSms), eventSmsEnabled: Boolean(deps.eventSms?.owner) })) return;
+        { portal, marketingWorkspace: deps.marketingWorkspace, webinarLeads: deps.webinarLeads, emailEditorEnabled: Boolean(deps.ownerEmail), sequenceEditorEnabled: Boolean(deps.sequences), ownedSmsEnabled: Boolean(deps.ownedSms), eventSmsEnabled: Boolean(deps.eventSms?.owner), whatsappEnabled: Boolean(deps.ownedWhatsApp) })) return;
       if (deps.growth && await handleMhpGrowth(req, res, url, { portal, ...deps.growth })) return;
       if (deps.desk && commerce.creditSnapshot && commerce.courseCheckout && await handleMhpDesk(req, res, url, {
         portal, desk: deps.desk, commerce: { billingEnabled: commerce.billingEnabled,

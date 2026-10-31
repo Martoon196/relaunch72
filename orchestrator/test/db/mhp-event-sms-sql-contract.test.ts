@@ -27,10 +27,9 @@ test('0131 changes no existing message, approval, delivery, job, authority or co
   assert.doesNotMatch(text, /DROP (?:TABLE|FUNCTION|POLICY|TRIGGER)/u);
 });
 
-test('0131 is the next contiguous migration', async () => {
+test('0131 is migration 131 in a contiguous sequence', async () => {
   const files = (await readdir(migrationsUrl)).filter(name => /^\d{4}_.*\.sql$/u.test(name)).sort();
-  assert.equal(files.at(-1), '0131_mhp_event_sms_programme.sql');
-  assert.equal(files.length, 131);
+  assert.equal(files[130], '0131_mhp_event_sms_programme.sql');
 });
 
 test('public functions run only as the existing public capture role and never create CRM or owner state', async () => {
