@@ -129,6 +129,7 @@ const migration122Url = new URL('../../src/db/migrations/0122_property_predator_
 const migration123Url = new URL('../../src/db/migrations/0123_sms_phone_receipt_trigger_acl.sql', import.meta.url);
 const migration124Url = new URL('../../src/db/migrations/0124_mhp_brand_marketing_workspace.sql', import.meta.url);
 const migration125Url = new URL('../../src/db/migrations/0125_mhp_webinar_lead_candidates.sql', import.meta.url);
+const migration126Url = new URL('../../src/db/migrations/0126_mhp_owner_email_editor.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -690,6 +691,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: '0123_sms_phone_receipt_trigger_acl.sql', version: 123 },
     { filename: '0124_mhp_brand_marketing_workspace.sql', version: 124 },
     { filename: '0125_mhp_webinar_lead_candidates.sql', version: 125 },
+    { filename: '0126_mhp_owner_email_editor.sql', version: 126 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -811,10 +813,12 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration123Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration124Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration125Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration126Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.
   assert.equal(sources.length, tail.length);
+  assert.equal(tail.at(-1)?.checksum, '317555ffd745918305f4d9209112ed4abf7eca8ed283e7db3ceb0bffcd2aef76');
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
   }

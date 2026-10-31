@@ -1262,7 +1262,9 @@ export async function buildPgPortalPlatform(
 
     let mhp: MhpRuntime | undefined;
     try {
-      mhp = await buildMhpRuntime({ env, webPool, identityPool, commandPool, registerPool: pool => pools.push(pool) });
+      mhp = await buildMhpRuntime({ env, webPool, identityPool, commandPool,
+        contentAdapterPool: assetReadinessPool, contentCommandPool,
+        registerPool: pool => pools.push(pool) });
     } catch {
       // A separate brand's missing credentials must not replace the established
       // PP application. Its own host mount remains unavailable and fails /ready.
