@@ -15,9 +15,11 @@ import { PgMhpDeskService } from './desk-service.js';
 import { PgMhpGrowthService, mhpWebinarConfig } from './growth-service.js';
 import { PgMhpLearningService } from './learning-service.js';
 import { PgMhpMarketingWorkspaceService } from './marketing-workspace-service.js';
-import { mhpMarketingConfig, type MhpMarketingConfig } from './marketing-mail.js';
+import { createMhpMarketingSender, mhpMarketingConfig, type MhpMarketingConfig } from './marketing-mail.js';
 import { CrmCommandService, createPgCrmTransactionRunner } from '../crm-pg/index.js';
 import { MhpWebinarLeadService, PgMhpWebinarLeadReader } from './webinar-leads-service.js';
+import { createMhpOwnerEmailService, mhpOwnerEmailTestConfig, type MhpOwnerEmailService } from './owner-email-service.js';
+import { PgMhpOwnerEmailDispatch } from './owner-email-dispatch.js';
 
 export interface MhpRuntime {
   auth: PgMhpAuthService;
@@ -32,6 +34,8 @@ export interface MhpRuntime {
   learning: PgMhpLearningService;
   marketingWorkspace: PgMhpMarketingWorkspaceService;
   webinarLeads: MhpWebinarLeadService;
+  ownerEmail?: MhpOwnerEmailService;
+  ownerEmailDispatch?: PgMhpOwnerEmailDispatch;
   marketing: MhpMarketingConfig | null;
   readiness(): Promise<readonly string[]>;
 }
@@ -48,6 +52,8 @@ export async function buildMhpRuntime(input: {
   webPool: Pool;
   identityPool: Pool;
   commandPool: Pool;
+  contentAdapterPool?: Pool;
+  contentCommandPool?: Pool;
   registerPool(pool: Pool): void;
 }): Promise<MhpRuntime | undefined> {
   const { env, webPool, identityPool, commandPool } = input;
@@ -72,6 +78,12 @@ export async function buildMhpRuntime(input: {
   const marketing = mhpMarketingConfig(env);
   const webinar = mhpWebinarConfig(env);
   const marketingWorkspace = new PgMhpMarketingWorkspaceService(webPool, identityPool);
+  const ownerEmail = input.contentAdapterPool && input.contentCommandPool ? createMhpOwnerEmailService({
+    web: webPool, identity: identityPool, adapter: input.contentAdapterPool, approvals: input.contentCommandPool,
+    marketingWorkspace, campaign: webinar.campaign, env, marketing,
+    sender: marketing ? createMhpMarketingSender(marketing, env.SESSION_SECRET?.trim() ?? '') : undefined,
+  }) : undefined;
+  console.info(JSON.stringify({ event: 'mhp.owner-email.readiness', editorReady: Boolean(ownerEmail), ...mhpOwnerEmailTestConfig(env, marketing).status }));
   const transactions = createPgCrmTransactionRunner(commandPool);
   const rawVaultKey = env.INVESTOR_MAIL_ENCRYPTION_KEY?.trim();
   const vaultKey = rawVaultKey ? Buffer.from(rawVaultKey, 'base64') : undefined;
@@ -95,6 +107,8 @@ export async function buildMhpRuntime(input: {
     growth: new PgMhpGrowthService(webPool, identityPool, webinar),
     learning: new PgMhpLearningService(webPool, identityPool),
     marketingWorkspace,
+    ownerEmail,
+    ownerEmailDispatch: new PgMhpOwnerEmailDispatch(identityPool),
     webinarLeads: new MhpWebinarLeadService({ marketingWorkspace, reader: new PgMhpWebinarLeadReader(webPool),
       transactions, commands: new CrmCommandService({ transactionRunner: transactions }),
       campaign: webinar.campaign, cursorSecret: env.SESSION_SECRET?.trim() ?? '' }),

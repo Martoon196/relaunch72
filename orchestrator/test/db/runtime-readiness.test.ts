@@ -320,10 +320,15 @@ test('reader125 bridge is unavailable to the old123 prefix', async () => {
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, approvedMarketing, approvedWebinarReader]), directory), /migration not present/);
 });
 
-test('final125 application requires its exact bundled reader and all earlier migrations', async () => {
+test('final126 owner editor strictly requires exact126, exact125 and every earlier migration', async () => {
   const rows = (await discoverMigrations()).map(({ filename, checksum }) => ({ filename, checksum }));
-  assert.equal(rows.length, 125);assert.deepEqual(rows[124], approvedWebinarReader);
+  const ownerEmail = { filename: '0126_mhp_owner_email_editor.sql', checksum: '317555ffd745918305f4d9209112ed4abf7eca8ed283e7db3ceb0bffcd2aef76' };
+  assert.equal(rows.length, 126);assert.deepEqual(rows[124], approvedWebinarReader);assert.deepEqual(rows[125], ownerEmail);
   await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 124))), /schema is behind by 1 migration/);
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(0, 124), { ...approvedWebinarReader, checksum: '0'.repeat(64) }])), /checksum changed/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 125))), /schema is behind by 1 migration/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 124))), /schema is behind by 2 migration/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(0, 125), { ...ownerEmail, checksum: '0'.repeat(64) }])), /checksum changed/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(0, 124), { ...approvedWebinarReader, checksum: '0'.repeat(64) }, ownerEmail])), /checksum changed/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, ownerEmail])), /invalid runtime migration ledger/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { filename: '0127_unknown.sql', checksum: 'a'.repeat(64) }])), /migration not present/);
 });

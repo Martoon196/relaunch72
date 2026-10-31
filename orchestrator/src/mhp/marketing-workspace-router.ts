@@ -14,6 +14,7 @@ export interface MhpMarketingWorkspaceDependencies {
   portal: PostgresPortalDeps;
   marketingWorkspace: Pick<PgMhpMarketingWorkspaceService, 'snapshot' | 'select'>;
   webinarLeads?: Pick<MhpWebinarLeadService, 'importBatch'>;
+  emailEditorEnabled?: boolean;
 }
 const PATHS = new Set(['/hq/marketing', '/hq/marketing/open', '/hq/marketing/return', '/hq/marketing/webinar-leads']);
 const CSP = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
@@ -73,7 +74,7 @@ export async function handleMhpMarketingWorkspace(req: IncomingMessage, res: Ser
     const snapshot = await deps.marketingWorkspace.snapshot(identity);
     if (method === 'GET') {
       send(res, 200, marketingWorkspacePage(snapshot, portalCsrfToken(portal.sessionSecret, token), randomUUID(),
-        { enabled: Boolean(deps.webinarLeads) }), true);
+        { enabled: Boolean(deps.webinarLeads), emailEditorEnabled: deps.emailEditorEnabled }), true);
       return true;
     }
     if (req.headers.origin !== MHP_AUTH_ORIGIN
@@ -91,7 +92,7 @@ export async function handleMhpMarketingWorkspace(req: IncomingMessage, res: Ser
       const result = await deps.webinarLeads.importBatch(identity, context.requestId, fields.get('cursor') ?? '', now);
       if (result.failed) outcome = 'service_error';
       send(res, result.failed ? 503 : 200, marketingWorkspacePage(snapshot, portalCsrfToken(portal.sessionSecret, token), randomUUID(),
-        { enabled: true, result }), true);
+        { enabled: true, result, emailEditorEnabled: deps.emailEditorEnabled }), true);
       return true;
     }
     const action = path === '/hq/marketing/open' ? 'open' : 'return';
