@@ -18,10 +18,19 @@ import { PgMhpMarketingWorkspaceService } from './marketing-workspace-service.js
 import { createMhpMarketingSender, mhpMarketingConfig, type MhpMarketingConfig } from './marketing-mail.js';
 import { CrmCommandService, createPgCrmTransactionRunner } from '../crm-pg/index.js';
 import { MhpWebinarLeadService, PgMhpWebinarLeadReader } from './webinar-leads-service.js';
-import { createMhpOwnerEmailService, mhpOwnerEmailTestConfig, type MhpOwnerEmailService } from './owner-email-service.js';
+import { createMhpOwnerEmailService, mhpOwnerEmailContentRunner, mhpOwnerEmailTestConfig, type MhpOwnerEmailService } from './owner-email-service.js';
 import { PgMhpOwnerEmailDispatch } from './owner-email-dispatch.js';
-import { createMhpSequenceService, type MhpSequenceService } from './followup-sequence-service.js';
+import { createMhpSequenceService, PgMhpSequenceRepository, type MhpSequenceService } from './followup-sequence-service.js';
 import { PgMhpSequenceDispatch } from './followup-sequence-dispatch.js';
+import { CompanyContentService } from '../company-content-pg/index.js';
+import { LocalFlowMessages } from '../followup-sequences/messages.js';
+import { FlowLocalStore } from '../followup-sequences/local-store.js';
+import { parseMhpOwnerEmailBrand } from './owner-email-content.js';
+import { createPgPortalSmsBindingService } from '../portal/sms-binding-pg-service.js';
+import { createPgTwilioSmsLiveCommandService } from '../sms-live-pg/command-service.js';
+import { assertSmsCommandBoundaryReady } from '../sms-live-pg/readiness.js';
+import { MhpOwnedSmsService, PgMhpOwnedSmsRepository, mhpOwnedSmsConfig, assertMhpOwnedSmsBoundaryReady, refreshMhpOwnedSmsObservation } from './owned-sms-service.js';
+import { MHP_MARKETING_WORKSPACE_ID } from './marketing-workspace-service.js';
 
 export interface MhpRuntime {
   auth: PgMhpAuthService;
@@ -40,6 +49,7 @@ export interface MhpRuntime {
   ownerEmailDispatch?: PgMhpOwnerEmailDispatch;
   sequences?: MhpSequenceService;
   sequenceDispatch?: PgMhpSequenceDispatch;
+  ownedSms?: MhpOwnedSmsService;
   marketing: MhpMarketingConfig | null;
   readiness(): Promise<readonly string[]>;
 }
@@ -94,6 +104,39 @@ export async function buildMhpRuntime(input: {
   }) : undefined;
   console.info(JSON.stringify({ event: 'mhp.sequence.readiness', editorReady: Boolean(sequences), emailReady: sequences?.readiness.email ?? false,
     smsReady: false, whatsappReady: false, automaticEntryAvailable: Boolean(sequences) }));
+  let ownedSms: MhpOwnedSmsService | undefined;
+  const smsPilot = mhpOwnedSmsConfig(env);
+  if (smsPilot.enabled && sequences && input.contentAdapterPool && input.contentCommandPool) {
+    let smsPool: Pool | undefined;
+    const blockers = [...smsPilot.blockers];
+    if (smsPilot.config && env.DATABASE_SMS_COMMAND_URL?.trim()) {
+      try {
+        const database = loadDatabaseConfig('smsCommand', env);
+        if (database.sourceEnv !== 'DATABASE_SMS_COMMAND_URL' || database.expectedDatabaseUser !== 'r72_sms_command') throw new Error('MHP SMS identity is invalid');
+        smsPool = createDatabasePool(database);
+        if (env.PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID?.trim()) await assertExpectedDatabaseInstallation(smsPool, env.PROPERTY_PREDATOR_DATABASE_INSTALLATION_ID.trim());
+        await assertSmsCommandBoundaryReady(smsPool);
+        await assertMhpOwnedSmsBoundaryReady(smsPool);
+        input.registerPool(smsPool);
+      } catch { await smsPool?.end().catch(() => undefined); smsPool = undefined; blockers.push('The MHP SMS command connection is unavailable.'); }
+    } else if (!env.DATABASE_SMS_COMMAND_URL?.trim()) blockers.push('The MHP SMS command connection needs configuring.');
+    const contentReader = mhpOwnerEmailContentRunner(webPool), adapterRunner = mhpOwnerEmailContentRunner(input.contentAdapterPool);
+    const sourceRepository = new PgMhpSequenceRepository(webPool, identityPool);
+    const smsAdapter = new CompanyContentService({ transactionRunner: adapterRunner });
+    const messages = new LocalFlowMessages({ brand: 'mhp', authorize: (identity, requestId) => sequences.contentContext(identity, requestId),
+      brandSnapshot: async (_context, identity) => parseMhpOwnerEmailBrand((await sourceRepository.snapshot(identity, webinar.campaign)).brand),
+      reader: new CompanyContentService({ transactionRunner: contentReader }), adapter: smsAdapter,
+      approvals: new CompanyContentService({ transactionRunner: mhpOwnerEmailContentRunner(input.contentCommandPool) }),
+      transactions: adapterRunner, local: new FlowLocalStore(contentReader) });
+    const config = smsPilot.config;
+    ownedSms = new MhpOwnedSmsService({ marketingWorkspace, authorize: (identity, requestId) => sequences.contentContext(identity, requestId),
+      config, blockers, messages, observe: (context, detail, commandId, now) => refreshMhpOwnedSmsObservation({ context, detail, commandId, now, transactions: adapterRunner, adapter: smsAdapter }),
+      ...(smsPool && config ? {
+        repository: new PgMhpOwnedSmsRepository(smsPool), binding: createPgPortalSmsBindingService({ webPool, smsCommandPool: smsPool,
+          commandService: createPgTwilioSmsLiveCommandService({ commandPool: smsPool, workspaceId: MHP_MARKETING_WORKSPACE_ID, providerConnectionId: config.connectionId }),
+          workspaceId: MHP_MARKETING_WORKSPACE_ID, verificationPhone: config.phone, verificationContactId: config.contactId, verificationOwnerUserId: config.ownerUserId }),
+      } : {}) });
+  }
   const transactions = createPgCrmTransactionRunner(commandPool);
   const rawVaultKey = env.INVESTOR_MAIL_ENCRYPTION_KEY?.trim();
   const vaultKey = rawVaultKey ? Buffer.from(rawVaultKey, 'base64') : undefined;
@@ -120,6 +163,7 @@ export async function buildMhpRuntime(input: {
     ownerEmail,
     ownerEmailDispatch: new PgMhpOwnerEmailDispatch(identityPool),
     sequences,
+    ownedSms,
     sequenceDispatch: sequences ? new PgMhpSequenceDispatch(identityPool) : undefined,
     webinarLeads: new MhpWebinarLeadService({ marketingWorkspace, reader: new PgMhpWebinarLeadReader(webPool),
       transactions, commands: new CrmCommandService({ transactionRunner: transactions }),

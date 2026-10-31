@@ -18,6 +18,15 @@ export interface SmsPhoneVerificationBinding {
   readonly workspaceId: string;
   readonly connectionId: string;
   readonly phone: string;
+  readonly displayBrand?: string;
+}
+
+export function smsVerificationDisplayBrand(value?: string): string {
+  const brand = value ?? 'Property Predator';
+  if (!/^[A-Za-z][A-Za-z0-9 ]{1,59}$/u.test(brand) || brand !== brand.trim()) {
+    throw new Error('SMS verification display brand is invalid');
+  }
+  return brand;
 }
 
 export type SmsPhoneVerificationCycle = 'idle' | 'sent' | 'failed_or_attention';
@@ -29,6 +38,7 @@ export async function runSmsPhoneVerificationOnce(
 ): Promise<SmsPhoneVerificationCycle> {
   if (!UUID.test(binding.workspaceId) || !UUID.test(binding.connectionId)
       || !UK_PHONE.test(binding.phone)) throw new Error('SMS verification binding is invalid');
+  const displayBrand = smsVerificationDisplayBrand(binding.displayBrand);
   const context = (suffix: string) => ({
     actorKind: 'worker' as const,
     workspaceId: binding.workspaceId,
@@ -68,7 +78,7 @@ export async function runSmsPhoneVerificationOnce(
       correlationId: challengeId,
     }, {
       recipient: binding.phone,
-      body: `Property Predator verification code: ${code}. Expires in 10 minutes.`,
+      body: `${displayBrand} verification code: ${code}. Expires in 10 minutes.`,
       expectedSegmentCount: 1,
       idempotencySha256: idempotencyKey,
     });
