@@ -1,0 +1,47 @@
+name: MHP exact Linux proof
+
+on:
+  push:
+    branches: [codex/mhp-linux-proof-20261031]
+    paths: [.github/workflows/mhp-linux-proof.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  exact-source-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout the exact bridge source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Martoon196/relaunch72
+          ref: f84264bfea058378b15959fb90b05354474b816e
+          persist-credentials: false
+      - name: Assert exact source identity
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = f84264bfea058378b15959fb90b05354474b816e
+          test "$(git rev-parse 'HEAD^{tree}')" = 31981ae507dd6552815cbea4b6fd437062cda071
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD 'HEAD^{tree}'
+      - name: Match the Render Node runtime
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.4
+      - name: Assert Linux and Node runtime
+        shell: bash
+        run: |
+          test "$(uname -s)" = Linux
+          test "$(node --version)" = v22.23.4
+          node --version
+          npm --version
+      - name: Install the exact lockfile without install scripts
+        run: npm ci --ignore-scripts --include=dev
+      - name: Check the supply chain
+        run: node scripts/supply-chain.mjs --check
+      - name: Typecheck the whole project
+        run: npm run typecheck
+      - name: Run the whole normal test gate
+        run: npm test
