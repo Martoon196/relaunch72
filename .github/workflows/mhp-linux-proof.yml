@@ -13,17 +13,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout the exact MHP owned SMS compatibility bridge
+      - name: Checkout the exact MHP owned SMS application candidate
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Martoon196/relaunch72
-          ref: d95d9a9486906ac6247c024fcabe59790c93c795
+          ref: 6dd7e56ebb2efba24115f7238bfac5a2d442680b
           persist-credentials: false
       - name: Assert exact source identity
         shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = d95d9a9486906ac6247c024fcabe59790c93c795
-          test "$(git rev-parse 'HEAD^{tree}')" = 8f3170acf4a2a4caa98debb4fdc53eb130585bbd
+          test "$(git rev-parse HEAD)" = 6dd7e56ebb2efba24115f7238bfac5a2d442680b
+          test "$(git rev-parse 'HEAD^{tree}')" = 0e6919e6772f5858cbe28d6208b40c2863aea39a
           test -z "$(git status --porcelain)"
           git rev-parse HEAD 'HEAD^{tree}'
       - name: Match the Render Node runtime
