@@ -74,7 +74,7 @@ export class PgMhpEventSmsPublicService implements MhpEventSmsPublic {
 }
 
 export type MhpEventSmsRecipientStatus = 'ready' | 'email_unsubscribed' | 'phone_shared' | 'needs_import' | 'contact_ambiguous'
-  | 'opted_out' | 'consent_changed' | 'already_sent';
+  | 'opted_out' | 'consent_changed' | 'already_sent' | 'multiple_numbers';
 export interface MhpEventSmsSnapshot {
   campaign: string; bindingReady: boolean; readyCount: number; batchSha256: string | null;
   daySegmentsUsed: number; monthSegmentsUsed: number;
@@ -85,12 +85,12 @@ export interface MhpEventSmsSendResult {
   batchId: string; commandId: string; recipientCount: number; segmentsTotal: number; jobIds: readonly string[];
   authorityExpiresAt: string; replayed: boolean;
 }
-export interface MhpEventSmsSendInput { commandId: string; versionId: string; sha256: string; batchSha256: string }
+export interface MhpEventSmsSendInput { commandId: string; versionId: string; sha256: string; batchSha256: string; agreed: boolean }
 export interface MhpEventSmsRepository {
   snapshot(context: DatabaseRequestContext, identity: PortalSessionIdentity, campaign: string, content: { versionId: string; sha256: string } | null): Promise<MhpEventSmsSnapshot>;
   send(context: DatabaseRequestContext, identity: PortalSessionIdentity, campaign: string, input: MhpEventSmsSendInput, lookupOnly: boolean): Promise<MhpEventSmsSendResult | null>;
 }
-const STATUSES = new Set(['ready', 'email_unsubscribed', 'phone_shared', 'needs_import', 'contact_ambiguous', 'opted_out', 'consent_changed', 'already_sent']);
+const STATUSES = new Set(['ready', 'email_unsubscribed', 'phone_shared', 'needs_import', 'contact_ambiguous', 'opted_out', 'consent_changed', 'already_sent', 'multiple_numbers']);
 function ownerFailure(error: unknown): never {
   if (error instanceof MhpCommerceError) throw error;
   const code = error && typeof error === 'object' && 'code' in error ? (error as { code?: unknown }).code : undefined;
@@ -125,9 +125,9 @@ export class PgMhpEventSmsRepository implements MhpEventSmsRepository {
     try {
       return await withTransaction(this.commandPool, context, async tx => {
         const result = await tx.query<{ value: (MhpEventSmsSendResult & { not_started?: undefined }) | { not_started: true } }>(
-          'SELECT app_private.mhp_event_sms_batch_send($1,$2,$3,$4,$5,$6,true,$7) AS value',
+          'SELECT app_private.mhp_event_sms_batch_send($1,$2,$3,$4,$5,$6,$7,$8) AS value',
           [sha256(identity.sessionToken), input.commandId, campaign, input.versionId, Buffer.from(input.sha256, 'hex'),
-            Buffer.from(input.batchSha256, 'hex'), lookupOnly]);
+            Buffer.from(input.batchSha256, 'hex'), input.agreed, lookupOnly]);
         const value = result.rows[0]?.value;
         if (result.rows.length === 1 && value && 'not_started' in value && value.not_started === true) {
           if (lookupOnly) return null;
@@ -150,6 +150,7 @@ export async function assertMhpEventSmsBoundaryReady(pool: Pick<Pool, 'query'>):
     AND coalesce(has_function_privilege(current_user,to_regprocedure('app_private.mhp_event_sms_batch_send(bytea,uuid,text,uuid,bytea,bytea,boolean,boolean)'),'EXECUTE'),false)
     AND NOT coalesce(has_function_privilege(current_user,to_regprocedure('app_private.mhp_event_sms_batch_candidates(text,uuid)'),'EXECUTE'),false)
     AND NOT coalesce(has_function_privilege(current_user,to_regprocedure('app_private.mhp_event_sms_verified_optins(text)'),'EXECUTE'),false)
+    AND NOT coalesce(has_function_privilege(current_user,to_regprocedure('app_private.mhp_event_sms_ready_set(text,uuid)'),'EXECUTE'),false)
     AND NOT coalesce(has_function_privilege(current_user,to_regprocedure('app_private.mhp_event_sms_optin_request(text,text,text,text,bytea,bytea,text)'),'EXECUTE'),false)
     AS ready`);
   if (result.rows.length !== 1 || result.rows[0]?.ready !== true) throw new MhpCommerceError(503, 'The MHP webinar text capability is not ready.');
@@ -199,7 +200,7 @@ export class MhpEventSmsOwnerService {
     const context = await this.#context(identity, requestId);
     if (!UUID.test(input.commandId) || !UUID.test(input.itemId) || !UUID.test(input.versionId) || !SHA.test(input.sha256)
         || !SHA.test(input.batchSha256) || !input.agreed) throw new MhpCommerceError(400, 'Review the exact text and recipients, then tick the agreement.');
-    const command = { commandId: input.commandId, versionId: input.versionId, sha256: input.sha256, batchSha256: input.batchSha256 };
+    const command = { commandId: input.commandId, versionId: input.versionId, sha256: input.sha256, batchSha256: input.batchSha256, agreed: input.agreed };
     const previous = await this.dependencies.repository.send(context, identity, this.dependencies.campaign, command, true);
     if (previous) return previous;
     const detail = await this.#review(identity, requestId, input.itemId, input.versionId);

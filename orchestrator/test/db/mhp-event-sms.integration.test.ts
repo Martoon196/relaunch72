@@ -128,23 +128,32 @@ async function send(pools: Pools, command: string, batchSha: string, confirmed =
   return rows[0]!.value;
 }
 
+async function fresh(owner: Pool): Promise<void> {
+  await resetIdentityTables(owner);
+  await ownerQuery(owner, 'TRUNCATE TABLE app_private.mhp_prospects CASCADE');
+  await ownerQuery(owner, await readFile(new URL('./mhp-event-sms.fixture.sql', import.meta.url), 'utf8'));
+  cachedContentSha = (await ownerQuery<{ content_sha256: Buffer }>(owner,
+    'SELECT content_sha256 FROM app.company_content_versions WHERE id=$1', [VERSION]))[0]!.content_sha256;
+}
+const STOP_SQL = `
+  WITH p AS (INSERT INTO app.contact_points(workspace_id,contact_id,kind,value,normalized_value,deleted_at)
+    VALUES($1,$3,'phone',$2,$2,$4) RETURNING id,contact_id,kind,value,normalized_value)
+  INSERT INTO app.communication_suppression_events(workspace_id,contact_id,contact_point_id,channel,purpose,state,reason,source,actor_kind,endpoint_identity_sha256,occurred_at)
+  SELECT $1,p.contact_id,p.id,'sms',NULL,'suppressed','twilio_stop','twilio.webhook','webhook',
+    public.digest(p.kind||chr(31)||p.value||chr(31)||p.normalized_value,'sha256'),clock_timestamp() FROM p`;
+const verifiedRow = (prospect: number, n: number) => `INSERT INTO app_private.mhp_event_sms_optins(prospect_id,signup_id,email_sha256,campaign_key,phone_e164,
+  consent_version,consent_text_sha256,source_hash,request_key_sha256,state,code_hash,provider_message_sid,sent_at,verified_at)
+  SELECT p.id,s.id,public.digest(p.email::text,'sha256'),'${CAMPAIGN}','${phone(n)}','mhp.event-sms/v1',public.digest($1::text,'sha256'),
+   public.digest('src-${n}','sha256'),public.digest(gen_random_uuid()::text,'sha256'),'verified','x','SM${'b'.repeat(32)}',clock_timestamp(),clock_timestamp()
+  FROM app_private.mhp_prospects p JOIN app_private.mhp_prospect_signups s ON s.prospect_id=p.id WHERE p.email='registrant-${prospect}@example.invalid'`;
+
 test('MHP009B: public opt-in, owner exact-batch send and unchanged live-worker pre-call acceptance', { skip }, async () => {
   const owner = await openTestDatabase();
   let pools: Partial<Pools> = {};
   try {
-    await resetIdentityTables(owner);
-    await ownerQuery(owner, 'TRUNCATE TABLE app_private.mhp_prospects CASCADE');
-    const fixture = await readFile(new URL('./mhp-event-sms.fixture.sql', import.meta.url), 'utf8');
-    await ownerQuery(owner, fixture);
-    cachedContentSha = (await ownerQuery<{ content_sha256: Buffer }>(owner,
-      'SELECT content_sha256 FROM app.company_content_versions WHERE id=$1', [VERSION]))[0]!.content_sha256;
-    // Registrant 4 previously replied STOP on this phone; that must hold forever.
-    await ownerQuery(owner, `
-      WITH p AS (INSERT INTO app.contact_points(workspace_id,contact_id,kind,value,normalized_value)
-        VALUES($1,'0b131200-0000-4000-8000-000000000004','phone',$2,$2) RETURNING id,contact_id,kind,value,normalized_value)
-      INSERT INTO app.communication_suppression_events(workspace_id,contact_id,contact_point_id,channel,purpose,state,reason,source,actor_kind,endpoint_identity_sha256,occurred_at)
-      SELECT $1,p.contact_id,p.id,'sms',NULL,'suppressed','twilio_stop','twilio.webhook','webhook',
-        public.digest(p.kind||chr(31)||p.value||chr(31)||p.normalized_value,'sha256'),clock_timestamp() FROM p`, [WS, phone(4)]);
+    await fresh(owner);
+    // Registrant 4's number replied STOP long ago on a contact point that is now deleted.
+    await ownerQuery(owner, STOP_SQL, [WS, phone(4), '0b131200-0000-4000-8000-000000000004', new Date(Date.now() + 1000)]);
     pools = await openLoginPools(owner);
     const p = pools as Pools;
 
@@ -154,46 +163,45 @@ test('MHP009B: public opt-in, owner exact-batch send and unchanged live-worker p
     await expectPostgresError(as(p.r72_identity_command, 'public', 'SELECT app_private.mhp_event_sms_batch_snapshot($1,$2,$3,$4)',
       [SESSION, CAMPAIGN, VERSION, cachedContentSha]), '42501');
     await expectPostgresError(as(p.r72_sms_command, 'owner', 'SELECT * FROM app_private.mhp_event_sms_verified_optins($1)', [CAMPAIGN]), '42501');
+    await expectPostgresError(as(p.r72_sms_command, 'owner', 'SELECT app_private.mhp_event_sms_phone_suppressed($1)', [phone(1)]), '42501');
     await expectPostgresError(as(p.r72_identity_command, 'public', 'SELECT count(*) FROM app_private.mhp_event_sms_optins'), '42501');
     await expectPostgresError(as(p.r72_sms_worker_command, 'worker', 'SELECT app_private.mhp_event_sms_optin_confirm($1,$2)', [randomUUID(), '123456']), '42501');
-    // The public step refuses consent wording it did not show.
     await expectPostgresError(as(p.r72_identity_command, 'public', 'SELECT app_private.mhp_event_sms_optin_request($1,$2,$3,$4,$5,$6,$7)',
       ['registrant-1@example.invalid', phone(1), CAMPAIGN, 'mhp.event-sms/v1', sha('other words'), randomBytes(32), randomUUID()]), '22023');
 
     const ids = new Map<number, string>();
     for (const n of [1, 2, 3, 4, 5]) ids.set(n, await requestOptin(p, `registrant-${n}@example.invalid`, n));
+    // Unknown and unsubscribed emails are stored as decoys and answered exactly like real ones.
     const unsubscribed = await requestOptin(p, 'registrant-6@example.invalid', 6);
     const unknown = await requestOptin(p, 'nobody@example.invalid', 7);
-    const stored = await ownerQuery<{ id: string }>(owner, 'SELECT id FROM app_private.mhp_event_sms_optins ORDER BY created_at');
-    assert.equal(stored.length, 5, 'unknown and unsubscribed emails create nothing');
-    assert.ok(!stored.some(row => row.id === unsubscribed || row.id === unknown));
-    // Repeating the same phone while a code is live returns the same opt-in, no second code.
-    assert.equal(await requestOptin(p, 'registrant-1@example.invalid', 1), ids.get(1));
-    assert.equal(await deliverCodes(p), 5);
-    assert.equal(await deliverCodes(p), 0);
-    assert.equal(await confirm(p, unknown, '123456'), 'unavailable');
+    assert.equal(await requestOptin(p, 'nobody@example.invalid', 7), unknown, 'a repeat returns the same id for a decoy');
+    assert.equal(await requestOptin(p, 'registrant-1@example.invalid', 1), ids.get(1), 'and for a real registrant');
+    const states = Object.fromEntries((await ownerQuery<{ id: string; state: string }>(owner, 'SELECT id,state FROM app_private.mhp_event_sms_optins')).map(r => [r.id, r.state]));
+    assert.equal(states[unknown], 'decoy'); assert.equal(states[unsubscribed], 'decoy');
+    // Codes: never to the STOP'd number; one each for the others.
+    assert.equal(await deliverCodes(p), 4);
+    assert.equal((await ownerQuery<{ state: string }>(owner, 'SELECT state FROM app_private.mhp_event_sms_optins WHERE id=$1', [ids.get(4)]))[0]!.state, 'failed');
+    assert.equal(await confirm(p, unknown, '123456'), 'retry', 'a decoy answers like a real row with a wrong code');
+    assert.equal(await confirm(p, ids.get(1)!, '000000'), 'retry');
     assert.equal(await confirm(p, ids.get(1)!, '123456'), 'verified');
     assert.equal(await confirm(p, ids.get(1)!, '123456'), 'already');
-    assert.equal(await confirm(p, ids.get(2)!, '000000'), 'retry');
     assert.equal(await confirm(p, ids.get(2)!, '123456'), 'verified');
     for (let attempt = 0; attempt < 4; attempt += 1) await confirm(p, ids.get(3)!, '999999');
     assert.equal(await confirm(p, ids.get(3)!, '999999'), 'unavailable');
     assert.equal(await confirm(p, ids.get(3)!, '123456'), 'unavailable', 'five wrong codes lock the opt-in');
-    assert.equal(await confirm(p, ids.get(4)!, '123456'), 'verified');
     assert.equal(await confirm(p, ids.get(5)!, '123456'), 'verified');
-    // Nothing reached the CRM before the owner review.
-    assert.equal((await ownerQuery(owner, `SELECT 1 FROM app.communication_consent_events WHERE source='mhp.event-sms.public-optin'`)).length, 0);
+    assert.equal((await ownerQuery(owner, `SELECT 1 FROM app.communication_consent_events WHERE source='mhp.event-sms.public-optin'`)).length, 0,
+      'nothing reaches the CRM before the owner review');
+    // Registrant 2's number later replied STOP on a different, since-deleted contact point: it must hold.
+    await ownerQuery(owner, STOP_SQL, [WS, phone(2), '0b131200-0000-4000-8000-000000000003', new Date(Date.now() + 1000)]);
 
     const first = await snapshot(p);
     assert.equal(first.bindingReady, true);
-    const status = Object.fromEntries(first.recipients.map(r => [r.email, r.status]));
-    assert.deepEqual(status, {
-      'registrant-1@example.invalid': 'ready', 'registrant-2@example.invalid': 'ready',
-      'registrant-4@example.invalid': 'opted_out', 'registrant-5@example.invalid': 'needs_import',
+    assert.deepEqual(Object.fromEntries(first.recipients.map(r => [r.email, r.status])), {
+      'registrant-1@example.invalid': 'ready', 'registrant-2@example.invalid': 'opted_out', 'registrant-5@example.invalid': 'needs_import',
     });
-    assert.equal(first.readyCount, 2);
-    assert.match(first.batchSha256 ?? '', /^[0-9a-f]{64}$/u);
-
+    assert.equal(first.readyCount, 1);
+    assert.equal(first.daySegmentsUsed, 4, 'verification codes count against the daily allowance');
     await expectPostgresError(as(p.r72_sms_command, 'owner', 'SELECT app_private.mhp_event_sms_batch_snapshot($1,$2,$3,$4)',
       [sha('not-a-session'), CAMPAIGN, VERSION, cachedContentSha]), '42501');
     // A registrant who verifies after the owner looked must wait for a fresh review.
@@ -201,16 +209,19 @@ test('MHP009B: public opt-in, owner exact-batch send and unchanged live-worker p
     assert.equal(await deliverCodes(p), 1);
     assert.equal(await confirm(p, late, '123456'), 'verified');
     await expectPostgresError(send(p, randomUUID(), first.batchSha256!), '40001');
+    // The daily code budget (5) is now spent: a further opt-in waits, it is not texted.
+    await requestOptin(p, 'registrant-5@example.invalid', 22);
+    assert.equal(await deliverCodes(p), 0);
     const reviewed = await snapshot(p);
-    assert.equal(reviewed.readyCount, 3);
-    await expectPostgresError(send(p, randomUUID(), first.batchSha256!, false), '42501');
-    await expectPostgresError(send(p, randomUUID(), '00'.repeat(32)), '40001');
+    assert.equal(reviewed.readyCount, 2);
+
+    await expectPostgresError(send(p, randomUUID(), reviewed.batchSha256!, false), '42501');
     const command = randomUUID();
     const result = await send(p, command, reviewed.batchSha256!);
-    assert.equal(result.recipientCount, 3);
+    assert.equal(result.recipientCount, 2);
     assert.equal(result.replayed, false);
     assert.equal(result.providerEffects, 'none');
-    assert.equal((result.jobIds as string[]).length, 3);
+    assert.equal((result.jobIds as string[]).length, 2);
     const replay = await send(p, command, reviewed.batchSha256!);
     assert.equal(replay.replayed, true);
     assert.deepEqual(replay.jobIds, result.jobIds);
@@ -224,7 +235,7 @@ test('MHP009B: public opt-in, owner exact-batch send and unchanged live-worker p
       JOIN app.property_predator_sms_authorities a ON a.workspace_id=j.workspace_id AND a.id=j.authority_id
       JOIN app.communication_consent_events c ON c.workspace_id=r.workspace_id AND c.id=r.consent_event_id
       JOIN app.contact_points p ON p.workspace_id=r.workspace_id AND p.id=r.contact_point_id`);
-    assert.equal(evidence.length, 3);
+    assert.equal(evidence.length, 2);
     for (const row of evidence) {
       assert.equal(row.operator, OWNER, 'the reviewing owner is the operator');
       assert.equal(row.created_by, OWNER);
@@ -235,14 +246,20 @@ test('MHP009B: public opt-in, owner exact-batch send and unchanged live-worker p
     }
     assert.equal(new Set(evidence.map(row => row.request)).size, 1, 'one owner request authorised the whole batch');
 
+    // One person never gets the same text twice, even from a second number;
+    // a registrant with two verified numbers is held for the owner.
+    await ownerQuery(owner, verifiedRow(1, 31), [CONSENT_TEXT]);
+    await ownerQuery(owner, verifiedRow(5, 32), [CONSENT_TEXT]);
     const after = await snapshot(p);
     assert.equal(after.readyCount, 0);
     assert.equal(after.batchSha256, null);
-    assert.equal(after.daySegmentsUsed, 3);
-    assert.deepEqual(after.recipients.filter(r => r.status === 'already_sent').map(r => r.email).sort(),
-      ['registrant-1@example.invalid', 'registrant-2@example.invalid', 'registrant-3@example.invalid']);
-    assert.equal(after.batches[0]?.recipientCount, 3);
-    assert.equal(after.batches[0]?.jobStates.queued, 3);
+    assert.equal(after.daySegmentsUsed, 7, 'five codes and two texts');
+    const statuses = Object.fromEntries(after.recipients.map(r => [r.email, r.status]));
+    assert.equal(statuses['registrant-1@example.invalid'], 'already_sent');
+    assert.equal(statuses['registrant-3@example.invalid'], 'already_sent');
+    assert.equal(statuses['registrant-5@example.invalid'], 'multiple_numbers');
+    assert.equal(after.batches[0]?.recipientCount, 2);
+    assert.equal(after.batches[0]?.jobStates.queued, 2);
     await expectPostgresError(send(p, randomUUID(), reviewed.batchSha256!), '40001');
 
     // The unchanged 0056/0130 live worker claims the job and its pre-call
@@ -256,13 +273,44 @@ test('MHP009B: public opt-in, owner exact-batch send and unchanged live-worker p
       'SELECT app_private.begin_sms_live_call($1,$2,$3,$4,true,true,false) AS ok', [WS, claimed[0]!.job_id, claimed[0]!.lease_version, lease]);
     assert.equal(began[0]!.ok, true);
 
-    // Evidence is append-only.
     await expectPostgresError(ownerQuery(owner, `UPDATE app_private.mhp_event_sms_batches SET recipient_count=recipient_count`), '42501');
-    // Per-source request limit: five new opt-ins per 24 hours from one source.
+    // Limits count decoys too, so a 429 says nothing about registration.
     const source = randomBytes(32);
-    for (const n of [11, 12, 13, 14, 15]) await requestOptin(p, 'registrant-3@example.invalid', n, source);
-    await expectPostgresError(requestOptin(p, 'registrant-3@example.invalid', 16, source), '54000');
+    for (const n of [41, 42, 43, 44, 45]) await requestOptin(p, `stranger-${n}@example.invalid`, n, source);
+    await expectPostgresError(requestOptin(p, 'stranger-46@example.invalid', 46, source), '54000');
   } finally {
+    await closeLoginPools(owner, pools).catch(() => undefined);
+    await owner.end();
+  }
+});
+
+test('MHP009B race: two simultaneous owner sends of one batch enqueue exactly once', { skip }, async () => {
+  const owner = await openTestDatabase();
+  let pools: Partial<Pools> = {};
+  let second: Pool | undefined;
+  try {
+    await fresh(owner);
+    pools = await openLoginPools(owner);
+    const p = pools as Pools;
+    const a = await requestOptin(p, 'registrant-1@example.invalid', 1);
+    const b = await requestOptin(p, 'registrant-2@example.invalid', 2);
+    assert.equal(await deliverCodes(p), 2);
+    assert.equal(await confirm(p, a, '123456'), 'verified');
+    assert.equal(await confirm(p, b, '123456'), 'verified');
+    const snap = await snapshot(p);
+    assert.equal(snap.readyCount, 2);
+    second = new Pool({ connectionString: (p.r72_sms_command as unknown as { options: { connectionString: string } }).options.connectionString, max: 1 });
+    const sendWith = (pool: Pool) => as<{ value: Record<string, unknown> }>(pool, 'owner',
+      'SELECT app_private.mhp_event_sms_batch_send($1,$2,$3,$4,$5,$6,true,false) AS value',
+      [SESSION, randomUUID(), CAMPAIGN, VERSION, cachedContentSha, Buffer.from(snap.batchSha256!, 'hex')]);
+    const results = await Promise.allSettled([sendWith(p.r72_sms_command), sendWith(second)]);
+    assert.equal(results.filter(r => r.status === 'fulfilled').length, 1, 'exactly one send wins');
+    const loser = results.find(r => r.status === 'rejected') as PromiseRejectedResult;
+    assert.equal((loser.reason as { code?: string }).code, '40001', 'the loser is told the batch changed');
+    const jobs = await ownerQuery<{ n: string }>(owner, 'SELECT count(*)::text AS n FROM app.property_predator_sms_jobs');
+    assert.equal(jobs[0]!.n, '2', 'two recipients, two jobs, never four');
+  } finally {
+    await second?.end();
     await closeLoginPools(owner, pools).catch(() => undefined);
     await owner.end();
   }
