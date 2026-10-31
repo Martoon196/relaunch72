@@ -98,7 +98,7 @@ DO $security$ DECLARE t text; BEGIN
  END LOOP;
 END $security$;
 -- Public capture definer: opt-in rows only.
-GRANT SELECT,INSERT,UPDATE ON app_private.mhp_event_sms_optins TO r72_mhp_prospect_definer;
+GRANT SELECT,INSERT,UPDATE,DELETE ON app_private.mhp_event_sms_optins TO r72_mhp_prospect_definer;
 CREATE POLICY mhp_event_sms_optins_prospect ON app_private.mhp_event_sms_optins TO r72_mhp_prospect_definer USING(true) WITH CHECK(true);
 -- SMS definer: code worker state changes and batch evidence, MHP workspace only.
 GRANT SELECT,UPDATE(state,code_hash,claimed_at,armed_at,sent_at,expires_at,provider_message_sid) ON app_private.mhp_event_sms_optins TO r72_sms_definer;
@@ -159,10 +159,15 @@ BEGIN
  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('mhp.event-sms.phone:'||p_phone,7200131));
  SELECT * INTO existing FROM app_private.mhp_event_sms_optins o WHERE o.request_key_sha256=key_sha;
  IF FOUND THEN RETURN jsonb_build_object('optinId',existing.id); END IF;
+ -- Retention: decoys live 24 hours; unverified real rows 30 days. Verified rows
+ -- are consent evidence and go only with the prospect's own erasure cascade.
+ DELETE FROM app_private.mhp_event_sms_optins o WHERE (o.state='decoy' AND o.created_at<statement_timestamp()-interval '24 hours')
+  OR (o.state IN('pending','failed','needs_attention') AND o.created_at<statement_timestamp()-interval '30 days');
  -- Limits count every stored row, decoys included, so they trip identically.
- IF (SELECT count(*) FROM app_private.mhp_event_sms_optins o WHERE o.phone_e164=p_phone AND o.created_at>statement_timestamp()-interval '24 hours')>=3
+ -- They are per person-and-phone and per source, so junk requests cannot lock
+ -- someone else's number or the whole campaign.
+ IF (SELECT count(*) FROM app_private.mhp_event_sms_optins o WHERE o.phone_e164=p_phone AND o.email_sha256=email_sha AND o.created_at>statement_timestamp()-interval '24 hours')>=3
   OR (SELECT count(*) FROM app_private.mhp_event_sms_optins o WHERE o.source_hash=p_source_hash AND o.created_at>statement_timestamp()-interval '24 hours')>=5
-  OR (SELECT count(*) FROM app_private.mhp_event_sms_optins o WHERE o.campaign_key=p_campaign AND o.created_at>statement_timestamp()-interval '24 hours')>=200
  THEN RAISE EXCEPTION 'Webinar text opt-in rate limit' USING ERRCODE='54000'; END IF;
  -- The same person and phone get the same row back, whether it is real or a decoy.
  SELECT * INTO existing FROM app_private.mhp_event_sms_optins o WHERE o.phone_e164=p_phone AND o.campaign_key=p_campaign AND o.email_sha256=email_sha
@@ -245,7 +250,7 @@ $f$;
 -- rail jobs and verification codes, so the founder's 10/day and 50/month caps
 -- cover every text on the number.
 CREATE FUNCTION app_private.mhp_event_sms_usage(p_connection uuid)
-RETURNS TABLE(day_used integer,month_used integer,codes_today integer)
+RETURNS TABLE(day_used integer,month_used integer,codes_today integer,codes_month integer)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
  WITH day AS (SELECT (statement_timestamp() AT TIME ZONE 'UTC')::date AS d,
   date_trunc('month',statement_timestamp() AT TIME ZONE 'UTC')::date AS m),
@@ -255,12 +260,15 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
  codes AS (SELECT count(*) FILTER(WHERE (o.claimed_at AT TIME ZONE 'UTC')::date=day.d)::integer AS d,count(o.id)::integer AS m
   FROM day LEFT JOIN app_private.mhp_event_sms_optins o ON o.claimed_at IS NOT NULL
    AND date_trunc('month',o.claimed_at AT TIME ZONE 'UTC')::date=day.m)
- SELECT jobs.d+codes.d,jobs.m+codes.m,codes.d FROM jobs,codes
+ SELECT jobs.d+codes.d,jobs.m+codes.m,codes.d,codes.m FROM jobs,codes
 $f$;
 
--- Worker: claim one pending code. Codes share the rail's per-connection lock and
--- caps, have their own budget of 5 per UTC day, 3 per phone and 3 per person per
--- day, never go to a suppressed number, and stale claims fail closed.
+-- Worker: claim one pending code. Codes take the rail's per-connection lock,
+-- count inside the founder's 10/day and 50/month caps, and are limited to a
+-- reserved 3 per UTC day and 15 per month, so the owner always keeps at least
+-- 7 a day and 35 a month. 3 per phone and per person a day; never to a
+-- suppressed number; stale claims fail closed. Must run READ COMMITTED so the
+-- usage read after the lock sees every committed batch.
 CREATE FUNCTION app_private.mhp_event_sms_code_claim(p_workspace uuid,p_connection uuid)
 RETURNS TABLE(optin_id uuid,phone_e164 text)
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
@@ -280,11 +288,13 @@ BEGIN
  WHERE o.state='armed' AND o.armed_at<=statement_timestamp()-interval '2 minutes';
  UPDATE app_private.mhp_event_sms_optins o SET state='failed'
  WHERE o.state='pending' AND app_private.mhp_event_sms_phone_suppressed(o.phone_e164);
+ IF current_setting('transaction_isolation') IS DISTINCT FROM 'read committed'
+ THEN RAISE EXCEPTION 'MHP event SMS code claim requires read committed' USING ERRCODE='25000'; END IF;
  SELECT * INTO used FROM app_private.mhp_event_sms_usage(p_connection);
- IF used.codes_today>=5 OR used.day_used>=10 OR used.month_used>=50 THEN RETURN; END IF;
+ IF used.codes_today>=3 OR used.codes_month>=15 OR used.day_used>=10 OR used.month_used>=50 THEN RETURN; END IF;
  day_start:=date_trunc('day',statement_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
  SELECT o.* INTO selected FROM app_private.mhp_event_sms_optins o
- WHERE o.state='pending' AND o.expires_at>statement_timestamp()+interval '1 minute'
+ WHERE o.state='pending' AND o.expires_at>statement_timestamp()+interval '5 minutes'
   AND (SELECT count(*) FROM app_private.mhp_event_sms_optins s WHERE s.phone_e164=o.phone_e164 AND s.claimed_at>=day_start)<3
   AND (SELECT count(*) FROM app_private.mhp_event_sms_optins s WHERE s.prospect_id=o.prospect_id AND s.claimed_at>=day_start)<3
  ORDER BY o.created_at,o.id LIMIT 1 FOR UPDATE SKIP LOCKED;

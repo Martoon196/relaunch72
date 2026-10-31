@@ -71,7 +71,7 @@ export async function handleMhpEventSmsPublic(req: IncomingMessage, res: ServerR
     const optinId = fields.get('optinId') ?? '', result = await optins.confirm(optinId, fields.get('code') ?? '');
     if (result === 'verified' || result === 'already') { send(res, 200, mhpEventSmsDonePage()); return true; }
     if (result === 'retry') { send(res, 400, mhpEventSmsCodePage({ optinId, notice: "That code didn't match. Check the text and try again." })); return true; }
-    send(res, 400, mhpEventSmsMessagePage('That code has expired', 'Codes last 10 minutes and allow five tries. Start again to get a new one.')); return true;
+    send(res, 400, mhpEventSmsMessagePage('That code has expired', 'Codes last 15 minutes from when you asked and allow five tries. Start again to get a new one.')); return true;
   } catch (error) {
     outcome = 'service_error';
     const status = error instanceof MhpCommerceError ? error.status : 503;

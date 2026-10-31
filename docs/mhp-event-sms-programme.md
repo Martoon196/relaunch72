@@ -15,8 +15,10 @@ Astra must reconcile this against the ratified design before integration.
    six-digit code to that mobile. Entering the code proves possession. Nothing is
    written to the CRM at this stage. Every request is stored and answered the
    same way: an unknown, unsubscribed or clashing request becomes a never-texted
-   "decoy" row, so repeats, wrong-code answers and rate limits reveal nothing
-   about whether an email is registered.
+   "decoy" row, so repeats, wrong-code answers and rate limits look identical.
+   One signal cannot be removed: someone who enters their own mobile learns an
+   email is registered when a code arrives. Decoys are deleted after 24 hours and
+   unverified rows after 30 days.
 2. **Owner review = send (founder).** `/hq/marketing/event-texts` shows the exact
    current batch: every verified opt-in for the campaign, each with a status
    (ready, needs import, phone shared, opted out, already sent this text, and so
@@ -38,10 +40,14 @@ Astra must reconcile this against the ratified design before integration.
 3. **Verification codes (worker).** The existing SMS worker, in its live mode,
    optionally sends pending opt-in codes behind `MHP_EVENT_SMS_CODES_ENABLED=true`,
    still subject to its provider-effect and emergency-pause switches, and only
-   when no owner text is queued. Codes count against the same 10-a-day and
-   50-a-month allowance as every other text on the number, have their own budget
-   of 5 a day, 3 per phone and 3 per person a day, and are never sent to a number
-   with a STOP on any contact point, including deleted or quarantined ones.
+   when no owner text is queued. Codes count inside the same 10-a-day and
+   50-a-month allowance as every other text on the number but are limited to a
+   reserved 3 a day and 15 a month, so the owner always keeps at least 7 a day
+   and 35 a month; 3 per phone and per person a day. A code is never sent to a
+   number with a STOP on any contact point, including deleted or quarantined
+   ones, and only with at least 5 minutes of its 15-minute life left. The worker
+   refuses to start codes without `MHP_EVENT_SMS_TWILIO_ADVANCED_OPT_OUT_CONFIRMED=true`
+   and a poll interval of 15000 ms or less.
 
 ## The delayed-worker finding (needs Astra)
 
@@ -64,7 +70,11 @@ type) and is left for Astra's decision. No such change is made here.
 
 - 10 segments per UTC day and 50 per month on the MHP connection, codes
   included. A batch that does not fit the remaining allowance is refused, not
-  split. So the programme reaches at most ten people a day.
+  split. With 3 codes a day, at most three new people can confirm a mobile each
+  day. These are the founder's caps; raising them is a founder decision.
+- The ratified 0130 owner self-test enqueues through the unchanged 0056 check,
+  which counts jobs only, so on a day with codes it could exceed 10 by at most 3.
+  That owner test has already been used and needs its own new approval.
 - Email ownership is not proven by the phone step; possession of the phone is.
   Someone could attach their own number to another person's registration; they
   would receive that person's webinar texts and the number would be added to
@@ -102,5 +112,7 @@ type) and is left for Astra's decision. No such change is made here.
 |---|---|---|
 | `MHP_EVENT_SMS_ENABLED=true` | web | Mounts the public page and the owner page |
 | `MHP_EVENT_SMS_CODES_ENABLED=true` | SMS worker | Lets the live worker text verification codes |
+| `MHP_EVENT_SMS_TWILIO_ADVANCED_OPT_OUT_CONFIRMED=true` | SMS worker | Operator attests Twilio Advanced Opt-Out is on for the MHP Messaging Service; required for codes |
+| `PROPERTY_PREDATOR_SMS_LIVE_POLL_MS` | SMS worker | Must be 15000 or less when codes are on |
 
 Both also need the existing MHP SMS pilot settings and migration 0131.

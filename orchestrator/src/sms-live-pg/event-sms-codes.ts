@@ -15,9 +15,21 @@ interface BooleanRow extends QueryResultRow { applied: unknown }
 export function mhpEventSmsCodesEnabled(env: NodeJS.ProcessEnv, workspaceId: string): boolean {
   return env.MHP_EVENT_SMS_CODES_ENABLED === 'true' && workspaceId === MHP_EVENT_SMS_WORKSPACE_ID;
 }
+/**
+ * A STOP sent in reply to a code cannot be recorded by the unchanged inbound
+ * rail, so codes need the operator's attestation that Twilio Advanced Opt-Out
+ * is on for the MHP Messaging Service, and a poll fast enough to send a full
+ * 10-person owner batch inside its 4-minute authority.
+ */
+export function assertMhpEventSmsCodePreconditions(env: NodeJS.ProcessEnv, pollIntervalMs: number): void {
+  if (env.MHP_EVENT_SMS_TWILIO_ADVANCED_OPT_OUT_CONFIRMED !== 'true') {
+    throw new Error('MHP webinar codes need MHP_EVENT_SMS_TWILIO_ADVANCED_OPT_OUT_CONFIRMED=true');
+  }
+  if (pollIntervalMs > 15_000) throw new Error('MHP webinar codes need PROPERTY_PREDATOR_SMS_LIVE_POLL_MS of 15000 or less');
+}
 export function mhpEventSmsCodeBody(code: string): string {
   if (!/^[0-9]{6}$/u.test(code)) throw new Error('Invalid code');
-  return `Martin Howard Property code: ${code}. It expires in 10 minutes. If you did not ask for webinar texts, ignore this.`;
+  return `Martin Howard Property code: ${code}. Enter it on the webinar texts page within 15 minutes of asking. Not you? Ignore this.`;
 }
 export type MhpEventSmsCodeCycle = 'idle' | 'sent' | 'failed_or_attention';
 
@@ -28,7 +40,7 @@ export async function runMhpEventSmsCodeOnce(pool: Pick<Pool, 'connect'>, transp
   const context = (suffix: string) => ({ actorKind: 'worker' as const, workspaceId: binding.workspaceId, requestId: `sms:mhp-event-code:${suffix}` });
   const rows = await withTransaction(pool, context('claim'), async tx => (await tx.query<ClaimRow>(
     'SELECT optin_id AS "optinId", phone_e164 AS "phoneE164" FROM app_private.mhp_event_sms_code_claim($1::uuid,$2::uuid)',
-    [binding.workspaceId, binding.connectionId])).rows, { isolation: 'serializable' });
+    [binding.workspaceId, binding.connectionId])).rows, { isolation: 'read committed' });
   if (rows.length === 0) return 'idle';
   const optinId = rows[0]?.optinId, phone = rows[0]?.phoneE164;
   if (rows.length !== 1 || typeof optinId !== 'string' || !UUID.test(optinId) || typeof phone !== 'string' || !UK_MOBILE.test(phone)) {

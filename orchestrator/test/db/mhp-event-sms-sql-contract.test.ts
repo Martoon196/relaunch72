@@ -59,7 +59,9 @@ test('verification codes are worker-only, capped per day and per phone, and fail
   assert.match(claim, /current_setting\('app\.actor_kind',true\) IS DISTINCT FROM 'worker'/u);
   assert.match(claim, /coalesce\(current_setting\('app\.user_id',true\),''\)<>''/u, 'a worker claim carries no user identity');
   assert.match(claim, /hashtextextended\(format\('pp-sms:%s:%s',p_workspace,p_connection\),0\)/u, 'the 0056 per-connection lock');
-  assert.match(claim, /used\.codes_today>=5 OR used\.day_used>=10 OR used\.month_used>=50 THEN RETURN/u, 'codes share the founder caps');
+  assert.match(claim, /used\.codes_today>=3 OR used\.codes_month>=15 OR used\.day_used>=10 OR used\.month_used>=50 THEN RETURN/u,
+    'codes sit inside the founder caps with a small reserved budget');
+  assert.match(claim, /current_setting\('transaction_isolation'\) IS DISTINCT FROM 'read committed'/u, 'the usage read sees committed batches');
   assert.match(claim, /SET state='failed' WHERE o\.state='pending' AND app_private\.mhp_event_sms_phone_suppressed\(o\.phone_e164\)/u,
     'never a code to a STOP number');
   assert.match(claim, /s\.phone_e164=o\.phone_e164 AND s\.claimed_at>=day_start\)<3/u, '3 codes per phone per day');
