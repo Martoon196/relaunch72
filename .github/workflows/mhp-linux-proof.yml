@@ -17,13 +17,13 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Martoon196/relaunch72
-          ref: 978fc4a9a17a70ae5701a8469f27ca05101f975f
+          ref: 81711bc82939153e06e0d4bf800fd65e84742c50
           persist-credentials: false
       - name: Assert exact source identity
         shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = 978fc4a9a17a70ae5701a8469f27ca05101f975f
-          test "$(git rev-parse 'HEAD^{tree}')" = 8e06154cd76d659401fa8555ef90faf9b76eaf59
+          test "$(git rev-parse HEAD)" = 81711bc82939153e06e0d4bf800fd65e84742c50
+          test "$(git rev-parse 'HEAD^{tree}')" = 0c77890136ebab39a80c068ed8a0b8adbc6c2df3
           test -z "$(git status --porcelain)"
           git rev-parse HEAD 'HEAD^{tree}'
       - name: Match the Render Node runtime
