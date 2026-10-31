@@ -93,7 +93,7 @@ export async function buildMhpRuntime(input: {
     marketingWorkspace, emails: ownerEmail, campaign: webinar.campaign,
   }) : undefined;
   console.info(JSON.stringify({ event: 'mhp.sequence.readiness', editorReady: Boolean(sequences), emailReady: sequences?.readiness.email ?? false,
-    smsReady: false, whatsappReady: false, automaticEntryEnabled: false }));
+    smsReady: false, whatsappReady: false, automaticEntryAvailable: Boolean(sequences) }));
   const transactions = createPgCrmTransactionRunner(commandPool);
   const rawVaultKey = env.INVESTOR_MAIL_ENCRYPTION_KEY?.trim();
   const vaultKey = rawVaultKey ? Buffer.from(rawVaultKey, 'base64') : undefined;

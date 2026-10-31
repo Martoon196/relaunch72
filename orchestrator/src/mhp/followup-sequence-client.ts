@@ -8,9 +8,14 @@ for (const form of document.querySelectorAll('[data-sequence-editor]')) {
   const savedControls = [...document.querySelectorAll('[data-saved-required]')].map(button => ({button, disabled:button.disabled}));
   const node = (tag, text) => { const value = document.createElement(tag); if (text !== undefined) value.textContent = text; return value; };
   function current() {
-    return {...initial, title: form.querySelector('[data-field=title]').value.trim(),
+    const result = {...initial, title: form.querySelector('[data-field=title]').value.trim(),
       expiryHours: Number(form.querySelector('[data-field=expiryHours]').value), steps,
       stopOn: Object.fromEntries(['reply','booked','purchased'].map(key => [key, form.querySelector('[data-stop='+key+']').checked]))};
+    const mode = form.querySelector('[data-entry-mode]')?.value || 'manual';
+    if (initial.schema === 'growthhq.followup-sequence/v2' || mode !== 'manual') {
+      result.schema = 'growthhq.followup-sequence/v2'; result.entry = {mode, source:mode === 'manual'?'manual_owner':'mhp.capture/v2'};
+    }
+    return result;
   }
   function sync() {
     const content = JSON.stringify(current()), dirty = content !== JSON.stringify(initial);

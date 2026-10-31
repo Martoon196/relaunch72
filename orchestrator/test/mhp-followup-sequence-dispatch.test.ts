@@ -60,3 +60,25 @@ test('existing marketing interval calls sequence sweep after unchanged legacy an
       sequences: { queue: { claim: async () => { calls.push('sequence'); finished(); return []; }, prepare: async () => null, settle: async () => {}, unknown: async () => {} }, sender: { sendRendered: async () => 'unused' }, unsubscribeSecret: secret } });
   await done; stop(); assert.deepEqual(calls, ['legacy', 'standalone', 'sequence']);
 });
+
+test('bounded future capture entry runs before delivery and telemetry cannot interrupt it', async () => {
+  const f = fixture();
+  f.queue.enrolCaptures = async limit => { assert.equal(limit, 100); f.state.calls.push('entry');
+    return { processed: 1, enrolled: 1, alreadyEnrolled: 0, blocked: 0, skipped: 0, heldRules: 0 }; };
+  assert.equal((await f.run()).sent, 1);
+  assert.deepEqual(f.state.calls, ['entry', 'claim', 'prepare', 'provider', 'accepted']);
+});
+
+test('entry failure does not starve existing due sequence steps', async () => {
+  const f = fixture(); f.queue.enrolCaptures = async () => { f.state.calls.push('entry'); throw new Error('entry unavailable'); };
+  assert.equal((await f.run()).sent, 1); assert.deepEqual(f.state.calls, ['entry', 'claim', 'prepare', 'provider', 'accepted']);
+});
+
+test('new PG entry adapter uses bounded capability and rejects malformed counts', async () => {
+  const calls: string[] = []; let value: unknown = { processed: 100, enrolled: 1, alreadyEnrolled: 0, blocked: 99, skipped: 0, heldRules: 0 };
+  const queue = new PgMhpSequenceDispatch({ query: async (sql: string, values: unknown[]) => { calls.push(sql); assert.deepEqual(values, [100]); return { rows: [{ value }] }; } } as any);
+  assert.equal((await queue.enrolCaptures(100)).processed, 100);
+  value = { processed: 101, enrolled: 101, alreadyEnrolled: 0, blocked: 0, skipped: 0, heldRules: 0 };
+  await assert.rejects(queue.enrolCaptures(100), /Invalid capture/u);
+  assert.ok(calls.every(sql => sql === 'SELECT app_private.mhp_sequence_enrol_captures($1) AS value'));
+});

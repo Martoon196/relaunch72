@@ -14,15 +14,18 @@ import { sequenceIds, sequenceDefinition as definition, sequenceSnapshot as snap
 const HOST = 'app.martinhowardproperty.co.uk', ORIGIN = `https://${HOST}`, SECRET = 'synthetic-followup-sequence-native-secret-at-least-32';
 const BASE = '/hq/marketing/sequences';
 function fixture() {
-  const state = { authenticated: true, allowed: true, calls: [] as string[], input: null as unknown, published: false };
+  const state = { authenticated: true, allowed: true, calls: [] as string[], input: null as unknown, published: false, entryReplay: false };
   const authorise = (given: { sessionToken: string; workspaceId: string }) => { assert.equal(given.sessionToken, token); assert.equal(given.workspaceId, identity.workspaceId); if (!state.allowed) throw new MhpCommerceError(403, 'Open the owner workspace.'); };
-  const sequences: Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command'> = {
-    snapshot: async given => { authorise(given); return snapshot; },
+  const sequences: Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command' | 'entryCommand'> = {
+    snapshot: async given => { authorise(given); return { ...snapshot, entryAvailable: true }; },
     review: async (given, _request, item, version) => { authorise(given); assert.equal(item, sequenceIds.item); assert.equal(version, sequenceIds.version); return { ...detail, review: { ...detail.review, approvalStatus: state.published ? 'approved' : 'unrequested' } }; },
     preview: async (given, _request, value) => { authorise(given); state.calls.push('preview'); state.input = value; return { definition, timeline: followupTimeline(definition), blockers: [] }; },
     save: async (given, _request, value) => { authorise(given); state.calls.push('save'); state.input = value; return { contentItemId: sequenceIds.item, contentVersionId: sequenceIds.version, replayed: false }; },
     publish: async given => { authorise(given); state.calls.push('publish'); state.published = true; },
     command: async (given, _request, value) => { authorise(given); state.calls.push(value.action); state.input = value; return { action: value.action, contentItemId: sequenceIds.item, contentVersionId: sequenceIds.version, changed: 3, remaining: 2, blocked: 1, inFlight: 1, replayed: false }; },
+    entryCommand: async (given, _request, value) => { authorise(given); state.calls.push(`entry_${value.action}`); state.input = value; return { action: value.action,
+      contentItemId: sequenceIds.item, contentVersionId: sequenceIds.version, ruleId: value.ruleId || sequenceIds.proof, state: value.action === 'activate' ? 'active' : 'off',
+      expiresAt: value.expiresAt || '2026-11-08T00:00:00.000Z', watermark: '12', replayed: state.entryReplay }; },
   };
   const portal = { kind: 'postgres', secure: true, sessionSecret: SECRET, sessionCookieName: '__Host-mhp_session', productProfile: MARTIN_HOWARD_PROPERTY_PROFILE, portalBaseUrl: ORIGIN, now: () => now,
     crm: {} as PostgresPortalDeps['crm'], auth: { resolve: async (given: string) => state.authenticated && given === token ? identity : null, login: async () => null, revoke: async () => {} }, abuseHashSecret: SECRET,
@@ -80,4 +83,31 @@ test('foreign host, unauthenticated session and non-owner cannot read or mutate 
   const f = fixture(); assert.equal((await f.request('GET', BASE, '', { host: 'hq.propertypredator.com' })).status, 421);
   f.state.authenticated = false; const redirect = await f.request('GET', BASE); assert.equal(redirect.status, 303); assert.equal(redirect.headers.location, '/portal/login');
   f.state.authenticated = true; f.state.allowed = false; assert.equal((await f.request('GET', BASE)).status, 403); assert.equal((await f.request('POST', `${BASE}/enrol`, f.control())).status, 403); assert.deepEqual(f.state.calls, []);
+});
+test('native future-entry activation accepts explicit UTC expiry and no browser campaign or identity', async () => {
+  const f = fixture(); const page = await f.request('POST', `${BASE}/entry-activate`, f.saved({ expiresAt: '2026-11-08T19:30' }));
+  assert.equal(page.status, 200); assert.match(page.body, /Existing registrations were not backfilled/u); assert.deepEqual(f.state.calls, ['entry_activate']);
+  assert.equal((f.state.input as { expiresAt: string }).expiresAt, '2026-11-08T19:30:00.000Z'); assert.equal((f.state.input as { ruleId: string }).ruleId, '');
+  assert.equal('campaign' in (f.state.input as object), false);
+  for (const extra of ['&campaign=forged', '&workspaceId=' + ids.prospect, '&expiresAt=2026-11-09T19%3A30']) assert.equal((await f.request('POST', `${BASE}/entry-activate`, f.saved({ expiresAt: '2026-11-08T19:30' }) + extra)).status, 400);
+});
+test('turning future entry off invokes only the entry capability and leaves existing runs alone', async () => {
+  const f = fixture(); const page = await f.request('POST', `${BASE}/entry-off`, f.saved({ ruleId: sequenceIds.proof }));
+  assert.equal(page.status, 200); assert.match(page.body, /Existing runs were left unchanged/u); assert.deepEqual(f.state.calls, ['entry_off']);
+  assert.equal((f.state.input as { ruleId: string }).ruleId, sequenceIds.proof); assert.equal((f.state.input as { expiresAt: string }).expiresAt, '');
+});
+test('entry Origin/CSRF/method/expiry fences reject before activation or rule-off', async () => {
+  const f = fixture();
+  for (const path of ['entry-activate', 'entry-off']) {
+    const body = path === 'entry-activate' ? f.saved({ expiresAt: '2026-11-08T19:30' }) : f.saved({ ruleId: sequenceIds.proof });
+    for (const headers of [{ origin: 'null' }, { origin: 'https://foreign.invalid' }, { 'sec-fetch-site': 'cross-site' }] as Record<string, string>[]) assert.equal((await f.request('POST', `${BASE}/${path}`, body, headers)).status, 403);
+    assert.equal((await f.request('GET', `${BASE}/${path}`)).status, 405);
+  }
+  assert.equal((await f.request('POST', `${BASE}/entry-activate`, f.saved({ expiresAt: '2026-02-30T10:00' }))).status, 400);
+  assert.equal((await f.request('POST', `${BASE}/entry-activate`, f.saved({ expiresAt: '2026-01-01T10:00' }))).status, 400);
+  assert.equal((await f.request('POST', `${BASE}/entry-off`, f.saved({ ruleId: sequenceIds.proof, csrf: 'wrong' }))).status, 403); assert.deepEqual(f.state.calls, []);
+});
+test('a replayed enable result is historical and does not claim that a rule is currently active', async () => {
+  const f = fixture(); f.state.entryReplay = true; const page = await f.request('POST', `${BASE}/entry-activate`, f.saved({ expiresAt: '2026-11-08T19:30' }));
+  assert.equal(page.status, 200); assert.match(page.body, /current rule status is shown below/u); assert.doesNotMatch(page.body, /can now enter/u);
 });

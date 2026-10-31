@@ -9,13 +9,16 @@ import { MhpCommerceError } from './commerce-service.js';
 import type { MhpSequenceAction, MhpSequenceSaveInput, MhpSequenceService } from './followup-sequence-service.js';
 import { mhpSequenceNewDraft, mhpSequencePage, type MhpSequencePageInput } from './followup-sequence-view.js';
 import { MHP_SEQUENCE_EDITOR_SCRIPT } from './followup-sequence-client.js';
+import { followupEntryExpiry } from '../followup-sequences/entry.js';
 
 const BASE = '/hq/marketing/sequences';
-const ACTIONS = ['save', 'preview', 'publish', 'enrol', 'pause', 'resume', 'cancel', 'stop'] as const;
+const ACTIONS = ['save', 'preview', 'publish', 'enrol', 'pause', 'resume', 'cancel', 'stop', 'entry-activate', 'entry-off'] as const;
 const PATHS = new Set([BASE, `${BASE}/editor.js`, ...ACTIONS.map(action => `${BASE}/${action}`)]);
 const DRAFT = ['csrf', 'commandId', 'contentItemId', 'previousVersionId', 'definition'];
 const SAVED = ['csrf', 'commandId', 'itemId', 'versionId'];
 const CONTROL = [...SAVED, 'runId', 'ackProofId'];
+const ENTRY_ACTIVATE = [...SAVED, 'expiresAt'];
+const ENTRY_OFF = [...SAVED, 'ruleId'];
 const CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 function respond(res: ServerResponse, status: number, body: string, type = 'text/plain; charset=utf-8'): void {
   res.writeHead(status, { 'content-type': type, 'content-length': String(Buffer.byteLength(body)), 'cache-control': 'no-store',
@@ -34,7 +37,7 @@ async function form(req: IncomingMessage, keys: readonly string[]): Promise<URLS
   return fields;
 }
 export async function handleMhpSequence(req: IncomingMessage, res: ServerResponse, url: URL,
-  deps: { portal: PostgresPortalDeps; sequences: Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command'> }): Promise<boolean> {
+  deps: { portal: PostgresPortalDeps; sequences: Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command'> & Partial<Pick<MhpSequenceService, 'entryCommand'>> }): Promise<boolean> {
   const path = url.pathname.replace(/\/+$/, ''); if (!PATHS.has(path)) return false;
   const { portal, sequences } = deps, leases: Buffer[] = []; let outcome: 'success' | 'service_error' = 'success';
   try {
@@ -70,7 +73,7 @@ export async function handleMhpSequence(req: IncomingMessage, res: ServerRespons
     }
     if (url.search !== '' || req.headers.origin !== MHP_AUTH_ORIGIN || (req.headers['sec-fetch-site'] !== undefined && req.headers['sec-fetch-site'] !== 'same-origin')) throw new MhpCommerceError(403, 'Refresh the sequence form before continuing.');
     const action = path.slice(BASE.length + 1), editing = action === 'save' || action === 'preview';
-    const fields = await form(req, editing ? DRAFT : action === 'publish' ? SAVED : CONTROL), field = (key: string) => fields.get(key) ?? '';
+    const fields = await form(req, editing ? DRAFT : action === 'publish' ? SAVED : action === 'entry-activate' ? ENTRY_ACTIVATE : action === 'entry-off' ? ENTRY_OFF : CONTROL), field = (key: string) => fields.get(key) ?? '';
     if (!verifyPortalCsrf(portal.sessionSecret, token, field('csrf'))) throw new MhpCommerceError(403, 'Refresh the sequence form before continuing.');
     if (editing) {
       let definition: unknown; try { definition = JSON.parse(field('definition')); } catch { throw new MhpCommerceError(400, 'Check the sequence steps before saving.'); }
@@ -83,6 +86,17 @@ export async function handleMhpSequence(req: IncomingMessage, res: ServerRespons
     let message: string;
     if (action === 'publish') { await sequences.publish(identity, context.requestId, field('itemId'), field('versionId'), field('commandId'), now);
       message = 'This exact sequence version is published. No one was enrolled and no message was sent. Choose Start when you are ready.'; }
+    else if (action === 'entry-activate' || action === 'entry-off') {
+      if (!sequences.entryCommand) throw new MhpCommerceError(503, 'Future webinar entry is not connected yet.');
+      let expiry = '';
+      if (action === 'entry-activate') try { expiry = followupEntryExpiry(field('expiresAt'), now); }
+      catch { throw new MhpCommerceError(400, 'Choose a valid future stop time in UTC.'); }
+      const result = await sequences.entryCommand(identity, context.requestId, { action: action === 'entry-activate' ? 'activate' : 'off', commandId: field('commandId'),
+        itemId: field('itemId'), versionId: field('versionId'), ruleId: action === 'entry-off' ? field('ruleId') : '', expiresAt: expiry }, now);
+      message = result.state === 'active' ? 'Future opted-in webinar sign-ups can now enter this exact sequence. Existing registrations were not backfilled and no message was sent by enabling the rule.'
+        : 'Future entry is off. Existing runs were left unchanged; use their separate controls if you also want to stop them.';
+      if (result.replayed) message = `This is the saved result of your earlier ${result.state === 'active' ? 'enable' : 'off'} request. The current rule status is shown below; the earlier action was not repeated.`;
+    }
     else {
       const result = await sequences.command(identity, context.requestId, { action: action as MhpSequenceAction['action'], commandId: field('commandId'), itemId: field('itemId'), versionId: field('versionId'), runId: field('runId'), ackProofId: field('ackProofId') });
       message = `${result.changed} run${result.changed === 1 ? '' : 's'} ${action === 'enrol' ? 'started' : action === 'pause' ? 'paused' : action === 'resume' ? 'resumed' : action === 'stop' ? 'stopped' : 'cancelled'}. ${result.remaining} remain for another explicit batch; ${result.blocked} need review. ${result.inFlight} already being processed may still finish.${result.replayed ? ' This is the saved result of your earlier request.' : ''}`;

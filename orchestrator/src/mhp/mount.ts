@@ -28,7 +28,7 @@ interface MhpMountDependencies {
   marketingWorkspace?: MhpMarketingWorkspaceDependencies['marketingWorkspace'];
   webinarLeads?: MhpMarketingWorkspaceDependencies['webinarLeads'];
   ownerEmail?: Pick<MhpOwnerEmailService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'queue' | 'test'>;
-  sequences?: Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command'>;
+  sequences?: Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command'> & Partial<Pick<MhpSequenceService, 'entryCommand'>>;
   readiness(): Promise<readonly string[]>;
 }
 
