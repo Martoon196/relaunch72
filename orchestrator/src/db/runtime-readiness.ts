@@ -20,6 +20,8 @@ const SMS_TRIGGER_ACL_REPAIR_MIGRATION = '0123_sms_phone_receipt_trigger_acl.sql
 const SMS_TRIGGER_ACL_REPAIR_CHECKSUM = '094d3118a85131c099749ecd000c4c4b9141ea6ba00e8c643190fa5cf5a1554d';
 const MHP_MARKETING_COMPATIBILITY_MIGRATION = '0124_mhp_brand_marketing_workspace.sql';
 const MHP_MARKETING_COMPATIBILITY_CHECKSUM = '6d17547dc37070b736f23e2a7906dc40739b66c50de262eacdbe9ace7e011209';
+const MHP_WEBINAR_READER_MIGRATION = '0125_mhp_webinar_lead_candidates.sql';
+const MHP_WEBINAR_READER_CHECKSUM = '91bd726210fe34fa4edf46565f6c5f48d9005a6a177d735d808101d44f41c259';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -78,6 +80,15 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(SMS_TRIGGER_ACL_REPAIR_MIGRATION) === SMS_TRIGGER_ACL_REPAIR_CHECKSUM
       && applied.get(MHP_MARKETING_COMPATIBILITY_MIGRATION) === MHP_MARKETING_COMPATIBILITY_CHECKSUM) {
     applied.delete(MHP_MARKETING_COMPATIBILITY_MIGRATION);
+  }
+  // The124 application remains ready during this exact read-only125 cutover.
+  // Source and ledger must both include exact124. Bundled125 is strict.
+  if (migrations.length === 124
+      && migrations[123]?.filename === MHP_MARKETING_COMPATIBILITY_MIGRATION
+      && migrations[123]?.checksum === MHP_MARKETING_COMPATIBILITY_CHECKSUM
+      && applied.get(MHP_MARKETING_COMPATIBILITY_MIGRATION) === MHP_MARKETING_COMPATIBILITY_CHECKSUM
+      && applied.get(MHP_WEBINAR_READER_MIGRATION) === MHP_WEBINAR_READER_CHECKSUM) {
+    applied.delete(MHP_WEBINAR_READER_MIGRATION);
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
