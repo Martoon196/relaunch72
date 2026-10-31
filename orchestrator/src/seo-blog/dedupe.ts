@@ -84,6 +84,8 @@ export interface PlannedComparable {
   readonly title: string;
   readonly targetQuery: string;
   readonly slug: string;
+  /** A sibling in the same cluster: related by design, so only substantial duplication counts. */
+  readonly sibling?: boolean;
 }
 
 export const MATERIAL_OVERLAP = 0.5;
@@ -118,6 +120,7 @@ export function assessDuplicate(
       topicSimilarity(candidate.targetQuery, item.targetQuery),
       exact ? 1 : 0,
     );
+    if (item.sibling && !exact && score < SUBSTANTIAL_DUPLICATE) continue;
     consider(score, item.title, 'planned_article', exact);
   }
   const hit = best as { score: number; against: string; kind: 'published_page' | 'planned_article'; exact: boolean } | null;

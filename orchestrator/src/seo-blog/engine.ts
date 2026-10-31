@@ -413,7 +413,7 @@ export class SeoBlogEngine {
     const planId = randomUUID();
     const cluster = [result.value.pillar, ...result.value.supporting];
     const slugToId = new Map(cluster.map((a) => [a.slug, randomUUID()]));
-    const comparable = [
+    const comparable: import('./dedupe.js').PlannedComparable[] = [
       ...planned.filter((b) => !['omitted', 'skipped'].includes(b.status)).map((b) => ({ id: b.id, title: b.workingTitle, targetQuery: b.targetQuery, slug: b.slug })),
       ...articles.map((a) => ({ id: a.id, title: a.slug.replace(/-/g, ' '), targetQuery: a.slug.replace(/-/g, ' '), slug: a.slug })),
     ];
@@ -439,7 +439,7 @@ export class SeoBlogEngine {
         status: duplicate.verdict === 'skip' || duplicate.verdict === 'update_existing' ? 'postponed' : 'planned',
         suggestedAtUtc: null, articleId: null,
       };
-      comparable.push({ id: brief.id, title: brief.workingTitle, targetQuery: brief.targetQuery, slug: brief.slug });
+      comparable.push({ id: brief.id, title: brief.workingTitle, targetQuery: brief.targetQuery, slug: brief.slug, sibling: true });
       briefs.push(brief);
     }
     // Suggested dates: pillar first, supporting after it, inside the planning horizon.
@@ -1220,6 +1220,11 @@ export class SeoBlogEngine {
     for (const brief of briefs.filter((b) => b.status === 'accepted' && !queued.has(b.id)).slice(0, room)) {
       await this.enqueue(brandId, 'write', `write:${brief.id}`, { briefId: brief.id, requestedBy: 'system' });
     }
+  }
+
+  /** Worker discovery: brands with due schedules, open operations, runnable jobs or ongoing production. */
+  activeBrands(): Promise<string[]> {
+    return this.store.activeBrandIds(this.now());
   }
 
   async enqueueDailyForAll(brandIds: readonly string[]): Promise<void> {
