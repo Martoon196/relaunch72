@@ -13,17 +13,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout the exact capable editor source
+      - name: Checkout the exact sequence compatibility bridge
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Martoon196/relaunch72
-          ref: de6c3b76968beffda727112556f450e4facfe54a
+          ref: 48b89b2b3f221329119adbda495672727d29b805
           persist-credentials: false
       - name: Assert exact source identity
         shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = de6c3b76968beffda727112556f450e4facfe54a
-          test "$(git rev-parse 'HEAD^{tree}')" = 174d1dc40473d48f0ec8804b28b9e23388722d27
+          test "$(git rev-parse HEAD)" = 48b89b2b3f221329119adbda495672727d29b805
+          test "$(git rev-parse 'HEAD^{tree}')" = 96f149872681c1ef270fe98c804b3b46621c2491
           test -z "$(git status --porcelain)"
           git rev-parse HEAD 'HEAD^{tree}'
       - name: Match the Render Node runtime
