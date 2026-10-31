@@ -26,6 +26,8 @@ const MHP_OWNER_EMAIL_MIGRATION = '0126_mhp_owner_email_editor.sql';
 const MHP_OWNER_EMAIL_CHECKSUM = '317555ffd745918305f4d9209112ed4abf7eca8ed283e7db3ceb0bffcd2aef76';
 const MHP_FOLLOWUP_SEQUENCE_MIGRATION = '0127_mhp_followup_sequences.sql';
 const MHP_FOLLOWUP_SEQUENCE_CHECKSUM = 'bfd4319fe4a0f07b93d54d528b54f3468ae0857ad53e53a8b7a038ebb1a76f23';
+const MHP_CAPTURE_ENTRY_MIGRATION = '0128_mhp_sequence_capture_entry.sql';
+const MHP_CAPTURE_ENTRY_CHECKSUM = '09b35b4eaf6e934c8f560e8d9d645bd3b9f37a34268f77f4afd974ecd1b54e97';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -113,6 +115,16 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(MHP_OWNER_EMAIL_MIGRATION) === MHP_OWNER_EMAIL_CHECKSUM
       && applied.get(MHP_FOLLOWUP_SEQUENCE_MIGRATION) === MHP_FOLLOWUP_SEQUENCE_CHECKSUM) {
     applied.delete(MHP_FOLLOWUP_SEQUENCE_MIGRATION);
+  }
+  // Exact127 recovery artifact also carries the reviewed v2 reader/service
+  // guards. SQL excludes automatic runs from its old claim/prepare paths.
+  // Bundled128 remains strict and never takes this bridge allowance.
+  if (migrations.length === 127
+      && migrations[126]?.filename === MHP_FOLLOWUP_SEQUENCE_MIGRATION
+      && migrations[126]?.checksum === MHP_FOLLOWUP_SEQUENCE_CHECKSUM
+      && applied.get(MHP_FOLLOWUP_SEQUENCE_MIGRATION) === MHP_FOLLOWUP_SEQUENCE_CHECKSUM
+      && applied.get(MHP_CAPTURE_ENTRY_MIGRATION) === MHP_CAPTURE_ENTRY_CHECKSUM) {
+    applied.delete(MHP_CAPTURE_ENTRY_MIGRATION);
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));

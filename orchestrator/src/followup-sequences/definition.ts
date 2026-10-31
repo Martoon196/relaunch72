@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { canonicalCompanyContentJson } from '../company-content-pg/index.js';
 
 export const FOLLOWUP_SEQUENCE_SCHEMA = 'growthhq.followup-sequence/v1' as const;
+export const FOLLOWUP_SEQUENCE_V2_SCHEMA = 'growthhq.followup-sequence/v2' as const;
 export const FOLLOWUP_SEQUENCE_MIME = 'application/vnd.growthhq.followup-sequence+json';
 export const FOLLOWUP_SEQUENCE_MAX_STEPS = 24;
 export const FOLLOWUP_SEQUENCE_SOURCE = 'mhp.followup-sequence';
@@ -16,9 +17,11 @@ export interface FollowupMessage {
   readonly contentItemId: string; readonly contentVersionId: string; readonly contentSha256: string;
 }
 export type FollowupStep = FollowupWait | FollowupMessage;
+export interface FollowupEntryIntent { readonly mode: 'manual' | 'webinar_signup'; readonly source: 'manual_owner' | 'mhp.capture/v2' }
 export interface FollowupSequenceDefinition {
-  readonly schema: typeof FOLLOWUP_SEQUENCE_SCHEMA; readonly brand: FollowupBrand;
+  readonly schema: typeof FOLLOWUP_SEQUENCE_SCHEMA | typeof FOLLOWUP_SEQUENCE_V2_SCHEMA; readonly brand: FollowupBrand;
   readonly campaign: string; readonly title: string; readonly expiryHours: number;
+  readonly entry?: FollowupEntryIntent;
   readonly stopOn: Readonly<{ reply: boolean; booked: boolean; purchased: boolean }>;
   readonly steps: readonly FollowupStep[];
 }
@@ -35,8 +38,17 @@ export const followupSequenceSha = (value: string): string => createHash('sha256
 /** One shared persisted contract; brands/channels remain explicit, never inferred from another sender. */
 export function parseFollowupSequence(value: unknown): FollowupSequenceDefinition {
   if (!record(value)) return fail('Choose a sequence to edit.');
-  keys(value, ['schema', 'brand', 'campaign', 'title', 'expiryHours', 'stopOn', 'steps']);
-  if (value.schema !== FOLLOWUP_SEQUENCE_SCHEMA || !['mhp', 'pp'].includes(String(value.brand))) fail('Choose a supported workspace.');
+  const v2 = value.schema === FOLLOWUP_SEQUENCE_V2_SCHEMA;
+  keys(value, ['schema', 'brand', 'campaign', 'title', 'expiryHours', 'stopOn', 'steps', ...(v2 ? ['entry'] : [])]);
+  if ((!v2 && value.schema !== FOLLOWUP_SEQUENCE_SCHEMA) || !['mhp', 'pp'].includes(String(value.brand))) fail('Choose a supported workspace.');
+  let entry: FollowupEntryIntent | undefined;
+  if (v2) {
+    if (!record(value.entry)) return fail('Choose how people enter this sequence.');
+    keys(value.entry, ['mode', 'source']);
+    if (!((value.entry.mode === 'manual' && value.entry.source === 'manual_owner')
+        || (value.entry.mode === 'webinar_signup' && value.entry.source === 'mhp.capture/v2' && value.brand === 'mhp'))) fail('Choose a connected entry source for this brand.');
+    entry = Object.freeze({ mode: value.entry.mode as FollowupEntryIntent['mode'], source: value.entry.source as FollowupEntryIntent['source'] });
+  }
   if (typeof value.campaign !== 'string' || !/^[a-z0-9_-]{1,60}$/u.test(value.campaign)) fail('The webinar audience is unavailable.');
   if (typeof value.title !== 'string' || value.title !== value.title.trim() || value.title.length < 1 || value.title.length > 180
       || /[\u0000-\u001f\u007f]/u.test(value.title)) fail('Give the sequence a name of 1–180 characters.');
@@ -66,9 +78,14 @@ export function parseFollowupSequence(value: unknown): FollowupSequenceDefinitio
   });
   if (!messages || steps.at(-1)?.kind === 'wait') fail('End the sequence with a message, not a wait.');
   if (totalWait > 525600) fail('The total wait time must stay within one year.');
-  return Object.freeze({ schema: FOLLOWUP_SEQUENCE_SCHEMA, brand: value.brand as FollowupBrand, campaign: value.campaign as string,
+  return Object.freeze({ schema: v2 ? FOLLOWUP_SEQUENCE_V2_SCHEMA : FOLLOWUP_SEQUENCE_SCHEMA, ...(entry ? { entry } : {}), brand: value.brand as FollowupBrand, campaign: value.campaign as string,
     title: value.title as string, expiryHours: Number(value.expiryHours), stopOn: Object.freeze({ reply: value.stopOn.reply as boolean,
       booked: value.stopOn.booked as boolean, purchased: value.stopOn.purchased as boolean }), steps: Object.freeze(steps) });
+}
+export function followupEntryIntent(definition: FollowupSequenceDefinition): FollowupEntryIntent {
+  if (definition.schema === FOLLOWUP_SEQUENCE_SCHEMA) return Object.freeze({ mode: 'manual', source: 'manual_owner' });
+  if (!definition.entry) return fail('This sequence has no verified entry intent.');
+  return definition.entry;
 }
 export function canonicalFollowupSequence(value: unknown): string { return canonicalCompanyContentJson(parseFollowupSequence(value)); }
 export function readCanonicalFollowupSequence(content: string): FollowupSequenceDefinition {
