@@ -28,7 +28,7 @@ const binding = { workspaceId: MHP_EVENT_SMS_WORKSPACE_ID, connectionId: CONNECT
 test('the code text is one plain segment and carries no marketing', () => {
   const body = mhpEventSmsCodeBody('012345');
   assert.equal(twilioSmsSegmentCount(body), 1);
-  assert.doesNotMatch(body, /https?:|webinar starts|book|offer/iu);
+  assert.doesNotMatch(body, /https?:|webinar starts|book|offer|reply/iu, 'no marketing and no invitation to reply');
   assert.throws(() => mhpEventSmsCodeBody('12345'));
 });
 
@@ -88,8 +88,13 @@ test('the worker switch is off by default and refuses any other workspace or a d
   const plain = loadTwilioSmsWorkerConfig(liveEnv());
   assert.equal(plain.mode, 'owned_number_live');
   assert.equal(plain.mode === 'owned_number_live' && plain.mhpEventCodes, false);
-  const on = loadTwilioSmsWorkerConfig(liveEnv({ MHP_EVENT_SMS_CODES_ENABLED: 'true' }));
+  const attested = { MHP_EVENT_SMS_CODES_ENABLED: 'true', MHP_EVENT_SMS_TWILIO_ADVANCED_OPT_OUT_CONFIRMED: 'true', PROPERTY_PREDATOR_SMS_LIVE_POLL_MS: '5000' };
+  const on = loadTwilioSmsWorkerConfig(liveEnv(attested));
   assert.equal(on.mode === 'owned_number_live' && on.mhpEventCodes, true);
+  assert.throws(() => loadTwilioSmsWorkerConfig(liveEnv({ ...attested, MHP_EVENT_SMS_TWILIO_ADVANCED_OPT_OUT_CONFIRMED: undefined })), /ADVANCED_OPT_OUT/u,
+    'codes need the operator to confirm Twilio Advanced Opt-Out');
+  assert.throws(() => loadTwilioSmsWorkerConfig(liveEnv({ ...attested, PROPERTY_PREDATOR_SMS_LIVE_POLL_MS: '20000' })), /15000 or less/u,
+    'a full owner batch must fit its 4-minute authority');
   assert.throws(() => loadTwilioSmsWorkerConfig(liveEnv({ MHP_EVENT_SMS_CODES_ENABLED: 'true',
     PROPERTY_PREDATOR_SMS_LIVE_WORKSPACE_ID: '22222222-2222-4222-8222-222222222222' })), /MHP workspace only/u);
   assert.throws(() => loadTwilioSmsWorkerConfig({ NODE_ENV: 'production', MHP_EVENT_SMS_CODES_ENABLED: 'true',
@@ -109,7 +114,8 @@ test('a live cycle drains the marketing queue first and sends a code only when i
       sql.includes('mhp_event_sms_code_claim') && !claim ? { rows: [] } : client.query(sql, params) };
   }, query: async () => ({ rows: [] }), end: async () => {} };
   const readiness: string[] = [];
-  const runtime = await startTwilioSmsLiveWorker({ env: liveEnv({ MHP_EVENT_SMS_CODES_ENABLED: 'true', PROPERTY_PREDATOR_SMS_LIVE_POLL_MS: '60000' }),
+  const runtime = await startTwilioSmsLiveWorker({ env: liveEnv({ MHP_EVENT_SMS_CODES_ENABLED: 'true', MHP_EVENT_SMS_TWILIO_ADVANCED_OPT_OUT_CONFIRMED: 'true',
+    PROPERTY_PREDATOR_SMS_LIVE_POLL_MS: '15000' }),
     createPool: () => wrapped as never, assertSchemaCurrent: async () => {}, assertInstallationReady: async () => {}, assertBoundaryReady: async () => {},
     createRepository: () => ({ claimOne: async () => { marketingClaims += 1; return null; } }) as never,
     createTransport: () => ({ contract: TWILIO_SMS_LIVE_CONTRACT, providerId: TWILIO_SMS_PROVIDER_ID, send: async () => accepted }) as never,

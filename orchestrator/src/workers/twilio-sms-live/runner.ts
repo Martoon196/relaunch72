@@ -25,7 +25,7 @@ import {
 } from '../../sms-live-pg/readiness.js';
 import { createTwilioMessagingHttpAdapterFromRestrictedKeyEnvironment } from '../../providers/twilio-messaging-http-adapter.js';
 import { runSmsPhoneVerificationOnce, smsVerificationDisplayBrand } from '../../sms-live-pg/phone-verification.js';
-import { mhpEventSmsCodesEnabled, runMhpEventSmsCodeOnce } from '../../sms-live-pg/event-sms-codes.js';
+import { assertMhpEventSmsCodePreconditions, mhpEventSmsCodesEnabled, runMhpEventSmsCodeOnce } from '../../sms-live-pg/event-sms-codes.js';
 import { assertRuntimeSchemaCurrent } from '../../db/runtime-readiness.js';
 import { assertExpectedDatabaseInstallation } from '../../db/installation-identity.js';
 
@@ -231,6 +231,7 @@ export function loadTwilioSmsWorkerConfig(
   if (env.MHP_EVENT_SMS_CODES_ENABLED === 'true' && !mhpEventSmsCodesEnabled(env, workspaceId)) {
     throw new Error('MHP webinar codes are bound to the MHP workspace only');
   }
+  if (mhpEventSmsCodesEnabled(env, workspaceId)) assertMhpEventSmsCodePreconditions(env, pollIntervalMs);
   return Object.freeze({
     mode: 'owned_number_live',
     installationId,

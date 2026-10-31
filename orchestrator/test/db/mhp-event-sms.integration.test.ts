@@ -170,7 +170,10 @@ test('MHP009B: public opt-in, owner exact-batch send and unchanged live-worker p
       ['registrant-1@example.invalid', phone(1), CAMPAIGN, 'mhp.event-sms/v1', sha('other words'), randomBytes(32), randomUUID()]), '22023');
 
     const ids = new Map<number, string>();
-    for (const n of [1, 2, 3, 4, 5]) ids.set(n, await requestOptin(p, `registrant-${n}@example.invalid`, n));
+    for (const n of [1, 3, 4]) ids.set(n, await requestOptin(p, `registrant-${n}@example.invalid`, n));
+    // Registrants 2 and 5 confirmed earlier (stored directly; the daily code budget is 3).
+    await ownerQuery(owner, verifiedRow(2, 2), [CONSENT_TEXT]);
+    await ownerQuery(owner, verifiedRow(5, 5), [CONSENT_TEXT]);
     // Unknown and unsubscribed emails are stored as decoys and answered exactly like real ones.
     const unsubscribed = await requestOptin(p, 'registrant-6@example.invalid', 6);
     const unknown = await requestOptin(p, 'nobody@example.invalid', 7);
@@ -179,17 +182,15 @@ test('MHP009B: public opt-in, owner exact-batch send and unchanged live-worker p
     const states = Object.fromEntries((await ownerQuery<{ id: string; state: string }>(owner, 'SELECT id,state FROM app_private.mhp_event_sms_optins')).map(r => [r.id, r.state]));
     assert.equal(states[unknown], 'decoy'); assert.equal(states[unsubscribed], 'decoy');
     // Codes: never to the STOP'd number; one each for the others.
-    assert.equal(await deliverCodes(p), 4);
+    assert.equal(await deliverCodes(p), 2);
     assert.equal((await ownerQuery<{ state: string }>(owner, 'SELECT state FROM app_private.mhp_event_sms_optins WHERE id=$1', [ids.get(4)]))[0]!.state, 'failed');
     assert.equal(await confirm(p, unknown, '123456'), 'retry', 'a decoy answers like a real row with a wrong code');
     assert.equal(await confirm(p, ids.get(1)!, '000000'), 'retry');
     assert.equal(await confirm(p, ids.get(1)!, '123456'), 'verified');
     assert.equal(await confirm(p, ids.get(1)!, '123456'), 'already');
-    assert.equal(await confirm(p, ids.get(2)!, '123456'), 'verified');
     for (let attempt = 0; attempt < 4; attempt += 1) await confirm(p, ids.get(3)!, '999999');
     assert.equal(await confirm(p, ids.get(3)!, '999999'), 'unavailable');
     assert.equal(await confirm(p, ids.get(3)!, '123456'), 'unavailable', 'five wrong codes lock the opt-in');
-    assert.equal(await confirm(p, ids.get(5)!, '123456'), 'verified');
     assert.equal((await ownerQuery(owner, `SELECT 1 FROM app.communication_consent_events WHERE source='mhp.event-sms.public-optin'`)).length, 0,
       'nothing reaches the CRM before the owner review');
     // Registrant 2's number later replied STOP on a different, since-deleted contact point: it must hold.
@@ -201,7 +202,7 @@ test('MHP009B: public opt-in, owner exact-batch send and unchanged live-worker p
       'registrant-1@example.invalid': 'ready', 'registrant-2@example.invalid': 'opted_out', 'registrant-5@example.invalid': 'needs_import',
     });
     assert.equal(first.readyCount, 1);
-    assert.equal(first.daySegmentsUsed, 4, 'verification codes count against the daily allowance');
+    assert.equal(first.daySegmentsUsed, 2, 'verification codes count against the daily allowance');
     await expectPostgresError(as(p.r72_sms_command, 'owner', 'SELECT app_private.mhp_event_sms_batch_snapshot($1,$2,$3,$4)',
       [sha('not-a-session'), CAMPAIGN, VERSION, cachedContentSha]), '42501');
     // A registrant who verifies after the owner looked must wait for a fresh review.
@@ -209,7 +210,7 @@ test('MHP009B: public opt-in, owner exact-batch send and unchanged live-worker p
     assert.equal(await deliverCodes(p), 1);
     assert.equal(await confirm(p, late, '123456'), 'verified');
     await expectPostgresError(send(p, randomUUID(), first.batchSha256!), '40001');
-    // The daily code budget (5) is now spent: a further opt-in waits, it is not texted.
+    // The reserved daily code budget (3) is now spent: a further opt-in waits, it is not texted.
     await requestOptin(p, 'registrant-5@example.invalid', 22);
     assert.equal(await deliverCodes(p), 0);
     const reviewed = await snapshot(p);
@@ -253,7 +254,7 @@ test('MHP009B: public opt-in, owner exact-batch send and unchanged live-worker p
     const after = await snapshot(p);
     assert.equal(after.readyCount, 0);
     assert.equal(after.batchSha256, null);
-    assert.equal(after.daySegmentsUsed, 7, 'five codes and two texts');
+    assert.equal(after.daySegmentsUsed, 5, 'three codes and two texts');
     const statuses = Object.fromEntries(after.recipients.map(r => [r.email, r.status]));
     assert.equal(statuses['registrant-1@example.invalid'], 'already_sent');
     assert.equal(statuses['registrant-3@example.invalid'], 'already_sent');
@@ -274,6 +275,12 @@ test('MHP009B: public opt-in, owner exact-batch send and unchanged live-worker p
     assert.equal(began[0]!.ok, true);
 
     await expectPostgresError(ownerQuery(owner, `UPDATE app_private.mhp_event_sms_batches SET recipient_count=recipient_count`), '42501');
+    // Retention: a decoy older than 24 hours is purged by the next request.
+    const stale = await requestOptin(p, 'old-stranger@example.invalid', 47);
+    await ownerQuery(owner, `UPDATE app_private.mhp_event_sms_optins SET created_at=clock_timestamp()-interval '2 days',
+      expires_at=clock_timestamp()-interval '2 days' WHERE id=$1`, [stale]);
+    await requestOptin(p, 'another-stranger@example.invalid', 48);
+    assert.equal((await ownerQuery(owner, 'SELECT 1 FROM app_private.mhp_event_sms_optins WHERE id=$1', [stale])).length, 0);
     // Limits count decoys too, so a 429 says nothing about registration.
     const source = randomBytes(32);
     for (const n of [41, 42, 43, 44, 45]) await requestOptin(p, `stranger-${n}@example.invalid`, n, source);

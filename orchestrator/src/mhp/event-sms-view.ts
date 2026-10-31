@@ -27,11 +27,11 @@ export function mhpEventSmsOptinPage(input: { requestKey: string; notice?: strin
     + `<button>Text me a code</button><p class="small">We'll text a six-digit code to check the number is yours. Martin Howard Property is a trading name of MH196 Ltd. We only use this number for this webinar.</p></form></section>`);
 }
 export function mhpEventSmsCodePage(input: { optinId: string; notice?: string }): string {
-  return page('Check your phone', `<h1>Check your phone.</h1><p>If that email is registered for the webinar, we've just texted a six-digit code to your mobile. It expires in 10 minutes.</p>`
+  return page('Check your phone', `<h1>Check your phone.</h1><p>If that email is registered for the webinar, we'll text a six-digit code to your mobile within a few minutes. Enter it here within 15 minutes of asking.</p>`
     + `${input.notice ? `<p role="status" class="status">${esc(input.notice)}</p>` : ''}`
     + `<section><form method="post" action="${MHP_EVENT_SMS_PUBLIC_ROUTE}/confirm">${hidden('optinId', input.optinId)}`
     + `<label for="code">Six-digit code<input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required></label>`
-    + `<button>Confirm my number</button></form><p class="small">No text? Check the email matches the one you registered with, or <a href="${MHP_EVENT_SMS_PUBLIC_ROUTE}">start again</a>.</p></section>`);
+    + `<button>Confirm my number</button></form><p class="small">No text? We can only send a few codes each day. Check the email matches the one you registered with, or <a href="${MHP_EVENT_SMS_PUBLIC_ROUTE}">try again later</a>. Your email reminders carry on either way.</p></section>`);
 }
 export function mhpEventSmsDonePage(): string {
   return page('You are on the list', `<h1>You're on the text list.</h1><p>We'll text you about this webinar only. Reply STOP to any text and we'll stop straight away.</p>`
