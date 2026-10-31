@@ -159,10 +159,15 @@ BEGIN
  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('mhp.event-sms.phone:'||p_phone,7200131));
  SELECT * INTO existing FROM app_private.mhp_event_sms_optins o WHERE o.request_key_sha256=key_sha;
  IF FOUND THEN RETURN jsonb_build_object('optinId',existing.id); END IF;
- -- Retention: decoys live 24 hours; unverified real rows 30 days. Verified rows
- -- are consent evidence and go only with the prospect's own erasure cascade.
- DELETE FROM app_private.mhp_event_sms_optins o WHERE (o.state='decoy' AND o.created_at<statement_timestamp()-interval '24 hours')
-  OR (o.state IN('pending','failed','needs_attention') AND o.created_at<statement_timestamp()-interval '30 days');
+ -- Retention, bounded and non-blocking: decoys live 24 hours; every other
+ -- unverified row 30 days, but never one claimed this UTC month, so the month's
+ -- code count stays exact. Verified rows are consent evidence and go only with
+ -- the prospect's own erasure cascade.
+ DELETE FROM app_private.mhp_event_sms_optins o WHERE o.id IN(SELECT x.id FROM app_private.mhp_event_sms_optins x
+  WHERE (x.state='decoy' AND x.created_at<statement_timestamp()-interval '24 hours')
+   OR (x.state NOT IN('decoy','verified') AND x.created_at<statement_timestamp()-interval '30 days'
+    AND (x.claimed_at IS NULL OR x.claimed_at<date_trunc('month',statement_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'))
+  ORDER BY x.created_at LIMIT 50 FOR UPDATE SKIP LOCKED);
  -- Limits count every stored row, decoys included, so they trip identically.
  -- They are per person-and-phone and per source, so junk requests cannot lock
  -- someone else's number or the whole campaign.
