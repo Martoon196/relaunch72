@@ -28,6 +28,8 @@ const MHP_FOLLOWUP_SEQUENCE_MIGRATION = '0127_mhp_followup_sequences.sql';
 const MHP_FOLLOWUP_SEQUENCE_CHECKSUM = 'bfd4319fe4a0f07b93d54d528b54f3468ae0857ad53e53a8b7a038ebb1a76f23';
 const MHP_CAPTURE_ENTRY_MIGRATION = '0128_mhp_sequence_capture_entry.sql';
 const MHP_CAPTURE_ENTRY_CHECKSUM = '09b35b4eaf6e934c8f560e8d9d645bd3b9f37a34268f77f4afd974ecd1b54e97';
+const MHP_LOCAL_CHANNEL_DRAFTS_MIGRATION = '0129_mhp_local_channel_drafts.sql';
+const MHP_LOCAL_CHANNEL_DRAFTS_CHECKSUM = '649ba68b60954b6e76d4e702511321e59eff0785128051ed7b81f968abe1b57a';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -125,6 +127,16 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(MHP_FOLLOWUP_SEQUENCE_MIGRATION) === MHP_FOLLOWUP_SEQUENCE_CHECKSUM
       && applied.get(MHP_CAPTURE_ENTRY_MIGRATION) === MHP_CAPTURE_ENTRY_CHECKSUM) {
     applied.delete(MHP_CAPTURE_ENTRY_MIGRATION);
+  }
+  // The exact128 recovery reader keeps existing canonical v1/v2 history.
+  // Reviewed129 only extends structural draft references; executable gates
+  // still reject all non-email. Bundled129 uses the strict path.
+  if (migrations.length === 128
+      && migrations[127]?.filename === MHP_CAPTURE_ENTRY_MIGRATION
+      && migrations[127]?.checksum === MHP_CAPTURE_ENTRY_CHECKSUM
+      && applied.get(MHP_CAPTURE_ENTRY_MIGRATION) === MHP_CAPTURE_ENTRY_CHECKSUM
+      && applied.get(MHP_LOCAL_CHANNEL_DRAFTS_MIGRATION) === MHP_LOCAL_CHANNEL_DRAFTS_CHECKSUM) {
+    applied.delete(MHP_LOCAL_CHANNEL_DRAFTS_MIGRATION);
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
