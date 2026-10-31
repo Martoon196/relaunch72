@@ -14,13 +14,18 @@ const UK = /^\+44[0-9]{9,10}$/u;
 const HEX64 = /^[0-9a-f]{64}$/u;
 const sha256 = (value: string | Buffer): Buffer => createHash('sha256').update(value).digest();
 
-export interface MhpOwnedWhatsAppConfig { readonly ownerUserId: string; readonly contactId: string; readonly phone: string }
+export interface MhpOwnedWhatsAppConfig { readonly ownerUserId: string; readonly contactId: string; readonly phone: string; readonly workerLive?: boolean }
 /** Reuses the owner's already-verified SMS pilot number; WhatsApp has its own switch. */
 export function mhpOwnedWhatsAppConfig(env: NodeJS.ProcessEnv): { enabled: boolean; config: MhpOwnedWhatsAppConfig | null; blockers: readonly string[] } {
   if (env.MHP_WHATSAPP_PILOT_ENABLED !== 'true') return { enabled: false, config: null, blockers: ['The MHP WhatsApp pilot is not enabled.'] };
   const ownerUserId = env.MHP_SMS_PILOT_OWNER_USER_ID?.trim() ?? '', contactId = env.MHP_SMS_PILOT_CONTACT_ID?.trim() ?? '', phone = env.MHP_SMS_PILOT_PHONE?.trim() ?? '';
   const valid = UUID.test(ownerUserId) && UUID.test(contactId) && UK.test(phone);
-  return { enabled: true, config: valid ? { ownerUserId, contactId, phone } : null, blockers: valid ? [] : ['The owner number from the MHP SMS pilot settings is needed.'] };
+  // A queued test has a 4-minute authority; sending while the worker is dark would
+  // burn one of the 3 monthly slots for nothing. The operator attests it is live.
+  const workerLive = env.MHP_WHATSAPP_WORKER_LIVE_CONFIRMED === 'true';
+  return { enabled: true, config: valid ? { ownerUserId, contactId, phone, workerLive } : null,
+    blockers: [...(valid ? [] : ['The owner number from the MHP SMS pilot settings is needed.']),
+      ...(workerLive ? [] : ['Sending waits until the MHP WhatsApp worker is live (MHP_WHATSAPP_WORKER_LIVE_CONFIRMED=true).'])] };
 }
 
 /** Non-secret output of the off-web seal CLI. The token itself never reaches the web process. */
@@ -57,8 +62,11 @@ function failure(error: unknown): never {
   const message = error && typeof error === 'object' && 'message' in error ? String((error as { message: unknown }).message) : '';
   if (code === '42501' && message.includes('hard send cap')) throw new MhpCommerceError(409, 'WhatsApp allows one test a day and three a month on this number. Try again tomorrow.');
   if (code === '42501' && message.includes('Verify your own number')) throw new MhpCommerceError(409, 'Verify your own number on the phone test page first.');
+  if (code === '42501' && message.includes('opt-out')) throw new MhpCommerceError(409, 'WhatsApp is blocked by an opt-out on this number.');
+  if (code === '42501' && message.includes('format the rail cannot honour')) throw new MhpCommerceError(409, 'A CRM WhatsApp entry for this number must be removed before the test.');
   if (code === '42501') throw new MhpCommerceError(403, 'This MHP owner session, sender or permission is not authorised.');
-  if (code === '23505') throw new MhpCommerceError(409, 'The MHP WhatsApp sender is already connected.');
+  if (code === '23505' && message.includes('already connected')) throw new MhpCommerceError(409, 'The MHP WhatsApp sender is already connected.');
+  if (code === '23505') throw new MhpCommerceError(409, 'That template or step is already recorded. Refresh the page.');
   if (code === '40001' || code === '23514') throw new MhpCommerceError(409, 'Something changed since you looked. Refresh and review again.');
   throw new MhpCommerceError(503, 'The WhatsApp step could not complete. Refresh its recorded status before trying again.');
 }
@@ -164,9 +172,9 @@ export class MhpOwnedWhatsAppService {
   }
   /** Approve the exact draft if needed, then pin it as the Meta-approved template. */
   async recordTemplate(identity: PortalSessionIdentity, requestId: string, input: { commandId: string; templateId: string; itemId: string; versionId: string;
-    sha256: string; category: string; metaTemplateId: string; approvalReference: string; confirmed: boolean }, now = Date.now()) {
+    sha256: string; category: string; metaTemplateId: string; approvalReference: string; confirmed: boolean; contentApproved: boolean }, now = Date.now()) {
     const context = await this.#context(identity, requestId), { repository, config } = this.#ready();
-    if (!UUID.test(input.commandId) || !UUID.test(input.templateId) || !HEX64.test(input.sha256) || !input.confirmed
+    if (!UUID.test(input.commandId) || !UUID.test(input.templateId) || !HEX64.test(input.sha256) || !input.confirmed || !input.contentApproved
         || (input.category !== 'utility' && input.category !== 'marketing') || !META_ID.test(input.metaTemplateId)
         || input.approvalReference.trim().length < 8 || input.approvalReference.trim().length > 500) {
       throw new MhpCommerceError(400, 'Enter the Meta template ID and approval reference, and confirm Meta shows it Approved.');
@@ -184,6 +192,7 @@ export class MhpOwnedWhatsAppService {
   async send(identity: PortalSessionIdentity, requestId: string, input: { commandId: string; templateId: string; agreed: boolean }) {
     const context = await this.#context(identity, requestId), { repository, config } = this.#ready();
     if (!UUID.test(input.commandId) || !UUID.test(input.templateId) || !input.agreed) throw new MhpCommerceError(400, 'Tick the one-test agreement first.');
+    if (!config.workerLive) throw new MhpCommerceError(409, 'Switch the MHP WhatsApp worker live before sending, so the test is not wasted.');
     const snapshot = await repository.snapshot(context, identity, config);
     if (!snapshot.bindingId) throw new MhpCommerceError(409, 'Connect the MHP WhatsApp sender first.');
     const command = { commandId: input.commandId, bindingId: snapshot.bindingId, templateId: input.templateId, agreed: input.agreed };
