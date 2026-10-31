@@ -19,6 +19,9 @@ export interface MhpSignup {
   email: string; firstName: string | null; level: 'L1' | 'L2' | 'L3' | null; consent: boolean;
   kind: 'sheet' | 'webinar' | 'waitlist'; label: string; module: string | null; link: string | null;
 }
+export interface MhpCapturedSignup {
+  prospectId: string; queued: number; signupId: string; campaign: string | null; entryEventSequence: string | null;
+}
 export interface MhpClaimedSend {
   id: string; prospectId: string; template: string; campaign: string; context: Record<string, unknown>;
   email: string; firstName: string | null; level: string | null; attempts: number; expiresAt: string;
@@ -154,15 +157,20 @@ export class PgMhpGrowthService {
   constructor(private readonly readPool: Pick<Pool, 'query'>, private readonly commandPool: Pick<Pool, 'query'>,
     private readonly webinar: MhpWebinarConfig) {}
 
-  async capture(signup: MhpSignup, sourceHash: Buffer | null, now = Date.now()): Promise<{ prospectId: string; queued: number }> {
+  async capture(signup: MhpSignup, sourceHash: Buffer | null, now = Date.now()): Promise<MhpCapturedSignup> {
     const schedule = mhpSchedule(signup, this.webinar, now);
+    const campaign = signup.kind === 'webinar' ? this.webinar.campaign : null;
     try {
-      const result = await this.commandPool.query<{ outcome: { prospectId: string; queued: number } }>(
-        'SELECT app_private.mhp_capture_signup($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) AS outcome',
+      const result = await this.commandPool.query<{ outcome: MhpCapturedSignup }>(
+        'SELECT app_private.mhp_capture_signup_v2($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) AS outcome',
         [signup.email, signup.firstName, signup.level, signup.consent, MHP_CONSENT_VERSION, signup.kind, signup.label,
-          signup.module, signup.link, sourceHash?.length === 32 ? sourceHash : null, JSON.stringify(schedule)]);
+          signup.module, signup.link, sourceHash?.length === 32 ? sourceHash : null, JSON.stringify(schedule), campaign]);
       const outcome = result.rows[0]?.outcome;
-      if (!outcome || !UUID.test(outcome.prospectId)) throw new MhpGrowthError(503, 'Sign-up is temporarily unavailable.');
+      if (!outcome || !UUID.test(outcome.prospectId) || !UUID.test(outcome.signupId) || outcome.campaign !== campaign
+          || !Number.isSafeInteger(outcome.queued) || outcome.queued < 0
+          || (campaign !== null ? typeof outcome.entryEventSequence !== 'string' || !/^[1-9][0-9]{0,18}$/u.test(outcome.entryEventSequence) : outcome.entryEventSequence !== null)) {
+        throw new MhpGrowthError(503, 'Sign-up is temporarily unavailable.');
+      }
       return outcome;
     } catch (error) {
       if (error instanceof MhpGrowthError) throw error;

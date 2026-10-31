@@ -3,6 +3,7 @@ import { MHP_SITE_ORIGIN, mhpUnsubscribeUrl, type MhpClaimedSend, type MhpTempla
 import { MHP_MARKETING_TEMPLATES } from './marketing-templates.js';
 import { dispatchMhpOwnerEmails, type MhpOwnerEmailDispatch } from './owner-email-dispatch.js';
 import { dispatchMhpSequenceEmails, type MhpSequenceDispatch } from './followup-sequence-dispatch.js';
+import type { FollowupEntrySweepResult } from '../followup-sequences/entry.js';
 
 /**
  * Sends the queued sign-up emails through a Postmark broadcast stream.
@@ -96,7 +97,8 @@ export function createMhpMarketingSender(config: MhpMarketingConfig, unsubscribe
 export function startMhpMarketingDispatcher(growth: Pick<PgMhpGrowthService, 'claim' | 'settle'>, sender: MhpMarketingSender,
   config: Pick<MhpMarketingConfig, 'testRecipients'>, options: { intervalMs?: number; onResult?: (result: { sent: number; failed: number }) => void;
     owner?: { queue: MhpOwnerEmailDispatch; sender: MhpRenderedMarketingSender; unsubscribeSecret: string };
-    sequences?: { queue: MhpSequenceDispatch; sender: MhpRenderedMarketingSender; unsubscribeSecret: string } } = {}): () => void {
+    sequences?: { queue: MhpSequenceDispatch; sender: MhpRenderedMarketingSender; unsubscribeSecret: string;
+      onEntryResult?: (result: FollowupEntrySweepResult) => void; onEntryError?: () => void } } = {}): () => void {
   let stopped = false, running = false;
   const runOnce = async (): Promise<void> => {
     if (running || stopped) return;

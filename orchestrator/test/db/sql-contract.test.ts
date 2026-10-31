@@ -131,6 +131,7 @@ const migration124Url = new URL('../../src/db/migrations/0124_mhp_brand_marketin
 const migration125Url = new URL('../../src/db/migrations/0125_mhp_webinar_lead_candidates.sql', import.meta.url);
 const migration126Url = new URL('../../src/db/migrations/0126_mhp_owner_email_editor.sql', import.meta.url);
 const migration127Url = new URL('../../src/db/migrations/0127_mhp_followup_sequences.sql', import.meta.url);
+const migration128Url = new URL('../../src/db/migrations/0128_mhp_sequence_capture_entry.sql', import.meta.url);
 
 function normalise(sql: string): string {
   return sql.replace(/--[^\n]*/g, ' ').replace(/\s+/g, ' ').trim();
@@ -694,6 +695,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: '0125_mhp_webinar_lead_candidates.sql', version: 125 },
     { filename: '0126_mhp_owner_email_editor.sql', version: 126 },
     { filename: '0127_mhp_followup_sequences.sql', version: 127 },
+    { filename: '0128_mhp_sequence_capture_entry.sql', version: 128 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -817,11 +819,12 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration125Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration126Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration127Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration128Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.
   assert.equal(sources.length, tail.length);
-  assert.equal(tail.at(-1)?.checksum, 'bfd4319fe4a0f07b93d54d528b54f3468ae0857ad53e53a8b7a038ebb1a76f23');
+  assert.equal(tail.at(-1)?.checksum, '09b35b4eaf6e934c8f560e8d9d645bd3b9f37a34268f77f4afd974ecd1b54e97');
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
   }

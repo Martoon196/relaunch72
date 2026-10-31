@@ -4,7 +4,7 @@ import type { CompanyContentService, CompanyContentTransactionRunner, CreateComp
 import type { DatabaseRequestContext } from '../src/db/rls.js';
 import { MhpSequenceService, PgMhpSequenceRepository, type MhpSequenceRepository } from '../src/mhp/followup-sequence-service.js';
 import { MhpCommerceError } from '../src/mhp/commerce-service.js';
-import { readCanonicalFollowupSequence, followupSequenceSha } from '../src/followup-sequences/definition.js';
+import { canonicalFollowupSequence, readCanonicalFollowupSequence, followupSequenceSha, FOLLOWUP_SEQUENCE_V2_SCHEMA } from '../src/followup-sequences/definition.js';
 import { ids, identity, tokenHash, now, snapshot as emailSnapshot, review as emailReview, local as emailLocal } from './helpers/mhp-owner-email-fixture.js';
 import { sequenceIds, sequenceDefinition as definition, sequenceSnapshot as snapshot, sequenceDetail as detail } from './helpers/mhp-sequence-fixture.js';
 
@@ -81,4 +81,36 @@ test('PG boundary hashes real native token, uses server campaign and exact unkno
   await repository.command(identity, { ...action, action: 'resume', runId: sequenceIds.run, ackProofId: sequenceIds.proof, campaign: definition.campaign, requestId: ids.request });
   assert.deepEqual(calls[0]!.args[0], tokenHash); assert.deepEqual(calls[0]!.args.slice(1), ['resume', ids.command, sequenceIds.version, definition.campaign, sequenceIds.run, sequenceIds.proof, ids.request]);
   assert.match(calls[0]!.sql, /^SELECT app_private\.mhp_sequence_command/u);
+});
+test('future entry requires published current intent and current email readiness; off leaves runs alone even after stale draft', async () => {
+  const f = fixture();
+  f.repository.entryCommand = async (_identity, input) => { f.state.calls.push(`entry:${input.action}`); assert.equal(input.campaign, definition.campaign);
+    return { action: input.action, contentItemId: sequenceIds.item, contentVersionId: sequenceIds.version, ruleId: sequenceIds.proof,
+      state: input.action === 'activate' ? 'active' : 'off', expiresAt: input.expiresAt || '2026-11-08T00:00:00.000Z', watermark: '21', replayed: false }; };
+  const entry = { action: 'activate' as const, commandId: ids.command, itemId: sequenceIds.item, versionId: sequenceIds.version, ruleId: '', expiresAt: '2026-11-08T00:00:00.000Z' };
+  await assert.rejects(f.service.entryCommand(identity, ids.request, entry, now), { status: 409 }); assert.deepEqual(f.state.calls, []);
+  const future = { ...definition, schema: FOLLOWUP_SEQUENCE_V2_SCHEMA, entry: { mode: 'webinar_signup', source: 'mhp.capture/v2' } }, canonical = canonicalFollowupSequence(future), sha = followupSequenceSha(canonical);
+  f.state.review = { ...f.state.review, canonicalContent: canonical, contentSha256: sha, approvalStatus: 'approved' };
+  f.state.local = { ...f.state.local, canonicalContent: canonical, contentSha256: sha, exact: { ...f.state.local.exact!, canonicalContent: canonical, contentSha256: sha, definition: readCanonicalFollowupSequence(canonical) } };
+  f.state.emailLatest = false; await assert.rejects(f.service.entryCommand(identity, ids.request, entry, now), { status: 409 }); assert.deepEqual(f.state.calls, []);
+  f.state.emailLatest = true; assert.equal((await f.service.entryCommand(identity, ids.request, { ...entry, campaign: 'browser-choice' } as any, now)).state, 'active');
+  f.state.review = { ...f.state.review, isLatest: false }; f.state.local = { ...f.state.local, valid: false };
+  assert.equal((await f.service.entryCommand(identity, ids.request, { ...entry, action: 'off', ruleId: sequenceIds.proof, expiresAt: '' }, now)).state, 'off');
+  assert.deepEqual(f.state.calls, ['entry:activate', 'entry:off']);
+});
+test('entry command validates exact expiry, rule identity and native selected workspace before mutation', async () => {
+  const f = fixture(), entry = { action: 'activate' as const, commandId: ids.command, itemId: sequenceIds.item, versionId: sequenceIds.version, ruleId: '', expiresAt: 'bad' };
+  await assert.rejects(f.service.entryCommand({ ...identity, workspaceId: ids.prospect }, ids.request, entry, now), { status: 403 });
+  await assert.rejects(f.service.entryCommand(identity, ids.request, entry, now), { status: 400 });
+  await assert.rejects(f.service.entryCommand(identity, ids.request, { ...entry, action: 'off', ruleId: 'fake', expiresAt: '' }, now), { status: 400 });
+  assert.deepEqual(f.state.calls, []);
+});
+test('PG future-entry boundary passes only native token hash and trusted campaign with exact activation fields', async () => {
+  const calls: { sql: string; args: unknown[] }[] = [];
+  const pool = { query: async (sql: string, args: unknown[]) => { calls.push({ sql, args }); return { rows: [{ value: { action: 'activate', contentItemId: sequenceIds.item,
+    contentVersionId: sequenceIds.version, ruleId: sequenceIds.proof, state: 'active', expiresAt: '2026-11-08T00:00:00.000Z', watermark: '21', replayed: false } }] }; } } as any;
+  await new PgMhpSequenceRepository(pool, pool).entryCommand(identity, { action: 'activate', commandId: ids.command, itemId: sequenceIds.item, versionId: sequenceIds.version,
+    ruleId: '', expiresAt: '2026-11-08T00:00:00.000Z', campaign: definition.campaign, requestId: ids.request });
+  assert.deepEqual(calls[0]!.args, [tokenHash, 'activate', ids.command, sequenceIds.version, definition.campaign, null, '2026-11-08T00:00:00.000Z', ids.request]);
+  assert.match(calls[0]!.sql, /^SELECT app_private\.mhp_sequence_entry_command/u);
 });

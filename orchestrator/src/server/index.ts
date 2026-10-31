@@ -988,7 +988,10 @@ async function main(): Promise<void> {
         owner: postgresPortal.mhp.ownerEmailDispatch ? { queue: postgresPortal.mhp.ownerEmailDispatch,
           sender: mhpMarketingSender!, unsubscribeSecret: cfg.sessionSecret } : undefined,
         sequences: postgresPortal.mhp.sequenceDispatch ? { queue: postgresPortal.mhp.sequenceDispatch,
-          sender: mhpMarketingSender!, unsubscribeSecret: cfg.sessionSecret } : undefined,
+          sender: mhpMarketingSender!, unsubscribeSecret: cfg.sessionSecret,
+          onEntryResult: result => { if (result.processed) console.info(JSON.stringify({ event: 'mhp.sequence.entry.sweep', ...result })); },
+          onEntryError: () => console.warn('MHP future signup entry is unavailable; existing sequence delivery continues.'),
+        } : undefined,
         onResult: result => { if (result.failed > 0) console.warn(`MHP sign-up emails: ${result.sent} sent, ${result.failed} need a retry.`); },
       })
     : () => {};
