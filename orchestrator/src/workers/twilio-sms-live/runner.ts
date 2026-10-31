@@ -25,6 +25,7 @@ import {
 } from '../../sms-live-pg/readiness.js';
 import { createTwilioMessagingHttpAdapterFromRestrictedKeyEnvironment } from '../../providers/twilio-messaging-http-adapter.js';
 import { runSmsPhoneVerificationOnce, smsVerificationDisplayBrand } from '../../sms-live-pg/phone-verification.js';
+import { mhpEventSmsCodesEnabled, runMhpEventSmsCodeOnce } from '../../sms-live-pg/event-sms-codes.js';
 import { assertRuntimeSchemaCurrent } from '../../db/runtime-readiness.js';
 import { assertExpectedDatabaseInstallation } from '../../db/installation-identity.js';
 
@@ -82,6 +83,7 @@ export interface TwilioSmsLiveWorkerReadiness {
     phoneVerificationEnabled: boolean;
     emergencyPaused: boolean;
     marketingEmergencyPaused: boolean;
+    mhpEventCodesEnabled: boolean;
     dispatchLoopStarted: boolean;
     recipientsPerJob: 1;
     dailySegmentCap: 10;
@@ -103,6 +105,8 @@ export interface ActiveTwilioSmsWorkerConfig extends WorkerConfigBase {
   readonly mode: 'owned_number_live';
   readonly workspaceId: string;
   readonly connectionId: string;
+  /** MHP009B public webinar opt-in codes, behind their own explicit switch. */
+  readonly mhpEventCodes: boolean;
 }
 
 export interface VerificationOnlySmsWorkerConfig extends WorkerConfigBase {
@@ -213,6 +217,9 @@ export function loadTwilioSmsWorkerConfig(
       verificationDisplayBrand: smsVerificationDisplayBrand(env.PROPERTY_PREDATOR_SMS_VERIFICATION_DISPLAY_BRAND),
     });
   }
+  if (env.MHP_EVENT_SMS_CODES_ENABLED === 'true' && runtime.mode === 'disabled') {
+    throw new Error('MHP webinar codes need the owned-number live worker mode');
+  }
   if (runtime.mode === 'disabled') {
     return Object.freeze({ mode: 'disabled', installationId, pollIntervalMs, runtime });
   }
@@ -221,6 +228,9 @@ export function loadTwilioSmsWorkerConfig(
   if (!UUID.test(workspaceId) || !UUID.test(connectionId)) {
     throw new Error('Twilio SMS live mode requires exact workspace and connection bindings');
   }
+  if (env.MHP_EVENT_SMS_CODES_ENABLED === 'true' && !mhpEventSmsCodesEnabled(env, workspaceId)) {
+    throw new Error('MHP webinar codes are bound to the MHP workspace only');
+  }
   return Object.freeze({
     mode: 'owned_number_live',
     installationId,
@@ -228,6 +238,7 @@ export function loadTwilioSmsWorkerConfig(
     runtime,
     workspaceId,
     connectionId,
+    mhpEventCodes: mhpEventSmsCodesEnabled(env, workspaceId) && runtime.providerEffectsEnabled && runtime.smsDeliveryEnabled,
   });
 }
 
@@ -365,6 +376,7 @@ export async function startTwilioSmsLiveWorker(
       phoneVerificationEnabled: config.mode === 'verification_only',
       emergencyPaused: config.mode === 'verification_only' ? false : config.runtime.emergencyPaused,
       marketingEmergencyPaused: config.runtime.emergencyPaused,
+      mhpEventCodesEnabled: config.mode === 'owned_number_live' && config.mhpEventCodes && !config.runtime.emergencyPaused,
       dispatchLoopStarted: config.mode !== 'disabled',
       recipientsPerJob: 1 as const,
       dailySegmentCap: 10 as const,
@@ -400,12 +412,19 @@ export async function startTwilioSmsLiveWorker(
     }
     if (!repository) return Promise.resolve('disabled');
     const boundRepository = repository;
-    inFlight = runTwilioSmsLiveOnce({
+    const marketing = (): Promise<TwilioSmsWorkerCycleResult> => runTwilioSmsLiveOnce({
       config: config.runtime,
       repository: boundRepository,
       transport: boundTransport,
       leaseToken: randomBytes(32),
-    }).finally(() => { inFlight = null; });
+    });
+    // At most one provider call per cycle: a pending opt-in code goes first,
+    // and the marketing queue runs only when no code is waiting.
+    inFlight = (config.mhpEventCodes && !config.runtime.emergencyPaused
+      ? runMhpEventSmsCodeOnce(pool, boundTransport, { workspaceId: config.workspaceId, connectionId: config.connectionId })
+        .then((result): Promise<TwilioSmsWorkerCycleResult> | TwilioSmsWorkerCycleResult => result === 'idle' ? marketing()
+          : result === 'sent' ? 'settled' : 'failed_or_attention')
+      : marketing()).finally(() => { inFlight = null; });
     return inFlight;
   };
 
