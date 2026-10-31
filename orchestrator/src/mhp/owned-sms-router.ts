@@ -18,7 +18,7 @@ const FIELDS: Readonly<Record<string, readonly string[]>> = {
 };
 function send(res: ServerResponse, status: number, body: string, html = false): void {
   res.writeHead(status, { 'content-type': html ? 'text/html; charset=utf-8' : 'text/plain; charset=utf-8',
-    'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff',
+    'cache-control': 'no-store', 'referrer-policy': 'same-origin', 'x-content-type-options': 'nosniff',
     'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" }); res.end(body);
 }
 async function form(req: IncomingMessage, fields: readonly string[]): Promise<URLSearchParams> {

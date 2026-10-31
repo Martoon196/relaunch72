@@ -48,9 +48,11 @@ export function ownedSmsRouterFixture() {
 }
 test('real MHP host mount forwards owned test and offers connection, private verification and one Send action', async () => {
   const f = ownedSmsRouterFixture(); let page = await f.request('GET', BASE);
+  assert.equal(page.headers['referrer-policy'], 'same-origin');
   assert.equal(page.status, 200); assert.match(page.body, /Connect MHP sender/u); assert.match(page.body, /17px/u); assert.doesNotMatch(page.body, /name="code"/u);
   await f.request('POST', `${BASE}/connect`, f.form({ ownershipEvidence: 'actual-purchase', regulatoryEvidence: 'actual-registration', confirmed: 'yes' }));
   page = await f.request('POST', `${BASE}/request-code`, f.form({})); assert.equal(page.status, 200); assert.match(page.body, /Six-digit code/u);
+  assert.equal(page.headers['referrer-policy'], 'same-origin');
   page = await f.request('POST', `${BASE}/confirm-code`, f.form({ challengeId: ids.request, code: '123456' }));
   assert.equal(page.status, 200); assert.equal(f.state.code, '123456'); assert.doesNotMatch(page.body, /123456/u);
   page = await f.request('POST', `${BASE}/save`, f.form({ bodyText: MHP_OWNED_SMS_DEFAULT_BODY, itemId: '', previousVersionId: '' }));
@@ -61,6 +63,7 @@ test('real MHP host mount forwards owned test and offers connection, private ver
 });
 test('bad Origin, CSRF, hidden workspace injection and another host cannot reach commands', async () => {
   const f = ownedSmsRouterFixture();
+  assert.equal((await f.request('POST', `${BASE}/request-code`, f.form({}), { origin: 'null' })).status, 403);
   assert.equal((await f.request('POST', `${BASE}/request-code`, f.form({}), { origin: 'https://hq.propertypredator.com' })).status, 403);
   assert.equal((await f.request('POST', `${BASE}/request-code`, f.form({ csrf: 'wrong' }))).status, 403);
   assert.equal((await f.request('POST', `${BASE}/request-code`, f.form({ workspaceId: ids.prospect }))).status, 400);
