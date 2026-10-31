@@ -13,17 +13,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout the exact MHP owned SMS browser form correction
+      - name: Checkout the exact MHP owned SMS publication correction
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Martoon196/relaunch72
-          ref: e3a84626105754f628e5fd030b61e07285359012
+          ref: 9ca2d59122d26829bec1eb56235c2ef3f25a522b
           persist-credentials: false
       - name: Assert exact source identity
         shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = e3a84626105754f628e5fd030b61e07285359012
-          test "$(git rev-parse 'HEAD^{tree}')" = 89fe6be2a9fa776b2de7e6d7774e9076ffaa2cd5
+          test "$(git rev-parse HEAD)" = 9ca2d59122d26829bec1eb56235c2ef3f25a522b
+          test "$(git rev-parse 'HEAD^{tree}')" = 42429022f0f316c98c98bfd7489c6c893c882778
           test -z "$(git status --porcelain)"
           git rev-parse HEAD 'HEAD^{tree}'
       - name: Match the Render Node runtime
