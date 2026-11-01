@@ -34,6 +34,10 @@ const MHP_OWNED_SMS_MIGRATION = '0130_mhp_owned_sms_pilot.sql';
 const MHP_OWNED_SMS_CHECKSUM = 'e6bb5be3a87e0fde3e29d3f47edde1c5daf8492f4c368f80e2e4335f5b239797';
 const SEO_BLOG_MIGRATION = '0131_seo_blog_engine.sql';
 const SEO_BLOG_CHECKSUM = '904c4651c51da6507370ca7eb2f271ca0347a27d76c60b0f24a19aba01695784';
+const SEO_BLOG_SOCIAL_MIGRATION = '0132_seo_blog_social_promotion.sql';
+const SEO_BLOG_SOCIAL_CHECKSUM = '6a413abf1e1f04c7ce7cfa181c2ee6c7ced7b0155fcc2c4106ff860c98fa03cb';
+const SEO_BLOG_SOCIAL_DISPATCH_MIGRATION = '0133_seo_blog_social_dispatch_reservations.sql';
+const SEO_BLOG_SOCIAL_DISPATCH_CHECKSUM = '457402d6dc48129fe457044564a99720061bdc2e701e84ddbbb9cd957bba591f';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -160,6 +164,27 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(MHP_OWNED_SMS_MIGRATION) === MHP_OWNED_SMS_CHECKSUM
       && applied.get(SEO_BLOG_MIGRATION) === SEO_BLOG_CHECKSUM) {
     applied.delete(SEO_BLOG_MIGRATION);
+  }
+  // The131 recovery artifact may also admit only this exact consecutive132+133
+  // pair. It never bundles either migration; final133 runtimes stay strict.
+  if (migrations.length === 131
+      && migrations[130]?.filename === SEO_BLOG_MIGRATION
+      && migrations[130]?.checksum === SEO_BLOG_CHECKSUM
+      && applied.get(SEO_BLOG_MIGRATION) === SEO_BLOG_CHECKSUM
+      && applied.get(SEO_BLOG_SOCIAL_MIGRATION) === SEO_BLOG_SOCIAL_CHECKSUM
+      && applied.get(SEO_BLOG_SOCIAL_DISPATCH_MIGRATION) === SEO_BLOG_SOCIAL_DISPATCH_CHECKSUM) {
+    applied.delete(SEO_BLOG_SOCIAL_DISPATCH_MIGRATION);
+  }
+  // The exact131 recovery runtime stays ready through this reviewed additive132
+  // (SEO blog social promotion). A release bundling132 takes the strict path.
+  // Source and database must both retain the exact131 tail; unknown, missing
+  // and changed earlier rows fail.
+  if (migrations.length === 131
+      && migrations[130]?.filename === SEO_BLOG_MIGRATION
+      && migrations[130]?.checksum === SEO_BLOG_CHECKSUM
+      && applied.get(SEO_BLOG_MIGRATION) === SEO_BLOG_CHECKSUM
+      && applied.get(SEO_BLOG_SOCIAL_MIGRATION) === SEO_BLOG_SOCIAL_CHECKSUM) {
+    applied.delete(SEO_BLOG_SOCIAL_MIGRATION);
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
