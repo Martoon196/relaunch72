@@ -50,6 +50,8 @@ export interface PgMetaWhatsAppLiveWebhookCommandServiceDependencies {
   readonly workspaceId: string;
   readonly connectionId: string;
   readonly bindingId: string;
+  /** MHP009C: route the MHP binding's inbound through the signed JOIN/STOP wrapper (off by default). */
+  readonly mhpEventWhatsApp?: boolean;
 }
 
 export class PgMetaWhatsAppLiveWebhookCommandService
@@ -58,12 +60,14 @@ implements MetaWhatsAppLiveWebhookCommandService {
   readonly connectionId: string;
   readonly #bindingId: string;
   readonly #commandPool: Pick<Pool, 'connect'>;
+  readonly mhpEventWhatsApp: boolean;
 
   constructor(dependencies: PgMetaWhatsAppLiveWebhookCommandServiceDependencies) {
     this.workspaceId = uuid(dependencies.workspaceId, 'workspace binding');
     this.connectionId = uuid(dependencies.connectionId, 'connection binding');
     this.#bindingId = uuid(dependencies.bindingId, 'credential binding');
     this.#commandPool = dependencies.commandPool;
+    this.mhpEventWhatsApp = dependencies.mhpEventWhatsApp === true && this.workspaceId === '2789228d-55a6-4688-b1e8-2f70abca990b';
   }
 
   async recordStatus(input: Readonly<{
@@ -114,6 +118,24 @@ implements MetaWhatsAppLiveWebhookCommandService {
       input.payloadSha256,
       input.signatureSha256,
     ].join('\u001f')).digest();
+    const values = [this.workspaceId, this.#bindingId, event.externalEventId,
+        event.providerMessageId, event.senderId, event.body, senderSha256,
+        bodySha256, payloadSha256, signatureSha256, eventIdentitySha256,
+        event.occurredAt];
+    if (this.mhpEventWhatsApp) {
+      // MHP009C: signed JOIN/STOP wrapper; delegates to the unchanged 0055 projection in one READ COMMITTED transaction.
+      return withTransaction(this.#commandPool, { actorKind: 'webhook', workspaceId: this.workspaceId, requestId: this.#requestId(event.externalEventId) },
+        async (transaction) => {
+          const rows = (await transaction.query<{ outcome: unknown } & QueryResultRow>(
+            `/* mhp-event-whatsapp.record-inbound */ SELECT inbound.disposition AS outcome FROM app_private.mhp_record_event_whatsapp_inbound(
+              $1::uuid,$2::uuid,$3::text,$4::text,$5::text,$6::text,$7::bytea,$8::bytea,$9::bytea,$10::bytea,$11::bytea,$12::timestamptz) AS inbound`, values)).rows;
+          const value = rows[0]?.outcome;
+          if (rows.length !== 1 || typeof value !== 'string') throw new Error('Meta WhatsApp webhook recorder returned an invalid outcome');
+          if (value === 'conflict' || value === 'replayed') return value as WebhookOutcome;
+          if (['applied', 'event_joined', 'event_held', 'event_join_expired', 'unprojected'].includes(value)) return 'applied' as WebhookOutcome;
+          throw new Error('Meta WhatsApp webhook recorder returned an invalid outcome');
+        }, { isolation: 'read committed' });
+    }
     return withTransaction(this.#commandPool, {
       actorKind: 'webhook', workspaceId: this.workspaceId,
       requestId: this.#requestId(event.externalEventId),
@@ -125,10 +147,7 @@ implements MetaWhatsAppLiveWebhookCommandService {
          $7::bytea, $8::bytea, $9::bytea, $10::bytea, $11::bytea,
          $12::timestamptz
        ) AS projection`,
-      [this.workspaceId, this.#bindingId, event.externalEventId,
-        event.providerMessageId, event.senderId, event.body, senderSha256,
-        bodySha256, payloadSha256, signatureSha256, eventIdentitySha256,
-        event.occurredAt],
+      values,
     )), { isolation: 'serializable' });
   }
 

@@ -134,6 +134,10 @@ test('MHP009C WhatsApp follow-up: own JOIN, Meta read, owner batch and absolute-
     assert.deepEqual(stop[0], { wa: 1, sms: 0 });
 
     // No owner-typed approval: until the worker reads APPROVED from Meta nobody can be scheduled.
+    // The worker learns exactly which template to read; the sealed credential decrypts only in the worker.
+    const targets = await as<{ meta_template_id: string; template_name: string }>(p.r72_whatsapp_live_worker_command, 'worker',
+      'SELECT meta_template_id,template_name FROM app_private.mhp_event_whatsapp_observation_targets($1,$2)', [WS, WA_BINDING]);
+    assert.deepEqual(targets, [{ meta_template_id: META_ID, template_name: 'mhp_webinar_20261104_reminder_v1' }]);
     let first = await review(p);
     assert.equal(first.templateObservation.current, false); assert.equal(first.selectedReceiptIds.length, 0);
     await observe(p, 'PENDING');

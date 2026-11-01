@@ -1756,6 +1756,32 @@ BEGIN
  RETURN FOUND;
 END $f$;
 
+-- What the worker must read from Meta: the sealed binding credential (decrypted
+-- only in the worker) and each current approved programme's exact template.
+CREATE FUNCTION app_private.mhp_event_whatsapp_observation_targets(p_workspace_id uuid,p_binding_id uuid)
+RETURNS TABLE(binding_id uuid,provider_connection_id uuid,app_id text,waba_id text,phone_number_id text,graph_api_version text,secret_key_version text,
+ secret_iv bytea,secret_ciphertext bytea,secret_auth_tag bytea,secret_aad_sha256 bytea,secret_payload_sha256 bytea,meta_template_id text,template_name text,language_code text)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE programme jsonb; binding app.property_predator_whatsapp_live_bindings%ROWTYPE;
+BEGIN
+ PERFORM app_private.mhp_event_whatsapp_worker_context(p_workspace_id);
+ binding:=app_private.mhp_event_whatsapp_binding(p_binding_id);
+ IF binding.id IS NULL THEN RETURN; END IF;
+ FOR programme IN SELECT app_private.mhp_event_whatsapp_programme_exact(v.id,true) FROM app.company_content_versions v
+  WHERE v.workspace_id=p_workspace_id AND v.source_system='mhp.event-whatsapp' AND NOT EXISTS(SELECT 1 FROM app.company_content_versions n
+   WHERE n.workspace_id=v.workspace_id AND n.content_item_id=v.content_item_id AND n.version_number>v.version_number) LOOP
+  IF programme->>'approvalId' IS NOT NULL AND programme->>'whatsappBindingId'=binding.id::text
+   AND (programme->>'providerDeadline')::timestamptz>statement_timestamp() THEN
+   RETURN QUERY SELECT binding.id,binding.provider_connection_id,binding.app_id,binding.waba_id,binding.phone_number_id,binding.graph_api_version,
+    binding.secret_key_version,binding.secret_iv,binding.secret_ciphertext,binding.secret_auth_tag,binding.secret_aad_sha256,binding.secret_payload_sha256,
+    programme->>'metaTemplateId',programme->>'templateName',programme->>'language';
+  END IF;
+ END LOOP;
+EXCEPTION WHEN sqlstate '23514' OR sqlstate '42501' THEN RETURN;
+END $f$;
+REVOKE ALL ON FUNCTION app_private.mhp_event_whatsapp_observation_targets(uuid,uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_private.mhp_event_whatsapp_observation_targets(uuid,uuid) TO r72_whatsapp_live_worker_command;
+
 CREATE FUNCTION app_private.mhp_hold_event_whatsapp() RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE ws constant uuid:='2789228d-55a6-4688-b1e8-2f70abca990b'; held integer; cancelled integer; report jsonb;

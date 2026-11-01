@@ -9,7 +9,7 @@ import { MhpCommerceError } from './commerce-service.js';
 import { MHP_EVENT_PHONE_CAPABILITY_COOKIE, MHP_EVENT_PHONE_OWNER_ROUTE, MHP_EVENT_PHONE_ROUTE, type MhpEventPhoneOwner,
   type PgMhpEventPhonePublic } from './event-phone-service.js';
 import { mhpEventPhoneChoosePage, mhpEventPhoneMessagePage, mhpEventPhoneOpenPage, mhpEventPhoneOwnerPage, mhpEventPhoneRequestPage,
-  mhpEventPhoneSentPage } from './event-phone-view.js';
+  mhpEventPhoneSentPage, mhpEventPhoneWhatsAppPage } from './event-phone-view.js';
 
 const CSP = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 function send(res: ServerResponse, status: number, body: string, headers: Record<string, string> = {}): void {
@@ -43,13 +43,14 @@ async function admit(portal: PostgresPortalDeps, admission: ReturnType<typeof so
   if (decision.leaseHash) leases.push(decision.leaseHash);
 }
 
-type Public = Pick<PgMhpEventPhonePublic, 'requestLink' | 'open' | 'status' | 'choose' | 'withdraw' | 'senderNumber'>;
+type Public = Pick<PgMhpEventPhonePublic, 'requestLink' | 'open' | 'status' | 'choose' | 'withdraw' | 'senderNumber'>
+  & Partial<Pick<PgMhpEventPhonePublic, 'whatsappNumber' | 'whatsappStatus' | 'chooseWhatsApp' | 'withdrawWhatsApp'>>;
 /** Anonymous registrant pages: no session, no owner context, no CRM access. */
 export async function handleMhpEventPhonePublic(req: IncomingMessage, res: ServerResponse, url: URL,
   dependencies: { portal: PostgresPortalDeps; reminders: Public }): Promise<boolean> {
   const path = url.pathname.replace(/\/+$/, '');
   const action = path === MHP_EVENT_PHONE_ROUTE ? '' : path.startsWith(`${MHP_EVENT_PHONE_ROUTE}/`) ? path.slice(MHP_EVENT_PHONE_ROUTE.length + 1) : null;
-  if (action === null || !['', 'open', 'choose', 'withdraw'].includes(action)) return false;
+  if (action === null || !['', 'open', 'choose', 'withdraw', 'whatsapp', 'whatsapp/choose', 'whatsapp/withdraw'].includes(action)) return false;
   const { portal, reminders } = dependencies, leases: Buffer[] = [];
   let outcome: 'success' | 'service_error' = 'success';
   try {
@@ -63,10 +64,15 @@ export async function handleMhpEventPhonePublic(req: IncomingMessage, res: Serve
       await admit(portal, sourceAbuseAdmission(context, 'read.page', now), leases);
       if (action === '' && url.search === '') { send(res, 200, mhpEventPhoneRequestPage()); return true; }
       if (action === 'open' && [...url.searchParams.keys()].join() === 't') { send(res, 200, mhpEventPhoneOpenPage(url.searchParams.get('t') ?? '')); return true; }
+      if (action === 'whatsapp' && url.search === '' && reminders.whatsappNumber && reminders.whatsappStatus) {
+        const wa = await reminders.whatsappStatus(capability);
+        if (!wa) { send(res, 401, mhpEventPhoneMessagePage('Your link has expired', 'Ask for a new email link to continue. It works for 15 minutes.')); return true; }
+        send(res, 200, mhpEventPhoneWhatsAppPage({ status: wa, csrf, number: reminders.whatsappNumber })); return true;
+      }
       if (action === 'choose' && url.search === '') {
         const status = await reminders.status(capability);
         if (!status) { send(res, 401, mhpEventPhoneMessagePage('Your link has expired', 'Ask for a new email link to continue. It works for 15 minutes.')); return true; }
-        send(res, 200, mhpEventPhoneChoosePage({ status, csrf, sender: reminders.senderNumber })); return true;
+        send(res, 200, mhpEventPhoneChoosePage({ status, csrf, sender: reminders.senderNumber, whatsapp: Boolean(reminders.whatsappNumber) })); return true;
       }
       throw new MhpCommerceError(404, 'This page does not exist.');
     }
@@ -90,6 +96,25 @@ export async function handleMhpEventPhonePublic(req: IncomingMessage, res: Serve
         'set-cookie': capabilityCookie(opened.capability, 900) });
       res.end(); return true;
     }
+    if (action.startsWith('whatsapp/')) {
+      if (!reminders.whatsappNumber || !reminders.whatsappStatus || !reminders.chooseWhatsApp || !reminders.withdrawWhatsApp) throw new MhpCommerceError(404, 'This page does not exist.');
+      const fields = action === 'whatsapp/choose' ? await form(req, ['csrf', 'mobile', 'consent'], ['csrf', 'mobile']) : await form(req, ['csrf', 'receiptId']);
+      if (!capability || !verifyPortalCsrf(portal.sessionSecret, `mhp.event-phone:${capability}`, fields.get('csrf') ?? '')) throw new MhpCommerceError(403, 'Your link has expired. Ask for a new email link.');
+      if (action === 'whatsapp/withdraw') {
+        const stopped = await reminders.withdrawWhatsApp(capability, fields.get('receiptId') ?? '');
+        send(res, stopped ? 200 : 409, mhpEventPhoneMessagePage(stopped ? 'WhatsApp follow-up stopped' : 'Nothing to stop',
+          stopped ? "We won't message you on WhatsApp about this webinar." : 'There is no active WhatsApp follow-up for this link.')); return true;
+      }
+      const choice = await reminders.chooseWhatsApp(capability, fields.get('mobile') ?? '', fields.get('consent') === 'yes', source);
+      const wa = await reminders.whatsappStatus(capability);
+      if (!wa) { send(res, 401, mhpEventPhoneMessagePage('Your link has expired', 'Ask for a new email link to continue.')); return true; }
+      if ('reason' in choice) {
+        send(res, 409, mhpEventPhoneWhatsAppPage({ status: wa, csrf, number: reminders.whatsappNumber, notice: choice.reason === 'closed'
+          ? 'WhatsApp follow-ups for this webinar are closed.' : "We couldn't use that number. Use your own WhatsApp mobile, or try again in 10 minutes." })); return true;
+      }
+      send(res, 200, mhpEventPhoneWhatsAppPage({ status: wa, csrf, number: reminders.whatsappNumber,
+        ...(choice.alreadyVerified ? { notice: 'That WhatsApp number is already confirmed.' } : { join: { nonce: choice.nonce, joinExpiresAt: choice.joinExpiresAt } }) })); return true;
+    }
     if (action === 'choose') {
       const fields = await form(req, ['csrf', 'mobile', 'consent'], ['csrf', 'mobile']);
       if (!capability || !verifyPortalCsrf(portal.sessionSecret, `mhp.event-phone:${capability}`, fields.get('csrf') ?? '')) throw new MhpCommerceError(403, 'Your link has expired. Ask for a new email link.');
@@ -99,9 +124,9 @@ export async function handleMhpEventPhonePublic(req: IncomingMessage, res: Serve
       if ('reason' in choice) {
         const message = choice.reason === 'closed' ? 'Text reminders for this webinar are closed.' : choice.reason === 'number_unavailable'
           ? "We couldn't use that number for this webinar. Use your own mobile, or try again in 10 minutes." : 'Your link has expired. Ask for a new email link.';
-        send(res, 409, mhpEventPhoneChoosePage({ status, csrf, sender: reminders.senderNumber, notice: message })); return true;
+        send(res, 409, mhpEventPhoneChoosePage({ status, csrf, sender: reminders.senderNumber, whatsapp: Boolean(reminders.whatsappNumber), notice: message })); return true;
       }
-      send(res, 200, mhpEventPhoneChoosePage({ status, csrf, sender: reminders.senderNumber, ...(choice.alreadyVerified ? { notice: 'That number is already confirmed.' }
+      send(res, 200, mhpEventPhoneChoosePage({ status, csrf, sender: reminders.senderNumber, whatsapp: Boolean(reminders.whatsappNumber), ...(choice.alreadyVerified ? { notice: 'That number is already confirmed.' }
         : { join: { nonce: choice.nonce, joinExpiresAt: choice.joinExpiresAt, sender: reminders.senderNumber } }) })); return true;
     }
     const fields = await form(req, ['csrf', 'receiptId']);

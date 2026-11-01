@@ -34,18 +34,33 @@ const ALLOWED: Record<BoundaryKind, readonly string[]> = {
     'app_private.runtime_schema_migrations()',
     'app_private.runtime_database_installation_id()',
     'app_private.lock_active_portal_session(bytea,uuid,uuid)',
+    // MHP009C (0132): owner connection and the event follow-up batch.
+    'app_private.mhp_whatsapp_connect(bytea,uuid,uuid,uuid,text,text,text,text,text,bytea,bytea,bytea,bytea,bytea,text,boolean)',
+    'app_private.mhp_event_whatsapp_review(bytea,uuid)',
+    'app_private.mhp_event_whatsapp_activate(bytea,uuid,uuid,bytea,uuid[],jsonb,bytea,text,boolean,boolean)',
+    'app_private.mhp_event_whatsapp_control(bytea,uuid,text,uuid,bytea,text)',
   ],
   worker: [
     'app_private.claim_whatsapp_live_job(uuid,uuid,bytea,integer)',
     'app_private.load_whatsapp_live_job(uuid,uuid,bigint,bytea)',
     'app_private.begin_whatsapp_live_call(uuid,uuid,bigint,bytea,boolean,boolean)',
     'app_private.settle_whatsapp_live_call(uuid,uuid,bigint,bytea,text,text,bytea,text,timestamp with time zone)',
+    // MHP009C (0132): Meta template read evidence and the absolute-due event rail.
+    'app_private.record_mhp_whatsapp_template_observation(uuid,uuid,text,text,text,text,text,integer,bytea,bytea,bytea)',
+    'app_private.mhp_event_whatsapp_observation_targets(uuid,uuid)',
+    'app_private.mhp_prepare_event_whatsapp(uuid,uuid,integer)',
+    'app_private.claim_event_whatsapp_job(uuid,uuid,bytea,integer)',
+    'app_private.load_event_whatsapp_job(uuid,uuid,bigint,bytea)',
+    'app_private.begin_event_whatsapp_call(uuid,uuid,bigint,bytea,boolean,boolean)',
+    'app_private.mhp_hold_event_whatsapp()',
     'app_private.runtime_schema_migrations()',
     'app_private.runtime_database_installation_id()',
   ],
   webhook: [
     'app_private.record_whatsapp_live_status(uuid,uuid,text,text,bytea,text,bytea,timestamp with time zone)',
     'app_private.record_whatsapp_live_inbound_projection(uuid,uuid,text,text,text,text,bytea,bytea,bytea,bytea,bytea,timestamp with time zone)',
+    // MHP009C (0132): signed JOIN/STOP wrapper over the unchanged projection.
+    'app_private.mhp_record_event_whatsapp_inbound(uuid,uuid,text,text,text,text,bytea,bytea,bytea,bytea,bytea,timestamp with time zone)',
     'app_private.runtime_schema_migrations()',
     'app_private.runtime_database_installation_id()',
   ],

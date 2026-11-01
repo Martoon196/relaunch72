@@ -20,6 +20,12 @@ export const MHP_EVENT_PHONE_CONSENT_REVISION = 'mhp.event-phone-sms/v1';
 /** Must equal app_private.mhp_event_phone_consent_text('mhp.event-phone-sms/v1') byte-for-byte. */
 export const MHP_EVENT_PHONE_CONSENT_TEXT = 'Text me a reminder about this Martin Howard Property webinar at this mobile number. These texts are only about this webinar, not other marketing. Reply STOP to opt out.';
 export const MHP_EVENT_PHONE_SOURCE = 'mhp.event-phone';
+export const MHP_EVENT_WHATSAPP_CONSENT_REVISION = 'mhp.event-whatsapp/v1';
+/** Must equal app_private.mhp_event_whatsapp_consent_text('mhp.event-whatsapp/v1') byte-for-byte. */
+export const MHP_EVENT_WHATSAPP_CONSENT_TEXT = 'Send me a WhatsApp follow-up about this Martin Howard Property webinar at this number. These messages are only about this webinar, not other marketing. Reply STOP to opt out.';
+export const mhpEventWhatsAppJoinSha = (nonce: string): Buffer => sha256(`mhp.event-whatsapp.join/v1:${nonce.toLowerCase()}`);
+export interface MhpEventWhatsAppStatus { ok: true; campaign: string; open: boolean; consentText: string | null;
+  whatsapp: { state: string; revision: number; phoneMasked: string; joinExpiresAt: string; grantReceiptId: string | null } | null }
 export const MHP_EVENT_PHONE_MIME = 'application/vnd.growthhq.event-phone+json';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const SHA = /^[0-9a-f]{64}$/u;
@@ -61,10 +67,47 @@ function publicFailure(error: unknown): never {
 /** Anonymous registrant boundary. The identity pool can execute only the five 0131 public functions. */
 export class PgMhpEventPhonePublic {
   constructor(private readonly pool: Pick<Pool, 'query'>, private readonly mailer: Pick<MhpTransactionalMailer, 'configured'> & Required<Pick<MhpTransactionalMailer, 'sendEventPhoneLink'>>,
-    private readonly sender: string) {
-    if (!/^\+44[0-9]{9,10}$/u.test(sender)) throw new Error('MHP event reminder sender is invalid');
+    private readonly sender: string, private readonly whatsapp: string | null = null) {
+    if (!/^\+44[0-9]{9,10}$/u.test(sender) || (whatsapp !== null && !/^\+44[0-9]{9,10}$/u.test(whatsapp))) throw new Error('MHP event reminder sender is invalid');
   }
   get senderNumber(): string { return this.sender; }
+  /** MHP009C: the MHP WhatsApp number registrants message "JOIN <code>" to, or null when WhatsApp is off. */
+  get whatsappNumber(): string | null { return this.whatsapp; }
+
+  async whatsappStatus(capability: string): Promise<MhpEventWhatsAppStatus | null> {
+    if (!TOKEN.test(capability) || !this.whatsapp) return null;
+    try {
+      const value = (await this.pool.query<{ value: MhpEventWhatsAppStatus | { ok: false } }>('SELECT app_private.mhp_event_whatsapp_status($1) AS value',
+        [mhpEventCapabilitySha(capability)])).rows[0]?.value;
+      return value && value.ok === true ? value : null;
+    } catch (error) { return publicFailure(error); }
+  }
+  /** WhatsApp's own possession proof: the registrant sends JOIN <code> from WhatsApp. An SMS verification never counts. */
+  async chooseWhatsApp(capability: string, rawPhone: string, consented: boolean, sourceHash: Buffer | null): Promise<MhpEventPhoneChoice | { reason: string }> {
+    if (!TOKEN.test(capability) || !this.whatsapp) return { reason: 'session' };
+    if (!consented) throw new MhpCommerceError(400, 'Tick the box to agree to the WhatsApp follow-up, or simply leave this page.');
+    const phone = normalizeMhpEventMobile(rawPhone);
+    if (!phone) throw new MhpCommerceError(400, 'Enter a UK mobile number, for example 07700 900123.');
+    const nonce = mhpEventJoinNonce(), command = randomUUID();
+    try {
+      const value = (await this.pool.query<{ value: { ok: boolean; reason?: string; joinExpiresAt?: string; alreadyVerified?: boolean } }>(
+        'SELECT app_private.mhp_event_whatsapp_choose($1,$2,$3,$4,$5,$6,$7,$8) AS value',
+        [mhpEventCapabilitySha(capability), command, phone, MHP_EVENT_WHATSAPP_CONSENT_REVISION, sha256(MHP_EVENT_WHATSAPP_CONSENT_TEXT),
+          mhpEventWhatsAppJoinSha(nonce), sha256(`mhp.event-whatsapp.choose:${phone}`), sourceHash?.length === 32 ? sourceHash : sha256('mhp.event-phone.no-source')])).rows[0]?.value;
+      if (!value?.ok) return { reason: value?.reason ?? 'session' };
+      if (value.alreadyVerified) return { nonce: '', joinExpiresAt: '', alreadyVerified: true };
+      if (!value.joinExpiresAt) throw new Error('Invalid choice result');
+      return { nonce, joinExpiresAt: value.joinExpiresAt, alreadyVerified: false };
+    } catch (error) { return publicFailure(error); }
+  }
+  async withdrawWhatsApp(capability: string, receiptId: string): Promise<boolean> {
+    if (!TOKEN.test(capability) || !UUID.test(receiptId)) return false;
+    try {
+      const value = (await this.pool.query<{ value: { ok: boolean } }>('SELECT app_private.mhp_event_whatsapp_withdraw($1,$2,$3,$4) AS value',
+        [mhpEventCapabilitySha(capability), randomUUID(), receiptId, sha256(`mhp.event-whatsapp.withdraw:${receiptId}`)])).rows[0]?.value;
+      return value?.ok === true;
+    } catch (error) { return publicFailure(error); }
+  }
 
   /** Uniform for known and unknown emails; a replay never re-sends; the raw token exists only in the outgoing email. */
   async requestLink(rawEmail: string, sourceHash: Buffer | null): Promise<void> {

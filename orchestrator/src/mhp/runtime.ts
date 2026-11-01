@@ -30,6 +30,8 @@ import { createPgPortalSmsBindingService } from '../portal/sms-binding-pg-servic
 import { createPgTwilioSmsLiveCommandService } from '../sms-live-pg/command-service.js';
 import { assertMhpEventSmsBoundaryReady, assertSmsCommandBoundaryReady } from '../sms-live-pg/readiness.js';
 import { MhpEventPhoneOwner, PgMhpEventPhonePublic } from './event-phone-service.js';
+import { MhpEventWhatsAppOwner } from './event-whatsapp-owner.js';
+import { assertMetaWhatsAppLiveCommandBoundaryReady } from '../whatsapp-live-pg/index.js';
 import { MhpOwnedSmsService, PgMhpOwnedSmsRepository, mhpOwnedSmsConfig, assertMhpOwnedSmsBoundaryReady, refreshMhpOwnedSmsObservation } from './owned-sms-service.js';
 import { MHP_MARKETING_WORKSPACE_ID } from './marketing-workspace-service.js';
 
@@ -52,7 +54,7 @@ export interface MhpRuntime {
   sequenceDispatch?: PgMhpSequenceDispatch;
   ownedSms?: MhpOwnedSmsService;
   /** MHP009B: public webinar text reminders (off unless MHP_EVENT_PHONE_PUBLIC=enabled). */
-  eventPhone?: { reminders?: PgMhpEventPhonePublic; owner?: MhpEventPhoneOwner; campaign: string };
+  eventPhone?: { reminders?: PgMhpEventPhonePublic; owner?: MhpEventPhoneOwner; whatsappOwner?: MhpEventWhatsAppOwner; campaign: string };
   marketing: MhpMarketingConfig | null;
   readiness(): Promise<readonly string[]>;
 }
@@ -109,6 +111,7 @@ export async function buildMhpRuntime(input: {
     smsReady: false, whatsappReady: false, automaticEntryAvailable: Boolean(sequences) }));
   let ownedSms: MhpOwnedSmsService | undefined;
   let eventPhoneOwner: MhpEventPhoneOwner | undefined;
+  let eventWhatsAppOwner: MhpEventWhatsAppOwner | undefined;
   const smsPilot = mhpOwnedSmsConfig(env);
   if (smsPilot.enabled && sequences && input.contentAdapterPool && input.contentCommandPool) {
     let smsPool: Pool | undefined;
@@ -150,6 +153,24 @@ export async function buildMhpRuntime(input: {
           campaign: webinar.campaign, bindingId: smsPilot.config.bindingId });
       } catch { eventPhoneOwner = undefined; }
     }
+    // MHP009C WhatsApp follow-up owner page: its own r72_whatsapp_live_command pool, exact boundary first.
+    const waBinding = env.MHP_EVENT_WHATSAPP_BINDING_ID?.trim() ?? '';
+    if (env.MHP_EVENT_WHATSAPP_OWNER?.trim() === 'enabled' && env.DATABASE_WHATSAPP_LIVE_COMMAND_URL?.trim() && /^[0-9a-f-]{36}$/u.test(waBinding)
+        && /^webinar-[0-9]{4}-[0-9]{2}-[0-9]{2}$/u.test(webinar.campaign)) {
+      let waPool: Pool | undefined;
+      try {
+        const database = loadDatabaseConfig('whatsAppLiveCommand', env);
+        if (database.expectedDatabaseUser !== 'r72_whatsapp_live_command') throw new Error('MHP WhatsApp identity is invalid');
+        waPool = createDatabasePool(database);
+        await assertMetaWhatsAppLiveCommandBoundaryReady(waPool);
+        input.registerPool(waPool);
+        eventWhatsAppOwner = new MhpEventWhatsAppOwner({ marketingWorkspace, authorize: (identity, requestId) => sequences.contentContext(identity, requestId),
+          whatsappPool: waPool, reader: new CompanyContentService({ transactionRunner: contentReader }), adapter: smsAdapter,
+          approvals: new CompanyContentService({ transactionRunner: mhpOwnerEmailContentRunner(input.contentCommandPool) }),
+          brand: async identity => (await sourceRepository.snapshot(identity, webinar.campaign)).brand, campaign: webinar.campaign, bindingId: waBinding,
+          metaTemplateId: env.MHP_EVENT_WHATSAPP_META_TEMPLATE_ID?.trim() || '1441099094827445' });
+      } catch { await waPool?.end().catch(() => undefined); eventWhatsAppOwner = undefined; }
+    }
     ownedSms = new MhpOwnedSmsService({ marketingWorkspace, authorize: (identity, requestId) => sequences.contentContext(identity, requestId),
       config, blockers, messages, observe: (context, detail, commandId, now) => refreshMhpOwnedSmsObservation({ context, detail, commandId, now, transactions: adapterRunner, adapter: smsAdapter }),
       ...(smsPool && config ? {
@@ -187,9 +208,12 @@ export async function buildMhpRuntime(input: {
     ownedSms,
     eventPhone: (() => {
       const sender = smsPilot.config?.senderNumber;
+      const waNumber = env.MHP_EVENT_WHATSAPP_PUBLIC?.trim() === 'enabled' && /^\+44[0-9]{9,10}$/u.test(env.MHP_EVENT_WHATSAPP_NUMBER?.trim() ?? '')
+        ? env.MHP_EVENT_WHATSAPP_NUMBER!.trim() : null;
       const reminders = env.MHP_EVENT_PHONE_PUBLIC?.trim() === 'enabled' && sender && mail.sendEventPhoneLink
-        ? new PgMhpEventPhonePublic(identityPool, { configured: mail.configured, sendEventPhoneLink: mail.sendEventPhoneLink.bind(mail) }, sender) : undefined;
-      return reminders || eventPhoneOwner ? { ...(reminders ? { reminders } : {}), ...(eventPhoneOwner ? { owner: eventPhoneOwner } : {}), campaign: webinar.campaign } : undefined;
+        ? new PgMhpEventPhonePublic(identityPool, { configured: mail.configured, sendEventPhoneLink: mail.sendEventPhoneLink.bind(mail) }, sender, waNumber) : undefined;
+      return reminders || eventPhoneOwner || eventWhatsAppOwner ? { ...(reminders ? { reminders } : {}), ...(eventPhoneOwner ? { owner: eventPhoneOwner } : {}),
+        ...(eventWhatsAppOwner ? { whatsappOwner: eventWhatsAppOwner } : {}), campaign: webinar.campaign } : undefined;
     })(),
     sequenceDispatch: sequences ? new PgMhpSequenceDispatch(identityPool) : undefined,
     webinarLeads: new MhpWebinarLeadService({ marketingWorkspace, reader: new PgMhpWebinarLeadReader(webPool),
