@@ -98,7 +98,7 @@ export async function handleMhpEventPhonePublic(req: IncomingMessage, res: Serve
       if (!status) { send(res, 401, mhpEventPhoneMessagePage('Your link has expired', 'Ask for a new email link to continue.')); return true; }
       if ('reason' in choice) {
         const message = choice.reason === 'closed' ? 'Text reminders for this webinar are closed.' : choice.reason === 'number_unavailable'
-          ? 'That number is already being used for this webinar. Use your own mobile number.' : 'Your link has expired. Ask for a new email link.';
+          ? "We couldn't use that number for this webinar. Use your own mobile, or try again in 10 minutes." : 'Your link has expired. Ask for a new email link.';
         send(res, 409, mhpEventPhoneChoosePage({ status, csrf, sender: reminders.senderNumber, notice: message })); return true;
       }
       send(res, 200, mhpEventPhoneChoosePage({ status, csrf, sender: reminders.senderNumber, ...(choice.alreadyVerified ? { notice: 'That number is already confirmed.' }
@@ -182,8 +182,10 @@ export async function handleMhpEventPhoneOwner(req: IncomingMessage, res: Server
     }
     const control = field('action');
     if (control !== 'hold' && control !== 'cancel') throw new MhpCommerceError(400, 'Refresh the schedule.');
-    await owner.control(identity, context.requestId, { commandId, action: control, calendarId: field('calendarId') });
-    send(res, 200, await render(field('programmeVersionId'), control === 'cancel' ? 'Reminder cancelled.' : 'Reminder held. It will not send unless you schedule a new review.')); return true;
+    const controlled = await owner.control(identity, context.requestId, { commandId, action: control, calendarId: field('calendarId') });
+    send(res, 200, await render(field('programmeVersionId'), controlled.inFlight === true
+      ? 'This reminder was already handed to the sender, so it could not be stopped. Check its recorded status.'
+      : controlled.cancelled === true ? 'Reminder cancelled. It will not be sent.' : 'Reminder held. It will not be sent.')); return true;
   } catch (error) {
     outcome = 'service_error';
     const status = error instanceof MhpCommerceError ? error.status : 503;

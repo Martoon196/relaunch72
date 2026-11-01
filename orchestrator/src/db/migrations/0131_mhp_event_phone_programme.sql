@@ -733,7 +733,7 @@ BEGIN
    AND i.kind='access' AND i.created_at>statement_timestamp()-interval '1 hour')>=3
   OR (SELECT count(*) FROM app_private.mhp_event_phone_intents i WHERE i.source_sha256=p_source_sha AND i.kind='access'
    AND i.created_at>statement_timestamp()-interval '1 hour')>=3
- THEN RAISE EXCEPTION 'Event reminder request limit' USING ERRCODE='54000'; END IF;
+ THEN RETURN jsonb_build_object('send',false); END IF;  -- uniform: never reveals registration
  SELECT * INTO prospect FROM app_private.mhp_prospects p WHERE p.email::text=p_email;
  IF NOT FOUND THEN RETURN jsonb_build_object('send',false); END IF;
  signup:=app_private.mhp_event_phone_signup(prospect.id,programme->>'event');
@@ -849,6 +849,8 @@ BEGIN
   OR EXISTS(SELECT 1 FROM app_private.mhp_event_phone_intents i WHERE i.prospect_id=access.prospect_id AND i.campaign=access.campaign
    AND i.kind='sms' AND i.created_at>now_at-interval '60 seconds')
  THEN RAISE EXCEPTION 'Event reminder choice limit' USING ERRCODE='54000'; END IF;
+ UPDATE app_private.mhp_event_phone_intents SET state='expired',updated_at=now_at
+ WHERE kind='sms' AND state='awaiting_join' AND join_expires_at<=now_at AND phone_e164=p_phone AND campaign=access.campaign;
  IF EXISTS(SELECT 1 FROM app_private.mhp_event_phone_intents i WHERE i.campaign=access.campaign AND i.kind='sms' AND i.phone_e164=p_phone
   AND i.prospect_id<>access.prospect_id AND i.state IN('awaiting_join','verified','held'))
  THEN RETURN jsonb_build_object('ok',false,'reason','number_unavailable'); END IF;
@@ -986,7 +988,12 @@ BEGIN
  nonce:=lower(substring(p_body FROM '^[[:space:]]*[Jj][Oo][Ii][Nn][[:space:]]+([A-Za-z2-7]{26})[[:space:]]*$'));
  IF p_opt_evidence='' AND nonce IS NOT NULL THEN
   SELECT * INTO intent FROM app_private.mhp_event_phone_intents i
-  WHERE i.join_nonce_sha256=public.digest('mhp.event-phone.join/v1:'||nonce,'sha256') AND i.kind='sms' FOR UPDATE;
+  WHERE i.join_nonce_sha256=public.digest('mhp.event-phone.join/v1:'||nonce,'sha256') AND i.kind='sms';
+  IF intent.id IS NOT NULL THEN
+   -- Same order as choose/withdraw: advisory prospect+phone keys, then the row.
+   PERFORM app_private.mhp_event_phone_lock(ARRAY['mhp.event-phone.prospect:'||intent.campaign||':'||intent.prospect_id::text,'mhp.event-phone.phone:'||phone]);
+   SELECT * INTO intent FROM app_private.mhp_event_phone_intents i WHERE i.id=intent.id FOR UPDATE;
+  END IF;
  END IF;
  IF intent.id IS NULL OR intent.state<>'awaiting_join' OR intent.phone_e164 IS DISTINCT FROM phone THEN
   -- Not a valid JOIN for this number: ordinary existing inbound/STOP behaviour.
@@ -995,6 +1002,8 @@ BEGIN
   IF outcome='applied' AND p_opt_evidence='stop' THEN
    SELECT p.* INTO stop_point FROM app.contact_points p WHERE p.workspace_id=ws AND p.kind='phone' AND p.deleted_at IS NULL AND p.is_verified
     AND p.dedupe_state='normal' AND regexp_replace(p.normalized_value,'^\+','')=p_normalized_sender;
+   PERFORM app_private.mhp_event_phone_lock(coalesce((SELECT array_agg('mhp.event-phone.prospect:'||i.campaign||':'||i.prospect_id::text)
+    FROM app_private.mhp_event_phone_intents i WHERE i.kind='sms' AND i.state='verified' AND i.point_id=stop_point.id),'{}'::text[]));
    FOR grant_row IN SELECT i.id AS intent_id,i.prospect_id,i.campaign,r.* FROM app_private.mhp_event_phone_intents i
     JOIN app_private.mhp_event_phone_receipts r ON r.id=i.result_receipt_id
     WHERE i.kind='sms' AND i.state='verified' AND i.point_id=stop_point.id ORDER BY i.campaign,i.prospect_id FOR UPDATE OF i LOOP
@@ -1021,7 +1030,6 @@ BEGIN
   END IF;
   RETURN QUERY SELECT outcome; RETURN;
  END IF;
- PERFORM app_private.mhp_event_phone_lock(ARRAY['mhp.event-phone.prospect:'||intent.campaign||':'||intent.prospect_id::text,'mhp.event-phone.phone:'||phone]);
  IF intent.join_expires_at<=now_at THEN
   UPDATE app_private.mhp_event_phone_intents SET state='expired',updated_at=now_at WHERE id=intent.id;
   outcome:=app_private.mhp_event_sms_project(p_workspace,p_connection,p_external_event,p_message_sid,p_normalized_sender,p_opt_evidence,p_body,
@@ -1432,9 +1440,13 @@ BEGIN
   IF prior.payload_hash IS DISTINCT FROM payload OR prior.status<>'succeeded' THEN RAISE EXCEPTION 'Event reminder control replay conflicts' USING ERRCODE='40001'; END IF;
   RETURN prior.result||jsonb_build_object('replayed',true);
  END IF;
- SELECT * INTO row FROM app_private.mhp_marketing_sends s WHERE s.id=p_calendar_id AND s.delivery_channel='sms' FOR UPDATE;
+ SELECT * INTO row FROM app_private.mhp_marketing_sends s WHERE s.id=p_calendar_id AND s.delivery_channel='sms';
  IF NOT FOUND THEN RAISE EXCEPTION 'Event reminder not found' USING ERRCODE='42501'; END IF;
+ -- Lock order shared with begin (job, cap) and prepare (cap, calendar).
+ IF row.event_job_id IS NOT NULL THEN PERFORM 1 FROM app.property_predator_sms_jobs j WHERE j.workspace_id=ws AND j.id=row.event_job_id FOR UPDATE; END IF;
  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(format('pp-sms:%s:%s',ws,row.event_provider_connection_id),0));
+ SELECT * INTO row FROM app_private.mhp_marketing_sends s WHERE s.id=p_calendar_id AND s.delivery_channel='sms' FOR UPDATE;
+ IF row.event_job_id IS NOT NULL THEN PERFORM 1 FROM app.property_predator_sms_jobs j WHERE j.workspace_id=ws AND j.id=row.event_job_id FOR UPDATE; END IF;
  INSERT INTO app.command_receipts(id,workspace_id,command_name,idempotency_key,request_id,actor_user_id,payload_hash)
  VALUES(command_receipt,ws,'mhp.event-phone.control',p_command::text,request,actor,payload);
  IF row.event_job_id IS NOT NULL THEN
@@ -1587,7 +1599,8 @@ BEGIN
    CONTINUE;
   END IF;
   IF s.cancelled_at IS NOT NULL OR s.event_held_at IS NOT NULL THEN CONTINUE; END IF;
-  elig:=app_private.mhp_event_sms_eligible(s.id,true);
+  BEGIN elig:=app_private.mhp_event_sms_eligible(s.id,true);
+  EXCEPTION WHEN sqlstate '40001' OR sqlstate '40P01' THEN CONTINUE; WHEN OTHERS THEN elig:=jsonb_build_object('ok',false,'reason','not_eligible'); END;
   IF (elig->>'ok')::boolean IS NOT TRUE THEN
    reason:=CASE elig->>'reason' WHEN 'expired' THEN 'expired' WHEN 'receipt_changed' THEN 'receipt_changed' WHEN 'newer_draft' THEN 'newer_draft'
     WHEN 'not_due' THEN NULL WHEN 'held' THEN NULL ELSE 'not_eligible' END;
@@ -1597,6 +1610,7 @@ BEGIN
    END IF;
    CONTINUE;
   END IF;
+  BEGIN
   prepared:=date_trunc('milliseconds',statement_timestamp());
   expiry:=least(prepared+interval '4 minutes',s.expires_at,s.event_provider_deadline);
   SELECT coalesce(sum(j.segment_count) FILTER (WHERE j.utc_day=(prepared AT TIME ZONE 'UTC')::date),0)::integer,coalesce(sum(j.segment_count),0)::integer
@@ -1647,9 +1661,18 @@ BEGIN
   UPDATE app_private.mhp_marketing_sends SET event_prepared_at=prepared,event_authority_expires_at=expiry,event_authority_id=authority,event_job_id=job,
    event_preparation_request_id=request,event_decision_sha256=decision_sha,event_source_check_sha256=decode(elig->'source'->>'sourceCheckSha256','hex')
   WHERE id=s.id;
-  IF clock_timestamp()>=expiry THEN RAISE EXCEPTION 'MHP event SMS preparation expired while waiting' USING ERRCODE='23514'; END IF;
+  IF clock_timestamp()>=expiry THEN RAISE EXCEPTION 'MHP event SMS preparation expired while waiting' USING ERRCODE='40001'; END IF;
   done:=done||jsonb_build_array(jsonb_build_object('calendarId',s.id,'jobId',job,'authorityId',authority,
    'authorityExpiresAt',to_char(expiry AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'replayed',false));
+  EXCEPTION
+   -- Transient (race, deadlock, wall-clock expiry): this row only rolls back and is retried next cycle.
+   WHEN sqlstate '40001' OR sqlstate '40P01' OR sqlstate '55P03' THEN NULL;
+   -- Anything else is never retried blindly: the step is held for the owner.
+   WHEN OTHERS THEN
+    UPDATE app_private.mhp_marketing_sends SET event_held_at=statement_timestamp(),event_hold_reason='prepare_failed'
+    WHERE id=s.id AND event_held_at IS NULL AND cancelled_at IS NULL AND event_job_id IS NULL;
+    held:=held||jsonb_build_array(jsonb_build_object('calendarId',s.id,'reason','prepare_failed'));
+  END;
  END LOOP;
  RETURN jsonb_build_object('prepared',done,'held',held,'providerEffects','none');
 END $f$;
@@ -1701,6 +1724,16 @@ BEGIN
  FROM app_private.mhp_marketing_sends AS calendar
  WHERE job.workspace_id=p_workspace_id AND job.provider_connection_id=p_provider_connection_id AND job.authority_kind='mhp_event'
   AND job.state='queued' AND calendar.id=job.event_calendar_id AND (calendar.event_held_at IS NOT NULL OR calendar.cancelled_at IS NOT NULL);
+ -- A queued job whose four-minute authority lapsed was never handed over: it is
+ -- cancelled (freeing the cap) and its step held as expired, never re-armed.
+ WITH lapsed AS (
+  UPDATE app.property_predator_sms_jobs AS job SET state='cancelled',settled_at=statement_timestamp(),updated_at=statement_timestamp()
+  FROM app.property_predator_sms_authorities AS authority
+  WHERE job.workspace_id=p_workspace_id AND job.provider_connection_id=p_provider_connection_id AND job.authority_kind='mhp_event'
+   AND job.state='queued' AND authority.workspace_id=job.workspace_id AND authority.id=job.authority_id AND authority.valid_until<=statement_timestamp()
+  RETURNING job.event_calendar_id)
+ UPDATE app_private.mhp_marketing_sends AS calendar SET event_held_at=statement_timestamp(),event_hold_reason='expired'
+ FROM lapsed WHERE calendar.id=lapsed.event_calendar_id AND calendar.event_held_at IS NULL AND calendar.cancelled_at IS NULL;
  SELECT job.id,job.lease_version INTO selected FROM app.property_predator_sms_jobs AS job
  JOIN app.property_predator_sms_authorities AS authority ON authority.workspace_id=job.workspace_id AND authority.id=job.authority_id
   AND authority.provider_connection_id=job.provider_connection_id AND authority.message_delivery_id=job.message_delivery_id

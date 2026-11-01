@@ -143,6 +143,13 @@ test('MHP009B event phone permission, owner batch and absolute-due worker under 
     assert.deepEqual([replay.send, replay.replayed], [false, true]);
     await expectPostgresError(as(p.r72_identity_command, 'public', 'SELECT app_private.mhp_event_phone_request_link($1,$2,$3,$4,$5)',
       [email(6), command, tokenSha, randomBytes(32), randomBytes(32)]), '40001');
+    // Review finding 1: inside the cooldown a registered email gets the same non-sending
+    // result as an unknown one; the limit never surfaces as an error.
+    for (const address of [email(6), 'nobody@example.invalid']) {
+      const limited = await one<{ send: boolean }>(p.r72_identity_command, 'public', 'SELECT app_private.mhp_event_phone_request_link($1,$2,$3,$4,$5) AS value',
+        [address, randomUUID(), randomBytes(32), randomBytes(32), randomBytes(32)]);
+      assert.deepEqual(limited, { send: false });
+    }
     const capability = randomBytes(32);
     assert.equal((await one<{ ok: boolean }>(p.r72_identity_command, 'public', 'SELECT app_private.mhp_event_phone_open($1,$2,$3,$4,$5) AS value',
       [tokenSha, sha(capability), randomUUID(), randomBytes(32), randomBytes(32)])).ok, true);

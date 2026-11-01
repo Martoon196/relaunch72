@@ -420,7 +420,11 @@ export async function startTwilioSmsLiveWorker(
     inFlight = (async (): Promise<TwilioSmsWorkerCycleResult> => {
       // One provider operation per cycle: a due event reminder first, else the existing rail.
       if (boundEvents) {
-        await boundEvents.prepareDue();
+        // An event-preparation failure must never stop the existing owner SMS rail.
+        try { await boundEvents.prepareDue(); } catch (error) {
+          cycleErrorCount += 1; writeErrorTelemetry(errorLine('cycle', cycleErrorCount, redactedTwilioSmsWorkerErrorClass(error)));
+          return runTwilioSmsLiveOnce({ config: config.runtime, repository: boundRepository, transport: boundTransport, leaseToken: randomBytes(32) });
+        }
         const event = await runTwilioSmsLiveOnce({ config: config.runtime, repository: boundEvents, transport: boundTransport, leaseToken: randomBytes(32) });
         if (event !== 'idle') return event;
       }

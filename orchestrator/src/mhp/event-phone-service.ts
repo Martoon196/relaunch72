@@ -78,9 +78,10 @@ export class PgMhpEventPhonePublic {
         [email, command, mhpEventAccessSha(token), sha256(`mhp.event-phone.request-payload:${email}`), sourceHash?.length === 32 ? sourceHash : sha256('mhp.event-phone.no-source')])).rows[0]?.value;
     } catch (error) { publicFailure(error); }
     if (value?.send !== true || value.email !== email || !value.startsAt) return;
-    // Delivery failure leaves the link unused; a fresh request after the cooldown supersedes it.
+    // Delivery failure leaves the link unused and the response uniform (a 503 here
+    // would reveal that the address is registered); a later request supersedes it.
     await this.mailer.sendEventPhoneLink(email, `${MHP_AUTH_ORIGIN}${MHP_EVENT_PHONE_ROUTE}/open?t=${token}`, value.startsAt)
-      .catch(() => { throw new MhpCommerceError(503, 'We could not send the email just now. Please try again in a minute.'); });
+      .catch(() => { console.warn(JSON.stringify({ event: 'mhp.event-phone.link-mail', outcome: 'delivery_unavailable' })); });
   }
 
   /** Explicit POST only (mail scanners follow GET links). Returns the capability for a host-only cookie. */

@@ -44,7 +44,7 @@ export function mhpEventPhoneChoosePage(input: { status: MhpEventPhoneStatus; cs
       + `<p class="small">Texting us proves the number is yours. We don't text you until you do. Standard network rates apply.</p></section>`);
   }
   if (sms?.state === 'verified' && sms.grantReceiptId) {
-    return page('You are on the list', `${greeting}${notice(input.notice)}<section><p>We'll text ${esc(sms.phoneMasked)} about this webinar only, once Martin has reviewed the reminder list. Reply STOP to any text to stop.</p>`
+    return page('You are on the list', `${greeting}${notice(input.notice)}<section><p>${esc(sms.phoneMasked)} is confirmed. If Martin includes you in the reminder list, we'll text you about this webinar only. Reply STOP to any text to stop.</p>`
       + `<form method="post" action="${MHP_EVENT_PHONE_ROUTE}/withdraw">${hidden('csrf', input.csrf)}${hidden('receiptId', sms.grantReceiptId)}<button>Stop webinar texts</button></form></section>`
       + `<section><p>Changed number? Enter a new one below. Your old number gets no reminder.</p>${form(input.csrf, input.sender)}</section>`);
   }
