@@ -35,7 +35,7 @@ interface MhpMountDependencies {
   webinarLeads?: MhpMarketingWorkspaceDependencies['webinarLeads'];
   ownerEmail?: Pick<MhpOwnerEmailService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'queue' | 'test'>;
   ownedSms?: Pick<MhpOwnedSmsService, 'snapshot' | 'review' | 'save' | 'bind' | 'requestCode' | 'confirmCode' | 'send'>;
-  eventPhone?: { reminders?: Pick<PgMhpEventPhonePublic, 'requestLink' | 'open' | 'status' | 'choose' | 'withdraw' | 'senderNumber'>;
+  eventPhone?: { reminders?: Pick<PgMhpEventPhonePublic, 'requestLink' | 'open' | 'status' | 'choose' | 'withdraw' | 'senderNumber'> & Partial<Pick<PgMhpEventPhonePublic, 'fromSignup'>>;
     owner?: Pick<MhpEventPhoneOwner, 'programmes' | 'smsTexts' | 'saveProgramme' | 'publishProgramme' | 'review' | 'activate' | 'control'>; campaign: string };
   sequences?: Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command'> & Partial<Pick<MhpSequenceService, 'entryCommand' | 'message' | 'simulate'>>;
   readiness(): Promise<readonly string[]>;
@@ -93,7 +93,8 @@ export function createMhpMount(deps: MhpMountDependencies) {
       if (deps.ownerEmail && await handleMhpOwnerEmail(req, res, url, { portal, emails: deps.ownerEmail })) return;
       if (deps.marketingWorkspace && await handleMhpMarketingWorkspace(req, res, url,
         { portal, marketingWorkspace: deps.marketingWorkspace, webinarLeads: deps.webinarLeads, emailEditorEnabled: Boolean(deps.ownerEmail), sequenceEditorEnabled: Boolean(deps.sequences), ownedSmsEnabled: Boolean(deps.ownedSms) })) return;
-      if (deps.growth && await handleMhpGrowth(req, res, url, { portal, ...deps.growth })) return;
+      if (deps.growth && await handleMhpGrowth(req, res, url, { portal, ...deps.growth,
+        ...(deps.eventPhone?.reminders?.fromSignup ? { phoneSignup: { fromSignup: deps.eventPhone.reminders.fromSignup.bind(deps.eventPhone.reminders) } } : {}) })) return;
       if (deps.desk && commerce.creditSnapshot && commerce.courseCheckout && await handleMhpDesk(req, res, url, {
         portal, desk: deps.desk, commerce: { billingEnabled: commerce.billingEnabled,
           creditSnapshot: commerce.creditSnapshot.bind(commerce), courseCheckout: commerce.courseCheckout.bind(commerce) },

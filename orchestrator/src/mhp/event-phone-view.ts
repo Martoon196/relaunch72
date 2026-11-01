@@ -59,8 +59,9 @@ export function mhpEventPhoneChoosePage(input: { status: MhpEventPhoneStatus; cs
   if (!status.open) return page('Reminders closed', `${greeting}<p>Text reminders for this webinar are closed. Your email reminders carry on.</p>`);
   const prior = sms?.state === 'withdrawn' ? 'You stopped webinar texts. You can opt in again below.'
     : sms?.state === 'awaiting_join' ? `We're still waiting for your JOIN text from ${sms.phoneMasked}. Lost the code? Enter your number again for a new one.`
-    : sms?.state === 'held' ? 'We could not match that number automatically. Martin will check it; you can also try a different mobile.' : '';
+    : sms?.state === 'held' ? 'We could not confirm this registration automatically. Use an email link to continue. Your email reminders carry on.' : '';
   return page('Choose your mobile', `${greeting}${notice(input.notice)}${prior ? `<p class="status">${esc(prior)}</p>` : ''}`
+    + (sms?.state === 'held' ? `<p><a href="${MHP_EVENT_PHONE_ROUTE}">Email me a link to continue</a></p>` : '')
     + `<section>${form(input.csrf, input.sender)}</section>`);
 }
 function form(csrf: string, sender: string): string {

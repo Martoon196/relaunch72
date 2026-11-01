@@ -7,7 +7,7 @@ import { parseCookies } from '../server/admin/session.js';
 import { MHP_AUTH_ORIGIN, MHP_SESSION_COOKIE } from './auth-service.js';
 import { MhpCommerceError } from './commerce-service.js';
 import { MHP_EVENT_PHONE_CAPABILITY_COOKIE, MHP_EVENT_PHONE_OWNER_ROUTE, MHP_EVENT_PHONE_ROUTE, mhpEventUkLocalToUtc, type MhpEventPhoneOwner,
-  type PgMhpEventPhonePublic } from './event-phone-service.js';
+  mhpEventPhoneCapabilityCookie, type PgMhpEventPhonePublic } from './event-phone-service.js';
 import { mhpEventPhoneChoosePage, mhpEventPhoneMessagePage, mhpEventPhoneOpenPage, mhpEventPhoneOwnerPage, mhpEventPhoneRequestPage,
   mhpEventPhoneSentPage } from './event-phone-view.js';
 
@@ -34,8 +34,6 @@ async function form(req: IncomingMessage, allowed: readonly string[], required: 
 }
 const sameOrigin = (req: IncomingMessage): boolean => req.headers.origin === MHP_AUTH_ORIGIN
   && (!req.headers['sec-fetch-site'] || req.headers['sec-fetch-site'] === 'same-origin');
-const capabilityCookie = (value: string, maxAge: number): string =>
-  `${MHP_EVENT_PHONE_CAPABILITY_COOKIE}=${value}; Path=/; Max-Age=${maxAge}; Secure; HttpOnly; SameSite=Strict`;
 async function admit(portal: PostgresPortalDeps, admission: ReturnType<typeof sourceAbuseAdmission>, leases: Buffer[]): Promise<void> {
   if (!admission || !portal.abuse) throw new MhpCommerceError(503, 'This page is temporarily unavailable.');
   const decision = await portal.abuse.admit(admission);
@@ -87,7 +85,7 @@ export async function handleMhpEventPhonePublic(req: IncomingMessage, res: Serve
           'Ask for a new email link to continue. Each link works once, for 15 minutes.')); return true;
       }
       res.writeHead(303, { location: `${MHP_EVENT_PHONE_ROUTE}/choose`, 'cache-control': 'no-store', 'referrer-policy': 'same-origin',
-        'set-cookie': capabilityCookie(opened.capability, 900) });
+        'set-cookie': mhpEventPhoneCapabilityCookie(opened.capability, 900) });
       res.end(); return true;
     }
     if (action === 'choose') {

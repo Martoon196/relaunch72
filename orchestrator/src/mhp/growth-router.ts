@@ -8,6 +8,7 @@ import { MHP_SITE_ORIGIN, MhpGrowthError, parseMhpSignup, parseMhpStory, verifyM
 import { MhpLearningError, parseMhpCourseBundle, type PgMhpLearningService } from './learning-service.js';
 import { learnHomePage, learnLessonPage, learnModulePage } from './learning-view.js';
 import { hqCoursePage, hqGrowthPage, publicMessagePage, unsubscribeConfirmPage } from './growth-view.js';
+import { MHP_EVENT_PHONE_ROUTE, mhpEventPhoneCapabilityCookie, type PgMhpEventPhonePublic } from './event-phone-service.js';
 
 export interface MhpGrowthRouterDependencies {
   portal: PostgresPortalDeps;
@@ -15,6 +16,7 @@ export interface MhpGrowthRouterDependencies {
   learning: Pick<PgMhpLearningService, 'outline' | 'content' | 'saveProgress' | 'importCourse'>;
   unsubscribeSecret: string;
   marketingMode: string;
+  phoneSignup?: Pick<PgMhpEventPhonePublic, 'fromSignup'>;
 }
 
 const SITE_ORIGINS = new Set([MHP_SITE_ORIGIN, 'https://www.martinhowardproperty.co.uk']);
@@ -108,7 +110,18 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
         redirect(res, `${MHP_SITE_ORIGIN}/thanks/?for=story`); return true;
       }
       const signup = parseMhpSignup(fields);
-      if (signup !== 'honeypot') await deps.growth.capture(signup, source, now);
+      if (signup !== 'honeypot') {
+        const captured = await deps.growth.capture(signup, source, now);
+        if (signup.kind === 'webinar' && deps.phoneSignup) {
+          // This optional step must never undo or conceal an accepted registration.
+          const handoff = await deps.phoneSignup.fromSignup(captured, source, now).catch(() => null);
+          if (handoff) {
+            res.writeHead(303, { location: `${MHP_AUTH_ORIGIN}${MHP_EVENT_PHONE_ROUTE}/choose`, 'cache-control': 'no-store',
+              'referrer-policy': 'no-referrer', 'set-cookie': mhpEventPhoneCapabilityCookie(handoff.capability, handoff.maxAge) });
+            res.end(); return true;
+          }
+        }
+      }
       const kind = signup === 'honeypot' ? 'sheet' : signup.kind;
       redirect(res, `${MHP_SITE_ORIGIN}/thanks/?for=${kind}`); return true;
     }
