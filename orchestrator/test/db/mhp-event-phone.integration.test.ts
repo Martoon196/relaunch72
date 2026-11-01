@@ -88,6 +88,27 @@ async function openAndChoose(pools: Pools, n: number): Promise<Joined> {
   return { capability: sha(capability), intentId: chosen.intentId, nonce: joinNonce };
 }
 
+// Email proof only (no number yet) and a choice of any UK mobile: the unlinked STOP proofs need
+// one fresh registrant per step because choose has a 60 s per-registrant cooldown.
+async function openCapability(pools: Pools, n: number): Promise<Buffer> {
+  const token = randomBytes(32), capability = randomBytes(32), command = randomUUID();
+  const tokenSha = sha(Buffer.concat([Buffer.from('mhp.event-phone.access/v1:'), token]));
+  const link = await one<{ send: boolean }>(pools.r72_identity_command, 'public', 'SELECT app_private.mhp_event_phone_request_link($1,$2,$3,$4,$5) AS value',
+    [email(n), command, tokenSha, sha(command), randomBytes(32)]);
+  assert.equal(link.send, true);
+  const opened = await one<{ ok: boolean }>(pools.r72_identity_command, 'public', 'SELECT app_private.mhp_event_phone_open($1,$2,$3,$4,$5) AS value',
+    [tokenSha, sha(capability), randomUUID(), randomBytes(32), randomBytes(32)]);
+  assert.equal(opened.ok, true);
+  return sha(capability);
+}
+async function chooseNumber(pools: Pools, capability: Buffer, number: string): Promise<string> {
+  const joinNonce = nonce(), choose = randomUUID();
+  const chosen = await one<{ ok: boolean }>(pools.r72_identity_command, 'public', 'SELECT app_private.mhp_event_phone_choose($1,$2,$3,$4,$5,$6,$7,$8) AS value',
+    [capability, choose, number, CONSENT_REVISION, sha(CONSENT_TEXT), sha(`mhp.event-phone.join/v1:${joinNonce}`), sha(choose), randomBytes(32)]);
+  assert.equal(chosen.ok, true, JSON.stringify(chosen));
+  return joinNonce;
+}
+
 interface Inbound { sid: string; body: string; sender: string; payload: Buffer; signature: Buffer; occurred: Date }
 function inbound(n: number, body: string): Inbound {
   return { sid: `SM${randomBytes(16).toString('hex')}`, body, sender: phone(n).slice(1), payload: randomBytes(32), signature: randomBytes(32), occurred: new Date(Date.now() - 1000) };
@@ -125,6 +146,7 @@ test('MHP009B event phone permission, owner batch and absolute-due worker under 
   try {
     await resetIdentityTables(owner);
     await ownerQuery(owner, 'TRUNCATE app_private.mhp_prospects CASCADE');
+    await ownerQuery(owner, 'TRUNCATE app_private.mhp_unlinked_opt_events'); // no FK to a prospect by design; reset explicitly
     await ownerQuery(owner, await readFile(new URL('./mhp-event-phone.fixture.sql', import.meta.url), 'utf8'));
     pools = await openLoginPools(owner);
     const p = pools as Pools;
@@ -217,6 +239,53 @@ test('MHP009B event phone permission, owner batch and absolute-due worker under 
     const second = await review(p);
     assert.equal(second.selectedReceiptIds.length, 1);
 
+    // Astra item 1 (SMS). A signed STOP from a number that has no contact point is recorded durably against
+    // the phone digest only; a pending JOIN is held; a later JOIN is held; a signed START releases the number.
+    // Owner-seeded rows stand in for the other channel: a WhatsApp-only opt-out never counts for SMS.
+    const seedUnlinked = async (channel: 'sms' | 'whatsapp', number: string, evidence: 'stop' | 'start'): Promise<void> => {
+      const sms = channel === 'sms', id = sms ? `SM${randomBytes(16).toString('hex')}` : `wamid.${randomBytes(8).toString('hex')}`;
+      await ownerQuery(owner, `INSERT INTO app_private.mhp_unlinked_opt_events(workspace_id,channel,provider_connection_id,whatsapp_binding_id,provider_event_id,
+        provider_message_id,phone_identity_sha256,opt_evidence,body_sha256,payload_sha256,signature_sha256,event_identity_sha256,recorded_by_role,occurred_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$9,$9,$10,statement_timestamp())`,
+      [WS, channel, sms ? CONNECTION : null, sms ? null : randomUUID(), sms ? `inbound:${id}` : `whatsapp-message:${id}`, id, sha(number), evidence, randomBytes(32),
+        sms ? 'r72_sms_webhook_command' : 'r72_whatsapp_live_webhook_command']);
+    };
+    await seedUnlinked('whatsapp', phone(8), 'stop');
+    const cap7 = await openCapability(p, 7), cap8 = await openCapability(p, 8), cap9 = await openCapability(p, 9);
+    // (a) A pending JOIN is held by a signed STOP from the still-unlinked number; the event is durable and replay-safe.
+    await chooseNumber(p, cap8, phone(8));
+    const stop8 = inbound(8, 'STOP');
+    assert.equal(await deliverInbound(p, stop8, 'stop'), 'unlinked_stop');
+    assert.equal(await deliverInbound(p, stop8, 'stop'), 'replayed');
+    await expectPostgresError(deliverInbound(p, inbound(8, 'hello')), '23503'); // an ordinary text from an unknown number keeps the refusal
+    const unlinked8 = await ownerQuery<{ sms: number; held: number; points: number }>(owner, `SELECT
+      (SELECT count(*)::int FROM app_private.mhp_unlinked_opt_events WHERE channel='sms' AND phone_identity_sha256=$1 AND opt_evidence='stop') sms,
+      (SELECT count(*)::int FROM app_private.mhp_event_phone_intents WHERE kind='sms' AND phone_e164=$2 AND state='held' AND hold_reason='suppressed') held,
+      (SELECT count(*)::int FROM app.contact_points WHERE kind='phone' AND normalized_value=$2) points`, [sha(phone(8)), phone(8)]);
+    assert.deepEqual(unlinked8[0], { sms: 1, held: 1, points: 0 }, 'durable; the pending JOIN is held; no contact or point was created');
+    // (b) A later JOIN from a number whose latest signed SMS event is STOP is held, never granted.
+    assert.equal(await deliverInbound(p, inbound(7, 'STOP'), 'stop'), 'unlinked_stop');
+    const nonce7 = await chooseNumber(p, cap7, phone(7));
+    assert.equal(await deliverInbound(p, inbound(7, `JOIN ${nonce7}`)), 'event_held');
+    const held7 = await ownerQuery<{ held: number; points: number }>(owner, `SELECT
+      (SELECT count(*)::int FROM app_private.mhp_event_phone_intents WHERE kind='sms' AND phone_e164=$1 AND state='held' AND hold_reason='suppressed') held,
+      (SELECT count(*)::int FROM app.contact_points WHERE kind='phone' AND normalized_value=$1) points`, [phone(7)]);
+    assert.deepEqual(held7[0], { held: 1, points: 0 });
+    // (c) A signed START releases only the unlinked key: the next JOIN from that number is granted.
+    assert.equal(await deliverInbound(p, inbound(9, 'STOP'), 'stop'), 'unlinked_stop');
+    assert.equal(await deliverInbound(p, inbound(9, 'START'), 'start'), 'unlinked_start');
+    const nonce9 = await chooseNumber(p, cap9, phone(9));
+    assert.equal(await deliverInbound(p, inbound(9, `JOIN ${nonce9}`)), 'event_joined');
+    // (d) The owner review and every scheduled send share the grant gate. Registrant 4 (reviewed, never activated)
+    // disappears from review once their number carries an unlinked STOP; registrant 9's activated step is held by
+    // the real worker prepare below with the same 'receipt_changed' reason a linked suppression gives.
+    await seedUnlinked('sms', phone(4), 'stop');
+    const late = await review(p);
+    assert.equal(late.recipients.some(r => r.receiptId === second.selectedReceiptIds[0]), false, 'registrant 4 is no longer a recipient');
+    assert.equal(late.selectedReceiptIds.length, 1, 'registrant 9 (STOP then START) is still eligible');
+    assert.equal((await activate(p, randomUUID(), late)).count, 1);
+    await seedUnlinked('sms', phone(9), 'stop');
+
     // Legacy isolation: the email claim and the owner-SMS rail never touch the SMS calendar.
     const emailClaim = await one<unknown[]>(p.r72_identity_command, 'public', 'SELECT app_private.mhp_claim_marketing_sends(50,60,NULL) AS value');
     assert.ok(emailClaim.every(row => (row as { template: string }).template !== 'event_sms_1h'));
@@ -235,6 +304,7 @@ test('MHP009B event phone permission, owner batch and absolute-due worker under 
     const created = raced.flatMap(r => r.prepared.filter(x => !x.replayed));
     assert.equal(created.length, 3);
     assert.equal(new Set(created.map(x => x.calendarId)).size, 3);
+    assert.deepEqual(raced.flatMap(r => r.held.map(h => h.reason)), ['receipt_changed'], 'registrant 9: unlinked STOP holds the step, no authority, no job');
     const provenance = await ownerQuery<{ kind: string; actor: string; user: string | null; role: string; operator: string | null; permission: string | null }>(owner, `
       SELECT j.authority_kind kind,j.created_by_actor_kind actor,j.created_by_user_id::text "user",a.evaluated_by_role role,a.operator_user_id::text operator,
        a.permission_use_receipt_id::text permission FROM app.property_predator_sms_jobs j JOIN app.property_predator_sms_authorities a ON a.id=j.authority_id`);
@@ -283,6 +353,7 @@ test('MHP009B event phone permission, owner batch and absolute-due worker under 
     // Nothing is claimable twice and no email row was ever marked sent for an SMS step.
     const emailSent = await ownerQuery<{ n: number }>(owner, `SELECT count(*)::int n FROM app_private.mhp_marketing_sends WHERE delivery_channel='sms' AND sent_at IS NOT NULL`);
     assert.equal(emailSent[0]!.n, 0);
+
   } finally {
     await closeLoginPools(owner, pools);
     await owner.end();
