@@ -1,5 +1,62 @@
 # 009B + 009C r3 — handoff to Astra for ratification (1 November 2026)
 
+> **Second round (resubmission, 1 November 2026).** Astra reviewed 009B `e072627` and 009C `6b6515a`, found the earlier design gaps corrected, and asked for four bounded fixes. All four are implemented, tested and pushed. **Still not deployed.** The first-round record below is kept unchanged under it for history; the new exact SHAs are in the table immediately below.
+
+## 0. Resubmission: what Astra asked for, what changed, and the exact new SHAs
+
+| | Branch | Full SHA |
+|---|---|---|
+| **009B SMS candidate** | `claude/009b-r3` | `76fe4d8f5f0d691c52e58ec8f77f5970c272af61` |
+| 009B readiness bridge (`ea1903f` + exact new 0131) | `claude/009b-r3-readiness-bridge` | `5fc870192be36feae5b3ca24366b5fffe512e770` |
+| **009C WhatsApp candidate** (descends from the 009B head) | `claude/009c-r3` | `a0c9c9e46c18c68515abaa9e74f16c62e9448dce`, plus the docs-only commit that adds this section |
+| 009C readiness bridge (009B head + exact new 0132) | `claude/009c-r3-readiness-bridge` | `cfd7491781fff8fca5ccc754394daca00f0ea6aa` |
+
+| Migration | Second-round sha256 | First round |
+|---|---|---|
+| `0131_mhp_event_phone_programme.sql` | `b117e3d267640f58ee41e4d32a7d9f936e9e4add5d91ea1e921cc88051312c14` | `8ad7b48e…` |
+| `0132_mhp_event_whatsapp_programme.sql` | `25f63660ee2148c6ff949cb97b2c791c6e560df5ccdc7d718c286566dd10cbc0` | `ad09a7f2…` |
+
+Both migrations were amended in place: neither had been applied anywhere but the disposable test database. Every pin (ledger tests, both bridges) is updated, and the merge of 009B into both 009C branches carries byte-identical 009B files.
+
+**1. A signed STOP is recorded durably even when the number is not yet linked to a contact; JOIN and scheduled sends honour it.**
+- New append-only `app_private.mhp_unlinked_opt_events` (0131), keyed by `channel` and the phone digest the intents already use. It stores provider ids, the evidence (`stop`, or `start` for SMS), the four digests, the recording role and the time. No contact, no point, no body. UPDATE and DELETE are refused.
+- SMS (0131): when the projection reports an unknown sender and the message is a signed STOP or START, the wrapper appends the row and answers `unlinked_stop` / `unlinked_start`; pending JOIN intents for that number are held; a later JOIN is held; a signed START releases only this key. Other unknown-sender texts keep the existing refusal.
+- WhatsApp (0132): the same for a signed WhatsApp STOP (channel `whatsapp`; no START release, consistent with the linked WhatsApp STOP).
+- Enforcement is in the **grant tuple**, the one gate review, activation, prepare and begin already use for a linked suppression; a held step reads `receipt_changed`. Per-channel RLS: the SMS definer sees only `sms` rows, the WhatsApp definer only `whatsapp` rows. Neither opt-out is inferred from the other.
+- Proved under real roles in both integration tests (record, replay, pending JOIN held with no point, later JOIN held, START then JOIN granted (SMS), ordinary unknown text still refused, cross-channel key ignored, owner review dropping the registrant, the worker prepare race holding an activated step).
+
+**2. Fail closed on the Meta template check.** The worker now records *every* read. A failed or refused read is an immutable `READ_FAILED` observation and `begin` is never called without a fresh successful read. Because the SQL gate requires the *latest* observation to be `APPROVED`, the recorded failure also closes review, prepare and begin until a later read succeeds; the lease lapses, the job is re-queued, and the authority expires after four minutes if Meta stays unreachable. Regressions: unit (failed fetch and HTTP 429: `READ_FAILED` recorded, no begin, no provider call, no settlement; a successful read: begin, send, settle) and real-role integration (`READ_FAILED` makes the owner review's template evidence non-current; `APPROVED` restores it before the one begin).
+
+**3. Empty monthly WhatsApp count.** `mhp_event_whatsapp_budget` counts `j.id` / `s.id`; an empty month reads 3 available, asserted at the first APPROVED review.
+
+**4. Finite test lease wait.** Ten minutes instead of unlimited, on both branches.
+
+**Unchanged by instruction:** caps (SMS 10 segments a day / 50 a month; WhatsApp 1 a day / 3 a month). The linked WhatsApp STOP and the WABA-specific, worker-held Meta read are as Astra accepted in principle.
+
+**Second-round evidence**
+
+| Run | Result |
+|---|---|
+| 009B focused, fresh 131 database (`test/db/mhp-event-phone.integration.test.ts` under real roles, unit, compatibility, ledger, harness) | 98/98 |
+| 009C focused, 132 database: both real-role integration tests | 2/2 |
+| 009C ledger, both compatibility suites, both unit files (incl. the new worker regression) | 106/106 |
+| Bridges: runtime-readiness | 26/26 each |
+| Full integrated suite, 009C on 132 | running at the time of this commit; result in the follow-up docs commit |
+| Full integrated suite, 009B on 131 | running at the time of this commit; result in the follow-up docs commit |
+
+Readiness matrix (migration ledger plus the three real-role WhatsApp boundaries), re-run after the fixes:
+
+| Build | 131 database | 132 database |
+|---|---|---|
+| 009B bridge | ready | refused |
+| 009B | ready | refused |
+| 009C bridge | ready | ready |
+| 009C | refused (0132 pending) | ready |
+
+**Still blocking release:** Astra's ratification of these exact SHAs; the Meta template approval (`mhp_webinar_20261104_reminder_v1`, with the ChatGPT lane). The proposals doc now records items 1–3 as implemented/accepted in principle. No deploy, no production migration, no provider call and no message were made in this round.
+
+---
+
 **Status:** source candidates, independently reviewed, with review fixes applied and tested. **Not deployed.**
 No production migration was applied and no provider call was made. No SMS, WhatsApp or email was sent.
 All database work used the disposable local test database.
