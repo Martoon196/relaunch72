@@ -4,7 +4,7 @@
 |---|---|
 | Base | live `ea1903f` + design docs `1e28980` |
 | Candidate | branch `claude/009b-r3` (head: see the commit that adds this file) |
-| Migration | `0131_mhp_event_phone_programme.sql`, sha256 `b117e3d267640f58ee41e4d32a7d9f936e9e4add5d91ea1e921cc88051312c14` (second round; the first-round candidate was `8ad7b48e…`) |
+| Migration | `0131_mhp_event_phone_programme.sql`, sha256 `8abaea82bb29060d73281a78e59d0b9c8d070faf6bf91e40c2bdc7245e9753ac` (second round plus Astra's replay correction; earlier candidates `8ad7b48e…`, `b117e3d2…`) |
 | Readiness bridge | branch `claude/009b-r3-readiness-bridge` = `ea1903f` plus an allowance for that exact 0131 only |
 | External effects | none: no deploy, no migration outside the disposable local DB, no provider call, no text or email sent |
 | Reviewer | independent review agent (read-only) of `6f789bf`/`0198080`; findings and their disposition below |
@@ -77,6 +77,7 @@ Astra reviewed `e072627` and asked for bounded fixes. The two that touch 009B:
 - JOIN: a valid JOIN from a number whose latest signed SMS event is `stop` is held as `suppressed`, consumes the message and creates nothing.
 - Scheduled sends and review: `mhp_event_phone_grant_tuple`, the one gate that review, activation, prepare and begin already use for a linked suppression, now also requires the latest unlinked SMS event for the receipt's phone digest to be anything but `stop`. A held step shows `receipt_changed`, the same reason a linked suppression gives.
 - A signed START appends `start` and releases only this unlinked key; it never touches a manual or legal suppression.
+- Replay (Astra's correction after accepting the second round): a replay of an unlinked event under the same provider id is effect-free and answers `replayed` only when every piece of evidence is identical (message sid, phone digest, opt evidence, body, payload, signature and event identity digests); any change answers `conflict`, and the projection is never re-run for it. Proved under real roles (identical replay; changed body, payload and sender).
 - RLS: `r72_sms_definer` can read and append `channel='sms'` rows only (append only in the webhook session). The WhatsApp definer's access is granted in 0132 for `channel='whatsapp'` only. Neither channel's opt-out is ever inferred from the other.
 - Proved under real roles in `test/db/mhp-event-phone.integration.test.ts`: durable record and replay; the pending JOIN held and no point created; a later JOIN held; START then JOIN granted; an ordinary text from an unknown number still refused; a WhatsApp-only key ignored by SMS; the owner review dropping a registrant; and the worker prepare race holding an activated step with `receipt_changed` (no authority, no job).
 
