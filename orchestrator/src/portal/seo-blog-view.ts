@@ -6,14 +6,17 @@
  */
 
 import type { BrandReadiness } from '../seo-blog/engine.js';
+import { sha256 } from '../seo-blog/engine.js';
+import { promotionPublicationHold } from '../seo-blog/promotions.js';
+import { bindingHold, type SocialOverview } from '../seo-blog/social.js';
 import { articleStatusLabel } from '../seo-blog/policy.js';
 import { addDays, utcToLocal } from '../seo-blog/schedule.js';
-import { KNOWLEDGE_CATEGORIES, type ActivityEvent, type Article, type ArticleBrief, type ArticleVersion, type Brand, type BrandProfile, type Destination, type Job, type KnowledgeDocument, type Publication, type TopicPlan, type UsageKind, type WebsiteInventory } from '../seo-blog/types.js';
+import { KNOWLEDGE_CATEGORIES, type ActivityEvent, type Article, type ArticleBrief, type ArticleVersion, type Brand, type BrandProfile, type Destination, type Job, type KnowledgeDocument, type Publication, type TopicPlan, type SocialDispatch, type UsageKind, type WebsiteInventory } from '../seo-blog/types.js';
 import type { WebsitePublisher } from '../seo-blog/publishers/types.js';
 import { escapeHtml as e } from './ui.js';
 
 export const SEO_BLOG_BASE = '/portal/seo-blog';
-export type SeoBlogTab = 'overview' | 'setup' | 'topics' | 'articles' | 'calendar' | 'publishing' | 'activity';
+export type SeoBlogTab = 'overview' | 'setup' | 'topics' | 'articles' | 'calendar' | 'publishing' | 'social' | 'activity';
 
 const CSS = `
 :root{color-scheme:light dark;--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--muted:#5b6570;--line:#d9dee4;--accent:#0b5cad;--ok:#1d7a3a;--warn:#9a5b00;--bad:#b42318}
@@ -45,6 +48,7 @@ export interface Shell {
   readonly csrf: string;
   readonly notice?: string | null;
   readonly error?: string | null;
+  readonly applicationName?: string;
 }
 
 function url(brand: Brand, tab: string): string {
@@ -59,10 +63,10 @@ export function layout(shell: Shell, title: string, body: string, extraHead = ''
   const switcher = shell.brands.length
     ? `<form method="get" action="${SEO_BLOG_BASE}/switch"><label for="brand-switch" class="muted" style="margin:0">Brand</label><select id="brand-switch" name="brand">${shell.brands.map((b) => `<option value="${e(b.id)}"${b.id === shell.brand?.id ? ' selected' : ''}>${e(b.name)}</option>`).join('')}</select><button class="secondary" type="submit">Open</button></form>`
     : '';
-  const tabs: [SeoBlogTab, string][] = [['overview', 'Overview'], ['setup', 'Brand setup'], ['topics', 'Topics'], ['articles', 'Articles'], ['calendar', 'Calendar'], ['publishing', 'Publishing'], ['activity', 'Activity']];
+  const tabs: [SeoBlogTab, string][] = [['overview', 'Overview'], ['setup', 'Brand setup'], ['topics', 'Topics'], ['articles', 'Articles'], ['calendar', 'Calendar'], ['publishing', 'Publishing'], ['social', 'Social'], ['activity', 'Activity']];
   const nav = shell.brand ? `<nav class="tabs" aria-label="SEO Blog">${tabs.map(([t, label]) => `<a href="${url(shell.brand!, t)}"${t === shell.tab ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>` : '';
   return `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>${e(title)} · SEO Blog</title><style>${CSS}</style>${extraHead}</head><body>
-<header class="sb"><div><a href="${SEO_BLOG_BASE}"><strong>Brands</strong></a>${shell.brand ? ` › <strong>${e(shell.brand.name)}</strong> · SEO Blog` : ''}</div>${switcher}<a href="/portal">Back to portal</a></header>
+<header class="sb"><div>${shell.applicationName ? `<strong>${e(shell.applicationName)}</strong> · ` : ''}<a href="${SEO_BLOG_BASE}"><strong>Brands</strong></a>${shell.brand ? ` › <strong>${e(shell.brand.name)}</strong> · SEO Blog` : ''}</div>${switcher}<a href="/portal">${shell.applicationName ? 'Content home' : 'Back to portal'}</a></header>
 <main>${nav}${shell.notice ? `<p class="notice" role="status">${e(shell.notice)}</p>` : ''}${shell.error ? `<p class="notice bad" role="alert">${e(shell.error)}</p>` : ''}${body}</main></body></html>`;
 }
 
@@ -188,7 +192,7 @@ function statusClass(status: string): string {
   return ['Published', 'Scheduled', 'Approved'].includes(status) ? 'ok' : ['Held', 'Failed', 'Outcome unknown'].includes(status) ? 'bad' : 'warn';
 }
 
-export function editorPage(shell: Shell, data: { article: Article; version: ArticleVersion | null; versions: ArticleVersion[]; publications: Publication[]; status: string; destinations: Omit<Destination, 'sealedCredential'>[] }): string {
+export function editorPage(shell: Shell, data: { article: Article; version: ArticleVersion | null; versions: ArticleVersion[]; publications: Publication[]; status: string; destinations: Omit<Destination, 'sealedCredential'>[]; social?: SocialOverview | null }): string {
   const b = shell.brand!;
   const a = data.article;
   const v = data.version;
@@ -219,6 +223,12 @@ ${body.sections.map((s, i) => `<fieldset class="card"><legend>Section ${i + 1}</
 <label for="rs">Section</label><select id="rs" name="sectionId">${body.sections.map((s) => `<option value="${e(s.id)}">${e(s.heading)}</option>`).join('')}</select>
 <label for="ri">What should change?</label><input id="ri" name="instruction" type="text" maxlength="1000"><p class="muted">Only this section changes; the rest is kept exactly.</p><button type="submit">Regenerate section</button></form>
 <form method="post" action="${base}/regenerate">${csrfField(shell.csrf)}<input type="hidden" name="versionId" value="${e(v.id)}"><button class="secondary" type="submit">Regenerate whole article</button></form></section>
+<section class="card"><h2>Accompanying social posts</h2><p>Review these separately from the blog. Each approval binds the exact article version, post and blog URL. Editing the article requires new linked approvals.</p>
+${v.promotionPack ? `<p class="muted">${v.promotionPack.mode === 'model' ? 'Brand-grounded model drafts' : 'Article excerpt fallback; the social writing stage was unavailable'} · ${v.promotionPack.canonicalUrl ? `Reviewed blog URL: ${e(v.promotionPack.canonicalUrl)}` : 'Connect a blog website, then refresh these drafts to bind the final URL.'}</p>
+${v.promotionPack.posts.map(post => `<article class="card"><h3>${e(post.network)} — ${e(post.title)}</h3><pre style="white-space:pre-wrap">${e(post.copy)}${v.promotionPack!.canonicalUrl ? `\n\n${e(v.promotionPack!.canonicalUrl)}` : ''}</pre><p><strong>Artwork brief:</strong> ${e(post.artworkInstructions)}</p><p class="notice">${e(promotionPublicationHold(a, v, post.network) ?? 'Blog and exact post approval are ready. Select this brand’s connected account in its social calendar.')}</p>
+<form method="post" action="${base}/promotion-approve">${csrfField(shell.csrf)}<input type="hidden" name="versionId" value="${e(v.id)}"><input type="hidden" name="packSha" value="${e(sha256(v.promotionPack))}"><input type="hidden" name="network" value="${post.network}"><button type="submit"${v.promotionPack!.canonicalUrl ? '' : ' disabled'}>Approve exact ${e(post.network)} post</button></form>
+${socialScheduleBlock(shell, a, v, post.network, base, data.social)}</article>`).join('')}` : '<p>No accompanying drafts were created for this older article version.</p>'}
+<form method="post" action="${base}/promotion-refresh">${csrfField(shell.csrf)}<input type="hidden" name="versionId" value="${e(v.id)}"><button class="secondary" type="submit">Create new promotion version with current blog URL</button></form></section>
 <section class="card"><h2>Sources</h2><ol>${body.citations.map((c) => `<li><a href="${e(c.url)}" rel="noopener">${e(c.title)}</a> <span class="muted">retrieved ${e(c.retrievedAt.slice(0, 10))}${c.public ? '' : ' · internal only'}</span><br><small>${e(c.passage)}</small></li>`).join('')}</ol></section>
 <section class="card"><h2>History</h2><table><tbody>${[...data.versions].reverse().map((x) => `<tr><td>Version ${x.number}</td><td>${e({ generated: 'Written', edited: 'Edited', section_regenerated: 'Section regenerated', regenerated: 'Regenerated', image_changed: 'Image changed', metadata_changed: 'Details changed' }[x.change])}</td><td>${e(x.createdAt.slice(0, 16).replace('T', ' '))} UTC</td><td><a href="${base}/preview?v=${e(x.id)}" target="_blank" rel="noopener">Preview</a></td></tr>`).join('')}</tbody></table>
 ${data.publications.length ? `<h3>Publication attempts</h3><ul>${data.publications.map((p) => `<li>${e(p.state.replace('_', ' '))} — ${e(p.detail)}${p.verifiedAt ? ` (verified ${e(p.verifiedAt.slice(0, 16).replace('T', ' '))} UTC at <a href="${e(p.publicUrl)}">${e(p.publicUrl)}</a>)` : ''}</li>`).join('')}</ul>` : ''}</section>`);
@@ -240,6 +250,10 @@ export function calendarPage(shell: Shell, data: { view: 'month' | 'week' | 'lis
   const scheduled = data.articles.filter((x) => x.article.schedule);
   const tray = data.articles.filter((x) => !x.article.schedule && x.article.currentVersionId && x.status !== 'Published');
   const planned = data.briefs.filter((x) => x.suggestedAtUtc && ['planned', 'accepted'].includes(x.status));
+  const proposed = tray.flatMap(x => {
+    const brief = data.briefs.find(b => b.id === x.article.briefId);
+    return brief?.suggestedAtUtc ? [{ ...x, proposal: utcToLocal(brief.suggestedAtUtc, b.timezone) }] : [];
+  });
   const days: string[] = [];
   if (data.view === 'week') {
     const local = utcToLocal(`${data.anchor}T12:00:00Z`, 'UTC');
@@ -252,14 +266,15 @@ export function calendarPage(shell: Shell, data: { view: 'month' | 'week' | 'lis
   }
   const card = (x: { article: Article; title: string; status: string }) => `<div class="slot" draggable="true" data-article="${e(x.article.id)}" data-row-version="${x.article.rowVersion}" data-time="${e(x.article.schedule?.localTime ?? b.settings.cadence.localTime)}" data-destination="${e(x.article.schedule?.destinationId ?? data.destinations[0]?.id ?? '')}"><a href="${url(b, `articles/${x.article.id}`)}">${e(x.title)}</a><br>${e(b.name)} · ${e(x.article.schedule?.localTime ?? '')} · <span class="pill ${statusClass(x.status)}">${e(x.status)}</span>${x.article.schedule ? ` · ${e(data.destinations.find((d) => d.id === x.article.schedule!.destinationId)?.label ?? 'Website')}` : ''}</div>`;
   const plannedCard = (x: ArticleBrief) => `<div class="slot planned">Planned: ${e(x.workingTitle)}<br><span class="muted">not written yet</span></div>`;
+  const proposalCard = (x: typeof proposed[number]) => `<div class="slot planned" data-editorial-proposal><strong>BLOG · proposed ${e(x.proposal.time)}</strong><br><a href="${url(b, `articles/${x.article.id}`)}">${e(x.title)}</a><br><span class="pill">${e(x.status)}</span><br><small>Draft for review · no publication scheduled</small><form method="post" action="${url(b, `articles/${x.article.id}/proposal`)}">${csrfField(shell.csrf)}<input type="hidden" name="rowVersion" value="${x.article.rowVersion}"><input aria-label="Proposed date" type="date" name="localDate" value="${e(x.proposal.date)}" required><input aria-label="Proposed time" type="time" name="localTime" value="${e(x.proposal.time)}" required><button class="secondary" type="submit">Move proposed date</button></form></div>`;
   const grid = data.view === 'list'
     ? `<table><thead><tr><th>Date</th><th>Time</th><th>Article</th><th>Status</th><th>Website</th></tr></thead><tbody>${scheduled.sort((x, y) => x.article.schedule!.publishAtUtc.localeCompare(y.article.schedule!.publishAtUtc)).map((x) => `<tr><td>${e(x.article.schedule!.localDate)}</td><td>${e(x.article.schedule!.localTime)}</td><td><a href="${url(b, `articles/${x.article.id}`)}">${e(x.title)}</a></td><td>${e(x.status)}</td><td>${e(data.destinations.find((d) => d.id === x.article.schedule!.destinationId)?.label ?? '')}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nothing scheduled.</td></tr>'}</tbody></table>`
-    : `<div class="cal" role="grid">${days.map((d) => `<div class="day" role="gridcell" data-date="${d}" aria-label="${d}"><h4>${d.slice(8)}${d.slice(0, 7) !== data.anchor.slice(0, 7) && data.view === 'month' ? ` ${d.slice(5, 7)}` : ''}</h4>${scheduled.filter((x) => x.article.schedule!.localDate === d).map(card).join('')}${planned.filter((x) => utcToLocal(x.suggestedAtUtc!, b.timezone).date === d).map(plannedCard).join('')}</div>`).join('')}</div>`;
+    : `<div class="cal" role="grid">${days.map((d) => `<div class="day" role="gridcell" data-date="${d}" aria-label="${d}"><h4>${d.slice(8)}${d.slice(0, 7) !== data.anchor.slice(0, 7) && data.view === 'month' ? ` ${d.slice(5, 7)}` : ''}</h4>${scheduled.filter((x) => x.article.schedule!.localDate === d).map(card).join('')}${proposed.filter(x => x.proposal.date === d).map(proposalCard).join('')}${planned.filter((x) => utcToLocal(x.suggestedAtUtc!, b.timezone).date === d).map(plannedCard).join('')}</div>`).join('')}</div>`;
   const shift = (n: number) => data.view === 'week' ? addDays(data.anchor, 7 * n) : addDays(`${data.anchor.slice(0, 7)}-15`, 30 * n);
   return layout(shell, 'Calendar', `<h1>Calendar</h1>
 <p><a href="?view=month&date=${data.anchor}">Month</a> · <a href="?view=week&date=${data.anchor}">Week</a> · <a href="?view=list&date=${data.anchor}">List</a> · <a href="?view=${data.view}&date=${shift(-1)}">‹ Previous</a> · <a href="?view=${data.view}&date=${shift(1)}">Next ›</a> · <strong>${e(data.anchor.slice(0, 7))}</strong> · times in ${e(b.timezone)}</p>
 <form method="post" action="${url(b, 'calendar/autoplace')}" class="row">${csrfField(shell.csrf)}<div><label for="apd">Place unscheduled articles on</label><select id="apd" name="destinationId">${data.destinations.map((d) => `<option value="${e(d.id)}">${e(d.label)}</option>`).join('')}</select></div><div><button type="submit"${data.destinations.length ? '' : ' disabled'}>Automatic placement</button></div></form>
-<section class="card">${grid}</section>
+<section class="card">${grid}${data.view === 'list' ? `<h2>Proposed drafts awaiting review</h2>${proposed.map(proposalCard).join('') || '<p>No proposed drafts.</p>'}${planned.map(plannedCard).join('')}` : ''}</section>
 <section class="card"><h2>Unscheduled</h2>${tray.length ? tray.map((x) => `<details><summary>${e(x.title)} — <span class="pill ${statusClass(x.status)}">${e(x.status)}</span></summary>${scheduleForm(shell, b, x.article, data.destinations, url(b, `articles/${x.article.id}`))}</details>`).join('') : '<p class="muted">Nothing waiting.</p>'}</section>
 <form id="dnd-form" method="post" hidden>${csrfField(shell.csrf)}<input name="rowVersion"><input name="localDate"><input name="localTime"><input name="destinationId"></form>
 <script src="${SEO_BLOG_BASE}/calendar.js" defer></script>`);
@@ -316,3 +331,43 @@ export function activityPage(shell: Shell, data: { events: ActivityEvent[]; jobs
 }
 
 export { articleStatusLabel };
+
+function dispatchLabel(d: SocialDispatch, timezone: string): string {
+  const local = utcToLocal(d.scheduledFor, timezone);
+  return `${local.date} ${local.time} — ${d.state === 'queued' ? `queued (re-verified shortly before sending; caps ${d.dailyCap}/day, ${d.monthlyCap}/month)` : `held: ${d.detail ?? ''}`}`;
+}
+
+function socialScheduleBlock(shell: Shell, a: Article, v: ArticleVersion, network: 'instagram' | 'linkedin', base: string, social: SocialOverview | null | undefined): string {
+  const b = shell.brand!;
+  const dispatches = (a.socialDispatches ?? []).filter(d => d.articleVersionId === v.id && d.network === network);
+  const history = dispatches.length ? `<ul class="muted">${dispatches.slice(-5).map(d => `<li>${e(dispatchLabel(d, b.timezone))}</li>`).join('')}</ul>` : '';
+  const articleHold = promotionPublicationHold(a, v, network);
+  const accountHold = social ? bindingHold(social.bindings, network) : 'Social delivery is not available on this server.';
+  if (articleHold || accountHold) return `${history}<p class="muted">Scheduling: ${e(articleHold ?? accountHold ?? '')}${!articleHold && accountHold ? ` <a href="${url(b, 'social')}">Register accounts</a>` : ''}</p>`;
+  const local = utcToLocal(new Date(Date.now() + 3_600_000).toISOString(), b.timezone);
+  return `${history}<form method="post" action="${base}/social-schedule">${csrfField(shell.csrf)}<input type="hidden" name="versionId" value="${e(v.id)}"><input type="hidden" name="packSha" value="${e(sha256(v.promotionPack))}"><input type="hidden" name="network" value="${network}">
+<div class="row"><div><label for="sd-${network}">Date (${e(b.timezone)})</label><input id="sd-${network}" name="localDate" type="date" value="${e(local.date)}" required></div><div><label for="st-${network}">Time</label><input id="st-${network}" name="localTime" type="time" value="${e(local.time)}" required></div></div>
+<button type="submit">Queue ${e(network)} post through the brand’s registered account</button><p class="muted">The post is re-verified against the live article shortly before sending; if the article, URL or approval changed, nothing is sent.</p></form>`;
+}
+
+export function socialPage(shell: Shell, data: { overview: SocialOverview; connectHere: boolean; connectHost: string; intentId: string }): string {
+  const b = shell.brand!;
+  const o = data.overview;
+  const networks = ['instagram', 'linkedin'] as const;
+  const profile = o.profile
+    ? `<p><strong>Zernio profile:</strong> ${e(o.profile.providerProfileId)} <span class="muted">registered ${e(o.profile.registeredAt.slice(0, 16).replace('T', ' '))} UTC</span></p>`
+    : `<form method="post" action="${url(b, 'social/profile')}">${csrfField(shell.csrf)}<label for="pp">Zernio profile id for this brand</label><input id="pp" name="providerProfileId" type="text" required pattern="[A-Za-z0-9][A-Za-z0-9_-]{2,127}"><label for="pn">Connection name</label><input id="pn" name="displayName" type="text" maxlength="120" value="${e(b.name)} social accounts"><p class="muted">Create a separate profile for this brand in your Zernio dashboard and paste its id. Property Predator’s profile can never be registered to a brand.</p><button type="submit">Register profile</button></form>`;
+  const connect = o.profile ? `<h3>Connect accounts</h3>${data.connectHere
+    ? networks.map(n => `<form method="post" action="${url(b, 'social/connect')}" style="display:inline-block;margin-right:8px">${csrfField(shell.csrf)}<input type="hidden" name="network" value="${n}"><input type="hidden" name="intentId" value="${e(data.intentId)}"><input type="hidden" name="confirm" value="CONNECT"><button class="secondary" type="submit">Connect ${n}</button></form>`).join('')
+    : `<p class="muted">Account connection completes through the provider callback on <a href="${e(data.connectHost)}${url(b, 'social')}">${e(data.connectHost)}</a>. Open this page there to connect accounts.</p>`}` : '';
+  const accounts = o.accounts.length ? `<table><thead><tr><th>Network</th><th>Username</th><th>Status</th><th>Connected</th></tr></thead><tbody>${o.accounts.map(acc => `<tr><td>${e(acc.network)}</td><td>${e(acc.username ?? '—')}</td><td>${e(acc.status)}${acc.webhookReceiptCount === 0 ? ' <span class="muted">(awaiting provider confirmation)</span>' : ''}</td><td>${e(acc.linkedAt.slice(0, 10))}</td></tr>`).join('')}</tbody></table>` : (o.profile ? '<p class="muted">No accounts connected yet.</p>' : '');
+  const bindings = o.bindings.filter(x => x.status === 'active');
+  const registered = bindings.length ? `<table><thead><tr><th>Network</th><th>Account</th><th>Per day</th><th>Per month</th><th></th></tr></thead><tbody>${bindings.map(x => `<tr><td>${e(x.network)}</td><td>${e(x.username ?? '—')} <code class="muted">${e(x.providerAccountIdSha256.slice(0, 12))}…</code></td><td>${x.dailyCap}</td><td>${x.monthlyCap}</td><td>${x.dailyCap === 0 || x.monthlyCap === 0 ? '<span class="muted">off</span> ' : ''}<form method="post" action="${url(b, 'social/revoke')}" style="display:inline">${csrfField(shell.csrf)}<input type="hidden" name="bindingId" value="${e(x.id)}"><button class="danger" type="submit">Revoke</button></form></td></tr>`).join('')}</tbody></table>` : '<p class="muted">No account is registered for delivery. Queued posts hold until one is.</p>';
+  const bind = o.profile ? `<h3>Register a connected account for delivery</h3><form method="post" action="${url(b, 'social/bind')}">${csrfField(shell.csrf)}
+<div class="row"><div><label for="bn">Network</label><select id="bn" name="network">${networks.map(n => `<option value="${n}">${n}</option>`).join('')}</select></div><div><label for="ba">Account id (24 characters, from Zernio)</label><input id="ba" name="providerAccountId" type="text" required pattern="[a-f0-9]{24}"></div><div><label for="bd">Posts per day (0 = off)</label><input id="bd" name="dailyCap" type="number" min="0" max="24" value="0"></div><div><label for="bm">Posts per month (0 = off)</label><input id="bm" name="monthlyCap" type="number" min="0" max="300" value="0"></div></div>
+<p class="muted">Only an account the provider has confirmed as connected under this brand’s profile can be registered. Caps are enforced again at send time; lowering a cap to 0 or revoking stops queued posts.</p><button type="submit">Register account</button></form>` : '';
+  return layout(shell, 'Social', `<h1>Social delivery</h1>
+<section class="card"><h2>This brand’s accounts</h2><p>Accompanying posts go out only through accounts this brand connected and registered here. Nothing is shared with any other brand or application.</p>${profile}${connect}${accounts}</section>
+<section class="card"><h2>Registered for delivery</h2>${registered}${bind}</section>
+<section class="card"><h2>How a post is sent</h2><ol><li>You approve the exact article and the exact accompanying post.</li><li>The article is verified public at its final URL.</li><li>You queue the post for a time; it is planned through the canonical calendar with this brand’s caps.</li><li>Shortly before the time it is re-verified from the live article; if anything changed, it is cancelled with a note.</li><li>Instagram additionally needs a real approved image; text-only LinkedIn posts are independent.</li></ol></section>`);
+}

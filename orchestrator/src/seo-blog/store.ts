@@ -133,6 +133,17 @@ export interface SeoBlogStore {
 
   /** Worker discovery: brands with due schedules or runnable jobs. */
   activeBrandIds(now: string): Promise<string[]>;
+  /** Worker discovery: brands with social promotion slots whose short-lived proof is due. */
+  socialAttestationBrandIds(): Promise<string[]>;
+  /** Re-verifies due slots from the exact current source and records fresh 15-minute proofs (or truthful cancellations). */
+  attestDuePromotions(brandId: string): Promise<SocialAttestationOutcome[]>;
+}
+
+export interface SocialAttestationOutcome {
+  readonly revalidationJobId: string;
+  readonly intentId: string;
+  readonly state: 'verified' | 'cancelled' | 'window_expired' | 'dead_letter';
+  readonly detail: string;
 }
 
 const clone = <T>(value: T): T => structuredClone(value);
@@ -431,6 +442,9 @@ export class MemorySeoBlogStore implements SeoBlogStore {
   async listActivity(brandId: string, limit: number): Promise<ActivityEvent[]> {
     return this.activity.filter((e) => e.brandId === brandId).slice(-limit).reverse().map(clone);
   }
+
+  async socialAttestationBrandIds(): Promise<string[]> { return []; }
+  async attestDuePromotions(): Promise<SocialAttestationOutcome[]> { return []; }
 
   async activeBrandIds(now: string): Promise<string[]> {
     const ids = new Set<string>();

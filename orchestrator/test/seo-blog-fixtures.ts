@@ -170,6 +170,10 @@ export class ScriptedModel implements LlmClient {
         public_source_ids: [gov.id],
       };
       out = this.articleOverride ? this.articleOverride(base) : base;
+    } else if (stage === 'SEO_BLOG_SOCIAL') {
+      const article = block(content, 'blog_article') as { title: string; excerpt: string };
+      out = { posts: ['instagram', 'linkedin'].map(network => ({ network, title: article.title,
+        copy: `${article.title}\n\n${article.excerpt}\n\nExplore the full guide.`, artworkInstructions: 'Illustrate a key on a tenancy agreement in the brand colours.' })) };
     } else if (stage === 'SEO_BLOG_SECTION') {
       const section = block(content, 'section') as { heading: string };
       out = { heading: section.heading, body: 'Rewritten section. Landlords who keep clear records and talk to tenants early usually find this part of the process calm, predictable and easy to evidence if questions come up later.' };

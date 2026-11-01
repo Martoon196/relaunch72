@@ -222,3 +222,7 @@ entered in the MHP brand's GitHub-static connection (`branch=main`, `publicBaseU
 - The combined multi-brand calendar filter is not built; each brand has its own calendar.
 - Drag-and-drop was not browser-automated; the equivalent form path is tested.
 - MHP has no branded blog template yet; the neutral default template is used until one is committed.
+
+## Social promotion delivery through brand-registered accounts (0132)
+
+See `docs/central-content-contract.md` for the contract. In short: owner observation → canonical `social_post` (text/plain, exact copy + URL) → separate exact approval → verified-public article → owner queues a slot through the brand's registered account (caps 0 = off) → canonical intent/job → SEO worker just-in-time 15-minute proof from the live article → calendar worker lease/begin-call/receipt under that brand's own connection. Every missing input is a recorded hold on the article (`socialDispatches`), never a silent drop or a claim of delivery. Instagram needs a real approved image (not provided by this run); LinkedIn text is independent. The Social tab lives at `/portal/seo-blog/b/<brand>/social`.
