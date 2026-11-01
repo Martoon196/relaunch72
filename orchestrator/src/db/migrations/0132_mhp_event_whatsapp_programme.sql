@@ -772,15 +772,22 @@ BEGIN
   AND NOT EXISTS(SELECT 1 FROM app.property_predator_whatsapp_live_binding_revocations r WHERE r.workspace_id=b.workspace_id AND r.binding_id=b.id))
  THEN RAISE EXCEPTION 'MHP event WhatsApp binding denied' USING ERRCODE='42501'; END IF;
  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(format('mhp-wa-inbox:%s:%s:%s',p_workspace,p_binding,p_external_event),7200132));
- SELECT * INTO unlinked FROM app_private.mhp_unlinked_opt_events e WHERE e.channel='whatsapp' AND e.provider_event_id=p_external_event;
- IF FOUND THEN
-  -- An unlinked opt event replays effect-free only when every piece of evidence is identical; changed
-  -- evidence under the same provider id is a conflict. The projection is never re-run for it.
-  IF (unlinked.whatsapp_binding_id,unlinked.provider_message_id,unlinked.phone_identity_sha256,unlinked.body_sha256,unlinked.payload_sha256,
-      unlinked.signature_sha256,unlinked.event_identity_sha256)
-   IS DISTINCT FROM (p_binding,p_message_id,public.digest('+'||p_sender,'sha256'),p_body_sha,p_payload_sha,p_signature_sha,p_event_identity_sha)
-  THEN RETURN QUERY SELECT 'conflict'::text; RETURN; END IF;
-  RETURN QUERY SELECT 'replayed'::text; RETURN;
+ SELECT * INTO unlinked FROM app_private.mhp_unlinked_opt_events e
+ WHERE e.workspace_id=ws AND e.channel='whatsapp' AND e.provider_event_id=p_external_event;
+ IF unlinked.id IS NOT NULL THEN
+  -- No legacy projection receipt exists for an unknown sender. Match the durable
+  -- unlinked evidence exactly before acknowledging a repeated Meta event ID.
+  RETURN QUERY SELECT CASE WHEN
+   unlinked.whatsapp_binding_id IS DISTINCT FROM p_binding
+   OR unlinked.provider_message_id IS DISTINCT FROM p_message_id
+   OR unlinked.phone_identity_sha256 IS DISTINCT FROM public.digest('+'||p_sender,'sha256')
+   OR unlinked.opt_evidence IS DISTINCT FROM 'stop'
+   OR unlinked.body_sha256 IS DISTINCT FROM p_body_sha
+   OR unlinked.payload_sha256 IS DISTINCT FROM p_payload_sha
+   OR unlinked.signature_sha256 IS DISTINCT FROM p_signature_sha
+   OR unlinked.event_identity_sha256 IS DISTINCT FROM p_event_identity_sha
+   OR unlinked.occurred_at IS DISTINCT FROM p_occurred
+   THEN 'conflict'::text ELSE 'replayed'::text END; RETURN;
  END IF;
  IF EXISTS(SELECT 1 FROM app_private.mhp_event_whatsapp_receipts r WHERE r.whatsapp_binding_id=p_binding AND r.provider_event_id=p_external_event)
   OR EXISTS(SELECT 1 FROM app_private.mhp_event_whatsapp_intents i WHERE i.consumed_provider_event_id=p_external_event) THEN
