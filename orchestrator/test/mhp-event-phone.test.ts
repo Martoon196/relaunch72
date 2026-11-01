@@ -176,6 +176,15 @@ test('UK wall times convert exactly in winter and summer and reject DST gaps, re
     assert.throws(() => mhpEventUkLocalToUtc(value), /UK/u);
 });
 
+test('a held identity match offers the email-link fallback without claiming verification or scheduling', () => {
+  const html = mhpEventPhoneChoosePage({ sender: '+447861935832', csrf: 'private-csrf', status: { ok: true,
+    campaign: 'webinar-2026-11-04', firstName: null, open: true, startsAt: '2026-11-04T19:30:00Z', consentText: MHP_EVENT_PHONE_CONSENT_TEXT,
+    capabilityExpiresAt: '2026-11-01T00:15:00Z', sms: { state: 'held', revision: 1, phoneMasked: '07700…0123', joinExpiresAt: '', grantReceiptId: null } } });
+  assert.match(html, /could not confirm this registration/u);
+  assert.match(html, /href="\/webinar\/phone-reminders">Email me a link to continue/u);
+  assert.doesNotMatch(html, /is confirmed|Stop webinar texts|Martin will check/u);
+});
+
 test('owner chooses a current approved MHP text; programme IDs and hash come from its server review', async () => {
   let saved = '', valid = true, stale = false;
   const bodyText = 'Martin Howard Property webinar Wed 4 Nov 7:30pm UK. Reply STOP.',

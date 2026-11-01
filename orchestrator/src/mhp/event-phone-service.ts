@@ -12,11 +12,14 @@ import { MHP_MARKETING_WORKSPACE_ID, type PgMhpMarketingWorkspaceService } from 
 import { parseMhpOwnerEmailBrand } from './owner-email-content.js';
 import type { MhpTransactionalMailer } from './transactional-mail.js';
 import type { LocalFlowMessages } from '../followup-sequences/messages.js';
+import type { MhpCapturedSignup } from './growth-service.js';
 
-// MHP009B public webinar text reminders: email proof -> signed JOIN -> owner batch.
+// MHP webinar texts: email-link or same-browser signup access -> signed JOIN -> owner batch.
 export const MHP_EVENT_PHONE_ROUTE = '/webinar/phone-reminders';
 export const MHP_EVENT_PHONE_OWNER_ROUTE = '/hq/marketing/webinar-texts';
 export const MHP_EVENT_PHONE_CAPABILITY_COOKIE = '__Host-mhp_event_phone';
+export const mhpEventPhoneCapabilityCookie = (value: string, maxAge: number): string =>
+  `${MHP_EVENT_PHONE_CAPABILITY_COOKIE}=${value}; Path=/; Max-Age=${maxAge}; Secure; HttpOnly; SameSite=Strict`;
 export const MHP_EVENT_PHONE_CONSENT_REVISION = 'mhp.event-phone-sms/v1';
 /** Must equal app_private.mhp_event_phone_consent_text('mhp.event-phone-sms/v1') byte-for-byte. */
 export const MHP_EVENT_PHONE_CONSENT_TEXT = 'Text me a reminder about this Martin Howard Property webinar at this mobile number. These texts are only about this webinar, not other marketing. Reply STOP to opt out.';
@@ -73,13 +76,28 @@ function publicFailure(error: unknown): never {
   throw new MhpCommerceError(503, 'Webinar text reminders are temporarily unavailable.');
 }
 
-/** Anonymous registrant boundary. The identity pool can execute only the five 0131 public functions. */
+/** Anonymous registrant boundary: closed identity-role functions, never direct CRM table access. */
 export class PgMhpEventPhonePublic {
   constructor(private readonly pool: Pick<Pool, 'query'>, private readonly mailer: Pick<MhpTransactionalMailer, 'configured'> & Required<Pick<MhpTransactionalMailer, 'sendEventPhoneLink'>>,
     private readonly sender: string) {
     if (!/^\+44[0-9]{9,10}$/u.test(sender)) throw new Error('MHP event reminder sender is invalid');
   }
   get senderNumber(): string { return this.sender; }
+
+  /** Trusted capture result only: same-browser signup participation, never inbox ownership. */
+  async fromSignup(signup: MhpCapturedSignup, sourceHash: Buffer | null, now = Date.now()): Promise<{ capability: string; maxAge: number } | null> {
+    if (!UUID.test(signup.signupId) || !UUID.test(signup.prospectId) || !/^webinar-[0-9]{4}-[0-9]{2}-[0-9]{2}$/u.test(signup.campaign ?? '')
+      || sourceHash?.length !== 32) return null;
+    const capability = opaque();
+    try {
+      const value = (await this.pool.query<{ value: { ok: boolean; expiresAt?: string } }>(
+        'SELECT app_private.mhp_event_phone_from_signup($1,$2,$3,$4,$5) AS value',
+        [signup.signupId, signup.prospectId, signup.campaign, mhpEventCapabilitySha(capability), sourceHash])).rows[0]?.value;
+      if (value?.ok !== true || !value.expiresAt) return null;
+      const maxAge = Math.min(900, Math.floor((Date.parse(value.expiresAt) - now) / 1_000));
+      return Number.isFinite(maxAge) && maxAge > 0 ? { capability, maxAge } : null;
+    } catch { return null; } // Capture already committed: preserve static thanks/email fallback.
+  }
 
   /** Uniform for known and unknown emails; a replay never re-sends; the raw token exists only in the outgoing email. */
   async requestLink(rawEmail: string, sourceHash: Buffer | null): Promise<void> {
