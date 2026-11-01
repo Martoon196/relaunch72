@@ -38,6 +38,8 @@ const SEO_BLOG_SOCIAL_MIGRATION = '0132_seo_blog_social_promotion.sql';
 const SEO_BLOG_SOCIAL_CHECKSUM = '6a413abf1e1f04c7ce7cfa181c2ee6c7ced7b0155fcc2c4106ff860c98fa03cb';
 const SEO_BLOG_SOCIAL_DISPATCH_MIGRATION = '0133_seo_blog_social_dispatch_reservations.sql';
 const SEO_BLOG_SOCIAL_DISPATCH_CHECKSUM = '457402d6dc48129fe457044564a99720061bdc2e701e84ddbbb9cd957bba591f';
+const MHP_EVENT_PHONE_MIGRATION = '0134_mhp_event_phone_programme.sql';
+const MHP_EVENT_PHONE_CHECKSUM = 'c3480208038aace2211f7a50cf64cb6cda45bedce980d274bdb661a7b9466e33';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -185,6 +187,15 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(SEO_BLOG_MIGRATION) === SEO_BLOG_CHECKSUM
       && applied.get(SEO_BLOG_SOCIAL_MIGRATION) === SEO_BLOG_SOCIAL_CHECKSUM) {
     applied.delete(SEO_BLOG_SOCIAL_MIGRATION);
+  }
+  // The exact133 recovery build accepts only the reviewed additive MHP event
+  // phone migration. Bundled134 validates strictly; the SEO tail remains exact.
+  if (migrations.length === 133
+      && migrations[132]?.filename === SEO_BLOG_SOCIAL_DISPATCH_MIGRATION
+      && migrations[132]?.checksum === SEO_BLOG_SOCIAL_DISPATCH_CHECKSUM
+      && applied.get(SEO_BLOG_SOCIAL_DISPATCH_MIGRATION) === SEO_BLOG_SOCIAL_DISPATCH_CHECKSUM
+      && applied.get(MHP_EVENT_PHONE_MIGRATION) === MHP_EVENT_PHONE_CHECKSUM) {
+    applied.delete(MHP_EVENT_PHONE_MIGRATION);
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));

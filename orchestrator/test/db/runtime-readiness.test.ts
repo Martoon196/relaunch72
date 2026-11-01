@@ -340,3 +340,16 @@ test('final133 SEO social runtime strictly requires exact133 and every earlier m
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, rows[130]!])), /invalid runtime migration ledger/);
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { filename: '0134_unknown.sql', checksum: 'a'.repeat(64) }])), /migration not present/);
 });
+
+test('133 recovery bridge accepts only the exact additive MHP event phone 0134', async () => {
+  const rows = (await discoverMigrations()).map(({ filename, checksum }) => ({ filename, checksum }));
+  assert.equal(rows.length, 133);
+  assert.deepEqual(rows[132], { filename: '0133_seo_blog_social_dispatch_reservations.sql', checksum: '457402d6dc48129fe457044564a99720061bdc2e701e84ddbbb9cd957bba591f' });
+  const eventPhone = { filename: '0134_mhp_event_phone_programme.sql', checksum: 'c3480208038aace2211f7a50cf64cb6cda45bedce980d274bdb661a7b9466e33' };
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool([...rows, eventPhone])));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { ...eventPhone, checksum: '0'.repeat(64) }])), /migration not present/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, eventPhone, { filename: '0135_unknown.sql', checksum: 'a'.repeat(64) }])), /migration not present/);
+  const priorChanged = rows.map((row, index) => index === 132 ? { ...row, checksum: '0'.repeat(64) } : row);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...priorChanged, eventPhone])), /migration not present/);
+});
