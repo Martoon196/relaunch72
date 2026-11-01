@@ -118,7 +118,7 @@ END $proof$;
 -- NOT an assertion that Twilio signature verification or a physical send ran.
 DO $proof$
 DECLARE ws constant uuid:='2789228d-55a6-4688-b1e8-2f70abca990b'; conn uuid; n integer; label text; sid text; body text; sender text; result text;
- point uuid; evidence jsonb;
+ point uuid; evidence jsonb; event_sha bytea;
 BEGIN
  IF session_user<>'r72_sms_webhook_command' OR current_user<>'r72_sms_webhook_command' THEN RAISE EXCEPTION 'Actual webhook login required'; END IF;
  PERFORM set_config('app.workspace_id',ws::text,true); PERFORM set_config('app.actor_kind','webhook',true); PERFORM set_config('app.user_id','',true);
@@ -127,8 +127,11 @@ BEGIN
  FOR n IN 2..5 LOOP
   label:=CASE n WHEN 2 THEN 'clean' WHEN 3 THEN 'late-email' WHEN 4 THEN 'late-phone' ELSE 'legacy' END;
   sid:='SM'||lpad(n::text,32,'0'); sender:='447700900'||lpad((900+n)::text,3,'0'); body:='JOIN '||repeat('a',25)||chr(97+n);
+  event_sha:=public.digest('inbound:'||sid||chr(31)||sid||chr(31)||encode(public.digest(sender,'sha256'),'hex')||chr(31)
+   ||encode(public.digest(body,'sha256'),'hex')||chr(31)||encode(public.digest('f3-payload-'||label,'sha256'),'hex')||chr(31)
+   ||encode(public.digest('f3-signature-'||label,'sha256'),'hex'),'sha256');
   SELECT disposition INTO result FROM app_private.mhp_record_event_sms_inbound(ws,conn,'inbound:'||sid,sid,sender,'',body,
-   public.digest(sender,'sha256'),public.digest(body,'sha256'),public.digest('f3-payload-'||label,'sha256'),public.digest('f3-signature-'||label,'sha256'),public.digest('f3-event-'||label,'sha256'),clock_timestamp());
+   public.digest(sender,'sha256'),public.digest(body,'sha256'),public.digest('f3-payload-'||label,'sha256'),public.digest('f3-signature-'||label,'sha256'),event_sha,clock_timestamp());
   IF result IS DISTINCT FROM (CASE WHEN n IN(2,5) THEN 'event_joined' ELSE 'event_held' END) THEN RAISE EXCEPTION 'Unexpected JOIN mode outcome %',result; END IF;
  END LOOP;
 END $proof$;
