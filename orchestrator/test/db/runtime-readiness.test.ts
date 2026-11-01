@@ -342,7 +342,7 @@ test('final131 event-phone runtime strictly requires exact131 and every earlier 
 test('131 bridge admits only the exact reviewed 009C 0132 and keeps every other row strict', async () => {
   const rows = (await discoverMigrations()).map(({ filename, checksum }) => ({ filename, checksum }));
   assert.equal(rows.length, 131);
-  const reviewed132 = { filename: '0132_mhp_event_whatsapp_programme.sql', checksum: 'db9a1a05c997907d38750e4f2184c055d0b9fac3929fdc168ce3415fcac1716c' };
+  const reviewed132 = { filename: '0132_mhp_event_whatsapp_programme.sql', checksum: 'ad09a7f2a75bc536ad6e318e7069a3f081c1f31137b80747bde24180e9a65da3' };
   await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
   await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool([...rows, reviewed132])));
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { ...reviewed132, checksum: '0'.repeat(64) }])), /migration not present/);

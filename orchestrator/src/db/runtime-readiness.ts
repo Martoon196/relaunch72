@@ -35,7 +35,7 @@ const MHP_OWNED_SMS_CHECKSUM = 'e6bb5be3a87e0fde3e29d3f47edde1c5daf8492f4c368f80
 const MHP_EVENT_PHONE_MIGRATION = '0131_mhp_event_phone_programme.sql';
 const MHP_EVENT_PHONE_CHECKSUM = '8ad7b48ede3c99d2232dac73b0b61a074a153402208564c4dabe824a5aba4fde';
 const MHP_EVENT_WHATSAPP_MIGRATION = '0132_mhp_event_whatsapp_programme.sql';
-const MHP_EVENT_WHATSAPP_CHECKSUM = 'db9a1a05c997907d38750e4f2184c055d0b9fac3929fdc168ce3415fcac1716c';
+const MHP_EVENT_WHATSAPP_CHECKSUM = 'ad09a7f2a75bc536ad6e318e7069a3f081c1f31137b80747bde24180e9a65da3';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
