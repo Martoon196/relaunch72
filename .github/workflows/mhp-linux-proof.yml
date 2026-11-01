@@ -1,7 +1,7 @@
-name: MHP009B exact Linux proof
+name: SEO content UX exact Linux proof
 on:
   push:
-    branches: [codex/mhp-linux-proof-20261031]
+    branches: [codex/r72-content-ux-proof-20261101]
     paths: [.github/workflows/mhp-linux-proof.yml]
 permissions:
   contents: read
@@ -10,17 +10,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout exact reviewed MHP SMS release source
+      - name: Checkout exact reviewed content UX source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Martoon196/relaunch72
-          ref: c2b364114ff1a9d0ff43fc2996dcbe241fa99907
+          ref: 111adc52a3d69bc9b1addbf2e7efce67264064a9
           persist-credentials: false
       - name: Assert exact source identity
         shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = c2b364114ff1a9d0ff43fc2996dcbe241fa99907
-          test "$(git rev-parse 'HEAD^{tree}')" = c87688463d7e83b9ea0967a0914c74d399b47233
+          test "$(git rev-parse HEAD)" = 111adc52a3d69bc9b1addbf2e7efce67264064a9
+          test "$(git rev-parse 'HEAD^{tree}')" = 625ff14eaec6e20df869307da98282656f603ed4
           test -z "$(git status --porcelain)"
           git rev-parse HEAD 'HEAD^{tree}'
       - name: Match Render runtime
