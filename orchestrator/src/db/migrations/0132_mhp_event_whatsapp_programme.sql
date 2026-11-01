@@ -664,6 +664,53 @@ GRANT EXECUTE ON FUNCTION app_private.mhp_event_whatsapp_status(bytea),app_priva
 RESET ROLE;
 SET LOCAL ROLE r72_owner;
 
+-- 6b. The email proof also opens for a WhatsApp-only follow-up programme. Exact
+-- 0131 body; only the current-programme source is widened (compat test).
+SET LOCAL ROLE r72_mhp_prospect_definer;
+CREATE OR REPLACE FUNCTION app_private.mhp_event_phone_request_link(p_email text,p_command uuid,p_token_sha bytea,p_payload_sha bytea,p_source_sha bytea) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE programme jsonb; key_sha bytea; email_sha bytea; existing app_private.mhp_event_phone_intents%ROWTYPE;
+ prospect app_private.mhp_prospects%ROWTYPE; signup uuid; created uuid; expiry timestamptz;
+BEGIN
+ IF session_user<>'r72_identity_command' OR p_email IS NULL OR p_email<>lower(btrim(p_email)) OR length(p_email) NOT BETWEEN 3 AND 320
+  OR p_email!~'^[^[:space:]@<>]+@[^[:space:]@<>]+\.[^[:space:]@<>]+$' OR p_command IS NULL
+  OR octet_length(p_token_sha) IS DISTINCT FROM 32 OR octet_length(p_payload_sha) IS DISTINCT FROM 32 OR octet_length(p_source_sha) IS DISTINCT FROM 32
+ THEN RAISE EXCEPTION 'Invalid event reminder request' USING ERRCODE='22023'; END IF;
+ key_sha:=public.digest('mhp.event-phone.request:'||p_command::text,'sha256');
+ email_sha:=public.digest('mhp.event-phone.email:'||p_email,'sha256');
+ PERFORM app_private.mhp_event_phone_lock(ARRAY['mhp.event-phone.email:'||encode(email_sha,'hex')]);
+ SELECT * INTO existing FROM app_private.mhp_event_phone_intents i WHERE i.workspace_id='2789228d-55a6-4688-b1e8-2f70abca990b' AND i.request_key_sha256=key_sha;
+ IF FOUND THEN
+  IF existing.payload_sha256 IS DISTINCT FROM p_payload_sha THEN RAISE EXCEPTION 'Event reminder request conflicts' USING ERRCODE='40001'; END IF;
+  RETURN jsonb_build_object('send',false,'replayed',true);
+ END IF;
+ programme:=coalesce(app_private.mhp_event_phone_current_programme(),app_private.mhp_event_whatsapp_current_programme());
+ IF programme IS NULL THEN RETURN jsonb_build_object('send',false,'available',false); END IF;
+ IF EXISTS(SELECT 1 FROM app_private.mhp_event_phone_intents i WHERE i.email_identity_sha256=email_sha AND i.created_at>statement_timestamp()-interval '60 seconds')
+  OR (SELECT count(*) FROM app_private.mhp_event_phone_intents i WHERE i.email_identity_sha256=email_sha AND i.campaign=programme->>'event'
+   AND i.kind='access' AND i.created_at>statement_timestamp()-interval '1 hour')>=3
+  OR (SELECT count(*) FROM app_private.mhp_event_phone_intents i WHERE i.source_sha256=p_source_sha AND i.kind='access'
+   AND i.created_at>statement_timestamp()-interval '1 hour')>=3
+ THEN RETURN jsonb_build_object('send',false); END IF;  -- uniform: never reveals registration
+ SELECT * INTO prospect FROM app_private.mhp_prospects p WHERE p.email::text=p_email;
+ IF NOT FOUND THEN RETURN jsonb_build_object('send',false); END IF;
+ signup:=app_private.mhp_event_phone_signup(prospect.id,programme->>'event');
+ IF signup IS NULL THEN RETURN jsonb_build_object('send',false); END IF;
+ PERFORM app_private.mhp_event_phone_lock(ARRAY['mhp.event-phone.prospect:'||(programme->>'event')||':'||prospect.id::text]);
+ UPDATE app_private.mhp_event_phone_intents SET state='superseded',updated_at=statement_timestamp()
+ WHERE prospect_id=prospect.id AND campaign=programme->>'event' AND kind='access' AND state IN('issued','open');
+ expiry:=statement_timestamp()+interval '15 minutes';
+ INSERT INTO app_private.mhp_event_phone_intents(workspace_id,prospect_id,signup_id,campaign,programme_version_id,kind,revision,state,
+  command_id,request_key_sha256,payload_sha256,source_sha256,email_identity_sha256,access_token_sha256,access_expires_at)
+ VALUES('2789228d-55a6-4688-b1e8-2f70abca990b',prospect.id,signup,programme->>'event',(programme->>'programmeVersionId')::uuid,'access',1,'issued',
+  p_command,key_sha,p_payload_sha,p_source_sha,email_sha,p_token_sha,expiry) RETURNING id INTO created;
+ RETURN jsonb_build_object('send',true,'intentId',created,'email',prospect.email::text,'firstName',prospect.first_name,
+  'campaign',programme->>'event','startsAt',programme->>'startsAt',
+  'expiresAt',to_char(expiry AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'));
+END $f$;
+RESET ROLE;
+SET LOCAL ROLE r72_owner;
+
 -- 7. Signed WhatsApp inbound wrapper (r72_whatsapp_live_webhook_command). The
 -- app-secret HMAC, WABA, phone-number id and sender are verified by the existing
 -- 0053/0055 verifier BEFORE this call. 0055 bytes are unchanged; this wrapper
