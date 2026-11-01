@@ -118,6 +118,8 @@ export function assertDisposableTestDatabase(
   }
 }
 
+const LEASE_WAIT_TIMEOUT_MS = 600_000;
+
 export async function openTestDatabase(): Promise<Pool> {
   const rawUrl = process.env.TEST_DATABASE_URL?.trim();
   if (!rawUrl) throw new Error('TEST_DATABASE_URL is required');
@@ -136,11 +138,11 @@ export async function openTestDatabase(): Promise<Pool> {
     // concurrency flag cannot prevent another terminal or agent from running
     // the same disposable branch at the same time, so hold one database-scoped
     // session lease until this pool closes.
-    // Waiting for the lease is not a statement that should inherit the
-    // migrator's statement timeout: a test that legitimately runs longer would
-    // otherwise fail whichever test queues behind it. Node's per-test timeout
-    // still bounds the wait.
-    await leaseClient.query('SET statement_timeout = 0');
+    // Waiting for the lease must not inherit the migrator's 120 s statement
+    // timeout (a test that legitimately runs longer would fail whichever test
+    // queues behind it), but it stays finite: ten minutes, above every per-test
+    // timeout, so a wedged lease holder surfaces as an error rather than a hang.
+    await leaseClient.query(`SET statement_timeout = '${LEASE_WAIT_TIMEOUT_MS}'`);
     await leaseClient.query(
       `SELECT pg_catalog.pg_advisory_lock(${DISPOSABLE_DATABASE_LEASE_SQL})`,
     );
