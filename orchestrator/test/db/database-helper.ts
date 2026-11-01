@@ -136,9 +136,15 @@ export async function openTestDatabase(): Promise<Pool> {
     // concurrency flag cannot prevent another terminal or agent from running
     // the same disposable branch at the same time, so hold one database-scoped
     // session lease until this pool closes.
+    // Waiting for the lease is not a statement that should inherit the
+    // migrator's statement timeout: a test that legitimately runs longer would
+    // otherwise fail whichever test queues behind it. Node's per-test timeout
+    // still bounds the wait.
+    await leaseClient.query('SET statement_timeout = 0');
     await leaseClient.query(
       `SELECT pg_catalog.pg_advisory_lock(${DISPOSABLE_DATABASE_LEASE_SQL})`,
     );
+    await leaseClient.query('RESET statement_timeout');
     leaseHeld = true;
     const endPool = pool.end.bind(pool);
     let ending: Promise<void> | undefined;

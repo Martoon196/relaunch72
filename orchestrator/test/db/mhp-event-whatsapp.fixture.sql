@@ -92,7 +92,7 @@ BEGIN
  INSERT INTO app.company_content_approval_decisions(workspace_id,content_item_id,content_version_id,approval_request_id,content_sha256,decision,decided_by_user_id,decided_request_id)
  VALUES(ws,wa_item,wa_version,wa_request,wa_sha,'approved',owner_id,'mhp-009c-fixture');
  -- The WhatsApp follow-up programme: due a few minutes from now (real absolute-due worker, no fake clock).
- due:=date_trunc('minute',clock_timestamp())+interval '3 minutes'; starts:=date_trunc('minute',clock_timestamp())-interval '1 minute';
+ due:=date_trunc('minute',clock_timestamp()+interval '90 seconds'); starts:=date_trunc('minute',clock_timestamp())-interval '1 minute';
  campaign:='webinar-'||to_char(starts AT TIME ZONE 'UTC','YYYY-MM-DD');
  programme_body:=jsonb_build_object('schema','mhp.event-whatsapp/v1','event',campaign,'channel','whatsapp','stepKey','event_wa_followup',
   'startsAt',to_char(starts AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),'dueAt',to_char(due AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"'),
