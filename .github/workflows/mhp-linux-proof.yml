@@ -23,10 +23,16 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      TEST_DATABASE_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
+      TEST_DATABASE_URL: postgresql://ci_migrator:ci-owner-test-only@127.0.0.1:5432/relaunch72_test
       TEST_DATABASE_RESET_CONFIRM: reset-disposable-branch
       TEST_DATABASE_SSL_MODE: disable
     steps:
+      - name: Model the managed PostgreSQL migration identity
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: >-
+          docker exec "$PG_CONTAINER" psql -U postgres -d relaunch72_test -v ON_ERROR_STOP=1
+          -c "CREATE ROLE ci_migrator LOGIN CREATEROLE CREATEDB PASSWORD 'ci-owner-test-only'; ALTER DATABASE relaunch72_test OWNER TO ci_migrator;"
       - name: Checkout exact reviewed release source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
