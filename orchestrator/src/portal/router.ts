@@ -758,7 +758,7 @@ function sendLoginPage(
       email,
       csrfToken,
       deps.productProfile ?? RELAUNCH72_PRODUCT_PROFILE,
-      { propertyPredatorSso: deps.kind === 'postgres' && Boolean(deps.propertyPredatorSso), referrerPolicy: nativeAuthReferrerPolicy(deps) },
+      { propertyPredatorSso: deps.kind === 'postgres' && Boolean(deps.propertyPredatorSso), referrerPolicy: nativeAuthReferrerPolicy(deps), actionFeedback: deps.sessionCookieName === '__Host-r72_content' },
     ),
     [portalLoginCsrfCookie(csrfToken, deps.secure, deps.loginCsrfCookieName), ...additionalCookies],
     { ...extra, 'referrer-policy': nativeAuthReferrerPolicy(deps) },
@@ -2151,7 +2151,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         'referrer-policy': 'no-referrer',
       });
     }
-    return sendHtml(res, 200, accountSetupPage(portalSetupCsrfToken(deps.sessionSecret, setupCookieValue, now), undefined, productProfile, nativeAuthReferrerPolicy(deps)), undefined, {
+    return sendHtml(res, 200, accountSetupPage(portalSetupCsrfToken(deps.sessionSecret, setupCookieValue, now), undefined, productProfile, nativeAuthReferrerPolicy(deps), deps.sessionCookieName === '__Host-r72_content'), undefined, {
       'cache-control': 'no-store',
       'referrer-policy': nativeAuthReferrerPolicy(deps),
     });
@@ -2177,10 +2177,10 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     const setupCsrf = portalSetupCsrfToken(deps.sessionSecret, setupCookieValue, now);
     const password = form.password ?? '';
     if (password.length < 12 || password.length > 1_024) {
-      return sendHtml(res, 400, accountSetupPage(setupCsrf, 'Use a password between 12 and 1,024 characters.', productProfile, nativeAuthReferrerPolicy(deps)), undefined, { 'cache-control': 'no-store', 'referrer-policy': nativeAuthReferrerPolicy(deps) });
+      return sendHtml(res, 400, accountSetupPage(setupCsrf, 'Use a password between 12 and 1,024 characters.', productProfile, nativeAuthReferrerPolicy(deps), deps.sessionCookieName === '__Host-r72_content'), undefined, { 'cache-control': 'no-store', 'referrer-policy': nativeAuthReferrerPolicy(deps) });
     }
     if (password !== (form.confirm ?? '')) {
-      return sendHtml(res, 400, accountSetupPage(setupCsrf, 'Those passwords do not match.', productProfile, nativeAuthReferrerPolicy(deps)), undefined, { 'cache-control': 'no-store', 'referrer-policy': nativeAuthReferrerPolicy(deps) });
+      return sendHtml(res, 400, accountSetupPage(setupCsrf, 'Those passwords do not match.', productProfile, nativeAuthReferrerPolicy(deps), deps.sessionCookieName === '__Host-r72_content'), undefined, { 'cache-control': 'no-store', 'referrer-policy': nativeAuthReferrerPolicy(deps) });
     }
     let setupAbuseLease: Buffer | null | false = null;
     if (deps.abuse && resolvedRequestContext) {
@@ -2222,7 +2222,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     } catch {
       for (const key of reservations) throttle.release(key);
       await completeAbuseLease(setupAbuseLease, 'service_error');
-      return sendHtml(res, 503, accountSetupPage(setupCsrf, 'Secure account setup is temporarily unavailable. Try again shortly.', productProfile, nativeAuthReferrerPolicy(deps)), undefined, { 'cache-control': 'no-store', 'referrer-policy': nativeAuthReferrerPolicy(deps) });
+      return sendHtml(res, 503, accountSetupPage(setupCsrf, 'Secure account setup is temporarily unavailable. Try again shortly.', productProfile, nativeAuthReferrerPolicy(deps), deps.sessionCookieName === '__Host-r72_content'), undefined, { 'cache-control': 'no-store', 'referrer-policy': nativeAuthReferrerPolicy(deps) });
     }
     if (!completed) {
       for (const key of reservations) throttle.failure(key, now);

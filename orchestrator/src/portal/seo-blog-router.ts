@@ -20,6 +20,7 @@ import { USAGE_ESTIMATES, type Actor, type SeoBlogEngine } from '../seo-blog/eng
 import { defaultPublishers } from '../seo-blog/publishers/registry.js';
 import { SeoBlogError, type BrandSettings, type Brand } from '../seo-blog/types.js';
 import { utcToLocal } from '../seo-blog/schedule.js';
+import { CENTRAL_ACTION_FEEDBACK_PATH, CENTRAL_ACTION_FEEDBACK_SCRIPT } from './action-feedback.js';
 
 export interface SeoBlogRouteInput {
   readonly service: PortalSeoBlogService;
@@ -130,6 +131,10 @@ function int(value: string | null, field: string): number {
 export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, url: URL, input: SeoBlogRouteInput): Promise<void> {
   const path = url.pathname.replace(/\/+$/, '') || SEO_BLOG_BASE;
   const method = req.method ?? 'GET';
+  if (method === 'GET' && path === CENTRAL_ACTION_FEEDBACK_PATH) {
+    send(res, 200, CENTRAL_ACTION_FEEDBACK_SCRIPT, 'text/javascript; charset=utf-8');
+    return;
+  }
   if (path === `${SEO_BLOG_BASE}/calendar.js`) {
     send(res, 200, CALENDAR_SCRIPT, 'text/javascript; charset=utf-8');
     return;
@@ -182,8 +187,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       return send(res, 200, overviewPage(shell('overview'), { readiness, articles, usage, jobs }));
     }
     if (tab === 'setup') {
-      const [documents, profile, inventory, destinations] = await Promise.all([engine.listKnowledge(actor, brandId), engine.getProfile(actor, brandId), engine.getInventory(actor, brandId), engine.listDestinations(actor, brandId)]);
-      return send(res, 200, setupPage(shell('setup'), { documents, profile, inventory, destinations, publishers: [...defaultPublishers().values()], vaultReady: input.vaultReady }));
+      const [documents, profile, inventory, destinations, usage] = await Promise.all([engine.listKnowledge(actor, brandId), engine.getProfile(actor, brandId), engine.getInventory(actor, brandId), engine.listDestinations(actor, brandId), engine.usage(actor, brandId)]);
+      return send(res, 200, setupPage(shell('setup'), { documents, profile, inventory, destinations, usage, publishers: [...defaultPublishers().values()], vaultReady: input.vaultReady }));
     }
     if (tab === 'topics') {
       const [plans, readiness] = await Promise.all([engine.listPlans(actor, brandId), engine.readiness(actor, brandId)]);
@@ -273,9 +278,33 @@ async function handlePost(
       if (parts[1] === 'edit') {
         const current = await engine.getProfile(actor, brandId);
         if (!current) throw new SeoBlogError(409, 'Extract a profile first.');
-        await engine.editProfile(actor, brandId, int(f('version'), 'the profile version'), {
+        const expectedVersion = int(f('version'), 'the profile version');
+        if (current.version !== expectedVersion) throw new SeoBlogError(409, 'The brand profile changed. Reload it before saving your edits.');
+        // Indices refer only to this stored version. Source references never come from the form.
+        for (const key of form.fields.keys()) {
+          if (!key.startsWith('conflict_') && !key.startsWith('missingFact_')) continue;
+          const match = /^(conflict|missingFact)_(0|[1-9]\d*)_(field|detail|text|resolved)$/.exec(key);
+          const count = match?.[1] === 'conflict' ? current.conflicts.length : current.missingFacts.length;
+          if (!match || Number(match[2]) >= count || form.fields.getAll(key).length !== 1
+            || (match[1] === 'conflict' ? !['field', 'detail', 'resolved'].includes(match[3]!) : !['text', 'resolved'].includes(match[3]!))) {
+            throw new SeoBlogError(400, 'That profile issue is not in this version. Reload and try again.');
+          }
+        }
+        const issueText = (key: string, previous: string, maximum: number): string => {
+          const value = f(key);
+          if (value === null) return previous;
+          const text = value.trim();
+          if (!text || text.length > maximum) throw new SeoBlogError(400, `Keep a description for each unresolved issue (up to ${maximum} characters), or explicitly mark it resolved.`);
+          return text;
+        };
+        const conflicts = current.conflicts.flatMap((item, i) => f(`conflict_${i}_resolved`) === '1' ? [] : [{
+          ...item, field: issueText(`conflict_${i}_field`, item.field, 200), detail: issueText(`conflict_${i}_detail`, item.detail, 2000),
+        }]);
+        const missingFacts = current.missingFacts.flatMap((item, i) => f(`missingFact_${i}_resolved`) === '1' ? [] : [issueText(`missingFact_${i}_text`, item, 2000)]);
+        await engine.editProfile(actor, brandId, expectedVersion, {
           summary: (f('summary') ?? '').slice(0, 1200), positioning: (f('positioning') ?? '').slice(0, 1200), audiences: lines(f('audiences')),
           approvedClaims: lines(f('approvedClaims')), exclusions: lines(f('exclusions')), voice: { ...current.voice, dont: lines(f('voiceDont')) },
+          conflicts, missingFacts,
         });
         return ok(back('setup'), 'Profile saved. Confirm it to use it.');
       }

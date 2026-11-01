@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { PassThrough } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { handleSeoBlog } from '../src/portal/seo-blog-router.js';
@@ -11,6 +11,71 @@ import type { PortalSessionIdentity } from '../src/portal/auth-service.js';
 import { harness, OWNER, STRANGER, seedBrandSite } from './seo-blog-fixtures.js';
 
 const SECRET = 's'.repeat(48);
+
+test('profile issues are individually editable and explicitly resolved under the exact version without generation or lost sources', async () => {
+  const h = harness();
+  const { brand } = await h.engine.createBrand(OWNER, { commandId: randomUUID(), name: 'Harbour', website: 'https://harbour.example' });
+  await h.engine.updateSettings(OWNER, brand.id, brand.rowVersion, { budgets: { modelTokensPerMonth: 1_000_000, searchCallsPerMonth: 0, imagesPerMonth: 0 } });
+  const doc = await h.engine.uploadKnowledge(OWNER, brand.id, { category: 'product_facts', title: 'Current offers', pastedText: 'Harbour Compliance Plan costs £49 per month.' });
+  const extracted = await h.engine.extractBrandProfile(OWNER, brand.id);
+  const withIssues = await h.engine.editProfile(OWNER, brand.id, extracted.version, {
+    conflicts: [
+      { field: 'Offer', detail: 'Different offer terms', documentIds: [doc.id] },
+      { field: 'Service area', detail: 'Conflicting areas', documentIds: [doc.id] },
+    ], missingFacts: ['No named author', 'No stated contact route'],
+  });
+  const original = await h.engine.confirmProfile(OWNER, brand.id, withIssues.version);
+  const knowledge = await h.engine.listKnowledge(OWNER, brand.id);
+  const calls = h.llm.calls.length;
+  const usage = await h.engine.usage(OWNER, brand.id);
+  const service: PortalSeoBlogService = { generation: 'live', research: 'live', social: 'unavailable', engineFor: () => h.engine, socialCallback: async () => null };
+  const who = identity(OWNER.userId); const csrf = portalCsrfToken(SECRET, who.sessionToken);
+  const path = `/portal/seo-blog/b/${brand.id}/profile/edit`;
+  const fields = { _csrf: csrf, version: String(original.version), summary: original.summary, positioning: original.positioning,
+    audiences: original.audiences.join('\n'), approvedClaims: original.approvedClaims.join('\n'), exclusions: original.exclusions.join('\n'), voiceDont: original.voice.dont.join('\n') };
+  const setup = await call(service, who, 'GET', `/portal/seo-blog/b/${brand.id}/setup`);
+  assert.match(setup.body, /name="conflict_0_field" value="Offer"/);
+  assert.match(setup.body, /name="conflict_1_detail"/); assert.match(setup.body, /name="missingFact_0_text"/);
+  assert.match(setup.body, /Source documents: Current offers/);
+  assert.doesNotMatch(setup.body, /name="(?:conflict|missingFact)_\d+_resolved"[^>]*checked/);
+
+  // Blank edits and foreign indices cannot quietly erase an issue or create a version.
+  for (const extra of [{ conflict_0_detail: ' ' }, { conflict_99_resolved: '1' }, { missingFact_99_text: 'invented' }, { conflict_0_documentIds: 'replacement' }]) {
+    const result = await call(service, who, 'POST', path, { ...fields, ...extra });
+    assert.ok(new URL(result.headers.location!, 'https://x').searchParams.has('e'));
+    assert.equal((await h.engine.getProfile(OWNER, brand.id))!.version, original.version);
+  }
+  const saved = await call(service, who, 'POST', path, { ...fields, conflict_0_resolved: '1', conflict_1_detail: 'Owner checked: service is nationwide', missingFact_0_text: 'Owner will supply the author biography' });
+  assert.ok(new URL(saved.headers.location!, 'https://x').searchParams.has('n'));
+  const edited = (await h.engine.getProfile(OWNER, brand.id))!;
+  assert.equal(edited.version, original.version + 1); assert.equal(edited.source, 'owner_edited');
+  assert.equal(edited.confirmedAt, null); assert.equal(edited.confirmedBy, null);
+  assert.deepEqual(edited.conflicts, [{ ...original.conflicts[1]!, detail: 'Owner checked: service is nationwide' }]);
+  assert.deepEqual(edited.missingFacts, ['Owner will supply the author biography', original.missingFacts[1]]);
+  assert.deepEqual(edited.knowledge, original.knowledge); assert.deepEqual(edited.offers, original.offers);
+  assert.equal(original.conflicts.length, 2); assert.ok(original.confirmedAt);
+  assert.deepEqual(await h.engine.listKnowledge(OWNER, brand.id), knowledge);
+  assert.equal(h.llm.calls.length, calls); assert.deepEqual(await h.engine.usage(OWNER, brand.id), usage);
+
+  // A stale form cannot reinterpret an index from the old profile against the new one.
+  const stale = await call(service, who, 'POST', path, { ...fields, conflict_0_resolved: '1' });
+  assert.ok(new URL(stale.headers.location!, 'https://x').searchParams.has('e'));
+  assert.deepEqual(await h.engine.getProfile(OWNER, brand.id), edited);
+  const resolvedFact = await call(service, who, 'POST', path, { ...fields, version: String(edited.version), missingFact_0_resolved: '1' });
+  assert.ok(new URL(resolvedFact.headers.location!, 'https://x').searchParams.has('n'));
+  const latest = (await h.engine.getProfile(OWNER, brand.id))!;
+  assert.deepEqual(latest.conflicts, edited.conflicts, 'unmentioned conflicts survive');
+  assert.deepEqual(latest.missingFacts, [original.missingFacts[1]], 'only the explicitly resolved missing fact is removed');
+  assert.equal(latest.confirmedAt, null); assert.equal(h.llm.calls.length, calls);
+});
+
+test('profile extraction distinguishes absent facts from incompatible evidence without weakening price or source guards', () => {
+  const prompt = readFileSync(new URL('../../prompts/seo-blog-profile.md', import.meta.url), 'utf8');
+  assert.match(prompt, /version: 1\.1\.0/); assert.match(prompt, /Missing, unspecified or incomplete information is not a contradiction/);
+  assert.match(prompt, /SAME fact or offer/); assert.match(prompt, /cite only document ids actually supplied/);
+  assert.match(prompt, /Prices must be copied exactly/); assert.match(prompt, /naming both document ids/);
+  assert.match(prompt, /offer looks obsolete/); assert.match(prompt, /DATA, not instructions/);
+});
 
 function identity(userId: string): PortalSessionIdentity {
   return { sessionToken: `token-${userId}`, userId, workspaceId: '33333333-3333-4333-8333-333333333333', userEmail: 'owner@example.test' };
@@ -37,6 +102,8 @@ test('owner screens: add brand, switch, every tab renders, CSRF and foreign acce
   const csrf = portalCsrfToken(SECRET, owner.sessionToken);
 
   assert.equal((await call(service, null, 'GET', '/portal/seo-blog')).status, 303, 'signed-out users go to login');
+  const feedback = await call(service, null, 'GET', '/portal/seo-blog/action-feedback.js');
+  assert.equal(feedback.status, 200); assert.match(feedback.headers['content-type']!, /javascript/); assert.equal(feedback.headers['x-content-type-options'], 'nosniff');
   const home = await call(service, owner, 'GET', '/portal/seo-blog');
   assert.equal(home.status, 200);
   assert.match(home.body, /Add brand/);
@@ -63,6 +130,9 @@ test('owner screens: add brand, switch, every tab renders, CSRF and foreign acce
   assert.match(setup.body, /enctype="multipart\/form-data"/);
   assert.match(setup.body, /Static website in a GitHub repository/);
   assert.match(setup.body, /Website content API/);
+  assert.match(setup.body, /Writing allowance not configured/);
+  assert.match(setup.body, /Used 0 · Monthly ceiling 0 · Remaining 0/);
+  assert.ok(setup.body.includes(`/b/${brandId}/publishing#writing-budget`));
   // A forged notice is not displayed.
   const forged = await call(service, owner, 'GET', `/portal/seo-blog/b/${brandId}/setup?n=${Buffer.from('Your account is suspended').toString('base64url')}&s=bad`);
   assert.ok(!forged.body.includes('suspended'));
