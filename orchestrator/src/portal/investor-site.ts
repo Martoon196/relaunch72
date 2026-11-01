@@ -8,6 +8,17 @@ export interface InvestorSiteSettings {
 }
 export interface PublicInvestorSite {slug:string;headline:string;introduction:string;locations:string;contactEmail:string;privacyUrl:string;brandName:string;accentColor:string}
 export const INVESTOR_SITES_ROUTE='/investor-sites';
+/** Presentation only: public site/capture remain the authority for this slug. */
+export function investorEmbedCode(site:InvestorSiteSettings,origin:string,offer:string):{url:string;snippet:string}|null {
+  if(!site.published||!site.privacy_url||!/^[a-z0-9][a-z0-9-]{2,59}$/.test(site.slug)
+    ||offer.length<2||offer.length>100||/[\u0000-\u001f\u007f]/.test(offer))return null;
+  let base:URL;try{base=new URL(origin);}catch{return null;}
+  if(base.protocol!=='https:'||base.username||base.password)return null;
+  const url=new URL(`${INVESTOR_SITES_ROUTE}/${encodeURIComponent(site.slug)}/embed`,base.origin);
+  url.searchParams.set('offer',offer);
+  const snippet=`<iframe title="${e(offer)}" src="${e(url.toString())}" style="width:100%;max-width:560px;height:560px;border:0" loading="lazy"></iframe>`;
+  return {url:url.toString(),snippet};
+}
 export function siteFormToken(secret:string,slug:string,now=Date.now()):string {
   const body=`${Math.floor(now/1000)}.${randomBytes(16).toString('hex')}`;
   return body+'.'+createHmac('sha256',secret).update(`investor-site:${slug}:${body}`).digest('hex');

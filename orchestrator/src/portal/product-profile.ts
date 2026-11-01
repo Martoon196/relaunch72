@@ -54,6 +54,8 @@ export interface PortalProductProfile {
   investorWorkspace?: boolean;
   /** Selected canonical owner brand workspace; presentation only. */
   marketingWorkspace?: boolean;
+  /** Presentation only: copied from the current trusted MHP programme snapshot. Missing means no HQ link. */
+  programmeAdmin?: boolean;
   compactMark: string;
   suiteLabel: string;
   home: {

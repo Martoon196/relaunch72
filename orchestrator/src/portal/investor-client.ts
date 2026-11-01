@@ -7,7 +7,7 @@ export const INVESTOR_CLIENT_SOURCE = `document.addEventListener('click', async 
   if (!(field instanceof HTMLTextAreaElement) || !status) return;
   try {
     await navigator.clipboard.writeText(field.value);
-    status.textContent = 'Copied. Review it before sending.';
+    status.textContent = button.dataset.copySuccess || 'Copied. Review it before sending.';
   } catch {
     field.focus(); field.select();
     status.textContent = 'Text selected. Use your device’s Copy command.';

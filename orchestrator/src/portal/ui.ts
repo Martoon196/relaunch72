@@ -7,6 +7,7 @@
 import { CORE_PLATFORM_MODULES, platformModules, type PlatformModuleId, type PlatformModuleManifest, type ResolvedPlatformModule } from '../platform/modules.js';
 import type { PlatformCapability } from '../platform/capabilities.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
+import { mhpMemberNavigationLinks } from '../mhp/member-navigation.js';
 
 export type PortalSection = 'overview' | 'actions' | 'crm' | 'investors' | 'journeys' | 'content' | 'affiliates' | 'inbox' | 'billing';
 
@@ -98,6 +99,7 @@ export const PORTAL_STYLE = `
   button,input,summary{font:inherit}button,a,summary{-webkit-tap-highlight-color:transparent}a{color:inherit;text-decoration:none}button{color:inherit}h1,h2,h3,h4,p{margin-top:0;overflow-wrap:anywhere}.icon{width:18px;height:18px;flex:0 0 auto}.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
   :focus-visible{outline:3px solid rgba(237,156,36,.72);outline-offset:3px}.skip-link{position:fixed;z-index:100;top:10px;left:12px;transform:translateY(-150%);background:var(--ink);color:#fff;padding:9px 13px;border-radius:9px;font-weight:750}.skip-link:focus{transform:none}
 
+  .mhp-member-nav{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 22px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}.mhp-member-nav a{display:inline-flex;align-items:center;min-height:44px;padding:8px 12px;border-radius:8px;font-size:17px;font-weight:650;color:var(--ink);background:var(--accent-soft)}
   .app-shell{min-height:100vh}.sidebar{position:fixed;inset:0 auto 0 0;z-index:20;width:264px;background:var(--nav);color:var(--nav-text);display:flex;flex-direction:column;padding:18px 14px 14px;border-right:1px solid #0a101c}
   .brand-lockup{display:flex;align-items:center;gap:10px;padding:4px 10px 18px}.brand-mark{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:linear-gradient(145deg,#ffc568,var(--accent));color:#161b25;font-family:var(--mono);font-weight:900;font-size:0.875rem;box-shadow:0 7px 20px rgba(237,156,36,.2)}
   .brand-name{font-size:0.875rem;font-weight:850;letter-spacing:.075em}.brand-name small{display:block;color:var(--nav-muted);font-size:0.875rem;font-weight:650;letter-spacing:.08em;text-transform:uppercase;margin-top:1px}
@@ -289,6 +291,8 @@ export function appShell(opts: AppShellOptions): string {
   const compactMark = productBrandMark(profile);
   const brandName = productBrandName(profile);
   const suiteLabel = escapeHtml(profile.suiteLabel);
+  const memberNavigation = profile.id==='martin_howard_property'&&!profile.marketingWorkspace
+    ? `<nav class="mhp-member-nav" aria-label="Member navigation">${mhpMemberNavigationLinks({owner:profile.programmeAdmin===true})}</nav>` : '';
   return `${pageHead(opts.title, profile, crmMode ? crmPageReferrerPolicy(profile) : 'no-referrer')}<body><a class="skip-link" href="#main-content">Skip to main content</a>
   <div class="app-shell">
     <aside class="sidebar" aria-label="Workspace navigation">
@@ -315,7 +319,7 @@ export function appShell(opts: AppShellOptions): string {
         </details>
         <div class="top-actions">${profile.id === 'property_predator_growth' ? '<div class="theme-picker"><label for="portal-theme">Appearance</label><select id="portal-theme" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>' : ''}<span class="status-badge"><span class="dot"></span>${crmMode ? 'Private workspace' : 'Preview workspace'}</span><form method="post" action="/portal/logout">${csrfField}<button class="top-icon-button" type="submit" aria-label="Sign out" title="Sign out">${icon('logout')}</button></form></div>
       </header>
-      <main class="main" id="main-content" tabindex="-1">${opts.body}</main>
+      <main class="main" id="main-content" tabindex="-1">${memberNavigation}${opts.body}</main>
     </div>
     <nav class="mobile-nav" aria-label="Mobile navigation" style="--mobile-nav-count:${mobileModules.length}">${mobileNav}</nav>
   </div></body></html>`;

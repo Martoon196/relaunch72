@@ -1,3 +1,4 @@
+import { mhpMemberNavigationLinks } from './member-navigation.js';
 import { renderMhpMarkdown } from './markdown.js';
 import type { MhpCourseLessonOutline, MhpCourseModuleOutline, MhpCourseOutline, MhpLessonProgress } from './learning-service.js';
 
@@ -39,7 +40,7 @@ button.primary{width:100%;background:var(--gold);color:var(--ink);border:0;borde
 .layout>*{min-width:0}@media(max-width:900px){.layout{grid-template-columns:minmax(0,1fr)}aside{position:static}}`;
 
 function frame(title: string, csrf: string, body: string, owner: boolean): string {
-  return `<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${e(title)} · Martin Howard Property</title><style>${STYLE}</style></head><body><header><strong>Martin Howard Property</strong><nav aria-label="Member navigation"><a href="/app/learn">Training centre</a><a href="/app/desk">Deal Desk</a><a href="/portal/investors">Investor CRM</a><a href="/app/account">Account</a>${owner ? '<a href="/hq">HQ</a>' : ''}<form method="post" action="/portal/logout"><input type="hidden" name="_csrf" value="${e(csrf)}"><button>Sign out</button></form></nav></header><main>${body}<p class="disclaimer">Education, not legal, tax or financial advice. Rules change: check the current position and take advice before you act. No income is promised. Martin is connected to Property Predator, Key Properties UK, Ordris and Hello New Home and may earn when you use them.</p></main></body></html>`;
+  return `<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${e(title)} · Martin Howard Property</title><style>${STYLE}</style></head><body><header><strong>Martin Howard Property</strong><nav aria-label="Member navigation">${mhpMemberNavigationLinks({owner})}<form method="post" action="/portal/logout"><input type="hidden" name="_csrf" value="${e(csrf)}"><button>Sign out</button></form></nav></header><main>${body}<p class="disclaimer">Education, not legal, tax or financial advice. Rules change: check the current position and take advice before you act. No income is promised. Martin is connected to Property Predator, Key Properties UK, Ordris and Hello New Home and may earn when you use them.</p></main></body></html>`;
 }
 
 const counts = (module: MhpCourseModuleOutline, progress: Record<string, MhpLessonProgress>) => {

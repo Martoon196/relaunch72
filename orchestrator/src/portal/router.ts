@@ -2370,7 +2370,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       const programme = await deps.investors.snapshot(crmIdentity(sessionToken,deps));
       const business = programme.businesses.find(b=>b.workspaceId===programme.selectedWorkspaceId);
       if (business) {
-        deps = {...deps,productProfile:investorProfile(business)};
+        deps = {...deps,productProfile:investorProfile(business,programme.isAdmin)};
         productProfile=deps.productProfile!;
         if (p === '/portal') return redirect(res,INVESTOR_ROUTE);
       }
@@ -2415,7 +2415,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
           const pointId=await service.emailContactPoint(identity,requestedContact).catch(()=>null);
           if(pointId && centre.contacts.some(point=>point.id===pointId))selectedPoint=pointId;
         }
-        return sendHtml(res,200,investorEmailPage({business,centre,connection,csrf:portalCsrfToken(deps.sessionSecret,sessionToken),template:url.searchParams.get('template')??undefined,reply:url.searchParams.has('reply'),selectedPoint,notice}),undefined,{'cache-control':'no-store','referrer-policy':'no-referrer'});
+        return sendHtml(res,200,investorEmailPage({business,centre,connection,programmeAdmin:programme.isAdmin,csrf:portalCsrfToken(deps.sessionSecret,sessionToken),template:url.searchParams.get('template')??undefined,reply:url.searchParams.has('reply'),selectedPoint,notice}),undefined,{'cache-control':'no-store','referrer-policy':'no-referrer'});
       }
       if(p===INVESTOR_ROUTE+'/mail/callback'&&method==='GET') {
         if(!deps.investorMail||url.searchParams.has('error'))throw new InvestorError(400,'Email authorisation was not completed. You can start again from Business setup.');
@@ -2470,11 +2470,14 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       const crm=parts[0]?{...parts[0],opportunities:parts[1]?.opportunities ?? [],stages:parts[1]?.stages ?? [],tasks:parts[2]?.tasks ?? []}:null;
       // Setup links use the trusted deployment origin, never the request Host.
       const view=p.includes('/mail/')||p.endsWith('/branding')||p.endsWith('/site')?'settings':p.endsWith('/access')||p.endsWith('/create')?'programme':url.searchParams.get('view')??'today';
-      const site=current&&view==='settings'?await service.site(identity):undefined;
+      const hasEnquirySite=current&&(current.productProfileId!=='martin_howard_property'||current.features?.enquirySite===true);
+      const site=hasEnquirySite&&['settings','forms','today'].includes(view)?await service.site(identity):undefined;
+      const offer=(url.searchParams.get('offer')??'Your property guide').trim();
+      if(view==='forms'&&(offer.length<2||offer.length>100||/[\u0000-\u001f\u007f]/.test(offer)))throw new InvestorError(400,'Use a resource name between 2 and 100 characters.');
       const mhpBusiness=deps.productProfile?.id==='martin_howard_property';
       const mail=current&&((!mhpBusiness&&view==='settings')||(mhpBusiness&&current.features?.emailWorkflow===true&&(view==='settings'||view==='today')))
         ? await deps.investorMail?.snapshot(identity):undefined;
-      return sendHtml(res,200,investorPage({programme,csrf:portalCsrfToken(deps.sessionSecret,sessionToken),email:portalIdentity.userEmail,crm,requirements,message,setupPath,view,site,mail,productProfile:deps.productProfile}),undefined,{'cache-control':'no-store','referrer-policy':'no-referrer'});
+      return sendHtml(res,200,investorPage({programme,csrf:portalCsrfToken(deps.sessionSecret,sessionToken),email:portalIdentity.userEmail,crm,requirements,message,setupPath,view,site,offer,siteOrigin:deps.portalBaseUrl,mail,productProfile:deps.productProfile}),undefined,{'cache-control':'no-store','referrer-policy':'no-referrer'});
     } catch(error) {
       const failure=investorFailure(error);
       return sendHtml(res,failure.status,portalStatusPage(deps,sessionToken,{title:'Investor Desk',message:failure.message,active:'crm',backHref:INVESTOR_ROUTE,backLabel:'Return to Investor Desk'}));
