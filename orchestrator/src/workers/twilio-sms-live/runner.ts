@@ -20,9 +20,11 @@ import {
   PgTwilioSmsLiveRepository,
 } from '../../sms-live-pg/repository.js';
 import {
+  assertMhpEventSmsBoundaryReady,
   assertSmsWorkerBoundaryReady,
   SMS_WORKER_DATABASE_ROLE,
 } from '../../sms-live-pg/readiness.js';
+import { MHP_EVENT_WORKSPACE_ID, PgMhpEventSmsRepository } from '../../sms-live-pg/event-repository.js';
 import { createTwilioMessagingHttpAdapterFromRestrictedKeyEnvironment } from '../../providers/twilio-messaging-http-adapter.js';
 import { runSmsPhoneVerificationOnce, smsVerificationDisplayBrand } from '../../sms-live-pg/phone-verification.js';
 import { assertRuntimeSchemaCurrent } from '../../db/runtime-readiness.js';
@@ -103,6 +105,8 @@ export interface ActiveTwilioSmsWorkerConfig extends WorkerConfigBase {
   readonly mode: 'owned_number_live';
   readonly workspaceId: string;
   readonly connectionId: string;
+  /** MHP009B: also prepare and send owner-activated scheduled event reminders. */
+  readonly mhpEventReminders?: boolean;
 }
 
 export interface VerificationOnlySmsWorkerConfig extends WorkerConfigBase {
@@ -221,6 +225,10 @@ export function loadTwilioSmsWorkerConfig(
   if (!UUID.test(workspaceId) || !UUID.test(connectionId)) {
     throw new Error('Twilio SMS live mode requires exact workspace and connection bindings');
   }
+  const eventMode = env.PROPERTY_PREDATOR_SMS_MHP_EVENT_MODE?.trim() ?? 'disabled';
+  if (eventMode !== 'disabled' && (eventMode !== 'enabled' || workspaceId !== MHP_EVENT_WORKSPACE_ID)) {
+    throw new Error('MHP event reminders require PROPERTY_PREDATOR_SMS_MHP_EVENT_MODE=enabled on the MHP workspace');
+  }
   return Object.freeze({
     mode: 'owned_number_live',
     installationId,
@@ -228,6 +236,7 @@ export function loadTwilioSmsWorkerConfig(
     runtime,
     workspaceId,
     connectionId,
+    ...(eventMode === 'enabled' ? { mhpEventReminders: true } : {}),
   });
 }
 
@@ -313,13 +322,20 @@ export async function startTwilioSmsLiveWorker(
       pool, config.installationId,
     );
     await (dependencies.assertBoundaryReady ?? assertSmsWorkerBoundaryReady)(pool);
+    if (config.mode === 'owned_number_live' && config.mhpEventReminders && !dependencies.assertBoundaryReady) {
+      await assertMhpEventSmsBoundaryReady(pool, SMS_WORKER_DATABASE_ROLE);
+    }
   } catch (error) {
     await pool.end().catch(() => undefined);
     throw error;
   }
 
   let repository: TwilioSmsLiveRepository | null = null;
+  let eventRepository: PgMhpEventSmsRepository | null = null;
   let transport: TwilioMessagingSmsTransport | null = null;
+  if (config.mode === 'owned_number_live' && config.mhpEventReminders) {
+    eventRepository = new PgMhpEventSmsRepository(pool, { workspaceId: config.workspaceId, connectionId: config.connectionId });
+  }
   if (config.mode === 'owned_number_live') {
     repository = (dependencies.createRepository
       ?? ((boundPool, binding) => new PgTwilioSmsLiveRepository(boundPool, binding)))(
@@ -400,12 +416,16 @@ export async function startTwilioSmsLiveWorker(
     }
     if (!repository) return Promise.resolve('disabled');
     const boundRepository = repository;
-    inFlight = runTwilioSmsLiveOnce({
-      config: config.runtime,
-      repository: boundRepository,
-      transport: boundTransport,
-      leaseToken: randomBytes(32),
-    }).finally(() => { inFlight = null; });
+    const boundEvents = eventRepository;
+    inFlight = (async (): Promise<TwilioSmsWorkerCycleResult> => {
+      // One provider operation per cycle: a due event reminder first, else the existing rail.
+      if (boundEvents) {
+        await boundEvents.prepareDue();
+        const event = await runTwilioSmsLiveOnce({ config: config.runtime, repository: boundEvents, transport: boundTransport, leaseToken: randomBytes(32) });
+        if (event !== 'idle') return event;
+      }
+      return runTwilioSmsLiveOnce({ config: config.runtime, repository: boundRepository, transport: boundTransport, leaseToken: randomBytes(32) });
+    })().finally(() => { inFlight = null; });
     return inFlight;
   };
 
