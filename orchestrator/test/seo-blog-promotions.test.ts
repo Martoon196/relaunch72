@@ -176,7 +176,10 @@ test('scheduling goes through the registered account with truthful holds: unpubl
   assert.equal(held.state, 'held'); assert.match(held.detail!, /daily cap/);
   const shell = { brands: [brand], brand, tab: 'articles' as const, csrf: 'fixture', notice: null, error: null };
   const detail = await engine.getArticle(OWNER, brand.id, f.article.id);
-  const html = editorPage(shell, { ...detail, destinations: [], social: await dup.registry.overview(brand.id) });
+  const html = editorPage(shell, { ...detail, article: { ...detail.article, requiresApproval: true }, destinations: [], social: await dup.registry.overview(brand.id) });
+  assert.match(html, /aria-label="Needs my approval: On\. Turn off" class="toggle-control on"/);
+  const approvalOff = editorPage(shell, { ...detail, article: { ...detail.article, requiresApproval: false }, destinations: [], social: await dup.registry.overview(brand.id) });
+  assert.match(approvalOff, /aria-label="Needs my approval: Off\. Turn on" class="toggle-control off"/);
   assert.match(html, /held: The daily cap/); assert.match(html, /Queue linkedin post/); assert.match(html, /Instagram requires a real approved image/);
   const social = socialPage({ ...shell, tab: 'social' }, { overview: await dup.registry.overview(brand.id), connectHere: false, connectHost: 'https://hq.propertypredator.com', intentId: randomUUID() });
   assert.match(social, /brand-profile/); assert.match(social, /Open this page there to connect accounts/); assert.match(social, /Revoke/);

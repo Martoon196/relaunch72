@@ -88,9 +88,13 @@ function validUuid(value: string): boolean {
 }
 
 export class BudgetExceededError extends SeoBlogError {
-  constructor(kind: UsageKind) {
-    const label = kind === 'model_tokens' ? 'writing' : kind === 'search_calls' ? 'research' : 'image';
-    super(409, `The monthly ${label} budget for this brand is used up or not set. Raise it in Publishing settings to continue; nothing else is affected.`, 'budget_exceeded');
+  constructor(kind: UsageKind, used: number, ceiling: number, estimate: number) {
+    const label = kind === 'model_tokens' ? 'Writing' : kind === 'search_calls' ? 'Research' : 'Image';
+    const unit = kind === 'model_tokens' ? 'model tokens' : kind === 'search_calls' ? 'searches' : 'images';
+    const number = (value: number) => value.toLocaleString('en-GB');
+    const remaining = Math.max(0, ceiling - used);
+    const reason = ceiling <= 0 ? 'not configured (ceiling 0)' : used >= ceiling ? 'monthly ceiling reached' : 'insufficient headroom for this action';
+    super(409, `${label} allowance: ${reason}. Used ${number(used)}; ceiling ${number(ceiling)}; remaining ${number(remaining)} ${unit}. Action estimate ${number(estimate)}; shortfall ${number(Math.max(0, estimate - remaining))}. Minimum estimated monthly ceiling ${number(used + estimate)}. Review Publishing settings before retrying.`, 'budget_exceeded');
   }
 }
 
@@ -291,7 +295,7 @@ export class SeoBlogEngine {
   private async requireBudget(brand: Brand, kind: UsageKind, amount: number): Promise<void> {
     const ceiling = kind === 'model_tokens' ? brand.settings.budgets.modelTokensPerMonth : kind === 'search_calls' ? brand.settings.budgets.searchCallsPerMonth : brand.settings.budgets.imagesPerMonth;
     const used = await this.store.usageSince(brand.id, kind, monthStart(this.now()));
-    if (ceiling <= 0 || used + amount > ceiling) throw new BudgetExceededError(kind);
+    if (ceiling <= 0 || used + amount > ceiling) throw new BudgetExceededError(kind, used, ceiling, amount);
   }
 
   private async recordGeneration(brandId: string, record: GenerationRecord, reference: string): Promise<void> {

@@ -51,6 +51,7 @@ test('central login has host-only secure cookies and separate CSRF; cross-site r
   assert.equal(page.code, 200);
   assert.equal(page.headers['referrer-policy'], 'same-origin');
   assert.match(page.body, /<meta name="referrer" content="same-origin">/);
+  assert.match(page.body, /action-feedback\.js" defer/);
   const cookie = page.headers['set-cookie']!;
   assert.match(cookie, /__Host-r72_content_login_csrf=/); assert.match(cookie, /Secure/); assert.match(cookie, /HttpOnly/); assert.match(cookie, /Path=\//); assert.doesNotMatch(cookie, /Domain=/i);
   assert.match(page.body, /Relaunch72/i); assert.doesNotMatch(page.body, /sso\/property-predator/);
@@ -81,6 +82,7 @@ test('non-managing session cannot reach early SEO delegation or establish a cent
 function formPolicy(response: Awaited<ReturnType<typeof call>>, policy: 'same-origin' | 'no-referrer') {
   assert.equal(response.headers['referrer-policy'], policy);
   assert.ok(response.body.includes(`<meta name="referrer" content="${policy}">`));
+  assert.equal(response.body.includes('id="central-action-feedback"'), policy === 'same-origin');
 }
 const setupToken = Buffer.alloc(32, 47).toString('base64url');
 async function setupForm(f: ReturnType<typeof fixture>) {
