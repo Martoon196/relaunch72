@@ -1,4 +1,4 @@
-name: SEO exact Linux proof
+name: Central content exact PostgreSQL proof
 on:
   push:
     branches: [codex/mhp-linux-proof-20261031]
@@ -8,16 +8,32 @@ permissions:
 jobs:
   exact-source-gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: local-ci-test-only
+          POSTGRES_DB: relaunch72_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
+      TEST_DATABASE_RESET_CONFIRM: reset-disposable-branch
+      TEST_DATABASE_SSL_MODE: disable
     steps:
-      - name: Checkout exact reviewed SEO release source
+      - name: Checkout exact reviewed release source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Martoon196/relaunch72
           ref: 75ee4208d9cd1ce5d605b61be2db7f96a20427b0
           persist-credentials: false
       - name: Assert exact source identity
-        shell: bash
         run: |
           test "$(git rev-parse HEAD)" = 75ee4208d9cd1ce5d605b61be2db7f96a20427b0
           test "$(git rev-parse 'HEAD^{tree}')" = 8bdc7edfa5ae4304dbe89ff8de1a8dbe299c6d39
@@ -31,7 +47,26 @@ jobs:
         run: npm ci --ignore-scripts --include=dev
       - name: Check supply chain
         run: node scripts/supply-chain.mjs --check
-      - name: Typecheck whole project
-        run: npm run typecheck
-      - name: Run whole normal suite
-        run: npm test
+      - name: Inject one bounded pause challenge into the existing disposable journey
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('orchestrator/test/db/seo-blog-social-promotion.integration.test.ts')
+          s=p.read_text()
+          needle='    const workerStore = new PgSeoBlogStore'
+          assert s.count(needle)==1
+          inject='''    const pauseBrand = await a.getBrand(actorA, brandA.id);
+              await a.updateSettings(actorA, brandA.id, pauseBrand.rowVersion, { pauseAll: true });
+              assert.equal((await a.getBrand(actorA, brandA.id)).settings.pauseAll, true);
+              console.info('ROOT_PAUSE_CHALLENGE: pauseAll=true before JIT and begin-call');
+          '''
+          s=s.replace(needle,inject+needle)
+          needle2="    assert.equal((await jobRow(first.result.jobId)).state, 'succeeded', 'the 0085 terminal receipt state');"
+          assert s.count(needle2)==1
+          s=s.replace(needle2,needle2+"\n    console.info('ROOT_PAUSE_REPRODUCED: pauseAll=true, providerStubEffects=' + published.length + ', job=succeeded');\n    return;")
+          p.write_text(s)
+          PY
+      - name: Run real-role paused dispatch challenge only
+        env:
+          RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
+        run: cd orchestrator && node --import ./test/windows-node24-shim.mjs --import tsx --test test/db/seo-blog-social-promotion.integration.test.ts
