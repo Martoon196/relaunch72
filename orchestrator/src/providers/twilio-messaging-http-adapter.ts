@@ -114,10 +114,20 @@ export class TwilioMessagingHttpAdapter implements TwilioMessagingSmsTransport {
         || twilioSmsSegmentCount(request.body) !== request.expectedSegmentCount) {
       throw new Error('Twilio send request failed its controlled-pilot boundary');
     }
+    // MHP009B: an event reminder carries an absolute, authority-bound provider
+    // deadline. Omitted for every existing caller, so their form is unchanged.
+    let validitySeconds: number | null = null;
+    if (request.providerExpiresAt !== undefined) {
+      const deadline = Date.parse(request.providerExpiresAt);
+      validitySeconds = Number.isFinite(deadline) ? Math.floor((deadline - this.#now().getTime()) / 1000) : 0;
+      if (validitySeconds <= 0) throw new Error('Twilio send request is past its provider deadline');
+      validitySeconds = Math.min(validitySeconds, 36_000);
+    }
     const form = new URLSearchParams();
     form.set('To', request.recipient);
     form.set('MessagingServiceSid', this.#messagingServiceSid);
     form.set('Body', request.body);
+    if (validitySeconds !== null) form.set('ValidityPeriod', String(validitySeconds));
     const authorization = `Basic ${Buffer
       .from(`${this.#apiKeySid}:${this.#apiKeySecret}`, 'utf8').toString('base64')}`;
     let response: Response;

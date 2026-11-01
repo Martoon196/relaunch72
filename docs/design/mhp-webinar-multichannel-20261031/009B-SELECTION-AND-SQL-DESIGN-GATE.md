@@ -1,0 +1,38 @@
+# 009B selection: public event opt-in, genuine owner batch approval, delayed worker authority
+
+Astra reviewed Sol's bounded pre-materialisation comparison, SHA256 89ab2675765d07b9e141e633b65c06a715f3cdbf882a7f1d0920268479ffbc01. Select that narrower provenance model over af68's generic worker-created message/delivery approval branch. This document authorises the next exact SQL DESIGN ONLY, not app/test/SQL implementation or provider effects.
+
+## Why this option and how it serves public webinar follow-up
+
+Actual0056 delivery guard permits a real owner action to create the exact approved message/version/request/decision and matching delivery/provider operation, then reserve the operation without a job. No new nullable human message creator or per-message approval bypass is needed. The due worker needs only truthful event authority/job provenance and read access to that exact historical approval, not INSERT privileges on human approval/message/delivery tables. Source evidence is accepted as a design conclusion, not an isolated proof.
+
+An owned-only design must not consume the full implementation estimate while leaving public webinar entrants unusable. Therefore the selected product slice retains actual optional PUBLIC event SMS permission and signed endpoint verification from the existing design. A native owner then reviews the exact body, event/time, sender and selected current verified recipient list, and performs ONE explicit batch activation. Each generated message/request/decision must truthfully derive from that actual human action and exact recipient/body, not a worker inventing a future approval. The first real acceptance batch contains only the owned test recipient. Additional genuinely opted-in verified webinar recipients may later be explicitly reviewed in the same native batch flow within current caps and ratified activation gates.
+
+New registrants or newly verified phones after a reviewed batch remain visibly **awaiting owner review**. No automatic future-entry claim, hidden background approval or implied permission from email signup. This is a useful public webinar pathway with an explicit approval step, not yet the full automatic public-channel programme. Full009 remains open until the remaining automatic-entry and WhatsApp work is completed or explicitly respecified by the founder.
+
+This trades one real owner batch review for removal of the largest proposed delivery schema/worker privilege expansion. Do not expose a confusing manual approval click per message; one concrete review action may record exact recipient-specific decisions behind it. A mere programme-level approval without an exact recipient list cannot stand in for those human decisions.
+
+## Next bounded design deliverable
+
+Sol remains sole lane. Produce `009B-SQL-DESIGN.md`, based on live d8d57e6e75f200da5ef27eb046842516c6bdb040 / tree89fe6be2a9fa776b2de7e6d7774e9076ffaa2cd5 and schema130/e6bb. First checkpoint30minutes; final target45minutes, report if unfinished. Root freshly confirms the next migration slot before it is reserved. Do not write migration, app or test source yet.
+
+The document must freeze:
+
+1. Exact private event-intent/immutable permission-proof fields, constraints, capability hashing/expiry/source-abuse and signed JOIN transaction. No arbitrary account creation or owner/0122 receipt impersonation; returning-email proof and host-only event capability remain distinct from auth. No new retention/legal rule. Consent remains event/channel-specific and optional.
+2. Exact existing CRM projection/point dedupe and quarantine contract under truthful public/webhook provenance. No second CRM, silent contact merge, generic consent writer or fake opportunity. Suppression/withdrawal and number change cannot silently regrant/rebind a previously approved tuple.
+3. Owner batch payload/replay: exact sorted selected recipient receipt IDs and revisions, source version/hash, programme/event/time/window, sender and reviewed policy revision. One current real owner action materialises actual human approvals/deliveries/reserved operations atomically or with a declared bounded idempotent batch contract. Determine batch bounds from existing request/cap limits, not invented increased frequency. Show ambiguous/foreign/stale recipients excluded before review and changed selection/payload conflicts. Jobs/authority remain absent until due. Never approve future unknown recipients.
+4. The minimal existing authority/job provenance branch with exclusive complete non-NULL CHECK shapes. Preserve original owner/user fields and behaviour unchanged; event branch stores actual worker evaluator and exact historical activation references. No changes to message approval/creator/delivery FKs or worker INSERT on those relations. Prove reserved operations cannot be picked by generic provider rails before a due SMS job.
+5. Exact due/preparation/claim/load/begin/settle function signatures, actual roles, lock order and current-source/receipt/sender/suppression/cap/event-cutoff checks. Worker uses no owner session/current-user GUC/human permission-use receipt; it derives fresh short authority from the exact activation. Preserve replay before mutable gates where appropriate, never extend fixed authority or duplicate after unknown outcome. Source/recipient revisions after activation hold for fresh genuine review.
+6. Exact use of existing absolute calendar relation versus a justified alternative, with ALL named old email/SMS claim/maintenance/settle/withdraw exclusions, exclusive row shapes and same-source compatible recovery. Inventory those concrete callsites only; do not reopen unrelated architecture. No duplicate calendar/transport/body store.
+7. Authority-bound optional provider TTL (if necessary), actual primary contract, old-request byte compatibility and no late-arrival guarantee. Neutral dated source copy; reminder timing is reviewed programme configuration, not silently live. Acceptance and rollout must distinguish owned one-recipient proof from later public batch activation.
+8. Minimal file/function/role allowlist, executable cutover/recovery and targeted real-caller concurrency/source/STOP/legacy isolation proof. Exact final SQL and changes to shared functions require Astra's further source review before rehearsal/production. Preserve all0130/earlier migration files.
+
+The prior8–12hour source /2–4hour isolated proof /1–3hour release estimate is a comparison, not implementation authority. Re-estimate the selected public-verification plus explicit batch contract and its earliest useful release checkpoint. Separate active engineering from owner/provider availability. Do not silently spend another implementation block during design.
+
+## Current acceptance and exclusions
+
+Root reports 009A live d8d/tree89fe/schema130, native binding successful after R10, actual owned phone confirmed20:14:30.607, and genuine one-test approval recorded; signed incoming MHP CHECK and actual send/reply/STOP acceptance still pending. These are not evidence of public event permission or unattended execution. Root continues that live gate independently; do not interfere with the owner browser or block working email.
+
+No app/test/DDL/provider edit by Sol now, no new lane/agent, no cap increase, no broad policy/price/refund/tax changes, no active email definition/rule edit, no PP work. WhatsApp stays separately gated by actual MHP binding/template/permission/signed proof/STOP/owned acceptance; source design must not pretend that SMS proof verifies WhatsApp.
+
+Status: narrower provenance model and useful public+explicit-batch product direction selected; exact SQL design assigned. Source implementation and full009 completion NOT ratified.

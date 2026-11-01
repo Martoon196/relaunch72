@@ -17,6 +17,7 @@ import {
   verifyTwilioSmsWebhook,
 } from '../../sms-live/foundation.js';
 import {
+  assertMhpEventSmsBoundaryReady,
   assertSmsWebhookBoundaryReady,
   SMS_WEBHOOK_DATABASE_ROLE,
 } from '../../sms-live-pg/readiness.js';
@@ -253,6 +254,7 @@ export async function startTwilioSmsLiveWebhookService(
 ): Promise<TwilioSmsWebhookRuntime> {
   const env = dependencies.env ?? process.env;
   const config = loadTwilioSmsLiveWebhookConfig(env);
+  const mhpEventPhoneInbound = env.MHP_EVENT_PHONE_INBOUND?.trim() === 'enabled';
   const writeErrorTelemetry = dependencies.writeErrorTelemetry
     ?? ((line: string) => process.stderr.write(line));
   let backgroundErrorCount = 0;
@@ -274,6 +276,7 @@ export async function startTwilioSmsLiveWebhookService(
       pool, config.installationId,
     );
     await (dependencies.assertBoundaryReady ?? assertSmsWebhookBoundaryReady)(pool);
+    if (mhpEventPhoneInbound && !dependencies.assertBoundaryReady) await assertMhpEventSmsBoundaryReady(pool, 'r72_sms_webhook_command');
   } catch (error) {
     await pool.end().catch(() => undefined);
     throw error;
@@ -286,6 +289,8 @@ export async function startTwilioSmsLiveWebhookService(
         commandPool: boundPool,
         workspaceId: exact.workspaceId,
         providerConnectionId: exact.connectionId,
+        // MHP009B: off unless explicitly enabled at cutover; the boundary is re-proved first.
+        mhpEventPhone: mhpEventPhoneInbound,
       })))(pool, config);
   }
 

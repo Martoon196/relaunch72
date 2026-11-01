@@ -137,6 +137,7 @@ const migration130Url = new URL('../../src/db/migrations/0130_mhp_owned_sms_pilo
 const migration131Url = new URL('../../src/db/migrations/0131_seo_blog_engine.sql', import.meta.url);
 const migration132Url = new URL('../../src/db/migrations/0132_seo_blog_social_promotion.sql', import.meta.url);
 const migration133Url = new URL('../../src/db/migrations/0133_seo_blog_social_dispatch_reservations.sql', import.meta.url);
+const migration134Url = new URL('../../src/db/migrations/0134_mhp_event_phone_programme.sql', import.meta.url);
 
 /** Frozen on the completed run; the 131-compatible bridge admits exactly this applied row. */
 const SEO_BLOG_SOCIAL_PROMOTION_CHECKSUM = '6a413abf1e1f04c7ce7cfa181c2ee6c7ced7b0155fcc2c4106ff860c98fa03cb';
@@ -709,6 +710,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: '0131_seo_blog_engine.sql', version: 131 },
     { filename: '0132_seo_blog_social_promotion.sql', version: 132 },
     { filename: '0133_seo_blog_social_dispatch_reservations.sql', version: 133 },
+    { filename: '0134_mhp_event_phone_programme.sql', version: 134 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -838,14 +840,16 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration131Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration132Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration133Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration134Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.
   assert.equal(sources.length, tail.length);
-  assert.equal(tail.at(-4)?.checksum, 'e6bb5be3a87e0fde3e29d3f47edde1c5daf8492f4c368f80e2e4335f5b239797');
-  assert.equal(tail.at(-3)?.checksum, '904c4651c51da6507370ca7eb2f271ca0347a27d76c60b0f24a19aba01695784');
-  assert.equal(tail.at(-2)?.checksum, SEO_BLOG_SOCIAL_PROMOTION_CHECKSUM);
-  assert.equal(tail.at(-1)?.checksum, '457402d6dc48129fe457044564a99720061bdc2e701e84ddbbb9cd957bba591f');
+  assert.equal(tail.at(-5)?.checksum, 'e6bb5be3a87e0fde3e29d3f47edde1c5daf8492f4c368f80e2e4335f5b239797');
+  assert.equal(tail.at(-4)?.checksum, '904c4651c51da6507370ca7eb2f271ca0347a27d76c60b0f24a19aba01695784');
+  assert.equal(tail.at(-3)?.checksum, SEO_BLOG_SOCIAL_PROMOTION_CHECKSUM);
+  assert.equal(tail.at(-2)?.checksum, '457402d6dc48129fe457044564a99720061bdc2e701e84ddbbb9cd957bba591f');
+  assert.equal(tail.at(-1)?.checksum, 'c3480208038aace2211f7a50cf64cb6cda45bedce980d274bdb661a7b9466e33');
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
   }

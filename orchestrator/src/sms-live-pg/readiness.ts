@@ -50,6 +50,22 @@ const VERIFY_CONFIRM = 'app_private.confirm_sms_phone_challenge(uuid,uuid,text)'
 const VERIFY_CLAIM = 'app_private.claim_sms_phone_challenge(uuid,uuid,text)';
 const VERIFY_ARM = 'app_private.arm_sms_phone_challenge(uuid,uuid,text)';
 const VERIFY_SETTLE = 'app_private.settle_sms_phone_challenge(uuid,uuid,text,text)';
+// MHP009B scheduled event reminders (0131). Each role receives only its own set.
+export const MHP_EVENT_OWNER_FUNCTIONS = Object.freeze([
+  'app_private.mhp_event_phone_review(bytea,uuid)',
+  'app_private.mhp_event_phone_activate(bytea,uuid,uuid,bytea,uuid[],jsonb,bytea,text,boolean,boolean)',
+  'app_private.mhp_event_phone_control(bytea,uuid,text,uuid,bytea,text)',
+]);
+export const MHP_EVENT_WORKER_FUNCTIONS = Object.freeze([
+  'app_private.mhp_prepare_event_sms(uuid,uuid,integer)',
+  'app_private.claim_event_sms_job(uuid,uuid,bytea,integer)',
+  'app_private.load_event_sms_job(uuid,uuid,bigint,bytea)',
+  'app_private.begin_event_sms_call(uuid,uuid,bigint,bytea,boolean,boolean,boolean)',
+  'app_private.mhp_hold_event_sms()',
+]);
+export const MHP_EVENT_WEBHOOK_FUNCTIONS = Object.freeze([
+  'app_private.mhp_record_event_sms_inbound(uuid,uuid,text,text,text,text,text,bytea,bytea,bytea,bytea,bytea,timestamp with time zone)',
+]);
 
 interface RoleContract {
   readonly role: SmsRuntimeRole;
@@ -63,7 +79,7 @@ const CONTRACTS: Readonly<Record<SmsRuntimeRole, RoleContract>> = Object.freeze(
     required: Object.freeze([AUTHORIZE, SESSION_LOCK, VERIFY_REQUEST, VERIFY_CONFIRM]),
     forbidden: Object.freeze([
       CLAIM, LOAD, BEGIN, SETTLE, STATUS_RECEIPT, INBOUND_PROJECTION, SESSION_READ,
-      VERIFY_CLAIM, VERIFY_ARM, VERIFY_SETTLE,
+      VERIFY_CLAIM, VERIFY_ARM, VERIFY_SETTLE, ...MHP_EVENT_WORKER_FUNCTIONS, ...MHP_EVENT_WEBHOOK_FUNCTIONS,
     ]),
   }),
   [SMS_WORKER_DATABASE_ROLE]: Object.freeze({
@@ -72,7 +88,7 @@ const CONTRACTS: Readonly<Record<SmsRuntimeRole, RoleContract>> = Object.freeze(
       VERIFY_CLAIM, VERIFY_ARM, VERIFY_SETTLE]),
     forbidden: Object.freeze([
       AUTHORIZE, SESSION_LOCK, SESSION_READ, STATUS_RECEIPT, INBOUND_PROJECTION,
-      VERIFY_REQUEST, VERIFY_CONFIRM,
+      VERIFY_REQUEST, VERIFY_CONFIRM, ...MHP_EVENT_OWNER_FUNCTIONS, ...MHP_EVENT_WEBHOOK_FUNCTIONS,
     ]),
   }),
   [SMS_WEBHOOK_DATABASE_ROLE]: Object.freeze({
@@ -81,6 +97,7 @@ const CONTRACTS: Readonly<Record<SmsRuntimeRole, RoleContract>> = Object.freeze(
     forbidden: Object.freeze([
       AUTHORIZE, SESSION_LOCK, SESSION_READ, CLAIM, LOAD, BEGIN, SETTLE,
       VERIFY_REQUEST, VERIFY_CONFIRM, VERIFY_CLAIM, VERIFY_ARM, VERIFY_SETTLE,
+      ...MHP_EVENT_OWNER_FUNCTIONS, ...MHP_EVENT_WORKER_FUNCTIONS,
     ]),
   }),
 });
@@ -155,4 +172,16 @@ export function assertSmsWorkerBoundaryReady(pool: Pick<Pool, 'query'>): Promise
 
 export function assertSmsWebhookBoundaryReady(pool: Pick<Pool, 'query'>): Promise<void> {
   return assertBoundary(pool, CONTRACTS[SMS_WEBHOOK_DATABASE_ROLE]);
+}
+
+const EVENT_ROLE_FUNCTIONS: Readonly<Record<SmsRuntimeRole, readonly string[]>> = Object.freeze({
+  [SMS_COMMAND_DATABASE_ROLE]: MHP_EVENT_OWNER_FUNCTIONS,
+  [SMS_WORKER_DATABASE_ROLE]: MHP_EVENT_WORKER_FUNCTIONS,
+  [SMS_WEBHOOK_DATABASE_ROLE]: MHP_EVENT_WEBHOOK_FUNCTIONS,
+});
+
+/** Additive 0131 probe: the role's existing exact boundary plus its own event functions. */
+export function assertMhpEventSmsBoundaryReady(pool: Pick<Pool, 'query'>, role: SmsRuntimeRole): Promise<void> {
+  const base = CONTRACTS[role];
+  return assertBoundary(pool, Object.freeze({ role, required: Object.freeze([...base.required, ...EVENT_ROLE_FUNCTIONS[role]]), forbidden: base.forbidden }));
 }

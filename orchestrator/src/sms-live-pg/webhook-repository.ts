@@ -17,6 +17,13 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const SHA256 = /^[0-9a-f]{64}$/u;
 const STATUS_OUTCOMES = new Set(['applied', 'replayed', 'conflict', 'not_applicable']);
 const INBOUND_OUTCOMES = new Set(['applied', 'replayed', 'conflict']);
+const MHP_WORKSPACE_ID = '2789228d-55a6-4688-b1e8-2f70abca990b';
+// The 0131 wrapper records every outcome durably; only conflict changes the HTTP reply.
+const EVENT_INBOUND_OUTCOMES: Readonly<Record<string, InboundOutcome>> = Object.freeze({
+  applied: 'applied', replayed: 'replayed', conflict: 'conflict',
+  event_joined: 'applied', event_held: 'applied', event_join_expired: 'applied', unprojected: 'applied',
+  unlinked_stop: 'applied', unlinked_start: 'applied',
+});
 
 type StatusOutcome = 'applied' | 'replayed' | 'conflict' | 'not_applicable';
 type InboundOutcome = 'applied' | 'replayed' | 'conflict';
@@ -41,14 +48,17 @@ export class PgTwilioSmsWebhookRepository {
   readonly #commandPool: TwilioSmsWebhookRepositoryDependencies['commandPool'];
   readonly workspaceId: string;
   readonly connectionId: string;
+  /** MHP009B: route the MHP number's inbound texts through the signed JOIN/STOP wrapper. */
+  readonly eventPhone: boolean;
 
-  constructor(dependencies: TwilioSmsWebhookRepositoryDependencies) {
+  constructor(dependencies: TwilioSmsWebhookRepositoryDependencies & { readonly mhpEventPhone?: boolean }) {
     if (!UUID.test(dependencies.workspaceId) || !UUID.test(dependencies.providerConnectionId)) {
       fail('binding is invalid');
     }
     this.#commandPool = dependencies.commandPool;
     this.workspaceId = dependencies.workspaceId;
     this.connectionId = dependencies.providerConnectionId;
+    this.eventPhone = dependencies.mhpEventPhone === true && dependencies.workspaceId === MHP_WORKSPACE_ID;
   }
 
   async recordStatus(input: Readonly<{
@@ -102,6 +112,28 @@ export class PgTwilioSmsWebhookRepository {
       input.payloadSha256,
       input.signatureSha256,
     ].join('\u001f')).digest();
+    const values = [this.workspaceId, this.connectionId, event.externalEventId,
+      event.providerMessageId, event.normalizedSender,
+      event.optEvidence ?? '', event.body,
+      event.senderSha256, event.bodySha256, input.payloadSha256,
+      input.signatureSha256, eventIdentitySha256, input.occurredAt];
+    if (this.eventPhone) {
+      // Same verified inputs; the wrapper delegates to the existing projection in
+      // the same READ COMMITTED transaction (agreed design section 3).
+      const eventRows = await withTransaction(this.#commandPool, {
+        actorKind: 'webhook', workspaceId: this.workspaceId, requestId: this.#requestId(event.externalEventId),
+      }, async (transaction) => (await transaction.query<OutcomeRow>(
+        `/* mhp-event-phone.record-inbound */
+         SELECT inbound.disposition AS outcome
+         FROM app_private.mhp_record_event_sms_inbound(
+           $1::uuid, $2::uuid, $3::text, $4::text, $5::text, $6::text, $7::text,
+           decode($8, 'hex'), decode($9, 'hex'), decode($10, 'hex'),
+           decode($11, 'hex'), $12::bytea, $13::timestamptz
+         ) AS inbound`, values)).rows, { isolation: 'read committed' });
+      const value = eventRows[0]?.outcome;
+      if (eventRows.length !== 1 || typeof value !== 'string' || !Object.hasOwn(EVENT_INBOUND_OUTCOMES, value)) fail('returned an invalid outcome');
+      return EVENT_INBOUND_OUTCOMES[value]!;
+    }
     const rows = await withTransaction(this.#commandPool, {
       actorKind: 'webhook',
       workspaceId: this.workspaceId,
@@ -114,11 +146,7 @@ export class PgTwilioSmsWebhookRepository {
          decode($8, 'hex'), decode($9, 'hex'), decode($10, 'hex'),
          decode($11, 'hex'), $12::bytea, $13::timestamptz
        ) AS projection`,
-      [this.workspaceId, this.connectionId, event.externalEventId,
-        event.providerMessageId, event.normalizedSender,
-        event.optEvidence ?? '', event.body,
-        event.senderSha256, event.bodySha256, input.payloadSha256,
-        input.signatureSha256, eventIdentitySha256, input.occurredAt],
+      values,
     )).rows, { isolation: 'serializable' });
     return outcomeOf(rows, INBOUND_OUTCOMES) as InboundOutcome;
   }

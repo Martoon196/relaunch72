@@ -151,6 +151,8 @@ export interface TwilioSmsLiveMaterial extends TwilioSmsLiveClaim {
   readonly recipient: string;
   readonly body: string;
   readonly segmentCount: number;
+  /** MHP009B only: absolute provider queue deadline from the immutable event calendar. */
+  readonly providerExpiresAt?: string;
 }
 
 export interface TwilioSmsLiveRepository {
@@ -177,6 +179,8 @@ export interface TwilioSmsSendRequest {
   readonly expectedSegmentCount: number;
   /** SHA-256 of the canonical enqueue-time request; doubles as the idempotency key. */
   readonly idempotencySha256: string;
+  /** Optional absolute deadline mapped to Twilio ValidityPeriod (1..36000 s). */
+  readonly providerExpiresAt?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -264,6 +268,7 @@ export async function runTwilioSmsLiveOnce(input: Readonly<{
       body: material.body,
       expectedSegmentCount: material.segmentCount,
       idempotencySha256: material.requestSha256,
+      ...(material.providerExpiresAt !== undefined ? { providerExpiresAt: material.providerExpiresAt } : {}),
     });
   } catch {
     result = outcomeUnknown(now);
