@@ -40,6 +40,8 @@ const SEO_BLOG_SOCIAL_DISPATCH_MIGRATION = '0133_seo_blog_social_dispatch_reserv
 const SEO_BLOG_SOCIAL_DISPATCH_CHECKSUM = '457402d6dc48129fe457044564a99720061bdc2e701e84ddbbb9cd957bba591f';
 const MHP_EVENT_PHONE_MIGRATION = '0134_mhp_event_phone_programme.sql';
 const MHP_EVENT_PHONE_CHECKSUM = 'c3480208038aace2211f7a50cf64cb6cda45bedce980d274bdb661a7b9466e33';
+const MHP_EVENT_PHONE_SIGNUP_MIGRATION = '0135_mhp_event_phone_signup_handoff.sql';
+const MHP_EVENT_PHONE_SIGNUP_CHECKSUM = '9f73caa543ac243304063866897c4900301c4bb64bcf7f6d238cd668c8cc2be2';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -196,6 +198,15 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(SEO_BLOG_SOCIAL_DISPATCH_MIGRATION) === SEO_BLOG_SOCIAL_DISPATCH_CHECKSUM
       && applied.get(MHP_EVENT_PHONE_MIGRATION) === MHP_EVENT_PHONE_CHECKSUM) {
     applied.delete(MHP_EVENT_PHONE_MIGRATION);
+  }
+  // The exact 0134 recovery build accepts only the reviewed additive signup
+  // handoff migration. A later or changed ledger row remains a hard failure.
+  if (migrations.length === 134
+      && migrations[133]?.filename === MHP_EVENT_PHONE_MIGRATION
+      && migrations[133]?.checksum === MHP_EVENT_PHONE_CHECKSUM
+      && applied.get(MHP_EVENT_PHONE_MIGRATION) === MHP_EVENT_PHONE_CHECKSUM
+      && applied.get(MHP_EVENT_PHONE_SIGNUP_MIGRATION) === MHP_EVENT_PHONE_SIGNUP_CHECKSUM) {
+    applied.delete(MHP_EVENT_PHONE_SIGNUP_MIGRATION);
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));

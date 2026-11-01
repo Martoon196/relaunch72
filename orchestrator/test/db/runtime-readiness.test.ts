@@ -336,6 +336,22 @@ test('133 recovery bridge accepts only the exact additive MHP event phone 0134',
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...priorChanged, eventPhone]), directory), /migration not present/);
 });
 
+test('134 recovery bridge accepts only the exact additive MHP signup handoff 0135', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-mhp-signup-compat-'));
+  const prefix = (await discoverMigrations()).slice(0, 134);
+  await Promise.all(prefix.map(migration => writeFile(path.join(directory, migration.filename), migration.sql, 'utf8')));
+  const rows = prefix.map(({ filename, checksum }) => ({ filename, checksum }));
+  assert.equal(rows.length, 134);
+  assert.deepEqual(rows[133], { filename: '0134_mhp_event_phone_programme.sql', checksum: 'c3480208038aace2211f7a50cf64cb6cda45bedce980d274bdb661a7b9466e33' });
+  const signup = { filename: '0135_mhp_event_phone_signup_handoff.sql', checksum: '9f73caa543ac243304063866897c4900301c4bb64bcf7f6d238cd668c8cc2be2' };
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows), directory));
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool([...rows, signup]), directory));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { ...signup, checksum: '0'.repeat(64) }]), directory), /migration not present/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, signup, { filename: '0136_unknown.sql', checksum: 'a'.repeat(64) }]), directory), /migration not present/);
+  const priorChanged = rows.map((row, index) => index === 133 ? { ...row, checksum: '0'.repeat(64) } : row);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...priorChanged, signup]), directory), /migration not present/);
+});
+
 test('final134 SMS runtime preserves SEO131–133 and strictly requires exact134', async () => {
   const rows = (await discoverMigrations()).map(({ filename, checksum }) => ({ filename, checksum }));
   assert.equal(rows.length, 134);
