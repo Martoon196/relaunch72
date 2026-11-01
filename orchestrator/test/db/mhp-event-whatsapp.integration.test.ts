@@ -130,6 +130,10 @@ test('MHP009C WhatsApp follow-up: own JOIN, Meta read, owner batch and absolute-
     const stop8 = inbound(8, 'STOP');
     assert.equal(await deliver(p, stop8), 'unlinked_stop');
     assert.equal(await deliver(p, stop8), 'replayed');
+    // Astra correction: an identical replay is effect-free; changed evidence under the same provider id is a conflict.
+    assert.equal(await deliver(p, { ...stop8, body: 'STOP please' }), 'conflict');
+    assert.equal(await deliver(p, { ...stop8, signature: randomBytes(32) }), 'conflict');
+    assert.equal(await deliver(p, { ...stop8, sender: phone(7).slice(1) }), 'conflict');
     await expectPostgresError(deliver(p, inbound(8, 'hello')), '23503'); // an ordinary message from an unknown number keeps the refusal
     const unlinked8 = await ownerQuery<{ wa: number; sms: number; held: number; points: number }>(owner, `SELECT
       (SELECT count(*)::int FROM app_private.mhp_unlinked_opt_events WHERE channel='whatsapp' AND phone_identity_sha256=$1 AND opt_evidence='stop') wa,

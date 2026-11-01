@@ -758,7 +758,7 @@ DECLARE ws constant uuid:='2789228d-55a6-4688-b1e8-2f70abca990b'; nonce text; in
  prospect app_private.mhp_prospects%ROWTYPE; phone text; wa_point app.contact_points%ROWTYPE; email_point app.contact_points%ROWTYPE;
  ambiguous boolean:=false; contact uuid; point uuid; endpoint_sha bytea; consent uuid:=gen_random_uuid(); receipt uuid:=gen_random_uuid();
  outcome text; now_at timestamptz:=statement_timestamp(); grant_row record; stop_point app.contact_points%ROWTYPE; withdrawn_consent uuid; is_stop boolean;
- phone_sha bytea;
+ phone_sha bytea; unlinked app_private.mhp_unlinked_opt_events%ROWTYPE;
 BEGIN
  IF session_user<>'r72_whatsapp_live_webhook_command' OR p_workspace IS DISTINCT FROM ws OR current_setting('app.workspace_id',true) IS DISTINCT FROM ws::text
   OR current_setting('app.actor_kind',true) IS DISTINCT FROM 'webhook' OR coalesce(current_setting('app.user_id',true),'')<>''
@@ -772,9 +772,18 @@ BEGIN
   AND NOT EXISTS(SELECT 1 FROM app.property_predator_whatsapp_live_binding_revocations r WHERE r.workspace_id=b.workspace_id AND r.binding_id=b.id))
  THEN RAISE EXCEPTION 'MHP event WhatsApp binding denied' USING ERRCODE='42501'; END IF;
  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(format('mhp-wa-inbox:%s:%s:%s',p_workspace,p_binding,p_external_event),7200132));
+ SELECT * INTO unlinked FROM app_private.mhp_unlinked_opt_events e WHERE e.channel='whatsapp' AND e.provider_event_id=p_external_event;
+ IF FOUND THEN
+  -- An unlinked opt event replays effect-free only when every piece of evidence is identical; changed
+  -- evidence under the same provider id is a conflict. The projection is never re-run for it.
+  IF (unlinked.whatsapp_binding_id,unlinked.provider_message_id,unlinked.phone_identity_sha256,unlinked.body_sha256,unlinked.payload_sha256,
+      unlinked.signature_sha256,unlinked.event_identity_sha256)
+   IS DISTINCT FROM (p_binding,p_message_id,public.digest('+'||p_sender,'sha256'),p_body_sha,p_payload_sha,p_signature_sha,p_event_identity_sha)
+  THEN RETURN QUERY SELECT 'conflict'::text; RETURN; END IF;
+  RETURN QUERY SELECT 'replayed'::text; RETURN;
+ END IF;
  IF EXISTS(SELECT 1 FROM app_private.mhp_event_whatsapp_receipts r WHERE r.whatsapp_binding_id=p_binding AND r.provider_event_id=p_external_event)
-  OR EXISTS(SELECT 1 FROM app_private.mhp_event_whatsapp_intents i WHERE i.consumed_provider_event_id=p_external_event)
-  OR EXISTS(SELECT 1 FROM app_private.mhp_unlinked_opt_events e WHERE e.channel='whatsapp' AND e.provider_event_id=p_external_event) THEN
+  OR EXISTS(SELECT 1 FROM app_private.mhp_event_whatsapp_intents i WHERE i.consumed_provider_event_id=p_external_event) THEN
   outcome:=app_private.mhp_event_whatsapp_project(p_workspace,p_binding,p_external_event,p_message_id,p_sender,p_body,p_sender_sha,p_body_sha,
    p_payload_sha,p_signature_sha,p_event_identity_sha,p_occurred,true);
   RETURN QUERY SELECT CASE WHEN outcome='conflict' THEN 'conflict' ELSE 'replayed' END; RETURN;

@@ -4,6 +4,8 @@
 
 ## 0. Resubmission: what Astra asked for, what changed, and the exact new SHAs
 
+> **Replay correction (after Astra accepted the four fixes at 009B `76fe4d8` / 009C `a0c9c9e`).** In the unlinked replay branches of 0131 and 0132, a replay under the same provider id is effect-free and answers `replayed` only when every piece of evidence is identical; changed evidence answers `conflict`, and the projection is never re-run for it. Both migrations and both bridge pins are re-hashed; no other change. The SHA table below is the post-correction state (REPLAY_SHAS).
+
 | | Branch | Full SHA |
 |---|---|---|
 | **009B SMS candidate** | `claude/009b-r3` | `76fe4d8f5f0d691c52e58ec8f77f5970c272af61` |
@@ -13,8 +15,8 @@
 
 | Migration | Second-round sha256 | First round |
 |---|---|---|
-| `0131_mhp_event_phone_programme.sql` | `b117e3d267640f58ee41e4d32a7d9f936e9e4add5d91ea1e921cc88051312c14` | `8ad7b48e…` |
-| `0132_mhp_event_whatsapp_programme.sql` | `25f63660ee2148c6ff949cb97b2c791c6e560df5ccdc7d718c286566dd10cbc0` | `ad09a7f2…` |
+| `0131_mhp_event_phone_programme.sql` | `8abaea82bb29060d73281a78e59d0b9c8d070faf6bf91e40c2bdc7245e9753ac` (after the replay correction; second round was `b117e3d2…`) | `8ad7b48e…` |
+| `0132_mhp_event_whatsapp_programme.sql` | `699509011c03267e2df8aa4e8ef7ef2c219fcb4a8fea641c82fa97d7d279f366` (after the replay correction; second round was `25f63660…`) | `ad09a7f2…` |
 
 Both migrations were amended in place: neither had been applied anywhere but the disposable test database. Every pin (ledger tests, both bridges) is updated, and the merge of 009B into both 009C branches carries byte-identical 009B files.
 
