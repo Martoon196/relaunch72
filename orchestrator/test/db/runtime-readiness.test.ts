@@ -353,7 +353,10 @@ test('134 recovery bridge accepts only the exact additive MHP signup handoff 013
 });
 
 test('final134 SMS runtime preserves SEO131–133 and strictly requires exact134', async () => {
-  const rows = (await discoverMigrations()).map(({ filename, checksum }) => ({ filename, checksum }));
+  const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-mhp-final134-'));
+  const prefix = (await discoverMigrations()).slice(0, 134);
+  await Promise.all(prefix.map(migration => writeFile(path.join(directory, migration.filename), migration.sql, 'utf8')));
+  const rows = prefix.map(({ filename, checksum }) => ({ filename, checksum }));
   assert.equal(rows.length, 134);
   assert.deepEqual(rows[127], { filename: '0128_mhp_sequence_capture_entry.sql', checksum: '09b35b4eaf6e934c8f560e8d9d645bd3b9f37a34268f77f4afd974ecd1b54e97' });
   assert.deepEqual(rows[128], { filename: '0129_mhp_local_channel_drafts.sql', checksum: '649ba68b60954b6e76d4e702511321e59eff0785128051ed7b81f968abe1b57a' });
@@ -362,14 +365,25 @@ test('final134 SMS runtime preserves SEO131–133 and strictly requires exact134
   assert.deepEqual(rows[131], { filename: '0132_seo_blog_social_promotion.sql', checksum: '6a413abf1e1f04c7ce7cfa181c2ee6c7ced7b0155fcc2c4106ff860c98fa03cb' });
   assert.deepEqual(rows[132], { filename: '0133_seo_blog_social_dispatch_reservations.sql', checksum: '457402d6dc48129fe457044564a99720061bdc2e701e84ddbbb9cd957bba591f' });
   assert.deepEqual(rows[133], { filename: '0134_mhp_event_phone_programme.sql', checksum: 'c3480208038aace2211f7a50cf64cb6cda45bedce980d274bdb661a7b9466e33' });
-  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 133))), /schema is behind by 1 migration/);
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 132))), /schema is behind by 2 migration/);
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows), directory));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 133)), directory), /schema is behind by 1 migration/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 132)), directory), /schema is behind by 2 migration/);
   for (const at of [0, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133]) {
     const corrupt = rows.map((row, index) => index === at ? { ...row, checksum: '0'.repeat(64) } : row);
-    await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(corrupt)), /checksum changed/);
+    await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(corrupt), directory), /checksum changed/);
   }
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(0, 129), rows[130]!])), /not a contiguous prefix/);
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, rows[130]!])), /invalid runtime migration ledger/);
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { filename: '0135_unknown.sql', checksum: 'a'.repeat(64) }])), /migration not present/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(0, 129), rows[130]!]), directory), /not a contiguous prefix/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, rows[130]!]), directory), /invalid runtime migration ledger/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { filename: '0135_unknown.sql', checksum: 'a'.repeat(64) }]), directory), /migration not present/);
+});
+
+test('final135 signup handoff runtime requires exact135 and preserves prior ledger', async () => {
+  const rows = (await discoverMigrations()).map(({ filename, checksum }) => ({ filename, checksum }));
+  assert.equal(rows.length, 135);
+  assert.deepEqual(rows[134], { filename: '0135_mhp_event_phone_signup_handoff.sql', checksum: '9f73caa543ac243304063866897c4900301c4bb64bcf7f6d238cd668c8cc2be2' });
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 134))), /schema is behind by 1 migration/);
+  const changed = rows.map((row, index) => index === 134 ? { ...row, checksum: '0'.repeat(64) } : row);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(changed)), /checksum changed/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { filename: '0136_unknown.sql', checksum: 'a'.repeat(64) }])), /migration not present/);
 });
