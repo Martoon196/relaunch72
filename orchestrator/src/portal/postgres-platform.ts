@@ -1,4 +1,5 @@
 import { createPortalSeoBlogService, type PortalSeoBlogService } from './seo-blog-service.js';
+import { createSeoBlogZernioWebhookBrands, type SeoBlogZernioWebhookBrands } from './seo-blog-social-pg.js';
 import { SeoBlogCredentialVault } from '../seo-blog/vault.js';
 import { createHash } from 'node:crypto';
 import { createPortalFollowupFlowService, type PortalFollowupFlowService } from './followup-flow-service.js';
@@ -196,6 +197,8 @@ export interface PgPortalPlatform {
   followupFlows?: PortalFollowupFlowService;
   /** SEO blog engine; omitted unless SEO_BLOG_ENABLED=true and r72_content_command is ready. */
   seoBlog?: PortalSeoBlogService;
+  /** Brand-routed Zernio account webhook receipts; absent when social delivery is not composed. */
+  seoBlogZernioWebhook?: SeoBlogZernioWebhookBrands;
   seoBlogVaultReady?: boolean;
   /** Omitted unless adapter reads and founder command writes both pass readiness. */
   companyAssets?: PgPortalCompanyAssetsService;
@@ -1270,7 +1273,11 @@ export async function buildPgPortalPlatform(
     const ppFlowWorkspace = env.PROPERTY_PREDATOR_PILOT_WORKSPACE_ID?.trim().toLowerCase() ?? '';
     const followupFlows = assetReadinessPool && contentCommandPool && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(ppFlowWorkspace)
       ? createPortalFollowupFlowService({ webPool, adapterPool: assetReadinessPool, commandPool: contentCommandPool, workspaceId: ppFlowWorkspace }) : undefined;
-    const seoBlog = env.SEO_BLOG_ENABLED?.trim() === 'true' && contentCommandPool ? createPortalSeoBlogService(contentCommandPool, env, assetReadinessPool) : undefined;
+    const seoBlog = env.SEO_BLOG_ENABLED?.trim() === 'true' && contentCommandPool
+      ? createPortalSeoBlogService(contentCommandPool, env, assetReadinessPool, zernioSocialReadinessPool ? { zernioPool: zernioSocialReadinessPool } : undefined)
+      : undefined;
+    // Registered brands' signed account-lifecycle receipts route by provider profile; PP's own path is untouched.
+    const seoBlogZernioWebhook = seoBlog?.social === 'live' && zernioSocialReadinessPool ? createSeoBlogZernioWebhookBrands(zernioSocialReadinessPool) : undefined;
     let mhp: MhpRuntime | undefined;
     try {
       mhp = await buildMhpRuntime({ env, webPool, identityPool, commandPool,
@@ -1312,6 +1319,7 @@ export async function buildPgPortalPlatform(
       companyContent,
       followupFlows,
       seoBlog,
+      seoBlogZernioWebhook,
       seoBlogVaultReady: Boolean(SeoBlogCredentialVault.fromEnv(env)),
       companyAssets,
       companyContentSync,

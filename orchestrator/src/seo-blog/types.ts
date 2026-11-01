@@ -451,14 +451,61 @@ export interface Article {
   readonly failure: string | null;
   readonly createdAt: IsoInstant;
   readonly rowVersion: number;
-  readonly linkedPromotions?: readonly {
-    readonly articleVersionId: string;
-    readonly network: 'instagram' | 'linkedin';
-    readonly packSha: string;
-    readonly contentItemId: string;
-    readonly contentVersionId: string;
-    readonly approvalDecisionId: string;
-  }[];
+  readonly linkedPromotions?: readonly LinkedPromotionRecord[];
+  /** Durable owner observations: the exact moment an owner session verified the parent for one canonical command. */
+  readonly promotionObservations?: readonly PromotionObservation[];
+  /** Per-network delivery state of linked promotions through the brand's registered account. */
+  readonly socialDispatches?: readonly SocialDispatch[];
+}
+
+export type PromotionNetwork = 'instagram' | 'linkedin';
+
+export interface LinkedPromotionRecord {
+  readonly articleVersionId: string;
+  readonly network: PromotionNetwork;
+  readonly packSha: string;
+  readonly contentItemId: string;
+  readonly contentVersionId: string;
+  readonly approvalRequestId?: string;
+  readonly approvalDecisionId: string;
+}
+
+/**
+ * Source-local observation record. An owner action verifies the parent article
+ * tuple at `observedAt`; the canonical command derived from it carries exactly
+ * that observation, so a retried request replays the same durable command
+ * instead of inventing a fresh timestamp. Expired observations are never
+ * extended: the owner observes again, producing a new command.
+ */
+export interface PromotionObservation {
+  readonly id: string;
+  readonly purpose: 'approve' | 'schedule';
+  readonly articleVersionId: string;
+  readonly network: PromotionNetwork;
+  readonly packSha: string;
+  readonly observedAt: IsoInstant;
+  readonly expiresAt: IsoInstant;
+  readonly observedBy: string;
+  /** Filled once the canonical draft version exists so a resumed approval never re-creates it. */
+  readonly contentItemId: string | null;
+  readonly contentVersionId: string | null;
+}
+
+export interface SocialDispatch {
+  readonly id: string;
+  readonly articleVersionId: string;
+  readonly network: PromotionNetwork;
+  readonly packSha: string;
+  readonly bindingId: string;
+  readonly intentId: string;
+  readonly jobId: string | null;
+  readonly scheduledFor: IsoInstant;
+  readonly requestedAt: IsoInstant;
+  readonly requestedBy: string;
+  readonly state: 'queued' | 'held';
+  readonly detail: string | null;
+  readonly dailyCap: number;
+  readonly monthlyCap: number;
 }
 
 // ─── Destinations & publication ──────────────────────────────────────────────

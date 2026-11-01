@@ -750,6 +750,7 @@ async function main(): Promise<void> {
   const zernioAccountWebhook = composePropertyPredatorZernioAccountWebhook(
     process.env,
     postgresPortal?.zernioSocial,
+    postgresPortal?.seoBlogZernioWebhook,
   );
   if (zernioAccountWebhook.enabled) {
     console.log(zernioAccountWebhook.ready

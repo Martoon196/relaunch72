@@ -14,7 +14,7 @@ import { portalCsrfToken, verifyPortalCsrf } from './session.js';
 import type { PortalSeoBlogService } from './seo-blog-service.js';
 import {
   activityPage, articlesPage, brandsPage, CALENDAR_SCRIPT, calendarPage, editorPage, overviewPage, publishingPage,
-  SEO_BLOG_BASE, setupPage, topicsPage, type Shell, type SeoBlogTab,
+  SEO_BLOG_BASE, setupPage, socialPage, topicsPage, type Shell, type SeoBlogTab,
 } from './seo-blog-view.js';
 import { USAGE_ESTIMATES, type Actor, type SeoBlogEngine } from '../seo-blog/engine.js';
 import { defaultPublishers } from '../seo-blog/publishers/registry.js';
@@ -28,6 +28,9 @@ export interface SeoBlogRouteInput {
   readonly sessionSecret: string;
   readonly vaultReady: boolean;
   readonly applicationName?: string;
+  /** Whether provider OAuth callbacks return to this host; connection starts only where they complete. */
+  readonly socialConnectHere?: boolean;
+  readonly socialConnectHost?: string;
 }
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
@@ -156,7 +159,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const form: FormData = multipart ? parseMultipartForm(body, contentType) : { fields: new URLSearchParams(body.toString('utf8')), file: null };
       const f = (name: string) => form.fields.get(name);
       if (!verifyPortalCsrf(input.sessionSecret, identity.sessionToken, f('_csrf') ?? undefined)) throw new SeoBlogError(403, 'Your form expired. Refresh the page and try again.');
-      return await handlePost(res, engine, actor, path, brandId, rest, form, f, back, ok);
+      return await handlePost(res, engine, actor, path, brandId, rest, form, f, back, ok, input);
     }
     if (method !== 'GET' && method !== 'HEAD') throw new SeoBlogError(405, 'Use the controls on the page.');
 
@@ -200,7 +203,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         return send(res, 200, file.body, file.contentType, { 'content-disposition': `attachment; filename="${file.filename.replace(/[^a-z0-9.-]/gi, '_')}"`, 'content-security-policy': PREVIEW_CSP });
       }
       const [detail, destinations] = await Promise.all([engine.getArticle(actor, brandId, articleId), engine.listDestinations(actor, brandId)]);
-      return send(res, 200, editorPage(shell('articles'), { ...detail, destinations }));
+      const social = detail.article.linkedPromotions?.length ? await engine.socialOverview(actor, brandId).catch(() => null) : null;
+      return send(res, 200, editorPage(shell('articles'), { ...detail, destinations, social }));
     }
     if (tab === 'calendar') {
       const view = (['month', 'week', 'list'] as const).find((v) => v === url.searchParams.get('view')) ?? 'month';
@@ -210,6 +214,9 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       return send(res, 200, calendarPage(shell('calendar'), { view, anchor, articles, briefs: plans.flatMap((p) => p.briefs), destinations, brandsAll: false }));
     }
     if (tab === 'publishing') return send(res, 200, publishingPage(shell('publishing'), { usage: await engine.usage(actor, brandId) }));
+    if (tab === 'social') {
+      return send(res, 200, socialPage(shell('social'), { overview: await engine.socialOverview(actor, brandId), connectHere: input.socialConnectHere === true, connectHost: input.socialConnectHost ?? '', intentId: randomUUID() }));
+    }
     if (tab === 'activity') {
       const [events, jobs] = await Promise.all([engine.activity(actor, brandId), engine.listJobs(actor, brandId)]);
       return send(res, 200, activityPage(shell('activity'), { events, jobs }));
@@ -230,7 +237,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
 
 async function handlePost(
   res: ServerResponse, engine: SeoBlogEngine, actor: Actor, path: string, brandId: string | null, rest: string, form: FormData,
-  f: (name: string) => string | null, back: (tab: string) => string, ok: (location: string, text: string) => void,
+  f: (name: string) => string | null, back: (tab: string) => string, ok: (location: string, text: string) => void, input: SeoBlogRouteInput,
 ): Promise<void> {
   if (path === `${SEO_BLOG_BASE}/brands`) {
     const { brand, created } = await engine.createBrand(actor, { commandId: f('commandId') ?? '', name: f('name') ?? '', website: f('website') });
@@ -327,6 +334,25 @@ async function handlePost(
       await engine.updateSettings(actor, brandId, rowVersion(), settingsFromForm(brand, form.fields));
       return ok(back('publishing'), 'Settings saved.');
     }
+    case 'social': {
+      if (parts[1] === 'profile') { await engine.registerSocialProfile(actor, brandId, (f('displayName') ?? '').trim(), f('providerProfileId') ?? ''); return ok(back('social'), 'Zernio profile registered. Connect this brand’s accounts next.'); }
+      if (parts[1] === 'connect') {
+        const network = f('network');
+        if (network !== 'instagram' && network !== 'linkedin') throw new SeoBlogError(400, 'Choose a network.');
+        if (f('confirm') !== 'CONNECT') throw new SeoBlogError(400, 'Confirm the connection.');
+        if (input.socialConnectHere !== true) throw new SeoBlogError(409, `Connect accounts from ${input.socialConnectHost ?? 'the host that receives the provider callback'}.`);
+        const { authUrl } = await engine.beginSocialConnect(actor, brandId, network, f('intentId') ?? '');
+        return send(res, 200, `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><title>Connect ${network}</title></head><body><main style="max-width:640px;margin:40px auto;font:16px system-ui"><h1>Continue to ${network}</h1><p>A one-use provider handoff is ready. Review and approve the account permissions with the provider; nothing is connected until it confirms.</p><p><a href="${authUrl.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)}" rel="noopener noreferrer">Continue to ${network}</a></p><p><a href="${back('social')}">Back</a></p></main></body></html>`, 'text/html; charset=utf-8', { 'referrer-policy': 'no-referrer' });
+      }
+      if (parts[1] === 'bind') {
+        const network = f('network');
+        if (network !== 'instagram' && network !== 'linkedin') throw new SeoBlogError(400, 'Choose a network.');
+        await engine.registerSocialBinding(actor, brandId, { network, providerAccountId: f('providerAccountId') ?? '', dailyCap: int(f('dailyCap'), 'posts per day'), monthlyCap: int(f('monthlyCap'), 'posts per month') });
+        return ok(back('social'), 'Account registered. Caps of 0 keep delivery off until you raise them.');
+      }
+      if (parts[1] === 'revoke') { await engine.revokeSocialBinding(actor, brandId, f('bindingId') ?? ''); return ok(back('social'), 'Account revoked. Queued posts for it will hold.'); }
+      break;
+    }
     case 'jobs': {
       if (parts[1] && parts[2] === 'cancel') { await engine.cancelJob(actor, brandId, parts[1]); return ok(back('activity'), 'Task cancelled.'); }
       if (parts[1] && parts[2] === 'retry') { await engine.retryJob(actor, brandId, parts[1]); return ok(back('activity'), 'Task queued again.'); }
@@ -365,6 +391,12 @@ async function handlePost(
         if (network !== 'instagram' && network !== 'linkedin') throw new SeoBlogError(400, 'Choose an accompanying post.');
         await engine.approvePromotion(actor, brandId, articleId, f('versionId') ?? '', network, f('packSha') ?? '');
         return ok(here, 'Exact accompanying post approved. It is held until the same blog version and URL are verified public and a brand-owned account is connected.');
+      }
+      if (action === 'social-schedule') {
+        const network = f('network');
+        if (network !== 'instagram' && network !== 'linkedin') throw new SeoBlogError(400, 'Choose an accompanying post.');
+        const d = await engine.scheduleSocial(actor, brandId, articleId, f('versionId') ?? '', network, f('packSha') ?? '', (f('localDate') ?? '').trim(), (f('localTime') ?? '').trim());
+        return ok(here, `${network} post queued for ${d.scheduledFor.slice(0, 16).replace('T', ' ')} UTC through the brand’s registered account. It is re-verified shortly before sending.`);
       }
       if (action === 'checks') { const c = await engine.rerunChecks(actor, brandId, articleId); return ok(here, `Checks: ${c.issues.length} issue(s).`); }
       if (action === 'approve') { await engine.approve(actor, brandId, articleId, f('versionId') ?? ''); return ok(here, 'Approved.'); }

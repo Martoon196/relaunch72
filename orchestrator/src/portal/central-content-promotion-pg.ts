@@ -15,7 +15,7 @@ export function centralPromotionRunner(pool: Pick<Pool, 'connect'>, identity: Po
       [createHash('sha256').update(identity.sessionToken).digest(), identity.userId, identity.workspaceId]);
     if (session.rows[0]?.ok !== true) throw new InactivePortalSessionError();
     const guard = await transaction.query<{ ok: boolean }>(
-      'SELECT app_private.r72_content_assert_article_promotion($1,$2,$3,$4,$5,false) AS ok',
+      'SELECT app_private.seo_blog_assert_article_promotion($1,$2,$3,$4,$5,false) AS ok',
       [version.brandId, version.articleId, version.id, version.contentSha, version.promotionPack?.canonicalUrl ?? null]);
     if (guard.rows[0]?.ok !== true) throw new InactivePortalSessionError();
     return operation(transaction);
@@ -28,9 +28,9 @@ export function createCentralPromotionApproval(input: {
   identity: PortalSessionIdentity;
   requestId: string;
 }): ArticlePromotionApproval {
-  return { approve: (brand, article, version, network) => canonicalPromotionApproval({
+  return { approve: (approval) => canonicalPromotionApproval({
     context: brandId => ({ actorKind: 'user', userId: input.identity.userId, workspaceId: brandId, requestId: input.requestId }),
-    drafts: new CompanyContentService({ transactionRunner: centralPromotionRunner(input.adapterPool, input.identity, version) }),
-    approvals: new CompanyContentService({ transactionRunner: centralPromotionRunner(input.commandPool, input.identity, version) }),
-  }).approve(brand, article, version, network) };
+    drafts: new CompanyContentService({ transactionRunner: centralPromotionRunner(input.adapterPool, input.identity, approval.version) }),
+    approvals: new CompanyContentService({ transactionRunner: centralPromotionRunner(input.commandPool, input.identity, approval.version) }),
+  }).approve(approval) };
 }

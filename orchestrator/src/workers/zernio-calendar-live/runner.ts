@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { createCombinedSocialImageMediaResolver } from '../../public-social-outbound/combined-social-image-media.js';
 import type { Pool } from 'pg';
 import { assertExpectedDatabaseInstallation } from '../../db/installation-identity.js';
+import { withTransaction } from '../../db/transaction.js';
 import { createOwnedSocialWorkerCommandDatabasePool } from '../../db/pool.js';
 import { assertRuntimeSchemaCurrent } from '../../db/runtime-readiness.js';
 import {
@@ -109,8 +110,63 @@ export interface ZernioCalendarWorkerRuntime {
   shutdown(): Promise<void>;
 }
 
+/**
+ * A brand-registered account discovered from the database registry
+ * (app.seo_blog_social_bindings via app_private.seo_blog_social_dispatch_targets).
+ * Never derived from Property Predator's environment account ids.
+ */
+export interface ZernioCalendarRegistryTarget {
+  readonly workspaceId: string;
+  readonly connectionId: string;
+  readonly network: ZernioPostingNetwork;
+  readonly providerAccountId: string;
+  readonly dailyCap: number;
+  readonly monthlyCap: number;
+}
+
+const REGISTRY_DISCOVERY_WORKSPACE = '00000000-0000-4000-8000-000000000000';
+
+export async function discoverZernioCalendarRegistryTargets(
+  pool: Pick<Pool, 'connect'>,
+): Promise<readonly ZernioCalendarRegistryTarget[]> {
+  const rows = await withTransaction(pool, {
+    actorKind: 'worker', workspaceId: REGISTRY_DISCOVERY_WORKSPACE,
+    requestId: `zernio-calendar:registry:${Date.now()}`,
+  }, async (transaction) => (await transaction.query<{
+    workspace_id: string; provider_connection_id: string; network: string;
+    provider_account_id: string; daily_cap: number; monthly_cap: number;
+  }>(`/* zernio-calendar.registry-discovery */
+      SELECT workspace_id::text, provider_connection_id::text, network, provider_account_id, daily_cap, monthly_cap
+      FROM app_private.seo_blog_social_dispatch_targets()`)).rows, { readOnly: true });
+  const targets: ZernioCalendarRegistryTarget[] = [];
+  for (const row of rows) {
+    if (!UUID.test(row.workspace_id) || !UUID.test(row.provider_connection_id)
+        || (row.network !== 'instagram' && row.network !== 'linkedin')
+        || !ACCOUNT_ID.test(row.provider_account_id)
+        || !Number.isSafeInteger(Number(row.daily_cap)) || Number(row.daily_cap) < 1
+        || !Number.isSafeInteger(Number(row.monthly_cap)) || Number(row.monthly_cap) < 1) {
+      throw new Error('Zernio calendar registry target is invalid');
+    }
+    targets.push(Object.freeze({
+      workspaceId: row.workspace_id, connectionId: row.provider_connection_id, network: row.network,
+      providerAccountId: row.provider_account_id, dailyCap: Number(row.daily_cap), monthlyCap: Number(row.monthly_cap),
+    }));
+  }
+  return Object.freeze(targets);
+}
+
+/** Registered brands carry text-only promotions; any media on such a job is a binding fault, never a silent skip. */
+const registryMediaResolver: ZernioCalendarMediaResolver = {
+  async resolve(input) {
+    if (input.media.length !== 0) throw new Error('Registry-dispatched jobs carry no media');
+    return Object.freeze([]);
+  },
+};
+
 export interface ZernioCalendarWorkerDependencies {
   readonly env?: NodeJS.ProcessEnv;
+  /** Database registry discovery of brand-registered accounts; defaults to the definer function read. */
+  readonly discoverRegistryTargets?: (pool: Pick<Pool, 'connect'>) => Promise<readonly ZernioCalendarRegistryTarget[]>;
   readonly autoStart?: boolean;
   readonly createPool?: (
     env: NodeJS.ProcessEnv,
@@ -403,15 +459,67 @@ export async function startZernioCalendarLiveWorker(
     if (!(token instanceof Uint8Array) || token.byteLength !== 32) {
       return Promise.reject(new Error('Zernio calendar worker lease entropy is invalid'));
     }
-    inFlight = runCycle({
-      config: config.runtime,
-      accountBindings: config.accountBindings,
-      repository,
-      posting,
-      leaseToken: Buffer.from(token),
-      mediaResolver,
-    }).finally(() => { inFlight = undefined; });
+    const boundRepository = repository;
+    const boundPosting = posting;
+    const boundMediaResolver = mediaResolver;
+    inFlight = (async (): Promise<ZernioCalendarWorkerCycleResult> => {
+      // 1. Property Predator's environment-bound accounts: unchanged path.
+      const pinned = await runCycle({
+        config: config.runtime,
+        accountBindings: config.accountBindings,
+        repository: boundRepository,
+        posting: boundPosting,
+        leaseToken: Buffer.from(token),
+        mediaResolver: boundMediaResolver,
+      });
+      if (pinned !== 'idle') return pinned;
+      // 2. Brand-registered accounts from the database registry, at most one
+      //    operation per cycle overall, each under its own workspace/connection
+      //    boundary and its own posting targets.
+      return runRegistryCycle(Buffer.from(token));
+    })().finally(() => { inFlight = undefined; });
     return inFlight;
+  };
+
+  const discoverRegistry = dependencies.discoverRegistryTargets
+    ?? ((registryPool: Pick<Pool, 'connect'>) => typeof registryPool.connect === 'function'
+      ? discoverZernioCalendarRegistryTargets(registryPool) : Promise.resolve(Object.freeze([])));
+  const runRegistryCycle = async (token: Buffer): Promise<ZernioCalendarWorkerCycleResult> => {
+    if (config.mode !== 'zernio_live') return 'idle';
+    const targets = await discoverRegistry(pool);
+    const groups = new Map<string, ZernioCalendarRegistryTarget[]>();
+    for (const target of targets) {
+      if (target.workspaceId === config.workspaceId) continue; // never re-bind PP's workspace from the registry
+      const key = `${target.workspaceId}:${target.connectionId}`;
+      groups.set(key, [...(groups.get(key) ?? []), target]);
+    }
+    for (const group of groups.values()) {
+      const networks = Object.freeze([...new Set(group.map((target) => target.network))].sort());
+      if (networks.length !== group.length) throw new Error('Zernio calendar registry has duplicate network bindings');
+      const accountBindings = Object.freeze(group.map((target) => Object.freeze({
+        network: target.network, providerAccountId: target.providerAccountId,
+      })));
+      const first = group[0]!;
+      const result = await runCycle({
+        config: Object.freeze({ ...config.runtime, networks }),
+        accountBindings,
+        repository: (dependencies.createRepository
+          ?? ((commandPool, binding) => new PgZernioCalendarRepository(commandPool, binding)))(
+          pool, { workspaceId: first.workspaceId, connectionId: first.connectionId },
+        ),
+        posting: (dependencies.createPosting ?? ((input) => createZernioPostingClient({
+          apiKey: input.apiKey,
+          allowedTargets: input.accountBindings.map((binding) => ({
+            network: binding.network, accountId: binding.providerAccountId,
+          })),
+          fetch: globalThis.fetch,
+        })))({ apiKey: config.apiKey, accountBindings }),
+        leaseToken: token,
+        mediaResolver: registryMediaResolver,
+      });
+      if (result !== 'idle') return result;
+    }
+    return 'idle';
   };
 
   const onCycle = dependencies.onCycle ?? (() => undefined);

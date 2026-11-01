@@ -16,12 +16,26 @@ import { GuardedFetchTransport } from '../seo-blog/safe-fetch.js';
 import { SeoBlogCredentialVault } from '../seo-blog/vault.js';
 import type { PortalSessionIdentity } from './auth-service.js';
 import { createCentralPromotionApproval } from './central-content-promotion-pg.js';
+import { createPgSeoBlogSocialRegistry, resolveSeoBlogBrandForProfile, seoBlogSocialReservedProfileIds } from './seo-blog-social-pg.js';
+import type { PromotionNetwork } from '../seo-blog/types.js';
 
 export interface PortalSeoBlogService {
   /** Engine bound to this signed-in principal; every call is re-authorised in PostgreSQL. */
   engineFor(identity: PortalSessionIdentity, requestId: string): SeoBlogEngine;
   readonly generation: 'live' | 'unavailable';
   readonly research: 'live' | 'unconfigured';
+  /** Whether per-brand social registration/delivery is composed (Zernio command boundary + content pools). */
+  readonly social: 'live' | 'unavailable';
+  /**
+   * Completes a brand's provider OAuth callback when the profile id belongs to
+   * a registered brand rather than Property Predator. Returns null when no
+   * brand owns that profile so the caller keeps its existing behaviour.
+   */
+  socialCallback(identity: PortalSessionIdentity, requestId: string, input: { intentId: string; network: PromotionNetwork; providerProfileId: string; providerAccountId: string; username: string; canonicalCallback: string }): Promise<'recorded' | 'replayed' | null>;
+}
+
+export interface PortalSeoBlogSocialPools {
+  readonly zernioPool: Pool;
 }
 
 export interface SeoBlogRuntime {
@@ -45,21 +59,38 @@ export function seoBlogRuntime(env: NodeJS.ProcessEnv = process.env): SeoBlogRun
   return { llm, search: configuredSearchProvider(env), keywords, vault: SeoBlogCredentialVault.fromEnv(env) };
 }
 
-export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS.ProcessEnv = process.env, contentAdapterPool?: Pool): PortalSeoBlogService {
+export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS.ProcessEnv = process.env, contentAdapterPool?: Pool, socialPools?: PortalSeoBlogSocialPools): PortalSeoBlogService {
   const runtime = seoBlogRuntime(env);
   const transport = new GuardedFetchTransport();
   const publishers = defaultPublishers();
-  return {
+  const promotionsReady = env.R72_CONTENT_ENABLED === 'true' && Boolean(contentAdapterPool);
+  const socialReady = promotionsReady && Boolean(socialPools);
+  const zernioApiKey = env.ZERNIO_API_KEY?.trim() || null;
+  const reservedProfileIds = seoBlogSocialReservedProfileIds(env);
+  const socialFor = (identity: PortalSessionIdentity, requestId: string) => socialReady && contentAdapterPool && socialPools
+    ? createPgSeoBlogSocialRegistry({ zernioPool: socialPools.zernioPool, contentCommandPool, contentAdapterPool, identity, requestId, zernioApiKey, reservedProfileIds })
+    : undefined;
+  const service: PortalSeoBlogService = {
     generation: runtime.llm ? 'live' : 'unavailable',
     research: runtime.search.mode === 'live' ? 'live' : 'unconfigured',
+    social: socialReady ? 'live' : 'unavailable',
     engineFor(identity, requestId) {
       const store = new PgSeoBlogStore(contentCommandPool, {
         kind: 'user', userId: identity.userId, requestId, sessionToken: identity.sessionToken, selectedWorkspaceId: identity.workspaceId,
       });
+      const social = socialFor(identity, requestId);
       return new SeoBlogEngine({ store, llm: runtime.llm, search: runtime.search, keywords: runtime.keywords, transport, publishers, vault: runtime.vault,
-        ...(env.R72_CONTENT_ENABLED === 'true' && contentAdapterPool ? { promotions: createCentralPromotionApproval({ adapterPool: contentAdapterPool, commandPool: contentCommandPool, identity, requestId }) } : {}) });
+        ...(promotionsReady && contentAdapterPool ? { promotions: createCentralPromotionApproval({ adapterPool: contentAdapterPool, commandPool: contentCommandPool, identity, requestId }) } : {}),
+        ...(social ? { social } : {}) });
+    },
+    async socialCallback(identity, requestId, input) {
+      if (!socialReady || !socialPools || reservedProfileIds.includes(input.providerProfileId)) return null;
+      const brand = await resolveSeoBlogBrandForProfile(socialPools.zernioPool, { actorKind: 'user', userId: identity.userId, requestId }, input.providerProfileId);
+      if (!brand) return null;
+      return service.engineFor(identity, requestId).completeSocialConnect({ userId: identity.userId }, brand.workspaceId, input);
     },
   };
+  return service;
 }
 
 export function createWorkerSeoBlogEngine(contentCommandPool: Pool, requestId: string, env: NodeJS.ProcessEnv = process.env): SeoBlogEngine {
