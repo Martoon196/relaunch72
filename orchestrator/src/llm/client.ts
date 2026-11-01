@@ -33,7 +33,14 @@ export class AnthropicClient implements LlmClient {
   readonly mode = 'live' as const;
   private client: Anthropic;
 
-  constructor() {
+  constructor(apiKey?: string) {
+    if (apiKey !== undefined) {
+      if (!apiKey.trim()) throw new Error('The explicit Anthropic API key must not be empty.');
+      // Scoped callers do not broaden process-wide build authority or inherit
+      // a different bearer token from the ambient environment.
+      this.client = new Anthropic({ apiKey: apiKey.trim(), authToken: null, maxRetries: 4 });
+      return;
+    }
     if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
       throw new Error(
         'No Anthropic credentials: set ANTHROPIC_API_KEY in <repo root>/.env (see .env.example), or use --mock for a no-cost mechanics run.',

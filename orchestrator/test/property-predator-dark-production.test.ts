@@ -78,3 +78,10 @@ test('public web readiness rejects every privileged credential from another proc
   assert.match(blockers.join(' '), /Outbound Mailgun credential/);
   assert.match(blockers.join(' '), /Migration-owner database credential/);
 });
+
+test('SEO-scoped generation credential does not broaden global live-build authority', () => {
+  const scoped = locked({ SEO_BLOG_ENABLED: 'true', SEO_BLOG_ANTHROPIC_API_KEY: 'synthetic-seo-key' });
+  assert.deepEqual(propertyPredatorDarkProductionBlockers(scoped), []);
+  assert.deepEqual(propertyPredatorDarkProductionBlockers({ ...scoped, ANTHROPIC_API_KEY: 'synthetic-global-key' }),
+    ['Live build credential is forbidden in the public web process']);
+});

@@ -166,7 +166,8 @@ relaunch72 service:
 | `SEO_BLOG_ENABLED=true` | Mounts `/portal/seo-blog` and enables the worker. Absent = 404, nothing else changes. |
 | `DATABASE_CONTENT_COMMAND_URL` | Existing `r72_content_command` identity (already required in PP production). |
 | `SEO_BLOG_CREDENTIAL_KEY` | Base64 32-byte key for sealing website credentials. Without it, website connections are disabled with a clear message. |
-| `ANTHROPIC_API_KEY` | Real generation. Without it, generation is shown as unavailable. `RELAUNCH72_MODEL_SEO_BLOG_*` can override the model per stage. |
+| `SEO_BLOG_ANTHROPIC_API_KEY` | Scoped real-generation credential, passed directly to the SDK without changing global build authority. Use this on the Property Predator production web process; its existing guard continues to forbid global `ANTHROPIC_API_KEY`. `RELAUNCH72_MODEL_SEO_BLOG_*` can override the model per stage. |
+| `ANTHROPIC_API_KEY` | Legacy fallback for workers or other profiles that permit the global credential. The scoped key takes precedence. Without either key, or with `SEO_BLOG_GENERATION=off`, generation is unavailable. |
 | `SEO_BLOG_DATAFORSEO_LOGIN` / `_PASSWORD` (or the existing `DATAFORSEO_*`) | Research. Without them, planning is blocked with "connect a research provider". |
 | `SEO_BLOG_KEYWORD_METRICS=dataforseo` | Optional measured demand; otherwise demand is labelled qualitative. |
 | `SEO_BLOG_MAX_DOCUMENT_BYTES`, `SEO_BLOG_MAX_IMAGE_BYTES`, `SEO_BLOG_WORKER_INTERVAL_MS`, `SEO_BLOG_WORKER_BATCH` | Optional limits. |

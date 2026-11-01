@@ -33,8 +33,9 @@ export interface SeoBlogRuntime {
 export function seoBlogRuntime(env: NodeJS.ProcessEnv = process.env): SeoBlogRuntime {
   let llm: LlmClient | null = null;
   // Background generation is a real configured API call or it is unavailable — never a consumer chat product.
-  if (env.ANTHROPIC_API_KEY?.trim() && env.SEO_BLOG_GENERATION !== 'off') {
-    try { llm = new AnthropicClient(); } catch { llm = null; }
+  const scopedApiKey = env.SEO_BLOG_ANTHROPIC_API_KEY?.trim();
+  if ((scopedApiKey || env.ANTHROPIC_API_KEY?.trim()) && env.SEO_BLOG_GENERATION !== 'off') {
+    try { llm = scopedApiKey ? new AnthropicClient(scopedApiKey) : new AnthropicClient(); } catch { llm = null; }
   }
   let keywords: KeywordProvider | null = null;
   if (env.SEO_BLOG_KEYWORD_METRICS === 'dataforseo' && env.DATAFORSEO_LOGIN && env.DATAFORSEO_PASSWORD) {
