@@ -338,3 +338,15 @@ test('final131 event-phone runtime strictly requires exact131 and every earlier 
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, rows[130]!])), /invalid runtime migration ledger/);
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { filename: '0132_unknown.sql', checksum: 'a'.repeat(64) }])), /migration not present/);
 });
+
+test('131 bridge admits only the exact reviewed 009C 0132 and keeps every other row strict', async () => {
+  const rows = (await discoverMigrations()).map(({ filename, checksum }) => ({ filename, checksum }));
+  assert.equal(rows.length, 131);
+  const reviewed132 = { filename: '0132_mhp_event_whatsapp_programme.sql', checksum: 'db9a1a05c997907d38750e4f2184c055d0b9fac3929fdc168ce3415fcac1716c' };
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool([...rows, reviewed132])));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { ...reviewed132, checksum: '0'.repeat(64) }])), /migration not present/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, reviewed132, { filename: '0133_unknown.sql', checksum: 'a'.repeat(64) }])), /migration not present/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(0, 130), reviewed132])), /migration not present/, 'without exact131 the bridge is never taken');
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, reviewed132, reviewed132])), /invalid runtime migration ledger/);
+});

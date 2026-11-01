@@ -51,12 +51,36 @@ const ALLOWED: Record<BoundaryKind, readonly string[]> = {
   ],
 };
 
+// Bridge: keep the 131 release's exact WhatsApp boundaries ready while reviewed
+// 0132 (MHP009C) is applied. These may exist, are never required, and nothing
+// else is tolerated; to_regprocedure keeps the probe valid before 0132 exists.
+const BRIDGE_TOLERATED: Record<BoundaryKind, readonly string[]> = {
+  command: [
+    'app_private.mhp_whatsapp_connect(bytea,uuid,uuid,uuid,text,text,text,text,text,bytea,bytea,bytea,bytea,bytea,text,boolean)',
+    'app_private.mhp_event_whatsapp_review(bytea,uuid)',
+    'app_private.mhp_event_whatsapp_activate(bytea,uuid,uuid,bytea,uuid[],jsonb,bytea,text,boolean,boolean)',
+    'app_private.mhp_event_whatsapp_control(bytea,uuid,text,uuid,bytea,text)',
+  ],
+  worker: [
+    'app_private.record_mhp_whatsapp_template_observation(uuid,uuid,text,text,text,text,text,integer,bytea,bytea,bytea)',
+    'app_private.mhp_event_whatsapp_observation_targets(uuid,uuid)',
+    'app_private.mhp_prepare_event_whatsapp(uuid,uuid,integer)',
+    'app_private.claim_event_whatsapp_job(uuid,uuid,bytea,integer)',
+    'app_private.load_event_whatsapp_job(uuid,uuid,bigint,bytea)',
+    'app_private.begin_event_whatsapp_call(uuid,uuid,bigint,bytea,boolean,boolean)',
+    'app_private.mhp_hold_event_whatsapp()',
+  ],
+  webhook: ['app_private.mhp_record_event_whatsapp_inbound(uuid,uuid,text,text,text,text,bytea,bytea,bytea,bytea,bytea,timestamp with time zone)'],
+};
+
 async function assertBoundaryReady(
   pool: Pick<Pool, 'query'>,
   kind: BoundaryKind,
 ): Promise<void> {
   const allowed = ALLOWED[kind];
   const placeholders = allowed.map((_, index) => `$${index + 2}::regprocedure`);
+  const tolerated = BRIDGE_TOLERATED[kind];
+  const toleratedPlaceholders = tolerated.map((_, index) => `to_regprocedure($${allowed.length + index + 2})::oid`);
   let rows: readonly BoundaryRow[];
   try {
     const result = await pool.query<BoundaryRow>(
@@ -75,6 +99,7 @@ async function assertBoundaryReady(
            WHERE namespace.nspname = 'app_private'
              AND has_function_privilege(current_user, procedure.oid, 'EXECUTE')
              AND procedure.oid NOT IN (${placeholders.join(', ')})
+             AND NOT coalesce(procedure.oid = ANY(ARRAY[${toleratedPlaceholders.join(', ')}]::oid[]), false)
          ) AS "extraFunctionsDenied",
          NOT EXISTS (
            SELECT 1
@@ -96,7 +121,7 @@ async function assertBoundaryReady(
            AND NOT pg_has_role(current_user, 'r72_whatsapp_live_definer', 'MEMBER')
            AS "elevatedRolesDenied"
        FROM unnest(ARRAY[${placeholders.join(', ')}]::oid[]) AS allowed(oid)`,
-      [ROLE[kind], ...allowed],
+      [ROLE[kind], ...allowed, ...tolerated],
     );
     rows = result.rows;
   } catch {
