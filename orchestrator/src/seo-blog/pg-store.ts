@@ -264,7 +264,7 @@ export class PgSeoBlogStore implements SeoBlogStore {
     const skip = new Error('seo-blog: begin skipped');
     let skipWhy = '';
     try {
-      return await this.tx(input.brandId, async (t) => {
+      return await this.tx<BeginResult>(input.brandId, async (t) => {
         const brandRow = await t.query<{ settings: Brand['settings'] }>(
           'SELECT settings FROM app.seo_blog_brands WHERE workspace_id = $1 FOR SHARE', [input.brandId]);
         const articleRow = await t.query<{ data: Article; row_version: string }>(
@@ -292,6 +292,9 @@ export class PgSeoBlogStore implements SeoBlogStore {
           article, version, destination, profile, knowledge, publication: existing,
         });
         if (decision.kind === 'skip') { skipWhy = decision.why; throw skip; }
+        if (decision.kind === 'begin' && (!destination || !version)) {
+          throw new SeoBlogError(409, 'The authorised publication snapshot is incomplete.');
+        }
         let publication: Publication | undefined;
         if (decision.publication) {
           const { rowVersion: _rv, ...data } = decision.publication;
@@ -313,7 +316,11 @@ export class PgSeoBlogStore implements SeoBlogStore {
            WHERE workspace_id = $1 AND id = $2 AND row_version = $7 RETURNING data, row_version`,
           [input.brandId, article.id, JSON.stringify(articleData), decision.article.slug, decision.article.schedule?.publishAtUtc ?? null, Boolean(decision.article.hold), article.rowVersion]);
         if (!updated.rows[0]) throw new StaleWriteError('article');
-        return { kind: decision.kind, article: withVersion<Article>(updated.rows[0]), ...(publication ? { publication } : {}) };
+        if (decision.kind === 'begin') {
+          return { kind: 'begin', article: withVersion<Article>(updated.rows[0]), publication: publication!,
+            destination: structuredClone(destination!), version: structuredClone(version!) };
+        }
+        return { kind: 'hold', article: withVersion<Article>(updated.rows[0]), ...(publication ? { publication } : {}) };
       });
     } catch (error) {
       if (error === skip) return { kind: 'skip', why: skipWhy };

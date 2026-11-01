@@ -556,7 +556,7 @@ test('defect 1: a still-authorised absent operation is re-sent once with the sam
   assert.ok(states.indexOf('outcome_unknown') < states.lastIndexOf('prepared'), 'history shows the unknown outcome before re-authorisation');
 });
 
-test('defect 1: status verification of an applied operation continues while paused', async () => {
+test('defect 1: status verification of an applied operation continues while paused beyond the missed slot window', async () => {
   const h = harness();
   const { brand, id } = await scheduledArticle(h, { autoPublish: true, requiresApproval: false, approve: false });
   h.clock.set('2026-11-03T09:00:30.000Z');
@@ -564,7 +564,7 @@ test('defect 1: status verification of an applied operation continues while paus
   await h.engine.dispatchDue(brand.id);
   const b = await h.engine.getBrand(OWNER, brand.id);
   await h.engine.updateSettings(OWNER, brand.id, b.rowVersion, { pauseAll: true });
-  h.clock.advance(60_000);
+  h.clock.advance(3 * 60 * 60 * 1000);
   await h.engine.reconcile(brand.id);
   const d = await h.engine.getArticle(OWNER, brand.id, id);
   assert.equal(d.status, 'Published', 'what is already on the site is recognised, not re-sent');
@@ -591,3 +591,59 @@ test('defect 2: begin boundary — a pause committed before begin prevents dispa
   assert.equal((await h2.engine.getArticle(OWNER, s2.brand.id, s2.id)).article.hold?.reason, 'paused');
   void id;
 });
+
+test('defect 1R: a confirmed-absent operation past the missed slot window is held without a resend', async () => {
+  const { h, brand, id, publicationId } = await unknownAbsent({ autoPublish: true, requiresApproval: false, approve: false });
+  h.clock.advance(3 * 60 * 60 * 1000);
+  await h.engine.reconcile(brand.id);
+  const d = await h.engine.getArticle(OWNER, brand.id, id);
+  assert.equal(h.github.refPatches, 0, 'expired work causes no new provider effect');
+  assert.equal(d.publications.length, 1);
+  assert.equal(d.publications[0]!.id, publicationId, 'the original operation history is retained');
+  assert.equal(d.publications[0]!.state, 'cancelled');
+  assert.ok(d.publications[0]!.events!.some((e) => e.state === 'outcome_unknown'));
+  assert.equal(d.article.hold?.reason, 'missed_window');
+  assert.equal(d.article.delivery, 'none');
+});
+
+function retargetAfterBegin(h: Harness, brandId: string) {
+  const original = h.store.beginPublication.bind(h.store);
+  let authorisedDestination: string | null = null;
+  h.store.beginPublication = async (input) => {
+    const result = await original(input);
+    if (result.kind === 'begin') {
+      authorisedDestination = result.destination.publicBaseUrl;
+      const stored = (await h.store.getDestination(brandId, result.publication.destinationId))!;
+      await h.store.saveDestination({ ...stored, publicBaseUrl: 'https://replacement.example',
+        config: { ...stored.config, publicBaseUrl: 'https://replacement.example' }, status: 'unverified' });
+    }
+    return result;
+  };
+  return () => authorisedDestination;
+}
+
+for (const resume of [false, true]) {
+  test(`defect 2R: ${resume ? 'resumed' : 'initial'} publication uses the exact destination authorised at begin`, async () => {
+    const row = { autoPublish: true, requiresApproval: false, approve: false };
+    const setup = resume ? await unknownAbsent(row) : await (async () => {
+      const h = harness();
+      const { brand, id } = await scheduledArticle(h, row);
+      h.clock.set('2026-11-03T09:00:30.000Z');
+      return { h, brand, id };
+    })();
+    const { h, brand, id } = setup;
+    const authorised = retargetAfterBegin(h, brand.id);
+    if (resume) { h.clock.advance(60_000); await h.engine.reconcile(brand.id); }
+    else await h.engine.dispatchDue(brand.id);
+    const d = await h.engine.getArticle(OWNER, brand.id, id);
+    assert.equal(authorised(), 'https://harbour.example');
+    assert.equal(h.github.refPatches, 1);
+    assert.equal(d.publications[0]!.state, 'published');
+    assert.ok(d.publications[0]!.publicUrl.startsWith('https://harbour.example/'));
+    const current = (await h.store.getDestination(brand.id, d.publications[0]!.destinationId))!;
+    assert.equal(current.status, 'unverified', 'a later reconnection remains effective for later operations');
+    assert.equal(current.publicBaseUrl, 'https://replacement.example');
+    assert.ok([...h.github.files().values()].every((body) => !body.includes('https://replacement.example')),
+      'no generated article, index or sitemap is retargeted after authorisation');
+  });
+}

@@ -1013,9 +1013,7 @@ export class SeoBlogEngine {
       await this.log(brandId, 'system', 'publish.held', `Not published: ${begun.article!.hold!.detail}`, articleId);
       return 'held';
     }
-    const destination = (await this.store.getDestination(brandId, begun.publication!.destinationId))!;
-    const exact = (await this.store.getVersion(brandId, begun.publication!.versionId))!;
-    await this.attempt(brand, begun.publication!, destination, exact);
+    await this.attempt(brand, begun.publication, begun.destination, begun.version);
     return 'published';
   }
 
@@ -1122,7 +1120,7 @@ export class SeoBlogEngine {
         const f = this.factsKeyFrom(s.profile, s.knowledge);
         const decision = evaluatePublication({
           brand: s.brand, article: { ...article, delivery: 'none', hold: clearUnknownHold }, version: s.version, checks: article.checks,
-          currentFactsSha: f.key, destination: s.destination, now, missedWindowMs: Number.POSITIVE_INFINITY,
+          currentFactsSha: f.key, destination: s.destination, now,
         });
         if (decision.decision === 'hold') {
           return cancel(`Not re-sent: ${decision.hold.detail}`, { ...decision.hold, at: now });
@@ -1138,9 +1136,7 @@ export class SeoBlogEngine {
       },
     });
     if (result.kind === 'begin') {
-      const destination = await this.store.getDestination(brand.id, result.publication!.destinationId);
-      const version = await this.store.getVersion(brand.id, result.publication!.versionId);
-      if (destination && version) await this.attempt(brand, result.publication!, destination, version);
+      await this.attempt(brand, result.publication, result.destination, result.version);
     } else if (result.kind === 'hold') {
       await this.log(brand.id, 'system', 'publish.cancelled', result.publication?.detail ?? 'Operation not re-sent.', publication.articleId);
     }

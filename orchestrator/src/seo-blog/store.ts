@@ -58,12 +58,14 @@ export type BeginDecision =
   | { readonly kind: 'hold'; readonly article: Article; readonly publication?: Publication }
   | { readonly kind: 'begin'; readonly article: Article; readonly publication: Publication };
 
-export interface BeginResult {
-  readonly kind: 'skip' | 'hold' | 'begin';
-  readonly why?: string;
-  readonly article?: Article;
-  readonly publication?: Publication;
-}
+export type BeginResult =
+  | { readonly kind: 'skip'; readonly why: string }
+  | { readonly kind: 'hold'; readonly article: Article; readonly publication?: Publication }
+  | {
+      readonly kind: 'begin'; readonly article: Article; readonly publication: Publication;
+      /** Exact values authorised under the begin locks; later reconnections apply to later operations. */
+      readonly destination: Destination; readonly version: ArticleVersion;
+    };
 
 export interface SeoBlogStore {
   /**
@@ -346,6 +348,9 @@ export class MemorySeoBlogStore implements SeoBlogStore {
     });
     const decision = input.decide(snapshot);
     if (decision.kind === 'skip') return { kind: 'skip', why: decision.why };
+    if (decision.kind === 'begin' && (!snapshot.destination || !snapshot.version)) {
+      throw new SeoBlogError(409, 'The authorised publication snapshot is incomplete.');
+    }
     if (decision.kind === 'begin' && !existing
         && [...this.publications.values()].some((p) => p.brandId === input.brandId && p.idempotencyKey === decision.publication.idempotencyKey)) {
       return { kind: 'skip', why: 'This operation has already begun.' };
@@ -357,7 +362,11 @@ export class MemorySeoBlogStore implements SeoBlogStore {
       nextPublication = { ...clone(decision.publication), rowVersion: existing ? existing.rowVersion + 1 : 1 };
       this.publications.set(nextPublication.id, nextPublication);
     }
-    return { kind: decision.kind, article: clone(nextArticle), ...(nextPublication ? { publication: clone(nextPublication) } : {}) };
+    if (decision.kind === 'begin') {
+      return { kind: 'begin', article: clone(nextArticle), publication: clone(nextPublication!),
+        destination: clone(snapshot.destination!), version: clone(snapshot.version!) };
+    }
+    return { kind: 'hold', article: clone(nextArticle), ...(nextPublication ? { publication: clone(nextPublication) } : {}) };
   }
 
   async insertPublication(publication: Publication): Promise<{ publication: Publication; inserted: boolean }> {
