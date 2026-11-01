@@ -14,7 +14,7 @@ import type { Pool } from 'pg';
 import { withTransaction, type DbTransaction } from '../db/transaction.js';
 import { InactivePortalSessionError } from '../db/transaction.js';
 import type { DatabaseRequestContext } from '../db/rls.js';
-import type { BeginDecision, BeginResult, CreateBrandInput, PublicationSnapshot, SeoBlogStore } from './store.js';
+import type { BeginDecision, BeginResult, CreateBrandInput, PublicationSnapshot, SeoBlogStore, SocialAttestationOutcome } from './store.js';
 import { StaleWriteError } from './store.js';
 import {
   DEFAULT_BRAND_SETTINGS, SeoBlogError,
@@ -455,6 +455,23 @@ export class PgSeoBlogStore implements SeoBlogStore {
         'SELECT at, actor, kind, message, subject_id FROM app.seo_blog_activity WHERE workspace_id = $1 ORDER BY id DESC LIMIT $2', [brandId, limit]);
       return r.rows.map((row) => ({ brandId, at: new Date(row.at).toISOString(), actor: row.actor, kind: row.kind, message: row.message, subjectId: row.subject_id }));
     }, true);
+  }
+
+  async socialAttestationBrandIds(): Promise<string[]> {
+    if (this.principal.kind !== 'worker') return [];
+    return withTransaction(this.pool, { actorKind: 'worker', workspaceId: DISCOVERY_WORKSPACE, requestId: this.principal.requestId }, async (t) => {
+      const r = await t.query<{ id: string }>('SELECT app_private.seo_blog_social_attestation_workspaces() AS id');
+      return r.rows.map((row) => row.id);
+    }, { readOnly: true });
+  }
+
+  async attestDuePromotions(brandId: string): Promise<SocialAttestationOutcome[]> {
+    if (this.principal.kind !== 'worker') return [];
+    return this.tx(brandId, async (t) => {
+      const r = await t.query<{ revalidation_job_id: string; intent_id: string; state: SocialAttestationOutcome['state']; detail: string }>(
+        'SELECT revalidation_job_id, intent_id, state, detail FROM app_private.seo_blog_attest_due_promotions($1)', [brandId]);
+      return r.rows.map((row) => ({ revalidationJobId: row.revalidation_job_id, intentId: row.intent_id, state: row.state, detail: row.detail }));
+    });
   }
 
   async activeBrandIds(now: string): Promise<string[]> {

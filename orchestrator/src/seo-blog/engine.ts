@@ -10,7 +10,7 @@ import type { KeywordProvider } from '../keyword/types.js';
 import { runChecks } from './checks.js';
 import { assessDuplicate, slugify } from './dedupe.js';
 import {
-  extractProfile, GenerationUnavailableError, proposeCluster, resolveMarkers, rewriteSection, writeArticle,
+  extractProfile, GenerationUnavailableError, proposeCluster, resolveMarkers, rewriteSection, writeArticle, writeArticlePromotions,
   type PlannedArticle,
 } from './generation.js';
 import { buildInventory, linkableUrls } from './inventory.js';
@@ -26,12 +26,14 @@ import type { SeoBlogStore } from './store.js';
 import { StaleWriteError } from './store.js';
 import {
   DESTINATION_TYPES, FACTUAL_KNOWLEDGE_CATEGORIES, KNOWLEDGE_CATEGORIES, SeoBlogError,
-  type Article, type ArticleBody, type ArticleBrief, type ArticleVersion, type Brand, type BrandProfile, type BrandSettings,
+  type Article, type ArticleBody, type ArticleBrief, type ArticlePromotionPack, type ArticleVersion, type Brand, type BrandProfile, type BrandSettings,
   type CheckReport, type Destination, type GenerationRecord, type Job, type JobKind, type KnowledgeCategory,
   type KnowledgeDocument, type KnowledgeRef, type Publication, type ResearchSource, type TopicPlan, type UsageKind,
-  type VersionChange, type WebsiteInventory,
+  type PromotionObservation, type SocialDispatch, type VersionChange, type WebsiteInventory,
 } from './types.js';
 import type { SeoBlogCredentialVault } from './vault.js';
+import { linkedPromotionFor, OBSERVATION_CREATE_WINDOW_MS, OBSERVATION_TTL_MS, promotionPublicationHold, type ArticlePromotionApproval, type PromotionNetwork } from './promotions.js';
+import { activeBindingFor, bindingHold, SocialDeliveryHoldError, type SocialOverview, type SocialRegistry } from './social.js';
 
 export interface Actor {
   readonly userId: string;
@@ -48,10 +50,13 @@ export interface EngineDeps {
   readonly now?: () => string;
   /** Upper bound for unattended work per tick. */
   readonly batchLimit?: number;
+  readonly promotions?: ArticlePromotionApproval;
+  /** Per-brand social account registry and canonical calendar planning; absent when the Zernio command boundary is not composed. */
+  readonly social?: SocialRegistry;
 }
 
 /** Estimated model tokens per stage, used for pre-flight budget checks and batch estimates. */
-export const USAGE_ESTIMATES = Object.freeze({ profile: 14_000, plan: 40_000, article: 26_000, section: 8_000, searchPerPlan: 8 });
+export const USAGE_ESTIMATES = Object.freeze({ profile: 14_000, plan: 40_000, article: 32_000, promotion: 6_000, section: 8_000, searchPerPlan: 8 });
 
 const JOB_MAX_ATTEMPTS = 3;
 const LEASE_MS = 10 * 60 * 1000;
@@ -628,11 +633,34 @@ export class SeoBlogEngine {
   ): Promise<ArticleVersion> {
     const versions = await this.store.listVersions(brand.id, article.id);
     const contentSha = sha256(body);
+    const versionId = randomUUID();
+    const destinations = (await this.store.listDestinations(brand.id)).filter(d => d.status === 'connected');
+    const destination = destinations.find(d => d.id === article.schedule?.destinationId) ?? (destinations.length === 1 ? destinations[0] : null);
+    const canonicalUrl = destination ? publisherFor(this.deps.publishers, destination.type).publicUrlFor(destination, body.slug) : null;
+    let generationRecord: GenerationRecord | null = null;
+    let posts: ArticlePromotionPack['posts'] = (['instagram', 'linkedin'] as const).map(network => ({
+      network, title: body.title, copy: `${body.title}\n\n${body.excerpt}\n\nRead the full article.`,
+      artworkInstructions: `Create a brand-approved editorial image illustrating “${body.title}”. Review the image before scheduling.`,
+    }));
+    try {
+      await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.promotion);
+      const generated = await writeArticlePromotions(this.llm(), profile, body);
+      await this.recordGeneration(brand.id, generated.record, `promotion:${article.id}:${versionId}`);
+      posts = generated.value.posts; generationRecord = generated.record;
+    } catch (error) {
+      // Preserve the article/edit when the optional copy stage cannot run. The UI labels this fallback.
+      await this.log(brand.id, actor, 'promotion.fallback', `Accompanying drafts use the article excerpt: ${(error as Error).message.slice(0, 160)}`, article.id);
+    }
+    const promotionPack: ArticlePromotionPack = {
+      source: 'relaunch72.seo-blog', brandId: brand.id, articleId: article.id, versionId, contentSha,
+      profileVersion: profile.version, factsSha: profile.factsSha, canonicalUrl,
+      generation: generationRecord, mode: generationRecord ? 'model' : 'excerpt_fallback', posts,
+    };
     const version: ArticleVersion = {
-      id: randomUUID(), articleId: article.id, brandId: brand.id, number: (versions.at(-1)?.number ?? 0) + 1,
+      id: versionId, articleId: article.id, brandId: brand.id, number: (versions.at(-1)?.number ?? 0) + 1,
       parentVersionId: article.currentVersionId, change, changedSectionId, createdAt: this.now(), createdBy: actor, body,
       profileVersion: profile.version, factsSha: profile.factsSha, knowledge: profile.knowledge, briefId: brief.id, planId: brief.planId,
-      generation, contentSha,
+      generation, contentSha, promotionPack,
     };
     await this.store.addVersion(version);
     const checks = await this.checkVersion(brand, version);
@@ -642,6 +670,179 @@ export class SeoBlogEngine {
       hold: article.hold && ['checks_failed', 'stale_version'].includes(article.hold.reason) ? null : article.hold,
     });
     return version;
+  }
+
+  async refreshPromotionVersion(actor: Actor, brandId: string, articleId: string, expectedVersionId: string): Promise<ArticleVersion> {
+    const brand = await this.brandFor(actor, brandId);
+    const { article, version, profile, brief } = await this.editable(brandId, articleId, expectedVersionId);
+    return this.appendVersion(brand, article, version.body, 'metadata_changed', null, actor.userId, null, profile, brief);
+  }
+
+  /**
+   * Owner approval of one exact accompanying post. The owner session observes
+   * the parent tuple now; that observation is stored on the article first so
+   * a retried request replays the same canonical command (same attestation
+   * instant) instead of inventing a new one. Expired observations are
+   * replaced, never extended.
+   */
+  async approvePromotion(actor: Actor, brandId: string, articleId: string, versionId: string, network: PromotionNetwork, expectedPackSha: string): Promise<void> {
+    const brand = await this.brandFor(actor, brandId);
+    const { article, version } = await this.editable(brandId, articleId, versionId);
+    if (!version.promotionPack || sha256(version.promotionPack) !== expectedPackSha) throw new SeoBlogError(409, 'The accompanying drafts changed. Refresh before approving.');
+    if (!version.promotionPack.canonicalUrl) throw new SeoBlogError(409, 'Connect the blog website, then create a new promotion version with its final URL before review.');
+    if (!this.deps.promotions) throw new SeoBlogError(503, 'Canonical promotion approval is temporarily unavailable.');
+    const { article: observed, observation } = await this.observe(article, version, network, 'approve', actor.userId);
+    const link = await this.deps.promotions.approve({ brand, article: observed, version, network, observation,
+      recordDraft: async (contentItemId, contentVersionId) => {
+        const current = (await this.store.getArticle(brandId, articleId))!;
+        await this.store.updateArticle({ ...current, promotionObservations: (current.promotionObservations ?? []).map(o => o.id === observation.id ? { ...o, contentItemId, contentVersionId } : o) });
+      } });
+    const current = (await this.store.getArticle(brandId, articleId))!;
+    if (current.currentVersionId !== versionId) throw new StaleWriteError('article');
+    await this.store.updateArticle({ ...current, linkedPromotions: [...(current.linkedPromotions ?? []).filter(p => !(p.articleVersionId === versionId && p.network === network)), link] });
+    await this.log(brandId, actor.userId, 'promotion.approved', `${network} accompanying post approved for article version ${version.number}. Delivery remains separately gated.`, articleId);
+  }
+
+  private async observe(article: Article, version: ArticleVersion, network: PromotionNetwork, purpose: PromotionObservation['purpose'], userId: string): Promise<{ article: Article; observation: PromotionObservation }> {
+    const packSha = sha256(version.promotionPack);
+    const nowMs = Date.parse(this.now());
+    const existing = (article.promotionObservations ?? []).find(o => o.purpose === purpose && o.articleVersionId === version.id && o.network === network && o.packSha === packSha
+      && Date.parse(o.expiresAt) > nowMs && (o.contentVersionId !== null || nowMs - Date.parse(o.observedAt) <= OBSERVATION_CREATE_WINDOW_MS));
+    if (existing) return { article, observation: existing };
+    const observation: PromotionObservation = {
+      id: randomUUID(), purpose, articleVersionId: version.id, network, packSha,
+      observedAt: new Date(nowMs).toISOString(), expiresAt: new Date(nowMs + OBSERVATION_TTL_MS).toISOString(), observedBy: userId,
+      contentItemId: purpose === 'schedule' ? linkedPromotionFor(article, version, network)?.contentItemId ?? null : null,
+      contentVersionId: purpose === 'schedule' ? linkedPromotionFor(article, version, network)?.contentVersionId ?? null : null,
+    };
+    // Keep only live observations plus this one; stale ones can never be replayed anyway.
+    const kept = (article.promotionObservations ?? []).filter(o => Date.parse(o.expiresAt) > nowMs - 24 * 3_600_000).slice(-40);
+    const updated = await this.store.updateArticle({ ...article, promotionObservations: [...kept, observation] });
+    return { article: updated, observation };
+  }
+
+  // ─── Social delivery (per-brand registered accounts) ───────────────────
+
+  private social(): SocialRegistry {
+    if (!this.deps.social) throw new SeoBlogError(503, 'Social delivery is not available on this server.');
+    return this.deps.social;
+  }
+
+  async socialOverview(actor: Actor, brandId: string): Promise<SocialOverview> {
+    await this.brandFor(actor, brandId);
+    if (!this.deps.social) return { profile: null, accounts: [], bindings: [] };
+    return this.deps.social.overview(brandId);
+  }
+
+  async registerSocialProfile(actor: Actor, brandId: string, displayName: string, providerProfileId: string): Promise<void> {
+    const brand = await this.brandFor(actor, brandId);
+    const result = await this.social().registerProfile(brandId, displayName || `${brand.name} social accounts`, providerProfileId);
+    await this.log(brandId, actor.userId, 'social.profile', result.disposition === 'applied' ? 'Zernio profile registered for this brand.' : 'Zernio profile registration replayed.');
+  }
+
+  async beginSocialConnect(actor: Actor, brandId: string, network: PromotionNetwork, intentId: string): Promise<{ authUrl: string }> {
+    await this.brandFor(actor, brandId);
+    if (!validUuid(intentId)) throw new SeoBlogError(400, 'Refresh the page and try again.');
+    const result = await this.social().beginConnect(brandId, network, intentId);
+    await this.log(brandId, actor.userId, 'social.connect', `${network} connection handoff prepared. No account is connected until the provider confirms.`);
+    return result;
+  }
+
+  async completeSocialConnect(actor: Actor, brandId: string, input: { intentId: string; network: PromotionNetwork; providerProfileId: string; providerAccountId: string; username: string; canonicalCallback: string }): Promise<'recorded' | 'replayed'> {
+    await this.brandFor(actor, brandId);
+    if (!validUuid(input.intentId)) throw new SeoBlogError(400, 'The connection handoff is invalid.');
+    const result = await this.social().completeConnect(brandId, input);
+    if (result.disposition === 'recorded') await this.log(brandId, actor.userId, 'social.connected', `${input.network} account connected. Register it with caps to enable delivery.`);
+    return result.disposition;
+  }
+
+  async registerSocialBinding(actor: Actor, brandId: string, input: { network: PromotionNetwork; providerAccountId: string; dailyCap: number; monthlyCap: number }): Promise<void> {
+    await this.brandFor(actor, brandId);
+    const result = await this.social().registerBinding(brandId, input);
+    await this.log(brandId, actor.userId, 'social.binding', `${input.network} account ${result.disposition === 'caps_changed' ? 'caps changed' : result.disposition}: ${input.dailyCap}/day, ${input.monthlyCap}/month${input.dailyCap === 0 || input.monthlyCap === 0 ? ' (delivery off)' : ''}.`);
+  }
+
+  async revokeSocialBinding(actor: Actor, brandId: string, bindingId: string): Promise<void> {
+    await this.brandFor(actor, brandId);
+    await this.social().revokeBinding(brandId, bindingId);
+    await this.log(brandId, actor.userId, 'social.binding', 'A registered account was revoked. Queued posts for it will hold.');
+  }
+
+  /**
+   * Schedules one approved, verified-public accompanying post through the
+   * brand's registered account: fresh attestation, canonical planning intent,
+   * calendar job. Holds are recorded truthfully on the article instead of
+   * silently dropping the slot.
+   */
+  async scheduleSocial(actor: Actor, brandId: string, articleId: string, versionId: string, network: PromotionNetwork, expectedPackSha: string, localDate: string, localTime: string): Promise<SocialDispatch> {
+    const brand = await this.brandFor(actor, brandId);
+    if (brand.settings.pauseAll) throw new SeoBlogError(409, 'Publishing is paused for this brand.');
+    const when = localToUtc(localDate, localTime, brand.timezone);
+    let prepared: { article: Article; version: ArticleVersion; dispatch: SocialDispatch } | undefined;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { article, version } = await this.editable(brandId, articleId, versionId);
+      if (!version.promotionPack || sha256(version.promotionPack) !== expectedPackSha) throw new SeoBlogError(409, 'The accompanying drafts changed. Refresh before scheduling.');
+      const articleHold = promotionPublicationHold(article, version, network);
+      if (articleHold) throw new SeoBlogError(409, articleHold);
+      const overview = await this.social().overview(brandId);
+      const accountHold = bindingHold(overview.bindings, network);
+      if (accountHold) throw new SeoBlogError(409, accountHold);
+      const binding = activeBindingFor(overview.bindings, network)!;
+      const existing = (article.socialDispatches ?? []).find(d => d.articleVersionId === versionId && d.network === network && (d.state === 'preparing' || d.state === 'queued'));
+      if (existing) {
+        if (existing.scheduledFor !== when.utc || existing.packSha !== expectedPackSha || existing.bindingId !== binding.id) {
+          throw new SeoBlogError(409, `This post is already queued or reserved for ${utcToLocal(existing.scheduledFor, brand.timezone).date} ${utcToLocal(existing.scheduledFor, brand.timezone).time}. Refresh its original slot; a retry cannot move it.`);
+        }
+        if (existing.state === 'queued') return existing;
+        if (!existing.reservation) throw new SeoBlogError(409, 'This reserved slot needs attention before it can resume.');
+        prepared = { article, version, dispatch: existing }; break;
+      }
+      if (Date.parse(when.utc) < Date.parse(this.now()) + 10 * 60_000) throw new SeoBlogError(400, 'Choose a time at least ten minutes from now.');
+      if (Date.parse(when.utc) > Date.parse(this.now()) + 90 * 24 * 3_600_000) throw new SeoBlogError(400, 'Choose a time within the next 90 days.');
+      const now = this.now();
+      const link = linkedPromotionFor(article, version, network)!;
+      const observation: PromotionObservation = { id: randomUUID(), purpose: 'schedule', articleVersionId: versionId, network, packSha: expectedPackSha,
+        observedAt: now, expiresAt: new Date(Date.parse(now) + OBSERVATION_TTL_MS).toISOString(), observedBy: actor.userId,
+        contentItemId: link.contentItemId, contentVersionId: link.contentVersionId };
+      const dispatchId = randomUUID();
+      const dispatch: SocialDispatch = { id: dispatchId, articleVersionId: versionId, network, packSha: expectedPackSha, bindingId: binding.id, intentId: dispatchId, jobId: null,
+        scheduledFor: when.utc, requestedAt: now, requestedBy: actor.userId, state: 'preparing', detail: 'Recording the slot…', dailyCap: binding.dailyCap, monthlyCap: binding.monthlyCap,
+        reservation: { observation, link, binding } };
+      try {
+        const reserved = await this.store.updateArticle({ ...article, promotionObservations: [...(article.promotionObservations ?? []).slice(-40), observation],
+          socialDispatches: [...(article.socialDispatches ?? []), dispatch] });
+        prepared = { article: reserved, version, dispatch }; break;
+      } catch (error) { if (!(error instanceof StaleWriteError)) throw error; }
+    }
+    if (!prepared) throw new StaleWriteError('article');
+    const base = prepared.dispatch;
+    const { observation, link, binding } = base.reservation!;
+    let dispatch: SocialDispatch;
+    try {
+      // The PG adapter first recovers a committed receipt, before checking an expired observation.
+      const planned = await this.social().plan({ brand, article: prepared.article, version: prepared.version, network, link, binding, observation, dispatchId: base.id, scheduledFor: base.scheduledFor });
+      dispatch = { ...base, intentId: planned.intentId, jobId: planned.jobId, state: 'queued', detail: null, dailyCap: planned.dailyCap, monthlyCap: planned.monthlyCap };
+    } catch (error) {
+      if (!(error instanceof SocialDeliveryHoldError)) throw error;
+      dispatch = { ...base, state: 'held', detail: error.hold };
+    }
+    let saved = false;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const current = (await this.store.getArticle(brandId, articleId))!;
+      const recorded = current.socialDispatches?.find(d => d.id === base.id);
+      if (recorded?.state === 'queued') return recorded;
+      if (!recorded) throw new StaleWriteError('reserved social slot');
+      try {
+        await this.store.updateArticle({ ...current, socialDispatches: current.socialDispatches!.map(d => d.id === base.id ? dispatch : d) });
+        saved = true; break;
+      } catch (error) { if (!(error instanceof StaleWriteError)) throw error; }
+    }
+    if (!saved) throw new StaleWriteError('article');
+    await this.log(brandId, actor.userId, dispatch.state === 'queued' ? 'social.queued' : 'social.held', dispatch.state === 'queued'
+      ? `${network} post queued for ${localDate} ${when.localTime} through the brand’s registered account; it is re-verified shortly before sending.`
+      : `${network} post held: ${dispatch.detail}`, articleId);
+    if (dispatch.state === 'held') throw new SeoBlogError(409, dispatch.detail ?? 'The post is held.');
+    return dispatch;
   }
 
   private async checkVersion(brand: Brand, version: ArticleVersion): Promise<CheckReport> {
@@ -805,6 +1006,17 @@ export class SeoBlogEngine {
     if (article.rowVersion !== rowVersion) throw new StaleWriteError('article');
     if (article.delivery === 'publishing') throw new SeoBlogError(409, 'This article is being published right now.');
     return article;
+  }
+
+  async moveProposedDate(actor: Actor, brandId: string, articleId: string, rowVersion: number, localDate: string, localTime: string): Promise<void> {
+    const brand = await this.brandFor(actor, brandId);
+    const article = await this.mutableArticle(brandId, articleId, rowVersion);
+    if (article.schedule) throw new SeoBlogError(409, 'Use Move schedule for an article with a publication schedule.');
+    const brief = await this.store.getBrief(brandId, article.briefId);
+    if (!brief) throw new SeoBlogError(404, 'The article plan was not found.');
+    const proposed = localToUtc(localDate, localTime, brand.timezone);
+    await this.store.saveBrief({ ...brief, suggestedAtUtc: proposed.utc });
+    await this.log(brandId, actor.userId, 'diary.proposal_moved', 'Editorial proposal moved; no website publication scheduled.', articleId);
   }
 
   async schedule(actor: Actor, brandId: string, articleId: string, rowVersion: number, input: { localDate: string; localTime: string; destinationId: string }): Promise<Article> {
@@ -1231,6 +1443,16 @@ export class SeoBlogEngine {
     for (const job of jobs) await this.runJob(job);
     const brands = await this.store.activeBrandIds(this.now());
     for (const brandId of brands.slice(0, 50)) await this.dispatchDue(brandId);
+    // Short-lived just-in-time attestation of due social slots from the exact current source.
+    for (const brandId of (await this.store.socialAttestationBrandIds()).slice(0, 50)) {
+      try {
+        for (const outcome of await this.store.attestDuePromotions(brandId)) {
+          await this.log(brandId, 'system', `social.attest.${outcome.state}`, outcome.detail);
+        }
+      } catch (error) {
+        await this.log(brandId, 'system', 'social.attest.failed', `Attestation pass failed: ${(error as Error).message.slice(0, 160)}`).catch(() => undefined);
+      }
+    }
     return { jobs: jobs.length, brands: brands.length };
   }
 

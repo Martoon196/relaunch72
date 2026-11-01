@@ -8,6 +8,20 @@ import {
   ZERNIO_SOCIAL_WEBHOOK_ROUTE,
   type PortalZernioSocialConnectionService,
 } from '../../portal/zernio-social-connection-service.js';
+import type { SeoBlogZernioWebhookBrands } from '../../portal/seo-blog-social-pg.js';
+
+const PROVIDER_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/u;
+
+/** Bounded, non-authoritative read of the profile id used only to pick which exact credential to verify against. */
+function hintedProfileId(rawBody: Buffer): string | null {
+  try {
+    const payload = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(rawBody)) as { account?: { profileId?: unknown } };
+    const profileId = payload?.account?.profileId;
+    return typeof profileId === 'string' && PROVIDER_ID.test(profileId) ? profileId : null;
+  } catch {
+    return null;
+  }
+}
 
 export const PROPERTY_PREDATOR_ZERNIO_ACCOUNT_WEBHOOK_PATH =
   ZERNIO_SOCIAL_WEBHOOK_ROUTE;
@@ -75,6 +89,7 @@ function readBody(req: IncomingMessage): Promise<Buffer> {
 export function composePropertyPredatorZernioAccountWebhook(
   env: NodeJS.ProcessEnv,
   service: PortalZernioSocialConnectionService | undefined,
+  brands?: SeoBlogZernioWebhookBrands,
 ): PropertyPredatorZernioAccountWebhookMount {
   const configured = [
     env.ZERNIO_WEBHOOK_SECRET,
@@ -136,6 +151,28 @@ export function composePropertyPredatorZernioAccountWebhook(
         } catch {
           // The signature and exact profile binding must both match one member
           // of the bounded profile allowlist.
+        }
+      }
+      if (!verified && brands) {
+        // Registered brands: resolve the brand that owns the hinted profile, then verify
+        // the signature and exact binding against that brand's credential only.
+        const profileId = hintedProfileId(rawBody);
+        const binding = profileId && !(boundService.providerProfileIds ?? [boundService.providerProfileId]).includes(profileId)
+          ? await brands.resolve(profileId).catch(() => null) : null;
+        if (binding) {
+          try {
+            const credential = createZernioAccountWebhookCredential({
+              workspaceId: binding.workspaceId, connectionId: binding.connectionId, providerProfileId: binding.providerProfileId,
+              credentialVersion: env.ZERNIO_WEBHOOK_CREDENTIAL_VERSION?.trim() ?? '',
+              webhookSecret: env.ZERNIO_WEBHOOK_SECRET?.trim() ?? '',
+            });
+            const brandVerified = verifyZernioAccountWebhook(credential, { rawBody, signatureHeader: signature, eventIdHeader: eventId });
+            const outcome = await brands.record(brandVerified, binding);
+            if (!outcome.ok) return send(res, outcome.kind === 'forbidden' ? 403 : 503, { error: 'receipt_unavailable' });
+            return send(res, 200, { status: outcome.disposition });
+          } catch {
+            return send(res, 401, { error: 'invalid_signature_or_payload' });
+          }
         }
       }
       if (!verified) {
