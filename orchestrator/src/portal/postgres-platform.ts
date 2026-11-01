@@ -1,3 +1,5 @@
+import { createPortalSeoBlogService, type PortalSeoBlogService } from './seo-blog-service.js';
+import { SeoBlogCredentialVault } from '../seo-blog/vault.js';
 import { createHash } from 'node:crypto';
 import { createPortalFollowupFlowService, type PortalFollowupFlowService } from './followup-flow-service.js';
 import { InvestorService } from './investor-service.js';
@@ -192,6 +194,9 @@ export interface PgPortalPlatform {
   /** Omitted unless the dedicated r72_content_command identity passes readiness. */
   companyContent?: PgPortalCompanyContentService;
   followupFlows?: PortalFollowupFlowService;
+  /** SEO blog engine; omitted unless SEO_BLOG_ENABLED=true and r72_content_command is ready. */
+  seoBlog?: PortalSeoBlogService;
+  seoBlogVaultReady?: boolean;
   /** Omitted unless adapter reads and founder command writes both pass readiness. */
   companyAssets?: PgPortalCompanyAssetsService;
   /** Effects-off, operator-triggered source verification and immutable import. */
@@ -1265,6 +1270,7 @@ export async function buildPgPortalPlatform(
     const ppFlowWorkspace = env.PROPERTY_PREDATOR_PILOT_WORKSPACE_ID?.trim().toLowerCase() ?? '';
     const followupFlows = assetReadinessPool && contentCommandPool && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(ppFlowWorkspace)
       ? createPortalFollowupFlowService({ webPool, adapterPool: assetReadinessPool, commandPool: contentCommandPool, workspaceId: ppFlowWorkspace }) : undefined;
+    const seoBlog = env.SEO_BLOG_ENABLED?.trim() === 'true' && contentCommandPool ? createPortalSeoBlogService(contentCommandPool, env) : undefined;
     let mhp: MhpRuntime | undefined;
     try {
       mhp = await buildMhpRuntime({ env, webPool, identityPool, commandPool,
@@ -1305,6 +1311,8 @@ export async function buildPgPortalPlatform(
       }),
       companyContent,
       followupFlows,
+      seoBlog,
+      seoBlogVaultReady: Boolean(SeoBlogCredentialVault.fromEnv(env)),
       companyAssets,
       companyContentSync,
       companyContentReview,
