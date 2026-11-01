@@ -24,6 +24,7 @@ import { fileOrderStore, type Order } from './orders.js';
 import { fileSubscriptionStore } from './subscriptions.js';
 import { createApp, type AppDeps, type MarketingHooks } from './app.js';
 import { createMhpMount, unavailableMhpMount } from '../mhp/mount.js';
+import { centralContentOrigin, createCentralContentMount } from '../portal/central-content-mount.js';
 import { createMhpAuthMount } from '../mhp/auth-router.js';
 import { MHP_AUTH_ORIGIN, MHP_SESSION_COOKIE } from '../mhp/auth-service.js';
 import { MARTIN_HOWARD_PROPERTY_PROFILE } from '../portal/product-profile.js';
@@ -749,6 +750,7 @@ async function main(): Promise<void> {
   const zernioAccountWebhook = composePropertyPredatorZernioAccountWebhook(
     process.env,
     postgresPortal?.zernioSocial,
+    postgresPortal?.seoBlogZernioWebhook,
   );
   if (zernioAccountWebhook.enabled) {
     console.log(zernioAccountWebhook.ready
@@ -944,6 +946,15 @@ async function main(): Promise<void> {
       } catch { console.warn('MHP host composition is unavailable; Property Predator remains mounted.'); }
     }
   }
+  const contentOrigin = centralContentOrigin(process.env);
+  const centralContent = contentOrigin && portal?.kind === 'postgres' ? createCentralContentMount({
+    origin: contentOrigin, portal,
+    authorize: async (identity, requestId) => {
+      if (!postgresPortal?.companyContent) return false;
+      const access = await postgresPortal.companyContent.snapshot({ sessionToken: identity.sessionToken, requestId });
+      return access.ok && access.snapshot.workspace.workspaceId === identity.workspaceId && access.snapshot.workspace.canManage;
+    },
+  }) : undefined;
   const app = createApp({
     stripe,
     cfg,
@@ -955,6 +966,7 @@ async function main(): Promise<void> {
     runtimeReadinessProbe,
     canonicalHost,
     mhp,
+    centralContent,
     buildMode: forceMockBuilds ? 'mock' : 'live',
     now: () => new Date().toISOString(),
     marketing,
