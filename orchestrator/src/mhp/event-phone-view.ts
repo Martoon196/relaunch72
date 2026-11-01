@@ -60,9 +60,10 @@ export function mhpEventPhoneChoosePage(input: { status: MhpEventPhoneStatus; cs
   const prior = sms?.state === 'withdrawn' ? 'You stopped webinar texts. You can opt in again below.'
     : sms?.state === 'awaiting_join' ? `We're still waiting for your JOIN text from ${sms.phoneMasked}. Lost the code? Enter your number again for a new one.`
     : sms?.state === 'held' ? 'We could not confirm this registration automatically. Use an email link to continue. Your email reminders carry on.' : '';
-  return page('Choose your mobile', `${greeting}${notice(input.notice)}${prior ? `<p class="status">${esc(prior)}</p>` : ''}`
+  return page('Choose your mobile', `${greeting}<p class="status">Your webinar registration is complete. Text reminders are optional; your email reminders will continue either way.</p>`
+    + `${notice(input.notice)}${prior ? `<p class="status">${esc(prior)}</p>` : ''}`
     + (sms?.state === 'held' ? `<p><a href="${MHP_EVENT_PHONE_ROUTE}">Email me a link to continue</a></p>` : '')
-    + `<section>${form(input.csrf, input.sender)}</section>`);
+    + `<section>${form(input.csrf, input.sender)}</section><p><a href="https://martinhowardproperty.co.uk/thanks/?for=webinar">Skip texts and continue</a></p>`);
 }
 function form(csrf: string, sender: string): string {
   return `<form method="post" action="${MHP_EVENT_PHONE_ROUTE}/choose">${hidden('csrf', csrf)}`
