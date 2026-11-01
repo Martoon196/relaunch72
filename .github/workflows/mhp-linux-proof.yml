@@ -1,4 +1,4 @@
-name: SEO exact Linux proof
+name: MHP009B exact Linux proof
 on:
   push:
     branches: [codex/mhp-linux-proof-20261031]
@@ -10,17 +10,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout exact reviewed SEO release source
+      - name: Checkout exact reviewed MHP SMS release source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Martoon196/relaunch72
-          ref: ebf9a791067fdb7d268e924bc50fc8fb37214245
+          ref: 993bfefa507a261cf40d1712c17962e8e2bed46a
           persist-credentials: false
       - name: Assert exact source identity
         shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = ebf9a791067fdb7d268e924bc50fc8fb37214245
-          test "$(git rev-parse 'HEAD^{tree}')" = 46471dbe37bca20863b72db152fe5f9a5e93aae7
+          test "$(git rev-parse HEAD)" = 993bfefa507a261cf40d1712c17962e8e2bed46a
+          test "$(git rev-parse 'HEAD^{tree}')" = 6be5435db4682201b107ca3d8784464effd814d8
           test -z "$(git status --porcelain)"
           git rev-parse HEAD 'HEAD^{tree}'
       - name: Match Render runtime
