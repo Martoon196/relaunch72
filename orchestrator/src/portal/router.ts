@@ -18,6 +18,7 @@ import type { CompanyContentCatalogItem } from '../company-content-pg/types.js';
 import type { PortalFollowupFlowService } from './followup-flow-service.js';
 import { handlePortalFollowupFlow } from './followup-flow-router.js';
 import { handleSeoBlog } from './seo-blog-router.js';
+import { ZERNIO_CONNECTION_CALLBACK_URL } from '../public-social-outbound/zernio-connection-contract.js';
 import type { PortalSeoBlogService } from './seo-blog-service.js';
 import { parseCookies } from '../server/admin/session.js';
 import {
@@ -458,7 +459,8 @@ import {
 interface PortalCommonDeps {
   sessionSecret: string;
   secure: boolean;
-  sessionCookieName?: 'r72_portal' | '__Host-mhp_session';
+  sessionCookieName?: 'r72_portal' | '__Host-mhp_session' | '__Host-r72_content';
+  loginCsrfCookieName?: 'r72_login_csrf' | '__Host-r72_content_login_csrf';
   /** Brand membership guard runs before any authenticated application route. */
   authorizeMemberRequest?: (input: {
     sessionToken: string;
@@ -753,7 +755,7 @@ function sendLoginPage(
       deps.productProfile ?? RELAUNCH72_PRODUCT_PROFILE,
       { propertyPredatorSso: deps.kind === 'postgres' && Boolean(deps.propertyPredatorSso) },
     ),
-    [portalLoginCsrfCookie(csrfToken, deps.secure), ...additionalCookies],
+    [portalLoginCsrfCookie(csrfToken, deps.secure, deps.loginCsrfCookieName), ...additionalCookies],
     extra,
   );
 }
@@ -1963,7 +1965,10 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   if (deps.kind === 'postgres' && (p === '/portal/seo-blog' || p.startsWith('/portal/seo-blog/'))) {
     if (!deps.seoBlog) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('The SEO blog area is not available.'); return; }
     if (!resolvedRequestContext) { res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('The SEO blog area is temporarily unavailable.'); return; }
-    await handleSeoBlog(req, res, url, { service: deps.seoBlog, identity: portalIdentity, requestId: resolvedRequestContext.requestId, sessionSecret: deps.sessionSecret, vaultReady: deps.seoBlogVaultReady === true });
+    const callbackOrigin = new URL(ZERNIO_CONNECTION_CALLBACK_URL).origin;
+    await handleSeoBlog(req, res, url, { service: deps.seoBlog, identity: portalIdentity, requestId: resolvedRequestContext.requestId, sessionSecret: deps.sessionSecret, vaultReady: deps.seoBlogVaultReady === true,
+      socialConnectHere: deps.sessionCookieName !== '__Host-r72_content' && deps.productProfile?.id === 'property_predator_growth', socialConnectHost: callbackOrigin,
+      ...(deps.sessionCookieName === '__Host-r72_content' ? { applicationName: 'Relaunch72 Content' } : {}) });
     return;
   }
   // ── one-time account setup / login / logout (no auth) ──
@@ -2242,7 +2247,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   if (p === '/portal/login' && method === 'POST') {
     const form = await readForm(req);
     const email = (form.email ?? '').trim().toLowerCase();
-    const loginCsrfCookieToken = parseCookies(req.headers.cookie)[PORTAL_LOGIN_CSRF_COOKIE];
+    const loginCsrfCookieToken = parseCookies(req.headers.cookie)[deps.loginCsrfCookieName ?? PORTAL_LOGIN_CSRF_COOKIE];
     if (!verifyPortalLoginCsrf(deps.sessionSecret, loginCsrfCookieToken, form._login_csrf)) {
       return sendLoginPage(res, 403, deps, 'Refresh the sign-in page and try again.', email);
     }
@@ -2907,6 +2912,20 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       profileId: providerProfileId,
       username,
     });
+    // A registered brand's profile completes through the SEO blog social seam under
+    // that brand's own workspace; Property Predator's profiles keep the path below.
+    if (deps.seoBlog && portalIdentity && resolvedRequestContext
+        && !(deps.zernioSocial.providerProfileIds ?? [deps.zernioSocial.providerProfileId]).includes(providerProfileId)
+        && (connected === 'instagram' || connected === 'linkedin')) {
+      try {
+        const brandOutcome = await deps.seoBlog.socialCallback(portalIdentity, resolvedRequestContext.requestId, {
+          intentId, network: connected, providerProfileId, providerAccountId, username, canonicalCallback,
+        });
+        if (brandOutcome) return callbackRedirect(brandOutcome === 'recorded' ? 'connected' : 'replayed');
+      } catch {
+        return callbackRedirect('invalid');
+      }
+    }
     const outcome = await deps.zernioSocial.callback(crmIdentity(sessionToken, deps), {
       intentId,
       network: connected,

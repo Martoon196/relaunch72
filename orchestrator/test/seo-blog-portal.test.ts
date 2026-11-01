@@ -32,7 +32,7 @@ async function call(service: PortalSeoBlogService, who: PortalSessionIdentity | 
 
 test('owner screens: add brand, switch, every tab renders, CSRF and foreign access are enforced', async () => {
   const h = harness();
-  const service: PortalSeoBlogService = { generation: 'live', research: 'live', engineFor: () => h.engine };
+  const service: PortalSeoBlogService = { generation: 'live', research: 'live', social: 'unavailable', engineFor: () => h.engine, socialCallback: async () => null };
   const owner = identity(OWNER.userId);
   const csrf = portalCsrfToken(SECRET, owner.sessionToken);
 

@@ -320,21 +320,23 @@ test('reader125 bridge is unavailable to the old123 prefix', async () => {
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, approvedMarketing, approvedWebinarReader]), directory), /migration not present/);
 });
 
-test('final131 SEO blog runtime strictly requires exact131 and every earlier migration', async () => {
+test('final133 SEO social runtime strictly requires exact133 and every earlier migration', async () => {
   const rows = (await discoverMigrations()).map(({ filename, checksum }) => ({ filename, checksum }));
-  assert.equal(rows.length, 131);
+  assert.equal(rows.length, 133);
   assert.deepEqual(rows[127], { filename: '0128_mhp_sequence_capture_entry.sql', checksum: '09b35b4eaf6e934c8f560e8d9d645bd3b9f37a34268f77f4afd974ecd1b54e97' });
   assert.deepEqual(rows[128], { filename: '0129_mhp_local_channel_drafts.sql', checksum: '649ba68b60954b6e76d4e702511321e59eff0785128051ed7b81f968abe1b57a' });
   assert.deepEqual(rows[129], { filename: '0130_mhp_owned_sms_pilot.sql', checksum: 'e6bb5be3a87e0fde3e29d3f47edde1c5daf8492f4c368f80e2e4335f5b239797' });
   assert.deepEqual(rows[130], { filename: '0131_seo_blog_engine.sql', checksum: '904c4651c51da6507370ca7eb2f271ca0347a27d76c60b0f24a19aba01695784' });
+  assert.deepEqual(rows[131], { filename: '0132_seo_blog_social_promotion.sql', checksum: '6a413abf1e1f04c7ce7cfa181c2ee6c7ced7b0155fcc2c4106ff860c98fa03cb' });
+  assert.deepEqual(rows[132], { filename: '0133_seo_blog_social_dispatch_reservations.sql', checksum: '457402d6dc48129fe457044564a99720061bdc2e701e84ddbbb9cd957bba591f' });
   await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 130))), /schema is behind by 1 migration/);
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 129))), /schema is behind by 2 migration/);
-  for (const at of [0, 124, 125, 126, 127, 128, 129, 130]) {
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 132))), /schema is behind by 1 migration/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 131))), /schema is behind by 2 migration/);
+  for (const at of [0, 124, 125, 126, 127, 128, 129, 130, 131, 132]) {
     const corrupt = rows.map((row, index) => index === at ? { ...row, checksum: '0'.repeat(64) } : row);
     await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(corrupt)), /checksum changed/);
   }
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(0, 128), rows[129]!])), /not a contiguous prefix/);
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, rows[129]!])), /invalid runtime migration ledger/);
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { filename: '0131_unknown.sql', checksum: 'a'.repeat(64) }])), /migration not present/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(0, 129), rows[130]!])), /not a contiguous prefix/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, rows[130]!])), /invalid runtime migration ledger/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { filename: '0134_unknown.sql', checksum: 'a'.repeat(64) }])), /migration not present/);
 });
