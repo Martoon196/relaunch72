@@ -185,6 +185,16 @@ test('a held identity match offers the email-link fallback without claiming veri
   assert.doesNotMatch(html, /is confirmed|Stop webinar texts|Martin will check/u);
 });
 
+test('a registered webinar visitor can skip optional texts while email reminders continue', () => {
+  const html = mhpEventPhoneChoosePage({ sender: '+447861935832', csrf: 'private-csrf', status: { ok: true,
+    campaign: 'webinar-2026-11-04', firstName: 'Martin', open: true, startsAt: '2026-11-04T19:30:00Z', consentText: MHP_EVENT_PHONE_CONSENT_TEXT,
+    capabilityExpiresAt: '2026-11-01T00:15:00Z', sms: null } });
+  assert.match(html, /registration is complete/u);
+  assert.match(html, /Text reminders are optional; your email reminders will continue either way/u);
+  assert.match(html, /href="https:\/\/martinhowardproperty\.co\.uk\/thanks\/\?for=webinar">Skip texts and continue/u);
+  assert.match(html, /name="consent" value="yes" required/u);
+});
+
 test('owner chooses a current approved MHP text; programme IDs and hash come from its server review', async () => {
   let saved = '', valid = true, stale = false;
   const bodyText = 'Martin Howard Property webinar Wed 4 Nov 7:30pm UK. Reply STOP.',
