@@ -4,14 +4,14 @@
 
 ## 0. Resubmission: what Astra asked for, what changed, and the exact new SHAs
 
-> **Replay correction (after Astra accepted the four fixes at 009B `76fe4d8` / 009C `a0c9c9e`).** In the unlinked replay branches of 0131 and 0132, a replay under the same provider id is effect-free and answers `replayed` only when every piece of evidence is identical; changed evidence answers `conflict`, and the projection is never re-run for it. Both migrations and both bridge pins are re-hashed; no other change. The SHA table below is the post-correction state (REPLAY_SHAS).
+> **Replay correction (after Astra accepted the four fixes at 009B `76fe4d8` / 009C `a0c9c9e`).** In the unlinked replay branches of 0131 and 0132, a replay under the same provider id is effect-free and answers `replayed` only when every piece of evidence is identical; changed evidence answers `conflict`, and the projection is never re-run for it. Both migrations and both bridge pins are re-hashed; no other change. Astra's acceptance was at 009B `76fe4d8` / 009C `a0c9c9e`; the post-correction heads are 009B `161b1b9c5845e69ad97ba07027e128b9ec7a5379`, 009B bridge `1aaf747c0248a20f931c95a608bcc5724034c2ce`, 009C `2e9c5d51c50c9bb01630671795ca577b31dbd2ca` (plus the docs-only commit that adds this note), 009C bridge `79ca570af6d0a2f56be3f353be12cf5d0fa55dba`. Proof: 009B on a fresh 131 database 89/89; 009C on 132 96/96 (both real-role integration tests with the replay/conflict cases, ledger and compatibility); bridges 26/26 and 79/79.
 
 | | Branch | Full SHA |
 |---|---|---|
-| **009B SMS candidate** | `claude/009b-r3` | `76fe4d8f5f0d691c52e58ec8f77f5970c272af61` |
-| 009B readiness bridge (`ea1903f` + exact new 0131) | `claude/009b-r3-readiness-bridge` | `5fc870192be36feae5b3ca24366b5fffe512e770` |
-| **009C WhatsApp candidate** (descends from the 009B head) | `claude/009c-r3` | `a0c9c9e46c18c68515abaa9e74f16c62e9448dce`, plus the docs-only commit that adds this section |
-| 009C readiness bridge (009B head + exact new 0132) | `claude/009c-r3-readiness-bridge` | `cfd7491781fff8fca5ccc754394daca00f0ea6aa` |
+| **009B SMS candidate** | `claude/009b-r3` | `161b1b9c5845e69ad97ba07027e128b9ec7a5379` |
+| 009B readiness bridge (`ea1903f` + exact new 0131) | `claude/009b-r3-readiness-bridge` | `1aaf747c0248a20f931c95a608bcc5724034c2ce` |
+| **009C WhatsApp candidate** (descends from the 009B head) | `claude/009c-r3` | `2e9c5d51c50c9bb01630671795ca577b31dbd2ca`, plus the docs-only commits on top |
+| 009C readiness bridge (009B head + exact new 0132) | `claude/009c-r3-readiness-bridge` | `79ca570af6d0a2f56be3f353be12cf5d0fa55dba` |
 
 | Migration | Second-round sha256 | First round |
 |---|---|---|
