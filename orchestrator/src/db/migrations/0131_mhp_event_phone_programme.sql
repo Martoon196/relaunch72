@@ -1019,7 +1019,8 @@ DECLARE ws constant uuid:='2789228d-55a6-4688-b1e8-2f70abca990b'; nonce text; in
  programme jsonb; binding app.property_predator_sms_bindings%ROWTYPE; prospect app_private.mhp_prospects%ROWTYPE; phone text;
  phone_point app.contact_points%ROWTYPE; email_point app.contact_points%ROWTYPE; ambiguous boolean:=false; contact uuid; point uuid;
  endpoint_sha bytea; consent uuid:=gen_random_uuid(); receipt uuid:=gen_random_uuid(); outcome text; now_at timestamptz:=statement_timestamp();
- grant_row record; stop_point app.contact_points%ROWTYPE; withdrawn_consent uuid; phone_sha bytea; unlinked app_private.mhp_unlinked_opt_events%ROWTYPE;
+ grant_row record; stop_point app.contact_points%ROWTYPE; withdrawn_consent uuid; phone_sha bytea;
+ unlinked app_private.mhp_unlinked_opt_events%ROWTYPE;
 BEGIN
  IF session_user<>'r72_sms_webhook_command' OR p_workspace IS DISTINCT FROM ws OR current_setting('app.workspace_id',true) IS DISTINCT FROM ws::text
   OR current_setting('app.actor_kind',true) IS DISTINCT FROM 'webhook' OR coalesce(current_setting('app.user_id',true),'')<>''
@@ -1031,15 +1032,22 @@ BEGIN
  THEN RAISE EXCEPTION 'MHP event inbound evidence is invalid' USING ERRCODE='22023'; END IF;
  -- Same event key as the existing projection (re-entrant), so replays serialise.
  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(format('pp-sms-inbox:%s:%s:%s',p_workspace,p_connection,p_external_event),7200056));
- SELECT * INTO unlinked FROM app_private.mhp_unlinked_opt_events e WHERE e.channel='sms' AND e.provider_event_id=p_external_event;
- IF FOUND THEN
-  -- An unlinked opt event replays effect-free only when every piece of evidence is identical; changed
-  -- evidence under the same provider id is a conflict. The projection is never re-run for it.
-  IF (unlinked.provider_message_id,unlinked.phone_identity_sha256,unlinked.opt_evidence,unlinked.body_sha256,unlinked.payload_sha256,
-      unlinked.signature_sha256,unlinked.event_identity_sha256)
-   IS DISTINCT FROM (p_message_sid,public.digest('+'||p_normalized_sender,'sha256'),p_opt_evidence,p_body_sha,p_payload_sha,p_signature_sha,p_event_identity_sha)
-  THEN RETURN QUERY SELECT 'conflict'::text; RETURN; END IF;
-  RETURN QUERY SELECT 'replayed'::text; RETURN;
+ SELECT * INTO unlinked FROM app_private.mhp_unlinked_opt_events e
+ WHERE e.workspace_id=ws AND e.channel='sms' AND e.provider_event_id=p_external_event;
+ IF unlinked.id IS NOT NULL THEN
+  -- The legacy projection has no receipt for an unknown sender, so compare the immutable
+  -- unlinked evidence itself before treating this provider ID as an identical replay.
+  RETURN QUERY SELECT CASE WHEN
+   unlinked.provider_connection_id IS DISTINCT FROM p_connection
+   OR unlinked.provider_message_id IS DISTINCT FROM p_message_sid
+   OR unlinked.phone_identity_sha256 IS DISTINCT FROM public.digest('+'||p_normalized_sender,'sha256')
+   OR unlinked.opt_evidence IS DISTINCT FROM p_opt_evidence
+   OR unlinked.body_sha256 IS DISTINCT FROM p_body_sha
+   OR unlinked.payload_sha256 IS DISTINCT FROM p_payload_sha
+   OR unlinked.signature_sha256 IS DISTINCT FROM p_signature_sha
+   OR unlinked.event_identity_sha256 IS DISTINCT FROM p_event_identity_sha
+   OR unlinked.occurred_at IS DISTINCT FROM p_occurred
+   THEN 'conflict'::text ELSE 'replayed'::text END; RETURN;
  END IF;
  IF EXISTS(SELECT 1 FROM app_private.mhp_event_phone_receipts r WHERE r.provider_connection_id=p_connection AND r.provider_event_id=p_external_event)
   OR EXISTS(SELECT 1 FROM app_private.mhp_event_phone_intents i WHERE i.consumed_provider_event_id=p_external_event) THEN

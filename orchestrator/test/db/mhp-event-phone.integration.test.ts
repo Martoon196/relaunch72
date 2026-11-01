@@ -113,13 +113,13 @@ interface Inbound { sid: string; body: string; sender: string; payload: Buffer; 
 function inbound(n: number, body: string): Inbound {
   return { sid: `SM${randomBytes(16).toString('hex')}`, body, sender: phone(n).slice(1), payload: randomBytes(32), signature: randomBytes(32), occurred: new Date(Date.now() - 1000) };
 }
-async function deliverInbound(pools: Pools, message: Inbound, opt = ''): Promise<string> {
+async function deliverInbound(pools: Pools, message: Inbound, opt = '', connection = CONNECTION): Promise<string> {
   const external = `inbound:${message.sid}`, senderSha = sha(message.sender), bodySha = sha(message.body);
   const identity = sha([external, message.sid, senderSha.toString('hex'), bodySha.toString('hex'), message.payload.toString('hex'),
     message.signature.toString('hex')].join('\u001f'));
   const rows = await as<{ disposition: string }>(pools.r72_sms_webhook_command, 'webhook',
     'SELECT disposition FROM app_private.mhp_record_event_sms_inbound($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)',
-    [WS, CONNECTION, external, message.sid, message.sender, opt, message.body, senderSha, bodySha, message.payload, message.signature, identity, message.occurred]);
+    [WS, connection, external, message.sid, message.sender, opt, message.body, senderSha, bodySha, message.payload, message.signature, identity, message.occurred]);
   return rows[0]!.disposition;
 }
 
@@ -257,10 +257,13 @@ test('MHP009B event phone permission, owner batch and absolute-due worker under 
     const stop8 = inbound(8, 'STOP');
     assert.equal(await deliverInbound(p, stop8, 'stop'), 'unlinked_stop');
     assert.equal(await deliverInbound(p, stop8, 'stop'), 'replayed');
-    // Astra correction: an identical replay is effect-free; changed evidence under the same provider id is a conflict.
-    assert.equal(await deliverInbound(p, { ...stop8, body: 'STOP please' }, 'stop'), 'conflict');
-    assert.equal(await deliverInbound(p, { ...stop8, payload: randomBytes(32) }, 'stop'), 'conflict');
-    assert.equal(await deliverInbound(p, { ...stop8, sender: phone(7).slice(1) }, 'stop'), 'conflict');
+    assert.equal(await deliverInbound(p, { ...stop8, body: 'START' }, 'start'), 'conflict', 'same provider ID cannot turn STOP into START');
+    assert.equal(await deliverInbound(p, stop8, 'stop', randomUUID()), 'conflict', 'connection change conflicts');
+    assert.equal(await deliverInbound(p, { ...stop8, sender: phone(7).slice(1) }, 'stop'), 'conflict', 'sender change conflicts');
+    assert.equal(await deliverInbound(p, { ...stop8, payload: randomBytes(32) }, 'stop'), 'conflict', 'payload change conflicts');
+    assert.equal(await deliverInbound(p, { ...stop8, signature: randomBytes(32) }, 'stop'), 'conflict', 'signature change conflicts');
+    assert.equal(await deliverInbound(p, { ...stop8, occurred: new Date(stop8.occurred.getTime() + 1) }, 'stop'), 'conflict', 'occurrence change conflicts');
+    assert.equal(await deliverInbound(p, stop8, 'stop'), 'replayed', 'conflicts leave the original STOP unchanged');
     await expectPostgresError(deliverInbound(p, inbound(8, 'hello')), '23503'); // an ordinary text from an unknown number keeps the refusal
     const unlinked8 = await ownerQuery<{ sms: number; held: number; points: number }>(owner, `SELECT
       (SELECT count(*)::int FROM app_private.mhp_unlinked_opt_events WHERE channel='sms' AND phone_identity_sha256=$1 AND opt_evidence='stop') sms,
