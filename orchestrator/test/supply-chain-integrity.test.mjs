@@ -22,8 +22,8 @@ async function repositoryLock() {
 
 test('root package lock is registry-only, integrity-pinned and lifecycle-script bounded', async () => {
   const result = verifyPackageLock(await repositoryLock());
-  assert.equal(result.packageCount, 118);
-  assert.equal(result.externalPackageCount, 115);
+  assert.equal(result.packageCount, 119);
+  assert.equal(result.externalPackageCount, 116);
   assert.deepEqual(result.declaredInstallScripts, [
     'node_modules/esbuild@0.28.1',
     'node_modules/fsevents@2.3.3',
@@ -110,7 +110,7 @@ test('Render invokes a repository-owned built-in-only Node gate before applicati
     env: { ...process.env },
   });
   assert.equal(execution.status, 0, execution.stderr);
-  assert.match(execution.stdout, /Supply-chain gate passed for 115 external packages; SBOM is current\./);
+  assert.match(execution.stdout, /Supply-chain gate passed for 116 external packages; SBOM is current\./);
 });
 
 test('CycloneDX output is canonical, complete and exactly reproducible', async () => {
@@ -120,7 +120,7 @@ test('CycloneDX output is canonical, complete and exactly reproducible', async (
   const sbom = buildCycloneDxSbom(lock);
   assert.equal(sbom.serialNumber, undefined);
   assert.equal(sbom.metadata.timestamp, undefined);
-  assert.equal(sbom.components.length, 116);
+  assert.equal(sbom.components.length, 117);
   assert.equal(first, canonicalJson(JSON.parse(first)));
   const componentRefs = new Set(sbom.components.map((component) => component['bom-ref']));
   assert.equal(componentRefs.size, sbom.components.length);
