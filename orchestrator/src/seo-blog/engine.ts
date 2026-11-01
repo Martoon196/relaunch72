@@ -268,9 +268,16 @@ export class SeoBlogEngine {
 
   /** The key that article checks are bound to: profile facts plus factual-knowledge identity. */
   private async currentFactsKey(brandId: string): Promise<{ key: string; profile: BrandProfile | null; stale: boolean }> {
-    const [profile, docs] = await Promise.all([this.store.latestProfile(brandId), this.activeKnowledge(brandId)]);
+    const [profile, all] = await Promise.all([this.store.latestProfile(brandId), this.store.listKnowledge(brandId)]);
+    return this.factsKeyFrom(profile, all);
+  }
+
+  /** Pure form, used inside the publication-begin boundary on locked/same-snapshot reads. */
+  private factsKeyFrom(profile: BrandProfile | null, allKnowledge: readonly KnowledgeDocument[]): { key: string; profile: BrandProfile | null; stale: boolean } {
     if (!profile) return { key: 'no-profile', profile: null, stale: true };
-    const stale = this.profileStale(profile, docs);
+    const latest = new Map<string, KnowledgeDocument>();
+    for (const d of allKnowledge) if (!latest.has(d.id) || latest.get(d.id)!.version < d.version) latest.set(d.id, d);
+    const stale = this.profileStale(profile, [...latest.values()].filter((d) => d.active));
     return { key: sha256({ facts: profile.factsSha, profileVersion: profile.version, confirmed: profile.confirmedAt, stale }), profile, stale };
   }
 
@@ -969,66 +976,81 @@ export class SeoBlogEngine {
   }
 
   private async dispatchOne(brandId: string, articleId: string): Promise<'published' | 'held' | 'skipped'> {
-    // Re-read everything at execution time; nothing from the listing is trusted.
+    // Preparation outside the boundary: refresh stale checks so the boundary can judge them.
     const brand = await this.store.getBrand(brandId);
-    let article = await this.store.getArticle(brandId, articleId);
+    const article = await this.store.getArticle(brandId, articleId);
     if (!brand || !article) return 'skipped';
     const version = article.currentVersionId ? await this.store.getVersion(brandId, article.currentVersionId) : null;
     const facts = await this.currentFactsKey(brandId);
-    let checks = article.checks;
-    if (version && !checksAreCurrent(checks, version, facts.key) && Date.parse(article.schedule?.publishAtUtc ?? '') <= Date.parse(this.now())) {
-      checks = await this.checkVersion(brand, version);
-      article = await this.store.updateArticle({ ...article, checks });
+    if (version && !checksAreCurrent(article.checks, version, facts.key) && Date.parse(article.schedule?.publishAtUtc ?? '') <= Date.parse(this.now())) {
+      await this.store.updateArticle({ ...article, checks: await this.checkVersion(brand, version) });
     }
-    const destination = article.schedule ? await this.store.getDestination(brandId, article.schedule.destinationId) : null;
-    const decision = evaluatePublication({ brand, article, version, checks, currentFactsSha: facts.key, destination, now: this.now() });
-    if (decision.decision === 'not_due' || decision.decision === 'skip') return 'skipped';
-    if (decision.decision === 'hold') {
-      await this.store.updateArticle({ ...article, hold: { ...decision.hold, at: this.now() } });
-      await this.log(brandId, 'system', 'publish.held', `Not published: ${decision.hold.detail}`, articleId);
+    // The publication-begin boundary: policy is evaluated on locked, current state and the
+    // operation + article claim (or hold) are committed atomically. No provider call inside.
+    const now = this.now();
+    const begun = await this.store.beginPublication({
+      brandId, articleId, resumePublicationId: null,
+      decide: (s) => {
+        const f = this.factsKeyFrom(s.profile, s.knowledge);
+        const decision = evaluatePublication({ brand: s.brand, article: s.article, version: s.version, checks: s.article.checks, currentFactsSha: f.key, destination: s.destination, now });
+        if (decision.decision === 'not_due' || decision.decision === 'skip') return { kind: 'skip', why: decision.decision === 'skip' ? decision.why : 'Not due.' };
+        if (decision.decision === 'hold') return { kind: 'hold', article: { ...s.article, hold: { ...decision.hold, at: now } } };
+        const publisher = publisherFor(this.deps.publishers, s.destination!.type);
+        const publication: Publication = {
+          id: randomUUID(), brandId, articleId, versionId: s.version!.id, contentSha: s.version!.contentSha, versionNumber: s.version!.number,
+          destinationId: s.destination!.id,
+          // One operation per exact version, destination and owner-set schedule: duplicate workers share it.
+          idempotencyKey: `${brandId}:${articleId}:${s.version!.id}:${s.destination!.id}:${s.article.schedule!.setAt}`, scheduledFor: s.article.schedule!.publishAtUtc,
+          policy: decision.policy, state: 'prepared', attempts: 0, firstAttemptAt: null, lastAttemptAt: null, providerRef: null,
+          publicUrl: publisher.publicUrlFor(s.destination!, s.version!.body.slug), verifiedAt: null, verifyAttempts: 0,
+          detail: 'Authorised and recorded before sending.', events: [{ at: now, state: 'prepared', detail: `Authorised by policy rule "${decision.policy.rule}".` }], rowVersion: 1,
+        };
+        return { kind: 'begin', publication, article: { ...s.article, delivery: 'publishing', lastAttemptAt: now, failure: null } };
+      },
+    });
+    if (begun.kind === 'skip') return 'skipped';
+    if (begun.kind === 'hold') {
+      await this.log(brandId, 'system', 'publish.held', `Not published: ${begun.article!.hold!.detail}`, articleId);
       return 'held';
     }
-    const publisher = publisherFor(this.deps.publishers, destination!.type);
-    const publication: Publication = {
-      id: randomUUID(), brandId, articleId, versionId: version!.id, contentSha: version!.contentSha, destinationId: destination!.id,
-      // One operation per exact version, destination and owner-set schedule: duplicate workers share it.
-      idempotencyKey: `${brandId}:${articleId}:${version!.id}:${destination!.id}:${article.schedule!.setAt}`, scheduledFor: article.schedule!.publishAtUtc,
-      policy: decision.policy, state: 'prepared', attempts: 0, firstAttemptAt: null, lastAttemptAt: null, providerRef: null,
-      publicUrl: publisher.publicUrlFor(destination!, version!.body.slug), verifiedAt: null, verifyAttempts: 0, detail: 'Prepared.', rowVersion: 1,
-    };
-    // 1. Persist the operation (unique per exact version + destination) BEFORE any provider call.
-    const inserted = await this.store.insertPublication(publication);
-    if (!inserted.inserted) return 'skipped';
-    // 2. Claim the article (row-version fenced): a duplicate worker loses here.
-    await this.store.updateArticle({ ...article, delivery: 'publishing', lastAttemptAt: this.now(), failure: null });
-    await this.attempt(brand, inserted.publication, destination!, version!);
+    const destination = (await this.store.getDestination(brandId, begun.publication!.destinationId))!;
+    const exact = (await this.store.getVersion(brandId, begun.publication!.versionId))!;
+    await this.attempt(brand, begun.publication!, destination, exact);
     return 'published';
+  }
+
+  /** Append to the operation's own history; identity and earlier events are never rewritten. */
+  private pub(p: Publication, patch: Partial<Publication>): Publication {
+    const next = { ...p, ...patch };
+    const events = [...(p.events ?? []), { at: this.now(), state: next.state, detail: next.detail }].slice(-60);
+    return { ...next, events };
   }
 
   private publishInput(brand: Brand, publication: Publication, destination: Destination, version: ArticleVersion): PublishInput {
     return {
       operationId: publication.id, destination, credential: this.credentialFor(destination), brandName: brand.name, locale: brand.locale,
-      articleId: publication.articleId, versionId: publication.versionId, contentSha: publication.contentSha, body: version.body,
+      articleId: publication.articleId, versionId: publication.versionId, contentSha: publication.contentSha,
+      versionNumber: publication.versionNumber ?? version.number, body: version.body,
       publishedAt: publication.firstAttemptAt ?? this.now(),
     };
   }
 
   private async attempt(brand: Brand, publication: Publication, destination: Destination, version: ArticleVersion): Promise<Publication> {
     const publisher = publisherFor(this.deps.publishers, destination.type);
-    let p = await this.store.updatePublication({ ...publication, state: 'submitted', attempts: publication.attempts + 1, firstAttemptAt: publication.firstAttemptAt ?? this.now(), lastAttemptAt: this.now(), detail: 'Sent to the website.' });
+    let p = await this.store.updatePublication(this.pub(publication, { state: 'submitted', attempts: publication.attempts + 1, firstAttemptAt: publication.firstAttemptAt ?? this.now(), lastAttemptAt: this.now(), detail: 'Sent to the website.' }));
     try {
       const outcome = await publisher.publish(this.publishInput(brand, p, destination, version));
-      p = await this.store.updatePublication({ ...p, state: 'verifying', providerRef: outcome.providerRef, publicUrl: outcome.publicUrl, detail: outcome.status === 'already_present' ? 'Already on the website; confirming the public page.' : 'Accepted by the website; confirming the public page.' });
+      p = await this.store.updatePublication(this.pub(p, { state: 'verifying', providerRef: outcome.providerRef, publicUrl: outcome.publicUrl, detail: outcome.status === 'already_present' ? 'Already on the website; confirming the public page.' : 'Accepted by the website; confirming the public page.' }));
       await this.log(brand.id, 'system', 'publish.accepted', `Website accepted the article; waiting for ${p.publicUrl} to serve it.`, p.articleId);
       return this.verify(brand, p, version);
     } catch (error) {
       if (error instanceof PublisherOutcomeUnknownError) {
-        p = await this.store.updatePublication({ ...p, state: 'outcome_unknown', detail: `Outcome unknown: ${error.message} Reconciling — it will not be sent twice.` });
+        p = await this.store.updatePublication(this.pub(p, { state: 'outcome_unknown', detail: `Outcome unknown: ${error.message} Reconciling — it will not be sent twice.` }));
         await this.setArticleDelivery(brand.id, p.articleId, 'unknown', null);
         return p;
       }
       const message = error instanceof PublisherRejectedError || error instanceof SeoBlogError ? error.message : 'The website could not be updated.';
-      p = await this.store.updatePublication({ ...p, state: 'failed', detail: message });
+      p = await this.store.updatePublication(this.pub(p, { state: 'failed', detail: message }));
       await this.setArticleDelivery(brand.id, p.articleId, 'failed', message);
       await this.log(brand.id, 'system', 'publish.failed', message, p.articleId);
       return p;
@@ -1054,18 +1076,74 @@ export class SeoBlogEngine {
     const marker = versionMarker(publication.articleId, publication.versionId, publication.contentSha);
     const result = await verifyPublicUrl(this.deps.transport, publication.publicUrl, marker);
     if (result === 'served') {
-      const p = await this.store.updatePublication({ ...publication, state: 'published', verifiedAt: this.now(), verifyAttempts: publication.verifyAttempts + 1, detail: 'Verified on the public website.' });
+      const p = await this.store.updatePublication(this.pub(publication, { state: 'published', verifiedAt: this.now(), verifyAttempts: publication.verifyAttempts + 1, detail: 'Verified on the public website.' }));
       await this.setArticleDelivery(brand.id, publication.articleId, 'published', null, { publishedVersionId: publication.versionId, publishedUrl: publication.publicUrl, publishedAt: this.now() });
       await this.log(brand.id, 'system', 'publish.verified', `Published and verified at ${publication.publicUrl} (version ${version.number}).`, publication.articleId);
       return p;
     }
     const attempts = publication.verifyAttempts + 1;
     if (attempts >= MAX_VERIFY_ATTEMPTS) {
-      const p = await this.store.updatePublication({ ...publication, state: 'outcome_unknown', verifyAttempts: attempts, detail: 'The website accepted the change but the public page has not shown it. Check the site’s deployment.' });
+      const p = await this.store.updatePublication(this.pub(publication, { state: 'outcome_unknown', verifyAttempts: attempts, detail: 'The website accepted the change but the public page has not shown it. Check the site’s deployment.' }));
       await this.setArticleDelivery(brand.id, publication.articleId, 'unknown', null);
       return p;
     }
-    return this.store.updatePublication({ ...publication, verifyAttempts: attempts, detail: result === 'different' ? 'The public page still shows an earlier version; waiting for the site to update.' : 'Waiting for the public page to appear.' });
+    return this.store.updatePublication(this.pub(publication, { verifyAttempts: attempts, detail: result === 'different' ? 'The public page still shows an earlier version; waiting for the site to update.' : 'Waiting for the public page to appear.' }));
+  }
+
+  /**
+   * Resend a confirmed-absent operation only if it is still authorised now. The same operation
+   * id and history are kept. Superseded operations (new version, rescheduled, other destination)
+   * are cancelled without touching the site; unauthorised ones (paused, approval missing,
+   * failing checks, disconnected destination) are cancelled and the article is held.
+   */
+  private async resumeAbsent(brand: Brand, publication: Publication): Promise<void> {
+    const now = this.now();
+    const result = await this.store.beginPublication({
+      brandId: brand.id, articleId: publication.articleId, resumePublicationId: publication.id,
+      decide: (s) => {
+        const p = s.publication!;
+        const stale = Date.parse(now) - Date.parse(p.lastAttemptAt ?? p.scheduledFor) > PREPARED_STALE_MS;
+        if (p.rowVersion !== publication.rowVersion || !(p.state === 'outcome_unknown' || (['prepared', 'submitted'].includes(p.state) && stale))) {
+          return { kind: 'skip', why: 'Another worker is handling this operation.' };
+        }
+        const article = s.article;
+        const clearUnknownHold = article.hold?.reason === 'outcome_unknown' ? null : article.hold;
+        const cancel = (detail: string, hold: Article['hold']) => ({
+          kind: 'hold' as const,
+          publication: this.pub(p, { state: 'cancelled', detail }),
+          article: { ...article, delivery: 'none' as const, hold, failure: null },
+        });
+        const superseded = article.currentVersionId !== p.versionId
+          || !article.schedule || article.schedule.destinationId !== p.destinationId
+          || !p.idempotencyKey.endsWith(`:${article.schedule.setAt}`);
+        if (superseded) {
+          return cancel('Not re-sent: superseded by a newer version or schedule. Nothing was published by this operation.', clearUnknownHold);
+        }
+        const f = this.factsKeyFrom(s.profile, s.knowledge);
+        const decision = evaluatePublication({
+          brand: s.brand, article: { ...article, delivery: 'none', hold: clearUnknownHold }, version: s.version, checks: article.checks,
+          currentFactsSha: f.key, destination: s.destination, now, missedWindowMs: Number.POSITIVE_INFINITY,
+        });
+        if (decision.decision === 'hold') {
+          return cancel(`Not re-sent: ${decision.hold.detail}`, { ...decision.hold, at: now });
+        }
+        if (decision.decision !== 'publish') {
+          return cancel(`Not re-sent: ${decision.decision === 'skip' ? decision.why : 'no longer due'}.`, clearUnknownHold ?? { reason: 'owner', detail: 'Choose a new time.', at: now });
+        }
+        return {
+          kind: 'begin',
+          publication: this.pub(p, { state: 'prepared', policy: decision.policy, detail: 'Confirmed absent; re-authorised on current state and re-sending the same operation.' }),
+          article: { ...article, delivery: 'publishing', hold: null, lastAttemptAt: now, failure: null },
+        };
+      },
+    });
+    if (result.kind === 'begin') {
+      const destination = await this.store.getDestination(brand.id, result.publication!.destinationId);
+      const version = await this.store.getVersion(brand.id, result.publication!.versionId);
+      if (destination && version) await this.attempt(brand, result.publication!, destination, version);
+    } else if (result.kind === 'hold') {
+      await this.log(brand.id, 'system', 'publish.cancelled', result.publication?.detail ?? 'Operation not re-sent.', publication.articleId);
+    }
   }
 
   /** Recover operations left submitted, unknown, verifying or stale-prepared. Never blindly re-sends. */
@@ -1081,32 +1159,47 @@ export class SeoBlogEngine {
       const destination = await this.store.getDestination(brandId, publication.destinationId);
       if (!version || !destination) continue;
       touched++;
-      if (publication.state === 'verifying') { await this.verify(brand, publication, version); continue; }
+      try {
+        await this.reconcileOne(brand, publication, version, destination);
+      } catch (error) {
+        // Another worker advanced this operation first; it owns the next step.
+        if (error instanceof StaleWriteError) continue;
+        throw error;
+      }
+    }
+    return touched;
+  }
+
+  private async reconcileOne(brand: Brand, publication: Publication, version: ArticleVersion, destination: Destination): Promise<void> {
+    const brandId = brand.id;
+    {
+      if (publication.state === 'verifying') { await this.verify(brand, publication, version); return; }
       const publisher = publisherFor(this.deps.publishers, destination.type);
       try {
         const existing = await publisher.findExisting(this.publishInput(brand, publication, destination, version));
         if (existing.state === 'present') {
-          const p = await this.store.updatePublication({ ...publication, state: 'verifying', providerRef: existing.providerRef, detail: 'Found on the website during reconciliation; confirming the public page.' });
+          const p = await this.store.updatePublication(this.pub(publication, { state: 'verifying', providerRef: existing.providerRef, detail: 'Found on the website during reconciliation; confirming the public page.' }));
           await this.setArticleDelivery(brandId, publication.articleId, 'publishing', null);
           await this.verify(brand, p, version);
         } else if (existing.state === 'absent' && publication.attempts < JOB_MAX_ATTEMPTS) {
-          // Confirmed not applied: the same operation may be re-sent (publish is idempotent by marker too).
-          await this.setArticleDelivery(brandId, publication.articleId, 'publishing', null);
-          await this.attempt(brand, publication, destination, version);
+          // Confirmed not applied. Re-sending is a new provider effect, so it passes the same
+          // begin boundary as a first send: current version, schedule, approval, pause, facts,
+          // checks and destination are revalidated on locked state, or the operation is held.
+          await this.resumeAbsent(brand, publication);
         } else {
           const detail = existing.state === 'other_version'
             ? 'The website shows a different version of this article. Nothing was overwritten; review and schedule again.'
             : 'The article could not be published after several attempts.';
-          await this.store.updatePublication({ ...publication, state: 'failed', detail });
+          await this.store.updatePublication(this.pub(publication, { state: 'failed', detail }));
           await this.setArticleDelivery(brandId, publication.articleId, 'failed', detail);
         }
       } catch (error) {
-        if (error instanceof PublisherOutcomeUnknownError) continue; // still unknown; try again next tick
-        await this.store.updatePublication({ ...publication, state: 'failed', detail: (error as Error).message.slice(0, 300) });
+        if (error instanceof PublisherOutcomeUnknownError) return; // still unknown; try again next tick
+        if (error instanceof StaleWriteError) throw error; // concurrent progress, not a failure
+        await this.store.updatePublication(this.pub(publication, { state: 'failed', detail: (error as Error).message.slice(0, 300) }));
         await this.setArticleDelivery(brandId, publication.articleId, 'failed', (error as Error).message.slice(0, 300));
       }
     }
-    return touched;
   }
 
   // ─── Jobs ────────────────────────────────────────────────────────────────

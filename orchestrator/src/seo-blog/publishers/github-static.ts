@@ -152,6 +152,10 @@ export class GithubStaticPublisher implements WebsitePublisher {
         if (existingArticle !== null && !existingArticle.includes(`r72-blog:${input.articleId}:`)) {
           throw new PublisherRejectedError(`A page the engine does not own already exists at /${d.config.blogPath}/${input.body.slug}/. Choose another slug.`);
         }
+        const onSite = Number(/<meta name="r72-blog-version-number" content="(\d{1,9})">/.exec(existingArticle ?? '')?.[1] ?? 0);
+        if (onSite >= input.versionNumber) {
+          throw new PublisherRejectedError('The website already has the same or a newer version of this article. Nothing was overwritten.');
+        }
         const [indexHtml, sitemap, template] = await Promise.all([
           this.readFile(input.credential, d, `${d.config.blogPath}/index.html`, headSha),
           this.readFile(input.credential, d, d.config.sitemapPath!, headSha),
@@ -164,7 +168,7 @@ export class GithubStaticPublisher implements WebsitePublisher {
         if (d.config.templatePath && !template) throw new PublisherRejectedError('The configured article template is missing.');
         const articleHtml = renderArticlePage(input.body, {
           siteName: input.brandName, canonicalUrl: publicUrl, blogIndexUrl: indexUrl, locale: input.locale,
-          publishedAt: input.publishedAt, articleId: input.articleId, versionId: input.versionId, contentSha: input.contentSha, template,
+          publishedAt: input.publishedAt, articleId: input.articleId, versionId: input.versionId, contentSha: input.contentSha, versionNumber: input.versionNumber, template,
         });
         const entries = upsertIndexEntry(readIndexManifest(indexHtml), {
           title: input.body.title, url: publicUrl, excerpt: input.body.excerpt, publishedAt: input.publishedAt, articleId: input.articleId,

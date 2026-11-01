@@ -14,7 +14,7 @@ import type { Pool } from 'pg';
 import { withTransaction, type DbTransaction } from '../db/transaction.js';
 import { InactivePortalSessionError } from '../db/transaction.js';
 import type { DatabaseRequestContext } from '../db/rls.js';
-import type { CreateBrandInput, SeoBlogStore } from './store.js';
+import type { BeginDecision, BeginResult, CreateBrandInput, PublicationSnapshot, SeoBlogStore } from './store.js';
 import { StaleWriteError } from './store.js';
 import {
   DEFAULT_BRAND_SETTINGS, SeoBlogError,
@@ -247,6 +247,79 @@ export class PgSeoBlogStore implements SeoBlogStore {
   }
 
   // ─── Publications ──────────────────────────────────────────────────────
+
+  /**
+   * The publication-begin boundary. One READ COMMITTED transaction:
+   *   1. brand settings row        FOR SHARE   (pause / auto-publish toggles UPDATE this row)
+   *   2. article row               FOR UPDATE  (edits, approval, schedule, holds UPDATE this row)
+   *   3. resumed operation row     FOR UPDATE  (concurrent reconcilers serialise here)
+   *   4. destination record        FOR SHARE   (reconnection UPSERTs this row)
+   *   5. version, profile and knowledge are read in the same snapshot
+   *   6. `decide` runs synchronously; its outcome (operation row + article claim, or a hold) is written
+   * and the transaction commits. A conflicting change committed first is seen after the lock wait;
+   * one committed later waits for this boundary and applies to an operation that has already begun.
+   * The provider request always happens after commit, never inside this transaction.
+   */
+  async beginPublication(input: { brandId: string; articleId: string; resumePublicationId: string | null; decide: (snapshot: PublicationSnapshot) => BeginDecision }): Promise<BeginResult> {
+    const skip = new Error('seo-blog: begin skipped');
+    let skipWhy = '';
+    try {
+      return await this.tx(input.brandId, async (t) => {
+        const brandRow = await t.query<{ settings: Brand['settings'] }>(
+          'SELECT settings FROM app.seo_blog_brands WHERE workspace_id = $1 FOR SHARE', [input.brandId]);
+        const articleRow = await t.query<{ data: Article; row_version: string }>(
+          'SELECT data, row_version FROM app.seo_blog_articles WHERE workspace_id = $1 AND id = $2 FOR UPDATE', [input.brandId, input.articleId]);
+        if (!brandRow.rows[0] || !articleRow.rows[0]) { skipWhy = 'Article not found.'; throw skip; }
+        const article = withVersion<Article>(articleRow.rows[0]);
+        let existing: Publication | null = null;
+        if (input.resumePublicationId) {
+          const r = await t.query<{ data: Publication; row_version: string }>(
+            'SELECT data, row_version FROM app.seo_blog_publications WHERE workspace_id = $1 AND id = $2 FOR UPDATE', [input.brandId, input.resumePublicationId]);
+          if (!r.rows[0]) { skipWhy = 'Operation not found.'; throw skip; }
+          existing = withVersion<Publication>(r.rows[0]);
+        }
+        const destinationId = existing?.destinationId ?? article.schedule?.destinationId ?? null;
+        const destination = destinationId ? (await t.query<{ data: Destination }>(
+          `SELECT data FROM app.seo_blog_records WHERE workspace_id = $1 AND kind = 'destination' AND id = $2 FOR SHARE`, [input.brandId, destinationId])).rows[0]?.data ?? null : null;
+        const version = article.currentVersionId ? (await t.query<{ data: ArticleVersion }>(
+          'SELECT data FROM app.seo_blog_article_versions WHERE workspace_id = $1 AND id = $2', [input.brandId, article.currentVersionId])).rows[0]?.data ?? null : null;
+        const profile = (await t.query<{ data: BrandProfile }>(
+          `SELECT data FROM app.seo_blog_records WHERE workspace_id = $1 AND kind = 'profile' ORDER BY id DESC LIMIT 1`, [input.brandId])).rows[0]?.data ?? null;
+        const knowledge = (await t.query<{ data: KnowledgeDocument }>(
+          `SELECT data FROM app.seo_blog_records WHERE workspace_id = $1 AND kind = 'knowledge'`, [input.brandId])).rows.map((r) => r.data);
+        const decision = input.decide({
+          brand: { id: input.brandId, settings: { ...DEFAULT_BRAND_SETTINGS, ...brandRow.rows[0].settings } },
+          article, version, destination, profile, knowledge, publication: existing,
+        });
+        if (decision.kind === 'skip') { skipWhy = decision.why; throw skip; }
+        let publication: Publication | undefined;
+        if (decision.publication) {
+          const { rowVersion: _rv, ...data } = decision.publication;
+          const written = existing
+            ? await t.query<{ data: Publication; row_version: string }>(
+              `UPDATE app.seo_blog_publications SET data = $3, state = $4, row_version = row_version + 1, updated_at = clock_timestamp()
+               WHERE workspace_id = $1 AND id = $2 AND row_version = $5 RETURNING data, row_version`,
+              [input.brandId, existing.id, JSON.stringify(data), decision.publication.state, existing.rowVersion])
+            : await t.query<{ data: Publication; row_version: string }>(
+              `INSERT INTO app.seo_blog_publications (workspace_id, id, article_id, version_id, idempotency_key, state, data) VALUES ($1, $2, $3, $4, $5, $6, $7)
+               ON CONFLICT (workspace_id, idempotency_key) DO NOTHING RETURNING data, row_version`,
+              [input.brandId, decision.publication.id, decision.publication.articleId, decision.publication.versionId, decision.publication.idempotencyKey, decision.publication.state, JSON.stringify(data)]);
+          if (!written.rows[0]) { skipWhy = 'This operation has already begun.'; throw skip; }
+          publication = withVersion<Publication>(written.rows[0]);
+        }
+        const { rowVersion: _arv, ...articleData } = decision.article;
+        const updated = await t.query<{ data: Article; row_version: string }>(
+          `UPDATE app.seo_blog_articles SET data = $3, slug = $4, publish_at = $5, held = $6, row_version = row_version + 1, updated_at = clock_timestamp()
+           WHERE workspace_id = $1 AND id = $2 AND row_version = $7 RETURNING data, row_version`,
+          [input.brandId, article.id, JSON.stringify(articleData), decision.article.slug, decision.article.schedule?.publishAtUtc ?? null, Boolean(decision.article.hold), article.rowVersion]);
+        if (!updated.rows[0]) throw new StaleWriteError('article');
+        return { kind: decision.kind, article: withVersion<Article>(updated.rows[0]), ...(publication ? { publication } : {}) };
+      });
+    } catch (error) {
+      if (error === skip) return { kind: 'skip', why: skipWhy };
+      throw error;
+    }
+  }
 
   async insertPublication(publication: Publication): Promise<{ publication: Publication; inserted: boolean }> {
     return this.tx(publication.brandId, async (t) => {

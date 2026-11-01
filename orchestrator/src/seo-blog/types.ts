@@ -492,7 +492,17 @@ export interface Publication {
   readonly verifiedAt: IsoInstant | null;
   readonly verifyAttempts: number;
   readonly detail: string;
+  /** Exact article version number (monotonic per article) — destinations order versions by it, never by id. */
+  readonly versionNumber?: number;
+  /** Append-only state history of this operation (unknown outcomes, reconciliation, cancellation). */
+  readonly events?: readonly PublicationEvent[];
   readonly rowVersion: number;
+}
+
+export interface PublicationEvent {
+  readonly at: IsoInstant;
+  readonly state: PublicationState;
+  readonly detail: string;
 }
 
 // ─── Jobs, usage, activity ───────────────────────────────────────────────────

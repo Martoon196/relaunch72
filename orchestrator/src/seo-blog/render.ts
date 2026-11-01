@@ -22,6 +22,8 @@ export interface RenderContext {
   readonly articleId: string;
   readonly versionId: string;
   readonly contentSha: string;
+  /** Monotonic per-article version number, embedded so a destination can refuse to roll back. */
+  readonly versionNumber?: number;
   /** Optional destination template with {{…}} slots; defaults to a neutral, readable layout. */
   readonly template?: string | null;
   readonly noindex?: boolean;
@@ -151,6 +153,7 @@ export function renderArticlePage(body: ArticleBody, ctx: RenderContext): string
     body.image.url ? `<meta property="og:image" content="${escapeHtml(body.image.url)}">` : '',
     `<meta property="article:published_time" content="${escapeHtml(ctx.publishedAt)}">`,
     `<meta name="r72-blog-version" content="${escapeHtml(versionMarker(ctx.articleId, ctx.versionId, ctx.contentSha))}">`,
+    ctx.versionNumber ? `<meta name="r72-blog-version-number" content="${Math.trunc(ctx.versionNumber)}">` : '',
     `<script type="application/ld+json">${jsonLd(body, ctx)}</script>`,
   ].filter(Boolean).join('\n');
   const content = [

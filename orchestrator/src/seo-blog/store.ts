@@ -31,7 +31,50 @@ export interface CreateBrandInput {
   readonly now: string;
 }
 
+/**
+ * Everything the publication policy needs, read under the begin boundary's locks.
+ * Brand settings are locked FOR SHARE, the article and (on resume) the existing
+ * operation FOR UPDATE, and the destination FOR SHARE, so a pause, edit,
+ * approval or schedule change either commits before the boundary (and is seen)
+ * or waits until the operation has begun.
+ */
+export interface PublicationSnapshot {
+  readonly brand: Pick<Brand, 'id' | 'settings'>;
+  readonly article: Article;
+  readonly version: ArticleVersion | null;
+  readonly destination: Destination | null;
+  readonly profile: BrandProfile | null;
+  readonly knowledge: readonly KnowledgeDocument[];
+  /** The operation being resumed by reconciliation; null when beginning a new one. */
+  readonly publication: Publication | null;
+}
+
+/**
+ * Pure decision made inside the boundary. Article/publication values are the
+ * full next state; rowVersion is managed by the store.
+ */
+export type BeginDecision =
+  | { readonly kind: 'skip'; readonly why: string }
+  | { readonly kind: 'hold'; readonly article: Article; readonly publication?: Publication }
+  | { readonly kind: 'begin'; readonly article: Article; readonly publication: Publication };
+
+export interface BeginResult {
+  readonly kind: 'skip' | 'hold' | 'begin';
+  readonly why?: string;
+  readonly article?: Article;
+  readonly publication?: Publication;
+}
+
 export interface SeoBlogStore {
+  /**
+   * Publication-begin boundary: one short transaction that locks and re-reads
+   * the current state, calls `decide` synchronously, and records the outcome —
+   * a new or resumed operation plus the article claim, or a hold. No provider
+   * call ever happens inside it. A duplicate begin (same operation key, or an
+   * article already claimed) resolves to `skip`.
+   */
+  beginPublication(input: { brandId: string; articleId: string; resumePublicationId: string | null; decide: (snapshot: PublicationSnapshot) => BeginDecision }): Promise<BeginResult>;
+
   createBrand(input: CreateBrandInput): Promise<{ brand: Brand; created: boolean }>;
   listBrands(actorId: string): Promise<Brand[]>;
   canManage(actorId: string, brandId: string): Promise<boolean>;
@@ -280,6 +323,41 @@ export class MemorySeoBlogStore implements SeoBlogStore {
   }
   async listDestinations(brandId: string): Promise<Destination[]> {
     return [...this.destinations.values()].filter((d) => d.brandId === brandId).map(clone);
+  }
+
+  async beginPublication(input: { brandId: string; articleId: string; resumePublicationId: string | null; decide: (snapshot: PublicationSnapshot) => BeginDecision }): Promise<BeginResult> {
+    // No await between reading and writing: in a single-threaded runtime this is atomic.
+    this.maybeFail('beginPublication');
+    const brand = this.brands.get(input.brandId);
+    const article = this.articles.get(input.articleId);
+    if (!brand || !article || article.brandId !== input.brandId) return { kind: 'skip', why: 'Article not found.' };
+    const existing = input.resumePublicationId ? this.publications.get(input.resumePublicationId) ?? null : null;
+    if (input.resumePublicationId && (!existing || existing.brandId !== input.brandId)) return { kind: 'skip', why: 'Operation not found.' };
+    const destinationId = existing?.destinationId ?? article.schedule?.destinationId ?? null;
+    const destination = destinationId ? this.destinations.get(destinationId) ?? null : null;
+    const profiles = this.profiles.get(input.brandId) ?? [];
+    const snapshot: PublicationSnapshot = clone({
+      brand: { id: brand.id, settings: brand.settings }, article,
+      version: article.currentVersionId ? this.versions.get(article.currentVersionId) ?? null : null,
+      destination: destination && destination.brandId === input.brandId ? destination : null,
+      profile: [...profiles].sort((a, b) => b.version - a.version)[0] ?? null,
+      knowledge: [...this.knowledge.values()].filter((d) => d.brandId === input.brandId),
+      publication: existing,
+    });
+    const decision = input.decide(snapshot);
+    if (decision.kind === 'skip') return { kind: 'skip', why: decision.why };
+    if (decision.kind === 'begin' && !existing
+        && [...this.publications.values()].some((p) => p.brandId === input.brandId && p.idempotencyKey === decision.publication.idempotencyKey)) {
+      return { kind: 'skip', why: 'This operation has already begun.' };
+    }
+    const nextArticle: Article = { ...clone(decision.article), rowVersion: article.rowVersion + 1 };
+    this.articles.set(article.id, nextArticle);
+    let nextPublication: Publication | undefined;
+    if (decision.publication) {
+      nextPublication = { ...clone(decision.publication), rowVersion: existing ? existing.rowVersion + 1 : 1 };
+      this.publications.set(nextPublication.id, nextPublication);
+    }
+    return { kind: decision.kind, article: clone(nextArticle), ...(nextPublication ? { publication: clone(nextPublication) } : {}) };
   }
 
   async insertPublication(publication: Publication): Promise<{ publication: Publication; inserted: boolean }> {

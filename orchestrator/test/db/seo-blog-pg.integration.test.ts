@@ -103,3 +103,124 @@ test('PostgreSQL store: brand creation, RLS isolation, versions, idempotent publ
     await content.end();
   }
 });
+
+// ─── Publication-begin boundary under overlapping real sessions ─────────────
+
+import { MemorySeoBlogStore } from '../../src/seo-blog/store.js';
+import { GithubStaticPublisher } from '../../src/seo-blog/publishers/github-static.js';
+import type { PublisherRegistry } from '../../src/seo-blog/publishers/registry.js';
+import type { WebsitePublisher } from '../../src/seo-blog/publishers/types.js';
+import type { DestinationType } from '../../src/seo-blog/types.js';
+
+async function waitForLockWait(admin: pg.Pool, timeoutMs = 5000): Promise<boolean> {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    const r = await admin.query(`SELECT count(*)::int AS n FROM pg_stat_activity WHERE usename = 'r72_content_command' AND wait_event_type = 'Lock'`);
+    if (r.rows[0].n > 0) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return false;
+}
+
+async function scheduledPgArticle(admin: pg.Pool, content: pg.Pool) {
+  void MemorySeoBlogStore;
+  const owner = await seedOwner(admin, `race${randomUUID().slice(0, 6)}`);
+  const h = harness();
+  const publishers: PublisherRegistry = new Map<DestinationType, WebsitePublisher>([['github_static', new GithubStaticPublisher(h.github.fetch, 1000)]]);
+  const user = new SeoBlogEngine({ store: new PgSeoBlogStore(content, { kind: 'user', userId: owner.user, requestId: `u-${randomUUID()}`, sessionToken: owner.token, selectedWorkspaceId: owner.ws }), llm: h.llm, search: h.search, transport: h.web, publishers, vault: h.vault, now: h.clock.now });
+  const workerFor = () => new SeoBlogEngine({ store: new PgSeoBlogStore(content, { kind: 'worker', requestId: `w-${randomUUID()}` }), llm: h.llm, search: h.search, transport: h.web, publishers, vault: h.vault, now: h.clock.now });
+  const actor = { userId: owner.user };
+  seedBrandSite(h.web, 'https://harbour.example', 'deposits');
+  const { brand } = await user.createBrand(actor, { commandId: randomUUID(), name: `Race ${randomUUID().slice(0, 6)}`, website: 'https://harbour.example' });
+  let b = await user.getBrand(actor, brand.id);
+  b = await user.updateSettings(actor, brand.id, b.rowVersion, { autoPublish: true, budgets: { modelTokensPerMonth: 2_000_000, searchCallsPerMonth: 200, imagesPerMonth: 0 } });
+  await user.uploadKnowledge(actor, brand.id, { category: 'product_facts', title: 'Plans', pastedText: 'Compliance Plan costs £49 per month.' });
+  const profile = await user.extractBrandProfile(actor, brand.id);
+  await user.confirmProfile(actor, brand.id, profile.version);
+  await user.requestPlan(actor, brand.id, { commandId: randomUUID() });
+  await workerFor().tick('w');
+  const { plan, briefs } = (await user.listPlans(actor, brand.id))[0]!;
+  await user.acceptPlan(actor, brand.id, plan.id);
+  await user.requestArticles(actor, brand.id, [briefs.find((x) => x.role === 'pillar')!.id]);
+  await workerFor().tick('w');
+  const id = (await user.listArticles(actor, brand.id))[0]!.article.id;
+  const destination = await user.connectDestination(actor, brand.id, { type: 'github_static', label: 'Site', credential: 'gh-token-1', config: { repository: 'acme/site', branch: 'main', publicBaseUrl: 'https://harbour.example' } });
+  assert.equal(destination.status, 'connected', destination.statusDetail);
+  const art = (await user.getArticle(actor, brand.id, id)).article;
+  await user.schedule(actor, brand.id, id, art.rowVersion, { localDate: '2026-11-03', localTime: '09:00', destinationId: destination.id });
+  h.clock.set('2026-11-03T09:00:30.000Z');
+  return { h, user, workerFor, actor, brandId: brand.id, id };
+}
+
+test('PostgreSQL begin boundary: an uncommitted pause blocks begin, and once committed prevents dispatch', { skip }, async () => {
+  const admin = new pg.Pool({ connectionString: adminUrl, max: 3 });
+  const content = new pg.Pool({ connectionString: contentUrl, max: 6 });
+  try {
+    const s = await scheduledPgArticle(admin, content);
+    const pauser = await admin.connect();
+    try {
+      await pauser.query('BEGIN');
+      await pauser.query(`UPDATE app.seo_blog_brands SET settings = jsonb_set(settings, '{pauseAll}', 'true'), row_version = row_version + 1 WHERE workspace_id = $1`, [s.brandId]);
+      const dispatch = s.workerFor().dispatchDue(s.brandId);
+      assert.equal(await waitForLockWait(admin), true, 'the worker waits on the brand lock inside the begin boundary');
+      await pauser.query('COMMIT');
+      await dispatch;
+    } finally { pauser.release(); }
+    const d = await s.user.getArticle(s.actor, s.brandId, s.id);
+    assert.equal(d.publications.length, 0, 'no operation was recorded');
+    assert.equal(d.article.hold?.reason, 'paused');
+    assert.equal(s.h.github.refPatches, 0, 'nothing reached the website');
+  } finally { await admin.end(); await content.end(); }
+});
+
+test('PostgreSQL begin boundary: concurrent duplicate workers begin exactly once', { skip }, async () => {
+  const admin = new pg.Pool({ connectionString: adminUrl, max: 3 });
+  const content = new pg.Pool({ connectionString: contentUrl, max: 8 });
+  try {
+    const s = await scheduledPgArticle(admin, content);
+    // Hold the article row so every worker queues on the same lock, then release them together.
+    const holder = await admin.connect();
+    let workers: Promise<unknown>[];
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT 1 FROM app.seo_blog_articles WHERE workspace_id = $1 AND id = $2 FOR UPDATE', [s.brandId, s.id]);
+      workers = [s.workerFor(), s.workerFor(), s.workerFor(), s.workerFor()].map((w) => w.dispatchDue(s.brandId));
+      assert.equal(await waitForLockWait(admin), true);
+      await holder.query('COMMIT');
+    } finally { holder.release(); }
+    await Promise.all(workers);
+    const rows = await admin.query('SELECT count(*)::int AS n FROM app.seo_blog_publications WHERE workspace_id = $1', [s.brandId]);
+    assert.equal(rows.rows[0].n, 1, 'one operation row');
+    assert.equal(s.h.github.refPatches, 1, 'one provider effect');
+    assert.equal((await s.user.getArticle(s.actor, s.brandId, s.id)).status, 'Published');
+  } finally { await admin.end(); await content.end(); }
+});
+
+test('PostgreSQL reconciliation: a pause racing a confirmed-absent resend wins; no resend', { skip }, async () => {
+  const admin = new pg.Pool({ connectionString: adminUrl, max: 3 });
+  const content = new pg.Pool({ connectionString: contentUrl, max: 6 });
+  try {
+    const s = await scheduledPgArticle(admin, content);
+    s.h.github.failNextRefBeforeApply = 2;
+    await s.workerFor().dispatchDue(s.brandId);
+    const before = (await s.user.getArticle(s.actor, s.brandId, s.id)).publications[0]!;
+    assert.equal(before.state, 'outcome_unknown');
+    s.h.clock.advance(60_000);
+    const pauser = await admin.connect();
+    try {
+      await pauser.query('BEGIN');
+      await pauser.query(`UPDATE app.seo_blog_brands SET settings = jsonb_set(settings, '{pauseAll}', 'true'), row_version = row_version + 1 WHERE workspace_id = $1`, [s.brandId]);
+      const reconcile = s.workerFor().reconcile(s.brandId);
+      assert.equal(await waitForLockWait(admin), true);
+      await pauser.query('COMMIT');
+      await reconcile;
+    } finally { pauser.release(); }
+    const after = (await s.user.getArticle(s.actor, s.brandId, s.id));
+    assert.equal(after.publications.length, 1);
+    assert.equal(after.publications[0]!.id, before.id);
+    assert.equal(after.publications[0]!.state, 'cancelled');
+    assert.ok(after.publications[0]!.events!.some((e) => e.state === 'outcome_unknown'));
+    assert.equal(s.h.github.refPatches, 0);
+    assert.equal(after.article.hold?.reason, 'paused');
+  } finally { await admin.end(); await content.end(); }
+});

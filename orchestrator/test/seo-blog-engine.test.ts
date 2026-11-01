@@ -385,15 +385,16 @@ test('A10: restarts during writing and publication resume without duplicates or 
   assert.equal(articles.length, 1);
   assert.equal((await h.engine.getArticle(OWNER, brand.id, articles[0]!.article.id)).versions.length, 1);
 
-  // Crash after the publication operation is recorded but before the article is claimed.
+  // Crash after the begin boundary committed (operation + claim) but before the provider call.
   const destination = await connectGithub(h, brand);
   const b = await h.engine.getBrand(OWNER, brand.id);
   await h.engine.updateSettings(OWNER, brand.id, b.rowVersion, { autoPublish: true });
   const id = articles[0]!.article.id;
   await h.engine.schedule(OWNER, brand.id, id, (await h.store.getArticle(brand.id, id))!.rowVersion, { localDate: '2026-11-05', localTime: '09:00', destinationId: destination.id });
   h.clock.set('2026-11-05T09:00:10.000Z');
-  h.store.failNext.updateArticle = 1;
+  h.store.failNext.updatePublication = 1;
   await assert.rejects(h.engine.dispatchDue(brand.id));
+  assert.equal((await h.engine.getArticle(OWNER, brand.id, id)).publications[0]!.state, 'prepared', 'the authorised operation was recorded before any send');
   assert.equal(h.github.refPatches, 0);
   h.clock.advance(10 * 60_000);
   await h.makeEngine().tick('worker-3');
@@ -482,4 +483,111 @@ test('ongoing production tops up within the backlog ceiling and never duplicates
   assert.equal(articles.length, 2, 'drafting stops at the backlog ceiling');
   assert.equal((await h.engine.listPlans(OWNER, brand.id)).length, 1, 'one daily plan per day');
   assert.ok(articles.every((a) => !a.article.schedule), 'drafting never schedules or publishes by itself');
+});
+
+// ─── Defect fixes: reconciliation revalidation and the begin boundary ────────
+
+async function unknownAbsent(row: { autoPublish: boolean; requiresApproval: boolean; approve: boolean }) {
+  const h = harness();
+  const { brand, id } = await scheduledArticle(h, row);
+  h.clock.set('2026-11-03T09:00:30.000Z');
+  // The site never applies it (first send and the same tick's reconciliation resend), but the worker cannot know.
+  h.github.failNextRefBeforeApply = 2;
+  await h.engine.dispatchDue(brand.id);
+  const detail = await h.engine.getArticle(OWNER, brand.id, id);
+  assert.equal(detail.publications[0]!.state, 'outcome_unknown');
+  assert.equal(h.github.refPatches, 0);
+  return { h, brand, id, publicationId: detail.publications[0]!.id };
+}
+
+test('defect 1: a confirmed-absent operation is not re-sent after Pause all', async () => {
+  const { h, brand, id, publicationId } = await unknownAbsent({ autoPublish: true, requiresApproval: false, approve: false });
+  const b = await h.engine.getBrand(OWNER, brand.id);
+  await h.engine.updateSettings(OWNER, brand.id, b.rowVersion, { pauseAll: true });
+  h.clock.advance(60_000);
+  await h.engine.reconcile(brand.id);
+  const d = await h.engine.getArticle(OWNER, brand.id, id);
+  assert.equal(h.github.refPatches, 0, 'nothing was re-sent');
+  assert.equal(d.publications.length, 1);
+  assert.equal(d.publications[0]!.id, publicationId, 'operation identity preserved');
+  assert.equal(d.publications[0]!.state, 'cancelled');
+  assert.ok(d.publications[0]!.events!.some((e) => e.state === 'outcome_unknown'), 'unknown-outcome history preserved');
+  assert.equal(d.article.hold?.reason, 'paused');
+  assert.equal(d.article.delivery, 'none');
+});
+
+test('defect 1: a confirmed-absent operation is not re-sent after the article was edited', async () => {
+  const { h, brand, id } = await unknownAbsent({ autoPublish: true, requiresApproval: false, approve: false });
+  const before = await h.engine.getArticle(OWNER, brand.id, id);
+  // The unknown-outcome hold blocks owner edits to scheduling, but content edits create a new version.
+  await h.engine.editArticle(OWNER, brand.id, id, before.version!.id, { title: 'Tenancy deposit protection: revised landlord guide' });
+  h.clock.advance(60_000);
+  await h.engine.reconcile(brand.id);
+  const d = await h.engine.getArticle(OWNER, brand.id, id);
+  assert.equal(h.github.refPatches, 0);
+  assert.equal(d.publications[0]!.state, 'cancelled');
+  assert.match(d.publications[0]!.detail, /superseded/);
+});
+
+test('defect 1: a confirmed-absent operation whose approval no longer matches is held, not re-sent', async () => {
+  const { h, brand, id } = await unknownAbsent({ autoPublish: false, requiresApproval: false, approve: true });
+  const b = await h.engine.getBrand(OWNER, brand.id);
+  await h.engine.updateSettings(OWNER, brand.id, b.rowVersion, { autoPublish: false }); // still requires approval
+  const a = (await h.store.getArticle(brand.id, id))!;
+  await h.store.updateArticle({ ...a, approval: null }); // approval withdrawn while the outcome was unknown
+  h.clock.advance(60_000);
+  await h.engine.reconcile(brand.id);
+  const d = await h.engine.getArticle(OWNER, brand.id, id);
+  assert.equal(h.github.refPatches, 0);
+  assert.equal(d.article.hold?.reason, 'missing_approval');
+});
+
+test('defect 1: a still-authorised absent operation is re-sent once with the same identity and history', async () => {
+  const { h, brand, id, publicationId } = await unknownAbsent({ autoPublish: true, requiresApproval: false, approve: false });
+  h.clock.advance(60_000);
+  await Promise.all([h.engine.reconcile(brand.id), h.makeEngine().reconcile(brand.id)]);
+  const d = await h.engine.getArticle(OWNER, brand.id, id);
+  assert.equal(h.github.refPatches, 1, 'exactly one re-send');
+  assert.equal(d.publications.length, 1);
+  assert.equal(d.publications[0]!.id, publicationId);
+  assert.equal(d.publications[0]!.state, 'published');
+  const states = d.publications[0]!.events!.map((e) => e.state);
+  assert.deepEqual(states.filter((s) => s === 'outcome_unknown').length >= 1, true);
+  assert.ok(states.indexOf('outcome_unknown') < states.lastIndexOf('prepared'), 'history shows the unknown outcome before re-authorisation');
+});
+
+test('defect 1: status verification of an applied operation continues while paused', async () => {
+  const h = harness();
+  const { brand, id } = await scheduledArticle(h, { autoPublish: true, requiresApproval: false, approve: false });
+  h.clock.set('2026-11-03T09:00:30.000Z');
+  h.github.dropNextRefResponse = true; // applied, response lost
+  await h.engine.dispatchDue(brand.id);
+  const b = await h.engine.getBrand(OWNER, brand.id);
+  await h.engine.updateSettings(OWNER, brand.id, b.rowVersion, { pauseAll: true });
+  h.clock.advance(60_000);
+  await h.engine.reconcile(brand.id);
+  const d = await h.engine.getArticle(OWNER, brand.id, id);
+  assert.equal(d.status, 'Published', 'what is already on the site is recognised, not re-sent');
+  assert.equal(h.github.refPatches, 1);
+});
+
+test('defect 2: begin boundary — a pause committed before begin prevents dispatch; duplicates begin once', async () => {
+  const h = harness();
+  const { brand, id } = await scheduledArticle(h, { autoPublish: true, requiresApproval: false, approve: false });
+  h.clock.set('2026-11-03T09:00:30.000Z');
+  // Duplicate workers racing the same due article.
+  const engines = [h.engine, h.makeEngine(), h.makeEngine()];
+  await Promise.all(engines.map((e) => e.dispatchDue(brand.id)));
+  assert.equal((await h.store.listPublications(brand.id)).length, 1);
+  assert.equal(h.github.refPatches, 1);
+  // A second brand article paused before the boundary is held without an operation.
+  const h2 = harness();
+  const s2 = await scheduledArticle(h2, { autoPublish: true, requiresApproval: false, approve: false });
+  const b2 = await h2.engine.getBrand(OWNER, s2.brand.id);
+  await h2.engine.updateSettings(OWNER, s2.brand.id, b2.rowVersion, { pauseAll: true });
+  h2.clock.set('2026-11-03T09:00:30.000Z');
+  await h2.engine.dispatchDue(s2.brand.id);
+  assert.equal((await h2.store.listPublications(s2.brand.id)).length, 0);
+  assert.equal((await h2.engine.getArticle(OWNER, s2.brand.id, s2.id)).article.hold?.reason, 'paused');
+  void id;
 });

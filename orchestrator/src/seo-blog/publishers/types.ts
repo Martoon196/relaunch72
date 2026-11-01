@@ -30,6 +30,8 @@ export interface PublishInput {
   readonly articleId: string;
   readonly versionId: string;
   readonly contentSha: string;
+  /** Monotonic per-article version number; destinations must never let a lower number replace a higher one. */
+  readonly versionNumber: number;
   readonly body: ArticleBody;
   readonly publishedAt: string;
 }

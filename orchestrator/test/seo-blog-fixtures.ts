@@ -188,6 +188,8 @@ export class FakeGithub {
   head: string;
   /** Apply the ref update then throw a network error (outcome unknown). */
   dropNextRefResponse = false;
+  /** Throw a network error WITHOUT applying the ref update (outcome unknown, actually absent). */
+  failNextRefBeforeApply = 0;
   /** Move the branch underneath the publisher once (concurrent site edit). */
   concurrentEditOnce = false;
   refPatches = 0;
@@ -234,6 +236,7 @@ export class FakeGithub {
       return json(201, { sha });
     }
     if (method === 'PATCH' && path.startsWith('/git/refs/heads/')) {
+      if (this.failNextRefBeforeApply > 0) { this.failNextRefBeforeApply--; throw new TypeError('fetch failed'); }
       this.refPatches++;
       if (this.concurrentEditOnce) {
         this.concurrentEditOnce = false;

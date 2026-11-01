@@ -120,6 +120,8 @@ export class ContentApiPublisher implements WebsitePublisher {
       articleId: input.articleId,
       versionId: input.versionId,
       contentSha: input.contentSha,
+      // Ordering is by this monotonic number, never by UUID; the site refuses lower numbers.
+      versionNumber: input.versionNumber,
       marker: versionMarker(input.articleId, input.versionId, input.contentSha),
       slug: input.body.slug,
       title: input.body.title,
@@ -139,6 +141,7 @@ export class ContentApiPublisher implements WebsitePublisher {
       const status = res.json.status === 'already_present' ? 'already_present' : 'accepted';
       return { status, providerRef: typeof res.json.ref === 'string' ? res.json.ref : input.operationId, publicUrl };
     }
+    if (res.status === 409 && res.json.status === 'superseded') throw new PublisherRejectedError('The website already has a newer version of this article. Nothing was overwritten.');
     if (res.status === 409) throw new PublisherRejectedError(typeof res.json.error === 'string' ? res.json.error.slice(0, 200) : 'The website refused this slug.');
     if (res.status === 401 || res.status === 403) throw new PublisherRejectedError('The website rejected the signing secret. Reconnect the website.');
     throw new PublisherRejectedError(`The website refused the article (HTTP ${res.status}).`);
