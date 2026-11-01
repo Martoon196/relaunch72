@@ -11,6 +11,7 @@ import { CORE_PLATFORM_MODULES } from '../platform/modules.js';
 import { appShell, escapeHtml as esc, icon, pageHead, plannedPortalModules, portalModuleIcon, productBrandMark, productBrandName } from './ui.js';
 import { RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
 import { PROPERTY_PREDATOR_SSO_START_ROUTE } from './property-predator-sso.js';
+import { centralActionFeedbackHead, centralActionFeedbackStatus } from './action-feedback.js';
 
 function loginModuleBadges(productProfile: PortalProductProfile): string {
   const visible = new Set(productProfile.visibleNavigation);
@@ -34,11 +35,12 @@ export function accountSetupPage(
   error?: string,
   productProfile: PortalProductProfile = RELAUNCH72_PRODUCT_PROFILE,
   referrerPolicy: 'same-origin' | 'no-referrer' = 'no-referrer',
+  actionFeedback = false,
 ): string {
   const plainProductName = productProfile.id === 'relaunch72' ? 'Relaunch72' : productProfile.productName;
   const productName = esc(plainProductName);
   const suiteLabel = productProfile.id === 'relaunch72' ? productProfile.suiteLabel.toLowerCase() : productProfile.suiteLabel;
-  return `${pageHead(`${plainProductName} — Set up your account`, productProfile, referrerPolicy)}<body>
+  return `${pageHead(`${plainProductName} — Set up your account`, productProfile, referrerPolicy).replace('</head>', `${centralActionFeedbackHead(actionFeedback)}</head>`)}<body>${centralActionFeedbackStatus(actionFeedback)}
     <main class="auth-shell">
       <section class="auth-panel" aria-labelledby="setup-title">
         <div class="auth-card">
@@ -89,7 +91,7 @@ export function loginPage(
   email = '',
   loginCsrfToken = '',
   productProfile: PortalProductProfile = RELAUNCH72_PRODUCT_PROFILE,
-  options: { propertyPredatorSso?: boolean; referrerPolicy?: 'same-origin' | 'no-referrer' } = {},
+  options: { propertyPredatorSso?: boolean; referrerPolicy?: 'same-origin' | 'no-referrer'; actionFeedback?: boolean } = {},
 ): string {
   const productName = esc(productProfile.productName);
   const sharedSignIn = options.propertyPredatorSso
@@ -100,7 +102,7 @@ export function loginPage(
       </div>
       <div class="auth-divider"><span>or use your Growth HQ password</span></div>`
     : '';
-  return `${pageHead(`${productProfile.productName} — Sign in`, productProfile, options.referrerPolicy)}<body>
+  return `${pageHead(`${productProfile.productName} — Sign in`, productProfile, options.referrerPolicy).replace('</head>', `${centralActionFeedbackHead(options.actionFeedback === true)}</head>`)}<body>${centralActionFeedbackStatus(options.actionFeedback === true)}
     <main class="auth-shell">
       <section class="auth-panel" aria-labelledby="login-title">
         <div class="auth-card">

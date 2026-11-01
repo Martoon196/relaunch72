@@ -37,6 +37,8 @@ test('owner screens: add brand, switch, every tab renders, CSRF and foreign acce
   const csrf = portalCsrfToken(SECRET, owner.sessionToken);
 
   assert.equal((await call(service, null, 'GET', '/portal/seo-blog')).status, 303, 'signed-out users go to login');
+  const feedback = await call(service, null, 'GET', '/portal/seo-blog/action-feedback.js');
+  assert.equal(feedback.status, 200); assert.match(feedback.headers['content-type']!, /javascript/); assert.equal(feedback.headers['x-content-type-options'], 'nosniff');
   const home = await call(service, owner, 'GET', '/portal/seo-blog');
   assert.equal(home.status, 200);
   assert.match(home.body, /Add brand/);
@@ -63,6 +65,9 @@ test('owner screens: add brand, switch, every tab renders, CSRF and foreign acce
   assert.match(setup.body, /enctype="multipart\/form-data"/);
   assert.match(setup.body, /Static website in a GitHub repository/);
   assert.match(setup.body, /Website content API/);
+  assert.match(setup.body, /Writing allowance not configured/);
+  assert.match(setup.body, /Used 0 · Monthly ceiling 0 · Remaining 0/);
+  assert.ok(setup.body.includes(`/b/${brandId}/publishing#writing-budget`));
   // A forged notice is not displayed.
   const forged = await call(service, owner, 'GET', `/portal/seo-blog/b/${brandId}/setup?n=${Buffer.from('Your account is suspended').toString('base64url')}&s=bad`);
   assert.ok(!forged.body.includes('suspended'));

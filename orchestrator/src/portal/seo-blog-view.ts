@@ -6,7 +6,7 @@
  */
 
 import type { BrandReadiness } from '../seo-blog/engine.js';
-import { sha256 } from '../seo-blog/engine.js';
+import { sha256, USAGE_ESTIMATES } from '../seo-blog/engine.js';
 import { promotionPublicationHold } from '../seo-blog/promotions.js';
 import { bindingHold, type SocialOverview } from '../seo-blog/social.js';
 import { articleStatusLabel } from '../seo-blog/policy.js';
@@ -14,6 +14,7 @@ import { addDays, utcToLocal } from '../seo-blog/schedule.js';
 import { KNOWLEDGE_CATEGORIES, type ActivityEvent, type Article, type ArticleBrief, type ArticleVersion, type Brand, type BrandProfile, type Destination, type Job, type KnowledgeDocument, type Publication, type TopicPlan, type SocialDispatch, type UsageKind, type WebsiteInventory } from '../seo-blog/types.js';
 import type { WebsitePublisher } from '../seo-blog/publishers/types.js';
 import { escapeHtml as e } from './ui.js';
+import { centralActionFeedbackHead, centralActionFeedbackStatus } from './action-feedback.js';
 
 export const SEO_BLOG_BASE = '/portal/seo-blog';
 export type SeoBlogTab = 'overview' | 'setup' | 'topics' | 'articles' | 'calendar' | 'publishing' | 'social' | 'activity';
@@ -32,6 +33,7 @@ label{display:block;font-weight:600;margin:8px 0 4px}input[type=text],input[type
 textarea{min-height:120px}button,.button{display:inline-block;padding:8px 14px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;font:inherit;cursor:pointer;text-decoration:none}
 button.secondary,.button.secondary{background:transparent;color:var(--accent)}button.danger{background:var(--bad);border-color:var(--bad)}
 .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;border:1px solid var(--line)}.pill.ok{color:var(--ok);border-color:var(--ok)}.pill.warn{color:var(--warn);border-color:var(--warn)}.pill.bad{color:var(--bad);border-color:var(--bad)}
+.toggle-state.on{color:var(--ok);border-color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,var(--card))}.toggle-state.off{color:var(--muted);border-color:var(--muted);background:var(--card)}.toggle-state.paused{color:var(--bad);border-color:var(--bad);background:color-mix(in srgb,var(--bad) 12%,var(--card))}
 .notice{padding:10px 14px;border-radius:8px;border:1px solid var(--line);background:var(--card);margin:0 0 16px}.notice.bad{border-color:var(--bad)}
 table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:top}
 .muted{color:var(--muted)}.row{display:flex;flex-wrap:wrap;gap:8px;align-items:end}.row>*{flex:1 1 160px}
@@ -60,12 +62,13 @@ export function csrfField(csrf: string): string {
 }
 
 export function layout(shell: Shell, title: string, body: string, extraHead = ''): string {
+  const feedback = shell.applicationName === 'Relaunch72 Content';
   const switcher = shell.brands.length
     ? `<form method="get" action="${SEO_BLOG_BASE}/switch"><label for="brand-switch" class="muted" style="margin:0">Brand</label><select id="brand-switch" name="brand">${shell.brands.map((b) => `<option value="${e(b.id)}"${b.id === shell.brand?.id ? ' selected' : ''}>${e(b.name)}</option>`).join('')}</select><button class="secondary" type="submit">Open</button></form>`
     : '';
   const tabs: [SeoBlogTab, string][] = [['overview', 'Overview'], ['setup', 'Brand setup'], ['topics', 'Topics'], ['articles', 'Articles'], ['calendar', 'Calendar'], ['publishing', 'Publishing'], ['social', 'Social'], ['activity', 'Activity']];
   const nav = shell.brand ? `<nav class="tabs" aria-label="SEO Blog">${tabs.map(([t, label]) => `<a href="${url(shell.brand!, t)}"${t === shell.tab ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>` : '';
-  return `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>${e(title)} · SEO Blog</title><style>${CSS}</style>${extraHead}</head><body>
+  return `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>${e(title)} · SEO Blog</title><style>${CSS}</style>${extraHead}${centralActionFeedbackHead(feedback)}</head><body>${centralActionFeedbackStatus(feedback)}
 <header class="sb"><div>${shell.applicationName ? `<strong>${e(shell.applicationName)}</strong> · ` : ''}<a href="${SEO_BLOG_BASE}"><strong>Brands</strong></a>${shell.brand ? ` › <strong>${e(shell.brand.name)}</strong> · SEO Blog` : ''}</div>${switcher}<a href="/portal">${shell.applicationName ? 'Content home' : 'Back to portal'}</a></header>
 <main>${nav}${shell.notice ? `<p class="notice" role="status">${e(shell.notice)}</p>` : ''}${shell.error ? `<p class="notice bad" role="alert">${e(shell.error)}</p>` : ''}${body}</main></body></html>`;
 }
@@ -115,6 +118,7 @@ const CATEGORY_LABEL: Record<string, string> = {
 export function setupPage(shell: Shell, data: {
   documents: KnowledgeDocument[]; profile: BrandProfile | null; inventory: WebsiteInventory | null;
   destinations: Omit<Destination, 'sealedCredential'>[]; publishers: WebsitePublisher[]; vaultReady: boolean;
+  usage?: Record<UsageKind, number>;
 }): string {
   const b = shell.brand!;
   const latest = new Map<string, KnowledgeDocument>();
@@ -122,6 +126,12 @@ export function setupPage(shell: Shell, data: {
   const docs = [...latest.values()];
   const cats = KNOWLEDGE_CATEGORIES.map((c) => `<option value="${c}">${CATEGORY_LABEL[c]}</option>`).join('');
   const p = data.profile;
+  const used = data.usage?.model_tokens;
+  const ceiling = b.settings.budgets.modelTokensPerMonth;
+  const remaining = used === undefined ? null : Math.max(0, ceiling - used);
+  const shortfall = remaining === null ? null : Math.max(0, USAGE_ESTIMATES.profile - remaining);
+  const n = (value: number) => value.toLocaleString('en-GB');
+  const allowance = used === undefined ? '<p class="muted">Monthly usage is unavailable. The server checks your allowance before extraction.</p>' : `<div class="notice${shortfall! > 0 ? ' bad' : ''}" role="status"><strong>${ceiling <= 0 ? 'Writing allowance not configured' : used >= ceiling ? 'Monthly writing ceiling reached' : shortfall! > 0 ? 'More headroom needed for profile extraction' : 'Profile extraction fits the current allowance'}</strong><p>Used ${n(used)} · Monthly ceiling ${n(ceiling)} · Remaining ${n(remaining!)} model tokens.</p><p>Profile extraction preflight estimate: ${n(USAGE_ESTIMATES.profile)} tokens.${shortfall! > 0 ? ` Shortfall: ${n(shortfall!)} tokens. Minimum estimated monthly ceiling for this action: ${n(used + USAGE_ESTIMATES.profile)} tokens.` : ''}</p><a href="${url(b, 'publishing')}#writing-budget">Review writing allowance in Publishing</a><p class="muted">This is a usage ceiling, not a purchased credit balance. Choose and save your own limit; it is never increased automatically.</p></div>`;
   const list = (items: readonly string[]) => items.length ? `<ul>${items.map((i) => `<li>${e(i)}</li>`).join('')}</ul>` : '<p class="muted">None.</p>';
   const profileBlock = p ? `<p><span class="pill ${p.confirmedAt ? 'ok' : 'warn'}">${p.confirmedAt ? 'Confirmed' : 'Needs your confirmation'}</span> Version ${p.version}${p.generation?.mode === 'simulated' ? ' · <span class="pill warn">simulated extraction</span>' : ''}</p>
 <p>${e(p.summary)}</p>
@@ -156,7 +166,7 @@ ${data.inventory ? ` <span class="muted">Last read ${e(data.inventory.fetchedAt.
 <button type="submit">Upload</button></form>
 <table><thead><tr><th>Document</th><th>Kind</th><th>Version</th><th>Result</th><th></th></tr></thead><tbody>${docs.map((d) => `<tr><td>${e(d.title)}</td><td>${CATEGORY_LABEL[d.category]}</td><td>${d.version}</td><td>${docStatus(d)} <span class="muted">${e(d.statusDetail)}</span></td><td>${d.active ? `<form method="post" action="${url(b, `knowledge/${d.id}/retire`)}">${csrfField(shell.csrf)}<button class="secondary" type="submit">Retire</button></form>` : '<span class="muted">Retired</span>'}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">No guidance yet.</td></tr>'}</tbody></table>
 <p class="muted">Uploaded documents are brand context only. Instructions inside them are ignored.</p></section>
-<section class="card"><h2>Brand profile</h2><form method="post" action="${url(b, 'profile/extract')}">${csrfField(shell.csrf)}<button class="secondary" type="submit">${p ? 'Re-extract from current guidance' : 'Extract profile'}</button></form>${profileBlock}</section>
+<section class="card"><h2>Brand profile</h2>${allowance}<form method="post" action="${url(b, 'profile/extract')}">${csrfField(shell.csrf)}<button class="secondary" type="submit"${shortfall !== null && (shortfall > 0 || ceiling <= 0) ? ' disabled aria-describedby="profile-budget-help"' : ''}>${p ? 'Re-extract from current guidance' : 'Extract profile'}</button></form><p id="profile-budget-help" class="muted">The estimate is a preflight headroom check. Actual recorded usage may differ with document length and retries.</p>${profileBlock}</section>
 <section class="card"><h2>Website publishing connection</h2>${data.destinations.length ? `<table><tbody>${data.destinations.map((d) => `<tr><td>${e(d.label)}</td><td>${e(d.publicBaseUrl)}</td><td><span class="pill ${d.status === 'connected' ? 'ok' : d.status === 'failed' ? 'bad' : 'warn'}">${d.status === 'connected' ? 'Connected' : d.status === 'failed' ? 'Failed' : 'Not checked'}</span> <span class="muted">${e(d.statusDetail)}</span></td><td><form method="post" action="${url(b, `destinations/${d.id}/check`)}">${csrfField(shell.csrf)}<button class="secondary" type="submit">Check again</button></form></td></tr>`).join('')}</tbody></table>` : '<p class="muted">No website connected.</p>'}
 ${destinationForms}<p class="muted">Other website types are not supported yet. You can always export articles as Markdown or HTML.</p></section>`);
 }
@@ -306,7 +316,7 @@ export function publishingPage(shell: Shell, data: { usage: Record<UsageKind, nu
   const b = shell.brand!;
   const s = b.settings;
   const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-  const toggle = (name: string, on: boolean, label: string, help: string) => `<form method="post" action="${url(b, 'settings/toggle')}">${csrfField(shell.csrf)}<input type="hidden" name="rowVersion" value="${b.rowVersion}"><input type="hidden" name="name" value="${name}"><input type="hidden" name="value" value="${on ? '0' : '1'}"><p><strong>${label}:</strong> ${on ? 'on' : 'off'} <button class="${name === 'pauseAll' && !on ? 'danger' : 'secondary'}" type="submit">${on ? 'Turn off' : 'Turn on'}</button><br><small class="muted">${help}</small></p></form>`;
+  const toggle = (name: string, on: boolean, label: string, help: string) => `<form method="post" action="${url(b, 'settings/toggle')}">${csrfField(shell.csrf)}<input type="hidden" name="rowVersion" value="${b.rowVersion}"><input type="hidden" name="name" value="${name}"><input type="hidden" name="value" value="${on ? '0' : '1'}"><p><strong>${label}:</strong> <span class="pill toggle-state ${on ? name === 'pauseAll' ? 'paused' : 'on' : 'off'}">${on ? 'On' : 'Off'}</span> <button role="switch" aria-checked="${on}" aria-label="${e(label)}: ${on ? 'On. Turn off' : 'Off. Turn on'}" class="${name === 'pauseAll' && !on ? 'danger' : 'secondary'}" type="submit">${on ? 'Turn off' : 'Turn on'}</button><br><small class="muted">${help}</small></p></form>`;
   return layout(shell, 'Publishing', `<h1>Publishing</h1>
 <section class="card"><h2>Controls</h2>
 ${toggle('autoPublish', s.autoPublish, 'Automatic publishing', 'On: articles that do not need your approval publish at their diary time if checks and the website connection pass. Off: every article needs approval of its exact version.')}
@@ -316,7 +326,8 @@ ${toggle('autoAcceptPlans', s.autoAcceptPlans, 'Accept system plans automaticall
 <section class="card"><h2>Cadence, limits and author</h2><form method="post" action="${url(b, 'settings')}">${csrfField(shell.csrf)}<input type="hidden" name="rowVersion" value="${b.rowVersion}">
 <fieldset><legend>Publishing days</legend>${days.map((d, i) => `<label style="display:inline-block;margin-right:10px;font-weight:400"><input type="checkbox" name="weekday" value="${i + 1}"${s.cadence.weekdays.includes(i + 1) ? ' checked' : ''}> ${d}</label>`).join('')}</fieldset>
 <div class="row"><div><label for="ct">Time</label><input id="ct" name="localTime" type="time" value="${e(s.cadence.localTime)}"></div><div><label for="cp">Posts per week</label><input id="cp" name="perWeek" type="number" min="1" max="14" value="${s.cadence.perWeek}"></div><div><label for="ch">Planning horizon (days)</label><input id="ch" name="horizon" type="number" min="7" max="120" value="${s.planningHorizonDays}"></div><div><label for="cb">Backlog ceiling</label><input id="cb" name="backlog" type="number" min="0" max="50" value="${s.backlogCeiling}"></div></div>
-<div class="row"><div><label for="bm">Writing budget (tokens / month)</label><input id="bm" name="modelTokens" type="number" min="0" value="${s.budgets.modelTokensPerMonth}"></div><div><label for="bs">Research budget (searches / month)</label><input id="bs" name="searchCalls" type="number" min="0" value="${s.budgets.searchCallsPerMonth}"></div><div><label for="bi">Images / month</label><input id="bi" name="images" type="number" min="0" value="${s.budgets.imagesPerMonth}"></div></div>
+<div class="row"><div id="writing-budget"><label for="bm">Writing allowance (model tokens / UTC calendar month)</label><input id="bm" name="modelTokens" type="number" min="0" value="${s.budgets.modelTokensPerMonth}" aria-describedby="token-budget-guide"></div><div><label for="bs">Research allowance (searches / month)</label><input id="bs" name="searchCalls" type="number" min="0" value="${s.budgets.searchCallsPerMonth}"></div><div><label for="bi">Images / month</label><input id="bi" name="images" type="number" min="0" value="${s.budgets.imagesPerMonth}"></div></div>
+<div id="token-budget-guide" class="notice"><p>Model tokens count recorded input and output usage together for this brand, from the first day of each month at 00:00 UTC. This limit is not a wallet or purchased Relaunch72 credits. Profile extraction needs at least ${USAGE_ESTIMATES.profile.toLocaleString('en-GB')} tokens of remaining preflight headroom; earlier usage adds to the minimum ceiling. Estimates are not guaranteed final usage.</p><p><strong>Provider-cost example only:</strong> Sonnet 4.6 standard global rates are US$3 per million input tokens and US$15 per million output tokens. An example of 10,000 input + 4,000 output tokens costs US$0.09. The active model can be overridden, and document length, input/output split, retries and cache use affect actual billing. Total tokens alone do not determine the cost. <a href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank" rel="noopener noreferrer">Check current Anthropic API pricing</a> and your provider console. No limit or provider credit is purchased or increased by this guide.</p></div>
 <div class="row"><div><label for="lp">Length preference</label><select id="lp" name="length">${(['concise', 'standard', 'in-depth'] as const).map((l) => `<option value="${l}"${s.lengthPreference === l ? ' selected' : ''}>${l}</option>`).join('')}</select></div><div><label for="an">Author name (optional)</label><input id="an" name="authorName" type="text" value="${e(s.author?.name ?? '')}"></div><div><label for="au">Author profile URL (optional)</label><input id="au" name="authorUrl" type="text" value="${e(s.author?.url ?? '')}"></div></div>
 <button type="submit">Save settings</button></form>
 <p class="muted">Used this month: ${data.usage.model_tokens.toLocaleString('en-GB')} tokens, ${data.usage.search_calls} searches, ${data.usage.images} images.</p></section>`);

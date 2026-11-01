@@ -20,6 +20,7 @@ import { USAGE_ESTIMATES, type Actor, type SeoBlogEngine } from '../seo-blog/eng
 import { defaultPublishers } from '../seo-blog/publishers/registry.js';
 import { SeoBlogError, type BrandSettings, type Brand } from '../seo-blog/types.js';
 import { utcToLocal } from '../seo-blog/schedule.js';
+import { CENTRAL_ACTION_FEEDBACK_PATH, CENTRAL_ACTION_FEEDBACK_SCRIPT } from './action-feedback.js';
 
 export interface SeoBlogRouteInput {
   readonly service: PortalSeoBlogService;
@@ -130,6 +131,10 @@ function int(value: string | null, field: string): number {
 export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, url: URL, input: SeoBlogRouteInput): Promise<void> {
   const path = url.pathname.replace(/\/+$/, '') || SEO_BLOG_BASE;
   const method = req.method ?? 'GET';
+  if (method === 'GET' && path === CENTRAL_ACTION_FEEDBACK_PATH) {
+    send(res, 200, CENTRAL_ACTION_FEEDBACK_SCRIPT, 'text/javascript; charset=utf-8');
+    return;
+  }
   if (path === `${SEO_BLOG_BASE}/calendar.js`) {
     send(res, 200, CALENDAR_SCRIPT, 'text/javascript; charset=utf-8');
     return;
@@ -182,8 +187,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       return send(res, 200, overviewPage(shell('overview'), { readiness, articles, usage, jobs }));
     }
     if (tab === 'setup') {
-      const [documents, profile, inventory, destinations] = await Promise.all([engine.listKnowledge(actor, brandId), engine.getProfile(actor, brandId), engine.getInventory(actor, brandId), engine.listDestinations(actor, brandId)]);
-      return send(res, 200, setupPage(shell('setup'), { documents, profile, inventory, destinations, publishers: [...defaultPublishers().values()], vaultReady: input.vaultReady }));
+      const [documents, profile, inventory, destinations, usage] = await Promise.all([engine.listKnowledge(actor, brandId), engine.getProfile(actor, brandId), engine.getInventory(actor, brandId), engine.listDestinations(actor, brandId), engine.usage(actor, brandId)]);
+      return send(res, 200, setupPage(shell('setup'), { documents, profile, inventory, destinations, usage, publishers: [...defaultPublishers().values()], vaultReady: input.vaultReady }));
     }
     if (tab === 'topics') {
       const [plans, readiness] = await Promise.all([engine.listPlans(actor, brandId), engine.readiness(actor, brandId)]);
