@@ -19,6 +19,8 @@ import { handleMhpOwnedSms } from './owned-sms-router.js';
 import type { MhpOwnedSmsService } from './owned-sms-service.js';
 import type { MhpOwnerEmailService } from './owner-email-service.js';
 import { handleMhpSequence } from './followup-sequence-router.js';
+import { handleMhpEventPhoneOwner, handleMhpEventPhonePublic } from './event-phone-router.js';
+import type { MhpEventPhoneOwner, PgMhpEventPhonePublic } from './event-phone-service.js';
 import type { MhpSequenceService } from './followup-sequence-service.js';
 
 interface MhpMountDependencies {
@@ -33,6 +35,8 @@ interface MhpMountDependencies {
   webinarLeads?: MhpMarketingWorkspaceDependencies['webinarLeads'];
   ownerEmail?: Pick<MhpOwnerEmailService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'queue' | 'test'>;
   ownedSms?: Pick<MhpOwnedSmsService, 'snapshot' | 'review' | 'save' | 'bind' | 'requestCode' | 'confirmCode' | 'send'>;
+  eventPhone?: { reminders?: Pick<PgMhpEventPhonePublic, 'requestLink' | 'open' | 'status' | 'choose' | 'withdraw' | 'senderNumber'>;
+    owner?: Pick<MhpEventPhoneOwner, 'programmes' | 'saveProgramme' | 'publishProgramme' | 'review' | 'activate' | 'control'>; campaign: string };
   sequences?: Pick<MhpSequenceService, 'snapshot' | 'review' | 'preview' | 'save' | 'publish' | 'command'> & Partial<Pick<MhpSequenceService, 'entryCommand' | 'message' | 'simulate'>>;
   readiness(): Promise<readonly string[]>;
 }
@@ -82,6 +86,8 @@ export function createMhpMount(deps: MhpMountDependencies) {
       const url = new URL(req.url ?? '/', MHP_AUTH_ORIGIN);
       const path = url.pathname.replace(/\/+$/, '') || '/';
       if (await deps.authMount.handle(req, res, url)) return;
+      if (deps.eventPhone?.reminders && await handleMhpEventPhonePublic(req, res, url, { portal, reminders: deps.eventPhone.reminders })) return;
+      if (deps.eventPhone?.owner && await handleMhpEventPhoneOwner(req, res, url, { portal, owner: deps.eventPhone.owner, campaign: deps.eventPhone.campaign })) return;
       if (deps.ownedSms && await handleMhpOwnedSms(req, res, url, { portal, sms: deps.ownedSms })) return;
       if (deps.sequences && await handleMhpSequence(req, res, url, { portal, sequences: deps.sequences })) return;
       if (deps.ownerEmail && await handleMhpOwnerEmail(req, res, url, { portal, emails: deps.ownerEmail })) return;

@@ -6,7 +6,7 @@ import { assertExpectedDatabaseInstallation } from '../db/installation-identity.
 import { PgMhpAuthService } from './auth-service.js';
 import { createMhpTransactionalMailer, type MhpTransactionalMailer } from './transactional-mail.js';
 import { mhpCommerceConfig } from './commerce-config.js';
-import { PgMhpCommerceService } from './commerce-service.js';
+import { MhpCommerceError, PgMhpCommerceService } from './commerce-service.js';
 import { MhpInvestorService, PgMhpMemberService } from './member-service.js';
 import { InvestorMailService } from '../portal/investor-mail-service.js';
 import { InvestorMailVault } from '../investor-mail/vault.js';
@@ -28,7 +28,8 @@ import { FlowLocalStore } from '../followup-sequences/local-store.js';
 import { parseMhpOwnerEmailBrand } from './owner-email-content.js';
 import { createPgPortalSmsBindingService } from '../portal/sms-binding-pg-service.js';
 import { createPgTwilioSmsLiveCommandService } from '../sms-live-pg/command-service.js';
-import { assertSmsCommandBoundaryReady } from '../sms-live-pg/readiness.js';
+import { assertMhpEventSmsBoundaryReady, assertSmsCommandBoundaryReady } from '../sms-live-pg/readiness.js';
+import { MhpEventPhoneOwner, PgMhpEventPhonePublic } from './event-phone-service.js';
 import { MhpOwnedSmsService, PgMhpOwnedSmsRepository, mhpOwnedSmsConfig, assertMhpOwnedSmsBoundaryReady, refreshMhpOwnedSmsObservation } from './owned-sms-service.js';
 import { MHP_MARKETING_WORKSPACE_ID } from './marketing-workspace-service.js';
 
@@ -50,6 +51,8 @@ export interface MhpRuntime {
   sequences?: MhpSequenceService;
   sequenceDispatch?: PgMhpSequenceDispatch;
   ownedSms?: MhpOwnedSmsService;
+  /** MHP009B: public webinar text reminders (off unless MHP_EVENT_PHONE_PUBLIC=enabled). */
+  eventPhone?: { reminders?: PgMhpEventPhonePublic; owner?: MhpEventPhoneOwner; campaign: string };
   marketing: MhpMarketingConfig | null;
   readiness(): Promise<readonly string[]>;
 }
@@ -105,6 +108,7 @@ export async function buildMhpRuntime(input: {
   console.info(JSON.stringify({ event: 'mhp.sequence.readiness', editorReady: Boolean(sequences), emailReady: sequences?.readiness.email ?? false,
     smsReady: false, whatsappReady: false, automaticEntryAvailable: Boolean(sequences) }));
   let ownedSms: MhpOwnedSmsService | undefined;
+  let eventPhoneOwner: MhpEventPhoneOwner | undefined;
   const smsPilot = mhpOwnedSmsConfig(env);
   if (smsPilot.enabled && sequences && input.contentAdapterPool && input.contentCommandPool) {
     let smsPool: Pool | undefined;
@@ -129,6 +133,23 @@ export async function buildMhpRuntime(input: {
       approvals: new CompanyContentService({ transactionRunner: mhpOwnerEmailContentRunner(input.contentCommandPool) }),
       transactions: adapterRunner, local: new FlowLocalStore(contentReader) });
     const config = smsPilot.config;
+    // MHP009B owner review/schedule shares the exact 009A owner pool and local SMS sources.
+    if (env.MHP_EVENT_PHONE_OWNER?.trim() === 'enabled' && smsPool && smsPilot.config && /^webinar-[0-9]{4}-[0-9]{2}-[0-9]{2}$/u.test(webinar.campaign)) {
+      try {
+        await assertMhpEventSmsBoundaryReady(smsPool, 'r72_sms_command');
+        const boundSmsPool = smsPool;
+        eventPhoneOwner = new MhpEventPhoneOwner({ marketingWorkspace, authorize: (identity, requestId) => sequences.contentContext(identity, requestId),
+          smsPool: boundSmsPool, reader: new CompanyContentService({ transactionRunner: contentReader }), adapter: smsAdapter,
+          approvals: new CompanyContentService({ transactionRunner: mhpOwnerEmailContentRunner(input.contentCommandPool) }), adapterTransactions: adapterRunner,
+          brand: async identity => (await sourceRepository.snapshot(identity, webinar.campaign)).brand,
+          observeSource: async (identity, requestId, context, itemId, versionId, commandId, now) => {
+            const detail = await messages.review(identity, requestId, 'sms', itemId, versionId);
+            if (detail.review.approvalStatus !== 'approved' || detail.review.approvalStale) throw new MhpCommerceError(409, 'Approve the reminder text before scheduling.');
+            await refreshMhpOwnedSmsObservation({ context, detail, commandId: `event-${commandId}`, now, transactions: adapterRunner, adapter: smsAdapter });
+          },
+          campaign: webinar.campaign, bindingId: smsPilot.config.bindingId });
+      } catch { eventPhoneOwner = undefined; }
+    }
     ownedSms = new MhpOwnedSmsService({ marketingWorkspace, authorize: (identity, requestId) => sequences.contentContext(identity, requestId),
       config, blockers, messages, observe: (context, detail, commandId, now) => refreshMhpOwnedSmsObservation({ context, detail, commandId, now, transactions: adapterRunner, adapter: smsAdapter }),
       ...(smsPool && config ? {
@@ -164,6 +185,12 @@ export async function buildMhpRuntime(input: {
     ownerEmailDispatch: new PgMhpOwnerEmailDispatch(identityPool),
     sequences,
     ownedSms,
+    eventPhone: (() => {
+      const sender = smsPilot.config?.senderNumber;
+      const reminders = env.MHP_EVENT_PHONE_PUBLIC?.trim() === 'enabled' && sender && mail.sendEventPhoneLink
+        ? new PgMhpEventPhonePublic(identityPool, { configured: mail.configured, sendEventPhoneLink: mail.sendEventPhoneLink.bind(mail) }, sender) : undefined;
+      return reminders || eventPhoneOwner ? { ...(reminders ? { reminders } : {}), ...(eventPhoneOwner ? { owner: eventPhoneOwner } : {}), campaign: webinar.campaign } : undefined;
+    })(),
     sequenceDispatch: sequences ? new PgMhpSequenceDispatch(identityPool) : undefined,
     webinarLeads: new MhpWebinarLeadService({ marketingWorkspace, reader: new PgMhpWebinarLeadReader(webPool),
       transactions, commands: new CrmCommandService({ transactionRunner: transactions }),

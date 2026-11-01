@@ -4,6 +4,8 @@ export interface MhpTransactionalMailer {
   readonly configured: boolean;
   sendAuthLink(email: string, url: string, purpose: MhpAuthPurpose): Promise<void>;
   sendAccessInvite(email: string, name: string, product: string): Promise<void>;
+  /** MHP009B: requested event-reminder email proof. Separate from auth links; creates no account. */
+  sendEventPhoneLink?(email: string, url: string, startsAt: string): Promise<void>;
 }
 
 const escape = (value: string): string => value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
@@ -57,6 +59,17 @@ export function createMhpTransactionalMailer(env: NodeJS.ProcessEnv = process.en
       const plain = `Hi ${name},\n\nMartin has opened your ${product} access. Sign in with this email address to open your training centre and Your Desk:\n${link}\n\nChoose “Email my secure link”. Your sign-in email will contain a one-time link.\n\nMartin Howard Property\nmartin@propinvestuk.co.uk`;
       const html = `<div style="background:#f3f3ee;padding:32px;font-family:Arial,sans-serif;color:#142019"><div style="max-width:560px;margin:auto;background:#fff;border-radius:20px;padding:36px"><p style="letter-spacing:2px;font-size:12px">MARTIN HOWARD PROPERTY</p><h1 style="font-size:28px">Your access is ready.</h1><p>Hi ${escape(name)}, Martin has opened your ${escape(product)} access.</p><p>Use this email address to open your training centre and Your Desk. We’ll send you a private sign-in link.</p><p style="margin:28px 0"><a href="${link}" style="display:inline-block;padding:14px 20px;background:#E8A33D;color:#142019;text-decoration:none;border-radius:8px;font-weight:bold">Open my workspace</a></p><p style="font-size:13px;color:#5b665f">Enter ${escape(email)} and choose “Email my secure link”.</p><hr style="border:0;border-top:1px solid #e7ebe6"><p style="font-size:12px">Martin Howard Property · martin@propinvestuk.co.uk</p></div></div>`;
       await deliver(email, subject, plain, html, 'mhp-access');
+    },
+    async sendEventPhoneLink(email: string, url: string, startsAt: string): Promise<void> {
+      const target = new URL(url), start = Date.parse(startsAt);
+      if (!normalizeMhpEmail(email) || target.origin !== MHP_AUTH_ORIGIN || target.pathname !== '/webinar/phone-reminders/open'
+          || !/^[A-Za-z0-9_-]{43}$/u.test(target.searchParams.get('t') ?? '') || [...target.searchParams.keys()].length !== 1
+          || !Number.isFinite(start)) throw new Error('Invalid MHP event reminder mail');
+      const when = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', weekday: 'long', day: 'numeric', month: 'long', hour: 'numeric', minute: '2-digit' }).format(start);
+      const subject = 'Confirm your webinar text reminder';
+      const text = `You asked for a text reminder for the Martin Howard Property webinar on ${when} (UK time).\n\nConfirm it here: ${url}\n\nThis link expires in 15 minutes and works once. If you did not ask for this, ignore this email: nothing changes and you will not get texts.\n\nMartin Howard Property\nmartin@propinvestuk.co.uk`;
+      const html = `<div style="background:#f3f3ee;padding:32px;font-family:Arial,sans-serif;color:#142019"><div style="max-width:560px;margin:auto;background:#fff;border-radius:20px;padding:36px"><p style="letter-spacing:2px;font-size:12px">MARTIN HOWARD PROPERTY</p><h1 style="font-size:28px">Confirm your text reminder</h1><p>You asked for a text reminder for the webinar on ${escape(when)} (UK time).</p><p style="margin:28px 0"><a href="${escape(url)}" style="display:inline-block;padding:14px 20px;background:#E8A33D;color:#142019;text-decoration:none;border-radius:8px;font-weight:bold">Continue</a></p><p style="font-size:13px;color:#5b665f">This link expires in 15 minutes and works once. If you did not ask for this, ignore this email: nothing changes and you will not get texts.</p><hr style="border:0;border-top:1px solid #e7ebe6"><p style="font-size:12px">Martin Howard Property · martin@propinvestuk.co.uk</p></div></div>`;
+      await deliver(email, subject, text, html, 'mhp-event-reminder');
     },
   });
 }
