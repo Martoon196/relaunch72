@@ -235,6 +235,10 @@ test('native owner page selects text by title and preview, accepts labelled UK t
   } as unknown as MhpEventPhoneOwner;
   const f = publicFixture(owner), cookie = `__Host-mhp_session=${token}`, csrf = portalCsrfToken(SECRET, token);
   const page = await f.request('GET', route, '', { cookie }); assert.equal(page.status, 200);
+  assert.match(page.body, /New website registrants can choose optional text reminders straight away/u);
+  assert.match(page.body, /Earlier registrants can use an email link/u);
+  assert.match(page.body, /text JOIN from their own mobile/u);
+  assert.match(page.body, /No reminder sends until you review the recipients here/u);
   assert.match(page.body, /Saved SMS text<select/u); assert.match(page.body, /Webinar reminder text/u); assert.match(page.body, /Read this exact text before choosing/u);
   assert.match(page.body, /Create or approve a text/u); assert.doesNotMatch(page.body, /name="(?:sourceItemId|sourceSha256)"/u);
   assert.match(page.body, /Webinar starts \(UK time\)/u); assert.match(page.body, /Close phone sign-ups \(UK time\)/u);

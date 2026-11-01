@@ -113,6 +113,6 @@ export function mhpEventPhoneOwnerPage(input: { programmes: MhpEventProgrammeSum
           + `${hidden('calendarId', row.calendarId)}${hidden('programmeVersionId', p.programmeVersionId)}<button name="action" value="${row.held ? 'cancel' : 'hold'}">${row.held ? 'Cancel' : 'Hold'}</button></form>`;
         return `<tr><td>${esc(row.phoneMasked)}</td><td>${esc(state)}</td><td>${control}</td></tr>`; }).join('')}</table>`}`;
   }
-  return page('Webinar texts', `<h1>Webinar text reminders</h1>${notice(input.notice)}<p>Registrants confirm their email, then text JOIN from their own mobile. Nobody gets a text until you review them here.</p>`
+  return page('Webinar texts', `<h1>Webinar text reminders</h1>${notice(input.notice)}<p>New website registrants can choose optional text reminders straight away. Earlier registrants can use an email link. Each person must text JOIN from their own mobile. No reminder sends until you review the recipients here.</p>`
     + `<section><h2>Programme</h2>${programmes}${publish}${editor}</section><section><h2>Review and schedule</h2>${batch || '<p>Open an approved programme to review recipients.</p>'}</section>`, true);
 }
