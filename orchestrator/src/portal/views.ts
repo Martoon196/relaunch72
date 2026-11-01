@@ -33,11 +33,12 @@ export function accountSetupPage(
   setupCsrfToken: string,
   error?: string,
   productProfile: PortalProductProfile = RELAUNCH72_PRODUCT_PROFILE,
+  referrerPolicy: 'same-origin' | 'no-referrer' = 'no-referrer',
 ): string {
   const plainProductName = productProfile.id === 'relaunch72' ? 'Relaunch72' : productProfile.productName;
   const productName = esc(plainProductName);
   const suiteLabel = productProfile.id === 'relaunch72' ? productProfile.suiteLabel.toLowerCase() : productProfile.suiteLabel;
-  return `${pageHead(`${plainProductName} — Set up your account`, productProfile)}<body>
+  return `${pageHead(`${plainProductName} — Set up your account`, productProfile, referrerPolicy)}<body>
     <main class="auth-shell">
       <section class="auth-panel" aria-labelledby="setup-title">
         <div class="auth-card">
@@ -88,7 +89,7 @@ export function loginPage(
   email = '',
   loginCsrfToken = '',
   productProfile: PortalProductProfile = RELAUNCH72_PRODUCT_PROFILE,
-  options: { propertyPredatorSso?: boolean } = {},
+  options: { propertyPredatorSso?: boolean; referrerPolicy?: 'same-origin' | 'no-referrer' } = {},
 ): string {
   const productName = esc(productProfile.productName);
   const sharedSignIn = options.propertyPredatorSso
@@ -99,7 +100,7 @@ export function loginPage(
       </div>
       <div class="auth-divider"><span>or use your Growth HQ password</span></div>`
     : '';
-  return `${pageHead(`${productProfile.productName} — Sign in`, productProfile)}<body>
+  return `${pageHead(`${productProfile.productName} — Sign in`, productProfile, options.referrerPolicy)}<body>
     <main class="auth-shell">
       <section class="auth-panel" aria-labelledby="login-title">
         <div class="auth-card">
