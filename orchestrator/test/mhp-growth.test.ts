@@ -117,7 +117,7 @@ test('marketing emails escape merge values, fill every placeholder and keep the 
       }
       assert.equal(email.stream, template === 'application_received' ? 'outbound' : 'broadcast');
       for (const body of [email.html, email.text]) {
-        assert.match(body, /Martin Howard Property is a trading name of MH196 2026 Ltd/);
+        assert.match(body, /Martin Howard Property is a trading name of MH196 Ltd, registered in England and Wales, company number 15060897\. Registered office: 5 Clothier Meadow, Castle Cary, Somerset BA7 7HA/);
         assert.match(body, /Education, not legal, tax or financial advice\. No income is promised\./);
         assert.match(body, /Property Predator, Key Properties UK, Ordris and Hello New Home/);
         assert.match(body, /app\.martinhowardproperty\.co\.uk\/email\/unsubscribe\?p=/);
