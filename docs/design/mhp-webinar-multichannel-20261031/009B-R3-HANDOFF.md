@@ -43,6 +43,7 @@
 - **Integrated full suite on the disposable DB (before the review fixes):** 3730 tests, 3723 pass, 6 fail, 1 skipped.
   - All 6 failures are pre-existing and reproduce on unchanged `ea1903f`: company-asset, growth-evidence, 0090, 0091, 0092, and the email pilot.
   - The email pilot's `conversations_check1` is date-dependent fixture data and also fails on the base with 130 migrations.
+- **Integrated full suite after the review fixes and the harness fix (`67fe2d2`, fresh 131 database):** 3730 tests, 3723 pass, 6 fail, 0 cancelled, 1 skipped. These are the same six that fail on unchanged `ea1903f`: company-asset, growth-evidence, 0090, 0091, 0092 and the email pilot.
 - **Test harness fix (test-only, added after review).** The disposable-DB advisory lease used to inherit the migrator's 120 s statement timeout. This test waits 2–3 minutes for a real due minute, so whichever DB test queued behind it could fail with 57014. The lease wait now has no statement timeout (node's per-test timeout still bounds it). Proof: the harness test, this integration test and the 0055 inbox test queued behind it, run together on a 131 database: 4/4 pass.
 - **Bridge:** runtime-readiness 26/26; full unit suite 3688 tests, 3647 pass, 0 fail, 41 skipped.
 
