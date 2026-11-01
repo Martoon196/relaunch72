@@ -45,6 +45,17 @@
 - **009B SQL path on a 132 database:** passes.
 - **0132 compatibility:** 6/6 (five exact prior bodies plus the untouched-functions check). **Unit:** 4/4. **Ledger tests:** pinned to the final checksum.
 - **Focused run on a 132 database:** 106/106 (SMS and WhatsApp integration, ledger, both compatibility suites, units).
+- **Full integrated suite on a 132 database:** 3741 tests: 3734 pass, 6 fail, 1 skipped. All six failures also fail on ea1903f without 0131/0132: company-asset, growth-evidence, 0090, 0091, 0092 and the email pilot.
+- **Test harness fix (test-only).** The disposable-DB advisory lease used to inherit the migrator's 120 s statement timeout. The 009B/009C absolute-due tests wait for a real due minute, so the test queued behind them failed with 57014. This happened once in the first full run, hitting the 0055 inbox test. The lease wait now has no statement timeout (node's per-test timeout still bounds it), and the 009C fixture's due time is the whole minute 30–90 s ahead.
+- **Readiness matrix (ledger plus the three real-role WhatsApp boundaries):**
+
+  | Build | 131 database | 132 database |
+  |---|---|---|
+  | 009B `f3ed2e6` | ready | refused (unknown 0132; boundaries not exact) |
+  | bridge `16d412f` | ready | ready |
+  | 009C (this branch) | refused (0132 pending) | ready |
+
+  This is why the bridge must be deployed before 0132 is applied.
 
 ## Independent review disposition
 
