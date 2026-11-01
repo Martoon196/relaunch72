@@ -2840,6 +2840,36 @@
       "version": "2.3.1"
     },
     {
+      "bom-ref": "npm:qrcode-generator@2.0.4#node_modules/qrcode-generator",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "mZSiP6RnbHl4xL2Ap5HfkjLnmxfKcPWpWe/c+5XxCuetEenqmNFf1FH/ftXPCtFG5/TDobjsjz6sSNL0Sr8Z9g=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "MIT"
+          }
+        }
+      ],
+      "name": "qrcode-generator",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/qrcode-generator"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/qrcode-generator/-/qrcode-generator-2.0.4.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "2.0.4"
+    },
+    {
       "bom-ref": "npm:quick-format-unescaped@4.0.4#node_modules/quick-format-unescaped",
       "hashes": [
         {
@@ -3611,6 +3641,7 @@
         "npm:nodemailer@10.2.1#node_modules/nodemailer",
         "npm:pg@8.23.0#node_modules/pg",
         "npm:playwright-core@1.61.1#node_modules/playwright-core",
+        "npm:qrcode-generator@2.0.4#node_modules/qrcode-generator",
         "npm:stripe@22.3.0#node_modules/stripe",
         "npm:tsx@4.23.0#node_modules/tsx",
         "npm:typescript@5.9.3#node_modules/typescript"
@@ -4022,6 +4053,10 @@
     },
     {
       "dependsOn": [],
+      "ref": "npm:qrcode-generator@2.0.4#node_modules/qrcode-generator"
+    },
+    {
+      "dependsOn": [],
       "ref": "npm:quick-format-unescaped@4.0.4#node_modules/quick-format-unescaped"
     },
     {
@@ -4127,7 +4162,7 @@
       "properties": [
         {
           "name": "relaunch72:canonical-package-lock-sha256",
-          "value": "dd4759bd0b57aef6f8d2f31f88586c1697a9e6bc1619be825ac5e116b34a81c1"
+          "value": "bf5e79134664befa7c4fef1cb3c62d086579629d1d2a56a8392f31b81f162344"
         },
         {
           "name": "relaunch72:supply-chain-policy-version",

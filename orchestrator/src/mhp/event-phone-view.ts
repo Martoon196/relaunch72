@@ -1,4 +1,5 @@
 import { escapeHtml as esc } from '../portal/ui.js';
+import qrcode from 'qrcode-generator';
 import { MHP_EVENT_PHONE_CONSENT_TEXT, MHP_EVENT_PHONE_OWNER_ROUTE, MHP_EVENT_PHONE_ROUTE, mhpEventUkLocalValue, type MhpEventPhoneStatus, type MhpEventSmsChoice,
   type MhpEventProgrammeSummary, type MhpEventReview } from './event-phone-service.js';
 
@@ -6,6 +7,7 @@ const STYLE = 'body{margin:0;background:#f5f3ed;color:#142019;font:17px/1.6 syst
   + 'section{background:#fff;border:1px solid #d9dfd5;border-radius:18px;padding:clamp(20px,4vw,36px);margin:20px 0}h1{font:clamp(30px,5vw,40px)/1.15 Georgia,serif;margin:8px 0 14px}'
   + 'label{display:block;margin:18px 0}input,button,select{font:inherit;box-sizing:border-box}select,input:not([type=checkbox]):not([type=hidden]){display:block;width:100%;padding:12px;border:1px solid #75846f;border-radius:8px;margin-top:8px}'
   + 'button{background:#e8a33d;border:0;border-radius:9px;padding:14px 20px;font-weight:700;cursor:pointer}.check{display:flex;gap:12px;align-items:flex-start}.check input{flex:0 0 auto;margin-top:7px}'
+  + '.join-button{display:inline-block;background:#e8a33d;color:#142019;border-radius:9px;padding:16px 22px;font-weight:700;text-decoration:none}.join-qr{max-width:280px;margin:20px auto}.join-qr svg{display:block;width:100%;height:auto}'
   + '.small{font-size:15px;color:#4c5a51}.status{padding:14px 16px;background:#eaf0e5;border-radius:10px}.code{font:700 22px/1.4 ui-monospace,monospace;letter-spacing:1px;overflow-wrap:anywhere}'
   + 'blockquote{white-space:pre-wrap;overflow-wrap:anywhere;border-left:4px solid #e8a33d;padding:16px 20px;margin:16px 0;background:#f6f4ed}'
   + 'table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 10px;border-top:1px solid #d9dfd5;vertical-align:top}a{color:inherit}nav{display:flex;gap:18px;flex-wrap:wrap}';
@@ -37,10 +39,16 @@ export function mhpEventPhoneChoosePage(input: { status: MhpEventPhoneStatus; cs
     + (status.startsAt ? `<p>The webinar starts ${esc(ukTime(status.startsAt))}.</p>` : '');
   const join = input.join;
   if (join) {
+    if (!/^\+44[0-9]{9,10}$/u.test(join.sender) || !/^[a-z2-7]{26}$/iu.test(join.nonce)) throw new Error('Invalid JOIN handoff');
     const body = `JOIN ${join.nonce.toUpperCase()}`;
+    const uri = `sms:${join.sender}?&body=${encodeURIComponent(body)}`;
+    const qr = qrcode(0, 'M'); qr.addData(uri, 'Byte'); qr.make();
+    const svg = qr.createSvgTag({ cellSize: 4, margin: 16, scalable: true }).replace('<svg ', '<svg role="img" aria-label="Scan to open your JOIN text message" ');
     return page('Text JOIN to confirm', `${greeting}${notice(input.notice)}<section><h2>One last step: text us from that mobile.</h2>`
+      + `<p><a class="join-button" href="${esc(uri)}">Open Messages with my JOIN text</a></p><p>On your mobile, tap the button, then press Send. On a computer, scan this QR code with that mobile's camera to open the same text.</p>`
+      + `<div class="join-qr">${svg}</div><p class="small">Still need to enter it yourself? Use the code and number below.</p>`
       + `<p>Send this exact text from the mobile you entered, before ${esc(ukTime(join.joinExpiresAt))}:</p><p class="code">${esc(body)}</p>`
-      + `<p>to <strong>${esc(join.sender)}</strong>.</p><p><a href="sms:${esc(join.sender)}?&amp;body=${encodeURIComponent(body)}">Open my messages with this text</a></p>`
+      + `<p>to <strong>${esc(join.sender)}</strong>.</p>`
       + `<p class="small">Texting us proves the number is yours. We don't text you until you do. Standard network rates apply.</p></section>`);
   }
   if (sms?.state === 'verified' && sms.grantReceiptId) {

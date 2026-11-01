@@ -16,6 +16,8 @@ import { TwilioMessagingHttpAdapter } from '../src/providers/twilio-messaging-ht
 import { PgTwilioSmsWebhookRepository } from '../src/sms-live-pg/webhook-repository.js';
 import { loadTwilioSmsWorkerConfig } from '../src/workers/twilio-sms-live/runner.js';
 import { readFile } from 'node:fs/promises';
+import qrcode from 'qrcode-generator';
+import { mhpEventPhoneChoosePage } from '../src/mhp/event-phone-view.js';
 
 const HOST = 'app.martinhowardproperty.co.uk', ORIGIN = `https://${HOST}`, SECRET = 'synthetic-mhp-event-phone-router-secret-at-least-32';
 const ROUTE = '/webinar/phone-reminders';
@@ -46,6 +48,7 @@ test('event link email is a separate transactional method bound to the exact rem
   const token = 'A'.repeat(43);
   await mailer.sendEventPhoneLink!('person@example.invalid', `${ORIGIN}${ROUTE}/open?t=${token}`, '2026-11-04T19:30:00Z');
   assert.equal(sent.length, 1); assert.equal(sent[0]!.body.Tag, 'mhp-event-reminder');
+  assert.doesNotMatch(String(sent[0]!.body.TextBody), /JOIN/u);
   assert.match(String(sent[0]!.body.TextBody), /expires in 15 minutes and works once/u);
   await assert.rejects(mailer.sendEventPhoneLink!('person@example.invalid', `${ORIGIN}/portal/auth/verify?t=${token}`, '2026-11-04T19:30:00Z'));
   await assert.rejects(mailer.sendEventPhoneLink!('person@example.invalid', `https://evil.example${ROUTE}/open?t=${token}`, '2026-11-04T19:30:00Z'));
@@ -142,8 +145,28 @@ test('public flow: uniform email request, GET never consumes, explicit POST sets
   assert.equal((await f.request('POST', `${ROUTE}/choose`, 'csrf=wrong&mobile=07700900123&consent=yes', { cookie })).status, 403);
   page = await f.request('POST', `${ROUTE}/choose`, `csrf=${encodeURIComponent(csrf)}&mobile=07700900123&consent=yes`, { cookie });
   assert.equal(page.status, 200); assert.match(page.body, /JOIN ABCDEFGHIJKLMNOPQRSTUVWXYZ/u); assert.match(page.body, /\+447861935832/u);
+  assert.match(page.body, /class="join-button"/u); assert.match(page.body, /<svg /u); assert.equal(page.headers['cache-control'], 'no-store');
   assert.deepEqual(f.state.chosen, ['07700900123:true']);
   assert.equal((await f.request('GET', `${ROUTE}/choose`)).status, 401, 'no capability cookie, no status');
+});
+
+test('desktop QR and prominent mobile button contain exactly the same SMS JOIN handoff with inert local SVG', () => {
+  const nonce = 'abcdefghijklmnopqrstuvwxyz', sender = '+447861935832';
+  const status: MhpEventPhoneStatus = { ok: true, campaign: 'webinar-2026-11-04', firstName: null, open: true, startsAt: '2026-11-04T19:30:00Z',
+    consentText: MHP_EVENT_PHONE_CONSENT_TEXT, capabilityExpiresAt: '2026-11-01T00:15:00Z', sms: null };
+  const input = { status, csrf: 'private-csrf', sender, join: { nonce, sender, joinExpiresAt: '2026-11-01T00:10:00Z' } };
+  const html = mhpEventPhoneChoosePage(input), uri = 'sms:+447861935832?&body=JOIN%20ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const href = /class="join-button" href="([^"]+)"/u.exec(html)![1]!.replaceAll('&amp;', '&');
+  assert.equal(href, uri); assert.match(html, /press Send/u); assert.match(html, /camera/u);
+  assert.match(html, /JOIN ABCDEFGHIJKLMNOPQRSTUVWXYZ/u); assert.match(html, /to <strong>\+447861935832<\/strong>/u);
+  const svg = /<svg\b[\s\S]*?<\/svg>/u.exec(html)![0];
+  assert.match(svg, /role="img" aria-label="Scan to open your JOIN text message"/u);
+  assert.doesNotMatch(svg, /<(?:script|foreignObject|image|use|a)\b|\b(?:href|src|onload|onclick)=/iu);
+  const expected = qrcode(0, 'M'); expected.addData(uri, 'Byte'); expected.make();
+  assert.equal(/<path d="([^"]+)"/u.exec(svg)![1], /<path d="([^"]+)"/u.exec(expected.createSvgTag({ cellSize: 4, margin: 16, scalable: true }))![1]);
+  assert.doesNotMatch(svg, /ABCDEFGHIJKLMNOPQRSTUVWXYZ/u);
+  assert.throws(() => mhpEventPhoneChoosePage({ ...input, join: { ...input.join, sender: 'javascript:alert(1)' } }), /Invalid JOIN handoff/u);
+  assert.throws(() => mhpEventPhoneChoosePage({ ...input, join: { ...input.join, nonce: '<script>alert(1)</script>' } }), /Invalid JOIN handoff/u);
 });
 
 test('UK wall times convert exactly in winter and summer and reject DST gaps, repeats and invalid dates', () => {

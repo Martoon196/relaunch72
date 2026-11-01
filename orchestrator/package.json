@@ -54,6 +54,7 @@
     "nodemailer": "10.2.1",
     "pg": "^8.23.0",
     "playwright-core": "^1.61.1",
+    "qrcode-generator": "2.0.4",
     "stripe": "^22.3.0",
     "tsx": "^4.19.0"
   },
