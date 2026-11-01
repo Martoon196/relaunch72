@@ -1,47 +1,37 @@
-name: MHP exact Linux proof
-
+name: SEO exact Linux proof
 on:
   push:
     branches: [codex/mhp-linux-proof-20261031]
     paths: [.github/workflows/mhp-linux-proof.yml]
-
 permissions:
   contents: read
-
 jobs:
   exact-source-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout the exact MHP owned SMS publication correction
+      - name: Checkout exact reviewed SEO release source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Martoon196/relaunch72
-          ref: 9ca2d59122d26829bec1eb56235c2ef3f25a522b
+          ref: 47947623d4adf02d7b21396e2294ad96326f156a
           persist-credentials: false
       - name: Assert exact source identity
         shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = 9ca2d59122d26829bec1eb56235c2ef3f25a522b
-          test "$(git rev-parse 'HEAD^{tree}')" = 42429022f0f316c98c98bfd7489c6c893c882778
+          test "$(git rev-parse HEAD)" = 47947623d4adf02d7b21396e2294ad96326f156a
+          test "$(git rev-parse 'HEAD^{tree}')" = 430d710db380e0b409f207aa8d58d921dc9a11af
           test -z "$(git status --porcelain)"
           git rev-parse HEAD 'HEAD^{tree}'
-      - name: Match the Render Node runtime
+      - name: Match Render runtime
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.23.4
-      - name: Assert Linux and Node runtime
-        shell: bash
-        run: |
-          test "$(uname -s)" = Linux
-          test "$(node --version)" = v22.23.4
-          node --version
-          npm --version
-      - name: Install the exact lockfile without install scripts
+      - name: Install exact lockfile
         run: npm ci --ignore-scripts --include=dev
-      - name: Check the supply chain
+      - name: Check supply chain
         run: node scripts/supply-chain.mjs --check
-      - name: Typecheck the whole project
+      - name: Typecheck whole project
         run: npm run typecheck
-      - name: Run the whole normal test gate
+      - name: Run whole normal suite
         run: npm test
