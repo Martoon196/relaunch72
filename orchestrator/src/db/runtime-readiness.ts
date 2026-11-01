@@ -33,7 +33,7 @@ const MHP_LOCAL_CHANNEL_DRAFTS_CHECKSUM = '649ba68b60954b6e76d4e702511321e59eff0
 const MHP_OWNED_SMS_MIGRATION = '0130_mhp_owned_sms_pilot.sql';
 const MHP_OWNED_SMS_CHECKSUM = 'e6bb5be3a87e0fde3e29d3f47edde1c5daf8492f4c368f80e2e4335f5b239797';
 const MHP_EVENT_PHONE_MIGRATION = '0131_mhp_event_phone_programme.sql';
-const MHP_EVENT_PHONE_CHECKSUM = '8abaea82bb29060d73281a78e59d0b9c8d070faf6bf91e40c2bdc7245e9753ac';
+const MHP_EVENT_PHONE_CHECKSUM = 'c3480208038aace2211f7a50cf64cb6cda45bedce980d274bdb661a7b9466e33';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
