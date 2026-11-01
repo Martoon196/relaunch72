@@ -346,6 +346,20 @@ export interface ArticleBody {
 
 export type VersionChange = 'generated' | 'edited' | 'section_regenerated' | 'regenerated' | 'image_changed' | 'metadata_changed';
 
+export interface ArticlePromotionPack {
+  readonly source: 'relaunch72.seo-blog';
+  readonly brandId: string;
+  readonly articleId: string;
+  readonly versionId: string;
+  readonly contentSha: string;
+  readonly profileVersion: number;
+  readonly factsSha: string;
+  readonly canonicalUrl: string | null;
+  readonly generation: GenerationRecord | null;
+  readonly mode: 'model' | 'excerpt_fallback';
+  readonly posts: readonly { readonly network: 'instagram' | 'linkedin'; readonly title: string; readonly copy: string; readonly artworkInstructions: string }[];
+}
+
 export interface ArticleVersion {
   readonly id: string;
   readonly articleId: string;
@@ -364,6 +378,8 @@ export interface ArticleVersion {
   readonly planId: string;
   readonly generation: GenerationRecord | null;
   readonly contentSha: string;
+  /** Immutable accompanying drafts. Review is separate from blog approval. */
+  readonly promotionPack?: ArticlePromotionPack;
 }
 
 export type CheckSeverity = 'critical' | 'warning';
@@ -435,6 +451,14 @@ export interface Article {
   readonly failure: string | null;
   readonly createdAt: IsoInstant;
   readonly rowVersion: number;
+  readonly linkedPromotions?: readonly {
+    readonly articleVersionId: string;
+    readonly network: 'instagram' | 'linkedin';
+    readonly packSha: string;
+    readonly contentItemId: string;
+    readonly contentVersionId: string;
+    readonly approvalDecisionId: string;
+  }[];
 }
 
 // ─── Destinations & publication ──────────────────────────────────────────────

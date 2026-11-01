@@ -27,6 +27,7 @@ export interface SeoBlogRouteInput {
   readonly requestId: string;
   readonly sessionSecret: string;
   readonly vaultReady: boolean;
+  readonly applicationName?: string;
 }
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
@@ -167,11 +168,11 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     const brands = await engine.listBrands(actor);
     const messages = readMessage(input.sessionSecret, url);
     if (path === SEO_BLOG_BASE) {
-      return send(res, 200, brandsPage({ brands, brand: null, tab: null, csrf, ...messages }, randomUUID()));
+      return send(res, 200, brandsPage({ brands, brand: null, tab: null, csrf, ...messages, applicationName: input.applicationName }, randomUUID()));
     }
     if (!brandId) throw new SeoBlogError(404, 'That page was not found.');
     const brand = await engine.getBrand(actor, brandId);
-    const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages });
+    const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages, applicationName: input.applicationName });
     const tab = rest.split('/')[0] || 'overview';
     if (tab === 'overview') {
       const [readiness, articles, usage, jobs] = await Promise.all([engine.readiness(actor, brandId), engine.listArticles(actor, brandId), engine.usage(actor, brandId), engine.listJobs(actor, brandId)]);
@@ -355,6 +356,16 @@ async function handlePost(
         return ok(here, `Section regenerated as version ${v.number}. Other sections are unchanged.`);
       }
       if (action === 'regenerate') { await engine.requestRegeneration(actor, brandId, articleId, f('versionId') ?? ''); return ok(here, 'Regenerating in the background. The current version stays available.'); }
+      if (action === 'promotion-refresh') {
+        await engine.refreshPromotionVersion(actor, brandId, articleId, f('versionId') ?? '');
+        return ok(here, 'A new article and promotion version is ready for review. Previous linked approvals no longer authorise delivery.');
+      }
+      if (action === 'promotion-approve') {
+        const network = f('network');
+        if (network !== 'instagram' && network !== 'linkedin') throw new SeoBlogError(400, 'Choose an accompanying post.');
+        await engine.approvePromotion(actor, brandId, articleId, f('versionId') ?? '', network, f('packSha') ?? '');
+        return ok(here, 'Exact accompanying post approved. It is held until the same blog version and URL are verified public and a brand-owned account is connected.');
+      }
       if (action === 'checks') { const c = await engine.rerunChecks(actor, brandId, articleId); return ok(here, `Checks: ${c.issues.length} issue(s).`); }
       if (action === 'approve') { await engine.approve(actor, brandId, articleId, f('versionId') ?? ''); return ok(here, 'Approved.'); }
       if (action === 'approval-flag') { await engine.setRequiresApproval(actor, brandId, articleId, rowVersion(), f('required') === '1'); return ok(here, 'Saved.'); }
@@ -364,6 +375,10 @@ async function handlePost(
         return ok(here, `Scheduled for ${a.schedule!.localDate} ${a.schedule!.localTime}. Nothing changes on the website until then.`);
       }
       if (action === 'unschedule') { await engine.unschedule(actor, brandId, articleId, rowVersion()); return ok(here, 'Schedule cancelled.'); }
+      if (action === 'proposal') {
+        await engine.moveProposedDate(actor, brandId, articleId, rowVersion(), f('localDate') ?? '', f('localTime') ?? '');
+        return ok(back('calendar'), 'Proposed date moved. No website publication was scheduled.');
+      }
       break;
     }
   }

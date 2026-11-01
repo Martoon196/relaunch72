@@ -1270,7 +1270,7 @@ export async function buildPgPortalPlatform(
     const ppFlowWorkspace = env.PROPERTY_PREDATOR_PILOT_WORKSPACE_ID?.trim().toLowerCase() ?? '';
     const followupFlows = assetReadinessPool && contentCommandPool && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(ppFlowWorkspace)
       ? createPortalFollowupFlowService({ webPool, adapterPool: assetReadinessPool, commandPool: contentCommandPool, workspaceId: ppFlowWorkspace }) : undefined;
-    const seoBlog = env.SEO_BLOG_ENABLED?.trim() === 'true' && contentCommandPool ? createPortalSeoBlogService(contentCommandPool, env) : undefined;
+    const seoBlog = env.SEO_BLOG_ENABLED?.trim() === 'true' && contentCommandPool ? createPortalSeoBlogService(contentCommandPool, env, assetReadinessPool) : undefined;
     let mhp: MhpRuntime | undefined;
     try {
       mhp = await buildMhpRuntime({ env, webPool, identityPool, commandPool,

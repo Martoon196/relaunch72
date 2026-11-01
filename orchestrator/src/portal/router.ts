@@ -458,7 +458,8 @@ import {
 interface PortalCommonDeps {
   sessionSecret: string;
   secure: boolean;
-  sessionCookieName?: 'r72_portal' | '__Host-mhp_session';
+  sessionCookieName?: 'r72_portal' | '__Host-mhp_session' | '__Host-r72_content';
+  loginCsrfCookieName?: 'r72_login_csrf' | '__Host-r72_content_login_csrf';
   /** Brand membership guard runs before any authenticated application route. */
   authorizeMemberRequest?: (input: {
     sessionToken: string;
@@ -753,7 +754,7 @@ function sendLoginPage(
       deps.productProfile ?? RELAUNCH72_PRODUCT_PROFILE,
       { propertyPredatorSso: deps.kind === 'postgres' && Boolean(deps.propertyPredatorSso) },
     ),
-    [portalLoginCsrfCookie(csrfToken, deps.secure), ...additionalCookies],
+    [portalLoginCsrfCookie(csrfToken, deps.secure, deps.loginCsrfCookieName), ...additionalCookies],
     extra,
   );
 }
@@ -1963,7 +1964,8 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   if (deps.kind === 'postgres' && (p === '/portal/seo-blog' || p.startsWith('/portal/seo-blog/'))) {
     if (!deps.seoBlog) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('The SEO blog area is not available.'); return; }
     if (!resolvedRequestContext) { res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('The SEO blog area is temporarily unavailable.'); return; }
-    await handleSeoBlog(req, res, url, { service: deps.seoBlog, identity: portalIdentity, requestId: resolvedRequestContext.requestId, sessionSecret: deps.sessionSecret, vaultReady: deps.seoBlogVaultReady === true });
+    await handleSeoBlog(req, res, url, { service: deps.seoBlog, identity: portalIdentity, requestId: resolvedRequestContext.requestId, sessionSecret: deps.sessionSecret, vaultReady: deps.seoBlogVaultReady === true,
+      ...(deps.sessionCookieName === '__Host-r72_content' ? { applicationName: 'Relaunch72 Content' } : {}) });
     return;
   }
   // ── one-time account setup / login / logout (no auth) ──
@@ -2242,7 +2244,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
   if (p === '/portal/login' && method === 'POST') {
     const form = await readForm(req);
     const email = (form.email ?? '').trim().toLowerCase();
-    const loginCsrfCookieToken = parseCookies(req.headers.cookie)[PORTAL_LOGIN_CSRF_COOKIE];
+    const loginCsrfCookieToken = parseCookies(req.headers.cookie)[deps.loginCsrfCookieName ?? PORTAL_LOGIN_CSRF_COOKIE];
     if (!verifyPortalLoginCsrf(deps.sessionSecret, loginCsrfCookieToken, form._login_csrf)) {
       return sendLoginPage(res, 403, deps, 'Refresh the sign-in page and try again.', email);
     }

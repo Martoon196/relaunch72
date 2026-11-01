@@ -6,6 +6,8 @@
  */
 
 import type { BrandReadiness } from '../seo-blog/engine.js';
+import { sha256 } from '../seo-blog/engine.js';
+import { promotionPublicationHold } from '../seo-blog/promotions.js';
 import { articleStatusLabel } from '../seo-blog/policy.js';
 import { addDays, utcToLocal } from '../seo-blog/schedule.js';
 import { KNOWLEDGE_CATEGORIES, type ActivityEvent, type Article, type ArticleBrief, type ArticleVersion, type Brand, type BrandProfile, type Destination, type Job, type KnowledgeDocument, type Publication, type TopicPlan, type UsageKind, type WebsiteInventory } from '../seo-blog/types.js';
@@ -45,6 +47,7 @@ export interface Shell {
   readonly csrf: string;
   readonly notice?: string | null;
   readonly error?: string | null;
+  readonly applicationName?: string;
 }
 
 function url(brand: Brand, tab: string): string {
@@ -62,7 +65,7 @@ export function layout(shell: Shell, title: string, body: string, extraHead = ''
   const tabs: [SeoBlogTab, string][] = [['overview', 'Overview'], ['setup', 'Brand setup'], ['topics', 'Topics'], ['articles', 'Articles'], ['calendar', 'Calendar'], ['publishing', 'Publishing'], ['activity', 'Activity']];
   const nav = shell.brand ? `<nav class="tabs" aria-label="SEO Blog">${tabs.map(([t, label]) => `<a href="${url(shell.brand!, t)}"${t === shell.tab ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>` : '';
   return `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>${e(title)} · SEO Blog</title><style>${CSS}</style>${extraHead}</head><body>
-<header class="sb"><div><a href="${SEO_BLOG_BASE}"><strong>Brands</strong></a>${shell.brand ? ` › <strong>${e(shell.brand.name)}</strong> · SEO Blog` : ''}</div>${switcher}<a href="/portal">Back to portal</a></header>
+<header class="sb"><div>${shell.applicationName ? `<strong>${e(shell.applicationName)}</strong> · ` : ''}<a href="${SEO_BLOG_BASE}"><strong>Brands</strong></a>${shell.brand ? ` › <strong>${e(shell.brand.name)}</strong> · SEO Blog` : ''}</div>${switcher}<a href="/portal">${shell.applicationName ? 'Content home' : 'Back to portal'}</a></header>
 <main>${nav}${shell.notice ? `<p class="notice" role="status">${e(shell.notice)}</p>` : ''}${shell.error ? `<p class="notice bad" role="alert">${e(shell.error)}</p>` : ''}${body}</main></body></html>`;
 }
 
@@ -219,6 +222,11 @@ ${body.sections.map((s, i) => `<fieldset class="card"><legend>Section ${i + 1}</
 <label for="rs">Section</label><select id="rs" name="sectionId">${body.sections.map((s) => `<option value="${e(s.id)}">${e(s.heading)}</option>`).join('')}</select>
 <label for="ri">What should change?</label><input id="ri" name="instruction" type="text" maxlength="1000"><p class="muted">Only this section changes; the rest is kept exactly.</p><button type="submit">Regenerate section</button></form>
 <form method="post" action="${base}/regenerate">${csrfField(shell.csrf)}<input type="hidden" name="versionId" value="${e(v.id)}"><button class="secondary" type="submit">Regenerate whole article</button></form></section>
+<section class="card"><h2>Accompanying social posts</h2><p>Review these separately from the blog. Each approval binds the exact article version, post and blog URL. Editing the article requires new linked approvals.</p>
+${v.promotionPack ? `<p class="muted">${v.promotionPack.mode === 'model' ? 'Brand-grounded model drafts' : 'Article excerpt fallback; the social writing stage was unavailable'} · ${v.promotionPack.canonicalUrl ? `Reviewed blog URL: ${e(v.promotionPack.canonicalUrl)}` : 'Connect a blog website, then refresh these drafts to bind the final URL.'}</p>
+${v.promotionPack.posts.map(post => `<article class="card"><h3>${e(post.network)} — ${e(post.title)}</h3><pre style="white-space:pre-wrap">${e(post.copy)}${v.promotionPack!.canonicalUrl ? `\n\n${e(v.promotionPack!.canonicalUrl)}` : ''}</pre><p><strong>Artwork brief:</strong> ${e(post.artworkInstructions)}</p><p class="notice">${e(promotionPublicationHold(a, v, post.network) ?? 'Blog and exact post approval are ready. Select this brand’s connected account in its social calendar.')}</p>
+<form method="post" action="${base}/promotion-approve">${csrfField(shell.csrf)}<input type="hidden" name="versionId" value="${e(v.id)}"><input type="hidden" name="packSha" value="${e(sha256(v.promotionPack))}"><input type="hidden" name="network" value="${post.network}"><button type="submit"${v.promotionPack!.canonicalUrl ? '' : ' disabled'}>Approve exact ${e(post.network)} post</button></form></article>`).join('')}` : '<p>No accompanying drafts were created for this older article version.</p>'}
+<form method="post" action="${base}/promotion-refresh">${csrfField(shell.csrf)}<input type="hidden" name="versionId" value="${e(v.id)}"><button class="secondary" type="submit">Create new promotion version with current blog URL</button></form></section>
 <section class="card"><h2>Sources</h2><ol>${body.citations.map((c) => `<li><a href="${e(c.url)}" rel="noopener">${e(c.title)}</a> <span class="muted">retrieved ${e(c.retrievedAt.slice(0, 10))}${c.public ? '' : ' · internal only'}</span><br><small>${e(c.passage)}</small></li>`).join('')}</ol></section>
 <section class="card"><h2>History</h2><table><tbody>${[...data.versions].reverse().map((x) => `<tr><td>Version ${x.number}</td><td>${e({ generated: 'Written', edited: 'Edited', section_regenerated: 'Section regenerated', regenerated: 'Regenerated', image_changed: 'Image changed', metadata_changed: 'Details changed' }[x.change])}</td><td>${e(x.createdAt.slice(0, 16).replace('T', ' '))} UTC</td><td><a href="${base}/preview?v=${e(x.id)}" target="_blank" rel="noopener">Preview</a></td></tr>`).join('')}</tbody></table>
 ${data.publications.length ? `<h3>Publication attempts</h3><ul>${data.publications.map((p) => `<li>${e(p.state.replace('_', ' '))} — ${e(p.detail)}${p.verifiedAt ? ` (verified ${e(p.verifiedAt.slice(0, 16).replace('T', ' '))} UTC at <a href="${e(p.publicUrl)}">${e(p.publicUrl)}</a>)` : ''}</li>`).join('')}</ul>` : ''}</section>`);
@@ -240,6 +248,10 @@ export function calendarPage(shell: Shell, data: { view: 'month' | 'week' | 'lis
   const scheduled = data.articles.filter((x) => x.article.schedule);
   const tray = data.articles.filter((x) => !x.article.schedule && x.article.currentVersionId && x.status !== 'Published');
   const planned = data.briefs.filter((x) => x.suggestedAtUtc && ['planned', 'accepted'].includes(x.status));
+  const proposed = tray.flatMap(x => {
+    const brief = data.briefs.find(b => b.id === x.article.briefId);
+    return brief?.suggestedAtUtc ? [{ ...x, proposal: utcToLocal(brief.suggestedAtUtc, b.timezone) }] : [];
+  });
   const days: string[] = [];
   if (data.view === 'week') {
     const local = utcToLocal(`${data.anchor}T12:00:00Z`, 'UTC');
@@ -252,14 +264,15 @@ export function calendarPage(shell: Shell, data: { view: 'month' | 'week' | 'lis
   }
   const card = (x: { article: Article; title: string; status: string }) => `<div class="slot" draggable="true" data-article="${e(x.article.id)}" data-row-version="${x.article.rowVersion}" data-time="${e(x.article.schedule?.localTime ?? b.settings.cadence.localTime)}" data-destination="${e(x.article.schedule?.destinationId ?? data.destinations[0]?.id ?? '')}"><a href="${url(b, `articles/${x.article.id}`)}">${e(x.title)}</a><br>${e(b.name)} · ${e(x.article.schedule?.localTime ?? '')} · <span class="pill ${statusClass(x.status)}">${e(x.status)}</span>${x.article.schedule ? ` · ${e(data.destinations.find((d) => d.id === x.article.schedule!.destinationId)?.label ?? 'Website')}` : ''}</div>`;
   const plannedCard = (x: ArticleBrief) => `<div class="slot planned">Planned: ${e(x.workingTitle)}<br><span class="muted">not written yet</span></div>`;
+  const proposalCard = (x: typeof proposed[number]) => `<div class="slot planned" data-editorial-proposal><strong>BLOG · proposed ${e(x.proposal.time)}</strong><br><a href="${url(b, `articles/${x.article.id}`)}">${e(x.title)}</a><br><span class="pill">${e(x.status)}</span><br><small>Draft for review · no publication scheduled</small><form method="post" action="${url(b, `articles/${x.article.id}/proposal`)}">${csrfField(shell.csrf)}<input type="hidden" name="rowVersion" value="${x.article.rowVersion}"><input aria-label="Proposed date" type="date" name="localDate" value="${e(x.proposal.date)}" required><input aria-label="Proposed time" type="time" name="localTime" value="${e(x.proposal.time)}" required><button class="secondary" type="submit">Move proposed date</button></form></div>`;
   const grid = data.view === 'list'
     ? `<table><thead><tr><th>Date</th><th>Time</th><th>Article</th><th>Status</th><th>Website</th></tr></thead><tbody>${scheduled.sort((x, y) => x.article.schedule!.publishAtUtc.localeCompare(y.article.schedule!.publishAtUtc)).map((x) => `<tr><td>${e(x.article.schedule!.localDate)}</td><td>${e(x.article.schedule!.localTime)}</td><td><a href="${url(b, `articles/${x.article.id}`)}">${e(x.title)}</a></td><td>${e(x.status)}</td><td>${e(data.destinations.find((d) => d.id === x.article.schedule!.destinationId)?.label ?? '')}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nothing scheduled.</td></tr>'}</tbody></table>`
-    : `<div class="cal" role="grid">${days.map((d) => `<div class="day" role="gridcell" data-date="${d}" aria-label="${d}"><h4>${d.slice(8)}${d.slice(0, 7) !== data.anchor.slice(0, 7) && data.view === 'month' ? ` ${d.slice(5, 7)}` : ''}</h4>${scheduled.filter((x) => x.article.schedule!.localDate === d).map(card).join('')}${planned.filter((x) => utcToLocal(x.suggestedAtUtc!, b.timezone).date === d).map(plannedCard).join('')}</div>`).join('')}</div>`;
+    : `<div class="cal" role="grid">${days.map((d) => `<div class="day" role="gridcell" data-date="${d}" aria-label="${d}"><h4>${d.slice(8)}${d.slice(0, 7) !== data.anchor.slice(0, 7) && data.view === 'month' ? ` ${d.slice(5, 7)}` : ''}</h4>${scheduled.filter((x) => x.article.schedule!.localDate === d).map(card).join('')}${proposed.filter(x => x.proposal.date === d).map(proposalCard).join('')}${planned.filter((x) => utcToLocal(x.suggestedAtUtc!, b.timezone).date === d).map(plannedCard).join('')}</div>`).join('')}</div>`;
   const shift = (n: number) => data.view === 'week' ? addDays(data.anchor, 7 * n) : addDays(`${data.anchor.slice(0, 7)}-15`, 30 * n);
   return layout(shell, 'Calendar', `<h1>Calendar</h1>
 <p><a href="?view=month&date=${data.anchor}">Month</a> · <a href="?view=week&date=${data.anchor}">Week</a> · <a href="?view=list&date=${data.anchor}">List</a> · <a href="?view=${data.view}&date=${shift(-1)}">‹ Previous</a> · <a href="?view=${data.view}&date=${shift(1)}">Next ›</a> · <strong>${e(data.anchor.slice(0, 7))}</strong> · times in ${e(b.timezone)}</p>
 <form method="post" action="${url(b, 'calendar/autoplace')}" class="row">${csrfField(shell.csrf)}<div><label for="apd">Place unscheduled articles on</label><select id="apd" name="destinationId">${data.destinations.map((d) => `<option value="${e(d.id)}">${e(d.label)}</option>`).join('')}</select></div><div><button type="submit"${data.destinations.length ? '' : ' disabled'}>Automatic placement</button></div></form>
-<section class="card">${grid}</section>
+<section class="card">${grid}${data.view === 'list' ? `<h2>Proposed drafts awaiting review</h2>${proposed.map(proposalCard).join('') || '<p>No proposed drafts.</p>'}${planned.map(plannedCard).join('')}` : ''}</section>
 <section class="card"><h2>Unscheduled</h2>${tray.length ? tray.map((x) => `<details><summary>${e(x.title)} — <span class="pill ${statusClass(x.status)}">${e(x.status)}</span></summary>${scheduleForm(shell, b, x.article, data.destinations, url(b, `articles/${x.article.id}`))}</details>`).join('') : '<p class="muted">Nothing waiting.</p>'}</section>
 <form id="dnd-form" method="post" hidden>${csrfField(shell.csrf)}<input name="rowVersion"><input name="localDate"><input name="localTime"><input name="destinationId"></form>
 <script src="${SEO_BLOG_BASE}/calendar.js" defer></script>`);

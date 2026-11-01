@@ -14,7 +14,7 @@ import { extractJson } from '../llm/json.js';
 import type { LlmClient } from '../llm/client.js';
 import { loadPrompt, type LoadedPrompt } from '../stages/prompt.js';
 import type {
-  ArticleBrief, BrandProfile, GenerationRecord, InventoryPage, KnowledgeDocument, LengthPreference, ResearchSource,
+  ArticleBody, ArticleBrief, ArticlePromotionPack, BrandProfile, GenerationRecord, InventoryPage, KnowledgeDocument, LengthPreference, ResearchSource,
 } from './types.js';
 import { SeoBlogError } from './types.js';
 
@@ -90,6 +90,24 @@ export function dataBlock(tag: string, value: unknown): string {
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 1);
   // Neutralise attempts to close the fence from inside the data.
   return `<${tag}>\n${text.replace(new RegExp(`</?${tag}\\b[^>]*>`, 'gi'), '[removed tag]')}\n</${tag}>`;
+}
+
+export async function writeArticlePromotions(llm: LlmClient, profile: BrandProfile, article: ArticleBody): Promise<JsonCallResult<{ posts: ArticlePromotionPack['posts'] }>> {
+  return callJson(llm, {
+    prompt: loadPrompt('seo-blog-social.md'), maxTokens: 2400,
+    user: [dataBlock('brand_profile', profileForPrompt(profile)), dataBlock('blog_article', article)].join('\n\n'),
+    schema: { type: 'object', additionalProperties: false, required: ['posts'], properties: { posts: {
+      type: 'array', minItems: 2, maxItems: 2, items: { type: 'object', additionalProperties: false,
+        required: ['network', 'title', 'copy', 'artworkInstructions'], properties: {
+          network: { enum: ['instagram', 'linkedin'] }, title: { type: 'string', minLength: 3, maxLength: 200 },
+          copy: { type: 'string', minLength: 30, maxLength: 1800 }, artworkInstructions: { type: 'string', minLength: 10, maxLength: 800 },
+        } },
+    } } },
+    validate: value => [
+      ...(new Set(value.posts.map(p => p.network)).size !== 2 ? ['Provide exactly one post per network.'] : []),
+      ...value.posts.flatMap(p => /https?:\/\/|<\/?[a-z]/i.test(p.copy) ? ['Copy must contain no URLs or HTML.'] : []),
+    ],
+  });
 }
 
 // ─── Profile ─────────────────────────────────────────────────────────────────

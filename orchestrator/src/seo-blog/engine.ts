@@ -10,7 +10,7 @@ import type { KeywordProvider } from '../keyword/types.js';
 import { runChecks } from './checks.js';
 import { assessDuplicate, slugify } from './dedupe.js';
 import {
-  extractProfile, GenerationUnavailableError, proposeCluster, resolveMarkers, rewriteSection, writeArticle,
+  extractProfile, GenerationUnavailableError, proposeCluster, resolveMarkers, rewriteSection, writeArticle, writeArticlePromotions,
   type PlannedArticle,
 } from './generation.js';
 import { buildInventory, linkableUrls } from './inventory.js';
@@ -26,12 +26,13 @@ import type { SeoBlogStore } from './store.js';
 import { StaleWriteError } from './store.js';
 import {
   DESTINATION_TYPES, FACTUAL_KNOWLEDGE_CATEGORIES, KNOWLEDGE_CATEGORIES, SeoBlogError,
-  type Article, type ArticleBody, type ArticleBrief, type ArticleVersion, type Brand, type BrandProfile, type BrandSettings,
+  type Article, type ArticleBody, type ArticleBrief, type ArticlePromotionPack, type ArticleVersion, type Brand, type BrandProfile, type BrandSettings,
   type CheckReport, type Destination, type GenerationRecord, type Job, type JobKind, type KnowledgeCategory,
   type KnowledgeDocument, type KnowledgeRef, type Publication, type ResearchSource, type TopicPlan, type UsageKind,
   type VersionChange, type WebsiteInventory,
 } from './types.js';
 import type { SeoBlogCredentialVault } from './vault.js';
+import type { ArticlePromotionApproval, PromotionNetwork } from './promotions.js';
 
 export interface Actor {
   readonly userId: string;
@@ -48,10 +49,11 @@ export interface EngineDeps {
   readonly now?: () => string;
   /** Upper bound for unattended work per tick. */
   readonly batchLimit?: number;
+  readonly promotions?: ArticlePromotionApproval;
 }
 
 /** Estimated model tokens per stage, used for pre-flight budget checks and batch estimates. */
-export const USAGE_ESTIMATES = Object.freeze({ profile: 14_000, plan: 40_000, article: 26_000, section: 8_000, searchPerPlan: 8 });
+export const USAGE_ESTIMATES = Object.freeze({ profile: 14_000, plan: 40_000, article: 32_000, promotion: 6_000, section: 8_000, searchPerPlan: 8 });
 
 const JOB_MAX_ATTEMPTS = 3;
 const LEASE_MS = 10 * 60 * 1000;
@@ -628,11 +630,34 @@ export class SeoBlogEngine {
   ): Promise<ArticleVersion> {
     const versions = await this.store.listVersions(brand.id, article.id);
     const contentSha = sha256(body);
+    const versionId = randomUUID();
+    const destinations = (await this.store.listDestinations(brand.id)).filter(d => d.status === 'connected');
+    const destination = destinations.find(d => d.id === article.schedule?.destinationId) ?? (destinations.length === 1 ? destinations[0] : null);
+    const canonicalUrl = destination ? publisherFor(this.deps.publishers, destination.type).publicUrlFor(destination, body.slug) : null;
+    let generationRecord: GenerationRecord | null = null;
+    let posts: ArticlePromotionPack['posts'] = (['instagram', 'linkedin'] as const).map(network => ({
+      network, title: body.title, copy: `${body.title}\n\n${body.excerpt}\n\nRead the full article.`,
+      artworkInstructions: `Create a brand-approved editorial image illustrating “${body.title}”. Review the image before scheduling.`,
+    }));
+    try {
+      await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.promotion);
+      const generated = await writeArticlePromotions(this.llm(), profile, body);
+      await this.recordGeneration(brand.id, generated.record, `promotion:${article.id}:${versionId}`);
+      posts = generated.value.posts; generationRecord = generated.record;
+    } catch (error) {
+      // Preserve the article/edit when the optional copy stage cannot run. The UI labels this fallback.
+      await this.log(brand.id, actor, 'promotion.fallback', `Accompanying drafts use the article excerpt: ${(error as Error).message.slice(0, 160)}`, article.id);
+    }
+    const promotionPack: ArticlePromotionPack = {
+      source: 'relaunch72.seo-blog', brandId: brand.id, articleId: article.id, versionId, contentSha,
+      profileVersion: profile.version, factsSha: profile.factsSha, canonicalUrl,
+      generation: generationRecord, mode: generationRecord ? 'model' : 'excerpt_fallback', posts,
+    };
     const version: ArticleVersion = {
-      id: randomUUID(), articleId: article.id, brandId: brand.id, number: (versions.at(-1)?.number ?? 0) + 1,
+      id: versionId, articleId: article.id, brandId: brand.id, number: (versions.at(-1)?.number ?? 0) + 1,
       parentVersionId: article.currentVersionId, change, changedSectionId, createdAt: this.now(), createdBy: actor, body,
       profileVersion: profile.version, factsSha: profile.factsSha, knowledge: profile.knowledge, briefId: brief.id, planId: brief.planId,
-      generation, contentSha,
+      generation, contentSha, promotionPack,
     };
     await this.store.addVersion(version);
     const checks = await this.checkVersion(brand, version);
@@ -642,6 +667,24 @@ export class SeoBlogEngine {
       hold: article.hold && ['checks_failed', 'stale_version'].includes(article.hold.reason) ? null : article.hold,
     });
     return version;
+  }
+
+  async refreshPromotionVersion(actor: Actor, brandId: string, articleId: string, expectedVersionId: string): Promise<ArticleVersion> {
+    const brand = await this.brandFor(actor, brandId);
+    const { article, version, profile, brief } = await this.editable(brandId, articleId, expectedVersionId);
+    return this.appendVersion(brand, article, version.body, 'metadata_changed', null, actor.userId, null, profile, brief);
+  }
+
+  async approvePromotion(actor: Actor, brandId: string, articleId: string, versionId: string, network: PromotionNetwork, expectedPackSha: string): Promise<void> {
+    const brand = await this.brandFor(actor, brandId);
+    const { article, version } = await this.editable(brandId, articleId, versionId);
+    if (!version.promotionPack || sha256(version.promotionPack) !== expectedPackSha) throw new SeoBlogError(409, 'The accompanying drafts changed. Refresh before approving.');
+    if (!this.deps.promotions) throw new SeoBlogError(503, 'Canonical promotion approval is temporarily unavailable.');
+    const link = await this.deps.promotions.approve(brand, article, version, network);
+    const current = (await this.store.getArticle(brandId, articleId))!;
+    if (current.currentVersionId !== versionId) throw new StaleWriteError('article');
+    await this.store.updateArticle({ ...current, linkedPromotions: [...(current.linkedPromotions ?? []).filter(p => !(p.articleVersionId === versionId && p.network === network)), link] });
+    await this.log(brandId, actor.userId, 'promotion.approved', `${network} accompanying post approved for article version ${version.number}. Delivery remains separately gated.`, articleId);
   }
 
   private async checkVersion(brand: Brand, version: ArticleVersion): Promise<CheckReport> {
@@ -805,6 +848,17 @@ export class SeoBlogEngine {
     if (article.rowVersion !== rowVersion) throw new StaleWriteError('article');
     if (article.delivery === 'publishing') throw new SeoBlogError(409, 'This article is being published right now.');
     return article;
+  }
+
+  async moveProposedDate(actor: Actor, brandId: string, articleId: string, rowVersion: number, localDate: string, localTime: string): Promise<void> {
+    const brand = await this.brandFor(actor, brandId);
+    const article = await this.mutableArticle(brandId, articleId, rowVersion);
+    if (article.schedule) throw new SeoBlogError(409, 'Use Move schedule for an article with a publication schedule.');
+    const brief = await this.store.getBrief(brandId, article.briefId);
+    if (!brief) throw new SeoBlogError(404, 'The article plan was not found.');
+    const proposed = localToUtc(localDate, localTime, brand.timezone);
+    await this.store.saveBrief({ ...brief, suggestedAtUtc: proposed.utc });
+    await this.log(brandId, actor.userId, 'diary.proposal_moved', 'Editorial proposal moved; no website publication scheduled.', articleId);
   }
 
   async schedule(actor: Actor, brandId: string, articleId: string, rowVersion: number, input: { localDate: string; localTime: string; destinationId: string }): Promise<Article> {

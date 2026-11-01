@@ -15,6 +15,7 @@ import { configuredSearchProvider, type SearchProvider } from '../seo-blog/resea
 import { GuardedFetchTransport } from '../seo-blog/safe-fetch.js';
 import { SeoBlogCredentialVault } from '../seo-blog/vault.js';
 import type { PortalSessionIdentity } from './auth-service.js';
+import { createCentralPromotionApproval } from './central-content-promotion-pg.js';
 
 export interface PortalSeoBlogService {
   /** Engine bound to this signed-in principal; every call is re-authorised in PostgreSQL. */
@@ -44,7 +45,7 @@ export function seoBlogRuntime(env: NodeJS.ProcessEnv = process.env): SeoBlogRun
   return { llm, search: configuredSearchProvider(env), keywords, vault: SeoBlogCredentialVault.fromEnv(env) };
 }
 
-export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS.ProcessEnv = process.env): PortalSeoBlogService {
+export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS.ProcessEnv = process.env, contentAdapterPool?: Pool): PortalSeoBlogService {
   const runtime = seoBlogRuntime(env);
   const transport = new GuardedFetchTransport();
   const publishers = defaultPublishers();
@@ -55,7 +56,8 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
       const store = new PgSeoBlogStore(contentCommandPool, {
         kind: 'user', userId: identity.userId, requestId, sessionToken: identity.sessionToken, selectedWorkspaceId: identity.workspaceId,
       });
-      return new SeoBlogEngine({ store, llm: runtime.llm, search: runtime.search, keywords: runtime.keywords, transport, publishers, vault: runtime.vault });
+      return new SeoBlogEngine({ store, llm: runtime.llm, search: runtime.search, keywords: runtime.keywords, transport, publishers, vault: runtime.vault,
+        ...(env.R72_CONTENT_ENABLED === 'true' && contentAdapterPool ? { promotions: createCentralPromotionApproval({ adapterPool: contentAdapterPool, commandPool: contentCommandPool, identity, requestId }) } : {}) });
     },
   };
 }

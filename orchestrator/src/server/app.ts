@@ -111,6 +111,12 @@ export interface AppDeps {
     handle(req: IncomingMessage, res: ServerResponse): Promise<void>;
     readiness(): Promise<readonly string[]>;
   };
+  /** Independent central content host; every unknown path terminates within it. */
+  centralContent?: {
+    readonly hostname: string;
+    handle(req: IncomingMessage, res: ServerResponse): Promise<void>;
+    readiness(): Promise<readonly string[]>;
+  };
   /** Truthful execution mode exposed by health for accepted builds. */
   buildMode?: 'mock' | 'live';
   /** Optional, disabled-by-default Property Predator receipt-only source bridge. */
@@ -275,14 +281,27 @@ export function createApp(deps: AppDeps) {
     const requestHost = /^[a-z0-9.-]+(?::[0-9]{1,5})?$/.test(rawHost)
       ? rawHost.replace(/:\d+$/, '') : '';
     const mhpRequest = deps.mhp !== undefined && requestHost === deps.mhp.hostname;
+    const centralContentRequest = deps.centralContent !== undefined && rawHost === deps.centralContent.hostname;
+    if (deps.centralContent && requestHost === deps.centralContent.hostname && !centralContentRequest) {
+      return send(res, 421, { error: 'misdirected request' });
+    }
 
     // Render's health probes must remain available before custom-DNS cutover,
     // but every operational surface is host-bound. Never redirect a mismatched
     // Host: a fixed 421 avoids reflecting attacker-controlled proxy headers.
     if (deps.canonicalHost && route !== 'GET /health' && route !== 'GET /ready') {
-      if (requestHost !== deps.canonicalHost && !mhpRequest) {
+      if (requestHost !== deps.canonicalHost && !mhpRequest && !centralContentRequest) {
         return send(res, 421, { error: 'misdirected request' });
       }
+    }
+
+    if (centralContentRequest && route !== 'GET /ready' && route !== 'GET /health') {
+      if (activePortalRequests >= portalMaxConcurrentRequests) { sendPortalRuntimeStatus(res, 429); return; }
+      activePortalRequests += 1;
+      try { await deps.centralContent!.handle(req, res); }
+      catch { if (!res.headersSent) sendPortalRuntimeStatus(res, 503); }
+      finally { activePortalRequests -= 1; }
+      return;
     }
 
     if (mhpRequest && route !== 'GET /ready' && route !== 'GET /health') {
@@ -379,6 +398,10 @@ export function createApp(deps: AppDeps) {
         if (mhpRequest) {
           try { blockers.push(...await deps.mhp!.readiness()); }
           catch { blockers.push('MHP member application is unavailable'); }
+        }
+        if (centralContentRequest) {
+          try { blockers.push(...await deps.centralContent!.readiness()); }
+          catch { blockers.push('Central content application is unavailable'); }
         }
         if (!deps.portal) {
           blockers.push(...(deps.portalBlockers ?? ['client portal is not mounted']));

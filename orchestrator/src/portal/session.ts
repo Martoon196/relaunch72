@@ -7,7 +7,7 @@
 import crypto from 'node:crypto';
 
 export const PORTAL_COOKIE = 'r72_portal';
-export type PortalSessionCookieName = typeof PORTAL_COOKIE | '__Host-mhp_session';
+export type PortalSessionCookieName = typeof PORTAL_COOKIE | '__Host-mhp_session' | '__Host-r72_content';
 export const PORTAL_LOGIN_CSRF_COOKIE = 'r72_login_csrf';
 export const PORTAL_SETUP_COOKIE = 'r72_account_setup';
 export const PORTAL_TTL_MS = 1000 * 60 * 60 * 24 * 14; // 14 days
@@ -366,12 +366,13 @@ export function clearPortalSetupCookie(secure: boolean): string {
   return bits.join('; ');
 }
 
-export function portalLoginCsrfCookie(token: string, secure: boolean): string {
+export function portalLoginCsrfCookie(token: string, secure: boolean, name: 'r72_login_csrf' | '__Host-r72_content_login_csrf' = PORTAL_LOGIN_CSRF_COOKIE): string {
+  if (name.startsWith('__Host-') && !secure) throw new Error('Host-bound login requires HTTPS');
   const bits = [
-    `${PORTAL_LOGIN_CSRF_COOKIE}=${token}`,
+    `${name}=${token}`,
     'HttpOnly',
     'SameSite=Strict',
-    'Path=/portal/login',
+    name.startsWith('__Host-') ? 'Path=/' : 'Path=/portal/login',
     'Max-Age=600',
   ];
   if (secure) bits.push('Secure');
@@ -379,7 +380,7 @@ export function portalLoginCsrfCookie(token: string, secure: boolean): string {
 }
 
 export function portalCookie(token: string, secure: boolean, maxAgeSec = PORTAL_TTL_MS / 1000, name: PortalSessionCookieName = PORTAL_COOKIE): string {
-  if (name !== PORTAL_COOKIE && name !== '__Host-mhp_session') throw new Error('Invalid portal session cookie');
+  if (name !== PORTAL_COOKIE && name !== '__Host-mhp_session' && name !== '__Host-r72_content') throw new Error('Invalid portal session cookie');
   if (name.startsWith('__Host-') && !secure) throw new Error('Host-bound session requires HTTPS');
   const bits = [`${name}=${token}`, 'HttpOnly', 'SameSite=Lax', 'Path=/', `Max-Age=${maxAgeSec}`];
   if (secure) bits.push('Secure');
@@ -387,7 +388,7 @@ export function portalCookie(token: string, secure: boolean, maxAgeSec = PORTAL_
 }
 
 export function clearPortalCookie(secure: boolean, name: PortalSessionCookieName = PORTAL_COOKIE): string {
-  if (name !== PORTAL_COOKIE && name !== '__Host-mhp_session') throw new Error('Invalid portal session cookie');
+  if (name !== PORTAL_COOKIE && name !== '__Host-mhp_session' && name !== '__Host-r72_content') throw new Error('Invalid portal session cookie');
   if (name.startsWith('__Host-') && !secure) throw new Error('Host-bound session requires HTTPS');
   const bits = [`${name}=`, 'HttpOnly', 'SameSite=Lax', 'Path=/', 'Max-Age=0'];
   if (secure) bits.push('Secure');
