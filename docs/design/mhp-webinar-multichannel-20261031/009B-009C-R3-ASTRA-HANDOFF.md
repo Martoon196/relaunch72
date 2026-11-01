@@ -41,8 +41,10 @@ Both migrations were amended in place: neither had been applied anywhere but the
 | 009C focused, 132 database: both real-role integration tests | 2/2 |
 | 009C ledger, both compatibility suites, both unit files (incl. the new worker regression) | 106/106 |
 | Bridges: runtime-readiness | 26/26 each |
-| Full integrated suite, 009C on 132 | running at the time of this commit; result in the follow-up docs commit |
-| Full integrated suite, 009B on 131 | running at the time of this commit; result in the follow-up docs commit |
+| Full integrated suite, 009C on 132 (head `a0c9c9e`) | 3742 tests: 3735 pass, 6 fail, 1 skipped |
+| Full integrated suite, 009B on a fresh 131 (head `76fe4d8`) | 3730 tests: 3723 pass, 6 fail, 1 skipped |
+
+The six failures are the same six in both runs and the same six as the first round; all also fail on unchanged `ea1903f` (company-asset, growth-evidence, 0090, 0091, 0092, the date-dependent email pilot). No timeouts.
 
 Readiness matrix (migration ledger plus the three real-role WhatsApp boundaries), re-run after the fixes:
 
