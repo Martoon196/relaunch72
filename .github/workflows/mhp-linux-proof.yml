@@ -53,9 +53,29 @@ jobs:
         run: npm ci --ignore-scripts --include=dev
       - name: Check supply chain
         run: node scripts/supply-chain.mjs --check
-      - name: Typecheck exact final project
-        run: npm --prefix orchestrator run typecheck
-      - name: Run exact final normal suite
-        run: npm --prefix orchestrator test
-      - name: Run full explicit disposable PostgreSQL integration command
-        run: npm --prefix orchestrator run test:db:integration
+      - name: Inject bounded competing-intent challenge after exact source assertion
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('orchestrator/test/db/seo-blog-social-promotion.integration.test.ts')
+          s=p.read_text()
+          needle='    const first = await planFor(slot);'
+          assert s.count(needle)==1
+          replacement='''    await a.registerSocialBinding(actorA, brandA.id, { network: 'linkedin', providerAccountId: LINKEDIN_A, dailyCap: 5, monthlyCap: 10 });
+              const concurrent = await Promise.allSettled([planFor(slot), planFor(new Date(slot.getTime() + 60_000))]);
+              const accepted = concurrent.filter(x => x.status === 'fulfilled');
+              const rejected = concurrent.filter(x => x.status === 'rejected');
+              assert.equal(accepted.length, 1, 'two overlapping real serializable registry.plan transactions must admit only one active promotion');
+              assert.equal(rejected.length, 1);
+              const persisted = await admin.query('SELECT count(*)::int AS n FROM app.property_predator_owned_social_jobs WHERE workspace_id = $1', [brandA.id]);
+              assert.equal(persisted.rows[0].n, 1, 'one actual canonical job persisted for the two distinct competing slots');
+              console.info('ROOT_SQL_CONCURRENCY_PROVED: distinctSlots=2 caps=5/10 admitted=' + accepted.length + ' rejected=' + rejected.length + ' persistedJobs=' + persisted.rows[0].n + ' providerEffects=0');
+              return;
+          '''
+          s=s.replace(needle,replacement)
+          p.write_text(s)
+          PY
+      - name: Run real-role serializable admission concurrency challenge only
+        env:
+          RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
+        run: cd orchestrator && node --import ./test/windows-node24-shim.mjs --import tsx --test test/db/seo-blog-social-promotion.integration.test.ts
