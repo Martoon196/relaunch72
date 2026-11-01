@@ -327,7 +327,7 @@ test('final132 event-WhatsApp runtime strictly requires exact132 and every earli
   assert.deepEqual(rows[128], { filename: '0129_mhp_local_channel_drafts.sql', checksum: '649ba68b60954b6e76d4e702511321e59eff0785128051ed7b81f968abe1b57a' });
   assert.deepEqual(rows[129], { filename: '0130_mhp_owned_sms_pilot.sql', checksum: 'e6bb5be3a87e0fde3e29d3f47edde1c5daf8492f4c368f80e2e4335f5b239797' });
   assert.deepEqual(rows[130], { filename: '0131_mhp_event_phone_programme.sql', checksum: '8ad7b48ede3c99d2232dac73b0b61a074a153402208564c4dabe824a5aba4fde' });
-  assert.deepEqual(rows[131], { filename: '0132_mhp_event_whatsapp_programme.sql', checksum: 'db9a1a05c997907d38750e4f2184c055d0b9fac3929fdc168ce3415fcac1716c' });
+  assert.deepEqual(rows[131], { filename: '0132_mhp_event_whatsapp_programme.sql', checksum: 'ad09a7f2a75bc536ad6e318e7069a3f081c1f31137b80747bde24180e9a65da3' });
   await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 131))), /schema is behind by 1 migration/);
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 130))), /schema is behind by 2 migration/);

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-// 0132 replaces four existing definitions; each equals its latest prior
+// 0132 replaces five existing definitions; each equals its latest prior
 // definition byte-for-byte except for the named repair or exclusion.
 const DIR = new URL('../../src/db/migrations/', import.meta.url);
 async function definitions(name: string): Promise<{ file: string; text: string }[]> {
@@ -30,7 +30,14 @@ const CASES: { name: string; edits: [string, string][] }[] = [
   { name: 'whatsapp_live_job_identity_guard', edits: [['     OR NEW.created_by_user_id IS DISTINCT FROM OLD.created_by_user_id\n',
     '     OR NEW.created_by_user_id IS DISTINCT FROM OLD.created_by_user_id\n     OR NEW.authority_kind IS DISTINCT FROM OLD.authority_kind\n     OR NEW.event_send_id IS DISTINCT FROM OLD.event_send_id\n     OR NEW.created_by_actor_kind IS DISTINCT FROM OLD.created_by_actor_kind\n']] },
   { name: 'mhp_event_phone_request_link', edits: [[' programme:=app_private.mhp_event_phone_current_programme();\n',
-    ' programme:=coalesce(app_private.mhp_event_phone_current_programme(),app_private.mhp_event_whatsapp_current_programme());\n']] },
+    ' programme:=coalesce(app_private.mhp_event_phone_current_programme(),app_private.mhp_event_whatsapp_current_programme());\n'],
+    [" signup:=app_private.mhp_event_phone_signup(prospect.id,programme->>'event');\n",
+      " signup:=app_private.mhp_event_phone_signup(prospect.id,programme->>'event');\n -- 0132: a registrant of the current WhatsApp follow-up programme also gets the email proof.\n"
+      + " IF signup IS NULL AND app_private.mhp_event_whatsapp_current_programme() IS NOT NULL THEN\n  programme:=app_private.mhp_event_whatsapp_current_programme();\n"
+      + "  signup:=app_private.mhp_event_phone_signup(prospect.id,programme->>'event');\n END IF;\n"]] },
+  // A legacy owner-action enqueue can never reuse a webinar-scoped event consent.
+  { name: 'authorize_and_enqueue_whatsapp_live_job', edits: [["     OR p_purpose !~ '^[a-z][a-z0-9_.-]{0,99}$'\n",
+    "     OR p_purpose !~ '^[a-z][a-z0-9_.-]{0,99}$' OR p_purpose ~ '^mhp[.]webinar[.]'\n"]] },
 ];
 for (const { name, edits } of CASES) {
   test(`0132 ${name} is the exact prior body plus only its named change`, async () => {
@@ -41,10 +48,10 @@ for (const { name, edits } of CASES) {
     assert.equal(replacement.text, expected);
   });
 }
-test('0132 leaves the 0055 projection, 0053 load/begin/settle/enqueue and every 0131 SMS function untouched', async () => {
+test('0132 leaves the 0055 projection, 0053 load/begin/settle and every 0131 SMS function untouched', async () => {
   const source = await readFile(new URL('0132_mhp_event_whatsapp_programme.sql', DIR), 'utf8');
   for (const name of ['record_whatsapp_live_inbound_projection', 'load_whatsapp_live_job', 'begin_whatsapp_live_call', 'settle_whatsapp_live_call',
-    'authorize_and_enqueue_whatsapp_live_job', 'whatsapp_live_authority_is_current', 'mhp_record_event_sms_inbound', 'mhp_prepare_event_sms', 'begin_event_sms_call']) {
+    'whatsapp_live_authority_is_current', 'mhp_record_event_sms_inbound', 'mhp_prepare_event_sms', 'begin_event_sms_call']) {
     assert.doesNotMatch(source, new RegExp(`FUNCTION app_private\\.${name}\\(`, 'u'), name);
   }
   assert.doesNotMatch(source, /sms_phone_verification_receipts/u, 'an SMS verification is never WhatsApp possession');

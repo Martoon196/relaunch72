@@ -122,7 +122,9 @@ implements MetaWhatsAppLiveWebhookCommandService {
         event.providerMessageId, event.senderId, event.body, senderSha256,
         bodySha256, payloadSha256, signatureSha256, eventIdentitySha256,
         event.occurredAt];
-    if (this.mhpEventWhatsApp) {
+    const eventShaped = /^\s*join\s+[a-z2-7]{26}\s*$/iu.test(event.body)
+      || /^(STOP|STOPALL|UNSUBSCRIBE|CANCEL|END|QUIT|OPTOUT|OPT OUT)(?:[^A-Z0-9]|$)/u.test(event.body.trim().toUpperCase());
+    if (this.mhpEventWhatsApp && eventShaped) {
       // MHP009C: signed JOIN/STOP wrapper; delegates to the unchanged 0055 projection in one READ COMMITTED transaction.
       return withTransaction(this.#commandPool, { actorKind: 'webhook', workspaceId: this.workspaceId, requestId: this.#requestId(event.externalEventId) },
         async (transaction) => {

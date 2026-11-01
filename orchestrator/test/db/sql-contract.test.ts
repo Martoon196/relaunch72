@@ -838,7 +838,7 @@ test('bundled migration discovery orders and checksums through source refresh re
   assert.equal(sources.length, tail.length);
   assert.equal(tail.at(-3)?.checksum, 'e6bb5be3a87e0fde3e29d3f47edde1c5daf8492f4c368f80e2e4335f5b239797');
   assert.equal(tail.at(-2)?.checksum, '8ad7b48ede3c99d2232dac73b0b61a074a153402208564c4dabe824a5aba4fde');
-  assert.equal(tail.at(-1)?.checksum, 'db9a1a05c997907d38750e4f2184c055d0b9fac3929fdc168ce3415fcac1716c');
+  assert.equal(tail.at(-1)?.checksum, 'ad09a7f2a75bc536ad6e318e7069a3f081c1f31137b80747bde24180e9a65da3');
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
   }

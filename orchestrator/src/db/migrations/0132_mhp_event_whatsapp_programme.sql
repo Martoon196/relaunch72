@@ -328,7 +328,8 @@ CREATE POLICY mhp_event_whatsapp_receipts_public ON app_private.mhp_event_whatsa
 GRANT SELECT,UPDATE ON app_private.mhp_event_whatsapp_sends TO r72_mhp_prospect_definer;
 -- Public withdrawal and the content new-version trigger hold steps; the immutable guard limits them to hold fields.
 CREATE POLICY mhp_event_whatsapp_sends_prospect_hold ON app_private.mhp_event_whatsapp_sends TO r72_mhp_prospect_definer
- USING(workspace_id='2789228d-55a6-4688-b1e8-2f70abca990b') WITH CHECK(workspace_id='2789228d-55a6-4688-b1e8-2f70abca990b');
+ USING(workspace_id='2789228d-55a6-4688-b1e8-2f70abca990b' AND session_user IN('r72_identity_command','r72_content_adapter'))
+ WITH CHECK(workspace_id='2789228d-55a6-4688-b1e8-2f70abca990b' AND session_user IN('r72_identity_command','r72_content_adapter'));
 CREATE POLICY mhp_event_whatsapp_consent_public ON app.communication_consent_events FOR INSERT TO r72_mhp_prospect_definer
  WITH CHECK(workspace_id='2789228d-55a6-4688-b1e8-2f70abca990b' AND session_user='r72_identity_command'
   AND channel='whatsapp' AND purpose~'^mhp\.webinar\.[0-9]{4}-[0-9]{2}-[0-9]{2}$' AND state='withdrawn'
@@ -695,6 +696,11 @@ BEGIN
  SELECT * INTO prospect FROM app_private.mhp_prospects p WHERE p.email::text=p_email;
  IF NOT FOUND THEN RETURN jsonb_build_object('send',false); END IF;
  signup:=app_private.mhp_event_phone_signup(prospect.id,programme->>'event');
+ -- 0132: a registrant of the current WhatsApp follow-up programme also gets the email proof.
+ IF signup IS NULL AND app_private.mhp_event_whatsapp_current_programme() IS NOT NULL THEN
+  programme:=app_private.mhp_event_whatsapp_current_programme();
+  signup:=app_private.mhp_event_phone_signup(prospect.id,programme->>'event');
+ END IF;
  IF signup IS NULL THEN RETURN jsonb_build_object('send',false); END IF;
  PERFORM app_private.mhp_event_phone_lock(ARRAY['mhp.event-phone.prospect:'||(programme->>'event')||':'||prospect.id::text]);
  UPDATE app_private.mhp_event_phone_intents SET state='superseded',updated_at=statement_timestamp()
@@ -745,7 +751,7 @@ BEGIN
  IF session_user<>'r72_whatsapp_live_webhook_command' OR p_workspace IS DISTINCT FROM ws OR current_setting('app.workspace_id',true) IS DISTINCT FROM ws::text
   OR current_setting('app.actor_kind',true) IS DISTINCT FROM 'webhook' OR coalesce(current_setting('app.user_id',true),'')<>''
   OR p_binding IS NULL OR p_external_event IS NULL OR p_message_id IS NULL OR p_message_id!~'^wamid[.][A-Za-z0-9_=-]{1,190}$'
-  OR p_sender IS NULL OR p_sender!~'^44[0-9]{9,10}$' OR p_body IS NULL
+  OR p_sender IS NULL OR p_sender!~'^[1-9][0-9]{6,14}$' OR p_body IS NULL
   OR p_sender_sha IS DISTINCT FROM public.digest(p_sender,'sha256') OR p_body_sha IS DISTINCT FROM public.digest(p_body,'sha256')
   OR octet_length(p_payload_sha) IS DISTINCT FROM 32 OR octet_length(p_signature_sha) IS DISTINCT FROM 32
   OR octet_length(p_event_identity_sha) IS DISTINCT FROM 32 OR p_occurred IS NULL
@@ -761,7 +767,7 @@ BEGIN
   RETURN QUERY SELECT CASE WHEN outcome='conflict' THEN 'conflict' ELSE 'replayed' END; RETURN;
  END IF;
  phone:='+'||p_sender;
- is_stop:=upper(btrim(p_body)) IN('STOP','STOPALL','UNSUBSCRIBE','CANCEL','END','QUIT','OPTOUT','OPT OUT');
+ is_stop:=upper(btrim(p_body))~'^(STOP|STOPALL|UNSUBSCRIBE|CANCEL|END|QUIT|OPTOUT|OPT OUT)([^A-Z0-9]|$)';
  nonce:=lower(substring(p_body FROM '^[[:space:]]*[Jj][Oo][Ii][Nn][[:space:]]+([A-Za-z2-7]{26})[[:space:]]*$'));
  IF nonce IS NOT NULL THEN
   SELECT * INTO intent FROM app_private.mhp_event_whatsapp_intents i WHERE i.join_nonce_sha256=public.digest('mhp.event-whatsapp.join/v1:'||nonce,'sha256');
@@ -771,9 +777,14 @@ BEGIN
   END IF;
  END IF;
  IF intent.id IS NULL OR intent.state<>'awaiting_join' OR intent.phone_e164 IS DISTINCT FROM phone THEN
+  -- A STOP is honoured even when the inbox projection cannot run (unknown sender stays the existing refusal).
   outcome:=app_private.mhp_event_whatsapp_project(p_workspace,p_binding,p_external_event,p_message_id,p_sender,p_body,p_sender_sha,p_body_sha,
-   p_payload_sha,p_signature_sha,p_event_identity_sha,p_occurred,false);
-  IF outcome='applied' AND is_stop THEN
+   p_payload_sha,p_signature_sha,p_event_identity_sha,p_occurred,is_stop);
+  IF is_stop AND outcome='unprojected' AND NOT EXISTS(SELECT 1 FROM app.contact_points p WHERE p.workspace_id=ws AND p.kind='whatsapp'
+   AND p.deleted_at IS NULL AND p.is_verified AND p.dedupe_state='normal' AND p.normalized_value=p_sender) THEN
+   RAISE EXCEPTION 'WhatsApp live inbound verified contact point not found' USING ERRCODE='23503';
+  END IF;
+  IF outcome IN('applied','unprojected') AND is_stop THEN
    -- Proposal 2 (unratified): WhatsApp STOP suppresses WhatsApp only, never SMS.
    SELECT p.* INTO stop_point FROM app.contact_points p WHERE p.workspace_id=ws AND p.kind='whatsapp' AND p.deleted_at IS NULL AND p.is_verified
     AND p.dedupe_state='normal' AND p.normalized_value=p_sender;
@@ -872,7 +883,7 @@ BEGIN
  VALUES(consent,ws,contact,wa_point.id,'whatsapp',programme->>'purpose','granted','consent','mhp.event-whatsapp.join',intent.consent_revision,
   intent.consent_text_sha256,p_external_event,'webhook',NULL,jsonb_build_object('schema','mhp.event-whatsapp-grant/v1','intentId',intent.id,
    'revision',intent.revision,'receiptId',receipt,'campaign',intent.campaign,'emailProof','single-use-link','whatsappProof','signed-meta-join',
-   'smsVerificationUsed',false,'generalMarketing',false),endpoint_sha,p_occurred);
+   'smsVerificationUsed',false,'generalMarketing',false),endpoint_sha,least(p_occurred,statement_timestamp()));
  INSERT INTO app_private.mhp_event_whatsapp_receipts(id,workspace_id,intent_id,intent_revision,campaign,prospect_id,signup_id,channel,purpose,contact_id,
   contact_point_id,endpoint_identity_sha256,phone_identity_sha256,decision,consent_revision,consent_text_sha256,consent_event_id,proof_kind,
   whatsapp_binding_id,provider_event_id,provider_message_id,payload_sha256,signature_sha256,body_sha256,event_identity_sha256,occurred_at,request_sha256)
@@ -1079,7 +1090,7 @@ LANGUAGE sql STABLE SECURITY INVOKER SET search_path=pg_catalog AS $f$
   'programmeVersionId',p_programme->>'programmeVersionId','programmeSha256',p_programme->>'programmeSha256','programmeApprovalId',p_programme->>'approvalId',
   'event',p_programme->>'event','stepKey',p_programme->>'stepKey','dueAt',p_programme->>'dueAt','providerDeadline',p_programme->>'providerDeadline',
   'sourceContentVersionId',p_programme->>'sourceContentVersionId','bodySha256',p_programme->>'bodySha256','templateName',p_programme->>'templateName',
-  'language',p_programme->>'language','metaTemplateId',p_programme->>'metaTemplateId','bindingId',p_binding,'templateObservationId',p_observation,
+  'language',p_programme->>'language','metaTemplateId',p_programme->>'metaTemplateId','bindingId',p_binding,'templateApprovedAtReview',p_observation IS NOT NULL,
   'recipients',coalesce((SELECT jsonb_agg(jsonb_build_object('receiptId',t.receipt_id,'revision',t.intent_revision,'pointId',t.point_id,
     'endpointSha256',encode(t.endpoint_sha256,'hex'),'consentEventId',t.consent_event_id) ORDER BY t.receipt_id)
    FROM unnest(p_receipts) x(id) CROSS JOIN LATERAL app_private.mhp_event_whatsapp_grant_tuple(x.id) t),'[]'::jsonb))
@@ -1289,7 +1300,7 @@ BEGIN
   UPDATE app_private.mhp_event_whatsapp_sends SET cancelled_at=statement_timestamp() WHERE id=row.id;
  END IF;
  SELECT jsonb_build_object('sendId',s.id,'action',p_action,'held',s.held_at IS NOT NULL,'cancelled',s.cancelled_at IS NOT NULL,'jobState',job_state,
-  'inFlight',job_state IN('leased','calling','awaiting_status','needs_attention','succeeded','failed'),'replayed',false) INTO outcome
+  'inFlight',job_state IN('calling','awaiting_status','succeeded'),'replayed',false) INTO outcome
  FROM app_private.mhp_event_whatsapp_sends s WHERE s.id=row.id;
  UPDATE app.command_receipts SET result=outcome,status='succeeded',response_status=200,completed_at=clock_timestamp() WHERE id=command_receipt AND workspace_id=ws;
  RETURN outcome;
@@ -1460,6 +1471,265 @@ BEGIN
   RETURN QUERY SELECT selected.id, selected.binding_id, next_version;
 END
 $function$;
+CREATE OR REPLACE FUNCTION app_private.authorize_and_enqueue_whatsapp_live_job(
+  p_workspace_id uuid, p_binding_id uuid, p_template_id uuid,
+  p_contact_id uuid, p_contact_point_id uuid, p_consent_event_id uuid,
+  p_compliance_subject_id uuid, p_policy_publication_event_id uuid,
+  p_pecr_sender_decision_event_id uuid, p_pecr_instigator_decision_event_id uuid,
+  p_permission_use_receipt_id uuid, p_purpose text,
+  p_authority_valid_until timestamptz, p_operation_id uuid,
+  p_idempotency_key_sha256 bytea, p_request_sha256 bytea
+) RETURNS uuid
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog AS $function$
+DECLARE selected_user uuid; selected_request text; selected_connection uuid;
+  selected_recipient text; selected_recipient_sha bytea; authority_id uuid := gen_random_uuid();
+  selected_id uuid := gen_random_uuid(); existing record; expected_endpoint_sha bytea;
+  expected_action_scope bytea; selected_pecr_sha bytea; selected_instigator_sha bytea;
+BEGIN
+  IF session_user <> 'r72_whatsapp_live_command'
+     OR current_setting('app.workspace_id', true) IS DISTINCT FROM p_workspace_id::text
+     OR current_setting('app.actor_kind', true) IS DISTINCT FROM 'user'
+     OR current_setting('app.user_id', true) !~ '^[0-9a-f-]{36}$'
+     OR coalesce(current_setting('app.request_id', true), '') = ''
+     OR octet_length(p_idempotency_key_sha256) <> 32
+     OR octet_length(p_request_sha256) <> 32
+     OR p_purpose !~ '^[a-z][a-z0-9_.-]{0,99}$' OR p_purpose ~ '^mhp[.]webinar[.]'
+     OR p_authority_valid_until <= statement_timestamp()
+     OR p_authority_valid_until > statement_timestamp() + interval '15 minutes' THEN
+    RAISE EXCEPTION 'WhatsApp live enqueue denied' USING ERRCODE = '42501';
+  END IF;
+  selected_user := current_setting('app.user_id')::uuid;
+  selected_request := current_setting('app.request_id');
+  -- Serialize all cap/idempotency decisions for the one owned number. The
+  -- partial daily unique index is a second fail-closed concurrency fence.
+  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
+    format('pp-whatsapp-live:%s:%s', p_workspace_id, p_binding_id), 0
+  ));
+  SELECT job.id, job.request_sha256 INTO existing
+  FROM app.property_predator_whatsapp_live_jobs AS job
+  WHERE job.workspace_id = p_workspace_id AND job.idempotency_key_sha256 = p_idempotency_key_sha256;
+  IF FOUND THEN
+    IF existing.request_sha256 <> p_request_sha256 THEN
+      RAISE EXCEPTION 'WhatsApp live idempotency conflict' USING ERRCODE = '40001';
+    END IF;
+    RETURN existing.id;
+  END IF;
+  SELECT template.provider_connection_id INTO selected_connection
+  FROM app.property_predator_whatsapp_live_templates AS template
+  JOIN app.property_predator_whatsapp_live_bindings AS binding
+    ON binding.workspace_id = template.workspace_id AND binding.id = template.binding_id
+   AND binding.provider_connection_id = template.provider_connection_id
+   AND binding.status = 'active'
+  JOIN app.provider_connections AS connection
+    ON connection.workspace_id = binding.workspace_id
+   AND connection.id = binding.provider_connection_id
+   AND connection.provider_id = 'meta_whatsapp_cloud'
+   AND connection.provider_kind = 'messaging'
+   AND connection.environment = 'live' AND connection.status = 'active'
+  WHERE template.workspace_id = p_workspace_id AND template.id = p_template_id
+    AND template.binding_id = p_binding_id AND template.provider_status = 'approved'
+    AND template.parameter_count = 0
+    AND NOT EXISTS (
+      SELECT 1 FROM app.property_predator_whatsapp_live_binding_revocations AS revocation
+      WHERE revocation.workspace_id = binding.workspace_id
+        AND revocation.binding_id = binding.id
+    );
+  SELECT regexp_replace(point.normalized_value, '^\\+', ''),
+    public.digest(regexp_replace(point.normalized_value, '^\\+', ''), 'sha256'),
+    public.digest(point.kind || pg_catalog.chr(31) || point.value
+      || pg_catalog.chr(31) || point.normalized_value, 'sha256')
+  INTO selected_recipient, selected_recipient_sha, expected_endpoint_sha
+  FROM app.contact_points AS point
+  WHERE point.workspace_id = p_workspace_id AND point.id = p_contact_point_id
+    AND point.contact_id = p_contact_id AND point.kind = 'whatsapp'
+    AND point.is_verified AND point.dedupe_state = 'normal' AND point.deleted_at IS NULL
+    AND regexp_replace(point.normalized_value, '^\\+', '') ~ '^[1-9][0-9]{6,14}$';
+  expected_action_scope := public.digest(format('whatsapp:%s:%s:%s:%s:%s:%s',
+    p_workspace_id, p_binding_id, p_template_id,
+    encode(selected_recipient_sha, 'hex'), p_purpose, p_consent_event_id), 'sha256');
+  IF selected_connection IS NULL OR selected_recipient IS NULL OR NOT EXISTS (
+    SELECT 1 FROM app.workspace_memberships AS membership
+    WHERE membership.workspace_id = p_workspace_id AND membership.user_id = selected_user
+      AND membership.status = 'active' AND membership.role IN ('owner', 'admin')
+  ) OR NOT EXISTS (
+    SELECT 1 FROM app.communication_consent_events AS consent
+    WHERE consent.workspace_id = p_workspace_id AND consent.id = p_consent_event_id
+      AND consent.contact_id = p_contact_id AND consent.contact_point_id = p_contact_point_id
+      AND consent.channel = 'whatsapp' AND consent.purpose = p_purpose
+      AND consent.state = 'granted' AND consent.endpoint_identity_sha256 = expected_endpoint_sha
+      AND consent.id = (
+        SELECT latest.id FROM app.communication_consent_events AS latest
+        WHERE latest.workspace_id = p_workspace_id
+          AND latest.contact_point_id = p_contact_point_id
+          AND latest.channel = 'whatsapp' AND latest.purpose = p_purpose
+        ORDER BY latest.occurred_at DESC, latest.recorded_at DESC, latest.id DESC LIMIT 1
+      )
+  ) OR EXISTS (
+    SELECT 1 FROM app.communication_suppression_events AS suppression
+    WHERE suppression.workspace_id = p_workspace_id
+      AND suppression.contact_point_id = p_contact_point_id
+      AND suppression.channel = 'whatsapp'
+      AND (suppression.purpose IS NULL OR suppression.purpose = p_purpose)
+      AND suppression.endpoint_identity_sha256 = expected_endpoint_sha
+      AND suppression.state = 'suppressed'
+      AND suppression.id = (
+        SELECT latest.id FROM app.communication_suppression_events AS latest
+        WHERE latest.workspace_id = p_workspace_id
+          AND latest.contact_point_id = p_contact_point_id
+          AND latest.channel = 'whatsapp'
+          AND latest.purpose IS NOT DISTINCT FROM suppression.purpose
+        ORDER BY latest.occurred_at DESC, latest.recorded_at DESC, latest.id DESC LIMIT 1
+      )
+  ) THEN RAISE EXCEPTION 'WhatsApp live consent/PECR authority denied' USING ERRCODE = '42501'; END IF;
+  SELECT sender_route.decision_sha256, instigator_route.decision_sha256
+    INTO selected_pecr_sha, selected_instigator_sha
+  FROM app_private.affiliate_compliance_policy_publication_events AS publication
+  JOIN app_private.affiliate_compliance_policy_review_events AS legal_review
+    ON legal_review.workspace_id = publication.workspace_id
+   AND legal_review.id = publication.legal_review_event_id
+   AND legal_review.policy_pack_id = publication.policy_pack_id
+   AND legal_review.bundle_sha256 = publication.bundle_sha256
+   AND legal_review.review_dimension = 'legal' AND legal_review.decision = 'approved'
+  JOIN app_private.affiliate_compliance_policy_review_events AS commercial_review
+    ON commercial_review.workspace_id = publication.workspace_id
+   AND commercial_review.id = publication.commercial_review_event_id
+   AND commercial_review.policy_pack_id = publication.policy_pack_id
+   AND commercial_review.bundle_sha256 = publication.bundle_sha256
+   AND commercial_review.review_dimension = 'commercial' AND commercial_review.decision = 'approved'
+  JOIN app_private.affiliate_compliance_specialist_decision_events AS sender_route
+    ON sender_route.workspace_id = publication.workspace_id
+   AND sender_route.subject_id = p_compliance_subject_id
+   AND sender_route.id = p_pecr_sender_decision_event_id
+   AND sender_route.decision_kind = 'pecr_sender_route'
+   AND sender_route.decision_state = 'approved'
+   AND sender_route.action_scope_sha256 = expected_action_scope
+  JOIN app_private.affiliate_compliance_specialist_decision_events AS instigator_route
+    ON instigator_route.workspace_id = publication.workspace_id
+   AND instigator_route.subject_id = p_compliance_subject_id
+   AND instigator_route.id = p_pecr_instigator_decision_event_id
+   AND instigator_route.decision_kind = 'pecr_instigator_route'
+   AND instigator_route.decision_state = 'approved'
+   AND instigator_route.action_scope_sha256 = expected_action_scope
+  JOIN app_private.affiliate_compliance_permission_use_receipts AS permission_use
+    ON permission_use.workspace_id = publication.workspace_id
+   AND permission_use.subject_id = p_compliance_subject_id
+   AND permission_use.id = p_permission_use_receipt_id
+   AND permission_use.permission = 'whatsapp.send'
+   AND permission_use.action_scope_sha256 = expected_action_scope
+   AND permission_use.eligibility_decision = 'allow'
+   AND permission_use.use_state = 'consumed'
+   AND permission_use.provider_effects IS FALSE
+  WHERE publication.workspace_id = p_workspace_id
+    AND publication.id = p_policy_publication_event_id
+    AND publication.publication_state = 'published'
+    AND publication.effective_at <= statement_timestamp()
+    AND (publication.expires_at IS NULL OR publication.expires_at >= p_authority_valid_until)
+    AND sender_route.valid_from <= statement_timestamp()
+    AND (sender_route.valid_until IS NULL OR sender_route.valid_until >= p_authority_valid_until)
+    AND instigator_route.valid_from <= statement_timestamp()
+    AND (instigator_route.valid_until IS NULL OR instigator_route.valid_until >= p_authority_valid_until)
+    AND permission_use.recorded_by_user_id = selected_user
+    AND permission_use.recorded_request_id = selected_request
+    AND permission_use.consumed_at <= statement_timestamp()
+    AND permission_use.decision_expires_at >= p_authority_valid_until
+    AND NOT EXISTS (
+      SELECT 1 FROM app_private.affiliate_compliance_policy_publication_events AS successor
+      WHERE successor.workspace_id = publication.workspace_id
+        AND successor.policy_pack_id = publication.policy_pack_id
+        AND successor.supersedes_event_id = publication.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM app_private.affiliate_compliance_policy_review_events AS successor
+      WHERE successor.workspace_id = legal_review.workspace_id
+        AND successor.policy_pack_id = legal_review.policy_pack_id
+        AND successor.review_dimension = legal_review.review_dimension
+        AND successor.supersedes_event_id = legal_review.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM app_private.affiliate_compliance_policy_review_events AS successor
+      WHERE successor.workspace_id = commercial_review.workspace_id
+        AND successor.policy_pack_id = commercial_review.policy_pack_id
+        AND successor.review_dimension = commercial_review.review_dimension
+        AND successor.supersedes_event_id = commercial_review.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM app_private.affiliate_compliance_specialist_decision_events AS successor
+      WHERE successor.workspace_id = sender_route.workspace_id
+        AND successor.subject_id = sender_route.subject_id
+        AND successor.decision_kind = sender_route.decision_kind
+        AND successor.supersedes_event_id = sender_route.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM app_private.affiliate_compliance_specialist_decision_events AS successor
+      WHERE successor.workspace_id = instigator_route.workspace_id
+        AND successor.subject_id = instigator_route.subject_id
+        AND successor.decision_kind = instigator_route.decision_kind
+        AND successor.supersedes_event_id = instigator_route.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM app_private.affiliate_compliance_permission_fact_events AS block
+      WHERE block.workspace_id = permission_use.workspace_id
+        AND block.subject_id = permission_use.subject_id
+        AND block.permission = 'whatsapp.send'
+        AND block.action_scope_sha256 = expected_action_scope
+        AND block.permission_state IN ('blocked', 'revoked', 'expired')
+        AND block.valid_from <= statement_timestamp()
+        AND (block.valid_until IS NULL OR block.valid_until > statement_timestamp())
+        AND NOT EXISTS (
+          SELECT 1 FROM app_private.affiliate_compliance_permission_fact_events AS successor
+          WHERE successor.workspace_id = block.workspace_id
+            AND successor.subject_id = block.subject_id
+            AND successor.permission = block.permission
+            AND successor.action_scope_sha256 = block.action_scope_sha256
+            AND successor.supersedes_event_id = block.id
+        )
+    );
+  IF selected_pecr_sha IS NULL OR selected_instigator_sha IS NULL THEN
+    RAISE EXCEPTION 'WhatsApp live durable legal/operator evidence denied' USING ERRCODE = '42501';
+  END IF;
+  IF (SELECT count(*) FROM app.property_predator_whatsapp_live_jobs AS job
+      WHERE job.workspace_id = p_workspace_id AND job.binding_id = p_binding_id
+        AND job.utc_day = (statement_timestamp() AT TIME ZONE 'UTC')::date
+        AND job.state <> 'cancelled') >= 1
+     OR (SELECT count(*) FROM app.property_predator_whatsapp_live_jobs AS job
+      WHERE job.workspace_id = p_workspace_id AND job.binding_id = p_binding_id
+        AND job.utc_month = date_trunc('month', statement_timestamp() AT TIME ZONE 'UTC')::date
+        AND job.state <> 'cancelled') >= 3 THEN
+    RAISE EXCEPTION 'WhatsApp live hard send cap reached' USING ERRCODE = '42501';
+  END IF;
+  INSERT INTO app.property_predator_whatsapp_live_authorities (
+    id, workspace_id, binding_id, template_id, provider_connection_id,
+    contact_id, contact_point_id, recipient_sha256, purpose, consent_event_id,
+    compliance_subject_id, policy_publication_event_id,
+    pecr_sender_decision_event_id, pecr_instigator_decision_event_id,
+    permission_use_receipt_id,
+    pecr_decision, pecr_evidence_sha256, operator_instigator_decision,
+    operator_instigator_sha256, action_scope_sha256, operator_user_id,
+    operator_request_id, evaluated_at, valid_until
+  ) VALUES (
+    authority_id, p_workspace_id, p_binding_id, p_template_id, selected_connection,
+    p_contact_id, p_contact_point_id, selected_recipient_sha, p_purpose, p_consent_event_id,
+    p_compliance_subject_id, p_policy_publication_event_id,
+    p_pecr_sender_decision_event_id, p_pecr_instigator_decision_event_id,
+    p_permission_use_receipt_id,
+    'eligible', selected_pecr_sha, 'eligible', selected_instigator_sha,
+    expected_action_scope,
+    selected_user, selected_request, statement_timestamp(), p_authority_valid_until
+  );
+  INSERT INTO app.property_predator_whatsapp_live_jobs (
+    id, workspace_id, binding_id, template_id, authority_id, provider_connection_id,
+    recipient_sha256, operation_id, idempotency_key_sha256, request_sha256,
+    utc_day, utc_month, created_by_user_id
+  ) VALUES (
+    selected_id, p_workspace_id, p_binding_id, p_template_id, authority_id,
+    selected_connection, selected_recipient_sha, p_operation_id,
+    p_idempotency_key_sha256, p_request_sha256,
+    (statement_timestamp() AT TIME ZONE 'UTC')::date,
+    date_trunc('month', statement_timestamp() AT TIME ZONE 'UTC')::date, selected_user
+  );
+  RETURN selected_id;
+END
+$function$;
 RESET ROLE;
 SET LOCAL ROLE r72_owner;
 CREATE OR REPLACE FUNCTION app_private.whatsapp_live_job_identity_guard()
@@ -1525,6 +1795,9 @@ BEGIN
  EXCEPTION WHEN sqlstate '23514' OR sqlstate '42501' THEN RETURN jsonb_build_object('ok',false,'reason','newer_draft'); END;
  IF programme->>'approvalId' IS NULL OR programme->>'programmeSha256' IS DISTINCT FROM encode(s.programme_sha256,'hex')
   OR programme->>'sourceContentSha256' IS DISTINCT FROM encode(s.source_sha256,'hex') THEN RETURN jsonb_build_object('ok',false,'reason','newer_draft'); END IF;
+ -- The draft's own current owner approval (a later rejection stops a scheduled send).
+ BEGIN PERFORM app_private.mhp_owned_whatsapp_content(s.source_version_id,s.source_sha256);
+ EXCEPTION WHEN sqlstate '23514' OR sqlstate '42501' THEN RETURN jsonb_build_object('ok',false,'reason','newer_draft'); END;
  observation:=app_private.mhp_whatsapp_template_current(s.binding_id,s.meta_template_id,programme->>'templateName',programme->>'language',
   decode(programme->>'bodySha256','hex'));
  IF observation IS NULL THEN RETURN jsonb_build_object('ok',false,'reason','template_not_approved'); END IF;

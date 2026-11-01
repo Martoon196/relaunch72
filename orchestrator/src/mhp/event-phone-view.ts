@@ -29,12 +29,11 @@ export function mhpEventPhoneSentPage(): string {
 }
 export function mhpEventPhoneOpenPage(token: string): string {
   // GET never consumes the link (mail scanners follow links); this explicit button does.
-  return page('Continue', `<h1>Add a text reminder.</h1><p>Press continue to choose your mobile number.</p><section><form method="post" action="${MHP_EVENT_PHONE_ROUTE}/open">`
+  return page('Continue', `<h1>Webinar reminders and follow-up.</h1><p>Press continue to choose how we contact you about this webinar.</p><section><form method="post" action="${MHP_EVENT_PHONE_ROUTE}/open">`
     + `${hidden('t', token)}<button>Continue</button></form></section>`);
 }
 export function mhpEventPhoneChoosePage(input: { status: MhpEventPhoneStatus; csrf: string; join?: { nonce: string; joinExpiresAt: string; sender: string }; notice?: string; sender: string; whatsapp?: boolean }): string {
-  const { status } = input, sms = status.sms;
-  whatsappOffered = input.whatsapp === true;
+  const { status } = input, sms = status.sms, offered = input.whatsapp === true;
   const greeting = `<h1>${status.firstName ? `${esc(status.firstName)}, your` : 'Your'} webinar text reminder</h1>`
     + (status.startsAt ? `<p>The webinar starts ${esc(ukTime(status.startsAt))}.</p>` : '');
   const join = input.join;
@@ -48,19 +47,17 @@ export function mhpEventPhoneChoosePage(input: { status: MhpEventPhoneStatus; cs
   if (sms?.state === 'verified' && sms.grantReceiptId) {
     return page('You are on the list', `${greeting}${notice(input.notice)}<section><p>${esc(sms.phoneMasked)} is confirmed. If Martin includes you in the reminder list, we'll text you about this webinar only. Reply STOP to any text to stop.</p>`
       + `<form method="post" action="${MHP_EVENT_PHONE_ROUTE}/withdraw">${hidden('csrf', input.csrf)}${hidden('receiptId', sms.grantReceiptId)}<button>Stop webinar texts</button></form></section>`
-      + `<section><p>Changed number? Enter a new one below. Your old number gets no reminder.</p>${form(input.csrf, input.sender)}</section>`);
+      + `<section><p>Changed number? Enter a new one below. Your old number gets no reminder.</p>${form(input.csrf, input.sender, offered)}</section>`);
   }
-  if (!status.open) return page('Reminders closed', `${greeting}<p>Text reminders for this webinar are closed. Your email reminders carry on.</p>`);
+  if (!status.open) return page('Reminders closed', `${greeting}<p>Text reminders for this webinar are closed. Your email reminders carry on.</p>${whatsappLink(offered)}`);
   const prior = sms?.state === 'withdrawn' ? 'You stopped webinar texts. You can opt in again below.'
     : sms?.state === 'awaiting_join' ? `We're still waiting for your JOIN text from ${sms.phoneMasked}. Lost the code? Enter your number again for a new one.`
     : sms?.state === 'held' ? 'We could not match that number automatically. Martin will check it; you can also try a different mobile.' : '';
   return page('Choose your mobile', `${greeting}${notice(input.notice)}${prior ? `<p class="status">${esc(prior)}</p>` : ''}`
-    + `<section>${form(input.csrf, input.sender)}</section>`);
+    + `<section>${form(input.csrf, input.sender, offered)}</section>`);
 }
-let whatsappOffered = false;
-function form(csrf: string, sender: string): string {
-  return smsForm(csrf, sender) + (whatsappOffered ? `<p class="small"><a href="${MHP_EVENT_PHONE_ROUTE}/whatsapp">Prefer a WhatsApp follow-up instead?</a></p>` : '');
-}
+const whatsappLink = (offered: boolean): string => offered ? `<p class="small"><a href="${MHP_EVENT_PHONE_ROUTE}/whatsapp">Prefer a WhatsApp follow-up instead?</a></p>` : '';
+function form(csrf: string, sender: string, offered: boolean): string { return smsForm(csrf, sender) + whatsappLink(offered); }
 function smsForm(csrf: string, sender: string): string {
   return `<form method="post" action="${MHP_EVENT_PHONE_ROUTE}/choose">${hidden('csrf', csrf)}`
     + `<label for="mobile">Your UK mobile<input id="mobile" name="mobile" type="tel" inputmode="tel" autocomplete="tel" maxlength="32" placeholder="07700 900123" required></label>`

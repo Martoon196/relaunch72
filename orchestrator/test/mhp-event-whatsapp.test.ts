@@ -22,20 +22,26 @@ test('Meta template read: exact GET with the worker credential; status, body and
   let seen: { url: string; init?: RequestInit } | null = null;
   const template = { id: '1441099094827445', name: 'mhp_webinar_20261104_reminder_v1', language: 'en_GB', status: 'APPROVED', category: 'MARKETING',
     components: [{ type: 'BODY', text: BODY }] };
-  const ok = await readMetaWhatsAppTemplate({ binding, credentials: { accessToken: 'synthetic-token-value-12345' }, metaTemplateId: '1441099094827445',
-    fetch: (async (url: string, init?: RequestInit) => { seen = { url, init }; return new Response(JSON.stringify(template), { status: 200 }); }) as typeof fetch });
-  assert.equal(seen!.url, 'https://graph.facebook.com/v24.0/1441099094827445?fields=id,name,language,status,category,components');
+  const ok = await readMetaWhatsAppTemplate({ binding, credentials: { accessToken: 'synthetic-token-value-12345' }, metaTemplateId: '1441099094827445', templateName: 'mhp_webinar_20261104_reminder_v1',
+    fetch: (async (url: string, init?: RequestInit) => { seen = { url, init }; return new Response(JSON.stringify({ data: [template] }), { status: 200 }); }) as typeof fetch });
+  assert.equal(seen!.url, 'https://graph.facebook.com/v24.0/223456789012/message_templates?name=mhp_webinar_20261104_reminder_v1&fields=id,name,language,status,category,components&limit=50');
   assert.equal((seen!.init!.headers as Record<string, string>).Authorization, 'Bearer synthetic-token-value-12345');
   assert.equal(seen!.init!.method, 'GET');
   assert.deepEqual({ status: ok!.status, parameters: ok!.parameterCount, body: ok!.bodySha256 }, { status: 'APPROVED', parameters: 0, body: sha(BODY) });
-  const paused = await readMetaWhatsAppTemplate({ binding, credentials: { accessToken: 'synthetic-token-value-12345' }, metaTemplateId: '1441099094827445',
-    fetch: (async () => new Response(JSON.stringify({ ...template, status: 'PAUSED', components: [{ type: 'BODY', text: 'Hi {{1}}' }] }), { status: 200 })) as typeof fetch });
+  const paused = await readMetaWhatsAppTemplate({ binding, credentials: { accessToken: 'synthetic-token-value-12345' }, metaTemplateId: '1441099094827445', templateName: 'mhp_webinar_20261104_reminder_v1',
+    fetch: (async () => new Response(JSON.stringify({ data: [{ ...template, status: 'PAUSED', components: [{ type: 'BODY', text: 'Hi {{1}}' }] }] }), { status: 200 })) as typeof fetch });
   assert.deepEqual([paused!.status, paused!.parameterCount], ['PAUSED', 1]);
-  for (const response of [new Response('nope', { status: 500 }), new Response('{"id":"999999"}', { status: 200 }), new Response('not json', { status: 200 })]) {
-    assert.equal(await readMetaWhatsAppTemplate({ binding, credentials: { accessToken: 'synthetic-token-value-12345' }, metaTemplateId: '1441099094827445',
+  const withButton = await readMetaWhatsAppTemplate({ binding, credentials: { accessToken: 'synthetic-token-value-12345' }, metaTemplateId: '1441099094827445', templateName: 'mhp_webinar_20261104_reminder_v1',
+    fetch: (async () => new Response(JSON.stringify({ data: [{ ...template, components: [{ type: 'BODY', text: BODY }, { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Go', url: 'https://example.invalid' }] }] }] }), { status: 200 })) as typeof fetch });
+  assert.equal(withButton!.status, 'APPROVED');
+  assert.notEqual(withButton!.bodySha256, sha(BODY), 'a header, footer or button the owner never reviewed can never match the draft');
+  for (const response of [new Response('nope', { status: 500 }), new Response('{"id":"999999"}', { status: 200 }), new Response('not json', { status: 200 }),
+    new Response(JSON.stringify(template), { status: 200 }), new Response(JSON.stringify({ data: [{ ...template, id: '999999' }] }), { status: 200 }),
+    new Response(JSON.stringify({ data: [template, template] }), { status: 200 })]) {
+    assert.equal(await readMetaWhatsAppTemplate({ binding, credentials: { accessToken: 'synthetic-token-value-12345' }, metaTemplateId: '1441099094827445', templateName: 'mhp_webinar_20261104_reminder_v1',
       fetch: (async () => response) as typeof fetch }), null);
   }
-  assert.equal(await readMetaWhatsAppTemplate({ binding, credentials: { accessToken: 'synthetic-token-value-12345' }, metaTemplateId: '1441099094827445',
+  assert.equal(await readMetaWhatsAppTemplate({ binding, credentials: { accessToken: 'synthetic-token-value-12345' }, metaTemplateId: '1441099094827445', templateName: 'mhp_webinar_20261104_reminder_v1',
     fetch: (async () => { throw new Error('network'); }) as typeof fetch }), null);
 });
 

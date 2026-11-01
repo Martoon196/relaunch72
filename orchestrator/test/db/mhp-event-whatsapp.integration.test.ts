@@ -132,6 +132,12 @@ test('MHP009C WhatsApp follow-up: own JOIN, Meta read, owner batch and absolute-
       (SELECT count(*)::int FROM app.communication_suppression_events WHERE channel='whatsapp' AND reason='whatsapp_stop') wa,
       (SELECT count(*)::int FROM app.communication_suppression_events WHERE channel='sms') sms`);
     assert.deepEqual(stop[0], { wa: 1, sms: 0 });
+    // STOP is matched as the first word, so a polite repeat is honoured too (and still never touches SMS).
+    assert.equal(await deliver(p, inbound(2, 'Stop please')), 'applied');
+    const again = await ownerQuery<{ wa: number; sms: number }>(owner, `SELECT
+      (SELECT count(*)::int FROM app.communication_suppression_events WHERE channel='whatsapp' AND reason='whatsapp_stop') wa,
+      (SELECT count(*)::int FROM app.communication_suppression_events WHERE channel='sms') sms`);
+    assert.deepEqual(again[0], { wa: 2, sms: 0 });
 
     // No owner-typed approval: until the worker reads APPROVED from Meta nobody can be scheduled.
     // The worker learns exactly which template to read; the sealed credential decrypts only in the worker.

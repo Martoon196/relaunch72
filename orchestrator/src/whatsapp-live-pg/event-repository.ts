@@ -38,11 +38,17 @@ export interface MetaTemplateObservation {
   readonly parameterCount: number; readonly bodySha256: string; readonly componentsSha256: string; readonly responseSha256: string;
 }
 
-/** GET /{template-id}: the exact template Meta holds now. Never throws for a provider answer; null = unproven. */
+/**
+ * The exact template Meta holds now, read through this binding's own WABA
+ * (GET /{waba-id}/message_templates), so a template ID visible to the token
+ * but owned by another WABA can never count. Never throws for a provider
+ * answer; null = unproven.
+ */
 export async function readMetaWhatsAppTemplate(input: Readonly<{ binding: MetaWhatsAppBinding; credentials: MetaWhatsAppDispatchCredentials;
-  metaTemplateId: string; fetch: typeof fetch; timeoutMs?: number }>): Promise<MetaTemplateObservation | null> {
-  if (!META_ID.test(input.metaTemplateId) || input.binding.graphApiVersion !== 'v24.0') fail('template read input is invalid');
-  const url = `https://graph.facebook.com/${input.binding.graphApiVersion}/${input.metaTemplateId}?fields=id,name,language,status,category,components`;
+  metaTemplateId: string; templateName: string; fetch: typeof fetch; timeoutMs?: number }>): Promise<MetaTemplateObservation | null> {
+  if (!META_ID.test(input.metaTemplateId) || !TEMPLATE.test(input.templateName) || input.binding.graphApiVersion !== 'v24.0') fail('template read input is invalid');
+  const url = `https://graph.facebook.com/${input.binding.graphApiVersion}/${input.binding.wabaId}/message_templates?name=${encodeURIComponent(input.templateName)}`
+    + '&fields=id,name,language,status,category,components&limit=50';
   let text: string;
   try {
     const response = await input.fetch(url, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(input.timeoutMs ?? 10_000),
@@ -51,8 +57,13 @@ export async function readMetaWhatsAppTemplate(input: Readonly<{ binding: MetaWh
     if (!response.ok) return null;
   } catch { return null; }
   let parsed: Record<string, unknown>;
-  try { const candidate: unknown = JSON.parse(text); if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null; parsed = candidate as Record<string, unknown>; }
-  catch { return null; }
+  try {
+    const candidate: unknown = JSON.parse(text);
+    const list = candidate && typeof candidate === 'object' && !Array.isArray(candidate) ? (candidate as { data?: unknown }).data : null;
+    const match = Array.isArray(list) ? list.filter(t => t && typeof t === 'object' && (t as { id?: unknown }).id === input.metaTemplateId) : [];
+    if (match.length !== 1) return null;
+    parsed = match[0] as Record<string, unknown>;
+  } catch { return null; }
   const components = Array.isArray(parsed.components) ? parsed.components as Record<string, unknown>[] : null;
   const bodyComponent = components?.find(c => c && c.type === 'BODY');
   const body = typeof bodyComponent?.text === 'string' ? bodyComponent.text : null;
@@ -60,11 +71,15 @@ export async function readMetaWhatsAppTemplate(input: Readonly<{ binding: MetaWh
       || !LANGUAGE.test(parsed.language) || typeof parsed.status !== 'string' || !/^[A-Z_]{1,40}$/u.test(parsed.status)
       || typeof parsed.category !== 'string' || !['MARKETING', 'UTILITY', 'AUTHENTICATION'].includes(parsed.category) || !components || body === null) return null;
   const parameters = new Set([...body.matchAll(/\{\{([0-9]+)\}\}/gu)].map(m => m[1])).size;
+  // Only a BODY-only template can equal the owner-approved local draft; any header, footer or
+  // button is content the owner never reviewed, so its digest can never match.
+  const bodyOnly = components.length === 1;
   return Object.freeze({ name: parsed.name, language: parsed.language, category: parsed.category, status: parsed.status,
-    parameterCount: Math.min(parameters, 10), bodySha256: sha(body), componentsSha256: sha(canonical(components)), responseSha256: sha(text) });
+    parameterCount: Math.min(parameters, 10), bodySha256: bodyOnly ? sha(body) : sha(`non-body-components:${canonical(components)}`),
+    componentsSha256: sha(canonical(components)), responseSha256: sha(text) });
 }
 
-interface Target { bindingId: string; binding: MetaWhatsAppBinding; envelope: MetaWhatsAppDispatchCredentialEnvelope; metaTemplateId: string }
+interface Target { bindingId: string; binding: MetaWhatsAppBinding; envelope: MetaWhatsAppDispatchCredentialEnvelope; metaTemplateId: string; templateName: string }
 interface Material extends Target { jobId: string; leaseVersion: number; recipient: string; templateName: string; languageCode: string;
   operationId: string; requestSha256: string }
 
@@ -101,7 +116,9 @@ export class PgMhpEventWhatsAppRepository {
       [MHP_EVENT_WHATSAPP_WORKSPACE_ID, this.#bindingId], true);
     return rows.map(row => {
       if (typeof row.meta_template_id !== 'string' || !META_ID.test(row.meta_template_id)) fail('returned an invalid template id');
-      return { bindingId: this.#bindingId, binding: bindingOf(row, MHP_EVENT_WHATSAPP_WORKSPACE_ID), envelope: envelopeOf(row), metaTemplateId: row.meta_template_id };
+      if (typeof row.template_name !== 'string' || !TEMPLATE.test(row.template_name)) fail('returned an invalid template name');
+      return { bindingId: this.#bindingId, binding: bindingOf(row, MHP_EVENT_WHATSAPP_WORKSPACE_ID), envelope: envelopeOf(row), metaTemplateId: row.meta_template_id,
+        templateName: row.template_name };
     });
   }
   async recordObservation(metaTemplateId: string, o: MetaTemplateObservation): Promise<void> {
@@ -159,7 +176,8 @@ export async function runMhpEventWhatsAppOnce(input: Readonly<{
   const decrypt = (target: Target) => decryptMetaWhatsAppDispatchCredentials({ binding: target.binding, envelope: target.envelope,
     encryptionKey: input.encryptionKey, expectedKeyVersion: input.encryptionKeyVersion });
   const observe = async (target: Target, credentials: MetaWhatsAppDispatchCredentials) => {
-    const observation = await readMetaWhatsAppTemplate({ binding: target.binding, credentials, metaTemplateId: target.metaTemplateId, fetch: input.fetch });
+    const observation = await readMetaWhatsAppTemplate({ binding: target.binding, credentials, metaTemplateId: target.metaTemplateId,
+      templateName: target.templateName, fetch: input.fetch });
     if (observation) await input.repository.recordObservation(target.metaTemplateId, observation);
   };
   if (input.observeNow) for (const target of await input.repository.observationTargets()) await observe(target, decrypt(target));

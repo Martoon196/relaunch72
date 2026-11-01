@@ -218,7 +218,7 @@ export async function handleMhpEventWhatsAppOwner(req: IncomingMessage, res: Ser
     const control = f('action');
     if (control !== 'hold' && control !== 'cancel') throw new MhpCommerceError(400, 'Refresh the schedule.');
     const done = await owner.control(identity, context.requestId, { commandId, action: control, sendId: f('sendId') });
-    reply(200, await render(f('programmeVersionId'), done.inFlight === true ? 'Already handed to WhatsApp; it could not be stopped. Check its status.' : done.cancelled === true ? 'Cancelled. It will not be sent.' : 'Held. It will not be sent.')); return true;
+    reply(200, await render(f('programmeVersionId'), done.inFlight === true ? 'Already handed to WhatsApp, so it could not be stopped. Check its status.' : done.cancelled === true ? 'Cancelled. It will not be sent.' : 'Held. It will not be sent.')); return true;
   } catch (error) {
     outcome = 'service_error';
     reply(error instanceof MhpCommerceError ? error.status : 503, error instanceof MhpCommerceError ? error.message : 'Unavailable. Check recorded status before retrying.', false);

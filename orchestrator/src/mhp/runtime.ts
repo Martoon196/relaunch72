@@ -156,6 +156,7 @@ export async function buildMhpRuntime(input: {
     // MHP009C WhatsApp follow-up owner page: its own r72_whatsapp_live_command pool, exact boundary first.
     const waBinding = env.MHP_EVENT_WHATSAPP_BINDING_ID?.trim() ?? '';
     if (env.MHP_EVENT_WHATSAPP_OWNER?.trim() === 'enabled' && env.DATABASE_WHATSAPP_LIVE_COMMAND_URL?.trim() && /^[0-9a-f-]{36}$/u.test(waBinding)
+        && /^[1-9][0-9]{4,29}$/u.test(env.MHP_EVENT_WHATSAPP_META_TEMPLATE_ID?.trim() ?? '')
         && /^webinar-[0-9]{4}-[0-9]{2}-[0-9]{2}$/u.test(webinar.campaign)) {
       let waPool: Pool | undefined;
       try {
@@ -168,7 +169,7 @@ export async function buildMhpRuntime(input: {
           whatsappPool: waPool, reader: new CompanyContentService({ transactionRunner: contentReader }), adapter: smsAdapter,
           approvals: new CompanyContentService({ transactionRunner: mhpOwnerEmailContentRunner(input.contentCommandPool) }),
           brand: async identity => (await sourceRepository.snapshot(identity, webinar.campaign)).brand, campaign: webinar.campaign, bindingId: waBinding,
-          metaTemplateId: env.MHP_EVENT_WHATSAPP_META_TEMPLATE_ID?.trim() || '1441099094827445' });
+          metaTemplateId: env.MHP_EVENT_WHATSAPP_META_TEMPLATE_ID!.trim() });
       } catch { await waPool?.end().catch(() => undefined); eventWhatsAppOwner = undefined; }
     }
     ownedSms = new MhpOwnedSmsService({ marketingWorkspace, authorize: (identity, requestId) => sequences.contentContext(identity, requestId),
