@@ -1,4 +1,4 @@
-name: Central content exact PostgreSQL proof
+name: SEO exact Linux proof
 on:
   push:
     branches: [codex/mhp-linux-proof-20261031]
@@ -8,41 +8,19 @@ permissions:
 jobs:
   exact-source-gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: local-ci-test-only
-          POSTGRES_DB: relaunch72_test
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      TEST_DATABASE_URL: postgresql://ci_migrator:ci-owner-test-only@127.0.0.1:5432/relaunch72_test
-      TEST_DATABASE_RESET_CONFIRM: reset-disposable-branch
-      TEST_DATABASE_SSL_MODE: disable
+    timeout-minutes: 15
     steps:
-      - name: Model the managed PostgreSQL migration identity
-        env:
-          PG_CONTAINER: ${{ job.services.postgres.id }}
-        run: >-
-          docker exec "$PG_CONTAINER" psql -U postgres -d relaunch72_test -v ON_ERROR_STOP=1
-          -c "CREATE ROLE ci_migrator LOGIN CREATEROLE CREATEDB PASSWORD 'ci-owner-test-only'; ALTER DATABASE relaunch72_test OWNER TO ci_migrator;"
-      - name: Checkout exact reviewed release source
+      - name: Checkout exact reviewed SEO release source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Martoon196/relaunch72
-          ref: 6ce2900d3a66c2ae096b33a2bfbc078bdab86178
+          ref: ebf9a791067fdb7d268e924bc50fc8fb37214245
           persist-credentials: false
       - name: Assert exact source identity
+        shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = 6ce2900d3a66c2ae096b33a2bfbc078bdab86178
-          test "$(git rev-parse 'HEAD^{tree}')" = f94beb222fb29ebbf2474d91ddb0ab3d74d394b1
+          test "$(git rev-parse HEAD)" = ebf9a791067fdb7d268e924bc50fc8fb37214245
+          test "$(git rev-parse 'HEAD^{tree}')" = 46471dbe37bca20863b72db152fe5f9a5e93aae7
           test -z "$(git status --porcelain)"
           git rev-parse HEAD 'HEAD^{tree}'
       - name: Match Render runtime
@@ -53,9 +31,7 @@ jobs:
         run: npm ci --ignore-scripts --include=dev
       - name: Check supply chain
         run: node scripts/supply-chain.mjs --check
-      - name: Typecheck exact final project
-        run: npm --prefix orchestrator run typecheck
-      - name: Run exact final normal suite
-        run: npm --prefix orchestrator test
-      - name: Run full explicit disposable PostgreSQL integration command
-        run: npm --prefix orchestrator run test:db:integration
+      - name: Typecheck whole project
+        run: npm run typecheck
+      - name: Run whole normal suite
+        run: npm test
