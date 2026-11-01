@@ -5,7 +5,10 @@ PROPOSALS ONLY. Nothing here is implemented, ratified or authorised. These answe
 `claude/009b-r3` keeps the existing behaviour for each open item and says so; it does not
 pre-empt these decisions.
 
-## 1. Signed SMS STOP from a number with no contact point (release blocker, open)
+## 1. Signed SMS STOP from a number with no contact point (implemented in the second round, 1 November 2026)
+
+**Status:** Astra asked for this as a bounded fix; it is implemented on `claude/009b-r3` (SMS, 0131) and `claude/009c-r3` (WhatsApp, 0132) as described in the two R3 handoffs. The implemented shape differs from the text below in three small ways: the table is `app_private.mhp_unlinked_opt_events` with a `channel` column shared by both channels under per-channel RLS; the key is the same phone digest the intents use (sha256 of the E.164 number); and the unlinked `stop` is not copied onto a later point, because a JOIN is held while the latest event is `stop`, so a point can only be created after a signed START. The original proposal follows for the record.
+
 
 **Today (0056 and the 009B candidate unchanged):** `record_sms_live_inbound_projection` requires
 a verified contact point. A signed STOP from any other number raises `23503`, the webhook answers 503,
@@ -36,7 +39,10 @@ JOIN was held, can reply STOP before any contact point exists.
 - No change to 0056 function bytes. The legacy owner path never sees the new table, and the
   existing unknown-number behaviour for ordinary texts is preserved.
 
-## 2. WhatsApp STOP projection (0055) (release blocker for 009C, open)
+## 2. WhatsApp STOP projection (0055) (implemented; linked behaviour accepted in principle by Astra)
+
+**Status:** the linked WhatsApp STOP is implemented in 0132 and accepted in principle. The unlinked WhatsApp STOP is implemented in the second round using item 1's table with `channel='whatsapp'`; WhatsApp has no START release in this packet (a linked WhatsApp STOP has none either).
+
 
 **Today:** `record_whatsapp_live_inbound_projection` (0055) writes no suppression or consent
 withdrawal for a WhatsApp "STOP". It is projected as an ordinary inbound message.
@@ -51,7 +57,10 @@ withdrawal for a WhatsApp "STOP". It is projected as an ordinary inbound message
 - SMS STOP never writes WhatsApp suppression, and WhatsApp STOP never writes SMS suppression. The
   two channels are tracked separately; neither opt-out is inferred from the other.
 
-## 3. Meta template read and token custody (open)
+## 3. Meta template read and token custody (implemented; accepted in principle by Astra)
+
+**Status:** implemented as a worker-only, WABA-specific read: `GET /v24.0/{waba-id}/message_templates?name=<name>&fields=id,name,language,status,category,components&limit=50`, matched by template id, so the template must belong to this sender's own WhatsApp Business Account. Any header, footer or button makes the body digest unmatchable. Since the second round a failed read is itself recorded as a `READ_FAILED` observation and the worker never begins a call without a fresh successful read. The text below is the original proposal.
+
 
 **Proposal:**
 - **Operation:** `GET https://graph.facebook.com/v21.0/{template-id}?fields=id,name,language,status,category,components`
