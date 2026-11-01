@@ -22,6 +22,7 @@ const MHP_WORKSPACE_ID = '2789228d-55a6-4688-b1e8-2f70abca990b';
 const EVENT_INBOUND_OUTCOMES: Readonly<Record<string, InboundOutcome>> = Object.freeze({
   applied: 'applied', replayed: 'replayed', conflict: 'conflict',
   event_joined: 'applied', event_held: 'applied', event_join_expired: 'applied', unprojected: 'applied',
+  unlinked_stop: 'applied', unlinked_start: 'applied',
 });
 
 type StatusOutcome = 'applied' | 'replayed' | 'conflict' | 'not_applicable';

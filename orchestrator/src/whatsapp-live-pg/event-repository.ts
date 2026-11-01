@@ -79,9 +79,16 @@ export async function readMetaWhatsAppTemplate(input: Readonly<{ binding: MetaWh
     componentsSha256: sha(canonical(components)), responseSha256: sha(text) });
 }
 
-interface Target { bindingId: string; binding: MetaWhatsAppBinding; envelope: MetaWhatsAppDispatchCredentialEnvelope; metaTemplateId: string; templateName: string }
-interface Material extends Target { jobId: string; leaseVersion: number; recipient: string; templateName: string; languageCode: string;
-  operationId: string; requestSha256: string }
+/** Immutable evidence that the worker tried and could not prove the template; never equals an approved draft. */
+export function readFailed(target: Readonly<{ templateName: string; languageCode: string }>): MetaTemplateObservation {
+  return Object.freeze({ name: target.templateName, language: target.languageCode, category: 'UNKNOWN', status: 'READ_FAILED', parameterCount: 0,
+    bodySha256: sha('mhp.whatsapp.template-read-failed'), componentsSha256: sha('mhp.whatsapp.template-read-failed'),
+    responseSha256: sha(`mhp.whatsapp.template-read-failed:${new Date().toISOString()}`) });
+}
+
+interface Target { bindingId: string; binding: MetaWhatsAppBinding; envelope: MetaWhatsAppDispatchCredentialEnvelope; metaTemplateId: string; templateName: string;
+  languageCode: string }
+interface Material extends Target { jobId: string; leaseVersion: number; recipient: string; operationId: string; requestSha256: string }
 
 function envelopeOf(row: Record<string, unknown>): MetaWhatsAppDispatchCredentialEnvelope {
   const bytes = (key: string, length: number | null): Buffer => {
@@ -117,8 +124,9 @@ export class PgMhpEventWhatsAppRepository {
     return rows.map(row => {
       if (typeof row.meta_template_id !== 'string' || !META_ID.test(row.meta_template_id)) fail('returned an invalid template id');
       if (typeof row.template_name !== 'string' || !TEMPLATE.test(row.template_name)) fail('returned an invalid template name');
+      if (typeof row.language_code !== 'string' || !LANGUAGE.test(row.language_code)) fail('returned an invalid template language');
       return { bindingId: this.#bindingId, binding: bindingOf(row, MHP_EVENT_WHATSAPP_WORKSPACE_ID), envelope: envelopeOf(row), metaTemplateId: row.meta_template_id,
-        templateName: row.template_name };
+        templateName: row.template_name, languageCode: row.language_code };
     });
   }
   async recordObservation(metaTemplateId: string, o: MetaTemplateObservation): Promise<void> {
@@ -147,7 +155,7 @@ export class PgMhpEventWhatsAppRepository {
         || typeof row.language_code !== 'string' || !LANGUAGE.test(row.language_code) || typeof row.operation_id !== 'string' || !UUID.test(row.operation_id)
         || !Buffer.isBuffer(row.request_sha256) || typeof row.meta_template_id !== 'string') fail('loaded material crossed its trusted boundary');
     return { bindingId: this.#bindingId, binding: bindingOf(row, MHP_EVENT_WHATSAPP_WORKSPACE_ID), envelope: envelopeOf(row), metaTemplateId: row.meta_template_id,
-      ...claim, recipient: row.recipient, templateName: row.template_name, languageCode: row.language_code, operationId: row.operation_id,
+      templateName: row.template_name, languageCode: row.language_code, ...claim, recipient: row.recipient, operationId: row.operation_id,
       requestSha256: (row.request_sha256 as Buffer).toString('hex') };
   }
   async begin(claim: { jobId: string; leaseVersion: number }, leaseToken: Buffer): Promise<boolean> {
@@ -175,10 +183,13 @@ export async function runMhpEventWhatsAppOnce(input: Readonly<{
 }>): Promise<MhpEventWhatsAppCycle> {
   const decrypt = (target: Target) => decryptMetaWhatsAppDispatchCredentials({ binding: target.binding, envelope: target.envelope,
     encryptionKey: input.encryptionKey, expectedKeyVersion: input.encryptionKeyVersion });
-  const observe = async (target: Target, credentials: MetaWhatsAppDispatchCredentials) => {
+  const observe = async (target: Target, credentials: MetaWhatsAppDispatchCredentials): Promise<MetaTemplateObservation | null> => {
     const observation = await readMetaWhatsAppTemplate({ binding: target.binding, credentials, metaTemplateId: target.metaTemplateId,
       templateName: target.templateName, fetch: input.fetch });
-    if (observation) await input.repository.recordObservation(target.metaTemplateId, observation);
+    // A read that proves nothing is still recorded: the latest observation must be APPROVED for any
+    // owner review, prepare or begin, so a failed read closes the gate until a later read succeeds.
+    await input.repository.recordObservation(target.metaTemplateId, observation ?? readFailed(target));
+    return observation;
   };
   if (input.observeNow) for (const target of await input.repository.observationTargets()) await observe(target, decrypt(target));
   await input.repository.prepareDue();
@@ -187,7 +198,9 @@ export async function runMhpEventWhatsAppOnce(input: Readonly<{
   const material = await input.repository.load(claim, input.leaseToken);
   if (!material) return 'failed_or_attention';
   const credentials = decrypt(material);
-  await observe(material, credentials);
+  // Fail closed (Astra item 2): no fresh successful read, no begin. The lease lapses and the job is
+  // re-queued by claim recovery until the authority expires; nothing is sent on a stale approval.
+  if (!await observe(material, credentials)) return 'failed_or_attention';
   if (!await input.repository.begin(claim, input.leaseToken)) return 'failed_or_attention';
   let result: MetaWhatsAppDispatchResult;
   try {

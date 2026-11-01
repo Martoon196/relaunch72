@@ -4,7 +4,7 @@
 |---|---|
 | Base | `claude/009b-r3` (009B, reviewed) |
 | Candidate | branch `claude/009c-r3` (head: the commit that adds this file) |
-| Migration | `0132_mhp_event_whatsapp_programme.sql`, sha256 `ad09a7f2a75bc536ad6e318e7069a3f081c1f31137b80747bde24180e9a65da3` (pinned in `test/db/runtime-readiness.test.ts`, `test/db/sql-contract.test.ts` and the bridge) |
+| Migration | `0132_mhp_event_whatsapp_programme.sql`, sha256 `25f63660ee2148c6ff949cb97b2c791c6e560df5ccdc7d718c286566dd10cbc0` (second round; first-round candidate `ad09a7f2…`), on 0131 `b117e3d2…`; both pinned in the ledger tests and the bridge |
 | Readiness bridge | `claude/009c-r3-readiness-bridge` = 009B head plus two allowances: exactly this 0132 after 131, and the 0132 WhatsApp functions tolerated (never required) by the three exact WhatsApp boundaries |
 | External effects | None. No deploy, no migration outside the disposable local DB, no Meta or Twilio call, no message sent. |
 | Not ratified | There is no ratified 009C SQL design. Proposals 2 and 3 in `009B-009C-DECISION-PROPOSALS-R3.md` are implemented here as candidates and need Astra's decision. |
@@ -72,10 +72,21 @@ All ten findings from the independent 009C review are fixed in this head:
 9. **The prospect hold policy was too broad.** It is limited to `r72_identity_command` and `r72_content_adapter`.
 10. **The view used module-global state.** That is removed, and the runtime requires `MHP_EVENT_WHATSAPP_META_TEMPLATE_ID`.
 
+## Second review round (Astra, 1 November 2026)
+
+Astra reviewed `6b6515a` and asked for bounded fixes; all four are in this head.
+
+1. **Unlinked WhatsApp STOP recorded durably; JOIN and scheduled sends honour it.** `mhp_record_event_whatsapp_inbound` now appends a `channel='whatsapp'` row to the 0131 table `app_private.mhp_unlinked_opt_events` (phone digest only, no contact or point) when a signed STOP arrives from a number with no verified WhatsApp point, holds any pending WhatsApp JOIN for that number and answers `unlinked_stop`. A later WhatsApp JOIN from that number is held. `mhp_event_whatsapp_grant_tuple`, the gate review, activation, prepare and begin share, refuses the receipt while the latest unlinked WhatsApp event is `stop`. The WhatsApp definer can see and append `whatsapp` rows only; an SMS key never counts for WhatsApp and vice versa. There is no WhatsApp START release in this packet (nor for a linked WhatsApp STOP). Proved under real roles: durable record and replay; the pending JOIN held with no point; a later JOIN held; an ordinary message from an unknown number still refused; an SMS-only key ignored; the owner review dropping the remaining granted registrant only after a WhatsApp key is recorded.
+2. **Fail closed on the Meta re-read.** `runMhpEventWhatsAppOnce` records every read: a failed or refused read is stored as an immutable `READ_FAILED` observation (category `UNKNOWN`, a body digest that can never equal a draft), and `begin` is not called without a fresh successful read. Because `mhp_whatsapp_template_current` requires the *latest* observation to be `APPROVED`, the recorded failure also closes the SQL gate that review, prepare and begin evaluate, until a later read succeeds. The lease then lapses, claim recovery re-queues the job, and the authority expires after four minutes if Meta stays unreachable; nothing is sent on a stale approval. Regressions: `test/mhp-event-whatsapp.test.ts` (failed fetch and HTTP 429: `READ_FAILED` recorded, no begin, no provider call, no settlement; a successful read: begin, send, settle) and the real-role integration test (`READ_FAILED` makes the owner review's template evidence non-current; `APPROVED` restores it before the one begin).
+3. **Empty monthly budget.** `mhp_event_whatsapp_budget` counts `j.id` / `s.id`, so an empty month reads 3 available, not 2. Asserted in the integration test at the first APPROVED review.
+4. **Finite test lease wait.** `test/db/database-helper.ts`: ten minutes instead of unlimited.
+
+Caps are unchanged: 1 a day and 3 a month.
+
 ## Remaining limits and blockers
 
 - **Meta template.** `mhp_webinar_20261104_reminder_v1` (1441099094827445) was last reported "In review". Until Meta returns `APPROVED`, nothing can be scheduled; this is by design.
-- **Open decisions (Astra):** WhatsApp STOP, the Meta read boundary and token custody, unlinked STOP (shared with 009B), and caps.
+- **Astra's ratification** of the exact second-round SHAs. The linked WhatsApp STOP and the WABA-specific worker-held Meta read are accepted in principle; unlinked STOP is now implemented; caps are unchanged by instruction.
 - **Caps** of 1 a day and 3 a month mean at most 3 follow-ups a month in total.
 - **Existing defect (not caused by 009C).** `PgMetaWhatsAppLiveRepository` (legacy 0053 worker) calls its functions without the worker GUC context, so the legacy WhatsApp worker would be refused. The event repository uses the proper worker transaction. The legacy defect is left unchanged and flagged.
 - **Deploy order.** The exact WhatsApp boundaries list the 0132 functions. Any running WhatsApp runtime must be on the bridge or this build before 0132 is applied.

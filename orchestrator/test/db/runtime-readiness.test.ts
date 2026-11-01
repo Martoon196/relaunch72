@@ -326,8 +326,8 @@ test('final132 event-WhatsApp runtime strictly requires exact132 and every earli
   assert.deepEqual(rows[127], { filename: '0128_mhp_sequence_capture_entry.sql', checksum: '09b35b4eaf6e934c8f560e8d9d645bd3b9f37a34268f77f4afd974ecd1b54e97' });
   assert.deepEqual(rows[128], { filename: '0129_mhp_local_channel_drafts.sql', checksum: '649ba68b60954b6e76d4e702511321e59eff0785128051ed7b81f968abe1b57a' });
   assert.deepEqual(rows[129], { filename: '0130_mhp_owned_sms_pilot.sql', checksum: 'e6bb5be3a87e0fde3e29d3f47edde1c5daf8492f4c368f80e2e4335f5b239797' });
-  assert.deepEqual(rows[130], { filename: '0131_mhp_event_phone_programme.sql', checksum: '8ad7b48ede3c99d2232dac73b0b61a074a153402208564c4dabe824a5aba4fde' });
-  assert.deepEqual(rows[131], { filename: '0132_mhp_event_whatsapp_programme.sql', checksum: 'ad09a7f2a75bc536ad6e318e7069a3f081c1f31137b80747bde24180e9a65da3' });
+  assert.deepEqual(rows[130], { filename: '0131_mhp_event_phone_programme.sql', checksum: 'b117e3d267640f58ee41e4d32a7d9f936e9e4add5d91ea1e921cc88051312c14' });
+  assert.deepEqual(rows[131], { filename: '0132_mhp_event_whatsapp_programme.sql', checksum: '25f63660ee2148c6ff949cb97b2c791c6e560df5ccdc7d718c286566dd10cbc0' });
   await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 131))), /schema is behind by 1 migration/);
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 130))), /schema is behind by 2 migration/);

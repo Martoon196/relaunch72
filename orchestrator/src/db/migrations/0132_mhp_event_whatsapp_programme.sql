@@ -150,8 +150,10 @@ CREATE TABLE app_private.mhp_whatsapp_template_observations (
  meta_template_id text NOT NULL CHECK(meta_template_id~'^[1-9][0-9]{4,29}$'),
  template_name text NOT NULL CHECK(template_name~'^[a-z][a-z0-9_]*$' AND char_length(template_name)<=512),
  language_code text NOT NULL CHECK(language_code~'^[a-z]{2,3}(_[A-Z]{2})?$'),
- category text NOT NULL CHECK(category IN('MARKETING','UTILITY','AUTHENTICATION')),
+ category text NOT NULL CHECK(category IN('MARKETING','UTILITY','AUTHENTICATION','UNKNOWN')),
  provider_status text NOT NULL CHECK(provider_status~'^[A-Z_]{1,40}$'),
+ -- A failed worker read is recorded too (Astra item 2): the latest row must be APPROVED, so a failure closes the gate.
+ CHECK((provider_status='READ_FAILED')=(category='UNKNOWN')),
  parameter_count smallint NOT NULL CHECK(parameter_count BETWEEN 0 AND 10),
  body_sha256 bytea NOT NULL CHECK(octet_length(body_sha256)=32),
  components_sha256 bytea NOT NULL CHECK(octet_length(components_sha256)=32),
@@ -430,6 +432,15 @@ CREATE POLICY mhp_event_whatsapp_contacts_read ON app.contacts FOR SELECT TO r72
  USING(workspace_id='2789228d-55a6-4688-b1e8-2f70abca990b' AND session_user IN('r72_whatsapp_live_webhook_command','r72_whatsapp_live_command','r72_whatsapp_live_worker_command'));
 GRANT EXECUTE ON FUNCTION app_private.mhp_owner_email_authorize(bytea) TO r72_whatsapp_live_definer;
 GRANT EXECUTE ON FUNCTION app_private.mhp_event_phone_lock(text[]),app_private.mhp_event_phone_mask(text) TO r72_whatsapp_live_definer;
+-- Signed unlinked opt-outs (0131 table): the WhatsApp definer reads and appends whatsapp rows only (Astra item 1).
+GRANT SELECT,INSERT ON app_private.mhp_unlinked_opt_events TO r72_whatsapp_live_definer;
+GRANT EXECUTE ON FUNCTION app_private.mhp_unlinked_opt_latest(text,bytea) TO r72_whatsapp_live_definer;
+CREATE POLICY mhp_unlinked_opt_wa_read ON app_private.mhp_unlinked_opt_events FOR SELECT TO r72_whatsapp_live_definer
+ USING(channel='whatsapp' AND session_user IN('r72_whatsapp_live_webhook_command','r72_whatsapp_live_command','r72_whatsapp_live_worker_command')
+  AND current_setting('app.workspace_id',true)='2789228d-55a6-4688-b1e8-2f70abca990b');
+CREATE POLICY mhp_unlinked_opt_wa_signed ON app_private.mhp_unlinked_opt_events FOR INSERT TO r72_whatsapp_live_definer
+ WITH CHECK(channel='whatsapp' AND opt_evidence='stop' AND session_user='r72_whatsapp_live_webhook_command'
+  AND current_setting('app.actor_kind',true)='webhook' AND recorded_by_role='r72_whatsapp_live_webhook_command');
 GRANT CREATE ON SCHEMA app_private TO r72_whatsapp_live_definer,r72_mhp_prospect_definer;
 
 -- 6. WhatsApp programme, consent text and public registrant functions.
@@ -747,6 +758,7 @@ DECLARE ws constant uuid:='2789228d-55a6-4688-b1e8-2f70abca990b'; nonce text; in
  prospect app_private.mhp_prospects%ROWTYPE; phone text; wa_point app.contact_points%ROWTYPE; email_point app.contact_points%ROWTYPE;
  ambiguous boolean:=false; contact uuid; point uuid; endpoint_sha bytea; consent uuid:=gen_random_uuid(); receipt uuid:=gen_random_uuid();
  outcome text; now_at timestamptz:=statement_timestamp(); grant_row record; stop_point app.contact_points%ROWTYPE; withdrawn_consent uuid; is_stop boolean;
+ phone_sha bytea;
 BEGIN
  IF session_user<>'r72_whatsapp_live_webhook_command' OR p_workspace IS DISTINCT FROM ws OR current_setting('app.workspace_id',true) IS DISTINCT FROM ws::text
   OR current_setting('app.actor_kind',true) IS DISTINCT FROM 'webhook' OR coalesce(current_setting('app.user_id',true),'')<>''
@@ -761,7 +773,8 @@ BEGIN
  THEN RAISE EXCEPTION 'MHP event WhatsApp binding denied' USING ERRCODE='42501'; END IF;
  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(format('mhp-wa-inbox:%s:%s:%s',p_workspace,p_binding,p_external_event),7200132));
  IF EXISTS(SELECT 1 FROM app_private.mhp_event_whatsapp_receipts r WHERE r.whatsapp_binding_id=p_binding AND r.provider_event_id=p_external_event)
-  OR EXISTS(SELECT 1 FROM app_private.mhp_event_whatsapp_intents i WHERE i.consumed_provider_event_id=p_external_event) THEN
+  OR EXISTS(SELECT 1 FROM app_private.mhp_event_whatsapp_intents i WHERE i.consumed_provider_event_id=p_external_event)
+  OR EXISTS(SELECT 1 FROM app_private.mhp_unlinked_opt_events e WHERE e.channel='whatsapp' AND e.provider_event_id=p_external_event) THEN
   outcome:=app_private.mhp_event_whatsapp_project(p_workspace,p_binding,p_external_event,p_message_id,p_sender,p_body,p_sender_sha,p_body_sha,
    p_payload_sha,p_signature_sha,p_event_identity_sha,p_occurred,true);
   RETURN QUERY SELECT CASE WHEN outcome='conflict' THEN 'conflict' ELSE 'replayed' END; RETURN;
@@ -782,7 +795,19 @@ BEGIN
    p_payload_sha,p_signature_sha,p_event_identity_sha,p_occurred,is_stop);
   IF is_stop AND outcome='unprojected' AND NOT EXISTS(SELECT 1 FROM app.contact_points p WHERE p.workspace_id=ws AND p.kind='whatsapp'
    AND p.deleted_at IS NULL AND p.is_verified AND p.dedupe_state='normal' AND p.normalized_value=p_sender) THEN
-   RAISE EXCEPTION 'WhatsApp live inbound verified contact point not found' USING ERRCODE='23503';
+   -- Astra item 1: a signed WhatsApp STOP from a number with no point is recorded against the phone
+   -- digest only (channel 'whatsapp'; never SMS). A pending WhatsApp JOIN for this number is held.
+   phone_sha:=public.digest(phone,'sha256');
+   PERFORM app_private.mhp_event_phone_lock(coalesce((SELECT array_agg('mhp.event-whatsapp.prospect:'||i.campaign||':'||i.prospect_id::text)
+    FROM app_private.mhp_event_whatsapp_intents i WHERE i.state='awaiting_join' AND i.phone_identity_sha256=phone_sha),'{}'::text[])
+    ||ARRAY['mhp.event-whatsapp.phone:'||phone]);
+   INSERT INTO app_private.mhp_unlinked_opt_events(workspace_id,channel,whatsapp_binding_id,provider_event_id,provider_message_id,phone_identity_sha256,
+    opt_evidence,body_sha256,payload_sha256,signature_sha256,event_identity_sha256,recorded_by_role,occurred_at)
+   VALUES(ws,'whatsapp',p_binding,p_external_event,p_message_id,phone_sha,'stop',p_body_sha,p_payload_sha,p_signature_sha,p_event_identity_sha,
+    'r72_whatsapp_live_webhook_command',p_occurred);
+   UPDATE app_private.mhp_event_whatsapp_intents SET state='held',hold_reason='suppressed',updated_at=now_at
+   WHERE state='awaiting_join' AND phone_identity_sha256=phone_sha;
+   RETURN QUERY SELECT 'unlinked_stop'::text; RETURN;
   END IF;
   IF outcome IN('applied','unprojected') AND is_stop THEN
    -- Proposal 2 (unratified): WhatsApp STOP suppresses WhatsApp only, never SMS.
@@ -829,6 +854,13 @@ BEGIN
   OR programme->>'consentTextSha256' IS DISTINCT FROM encode(intent.consent_text_sha256,'hex') OR programme->>'whatsappBindingId' IS DISTINCT FROM p_binding::text THEN
   UPDATE app_private.mhp_event_whatsapp_intents SET state='held',hold_reason='programme_changed',join_consumed_at=now_at,
    consumed_provider_event_id=p_external_event,updated_at=now_at WHERE id=intent.id;
+  PERFORM app_private.mhp_event_whatsapp_project(p_workspace,p_binding,p_external_event,p_message_id,p_sender,p_body,p_sender_sha,p_body_sha,
+   p_payload_sha,p_signature_sha,p_event_identity_sha,p_occurred,true);
+  RETURN QUERY SELECT 'event_held'::text; RETURN;
+ END IF;
+ IF app_private.mhp_unlinked_opt_latest('whatsapp',intent.phone_identity_sha256)='stop' THEN
+  -- This number sent a WhatsApp STOP before it had a point (Astra item 1); an SMS START never releases it.
+  UPDATE app_private.mhp_event_whatsapp_intents SET state='held',hold_reason='suppressed',join_consumed_at=now_at,consumed_provider_event_id=p_external_event,updated_at=now_at WHERE id=intent.id;
   PERFORM app_private.mhp_event_whatsapp_project(p_workspace,p_binding,p_external_event,p_message_id,p_sender,p_body,p_sender_sha,p_body_sha,
    p_payload_sha,p_signature_sha,p_event_identity_sha,p_occurred,true);
   RETURN QUERY SELECT 'event_held'::text; RETURN;
@@ -1048,6 +1080,8 @@ LANGUAGE sql STABLE SECURITY INVOKER SET search_path=pg_catalog AS $f$
   AND public.digest(p.kind||chr(31)||p.value||chr(31)||p.normalized_value,'sha256')=r.endpoint_identity_sha256
  JOIN app.contacts c ON c.workspace_id=p.workspace_id AND c.id=p.contact_id AND c.deleted_at IS NULL
  WHERE r.id=p_receipt AND r.decision='granted'
+  -- A signed WhatsApp STOP from this number before it had a point is honoured (Astra item 1).
+  AND app_private.mhp_unlinked_opt_latest('whatsapp',r.phone_identity_sha256) IS DISTINCT FROM 'stop'
   AND app_private.mhp_event_whatsapp_current_receipt(r.prospect_id,r.campaign)=r.id
   AND r.consent_event_id=(SELECT l.id FROM app.communication_consent_events l WHERE l.workspace_id=r.workspace_id AND l.contact_point_id=r.contact_point_id
    AND l.channel='whatsapp' AND l.purpose=r.purpose ORDER BY l.occurred_at DESC,l.recorded_at DESC,l.id DESC LIMIT 1)
@@ -1072,9 +1106,9 @@ REVOKE ALL ON FUNCTION app_private.mhp_event_whatsapp_binding(uuid) FROM PUBLIC;
 CREATE FUNCTION app_private.mhp_event_whatsapp_budget(p_binding uuid,p_due timestamptz) RETURNS jsonb
 LANGUAGE sql STABLE SECURITY INVOKER SET search_path=pg_catalog AS $f$
  WITH d AS (SELECT (p_due AT TIME ZONE 'UTC')::date AS day,date_trunc('month',p_due AT TIME ZONE 'UTC')::date AS month),
- jobs AS (SELECT count(*) FILTER (WHERE j.utc_day=d.day)::integer AS day_used,count(*)::integer AS month_used FROM d
+ jobs AS (SELECT count(j.id) FILTER (WHERE j.utc_day=d.day)::integer AS day_used,count(j.id)::integer AS month_used FROM d
   LEFT JOIN app.property_predator_whatsapp_live_jobs j ON j.binding_id=p_binding AND j.utc_month=d.month AND j.state<>'cancelled' GROUP BY d.day),
- reserved AS (SELECT count(*) FILTER (WHERE (s.due_at AT TIME ZONE 'UTC')::date=d.day)::integer AS day_reserved,count(s.id)::integer AS month_reserved FROM d
+ reserved AS (SELECT count(s.id) FILTER (WHERE (s.due_at AT TIME ZONE 'UTC')::date=d.day)::integer AS day_reserved,count(s.id)::integer AS month_reserved FROM d
   LEFT JOIN app_private.mhp_event_whatsapp_sends s ON s.binding_id=p_binding AND date_trunc('month',s.due_at AT TIME ZONE 'UTC')::date=d.month
    AND s.cancelled_at IS NULL AND s.held_at IS NULL AND s.job_id IS NULL GROUP BY d.day)
  SELECT jsonb_build_object('utcDay',d.day,'dayAvailable',greatest(1-coalesce(jobs.day_used,0)-coalesce(reserved.day_reserved,0),0),

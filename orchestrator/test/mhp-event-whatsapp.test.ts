@@ -4,7 +4,8 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { MHP_EVENT_WHATSAPP_CONSENT_TEXT, mhpEventJoinSha, mhpEventWhatsAppJoinSha } from '../src/mhp/event-phone-service.js';
 import { mhpEventPhoneWhatsAppPage } from '../src/mhp/event-phone-view.js';
-import { readMetaWhatsAppTemplate } from '../src/whatsapp-live-pg/event-repository.js';
+import { encryptMetaWhatsAppDispatchCredentials } from '../src/whatsapp-live/foundation.js';
+import { readMetaWhatsAppTemplate, runMhpEventWhatsAppOnce, type MetaTemplateObservation } from '../src/whatsapp-live-pg/event-repository.js';
 import { PgMetaWhatsAppLiveWebhookCommandService } from '../src/whatsapp-live-pg/webhook-repository.js';
 
 const sha = (v: string): string => createHash('sha256').update(v).digest('hex');
@@ -64,4 +65,34 @@ test('the registrant WhatsApp page shows a wa.me link with their own JOIN code a
   const join = mhpEventPhoneWhatsAppPage({ status, csrf: 'c', number: '+447861935832', join: { nonce: 'abcdefghijklmnopqrstuvwxyz', joinExpiresAt: '2026-11-04T18:00:00Z' } });
   assert.match(join, /https:\/\/wa\.me\/447861935832\?text=JOIN%20ABCDEFGHIJKLMNOPQRSTUVWXYZ/u);
   assert.match(join, /A text-message check does not count for WhatsApp/u);
+});
+
+test('Astra item 2: a failed fresh Meta read before begin records READ_FAILED and never begins or sends', async () => {
+  const key = Buffer.alloc(32, 5);
+  const envelope = encryptMetaWhatsAppDispatchCredentials({ binding, credentials: { accessToken: 'EAAG-SYNTHETIC-TOKEN-VALUE-123456789' }, encryptionKey: key, keyVersion: 'test-v1' });
+  const material = { bindingId: '0b132000-0000-4000-8000-000000000003', binding, envelope, metaTemplateId: '1441099094827445', templateName: 'mhp_webinar_20261104_reminder_v1',
+    languageCode: 'en_GB', jobId: '0b132000-0000-4000-8000-0000000000aa', leaseVersion: 1, recipient: '447700900001', operationId: '0b132000-0000-4000-8000-0000000000bb',
+    requestSha256: 'ab'.repeat(32) };
+  const template = { id: '1441099094827445', name: 'mhp_webinar_20261104_reminder_v1', language: 'en_GB', status: 'APPROVED', category: 'MARKETING', components: [{ type: 'BODY', text: BODY }] };
+  const run = async (fetchImpl: typeof fetch) => {
+    const calls: string[] = []; const recorded: MetaTemplateObservation[] = [];
+    const repository = {
+      observationTargets: async () => [], recordObservation: async (_id: string, o: MetaTemplateObservation) => { recorded.push(o); }, prepareDue: async () => 0,
+      claim: async () => ({ jobId: material.jobId, leaseVersion: 1 }), load: async () => material,
+      begin: async () => { calls.push('begin'); return true; }, settle: async () => { calls.push('settle'); },
+    };
+    const cycle = await runMhpEventWhatsAppOnce({ repository: repository as never, encryptionKey: key, encryptionKeyVersion: 'test-v1', leaseToken: Buffer.alloc(32, 1),
+      fetch: fetchImpl, observeNow: false, createTransport: (() => ({ sendTemplate: async () => { calls.push('send');
+        return { state: 'accepted', providerMessageId: 'wamid.synthetic', receiptSha256: 'cd'.repeat(32), safeCode: 'meta_whatsapp_accepted', occurredAt: new Date().toISOString() }; } })) as never });
+    return { cycle, calls, recorded };
+  };
+  const failed = await run((async () => { throw new Error('network'); }) as typeof fetch);
+  assert.equal(failed.cycle, 'failed_or_attention');
+  assert.deepEqual(failed.calls, [], 'no begin, no provider call, no settlement on a failed fresh read');
+  assert.deepEqual(failed.recorded.map(o => [o.status, o.category, o.parameterCount]), [['READ_FAILED', 'UNKNOWN', 0]]);
+  assert.notEqual(failed.recorded[0]!.bodySha256, sha(BODY), 'a failed read can never equal the approved draft');
+  const refused = await run((async () => new Response('{"error":"rate limited"}', { status: 429 })) as typeof fetch);
+  assert.deepEqual([refused.cycle, refused.calls, refused.recorded[0]!.status], ['failed_or_attention', [], 'READ_FAILED']);
+  const ok = await run((async () => new Response(JSON.stringify({ data: [template] }), { status: 200 })) as typeof fetch);
+  assert.deepEqual([ok.cycle, ok.calls, ok.recorded[0]!.status], ['accepted', ['begin', 'send', 'settle'], 'APPROVED']);
 });

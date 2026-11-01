@@ -64,7 +64,7 @@ const phone = (n: number): string => `+4477009000${String(n).padStart(2, '0')}`;
 const email = (n: number): string => `registrant-${n}@example.invalid`;
 const nonce = (): string => Array.from(randomBytes(26), b => 'abcdefghijklmnopqrstuvwxyz234567'[b % 32]).join('');
 
-async function chooseWhatsApp(p: Pools, n: number): Promise<{ capability: Buffer; nonce: string }> {
+async function chooseWhatsApp(p: Pools, n: number, number = phone(n)): Promise<{ capability: Buffer; nonce: string }> {
   const token = randomBytes(32), capability = randomBytes(32), command = randomUUID();
   const link = await one<{ send: boolean }>(p.r72_identity_command, 'public', 'SELECT app_private.mhp_event_phone_request_link($1,$2,$3,$4,$5) AS value',
     [email(n), command, sha(token), sha(command), randomBytes(32)]);
@@ -73,7 +73,7 @@ async function chooseWhatsApp(p: Pools, n: number): Promise<{ capability: Buffer
     [sha(token), sha(capability), randomUUID(), randomBytes(32), randomBytes(32)])).ok, true);
   const joinNonce = nonce(), choose = randomUUID();
   const chosen = await one<{ ok: boolean }>(p.r72_identity_command, 'public', 'SELECT app_private.mhp_event_whatsapp_choose($1,$2,$3,$4,$5,$6,$7,$8) AS value',
-    [sha(capability), choose, phone(n), 'mhp.event-whatsapp/v1', sha(CONSENT_TEXT), sha(`mhp.event-whatsapp.join/v1:${joinNonce}`), sha(choose), randomBytes(32)]);
+    [sha(capability), choose, number, 'mhp.event-whatsapp/v1', sha(CONSENT_TEXT), sha(`mhp.event-whatsapp.join/v1:${joinNonce}`), sha(choose), randomBytes(32)]);
   assert.equal(chosen.ok, true, JSON.stringify(chosen));
   return { capability: sha(capability), nonce: joinNonce };
 }
@@ -89,9 +89,9 @@ async function deliver(p: Pools, m: Inbound): Promise<string> {
 }
 const observe = (p: Pools, status: string, body = BODY) => as(p.r72_whatsapp_live_worker_command, 'worker',
   'SELECT app_private.record_mhp_whatsapp_template_observation($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
-  [WS, WA_BINDING, META_ID, 'mhp_webinar_20261104_reminder_v1', 'en_GB', 'MARKETING', status, 0, sha(body), randomBytes(32), randomBytes(32)]);
+  [WS, WA_BINDING, META_ID, 'mhp_webinar_20261104_reminder_v1', 'en_GB', status === 'READ_FAILED' ? 'UNKNOWN' : 'MARKETING', status, 0, sha(body), randomBytes(32), randomBytes(32)]);
 interface Review { selectedReceiptIds: string[]; selectedRevisions: Record<string, number>; reviewSha256: string; programme: { programmeSha256: string; dueAt: string };
-  templateObservation: { current: boolean; status: string | null }; awaitingOwnerReview: number; recipients: unknown[] }
+  templateObservation: { current: boolean; status: string | null }; awaitingOwnerReview: number; recipients: unknown[]; budget: { dayAvailable: number; monthAvailable: number } }
 const review = (p: Pools) => one<Review>(p.r72_whatsapp_live_command, 'owner', 'SELECT app_private.mhp_event_whatsapp_review($1,$2) AS value', [SESSION, PROGRAMME]);
 const activate = (p: Pools, command: string, r: Review) => withClient(p.r72_whatsapp_live_command, 'owner', async (client, request) =>
   (await client.query<{ value: Record<string, unknown> }>('SELECT app_private.mhp_event_whatsapp_activate($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) AS value',
@@ -104,6 +104,7 @@ test('MHP009C WhatsApp follow-up: own JOIN, Meta read, owner batch and absolute-
   try {
     await resetIdentityTables(owner);
     await ownerQuery(owner, 'TRUNCATE app_private.mhp_prospects CASCADE');
+    await ownerQuery(owner, 'TRUNCATE app_private.mhp_unlinked_opt_events'); // no FK to a prospect by design; reset explicitly
     await ownerQuery(owner, await readFile(new URL('./mhp-event-whatsapp.fixture.sql', import.meta.url), 'utf8'));
     pools = await openLoginPools(owner);
     const p = pools as Pools;
@@ -113,6 +114,32 @@ test('MHP009C WhatsApp follow-up: own JOIN, Meta read, owner batch and absolute-
 
     // Registrants 1, 2 and 5 join through WhatsApp's own signed inbound path.
     const r1 = await chooseWhatsApp(p, 1), r2 = await chooseWhatsApp(p, 2), r5 = await chooseWhatsApp(p, 5);
+
+    // Astra item 1 (WhatsApp). A signed STOP from a number with no WhatsApp point is recorded against the phone digest
+    // under channel 'whatsapp' only; a pending WhatsApp JOIN is held; a later JOIN is held. An SMS-only key never counts.
+    const seedUnlinked = async (channel: 'sms' | 'whatsapp', number: string, evidence: 'stop' | 'start'): Promise<void> => {
+      const sms = channel === 'sms', id = sms ? `SM${randomBytes(16).toString('hex')}` : `wamid.${randomBytes(8).toString('hex')}`;
+      await ownerQuery(owner, `INSERT INTO app_private.mhp_unlinked_opt_events(workspace_id,channel,provider_connection_id,whatsapp_binding_id,provider_event_id,
+        provider_message_id,phone_identity_sha256,opt_evidence,body_sha256,payload_sha256,signature_sha256,event_identity_sha256,recorded_by_role,occurred_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$9,$9,$10,statement_timestamp())`,
+      [WS, channel, sms ? WA_CONNECTION : null, sms ? null : WA_BINDING, sms ? `inbound:${id}` : `whatsapp-message:${id}`, id, sha(number), evidence, randomBytes(32),
+        sms ? 'r72_sms_webhook_command' : 'r72_whatsapp_live_webhook_command']);
+    };
+    await seedUnlinked('sms', phone(5), 'stop'); // registrant 5 still JOINs on WhatsApp below
+    await chooseWhatsApp(p, 4, phone(8));
+    const stop8 = inbound(8, 'STOP');
+    assert.equal(await deliver(p, stop8), 'unlinked_stop');
+    assert.equal(await deliver(p, stop8), 'replayed');
+    await expectPostgresError(deliver(p, inbound(8, 'hello')), '23503'); // an ordinary message from an unknown number keeps the refusal
+    const unlinked8 = await ownerQuery<{ wa: number; sms: number; held: number; points: number }>(owner, `SELECT
+      (SELECT count(*)::int FROM app_private.mhp_unlinked_opt_events WHERE channel='whatsapp' AND phone_identity_sha256=$1 AND opt_evidence='stop') wa,
+      (SELECT count(*)::int FROM app_private.mhp_unlinked_opt_events WHERE channel='sms' AND phone_identity_sha256=$1) sms,
+      (SELECT count(*)::int FROM app_private.mhp_event_whatsapp_intents WHERE phone_e164=$2 AND state='held' AND hold_reason='suppressed') held,
+      (SELECT count(*)::int FROM app.contact_points WHERE kind='whatsapp' AND normalized_value=$3) points`, [sha(phone(8)), phone(8), phone(8).slice(1)]);
+    assert.deepEqual(unlinked8[0], { wa: 1, sms: 0, held: 1, points: 0 }, 'durable under whatsapp only; the pending JOIN is held; no contact or point');
+    assert.equal(await deliver(p, inbound(9, 'STOP')), 'unlinked_stop');
+    const r6 = await chooseWhatsApp(p, 6, phone(9));
+    assert.equal(await deliver(p, inbound(9, `JOIN ${r6.nonce}`)), 'event_held', 'a later JOIN from a number whose latest WhatsApp event is STOP is held');
     await expectPostgresError(deliver(p, inbound(9, `JOIN ${r1.nonce}`)), '23503');
     const join1 = inbound(1, `JOIN ${r1.nonce.toUpperCase()}`);
     assert.equal(await deliver(p, join1), 'event_joined');
@@ -154,6 +181,7 @@ test('MHP009C WhatsApp follow-up: own JOIN, Meta read, owner batch and absolute-
     await observe(p, 'APPROVED');
     first = await review(p);
     assert.equal(first.templateObservation.current, true);
+    assert.deepEqual([first.budget.dayAvailable, first.budget.monthAvailable], [1, 3], 'Astra item 3: an empty month reads 3 available, not 2');
     assert.equal(first.selectedReceiptIds.length, 1, 'unchanged 0053 cap: one WhatsApp send per day');
     assert.equal(first.awaitingOwnerReview, 1);
     const command = randomUUID();
@@ -188,6 +216,13 @@ test('MHP009C WhatsApp follow-up: own JOIN, Meta read, owner batch and absolute-
     const material = await as<{ recipient: string; template_name: string; meta_template_id: string }>(p.r72_whatsapp_live_worker_command, 'worker',
       'SELECT recipient,template_name,meta_template_id FROM app_private.load_event_whatsapp_job($1,$2,$3,$4)', [WS, job.job_id, job.lease_version, lease]);
     assert.equal(material.length, 1); assert.notEqual(material[0]!.recipient, phone(2).slice(1));
+    // Astra item 2: a failed fresh Meta read is recorded as READ_FAILED. The gate begin evaluates
+    // (mhp_whatsapp_template_current: the latest observation must be APPROVED) is closed until a later read succeeds.
+    await observe(p, 'READ_FAILED');
+    const failedRead = await review(p);
+    assert.deepEqual([failedRead.templateObservation.status, failedRead.templateObservation.current], ['READ_FAILED', false]);
+    await observe(p, 'APPROVED');
+    assert.equal((await review(p)).templateObservation.current, true);
     // Legacy load/begin are structurally blind to an event authority (no permission-use receipt).
     assert.equal((await as(p.r72_whatsapp_live_worker_command, 'worker', 'SELECT * FROM app_private.load_whatsapp_live_job($1,$2,$3,$4)', [WS, job.job_id, job.lease_version, lease])).length, 0);
     assert.equal(await one<boolean>(p.r72_whatsapp_live_worker_command, 'worker', 'SELECT app_private.begin_whatsapp_live_call($1,$2,$3,$4,true,false) AS value',
@@ -199,6 +234,16 @@ test('MHP009C WhatsApp follow-up: own JOIN, Meta read, owner batch and absolute-
     const final = await ownerQuery<{ state: string }>(owner, 'SELECT state FROM app.property_predator_whatsapp_live_jobs');
     assert.deepEqual(final, [{ state: 'awaiting_status' }]);
     assert.equal((await prepare()).prepared.length, 0, 'the daily cap and once-only step leave nothing else to prepare');
+    // Astra item 1 (WhatsApp): the owner review and every scheduled send share the grant gate. The other granted
+    // registrant still awaits a review; an unlinked WhatsApp STOP for that number removes them, an SMS key never does.
+    const pending = await review(p);
+    assert.equal(pending.recipients.length, 1);
+    const pendingNumber = (await ownerQuery<{ phone: string }>(owner, `SELECT '+'||cp.normalized_value AS phone FROM app_private.mhp_event_whatsapp_receipts r
+      JOIN app.contact_points cp ON cp.id=r.contact_point_id WHERE r.id=$1`, [(pending.recipients[0] as { receiptId: string }).receiptId]))[0]!.phone;
+    await seedUnlinked('sms', pendingNumber, 'stop');
+    assert.equal((await review(p)).recipients.length, 1, 'an SMS-only opt-out never counts for WhatsApp');
+    await seedUnlinked('whatsapp', pendingNumber, 'stop');
+    assert.equal((await review(p)).recipients.length, 0, 'the unlinked WhatsApp STOP removes the number from every future batch');
   } finally {
     await closeLoginPools(owner, pools);
     await owner.end();

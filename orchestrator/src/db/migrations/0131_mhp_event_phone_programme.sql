@@ -521,6 +521,59 @@ END $policies$;
 GRANT EXECUTE ON FUNCTION app_private.current_request_id(),app_private.current_user_id() TO r72_sms_definer;
 GRANT CREATE ON SCHEMA app_private TO r72_sms_definer,r72_mhp_prospect_definer;
 
+-- 6. Signed opt-out evidence from a number that has no contact point yet
+-- (Astra review, 1 November 2026, item 1). Keyed by channel and phone digest
+-- only: no contact, no point, no message body, nothing to erase. A later JOIN,
+-- the owner review and every scheduled send honour the latest event through
+-- the grant tuple. SMS and WhatsApp rows never cross: each channel's definer
+-- can only see and write its own channel.
+CREATE TABLE app_private.mhp_unlinked_opt_events (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ workspace_id uuid NOT NULL CHECK(workspace_id='2789228d-55a6-4688-b1e8-2f70abca990b'),
+ channel text NOT NULL CHECK(channel IN('sms','whatsapp')),
+ provider_connection_id uuid,
+ whatsapp_binding_id uuid,
+ provider_event_id text NOT NULL CHECK(length(provider_event_id) BETWEEN 1 AND 500),
+ provider_message_id text NOT NULL CHECK(length(provider_message_id) BETWEEN 1 AND 500),
+ phone_identity_sha256 bytea NOT NULL CHECK(octet_length(phone_identity_sha256)=32),
+ opt_evidence text NOT NULL CHECK(opt_evidence IN('stop','start')),
+ body_sha256 bytea NOT NULL CHECK(octet_length(body_sha256)=32),
+ payload_sha256 bytea NOT NULL CHECK(octet_length(payload_sha256)=32),
+ signature_sha256 bytea NOT NULL CHECK(octet_length(signature_sha256)=32),
+ event_identity_sha256 bytea NOT NULL CHECK(octet_length(event_identity_sha256)=32),
+ recorded_by_role text NOT NULL CHECK(recorded_by_role IN('r72_sms_webhook_command','r72_whatsapp_live_webhook_command')),
+ occurred_at timestamptz NOT NULL,
+ recorded_at timestamptz NOT NULL DEFAULT statement_timestamp(),
+ UNIQUE(workspace_id,channel,provider_event_id),
+ CONSTRAINT mhp_unlinked_opt_channel CHECK(
+  (channel='sms' AND provider_connection_id IS NOT NULL AND whatsapp_binding_id IS NULL AND recorded_by_role='r72_sms_webhook_command'
+   AND provider_event_id~'^inbound:(SM|MM)[0-9a-f]{32}$' AND provider_message_id~'^(SM|MM)[0-9a-f]{32}$')
+  OR (channel='whatsapp' AND whatsapp_binding_id IS NOT NULL AND provider_connection_id IS NULL AND recorded_by_role='r72_whatsapp_live_webhook_command'
+   AND provider_message_id~'^wamid[.][A-Za-z0-9_=-]{1,190}$' AND opt_evidence='stop'))
+);
+CREATE INDEX mhp_unlinked_opt_latest ON app_private.mhp_unlinked_opt_events(channel,phone_identity_sha256,occurred_at DESC,recorded_at DESC,id DESC);
+CREATE TRIGGER mhp_unlinked_opt_immutable BEFORE UPDATE OR DELETE ON app_private.mhp_unlinked_opt_events
+ FOR EACH ROW EXECUTE FUNCTION app_private.mhp_event_phone_receipt_guard();
+-- The latest signed unlinked event for one channel and one number: 'stop', 'start' or NULL.
+CREATE FUNCTION app_private.mhp_unlinked_opt_latest(p_channel text,p_phone_sha bytea) RETURNS text
+LANGUAGE sql STABLE SECURITY INVOKER SET search_path=pg_catalog AS $f$
+ SELECT e.opt_evidence FROM app_private.mhp_unlinked_opt_events e WHERE e.channel=p_channel AND e.phone_identity_sha256=p_phone_sha
+ ORDER BY e.occurred_at DESC,e.recorded_at DESC,e.id DESC LIMIT 1
+$f$;
+REVOKE ALL ON FUNCTION app_private.mhp_unlinked_opt_latest(text,bytea) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_private.mhp_unlinked_opt_latest(text,bytea) TO r72_sms_definer;
+ALTER TABLE app_private.mhp_unlinked_opt_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app_private.mhp_unlinked_opt_events FORCE ROW LEVEL SECURITY;
+REVOKE ALL ON app_private.mhp_unlinked_opt_events FROM PUBLIC;
+CREATE POLICY mhp_unlinked_opt_owner ON app_private.mhp_unlinked_opt_events TO r72_owner USING(true) WITH CHECK(true);
+GRANT SELECT,INSERT ON app_private.mhp_unlinked_opt_events TO r72_sms_definer;
+CREATE POLICY mhp_unlinked_opt_sms_read ON app_private.mhp_unlinked_opt_events FOR SELECT TO r72_sms_definer
+ USING(channel='sms' AND session_user IN('r72_sms_webhook_command','r72_sms_command','r72_sms_worker_command')
+  AND current_setting('app.workspace_id',true)='2789228d-55a6-4688-b1e8-2f70abca990b');
+CREATE POLICY mhp_unlinked_opt_sms_signed ON app_private.mhp_unlinked_opt_events FOR INSERT TO r72_sms_definer
+ WITH CHECK(channel='sms' AND session_user='r72_sms_webhook_command' AND current_setting('app.actor_kind',true)='webhook'
+  AND recorded_by_role='r72_sms_webhook_command');
+
 -- 6. Closed programme/source/identity helpers (prospect definer, no login EXECUTE).
 SET LOCAL ROLE r72_mhp_prospect_definer;
 CREATE FUNCTION app_private.mhp_event_phone_consent_text(p_revision text) RETURNS text
@@ -966,7 +1019,7 @@ DECLARE ws constant uuid:='2789228d-55a6-4688-b1e8-2f70abca990b'; nonce text; in
  programme jsonb; binding app.property_predator_sms_bindings%ROWTYPE; prospect app_private.mhp_prospects%ROWTYPE; phone text;
  phone_point app.contact_points%ROWTYPE; email_point app.contact_points%ROWTYPE; ambiguous boolean:=false; contact uuid; point uuid;
  endpoint_sha bytea; consent uuid:=gen_random_uuid(); receipt uuid:=gen_random_uuid(); outcome text; now_at timestamptz:=statement_timestamp();
- grant_row record; stop_point app.contact_points%ROWTYPE; withdrawn_consent uuid;
+ grant_row record; stop_point app.contact_points%ROWTYPE; withdrawn_consent uuid; phone_sha bytea;
 BEGIN
  IF session_user<>'r72_sms_webhook_command' OR p_workspace IS DISTINCT FROM ws OR current_setting('app.workspace_id',true) IS DISTINCT FROM ws::text
   OR current_setting('app.actor_kind',true) IS DISTINCT FROM 'webhook' OR coalesce(current_setting('app.user_id',true),'')<>''
@@ -979,7 +1032,8 @@ BEGIN
  -- Same event key as the existing projection (re-entrant), so replays serialise.
  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(format('pp-sms-inbox:%s:%s:%s',p_workspace,p_connection,p_external_event),7200056));
  IF EXISTS(SELECT 1 FROM app_private.mhp_event_phone_receipts r WHERE r.provider_connection_id=p_connection AND r.provider_event_id=p_external_event)
-  OR EXISTS(SELECT 1 FROM app_private.mhp_event_phone_intents i WHERE i.consumed_provider_event_id=p_external_event) THEN
+  OR EXISTS(SELECT 1 FROM app_private.mhp_event_phone_intents i WHERE i.consumed_provider_event_id=p_external_event)
+  OR EXISTS(SELECT 1 FROM app_private.mhp_unlinked_opt_events e WHERE e.channel='sms' AND e.provider_event_id=p_external_event) THEN
   outcome:=app_private.mhp_event_sms_project(p_workspace,p_connection,p_external_event,p_message_sid,p_normalized_sender,p_opt_evidence,p_body,
    p_sender_sha,p_body_sha,p_payload_sha,p_signature_sha,p_event_identity_sha,p_occurred,true);
   RETURN QUERY SELECT CASE WHEN outcome='conflict' THEN 'conflict' ELSE 'replayed' END; RETURN;
@@ -996,9 +1050,31 @@ BEGIN
   END IF;
  END IF;
  IF intent.id IS NULL OR intent.state<>'awaiting_join' OR intent.phone_e164 IS DISTINCT FROM phone THEN
-  -- Not a valid JOIN for this number: ordinary existing inbound/STOP behaviour.
+  -- Not a valid JOIN for this number: ordinary existing inbound/STOP behaviour. Only a signed
+  -- STOP/START may survive an unknown sender (Astra item 1); every other text keeps the refusal.
   outcome:=app_private.mhp_event_sms_project(p_workspace,p_connection,p_external_event,p_message_sid,p_normalized_sender,p_opt_evidence,p_body,
-   p_sender_sha,p_body_sha,p_payload_sha,p_signature_sha,p_event_identity_sha,p_occurred,false);
+   p_sender_sha,p_body_sha,p_payload_sha,p_signature_sha,p_event_identity_sha,p_occurred,p_opt_evidence IN('stop','start'));
+  IF outcome='unprojected' THEN
+   -- A verified point exists but the inbox could not project: the existing refusal, unchanged.
+   IF EXISTS(SELECT 1 FROM app.contact_points p WHERE p.workspace_id=ws AND p.kind='phone' AND p.deleted_at IS NULL AND p.is_verified
+    AND p.dedupe_state='normal' AND regexp_replace(p.normalized_value,'^\+','')=p_normalized_sender)
+   THEN RAISE EXCEPTION 'MHP event inbound could not be projected' USING ERRCODE='23503'; END IF;
+   -- No point for this number: record the signed opt event against the phone digest only.
+   phone_sha:=public.digest(phone,'sha256');
+   PERFORM app_private.mhp_event_phone_lock(coalesce((SELECT array_agg('mhp.event-phone.prospect:'||i.campaign||':'||i.prospect_id::text)
+    FROM app_private.mhp_event_phone_intents i WHERE i.kind='sms' AND i.state='awaiting_join' AND i.phone_identity_sha256=phone_sha),'{}'::text[])
+    ||ARRAY['mhp.event-phone.phone:'||phone]);
+   INSERT INTO app_private.mhp_unlinked_opt_events(workspace_id,channel,provider_connection_id,provider_event_id,provider_message_id,phone_identity_sha256,
+    opt_evidence,body_sha256,payload_sha256,signature_sha256,event_identity_sha256,recorded_by_role,occurred_at)
+   VALUES(ws,'sms',p_connection,p_external_event,p_message_sid,phone_sha,p_opt_evidence,p_body_sha,p_payload_sha,p_signature_sha,p_event_identity_sha,
+    'r72_sms_webhook_command',p_occurred);
+   IF p_opt_evidence='stop' THEN
+    -- A pending JOIN for this number can no longer verify until a signed START.
+    UPDATE app_private.mhp_event_phone_intents SET state='held',hold_reason='suppressed',updated_at=now_at
+    WHERE kind='sms' AND state='awaiting_join' AND phone_identity_sha256=phone_sha;
+   END IF;
+   RETURN QUERY SELECT ('unlinked_'||p_opt_evidence)::text; RETURN;
+  END IF;
   IF outcome='applied' AND p_opt_evidence='stop' THEN
    SELECT p.* INTO stop_point FROM app.contact_points p WHERE p.workspace_id=ws AND p.kind='phone' AND p.deleted_at IS NULL AND p.is_verified
     AND p.dedupe_state='normal' AND regexp_replace(p.normalized_value,'^\+','')=p_normalized_sender;
@@ -1043,6 +1119,14 @@ BEGIN
  IF programme IS NULL OR programme->>'event' IS DISTINCT FROM intent.campaign OR programme->>'consentRevision' IS DISTINCT FROM intent.consent_revision
   OR programme->>'consentTextSha256' IS DISTINCT FROM encode(intent.consent_text_sha256,'hex') OR binding.id IS NULL THEN
   UPDATE app_private.mhp_event_phone_intents SET state='held',hold_reason='programme_changed',join_consumed_at=now_at,
+   consumed_provider_event_id=p_external_event,updated_at=now_at WHERE id=intent.id;
+  outcome:=app_private.mhp_event_sms_project(p_workspace,p_connection,p_external_event,p_message_sid,p_normalized_sender,p_opt_evidence,p_body,
+   p_sender_sha,p_body_sha,p_payload_sha,p_signature_sha,p_event_identity_sha,p_occurred,true);
+  RETURN QUERY SELECT 'event_held'::text; RETURN;
+ END IF;
+ IF app_private.mhp_unlinked_opt_latest('sms',intent.phone_identity_sha256)='stop' THEN
+  -- This number texted STOP before it had a point and has not texted START since (Astra item 1).
+  UPDATE app_private.mhp_event_phone_intents SET state='held',hold_reason='suppressed',join_consumed_at=now_at,
    consumed_provider_event_id=p_external_event,updated_at=now_at WHERE id=intent.id;
   outcome:=app_private.mhp_event_sms_project(p_workspace,p_connection,p_external_event,p_message_sid,p_normalized_sender,p_opt_evidence,p_body,
    p_sender_sha,p_body_sha,p_payload_sha,p_signature_sha,p_event_identity_sha,p_occurred,true);
@@ -1146,6 +1230,8 @@ LANGUAGE sql STABLE SECURITY INVOKER SET search_path=pg_catalog AS $f$
  JOIN app.contacts c ON c.workspace_id=p.workspace_id AND c.id=p.contact_id AND c.deleted_at IS NULL
  JOIN app_private.mhp_prospects pr ON pr.id=r.prospect_id
  WHERE r.id=p_receipt AND r.decision='granted'
+  -- A signed STOP from this number before it had a point is honoured until a signed START (Astra item 1).
+  AND app_private.mhp_unlinked_opt_latest('sms',r.phone_identity_sha256) IS DISTINCT FROM 'stop'
   AND app_private.mhp_event_phone_current_receipt(r.prospect_id,r.campaign)=r.id
   AND r.consent_event_id=(SELECT l.id FROM app.communication_consent_events l WHERE l.workspace_id=r.workspace_id AND l.contact_point_id=r.contact_point_id
    AND l.channel='sms' AND l.purpose=r.purpose ORDER BY l.occurred_at DESC,l.recorded_at DESC,l.id DESC LIMIT 1)

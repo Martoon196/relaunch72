@@ -84,8 +84,9 @@ BEGIN
  VALUES(p_request,ws,p_item,p_version,p_sha,1,owner_id,'mhp-009b-fixture');
  INSERT INTO app.company_content_approval_decisions(workspace_id,content_item_id,content_version_id,approval_request_id,content_sha256,decision,decided_by_user_id,decided_request_id)
  VALUES(ws,p_item,p_version,p_request,p_sha,'approved',owner_id,'mhp-009b-fixture');
- -- Six webinar registrants. 1-4 already in the CRM by email; 5 not imported; 6 unsubscribed from email.
- FOR n IN 1..6 LOOP
+ -- Nine webinar registrants. 1-4 already in the CRM by email; 5 not imported; 6 unsubscribed from email;
+ -- 7-9 plain registrants used by the unlinked STOP/START proofs (Astra item 1).
+ FOR n IN 1..9 LOOP
   prospect:=('0b131100-0000-4000-8000-'||lpad(n::text,12,'0'))::uuid;
   INSERT INTO app_private.mhp_prospects(id,email,first_name,marketing_consent,consent_version,consent_at,unsubscribed_at)
   VALUES(prospect,'registrant-'||n||'@example.invalid','Registrant '||n,true,'disposable-v1',clock_timestamp(),CASE WHEN n=6 THEN clock_timestamp() END);

@@ -134,7 +134,7 @@ implements MetaWhatsAppLiveWebhookCommandService {
           const value = rows[0]?.outcome;
           if (rows.length !== 1 || typeof value !== 'string') throw new Error('Meta WhatsApp webhook recorder returned an invalid outcome');
           if (value === 'conflict' || value === 'replayed') return value as WebhookOutcome;
-          if (['applied', 'event_joined', 'event_held', 'event_join_expired', 'unprojected'].includes(value)) return 'applied' as WebhookOutcome;
+          if (['applied', 'event_joined', 'event_held', 'event_join_expired', 'unprojected', 'unlinked_stop'].includes(value)) return 'applied' as WebhookOutcome;
           throw new Error('Meta WhatsApp webhook recorder returned an invalid outcome');
         }, { isolation: 'read committed' });
     }
