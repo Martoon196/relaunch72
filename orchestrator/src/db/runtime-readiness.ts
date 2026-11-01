@@ -32,6 +32,8 @@ const MHP_LOCAL_CHANNEL_DRAFTS_MIGRATION = '0129_mhp_local_channel_drafts.sql';
 const MHP_LOCAL_CHANNEL_DRAFTS_CHECKSUM = '649ba68b60954b6e76d4e702511321e59eff0785128051ed7b81f968abe1b57a';
 const MHP_OWNED_SMS_MIGRATION = '0130_mhp_owned_sms_pilot.sql';
 const MHP_OWNED_SMS_CHECKSUM = 'e6bb5be3a87e0fde3e29d3f47edde1c5daf8492f4c368f80e2e4335f5b239797';
+const MHP_EVENT_PHONE_MIGRATION = '0131_mhp_event_phone_programme.sql';
+const MHP_EVENT_PHONE_CHECKSUM = '8ad7b48ede3c99d2232dac73b0b61a074a153402208564c4dabe824a5aba4fde';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -148,6 +150,15 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(MHP_LOCAL_CHANNEL_DRAFTS_MIGRATION) === MHP_LOCAL_CHANNEL_DRAFTS_CHECKSUM
       && applied.get(MHP_OWNED_SMS_MIGRATION) === MHP_OWNED_SMS_CHECKSUM) {
     applied.delete(MHP_OWNED_SMS_MIGRATION);
+  }
+  // Keep the exact130 application ready while only reviewed 0131 (009B agreed
+  // design) is added. Bundled131 validates strictly; every other row is checked.
+  if (migrations.length === 130
+      && migrations[129]?.filename === MHP_OWNED_SMS_MIGRATION
+      && migrations[129]?.checksum === MHP_OWNED_SMS_CHECKSUM
+      && applied.get(MHP_OWNED_SMS_MIGRATION) === MHP_OWNED_SMS_CHECKSUM
+      && applied.get(MHP_EVENT_PHONE_MIGRATION) === MHP_EVENT_PHONE_CHECKSUM) {
+    applied.delete(MHP_EVENT_PHONE_MIGRATION);
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));

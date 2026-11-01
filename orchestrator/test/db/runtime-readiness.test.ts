@@ -337,3 +337,16 @@ test('final130 owned-SMS runtime strictly requires exact130 and every earlier mi
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, rows[129]!])), /invalid runtime migration ledger/);
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { filename: '0131_unknown.sql', checksum: 'a'.repeat(64) }])), /migration not present/);
 });
+
+test('130 bridge admits only the exact reviewed 009B 0131 and keeps every other row strict', async () => {
+  const rows = (await discoverMigrations()).map(({ filename, checksum }) => ({ filename, checksum }));
+  assert.equal(rows.length, 130);
+  const reviewed131 = { filename: '0131_mhp_event_phone_programme.sql', checksum: '8ad7b48ede3c99d2232dac73b0b61a074a153402208564c4dabe824a5aba4fde' };
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool([...rows, reviewed131])));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { ...reviewed131, checksum: '0'.repeat(64) }])), /migration not present/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { filename: '0131_mhp_event_sms_programme.sql', checksum: 'c3bf409ea54d4311d0c750ba58719db905988d21878c8760fe041f56d25ef278' }])), /migration not present/, 'the superseded 0131 is never admitted');
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, reviewed131, { filename: '0132_unknown.sql', checksum: 'a'.repeat(64) }])), /migration not present/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(0, 129), reviewed131])), /migration not present/, 'without exact130 the bridge is never taken');
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, reviewed131, reviewed131])), /invalid runtime migration ledger/);
+});
