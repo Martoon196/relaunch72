@@ -341,7 +341,7 @@ test('final130 owned-SMS runtime strictly requires exact130 and every earlier mi
 test('130 bridge admits only the exact reviewed 009B 0131 and keeps every other row strict', async () => {
   const rows = (await discoverMigrations()).map(({ filename, checksum }) => ({ filename, checksum }));
   assert.equal(rows.length, 130);
-  const reviewed131 = { filename: '0131_mhp_event_phone_programme.sql', checksum: '8ad7b48ede3c99d2232dac73b0b61a074a153402208564c4dabe824a5aba4fde' };
+  const reviewed131 = { filename: '0131_mhp_event_phone_programme.sql', checksum: 'b117e3d267640f58ee41e4d32a7d9f936e9e4add5d91ea1e921cc88051312c14' };
   await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
   await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool([...rows, reviewed131])));
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { ...reviewed131, checksum: '0'.repeat(64) }])), /migration not present/);
