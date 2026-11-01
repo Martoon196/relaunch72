@@ -834,7 +834,7 @@ test('bundled migration discovery orders and checksums through source refresh re
   // pass nothing; make the pairing itself an assertion.
   assert.equal(sources.length, tail.length);
   assert.equal(tail.at(-2)?.checksum, 'e6bb5be3a87e0fde3e29d3f47edde1c5daf8492f4c368f80e2e4335f5b239797');
-  assert.equal(tail.at(-1)?.checksum, '8ad7b48ede3c99d2232dac73b0b61a074a153402208564c4dabe824a5aba4fde');
+  assert.equal(tail.at(-1)?.checksum, 'b117e3d267640f58ee41e4d32a7d9f936e9e4add5d91ea1e921cc88051312c14');
   for (const [index, migration] of tail.entries()) {
     assert.equal(migration!.checksum, createHash('sha256').update(sources[index]!, 'utf8').digest('hex'));
   }
