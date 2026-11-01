@@ -17,6 +17,8 @@ import type { PlatformCapability } from '../platform/capabilities.js';
 import type { CompanyContentCatalogItem } from '../company-content-pg/types.js';
 import type { PortalFollowupFlowService } from './followup-flow-service.js';
 import { handlePortalFollowupFlow } from './followup-flow-router.js';
+import { handleSeoBlog } from './seo-blog-router.js';
+import type { PortalSeoBlogService } from './seo-blog-service.js';
 import { parseCookies } from '../server/admin/session.js';
 import {
   PORTAL_COOKIE,
@@ -537,6 +539,10 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   /** Company-owned immutable content catalogue. It exposes no provider or publish operation. */
   companyContent?: PortalCompanyContentService;
   followupFlows?: Pick<PortalFollowupFlowService, 'snapshot' | 'review' | 'save' | 'publish' | 'preview' | 'simulate' | 'message'>;
+  /** SEO blog engine for owned brands. Absent unless SEO_BLOG_ENABLED=true and the content identity is ready. */
+  seoBlog?: PortalSeoBlogService;
+  /** True when website credentials can be sealed (SEO_BLOG_CREDENTIAL_KEY configured). */
+  seoBlogVaultReady?: boolean;
   /** Read-only owned-intelligence metadata. It exposes no review, activation or model operation. */
   brandBrain?: PortalBrandBrainService;
   /** Migration 0033 metadata and founder quarantine-only commands. */
@@ -1953,6 +1959,12 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     if (!deps.followupFlows) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('PP flow authoring is unavailable.'); return; }
     if (!resolvedRequestContext || !deps.abuse || !deps.abuseHashSecret) { res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('Native flow access is temporarily unavailable.'); return; }
     await handlePortalFollowupFlow(req, res, url, { portal: deps, flows: deps.followupFlows, identity: portalIdentity, requestId: resolvedRequestContext.requestId }); return;
+  }
+  if (deps.kind === 'postgres' && (p === '/portal/seo-blog' || p.startsWith('/portal/seo-blog/'))) {
+    if (!deps.seoBlog) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('The SEO blog area is not available.'); return; }
+    if (!resolvedRequestContext) { res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('The SEO blog area is temporarily unavailable.'); return; }
+    await handleSeoBlog(req, res, url, { service: deps.seoBlog, identity: portalIdentity, requestId: resolvedRequestContext.requestId, sessionSecret: deps.sessionSecret, vaultReady: deps.seoBlogVaultReady === true });
+    return;
   }
   // ── one-time account setup / login / logout (no auth) ──
   if (p === PROPERTY_PREDATOR_SSO_START_ROUTE && method === 'GET') {

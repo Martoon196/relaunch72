@@ -164,6 +164,8 @@ export interface PostgresPortalConfig {
   companyContent?: PortalCompanyContentService;
   /** Native local flow authoring; no enrolment or provider capability. */
   followupFlows?: PostgresPortalDeps['followupFlows'];
+  seoBlog?: PostgresPortalDeps['seoBlog'];
+  seoBlogVaultReady?: boolean;
   /** Omitted unless both company-asset least-privilege identities are ready. */
   companyAssets?: PortalCompanyAssetsService;
   /** Effects-off company-owned source sync. */
@@ -268,6 +270,8 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     operatorActions: cfg.operatorActions,
     companyContent: cfg.companyContent,
     followupFlows: cfg.followupFlows,
+    seoBlog: cfg.seoBlog,
+    seoBlogVaultReady: cfg.seoBlogVaultReady,
     companyAssets: cfg.companyAssets,
     companyContentSync: cfg.companyContentSync,
     companyContentReview: cfg.companyContentReview,

@@ -320,16 +320,17 @@ test('reader125 bridge is unavailable to the old123 prefix', async () => {
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, approvedMarketing, approvedWebinarReader]), directory), /migration not present/);
 });
 
-test('final130 owned-SMS runtime strictly requires exact130 and every earlier migration', async () => {
+test('final131 SEO blog runtime strictly requires exact131 and every earlier migration', async () => {
   const rows = (await discoverMigrations()).map(({ filename, checksum }) => ({ filename, checksum }));
-  assert.equal(rows.length, 130);
+  assert.equal(rows.length, 131);
   assert.deepEqual(rows[127], { filename: '0128_mhp_sequence_capture_entry.sql', checksum: '09b35b4eaf6e934c8f560e8d9d645bd3b9f37a34268f77f4afd974ecd1b54e97' });
   assert.deepEqual(rows[128], { filename: '0129_mhp_local_channel_drafts.sql', checksum: '649ba68b60954b6e76d4e702511321e59eff0785128051ed7b81f968abe1b57a' });
   assert.deepEqual(rows[129], { filename: '0130_mhp_owned_sms_pilot.sql', checksum: 'e6bb5be3a87e0fde3e29d3f47edde1c5daf8492f4c368f80e2e4335f5b239797' });
+  assert.deepEqual(rows[130], { filename: '0131_seo_blog_engine.sql', checksum: '904c4651c51da6507370ca7eb2f271ca0347a27d76c60b0f24a19aba01695784' });
   await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 129))), /schema is behind by 1 migration/);
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 128))), /schema is behind by 2 migration/);
-  for (const at of [0, 124, 125, 126, 127, 128, 129]) {
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 130))), /schema is behind by 1 migration/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0, 129))), /schema is behind by 2 migration/);
+  for (const at of [0, 124, 125, 126, 127, 128, 129, 130]) {
     const corrupt = rows.map((row, index) => index === at ? { ...row, checksum: '0'.repeat(64) } : row);
     await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(corrupt)), /checksum changed/);
   }
