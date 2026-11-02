@@ -24,6 +24,7 @@ async function main(): Promise<void> {
   }
   const pool = createDatabasePool(loadDatabaseConfig('contentCommand', process.env));
   console.log('seo-blog worker: capability profile-extraction-v1 (write stage profile; uncertain calls held).');
+  console.log('seo-blog worker: capability programme-research-v1 (budgeted plan attempts; durable receipts and bounded supplier retries).');
   const owner = `${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
   const interval = Math.max(15_000, Number(process.env.SEO_BLOG_WORKER_INTERVAL_MS ?? 60_000));
   let stopping = false;

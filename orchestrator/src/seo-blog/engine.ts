@@ -13,7 +13,7 @@ import { runChecks } from './checks.js';
 import { assessDuplicate, slugify } from './dedupe.js';
 import {
   extractProfile, GenerationUnavailableError, proposeCluster, resolveMarkers, rewriteSection, writeArticle, writeArticlePromotions,
-  type PlannedArticle,
+  type PlannedArticle, type PlannedCluster, type JsonCallResult,
 } from './generation.js';
 import { buildInventory, linkableUrls } from './inventory.js';
 import { cleanText, extractKnowledge } from './knowledge.js';
@@ -21,12 +21,14 @@ import { approvalIsCurrent, articleStatusLabel, checksAreCurrent, evaluatePublic
 import { publisherFor, type PublisherRegistry } from './publishers/registry.js';
 import { PublisherOutcomeUnknownError, PublisherRejectedError, verifyPublicUrl, type PublishInput } from './publishers/types.js';
 import { exportMarkdown, renderArticlePage, versionMarker } from './render.js';
-import { researchQueries, ResearchUnavailableError, type SearchProvider } from './research.js';
+import { researchQueries, ResearchUnavailableError, ResearchProviderError, type SearchProvider, type ResearchBundle } from './research.js';
 import { validatePublicUrl, type FetchTransport } from './safe-fetch.js';
 import { autoPlace, isValidTimeZone, localToUtc, utcToLocal, validateCadence } from './schedule.js';
 import type { SeoBlogStore } from './store.js';
 import { StaleWriteError } from './store.js';
 import { isProfileJob, profilePayload, unacknowledgedProfileCalls, type ProfileJobPayload, type ProfileJobReceipt, type ProfileJobSnapshot } from './profile-jobs.js';
+import { editorialRecommendations, editorialRootIssue, legacyPlanningHold, programmeAuthorityFor, programmeInputSnapshot, programmeReadinessIssue, programmeRun, programmeSha, researchDiagnostic,
+  type ApprovedEditorialStructure, type ProgrammeAuthority, type ProgrammeBoundarySnapshot, type ProgrammeBoundaryDecision, type ProgrammeRun, type ResearchSearchReceipt, type ResearchDiagnostic, type ProgrammeProvenance } from './programme.js';
 import {
   DESTINATION_TYPES, FACTUAL_KNOWLEDGE_CATEGORIES, KNOWLEDGE_CATEGORIES, SeoBlogError,
   type Article, type ArticleBody, type ArticleBrief, type ArticlePromotionPack, type ArticleVersion, type Brand, type BrandProfile, type BrandSettings,
@@ -40,6 +42,18 @@ import { activeBindingFor, bindingHold, SocialDeliveryHoldError, type SocialOver
 
 export interface Actor {
   readonly userId: string;
+}
+
+interface PlanExecution {
+  readonly search: SearchProvider;
+  readonly metrics?: KeywordProvider;
+  readonly research?: ResearchBundle;
+  readonly modelResult?: JsonCallResult<PlannedCluster>;
+  readonly planId: string;
+  readonly provenance: ProgrammeProvenance;
+  beforeModel(research: ResearchBundle): Promise<void>;
+  recordModel(result: JsonCallResult<PlannedCluster>): Promise<void>;
+  commit(plan: TopicPlan, briefs: readonly ArticleBrief[]): Promise<void>;
 }
 
 export interface EngineDeps {
@@ -93,7 +107,7 @@ function validUuid(value: string): boolean {
 export class BudgetExceededError extends SeoBlogError {
   constructor(kind: UsageKind, used: number, ceiling: number, estimate: number) {
     const label = kind === 'model_tokens' ? 'Writing' : kind === 'search_calls' ? 'Research' : 'Image';
-    const unit = kind === 'model_tokens' ? 'model tokens' : kind === 'search_calls' ? 'searches' : 'images';
+    const unit = kind === 'model_tokens' ? 'model tokens' : kind === 'search_calls' ? 'supplier attempts' : 'images';
     const number = (value: number) => value.toLocaleString('en-GB');
     const remaining = Math.max(0, ceiling - used);
     const reason = ceiling <= 0 ? 'not configured (ceiling 0)' : used >= ceiling ? 'monthly ceiling reached' : 'insufficient headroom for this action';
@@ -172,7 +186,11 @@ export class SeoBlogEngine {
   async updateSettings(actor: Actor, brandId: string, rowVersion: number, patch: Partial<BrandSettings>): Promise<Brand> {
     const brand = await this.brandFor(actor, brandId);
     if (brand.rowVersion !== rowVersion) throw new StaleWriteError('brand settings');
-    const next: BrandSettings = { ...brand.settings, ...patch };
+    const next: BrandSettings = { ...brand.settings, ...patch,
+      ...(patch.ongoingProduction!==undefined || patch.programme!==undefined ? {programme:{...brand.settings.programme,
+        ...(patch.programme ? {focus:cleanText(patch.programme.focus??'').slice(0,300)||null,exclusions:(patch.programme.exclusions??[]).map((x)=>cleanText(x).slice(0,80)).filter(Boolean).slice(0,20)} : {}),
+        authorisedBy:actor.userId,authorisedAt:this.now()}} : {}),
+    };
     validateSettings(next);
     const updated = await this.store.updateBrand({ ...brand, settings: next });
     const changes: string[] = [];
@@ -265,6 +283,17 @@ export class SeoBlogEngine {
     if (!latest) throw new SeoBlogError(404, 'That document was not found.');
     await this.store.saveKnowledge({ ...latest, version: latest.version + 1, active: false, createdAt: this.now(), statusDetail: 'Retired by the owner.' });
     await this.log(brandId, actor.userId, 'knowledge.retired', `${latest.title} retired.`, documentId);
+  }
+
+  async changeKnowledgeCategory(actor:Actor,brandId:string,documentId:string,expectedVersion:number,category:string):Promise<void> {
+    await this.brandFor(actor,brandId);
+    if(!KNOWLEDGE_CATEGORIES.includes(category as KnowledgeCategory)) throw new SeoBlogError(400,'Choose a guidance kind.');
+    const current=(await this.store.listKnowledge(brandId)).filter((d)=>d.id===documentId).sort((a,b)=>b.version-a.version)[0];
+    if(!current||!current.active) throw new SeoBlogError(404,'That active guidance document was not found.');
+    if(current.version!==expectedVersion) throw new StaleWriteError('guidance document');
+    if(current.category===category) return;
+    await this.store.saveKnowledge({...current,category:category as KnowledgeCategory,version:current.version+1,createdAt:this.now()});
+    await this.log(brandId,actor.userId,'knowledge.kind_changed','Guidance kind updated as a new document version. Review the profile if factual guidance changed.',documentId);
   }
 
   private knowledgeRefs(docs: readonly KnowledgeDocument[]): KnowledgeRef[] {
@@ -474,7 +503,8 @@ export class SeoBlogEngine {
   async refreshInventory(brandId: string, actorLabel = 'system'): Promise<WebsiteInventory> {
     const brand = await this.store.getBrand(brandId);
     if (!brand?.website) throw new SeoBlogError(409, 'Add the brand website before reading its pages.');
-    const inventory = await buildInventory(brandId, brand.website, this.deps.transport, { now: this.now() });
+    const scanned = await buildInventory(brandId, brand.website, this.deps.transport, { now: this.now() });
+    const inventory={...scanned,editorial:editorialRecommendations(scanned)};
     await this.store.saveInventory(inventory);
     const ok = inventory.pages.filter((p) => p.fetchStatus === 'ok');
     await this.log(brandId, actorLabel, 'inventory.refreshed', `Website read: ${ok.length} pages (${ok.filter((p) => p.editorial).length} editorial), ${inventory.pages.length - ok.length} could not be read.`);
@@ -493,9 +523,214 @@ export class SeoBlogEngine {
 
   // ─── Planning ────────────────────────────────────────────────────────────
 
-  async requestPlan(actor: Actor, brandId: string, input: { commandId: string; focus?: string | null; excluded?: readonly string[]; sourceArticleUrl?: string | null }): Promise<Job> {
+  async approveEditorialStructure(actor: Actor, brandId: string, input: {rowVersion:number;scanId:string;scanSha:string;destinationId:string;root:string;categories:readonly {id:string;label:string;slug:string}[]}): Promise<ApprovedEditorialStructure> {
+    await this.brandFor(actor,brandId);let approved:ApprovedEditorialStructure|undefined;
+    await this.store.programmeBoundary({brandId,jobId:null,authority:{origin:'manual',sponsorUserId:actor.userId},now:this.now(),decide:(s)=>{
+      if(!s.requesterAllowed) throw new SeoBlogError(403,'Only a current managing owner can approve editorial guidance.');
+      if(s.brand.rowVersion!==input.rowVersion) throw new StaleWriteError('brand settings');
+      if(!s.inventory) throw new SeoBlogError(409,'Read the website before approving its editorial structure.');
+      const recommendation=s.inventory.editorial??editorialRecommendations(s.inventory);
+      if(recommendation.scanId!==input.scanId || recommendation.scanSha!==input.scanSha) throw new SeoBlogError(409,'The website scan changed. Review the current recommendations before approval.');
+      const issue=editorialRootIssue(s.destinations.find((d)=>d.id===input.destinationId),input.root);
+      if(issue) throw new SeoBlogError(409,issue);
+      if(!input.categories.length || input.categories.length>12) throw new SeoBlogError(400,'Choose between 1 and 12 editorial categories.');
+      const categories=input.categories.map((item)=>{
+        const known=recommendation.categories.find((c)=>c.id===item.id);
+        if(!known&&!/^owner-[0-2]$/.test(item.id)) throw new SeoBlogError(400,'That category is not part of this recommendation.');
+        const label=cleanText(item.label).trim();const slug=item.slug.trim();
+        if(label.length<2||label.length>80||!(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).test(slug)||slug.length>60) throw new SeoBlogError(400,'Category labels need 2–80 characters; slugs use lowercase words separated by hyphens.');
+        return {...(known??{id:item.id,evidenceUrls:[],rationale:'Owner-provided draft category. This does not create a CMS route.',confidence:'low' as const}),label,slug};
+      });
+      if(new Set(categories.map((c)=>c.id)).size!==categories.length||new Set(categories.map((c)=>c.slug)).size!==categories.length) throw new SeoBlogError(400,'Give each category a distinct label and slug.');
+      const base={schema:1 as const,version:(s.brand.settings.programme?.structure?.version??0)+1,scanId:recommendation.scanId,scanSha:recommendation.scanSha,root:input.root,destinationId:input.destinationId,categories,approvedBy:actor.userId,approvedAt:this.now()};
+      approved={...base,sha:programmeSha(base)};
+      return {job:null,writeJob:false,settings:{...s.brand.settings,programme:{...s.brand.settings.programme,structure:approved}},event:{brandId,at:this.now(),actor:actor.userId,kind:'editorial.approved',message:`Editorial guidance version ${approved.version} approved. Existing URLs were not moved.`,subjectId:null}};
+    }});
+    if(!approved) throw new SeoBlogError(409,'Editorial guidance could not be approved.');
+    return approved;
+  }
+
+  private programmeOwns(current: Job | null, claim: Job): boolean {
+    return !!current && current.state==='running' && current.leaseOwner===claim.leaseOwner && current.attempts===claim.attempts && !!current.leaseExpiresAt && current.leaseExpiresAt>this.now();
+  }
+  private programmeIssue(s: ProgrammeBoundarySnapshot, run: ProgrammeRun, authority: ProgrammeAuthority): string | null {
+    const issue=programmeReadinessIssue(s,authority);
+    if(issue) return issue;
+    if(programmeInputSnapshot(s,authority).sha!==run.snapshot.sha) return 'The confirmed profile, guidance, programme owner or approved editorial guidance changed. Start a new planning intent; current edits were preserved.';
+    const structure=s.brand.settings.programme?.structure;
+    return structure ? editorialRootIssue(s.destinations.find((d)=>d.id===structure.destinationId),structure.root) : null;
+  }
+  private programmeHeld(s: ProgrammeBoundarySnapshot, job: Job, run: ProgrammeRun, reason: string, message: string, diagnostic: ResearchDiagnostic | null = null): ProgrammeBoundaryDecision {
+    const now=this.now();
+    const hold={logicalRunId:run.logicalRunId,jobId:job.id,at:now,reason,diagnostic};
+    const latch=!!s.brand.settings.programme?.researchHold || run.attempts.length>0 || !!run.modelStart || reason.startsWith('legacy');
+    return {job:{...job,state:'blocked',leaseOwner:null,leaseExpiresAt:null,payload:{...job.payload,programme:{...run,hold:reason}},error:message.slice(0,400),progress:message.slice(0,400),updatedAt:now},writeJob:true,
+      ...(latch?{settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:s.brand.settings.programme?.researchHold??hold}}}:{}),
+      event:{brandId:job.brandId,at:now,actor:'system',kind:'programme.held',message:message.slice(0,500),subjectId:job.id}};
+  }
+  private async programmeTransaction(job: Job, authority: ProgrammeAuthority, decide: (s: ProgrammeBoundarySnapshot)=>ProgrammeBoundaryDecision): Promise<Job> {
+    const result=await this.store.programmeBoundary({brandId:job.brandId,jobId:job.id,authority,now:this.now(),decide});
+    if(!result) throw new SeoBlogError(404,'Planning task not found.');
+    return result;
+  }
+  private async programmeSearch(claim: Job, authority: ProgrammeAuthority, query: string, options: {locale:string;limit:number}, kind:'serp'|'metrics'='serp', effect?:()=>Promise<ResearchSearchReceipt>): Promise<ResearchSearchReceipt> {
+    let cached:ResearchSearchReceipt|null=null; let nonce:string|null=null; let metricsSkipped=false;
+    const reserved=await this.programmeTransaction(claim,authority,(s)=>{
+      const current=s.job; const run=current&&programmeRun(current);
+      if(!current || !run) throw new SeoBlogError(409,'Planning run was not initialised.');
+      const querySha=programmeSha({input:run.snapshot.sha,query,locale:options.locale,limit:options.limit,provider:kind==='serp'?this.deps.search.id:'keyword-metrics',kind});
+      const saved=run.attempts.find((a)=>a.querySha===querySha && a.receipt);
+      if(saved?.receipt) {cached=saved.receipt;return {job:current,writeJob:false};}
+      if(!this.programmeOwns(current,claim)) return {job:current,writeJob:false};
+      const pending=run.attempts.find((a)=>a.querySha===querySha&&!a.receivedAt);
+      if(kind==='metrics' && (pending || run.metricsWarning)) {
+        metricsSkipped=true; const warning=run.metricsWarning??researchDiagnostic(null);
+        return {job:{...current,payload:{...current.payload,programme:{...run,metricsWarning:warning,attempts:run.attempts.map((a)=>a===pending?{...a,diagnostic:warning,uncertainAt:this.now()}:a)}}},writeJob:true};
+      }
+      if(pending) return this.programmeHeld(s,current,run,'outcome_unknown','A research request started without a durable response. Its outcome and supplier charge may be uncertain. Review and explicitly resume; it will not be repeated automatically.');
+      const issue=this.programmeIssue(s,run,authority);
+      if(issue) return this.programmeHeld(s,current,run,'inputs_changed',issue);
+      if(s.brand.settings.programme?.researchHold) return this.programmeHeld(s,current,run,'research_held','The programme has a research hold. Review it and explicitly resume with a new intent.');
+      const ceiling=s.brand.settings.budgets.searchCallsPerMonth;
+      if(kind==='metrics' && (ceiling<=0||s.usage.search_calls+1>ceiling)) {
+        metricsSkipped=true;return {job:{...current,payload:{...current.payload,programme:{...run,metricsWarning:{...researchDiagnostic(null),summary:'Optional keyword metrics were not requested because the remaining search-attempt allowance is insufficient.',remedy:'Source research remains valid; demand is labelled qualitative.'}}}},writeJob:true};
+      }
+      if(ceiling<=0||s.usage.search_calls+1>ceiling) return this.programmeHeld(s,current,run,'budget',new BudgetExceededError('search_calls',s.usage.search_calls,ceiling,1).message);
+      nonce=randomUUID(); const now=this.now();
+      return {job:{...current,payload:{...current.payload,programme:{...run,attempts:[...run.attempts,{querySha,query,nonce,kind,startedAt:now}]}},progress:`Researching ${kind==='metrics'?'optional demand metrics':'sources'} · attempt ${run.attempts.length+1}.`,error:null,updatedAt:now},writeJob:true,
+        usage:{brandId:claim.brandId,kind:'search_calls',amount:1,at:now,reference:`research:${run.logicalRunId}:${nonce}`}};
+    });
+    if(cached) return cached;
+    if(metricsSkipped) return {hits:[],keywordMetrics:[],taskId:null,providerReportedCost:null};
+    if(!nonce || reserved.state!=='running') throw new ResearchUnavailableError('Research is held. See the programme status for the next action.');
+    let receipt:ResearchSearchReceipt|null=null; let diagnostic:ResearchDiagnostic|null=null; let cost:number|null=null;
+    try {
+      receipt=effect ? await effect() : this.deps.search.searchReceipt ? await this.deps.search.searchReceipt(query,options) : {hits:await this.deps.search.search(query,options),taskId:null,providerReportedCost:null};
+    } catch(error) {
+      diagnostic=error instanceof ResearchProviderError?error.diagnostic:researchDiagnostic(null);
+      cost=error instanceof ResearchProviderError?error.providerReportedCost:null;
+    }
+    const save=()=>this.programmeTransaction(claim,authority,(s)=>{
+      const current=s.job; const run=current&&programmeRun(current);
+      if(!current || !run) throw new SeoBlogError(404,'Planning task not found.');
+      const index=run.attempts.findIndex((a)=>a.nonce===nonce);
+      if(index<0) throw new SeoBlogError(409,'Research receipt does not match its reserved attempt.');
+      if(run.attempts[index]!.receivedAt) return {job:current,writeJob:false};
+      const now=this.now(); const attempts=run.attempts.map((a,i)=>i===index?{...a,...(receipt?{receipt}:{diagnostic:diagnostic!,providerReportedCost:cost}),receivedAt:now}:a);
+      const nextRun={...run,attempts,...(kind==='metrics'&&receipt?{metricsWarning:undefined}:{})}; const next={...current,payload:{...current.payload,programme:nextRun},updatedAt:now};
+      if(!this.programmeOwns(current,claim)) return current.state==='running' ? this.programmeHeld(s,next,nextRun,'lease_lost','A late research receipt was retained, but its lease ended. No plan was applied. Review before resuming.') : {job:next,writeJob:true};
+      const issue=this.programmeIssue(s,nextRun,authority);
+      if(issue) return this.programmeHeld(s,next,nextRun,'inputs_changed',issue);
+      if(receipt) return {job:next,writeJob:true};
+      if(kind==='metrics') return {job:{...next,payload:{...next.payload,programme:{...nextRun,metricsWarning:diagnostic!}},progress:'Source research is available. Optional demand metrics are unavailable; demand remains qualitative.'},writeJob:true};
+      if(diagnostic?.retryable && run.retries<2 && s.usage.search_calls<s.brand.settings.budgets.searchCallsPerMonth) {
+        const retries=run.retries+1;const seconds=retries===1?60:300;
+        return {job:{...next,state:'queued',leaseOwner:null,leaseExpiresAt:null,runAfter:new Date(Date.parse(now)+seconds*1000).toISOString(),payload:{...next.payload,programme:{...nextRun,retries}},error:diagnostic.summary,progress:`Temporary search error. Retry ${retries} of 2 is queued in ${seconds} seconds, within the remaining search allowance.`},writeJob:true};
+      }
+      return this.programmeHeld(s,next,nextRun,diagnostic?.retryable?'retries_exhausted':diagnostic?.category??'unknown',diagnostic ? `${diagnostic.summary} ${diagnostic.retryable?'The bounded retry allowance or search ceiling is exhausted. Explicit owner resume is required.':diagnostic.remedy}` : 'Research outcome is unknown. Review before resuming.',diagnostic);
+    });
+    let saved:Job; try{saved=await save();}catch{saved=await save();}
+    if(kind==='metrics' && !receipt && saved.state==='running' && saved.leaseOwner===claim.leaseOwner && saved.attempts===claim.attempts) return {hits:[],keywordMetrics:[],taskId:null,providerReportedCost:cost};
+    if(!receipt || saved.state!=='running' || saved.leaseOwner!==claim.leaseOwner || saved.attempts!==claim.attempts) throw new ResearchUnavailableError('Research is paused. Open programme status for the saved outcome.');
+    return receipt;
+  }
+
+  private async runProgrammePlanJob(claim: Job): Promise<Job> {
+    const brand=await this.store.getBrand(claim.brandId); if(!brand) throw new SeoBlogError(404,'Brand not found.');
+    const profile=await this.store.latestProfile(claim.brandId); const authority=programmeAuthorityFor(claim,brand,profile);
+    let ready=await this.programmeTransaction(claim,authority,(s)=>{
+      const current=s.job;if(!current) throw new SeoBlogError(404,'Planning task not found.');
+      if(!this.programmeOwns(current,claim)) return {job:current,writeJob:false};
+      let run=programmeRun(current);
+      const unreceiptedLegacyClaim=!run&&current.attempts>1;
+      const source=programmeInputSnapshot(s,authority);
+      if(!run) run={schema:1,logicalRunId:current.id,snapshot:source,retries:0,attempts:[]};
+      const withRun={...current,payload:{...current.payload,programme:run}};
+      if(unreceiptedLegacyClaim) return this.programmeHeld(s,withRun,run,'legacy_outcome_unknown','An older worker already claimed this planning task without durable supplier receipts. Review its outcome before a distinct new intent; no historical charge or usage was inferred.');
+      const issue=this.programmeIssue(s,run,authority);
+      if(issue) return this.programmeHeld(s,withRun,run,'inputs_changed',issue);
+      if(!run.modelReceipt&&!this.deps.llm) return this.programmeHeld(s,withRun,run,'configuration','The writing model is not configured. No new supplier or model call was started.');
+      if(!run.research&&this.deps.search.mode!=='live') return this.programmeHeld(s,withRun,run,'configuration','Source research is not configured. Connect the research provider before a new planning intent.');
+      const legacy=legacyPlanningHold(s.jobs,s.brand.settings.programme?.researchAcknowledgements);
+      const hold=s.brand.settings.programme?.researchHold??legacy;
+      const explicit=hold && current.payload.resumeHoldId===hold.logicalRunId && authority.origin==='manual';
+      if(hold && !explicit && !(hold.jobId===current.id && run.modelReceipt)) {
+        const held=this.programmeHeld(s,withRun,run,'research_held',legacy?'An older planning task needs review. No historical supplier code or charge was inferred. A managing owner can explicitly resume with a new intent.':'Research is held. A managing owner can review and explicitly resume with a new intent.');
+        return {...held,settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:hold}}};
+      }
+      if(run.attempts.some((a)=>a.kind!=='metrics'&&!a.receivedAt) || (run.modelStart&&!run.modelReceipt)) return this.programmeHeld(s,withRun,run,'outcome_unknown','An interrupted paid research or model call has no durable result. Review its outcome before explicitly resuming; it will not be repeated automatically.');
+      return {job:{...withRun,error:null,progress:run.modelReceipt?'Applying the saved planning result; no new model call.':'Researching and planning the next draft campaign.'},writeJob:true,
+        ...(explicit?{settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:null,researchAcknowledgements:[...(s.brand.settings.programme?.researchAcknowledgements??[]),{jobId:hold!.jobId,intentId:current.id,actorId:authority.sponsorUserId,at:this.now()}]}}}:{})};
+    });
+    if(ready.state!=='running' || ready.leaseOwner!==claim.leaseOwner || ready.attempts!==claim.attempts) return ready;
+    const run=programmeRun(ready)!;
+    const p=ready.payload;
+    try {
+      await this.runPlan(claim.brandId,{focus:(p.focus as string|null)??null,excluded:(p.excluded as string[])??[],sourceArticleUrl:(p.sourceArticleUrl as string|null)??null,requestedBy:typeof p.requestedBy==='string'?p.requestedBy:undefined},{
+        planId:run.logicalRunId,provenance:{logicalRunId:run.logicalRunId,inputSha:run.snapshot.sha,structureSha:run.snapshot.structureSha,structureVersion:run.snapshot.structureVersion,root:run.snapshot.root,categoryLabels:run.snapshot.categoryLabels,authority},
+        search:{id:this.deps.search.id,mode:this.deps.search.mode,search:async(query,options)=>[...(await this.programmeSearch(claim,authority,query,options)).hits]},
+        ...(this.deps.keywords?.mode==='live'?{metrics:{mode:'live' as const,metrics:async(queries: string[])=>[...(await this.programmeSearch(claim,authority,queries.join('\n'),{locale:brand.locale,limit:queries.length},'metrics',async()=>({hits:[],keywordMetrics:(await this.deps.keywords!.metrics(queries)).filter((m)=>m.source!=='mock'),taskId:null,providerReportedCost:null}))).keywordMetrics??[]]}}:{}),
+        research:run.research,modelResult:run.modelReceipt,
+        beforeModel:async(research)=>{
+          let permitted=false;
+          ready=await this.programmeTransaction(claim,authority,(s)=>{
+            const current=s.job;const latest=current&&programmeRun(current);if(!current||!latest) throw new SeoBlogError(404,'Planning task not found.');
+            if(!this.programmeOwns(current,claim)) return {job:current,writeJob:false};
+            const issue=this.programmeIssue(s,latest,authority);
+            if(issue) return this.programmeHeld(s,current,latest,'inputs_changed',issue);
+            if(latest.modelStart&&!latest.modelReceipt) return this.programmeHeld(s,current,latest,'outcome_unknown','A previous model call has no durable result. Review before a new paid intent.');
+            const ceiling=s.brand.settings.budgets.modelTokensPerMonth;
+            if(ceiling<=0||s.usage.model_tokens+USAGE_ESTIMATES.plan>ceiling) return this.programmeHeld(s,current,latest,'budget',new BudgetExceededError('model_tokens',s.usage.model_tokens,ceiling,USAGE_ESTIMATES.plan).message);
+            permitted=true;return {job:{...current,payload:{...current.payload,programme:{...latest,research,modelStart:{nonce:randomUUID(),at:this.now()}}},progress:'Writing the researched draft plan.'},writeJob:true};
+          });
+          if(!permitted) throw new ResearchUnavailableError('Planning is held. See programme status.');
+        },
+        recordModel:async(result)=>{
+          const nonce=programmeRun(ready)!.modelStart!.nonce;
+          const save=()=>this.programmeTransaction(claim,authority,(s)=>{
+            const current=s.job;const latest=current&&programmeRun(current);if(!current||!latest||latest.modelStart?.nonce!==nonce) throw new SeoBlogError(409,'Planning model result does not match its started operation.');
+            if(latest.modelReceipt) return {job:current,writeJob:false};
+            const at=this.now();return {job:{...current,payload:{...current.payload,programme:{...latest,modelReceipt:result,modelReceiptAt:at}},updatedAt:at},writeJob:true,
+              usage:{brandId:claim.brandId,kind:'model_tokens',amount:result.record.tokensIn+result.record.tokensOut,at,reference:`plan:${latest.logicalRunId}:${nonce}`}};
+          });
+          try{ready=await save();}catch{ready=await save();}
+        },
+        commit:async(plan,briefs)=>{
+          const save=()=>this.programmeTransaction(claim,authority,(s)=>{
+            const current=s.job;const latest=current&&programmeRun(current);if(!current||!latest) throw new SeoBlogError(404,'Planning task not found.');
+            if(current.state==='done') return {job:current,writeJob:false};
+            if(!this.programmeOwns(current,claim)) return current.state==='running'?this.programmeHeld(s,current,latest,'lease_lost','The planning lease ended. The saved result was retained without applying it.'): {job:current,writeJob:false};
+            const issue=this.programmeIssue(s,latest,authority);
+            if(issue) return this.programmeHeld(s,current,latest,'inputs_changed',issue);
+            const accept=s.brand.settings.autoAcceptPlans;
+            const now=this.now();return {job:{...current,state:'done',leaseOwner:null,leaseExpiresAt:null,payload:{...current.payload,programme:{...latest,planId:plan.id}},progress:'Researched topic plan saved. Proposed dates are draft diary entries, not publication schedules.',error:null,updatedAt:now},writeJob:true,
+              plan:accept?{...plan,status:'accepted',acceptedAt:now}:plan,briefs:briefs.map((b)=>accept&&b.status==='planned'?{...b,status:'accepted'}:b),
+              settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:s.brand.settings.programme?.researchHold?.jobId===current.id?null:s.brand.settings.programme?.researchHold??null}},
+              event:{brandId:claim.brandId,at:now,actor:'system',kind:'plan.proposed',message:`Researched plan saved with ${briefs.length} proposed articles.`,subjectId:plan.id}};
+          });
+          try{ready=await save();}catch{ready=await save();}
+        },
+      });
+      const outcome=(await this.store.getJob(claim.brandId,claim.id))??ready;
+      if(outcome.state==='done') await this.topUpWrites(claim.brandId);
+      return outcome;
+    } catch(error) {
+      return this.programmeTransaction(claim,authority,(s)=>{
+        const current=s.job;const latest=current&&programmeRun(current);if(!current||!latest) throw new SeoBlogError(404,'Planning task not found.');
+        if(!this.programmeOwns(current,claim)) return {job:current,writeJob:false};
+        if(error instanceof BudgetExceededError) return this.programmeHeld(s,current,latest,'budget',error.message);
+        return this.programmeHeld(s,current,latest,'planning_held',latest.modelStart&&!latest.modelReceipt?'A planning model call has no saved result. Token usage may be uncertain. Review before a new paid intent.':'Planning could not complete with usable research. Saved successful query receipts were retained; review programme status before resuming.');
+      });
+    }
+  }
+
+  async requestPlan(actor: Actor, brandId: string, input: { commandId: string; focus?: string | null; excluded?: readonly string[]; sourceArticleUrl?: string | null; resumeHoldId?: string | null }): Promise<Job> {
     const brand = await this.brandFor(actor, brandId);
     if (!validUuid(input.commandId)) throw new SeoBlogError(400, 'Refresh the form and try again.');
+    const jobs=await this.store.listJobs(brandId);const prior=jobs.find((j)=>j.idempotencyKey===`plan:${input.commandId}`);
+    if(prior) return prior;
+    const hold=brand.settings.programme?.researchHold??legacyPlanningHold(jobs,brand.settings.programme?.researchAcknowledgements);
+    if(hold && input.resumeHoldId!==hold.logicalRunId) throw new SeoBlogError(409,'Research is held after an earlier outcome. Review the programme status and explicitly resume with a new research intent.');
     const readiness = await this.readinessFor(brand);
     if (!readiness.canPlan) throw new SeoBlogError(409, `Before planning: ${readiness.missing.filter((m) => !m.includes('website for publishing')).join(' ')}`, 'not_ready');
     await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.plan);
@@ -506,17 +741,18 @@ export class SeoBlogEngine {
       excluded: (input.excluded ?? []).map((x) => cleanText(x).slice(0, 80)).filter(Boolean).slice(0, 20),
       sourceArticleUrl,
       requestedBy: actor.userId,
+      resumeHoldId: input.resumeHoldId??null,
     });
   }
 
   /** Job handler: research → cluster → duplicate checks → suggested diary dates. */
-  async runPlan(brandId: string, payload: { focus: string | null; excluded: string[]; sourceArticleUrl: string | null; requestedBy?: string }): Promise<TopicPlan> {
+  async runPlan(brandId: string, payload: { focus: string | null; excluded: string[]; sourceArticleUrl: string | null; requestedBy?: string }, execution?: PlanExecution): Promise<TopicPlan> {
     const brand = await this.store.getBrand(brandId);
     if (!brand) throw new SeoBlogError(404, 'Brand not found.');
     const { profile, stale } = await this.currentFactsKey(brandId);
     if (!profile?.confirmedAt || stale) throw new SeoBlogError(409, 'Confirm the current brand profile before planning.', 'not_ready');
-    await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.plan);
-    await this.requireBudget(brand, 'search_calls', USAGE_ESTIMATES.searchPerPlan);
+    if(!execution?.modelResult) await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.plan);
+    if(!execution) await this.requireBudget(brand, 'search_calls', USAGE_ESTIMATES.searchPerPlan);
     let inventory = await this.store.getInventory(brandId);
     if (brand.website && (!inventory || Date.parse(this.now()) - Date.parse(inventory.fetchedAt) > 24 * 3600_000)) {
       inventory = await this.refreshInventory(brandId);
@@ -525,25 +761,28 @@ export class SeoBlogEngine {
     // Seed queries come from the brand itself: audiences' questions, offers, gaps — never from an owner prompt.
     const seeds = [
       payload.focus,
+      ...(brand.settings.programme?.structure?.categories??[]).slice(0,3).map((c)=>`${c.label} ${profile.audiences[0]??profile.positioning}`),
       ...profile.offers.slice(0, 3).map((o) => `${o.name} ${brand.locale === 'en-GB' ? 'UK' : ''}`.trim()),
       ...profile.audiences.slice(0, 3).map((a) => `${a} questions`),
       profile.positioning.split(/[.;]/)[0],
     ].filter((q): q is string => Boolean(q && q.trim().length > 3)).map((q) => q.slice(0, 120));
-    const research = await researchQueries({
-      queries: [...new Set(seeds)].slice(0, USAGE_ESTIMATES.searchPerPlan), search: this.deps.search, transport: this.deps.transport,
-      locale: brand.locale, brandWebsite: brand.website, now: this.now, keywordProvider: this.deps.keywords ?? null,
+    const research = execution?.research ?? await researchQueries({
+      queries: [...new Set(seeds)].slice(0, USAGE_ESTIMATES.searchPerPlan), search: execution?.search??this.deps.search, transport: this.deps.transport,
+      locale: brand.locale, brandWebsite: brand.website, now: this.now, keywordProvider: execution ? execution.metrics??null : this.deps.keywords ?? null,
     });
-    if (research.searchCalls > 0) await this.store.recordUsage({ brandId, kind: 'search_calls', amount: research.searchCalls, at: this.now(), reference: 'plan' });
+    if (!execution && research.searchCalls > 0) await this.store.recordUsage({ brandId, kind: 'search_calls', amount: research.searchCalls, at: this.now(), reference: 'plan' });
     if (research.sources.length === 0) throw new ResearchUnavailableError('Research returned no usable sources. Planning paused; nothing was invented.');
     const planned = await this.store.listBriefs(brandId);
     const articles = await this.store.listArticles(brandId);
-    const result = await proposeCluster(this.llm(), {
+    if(execution && !execution.modelResult) await execution.beforeModel(research);
+    const result = execution?.modelResult ?? await proposeCluster(this.llm(), {
       brandName: brand.name, profile, inventory: pages, sources: research.sources,
-      focus: payload.focus, excluded: payload.excluded, sourceArticleUrl: payload.sourceArticleUrl,
+      focus: [payload.focus,brand.settings.programme?.structure?`Owner-approved editorial category guidance: ${brand.settings.programme.structure.categories.map((c)=>c.label).join('; ')}. Preserve existing page URLs; category guidance does not create new website routes.`:null].filter(Boolean).join('\n')||null, excluded: payload.excluded, sourceArticleUrl: payload.sourceArticleUrl,
     });
-    await this.recordGeneration(brandId, result.record, 'plan');
+    if(execution) { if(!execution.modelResult) await execution.recordModel(result); }
+    else await this.recordGeneration(brandId, result.record, 'plan');
     const short = new Map(research.sources.map((s, i) => [`S${i + 1}`, s]));
-    const planId = randomUUID();
+    const planId = execution?.planId??randomUUID();
     const cluster = [result.value.pillar, ...result.value.supporting];
     const slugToId = new Map(cluster.map((a) => [a.slug, randomUUID()]));
     const comparable: import('./dedupe.js').PlannedComparable[] = [
@@ -559,6 +798,7 @@ export class SeoBlogEngine {
       usedSlugs.add(slug);
       const metric = research.keywordMetrics.find((m) => m.keyword.toLowerCase() === item.target_query.toLowerCase() && m.volume !== null);
       const brief: ArticleBrief = {
+        ...(execution ? {programme:execution.provenance} : {}),
         id: slugToId.get(item.slug)!, planId, brandId, role: item.role, slug,
         workingTitle: item.working_title, targetQuery: item.target_query, searchIntent: item.search_intent,
         relatedQuestions: item.related_questions, angle: item.angle, outline: item.outline, keyPoints: item.key_points,
@@ -585,6 +825,7 @@ export class SeoBlogEngine {
     });
     const when = new Map(placement.placed.map((p) => [p.id, p.utc]));
     const plan: TopicPlan = {
+      ...(execution ? {programme:execution.provenance} : {}),
       id: planId, brandId, status: 'proposed', topic: result.value.topic,
       moneyPage: result.value.money_page.url ? { url: result.value.money_page.url, label: result.value.money_page.label } : null,
       briefIds: briefs.map((b) => b.id), sources: research.sources,
@@ -592,6 +833,7 @@ export class SeoBlogEngine {
       profileVersion: profile.version, inventoryAt: inventory?.fetchedAt ?? null, generation: result.record, createdAt: this.now(), acceptedAt: null,
     };
     // Briefs first, plan last: a crash in between leaves orphan briefs no screen lists, never a half plan.
+    if(execution) { await execution.commit(plan,briefs.map((brief)=>({...brief,suggestedAtUtc:when.get(brief.id)??null}))); return plan; }
     for (const brief of briefs) await this.store.saveBrief({ ...brief, suggestedAtUtc: when.get(brief.id) ?? null });
     await this.store.savePlan(plan);
     await this.log(brandId, payload.requestedBy ?? 'system', 'plan.proposed', `New topic plan: “${plan.topic}” (${briefs.length} articles).`, planId);
@@ -633,6 +875,11 @@ export class SeoBlogEngine {
   }
 
   private async acceptPlanInternal(brand: Brand, plan: TopicPlan, actor: string): Promise<TopicPlan> {
+    if(plan.programme) {
+      const current=await this.store.getBrand(brand.id);const profile=await this.store.latestProfile(brand.id);
+      if(!current||!profile?.confirmedAt||profile.version!==plan.profileVersion||(current.settings.programme?.structure?.sha??null)!==plan.programme.structureSha) throw new SeoBlogError(409,'The profile or approved editorial guidance changed. Review a new plan before accepting.');
+      if(current.settings.pauseAll) throw new SeoBlogError(409,'The programme is paused.');
+    }
     if (plan.status === 'accepted') return plan;
     if (plan.status !== 'proposed') throw new SeoBlogError(409, 'Only a proposed plan can be accepted.');
     for (const id of plan.briefIds) {
@@ -697,10 +944,22 @@ export class SeoBlogEngine {
   async runWrite(brandId: string, payload: { briefId: string; fromVersionId?: string; requestedBy?: string }): Promise<Article> {
     const brand = await this.store.getBrand(brandId);
     if (!brand) throw new SeoBlogError(404, 'Brand not found.');
+    if(brand.settings.pauseAll) throw new SeoBlogError(409,'Draft production is paused by the owner.');
     const brief = await this.store.getBrief(brandId, payload.briefId);
     if (!brief) throw new SeoBlogError(404, 'Planned article not found.');
     const { profile, stale } = await this.currentFactsKey(brandId);
     if (!profile?.confirmedAt || stale) throw new SeoBlogError(409, 'Confirm the current brand profile before writing.', 'not_ready');
+    if(brief.programme) {
+      const authority=brief.programme.authority;
+      if(!authority) throw new SeoBlogError(409,'The planned article has no current programme authority. Review a new plan.');
+      const plan=await this.store.getPlan(brandId,brief.planId);
+      await this.store.programmeBoundary({brandId,jobId:null,authority,now:this.now(),decide:(s)=>{
+        const issue=programmeReadinessIssue(s,authority);
+        if(issue) throw new SeoBlogError(409,issue);
+        if(s.profile?.version!==plan?.profileVersion||(s.brand.settings.programme?.structure?.sha??null)!==brief.programme!.structureSha) throw new SeoBlogError(409,'The planned article is based on changed profile or editorial guidance. Review a new plan.');
+        return {job:null,writeJob:false};
+      }});
+    }
     const { article: created } = await this.store.createArticle({
       id: randomUUID(), brandId, briefId: brief.id, planId: brief.planId, slug: brief.slug, editorialState: 'writing',
       currentVersionId: null, requiresApproval: false, approval: null, checks: null, schedule: null, hold: null,
@@ -778,6 +1037,7 @@ export class SeoBlogEngine {
       generation: generationRecord, mode: generationRecord ? 'model' : 'excerpt_fallback', posts,
     };
     const version: ArticleVersion = {
+      ...(brief.programme?{programme:brief.programme}:{}),
       id: versionId, articleId: article.id, brandId: brand.id, number: (versions.at(-1)?.number ?? 0) + 1,
       parentVersionId: article.currentVersionId, change, changedSectionId, createdAt: this.now(), createdBy: actor, body,
       profileVersion: profile.version, factsSha: profile.factsSha, knowledge: profile.knowledge, briefId: brief.id, planId: brief.planId,
@@ -1579,6 +1839,7 @@ export class SeoBlogEngine {
 
   async runJob(job: Job): Promise<Job> {
     if (isProfileJob(job)) return this.runProfileJob(job);
+    if(job.kind==='plan') return this.runProgrammePlanJob(job);
     let current = job;
     try {
       const fresh = await this.store.getJob(job.brandId, job.id);
@@ -1587,7 +1848,6 @@ export class SeoBlogEngine {
       const p = job.payload as Record<string, unknown>;
       if (p.stage !== undefined) throw new SeoBlogError(409, 'This worker does not support that task stage.');
       if (job.kind === 'inventory') await this.refreshInventory(job.brandId);
-      else if (job.kind === 'plan') await this.runPlan(job.brandId, { focus: (p.focus as string | null) ?? null, excluded: (p.excluded as string[]) ?? [], sourceArticleUrl: (p.sourceArticleUrl as string | null) ?? null, requestedBy: p.requestedBy as string | undefined });
       else if (job.kind === 'write') await this.runWrite(job.brandId, { briefId: String(p.briefId), fromVersionId: p.fromVersionId as string | undefined, requestedBy: p.requestedBy as string | undefined });
       else if (job.kind === 'publish') await this.dispatchDue(job.brandId);
       else if (job.kind === 'daily') await this.runDaily(job.brandId);
@@ -1619,25 +1879,36 @@ export class SeoBlogEngine {
     const job = await this.store.getJob(brandId, jobId);
     if (!job) throw new SeoBlogError(404, 'That task was not found.');
     if (!['blocked', 'failed'].includes(job.state)) return job;
+    if(job.kind==='plan'&&!programmeRun(job)?.modelReceipt) throw new SeoBlogError(409,'Research retries retain their history and budget. Review programme status in Topics and explicitly resume with a new intent.');
     if (isProfileJob(job) && profilePayload(job).start && !profilePayload(job).receipt) throw new SeoBlogError(409, 'This model call has an uncertain outcome. Retry cannot repeat it. Review the current profile and explicitly confirm a new extraction in Brand setup.');
-    return this.store.updateJob({ ...job, state: 'queued', attempts: isProfileJob(job) ? job.attempts : 0, runAfter: this.now(), error: null, progress: 'Queued again by the owner.', updatedAt: this.now() });
+    return this.store.updateJob({ ...job, state: 'queued', attempts: isProfileJob(job)||job.kind==='plan' ? job.attempts : 0, runAfter: this.now(), error: null, progress: 'Queued again by the owner.', updatedAt: this.now() });
   }
 
   /** Daily bounded top-up when the brand enables ongoing production. Never replaces accepted plans. */
   async runDaily(brandId: string): Promise<void> {
     const brand = await this.store.getBrand(brandId);
-    if (!brand?.settings.ongoingProduction) return;
+    if (!brand?.settings.ongoingProduction || brand.settings.pauseAll) return;
     const day = this.now().slice(0, 10);
     if (brand.website) await this.enqueue(brandId, 'inventory', `daily-inventory:${day}`, {});
-    const [articles, briefs, plans] = await Promise.all([this.store.listArticles(brandId), this.store.listBriefs(brandId), this.store.listPlans(brandId)]);
+    const [articles, briefs, plans, jobs] = await Promise.all([this.store.listArticles(brandId), this.store.listBriefs(brandId), this.store.listPlans(brandId),this.store.listJobs(brandId)]);
+    const legacy=legacyPlanningHold(jobs,brand.settings.programme?.researchAcknowledgements);
+    if(legacy&&!brand.settings.programme?.researchHold) {
+      const source=jobs.find((j)=>j.id===legacy.jobId)!;const profile=await this.store.latestProfile(brandId);
+      await this.store.programmeBoundary({brandId,jobId:source.id,authority:programmeAuthorityFor(source,brand,profile),now:this.now(),decide:(s)=>{
+        const current=legacyPlanningHold(s.jobs,s.brand.settings.programme?.researchAcknowledgements);
+        if(!current||s.brand.settings.programme?.researchHold) return {job:s.job,writeJob:false};
+        return {job:s.job,writeJob:false,settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:current}},event:{brandId,at:this.now(),actor:'system',kind:'research.legacy_hold',message:'An unresolved older planning task needs owner review. No historical supplier code, cost or usage was invented.',subjectId:current.jobId}};
+      }});
+      await this.topUpWrites(brandId);return;
+    }
     const backlog = articles.filter((a) => a.delivery !== 'published').length;
     const horizonEnd = Date.parse(this.now()) + brand.settings.planningHorizonDays * 86_400_000;
     const future = briefs.filter((b) => ['planned', 'accepted'].includes(b.status) && b.suggestedAtUtc && Date.parse(b.suggestedAtUtc) <= horizonEnd).length
       + articles.filter((a) => a.schedule && Date.parse(a.schedule.publishAtUtc) <= horizonEnd).length;
     const slotsNeeded = Math.ceil((brand.settings.planningHorizonDays / 7) * brand.settings.cadence.perWeek);
     const recentPlan = plans.find((p) => Date.parse(this.now()) - Date.parse(p.createdAt) < 7 * 86_400_000 && p.status === 'proposed');
-    if (future < slotsNeeded && !recentPlan) {
-      await this.enqueue(brandId, 'plan', `daily-plan:${day}`, { focus: null, excluded: [], sourceArticleUrl: null, requestedBy: 'system' });
+    if (future < slotsNeeded && !recentPlan && !brand.settings.programme?.researchHold && !jobs.some((j)=>j.kind==='plan'&&['queued','running'].includes(j.state))) {
+      await this.enqueue(brandId, 'plan', `daily-plan:${day}`, { focus: brand.settings.programme?.focus??null, excluded: brand.settings.programme?.exclusions??[], sourceArticleUrl: null, requestedBy: 'system' });
     }
     void backlog;
     await this.topUpWrites(brandId);
@@ -1646,9 +1917,9 @@ export class SeoBlogEngine {
   /** Draft accepted briefs up to the backlog ceiling; `write:<briefId>` keys make this idempotent. */
   private async topUpWrites(brandId: string): Promise<void> {
     const brand = await this.store.getBrand(brandId);
-    if (!brand?.settings.ongoingProduction) return;
+    if (!brand?.settings.ongoingProduction || brand.settings.pauseAll) return;
     const [articles, briefs, jobs] = await Promise.all([this.store.listArticles(brandId), this.store.listBriefs(brandId), this.store.listJobs(brandId)]);
-    const pendingWrites = jobs.filter((j) => j.kind === 'write' && ['queued', 'running'].includes(j.state)).length;
+    const pendingWrites = jobs.filter((j) => j.kind === 'write' && !isProfileJob(j) && ['queued', 'running'].includes(j.state)).length;
     const backlog = articles.filter((a) => a.delivery !== 'published').length + pendingWrites;
     const room = Math.max(0, brand.settings.backlogCeiling - backlog);
     const queued = new Set(jobs.filter((j) => j.kind === 'write').map((j) => String((j.payload as { briefId?: string }).briefId)));
