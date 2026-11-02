@@ -16,6 +16,7 @@ import type { FetchTransport } from './safe-fetch.js';
 import type { ResearchSource } from './types.js';
 import { SeoBlogError } from './types.js';
 import type { KeywordMetric, KeywordProvider } from '../keyword/types.js';
+import { researchDiagnostic, type ResearchDiagnostic, type ResearchSearchReceipt } from './programme.js';
 
 export interface SearchHit {
   readonly url: string;
@@ -27,11 +28,18 @@ export interface SearchProvider {
   readonly id: string;
   readonly mode: 'live' | 'unconfigured';
   search(query: string, options: { readonly locale: string; readonly limit: number }): Promise<SearchHit[]>;
+  searchReceipt?(query: string, options: { readonly locale: string; readonly limit: number }): Promise<ResearchSearchReceipt>;
 }
 
 export class ResearchUnavailableError extends SeoBlogError {
   constructor(message = 'No research provider is connected. Connect one before planning content.') {
     super(409, message, 'research_unavailable');
+  }
+}
+
+export class ResearchProviderError extends ResearchUnavailableError {
+  constructor(readonly diagnostic: ResearchDiagnostic, readonly providerReportedCost: number | null = null) {
+    super(`${diagnostic.summary} ${diagnostic.remedy}`);
   }
 }
 
@@ -58,6 +66,10 @@ export class DataForSeoSerpProvider implements SearchProvider {
   }
 
   async search(query: string, options: { readonly locale: string; readonly limit: number }): Promise<SearchHit[]> {
+    return [...(await this.searchReceipt(query, options)).hits];
+  }
+
+  async searchReceipt(query: string, options: { readonly locale: string; readonly limit: number }): Promise<ResearchSearchReceipt> {
     const body = [{
       keyword: query.slice(0, 200),
       location_code: LOCATION_FOR_LOCALE[options.locale] ?? 2826,
@@ -76,22 +88,28 @@ export class DataForSeoSerpProvider implements SearchProvider {
         signal: AbortSignal.timeout(30_000),
       });
     } catch {
-      throw new ResearchUnavailableError('The research provider could not be reached. Research is paused; try again later.');
+      throw new ResearchProviderError(researchDiagnostic(null));
     }
-    if (!res.ok) throw new ResearchUnavailableError(`The research provider answered HTTP ${res.status}. Research is paused.`);
+    if (!res.ok) throw new ResearchProviderError(researchDiagnostic(null, res.status));
     const json = (await res.json().catch(() => ({}))) as {
       status_code?: number;
-      tasks?: { status_code?: number; result?: { items?: { type?: string; url?: string; title?: string; description?: string }[] }[] }[];
+      cost?: number;
+      tasks?: { id?: unknown; cost?: number; status_code?: number; result?: { items?: { type?: string; url?: string; title?: string; description?: string }[] }[] }[];
     };
     const task = json.tasks?.[0];
+    const rawCost = task?.cost ?? json.cost;
+    const providerReportedCost = typeof rawCost === 'number' && Number.isFinite(rawCost) && rawCost >= 0 && rawCost <= 1_000_000 ? rawCost : null;
+    if (json.status_code !== undefined && json.status_code >= 40000) throw new ResearchProviderError(researchDiagnostic(json.status_code, res.status, task?.id), providerReportedCost);
     if (!task || (task.status_code !== undefined && task.status_code >= 40000)) {
-      throw new ResearchUnavailableError('The research provider did not return results. Research is paused.');
+      throw new ResearchProviderError(researchDiagnostic(task?.status_code ?? null, res.status, task?.id), providerReportedCost);
     }
+    if(task.status_code!==20000 || !Array.isArray(task.result) || !task.result[0] || !Array.isArray(task.result[0].items)) throw new ResearchProviderError(researchDiagnostic(null,res.status,task.id),providerReportedCost);
     const items = task.result?.[0]?.items ?? [];
-    return items
+    const hits = items
       .filter((i) => i.type === 'organic' && typeof i.url === 'string' && typeof i.title === 'string')
       .slice(0, options.limit)
       .map((i) => ({ url: i.url!, title: i.title!.slice(0, 300), snippet: String(i.description ?? '').slice(0, 500) }));
+    return { hits, taskId: researchDiagnostic(null, res.status, task.id).taskId, providerReportedCost };
   }
 }
 

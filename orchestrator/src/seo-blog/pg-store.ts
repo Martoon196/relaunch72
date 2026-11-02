@@ -17,6 +17,7 @@ import type { DatabaseRequestContext } from '../db/rls.js';
 import type { BeginDecision, BeginResult, CreateBrandInput, PublicationSnapshot, SeoBlogStore, SocialAttestationOutcome } from './store.js';
 import { StaleWriteError } from './store.js';
 import { isProfileJob, profilePayload, type ProfileJobBoundaryInput } from './profile-jobs.js';
+import { programmeRun, type ProgrammeBoundaryInput } from './programme.js';
 import {
   DEFAULT_BRAND_SETTINGS, SeoBlogError,
   type ActivityEvent, type Article, type ArticleBrief, type ArticleVersion, type Brand, type BrandProfile, type Destination,
@@ -120,7 +121,7 @@ export class PgSeoBlogStore implements SeoBlogStore {
 
   private async putRecord(brandId: string, kind: string, id: string, data: unknown, mode: 'insert' | 'upsert'): Promise<void> {
     await this.tx(brandId, async (t) => {
-      if (kind === 'profile' || kind === 'knowledge') await t.query('SELECT workspace_id FROM app.seo_blog_brands WHERE workspace_id = $1 FOR UPDATE', [brandId]);
+      if (['profile','knowledge','inventory','brief','plan','destination'].includes(kind)) await t.query('SELECT workspace_id FROM app.seo_blog_brands WHERE workspace_id = $1 FOR UPDATE', [brandId]);
       const sql = mode === 'insert'
         ? 'INSERT INTO app.seo_blog_records (workspace_id, kind, id, data) VALUES ($1, $2, $3, $4)'
         : `INSERT INTO app.seo_blog_records (workspace_id, kind, id, data) VALUES ($1, $2, $3, $4)
@@ -363,6 +364,44 @@ export class PgSeoBlogStore implements SeoBlogStore {
   }
 
   // ─── Jobs ──────────────────────────────────────────────────────────────
+
+  async programmeBoundary(input: ProgrammeBoundaryInput): Promise<Job | null> {
+    if(this.principal.kind==='user') {
+      if(input.authority.origin!=='manual') throw new SeoBlogError(403,'Worker programme authority required.');
+      this.assertActor(input.authority.sponsorUserId);
+    }
+    return this.tx(input.brandId,async(t) => {
+      const locked=await t.query('SELECT workspace_id FROM app.seo_blog_brands WHERE workspace_id=$1 FOR UPDATE',[input.brandId]);
+      if(!locked.rows.length) throw new SeoBlogError(404,'Brand not found.');
+      const brand=(await t.query<{brand:Brand}>('SELECT app_private.seo_blog_brand($1) AS brand',[input.brandId])).rows[0]!.brand;
+      const records=await t.query<{kind:string;data:unknown}>("SELECT kind,data FROM app.seo_blog_records WHERE workspace_id=$1 AND kind IN ('profile','knowledge','inventory','plan','brief','destination') ORDER BY kind,id FOR SHARE",[input.brandId]);
+      const all= <T>(kind:string):T[] => records.rows.filter((r)=>r.kind===kind).map((r)=>r.data as T);
+      const jobs=(await t.query<{data:Job;row_version:string}>("SELECT data,row_version FROM app.seo_blog_jobs WHERE workspace_id=$1 AND kind='plan' ORDER BY id FOR UPDATE",[input.brandId])).rows.map(withVersion);
+      const job=jobs.find((j)=>j.id===input.jobId) ?? null;
+      const bound=job && programmeRun(job)?.snapshot.authority;
+      if(bound && (bound.origin!==input.authority.origin || bound.sponsorUserId!==input.authority.sponsorUserId)) throw new SeoBlogError(403,'Programme authority changed.');
+      if(job && !bound && (input.authority.origin==='manual' ? job.payload.requestedBy!==input.authority.sponsorUserId : job.payload.requestedBy!=='system')) throw new SeoBlogError(403,'Programme requester does not match.');
+      const validSponsor=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.authority.sponsorUserId);
+      const allowed=validSponsor ? (await t.query<{ok:boolean}>('SELECT app_private.can_manage_workspace($1,$2) AS ok',[input.authority.sponsorUserId,input.brandId])).rows[0]?.ok===true : false;
+      const usageRows=(await t.query<{kind:string;amount:string}>("SELECT kind,coalesce(sum(amount),0)::text AS amount FROM app.seo_blog_usage WHERE workspace_id=$1 AND kind IN ('search_calls','model_tokens') AND at >= $2 GROUP BY kind",[input.brandId,input.now.slice(0,7)+'-01T00:00:00.000Z'])).rows;
+      const usage={search_calls:0,model_tokens:0}; for(const row of usageRows) usage[row.kind as keyof typeof usage]=Number(row.amount);
+      const decision=input.decide({brand:normaliseBrand(brand),job,jobs,profile:all<BrandProfile>('profile').sort((a,b)=>b.version-a.version)[0]??null,knowledge:all<KnowledgeDocument>('knowledge'),inventory:all<WebsiteInventory>('inventory')[0]??null,plans:all<TopicPlan>('plan'),briefs:all<ArticleBrief>('brief'),destinations:all<Destination>('destination'),requesterAllowed:allowed,usage});
+      if(decision.settings) await t.query('SELECT app_private.seo_blog_update_brand($1,$2,$3,$4,$5,$6)',[input.brandId,brand.rowVersion,brand.website,brand.locale,brand.timezone,JSON.stringify(decision.settings)]);
+      if(decision.usage) await t.query('INSERT INTO app.seo_blog_usage(workspace_id,kind,amount,at,reference) VALUES($1,$2,$3,$4,$5)',[input.brandId,decision.usage.kind,decision.usage.amount,decision.usage.at,decision.usage.reference]);
+      if(decision.event) await t.query('INSERT INTO app.seo_blog_activity(workspace_id,at,actor,kind,message,subject_id) VALUES($1,$2,$3,$4,$5,$6)',[input.brandId,decision.event.at,decision.event.actor,decision.event.kind,decision.event.message,decision.event.subjectId]);
+      for(const brief of decision.briefs??[]) await t.query("INSERT INTO app.seo_blog_records(workspace_id,kind,id,data) VALUES($1,'brief',$2,$3) ON CONFLICT(workspace_id,kind,id) DO NOTHING",[input.brandId,brief.id,JSON.stringify(brief)]);
+      if(decision.plan) await t.query("INSERT INTO app.seo_blog_records(workspace_id,kind,id,data) VALUES($1,'plan',$2,$3) ON CONFLICT(workspace_id,kind,id) DO NOTHING",[input.brandId,decision.plan.id,JSON.stringify(decision.plan)]);
+      if(!decision.writeJob) return decision.job;
+      const next=decision.job;
+      if(!next || next.kind!=='plan' || next.brandId!==input.brandId) throw new SeoBlogError(409,'Programme task scope changed.');
+      const {rowVersion,...data}=next; const existing=jobs.find((j)=>j.id===next.id);
+      const saved=existing
+        ? await t.query<{data:Job;row_version:string}>('UPDATE app.seo_blog_jobs SET data=$3,state=$4,run_after=$5,lease_expires_at=$6,row_version=row_version+1,updated_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2 AND row_version=$7 RETURNING data,row_version',[input.brandId,next.id,JSON.stringify(data),next.state,next.runAfter,next.leaseExpiresAt,rowVersion])
+        : await t.query<{data:Job;row_version:string}>('INSERT INTO app.seo_blog_jobs(workspace_id,id,kind,idempotency_key,state,run_after,lease_expires_at,data) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING data,row_version',[input.brandId,next.id,next.kind,next.idempotencyKey,next.state,next.runAfter,next.leaseExpiresAt,JSON.stringify(data)]);
+      if(!saved.rows[0]) throw new StaleWriteError('programme job');
+      return withVersion(saved.rows[0]);
+    });
+  }
 
   async profileJobBoundary(input: ProfileJobBoundaryInput): Promise<Job> {
     if (this.principal.kind === 'user') this.assertActor(input.requesterId);

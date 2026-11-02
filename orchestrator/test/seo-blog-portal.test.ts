@@ -103,6 +103,30 @@ test('profile extract POST queues without a model call, scoped status reports du
   assert.equal(h.llm.calls.length, 1);
 });
 
+test('guidance-kind and editorial approval routes keep CSRF/owner/version gates and never generate or create website routes',async()=>{
+  const h=harness();seedBrandSite(h.web,'https://harbour.example','deposits');
+  const {brand}=await h.engine.createBrand(OWNER,{commandId:randomUUID(),name:'Harbour',website:'https://harbour.example'});
+  const doc=await h.engine.uploadKnowledge(OWNER,brand.id,{category:'brand_guidelines',title:'Product Facts',pastedText:'Source facts for this brand.'});
+  const inventory=await h.engine.refreshInventory(brand.id);
+  const destination=await h.engine.connectDestination(OWNER,brand.id,{type:'github_static',label:'Site',credential:'gh-token-fixture',config:{repository:'acme/site',branch:'main',publicBaseUrl:'https://harbour.example',blogPath:'blog',sitemapPath:'sitemap.xml'}});
+  const service:PortalSeoBlogService={generation:'live',research:'live',social:'unavailable',engineFor:()=>h.engine,socialCallback:async()=>null};
+  const who=identity(OWNER.userId),csrf=portalCsrfToken(SECRET,who.sessionToken);
+  const category=`/portal/seo-blog/b/${brand.id}/knowledge/${doc.id}/category`;
+  const expired=await call(service,who,'POST',category,{version:'1',category:'product_facts'});assert.ok(new URL(expired.headers.location!,'https://x').searchParams.has('e'));assert.equal((await h.engine.listKnowledge(OWNER,brand.id)).length,1);
+  assert.equal((await call(service,who,'POST',category,{_csrf:csrf,version:'1',category:'product_facts'})).status,303);
+  assert.equal((await h.engine.listKnowledge(OWNER,brand.id)).length,2);assert.equal(h.llm.calls.length,0);
+  const b=await h.engine.getBrand(OWNER,brand.id);const c=inventory.editorial!.categories[0]!;
+  const form={_csrf:csrf,rowVersion:String(b.rowVersion),scanId:inventory.editorial!.scanId,scanSha:inventory.editorial!.scanSha,destinationId:destination.id,root:'/blog',category_0_id:c.id,category_0_include:'1',category_0_label:'Owner guides',category_0_slug:'owner-guides'};
+  const route=`/portal/seo-blog/b/${brand.id}/editorial/approve`;
+  const foreign=identity(STRANGER.userId);assert.equal((await call(service,foreign,'POST',route,{...form,_csrf:portalCsrfToken(SECRET,foreign.sessionToken)})).status,404);
+  const approved=await call(service,who,'POST',route,form);assert.ok(new URL(approved.headers.location!,'https://x').searchParams.has('n'));
+  const saved=(await h.engine.getBrand(OWNER,brand.id)).settings.programme!.structure!;assert.equal(saved.categories[0]!.label,'Owner guides');assert.equal(saved.root,'/blog');
+  const stale=await call(service,who,'POST',route,form);assert.ok(new URL(stale.headers.location!,'https://x').searchParams.has('e'));
+  assert.deepEqual((await h.engine.getBrand(OWNER,brand.id)).settings.programme!.structure,saved);
+  const page=(await call(service,who,'GET',`/portal/seo-blog/b/${brand.id}/setup`)).body;assert.match(page,/replaced version retained/);assert.match(page,/Approved guidance · version 1/);
+  assert.equal(h.llm.calls.length,0);assert.equal(h.github.commits.size,1);assert.equal(await h.engine.getProfile(OWNER,brand.id),null);
+});
+
 function identity(userId: string): PortalSessionIdentity {
   return { sessionToken: `token-${userId}`, userId, workspaceId: '33333333-3333-4333-8333-333333333333', userEmail: 'owner@example.test' };
 }
