@@ -1,7 +1,7 @@
-name: SEO profile async exact release proof
+name: SEO programme exact release proof
 on:
   push:
-    branches: [codex/r72-profile-async-proof-20261102]
+    branches: [codex/r72-programme-009a-proof-20261102]
     paths: [.github/workflows/mhp-linux-proof.yml]
 permissions:
   contents: read
@@ -29,17 +29,17 @@ jobs:
         run: >-
           docker exec "$PG_CONTAINER" psql -U postgres -d relaunch72_test -v ON_ERROR_STOP=1
           -c "CREATE ROLE ci_migrator LOGIN CREATEROLE CREATEDB PASSWORD 'ci-owner-test-only'; ALTER DATABASE relaunch72_test OWNER TO ci_migrator;"
-      - name: Checkout exact reviewed profile release
+      - name: Checkout exact reviewed programme release
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Martoon196/relaunch72
-          ref: 0412bbf22b31c4c7b05b7271100ddd612f217617
+          ref: d94a5d4599300d0ff6e25a4adb0ae11b95457bed
           persist-credentials: false
       - name: Assert exact source identity
         shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = 0412bbf22b31c4c7b05b7271100ddd612f217617
-          test "$(git rev-parse 'HEAD^{tree}')" = ebb7caf488d4e0fc5a8d6a6291454a1b15ce5584
+          test "$(git rev-parse HEAD)" = d94a5d4599300d0ff6e25a4adb0ae11b95457bed
+          test "$(git rev-parse 'HEAD^{tree}')" = 22a11d7fbfcdc6e865fbd88cf514abd0deac6658
           test -z "$(git status --porcelain)"
           git rev-parse HEAD 'HEAD^{tree}'
       - name: Match Render runtime
@@ -54,10 +54,10 @@ jobs:
         run: npm run typecheck
       - name: Run normal suite
         run: npm test
-      - name: Run only the targeted real-role PostgreSQL profile journey
+      - name: Run only the targeted real-role PostgreSQL programme journey
         env:
           TEST_DATABASE_URL: postgresql://ci_migrator:ci-owner-test-only@127.0.0.1:5432/relaunch72_test
           TEST_DATABASE_RESET_CONFIRM: reset-disposable-branch
           TEST_DATABASE_SSL_MODE: disable
           RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
-        run: cd orchestrator && node --import ./test/windows-node24-shim.mjs --import tsx --test --test-concurrency=1 test/db/seo-blog-profile-async.integration.test.ts
+        run: cd orchestrator && node --import ./test/windows-node24-shim.mjs --import tsx --test --test-concurrency=1 test/db/seo-blog-programme.integration.test.ts
