@@ -15,6 +15,7 @@ import { KNOWLEDGE_CATEGORIES, type ActivityEvent, type Article, type ArticleBri
 import type { WebsitePublisher } from '../seo-blog/publishers/types.js';
 import { escapeHtml as e } from './ui.js';
 import { centralActionFeedbackHead, centralActionFeedbackStatus } from './action-feedback.js';
+import { isProfileJob, profilePayload, unacknowledgedProfileCalls } from '../seo-blog/profile-jobs.js';
 
 export const SEO_BLOG_BASE = '/portal/seo-blog';
 export type SeoBlogTab = 'overview' | 'setup' | 'topics' | 'articles' | 'calendar' | 'publishing' | 'social' | 'activity';
@@ -120,6 +121,7 @@ export function setupPage(shell: Shell, data: {
   documents: KnowledgeDocument[]; profile: BrandProfile | null; inventory: WebsiteInventory | null;
   destinations: Omit<Destination, 'sealedCredential'>[]; publishers: WebsitePublisher[]; vaultReady: boolean;
   usage?: Record<UsageKind, number>;
+  jobs?: readonly Job[]; extractionCommandId?: string;
 }): string {
   const b = shell.brand!;
   const latest = new Map<string, KnowledgeDocument>();
@@ -127,6 +129,11 @@ export function setupPage(shell: Shell, data: {
   const docs = [...latest.values()];
   const cats = KNOWLEDGE_CATEGORIES.map((c) => `<option value="${c}">${CATEGORY_LABEL[c]}</option>`).join('');
   const p = data.profile;
+  const profileJobs = (data.jobs ?? []).filter(isProfileJob).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const activeProfile = profileJobs.find((j) => ['queued', 'running'].includes(j.state));
+  const latestProfileJob = activeProfile ?? profileJobs[0];
+  const uncertainPrior = unacknowledgedProfileCalls(profileJobs).length > 0;
+  const taskStatus = latestProfileJob ? `<div class="notice" role="status"${activeProfile ? ` data-profile-status-url="${url(b, 'profile/status')}?job=${e(activeProfile.id)}"` : ''}><strong>Profile extraction</strong><p data-profile-status-detail>${e(latestProfileJob.state)}: ${e(latestProfileJob.error ?? latestProfileJob.progress)}</p><a href="${url(b, 'setup')}">Refresh status</a> · <a data-profile-review href="${url(b, 'setup')}#brand-profile"${activeProfile ? ' hidden' : ''}>Review current profile / result</a> · <a href="${url(b, 'activity')}">Task history and controls</a><p class="muted">Status updates do not reload this page or replace unsaved edits. Results need your review and confirmation.</p></div>${activeProfile ? `<script src="${SEO_BLOG_BASE}/profile-status.js" defer></script>` : ''}` : '';
   const used = data.usage?.model_tokens;
   const ceiling = b.settings.budgets.modelTokensPerMonth;
   const remaining = used === undefined ? null : Math.max(0, ceiling - used);
@@ -167,7 +174,7 @@ ${data.inventory ? ` <span class="muted">Last read ${e(data.inventory.fetchedAt.
 <button type="submit">Upload</button></form>
 <table><thead><tr><th>Document</th><th>Kind</th><th>Version</th><th>Result</th><th></th></tr></thead><tbody>${docs.map((d) => `<tr><td>${e(d.title)}</td><td>${CATEGORY_LABEL[d.category]}</td><td>${d.version}</td><td>${docStatus(d)} <span class="muted">${e(d.statusDetail)}</span></td><td>${d.active ? `<form method="post" action="${url(b, `knowledge/${d.id}/retire`)}">${csrfField(shell.csrf)}<button class="secondary" type="submit">Retire</button></form>` : '<span class="muted">Retired</span>'}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">No guidance yet.</td></tr>'}</tbody></table>
 <p class="muted">Uploaded documents are brand context only. Instructions inside them are ignored.</p></section>
-<section class="card"><h2>Brand profile</h2>${allowance}<form method="post" action="${url(b, 'profile/extract')}">${csrfField(shell.csrf)}<button class="secondary" type="submit"${shortfall !== null && (shortfall > 0 || ceiling <= 0) ? ' disabled aria-describedby="profile-budget-help"' : ''}>${p ? 'Re-extract from current guidance' : 'Extract profile'}</button></form><p id="profile-budget-help" class="muted">The estimate is a preflight headroom check. Actual recorded usage may differ with document length and retries.</p>${profileBlock}</section>
+<section class="card" id="brand-profile"><h2>Brand profile</h2>${taskStatus}${allowance}<form method="post" action="${url(b, 'profile/extract')}">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.extractionCommandId ?? '')}"><input type="hidden" name="baseVersion" value="${p?.version ?? 0}">${uncertainPrior && !activeProfile ? '<p class="notice bad">A previous model call has an uncertain outcome and may already have used tokens. Review the current profile before requesting another.</p><label><input type="checkbox" name="acknowledgePriorUsage" value="1" required> I have reviewed the current profile and want a new paid extraction; the earlier call may have used tokens.</label>' : ''}<button class="secondary" type="submit"${activeProfile || (shortfall !== null && (shortfall > 0 || ceiling <= 0)) ? ' disabled aria-describedby="profile-budget-help"' : ''}>${p ? 'Re-extract from current guidance' : 'Extract profile'}</button></form><p id="profile-budget-help" class="muted">Extraction queues in the background; you can leave and check its status here. The estimate is a preflight headroom check. Actual recorded usage may differ with document length and retries.</p>${profileBlock}</section>
 <section class="card"><h2>Website publishing connection</h2>${data.destinations.length ? `<table><tbody>${data.destinations.map((d) => `<tr><td>${e(d.label)}</td><td>${e(d.publicBaseUrl)}</td><td><span class="pill ${d.status === 'connected' ? 'ok' : d.status === 'failed' ? 'bad' : 'warn'}">${d.status === 'connected' ? 'Connected' : d.status === 'failed' ? 'Failed' : 'Not checked'}</span> <span class="muted">${e(d.statusDetail)}</span></td><td><form method="post" action="${url(b, `destinations/${d.id}/check`)}">${csrfField(shell.csrf)}<button class="secondary" type="submit">Check again</button></form></td></tr>`).join('')}</tbody></table>` : '<p class="muted">No website connected.</p>'}
 ${destinationForms}<p class="muted">Other website types are not supported yet. You can always export articles as Markdown or HTML.</p></section>`);
 }
@@ -338,7 +345,7 @@ export function activityPage(shell: Shell, data: { events: ActivityEvent[]; jobs
   const b = shell.brand!;
   const label: Record<string, string> = { inventory: 'Read website', plan: 'Plan content', write: 'Write article', publish: 'Publish', daily: 'Daily top-up' };
   return layout(shell, 'Activity', `<h1>Activity</h1>
-<section class="card"><h2>Tasks</h2><table><thead><tr><th>Task</th><th>State</th><th>Detail</th><th></th></tr></thead><tbody>${data.jobs.slice(0, 50).map((j) => `<tr><td>${e(label[j.kind] ?? j.kind)}</td><td>${e(j.state)}</td><td>${e(j.error ?? j.progress)}</td><td>${['queued', 'running', 'blocked'].includes(j.state) ? `<form method="post" action="${url(b, `jobs/${j.id}/cancel`)}">${csrfField(shell.csrf)}<button class="secondary" type="submit">Cancel</button></form>` : ''}${['blocked', 'failed'].includes(j.state) ? `<form method="post" action="${url(b, `jobs/${j.id}/retry`)}">${csrfField(shell.csrf)}<button class="secondary" type="submit">Retry</button></form>` : ''}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No tasks.</td></tr>'}</tbody></table></section>
+<section class="card"><h2>Tasks</h2><table><thead><tr><th>Task</th><th>State</th><th>Detail</th><th></th></tr></thead><tbody>${data.jobs.slice(0, 50).map((j) => `<tr><td>${e(isProfileJob(j) ? 'Profile extraction' : label[j.kind] ?? j.kind)}</td><td>${e(j.state)}</td><td>${e(j.error ?? j.progress)}</td><td>${['queued', 'running', 'blocked'].includes(j.state) ? `<form method="post" action="${url(b, `jobs/${j.id}/cancel`)}">${csrfField(shell.csrf)}<button class="secondary" type="submit">Cancel</button></form>` : ''}${['blocked', 'failed'].includes(j.state) ? isProfileJob(j) && profilePayload(j).start && !profilePayload(j).receipt ? `<a href="${url(b, 'setup')}#brand-profile">Review before a new extraction</a>` : `<form method="post" action="${url(b, `jobs/${j.id}/retry`)}">${csrfField(shell.csrf)}<button class="secondary" type="submit">${isProfileJob(j) && profilePayload(j).receipt ? 'Apply saved result (no model call)' : 'Retry'}</button></form>` : ''}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No tasks.</td></tr>'}</tbody></table></section>
 <section class="card"><h2>History</h2><ul>${data.events.map((ev) => `<li><span class="muted">${e(ev.at.slice(0, 16).replace('T', ' '))} UTC</span> ${e(ev.message)}</li>`).join('') || '<li class="muted">Nothing yet.</li>'}</ul></section>`);
 }
 

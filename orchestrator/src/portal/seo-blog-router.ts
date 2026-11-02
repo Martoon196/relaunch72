@@ -21,6 +21,8 @@ import { defaultPublishers } from '../seo-blog/publishers/registry.js';
 import { SeoBlogError, type BrandSettings, type Brand } from '../seo-blog/types.js';
 import { utcToLocal } from '../seo-blog/schedule.js';
 import { CENTRAL_ACTION_FEEDBACK_PATH, CENTRAL_ACTION_FEEDBACK_SCRIPT } from './action-feedback.js';
+import { PROFILE_STATUS_SCRIPT } from './profile-status.js';
+import { isProfileJob, profilePayload } from '../seo-blog/profile-jobs.js';
 
 export interface SeoBlogRouteInput {
   readonly service: PortalSeoBlogService;
@@ -131,6 +133,7 @@ function int(value: string | null, field: string): number {
 export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, url: URL, input: SeoBlogRouteInput): Promise<void> {
   const path = url.pathname.replace(/\/+$/, '') || SEO_BLOG_BASE;
   const method = req.method ?? 'GET';
+  if (method === 'GET' && path === `${SEO_BLOG_BASE}/profile-status.js`) return send(res, 200, PROFILE_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
   if (method === 'GET' && path === CENTRAL_ACTION_FEEDBACK_PATH) {
     send(res, 200, CENTRAL_ACTION_FEEDBACK_SCRIPT, 'text/javascript; charset=utf-8');
     return;
@@ -180,6 +183,12 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     }
     if (!brandId) throw new SeoBlogError(404, 'That page was not found.');
     const brand = await engine.getBrand(actor, brandId);
+    if (rest === 'profile/status') {
+      const jobId = url.searchParams.get('job');
+      const job = (await engine.listJobs(actor, brandId)).find((j) => j.id === jobId && isProfileJob(j));
+      if (!job) throw new SeoBlogError(404, 'That profile task was not found.');
+      return send(res, 200, JSON.stringify({ id: job.id, state: job.state, detail: job.error ?? job.progress, resultVersion: profilePayload(job).resultVersion ?? null }), 'application/json; charset=utf-8');
+    }
     const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages, applicationName: input.applicationName });
     const tab = rest.split('/')[0] || 'overview';
     if (tab === 'overview') {
@@ -187,8 +196,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       return send(res, 200, overviewPage(shell('overview'), { readiness, articles, usage, jobs }));
     }
     if (tab === 'setup') {
-      const [documents, profile, inventory, destinations, usage] = await Promise.all([engine.listKnowledge(actor, brandId), engine.getProfile(actor, brandId), engine.getInventory(actor, brandId), engine.listDestinations(actor, brandId), engine.usage(actor, brandId)]);
-      return send(res, 200, setupPage(shell('setup'), { documents, profile, inventory, destinations, usage, publishers: [...defaultPublishers().values()], vaultReady: input.vaultReady }));
+      const [documents, profile, inventory, destinations, usage, jobs] = await Promise.all([engine.listKnowledge(actor, brandId), engine.getProfile(actor, brandId), engine.getInventory(actor, brandId), engine.listDestinations(actor, brandId), engine.usage(actor, brandId), engine.listJobs(actor, brandId)]);
+      return send(res, 200, setupPage(shell('setup'), { documents, profile, inventory, destinations, usage, jobs, extractionCommandId: randomUUID(), publishers: [...defaultPublishers().values()], vaultReady: input.vaultReady }));
     }
     if (tab === 'topics') {
       const [plans, readiness] = await Promise.all([engine.listPlans(actor, brandId), engine.readiness(actor, brandId)]);
@@ -273,7 +282,10 @@ async function handlePost(
       return ok(back('setup'), `${doc.title}: ${doc.statusDetail}`);
     }
     case 'profile': {
-      if (parts[1] === 'extract') { await engine.extractBrandProfile(actor, brandId); return ok(back('setup'), 'Profile extracted. Review it and confirm.'); }
+      if (parts[1] === 'extract') {
+        const job = await engine.requestProfileExtraction(actor, brandId, { commandId: f('commandId') ?? '', baseVersion: int(f('baseVersion'), 'the profile version'), acknowledgePriorUsage: f('acknowledgePriorUsage') === '1' });
+        return ok(back('setup'), job.state === 'done' ? 'That extraction is ready. Review and confirm the profile.' : `Profile extraction ${job.state}. ${job.error ?? job.progress}`);
+      }
       if (parts[1] === 'confirm') { await engine.confirmProfile(actor, brandId, int(f('version'), 'the profile version')); return ok(back('setup'), 'Profile confirmed.'); }
       if (parts[1] === 'edit') {
         const current = await engine.getProfile(actor, brandId);

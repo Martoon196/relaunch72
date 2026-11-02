@@ -78,6 +78,31 @@ test('profile extraction distinguishes absent facts from incompatible evidence w
   assert.match(prompt, /offer looks obsolete/); assert.match(prompt, /DATA, not instructions/);
 });
 
+test('profile extract POST queues without a model call, scoped status reports durable outcomes and setup keeps owner edits intact', async () => {
+  const h = harness();
+  const { brand } = await h.engine.createBrand(OWNER, { commandId: randomUUID(), name: 'Harbour', website: 'https://harbour.example' });
+  await h.engine.updateSettings(OWNER, brand.id, brand.rowVersion, { budgets: { modelTokensPerMonth: 1_000_000, searchCallsPerMonth: 0, imagesPerMonth: 0 } });
+  await h.engine.uploadKnowledge(OWNER, brand.id, { category: 'other', title: 'Guide', pastedText: 'Harbour Compliance Plan costs £49 per month.' });
+  const service: PortalSeoBlogService = { generation: 'live', research: 'live', social: 'unavailable', engineFor: () => h.engine, socialCallback: async () => null };
+  const who = identity(OWNER.userId); const csrf = portalCsrfToken(SECRET, who.sessionToken); const commandId = randomUUID();
+  const action = `/portal/seo-blog/b/${brand.id}/profile/extract`;
+  const queued = await call(service, who, 'POST', action, { _csrf: csrf, commandId, baseVersion: '0' });
+  assert.equal(queued.status, 303); assert.equal(h.llm.calls.length, 0);
+  const statusUrl = `/portal/seo-blog/b/${brand.id}/profile/status?job=${commandId}`;
+  assert.equal(JSON.parse((await call(service, who, 'GET', statusUrl)).body).state, 'queued');
+  assert.equal((await call(service, identity(STRANGER.userId), 'GET', statusUrl)).status, 404);
+  const setup = (await call(service, who, 'GET', `/portal/seo-blog/b/${brand.id}/setup`)).body;
+  assert.match(setup, /data-profile-status-url=/); assert.match(setup, /profile-status\.js/);
+  assert.match(setup, /do not reload this page or replace unsaved edits/);
+  await h.engine.tick('worker');
+  const ready = JSON.parse((await call(service, who, 'GET', statusUrl)).body);
+  assert.equal(ready.state, 'done'); assert.equal(ready.resultVersion, 1);
+  assert.doesNotMatch(JSON.stringify(ready), /tokensIn|knowledge|receipt|nonce|inputSha/);
+  assert.equal((await h.engine.getProfile(OWNER, brand.id))!.confirmedAt, null);
+  assert.equal((await call(service, who, 'POST', action, { _csrf: csrf, commandId, baseVersion: '0' })).status, 303);
+  assert.equal(h.llm.calls.length, 1);
+});
+
 function identity(userId: string): PortalSessionIdentity {
   return { sessionToken: `token-${userId}`, userId, workspaceId: '33333333-3333-4333-8333-333333333333', userEmail: 'owner@example.test' };
 }

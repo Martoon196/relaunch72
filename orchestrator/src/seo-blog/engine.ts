@@ -6,6 +6,8 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import type { LlmClient } from '../llm/client.js';
+import { loadPrompt } from '../stages/prompt.js';
+import { stageModel } from '../config.js';
 import type { KeywordProvider } from '../keyword/types.js';
 import { runChecks } from './checks.js';
 import { assessDuplicate, slugify } from './dedupe.js';
@@ -24,6 +26,7 @@ import { validatePublicUrl, type FetchTransport } from './safe-fetch.js';
 import { autoPlace, isValidTimeZone, localToUtc, utcToLocal, validateCadence } from './schedule.js';
 import type { SeoBlogStore } from './store.js';
 import { StaleWriteError } from './store.js';
+import { isProfileJob, profilePayload, unacknowledgedProfileCalls, type ProfileJobPayload, type ProfileJobReceipt, type ProfileJobSnapshot } from './profile-jobs.js';
 import {
   DESTINATION_TYPES, FACTUAL_KNOWLEDGE_CATEGORIES, KNOWLEDGE_CATEGORIES, SeoBlogError,
   type Article, type ArticleBody, type ArticleBrief, type ArticlePromotionPack, type ArticleVersion, type Brand, type BrandProfile, type BrandSettings,
@@ -322,6 +325,120 @@ export class SeoBlogEngine {
     await this.store.saveProfile(profile);
     await this.log(brandId, actor.userId, 'profile.extracted', `Brand profile version ${profile.version} extracted${profile.conflicts.length ? ` with ${profile.conflicts.length} conflict(s) to resolve` : ''}.`);
     return profile;
+  }
+
+  private profileGenerationContext(): ProfileJobPayload['source']['prompt'] {
+    const p = loadPrompt('seo-blog-profile.md');
+    return { version: p.header.version, sha256: p.sha256, model: stageModel(p.header.stage, p.header.model) };
+  }
+
+  private profileInputs(s: ProfileJobSnapshot, prompt: ProfileJobPayload['source']['prompt']): { documents: KnowledgeDocument[]; sha: string; source: ProfileJobPayload['source'] } {
+    const latest = new Map<string, KnowledgeDocument>();
+    for (const d of s.knowledge) if (!latest.has(d.id) || latest.get(d.id)!.version < d.version) latest.set(d.id, d);
+    const documents = [...latest.values()].filter((d) => d.active);
+    const source = { brandName: s.brand.name, website: s.brand.website, knowledge: this.knowledgeRefs(documents), prompt };
+    return { documents, sha: sha256(source), source };
+  }
+
+  async requestProfileExtraction(actor: Actor, brandId: string, input: { commandId: string; baseVersion: number; acknowledgePriorUsage?: boolean }): Promise<Job> {
+    await this.brandFor(actor, brandId);
+    if (!validUuid(input.commandId)) throw new SeoBlogError(400, 'Refresh the form and try again.');
+    const now = this.now();
+    const context = this.profileGenerationContext();
+    return this.store.profileJobBoundary({ brandId, jobId: input.commandId, requesterId: actor.userId, now, decide: (s) => {
+      // Receipt lookup is not a new generation: replay it before changing-budget/source checks.
+      const replay = s.jobs.find((j) => profilePayload(j).requestIds.includes(input.commandId));
+      if (replay) return { job: replay, write: false };
+      if (!s.requesterAllowed) throw new SeoBlogError(403, 'Only a current brand owner or administrator can extract its profile.');
+      const active = s.jobs.find((j) => ['queued', 'running'].includes(j.state));
+      if (active) {
+        const p = profilePayload(active);
+        if (p.requestIds.length >= 256) throw new SeoBlogError(409, 'An extraction is already active. Open its status instead.');
+        return { job: { ...active, payload: { ...p, requestIds: [...p.requestIds, input.commandId] }, updatedAt: now }, write: true };
+      }
+      if ((s.profile?.version ?? 0) !== input.baseVersion) throw new StaleWriteError('brand profile');
+      const pendingUsage = unacknowledgedProfileCalls(s.jobs);
+      if (pendingUsage.length && !input.acknowledgePriorUsage) throw new SeoBlogError(409, 'A previous extraction has an uncertain outcome and may already have used model tokens. Review the current profile, then explicitly confirm a new extraction if needed.');
+      const inputs = this.profileInputs(s, context);
+      if (!inputs.documents.some((d) => d.text)) throw new SeoBlogError(409, 'Upload at least one readable guidance document first.');
+      this.llm();
+      if (s.brand.settings.budgets.modelTokensPerMonth <= 0 || s.modelTokensUsed + USAGE_ESTIMATES.profile > s.brand.settings.budgets.modelTokensPerMonth) throw new BudgetExceededError('model_tokens', s.modelTokensUsed, s.brand.settings.budgets.modelTokensPerMonth, USAGE_ESTIMATES.profile);
+      const p: ProfileJobPayload = { stage: 'profile', requestedBy: actor.userId, requestIds: [input.commandId], inputSha: inputs.sha, source: inputs.source,
+        baseVersion: input.baseVersion, baseProfileSha: sha256(s.profile), acknowledgedPriorUsage: pendingUsage.map((j) => j.id) };
+      const job: Job = { id: input.commandId, brandId, kind: 'write', idempotencyKey: `profile:${input.commandId}`, payload: { ...p }, state: 'queued', attempts: 0, maxAttempts: 1,
+        leaseOwner: null, leaseExpiresAt: null, runAfter: now, progress: 'Profile extraction queued. You can leave this page.', error: null, createdAt: now, updatedAt: now, rowVersion: 1 };
+      return { job, write: true, event: { brandId, at: now, actor: actor.userId, kind: 'profile.queued', message: 'Profile extraction queued in the background.', subjectId: job.id } };
+    } });
+  }
+
+  private profileHold(job: Job, reason: string, message: string, now: string): Job {
+    return { ...job, state: 'blocked', leaseOwner: null, leaseExpiresAt: null, payload: { ...profilePayload(job), reason }, error: message, progress: message, updatedAt: now };
+  }
+
+  /** A receipt may account late usage, but only a currently owned lease may apply a profile. */
+  private async completeProfileJob(job: Job, receipt: ProfileJobReceipt): Promise<Job> {
+    const now = this.now(); const requesterId = profilePayload(job).requestedBy;
+    const context = this.profileGenerationContext();
+    return this.store.profileJobBoundary({ brandId: job.brandId, jobId: job.id, requesterId, now, decide: (s) => {
+      const current = s.job;
+      if (!current) throw new SeoBlogError(404, 'Profile task not found.');
+      const p = profilePayload(current);
+      if (p.start?.nonce !== receipt.nonce) throw new SeoBlogError(409, 'Profile result does not match its started operation.');
+      if (current.state === 'done') return { job: current, write: false };
+      const actual = p.receipt ?? receipt;
+      const updated: Job = { ...current, payload: { ...p, receipt: actual }, updatedAt: now };
+      const usage = p.receipt ? undefined : { brandId: job.brandId, kind: 'model_tokens' as const, amount: actual.generation.tokensIn + actual.generation.tokensOut, at: actual.receivedAt, reference: `profile:${current.id}:${receipt.nonce}` };
+      const owned = current.state === 'running' && current.leaseOwner === job.leaseOwner && current.attempts === job.attempts && current.leaseExpiresAt !== null && current.leaseExpiresAt > now;
+      if (!owned) {
+        const late = current.state === 'running' ? this.profileHold(updated, 'lease_lost', 'Result received after its lease ended. Review before applying it; no new model call is needed.', now)
+          : { ...updated, error: null, progress: 'A late result was saved and actual usage recorded. The profile was not replaced. Review the current profile and task controls.' };
+        return { job: late, write: true, usage };
+      }
+      const sameInputs = this.profileInputs(s, context).sha === p.inputSha && (s.profile?.version ?? 0) === p.baseVersion && sha256(s.profile) === p.baseProfileSha;
+      if (!s.requesterAllowed || !sameInputs) return { job: this.profileHold(updated, !s.requesterAllowed ? 'requester_changed' : 'inputs_changed', !s.requesterAllowed ? 'The requesting owner no longer manages this brand. Result retained; no profile was replaced.' : 'Guidance or profile changed during extraction. Result retained; current edits were not replaced.', now), write: true, usage };
+      const profile: BrandProfile = { ...actual.value, brandId: job.brandId, version: p.baseVersion + 1, knowledge: this.knowledgeRefs(this.profileInputs(s, context).documents),
+        factsSha: profileFactsSha(actual.value), source: 'extracted', confirmedAt: null, confirmedBy: null, createdAt: now, generation: actual.generation };
+      return { job: { ...updated, state: 'done', leaseOwner: null, leaseExpiresAt: null, payload: { ...p, receipt: actual, resultVersion: profile.version }, error: null, progress: `Profile version ${profile.version} is ready. Review and confirm it.`, updatedAt: now }, write: true, profile, usage,
+        event: { brandId: job.brandId, at: now, actor: 'system', kind: 'profile.extracted', message: `Profile version ${profile.version} extracted in the background. Review and confirm it.`, subjectId: job.id } };
+    } });
+  }
+
+  private async runProfileJob(job: Job): Promise<Job> {
+    const now = this.now(); let startedHere = false;
+    const context = this.profileGenerationContext();
+    let modelInput: { brandName: string; website: string | null; documents: KnowledgeDocument[] } | null = null;
+    const started = await this.store.profileJobBoundary({ brandId: job.brandId, jobId: job.id, requesterId: profilePayload(job).requestedBy, now, decide: (s) => {
+      const current = s.job;
+      if (!current) throw new SeoBlogError(404, 'Profile task not found.');
+      const p = profilePayload(current);
+      if (current.state !== 'running' || current.leaseOwner !== job.leaseOwner || current.attempts !== job.attempts || !current.leaseExpiresAt || current.leaseExpiresAt <= now) return { job: current, write: false };
+      if (p.receipt) return { job: current, write: false };
+      if (p.start) return { job: this.profileHold(current, 'outcome_unknown', 'Extraction was interrupted after the model call started. Its outcome and token usage are uncertain. Review the current profile before explicitly starting another extraction.', now), write: true };
+      const inputs = this.profileInputs(s, context);
+      if (!s.requesterAllowed || inputs.sha !== p.inputSha || (s.profile?.version ?? 0) !== p.baseVersion || sha256(s.profile) !== p.baseProfileSha) return { job: this.profileHold(current, 'inputs_changed', 'The requesting owner, guidance or profile changed. Refresh and queue a new extraction.', now), write: true };
+      if (!this.deps.llm) return { job: this.profileHold(current, 'unavailable', 'Profile generation is not configured.', now), write: true };
+      if (s.brand.settings.budgets.modelTokensPerMonth <= 0 || s.modelTokensUsed + USAGE_ESTIMATES.profile > s.brand.settings.budgets.modelTokensPerMonth) return { job: this.profileHold(current, 'budget', new BudgetExceededError('model_tokens', s.modelTokensUsed, s.brand.settings.budgets.modelTokensPerMonth, USAGE_ESTIMATES.profile).message, now), write: true };
+      startedHere = true; modelInput = { brandName: s.brand.name, website: s.brand.website, documents: inputs.documents };
+      return { job: { ...current, payload: { ...p, start: { nonce: randomUUID(), at: now } }, progress: 'Extracting the brand profile. You can leave this page.', error: null, updatedAt: now }, write: true };
+    } });
+    const payload = profilePayload(started);
+    if (payload.receipt && started.state === 'running' && started.leaseOwner === job.leaseOwner && started.attempts === job.attempts) return this.completeProfileJob(job, payload.receipt);
+    if (!startedHere || !modelInput || !payload.start) return started;
+    try {
+      const result = await extractProfile(this.llm(), modelInput);
+      const receipt = { nonce: payload.start.nonce, value: result.value, generation: result.record, receivedAt: this.now() };
+      // A database failure retries this known receipt only, never the paid model call.
+      try { return await this.completeProfileJob(started, receipt); }
+      catch { return await this.completeProfileJob(started, receipt); }
+    } catch {
+      // Never turn an uncertain paid call into a generic automatic retry.
+      return this.store.profileJobBoundary({ brandId: job.brandId, jobId: job.id, requesterId: payload.requestedBy, now: this.now(), decide: (s) => {
+        if (!s.job) throw new SeoBlogError(404, 'Profile task not found.');
+        const p = profilePayload(s.job);
+        if (p.receipt || s.job.state === 'cancelled' || p.start?.nonce !== payload.start!.nonce) return { job: s.job, write: false };
+        return { job: this.profileHold(s.job, 'outcome_unknown', 'The model call did not finish with a saved result. Token usage may have occurred. Review the current profile before explicitly starting another extraction.', this.now()), write: true };
+      } });
+    }
   }
 
   async editProfile(actor: Actor, brandId: string, expectedVersion: number, edits: Partial<Pick<BrandProfile, 'summary' | 'audiences' | 'positioning' | 'offers' | 'conversionPages' | 'voice' | 'approvedClaims' | 'exclusions' | 'conflicts' | 'missingFacts'>>): Promise<BrandProfile> {
@@ -1461,12 +1578,14 @@ export class SeoBlogEngine {
   }
 
   async runJob(job: Job): Promise<Job> {
+    if (isProfileJob(job)) return this.runProfileJob(job);
     let current = job;
     try {
       const fresh = await this.store.getJob(job.brandId, job.id);
       if (!fresh || fresh.state === 'cancelled' || fresh.leaseOwner !== job.leaseOwner) return fresh ?? job;
       current = await this.store.updateJob({ ...fresh, progress: progressLabel(job.kind), updatedAt: this.now() });
       const p = job.payload as Record<string, unknown>;
+      if (p.stage !== undefined) throw new SeoBlogError(409, 'This worker does not support that task stage.');
       if (job.kind === 'inventory') await this.refreshInventory(job.brandId);
       else if (job.kind === 'plan') await this.runPlan(job.brandId, { focus: (p.focus as string | null) ?? null, excluded: (p.excluded as string[]) ?? [], sourceArticleUrl: (p.sourceArticleUrl as string | null) ?? null, requestedBy: p.requestedBy as string | undefined });
       else if (job.kind === 'write') await this.runWrite(job.brandId, { briefId: String(p.briefId), fromVersionId: p.fromVersionId as string | undefined, requestedBy: p.requestedBy as string | undefined });
@@ -1500,7 +1619,8 @@ export class SeoBlogEngine {
     const job = await this.store.getJob(brandId, jobId);
     if (!job) throw new SeoBlogError(404, 'That task was not found.');
     if (!['blocked', 'failed'].includes(job.state)) return job;
-    return this.store.updateJob({ ...job, state: 'queued', attempts: 0, runAfter: this.now(), error: null, progress: 'Queued again by the owner.', updatedAt: this.now() });
+    if (isProfileJob(job) && profilePayload(job).start && !profilePayload(job).receipt) throw new SeoBlogError(409, 'This model call has an uncertain outcome. Retry cannot repeat it. Review the current profile and explicitly confirm a new extraction in Brand setup.');
+    return this.store.updateJob({ ...job, state: 'queued', attempts: isProfileJob(job) ? job.attempts : 0, runAfter: this.now(), error: null, progress: 'Queued again by the owner.', updatedAt: this.now() });
   }
 
   /** Daily bounded top-up when the brand enables ongoing production. Never replaces accepted plans. */

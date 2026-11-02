@@ -15,6 +15,7 @@ import type {
   KnowledgeDocument, Publication, TopicPlan, UsageKind, UsageRecord, WebsiteInventory,
 } from './types.js';
 import { DEFAULT_BRAND_SETTINGS, SeoBlogError } from './types.js';
+import { isProfileJob, profilePayload, type ProfileJobBoundaryInput } from './profile-jobs.js';
 
 export class StaleWriteError extends SeoBlogError {
   constructor(what = 'record') {
@@ -68,6 +69,8 @@ export type BeginResult =
     };
 
 export interface SeoBlogStore {
+  /** Brand -> jobs lock order; no provider work in this atomic profile/result/cost boundary. */
+  profileJobBoundary(input: ProfileJobBoundaryInput): Promise<Job>;
   /**
    * Publication-begin boundary: one short transaction that locks and re-reads
    * the current state, calls `decide` synchronously, and records the outcome —
@@ -182,6 +185,36 @@ export class MemorySeoBlogStore implements SeoBlogStore {
   grant(actorId: string, brandId: string): void {
     if (!this.members.has(brandId)) this.members.set(brandId, new Set());
     this.members.get(brandId)!.add(actorId);
+  }
+  /** Test helper: model revocation before a worker's begin/apply boundary. */
+  revoke(actorId: string, brandId: string): void { this.members.get(brandId)?.delete(actorId); }
+
+  async profileJobBoundary(input: ProfileJobBoundaryInput): Promise<Job> {
+    this.maybeFail('profileJobBoundary');
+    const brand = this.brands.get(input.brandId);
+    if (!brand) throw new SeoBlogError(404, 'Brand not found.');
+    const jobs = [...this.jobs.values()].filter((j) => j.brandId === input.brandId && isProfileJob(j));
+    const job = jobs.find((j) => j.id === input.jobId) ?? null;
+    if (job && profilePayload(job).requestedBy !== input.requesterId) throw new SeoBlogError(403, 'Profile requester does not match.');
+    const profile = [...(this.profiles.get(input.brandId) ?? [])].sort((a, b) => b.version - a.version)[0] ?? null;
+    const since = input.now.slice(0, 7) + '-01T00:00:00.000Z';
+    const decision = input.decide(clone({ brand, jobs, job, profile,
+      knowledge: [...this.knowledge.values()].filter((d) => d.brandId === input.brandId),
+      requesterAllowed: this.members.get(input.brandId)?.has(input.requesterId) === true,
+      modelTokensUsed: this.usage.filter((u) => u.brandId === input.brandId && u.kind === 'model_tokens' && u.at >= since).reduce((n, u) => n + u.amount, 0),
+    }));
+    if (!decision.write) return clone(decision.job);
+    if (!isProfileJob(decision.job) || decision.job.brandId !== input.brandId) throw new SeoBlogError(409, 'Profile task scope changed.');
+    const previous = this.jobs.get(decision.job.id);
+    if (previous && previous.rowVersion !== decision.job.rowVersion) throw new StaleWriteError('job');
+    if (decision.profile && (this.profiles.get(input.brandId) ?? []).some((p) => p.version === decision.profile!.version)) throw new StaleWriteError('profile');
+    // No awaits between validation and these mutations: the memory boundary is atomic too.
+    const next = { ...clone(decision.job), rowVersion: previous ? previous.rowVersion + 1 : 1 };
+    if (decision.profile) this.profiles.set(input.brandId, [...(this.profiles.get(input.brandId) ?? []), clone(decision.profile)]);
+    if (decision.usage) this.usage.push(clone(decision.usage));
+    if (decision.event) this.activity.push(clone(decision.event));
+    this.jobs.set(next.id, next);
+    return clone(next);
   }
 
   async createBrand(input: CreateBrandInput): Promise<{ brand: Brand; created: boolean }> {
