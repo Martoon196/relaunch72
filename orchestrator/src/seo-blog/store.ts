@@ -16,6 +16,7 @@ import type {
 } from './types.js';
 import { DEFAULT_BRAND_SETTINGS, SeoBlogError } from './types.js';
 import { isProfileJob, profilePayload, type ProfileJobBoundaryInput } from './profile-jobs.js';
+import { programmeRun, type ProgrammeBoundaryInput } from './programme.js';
 
 export class StaleWriteError extends SeoBlogError {
   constructor(what = 'record') {
@@ -69,6 +70,7 @@ export type BeginResult =
     };
 
 export interface SeoBlogStore {
+  programmeBoundary(input: ProgrammeBoundaryInput): Promise<Job | null>;
   /** Brand -> jobs lock order; no provider work in this atomic profile/result/cost boundary. */
   profileJobBoundary(input: ProfileJobBoundaryInput): Promise<Job>;
   /**
@@ -188,6 +190,38 @@ export class MemorySeoBlogStore implements SeoBlogStore {
   }
   /** Test helper: model revocation before a worker's begin/apply boundary. */
   revoke(actorId: string, brandId: string): void { this.members.get(brandId)?.delete(actorId); }
+
+  async programmeBoundary(input: ProgrammeBoundaryInput): Promise<Job | null> {
+    this.maybeFail('programmeBoundary');
+    const brand = this.brands.get(input.brandId);
+    if (!brand) throw new SeoBlogError(404, 'Brand not found.');
+    const jobs = [...this.jobs.values()].filter((j) => j.brandId === input.brandId && j.kind === 'plan');
+    const job = jobs.find((j) => j.id === input.jobId) ?? null;
+    const bound = job && programmeRun(job)?.snapshot.authority;
+    if (bound && (bound.origin !== input.authority.origin || bound.sponsorUserId !== input.authority.sponsorUserId)) throw new SeoBlogError(403, 'Programme authority changed.');
+    if (job && !bound && (input.authority.origin === 'manual' ? job.payload.requestedBy !== input.authority.sponsorUserId : job.payload.requestedBy !== 'system')) throw new SeoBlogError(403, 'Programme requester does not match.');
+    const since = input.now.slice(0,7) + '-01T00:00:00.000Z';
+    const decision = input.decide(clone({ brand, job, jobs, profile: [...(this.profiles.get(input.brandId) ?? [])].sort((a,b) => b.version-a.version)[0] ?? null,
+      knowledge: [...this.knowledge.values()].filter((d) => d.brandId === input.brandId), inventory: this.inventories.get(input.brandId) ?? null,
+      plans: [...this.plans.values()].filter((p) => p.brandId === input.brandId), briefs: [...this.briefs.values()].filter((b) => b.brandId === input.brandId), destinations: [...this.destinations.values()].filter((d) => d.brandId === input.brandId),
+      requesterAllowed: this.members.get(input.brandId)?.has(input.authority.sponsorUserId) === true,
+      usage: { search_calls: this.usage.filter((u) => u.brandId===input.brandId && u.kind==='search_calls' && u.at>=since).reduce((n,u) => n+u.amount,0), model_tokens: this.usage.filter((u) => u.brandId===input.brandId && u.kind==='model_tokens' && u.at>=since).reduce((n,u) => n+u.amount,0) },
+    }));
+    let next = decision.job;
+    if (decision.writeJob) {
+      if (!next || next.kind!=='plan' || next.brandId!==input.brandId) throw new SeoBlogError(409,'Programme task scope changed.');
+      const previous=this.jobs.get(next.id);
+      if (previous && previous.rowVersion!==next.rowVersion) throw new StaleWriteError('programme job');
+      next={...clone(next),rowVersion:previous ? previous.rowVersion+1 : 1};
+    }
+    if (decision.settings) this.brands.set(brand.id,{...brand,settings:clone(decision.settings),rowVersion:brand.rowVersion+1});
+    if (decision.usage) this.usage.push(clone(decision.usage));
+    if (decision.event) this.activity.push(clone(decision.event));
+    for(const brief of decision.briefs ?? []) if(!this.briefs.has(brief.id)) this.briefs.set(brief.id,clone(brief));
+    if(decision.plan && !this.plans.has(decision.plan.id)) this.plans.set(decision.plan.id,clone(decision.plan));
+    if(decision.writeJob && next) this.jobs.set(next.id,next);
+    return clone(next);
+  }
 
   async profileJobBoundary(input: ProfileJobBoundaryInput): Promise<Job> {
     this.maybeFail('profileJobBoundary');

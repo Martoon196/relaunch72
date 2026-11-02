@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { SeoBlogEngine } from '../src/seo-blog/engine.js';
 import { UnconfiguredSearchProvider } from '../src/seo-blog/research.js';
+import { programmeRun } from '../src/seo-blog/programme.js';
 import type { Brand } from '../src/seo-blog/types.js';
 import { harness, makeDocx, makePdf, OWNER, seedBrandSite, STRANGER, type Harness } from './seo-blog-fixtures.js';
 
@@ -441,7 +442,7 @@ test('A11: missing research, exhausted budget and unavailable generation block o
   const b = await h.engine.getBrand(OWNER, brand.id);
   await h.engine.updateSettings(OWNER, brand.id, b.rowVersion, { budgets: { modelTokensPerMonth: 10, searchCallsPerMonth: 200, imagesPerMonth: 0 } });
   await assert.rejects(h.engine.requestPlan(OWNER, brand.id, { commandId: randomUUID() }), { code: 'budget_exceeded' });
-  // A plan job whose model fails is blocked/retried with an honest message; nothing is fabricated.
+  // A started model call without a result is held; a generic retry cannot purchase it again.
   const b2 = await h.engine.getBrand(OWNER, brand.id);
   await h.engine.updateSettings(OWNER, brand.id, b2.rowVersion, { budgets: BUDGETS });
   h.llm.failNext = 1;
@@ -449,11 +450,17 @@ test('A11: missing research, exhausted budget and unavailable generation block o
   await h.engine.tick('worker-1');
   const job = (await h.engine.listJobs(OWNER, brand.id)).find((j) => j.kind === 'plan')!;
   assert.equal(job.state, 'blocked');
-  assert.match(job.error!, /writing model could not be reached/);
+  assert.match(job.error!, /model call has no saved result/);
+  assert.ok(programmeRun(job)!.modelStart);assert.equal(programmeRun(job)!.modelReceipt,undefined);
   assert.equal((await h.engine.listPlans(OWNER, brand.id)).length, 0);
-  await h.engine.retryJob(OWNER, brand.id, job.id);
+  const calls=h.llm.calls.length;
+  await assert.rejects(h.engine.retryJob(OWNER, brand.id, job.id),/new intent/);
+  await h.engine.tick('worker-1');assert.equal(h.llm.calls.length,calls);
+  const hold=(await h.engine.getBrand(OWNER,brand.id)).settings.programme!.researchHold!;
+  await h.engine.requestPlan(OWNER,brand.id,{commandId:randomUUID(),resumeHoldId:hold.logicalRunId});
   await h.engine.tick('worker-1');
   assert.equal((await h.engine.listPlans(OWNER, brand.id)).length, 1);
+  assert.equal(h.llm.calls.length,calls+1);
 });
 
 test('A11: changing factual knowledge invalidates checks and holds publication; visual guidance does not', async () => {
