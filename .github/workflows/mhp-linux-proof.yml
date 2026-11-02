@@ -1,26 +1,45 @@
-name: SEO content UX exact Linux proof
+name: SEO profile async exact release proof
 on:
   push:
-    branches: [codex/r72-content-ux-proof-20261101]
+    branches: [codex/r72-profile-async-proof-20261102]
     paths: [.github/workflows/mhp-linux-proof.yml]
 permissions:
   contents: read
 jobs:
-  exact-source-gate:
+  exact-release-gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: local-ci-test-only
+          POSTGRES_DB: relaunch72_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
-      - name: Checkout exact reviewed content UX source
+      - name: Model the managed PostgreSQL migration identity
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: >-
+          docker exec "$PG_CONTAINER" psql -U postgres -d relaunch72_test -v ON_ERROR_STOP=1
+          -c "CREATE ROLE ci_migrator LOGIN CREATEROLE CREATEDB PASSWORD 'ci-owner-test-only'; ALTER DATABASE relaunch72_test OWNER TO ci_migrator;"
+      - name: Checkout exact reviewed profile release
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Martoon196/relaunch72
-          ref: 96c1138cd1df292ba4ae2ce9ad22ee2f6727f81b
+          ref: 0412bbf22b31c4c7b05b7271100ddd612f217617
           persist-credentials: false
       - name: Assert exact source identity
         shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = 96c1138cd1df292ba4ae2ce9ad22ee2f6727f81b
-          test "$(git rev-parse 'HEAD^{tree}')" = d43d89ce1e7310dea3e0ba5c86e809d9b8a9bdfe
+          test "$(git rev-parse HEAD)" = 0412bbf22b31c4c7b05b7271100ddd612f217617
+          test "$(git rev-parse 'HEAD^{tree}')" = ebb7caf488d4e0fc5a8d6a6291454a1b15ce5584
           test -z "$(git status --porcelain)"
           git rev-parse HEAD 'HEAD^{tree}'
       - name: Match Render runtime
@@ -33,5 +52,12 @@ jobs:
         run: node scripts/supply-chain.mjs --check
       - name: Typecheck whole project
         run: npm run typecheck
-      - name: Run whole normal suite
+      - name: Run normal suite
         run: npm test
+      - name: Run only the targeted real-role PostgreSQL profile journey
+        env:
+          TEST_DATABASE_URL: postgresql://ci_migrator:ci-owner-test-only@127.0.0.1:5432/relaunch72_test
+          TEST_DATABASE_RESET_CONFIRM: reset-disposable-branch
+          TEST_DATABASE_SSL_MODE: disable
+          RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
+        run: cd orchestrator && node --import ./test/windows-node24-shim.mjs --import tsx --test --test-concurrency=1 test/db/seo-blog-profile-async.integration.test.ts
