@@ -22,6 +22,7 @@ import { SeoBlogError, type BrandSettings, type Brand } from '../seo-blog/types.
 import { utcToLocal } from '../seo-blog/schedule.js';
 import { CENTRAL_ACTION_FEEDBACK_PATH, CENTRAL_ACTION_FEEDBACK_SCRIPT } from './action-feedback.js';
 import { PROFILE_STATUS_SCRIPT } from './profile-status.js';
+import { KNOWLEDGE_CATEGORY_SCRIPT } from './knowledge-category.js';
 import { isProfileJob, profilePayload } from '../seo-blog/profile-jobs.js';
 
 export interface SeoBlogRouteInput {
@@ -133,6 +134,7 @@ function int(value: string | null, field: string): number {
 export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, url: URL, input: SeoBlogRouteInput): Promise<void> {
   const path = url.pathname.replace(/\/+$/, '') || SEO_BLOG_BASE;
   const method = req.method ?? 'GET';
+  if(method==='GET'&&path===`${SEO_BLOG_BASE}/knowledge-kind.js`) return send(res,200,KNOWLEDGE_CATEGORY_SCRIPT,'text/javascript; charset=utf-8');
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/profile-status.js`) return send(res, 200, PROFILE_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
   if (method === 'GET' && path === CENTRAL_ACTION_FEEDBACK_PATH) {
     send(res, 200, CENTRAL_ACTION_FEEDBACK_SCRIPT, 'text/javascript; charset=utf-8');
@@ -200,8 +202,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       return send(res, 200, setupPage(shell('setup'), { documents, profile, inventory, destinations, usage, jobs, extractionCommandId: randomUUID(), publishers: [...defaultPublishers().values()], vaultReady: input.vaultReady }));
     }
     if (tab === 'topics') {
-      const [plans, readiness] = await Promise.all([engine.listPlans(actor, brandId), engine.readiness(actor, brandId)]);
-      return send(res, 200, topicsPage(shell('topics'), { plans, readiness, commandId: randomUUID(), estimatePerArticle: USAGE_ESTIMATES.article }));
+      const [plans, readiness, jobs, usage] = await Promise.all([engine.listPlans(actor, brandId), engine.readiness(actor, brandId),engine.listJobs(actor,brandId),engine.usage(actor,brandId)]);
+      return send(res, 200, topicsPage(shell('topics'), { plans, readiness, jobs, usage, commandId: randomUUID(), estimatePerArticle: USAGE_ESTIMATES.article }));
     }
     if (tab === 'articles') {
       const articleId = rest.split('/')[1];
@@ -224,8 +226,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const view = (['month', 'week', 'list'] as const).find((v) => v === url.searchParams.get('view')) ?? 'month';
       const requested = url.searchParams.get('date') ?? '';
       const anchor = /^\d{4}-\d{2}-\d{2}$/.test(requested) ? requested : utcToLocal(new Date().toISOString(), brand.timezone).date;
-      const [articles, plans, destinations] = await Promise.all([engine.listArticles(actor, brandId), engine.listPlans(actor, brandId), engine.listDestinations(actor, brandId)]);
-      return send(res, 200, calendarPage(shell('calendar'), { view, anchor, articles, briefs: plans.flatMap((p) => p.briefs), destinations, brandsAll: false }));
+      const [articles, plans, destinations, readiness, jobs] = await Promise.all([engine.listArticles(actor, brandId), engine.listPlans(actor, brandId), engine.listDestinations(actor, brandId),engine.readiness(actor,brandId),engine.listJobs(actor,brandId)]);
+      return send(res, 200, calendarPage(shell('calendar'), { view, anchor, articles, briefs: plans.flatMap((p) => p.briefs), destinations, readiness,jobs, brandsAll: false }));
     }
     if (tab === 'publishing') return send(res, 200, publishingPage(shell('publishing'), { usage: await engine.usage(actor, brandId) }));
     if (tab === 'social') {
@@ -242,7 +244,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     if (!known) console.error('seo-blog: request failed', (error as Error).name);
     if (method === 'POST' && known && error.status < 500 && error.status !== 404 && brandId) {
       const tab = rest.startsWith('articles/') ? `articles/${rest.split('/')[1]}` : rest.split('/')[0] || 'overview';
-      return redirect(res, `${back(tab === 'basics' || tab === 'knowledge' || tab === 'profile' || tab === 'destinations' || tab === 'inventory' ? 'setup' : tab === 'plan' || tab === 'plans' || tab === 'briefs' || tab === 'generate' ? 'topics' : tab === 'settings' ? 'publishing' : tab === 'jobs' ? 'activity' : tab)}?${signedMessage(input.sessionSecret, 'e', message)}`);
+      return redirect(res, `${back(tab === 'basics' || tab === 'knowledge' || tab === 'profile' || tab === 'destinations' || tab === 'inventory' || tab==='editorial' ? 'setup' : tab === 'plan' || tab === 'plans' || tab === 'briefs' || tab === 'generate' ? 'topics' : tab === 'settings' ? 'publishing' : tab === 'jobs' ? 'activity' : tab)}?${signedMessage(input.sessionSecret, 'e', message)}`);
     }
     const status = known ? error.status : 503;
     return send(res, status, `<!DOCTYPE html><html lang="en-GB"><head><meta charset="utf-8"><title>SEO Blog</title></head><body><main style="max-width:640px;margin:40px auto;font:16px system-ui"><h1>${status === 404 ? 'Not found' : 'Something needs attention'}</h1><p>${message.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)}</p><p><a href="${SEO_BLOG_BASE}">Back to brands</a></p></main></body></html>`);
@@ -270,6 +272,10 @@ async function handlePost(
       return ok(back('setup'), 'Reading the website. This continues in the background.');
     }
     case 'knowledge': {
+      if(parts[2]==='category'&&parts[1]) {
+        await engine.changeKnowledgeCategory(actor,brandId,parts[1],int(f('version'),'the document version'),f('category')??'');
+        return ok(back('setup'),'Guidance kind saved as a new version. Original files and history were retained.');
+      }
       if (parts[2] === 'retire' && parts[1]) {
         await engine.retireKnowledge(actor, brandId, parts[1]);
         return ok(back('setup'), 'Document retired. Re-extract the profile to apply the change.');
@@ -333,11 +339,23 @@ async function handlePost(
       return ok(back('setup'), `${d.label}: ${d.statusDetail}`);
     }
     case 'plan': {
+      if(f('resumeHoldId')&&f('confirmResearchResume')!=='1') throw new SeoBlogError(400,'Confirm that you want a new research intent within your remaining allowance.');
       await engine.requestPlan(actor, brandId, {
         commandId: f('commandId') ?? '', focus: f('focus'), excluded: (f('excluded') ?? '').split(',').map((x) => x.trim()).filter(Boolean),
         sourceArticleUrl: f('sourceArticleUrl'),
+        resumeHoldId:f('resumeHoldId'),
       });
       return ok(back('topics'), 'Planning started. Research and planning continue in the background.');
+    }
+    case 'editorial': {
+      const categories:{id:string;label:string;slug:string}[]=[];
+      for(let i=0;i<15;i++) {
+        const id=f(`category_${i}_id`);const label=f(`category_${i}_label`)??'';const slug=f(`category_${i}_slug`)??'';
+        if(!id||f(`category_${i}_include`)!=='1'||(!label.trim()&&!slug.trim())) continue;
+        categories.push({id,label,slug});
+      }
+      await engine.approveEditorialStructure(actor,brandId,{rowVersion:rowVersion(),scanId:f('scanId')??'',scanSha:f('scanSha')??'',destinationId:f('destinationId')??'',root:f('root')??'',categories});
+      return ok(back('setup'),'Editorial guidance approved. Categories guide drafts; existing URLs and website routes were not changed.');
     }
     case 'plans': {
       if (parts[2] === 'accept' && parts[1]) { await engine.acceptPlan(actor, brandId, parts[1]); return ok(back('topics'), 'Plan accepted.'); }
@@ -366,6 +384,10 @@ async function handlePost(
     }
     case 'settings': {
       const brand = await engine.getBrand(actor, brandId);
+      if(parts[1]==='authorise') {
+        await engine.updateSettings(actor,brandId,rowVersion(),{ongoingProduction:brand.settings.ongoingProduction});
+        return ok(back('publishing'),'Your current managing-owner authority was saved for the draft programme. Existing research holds still need an explicit resume.');
+      }
       if (parts[1] === 'toggle') {
         const name = f('name') as keyof BrandSettings;
         if (!['autoPublish', 'pauseAll', 'ongoingProduction', 'autoAcceptPlans'].includes(name)) throw new SeoBlogError(400, 'Unknown control.');
@@ -463,6 +485,7 @@ function settingsFromForm(brand: Brand, form: URLSearchParams): Partial<BrandSet
   const authorUrl = (form.get('authorUrl') ?? '').trim();
   const length = form.get('length');
   return {
+    ...(form.has('programmeFocus')?{programme:{focus:form.get('programmeFocus')??'',exclusions:lines(form.get('programmeExclusions'))}}:{}),
     cadence: { weekdays: form.getAll('weekday').map(Number), localTime: form.get('localTime') ?? brand.settings.cadence.localTime, perWeek: int(form.get('perWeek'), 'posts per week') },
     planningHorizonDays: int(form.get('horizon'), 'the planning horizon'),
     backlogCeiling: int(form.get('backlog'), 'the backlog ceiling'),

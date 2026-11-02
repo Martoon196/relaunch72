@@ -40,6 +40,7 @@ export interface BrandAuthor {
 }
 
 export interface BrandSettings {
+  readonly programme?: BrandProgrammeSettings;
   /** Off by default. On = articles that do not require review may publish without a per-article approval. */
   readonly autoPublish: boolean;
   /** Distinct emergency control: holds every publication that has not started. */
@@ -201,6 +202,7 @@ export interface InventoryPage {
 }
 
 export interface WebsiteInventory {
+  readonly editorial?: EditorialRecommendations;
   readonly brandId: string;
   readonly website: string;
   readonly fetchedAt: IsoInstant;
@@ -251,6 +253,7 @@ export interface DuplicateAssessment {
 export type BriefStatus = 'planned' | 'postponed' | 'omitted' | 'accepted' | 'generating' | 'generated' | 'skipped';
 
 export interface ArticleBrief {
+  readonly programme?: ProgrammeProvenance;
   readonly id: string;
   readonly planId: string;
   readonly brandId: string;
@@ -276,6 +279,7 @@ export interface ArticleBrief {
 }
 
 export interface TopicPlan {
+  readonly programme?: ProgrammeProvenance;
   readonly id: string;
   readonly brandId: string;
   readonly status: 'proposed' | 'accepted' | 'rejected' | 'superseded';
@@ -361,6 +365,7 @@ export interface ArticlePromotionPack {
 }
 
 export interface ArticleVersion {
+  readonly programme?: ProgrammeProvenance;
   readonly id: string;
   readonly articleId: string;
   readonly brandId: string;
@@ -633,3 +638,4 @@ export class SeoBlogError extends Error {
     this.name = 'SeoBlogError';
   }
 }
+import type { BrandProgrammeSettings, EditorialRecommendations, ProgrammeProvenance } from './programme.js';
