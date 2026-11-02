@@ -9,8 +9,19 @@ import { portalCsrfToken } from '../src/portal/session.js';
 import type { PortalSeoBlogService } from '../src/portal/seo-blog-service.js';
 import type { PortalSessionIdentity } from '../src/portal/auth-service.js';
 import { harness, OWNER, STRANGER, seedBrandSite } from './seo-blog-fixtures.js';
+import {websiteFixture} from './seo-blog-website-fixtures.js';
 
 const SECRET = 's'.repeat(48);
+
+test('website target routes expose installed roots, preserve CSRF/owner/version gates and never publish or generate on review',async()=>{
+  const f=await websiteFixture();const structure=await f.approveStructure();const service:PortalSeoBlogService={generation:'live',research:'live',social:'unavailable',engineFor:()=>f.h.engine,socialCallback:async()=>null};const who=identity(OWNER.userId);const csrf=portalCsrfToken(SECRET,who.sessionToken);
+  const setup=await call(service,who,'GET',`/portal/seo-blog/b/${f.brand.id}/setup`);assert.match(setup.body,/<select id="editorial-root" name="root"/);assert.match(setup.body,/<option value="\/investment-info"/);assert.doesNotMatch(setup.body,/Property Predator currently supports/);
+  const old=(await f.h.engine.getArticle(OWNER,f.brand.id,f.articleId)).version!;const path=`/portal/seo-blog/b/${f.brand.id}/articles/${f.articleId}/website-target`;const form={_csrf:csrf,versionId:old.id,destinationId:f.destination.id,categoryId:[structure.website!.categories[0]!.id]};const calls=f.h.llm.calls.length;
+  const denied=await call(service,who,'POST',path,{...form,_csrf:'wrong'});assert.equal(denied.status,303);assert.ok(new URL(denied.headers.location!,'https://x').searchParams.has('e'));assert.equal((await f.h.engine.getArticle(OWNER,f.brand.id,f.articleId)).version!.id,old.id);const foreign=identity(STRANGER.userId);assert.equal((await call(service,foreign,'POST',path,{...form,_csrf:portalCsrfToken(SECRET,foreign.sessionToken)})).status,404);
+  const saved=await call(service,who,'POST',path,form);assert.equal(saved.status,303);assert.ok(new URL(saved.headers.location!,'https://x').searchParams.has('n'));const current=(await f.h.engine.getArticle(OWNER,f.brand.id,f.articleId)).version!;assert.equal(current.number,old.number+1);assert.equal(f.h.llm.calls.length,calls);assert.equal(f.h.site.posts,0);
+  const stale=await call(service,who,'POST',path,form);assert.ok(new URL(stale.headers.location!,'https://x').searchParams.has('e'));assert.equal((await f.h.engine.getArticle(OWNER,f.brand.id,f.articleId)).version!.id,current.id);
+  const editor=await call(service,who,'GET',`/portal/seo-blog/b/${f.brand.id}/articles/${f.articleId}`);assert.match(editor.body,/Reviewed URL/);assert.match(editor.body,/Save publishing target as a new version/);assert.ok(!editor.body.includes(f.destination.sealedCredential!));
+});
 
 test('profile issues are individually editable and explicitly resolved under the exact version without generation or lost sources', async () => {
   const h = harness();

@@ -17,6 +17,7 @@ import type {
 import { DEFAULT_BRAND_SETTINGS, SeoBlogError } from './types.js';
 import { isProfileJob, profilePayload, type ProfileJobBoundaryInput } from './profile-jobs.js';
 import { programmeRun, type ProgrammeBoundaryInput } from './programme.js';
+import {assertWebsiteVersionGuard,websiteWakeJob,type WebsiteReviewInput,type WebsiteVersionGuard} from './website-target.js';
 
 export class StaleWriteError extends SeoBlogError {
   constructor(what = 'record') {
@@ -41,6 +42,7 @@ export interface CreateBrandInput {
  * or waits until the operation has begun.
  */
 export interface PublicationSnapshot {
+  readonly repairRequesterAllowed:boolean;
   readonly brand: Pick<Brand, 'id' | 'settings'>;
   readonly article: Article;
   readonly version: ArticleVersion | null;
@@ -70,6 +72,8 @@ export type BeginResult =
     };
 
 export interface SeoBlogStore {
+  /** Genuine owner command; atomically append the exact target-reviewed version and invalidate approval. */
+  reviewWebsiteTarget(input: WebsiteReviewInput): Promise<ArticleVersion>;
   programmeBoundary(input: ProgrammeBoundaryInput): Promise<Job | null>;
   /** Brand -> jobs lock order; no provider work in this atomic profile/result/cost boundary. */
   profileJobBoundary(input: ProfileJobBoundaryInput): Promise<Job>;
@@ -111,7 +115,7 @@ export interface SeoBlogStore {
   listArticles(brandId: string): Promise<Article[]>;
   /** Writes `article` if the stored rowVersion equals article.rowVersion; returns it with rowVersion + 1. */
   updateArticle(article: Article): Promise<Article>;
-  addVersion(version: ArticleVersion): Promise<void>;
+  addVersion(version: ArticleVersion,websiteGuard?:WebsiteVersionGuard): Promise<void>;
   getVersion(brandId: string, versionId: string): Promise<ArticleVersion | null>;
   listVersions(brandId: string, articleId: string): Promise<ArticleVersion[]>;
 
@@ -190,6 +194,21 @@ export class MemorySeoBlogStore implements SeoBlogStore {
   }
   /** Test helper: model revocation before a worker's begin/apply boundary. */
   revoke(actorId: string, brandId: string): void { this.members.get(brandId)?.delete(actorId); }
+
+  async reviewWebsiteTarget(input: WebsiteReviewInput): Promise<ArticleVersion> {
+    this.maybeFail('reviewWebsiteTarget');
+    const brand=this.brands.get(input.brandId);const article=this.articles.get(input.articleId);const destination=this.destinations.get(input.destinationId);
+    if(!this.members.get(input.brandId)?.has(input.actorId))throw new SeoBlogError(403,'Only a current managing owner can review this target.');
+    if(!brand||!article||article.brandId!==brand.id||!destination||destination.brandId!==brand.id)throw new SeoBlogError(404,'Article or website not found.');
+    if(article.currentVersionId!==input.expectedVersionId)throw new StaleWriteError('article version');
+    const version=this.versions.get(input.expectedVersionId);if(!version)throw new StaleWriteError('article version');
+    const next=input.decide(clone({brand,article,version,destination,publications:[...this.publications.values()].filter((p)=>p.brandId===brand.id&&p.articleId===article.id)}));
+    if(next.version.id===version.id)return clone(version);
+    if(next.version.brandId!==brand.id||next.version.articleId!==article.id||next.version.number!==version.number+1||next.version.parentVersionId!==version.id||next.article.id!==article.id||next.article.currentVersionId!==next.version.id||next.article.approval!==null)throw new SeoBlogError(409,'Invalid target review transition.');
+    if(this.versions.has(next.version.id)||[...this.versions.values()].some((v)=>v.articleId===article.id&&v.number===next.version.number))throw new StaleWriteError('article version');
+    this.versions.set(next.version.id,clone(next.version));this.articles.set(article.id,{...clone(next.article),rowVersion:article.rowVersion+1});
+    return clone(next.version);
+  }
 
   async programmeBoundary(input: ProgrammeBoundaryInput): Promise<Job | null> {
     this.maybeFail('programmeBoundary');
@@ -381,8 +400,12 @@ export class MemorySeoBlogStore implements SeoBlogStore {
     this.articles.set(article.id, next);
     return clone(next);
   }
-  async addVersion(version: ArticleVersion): Promise<void> {
+  async addVersion(version: ArticleVersion,websiteGuard?:WebsiteVersionGuard): Promise<void> {
     this.maybeFail('addVersion');
+    if(websiteGuard){
+      const brand=this.brands.get(version.brandId),article=this.articles.get(version.articleId);if(!brand||!article)throw new SeoBlogError(404,'Article not found.');
+      assertWebsiteVersionGuard(websiteGuard,clone({brand,article,destination:this.destinations.get(websiteGuard.destinationId)??null,profile:[...(this.profiles.get(version.brandId)??[])].sort((a,b)=>b.version-a.version)[0]??null,knowledge:[...this.knowledge.values()].filter((d)=>d.brandId===version.brandId),brief:this.briefs.get(version.briefId)??null,requesterAllowed:this.members.get(version.brandId)?.has(websiteGuard.authority.sponsorUserId)===true}));
+    }
     if (this.versions.has(version.id) || [...this.versions.values()].some((v) => v.articleId === version.articleId && v.number === version.number)) {
       throw new StaleWriteError('article version');
     }
@@ -417,6 +440,7 @@ export class MemorySeoBlogStore implements SeoBlogStore {
     const destination = destinationId ? this.destinations.get(destinationId) ?? null : null;
     const profiles = this.profiles.get(input.brandId) ?? [];
     const snapshot: PublicationSnapshot = clone({
+      repairRequesterAllowed:!!existing?.sitemapRepair&&this.members.get(input.brandId)?.has(existing.sitemapRepair.requestedBy)===true,
       brand: { id: brand.id, settings: brand.settings }, article,
       version: article.currentVersionId ? this.versions.get(article.currentVersionId) ?? null : null,
       destination: destination && destination.brandId === input.brandId ? destination : null,
@@ -439,6 +463,7 @@ export class MemorySeoBlogStore implements SeoBlogStore {
     if (decision.publication) {
       nextPublication = { ...clone(decision.publication), rowVersion: existing ? existing.rowVersion + 1 : 1 };
       this.publications.set(nextPublication.id, nextPublication);
+      this.persistWebsiteWake(nextPublication);
     }
     if (decision.kind === 'begin') {
       return { kind: 'begin', article: clone(nextArticle), publication: clone(nextPublication!),
@@ -460,7 +485,12 @@ export class MemorySeoBlogStore implements SeoBlogStore {
     if (!current || current.rowVersion !== publication.rowVersion) throw new StaleWriteError('publication');
     const next = { ...clone(publication), rowVersion: publication.rowVersion + 1 };
     this.publications.set(publication.id, next);
+    this.persistWebsiteWake(next);
     return clone(next);
+  }
+  private persistWebsiteWake(p:Publication):void {
+    const job=websiteWakeJob(p);
+    if(job&&![...this.jobs.values()].some((j)=>j.brandId===job.brandId&&j.idempotencyKey===job.idempotencyKey))this.jobs.set(job.id,clone(job));
   }
   async listPublications(brandId: string, articleId?: string): Promise<Publication[]> {
     return [...this.publications.values()].filter((p) => p.brandId === brandId && (!articleId || p.articleId === articleId)).map(clone);

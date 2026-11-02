@@ -13,6 +13,9 @@ import { escapeHtml, escapeXml } from './html.js';
 import type { ArticleBody, ArticleSourceCitation } from './types.js';
 
 export interface RenderContext {
+  readonly categoryLinks?:readonly {readonly label:string;readonly url:string}[];
+  readonly websiteTargetSha?:string;
+  readonly deliverySha?:string;
   readonly siteName: string;
   readonly canonicalUrl: string;
   readonly blogIndexUrl: string;
@@ -153,11 +156,14 @@ export function renderArticlePage(body: ArticleBody, ctx: RenderContext): string
     body.image.url ? `<meta property="og:image" content="${escapeHtml(body.image.url)}">` : '',
     `<meta property="article:published_time" content="${escapeHtml(ctx.publishedAt)}">`,
     `<meta name="r72-blog-version" content="${escapeHtml(versionMarker(ctx.articleId, ctx.versionId, ctx.contentSha))}">`,
+    ctx.websiteTargetSha?`<meta name="r72-blog-target-sha" content="${escapeHtml(ctx.websiteTargetSha)}">`:'',
+    ctx.deliverySha?`<meta name="r72-blog-delivery-sha" content="${escapeHtml(ctx.deliverySha)}">`:'',
     ctx.versionNumber ? `<meta name="r72-blog-version-number" content="${Math.trunc(ctx.versionNumber)}">` : '',
     `<script type="application/ld+json">${jsonLd(body, ctx)}</script>`,
   ].filter(Boolean).join('\n');
   const content = [
     `<nav class="crumbs"><a href="${escapeHtml(ctx.blogIndexUrl)}">Blog</a></nav>`,
+    ctx.categoryLinks?.length?`<nav aria-label="Article categories">${ctx.categoryLinks.map((c)=>`<a href="${escapeHtml(c.url)}">${escapeHtml(c.label)}</a>`).join(' · ')}</nav>`:'',
     `<article>`,
     `<h1>${escapeHtml(body.title)}</h1>`,
     `<p class="meta">${body.author ? `By ${escapeHtml(body.author.name)} · ` : ''}<time datetime="${escapeHtml(ctx.publishedAt)}">${escapeHtml(dateLabel)}</time></p>`,
@@ -181,6 +187,7 @@ export function fillTemplate(template: string, slots: Record<string, string>): s
 }
 
 export interface IndexEntry {
+  readonly categories?:readonly {readonly id:string;readonly slug:string;readonly label:string}[];
   readonly title: string;
   readonly url: string;
   readonly excerpt: string;
@@ -210,16 +217,16 @@ export function upsertIndexEntry(entries: readonly IndexEntry[], entry: IndexEnt
     .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt));
 }
 
-export function renderIndexPage(entries: readonly IndexEntry[], ctx: { siteName: string; indexUrl: string; locale: string; template?: string | null }): string {
+export function renderIndexPage(entries: readonly IndexEntry[], ctx: { siteName: string; indexUrl: string; locale: string; template?: string | null;heading?:string;noindex?:boolean }): string {
   const head = [
-    `<title>${escapeHtml(`Blog | ${ctx.siteName}`)}</title>`,
+    `<title>${escapeHtml(`${ctx.heading??'Blog'} | ${ctx.siteName}`)}</title>`,
     `<meta name="description" content="${escapeHtml(`Articles and guides from ${ctx.siteName}.`)}">`,
     `<link rel="canonical" href="${escapeHtml(ctx.indexUrl)}">`,
-    '<meta name="robots" content="index, follow">',
+    `<meta name="robots" content="${ctx.noindex?'noindex':'index'}, follow">`,
   ].join('\n');
   const fmt = new Intl.DateTimeFormat(ctx.locale || 'en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
   const content = [
-    `<h1>Blog</h1>`,
+    `<h1>${escapeHtml(ctx.heading??'Blog')}</h1>`,
     entries.length === 0 ? '<p>No articles have been published yet.</p>' : '',
     ...entries.map((e) => `<article><h2><a href="${escapeHtml(e.url)}">${escapeHtml(e.title)}</a></h2><p class="meta"><time datetime="${escapeHtml(e.publishedAt)}">${escapeHtml(fmt.format(new Date(e.publishedAt)))}</time></p><p>${escapeHtml(e.excerpt)}</p></article>`),
     `${INDEX_MANIFEST_START}${Buffer.from(JSON.stringify(entries)).toString('base64')}${INDEX_MANIFEST_END}`,

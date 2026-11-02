@@ -16,8 +16,9 @@ import type { Destination } from '../types.js';
 import { SeoBlogError } from '../types.js';
 import { citationNumbers, renderMarkdown, versionMarker } from '../render.js';
 import { escapeHtml } from '../html.js';
+import { parseWebsiteCapabilities, websiteOrigin, websiteSha, type WebsiteCapabilityReceipt } from '../website-target.js';
 import {
-  cleanPath, PublisherOutcomeUnknownError, PublisherRejectedError, requireHttpsBase,
+  assertPublishTarget,cleanPath, PublisherOutcomeUnknownError, PublisherRejectedError, requireHttpsBase,
   type ExistingState, type PublishInput, type PublishOutcome, type ValidatedDestination, type WebsitePublisher,
 } from './types.js';
 
@@ -58,18 +59,18 @@ export class ContentApiPublisher implements WebsitePublisher {
 
   validateConfig(raw: Readonly<Record<string, string>>): ValidatedDestination {
     const endpoint = requireHttpsBase(raw.endpoint, 'Publishing endpoint');
-    const publicBaseUrl = requireHttpsBase(raw.publicBaseUrl, 'Public website address');
+    const publicBaseUrl = websiteOrigin(requireHttpsBase(raw.publicBaseUrl, 'Public website address'));
     if (new URL(endpoint).host !== new URL(publicBaseUrl).host) throw new SeoBlogError(400, 'The publishing endpoint must be on the same website as the public address.');
     const blogPath = cleanPath(raw.blogPath, 'blog', 'Blog path');
     return { config: { endpoint, publicBaseUrl, blogPath }, publicBaseUrl };
   }
 
   publicUrlFor(destination: Destination, slug: string): string {
-    return `${destination.publicBaseUrl}/${destination.config.blogPath}/${slug}`;
+    return `${destination.publicBaseUrl}/blog/${slug}`;
   }
 
   indexUrlFor(destination: Destination): string {
-    return `${destination.publicBaseUrl}/${destination.config.blogPath}`;
+    return `${destination.publicBaseUrl}/blog`;
   }
 
   private async signed(destination: Destination, credential: string, method: 'GET' | 'POST', suffix: string, body = ''): Promise<{ status: number; json: Record<string, unknown> }> {
@@ -93,11 +94,15 @@ export class ContentApiPublisher implements WebsitePublisher {
     return { status: res.status, json };
   }
 
-  async checkConnection(destination: Destination, credential: string): Promise<{ ok: boolean; detail: string }> {
+  async checkConnection(destination: Destination, credential: string): Promise<{ ok: boolean; detail: string; websiteCapability?: WebsiteCapabilityReceipt }> {
     if (credential.length < 32) return { ok: false, detail: 'The signing secret must be at least 32 characters.' };
     try {
       const res = await this.signed(destination, credential, 'GET', '/status?check=1');
-      if (res.status === 200 && res.json.ok === true) return { ok: true, detail: 'The website accepted a signed connection check.' };
+      if (res.status === 200 && res.json.ok === true) {
+        const websiteCapability=parseWebsiteCapabilities(res.json.capabilities,destination.publicBaseUrl,new Date(this.clock()).toISOString());
+        if(websiteCapability.protocol==='legacy'&&destination.config.blogPath!=='blog')return {ok:false,detail:'This legacy website connection supports /blog only. Reconnect with that root or install the v2 website integration.'};
+        return {ok:true,detail:websiteCapability.protocol==='v2'?`Signed website verified; ${websiteCapability.capabilities.roots.length} installed publishing roots.`:'Signed legacy website verified; /blog publishing only.',websiteCapability};
+      }
       if (res.status === 401 || res.status === 403) return { ok: false, detail: 'The website rejected the signing secret.' };
       return { ok: false, detail: `The website answered HTTP ${res.status}.` };
     } catch (error) {
@@ -109,13 +114,16 @@ export class ContentApiPublisher implements WebsitePublisher {
     const res = await this.signed(input.destination, input.credential, 'GET', `/status?article=${encodeURIComponent(input.articleId)}&version=${encodeURIComponent(input.versionId)}`);
     if (res.status !== 200) throw new PublisherOutcomeUnknownError(`The website status check answered HTTP ${res.status}.`);
     const state = res.json.state;
+    if(state==='present'&&input.websiteTarget&&(res.json.canonicalUrl!==input.websiteTarget.target.canonicalUrl||res.json.contractVersion!==2||typeof res.json.payloadSha!=='string'||!/^[a-f0-9]{64}$/.test(res.json.payloadSha)||websiteSha(res.json.target)!==websiteSha(input.websiteTarget.target)))return {state:'other_version',providerRef:typeof res.json.ref==='string'?res.json.ref:null};
     if (state === 'present' || state === 'absent' || state === 'other_version') return { state, providerRef: typeof res.json.ref === 'string' ? res.json.ref : null };
     throw new PublisherOutcomeUnknownError('The website status check returned an unexpected answer.');
   }
 
   async publish(input: PublishInput): Promise<PublishOutcome> {
-    const publicUrl = this.publicUrlFor(input.destination, input.body.slug);
+    assertPublishTarget(input);
+    const publicUrl = input.websiteTarget?.target.canonicalUrl ?? this.publicUrlFor(input.destination, input.body.slug);
     const payload = JSON.stringify({
+      ...(input.websiteTarget?{contractVersion:2,target:input.websiteTarget.target}:{}),
       operationId: input.operationId,
       articleId: input.articleId,
       versionId: input.versionId,

@@ -18,6 +18,7 @@ import type { BeginDecision, BeginResult, CreateBrandInput, PublicationSnapshot,
 import { StaleWriteError } from './store.js';
 import { isProfileJob, profilePayload, type ProfileJobBoundaryInput } from './profile-jobs.js';
 import { programmeRun, type ProgrammeBoundaryInput } from './programme.js';
+import {assertWebsiteVersionGuard,websiteWakeJob,type WebsiteReviewInput,type WebsiteVersionGuard} from './website-target.js';
 import {
   DEFAULT_BRAND_SETTINGS, SeoBlogError,
   type ActivityEvent, type Article, type ArticleBrief, type ArticleVersion, type Brand, type BrandProfile, type Destination,
@@ -118,6 +119,32 @@ export class PgSeoBlogStore implements SeoBlogStore {
   }
 
   // ─── Generic records ───────────────────────────────────────────────────
+
+  async reviewWebsiteTarget(input:WebsiteReviewInput):Promise<ArticleVersion> {
+    this.assertActor(input.actorId);
+    return this.tx(input.brandId,async(t)=>{
+      await t.query('SELECT workspace_id FROM app.seo_blog_brands WHERE workspace_id=$1 FOR UPDATE',[input.brandId]);
+      const allowed=await t.query<{ok:boolean}>('SELECT app_private.can_manage_workspace(app_private.current_user_id(),$1) AS ok',[input.brandId]);
+      if(!allowed.rows[0]?.ok)throw new SeoBlogError(403,'Only a current managing owner can review this target.');
+      const brandRow=await t.query<{brand:Brand}>('SELECT app_private.seo_blog_brand($1) AS brand',[input.brandId]);
+      const ar=await t.query<{data:Article;row_version:string}>('SELECT data,row_version FROM app.seo_blog_articles WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[input.brandId,input.articleId]);
+      const brand=brandRow.rows[0]?.brand?normaliseBrand(brandRow.rows[0].brand):null;const article=ar.rows[0]?withVersion<Article>(ar.rows[0]):null;
+      if(!brand||!article)throw new SeoBlogError(404,'Article not found.');
+      if(article.currentVersionId!==input.expectedVersionId)throw new StaleWriteError('article version');
+      const pr=await t.query<{data:Publication;row_version:string}>('SELECT data,row_version FROM app.seo_blog_publications WHERE workspace_id=$1 AND article_id=$2 ORDER BY id FOR UPDATE',[input.brandId,input.articleId]);
+      const destination=(await t.query<{data:Destination}>("SELECT data FROM app.seo_blog_records WHERE workspace_id=$1 AND kind='destination' AND id=$2 FOR SHARE",[input.brandId,input.destinationId])).rows[0]?.data;
+      const version=(await t.query<{data:ArticleVersion}>('SELECT data FROM app.seo_blog_article_versions WHERE workspace_id=$1 AND id=$2',[input.brandId,input.expectedVersionId])).rows[0]?.data;
+      if(!destination||!version)throw new SeoBlogError(404,'Article version or website not found.');
+      const next=input.decide({brand,article,version,destination,publications:pr.rows.map((r)=>withVersion<Publication>(r))});
+      if(next.version.id===version.id)return version;
+      if(next.version.brandId!==brand.id||next.version.articleId!==article.id||next.version.number!==version.number+1||next.version.parentVersionId!==version.id||next.article.id!==article.id||next.article.currentVersionId!==next.version.id||next.article.approval!==null)throw new SeoBlogError(409,'Invalid target review transition.');
+      await t.query('INSERT INTO app.seo_blog_article_versions(workspace_id,id,article_id,number,content_sha256,data) VALUES($1,$2,$3,$4,$5,$6)',[brand.id,next.version.id,article.id,next.version.number,next.version.contentSha,JSON.stringify(next.version)]);
+      const {rowVersion:_row,...data}=next.article;
+      const updated=await t.query('UPDATE app.seo_blog_articles SET data=$3,row_version=row_version+1,updated_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2 AND row_version=$4 RETURNING id',[brand.id,article.id,JSON.stringify(data),article.rowVersion]);
+      if(!updated.rows[0])throw new StaleWriteError('article');
+      return next.version;
+    }).catch((error)=>{if(isUnique(error))throw new StaleWriteError('article version');throw error;});
+  }
 
   private async putRecord(brandId: string, kind: string, id: string, data: unknown, mode: 'insert' | 'upsert'): Promise<void> {
     await this.tx(brandId, async (t) => {
@@ -225,11 +252,25 @@ export class PgSeoBlogStore implements SeoBlogStore {
     return withVersion(row);
   }
 
-  async addVersion(version: ArticleVersion): Promise<void> {
-    await this.tx(version.brandId, (t) => t.query(
-      'INSERT INTO app.seo_blog_article_versions (workspace_id, id, article_id, number, content_sha256, data) VALUES ($1, $2, $3, $4, $5, $6)',
-      [version.brandId, version.id, version.articleId, version.number, version.contentSha, JSON.stringify(version)],
-    )).catch((error) => {
+  async addVersion(version: ArticleVersion,websiteGuard?:WebsiteVersionGuard): Promise<void> {
+    await this.tx(version.brandId, async(t) => {
+      if(websiteGuard){
+        if(!/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(websiteGuard.authority.sponsorUserId))throw new SeoBlogError(409,'The proposal has no current programme sponsor.');
+        if(this.principal.kind==='user'&&websiteGuard.authority.origin==='manual'&&this.principal.userId!==websiteGuard.authority.sponsorUserId)throw new SeoBlogError(403,'The proposal requester does not match this session.');
+        await t.query('SELECT workspace_id FROM app.seo_blog_brands WHERE workspace_id=$1 FOR UPDATE',[version.brandId]);
+        const brand=(await t.query<{brand:Brand}>('SELECT app_private.seo_blog_brand($1) AS brand',[version.brandId])).rows[0]?.brand;
+        const row=(await t.query<{data:Article;row_version:string}>('SELECT data,row_version FROM app.seo_blog_articles WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[version.brandId,version.articleId])).rows[0];
+        const records=(await t.query<{kind:string;id:string;data:unknown}>("SELECT kind,id,data FROM app.seo_blog_records WHERE workspace_id=$1 AND kind IN ('profile','knowledge','brief','destination') FOR SHARE",[version.brandId])).rows;
+        if(!brand||!row)throw new SeoBlogError(404,'Article not found.');
+        const profiles=records.filter((r)=>r.kind==='profile').map((r)=>r.data as BrandProfile).sort((a,b)=>b.version-a.version);
+        const allowed=(await t.query<{ok:boolean}>('SELECT app_private.can_manage_workspace($1,$2) AS ok',[websiteGuard.authority.sponsorUserId,version.brandId])).rows[0]?.ok===true;
+        assertWebsiteVersionGuard(websiteGuard,{brand:normaliseBrand(brand),article:withVersion<Article>(row),destination:(records.find((r)=>r.kind==='destination'&&r.id===websiteGuard.destinationId)?.data as Destination)??null,profile:profiles[0]??null,knowledge:records.filter((r)=>r.kind==='knowledge').map((r)=>r.data as KnowledgeDocument),brief:(records.find((r)=>r.kind==='brief'&&r.id===version.briefId)?.data as ArticleBrief)??null,requesterAllowed:allowed});
+      }
+      return t.query(
+        'INSERT INTO app.seo_blog_article_versions (workspace_id, id, article_id, number, content_sha256, data) VALUES ($1, $2, $3, $4, $5, $6)',
+        [version.brandId, version.id, version.articleId, version.number, version.contentSha, JSON.stringify(version)],
+      );
+    }).catch((error) => {
       if (isUnique(error)) throw new StaleWriteError('article version');
       throw error;
     });
@@ -291,6 +332,7 @@ export class PgSeoBlogStore implements SeoBlogStore {
         const knowledge = (await t.query<{ data: KnowledgeDocument }>(
           `SELECT data FROM app.seo_blog_records WHERE workspace_id = $1 AND kind = 'knowledge'`, [input.brandId])).rows.map((r) => r.data);
         const decision = input.decide({
+          repairRequesterAllowed:existing?.sitemapRepair?(await t.query<{ok:boolean}>('SELECT app_private.can_manage_workspace($1,$2) AS ok',[existing.sitemapRepair.requestedBy,input.brandId])).rows[0]?.ok===true:false,
           brand: { id: input.brandId, settings: { ...DEFAULT_BRAND_SETTINGS, ...brandRow.rows[0].settings } },
           article, version, destination, profile, knowledge, publication: existing,
         });
@@ -312,6 +354,7 @@ export class PgSeoBlogStore implements SeoBlogStore {
               [input.brandId, decision.publication.id, decision.publication.articleId, decision.publication.versionId, decision.publication.idempotencyKey, decision.publication.state, JSON.stringify(data)]);
           if (!written.rows[0]) { skipWhy = 'This operation has already begun.'; throw skip; }
           publication = withVersion<Publication>(written.rows[0]);
+          await this.persistWebsiteWake(t,publication);
         }
         const { rowVersion: _arv, ...articleData } = decision.article;
         const updated = await t.query<{ data: Article; row_version: string }>(
@@ -346,12 +389,21 @@ export class PgSeoBlogStore implements SeoBlogStore {
 
   async updatePublication(publication: Publication): Promise<Publication> {
     const { rowVersion, ...data } = publication;
-    const row = await this.tx(publication.brandId, async (t) => (await t.query<{ data: Publication; row_version: string }>(
+    const row = await this.tx(publication.brandId, async (t) => {
+      const row=(await t.query<{ data: Publication; row_version: string }>(
       `UPDATE app.seo_blog_publications SET data = $3, state = $4, row_version = row_version + 1, updated_at = clock_timestamp()
        WHERE workspace_id = $1 AND id = $2 AND row_version = $5 RETURNING data, row_version`,
-      [publication.brandId, publication.id, JSON.stringify(data), publication.state, rowVersion])).rows[0]);
+      [publication.brandId, publication.id, JSON.stringify(data), publication.state, rowVersion])).rows[0];
+      if(row)await this.persistWebsiteWake(t,withVersion<Publication>(row));return row;
+    });
     if (!row) throw new StaleWriteError('publication');
     return withVersion(row);
+  }
+
+  private async persistWebsiteWake(t:DbTransaction,p:Publication):Promise<void> {
+    const job=websiteWakeJob(p);if(!job)return;
+    const {rowVersion:_row,...data}=job;
+    await t.query('INSERT INTO app.seo_blog_jobs(workspace_id,id,kind,idempotency_key,state,run_after,lease_expires_at,data) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(workspace_id,idempotency_key) DO NOTHING',[job.brandId,job.id,job.kind,job.idempotencyKey,job.state,job.runAfter,job.leaseExpiresAt,JSON.stringify(data)]);
   }
 
   async listPublications(brandId: string, articleId?: string): Promise<Publication[]> {

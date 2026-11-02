@@ -19,6 +19,7 @@ import { validatePublicUrl, type FetchedResource, type FetchOptions, type FetchT
 import { MemorySeoBlogStore } from '../src/seo-blog/store.js';
 import type { DestinationType } from '../src/seo-blog/types.js';
 import { SeoBlogCredentialVault } from '../src/seo-blog/vault.js';
+import {websiteSha} from '../src/seo-blog/website-target.js';
 
 export const OWNER = { userId: '11111111-1111-4111-8111-111111111111' };
 export const STRANGER = { userId: '22222222-2222-4222-8222-222222222222' };
@@ -187,6 +188,7 @@ export class ScriptedModel implements LlmClient {
 // ─── In-memory GitHub ────────────────────────────────────────────────────────
 
 export class FakeGithub {
+  failReads=false;
   readonly trees = new Map<string, Map<string, string>>();
   readonly commits = new Map<string, { tree: string; parents: string[]; message: string }>();
   head: string;
@@ -211,10 +213,12 @@ export class FakeGithub {
   }
 
   fetch = async (url: string, init: RequestInit = {}): Promise<Response> => {
+    if(this.failReads&&(init.method??'GET')==='GET')throw new TypeError('read response unavailable');
     const u = new URL(url);
     const path = u.pathname.replace(`/repos/${this.repo}`, '');
     const method = init.method ?? 'GET';
     const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    if(method==='GET'&&path.startsWith('/git/trees/')){const id=path.slice('/git/trees/'.length);const tree=this.trees.get(id);return tree?json(200,{truncated:false,tree:[...tree.keys()].map((path)=>({path,type:'blob'}))}):json(404,{});}
     if (!String((init.headers as Record<string, string>)?.authorization ?? '').startsWith('Bearer gh-token')) return json(401, {});
     if (method === 'GET' && path === '') return json(200, { permissions: { push: true } });
     if (method === 'GET' && path.startsWith('/git/ref/heads/')) return json(200, { object: { sha: this.head } });
@@ -275,7 +279,10 @@ export class FakeGithub {
 // ─── In-memory signed content-API site ───────────────────────────────────────
 
 export class FakeContentSite {
-  readonly articles = new Map<string, { versionId: string; slug: string; html: string; title: string }>();
+  readonly articles = new Map<string, { versionId: string; slug: string; html: string; title: string;canonicalUrl:string }>();
+  capabilities?:unknown;
+  dropNextPublishResponse=false;
+  readonly payloads:Record<string,unknown>[]=[];
   posts = 0;
   constructor(readonly origin: string, readonly secret: string) {}
   fetch = async (url: string, init: RequestInit = {}): Promise<Response> => {
@@ -286,20 +293,23 @@ export class FakeContentSite {
     const json = (status: number, b: unknown) => new Response(JSON.stringify(b), { status });
     if (headers['x-r72-signature'] !== expected) return json(401, { error: 'bad signature' });
     if (u.pathname.endsWith('/status')) {
-      if (u.searchParams.get('check')) return json(200, { ok: true });
+      if (u.searchParams.get('check')) return json(200, { ok: true,...(this.capabilities?{capabilities:this.capabilities}:{}) });
       const a = this.articles.get(u.searchParams.get('article')!);
-      return json(200, { state: !a ? 'absent' : a.versionId === u.searchParams.get('version') ? 'present' : 'other_version' });
+      const payload=[...this.payloads].reverse().find((p)=>p.articleId===u.searchParams.get('article'));
+      return json(200, { state: !a ? 'absent' : a.versionId === u.searchParams.get('version') ? 'present' : 'other_version',...(a&&payload?{ref:a.versionId,canonicalUrl:a.canonicalUrl,target:payload.target??null,contractVersion:payload.contractVersion??1,payloadSha:websiteSha(payload)}:{}) });
     }
     this.posts++;
-    const p = JSON.parse(body) as { articleId: string; versionId: string; slug: string; title: string; articleHtml: string; marker: string };
+    this.payloads.push(JSON.parse(body));
+    const p = JSON.parse(body) as { articleId: string; versionId: string; slug: string; title: string; articleHtml: string; marker: string; canonicalUrl:string };
     const existing = this.articles.get(p.articleId);
     if (existing?.versionId === p.versionId) return json(200, { status: 'already_present', ref: p.versionId });
-    this.articles.set(p.articleId, { versionId: p.versionId, slug: p.slug, title: p.title, html: `<html><head><meta name="r72-blog-version" content="${p.marker}"></head><body>${p.articleHtml}</body></html>` });
+    this.articles.set(p.articleId, { versionId: p.versionId, slug: p.slug, title: p.title,canonicalUrl:p.canonicalUrl, html: `<html><head><link rel="canonical" href="${p.canonicalUrl}"><meta name="r72-blog-version" content="${p.marker}"></head><body>${p.articleHtml}</body></html>` });
+    if(this.dropNextPublishResponse){this.dropNextPublishResponse=false;throw new TypeError('lost publish acknowledgement');}
     return json(201, { status: 'published', ref: p.versionId });
   };
   serve(): (url: string) => Page | null {
     return (url: string) => {
-      for (const a of this.articles.values()) if (url === `${this.origin}/blog/${a.slug}`) return { body: a.html };
+      for (const a of this.articles.values()) if (url === a.canonicalUrl) return { body: a.html };
       return null;
     };
   }

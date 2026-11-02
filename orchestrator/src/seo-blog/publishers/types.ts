@@ -7,6 +7,7 @@
 import type { ArticleBody, Destination, DestinationType } from '../types.js';
 import { SeoBlogError } from '../types.js';
 import type { FetchTransport } from '../safe-fetch.js';
+import {targetEligibility,websiteSha,type ArticleWebsiteTarget,type WebsiteCapabilityReceipt} from '../website-target.js';
 
 export interface DestinationConfigField {
   readonly key: string;
@@ -22,6 +23,8 @@ export interface ValidatedDestination {
 }
 
 export interface PublishInput {
+  readonly sitemapSourceSha?:string;
+  readonly websiteTarget?: ArticleWebsiteTarget;
   readonly operationId: string;
   readonly destination: Destination;
   readonly credential: string;
@@ -40,6 +43,13 @@ export interface PublishOutcome {
   readonly status: 'accepted' | 'already_present';
   readonly providerRef: string;
   readonly publicUrl: string;
+}
+
+export function assertPublishTarget(input:PublishInput):void {
+  const value=input.websiteTarget;if(!value)return;
+  const {deliverySha,...snapshot}=value;const receipt=input.destination.websiteCapability;
+  const root=receipt?.protocol==='v2'?receipt.capabilities.roots.find((r)=>r.id===value.target.rootId):null;
+  if(targetEligibility(input.destination,value)||!root||value.target.canonicalUrl!==root.articleUrlPattern.replace('{slug}',input.body.slug)||value.brandName!==input.brandName||value.locale!==input.locale||websiteSha({body:input.body,...snapshot})!==deliverySha)throw new PublisherRejectedError('The immutable reviewed website target or delivery digest does not match this publication.');
 }
 
 export type ExistingState = 'present' | 'absent' | 'other_version';
@@ -68,11 +78,15 @@ export interface WebsitePublisher {
   validateConfig(raw: Readonly<Record<string, string>>): ValidatedDestination;
   publicUrlFor(destination: Destination, slug: string): string;
   indexUrlFor(destination: Destination): string;
-  checkConnection(destination: Destination, credential: string): Promise<{ ok: boolean; detail: string }>;
+  checkConnection(destination: Destination, credential: string): Promise<{ ok: boolean; detail: string; websiteCapability?: WebsiteCapabilityReceipt }>;
   /** Idempotent. Throws PublisherOutcomeUnknownError when the outcome cannot be known. */
   publish(input: PublishInput): Promise<PublishOutcome>;
   /** Read the provider's current state for this exact article/version (reconciliation). */
   findExisting(input: PublishInput): Promise<{ state: ExistingState; providerRef: string | null }>;
+  /** Separate operation: writes only owned sitemap XML, never article/index bytes. */
+  repairSitemap?(input: PublishInput): Promise<{readonly providerRef:string}>;
+  /** Read-only repair reconciliation. Unknown/absent is never permission to republish an article. */
+  inspectSitemapRepair?(input:PublishInput):Promise<{readonly complete:boolean;readonly providerRef:string;readonly sourceSha:string}>;
 }
 
 /** Read the public page and confirm it serves this exact article version. */

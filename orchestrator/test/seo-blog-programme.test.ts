@@ -81,7 +81,7 @@ test('editorial recommendations are deterministic across timestamp-only scans an
   const f=await ready();const first=await f.h.engine.refreshInventory(f.brand.id);
   const second=editorialRecommendations({...first,fetchedAt:'2027-01-01T00:00:00.000Z'});assert.equal(first.editorial!.scanSha,second.scanSha);assert.equal(first.editorial!.scanId,second.scanId);
   const destination=await f.h.engine.connectDestination(OWNER,f.brand.id,{type:'github_static',label:'Site',credential:'gh-token-fixture',config:{repository:'acme/site',branch:'main',publicBaseUrl:'https://harbour.example',blogPath:'blog',sitemapPath:'sitemap.xml'}});
-  assert.match(editorialRootIssue({...destination,publicBaseUrl:'https://propertypredator.com'},'/investment-info')!,/supports \/blog only/);
+  assert.match(editorialRootIssue({...destination,publicBaseUrl:'https://propertypredator.com',websiteCapability:undefined},'/investment-info')!,/supports \/blog only/);
   const b=await f.h.engine.getBrand(OWNER,f.brand.id);const c=first.editorial!.categories[0]!;
   const structure=await f.h.engine.approveEditorialStructure(OWNER,f.brand.id,{rowVersion:b.rowVersion,scanId:first.editorial!.scanId,scanSha:first.editorial!.scanSha,destinationId:destination.id,root:'/blog',categories:[{id:c.id,label:'Owner guides',slug:'owner-guides'}]});
   await f.h.engine.refreshInventory(f.brand.id);assert.equal((await f.h.engine.getBrand(OWNER,f.brand.id)).settings.programme!.structure!.sha,structure.sha);

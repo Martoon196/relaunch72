@@ -5,6 +5,7 @@ import type { SearchHit, ResearchBundle } from './research.js';
 import type { ActivityEvent, ArticleBrief, Brand, BrandProfile, Destination, Job, KnowledgeCategory, KnowledgeDocument, KnowledgeRef, TopicPlan, UsageRecord, WebsiteInventory } from './types.js';
 import { FACTUAL_KNOWLEDGE_CATEGORIES } from './types.js';
 import type { KeywordMetric } from '../keyword/types.js';
+import type { WebsiteStructure } from './website-target.js';
 
 export interface ResearchDiagnostic {
   readonly category: 'transient' | 'credentials' | 'verification' | 'payment' | 'daily_limit' | 'entitlement' | 'task_failed' | 'unknown';
@@ -103,6 +104,8 @@ export interface EditorialRecommendations {
   readonly rationale: string;
 }
 export interface ApprovedEditorialStructure {
+  /** Present only after explicit website-capability-aware owner approval. Legacy guidance stays guidance. */
+  readonly website?: WebsiteStructure;
   readonly schema: 1;
   readonly version: number;
   readonly sha: string;
@@ -238,6 +241,7 @@ export function editorialRecommendations(inventory: WebsiteInventory): Editorial
 export function editorialRootIssue(destination: Destination | undefined, root: string): string | null {
   if(!destination || destination.status!=='connected') return 'Connect and verify a supported publishing destination first.';
   if(!/^\/[a-z0-9]+(?:[a-z0-9/_-]*[a-z0-9])?$/.test(root) || root.includes('//') || root.includes('..')) return 'Choose a simple supported root path, such as /blog.';
+  if(destination.websiteCapability?.protocol==='v2')return destination.websiteCapability.capabilities.roots.some((r)=>root===`/${r.path}`)?null:'This root is not installed on the verified website. Choose an advertised publishing root.';
   const host=new URL(destination.publicBaseUrl).hostname.toLowerCase().replace(/^www\./,'');
   if(host==='propertypredator.com' && root!=='/blog') return 'Property Predator currently supports /blog only. Other roots require a website integration; no route will be created.';
   if(root!==`/${destination.config.blogPath??'blog'}`.replace(/\/$/,'')) return 'This root differs from the connected adapter configuration. Website integration is required before it can be approved.';

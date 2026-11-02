@@ -19,7 +19,9 @@ import { buildInventory, linkableUrls } from './inventory.js';
 import { cleanText, extractKnowledge } from './knowledge.js';
 import { approvalIsCurrent, articleStatusLabel, checksAreCurrent, evaluatePublication } from './policy.js';
 import { publisherFor, type PublisherRegistry } from './publishers/registry.js';
-import { PublisherOutcomeUnknownError, PublisherRejectedError, verifyPublicUrl, type PublishInput } from './publishers/types.js';
+import { PublisherOutcomeUnknownError, PublisherRejectedError, verifyPublicUrl, type PublishInput, type WebsitePublisher } from './publishers/types.js';
+import { reviewedWebsiteTarget, targetEligibility, destinationIdentity,websiteIdentity, websiteSha, websiteWakeJob, type ArticleWebsiteTarget, type WebsiteStructure, type WebsiteVersionGuard } from './website-target.js';
+import { observeWebsiteDelivery } from './website-delivery.js';
 import { exportMarkdown, renderArticlePage, versionMarker } from './render.js';
 import { researchQueries, ResearchUnavailableError, ResearchProviderError, type SearchProvider, type ResearchBundle } from './research.js';
 import { validatePublicUrl, type FetchTransport } from './safe-fetch.js';
@@ -523,8 +525,9 @@ export class SeoBlogEngine {
 
   // ─── Planning ────────────────────────────────────────────────────────────
 
-  async approveEditorialStructure(actor: Actor, brandId: string, input: {rowVersion:number;scanId:string;scanSha:string;destinationId:string;root:string;categories:readonly {id:string;label:string;slug:string}[]}): Promise<ApprovedEditorialStructure> {
+  async approveEditorialStructure(actor: Actor, brandId: string, input: {rowVersion:number;scanId:string;scanSha:string;destinationId:string;root:string;categories:readonly {id:string;label:string;slug:string}[];newCategoryAddresses?:boolean}): Promise<ApprovedEditorialStructure> {
     await this.brandFor(actor,brandId);let approved:ApprovedEditorialStructure|undefined;
+    const connection=await this.store.getDestination(brandId,input.destinationId);if(connection)await this.checkDestinationInternal(connection);
     await this.store.programmeBoundary({brandId,jobId:null,authority:{origin:'manual',sponsorUserId:actor.userId},now:this.now(),decide:(s)=>{
       if(!s.requesterAllowed) throw new SeoBlogError(403,'Only a current managing owner can approve editorial guidance.');
       if(s.brand.rowVersion!==input.rowVersion) throw new StaleWriteError('brand settings');
@@ -542,7 +545,16 @@ export class SeoBlogEngine {
         return {...(known??{id:item.id,evidenceUrls:[],rationale:'Owner-provided draft category. This does not create a CMS route.',confidence:'low' as const}),label,slug};
       });
       if(new Set(categories.map((c)=>c.id)).size!==categories.length||new Set(categories.map((c)=>c.slug)).size!==categories.length) throw new SeoBlogError(400,'Give each category a distinct label and slug.');
-      const base={schema:1 as const,version:(s.brand.settings.programme?.structure?.version??0)+1,scanId:recommendation.scanId,scanSha:recommendation.scanSha,root:input.root,destinationId:input.destinationId,categories,approvedBy:actor.userId,approvedAt:this.now()};
+      const previous=s.brand.settings.programme?.structure;
+      const destination=s.destinations.find((d)=>d.id===input.destinationId)!;
+      let website:WebsiteStructure|undefined;
+      if(destination.websiteCapability?.protocol==='v2') {
+        const c=destination.websiteCapability.capabilities;const root=c.roots.find((r)=>`/${r.path}`===input.root)!;
+        const changed=previous?.website&&categories.some((item)=>!previous.website!.categories.some((p)=>p.id===websiteIdentity('category',brandId,destination.id,c.siteId,root.path,item.slug)));
+        if(changed&&!input.newCategoryAddresses)throw new SeoBlogError(409,'Changing a category address creates a new category identity. Explicitly confirm this; existing archives and article URLs will stay where they are.');
+        website={siteId:c.siteId,structureId:websiteIdentity('structure',brandId,destination.id,c.siteId),rootId:root.id,rootPath:root.path,categories:categories.map((item)=>({recommendationId:item.id,id:websiteIdentity('category',brandId,destination.id,c.siteId,root.path,item.slug),label:item.label,slug:item.slug}))};
+      }
+      const base={schema:1 as const,version:(previous?.version??0)+1,scanId:recommendation.scanId,scanSha:recommendation.scanSha,root:input.root,destinationId:input.destinationId,categories,...(website?{website}:{}),approvedBy:actor.userId,approvedAt:this.now()};
       approved={...base,sha:programmeSha(base)};
       return {job:null,writeJob:false,settings:{...s.brand.settings,programme:{...s.brand.settings.programme,structure:approved}},event:{brandId,at:this.now(),actor:actor.userId,kind:'editorial.approved',message:`Editorial guidance version ${approved.version} approved. Existing URLs were not moved.`,subjectId:null}};
     }});
@@ -960,6 +972,7 @@ export class SeoBlogEngine {
         return {job:null,writeJob:false};
       }});
     }
+    const sourceKnowledgeSha=websiteSha(this.knowledgeRefs(await this.activeKnowledge(brandId)));
     const { article: created } = await this.store.createArticle({
       id: randomUUID(), brandId, briefId: brief.id, planId: brief.planId, slug: brief.slug, editorialState: 'writing',
       currentVersionId: null, requiresApproval: false, approval: null, checks: null, schedule: null, hold: null,
@@ -1001,7 +1014,7 @@ export class SeoBlogEngine {
       image: previous?.body.image ?? { kind: 'none', url: null, alt: v.image_alt, provenance: 'No image selected yet.', width: null, height: null },
       author: brand.settings.author,
     };
-    const version = await this.appendVersion(brand, article, body, previous ? 'regenerated' : 'generated', null, payload.requestedBy ?? 'system', written.record, profile, brief);
+    const version = await this.appendVersion(brand, article, body, previous ? 'regenerated' : 'generated', null, payload.requestedBy ?? 'system', written.record, profile, brief,sourceKnowledgeSha);
     await this.store.saveBrief({ ...(await this.store.getBrief(brandId, brief.id))!, status: 'generated', articleId: article.id });
     await this.log(brandId, payload.requestedBy ?? 'system', previous ? 'article.regenerated' : 'article.generated', `“${body.title}” ${previous ? 'regenerated' : 'written'} (version ${version.number}).`, article.id);
     return (await this.store.getArticle(brandId, article.id))!;
@@ -1009,14 +1022,27 @@ export class SeoBlogEngine {
 
   private async appendVersion(
     brand: Brand, article: Article, body: ArticleBody, change: VersionChange, changedSectionId: string | null, actor: string,
-    generation: GenerationRecord | null, profile: BrandProfile, brief: ArticleBrief,
+    generation: GenerationRecord | null, profile: BrandProfile, brief: ArticleBrief,sourceKnowledgeSha?:string,
   ): Promise<ArticleVersion> {
     const versions = await this.store.listVersions(brand.id, article.id);
+    const prior=versions.find((v)=>v.id===article.currentVersionId);
+    if(article.publishedUrl&&body.slug!==new URL(article.publishedUrl).pathname.split('/').filter(Boolean).at(-1))throw new SeoBlogError(409,'An already-published article keeps its original slug and URL.');
+    let websiteTarget:ArticleWebsiteTarget|undefined=prior?.websiteTarget&&prior.body.slug===body.slug?{...prior.websiteTarget,deliverySha:websiteSha({body,...Object.fromEntries(Object.entries(prior.websiteTarget).filter(([key])=>key!=='deliverySha'))})}:undefined;
     const contentSha = sha256(body);
     const versionId = randomUUID();
     const destinations = (await this.store.listDestinations(brand.id)).filter(d => d.status === 'connected');
-    const destination = destinations.find(d => d.id === article.schedule?.destinationId) ?? (destinations.length === 1 ? destinations[0] : null);
-    const canonicalUrl = destination ? publisherFor(this.deps.publishers, destination.type).publicUrlFor(destination, body.slug) : null;
+    const structure=brand.settings.programme?.structure;
+    const destination = destinations.find(d=>d.id===prior?.websiteTarget?.destinationId)??destinations.find(d => d.id === article.schedule?.destinationId)??destinations.find(d=>d.id===structure?.destinationId) ?? (destinations.length === 1 ? destinations[0] : null);
+    let websiteGuard:WebsiteVersionGuard|undefined;
+    if(!prior?.websiteTarget&&!article.publishedUrl&&structure?.website&&destination?.id===structure.destinationId&&destination.websiteCapability?.protocol==='v2'){
+      const candidate:ArticleVersion={...(brief.programme?{programme:brief.programme}:{}),id:versionId,articleId:article.id,brandId:brand.id,number:(versions.at(-1)?.number??0)+1,parentVersionId:article.currentVersionId,change,changedSectionId,createdAt:this.now(),createdBy:actor,body,profileVersion:profile.version,factsSha:profile.factsSha,knowledge:profile.knowledge,briefId:brief.id,planId:brief.planId,generation,contentSha};
+      const proposed=reviewedWebsiteTarget({brand,article,version:candidate,destination,publications:[]},[]);
+      const {deliverySha:_digest,...snapshot}=proposed;
+      websiteTarget={...snapshot,origin:'programme_default',deliverySha:websiteSha({body,...snapshot,origin:'programme_default'})};
+      const authority=brief.programme?.authority??(/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(actor)?{origin:'manual' as const,sponsorUserId:actor}:{origin:'daily' as const,sponsorUserId:brand.settings.programme?.authorisedBy??profile.confirmedBy??''});
+      websiteGuard={expectedVersionId:article.currentVersionId,structureSha:structure.sha,structureVersion:structure.version,destinationId:destination.id,destinationSha:destinationIdentity(destination),profileSha:websiteSha(profile),knowledgeSha:sourceKnowledgeSha??websiteSha(this.knowledgeRefs(await this.activeKnowledge(brand.id))),authority};
+    }
+    const canonicalUrl = websiteTarget?.target.canonicalUrl ?? article.publishedUrl ?? (destination ? publisherFor(this.deps.publishers, destination.type).publicUrlFor(destination, body.slug) : null);
     let generationRecord: GenerationRecord | null = null;
     let posts: ArticlePromotionPack['posts'] = (['instagram', 'linkedin'] as const).map(network => ({
       network, title: body.title, copy: `${body.title}\n\n${body.excerpt}\n\nRead the full article.`,
@@ -1037,13 +1063,14 @@ export class SeoBlogEngine {
       generation: generationRecord, mode: generationRecord ? 'model' : 'excerpt_fallback', posts,
     };
     const version: ArticleVersion = {
+      ...(websiteTarget?{websiteTarget}:{}),
       ...(brief.programme?{programme:brief.programme}:{}),
       id: versionId, articleId: article.id, brandId: brand.id, number: (versions.at(-1)?.number ?? 0) + 1,
       parentVersionId: article.currentVersionId, change, changedSectionId, createdAt: this.now(), createdBy: actor, body,
       profileVersion: profile.version, factsSha: profile.factsSha, knowledge: profile.knowledge, briefId: brief.id, planId: brief.planId,
       generation, contentSha, promotionPack,
     };
-    await this.store.addVersion(version);
+    await this.store.addVersion(version,websiteGuard);
     const checks = await this.checkVersion(brand, version);
     // A new version always invalidates the old approval; review-required articles return to Needs approval.
     await this.store.updateArticle({
@@ -1265,7 +1292,7 @@ export class SeoBlogEngine {
     const versions = await this.store.listVersions(brandId, articleId);
     return {
       article, version: versions.find((v) => v.id === article.currentVersionId) ?? null, versions,
-      publications: await this.store.listPublications(brandId, articleId), status: articleStatusLabel(article, brand.settings),
+      publications: (await this.store.listPublications(brandId, articleId)).map(({websiteSnapshot:_private,...publicRecord})=>publicRecord), status: articleStatusLabel(article, brand.settings),
     };
   }
 
@@ -1349,6 +1376,22 @@ export class SeoBlogEngine {
   }
 
   // ─── Approval, holds, schedule ───────────────────────────────────────────
+
+  async reviewArticleWebsiteTarget(actor:Actor,brandId:string,articleId:string,input:{expectedVersionId:string;destinationId:string;categoryIds:readonly string[]}):Promise<ArticleVersion> {
+    await this.brandFor(actor,brandId);
+    const destination=await this.store.getDestination(brandId,input.destinationId);
+    if(!destination)throw new SeoBlogError(404,'Website not found.');
+    await this.checkDestinationInternal(destination);
+    const result=await this.store.reviewWebsiteTarget({brandId,articleId,actorId:actor.userId,destinationId:input.destinationId,expectedVersionId:input.expectedVersionId,decide:(s)=>{
+      const target=reviewedWebsiteTarget(s,input.categoryIds);
+      if(s.version.websiteTarget?.deliverySha===target.deliverySha)return {article:s.article,version:s.version};
+      const id=randomUUID();const version:ArticleVersion={...s.version,id,number:s.version.number+1,parentVersionId:s.version.id,createdAt:this.now(),createdBy:actor.userId,change:'metadata_changed',generation:null,websiteTarget:target,
+        ...(s.version.promotionPack?{promotionPack:{...s.version.promotionPack,versionId:id,canonicalUrl:target.target.canonicalUrl}}:{})};
+      return {version,article:{...s.article,currentVersionId:id,approval:null,checks:s.article.checks?{...s.article.checks,versionId:id}:null}};
+    }});
+    await this.log(brandId,actor.userId,'article.target_reviewed',`Website target saved in version ${result.number}; exact-version publication approval remains separate.`,articleId);
+    return result;
+  }
 
   async setRequiresApproval(actor: Actor, brandId: string, articleId: string, rowVersion: number, required: boolean): Promise<Article> {
     await this.brandFor(actor, brandId);
@@ -1500,13 +1543,13 @@ export class SeoBlogEngine {
 
   private async checkDestinationInternal(destination: Destination): Promise<Destination> {
     const publisher = publisherFor(this.deps.publishers, destination.type);
-    let result: { ok: boolean; detail: string };
+    let result: Awaited<ReturnType<WebsitePublisher['checkConnection']>>;
     try {
       result = await publisher.checkConnection(destination, this.credentialFor(destination));
     } catch (error) {
       result = { ok: false, detail: (error as Error).message };
     }
-    const next: Destination = { ...destination, status: result.ok ? 'connected' : 'failed', statusDetail: result.detail.slice(0, 300), checkedAt: this.now() };
+    const next: Destination = { ...destination, websiteCapability:result.ok?result.websiteCapability:destination.websiteCapability, status: result.ok ? 'connected' : 'failed', statusDetail: result.detail.slice(0, 300), checkedAt: this.now() };
     await this.store.saveDestination(next);
     return next;
   }
@@ -1530,9 +1573,9 @@ export class SeoBlogEngine {
     if (!article || !version || version.articleId !== articleId) throw new SeoBlogError(404, 'That version was not found.');
     const destination = article.schedule ? await this.store.getDestination(brandId, article.schedule.destinationId) : (await this.store.listDestinations(brandId))[0] ?? null;
     const base = destination?.publicBaseUrl ?? brand.website ?? 'https://example.invalid';
-    const canonical = destination ? publisherFor(this.deps.publishers, destination.type).publicUrlFor(destination, version.body.slug) : `${base}/blog/${version.body.slug}/`;
+    const canonical = version.websiteTarget?.target.canonicalUrl ?? article.publishedUrl ?? (destination ? publisherFor(this.deps.publishers, destination.type).publicUrlFor(destination, version.body.slug) : `${base}/blog/${version.body.slug}/`);
     return renderArticlePage(version.body, {
-      siteName: brand.name, canonicalUrl: canonical, blogIndexUrl: destination ? publisherFor(this.deps.publishers, destination.type).indexUrlFor(destination) : `${base}/blog/`,
+      siteName: version.websiteTarget?.brandName??brand.name, canonicalUrl: canonical, blogIndexUrl: version.websiteTarget?.target.indexUrl ?? (destination ? publisherFor(this.deps.publishers, destination.type).indexUrlFor(destination) : `${base}/blog/`),
       locale: brand.locale, publishedAt: this.now(), articleId, versionId: version.id, contentSha: version.contentSha, noindex: true,
     });
   }
@@ -1574,6 +1617,8 @@ export class SeoBlogEngine {
     const article = await this.store.getArticle(brandId, articleId);
     if (!brand || !article) return 'skipped';
     const version = article.currentVersionId ? await this.store.getVersion(brandId, article.currentVersionId) : null;
+    const connection=article.schedule?await this.store.getDestination(brandId,article.schedule.destinationId):null;
+    if(connection?.type==='content_api'&&Date.parse(article.schedule!.publishAtUtc)<=Date.parse(this.now()))await this.checkDestinationInternal(connection);
     const facts = await this.currentFactsKey(brandId);
     if (version && !checksAreCurrent(article.checks, version, facts.key) && Date.parse(article.schedule?.publishAtUtc ?? '') <= Date.parse(this.now())) {
       await this.store.updateArticle({ ...article, checks: await this.checkVersion(brand, version) });
@@ -1588,17 +1633,23 @@ export class SeoBlogEngine {
         const decision = evaluatePublication({ brand: s.brand, article: s.article, version: s.version, checks: s.article.checks, currentFactsSha: f.key, destination: s.destination, now });
         if (decision.decision === 'not_due' || decision.decision === 'skip') return { kind: 'skip', why: decision.decision === 'skip' ? decision.why : 'Not due.' };
         if (decision.decision === 'hold') return { kind: 'hold', article: { ...s.article, hold: { ...decision.hold, at: now } } };
+        const issue=this.websitePublicationIssue(s.destination!,s.version!,s.brand.settings,s.article);
+        if(issue)return {kind:'hold',article:{...s.article,hold:{reason:'destination',detail:issue,at:now}}};
         const publisher = publisherFor(this.deps.publishers, s.destination!.type);
+        if(s.article.publishedUrl&&s.article.publishedUrl!==(s.version!.websiteTarget?.target.canonicalUrl??publisher.publicUrlFor(s.destination!,s.version!.body.slug)))return {kind:'hold',article:{...s.article,hold:{reason:'destination',detail:'This article must keep its original published URL. Reconnect or review its original website target.',at:now}}};
+        const target=s.version!.websiteTarget??null;
+        const snapshot={destination:s.destination!,brandName:target?.brandName??brand.name,locale:target?.locale??brand.locale,publishedAt:now,target,reviewedIntentSha:target?.deliverySha??s.version!.contentSha};
         const publication: Publication = {
+          websiteSnapshot:{...snapshot,requestSha:websiteSha({body:s.version!.body,...snapshot})},
           id: randomUUID(), brandId, articleId, versionId: s.version!.id, contentSha: s.version!.contentSha, versionNumber: s.version!.number,
           destinationId: s.destination!.id,
           // One operation per exact version, destination and owner-set schedule: duplicate workers share it.
           idempotencyKey: `${brandId}:${articleId}:${s.version!.id}:${s.destination!.id}:${s.article.schedule!.setAt}`, scheduledFor: s.article.schedule!.publishAtUtc,
           policy: decision.policy, state: 'prepared', attempts: 0, firstAttemptAt: null, lastAttemptAt: null, providerRef: null,
-          publicUrl: publisher.publicUrlFor(s.destination!, s.version!.body.slug), verifiedAt: null, verifyAttempts: 0,
+          publicUrl: target?.target.canonicalUrl??s.article.publishedUrl??publisher.publicUrlFor(s.destination!, s.version!.body.slug), verifiedAt: null, verifyAttempts: 0,
           detail: 'Authorised and recorded before sending.', events: [{ at: now, state: 'prepared', detail: `Authorised by policy rule "${decision.policy.rule}".` }], rowVersion: 1,
         };
-        return { kind: 'begin', publication, article: { ...s.article, delivery: 'publishing', lastAttemptAt: now, failure: null } };
+        return { kind: 'begin', publication, article: { ...s.article,deliveryPublicationId:publication.id, delivery: 'publishing', lastAttemptAt: now, failure: null } };
       },
     });
     if (begun.kind === 'skip') return 'skipped';
@@ -1618,12 +1669,21 @@ export class SeoBlogEngine {
   }
 
   private publishInput(brand: Brand, publication: Publication, destination: Destination, version: ArticleVersion): PublishInput {
+    const snapshot=publication.websiteSnapshot;const pinned=snapshot?.destination??destination;
     return {
-      operationId: publication.id, destination, credential: this.credentialFor(destination), brandName: brand.name, locale: brand.locale,
+      ...(snapshot?.target?{websiteTarget:snapshot.target}:{}),
+      operationId: publication.id, destination:pinned, credential: this.credentialFor(pinned), brandName: snapshot?.brandName??brand.name, locale: snapshot?.locale??brand.locale,
       articleId: publication.articleId, versionId: publication.versionId, contentSha: publication.contentSha,
       versionNumber: publication.versionNumber ?? version.number, body: version.body,
-      publishedAt: publication.firstAttemptAt ?? this.now(),
+      publishedAt: snapshot?.publishedAt??publication.firstAttemptAt ?? this.now(),
     };
+  }
+
+  private websitePublicationIssue(destination:Destination,version:ArticleVersion,settings:Brand['settings'],article:Article):string|null {
+    if(version.websiteTarget)return targetEligibility(destination,version.websiteTarget);
+    if(article.publishedUrl===publisherFor(this.deps.publishers,destination.type).publicUrlFor(destination,version.body.slug))return null;
+    if(destination.websiteCapability?.protocol==='v2'&&settings.programme?.structure?.destinationId===destination.id&&settings.programme.structure.website)return 'Review and save the installed website root and categories for this exact article version before publishing.';
+    return null;
   }
 
   private async attempt(brand: Brand, publication: Publication, destination: Destination, version: ArticleVersion): Promise<Publication> {
@@ -1637,25 +1697,32 @@ export class SeoBlogEngine {
     } catch (error) {
       if (error instanceof PublisherOutcomeUnknownError) {
         p = await this.store.updatePublication(this.pub(p, { state: 'outcome_unknown', detail: `Outcome unknown: ${error.message} Reconciling — it will not be sent twice.` }));
-        await this.setArticleDelivery(brand.id, p.articleId, 'unknown', null);
+        await this.setArticleDelivery(brand.id, p.articleId, 'unknown', null,{},p);
         return p;
       }
       const message = error instanceof PublisherRejectedError || error instanceof SeoBlogError ? error.message : 'The website could not be updated.';
       p = await this.store.updatePublication(this.pub(p, { state: 'failed', detail: message }));
-      await this.setArticleDelivery(brand.id, p.articleId, 'failed', message);
+      await this.setArticleDelivery(brand.id, p.articleId, 'failed', message,{},p);
       await this.log(brand.id, 'system', 'publish.failed', message, p.articleId);
       return p;
     }
   }
 
-  private async setArticleDelivery(brandId: string, articleId: string, delivery: Article['delivery'], failure: string | null, extra: Partial<Article> = {}): Promise<void> {
+  private async setArticleDelivery(brandId: string, articleId: string, delivery: Article['delivery'], failure: string | null, extra: Partial<Article> = {},operation?:Publication): Promise<void> {
     for (let i = 0; i < 3; i++) {
       const a = await this.store.getArticle(brandId, articleId);
       if (!a) return;
+      if(operation){
+        if(a.deliveryPublicationId&&a.deliveryPublicationId!==operation.id)return;
+        if(!a.deliveryPublicationId){
+          const other=(await this.store.listPublications(brandId,articleId)).some((p)=>p.id!==operation.id&&['prepared','submitted','outcome_unknown','verifying'].includes(p.state));
+          if(other||a.lastAttemptAt!==operation.lastAttemptAt)return;
+        }
+      }
       try {
-        const hold = delivery === 'unknown' ? { reason: 'outcome_unknown' as const, detail: 'The website’s response was lost; reconciling before anything else happens.', at: this.now() }
+        const hold = a.hold?.reason==='owner'?a.hold:delivery === 'unknown' ? { reason: 'outcome_unknown' as const, detail: 'The website’s response was lost; reconciling before anything else happens.', at: this.now() }
           : delivery === 'failed' ? { reason: 'destination' as const, detail: failure ?? 'Publishing failed.', at: this.now() } : a.hold;
-        await this.store.updateArticle({ ...a, delivery, failure, hold: delivery === 'published' ? null : hold, ...extra });
+        await this.store.updateArticle({ ...a, delivery, failure, hold: delivery === 'published' && hold?.reason==='outcome_unknown' ? null : hold, ...extra,...(operation?{deliveryPublicationId:operation.id}:{}) });
         return;
       } catch (error) {
         if (!(error instanceof StaleWriteError)) throw error;
@@ -1665,20 +1732,99 @@ export class SeoBlogEngine {
 
   private async verify(brand: Brand, publication: Publication, version: ArticleVersion): Promise<Publication> {
     const marker = versionMarker(publication.articleId, publication.versionId, publication.contentSha);
-    const result = await verifyPublicUrl(this.deps.transport, publication.publicUrl, marker);
-    if (result === 'served') {
-      const p = await this.store.updatePublication(this.pub(publication, { state: 'published', verifiedAt: this.now(), verifyAttempts: publication.verifyAttempts + 1, detail: 'Verified on the public website.' }));
-      await this.setArticleDelivery(brand.id, publication.articleId, 'published', null, { publishedVersionId: publication.versionId, publishedUrl: publication.publicUrl, publishedAt: this.now() });
+    const destination=publication.websiteSnapshot?.destination??await this.store.getDestination(brand.id,publication.destinationId);
+    if(!destination)return publication;
+    const target=publication.websiteSnapshot?.target;
+    const evidence=await observeWebsiteDelivery(this.deps.transport,{url:publication.publicUrl,marker,indexUrl:target?.target.indexUrl??publisherFor(this.deps.publishers,destination.type).indexUrlFor(destination),categoryUrls:target?.categoryUrls??[],sitemapUrls:target?.sitemapUrls??[`${new URL(publication.publicUrl).origin}/sitemap.xml`],at:this.now()});
+    const observed=(publication.websiteObserveAttempts??0)+1;
+    const complete=evidence.article.state==='verified'&&evidence.index.state==='verified'&&evidence.categories.every((c)=>c.state==='verified')&&evidence.sitemap.state==='verified';
+    const observation={websiteDelivery:evidence,websiteObserveRunId:publication.websiteObserveRunId??randomUUID(),websiteObserveAttempts:observed,websiteObserveAfter:complete||observed>=12?null:new Date(Date.parse(this.now())+(observed<=2?30000:300000)).toISOString()};
+    if (evidence.article.state === 'verified') {
+      const p = await this.store.updatePublication(this.pub(publication, { ...observation,state: 'published', verifiedAt: this.now(), verifyAttempts: publication.verifyAttempts + 1, detail: complete?'Article, index, categories and served sitemap verified.':'Article and canonical verified live; some index, category or sitemap checks are still pending.' }));
+      const current=await this.store.getArticle(brand.id,publication.articleId);
+      await this.setArticleDelivery(brand.id, publication.articleId, 'published', null, { publishedVersionId: publication.versionId, publishedUrl: current?.publishedUrl??publication.publicUrl, publishedAt: current?.publishedAt??this.now() },p);
+      if(observation.websiteObserveAfter)await this.enqueueObservation(p);
       await this.log(brand.id, 'system', 'publish.verified', `Published and verified at ${publication.publicUrl} (version ${version.number}).`, publication.articleId);
       return p;
     }
+    if(publication.state==='published'){
+      const current=await this.store.getArticle(brand.id,publication.articleId);
+      if(current?.currentVersionId===publication.versionId&&current.publishedVersionId===publication.versionId)await this.setArticleDelivery(brand.id,publication.articleId,'unknown','The latest public article/canonical observation needs attention.',{},publication);
+      const next=await this.store.updatePublication(this.pub(publication,{...observation,detail:'Previously verified article: the latest public observation needs attention. No content was re-published.'}));
+      if(next.websiteObserveAfter)await this.enqueueObservation(next);return next;
+    }
     const attempts = publication.verifyAttempts + 1;
     if (attempts >= MAX_VERIFY_ATTEMPTS) {
-      const p = await this.store.updatePublication(this.pub(publication, { state: 'outcome_unknown', verifyAttempts: attempts, detail: 'The website accepted the change but the public page has not shown it. Check the site’s deployment.' }));
-      await this.setArticleDelivery(brand.id, publication.articleId, 'unknown', null);
+      const p = await this.store.updatePublication(this.pub(publication, { ...observation,state: 'outcome_unknown', verifyAttempts: attempts, detail: 'The website accepted the change but the exact public article and canonical have not been verified. Check the site’s deployment.' }));
+      await this.setArticleDelivery(brand.id, publication.articleId, 'unknown', null,{},p);
       return p;
     }
-    return this.store.updatePublication(this.pub(publication, { verifyAttempts: attempts, detail: result === 'different' ? 'The public page still shows an earlier version; waiting for the site to update.' : 'Waiting for the public page to appear.' }));
+    return this.store.updatePublication(this.pub(publication, { ...observation,verifyAttempts: attempts, detail: evidence.article.detail }));
+  }
+
+  private async enqueueObservation(publication:Publication):Promise<void> {
+    const job=websiteWakeJob(publication);if(job)await this.store.enqueueJob(job);
+  }
+
+  async reobservePublication(actor:Actor,brandId:string,articleId:string,publicationId:string):Promise<void> {
+    const brand=await this.brandFor(actor,brandId);const publication=(await this.store.listPublications(brandId,articleId)).find((p)=>p.id===publicationId);const version=publication?await this.store.getVersion(brandId,publication.versionId):null;
+    if(!publication||!version||publication.state!=='published')throw new SeoBlogError(409,'Choose a verified article publication to recheck.');
+    await this.verify(brand,{...publication,websiteObserveAttempts:0,websiteObserveRunId:randomUUID()},version);
+  }
+
+  async requestSitemapRepair(actor:Actor,brandId:string,articleId:string,input:{publicationId:string;commandId:string;acknowledgeUnknown?:boolean}):Promise<void> {
+    const brand=await this.brandFor(actor,brandId);if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.commandId))throw new SeoBlogError(400,'Refresh this page before requesting a repair.');
+    const publication=(await this.store.listPublications(brandId,articleId)).find((p)=>p.id===input.publicationId);
+    if(!publication?.websiteSnapshot||publication.state!=='published')throw new SeoBlogError(409,'This publication has no pinned repairable website snapshot.');
+    if(publication.sitemapRepair?.id===input.commandId)return;
+    const destination=publication.websiteSnapshot.destination;const publisher=publisherFor(this.deps.publishers,destination.type);
+    if(destination.websiteCapability?.protocol!=='v2'||!destination.websiteCapability.capabilities.repair.sitemap||!publisher.repairSitemap||!publisher.inspectSitemapRepair)throw new SeoBlogError(409,'This website does not support sitemap-only repair. Recheck delivery or repair its website integration; the article will not be republished.');
+    if(publication.sitemapRepair&&['queued','calling'].includes(publication.sitemapRepair.state))throw new SeoBlogError(409,'This sitemap repair is already queued or being reconciled.');
+    if(publication.sitemapRepair?.uncertain&&publication.sitemapRepair.state!=='done'&&!input.acknowledgeUnknown)throw new SeoBlogError(409,'The earlier sitemap repair may already have committed. Recheck first, or explicitly acknowledge a new owner repair intent.');
+    const version=(await this.store.getVersion(brandId,publication.versionId))!;const inspected=await publisher.inspectSitemapRepair(this.publishInput(brand,publication,destination,version));
+    const result=await this.store.beginPublication({brandId,articleId,resumePublicationId:publication.id,decide:(s)=>{
+      const p=s.publication!;
+      if(p.rowVersion!==publication.rowVersion)throw new StaleWriteError('publication');
+      if(s.brand.settings.pauseAll||s.article.currentVersionId!==p.versionId||s.article.publishedVersionId!==p.versionId||s.article.publishedUrl!==p.publicUrl||s.destination?.status!=='connected'||destinationIdentity(s.destination)!==destinationIdentity(destination))throw new SeoBlogError(409,'The current article, connection or pause control changed. Recheck before requesting a repair.');
+      const repair={id:input.commandId,publicationId:p.id,versionId:p.versionId,targetSha:p.websiteSnapshot!.requestSha,sitemapSourceSha:inspected.sourceSha,requestedBy:actor.userId,requestedAt:this.now(),state:inspected.complete?'done' as const:'queued' as const,startedAt:null,providerRef:inspected.complete?inspected.providerRef:null,uncertain:false,reconcileAttempts:0,reconcileAfter:null,detail:inspected.complete?'The repository sitemap already contains this exact entry; waiting for public delivery.':'Owner-authorised sitemap-only repair queued.'};
+      return {kind:'hold',article:s.article,publication:{...p,sitemapRepair:repair,sitemapRepairHistory:[...(p.sitemapRepairHistory??[]),...(p.sitemapRepair?[p.sitemapRepair]:[])],websiteObserveAfter:this.now(),websiteObserveRunId:randomUUID(),websiteObserveAttempts:0}};
+    }});
+    if(result.kind==='hold'&&result.publication){await this.enqueue(brandId,'publish',`sitemap-repair:${input.commandId}`,{sitemapRepair:publication.id});}
+  }
+
+  private async processSitemapRepair(brand:Brand,p:Publication):Promise<void> {
+    const repair=p.sitemapRepair;if(!repair||!['queued','calling','unknown'].includes(repair.state)||!p.websiteSnapshot)return;
+    if(repair.state==='calling'&&repair.startedAt&&Date.parse(this.now())-Date.parse(repair.startedAt)<PREPARED_STALE_MS)return;
+    if(repair.state!=='queued'&&repair.reconcileAfter&&repair.reconcileAfter>this.now())return;
+    const version=await this.store.getVersion(brand.id,p.versionId);if(!version)return;
+    const publisher=publisherFor(this.deps.publishers,p.websiteSnapshot.destination.type);if(!publisher.inspectSitemapRepair||!publisher.repairSitemap)return;
+    const input={...this.publishInput(brand,p,p.websiteSnapshot.destination,version),operationId:repair.id,sitemapSourceSha:repair.sitemapSourceSha};
+    if(repair.state!=='queued'){
+      try{const result=await publisher.inspectSitemapRepair(input);await this.finishSitemapRepair(p,repair.id,result.complete?'done':'held',result.complete?'Sitemap-only repair found in the repository; public delivery will be checked.':'No complete repair receipt was found. No second commit was attempted; review before a new owner intent.',result.providerRef,true);}
+      catch(error){await this.finishSitemapRepair(p,repair.id,error instanceof PublisherRejectedError?'held':'unknown',error instanceof PublisherRejectedError?error.message:'The repair outcome remains uncertain. Only read-only reconciliation will run.',null,true);}return;
+    }
+    let claimed=false;
+    const begun=await this.store.beginPublication({brandId:brand.id,articleId:p.articleId,resumePublicationId:p.id,decide:(s)=>{
+      const current=s.publication!;const r=current.sitemapRepair;
+      if(current.rowVersion!==p.rowVersion||r?.id!==repair.id||r.state!=='queued')return {kind:'skip',why:'Another worker handles this repair.'};
+      const permitted=s.repairRequesterAllowed===true&&!s.brand.settings.pauseAll&&current.state==='published'&&s.article.currentVersionId===current.versionId&&s.article.publishedVersionId===current.versionId&&s.article.publishedUrl===current.publicUrl&&s.destination?.status==='connected'&&destinationIdentity(s.destination)===destinationIdentity(current.websiteSnapshot!.destination)&&r.targetSha===current.websiteSnapshot!.requestSha&&r.versionId===current.versionId&&r.publicationId===current.id;
+      claimed=permitted;
+      return {kind:'hold',article:s.article,publication:{...current,sitemapRepair:{...r,state:permitted?'calling':'held',startedAt:permitted?this.now():null,reconcileAfter:permitted?new Date(Date.parse(this.now())+PREPARED_STALE_MS).toISOString():null,detail:permitted?'Authorised sitemap-only commit started.':'Repair held because current owner, article, website or pause controls changed.'}}};
+    }});
+    if(!claimed||begun.kind!=='hold'||!begun.publication)return;
+    try{const outcome=await publisher.repairSitemap(input);await this.finishSitemapRepair(begun.publication,repair.id,'done','Sitemap-only commit accepted. Article and index bytes were not changed.',outcome.providerRef);}
+    catch(error){await this.finishSitemapRepair(begun.publication,repair.id,error instanceof PublisherRejectedError?'held':'unknown',error instanceof PublisherRejectedError?error.message:'The sitemap commit acknowledgement is uncertain; only observation will follow.',null);}
+  }
+
+  private async finishSitemapRepair(publication:Publication,id:string,state:'done'|'held'|'unknown',detail:string,providerRef:string|null,reconciled=false):Promise<void> {
+    for(let n=0;n<3;n++){
+      const p=(await this.store.listPublications(publication.brandId,publication.articleId)).find((v)=>v.id===publication.id);
+      if(!p?.sitemapRepair||p.sitemapRepair.id!==id)return;
+      if(p.sitemapRepair.state==='done'&&state!=='done')return;
+      const count=p.sitemapRepair.reconcileAttempts+(reconciled?1:0);const exhausted=state==='unknown'&&count>=6;
+      try{const next=await this.store.updatePublication({...p,sitemapRepair:{...p.sitemapRepair,state:exhausted?'held':state,detail:exhausted?'Read-only repair checks reached their limit. The outcome remains uncertain; review before a new owner intent.':detail,providerRef,uncertain:p.sitemapRepair.uncertain||state==='unknown'||reconciled&&state==='held',reconcileAttempts:count,reconcileAfter:state==='unknown'&&!exhausted?new Date(Date.parse(this.now())+(count<2?30000:300000)).toISOString():null},websiteObserveAfter:this.now(),websiteObserveRunId:randomUUID(),websiteObserveAttempts:0});await this.enqueueObservation(next);return;}
+      catch(error){if(n===2||error instanceof SeoBlogError&&!(error instanceof StaleWriteError))throw error;}
+    }
   }
 
   /**
@@ -1688,6 +1834,8 @@ export class SeoBlogEngine {
    * failing checks, disconnected destination) are cancelled and the article is held.
    */
   private async resumeAbsent(brand: Brand, publication: Publication): Promise<void> {
+    const currentDestination=await this.store.getDestination(brand.id,publication.destinationId);
+    if(currentDestination?.type==='content_api')await this.checkDestinationInternal(currentDestination);
     const now = this.now();
     const result = await this.store.beginPublication({
       brandId: brand.id, articleId: publication.articleId, resumePublicationId: publication.id,
@@ -1721,10 +1869,14 @@ export class SeoBlogEngine {
         if (decision.decision !== 'publish') {
           return cancel(`Not re-sent: ${decision.decision === 'skip' ? decision.why : 'no longer due'}.`, clearUnknownHold ?? { reason: 'owner', detail: 'Choose a new time.', at: now });
         }
+        const targetIssue=this.websitePublicationIssue(s.destination!,s.version!,s.brand.settings,s.article);
+        const prior=p.websiteSnapshot?.destination;
+        const changed=prior&&destinationIdentity(prior)!==destinationIdentity(s.destination!);
+        if(targetIssue||changed)return cancel(`Not re-sent: ${targetIssue??'The authorised website connection changed. Review and choose a new publication time.'}`,{reason:'destination',detail:targetIssue??'Website connection changed; review before sending.',at:now});
         return {
           kind: 'begin',
           publication: this.pub(p, { state: 'prepared', policy: decision.policy, detail: 'Confirmed absent; re-authorised on current state and re-sending the same operation.' }),
-          article: { ...article, delivery: 'publishing', hold: null, lastAttemptAt: now, failure: null },
+          article: { ...article,deliveryPublicationId:p.id, delivery: 'publishing', hold: null, lastAttemptAt: now, failure: null },
         };
       },
     });
@@ -1741,11 +1893,15 @@ export class SeoBlogEngine {
     if (!brand) return 0;
     let touched = 0;
     for (const publication of await this.store.listPublications(brandId)) {
+      if(publication.sitemapRepair&&['queued','calling','unknown'].includes(publication.sitemapRepair.state)){await this.processSitemapRepair(brand,publication);continue;}
+      if(publication.state==='published'&&publication.websiteObserveAfter&&publication.websiteObserveAfter<=this.now()) {
+        const version=await this.store.getVersion(brandId,publication.versionId);if(version){try{await this.verify(brand,publication,version);touched++;}catch(error){if(!(error instanceof StaleWriteError))throw error;}}continue;
+      }
       const stalePrepared = publication.state === 'prepared' && Date.parse(this.now()) - Date.parse(publication.lastAttemptAt ?? publication.scheduledFor) > PREPARED_STALE_MS;
       const staleSubmitted = publication.state === 'submitted' && Date.parse(this.now()) - Date.parse(publication.lastAttemptAt ?? publication.scheduledFor) > PREPARED_STALE_MS;
       if (!['outcome_unknown', 'verifying'].includes(publication.state) && !stalePrepared && !staleSubmitted) continue;
       const version = await this.store.getVersion(brandId, publication.versionId);
-      const destination = await this.store.getDestination(brandId, publication.destinationId);
+      const destination = publication.websiteSnapshot?.destination??await this.store.getDestination(brandId, publication.destinationId);
       if (!version || !destination) continue;
       touched++;
       try {
@@ -1768,7 +1924,7 @@ export class SeoBlogEngine {
         const existing = await publisher.findExisting(this.publishInput(brand, publication, destination, version));
         if (existing.state === 'present') {
           const p = await this.store.updatePublication(this.pub(publication, { state: 'verifying', providerRef: existing.providerRef, detail: 'Found on the website during reconciliation; confirming the public page.' }));
-          await this.setArticleDelivery(brandId, publication.articleId, 'publishing', null);
+          await this.setArticleDelivery(brandId, publication.articleId, 'publishing', null,{},p);
           await this.verify(brand, p, version);
         } else if (existing.state === 'absent' && publication.attempts < JOB_MAX_ATTEMPTS) {
           // Confirmed not applied. Re-sending is a new provider effect, so it passes the same
@@ -1780,13 +1936,13 @@ export class SeoBlogEngine {
             ? 'The website shows a different version of this article. Nothing was overwritten; review and schedule again.'
             : 'The article could not be published after several attempts.';
           await this.store.updatePublication(this.pub(publication, { state: 'failed', detail }));
-          await this.setArticleDelivery(brandId, publication.articleId, 'failed', detail);
+          await this.setArticleDelivery(brandId, publication.articleId, 'failed', detail,{},publication);
         }
       } catch (error) {
         if (error instanceof PublisherOutcomeUnknownError) return; // still unknown; try again next tick
         if (error instanceof StaleWriteError) throw error; // concurrent progress, not a failure
         await this.store.updatePublication(this.pub(publication, { state: 'failed', detail: (error as Error).message.slice(0, 300) }));
-        await this.setArticleDelivery(brandId, publication.articleId, 'failed', (error as Error).message.slice(0, 300));
+        await this.setArticleDelivery(brandId, publication.articleId, 'failed', (error as Error).message.slice(0, 300),{},publication);
       }
     }
   }
@@ -1812,6 +1968,18 @@ export class SeoBlogEngine {
     const job = await this.store.getJob(brandId, jobId);
     if (!job) throw new SeoBlogError(404, 'That task was not found.');
     if (['done', 'failed', 'cancelled'].includes(job.state)) return job;
+    if(job.kind==='publish'&&typeof job.payload.websiteObservation==='string'){
+      const p=(await this.store.listPublications(brandId)).find((p)=>p.id===job.payload.websiteObservation);
+      if(p?.sitemapRepair&&['calling','unknown'].includes(p.sitemapRepair.state))throw new SeoBlogError(409,'This task tracks an uncertain website operation. Read-only reconciliation must continue; it cannot send another write.');
+    }
+    if(job.kind==='publish'&&typeof job.payload.sitemapRepair==='string'){
+      const p=(await this.store.listPublications(brandId)).find((p)=>p.id===job.payload.sitemapRepair);
+      if(p?.sitemapRepair&&job.idempotencyKey===`sitemap-repair:${p.sitemapRepair.id}`)await this.store.beginPublication({brandId,articleId:p.articleId,resumePublicationId:p.id,decide:(s)=>{
+        const current=s.publication!;const repair=current.sitemapRepair;if(!repair||repair.id!==p.sitemapRepair!.id)return {kind:'skip',why:'Repair intent changed.'};
+        if(repair.state==='queued')return {kind:'hold',article:s.article,publication:{...current,sitemapRepair:{...repair,state:'held',detail:'Owner cancelled this repair before it began.'}}};
+        return {kind:'hold',article:s.article,publication:current};
+      }});
+    }
     const next = await this.store.updateJob({ ...job, state: 'cancelled', leaseOwner: null, leaseExpiresAt: null, progress: 'Cancelled by the owner.', updatedAt: this.now() });
     await this.log(brandId, actor.userId, 'job.cancelled', `${job.kind} task cancelled.`, jobId);
     return next;
@@ -1849,7 +2017,21 @@ export class SeoBlogEngine {
       if (p.stage !== undefined) throw new SeoBlogError(409, 'This worker does not support that task stage.');
       if (job.kind === 'inventory') await this.refreshInventory(job.brandId);
       else if (job.kind === 'write') await this.runWrite(job.brandId, { briefId: String(p.briefId), fromVersionId: p.fromVersionId as string | undefined, requestedBy: p.requestedBy as string | undefined });
-      else if (job.kind === 'publish') await this.dispatchDue(job.brandId);
+      else if (job.kind === 'publish') {
+        if(p.websiteObservation!==undefined||p.sitemapRepair!==undefined){
+          if((p.websiteObservation!==undefined&&p.sitemapRepair!==undefined)||typeof(p.websiteObservation??p.sitemapRepair)!=='string')throw new SeoBlogError(409,'Unsupported website delivery task.');
+          const publication=(await this.store.listPublications(job.brandId)).find((p)=>p.id===(job.payload.websiteObservation??job.payload.sitemapRepair));
+          const brand=await this.store.getBrand(job.brandId);
+          if(publication&&brand){
+            if(typeof p.sitemapRepair==='string'&&job.idempotencyKey===`sitemap-repair:${publication.sitemapRepair?.id}`)await this.processSitemapRepair(brand,publication);
+            else if(typeof p.websiteObservation==='string'){
+              if(publication.sitemapRepair&&['calling','unknown'].includes(publication.sitemapRepair.state))await this.processSitemapRepair(brand,publication);
+              const fresh=(await this.store.listPublications(job.brandId)).find((v)=>v.id===publication.id);const version=await this.store.getVersion(job.brandId,publication.versionId);
+              if(fresh?.state==='published'&&version&&fresh.websiteObserveAfter&&fresh.websiteObserveAfter<=this.now())await this.verify(brand,fresh,version);
+            }
+          }
+        }else await this.dispatchDue(job.brandId);
+      }
       else if (job.kind === 'daily') await this.runDaily(job.brandId);
       const latest = (await this.store.getJob(job.brandId, job.id))!;
       if (latest.state === 'cancelled') return latest;

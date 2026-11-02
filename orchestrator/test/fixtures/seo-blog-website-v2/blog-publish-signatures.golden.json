@@ -1,0 +1,10 @@
+{
+  "timestamp": "1793610000",
+  "method": "POST",
+  "path": "/api/blog/publish",
+  "testSecret": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+  "signatures": {
+    "blog-publish-v1.golden.json": "7202a28de52e5e6a1d470e3a3ed114af822b2d265bf4039aea4a6194bf936761",
+    "blog-publish-v2.golden.json": "791b5f3a7d56c6179375eeb917093930adeaca5ba0482fde995ae326b87c580e"
+  }
+}

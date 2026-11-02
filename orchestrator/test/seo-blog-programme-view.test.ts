@@ -59,5 +59,5 @@ test('editorial support copy follows the actual connected site instead of assign
   const destination=await f.h.engine.connectDestination(OWNER,f.brand.id,{type:'github_static',label:'Harbour site',credential:'gh-token-fixture',config:{repository:'acme/site',branch:'main',publicBaseUrl:'https://harbour.example',blogPath:'blog',sitemapPath:'sitemap.xml'}});
   const input={documents:await f.h.engine.listKnowledge(OWNER,f.brand.id),profile:await f.h.engine.getProfile(OWNER,f.brand.id),inventory,publishers:[],vaultReady:false,usage:await f.h.engine.usage(OWNER,f.brand.id)};
   const generic=setupPage(await f.shell('setup'),{...input,destinations:[destination]});assert.doesNotMatch(generic,/Property Predator currently supports/);assert.match(generic,/configured, verified publishing root/);
-  const pp=setupPage(await f.shell('setup'),{...input,destinations:[{...destination,publicBaseUrl:'https://propertypredator.com'}]});assert.match(pp,/Property Predator currently supports \/blog only/);
+  const pp=setupPage(await f.shell('setup'),{...input,destinations:[{...destination,publicBaseUrl:'https://propertypredator.com',websiteCapability:undefined}]});assert.match(pp,/Property Predator currently supports \/blog only/);
 });

@@ -9,6 +9,9 @@
  * fields so an article can be approved-but-unscheduled or scheduled-but-held.
  */
 
+import type { ArticleWebsiteTarget, PublicationWebsiteSnapshot, WebsiteCapabilityReceipt, SitemapRepairIntent } from './website-target.js';
+import type { WebsiteDeliveryEvidence } from './website-delivery.js';
+
 export type IsoInstant = string;
 
 export const SEO_BLOG_DEFAULT_LOCALE = 'en-GB';
@@ -365,6 +368,7 @@ export interface ArticlePromotionPack {
 }
 
 export interface ArticleVersion {
+  readonly websiteTarget?: ArticleWebsiteTarget;
   readonly programme?: ProgrammeProvenance;
   readonly id: string;
   readonly articleId: string;
@@ -435,6 +439,8 @@ export interface ArticleHold {
 }
 
 export interface Article {
+  /** Durable operation that owns delivery, independent of the editor's current version. */
+  readonly deliveryPublicationId?:string;
   readonly id: string;
   readonly brandId: string;
   readonly briefId: string;
@@ -525,6 +531,7 @@ export const DESTINATION_TYPES = ['github_static', 'content_api'] as const;
 export type DestinationType = (typeof DESTINATION_TYPES)[number];
 
 export interface Destination {
+  readonly websiteCapability?: WebsiteCapabilityReceipt;
   readonly id: string;
   readonly brandId: string;
   readonly type: DestinationType;
@@ -554,6 +561,14 @@ export interface PolicySnapshot {
 }
 
 export interface Publication {
+  readonly sitemapRepair?: SitemapRepairIntent;
+  readonly sitemapRepairHistory?:readonly SitemapRepairIntent[];
+  readonly websiteDelivery?: WebsiteDeliveryEvidence;
+  readonly websiteObserveAfter?: string|null;
+  readonly websiteObserveAttempts?: number;
+  readonly websiteObserveRunId?:string;
+  /** Server-private authorised connection and immutable request metadata for this operation. */
+  readonly websiteSnapshot?: PublicationWebsiteSnapshot;
   /** Operation ID — persisted before any provider call. */
   readonly id: string;
   readonly brandId: string;

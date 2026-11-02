@@ -354,7 +354,7 @@ async function handlePost(
         if(!id||f(`category_${i}_include`)!=='1'||(!label.trim()&&!slug.trim())) continue;
         categories.push({id,label,slug});
       }
-      await engine.approveEditorialStructure(actor,brandId,{rowVersion:rowVersion(),scanId:f('scanId')??'',scanSha:f('scanSha')??'',destinationId:f('destinationId')??'',root:f('root')??'',categories});
+      await engine.approveEditorialStructure(actor,brandId,{rowVersion:rowVersion(),scanId:f('scanId')??'',scanSha:f('scanSha')??'',destinationId:f('destinationId')??'',root:f('root')??'',categories,newCategoryAddresses:f('newCategoryAddresses')==='1'});
       return ok(back('setup'),'Editorial guidance approved. Categories guide drafts; existing URLs and website routes were not changed.');
     }
     case 'plans': {
@@ -426,6 +426,12 @@ async function handlePost(
       const action = parts[2];
       if (!articleId) break;
       const here = back(`articles/${articleId}`);
+      if(action==='website-target'){
+        const v=await engine.reviewArticleWebsiteTarget(actor,brandId,articleId,{expectedVersionId:f('versionId')??'',destinationId:f('destinationId')??'',categoryIds:form.fields.getAll('categoryId')});
+        return ok(here,`Website target saved in version ${v.number}. Review and approve that exact version before publication.`);
+      }
+      if(action==='delivery-recheck'){await engine.reobservePublication(actor,brandId,articleId,f('publicationId')??'');return ok(here,'Public delivery checks updated. No article was republished.');}
+      if(action==='sitemap-repair'){await engine.requestSitemapRepair(actor,brandId,articleId,{publicationId:f('publicationId')??'',commandId:f('commandId')??'',acknowledgeUnknown:f('acknowledgeUnknown')==='1'});return ok(here,'Sitemap-only repair intent recorded. Article and index bytes will not be republished.');}
       if (action === 'edit') {
         const ids = form.fields.getAll('sectionId'), headings = form.fields.getAll('sectionHeading'), bodies = form.fields.getAll('sectionBody');
         if (ids.length !== headings.length || ids.length !== bodies.length) throw new SeoBlogError(400, 'Refresh the editor and try again.');
