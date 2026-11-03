@@ -42,6 +42,9 @@ const MHP_EVENT_PHONE_MIGRATION = '0134_mhp_event_phone_programme.sql';
 const MHP_EVENT_PHONE_CHECKSUM = 'c3480208038aace2211f7a50cf64cb6cda45bedce980d274bdb661a7b9466e33';
 const MHP_EVENT_PHONE_SIGNUP_MIGRATION = '0135_mhp_event_phone_signup_handoff.sql';
 const MHP_EVENT_PHONE_SIGNUP_CHECKSUM = '9f73caa543ac243304063866897c4900301c4bb64bcf7f6d238cd668c8cc2be2';
+const SEO_BLOG_MEDIA_MIGRATION = '0136_seo_blog_media_storage.sql';
+// Exact b90cec0 migration independently reviewed; no other future ledger is allowed.
+const SEO_BLOG_MEDIA_CHECKSUM: string | null = 'd9a937df9d6667fd0d65c02ead185b1faccf724d166499df12c76a3e9fd3392b';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -207,6 +210,17 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(MHP_EVENT_PHONE_MIGRATION) === MHP_EVENT_PHONE_CHECKSUM
       && applied.get(MHP_EVENT_PHONE_SIGNUP_MIGRATION) === MHP_EVENT_PHONE_SIGNUP_CHECKSUM) {
     applied.delete(MHP_EVENT_PHONE_SIGNUP_MIGRATION);
+  }
+  // A135 recovery runtime may admit only the independently reviewed additive
+  // media136 migration. It never bundles136; every earlier ledger row still
+  // receives strict validation below. Bundled136 uses the strict path.
+  if (SEO_BLOG_MEDIA_CHECKSUM !== null
+      && migrations.length === 135
+      && migrations[134]?.filename === MHP_EVENT_PHONE_SIGNUP_MIGRATION
+      && migrations[134]?.checksum === MHP_EVENT_PHONE_SIGNUP_CHECKSUM
+      && applied.get(MHP_EVENT_PHONE_SIGNUP_MIGRATION) === MHP_EVENT_PHONE_SIGNUP_CHECKSUM
+      && applied.get(SEO_BLOG_MEDIA_MIGRATION) === SEO_BLOG_MEDIA_CHECKSUM) {
+    applied.delete(SEO_BLOG_MEDIA_MIGRATION);
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
