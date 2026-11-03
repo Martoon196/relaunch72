@@ -1,14 +1,16 @@
-name: SEO website exact release proof
-on:
+name: Exact023 final normal and serial PostgreSQL gates
+'on':
   push:
-    branches: [codex/r72-website-009b-proof-20261103]
-    paths: [.github/workflows/mhp-linux-proof.yml]
+    branches:
+    - codex/r72-media-137-final-v3-proof-20261103
+    paths:
+    - .github/workflows/mhp-linux-proof.yml
 permissions:
   contents: read
 jobs:
-  exact-release-gate:
+  exact-normal-and-final-pg:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     services:
       postgres:
         image: postgres:18-alpine
@@ -16,48 +18,116 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: local-ci-test-only
           POSTGRES_DB: relaunch72_test
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
+        ports:
+        - 5432:5432
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s
           --health-retries 10
     steps:
-      - name: Model the managed PostgreSQL migration identity
-        env:
-          PG_CONTAINER: ${{ job.services.postgres.id }}
-        run: >-
-          docker exec "$PG_CONTAINER" psql -U postgres -d relaunch72_test -v ON_ERROR_STOP=1
-          -c "CREATE ROLE ci_migrator LOGIN CREATEROLE CREATEDB PASSWORD 'ci-owner-test-only'; ALTER DATABASE relaunch72_test OWNER TO ci_migrator;"
-      - name: Checkout exact reviewed website release
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          repository: Martoon196/relaunch72
-          ref: f0e0403cebfe310ad0a8a0085f7cf5cdea3ea9dd
-          persist-credentials: false
-      - name: Assert exact source identity
-        shell: bash
-        run: |
-          test "$(git rev-parse HEAD)" = f0e0403cebfe310ad0a8a0085f7cf5cdea3ea9dd
-          test "$(git rev-parse 'HEAD^{tree}')" = 8193784235afa9638a827934311f120fa31b8e75
-          test -z "$(git status --porcelain)"
-          git rev-parse HEAD 'HEAD^{tree}'
-      - name: Match Render runtime
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 22.23.4
-      - name: Install exact lockfile
-        run: npm ci --ignore-scripts --include=dev
-      - name: Check supply chain
-        run: node scripts/supply-chain.mjs --check
-      - name: Typecheck whole project
-        run: npm run typecheck
-      - name: Run normal suite
-        run: npm test
-      - name: Run only the targeted real-role PostgreSQL website journey
-        env:
-          TEST_DATABASE_URL: postgresql://ci_migrator:ci-owner-test-only@127.0.0.1:5432/relaunch72_test
-          TEST_DATABASE_RESET_CONFIRM: reset-disposable-branch
-          TEST_DATABASE_SSL_MODE: disable
-          RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
-        run: cd orchestrator && node --import ./test/windows-node24-shim.mjs --import tsx --test --test-concurrency=1 test/db/seo-blog-website.integration.test.ts
+    - name: Checkout exact023 final source
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: Martoon196/relaunch72
+        ref: 2bd32194a3a33d6e43cfa1b29d5b0769598fc137
+        persist-credentials: false
+    - name: Bind source tree parent SQL lock and exact two tests
+      shell: bash
+      run: 'set -euo pipefail
+
+        test "$(git rev-parse HEAD)" = 2bd32194a3a33d6e43cfa1b29d5b0769598fc137
+
+        test "$(git rev-parse HEAD^{tree})" = 1679f413e7ef278ac9dc3c6a2a9ebb29cce51b00
+
+        test "$(git cat-file -p HEAD | sed -n ''s/^parent //p'')" = 0b602df7a6b902ffe27b3bb1f69c2bc6155ffe40
+
+        test -z "$(git status --porcelain)"
+
+        echo ''9bb9b0998d98f4b678b5f7dd026a5f38633eec144b0e20515f647914668c70cc  package-lock.json''
+        | sha256sum --check
+
+        echo ''ff85dc3ee825e2529333fc8efb0de070a05e43786717d9ae279aa469e41e1255  orchestrator/src/db/migrations/0137_seo_blog_media_storage.sql''
+        | sha256sum --check
+
+        echo ''9bf6605cdc536794fae989964542eb8253cdd49ebd995d3e6dd346c01c746139  orchestrator/src/db/migrations/0136_mhp_webinar_applications.sql''
+        | sha256sum --check
+
+        echo ''ecfa83df56db1df9bb4d4876bfd3f188c0a536235b7f24dc79a0abdc21c491f1  orchestrator/test/db/seo-blog-media-engine.integration.test.ts''
+        | sha256sum --check
+
+        echo ''433d298178d1a4eb835427b3c67fce30229512b562f5148e943ddc5f4cba1f5f  orchestrator/test/db/seo-blog-media-storage.integration.test.ts''
+        | sha256sum --check'
+    - name: Match existing runtime
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version: 22.23.4
+    - name: Verify frozen local controls
+      shell: bash
+      run: 'set -euo pipefail
+
+        printf ''%s'' ''ew0KICAic3RhdGUiOiAiUkVWSUVXRURfRklOQUxfU09VUkNFX0FORF9CUklER0UiLA0KICAiYmFzZWxpbmVTb3VyY2UiOiAiOGM2NTdmYWMyNmQyMTkyMmVjZTIyOGJhNTE2NmFiNDhiODlmNGFmZSIsDQogICJiYXNlbGluZVRyZWUiOiAiNzE2NDFkYjQyNzIyZjQ2MjQwYzA2M2I2ZmUwNWJkM2IyNTg2YzNkMCIsDQogICJicmlkZ2VTb3VyY2UiOiAiMGI2MDJkZjdhNmI5MDJmZmUyN2IzYmIxZjY5YzJiYzYxNTVmZmU0MCIsDQogICJicmlkZ2VUcmVlIjogImMyMTc2NTFhNjMzODBjY2Q1OTFkMTdkNWM3NDg0OTJjMTk0MjdiYzEiLA0KICAic291cmNlIjogIjJiZDMyMTk0YTNhMzNkNmU0M2NmYTFiMjlkNWIwNzY5NTk4ZmMxMzciLA0KICAidHJlZSI6ICIxNjc5ZjQxM2U3ZWYyNzhhYzlkYzNjNmEyYTllYmIyOWNjZTUxYjAwIiwNCiAgIm1pZ3JhdGlvbkZpbGVuYW1lIjogIjAxMzdfc2VvX2Jsb2dfbWVkaWFfc3RvcmFnZS5zcWwiLA0KICAibWlncmF0aW9uQ2hlY2tzdW0iOiAiZmY4NWRjM2VlODI1ZTI1MjkzMzNmYzhlZmIwZGUwNzBhMDVlNDM3ODY3MTdkOWFlMjc5YWE0NjllNDFlMTI1NSIsDQogICJtaHAxMzZGaWxlbmFtZSI6ICIwMTM2X21ocF93ZWJpbmFyX2FwcGxpY2F0aW9ucy5zcWwiLA0KICAibWhwMTM2Q2hlY2tzdW0iOiAiOWJmNjYwNWNkYzUzNjc5NGZhZTk4OTk2NDU0MmViODI1M2NkZDQ5ZWJkOTk1ZDNlNmRkMzQ2YzAxYzc0NjEzOSIsDQogICJzb3VyY2VMb2NrU2hhMjU2IjogIjliYjliMDk5OGQ5OGY0YjY3OGI1ZjdkZDAyNmE1ZjM4NjMzZWVjMTQ0YjBlMjA1MTVmNjQ3OTE0NjY4YzcwY2MiLA0KICAiYmFzZWxpbmVMb2NrU2hhMjU2IjogIjQ3ZWRmYjlhYzFmMjVmZWMwYTNiOTkzNDYzMjAzM2RlZjUyMDU5ZDEzMjVjODViZjI3MTY3MDhhZTNiNmZjY2QiLA0KICAiYnJpZGdlTG9ja1NoYTI1NiI6ICI0N2VkZmI5YWMxZjI1ZmVjMGEzYjk5MzQ2MzIwMzNkZWY1MjA1OWQxMzI1Yzg1YmYyNzE2NzA4YWUzYjZmY2NkIiwNCiAgInNvdXJjZUZpbGVzIjogew0KICAgICJvcmNoZXN0cmF0b3IvdGVzdC9kYi9zZW8tYmxvZy1tZWRpYS1zdG9yYWdlLmludGVncmF0aW9uLnRlc3QudHMiOiAiNDMzZDI5ODE3OGQxYTRlYjgzNTQyN2IzYzY3ZmNlMzAyMjk1MTJiNTYyZjUxNDhlOTQzZGRjNWY0Y2JhMWY1ZiIsDQogICAgIm9yY2hlc3RyYXRvci90ZXN0L2RiL3Nlby1ibG9nLW1lZGlhLWVuZ2luZS5pbnRlZ3JhdGlvbi50ZXN0LnRzIjogImVjZmE4M2RmNTZkYjFkZjliYjRkNDg3NmJmZDNmMTg4YzBhNTM2MjM1YjdmMjRkYzc5YTBhYmRjMjFjNDkxZjEiDQogIH0sDQogICJyZXZpZXdCcmFuY2giOiAiY29kZXgvcjcyLXNlbzEzNy1jYXBhYmxlLXYzLTIwMjYxMTAzIiwNCiAgImhlbHBlckJyYW5jaCI6ICJjb2RleC9yNzItbWVkaWEtMTM3LWZpbmFsLXYzLXByb29mLTIwMjYxMTAzIiwNCiAgIm5vcm1hbE5vZGVWZXJzaW9uIjogIjIyLjIzLjQiLA0KICAiZXhwZWN0ZWRNZWRpYVRlc3RzIjogMywNCiAgInByb3ZpZGVyQ2FsbHMiOiBmYWxzZSwNCiAgInByb2R1Y3Rpb25DcmVkZW50aWFscyI6IGZhbHNlLA0KICAibm90ZSI6ICJTb3VyY2UvdHJlZS90ZXN0L2xvY2sgaGFzaGVzIGRlbGliZXJhdGVseSB1bnNldCB1bnRpbCBSb290IGZyZWV6ZXMgcmVjb25jaWxlZCBjYXBhYmxlIHNvdXJjZTsgZ2VuZXJhdG9yIHJlZnVzZXMgcnVubmFibGUgd29ya2Zsb3cuIE5vIEFQSSBkaXNwYXRjaCBvciBkZXBsb3ltZW50IGNhcGFiaWxpdHkuIiwNCiAgIm9ubHlDaGFuZ2VzRnJvbTAyMiI6IFsNCiAgICAib3JjaGVzdHJhdG9yL3Rlc3QvZGIvc2VvLWJsb2ctbWVkaWEtZW5naW5lLmludGVncmF0aW9uLnRlc3QudHMiLA0KICAgICJvcmNoZXN0cmF0b3IvdGVzdC9kYi9zZW8tYmxvZy1tZWRpYS1zdG9yYWdlLmludGVncmF0aW9uLnRlc3QudHMiDQogIF0sDQogICJydW50aW1lU3FsTG9ja01ocFJvbGVzVW5jaGFuZ2VkRnJvbTAyMiI6IHRydWUsDQogICJyZXRhaW5lZFByZXNlcnZhdGlvbiI6IHsNCiAgICAiZmlsZSI6ICIuLi9tZWRpYS0xMzctcGctdjUtcHJvb2YtMjAyNjExMDMvcHJlc2VydmF0aW9uLXN1Y2Nlc3MuanNvbiIsDQogICAgInNoYTI1NiI6ICIxNGY2OWNlY2JjZWNlZTc0MWQ1ZTI0Yjg2MzAxY2YxODNhMzVlZDI3YWNlMWFkYWNmMjE5NDFjYWYwZmJmMGI4IiwNCiAgICAicnVuIjogNDE3MTczNjIzMDcsDQogICAgImpvYiI6IDEyNjIwMDc4MzExOCwNCiAgICAic291cmNlIjogIjAyMmM3YzM4NTQ4MGU1MjBkZDg5Y2FhMTg0YWI2Y2YwY2M1MDA3ZDEiDQogIH0sDQogICJyb290U291cmNlTWFuaWZlc3RTaGEyNTYiOiAiYjVmZDM0NThiYTI1ZGE2MTZhMTFkOTVlZmEwMDFmZGM2NzQxNDc3MjI0ZmFiMDY3ZmVmYmUzNTExMTg0MGZiOCIsDQogICJyZXZpZXciOiAiQXN0cmEwMjMgZXhhY3Qtc291cmNlL2hhc2ggYW5kIFJvb3QgYmluZGluZyByZXZpZXc7IGZyZXNoIGV4YWN0IG5vcm1hbCtzZXJpYWxQRywgcmV0YWluZWQgYnl0ZS1pZGVudGljYWwgcnVudGltZS9TUUwyOTN0YWJsZSBwcmVzZXJ2YXRpb24sIGlzb2xhdGVkIENJIG9ubHkuIg0KfQ0K''
+        | base64 -d > /tmp/r72-media-137-manifest.json
+
+        echo ''2fea491de6c5e31a2326dce00630403ed49e8a9c71d69d37f924a1309002fb16  /tmp/r72-media-137-manifest.json''
+        | sha256sum --check
+
+        printf ''%s'' ''Ly8gQ09OVFJPTCBPTkxZLiBSZWNlaXB0IGVtaXR0ZWQgb25seSBhZnRlciBzaGVsbCBwaXBlZmFpbCBnYXRlcyBhbGwgZXhpdCB6ZXJvLgppbXBvcnQgYXNzZXJ0IGZyb20gJ25vZGU6YXNzZXJ0L3N0cmljdCc7CmltcG9ydCB7cmVhZEZpbGUsd3JpdGVGaWxlfSBmcm9tICdub2RlOmZzL3Byb21pc2VzJzsKaW1wb3J0IHtjcmVhdGVIYXNofSBmcm9tICdub2RlOmNyeXB0byc7CmltcG9ydCB7ZXhlY0ZpbGVTeW5jfSBmcm9tICdub2RlOmNoaWxkX3Byb2Nlc3MnOwpjb25zdCBtPUpTT04ucGFyc2UoYXdhaXQgcmVhZEZpbGUoJy90bXAvcjcyLW1lZGlhLTEzNy1tYW5pZmVzdC5qc29uJywndXRmOCcpKTsKYXNzZXJ0LmVxdWFsKHByb2Nlc3MudmVyc2lvbnMubm9kZSxtLm5vcm1hbE5vZGVWZXJzaW9uKTsKY29uc3QgZ2l0PSguLi5hcmdzKT0+ZXhlY0ZpbGVTeW5jKCdnaXQnLGFyZ3Mse2VuY29kaW5nOid1dGY4J30pLnRyaW0oKTsKYXNzZXJ0LmVxdWFsKGdpdCgncmV2LXBhcnNlJywnSEVBRCcpLG0uc291cmNlKTthc3NlcnQuZXF1YWwoZ2l0KCdyZXYtcGFyc2UnLCdIRUFEXnt0cmVlfScpLG0udHJlZSk7CmNvbnN0IHRleHQ9YXdhaXQgcmVhZEZpbGUoJy90bXAvcjcyLW1lZGlhLTEzNy1ub3JtYWwubG9nJywndXRmOCcpOwpjb25zdCBjb3VudD1uYW1lPT57Y29uc3QgbWF0Y2g9dGV4dC5tYXRjaChuZXcgUmVnRXhwKCdeIyAnK25hbWUrJyAoXFxkKykkJywnbScpKTthc3NlcnQub2sobWF0Y2gsJ01pc3Npbmcgbm9ybWFsIFRBUCAnK25hbWUpO3JldHVybiBOdW1iZXIobWF0Y2hbMV0pO307CmNvbnN0IGNvdW50cz17dGVzdHM6Y291bnQoJ3Rlc3RzJykscGFzczpjb3VudCgncGFzcycpLGZhaWw6Y291bnQoJ2ZhaWwnKSxza2lwcGVkOmNvdW50KCdza2lwcGVkJyksY2FuY2VsbGVkOmNvdW50KCdjYW5jZWxsZWQnKX07CmFzc2VydC5vayhjb3VudHMucGFzcz4wKTthc3NlcnQuZXF1YWwoY291bnRzLmZhaWwsMCk7YXNzZXJ0LmVxdWFsKGNvdW50cy5jYW5jZWxsZWQsMCk7CmFzc2VydC5lcXVhbChjb3VudHMudGVzdHMsY291bnRzLnBhc3MrY291bnRzLnNraXBwZWQpOwpjb25zdCByZWNlaXB0PXtwcm9vZjonZXhhY3Qtbm9ybWFsLXJlY2VpcHQnLHNvdXJjZTptLnNvdXJjZSx0cmVlOm0udHJlZSxub2RlOnByb2Nlc3MudmVyc2lvbnMubm9kZSxsb2NrU2hhMjU2OmNyZWF0ZUhhc2goJ3NoYTI1NicpLnVwZGF0ZShhd2FpdCByZWFkRmlsZSgncGFja2FnZS1sb2NrLmpzb24nKSkuZGlnZXN0KCdoZXgnKSxucG1DaTonUEFTUycsd2hvbGVUeXBlU2NyaXB0OidQQVNTJyxzYm9tOidQQVNTJyxub3JtYWxUZXN0czpjb3VudHMscHJvdmlkZXJDYWxsczowLHByb2R1Y3Rpb25DcmVkZW50aWFsczpmYWxzZX07CmFzc2VydC5lcXVhbChyZWNlaXB0LmxvY2tTaGEyNTYsbS5zb3VyY2VMb2NrU2hhMjU2KTsKYXdhaXQgd3JpdGVGaWxlKCcvdG1wL3I3Mi1tZWRpYS0xMzctbm9ybWFsLXJlY2VpcHQuanNvbicsSlNPTi5zdHJpbmdpZnkocmVjZWlwdCxudWxsLDIpKTtjb25zb2xlLmxvZyhKU09OLnN0cmluZ2lmeShyZWNlaXB0KSk7Cg==''
+        | base64 -d > /tmp/normal-receipt.mjs
+
+        echo ''50da3d0d271e6950e7ffb1efc99191379ce8c2c5e71b9bf932e904fc40a589b2  /tmp/normal-receipt.mjs''
+        | sha256sum --check'
+    - name: Install exact dependencies once
+      run: npm ci --ignore-scripts --include=dev
+    - name: Whole TypeScript SBOM and exact normal suite
+      shell: bash
+      run: 'set -euo pipefail
+
+        npm run typecheck
+
+        npm run supply-chain:check
+
+        npm test 2>&1 | tee /tmp/r72-media-137-normal.log'
+    - name: Emit exact normal receipt before database environment
+      run: node /tmp/normal-receipt.mjs
+    - name: Create non-super disposable migration identity
+      shell: bash
+      env:
+        PG_CONTAINER: ${{ job.services.postgres.id }}
+      run: 'set -euo pipefail
+
+        docker exec "$PG_CONTAINER" psql -U postgres -d relaunch72_test -v ON_ERROR_STOP=1
+        -c "CREATE ROLE ci_migrator LOGIN NOSUPERUSER NOBYPASSRLS CREATEROLE CREATEDB
+        PASSWORD ''ci-owner-test-only''; ALTER DATABASE relaunch72_test OWNER TO ci_migrator;"
+
+        {
+
+        echo ''TEST_DATABASE_URL=postgresql://ci_migrator:ci-owner-test-only@127.0.0.1:5432/relaunch72_test''
+
+        echo ''TEST_DATABASE_RESET_CONFIRM=reset-disposable-branch''
+
+        echo ''TEST_DATABASE_SSL_MODE=disable''
+
+        echo ''RELAUNCH72_DATABASE_INTEGRATION=explicit-disposable-run''
+
+        echo ''DATABASE_MIGRATOR_URL=postgresql://ci_migrator:ci-owner-test-only@127.0.0.1:5432/relaunch72_test''
+
+        echo ''DATABASE_SSL_MODE=disable''
+
+        echo ''NODE_ENV=development''
+
+        } >> "$GITHUB_ENV"'
+    - name: Run exact two final PG files serially with all3cases
+      shell: bash
+      run: 'set -euo pipefail
+
+        cd orchestrator
+
+        node --import ./test/windows-node24-shim.mjs --import tsx --test --test-reporter=tap
+        --test-concurrency=1 test/db/seo-blog-media-storage.integration.test.ts test/db/seo-blog-media-engine.integration.test.ts
+        2>&1 | tee /tmp/r72-media-137-final-pg.log
+
+        grep -qx ''# tests 3'' /tmp/r72-media-137-final-pg.log
+
+        grep -qx ''# pass 3'' /tmp/r72-media-137-final-pg.log
+
+        grep -qx ''# fail 0'' /tmp/r72-media-137-final-pg.log
+
+        grep -qx ''# skipped 0'' /tmp/r72-media-137-final-pg.log'
