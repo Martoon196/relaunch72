@@ -78,10 +78,19 @@ test('new articles automatically propose the approved default and proceed throug
 });
 test('atomic first-target insertion rejects changed structure or destination rather than attach stale metadata',async()=>{
   for(const control of ['structure','destination']){
+    let changed=0;
     const f=await websiteFixture('content_api','/blog',async(h,brandId,destinationId)=>{
-      const insert=h.store.addVersion.bind(h.store);let changed=false;
-      h.store.addVersion=async(version,guard)=>{if(guard&&!changed){changed=true;if(control==='structure'){const b=await h.engine.getBrand(OWNER,brandId);const scan=(await h.engine.getInventory(OWNER,brandId))!;await h.engine.approveEditorialStructure(OWNER,brandId,{rowVersion:b.rowVersion,scanId:scan.editorial!.scanId,scanSha:scan.editorial!.scanSha,destinationId,root:'/blog',categories:[{id:scan.editorial!.categories[0]!.id,label:'Changed during append',slug:'guides'}]});}else{const d=(await h.store.getDestination(brandId,destinationId))!;await h.store.saveDestination({...d,status:'unverified'});}}return insert(version,guard);};
+      const boundary=h.store.campaignCopyBoundary.bind(h.store);
+      h.store.campaignCopyBoundary=async input=>{
+        const current=await h.store.getArticle(brandId,input.articleId),marker=current?.campaignGeneration;
+        if(marker?.receipt&&!marker.appliedAt&&!changed){
+          changed++;if(control==='structure'){const b=await h.engine.getBrand(OWNER,brandId);const scan=(await h.engine.getInventory(OWNER,brandId))!;await h.engine.approveEditorialStructure(OWNER,brandId,{rowVersion:b.rowVersion,scanId:scan.editorial!.scanId,scanSha:scan.editorial!.scanSha,destinationId,root:'/blog',categories:[{id:scan.editorial!.categories[0]!.id,label:'Changed during append',slug:'guides'}]});}
+          else{const d=(await h.store.getDestination(brandId,destinationId))!;await h.store.saveDestination({...d,status:'unverified'});}
+        }
+        return boundary(input);
+      };
     });
+    assert.equal(changed,1,'the control really changes before the final atomic insertion');
     assert.equal((await f.h.store.listVersions(f.brand.id,f.articleId)).length,0);const job=(await f.h.store.listJobs(f.brand.id)).find((j)=>j.kind==='write')!;assert.equal(job.state,'blocked');assert.match(job.error!,/changed while the target proposal/);assert.equal(f.h.site.posts,0);
   }
 });
@@ -97,5 +106,10 @@ test('current pinned old-root catalogue wins over older published history after 
   const article=(await f.h.store.getArticle(f.brand.id,f.articleId))!;const destination=(await f.h.store.getDestination(f.brand.id,f.destination.id))!;const fallback=reviewedWebsiteTarget({brand:await f.h.engine.getBrand(OWNER,f.brand.id),article,version:{...same,websiteTarget:undefined},destination,publications:await f.h.store.listPublications(f.brand.id,f.articleId)},[tax]);assert.equal(fallback.target.structureRevision,second.version);assert.deepEqual(fallback.target.categoryIds,[tax]);
 });
 test('a health-only recheck during automatic target insertion preserves the semantic website identity',async()=>{
-  const f=await websiteFixture('content_api','/blog',async(h,brandId,destinationId)=>{const insert=h.store.addVersion.bind(h.store);let checked=false;h.store.addVersion=async(version,guard)=>{if(guard&&!checked){checked=true;h.clock.advance(60_000);await h.engine.checkDestination(OWNER,brandId,destinationId);}return insert(version,guard);};});assert.ok((await f.h.engine.getArticle(OWNER,f.brand.id,f.articleId)).version!.websiteTarget);assert.equal(f.h.site.posts,0);
+  let checked=0;
+  const f=await websiteFixture('content_api','/blog',async(h,brandId,destinationId)=>{
+    const boundary=h.store.campaignCopyBoundary.bind(h.store);
+    h.store.campaignCopyBoundary=async input=>{const marker=(await h.store.getArticle(brandId,input.articleId))?.campaignGeneration;if(marker?.receipt&&!marker.appliedAt&&!checked){checked++;h.clock.advance(60_000);await h.engine.checkDestination(OWNER,brandId,destinationId);}return boundary(input);};
+  });
+  assert.equal(checked,1,'the healthy connection is actually rechecked before final insertion');assert.ok((await f.h.engine.getArticle(OWNER,f.brand.id,f.articleId)).version!.websiteTarget);assert.equal(f.h.site.posts,0);
 });

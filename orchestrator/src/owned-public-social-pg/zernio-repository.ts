@@ -1,5 +1,6 @@
 import type { Pool, QueryResultRow } from 'pg';
 import { parseCompanyContentSocialImage } from '../company-content-pg/social-image.js';
+import { parseSeoCampaignMedia } from '../seo-blog/campaign-media.js';
 import { withTransaction } from '../db/transaction.js';
 import type {
   ZernioCalendarClaim,
@@ -80,7 +81,7 @@ function externalId(value: unknown): string | null {
   return value;
 }
 
-function media(value: unknown): ZernioCalendarJobMaterial['media'] {
+function media(value: unknown, workspaceId: string): ZernioCalendarJobMaterial['media'] {
   let source = value;
   if (typeof source === 'string') {
     try { source = JSON.parse(source) as unknown; } catch { fail('media'); }
@@ -97,10 +98,13 @@ function media(value: unknown): ZernioCalendarJobMaterial['media'] {
         || !/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/u.test(row.mimeType)) {
       fail('media');
     }
+    const seoCampaign = row.seoCampaign === undefined ? null : parseSeoCampaignMedia(row.seoCampaign, workspaceId, row.storageKey, row.blobSha256);
+    if (row.storageKey.startsWith('seo-blog-media/') && (!seoCampaign || row.inlineImage === undefined || row.mimeType !== 'image/jpeg')) fail('SEO media');
     return Object.freeze({
       storageKey: row.storageKey, blobSha256: row.blobSha256, mimeType: row.mimeType,
       ...(row.inlineImage !== undefined
         ? { inlineImage: parseCompanyContentSocialImage(row.inlineImage) } : {}),
+      ...(seoCampaign ? { seoCampaign } : {}),
     });
   }));
 }
@@ -216,7 +220,7 @@ export class PgZernioCalendarRepository implements ZernioCalendarRepository {
         textSha256: digest(row.textSha256, 'text digest'),
         scheduledFor: timestamp(row.scheduledFor, 'scheduled time'),
         providerPostId: externalId(row.providerExternalId),
-        media: media(row.media),
+        media: media(row.media, input.workspaceId),
       });
     }, { readOnly: true, isolation: 'repeatable read' });
   }

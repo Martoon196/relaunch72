@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { createCombinedSocialImageMediaResolver } from '../../public-social-outbound/combined-social-image-media.js';
+import { createCombinedSocialImageMediaResolver, createSeoCampaignImageMediaResolver } from '../../public-social-outbound/combined-social-image-media.js';
 import type { Pool } from 'pg';
 import { assertExpectedDatabaseInstallation } from '../../db/installation-identity.js';
 import { withTransaction } from '../../db/transaction.js';
@@ -155,14 +155,6 @@ export async function discoverZernioCalendarRegistryTargets(
   return Object.freeze(targets);
 }
 
-/** Registered brands carry text-only promotions; any media on such a job is a binding fault, never a silent skip. */
-const registryMediaResolver: ZernioCalendarMediaResolver = {
-  async resolve(input) {
-    if (input.media.length !== 0) throw new Error('Registry-dispatched jobs carry no media');
-    return Object.freeze([]);
-  },
-};
-
 export interface ZernioCalendarWorkerDependencies {
   readonly env?: NodeJS.ProcessEnv;
   /** Database registry discovery of brand-registered accounts; defaults to the definer function read. */
@@ -187,6 +179,7 @@ export interface ZernioCalendarWorkerDependencies {
     accountBindings: readonly ZernioCalendarAccountBinding[];
   }>) => Pick<ZernioPostingClient, 'publishDue' | 'reconcile'>;
   readonly createMediaResolver?: (env: NodeJS.ProcessEnv) => ZernioCalendarMediaResolver;
+  readonly createRegistryMediaResolver?: (input: Readonly<{ workspaceId: string; apiKey: string; accountBindings: readonly ZernioCalendarAccountBinding[] }>) => ZernioCalendarMediaResolver;
   readonly runCycle?: typeof runZernioCalendarLiveOnce;
   readonly randomToken?: () => Uint8Array;
   readonly writeReadiness?: (line: string) => void;
@@ -515,7 +508,11 @@ export async function startZernioCalendarLiveWorker(
           fetch: globalThis.fetch,
         })))({ apiKey: config.apiKey, accountBindings }),
         leaseToken: token,
-        mediaResolver: registryMediaResolver,
+        mediaResolver: dependencies.createRegistryMediaResolver?.({ workspaceId: first.workspaceId, apiKey: config.apiKey, accountBindings })
+          ?? createSeoCampaignImageMediaResolver({ workspaceId: first.workspaceId,
+            posting: createZernioPostingClient({ apiKey: config.apiKey,
+              allowedTargets: accountBindings.map(binding => ({ network: binding.network, accountId: binding.providerAccountId })), fetch: globalThis.fetch }),
+            fetch: globalThis.fetch }),
       });
       if (result !== 'idle') return result;
     }

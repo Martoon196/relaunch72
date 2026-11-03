@@ -1,6 +1,7 @@
 import { createPortalSeoBlogService, type PortalSeoBlogService } from './seo-blog-service.js';
 import { createSeoBlogZernioWebhookBrands, type SeoBlogZernioWebhookBrands } from './seo-blog-social-pg.js';
 import { SeoBlogCredentialVault } from '../seo-blog/vault.js';
+import { PgSeoBlogReleasedMediaReader } from '../seo-blog/media-store.js';
 import { createHash } from 'node:crypto';
 import { createPortalFollowupFlowService, type PortalFollowupFlowService } from './followup-flow-service.js';
 import { InvestorService } from './investor-service.js';
@@ -197,6 +198,7 @@ export interface PgPortalPlatform {
   followupFlows?: PortalFollowupFlowService;
   /** SEO blog engine; omitted unless SEO_BLOG_ENABLED=true and r72_content_command is ready. */
   seoBlog?: PortalSeoBlogService;
+  releasedSeoMedia?: import('./seo-blog-media.js').PortalReleasedSeoMediaReader;
   /** Brand-routed Zernio account webhook receipts; absent when social delivery is not composed. */
   seoBlogZernioWebhook?: SeoBlogZernioWebhookBrands;
   seoBlogVaultReady?: boolean;
@@ -1319,6 +1321,7 @@ export async function buildPgPortalPlatform(
       companyContent,
       followupFlows,
       seoBlog,
+      releasedSeoMedia: new PgSeoBlogReleasedMediaReader(webPool),
       seoBlogZernioWebhook,
       seoBlogVaultReady: Boolean(SeoBlogCredentialVault.fromEnv(env)),
       companyAssets,

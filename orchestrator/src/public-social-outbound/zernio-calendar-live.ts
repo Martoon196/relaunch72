@@ -54,6 +54,8 @@ export interface ZernioCalendarJobMaterial extends ZernioCalendarClaim {
     blobSha256: string;
     mimeType: string;
     inlineImage?: CompanyContentSocialImage;
+    /** Present only on the SQL-verified generic SEO campaign media branch. */
+    seoCampaign?: import('../seo-blog/campaign-media.js').SeoCampaignMediaProvenance;
   }>[];
 }
 

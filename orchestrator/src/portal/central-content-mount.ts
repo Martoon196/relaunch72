@@ -4,6 +4,7 @@ import { parseCookies } from '../server/admin/session.js';
 import { handlePortal, type PostgresPortalDeps } from './router.js';
 import { RELAUNCH72_PRODUCT_PROFILE } from './product-profile.js';
 import type { PortalAuthenticatedSession, PortalSessionIdentity } from './auth-service.js';
+import { createReleasedSeoMediaMount, RELEASED_SEO_MEDIA_PREFIX, serveReleasedSeoMedia, type PortalReleasedSeoMediaReader } from './seo-blog-media.js';
 
 export const CENTRAL_CONTENT_ORIGIN = 'https://app.relaunch72.com';
 export const CENTRAL_CONTENT_COOKIE = '__Host-r72_content' as const;
@@ -13,6 +14,17 @@ export function centralContentOrigin(env: NodeJS.ProcessEnv): string | null {
   if (env.R72_CONTENT_ENABLED !== 'true') return null;
   if (env.R72_CONTENT_ORIGIN !== CENTRAL_CONTENT_ORIGIN) throw new Error('R72_CONTENT_ORIGIN must be the exact approved HTTPS origin');
   return CENTRAL_CONTENT_ORIGIN;
+}
+
+/** Production composition seam: disabling the UI does not withdraw released pixels. */
+export function composeCentralContentMount(input: {
+  origin: string | null;
+  portal: PostgresPortalDeps | undefined;
+  releasedMedia: PortalReleasedSeoMediaReader | undefined;
+  authorize(identity: PortalSessionIdentity, requestId: string): Promise<boolean>;
+}) {
+  if (input.origin && input.portal) return createCentralContentMount({ origin: input.origin, portal: input.portal, authorize: input.authorize });
+  return input.releasedMedia ? createReleasedSeoMediaMount(CENTRAL_CONTENT_ORIGIN, input.releasedMedia) : undefined;
 }
 
 function status(res: ServerResponse, code: number, message: string): void {
@@ -56,6 +68,9 @@ export function createCentralContentMount(input: {
       // Ignore proxy host headers; ports, userinfo, suffixes and unknown routes never fall through.
       if (req.headers.host?.toLowerCase() !== hostname) return status(res, 421, 'Misdirected request.');
       const url = new URL(req.url ?? '/', input.origin);
+      // Exact released ID/SHA only. No private asset enumeration or dependency
+      // on today's owner session, draft, image opt-in or generation feature flag.
+      if (url.pathname.startsWith(RELEASED_SEO_MEDIA_PREFIX)) return serveReleasedSeoMedia(req, res, url, base.releasedSeoMedia);
       const method = req.method ?? 'GET';
       const seo = url.pathname === '/portal/seo-blog' || url.pathname.startsWith('/portal/seo-blog/');
       const auth = ['/portal/login', '/portal/logout', '/portal/setup'].includes(url.pathname);

@@ -19,6 +19,11 @@ import { StaleWriteError } from './store.js';
 import { isProfileJob, profilePayload, type ProfileJobBoundaryInput } from './profile-jobs.js';
 import { programmeRun, type ProgrammeBoundaryInput } from './programme.js';
 import {assertWebsiteVersionGuard,websiteWakeJob,type WebsiteReviewInput,type WebsiteVersionGuard} from './website-target.js';
+import { publicationMediaPin, publicationMediaEffectBoundary } from './media-publication.js';
+import type { SeoMediaReleaseInput } from './media-types.js';
+import { persistCampaignQueueWake } from './campaign-queue.js';
+import { preservePublicationVerificationAnchor } from './publication-verification.js';
+import { assertCampaignCopyScope, pendingCampaignTokens, type CampaignGeneration, type CampaignCopyBoundaryInput } from './campaign-generation.js';
 import {
   DEFAULT_BRAND_SETTINGS, SeoBlogError,
   type ActivityEvent, type Article, type ArticleBrief, type ArticleVersion, type Brand, type BrandProfile, type Destination,
@@ -38,7 +43,12 @@ function isUnique(error: unknown): boolean {
 export class PgSeoBlogStore implements SeoBlogStore {
   private readonly sessionHash: Buffer | null;
 
-  constructor(private readonly pool: Pick<Pool, 'connect'>, private readonly principal: PgSeoBlogPrincipal) {
+  constructor(private readonly pool: Pick<Pool, 'connect'>, private readonly principal: PgSeoBlogPrincipal,
+    private readonly publicationMedia?: {
+      assertPublicationMediaEffect(t: DbTransaction, workspaceId: string, input: SeoMediaReleaseInput): Promise<void>;
+      releaseForPublication(t: DbTransaction, workspaceId: string, input: SeoMediaReleaseInput): Promise<unknown>;
+      listPendingCampaignQueuesOnTransaction?(t: DbTransaction, workspaceId: string, articleId?: string): Promise<readonly string[]>;
+    }) {
     this.sessionHash = principal.kind === 'user' ? createHash('sha256').update(principal.sessionToken).digest() : null;
   }
 
@@ -342,7 +352,18 @@ export class PgSeoBlogStore implements SeoBlogStore {
         }
         let publication: Publication | undefined;
         if (decision.publication) {
-          const { rowVersion: _rv, ...data } = decision.publication;
+          let nextPublication = existing ? preservePublicationVerificationAnchor(existing, decision.publication) : decision.publication;
+          if (decision.kind === 'begin') {
+            const publishedVersion = nextPublication.versionId === version!.id ? version! : (await t.query<{data:ArticleVersion}>(
+              'SELECT data FROM app.seo_blog_article_versions WHERE workspace_id=$1 AND id=$2', [input.brandId, nextPublication.versionId])).rows[0]?.data;
+            if (!publishedVersion) throw new SeoBlogError(409, 'The immutable publication version is unavailable.');
+            const mediaRelease = publicationMediaPin(article, publishedVersion, nextPublication);
+            if (mediaRelease) {
+              if (!this.publicationMedia || typeof this.publicationMedia.assertPublicationMediaEffect !== 'function') throw new SeoBlogError(503, 'The capable media publication worker is unavailable. No publication began.');
+              nextPublication = { ...nextPublication, mediaRelease };
+            }
+          }
+          const { rowVersion: _rv, ...data } = nextPublication;
           const written = existing
             ? await t.query<{ data: Publication; row_version: string }>(
               `UPDATE app.seo_blog_publications SET data = $3, state = $4, row_version = row_version + 1, updated_at = clock_timestamp()
@@ -354,6 +375,15 @@ export class PgSeoBlogStore implements SeoBlogStore {
               [input.brandId, decision.publication.id, decision.publication.articleId, decision.publication.versionId, decision.publication.idempotencyKey, decision.publication.state, JSON.stringify(data)]);
           if (!written.rows[0]) { skipWhy = 'This operation has already begun.'; throw skip; }
           publication = withVersion<Publication>(written.rows[0]);
+          if (decision.kind === 'begin' && publication.mediaRelease) {
+            const mediaInput = { publicationId: publication.id, ownerAuthorizationId: publication.mediaRelease.ownerAuthorizationId,
+              reviewedIntentSha256: publication.mediaRelease.reviewedIntentSha256 };
+            // A historical immutable release receipt is recovery evidence, never a new send grant.
+            await publicationMediaEffectBoundary(async () => {
+              await this.publicationMedia!.assertPublicationMediaEffect(t, input.brandId, mediaInput);
+              await this.publicationMedia!.releaseForPublication(t, input.brandId, mediaInput);
+            });
+          }
           await this.persistWebsiteWake(t,publication);
         }
         const { rowVersion: _arv, ...articleData } = decision.article;
@@ -388,13 +418,23 @@ export class PgSeoBlogStore implements SeoBlogStore {
   }
 
   async updatePublication(publication: Publication): Promise<Publication> {
-    const { rowVersion, ...data } = publication;
     const row = await this.tx(publication.brandId, async (t) => {
+      const previous = (await t.query<{data:Publication;row_version:string}>('SELECT data,row_version FROM app.seo_blog_publications WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [publication.brandId, publication.id])).rows[0];
+      if (!previous || Number(previous.row_version) !== publication.rowVersion) throw new StaleWriteError('publication');
+      const { rowVersion, ...data } = preservePublicationVerificationAnchor(withVersion<Publication>(previous), publication);
       const row=(await t.query<{ data: Publication; row_version: string }>(
       `UPDATE app.seo_blog_publications SET data = $3, state = $4, row_version = row_version + 1, updated_at = clock_timestamp()
        WHERE workspace_id = $1 AND id = $2 AND row_version = $5 RETURNING data, row_version`,
       [publication.brandId, publication.id, JSON.stringify(data), publication.state, rowVersion])).rows[0];
-      if(row)await this.persistWebsiteWake(t,withVersion<Publication>(row));return row;
+      if (row) {
+        const saved = withVersion<Publication>(row);
+        await this.persistWebsiteWake(t, saved);
+        if (saved.state === 'published' && saved.websiteDelivery?.article.state === 'verified' && this.publicationMedia?.listPendingCampaignQueuesOnTransaction) {
+          const pending = await this.publicationMedia.listPendingCampaignQueuesOnTransaction(t, saved.brandId, saved.articleId);
+          for (const id of pending) await persistCampaignQueueWake(t, saved.brandId, id, `verified:${saved.id}`, saved.websiteDelivery.article.at);
+        }
+      }
+      return row;
     });
     if (!row) throw new StaleWriteError('publication');
     return withVersion(row);
@@ -416,6 +456,36 @@ export class PgSeoBlogStore implements SeoBlogStore {
   }
 
   // ─── Jobs ──────────────────────────────────────────────────────────────
+
+  async campaignCopyBoundary(input: CampaignCopyBoundaryInput): Promise<Article> {
+    if(this.principal.kind==='user') {
+      if(input.authority.origin!=='manual')throw new SeoBlogError(403,'Worker drafting authority required.');
+      this.assertActor(input.authority.sponsorUserId);
+    } else if(!input.claim) throw new SeoBlogError(403,'A durable article worker claim is required.');
+    return this.tx(input.brandId,async(t)=>{
+      await t.query('SELECT workspace_id FROM app.seo_blog_brands WHERE workspace_id=$1 FOR UPDATE',[input.brandId]);
+      const br=(await t.query<{brand:Brand}>('SELECT app_private.seo_blog_brand($1) AS brand',[input.brandId])).rows[0]?.brand;
+      const row=(await t.query<{data:Article;row_version:string}>('SELECT data,row_version FROM app.seo_blog_articles WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[input.brandId,input.articleId])).rows[0];
+      if(!br||!row)throw new SeoBlogError(404,'Article not found.');
+      const article=withVersion<Article>(row),brand=normaliseBrand(br);
+      const records=(await t.query<{kind:string;id:string;data:unknown}>("SELECT kind,id,data FROM app.seo_blog_records WHERE workspace_id=$1 AND kind IN ('profile','knowledge','brief','destination') ORDER BY kind,id FOR SHARE",[input.brandId])).rows;
+      const jr=input.claim?(await t.query<{data:Job;row_version:string}>('SELECT data,row_version FROM app.seo_blog_jobs WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[input.brandId,input.claim.jobId])).rows[0]:null;
+      const valid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(input.authority.sponsorUserId);
+      const allowed=valid&&(await t.query<{ok:boolean}>('SELECT app_private.can_manage_workspace($1,$2) AS ok',[input.authority.sponsorUserId,input.brandId])).rows[0]?.ok===true;
+      const used=(await t.query<{amount:string}>("SELECT coalesce(sum(amount),0)::text AS amount FROM app.seo_blog_usage WHERE workspace_id=$1 AND kind='model_tokens' AND at >= $2",[input.brandId,input.now.slice(0,7)+'-01T00:00:00.000Z'])).rows[0]?.amount??'0';
+      const pending=(await t.query<{marker:Pick<CampaignGeneration,'estimatedTokens'|'startedAt'|'receipt'>}>("SELECT jsonb_build_object('estimatedTokens',data#>'{campaignGeneration,estimatedTokens}','startedAt',data#>'{campaignGeneration,startedAt}','receipt',data#>'{campaignGeneration,receipt}') AS marker FROM app.seo_blog_articles WHERE workspace_id=$1 AND data ? 'campaignGeneration'",[input.brandId])).rows;
+      const snapshot={brand,article,profile:records.filter(r=>r.kind==='profile').map(r=>r.data as BrandProfile).sort((a,b)=>b.version-a.version)[0]??null,knowledge:records.filter(r=>r.kind==='knowledge').map(r=>r.data as KnowledgeDocument),job:jr?withVersion<Job>(jr):null,requesterAllowed:allowed,modelTokensUsed:Number(used),modelTokensReserved:pendingCampaignTokens(pending.map(r=>r.marker))};
+      assertCampaignCopyScope(input,snapshot);
+      const decision=input.decide(snapshot);
+      if(decision.article.id!==article.id||decision.article.brandId!==brand.id||decision.article.rowVersion!==article.rowVersion)throw new StaleWriteError('article');
+      if(decision.websiteGuard)assertWebsiteVersionGuard(decision.websiteGuard,{...snapshot,destination:(records.find(r=>r.kind==='destination'&&r.id===decision.websiteGuard!.destinationId)?.data as Destination)??null,brief:(records.find(r=>r.kind==='brief'&&r.id===article.briefId)?.data as ArticleBrief)??null});
+      if(decision.version){const v=decision.version;if(v.articleId!==article.id||v.brandId!==brand.id)throw new SeoBlogError(409,'Article version scope changed.');await t.query('INSERT INTO app.seo_blog_article_versions(workspace_id,id,article_id,number,content_sha256,data) VALUES($1,$2,$3,$4,$5,$6)',[brand.id,v.id,article.id,v.number,v.contentSha,JSON.stringify(v)]);}
+      if(decision.usage){const u=decision.usage;await t.query('INSERT INTO app.seo_blog_usage(workspace_id,kind,amount,at,reference) VALUES($1,$2,$3,$4,$5)',[brand.id,u.kind,u.amount,u.at,u.reference]);}
+      const {rowVersion:_rv,...data}=decision.article;
+      const updated=(await t.query<{data:Article;row_version:string}>('UPDATE app.seo_blog_articles SET data=$3,row_version=row_version+1,updated_at=clock_timestamp() WHERE workspace_id=$1 AND id=$2 AND row_version=$4 RETURNING data,row_version',[brand.id,article.id,JSON.stringify(data),article.rowVersion])).rows[0];
+      if(!updated)throw new StaleWriteError('article');return withVersion<Article>(updated);
+    });
+  }
 
   async programmeBoundary(input: ProgrammeBoundaryInput): Promise<Job | null> {
     if(this.principal.kind==='user') {

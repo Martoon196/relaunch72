@@ -43,6 +43,8 @@ export interface BrandAuthor {
 }
 
 export interface BrandSettings {
+  /** Explicit owner opt-in; absence is OFF, independent of the image-attempt allowance. */
+  readonly media?: { readonly imageGenerationEnabled: boolean; readonly authorizedBy: string; readonly authorizedAt: IsoInstant };
   readonly programme?: BrandProgrammeSettings;
   /** Off by default. On = articles that do not require review may publish without a per-article approval. */
   readonly autoPublish: boolean;
@@ -439,6 +441,16 @@ export interface ArticleHold {
 }
 
 export interface Article {
+  readonly mediaQualityReviews?: readonly import('./media-review.js').MediaQualityReview[];
+  readonly mediaWithdrawals?: readonly import('./media-types.js').SeoMediaWithdrawal[];
+  readonly heroMedia?: import('./media-review.js').HeroMediaSelection;
+  /** Prepared private candidates, not selected/approved hero images or released public assets. */
+  readonly imageProposals?: readonly import('./image-campaign.js').ArticleImageProposal[];
+  readonly localImageProposals?: readonly import('./image-campaign.js').ArticleLocalImageProposal[];
+  /** Exact per-angle social revisions; social edits do not alter the reviewed blog body. */
+  readonly campaign?: import('./campaign.js').ArticleCampaign;
+  /** Private initial-copy start/receipt marker; never a second paid retry. */
+  readonly campaignGeneration?: import('./campaign-generation.js').CampaignGeneration;
   /** Durable operation that owns delivery, independent of the editor's current version. */
   readonly deliveryPublicationId?:string;
   readonly id: string;
@@ -561,6 +573,9 @@ export interface PolicySnapshot {
 }
 
 export interface Publication {
+  /** Once latched by independent verification, immutable; null means legacy first instant is unavailable. */
+  readonly firstVerifiedAt?: IsoInstant | null;
+  readonly mediaRelease?: import('./media-publication.js').PublicationMediaRelease;
   readonly sitemapRepair?: SitemapRepairIntent;
   readonly sitemapRepairHistory?:readonly SitemapRepairIntent[];
   readonly websiteDelivery?: WebsiteDeliveryEvidence;
