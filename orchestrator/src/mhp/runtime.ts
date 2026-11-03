@@ -12,7 +12,7 @@ import { InvestorMailService } from '../portal/investor-mail-service.js';
 import { InvestorMailVault } from '../investor-mail/vault.js';
 import { PgMhpHqService } from './hq-service.js';
 import { PgMhpDeskService } from './desk-service.js';
-import { PgMhpGrowthService, mhpWebinarConfig } from './growth-service.js';
+import { PgMhpGrowthService, mhpWebinarConfig, mhpApplicationConfig } from './growth-service.js';
 import { PgMhpLearningService } from './learning-service.js';
 import { PgMhpMarketingWorkspaceService } from './marketing-workspace-service.js';
 import { createMhpMarketingSender, mhpMarketingConfig, type MhpMarketingConfig } from './marketing-mail.js';
@@ -178,7 +178,7 @@ export async function buildMhpRuntime(input: {
     commerce,
     hq: new PgMhpHqService(webPool, identityPool),
     desk: new PgMhpDeskService(webPool, identityPool),
-    growth: new PgMhpGrowthService(webPool, identityPool, webinar),
+    growth: new PgMhpGrowthService(webPool, identityPool, webinar, mhpApplicationConfig(env)),
     learning: new PgMhpLearningService(webPool, identityPool),
     marketingWorkspace,
     ownerEmail,
