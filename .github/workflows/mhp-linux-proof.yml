@@ -1,4 +1,4 @@
-name: MHP webinar v2 exact Linux proof
+name: MHP mobile handoff exact Linux proof
 
 on:
   push:
@@ -17,9 +17,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: capable
-            commit: e8c64d7f04ed96daa7026f896e04b1dc81177b04
-            tree: 60ea5c993b07b116087d163ac831ccc3d631512a
+          - target: mobile-handoff
+            commit: 8c657fac26d21922ece228ba5166ab48b89f4afe
+            tree: 71641db42722f46240c063b6fe05bd3b2586c3d0
     steps:
       - name: Checkout exact reviewed source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
