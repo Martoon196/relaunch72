@@ -54,7 +54,7 @@ test('published future intent exposes one explicit activation, current rule coun
   assert.match(html, /25 enrolled · 20 skipped · 6 blocked · 51 events processed/u); assert.match(html, /Turn off future entry/u);
   assert.match(html, /does not stop or recall messages in existing runs/u); assert.match(html, /pending events from before the new action are not backfilled/u);
 });
-test('native capture uses the trusted server campaign and actual returned signup identity; automaticfive stays exact', async () => {
+test('native capture uses the trusted server campaign and actual returned signup identity; optional phone stays informational', async () => {
   const config = mhpWebinarConfig({ MHP_WEBINAR_CAMPAIGN: 'server-webinar' }), now = Date.parse('2026-10-31T00:00:00Z');
   const signup = parseMhpSignup(new URLSearchParams({ EMAIL: 'test@example.invalid', OPT_IN: '1', CHEATSHEET: 'Webinar signup', CHEATSHEET_LINK: 'https://martinhowardproperty.co.uk/webinar/' })) as MhpSignup;
   const calls: { sql: string; args: unknown[] }[] = [];
@@ -62,7 +62,8 @@ test('native capture uses the trusted server campaign and actual returned signup
     { query: async (sql: string, args: unknown[]) => { calls.push({ sql, args }); return { rows: [{ outcome: { prospectId: ids.prospect, signupId: ids.request, queued: 5, campaign: config.campaign, entryEventSequence: '21' } }] }; } } as any, config);
   const result = await service.capture({ ...signup, campaign: 'browser-choice', sequenceId: ids.item } as any, Buffer.alloc(32, 7), now);
   assert.equal(result.signupId, ids.request); assert.equal(result.entryEventSequence, '21');
-  assert.match(calls[0]!.sql, /^SELECT app_private\.mhp_capture_signup_v2/u); assert.equal(calls[0]!.args.length, 12); assert.equal(calls[0]!.args[11], 'server-webinar');
+  assert.match(calls[0]!.sql, /^SELECT app_private\.mhp_capture_signup_v3/u); assert.equal(calls[0]!.args.length, 13); assert.equal(calls[0]!.args[11], 'server-webinar'); assert.equal(calls[0]!.args[12], null);
+  assert.doesNotMatch(calls.map(call=>call.sql).join('\n'),/mhp_set_prospect_phone|contact_points|sms_live/u);
   assert.deepEqual(JSON.parse(calls[0]!.args[10] as string), mhpSchedule(signup, config, now)); assert.deepEqual(calls[0]!.args[9], Buffer.alloc(32, 7));
 });
 test('exact campaign capture survives an empty old schedule; nonwebinar capture stays unlinked', async () => {

@@ -6,9 +6,9 @@ import test from 'node:test';
 // definition byte-for-byte except for the single named exclusion predicate.
 const DIR = new URL('../../src/db/migrations/', import.meta.url);
 
-async function definitions(name: string): Promise<{ file: string; text: string }[]> {
+async function definitions(name: string, through = Number.POSITIVE_INFINITY): Promise<{ file: string; text: string }[]> {
   const found: { file: string; text: string }[] = [];
-  for (const file of (await readdir(DIR)).filter(f => f.endsWith('.sql')).sort()) {
+  for (const file of (await readdir(DIR)).filter(f => f.endsWith('.sql') && Number(f.slice(0,4)) <= through).sort()) {
     const source = (await readFile(new URL(file, DIR), 'utf8')).replace(/\r\n/gu, '\n');
     const pattern = new RegExp(`CREATE (?:OR REPLACE )?FUNCTION app_private\\.${name}\\(`, 'gu');
     for (const match of source.matchAll(pattern)) {
@@ -44,7 +44,7 @@ const CASES: { name: string; edits: [string, string, number][] }[] = [
 
 for (const { name, edits } of CASES) {
   test(`0134 ${name} is the exact prior body plus only its exclusion predicate`, async () => {
-    const all = await definitions(name);
+    const all = await definitions(name,134);
     const replacement = all.at(-1)!, prior = all.at(-2)!;
     assert.equal(replacement.file, '0134_mhp_event_phone_programme.sql');
     assert.notEqual(prior.file, replacement.file);
@@ -65,4 +65,20 @@ test('0134 installs every SMS calendar exclusion the agreed inventory names', as
     'settle_sms_live_call', 'authorize_and_enqueue_sms_live_job', 'record_sms_live_inbound_projection', 'record_sms_live_status_receipt']) {
     assert.doesNotMatch(source, new RegExp(`FUNCTION app_private\\.${name}\\(`, 'u'));
   }
+});
+
+
+test('0136 delegates old claims to legacy-only maintenance while fencing owner, sequence and nonemail work', async()=>{
+  const source=(await readFile(new URL('0136_mhp_webinar_applications.sql',DIR),'utf8')).replace(/\r\n/gu,'\n');
+  const claim=(await definitions('mhp_claim_marketing_sends')).at(-1)!;
+  assert.equal(claim.file,'0136_mhp_webinar_applications.sql');
+  assert.match(claim.text,/SELECT app_private\.mhp_claim_builtin_sends_internal\(p_limit,p_lease_seconds,p_only_emails,false\)/u);
+  assert.equal(source.split("s.delivery_channel='email' AND s.owner_content_version_id IS NULL AND (p_include_v2 OR s.builtin_purpose='legacy')").length-1,4);
+  assert.match(source,/owner_content_version_id IS NULL AND sequence_run_id IS NULL/u);
+  assert.match(source,/'context',l\.context\|\|jsonb_build_object\('emailPurpose',l\.builtin_purpose\)/u);
+  const unsubscribe=(await definitions('mhp_unsubscribe_prospect')).at(-1)!;
+  assert.equal(unsubscribe.file,'0136_mhp_webinar_applications.sql');
+  assert.match(unsubscribe.text,/s\.delivery_channel='email'/u);
+  assert.match(unsubscribe.text,/NOT\(s\.builtin_purpose IN\('application_received','application_notify'\) AND EXISTS/u);
+  assert.match(unsubscribe.text,/a\.id=s\.application_id AND a\.prospect_id=s\.prospect_id/u);
 });
