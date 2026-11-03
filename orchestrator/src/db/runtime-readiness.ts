@@ -44,6 +44,8 @@ const MHP_EVENT_PHONE_SIGNUP_MIGRATION = '0135_mhp_event_phone_signup_handoff.sq
 const MHP_EVENT_PHONE_SIGNUP_CHECKSUM = '9f73caa543ac243304063866897c4900301c4bb64bcf7f6d238cd668c8cc2be2';
 const MHP_WEBINAR_APPLICATIONS_MIGRATION = '0136_mhp_webinar_applications.sql';
 const MHP_WEBINAR_APPLICATIONS_CHECKSUM = '9bf6605cdc536794fae989964542eb8253cdd49ebd995d3e6dd346c01c746139';
+const SEO_BLOG_MEDIA_MIGRATION = '0137_seo_blog_media_storage.sql';
+const SEO_BLOG_MEDIA_CHECKSUM: string | null = 'ff85dc3ee825e2529333fc8efb0de070a05e43786717d9ae279aa469e41e1255';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -219,6 +221,17 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(MHP_EVENT_PHONE_SIGNUP_MIGRATION) === MHP_EVENT_PHONE_SIGNUP_CHECKSUM
       && applied.get(MHP_WEBINAR_APPLICATIONS_MIGRATION) === MHP_WEBINAR_APPLICATIONS_CHECKSUM) {
     applied.delete(MHP_WEBINAR_APPLICATIONS_MIGRATION);
+  }
+  // The exact136 recovery runtime admits only the independently reviewed
+  // additive SEO137 migration. Every earlier row remains strictly validated.
+  // A release bundling137 takes the strict path and cannot fall back to136.
+  if (SEO_BLOG_MEDIA_CHECKSUM !== null
+      && migrations.length === 136
+      && migrations[135]?.filename === MHP_WEBINAR_APPLICATIONS_MIGRATION
+      && migrations[135]?.checksum === MHP_WEBINAR_APPLICATIONS_CHECKSUM
+      && applied.get(MHP_WEBINAR_APPLICATIONS_MIGRATION) === MHP_WEBINAR_APPLICATIONS_CHECKSUM
+      && applied.get(SEO_BLOG_MEDIA_MIGRATION) === SEO_BLOG_MEDIA_CHECKSUM) {
+    applied.delete(SEO_BLOG_MEDIA_MIGRATION);
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
