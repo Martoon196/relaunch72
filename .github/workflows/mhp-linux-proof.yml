@@ -1,14 +1,10 @@
-name: SEO website exact release proof
-on:
-  push:
-    branches: [codex/r72-website-009b-proof-20261103]
-    paths: [.github/workflows/mhp-linux-proof.yml]
+name: Exact023 isolated PostgreSQL media gates
 permissions:
   contents: read
 jobs:
-  exact-release-gate:
+  isolated-final-pg:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     services:
       postgres:
         image: postgres:18-alpine
@@ -16,48 +12,136 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: local-ci-test-only
           POSTGRES_DB: relaunch72_test
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
+        ports:
+        - 5432:5432
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s
           --health-retries 10
     steps:
-      - name: Model the managed PostgreSQL migration identity
-        env:
-          PG_CONTAINER: ${{ job.services.postgres.id }}
-        run: >-
-          docker exec "$PG_CONTAINER" psql -U postgres -d relaunch72_test -v ON_ERROR_STOP=1
-          -c "CREATE ROLE ci_migrator LOGIN CREATEROLE CREATEDB PASSWORD 'ci-owner-test-only'; ALTER DATABASE relaunch72_test OWNER TO ci_migrator;"
-      - name: Checkout exact reviewed website release
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          repository: Martoon196/relaunch72
-          ref: f0e0403cebfe310ad0a8a0085f7cf5cdea3ea9dd
-          persist-credentials: false
-      - name: Assert exact source identity
-        shell: bash
-        run: |
-          test "$(git rev-parse HEAD)" = f0e0403cebfe310ad0a8a0085f7cf5cdea3ea9dd
-          test "$(git rev-parse 'HEAD^{tree}')" = 8193784235afa9638a827934311f120fa31b8e75
-          test -z "$(git status --porcelain)"
-          git rev-parse HEAD 'HEAD^{tree}'
-      - name: Match Render runtime
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 22.23.4
-      - name: Install exact lockfile
-        run: npm ci --ignore-scripts --include=dev
-      - name: Check supply chain
-        run: node scripts/supply-chain.mjs --check
-      - name: Typecheck whole project
-        run: npm run typecheck
-      - name: Run normal suite
-        run: npm test
-      - name: Run only the targeted real-role PostgreSQL website journey
-        env:
-          TEST_DATABASE_URL: postgresql://ci_migrator:ci-owner-test-only@127.0.0.1:5432/relaunch72_test
-          TEST_DATABASE_RESET_CONFIRM: reset-disposable-branch
-          TEST_DATABASE_SSL_MODE: disable
-          RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
-        run: cd orchestrator && node --import ./test/windows-node24-shim.mjs --import tsx --test --test-concurrency=1 test/db/seo-blog-website.integration.test.ts
+    - name: Checkout exact023 final source
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        repository: Martoon196/relaunch72
+        ref: 2bd32194a3a33d6e43cfa1b29d5b0769598fc137
+        persist-credentials: false
+    - name: Bind source tree parent SQL lock and exact two tests
+      shell: bash
+      run: 'set -euo pipefail
+
+        test "$(git rev-parse HEAD)" = 2bd32194a3a33d6e43cfa1b29d5b0769598fc137
+
+        test "$(git rev-parse HEAD^{tree})" = 1679f413e7ef278ac9dc3c6a2a9ebb29cce51b00
+
+        test "$(git cat-file -p HEAD | sed -n ''s/^parent //p'')" = 0b602df7a6b902ffe27b3bb1f69c2bc6155ffe40
+
+        test -z "$(git status --porcelain)"
+
+        echo ''9bb9b0998d98f4b678b5f7dd026a5f38633eec144b0e20515f647914668c70cc  package-lock.json''
+        | sha256sum --check
+
+        echo ''ff85dc3ee825e2529333fc8efb0de070a05e43786717d9ae279aa469e41e1255  orchestrator/src/db/migrations/0137_seo_blog_media_storage.sql''
+        | sha256sum --check
+
+        echo ''9bf6605cdc536794fae989964542eb8253cdd49ebd995d3e6dd346c01c746139  orchestrator/src/db/migrations/0136_mhp_webinar_applications.sql''
+        | sha256sum --check
+
+        echo ''ecfa83df56db1df9bb4d4876bfd3f188c0a536235b7f24dc79a0abdc21c491f1  orchestrator/test/db/seo-blog-media-engine.integration.test.ts''
+        | sha256sum --check
+
+        echo ''433d298178d1a4eb835427b3c67fce30229512b562f5148e943ddc5f4cba1f5f  orchestrator/test/db/seo-blog-media-storage.integration.test.ts''
+        | sha256sum --check'
+    - name: Match existing runtime
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version: 22.23.4
+    - name: Verify retained exact normal and preservation receipts
+      shell: bash
+      run: 'set -euo pipefail
+
+        printf ''%s'' ''ewogICJzdGF0ZSI6ICJSRVZJRVdFRF9GSU5BTF9TT1VSQ0VfQU5EX0JSSURHRSIsCiAgImJhc2VsaW5lU291cmNlIjogIjhjNjU3ZmFjMjZkMjE5MjJlY2UyMjhiYTUxNjZhYjQ4Yjg5ZjRhZmUiLAogICJiYXNlbGluZVRyZWUiOiAiNzE2NDFkYjQyNzIyZjQ2MjQwYzA2M2I2ZmUwNWJkM2IyNTg2YzNkMCIsCiAgImJyaWRnZVNvdXJjZSI6ICIwYjYwMmRmN2E2YjkwMmZmZTI3YjNiYjFmNjljMmJjNjE1NWZmZTQwIiwKICAiYnJpZGdlVHJlZSI6ICJjMjE3NjUxYTYzMzgwY2NkNTkxZDE3ZDVjNzQ4NDkyYzE5NDI3YmMxIiwKICAic291cmNlIjogIjJiZDMyMTk0YTNhMzNkNmU0M2NmYTFiMjlkNWIwNzY5NTk4ZmMxMzciLAogICJ0cmVlIjogIjE2NzlmNDEzZTdlZjI3OGFjOWRjM2M2YTJhOWViYjI5Y2NlNTFiMDAiLAogICJtaWdyYXRpb25GaWxlbmFtZSI6ICIwMTM3X3Nlb19ibG9nX21lZGlhX3N0b3JhZ2Uuc3FsIiwKICAibWlncmF0aW9uQ2hlY2tzdW0iOiAiZmY4NWRjM2VlODI1ZTI1MjkzMzNmYzhlZmIwZGUwNzBhMDVlNDM3ODY3MTdkOWFlMjc5YWE0NjllNDFlMTI1NSIsCiAgIm1ocDEzNkZpbGVuYW1lIjogIjAxMzZfbWhwX3dlYmluYXJfYXBwbGljYXRpb25zLnNxbCIsCiAgIm1ocDEzNkNoZWNrc3VtIjogIjliZjY2MDVjZGM1MzY3OTRmYWU5ODk5NjQ1NDJlYjgyNTNjZGQ0OWViZDk5NWQzZTZkZDM0NmMwMWM3NDYxMzkiLAogICJzb3VyY2VMb2NrU2hhMjU2IjogIjliYjliMDk5OGQ5OGY0YjY3OGI1ZjdkZDAyNmE1ZjM4NjMzZWVjMTQ0YjBlMjA1MTVmNjQ3OTE0NjY4YzcwY2MiLAogICJiYXNlbGluZUxvY2tTaGEyNTYiOiAiNDdlZGZiOWFjMWYyNWZlYzBhM2I5OTM0NjMyMDMzZGVmNTIwNTlkMTMyNWM4NWJmMjcxNjcwOGFlM2I2ZmNjZCIsCiAgImJyaWRnZUxvY2tTaGEyNTYiOiAiNDdlZGZiOWFjMWYyNWZlYzBhM2I5OTM0NjMyMDMzZGVmNTIwNTlkMTMyNWM4NWJmMjcxNjcwOGFlM2I2ZmNjZCIsCiAgInNvdXJjZUZpbGVzIjogewogICAgIm9yY2hlc3RyYXRvci90ZXN0L2RiL3Nlby1ibG9nLW1lZGlhLXN0b3JhZ2UuaW50ZWdyYXRpb24udGVzdC50cyI6ICI0MzNkMjk4MTc4ZDFhNGViODM1NDI3YjNjNjdmY2UzMDIyOTUxMmI1NjJmNTE0OGU5NDNkZGM1ZjRjYmExZjVmIiwKICAgICJvcmNoZXN0cmF0b3IvdGVzdC9kYi9zZW8tYmxvZy1tZWRpYS1lbmdpbmUuaW50ZWdyYXRpb24udGVzdC50cyI6ICJlY2ZhODNkZjU2ZGIxZGY5YmI0ZDQ4NzZiZmQzZjE4OGMwYTUzNjIzNWI3ZjI0ZGM3OWEwYWJkYzIxYzQ5MWYxIgogIH0sCiAgInJldmlld0JyYW5jaCI6ICJjb2RleC9yNzItc2VvMTM3LWNhcGFibGUtdjMtMjAyNjExMDMiLAogICJoZWxwZXJCcmFuY2giOiAiY29kZXgvcjcyLW1lZGlhLTEzNy1pc29sYXRlZC12NC1wcm9vZi0yMDI2MTEwMyIsCiAgIm5vcm1hbE5vZGVWZXJzaW9uIjogIjIyLjIzLjQiLAogICJleHBlY3RlZE1lZGlhVGVzdHMiOiAzLAogICJwcm92aWRlckNhbGxzIjogZmFsc2UsCiAgInByb2R1Y3Rpb25DcmVkZW50aWFscyI6IGZhbHNlLAogICJub3RlIjogIlNvdXJjZS90cmVlL3Rlc3QvbG9jayBoYXNoZXMgZGVsaWJlcmF0ZWx5IHVuc2V0IHVudGlsIFJvb3QgZnJlZXplcyByZWNvbmNpbGVkIGNhcGFibGUgc291cmNlOyBnZW5lcmF0b3IgcmVmdXNlcyBydW5uYWJsZSB3b3JrZmxvdy4gTm8gQVBJIGRpc3BhdGNoIG9yIGRlcGxveW1lbnQgY2FwYWJpbGl0eS4iLAogICJvbmx5Q2hhbmdlc0Zyb20wMjIiOiBbCiAgICAib3JjaGVzdHJhdG9yL3Rlc3QvZGIvc2VvLWJsb2ctbWVkaWEtZW5naW5lLmludGVncmF0aW9uLnRlc3QudHMiLAogICAgIm9yY2hlc3RyYXRvci90ZXN0L2RiL3Nlby1ibG9nLW1lZGlhLXN0b3JhZ2UuaW50ZWdyYXRpb24udGVzdC50cyIKICBdLAogICJydW50aW1lU3FsTG9ja01ocFJvbGVzVW5jaGFuZ2VkRnJvbTAyMiI6IHRydWUsCiAgInJldGFpbmVkUHJlc2VydmF0aW9uIjogewogICAgImZpbGUiOiAiLi4vbWVkaWEtMTM3LXBnLXY1LXByb29mLTIwMjYxMTAzL3ByZXNlcnZhdGlvbi1zdWNjZXNzLmpzb24iLAogICAgInNoYTI1NiI6ICIxNGY2OWNlY2JjZWNlZTc0MWQ1ZTI0Yjg2MzAxY2YxODNhMzVlZDI3YWNlMWFkYWNmMjE5NDFjYWYwZmJmMGI4IiwKICAgICJydW4iOiA0MTcxNzM2MjMwNywKICAgICJqb2IiOiAxMjYyMDA3ODMxMTgsCiAgICAic291cmNlIjogIjAyMmM3YzM4NTQ4MGU1MjBkZDg5Y2FhMTg0YWI2Y2YwY2M1MDA3ZDEiCiAgfSwKICAicm9vdFNvdXJjZU1hbmlmZXN0U2hhMjU2IjogImI1ZmQzNDU4YmEyNWRhNjE2YTExZDk1ZWZhMDAxZmRjNjc0MTQ3NzIyNGZhYjA2N2ZlZmJlMzUxMTE4NDBmYjgiLAogICJyZXZpZXciOiAiQXN0cmEwMjMgZXhhY3Qtc291cmNlL2hhc2ggYW5kIFJvb3QgYmluZGluZyByZXZpZXc7IGZyZXNoIGV4YWN0IG5vcm1hbCtzZXJpYWxQRywgcmV0YWluZWQgYnl0ZS1pZGVudGljYWwgcnVudGltZS9TUUwyOTN0YWJsZSBwcmVzZXJ2YXRpb24sIGlzb2xhdGVkIENJIG9ubHkuIiwKICAiY29udHJvbEZpbmRpbmciOiAiQ09OVFJPTC1JU09MQVRJT04tMDI0IiwKICAicmV0YWluZWROb3JtYWwiOiB7CiAgICAiZmlsZSI6ICIuLi9tZWRpYS0xMzctZmluYWwtdjMtcHJvb2YtMjAyNjExMDMvbm9ybWFsLWdhdGUtc3VjY2Vzcy5qc29uIiwKICAgICJzaGEyNTYiOiAiY2Y4YzJiYThkNTNmZGI2NDIxMDMwY2YzOWE2ZmM1NDc2ZGVkYjZjZDA1NWJlYmYzNTA0ZmU0MTIwNzkxZjJkNCIsCiAgICAicnVuIjogNDE3MjAwNTIwODIsCiAgICAiam9iIjogMTI2MjEwMTI4MDU4CiAgfQp9Cg==''
+        | base64 -d > /tmp/r72-media-137-manifest.json
+
+        echo ''555644b8cb88441a43e0801d9856f73cd852a8507227d02353b08394456939b1  /tmp/r72-media-137-manifest.json''
+        | sha256sum --check
+
+        printf ''%s'' ''ewogICJydW4iOiA0MTcyMDA1MjA4MiwKICAiam9iIjogMTI2MjEwMTI4MDU4LAogICJyYXdMb2dTaGEyNTYiOiAiODgxMjc0ZDk2YTExOTNlMzc3NDFiMTQ2NWM1YWI3NzE2MzJiN2Y4NGEyY2Y2MDdhM2ZmYTY3ZjY0ZmE1OGYxMCIsCiAgInJlY2VpcHQiOiB7CiAgICAicHJvb2YiOiAiZXhhY3Qtbm9ybWFsLXJlY2VpcHQiLAogICAgInNvdXJjZSI6ICIyYmQzMjE5NGEzYTMzZDZlNDNjZmExYjI5ZDViMDc2OTU5OGZjMTM3IiwKICAgICJ0cmVlIjogIjE2NzlmNDEzZTdlZjI3OGFjOWRjM2M2YTJhOWViYjI5Y2NlNTFiMDAiLAogICAgIm5vZGUiOiAiMjIuMjMuNCIsCiAgICAibG9ja1NoYTI1NiI6ICI5YmI5YjA5OThkOThmNGI2NzhiNWY3ZGQwMjZhNWYzODYzM2VlYzE0NGIwZTIwNTE1ZjY0NzkxNDY2OGM3MGNjIiwKICAgICJucG1DaSI6ICJQQVNTIiwKICAgICJ3aG9sZVR5cGVTY3JpcHQiOiAiUEFTUyIsCiAgICAic2JvbSI6ICJQQVNTIiwKICAgICJub3JtYWxUZXN0cyI6IHsKICAgICAgInRlc3RzIjogNDA3NCwKICAgICAgInBhc3MiOiA0MDIxLAogICAgICAiZmFpbCI6IDAsCiAgICAgICJza2lwcGVkIjogNTMsCiAgICAgICJjYW5jZWxsZWQiOiAwCiAgICB9LAogICAgInByb3ZpZGVyQ2FsbHMiOiAwLAogICAgInByb2R1Y3Rpb25DcmVkZW50aWFscyI6IGZhbHNlCiAgfQp9Cg==''
+        | base64 -d > /tmp/retainedNormal.json
+
+        echo ''cf8c2ba8d53fdb6421030cf39a6fc5476dedb6cd055bebf3504fe4120791f2d4  /tmp/retainedNormal.json''
+        | sha256sum --check
+
+        printf ''%s'' ''ew0KICAic3RhdGUiOiAiUE9QVUxBVEVEMTM2X1RPMTM3X1BSRVNFUlZBVElPTl9QQVNTX0ZJTkFMX01FRElBX1RFU1RTX0ZBSUxFRCIsDQogICJzb3VyY2UiOiAiMDIyYzdjMzg1NDgwZTUyMGRkODljYWExODRhYjZjZjBjYzUwMDdkMSIsDQogICJ0cmVlIjogIjY2MmJkYTI2MDNmMGVmYjI5YjFmZjI4ZGYyOWE4MjM4YmVjYjNkNTkiLA0KICAicnVuIjogNDE3MTczNjIzMDcsDQogICJqb2IiOiAxMjYyMDA3ODMxMTgsDQogICJyYXdMb2dTaGEyNTYiOiAiNmIyYjkyNzJmZTY2NWI5ZDdmYjM5M2EyZWU5MTI2ZGU1NmFmYWQzMGE2NzVhZGNjNDljMWNkMzhmYTM0ODEzMCIsDQogICJyZWNlaXB0cyI6IFsNCiAgICB7DQogICAgICAicHJvb2YiOiAicG9wdWxhdGVkMTM2LWJlZm9yZTEzNyIsDQogICAgICAic291cmNlIjogIjAyMmM3YzM4NTQ4MGU1MjBkZDg5Y2FhMTg0YWI2Y2YwY2M1MDA3ZDEiLA0KICAgICAgIm1pZ3JhdGlvbkNvdW50IjogMTM2LA0KICAgICAgImV4aXN0aW5nVGFibGVzIjogMjkzLA0KICAgICAgInBvcHVsYXRlZFRhYmxlcyI6IDU0LA0KICAgICAgIm9sZFJvd3MiOiA0NDUsDQogICAgICAiYnJpZGdlUmVhZGVycyI6IHsNCiAgICAgICAgImFsbG93ZWQiOiBbDQogICAgICAgICAgInI3Ml93ZWIiLA0KICAgICAgICAgICJyNzJfb3duZWRfc29jaWFsX3dvcmtlcl9jb21tYW5kIiwNCiAgICAgICAgICAicjcyX3plcm5pb19zb2NpYWxfY29tbWFuZCIsDQogICAgICAgICAgInI3Ml9zbXNfd29ya2VyX2NvbW1hbmQiLA0KICAgICAgICAgICJyNzJfc21zX3dlYmhvb2tfY29tbWFuZCINCiAgICAgICAgXSwNCiAgICAgICAgImRlbmllZCI6IFsNCiAgICAgICAgICAicjcyX2NvbnRlbnRfY29tbWFuZCIsDQogICAgICAgICAgInI3Ml9jb250ZW50X2FkYXB0ZXIiDQogICAgICAgIF0NCiAgICAgIH0sDQogICAgICAicHJvdmlkZXJDYWxscyI6IDAsDQogICAgICAicHJvZHVjdGlvbkNyZWRlbnRpYWxzIjogZmFsc2UNCiAgICB9LA0KICAgIHsNCiAgICAgICJtaHBQcmVzZXJ2ZWQiOiB7DQogICAgICAgICJvd25lclJlYWQiOiB0cnVlLA0KICAgICAgICAiZm9yZWlnbkF1ZGllbmNlRGVuaWVkIjogdHJ1ZSwNCiAgICAgICAgImRpcmVjdFRhYmxlc0RlbmllZCI6IHRydWUsDQogICAgICAgICJxdWV1ZVdyaXRlRGVuaWVkIjogdHJ1ZSwNCiAgICAgICAgInNlcnZpY2Vfc2lnbnVwcyI6IDIsDQogICAgICAgICJzZXJ2aWNlX3Jvd3MiOiA0LA0KICAgICAgICAibWFya2V0aW5nX3Jvd3MiOiA1LA0KICAgICAgICAiYXBwbGljYXRpb25fcm93cyI6IDIsDQogICAgICAgICJhcHBsaWNhdGlvbnMiOiAxLA0KICAgICAgICAiZXZlbnRzIjogMQ0KICAgICAgfSwNCiAgICAgICJwcm9vZiI6ICJwb3B1bGF0ZWQxMzYtdG8xMzctcHJlc2VydmVkIiwNCiAgICAgICJzb3VyY2UiOiAiMDIyYzdjMzg1NDgwZTUyMGRkODljYWExODRhYjZjZjBjYzUwMDdkMSIsDQogICAgICAic3FsIjogImZmODVkYzNlZTgyNWUyNTI5MzMzZmM4ZWZiMGRlMDcwYTA1ZTQzNzg2NzE3ZDlhZTI3OWFhNDY5ZTQxZTEyNTUiLA0KICAgICAgIm1pZ3JhdGlvbkNvdW50IjogMTM3LA0KICAgICAgInByZXNlcnZlZFRhYmxlcyI6IDI5MywNCiAgICAgICJwcmVzZXJ2ZWRSb3dzIjogNDQ1LA0KICAgICAgInNhbWVJbnN0YWxsYXRpb24iOiB0cnVlLA0KICAgICAgImV4aXN0aW5nUnVudGltZVRhYmxlUHJpdmlsZWdlc1VuY2hhbmdlZCI6IHRydWUsDQogICAgICAiYnJpZGdlUmVhZGVycyI6IHsNCiAgICAgICAgImFsbG93ZWQiOiBbDQogICAgICAgICAgInI3Ml93ZWIiLA0KICAgICAgICAgICJyNzJfb3duZWRfc29jaWFsX3dvcmtlcl9jb21tYW5kIiwNCiAgICAgICAgICAicjcyX3plcm5pb19zb2NpYWxfY29tbWFuZCIsDQogICAgICAgICAgInI3Ml9zbXNfd29ya2VyX2NvbW1hbmQiLA0KICAgICAgICAgICJyNzJfc21zX3dlYmhvb2tfY29tbWFuZCINCiAgICAgICAgXSwNCiAgICAgICAgImRlbmllZCI6IFsNCiAgICAgICAgICAicjcyX2NvbnRlbnRfY29tbWFuZCIsDQogICAgICAgICAgInI3Ml9jb250ZW50X2FkYXB0ZXIiDQogICAgICAgIF0NCiAgICAgIH0sDQogICAgICAiaW1hZ2VQb2xpY3lEaXNhYmxlZCI6IHRydWUsDQogICAgICAicHJvdmlkZXJDYWxscyI6IDAsDQogICAgICAicHJvZHVjdGlvbkNyZWRlbnRpYWxzIjogZmFsc2UNCiAgICB9DQogIF0sDQogICJvcmRpbmFyeU1pZ3JhdGlvbiI6ICJQQVNTMWFwcGxpZWQxMzZjdXJyZW50IiwNCiAgImRiQ2hlY2siOiAiUEFTUyIsDQogICJleGFjdEZpbmFsUGdGaWxlcyI6IHsNCiAgICAicGFzcyI6IDEsDQogICAgImZhaWwiOiAyLA0KICAgICJza2lwIjogMCwNCiAgICAicmVnaXN0ZXJlZCI6IDMNCiAgfSwNCiAgImZhaWx1cmVzIjogWw0KICAgICJlbmdpbmUgZml4dHVyZSBVUERBVEVpbW11dGFibGVhcnRpY2xldmVyc2lvbjQyNTAxIiwNCiAgICAic3RvcmFnZSBmaXh0dXJlIGFjY291bnRkaXNjb3Zlcnl1bmNvbmZpZ3VyZWQiDQogIF0sDQogICJwcm9kdWN0aW9uRWZmZWN0cyI6IGZhbHNlLA0KICAibm9ybWFsR2F0ZVJldGFpbmVkIjogIjQwMjEvMC81MyBvbiBleGFjdDAyMiINCn0NCg==''
+        | base64 -d > /tmp/retainedPreservation.json
+
+        echo ''14f69cecbcecee741d5e24b86301cf183a35ed27ace1adacf21941caf0fbf0b8  /tmp/retainedPreservation.json''
+        | sha256sum --check'
+    - name: Install exact dependencies once
+      run: npm ci --ignore-scripts --include=dev
+    - name: Create non-super disposable migration identity
+      shell: bash
+      env:
+        PG_CONTAINER: ${{ job.services.postgres.id }}
+      run: 'set -euo pipefail
+
+        docker exec "$PG_CONTAINER" psql -U postgres -d relaunch72_test -v ON_ERROR_STOP=1
+        -c "CREATE ROLE ci_migrator LOGIN NOSUPERUSER NOBYPASSRLS CREATEROLE CREATEDB
+        PASSWORD ''ci-owner-test-only''; ALTER DATABASE relaunch72_test OWNER TO ci_migrator;"
+
+        {
+
+        echo ''TEST_DATABASE_URL=postgresql://ci_migrator:ci-owner-test-only@127.0.0.1:5432/relaunch72_test''
+
+        echo ''TEST_DATABASE_RESET_CONFIRM=reset-disposable-branch''
+
+        echo ''TEST_DATABASE_SSL_MODE=disable''
+
+        echo ''RELAUNCH72_DATABASE_INTEGRATION=explicit-disposable-run''
+
+        echo ''DATABASE_MIGRATOR_URL=postgresql://ci_migrator:ci-owner-test-only@127.0.0.1:5432/relaunch72_test''
+
+        echo ''DATABASE_SSL_MODE=disable''
+
+        echo ''NODE_ENV=development''
+
+        } >> "$GITHUB_ENV"'
+    - name: Run unchanged media file against own fresh PG18 cluster
+      shell: bash
+      env:
+        TEST_FILE: ${{ matrix.file }}
+        EXPECTED_TESTS: ${{ matrix.expected }}
+      run: 'set -euo pipefail
+
+        cd orchestrator
+
+        node --import ./test/windows-node24-shim.mjs --import tsx --test --test-reporter=tap
+        --test-concurrency=1 "$TEST_FILE" 2>&1 | tee /tmp/r72-media-137-isolated-pg.log
+
+        grep -qx "# tests $EXPECTED_TESTS" /tmp/r72-media-137-isolated-pg.log
+
+        grep -qx "# pass $EXPECTED_TESTS" /tmp/r72-media-137-isolated-pg.log
+
+        grep -qx ''# fail 0'' /tmp/r72-media-137-isolated-pg.log
+
+        grep -qx ''# skipped 0'' /tmp/r72-media-137-isolated-pg.log
+
+        grep -qx ''# cancelled 0'' /tmp/r72-media-137-isolated-pg.log
+
+        node --input-type=module -e ''console.log(JSON.stringify({proof:"isolated-final-pg",source:"2bd32194a3a33d6e43cfa1b29d5b0769598fc137",tree:"1679f413e7ef278ac9dc3c6a2a9ebb29cce51b00",file:process.env.TEST_FILE,pass:Number(process.env.EXPECTED_TESTS),fail:0,skipped:0,cancelled:0,productionCredentials:false,providerCalls:0}))''
+
+        '
+    name: Exact023 PG ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - name: engine
+          file: test/db/seo-blog-media-engine.integration.test.ts
+          expected: 1
+        - name: storage
+          file: test/db/seo-blog-media-storage.integration.test.ts
+          expected: 2
+'on':
+  push:
+    branches:
+    - codex/r72-media-137-isolated-v4-proof-20261103
+    paths:
+    - .github/workflows/mhp-linux-proof.yml
