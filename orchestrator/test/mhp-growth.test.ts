@@ -5,7 +5,7 @@ import {
   parseMhpStory, verifyMhpUnsubscribeToken, type MhpApplication, type MhpApplicationRecord, type MhpClaimedSend, type MhpSignup,
 } from '../src/mhp/growth-service.js';
 import { createMhpMarketingSender, mhpMarketingConfig, renderMhpMarketingEmail } from '../src/mhp/marketing-mail.js';
-import { hqApplicationsPage, hqGrowthPage } from '../src/mhp/growth-view.js';
+import { hqApplicationsPage, hqGrowthPage, hqRegistrantsPage, registrantsCsv } from '../src/mhp/growth-view.js';
 import { MHP_MARKETING_TEMPLATES } from '../src/mhp/marketing-templates.js';
 import { renderMhpMarkdown } from '../src/mhp/markdown.js';
 import { parseMhpCourseBundle, MhpLearningError } from '../src/mhp/learning-service.js';
@@ -19,7 +19,7 @@ const webinar = mhpWebinarConfig({});
 test('site sign-up fields map to a normalised webinar, sheet or waitlist sign-up', () => {
   const signup = parseMhpSignup(form(webinarForm)) as MhpSignup;
   assert.deepEqual({ ...signup }, { email: 'alex@example.com', firstName: 'Alex', level: 'L2', consent: true, kind: 'webinar',
-    label: 'Webinar 4 November', module: 'Module 1', link: 'https://martinhowardproperty.co.uk/webinar/' });
+    label: 'Webinar 4 November', module: 'Module 1', link: 'https://martinhowardproperty.co.uk/webinar/', phone: null });
   const sheet = parseMhpSignup(form({ ...webinarForm, CHEATSHEET: 'The HMO Checklist, Wales First', CHEATSHEET_LINK: 'https://martinhowardproperty.co.uk/cheat-sheets/12/' })) as MhpSignup;
   assert.equal(sheet.kind, 'sheet');
   const wait = parseMhpSignup(form({ ...webinarForm, CHEATSHEET: 'Course waitlist', CHEATSHEET_LINK: 'https://martinhowardproperty.co.uk/join/' })) as MhpSignup;
@@ -253,4 +253,26 @@ test('multipart reader returns named parts and rejects duplicates', () => {
   assert.equal(parts.get('bundle')?.toString(), '{"a":1}');
   const twice = Buffer.from([`--${boundary}`, 'Content-Disposition: form-data; name="csrf"', '', 'a', `--${boundary}`, 'Content-Disposition: form-data; name="csrf"', '', 'b', `--${boundary}--`].join('\r\n'));
   assert.throws(() => parseMultipart(twice, `multipart/form-data; boundary=${boundary}`));
+});
+
+test('webinar sign-up keeps an optional mobile number and drops a malformed one', () => {
+  assert.equal((parseMhpSignup(form({ ...webinarForm, PHONE: '07700 900123' })) as MhpSignup).phone, '07700 900123');
+  assert.equal((parseMhpSignup(form({ ...webinarForm, PHONE: '+44 (0)7700-900123' })) as MhpSignup).phone, '+44 (0)7700-900123');
+  assert.equal((parseMhpSignup(form({ ...webinarForm, PHONE: 'call me' })) as MhpSignup).phone, null);
+  assert.equal((parseMhpSignup(form({ ...webinarForm, PHONE: '12' })) as MhpSignup).phone, null);
+  assert.equal((parseMhpSignup(form(webinarForm)) as MhpSignup).phone, null);
+});
+
+test('registrants page and CSV list sign-ups, escape values and defuse spreadsheet formulas', () => {
+  const r = { id: '00000000-0000-4000-8000-000000000001', firstName: '=HYPERLINK("x")', email: 'a@example.com', phone: '07700 900123', level: 'L1',
+    marketingConsent: true, unsubscribed: false, firstSeenAt: '2026-11-03T10:00:00Z', lastSignupAt: '2026-11-03T10:00:00Z',
+    signups: ['Webinar 4 November'], webinar: true, applied: false };
+  const html = hqRegistrantsPage([r]);
+  assert.match(html, /07700 900123/);
+  assert.match(html, /=HYPERLINK\(&quot;x&quot;\)/);
+  assert.match(html, /href="\/hq\/registrants\?format=csv"/);
+  assert.match(hqRegistrantsPage([]), /No sign-ups yet/);
+  const csv = registrantsCsv([r]);
+  assert.ok(csv.startsWith('\ufeffLatest sign-up (UTC),First name,Email,Mobile,'));
+  assert.match(csv, /"'=HYPERLINK\(""x""\)",a@example\.com,07700 900123,Webinar 4 November,Yes,No,No,L1,/);
 });

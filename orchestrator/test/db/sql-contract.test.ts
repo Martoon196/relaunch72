@@ -841,7 +841,8 @@ test('0124 keeps applications and event counts behind definer functions', async 
   assert.doesNotMatch(sql, /SECURITY DEFINER(?! SET search_path=pg_catalog)/);
   assert.match(sql, /CHECK\(kind IN\('sheet','webinar','waitlist','application','diagnostic'\)\)/);
   assert.match(sql, /template_key IN\('webinar_followup','webinar_90days','webinar_casestudy'\)/);
-  assert.match(sql, /app_private\.mhp_record_event\(text,text\) TO r72_identity_command/);
+  assert.match(sql, /app_private\.mhp_record_event\(text,text\), app_private\.mhp_set_prospect_phone\(text,text\) TO r72_identity_command/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.mhp_list_registrants\(bytea\) TO r72_web/);
   assert.match(sql, /GRANT EXECUTE ON FUNCTION app_private\.mhp_list_applications\(bytea\) TO r72_web/);
   // No identifiers in the funnel counters.
   assert.doesNotMatch(/CREATE TABLE app_private\.mhp_event_counts \(([^;]*)\);/.exec(sql)?.[1] ?? 'missing', /source_hash|email|prospect|user_id|\bip\b/);

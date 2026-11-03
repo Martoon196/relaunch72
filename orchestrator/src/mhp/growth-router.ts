@@ -8,11 +8,11 @@ import { MHP_SITE_ORIGIN, MhpGrowthError, parseMhpApplication, parseMhpEvent, pa
   type PgMhpGrowthService } from './growth-service.js';
 import { MhpLearningError, parseMhpCourseBundle, type PgMhpLearningService } from './learning-service.js';
 import { learnHomePage, learnLessonPage, learnModulePage } from './learning-view.js';
-import { hqApplicationsPage, hqCoursePage, hqGrowthPage, publicMessagePage, unsubscribeConfirmPage } from './growth-view.js';
+import { hqApplicationsPage, hqCoursePage, hqGrowthPage, hqRegistrantsPage, registrantsCsv, publicMessagePage, unsubscribeConfirmPage } from './growth-view.js';
 
 export interface MhpGrowthRouterDependencies {
   portal: PostgresPortalDeps;
-  growth: Pick<PgMhpGrowthService, 'capture' | 'story' | 'unsubscribe' | 'summary' | 'apply' | 'event' | 'listApplications'>;
+  growth: Pick<PgMhpGrowthService, 'capture' | 'story' | 'unsubscribe' | 'summary' | 'apply' | 'event' | 'listApplications' | 'listRegistrants'>;
   learning: Pick<PgMhpLearningService, 'outline' | 'content' | 'saveProgress' | 'importCourse'>;
   unsubscribeSecret: string;
   marketingMode: string;
@@ -74,7 +74,7 @@ export function parseMultipart(body: Buffer, contentType: string): Map<string, B
 
 const LEARN = /^\/app\/learn(?:\/([0-9]{2})(?:\/([0-9]{2}))?)?$/;
 const known = (path: string): boolean => path === '/api/mhp/subscribe' || path === '/api/mhp/story' || path === '/api/mhp/apply'
-  || path === '/email/unsubscribe' || path === '/hq/growth' || path === '/hq/course' || path === '/hq/applications' || LEARN.test(path);
+  || path === '/email/unsubscribe' || path === '/hq/growth' || path === '/hq/course' || path === '/hq/applications' || path === '/hq/registrants' || LEARN.test(path);
 
 /**
  * Cookieless page-event beacon from the site (navigator.sendBeacon). Always 204,
@@ -180,6 +180,17 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
     if (path === '/hq/applications') {
       if (method !== 'GET') throw new HttpError(405, 'Use the controls in HQ.');
       send(res, 200, hqApplicationsPage(await deps.growth.listApplications(token))); return true;
+    }
+    if (path === '/hq/registrants') {
+      if (method !== 'GET') throw new HttpError(405, 'Use the controls in HQ.');
+      const registrants = await deps.growth.listRegistrants(token);
+      if (url.searchParams.get('format') === 'csv') {
+        const csv = registrantsCsv(registrants);
+        res.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="mhp-registrants.csv"',
+          'cache-control': 'no-store', 'content-length': String(Buffer.byteLength(csv)), 'referrer-policy': 'same-origin', 'x-content-type-options': 'nosniff' });
+        res.end(csv); return true;
+      }
+      send(res, 200, hqRegistrantsPage(registrants)); return true;
     }
     if (path === '/hq/course') {
       if (method === 'GET') {

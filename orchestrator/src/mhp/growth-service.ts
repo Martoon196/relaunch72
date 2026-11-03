@@ -21,6 +21,8 @@ export interface MhpApplicationConfig { notifyTo: string; bookingUrl: string | n
 export interface MhpSignup {
   email: string; firstName: string | null; level: 'L1' | 'L2' | 'L3' | null; consent: boolean;
   kind: 'sheet' | 'webinar' | 'waitlist'; label: string; module: string | null; link: string | null;
+  /** Optional mobile number; malformed numbers are dropped rather than refused. */
+  phone?: string | null;
 }
 export interface MhpClaimedSend {
   id: string; prospectId: string; template: string; campaign: string; context: Record<string, unknown>;
@@ -44,6 +46,10 @@ export interface MhpApplication {
 export interface MhpApplicationRecord {
   id: string; name: string; email: string; phone: string | null; location: string; experience: string; door: string; hours: string;
   objective: string; obstacle: string; support: string; discuss: boolean; marketingConsent: boolean; source: string; status: string; createdAt: string;
+}
+export interface MhpRegistrantRecord {
+  id: string; firstName: string | null; email: string; phone: string | null; level: string | null; marketingConsent: boolean; unsubscribed: boolean;
+  firstSeenAt: string; lastSignupAt: string; signups: string[]; webinar: boolean; applied: boolean;
 }
 export interface MhpGrowthSummary {
   prospects: number; unsubscribed: number; signupsToday: number;
@@ -94,7 +100,9 @@ export function parseMhpSignup(fields: URLSearchParams): MhpSignup | 'honeypot' 
   // and only adds marketing consent.
   const consent = fields.get('OPT_IN') === '1' || fields.get('OPT_IN') === 'on' || fields.get('OPT_IN') === 'true';
   if (!consent && kind !== 'webinar') throw new MhpGrowthError(400, 'Tick the box so we can email you.');
-  return { email, firstName, level, consent, kind, label, module, link };
+  const rawPhone = (fields.get('PHONE') ?? '').replace(/\s+/g, ' ').trim();
+  const phone = /^[0-9 +()-]{6,30}$/.test(rawPhone) && (rawPhone.match(/[0-9]/g) ?? []).length >= 6 ? rawPhone : null;
+  return { email, firstName, level, consent, kind, label, module, link, phone };
 }
 
 export function mhpWebinarConfig(env: NodeJS.ProcessEnv): MhpWebinarConfig {
@@ -283,6 +291,18 @@ export class PgMhpGrowthService {
     }
   }
 
+  async listRegistrants(token: string): Promise<MhpRegistrantRecord[]> {
+    try {
+      const result = await this.readPool.query<{ registrants: MhpRegistrantRecord[] }>('SELECT app_private.mhp_list_registrants($1) AS registrants', [sessionHash(token)]);
+      const registrants = result.rows[0]?.registrants;
+      return Array.isArray(registrants) ? registrants : [];
+    } catch (error) {
+      if (error instanceof MhpGrowthError) throw error;
+      if ((error as { code?: string })?.code === '42501') throw new MhpGrowthError(403, 'Owner access is required for HQ.');
+      throw new MhpGrowthError(503, 'Registrants could not load.');
+    }
+  }
+
   async capture(signup: MhpSignup, sourceHash: Buffer | null, now = Date.now()): Promise<{ prospectId: string; queued: number }> {
     const schedule = mhpSchedule(signup, this.webinar, now);
     try {
@@ -292,6 +312,10 @@ export class PgMhpGrowthService {
           signup.module, signup.link, sourceHash?.length === 32 ? sourceHash : null, JSON.stringify(schedule)]);
       const outcome = result.rows[0]?.outcome;
       if (!outcome || !UUID.test(outcome.prospectId)) throw new MhpGrowthError(503, 'Sign-up is temporarily unavailable.');
+      if (signup.phone) {
+        // The sign-up already succeeded; a phone that can't be stored never fails it.
+        try { await this.commandPool.query('SELECT app_private.mhp_set_prospect_phone($1,$2)', [signup.email, signup.phone]); } catch { /* keep the sign-up */ }
+      }
       return outcome;
     } catch (error) {
       if (error instanceof MhpGrowthError) throw error;

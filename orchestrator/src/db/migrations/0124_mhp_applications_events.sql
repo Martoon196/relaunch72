@@ -16,6 +16,10 @@ SET LOCAL ROLE r72_owner;
 ALTER TABLE app_private.mhp_prospect_signups DROP CONSTRAINT mhp_prospect_signups_kind_check;
 ALTER TABLE app_private.mhp_prospect_signups ADD CONSTRAINT mhp_prospect_signups_kind_check CHECK(kind IN('sheet','webinar','waitlist','application','diagnostic'));
 
+-- Optional mobile number from the webinar form, for a reminder by text or
+-- WhatsApp and the replay link. Never required; the latest number given wins.
+ALTER TABLE app_private.mhp_prospects ADD COLUMN phone text CHECK(phone IS NULL OR (length(phone) BETWEEN 6 AND 30 AND phone ~ '^[0-9 +()-]+$'));
+
 -- One row per application; a prospect may apply more than once. No savings or
 -- bank balances are collected.
 CREATE TABLE app_private.mhp_applications (
@@ -134,6 +138,37 @@ BEGIN
   FROM (SELECT * FROM app_private.mhp_applications ORDER BY created_at DESC,id LIMIT 200) a JOIN app_private.mhp_prospects p ON p.id=a.prospect_id),'[]'::jsonb);
 END $f$;
 
+-- Owner-only list of the latest 2000 people who signed up, newest first, with what
+-- they signed up for and whether they have applied. For contacting registrants
+-- about what they asked for; marketing only where marketingConsent is true.
+CREATE FUNCTION app_private.mhp_list_registrants(p_session bytea) RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE actor uuid;
+BEGIN
+ SELECT s.user_id INTO actor FROM app_private.resolve_session(p_session) s JOIN app.user_sessions us ON us.id=s.session_id
+ WHERE us.product_audience='martin_howard_property';
+ IF actor IS NULL OR NOT app_private.mhp_is_programme_admin(actor) THEN RAISE EXCEPTION 'MHP administration required' USING ERRCODE='42501'; END IF;
+ RETURN COALESCE((SELECT jsonb_agg(jsonb_build_object('id',p.id,'firstName',p.first_name,'email',p.email::text,'phone',p.phone,'level',p.level,
+   'marketingConsent',p.marketing_consent,'unsubscribed',p.unsubscribed_at IS NOT NULL,'firstSeenAt',p.created_at,
+   'lastSignupAt',x.last_at,'signups',x.labels,
+   'webinar',x.webinar,'applied',EXISTS(SELECT 1 FROM app_private.mhp_applications a WHERE a.prospect_id=p.id)) ORDER BY x.last_at DESC,p.id)
+  FROM app_private.mhp_prospects p
+  JOIN LATERAL (SELECT max(g.created_at) AS last_at, bool_or(g.kind='webinar') AS webinar,
+                       jsonb_agg(DISTINCT g.label) AS labels
+                FROM app_private.mhp_prospect_signups g WHERE g.prospect_id=p.id) x ON x.last_at IS NOT NULL
+  WHERE p.id IN (SELECT g2.prospect_id FROM app_private.mhp_prospect_signups g2 GROUP BY g2.prospect_id ORDER BY max(g2.created_at) DESC LIMIT 2000)),'[]'::jsonb);
+END $f$;
+
+-- Stores the optional mobile number given with a sign-up. Called straight after
+-- mhp_capture_signup for the same email; an unknown email changes nothing.
+CREATE FUNCTION app_private.mhp_set_prospect_phone(p_email text,p_phone text) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
+BEGIN
+ IF p_phone IS NULL OR length(p_phone) NOT BETWEEN 6 AND 30 OR p_phone !~ '^[0-9 +()-]+$' THEN RETURN false; END IF;
+ UPDATE app_private.mhp_prospects SET phone=p_phone,updated_at=clock_timestamp() WHERE email::text=lower(btrim(p_email));
+ RETURN FOUND;
+END $f$;
+
 -- One cookieless page event, counted per UTC day. Unknown names or paths are
 -- ignored rather than raised: the public beacon always gets a 204.
 CREATE FUNCTION app_private.mhp_record_event(p_name text,p_path text) RETURNS boolean
@@ -226,13 +261,17 @@ REVOKE CREATE ON SCHEMA app_private FROM r72_mhp_prospect_definer;
 REVOKE ALL ON FUNCTION
  app_private.mhp_record_application(text,text,text,text,text,text,text,text,text,text,boolean,boolean,boolean,text,text,bytea,text),
  app_private.mhp_list_applications(bytea),
+ app_private.mhp_list_registrants(bytea),
+ app_private.mhp_set_prospect_phone(text,text),
  app_private.mhp_record_event(text,text),
  app_private.mhp_claim_marketing_sends(integer,integer,text[]),
  app_private.mhp_growth_summary(bytea)
 FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION
  app_private.mhp_record_application(text,text,text,text,text,text,text,text,text,text,boolean,boolean,boolean,text,text,bytea,text),
- app_private.mhp_record_event(text,text)
+ app_private.mhp_record_event(text,text),
+ app_private.mhp_set_prospect_phone(text,text)
 TO r72_identity_command;
 GRANT EXECUTE ON FUNCTION app_private.mhp_list_applications(bytea) TO r72_web;
+GRANT EXECUTE ON FUNCTION app_private.mhp_list_registrants(bytea) TO r72_web;
 RESET ROLE;

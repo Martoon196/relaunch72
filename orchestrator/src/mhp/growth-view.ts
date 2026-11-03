@@ -1,10 +1,10 @@
-import { MHP_EVENT_NAMES, type MhpApplicationRecord, type MhpGrowthSummary } from './growth-service.js';
+import { MHP_EVENT_NAMES, type MhpApplicationRecord, type MhpGrowthSummary, type MhpRegistrantRecord } from './growth-service.js';
 
 const e = (value: unknown): string => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const STYLE = `:root{color-scheme:light;--ink:#142019;--muted:#58685e;--line:#d9e0d8;--gold:#e8a33d;--paper:#f5f5ef}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.6 system-ui,-apple-system,sans-serif}a{color:#1f6b45}header{background:var(--ink);color:#fff;padding:20px max(20px,calc((100vw - 1160px)/2));display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}header strong{font-size:18px}nav{display:flex;gap:20px;flex-wrap:wrap}nav a{color:#f1bc6b;text-decoration:none;font-weight:650}main{max-width:1160px;margin:auto;padding:44px 20px 80px}.eyebrow{font-size:12px;letter-spacing:.15em;text-transform:uppercase;font-weight:700;color:var(--muted)}h1{font-size:clamp(30px,4vw,44px);line-height:1.1;letter-spacing:-.03em;margin:8px 0 14px}.intro{color:var(--muted);max-width:680px}.stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px;margin:26px 0}.stat{background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px}.stat b{display:block;font-size:30px;letter-spacing:-.02em}.stat span{color:var(--muted);font-size:14px}table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:16px;overflow:hidden}th,td{text-align:left;padding:10px 14px;border-top:1px solid var(--line)}th{background:#f4f6f1}.panel{background:#fff;border:1px solid var(--line);border-radius:16px;padding:22px;margin:22px 0;max-width:720px}.notice{background:#eef7ef;border:1px solid #b9dcc0;border-radius:14px;padding:14px 18px;margin:18px 0}button{background:var(--gold);color:var(--ink);border:0;border-radius:10px;padding:12px 16px;font:inherit;font-weight:750;cursor:pointer}input[type=file]{margin:12px 0;display:block}.small{font-size:14px;color:var(--muted)}.funnel{display:flex;flex-wrap:wrap;gap:10px;align-items:stretch;margin:18px 0 26px}.funnel .stat{flex:1 1 170px}.funnel .rate{align-self:center;color:var(--muted);font-size:14px;font-weight:650}.scroll{overflow-x:auto}.scroll table{min-width:960px}td.long{white-space:pre-wrap;overflow-wrap:anywhere;min-width:220px}`;
 
 function frame(title: string, body: string): string {
-  return `<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${e(title)} · Martin Howard Property</title><style>${STYLE}</style></head><body><header><strong>Martin Howard Property</strong><nav aria-label="Owner navigation"><a href="/hq">Access</a><a href="/hq/growth">Growth</a><a href="/hq/applications">Applications</a><a href="/hq/course">Course</a><a href="/hq/verdicts">Verdicts</a><a href="/app/learn">Training centre</a></nav></header><main>${body}</main></body></html>`;
+  return `<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${e(title)} · Martin Howard Property</title><style>${STYLE}</style></head><body><header><strong>Martin Howard Property</strong><nav aria-label="Owner navigation"><a href="/hq">Access</a><a href="/hq/growth">Growth</a><a href="/hq/applications">Applications</a><a href="/hq/registrants">Registrants</a><a href="/hq/course">Course</a><a href="/hq/verdicts">Verdicts</a><a href="/app/learn">Training centre</a></nav></header><main>${body}</main></body></html>`;
 }
 
 export function hqGrowthPage(summary: MhpGrowthSummary, marketingMode: string): string {
@@ -51,6 +51,26 @@ export function hqApplicationsPage(applications: readonly MhpApplicationRecord[]
   const when = (value: string): string => new Date(value).toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'medium', timeStyle: 'short' });
   const rows = applications.map(a => `<tr><td>${e(when(a.createdAt))}</td><td>${e(a.status)}</td><td>${e(a.name)}<br><a href="mailto:${e(a.email)}">${e(a.email)}</a>${a.phone ? `<br>${e(a.phone)}` : ''}</td><td>${e(a.location)}</td><td>${e(a.door)}</td><td>${e(a.experience)}</td><td>${e(a.hours)}</td><td class="long">${e(a.objective)}</td><td>${e(a.obstacle)}</td><td>${e(a.support)}</td><td>${a.discuss ? 'Yes' : 'No'}</td><td>${a.marketingConsent ? 'Yes' : 'No'}</td><td>${e(a.source)}</td></tr>`).join('');
   return frame('Applications', `<span class="eyebrow">Owner HQ · Applications</span><h1>One Lane Mentoring applications.</h1><p class="intro">Newest first, up to 200. These details are for assessing the application and contacting the applicant about it. Status changes are recorded manually for now.</p><div class="scroll"><table><thead><tr><th>Received (UK)</th><th>Status</th><th>Applicant</th><th>Town or area</th><th>Door</th><th>Experience</th><th>Hours a week</th><th>90-day objective</th><th>Obstacle</th><th>Support</th><th>Discuss</th><th>Tips emails</th><th>Source</th></tr></thead><tbody>${rows || '<tr><td colspan="13">No applications yet.</td></tr>'}</tbody></table></div>`);
+}
+
+export function hqRegistrantsPage(registrants: readonly MhpRegistrantRecord[]): string {
+  const when = (value: string): string => new Date(value).toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'medium', timeStyle: 'short' });
+  const webinar = registrants.filter(r => r.webinar).length;
+  const rows = registrants.map(r => `<tr><td>${e(when(r.lastSignupAt))}</td><td>${e(r.firstName ?? '')}</td><td><a href="mailto:${e(r.email)}">${e(r.email)}</a></td><td>${e(r.phone ?? '')}</td><td>${e(r.signups.join(', '))}</td><td>${r.marketingConsent && !r.unsubscribed ? 'Yes' : 'No'}</td><td>${r.unsubscribed ? 'Yes' : 'No'}</td><td>${r.applied ? 'Yes' : 'No'}</td><td>${e(r.level ?? '')}</td></tr>`).join('');
+  return frame('Registrants', `<span class="eyebrow">Owner HQ · Registrants</span><h1>Who signed up.</h1><p class="intro">Newest first, up to 2,000 people. ${e(webinar)} registered for the webinar. Contact people only about what they asked for; send marketing only where "Tips emails" says Yes.</p><p><a href="/hq/registrants?format=csv">Download as CSV</a></p><div class="scroll"><table><thead><tr><th>Latest sign-up (UK)</th><th>First name</th><th>Email</th><th>Mobile</th><th>Signed up for</th><th>Tips emails</th><th>Unsubscribed</th><th>Applied</th><th>Level</th></tr></thead><tbody>${rows || '<tr><td colspan="9">No sign-ups yet.</td></tr>'}</tbody></table></div>`);
+}
+
+/** CSV for a spreadsheet. Cells a spreadsheet would read as a formula get a leading apostrophe. */
+export function registrantsCsv(registrants: readonly MhpRegistrantRecord[]): string {
+  const cell = (value: unknown): string => {
+    let text = String(value ?? '');
+    if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+    return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+  const head = ['Latest sign-up (UTC)', 'First name', 'Email', 'Mobile', 'Signed up for', 'Tips emails', 'Unsubscribed', 'Applied', 'Level', 'First seen (UTC)'];
+  const lines = registrants.map(r => [r.lastSignupAt, r.firstName ?? '', r.email, r.phone ?? '', r.signups.join('; '), r.marketingConsent && !r.unsubscribed ? 'Yes' : 'No',
+    r.unsubscribed ? 'Yes' : 'No', r.applied ? 'Yes' : 'No', r.level ?? '', r.firstSeenAt].map(cell).join(','));
+  return '﻿' + [head.map(cell).join(','), ...lines].join('\r\n') + '\r\n';
 }
 
 export function hqCoursePage(input: { csrf: string; course: MhpGrowthSummary['course']; loaded?: { modules: number; lessons: number } }): string {

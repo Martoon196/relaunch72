@@ -87,3 +87,8 @@ Note: the running 0123 build's runtime schema check rejects a ledger row it does
 ## Not in this package
 
 Bounce and complaint webhooks (Postmark suppresses these itself), Deal Desk and course buyer sequences (D4 to D8), the sheet nurture emails (templates 17 and 18 need per-sheet tips), webinar attendance import and story publishing tools.
+
+## Registrants and phone numbers (added 3 November)
+
+- `/hq/registrants` (programme admins): everyone who signed up, newest first, up to 2,000, with first name, email, optional mobile, what they signed up for, tips-email consent, unsubscribed and applied. `?format=csv` downloads the same list; cells a spreadsheet would read as a formula get a leading apostrophe.
+- The webinar form sends an optional `PHONE`. It is stored on the prospect by `mhp_set_prospect_phone` straight after the sign-up; a malformed number is dropped and never fails the sign-up. The site shows the field only when `collectPhone: true` in `assets/config.js`, so set that after this release is live.
