@@ -1,32 +1,64 @@
-name: MHP009B exact Linux proof
+name: MHP webinar v2 exact Linux proof
+
 on:
   push:
     branches: [codex/mhp-linux-proof-20261031]
     paths: [.github/workflows/mhp-linux-proof.yml]
+
 permissions:
   contents: read
+
 jobs:
   exact-source-gate:
+    name: ${{ matrix.target }} exact Linux gate
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: bridge
+            commit: 5ce2dcbb55974fd01fbf1ab1bf952926de1d0a53
+            tree: 536954aef09bba0fd4c0c90a2b353881138e1091
+          - target: capable
+            commit: 6a03315e2b28956cd07d9889b9eca93c37c3cf2c
+            tree: 6bc41f66fbc5f8a8f9ba2647032a8183902e497e
     steps:
-      - name: Checkout exact reviewed MHP SMS release source
+      - name: Checkout exact reviewed source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Martoon196/relaunch72
-          ref: 102aa2fda66684fa347556eea285a57aba4d414a
+          ref: ${{ matrix.commit }}
           persist-credentials: false
-      - name: Assert exact source identity
-        shell: bash
-        run: |
-          test "$(git rev-parse HEAD)" = 102aa2fda66684fa347556eea285a57aba4d414a
-          test "$(git rev-parse 'HEAD^{tree}')" = 69b682e53cd0702f27cf9076fabf8a83881f9a14
-          test -z "$(git status --porcelain)"
-          git rev-parse HEAD 'HEAD^{tree}'
       - name: Match Render runtime
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22.23.4
+      - name: Verify and record exact source and runtime
+        shell: bash
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+          EXPECTED_COMMIT: ${{ matrix.commit }}
+          EXPECTED_TREE: ${{ matrix.tree }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+          const commit = git('rev-parse', 'HEAD');
+          const tree = git('rev-parse', 'HEAD^{tree}');
+          assert.equal(commit, process.env.EXPECTED_COMMIT);
+          assert.equal(tree, process.env.EXPECTED_TREE);
+          assert.equal(git('status', '--porcelain'), '');
+          assert.equal(process.platform, 'linux');
+          assert.equal(process.version, 'v22.23.4');
+          console.log(JSON.stringify({
+            target: process.env.EXPECTED_TARGET, commit, tree, clean: true,
+            platform: process.platform, arch: process.arch,
+            node: process.version, versions: process.versions,
+            npm: execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim(),
+          }));
+          NODE
       - name: Install exact lockfile
         run: npm ci --ignore-scripts --include=dev
       - name: Check supply chain
