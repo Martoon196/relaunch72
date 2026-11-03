@@ -1,0 +1,363 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:relaunch72:marketing-rule-pack:0.1",
+  "title": "Relaunch72 draft marketing method pack",
+  "description": "Authoring format only. Runtime approval, entitlements and hashes are verified independently by the server.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "packId",
+    "version",
+    "status",
+    "intendedScope",
+    "summary",
+    "supportedStages",
+    "dependencies",
+    "requiredInputs",
+    "decisionSteps",
+    "rules",
+    "internalReceiptFields",
+    "qualityChecks",
+    "revisionPolicy",
+    "outputContract",
+    "examples",
+    "provenance"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "packId": {
+      "enum": [
+        "production-core",
+        "editorial-planning",
+        "blog-writing",
+        "conversion-copy",
+        "social-repurposing",
+        "visual-briefing",
+        "email-writing",
+        "offer-design"
+      ]
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "status": {
+      "const": "draft"
+    },
+    "intendedScope": {
+      "enum": [
+        "private-owned-brands",
+        "public-upgrade-candidate"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "supportedStages": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "planning",
+          "blog",
+          "copy",
+          "social",
+          "visual-brief",
+          "email",
+          "offer",
+          "revision"
+        ]
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "packId",
+          "version"
+        ],
+        "properties": {
+          "packId": {
+            "enum": [
+              "production-core",
+              "editorial-planning",
+              "blog-writing",
+              "conversion-copy",
+              "social-repurposing",
+              "visual-briefing",
+              "email-writing",
+              "offer-design"
+            ]
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+          }
+        }
+      }
+    },
+    "requiredInputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "purpose",
+          "missingBehaviour"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "purpose": {
+            "type": "string",
+            "minLength": 1
+          },
+          "missingBehaviour": {
+            "enum": [
+              "block-task",
+              "omit-affected-claim",
+              "request-owner-decision",
+              "use-explicit-task-default"
+            ]
+          }
+        }
+      }
+    },
+    "decisionSteps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "instruction",
+          "produces"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "instruction": {
+            "type": "string",
+            "minLength": 1
+          },
+          "produces": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "instruction",
+          "appliesWhen",
+          "check"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "instruction": {
+            "type": "string",
+            "minLength": 1
+          },
+          "appliesWhen": {
+            "type": "string",
+            "minLength": 1
+          },
+          "check": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "internalReceiptFields": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "qualityChecks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "criterion",
+          "passingEvidence",
+          "failureAction"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "criterion": {
+            "type": "string",
+            "minLength": 1
+          },
+          "passingEvidence": {
+            "type": "string",
+            "minLength": 1
+          },
+          "failureAction": {
+            "enum": [
+              "revise",
+              "block-task",
+              "omit-affected-claim",
+              "request-owner-decision"
+            ]
+          }
+        }
+      }
+    },
+    "revisionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxRevisionPasses",
+        "stopWhen",
+        "onExhaustion"
+      ],
+      "properties": {
+        "maxRevisionPasses": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "stopWhen": {
+          "type": "string",
+          "minLength": 1
+        },
+        "onExhaustion": {
+          "enum": [
+            "save-held-draft-with-findings",
+            "block-task"
+          ]
+        }
+      }
+    },
+    "outputContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "respectExistingStageSchema",
+        "customerFacing",
+        "internalSidecar",
+        "providerEffects"
+      ],
+      "properties": {
+        "respectExistingStageSchema": {
+          "const": true
+        },
+        "customerFacing": {
+          "type": "string",
+          "minLength": 1
+        },
+        "internalSidecar": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerEffects": {
+          "const": false
+        }
+      }
+    },
+    "examples": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "fictionalBrand",
+          "inputScenario",
+          "expectedBehaviour",
+          "forbiddenBehaviour"
+        ],
+        "properties": {
+          "fictionalBrand": {
+            "type": "string",
+            "minLength": 1
+          },
+          "inputScenario": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expectedBehaviour": {
+            "type": "string",
+            "minLength": 1
+          },
+          "forbiddenBehaviour": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authoringNote",
+        "privateSourceReferences",
+        "originalityNotes",
+        "unresolvedCommercialUseQuestions"
+      ],
+      "properties": {
+        "authoringNote": {
+          "type": "string",
+          "minLength": 1
+        },
+        "privateSourceReferences": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "originalityNotes": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unresolvedCommercialUseQuestions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}
