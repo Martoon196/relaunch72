@@ -17,12 +17,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: bridge
-            commit: 5ce2dcbb55974fd01fbf1ab1bf952926de1d0a53
-            tree: 536954aef09bba0fd4c0c90a2b353881138e1091
           - target: capable
-            commit: 6a03315e2b28956cd07d9889b9eca93c37c3cf2c
-            tree: 6bc41f66fbc5f8a8f9ba2647032a8183902e497e
+            commit: e8c64d7f04ed96daa7026f896e04b1dc81177b04
+            tree: 60ea5c993b07b116087d163ac831ccc3d631512a
     steps:
       - name: Checkout exact reviewed source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
