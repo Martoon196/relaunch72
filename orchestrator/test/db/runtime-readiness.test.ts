@@ -387,3 +387,22 @@ test('final135 signup handoff runtime requires exact135 and preserves prior ledg
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(changed)), /checksum changed/);
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { filename: '0136_unknown.sql', checksum: 'a'.repeat(64) }])), /migration not present/);
 });
+
+test('135 recovery bridge accepts only exact136 and preserves all prior checks', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-mhp-webinar136-compat-'));
+  const prefix = (await discoverMigrations()).slice(0, 135);
+  assert.equal(prefix.length, 135);
+  await Promise.all(prefix.map(migration => writeFile(path.join(directory, migration.filename), migration.sql, 'utf8')));
+  const rows = prefix.map(({ filename, checksum }) => ({ filename, checksum }));
+  const applications = { filename: '0136_mhp_webinar_applications.sql', checksum: '9bf6605cdc536794fae989964542eb8253cdd49ebd995d3e6dd346c01c746139' };
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows), directory));
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool([...rows, applications]), directory));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, { ...applications, checksum: '0'.repeat(64) }]), directory), /migration not present/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, applications, applications]), directory), /invalid runtime migration ledger/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows, applications, { filename: '0137_unknown.sql', checksum: 'a'.repeat(64) }]), directory), /migration not present/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(0, 134), applications]), directory), /migration not present/);
+  for (const at of [0, 120, 123, 125, 126, 127, 130, 131, 132, 133, 134]) {
+    const changed = rows.map((row, index) => index === at ? { ...row, checksum: '0'.repeat(64) } : row);
+    await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...changed, applications]), directory), /checksum changed|migration not present/);
+  }
+});

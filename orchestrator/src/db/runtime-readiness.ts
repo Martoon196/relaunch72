@@ -42,6 +42,8 @@ const MHP_EVENT_PHONE_MIGRATION = '0134_mhp_event_phone_programme.sql';
 const MHP_EVENT_PHONE_CHECKSUM = 'c3480208038aace2211f7a50cf64cb6cda45bedce980d274bdb661a7b9466e33';
 const MHP_EVENT_PHONE_SIGNUP_MIGRATION = '0135_mhp_event_phone_signup_handoff.sql';
 const MHP_EVENT_PHONE_SIGNUP_CHECKSUM = '9f73caa543ac243304063866897c4900301c4bb64bcf7f6d238cd668c8cc2be2';
+const MHP_WEBINAR_APPLICATIONS_MIGRATION = '0136_mhp_webinar_applications.sql';
+const MHP_WEBINAR_APPLICATIONS_CHECKSUM = '9bf6605cdc536794fae989964542eb8253cdd49ebd995d3e6dd346c01c746139';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -207,6 +209,16 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(MHP_EVENT_PHONE_MIGRATION) === MHP_EVENT_PHONE_CHECKSUM
       && applied.get(MHP_EVENT_PHONE_SIGNUP_MIGRATION) === MHP_EVENT_PHONE_SIGNUP_CHECKSUM) {
     applied.delete(MHP_EVENT_PHONE_SIGNUP_MIGRATION);
+  }
+  // This 0135 recovery build admits only the exact reviewed additive 0136.
+  // Its old builtin queue excludes new-purpose rows installed by that migration.
+  // Bundled136 takes the strict path; prior gaps/checksums and future rows fail.
+  if (migrations.length === 135
+      && migrations[134]?.filename === MHP_EVENT_PHONE_SIGNUP_MIGRATION
+      && migrations[134]?.checksum === MHP_EVENT_PHONE_SIGNUP_CHECKSUM
+      && applied.get(MHP_EVENT_PHONE_SIGNUP_MIGRATION) === MHP_EVENT_PHONE_SIGNUP_CHECKSUM
+      && applied.get(MHP_WEBINAR_APPLICATIONS_MIGRATION) === MHP_WEBINAR_APPLICATIONS_CHECKSUM) {
+    applied.delete(MHP_WEBINAR_APPLICATIONS_MIGRATION);
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
