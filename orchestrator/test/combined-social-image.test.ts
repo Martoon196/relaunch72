@@ -3,7 +3,8 @@ import test from 'node:test';
 import { createHash } from 'node:crypto';
 import { canonicalCompanyContentSocialDraft, parseCompanyContentSocialDraft } from '../src/company-content-pg/validation.js';
 import { parseCompanyContentSocialImage, socialImageFromDataUrl } from '../src/company-content-pg/social-image.js';
-import { createCombinedSocialImageMediaResolver } from '../src/public-social-outbound/combined-social-image-media.js';
+import { createCombinedSocialImageMediaResolver, createSeoCampaignImageMediaResolver } from '../src/public-social-outbound/combined-social-image-media.js';
+import { parseSeoCampaignMedia, type SeoCampaignMediaProvenance } from '../src/seo-blog/campaign-media.js';
 import { IMAGE_FIXTURE, JPEG_FIXTURE } from './social-image-fixture.js';
 
 const post = { type: 'generated', kind: 'post', platform: 'LinkedIn', title: 'A post',
@@ -81,4 +82,49 @@ test('existing approved-asset delivery stays with its existing resolver', async 
   assert.deepEqual(await resolver.resolve({ workspaceId: 'w', jobId: 'j', media: [{
     storageKey: 'approved/picture.jpg', blobSha256: 'a'.repeat(64), mimeType: 'image/jpeg',
   }] }), ['https://legacy.invalid/image']);
+});
+
+const campaignUuid = (n: number) => `10000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const campaignSource: SeoCampaignMediaProvenance = { system: 'relaunch72.seo-blog', workspaceId: campaignUuid(1), articleId: campaignUuid(2), articleVersionId: campaignUuid(3), variantId: campaignUuid(4), variantRevisionId: campaignUuid(5), variantSha256: 'c'.repeat(64), mediaUseId: campaignUuid(6), assetId: campaignUuid(7) };
+const campaignItem = { storageKey: `seo-blog-media/${campaignSource.assetId}/${IMAGE_FIXTURE.sha256}`, blobSha256: IMAGE_FIXTURE.sha256, mimeType: 'image/jpeg', inlineImage: IMAGE_FIXTURE, seoCampaign: campaignSource };
+
+test('registered SEO campaign uploads one exact verified JPEG through the same restricted uploader', async () => {
+  let uploads = 0, puts = 0;
+  const resolver = createCombinedSocialImageMediaResolver({
+    legacy: { resolve: async () => { throw new Error('SEO source must not inherit a legacy asset'); } },
+    posting: { prepareMediaUpload: async () => { uploads++; return { uploadUrl: 'https://fixture.r2.cloudflarestorage.com/image', publicUrl: 'https://media.zernio.com/campaign.jpg', expiresIn: 120 }; } },
+    fetch: (async (_url, options) => { puts++; assert.deepEqual(Buffer.from(options!.body as Uint8Array), Buffer.from(IMAGE_FIXTURE.base64, 'base64')); return new Response(null, { status: 200 }); }) as typeof fetch,
+  });
+  assert.deepEqual(await resolver.resolve({ workspaceId: campaignSource.workspaceId, jobId: campaignUuid(8), media: [campaignItem] }), ['https://media.zernio.com/campaign.jpg']);
+  assert.equal(uploads, 1); assert.equal(puts, 1);
+});
+
+test('SEO media cannot fall back to legacy URLs, cross brands or claim a different asset identity', async () => {
+  let effects = 0;
+  const resolver = createCombinedSocialImageMediaResolver({
+    legacy: { resolve: async () => { effects++; return ['https://legacy.invalid/asset']; } },
+    posting: { prepareMediaUpload: async () => { effects++; throw new Error('not permitted'); } },
+    fetch: (async () => { effects++; throw new Error('not permitted'); }) as typeof fetch,
+  });
+  const request = { workspaceId: campaignSource.workspaceId, jobId: campaignUuid(8), media: [campaignItem] };
+  await assert.rejects(resolver.resolve({ ...request, workspaceId: campaignUuid(99) }));
+  await assert.rejects(resolver.resolve({ ...request, media: [{ ...campaignItem, inlineImage: undefined }] }));
+  await assert.rejects(resolver.resolve({ ...request, media: [{ ...campaignItem, seoCampaign: undefined }] }));
+  await assert.rejects(resolver.resolve({ ...request, media: [{ ...campaignItem, seoCampaign: { ...campaignSource, assetId: campaignUuid(99) } }] }));
+  assert.throws(() => parseSeoCampaignMedia({ ...campaignSource, externalUrl: 'https://attacker.invalid/image' }, request.workspaceId, campaignItem.storageKey, IMAGE_FIXTURE.sha256));
+  assert.equal(effects, 0);
+});
+
+test('generic registered-brand worker resolver permits only its exact SEO campaign source and preserves text-only delivery', async () => {
+  let uploads = 0, puts = 0;
+  const resolver = createSeoCampaignImageMediaResolver({ workspaceId: campaignSource.workspaceId,
+    posting: { async prepareMediaUpload() { uploads++; return { uploadUrl: 'https://fixture.r2.cloudflarestorage.com/upload', publicUrl: 'https://media.zernio.com/exact.jpg', expiresIn: 60 }; } },
+    fetch: (async () => { puts++; return new Response(null, { status: 200 }); }) as typeof fetch });
+  const request = { workspaceId: campaignSource.workspaceId, jobId: campaignUuid(8), media: [campaignItem] };
+  assert.deepEqual(await resolver.resolve({ ...request, media: [] }), []);
+  await assert.rejects(resolver.resolve({ ...request, workspaceId: campaignUuid(99) }));
+  await assert.rejects(resolver.resolve({ ...request, media: [{ ...campaignItem, seoCampaign: undefined, storageKey: `hq-social-image/${IMAGE_FIXTURE.sha256}` }] }));
+  assert.equal(uploads, 0); assert.equal(puts, 0);
+  assert.deepEqual(await resolver.resolve(request), ['https://media.zernio.com/exact.jpg']);
+  assert.equal(uploads, 1); assert.equal(puts, 1);
 });

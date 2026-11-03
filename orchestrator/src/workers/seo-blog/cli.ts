@@ -26,6 +26,7 @@ async function main(): Promise<void> {
   console.log('seo-blog worker: capability profile-extraction-v1 (write stage profile; uncertain calls held).');
   console.log('seo-blog worker: capability programme-research-v1 (budgeted plan attempts; durable receipts and bounded supplier retries).');
   console.log('seo-blog worker: capability website-target-v2 (pinned reviewed targets, independent delivery evidence and sitemap-only repair).');
+  console.log('seo-blog worker: capability campaign-media-v1 (committed image intents, private crops, exact media release and genuine-owner deferred social instructions).');
   const owner = `${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
   const interval = Math.max(15_000, Number(process.env.SEO_BLOG_WORKER_INTERVAL_MS ?? 60_000));
   let stopping = false;

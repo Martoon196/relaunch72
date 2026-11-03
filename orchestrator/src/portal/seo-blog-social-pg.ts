@@ -20,6 +20,9 @@ import { createZernioLiveConnectionClient, ZERNIO_LIVE_CONNECTION_CONTRACT, type
 import { promotionCommand, promotionCommandKey } from '../seo-blog/promotions.js';
 import { ACCOUNT_ID, PROFILE_ID, SocialDeliveryHoldError, type SocialAccount, type SocialBinding, type SocialOverview, type SocialPlanInput, type SocialPlanResult, type SocialProfile, type SocialRegistry } from '../seo-blog/social.js';
 import { SeoBlogError, type PromotionNetwork } from '../seo-blog/types.js';
+import { PgSeoBlogStore } from '../seo-blog/pg-store.js';
+import { createSocialProviderInventory, type SocialDiscovery } from '../seo-blog/social-discovery.js';
+import { socialCalendarWindow, type SocialCalendarJob } from '../seo-blog/campaign-calendar.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
@@ -57,6 +60,18 @@ export function createPgSeoBlogSocialRegistry(input: PgSeoBlogSocialRegistryInpu
   const sessionHash = sha256(input.identity.sessionToken);
   const now = input.now ?? (() => new Date());
   const reserved = new Set(input.reservedProfileIds.map(id => id.trim()).filter(Boolean));
+  const brandAuthority = new PgSeoBlogStore(input.contentCommandPool, { kind: 'user', userId: input.identity.userId,
+    sessionToken: input.identity.sessionToken, selectedWorkspaceId: input.identity.workspaceId, requestId: input.requestId });
+  const inventory = createSocialProviderInventory({ apiKey: input.zernioApiKey, fetch: input.fetch ?? globalThis.fetch, now: () => now().toISOString() });
+  async function assertOwner(brandId: string): Promise<void> {
+    if (!await brandAuthority.canManage(input.identity.userId, brandId)) throw new SeoBlogError(403, 'Only an active owner or admin of this brand can view or connect its accounts.');
+  }
+  async function discover(brandId: string): Promise<SocialDiscovery> {
+    await assertOwner(brandId);
+    const profile = await profileFor(brandId);
+    return inventory.discover({ brandId, registeredProfileId: profile?.providerProfileId ?? null, reservedProfileIds: input.reservedProfileIds,
+      registeredBrandFor: async id => (await resolveSeoBlogBrandForProfile(input.zernioPool, { actorKind: 'user', userId: input.identity.userId, requestId: input.requestId }, id))?.workspaceId ?? null });
+  }
 
   async function tx<T>(brandId: string, operation: (t: import('../db/transaction.js').DbTransaction) => Promise<T>, options: { serializable?: boolean; readOnly?: boolean } = {}): Promise<T> {
     if (!UUID.test(brandId)) throw new SeoBlogError(404, 'That brand was not found.', 'not_found');
@@ -99,10 +114,11 @@ export function createPgSeoBlogSocialRegistry(input: PgSeoBlogSocialRegistryInpu
    * brand id stays a selector rather than a session re-selection.
    */
   async function accountsFor(brandId: string, profile: SocialProfile): Promise<SocialAccount[]> {
-    const rows = await tx(brandId, async t => (await t.query<{ account_id: string; network: SocialAccount['network']; username: string | null; status: SocialAccount['status']; linked_at: Date; webhook_receipt_count: string | number }>(
-      'SELECT account_id, network, username, status, linked_at, webhook_receipt_count FROM app_private.read_zernio_social_accounts($1::uuid,$2::uuid,$3::bytea)',
+    const rows = await tx(brandId, async t => (await t.query<{ account_id: string; provider_account_id_sha256: Buffer; network: SocialAccount['network']; username: string | null; status: SocialAccount['status']; linked_at: Date; webhook_receipt_count: string | number }>(
+      'SELECT account_id, provider_account_id_sha256, network, username, status, linked_at, webhook_receipt_count FROM app_private.read_zernio_social_accounts($1::uuid,$2::uuid,$3::bytea)',
       [brandId, profile.providerConnectionId, sha256(profile.providerProfileId)])).rows, { readOnly: true });
-    return rows.map(r => ({ accountId: r.account_id, network: r.network, username: r.username, status: r.status, linkedAt: new Date(r.linked_at).toISOString(), webhookReceiptCount: Number(r.webhook_receipt_count) }));
+    return rows.map(r => ({ accountId: r.account_id, network: r.network, username: r.username, status: r.status, linkedAt: new Date(r.linked_at).toISOString(), webhookReceiptCount: Number(r.webhook_receipt_count),
+      ...(Buffer.isBuffer(r.provider_account_id_sha256) && r.provider_account_id_sha256.length === 32 ? { providerAccountIdSha256: r.provider_account_id_sha256.toString('hex') } : {}) }));
   }
 
   async function bindingsFor(brandId: string): Promise<SocialBinding[]> {
@@ -112,6 +128,35 @@ export function createPgSeoBlogSocialRegistry(input: PgSeoBlogSocialRegistryInpu
   }
 
   return {
+    discover,
+    async listCalendar(brandId,from,to) {
+      if(!socialCalendarWindow(from,to))throw new SeoBlogError(400,'Choose a delivery period of no more than 366 days.');
+      await assertOwner(brandId);
+      return tx(brandId,async t=>{
+        const result=await t.query<{job_id:string;network:string;content_body:string;scheduled_for:string;state:string;safe_code:string|null}>(
+          `SELECT job_id::text,network,content_body,scheduled_for::text,state,safe_code
+           FROM app_private.list_zernio_calendar_jobs($1::uuid,$2::timestamptz,$3::timestamptz,100)`,[brandId,from,to]);
+        if(result.rows.length>100)throw new SeoBlogError(503,'The delivery calendar returned an invalid page.');
+        return result.rows.map((row):SocialCalendarJob=>{
+          const instant=Date.parse(row.scheduled_for);
+          if(!UUID.test(row.job_id)||!['instagram','linkedin'].includes(row.network)||typeof row.content_body!=='string'||Buffer.byteLength(row.content_body)<1||Buffer.byteLength(row.content_body)>12_000||/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/u.test(row.content_body)||!Number.isFinite(instant)||!['queued','leased','calling','reconciliation_pending','succeeded','failed','cancelled','needs_attention'].includes(row.state)||(row.safe_code!==null&&!/^[a-z][a-z0-9_.:-]{0,99}$/u.test(row.safe_code)))throw new SeoBlogError(503,'A delivery calendar entry could not be safely read.');
+          return {jobId:row.job_id,network:row.network,content:row.content_body,scheduledFor:new Date(instant).toISOString(),state:row.state,safeCode:row.safe_code};
+        });
+      });
+    },
+    async prepareCampaignTarget(brandId, bindingId) {
+      if (!UUID.test(bindingId)) throw new SeoBlogError(400, 'Choose a registered account.');
+      const binding = (await bindingsFor(brandId)).find(b => b.id === bindingId && b.status === 'active');
+      if (!binding) throw new SeoBlogError(409, 'That brand-owned connected account is no longer active.');
+      try {
+        await tx(brandId, async t => {
+          const target = await t.query<{ test_target_id: string }>(
+            'SELECT test_target_id::text FROM app_private.bootstrap_zernio_calendar_planner_target($1::uuid,$2::uuid,$3::text,$4::bytea,$5::bytea)',
+            [brandId, binding.providerConnectionId, binding.network, sha256(await profileIdFor(t, brandId)), Buffer.from(binding.providerAccountIdSha256, 'hex')]);
+          if (!target.rows[0]?.test_target_id || !UUID.test(target.rows[0].test_target_id)) throw new SeoBlogError(503, 'The connected calendar target could not be prepared.');
+        }, { serializable: true });
+      } catch (error) { translate(error); }
+    },
     async overview(brandId) {
       const profile = await profileFor(brandId);
       const accounts = profile ? await accountsFor(brandId, profile) : [];
@@ -121,6 +166,13 @@ export function createPgSeoBlogSocialRegistry(input: PgSeoBlogSocialRegistryInpu
       const profileId = providerProfileId.trim();
       if (!PROFILE_ID.test(profileId)) throw new SeoBlogError(400, 'Enter the Zernio profile id exactly as shown in your Zernio dashboard.');
       if (reserved.has(profileId)) throw new SeoBlogError(403, 'That profile is reserved for another application and cannot be registered to a brand.');
+      await assertOwner(brandId);
+      const existing = await profileFor(brandId);
+      if (!existing) {
+        const choices = await discover(brandId);
+        if (choices.state !== 'available') throw new SeoBlogError(503, choices.detail);
+        if (!choices.profiles.some(p => p.id === profileId && p.selectable)) throw new SeoBlogError(403, 'Choose a provider-verified profile explicitly linked to this brand.');
+      }
       try {
         const rows = await tx(brandId, async t => (await t.query<{ provider_connection_id: string; disposition: 'applied' | 'replayed' }>(
           'SELECT provider_connection_id, disposition FROM app_private.seo_blog_register_zernio_profile($1, $2, $3)', [brandId, displayName.trim().slice(0, 120) || 'Brand social accounts', profileId])).rows);
@@ -179,6 +231,17 @@ export function createPgSeoBlogSocialRegistry(input: PgSeoBlogSocialRegistryInpu
       if (!Number.isInteger(binding.dailyCap) || binding.dailyCap < 0 || binding.dailyCap > 24 || !Number.isInteger(binding.monthlyCap) || binding.monthlyCap < 0 || binding.monthlyCap > 300) throw new SeoBlogError(400, 'Caps must be whole numbers: 0–24 per day and 0–300 per month.');
       const profile = await profileFor(brandId);
       if (!profile) throw new SeoBlogError(409, 'Register the brand’s Zernio profile first.');
+      const existing = (await bindingsFor(brandId)).find(b => b.status === 'active' && b.network === binding.network && b.providerAccountIdSha256 === sha256(accountId).toString('hex'));
+      const reductionOnly = existing && binding.dailyCap <= existing.dailyCap && binding.monthlyCap <= existing.monthlyCap;
+      // Provider outage must never prevent reducing an existing exact account's
+      // authority. Fresh bindings/increases still need the verified picker.
+      if (!reductionOnly) {
+        const choices = await discover(brandId);
+        if (choices.state !== 'available') throw new SeoBlogError(503, choices.detail);
+        const candidate = choices.accounts.find(a => a.id === accountId && a.profileId === profile.providerProfileId && a.network === binding.network && a.active && a.supported);
+        const owned = (await accountsFor(brandId, profile)).find(a => a.providerAccountIdSha256 === sha256(accountId).toString('hex') && a.network === binding.network && a.status === 'active' && a.webhookReceiptCount > 0);
+        if (!candidate || !owned) throw new SeoBlogError(409, 'Choose an active account this provider has confirmed as connected to this brand. Reconnect it to record ownership if needed.');
+      }
       try {
         const rows = await tx(brandId, async t => (await t.query<{ binding_id: string; disposition: 'applied' | 'replayed' | 'caps_changed' }>(
           'SELECT binding_id, disposition FROM app_private.seo_blog_register_social_binding($1, $2, $3, $4, $5, $6)',

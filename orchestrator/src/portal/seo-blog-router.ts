@@ -7,14 +7,14 @@
  * portal CSRF token and a same-origin request.
  */
 
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { PortalSessionIdentity } from './auth-service.js';
 import { portalCsrfToken, verifyPortalCsrf } from './session.js';
 import type { PortalSeoBlogService } from './seo-blog-service.js';
 import {
   activityPage, articlesPage, brandsPage, CALENDAR_SCRIPT, calendarPage, editorPage, overviewPage, publishingPage,
-  SEO_BLOG_BASE, setupPage, socialPage, topicsPage, type Shell, type SeoBlogTab,
+  SEO_BLOG_BASE, setupPage, socialPage, topicsPage, layout, type Shell, type SeoBlogTab,
 } from './seo-blog-view.js';
 import { USAGE_ESTIMATES, type Actor, type SeoBlogEngine } from '../seo-blog/engine.js';
 import { defaultPublishers } from '../seo-blog/publishers/registry.js';
@@ -24,6 +24,11 @@ import { CENTRAL_ACTION_FEEDBACK_PATH, CENTRAL_ACTION_FEEDBACK_SCRIPT } from './
 import { PROFILE_STATUS_SCRIPT } from './profile-status.js';
 import { KNOWLEDGE_CATEGORY_SCRIPT } from './knowledge-category.js';
 import { isProfileJob, profilePayload } from '../seo-blog/profile-jobs.js';
+import { campaignPage, type CampaignActionResult } from './seo-blog-campaign-view.js';
+import { loadAuthorityProgrammePage } from '../seo-blog/authority-programme-controller.js';
+import { authorityProgrammeContent } from '../seo-blog/authority-programme-view.js';
+import { CAMPAIGN_IMAGE_STATUS_SCRIPT } from './campaign-image-status.js';
+import { campaignDeliveryCalendarPage } from './seo-blog-campaign-calendar-view.js';
 
 export interface SeoBlogRouteInput {
   readonly service: PortalSeoBlogService;
@@ -134,6 +139,7 @@ function int(value: string | null, field: string): number {
 export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, url: URL, input: SeoBlogRouteInput): Promise<void> {
   const path = url.pathname.replace(/\/+$/, '') || SEO_BLOG_BASE;
   const method = req.method ?? 'GET';
+  if (method === 'GET' && path === `${SEO_BLOG_BASE}/campaign-image-status.js`) return send(res, 200, CAMPAIGN_IMAGE_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
   if(method==='GET'&&path===`${SEO_BLOG_BASE}/knowledge-kind.js`) return send(res,200,KNOWLEDGE_CATEGORY_SCRIPT,'text/javascript; charset=utf-8');
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/profile-status.js`) return send(res, 200, PROFILE_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
   if (method === 'GET' && path === CENTRAL_ACTION_FEEDBACK_PATH) {
@@ -185,6 +191,15 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     }
     if (!brandId) throw new SeoBlogError(404, 'That page was not found.');
     const brand = await engine.getBrand(actor, brandId);
+    if (rest === 'image/status') return send(res, 200, JSON.stringify(await engine.imageJobStatus(actor, brandId, url.searchParams.get('article') ?? '', url.searchParams.get('job') ?? '')), 'application/json; charset=utf-8');
+    const privateImage = new RegExp(`^media/(${UUID})/([0-9a-f]{64})\\.jpg$`, 'i').exec(rest);
+    if (privateImage) {
+      const image = await engine.privateCampaignImage(actor, brandId, privateImage[1]!, privateImage[2]!);
+      if (image.asset.validation !== 'prepared_jpeg' || image.asset.kind !== 'variant' || image.bytes.byteLength > 600_000
+        || createHash('sha256').update(image.bytes).digest('hex') !== privateImage[2]) throw new SeoBlogError(404, 'That private crop is unavailable.');
+      res.writeHead(200, { 'content-type': 'image/jpeg', 'content-length': String(image.bytes.byteLength), 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-robots-tag': 'noindex, nofollow', 'referrer-policy': 'no-referrer' });
+      res.end(method === 'HEAD' ? undefined : image.bytes); return;
+    }
     if (rest === 'profile/status') {
       const jobId = url.searchParams.get('job');
       const job = (await engine.listJobs(actor, brandId)).find((j) => j.id === jobId && isProfileJob(j));
@@ -192,6 +207,11 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       return send(res, 200, JSON.stringify({ id: job.id, state: job.state, detail: job.error ?? job.progress, resultVersion: profilePayload(job).resultVersion ?? null }), 'application/json; charset=utf-8');
     }
     const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages, applicationName: input.applicationName });
+    if (rest === 'authority') {
+      if (input.applicationName !== 'Relaunch72 Content') throw new SeoBlogError(404, 'That page was not found.');
+      const data = await loadAuthorityProgrammePage(engine, actor, brandId);
+      return send(res, 200, layout(shell('authority'), 'Authority', authorityProgrammeContent(data)));
+    }
     const tab = rest.split('/')[0] || 'overview';
     if (tab === 'overview') {
       const [readiness, articles, usage, jobs] = await Promise.all([engine.readiness(actor, brandId), engine.listArticles(actor, brandId), engine.usage(actor, brandId), engine.listJobs(actor, brandId)]);
@@ -209,6 +229,11 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const articleId = rest.split('/')[1];
       if (!articleId) return send(res, 200, articlesPage(shell('articles'), { articles: await engine.listArticles(actor, brandId) }));
       const action = rest.split('/')[2];
+      if (action === 'campaign') {
+        const [detail, jobs] = await Promise.all([engine.getArticle(actor, brandId, articleId), engine.listJobs(actor, brandId)]);
+        const social = await engine.socialOverview(actor, brandId).catch(() => null);
+        return send(res, 200, campaignPage(shell('articles'), { ...detail, jobs, social, now: new Date().toISOString() }));
+      }
       if (action === 'preview') {
         const html = await engine.preview(actor, brandId, articleId, url.searchParams.get('v') ?? undefined);
         return send(res, 200, html, 'text/html; charset=utf-8', { 'content-security-policy': PREVIEW_CSP });
@@ -226,12 +251,19 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const view = (['month', 'week', 'list'] as const).find((v) => v === url.searchParams.get('view')) ?? 'month';
       const requested = url.searchParams.get('date') ?? '';
       const anchor = /^\d{4}-\d{2}-\d{2}$/.test(requested) ? requested : utcToLocal(new Date().toISOString(), brand.timezone).date;
-      const [articles, plans, destinations, readiness, jobs] = await Promise.all([engine.listArticles(actor, brandId), engine.listPlans(actor, brandId), engine.listDestinations(actor, brandId),engine.readiness(actor,brandId),engine.listJobs(actor,brandId)]);
-      return send(res, 200, calendarPage(shell('calendar'), { view, anchor, articles, briefs: plans.flatMap((p) => p.briefs), destinations, readiness,jobs, brandsAll: false }));
+      const [articles, plans, destinations, readiness, jobs, campaignEntries] = await Promise.all([engine.listArticles(actor, brandId), engine.listPlans(actor, brandId), engine.listDestinations(actor, brandId),engine.readiness(actor,brandId),engine.listJobs(actor,brandId),engine.campaignCalendar(actor,brandId)]);
+      return send(res, 200, calendarPage(shell('calendar'), { view, anchor, articles, briefs: plans.flatMap((p) => p.briefs), destinations, readiness,jobs,campaignEntries, brandsAll: false }));
     }
     if (tab === 'publishing') return send(res, 200, publishingPage(shell('publishing'), { usage: await engine.usage(actor, brandId) }));
     if (tab === 'social') {
-      return send(res, 200, socialPage(shell('social'), { overview: await engine.socialOverview(actor, brandId), connectHere: input.socialConnectHere === true, connectHost: input.socialConnectHost ?? '', intentId: randomUUID() }));
+      if(rest==='social/calendar'){
+        const today=new Date().toISOString().slice(0,10),end=new Date(Date.parse(`${today}T00:00:00.000Z`)+31*86_400_000).toISOString().slice(0,10);
+        const from=url.searchParams.get('from')??today,to=url.searchParams.get('to')??end;
+        if(!/^\d{4}-\d{2}-\d{2}$/u.test(from)||!/^\d{4}-\d{2}-\d{2}$/u.test(to))throw new SeoBlogError(400,'Choose valid delivery dates.');
+        const start=`${from}T00:00:00.000Z`,stop=`${to}T00:00:00.000Z`;
+        return send(res,200,campaignDeliveryCalendarPage(shell('social'),{from:start,to:stop,...await engine.socialCalendar(actor,brandId,start,stop)}));
+      }
+      return send(res, 200, socialPage(shell('social'), { overview: await engine.socialOverview(actor, brandId), discovery: await engine.socialDiscovery(actor, brandId), connectHere: input.socialConnectHere === true, connectHost: input.socialConnectHost ?? '', intentId: randomUUID() }));
     }
     if (tab === 'activity') {
       const [events, jobs] = await Promise.all([engine.activity(actor, brandId), engine.listJobs(actor, brandId)]);
@@ -243,7 +275,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     const message = known ? error.message : 'The SEO blog area is temporarily unavailable. Nothing was changed.';
     if (!known) console.error('seo-blog: request failed', (error as Error).name);
     if (method === 'POST' && known && error.status < 500 && error.status !== 404 && brandId) {
-      const tab = rest.startsWith('articles/') ? `articles/${rest.split('/')[1]}` : rest.split('/')[0] || 'overview';
+      const articleAction = rest.split('/')[2] ?? '';
+      const tab = rest.startsWith('articles/') ? `articles/${rest.split('/')[1]}${articleAction.startsWith('campaign-') || articleAction.startsWith('image-') ? '/campaign' : ''}` : rest.split('/')[0] || 'overview';
       return redirect(res, `${back(tab === 'basics' || tab === 'knowledge' || tab === 'profile' || tab === 'destinations' || tab === 'inventory' || tab==='editorial' ? 'setup' : tab === 'plan' || tab === 'plans' || tab === 'briefs' || tab === 'generate' ? 'topics' : tab === 'settings' ? 'publishing' : tab === 'jobs' ? 'activity' : tab)}?${signedMessage(input.sessionSecret, 'e', message)}`);
     }
     const status = known ? error.status : 503;
@@ -389,6 +422,10 @@ async function handlePost(
         return ok(back('publishing'),'Your current managing-owner authority was saved for the draft programme. Existing research holds still need an explicit resume.');
       }
       if (parts[1] === 'toggle') {
+        if (f('name') === 'imageGenerationEnabled') {
+          await engine.updateSettings(actor, brandId, rowVersion(), { media: { imageGenerationEnabled: f('value') === '1', authorizedBy: actor.userId, authorizedAt: new Date().toISOString() } });
+          return ok(back('publishing'), 'Image production preference saved. Existing allowances and image approvals are unchanged.');
+        }
         const name = f('name') as keyof BrandSettings;
         if (!['autoPublish', 'pauseAll', 'ongoingProduction', 'autoAcceptPlans'].includes(name)) throw new SeoBlogError(400, 'Unknown control.');
         await engine.updateSettings(actor, brandId, rowVersion(), { [name]: f('value') === '1' } as Partial<BrandSettings>);
@@ -419,6 +456,7 @@ async function handlePost(
     case 'jobs': {
       if (parts[1] && parts[2] === 'cancel') { await engine.cancelJob(actor, brandId, parts[1]); return ok(back('activity'), 'Task cancelled.'); }
       if (parts[1] && parts[2] === 'retry') { await engine.retryJob(actor, brandId, parts[1]); return ok(back('activity'), 'Task queued again.'); }
+      if (parts[1] && parts[2] === 'image-retry') { await engine.retryImagePreparation(actor, brandId, parts[1]); return ok(back('activity'), 'Saved image queued for local preparation. No new image generation was requested.'); }
       break;
     }
     case 'articles': {
@@ -426,6 +464,91 @@ async function handlePost(
       const action = parts[2];
       if (!articleId) break;
       const here = back(`articles/${articleId}`);
+      const campaignHere = `${here}/campaign`;
+      const campaignSelection = () => ({ variantId: f('variantId') ?? '', revisionId: f('revisionId') ?? '' });
+      const renderCampaignResults = async (batchResults: readonly CampaignActionResult[]) => {
+        const [detail, jobs, brands, brand, social] = await Promise.all([engine.getArticle(actor, brandId, articleId), engine.listJobs(actor, brandId),
+          engine.listBrands(actor), engine.getBrand(actor, brandId), engine.socialOverview(actor, brandId).catch(() => null)]);
+        return send(res, 200, campaignPage({ brands, brand, tab: 'articles', csrf: portalCsrfToken(input.sessionSecret, input.identity!.sessionToken), applicationName: input.applicationName },
+          { ...detail, jobs, social, now: new Date().toISOString(), batchResults }));
+      };
+      if (action === 'image-upload') {
+        if (!form.file) throw new SeoBlogError(400, 'Choose a JPEG original.');
+        await engine.uploadCampaignImage(actor, brandId, articleId, f('versionId') ?? '', f('commandId') ?? '', form.file.data, form.file.filename);
+        return ok(campaignHere, 'Owner JPEG saved privately and three real crops prepared locally. Review the pixels and description before selecting a use.');
+      }
+      if (action === 'image-withdraw') {
+        if (f('acknowledgeWithdrawal') !== '1') throw new SeoBlogError(400, 'Explicitly confirm which public/social image uses you are withdrawing.');
+        const scope = f('scope'), common = { commandId: f('commandId') ?? '', assetSha256: f('assetSha256') ?? '', reason: (f('reason') ?? '').trim() };
+        if (scope !== 'asset' && scope !== 'release') throw new SeoBlogError(400, 'Choose the exact withdrawal scope.');
+        await engine.withdrawCampaignImage(actor, brandId, articleId, scope === 'asset' ? { ...common, scope, assetId: f('assetId') ?? '' } : { ...common, scope, releaseId: f('releaseId') ?? '' });
+        return ok(campaignHere, 'Explicit image withdrawal recorded. Affected public URLs stop serving pixels and new deliveries are held; history is retained.');
+      }
+      if (action === 'image-quality-review') {
+        const profile = f('profile'); if (profile !== 'blog' && profile !== 'instagram' && profile !== 'linkedin') throw new SeoBlogError(400, 'Choose a supported image crop.');
+        await engine.reviewCampaignImage(actor, brandId, articleId, f('commandId') ?? '', { assetId: f('assetId') ?? '', assetSha256: f('assetSha256') ?? '', profile, alt: (f('alt') ?? '').trim() });
+        return ok(campaignHere, 'Exact private crop and alt text approved for quality. Select a separate hero or social use for the final version.');
+      }
+      if (action === 'image-crop') {
+        const x = Number(f('focalX')), y = Number(f('focalY'));
+        if (!f('focalX') || !f('focalY') || !Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 100 || y < 0 || y > 100) throw new SeoBlogError(400, 'Choose horizontal and vertical focal positions from 0 to 100.');
+        await engine.cropCampaignImage(actor, brandId, articleId, f('versionId') ?? '', f('commandId') ?? '', f('candidateAssetId') ?? '', f('candidateSha256') ?? '', { x: x / 100, y: y / 100 });
+        return ok(campaignHere, 'New private crops prepared from the saved original. Review their exact pixels and alt text; no image provider was called.');
+      }
+      if (action === 'image-select-hero') { const v = await engine.selectCampaignHero(actor, brandId, articleId, f('versionId') ?? '', f('commandId') ?? '', f('qualityCommandId') ?? ''); return ok(campaignHere, `Hero URL pinned in article version ${v.number}. Review the final target, authorize this exact use, then approve the blog.`); }
+      if (action === 'image-authorize-hero') { await engine.authorizeCampaignHero(actor, brandId, articleId, f('versionId') ?? '', f('commandId') ?? ''); return ok(campaignHere, 'Exact final-version hero use authorized. Pixels remain private until the publication transaction releases this same URL.'); }
+      if (action === 'campaign-select-image') { await engine.selectCampaignPostImage(actor, brandId, articleId, f('versionId') ?? '', campaignSelection(), f('commandId') ?? '', f('qualityCommandId') ?? ''); return ok(campaignHere, 'New exact post revision and image use saved. Review its text and image together before post approval.'); }
+      if (action === 'image-request') {
+        const result = await engine.requestArticleImage(actor, brandId, articleId, f('versionId') ?? '', { commandId: f('commandId') ?? '', confirmedNewIntent: f('confirmedNewIntent') === '1', replacesIntentId: f('replacesIntentId') });
+        return ok(campaignHere, result.kind === 'held' ? result.detail : 'Image preparation queued. Progress is saved; you can leave this page.');
+      }
+      if (action === 'campaign-edit') {
+        await engine.editCampaignPost(actor, brandId, articleId, f('versionId') ?? '', campaignSelection(), { title: (f('title') ?? '').trim(), copy: (f('copy') ?? '').trim(), artworkInstructions: (f('artworkInstructions') ?? '').trim() });
+        return ok(campaignHere, 'New post revision saved. Review its exact text and image use again; other posts and the blog are unchanged.');
+      }
+      if (action === 'campaign-rebase') { await engine.rebaseCampaign(actor, brandId, articleId, f('versionId') ?? ''); return ok(campaignHere, 'New parent-bound campaign revisions saved. Earlier history, owner text, dates and omissions are retained; approvals must be renewed.'); }
+      if (action === 'campaign-omit' || action === 'campaign-pin' || action === 'campaign-relative') {
+        await engine.controlCampaignPost(actor, brandId, articleId, f('versionId') ?? '', campaignSelection(), action === 'campaign-omit' ? { kind: 'omit', omitted: f('omitted') === '1' } : action === 'campaign-pin' ? { kind: 'pin', localDate: f('localDate') ?? '', localTime: f('localTime') ?? '' } : { kind: 'relative' });
+        return ok(campaignHere, 'Campaign choice saved. No external post was queued or moved.');
+      }
+      if (action === 'campaign-approve') { await engine.approveCampaignPost(actor, brandId, articleId, f('versionId') ?? '', campaignSelection()); return ok(campaignHere, 'Exact post approved. Public delivery remains separately gated by the live blog, account and current controls.'); }
+      if (action === 'campaign-queue') {
+        let dateRule: unknown; try { dateRule = JSON.parse(f('dateRule') ?? ''); } catch { throw new SeoBlogError(400, 'Refresh and review the campaign date.'); }
+        const command = { versionId: f('versionId') ?? '', ...campaignSelection(), commandId: f('commandId') ?? '', bindingId: f('bindingId') ?? '', dateRule };
+        try { await engine.queueCampaignPost(actor, brandId, articleId, command); }
+        catch (error) { return renderCampaignResults([{ title: 'Delivery instruction', confirmed: false, detail: error instanceof SeoBlogError ? error.message : 'Result not confirmed. Recover this same instruction before creating a new one.', retry: command }]); }
+        return ok(campaignHere, 'Delivery instruction safely recorded. The worker waits for this exact blog to be independently verified live, then checks the captured date, approvals, image, account and current controls.');
+      }
+      if (action === 'campaign-queue-cancel') { await engine.cancelCampaignPostQueue(actor, brandId, articleId, f('queueIntentId') ?? '', f('commandId') ?? ''); return ok(campaignHere, 'Future delivery instruction cancelled. Any already uncertain provider outcome can still be reconciled; no new send was authorized.'); }
+      if (action === 'campaign-queue-selected') {
+        const detail = await engine.getArticle(actor, brandId, articleId), results: CampaignActionResult[] = [];
+        if (!detail.version || detail.version.id !== f('versionId')) throw new SeoBlogError(409, 'The blog changed. Refresh before authorizing delivery.');
+        for (const variant of detail.article.campaign?.variants ?? []) {
+          const revisionId = f(`queue_${variant.id}`); if (!revisionId) continue;
+          const title = `${variant.network} · ${variant.angle.replace('_', ' ')}`;
+          let command: CampaignActionResult['retry'];
+          try {
+            let dateRule: unknown; try { dateRule = JSON.parse(f(`queueDate_${variant.id}`) ?? ''); } catch { throw new SeoBlogError(400, 'Refresh and review this post date.'); }
+            command = { versionId: detail.version.id, variantId: variant.id, revisionId, commandId: f(`queueCommand_${variant.id}`) ?? '', bindingId: f(`queueBinding_${variant.id}`) ?? '', dateRule };
+            await engine.queueCampaignPost(actor, brandId, articleId, command);
+            results.push({ title, confirmed: true, detail: 'Genuine delivery instruction saved. Waiting for exact live blog and current delivery controls.' });
+          } catch (error) { results.push({ title, confirmed: false, detail: error instanceof SeoBlogError ? error.message : 'Result not confirmed. Recover this same instruction before creating a new one.', ...(command ? { retry: command } : {}) }); }
+        }
+        return renderCampaignResults(results.length ? results : [{ title: 'No posts selected', confirmed: false, detail: 'Choose eligible exact post revisions to authorize.' }]);
+      }
+      if (action === 'campaign-approve-selected') {
+        const detail = await engine.getArticle(actor, brandId, articleId);
+        const exactVersion = detail.version;
+        if (!exactVersion || exactVersion.id !== f('versionId')) throw new SeoBlogError(409, 'The blog changed. Refresh before reviewing posts.');
+        const results: { title: string; confirmed: boolean; detail: string }[] = [];
+        for (const variant of detail.article.campaign?.variants ?? []) {
+          const selected = f(`approve_${variant.id}`); if (!selected) continue;
+          const title = `${variant.network} · ${variant.angle.replace('_', ' ')}`;
+          try { await engine.approveCampaignPost(actor, brandId, articleId, exactVersion.id, { variantId: variant.id, revisionId: selected }); results.push({ title, confirmed: true, detail: 'Exact post approved. Scheduling and public delivery remain separately gated.' }); }
+          catch (error) { results.push({ title, confirmed: false, detail: error instanceof SeoBlogError ? error.message : 'Approval result not confirmed. Refresh and review this exact item before retrying.' }); }
+        }
+        return renderCampaignResults(results.length ? results : [{ title: 'No posts selected', confirmed: false, detail: 'Choose eligible exact post revisions to approve.' }]);
+      }
       if(action==='website-target'){
         const v=await engine.reviewArticleWebsiteTarget(actor,brandId,articleId,{expectedVersionId:f('versionId')??'',destinationId:f('destinationId')??'',categoryIds:form.fields.getAll('categoryId')});
         return ok(here,`Website target saved in version ${v.number}. Review and approve that exact version before publication.`);

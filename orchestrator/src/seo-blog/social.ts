@@ -20,6 +20,8 @@ export interface SocialAccount {
   readonly status: 'active' | 'disconnected';
   readonly linkedAt: string;
   readonly webhookReceiptCount: number;
+  /** Provider ID digest from the signed connection registry, not a guessed clear account ID. */
+  readonly providerAccountIdSha256?: string;
 }
 
 export interface SocialBinding {
@@ -67,6 +69,10 @@ export class SocialDeliveryHoldError extends Error {
 }
 
 export interface SocialRegistry {
+  listCalendar?(brandId:string,from:string,to:string):Promise<readonly import('./campaign-calendar.js').SocialCalendarJob[]>;
+  /** Genuine owner-only, idempotent canonical TEST-target preparation; never sends. */
+  prepareCampaignTarget?(brandId: string, bindingId: string): Promise<void>;
+  discover?(brandId: string): Promise<import('./social-discovery.js').SocialDiscovery>;
   overview(brandId: string): Promise<SocialOverview>;
   registerProfile(brandId: string, displayName: string, providerProfileId: string): Promise<{ providerConnectionId: string; disposition: 'applied' | 'replayed' }>;
   beginConnect(brandId: string, network: PromotionNetwork, intentId: string): Promise<{ authUrl: string }>;

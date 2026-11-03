@@ -24,7 +24,7 @@ import { fileOrderStore, type Order } from './orders.js';
 import { fileSubscriptionStore } from './subscriptions.js';
 import { createApp, type AppDeps, type MarketingHooks } from './app.js';
 import { createMhpMount, unavailableMhpMount } from '../mhp/mount.js';
-import { centralContentOrigin, createCentralContentMount } from '../portal/central-content-mount.js';
+import { centralContentOrigin, composeCentralContentMount } from '../portal/central-content-mount.js';
 import { createMhpAuthMount } from '../mhp/auth-router.js';
 import { MHP_AUTH_ORIGIN, MHP_SESSION_COOKIE } from '../mhp/auth-service.js';
 import { MARTIN_HOWARD_PROPERTY_PROFILE } from '../portal/product-profile.js';
@@ -655,6 +655,7 @@ async function main(): Promise<void> {
         companyContent: postgresPortal.companyContent,
         followupFlows: postgresPortal.followupFlows,
         seoBlog: postgresPortal.seoBlog,
+        releasedSeoMedia: postgresPortal.releasedSeoMedia,
         seoBlogVaultReady: postgresPortal.seoBlogVaultReady,
         companyAssets: postgresPortal.companyAssets,
         companyContentSync: postgresPortal.companyContentSync,
@@ -948,14 +949,14 @@ async function main(): Promise<void> {
     }
   }
   const contentOrigin = centralContentOrigin(process.env);
-  const centralContent = contentOrigin && portal?.kind === 'postgres' ? createCentralContentMount({
-    origin: contentOrigin, portal,
+  const centralContent = composeCentralContentMount({
+    origin: contentOrigin, portal: portal?.kind === 'postgres' ? portal : undefined, releasedMedia: postgresPortal?.releasedSeoMedia,
     authorize: async (identity, requestId) => {
       if (!postgresPortal?.companyContent) return false;
       const access = await postgresPortal.companyContent.snapshot({ sessionToken: identity.sessionToken, requestId });
       return access.ok && access.snapshot.workspace.workspaceId === identity.workspaceId && access.snapshot.workspace.canManage;
     },
-  }) : undefined;
+  });
   const app = createApp({
     stripe,
     cfg,

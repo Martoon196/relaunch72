@@ -543,6 +543,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   followupFlows?: Pick<PortalFollowupFlowService, 'snapshot' | 'review' | 'save' | 'publish' | 'preview' | 'simulate' | 'message'>;
   /** SEO blog engine for owned brands. Absent unless SEO_BLOG_ENABLED=true and the content identity is ready. */
   seoBlog?: PortalSeoBlogService;
+  /** Exact released public image snapshots; independent of current membership/SEO generation. */
+  releasedSeoMedia?: import('./seo-blog-media.js').PortalReleasedSeoMediaReader;
   /** True when website credentials can be sealed (SEO_BLOG_CREDENTIAL_KEY configured). */
   seoBlogVaultReady?: boolean;
   /** Read-only owned-intelligence metadata. It exposes no review, activation or model operation. */

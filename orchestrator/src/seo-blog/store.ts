@@ -18,6 +18,9 @@ import { DEFAULT_BRAND_SETTINGS, SeoBlogError } from './types.js';
 import { isProfileJob, profilePayload, type ProfileJobBoundaryInput } from './profile-jobs.js';
 import { programmeRun, type ProgrammeBoundaryInput } from './programme.js';
 import {assertWebsiteVersionGuard,websiteWakeJob,type WebsiteReviewInput,type WebsiteVersionGuard} from './website-target.js';
+import { publicationMediaPin } from './media-publication.js';
+import { preservePublicationVerificationAnchor } from './publication-verification.js';
+import { assertCampaignCopyScope, pendingCampaignTokens, type CampaignCopyBoundaryInput } from './campaign-generation.js';
 
 export class StaleWriteError extends SeoBlogError {
   constructor(what = 'record') {
@@ -72,6 +75,7 @@ export type BeginResult =
     };
 
 export interface SeoBlogStore {
+  campaignCopyBoundary(input: CampaignCopyBoundaryInput): Promise<Article>;
   /** Genuine owner command; atomically append the exact target-reviewed version and invalidate approval. */
   reviewWebsiteTarget(input: WebsiteReviewInput): Promise<ArticleVersion>;
   programmeBoundary(input: ProgrammeBoundaryInput): Promise<Job | null>;
@@ -208,6 +212,29 @@ export class MemorySeoBlogStore implements SeoBlogStore {
     if(this.versions.has(next.version.id)||[...this.versions.values()].some((v)=>v.articleId===article.id&&v.number===next.version.number))throw new StaleWriteError('article version');
     this.versions.set(next.version.id,clone(next.version));this.articles.set(article.id,{...clone(next.article),rowVersion:article.rowVersion+1});
     return clone(next.version);
+  }
+
+  async campaignCopyBoundary(input: CampaignCopyBoundaryInput): Promise<Article> {
+    this.maybeFail('campaignCopyBoundary');
+    const brand=this.brands.get(input.brandId), article=this.articles.get(input.articleId);
+    if(!brand||!article||article.brandId!==brand.id) throw new SeoBlogError(404,'Article not found.');
+    const snapshot=clone({brand,article,profile:[...(this.profiles.get(brand.id)??[])].sort((a,b)=>b.version-a.version)[0]??null,
+      knowledge:[...this.knowledge.values()].filter(d=>d.brandId===brand.id),job:input.claim?this.jobs.get(input.claim.jobId)??null:null,
+      requesterAllowed:this.members.get(brand.id)?.has(input.authority.sponsorUserId)===true,
+      modelTokensReserved:pendingCampaignTokens([...this.articles.values()].filter(a=>a.brandId===brand.id).flatMap(a=>a.campaignGeneration?[a.campaignGeneration]:[])),
+      modelTokensUsed:this.usage.filter(u=>u.brandId===brand.id&&u.kind==='model_tokens'&&u.at>=input.now.slice(0,7)+'-01T00:00:00.000Z').reduce((n,u)=>n+u.amount,0)});
+    assertCampaignCopyScope(input,snapshot);
+    const decision=input.decide(snapshot);
+    if(decision.article.id!==article.id||decision.article.brandId!==brand.id||decision.article.rowVersion!==article.rowVersion) throw new StaleWriteError('article');
+    if(decision.websiteGuard) assertWebsiteVersionGuard(decision.websiteGuard,{...snapshot,destination:this.destinations.get(decision.websiteGuard.destinationId)??null,brief:this.briefs.get(article.briefId)??null});
+    if(decision.version){
+      this.maybeFail('addVersion');
+      const v=decision.version;
+      if(v.articleId!==article.id||v.brandId!==brand.id||this.versions.has(v.id)||[...this.versions.values()].some(x=>x.articleId===article.id&&x.number===v.number)) throw new StaleWriteError('article version');
+      this.versions.set(v.id,clone(v));
+    }
+    if(decision.usage)this.usage.push(clone(decision.usage));
+    const next={...clone(decision.article),rowVersion:article.rowVersion+1};this.articles.set(article.id,next);return clone(next);
   }
 
   async programmeBoundary(input: ProgrammeBoundaryInput): Promise<Job | null> {
@@ -457,11 +484,12 @@ export class MemorySeoBlogStore implements SeoBlogStore {
         && [...this.publications.values()].some((p) => p.brandId === input.brandId && p.idempotencyKey === decision.publication.idempotencyKey)) {
       return { kind: 'skip', why: 'This operation has already begun.' };
     }
+    const mediaRelease = decision.kind === 'begin' ? publicationMediaPin(article, this.versions.get(decision.publication.versionId)!, decision.publication) : null;
     const nextArticle: Article = { ...clone(decision.article), rowVersion: article.rowVersion + 1 };
     this.articles.set(article.id, nextArticle);
     let nextPublication: Publication | undefined;
     if (decision.publication) {
-      nextPublication = { ...clone(decision.publication), rowVersion: existing ? existing.rowVersion + 1 : 1 };
+      nextPublication = { ...clone(existing ? preservePublicationVerificationAnchor(existing, decision.publication) : decision.publication), ...(mediaRelease ? { mediaRelease } : {}), rowVersion: existing ? existing.rowVersion + 1 : 1 };
       this.publications.set(nextPublication.id, nextPublication);
       this.persistWebsiteWake(nextPublication);
     }
@@ -483,7 +511,7 @@ export class MemorySeoBlogStore implements SeoBlogStore {
     this.maybeFail('updatePublication');
     const current = this.publications.get(publication.id);
     if (!current || current.rowVersion !== publication.rowVersion) throw new StaleWriteError('publication');
-    const next = { ...clone(publication), rowVersion: publication.rowVersion + 1 };
+    const next = { ...clone(preservePublicationVerificationAnchor(current, publication)), rowVersion: publication.rowVersion + 1 };
     this.publications.set(publication.id, next);
     this.persistWebsiteWake(next);
     return clone(next);

@@ -18,6 +18,7 @@ import type { PortalSessionIdentity } from './auth-service.js';
 import { createCentralPromotionApproval } from './central-content-promotion-pg.js';
 import { createPgSeoBlogSocialRegistry, resolveSeoBlogBrandForProfile, seoBlogSocialReservedProfileIds } from './seo-blog-social-pg.js';
 import type { PromotionNetwork } from '../seo-blog/types.js';
+import { createSeoBlogMediaRuntime } from './seo-blog-media-service.js';
 
 export interface PortalSeoBlogService {
   /** Engine bound to this signed-in principal; every call is re-authorised in PostgreSQL. */
@@ -75,11 +76,11 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
     research: runtime.search.mode === 'live' ? 'live' : 'unconfigured',
     social: socialReady ? 'live' : 'unavailable',
     engineFor(identity, requestId) {
-      const store = new PgSeoBlogStore(contentCommandPool, {
-        kind: 'user', userId: identity.userId, requestId, sessionToken: identity.sessionToken, selectedWorkspaceId: identity.workspaceId,
-      });
       const social = socialFor(identity, requestId);
-      return new SeoBlogEngine({ store, llm: runtime.llm, search: runtime.search, keywords: runtime.keywords, transport, publishers, vault: runtime.vault,
+      const media = createSeoBlogMediaRuntime({ contentPool: contentCommandPool, adapterPool: promotionsReady ? contentAdapterPool : undefined, env, identity,
+        principal: { kind: 'user', userId: identity.userId, requestId, sessionToken: identity.sessionToken, selectedWorkspaceId: identity.workspaceId },
+        ...(social?.prepareCampaignTarget ? { prepareCampaignTarget: (brandId, bindingId) => social.prepareCampaignTarget!(brandId, bindingId) } : {}) });
+      return new SeoBlogEngine({ ...media, llm: runtime.llm, search: runtime.search, keywords: runtime.keywords, transport, publishers, vault: runtime.vault,
         ...(promotionsReady && contentAdapterPool ? { promotions: createCentralPromotionApproval({ adapterPool: contentAdapterPool, commandPool: contentCommandPool, identity, requestId }) } : {}),
         ...(social ? { social } : {}) });
     },
@@ -96,7 +97,7 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
 export function createWorkerSeoBlogEngine(contentCommandPool: Pool, requestId: string, env: NodeJS.ProcessEnv = process.env): SeoBlogEngine {
   const runtime = seoBlogRuntime(env);
   return new SeoBlogEngine({
-    store: new PgSeoBlogStore(contentCommandPool, { kind: 'worker', requestId }),
+    ...createSeoBlogMediaRuntime({ contentPool: contentCommandPool, principal: { kind: 'worker', requestId }, env }),
     llm: runtime.llm, search: runtime.search, keywords: runtime.keywords, transport: new GuardedFetchTransport(),
     publishers: defaultPublishers(), vault: runtime.vault, batchLimit: Number(env.SEO_BLOG_WORKER_BATCH ?? 5),
   });

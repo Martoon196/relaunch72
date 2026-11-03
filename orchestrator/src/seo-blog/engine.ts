@@ -12,7 +12,7 @@ import type { KeywordProvider } from '../keyword/types.js';
 import { runChecks } from './checks.js';
 import { assessDuplicate, slugify } from './dedupe.js';
 import {
-  extractProfile, GenerationUnavailableError, proposeCluster, resolveMarkers, rewriteSection, writeArticle, writeArticlePromotions,
+  extractProfile, GenerationUnavailableError, CampaignGenerationRejectedError, proposeCluster, resolveMarkers, rewriteSection, writeArticle, writeArticlePromotions, writeArticleCampaignPromotions,
   type PlannedArticle, type PlannedCluster, type JsonCallResult,
 } from './generation.js';
 import { buildInventory, linkableUrls } from './inventory.js';
@@ -29,7 +29,7 @@ import { autoPlace, isValidTimeZone, localToUtc, utcToLocal, validateCadence } f
 import type { SeoBlogStore } from './store.js';
 import { StaleWriteError } from './store.js';
 import { isProfileJob, profilePayload, unacknowledgedProfileCalls, type ProfileJobPayload, type ProfileJobReceipt, type ProfileJobSnapshot } from './profile-jobs.js';
-import { editorialRecommendations, editorialRootIssue, legacyPlanningHold, programmeAuthorityFor, programmeInputSnapshot, programmeReadinessIssue, programmeRun, programmeSha, researchDiagnostic,
+import { editorialRecommendations, editorialRootIssue, legacyPlanningHold, programmeAuthorityFor, programmeInputSnapshot, programmeReadinessIssue, programmeRun, programmeSha, programmeKnowledgeRefs, researchDiagnostic,
   type ApprovedEditorialStructure, type ProgrammeAuthority, type ProgrammeBoundarySnapshot, type ProgrammeBoundaryDecision, type ProgrammeRun, type ResearchSearchReceipt, type ResearchDiagnostic, type ProgrammeProvenance } from './programme.js';
 import {
   DESTINATION_TYPES, FACTUAL_KNOWLEDGE_CATEGORIES, KNOWLEDGE_CATEGORIES, SeoBlogError,
@@ -41,6 +41,13 @@ import {
 import type { SeoBlogCredentialVault } from './vault.js';
 import { linkedPromotionFor, OBSERVATION_CREATE_WINDOW_MS, OBSERVATION_TTL_MS, promotionPublicationHold, type ArticlePromotionApproval, type PromotionNetwork } from './promotions.js';
 import { activeBindingFor, bindingHold, SocialDeliveryHoldError, type SocialOverview, type SocialRegistry } from './social.js';
+import { automaticImageCommandId, imageJobDto, isArticleWriteJob, isImageJob, type ArticleImageService, type ArticleImageRequestResult } from './image-campaign.js';
+import { createArticleCampaign, fallbackCampaignDrafts, type CampaignDraft } from './campaign.js';
+import { SeoBlogCampaignService, type CampaignReviewPorts, type CampaignSelection } from './campaign-service.js';
+import type { ArticleMediaReviewService } from './media-review.js';
+import type { SeoBlogCampaignQueueService } from './campaign-queue.js';
+import { campaignCopyIssue, INITIAL_CAMPAIGN_TOKEN_ESTIMATE, type CampaignGeneration, type CampaignCopyReceipt } from './campaign-generation.js';
+import { campaignCalendarEntries, campaignJobLinks, socialCalendarWindow } from './campaign-calendar.js';
 
 export interface Actor {
   readonly userId: string;
@@ -72,6 +79,10 @@ export interface EngineDeps {
   readonly promotions?: ArticlePromotionApproval;
   /** Per-brand social account registry and canonical calendar planning; absent when the Zernio command boundary is not composed. */
   readonly social?: SocialRegistry;
+  readonly images?: ArticleImageService;
+  readonly campaignReview?: CampaignReviewPorts;
+  readonly mediaReview?: ArticleMediaReviewService;
+  readonly campaignQueue?: SeoBlogCampaignQueueService;
 }
 
 /** Estimated model tokens per stage, used for pre-flight budget checks and batch estimates. */
@@ -188,7 +199,9 @@ export class SeoBlogEngine {
   async updateSettings(actor: Actor, brandId: string, rowVersion: number, patch: Partial<BrandSettings>): Promise<Brand> {
     const brand = await this.brandFor(actor, brandId);
     if (brand.rowVersion !== rowVersion) throw new StaleWriteError('brand settings');
+    if (patch.media !== undefined && (!patch.media || typeof patch.media.imageGenerationEnabled !== 'boolean')) throw new SeoBlogError(400, 'Invalid image generation toggle.');
     const next: BrandSettings = { ...brand.settings, ...patch,
+      ...(patch.media !== undefined ? { media: { imageGenerationEnabled: patch.media.imageGenerationEnabled, authorizedBy: actor.userId, authorizedAt: this.now() } } : {}),
       ...(patch.ongoingProduction!==undefined || patch.programme!==undefined ? {programme:{...brand.settings.programme,
         ...(patch.programme ? {focus:cleanText(patch.programme.focus??'').slice(0,300)||null,exclusions:(patch.programme.exclusions??[]).map((x)=>cleanText(x).slice(0,80)).filter(Boolean).slice(0,20)} : {}),
         authorisedBy:actor.userId,authorisedAt:this.now()}} : {}),
@@ -953,7 +966,7 @@ export class SeoBlogEngine {
   }
 
   /** Job handler. Idempotent: a re-run after a crash finishes or no-ops, never duplicates. */
-  async runWrite(brandId: string, payload: { briefId: string; fromVersionId?: string; requestedBy?: string }): Promise<Article> {
+  async runWrite(brandId: string, payload: { briefId: string; fromVersionId?: string; requestedBy?: string }, claimedJob?:Job): Promise<Article> {
     const brand = await this.store.getBrand(brandId);
     if (!brand) throw new SeoBlogError(404, 'Brand not found.');
     if(brand.settings.pauseAll) throw new SeoBlogError(409,'Draft production is paused by the owner.');
@@ -983,9 +996,20 @@ export class SeoBlogEngine {
     if (!payload.fromVersionId && article.currentVersionId) {
       // Already written (e.g. a crash after the version was stored): finish bookkeeping only.
       if (brief.status !== 'generated') await this.store.saveBrief({ ...brief, status: 'generated', articleId: article.id });
+      const retained = await this.store.getVersion(brandId, article.currentVersionId);
+      if (retained) await this.queueAutomaticArticleImage(brand, article, retained, profile);
       return article;
     }
     if (payload.fromVersionId && article.currentVersionId !== payload.fromVersionId) return article; // superseded meanwhile
+    if(!payload.fromVersionId && article.campaignGeneration) {
+      const retained=article.campaignGeneration;
+      await this.appendVersion(brand,article,retained.body,'generated',null,payload.requestedBy??'system',retained.articleGeneration,profile,brief,sourceKnowledgeSha,false,claimedJob);
+      await this.store.saveBrief({...brief,status:'generated',articleId:article.id});
+      const completed=(await this.store.getArticle(brandId,article.id))!;
+      const version=completed.currentVersionId?await this.store.getVersion(brandId,completed.currentVersionId):null;
+      if(version)await this.queueAutomaticArticleImage(brand,completed,version,profile);
+      return completed;
+    }
     if (brief.status !== 'generating') await this.store.saveBrief({ ...brief, status: 'generating', articleId: article.id });
     if (article.editorialState !== 'writing') article = await this.store.updateArticle({ ...article, editorialState: 'writing' });
     await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.article);
@@ -1014,22 +1038,114 @@ export class SeoBlogEngine {
       image: previous?.body.image ?? { kind: 'none', url: null, alt: v.image_alt, provenance: 'No image selected yet.', width: null, height: null },
       author: brand.settings.author,
     };
-    const version = await this.appendVersion(brand, article, body, previous ? 'regenerated' : 'generated', null, payload.requestedBy ?? 'system', written.record, profile, brief,sourceKnowledgeSha);
+    const version = await this.appendVersion(brand, article, body, previous ? 'regenerated' : 'generated', null, payload.requestedBy ?? 'system', written.record, profile, brief,sourceKnowledgeSha,false,claimedJob);
     await this.store.saveBrief({ ...(await this.store.getBrief(brandId, brief.id))!, status: 'generated', articleId: article.id });
     await this.log(brandId, payload.requestedBy ?? 'system', previous ? 'article.regenerated' : 'article.generated', `“${body.title}” ${previous ? 'regenerated' : 'written'} (version ${version.number}).`, article.id);
+    await this.queueAutomaticArticleImage(brand, article, version, profile);
     return (await this.store.getArticle(brandId, article.id))!;
+  }
+
+  private async queueAutomaticArticleImage(brand: Brand, article: Article, version: ArticleVersion, profile: BrandProfile): Promise<void> {
+    if (!brand.settings.media?.imageGenerationEnabled || !this.deps.images || version.body.image.kind !== 'none') return;
+    // An automatic intent is sponsored by the exact current confirmer. The SQL
+    // boundary rechecks eligibility under the real worker, not a user principal.
+    if (!profile.confirmedBy) return;
+    try {
+      const result = await this.deps.images.request({ brandId: brand.id, articleId: article.id, expectedVersionId: version.id,
+        commandId: automaticImageCommandId(article.id, version.id), origin: 'programme', sponsorUserId: profile.confirmedBy, confirmedNewIntent: false });
+      if (result.kind === 'held') await this.log(brand.id, 'system', 'image.held', result.detail.slice(0, 300), article.id);
+    } catch {
+      // Image readiness cannot erase a successfully saved article. No provider
+      // call happens here; the durable image job alone can request admission.
+      await this.log(brand.id, 'system', 'image.unavailable', 'The article was saved. Image preparation is unavailable; review campaign image settings.', article.id).catch(() => undefined);
+    }
+  }
+
+  async requestArticleImage(actor: Actor, brandId: string, articleId: string, expectedVersionId: string, input: { readonly commandId: string; readonly confirmedNewIntent: boolean; readonly replacesIntentId?: string | null }): Promise<ArticleImageRequestResult> {
+    await this.brandFor(actor, brandId);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(input.commandId)) throw new SeoBlogError(400, 'Invalid image command.');
+    if (input.replacesIntentId && !validUuid(input.replacesIntentId)) throw new SeoBlogError(400, 'Invalid previous image intent.');
+    if (!this.deps.images) throw new SeoBlogError(503, 'Image storage and the capable image worker are not configured. No image call has been made.');
+    // The service recovers a genuine command alias BEFORE fresh source checks.
+    // A retained receipt is not permission for another paid provider call.
+    const result = await this.deps.images.request({ brandId, articleId, expectedVersionId, commandId: input.commandId, origin: 'owner', sponsorUserId: actor.userId, confirmedNewIntent: input.confirmedNewIntent, replacesIntentId: input.replacesIntentId ?? null });
+    return result.kind === 'job' ? { ...result, job: imageJobDto(result.job) } : result;
+  }
+
+  async retryImagePreparation(actor: Actor, brandId: string, jobId: string): Promise<Job> {
+    await this.brandFor(actor, brandId);
+    if (!this.deps.images) throw new SeoBlogError(503, 'Image preparation is unavailable.');
+    return imageJobDto(await this.deps.images.retryPreparation({ brandId, jobId, actorId: actor.userId }));
+  }
+
+  private async initialCampaignCopy(input:{brand:Brand;article:Article;body:ArticleBody;generation:GenerationRecord|null;profile:BrandProfile;brief:ArticleBrief;actor:string;versionId:string;number:number;claimedJob?:Job;sourceKnowledgeSha?:string}):Promise<{article:Article;drafts:readonly CampaignDraft[];generation:GenerationRecord|null}> {
+    const {brand,body,profile,brief}=input;
+    const claim=input.claimedJob?{jobId:input.claimedJob.id,leaseOwner:input.claimedJob.leaseOwner,attempts:input.claimedJob.attempts}:null;
+    const requestedBy=input.claimedJob?.payload.requestedBy??input.actor;
+    if(typeof requestedBy!=='string'||(requestedBy!=='system'&&!validUuid(requestedBy))||(input.claimedJob&&requestedBy!==input.actor))throw new SeoBlogError(403,'Article copy requester does not match the actual write claim.');
+    const authority=input.article.campaignGeneration?.authority??(requestedBy==='system'?{origin:'daily' as const,sponsorUserId:brand.settings.programme?.authorisedBy??profile.confirmedBy??''}:{origin:'manual' as const,sponsorUserId:requestedBy});
+    const boundary=(decide:Parameters<SeoBlogStore['campaignCopyBoundary']>[0]['decide'])=>this.store.campaignCopyBoundary({brandId:brand.id,articleId:input.article.id,authority,claim,now:this.now(),decide});
+    let article=await boundary(s=>{
+      if(s.article.campaignGeneration)return {article:s.article};
+      const marker:CampaignGeneration={nonce:randomUUID(),estimatedTokens:INITIAL_CAMPAIGN_TOKEN_ESTIMATE,plannedVersionId:input.versionId,plannedVersionNumber:input.number,body,articleGeneration:input.generation,profileSha:programmeSha(profile),knowledgeSha:input.sourceKnowledgeSha??programmeSha(programmeKnowledgeRefs(s.knowledge)),authority,claim,capturedAt:this.now(),startedAt:null,receipt:null,appliedAt:null};
+      // Source and genuine authority are checked before saving any provider intent.
+      const issue=campaignCopyIssue(s,marker,this.now());if(issue)throw new SeoBlogError(409,issue,'campaign_copy_held');
+      return {article:{...s.article,campaignGeneration:marker}};
+    });
+    let marker=article.campaignGeneration!;
+    if(programmeSha(marker.body)!==programmeSha(body)||marker.plannedVersionId!==input.versionId)throw new SeoBlogError(409,'The saved initial article input must be recovered exactly.');
+    if(marker.startedAt&&!marker.receipt)throw new SeoBlogError(409,'The social copy call has an uncertain outcome. Its article input is saved; Retry cannot repeat the paid call.','campaign_copy_unknown');
+    if(!marker.receipt) {
+      // Configuration/budget failure before a start is a labelled free fallback.
+      let llm:LlmClient;
+      try { llm=this.llm(); await this.requireBudget(brand,'model_tokens',USAGE_ESTIMATES.promotion); }
+      catch(error) { if(!(error instanceof SeoBlogError))throw error; return {article,drafts:fallbackCampaignDrafts(body),generation:null}; }
+      let startedHere=false;
+      article=await boundary(s=>{
+        const m=s.article.campaignGeneration;
+        if(!m||m.nonce!==marker.nonce)throw new SeoBlogError(409,'Initial copy identity changed.');
+        if(m.receipt||m.startedAt)return {article:s.article};
+        const issue=campaignCopyIssue(s,{...m,claim},this.now());if(issue)throw new SeoBlogError(409,issue,'campaign_copy_held');
+        const ceiling=s.brand.settings.budgets.modelTokensPerMonth;
+        if(ceiling<=0||s.modelTokensUsed+s.modelTokensReserved+USAGE_ESTIMATES.promotion>ceiling)throw new SeoBlogError(409,`Writing allowance: recorded usage ${s.modelTokensUsed.toLocaleString('en-GB')} tokens; pending copy reservations ${s.modelTokensReserved.toLocaleString('en-GB')} estimated tokens; ceiling ${ceiling.toLocaleString('en-GB')}. This action needs another ${USAGE_ESTIMATES.promotion.toLocaleString('en-GB')} estimated tokens. Review pending work and Publishing settings; reserved estimates are not actual billed usage.`,'budget_exceeded');
+        startedHere=true;return {article:{...s.article,campaignGeneration:{...m,claim,startedAt:this.now()}}};
+      });
+      marker=article.campaignGeneration!;
+      if(!startedHere){
+        if(!marker.receipt)throw new SeoBlogError(409,'Another worker started this copy call. Await its saved receipt.','campaign_copy_unknown');
+      }else{
+        let receipt:CampaignCopyReceipt;
+        try {const generated=await writeArticleCampaignPromotions(llm,profile,body);receipt={nonce:marker.nonce,at:this.now(),record:generated.record,result:{kind:'accepted',drafts:generated.value.posts}};}
+        catch(error){
+          if(!(error instanceof CampaignGenerationRejectedError))throw new SeoBlogError(409,'The social copy request has an uncertain outcome. The saved article is held; no automatic paid replay will occur.','campaign_copy_unknown');
+          receipt={nonce:marker.nonce,at:this.now(),record:error.record,result:{kind:'rejected'}};
+        }
+        const save=()=>boundary(s=>{
+          const m=s.article.campaignGeneration;
+          if(!m||m.nonce!==receipt.nonce||!m.startedAt)throw new SeoBlogError(409,'Copy receipt identity changed.');
+          if(m.receipt)return {article:s.article};
+          return {article:{...s.article,campaignGeneration:{...m,receipt}},usage:{brandId:brand.id,kind:'model_tokens',amount:receipt.record.tokensIn+receipt.record.tokensOut,at:receipt.at,reference:`promotion:${s.article.id}:${m.plannedVersionId}`}};
+        });
+        // Retry persistence only, using the same known result. Never repeat LLM work.
+        try{article=await save();}catch{article=await save();}
+        marker=article.campaignGeneration!;
+      }
+    }
+    const receipt=marker.receipt;
+    if(!receipt)throw new SeoBlogError(409,'The copy result is still awaiting a durable receipt.','campaign_copy_unknown');
+    return {article,drafts:receipt.result.kind==='accepted'?receipt.result.drafts:fallbackCampaignDrafts(body),generation:receipt.result.kind==='accepted'?receipt.record:null};
   }
 
   private async appendVersion(
     brand: Brand, article: Article, body: ArticleBody, change: VersionChange, changedSectionId: string | null, actor: string,
-    generation: GenerationRecord | null, profile: BrandProfile, brief: ArticleBrief,sourceKnowledgeSha?:string,
+    generation: GenerationRecord | null, profile: BrandProfile, brief: ArticleBrief,sourceKnowledgeSha?:string, skipPromotionGeneration=false, claimedJob?:Job,
   ): Promise<ArticleVersion> {
     const versions = await this.store.listVersions(brand.id, article.id);
     const prior=versions.find((v)=>v.id===article.currentVersionId);
     if(article.publishedUrl&&body.slug!==new URL(article.publishedUrl).pathname.split('/').filter(Boolean).at(-1))throw new SeoBlogError(409,'An already-published article keeps its original slug and URL.');
     let websiteTarget:ArticleWebsiteTarget|undefined=prior?.websiteTarget&&prior.body.slug===body.slug?{...prior.websiteTarget,deliverySha:websiteSha({body,...Object.fromEntries(Object.entries(prior.websiteTarget).filter(([key])=>key!=='deliverySha'))})}:undefined;
     const contentSha = sha256(body);
-    const versionId = randomUUID();
+    const versionId = article.currentVersionId===null&&!article.campaign&&!article.campaignGeneration?.appliedAt ? article.campaignGeneration?.plannedVersionId??randomUUID() : randomUUID();
     const destinations = (await this.store.listDestinations(brand.id)).filter(d => d.status === 'connected');
     const structure=brand.settings.programme?.structure;
     const destination = destinations.find(d=>d.id===prior?.websiteTarget?.destinationId)??destinations.find(d => d.id === article.schedule?.destinationId)??destinations.find(d=>d.id===structure?.destinationId) ?? (destinations.length === 1 ? destinations[0] : null);
@@ -1044,18 +1160,29 @@ export class SeoBlogEngine {
     }
     const canonicalUrl = websiteTarget?.target.canonicalUrl ?? article.publishedUrl ?? (destination ? publisherFor(this.deps.publishers, destination.type).publicUrlFor(destination, body.slug) : null);
     let generationRecord: GenerationRecord | null = null;
+    const initialCampaign = article.currentVersionId === null && !article.campaign;
+    let campaignDrafts: readonly CampaignDraft[] = fallbackCampaignDrafts(body);
     let posts: ArticlePromotionPack['posts'] = (['instagram', 'linkedin'] as const).map(network => ({
       network, title: body.title, copy: `${body.title}\n\n${body.excerpt}\n\nRead the full article.`,
       artworkInstructions: `Create a brand-approved editorial image illustrating “${body.title}”. Review the image before scheduling.`,
     }));
-    try {
+    if(initialCampaign && !skipPromotionGeneration) {
+      const result=await this.initialCampaignCopy({brand,article,body,generation,profile,brief,actor,versionId,number:(versions.at(-1)?.number??0)+1,claimedJob,sourceKnowledgeSha});
+      article=result.article; campaignDrafts=result.drafts; generationRecord=result.generation;
+      posts=campaignDrafts.filter(p=>p.angle==='launch').map(({network,title,copy,artworkInstructions})=>({network,title,copy,artworkInstructions}));
+    } else try {
+      if (skipPromotionGeneration) throw new GenerationUnavailableError('This image-only edit retains article-text accompanying drafts; no model call was made.');
       await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.promotion);
-      const generated = await writeArticlePromotions(this.llm(), profile, body);
-      await this.recordGeneration(brand.id, generated.record, `promotion:${article.id}:${versionId}`);
-      posts = generated.value.posts; generationRecord = generated.record;
+      {
+        const generated = await writeArticlePromotions(this.llm(), profile, body);
+        await this.recordGeneration(brand.id, generated.record, `promotion:${article.id}:${versionId}`);
+        posts = generated.value.posts; generationRecord = generated.record;
+      }
     } catch (error) {
       // Preserve the article/edit when the optional copy stage cannot run. The UI labels this fallback.
-      await this.log(brand.id, actor, 'promotion.fallback', `Accompanying drafts use the article excerpt: ${(error as Error).message.slice(0, 160)}`, article.id);
+      await this.log(brand.id, actor, 'promotion.fallback', initialCampaign
+        ? 'Accompanying drafts use labelled article-text templates because model output was unavailable or incomplete. No automatic correction call was made.'
+        : `Accompanying drafts use the article excerpt: ${(error as Error).message.slice(0, 160)}`, article.id);
     }
     const promotionPack: ArticlePromotionPack = {
       source: 'relaunch72.seo-blog', brandId: brand.id, articleId: article.id, versionId, contentSha,
@@ -1070,13 +1197,25 @@ export class SeoBlogEngine {
       profileVersion: profile.version, factsSha: profile.factsSha, knowledge: profile.knowledge, briefId: brief.id, planId: brief.planId,
       generation, contentSha, promotionPack,
     };
-    await this.store.addVersion(version,websiteGuard);
     const checks = await this.checkVersion(brand, version);
     // A new version always invalidates the old approval; review-required articles return to Needs approval.
-    await this.store.updateArticle({
+    const nextArticle:Article={
       ...article, slug: body.slug, currentVersionId: version.id, editorialState: 'draft', approval: null, checks, failure: null,
+      ...(initialCampaign ? { campaign: createArticleCampaign({ articleVersionId: version.id, articleContentSha: version.contentSha, canonicalUrl,
+        drafts: campaignDrafts, createdAt: version.createdAt, createdBy: actor, generation: generationRecord }) } : {}),
       hold: article.hold && ['checks_failed', 'stale_version'].includes(article.hold.reason) ? null : article.hold,
-    });
+    };
+    if(initialCampaign && article.campaignGeneration) {
+      const marker=article.campaignGeneration, claim=claimedJob?{jobId:claimedJob.id,leaseOwner:claimedJob.leaseOwner,attempts:claimedJob.attempts}:null;
+      await this.store.campaignCopyBoundary({brandId:brand.id,articleId:article.id,authority:marker.authority,claim,now:this.now(),decide:s=>{
+        const m=s.article.campaignGeneration;
+        if(!m||m.nonce!==marker.nonce||m.appliedAt)throw new SeoBlogError(409,'The article copy completion changed.');
+        const issue=campaignCopyIssue(s,{...m,claim},this.now());if(issue)throw new SeoBlogError(409,issue,'campaign_copy_held');
+        if(m.startedAt&&!m.receipt)throw new SeoBlogError(409,'The copy call has an uncertain outcome. No automatic paid replay is permitted.','campaign_copy_unknown');
+        if(s.article.rowVersion!==article.rowVersion)throw new StaleWriteError('article');
+        return {article:{...nextArticle,campaignGeneration:{...m,appliedAt:this.now()}},version,websiteGuard};
+      }});
+    } else { await this.store.addVersion(version,websiteGuard); await this.store.updateArticle(nextArticle); }
     return version;
   }
 
@@ -1140,6 +1279,28 @@ export class SeoBlogEngine {
     await this.brandFor(actor, brandId);
     if (!this.deps.social) return { profile: null, accounts: [], bindings: [] };
     return this.deps.social.overview(brandId);
+  }
+
+  async campaignCalendar(actor:Actor,brandId:string):Promise<import('./campaign-calendar.js').CampaignCalendarEntry[]> {
+    const brand=await this.brandFor(actor,brandId);
+    const [articles,briefs,publications]=await Promise.all([this.store.listArticles(brandId),this.store.listBriefs(brandId),this.store.listPublications(brandId)]);
+    const sources=await Promise.all(articles.filter(a=>a.campaign).map(async article=>({article,version:article.currentVersionId?await this.store.getVersion(brandId,article.currentVersionId):null,proposedAt:briefs.find(b=>b.id===article.briefId)?.suggestedAtUtc??null,publications:publications.filter(p=>p.articleId===article.id)})));
+    return campaignCalendarEntries(sources,this.now(),brand.timezone,brand.settings.pauseAll);
+  }
+
+  async socialCalendar(actor:Actor,brandId:string,from:string,to:string):Promise<{jobs:readonly import('./campaign-calendar.js').SocialCalendarJob[];links:ReadonlyMap<string,import('./campaign-calendar.js').CampaignJobLink>;available:boolean}> {
+    await this.brandFor(actor,brandId);
+    if(!socialCalendarWindow(from,to))throw new SeoBlogError(400,'Choose a valid delivery period of no more than 366 days.');
+    const reader=this.deps.social?.listCalendar;
+    if(!reader)return {jobs:[],links:new Map(),available:false};
+    const [jobs,articles,wakeups]=await Promise.all([reader(brandId,from,to),this.store.listArticles(brandId),this.store.listJobs(brandId)]);
+    return {jobs,links:campaignJobLinks(articles,wakeups),available:true};
+  }
+
+  async socialDiscovery(actor: Actor, brandId: string): Promise<import('./social-discovery.js').SocialDiscovery> {
+    await this.brandFor(actor, brandId);
+    if (!this.deps.social?.discover) return { state: 'unconfigured', profiles: [], accounts: [], checkedAt: null, detail: 'Verified account discovery is unavailable. Existing bindings have not been changed.' };
+    return this.deps.social.discover(brandId);
   }
 
   async registerSocialProfile(actor: Actor, brandId: string, displayName: string, providerProfileId: string): Promise<void> {
@@ -1285,15 +1446,103 @@ export class SeoBlogEngine {
 
   // ─── Editing ─────────────────────────────────────────────────────────────
 
-  async getArticle(actor: Actor, brandId: string, articleId: string): Promise<{ article: Article; version: ArticleVersion | null; versions: ArticleVersion[]; publications: Publication[]; status: string }> {
+  async getArticle(actor: Actor, brandId: string, articleId: string): Promise<{ article: Article; version: ArticleVersion | null; versions: ArticleVersion[]; publications: Publication[]; status: string; proposedAt?: string | null }> {
     const brand = await this.brandFor(actor, brandId);
     const article = await this.store.getArticle(brandId, articleId);
     if (!article) throw new SeoBlogError(404, 'That article was not found.');
-    const versions = await this.store.listVersions(brandId, articleId);
+    const [versions, brief] = await Promise.all([this.store.listVersions(brandId, articleId), this.store.getBrief(brandId, article.briefId)]);
     return {
-      article, version: versions.find((v) => v.id === article.currentVersionId) ?? null, versions,
+      article, version: versions.find((v) => v.id === article.currentVersionId) ?? null, versions, proposedAt: brief?.suggestedAtUtc ?? null,
       publications: (await this.store.listPublications(brandId, articleId)).map(({websiteSnapshot:_private,...publicRecord})=>publicRecord), status: articleStatusLabel(article, brand.settings),
     };
+  }
+
+  private campaignService(): SeoBlogCampaignService { return new SeoBlogCampaignService(this.store, this.now, this.deps.campaignReview); }
+  private mediaReview(): ArticleMediaReviewService {
+    if (!this.deps.mediaReview) throw new SeoBlogError(503, 'Private image review is not configured. No image was approved or released.');
+    return this.deps.mediaReview;
+  }
+  async privateCampaignImage(actor: Actor, brandId: string, assetId: string, sha: string): Promise<import('./media-types.js').SeoMediaPrivateBytes> {
+    await this.brandFor(actor, brandId);
+    return this.mediaReview().media.loadPrivateAsset(brandId, assetId, sha);
+  }
+  async reviewCampaignImage(actor: Actor, brandId: string, articleId: string, commandId: string, input: import('./media-types.js').SeoMediaAssetManifestInput): Promise<import('./media-review.js').MediaQualityReview> {
+    await this.brandFor(actor, brandId);
+    return this.mediaReview().review(actor.userId, brandId, articleId, commandId, input);
+  }
+  async cropCampaignImage(actor: Actor, brandId: string, articleId: string, versionId: string, commandId: string, candidateAssetId: string, candidateSha256: string, focal: { x: number; y: number }): Promise<void> {
+    await this.brandFor(actor, brandId);
+    await this.mediaReview().crop(actor.userId, brandId, articleId, versionId, commandId, candidateAssetId, candidateSha256, focal);
+  }
+  async uploadCampaignImage(actor: Actor, brandId: string, articleId: string, versionId: string, commandId: string, bytes: Buffer, filename: string): Promise<void> {
+    await this.brandFor(actor, brandId);
+    await this.mediaReview().upload(actor.userId, brandId, articleId, versionId, commandId, bytes, filename);
+  }
+  async withdrawCampaignImage(actor: Actor, brandId: string, articleId: string, input: import('./media-types.js').SeoMediaWithdrawalInput): Promise<void> {
+    await this.brandFor(actor, brandId);
+    await this.mediaReview().withdraw(actor.userId, brandId, articleId, input);
+  }
+  async selectCampaignHero(actor: Actor, brandId: string, articleId: string, expectedVersionId: string, commandId: string, qualityCommandId: string): Promise<ArticleVersion> {
+    const brand = await this.brandFor(actor, brandId), media = this.mediaReview();
+    let article = await this.store.getArticle(brandId, articleId);
+    if (!article) throw new SeoBlogError(404, 'Article not found.');
+    const review = article.mediaQualityReviews?.find(r => r.commandId === qualityCommandId);
+    if (!review?.canonical || review.manifest.presentation.profile !== 'blog') throw new SeoBlogError(409, 'Review the real blog crop and its exact alt text first.');
+    const manifest = review.manifest;
+    const reservation = await media.media.reserveMediaUse(brandId, { commandId, articleId, assetId: manifest.assetId, assetSha256: manifest.byteSha256,
+      presentation: { slot: 'hero', profile: 'blog', alt: manifest.presentation.alt } });
+    const current = article.currentVersionId ? await this.store.getVersion(brandId, article.currentVersionId) : null;
+    let next: ArticleVersion;
+    if (current?.body.image.url === reservation.prospectiveUrl && current.body.image.alt === reservation.presentation.alt) next = current;
+    else {
+      const editable = await this.editable(brandId, articleId, expectedVersionId);
+      if (editable.article.delivery === 'publishing') throw new SeoBlogError(409, 'Wait for the current publication to finish before changing the hero image.');
+      next = await this.appendVersion(brand, editable.article, { ...editable.version.body, image: { kind: manifest.provenance.kind,
+        url: reservation.prospectiveUrl, alt: manifest.presentation.alt, provenance: 'Exact privately reviewed editorial crop; public release remains separately gated.',
+        width: manifest.width, height: manifest.height } }, 'image_changed', null, actor.userId, null, editable.profile, editable.brief, undefined, true);
+    }
+    article = (await this.store.getArticle(brandId, articleId))!;
+    if (article.currentVersionId !== next.id) throw new StaleWriteError('article');
+    await this.store.updateArticle({ ...article, heroMedia: { reservation, quality: review.canonical, authorizations: article.heroMedia?.reservation.commandId === commandId ? article.heroMedia.authorizations : [] } });
+    return next;
+  }
+  async authorizeCampaignHero(actor: Actor, brandId: string, articleId: string, versionId: string, commandId: string): Promise<void> {
+    await this.brandFor(actor, brandId);
+    const article = await this.store.getArticle(brandId, articleId), version = await this.store.getVersion(brandId, versionId);
+    if (!article || !version || article.currentVersionId !== versionId || version.articleId !== articleId || !article.heroMedia) throw new SeoBlogError(409, 'Refresh and select the exact reviewed hero before authorizing this version.');
+    const selected = article.heroMedia;
+    if (version.body.image.url !== selected.reservation.prospectiveUrl || version.body.image.alt !== selected.reservation.presentation.alt) throw new SeoBlogError(409, 'The hero presentation changed. Review a new exact use.');
+    const authorization = await this.mediaReview().media.recordOwnerImageAuthorization(brandId, { commandId, reservationCommandId: selected.reservation.commandId,
+      articleVersionId: version.id, articleContentSha256: version.contentSha, reviewedIntentSha256: version.websiteTarget?.deliverySha ?? version.contentSha, canonical: selected.quality });
+    const current = (await this.store.getArticle(brandId, articleId))!;
+    if (current.currentVersionId !== version.id || current.heroMedia?.reservation.commandId !== selected.reservation.commandId) throw new StaleWriteError('hero image');
+    const authorizations = current.heroMedia.authorizations.some(a => a.id === authorization.id) ? current.heroMedia.authorizations : [...current.heroMedia.authorizations, authorization];
+    await this.store.updateArticle({ ...current, heroMedia: { ...current.heroMedia, authorizations } });
+  }
+  async editCampaignPost(actor: Actor, brandId: string, articleId: string, versionId: string, selection: CampaignSelection, edit: { title: string; copy: string; artworkInstructions: string }): Promise<Article> {
+    return this.campaignService().edit(actor.userId, brandId, articleId, versionId, selection, edit);
+  }
+  async selectCampaignPostImage(actor: Actor, brandId: string, articleId: string, versionId: string, selection: CampaignSelection, commandId: string, qualityCommandId: string): Promise<Article> {
+    return this.campaignService().selectImage(actor.userId, brandId, articleId, versionId, selection, commandId, qualityCommandId);
+  }
+  async controlCampaignPost(actor: Actor, brandId: string, articleId: string, versionId: string, selection: CampaignSelection, control: Parameters<SeoBlogCampaignService['control']>[5]): Promise<Article> {
+    return this.campaignService().control(actor.userId, brandId, articleId, versionId, selection, control);
+  }
+  async rebaseCampaign(actor: Actor, brandId: string, articleId: string, versionId: string): Promise<Article> {
+    return this.campaignService().rebase(actor.userId, brandId, articleId, versionId);
+  }
+  async approveCampaignPost(actor: Actor, brandId: string, articleId: string, versionId: string, selection: CampaignSelection): Promise<Article> {
+    return this.campaignService().approve(actor.userId, brandId, articleId, versionId, selection);
+  }
+  async queueCampaignPost(actor: Actor, brandId: string, articleId: string, input: Parameters<SeoBlogCampaignQueueService['request']>[3]): Promise<import('./media-types.js').SeoCampaignQueueInstruction> {
+    await this.brandFor(actor, brandId);
+    if (!this.deps.campaignQueue) throw new SeoBlogError(503, 'Durable campaign delivery is not configured. No post was queued.');
+    return this.deps.campaignQueue.request(actor.userId, brandId, articleId, input);
+  }
+  async cancelCampaignPostQueue(actor: Actor, brandId: string, articleId: string, queueId: string, commandId: string): Promise<void> {
+    await this.brandFor(actor, brandId);
+    if (!this.deps.campaignQueue) throw new SeoBlogError(503, 'Campaign delivery is not configured.');
+    await this.deps.campaignQueue.cancel(actor.userId, brandId, articleId, queueId, commandId);
   }
 
   async listArticles(actor: Actor, brandId: string): Promise<{ article: Article; title: string; status: string }[]> {
@@ -1329,7 +1578,7 @@ export class SeoBlogEngine {
 
   private validateImage(brand: Brand, image: ArticleBody['image']): ArticleBody['image'] {
     if (image.kind === 'none') return { kind: 'none', url: null, alt: cleanText(image.alt).slice(0, 200), provenance: 'No image selected.', width: null, height: null };
-    if (image.kind === 'generated') throw new SeoBlogError(409, 'Image generation is not connected for blog articles yet. Choose an existing brand image instead.');
+    if (image.kind === 'generated') throw new SeoBlogError(409, 'Use the Campaign screen to select a prepared image and review its exact description and use.');
     if (!image.url || !/^https:\/\//.test(image.url)) throw new SeoBlogError(400, 'Use a full https:// address for the image.');
     if (!image.alt || image.alt.trim().length < 5) throw new SeoBlogError(400, 'Describe the image in the alt text.');
     if (/\b(our client|testimonial|before and after|screenshot of|our property at)\b/i.test(image.alt)) {
@@ -1626,7 +1875,10 @@ export class SeoBlogEngine {
     // The publication-begin boundary: policy is evaluated on locked, current state and the
     // operation + article claim (or hold) are committed atomically. No provider call inside.
     const now = this.now();
-    const begun = await this.store.beginPublication({
+    let attempted: Article | null = null;
+    const knownOperations = new Set((await this.store.listPublications(brandId, articleId)).map(p => p.id));
+    let begun: import('./store.js').BeginResult;
+    try { begun = await this.store.beginPublication({
       brandId, articleId, resumePublicationId: null,
       decide: (s) => {
         const f = this.factsKeyFrom(s.profile, s.knowledge);
@@ -1649,9 +1901,14 @@ export class SeoBlogEngine {
           publicUrl: target?.target.canonicalUrl??s.article.publishedUrl??publisher.publicUrlFor(s.destination!, s.version!.body.slug), verifiedAt: null, verifyAttempts: 0,
           detail: 'Authorised and recorded before sending.', events: [{ at: now, state: 'prepared', detail: `Authorised by policy rule "${decision.policy.rule}".` }], rowVersion: 1,
         };
+        attempted = structuredClone(s.article);
         return { kind: 'begin', publication, article: { ...s.article,deliveryPublicationId:publication.id, delivery: 'publishing', lastAttemptAt: now, failure: null } };
       },
-    });
+    }); } catch (error) {
+      if (!(error instanceof SeoBlogError) || error.code !== 'media_effect_held') throw error;
+      await this.projectMediaEffectHold(brandId, articleId, attempted, knownOperations, error.message);
+      return 'held';
+    }
     if (begun.kind === 'skip') return 'skipped';
     if (begun.kind === 'hold') {
       await this.log(brandId, 'system', 'publish.held', `Not published: ${begun.article!.hold!.detail}`, articleId);
@@ -1659,6 +1916,20 @@ export class SeoBlogEngine {
     }
     await this.attempt(brand, begun.publication, begun.destination, begun.version);
     return 'published';
+  }
+
+  private async projectMediaEffectHold(brandId: string, articleId: string, attempted: Article | null, knownOperations: ReadonlySet<string>, detail: string): Promise<void> {
+    const current = await this.store.getArticle(brandId, articleId), operations = await this.store.listPublications(brandId, articleId);
+    if (attempted && current && current.rowVersion === attempted.rowVersion && !current.hold
+      && current.currentVersionId === attempted.currentVersionId && current.delivery === attempted.delivery
+      && current.deliveryPublicationId === attempted.deliveryPublicationId
+      && current.schedule?.setAt === attempted.schedule?.setAt && current.schedule?.destinationId === attempted.schedule?.destinationId
+      && current.schedule?.publishAtUtc === attempted.schedule?.publishAtUtc
+      && !operations.some(p => !knownOperations.has(p.id) || ['prepared','submitted','outcome_unknown','verifying'].includes(p.state))) {
+      try { await this.store.updateArticle({ ...current, hold: { reason: 'owner', at: this.now(), detail } }); }
+      catch (error) { if (!(error instanceof StaleWriteError)) throw error; }
+    }
+    await this.log(brandId, 'system', 'publish.held', `${detail} This attempt did not begin a new website send.`, articleId);
   }
 
   /** Append to the operation's own history; identity and earlier events are never rewritten. */
@@ -1960,7 +2231,15 @@ export class SeoBlogEngine {
 
   async listJobs(actor: Actor, brandId: string): Promise<Job[]> {
     await this.brandFor(actor, brandId);
-    return this.store.listJobs(brandId);
+    return (await this.store.listJobs(brandId)).map(imageJobDto);
+  }
+  async imageJobStatus(actor: Actor, brandId: string, articleId: string, jobId: string): Promise<{ id: string; state: Job['state']; detail: string; prepared: boolean }> {
+    await this.brandFor(actor, brandId);
+    const job = await this.store.getJob(brandId, jobId);
+    const dto = job ? imageJobDto(job) : null, image = dto?.payload.image as Record<string, unknown> | undefined;
+    if (!job || !isImageJob(job) || image?.articleId !== articleId) throw new SeoBlogError(404, 'That image task was not found.');
+    const result = image.result as Record<string, unknown>;
+    return { id: job.id, state: job.state, detail: (job.error ?? job.progress).slice(0, 600), prepared: job.state === 'done' && result.state === 'prepared' };
   }
 
   async cancelJob(actor: Actor, brandId: string, jobId: string): Promise<Job> {
@@ -2002,21 +2281,39 @@ export class SeoBlogEngine {
         await this.log(brandId, 'system', 'social.attest.failed', `Attestation pass failed: ${(error as Error).message.slice(0, 160)}`).catch(() => undefined);
       }
     }
+    if(this.deps.campaignQueue){
+      try{await this.deps.campaignQueue.recover();}
+      catch(error){throw new SeoBlogError(503,error instanceof SeoBlogError&&error.code==='campaign_recovery_authority'?'Campaign recovery needs database-authority attention. Existing social proof checks ran independently.':'Campaign recovery is unavailable. Saved instructions are retained; existing social proof checks ran independently.','campaign_recovery_failed');}
+    }
     return { jobs: jobs.length, brands: brands.length };
   }
 
   async runJob(job: Job): Promise<Job> {
+    if (job.kind === 'publish' && job.payload.campaignQueue !== undefined) {
+      if (!this.deps.campaignQueue) {
+        const fresh = await this.store.getJob(job.brandId, job.id);
+        if (!fresh || fresh.state !== 'running' || fresh.leaseOwner !== job.leaseOwner || fresh.attempts !== job.attempts) return fresh ?? job;
+        return this.store.updateJob({ ...fresh, state: 'blocked', leaseOwner: null, leaseExpiresAt: null, progress: 'Campaign delivery is unavailable on this worker.', error: 'A capable campaign worker is required. No article or social post was published.', updatedAt: this.now() });
+      }
+      return this.deps.campaignQueue.run(job);
+    }
+    if (isImageJob(job)) {
+      if (this.deps.images) return this.deps.images.run(job);
+      const fresh = await this.store.getJob(job.brandId, job.id);
+      if (!fresh || fresh.state !== 'running' || fresh.leaseOwner !== job.leaseOwner || fresh.attempts !== job.attempts) return fresh ?? job;
+      return this.store.updateJob({ ...fresh, state: 'blocked', leaseOwner: null, leaseExpiresAt: null, progress: 'Image preparation is unavailable on this worker.', error: 'The capable image worker and media storage must be configured before this task can run.', updatedAt: this.now() });
+    }
     if (isProfileJob(job)) return this.runProfileJob(job);
     if(job.kind==='plan') return this.runProgrammePlanJob(job);
     let current = job;
     try {
       const fresh = await this.store.getJob(job.brandId, job.id);
-      if (!fresh || fresh.state === 'cancelled' || fresh.leaseOwner !== job.leaseOwner) return fresh ?? job;
+      if (!fresh || fresh.state === 'cancelled' || fresh.leaseOwner !== job.leaseOwner || (isArticleWriteJob(job)&&fresh.attempts!==job.attempts)) return fresh ?? job;
       current = await this.store.updateJob({ ...fresh, progress: progressLabel(job.kind), updatedAt: this.now() });
       const p = job.payload as Record<string, unknown>;
       if (p.stage !== undefined) throw new SeoBlogError(409, 'This worker does not support that task stage.');
       if (job.kind === 'inventory') await this.refreshInventory(job.brandId);
-      else if (job.kind === 'write') await this.runWrite(job.brandId, { briefId: String(p.briefId), fromVersionId: p.fromVersionId as string | undefined, requestedBy: p.requestedBy as string | undefined });
+      else if (job.kind === 'write') await this.runWrite(job.brandId, { briefId: String(p.briefId), fromVersionId: p.fromVersionId as string | undefined, requestedBy: p.requestedBy as string | undefined },current);
       else if (job.kind === 'publish') {
         if(p.websiteObservation!==undefined||p.sitemapRepair!==undefined){
           if((p.websiteObservation!==undefined&&p.sitemapRepair!==undefined)||typeof(p.websiteObservation??p.sitemapRepair)!=='string')throw new SeoBlogError(409,'Unsupported website delivery task.');
@@ -2035,10 +2332,12 @@ export class SeoBlogEngine {
       else if (job.kind === 'daily') await this.runDaily(job.brandId);
       const latest = (await this.store.getJob(job.brandId, job.id))!;
       if (latest.state === 'cancelled') return latest;
+      if(isArticleWriteJob(job)&&(latest.leaseOwner!==job.leaseOwner||latest.attempts!==job.attempts))return latest;
       return await this.store.updateJob({ ...latest, state: 'done', leaseOwner: null, leaseExpiresAt: null, progress: 'Done.', error: null, updatedAt: this.now() });
     } catch (error) {
       const latest = (await this.store.getJob(job.brandId, job.id)) ?? current;
       if (latest.state === 'cancelled') return latest;
+      if(isArticleWriteJob(job)&&(latest.leaseOwner!==job.leaseOwner||latest.attempts!==job.attempts))return latest;
       const known = error instanceof SeoBlogError;
       const blocked = known && [409, 503].includes(error.status);
       const exhausted = latest.attempts >= latest.maxAttempts;
@@ -2061,9 +2360,16 @@ export class SeoBlogEngine {
     const job = await this.store.getJob(brandId, jobId);
     if (!job) throw new SeoBlogError(404, 'That task was not found.');
     if (!['blocked', 'failed'].includes(job.state)) return job;
+    if (isImageJob(job)) throw new SeoBlogError(409, 'Image tasks cannot repeat a paid call through Retry. Use Retry preparation for a saved candidate, or explicitly request a new generation intent.');
+    let retainsCopyEpoch=false;
+    if(isArticleWriteJob(job)) {
+      const article=(await this.store.listArticles(brandId)).find(a=>a.briefId===job.payload.briefId);
+      retainsCopyEpoch=!!article?.campaignGeneration;
+      if(article?.campaignGeneration?.startedAt&&!article.campaignGeneration.receipt)throw new SeoBlogError(409,'The social copy request has an uncertain outcome. Retry cannot repeat it. The saved article input and attempt are retained.','campaign_copy_unknown');
+    }
     if(job.kind==='plan'&&!programmeRun(job)?.modelReceipt) throw new SeoBlogError(409,'Research retries retain their history and budget. Review programme status in Topics and explicitly resume with a new intent.');
     if (isProfileJob(job) && profilePayload(job).start && !profilePayload(job).receipt) throw new SeoBlogError(409, 'This model call has an uncertain outcome. Retry cannot repeat it. Review the current profile and explicitly confirm a new extraction in Brand setup.');
-    return this.store.updateJob({ ...job, state: 'queued', attempts: isProfileJob(job)||job.kind==='plan' ? job.attempts : 0, runAfter: this.now(), error: null, progress: 'Queued again by the owner.', updatedAt: this.now() });
+    return this.store.updateJob({ ...job, state: 'queued', attempts: isProfileJob(job)||job.kind==='plan'||retainsCopyEpoch ? job.attempts : 0, runAfter: this.now(), error: null, progress: 'Queued again by the owner.', updatedAt: this.now() });
   }
 
   /** Daily bounded top-up when the brand enables ongoing production. Never replaces accepted plans. */
@@ -2101,10 +2407,10 @@ export class SeoBlogEngine {
     const brand = await this.store.getBrand(brandId);
     if (!brand?.settings.ongoingProduction || brand.settings.pauseAll) return;
     const [articles, briefs, jobs] = await Promise.all([this.store.listArticles(brandId), this.store.listBriefs(brandId), this.store.listJobs(brandId)]);
-    const pendingWrites = jobs.filter((j) => j.kind === 'write' && !isProfileJob(j) && ['queued', 'running'].includes(j.state)).length;
+    const pendingWrites = jobs.filter((j) => isArticleWriteJob(j) && ['queued', 'running'].includes(j.state)).length;
     const backlog = articles.filter((a) => a.delivery !== 'published').length + pendingWrites;
     const room = Math.max(0, brand.settings.backlogCeiling - backlog);
-    const queued = new Set(jobs.filter((j) => j.kind === 'write').map((j) => String((j.payload as { briefId?: string }).briefId)));
+    const queued = new Set(jobs.filter(isArticleWriteJob).map((j) => String((j.payload as { briefId?: string }).briefId)));
     for (const brief of briefs.filter((b) => b.status === 'accepted' && !queued.has(b.id)).slice(0, room)) {
       await this.enqueue(brandId, 'write', `write:${brief.id}`, { briefId: brief.id, requestedBy: 'system' });
     }
@@ -2157,6 +2463,7 @@ export function normaliseWebsite(raw: string): string {
 }
 
 function validateSettings(s: BrandSettings): void {
+  if (s.media && typeof s.media.imageGenerationEnabled !== 'boolean') throw new SeoBlogError(400, 'Invalid image generation toggle.');
   validateCadence(s.cadence);
   if (!Number.isInteger(s.planningHorizonDays) || s.planningHorizonDays < 7 || s.planningHorizonDays > 120) throw new SeoBlogError(400, 'Planning horizon must be 7–120 days.');
   if (!Number.isInteger(s.backlogCeiling) || s.backlogCeiling < 0 || s.backlogCeiling > 50) throw new SeoBlogError(400, 'Backlog ceiling must be 0–50 articles.');

@@ -1880,6 +1880,36 @@
       "version": "10.7.5"
     },
     {
+      "bom-ref": "npm:jpeg-js@0.4.4#node_modules/jpeg-js",
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "WZzeDOEtTOBK4Mdsar0IqEU5sMr3vSV2RqkAIzUEV2BHnUfKGyswWFPFwK5EeDo93K3FohSHbLAjj0s1Wzd+dg=="
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "BSD-3-Clause"
+          }
+        }
+      ],
+      "name": "jpeg-js",
+      "properties": [
+        {
+          "name": "relaunch72:package-lock-path",
+          "value": "node_modules/jpeg-js"
+        },
+        {
+          "name": "relaunch72:resolved",
+          "value": "https://registry.npmjs.org/jpeg-js/-/jpeg-js-0.4.4.tgz"
+        }
+      ],
+      "scope": "required",
+      "type": "library",
+      "version": "0.4.4"
+    },
+    {
       "bom-ref": "npm:json-schema-to-ts@3.1.1#node_modules/json-schema-to-ts",
       "hashes": [
         {
@@ -3637,6 +3667,7 @@
         "npm:dotenv@16.6.1#node_modules/dotenv",
         "npm:https-proxy-agent@9.1.0#node_modules/https-proxy-agent",
         "npm:imapflow@2.9.1#node_modules/imapflow",
+        "npm:jpeg-js@0.4.4#node_modules/jpeg-js",
         "npm:mailparser@3.12.4#node_modules/mailparser",
         "npm:nodemailer@10.2.1#node_modules/nodemailer",
         "npm:pg@8.23.0#node_modules/pg",
@@ -3869,6 +3900,10 @@
     {
       "dependsOn": [],
       "ref": "npm:ip-address@10.7.5#node_modules/ip-address"
+    },
+    {
+      "dependsOn": [],
+      "ref": "npm:jpeg-js@0.4.4#node_modules/jpeg-js"
     },
     {
       "dependsOn": [
@@ -4162,7 +4197,7 @@
       "properties": [
         {
           "name": "relaunch72:canonical-package-lock-sha256",
-          "value": "bf5e79134664befa7c4fef1cb3c62d086579629d1d2a56a8392f31b81f162344"
+          "value": "aa638f3ce3a40e0b1d64c9756ca81f6eccc72b3cc11d6cd008f3f061b4f26bb1"
         },
         {
           "name": "relaunch72:supply-chain-policy-version",
