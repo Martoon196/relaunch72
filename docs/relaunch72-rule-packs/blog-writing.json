@@ -83,6 +83,13 @@
       "produces": [
         "primaryNextAction"
       ]
+    },
+    {
+      "id": "blog.handoff",
+      "instruction": "Hand the immutable article version to the existing checks and approval path unchanged. Hand social-repurposing and visual-briefing the exact approved version id, title, excerpt, sections and key points, the evidence references and the primary next action; never a draft that failed checks. Hand conversion-copy nothing unless the brief requests a downstream copy asset.",
+      "produces": [
+        "handoffPacket"
+      ]
     }
   ],
   "rules": [
@@ -170,7 +177,8 @@
     "skimPath",
     "primaryNextAction",
     "omittedUnsupportedClaims",
-    "revisionPasses"
+    "revisionPasses",
+    "handoffPacket"
   ],
   "qualityChecks": [
     {
@@ -244,8 +252,11 @@
   "provenance": {
     "authoringNote": "Draft authored 3 November 2026. Compatible with the recorded Relaunch72 article contract and section-revision path. Not approved or installable.",
     "originalityNotes": "Original design: the mechanism map, skim-path design step, format-shape markers and section-revision preservation rule were written for this platform. No private corpus or licensed manual was consulted; evidence rules mirror the platform's existing factual constraints.",
-    "privateSourceReferences": [],
+    "privateSourceReferences": [
+      "Not consulted: the owner's private original training corpus and newer operating manual were not supplied to the authoring session; see AUTHORING-NOTES.txt."
+    ],
     "unresolvedCommercialUseQuestions": [
+      "The private training corpus and newer operating manual were not available during authoring; any rule the owner expects from those sources must be checked against them before private-use approval.",
       "Private-use approval for Martin-owned brands has not been recorded; this file cannot supply it.",
       "Public commercial release approval is a separate recorded decision and is not established by this draft.",
       "Which packs are included versus sold as upgrades, per-brand versus workspace-wide access, and pricing remain undecided."

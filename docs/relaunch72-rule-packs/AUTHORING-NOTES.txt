@@ -1,0 +1,93 @@
+RELAUNCH72 RULE PACKS — AUTHORING NOTES
+Authoring return, 3 November 2026. Status of every pack: draft. Nothing here is approved,
+installed, assigned, sold, deployed or configured.
+
+1. WHAT WAS AND WAS NOT AVAILABLE
+Used: 00-READ-FIRST, 01-ARCHITECTURE, 02-CLAUDE-HANDOFF, 03-rule-pack.schema.json,
+04-return-template.json, 05-IMPLEMENTATION-AND-ACCEPTANCE, and the recorded Relaunch72
+stage prompts (prompts/seo-blog-plan.md, seo-blog-article.md, seo-blog-section.md,
+seo-blog-social.md) for output-contract compatibility.
+NOT available: the owner's private original training corpus, the newer operating manual,
+the root "AI Training Docs" template and the Property Predator Brand Brain. None were
+supplied to the authoring session. Consequences:
+- Every rule was written from general, widely practised marketing craft and from the
+  platform's own contracts. No source variant was reconciled against actual source text.
+- privateSourceReferences in each pack records that the corpus was not consulted. If the
+  owner expects specific rules from the corpus or manual, those must be compared before
+  private-use approval (listed in OWNER-DECISIONS.txt).
+- Because nothing was copied, there is no rewritten third-party material in this return
+  and no claim that a rewrite establishes resale permission. The reverse caution also
+  applies: these packs do not reproduce the training's method either, so they should be
+  reviewed for method completeness against it by someone who has it.
+
+2. DESIGN APPROACH (SOURCE-TO-DESIGN)
+- production-core is the only dependency of every specialist pack. It owns the claim
+  ledger (verified brand fact / external source / general / unsupported), the single
+  primary next action keyed to reader stage, bounded revision, the "decide, do not ask"
+  rule for unattended runs, self-scores-are-not-evidence, changing-claims-need-current-
+  evidence, the explicit owner-decision surfacing check and a handoff packet.
+- Each specialist pack: required inputs with declared missing behaviour; ordered
+  decision steps ending in an explicit handoff step naming the next stage and what may
+  not pass (publication, send, scheduling, unapproved terms); operational rules with
+  stable ids (<pack>.<kebab>); receipt fields including audience, purpose, format or
+  structure, angle, evidence references and next action where relevant; inspectable
+  quality checks with a failure action; a revision policy of one or two passes.
+- Compatibility: editorial-planning returns the existing one-pillar-plus-six cluster with
+  the existing fields; blog-writing respects seo_title ≤65, meta 70–160, 3–10 sections,
+  0–6 FAQs, [src:ID] figure markers, allowed-links-only, Markdown-only bodies and neutral
+  image_alt; social-repurposing preserves the two-post default and the six_angle_campaign
+  recipe (launch/takeaway/follow_up × instagram/linkedin, ~40–70 words, one-sentence art
+  brief, no URL, no publication claim); visual-briefing fits the existing image-brief
+  fields; email-writing and offer-design are authoring contracts with no runtime path
+  claimed.
+- Examples: two fictional brands per pack (a home-maintenance business and a B2B
+  scheduling business) with explicitly invented facts and no performance evidence,
+  showing the same method with separate facts, voice and calls to action.
+
+3. SOURCE VARIANTS — DECISIONS AND RECOMMENDATIONS
+a) 40/30/20/10 content mix (original) vs optional (newer master).
+   Implemented as: optional guidance. editorial-planning treats any supplied mix as a
+   target to approach and records deviations; with no guidance it uses a recorded default
+   (majority learn, at least one compare or buy per cluster). Recommendation: keep it
+   optional. A fixed quota forces unsupported or duplicated topics, which the platform's
+   factual rules then reject anyway.
+b) Social manual-input vs Make.com-enabled variants.
+   Implemented as: neither. social-repurposing produces drafts for the existing exact-
+   version approval path only and forbids implying any integration, platform or format
+   the runtime has not confirmed. Recommendation: do not model either variant; the
+   platform's own calendar and registry gates are the integration.
+c) Root AI Training Docs template containing Prop Invest content.
+   Implemented as: excluded. No Prop Invest or Property Predator fact, audience
+   assumption, price, CTA or model appears in any pack; a brand's lifecycle model is
+   treated as optional brand context only. Recommendation: keep brand material in brand
+   packs; never promote it to a generic method.
+d) Newer manuals as working source, not automatic approval.
+   Implemented as: every pack is draft and its provenance says private-use and public
+   approval are separate recorded decisions.
+
+4. MATERIAL DELIBERATELY OMITTED
+- No mandatory word counts (social lengths are the existing stage ceiling, not a quota),
+  no content quotas, no required testimonials, urgency, discounts, outcome claims or case
+  studies. Case studies are allowed only when verified brand evidence exists.
+- No framework stacking: conversion-copy selects one structure per asset.
+- No channel-specific guidance for channels the runtime does not support (no video,
+  carousels, DMs, analytics, paid promotion, TikTok, Facebook).
+- No email sending, list handling or permission inference; no offer approval or pricing.
+- No approval, hash, entitlement or registry fields: the server computes and records
+  those (05-IMPLEMENTATION-AND-ACCEPTANCE).
+
+5. VALIDATION PERFORMED
+All eight JSON files validate against rule-pack.schema.json (JSON Schema 2020-12) with a
+standard validator; ids are unique and stable; versions are 0.1.0; dependencies are exact
+and acyclic; no template markers remain. The schema is copied into this folder for
+convenience; it is not part of the authored content.
+
+6. UNRESOLVED ISSUES FOR CODEX / REVIEWERS
+- Receipt field names are proposals; align them with the production receipt storage once
+  designed.
+- The "visual-brief" stage currently exists only as the image-brief fields on the article
+  and social outputs; a dedicated stage, if built, should keep those fields.
+- email-writing and offer-design cannot be exercised until a drafting/offer path exists;
+  acceptance for them is schema validity and reviewer reading only.
+- Method rules that the owner's private corpus may require, and that are absent here,
+  cannot be identified from this session (see section 1).

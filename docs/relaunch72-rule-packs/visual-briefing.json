@@ -81,6 +81,13 @@
         "altText",
         "dimensions"
       ]
+    },
+    {
+      "id": "visual.handoff",
+      "instruction": "Hand the brief to whichever existing path the runtime provides: an owner-supplied image upload, or image generation only where generationCapability is available. The brief waits as a held item otherwise. The parent asset's approval is never implied by the existence of a brief.",
+      "produces": [
+        "handoffPacket"
+      ]
     }
   ],
   "rules": [
@@ -143,7 +150,8 @@
     "overlayText",
     "altText",
     "dimensions",
-    "generationCapabilityState"
+    "generationCapabilityState",
+    "handoffPacket"
   ],
   "qualityChecks": [
     {
@@ -205,8 +213,11 @@
   "provenance": {
     "authoringNote": "Draft authored 3 November 2026. Applies to the current image-brief path only; it adds no generation, logo or spend capability. Not approved or installable.",
     "originalityNotes": "Original design: the visual-job statement, illustrative/evidential classification and asset-presence rules were written for this platform; no private corpus or licensed material was consulted.",
-    "privateSourceReferences": [],
+    "privateSourceReferences": [
+      "Not consulted: the owner's private original training corpus and newer operating manual were not supplied to the authoring session; see AUTHORING-NOTES.txt."
+    ],
     "unresolvedCommercialUseQuestions": [
+      "The private training corpus and newer operating manual were not available during authoring; any rule the owner expects from those sources must be checked against them before private-use approval.",
       "Private-use approval for Martin-owned brands has not been recorded; this file cannot supply it.",
       "Public commercial release approval is a separate recorded decision and is not established by this draft.",
       "Which packs are included versus sold as upgrades, per-brand versus workspace-wide access, and pricing remain undecided."

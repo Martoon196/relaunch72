@@ -90,6 +90,13 @@
         "workingName",
         "positioningLine"
       ]
+    },
+    {
+      "id": "offer.handoff",
+      "instruction": "Hand the proposal to the owner for decision. Only after the owner records approval do the price and terms become verified facts; then conversion-copy may use them. Nothing passes to copy, pricing pages or checkout from this pack directly.",
+      "produces": [
+        "handoffPacket"
+      ]
     }
   ],
   "rules": [
@@ -142,7 +149,8 @@
     "comparisonWithExisting",
     "recommendation",
     "workingName",
-    "positioningLine"
+    "positioningLine",
+    "handoffPacket"
   ],
   "qualityChecks": [
     {
@@ -204,8 +212,11 @@
   "provenance": {
     "authoringNote": "Draft authored 3 November 2026 as an authoring contract only; no offer-workflow implementation is claimed to exist in the recorded release. Not approved or installable.",
     "originalityNotes": "Original design: the attempted-outcome framing, deliverable-only component rule, proposal labelling and buyer-risk response steps were written for this platform; no private corpus or licensed framework was consulted.",
-    "privateSourceReferences": [],
+    "privateSourceReferences": [
+      "Not consulted: the owner's private original training corpus and newer operating manual were not supplied to the authoring session; see AUTHORING-NOTES.txt."
+    ],
     "unresolvedCommercialUseQuestions": [
+      "The private training corpus and newer operating manual were not available during authoring; any rule the owner expects from those sources must be checked against them before private-use approval.",
       "Private-use approval for Martin-owned brands has not been recorded; this file cannot supply it.",
       "Public commercial release approval is a separate recorded decision and is not established by this draft.",
       "Which packs are included versus sold as upgrades, per-brand versus workspace-wide access, and pricing remain undecided."
