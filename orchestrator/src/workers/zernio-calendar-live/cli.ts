@@ -8,6 +8,7 @@ import {
 
 async function main(): Promise<void> {
   const runtime = await startZernioCalendarLiveWorker();
+  console.log('zernio calendar worker: capability seo-campaign-media-v1 (exact registered-brand source and reviewed JPEG delivery; legacy PP targets unchanged).');
   let shutdownFailureCount = 0;
   const shutdown = (): void => {
     void runtime.shutdown().catch((error: unknown) => {

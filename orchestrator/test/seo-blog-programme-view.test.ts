@@ -46,6 +46,14 @@ test('guidance kind suggestions are correctable, reclassification retains source
   assert.equal(f.h.llm.calls.length,count);
   const html=setupPage(await f.shell('setup'),{documents:docs,profile:await f.h.engine.getProfile(OWNER,f.brand.id),inventory:null,destinations:[],publishers:[],vaultReady:false,usage:await f.h.engine.usage(OWNER,f.brand.id)});
   assert.match(html,/Choose a guidance kind/);assert.match(html,/Save kind/);assert.match(html,/replaced version retained/);assert.match(html,/Active guidance/);
+  const basics=html.match(/<form method="post" action="[^"]*\/basics">([\s\S]*?)<\/form>/)![1]!;
+  assert.match(basics,/British English · London time/);
+  const advanced=basics.match(/<details><summary>Advanced language and time zone<\/summary>([\s\S]*?)<\/details>/)![1]!;
+  assert.match(advanced,/id="bl" name="locale" type="text" value="en-GB"/);
+  assert.match(advanced,/id="bt" name="timezone" type="text" value="Europe\/London"/);
+  assert.match(basics,/name="_csrf" value="fixture-csrf"/);assert.match(basics,/name="rowVersion"/);
+  assert.ok(basics.indexOf('name="website"')<basics.indexOf('<details>'));
+  assert.doesNotMatch(basics,/<details[^>]* open/);
 });
 test('browser kind hint never overrides an explicit owner choice or reads file bytes',()=>{
   const handlers=new Map<string,()=>void>();const add=(prefix:string)=>(event:string,fn:()=>void)=>handlers.set(prefix+event,fn);

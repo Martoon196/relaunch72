@@ -17,6 +17,7 @@ import type {
   ArticleBody, ArticleBrief, ArticlePromotionPack, BrandProfile, GenerationRecord, InventoryPage, KnowledgeDocument, LengthPreference, ResearchSource,
 } from './types.js';
 import { SeoBlogError } from './types.js';
+import { CAMPAIGN_ANGLES, CAMPAIGN_NETWORKS, type CampaignDraft } from './campaign.js';
 
 const ajv = new Ajv({ allErrors: true, strict: false });
 const validators = new Map<AnySchema, ValidateFunction>();
@@ -45,6 +46,8 @@ export async function callJson<T>(llm: LlmClient, input: {
   readonly schema: AnySchema;
   readonly maxTokens: number;
   readonly validate?: (value: T) => string[];
+  /** Campaign proposals never silently pay for a format-correction call. */
+  readonly singleAttempt?: boolean;
 }): Promise<JsonCallResult<T>> {
   const model = stageModel(input.prompt.header.stage, input.prompt.header.model);
   const validate = validatorFor(input.schema);
@@ -52,7 +55,7 @@ export async function callJson<T>(llm: LlmClient, input: {
   let tokensOut = 0;
   let critique = '';
   let previous = '';
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= (input.singleAttempt ? 1 : 2); attempt++) {
     const messages: { role: 'user' | 'assistant'; content: string }[] = [{ role: 'user', content: input.user }];
     if (critique) {
       messages.push({ role: 'assistant', content: previous.slice(0, 60_000) || '{}' });
@@ -83,7 +86,7 @@ export async function callJson<T>(llm: LlmClient, input: {
       record: { mode: llm.mode === 'live' ? 'live' : 'simulated', model: response.model || model, promptVersion: `${input.prompt.file}@${input.prompt.header.version}#${input.prompt.sha256.slice(0, 12)}`, tokensIn, tokensOut },
     };
   }
-  throw new SeoBlogError(422, `The model did not return a usable result after a retry. ${critique.split('\n')[0] ?? ''}`.trim(), 'generation_rejected');
+  throw new SeoBlogError(422, `The model did not return a usable result ${input.singleAttempt ? 'after one attempt' : 'after a retry'}. ${critique.split('\n')[0] ?? ''}`.trim(), 'generation_rejected');
 }
 
 export function dataBlock(tag: string, value: unknown): string {
@@ -108,6 +111,42 @@ export async function writeArticlePromotions(llm: LlmClient, profile: BrandProfi
       ...value.posts.flatMap(p => /https?:\/\/|<\/?[a-z]/i.test(p.copy) ? ['Copy must contain no URLs or HTML.'] : []),
     ],
   });
+}
+
+/** Same existing social stage/model/output ceiling; six short proposals instead of two launch copies. */
+export class CampaignGenerationRejectedError extends SeoBlogError {
+  constructor(readonly record: GenerationRecord) { super(422,'The social copy response was incomplete after one attempt. Labelled article-text drafts were retained.','campaign_generation_rejected'); }
+}
+export async function writeArticleCampaignPromotions(llm: LlmClient, profile: BrandProfile, article: ArticleBody): Promise<JsonCallResult<{ posts: readonly CampaignDraft[] }>> {
+  const prompt=loadPrompt('seo-blog-social.md');
+  let knownRecord:GenerationRecord|null=null;
+  const capture:LlmClient={mode:llm.mode,complete:async(request)=>{
+    const response=await llm.complete(request);
+    if([response.tokensIn,response.tokensOut].every(n=>Number.isSafeInteger(n)&&n>=0)&&Number.isSafeInteger(response.tokensIn+response.tokensOut)&&typeof response.model==='string'&&response.model.length<=200&&!/[\r\n\x00-\x1f]/u.test(response.model)) knownRecord={mode:llm.mode==='live'?'live':'simulated',model:response.model||request.model,promptVersion:`${prompt.file}@${prompt.header.version}#${prompt.sha256.slice(0,12)}`,tokensIn:response.tokensIn,tokensOut:response.tokensOut};
+    return response;
+  }};
+  try { const generated=await callJson<{posts:readonly CampaignDraft[]}>(capture, {
+    prompt, maxTokens: 2400, singleAttempt: true,
+    user: [dataBlock('brand_profile', profileForPrompt(profile)), dataBlock('blog_article', article),
+      dataBlock('campaign_recipe', { mode: 'six_angle_campaign', recipe: 'r72-social-three-angle-v1', networks: CAMPAIGN_NETWORKS, angles: CAMPAIGN_ANGLES,
+        brief: 'One launch summary, one specific practical takeaway and one later question/follow-up for EACH channel. Adapt the copy to the channel; no repeated post or invented claim.' })].join('\n\n'),
+    schema: { type: 'object', additionalProperties: false, required: ['posts'], properties: { posts: { type: 'array', minItems: 6, maxItems: 6,
+      items: { type: 'object', additionalProperties: false, required: ['network', 'angle', 'title', 'copy', 'artworkInstructions'], properties: {
+        network: { enum: CAMPAIGN_NETWORKS }, angle: { enum: CAMPAIGN_ANGLES }, title: { type: 'string', minLength: 3, maxLength: 160 },
+        copy: { type: 'string', minLength: 30, maxLength: 800 }, artworkInstructions: { type: 'string', minLength: 10, maxLength: 300 },
+      } } } } },
+    validate: value => [
+      ...(new Set(value.posts.map(p => `${p.network}:${p.angle}`)).size !== 6 ? ['Provide exactly one post for each of the six channel/angle combinations.'] : []),
+      ...(new Set(value.posts.map(p => p.copy.trim().toLowerCase().replace(/\s+/gu, ' '))).size !== 6 ? ['Write six distinct perspectives; do not duplicate copy between angles or channels.'] : []),
+      ...value.posts.flatMap(p => /https?:\/\/|www\.|<\/?[a-z]/iu.test(p.copy) ? ['Copy must contain no URLs or HTML.'] : []),
+    ],
+  });
+    if(!knownRecord)throw new GenerationUnavailableError('The social copy response did not include safe usage evidence. Its outcome needs review.');
+    return {value:generated.value,record:knownRecord};
+  } catch(error) {
+    if(error instanceof SeoBlogError&&error.code==='generation_rejected'&&knownRecord)throw new CampaignGenerationRejectedError(knownRecord);
+    throw error;
+  }
 }
 
 // ─── Profile ─────────────────────────────────────────────────────────────────

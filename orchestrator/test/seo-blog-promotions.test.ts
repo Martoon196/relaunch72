@@ -46,6 +46,9 @@ function fakeApproval(behaviour: { failAfterDraft?: number } = {}) {
 test('generated articles automatically carry model promotion drafts and appear at proposed dates without publication schedules', async () => {
   const f = await written(); const { version, article, brand, h } = f;
   assert.ok(version?.promotionPack); assert.equal(version.promotionPack.mode, 'model'); assert.equal(version.promotionPack.posts.length, 2);
+  assert.equal(article.campaign?.variants.length, 6, 'the same initial social call produces three distinct angles per channel');
+  assert.equal(new Set(article.campaign!.variants.map(p => p.id)).size, 6);
+  assert.equal(h.llm.calls.filter(stage => stage === 'SEO_BLOG_SOCIAL').length, 1, 'no additional campaign model call');
   assert.equal(version.promotionPack.brandId, brand.id); assert.equal(version.promotionPack.versionId, version.id); assert.equal(version.promotionPack.contentSha, version.contentSha);
   assert.ok(h.llm.calls.includes('SEO_BLOG_SOCIAL')); assert.equal(article.schedule, null);
   const html = calendarPage({ brands: [brand], brand, tab: 'calendar', csrf: 'fixture', notice: null, error: null }, { view: 'list', anchor: f.brief.suggestedAtUtc!.slice(0,10), articles: [{ article, title: version.body.title, status: 'Needs approval' }], briefs: [f.brief], destinations: [], brandsAll: false });
@@ -182,7 +185,7 @@ test('scheduling goes through the registered account with truthful holds: unpubl
   assert.match(approvalOff, /aria-label="Needs my approval: Off\. Turn on" class="toggle-control off"/);
   assert.match(html, /held: The daily cap/); assert.match(html, /Queue linkedin post/); assert.match(html, /Instagram requires a real approved image/);
   const social = socialPage({ ...shell, tab: 'social' }, { overview: await dup.registry.overview(brand.id), connectHere: false, connectHost: 'https://hq.propertypredator.com', intentId: randomUUID() });
-  assert.match(social, /brand-profile/); assert.match(social, /Open this page there to connect accounts/); assert.match(social, /Revoke/);
+  assert.match(social, /Harbour social profile/); assert.doesNotMatch(social, /brand-profile/); assert.match(social, /Open this page there to connect accounts/); assert.match(social, /Revoke/);
 });
 
 test('engine refuses social actions when no registry is composed and exposes an empty overview', async () => {
