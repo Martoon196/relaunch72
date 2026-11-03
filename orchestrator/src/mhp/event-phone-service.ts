@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { canonicalCompanyContentJson, type CompanyContentService, type CompanyContentTransactionRunner,
   type CreateCompanyContentVersionCommand } from '../company-content-pg/index.js';
@@ -58,6 +58,41 @@ export function normalizeMhpEventMobile(raw: string): string | null {
   const e164 = /^07[0-9]{9}$/u.test(digits) ? `+44${digits.slice(1)}` : /^\+447[0-9]{9}$/u.test(digits) ? digits
     : /^447[0-9]{9}$/u.test(digits) ? `+${digits}` : null;
   return e164;
+}
+
+// Convenience only: never proof of a phone, prospect identity or consent.
+export const MHP_EVENT_PHONE_HINT_COOKIE = '__Host-mhp_event_phone_hint';
+const HINT_AAD = Buffer.from(`${MHP_AUTH_ORIGIN}/webinar/phone-reminders:mobile-hint/v1`);
+const hintKey = (secret: string): Buffer => createHmac('sha256', secret).update('mhp/event-phone/mobile-hint/key/v1\0').digest();
+export const mhpEventPhoneHintCookie = (value: string | null, maxAge = 900): string =>
+  `${MHP_EVENT_PHONE_HINT_COOKIE}=${value ?? ''}; Path=/; Max-Age=${value ? Math.max(0, Math.min(900, Math.floor(maxAge))) : 0}; Secure; HttpOnly; SameSite=Strict`;
+
+export function sealMhpEventPhoneHint(secret: string, capability: string, rawPhone: string, now: number, maxAge: number): string | null {
+  const phone = normalizeMhpEventMobile(rawPhone), age = Math.min(900, Math.floor(maxAge));
+  if (secret.length < 32 || !TOKEN.test(capability) || !phone || !Number.isSafeInteger(now) || !Number.isFinite(age) || age < 1) return null;
+  const nonce = randomBytes(12), cipher = createCipheriv('aes-256-gcm', hintKey(secret), nonce);
+  cipher.setAAD(HINT_AAD);
+  const payload = JSON.stringify({ schema: 'mhp.event-phone.mobile-hint/v1', capability: mhpEventCapabilitySha(capability).toString('hex'),
+    phone, issuedAt: now, expiresAt: now + age * 1000 });
+  const encrypted = Buffer.concat([cipher.update(payload, 'utf8'), cipher.final()]);
+  return Buffer.concat([nonce, cipher.getAuthTag(), encrypted]).toString('base64url');
+}
+
+export function openMhpEventPhoneHint(secret: string, capability: string, value: string | undefined, now: number): string | null {
+  if (secret.length < 32 || !TOKEN.test(capability) || !value || value.length > 1024 || !/^[A-Za-z0-9_-]+$/u.test(value) || !Number.isSafeInteger(now)) return null;
+  try {
+    const encrypted = Buffer.from(value, 'base64url');
+    if (encrypted.length < 29) return null;
+    const decipher = createDecipheriv('aes-256-gcm', hintKey(secret), encrypted.subarray(0, 12));
+    decipher.setAAD(HINT_AAD); decipher.setAuthTag(encrypted.subarray(12, 28));
+    const payload = JSON.parse(Buffer.concat([decipher.update(encrypted.subarray(28)), decipher.final()]).toString('utf8')) as Record<string, unknown>;
+    if (payload.schema !== 'mhp.event-phone.mobile-hint/v1' || payload.capability !== mhpEventCapabilitySha(capability).toString('hex')
+      || typeof payload.phone !== 'string' || normalizeMhpEventMobile(payload.phone) !== payload.phone
+      || typeof payload.issuedAt !== 'number' || !Number.isSafeInteger(payload.issuedAt) || payload.issuedAt > now
+      || typeof payload.expiresAt !== 'number' || !Number.isSafeInteger(payload.expiresAt) || payload.expiresAt <= now
+      || payload.expiresAt <= payload.issuedAt || payload.expiresAt - payload.issuedAt > 900_000) return null;
+    return payload.phone;
+  } catch { return null; }
 }
 
 export interface MhpEventPhoneStatus {

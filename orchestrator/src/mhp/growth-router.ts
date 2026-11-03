@@ -8,7 +8,8 @@ import { MHP_SITE_ORIGIN, MhpGrowthError, parseMhpApplication, parseMhpEvent, pa
 import { MhpLearningError, parseMhpCourseBundle, type PgMhpLearningService } from './learning-service.js';
 import { learnHomePage, learnLessonPage, learnModulePage } from './learning-view.js';
 import { hqApplicationsPage, hqCoursePage, hqGrowthPage, hqRegistrantsPage, registrantsCsv, publicMessagePage, unsubscribeConfirmPage } from './growth-view.js';
-import { MHP_EVENT_PHONE_ROUTE, mhpEventPhoneCapabilityCookie, type PgMhpEventPhonePublic } from './event-phone-service.js';
+import { MHP_EVENT_PHONE_ROUTE, MHP_EVENT_PHONE_HINT_COOKIE, mhpEventPhoneCapabilityCookie, mhpEventPhoneHintCookie,
+  sealMhpEventPhoneHint, type PgMhpEventPhonePublic } from './event-phone-service.js';
 
 export interface MhpGrowthRouterDependencies {
   portal: PostgresPortalDeps;
@@ -28,8 +29,8 @@ function send(res: ServerResponse, status: number, content: string): void {
     'referrer-policy': 'same-origin', 'x-content-type-options': 'nosniff', 'content-security-policy': CSP });
   res.end(content);
 }
-function redirect(res: ServerResponse, location: string): void {
-  res.writeHead(303, { location, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); res.end();
+function redirect(res: ServerResponse, location: string, cookie?: string): void {
+  res.writeHead(303, { location, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', ...(cookie ? { 'set-cookie': cookie } : {}) }); res.end();
 }
 async function readBody(req: IncomingMessage, maximum: number): Promise<Buffer> {
   if (Number(req.headers['content-length'] ?? 0) > maximum) throw new HttpError(413, 'This form is too large.');
@@ -155,14 +156,18 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
           // This optional step must never undo or conceal an accepted registration.
           const handoff = await deps.phoneSignup.fromSignup(captured, source, now).catch(() => null);
           if (handoff) {
+            const hint = sealMhpEventPhoneHint(portal.sessionSecret, handoff.capability, signup.phone ?? '', now, handoff.maxAge);
+            const cookies = [mhpEventPhoneCapabilityCookie(handoff.capability, handoff.maxAge)];
+            if (hint || parseCookies(req.headers.cookie)[MHP_EVENT_PHONE_HINT_COOKIE]) cookies.push(mhpEventPhoneHintCookie(hint, handoff.maxAge));
             res.writeHead(303, { location: `${MHP_AUTH_ORIGIN}${MHP_EVENT_PHONE_ROUTE}/choose`, 'cache-control': 'no-store',
-              'referrer-policy': 'no-referrer', 'set-cookie': mhpEventPhoneCapabilityCookie(handoff.capability, handoff.maxAge) });
+              'referrer-policy': 'no-referrer', 'set-cookie': cookies.length === 1 ? cookies[0]! : cookies });
             res.end(); return true;
           }
         }
       }
       const kind = signup === 'honeypot' ? 'sheet' : signup.kind;
-      redirect(res, `${MHP_SITE_ORIGIN}/thanks/?for=${kind}`); return true;
+      redirect(res, `${MHP_SITE_ORIGIN}/thanks/?for=${kind}`,
+        parseCookies(req.headers.cookie)[MHP_EVENT_PHONE_HINT_COOKIE] ? mhpEventPhoneHintCookie(null) : undefined); return true;
     }
 
     if (path === '/email/unsubscribe') {

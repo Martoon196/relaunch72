@@ -33,7 +33,7 @@ export function mhpEventPhoneOpenPage(token: string): string {
   return page('Continue', `<h1>Add a text reminder.</h1><p>Press continue to choose your mobile number.</p><section><form method="post" action="${MHP_EVENT_PHONE_ROUTE}/open">`
     + `${hidden('t', token)}<button>Continue</button></form></section>`);
 }
-export function mhpEventPhoneChoosePage(input: { status: MhpEventPhoneStatus; csrf: string; join?: { nonce: string; joinExpiresAt: string; sender: string }; notice?: string; sender: string }): string {
+export function mhpEventPhoneChoosePage(input: { status: MhpEventPhoneStatus; csrf: string; join?: { nonce: string; joinExpiresAt: string; sender: string }; notice?: string; sender: string; mobileHint?: string }): string {
   const { status } = input, sms = status.sms;
   const greeting = `<h1>${status.firstName ? `${esc(status.firstName)}, your` : 'Your'} webinar text reminder</h1>`
     + (status.startsAt ? `<p>The webinar starts ${esc(ukTime(status.startsAt))}.</p>` : '');
@@ -63,11 +63,11 @@ export function mhpEventPhoneChoosePage(input: { status: MhpEventPhoneStatus; cs
   return page('Choose your mobile', `${greeting}<p class="status">Your webinar registration is complete. Text reminders are optional; your email reminders will continue either way.</p>`
     + `${notice(input.notice)}${prior ? `<p class="status">${esc(prior)}</p>` : ''}`
     + (sms?.state === 'held' ? `<p><a href="${MHP_EVENT_PHONE_ROUTE}">Email me a link to continue</a></p>` : '')
-    + `<section>${form(input.csrf, input.sender)}</section><p><a href="https://martinhowardproperty.co.uk/thanks/?for=webinar">Skip texts and continue</a></p>`);
+    + `<section>${form(input.csrf, input.sender, input.mobileHint)}</section><p><a href="https://martinhowardproperty.co.uk/thanks/?for=webinar">Skip texts and continue</a></p>`);
 }
-function form(csrf: string, sender: string): string {
+function form(csrf: string, sender: string, mobileHint = ''): string {
   return `<form method="post" action="${MHP_EVENT_PHONE_ROUTE}/choose">${hidden('csrf', csrf)}`
-    + `<label for="mobile">Your UK mobile<input id="mobile" name="mobile" type="tel" inputmode="tel" autocomplete="tel" maxlength="32" placeholder="07700 900123" required></label>`
+    + `<label for="mobile">Your UK mobile<input id="mobile" name="mobile" type="tel" inputmode="tel" autocomplete="tel" maxlength="32" placeholder="07700 900123" value="${esc(mobileHint)}" required></label>`
     + `<label class="check" for="consent"><input id="consent" type="checkbox" name="consent" value="yes" required>${esc(MHP_EVENT_PHONE_CONSENT_TEXT)}</label>`
     + `<button>Continue</button><p class="small">Next you'll text JOIN from that mobile to ${esc(sender)} so we know it's yours. Martin Howard Property is a trading name of MH196 Ltd. This number is used for this webinar only.</p></form>`;
 }

@@ -3,7 +3,10 @@ import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import test from 'node:test';
 import { createMhpMount } from '../src/mhp/mount.js';
-import { PgMhpEventPhonePublic, mhpEventCapabilitySha } from '../src/mhp/event-phone-service.js';
+import { PgMhpEventPhonePublic, mhpEventCapabilitySha, MHP_EVENT_PHONE_HINT_COOKIE, mhpEventPhoneHintCookie,
+  openMhpEventPhoneHint, sealMhpEventPhoneHint } from '../src/mhp/event-phone-service.js';
+import { MhpCommerceError } from '../src/mhp/commerce-service.js';
+import { portalCsrfToken } from '../src/portal/session.js';
 import type { MhpCapturedSignup } from '../src/mhp/growth-service.js';
 import type { PostgresPortalDeps } from '../src/portal/router.js';
 import { MARTIN_HOWARD_PROPERTY_PROFILE } from '../src/portal/product-profile.js';
@@ -16,16 +19,20 @@ const source = Buffer.alloc(32, 2);
 const fields = { EMAIL: 'new@example.invalid', FIRSTNAME: 'New', OPT_IN: '1', CHEATSHEET: 'Webinar 4 November', CHEATSHEET_LINK: `${SITE}/webinar/` };
 
 export function signupPhoneFixture(mode: 'ok' | 'denied' | 'throws' | 'off' = 'ok') {
-  const calls = { captured: 0, handoffs: 0, stories: 0 };
+  const calls = { captured: 0, handoffs: 0, stories: 0, choices: [] as { phone: string; consented: boolean }[] };
   const portal = { kind: 'postgres', secure: true, sessionSecret: 'synthetic-signup-phone-secret-at-least32',
     abuseHashSecret: 'synthetic-signup-phone-abuse-secret-at-least32',
     productProfile: MARTIN_HOWARD_PROPERTY_PROFILE, now: () => now, auth: { resolve: async () => null },
     requestContext: () => ({ requestId: '55555555-5555-4555-8555-555555555555', sourceHash: source, requestHash: Buffer.alloc(32, 1) }),
     abuse: { admit: async () => ({ allowed: true }), complete: async () => {} } } as unknown as PostgresPortalDeps;
-  const reminders = { senderNumber: '+447861935832', requestLink: async () => {}, open: async () => ({ reason: 'invalid' as const }),
+  const reminders = { senderNumber: '+447861935832', requestLink: async () => {}, open: async (token: string) => token === 'T'.repeat(43) ? { capability: 'C'.repeat(43) } : { reason: 'invalid' as const },
     status: async (cap: string) => cap === 'C'.repeat(43) ? { ok: true as const, campaign: captured.campaign!, firstName: 'New', open: true,
       startsAt: '2026-11-04T19:30:00Z', consentText: 'Optional webinar texts only.', capabilityExpiresAt: '2026-11-01T12:15:00Z', sms: null } : null,
-    choose: async () => ({ reason: 'session' }), withdraw: async () => false,
+    choose: async (_cap: string, phone: string, consented: boolean) => {
+      if (!consented) throw new MhpCommerceError(400, 'Tick the box to request the text reminder.');
+      calls.choices.push({ phone, consented });
+      return { nonce: 'a'.repeat(26), joinExpiresAt: '2026-11-01T12:10:00Z', alreadyVerified: false };
+    }, withdraw: async () => false,
     fromSignup: async (result: MhpCapturedSignup, hash: Buffer | null, clock: number) => {
       calls.handoffs++; assert.deepEqual(result, captured); assert.deepEqual(hash, source); assert.equal(clock, now);
       assert.equal(calls.captured, 1, 'signup must be committed before optional handoff');
@@ -119,4 +126,84 @@ test('restricted service denies unknown signup, expired returned authority and d
   }
   const broken = new PgMhpEventPhonePublic({ query: async () => { throw Error('private DB detail'); } } as never, { configured: false, sendEventPhoneLink: async () => {} }, '+447861935832');
   assert.equal(await broken.fromSignup(captured, source, now), null);
+});
+
+const HINT_SECRET = 'synthetic-signup-phone-secret-at-least32';
+const CAPABILITY = 'C'.repeat(43);
+function cookiesFrom(headers: Record<string,string>): string[] {
+  const value: unknown = headers['set-cookie'];
+  if (value === undefined) return [];
+  assert.ok(typeof value === 'string' || Array.isArray(value));
+  return (typeof value === 'string' ? [value] : value).map(String);
+}
+const hintValue = (headers: Record<string,string>): string => cookiesFrom(headers).find(value => value.startsWith(`${MHP_EVENT_PHONE_HINT_COOKIE}=`))?.split(';')[0]?.split('=')[1] ?? '';
+const browserCookies = (hint: string): string => `__Host-mhp_event_phone=${CAPABILITY}; ${MHP_EVENT_PHONE_HINT_COOKIE}=${hint}`;
+
+test('mobile convenience hint is opaque authenticated encryption bound to the capability and at most fifteen minutes', () => {
+  const sealed = sealMhpEventPhoneHint(HINT_SECRET,CAPABILITY,'07700 900123',now,3600)!;
+  assert.ok(sealed); assert.match(sealed,/^[A-Za-z0-9_-]+$/u);
+  assert.doesNotMatch(sealed,/07700900123|447700900123/u);
+  assert.equal(Buffer.from(sealed,'base64url').includes(Buffer.from('+447700900123')),false);
+  assert.equal(openMhpEventPhoneHint(HINT_SECRET,CAPABILITY,sealed,now),'+447700900123');
+  assert.equal(openMhpEventPhoneHint(HINT_SECRET,CAPABILITY,sealed,now+899_999),'+447700900123');
+  for(const [secret,cap,value,clock] of [
+    [HINT_SECRET,CAPABILITY,sealed,now+900_000], [HINT_SECRET,CAPABILITY,sealed,now-1],
+    [HINT_SECRET,'D'.repeat(43),sealed,now], ['different-session-secret-at-least32',CAPABILITY,sealed,now],
+    [HINT_SECRET,CAPABILITY,`${sealed[0]==='A'?'B':'A'}${sealed.slice(1)}`,now], [HINT_SECRET,CAPABILITY,sealed.slice(0,20),now],
+  ] as const) assert.equal(openMhpEventPhoneHint(secret,cap,value,clock),null);
+  for(const phone of ['', 'not-a-phone', '020 7946 0136', '"><script>']) assert.equal(sealMhpEventPhoneHint(HINT_SECRET,CAPABILITY,phone,now,900),null);
+  const short = sealMhpEventPhoneHint(HINT_SECRET,CAPABILITY,'07700 900123',now,30)!;
+  assert.equal(openMhpEventPhoneHint(HINT_SECRET,CAPABILITY,short,now+30_000),null);
+  assert.match(mhpEventPhoneHintCookie(sealed,3600),/Max-Age=900; Secure; HttpOnly; SameSite=Strict$/u);
+  assert.doesNotMatch(mhpEventPhoneHintCookie(sealed),/Domain=/u);
+});
+
+test('same-browser signup pre-fills an editable number but still requires explicit consent, CSRF and JOIN', async () => {
+  const f=signupPhoneFixture();
+  const signup=await f.request('POST','/api/mhp/subscribe',{...fields,PHONE:'07700 900123',OPT_IN:''});
+  assert.equal(signup.status,303);assert.equal(cookiesFrom(signup.headers).length,2);
+  const hint=hintValue(signup.headers);assert.ok(hint);
+  assert.equal(signup.headers.location,`${ORIGIN}/webinar/phone-reminders/choose`);
+  assert.doesNotMatch(JSON.stringify(signup.headers),/07700|447700900123/u);
+  const cookie=browserCookies(hint);
+  const chosen=await f.request('GET','/webinar/phone-reminders/choose',{}, {origin:ORIGIN,cookie});
+  assert.equal(chosen.status,200);assert.equal(chosen.headers['cache-control'],'no-store');
+  assert.match(chosen.body, /name="mobile"[^>]*value="\+447700900123"/u);
+  assert.doesNotMatch(chosen.body, /name="mobile"[^>]*(?:readonly|disabled)|name="consent"[^>]*checked/u);
+  const csrf=portalCsrfToken(HINT_SECRET,`mhp.event-phone:${CAPABILITY}`);
+  const input={csrf,mobile:'07700 900456'};
+  assert.equal((await f.request('POST','/webinar/phone-reminders/choose',input,{origin:ORIGIN,cookie})).status,400);
+  assert.equal((await f.request('POST','/webinar/phone-reminders/choose',{...input,csrf:'wrong',consent:'yes'},{origin:ORIGIN,cookie})).status,403);
+  assert.equal((await f.request('POST','/webinar/phone-reminders/choose',{...input,consent:'yes'},{origin:SITE,cookie})).status,403);
+  assert.equal(f.calls.choices.length,0);
+  const sent=await f.request('POST','/webinar/phone-reminders/choose',{...input,consent:'yes'},{origin:ORIGIN,cookie});
+  assert.equal(sent.status,200);assert.match(sent.body,/Text JOIN|JOIN A{26}/u);
+  assert.match(sent.body,/Reply STOP|Texting us proves the number is yours/u);
+  assert.deepEqual(f.calls.choices,[{phone:'07700 900456',consented:true}]);
+  assert.equal(sent.headers['set-cookie'],mhpEventPhoneHintCookie(null));
+});
+
+test('missing, expired, tampered and superseded hints are blank; fallback and email-link routes clear the hint', async () => {
+  const f=signupPhoneFixture();
+  const old=sealMhpEventPhoneHint(HINT_SECRET,'D'.repeat(43),'07700 900123',now,900)!;
+  const expired=sealMhpEventPhoneHint(HINT_SECRET,CAPABILITY,'07700 900123',now-900_000,900)!;
+  for(const hint of ['',old,expired,'tampered']){
+    const page=await f.request('GET','/webinar/phone-reminders/choose',{}, {origin:ORIGIN,cookie:browserCookies(hint)});
+    assert.equal(page.status,200);assert.match(page.body,/name="mobile"[^>]*value=""/u);
+    if(hint)assert.equal(page.headers['set-cookie'],mhpEventPhoneHintCookie(null));
+  }
+  const current=sealMhpEventPhoneHint(HINT_SECRET,CAPABILITY,'07700 900123',now,900)!;
+  for(const phone of ['', 'bad phone']){
+    const signup=await f.request('POST','/api/mhp/subscribe',{...fields,PHONE:phone},{cookie:browserCookies(current)});
+    assert.ok(cookiesFrom(signup.headers).includes(mhpEventPhoneHintCookie(null)));
+  }
+  for(const mode of ['denied','throws','off'] as const){
+    const fallback=await signupPhoneFixture(mode).request('POST','/api/mhp/subscribe',{...fields,PHONE:'07700 900123'},{cookie:browserCookies(current)});
+    assert.equal(fallback.headers.location,`${SITE}/thanks/?for=webinar`);
+    assert.equal(fallback.headers['set-cookie'],mhpEventPhoneHintCookie(null));
+  }
+  const email=await f.request('GET',`/webinar/phone-reminders/open?t=${'T'.repeat(43)}`,{}, {origin:ORIGIN,cookie:browserCookies(current)});
+  assert.equal(email.status,200);assert.equal(email.headers['set-cookie'],mhpEventPhoneHintCookie(null));
+  const opened=await f.request('POST','/webinar/phone-reminders/open',{t:'T'.repeat(43)}, {origin:ORIGIN,cookie:browserCookies(current)});
+  assert.equal(opened.status,303);assert.ok(cookiesFrom(opened.headers).includes(mhpEventPhoneHintCookie(null)));
 });

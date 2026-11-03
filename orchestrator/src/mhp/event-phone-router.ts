@@ -7,7 +7,8 @@ import { parseCookies } from '../server/admin/session.js';
 import { MHP_AUTH_ORIGIN, MHP_SESSION_COOKIE } from './auth-service.js';
 import { MhpCommerceError } from './commerce-service.js';
 import { MHP_EVENT_PHONE_CAPABILITY_COOKIE, MHP_EVENT_PHONE_OWNER_ROUTE, MHP_EVENT_PHONE_ROUTE, mhpEventUkLocalToUtc, type MhpEventPhoneOwner,
-  mhpEventPhoneCapabilityCookie, type PgMhpEventPhonePublic } from './event-phone-service.js';
+  mhpEventPhoneCapabilityCookie, MHP_EVENT_PHONE_HINT_COOKIE, mhpEventPhoneHintCookie, openMhpEventPhoneHint,
+  type PgMhpEventPhonePublic } from './event-phone-service.js';
 import { mhpEventPhoneChoosePage, mhpEventPhoneMessagePage, mhpEventPhoneOpenPage, mhpEventPhoneOwnerPage, mhpEventPhoneRequestPage,
   mhpEventPhoneSentPage } from './event-phone-view.js';
 
@@ -55,16 +56,20 @@ export async function handleMhpEventPhonePublic(req: IncomingMessage, res: Serve
     const context = portal.requestContext?.(req), now = portal.now?.() ?? Date.now();
     if (!context || !portal.abuse) throw new MhpCommerceError(503, 'This page is temporarily unavailable.');
     const source = context.sourceHash ? Buffer.from(context.sourceHash) : null;
-    const capability = parseCookies(req.headers.cookie)[MHP_EVENT_PHONE_CAPABILITY_COOKIE] ?? '';
+    const cookies = parseCookies(req.headers.cookie), capability = cookies[MHP_EVENT_PHONE_CAPABILITY_COOKIE] ?? '';
+    const sealedHint = cookies[MHP_EVENT_PHONE_HINT_COOKIE];
+    const mobileHint = openMhpEventPhoneHint(portal.sessionSecret, capability, sealedHint, now);
+    const clearHint: Record<string, string> = sealedHint ? { 'set-cookie': mhpEventPhoneHintCookie(null) } : {};
     const csrf = capability ? portalCsrfToken(portal.sessionSecret, `mhp.event-phone:${capability}`) : '';
     if (method === 'GET') {
       await admit(portal, sourceAbuseAdmission(context, 'read.page', now), leases);
-      if (action === '' && url.search === '') { send(res, 200, mhpEventPhoneRequestPage()); return true; }
-      if (action === 'open' && [...url.searchParams.keys()].join() === 't') { send(res, 200, mhpEventPhoneOpenPage(url.searchParams.get('t') ?? '')); return true; }
+      if (action === '' && url.search === '') { send(res, 200, mhpEventPhoneRequestPage(), clearHint); return true; }
+      if (action === 'open' && [...url.searchParams.keys()].join() === 't') { send(res, 200, mhpEventPhoneOpenPage(url.searchParams.get('t') ?? ''), clearHint); return true; }
       if (action === 'choose' && url.search === '') {
         const status = await reminders.status(capability);
-        if (!status) { send(res, 401, mhpEventPhoneMessagePage('Your link has expired', 'Ask for a new email link to continue. It works for 15 minutes.')); return true; }
-        send(res, 200, mhpEventPhoneChoosePage({ status, csrf, sender: reminders.senderNumber })); return true;
+        if (!status) { send(res, 401, mhpEventPhoneMessagePage('Your link has expired', 'Ask for a new email link to continue. It works for 15 minutes.'), clearHint); return true; }
+        send(res, 200, mhpEventPhoneChoosePage({ status, csrf, sender: reminders.senderNumber, ...(mobileHint ? { mobileHint } : {}) }),
+          mobileHint ? {} : clearHint); return true;
       }
       throw new MhpCommerceError(404, 'This page does not exist.');
     }
@@ -75,17 +80,18 @@ export async function handleMhpEventPhonePublic(req: IncomingMessage, res: Serve
     if (action === '') {
       const fields = await form(req, ['email']);
       await reminders.requestLink(fields.get('email') ?? '', source);
-      send(res, 200, mhpEventPhoneSentPage()); return true;
+      send(res, 200, mhpEventPhoneSentPage(), clearHint); return true;
     }
     if (action === 'open') {
       const fields = await form(req, ['t']);
       const opened = await reminders.open(fields.get('t') ?? '', source);
       if (!('capability' in opened)) {
         send(res, 400, mhpEventPhoneMessagePage(opened.reason === 'expired' ? 'That link has expired' : 'That link has already been used',
-          'Ask for a new email link to continue. Each link works once, for 15 minutes.')); return true;
+          'Ask for a new email link to continue. Each link works once, for 15 minutes.'), clearHint); return true;
       }
       res.writeHead(303, { location: `${MHP_EVENT_PHONE_ROUTE}/choose`, 'cache-control': 'no-store', 'referrer-policy': 'same-origin',
-        'set-cookie': mhpEventPhoneCapabilityCookie(opened.capability, 900) });
+        'set-cookie': sealedHint ? [mhpEventPhoneCapabilityCookie(opened.capability, 900), mhpEventPhoneHintCookie(null)]
+          : mhpEventPhoneCapabilityCookie(opened.capability, 900) });
       res.end(); return true;
     }
     if (action === 'choose') {
@@ -93,20 +99,20 @@ export async function handleMhpEventPhonePublic(req: IncomingMessage, res: Serve
       if (!capability || !verifyPortalCsrf(portal.sessionSecret, `mhp.event-phone:${capability}`, fields.get('csrf') ?? '')) throw new MhpCommerceError(403, 'Your link has expired. Ask for a new email link.');
       const choice = await reminders.choose(capability, fields.get('mobile') ?? '', fields.get('consent') === 'yes', source);
       const status = await reminders.status(capability);
-      if (!status) { send(res, 401, mhpEventPhoneMessagePage('Your link has expired', 'Ask for a new email link to continue.')); return true; }
+      if (!status) { send(res, 401, mhpEventPhoneMessagePage('Your link has expired', 'Ask for a new email link to continue.'), clearHint); return true; }
       if ('reason' in choice) {
         const message = choice.reason === 'closed' ? 'Text reminders for this webinar are closed.' : choice.reason === 'number_unavailable'
           ? "We couldn't use that number for this webinar. Use your own mobile, or try again in 10 minutes." : 'Your link has expired. Ask for a new email link.';
-        send(res, 409, mhpEventPhoneChoosePage({ status, csrf, sender: reminders.senderNumber, notice: message })); return true;
+        send(res, 409, mhpEventPhoneChoosePage({ status, csrf, sender: reminders.senderNumber, notice: message, ...(mobileHint ? { mobileHint } : {}) })); return true;
       }
       send(res, 200, mhpEventPhoneChoosePage({ status, csrf, sender: reminders.senderNumber, ...(choice.alreadyVerified ? { notice: 'That number is already confirmed.' }
-        : { join: { nonce: choice.nonce, joinExpiresAt: choice.joinExpiresAt, sender: reminders.senderNumber } }) })); return true;
+        : { join: { nonce: choice.nonce, joinExpiresAt: choice.joinExpiresAt, sender: reminders.senderNumber } }) }), clearHint); return true;
     }
     const fields = await form(req, ['csrf', 'receiptId']);
     if (!capability || !verifyPortalCsrf(portal.sessionSecret, `mhp.event-phone:${capability}`, fields.get('csrf') ?? '')) throw new MhpCommerceError(403, 'Your link has expired. Ask for a new email link.');
     const stopped = await reminders.withdraw(capability, fields.get('receiptId') ?? '');
     send(res, stopped ? 200 : 409, mhpEventPhoneMessagePage(stopped ? 'Webinar texts stopped' : 'Nothing to stop',
-      stopped ? "We won't text you about this webinar. Your email reminders carry on." : 'There is no active text reminder for this link.')); return true;
+      stopped ? "We won't text you about this webinar. Your email reminders carry on." : 'There is no active text reminder for this link.'), clearHint); return true;
   } catch (error) {
     outcome = 'service_error';
     const status = error instanceof MhpCommerceError ? error.status : 503;
