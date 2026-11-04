@@ -6,6 +6,7 @@ import { principalAbuseAdmission, sourceAbuseAdmission } from '../portal/abuse.j
 import { handleInvestorPublicSite, INVESTOR_SITES_ROUTE } from '../portal/investor-site.js';
 import { MHP_AUTH_HOST, MHP_AUTH_ORIGIN, MHP_SESSION_COOKIE } from './auth-service.js';
 import { MhpCommerceError, type PgMhpCommerceService } from './commerce-service.js';
+import { MHP_SITE } from './catalog.js';
 import { accountPage } from './account-view.js';
 import { hqPage } from './hq-view.js';
 import type { PgMhpHqService } from './hq-service.js';
@@ -26,10 +27,10 @@ import type { MhpSequenceService } from './followup-sequence-service.js';
 interface MhpMountDependencies {
   portal: PostgresPortalDeps;
   authMount: { handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> };
-  commerce: Pick<PgMhpCommerceService, 'snapshot' | 'refund' | 'billingPortal' | 'webhook' | 'billingEnabled'> & Partial<Pick<PgMhpCommerceService, 'creditSnapshot' | 'courseCheckout'>>;
+  commerce: Pick<PgMhpCommerceService, 'snapshot' | 'refund' | 'billingPortal' | 'webhook' | 'billingEnabled'> & Partial<Pick<PgMhpCommerceService, 'creditSnapshot' | 'courseCheckout' | 'publicCourseCheckout'>>;
   desk?: Pick<PgMhpDeskService, 'snapshot' | 'save' | 'archive' | 'submitVerdict' | 'queue' | 'review'>;
   hq: Pick<PgMhpHqService, 'snapshot' | 'grant' | 'isOwner'>;
-  mail?: Pick<MhpTransactionalMailer, 'sendAccessInvite' | 'configured'>;
+  mail?: Pick<MhpTransactionalMailer, 'sendAccessInvite' | 'configured'> & Partial<Pick<MhpTransactionalMailer, 'sendPurchaseWelcome'>>;
   growth?: Omit<MhpGrowthRouterDependencies, 'portal'>;
   marketingWorkspace?: MhpMarketingWorkspaceDependencies['marketingWorkspace'];
   webinarLeads?: MhpMarketingWorkspaceDependencies['webinarLeads'];
@@ -72,6 +73,47 @@ function portalPath(path: string): boolean {
     || path === '/portal/api/leadrelay' || path.startsWith('/portal/api/leadrelay/');
 }
 
+const SITE_ORIGINS = new Set([MHP_SITE, 'https://www.martinhowardproperty.co.uk']);
+/**
+ * Public course checkout: a plain form post from the site's "Start the course"
+ * buttons. The server picks the price by its own clock and sends the buyer to Stripe.
+ */
+async function courseCheckout(req: IncomingMessage, res: ServerResponse, deps: MhpMountDependencies): Promise<void> {
+  const { portal, commerce } = deps;
+  if (req.method !== 'POST') { redirect(res, `${MHP_SITE}/join/`); return; }
+  const leases: Buffer[] = [];
+  let outcome: 'success' | 'service_error' = 'success';
+  try {
+    if (!SITE_ORIGINS.has(String(req.headers.origin ?? ''))) throw new MhpCommerceError(403, 'Please start checkout from martinhowardproperty.co.uk.');
+    if (!/^application\/x-www-form-urlencoded(?:;|$)/i.test(String(req.headers['content-type'] ?? ''))) throw new MhpCommerceError(415, 'Please start checkout from the course page.');
+    const context = portal.requestContext?.(req);
+    if (!context || !portal.abuse) throw new MhpCommerceError(503, 'Checkout is temporarily unavailable.');
+    const admission = sourceAbuseAdmission(context, 'auth.setup', portal.now?.() ?? Date.now());
+    if (!admission) throw new MhpCommerceError(503, 'Checkout is temporarily unavailable.');
+    const decision = await portal.abuse.admit(admission);
+    if (decision.leaseHash) leases.push(decision.leaseHash);
+    if (!decision.allowed) throw new MhpCommerceError(429, 'Too many checkout attempts. Please wait a few minutes and try again.');
+    const fields = new URLSearchParams((await body(req, 1_024)).toString('utf8'));
+    if ([...fields.keys()].some(key => key !== 'plan') || fields.getAll('plan').length !== 1) throw new MhpCommerceError(400, 'Choose a payment option on the course page.');
+    const plan = fields.get('plan');
+    if (plan !== 'full' && plan !== '3x') throw new MhpCommerceError(400, 'Choose a payment option on the course page.');
+    if (!commerce.billingEnabled || !commerce.publicCourseCheckout) {
+      throw new MhpCommerceError(503, 'Checkout is opening shortly. Please try again soon, or email martin@propinvestuk.co.uk.');
+    }
+    const target = new URL(await commerce.publicCourseCheckout(plan));
+    if (target.protocol !== 'https:' || target.hostname !== 'checkout.stripe.com' || target.username || target.password) {
+      throw new MhpCommerceError(503, 'Checkout is temporarily unavailable.');
+    }
+    redirect(res, target.href);
+  } catch (error) {
+    outcome = 'service_error';
+    respond(res, error instanceof MhpCommerceError ? error.status : 503, error instanceof MhpCommerceError ? error.message
+      : 'Checkout is temporarily unavailable. Please try again shortly, or email martin@propinvestuk.co.uk.');
+  } finally {
+    await Promise.allSettled(leases.map(lease => portal.abuse!.complete(lease, outcome)));
+  }
+}
+
 /** Each MHP route terminates here; legacy PP marketing/payment routes are unreachable. */
 export function createMhpMount(deps: MhpMountDependencies) {
   const { portal, commerce } = deps;
@@ -104,14 +146,20 @@ export function createMhpMount(deps: MhpMountDependencies) {
         try {
           const signature = req.headers['stripe-signature'];
           if (typeof signature !== 'string') throw new MhpCommerceError(400, 'Missing Stripe signature.');
-          await commerce.webhook(await body(req, 256 * 1024), signature);
+          const notice = await commerce.webhook(await body(req, 256 * 1024), signature);
           respond(res, 200, 'Received.');
+          // After the 200: a mail failure must never make Stripe retry a recorded receipt.
+          if (notice && deps.mail?.configured && deps.mail.sendPurchaseWelcome) {
+            void deps.mail.sendPurchaseWelcome(notice.email, notice.name, notice.productName, notice.kind)
+              .catch(() => console.warn(JSON.stringify({ event: 'mhp.purchase-welcome.failed', sku: notice.sku })));
+          }
         } catch (error) {
           respond(res, error instanceof MhpCommerceError ? error.status : 503,
             error instanceof MhpCommerceError ? error.message : 'Payment receipt processing is temporarily unavailable.');
         }
         return;
       }
+      if (path === '/api/mhp/checkout/course') { await courseCheckout(req, res, deps); return; }
       if (path.startsWith(`${INVESTOR_SITES_ROUTE}/`) && portal.investors) {
         await handleInvestorPublicSite(req, res, portal.investors, portal.sessionSecret); return;
       }

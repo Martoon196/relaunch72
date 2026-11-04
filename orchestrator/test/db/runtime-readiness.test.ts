@@ -427,16 +427,36 @@ test('final136 capable runtime stays strict for new applications and every histo
 });
 
 test('final137 media runtime strictly requires media137, MHP136 and every prior ledger row', async () => {
-  const rows=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-media137-'));
+  const prefix = (await discoverMigrations()).slice(0, 137);
+  await Promise.all(prefix.map(migration => writeFile(path.join(directory, migration.filename), migration.sql, 'utf8')));
+  const rows=prefix.map(({filename,checksum})=>({filename,checksum}));
   assert.equal(rows.length,137);
   assert.deepEqual(rows[135],{filename:'0136_mhp_webinar_applications.sql',checksum:'9bf6605cdc536794fae989964542eb8253cdd49ebd995d3e6dd346c01c746139'});
   assert.deepEqual(rows[136],{filename:'0137_seo_blog_media_storage.sql',checksum:'ff85dc3ee825e2529333fc8efb0de070a05e43786717d9ae279aa469e41e1255'});
-  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0,136))),/schema is behind by 1 migration/);
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.filter((_,i)=>i!==135))),/not a contiguous prefix at 0137_seo_blog_media_storage.sql/);
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows),directory));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0,136)),directory),/schema is behind by 1 migration/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.filter((_,i)=>i!==135)),directory),/not a contiguous prefix at 0137_seo_blog_media_storage.sql/);
   for (const at of [0,120,123,125,126,127,130,131,132,133,134,135,136]) {
     const changed=rows.map((row,index)=>index===at?{...row,checksum:'0'.repeat(64)}:row);
+    await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(changed),directory),/checksum changed/);
+  }
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows,{filename:'0138_unknown.sql',checksum:'a'.repeat(64)}]),directory),/migration not present/);
+});
+
+test('payments138 release is ready before and after its exact additive 0138, and strict otherwise', async () => {
+  const rows=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  assert.equal(rows.length,138);
+  assert.deepEqual(rows[137],{filename:'0138_mhp_payments_live.sql',checksum:'9280188fde14cb5ac0b165bd0c9a85a25ec4e21bc29ec85a97a1ae9e5311b4f8'});
+  // Deployed to every consumer first: the exact 0137 ledger with only 0138 pending is ready.
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0,137))));
+  // After the migration it is strict as usual.
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0,136))),/schema is behind by 2 migration/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(0,137),{...rows[137]!,checksum:'0'.repeat(64)}])),/checksum changed|migration not present/);
+  for (const at of [0,120,135,136]) {
+    const changed=rows.slice(0,137).map((row,index)=>index===at?{...row,checksum:'0'.repeat(64)}:row);
     await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(changed)),/checksum changed/);
   }
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows,{filename:'0138_unknown.sql',checksum:'a'.repeat(64)}])),/migration not present/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows,{filename:'0139_unknown.sql',checksum:'a'.repeat(64)}])),/migration not present/);
 });

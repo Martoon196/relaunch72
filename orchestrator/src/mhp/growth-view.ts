@@ -1,4 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { MHP_EVENT_NAMES, type MhpApplicationRecord, type MhpGrowthSummary, type MhpRegistrantRecord } from './growth-service.js';
+import { MHP_PRIVATE_OFFERS, mhpPriceStatement, mhpPrivateOfferAllowed, mhpProduct } from './catalog.js';
+import type { MhpPrivateOfferLink } from './commerce-service.js';
 
 const e = (value: unknown): string => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const STYLE = `:root{color-scheme:light;--ink:#142019;--muted:#58685e;--line:#d9e0d8;--gold:#e8a33d;--paper:#f5f5ef}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.6 system-ui,-apple-system,sans-serif}a{color:#1f6b45}header{background:var(--ink);color:#fff;padding:20px max(20px,calc((100vw - 1160px)/2));display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}header strong{font-size:18px}nav{display:flex;gap:20px;flex-wrap:wrap}nav a{color:#f1bc6b;text-decoration:none;font-weight:650}main{max-width:1160px;margin:auto;padding:44px 20px 80px}.eyebrow{font-size:12px;letter-spacing:.15em;text-transform:uppercase;font-weight:700;color:var(--muted)}h1{font-size:clamp(30px,4vw,44px);line-height:1.1;letter-spacing:-.03em;margin:8px 0 14px}.intro{color:var(--muted);max-width:680px}.stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px;margin:26px 0}.stat{background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px}.stat b{display:block;font-size:30px;letter-spacing:-.02em}.stat span{color:var(--muted);font-size:14px}table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:16px;overflow:hidden}th,td{text-align:left;padding:10px 14px;border-top:1px solid var(--line)}th{background:#f4f6f1}.panel{background:#fff;border:1px solid var(--line);border-radius:16px;padding:22px;margin:22px 0;max-width:720px}.notice{background:#eef7ef;border:1px solid #b9dcc0;border-radius:14px;padding:14px 18px;margin:18px 0}button{background:var(--gold);color:var(--ink);border:0;border-radius:10px;padding:12px 16px;font:inherit;font-weight:750;cursor:pointer}input[type=file]{margin:12px 0;display:block}.small{font-size:14px;color:var(--muted)}.funnel{display:flex;flex-wrap:wrap;gap:10px;align-items:stretch;margin:18px 0 26px}.funnel .stat{flex:1 1 170px}.funnel .rate{align-self:center;color:var(--muted);font-size:14px;font-weight:650}.scroll{overflow-x:auto}.scroll table{min-width:960px}td.long{white-space:pre-wrap;overflow-wrap:anywhere;min-width:220px}`;
@@ -47,10 +50,40 @@ function funnel(summary: MhpGrowthSummary): string {
     + `<h2>Page events, last 30 days</h2><table><thead><tr><th>Event</th><th>Count</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-export function hqApplicationsPage(applications: readonly MhpApplicationRecord[]): string {
+export interface HqApplicationOffersInput {
+  csrf: string; billingEnabled: boolean; offers: readonly MhpPrivateOfferLink[] | null; created: string; withdrawn: boolean;
+}
+const OFFER_EMAIL_BODY = (name: string, product: string, statement: string, url: string): string =>
+  `Hi ${name},\n\nThanks for the call. As promised, here is your private link for ${product}:\n\n${url}\n\n${statement}\nThe link works once and is just for you. The full price and any instalment total are shown before you pay.\n\nOnce you have paid I will be in touch within one working day to book your first session.\n\nMartin`;
+
+export function hqApplicationsPage(applications: readonly MhpApplicationRecord[], input?: HqApplicationOffersInput): string {
   const when = (value: string): string => new Date(value).toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'medium', timeStyle: 'short' });
-  const rows = applications.map(a => `<tr><td>${e(when(a.createdAt))}</td><td>${e(a.status)}</td><td>${e(a.name)}<br><a href="mailto:${e(a.email)}">${e(a.email)}</a>${a.phone ? `<br>${e(a.phone)} (unverified)` : ''}</td><td>${e(a.location)}</td><td>${e(a.door)}</td><td>${e(a.experience)}</td><td>${e(a.hours)}</td><td class="long">${e(a.objective)}</td><td>${e(a.obstacle)}</td><td>${e(a.support)}</td><td>${a.discuss ? 'Yes' : 'No'}</td><td>${a.marketingConsent ? 'Yes' : 'No'}</td><td>${e(a.source)}</td></tr>`).join('');
-  return frame('Applications', `<span class="eyebrow">Owner HQ · Applications</span><h1>One Lane Mentoring applications.</h1><p class="intro">Newest first, up to 200. These details are for assessing the application and contacting the applicant about it. Status changes are recorded manually for now.</p><div class="scroll"><table><thead><tr><th>Received (UK)</th><th>Status</th><th>Applicant</th><th>Town or area</th><th>Door</th><th>Experience</th><th>Hours a week</th><th>90-day objective</th><th>Obstacle</th><th>Support</th><th>Discuss</th><th>Tips emails</th><th>Source</th></tr></thead><tbody>${rows || '<tr><td colspan="13">No applications yet.</td></tr>'}</tbody></table></div>`);
+  const offers = input?.offers ?? [];
+  const offerCell = (a: MhpApplicationRecord): string => {
+    if (!input) return '';
+    if (!input.billingEnabled) return '<td>Payments are not connected yet.</td>';
+    const mine = offers.filter(o => o.applicationId === a.id);
+    const links = mine.map(o => {
+      const state = o.paid ? 'Paid' : o.active ? 'Not used yet' : 'Withdrawn';
+      const mail = `mailto:${encodeURIComponent(a.email)}?subject=${encodeURIComponent(`Your ${o.name} link`)}&body=${encodeURIComponent(OFFER_EMAIL_BODY(a.name.split(' ')[0] || a.name, o.name, o.priceStatement, o.url))}`;
+      return `<div class="panel" style="margin:8px 0;padding:12px${o.id === input.created ? ';border-color:#e8a33d' : ''}"><strong>${e(o.name)}</strong> · ${e(state)}<br><span class="small">${e(o.priceStatement)}</span>`
+        + (o.active && !o.paid ? `<br><input readonly value="${e(o.url)}" aria-label="Payment link" style="width:100%;font:inherit;padding:6px;margin:6px 0"><a href="${e(mail)}">Email this link to ${e(a.email)}</a>`
+          + `<form method="post" action="/hq/applications/withdraw" style="margin-top:6px"><input type="hidden" name="csrf" value="${e(input.csrf)}"><input type="hidden" name="linkId" value="${e(o.id)}"><button style="padding:6px 10px;background:#eee">Withdraw link</button></form>` : '')
+        + '</div>';
+    }).join('');
+    const founding = mhpPrivateOfferAllowed('mhp_mentoring_early', a.createdAt);
+    const options = MHP_PRIVATE_OFFERS.filter(sku => mhpPrivateOfferAllowed(sku, a.createdAt)).map(sku => {
+      const product = mhpProduct(sku)!;
+      return `<option value="${e(sku)}">${e(product.name)}: ${e(mhpPriceStatement(product))}</option>`;
+    }).join('');
+    return `<td style="min-width:300px">${links}<form method="post" action="/hq/applications/offer"><input type="hidden" name="csrf" value="${e(input.csrf)}"><input type="hidden" name="commandId" value="${e(randomUUID())}"><input type="hidden" name="applicationId" value="${e(a.id)}"><label class="small" for="offer-${e(a.id)}">Offer after an accepted call</label><select id="offer-${e(a.id)}" name="sku" style="width:100%;font:inherit;padding:6px;margin:4px 0">${options}</select><button>Create single-use link</button></form><p class="small">${founding ? 'Received before the founding deadline, so founding prices are available.' : 'Received after 7 November, 23:59 GMT: founding prices are not available.'}</p></td>`;
+  };
+  const rows = applications.map(a => `<tr id="app-${e(a.id)}"><td>${e(when(a.createdAt))}</td><td>${e(a.status)}</td><td>${e(a.name)}<br><a href="mailto:${e(a.email)}">${e(a.email)}</a>${a.phone ? `<br>${e(a.phone)} (unverified)` : ''}</td>${offerCell(a)}<td>${e(a.location)}</td><td>${e(a.door)}</td><td>${e(a.experience)}</td><td>${e(a.hours)}</td><td class="long">${e(a.objective)}</td><td>${e(a.obstacle)}</td><td>${e(a.support)}</td><td>${a.discuss ? 'Yes' : 'No'}</td><td>${a.marketingConsent ? 'Yes' : 'No'}</td><td>${e(a.source)}</td></tr>`).join('');
+  const notice = input?.created ? '<div class="notice"><strong>Link created.</strong> It is shown against the applicant below. Use “Email this link” to send it from your own email.</div>'
+    : input?.withdrawn ? '<div class="notice"><strong>Link withdrawn.</strong> It can no longer be used to pay.</div>' : '';
+  const loadFailed = input?.billingEnabled && input.offers === null ? '<div class="notice"><strong>Saved links could not load from Stripe just now.</strong> Refresh in a minute before creating another.</div>' : '';
+  const offerHead = input ? '<th>Payment link</th>' : '';
+  return frame('Applications', `<span class="eyebrow">Owner HQ · Applications</span><h1>One Lane Mentoring applications.</h1><p class="intro">Newest first, up to 200. These details are for assessing the application and contacting the applicant about it. Status changes are recorded manually for now. After an accepted call, create a single-use payment link for the agreed offer and email it to the applicant. Each link works once, shows the full price and any instalment total, and gives access automatically when paid.</p>${notice}${loadFailed}<div class="scroll"><table><thead><tr><th>Received (UK)</th><th>Status</th><th>Applicant</th>${offerHead}<th>Town or area</th><th>Door</th><th>Experience</th><th>Hours a week</th><th>90-day objective</th><th>Obstacle</th><th>Support</th><th>Discuss</th><th>Tips emails</th><th>Source</th></tr></thead><tbody>${rows || `<tr><td colspan="${input ? 14 : 13}">No applications yet.</td></tr>`}</tbody></table></div>`);
 }
 
 export function hqRegistrantsPage(registrants: readonly MhpRegistrantRecord[]): string {

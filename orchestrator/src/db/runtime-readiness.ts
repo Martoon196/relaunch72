@@ -46,6 +46,8 @@ const MHP_WEBINAR_APPLICATIONS_MIGRATION = '0136_mhp_webinar_applications.sql';
 const MHP_WEBINAR_APPLICATIONS_CHECKSUM = '9bf6605cdc536794fae989964542eb8253cdd49ebd995d3e6dd346c01c746139';
 const SEO_BLOG_MEDIA_MIGRATION = '0137_seo_blog_media_storage.sql';
 const SEO_BLOG_MEDIA_CHECKSUM: string | null = 'ff85dc3ee825e2529333fc8efb0de070a05e43786717d9ae279aa469e41e1255';
+const MHP_PAYMENTS_LIVE_MIGRATION = '0138_mhp_payments_live.sql';
+const MHP_PAYMENTS_LIVE_CHECKSUM = '9280188fde14cb5ac0b165bd0c9a85a25ec4e21bc29ec85a97a1ae9e5311b4f8';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -245,6 +247,20 @@ export async function assertRuntimeSchemaCurrent(
       && pending[0]?.filename === SMS_TRIGGER_ACL_REPAIR_MIGRATION
       && pending[0]?.checksum === SMS_TRIGGER_ACL_REPAIR_CHECKSUM
       && applied.get(SMS_PHONE_COMPATIBILITY_MIGRATION) === SMS_PHONE_COMPATIBILITY_CHECKSUM) {
+    return;
+  }
+  // This release bundles the reviewed additive 0138 (MHP payments go-live) and is
+  // deployed to every consumer BEFORE 0138 is applied, so one deploy round covers the
+  // cut-over. Only the exact 0138 file may be pending, on top of the exact 0137 ledger.
+  // Until 0138 is applied the new MHP products are inactive in the database, so their
+  // receipts fail closed (Stripe retries) and no new purchase route is published.
+  if (pending.length === 1
+      && migrations.length === 138
+      && migrations[137]?.filename === MHP_PAYMENTS_LIVE_MIGRATION
+      && pending[0]?.filename === MHP_PAYMENTS_LIVE_MIGRATION
+      && pending[0]?.checksum === MHP_PAYMENTS_LIVE_CHECKSUM
+      && SEO_BLOG_MEDIA_CHECKSUM !== null
+      && applied.get(SEO_BLOG_MEDIA_MIGRATION) === SEO_BLOG_MEDIA_CHECKSUM) {
     return;
   }
   if (pending.length > 0) {
