@@ -9,7 +9,7 @@ import { writeArticle, rewriteSection, proposeCluster, researchForPrompt, shortS
 import { CampaignCreator, campaignProblems } from '../src/seo-blog/campaign-creator.js';
 import { MemorySeoBlogStore } from '../src/seo-blog/store.js';
 import { SeoBlogEngine } from '../src/seo-blog/engine.js';
-import { UnconfiguredSearchProvider } from '../src/seo-blog/research.js';
+import { UnconfiguredSearchProvider, researchQueries } from '../src/seo-blog/research.js';
 import { nativeCsrf, nativeIdentity, nativeSeoCall } from './seo-blog-native-request.js';
 import { FakeWeb, FakeSearch, seedResearchWeb } from './seo-blog-fixtures.js';
 import { fixtureBrand } from './rl72-method-fixtures.js';
@@ -57,6 +57,12 @@ test('typed evidence persists the selected format, actual provenance metadata an
  assert(!('_method_sidecar' in f.out.value));assert.equal(r!.approvalState,'draft');
  const projected=researchForPrompt(shortSourceIds([{...f.sources[0]!,publishedAt:'2026-10-02T00:00:00Z',observedPeriod:'2025 calendar year',confidence:'medium'}])) as any[];
  assert.equal(projected[0].observedPeriod,'2025 calendar year');assert.equal(projected[0].confidence,'medium');assert(projected[0].retrievedAt);
+});
+test('research acquisition retains a page publication date without inventing a data period or confidence',async()=>{
+ const transport=new FakeWeb(),url='https://evidence.example/practical-check';
+ transport.set(url,'<html><head><title>Practical checks</title><meta property="article:published_time" content="2026-10-01T00:00:00Z"></head><body><p>Practical checks begin with observable evidence. Record the starting condition and identify which information is unknown before choosing the next useful action. This separates a supported observation from an assumption about a result.</p></body></html>');
+ const result=await researchQueries({queries:['practical checks'],search:{id:'fictional-evidence',mode:'live',async search(){return [{url,title:'Practical checks',snippet:''}];}},transport,locale:'en-GB',brandWebsite:null,now:()=> '2026-11-04T00:00:00.000Z'});
+ assert.equal(result.sources.length,1);assert.match(result.sources[0]!.publishedAt!,/^2026-10-01/);assert.equal(result.sources[0]!.observedPeriod,null);assert.equal(result.sources[0]!.confidence,'unknown');
 });
 for(const [name,mutate] of [
  ['generic pass without evidence',(v:any)=>{delete v._method_sidecar.qualityFindings[0].evidence;}],
