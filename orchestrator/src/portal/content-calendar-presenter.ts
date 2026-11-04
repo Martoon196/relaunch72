@@ -1,3 +1,4 @@
+import { validDateOnly,safeTimeZone,dateInTimeZone,utcDate,dateOnly,addDays,periodBounds } from './calendar-dates.js';
 import type {
   CompanyContentCatalogItem,
   CompanyContentCatalogPage,
@@ -220,7 +221,7 @@ const CHANNELS = new Set<ContentCalendarChannelFilter>([
   'all', 'linkedin', 'instagram', 'facebook', 'tiktok', 'x', 'youtube',
   'google_business_profile', 'threads', 'pinterest', 'email', 'webinar',
 ]);
-const DAY_MS = 86_400_000;
+
 
 const CHANNEL_LABELS: Readonly<Record<ContentCalendarChannel, string>> = Object.freeze({
   linkedin: 'LinkedIn',
@@ -524,37 +525,6 @@ function presentPlanning(
   });
 }
 
-function validDateOnly(value: unknown): string | null {
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
-  const parsed = new Date(`${value}T00:00:00.000Z`);
-  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
-    ? value
-    : null;
-}
-
-function safeTimeZone(value: unknown): string {
-  if (typeof value !== 'string' || value.length < 1 || value.length > 100) return 'UTC';
-  try {
-    new Intl.DateTimeFormat('en-GB', { timeZone: value }).format(new Date(0));
-    return value;
-  } catch {
-    return 'UTC';
-  }
-}
-
-function dateInTimeZone(value: string | Date, timeZone: string): string | null {
-  const date = value instanceof Date ? value : new Date(value);
-  if (!Number.isFinite(date.getTime())) return null;
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    year: 'numeric', month: '2-digit', day: '2-digit', timeZone,
-  }).formatToParts(date);
-  const year = parts.find((part) => part.type === 'year')?.value;
-  const month = parts.find((part) => part.type === 'month')?.value;
-  const day = parts.find((part) => part.type === 'day')?.value;
-  const candidate = year && month && day ? `${year}-${month}-${day}` : null;
-  return candidate && validDateOnly(candidate) ? candidate : null;
-}
-
 function safeAsOfDate(asOf: string, timeZone = 'UTC'): string {
   return dateInTimeZone(asOf, safeTimeZone(timeZone)) ?? '1970-01-01';
 }
@@ -575,67 +545,6 @@ export function normaliseContentCalendarFilters(
     mode,
     date: validDateOnly(input.date) ?? safeAsOfDate(asOf, timeZone),
     channel,
-  });
-}
-
-function utcDate(date: string): Date {
-  return new Date(`${date}T00:00:00.000Z`);
-}
-
-function dateOnly(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
-function addDays(date: Date, days: number): Date {
-  return new Date(date.getTime() + (days * DAY_MS));
-}
-
-function mondayOnOrBefore(date: Date): Date {
-  const weekday = date.getUTCDay();
-  return addDays(date, -(weekday === 0 ? 6 : weekday - 1));
-}
-
-function startOfMonth(date: Date): Date {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
-}
-
-function endOfMonth(date: Date): Date {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0));
-}
-
-function periodBounds(filters: ContentCalendarFiltersView): Readonly<{
-  gridStart: Date;
-  gridEnd: Date;
-  primaryStart: Date;
-  primaryEnd: Date;
-  previousDate: string;
-  nextDate: string;
-}> {
-  const selected = utcDate(filters.date);
-  if (filters.mode === 'week') {
-    const start = mondayOnOrBefore(selected);
-    const end = addDays(start, 6);
-    return Object.freeze({
-      gridStart: start,
-      gridEnd: end,
-      primaryStart: start,
-      primaryEnd: end,
-      previousDate: dateOnly(addDays(selected, -7)),
-      nextDate: dateOnly(addDays(selected, 7)),
-    });
-  }
-  const first = startOfMonth(selected);
-  const last = endOfMonth(selected);
-  const gridStart = mondayOnOrBefore(first);
-  const lastWeekday = last.getUTCDay();
-  const gridEnd = addDays(last, lastWeekday === 0 ? 0 : 7 - lastWeekday);
-  return Object.freeze({
-    gridStart,
-    gridEnd,
-    primaryStart: first,
-    primaryEnd: last,
-    previousDate: dateOnly(new Date(Date.UTC(selected.getUTCFullYear(), selected.getUTCMonth() - 1, 1))),
-    nextDate: dateOnly(new Date(Date.UTC(selected.getUTCFullYear(), selected.getUTCMonth() + 1, 1))),
   });
 }
 

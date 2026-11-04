@@ -148,6 +148,7 @@ export interface PortalBundle {
 export interface PostgresPortalConfig {
   investors?: PostgresPortalDeps['investors'];
   investorMail?: PostgresPortalDeps['investorMail'];
+  booking?: PostgresPortalDeps['booking'];
   financeDrafts?: PostgresPortalDeps['financeDrafts'];
   sessionSecret: string;
   secure: boolean;
@@ -266,6 +267,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     financeDrafts: cfg.financeDrafts,
     investors: cfg.investors,
     investorMail: cfg.investorMail,
+    booking: cfg.booking,
     portalBaseUrl: cfg.portalBaseUrl,
     journeys: cfg.journeys,
     operatorActions: cfg.operatorActions,

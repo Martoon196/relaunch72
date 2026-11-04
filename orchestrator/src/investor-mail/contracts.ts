@@ -8,6 +8,8 @@ export interface CustomMailbox {
 export interface OAuthMailbox {
   provider:'google'|'microsoft'; address:string; displayName:string;
   accessToken:string; refreshToken:string; expiresAt:number;
+  /** Provider-returned grants; absent on historical mail-only connections. */
+  grantedScopes?:string[];
 }
 export type MailboxCredentials=CustomMailbox|OAuthMailbox;
 export interface ApprovedInvestorMail {

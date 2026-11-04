@@ -304,6 +304,7 @@ export function appShell(opts: AppShellOptions): string {
       <nav class="primary-nav" aria-label="Primary">
         <div class="nav-label">Workspace</div>
         ${workingNav}
+        ${opts.crmAvailable!==false?'<a class="nav-item" href="/portal/calendar">'+icon('calendar')+'<span>Meetings &amp; bookings</span></a>':''}
       </nav>
       <div class="sidebar-foot"><div class="sandbox-note"><span class="sandbox-dot"></span><span><strong>${crmMode ? 'Private workspace' : 'Private preview'}</strong>${crmMode ? 'Connection, permission and confirmed outcomes are shown separately' : 'Preview records · no publishing'}</span></div></div>
     </aside>

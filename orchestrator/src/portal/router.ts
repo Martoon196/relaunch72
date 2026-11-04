@@ -4,6 +4,8 @@
  * keeps canonical PostgreSQL workspaces separate from the local JSON demo.
  */
 
+import {BOOKING_ROUTE,type BookingService} from '../booking/service.js';
+import {handleOwnerBooking,bookingFailure} from '../booking/router.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { handleLeadRelay, panelSource, panelCss, panelBoot, builderSource, builderCss, providerSource, providerCss, trainingSource, trainingCss, voiceSource, voiceCss, agentSettingsSource, agentSettingsCss, websiteChatSource, websiteChatCss } from '../integrations/leadrelay/mount.js';
 import { InvestorService, INVESTOR_ROUTE, InvestorError, investorFailure } from './investor-service.js';
@@ -534,6 +536,7 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   financeDrafts?: PortalFinanceDraftsService;
   investors?: InvestorService;
   investorMail?: InvestorMailService;
+  booking?: BookingService;
   /** Exact, read-mostly conversion definition manager. Omitted until composed and ready. */
   journeys?: PortalJourneyManagerService;
   /** Authoritative cross-module operator queue; only assignment and snooze mutate its overlay. */
@@ -2382,6 +2385,19 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
     }
   }
 
+  if(p===BOOKING_ROUTE||p.startsWith(BOOKING_ROUTE+'/')) {
+    if(deps.kind!=='postgres'||!deps.booking||!portalIdentity)return sendHtml(res,404,'Calendar unavailable.');
+    try {
+      await handleOwnerBooking({service:deps.booking,identity:crmIdentity(sessionToken,deps),url,method,
+        csrf:portalCsrfToken(deps.sessionSecret,sessionToken),origin:new URL(deps.portalBaseUrl??'https://hq.propertypredator.com').origin,
+        readForm:()=>readForm(req,32*1024),verify:f=>verifyPortalCsrf(deps.sessionSecret,sessionToken,f._csrf),
+        download:ics=>{res.writeHead(200,{'content-type':'text/calendar; charset=utf-8','content-disposition':'attachment; filename="meeting.ics"','cache-control':'no-store','referrer-policy':'no-referrer','x-content-type-options':'nosniff'});res.end(ics);},
+        render:body=>{sendHtml(res,200,appShell({title:'Meetings & bookings',tenantName:'Your workspace',active:'investors',productProfile:deps.productProfile,capabilities:new Set(['workspace.overview.read','crm.contacts.read','crm.pipeline.read']),mode:'crm',csrfToken:portalCsrfToken(deps.sessionSecret,sessionToken),body}),undefined,{'cache-control':'no-store'});},
+        redirect:path=>{redirect(res,path);}});
+    }catch(error){const failure=bookingFailure(error);sendHtml(res,failure.status,portalStatusPage(deps,sessionToken,{title:'Calendar needs attention',message:failure.message,backHref:BOOKING_ROUTE}));}
+    return;
+  }
+
   if (p === INVESTOR_ROUTE || p.startsWith(INVESTOR_ROUTE + '/')) {
     if (deps.kind !== 'postgres' || !deps.investors || !portalIdentity) return sendHtml(res,404,portalStatusPage(deps,sessionToken,{title:'Investor Desk unavailable',message:'Investor Desk has not been connected to this installation.'}));
     if (p === INVESTOR_ROUTE+'/client.js' && method === 'GET') return sendJavaScript(res,INVESTOR_CLIENT_SOURCE,'private, no-store');
@@ -2423,7 +2439,11 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
         if(!deps.investorMail||url.searchParams.has('error'))throw new InvestorError(400,'Email authorisation was not completed. You can start again from Business setup.');
         const programme=await service.snapshot(identity),business=programme.businesses.find(b=>b.workspaceId===programme.selectedWorkspaceId);
         if(!business)throw new InvestorError(403,'Open your investor business first.');
-        await deps.investorMail.finishOAuth(identity,url.searchParams.get('state')??'',url.searchParams.get('code')??'',business.brandName);
+        const purpose=await deps.investorMail.finishOAuth(identity,url.searchParams.get('state')??'',url.searchParams.get('code')??'',business.brandName);
+        if(purpose.purpose==='calendar'){
+          if(!deps.booking)throw new InvestorError(503,'Calendar is unavailable. Your mailbox has not been changed.');
+          await deps.booking.finishConnection(identity,purpose.credentials,purpose.version);return redirect(res,BOOKING_ROUTE+'?saved=1');
+        }
         return redirect(res,INVESTOR_ROUTE+'?view=settings');
       }
       if(p===INVESTOR_ROUTE+'/site-preview'&&method==='GET') {
