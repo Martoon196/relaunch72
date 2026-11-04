@@ -1,0 +1,169 @@
+{
+  "reviewDate": "2026-11-04",
+  "sourceCommit": "ec931c813380a4406fc86249bf73e604e8ea6e2a",
+  "schemaExtension": {
+    "decision": "accepted",
+    "differences": [
+      "/$id",
+      "/properties/dependencies/items/properties/packId/enum",
+      "/properties/packId/enum",
+      "/properties/supportedStages/items/enum",
+      "/title"
+    ],
+    "effect": "Four added packs are registry-only; no runtime capability invented."
+  },
+  "validation": {
+    "proposedSchemaPass": 12,
+    "originalSchemaPass": 8,
+    "uniqueStableIds": 258,
+    "exactDependencies": "pass",
+    "cycles": "none",
+    "templateMarkers": "none detected",
+    "brandSpecificOperationalFacts": "none detected",
+    "thirdPartyText": "Manual inspection found no obvious source excerpts; not a complete corpus similarity or legal determination. Author provenance is retained, not proof of approval."
+  },
+  "privateTrainingComparison": {
+    "status": "partial-review-only",
+    "evidence": "Prior Drive scan established high-level coverage. Claude did not receive the original corpus or newer manual. No claim of exact equivalence or complete source-to-pack comparison."
+  },
+  "registry": [
+    {
+      "packId": "advocacy-and-referral",
+      "version": "0.1.0",
+      "hash": "3a787710992232325792d6e9899e63e6276e131538b48e8d03fd5ab533727484",
+      "scope": "private-owned-brands",
+      "privateApproval": "pending",
+      "privateEvidence": "No owner private-use approval recorded for this unavailable capability.",
+      "publicApproval": "blocked",
+      "publicEvidence": "OWNER-DECISIONS item 6: commercial-use review not recorded.",
+      "reviewEvidence": "docs/relaunch72-rule-packs/REVIEW-LEDGER.json; schema/dependencies/IDs inspected; integration gate required."
+    },
+    {
+      "packId": "audience-resonance",
+      "version": "0.1.0",
+      "hash": "80e3bd3dac1bf6157f5b3f8912b3289d134f96bce7812e2ce6b594e701f1edb9",
+      "scope": "private-owned-brands",
+      "privateApproval": "pending",
+      "privateEvidence": "No owner private-use approval recorded for this unavailable capability.",
+      "publicApproval": "blocked",
+      "publicEvidence": "OWNER-DECISIONS item 6: commercial-use review not recorded.",
+      "reviewEvidence": "docs/relaunch72-rule-packs/REVIEW-LEDGER.json; schema/dependencies/IDs inspected; integration gate required."
+    },
+    {
+      "packId": "blog-writing",
+      "version": "0.1.0",
+      "hash": "1083462d573a49153603d258a5e192e8849830fac853c4ae25fcaa3e732d7785",
+      "scope": "private-owned-brands",
+      "privateApproval": "approved",
+      "privateEvidence": "Martin, chat 2026-11-04: Approve private use after validation. Six supported packs only; integration gate must pass.",
+      "publicApproval": "blocked",
+      "publicEvidence": "OWNER-DECISIONS item 6: commercial-use review not recorded.",
+      "reviewEvidence": "docs/relaunch72-rule-packs/REVIEW-LEDGER.json; schema/dependencies/IDs inspected; integration gate required."
+    },
+    {
+      "packId": "brand-context-building",
+      "version": "0.1.0",
+      "hash": "2391e900720694d148b49bef4e6681c6d3b3423fa99e420cd11b042988c8a9a8",
+      "scope": "private-owned-brands",
+      "privateApproval": "pending",
+      "privateEvidence": "No owner private-use approval recorded for this unavailable capability.",
+      "publicApproval": "blocked",
+      "publicEvidence": "OWNER-DECISIONS item 6: commercial-use review not recorded.",
+      "reviewEvidence": "docs/relaunch72-rule-packs/REVIEW-LEDGER.json; schema/dependencies/IDs inspected; integration gate required."
+    },
+    {
+      "packId": "conversion-copy",
+      "version": "0.1.0",
+      "hash": "d196df4f8c0267337889c92ac9bc7212c623bd6d82abc9c19ac154811cae2a60",
+      "scope": "private-owned-brands",
+      "privateApproval": "approved",
+      "privateEvidence": "Martin, chat 2026-11-04: Approve private use after validation. Six supported packs only; integration gate must pass.",
+      "publicApproval": "blocked",
+      "publicEvidence": "OWNER-DECISIONS item 6: commercial-use review not recorded.",
+      "reviewEvidence": "docs/relaunch72-rule-packs/REVIEW-LEDGER.json; schema/dependencies/IDs inspected; integration gate required."
+    },
+    {
+      "packId": "editorial-planning",
+      "version": "0.1.0",
+      "hash": "2ed1aed3fa7cc9c1c07fe16afdb9fa444f6f2c3dcd1c85b33086b1f602128677",
+      "scope": "private-owned-brands",
+      "privateApproval": "approved",
+      "privateEvidence": "Martin, chat 2026-11-04: Approve private use after validation. Six supported packs only; integration gate must pass.",
+      "publicApproval": "blocked",
+      "publicEvidence": "OWNER-DECISIONS item 6: commercial-use review not recorded.",
+      "reviewEvidence": "docs/relaunch72-rule-packs/REVIEW-LEDGER.json; schema/dependencies/IDs inspected; integration gate required."
+    },
+    {
+      "packId": "email-writing",
+      "version": "0.1.0",
+      "hash": "4492089e044118590c9a6c633611a5ecc69a735caf002303878281d1a3f79788",
+      "scope": "private-owned-brands",
+      "privateApproval": "pending",
+      "privateEvidence": "No owner private-use approval recorded for this unavailable capability.",
+      "publicApproval": "blocked",
+      "publicEvidence": "OWNER-DECISIONS item 6: commercial-use review not recorded.",
+      "reviewEvidence": "docs/relaunch72-rule-packs/REVIEW-LEDGER.json; schema/dependencies/IDs inspected; integration gate required."
+    },
+    {
+      "packId": "journey-review",
+      "version": "0.1.0",
+      "hash": "4dd83f29daff921926de271aa091d5a5fc8e0b56a887d3b92345e69e4b94bc4f",
+      "scope": "private-owned-brands",
+      "privateApproval": "pending",
+      "privateEvidence": "No owner private-use approval recorded for this unavailable capability.",
+      "publicApproval": "blocked",
+      "publicEvidence": "OWNER-DECISIONS item 6: commercial-use review not recorded.",
+      "reviewEvidence": "docs/relaunch72-rule-packs/REVIEW-LEDGER.json; schema/dependencies/IDs inspected; integration gate required."
+    },
+    {
+      "packId": "offer-design",
+      "version": "0.1.0",
+      "hash": "93555d10488ec2389c2af8c7b637e49bd2fb320b41c1bdec1ac0b74755dc553e",
+      "scope": "private-owned-brands",
+      "privateApproval": "pending",
+      "privateEvidence": "No owner private-use approval recorded for this unavailable capability.",
+      "publicApproval": "blocked",
+      "publicEvidence": "OWNER-DECISIONS item 6: commercial-use review not recorded.",
+      "reviewEvidence": "docs/relaunch72-rule-packs/REVIEW-LEDGER.json; schema/dependencies/IDs inspected; integration gate required."
+    },
+    {
+      "packId": "production-core",
+      "version": "0.1.0",
+      "hash": "d30ce36f00f18b25ed7e32af5d9e531bdf95d3ec3af638e1df8dee7472317b34",
+      "scope": "private-owned-brands",
+      "privateApproval": "approved",
+      "privateEvidence": "Martin, chat 2026-11-04: Approve private use after validation. Six supported packs only; integration gate must pass.",
+      "publicApproval": "blocked",
+      "publicEvidence": "OWNER-DECISIONS item 6: commercial-use review not recorded.",
+      "reviewEvidence": "docs/relaunch72-rule-packs/REVIEW-LEDGER.json; schema/dependencies/IDs inspected; integration gate required."
+    },
+    {
+      "packId": "social-repurposing",
+      "version": "0.1.0",
+      "hash": "d2caa4bf20be4f6bf098662cf5bb71d5c3de86cdf5862c61015b4e28b5e4ca91",
+      "scope": "private-owned-brands",
+      "privateApproval": "approved",
+      "privateEvidence": "Martin, chat 2026-11-04: Approve private use after validation. Six supported packs only; integration gate must pass.",
+      "publicApproval": "blocked",
+      "publicEvidence": "OWNER-DECISIONS item 6: commercial-use review not recorded.",
+      "reviewEvidence": "docs/relaunch72-rule-packs/REVIEW-LEDGER.json; schema/dependencies/IDs inspected; integration gate required."
+    },
+    {
+      "packId": "visual-briefing",
+      "version": "0.1.0",
+      "hash": "a33b4d10bf2210b1eb922d6ae2a51a5283bbcb6bba6dc38c014185a0136debde",
+      "scope": "private-owned-brands",
+      "privateApproval": "approved",
+      "privateEvidence": "Martin, chat 2026-11-04: Approve private use after validation. Six supported packs only; integration gate must pass.",
+      "publicApproval": "blocked",
+      "publicEvidence": "OWNER-DECISIONS item 6: commercial-use review not recorded.",
+      "reviewEvidence": "docs/relaunch72-rule-packs/REVIEW-LEDGER.json; schema/dependencies/IDs inspected; integration gate required."
+    }
+  ],
+  "activation": {
+    "flag": "SEO_BLOG_METHOD_PACKS",
+    "default": false,
+    "assignmentsCreated": 0,
+    "publicCommerceEnabled": false
+  }
+}

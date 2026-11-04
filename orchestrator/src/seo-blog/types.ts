@@ -301,6 +301,8 @@ export interface TopicPlan {
 }
 
 export interface GenerationRecord {
+  /** Private production receipt. No audit prose in customer-facing article fields. */
+  readonly methodReceiptId?: string;
   readonly mode: 'live' | 'simulated';
   readonly model: string;
   readonly promptVersion: string;

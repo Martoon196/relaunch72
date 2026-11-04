@@ -10,6 +10,7 @@
 
 import { Ajv, type AnySchema, type ValidateFunction } from 'ajv';
 import { stageModel } from '../config.js';
+import { methodRunFor, inheritMethodRun } from './method-packs.js';
 import { extractJson } from '../llm/json.js';
 import type { LlmClient } from '../llm/client.js';
 import { loadPrompt, type LoadedPrompt } from '../stages/prompt.js';
@@ -49,13 +50,14 @@ export async function callJson<T>(llm: LlmClient, input: {
   /** Campaign proposals never silently pay for a format-correction call. */
   readonly singleAttempt?: boolean;
 }): Promise<JsonCallResult<T>> {
+  const methodRun = methodRunFor(llm);
   const model = stageModel(input.prompt.header.stage, input.prompt.header.model);
   const validate = validatorFor(input.schema);
   let tokensIn = 0;
   let tokensOut = 0;
   let critique = '';
   let previous = '';
-  for (let attempt = 1; attempt <= (input.singleAttempt ? 1 : 2); attempt++) {
+  for (let attempt = 1; attempt <= (input.singleAttempt ? 1 : Math.min(2, (methodRun?.maxPasses ?? 1) + 1)); attempt++) {
     const messages: { role: 'user' | 'assistant'; content: string }[] = [{ role: 'user', content: input.user }];
     if (critique) {
       messages.push({ role: 'assistant', content: previous.slice(0, 60_000) || '{}' });
@@ -68,6 +70,10 @@ export async function callJson<T>(llm: LlmClient, input: {
         meta: { stage: input.prompt.header.stage, attempt },
       });
     } catch (error) {
+      if(methodRun){
+        await methodRun.finish({mode:llm.mode==='live'?'live':'simulated',model,promptVersion:input.prompt.file,tokensIn,tokensOut},'unknown');
+        throw new SeoBlogError(409,'The method generation outcome is uncertain. Review its saved receipt before another call.','method_generation_unknown');
+      }
       throw new GenerationUnavailableError(`The writing model could not be reached (${(error as Error).message.slice(0, 160)}). Nothing was changed.`);
     }
     tokensIn += response.tokensIn;
@@ -75,16 +81,22 @@ export async function callJson<T>(llm: LlmClient, input: {
     previous = response.text;
     const parsed = extractJson(response.text);
     if ('error' in parsed) { critique = `Not valid JSON: ${parsed.error}`; continue; }
-    if (!validate(parsed.value)) {
+    const methodOutput = methodRun?.unpack(parsed.value);
+    if (methodOutput?.problems.length) { critique = methodOutput.problems.join('\n'); continue; }
+    const output = methodOutput ? methodOutput.value : parsed.value;
+    if (!validate(output)) {
       critique = (validate.errors ?? []).slice(0, 12).map((e) => `${e.instancePath || '(root)'} ${e.message}`).join('\n');
       continue;
     }
-    const problems = input.validate?.(parsed.value as T) ?? [];
+    const problems = input.validate?.(output as T) ?? [];
     if (problems.length > 0) { critique = problems.slice(0, 12).join('\n'); continue; }
-    return {
-      value: parsed.value as T,
-      record: { mode: llm.mode === 'live' ? 'live' : 'simulated', model: response.model || model, promptVersion: `${input.prompt.file}@${input.prompt.header.version}#${input.prompt.sha256.slice(0, 12)}`, tokensIn, tokensOut },
-    };
+    let record: GenerationRecord = { mode: llm.mode === 'live' ? 'live' : 'simulated', model: response.model || model, promptVersion: `${input.prompt.file}@${input.prompt.header.version}#${input.prompt.sha256.slice(0, 12)}`, tokensIn, tokensOut };
+    if (methodRun) record = await methodRun.finish(record, "accepted");
+    return {value: output as T, record};
+  }
+  if (methodRun) {
+    await methodRun.finish({mode:llm.mode==='live'?'live':'simulated',model,promptVersion:input.prompt.file,tokensIn,tokensOut},'rejected');
+    throw new SeoBlogError(422, 'The assigned production methods could not produce a valid draft. '+critique.slice(0,250), 'method_generation_rejected');
   }
   throw new SeoBlogError(422, `The model did not return a usable result ${input.singleAttempt ? 'after one attempt' : 'after a retry'}. ${critique.split('\n')[0] ?? ''}`.trim(), 'generation_rejected');
 }
@@ -125,6 +137,7 @@ export async function writeArticleCampaignPromotions(llm: LlmClient, profile: Br
     if([response.tokensIn,response.tokensOut].every(n=>Number.isSafeInteger(n)&&n>=0)&&Number.isSafeInteger(response.tokensIn+response.tokensOut)&&typeof response.model==='string'&&response.model.length<=200&&!/[\r\n\x00-\x1f]/u.test(response.model)) knownRecord={mode:llm.mode==='live'?'live':'simulated',model:response.model||request.model,promptVersion:`${prompt.file}@${prompt.header.version}#${prompt.sha256.slice(0,12)}`,tokensIn:response.tokensIn,tokensOut:response.tokensOut};
     return response;
   }};
+  inheritMethodRun(capture,llm);
   try { const generated=await callJson<{posts:readonly CampaignDraft[]}>(capture, {
     prompt, maxTokens: 2400, singleAttempt: true,
     user: [dataBlock('brand_profile', profileForPrompt(profile)), dataBlock('blog_article', article),
@@ -142,7 +155,7 @@ export async function writeArticleCampaignPromotions(llm: LlmClient, profile: Br
     ],
   });
     if(!knownRecord)throw new GenerationUnavailableError('The social copy response did not include safe usage evidence. Its outcome needs review.');
-    return {value:generated.value,record:knownRecord};
+    return {value:generated.value,record:generated.record};
   } catch(error) {
     if(error instanceof SeoBlogError&&error.code==='generation_rejected'&&knownRecord)throw new CampaignGenerationRejectedError(knownRecord);
     throw error;

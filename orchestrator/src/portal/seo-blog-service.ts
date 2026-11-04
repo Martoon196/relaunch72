@@ -5,6 +5,8 @@
  */
 
 import type { Pool } from 'pg';
+import { MethodController } from '../seo-blog/method-packs.js';
+import { PgMethodStore } from '../seo-blog/method-store.js';
 import { AnthropicClient, type LlmClient } from '../llm/client.js';
 import { DataForSeoProvider } from '../keyword/dataforseo.js';
 import type { KeywordProvider } from '../keyword/types.js';
@@ -80,7 +82,8 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
       const media = createSeoBlogMediaRuntime({ contentPool: contentCommandPool, adapterPool: promotionsReady ? contentAdapterPool : undefined, env, identity,
         principal: { kind: 'user', userId: identity.userId, requestId, sessionToken: identity.sessionToken, selectedWorkspaceId: identity.workspaceId },
         ...(social?.prepareCampaignTarget ? { prepareCampaignTarget: (brandId, bindingId) => social.prepareCampaignTarget!(brandId, bindingId) } : {}) });
-      return new SeoBlogEngine({ ...media, llm: runtime.llm, search: runtime.search, keywords: runtime.keywords, transport, publishers, vault: runtime.vault,
+      return new SeoBlogEngine({ ...media,
+        ...(env.SEO_BLOG_METHOD_PACKS==='true'?{methods:new MethodController(new PgMethodStore(contentCommandPool,{kind:'user',userId:identity.userId,requestId,sessionToken:identity.sessionToken,selectedWorkspaceId:identity.workspaceId}),true)}:{}), llm: runtime.llm, search: runtime.search, keywords: runtime.keywords, transport, publishers, vault: runtime.vault,
         ...(promotionsReady && contentAdapterPool ? { promotions: createCentralPromotionApproval({ adapterPool: contentAdapterPool, commandPool: contentCommandPool, identity, requestId }) } : {}),
         ...(social ? { social } : {}) });
     },
@@ -98,6 +101,7 @@ export function createWorkerSeoBlogEngine(contentCommandPool: Pool, requestId: s
   const runtime = seoBlogRuntime(env);
   return new SeoBlogEngine({
     ...createSeoBlogMediaRuntime({ contentPool: contentCommandPool, principal: { kind: 'worker', requestId }, env }),
+    ...(env.SEO_BLOG_METHOD_PACKS==='true'?{methods:new MethodController(new PgMethodStore(contentCommandPool,{kind:'worker',requestId}),true)}:{}),
     llm: runtime.llm, search: runtime.search, keywords: runtime.keywords, transport: new GuardedFetchTransport(),
     publishers: defaultPublishers(), vault: runtime.vault, batchLimit: Number(env.SEO_BLOG_WORKER_BATCH ?? 5),
   });

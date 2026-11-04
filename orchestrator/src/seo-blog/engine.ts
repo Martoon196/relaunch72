@@ -65,7 +65,10 @@ interface PlanExecution {
   commit(plan: TopicPlan, briefs: readonly ArticleBrief[]): Promise<void>;
 }
 
+import type { MethodController, MethodPin } from './method-packs.js';
+
 export interface EngineDeps {
+  readonly methods?: MethodController;
   readonly store: SeoBlogStore;
   readonly llm: LlmClient | null;
   readonly search: SearchProvider;
@@ -800,14 +803,14 @@ export class SeoBlogEngine {
     const planned = await this.store.listBriefs(brandId);
     const articles = await this.store.listArticles(brandId);
     if(execution && !execution.modelResult) await execution.beforeModel(research);
-    const result = execution?.modelResult ?? await proposeCluster(this.llm(), {
+    const planId = execution?.planId??randomUUID();
+    const result = execution?.modelResult ?? await proposeCluster(await this.methodLlm(brand,profile,'planning','plan:'+planId,research.sources), {
       brandName: brand.name, profile, inventory: pages, sources: research.sources,
       focus: [payload.focus,brand.settings.programme?.structure?`Owner-approved editorial category guidance: ${brand.settings.programme.structure.categories.map((c)=>c.label).join('; ')}. Preserve existing page URLs; category guidance does not create new website routes.`:null].filter(Boolean).join('\n')||null, excluded: payload.excluded, sourceArticleUrl: payload.sourceArticleUrl,
     });
     if(execution) { if(!execution.modelResult) await execution.recordModel(result); }
     else await this.recordGeneration(brandId, result.record, 'plan');
     const short = new Map(research.sources.map((s, i) => [`S${i + 1}`, s]));
-    const planId = execution?.planId??randomUUID();
     const cluster = [result.value.pillar, ...result.value.supporting];
     const slugToId = new Map(cluster.map((a) => [a.slug, randomUUID()]));
     const comparable: import('./dedupe.js').PlannedComparable[] = [
@@ -1017,7 +1020,7 @@ export class SeoBlogEngine {
     const linkable = await this.linkable(brandId);
     let written;
     try {
-      written = await writeArticle(this.llm(), { profile, brief, sources, linkable, length: brand.settings.lengthPreference });
+      written = await writeArticle(await this.methodLlm(brand,profile,'blog','article:'+article.id,sources,undefined,brief.searchIntent==='buy'), { profile, brief, sources, linkable, length: brand.settings.lengthPreference });
     } catch (error) {
       await this.store.updateArticle({ ...article, editorialState: article.currentVersionId ? 'draft' : 'failed', failure: (error as Error).message.slice(0, 300) }).catch(() => undefined);
       throw error;
@@ -1098,8 +1101,8 @@ export class SeoBlogEngine {
     if(!marker.receipt) {
       // Configuration/budget failure before a start is a labelled free fallback.
       let llm:LlmClient;
-      try { llm=this.llm(); await this.requireBudget(brand,'model_tokens',USAGE_ESTIMATES.promotion); }
-      catch(error) { if(!(error instanceof SeoBlogError))throw error; return {article,drafts:fallbackCampaignDrafts(body),generation:null}; }
+      try { llm=await this.methodLlm(brand,profile,'social','promotion:'+input.versionId,body.citations.map(c=>({id:c.sourceId} as ResearchSource))); await this.requireBudget(brand,'model_tokens',USAGE_ESTIMATES.promotion); }
+      catch(error) { if(!(error instanceof SeoBlogError)||error.code.startsWith('method_'))throw error; return {article,drafts:fallbackCampaignDrafts(body),generation:null}; }
       let startedHere=false;
       article=await boundary(s=>{
         const m=s.article.campaignGeneration;
@@ -1117,6 +1120,7 @@ export class SeoBlogEngine {
         let receipt:CampaignCopyReceipt;
         try {const generated=await writeArticleCampaignPromotions(llm,profile,body);receipt={nonce:marker.nonce,at:this.now(),record:generated.record,result:{kind:'accepted',drafts:generated.value.posts}};}
         catch(error){
+          if(error instanceof SeoBlogError&&error.code.startsWith('method_'))throw error;
           if(!(error instanceof CampaignGenerationRejectedError))throw new SeoBlogError(409,'The social copy request has an uncertain outcome. The saved article is held; no automatic paid replay will occur.','campaign_copy_unknown');
           receipt={nonce:marker.nonce,at:this.now(),record:error.record,result:{kind:'rejected'}};
         }
@@ -1174,11 +1178,12 @@ export class SeoBlogEngine {
       if (skipPromotionGeneration) throw new GenerationUnavailableError('This image-only edit retains article-text accompanying drafts; no model call was made.');
       await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.promotion);
       {
-        const generated = await writeArticlePromotions(this.llm(), profile, body);
+        const generated = await writeArticlePromotions(await this.methodLlm(brand,profile,'social','promotion:'+versionId,body.citations.map(c=>({id:c.sourceId} as ResearchSource))), profile, body);
         await this.recordGeneration(brand.id, generated.record, `promotion:${article.id}:${versionId}`);
         posts = generated.value.posts; generationRecord = generated.record;
       }
     } catch (error) {
+      if(error instanceof SeoBlogError&&error.code.startsWith('method_'))throw error;
       // Preserve the article/edit when the optional copy stage cannot run. The UI labels this fallback.
       await this.log(brand.id, actor, 'promotion.fallback', initialCampaign
         ? 'Accompanying drafts use labelled article-text templates because model output was unavailable or incomplete. No automatic correction call was made.'
@@ -1602,6 +1607,20 @@ export class SeoBlogEngine {
     return { article, version, profile, brief };
   }
 
+  private async methodLlm(brand:Brand,profile:BrandProfile,stage:'planning'|'blog'|'revision'|'social',assetRef:string,sources:readonly ResearchSource[],preserveReceiptId?:string|null,copyRequested=false):Promise<LlmClient>{
+    const llm=this.llm();if(!this.deps.methods)return llm;
+    return this.deps.methods.prepare(llm,{brand,profile,stage,assetRef,stages:stage==='blog'?['blog','visual-brief',...(copyRequested?['copy']:[])]:stage==='social'?['social','visual-brief']:[stage],
+      sources:[...sources.map(s=>s.id),...sources.map((_,i)=>'S'+(i+1))],preserveReceiptId,
+      baselineTokens:stage==='planning'?USAGE_ESTIMATES.plan:stage==='blog'?USAGE_ESTIMATES.article:stage==='social'?USAGE_ESTIMATES.promotion:USAGE_ESTIMATES.section});
+  }
+
+  /** Internal owner command; changes no checkout, price or paid entitlement. */
+  async assignMethods(actor:Actor,brandId:string,expectedRevision:number,pins:readonly MethodPin[]):Promise<number>{
+    await this.brandFor(actor,brandId);
+    if(!this.deps.methods)throw new SeoBlogError(409,'Production methods are disabled.','method_disabled');
+    return this.deps.methods.store.assign(brandId,expectedRevision,pins);
+  }
+
   async regenerateSection(actor: Actor, brandId: string, articleId: string, expectedVersionId: string, sectionId: string, instruction: string): Promise<ArticleVersion> {
     const brand = await this.brandFor(actor, brandId);
     const { article, version, profile, brief } = await this.editable(brandId, articleId, expectedVersionId);
@@ -1609,7 +1628,7 @@ export class SeoBlogEngine {
     if (index < 0) throw new SeoBlogError(404, 'That section was not found.');
     await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.section);
     const sources = await this.sourcesForBrief(brandId, brief);
-    const result = await rewriteSection(this.llm(), {
+    const result = await rewriteSection(await this.methodLlm(brand,profile,'revision','article:'+articleId,sources,version.generation?.methodReceiptId??null), {
       profile, outline: version.body.sections.map((s) => s.heading), section: version.body.sections[index]!,
       instruction: cleanText(instruction), sources, linkable: await this.linkable(brandId),
     });

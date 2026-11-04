@@ -164,6 +164,8 @@ export class PgSeoBlogStore implements SeoBlogStore {
         : `INSERT INTO app.seo_blog_records (workspace_id, kind, id, data) VALUES ($1, $2, $3, $4)
            ON CONFLICT (workspace_id, kind, id) DO UPDATE SET data = EXCLUDED.data, updated_at = clock_timestamp()`;
       await t.query(sql, [brandId, kind, id, JSON.stringify(data)]);
+      const receipt = kind==='plan' ? (data as TopicPlan).generation.methodReceiptId : undefined;
+      if(receipt)await t.query('SELECT app_private.seo_method_bind($1,$2,$3,$4,$5)',[brandId,this.sessionHash,receipt,'plan',id]);
     }).catch((error) => {
       if (isUnique(error)) throw new StaleWriteError(kind);
       throw error;
@@ -276,10 +278,12 @@ export class PgSeoBlogStore implements SeoBlogStore {
         const allowed=(await t.query<{ok:boolean}>('SELECT app_private.can_manage_workspace($1,$2) AS ok',[websiteGuard.authority.sponsorUserId,version.brandId])).rows[0]?.ok===true;
         assertWebsiteVersionGuard(websiteGuard,{brand:normaliseBrand(brand),article:withVersion<Article>(row),destination:(records.find((r)=>r.kind==='destination'&&r.id===websiteGuard.destinationId)?.data as Destination)??null,profile:profiles[0]??null,knowledge:records.filter((r)=>r.kind==='knowledge').map((r)=>r.data as KnowledgeDocument),brief:(records.find((r)=>r.kind==='brief'&&r.id===version.briefId)?.data as ArticleBrief)??null,requesterAllowed:allowed});
       }
-      return t.query(
+      await t.query(
         'INSERT INTO app.seo_blog_article_versions (workspace_id, id, article_id, number, content_sha256, data) VALUES ($1, $2, $3, $4, $5, $6)',
         [version.brandId, version.id, version.articleId, version.number, version.contentSha, JSON.stringify(version)],
       );
+      for(const [kind,receipt] of [['article',version.generation?.methodReceiptId],['promotion',version.promotionPack?.generation?.methodReceiptId]] as const)
+        if(receipt)await t.query('SELECT app_private.seo_method_bind($1,$2,$3,$4,$5)',[version.brandId,this.sessionHash,receipt,kind,version.id]);
     }).catch((error) => {
       if (isUnique(error)) throw new StaleWriteError('article version');
       throw error;
