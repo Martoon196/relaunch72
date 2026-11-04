@@ -11,7 +11,7 @@ import { MemorySeoBlogStore } from '../src/seo-blog/store.js';
 import { SeoBlogEngine } from '../src/seo-blog/engine.js';
 import { UnconfiguredSearchProvider } from '../src/seo-blog/research.js';
 import { nativeCsrf, nativeIdentity, nativeSeoCall } from './seo-blog-native-request.js';
-import { FakeWeb } from './seo-blog-fixtures.js';
+import { FakeWeb, FakeSearch, seedResearchWeb } from './seo-blog-fixtures.js';
 import { fixtureBrand } from './rl72-method-fixtures.js';
 import { UpgradeFixtureModel, upgradeSnapshot, campaignBrief, MemoryCreatorFixture } from './rl72-upgrade-fixtures.js';
 import { creatorContentFromForm } from '../src/portal/campaign-creator-view.js';
@@ -86,6 +86,18 @@ test('confirmed visual guidance excludes retired, stale and other-brand referenc
  assert.equal(confirmedVisualInputs(p,[doc],'social-post').guidance.length,1);
  assert.equal(confirmedVisualInputs(p,[doc,{...doc,version:2,active:false}],'social-post').guidance.length,0);
  assert.equal(confirmedVisualInputs(p,[{...doc,sha256:'c'.repeat(64)}],'social-post').guidance.length,0);
+ assert.equal(confirmedVisualInputs(p,[{...doc,brandId:randomUUID()}],'social-post').guidance.length,0);
+});
+test('engine persists the planner format into the article brief and actual writer request',async()=>{
+ const f=await creatorFixture(),transport=new FakeWeb();seedResearchWeb(transport);
+ const now=()=>f.profile.createdAt;
+ await f.blogs.saveInventory({brandId:f.brand.id,website:f.brand.website!,fetchedAt:now(),sitemapUrls:0,pages:[],notes:[]});
+ const engine=new SeoBlogEngine({store:f.blogs,methods:f.controller,llm:f.model,search:new FakeSearch(),transport,publishers:new Map(),vault:null,now});
+ const plan=await engine.runPlan(f.brand.id,{focus:null,excluded:[],sourceArticleUrl:null,requestedBy:f.actor});
+ const briefs=await f.blogs.listBriefs(f.brand.id);assert.equal(briefs.length,7);assert(briefs.every(b=>b.editorialFormat?.formatId==='checklist'));assert(briefs.every(b=>b.editorialFormat?.planReceiptId===plan.generation.methodReceiptId));
+ await engine.acceptPlan({userId:f.actor},f.brand.id,plan.id);
+ const brief=briefs.find(b=>b.role==='pillar')!;await engine.requestArticles({userId:f.actor},f.brand.id,[brief.id]);await engine.tick('fictional-upgrade-worker');
+ const request=f.model.requests.find(r=>r.meta?.stage==='SEO_BLOG_ARTICLE');assert(request);assert.match(request.messages[0]!.content,/"formatId":"checklist"/);
 });
 test('email and advocacy authoring produce saved reviewed drafts, durable result text and no delivery effects',async()=>{
  const a=await creatorFixture('home'),b=await creatorFixture('b2b');

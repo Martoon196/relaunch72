@@ -30,7 +30,7 @@ export function concreteSidecar(request:LlmRequest,asset:any):any {
     decisions.consentReview={process:brief.consentProcess,delivery:'owner-managed',proofUse:'requires-separate-permission'};
     decisions.incentiveReview={terms:brief.incentiveTerms,reason:'Only the owner-approved terms may be used.'};
   }
-  const path=asset.title?'/asset/title':asset.heading?'/asset/heading':'/decisions/formatPerArticle';
+  const path=asset.title?'/asset/title':asset.heading?'/asset/heading':asset.posts?'/asset/posts/0/copy':'/decisions/formatPerArticle';
   return {audience:profile.audiences[0],selectedFormat:decisions.formatDecision.formatId,angle:'Check what is observable before deciding.',evidenceReferences:[],primaryNextAction:profile.conversionPages[0]?.label??null,omittedUnsupportedClaims:['No unsupported customer results included.'],decisions,
     qualityFindings:packs.flatMap(p=>p.qualityChecks.map(q=>({ruleId:q.id,status:'pass',detail:'Inspect the linked concrete draft and the recorded typed decisions.',evidence:[path]})))};
 }
