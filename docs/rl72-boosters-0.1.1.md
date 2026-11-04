@@ -150,6 +150,10 @@ for 138 and 139 are in the 0.1.1 release manifest and schema bridge.
 
 Affected shared-schema services (recorded live fleet, 4 November):
 
+Refresh this inventory at cutover and include every runtime using the same
+strict migration ledger. These are the seven recorded affected services;
+their names are not authority to deploy unrelated services.
+
 - `relaunch72-seo-blog-worker` — `srv-dbj8k2gae00c73dgrgcg`
 - `property-predator-growth-hq` — `srv-da7fv1gn74is73d58hb0`
 - `property-predator-owned-public-social-live` — `srv-da99sd5g1s2s739novjg`
