@@ -4,8 +4,8 @@ on:
     branches: [codex/rl72-boosters-integration-20261104]
     paths:
       - 'orchestrator/src/**'
-      - 'orchestrator/test/rl72-method*'
-      - 'orchestrator/test/db/rl72-method*'
+      - 'orchestrator/test/**'
+      - 'orchestrator/method-packs/**'
       - 'scripts/rl72-boosters-pg-bootstrap.mjs'
       - '.github/workflows/rl72-boosters-proof.yml'
 permissions:
