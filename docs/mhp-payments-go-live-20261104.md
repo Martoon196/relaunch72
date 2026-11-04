@@ -6,7 +6,7 @@ Source: branch `codex/mhp-payments-live-20261104` (app, direct child of `codex/r
 
 ## 0. Before anything: confirm what is live
 
-In Render, open `property-predator-growth-hq` and note the deployed commit. This release sits on top of 2bd3219 (SEO media 0137). If production is not already on 2bd3219 with 0137 applied, the SEO 0137 release must finish first, or this branch must be rebased onto what is live. Do not deploy until this is settled.
+The shared ledger (R72-010-VERIFIED-LIVE-CLOSURE-20261103) records production VERIFIED LIVE at 2026-11-03 23:00 UTC on 2bd32194 with migration 0137 applied, across all seven active services. This release is a direct child of 2bd3219, so it applies cleanly. If Render shows any other commit before you deploy, stop: the ledger is then out of date.
 
 ## 1. Stripe (MH196 Ltd account, sandbox first)
 
@@ -26,7 +26,7 @@ Add: `MHP_STRIPE_SECRET_KEY` (rk_test_…), `MHP_STRIPE_ACCOUNT_ID` (acct_… of
 ## 3. Deploy the release to every service, then migrate
 
 1. Publish the branch to the deployment branch (owner go-ahead needed).
-2. In Render, deploy the same commit to all eight services on `codex/relaunch72-platform-foundation`: growth-hq, meta-whatsapp-live-worker, meta-whatsapp-live-webhook, customer-email-live, email-worker, owned-public-social-live, twilio-sms-live, twilio-sms-live-webhook. Each stays ready on the 0137 database (exact allowance for pending 0138). Check `/ready` on app.martinhowardproperty.co.uk.
+2. In Render, deploy the same commit to every active service on `codex/relaunch72-platform-foundation` (seven at the last release; growth-hq last, as in that release). Each stays ready on the 0137 database (exact allowance for pending 0138). Check `/ready` on app.martinhowardproperty.co.uk.
 3. From the growth-hq Shell, with the owner database URL: `npm run db:migrate`. It applies only 0138. Check `/ready` again on both hosts.
 
 ## 4. Stripe setup command (growth-hq Shell)
