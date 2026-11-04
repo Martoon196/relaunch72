@@ -427,6 +427,9 @@ test('final136 capable runtime stays strict for new applications and every histo
 });
 
 test('defaults140 runtime strictly requires defaults140, creators139, methods138 and every prior ledger row', async () => {
+  // Render also runs this suite while the temporary deployment bridge is set.
+  // Strict-mode assertions must not inherit that service environment.
+  const assertStrictSchemaCurrent = (pool: Pick<Pool, 'query'>) => assertRuntimeSchemaCurrent(pool, undefined, {});
   const rows=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
   assert.equal(rows.length,140);
   assert.equal(rows[137]!.filename,'0138_seo_blog_method_packs.sql');
@@ -435,14 +438,14 @@ test('defaults140 runtime strictly requires defaults140, creators139, methods138
   assert.equal(rows[139]!.filename,'0140_private_method_automatic_defaults.sql');
   assert.deepEqual(rows[135],{filename:'0136_mhp_webinar_applications.sql',checksum:'9bf6605cdc536794fae989964542eb8253cdd49ebd995d3e6dd346c01c746139'});
   assert.deepEqual(rows[136],{filename:'0137_seo_blog_media_storage.sql',checksum:'ff85dc3ee825e2529333fc8efb0de070a05e43786717d9ae279aa469e41e1255'});
-  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows)));
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0,137))),/schema is behind by 3 migration/);
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0,138))),/schema is behind by 2 migration/);
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.slice(0,139))),/schema is behind by 1 migration/);
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows.filter((_,i)=>i!==135))),/not a contiguous prefix at 0137_seo_blog_media_storage.sql/);
+  await assert.doesNotReject(assertStrictSchemaCurrent(runtimePool(rows)));
+  await assert.rejects(assertStrictSchemaCurrent(runtimePool(rows.slice(0,137))),/schema is behind by 3 migration/);
+  await assert.rejects(assertStrictSchemaCurrent(runtimePool(rows.slice(0,138))),/schema is behind by 2 migration/);
+  await assert.rejects(assertStrictSchemaCurrent(runtimePool(rows.slice(0,139))),/schema is behind by 1 migration/);
+  await assert.rejects(assertStrictSchemaCurrent(runtimePool(rows.filter((_,i)=>i!==135))),/not a contiguous prefix at 0137_seo_blog_media_storage.sql/);
   for (const at of [0,120,123,125,126,127,130,131,132,133,134,135,136,137,138,139]) {
     const changed=rows.map((row,index)=>index===at?{...row,checksum:'0'.repeat(64)}:row);
-    await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(changed)),/checksum changed/);
+    await assert.rejects(assertStrictSchemaCurrent(runtimePool(changed)),/checksum changed/);
   }
-  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows,{filename:'0141_unknown.sql',checksum:'a'.repeat(64)}])),/migration not present/);
+  await assert.rejects(assertStrictSchemaCurrent(runtimePool([...rows,{filename:'0141_unknown.sql',checksum:'a'.repeat(64)}])),/migration not present/);
 });
