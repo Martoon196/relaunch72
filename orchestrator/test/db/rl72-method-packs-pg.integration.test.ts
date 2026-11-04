@@ -6,6 +6,9 @@ import pg from 'pg';
 import { PgMethodStore } from '../../src/seo-blog/method-store.js';
 import { MethodController,libraryPins } from '../../src/seo-blog/method-packs.js';
 import { writeArticle } from '../../src/seo-blog/generation.js';
+import { PgSeoBlogStore } from '../../src/seo-blog/pg-store.js';
+import { sha256 } from '../../src/seo-blog/engine.js';
+import type { ArticleBody,ArticleVersion } from '../../src/seo-blog/types.js';
 import { fixtureBrand,MethodFixtureModel } from '../rl72-method-fixtures.js';
 
 const url=process.env.RL72_METHODS_PG_TEST_URL;
@@ -59,6 +62,22 @@ test('RL72 methods: actual PostgreSQL forced RLS, function-only owner commands a
     assert.deepEqual(ar!.pins,br!.pins);assert.notEqual(ar!.sidecar!.audience,br!.sidecar!.audience);
     await assert.rejects(b.store.receipt(a.brand.id,aa.record.methodReceiptId!));
     assert.equal(await b.store.receipt(b.brand.id,aa.record.methodReceiptId!),null);
+  });
+  await t.test('resulting article versions bind atomically to their private production receipts',async()=>{
+    for(const [f,result] of [[a,aa],[b,bb]] as const){
+      const store=new PgSeoBlogStore(content,{kind:'user',userId:f.user,requestId:'binding-test',sessionToken:f.token,selectedWorkspaceId:f.brand.id});
+      const articleId=f.brief.id,body:ArticleBody={title:result.value.title,seoTitle:result.value.seo_title,metaDescription:result.value.meta_description,
+        excerpt:result.value.excerpt,slug:f.brief.slug,intro:result.value.intro,sections:result.value.sections.map(s=>({...s,id:randomUUID()})),
+        conclusion:result.value.conclusion,cta:f.brief.cta,faqs:[],citations:[],image:{kind:'none',url:null,alt:result.value.image_alt,provenance:'Fictional test illustration.',width:null,height:null},author:null};
+      await store.createArticle({id:articleId,brandId:f.brand.id,briefId:f.brief.id,planId:f.brief.planId,slug:f.brief.slug,editorialState:'draft',currentVersionId:null,
+        requiresApproval:true,approval:null,checks:null,schedule:null,hold:null,delivery:'none',publishedVersionId:null,publishedUrl:null,lastAttemptAt:null,publishedAt:null,failure:null,createdAt:f.profile.createdAt,rowVersion:1});
+      const version:ArticleVersion={id:randomUUID(),articleId,brandId:f.brand.id,number:1,parentVersionId:null,change:'generated',changedSectionId:null,createdAt:f.profile.createdAt,
+        createdBy:f.user,body,profileVersion:1,factsSha:f.profile.factsSha,knowledge:[],briefId:f.brief.id,planId:f.brief.planId,generation:result.record,contentSha:sha256(body)};
+      await store.addVersion(version);
+      assert.deepEqual((await store.getVersion(f.brand.id,version.id))!.body,body);
+      const binding=await admin.query('SELECT asset_kind,asset_version_id,approval_state FROM app.seo_blog_method_bindings WHERE workspace_id=$1 AND receipt_id=$2',[f.brand.id,result.record.methodReceiptId]);
+      assert.equal(binding.rowCount,1);assert.equal(binding.rows[0].asset_version_id,version.id);assert.equal(binding.rows[0].approval_state,'draft');
+    }
   });
   await t.test('forced RLS hides foreign receipts even from the NOLOGIN definer under scoped context',async()=>{
     const client=await admin.connect();

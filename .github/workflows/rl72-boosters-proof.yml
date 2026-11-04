@@ -40,12 +40,12 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: TypeScript gate
         run: npm --prefix orchestrator run typecheck
-      - name: Offline full suite
-        env:
-          RL72_METHODS_PG_TEST_URL: ''
-        run: npm --prefix orchestrator test
       - name: Apply migrations only to disposable localhost database
         run: node --import tsx scripts/rl72-boosters-pg-bootstrap.mjs
       - name: Exercise real PostgreSQL method boundaries
         working-directory: orchestrator
         run: node --import tsx --test test/db/rl72-method-packs-pg.integration.test.ts
+      - name: Offline full suite
+        env:
+          RL72_METHODS_PG_TEST_URL: ''
+        run: npm --prefix orchestrator test
