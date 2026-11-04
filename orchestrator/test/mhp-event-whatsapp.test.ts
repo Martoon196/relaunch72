@@ -1,0 +1,115 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import test from 'node:test';
+import { MHP_EVENT_PHONE_CONSENT_TEXT, MHP_EVENT_WHATSAPP_CONSENT_TEXT, mhpEventJoinSha, mhpEventWhatsAppJoinSha } from '../src/mhp/event-phone-service.js';
+import { mhpEventPhoneChoosePage, mhpEventPhoneWhatsAppPage } from '../src/mhp/event-phone-view.js';
+import { encryptMetaWhatsAppDispatchCredentials } from '../src/whatsapp-live/foundation.js';
+import { readMetaWhatsAppTemplate, runMhpEventWhatsAppOnce, type MetaTemplateObservation } from '../src/whatsapp-live-pg/event-repository.js';
+import { PgMetaWhatsAppLiveWebhookCommandService } from '../src/whatsapp-live-pg/webhook-repository.js';
+
+const sha = (v: string): string => createHash('sha256').update(v).digest('hex');
+const binding = { workspaceId: '2789228d-55a6-4688-b1e8-2f70abca990b', connectionId: '0b132000-0000-4000-8000-000000000001',
+  appId: '123456789012', wabaId: '223456789012', phoneNumberId: '323456789012', graphApiVersion: 'v24.0' as const };
+const BODY = 'Thanks for registering for the Martin Howard Property webinar. The replay is now on your Desk.';
+
+test('WhatsApp consent copy equals the 0141 SQL text and its JOIN digest is separate from SMS', async () => {
+  const sql = await readFile(new URL('../src/db/migrations/0141_mhp_event_whatsapp_programme.sql', import.meta.url), 'utf8');
+  assert.ok(sql.includes(`'${MHP_EVENT_WHATSAPP_CONSENT_TEXT}'`));
+  assert.notDeepEqual(mhpEventWhatsAppJoinSha('abc'), mhpEventJoinSha('abc'), 'an SMS JOIN code can never verify WhatsApp');
+});
+
+test('Meta template read: exact GET with the worker credential; status, body and parameters hashed; unproven answers are null', async () => {
+  let seen: { url: string; init?: RequestInit } | null = null;
+  const template = { id: '1441099094827445', name: 'mhp_webinar_20261104_reminder_v1', language: 'en_GB', status: 'APPROVED', category: 'MARKETING',
+    components: [{ type: 'BODY', text: BODY }] };
+  const ok = await readMetaWhatsAppTemplate({ binding, credentials: { accessToken: 'synthetic-token-value-12345' }, metaTemplateId: '1441099094827445', templateName: 'mhp_webinar_20261104_reminder_v1',
+    fetch: (async (url: string, init?: RequestInit) => { seen = { url, init }; return new Response(JSON.stringify({ data: [template] }), { status: 200 }); }) as typeof fetch });
+  assert.equal(seen!.url, 'https://graph.facebook.com/v24.0/223456789012/message_templates?name=mhp_webinar_20261104_reminder_v1&fields=id,name,language,status,category,components&limit=50');
+  assert.equal((seen!.init!.headers as Record<string, string>).Authorization, 'Bearer synthetic-token-value-12345');
+  assert.equal(seen!.init!.method, 'GET');
+  assert.deepEqual({ status: ok!.status, parameters: ok!.parameterCount, body: ok!.bodySha256 }, { status: 'APPROVED', parameters: 0, body: sha(BODY) });
+  const paused = await readMetaWhatsAppTemplate({ binding, credentials: { accessToken: 'synthetic-token-value-12345' }, metaTemplateId: '1441099094827445', templateName: 'mhp_webinar_20261104_reminder_v1',
+    fetch: (async () => new Response(JSON.stringify({ data: [{ ...template, status: 'PAUSED', components: [{ type: 'BODY', text: 'Hi {{1}}' }] }] }), { status: 200 })) as typeof fetch });
+  assert.deepEqual([paused!.status, paused!.parameterCount], ['PAUSED', 1]);
+  const withButton = await readMetaWhatsAppTemplate({ binding, credentials: { accessToken: 'synthetic-token-value-12345' }, metaTemplateId: '1441099094827445', templateName: 'mhp_webinar_20261104_reminder_v1',
+    fetch: (async () => new Response(JSON.stringify({ data: [{ ...template, components: [{ type: 'BODY', text: BODY }, { type: 'BUTTONS', buttons: [{ type: 'URL', text: 'Go', url: 'https://example.invalid' }] }] }] }), { status: 200 })) as typeof fetch });
+  assert.equal(withButton!.status, 'APPROVED');
+  assert.notEqual(withButton!.bodySha256, sha(BODY), 'a header, footer or button the owner never reviewed can never match the draft');
+  for (const response of [new Response('nope', { status: 500 }), new Response('{"id":"999999"}', { status: 200 }), new Response('not json', { status: 200 }),
+    new Response(JSON.stringify(template), { status: 200 }), new Response(JSON.stringify({ data: [{ ...template, id: '999999' }] }), { status: 200 }),
+    new Response(JSON.stringify({ data: [template, template] }), { status: 200 })]) {
+    assert.equal(await readMetaWhatsAppTemplate({ binding, credentials: { accessToken: 'synthetic-token-value-12345' }, metaTemplateId: '1441099094827445', templateName: 'mhp_webinar_20261104_reminder_v1',
+      fetch: (async () => response) as typeof fetch }), null);
+  }
+  assert.equal(await readMetaWhatsAppTemplate({ binding, credentials: { accessToken: 'synthetic-token-value-12345' }, metaTemplateId: '1441099094827445', templateName: 'mhp_webinar_20261104_reminder_v1',
+    fetch: (async () => { throw new Error('network'); }) as typeof fetch }), null);
+});
+
+test('WhatsApp webhook routes MHP inbound through the wrapper only when enabled', async () => {
+  const queries: string[] = [];
+  const pool = { connect: async () => ({ query: async (sql: string) => { queries.push(sql);
+    return { rows: sql.includes('mhp_record_event_whatsapp_inbound') ? [{ outcome: 'event_joined' }] : sql.includes('record_whatsapp_live_inbound_projection') ? [{ outcome: 'applied' }] : [] }; },
+    release: () => undefined }) };
+  const make = (enabled: boolean, workspaceId = binding.workspaceId) => new PgMetaWhatsAppLiveWebhookCommandService({ commandPool: pool as never,
+    workspaceId, connectionId: binding.connectionId, bindingId: '0b132000-0000-4000-8000-000000000003', mhpEventWhatsApp: enabled });
+  assert.equal(make(true).mhpEventWhatsApp, true);
+  assert.equal(make(false).mhpEventWhatsApp, false);
+  assert.equal(make(true, '11111111-1111-4111-8111-111111111111').mhpEventWhatsApp, false);
+});
+
+test('the registrant WhatsApp page shows a wa.me link with their own JOIN code and says SMS checks do not count', () => {
+  const status = { ok: true as const, campaign: 'webinar-2026-11-04', open: true, consentText: MHP_EVENT_WHATSAPP_CONSENT_TEXT, whatsapp: null };
+  const choose = mhpEventPhoneWhatsAppPage({ status, csrf: 'c', number: '+447861935832' });
+  assert.ok(choose.includes(MHP_EVENT_WHATSAPP_CONSENT_TEXT)); assert.match(choose, /required>/u);
+  const join = mhpEventPhoneWhatsAppPage({ status, csrf: 'c', number: '+447861935832', join: { nonce: 'abcdefghijklmnopqrstuvwxyz', joinExpiresAt: '2026-11-04T18:00:00Z' } });
+  assert.match(join, /https:\/\/wa\.me\/447861935832\?text=JOIN%20ABCDEFGHIJKLMNOPQRSTUVWXYZ/u);
+  assert.match(join, /A text-message check does not count for WhatsApp/u);
+});
+
+test('Astra item 2: a failed fresh Meta read before begin records READ_FAILED and never begins or sends', async () => {
+  const key = Buffer.alloc(32, 5);
+  const envelope = encryptMetaWhatsAppDispatchCredentials({ binding, credentials: { accessToken: 'EAAG-SYNTHETIC-TOKEN-VALUE-123456789' }, encryptionKey: key, keyVersion: 'test-v1' });
+  const material = { bindingId: '0b132000-0000-4000-8000-000000000003', binding, envelope, metaTemplateId: '1441099094827445', templateName: 'mhp_webinar_20261104_reminder_v1',
+    languageCode: 'en_GB', jobId: '0b132000-0000-4000-8000-0000000000aa', leaseVersion: 1, recipient: '447700900001', operationId: '0b132000-0000-4000-8000-0000000000bb',
+    requestSha256: 'ab'.repeat(32) };
+  const template = { id: '1441099094827445', name: 'mhp_webinar_20261104_reminder_v1', language: 'en_GB', status: 'APPROVED', category: 'MARKETING', components: [{ type: 'BODY', text: BODY }] };
+  const run = async (fetchImpl: typeof fetch) => {
+    const calls: string[] = []; const recorded: MetaTemplateObservation[] = [];
+    const repository = {
+      observationTargets: async () => [], recordObservation: async (_id: string, o: MetaTemplateObservation) => { recorded.push(o); }, prepareDue: async () => 0,
+      claim: async () => ({ jobId: material.jobId, leaseVersion: 1 }), load: async () => material,
+      begin: async () => { calls.push('begin'); return true; }, settle: async () => { calls.push('settle'); },
+    };
+    const cycle = await runMhpEventWhatsAppOnce({ repository: repository as never, encryptionKey: key, encryptionKeyVersion: 'test-v1', leaseToken: Buffer.alloc(32, 1),
+      fetch: fetchImpl, observeNow: false, createTransport: (() => ({ sendTemplate: async () => { calls.push('send');
+        return { state: 'accepted', providerMessageId: 'wamid.synthetic', receiptSha256: 'cd'.repeat(32), safeCode: 'meta_whatsapp_accepted', occurredAt: new Date().toISOString() }; } })) as never });
+    return { cycle, calls, recorded };
+  };
+  const failed = await run((async () => { throw new Error('network'); }) as typeof fetch);
+  assert.equal(failed.cycle, 'failed_or_attention');
+  assert.deepEqual(failed.calls, [], 'no begin, no provider call, no settlement on a failed fresh read');
+  assert.deepEqual(failed.recorded.map(o => [o.status, o.category, o.parameterCount]), [['READ_FAILED', 'UNKNOWN', 0]]);
+  assert.notEqual(failed.recorded[0]!.bodySha256, sha(BODY), 'a failed read can never equal the approved draft');
+  const refused = await run((async () => new Response('{"error":"rate limited"}', { status: 429 })) as typeof fetch);
+  assert.deepEqual([refused.cycle, refused.calls, refused.recorded[0]!.status], ['failed_or_attention', [], 'READ_FAILED']);
+  const ok = await run((async () => new Response(JSON.stringify({ data: [template] }), { status: 200 })) as typeof fetch);
+  assert.deepEqual([ok.cycle, ok.calls, ok.recorded[0]!.status], ['accepted', ['begin', 'send', 'settle'], 'APPROVED']);
+});
+
+
+test('adding WhatsApp preserves the registered mobile hint and optional SMS skip path', () => {
+  const input = { status: { ok: true as const, campaign: 'webinar-2026-11-04', firstName: 'Ana', open: true,
+    startsAt: '2026-11-04T19:30:00Z', consentText: MHP_EVENT_PHONE_CONSENT_TEXT, capabilityExpiresAt: '2026-11-04T18:15:00Z', sms: null },
+    csrf: 'private-csrf', sender: '+447861935832', mobileHint: '+447700900123' };
+  const enabled = mhpEventPhoneChoosePage({ ...input, whatsapp: true });
+  assert.match(enabled, /value="\+447700900123"/u);
+  assert.match(enabled, /Skip texts and continue/u);
+  assert.match(enabled, /href="\/webinar\/phone-reminders\/whatsapp"/u);
+  assert.doesNotMatch(mhpEventPhoneChoosePage(input), /href="\/webinar\/phone-reminders\/whatsapp"/u);
+  const confirmed = mhpEventPhoneChoosePage({ ...input, whatsapp: true, status: { ...input.status,
+    sms: { state: 'verified', revision: 1, phoneMasked: '07700…0123', joinExpiresAt: '', grantReceiptId: '11111111-1111-4111-8111-111111111111' } } });
+  assert.match(confirmed, /Stop webinar texts/u);
+  assert.match(confirmed, /value="\+447700900123"/u);
+  assert.match(confirmed, /href="\/webinar\/phone-reminders\/whatsapp"/u);
+});

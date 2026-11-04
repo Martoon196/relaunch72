@@ -355,6 +355,8 @@ export async function startMetaWhatsAppLiveWebhookService(
       ?? ((commandPool, exact) => new PgMetaWhatsAppLiveWebhookCommandService({
         commandPool, workspaceId: exact.binding.workspaceId,
         connectionId: exact.binding.connectionId, bindingId: exact.bindingId,
+        // MHP009C: off unless explicitly enabled at cutover.
+        mhpEventWhatsApp: env.MHP_EVENT_WHATSAPP_INBOUND?.trim() === 'enabled',
       })))(pool, config);
   }
   const readiness = readinessFor(config);

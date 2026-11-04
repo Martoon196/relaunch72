@@ -1,6 +1,7 @@
 import { escapeHtml as esc } from '../portal/ui.js';
 import qrcode from 'qrcode-generator';
-import { MHP_EVENT_PHONE_CONSENT_TEXT, MHP_EVENT_PHONE_OWNER_ROUTE, MHP_EVENT_PHONE_ROUTE, mhpEventUkLocalValue, type MhpEventPhoneStatus, type MhpEventSmsChoice,
+import { MHP_EVENT_PHONE_CONSENT_TEXT, MHP_EVENT_PHONE_OWNER_ROUTE, MHP_EVENT_PHONE_ROUTE, MHP_EVENT_WHATSAPP_CONSENT_TEXT, mhpEventUkLocalValue, type MhpEventPhoneStatus, type MhpEventSmsChoice,
+  type MhpEventWhatsAppStatus,
   type MhpEventProgrammeSummary, type MhpEventReview } from './event-phone-service.js';
 
 const STYLE = 'body{margin:0;background:#f5f3ed;color:#142019;font:17px/1.6 system-ui,sans-serif}header,main{max-width:720px;margin:auto;padding:24px}'
@@ -30,11 +31,11 @@ export function mhpEventPhoneSentPage(): string {
 }
 export function mhpEventPhoneOpenPage(token: string): string {
   // GET never consumes the link (mail scanners follow links); this explicit button does.
-  return page('Continue', `<h1>Add a text reminder.</h1><p>Press continue to choose your mobile number.</p><section><form method="post" action="${MHP_EVENT_PHONE_ROUTE}/open">`
+  return page('Continue', `<h1>Webinar reminders and follow-up.</h1><p>Press continue to choose how we contact you about this webinar.</p><section><form method="post" action="${MHP_EVENT_PHONE_ROUTE}/open">`
     + `${hidden('t', token)}<button>Continue</button></form></section>`);
 }
-export function mhpEventPhoneChoosePage(input: { status: MhpEventPhoneStatus; csrf: string; join?: { nonce: string; joinExpiresAt: string; sender: string }; notice?: string; sender: string; mobileHint?: string }): string {
-  const { status } = input, sms = status.sms;
+export function mhpEventPhoneChoosePage(input: { status: MhpEventPhoneStatus; csrf: string; join?: { nonce: string; joinExpiresAt: string; sender: string }; notice?: string; sender: string; mobileHint?: string; whatsapp?: boolean }): string {
+  const { status } = input, sms = status.sms, offered = input.whatsapp === true;
   const greeting = `<h1>${status.firstName ? `${esc(status.firstName)}, your` : 'Your'} webinar text reminder</h1>`
     + (status.startsAt ? `<p>The webinar starts ${esc(ukTime(status.startsAt))}.</p>` : '');
   const join = input.join;
@@ -54,18 +55,22 @@ export function mhpEventPhoneChoosePage(input: { status: MhpEventPhoneStatus; cs
   if (sms?.state === 'verified' && sms.grantReceiptId) {
     return page('You are on the list', `${greeting}${notice(input.notice)}<section><p>${esc(sms.phoneMasked)} is confirmed. If Martin includes you in the reminder list, we'll text you about this webinar only. Reply STOP to any text to stop.</p>`
       + `<form method="post" action="${MHP_EVENT_PHONE_ROUTE}/withdraw">${hidden('csrf', input.csrf)}${hidden('receiptId', sms.grantReceiptId)}<button>Stop webinar texts</button></form></section>`
-      + `<section><p>Changed number? Enter a new one below. Your old number gets no reminder.</p>${form(input.csrf, input.sender)}</section>`);
+      + `<section><p>Changed number? Enter a new one below. Your old number gets no reminder.</p>${form(input.csrf, input.sender, input.mobileHint, offered)}</section>`);
   }
-  if (!status.open) return page('Reminders closed', `${greeting}<p>Text reminders for this webinar are closed. Your email reminders carry on.</p>`);
+  if (!status.open) return page('Reminders closed', `${greeting}<p>Text reminders for this webinar are closed. Your email reminders carry on.</p>${whatsappLink(offered)}`);
   const prior = sms?.state === 'withdrawn' ? 'You stopped webinar texts. You can opt in again below.'
     : sms?.state === 'awaiting_join' ? `We're still waiting for your JOIN text from ${sms.phoneMasked}. Lost the code? Enter your number again for a new one.`
     : sms?.state === 'held' ? 'We could not confirm this registration automatically. Use an email link to continue. Your email reminders carry on.' : '';
   return page('Choose your mobile', `${greeting}<p class="status">Your webinar registration is complete. Text reminders are optional; your email reminders will continue either way.</p>`
     + `${notice(input.notice)}${prior ? `<p class="status">${esc(prior)}</p>` : ''}`
     + (sms?.state === 'held' ? `<p><a href="${MHP_EVENT_PHONE_ROUTE}">Email me a link to continue</a></p>` : '')
-    + `<section>${form(input.csrf, input.sender, input.mobileHint)}</section><p><a href="https://martinhowardproperty.co.uk/thanks/?for=webinar">Skip texts and continue</a></p>`);
+    + `<section>${form(input.csrf, input.sender, input.mobileHint, offered)}</section><p><a href="https://martinhowardproperty.co.uk/thanks/?for=webinar">Skip texts and continue</a></p>`);
 }
-function form(csrf: string, sender: string, mobileHint = ''): string {
+const whatsappLink = (offered: boolean): string => offered ? `<p class="small"><a href="${MHP_EVENT_PHONE_ROUTE}/whatsapp">Prefer a WhatsApp follow-up instead?</a></p>` : '';
+function form(csrf: string, sender: string, mobileHint = '', offered = false): string {
+  return smsForm(csrf, sender, mobileHint) + whatsappLink(offered);
+}
+function smsForm(csrf: string, sender: string, mobileHint: string): string {
   return `<form method="post" action="${MHP_EVENT_PHONE_ROUTE}/choose">${hidden('csrf', csrf)}`
     + `<label for="mobile">Your UK mobile<input id="mobile" name="mobile" type="tel" inputmode="tel" autocomplete="tel" maxlength="32" placeholder="07700 900123" value="${esc(mobileHint)}" required></label>`
     + `<label class="check" for="consent"><input id="consent" type="checkbox" name="consent" value="yes" required>${esc(MHP_EVENT_PHONE_CONSENT_TEXT)}</label>`
@@ -115,4 +120,25 @@ export function mhpEventPhoneOwnerPage(input: { programmes: MhpEventProgrammeSum
   }
   return page('Webinar texts', `<h1>Webinar text reminders</h1>${notice(input.notice)}<p>New website registrants can choose optional text reminders straight away. Earlier registrants can use an email link. Each person must text JOIN from their own mobile. No reminder sends until you review the recipients here.</p>`
     + `<section><h2>Programme</h2>${programmes}${publish}${editor}</section><section><h2>Review and schedule</h2>${batch || '<p>Open an approved programme to review recipients.</p>'}</section>`, true);
+}
+
+/** MHP009C: the WhatsApp follow-up option. Possession is the registrant's own WhatsApp JOIN; an SMS check never counts. */
+export function mhpEventPhoneWhatsAppPage(input: { status: MhpEventWhatsAppStatus; csrf: string; number: string; join?: { nonce: string; joinExpiresAt: string }; notice?: string }): string {
+  const wa = input.status.whatsapp, digits = input.number.replace(/^\+/u, '');
+  if (input.join) {
+    const body = `JOIN ${input.join.nonce.toUpperCase()}`;
+    return page('Message JOIN on WhatsApp', `<h1>One last step: message us on WhatsApp.</h1>${notice(input.notice)}<section>`
+      + `<p>From the WhatsApp account on the number you entered, send this exact message before ${esc(ukTime(input.join.joinExpiresAt))}:</p><p class="code">${esc(body)}</p>`
+      + `<p><a href="https://wa.me/${esc(digits)}?text=${encodeURIComponent(body)}">Open WhatsApp with this message</a></p>`
+      + `<p class="small">Messaging us proves the WhatsApp number is yours. We send nothing on WhatsApp until you do. A text-message check does not count for WhatsApp.</p></section>`);
+  }
+  if (wa?.state === 'verified' && wa.grantReceiptId) {
+    return page('WhatsApp follow-up', `<h1>Your WhatsApp follow-up</h1>${notice(input.notice)}<section><p>${esc(wa.phoneMasked)} is confirmed. If Martin includes you, we'll send one WhatsApp follow-up about this webinar only. Reply STOP to stop.</p>`
+      + `<form method="post" action="${MHP_EVENT_PHONE_ROUTE}/whatsapp/withdraw">${hidden('csrf', input.csrf)}${hidden('receiptId', wa.grantReceiptId)}<button>Stop WhatsApp follow-up</button></form></section>`);
+  }
+  if (!input.status.open) return page('WhatsApp closed', `<h1>WhatsApp follow-ups are closed.</h1><p>Your email reminders carry on.</p>`);
+  return page('WhatsApp follow-up', `<h1>Get the follow-up on WhatsApp.</h1>${notice(input.notice)}<section><form method="post" action="${MHP_EVENT_PHONE_ROUTE}/whatsapp/choose">${hidden('csrf', input.csrf)}`
+    + `<label for="mobile">Your WhatsApp mobile (UK)<input id="mobile" name="mobile" type="tel" inputmode="tel" autocomplete="tel" maxlength="32" placeholder="07700 900123" required></label>`
+    + `<label class="check" for="consent"><input id="consent" type="checkbox" name="consent" value="yes" required>${esc(MHP_EVENT_WHATSAPP_CONSENT_TEXT)}</label>`
+    + `<button>Continue</button><p class="small">Next you'll message JOIN to us on WhatsApp so we know the account is yours.</p></form></section>`);
 }
