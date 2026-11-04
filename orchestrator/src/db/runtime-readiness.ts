@@ -1,3 +1,4 @@
+import { mhpWhatsAppSchemaBridgeAllowed, MHP_WHATSAPP_MIGRATION } from './mhp-whatsapp-schema-bridge.js';
 import type { Pool, QueryResultRow } from 'pg';
 import { methodSchemaBridgeAllowed } from './method-schema-bridge.js';
 import {
@@ -235,6 +236,7 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(SEO_BLOG_MEDIA_MIGRATION) === SEO_BLOG_MEDIA_CHECKSUM) {
     applied.delete(SEO_BLOG_MEDIA_MIGRATION);
   }
+  if (mhpWhatsAppSchemaBridgeAllowed(migrations, applied)) applied.delete(MHP_WHATSAPP_MIGRATION);
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
   if(methodSchemaBridgeAllowed(migrations,applied,env))return;

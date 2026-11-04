@@ -1,3 +1,4 @@
+import { mhpWhatsAppBridgeBoundaryExtras } from '../db/mhp-whatsapp-schema-bridge.js';
 import type { Pool, QueryResultRow } from 'pg';
 
 export const META_WHATSAPP_LIVE_COMMAND_DATABASE_ROLE =
@@ -55,7 +56,10 @@ async function assertBoundaryReady(
   pool: Pick<Pool, 'query'>,
   kind: BoundaryKind,
 ): Promise<void> {
-  const allowed = ALLOWED[kind];
+  const ledger = await pool.query<{ filename: string; checksum: string }>(
+    '/* meta-whatsapp-live.bridge-ledger */ SELECT filename,checksum FROM app_private.runtime_schema_migrations()');
+  const applied = new Map(ledger.rows.map(row => [row.filename, row.checksum]));
+  const allowed = [...ALLOWED[kind], ...mhpWhatsAppBridgeBoundaryExtras(kind, applied)];
   const placeholders = allowed.map((_, index) => `$${index + 2}::regprocedure`);
   let rows: readonly BoundaryRow[];
   try {
