@@ -7,9 +7,22 @@ Used: 00-READ-FIRST, 01-ARCHITECTURE, 02-CLAUDE-HANDOFF, 03-rule-pack.schema.jso
 04-return-template.json, 05-IMPLEMENTATION-AND-ACCEPTANCE, and the recorded Relaunch72
 stage prompts (prompts/seo-blog-plan.md, seo-blog-article.md, seo-blog-section.md,
 seo-blog-social.md) for output-contract compatibility.
-NOT available: the owner's private original training corpus, the newer operating manual,
-the root "AI Training Docs" template and the Property Predator Brand Brain. None were
-supplied to the authoring session. Consequences:
+Private reference (4 November 2026 expansion): the DigitalMarketer AI Workspace Claude
+plugin v2.0.0 and DigitalMarketer Synthetic Audience Lab plugin v1.0.0 installed in the
+owner's Claude workspace (author: DigitalMarketer). They were read to identify WHICH JOBS a
+shared method library should cover (content systems, core message and buyer profiling,
+ads, promotional and welcome email sequences, lead magnets, offer structuring, referral and
+testimonial systems, landing-page and journey audits, growth planning, persona-panel copy
+scoring). Their text, names, frameworks, scripts, templates, rubrics, weights, default
+personas, benchmarks, swipe files and brand voice were NOT reused; every rule here was
+written fresh for this platform. Note: the plugins state their tools are proprietary to
+DigitalMarketer Lab members. A rewrite would not create resale permission for their
+material, so none was rewritten; the only dependency is that job coverage was informed by
+reading them, and that dependency is recorded in each pack's provenance for the
+commercial-use review.
+NOT available: the owner's separately held original training corpus, the newer operating
+manual, the root "AI Training Docs" template and the brand guidelines/voice packs (which
+the owner maintains separately and which these methods only read as inputs). Consequences:
 - Every rule was written from general, widely practised marketing craft and from the
   platform's own contracts. No source variant was reconciled against actual source text.
 - privateSourceReferences in each pack records that the corpus was not consulted. If the
@@ -19,6 +32,38 @@ supplied to the authoring session. Consequences:
   and no claim that a rewrite establishes resale permission. The reverse caution also
   applies: these packs do not reproduce the training's method either, so they should be
   reviewed for method completeness against it by someone who has it.
+
+1b. EXPANSION TO TWELVE PACKS (4 November 2026)
+The original eight packs were extended to cover the jobs above where they fit, and four
+packs were added where they did not:
+- editorial-planning: owned themes, an opening bank (original devices), dated plans with an
+  optional problem→cause→what-to-do→what-good-looks-like arc, campaign content phases.
+- conversion-copy: ad test sets (one primary + up to three alternatives that differ in
+  entry point), polish-existing with kept elements, channel adaptation only for runtime-
+  specified channels, a revision-only rubric.
+- social-repurposing: a multiplication plan limited to supported derivations.
+- visual-briefing: two creative concepts (photographic vs illustrated), both illustrative.
+- email-writing: welcome, onboarding and promotion sequences mapped before writing,
+  promotions planned backwards from an approved closing date, preview text, value between
+  asks, PS rules, measurement notes without benchmarks.
+- offer-design: free entry offer (lead magnet) design, offer ladder review, pricing-model
+  comparison.
+- NEW brand-context-building (produces brand data for the brand pack from collected owner
+  answers; confirmed/guessed/not-supplied labelling; no interactive interview).
+- NEW journey-review (eight plain-language journey stages, evidence-capped 1–4 scores,
+  page review of observable elements by price band, a three-step lever rule, 90-day plan
+  sized to owner capacity, no benchmarks or forecasts).
+- NEW audience-resonance (reader personas only from the brand pack, five original
+  dimensions, split diagnosis, at most five quoted rewrite directives, no verdicts).
+- NEW advocacy-and-referral (verifiable-benefit moments, consent-before-use, never drafts
+  the customer, incentives and tracking as owner decisions).
+The four new packs need the schema's packId and supportedStages enums extended. The exact
+proposed change is rule-pack.schema.proposed.json (enum additions only: packIds
+brand-context-building, journey-review, audience-resonance, advocacy-and-referral; stages
+brand-context, review, advocacy). The eight original packs validate against BOTH the
+supplied schema and the proposed one; the four new packs validate against the proposed
+one. CATALOGUE.json proposes product names for the upgrade catalogue; names and placement
+are the owner's decision and are independent of the method content.
 
 2. DESIGN APPROACH (SOURCE-TO-DESIGN)
 - production-core is the only dependency of every specialist pack. It owns the claim
@@ -77,12 +122,18 @@ d) Newer manuals as working source, not automatic approval.
   those (05-IMPLEMENTATION-AND-ACCEPTANCE).
 
 5. VALIDATION PERFORMED
-All eight JSON files validate against rule-pack.schema.json (JSON Schema 2020-12) with a
-standard validator; ids are unique and stable; versions are 0.1.0; dependencies are exact
+All twelve JSON files validate against rule-pack.schema.proposed.json and the eight
+original ids also against rule-pack.schema.json (JSON Schema 2020-12) with a standard
+validator; ids are unique and stable; versions are 0.1.0; dependencies are exact
 and acyclic; no template markers remain. The schema is copied into this folder for
 convenience; it is not part of the authored content.
 
 6. UNRESOLVED ISSUES FOR CODEX / REVIEWERS
+- Accept or reject the proposed enum extension (four pack ids, three stages). The new
+  packs' stages (brand-context, review, advocacy) have no runtime stage yet; until one
+  exists they are authoring contracts like email-writing and offer-design.
+- audience-resonance needs reader personas as brand-pack fields; the brand pack format is
+  the owner's and is not defined here.
 - Receipt field names are proposals; align them with the production receipt storage once
   designed.
 - The "visual-brief" stage currently exists only as the image-brief fields on the article

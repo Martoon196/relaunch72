@@ -1,0 +1,125 @@
+{
+  "note": "Proposed product names for the Relaunch72 upgrade catalogue. Names are the owner's decision; the method content is independent of naming and pricing (architecture section 1D). Nothing here sets a tier or a price.",
+  "entries": [
+    {
+      "packId": "production-core",
+      "proposedName": "Engine Room",
+      "alternatives": [
+        "Backbone",
+        "Groundwork"
+      ],
+      "benefit": "The discipline every piece of work runs on: who it is for, what it must do, only facts you can back, one next step.",
+      "placementNote": "Included in every plan; not a separately sold upgrade."
+    },
+    {
+      "packId": "brand-context-building",
+      "proposedName": "Brain Builder",
+      "alternatives": [
+        "Identity Lab",
+        "Who & Why"
+      ],
+      "benefit": "Turns your answers into a confirmed picture of your buyer, their words, their hesitations and your plain statement of value.",
+      "placementNote": "Onboarding; the brand pack it produces is separate from methods."
+    },
+    {
+      "packId": "editorial-planning",
+      "proposedName": "Editor's Desk",
+      "alternatives": [
+        "The Planner",
+        "Calendar Brain"
+      ],
+      "benefit": "Decides what to say next: real questions, useful formats, grounded angles, a plan that is never a quota.",
+      "placementNote": "Core content planning."
+    },
+    {
+      "packId": "blog-writing",
+      "proposedName": "Longform Forge",
+      "alternatives": [
+        "Deep Draft",
+        "The Writer's Room"
+      ],
+      "benefit": "Articles that answer first, explain why things work and cite every figure.",
+      "placementNote": "Core blog production."
+    },
+    {
+      "packId": "conversion-copy",
+      "proposedName": "Hook & Close",
+      "alternatives": [
+        "Ask Engine",
+        "Page Turner"
+      ],
+      "benefit": "Copy that asks for one action honestly, with test versions that differ in substance.",
+      "placementNote": "Candidate upgrade."
+    },
+    {
+      "packId": "social-repurposing",
+      "proposedName": "Multiplier",
+      "alternatives": [
+        "Echo",
+        "One-to-Many"
+      ],
+      "benefit": "One approved article becomes channel-native posts that stand on their own.",
+      "placementNote": "Core social production; dispatch stays gated separately."
+    },
+    {
+      "packId": "visual-briefing",
+      "proposedName": "Art Director",
+      "alternatives": [
+        "Picture Brief",
+        "Framed"
+      ],
+      "benefit": "Image briefs that show the point, keep real evidence separate and never pretend an image exists.",
+      "placementNote": "Candidate upgrade when image paths exist."
+    },
+    {
+      "packId": "email-writing",
+      "proposedName": "Inbox Engine",
+      "alternatives": [
+        "Sequence Studio",
+        "The Mailroom"
+      ],
+      "benefit": "Welcome, onboarding and promotion sequences with honest subjects and one job per email.",
+      "placementNote": "Authoring contract until an email path exists."
+    },
+    {
+      "packId": "offer-design",
+      "proposedName": "Deal Shaper",
+      "alternatives": [
+        "Offer Bench",
+        "The Ladder"
+      ],
+      "benefit": "Structures offers, free entry offers and the offer ladder as proposals you approve.",
+      "placementNote": "Authoring contract until an offer workflow exists."
+    },
+    {
+      "packId": "journey-review",
+      "proposedName": "Funnel Scan",
+      "alternatives": [
+        "Journey X-Ray",
+        "Gap Finder"
+      ],
+      "benefit": "Scores your whole buyer journey and a page on evidence, picks three levers, plans 90 days you can actually do.",
+      "placementNote": "Candidate upgrade."
+    },
+    {
+      "packId": "audience-resonance",
+      "proposedName": "Focus Room",
+      "alternatives": [
+        "Reader Panel",
+        "Resonance Check"
+      ],
+      "benefit": "Your own reader personas pressure-test a draft and hand back exact rewrite directives.",
+      "placementNote": "Candidate upgrade; needs personas in the brand pack."
+    },
+    {
+      "packId": "advocacy-and-referral",
+      "proposedName": "Word of Mouth Engine",
+      "alternatives": [
+        "Advocate Loop",
+        "Pass It On"
+      ],
+      "benefit": "Asks happy customers to speak and to refer, with consent recorded and incentives you decide.",
+      "placementNote": "Candidate upgrade; sending and tracking need platform capabilities."
+    }
+  ]
+}

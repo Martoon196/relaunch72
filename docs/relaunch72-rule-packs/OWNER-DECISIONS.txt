@@ -23,6 +23,25 @@ changed by reviewers without you.
    packs have run privately for a while and after a recorded commercial-use review of the
    underlying training.
 
-5. Social channels. The packs assume Instagram and LinkedIn only, because that is what the
+5. Product names. CATALOGUE.json proposes a name per pack (Engine Room, Brain Builder,
+   Editor's Desk, Longform Forge, Hook & Close, Multiplier, Art Director, Inbox Engine,
+   Deal Shaper, Funnel Scan, Focus Room, Word of Mouth Engine) with two alternatives each.
+   Pick, rename or reject; the method content does not change. Recommendation: choose names
+   that describe the job in your voice and avoid any name another marketing product already
+   uses.
+
+6. The DigitalMarketer plugins. They were read only to see which jobs to cover; nothing
+   was copied. Their own text says the tools are proprietary to Lab members. Before any
+   pack is SOLD, record a commercial-use review confirming that original method packs
+   covering the same jobs are yours to sell. Recommendation: get that confirmed in
+   writing (your own counsel or DigitalMarketer's terms) before public release; private
+   use for your own brands is a separate, lower-risk decision.
+
+7. Four new pack types. They need Codex to extend the schema's allowed ids and stages
+   (proposed file included). Do you want brand-context-building, journey-review,
+   audience-resonance and advocacy-and-referral in the library? Recommendation: yes for
+   the library; sell only the ones whose runtime path exists when you decide pricing.
+
+8. Social channels. The packs assume Instagram and LinkedIn only, because that is what the
    platform supports. If you want other channels later, that is a platform capability
    decision first, not a pack change.

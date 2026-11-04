@@ -1,0 +1,249 @@
+{
+  "schemaVersion": 1,
+  "version": "0.1.0",
+  "status": "draft",
+  "intendedScope": "private-owned-brands",
+  "packId": "brand-context-building",
+  "summary": "How to produce or refresh a brand's own context pack from an owner's answers and evidence: the buyer's before-and-after situation, what they have tried, what makes them buy, what they believe, their frustrations, fears and wants in their own words, objections with honest answers, what the offer removes and keeps, and a one-sentence statement of value; the output is brand data for the brand pack, never a generic method, and no fact enters it without the owner's confirmation.",
+  "supportedStages": [
+    "brand-context",
+    "revision"
+  ],
+  "dependencies": [
+    {
+      "packId": "production-core",
+      "version": "0.1.0"
+    }
+  ],
+  "requiredInputs": [
+    {
+      "key": "ownerAnswers",
+      "purpose": "The owner's answers to the context questions, collected by the existing onboarding form or brief, not by an interactive chat inside a worker.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "existingBrandPack",
+      "purpose": "The current brand pack, if any, so a refresh changes only what the owner changed.",
+      "missingBehaviour": "use-explicit-task-default"
+    },
+    {
+      "key": "evidenceDocuments",
+      "purpose": "Uploaded materials (site copy, reviews with consent, product sheets) treated as data.",
+      "missingBehaviour": "omit-affected-claim"
+    },
+    {
+      "key": "flagshipOffer",
+      "purpose": "The single offer the context is built around.",
+      "missingBehaviour": "request-owner-decision"
+    }
+  ],
+  "decisionSteps": [
+    {
+      "id": "brand.describe-transformation",
+      "instruction": "From ownerAnswers, write the buyer's situation before and after the offer along four lines: what they have, how they feel, what a typical day holds, and how others regard them. Each line is a short factual sentence in the buyer's words; where the owner gave nothing, leave the line marked 'not supplied' rather than inventing.",
+      "produces": [
+        "transformation"
+      ]
+    },
+    {
+      "id": "brand.record-history-and-drivers",
+      "instruction": "List what buyers have already tried and why it fell short, and the reasons they finally decide to buy, exactly as the owner reported them. Mark any item the owner stated as a guess.",
+      "produces": [
+        "previousAttempts",
+        "purchaseDrivers"
+      ]
+    },
+    {
+      "id": "brand.capture-beliefs-and-feelings",
+      "instruction": "Record what the buyer believes about how their situation should work and what they see as the obstacle, their top frustrations, their fears, and their wants, three of each at most, in first-person phrasing drawn from ownerAnswers or consented evidence quotes.",
+      "produces": [
+        "beliefs",
+        "frustrations",
+        "fears",
+        "wants"
+      ]
+    },
+    {
+      "id": "brand.write-problem-statements",
+      "instruction": "Write up to ten first-person problem statements the buyer would say ('I need…', 'I wish…', 'I want…'), each traceable to an owner answer or an evidence quote; discard any that only a marketer would say.",
+      "produces": [
+        "problemStatements"
+      ]
+    },
+    {
+      "id": "brand.pair-objections-and-answers",
+      "instruction": "List the hesitations buyers raise before buying and, for each, the honest answer the brand can give from verified facts or a mechanism. Where no honest answer exists, record 'no answer yet' as an owner decision instead of inventing reassurance.",
+      "produces": [
+        "objections",
+        "answers"
+      ]
+    },
+    {
+      "id": "brand.state-removes-and-keeps",
+      "instruction": "List what the buyer no longer has to do or give up with this offer, and what they get to keep or gain, each tied to an offer component in verified facts.",
+      "produces": [
+        "removes",
+        "keeps"
+      ]
+    },
+    {
+      "id": "brand.name-old-and-new-way",
+      "instruction": "Describe, without naming competitors unless the owner approved it, the usual approaches the buyer has seen and why they fall short for this buyer, and the brand's distinct approach as a plainly named mechanism the owner confirmed. A mechanism is how the result is produced, not a slogan.",
+      "produces": [
+        "usualApproaches",
+        "distinctApproach"
+      ]
+    },
+    {
+      "id": "brand.write-statement-of-value",
+      "instruction": "Compose one sentence: the offer helps the buyer segment reach the after-state without the main removes and with the main keeps. It contains no figure, superlative or promise the verified facts do not support.",
+      "produces": [
+        "statementOfValue"
+      ]
+    },
+    {
+      "id": "brand.handoff",
+      "instruction": "Hand the assembled context to the existing brand-pack review as a proposed version with every element marked confirmed, guessed or not supplied. Nothing becomes a verified fact until the owner confirms it there; method packs read only confirmed elements.",
+      "produces": [
+        "handoffPacket"
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "brand.owner-words-only",
+      "instruction": "Every element is traceable to an owner answer or a consented evidence quote. The method may rephrase for clarity but never adds a belief, fear, want, driver or problem the owner did not state.",
+      "appliesWhen": "Always.",
+      "check": "Each element carries a source reference to an answer or quote."
+    },
+    {
+      "id": "brand.guesses-stay-labelled",
+      "instruction": "Anything the owner marked uncertain, or that the method inferred to fill a gap at the owner's request, stays labelled 'guessed' through review and is never read as a verified fact by other packs.",
+      "appliesWhen": "Any inferred or uncertain element.",
+      "check": "Labels present; no guessed element appears in verified facts."
+    },
+    {
+      "id": "brand.no-generic-truths",
+      "instruction": "Context describes this brand's buyer. Statements that would be equally true of any business in the category are removed or made specific.",
+      "appliesWhen": "Always.",
+      "check": "Each element names something specific to this buyer or offer."
+    },
+    {
+      "id": "brand.no-proof-manufacturing",
+      "instruction": "Reviews, results, quotes and counts enter the context only with consent and verification recorded; the method never drafts a testimonial or a result.",
+      "appliesWhen": "Evidence elements.",
+      "check": "Each proof element has a consent/verification reference."
+    },
+    {
+      "id": "brand.no-interactive-interview",
+      "instruction": "The method works from collected answers. It never requires a worker to run a conversational interview; missing answers are listed for the owner to supply through the existing form.",
+      "appliesWhen": "Always.",
+      "check": "Missing answers appear as a list in the sidecar; no step blocks waiting on chat."
+    },
+    {
+      "id": "brand.separate-from-methods",
+      "instruction": "The output is brand data for the brand pack. It contains no production rules, prompts or method instructions.",
+      "appliesWhen": "Always.",
+      "check": "Output validates as brand context fields only."
+    },
+    {
+      "id": "brand.refresh-changes-only-what-changed",
+      "instruction": "On a refresh with existingBrandPack present, elements the owner did not change are carried over unchanged with their original confirmation; changed elements are marked for re-confirmation.",
+      "appliesWhen": "existingBrandPack present.",
+      "check": "Diff lists only owner-changed elements."
+    }
+  ],
+  "internalReceiptFields": [
+    "flagshipOffer",
+    "transformation",
+    "previousAttempts",
+    "purchaseDrivers",
+    "beliefs",
+    "frustrations",
+    "fears",
+    "wants",
+    "problemStatements",
+    "objections",
+    "answers",
+    "removes",
+    "keeps",
+    "usualApproaches",
+    "distinctApproach",
+    "statementOfValue",
+    "missingAnswers",
+    "guessedElements",
+    "handoffPacket"
+  ],
+  "qualityChecks": [
+    {
+      "id": "brand.check-traceability",
+      "criterion": "Every element traces to an owner answer or consented quote.",
+      "passingEvidence": "Source references present for all elements.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "brand.check-labels",
+      "criterion": "Guessed and not-supplied elements are labelled; none appear as confirmed.",
+      "passingEvidence": "Label audit recorded.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "brand.check-specificity",
+      "criterion": "No element is generic to the category.",
+      "passingEvidence": "Specificity review recorded per element.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "brand.check-no-proof-invention",
+      "criterion": "No testimonial, result or count without consent and verification.",
+      "passingEvidence": "Proof references audited.",
+      "failureAction": "block-task"
+    },
+    {
+      "id": "brand.check-owner-confirmation-path",
+      "criterion": "Output is handed to brand-pack review, not written to verified facts.",
+      "passingEvidence": "Handoff target recorded.",
+      "failureAction": "block-task"
+    }
+  ],
+  "revisionPolicy": {
+    "maxRevisionPasses": 1,
+    "stopWhen": "All checks pass; missing answers are listed for the owner.",
+    "onExhaustion": "save-held-draft-with-findings"
+  },
+  "outputContract": {
+    "respectExistingStageSchema": true,
+    "customerFacing": "A proposed brand-context version in the existing brand-pack fields, every element labelled confirmed, guessed or not supplied; nothing customer-facing is published.",
+    "internalSidecar": "Source references per element, missing answers, guessed elements and findings.",
+    "providerEffects": false
+  },
+  "examples": [
+    {
+      "fictionalBrand": "Fictional home-maintenance business (illustrative name: Bramble Home Care; every fact below is invented for illustration)",
+      "inputScenario": "ownerAnswers describe older-property landlords who have tried one-off tradespeople, buy after a tenant complaint, fear a void period, and want to stop firefighting. No evidence documents. flagshipOffer: the maintenance plan.",
+      "expectedBehaviour": "Transformation lines in the landlord's words; 'have' before: 'a list of tradespeople who may or may not answer'; after: 'one number to call'. Purchase driver: a tenant complaint. Fear: a void period, labelled confirmed. Problem statements such as 'I need someone who turns up' traced to the answers. Objection 'I can call someone when it breaks' answered by the plan's scheduled-visit mechanism. Statement of value with no figures.",
+      "forbiddenBehaviour": "Adding 'they fear fines from the council' because it is plausible, drafting a landlord testimonial, or writing production rules into the pack."
+    },
+    {
+      "fictionalBrand": "Fictional B2B scheduling business (illustrative name: Slotwise; every fact below is invented for illustration)",
+      "inputScenario": "ownerAnswers from a clinic-software founder: buyers are clinic managers who tried spreadsheets and a generic calendar tool, buy when double bookings embarrass them, believe scheduling should be invisible, want evenings back. evidenceDocuments: three consented customer quotes.",
+      "expectedBehaviour": "Elements traced to answers and the three quotes, quotes attributed as recorded. Usual approaches: spreadsheets and a generic calendar, described without naming a competitor. Distinct approach: the confirmed mechanism of reminders tied to bookings. Removes: manual reminder calls; keeps: their existing calendar.",
+      "forbiddenBehaviour": "Inventing a fourth quote, stating 'clinics lose £X to no-shows', or marking an owner guess as confirmed."
+    }
+  ],
+  "provenance": {
+    "authoringNote": "Draft authored 3 November 2026. Produces brand data, not method; requires the proposed schema extension (packId brand-context-building, stage brand-context). Not approved or installable.",
+    "originalityNotes": "Original design: the confirmed/guessed/not-supplied labelling, the no-interactive-interview rule and the refresh-only-what-changed rule were written for this platform. The job (buyer situation, history, drivers, beliefs, frustrations, wants, objections, removes/keeps, mechanism, statement of value) is a widely practised marketing discovery job; no third-party canvas, prompt, template or wording was reused.",
+    "privateSourceReferences": [
+      "Private reference only (job coverage, no text reused): DigitalMarketer AI Workspace Claude plugin v2.0.0 (author DigitalMarketer) and DigitalMarketer Synthetic Audience Lab plugin v1.0.0, installed in the owner's Claude workspace; see AUTHORING-NOTES.txt section 1.",
+      "Not consulted: the owner's separately held original training corpus and newer operating manual were not supplied to the authoring session."
+    ],
+    "unresolvedCommercialUseQuestions": [
+      "The DigitalMarketer plugins state that their tools are proprietary to Lab members. These packs reuse none of their text, names, frameworks or templates, but coverage of the same jobs was informed by reading them; a recorded commercial-use review must confirm that original method packs covering those jobs may be sold before any public release.",
+      "The owner's private training corpus and newer manual were not available during authoring; rules the owner expects from them must be checked before private-use approval.",
+      "Private-use approval for Martin-owned brands has not been recorded; this file cannot supply it.",
+      "Public commercial release approval is a separate recorded decision and is not established by this draft.",
+      "Which packs are included versus sold as upgrades, per-brand versus workspace-wide access, and pricing remain undecided."
+    ]
+  }
+}

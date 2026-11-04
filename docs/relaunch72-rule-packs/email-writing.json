@@ -4,7 +4,7 @@
   "status": "draft",
   "intendedScope": "private-owned-brands",
   "packId": "email-writing",
-  "summary": "Authoring contract for email drafting (no sender, list or send capability is implied): define the sequence purpose and audience, give subject options that describe the content honestly, write a complete body that earns the open, and end with one next action; all claims and terms bound to verified facts.",
+  "summary": "Authoring contract for email drafting (no sender, list or send capability is implied): single emails, new-subscriber welcome sequences, new-customer onboarding sequences and promotion sequences planned backwards from an approved closing date; honest subject and preview options, one job and one action per email, value between asks, urgency only from approved terms, and all claims bound to verified facts.",
   "supportedStages": [
     "email",
     "revision"
@@ -40,9 +40,31 @@
       "key": "linkablePages",
       "purpose": "Destinations the action may point at.",
       "missingBehaviour": "omit-affected-claim"
+    },
+    {
+      "key": "sequenceKind",
+      "purpose": "Single email (default), new-subscriber welcome sequence, new-customer onboarding sequence, or promotion sequence.",
+      "missingBehaviour": "use-explicit-task-default"
+    },
+    {
+      "key": "promotionWindow",
+      "purpose": "For a promotion sequence: the approved start and end dates and any approved deadline terms.",
+      "missingBehaviour": "request-owner-decision"
+    },
+    {
+      "key": "supportingAssets",
+      "purpose": "Existing approved articles or resources a sequence may link to as value between asks.",
+      "missingBehaviour": "omit-affected-claim"
     }
   ],
   "decisionSteps": [
+    {
+      "id": "email.map-sequence",
+      "instruction": "When sequenceKind is a sequence, map every email before writing any: its position, its single job, its proposed send timing relative to the trigger, and its single action. A welcome sequence moves from delivering what was promised, to who the brand is, to one useful lesson, to what good looks like (illustrative or permissioned), to one invitation. An onboarding sequence moves from confirming the purchase, to the fastest first useful step, to what to expect, to a permissioned success example or an illustrative one, to the natural next offer only if approved. A promotion sequence is planned from its approved closing date backwards: interest check, opening, value between asks, objection answers, closing reminder, final notice, and a post-close follow-up; the number of emails follows the window length and the owner's stated frequency, never a fixed count.",
+      "produces": [
+        "sequenceMap"
+      ]
+    },
     {
       "id": "email.define-purpose",
       "instruction": "State in one sentence what this email must achieve for the reader and where it sits in the sequence (first contact, follow-up, value delivery, offer, reminder). Record what the previous email in the sequence covered if supplied.",
@@ -53,10 +75,11 @@
     },
     {
       "id": "email.subject-options",
-      "instruction": "Write three to five subject lines that each describe the actual content from a different entry point (the question answered, the benefit, the situation, the plain description). No deception, no fake replies, no urgency without an approved date.",
+      "instruction": "Write three to five subject lines that each describe the actual content from a different entry point (the question answered, the benefit, the situation, the plain description) plus a short preview line that continues the subject truthfully. No deception, no fake replies, no urgency without an approved date.",
       "produces": [
         "subjectOptions",
-        "recommendedSubject"
+        "recommendedSubject",
+        "previewText"
       ]
     },
     {
@@ -71,6 +94,13 @@
       "instruction": "Apply production-core's single next action, phrased for a reader who will act from their inbox, pointing at a linkable page or an explicit reply instruction.",
       "produces": [
         "primaryNextAction"
+      ]
+    },
+    {
+      "id": "email.plan-measurement",
+      "instruction": "For a sequence, state in the sidecar which existing measures the owner can read afterwards (opens, clicks, replies, completions) and what each would suggest changing; give no target percentages, benchmarks or pivot thresholds, because none are evidence for this brand.",
+      "produces": [
+        "measurementNotes"
       ]
     },
     {
@@ -119,6 +149,24 @@
       "check": "Paragraph lengths and word count recorded."
     },
     {
+      "id": "email.urgency-only-from-approved-window",
+      "instruction": "Closing-soon and final-notice emails exist only when promotionWindow carries an approved end date; the deadline is stated exactly as approved. Scarcity claims need an approved quantity. Nothing is extended, reopened or 'brought back' by the copy.",
+      "appliesWhen": "Promotion sequences.",
+      "check": "Every deadline or scarcity phrase matches the approved window."
+    },
+    {
+      "id": "email.value-between-asks",
+      "instruction": "In any sequence, at least one email between asks delivers something useful on its own (a lesson, a resource from supportingAssets, an answer to a known objection) without a purchase ask beyond the standard footer.",
+      "appliesWhen": "Sequences of three or more emails.",
+      "check": "sequenceMap shows at least one value email between two ask emails."
+    },
+    {
+      "id": "email.postscript-optional-and-true",
+      "instruction": "A postscript, if used, restates the single action or adds one true, useful detail; it never introduces a second offer, a new claim or urgency.",
+      "appliesWhen": "A postscript is written.",
+      "check": "PS content maps to the same action or an already-supported fact."
+    },
+    {
       "id": "email.personalisation-placeholders-only",
       "instruction": "Personalisation uses only placeholders the runtime supplies; the draft never invents a reader's name, company or history.",
       "appliesWhen": "Personalisation is used.",
@@ -135,6 +183,9 @@
     "primaryNextAction",
     "permissionContextUsed",
     "omittedUnsupportedClaims",
+    "sequenceMap",
+    "previewText",
+    "measurementNotes",
     "handoffPacket"
   ],
   "qualityChecks": [
@@ -192,10 +243,12 @@
     "authoringNote": "Draft authored 3 November 2026 as an authoring contract only; no email drafting path is claimed to exist in the recorded release. Not approved or installable.",
     "originalityNotes": "Original design: the permission-context input and the subject-matches-body rule were written for this platform; no private corpus or licensed material was consulted.",
     "privateSourceReferences": [
-      "Not consulted: the owner's private original training corpus and newer operating manual were not supplied to the authoring session; see AUTHORING-NOTES.txt."
+      "Private reference only (job coverage, no text reused): DigitalMarketer AI Workspace Claude plugin v2.0.0 (author DigitalMarketer) and DigitalMarketer Synthetic Audience Lab plugin v1.0.0, installed in the owner's Claude workspace; see AUTHORING-NOTES.txt section 1.",
+      "Not consulted: the owner's separately held original training corpus and newer operating manual were not supplied to the authoring session."
     ],
     "unresolvedCommercialUseQuestions": [
-      "The private training corpus and newer operating manual were not available during authoring; any rule the owner expects from those sources must be checked against them before private-use approval.",
+      "The DigitalMarketer plugins state that their tools are proprietary to Lab members. These packs reuse none of their text, names, frameworks or templates, but coverage of the same jobs was informed by reading them; a recorded commercial-use review must confirm that original method packs covering those jobs may be sold before any public release.",
+      "The owner's private training corpus and newer manual were not available during authoring; rules the owner expects from them must be checked before private-use approval.",
       "Private-use approval for Martin-owned brands has not been recorded; this file cannot supply it.",
       "Public commercial release approval is a separate recorded decision and is not established by this draft.",
       "Which packs are included versus sold as upgrades, per-brand versus workspace-wide access, and pricing remain undecided."

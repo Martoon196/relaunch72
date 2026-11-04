@@ -4,7 +4,7 @@
   "status": "draft",
   "intendedScope": "private-owned-brands",
   "packId": "conversion-copy",
-  "summary": "How to write copy that asks for an action honestly: identify the reader's awareness, lead with the benefit that matters to them, order proof the brand can actually support, answer the objections that stop this audience, pick a persuasion structure that fits, write meaningfully different hooks when useful, and end with one clear action; with all rationale kept out of the copy.",
+  "summary": "How to write and test copy that asks for an action honestly (landing sections, ads, calls to action, polishes of existing copy): identify the reader's awareness, lead with the benefit that matters to them, order proof the brand can actually support, answer the objections that stop this audience, pick a persuasion structure that fits, write meaningfully different hooks when useful, and end with one clear action; with all rationale kept out of the copy.",
   "supportedStages": [
     "copy",
     "revision"
@@ -44,6 +44,16 @@
     {
       "key": "hookVariantCount",
       "purpose": "How many hook options the task wants, if any.",
+      "missingBehaviour": "use-explicit-task-default"
+    },
+    {
+      "key": "existingCopy",
+      "purpose": "Copy to improve, when the brief is a polish rather than a new piece, plus what in it must be kept.",
+      "missingBehaviour": "use-explicit-task-default"
+    },
+    {
+      "key": "channelSpecs",
+      "purpose": "Character limits and format rules for the channel the copy will run on, supplied by the runtime for supported channels only.",
       "missingBehaviour": "use-explicit-task-default"
     }
   ],
@@ -98,6 +108,29 @@
       "produces": [
         "hookOptions",
         "recommendedHook"
+      ]
+    },
+    {
+      "id": "copy.build-test-set",
+      "instruction": "When the brief asks for an ad or a testable short piece, write one primary version plus up to three alternatives that differ in entry point, not wording: one opening on the problem the reader feels and its consequence, one opening on the outcome and the mechanism that delivers it, and one opening on a short hypothetical before-and-after situation that is explicitly illustrative. Each alternative keeps the same offer, proof and action.",
+      "produces": [
+        "primaryVersion",
+        "alternatives"
+      ]
+    },
+    {
+      "id": "copy.polish-existing",
+      "instruction": "When existingCopy is supplied, first record what must be kept (an opening that is known to work, an approved claim, a required phrase), then apply the same decision steps to the rest. Changes are listed as before/after pairs with the rule that motivated each; nothing kept is altered.",
+      "produces": [
+        "keptElements",
+        "changeList"
+      ]
+    },
+    {
+      "id": "copy.adapt-to-channel",
+      "instruction": "Only when channelSpecs are supplied, produce the channel's required fields within its limits (for example headline and description lengths) from the approved primary version, without adding claims. Do not produce fields for channels the runtime did not specify.",
+      "produces": [
+        "channelAdaptations"
       ]
     },
     {
@@ -170,6 +203,18 @@
       "check": "Word or character count within the brief's limit; elements match placement."
     },
     {
+      "id": "copy.rubric-guides-revision-only",
+      "instruction": "A pre-delivery rubric (clarity of promise, concreteness, relevance to the named audience, proof present and permissioned, readability, single action) may be scored to decide revisions. Scores live in the sidecar; they are never shown as evidence of quality or expected performance.",
+      "appliesWhen": "A quality pass scores the draft.",
+      "check": "Rubric scores appear in the sidecar only and each low score maps to a revision or a recorded reason."
+    },
+    {
+      "id": "copy.no-unspecified-channels",
+      "instruction": "Channel-specific formats, limits, emoji conventions or placement advice are applied only for channels the runtime names in channelSpecs; the copy never implies an ad account, platform or placement exists.",
+      "appliesWhen": "Always.",
+      "check": "Channel fields present only for specified channels; no platform named otherwise."
+    },
+    {
       "id": "copy.one-structure-not-all",
       "instruction": "Use the single structure chosen in copy.choose-structure. Never stack several persuasion frameworks into one asset or add elements (story, objection block, proof block) that the placement and awareness do not call for.",
       "appliesWhen": "Always.",
@@ -190,6 +235,12 @@
     "recommendedHook",
     "primaryNextAction",
     "omittedUnsupportedClaims",
+    "primaryVersion",
+    "alternatives",
+    "keptElements",
+    "changeList",
+    "channelAdaptations",
+    "rubricScores",
     "handoffPacket"
   ],
   "qualityChecks": [
@@ -259,10 +310,12 @@
     "authoringNote": "Draft authored 3 November 2026. Intended for copy placements the platform already represents; it adds no sender, ad platform or payment capability. Not approved or installable.",
     "originalityNotes": "Original design: the awareness-to-angle mapping, benefit-to-feature binding, permissioned-proof rule, objection basis rule and substantive-hook-difference test were written for this platform using general persuasion craft; no private corpus or licensed framework text was copied.",
     "privateSourceReferences": [
-      "Not consulted: the owner's private original training corpus and newer operating manual were not supplied to the authoring session; see AUTHORING-NOTES.txt."
+      "Private reference only (job coverage, no text reused): DigitalMarketer AI Workspace Claude plugin v2.0.0 (author DigitalMarketer) and DigitalMarketer Synthetic Audience Lab plugin v1.0.0, installed in the owner's Claude workspace; see AUTHORING-NOTES.txt section 1.",
+      "Not consulted: the owner's separately held original training corpus and newer operating manual were not supplied to the authoring session."
     ],
     "unresolvedCommercialUseQuestions": [
-      "The private training corpus and newer operating manual were not available during authoring; any rule the owner expects from those sources must be checked against them before private-use approval.",
+      "The DigitalMarketer plugins state that their tools are proprietary to Lab members. These packs reuse none of their text, names, frameworks or templates, but coverage of the same jobs was informed by reading them; a recorded commercial-use review must confirm that original method packs covering those jobs may be sold before any public release.",
+      "The owner's private training corpus and newer manual were not available during authoring; rules the owner expects from them must be checked before private-use approval.",
       "Private-use approval for Martin-owned brands has not been recorded; this file cannot supply it.",
       "Public commercial release approval is a separate recorded decision and is not established by this draft.",
       "Which packs are included versus sold as upgrades, per-brand versus workspace-wide access, and pricing remain undecided."

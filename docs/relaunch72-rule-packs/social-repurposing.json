@@ -72,6 +72,13 @@
       ]
     },
     {
+      "id": "social.plan-multiplication",
+      "instruction": "When the brief asks how one approved asset becomes several pieces, list the derivations the runtime supports (for example an article into its two network posts, a campaign set, and an email intro passed to email-writing), each with the article part it uses and its own next action only if the brief authorises a different one. Derivations for unsupported networks or formats are not listed.",
+      "produces": [
+        "multiplicationPlan"
+      ]
+    },
+    {
       "id": "social.handoff",
       "instruction": "Hand the drafts to the existing exact-version social approval path with the source article version id and the per-draft source sections. Hand each artwork brief to visual-briefing when a visual is requested. Dispatch, scheduling, account selection and URL binding are never part of this handoff; they belong to the existing calendar and registry gates.",
       "produces": [
@@ -138,6 +145,7 @@
     "sourceSectionPerDraft",
     "wordCountPerDraft",
     "primaryNextAction",
+    "multiplicationPlan",
     "handoffPacket"
   ],
   "qualityChecks": [
@@ -201,10 +209,12 @@
     "authoringNote": "Draft authored 3 November 2026. Preserves the recorded Relaunch72 social contract (two-post default and six_angle_campaign recipe). Not approved or installable.",
     "originalityNotes": "Original design: the three-part article decomposition, angle-to-part mapping and channel-native-not-truncated rule were written for this platform; no private corpus or licensed text was used.",
     "privateSourceReferences": [
-      "Not consulted: the owner's private original training corpus and newer operating manual were not supplied to the authoring session; see AUTHORING-NOTES.txt."
+      "Private reference only (job coverage, no text reused): DigitalMarketer AI Workspace Claude plugin v2.0.0 (author DigitalMarketer) and DigitalMarketer Synthetic Audience Lab plugin v1.0.0, installed in the owner's Claude workspace; see AUTHORING-NOTES.txt section 1.",
+      "Not consulted: the owner's separately held original training corpus and newer operating manual were not supplied to the authoring session."
     ],
     "unresolvedCommercialUseQuestions": [
-      "The private training corpus and newer operating manual were not available during authoring; any rule the owner expects from those sources must be checked against them before private-use approval.",
+      "The DigitalMarketer plugins state that their tools are proprietary to Lab members. These packs reuse none of their text, names, frameworks or templates, but coverage of the same jobs was informed by reading them; a recorded commercial-use review must confirm that original method packs covering those jobs may be sold before any public release.",
+      "The owner's private training corpus and newer manual were not available during authoring; rules the owner expects from them must be checked before private-use approval.",
       "Private-use approval for Martin-owned brands has not been recorded; this file cannot supply it.",
       "Public commercial release approval is a separate recorded decision and is not established by this draft.",
       "Which packs are included versus sold as upgrades, per-brand versus workspace-wide access, and pricing remain undecided."
