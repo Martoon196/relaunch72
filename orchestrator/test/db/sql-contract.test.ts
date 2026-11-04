@@ -717,6 +717,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: '0135_mhp_event_phone_signup_handoff.sql', version: 135 },
     { filename: '0136_mhp_webinar_applications.sql', version: 136 },
     { filename: '0137_seo_blog_media_storage.sql', version: 137 },
+    { filename: '0138_seo_blog_method_packs.sql', version: 138 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
