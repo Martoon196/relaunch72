@@ -165,5 +165,148 @@
     "default": false,
     "assignmentsCreated": 0,
     "publicCommerceEnabled": false
+  },
+  "integration": {
+    "state": "READY_FOR_REVIEW_NOT_DEPLOYED",
+    "recordedAt": "2026-11-04T00:41:15.920599+00:00",
+    "branch": "codex/rl72-boosters-integration-20261104",
+    "testedSourceSha": "1e9992022028cb6a2da23e2caee61a76ac5e5348",
+    "sourceBase": "ec931c813380a4406fc86249bf73e604e8ea6e2a",
+    "releaseBase": "2bd32194a3a33d6e43cfa1b29d5b0769598fc137",
+    "gate": {
+      "url": "https://github.com/Martoon196/relaunch72/actions/runs/41748339355",
+      "runId": 41748339355,
+      "jobId": 126306884335,
+      "conclusion": "success",
+      "typecheck": "pass",
+      "fullSuite": {
+        "tests": 4096,
+        "suites": 0,
+        "pass": 4042,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 54
+      },
+      "newMethodUnitCases": 21,
+      "actualPostgres": {
+        "tests": 9,
+        "suites": 0,
+        "pass": 9,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "environment": "Node 22.23.4; CI PostgreSQL 18-alpine localhost disposable database; no marketing provider credentials"
+    },
+    "migration": {
+      "number": 138,
+      "file": "0138_seo_blog_method_packs.sql",
+      "canonicalLfSha256": "84f1abb3a152ac93800edbfd92b281d34d31e8ffe4e4ec5b0df2019e806898d8",
+      "frozenAfterGreenGate": true,
+      "appliedToProduction": false,
+      "earlierAppliedMigrationsModified": false
+    },
+    "flag": {
+      "name": "SEO_BLOG_METHOD_PACKS",
+      "default": false,
+      "productionChanged": false
+    },
+    "privateUseApproval": {
+      "decision": "approved after validation",
+      "approver": "Martin",
+      "evidence": "2026-11-04 chat reply: Approve private use after validation",
+      "packs": [
+        "production-core",
+        "editorial-planning",
+        "blog-writing",
+        "conversion-copy",
+        "social-repurposing",
+        "visual-briefing"
+      ],
+      "operatorOrganizationEnrolmentRequired": true,
+      "productionEnrolmentsOrAssignmentsCreated": 0
+    },
+    "publicCommercialApproval": {
+      "decision": "blocked",
+      "reason": "Commercial-use review remains unrecorded; no public upgrade entitlement path enabled."
+    },
+    "schemaExtension": {
+      "decision": "accepted",
+      "note": "Four IDs and three stages, plus schema title/identifier metadata changes; original eight remain valid under the original schema."
+    },
+    "catalogue": {
+      "status": "proposal-only",
+      "pricesChanged": false,
+      "subscriptionsChanged": false,
+      "paidEntitlementsGranted": false
+    },
+    "acceptance": {
+      "A": {
+        "result": "pass - deterministic fictional drafts plus actual PostgreSQL isolation",
+        "evidence": "rl72-method-packs.test.ts brand separation; rl72-method-packs-pg.integration.test.ts distinct brand drafts and forced RLS."
+      },
+      "B": {
+        "result": "pass - mechanical acceptance",
+        "evidence": "Drafts contain the selected how-to steps, distinct audience/angle/CTA; sidecar is private; actual saved article versions bind to receipts. Live model quality not exercised."
+      },
+      "C": {
+        "result": "pass - deterministic fixtures and existing factual checks",
+        "evidence": "No fabricated performance figures/customer results in fixtures; unsupported evidence IDs reject method output; existing engine unsupported-figure check retained. No live model factual evaluation."
+      },
+      "D": {
+        "result": "pass",
+        "evidence": "Server-only assignments, private organization operator gate, foreign-session denial, revocation preserving receipts, unavailable capability tests."
+      },
+      "E": {
+        "result": "pass - structural trust boundary",
+        "evidence": "Trusted method compilation is separate from fenced brand/research data; assignments cannot be supplied through model/browser input. Adversarial live-model instruction resistance not exercised."
+      },
+      "F": {
+        "result": "pass - deterministic social output",
+        "evidence": "All six Instagram/LinkedIn angle pairs and distinct channel copy; no URLs/publication claims. No actual social provider call."
+      },
+      "G": {
+        "result": "pass",
+        "evidence": "Twelve exact versioned release archives; canonical hash checks; original-version preservation/reassignment rejection; immutable SQL receipts and asset-version bindings."
+      },
+      "H": {
+        "result": "pass",
+        "evidence": "Missing/unapproved/cyclic/hash-mismatched dependencies, bounded context and revision, rejected/unknown receipts, known usage and explicit failures tested."
+      },
+      "I": {
+        "result": "pass",
+        "evidence": "Exact-source Linux TypeScript, full offline suite, and disposable PostgreSQL proof in the linked CI run. Original release tests reused where unchanged."
+      }
+    },
+    "notExercised": [
+      "Live model content quality and adversarial instruction resistance",
+      "Paid image/model generation",
+      "Real social publishing or email sends",
+      "Production rollout/migration/feature activation",
+      "Full equivalence against the original private training corpus",
+      "Runtime stages for email, offers, brand-context building, journey review, audience resonance and advocacy/referral"
+    ],
+    "externalEffects": {
+      "production": false,
+      "marketingProviders": false,
+      "publicPosts": false,
+      "pullRequestOpened": false,
+      "developmentOnly": [
+        "Integration branch pushed to GitHub",
+        "Disposable GitHub Actions test runs; one superseded run cancelled"
+      ]
+    },
+    "openOwnerDecisions": [
+      "Names and bundles remain proposals.",
+      "Which modules are included or paid upgrades, pricing and per-brand versus workspace access remain undecided.",
+      "Public commercial-use review remains required before any sale.",
+      "Detailed original-corpus comparison remains partial; the authored library must not be presented as an exact reproduction.",
+      "Optional content-mix preferences can be chosen per brand later."
+    ],
+    "priorAttempts": [
+      "First disposable bootstrap used a superuser and hit an existing membership-baseline guard; corrected to the established ordinary CREATEROLE database-owner fixture without editing applied SQL.",
+      "Windows full run reported three additive migration fixture mismatches and a disabled-worker startup timeout. Migration fixtures were advanced; final Linux exact-source gate passes.",
+      "Intermediate Linux gate found one incomplete migration source-list fixture; completed without changing historical checksums."
+    ]
   }
 }
