@@ -1,0 +1,223 @@
+{
+  "schemaVersion": 1,
+  "version": "0.1.1",
+  "status": "draft",
+  "intendedScope": "private-owned-brands",
+  "packId": "social-repurposing",
+  "summary": "How to adapt one exact approved article into channel-native social drafts without adding claims: pick the useful part of the article for each angle, write for the channel's reading situation, keep the brand voice, invite the reader to the article, and preserve the platform's two-post default and six-draft campaign recipe exactly.",
+  "supportedStages": [
+    "social",
+    "revision"
+  ],
+  "dependencies": [
+    {
+      "packId": "production-core",
+      "version": "0.1.1"
+    }
+  ],
+  "requiredInputs": [
+    {
+      "key": "brandProfile",
+      "purpose": "Voice and audience for channel adaptation.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "approvedArticle",
+      "purpose": "The exact article version being promoted (title, excerpt, sections, key points).",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "recipe",
+      "purpose": "The server-supplied recipe: default two posts, or six_angle_campaign (launch, takeaway, follow_up × instagram, linkedin).",
+      "missingBehaviour": "use-explicit-task-default"
+    },
+    {
+      "key": "supportedNetworks",
+      "purpose": "Networks the runtime actually supports for this brand.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "exclusions",
+      "purpose": "Excluded words, hashtags, topics.",
+      "missingBehaviour": "use-explicit-task-default"
+    }
+  ],
+  "decisionSteps": [
+    {
+      "id": "social.pick-article-parts",
+      "instruction": "Identify the three most useful, self-contained parts of the article: the central answer, the most surprising or practical point, and the step or decision the reader can act on today. Record the section each came from.",
+      "produces": [
+        "articleParts"
+      ]
+    },
+    {
+      "id": "social.map-angles",
+      "instruction": "If the recipe is six_angle_campaign, assign the central answer to launch, the practical point to takeaway and the action to follow_up for both networks; adapt each to the network rather than copying between networks. If the default recipe applies, write one Instagram caption and one LinkedIn post from the central answer.",
+      "produces": [
+        "angleMap"
+      ]
+    },
+    {
+      "id": "social.adapt-per-network",
+      "instruction": "For Instagram write for a reader scrolling quickly: lead with the concrete benefit or question in the first line, keep sentences short, and state the invitation to read in plain words. For LinkedIn write for a professional reader: open with the situation they recognise, give one reasoned point, and invite them to the article for the full reasoning. Never imply a network the runtime does not support.",
+      "produces": [
+        "networkAdaptations"
+      ]
+    },
+    {
+      "id": "social.write-artwork-brief",
+      "instruction": "Write a one-sentence artwork brief per draft describing a neutral illustrative image that supports the draft's point, without pretending an image exists or showing real people, properties, screens or results.",
+      "produces": [
+        "artworkInstructions"
+      ]
+    },
+    {
+      "id": "social.plan-multiplication",
+      "instruction": "When the brief asks how one approved asset becomes several pieces, list the derivations the runtime supports (for example an article into its two network posts, a campaign set, and an email intro passed to email-writing), each with the article part it uses and its own next action only if the brief authorises a different one. Derivations for unsupported networks or formats are not listed.",
+      "produces": [
+        "multiplicationPlan"
+      ]
+    },
+    {
+      "id": "social.handoff",
+      "instruction": "Hand the drafts to the existing exact-version social approval path with the source article version id and the per-draft source sections. Hand each artwork brief to visual-briefing when a visual is requested. Dispatch, scheduling, account selection and URL binding are never part of this handoff; they belong to the existing calendar and registry gates.",
+      "produces": [
+        "handoffPacket"
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "social.only-article-and-facts",
+      "instruction": "Every statement in a draft comes from the approved article or confirmed brand facts. No new figures, quotations, results, urgency or claims about the article's reception.",
+      "appliesWhen": "Always.",
+      "check": "Each sentence traces to an article passage or a brand fact."
+    },
+    {
+      "id": "social.no-urls-no-publication-claims",
+      "instruction": "Drafts contain no URL; the application binds the reviewed canonical URL separately. Drafts never state or imply that the article is published, scheduled or live.",
+      "appliesWhen": "Always.",
+      "check": "No URL pattern and no publication-state phrase in any draft."
+    },
+    {
+      "id": "social.cardinality-exact",
+      "instruction": "With six_angle_campaign return exactly six drafts: launch, takeaway, follow_up for each of instagram and linkedin, each with network, angle, title, copy and artworkInstructions. Without it return exactly one Instagram caption and one LinkedIn post. A partial set is a failure, never a 'best effort'.",
+      "appliesWhen": "Producing output.",
+      "check": "Draft count and network/angle pairs match the recipe exactly."
+    },
+    {
+      "id": "social.distinct-drafts",
+      "instruction": "No two drafts share copy or lead with the same article part; each angle is grounded in a different useful part of the article.",
+      "appliesWhen": "More than one draft.",
+      "check": "Pairwise comparison shows different opening lines and different source sections."
+    },
+    {
+      "id": "social.length-discipline",
+      "instruction": "Keep each copy roughly 40–70 words and each artwork brief to one sentence so the full result fits the stage output ceiling.",
+      "appliesWhen": "Always.",
+      "check": "Word counts recorded per draft within range."
+    },
+    {
+      "id": "social.channel-native-not-truncated",
+      "instruction": "A draft is a rewrite for the channel, not the article's excerpt cut short. It must make one useful point on its own before inviting the reader to the article.",
+      "appliesWhen": "Always.",
+      "check": "Each draft contains a complete point that a reader could use without clicking."
+    },
+    {
+      "id": "social.voice-and-exclusions",
+      "instruction": "Use the brand voice; apply exclusions to copy, hashtags and artwork briefs; use hashtags only if the profile's voice guidance allows them and never more than three.",
+      "appliesWhen": "Always.",
+      "check": "Exclusion scan clear; hashtag count within limit."
+    },
+    {
+      "id": "social.no-capability-implication",
+      "instruction": "Drafts and briefs never imply video, carousels, direct messages, analytics, paid promotion or a network outside supportedNetworks.",
+      "appliesWhen": "Always.",
+      "check": "No reference to unsupported formats or networks."
+    }
+  ],
+  "internalReceiptFields": [
+    "audience",
+    "purpose",
+    "articleParts",
+    "angleMap",
+    "networkAdaptations",
+    "sourceSectionPerDraft",
+    "wordCountPerDraft",
+    "primaryNextAction",
+    "multiplicationPlan",
+    "handoffPacket"
+  ],
+  "qualityChecks": [
+    {
+      "id": "social.check-cardinality",
+      "criterion": "Draft count and network/angle pairs match the recipe exactly.",
+      "passingEvidence": "Enumerated pairs.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "social.check-grounding",
+      "criterion": "Every sentence traces to the article or a brand fact; no URL; no publication claim.",
+      "passingEvidence": "Trace table and pattern scan.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "social.check-distinct",
+      "criterion": "No duplicate copy; different source sections per angle.",
+      "passingEvidence": "Pairwise comparison recorded.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "social.check-length",
+      "criterion": "Copy 40–70 words; artwork brief one sentence.",
+      "passingEvidence": "Counts recorded.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "social.check-supported-networks",
+      "criterion": "Only supported networks and formats referenced.",
+      "passingEvidence": "Network list compared to supportedNetworks.",
+      "failureAction": "block-task"
+    }
+  ],
+  "revisionPolicy": {
+    "maxRevisionPasses": 1,
+    "stopWhen": "All checks pass.",
+    "onExhaustion": "save-held-draft-with-findings"
+  },
+  "outputContract": {
+    "respectExistingStageSchema": true,
+    "customerFacing": "The existing social output: { posts: [...] } with exactly the recipe's drafts, each with network, angle (campaign only), title, copy and artworkInstructions.",
+    "internalSidecar": "Article parts chosen, angle map, source section per draft, word counts and findings.",
+    "providerEffects": false
+  },
+  "examples": [
+    {
+      "fictionalBrand": "Fictional home-maintenance business (illustrative name: Bramble Home Care; every fact below is invented for illustration)",
+      "inputScenario": "Approved article: a how-to on stopping window condensation with a cited humidity range. Recipe: six_angle_campaign. supportedNetworks: instagram, linkedin. Exclusions: a competitor's name.",
+      "expectedBehaviour": "Six drafts. Instagram launch leads with the one-line cause of condensation; LinkedIn launch opens with the situation of a landlord fielding tenant complaints. Takeaways use the practical ventilation step; follow_ups use the 'check these three things tonight' action. No URL, no 'read our new post now live', the humidity range stated only as in the article. Each artwork brief one sentence describing a generic window image.",
+      "forbiddenBehaviour": "Five drafts with a note that the sixth was similar; adding 'join 3,000 readers'; a brief that says 'photo of our team at a customer's house'."
+    },
+    {
+      "fictionalBrand": "Fictional B2B scheduling business (illustrative name: Slotwise; every fact below is invented for illustration)",
+      "inputScenario": "Approved article: a comparison of deposit policies. Recipe absent (default). supportedNetworks: linkedin only.",
+      "expectedBehaviour": "The default format is preserved but the runtime's supported networks govern what is dispatchable: the output still returns the two-post contract, with the Instagram caption written honestly and the sidecar noting Instagram is unsupported for this brand so it cannot be dispatched. The LinkedIn post opens with the manager's dilemma, gives the one reasoned criterion from the article, and invites them to read the comparison.",
+      "forbiddenBehaviour": "Inventing a no-show percentage, writing a TikTok caption, or implying the post is scheduled."
+    }
+  ],
+  "provenance": {
+    "authoringNote": "Draft authored 3 November 2026. Preserves the recorded Relaunch72 social contract (two-post default and six_angle_campaign recipe). Not approved or installable.",
+    "originalityNotes": "Version 0.1.1 adds original selection vocabulary and concrete evidence contracts following the private functional comparison dated 2026-11-04. It preserves the original release separately. No source-manual excerpts, filled brand templates or commercial permission are incorporated.",
+    "privateSourceReferences": [
+      "Private reference only (job coverage, no text reused): DigitalMarketer AI Workspace Claude plugin v2.0.0 (author DigitalMarketer) and DigitalMarketer Synthetic Audience Lab plugin v1.0.0, installed in the owner's Claude workspace; see AUTHORING-NOTES.txt section 1.",
+      "Not consulted: the owner's separately held original training corpus and newer operating manual were not supplied to the authoring session."
+    ],
+    "unresolvedCommercialUseQuestions": [
+      "The DigitalMarketer plugins state that their tools are proprietary to Lab members. These packs reuse none of their text, names, frameworks or templates, but coverage of the same jobs was informed by reading them; a recorded commercial-use review must confirm that original method packs covering those jobs may be sold before any public release.",
+      "The owner's private training corpus and newer manual were not available during authoring; rules the owner expects from them must be checked before private-use approval.",
+      "Private-use approval for Martin-owned brands has not been recorded; this file cannot supply it.",
+      "Public commercial release approval is a separate recorded decision and is not established by this draft.",
+      "Which packs are included versus sold as upgrades, per-brand versus workspace-wide access, and pricing remain undecided."
+    ]
+  }
+}

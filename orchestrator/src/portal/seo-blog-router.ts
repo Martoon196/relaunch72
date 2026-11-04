@@ -29,6 +29,8 @@ import { loadAuthorityProgrammePage } from '../seo-blog/authority-programme-cont
 import { authorityProgrammeContent } from '../seo-blog/authority-programme-view.js';
 import { CAMPAIGN_IMAGE_STATUS_SCRIPT } from './campaign-image-status.js';
 import { campaignDeliveryCalendarPage } from './seo-blog-campaign-calendar-view.js';
+import { campaignCreatorsPage, campaignCreatorReviewPage, creatorContentFromForm, creatorTextExport, productionRulesPage } from './campaign-creator-view.js';
+import type { CampaignBrief } from '../seo-blog/campaign-creator.js';
 
 export interface SeoBlogRouteInput {
   readonly service: PortalSeoBlogService;
@@ -206,7 +208,19 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       if (!job) throw new SeoBlogError(404, 'That profile task was not found.');
       return send(res, 200, JSON.stringify({ id: job.id, state: job.state, detail: job.error ?? job.progress, resultVersion: profilePayload(job).resultVersion ?? null }), 'application/json; charset=utf-8');
     }
-    const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages, applicationName: input.applicationName });
+    const shell = (tab: SeoBlogTab): Shell => ({ brands, brand, tab, csrf, ...messages, applicationName: input.applicationName,creatorsAvailable:engine.campaignCreatorsReady,methodsAvailable:engine.productionMethodsReady });
+    if(rest==='methods')return send(res,200,productionRulesPage(shell('methods'),await engine.methodOverview(actor,brandId),engine.campaignCreatorsReady));
+    if(rest==='campaigns'||rest.startsWith('campaigns/')){
+      const creator=engine.creators(),parts=rest.split('/');
+      if(!parts[1])return send(res,200,campaignCreatorsPage(shell('campaigns'),await engine.getProfile(actor,brandId),await creator.list(actor.userId,brandId)));
+      const record=await creator.get(actor.userId,brandId,parts[1]);
+      if(parts[2]==='export'){
+        const json=await creator.export(actor.userId,brandId,record.id);
+        const format=url.searchParams.get('format')==='json'?'json':'txt';
+        return send(res,200,format==='json'?json:creatorTextExport(record,JSON.parse(json).content),format==='json'?'application/json; charset=utf-8':'text/plain; charset=utf-8',{'content-disposition':`attachment; filename="campaign.${format}"`});
+      }
+      return send(res,200,campaignCreatorReviewPage(shell('campaigns'),record,await engine.getProfile(actor,brandId)));
+    }
     if (rest === 'authority') {
       if (input.applicationName !== 'Relaunch72 Content') throw new SeoBlogError(404, 'That page was not found.');
       const data = await loadAuthorityProgrammePage(engine, actor, brandId);
@@ -296,6 +310,37 @@ async function handlePost(
   const parts = rest.split('/');
   const rowVersion = () => int(f('rowVersion'), 'the form version');
   switch (parts[0]) {
+    case 'methods': {
+      if(parts[1]!=='activate')throw new SeoBlogError(404,'That action was not found.');
+      await engine.activateReviewedMethods(actor,brandId,int(f('revision'),'the current rule assignment'),f('creators')==='1');
+      return ok(back('methods'),'Reviewed production rules assigned to this brand.');
+    }
+    case 'campaigns': {
+      const creator=engine.creators();
+      if(parts[1]==='create'){
+        const profile=await engine.getProfile(actor,brandId),index=int(f('ctaIndex'),'the next-step link');
+        const cta=profile?.conversionPages[index];if(!cta)throw new SeoBlogError(400,'Choose a confirmed next-step link.');
+        const brief:CampaignBrief={kind:f('kind') as CampaignBrief['kind'],name:f('name')??'',goal:f('goal')??'',audience:f('audience')??'',purpose:f('purpose') as CampaignBrief['purpose'],count:int(f('count'),'the email count'),cta,
+          offerName:f('offerName')||null,permissionContext:f('permissionContext')??'',customerMoment:f('customerMoment')??'',consentProcess:f('consentProcess')??'',incentiveTerms:f('incentiveTerms')??'None'};
+        const r=await creator.create(actor.userId,brandId,f('commandId')??'',brief);
+        return ok(back('campaigns/'+r.id),r.state==='draft'?'Campaign draft ready for review.':'Campaign saved. Review its current state before starting another run.');
+      }
+      const id=parts[1];if(!id)throw new SeoBlogError(404,'Campaign not found.');
+      if(parts[2]==='recover'){
+        const r=await creator.recover(actor.userId,brandId,id);
+        return ok(back('campaigns/'+id),r.version?'Recovered the saved draft without another model call.':'Saved run checked. No new generation was started.');
+      }
+      if(parts[2]==='edit'){
+        const record=await creator.get(actor.userId,brandId,id);
+        await creator.edit(actor.userId,brandId,id,rowVersion(),f('contentSha')??'',creatorContentFromForm(record,form.fields));
+        return ok(back('campaigns/'+id),'New draft version saved. Review it before export.');
+      }
+      if(parts[2]==='approve'){
+        await creator.approve(actor.userId,brandId,id,rowVersion(),f('contentSha')??'',f('reviewed')==='1');
+        return ok(back('campaigns/'+id),'This campaign draft is approved for export. Nothing was sent.');
+      }
+      throw new SeoBlogError(404,'That campaign action was not found.');
+    }
     case 'basics': {
       await engine.updateBrandBasics(actor, brandId, { rowVersion: rowVersion(), website: f('website'), locale: (f('locale') ?? 'en-GB').trim(), timezone: (f('timezone') ?? 'Europe/London').trim() });
       return ok(back('setup'), 'Saved.');

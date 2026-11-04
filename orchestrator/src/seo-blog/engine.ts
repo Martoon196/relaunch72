@@ -65,9 +65,12 @@ interface PlanExecution {
   commit(plan: TopicPlan, briefs: readonly ArticleBrief[]): Promise<void>;
 }
 
-import type { MethodController, MethodPin } from './method-packs.js';
+import { libraryPins, PRIVATE_RELEASE_VERSION, resolveMethods, type MethodController, type MethodPin } from './method-packs.js';
+import { CampaignCreator, type CampaignCreatorStore } from './campaign-creator.js';
+import { confirmedVisualInputs, type EditorialFormat } from './method-evidence.js';
 
 export interface EngineDeps {
+  readonly creatorStore?: CampaignCreatorStore;
   readonly methods?: MethodController;
   readonly store: SeoBlogStore;
   readonly llm: LlmClient | null;
@@ -812,6 +815,8 @@ export class SeoBlogEngine {
     else await this.recordGeneration(brandId, result.record, 'plan');
     const short = new Map(research.sources.map((s, i) => [`S${i + 1}`, s]));
     const cluster = [result.value.pillar, ...result.value.supporting];
+    const planReceipt=result.record.methodReceiptId&&this.deps.methods?await this.deps.methods.store.receipt(brandId,result.record.methodReceiptId):null;
+    const formatDecisions=(planReceipt?.sidecar?.decisions as {formatPerArticle?:{slug:string;formatId:string;rationale:string}[]}|undefined)?.formatPerArticle;
     const slugToId = new Map(cluster.map((a) => [a.slug, randomUUID()]));
     const comparable: import('./dedupe.js').PlannedComparable[] = [
       ...planned.filter((b) => !['omitted', 'skipped'].includes(b.status)).map((b) => ({ id: b.id, title: b.workingTitle, targetQuery: b.targetQuery, slug: b.slug })),
@@ -828,6 +833,7 @@ export class SeoBlogEngine {
       const brief: ArticleBrief = {
         ...(execution ? {programme:execution.provenance} : {}),
         id: slugToId.get(item.slug)!, planId, brandId, role: item.role, slug,
+        ...(formatDecisions?.find(f=>f.slug===item.slug)?{editorialFormat:{...formatDecisions.find(f=>f.slug===item.slug)!,planReceiptId:result.record.methodReceiptId}}:{}),
         workingTitle: item.working_title, targetQuery: item.target_query, searchIntent: item.search_intent,
         relatedQuestions: item.related_questions, angle: item.angle, outline: item.outline, keyPoints: item.key_points,
         cta: this.ctaFor(item, profile), internalLinks: item.internal_links.map((l) => (slugToId.has(l) ? `brief:${slugToId.get(l)}` : l)),
@@ -1020,7 +1026,7 @@ export class SeoBlogEngine {
     const linkable = await this.linkable(brandId);
     let written;
     try {
-      written = await writeArticle(await this.methodLlm(brand,profile,'blog','article:'+article.id,sources,undefined,brief.searchIntent==='buy'), { profile, brief, sources, linkable, length: brand.settings.lengthPreference });
+      written = await writeArticle(await this.methodLlm(brand,profile,'blog','article:'+article.id,sources,undefined,brief.searchIntent==='buy',brief.editorialFormat), { profile, brief, sources, linkable, length: brand.settings.lengthPreference });
     } catch (error) {
       await this.store.updateArticle({ ...article, editorialState: article.currentVersionId ? 'draft' : 'failed', failure: (error as Error).message.slice(0, 300) }).catch(() => undefined);
       throw error;
@@ -1037,7 +1043,7 @@ export class SeoBlogEngine {
       conclusion: resolveMarkers(v.conclusion, written.short),
       cta: brief.cta,
       faqs: v.faqs.map((f) => ({ q: f.q, a: resolveMarkers(f.a, written.short) })),
-      citations: sources.map((s) => ({ sourceId: s.id, url: s.url, title: s.title, retrievedAt: s.retrievedAt, passage: s.passage, public: publicIds.has(s.id) || bodyCites(v, written.short, s.id) })),
+      citations: sources.map((s) => ({ sourceId: s.id, url: s.url, title: s.title, retrievedAt: s.retrievedAt, publishedAt:s.publishedAt,observedPeriod:s.observedPeriod,confidence:s.confidence,passage: s.passage, public: publicIds.has(s.id) || bodyCites(v, written.short, s.id) })),
       image: previous?.body.image ?? { kind: 'none', url: null, alt: v.image_alt, provenance: 'No image selected yet.', width: null, height: null },
       author: brand.settings.author,
     };
@@ -1101,7 +1107,7 @@ export class SeoBlogEngine {
     if(!marker.receipt) {
       // Configuration/budget failure before a start is a labelled free fallback.
       let llm:LlmClient;
-      try { llm=await this.methodLlm(brand,profile,'social','promotion:'+input.versionId,body.citations.map(c=>({id:c.sourceId} as ResearchSource))); await this.requireBudget(brand,'model_tokens',USAGE_ESTIMATES.promotion); }
+      try { llm=await this.methodLlm(brand,profile,'social','promotion:'+input.versionId,body.citations.map(c=>({id:c.sourceId,url:c.url,title:c.title,retrievedAt:c.retrievedAt,passage:c.passage,publishedAt:c.publishedAt,observedPeriod:c.observedPeriod,confidence:c.confidence,primary:false,provider: "recorded",query: ""} as ResearchSource))); await this.requireBudget(brand,'model_tokens',USAGE_ESTIMATES.promotion); }
       catch(error) { if(!(error instanceof SeoBlogError)||error.code.startsWith('method_'))throw error; return {article,drafts:fallbackCampaignDrafts(body),generation:null}; }
       let startedHere=false;
       article=await boundary(s=>{
@@ -1178,7 +1184,7 @@ export class SeoBlogEngine {
       if (skipPromotionGeneration) throw new GenerationUnavailableError('This image-only edit retains article-text accompanying drafts; no model call was made.');
       await this.requireBudget(brand, 'model_tokens', USAGE_ESTIMATES.promotion);
       {
-        const generated = await writeArticlePromotions(await this.methodLlm(brand,profile,'social','promotion:'+versionId,body.citations.map(c=>({id:c.sourceId} as ResearchSource))), profile, body);
+        const generated = await writeArticlePromotions(await this.methodLlm(brand,profile,'social','promotion:'+versionId,body.citations.map(c=>({id:c.sourceId,url:c.url,title:c.title,retrievedAt:c.retrievedAt,passage:c.passage,publishedAt:c.publishedAt,observedPeriod:c.observedPeriod,confidence:c.confidence,primary:false,provider: "recorded",query: ""} as ResearchSource))), profile, body);
         await this.recordGeneration(brand.id, generated.record, `promotion:${article.id}:${versionId}`);
         posts = generated.value.posts; generationRecord = generated.record;
       }
@@ -1427,7 +1433,7 @@ export class SeoBlogEngine {
     const linkable = linkableUrls(inventory);
     for (const a of articles) if (a.delivery === 'published' && a.publishedUrl) linkable.add(a.publishedUrl);
     const sources = new Map((plan?.sources ?? []).map((s) => [s.id, s]));
-    for (const c of version.body.citations) if (!sources.has(c.sourceId)) sources.set(c.sourceId, { id: c.sourceId, url: c.url, title: c.title, retrievedAt: c.retrievedAt, passage: c.passage, provider: 'recorded', primary: false, query: '' });
+    for (const c of version.body.citations) if (!sources.has(c.sourceId)) sources.set(c.sourceId, { id: c.sourceId, url: c.url, title: c.title, retrievedAt: c.retrievedAt,publishedAt:c.publishedAt,observedPeriod:c.observedPeriod,confidence:c.confidence,passage: c.passage, provider: 'recorded', primary: false, query: '' });
     const others = [
       ...articles.filter((a) => a.id !== version.articleId).map((a) => ({ title: a.slug.replace(/-/g, ' '), slug: a.slug, kind: 'article' as const })),
       ...(inventory?.pages ?? []).filter((p) => p.fetchStatus === 'ok' && p.title).map((p) => ({ title: p.title!, slug: '', kind: 'page' as const })),
@@ -1607,10 +1613,26 @@ export class SeoBlogEngine {
     return { article, version, profile, brief };
   }
 
-  private async methodLlm(brand:Brand,profile:BrandProfile,stage:'planning'|'blog'|'revision'|'social',assetRef:string,sources:readonly ResearchSource[],preserveReceiptId?:string|null,copyRequested=false):Promise<LlmClient>{
+  private async methodLlm(brand:Brand,profile:BrandProfile,stage:'planning'|'blog'|'revision'|'social',assetRef:string,sources:readonly ResearchSource[],preserveReceiptId?:string|null,copyRequested=false,editorialFormat?:EditorialFormat):Promise<LlmClient>{
     const llm=this.llm();if(!this.deps.methods)return llm;
+    const visual=confirmedVisualInputs(profile,await this.store.listKnowledge(brand.id),stage==='social'?'social-post':stage==='revision'?'section':'article-hero');
+    const id=assetRef.split(':')[1]!;
+    const version=assetRef.startsWith('promotion:')?await this.store.getVersion(brand.id,id):null;
+    const article=await this.store.getArticle(brand.id,version?.articleId??id);
+    const hero=article?.heroMedia;
+    if(hero&&!(article?.mediaWithdrawals?.length)&&hero.quality&&hero.quality.contentSha256){
+      // No binary is exposed to the model. A matching canonical manifest is required below.
+      const review=article?.mediaQualityReviews?.find(r=>r.canonical?.contentSha256===hero.quality.contentSha256&&r.manifest.assetId===hero.reservation.assetId&&r.manifest.byteSha256===hero.reservation.assetSha256);
+      if(review)(visual.assets as {id:string;sha256:string;kind:'illustration'|'evidence';description:string;width?:number;height?:number}[]).push({id:review.manifest.assetId,sha256:review.manifest.byteSha256,kind:review.manifest.provenance.kind==='generated'?'illustration':'evidence',description:review.manifest.presentation.alt,width:review.manifest.width,height:review.manifest.height});
+    }
+    if(preserveReceiptId){
+      const original=await this.deps.methods.store.receipt(brand.id,preserveReceiptId);
+      const decision=(original?.sidecar?.decisions as {formatDecision?:EditorialFormat}|undefined)?.formatDecision;
+      if(decision)editorialFormat=decision;
+    }
     return this.deps.methods.prepare(llm,{brand,profile,stage,assetRef,stages:stage==='blog'?['blog','visual-brief',...(copyRequested?['copy']:[])]:stage==='social'?['social','visual-brief']:[stage],
       sources:[...sources.map(s=>s.id),...sources.map((_,i)=>'S'+(i+1))],preserveReceiptId,
+      evidence:{research:sources,visual,editorialFormat},
       baselineTokens:stage==='planning'?USAGE_ESTIMATES.plan:stage==='blog'?USAGE_ESTIMATES.article:stage==='social'?USAGE_ESTIMATES.promotion:USAGE_ESTIMATES.section});
   }
 
@@ -1618,6 +1640,27 @@ export class SeoBlogEngine {
   async assignMethods(actor:Actor,brandId:string,expectedRevision:number,pins:readonly MethodPin[]):Promise<number>{
     await this.brandFor(actor,brandId);
     if(!this.deps.methods)throw new SeoBlogError(409,'Production methods are disabled.','method_disabled');
+    return this.deps.methods.store.assign(brandId,expectedRevision,pins);
+  }
+
+  get campaignCreatorsReady():boolean{return Boolean(this.deps.creatorStore&&this.deps.methods);}
+  get productionMethodsReady():boolean{return Boolean(this.deps.methods);}
+  creators():CampaignCreator {
+    if(!this.deps.creatorStore||!this.deps.methods)throw new SeoBlogError(409,'Campaign creators are not enabled yet.');
+    return new CampaignCreator(this.deps.creatorStore,this.store,this.deps.methods,this.deps.llm);
+  }
+  async methodOverview(actor:Actor,brandId:string){
+    await this.brandFor(actor,brandId);
+    if(!this.deps.methods)return {enabled:false,assignment:null,releases:[],version:PRIVATE_RELEASE_VERSION};
+    return {enabled:true,...await this.deps.methods.store.snapshot(brandId),version:PRIVATE_RELEASE_VERSION};
+  }
+  async activateReviewedMethods(actor:Actor,brandId:string,expectedRevision:number,includeCreators:boolean):Promise<number>{
+    await this.brandFor(actor,brandId);
+    if(!this.deps.methods)throw new SeoBlogError(409,'Production methods are disabled.');
+    if(includeCreators&&!this.campaignCreatorsReady)throw new SeoBlogError(409,'Campaign creators are not enabled yet.');
+    const snapshot=await this.deps.methods.store.snapshot(brandId);
+    const pins=libraryPins(PRIVATE_RELEASE_VERSION).filter(p=>includeCreators||!['email-writing','advocacy-and-referral'].includes(p.packId));
+    resolveMethods({...snapshot,assignment:{revision:expectedRevision+1,scope:'private-owned-brands',pins}},['planning','blog','copy','social','visual-brief','email','advocacy']);
     return this.deps.methods.store.assign(brandId,expectedRevision,pins);
   }
 
@@ -1636,7 +1679,7 @@ export class SeoBlogEngine {
     // Only the target section changes; every other section is carried over byte-for-byte.
     const sections = version.body.sections.map((s, i) => (i === index ? { id: s.id, heading: result.value.heading, body: resolveMarkers(result.value.body, result.short) } : s));
     const known = new Set(version.body.citations.map((c) => c.sourceId));
-    const citations = [...version.body.citations, ...sources.filter((s) => !known.has(s.id)).map((s) => ({ sourceId: s.id, url: s.url, title: s.title, retrievedAt: s.retrievedAt, passage: s.passage, public: sections[index]!.body.includes(`[src:${s.id}]`) }))]
+    const citations = [...version.body.citations, ...sources.filter((s) => !known.has(s.id)).map((s) => ({ sourceId: s.id, url: s.url, title: s.title, retrievedAt: s.retrievedAt, publishedAt:s.publishedAt,observedPeriod:s.observedPeriod,confidence:s.confidence,passage: s.passage, public: sections[index]!.body.includes(`[src:${s.id}]`) }))]
       .map((c) => (sections[index]!.body.includes(`[src:${c.sourceId}]`) ? { ...c, public: true } : c));
     const next = await this.appendVersion(brand, article, { ...version.body, sections, citations }, 'section_regenerated', sectionId, actor.userId, result.record, profile, brief);
     await this.log(brandId, actor.userId, 'article.section', `Section “${sections[index]!.heading}” regenerated (version ${next.number}).`, articleId);

@@ -71,6 +71,10 @@ export async function callJson<T>(llm: LlmClient, input: {
       });
     } catch (error) {
       if(methodRun){
+        if(error instanceof SeoBlogError&&error.code==='method_context_limit'){
+          await methodRun.finish({mode:llm.mode==='live'?'live':'simulated',model,promptVersion:input.prompt.file,tokensIn,tokensOut},'rejected');
+          throw error;
+        }
         await methodRun.finish({mode:llm.mode==='live'?'live':'simulated',model,promptVersion:input.prompt.file,tokensIn,tokensOut},'unknown');
         throw new SeoBlogError(409,'The method generation outcome is uncertain. Review its saved receipt before another call.','method_generation_unknown');
       }
@@ -162,7 +166,7 @@ export async function writeArticleCampaignPromotions(llm: LlmClient, profile: Br
   }
 }
 
-// ─── Profile ─────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Profile â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const STR = { type: 'string' } as const;
 const STR_ARR = { type: 'array', items: STR, maxItems: 40 } as const;
@@ -210,7 +214,7 @@ export async function extractProfile(llm: LlmClient, input: {
   });
 }
 
-// ─── Planning ────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Planning â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const SLUG = { type: 'string', pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$', minLength: 3, maxLength: 80 } as const;
 
@@ -276,6 +280,11 @@ export function shortSourceIds(sources: readonly ResearchSource[]): Map<string, 
   return new Map(sources.map((s, i) => [`S${i + 1}`, s]));
 }
 
+export function researchForPrompt(short:Map<string,ResearchSource>):unknown[] {
+  return [...short].map(([id,s])=>({id,sourceId:s.id,url:s.url,title:s.title,primary:s.primary,passage:s.passage,
+    retrievedAt:s.retrievedAt,publishedAt:s.publishedAt??null,observedPeriod:s.observedPeriod??null,confidence:s.confidence??'unknown'}));
+}
+
 export function profileForPrompt(profile: BrandProfile): Record<string, unknown> {
   return {
     summary: profile.summary, audiences: profile.audiences, positioning: profile.positioning, offers: profile.offers,
@@ -304,7 +313,7 @@ export async function proposeCluster(llm: LlmClient, input: {
       `Brand: ${input.brandName}`,
       dataBlock('brand_profile', profileForPrompt(input.profile)),
       dataBlock('website_inventory', input.inventory.filter((p) => p.fetchStatus === 'ok').slice(0, 120).map((p) => ({ url: p.canonical ?? p.url, title: p.title, headings: p.headings.slice(0, 6), editorial: p.editorial }))),
-      dataBlock('research_sources', [...short].map(([id, s]) => ({ id, url: s.url, title: s.title, primary: s.primary, passage: s.passage }))),
+      dataBlock('research_sources', researchForPrompt(short)),
       dataBlock('owner_inputs', { focus: input.focus, excluded_subjects: input.excluded, source_article: input.sourceArticleUrl }),
     ].join('\n\n'),
     validate: (v) => {
@@ -326,7 +335,7 @@ export async function proposeCluster(llm: LlmClient, input: {
   });
 }
 
-// ─── Writing ─────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Writing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export const ARTICLE_SCHEMA: AnySchema = {
   type: 'object',
@@ -361,9 +370,9 @@ export interface WrittenArticle {
 }
 
 const LENGTH_HINT: Record<LengthPreference, string> = {
-  concise: 'concise — cover the question fully, about 700–1,100 words',
-  standard: 'standard — thorough but tight, about 1,100–1,800 words',
-  'in-depth': 'in-depth — comprehensive pillar treatment, about 1,800–2,800 words, only if every section earns its place',
+  concise: 'concise â€” cover the question fully, about 700â€“1,100 words',
+  standard: 'standard â€” thorough but tight, about 1,100â€“1,800 words',
+  'in-depth': 'in-depth â€” comprehensive pillar treatment, about 1,800â€“2,800 words, only if every section earns its place',
 };
 
 export function sourceMarkers(text: string): string[] {
@@ -391,8 +400,9 @@ export async function writeArticle(llm: LlmClient, input: {
         role: input.brief.role, working_title: input.brief.workingTitle, target_query: input.brief.targetQuery,
         search_intent: input.brief.searchIntent, related_questions: input.brief.relatedQuestions, angle: input.brief.angle,
         outline: input.brief.outline, key_points: input.brief.keyPoints, call_to_action: input.brief.cta,
+        editorial_format: input.brief.editorialFormat??null,
       }),
-      dataBlock('research_sources', [...short].map(([id, s]) => ({ id, url: s.url, title: s.title, primary: s.primary, passage: s.passage }))),
+      dataBlock('research_sources', researchForPrompt(short)),
       dataBlock('linkable_pages', input.linkable.slice(0, 80)),
     ].join('\n\n'),
     validate: (v) => {
@@ -426,7 +436,7 @@ export async function rewriteSection(llm: LlmClient, input: {
       dataBlock('article_outline', input.outline),
       dataBlock('section', input.section),
       dataBlock('owner_instruction', input.instruction.slice(0, 1000) || 'Improve clarity and usefulness without changing the facts.'),
-      dataBlock('research_sources', [...short].map(([id, s]) => ({ id, url: s.url, title: s.title, passage: s.passage }))),
+      dataBlock('research_sources', researchForPrompt(short)),
       dataBlock('linkable_pages', input.linkable.slice(0, 80)),
     ].join('\n\n'),
     validate: (v) => {

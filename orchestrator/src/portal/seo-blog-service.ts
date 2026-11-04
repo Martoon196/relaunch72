@@ -7,6 +7,7 @@
 import type { Pool } from 'pg';
 import { MethodController } from '../seo-blog/method-packs.js';
 import { PgMethodStore } from '../seo-blog/method-store.js';
+import { PgCampaignCreatorStore } from '../seo-blog/campaign-creator-store.js';
 import { AnthropicClient, type LlmClient } from '../llm/client.js';
 import { DataForSeoProvider } from '../keyword/dataforseo.js';
 import type { KeywordProvider } from '../keyword/types.js';
@@ -83,6 +84,7 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
         principal: { kind: 'user', userId: identity.userId, requestId, sessionToken: identity.sessionToken, selectedWorkspaceId: identity.workspaceId },
         ...(social?.prepareCampaignTarget ? { prepareCampaignTarget: (brandId, bindingId) => social.prepareCampaignTarget!(brandId, bindingId) } : {}) });
       return new SeoBlogEngine({ ...media,
+        ...(env.SEO_BLOG_METHOD_PACKS==='true'&&env.SEO_BLOG_CAMPAIGN_CREATORS==='true'?{creatorStore:new PgCampaignCreatorStore(contentCommandPool,{kind:'user',userId:identity.userId,requestId,sessionToken:identity.sessionToken,selectedWorkspaceId:identity.workspaceId})}:{}),
         ...(env.SEO_BLOG_METHOD_PACKS==='true'?{methods:new MethodController(new PgMethodStore(contentCommandPool,{kind:'user',userId:identity.userId,requestId,sessionToken:identity.sessionToken,selectedWorkspaceId:identity.workspaceId}),true)}:{}), llm: runtime.llm, search: runtime.search, keywords: runtime.keywords, transport, publishers, vault: runtime.vault,
         ...(promotionsReady && contentAdapterPool ? { promotions: createCentralPromotionApproval({ adapterPool: contentAdapterPool, commandPool: contentCommandPool, identity, requestId }) } : {}),
         ...(social ? { social } : {}) });

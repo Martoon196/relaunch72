@@ -44,7 +44,7 @@ jobs:
         run: node --import tsx scripts/rl72-boosters-pg-bootstrap.mjs
       - name: Exercise real PostgreSQL method boundaries
         working-directory: orchestrator
-        run: node --import tsx --test test/db/rl72-method-packs-pg.integration.test.ts
+        run: node --import tsx --test test/db/rl72-method-packs-pg.integration.test.ts test/db/rl72-creators-pg.integration.test.ts
       - name: Offline full suite
         env:
           RL72_METHODS_PG_TEST_URL: ''

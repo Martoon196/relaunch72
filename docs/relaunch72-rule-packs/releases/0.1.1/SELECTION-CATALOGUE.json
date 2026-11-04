@@ -1,0 +1,440 @@
+{
+  "version": "0.1.1",
+  "formats": [
+    {
+      "id": "how-to",
+      "shape": "A task in ordered actions; explain why each action matters.",
+      "requires": []
+    },
+    {
+      "id": "checklist",
+      "shape": "Observable checks grouped by the decision they support.",
+      "requires": []
+    },
+    {
+      "id": "comparison",
+      "shape": "The same criteria applied fairly to each option.",
+      "requires": []
+    },
+    {
+      "id": "decision-guide",
+      "shape": "Choose a route from constraints, trade-offs and next checks.",
+      "requires": []
+    },
+    {
+      "id": "faq",
+      "shape": "Answer distinct reader questions directly without repeating the introduction.",
+      "requires": []
+    },
+    {
+      "id": "explainer",
+      "shape": "Define the idea, show its mechanism, then its practical limits.",
+      "requires": []
+    },
+    {
+      "id": "beginner-route",
+      "shape": "A safe starting path with unfamiliar terms explained.",
+      "requires": []
+    },
+    {
+      "id": "advanced-practice",
+      "shape": "Dependencies and difficult trade-offs for an experienced reader.",
+      "requires": []
+    },
+    {
+      "id": "mistake-repair",
+      "shape": "Recognise a mistake, explain its cost in general terms and repair it.",
+      "requires": []
+    },
+    {
+      "id": "myth-check",
+      "shape": "State an assumption and distinguish what follows from what does not.",
+      "requires": []
+    },
+    {
+      "id": "glossary",
+      "shape": "A small set of useful terms with context and boundaries.",
+      "requires": []
+    },
+    {
+      "id": "single-definition",
+      "shape": "One term explained through use, counterexample and limits.",
+      "requires": []
+    },
+    {
+      "id": "process-map",
+      "shape": "Stages, responsible roles and the checks between them.",
+      "requires": []
+    },
+    {
+      "id": "preparation-guide",
+      "shape": "Inputs to collect before starting a task.",
+      "requires": []
+    },
+    {
+      "id": "troubleshooting",
+      "shape": "A symptom-to-check route that avoids pretending to diagnose.",
+      "requires": []
+    },
+    {
+      "id": "diagnostic-questions",
+      "shape": "Questions that reveal which information is still missing.",
+      "requires": []
+    },
+    {
+      "id": "risk-register",
+      "shape": "Risks, dependencies, warning signs and checks; no invented probabilities.",
+      "requires": []
+    },
+    {
+      "id": "trade-off-review",
+      "shape": "What each choice gives up as well as what it offers.",
+      "requires": []
+    },
+    {
+      "id": "criteria-guide",
+      "shape": "Turn a vague preference into observable selection criteria.",
+      "requires": []
+    },
+    {
+      "id": "buyer-questions",
+      "shape": "What to ask before buying and what an adequate answer contains.",
+      "requires": []
+    },
+    {
+      "id": "readiness-check",
+      "shape": "Conditions to meet before proceeding and reasons to wait.",
+      "requires": []
+    },
+    {
+      "id": "workflow-handoff",
+      "shape": "What the next person needs and how to check it arrived.",
+      "requires": []
+    },
+    {
+      "id": "maintenance-routine",
+      "shape": "Repeatable observations and owner-chosen review points.",
+      "requires": []
+    },
+    {
+      "id": "planning-guide",
+      "shape": "Set scope, dependencies and checkpoints without inventing dates.",
+      "requires": []
+    },
+    {
+      "id": "priorities",
+      "shape": "Rank actions by a stated qualitative reason, not fabricated scoring.",
+      "requires": []
+    },
+    {
+      "id": "scenario-walkthrough",
+      "shape": "A clearly hypothetical situation followed through its decisions.",
+      "requires": []
+    },
+    {
+      "id": "worked-example",
+      "shape": "A labelled illustration with no attributed brand result.",
+      "requires": []
+    },
+    {
+      "id": "before-after-method",
+      "shape": "Contrast two hypothetical approaches without implied performance proof.",
+      "requires": []
+    },
+    {
+      "id": "common-questions",
+      "shape": "Explain recurring decision questions without claiming survey prevalence.",
+      "requires": []
+    },
+    {
+      "id": "alternatives",
+      "shape": "Several routes and the situations where each might fit.",
+      "requires": []
+    },
+    {
+      "id": "principles",
+      "shape": "A few concrete principles, each tied to a practical decision.",
+      "requires": []
+    },
+    {
+      "id": "practical-tips",
+      "shape": "Independent useful actions with a reason and a limit.",
+      "requires": []
+    },
+    {
+      "id": "resource-map",
+      "shape": "Organise supplied verified resources by reader need.",
+      "requires": []
+    },
+    {
+      "id": "reading-path",
+      "shape": "Sequence supplied useful reading without promising an unavailable download.",
+      "requires": []
+    },
+    {
+      "id": "template-guide",
+      "shape": "Explain a proposed reusable structure, labelled as an example.",
+      "requires": []
+    },
+    {
+      "id": "question-ladder",
+      "shape": "Move from the first question to deeper checks in a useful order.",
+      "requires": []
+    },
+    {
+      "id": "counterexample",
+      "shape": "Show where a general rule stops working using a labelled illustration.",
+      "requires": []
+    },
+    {
+      "id": "constraint-first",
+      "shape": "Start with a real constraint and compare workable routes.",
+      "requires": []
+    },
+    {
+      "id": "ownership-guide",
+      "shape": "Clarify who checks, decides, records and follows up.",
+      "requires": []
+    },
+    {
+      "id": "evaluation-rubric",
+      "shape": "Propose observable criteria without predicting performance.",
+      "requires": []
+    },
+    {
+      "id": "review-agenda",
+      "shape": "A proposed agenda with the evidence needed at each step.",
+      "requires": []
+    },
+    {
+      "id": "decision-record",
+      "shape": "A clearly illustrative decision, options, reasons and remaining unknowns.",
+      "requires": []
+    },
+    {
+      "id": "research-roundup",
+      "shape": "Compare supplied findings, their dates and their limitations.",
+      "requires": [
+        "sources"
+      ]
+    },
+    {
+      "id": "evidence-review",
+      "shape": "Separate supported conclusions from unresolved questions.",
+      "requires": [
+        "sources"
+      ]
+    },
+    {
+      "id": "statistics-context",
+      "shape": "Explain the period, denominator and limits of supplied figures.",
+      "requires": [
+        "sources"
+      ]
+    },
+    {
+      "id": "change-brief",
+      "shape": "What a dated source says changed, who it affects and what to check.",
+      "requires": [
+        "sources"
+      ]
+    },
+    {
+      "id": "news-context",
+      "shape": "Explain a supplied recent event without invented developments.",
+      "requires": [
+        "sources"
+      ]
+    },
+    {
+      "id": "trend-assessment",
+      "shape": "Test a trend claim against dated sources and alternative explanations.",
+      "requires": [
+        "sources"
+      ]
+    },
+    {
+      "id": "source-comparison",
+      "shape": "Explain agreement and disagreement between supplied sources.",
+      "requires": [
+        "sources"
+      ]
+    },
+    {
+      "id": "tools-review",
+      "shape": "Compare only tool capabilities evidenced by supplied current sources.",
+      "requires": [
+        "sources"
+      ]
+    },
+    {
+      "id": "reading-digest",
+      "shape": "Summarise supplied source ideas in original language with attribution.",
+      "requires": [
+        "sources"
+      ]
+    },
+    {
+      "id": "timeline",
+      "shape": "Order only documented events and distinguish targets from completed events.",
+      "requires": [
+        "sources"
+      ]
+    },
+    {
+      "id": "case-study",
+      "shape": "Use permissioned real problem, action and outcome evidence.",
+      "requires": [
+        "customerEvidence"
+      ]
+    },
+    {
+      "id": "customer-questions",
+      "shape": "Use permissioned actual questions without invented identities.",
+      "requires": [
+        "customerEvidence"
+      ]
+    },
+    {
+      "id": "customer-story",
+      "shape": "Use approved customer words and scope of permission.",
+      "requires": [
+        "customerEvidence"
+      ]
+    },
+    {
+      "id": "expert-interview",
+      "shape": "Present supplied interview answers with accurate attribution.",
+      "requires": [
+        "interview"
+      ]
+    },
+    {
+      "id": "practitioner-profile",
+      "shape": "Use supplied biography and interview evidence without invented experience.",
+      "requires": [
+        "interview"
+      ]
+    },
+    {
+      "id": "original-study",
+      "shape": "Explain supplied dataset, method, period and limitations.",
+      "requires": [
+        "originalData"
+      ]
+    },
+    {
+      "id": "experiment-report",
+      "shape": "Report a supplied actual experiment without fabricated measurements.",
+      "requires": [
+        "originalData"
+      ]
+    },
+    {
+      "id": "behind-the-scenes",
+      "shape": "Explain a documented process using approved real material.",
+      "requires": [
+        "verifiedAssets"
+      ]
+    },
+    {
+      "id": "project-update",
+      "shape": "Separate documented completed work, current state and future targets.",
+      "requires": [
+        "verifiedAssets"
+      ]
+    }
+  ],
+  "hooks": [
+    {
+      "id": "reader-question",
+      "use": "Open with the decision the reader is trying to make."
+    },
+    {
+      "id": "visible-symptom",
+      "use": "Name an observable situation, without inventing its prevalence."
+    },
+    {
+      "id": "missed-condition",
+      "use": "State a condition that changes the advice."
+    },
+    {
+      "id": "useful-contrast",
+      "use": "Compare two plausible approaches without a false dichotomy."
+    },
+    {
+      "id": "small-first-step",
+      "use": "Offer one action the reader can inspect immediately."
+    },
+    {
+      "id": "common-assumption",
+      "use": "Test an assumption with the supplied evidence."
+    },
+    {
+      "id": "constraint",
+      "use": "Start from the time, resource or information constraint in the brief."
+    },
+    {
+      "id": "decision-fork",
+      "use": "Name the criterion that separates two sensible choices."
+    },
+    {
+      "id": "mechanism",
+      "use": "Explain the cause before promising any benefit."
+    },
+    {
+      "id": "hypothetical-scene",
+      "use": "Clearly label a situation as an illustration."
+    },
+    {
+      "id": "evidence-finding",
+      "use": "Lead with a dated supplied finding, including its limits."
+    },
+    {
+      "id": "objection",
+      "use": "Answer a genuine objection from the brief rather than inventing a customer quote."
+    },
+    {
+      "id": "check-before-action",
+      "use": "Name what must be checked before proceeding."
+    },
+    {
+      "id": "honest-invitation",
+      "use": "Ask for a relevant next step without false urgency."
+    }
+  ],
+  "structures": [
+    {
+      "id": "recognise-explain-act",
+      "use": "An unfamiliar problem: recognise the situation, explain the mechanism, give one next step."
+    },
+    {
+      "id": "criteria-options-choice",
+      "use": "A comparing reader: establish criteria, compare fairly, state who each option fits."
+    },
+    {
+      "id": "question-answer-proof",
+      "use": "A focused objection: answer it, show supplied proof, state remaining limits."
+    },
+    {
+      "id": "outcome-mechanism-boundary",
+      "use": "A solution-aware reader: desired outcome, actual mechanism, conditions and next step."
+    },
+    {
+      "id": "offer-fit-terms-action",
+      "use": "An offer-aware reader: who it fits, exact supplied inclusions and terms, one action."
+    },
+    {
+      "id": "action-reassurance",
+      "use": "A ready reader: clear action, verified process, proportionate reassurance."
+    },
+    {
+      "id": "situation-check-route",
+      "use": "An uncertain reader: situation, evidence to collect, suitable next route."
+    },
+    {
+      "id": "lesson-application-invitation",
+      "use": "A learning reader: useful lesson, practical application, optional relevant invitation."
+    }
+  ]
+}

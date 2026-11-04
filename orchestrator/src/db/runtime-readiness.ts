@@ -1,4 +1,5 @@
 import type { Pool, QueryResultRow } from 'pg';
+import { methodSchemaBridgeAllowed } from './method-schema-bridge.js';
 import {
   DEFAULT_MIGRATIONS_DIR,
   discoverMigrations,
@@ -55,6 +56,7 @@ const SEO_BLOG_MEDIA_CHECKSUM: string | null = 'ff85dc3ee825e2529333fc8efb0de070
 export async function assertRuntimeSchemaCurrent(
   pool: Pick<Pool, 'query'>,
   migrationsDir: string = DEFAULT_MIGRATIONS_DIR,
+  env:NodeJS.ProcessEnv=process.env,
 ): Promise<void> {
   const migrations = await discoverMigrations(migrationsDir);
   const result = await pool.query<RuntimeMigrationRow>(
@@ -235,6 +237,7 @@ export async function assertRuntimeSchemaCurrent(
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
+  if(methodSchemaBridgeAllowed(migrations,applied,env))return;
   // 0123 only revokes an unintended PUBLIC execute grant on an internal SMS
   // receipt trigger. The production ACL was repaired before this source was
   // published; allow that exact 0122 ledger during the additive cutover.

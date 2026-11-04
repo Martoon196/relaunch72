@@ -219,6 +219,9 @@ export interface WebsiteInventory {
 // ─── Research ────────────────────────────────────────────────────────────────
 
 export interface ResearchSource {
+  readonly publishedAt?: IsoInstant | null;
+  readonly observedPeriod?: string | null;
+  readonly confidence?: 'high' | 'medium' | 'low' | 'unknown';
   readonly id: string;
   readonly url: string;
   readonly title: string;
@@ -258,6 +261,7 @@ export interface DuplicateAssessment {
 export type BriefStatus = 'planned' | 'postponed' | 'omitted' | 'accepted' | 'generating' | 'generated' | 'skipped';
 
 export interface ArticleBrief {
+  readonly editorialFormat?: import('./method-evidence.js').EditorialFormat;
   readonly programme?: ProgrammeProvenance;
   readonly id: string;
   readonly planId: string;
@@ -321,6 +325,9 @@ export interface ArticleSection {
 }
 
 export interface ArticleSourceCitation {
+  readonly publishedAt?: IsoInstant | null;
+  readonly observedPeriod?: string | null;
+  readonly confidence?: 'high' | 'medium' | 'low' | 'unknown';
   readonly sourceId: string;
   readonly url: string;
   readonly title: string;
