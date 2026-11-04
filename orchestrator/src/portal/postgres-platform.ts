@@ -4,6 +4,7 @@ import { SeoBlogCredentialVault } from '../seo-blog/vault.js';
 import { PgSeoBlogReleasedMediaReader } from '../seo-blog/media-store.js';
 import { createHash } from 'node:crypto';
 import { createPortalFollowupFlowService, type PortalFollowupFlowService } from './followup-flow-service.js';
+import {BookingService} from '../booking/service.js';
 import { InvestorService } from './investor-service.js';
 import { InvestorMailService } from './investor-mail-service.js';
 import { InvestorMailVault } from '../investor-mail/vault.js';
@@ -190,6 +191,7 @@ export interface PgPortalPlatform {
   financeDrafts: FinanceDraftsService;
   investors: InvestorService;
   investorMail: InvestorMailService;
+  booking: BookingService;
   journeys: PgPortalJourneyManagerService;
   /** RLS-scoped authoritative operator queue with assignment/snooze overlays only. */
   operatorActions: PgPortalOperatorActionCentreService;
@@ -1298,6 +1300,8 @@ export async function buildPgPortalPlatform(
       // An optional founder read bridge must never unmount the customer portal.
       console.warn('Group HQ CRM read bridge is unavailable; Property Predator portal remains mounted.');
     }
+    const mailVault=investorMailVault(env),mailOAuth=investorOAuthConfig(env);
+    const memberMail=new InvestorMailService(webPool,identityPool,mailVault,mailOAuth,env.INVESTOR_MAIL_DELIVERY_ENABLED==='true');
     let closed = false;
     return {
       groupHqCrm,
@@ -1311,7 +1315,8 @@ export async function buildPgPortalPlatform(
       }),
       financeDrafts: createPgFinanceDraftsService({ webPool, commandPool, secret: env.SESSION_SECRET?.trim() ?? '' }),
       investors: new InvestorService(webPool, identityPool, commandPool),
-      investorMail: new InvestorMailService(webPool,identityPool,investorMailVault(env),investorOAuthConfig(env),env.INVESTOR_MAIL_DELIVERY_ENABLED==='true'),
+      investorMail: memberMail,
+      booking: new BookingService(webPool,identityPool,mailVault,mailOAuth,memberMail,false),
       journeys: createPgPortalJourneyManagerService({ webPool, commandPool }),
       operatorActions: createPgPortalOperatorActionCentreService({
         webPool,

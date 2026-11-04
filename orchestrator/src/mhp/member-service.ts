@@ -58,7 +58,8 @@ export function authorizeMhpMemberRoute(access: MhpMemberAccess, request: { meth
   if ((path === '/portal/mhp-crm.js' && (method === 'GET' || method === 'HEAD'))
       || path === '/portal' || path === '/portal/investors' || path === '/portal/investors/client.js'
       || /^\/portal\/investors\/(branding|requirements|site|site-preview|switch|create|access)$/.test(path)
-      || crmRoute.test(path)) return { allowed: true };
+        || /^\/portal\/calendar(?:\/(setup|connect|hours|type|duplicate|archive|meeting|change))?$/.test(path)
+        || crmRoute.test(path)) return { allowed: true };
   return deny('This page is not part of your Martin Howard Property workspace.', 404);
 }
 

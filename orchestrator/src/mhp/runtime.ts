@@ -1,3 +1,4 @@
+import {BookingService} from '../booking/service.js';
 import type { Pool } from 'pg';
 import Stripe from 'stripe';
 import { loadDatabaseConfig } from '../db/config.js';
@@ -39,6 +40,7 @@ export interface MhpRuntime {
   members: PgMhpMemberService;
   investors: MhpInvestorService;
   investorMail: InvestorMailService;
+  booking: BookingService;
   commerce: PgMhpCommerceService;
   hq: PgMhpHqService;
   desk: PgMhpDeskService;
@@ -166,15 +168,16 @@ export async function buildMhpRuntime(input: {
   }
   const oauthApp = (prefix: string) => env[`${prefix}_CLIENT_ID`] && env[`${prefix}_CLIENT_SECRET`]
     ? { clientId: env[`${prefix}_CLIENT_ID`]!, clientSecret: env[`${prefix}_CLIENT_SECRET`]! } : undefined;
+  const mailVault=vaultKey?new InvestorMailVault(vaultKey):undefined;
+  const mailOAuth={redirectUri:'https://app.martinhowardproperty.co.uk/portal/investors/mail/callback',google:oauthApp('MHP_INVESTOR_GOOGLE'),microsoft:oauthApp('MHP_INVESTOR_MICROSOFT')};
+  const memberMail=new InvestorMailService(webPool,identityPool,mailVault,mailOAuth,env.MHP_INVESTOR_MAIL_DELIVERY_ENABLED==='true');
   return {
     auth: new PgMhpAuthService({ readPool: webPool, commandPool: identityPool }),
     mail,
     members: new PgMhpMemberService(webPool),
     investors: new MhpInvestorService(webPool, identityPool, commandPool),
-    investorMail: new InvestorMailService(webPool, identityPool, vaultKey ? new InvestorMailVault(vaultKey) : undefined, {
-      redirectUri: 'https://app.martinhowardproperty.co.uk/portal/investors/mail/callback',
-      google: oauthApp('MHP_INVESTOR_GOOGLE'), microsoft: oauthApp('MHP_INVESTOR_MICROSOFT'),
-    }, env.MHP_INVESTOR_MAIL_DELIVERY_ENABLED === 'true'),
+    investorMail: memberMail,
+    booking: new BookingService(webPool,identityPool,mailVault,mailOAuth,memberMail,true),
     commerce,
     hq: new PgMhpHqService(webPool, identityPool),
     desk: new PgMhpDeskService(webPool, identityPool),

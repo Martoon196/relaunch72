@@ -1,3 +1,4 @@
+import { hidden,field,area } from './form-fields.js';
 import { appShell, escapeHtml as e } from './ui.js';
 import type { PlatformCapability } from '../platform/capabilities.js';
 import { MARTIN_HOWARD_PROPERTY_PROFILE, RELAUNCH72_PRODUCT_PROFILE, type PortalProductProfile } from './product-profile.js';
@@ -8,9 +9,6 @@ import type { InvestorMailView } from './investor-mail-service.js';
 import { investorMailSettings } from './investor-mail-view.js';
 import { INVESTOR_ROUTE as route, INVESTOR_TEMPLATES, investorCommandKey, renderInvestorTemplate, type InvestorProgramme, type InvestorBusiness, type InvestorRequirements } from './investor-service.js';
 
-const hidden = (name:string,value:unknown) => `<input type="hidden" name="${name}" value="${e(value)}">`;
-const field = (label:string,name:string,value='',type='text',maximum=200) => `<label class="iv-field">${e(label)}<input name="${name}" type="${type}" value="${e(value)}" maxlength="${maximum}"${type==='email'?' autocomplete="email"':''}></label>`;
-const area = (label:string,name:string,value='',maximum=1000) => `<label class="iv-field">${e(label)}<textarea name="${name}" rows="4" maxlength="${maximum}">${e(value)}</textarea></label>`;
 const form = (action:string,csrf:string,body:string) => `<form method="post" action="${route}/${action}">${hidden('_csrf',csrf)}${body}</form>`;
 const states: Record<string,string> = {test:'Your test business',pending_payment:'Awaiting payment confirmation',active:'Access active',suspended:'Access suspended'};
 const css = `<style>.iv-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:18px}.iv-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;margin:16px 0;min-width:0}.iv-card h2,.iv-card h3{margin:0 0 12px}.iv-card p{overflow-wrap:anywhere}.iv-field{display:grid;gap:6px;margin:12px 0;font-weight:600}.iv-field input,.iv-field textarea,.iv-field select{font:inherit;font-weight:400;padding:10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--panel);color:var(--ink);width:100%;min-height:44px}.iv-field textarea{resize:vertical}.iv-actions{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}.iv-tag{display:inline-block;padding:5px 10px;border-radius:20px;background:var(--panel-subtle);font-size:.85rem}.iv-card summary{cursor:pointer;min-height:44px;font-weight:600}.iv-template{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}.iv-check{display:flex;align-items:flex-start;gap:10px;margin:12px 0}.iv-check input{margin-top:5px}.iv-heading{border-left:5px solid var(--accent);padding-left:16px}.iv-links{display:flex;gap:14px;flex-wrap:wrap;margin:16px 0}@media(max-width:480px){.iv-card{padding:16px}}.iv-links a.iv-email-cta,.button.iv-email-cta{background:#e8a33d;color:#142019;border-color:#e8a33d;font-size:17px}.iv-email-cta:hover{filter:brightness(.96)}.iv-email-cta:focus-visible{outline:3px solid #142019;outline-offset:3px}</style>`;

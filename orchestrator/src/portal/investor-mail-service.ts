@@ -4,10 +4,10 @@ import { createPgPortalCrmPrincipalResolver } from './crm-pg-service.js';
 import type { PortalCrmRequestIdentity } from './crm-service.js';
 import { InvestorError,investorUuid } from './investor-service.js';
 import { InvestorMailVault } from '../investor-mail/vault.js';
-import { mailboxAddress,type CustomMailbox,type MailboxCredentials,type ApprovedInvestorMail,type InvestorMailboxTransport } from '../investor-mail/contracts.js';
+import { mailboxAddress,type CustomMailbox,type MailboxCredentials,type OAuthMailbox,type ApprovedInvestorMail,type InvestorMailboxTransport } from '../investor-mail/contracts.js';
 import { CustomMailboxTransport,validateCustomMailbox } from '../investor-mail/custom-mailbox.js';
 import { OAuthMailboxTransport } from '../investor-mail/oauth-mailbox.js';
-import { mailAuthorizationUrl,exchangeMailCode,refreshMailTokens,type MailOAuthConfig } from '../investor-mail/oauth.js';
+import { mailAuthorizationUrl,exchangeMailCode,refreshMailTokens,hasCalendarAccess,type ConnectionPurpose,type MailOAuthConfig } from '../investor-mail/oauth.js';
 export interface InvestorMailSnapshot {provider:'google'|'microsoft'|'smtp';address:string;status:'pending'|'verified'|'paused';version:number;verifiedAt:string|null;settings:Record<string,string|number>}
 export interface InvestorMailView {account:InvestorMailSnapshot|null;customAvailable:boolean;googleAvailable:boolean;microsoftAvailable:boolean;deliveryEnabled:boolean}
 export interface InvestorEmailItem {id:string;subject:string;contactName:string;to:string;direction:string;state:string;createdAt:string;preview:string}
@@ -115,19 +115,26 @@ export class InvestorMailService {
     if(!/^\d+$/.test(version))throw new InvestorError(400,'Refresh before disconnecting.');
     await this.commandPool.query('SELECT app_private.disconnect_investor_mail($1,$2)',[hash(identity.sessionToken),Number(version)]);
   }
-  async beginOAuth(identity:PortalCrmRequestIdentity,provider:string):Promise<string> {
+  async beginOAuth(identity:PortalCrmRequestIdentity,provider:string,purpose:ConnectionPurpose='mail',calendarVersion?:number):Promise<string> {
     if(!['google','microsoft'].includes(provider)||!this.oauth)throw new InvestorError(503,'This email provider needs platform setup first.');
     const selected=provider as 'google'|'microsoft',state=randomBytes(32).toString('base64url'),verifier=randomBytes(32).toString('base64url'),ws=await this.workspace(identity);
-    const url=mailAuthorizationUrl(this.oauth,selected,state,verifier);
-    await this.commandPool.query('SELECT app_private.begin_investor_oauth($1,$2,$3,$4)',[hash(identity.sessionToken),hash(state),selected,this.key().sealValue(ws,{verifier},'oauth')]);return url;
+    const url=mailAuthorizationUrl(this.oauth,selected,state,verifier,purpose);
+    if(purpose==='calendar'&&(!Number.isSafeInteger(calendarVersion)||calendarVersion!<1))throw new InvestorError(400,'Save working hours before connecting your calendar.');
+    await this.commandPool.query('SELECT app_private.begin_investor_oauth($1,$2,$3,$4)',[hash(identity.sessionToken),hash(state),selected,this.key().sealValue(ws,{verifier,purpose,...(purpose==='calendar'?{calendarVersion}:{})},'oauth')]);return url;
   }
-  async finishOAuth(identity:PortalCrmRequestIdentity,state:string,code:string,displayName:string):Promise<void> {
+  async finishOAuth(identity:PortalCrmRequestIdentity,state:string,code:string,displayName:string):Promise<{purpose:'mail'}|{purpose:'calendar';credentials:OAuthMailbox;version:number}> {
     if(!/^[A-Za-z0-9_-]{43}$/.test(state)||!this.oauth)throw new InvestorError(400,'Email authorisation expired. Start again.');
     const result=await this.commandPool.query<{attempt:{provider:'google'|'microsoft';sealed:string;version:number}}>('SELECT app_private.consume_investor_oauth($1,$2) AS attempt',[hash(identity.sessionToken),hash(state)]);
     const attempt=result.rows[0]?.attempt;if(!attempt)throw new InvestorError(400,'Email authorisation expired. Start again.');
-    const payload=this.key().openValue(await this.workspace(identity),attempt.sealed,'oauth') as {verifier:string};
-    const credentials=await exchangeMailCode(this.oauth,attempt.provider,code,payload.verifier,displayName);
+    const payload=this.key().openValue(await this.workspace(identity),attempt.sealed,'oauth') as {verifier:string;purpose?:ConnectionPurpose;calendarVersion?:number};
+    const credentials=await exchangeMailCode(this.oauth,attempt.provider,code,payload.verifier,displayName,fetch,payload.purpose);
+    if(payload.purpose==='calendar'&&!hasCalendarAccess(credentials))throw new InvestorError(400,'Calendar permission was not granted. Your existing mailbox has not been changed. Please connect again and approve calendar access.');
+    if(payload.purpose==='calendar'){
+      if(!Number.isSafeInteger(payload.calendarVersion)||payload.calendarVersion!<1)throw new InvestorError(400,'Calendar connection expired. Start again.');
+      return {purpose:'calendar',credentials,version:payload.calendarVersion!};
+    }
     const version=await this.save(identity,Number(attempt.version),credentials);
     await this.commandPool.query('SELECT app_private.verify_investor_mail_connection($1,$2,$3)',[hash(identity.sessionToken),version,credentials.address]);
+    return {purpose:'mail'};
   }
 }

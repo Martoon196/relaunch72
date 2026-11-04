@@ -649,6 +649,7 @@ async function main(): Promise<void> {
         financeDrafts: postgresPortal.financeDrafts,
         investors: postgresPortal.investors,
         investorMail: postgresPortal.investorMail,
+        booking: postgresPortal.booking,
         portalBaseUrl,
         journeys: postgresPortal.journeys,
         operatorActions: postgresPortal.operatorActions,
@@ -914,7 +915,7 @@ async function main(): Promise<void> {
           sessionSecret: cfg.sessionSecret, secure: true, telemetry: SERVICE_TELEMETRY,
           auth: runtime.auth, abuse: postgresPortal.abuse,
           abuseHashSecret: portalAbuseRuntime.hashSecret, requestContext: portal.requestContext!,
-          crm: postgresPortal.crm, investors: runtime.investors, investorMail: runtime.investorMail,
+          crm: postgresPortal.crm, investors: runtime.investors, investorMail: runtime.investorMail, booking: runtime.booking,
           portalBaseUrl: MHP_AUTH_ORIGIN, productProfile: MARTIN_HOWARD_PROPERTY_PROFILE,
         });
         mhpPortal.sessionCookieName = MHP_SESSION_COOKIE;

@@ -7,7 +7,7 @@ export class InvestorMailVault {
   seal(workspaceId:string,credentials:MailboxCredentials):string {
     return this.sealValue(workspaceId,credentials,'mailbox');
   }
-  sealValue(workspaceId:string,value:unknown,purpose:'mailbox'|'oauth'):string {
+  sealValue(workspaceId:string,value:unknown,purpose:'mailbox'|'oauth'|'calendar'):string {
     const nonce=randomBytes(12),cipher=createCipheriv('aes-256-gcm',this.#key,nonce);
     cipher.setAAD(Buffer.from(`investor-mail:v1:${purpose}:${workspaceId}`));
     const body=Buffer.concat([cipher.update(JSON.stringify(value),'utf8'),cipher.final()]);
@@ -16,7 +16,7 @@ export class InvestorMailVault {
   open(workspaceId:string,sealed:string):MailboxCredentials {
     return this.openValue(workspaceId,sealed,'mailbox') as MailboxCredentials;
   }
-  openValue(workspaceId:string,sealed:string,purpose:'mailbox'|'oauth'):unknown {
+  openValue(workspaceId:string,sealed:string,purpose:'mailbox'|'oauth'|'calendar'):unknown {
     try {
       const bytes=Buffer.from(sealed,'base64');
       if(bytes[0]!==1||bytes.length<30||bytes.length>24_000)throw new Error();

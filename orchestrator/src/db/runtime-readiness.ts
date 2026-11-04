@@ -46,6 +46,8 @@ const MHP_WEBINAR_APPLICATIONS_MIGRATION = '0136_mhp_webinar_applications.sql';
 const MHP_WEBINAR_APPLICATIONS_CHECKSUM = '9bf6605cdc536794fae989964542eb8253cdd49ebd995d3e6dd346c01c746139';
 const SEO_BLOG_MEDIA_MIGRATION = '0137_seo_blog_media_storage.sql';
 const SEO_BLOG_MEDIA_CHECKSUM: string | null = 'ff85dc3ee825e2529333fc8efb0de070a05e43786717d9ae279aa469e41e1255';
+const BOOKING_MIGRATION = '0138_growth_hq_bookings.sql';
+const BOOKING_CHECKSUM = '5ecc75d3f1f40915e06e20b9004d28bfa209bed52914a7cd04d60e4d10feede6';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -232,6 +234,15 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(MHP_WEBINAR_APPLICATIONS_MIGRATION) === MHP_WEBINAR_APPLICATIONS_CHECKSUM
       && applied.get(SEO_BLOG_MEDIA_MIGRATION) === SEO_BLOG_MEDIA_CHECKSUM) {
     applied.delete(SEO_BLOG_MEDIA_MIGRATION);
+  }
+  // Exact137 bridge/recovery supports this additive booking schema only. The
+  // capable138 runtime stays strict; no earlier gap or unknown tail is hidden.
+  if(migrations.length===137
+      && migrations[136]?.filename===SEO_BLOG_MEDIA_MIGRATION
+      && migrations[136]?.checksum===SEO_BLOG_MEDIA_CHECKSUM
+      && applied.get(SEO_BLOG_MEDIA_MIGRATION)===SEO_BLOG_MEDIA_CHECKSUM
+      && applied.get(BOOKING_MIGRATION)===BOOKING_CHECKSUM) {
+    applied.delete(BOOKING_MIGRATION);
   }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));

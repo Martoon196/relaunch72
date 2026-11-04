@@ -9,6 +9,7 @@
  *   POST /api/subscribe        — capture a lead (scorecard) into the Brevo nurture list
  */
 
+import {handlePublicBooking} from '../booking/router.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -360,6 +361,13 @@ export function createApp(deps: AppDeps) {
       return;
     }
 
+    if(url.pathname.startsWith('/book/')) {
+      if(deps.portal?.kind!=='postgres'||!deps.portal.booking){send(res,404,{error:'not found'});return;}
+      if(activePortalRequests>=portalMaxConcurrentRequests){sendPortalRuntimeStatus(res,429);return;}
+      activePortalRequests++;
+      try{await handlePublicBooking(req,res,deps.portal.booking,deps.portal.sessionSecret);}finally{activePortalRequests--;}
+      return;
+    }
     if (url.pathname.startsWith(INVESTOR_SITES_ROUTE+'/')) {
       if(deps.portal?.kind!=='postgres'||!deps.portal.investors){send(res,404,{error:'not found'});return;}
       if(activePortalRequests>=portalMaxConcurrentRequests){sendPortalRuntimeStatus(res,429);return;}

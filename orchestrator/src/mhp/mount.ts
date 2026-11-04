@@ -1,3 +1,4 @@
+import {handlePublicBooking} from '../booking/router.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { handlePortal, type PostgresPortalDeps } from '../portal/router.js';
 import { portalCsrfToken, verifyPortalCsrf } from '../portal/session.js';
@@ -112,6 +113,7 @@ export function createMhpMount(deps: MhpMountDependencies) {
         }
         return;
       }
+      if(path.startsWith('/book/')&&portal.booking){await handlePublicBooking(req,res,portal.booking,portal.sessionSecret);return;}
       if (path.startsWith(`${INVESTOR_SITES_ROUTE}/`) && portal.investors) {
         await handleInvestorPublicSite(req, res, portal.investors, portal.sessionSecret); return;
       }
