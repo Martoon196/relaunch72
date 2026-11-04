@@ -1,0 +1,185 @@
+{
+  "schemaVersion": 1,
+  "version": "0.1.0",
+  "status": "draft",
+  "intendedScope": "private-owned-brands",
+  "packId": "audience-resonance",
+  "summary": "How to pressure-test a draft against a panel of configurable reader personas drawn from the brand pack before an owner reviews it: each persona reads the draft with its own question, the panel scores fixed inspectable dimensions, disagreements between personas are diagnosed, and the result is a short list of exact rewrite directives; the scores guide revision and are never evidence that the copy is true or will convert.",
+  "supportedStages": [
+    "review",
+    "revision"
+  ],
+  "dependencies": [
+    {
+      "packId": "production-core",
+      "version": "0.1.0"
+    }
+  ],
+  "requiredInputs": [
+    {
+      "key": "draftUnderTest",
+      "purpose": "The exact draft (any stage output) being tested.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "readerPersonas",
+      "purpose": "Two to four personas from the brand pack, each with situation, main question, constraints and recorded voice-of-customer phrases; defaults are not supplied by the method.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "personaWeights",
+      "purpose": "Owner-set relative importance of each persona for this task.",
+      "missingBehaviour": "use-explicit-task-default"
+    },
+    {
+      "key": "verifiedFacts",
+      "purpose": "So directives never recommend adding an unsupported claim.",
+      "missingBehaviour": "omit-affected-claim"
+    }
+  ],
+  "decisionSteps": [
+    {
+      "id": "resonance.read-as-each-persona",
+      "instruction": "For each persona, read the draft once asking only that persona's main question (for example 'will this work for someone starting out?', 'will this cost me more time than it saves?', 'will this hold up as we grow?'). Record the first sentence where the persona would stop reading, if any, and why.",
+      "produces": [
+        "personaReadings"
+      ]
+    },
+    {
+      "id": "resonance.score-dimensions",
+      "instruction": "Score five dimensions 1 to 5 per persona: Clarity (can they say what is offered in one sentence), Relevance (does it speak to their situation), Credibility (is every claim supported or mechanism-explained), Effort (does acting sound achievable for them), Distinctiveness (could they tell this from an ordinary alternative). Each score quotes the draft element behind it.",
+      "produces": [
+        "dimensionScores"
+      ]
+    },
+    {
+      "id": "resonance.weight-and-compare",
+      "instruction": "Combine scores using personaWeights (equal when absent). Where two personas differ by more than two points on a dimension, diagnose the element causing the split (usually sophistication versus accessibility, or promise versus proof) and state it.",
+      "produces": [
+        "weightedScores",
+        "splits"
+      ]
+    },
+    {
+      "id": "resonance.write-directives",
+      "instruction": "Write at most five rewrite directives. Each names the dimension and persona, quotes the weak element verbatim, gives the exact replacement instruction, and states why; a directive may never recommend adding a claim, figure or proof that verifiedFacts do not support.",
+      "produces": [
+        "directives"
+      ]
+    },
+    {
+      "id": "resonance.handoff",
+      "instruction": "Hand the directives to the originating pack's revision pass within that pack's revision budget. The panel result never approves, publishes or replaces owner review.",
+      "produces": [
+        "handoffPacket"
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "resonance.personas-from-brand-pack",
+      "instruction": "Personas, their questions and voice-of-customer phrases come only from the brand pack. The method ships no default personas and never invents a quote; a reaction with no recorded phrase behind it is marked as an assumption and weighted lower.",
+      "appliesWhen": "Always.",
+      "check": "Each persona cites brand-pack fields; assumptions labelled."
+    },
+    {
+      "id": "resonance.scores-are-not-evidence",
+      "instruction": "Panel scores are a revision aid. They never appear in customer-facing output, receipts or claims as evidence of truth, quality or expected conversion, and no deploy/do-not-deploy verdict is issued from them.",
+      "appliesWhen": "Always.",
+      "check": "No verdict language; scores confined to the sidecar."
+    },
+    {
+      "id": "resonance.quote-the-element",
+      "instruction": "Every score and directive quotes the draft element it concerns.",
+      "appliesWhen": "Always.",
+      "check": "Quotes present and found verbatim in the draft."
+    },
+    {
+      "id": "resonance.no-unsupported-fixes",
+      "instruction": "Directives improve clarity, relevance, effort and distinctiveness with facts already available; credibility directives may only ask to cite, remove or explain, never to add proof.",
+      "appliesWhen": "Writing directives.",
+      "check": "No directive introduces a claim absent from verified facts."
+    },
+    {
+      "id": "resonance.bounded",
+      "instruction": "At most four personas, five dimensions and five directives; one panel pass per revision pass of the originating pack.",
+      "appliesWhen": "Always.",
+      "check": "Counts within limits."
+    }
+  ],
+  "internalReceiptFields": [
+    "personaReadings",
+    "dimensionScores",
+    "weightedScores",
+    "splits",
+    "directives",
+    "assumptions",
+    "handoffPacket"
+  ],
+  "qualityChecks": [
+    {
+      "id": "resonance.check-sources",
+      "criterion": "Personas and phrases trace to the brand pack; assumptions labelled.",
+      "passingEvidence": "Field references listed.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "resonance.check-quotes",
+      "criterion": "All scores and directives quote the draft.",
+      "passingEvidence": "Quote audit recorded.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "resonance.check-no-added-claims",
+      "criterion": "No directive adds unsupported claims.",
+      "passingEvidence": "Directive/fact reconciliation.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "resonance.check-no-verdict",
+      "criterion": "No deploy verdict or performance prediction.",
+      "passingEvidence": "Language scan recorded clear.",
+      "failureAction": "block-task"
+    }
+  ],
+  "revisionPolicy": {
+    "maxRevisionPasses": 0,
+    "stopWhen": "Directives are written; this pack does not revise itself.",
+    "onExhaustion": "save-held-draft-with-findings"
+  },
+  "outputContract": {
+    "respectExistingStageSchema": true,
+    "customerFacing": "Nothing customer-facing; the panel result is an internal review attached to the draft under test.",
+    "internalSidecar": "Persona readings, dimension scores with quotes, weighted scores, splits, assumptions and directives.",
+    "providerEffects": false
+  },
+  "examples": [
+    {
+      "fictionalBrand": "Fictional home-maintenance business (illustrative name: Bramble Home Care; every fact below is invented for illustration)",
+      "inputScenario": "Draft: a landing section for the maintenance plan. Personas from the brand pack: a first-time landlord ('will this be worth it for one flat?') and a portfolio landlord ('will this scale to twelve properties?'), with recorded phrases.",
+      "expectedBehaviour": "Readings note the first-time landlord stops at 'portfolio-grade cover'; scores quote it. Split on Relevance diagnosed as sophistication versus accessibility. Directive: replace that phrase with 'cover for one flat or many' because the first-time persona's phrase 'I only have the one place' is recorded. No verdict, no predicted uplift.",
+      "forbiddenBehaviour": "Adding a persona the brand pack lacks, 'deploy as is', or directing 'add a statistic about repair costs'."
+    },
+    {
+      "fictionalBrand": "Fictional B2B scheduling business (illustrative name: Slotwise; every fact below is invented for illustration)",
+      "inputScenario": "Draft: an ad for the trial. Personas: solo practitioner, clinic manager, multi-site operator; weights favour the manager.",
+      "expectedBehaviour": "Dimension scores per persona with quotes; weighted result; a split on Effort between solo and multi-site diagnosed; directives that clarify setup effort using the verified 'calendar sync' fact only.",
+      "forbiddenBehaviour": "A conversion forecast, a quote invented for the operator persona, or more than five directives."
+    }
+  ],
+  "provenance": {
+    "authoringNote": "Draft authored 3 November 2026. Requires the proposed schema extension (packId audience-resonance, stage review). Not approved or installable.",
+    "originalityNotes": "Original design: the five dimensions (Clarity, Relevance, Credibility, Effort, Distinctiveness), the stop-reading reading, the split threshold and the no-added-proof directive rule were written for this platform; personas ship only from the brand pack. Reader-panel testing of copy is common practice; no third-party formula, weights, default personas, benchmarks or verdict scale were reused.",
+    "privateSourceReferences": [
+      "Private reference only (job coverage, no text reused): DigitalMarketer AI Workspace Claude plugin v2.0.0 (author DigitalMarketer) and DigitalMarketer Synthetic Audience Lab plugin v1.0.0, installed in the owner's Claude workspace; see AUTHORING-NOTES.txt section 1.",
+      "Not consulted: the owner's separately held original training corpus and newer operating manual were not supplied to the authoring session."
+    ],
+    "unresolvedCommercialUseQuestions": [
+      "The DigitalMarketer plugins state that their tools are proprietary to Lab members. These packs reuse none of their text, names, frameworks or templates, but coverage of the same jobs was informed by reading them; a recorded commercial-use review must confirm that original method packs covering those jobs may be sold before any public release.",
+      "The owner's private training corpus and newer manual were not available during authoring; rules the owner expects from them must be checked before private-use approval.",
+      "Private-use approval for Martin-owned brands has not been recorded; this file cannot supply it.",
+      "Public commercial release approval is a separate recorded decision and is not established by this draft.",
+      "Which packs are included versus sold as upgrades, per-brand versus workspace-wide access, and pricing remain undecided."
+    ]
+  }
+}

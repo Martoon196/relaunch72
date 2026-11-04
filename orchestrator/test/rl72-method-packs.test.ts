@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { REPO_ROOT } from '../src/paths.js';
-import { MethodController,libraryPins,loadMethod,resolveMethods,methodHash } from '../src/seo-blog/method-packs.js';
+import { MethodController,MethodRun,libraryPins,loadMethod,resolveMethods,methodHash } from '../src/seo-blog/method-packs.js';
 import { MemoryMethodStore } from '../src/seo-blog/method-store.js';
 import { writeArticle,rewriteSection,writeArticleCampaignPromotions } from '../src/seo-blog/generation.js';
 import type { ArticleBody } from '../src/seo-blog/types.js';
@@ -29,11 +29,15 @@ test('library: all twelve Draft2020-12 packs; original eight retain the supplied
 test('canonical release hashes normalise LF only',()=>{
  assert.equal(methodHash('a\r\nb\r'),methodHash('a\nb\n'));assert.notEqual(methodHash('a\n'),methodHash('a'));
 });
-test('dependency cycles and context overflow fail before model submission',()=>{
+test('dependency cycles fail before model submission',()=>{
  const s=fixtureSnapshot('x');
  assert.throws(()=>resolveMethods(s,['blog'],undefined,p=>{
    const pack=loadMethod(p);return p.packId==='production-core'?{...pack,dependencies:[{packId:'blog-writing',version:'0.1.0'}]}:pack;
  }),/Cyclic method dependencies/);
+});
+test('oversized compiled method context fails before model submission',()=>{
+ const f=fixtureBrand(),s=fixtureSnapshot(f.brand.id),pin=s.assignment!.pins.find(p=>p.packId==='blog-writing')!,pack=loadMethod(pin);
+ assert.throws(()=>new MethodRun(new MemoryMethodStore(),{...f,stage:'blog',assetRef:'x',sources:[]},s.assignment!,[pin],[{...pack,rules:[{id:'oversized',instruction:'x'.repeat(70000)}]}]),/context exceeds/);
 });
 test('a selected release cannot silently switch the original version after reassignment',async()=>{
  const f=await runBlog();const id=f.result.record.methodReceiptId!;

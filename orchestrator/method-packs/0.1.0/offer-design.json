@@ -1,0 +1,267 @@
+{
+  "schemaVersion": 1,
+  "version": "0.1.0",
+  "status": "draft",
+  "intendedScope": "private-owned-brands",
+  "packId": "offer-design",
+  "summary": "Authoring contract for structuring and evaluating offers before any selling copy, including free entry offers and the offer ladder: define who the offer is for and the outcome it promises to attempt, assemble components from what the brand can actually deliver, make price and terms explicit as proposals, identify the risk the buyer feels and how the offer addresses it honestly, and record what must be approved before the proposal becomes a fact.",
+  "supportedStages": [
+    "offer",
+    "revision"
+  ],
+  "dependencies": [
+    {
+      "packId": "production-core",
+      "version": "0.1.0"
+    }
+  ],
+  "requiredInputs": [
+    {
+      "key": "brandProfile",
+      "purpose": "Audiences, positioning and current approved offers.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "deliverableInventory",
+      "purpose": "What the brand can actually deliver (services, features, capacity notes) as verified facts.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "offerBrief",
+      "purpose": "The commercial question: new offer, repackaging, bundle, trial or guarantee review.",
+      "missingBehaviour": "block-task"
+    },
+    {
+      "key": "existingApprovedOffers",
+      "purpose": "Offers already approved; these remain authoritative.",
+      "missingBehaviour": "use-explicit-task-default"
+    },
+    {
+      "key": "constraints",
+      "purpose": "Owner constraints: price floors, capacity, legal or regulatory limits, exclusions.",
+      "missingBehaviour": "request-owner-decision"
+    },
+    {
+      "key": "offerJob",
+      "purpose": "Which job the brief asks for: new offer, refine existing, free entry offer (lead magnet) design, or offer ladder review.",
+      "missingBehaviour": "use-explicit-task-default"
+    }
+  ],
+  "decisionSteps": [
+    {
+      "id": "offer.design-entry-offer",
+      "instruction": "When the job is a free entry offer, choose the one specific problem it solves for the buyer segment such that solving it makes the paid offer the natural next step; pick the format the problem actually needs (checklist, short guide, template, worksheet, short assessment, worked example) rather than the most impressive one; name it plainly after the result the reader gets; outline it so a reader finishes it in one sitting; and write its request-page copy (what it is, who it is for, what they will be able to do) with no claims beyond verified facts. Delivery, capture forms and consent are platform capabilities and are recorded as owner-decision items if absent.",
+      "produces": [
+        "entryOfferProblem",
+        "entryOfferFormat",
+        "entryOfferName",
+        "entryOfferOutline",
+        "entryOfferCopy"
+      ]
+    },
+    {
+      "id": "offer.map-ladder",
+      "instruction": "When the job is an offer ladder review, lay out the brand's existing approved offers from free entry to highest value, state the buyer's reason to move between adjacent steps, mark gaps where a next step has no offer and overlaps where two offers compete, and propose at most one new step with components from deliverableInventory. All additions are proposals.",
+      "produces": [
+        "offerLadder",
+        "ladderGaps",
+        "ladderProposal"
+      ]
+    },
+    {
+      "id": "offer.consider-pricing-models",
+      "instruction": "When proposing price, compare at least two models that the deliverable inventory can support (for example one-off, subscription, tiered, usage-based, deposit-plus-balance) and state which the buyer segment is most likely to understand and which the brand can administer; the chosen model remains a proposal with the constraints it depends on.",
+      "produces": [
+        "pricingModelComparison"
+      ]
+    },
+    {
+      "id": "offer.define-buyer-and-outcome",
+      "instruction": "Name the buyer segment from the profile and the outcome they want in their words. State what the offer attempts to deliver toward that outcome, without promising the outcome.",
+      "produces": [
+        "buyerSegment",
+        "attemptedOutcome"
+      ]
+    },
+    {
+      "id": "offer.assemble-components",
+      "instruction": "List components only from deliverableInventory. For each, state the buyer problem it addresses. Remove components that address no stated problem or that the brand cannot deliver at the implied volume.",
+      "produces": [
+        "components"
+      ]
+    },
+    {
+      "id": "offer.propose-price-and-terms",
+      "instruction": "Propose price, billing cadence, inclusions, exclusions, duration, cancellation and refund terms, each labelled PROPOSAL. Where constraints set floors or limits, respect them. Where information is missing, record the owner decision needed instead of guessing.",
+      "produces": [
+        "pricingProposal",
+        "termsProposal",
+        "ownerDecisionsNeeded"
+      ]
+    },
+    {
+      "id": "offer.address-buyer-risk",
+      "instruction": "Identify the main risk the buyer feels (wasted money, disruption, lock-in, uncertainty of result) and propose how the offer addresses it honestly: trial, phased start, clear scope, exit terms. A guarantee is proposed only if the brand can fund and administer it; it is never phrased as a result guarantee.",
+      "produces": [
+        "buyerRisk",
+        "riskResponse"
+      ]
+    },
+    {
+      "id": "offer.compare-with-existing",
+      "instruction": "Compare the proposal with existingApprovedOffers: overlap, cannibalisation, confusion. Recommend keep-separate, replace or merge, with reasons.",
+      "produces": [
+        "comparisonWithExisting",
+        "recommendation"
+      ]
+    },
+    {
+      "id": "offer.name-and-one-line",
+      "instruction": "Propose a working name and a one-line positioning statement that says who it is for and what it includes, using no superlatives and no promised result. This is the minimum copy needed to evaluate the offer; selling copy belongs to conversion-copy after approval.",
+      "produces": [
+        "workingName",
+        "positioningLine"
+      ]
+    },
+    {
+      "id": "offer.handoff",
+      "instruction": "Hand the proposal to the owner for decision. Only after the owner records approval do the price and terms become verified facts; then conversion-copy may use them. Nothing passes to copy, pricing pages or checkout from this pack directly.",
+      "produces": [
+        "handoffPacket"
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "offer.proposals-are-not-facts",
+      "instruction": "Every price, term, inclusion and guarantee in the output is labelled as a proposal until the owner approves it. The pack never writes them into verified facts or into customer-facing copy.",
+      "appliesWhen": "Always.",
+      "check": "Each commercial element carries the PROPOSAL label and the sidecar lists approval needs."
+    },
+    {
+      "id": "offer.deliverable-only",
+      "instruction": "No component appears that is not in deliverableInventory. 'We could add…' ideas go in the sidecar as owner questions.",
+      "appliesWhen": "Assembling components.",
+      "check": "Each component references an inventory item."
+    },
+    {
+      "id": "offer.existing-offers-authoritative",
+      "instruction": "Existing approved offers are never silently changed. A proposal that alters one is marked as a replacement proposal and requires the owner's decision.",
+      "appliesWhen": "An existing offer overlaps.",
+      "check": "comparisonWithExisting names affected offers and the recommendation."
+    },
+    {
+      "id": "offer.no-result-guarantee",
+      "instruction": "Guarantees, if proposed, concern delivery or satisfaction terms the brand controls, never outcomes the brand does not control.",
+      "appliesWhen": "A guarantee is considered.",
+      "check": "Guarantee text contains no outcome promise."
+    },
+    {
+      "id": "offer.constraints-respected",
+      "instruction": "Price floors, capacity, legal and regulatory constraints are respected exactly; if a constraint is unknown and material, the proposal pauses on that element with an owner decision request.",
+      "appliesWhen": "Constraints are present or clearly material.",
+      "check": "Constraint list reconciled against the proposal."
+    },
+    {
+      "id": "offer.evaluate-before-selling",
+      "instruction": "The output contains the evaluation (fit, risk, comparison, decisions needed) and only the minimum copy (name and positioning line). No sales page, ad or email copy is produced by this pack.",
+      "appliesWhen": "Always.",
+      "check": "Output contains no selling copy beyond the working name and one line."
+    }
+  ],
+  "internalReceiptFields": [
+    "buyerSegment",
+    "attemptedOutcome",
+    "components",
+    "pricingProposal",
+    "termsProposal",
+    "ownerDecisionsNeeded",
+    "buyerRisk",
+    "riskResponse",
+    "comparisonWithExisting",
+    "recommendation",
+    "workingName",
+    "positioningLine",
+    "entryOfferProblem",
+    "entryOfferFormat",
+    "entryOfferName",
+    "entryOfferOutline",
+    "offerLadder",
+    "ladderGaps",
+    "ladderProposal",
+    "pricingModelComparison",
+    "handoffPacket"
+  ],
+  "qualityChecks": [
+    {
+      "id": "offer.check-labels",
+      "criterion": "All commercial elements labelled as proposals; approval needs listed.",
+      "passingEvidence": "Label scan and decisions list.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "offer.check-deliverable",
+      "criterion": "Every component maps to the deliverable inventory.",
+      "passingEvidence": "Component/inventory mapping.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "offer.check-no-outcome-guarantee",
+      "criterion": "No outcome guarantee or result promise.",
+      "passingEvidence": "Pattern scan recorded clear.",
+      "failureAction": "revise"
+    },
+    {
+      "id": "offer.check-constraints",
+      "criterion": "All stated constraints respected; unknown material constraints raised as owner decisions.",
+      "passingEvidence": "Constraint reconciliation recorded.",
+      "failureAction": "request-owner-decision"
+    },
+    {
+      "id": "offer.check-scope",
+      "criterion": "No selling copy beyond name and positioning line.",
+      "passingEvidence": "Output reviewed for copy elements.",
+      "failureAction": "revise"
+    }
+  ],
+  "revisionPolicy": {
+    "maxRevisionPasses": 1,
+    "stopWhen": "All checks pass or the remaining items are owner decisions.",
+    "onExhaustion": "save-held-draft-with-findings"
+  },
+  "outputContract": {
+    "respectExistingStageSchema": true,
+    "customerFacing": "An offer proposal document in whatever existing proposal format the runtime provides: buyer, components, proposed price and terms (labelled), risk response, comparison, recommendation, working name and positioning line. Nothing customer-facing is published by this pack.",
+    "internalSidecar": "Owner decisions needed, rejected components, constraint reconciliation and findings.",
+    "providerEffects": false
+  },
+  "examples": [
+    {
+      "fictionalBrand": "Fictional home-maintenance business (illustrative name: Bramble Home Care; every fact below is invented for illustration)",
+      "inputScenario": "Brief: design a landlord maintenance bundle. deliverableInventory: annual inspection, emergency call-out, certificate coordination. constraints: price floor stated as an illustrative monthly amount; capacity 40 bundles. existingApprovedOffers: a homeowner plan.",
+      "expectedBehaviour": "Buyer: landlords with two to five properties. Components: the three inventory items each tied to a landlord problem. Price PROPOSAL at or above the floor; terms PROPOSAL with cancellation after an illustrative minimum term; capacity note of 40. Risk: unexpected costs; response: a defined scope and call-out cap, no result guarantee. Comparison: keep separate from the homeowner plan. Working name and one-line positioning without superlatives.",
+      "forbiddenBehaviour": "Writing the price into verified facts, promising 'no void periods', or adding a 'tenant-finding service' not in the inventory."
+    },
+    {
+      "fictionalBrand": "Fictional B2B scheduling business (illustrative name: Slotwise; every fact below is invented for illustration)",
+      "inputScenario": "Brief: should the trial become freemium? deliverableInventory: booking pages, reminders, calendar sync; capacity unconstrained. constraints: none supplied. existingApprovedOffers: 14-day trial, two paid tiers.",
+      "expectedBehaviour": "Evaluation of replacing the trial with a free tier: components that would be free versus paid, risk of cannibalising the lower tier, support load as an owner decision because constraints are unknown, recommendation framed as a replacement proposal requiring the owner's decision.",
+      "forbiddenBehaviour": "Declaring a free tier live, quoting conversion rates with no fact, or drafting a sales page."
+    }
+  ],
+  "provenance": {
+    "authoringNote": "Draft authored 3 November 2026 as an authoring contract only; no offer-workflow implementation is claimed to exist in the recorded release. Not approved or installable.",
+    "originalityNotes": "Original design: the attempted-outcome framing, deliverable-only component rule, proposal labelling and buyer-risk response steps were written for this platform; no private corpus or licensed framework was consulted.",
+    "privateSourceReferences": [
+      "Private reference only (job coverage, no text reused): DigitalMarketer AI Workspace Claude plugin v2.0.0 (author DigitalMarketer) and DigitalMarketer Synthetic Audience Lab plugin v1.0.0, installed in the owner's Claude workspace; see AUTHORING-NOTES.txt section 1.",
+      "Not consulted: the owner's separately held original training corpus and newer operating manual were not supplied to the authoring session."
+    ],
+    "unresolvedCommercialUseQuestions": [
+      "The DigitalMarketer plugins state that their tools are proprietary to Lab members. These packs reuse none of their text, names, frameworks or templates, but coverage of the same jobs was informed by reading them; a recorded commercial-use review must confirm that original method packs covering those jobs may be sold before any public release.",
+      "The owner's private training corpus and newer manual were not available during authoring; rules the owner expects from them must be checked before private-use approval.",
+      "Private-use approval for Martin-owned brands has not been recorded; this file cannot supply it.",
+      "Public commercial release approval is a separate recorded decision and is not established by this draft.",
+      "Which packs are included versus sold as upgrades, per-brand versus workspace-wide access, and pricing remain undecided."
+    ]
+  }
+}

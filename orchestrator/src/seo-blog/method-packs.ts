@@ -53,12 +53,13 @@ export const methodError=(message:string, code='method_unavailable'):never=>{
 };
 export const methodHash=(text:string):string=>createHash('sha256').update(text.replace(/\r\n?/g,'\n'),'utf8').digest('hex');
 const directory=path.join(REPO_ROOT,'docs','relaunch72-rule-packs');
+const releasesDirectory=path.join(REPO_ROOT,'orchestrator','method-packs');
 const schema=JSON.parse(readFileSync(path.join(directory,'rule-pack.schema.proposed.json'),'utf8'));
 const validate=new Ajv2020({allErrors:true,strict:false}).compile(schema);
 export function loadMethod(pin:MethodPin): RulePack {
   if(!/^[a-z][a-z0-9-]{0,70}$/.test(pin.packId)||!/^\d+\.\d+\.\d+$/.test(pin.version))return methodError('Invalid method release identity.');
   let text:string;
-  try{text=readFileSync(path.join(directory,pin.packId+'.json'),'utf8');}catch{return methodError('Assigned method file is missing: '+pin.packId);}
+  try{text=readFileSync(path.join(releasesDirectory,pin.version,pin.packId+'.json'),'utf8');}catch{return methodError('Assigned method file is missing: '+pin.packId);}
   if(methodHash(text)!==pin.hash)return methodError('Assigned method hash changed: '+pin.packId,'method_hash_mismatch');
   const pack=JSON.parse(text) as RulePack;
   if(!validate(pack)||pack.packId!==pin.packId||pack.version!==pin.version)return methodError('Assigned method is invalid: '+pin.packId);
