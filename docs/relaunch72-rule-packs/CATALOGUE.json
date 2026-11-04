@@ -1,9 +1,55 @@
 {
-  "note": "Proposed product names for the Relaunch72 upgrade catalogue. Names are the owner's decision; the method content is independent of naming and pricing (architecture section 1D). Nothing here sets a tier or a price.",
+  "note": "Proposed Relaunch72-branded names for the upgrade catalogue. Names are the owner's decision; the method content is independent of naming and pricing (architecture section 1D). Nothing here sets a tier or a price.",
+  "family": {
+    "proposedName": "RL72 Boosters",
+    "alternatives": [
+      "RL72 Super Boosters",
+      "RL72 Expansion Packs",
+      "RL72 Power Packs"
+    ],
+    "pattern": "Each upgrade is sold as 'RL72 <Pack Name> Booster'; the base plan is 'RL72 Engine Room' and is never sold separately."
+  },
+  "bundles": [
+    {
+      "proposedName": "RL72 Super Booster",
+      "includes": [
+        "conversion-copy",
+        "visual-briefing",
+        "email-writing",
+        "offer-design",
+        "journey-review",
+        "audience-resonance",
+        "advocacy-and-referral"
+      ],
+      "benefit": "Every expansion pack in one upgrade.",
+      "placementNote": "Proposal only; include a pack only when its runtime path exists."
+    },
+    {
+      "proposedName": "RL72 Launch Booster",
+      "includes": [
+        "conversion-copy",
+        "email-writing",
+        "offer-design"
+      ],
+      "benefit": "Shape the offer, write the page and the sequence, ask for the sale honestly.",
+      "placementNote": "Proposal only."
+    },
+    {
+      "proposedName": "RL72 Growth Booster",
+      "includes": [
+        "journey-review",
+        "audience-resonance",
+        "advocacy-and-referral"
+      ],
+      "benefit": "Find the gaps, pressure-test the words, turn happy customers into the next ones.",
+      "placementNote": "Proposal only."
+    }
+  ],
   "entries": [
     {
       "packId": "production-core",
       "proposedName": "Engine Room",
+      "productName": "RL72 Engine Room",
       "alternatives": [
         "Backbone",
         "Groundwork"
@@ -14,6 +60,7 @@
     {
       "packId": "brand-context-building",
       "proposedName": "Brain Builder",
+      "productName": "RL72 Brain Builder Booster",
       "alternatives": [
         "Identity Lab",
         "Who & Why"
@@ -24,6 +71,7 @@
     {
       "packId": "editorial-planning",
       "proposedName": "Editor's Desk",
+      "productName": "RL72 Editor's Desk Booster",
       "alternatives": [
         "The Planner",
         "Calendar Brain"
@@ -34,6 +82,7 @@
     {
       "packId": "blog-writing",
       "proposedName": "Longform Forge",
+      "productName": "RL72 Longform Forge Booster",
       "alternatives": [
         "Deep Draft",
         "The Writer's Room"
@@ -44,6 +93,7 @@
     {
       "packId": "conversion-copy",
       "proposedName": "Hook & Close",
+      "productName": "RL72 Hook & Close Booster",
       "alternatives": [
         "Ask Engine",
         "Page Turner"
@@ -54,6 +104,7 @@
     {
       "packId": "social-repurposing",
       "proposedName": "Multiplier",
+      "productName": "RL72 Multiplier Booster",
       "alternatives": [
         "Echo",
         "One-to-Many"
@@ -64,6 +115,7 @@
     {
       "packId": "visual-briefing",
       "proposedName": "Art Director",
+      "productName": "RL72 Art Director Booster",
       "alternatives": [
         "Picture Brief",
         "Framed"
@@ -74,6 +126,7 @@
     {
       "packId": "email-writing",
       "proposedName": "Inbox Engine",
+      "productName": "RL72 Inbox Engine Booster",
       "alternatives": [
         "Sequence Studio",
         "The Mailroom"
@@ -84,6 +137,7 @@
     {
       "packId": "offer-design",
       "proposedName": "Deal Shaper",
+      "productName": "RL72 Deal Shaper Booster",
       "alternatives": [
         "Offer Bench",
         "The Ladder"
@@ -94,6 +148,7 @@
     {
       "packId": "journey-review",
       "proposedName": "Funnel Scan",
+      "productName": "RL72 Funnel Scan Booster",
       "alternatives": [
         "Journey X-Ray",
         "Gap Finder"
@@ -104,6 +159,7 @@
     {
       "packId": "audience-resonance",
       "proposedName": "Focus Room",
+      "productName": "RL72 Focus Room Booster",
       "alternatives": [
         "Reader Panel",
         "Resonance Check"
@@ -114,6 +170,7 @@
     {
       "packId": "advocacy-and-referral",
       "proposedName": "Word of Mouth Engine",
+      "productName": "RL72 Word of Mouth Engine Booster",
       "alternatives": [
         "Advocate Loop",
         "Pass It On"

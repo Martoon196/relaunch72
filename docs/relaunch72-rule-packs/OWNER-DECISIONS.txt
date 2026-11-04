@@ -23,7 +23,7 @@ changed by reviewers without you.
    packs have run privately for a while and after a recorded commercial-use review of the
    underlying training.
 
-5. Product names. CATALOGUE.json proposes a name per pack (Engine Room, Brain Builder,
+5. Product names. CATALOGUE.json proposes the family "RL72 Boosters" (alternatives: RL72 Super Boosters, RL72 Expansion Packs, RL72 Power Packs), the bundles "RL72 Super Booster", "RL72 Launch Booster" and "RL72 Growth Booster", and a name per pack (Engine Room, Brain Builder,
    Editor's Desk, Longform Forge, Hook & Close, Multiplier, Art Director, Inbox Engine,
    Deal Shaper, Funnel Scan, Focus Room, Word of Mouth Engine) with two alternatives each.
    Pick, rename or reject; the method content does not change. Recommendation: choose names
