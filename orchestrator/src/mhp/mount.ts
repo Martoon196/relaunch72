@@ -28,7 +28,7 @@ import type { MhpSequenceService } from './followup-sequence-service.js';
 interface MhpMountDependencies {
   portal: PostgresPortalDeps;
   authMount: { handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> };
-  commerce: Pick<PgMhpCommerceService, 'snapshot' | 'refund' | 'billingPortal' | 'webhook' | 'billingEnabled'> & Partial<Pick<PgMhpCommerceService, 'creditSnapshot' | 'courseCheckout' | 'publicCourseCheckout'>>;
+  commerce: Pick<PgMhpCommerceService, 'snapshot' | 'refund' | 'billingPortal' | 'webhook' | 'billingEnabled'> & Partial<Pick<PgMhpCommerceService, 'creditSnapshot' | 'courseCheckout' | 'publicCourseCheckout' | 'sandbox'>>;
   desk?: Pick<PgMhpDeskService, 'snapshot' | 'save' | 'archive' | 'submitVerdict' | 'queue' | 'review'>;
   hq: Pick<PgMhpHqService, 'snapshot' | 'grant' | 'isOwner'>;
   mail?: Pick<MhpTransactionalMailer, 'sendAccessInvite' | 'configured'> & Partial<Pick<MhpTransactionalMailer, 'sendPurchaseWelcome'>>;
@@ -83,11 +83,25 @@ const SITE_ORIGINS = new Set([MHP_SITE, 'https://www.martinhowardproperty.co.uk'
  */
 async function courseCheckout(req: IncomingMessage, res: ServerResponse, deps: MhpMountDependencies): Promise<void> {
   const { portal, commerce } = deps;
-  if (req.method !== 'POST') { redirect(res, `${MHP_SITE}/join/`); return; }
+  const sandbox = commerce.billingEnabled && commerce.sandbox === true;
+  if (req.method !== 'POST') {
+    // Sandbox only: a plain test page on the app so the checkout can be proved before the site is published.
+    if (sandbox && req.method === 'GET') {
+      const page = `<!doctype html><html lang="en-GB"><meta charset="utf-8"><title>Sandbox course checkout</title><body style="font-family:system-ui;max-width:560px;margin:40px auto;padding:0 20px"><h1>Sandbox course checkout</h1><p>Test mode only. Use card 4242 4242 4242 4242. The server clock picks the price.</p><form method="post" action="/api/mhp/checkout/course"><button name="plan" value="full">Pay in full</button> <button name="plan" value="3x">3 monthly payments</button></form></body></html>`;
+      // form-action must allow the redirect to Stripe Checkout that follows the post.
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-length': String(Buffer.byteLength(page)), 'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'x-robots-tag': 'noindex',
+        'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://checkout.stripe.com; base-uri 'none'; frame-ancestors 'none'" });
+      res.end(page);
+      return;
+    }
+    redirect(res, `${MHP_SITE}/join/`); return;
+  }
   const leases: Buffer[] = [];
   let outcome: 'success' | 'service_error' = 'success';
   try {
-    if (!SITE_ORIGINS.has(String(req.headers.origin ?? ''))) throw new MhpCommerceError(403, 'Please start checkout from martinhowardproperty.co.uk.');
+    const origin = String(req.headers.origin ?? '');
+    if (!SITE_ORIGINS.has(origin) && !(sandbox && origin === MHP_AUTH_ORIGIN)) throw new MhpCommerceError(403, 'Please start checkout from martinhowardproperty.co.uk.');
     if (!/^application\/x-www-form-urlencoded(?:;|$)/i.test(String(req.headers['content-type'] ?? ''))) throw new MhpCommerceError(415, 'Please start checkout from the course page.');
     const context = portal.requestContext?.(req);
     if (!context || !portal.abuse) throw new MhpCommerceError(503, 'Checkout is temporarily unavailable.');

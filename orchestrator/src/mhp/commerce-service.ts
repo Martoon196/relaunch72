@@ -73,6 +73,8 @@ export class PgMhpCommerceService {
     private readonly config: MhpCommerceConfig | null, private readonly now: () => number = Date.now) {}
 
   get billingEnabled(): boolean { return this.config !== null && this.stripe !== null && this.webhookPool !== null; }
+  /** True only with a sandbox (rk_test_) key; enables the app's sandbox checkout test page. */
+  get sandbox(): boolean { return this.billingEnabled && this.config?.live === false; }
   /** Webinar-price cut-over in milliseconds, or null when billing is off. */
   get windowEndsAt(): number | null { return this.config?.windowEndsAt ?? null; }
   private enabled(): { stripe: Stripe; config: MhpCommerceConfig; pool: QueryPool } {
