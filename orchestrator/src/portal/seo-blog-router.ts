@@ -212,7 +212,11 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     if(rest==='methods')return send(res,200,productionRulesPage(shell('methods'),await engine.methodOverview(actor,brandId),engine.campaignCreatorsReady));
     if(rest==='campaigns'||rest.startsWith('campaigns/')){
       const creator=engine.creators(),parts=rest.split('/');
-      if(!parts[1])return send(res,200,campaignCreatorsPage(shell('campaigns'),await engine.getProfile(actor,brandId),await creator.list(actor.userId,brandId)));
+      if(!parts[1]){
+        const settings=await engine.methodOverview(actor,brandId),pins=settings.assignment?.pins??[];
+        const enabled=(['email','advocacy'] as const).filter(kind=>pins.some(p=>p.packId===(kind==='email'?'email-writing':'advocacy-and-referral')));
+        return send(res,200,campaignCreatorsPage(shell('campaigns'),await engine.getProfile(actor,brandId),await creator.list(actor.userId,brandId),enabled));
+      }
       const record=await creator.get(actor.userId,brandId,parts[1]);
       if(parts[2]==='export'){
         const json=await creator.export(actor.userId,brandId,record.id);
@@ -311,6 +315,10 @@ async function handlePost(
   const rowVersion = () => int(f('rowVersion'), 'the form version');
   switch (parts[0]) {
     case 'methods': {
+      if(parts[1]==='update'||parts[1]==='disable'){
+        await engine.setReviewedMethods(actor,brandId,int(f('revision'),'the current rule assignment'),parts[1]==='disable'?[]:form.fields.getAll('packId'));
+        return ok(back('methods'),parts[1]==='disable'?'Production packs switched off for this brand.':'Production pack choices saved for this brand.');
+      }
       if(parts[1]!=='activate')throw new SeoBlogError(404,'That action was not found.');
       await engine.activateReviewedMethods(actor,brandId,int(f('revision'),'the current rule assignment'),f('creators')==='1');
       return ok(back('methods'),'Reviewed production rules assigned to this brand.');

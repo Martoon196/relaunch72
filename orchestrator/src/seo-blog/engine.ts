@@ -1655,11 +1655,17 @@ export class SeoBlogEngine {
     return {enabled:true,...await this.deps.methods.store.snapshot(brandId),version:PRIVATE_RELEASE_VERSION};
   }
   async activateReviewedMethods(actor:Actor,brandId:string,expectedRevision:number,includeCreators:boolean):Promise<number>{
+    return this.setReviewedMethods(actor,brandId,expectedRevision,libraryPins(PRIVATE_RELEASE_VERSION).filter(p=>includeCreators||!['email-writing','advocacy-and-referral'].includes(p.packId)).map(p=>p.packId));
+  }
+  async setReviewedMethods(actor:Actor,brandId:string,expectedRevision:number,requested:readonly string[]):Promise<number>{
     await this.brandFor(actor,brandId);
     if(!this.deps.methods)throw new SeoBlogError(409,'Production methods are disabled.');
-    if(includeCreators&&!this.campaignCreatorsReady)throw new SeoBlogError(409,'Campaign creators are not enabled yet.');
+    if(requested.some(id=>['email-writing','advocacy-and-referral'].includes(id))&&!this.campaignCreatorsReady)throw new SeoBlogError(409,'Campaign creators are not enabled yet.');
+    const available=libraryPins(PRIVATE_RELEASE_VERSION);
+    if(new Set(requested).size!==requested.length||requested.some(id=>!available.some(p=>p.packId===id)))throw new SeoBlogError(400,'Choose only the available reviewed packs.');
+    const selected=new Set(requested);if(selected.size)selected.add('production-core');
     const snapshot=await this.deps.methods.store.snapshot(brandId);
-    const pins=libraryPins(PRIVATE_RELEASE_VERSION).filter(p=>includeCreators||!['email-writing','advocacy-and-referral'].includes(p.packId));
+    const pins=available.filter(p=>selected.has(p.packId));
     resolveMethods({...snapshot,assignment:{revision:expectedRevision+1,scope:'private-owned-brands',pins}},['planning','blog','copy','social','visual-brief','email','advocacy']);
     return this.deps.methods.store.assign(brandId,expectedRevision,pins);
   }

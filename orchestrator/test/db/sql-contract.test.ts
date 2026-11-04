@@ -143,6 +143,7 @@ const migration136Url = new URL('../../src/db/migrations/0136_mhp_webinar_applic
 const migration137Url = new URL('../../src/db/migrations/0137_seo_blog_media_storage.sql', import.meta.url);
 const migration138Url = new URL('../../src/db/migrations/0138_seo_blog_method_packs.sql', import.meta.url);
 const migration139Url = new URL('../../src/db/migrations/0139_method_evidence_campaign_creators.sql', import.meta.url);
+const migration140Url = new URL('../../src/db/migrations/0140_private_method_automatic_defaults.sql', import.meta.url);
 
 /** Frozen on the completed run; the 131-compatible bridge admits exactly this applied row. */
 const SEO_BLOG_SOCIAL_PROMOTION_CHECKSUM = '6a413abf1e1f04c7ce7cfa181c2ee6c7ced7b0155fcc2c4106ff860c98fa03cb';
@@ -721,6 +722,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     { filename: '0137_seo_blog_media_storage.sql', version: 137 },
     { filename: '0138_seo_blog_method_packs.sql', version: 138 },
     { filename: '0139_method_evidence_campaign_creators.sql', version: 139 },
+    { filename: '0140_private_method_automatic_defaults.sql', version: 140 },
   ]);
   const sources = [
     (await readFile(migration7Url, 'utf8')).replace(/\r\n?/g, '\n'),
@@ -856,6 +858,7 @@ test('bundled migration discovery orders and checksums through source refresh re
     (await readFile(migration137Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration138Url, 'utf8')).replace(/\r\n?/g, '\n'),
     (await readFile(migration139Url, 'utf8')).replace(/\r\n?/g, '\n'),
+    (await readFile(migration140Url, 'utf8')).replace(/\r\n?/g, '\n'),
   ];
   // A source list shorter than the discovered tail would hash `undefined` and
   // pass nothing; make the pairing itself an assertion.

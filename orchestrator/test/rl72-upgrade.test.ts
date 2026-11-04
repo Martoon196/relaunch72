@@ -126,6 +126,19 @@ test('same campaign command never repeats a paid call; a changed brief cannot re
  assert.equal((await f.creator.create(f.actor,f.brand.id,id,brief)).id,first.id);assert.equal(f.model.requests.length,calls);
  await assert.rejects(f.creator.create(f.actor,f.brand.id,id,{...brief,goal:'A different purpose.'}),/different inputs/);
 });
+test('owner admin controls persist individual pack choices and all-off without deleting drafts or spending',async()=>{
+ const f=await creatorFixture(),who=nativeIdentity(f.actor),csrf=nativeCsrf(who),base='/portal/seo-blog/b/'+f.brand.id;
+ const draft=await f.creator.create(f.actor,f.brand.id,randomUUID(),campaignBrief(f.profile)),calls=f.model.requests.length;
+ let response=await nativeSeoCall(f.engine,{who,method:'POST',path:base+'/methods/update',fields:{_csrf:csrf,revision:'1',packId:['email-writing']}});
+ assert.equal(response.status,303);assert.doesNotMatch(response.headers.location!,/\?e=/);
+ let snapshot=await f.methods.snapshot(f.brand.id);assert.deepEqual(snapshot.assignment!.pins.map(p=>p.packId).sort(),['email-writing','production-core']);
+ response=await nativeSeoCall(f.engine,{who,method:'GET',path:base+'/campaigns'});assert.match(response.body,/Word of Mouth Engine is switched off/);assert.match(response.body,/Create email campaign/);
+ response=await nativeSeoCall(f.engine,{who,method:'POST',path:base+'/methods/disable',fields:{_csrf:csrf,revision:'2'}});assert.equal(response.status,303);
+ snapshot=await f.methods.snapshot(f.brand.id);assert.equal(snapshot.assignment!.pins.length,0);assert.equal(snapshot.assignment!.revision,3);
+ response=await nativeSeoCall(f.engine,{who,method:'GET',path:base+'/methods'});assert.match(response.body,/All production packs off/);
+ await assert.rejects(f.creator.create(f.actor,f.brand.id,randomUUID(),campaignBrief(f.profile)),/Activate/);assert.equal(f.model.requests.length,calls);assert.equal((await f.creator.get(f.actor,f.brand.id,draft.id)).id,draft.id);
+ response=await nativeSeoCall(f.engine,{who,method:'POST',path:base+'/methods/activate',fields:{_csrf:csrf,revision:'2',creators:'1'}});assert.match(response.headers.location!,/\?e=/);assert.equal((await f.methods.snapshot(f.brand.id)).assignment!.pins.length,0);
+});
 test('owner edit clears approval and changing the profile holds export',async()=>{
  const f=await creatorFixture();let r=await f.creator.create(f.actor,f.brand.id,randomUUID(),campaignBrief(f.profile));
  r=await f.creator.approve(f.actor,f.brand.id,r.id,r.rowVersion,r.version!.contentSha,true);
@@ -158,15 +171,15 @@ test('native creator journey protects CSRF, renders both creators, approves/expo
  page=await nativeSeoCall(f.engine,{who,method:'POST',path:base+'/'+id+'/approve',fields:{_csrf:csrf,rowVersion:String(r.rowVersion),contentSha:r.version!.contentSha,reviewed:'1'}});assert.equal(page.status,303);
  page=await nativeSeoCall(f.engine,{who,method:'GET',path:base+'/'+id+'/export'});assert.equal(page.status,200);assert.match(page.body,/EMAIL 1/);assert.match(page.body,/not sent or scheduled/);
 });
-test('exact schema bridge works at 137/138 only when both features are off, then strict 139 is required',async()=>{
+test('exact schema bridge works at 137/138/139 only when both features are off, then strict 140 is required',async()=>{
  const migrations=await discoverMigrations(),rows=migrations.map(({filename,checksum})=>({filename,checksum}));
  const pool=(r:typeof rows)=>({query:async()=>({rows:r})}) as unknown as Pick<Pool,'query'>;
- const env={RL72_METHOD_SCHEMA_BRIDGE:'138-139',SEO_BLOG_METHOD_PACKS:'false',SEO_BLOG_CAMPAIGN_CREATORS:'false'};
- for(const count of [137,138]){
+ const env={RL72_METHOD_SCHEMA_BRIDGE:'138-140',SEO_BLOG_METHOD_PACKS:'false',SEO_BLOG_CAMPAIGN_CREATORS:'false'};
+ for(const count of [137,138,139]){
   await assert.doesNotReject(assertRuntimeSchemaCurrent(pool(rows.slice(0,count)),undefined,env));
   await assert.rejects(assertRuntimeSchemaCurrent(pool(rows.slice(0,count)),undefined,{}),/schema is behind/);
   await assert.rejects(assertRuntimeSchemaCurrent(pool(rows.slice(0,count)),undefined,{...env,SEO_BLOG_METHOD_PACKS:'true'}),/schema is behind/);
  }
  await assert.doesNotReject(assertRuntimeSchemaCurrent(pool(rows),undefined,{}));
- await assert.rejects(assertRuntimeSchemaCurrent(pool([...rows,{filename:'0140_unknown.sql',checksum:'0'.repeat(64)}]),undefined,env),/not present/);
+ await assert.rejects(assertRuntimeSchemaCurrent(pool([...rows,{filename:'0141_unknown.sql',checksum:'0'.repeat(64)}]),undefined,env),/not present/);
 });

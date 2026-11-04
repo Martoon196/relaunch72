@@ -19,6 +19,7 @@ export interface MethodRelease extends MethodPin {
   reviewEvidence: string;
 }
 export interface MethodAssignment {
+  origin?:'owner'|'private-default';
   revision: number; scope: 'private-owned-brands'|'public';
   pins: readonly MethodPin[];
 }

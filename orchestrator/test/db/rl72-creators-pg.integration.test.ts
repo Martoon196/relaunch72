@@ -18,7 +18,7 @@ const skip=!raw||process.env.RELAUNCH72_DATABASE_INTEGRATION!=='explicit-disposa
 test('RL72 creators: real owner sessions, atomic allowance reservations, immutable revisions and recoverable generation', {skip},async t=>{
  const target=new URL(raw!);assert(['localhost','127.0.0.1'].includes(target.hostname));assert.equal(target.pathname,'/relaunch72_test');
  const admin=new pg.Pool({connectionString:raw,max:3});const u=new URL(raw!);u.username='r72_content_command';u.password='local-methods-test-only';const pool=new pg.Pool({connectionString:u.toString(),max:4});
- async function fixture(kind:'home'|'b2b'='home'){
+ async function fixture(kind:'home'|'b2b'='home',automatic=false){
   const f=fixtureBrand(kind),actor=f.profile.confirmedBy!,token=randomUUID()+randomUUID();
   await admin.query("INSERT INTO app.organizations(id,name,slug,kind) VALUES($1,$2,$3,'direct_customer')",[f.brand.organizationId,f.brand.name,'org-'+f.brand.organizationId]);
   await admin.query("INSERT INTO app.users(id,email,status) VALUES($1,$2,'active')",[actor,actor+'@example.test']);
@@ -27,14 +27,25 @@ test('RL72 creators: real owner sessions, atomic allowance reservations, immutab
   await admin.query("INSERT INTO app.workspace_memberships(workspace_id,organization_id,user_id,role,status,source_organization_id) VALUES($1,$2,$3,'owner','active',$2)",[f.brand.id,f.brand.organizationId,actor]);
   await admin.query("INSERT INTO app.user_sessions(token_hash,csrf_secret_hash,user_id,selected_workspace_id,expires_at) VALUES($1,$2,$3,$4,now()+interval '1 hour')",[createHash('sha256').update(token).digest(),createHash('sha256').update('csrf'+token).digest(),actor,f.brand.id]);
   await admin.query('INSERT INTO app.seo_blog_brands(workspace_id,organization_id,created_by_user_id,settings) VALUES($1,$2,$3,$4)',[f.brand.id,f.brand.organizationId,actor,JSON.stringify(f.brand.settings)]);
-  await admin.query("INSERT INTO app.seo_blog_method_private_organizations(organization_id,evidence) VALUES($1,'Explicit test-only owned organization')",[f.brand.organizationId]);
+  await admin.query("INSERT INTO app.seo_blog_method_private_organizations(organization_id,evidence,automatic_defaults,default_owner_user_id) VALUES($1,'Explicit test-only owned organization',$2,$3)",[f.brand.organizationId,automatic,automatic?actor:null]);
   const principal={kind:'user' as const,userId:actor,requestId:'creator-pg-test',sessionToken:token,selectedWorkspaceId:f.brand.id};
   const blogs=new PgSeoBlogStore(pool,principal),methods=new PgMethodStore(pool,principal),store=new PgCampaignCreatorStore(pool,principal),model=new UpgradeFixtureModel(),controller=new MethodController(methods,true);
-  await blogs.saveProfile(f.profile);await methods.assign(f.brand.id,0,libraryPins('0.1.1'));
+  await blogs.saveProfile(f.profile);if(!automatic)await methods.assign(f.brand.id,0,libraryPins('0.1.1'));
   return {...f,actor,token,blogs,methods,store,model,controller,creator:new CampaignCreator(store,blogs,controller,model)};
  }
  try{
   const a=await fixture(),b=await fixture('b2b');
+  await t.test('enrolled private defaults activate all eight once, preserve explicit off and cover future brands',async()=>{
+   const c=await fixture('home',true);
+   const first=await c.methods.snapshot(c.brand.id);assert.equal(first.assignment!.pins.length,8);assert.equal(first.assignment!.origin,'private-default');assert.equal(first.assignment!.revision,1);
+   assert.equal((await c.methods.snapshot(c.brand.id)).assignment!.revision,1);
+   await c.methods.assign(c.brand.id,1,[]);const off=await c.methods.snapshot(c.brand.id);assert.equal(off.assignment!.pins.length,0);assert.equal(off.assignment!.revision,2);assert.equal(off.assignment!.origin,'owner');
+   const id=randomUUID();await admin.query('INSERT INTO app.workspaces(id,organization_id,name,slug) VALUES($1,$2,$3,$4)',[id,c.brand.organizationId,'Future fictional brand','future-'+id]);
+   await admin.query("INSERT INTO app.workspace_memberships(workspace_id,organization_id,user_id,role,status,source_organization_id) VALUES($1,$2,$3,'owner','active',$2)",[id,c.brand.organizationId,c.actor]);
+   await admin.query('INSERT INTO app.seo_blog_brands(workspace_id,organization_id,created_by_user_id,settings) VALUES($1,$2,$3,$4)',[id,c.brand.organizationId,c.actor,JSON.stringify(c.brand.settings)]);
+   const future=await c.methods.snapshot(id);assert.equal(future.assignment!.pins.length,8);assert.equal(future.assignment!.origin,'private-default');
+   await assert.rejects(pool.query('SELECT app_private.seo_method_ensure_defaults($1)',[id]),{code:'42501'});
+  });
   await t.test('runtime is table-blind and cannot assume the definer',async()=>{
    for(const name of ['campaigns','versions'])await assert.rejects(pool.query('SELECT * FROM app.seo_blog_creator_'+name),{code:'42501'});
    assert.equal((await pool.query("SELECT pg_has_role(current_user,'r72_seo_method_definer','MEMBER') AS allowed")).rows[0].allowed,false);
