@@ -19,6 +19,11 @@ export interface AdvocacyRequest { moment:string; shortRequest:string; standardR
 export interface EmailCampaign { title:string; summary:string; emails:EmailDraft[] }
 export interface AdvocacyKit { title:string; summary:string; requests:AdvocacyRequest[]; referralMessages:{short:string;standard:string;extended:string}|null; consentChecklist:string[]; incentiveTerms:string }
 export type CampaignContent=EmailCampaign|AdvocacyKit;
+/** JSONB reorders object keys; idempotency compares canonical values, not serialisation order. */
+export function campaignInputHash(brief:CampaignBrief):string {
+  const stable=(value:unknown):string=>value!==null&&typeof value==='object'?(Array.isArray(value)?'['+value.map(stable).join(',')+']':'{'+Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>JSON.stringify(k)+':'+stable(v)).join(',')+'}'):JSON.stringify(value);
+  return methodHash(stable(brief));
+}
 export interface CreatorVersion { number:number; content:CampaignContent; contentSha:string; methodReceiptId:string|null; createdAt:string; createdBy:string }
 export interface CreatorRecord {
   id:string;brandId:string;brief:CampaignBrief;profileVersion:number;factsSha:string;assignmentRevision:number;
@@ -113,12 +118,12 @@ export class CampaignCreator {
   async create(actorId:string,brandId:string,commandId:string,raw:CampaignBrief):Promise<CreatorRecord>{
     if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(commandId))throw new SeoBlogError(400,'Refresh the campaign form and try again.');
     const {brand,profile}=await this.profile(actorId,brandId),brief=validateCampaignBrief(raw,profile);
-    const inputHash=methodHash(JSON.stringify(brief));
+    const inputHash=campaignInputHash(brief);
     const existing=await this.store.get(brandId,commandId);
-    if(existing){if(methodHash(JSON.stringify(existing.brief))!==inputHash)throw new SeoBlogError(409,'This campaign command was already used with different inputs.');return existing;}
+    if(existing){if(campaignInputHash(existing.brief)!==inputHash)throw new SeoBlogError(409,'This campaign command was already used with different inputs.');return existing;}
     if(!this.llm)throw new SeoBlogError(409,'Connect the writing model before creating a campaign.');
     const llm=await this.methods.prepare(this.llm,{brand,profile,stage:brief.kind,stages:[brief.kind],assetRef:'creator:'+commandId,sources:[],baselineTokens:350000,
-      evidence:{ownerFacts:brief.kind==='advocacy'?[{id:'campaign:incentiveTerms',text:brief.incentiveTerms}]:[]}});
+      evidence:{campaign:{consentProcess:brief.consentProcess,incentiveTerms:brief.incentiveTerms},ownerFacts:brief.kind==='advocacy'?[{id:'campaign:incentiveTerms',text:brief.incentiveTerms}]:[]}});
     const run=methodRunFor(llm),required=brief.kind==='email'?'email-writing':'advocacy-and-referral';
     if(!run?.pins.some(p=>p.packId===required&&p.version===PRIVATE_RELEASE_VERSION))throw new SeoBlogError(409,'Activate the reviewed '+(brief.kind==='email'?'Inbox Engine':'Word of Mouth Engine')+' pack for this brand first.');
     const begin=await this.store.begin({id:commandId,brandId,actorId,brief,profileVersion:profile.version,factsSha:profile.factsSha,assignmentRevision:run.assignment.revision,methodReceiptId:run.id,reservation:350000,inputHash});

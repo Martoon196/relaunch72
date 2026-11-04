@@ -9,6 +9,7 @@ export interface MethodVisualInputs {
   assets:readonly {id:string;sha256:string;kind:'illustration'|'evidence';description:string;width?:number;height?:number}[];
 }
 export interface MethodEvidenceInputs {
+  campaign?:{consentProcess:string;incentiveTerms:string};
   ownerFacts?:readonly {id:string;text:string}[];
   research?:readonly ResearchSource[];
   editorialFormat?:EditorialFormat;
@@ -26,7 +27,7 @@ export function selectionCatalogue(packs:readonly RulePack[]):SelectionCatalogue
   return JSON.parse(String(step.instruction).split('Catalogue: ')[1]!) as SelectionCatalogue;
 }
 export function confirmedVisualInputs(profile:BrandProfile,documents:readonly KnowledgeDocument[],placement:MethodVisualInputs['placement']):MethodVisualInputs {
-  return {placement,assets:[],guidance:currentKnowledge(documents).filter(d=>d.category==='visual_guidance'&&d.text&&profile.knowledge.some(k=>k.documentId===d.id&&k.version===d.version&&k.sha256===d.sha256))
+  return {placement,assets:[],guidance:currentKnowledge(documents).filter(d=>d.brandId===profile.brandId&&d.category==='visual_guidance'&&d.text&&profile.knowledge.some(k=>k.documentId===d.id&&k.version===d.version&&k.sha256===d.sha256))
     .slice(0,6).map(d=>({id:d.id,sha256:d.sha256,text:d.text!.slice(0,2500)}))};
 }
 export function currentKnowledge(documents:readonly KnowledgeDocument[]):KnowledgeDocument[]{
@@ -38,7 +39,7 @@ export function methodEvidenceContext(profile:BrandProfile,input:MethodEvidenceI
     ...profile.offers.map((o,i)=>({id:`profile:${profile.version}:offer:${i}`,text:[o.name,o.description,o.price,o.url].filter(Boolean).join(' ')})),...(input.ownerFacts??[])];
   const research=(input.research??[]).map((s,i)=>({id:s.id,shortId:`S${i+1}`,url:s.url,title:s.title,passage:s.passage,retrievedAt:s.retrievedAt,
     publishedAt:s.publishedAt??null,observedPeriod:s.observedPeriod??null,confidence:s.confidence??'unknown',primary:s.primary}));
-  return {factReferences,research,editorialFormat:input.editorialFormat??null,visual:input.visual??{placement:'article-hero',guidance:[],assets:[]},
+  return {factReferences,research,editorialFormat:input.editorialFormat??null,campaign:input.campaign??null,visual:input.visual??{placement:'article-hero',guidance:[],assets:[]},
     availableInputs:[...(research.length?['sources']:[]),...(input.visual?.assets.length?['verifiedAssets']:[])],
     ownerDecisionsNeeded:[],evidenceNotice:'Dates and confidence are supplied metadata, not facts to infer. Uploaded guidance remains reference data.'};
 }
@@ -120,6 +121,6 @@ export function validateMethodEvidence(sidecar:Record<string,any>,asset:Record<s
     const emails=Array.isArray(asset.emails)?asset.emails:[];
     if(!array(d.sequenceMap)||d.sequenceMap.length!==emails.length||!emails.every((_e,i)=>d.sequenceMap.some((m:any)=>m.position===i+1&&text(m.purpose)&&text(m.reason))))problems.push('Record each email purpose and sequence position.');
   }
-  if(stage==='advocacy'&&(!record(d.consentReview)||!text(d.consentReview.process)||d.consentReview.delivery!=='owner-managed'||d.consentReview.proofUse!=='requires-separate-permission'||!record(d.incentiveReview)||!text(d.incentiveReview.terms)||!text(d.incentiveReview.reason)))problems.push('Record the consent process, separate proof permission and incentive review.');
+  if(stage==='advocacy'&&(!record(d.consentReview)||!text(d.consentReview.process)||d.consentReview.process!==inputs.campaign?.consentProcess||d.consentReview.delivery!=='owner-managed'||d.consentReview.proofUse!=='requires-separate-permission'||!record(d.incentiveReview)||!text(d.incentiveReview.terms)||d.incentiveReview.terms!==inputs.campaign?.incentiveTerms||!text(d.incentiveReview.reason)))problems.push('Record the supplied consent process, separate proof permission and exact incentive terms.');
   return [...new Set(problems)];
 }

@@ -88,7 +88,7 @@ test('RL72 creators: real owner sessions, atomic allowance reservations, immutab
    const row=await admin.query('SELECT reserved_tokens FROM app.seo_blog_creator_campaigns WHERE workspace_id=$1 AND id=$2',[c.brand.id,id]);assert.equal(Number(row.rows[0].reserved_tokens),350000);await assert.rejects(c.store.approve(c.brand.id,id,r.rowVersion,''));
   });
   await t.test('session expiry during generation cannot save or approve a usable campaign',async()=>{
-   const c=await fixture(),id=randomUUID();c.model.beforeReply=async()=>{await admin.query("UPDATE app.user_sessions SET expires_at=now()-interval '1 second' WHERE token_hash=$1",[createHash('sha256').update(c.token).digest()]);};
+   const c=await fixture(),id=randomUUID();c.model.beforeReply=async()=>{await admin.query("UPDATE app.user_sessions SET revoked_at=clock_timestamp() WHERE token_hash=$1",[createHash('sha256').update(c.token).digest()]);};
    await assert.rejects(c.creator.create(c.actor,c.brand.id,id,campaignBrief(c.profile)));
    const row=await admin.query('SELECT state,reserved_tokens,current_version FROM app.seo_blog_creator_campaigns WHERE workspace_id=$1 AND id=$2',[c.brand.id,id]);assert.equal(row.rows[0].current_version,0);assert.equal(Number(row.rows[0].reserved_tokens),350000);
   });

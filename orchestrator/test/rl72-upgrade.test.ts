@@ -104,6 +104,7 @@ test('email and advocacy authoring produce saved reviewed drafts, durable result
 test('same campaign command never repeats a paid call; a changed brief cannot reuse it',async()=>{
  const f=await creatorFixture(),id=randomUUID(),brief=campaignBrief(f.profile);
  const first=await f.creator.create(f.actor,f.brand.id,id,brief),calls=f.model.requests.length;
+ f.store.rows.get(id)!.brief=Object.fromEntries(Object.entries(brief).reverse()) as typeof brief;
  assert.equal((await f.creator.create(f.actor,f.brand.id,id,brief)).id,first.id);assert.equal(f.model.requests.length,calls);
  await assert.rejects(f.creator.create(f.actor,f.brand.id,id,{...brief,goal:'A different purpose.'}),/different inputs/);
 });
