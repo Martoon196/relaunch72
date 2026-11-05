@@ -1,7 +1,7 @@
 import type { SqlMigration } from './migrate.js';
 
 export const MHP_WHATSAPP_MIGRATION = '0141_mhp_event_whatsapp_programme.sql';
-export const MHP_WHATSAPP_MIGRATION_SHA = '344810a1dc167168ca822c95755d4c800703282702436a55d425db57d3f39777';
+export const MHP_WHATSAPP_MIGRATION_SHA = 'f2a7617a925f39d41ac3a606de9f9dd864b52a2725d8ed7c89d37737c4fe747c';
 const TAIL = '0140_private_method_automatic_defaults.sql';
 const TAIL_SHA = 'a4b53f5721855e300cd49665cc5faa773f3c80240fbcca3fe3f31379c7f3a378';
 /** A deliberate recovery artifact: remove only the exact additive141 from a140 source ledger comparison. */

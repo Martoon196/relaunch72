@@ -1,7 +1,7 @@
 name: MHP WhatsApp exact-source gate
 on:
   push:
-    branches: [codex/mhp-whatsapp-current-20261104, codex/mhp-wa-0141-bridge]
+    branches: [codex/mhp-whatsapp-current-20261104, codex/mhp-wa-0141-bridge, codex/mhp-wa-0141-live]
 permissions:
   contents: read
 jobs:
@@ -37,7 +37,7 @@ jobs:
           RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
         run: node --import tsx scripts/rl72-boosters-pg-bootstrap.mjs
       - name: MHP real-role connection and WhatsApp event proof
-        if: github.ref_name == 'codex/mhp-whatsapp-current-20261104'
+        if: github.ref_name != 'codex/mhp-wa-0141-bridge'
         working-directory: orchestrator
         env:
           TEST_DATABASE_URL: postgresql://ci_migrator:ci-owner-test-only@127.0.0.1:5432/relaunch72_test
