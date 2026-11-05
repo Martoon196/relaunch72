@@ -15,6 +15,7 @@ import {
   type MetaWhatsAppLiveRepository,
   type MetaWhatsAppLiveRuntimeConfig,
 } from '../../whatsapp-live/index.js';
+import { MHP_EVENT_WHATSAPP_WORKSPACE_ID, PgMhpEventWhatsAppRepository, runMhpEventWhatsAppOnce } from '../../whatsapp-live-pg/event-repository.js';
 
 export const META_WHATSAPP_LIVE_WORKER_SERVICE =
   'property-predator-meta-whatsapp-live-worker' as const;
@@ -45,6 +46,8 @@ type ActiveConfig = Readonly<{
   encryptionKey: Buffer;
   encryptionKeyVersion: string;
   runtime: MetaWhatsAppLiveRuntimeConfig;
+  /** MHP009C: exact MHP binding for the scheduled webinar follow-up (opt-in). */
+  mhpEventBindingId?: string;
 }>;
 type DisabledConfig = Readonly<{
   mode: 'disabled';
@@ -86,8 +89,8 @@ export interface MetaWhatsAppLiveWorkerReadiness {
     dispatchLoopStarted: boolean;
     maximumRecipientsPerJob: 1;
     maximumTemplatesPerJob: 1;
-    dailySendCap: 1;
-    monthlySendCap: 3;
+    dailySendCap: number | null;
+    monthlySendCap: number | null;
   }>;
 }
 
@@ -117,6 +120,7 @@ export interface MetaWhatsAppLiveWorkerDependencies {
   ) => MetaWhatsAppLiveRepository;
   readonly createTransport?: MetaWhatsAppLiveTransportFactory;
   readonly runCycle?: typeof runMetaWhatsAppLiveOnce;
+  readonly runEventCycle?: typeof runMhpEventWhatsAppOnce;
   readonly randomToken?: () => Uint8Array;
   readonly writeReadiness?: (line: string) => void;
   readonly writeErrorTelemetry?: (line: string) => void;
@@ -212,7 +216,17 @@ export function loadMetaWhatsAppLiveWorkerConfig(
     ),
     encryptionKeyVersion,
     runtime,
+    ...mhpEventBinding(env),
   });
+}
+
+function mhpEventBinding(env: NodeJS.ProcessEnv): { mhpEventBindingId?: string } {
+  const mode = env.PROPERTY_PREDATOR_WHATSAPP_MHP_EVENT_MODE?.trim() ?? 'disabled';
+  if (mode === 'disabled') return {};
+  if (mode !== 'enabled' || env.PROPERTY_PREDATOR_WHATSAPP_LIVE_WORKSPACE_ID?.trim() !== MHP_EVENT_WHATSAPP_WORKSPACE_ID) {
+    throw new Error('MHP event WhatsApp requires PROPERTY_PREDATOR_WHATSAPP_MHP_EVENT_MODE=enabled on the MHP workspace');
+  }
+  return { mhpEventBindingId: requiredUuid(env.PROPERTY_PREDATOR_WHATSAPP_MHP_BINDING_ID, 'PROPERTY_PREDATOR_WHATSAPP_MHP_BINDING_ID') };
 }
 
 function safeErrorClass(error: unknown): string {
@@ -248,7 +262,8 @@ function readinessFor(config: MetaWhatsAppLiveWorkerConfig): MetaWhatsAppLiveWor
     safety: Object.freeze({ providerEffectsEnabled: config.runtime.providerEffectsEnabled,
       emergencyPaused: config.runtime.emergencyPaused, dispatchLoopStarted: active,
       maximumRecipientsPerJob: 1, maximumTemplatesPerJob: 1,
-      dailySendCap: 1, monthlySendCap: 3 }),
+      dailySendCap: config.mode === 'owned_template_live' && config.mhpEventBindingId ? null : 1,
+      monthlySendCap: config.mode === 'owned_template_live' && config.mhpEventBindingId ? null : 3 }),
   });
 }
 
@@ -305,6 +320,9 @@ export async function startMetaWhatsAppLiveWorker(
   const createTransport = dependencies.createTransport
     ?? ((options) => createMetaWhatsAppLiveTransport({ ...options, fetch: globalThis.fetch }));
 
+  const eventRepository = config.mode === 'owned_template_live' && config.mhpEventBindingId
+    ? new PgMhpEventWhatsAppRepository(pool, { workspaceId: config.workspaceId, connectionId: config.connectionId, bindingId: config.mhpEventBindingId }) : null;
+  let lastObservation = 0;
   const executeCycle = (): Promise<MetaWhatsAppLiveWorkerCycleResult> => {
     if (stopping) return Promise.reject(new Error('Meta WhatsApp live worker is stopping'));
     if (inFlight) return inFlight;
@@ -314,10 +332,22 @@ export async function startMetaWhatsAppLiveWorker(
     if (!(token instanceof Uint8Array) || token.byteLength !== 32) {
       return Promise.reject(new Error('Meta WhatsApp worker lease entropy is invalid'));
     }
-    inFlight = runCycle({ config: config.runtime, repository,
+    const legacy = () => runCycle({ config: config.runtime, repository: repository!,
       encryptionKey: config.encryptionKey,
       encryptionKeyVersion: config.encryptionKeyVersion,
-      leaseToken: Buffer.from(token), createTransport }).finally(() => { inFlight = undefined; });
+      leaseToken: Buffer.from(token), createTransport });
+    inFlight = (async (): Promise<MetaWhatsAppLiveWorkerCycleResult> => {
+      if (eventRepository) {
+        if (!config.runtime.providerEffectsEnabled || config.runtime.emergencyPaused) return 'disabled';
+        // Dedicated MHP event mode never enters the legacy owner-action rail, even when idle or failing.
+        const observeNow = Date.now() - lastObservation >= 300_000;
+        const event = await (dependencies.runEventCycle ?? runMhpEventWhatsAppOnce)({ repository: eventRepository, encryptionKey: config.encryptionKey,
+          encryptionKeyVersion: config.encryptionKeyVersion, leaseToken: Buffer.from(token), fetch: globalThis.fetch, createTransport, observeNow });
+        if (observeNow) lastObservation = Date.now();
+        return event;
+      }
+      return legacy();
+    })().finally(() => { inFlight = undefined; });
     return inFlight;
   };
 

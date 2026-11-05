@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { MethodController, MethodRun, libraryPins, loadMethod, resolveMethods, methodHash } from '../src/seo-blog/method-packs.js';
 import { MemoryMethodStore } from '../src/seo-blog/method-store.js';
 import { confirmedVisualInputs, validateMethodEvidence, selectionCatalogue } from '../src/seo-blog/method-evidence.js';
@@ -172,14 +175,16 @@ test('native creator journey protects CSRF, renders both creators, approves/expo
  page=await nativeSeoCall(f.engine,{who,method:'GET',path:base+'/'+id+'/export'});assert.equal(page.status,200);assert.match(page.body,/EMAIL 1/);assert.match(page.body,/not sent or scheduled/);
 });
 test('exact schema bridge works at 137/138/139 only when both features are off, then strict 140 is required',async()=>{
- const migrations=await discoverMigrations(),rows=migrations.map(({filename,checksum})=>({filename,checksum}));
+ const migrations=(await discoverMigrations()).slice(0,140),rows=migrations.map(({filename,checksum})=>({filename,checksum}));
+ const directory=await mkdtemp(path.join(tmpdir(),'rl72-historical140-'));
+ await Promise.all(migrations.map(m=>writeFile(path.join(directory,m.filename),m.sql)));
  const pool=(r:typeof rows)=>({query:async()=>({rows:r})}) as unknown as Pick<Pool,'query'>;
  const env={RL72_METHOD_SCHEMA_BRIDGE:'138-140',SEO_BLOG_METHOD_PACKS:'false',SEO_BLOG_CAMPAIGN_CREATORS:'false'};
  for(const count of [137,138,139]){
-  await assert.doesNotReject(assertRuntimeSchemaCurrent(pool(rows.slice(0,count)),undefined,env));
-  await assert.rejects(assertRuntimeSchemaCurrent(pool(rows.slice(0,count)),undefined,{}),/schema is behind/);
-  await assert.rejects(assertRuntimeSchemaCurrent(pool(rows.slice(0,count)),undefined,{...env,SEO_BLOG_METHOD_PACKS:'true'}),/schema is behind/);
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(pool(rows.slice(0,count)),directory,env));
+  await assert.rejects(assertRuntimeSchemaCurrent(pool(rows.slice(0,count)),directory,{}),/schema is behind/);
+  await assert.rejects(assertRuntimeSchemaCurrent(pool(rows.slice(0,count)),directory,{...env,SEO_BLOG_METHOD_PACKS:'true'}),/schema is behind/);
  }
- await assert.doesNotReject(assertRuntimeSchemaCurrent(pool(rows),undefined,{}));
- await assert.rejects(assertRuntimeSchemaCurrent(pool([...rows,{filename:'0141_unknown.sql',checksum:'0'.repeat(64)}]),undefined,env),/not present/);
+ await assert.doesNotReject(assertRuntimeSchemaCurrent(pool(rows),directory,{}));
+ await assert.rejects(assertRuntimeSchemaCurrent(pool([...rows,{filename:'0141_unknown.sql',checksum:'0'.repeat(64)}]),directory,env),/not present/);
 });
