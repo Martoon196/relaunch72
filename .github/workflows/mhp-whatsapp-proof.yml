@@ -1,7 +1,7 @@
 name: MHP WhatsApp exact-source gate
 on:
   push:
-    branches: [codex/mhp-whatsapp-current-20261104, codex/mhp-wa-0141-bridge, codex/mhp-wa-0141-live]
+    branches: [codex/mhp-whatsapp-current-20261104, codex/mhp-wa-0141-bridge, codex/mhp-wa-0141-live, codex/mhp-wa-first-contact-20261106, codex/mhp-wa-0142-bridge]
 permissions:
   contents: read
 jobs:
@@ -44,6 +44,14 @@ jobs:
           TEST_DATABASE_RESET_CONFIRM: reset-disposable-branch
           RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
         run: node --import tsx --test test/db/mhp-event-whatsapp.integration.test.ts
+      - name: MHP real-role first-contact and unmatched-status proof
+        if: github.ref_name == 'codex/mhp-wa-first-contact-20261106'
+        working-directory: orchestrator
+        env:
+          TEST_DATABASE_URL: postgresql://ci_migrator:ci-owner-test-only@127.0.0.1:5432/relaunch72_test
+          TEST_DATABASE_RESET_CONFIRM: reset-disposable-branch
+          RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
+        run: node --import tsx --test test/db/mhp-whatsapp-first-contact.integration.test.ts
       - name: Offline complete suite
         env:
           RELAUNCH72_DATABASE_INTEGRATION: ''
