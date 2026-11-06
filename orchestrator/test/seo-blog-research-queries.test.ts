@@ -2,6 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { researchQuerySeeds, researchQueries, ResearchUnavailableError } from '../src/seo-blog/research.js';
 import { FakeWeb } from './seo-blog-fixtures.js';
+import {gzipSync,brotliCompressSync,deflateSync} from 'node:zlib';
+
+test('compressed research is decoded within the page limit; corrupt and oversized payloads are not evidence',async()=>{
+  const text='<html><title>Readable refurbishment evidence</title><main><p>Refurbishment budgets need written assumptions, comparable evidence and a clear scope of works. Keep separate labour and material estimates and test each assumption carefully.</p></main></html>';
+  for(const [encoding,body,expected] of [['gzip',gzipSync(text),1],['br',brotliCompressSync(text),1],['deflate',deflateSync(text),1],['gzip',Buffer.from('broken'),0],['gzip',gzipSync('A'.repeat(1_600_000)),0]] as const){
+    const result=await researchQueries({queries:['refurbishment budgets'],search:{id:'fixture',mode:'live',search:async()=>[{url:'https://evidence.example/guide',title:'Guide',snippet:''}]},transport:{fetch:async url=>({url,finalUrl:url,status:200,contentType:'text/html',headers:{'content-encoding':encoding},body,truncated:false})},locale:'en-GB',brandWebsite:null,now:()=>new Date().toISOString()});
+    assert.equal(result.sources.length,expected);if(expected)assert.match(result.sources[0]!.passage,/Keep separate labour/);
+  }
+});
 
 test('search phrases retain whole words and Unicode without quoted prose or incomplete parentheses', () => {
   const result = researchQuerySeeds({ focus: 'UK property appraisal: checking sold comparables, refurbishment assumptions and maximum offers, with clear source and geographic limits.', audiences: ['Investisseurs français (Paris, Lyon) et rénovation énergétique'], positioning: '' });

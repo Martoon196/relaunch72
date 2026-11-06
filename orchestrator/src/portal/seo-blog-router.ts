@@ -31,6 +31,8 @@ import { CAMPAIGN_IMAGE_STATUS_SCRIPT } from './campaign-image-status.js';
 import { campaignDeliveryCalendarPage } from './seo-blog-campaign-calendar-view.js';
 import { campaignCreatorsPage, campaignCreatorReviewPage, creatorContentFromForm, creatorTextExport, productionRulesPage } from './campaign-creator-view.js';
 import type { CampaignBrief } from '../seo-blog/campaign-creator.js';
+import {postingDraftsPage,POSTING_DRAFTS_SCRIPT} from './seo-blog-posting-view.js';
+import {exportPostDraft} from '../seo-blog/platform-drafts.js';
 
 export interface SeoBlogRouteInput {
   readonly service: PortalSeoBlogService;
@@ -144,6 +146,7 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/campaign-image-status.js`) return send(res, 200, CAMPAIGN_IMAGE_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
   if(method==='GET'&&path===`${SEO_BLOG_BASE}/knowledge-kind.js`) return send(res,200,KNOWLEDGE_CATEGORY_SCRIPT,'text/javascript; charset=utf-8');
   if (method === 'GET' && path === `${SEO_BLOG_BASE}/profile-status.js`) return send(res, 200, PROFILE_STATUS_SCRIPT, 'text/javascript; charset=utf-8');
+  if (method === 'GET' && path === `${SEO_BLOG_BASE}/posting-drafts.js`) return send(res, 200, POSTING_DRAFTS_SCRIPT, 'text/javascript; charset=utf-8');
   if (method === 'GET' && path === CENTRAL_ACTION_FEEDBACK_PATH) {
     send(res, 200, CENTRAL_ACTION_FEEDBACK_SCRIPT, 'text/javascript; charset=utf-8');
     return;
@@ -161,7 +164,10 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
   const brandId = brandMatch?.[1]?.toLowerCase() ?? null;
   const rest = brandMatch?.[2] ?? '';
   const back = (tab: string) => `${SEO_BLOG_BASE}/b/${brandId}/${tab}`;
-  const ok = (location: string, text: string) => redirect(res, `${location}${location.includes('?') ? '&' : '?'}${signedMessage(input.sessionSecret, 'n', text)}`);
+  const ok = (location: string, text: string) => {
+    const [address,fragment]=location.split('#');
+    return redirect(res, `${address}${address!.includes('?') ? '&' : '?'}${signedMessage(input.sessionSecret, 'n', text)}${fragment?'#'+fragment:''}`);
+  };
 
   try {
     if (method === 'POST') {
@@ -247,6 +253,12 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
       const articleId = rest.split('/')[1];
       if (!articleId) return send(res, 200, articlesPage(shell('articles'), { articles: await engine.listArticles(actor, brandId) }));
       const action = rest.split('/')[2];
+      if(action==='posts')return send(res,200,postingDraftsPage(shell('articles'),await engine.getPostingDrafts(actor,brandId,articleId)));
+      if(action==='post-export') {
+        const data=await engine.getPostingDrafts(actor,brandId,articleId),entry=data.drafts.find(x=>x.draft.id===url.searchParams.get('draft'));
+        if(!entry)throw new SeoBlogError(404,'That posting draft was not found.');
+        return send(res,200,exportPostDraft(entry.draft),'text/markdown; charset=utf-8',{'content-disposition':`attachment; filename="${entry.draft.platform}-post.md"`});
+      }
       if (action === 'campaign') {
         const [detail, jobs] = await Promise.all([engine.getArticle(actor, brandId, articleId), engine.listJobs(actor, brandId)]);
         const social = await engine.socialOverview(actor, brandId).catch(() => null);
@@ -518,6 +530,20 @@ async function handlePost(
       if (!articleId) break;
       const here = back(`articles/${articleId}`);
       const campaignHere = `${here}/campaign`;
+      const postFields=()=>({versionId:f('versionId')??'',rowVersion:Number(f('rowVersion')),draftId:f('draftId')??'',revisionId:f('revisionId')??'',commandId:f('commandId')??''});
+      if(action==='post-save') {
+        const d=await engine.savePostingDraft(actor,brandId,articleId,{...postFields(),title:f('title')??'',body:f('body')??'',question:f('question')??'',targetUrl:f('targetUrl')??null});
+        return ok(`${here}/posts#post-${d.id}`,'New post version saved.');
+      }
+      if(action==='post-restore') {
+        await engine.restorePostingDraft(actor,brandId,articleId,{...postFields(),restoreId:f('restoreId')??''});
+        return ok(`${here}/posts#post-${f('draftId')??''}`,'Earlier text restored as a new post version.');
+      }
+      if(action==='post-answer') {
+        const platform=f('platform');if(platform!=='reddit'&&platform!=='quora')throw new SeoBlogError(400,'Choose Reddit or Quora for this answer.');
+        const d=await engine.createPostingAnswer(actor,brandId,articleId,{versionId:f('versionId')??'',rowVersion:Number(f('rowVersion')),platform,questionIndex:Number(f('questionIndex'))});
+        return ok(`${here}/posts#post-${d.id}`,'Answer prepared from the article FAQ.');
+      }
       const campaignSelection = () => ({ variantId: f('variantId') ?? '', revisionId: f('revisionId') ?? '' });
       const renderCampaignResults = async (batchResults: readonly CampaignActionResult[]) => {
         const [detail, jobs, brands, brand, social] = await Promise.all([engine.getArticle(actor, brandId, articleId), engine.listJobs(actor, brandId),

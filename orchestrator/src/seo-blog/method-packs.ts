@@ -2,6 +2,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import {isDeepStrictEqual} from 'node:util';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { REPO_ROOT } from '../paths.js';
 import type { LlmClient } from '../llm/client.js';
@@ -192,7 +193,15 @@ export class MethodRun {
         revisionPasses:Math.max(0,this.attempts-1),outcome,resultHash:outcome==='accepted'?methodHash(JSON.stringify(this.lastValue)):null,
         approvalState:'draft',createdAt:new Date().toISOString(),compiledHash:methodHash(this.compiled),...(outcome!=='accepted'&&JSON.stringify(this.lastValue).length<64000?{heldDraft:this.lastValue}:{})};
       if(['email','advocacy'].includes(this.context.stage)&&outcome==='accepted')receipt.resultText=JSON.stringify(this.lastValue);
-      await this.store.saveReceipt(receipt);this.saved=true;
+      try { await this.store.saveReceipt(receipt); }
+      catch(error) {
+        // A commit can succeed while its acknowledgement is lost. Read the
+        // exact immutable receipt; never repeat the model request or its cost.
+        let saved:MethodReceipt|null=null;
+        try{saved=await this.store.receipt(receipt.brandId,receipt.id);}catch{/* Preserve the original persistence failure. */}
+        if(!saved||!isDeepStrictEqual(saved,receipt))throw error;
+      }
+      this.saved=true;
     }
     return {...record,methodReceiptId:this.id};
   }

@@ -81,8 +81,8 @@ export async function callJson<T>(llm: LlmClient, input: {
     } catch (error) {
       if(methodRun){
         if(error instanceof SeoBlogError&&error.code==='method_context_limit'){
-          await methodRun.finish({mode:llm.mode==='live'?'live':'simulated',model,promptVersion:input.prompt.file,tokensIn,tokensOut},'rejected');
-          throw error;
+          const record=await methodRun.finish({mode:llm.mode==='live'?'live':'simulated',model,promptVersion:input.prompt.file,tokensIn,tokensOut},'rejected');
+          throw new GenerationRejectedError('The draft exceeded its bounded method context. Its known usage was recorded.',record,'method');
         }
         await methodRun.finish({mode:llm.mode==='live'?'live':'simulated',model,promptVersion:input.prompt.file,tokensIn,tokensOut},'unknown');
         throw new SeoBlogError(409,'The method generation outcome is uncertain. Review its saved receipt before another call.','method_generation_unknown');

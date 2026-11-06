@@ -4,11 +4,33 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { REPO_ROOT } from '../src/paths.js';
-import { MethodController,MethodRun,libraryPins,loadMethod,resolveMethods,methodHash } from '../src/seo-blog/method-packs.js';
+import { MethodController,MethodRun,libraryPins,loadMethod,resolveMethods,methodHash,inheritMethodRun } from '../src/seo-blog/method-packs.js';
 import { MemoryMethodStore } from '../src/seo-blog/method-store.js';
+import {GenerationRejectedError,callJson} from '../src/seo-blog/generation.js';
+import {loadPrompt} from '../src/stages/prompt.js';
 import { writeArticle,rewriteSection,writeArticleCampaignPromotions } from '../src/seo-blog/generation.js';
 import type { ArticleBody } from '../src/seo-blog/types.js';
+import {SeoBlogError} from '../src/seo-blog/types.js';
 import { fixtureBrand,fixtureSnapshot,MethodFixtureModel } from './rl72-method-fixtures.js';
+
+test('a committed rejected method receipt survives a lost acknowledgement without another model call or receipt charge',async()=>{
+  const f=fixtureBrand(),store=new MemoryMethodStore();store.snapshots.set(f.brand.id,fixtureSnapshot(f.brand.id));
+  const save=store.saveReceipt.bind(store);let writes=0,calls=0;
+  store.saveReceipt=async r=>{writes++;await save(r);throw new Error('lost acknowledgement');};
+  const model={mode:'live' as const,complete:async()=>{calls++;return {text:'{}',tokensIn:101,tokensOut:7,model:'fixture',stopReason:'end_turn'};}};
+  const llm=await new MethodController(store,true).prepare(model,{...f,stages:['blog'],stage:'blog',assetRef:'article:test',sources:['fixture-source','S1'],baselineTokens:32000});
+  await assert.rejects(()=>callJson(llm,{prompt:loadPrompt('seo-blog-article.md'),user:'fixture',schema:{type:'object'},maxTokens:100}),e=>{assert.ok(e instanceof GenerationRejectedError);assert.ok(e.record.methodReceiptId);assert.equal(e.record.tokensIn+e.record.tokensOut,216);return true;});
+  assert.equal(calls,2);assert.equal(writes,1);assert.equal(store.receipts.size,1);assert.equal([...store.receipts.values()][0]!.outcome,'rejected');
+});
+
+test('a preflight context limit on correction retains the first response as known rejected usage',async()=>{
+  const f=fixtureBrand(),store=new MemoryMethodStore();store.snapshots.set(f.brand.id,fixtureSnapshot(f.brand.id));let calls=0,attempts=0;
+  const model={mode:'live' as const,complete:async()=>{calls++;return {text:'{}',tokensIn:101,tokensOut:7,model:'fixture',stopReason:'end_turn'};}};
+  const wrapped=await new MethodController(store,true).prepare(model,{...f,stages:['blog'],stage:'blog',assetRef:'article:bounded',sources:['fixture-source','S1'],baselineTokens:32000});
+  const client={...wrapped,complete:async(req:Parameters<typeof wrapped.complete>[0])=>{if(++attempts===2)throw new SeoBlogError(409,'bounded request','method_context_limit');return wrapped.complete(req);}};inheritMethodRun(client,wrapped);
+  await assert.rejects(()=>callJson(client,{prompt:loadPrompt('seo-blog-article.md'),user:'fixture',schema:{type:'object'},maxTokens:100}),e=>{assert.ok(e instanceof GenerationRejectedError);assert.equal(e.reason,'method');assert.equal(e.record.tokensIn+e.record.tokensOut,108);return true;});
+  assert.equal(calls,1);assert.equal([...store.receipts.values()][0]!.outcome,'rejected');
+});
 
 async function runBlog(kind:'home'|'b2b'='home'){
  const f=fixtureBrand(kind),store=new MemoryMethodStore(),model=new MethodFixtureModel();

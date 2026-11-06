@@ -9,6 +9,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import {gunzipSync,inflateSync,brotliDecompressSync} from 'node:zlib';
 import { parseHtmlPage } from './html.js';
 import { topicTokens } from './dedupe.js';
 import { sameSite } from './inventory.js';
@@ -291,10 +292,17 @@ export async function researchQueries(input: {
       try {
         const page = await input.transport.fetch(key, { maxBytes: 1_500_000 });
         if (page.status !== 200 || !/html|text\/plain/i.test(page.contentType)) { notes.push(`${key} could not be read (HTTP ${page.status}).`); continue; }
-        const parsed = /html/i.test(page.contentType) ? parseHtmlPage(page.body.toString('utf8'), page.finalUrl) : null;
+        const encoding=(page.headers['content-encoding']??'identity').toLowerCase().trim();
+        const options={maxOutputLength:1_500_000};
+        const bytes=encoding==='gzip'?gunzipSync(page.body,options):encoding==='deflate'?inflateSync(page.body,options):encoding==='br'?brotliDecompressSync(page.body,options):encoding==='identity'?page.body:null;
+        if(!bytes){notes.push(`${key} used an unsupported text encoding.`);continue;}
+        const rawText=bytes.toString('utf8');
+        // Refuse binary/corrupt responses even if a server labels them HTML.
+        if(rawText.includes('\ufffd')&&rawText.split('\ufffd').length>Math.max(10,rawText.length/100)){notes.push(`${key} did not contain readable text.`);continue;}
+        const parsed = /html/i.test(page.contentType) ? parseHtmlPage(rawText, page.finalUrl) : null;
         // HTML can contain literal NUL padding. PostgreSQL JSONB cannot store
         // it; use a space so adjacent words do not silently merge.
-        const text = (parsed ? parsed.text : page.body.toString('utf8')).replace(/\u0000/gu,' ');
+        const text = (parsed ? parsed.text : rawText).replace(/\u0000/gu,' ');
         const passage = supportingPassage(text, query);
         if (passage.length < 60) { notes.push(`${key} had no usable text.`); continue; }
         sources.push({

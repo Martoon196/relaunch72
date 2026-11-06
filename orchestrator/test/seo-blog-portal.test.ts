@@ -13,6 +13,27 @@ import {websiteFixture} from './seo-blog-website-fixtures.js';
 
 const SECRET = 's'.repeat(48);
 
+test('posting draft owner routes save, export and restore versions with CSRF and foreign access protection',async()=>{
+  const f=await websiteFixture(),engine=f.h.engine,who=identity(OWNER.userId),csrf=portalCsrfToken(SECRET,who.sessionToken);
+  const service:PortalSeoBlogService={generation:'live',research:'live',social:'unavailable',engineFor:()=>engine,socialCallback:async()=>null};
+  const base=`/portal/seo-blog/b/${f.brand.id}/articles/${f.articleId}`,before=await engine.getArticle(OWNER,f.brand.id,f.articleId);
+  const page=await call(service,who,'GET',base+'/posts');assert.equal(page.status,200);assert.match(page.body,/Copy\/export handoff/);assert.match(page.body,/Substack/);assert.match(page.body,/name="_csrf"/);
+  const data=await engine.getPostingDrafts(OWNER,f.brand.id,f.articleId),d=data.drafts.find(x=>x.draft.platform==='substack')!.draft,r=d.revisions[0]!;
+  const fields={versionId:data.version.id,rowVersion:String(data.article.rowVersion),draftId:d.id,revisionId:r.id,commandId:randomUUID(),title:r.title,body:r.body+'\nOwner addition.',question:'',targetUrl:'https://publication.example/'};
+  for(const denied of [await call(service,who,'POST',base+'/post-save',fields),await call(service,who,'POST',base+'/post-save',{...fields,_csrf:csrf},{origin:'https://evil.example'})]){
+    assert.equal(denied.status,303);assert.ok(new URL(denied.headers.location!,'https://portal.example').searchParams.has('e'));
+  }
+  assert.deepEqual((await engine.getArticle(OWNER,f.brand.id,f.articleId)).article,before.article);
+  assert.equal((await call(service,identity(STRANGER.userId),'GET',base+'/posts')).status,404);
+  const saved=await call(service,who,'POST',base+'/post-save',{...fields,_csrf:csrf});assert.equal(saved.status,303);const location=new URL(saved.headers.location!,'https://portal.example');assert.ok(location.searchParams.has('n'));assert.equal(location.hash,'#post-'+d.id);
+  const exported=await call(service,who,'GET',base+'/post-export?draft='+d.id);assert.equal(exported.status,200);assert.match(exported.body,/Owner addition/);assert.match(exported.headers['content-disposition']!,/substack-post.md/);
+  const foreign=await call(service,who,'GET',base+'/post-export?draft='+randomUUID());assert.equal(foreign.status,404);
+  const current=await engine.getPostingDrafts(OWNER,f.brand.id,f.articleId),savedDraft=current.drafts.find(x=>x.draft.id===d.id)!.draft;
+  const restored=await call(service,who,'POST',base+'/post-restore',{_csrf:csrf,versionId:current.version.id,rowVersion:String(current.article.rowVersion),draftId:d.id,revisionId:savedDraft.currentRevisionId,restoreId:r.id,commandId:randomUUID()});assert.equal(restored.status,303);
+  assert.deepEqual((await engine.getArticle(OWNER,f.brand.id,f.articleId)).version,before.version);assert.equal(f.h.site.posts,0);
+  assert.equal((await call(service,null,'GET','/portal/seo-blog/posting-drafts.js')).status,200);
+});
+
 test('website target routes expose installed roots, preserve CSRF/owner/version gates and never publish or generate on review',async()=>{
   const f=await websiteFixture();const structure=await f.approveStructure();const service:PortalSeoBlogService={generation:'live',research:'live',social:'unavailable',engineFor:()=>f.h.engine,socialCallback:async()=>null};const who=identity(OWNER.userId);const csrf=portalCsrfToken(SECRET,who.sessionToken);
   const setup=await call(service,who,'GET',`/portal/seo-blog/b/${f.brand.id}/setup`);assert.match(setup.body,/<select id="editorial-root" name="root"/);assert.match(setup.body,/<option value="\/investment-info"/);assert.doesNotMatch(setup.body,/Property Predator currently supports/);

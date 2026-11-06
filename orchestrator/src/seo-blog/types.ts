@@ -450,6 +450,8 @@ export interface ArticleHold {
 }
 
 export interface Article {
+  /** Private handoff drafts; never an approval or a connected publishing account. */
+  readonly platformDrafts?: readonly import('./platform-drafts.js').PlatformDraft[];
   readonly mediaQualityReviews?: readonly import('./media-review.js').MediaQualityReview[];
   readonly mediaWithdrawals?: readonly import('./media-types.js').SeoMediaWithdrawal[];
   readonly heroMedia?: import('./media-review.js').HeroMediaSelection;

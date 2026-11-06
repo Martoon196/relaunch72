@@ -49,6 +49,7 @@ import type { ArticleMediaReviewService } from './media-review.js';
 import type { SeoBlogCampaignQueueService } from './campaign-queue.js';
 import { campaignCopyIssue, INITIAL_CAMPAIGN_TOKEN_ESTIMATE, type CampaignGeneration, type CampaignCopyReceipt } from './campaign-generation.js';
 import { campaignCalendarEntries, campaignJobLinks, socialCalendarWindow } from './campaign-calendar.js';
+import { POSTING_PLATFORMS, currentPostDraft, defaultPostDraftId, derivePostDraft, editPostDraft, restorePostDraft, postDraftIsStale, type PlatformDraft, type PostDraftSource } from './platform-drafts.js';
 
 export interface Actor {
   readonly userId: string;
@@ -1488,6 +1489,43 @@ export class SeoBlogEngine {
       article, version: versions.find((v) => v.id === article.currentVersionId) ?? null, versions, proposedAt: brief?.suggestedAtUtc ?? null,
       publications: (await this.store.listPublications(brandId, articleId)).map(({websiteSnapshot:_private,...publicRecord})=>publicRecord), status: articleStatusLabel(article, brand.settings),
     };
+  }
+
+  async getPostingDrafts(actor:Actor,brandId:string,articleId:string) {
+    const detail=await this.getArticle(actor,brandId,articleId),brand=await this.brandFor(actor,brandId);
+    if(!detail.version)throw new SeoBlogError(409,'The article is still being written. Its posting drafts will appear when it is ready.');
+    const v=detail.version,a=detail.article,profile=await this.store.latestProfile(brandId);
+    const source:PostDraftSource={articleId:a.id,brandId,versionId:v.id,contentSha:v.contentSha,profileVersion:v.profileVersion,factsSha:v.factsSha,body:v.body,publicUrl:a.publishedVersionId===v.id?a.publishedUrl:null};
+    const saved=[...(a.platformDrafts??[])];
+    const drafts=[...saved,...POSTING_PLATFORMS.filter(p=>!saved.some(d=>d.platform===p.id&&currentPostDraft(d).sourceVersionId===v.id)).map(p=>derivePostDraft(source,p.id,brand.name,{id:defaultPostDraftId(a.id,v.id,p.id),actor:actor.userId,at:v.createdAt}))];
+    return {...detail,version:v,drafts:drafts.map(d=>({draft:d,saved:saved.some(s=>s.id===d.id),stale:postDraftIsStale(d,{...source,factsSha:profile?.factsSha??source.factsSha})}))};
+  }
+  async createPostingAnswer(actor:Actor,brandId:string,articleId:string,input:{versionId:string;rowVersion:number;platform:'reddit'|'quora';questionIndex:number}):Promise<PlatformDraft> {
+    const data=await this.getPostingDrafts(actor,brandId,articleId),a=data.article,v=data.version;
+    if(a.currentVersionId!==input.versionId||a.rowVersion!==input.rowVersion)throw new StaleWriteError('posting workspace');
+    if(!['reddit','quora'].includes(input.platform)||!Number.isInteger(input.questionIndex)||!v.body.faqs[input.questionIndex])throw new SeoBlogError(400,'Choose a question answered in this article.');
+    const id=defaultPostDraftId(a.id,v.id,input.platform,input.questionIndex),prior=a.platformDrafts?.find(d=>d.id===id);
+    if(prior)return prior;
+    const brand=await this.brandFor(actor,brandId);
+    const next=derivePostDraft({articleId:a.id,brandId,versionId:v.id,contentSha:v.contentSha,profileVersion:v.profileVersion,factsSha:v.factsSha,body:v.body,publicUrl:a.publishedVersionId===v.id?a.publishedUrl:null},input.platform,brand.name,{id,actor:actor.userId,at:this.now(),questionIndex:input.questionIndex});
+    await this.store.updateArticle({...a,platformDrafts:[...(a.platformDrafts??[]),next]});return next;
+  }
+  async savePostingDraft(actor:Actor,brandId:string,articleId:string,input:{versionId:string;rowVersion:number;draftId:string;revisionId:string;commandId:string;title:string;body:string;question:string;targetUrl:string|null}):Promise<PlatformDraft> {
+    const data=await this.getPostingDrafts(actor,brandId,articleId),a=data.article;
+    const entry=data.drafts.find(d=>d.draft.id===input.draftId);
+    if(!entry)throw new SeoBlogError(404,'That posting draft was not found.');
+    if(a.currentVersionId!==input.versionId||a.rowVersion!==input.rowVersion)throw new StaleWriteError('posting workspace');
+    const next=editPostDraft(entry.draft,input.revisionId,{id:input.commandId,actor:actor.userId,at:this.now(),title:input.title,body:input.body,question:input.question,targetUrl:input.targetUrl});
+    await this.store.updateArticle({...a,platformDrafts:[...(a.platformDrafts??[]).filter(d=>d.id!==next.id),next]});
+    return next;
+  }
+  async restorePostingDraft(actor:Actor,brandId:string,articleId:string,input:{versionId:string;rowVersion:number;draftId:string;revisionId:string;restoreId:string;commandId:string}):Promise<void> {
+    const data=await this.getPostingDrafts(actor,brandId,articleId),a=data.article;
+    if(a.currentVersionId!==input.versionId||a.rowVersion!==input.rowVersion)throw new StaleWriteError('posting workspace');
+    const entry=data.drafts.find(d=>d.saved&&d.draft.id===input.draftId);
+    if(!entry)throw new SeoBlogError(404,'That saved post was not found.');
+    const next=restorePostDraft(entry.draft,input.revisionId,input.restoreId,{id:input.commandId,actor:actor.userId,at:this.now()});
+    await this.store.updateArticle({...a,platformDrafts:(a.platformDrafts??[]).map(d=>d.id===next.id?next:d)});
   }
 
   private campaignService(): SeoBlogCampaignService { return new SeoBlogCampaignService(this.store, this.now, this.deps.campaignReview); }
