@@ -1,12 +1,13 @@
 /**
- * <ghq-player> — native <video> with no vendor chrome.
+ * <ghq-player> — native <video> with our own chrome. No vendor logo, no "watch on" link.
  *  - Live low-latency: WebRTC (WHEP) first, automatic fallback to HLS.
  *  - HLS: native where supported (Safari/iOS), hls.js lazily loaded elsewhere.
  *  - Evergreen: playhead locked to "now − slot start"; seeking is undone.
  *  - On-demand/replay: free seeking, resumes where the viewer left off.
  * Emits `ghq-time` ({ position, playing }) about once a second.
  */
-import { html, css, LitElement, type PropertyValues } from 'lit';
+import { html, css, LitElement, nothing, type PropertyValues } from 'lit';
+import { icon } from './icons.js';
 import { base } from './styles.js';
 import { store } from './api.js';
 import type { Playback } from './types.js';
@@ -24,6 +25,8 @@ export class GhqPlayer extends LitElement {
     _muted: { state: true },
     _paused: { state: true },
     _captions: { state: true },
+    _loading: { state: true },
+    _hasCaptions: { state: true },
   };
   declare playback: Playback | null;
   declare fetchedAt: number;
@@ -34,6 +37,8 @@ export class GhqPlayer extends LitElement {
   declare _muted: boolean;
   declare _paused: boolean;
   declare _captions: boolean;
+  declare _loading: boolean;
+  declare _hasCaptions: boolean;
 
   private hls: HlsLike | null = null;
   private pc: RTCPeerConnection | null = null;
@@ -42,11 +47,24 @@ export class GhqPlayer extends LitElement {
   private currentSrc = '';
 
   static styles = [base, css`
-    .wrap { position: relative; background: #000; border-radius: var(--ghq-radius); overflow: hidden; aspect-ratio: 16 / 9; }
+    .wrap { position: relative; background: #000; border-radius: var(--ghq-radius); overflow: hidden; aspect-ratio: 16 / 9; box-shadow: var(--ghq-shadow); isolation: isolate; }
+    .wrap:fullscreen { border-radius: 0; }
     video { width: 100%; height: 100%; display: block; background: #000; }
-    .overlay { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.45); }
-    .bar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: 8px; padding: 8px; background: linear-gradient(transparent, rgba(0,0,0,.7)); }
-    .bar button { min-height: 36px; padding: 6px 12px; background: rgba(255,255,255,.15); border-color: transparent; font-size: .85rem; }
+    .overlay { position: absolute; inset: 0; display: grid; place-items: center; background: radial-gradient(ellipse at center, rgba(0,0,0,.25), rgba(0,0,0,.65)); }
+    .overlay button { background: #fff; color: #111; border-color: #fff; padding: 12px 24px 12px 18px; font-size: 1rem; box-shadow: 0 10px 30px -8px rgba(0,0,0,.6); }
+    .overlay button svg { width: 22px; height: 22px; }
+    .spinner { width: 42px; height: 42px; border-radius: 50%; border: 3px solid rgba(255,255,255,.25); border-top-color: #fff; animation: ghq-spin .9s linear infinite; }
+    @keyframes ghq-spin { to { transform: rotate(360deg); } }
+    .bar {
+      position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 4px; padding: 10px 10px 8px;
+      background: linear-gradient(transparent, rgba(0,0,0,.75)); opacity: 0; transition: opacity .25s;
+    }
+    .wrap:hover .bar, .wrap:focus-within .bar, .bar.show { opacity: 1; }
+    .bar button { min-height: 38px; width: 38px; padding: 0; border-radius: 10px; background: rgba(255,255,255,.12); border-color: transparent; color: #fff; backdrop-filter: blur(6px); }
+    .bar button:hover { background: rgba(255,255,255,.22); transform: none; box-shadow: none; }
+    .bar button[aria-pressed='true'] { background: #fff; color: #111; }
+    .bar .state { margin-left: 6px; display: inline-flex; align-items: center; gap: 7px; color: #fff; font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .bar .state .dot { background: #e11d48; color: #e11d48; }
     .spacer { flex: 1; }
   `];
 
@@ -61,6 +79,8 @@ export class GhqPlayer extends LitElement {
     this._muted = false;
     this._paused = true;
     this._captions = false;
+    this._loading = true;
+    this._hasCaptions = false;
   }
 
   get video(): HTMLVideoElement | null {
@@ -98,6 +118,7 @@ export class GhqPlayer extends LitElement {
     if (this._mode === 'webrtc' && this.pc && p.low_latency) return;
     const keepAt = this._mode === 'hls' && !v.paused ? v.currentTime : null;
     this.teardown();
+    this._loading = true;
     if (p.low_latency && p.webrtc && 'RTCPeerConnection' in window) {
       try {
         await this.whep(p.webrtc, v);
@@ -112,6 +133,7 @@ export class GhqPlayer extends LitElement {
     await this.loadHls(p.hls, v);
     this._mode = 'hls';
     v.addEventListener('loadedmetadata', () => {
+      this._hasCaptions = Array.from(v.textTracks).some((t) => t.kind === 'captions' || t.kind === 'subtitles');
       const exp = this.expectedPosition();
       if (exp !== null) v.currentTime = exp;
       else if (keepAt !== null) v.currentTime = keepAt;
@@ -175,13 +197,11 @@ export class GhqPlayer extends LitElement {
       });
     });
     pc.addEventListener('connectionstatechange', () => {
-      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+      if ((pc.connectionState === 'failed' || pc.connectionState === 'disconnected') && this.pc === pc && this.playback) {
         // Mid-stream failure → HLS.
-        if (this.pc === pc && this.playback) {
-          this.pc = null;
-          pc.close();
-          void this.loadHls(this.playback.hls, v).then(() => { this._mode = 'hls'; this.tryPlay(); });
-        }
+        this.pc = null;
+        pc.close();
+        void this.loadHls(this.playback.hls, v).then(() => { this._mode = 'hls'; this.tryPlay(); });
       }
     });
   }
@@ -189,7 +209,7 @@ export class GhqPlayer extends LitElement {
   private tryPlay() {
     const v = this.video;
     if (!v) return;
-    v.play().then(() => { this._needsTap = false; }).catch(() => { this._needsTap = true; });
+    v.play().then(() => { this._needsTap = false; }).catch(() => { this._needsTap = true; this._loading = false; });
   }
 
   private onTime() {
@@ -226,33 +246,46 @@ export class GhqPlayer extends LitElement {
     for (const t of Array.from(v.textTracks)) t.mode = this._captions && (t.kind === 'captions' || t.kind === 'subtitles') ? 'showing' : 'disabled';
   }
 
+  private fullscreen() {
+    const el = this.renderRoot.querySelector<HTMLElement>('.wrap');
+    if (!el) return;
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else if (el.requestFullscreen) void el.requestFullscreen();
+    else (this.video as HTMLVideoElement & { webkitEnterFullscreen?: () => void })?.webkitEnterFullscreen?.();
+  }
+
   render() {
     const p = this.playback;
     const custom = !!p && !p.seekable; // live + evergreen: no scrub bar
+    const live = !!p?.low_latency;
     return html`
       <div class="wrap">
         <video
           playsinline
           ?controls=${!custom}
-          controlslist="nodownload noplaybackrate"
+          controlslist="nodownload noplaybackrate noremoteplayback"
           disablepictureinpicture
           aria-label=${this.title}
           @timeupdate=${this.onTime}
           @seeking=${this.onSeeking}
           @play=${this.onPlay}
+          @playing=${() => (this._loading = false)}
+          @waiting=${() => (this._loading = true)}
           @pause=${() => (this._paused = true)}
           @volumechange=${() => (this._muted = !!this.video?.muted)}
           @contextmenu=${(e: Event) => e.preventDefault()}
         ></video>
         ${custom ? html`
-          <div class="bar">
-            <button @click=${() => (this.video!.paused ? this.tryPlay() : this.video!.pause())} aria-label=${this._paused ? 'Play' : 'Pause'}>${this._paused ? '▶ Play' : '❚❚ Pause'}</button>
-            <button @click=${() => { const v = this.video!; v.muted = !v.muted; }} aria-label=${this._muted ? 'Unmute' : 'Mute'}>${this._muted ? 'Unmute' : 'Mute'}</button>
+          <div class="bar ${this._paused ? 'show' : ''}">
+            <button @click=${() => (this.video!.paused ? this.tryPlay() : this.video!.pause())} aria-label=${this._paused ? 'Play' : 'Pause'}>${this._paused ? icon.play() : icon.pause()}</button>
+            <button @click=${() => { const v = this.video!; v.muted = !v.muted; }} aria-label=${this._muted ? 'Unmute' : 'Mute'}>${this._muted ? icon.muted() : icon.volume()}</button>
+            <span class="state"><span class="dot ${live ? 'pulse' : ''}"></span>${live ? 'Live' : 'Scheduled replay'}</span>
             <span class="spacer"></span>
-            <button @click=${this.toggleCaptions} aria-pressed=${this._captions ? 'true' : 'false'}>CC</button>
-            <button @click=${() => this.renderRoot.querySelector('.wrap')?.requestFullscreen?.()} aria-label="Full screen">⛶</button>
-          </div>` : ''}
-        ${this._needsTap ? html`<div class="overlay"><button class="accent" @click=${() => this.tryPlay()}>▶ Click to watch</button></div>` : ''}
+            ${this._hasCaptions ? html`<button @click=${this.toggleCaptions} aria-pressed=${this._captions ? 'true' : 'false'} aria-label="Captions">${icon.captions()}</button>` : nothing}
+            <button @click=${this.fullscreen} aria-label="Full screen">${icon.expand()}</button>
+          </div>` : nothing}
+        ${this._needsTap ? html`<div class="overlay"><button class="rise" @click=${() => this.tryPlay()}>${icon.play()} Click to watch</button></div>`
+          : this._loading && p ? html`<div class="overlay" aria-label="Loading video"><div class="spinner"></div></div>` : nothing}
       </div>`;
   }
 }

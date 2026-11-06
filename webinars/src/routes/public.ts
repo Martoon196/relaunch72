@@ -65,7 +65,7 @@ function webinarSummary(w: WebinarRow, cfg?: ResolvedConfig, env?: { PUBLIC_ORIG
     id: w.id,
     slug: w.slug,
     type: w.type,
-    label: w.type === 'evergreen' ? 'Scheduled replay' : w.type === 'live' ? 'Live' : 'On demand',
+    label: w.type === 'evergreen' ? 'Scheduled replay' : w.type === 'live' ? 'Live webinar' : 'On demand',
     title: w.title,
     description: w.description,
     presenters: parseJson(w.presenters_json, []),

@@ -1,9 +1,10 @@
 /** register · list · countdown views. The room lives in room.ts. */
 import { html, css, LitElement, nothing } from 'lit';
 import { Api, ApiError, emit, store } from './api.js';
-import { countdown, localDateTime, shortDateTime, utmFromLocation } from './format.js';
-import { base } from './styles.js';
-import type { FormField, WebinarDetail } from './types.js';
+import { countdownParts, localDate, localTime, shortDateTime, utmFromLocation } from './format.js';
+import { icon } from './icons.js';
+import { base, hueFor, initials } from './styles.js';
+import type { FormField, Presenter, WebinarDetail } from './types.js';
 
 declare global {
   interface Window { turnstile?: { render(el: HTMLElement, opts: Record<string, unknown>): string; reset(id?: string): void } }
@@ -24,6 +25,38 @@ function loadTurnstile(): Promise<void> {
 }
 
 export const tokenKey = (key: string, slug: string) => `ghq:${key.slice(0, 16)}:${slug}:token`;
+
+export const presenterCard = (p: Presenter, size: 'md' | 'lg' = 'md') => html`
+  <div class="presenter ${size}">
+    ${p.photo_url ? html`<img class="avatar" src=${p.photo_url} alt="">` : html`<span class="avatar" style="--h:${hueFor(p.name)}">${initials(p.name)}</span>`}
+    <div><strong>${p.name}</strong>${p.title ? html`<div class="muted small">${p.title}</div>` : nothing}${size === 'lg' && p.bio ? html`<p class="small muted" style="margin:6px 0 0">${p.bio}</p>` : nothing}</div>
+  </div>`;
+
+/** Segmented countdown (days · hours · minutes · seconds). */
+export const countdownTiles = (ms: number) => {
+  const parts = countdownParts(ms);
+  return html`<div class="tiles" role="timer" aria-live="off">
+    ${parts.map((p) => html`<div class="tile"><span class="n">${String(p.value).padStart(2, '0')}</span><span class="l">${p.label}</span></div>`)}
+  </div>`;
+};
+
+export const tilesCss = css`
+  .tiles { display: inline-flex; gap: 8px; }
+  .tile { display: grid; justify-items: center; min-width: 64px; padding: 10px 8px 8px; border-radius: calc(var(--ghq-radius) * .8); background: var(--ghq-surface); border: 1px solid var(--ghq-border); }
+  .tile .n { font-size: 1.75rem; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+  .tile .l { font-size: .65rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ghq-muted); margin-top: 6px; }
+`;
+
+const skeletonCss = css`
+  .sk-grid { display: grid; gap: 24px; grid-template-columns: 1fr; }
+  @media (min-width: 820px) { .sk-grid { grid-template-columns: 1.15fr 1fr; } }
+  .sk-grid .skeleton { margin-bottom: 14px; }
+`;
+
+const skeletonRegister = html`<div class="sk-grid" aria-busy="true" aria-label="Loading">
+  <div><div class="skeleton" style="width:90px;height:20px"></div><div class="skeleton" style="width:70%;height:38px"></div><div class="skeleton" style="width:45%;height:22px"></div><div class="skeleton" style="height:60px"></div><div class="skeleton" style="width:60%;height:44px"></div></div>
+  <div class="card"><div class="skeleton" style="width:40%;height:24px"></div><div class="skeleton" style="height:46px"></div><div class="skeleton" style="height:46px"></div><div class="skeleton" style="height:46px"></div><div class="skeleton" style="width:40%;height:46px;border-radius:999px"></div></div>
+</div>`;
 
 // =====================================================================
 // <ghq-register>
@@ -63,17 +96,31 @@ export class GhqRegister extends LitElement {
   declare _turnstileToken: string;
   private turnstileId: string | null = null;
 
-  static styles = [base, css`
-    .grid { display: grid; gap: 24px; grid-template-columns: 1fr; }
-    @media (min-width: 820px) { .grid { grid-template-columns: 1.2fr 1fr; } }
-    .presenter { display: flex; gap: 12px; align-items: center; }
-    .presenter img { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; }
+  static styles = [base, skeletonCss, css`
+    .grid { display: grid; gap: 28px; grid-template-columns: 1fr; align-items: start; }
+    @media (min-width: 820px) { .grid { grid-template-columns: 1.15fr 1fr; gap: 40px; } .form { position: sticky; top: 16px; } }
+    .lede { font-size: 1.05rem; color: var(--ghq-muted); max-width: 56ch; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 18px; }
+    .presenters { display: grid; gap: 14px; margin-top: 8px; }
+    .presenter { display: flex; gap: 12px; align-items: flex-start; }
+    .presenter .avatar { width: 48px; height: 48px; }
+    .learn li { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; }
+    .learn li svg { width: 20px; height: 20px; color: var(--ghq-accent); flex: none; margin-top: 2px; }
+    .learn li .t { color: var(--ghq-muted); font-variant-numeric: tabular-nums; margin-right: 4px; }
+    .form h2 { display: flex; align-items: center; gap: 8px; }
+    .form h2 svg { width: 20px; height: 20px; color: var(--ghq-accent); }
     .slots { display: grid; gap: 8px; }
-    .slot { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid var(--ghq-border); border-radius: var(--ghq-radius); cursor: pointer; font-weight: 500; }
-    .slot:has(input:checked) { border-color: var(--ghq-accent); box-shadow: 0 0 0 1px var(--ghq-accent); }
-    .slot input { width: 18px; min-height: 18px; height: 18px; }
-    .when { font-size: 1.05rem; font-weight: 600; }
-    .cal a { margin-right: 14px; }
+    .slots .choice .d { flex: 1; }
+    .slots .choice .t { font-weight: 700; font-variant-numeric: tabular-nums; }
+    .slots .soon { font-size: .7rem; font-weight: 700; color: var(--ghq-accent); text-transform: uppercase; letter-spacing: .06em; }
+    .submit { width: 100%; font-size: 1rem; }
+    .done { text-align: center; padding: 34px 24px; }
+    .done .tick { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; margin: 0 auto 16px; background: var(--_accent-soft); color: var(--ghq-accent); }
+    .done .tick svg { width: 34px; height: 34px; }
+    .done .when { font-size: 1.1rem; font-weight: 700; }
+    .cal { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; }
+    .cal a { text-decoration: none; color: var(--ghq-text); }
+    .privacy { margin-top: 2px; }
   `];
 
   constructor() {
@@ -129,6 +176,7 @@ export class GhqRegister extends LitElement {
     e.preventDefault();
     const w = this._w!;
     const form = e.target as HTMLFormElement;
+    if (!form.reportValidity()) return;
     const fd = new FormData(form);
     const answers: Record<string, string | boolean> = {};
     for (const f of w.config.registration.fields) {
@@ -172,7 +220,7 @@ export class GhqRegister extends LitElement {
     const id = `f-${f.name}`;
     const req = !!f.required;
     if (f.type === 'checkbox') {
-      return html`<label class="check" for=${id}><input id=${id} type="checkbox" name=${f.name} ?required=${req}> ${f.label}</label>`;
+      return html`<label class="check" for=${id}><input id=${id} type="checkbox" name=${f.name} ?required=${req}> <span>${f.label}</span></label>`;
     }
     const input =
       f.type === 'select'
@@ -180,7 +228,7 @@ export class GhqRegister extends LitElement {
         : f.type === 'textarea'
           ? html`<textarea id=${id} name=${f.name} ?required=${req}></textarea>`
           : html`<input id=${id} name=${f.name} type=${f.type} ?required=${req} autocomplete=${f.name === 'email' ? 'email' : f.name === 'name' ? 'name' : f.name === 'phone' ? 'tel' : 'off'}>`;
-    return html`<div><label for=${id}>${f.label}${req ? '' : html` <span class="muted small">(optional)</span>`}</label>${input}</div>`;
+    return html`<div><label for=${id}>${f.label}${req ? '' : html` <span class="muted" style="font-weight:400">(optional)</span>`}</label>${input}</div>`;
   }
 
   private joinNow() {
@@ -190,57 +238,69 @@ export class GhqRegister extends LitElement {
   private renderDone(w: WebinarDetail, r: RegResult) {
     const starts = r.session.starts_at;
     const opensSoon = !starts || Date.parse(starts) - Date.now() < w.config.defaults.room_opens_min_before * 60_000;
+    const locale = w.config.defaults.locale;
     return html`
-      <div class="card stack" role="status" aria-live="polite">
-        <h2>${r.already_registered ? 'You’re already registered' : 'You’re registered!'}</h2>
-        ${starts ? html`<p class="when">${localDateTime(starts, w.config.defaults.locale)}</p>` : nothing}
-        <p>${r.already_registered ? 'We’ve sent a fresh link to your email.' : 'Your personal link is on its way to your inbox.'}</p>
-        ${r.token && opensSoon ? html`<button class="accent" @click=${this.joinNow}>Join now</button>` : nothing}
-        ${r.calendar ? html`<p class="cal small">Add to calendar:
-          <a href=${r.calendar.google_url} target="_blank" rel="noopener">Google</a>
-          <a href=${r.calendar.outlook_url} target="_blank" rel="noopener">Outlook</a>
-          <a href=${r.calendar.ics_url}>Apple / .ics</a></p>` : nothing}
+      <div class="card done rise" role="status" aria-live="polite">
+        <div class="tick">${icon.check()}</div>
+        <h2>${r.already_registered ? 'You’re already registered' : 'You’re in!'}</h2>
+        ${starts ? html`<p class="when">${localDate(starts, locale)}<br><span class="muted" style="font-weight:500">${localTime(starts, locale)}</span></p>` : nothing}
+        <p class="muted">${r.already_registered ? 'We’ve sent a fresh link to your inbox.' : w.type === 'on_demand' ? 'Your personal link is on its way, and you can start watching right now.' : 'Your personal link is on its way to your inbox.'}</p>
+        ${r.token && opensSoon ? html`<button class="accent" @click=${this.joinNow}>${w.type === 'on_demand' ? 'Watch now' : 'Join now'} ${icon.arrow()}</button>` : nothing}
+        ${r.calendar ? html`<div class="cal">
+          <a class="pill" href=${r.calendar.google_url} target="_blank" rel="noopener">${icon.calendar()} Google</a>
+          <a class="pill" href=${r.calendar.outlook_url} target="_blank" rel="noopener">${icon.calendar()} Outlook</a>
+          <a class="pill" href=${r.calendar.ics_url}>${icon.download()} Apple / .ics</a></div>` : nothing}
       </div>`;
   }
 
   render() {
-    if (this._error && !this._w) return html`<div class="card error" role="alert">${this._error}</div>`;
+    if (this._error && !this._w) return html`<div class="alert" role="alert">${icon.alert()}<span>${this._error}</span></div>`;
     const w = this._w;
-    if (!w) return html`<div class="card muted" aria-busy="true">Loading…</div>`;
+    if (!w) return skeletonRegister;
     const cfg = w.config;
     const locale = cfg.defaults.locale;
+    const next = w.type === 'live' ? w.sessions[0]?.starts_at : w.type === 'evergreen' ? w.slots[0] : null;
+    const now = Date.now();
     return html`
-      <div class="grid">
-        <section class="stack">
-          <span class="badge">${w.label}</span>
-          <h1>${w.title}</h1>
-          ${w.type === 'live' && w.sessions[0] ? html`<p class="when">${localDateTime(w.sessions[0].starts_at, locale)}</p>` : nothing}
-          ${w.description ? html`<p>${w.description}</p>` : nothing}
-          ${w.presenters.map((p) => html`<div class="presenter">${p.photo_url ? html`<img src=${p.photo_url} alt="">` : nothing}<div><strong>${p.name}</strong>${p.title ? html`<div class="muted small">${p.title}</div>` : nothing}</div></div>`)}
-          ${w.agenda?.length ? html`<div><h2>What you’ll learn</h2><ul>${w.agenda.map((a) => html`<li>${a.title}</li>`)}</ul></div>` : nothing}
-        </section>
+      <div class="grid fade-in">
         <section>
+          <span class="eyebrow">${w.label}</span>
+          <h1>${w.title}</h1>
+          <div class="meta">
+            ${next ? html`<span class="pill">${icon.calendar()} ${w.type === 'evergreen' ? 'Next showing' : ''} ${shortDateTime(next, locale)}</span>` : nothing}
+            ${w.duration_s ? html`<span class="pill">${icon.clock()} ${Math.round(w.duration_s / 60)} min</span>` : nothing}
+            ${w.type === 'on_demand' ? html`<span class="pill">${icon.play()} Watch any time</span>` : nothing}
+          </div>
+          ${w.description ? html`<p class="lede">${w.description}</p>` : nothing}
+          ${w.presenters.length ? html`<div class="presenters">${w.presenters.map((p) => presenterCard(p))}</div>` : nothing}
+          ${w.agenda?.length ? html`<div style="margin-top:22px"><h3>What you’ll learn</h3><ul class="learn">${w.agenda.map((a) => html`<li>${icon.checkCircle()}<span>${a.time ? html`<span class="t">${a.time}</span>` : nothing}${a.title}</span></li>`)}</ul></div>` : nothing}
+        </section>
+        <section class="form">
           ${this._done ? this.renderDone(w, this._done) : html`
-          <form class="card stack" @submit=${this.submit} novalidate=${false}>
-            <h2>${w.type === 'on_demand' ? 'Watch now' : 'Save your seat'}</h2>
+          <form class="card stack" @submit=${this.submit} novalidate>
+            <h2>${w.type === 'on_demand' ? html`${icon.play()} Watch now` : html`${icon.sparkle()} Save your seat`}</h2>
             ${w.type === 'evergreen' ? html`
               <fieldset class="slots" style="border:0;padding:0;margin:0">
-                <legend class="small" style="font-weight:600;margin-bottom:6px">Choose a time</legend>
+                <legend class="small" style="font-weight:600;margin-bottom:8px">Choose a time</legend>
                 ${w.slots.length ? w.slots.slice(0, 6).map((s, i) => html`
-                  <label class="slot"><input type="radio" name="slot" .checked=${i === 0} value=${s} @change=${() => (this._slot = s)}> ${shortDateTime(s, locale)}</label>`)
+                  <label class="choice"><input type="radio" name="slot" .checked=${i === 0} value=${s} @change=${() => (this._slot = s)}>
+                    <span class="d">${localDate(s, locale)}</span><span class="t">${localTime(s, locale)}</span>
+                    ${Date.parse(s) - now < 20 * 60_000 ? html`<span class="soon">Starting soon</span>` : nothing}</label>`)
                   : html`<p class="muted">No upcoming times — check back soon.</p>`}
               </fieldset>` : nothing}
             ${w.type === 'live' && w.sessions.length > 1 ? html`
               <div><label for="f-session">Session</label>
                 <select id="f-session" @change=${(e: Event) => (this._session = (e.target as HTMLSelectElement).value)}>
-                  ${w.sessions.map((s) => html`<option value=${s.id}>${localDateTime(s.starts_at, locale)}</option>`)}
+                  ${w.sessions.map((s) => html`<option value=${s.id}>${shortDateTime(s.starts_at, locale)}</option>`)}
                 </select></div>` : nothing}
             ${cfg.registration.fields.map((f) => this.field(f))}
             <label class="check small"><input type="checkbox" name="consent" required>
-              <span>${cfg.registration.consent_text} ${cfg.registration.privacy_url ? html`<a href=${cfg.registration.privacy_url} target="_blank" rel="noopener">Privacy policy</a>` : nothing}</span></label>
+              <span>${cfg.registration.consent_text} ${cfg.registration.privacy_url ? html`<a class="privacy" href=${cfg.registration.privacy_url} target="_blank" rel="noopener">Privacy policy</a>` : nothing}</span></label>
             <div id="turnstile"></div>
-            ${this._error ? html`<p class="error" role="alert">${this._error}</p>` : nothing}
-            <button type="submit" class="accent" ?disabled=${this._busy || (w.type === 'evergreen' && !this._slot)}>${this._busy ? 'Registering…' : w.type === 'on_demand' ? 'Get instant access' : 'Register'}</button>
+            ${this._error ? html`<div class="alert" role="alert">${icon.alert()}<span>${this._error}</span></div>` : nothing}
+            <button type="submit" class="accent submit ${this._busy ? 'busy' : ''}" ?disabled=${this._busy || (w.type === 'evergreen' && !this._slot)}>
+              ${this._busy ? 'One moment…' : w.type === 'on_demand' ? 'Get instant access' : 'Register free'} ${this._busy ? nothing : icon.arrow()}
+            </button>
             ${cfg.compliance.risk_warning ? html`<p class="risk">${cfg.compliance.risk_warning}</p>` : nothing}
           </form>`}
         </section>
@@ -269,12 +329,30 @@ export class GhqList extends LitElement {
   declare _error: string | null;
 
   static styles = [base, css`
-    .cards { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+    .cards { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); }
     .list { display: grid; gap: 10px; }
-    .item { display: flex; flex-direction: column; gap: 8px; text-align: left; cursor: pointer; color: inherit; background: var(--ghq-surface); border: 1px solid var(--ghq-border); border-radius: var(--ghq-radius); padding: 18px; font-weight: 400; min-height: 0; }
-    .list .item { flex-direction: row; align-items: center; justify-content: space-between; }
-    .item:hover { border-color: var(--ghq-accent); }
-    .item h3 { margin: 0; font-size: 1.05rem; }
+    .item {
+      display: flex; flex-direction: column; gap: 10px; text-align: left; cursor: pointer; color: inherit; min-height: 0; padding: 0;
+      background: var(--ghq-surface-2); border: 1px solid var(--ghq-border); border-radius: var(--ghq-radius); font-weight: 400; overflow: hidden;
+      box-shadow: var(--ghq-shadow);
+    }
+    .item .top { height: 5px; width: 100%; background: linear-gradient(90deg, var(--ghq-primary), var(--ghq-accent)); }
+    .item .body { padding: 14px 18px 18px; display: flex; flex-direction: column; gap: 10px; width: 100%; }
+    .list .item .body { flex-direction: row; align-items: center; gap: 14px; }
+    .list .item .top { display: none; }
+    .list .item h3 { flex: 1; }
+    .item:hover { transform: translateY(-2px); border-color: var(--_accent-line); }
+    .item h3 { margin: 0; font-size: 1.08rem; }
+    .item .when { display: inline-flex; align-items: center; gap: 6px; font-size: .85rem; color: var(--ghq-muted); }
+    .item .when svg { width: 15px; height: 15px; }
+    .item .go { margin-top: auto; display: inline-flex; align-items: center; gap: 6px; color: var(--ghq-accent); font-weight: 600; font-size: .9rem; }
+    .item .go svg { width: 16px; height: 16px; transition: transform .2s; }
+    .item:hover .go svg { transform: translateX(3px); }
+    .list .item .go { margin: 0; }
+    .empty { text-align: center; padding: 30px; color: var(--ghq-muted); }
+    .empty svg { width: 32px; height: 32px; margin-bottom: 8px; color: var(--ghq-accent); }
+    .sk { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); }
+    .sk .skeleton { height: 150px; border-radius: var(--ghq-radius); }
   `];
 
   constructor() {
@@ -300,15 +378,19 @@ export class GhqList extends LitElement {
   }
 
   render() {
-    if (this._error) return html`<p class="error">${this._error}</p>`;
-    if (!this._items) return html`<p class="muted" aria-busy="true">Loading…</p>`;
-    if (!this._items.length) return html`<p class="muted">No ${this.filter === 'on_demand' ? 'on-demand' : 'upcoming'} webinars right now.</p>`;
-    return html`<div class=${this.layout === 'list' ? 'list' : 'cards'} role="list">
-      ${this._items.map((w) => html`
-        <button class="item" role="listitem" @click=${() => this.open(w)}>
-          <span class="badge">${w.label}</span>
-          <h3>${w.title}</h3>
-          <span class="muted small">${w.next_start ? shortDateTime(w.next_start) : w.duration_s ? `${Math.round(w.duration_s / 60)} min` : 'Watch now'}</span>
+    if (this._error) return html`<div class="alert" role="alert">${icon.alert()}<span>${this._error}</span></div>`;
+    if (!this._items) return html`<div class="sk" aria-busy="true"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>`;
+    if (!this._items.length) return html`<div class="card flat empty">${icon.calendar()}<div>No ${this.filter === 'on_demand' ? 'on-demand' : 'upcoming'} webinars right now.</div></div>`;
+    return html`<div class="${this.layout === 'list' ? 'list' : 'cards'} fade-in" role="list">
+      ${this._items.map((w, i) => html`
+        <button class="item rise" style="animation-delay:${i * 50}ms" role="listitem" @click=${() => this.open(w)}>
+          <span class="top"></span>
+          <span class="body">
+            <span class="badge ${w.live_now ? 'live' : ''}">${w.live_now ? 'Live now' : w.label}</span>
+            <h3>${w.title}</h3>
+            <span class="when">${w.next_start ? html`${icon.calendar()} ${shortDateTime(w.next_start)}` : html`${icon.clock()} ${w.duration_s ? `${Math.round(w.duration_s / 60)} min · ` : ''}Watch any time`}</span>
+            <span class="go">${w.live_now ? 'Join now' : w.type === 'on_demand' ? 'Watch' : 'Register'} ${icon.arrow()}</span>
+          </span>
         </button>`)}
     </div>`;
   }
@@ -333,11 +415,21 @@ export class GhqCountdown extends LitElement {
   declare _now: number;
   private timer: number | undefined;
 
-  static styles = [base, css`
-    .bar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; padding: 10px 16px; background: var(--ghq-primary); color: #fff; border-radius: var(--ghq-radius); }
-    .bar strong { font-weight: 600; }
-    .bar .btn { background: var(--ghq-accent); border-color: var(--ghq-accent); min-height: 38px; padding: 6px 14px; }
-    .t { font-variant-numeric: tabular-nums; opacity: .9; }
+  static styles = [base, tilesCss, css`
+    .bar {
+      display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: space-between; padding: 14px 18px;
+      background: linear-gradient(110deg, var(--ghq-primary), color-mix(in srgb, var(--ghq-primary) 70%, var(--ghq-accent))); color: #fff; border-radius: var(--ghq-radius);
+      box-shadow: var(--ghq-shadow);
+    }
+    .bar .t { font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; opacity: .8; }
+    .bar strong { font-size: 1.05rem; display: block; }
+    .bar .btn { background: var(--ghq-accent); border-color: var(--ghq-accent); color: #fff; min-height: 42px; padding: 8px 18px; }
+    .tiles { gap: 6px; }
+    .tile { min-width: 52px; padding: 7px 6px 6px; background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.18); color: #fff; }
+    .tile .n { font-size: 1.3rem; }
+    .tile .l { color: rgba(255,255,255,.75); margin-top: 3px; }
+    .live { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; }
+    .live .dot { background: #fb7185; color: #fb7185; }
   `];
 
   constructor() {
@@ -375,9 +467,10 @@ export class GhqCountdown extends LitElement {
     if (!w?.next_start) return nothing;
     const ms = w.live_now ? 0 : Date.parse(w.next_start) - this._now;
     const link = this.href ? this.href.replace('{slug}', w.slug) : w.hosted_url ?? '#';
-    return html`<div class="bar" role="region" aria-label="Upcoming webinar">
-      <span><strong>${w.title}</strong> <span class="t">· ${w.live_now ? 'live now' : ms > 0 ? `${w.type === 'evergreen' ? 'next showing' : 'starts'} in ${countdown(ms)}` : 'starting now'}</span></span>
-      <a class="btn" href=${link}>${w.live_now ? 'Join now' : 'Register free'}</a>
+    return html`<div class="bar fade-in" role="region" aria-label="Upcoming webinar">
+      <span><span class="t">${w.live_now ? 'Happening now' : w.type === 'evergreen' ? 'Next showing' : 'Live webinar'}</span><strong>${w.title}</strong></span>
+      ${w.live_now ? html`<span class="live"><span class="dot pulse"></span> Live now</span>` : ms > 0 ? countdownTiles(ms) : html`<span class="live">Starting…</span>`}
+      <a class="btn" href=${link}>${w.live_now ? 'Join now' : 'Register free'} ${icon.arrow()}</a>
     </div>`;
   }
 }

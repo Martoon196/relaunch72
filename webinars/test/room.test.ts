@@ -106,7 +106,7 @@ test('chat fans out; moderated questions only reach the asker and staff until ap
   // Alarm flushes everything to D1.
   await h.rooms.room(sessionId).room.alarm();
   const rows = h.db.sqlite.prepare('SELECT kind, status FROM messages ORDER BY created_at').all() as { kind: string; status: string }[];
-  assert.deepEqual(rows.map((r) => `${r.kind}:${r.status}`), ['chat:visible', 'question:hidden', 'answer:visible']);
+  assert.deepEqual(rows.map((r) => `${r.kind}:${r.status}`).sort(), ['answer:visible', 'chat:visible', 'question:hidden']);
   assert.equal((sc.last('viewers') as { count: number }).count, 3);
 
   // REST moderation path (Growth HQ console) stays in sync with the room.

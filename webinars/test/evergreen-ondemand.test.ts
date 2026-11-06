@@ -107,6 +107,19 @@ test('on-demand: publish needs a video; replay expiry per registrant', async () 
   await runScheduled(h.env, h.services, h.clock.now + 60_000);
   assert.equal(eventsOf(h, 'attendee.left').length, 1);
 
+  assert.equal(eventsOf(h, 'attendee.left')[0]!.payload.data.repeat, false);
+
+  // Coming back for a second viewing: analytics get another attendee.left, the CRM does not re-score.
+  const again = await h.call('POST', '/v1/join', { key: pk, body: { token: reg.json.data.token, device_id: 'd' } });
+  assert.equal(again.status, 200);
+  h.clock.now += 11 * 60_000;
+  await runScheduled(h.env, h.services, h.clock.now);
+  const lefts = eventsOf(h, 'attendee.left');
+  assert.equal(lefts.length, 2);
+  assert.equal(lefts[1]!.payload.data.repeat, true);
+  assert.equal(lefts[1]!.payload.crm.action, null);
+  assert.equal(lefts[1]!.payload.crm.lead_score_delta, 0);
+
   h.clock.now = Date.parse('2026-11-17T00:00:00Z');
   const expired = await h.call('POST', '/v1/join', { key: pk, body: { token: reg.json.data.token, device_id: 'd' } });
   assert.equal(expired.status, 410);

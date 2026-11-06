@@ -34,12 +34,13 @@ cd webinars
 cp .dev.vars.example .dev.vars                # DEV_MODE=1: sample video, Turnstile bypass
 npx wrangler d1 migrations apply webinars --local
 npm run dev                                   # builds the embed, serves on http://localhost:8787
-node scripts/dev-seed.mjs                     # prints keys, an embed snippet and a host-console link
+npm run seed                                  # demo brand + keys + one webinar of each type; prints pk, host-console link
+npm run demo -- pk_live_…                     # a throwaway brand site on http://localhost:8788 embedding the widget
 ```
 
-The seed allows embeds from `http://localhost:8788`. Put the printed snippet in any page served from there. The seed also prints a host-console link you can open.
+The demo site has pages for the live, evergreen and on-demand webinars, a list view and a dark-theme page. It deliberately ships hostile global CSS (`button{background:hotpink!important}`) so you can see Shadow DOM isolation holding. Open the printed host-console link in a second tab to run the room.
 
-Checks: `npm test` (31 tests) and `npm run typecheck` (worker, embed and tests).
+Checks: `npm test` (31 tests) and `npm run typecheck` (worker, embed and tests). The embed is built by esbuild into `public/v1/` (loader ≈ 0.3 KB, app ≈ 96 KB minified, hls.js in a lazy chunk only non-Safari browsers fetch).
 
 ## Deploy (first time)
 

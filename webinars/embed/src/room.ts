@@ -4,11 +4,12 @@
  */
 import { html, css, LitElement, nothing } from 'lit';
 import { Api, ApiError, deviceId, emit, store } from './api.js';
-import { countdown, localDateTime, timeOnly } from './format.js';
+import { localDate, localDateTime, localTime, timeOnly } from './format.js';
+import { icon } from './icons.js';
 import './player.js';
-import { base } from './styles.js';
+import { base, hueFor, initials } from './styles.js';
 import type { ChatMessage, Cta, JoinPayload, Playback, Poll, RoomState } from './types.js';
-import { tokenKey } from './views.js';
+import { countdownTiles, presenterCard, tilesCss, tokenKey } from './views.js';
 
 const HEARTBEAT_MS = 30_000;
 
@@ -34,6 +35,7 @@ export class GhqRoom extends LitElement {
     _conn: { state: true },
     _panelOpen: { state: true },
     _notice: { state: true },
+    _unread: { state: true },
   };
   declare api: Api;
   declare slug: string;
@@ -55,6 +57,7 @@ export class GhqRoom extends LitElement {
   declare _conn: 'connecting' | 'open' | 'closed';
   declare _panelOpen: boolean;
   declare _notice: string | null;
+  declare _unread: number;
 
   private ws: WebSocket | null = null;
   private wsRetry = 0;
@@ -65,42 +68,92 @@ export class GhqRoom extends LitElement {
   private playing = false;
   private stopped = false;
 
-  static styles = [base, css`
-    .layout { display: grid; gap: 16px; grid-template-columns: 1fr; }
-    @media (min-width: 900px) { .layout.with-panel { grid-template-columns: minmax(0, 1fr) 340px; } }
-    .head { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 10px; }
-    .head h1 { font-size: 1.3rem; margin: 0; }
-    .panel { display: flex; flex-direction: column; min-height: 420px; max-height: 70vh; padding: 0; overflow: hidden; }
-    @media (max-width: 899px) { .panel { max-height: 60vh; } }
-    .tabs { display: flex; border-bottom: 1px solid var(--ghq-border); }
-    .tabs button { flex: 1; border-radius: 0; border: none; background: none; color: var(--ghq-muted); min-height: 44px; }
-    .tabs button[aria-selected='true'] { color: var(--ghq-text); box-shadow: inset 0 -3px 0 var(--ghq-accent); }
-    .msgs { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
-    .msg { font-size: .92rem; }
-    .msg .who { font-weight: 600; margin-right: 6px; }
-    .msg.host .who { color: var(--ghq-accent); }
-    .msg.pinned { background: var(--ghq-bg); border: 1px solid var(--ghq-accent); border-radius: var(--ghq-radius); padding: 8px; }
-    .msg .meta { font-size: .75rem; color: var(--ghq-muted); }
-    .answer { margin: 6px 0 0 14px; padding-left: 10px; border-left: 3px solid var(--ghq-accent); }
-    .compose { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--ghq-border); }
-    .compose input { flex: 1; }
-    .compose button { min-height: 44px; padding: 8px 14px; }
-    .cta { display: flex; gap: 14px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: 14px; border-color: var(--ghq-accent); }
+  static styles = [base, tilesCss, css`
+    .layout { display: grid; gap: 16px; grid-template-columns: 1fr; align-items: start; }
+    @media (min-width: 960px) { .layout.with-panel { grid-template-columns: minmax(0, 1fr) 350px; } }
+    .head { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 12px; }
+    .head h1 { font-size: 1.35rem; margin: 0; }
+    .status { display: flex; gap: 8px; align-items: center; }
+    .conn { display: inline-flex; align-items: center; gap: 6px; font-size: .75rem; color: var(--ghq-muted); }
+
+    /* side panel */
+    .panel { display: flex; flex-direction: column; height: min(72vh, 680px); padding: 0; overflow: hidden; }
+    @media (max-width: 959px) { .panel { height: 60vh; } }
+    .tabs { display: flex; border-bottom: 1px solid var(--ghq-border); padding: 0 6px; }
+    .tabs button { flex: 1; border-radius: 0; border: none; background: none; color: var(--ghq-muted); min-height: 48px; position: relative; gap: 8px; }
+    .tabs button:hover { transform: none; box-shadow: none; color: var(--ghq-text); }
+    .tabs button svg { width: 17px; height: 17px; }
+    .tabs button[aria-selected='true'] { color: var(--ghq-text); }
+    .tabs button[aria-selected='true']::after { content: ''; position: absolute; left: 14px; right: 14px; bottom: -1px; height: 3px; border-radius: 3px 3px 0 0; background: var(--ghq-accent); }
+    .tabs .count { font-size: .68rem; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: var(--_accent-soft); color: var(--ghq-accent); }
+    .msgs { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; scroll-behavior: smooth; overscroll-behavior: contain; }
+    .msg { display: flex; gap: 10px; align-items: flex-start; font-size: .92rem; animation: ghq-rise .25s var(--_ease) both; }
+    .msg .avatar { width: 30px; height: 30px; font-size: .68rem; margin-top: 2px; }
+    .msg .b { flex: 1; min-width: 0; }
+    .msg .who { font-weight: 700; font-size: .82rem; display: flex; align-items: center; gap: 6px; }
+    .msg .who .t { font-weight: 500; color: var(--ghq-muted); font-size: .72rem; }
+    .msg .who .host { font-size: .62rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; padding: 1px 6px; border-radius: 999px; background: var(--ghq-accent); color: #fff; }
+    .msg .txt { overflow-wrap: anywhere; }
+    .msg.host .avatar { background: var(--ghq-accent); }
+    .msg.pinned { background: var(--_accent-soft); border: 1px solid var(--_accent-line); border-radius: calc(var(--ghq-radius) * .8); padding: 10px 12px; }
+    .msg .meta { font-size: .72rem; color: var(--ghq-muted); display: inline-flex; gap: 5px; align-items: center; }
+    .msg .meta svg { width: 12px; height: 12px; }
+    .answer { margin-top: 8px; padding: 8px 10px; border-left: 3px solid var(--ghq-accent); background: var(--ghq-surface); border-radius: 0 8px 8px 0; font-size: .88rem; }
+    .answer .who { font-weight: 700; color: var(--ghq-accent); }
+    .empty { margin: auto; text-align: center; color: var(--ghq-muted); font-size: .88rem; padding: 20px; }
+    .empty svg { width: 28px; height: 28px; color: var(--ghq-accent); margin-bottom: 6px; }
+    .compose { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--ghq-border); background: var(--ghq-surface-2); }
+    .compose input { flex: 1; min-height: 44px; background: var(--ghq-surface); }
+    .compose button { min-height: 44px; width: 46px; padding: 0; }
+    .compose button svg { width: 18px; height: 18px; }
+
+    /* offer + poll */
+    .cta { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: 16px; border-color: var(--_accent-line); position: relative; overflow: hidden; }
+    .cta::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: linear-gradient(var(--ghq-accent), var(--ghq-primary)); }
     .cta.card-style { flex-direction: column; align-items: stretch; }
-    .cta img { max-width: 100%; border-radius: var(--ghq-radius); }
-    .poll { margin-top: 14px; }
+    .cta img { max-width: 100%; border-radius: calc(var(--ghq-radius) * .7); }
+    .cta .k { font-size: .7rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--ghq-accent); display: flex; gap: 6px; align-items: center; margin-bottom: 4px; }
+    .cta .k svg { width: 14px; height: 14px; }
+    .cta strong { font-size: 1.05rem; }
+    .poll { margin-top: 16px; }
+    .poll .q { display: flex; gap: 8px; align-items: flex-start; font-weight: 700; font-size: 1.02rem; }
+    .poll .q svg { width: 20px; height: 20px; color: var(--ghq-accent); flex: none; margin-top: 2px; }
     .poll .opts { display: grid; gap: 8px; }
-    .poll .opt { justify-content: space-between; background: var(--ghq-bg); color: var(--ghq-text); border: 1px solid var(--ghq-border); font-weight: 500; }
-    .bar { height: 6px; background: var(--ghq-border); border-radius: 3px; overflow: hidden; }
-    .bar > span { display: block; height: 100%; background: var(--ghq-accent); }
-    .big { font-size: clamp(2rem, 6vw, 3.25rem); font-weight: 700; font-variant-numeric: tabular-nums; margin: 8px 0; }
-    .wait { text-align: center; padding: 32px 20px; }
-    .announce { background: var(--ghq-accent); color: #fff; padding: 10px 14px; border-radius: var(--ghq-radius); margin-bottom: 10px; display: flex; justify-content: space-between; gap: 10px; }
-    .announce button { background: none; border: none; min-height: 0; padding: 0 4px; color: #fff; }
-    .conn { font-size: .75rem; color: var(--ghq-muted); }
-    .toggle { width: 100%; margin-top: 10px; }
-    @media (min-width: 900px) { .toggle { display: none; } }
-    .handouts a { display: inline-block; margin: 0 12px 6px 0; }
+    .poll .opt { position: relative; justify-content: space-between; background: var(--ghq-surface); color: var(--ghq-text); border: 1.5px solid var(--ghq-border); font-weight: 500; overflow: hidden; }
+    .poll .opt:hover:not(:disabled) { border-color: var(--ghq-accent); transform: none; box-shadow: none; }
+    .poll .opt[aria-pressed='true'] { border-color: var(--ghq-accent); font-weight: 700; }
+    .poll .opt .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--_accent-soft); transition: width .6s var(--_ease); z-index: 0; }
+    .poll .opt > span { position: relative; z-index: 1; display: inline-flex; gap: 8px; align-items: center; }
+    .poll .opt svg { width: 16px; height: 16px; color: var(--ghq-accent); }
+    .poll .pct { font-variant-numeric: tabular-nums; color: var(--ghq-muted); font-weight: 600; }
+    .poll .thanks { display: flex; gap: 6px; align-items: center; }
+    .poll .thanks svg { width: 16px; height: 16px; color: #10b981; }
+
+    /* waiting room */
+    .wait { text-align: center; padding: 40px 24px; background: radial-gradient(ellipse at top, var(--_accent-soft), transparent 60%), var(--ghq-surface-2); }
+    .wait .when { font-size: 1.05rem; font-weight: 600; }
+    .wait .when span { color: var(--ghq-muted); font-weight: 500; }
+    .wait .tiles { margin: 18px 0 14px; }
+    .wait .open { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; color: var(--ghq-text); }
+    .wait .presenters { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px 32px; margin: 26px auto 0; max-width: 720px; text-align: left; }
+    .wait .presenter { display: flex; gap: 12px; align-items: flex-start; max-width: 320px; }
+    .wait .agenda { text-align: left; max-width: 480px; margin: 26px auto 0; }
+    .wait .agenda li { display: flex; gap: 10px; padding: 8px 0; border-top: 1px solid var(--ghq-border); }
+    .wait .agenda li .t { color: var(--ghq-accent); font-weight: 700; font-variant-numeric: tabular-nums; min-width: 44px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .wait .chips { justify-content: center; margin-top: 22px; }
+    .chips a { text-decoration: none; color: var(--ghq-text); }
+
+    .end { text-align: center; padding: 40px 24px; }
+    .end .ic { width: 60px; height: 60px; border-radius: 50%; display: grid; place-items: center; margin: 0 auto 14px; background: var(--_accent-soft); color: var(--ghq-accent); }
+    .end .ic svg { width: 30px; height: 30px; }
+    .announce { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 10px 14px; margin-bottom: 12px; border-radius: calc(var(--ghq-radius) * .8); background: var(--ghq-primary); color: #fff; animation: ghq-rise .3s var(--_ease) both; }
+    .announce .l { display: flex; gap: 10px; align-items: center; }
+    .announce svg { width: 18px; height: 18px; flex: none; }
+    .announce button { background: none; border: none; min-height: 0; padding: 4px; color: #fff; }
+    .toggle { width: 100%; margin-top: 12px; }
+    @media (min-width: 960px) { .toggle { display: none; } }
+    .below { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
   `];
 
   constructor() {
@@ -122,8 +175,9 @@ export class GhqRoom extends LitElement {
     this._tab = 'chat';
     this._announcement = null;
     this._conn = 'connecting';
-    this._panelOpen = typeof matchMedia === 'function' ? matchMedia('(min-width: 900px)').matches : true;
+    this._panelOpen = typeof matchMedia === 'function' ? matchMedia('(min-width: 960px)').matches : true;
     this._notice = null;
+    this._unread = 0;
   }
 
   // ---------- lifecycle ----------
@@ -264,6 +318,7 @@ export class GhqRoom extends LitElement {
   private upsert(m: ChatMessage) {
     const i = this._messages.findIndex((x) => x.id === m.id);
     this._messages = i >= 0 ? this._messages.map((x) => (x.id === m.id ? m : x)) : [...this._messages, m].slice(-300);
+    if (i < 0 && m.kind === 'chat' && this._tab !== 'chat' && m.registrant_id !== this._p?.registrant.id) this._unread++;
   }
 
   private onWs(m: Record<string, any>) {
@@ -274,6 +329,7 @@ export class GhqRoom extends LitElement {
         this._pushedCta = m.active_cta ?? null;
         this._pushedPoll = m.active_poll ?? null;
         if (m.active_poll && m.poll_results) this._pollResults = { ...this._pollResults, [m.active_poll.id]: m.poll_results };
+        void this.updateComplete.then(() => this.scrollChat(true));
         break;
       case 'message':
       case 'message_update':
@@ -319,9 +375,9 @@ export class GhqRoom extends LitElement {
     }
   }
 
-  private scrollChat() {
+  private scrollChat(force = false) {
     const el = this.renderRoot.querySelector('.msgs');
-    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 160) el.scrollTop = el.scrollHeight;
+    if (el && (force || el.scrollHeight - el.scrollTop - el.clientHeight < 160)) el.scrollTop = el.scrollHeight;
   }
 
   // ---------- actions ----------
@@ -343,6 +399,12 @@ export class GhqRoom extends LitElement {
     window.open(c.url, '_blank', 'noopener');
   }
 
+  private switchTab(tab: 'chat' | 'qa') {
+    this._tab = tab;
+    if (tab === 'chat') this._unread = 0;
+    void this.updateComplete.then(() => this.scrollChat(true));
+  }
+
   // ---------- render ----------
 
   private activeCta(): Cta | null {
@@ -358,10 +420,13 @@ export class GhqRoom extends LitElement {
   }
 
   private renderCta(c: Cta) {
-    return html`<div class="card cta ${c.style === 'card' ? 'card-style' : ''}" role="complementary" aria-label="Offer">
+    return html`<div class="card cta rise ${c.style === 'card' ? 'card-style' : ''}" role="complementary" aria-label="Offer">
       ${c.image_url ? html`<img src=${c.image_url} alt="">` : nothing}
-      <div>${c.style === 'card' ? html`<strong>${c.label}</strong>` : nothing}${c.body ? html`<p class="small" style="margin:4px 0 0">${c.body}</p>` : nothing}</div>
-      <button class="accent" @click=${() => this.clickCta(c)}>${c.label}</button>
+      <div>
+        ${c.style === 'card' ? html`<div class="k">${icon.sparkle()} Offer</div><strong>${c.label}</strong>` : nothing}
+        ${c.body ? html`<p class="small muted" style="margin:4px 0 0">${c.body}</p>` : nothing}
+      </div>
+      <button class="accent" @click=${() => this.clickCta(c)}>${c.label} ${icon.external()}</button>
     </div>`;
   }
 
@@ -369,52 +434,58 @@ export class GhqRoom extends LitElement {
     const voted = store.get(`ghq:vote:${p.id}`);
     const results = this._pollResults[p.id];
     const total = results ? Object.values(results).reduce((a, b) => a + b, 0) : 0;
-    return html`<div class="card poll stack" role="group" aria-label="Poll">
-      <strong>${p.question}</strong>
+    const pct = (o: string) => (results && total ? Math.round(((results[o] ?? 0) / total) * 100) : 0);
+    return html`<div class="card poll stack rise" role="group" aria-label="Poll">
+      <div class="q">${icon.poll()}<span>${p.question}</span></div>
       <div class="opts">
         ${p.options.map((o) => html`
           <button class="opt" ?disabled=${!!voted} aria-pressed=${voted === o ? 'true' : 'false'} @click=${() => this.send({ type: 'vote', poll_id: p.id, option: o })}>
-            <span>${voted === o ? '✓ ' : ''}${o}</span>${results ? html`<span class="small">${total ? Math.round(((results[o] ?? 0) / total) * 100) : 0}%</span>` : nothing}
-          </button>
-          ${results ? html`<div class="bar"><span style="width:${total ? ((results[o] ?? 0) / total) * 100 : 0}%"></span></div>` : nothing}`)}
+            ${results ? html`<span class="fill" style="width:${pct(o)}%"></span>` : nothing}
+            <span>${voted === o ? icon.check() : nothing}${o}</span>${results ? html`<span class="pct">${pct(o)}%</span>` : nothing}
+          </button>`)}
       </div>
-      ${voted && !results ? html`<p class="small muted">Thanks — your answer was recorded.</p>` : nothing}
+      ${results ? html`<p class="xs muted" style="margin:0">${total} ${total === 1 ? 'vote' : 'votes'}</p>` : voted ? html`<p class="small muted thanks" style="margin:0">${icon.checkCircle()} Thanks — your answer was recorded.</p>` : nothing}
     </div>`;
   }
 
   private renderMessage(m: ChatMessage, answers: ChatMessage[]) {
     const fromHost = !!m.host_id;
     return html`<div class="msg ${fromHost ? 'host' : ''} ${m.status === 'pinned' ? 'pinned' : ''}">
-      ${m.status === 'pinned' ? html`<div class="meta">📌 Pinned</div>` : nothing}
-      <span class="who">${m.author_name}${fromHost ? ' (host)' : ''}</span><span>${m.body}</span>
-      <div class="meta">${timeOnly(m.created_at)}${m.status === 'pending' ? ' · awaiting approval' : ''}${m.kind === 'question' && m.done_at ? ' · answered' : ''}</div>
-      ${answers.map((a) => html`<div class="answer"><span class="who">${a.author_name}</span>${a.body}</div>`)}
+      <span class="avatar" style="--h:${hueFor(m.author_name)}">${initials(m.author_name)}</span>
+      <div class="b">
+        <div class="who">${m.author_name}${fromHost ? html`<span class="host">Host</span>` : nothing}<span class="t">${timeOnly(m.created_at)}</span>
+          ${m.status === 'pinned' ? html`<span class="meta">${icon.pin()} Pinned</span>` : nothing}</div>
+        <div class="txt">${m.body}</div>
+        ${m.status === 'pending' ? html`<div class="meta">${icon.clock()} Awaiting approval</div>` : m.kind === 'question' && m.done_at && !answers.length ? html`<div class="meta">${icon.checkCircle()} Answered live</div>` : nothing}
+        ${answers.map((a) => html`<div class="answer"><span class="who">${a.author_name}</span> ${a.body}</div>`)}
+      </div>
     </div>`;
   }
 
   private renderPanel() {
     const p = this._p!;
-    const chatOn = p.config.defaults.chat_enabled && (this._room?.state === 'live');
+    const chatOn = p.config.defaults.chat_enabled && this._room?.state === 'live';
     const tab = chatOn ? this._tab : 'qa';
     const answers = (id: string) => this._messages.filter((m) => m.kind === 'answer' && m.parent_id === id);
     const list = this._messages.filter((m) => (tab === 'chat' ? m.kind === 'chat' : m.kind === 'question'));
     const pinned = list.filter((m) => m.status === 'pinned');
     const rest = list.filter((m) => m.status !== 'pinned');
     const isReplay = this._room?.state !== 'live';
+    const qCount = this._messages.filter((m) => m.kind === 'question').length;
     return html`
       <aside class="card panel" ?hidden=${!this._panelOpen} aria-label="Chat and questions">
         <div class="tabs" role="tablist">
-          ${chatOn ? html`<button role="tab" aria-selected=${tab === 'chat'} @click=${() => (this._tab = 'chat')}>Chat</button>` : nothing}
-          <button role="tab" aria-selected=${tab === 'qa'} @click=${() => (this._tab = 'qa')}>Questions</button>
+          ${chatOn ? html`<button role="tab" aria-selected=${tab === 'chat'} @click=${() => this.switchTab('chat')}>${icon.chat()} Chat ${this._unread ? html`<span class="count">${this._unread}</span>` : nothing}</button>` : nothing}
+          <button role="tab" aria-selected=${tab === 'qa'} @click=${() => this.switchTab('qa')}>${icon.question()} Questions ${qCount ? html`<span class="count">${qCount}</span>` : nothing}</button>
         </div>
         <div class="msgs" role="log" aria-live="polite" aria-relevant="additions">
           ${[...pinned, ...rest].map((m) => this.renderMessage(m, answers(m.id)))}
-          ${!list.length ? html`<p class="muted small">${tab === 'chat' ? 'Say hello 👋' : isReplay ? 'Ask a question — the team will follow up by email.' : 'Ask the presenter a question.'}</p>` : nothing}
+          ${!list.length ? html`<div class="empty">${tab === 'chat' ? html`${icon.chat()}<div>Say hello — you’re among the first here.</div>` : html`${icon.question()}<div>${isReplay ? 'Ask a question and the team will follow up by email.' : 'Ask the presenter anything.'}</div>`}</div>` : nothing}
         </div>
         <form class="compose" @submit=${(e: Event) => this.post(e, tab === 'chat' ? 'chat' : 'question')}>
           <label class="sr-only" for="compose">${tab === 'chat' ? 'Chat message' : 'Your question'}</label>
           <input id="compose" maxlength="500" autocomplete="off" placeholder=${tab === 'chat' ? 'Type a message…' : 'Ask a question…'} ?disabled=${this._conn !== 'open'}>
-          <button type="submit" ?disabled=${this._conn !== 'open'}>Send</button>
+          <button type="submit" class="accent" aria-label="Send" ?disabled=${this._conn !== 'open'}>${icon.send()}</button>
         </form>
       </aside>`;
   }
@@ -424,61 +495,68 @@ export class GhqRoom extends LitElement {
     const r = this._room!;
     const starts = r.starts_at ? Date.parse(r.starts_at) : null;
     const cfg = p.config;
-    return html`<div class="card wait stack">
-      <span class="badge">${r.label}</span>
-      <h1>${p.webinar.title}</h1>
-      ${starts ? html`<p>${localDateTime(r.starts_at!, cfg.defaults.locale)}</p>
-        <div class="big" aria-live="off">${starts > this._now ? countdown(starts - this._now) : 'Starting…'}</div>` : nothing}
-      <p class="muted">${r.state === 'waiting' ? (p.webinar.type === 'live' ? 'The room is open — the presenter will start shortly.' : 'Starting shortly. Stay on this page.') : `The room opens ${cfg.defaults.room_opens_min_before} minutes before the start.`}</p>
-      ${p.webinar.presenters.map((pr) => html`<p><strong>${pr.name}</strong>${pr.bio ? html` — <span class="muted">${pr.bio}</span>` : nothing}</p>`)}
-      ${p.webinar.agenda?.length ? html`<div style="text-align:left;max-width:520px;margin:0 auto"><h2>Agenda</h2><ul>${p.webinar.agenda.map((a) => html`<li>${a.time ? html`<strong>${a.time}</strong> ` : nothing}${a.title}</li>`)}</ul></div>` : nothing}
-      ${p.webinar.handouts.length ? html`<p class="handouts">${p.webinar.handouts.map((h) => html`<a href=${h.url} download>⬇ ${h.label}</a>`)}</p>` : nothing}
-      ${cfg.compliance.recording_notice ? html`<p class="small muted">${cfg.compliance.recording_notice}</p>` : nothing}
+    const locale = cfg.defaults.locale;
+    return html`<div class="card wait fade-in">
+      <span class="badge ${r.state === 'waiting' ? '' : 'neutral'}">${r.label}</span>
+      <h1 style="margin-top:12px">${p.webinar.title}</h1>
+      ${starts ? html`<p class="when">${localDate(r.starts_at!, locale)} <span>· ${localTime(r.starts_at!, locale)}</span></p>
+        ${starts > this._now ? countdownTiles(starts - this._now) : html`<p class="muted">Starting…</p>`}` : nothing}
+      <p class="open">${r.state === 'waiting' ? html`<span class="dot pulse"></span> ${p.webinar.type === 'live' ? 'The room is open — the presenter will start shortly.' : 'Starting shortly. Stay on this page.'}` : html`${icon.lock()} The room opens ${cfg.defaults.room_opens_min_before} minutes before the start.`}</p>
+      ${p.webinar.presenters.length ? html`<div class="presenters">${p.webinar.presenters.map((pr) => presenterCard(pr, 'lg'))}</div>` : nothing}
+      ${p.webinar.agenda?.length ? html`<div class="agenda"><h3>Agenda</h3><ul>${p.webinar.agenda.map((a) => html`<li>${a.time ? html`<span class="t">${a.time}</span>` : nothing}<span>${a.title}</span></li>`)}</ul></div>` : nothing}
+      ${p.webinar.handouts.length ? html`<div class="chips">${p.webinar.handouts.map((h) => html`<a class="pill" href=${h.url} download>${icon.download()} ${h.label}</a>`)}</div>` : nothing}
+      ${cfg.compliance.recording_notice ? html`<p class="xs muted" style="margin:22px 0 0">${cfg.compliance.recording_notice}</p>` : nothing}
     </div>`;
+  }
+
+  private renderEnd(title: string, body: string, ic: 'replay' | 'lock' | 'clock') {
+    const cfg = this._p!.config;
+    return html`<div class="card end fade-in"><div class="ic">${icon[ic]()}</div><h2>${title}</h2><p class="muted" style="max-width:46ch;margin:0 auto 18px">${body}</p>
+      ${cfg.ctas.default ? html`<a class="btn accent" href=${cfg.ctas.default.url} target="_blank" rel="noopener">${cfg.ctas.default.label} ${icon.arrow()}</a>` : nothing}</div>`;
   }
 
   render() {
     if (this._error) {
-      return html`<div class="card stack" role="alert"><p>${this._error.message}</p>
+      return html`<div class="card end fade-in" role="alert"><div class="ic">${icon.alert()}</div><p style="max-width:46ch;margin:0 auto 16px">${this._error.message}</p>
         ${this._error.code === 'no_token' || this._error.code === 'invalid_link'
-          ? html`<button class="secondary" @click=${() => this.dispatchEvent(new CustomEvent('ghq-go', { detail: { view: 'register', slug: this.slug }, bubbles: true, composed: true }))}>Register</button>`
+          ? html`<button class="secondary" @click=${() => this.dispatchEvent(new CustomEvent('ghq-go', { detail: { view: 'register', slug: this.slug }, bubbles: true, composed: true }))}>Register ${icon.arrow()}</button>`
           : nothing}</div>`;
     }
     const p = this._p;
     const r = this._room;
-    if (!p || !r) return html`<div class="card muted" aria-busy="true">Joining…</div>`;
+    if (!p || !r) return html`<div class="card" aria-busy="true" aria-label="Joining"><div class="skeleton" style="width:40%;height:28px;margin-bottom:14px"></div><div class="skeleton" style="aspect-ratio:16/9;border-radius:var(--ghq-radius)"></div></div>`;
     const cfg = p.config;
 
     if (r.state === 'scheduled' || r.state === 'waiting') return this.renderWaiting();
-    if (r.state === 'expired') return html`<div class="card"><h2>${p.webinar.title}</h2><p>Access to this replay has ended.</p>${cfg.ctas.default ? html`<a class="btn accent" href=${cfg.ctas.default.url}>${cfg.ctas.default.label}</a>` : nothing}</div>`;
-    if (r.state === 'ended' || r.state === 'processing') {
-      return html`<div class="card stack"><h2>${p.webinar.title}</h2>
-        <p>${r.state === 'processing' ? 'This video is being prepared. Please check back shortly.' : 'This session has ended. The replay will be available here soon — we’ll email you when it’s ready.'}</p>
-        ${cfg.ctas.default ? html`<a class="btn accent" href=${cfg.ctas.default.url} target="_blank" rel="noopener">${cfg.ctas.default.label}</a>` : nothing}</div>`;
-    }
+    if (r.state === 'expired') return this.renderEnd(p.webinar.title, 'Access to this replay has ended.', 'lock');
+    if (r.state === 'processing') return this.renderEnd(p.webinar.title, 'This video is being prepared. Please check back shortly.', 'clock');
+    if (r.state === 'ended') return this.renderEnd('That’s a wrap', 'This session has ended. The replay will appear here soon — we’ll email you when it’s ready.', 'replay');
 
     const cta = this.activeCta();
     const poll = this.activePoll();
+    const isLive = r.state === 'live' && p.webinar.type === 'live';
     return html`
-      ${this._announcement ? html`<div class="announce" role="status"><span>${this._announcement}</span><button aria-label="Dismiss" @click=${() => (this._announcement = null)}>✕</button></div>` : nothing}
-      <div class="head">
+      ${this._announcement ? html`<div class="announce" role="status"><span class="l">${icon.megaphone()}<span>${this._announcement}</span></span><button aria-label="Dismiss" @click=${() => (this._announcement = null)}>${icon.close()}</button></div>` : nothing}
+      <div class="head fade-in">
         <h1>${p.webinar.title}</h1>
-        <div class="row">
-          <span class="badge ${r.state === 'live' && p.webinar.type === 'live' ? 'live' : ''}">${r.label}</span>
-          ${r.state === 'live' ? html`<span class="small muted" aria-label="viewers">👥 ${this._viewers}</span>` : nothing}
-          ${this._conn !== 'open' ? html`<span class="conn">${this._conn === 'connecting' ? 'Connecting…' : 'Reconnecting…'}</span>` : nothing}
+        <div class="status">
+          <span class="badge ${isLive ? 'live' : ''}">${r.label}</span>
+          ${r.state === 'live' ? html`<span class="pill" aria-label="viewers">${icon.users()} ${this._viewers}</span>` : nothing}
+          ${this._conn !== 'open' ? html`<span class="conn"><span class="dot off"></span>${this._conn === 'connecting' ? 'Connecting…' : 'Reconnecting…'}</span>` : nothing}
         </div>
       </div>
-      ${this._notice ? html`<p class="small error" role="status">${this._notice}</p>` : nothing}
+      ${this._notice ? html`<div class="alert" role="status" style="margin-bottom:12px">${icon.alert()}<span>${this._notice}</span></div>` : nothing}
       <div class="layout with-panel">
-        <div>
+        <div class="fade-in">
           <ghq-player .playback=${this._playback} .fetchedAt=${this._fetchedAt} .resumeKey=${r.seekable ? `ghq:pos:${p.session.id}:${p.webinar.id}` : null} title=${p.webinar.title} @ghq-time=${this.onTime}></ghq-player>
           ${cta ? this.renderCta(cta) : nothing}
           ${poll ? this.renderPoll(poll) : nothing}
+          ${p.webinar.handouts.length || r.access_expires_at ? html`<div class="below">
+            ${p.webinar.handouts.map((h) => html`<a class="pill" href=${h.url} download>${icon.download()} ${h.label}</a>`)}
+            ${r.access_expires_at ? html`<span class="xs muted">Available until ${localDateTime(r.access_expires_at, cfg.defaults.locale)}</span>` : nothing}
+          </div>` : nothing}
           ${cfg.compliance.risk_warning ? html`<p class="risk">${cfg.compliance.risk_warning}</p>` : nothing}
-          ${p.webinar.handouts.length ? html`<p class="handouts small">${p.webinar.handouts.map((h) => html`<a href=${h.url} download>⬇ ${h.label}</a>`)}</p>` : nothing}
-          ${r.access_expires_at ? html`<p class="small muted">Available until ${localDateTime(r.access_expires_at, cfg.defaults.locale)}.</p>` : nothing}
-          <button class="secondary toggle" aria-expanded=${this._panelOpen} @click=${() => (this._panelOpen = !this._panelOpen)}>${this._panelOpen ? 'Hide chat' : 'Show chat & questions'}</button>
+          <button class="secondary toggle" aria-expanded=${this._panelOpen} @click=${() => (this._panelOpen = !this._panelOpen)}>${this._panelOpen ? html`${icon.eyeOff()} Hide chat` : html`${icon.chat()} Chat & questions`}</button>
         </div>
         ${this.renderPanel()}
       </div>`;

@@ -64,6 +64,7 @@ export function crmHint(type: EventType, settings: BrandSettings, webinarSlug: s
       return { ...base, action: 'tag_contact', tags_add: [tag('attended')], tags_remove: [tag('no_show')], stop_sequence: 'webinar_no_show', lead_score_delta: crm.lead_score.attended };
     case 'attendee.left': {
       const pct = Number(data.percent_watched ?? 0);
+      if (data.repeat) return { ...base, action: null };
       return pct >= crm.engaged_threshold_pct
         ? { ...base, action: 'score_contact', tags_add: [tag('engaged')], lead_score_delta: crm.lead_score.engaged }
         : { ...base, action: null };

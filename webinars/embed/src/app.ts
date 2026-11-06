@@ -47,7 +47,12 @@ export class GhqWebinar extends LitElement {
   declare _error: string | null;
   private api!: Api;
 
-  static styles = [base, css`:host { background: transparent; } .root { color: var(--ghq-text); } :host([theme='dark']) .root, :host([theme='auto']) .root { background: var(--ghq-bg); border-radius: var(--ghq-radius); padding: 16px; }`];
+  static styles = [base, css`
+    :host { background: transparent; }
+    .root { color: var(--ghq-text); }
+    :host([theme='dark']) .root { background: var(--ghq-bg); border-radius: var(--ghq-radius); padding: 18px; }
+    @media (prefers-color-scheme: dark) { :host([theme='auto']) .root { background: var(--ghq-bg); border-radius: var(--ghq-radius); padding: 18px; } }
+  `];
 
   constructor() {
     super();
@@ -95,7 +100,7 @@ export class GhqWebinar extends LitElement {
 
   render() {
     if (this._error) return html`<p class="error" role="alert">${this._error}</p>`;
-    if (!this._cfg) return html`<div aria-busy="true" style="min-height:120px"></div>`;
+    if (!this._cfg) return html`<div aria-busy="true" aria-label="Loading" style="min-height:120px"></div>`;
     const style = themeVars(this._cfg.theme, this.mode(), this.accent);
     const v = this.view;
     let body: unknown = nothing;

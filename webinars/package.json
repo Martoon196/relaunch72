@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Growth HQ Webinars — white-label live / on-demand / evergreen webinars on Cloudflare (Workers, D1, Durable Objects, Stream, Queues).",
+  "description": "Growth HQ Webinars \u2014 white-label live / on-demand / evergreen webinars on Cloudflare (Workers, D1, Durable Objects, Stream, Queues).",
   "scripts": {
     "dev": "npm run build:embed && wrangler dev --local-upstream localhost:8787",
     "deploy": "npm run build:embed && wrangler deploy",
@@ -11,7 +11,9 @@
     "db:migrate:local": "wrangler d1 migrations apply webinars --local",
     "db:migrate": "wrangler d1 migrations apply webinars --remote",
     "test": "node --no-warnings --import tsx --test test/*.test.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p embed/tsconfig.json && tsc --noEmit -p test/tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p embed/tsconfig.json && tsc --noEmit -p test/tsconfig.json",
+    "seed": "node scripts/dev-seed.mjs",
+    "demo": "node scripts/dev-site.mjs"
   },
   "dependencies": {
     "hls.js": "^1.6.0",

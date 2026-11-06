@@ -189,7 +189,7 @@ export function computeRoomState(
   };
   const before = (): RoomState => {
     const waiting = startMs !== null && nowMs >= startMs - opensMin * 60_000;
-    return { ...base, state: waiting ? 'waiting' : 'scheduled', label: webinar.type === 'evergreen' ? 'Scheduled replay' : 'Live' };
+    return { ...base, state: waiting ? 'waiting' : 'scheduled', label: webinar.type === 'evergreen' ? 'Scheduled replay' : 'Live webinar' };
   };
   const replay = (endedAt: string | null): RoomState => {
     const uid = session.recording_uid ?? webinar.video_uid;
@@ -343,6 +343,9 @@ export interface AttendanceRow {
 }
 
 export async function emitLeft(env: Env, webinar: WebinarRow, a: AttendanceRow, durationS: number | null, nowMs: number) {
+  // A returning replay viewer gets a second attendee.left so analytics stay complete, but it is
+  // flagged `repeat` and carries no CRM action: lead score and the engaged tag are applied once.
+  const prior = await env.DB.prepare("SELECT 1 AS x FROM events WHERE registrant_id = ? AND session_id = ? AND type = 'attendee.left'").bind(a.registrant_id, a.session_id).first();
   await emitEvent(env, {
     brandId: webinar.brand_id, mode: webinar.mode, type: 'attendee.left', registrantId: a.registrant_id, sessionId: a.session_id, webinarId: webinar.id,
     data: {
@@ -353,6 +356,7 @@ export async function emitLeft(env: Env, webinar: WebinarRow, a: AttendanceRow, 
       percent_watched: percentWatched(a.watch_s, durationS),
       device: a.device,
       country: a.country,
+      repeat: !!prior,
     },
     now: nowMs,
   });
