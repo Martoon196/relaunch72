@@ -1,7 +1,7 @@
 name: Content research query exact-source gate
 on:
   push:
-    branches: [codex/pp-rl72-research-20261106, codex/pp-rl72-standard-research-20261106, codex/pp-rl72-plan-contract-20261106, codex/pp-rl72-content-workbench-20261106]
+    branches: [codex/pp-rl72-research-20261106, codex/pp-rl72-standard-research-20261106, codex/pp-rl72-plan-contract-20261106, codex/pp-rl72-content-workbench-20261106, codex/pp-rl72-evidence-rebase-20261106]
 permissions:
   contents: read
 jobs:

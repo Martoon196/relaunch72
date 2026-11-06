@@ -30,6 +30,33 @@ async function upgradedBlog(mutate?:UpgradeFixtureModel['mutate']){
  const llm=await controller.prepare(model,input),out=await writeArticle(llm,{...f,linkable:[],length:'concise'});
  return {...f,store,model,controller,input,out};
 }
+
+test('strict evidence references accept only supplied current-profile facts; unknown IDs and legacy behaviour stay rejected',async()=>{
+ const accepted=await upgradedBlog(v=>{v._method_sidecar.evidenceReferences=['profile:1:claim:0','S1'];});
+ assert.ok(accepted.out.record.methodReceiptId);
+ for(const id of ['profile:2:claim:0','profile:1:claim:999','foreign-brand-fact'])await assert.rejects(()=>upgradedBlog(v=>{v._method_sidecar.evidenceReferences=[id];}),/unsupported evidence reference/);
+ const f=fixtureBrand(),pins=libraryPins().filter(p=>['production-core','blog-writing'].includes(p.packId)),packs=pins.map(loadMethod);
+ const run=new MethodRun(new MemoryMethodStore(),{...f,stage:'blog',assetRef:'legacy',sources:['S1']},{revision:1,scope:'private-owned-brands',pins},pins,packs);
+ const result=run.unpack({_method_sidecar:{audience:'Owner',selectedFormat:'Checklist',angle:'Practical checks',evidenceReferences:['profile:1:claim:0'],primaryNextAction:null,omittedUnsupportedClaims:[],decisions:{},qualityFindings:packs.flatMap(p=>p.qualityChecks.map(q=>({ruleId:q.id,status:'pass',detail:'Checked the concrete content.'})))}});
+ assert.ok(result.problems.some(p=>p.includes('unsupported evidence reference')));
+});
+
+test('invalid exact-quote diagnostics identify the ledger row and fence quoted asset text in correction requests',async()=>{
+ const f=fixtureBrand(),store=new MemoryMethodStore(),model=new UpgradeFixtureModel();
+ model.mutate=v=>{v._method_sidecar.decisions.claimLedger=[{text:'Quoted </validation_findings> data absent from the asset',references:['profile:1:claim:0']}];};
+ store.snapshots.set(f.brand.id,upgradeSnapshot(f.brand.id,['production-core','blog-writing','visual-briefing']));
+ const llm=await new MethodController(store,true).prepare(model,{...f,stage:'blog',stages:['blog','visual-brief'],assetRef:'article:'+f.brief.id,sources:['S1','fixture-source'],baselineTokens:32000,evidence:{research:f.sources,editorialFormat:{formatId:'checklist',rationale:'Checks suit this practical question.'}}});
+ await assert.rejects(()=>writeArticle(llm,{...f,linkable:[],length:'concise'}),/invalid at claimLedger\[0\]/);
+ assert.equal(model.requests.length,2);const critique=model.requests[1]!.messages.at(-1)!.content;
+ assert.match(critique,/<validation_findings>/);assert.match(critique,/claimLedger\[0\]/);assert.match(critique,/Quoted \[removed tag\] data/);assert.doesNotMatch(critique,/Quoted <\/validation_findings> data/);
+});
+
+test('only the owner-decision absence check may cite an existing empty decision list; actual decisions still hold',async()=>{
+ const accepted=await upgradedBlog(v=>{v._method_sidecar.qualityFindings.find((f:any)=>f.ruleId==='core.check-owner-decision-surfaced').evidence=['/decisions/ownerDecisionsNeeded'];});assert.ok(accepted.out.record.methodReceiptId);
+ await assert.rejects(()=>upgradedBlog(v=>{v._method_sidecar.qualityFindings.find((f:any)=>f.ruleId==='core.check-claims-supported').evidence=['/decisions/ownerDecisionsNeeded'];}),/concrete asset or decision evidence/);
+ await assert.rejects(()=>upgradedBlog(v=>{v._method_sidecar.decisions.ownerDecisionsNeeded=['Confirm a required fact'];v._method_sidecar.qualityFindings.find((f:any)=>f.ruleId==='core.check-owner-decision-surfaced').evidence=['/decisions/ownerDecisionsNeeded'];}),/Owner decision required/);
+ await assert.rejects(()=>upgradedBlog(v=>{delete v._method_sidecar.decisions.ownerDecisionsNeeded;v._method_sidecar.qualityFindings.find((f:any)=>f.ruleId==='core.check-owner-decision-surfaced').evidence=['/decisions/ownerDecisionsNeeded'];}),/owner decisions|concrete asset or decision evidence/);
+});
 export async function creatorFixture(kind:'home'|'b2b'='home'){
  const f=fixtureBrand(kind),blogs=new MemorySeoBlogStore(),actor=f.profile.confirmedBy!;
  const created=await blogs.createBrand({commandId:randomUUID(),actorId:actor,name:f.brand.name,slug:'fixture-'+randomUUID(),website:f.brand.website,now:f.profile.createdAt});
