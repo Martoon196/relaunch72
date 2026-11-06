@@ -69,7 +69,10 @@ export async function callJson<T>(llm: LlmClient, input: {
   for (let attempt = 1; attempt <= (input.singleAttempt ? 1 : Math.min(2, (methodRun?.maxPasses ?? 1) + 1)); attempt++) {
     const messages: { role: 'user' | 'assistant'; content: string }[] = [{ role: 'user', content: input.user }];
     if (critique) {
-      messages.push({ role: 'assistant', content: previous.slice(0, 60_000) || '{}' });
+      // Large private plans already fill their bounded method context. Keep
+      // the source request and precise critique, rather than echoing another
+      // entire draft that prevents the existing correction from being sent.
+      if(!methodRun||input.prompt.header.stage!=='SEO_BLOG_PLAN')messages.push({ role: 'assistant', content: previous.slice(0, 60_000) || '{}' });
       messages.push({ role: 'user', content: `Your previous answer was rejected:\n${critique}\nReturn corrected JSON only.` });
     }
     let response;

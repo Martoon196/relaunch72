@@ -32,6 +32,17 @@ test('a preflight context limit on correction retains the first response as know
   assert.equal(calls,1);assert.equal([...store.receipts.values()][0]!.outcome,'rejected');
 });
 
+test('a large private plan can make its one bounded correction without echoing the entire prior draft',async()=>{
+  const f=fixtureBrand(),store=new MemoryMethodStore();store.snapshots.set(f.brand.id,fixtureSnapshot(f.brand.id,['production-core','editorial-planning']));
+  const requests:Parameters<import('../src/llm/client.js').LlmClient['complete']>[0][]=[];
+  const model={mode:'live' as const,complete:async(req:typeof requests[number])=>{requests.push(req);return {text:JSON.stringify({padding:'x'.repeat(59000)}),tokensIn:101,tokensOut:7,model:'fixture',stopReason:'end_turn'};}};
+  const wrapped=await new MethodController(store,true).prepare(model,{...f,stages:['planning'],stage:'planning',assetRef:'plan:large',sources:['fixture-source','S1'],baselineTokens:40000});
+  const user='Original research and confirmed facts: '+'x'.repeat(100000);
+  await assert.rejects(()=>callJson(wrapped,{prompt:loadPrompt('seo-blog-plan.md'),user,schema:{type:'object'},maxTokens:16000}),e=>{assert.ok(e instanceof GenerationRejectedError);assert.doesNotMatch(e.message,/bounded method context/);assert.equal(e.record.tokensIn+e.record.tokensOut,216);return true;});
+  assert.equal(requests.length,2);assert.ok(requests.every(r=>Buffer.byteLength(JSON.stringify(r),'utf8')<=150000));
+  assert.equal(requests[0]!.messages[0]!.content,requests[1]!.messages[0]!.content);assert.match(requests[1]!.messages[1]!.content,/previous answer was rejected.*Missing internal method sidecar/s);assert.ok(requests[1]!.messages.every(m=>m.role==='user'));assert.equal(store.receipts.size,1);
+});
+
 async function runBlog(kind:'home'|'b2b'='home'){
  const f=fixtureBrand(kind),store=new MemoryMethodStore(),model=new MethodFixtureModel();
  store.snapshots.set(f.brand.id,fixtureSnapshot(f.brand.id));
