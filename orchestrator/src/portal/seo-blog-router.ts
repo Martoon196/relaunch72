@@ -239,7 +239,8 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
     const tab = rest.split('/')[0] || 'overview';
     if (tab === 'overview') {
       const [readiness, articles, usage, jobs] = await Promise.all([engine.readiness(actor, brandId), engine.listArticles(actor, brandId), engine.usage(actor, brandId), engine.listJobs(actor, brandId)]);
-      return send(res, 200, overviewPage(shell('overview'), { readiness, articles, usage, jobs }));
+      const apollo = await input.service.apolloUsage?.(identity, input.requestId, brandId) ?? null;
+      return send(res, 200, overviewPage(shell('overview'), { readiness, articles, usage, jobs, apollo }));
     }
     if (tab === 'setup') {
       const [documents, profile, inventory, destinations, usage, jobs] = await Promise.all([engine.listKnowledge(actor, brandId), engine.getProfile(actor, brandId), engine.getInventory(actor, brandId), engine.listDestinations(actor, brandId), engine.usage(actor, brandId), engine.listJobs(actor, brandId)]);

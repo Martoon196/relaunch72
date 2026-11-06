@@ -1,0 +1,6 @@
+{
+  "synthetic": true,
+  "company": {"company_number":"01234567","company_name":"Fixture Property Limited","company_status":"active","type":"ltd","sic_codes":["68320"]},
+  "people": {"total_entries":2,"people":[{"id":"fixture-owner","title":"Managing Director","organization":{"primary_domain":"fixture.example"}},{"id":"fixture-team","title":"Property Manager","organization":{"primary_domain":"fixture.example"}}]},
+  "enrichment": {"credits_consumed":1,"person":{"id":"fixture-owner","email":"director@fixture.example","email_status":"verified","title":"Managing Director","organization":{"primary_domain":"fixture.example"}}}
+}

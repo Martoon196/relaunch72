@@ -457,8 +457,11 @@ test('WhatsApp141 runtime strictly requires141, defaults140, creators139, method
 });
 
 test('payments142 release is ready before and after its exact additive 0142, and strict otherwise', async () => {
-  const assertStrictSchemaCurrent = (pool: Pick<Pool, 'query'>) => assertRuntimeSchemaCurrent(pool, undefined, {});
-  const rows=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-payments142-'));
+  const prefix = (await discoverMigrations()).slice(0,142);
+  await Promise.all(prefix.map(migration => writeFile(path.join(directory,migration.filename),migration.sql,'utf8')));
+  const assertStrictSchemaCurrent = (pool: Pick<Pool, 'query'>) => assertRuntimeSchemaCurrent(pool, directory, {});
+  const rows=prefix.map(({filename,checksum})=>({filename,checksum}));
   assert.equal(rows.length,142);
   assert.deepEqual(rows[140],{filename:'0141_mhp_event_whatsapp_programme.sql',checksum:'f2a7617a925f39d41ac3a606de9f9dd864b52a2725d8ed7c89d37737c4fe747c'});
   assert.deepEqual(rows[141],{filename:'0142_mhp_payments_live.sql',checksum:'2f5ee2ad95de6244a080d20120b106820536eca8f0df5ca6a8a124c8e78f910d'});
@@ -474,4 +477,19 @@ test('payments142 release is ready before and after its exact additive 0142, and
     await assert.rejects(assertStrictSchemaCurrent(runtimePool(changed)),/checksum changed/);
   }
   await assert.rejects(assertStrictSchemaCurrent(runtimePool([...rows,{filename:'0143_unknown.sql',checksum:'a'.repeat(64)}])),/migration not present/);
+});
+
+test('Apollo143 requires its own migration and preserves every historical payment checksum', async () => {
+  const rows=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  const strict=(entries:typeof rows)=>assertRuntimeSchemaCurrent(runtimePool(entries),undefined,{});
+  assert.equal(rows.length,143);
+  assert.deepEqual(rows[141],{filename:'0142_mhp_payments_live.sql',checksum:'2f5ee2ad95de6244a080d20120b106820536eca8f0df5ca6a8a124c8e78f910d'});
+  assert.equal(rows[142]!.filename,'0143_apollo_private_discovery.sql');
+  await assert.doesNotReject(strict(rows));
+  await assert.rejects(strict(rows.slice(0,142)),/schema is behind by 1 migration/);
+  await assert.rejects(strict(rows.slice(0,141)),/schema is behind by 2 migration/);
+  for (const at of [0,135,136,137,138,139,140,141,142]) {
+    await assert.rejects(strict(rows.map((r,i)=>i===at?{...r,checksum:'0'.repeat(64)}:r)),/checksum changed/);
+  }
+  await assert.rejects(strict([...rows,{filename:'0144_unknown.sql',checksum:'a'.repeat(64)}]),/migration not present/);
 });
