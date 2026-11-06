@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import type { PlannedCluster, JsonCallResult } from './generation.js';
 import type { SearchHit, ResearchBundle } from './research.js';
-import type { ActivityEvent, ArticleBrief, Brand, BrandProfile, Destination, Job, KnowledgeCategory, KnowledgeDocument, KnowledgeRef, TopicPlan, UsageRecord, WebsiteInventory } from './types.js';
+import type { ActivityEvent, ArticleBrief, Brand, BrandProfile, Destination, GenerationRecord, Job, KnowledgeCategory, KnowledgeDocument, KnowledgeRef, TopicPlan, UsageRecord, WebsiteInventory } from './types.js';
 import { FACTUAL_KNOWLEDGE_CATEGORIES } from './types.js';
 import type { KeywordMetric } from '../keyword/types.js';
 import type { WebsiteStructure } from './website-target.js';
@@ -77,6 +77,7 @@ export interface ProgrammeRun {
   readonly modelStart?: { readonly nonce: string; readonly at: string };
   readonly modelReceipt?: JsonCallResult<PlannedCluster>;
   readonly modelReceiptAt?: string;
+  readonly modelRejection?: {readonly record:GenerationRecord;readonly reason:'schema'|'method'|'content';readonly at:string};
   readonly planId?: string;
   readonly hold?: string;
 }

@@ -83,6 +83,28 @@ test('live planning searches concise customer subjects, not Scout/Hunter/Apex or
   assert.ok(seen.every((q) => !/Scout|Hunter|Apex|positions as|questio$/iu.test(q)));
   assert.equal((await f.h.engine.listPlans(OWNER, f.brand.id)).length, 1);
 });
+
+test('known invalid planning responses retain usage once and hold as rejected, while transport failures remain unknown',async()=>{
+  for(const outcome of ['rejected','transport']){
+    const f=await ready();const original=f.h.llm.complete.bind(f.h.llm);let calls=0;
+    f.h.llm.complete=async(req)=>{
+      if(req.meta?.stage!=='SEO_BLOG_PLAN')return original(req);
+      calls++;assert.match(req.messages[0]!.content,/Server response schema/);assert.match(req.system,/indices 0 through 5/);
+      if(outcome==='transport')throw new Error('private upstream failure');
+      return {text:'{}',tokensIn:101,tokensOut:7,model:req.model,stopReason:'end_turn'};
+    };
+    const before=(await f.h.engine.usage(OWNER,f.brand.id)).model_tokens;
+    const job=await f.request();await f.h.engine.tick('worker');const final=(await f.h.store.getJob(f.brand.id,job.id))!;
+    assert.equal(final.state,'blocked');assert.equal((await f.h.engine.listPlans(OWNER,f.brand.id)).length,0);
+    const run=programmeRun(final)!;
+    if(outcome==='rejected'){
+      assert.equal(calls,2,'existing one format revision is retained');assert.equal(run.hold,'generation_rejected');assert.equal(run.modelRejection!.reason,'schema');
+      assert.equal((await f.h.engine.usage(OWNER,f.brand.id)).model_tokens-before,216);
+      assert.doesNotMatch(final.error!,/uncertain|private upstream/);
+    }else{assert.equal(calls,1);assert.equal(run.modelRejection,undefined);assert.match(final.error!,/uncertain/);assert.equal((await f.h.engine.usage(OWNER,f.brand.id)).model_tokens,before);}
+    const usage=await f.h.engine.usage(OWNER,f.brand.id);await f.h.engine.tick('restart');assert.deepEqual(await f.h.engine.usage(OWNER,f.brand.id),usage);
+  }
+});
 test('only two additional40101 retries persist60/300s across claims; every attempt is counted before the call and exhaustion survives tomorrow',async()=>{
   const f=await ready();let calls=0;
   f.h.search.search=async()=>{calls++;assert.equal((await f.h.engine.usage(OWNER,f.brand.id)).search_calls,calls);throw new ResearchProviderError(researchDiagnostic(40101,200,'task-12345678'),0.001);};
