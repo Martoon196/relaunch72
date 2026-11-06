@@ -4,7 +4,8 @@
   "private": true,
   "description": "Relaunch72 — AI-powered done-for-you marketing system. Monorepo: orchestrator, prompts, site, admin.",
   "workspaces": [
-    "orchestrator"
+    "orchestrator",
+    "webinars"
   ],
   "scripts": {
     "pipeline": "npm run --workspace orchestrator pipeline --",
@@ -16,7 +17,10 @@
     "test": "npm run --workspace orchestrator test",
     "typecheck": "npm run --workspace orchestrator typecheck",
     "serve": "npm run --workspace orchestrator serve",
-    "stripe:setup": "npm run --workspace orchestrator stripe:setup"
+    "stripe:setup": "npm run --workspace orchestrator stripe:setup",
+    "webinars:test": "npm run --workspace webinars test",
+    "webinars:typecheck": "npm run --workspace webinars typecheck",
+    "webinars:dev": "npm run --workspace webinars dev"
   },
   "engines": {
     "node": ">=20"
