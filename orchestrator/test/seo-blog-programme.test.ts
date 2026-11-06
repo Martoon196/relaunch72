@@ -16,6 +16,27 @@ async function ready() {
   const provider:SearchProvider=h.search;
   return {h,brand,provider,request:()=>h.engine.requestPlan(OWNER,brand.id,{commandId:randomUUID()})};
 }
+test('live planning searches concise customer subjects, not Scout/Hunter/Apex or truncated positioning prose', async () => {
+  const f = await ready();
+  const p = (await f.h.engine.getProfile(OWNER, f.brand.id))!;
+  const profile = await f.h.engine.editProfile(OWNER, f.brand.id, p.version, {
+    audiences: ['Appraisal-led property investors who buy to add value (conversions, refurb-to-refinance, flips, HMOs, ground-up)', 'Deal sourcers and packagers seeking owner research and branded deal packs', 'Auction buyers reviewing large catalogues under time pressure'],
+    positioning: 'PropertyPredator positions as named weapons, not features — a commercially sharp, evidence-first decision-support tool.',
+    offers: ['Scout (free account)', 'Hunter', 'Apex'].map((name) => ({ ...p.offers[0]!, name })),
+  });
+  await f.h.engine.confirmProfile(OWNER, f.brand.id, profile.version);
+  const seen: string[] = [];
+  const original = f.provider.search.bind(f.provider);
+  f.provider.search = async (query, options) => { seen.push(query); return original(query, options); };
+  const job = await f.h.engine.requestPlan(OWNER, f.brand.id, { commandId: randomUUID(), focus: 'UK property appraisal: checking sold comparables, refurbishment assumptions and maximum offers, with clear source and geographic limits.' });
+  await f.h.engine.tick('worker');
+  assert.equal((await f.h.store.getJob(f.brand.id, job.id))!.state, 'done');
+  assert.equal(seen.length, 4);
+  assert.ok(seen.every((q) => q.length <= 90 && q.split(' ').length <= 8));
+  assert.match(seen[0]!, /property appraisal.*sold comparables/iu);
+  assert.ok(seen.every((q) => !/Scout|Hunter|Apex|positions as|questio$/iu.test(q)));
+  assert.equal((await f.h.engine.listPlans(OWNER, f.brand.id)).length, 1);
+});
 test('only two additional40101 retries persist60/300s across claims; every attempt is counted before the call and exhaustion survives tomorrow',async()=>{
   const f=await ready();let calls=0;
   f.h.search.search=async()=>{calls++;assert.equal((await f.h.engine.usage(OWNER,f.brand.id)).search_calls,calls);throw new ResearchProviderError(researchDiagnostic(40101,200,'task-12345678'),0.001);};
@@ -88,11 +109,13 @@ test('editorial recommendations are deterministic across timestamp-only scans an
   await assert.rejects(f.h.engine.approveEditorialStructure(OWNER,f.brand.id,{rowVersion:b.rowVersion,scanId:first.editorial!.scanId,scanSha:first.editorial!.scanSha,destinationId:destination.id,root:'/investment-info',categories:[{id:c.id,label:'Guides',slug:'guides'}]}),/changed/);
 });
 test('optional metrics are separately reserved, failures do not retry or invalidate source research, and no headroom means no metrics call',async()=>{
-  for(const ceiling of [100,4]) {
+  for(const ceiling of [100,2]) {
     const f=await ready();const b=await f.h.engine.getBrand(OWNER,f.brand.id);await f.h.engine.updateSettings(OWNER,f.brand.id,b.rowVersion,{budgets:{...b.settings.budgets,searchCallsPerMonth:Math.max(ceiling,8)}});let calls=0;
     const worker=new SeoBlogEngine({store:f.h.store,llm:f.h.llm,search:f.h.search,transport:f.h.web,publishers:new Map(),vault:f.h.vault,now:f.h.clock.now,keywords:{mode:'live',metrics:async()=>{calls++;throw new Error('untrusted metrics response');}}});
-    const queued=await f.request();if(ceiling===4){const current=await f.h.engine.getBrand(OWNER,f.brand.id);await f.h.engine.updateSettings(OWNER,f.brand.id,current.rowVersion,{budgets:{...current.settings.budgets,searchCallsPerMonth:4}});}await worker.tick('worker');const job=(await f.h.store.getJob(f.brand.id,queued.id))!;
-    assert.equal(job.state,'done',job.error??'');assert.equal(programmeRun(job)!.retries,0);assert.ok(programmeRun(job)!.metricsWarning);assert.equal(calls,ceiling===4?0:1);
+    // This fixture has two distinct customer subjects; lower the ceiling after
+    // queueing so those two calls leave genuinely no optional-metrics headroom.
+    const queued=await f.request();if(ceiling===2){const current=await f.h.engine.getBrand(OWNER,f.brand.id);await f.h.engine.updateSettings(OWNER,f.brand.id,current.rowVersion,{budgets:{...current.settings.budgets,searchCallsPerMonth:2}});}await worker.tick('worker');const job=(await f.h.store.getJob(f.brand.id,queued.id))!;
+    assert.equal(job.state,'done',job.error??'');assert.equal(programmeRun(job)!.retries,0);assert.ok(programmeRun(job)!.metricsWarning);assert.equal(calls,ceiling===2?0:1);
     assert.equal((await f.h.engine.usage(OWNER,f.brand.id)).search_calls,f.h.search.calls+calls);assert.equal((await f.h.engine.getBrand(OWNER,f.brand.id)).settings.programme?.researchHold??null,null);
     assert.ok((await f.h.engine.listPlans(OWNER,f.brand.id))[0]!.briefs.every((b)=>b.demand.kind==='qualitative'));
   }

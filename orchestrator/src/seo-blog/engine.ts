@@ -24,7 +24,7 @@ import { reviewedWebsiteTarget, targetEligibility, destinationIdentity,websiteId
 import { observeWebsiteDelivery } from './website-delivery.js';
 import { WORDPRESS_URL_CONTRACT } from './website-target.js';
 import { exportMarkdown, renderArticlePage, versionMarker } from './render.js';
-import { researchQueries, ResearchUnavailableError, ResearchProviderError, type SearchProvider, type ResearchBundle } from './research.js';
+import { researchQueries, researchQuerySeeds, ResearchUnavailableError, ResearchProviderError, type SearchProvider, type ResearchBundle } from './research.js';
 import { validatePublicUrl, type FetchTransport } from './safe-fetch.js';
 import { autoPlace, isValidTimeZone, localToUtc, utcToLocal, validateCadence } from './schedule.js';
 import type { SeoBlogStore } from './store.js';
@@ -790,16 +790,13 @@ export class SeoBlogEngine {
       inventory = await this.refreshInventory(brandId);
     }
     const pages = inventory?.pages ?? [];
-    // Seed queries come from the brand itself: audiences' questions, offers, gaps — never from an owner prompt.
-    const seeds = [
-      payload.focus,
-      ...(brand.settings.programme?.structure?.categories??[]).slice(0,3).map((c)=>`${c.label} ${profile.audiences[0]??profile.positioning}`),
-      ...profile.offers.slice(0, 3).map((o) => `${o.name} ${brand.locale === 'en-GB' ? 'UK' : ''}`.trim()),
-      ...profile.audiences.slice(0, 3).map((a) => `${a} questions`),
-      profile.positioning.split(/[.;]/)[0],
-    ].filter((q): q is string => Boolean(q && q.trim().length > 3)).map((q) => q.slice(0, 120));
+    const seeds = researchQuerySeeds({
+      focus: payload.focus, audiences: profile.audiences, positioning: profile.positioning,
+      categories: (brand.settings.programme?.structure?.categories ?? []).map((c) => c.label),
+      limit: USAGE_ESTIMATES.searchPerPlan,
+    });
     const research = execution?.research ?? await researchQueries({
-      queries: [...new Set(seeds)].slice(0, USAGE_ESTIMATES.searchPerPlan), search: execution?.search??this.deps.search, transport: this.deps.transport,
+      queries: seeds, search: execution?.search??this.deps.search, transport: this.deps.transport,
       locale: brand.locale, brandWebsite: brand.website, now: this.now, keywordProvider: execution ? execution.metrics??null : this.deps.keywords ?? null,
     });
     if (!execution && research.searchCalls > 0) await this.store.recordUsage({ brandId, kind: 'search_calls', amount: research.searchCalls, at: this.now(), reference: 'plan' });

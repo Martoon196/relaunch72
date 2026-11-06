@@ -163,6 +163,45 @@ export interface ResearchBundle {
   readonly keywordMetrics: KeywordMetric[];
 }
 
+/** Search for customer subjects, not ambiguous commercial plan names or a pitch.
+ * Keep complete words and a small keyword phrase: slicing a brand paragraph at
+ * 120 characters produced irrelevant SERPs and supplier errors in the live run.
+ * These are search terms only, never product claims or invented source evidence.
+ */
+export function researchQuerySeeds(input: {
+  readonly focus?: string | null;
+  readonly audiences: readonly string[];
+  readonly positioning: string;
+  readonly categories?: readonly string[];
+  readonly limit?: number;
+}): string[] {
+  const stop = new Set(['a', 'an', 'the', 'and', 'or', 'to', 'of', 'for', 'with', 'who', 'that', 'their', 'your', 'our', 'is', 'are', 'in', 'on', 'by', 'under']);
+  const phrase = (text: string): string => {
+    const words = text.normalize('NFKC').replace(/\([^)]*\)/gu, ' ')
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/u)
+      .filter((word) => word.length > 1 && !stop.has(word.toLowerCase()));
+    const kept: string[] = [];
+    for (const word of words) {
+      if (kept.length === 8 || [...kept, word].join(' ').length > 90) break;
+      kept.push(word);
+    }
+    return kept.join(' ');
+  };
+  const context = phrase(input.audiences.find((a) => phrase(a).length > 3) ?? input.positioning);
+  const candidates = [
+    input.focus ?? '',
+    ...input.audiences.slice(0, 3),
+    ...(input.categories ?? []).slice(0, 3).map((label) => `${label} ${context}`),
+  ];
+  if (!candidates.some((value) => phrase(value).length > 3)) candidates.push(input.positioning);
+  const queries = new Map<string, string>();
+  for (const value of candidates) {
+    const query = phrase(value);
+    if (query.length > 3) queries.set(query.toLowerCase(), query);
+  }
+  return [...queries.values()].slice(0, Math.max(0, Math.min(8, input.limit ?? 8)));
+}
+
 export async function researchQueries(input: {
   readonly queries: readonly string[];
   readonly search: SearchProvider;
