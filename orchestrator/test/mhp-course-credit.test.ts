@@ -7,7 +7,7 @@ import type { MhpCommerceConfig } from '../src/mhp/commerce-config.js';
 import { PgMhpCommerceService } from '../src/mhp/commerce-service.js';
 
 const config: MhpCommerceConfig = {secretKey:'rk_test_fixture',accountId:'acct_mhp',webhookSecret:'whsec_test',live:false,
-  portalConfigurationId:'bpc_mhp',prices:{mhp_course:'price_course',mhp_deal_desk:'price_desk'}};
+  windowEndsAt: Date.parse('2026-11-11T19:30:00Z'), portalConfigurationId:'bpc_mhp',prices:{mhp_course:'price_course',mhp_deal_desk:'price_desk'}};
 const command='12000000-0000-4000-8000-000000000001';
 const actor='12000000-0000-4000-8000-000000000002';
 const sdk=new Stripe('rk_test_fixture');

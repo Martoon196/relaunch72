@@ -1,8 +1,10 @@
-import { MHP_CATALOG, mhpPriceEnvironmentName, type MhpSku } from './catalog.js';
+import { MHP_CATALOG, mhpCourseWindowEndsAt, mhpPriceEnvironmentName, mhpSellable, type MhpSku } from './catalog.js';
 
 export interface MhpCommerceConfig {
   secretKey: string; accountId: string; webhookSecret: string; live: boolean;
   prices: Readonly<Partial<Record<MhpSku, string>>>; portalConfigurationId: string;
+  /** Milliseconds. Webinar-price checkouts can be created only before this moment. */
+  windowEndsAt: number;
 }
 /** No fallback to the Property Predator Stripe account or global STRIPE_* keys. */
 export function mhpCommerceConfig(env: NodeJS.ProcessEnv): MhpCommerceConfig | null {
@@ -15,6 +17,7 @@ export function mhpCommerceConfig(env: NodeJS.ProcessEnv): MhpCommerceConfig | n
     || !/^whsec_[A-Za-z0-9]+$/.test(webhookSecret) || !/^bpc_[A-Za-z0-9]+$/.test(portalConfigurationId)) {
     throw new Error('MHP billing configuration is incomplete');
   }
+  const live = secretKey.startsWith('rk_live_');
   const prices: Partial<Record<MhpSku, string>> = {};
   for (const product of MHP_CATALOG) {
     const price = env[mhpPriceEnvironmentName(product.sku)]?.trim() ?? '';
@@ -22,10 +25,10 @@ export function mhpCommerceConfig(env: NodeJS.ProcessEnv): MhpCommerceConfig | n
       if (price) throw new Error('Manual MHP products must not have a Stripe price');
       continue;
     }
-    if (!price && product.availability === 'gated') continue;
+    if (!price && !mhpSellable(product)) continue;
     if (!/^price_[A-Za-z0-9]+$/.test(price)) throw new Error('MHP price configuration is incomplete');
     prices[product.sku] = price;
   }
   if (new Set(Object.values(prices)).size !== Object.keys(prices).length) throw new Error('MHP prices must be distinct');
-  return { secretKey, accountId, webhookSecret, portalConfigurationId, live: secretKey.startsWith('rk_live_'), prices };
+  return { secretKey, accountId, webhookSecret, portalConfigurationId, live, prices, windowEndsAt: mhpCourseWindowEndsAt(env, live) };
 }
