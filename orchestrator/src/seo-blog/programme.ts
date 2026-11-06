@@ -51,6 +51,8 @@ export interface ProgrammeQueryAttempt {
   readonly providerReportedCost?: number | null;
   readonly receivedAt?: string;
   readonly uncertainAt?: string;
+  /** Acknowledged paid Standard task. Subsequent reads must never submit it again. */
+  readonly supplierTask?: { readonly id: string; readonly submittedAt: string; readonly providerReportedCost: number | null };
 }
 export interface ProgrammeInputSnapshot {
   readonly authority: ProgrammeAuthority;

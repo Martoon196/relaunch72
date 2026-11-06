@@ -29,6 +29,8 @@ export interface SearchProvider {
   readonly mode: 'live' | 'unconfigured';
   search(query: string, options: { readonly locale: string; readonly limit: number }): Promise<SearchHit[]>;
   searchReceipt?(query: string, options: { readonly locale: string; readonly limit: number }): Promise<ResearchSearchReceipt>;
+  submitTask?(query: string, options: { readonly locale: string; readonly limit: number }): Promise<{ readonly taskId: string; readonly providerReportedCost: number | null }>;
+  readTask?(taskId: string, options: { readonly limit: number }): Promise<ResearchSearchReceipt | null>;
 }
 
 export class ResearchUnavailableError extends SeoBlogError {
@@ -67,6 +69,45 @@ export class DataForSeoSerpProvider implements SearchProvider {
 
   async search(query: string, options: { readonly locale: string; readonly limit: number }): Promise<SearchHit[]> {
     return [...(await this.searchReceipt(query, options)).hits];
+  }
+
+  /** Standard priority resolves GoTo destinations; Live is retained for non-programme callers. */
+  async submitTask(query: string, options: { readonly locale: string; readonly limit: number }): Promise<{ taskId: string; providerReportedCost: number | null }> {
+    const { task, cost, status } = await this.taskRequest('task_post', [{
+      keyword: query.slice(0, 200), location_code: LOCATION_FOR_LOCALE[options.locale] ?? 2826,
+      language_code: options.locale.slice(0, 2) || 'en', depth: Math.min(Math.max(options.limit, 1), 20), priority: 1,
+    }]);
+    const taskId = researchDiagnostic(null, status, task.id).taskId;
+    if (task.status_code !== 20100 || !taskId) throw new ResearchProviderError(researchDiagnostic(task.status_code ?? null, status, task.id), cost);
+    return { taskId, providerReportedCost: cost };
+  }
+
+  /** GET is free. A pending result is not a failed paid request or permission to POST again. */
+  async readTask(taskId: string, options: { readonly limit: number }): Promise<ResearchSearchReceipt | null> {
+    if (researchDiagnostic(null, null, taskId).taskId !== taskId) throw new ResearchProviderError(researchDiagnostic(null));
+    const { task, cost, status } = await this.taskRequest(`task_get/regular/${taskId}`);
+    if (task.id !== taskId) throw new ResearchProviderError(researchDiagnostic(null, status, taskId), cost);
+    if (task.status_code === 40601 || task.status_code === 40602) return null;
+    if (task.status_code !== 20000 || !Array.isArray(task.result?.[0]?.items)) throw new ResearchProviderError(researchDiagnostic(task.status_code ?? null, status, taskId), cost);
+    return { taskId, providerReportedCost: cost, hits: task.result[0]!.items!
+      .filter((i) => i.type === 'organic' && typeof i.url === 'string' && typeof i.title === 'string')
+      .slice(0, options.limit).map((i) => ({ url: i.url!, title: i.title!.slice(0, 300), snippet: String(i.description ?? '').slice(0, 500) })) };
+  }
+
+  private async taskRequest(path: string, body?: unknown): Promise<{ task: { id?: unknown; status_code?: number; result?: { items?: { type?: string; url?: string; title?: string; description?: string }[] }[] }; cost: number | null; status: number }> {
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`https://api.dataforseo.com/v3/serp/google/organic/${path}`, {
+        method: body ? 'POST' : 'GET', headers: { authorization: `Basic ${Buffer.from(`${this.login}:${this.password}`).toString('base64')}`, 'content-type': 'application/json' },
+        ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30_000),
+      });
+    } catch { throw new ResearchProviderError(researchDiagnostic(null)); }
+    if (!res.ok) throw new ResearchProviderError(researchDiagnostic(null, res.status));
+    const json = await res.json().catch(() => ({})) as { status_code?: number; cost?: number; tasks?: { id?: unknown; cost?: number; status_code?: number; result?: { items?: { type?: string; url?: string; title?: string; description?: string }[] }[] }[] };
+    const task = json.tasks?.[0]; const raw = task?.cost ?? json.cost;
+    const cost = typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 && raw <= 1_000_000 ? raw : null;
+    if (json.status_code !== 20000 || !task) throw new ResearchProviderError(researchDiagnostic(json.status_code ?? null, res.status, task?.id), cost);
+    return { task, cost, status: res.status };
   }
 
   async searchReceipt(query: string, options: { readonly locale: string; readonly limit: number }): Promise<ResearchSearchReceipt> {
