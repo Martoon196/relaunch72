@@ -235,6 +235,15 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(SEO_BLOG_MEDIA_MIGRATION) === SEO_BLOG_MEDIA_CHECKSUM) {
     applied.delete(SEO_BLOG_MEDIA_MIGRATION);
   }
+  // Recovery/cutover only: old checkout remains unchanged on the exact additive
+  // payment migration. Unknown or edited migrations still fail readiness.
+  if (migrations.length === 141
+      && migrations[140]?.filename === '0141_mhp_event_whatsapp_programme.sql'
+      && migrations[140]?.checksum === 'f2a7617a925f39d41ac3a606de9f9dd864b52a2725d8ed7c89d37737c4fe747c'
+      && applied.get('0141_mhp_event_whatsapp_programme.sql') === 'f2a7617a925f39d41ac3a606de9f9dd864b52a2725d8ed7c89d37737c4fe747c'
+      && applied.get('0142_mhp_payments_live.sql') === '2f5ee2ad95de6244a080d20120b106820536eca8f0df5ca6a8a124c8e78f910d') {
+    applied.delete('0142_mhp_payments_live.sql');
+  }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
   if(methodSchemaBridgeAllowed(migrations,applied,env))return;
