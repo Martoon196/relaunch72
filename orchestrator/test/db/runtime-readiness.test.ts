@@ -429,8 +429,12 @@ test('final136 capable runtime stays strict for new applications and every histo
 test('WhatsApp141 runtime strictly requires141, defaults140, creators139, methods138 and every prior ledger row', async () => {
   // Render also runs this suite while the temporary deployment bridge is set.
   // Strict-mode assertions must not inherit that service environment.
-  const assertStrictSchemaCurrent = (pool: Pick<Pool, 'query'>) => assertRuntimeSchemaCurrent(pool, undefined, {});
-  const rows=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  // Pinned to the 141 release's own bundle: later releases add migrations after it.
+  const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-whatsapp141-'));
+  const prefix = (await discoverMigrations()).slice(0, 141);
+  await Promise.all(prefix.map(migration => writeFile(path.join(directory, migration.filename), migration.sql, 'utf8')));
+  const assertStrictSchemaCurrent = (pool: Pick<Pool, 'query'>) => assertRuntimeSchemaCurrent(pool, directory, {});
+  const rows=prefix.map(({filename,checksum})=>({filename,checksum}));
   assert.equal(rows.length,141);
   assert.deepEqual(rows[140],{filename:'0141_mhp_event_whatsapp_programme.sql',checksum:'f2a7617a925f39d41ac3a606de9f9dd864b52a2725d8ed7c89d37737c4fe747c'});
   assert.equal(rows[137]!.filename,'0138_seo_blog_method_packs.sql');
@@ -450,4 +454,24 @@ test('WhatsApp141 runtime strictly requires141, defaults140, creators139, method
     await assert.rejects(assertStrictSchemaCurrent(runtimePool(changed)),/checksum changed/);
   }
   await assert.rejects(assertStrictSchemaCurrent(runtimePool([...rows,{filename:'0142_unknown.sql',checksum:'a'.repeat(64)}])),/migration not present/);
+});
+
+test('payments142 release is ready before and after its exact additive 0142, and strict otherwise', async () => {
+  const assertStrictSchemaCurrent = (pool: Pick<Pool, 'query'>) => assertRuntimeSchemaCurrent(pool, undefined, {});
+  const rows=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  assert.equal(rows.length,142);
+  assert.deepEqual(rows[140],{filename:'0141_mhp_event_whatsapp_programme.sql',checksum:'f2a7617a925f39d41ac3a606de9f9dd864b52a2725d8ed7c89d37737c4fe747c'});
+  assert.deepEqual(rows[141],{filename:'0142_mhp_payments_live.sql',checksum:'2f5ee2ad95de6244a080d20120b106820536eca8f0df5ca6a8a124c8e78f910d'});
+  // Deployed to every consumer first: the exact 0141 ledger with only 0142 pending is ready.
+  await assert.doesNotReject(assertStrictSchemaCurrent(runtimePool(rows.slice(0,141))));
+  // After the migration it is strict as usual.
+  await assert.doesNotReject(assertStrictSchemaCurrent(runtimePool(rows)));
+  await assert.rejects(assertStrictSchemaCurrent(runtimePool(rows.slice(0,140))),/schema is behind by 2 migration/);
+  await assert.rejects(assertStrictSchemaCurrent(runtimePool(rows.slice(0,137))),/schema is behind by 5 migration/);
+  await assert.rejects(assertStrictSchemaCurrent(runtimePool([...rows.slice(0,141),{...rows[141]!,checksum:'0'.repeat(64)}])),/checksum changed|migration not present/);
+  for (const at of [0,120,135,136,137,138,139,140]) {
+    const changed=rows.slice(0,141).map((row,index)=>index===at?{...row,checksum:'0'.repeat(64)}:row);
+    await assert.rejects(assertStrictSchemaCurrent(runtimePool(changed)),/checksum changed/);
+  }
+  await assert.rejects(assertStrictSchemaCurrent(runtimePool([...rows,{filename:'0143_unknown.sql',checksum:'a'.repeat(64)}])),/migration not present/);
 });
