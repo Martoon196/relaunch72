@@ -12,7 +12,7 @@ import type { KeywordProvider } from '../keyword/types.js';
 import { runChecks } from './checks.js';
 import { assessDuplicate, slugify } from './dedupe.js';
 import {
-  extractProfile, GenerationUnavailableError, CampaignGenerationRejectedError, proposeCluster, resolveMarkers, rewriteSection, writeArticle, writeArticlePromotions, writeArticleCampaignPromotions,
+  extractProfile, GenerationUnavailableError, GenerationRejectedError, CampaignGenerationRejectedError, proposeCluster, resolveMarkers, rewriteSection, writeArticle, writeArticlePromotions, writeArticleCampaignPromotions,
   type PlannedArticle, type PlannedCluster, type JsonCallResult,
 } from './generation.js';
 import { buildInventory, linkableUrls } from './inventory.js';
@@ -765,6 +765,12 @@ export class SeoBlogEngine {
     } catch(error) {
       return this.programmeTransaction(claim,authority,(s)=>{
         const current=s.job;const latest=current&&programmeRun(current);if(!current||!latest) throw new SeoBlogError(404,'Planning task not found.');
+        if(error instanceof GenerationRejectedError && latest.modelStart && !latest.modelReceipt && !latest.modelRejection) {
+          const now=this.now();const run={...latest,modelRejection:{record:error.record,reason:error.reason,at:now}};
+          const next={...current,payload:{...current.payload,programme:run}};
+          const held=this.programmeOwns(current,claim)?this.programmeHeld(s,next,run,'generation_rejected','The generated plan did not pass its format or evidence checks. Its known model usage was recorded. Review before another paid intent.'):{job:next,writeJob:true};
+          return {...held,usage:{brandId:claim.brandId,kind:'model_tokens',amount:error.record.tokensIn+error.record.tokensOut,at:now,reference:`plan:${latest.logicalRunId}:${latest.modelStart.nonce}`}};
+        }
         if(!this.programmeOwns(current,claim)) return {job:current,writeJob:false};
         if(error instanceof BudgetExceededError) return this.programmeHeld(s,current,latest,'budget',error.message);
         return this.programmeHeld(s,current,latest,'planning_held',latest.modelStart&&!latest.modelReceipt?'A planning model call has no saved result. Token usage may be uncertain. Review before a new paid intent.':'Planning could not complete with usable research. Saved successful query receipts were retained; review programme status before resuming.');

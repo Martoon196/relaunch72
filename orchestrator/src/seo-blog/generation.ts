@@ -34,6 +34,13 @@ export class GenerationUnavailableError extends SeoBlogError {
   }
 }
 
+/** A response arrived but failed validation; its known usage is not a transport uncertainty. */
+export class GenerationRejectedError extends SeoBlogError {
+  constructor(message: string, readonly record: GenerationRecord, readonly reason: 'schema'|'method'|'content') {
+    super(422, message, record.methodReceiptId ? 'method_generation_rejected' : 'generation_rejected');
+  }
+}
+
 export interface JsonCallResult<T> {
   readonly value: T;
   readonly record: GenerationRecord;
@@ -57,6 +64,8 @@ export async function callJson<T>(llm: LlmClient, input: {
   let tokensOut = 0;
   let critique = '';
   let previous = '';
+  let rejection: 'schema'|'method'|'content' = 'schema';
+  let responseModel = model;
   for (let attempt = 1; attempt <= (input.singleAttempt ? 1 : Math.min(2, (methodRun?.maxPasses ?? 1) + 1)); attempt++) {
     const messages: { role: 'user' | 'assistant'; content: string }[] = [{ role: 'user', content: input.user }];
     if (critique) {
@@ -82,27 +91,30 @@ export async function callJson<T>(llm: LlmClient, input: {
     }
     tokensIn += response.tokensIn;
     tokensOut += response.tokensOut;
+    responseModel = response.model || model;
+    rejection='schema';
     previous = response.text;
     const parsed = extractJson(response.text);
     if ('error' in parsed) { critique = `Not valid JSON: ${parsed.error}`; continue; }
     const methodOutput = methodRun?.unpack(parsed.value);
-    if (methodOutput?.problems.length) { critique = methodOutput.problems.join('\n'); continue; }
+    if (methodOutput?.problems.length) { rejection='method'; critique = methodOutput.problems.join('\n'); continue; }
     const output = methodOutput ? methodOutput.value : parsed.value;
     if (!validate(output)) {
+      rejection='schema';
       critique = (validate.errors ?? []).slice(0, 12).map((e) => `${e.instancePath || '(root)'} ${e.message}`).join('\n');
       continue;
     }
     const problems = input.validate?.(output as T) ?? [];
-    if (problems.length > 0) { critique = problems.slice(0, 12).join('\n'); continue; }
+    if (problems.length > 0) { rejection='content'; critique = problems.slice(0, 12).join('\n'); continue; }
     let record: GenerationRecord = { mode: llm.mode === 'live' ? 'live' : 'simulated', model: response.model || model, promptVersion: `${input.prompt.file}@${input.prompt.header.version}#${input.prompt.sha256.slice(0, 12)}`, tokensIn, tokensOut };
     if (methodRun) record = await methodRun.finish(record, "accepted");
     return {value: output as T, record};
   }
-  if (methodRun) {
-    await methodRun.finish({mode:llm.mode==='live'?'live':'simulated',model,promptVersion:input.prompt.file,tokensIn,tokensOut},'rejected');
-    throw new SeoBlogError(422, 'The assigned production methods could not produce a valid draft. '+critique.slice(0,250), 'method_generation_rejected');
-  }
-  throw new SeoBlogError(422, `The model did not return a usable result ${input.singleAttempt ? 'after one attempt' : 'after a retry'}. ${critique.split('\n')[0] ?? ''}`.trim(), 'generation_rejected');
+  let record:GenerationRecord={mode:llm.mode==='live'?'live':'simulated',model:responseModel,promptVersion:`${input.prompt.file}@${input.prompt.header.version}#${input.prompt.sha256.slice(0,12)}`,tokensIn,tokensOut};
+  if(methodRun) record=await methodRun.finish(record,'rejected');
+  const message=methodRun?'The assigned production methods could not produce a valid draft. '+critique.slice(0,250)
+    :`The model did not return a usable result ${input.singleAttempt ? 'after one attempt' : 'after a retry'}. ${critique.split('\n')[0] ?? ''}`.trim();
+  throw new GenerationRejectedError(message,record,rejection);
 }
 
 export function dataBlock(tag: string, value: unknown): string {
@@ -315,6 +327,7 @@ export async function proposeCluster(llm: LlmClient, input: {
       dataBlock('website_inventory', input.inventory.filter((p) => p.fetchStatus === 'ok').slice(0, 120).map((p) => ({ url: p.canonical ?? p.url, title: p.title, headings: p.headings.slice(0, 6), editorial: p.editorial }))),
       dataBlock('research_sources', researchForPrompt(short)),
       dataBlock('owner_inputs', { focus: input.focus, excluded_subjects: input.excluded, source_article: input.sourceArticleUrl }),
+      `Server response schema (required; method sidecar is a separate sibling): ${JSON.stringify(PLAN_SCHEMA)}`,
     ].join('\n\n'),
     validate: (v) => {
       const problems: string[] = [];
