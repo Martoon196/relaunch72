@@ -7,6 +7,7 @@ import { PgApolloStore } from '../orchestrator/src/integrations/apollo/pg-store.
 import { coverage,readCompanyCsv } from '../orchestrator/src/integrations/apollo/coverage.js';
 import { validateCoverageTarget } from '../orchestrator/src/integrations/apollo/target-plan.js';
 import { PgSeoBlogStore } from '../orchestrator/src/seo-blog/pg-store.js';
+async function main():Promise<void>{
 const args=process.argv.slice(2),option=(key:string)=>{const i=args.indexOf(key);return i>=0?args[i+1]:undefined;};
 const input=option('--input'),output=option('--output'),brand=option('--brand'),targetPath=option('--target-plan');
 const cap=Number(option('--max-credits')??'0');
@@ -38,3 +39,9 @@ try{
   console.table(report.segments);console.log(JSON.stringify({credits:report.credits,report:output}));
   if(report.rows.some(r=>r.hold))process.exitCode=2;
 }finally{await pool.end();}
+}
+main().catch(error=>{
+  const message=error instanceof Error?error.message:'';
+  const safe=/^(Usage:|Apollo is disabled|[A-Z_]+ is required;|Target plan exceeds|target_|apollo_|Coverage accepts|CSV |Every firm|Unsupported segment|Duplicate firms|Unterminated CSV|Invalid CSV|Text after CSV)/.test(message)?message:'Coverage failed; reconcile the held run before retrying.';
+  process.stderr.write(JSON.stringify({error:safe})+'\n');process.exitCode=1;
+});

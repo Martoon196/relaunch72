@@ -32,6 +32,8 @@ jobs:
       - run: node scripts/supply-chain.mjs --check
       - name: TypeScript
         run: npm --prefix orchestrator run typecheck
+      - name: Coverage CLI TypeScript (root scripts are outside the app tsconfig)
+        run: node node_modules/typescript/bin/tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --noUncheckedIndexedAccess --esModuleInterop --resolveJsonModule --skipLibCheck scripts/apollo_coverage_test.ts
       - name: Apply exact migrations to disposable localhost only
         env:
           RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
