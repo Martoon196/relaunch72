@@ -65,4 +65,3 @@ if ( is_admin() ) {
 	R72Pub_Admin::init();
 	R72Pub_Metabox::init();
 }
-

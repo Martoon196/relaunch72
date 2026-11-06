@@ -615,4 +615,3 @@ class R72Pub_Admin {
 		echo '</tbody></table>';
 	}
 }
-
