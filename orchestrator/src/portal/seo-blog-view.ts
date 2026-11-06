@@ -6,6 +6,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import type { Usage as ApolloUsage } from '../integrations/apollo/index.js';
 import type { BrandReadiness } from '../seo-blog/engine.js';
 import { sha256, USAGE_ESTIMATES } from '../seo-blog/engine.js';
 import { promotionPublicationHold } from '../seo-blog/promotions.js';
@@ -109,7 +110,7 @@ function check(ok: boolean, label: string): string {
   return `<li><span class="pill ${ok ? 'ok' : 'warn'}">${ok ? 'Ready' : 'To do'}</span> ${e(label)}</li>`;
 }
 
-export function overviewPage(shell: Shell, data: { readiness: BrandReadiness; articles: { article: Article; status: string }[]; usage: Record<UsageKind, number>; jobs: Job[] }): string {
+export function overviewPage(shell: Shell, data: { readiness: BrandReadiness; articles: { article: Article; status: string }[]; usage: Record<UsageKind, number>; jobs: Job[]; apollo?: ApolloUsage | null }): string {
   const b = shell.brand!;
   const r = data.readiness;
   const counts = new Map<string, number>();
@@ -118,6 +119,7 @@ export function overviewPage(shell: Shell, data: { readiness: BrandReadiness; ar
   const drafts=data.articles.filter((a)=>a.article.currentVersionId&&a.article.delivery!=='published').length;
   const programme=programmeSummary({brand:b,jobs:data.jobs,profileState:r.profile,canPlan:r.canPlan,missing:r.missing,researchConfigured:r.research,drafts});
   return layout(shell, 'Overview', `<h1>${e(b.name)}</h1>
+${data.apollo ? `<section class="card"><h2>Prospect discovery allowance</h2><p>Apollo: ${data.apollo.enabled ? 'enabled for this brand' : 'paused'}. Used or reserved this month: ${data.apollo.brandUsedOrReserved} of ${data.apollo.brandLimit} brand credits; ${data.apollo.globalUsedOrReserved} of ${data.apollo.globalLimit} across your brands.</p><p>Remaining available: ${data.apollo.remaining} credits. ${data.apollo.freeAllowanceConfirmed ? 'Free allowance confirmed.' : 'Confirm the account’s free allowance before any paid lookup.'}</p><p>Discovery only. No messages are sent.</p></section>` : ''}
 <section class="programme-hero" data-state="${programme.state}"><div><p class="eyebrow">Your content programme · ${b.settings.ongoingProduction?'ongoing drafts enabled':'owner-led planning'}</p><h2>${e(programme.title)}</h2><p>${e(programme.detail)}</p><span class="pill">Public publishing ${b.settings.autoPublish?'enabled by owner':'held for approval'}</span></div><a class="button" href="${url(b,programme.next.tab)}">${e(programme.next.label)}</a></section>
 <div class="metric-grid"><section class="metric"><span class="eyebrow">Drafts to review</span><strong>${drafts}</strong><small>Editorial proposals, not public posts</small></section><section class="metric"><span class="eyebrow">Work in progress</span><strong>${running.length}</strong><small>Durable tasks continue after you leave</small></section><section class="metric"><span class="eyebrow">Writing this month</span><strong>${data.usage.model_tokens.toLocaleString('en-GB')}</strong><small>of ${b.settings.budgets.modelTokensPerMonth.toLocaleString('en-GB')} model tokens · input + output</small></section><section class="metric"><span class="eyebrow">Research allowance</span><strong>${data.usage.search_calls} / ${b.settings.budgets.searchCallsPerMonth}</strong><small>Supplier attempts, including failed calls · not cash billing</small></section></div>
 <section class="card research-status" data-held="${programme.diagnostic!==null||programme.state==='held'}"><p class="eyebrow">Research health</p><h2>${e(programme.health)}</h2>${programme.diagnostic?`<p>${e(programme.diagnostic.summary)} ${e(programme.diagnostic.remedy)}</p><details><summary>Supplier details</summary><p class="muted">${programme.diagnostic.supplierCode?`Supplier status ${programme.diagnostic.supplierCode}`:'No verified supplier status code'}${programme.diagnostic.taskId?` · Task ${e(programme.diagnostic.taskId)}`:''}</p></details>`:''}<p class="muted">Last successful source research: ${programme.lastSuccessAt?`${e(programme.lastSuccessAt.slice(0,16).replace('T',' '))} UTC`:'No successful receipt recorded yet.'}</p>${programme.metricsWarning?`<p class="notice">Optional keyword metrics: ${e(programme.metricsWarning)} Source research and qualitative demand are separate.</p>`:''}<a href="${url(b,'topics')}#research-status">Research status and recovery</a></section>

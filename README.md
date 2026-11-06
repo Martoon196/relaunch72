@@ -57,3 +57,5 @@ Exit codes: `0` ok · `2` intake rejected by S0 (nudge required) · `3` a stage 
 - Secrets in env only; `.env` is gitignored.
 
 See `/docs/decisions.md` for every judgement call made along the way.
+
+Apollo private prospect discovery is an off-by-default source scaffold for Prop Invest UK and Key Properties UK only; see [setup, corporate gate, budgets and coverage](orchestrator/src/integrations/apollo/README.md). Upgrading to Basic later uses the existing secrets and reviewed operator budget/plan configuration rather than a code change; confirm actual account permissions, licence, credit accounting and explicit paid-use scope before raising any ceiling. It does not enable customer access or sending.

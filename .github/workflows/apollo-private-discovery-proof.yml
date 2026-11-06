@@ -1,0 +1,53 @@
+name: Apollo private discovery proof
+on:
+  push:
+    branches: [codex/apollo-private-discovery-20261106, codex/apollo-owned-brand-pilot-20261106]
+permissions:
+  contents: read
+jobs:
+  release-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: local-ci-test-only
+          POSTGRES_DB: relaunch72_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.4
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node scripts/supply-chain.mjs --check
+      - name: TypeScript
+        run: npm --prefix orchestrator run typecheck
+      - name: Apply exact migrations to disposable localhost only
+        env:
+          RL72_METHODS_PG_TEST_URL: postgresql://postgres:local-ci-test-only@127.0.0.1:5432/relaunch72_test
+          RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
+        run: node --import tsx scripts/rl72-boosters-pg-bootstrap.mjs
+      - name: Actual PostgreSQL Apollo boundaries
+        working-directory: orchestrator
+        env:
+          TEST_DATABASE_URL: postgresql://ci_migrator:ci-owner-test-only@127.0.0.1:5432/relaunch72_test
+          SEO_BLOG_PG_ADMIN_URL: postgresql://ci_migrator:ci-owner-test-only@127.0.0.1:5432/relaunch72_test
+          SEO_BLOG_PG_CONTENT_URL: postgresql://r72_content_command:local-methods-test-only@127.0.0.1:5432/relaunch72_test
+          TEST_DATABASE_RESET_CONFIRM: reset-disposable-branch
+          RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
+        run: node --import tsx --test test/db/apollo-discovery.integration.test.ts
+      - name: Exact-source offline full suite
+        env:
+          RELAUNCH72_DATABASE_INTEGRATION: ''
+          TEST_DATABASE_URL: ''
+        run: npm --prefix orchestrator test
