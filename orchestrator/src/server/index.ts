@@ -974,6 +974,7 @@ async function main(): Promise<void> {
     marketing,
     portal,
     groupHqCrm: postgresPortal?.groupHqCrm,
+    groupHqInboxCrm: postgresPortal?.groupHqInboxCrm,
     portalMaxConcurrentRequests: 32,
     portalBlockers: portal
       ? undefined

@@ -131,8 +131,7 @@ export class CrmPgRepository {
       `/* crm.read-command-receipt */
        SELECT id, payload_hash AS "payloadHash", status, result
        FROM app.command_receipts
-       WHERE actor_user_id = $1 AND command_name = $2 AND idempotency_key = $3
-       FOR UPDATE`,
+       WHERE actor_user_id = $1 AND command_name = $2 AND idempotency_key = $3`,
       [input.actorUserId, input.commandName, input.commandKey],
     );
     const row = existing.rows[0];

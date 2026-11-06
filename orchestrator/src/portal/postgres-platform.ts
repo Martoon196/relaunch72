@@ -26,6 +26,7 @@ import { assertRuntimeSchemaCurrent } from '../db/runtime-readiness.js';
 import { assertExpectedDatabaseInstallation } from '../db/installation-identity.js';
 import { requestDatabaseContext } from '../db/rls.js';
 import { createGroupHqCrmReadMount, loadGroupHqCrmConfig } from '../integrations/group-hq-crm/read.js';
+import { createGroupHqInboxCrmMount, loadInboxCrmConfig } from '../integrations/group-hq-crm/inbox.js';
 import {
   createPgInboxReadService,
   type InboxConversationQuery,
@@ -182,6 +183,7 @@ import type { FinanceDraftsService } from './finance-drafts-service.js';
 
 export interface PgPortalPlatform {
   groupHqCrm?: ReturnType<typeof createGroupHqCrmReadMount>;
+  groupHqInboxCrm?: ReturnType<typeof createGroupHqInboxCrmMount>;
   mhp?: MhpRuntime;
   auth: PgPortalAuthService;
   /** Distributed, function-only admission guard shared by every web instance. */
@@ -1298,9 +1300,17 @@ export async function buildPgPortalPlatform(
       // An optional founder read bridge must never unmount the customer portal.
       console.warn('Group HQ CRM read bridge is unavailable; Property Predator portal remains mounted.');
     }
+    let groupHqInboxCrm: ReturnType<typeof createGroupHqInboxCrmMount> | undefined;
+    try {
+      const inboxConfig = loadInboxCrmConfig(env);
+      if (inboxConfig) groupHqInboxCrm = createGroupHqInboxCrmMount(webPool, commandPool, inboxConfig);
+    } catch {
+      console.warn('Group HQ inbox command bridge is unavailable; customer workspaces remain mounted.');
+    }
     let closed = false;
     return {
       groupHqCrm,
+      groupHqInboxCrm,
       mhp,
       auth: new PgPortalAuthService({ readPool: webPool, commandPool: identityPool }),
       abuse,
