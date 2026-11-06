@@ -427,10 +427,13 @@ test('final136 capable runtime stays strict for new applications and every histo
 });
 
 test('WhatsApp141 runtime strictly requires141, defaults140, creators139, methods138 and every prior ledger row', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-141-retained-'));
+  const prefix = (await discoverMigrations()).slice(0,141);
+  await Promise.all(prefix.map(m => writeFile(path.join(directory,m.filename),m.sql,'utf8')));
   // Render also runs this suite while the temporary deployment bridge is set.
   // Strict-mode assertions must not inherit that service environment.
-  const assertStrictSchemaCurrent = (pool: Pick<Pool, 'query'>) => assertRuntimeSchemaCurrent(pool, undefined, {});
-  const rows=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  const assertStrictSchemaCurrent = (pool: Pick<Pool, 'query'>) => assertRuntimeSchemaCurrent(pool, directory, {});
+  const rows=prefix.map(({filename,checksum})=>({filename,checksum}));
   assert.equal(rows.length,141);
   assert.deepEqual(rows[140],{filename:'0141_mhp_event_whatsapp_programme.sql',checksum:'f2a7617a925f39d41ac3a606de9f9dd864b52a2725d8ed7c89d37737c4fe747c'});
   assert.equal(rows[137]!.filename,'0138_seo_blog_method_packs.sql');
@@ -450,4 +453,30 @@ test('WhatsApp141 runtime strictly requires141, defaults140, creators139, method
     await assert.rejects(assertStrictSchemaCurrent(runtimePool(changed)),/checksum changed/);
   }
   await assert.rejects(assertStrictSchemaCurrent(runtimePool([...rows,{filename:'0142_unknown.sql',checksum:'a'.repeat(64)}])),/migration not present/);
+});
+
+test('141 recovery admits only exact142; capable142 requires it and retains every prior check', async () => {
+  const migrations=await discoverMigrations();
+  const prefix=migrations.slice(0,141);
+  const directory=await mkdtemp(path.join(tmpdir(),'r72-first-contact142-bridge-'));
+  await Promise.all(prefix.map(m=>writeFile(path.join(directory,m.filename),m.sql,'utf8')));
+  const rows=prefix.map(({filename,checksum})=>({filename,checksum}));
+  const firstContact={filename:'0142_mhp_whatsapp_first_contact.sql',checksum:'455d12aa5070ca7aa6dea050fa2d43fcf5dff390bfb52228772b15f448be9250'};
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool(rows),directory,{}));
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool([...rows,firstContact]),directory,{}));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows,{...firstContact,checksum:'0'.repeat(64)}]),directory,{}),/migration not present/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows,firstContact,firstContact]),directory,{}),/invalid runtime migration ledger/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(0,140),firstContact]),directory,{}),/migration not present/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows,firstContact,{filename:'0143_unknown.sql',checksum:'a'.repeat(64)}]),directory,{}),/migration not present/);
+  for(const at of [0,120,123,130,134,135,136,137,138,139,140]) {
+    const corrupt=rows.map((r,i)=>i===at?{...r,checksum:'0'.repeat(64)}:r);
+    await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...corrupt,firstContact]),directory,{}),/checksum changed|migration not present/);
+  }
+  // A source-only recovery artifact deliberately has141 files; the capable source has142.
+  if(migrations.length===142) {
+    assert.deepEqual(migrations.map(({filename,checksum})=>({filename,checksum}))[141],firstContact);
+    await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool([...rows,firstContact]),undefined,{}));
+    await assert.rejects(assertRuntimeSchemaCurrent(runtimePool(rows),undefined,{}),/schema is behind by 1 migration/);
+    await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows,{...firstContact,checksum:'0'.repeat(64)}]),undefined,{}),/checksum changed/);
+  } else assert.equal(migrations.length,141);
 });
