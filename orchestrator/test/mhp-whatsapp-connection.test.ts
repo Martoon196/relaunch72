@@ -84,16 +84,25 @@ test('one-use local setup rejects cross-site POST and downloads only the encrypt
     fetch: (async (...args: Parameters<typeof fetch>) => { reads++; return provider(...args); }) as typeof fetch, now: () => clock });
   try {
     const page = await fetch(tool.url), html = await page.text();
+    // Real HTML form POSTs use Origin:null under no-referrer, unlike fetch().
+    assert.equal(page.headers.get('referrer-policy'), 'same-origin');
     assert.match(html, /type="password"/u); assert.doesNotMatch(html, new RegExp(token, 'u'));
     const csrf = /name="csrf" value="([^"]+)"/u.exec(html)![1]!;
     const body = new URLSearchParams({ csrf, token });
     const foreign = await fetch(tool.url, { method: 'POST', body, headers: { origin: 'https://evil.example' } });
     assert.equal(foreign.status, 403); assert.equal(reads, 0);
+    assert.equal(foreign.headers.get('referrer-policy'), 'no-referrer');
+    const rejectedHeaders: Record<string, string>[] = [{ origin: 'null' }, { origin: new URL(tool.url).origin, 'sec-fetch-site': 'cross-site' }];
+    for (const headers of rejectedHeaders) {
+      const rejected = await fetch(tool.url, { method: 'POST', body, headers });
+      assert.equal(rejected.status, 403); assert.equal(reads, 0);
+    }
     const bad = await fetch(tool.url, { method: 'POST', body: new URLSearchParams({ csrf: 'wrong', token }), headers: { origin: new URL(tool.url).origin } });
     assert.equal(bad.status, 403); assert.equal(reads, 0);
     const response = await fetch(tool.url, { method: 'POST', body, headers: { origin: new URL(tool.url).origin } });
     assert.equal(response.status, 200); assert.equal(reads, 1);
     assert.match(response.headers.get('content-disposition')!, /mhp-whatsapp-connection.json/u);
+    assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
     const download = await response.text(); assert.doesNotMatch(download, new RegExp(token, 'u'));
     assert.equal(parseMhpWhatsAppConnectionPacket(download, bindingId, clock).bindingId, bindingId);
   } finally { tool.server.closeAllConnections(); await new Promise<void>(resolve => tool.server.close(() => resolve())); }

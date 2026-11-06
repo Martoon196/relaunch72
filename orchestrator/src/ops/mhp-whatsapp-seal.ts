@@ -29,7 +29,9 @@ export async function startMhpWhatsAppSealTool(input: { encryptionKey: Buffer; k
   const server = createServer(async (req, res) => {
     const reply = (status: number, body: string, type = 'text/plain; charset=utf-8') => {
       res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
-        'referrer-policy': 'no-referrer', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" }); res.end(body);
+        // HTML form POSTs need their real Origin; no-referrer makes it null.
+        'referrer-policy': req.method === 'GET' && status === 200 ? 'same-origin' : 'no-referrer',
+        'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" }); res.end(body);
     };
     if (req.headers.host !== new URL(origin).host || req.url !== `/${secretPath}` || complete) { reply(404, 'Not found'); return; }
     if (req.method === 'GET') {
