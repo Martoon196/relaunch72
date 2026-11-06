@@ -1,8 +1,23 @@
 import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
 import Stripe from 'stripe';
-import { MHP_BRAND, MHP_CATALOG, MHP_ORIGIN, MHP_STRIPE_EVENTS, mhpProduct, type MhpGrants, type MhpProduct } from './catalog.js';
+import { MHP_BRAND, MHP_CATALOG, MHP_ORIGIN, MHP_PRIVATE_TERMS_URL, MHP_SITE, MHP_STRIPE_EVENTS, MHP_TERMS_URL, mhpCourseSku, mhpPriceStatement,
+  mhpPrivateOfferAllowed, mhpProduct, mhpSellable, type MhpCoursePlan, type MhpGrants, type MhpPrivateOffer, type MhpProduct } from './catalog.js';
 import type { MhpCommerceConfig } from './commerce-config.js';
+
+/** Where Stripe returns a buyer. Static pages on the public site explain what happens next. */
+export const MHP_COURSE_WELCOME_URL = `${MHP_SITE}/join/welcome/`;
+export const MHP_MENTORING_WELCOME_URL = `${MHP_SITE}/mentoring/welcome/`;
+const WINDOW_SKUS = ['mhp_course_web', 'mhp_course_web_3x'] as const;
+/** Stripe's shortest Checkout expiry is 30 minutes; one extra minute covers network time. */
+const MIN_CHECKOUT_SECONDS = 1_860;
+export interface MhpPrivateOfferLink {
+  id: string; url: string; active: boolean; paid: boolean; sku: string; name: string; priceStatement: string;
+  applicationId: string; email: string; createdAt: string;
+}
+/** Receipt summary only. Welcome delivery uses the purchase-unique durable outbox. */
+export interface MhpPurchaseNotice { email: string; name: string; sku: string; productName: string; kind: 'course' | 'mentoring' }
+export interface MhpWelcomeJob { id: string; lease: string; email: string; name: string; productName: string; kind: 'course' | 'mentoring' }
 
 type QueryPool = Pick<Pool, 'query'>;
 const digest = (value: string | Buffer): Buffer => createHash('sha256').update(value).digest();
@@ -10,7 +25,7 @@ const idOf = (value: string | { id: string } | null | undefined): string | null 
 const iso = (seconds: number): string => new Date(seconds * 1_000).toISOString();
 /** Stripe monthly billing anchors clamp the original day to the month end. */
 export function mhpInstalmentEnd(anchorSeconds: number, months: number): number {
-  requireEvidence(Number.isSafeInteger(anchorSeconds) && anchorSeconds > 0 && [3,6].includes(months));
+  requireEvidence(Number.isSafeInteger(anchorSeconds) && anchorSeconds > 0 && [3,6,12].includes(months));
   const anchor = new Date(anchorSeconds * 1_000);
   const target = new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() + months, 1,
     anchor.getUTCHours(), anchor.getUTCMinutes(), anchor.getUTCSeconds()));
@@ -59,6 +74,24 @@ export class PgMhpCommerceService {
     private readonly config: MhpCommerceConfig | null, private readonly now: () => number = Date.now) {}
 
   get billingEnabled(): boolean { return this.config !== null && this.stripe !== null && this.webhookPool !== null; }
+  /** True only with a sandbox (rk_test_) key; enables the app's sandbox checkout test page. */
+  get sandbox(): boolean { return this.billingEnabled && this.config?.live === false; }
+  /** Webinar-price cut-over in milliseconds, or null when billing is off. */
+  get windowEndsAt(): number | null { return this.config?.windowEndsAt ?? null; }
+  async claimPurchaseWelcome(): Promise<MhpWelcomeJob | null> {
+    const { pool, config } = this.enabled();
+    const result = await pool.query<{ job: MhpWelcomeJob | null }>('SELECT app_private.mhp_claim_purchase_welcome($1,$2) AS job', [config.accountId, config.live]);
+    return result.rows[0]?.job ?? null;
+  }
+  async beginPurchaseWelcome(job: MhpWelcomeJob): Promise<boolean> {
+    const { pool, config } = this.enabled();
+    const result = await pool.query<{ allowed: boolean }>('SELECT app_private.mhp_begin_purchase_welcome($1,$2,$3,$4) AS allowed', [job.id, job.lease, config.accountId, config.live]);
+    return result.rows[0]?.allowed === true;
+  }
+  async settlePurchaseWelcome(job: MhpWelcomeJob, result: 'sent' | 'rejected' | 'unknown'): Promise<void> {
+    const { pool, config } = this.enabled();
+    await pool.query('SELECT app_private.mhp_settle_purchase_welcome($1,$2,$3,$4,$5)', [job.id, job.lease, config.accountId, config.live, result]);
+  }
   private enabled(): { stripe: Stripe; config: MhpCommerceConfig; pool: QueryPool } {
     if (!this.stripe || !this.config || !this.webhookPool) throw new MhpCommerceError(503, 'MHP billing is not connected yet.');
     return { stripe: this.stripe, config: this.config, pool: this.webhookPool };
@@ -86,7 +119,7 @@ export class PgMhpCommerceService {
       const product = mhpProduct(subscription.metadata.sku ?? '');
       try {
         if (subscription.metadata.brand === MHP_BRAND && product?.instalments && subscription.status !== 'canceled') {
-          requireEvidence(product.availability === 'standard' && config.prices[product.sku]
+          requireEvidence(mhpSellable(product) && config.prices[product.sku]
             && subscription.livemode === config.live && subscription.items.data.length === 1
             && subscription.items.data[0]!.quantity === 1 && subscription.items.data[0]!.price.id === config.prices[product.sku]
             && subscription.items.data[0]!.price.currency === 'gbp' && subscription.items.data[0]!.price.unit_amount === product.pricePence
@@ -289,17 +322,17 @@ export class PgMhpCommerceService {
     await this.commandPool.query('SELECT app_private.mhp_refund_submitted($1,$2)', [digest(sessionToken), purchaseId]);
     // Only the signed provider event changes the entitlement to read-only.
   }
-  async webhook(raw: Buffer, signature: string): Promise<void> {
+  async webhook(raw: Buffer, signature: string): Promise<MhpPurchaseNotice | null | void> {
     const { stripe, config, pool } = this.enabled();
     let event: Stripe.Event;
     try { event = stripe.webhooks.constructEvent(raw, signature, config.webhookSecret, 300); }
     catch { throw new MhpCommerceError(400, 'Invalid Stripe signature.'); }
     requireEvidence(event.livemode === config.live && (!event.account || event.account === config.accountId));
-    if (!(MHP_STRIPE_EVENTS as readonly string[]).includes(event.type)) return;
+    if (!(MHP_STRIPE_EVENTS as readonly string[]).includes(event.type)) return null;
     await this.verifyAccount();
     const observedAt = new Date(this.now()).toISOString();
     const sessionId = await this.sessionForEvent(event);
-    const evidence = await this.purchaseEvidence(sessionId, observedAt);
+    const { evidence, buyerName } = await this.purchaseEvidence(sessionId, observedAt);
     if (evidence.sku === 'mhp_deal_desk' && evidence.payments.every(p => p.refunded === p.amount)) {
       // Freeze new reservations before enumerating sessions. Otherwise a buyer
       // could open another discounted checkout between expiry and the receipt.
@@ -308,6 +341,142 @@ export class PgMhpCommerceService {
     }
     await pool.query('SELECT app_private.record_mhp_commerce_event($1,$2,$3,$4,$5)',
       [config.accountId, event.id, event.type, digest(raw), JSON.stringify(evidence)]);
+    if (event.type !== 'checkout.session.completed' || evidence.cancelled || evidence.payments.every(p => p.refunded === p.amount)) return null;
+    const product = mhpProduct(evidence.sku);
+    if (!product) return null;
+    if (product.availability === 'window' && Date.parse(evidence.firstPaidAt) >= config.windowEndsAt) {
+      // Only possible if the cut-over expiry could not reach Stripe. Recorded so the
+      // money and access stay consistent; logged without identifiers for the owner.
+      console.warn(JSON.stringify({ event: 'mhp.window.late-payment', sku: product.sku }));
+    }
+    const name = buyerName || evidence.email.split('@')[0]!;
+    return { email: evidence.email, name, sku: product.sku, productName: product.name,
+      kind: product.type === 'course' ? 'course' : 'mentoring' };
+  }
+  /** Public course checkout. The server clock picks the price; a browser cannot choose the webinar price. */
+  async publicCourseCheckout(plan: MhpCoursePlan): Promise<string> {
+    const { stripe, config } = this.enabled();
+    if (plan !== 'full' && plan !== '3x') throw new MhpCommerceError(400, 'Choose a payment option.');
+    await this.verifyAccount();
+    const now = this.now();
+    const sku = mhpCourseSku(plan, now, config.windowEndsAt);
+    const product = mhpProduct(sku); const priceId = config.prices[sku];
+    requireEvidence(product && priceId);
+    const nowSeconds = Math.floor(now / 1_000), windowEnd = Math.floor(config.windowEndsAt / 1_000);
+    // A window checkout expires at the window end; in the final 31 minutes Stripe's
+    // 30-minute floor applies and the window closer expires it at the cut-over.
+    const expiresAt = product.availability === 'window'
+      ? Math.max(nowSeconds + MIN_CHECKOUT_SECONDS, Math.min(nowSeconds + 23 * 3_600, windowEnd))
+      : nowSeconds + 23 * 3_600;
+    const statement = mhpPriceStatement(product);
+    const metadata = { brand: MHP_BRAND, sku, mhp_checkout: 'course' };
+    const session = await stripe.checkout.sessions.create({
+      mode: product.interval ? 'subscription' : 'payment', line_items: [{ price: priceId, quantity: 1 }], expires_at: expiresAt,
+      billing_address_collection: 'required', allow_promotion_codes: false, payment_method_types: ['card'],
+      consent_collection: { terms_of_service: 'required' },
+      custom_text: {
+        terms_of_service_acceptance: { message: `I agree to the [course terms](${MHP_TERMS_URL}), including the 30-day refund policy.` },
+        submit: { message: `${product.name}. ${statement}` },
+      },
+      metadata,
+      ...(product.interval
+        ? { subscription_data: { metadata, description: statement } }
+        : { customer_creation: 'always' as const, invoice_creation: { enabled: true }, payment_intent_data: { metadata } }),
+      success_url: MHP_COURSE_WELCOME_URL, cancel_url: `${MHP_SITE}/join/`,
+    }, { timeout: 8_000, maxNetworkRetries: 1 });
+    requireEvidence(session.livemode === config.live && session.status === 'open' && session.url && session.amount_total === product.pricePence);
+    const url = new URL(session.url);
+    requireEvidence(url.protocol === 'https:' && url.hostname === 'checkout.stripe.com');
+    return url.href;
+  }
+  /**
+   * Expire every open webinar-price checkout once the window has ended. Stripe
+   * already expires checkouts created more than 31 minutes before the end; this
+   * closes the rest at the cut-over. Idempotent; returns counts only.
+   */
+  async expireWindowCheckouts(): Promise<{ expired: number; stillOpen: number }> {
+    const { stripe, config } = this.enabled();
+    if (this.now() < config.windowEndsAt) return { expired: 0, stillOpen: 0 };
+    await this.verifyAccount();
+    const options: Stripe.RequestOptions = { timeout: 8_000, maxNetworkRetries: 1 };
+    const sessions = await stripe.checkout.sessions.list({ status: 'open', limit: 100,
+      created: { gte: Math.floor(config.windowEndsAt / 1_000) - 25 * 3_600 } }, options).autoPagingToArray({ limit: 2_000 });
+    let expired = 0, stillOpen = 0;
+    for (const session of sessions) {
+      if (session.metadata?.brand !== MHP_BRAND || !(WINDOW_SKUS as readonly string[]).includes(session.metadata.sku ?? '')) continue;
+      try {
+        const closed = await stripe.checkout.sessions.expire(session.id, {}, { ...options, idempotencyKey: `mhp-window-expire:${session.id}` });
+        if (closed.status === 'open') stillOpen++; else expired++;
+      } catch {
+        const current = await stripe.checkout.sessions.retrieve(session.id, {}, options).catch(() => null);
+        if (!current || current.status === 'open') stillOpen++;
+      }
+    }
+    return { expired, stillOpen };
+  }
+  /** Single-use private link for a named applicant. Callers must already have proved the owner and the application. */
+  async createPrivateOffer(input: { sku: string; commandId: string; applicationId: string; applicationReceivedAt: string;
+    email: string; name: string; createdBy: string }): Promise<MhpPrivateOfferLink> {
+    const { stripe, config } = this.enabled();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.commandId)
+      || !/^[0-9a-f-]{36}$/i.test(input.applicationId)) throw new MhpCommerceError(400, 'Reload the applications page and try again.');
+    if (!mhpPrivateOfferAllowed(input.sku, input.applicationReceivedAt)) {
+      throw new MhpCommerceError(400, 'That offer is not available for this application. Founding prices need an application received by 7 November, 23:59 GMT.');
+    }
+    const sku: MhpPrivateOffer = input.sku;
+    const product = mhpProduct(sku); const priceId = config.prices[sku];
+    requireEvidence(product && priceId);
+    await this.verifyAccount();
+    const statement = mhpPriceStatement(product);
+    const isPrivate = sku === 'mhp_private' || sku === 'mhp_private_12x';
+    const metadata = { brand: MHP_BRAND, sku, mhp_offer_link: '1', mhp_application: input.applicationId,
+      mhp_email: input.email.slice(0, 320), mhp_created_by: input.createdBy.slice(0, 320), mhp_created_at: new Date(this.now()).toISOString() };
+    const link = await stripe.paymentLinks.create({
+      line_items: [{ price: priceId, quantity: 1 }], restrictions: { completed_sessions: { limit: 1 } },
+      after_completion: { type: 'redirect', redirect: { url: MHP_MENTORING_WELCOME_URL } },
+      billing_address_collection: 'required', allow_promotion_codes: false, consent_collection: { terms_of_service: 'required' },
+      inactive_message: 'This payment link has already been used or has been withdrawn. Reply to Martin’s email and he will send a new one.',
+      custom_text: {
+        terms_of_service_acceptance: { message: isPrivate
+          ? `I agree to the [One Lane Private terms](${MHP_PRIVATE_TERMS_URL}): a full refund up to the first one-to-one session, then as those terms set out.`
+          : `I agree to the [terms](${MHP_TERMS_URL}), including refunds within 30 days of my first payment.` },
+        submit: { message: `${product.name} for ${input.name.slice(0, 80)}. ${statement}` },
+      },
+      metadata,
+      ...(product.interval
+        ? { subscription_data: { metadata: { brand: MHP_BRAND, sku, mhp_application: input.applicationId }, description: statement } }
+        : { customer_creation: 'always' as const, invoice_creation: { enabled: true }, payment_intent_data: { metadata: { brand: MHP_BRAND, sku, mhp_application: input.applicationId } } }),
+    }, { idempotencyKey: `mhp-private-offer:${input.commandId}`, timeout: 8_000, maxNetworkRetries: 1 });
+    const offer = this.offerFromLink(link);
+    requireEvidence(offer && link.livemode === config.live && offer.applicationId === input.applicationId && offer.sku === sku);
+    return offer;
+  }
+  private offerFromLink(link: Stripe.PaymentLink): MhpPrivateOfferLink | null {
+    const m = link.metadata ?? {};
+    const product = mhpProduct(m.sku ?? '');
+    if (m.brand !== MHP_BRAND || m.mhp_offer_link !== '1' || !product || product.availability !== 'private') return null;
+    const url = new URL(link.url);
+    if (url.protocol !== 'https:' || (url.hostname !== 'buy.stripe.com' && !url.hostname.endsWith('.stripe.com'))) return null;
+    if (m.mhp_email) url.searchParams.set('prefilled_email', m.mhp_email);
+    const used = (link.restrictions?.completed_sessions?.count ?? 0) >= 1;
+    return { id: link.id, url: url.href, active: link.active, paid: used, sku: product.sku, name: product.name,
+      priceStatement: mhpPriceStatement(product), applicationId: m.mhp_application ?? '', email: m.mhp_email ?? '', createdAt: m.mhp_created_at ?? '' };
+  }
+  /** Owner-created links, newest first. Stripe is the record; nothing is copied into the database. */
+  async privateOffers(): Promise<MhpPrivateOfferLink[]> {
+    const { stripe } = this.enabled();
+    await this.verifyAccount();
+    const links = await stripe.paymentLinks.list({ limit: 100 }, { timeout: 8_000, maxNetworkRetries: 1 }).autoPagingToArray({ limit: 1_000 });
+    return links.map(link => this.offerFromLink(link)).filter((o): o is MhpPrivateOfferLink => o !== null)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+  async withdrawPrivateOffer(linkId: string): Promise<void> {
+    const { stripe } = this.enabled();
+    if (!/^plink_[A-Za-z0-9]+$/.test(linkId)) throw new MhpCommerceError(400, 'Choose a saved link.');
+    await this.verifyAccount();
+    const link = await stripe.paymentLinks.retrieve(linkId);
+    if (!this.offerFromLink(link)) throw new MhpCommerceError(404, 'That link is not an applicant link.');
+    if (link.active) await stripe.paymentLinks.update(linkId, { active: false });
   }
   private async sessionForEvent(event: Stripe.Event): Promise<string> {
     const { stripe, config, pool } = this.enabled();
@@ -365,7 +534,7 @@ export class PgMhpCommerceService {
     const { stripe, config } = this.enabled();
     if (!product.instalments) return idOf(subscription.schedule);
     const priceId = config.prices[product.sku];
-    requireEvidence(product.availability === 'standard' && priceId);
+    requireEvidence(mhpSellable(product) && priceId);
     let scheduleId = idOf(subscription.schedule);
     if (!scheduleId) {
       requireEvidence(subscription.status !== 'canceled');
@@ -398,7 +567,8 @@ export class PgMhpCommerceService {
     this.validateSchedule(updated, product, anchor);
     return scheduleId;
   }
-  private async purchaseEvidence(sessionId: string, observedAt: string): Promise<PurchaseEvidence> {
+  /** buyerName is for the welcome email only; it is never stored as purchase evidence. */
+  private async purchaseEvidence(sessionId: string, observedAt: string): Promise<{ evidence: PurchaseEvidence; buyerName: string }> {
     const { stripe, config } = this.enabled();
     const session = await stripe.checkout.sessions.retrieve(sessionId);
     const lines = await stripe.checkout.sessions.listLineItems(sessionId, { limit: 2 });
@@ -417,12 +587,26 @@ export class PgMhpCommerceService {
     }
     const product = credit ? mhpProduct('mhp_course') : MHP_CATALOG.find(p => config.prices[p.sku] === line.price?.id);
     const expectedAmount = credit?.amountPence ?? product?.pricePence;
-    requireEvidence(product && product.availability === 'standard' && config.prices[product.sku]
+    requireEvidence(product && mhpSellable(product) && config.prices[product.sku]
       && (!credit || idOf(line.price?.product) === credit.productId)
       && line.quantity === 1 && line.price?.unit_amount === expectedAmount
       && line.price.currency === 'gbp' && line.amount_total === expectedAmount && session.amount_total === expectedAmount
       && session.total_details?.amount_discount === 0 && (session.total_details?.amount_tax ?? 0) === 0
       && session.mode === (product.interval ? 'subscription' : 'payment'));
+    // Provenance: a window price only from the server-created course checkout,
+    // created before the window ended; a private offer only from an owner-sent link.
+    if (product.availability === 'window') {
+      requireEvidence(session.metadata?.brand === MHP_BRAND && session.metadata.sku === product.sku
+        && session.metadata.mhp_checkout === 'course' && session.created * 1_000 < config.windowEndsAt && !session.payment_link);
+    }
+    if (product.availability === 'private') {
+      const linkId = idOf(session.payment_link);
+      requireEvidence(linkId);
+      // Stripe copies link metadata to its sessions; read the link itself if it did not.
+      const offer = session.metadata?.mhp_offer_link === '1' ? session.metadata : (await stripe.paymentLinks.retrieve(linkId)).metadata;
+      requireEvidence(offer?.brand === MHP_BRAND && offer.sku === product.sku
+        && offer.mhp_offer_link === '1' && /^[0-9a-f-]{36}$/i.test(offer.mhp_application ?? ''));
+    }
     const customerId = idOf(session.customer);
     const email = session.customer_details?.email?.trim().toLowerCase();
     requireEvidence(customerId && email && email.length <= 320 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
@@ -472,7 +656,8 @@ export class PgMhpCommerceService {
       if (credit) requireEvidence(Date.parse(payments[0]!.paidAt) <= Date.parse(credit.expiresAt));
     }
     payments.sort((a, b) => a.paidAt.localeCompare(b.paidAt));
-    return { sessionId, sku: product.sku, customerId, subscriptionId, scheduleId, email, live: config.live,
-      cancelled, firstPaidAt: payments[0]!.paidAt, periodEnd, observedAt, payments, ...(credit ? { creditAttemptId: credit.id } : {}) };
+    return { evidence: { sessionId, sku: product.sku, customerId, subscriptionId, scheduleId, email, live: config.live,
+      cancelled, firstPaidAt: payments[0]!.paidAt, periodEnd, observedAt, payments, ...(credit ? { creditAttemptId: credit.id } : {}) },
+    buyerName: session.customer_details?.name?.trim().slice(0, 200) ?? '' };
   }
 }

@@ -47,6 +47,10 @@ const MHP_WEBINAR_APPLICATIONS_MIGRATION = '0136_mhp_webinar_applications.sql';
 const MHP_WEBINAR_APPLICATIONS_CHECKSUM = '9bf6605cdc536794fae989964542eb8253cdd49ebd995d3e6dd346c01c746139';
 const SEO_BLOG_MEDIA_MIGRATION = '0137_seo_blog_media_storage.sql';
 const SEO_BLOG_MEDIA_CHECKSUM: string | null = 'ff85dc3ee825e2529333fc8efb0de070a05e43786717d9ae279aa469e41e1255';
+const MHP_EVENT_WHATSAPP_MIGRATION = '0141_mhp_event_whatsapp_programme.sql';
+const MHP_EVENT_WHATSAPP_CHECKSUM = 'f2a7617a925f39d41ac3a606de9f9dd864b52a2725d8ed7c89d37737c4fe747c';
+const MHP_PAYMENTS_LIVE_MIGRATION = '0142_mhp_payments_live.sql';
+const MHP_PAYMENTS_LIVE_CHECKSUM = '2f5ee2ad95de6244a080d20120b106820536eca8f0df5ca6a8a124c8e78f910d';
 
 /**
  * Prove that a least-privilege runtime is connected to the exact schema bundled
@@ -248,6 +252,19 @@ export async function assertRuntimeSchemaCurrent(
       && pending[0]?.filename === SMS_TRIGGER_ACL_REPAIR_MIGRATION
       && pending[0]?.checksum === SMS_TRIGGER_ACL_REPAIR_CHECKSUM
       && applied.get(SMS_PHONE_COMPATIBILITY_MIGRATION) === SMS_PHONE_COMPATIBILITY_CHECKSUM) {
+    return;
+  }
+  // This release bundles the reviewed additive 0142 (MHP payments go-live) and is
+  // deployed to every consumer BEFORE 0142 is applied, so one deploy round covers the
+  // cut-over. Only the exact 0142 file may be pending, on top of the exact 0141 ledger.
+  // Until 0142 is applied the new MHP products are inactive in the database, so their
+  // receipts fail closed (Stripe retries) and no new purchase route is published.
+  if (pending.length === 1
+      && migrations.length === 142
+      && migrations[141]?.filename === MHP_PAYMENTS_LIVE_MIGRATION
+      && pending[0]?.filename === MHP_PAYMENTS_LIVE_MIGRATION
+      && pending[0]?.checksum === MHP_PAYMENTS_LIVE_CHECKSUM
+      && applied.get(MHP_EVENT_WHATSAPP_MIGRATION) === MHP_EVENT_WHATSAPP_CHECKSUM) {
     return;
   }
   if (pending.length > 0) {

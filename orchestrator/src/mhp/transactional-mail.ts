@@ -1,9 +1,15 @@
 import { MHP_AUTH_ORIGIN, normalizeMhpEmail, type MhpAuthPurpose } from './auth-service.js';
 
+export class MhpWelcomeDeliveryError extends Error {
+  constructor(readonly outcome: 'rejected' | 'unknown') { super('MHP purchase welcome delivery needs attention'); }
+}
+
 export interface MhpTransactionalMailer {
   readonly configured: boolean;
   sendAuthLink(email: string, url: string, purpose: MhpAuthPurpose): Promise<void>;
   sendAccessInvite(email: string, name: string, product: string): Promise<void>;
+  /** After a signed Stripe receipt is recorded. Stripe sends the payment receipt itself. */
+  sendPurchaseWelcome?(email: string, name: string, product: string, kind: 'course' | 'mentoring'): Promise<void>;
   /** MHP009B: requested event-reminder email proof. Separate from auth links; creates no account. */
   sendEventPhoneLink?(email: string, url: string, startsAt: string): Promise<void>;
 }
@@ -21,7 +27,7 @@ export function createMhpTransactionalMailer(env: NodeJS.ProcessEnv = process.en
   const configured = provider === 'brevo' ? Boolean(brevoKey && Number.isSafeInteger(senderId) && senderId > 0)
     : provider === 'postmark' ? Boolean(postmarkKey && from) : false;
   let inFlight = 0;
-  const deliver = async (email: string, subject: string, plain: string, html: string, tag: string): Promise<void> => {
+  const deliver = async (email: string, subject: string, plain: string, html: string, tag: string, purchase = false): Promise<void> => {
     if (!configured) throw new Error('MHP transactional email is not configured');
     const endpoint = provider === 'brevo' ? 'https://api.brevo.com/v3/smtp/email' : 'https://api.postmarkapp.com/email';
     const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json' };
@@ -34,9 +40,22 @@ export function createMhpTransactionalMailer(env: NodeJS.ProcessEnv = process.en
     inFlight += 1;
     try {
       const response = await fetcher(endpoint, { method: 'POST', headers, body: JSON.stringify(payload), redirect: 'error', signal: AbortSignal.timeout(10_000) });
+      if (purchase) {
+        if (!response.ok) {
+          await response.body?.cancel();
+          throw new MhpWelcomeDeliveryError(response.status >= 400 && response.status < 500 ? 'rejected' : 'unknown');
+        }
+        const receipt = await response.json() as Record<string, unknown>;
+        if (provider === 'postmark' ? receipt.ErrorCode !== 0 || typeof receipt.MessageID !== 'string'
+          : typeof receipt.messageId !== 'string') throw new MhpWelcomeDeliveryError('unknown');
+        return;
+      }
       if (!response.ok) { await response.body?.cancel(); throw new Error('MHP transactional delivery unavailable'); }
       await response.body?.cancel();
-    } catch { throw new Error('MHP transactional delivery unavailable'); }
+    } catch (error) {
+      if (purchase) throw error instanceof MhpWelcomeDeliveryError ? error : new MhpWelcomeDeliveryError('unknown');
+      throw new Error('MHP transactional delivery unavailable');
+    }
     finally { inFlight -= 1; }
   };
   return Object.freeze({
@@ -59,6 +78,20 @@ export function createMhpTransactionalMailer(env: NodeJS.ProcessEnv = process.en
       const plain = `Hi ${name},\n\nMartin has opened your ${product} access. Sign in with this email address to open your training centre and Your Desk:\n${link}\n\nChoose “Email my secure link”. Your sign-in email will contain a one-time link.\n\nMartin Howard Property\nmartin@propinvestuk.co.uk`;
       const html = `<div style="background:#f3f3ee;padding:32px;font-family:Arial,sans-serif;color:#142019"><div style="max-width:560px;margin:auto;background:#fff;border-radius:20px;padding:36px"><p style="letter-spacing:2px;font-size:12px">MARTIN HOWARD PROPERTY</p><h1 style="font-size:28px">Your access is ready.</h1><p>Hi ${escape(name)}, Martin has opened your ${escape(product)} access.</p><p>Use this email address to open your training centre and Your Desk. We’ll send you a private sign-in link.</p><p style="margin:28px 0"><a href="${link}" style="display:inline-block;padding:14px 20px;background:#E8A33D;color:#142019;text-decoration:none;border-radius:8px;font-weight:bold">Open my workspace</a></p><p style="font-size:13px;color:#5b665f">Enter ${escape(email)} and choose “Email my secure link”.</p><hr style="border:0;border-top:1px solid #e7ebe6"><p style="font-size:12px">Martin Howard Property · martin@propinvestuk.co.uk</p></div></div>`;
       await deliver(email, subject, plain, html, 'mhp-access');
+    },
+    async sendPurchaseWelcome(email: string, name: string, product: string, kind: 'course' | 'mentoring'): Promise<void> {
+      if (!normalizeMhpEmail(email) || !name || name.length > 200 || !product || product.length > 200 || (kind !== 'course' && kind !== 'mentoring')) {
+        throw new Error('Invalid MHP purchase welcome');
+      }
+      const link = `${MHP_AUTH_ORIGIN}/portal/auth/magic`;
+      const subject = kind === 'course' ? 'You’re in: Property Done Properly' : `You’re in: ${product}`;
+      const next = kind === 'course'
+        ? 'Sign in with this email address, open the training centre and start with Module 0, lesson 1.'
+        : 'Martin will be in touch within one working day to book your first session. In the meantime you can sign in with this email address to open the training centre and Your Desk.';
+      const help = 'Need help? Reply to this email or write to martin@propinvestuk.co.uk. Your payment receipt comes separately from Stripe.';
+      const plain = `Hi ${name},\n\nThank you. Your payment for ${product} has gone through and your access is open.\n\n${next}\n\nSign in here: ${link}\nEnter ${email} and choose “Email my secure link”. The sign-in email contains a one-time link.\n\n${help}\n\nMartin Howard Property\nMH196 Ltd, registered in England and Wales, company number 15060897.\nEducation only. Nothing here is financial, legal or tax advice.`;
+      const html = `<div style="background:#f3f3ee;padding:32px;font-family:Arial,sans-serif;color:#142019"><div style="max-width:560px;margin:auto;background:#fff;border-radius:20px;padding:36px"><p style="letter-spacing:2px;font-size:12px">MARTIN HOWARD PROPERTY</p><h1 style="font-size:28px">You’re in.</h1><p>Hi ${escape(name)}, your payment for ${escape(product)} has gone through and your access is open.</p><p>${escape(next)}</p><p style="margin:28px 0"><a href="${link}" style="display:inline-block;padding:14px 20px;background:#E8A33D;color:#142019;text-decoration:none;border-radius:8px;font-weight:bold">Sign in</a></p><p style="font-size:13px;color:#5b665f">Enter ${escape(email)} and choose “Email my secure link”. ${escape(help)}</p><hr style="border:0;border-top:1px solid #e7ebe6"><p style="font-size:12px">Martin Howard Property · MH196 Ltd, registered in England and Wales, company number 15060897 · martin@propinvestuk.co.uk<br>Education only. Nothing here is financial, legal or tax advice.</p></div></div>`;
+      await deliver(email, subject, plain, html, 'mhp-purchase', true);
     },
     async sendEventPhoneLink(email: string, url: string, startsAt: string): Promise<void> {
       const target = new URL(url), start = Date.parse(startsAt);
