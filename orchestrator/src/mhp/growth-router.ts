@@ -8,6 +8,7 @@ import { MHP_SITE_ORIGIN, MhpGrowthError, parseMhpApplication, parseMhpEvent, pa
 import { MhpLearningError, parseMhpCourseBundle, type PgMhpLearningService } from './learning-service.js';
 import { learnHomePage, learnLessonPage, learnModulePage } from './learning-view.js';
 import { hqApplicationsPage, hqCoursePage, hqGrowthPage, hqRegistrantsPage, registrantsCsv, publicMessagePage, unsubscribeConfirmPage } from './growth-view.js';
+import { MhpCommerceError, type MhpPrivateOfferLink, type PgMhpCommerceService } from './commerce-service.js';
 import { MHP_EVENT_PHONE_ROUTE, MHP_EVENT_PHONE_HINT_COOKIE, mhpEventPhoneCapabilityCookie, mhpEventPhoneHintCookie,
   sealMhpEventPhoneHint, type PgMhpEventPhonePublic } from './event-phone-service.js';
 
@@ -18,6 +19,8 @@ export interface MhpGrowthRouterDependencies {
   unsubscribeSecret: string;
   marketingMode: string;
   phoneSignup?: Pick<PgMhpEventPhonePublic, 'fromSignup'>;
+  /** Single-use applicant payment links (MHP Stripe account). */
+  offers?: Pick<PgMhpCommerceService, 'billingEnabled' | 'privateOffers' | 'createPrivateOffer' | 'withdrawPrivateOffer'>;
 }
 
 const SITE_ORIGINS = new Set([MHP_SITE_ORIGIN, 'https://www.martinhowardproperty.co.uk']);
@@ -76,7 +79,8 @@ export function parseMultipart(body: Buffer, contentType: string): Map<string, B
 
 const LEARN = /^\/app\/learn(?:\/([0-9]{2})(?:\/([0-9]{2}))?)?$/;
 const known = (path: string): boolean => path === '/api/mhp/subscribe' || path === '/api/mhp/story' || path === '/api/mhp/apply' || path === '/email/unsubscribe'
-  || path === '/hq/growth' || path === '/hq/course' || path === '/hq/applications' || path === '/hq/registrants' || LEARN.test(path);
+  || path === '/hq/growth' || path === '/hq/course' || path === '/hq/applications' || path === '/hq/applications/offer' || path === '/hq/applications/withdraw'
+  || path === '/hq/registrants' || LEARN.test(path);
 
 /**
  * Cookieless page-event beacon from the site (navigator.sendBeacon). Always 204,
@@ -200,7 +204,33 @@ export async function handleMhpGrowth(req: IncomingMessage, res: ServerResponse,
     if (path === '/hq/applications') {
       if (method !== 'GET') throw new HttpError(405, 'Use the controls in HQ.');
       if (!deps.growth.listApplications) throw new HttpError(503, 'Applications are temporarily unavailable.');
-      send(res, 200, hqApplicationsPage(await deps.growth.listApplications(token))); return true;
+      // Owner proof comes first: listApplications refuses anyone who is not an MHP owner.
+      const applications = await deps.growth.listApplications(token);
+      let offers: MhpPrivateOfferLink[] | null = null;
+      if (deps.offers?.billingEnabled) offers = await deps.offers.privateOffers().catch(() => null);
+      send(res, 200, hqApplicationsPage(applications, { csrf, billingEnabled: Boolean(deps.offers?.billingEnabled), offers,
+        created: url.searchParams.get('offer') ?? '', withdrawn: url.searchParams.get('withdrawn') === '1' })); return true;
+    }
+    if (path === '/hq/applications/offer' || path === '/hq/applications/withdraw') {
+      if (method !== 'POST') throw new HttpError(405, 'Use the controls in HQ.');
+      if (!deps.growth.listApplications) throw new HttpError(503, 'Applications are temporarily unavailable.');
+      if (!deps.offers?.billingEnabled) throw new HttpError(503, 'Payments are not connected yet.');
+      const fields = requireForm(await urlencoded(req, 2_048), path === '/hq/applications/offer' ? ['csrf', 'commandId', 'applicationId', 'sku'] : ['csrf', 'linkId']);
+      const applications = await deps.growth.listApplications(token);
+      try {
+        if (path === '/hq/applications/withdraw') {
+          await deps.offers.withdrawPrivateOffer(fields.linkId ?? '');
+          redirect(res, '/hq/applications?withdrawn=1'); return true;
+        }
+        const application = applications.find(a => a.id === fields.applicationId);
+        if (!application) throw new HttpError(404, 'That application is not in HQ.');
+        const offer = await deps.offers.createPrivateOffer({ sku: fields.sku ?? '', commandId: fields.commandId ?? '', applicationId: application.id,
+          applicationReceivedAt: application.createdAt, email: application.email, name: application.name, createdBy: identity.userEmail });
+        redirect(res, `/hq/applications?offer=${encodeURIComponent(offer.id)}#app-${application.id}`); return true;
+      } catch (error) {
+        if (error instanceof MhpCommerceError) throw new HttpError(error.status, error.message);
+        throw error;
+      }
     }
     if (path === '/hq/registrants') {
       if (method !== 'GET') throw new HttpError(405, 'Use the controls in HQ.');

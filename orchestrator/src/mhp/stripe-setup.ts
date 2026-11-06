@@ -1,28 +1,31 @@
 import Stripe from 'stripe';
-import { MHP_BRAND, MHP_PAID_CATALOG, MHP_ORIGIN, MHP_STRIPE_EVENTS, mhpPriceEnvironmentName, type MhpSku } from './catalog.js';
+import { MHP_BRAND, MHP_PAID_CATALOG, MHP_ORIGIN, MHP_STRIPE_EVENTS, mhpPriceEnvironmentName, type MhpAvailability, type MhpSku } from './catalog.js';
 
 export interface MhpStripeSetupResult {
-  accountId: string; live: boolean; webhookId: string; portalConfigurationId: string;
-  links: { sku: MhpSku; priceId: string; paymentLinkId: string; url: string; active: boolean; availability: 'standard' | 'gated' }[];
+  accountId: string; live: boolean; webhookId: string; webhookEnabled: boolean; portalConfigurationId: string;
+  prices: { sku: MhpSku; priceId: string; availability: MhpAvailability }[];
+  /** Setup never retires a working purchase route. */
+  deactivatedLinks: number;
+  reusableLinksToReview: string[];
   environment: Record<string, string>;
 }
-/** Explicit operator command; never called on web process startup. No secrets are returned. */
-export async function setupMhpStripe(stripe: Stripe, expectedAccount: string, live: boolean,
-  activate = false): Promise<MhpStripeSetupResult> {
+/**
+ * Explicit operator command; never called on web process startup. No secrets are returned.
+ * Creates or reuses the MHP products, GBP prices, webhook endpoint and billing portal.
+ * Purchases no longer use reusable Payment Links: the course uses a server-created
+ * checkout and mentoring/Private use single-use applicant links from /hq/applications.
+ * Older reusable links remain active until replacement checkout is verified live.
+ */
+export async function setupMhpStripe(stripe: Stripe, expectedAccount: string, live: boolean): Promise<MhpStripeSetupResult> {
   const account = await stripe.accounts.retrieve(null);
   if (account.id !== expectedAccount) throw new Error('MHP Stripe account mismatch');
-  const links: MhpStripeSetupResult['links'] = [];
   const environment: Record<string, string> = { MHP_STRIPE_ACCOUNT_ID: account.id };
   const existingLinks = await stripe.paymentLinks.list({ limit: 100 }).autoPagingToArray({ limit: 1000 });
   if (existingLinks.length === 1000) throw new Error('Payment Link discovery bound reached');
-  // A superseded or retired MHP link must never remain a purchase route.
-  for (const link of existingLinks) {
-    if (link.metadata.brand === MHP_BRAND && link.active
-      && (link.metadata.terms_version !== '3' || !MHP_PAID_CATALOG.some(p => p.sku === link.metadata.sku && p.availability === 'standard'))) {
-      await stripe.paymentLinks.update(link.id, { active: false });
-      link.active = false;
-    }
-  }
+  const deactivatedLinks = 0;
+  const reusableLinksToReview = existingLinks.filter(link => link.metadata.brand === MHP_BRAND
+    && link.metadata.mhp_offer_link !== '1' && link.active).map(link => link.id);
+  const prices: MhpStripeSetupResult['prices'] = [];
   for (const product of MHP_PAID_CATALOG) {
     const productId = `${product.sku}_v3`;
     let remote: Stripe.Product;
@@ -37,37 +40,19 @@ export async function setupMhpStripe(stripe: Stripe, expectedAccount: string, li
       { idempotencyKey: `mhp-product-v3:${product.sku}` });
     }
     if (remote.livemode !== live || remote.metadata.sku !== product.sku || remote.metadata.brand !== MHP_BRAND) throw new Error('MHP product provenance mismatch');
-    const prices = await stripe.prices.list({ lookup_keys: [`mhp:v3:${product.sku}`], limit: 2 });
-    if (prices.data.length > 1 || prices.has_more) throw new Error('Ambiguous MHP price');
-    const price = prices.data[0] ?? await stripe.prices.create({ product: remote.id, currency: 'gbp', unit_amount: product.pricePence,
+    // Checkout shows the product name, so keep it on the current public name.
+    if (remote.name !== product.name || remote.metadata.refund_days !== String(product.refundDays)) {
+      remote = await stripe.products.update(remote.id, { name: product.name, metadata: { refund_days: String(product.refundDays) } });
+    }
+    const found = await stripe.prices.list({ lookup_keys: [`mhp:v3:${product.sku}`], limit: 2 });
+    if (found.data.length > 1 || found.has_more) throw new Error('Ambiguous MHP price');
+    const price = found.data[0] ?? await stripe.prices.create({ product: remote.id, currency: 'gbp', unit_amount: product.pricePence,
       lookup_key: `mhp:v3:${product.sku}`, ...(product.interval ? { recurring: { interval: product.interval, interval_count: 1 } } : {}),
       metadata: { brand: MHP_BRAND, sku: product.sku } }, { idempotencyKey: `mhp-price-v3:${product.sku}` });
-    if (price.livemode !== live || price.unit_amount !== product.pricePence || price.currency !== 'gbp' || price.product !== remote.id
+    if (price.livemode !== live || !price.active || price.unit_amount !== product.pricePence || price.currency !== 'gbp' || price.product !== remote.id
       || (price.recurring?.interval ?? null) !== product.interval || (price.recurring && price.recurring.interval_count !== 1)) throw new Error('MHP price terms mismatch');
     environment[mhpPriceEnvironmentName(product.sku)] = price.id;
-    const matches = existingLinks.filter(link => link.metadata.brand === MHP_BRAND && link.metadata.sku === product.sku && link.metadata.terms_version === '3');
-    if (matches.length > 1) throw new Error('Ambiguous MHP Payment Link');
-    let link = matches[0];
-    if (!link) {
-      link = await stripe.paymentLinks.create({ line_items: [{ price: price.id, quantity: 1 }],
-        after_completion: { type: 'redirect', redirect: { url: 'https://martinhowardproperty.co.uk/thanks/' } },
-        billing_address_collection: 'required', name_collection: { individual: { enabled: true, optional: false } },
-        allow_promotion_codes: false, metadata: { brand: MHP_BRAND, sku: product.sku, terms_version: '3' },
-        ...(product.interval
-          ? { subscription_data: { metadata: { brand: MHP_BRAND, sku: product.sku },
-              ...(product.instalments ? { description: `${product.instalments} monthly payments of GBP ${(product.pricePence / 100).toFixed(2)}; payments stop automatically.` } : {}) } }
-          : { customer_creation: 'always' as const, invoice_creation: { enabled: true } }) },
-      { idempotencyKey: `mhp-payment-link-v3:${product.sku}` });
-      // Stripe's create endpoint has no `active` parameter. Disable immediately,
-      // before returning or publishing the secret-unpredictable URL.
-      link = await stripe.paymentLinks.update(link.id, { active: false });
-    }
-    if (product.availability === 'gated' && link.active) link = await stripe.paymentLinks.update(link.id, { active: false });
-    const lineItems = await stripe.paymentLinks.listLineItems(link.id, { limit: 2 });
-    if (link.livemode !== live || lineItems.has_more || lineItems.data.length !== 1 || lineItems.data[0]?.price?.id !== price.id
-      || lineItems.data[0]?.quantity !== 1 || link.allow_promotion_codes || link.billing_address_collection !== 'required'
-      || link.after_completion.type !== 'redirect' || link.after_completion.redirect?.url !== 'https://martinhowardproperty.co.uk/thanks/') throw new Error('MHP Payment Link terms mismatch');
-    links.push({ sku: product.sku, priceId: price.id, paymentLinkId: link.id, url: link.url, active: link.active, availability: product.availability });
+    prices.push({ sku: product.sku, priceId: price.id, availability: product.availability });
   }
   const endpoints = await stripe.webhookEndpoints.list({ limit: 100 });
   if (endpoints.has_more) throw new Error('Webhook discovery bound reached');
@@ -90,15 +75,7 @@ export async function setupMhpStripe(stripe: Stripe, expectedAccount: string, li
       subscription_cancel: { enabled: true, mode: 'at_period_end', proration_behavior: 'none' } } },
   { idempotencyKey: 'mhp-portal-v1' });
   if (!portal.features.invoice_history.enabled || !portal.features.subscription_cancel.enabled) throw new Error('MHP portal features incomplete');
-  if (activate) {
-    if (!matchingEndpoints[0] || endpoint.status !== 'enabled') throw new Error('Connect and rehearse the existing webhook before activating links');
-    for (const link of links) {
-      if (link.availability === 'standard' && !link.active) {
-        const updated = await stripe.paymentLinks.update(link.paymentLinkId, { active: true });
-        link.active = updated.active;
-      }
-    }
-  }
   environment.MHP_STRIPE_PORTAL_CONFIGURATION_ID = portal.id;
-  return { accountId: account.id, live, webhookId: endpoint.id, portalConfigurationId: portal.id, links, environment };
+  return { accountId: account.id, live, webhookId: endpoint.id, webhookEnabled: endpoint.status === 'enabled',
+    portalConfigurationId: portal.id, prices, deactivatedLinks, reusableLinksToReview, environment };
 }
