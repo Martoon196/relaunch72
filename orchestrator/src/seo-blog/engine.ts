@@ -22,6 +22,7 @@ import { publisherFor, type PublisherRegistry } from './publishers/registry.js';
 import { PublisherOutcomeUnknownError, PublisherRejectedError, verifyPublicUrl, type PublishInput, type WebsitePublisher } from './publishers/types.js';
 import { reviewedWebsiteTarget, targetEligibility, destinationIdentity,websiteIdentity, websiteSha, websiteWakeJob, type ArticleWebsiteTarget, type WebsiteStructure, type WebsiteVersionGuard } from './website-target.js';
 import { observeWebsiteDelivery } from './website-delivery.js';
+import { WORDPRESS_URL_CONTRACT } from './website-target.js';
 import { exportMarkdown, renderArticlePage, versionMarker } from './render.js';
 import { researchQueries, ResearchUnavailableError, ResearchProviderError, type SearchProvider, type ResearchBundle } from './research.js';
 import { validatePublicUrl, type FetchTransport } from './safe-fetch.js';
@@ -1935,7 +1936,7 @@ export class SeoBlogEngine {
     if (!brand || !article) return 'skipped';
     const version = article.currentVersionId ? await this.store.getVersion(brandId, article.currentVersionId) : null;
     const connection=article.schedule?await this.store.getDestination(brandId,article.schedule.destinationId):null;
-    if(connection?.type==='content_api'&&Date.parse(article.schedule!.publishAtUtc)<=Date.parse(this.now()))await this.checkDestinationInternal(connection);
+    if((connection?.type==='content_api'||connection?.type==='wordpress')&&Date.parse(article.schedule!.publishAtUtc)<=Date.parse(this.now()))await this.checkDestinationInternal(connection);
     const facts = await this.currentFactsKey(brandId);
     if (version && !checksAreCurrent(article.checks, version, facts.key) && Date.parse(article.schedule?.publishAtUtc ?? '') <= Date.parse(this.now())) {
       await this.store.updateArticle({ ...article, checks: await this.checkVersion(brand, version) });
@@ -2074,7 +2075,8 @@ export class SeoBlogEngine {
     const destination=publication.websiteSnapshot?.destination??await this.store.getDestination(brand.id,publication.destinationId);
     if(!destination)return publication;
     const target=publication.websiteSnapshot?.target;
-    const evidence=await observeWebsiteDelivery(this.deps.transport,{url:publication.publicUrl,marker,indexUrl:target?.target.indexUrl??publisherFor(this.deps.publishers,destination.type).indexUrlFor(destination),categoryUrls:target?.categoryUrls??[],sitemapUrls:target?.sitemapUrls??[`${new URL(publication.publicUrl).origin}/sitemap.xml`],at:this.now()});
+    const declaredUrls=destination.websiteCapability?.protocol==='v2'&&destination.websiteCapability.capabilities.urlContract===WORDPRESS_URL_CONTRACT;
+    const evidence=await observeWebsiteDelivery(this.deps.transport,{...(declaredUrls?{pagination:'wordpress' as const,seoHead:true}:{}),url:publication.publicUrl,marker,indexUrl:target?.target.indexUrl??publisherFor(this.deps.publishers,destination.type).indexUrlFor(destination),categoryUrls:target?.categoryUrls??[],sitemapUrls:target?.sitemapUrls??[`${new URL(publication.publicUrl).origin}/sitemap.xml`],at:this.now()});
     const observed=(publication.websiteObserveAttempts??0)+1;
     const complete=evidence.article.state==='verified'&&evidence.index.state==='verified'&&evidence.categories.every((c)=>c.state==='verified')&&evidence.sitemap.state==='verified';
     const observation={websiteDelivery:evidence,websiteObserveRunId:publication.websiteObserveRunId??randomUUID(),websiteObserveAttempts:observed,websiteObserveAfter:complete||observed>=12?null:new Date(Date.parse(this.now())+(observed<=2?30000:300000)).toISOString()};
@@ -2174,7 +2176,7 @@ export class SeoBlogEngine {
    */
   private async resumeAbsent(brand: Brand, publication: Publication): Promise<void> {
     const currentDestination=await this.store.getDestination(brand.id,publication.destinationId);
-    if(currentDestination?.type==='content_api')await this.checkDestinationInternal(currentDestination);
+    if(currentDestination?.type==='content_api'||currentDestination?.type==='wordpress')await this.checkDestinationInternal(currentDestination);
     const now = this.now();
     const result = await this.store.beginPublication({
       brandId: brand.id, articleId: publication.articleId, resumePublicationId: publication.id,

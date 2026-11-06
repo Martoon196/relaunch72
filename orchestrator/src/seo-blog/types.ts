@@ -548,7 +548,7 @@ export interface SocialDispatch {
 
 // ─── Destinations & publication ──────────────────────────────────────────────
 
-export const DESTINATION_TYPES = ['github_static', 'content_api'] as const;
+export const DESTINATION_TYPES = ['github_static', 'content_api', 'wordpress'] as const;
 export type DestinationType = (typeof DESTINATION_TYPES)[number];
 
 export interface Destination {

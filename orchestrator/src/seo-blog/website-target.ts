@@ -22,7 +22,16 @@ export interface WebsiteCapabilities {
   readonly sitemaps: readonly string[];
   readonly updates: {readonly preservePublishedUrl: true};
   readonly repair: {readonly sitemap: boolean};
+  /**
+   * Explicit, versioned URL extension. Absent: the strict v2 single-root URL rules
+   * (`{origin}/{root}`, `/{root}/{slug}`, `/{root}/category/{slug}`). Present only for
+   * adapters that opt in (WordPress): declared same-origin permalink patterns.
+   */
+  readonly urlContract?: typeof WORDPRESS_URL_CONTRACT;
 }
+/** WordPress permalink URL extension of the v2 website contract. */
+export const WORDPRESS_URL_CONTRACT='wordpress-permalinks-1' as const;
+export interface CapabilityParseOptions {readonly urlContract?: typeof WORDPRESS_URL_CONTRACT}
 export type WebsiteCapabilityReceipt =
   | {readonly protocol: 'legacy'; readonly checkedAt: string}
   | {readonly protocol: 'v2'; readonly checkedAt: string; readonly capabilities: WebsiteCapabilities};
@@ -161,28 +170,54 @@ export function websiteOrigin(value:string):string {
   return u.origin;
 }
 /** Called only after the authenticated website check; an absent capability object is v1, not v2. */
-export function parseWebsiteCapabilities(value:unknown,configuredOrigin:string,at:string):WebsiteCapabilityReceipt {
+export function parseWebsiteCapabilities(value:unknown,configuredOrigin:string,at:string,options:CapabilityParseOptions={}):WebsiteCapabilityReceipt {
   const origin=websiteOrigin(configuredOrigin);
   if(value===undefined)return {protocol:'legacy',checkedAt:at};
   const c=object(value);const taxonomy=object(c.taxonomy);const updates=object(c.updates);const repair=object(c.repair);
   if(c.contractVersion!==2||typeof c.siteId!=='string'||!UUID.test(c.siteId)||c.publicOrigin!==origin||typeof c.capabilitiesSha!=='string'||!SHA.test(c.capabilitiesSha)||taxonomy.mode!=='categories'||!Number.isInteger(taxonomy.maxCategoriesPerArticle)||Number(taxonomy.maxCategoriesPerArticle)<0||Number(taxonomy.maxCategoriesPerArticle)>5||updates.preservePublishedUrl!==true||typeof repair.sitemap!=='boolean')throw new SeoBlogError(409,'The website capability contract is unsupported or belongs to another website.');
+  if(c.urlContract!==undefined&&(c.urlContract!==WORDPRESS_URL_CONTRACT||options.urlContract!==WORDPRESS_URL_CONTRACT))throw new SeoBlogError(409,'The website advertised a URL contract this connection type does not support.');
+  const declared=c.urlContract===WORDPRESS_URL_CONTRACT;
   if(!Array.isArray(c.roots)||!c.roots.length||c.roots.length>20||!Array.isArray(c.sitemaps)||!c.sitemaps.length||c.sitemaps.length>20)throw new SeoBlogError(409,'The website returned an invalid installed-root or sitemap list.');
   const roots=c.roots.map((value)=>{
     const r=object(value);if(typeof r.id!=='string'||typeof r.path!=='string'||!SEGMENT.test(r.id)||!SEGMENT.test(r.path)||r.path.length>80||r.id.length>80)throw new SeoBlogError(409,'The website advertised an unsupported root.');
+    if(declared){
+      const indexUrl=declaredIndexUrl(r.indexUrl,origin);const article=declaredPattern(r.articleUrlPattern,origin,0);const category=declaredPattern(r.categoryUrlPattern,origin,1);
+      if(!indexUrl||!article||!category||article.trailing!==category.trailing)throw new SeoBlogError(409,'The website advertised WordPress permalink patterns this connection cannot verify.');
+      return {id:r.id,path:r.path,indexUrl,articleUrlPattern:article.pattern,categoryUrlPattern:category.pattern} as WebsiteRoot;
+    }
     const base=`${origin}/${r.path}`;
     if(r.indexUrl!==base||r.articleUrlPattern!==`${base}/{slug}`||r.categoryUrlPattern!==`${base}/category/{slug}`)throw new SeoBlogError(409,'The website advertised URLs outside its installed root.');
     return {id:r.id,path:r.path,indexUrl:base,articleUrlPattern:r.articleUrlPattern,categoryUrlPattern:r.categoryUrlPattern} as WebsiteRoot;
   });
   if(new Set(roots.map((r)=>r.id)).size!==roots.length||new Set(roots.map((r)=>r.path)).size!==roots.length)throw new SeoBlogError(409,'The website advertised duplicate roots.');
   const sitemaps=c.sitemaps.map((value)=>{if(typeof value!=='string'||value.length>2048)throw new SeoBlogError(409,'Invalid website sitemap.');const u=new URL(value);if(u.origin!==origin||u.username||u.password||u.search||u.hash)throw new SeoBlogError(409,'The sitemap must be on this website.');return u.toString();});
-  return {protocol:'v2',checkedAt:at,capabilities:{contractVersion:2,siteId:c.siteId,publicOrigin:origin,capabilitiesSha:c.capabilitiesSha,roots,taxonomy:{mode:'categories',maxCategoriesPerArticle:Number(taxonomy.maxCategoriesPerArticle)},sitemaps,updates:{preservePublishedUrl:true},repair:{sitemap:repair.sitemap}}};
+  return {protocol:'v2',checkedAt:at,capabilities:{contractVersion:2,siteId:c.siteId,publicOrigin:origin,capabilitiesSha:c.capabilitiesSha,roots,taxonomy:{mode:'categories',maxCategoriesPerArticle:Number(taxonomy.maxCategoriesPerArticle)},sitemaps,updates:{preservePublishedUrl:true},repair:{sitemap:repair.sitemap},...(declared?{urlContract:WORDPRESS_URL_CONTRACT}:{})}};
 }
 
+const DECLARED_PATH=/^((?:\/[A-Za-z0-9._~-]+)*)\/\{slug\}(\/?)$/;
+/** Same-origin `{prefix}/{slug}[/]` with exactly one slug placeholder as the final segment. */
+function declaredPattern(value:unknown,origin:string,minPrefixSegments:number):{pattern:string;trailing:boolean}|null {
+  if(typeof value!=='string'||value.length>2048||!value.startsWith(`${origin}/`))return null;
+  const match=DECLARED_PATH.exec(value.slice(origin.length));if(!match||match[1]!.split('/').filter(Boolean).length<minPrefixSegments||match[1]!.split('/').some((s)=>s==='.'||s==='..'))return null;
+  return {pattern:value,trailing:match[2]==='/'};
+}
+function declaredIndexUrl(value:unknown,origin:string):string|null {
+  if(typeof value!=='string'||value.length>2048)return null;
+  let u:URL;try{u=new URL(value);}catch{return null;}
+  if(u.origin!==origin||u.username||u.password||u.search||u.hash||u.toString()!==value||!/^(?:\/[A-Za-z0-9._~-]+)*\/?$/.test(u.pathname)||u.pathname.split('/').some((s)=>s==='.'||s==='..'))return null;
+  return value;
+}
+/** True when `url` is exactly this root's article pattern with one valid slug. */
+export function articleUrlMatches(root:WebsiteRoot,url:string):boolean {
+  const [before,after]=root.articleUrlPattern.split('{slug}') as [string,string];
+  if(!url.startsWith(before)||!url.endsWith(after)||url.length<=before.length+after.length)return false;
+  return SEGMENT.test(url.slice(before.length,url.length-after.length));
+}
 export function targetEligibility(destination:Destination,target:ArticleWebsiteTarget):string|null {
   const receipt=destination.websiteCapability;
   if(destination.id!==target.destinationId||receipt?.protocol!=='v2')return 'Review this article’s publishing target against the verified website connection.';
   const c=receipt.capabilities;const t=target.target;const root=c.roots.find((r)=>r.id===t.rootId&&r.path===t.rootPath);
-  if(c.siteId!==t.siteId||c.capabilitiesSha!==t.capabilitiesSha||!root||t.indexUrl!==root.indexUrl||!t.canonicalUrl.startsWith(`${root.indexUrl.replace(/\/$/,'')}/`))return 'The website capabilities changed. Review a new article target before publishing.';
+  if(c.siteId!==t.siteId||c.capabilitiesSha!==t.capabilitiesSha||!root||t.indexUrl!==root.indexUrl||(c.urlContract===WORDPRESS_URL_CONTRACT?!articleUrlMatches(root,t.canonicalUrl):!t.canonicalUrl.startsWith(`${root.indexUrl.replace(/\/$/,'')}/`)))return 'The website capabilities changed. Review a new article target before publishing.';
   return null;
 }
 

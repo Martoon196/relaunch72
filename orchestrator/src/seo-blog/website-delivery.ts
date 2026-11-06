@@ -11,7 +11,10 @@ export interface WebsiteObservation {
   readonly canonical?:string|null;
   readonly pagesRead?:number;
   readonly linkedCategoryUrls?:readonly string[];
+  /** Opt-in (WordPress) count of SEO head tags actually served; observations, not guarantees. */
+  readonly seoHead?:{readonly canonical:number;readonly robots:number;readonly description:number;readonly ogUrl:string|null;readonly jsonLd:number};
 }
+export type ArchivePagination='same-path'|'wordpress';
 export interface SitemapObservation extends WebsiteObservation {
   readonly complete:boolean;
   readonly occurrences:number;
@@ -41,7 +44,7 @@ function nextPage(html:string,base:string):string|null {
   for(const tag of htmlHead(html).match(/<link\b[^>]*>/gi)??[]){const a=attributes(tag);if(a.rel?.toLowerCase().split(/\s+/).includes('next')&&a.href){try{return new URL(a.href,base).toString();}catch{return null;}}}
   return null;
 }
-export async function observeArticle(transport:FetchTransport,url:string,marker:string,at:string,categoryUrls:readonly string[]=[]):Promise<WebsiteObservation> {
+export async function observeArticle(transport:FetchTransport,url:string,marker:string,at:string,categoryUrls:readonly string[]=[],seoHead=false):Promise<WebsiteObservation> {
   const base={at,url};
   try {
     const page=await transport.fetch(url,{maxBytes:3*1024*1024,timeoutMs:10000});
@@ -52,15 +55,24 @@ export async function observeArticle(transport:FetchTransport,url:string,marker:
     const actual=canonical.length===1?canonical[0]!.href??null:null;
     const matched=page.finalUrl===url&&actual===url&&meta.length===1&&meta[0]!.content===marker;
     const {links}=observedLinks(observedHtml(html),page.finalUrl);
-    return {...base,finalUrl:page.finalUrl.slice(0,2048),canonical:actual?.slice(0,2048)??null,linkedCategoryUrls:categoryUrls.filter((u)=>links.has(u)),state:matched?'verified':'different',detail:matched?'Exact article version, final URL and canonical verified.':'The served version, final URL or canonical differs from the reviewed target.'};
+    let headCounts:WebsiteObservation['seoHead'];let note='';
+    if(seoHead){
+      const metas=(htmlHead(html).match(/<meta\b[^>]*>/gi)??[]).map(attributes);
+      const rawHead=/<head\b[^>]*>([\s\S]*?)<\/head\s*>/i.exec(html.replace(/<!--[\s\S]*?(?:-->|$)/g,''))?.[1]??'';
+      headCounts={canonical:canonical.length,robots:metas.filter((a)=>a.name?.toLowerCase()==='robots').length,description:metas.filter((a)=>a.name?.toLowerCase()==='description').length,ogUrl:metas.find((a)=>a.property?.toLowerCase()==='og:url')?.content?.slice(0,2048)??null,jsonLd:(rawHead.match(/<script\b[^>]*type\s*=\s*["']?application\/ld\+json/gi)??[]).length};
+      if(headCounts.robots>1||headCounts.description>1||(headCounts.ogUrl!==null&&headCounts.ogUrl!==url))note=' SEO head check: duplicate robots/description tags or an og:url that differs from the canonical were served.';
+    }
+    return {...base,finalUrl:page.finalUrl.slice(0,2048),canonical:actual?.slice(0,2048)??null,linkedCategoryUrls:categoryUrls.filter((u)=>links.has(u)),...(headCounts?{seoHead:headCounts}:{}),state:matched?'verified':'different',detail:(matched?'Exact article version, final URL and canonical verified.':'The served version, final URL or canonical differs from the reviewed target.')+note};
   }catch{return {...base,state:'unknown',detail:'The public article could not be reached. Its absence has not been established.'};}
 }
-export async function observeMembership(transport:FetchTransport,url:string,articleUrl:string,at:string,maxPages=10):Promise<WebsiteObservation> {
+export async function observeMembership(transport:FetchTransport,url:string,articleUrl:string,at:string,maxPages=10,pagination:ArchivePagination='same-path'):Promise<WebsiteObservation> {
   let current:string|null=url;const seen=new Set<string>();const origin=new URL(url).origin;const path=new URL(url).pathname;
+  const archivePath=path.endsWith('/')?path:`${path}/`;
+  const wpPage={test:(candidate:string)=>candidate.startsWith(`${archivePath}page/`)&&/^[1-9][0-9]{0,4}\/?$/.test(candidate.slice(archivePath.length+5))};
   try {
     while(current&&seen.size<maxPages){
       if(seen.has(current))return {at,url,state:'incomplete',pagesRead:seen.size,detail:'The archive pagination repeated; membership is not fully checked.'};
-      const u=new URL(current);if(u.origin!==origin||u.pathname!==path)return {at,url,state:'incomplete',pagesRead:seen.size,detail:'The archive advertised unsupported pagination.'};
+      const u=new URL(current);if(u.origin!==origin||(u.pathname!==path&&!(pagination==='wordpress'&&seen.size>0&&!u.search&&wpPage.test(u.pathname))))return {at,url,state:'incomplete',pagesRead:seen.size,detail:'The archive advertised unsupported pagination.'};
       seen.add(current);const page=await transport.fetch(current,{maxBytes:2*1024*1024,timeoutMs:10000});
       if(page.status===404)return {at,url,state:seen.size===1?'pending':'unknown',pagesRead:seen.size,detail:seen.size===1?'The expected archive is not serving yet.':'An advertised archive page is unavailable; membership is not fully checked.'};
       if(page.status!==200||page.truncated||page.finalUrl!==current)return {at,url,state:'unknown',pagesRead:seen.size,detail:'The complete expected archive could not be read at its exact URL.'};
@@ -165,9 +177,9 @@ export async function observeSitemap(transport:FetchTransport,urls:readonly stri
   incomplete||=queue.some((u)=>!seen.has(u));const complete=!unknown&&!incomplete;const state:ObservationState=unknown?'unknown':!complete?'incomplete':occurrences===1?'verified':occurrences>1?'different':'pending';
   return {at,url:urls[0]??new URL('/sitemap.xml',articleUrl).toString(),state,complete,occurrences,lastmod,pagesRead:seen.size,detail:state==='verified'?'The served sitemap contains the exact article URL once.':state==='pending'?'The article is live but its URL is not in the completely observed sitemap.':state==='different'?'The served sitemap contains duplicate article URLs.':'The sitemap traversal could not be completed; missing URLs are not treated as absent.'};
 }
-export async function observeWebsiteDelivery(transport:FetchTransport,input:{url:string;marker:string;indexUrl:string;categoryUrls:readonly string[];sitemapUrls:readonly string[];at:string}):Promise<WebsiteDeliveryEvidence> {
-  const article=await observeArticle(transport,input.url,input.marker,input.at,input.categoryUrls);
-  const [index,categories,sitemap]=await Promise.all([observeMembership(transport,input.indexUrl,input.url,input.at),Promise.all(input.categoryUrls.map((u)=>observeMembership(transport,u,input.url,input.at))),observeSitemap(transport,input.sitemapUrls,input.url,input.at)]);
+export async function observeWebsiteDelivery(transport:FetchTransport,input:{url:string;marker:string;indexUrl:string;categoryUrls:readonly string[];sitemapUrls:readonly string[];at:string;pagination?:ArchivePagination;seoHead?:boolean}):Promise<WebsiteDeliveryEvidence> {
+  const article=await observeArticle(transport,input.url,input.marker,input.at,input.categoryUrls,input.seoHead??false);
+  const [index,categories,sitemap]=await Promise.all([observeMembership(transport,input.indexUrl,input.url,input.at,10,input.pagination),Promise.all(input.categoryUrls.map((u)=>observeMembership(transport,u,input.url,input.at,10,input.pagination))),observeSitemap(transport,input.sitemapUrls,input.url,input.at)]);
   return {article,index,categories:categories.map((c)=>c.state==='verified'&&!article.linkedCategoryUrls?.includes(c.url)?{...c,state:'pending',detail:'The category archive links to the article, but its reviewed category link has not been verified on the article.'}:c),sitemap};
 }
 
