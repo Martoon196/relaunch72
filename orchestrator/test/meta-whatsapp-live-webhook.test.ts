@@ -151,6 +151,26 @@ test('challenge and POST routes verify exact raw bytes before dispatching receip
   assert.equal(challenge.status, 200);
   assert.equal(challenge.body, 'owned-proof');
   assert.match(String(challenge.headers['Content-Type']), /text\/plain/u);
+  const canonical = new URLSearchParams({ 'hub.mode': 'subscribe', 'hub.verify_token': VERIFY_TOKEN, 'hub.challenge': 'owned-proof' });
+  const dual = new URLSearchParams(canonical);
+  for (const [key, value] of canonical) dual.set(key.replace('.', '_'), value);
+  const metaChallenge = await request(runtime.handler, 'GET', `/webhooks/meta/whatsapp?${dual}`);
+  assert.equal(metaChallenge.status, 200, 'Meta sends both dotted fields and identical underscored aliases');
+  assert.equal(metaChallenge.body, 'owned-proof');
+  const invalidQueries = [new URLSearchParams({ hub_mode: 'subscribe', hub_verify_token: VERIFY_TOKEN, hub_challenge: 'owned-proof' })];
+  for (const [key, value] of [['hub_mode', 'different'], ['hub_verify_token', 'different'], ['hub_challenge', 'different']] as const) {
+    const changed = new URLSearchParams(dual); changed.set(key, value); invalidQueries.push(changed);
+  }
+  const partial = new URLSearchParams(canonical); partial.set('hub_mode', 'subscribe'); invalidQueries.push(partial);
+  const duplicate = new URLSearchParams(dual); duplicate.append('hub.mode', 'subscribe'); invalidQueries.push(duplicate);
+  const duplicateAlias = new URLSearchParams(dual); duplicateAlias.append('hub_mode', 'subscribe'); invalidQueries.push(duplicateAlias);
+  const unknown = new URLSearchParams(canonical); unknown.set('extra', 'unexpected'); invalidQueries.push(unknown);
+  for (const query of invalidQueries) {
+    const rejected = await request(runtime.handler, 'GET', `/webhooks/meta/whatsapp?${query}`);
+    assert.equal(rejected.status, 400); assert.equal(rejected.body, '');
+  }
+  const wrongToken = new URLSearchParams(dual); wrongToken.set('hub.verify_token', 'wrong'); wrongToken.set('hub_verify_token', 'wrong');
+  assert.equal((await request(runtime.handler, 'GET', `/webhooks/meta/whatsapp?${wrongToken}`)).status, 403);
 
   const raw = JSON.stringify(webhookFixture());
   const signature = `sha256=${createHmac('sha256', APP_SECRET).update(raw).digest('hex')}`;

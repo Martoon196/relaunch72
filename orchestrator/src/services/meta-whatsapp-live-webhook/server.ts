@@ -242,10 +242,17 @@ function exactChallenge(url: URL): Readonly<{
   verifyToken: string | undefined;
   challenge: string | undefined;
 }> | null {
-  const allowed = new Set(['hub.mode', 'hub.verify_token', 'hub.challenge']);
+  const canonical = ['hub.mode', 'hub.verify_token', 'hub.challenge'];
+  const aliases = canonical.map(key => key.replace('.', '_'));
+  const allowed = new Set([...canonical, ...aliases]);
   const entries = [...url.searchParams.entries()];
-  if (entries.length !== 3 || entries.some(([key]) => !allowed.has(key))) return null;
-  for (const key of allowed) if (url.searchParams.getAll(key).length !== 1) return null;
+  if (![3, 6].includes(entries.length) || entries.some(([key]) => !allowed.has(key))) return null;
+  for (const key of canonical) if (url.searchParams.getAll(key).length !== 1) return null;
+  // Meta may include both spellings. Admit only the complete, identical alias set.
+  if (entries.length === 6) for (let index = 0; index < canonical.length; index++) {
+    if (url.searchParams.getAll(aliases[index]!).length !== 1
+        || url.searchParams.get(aliases[index]!) !== url.searchParams.get(canonical[index]!)) return null;
+  }
   return Object.freeze({ mode: url.searchParams.get('hub.mode') ?? undefined,
     verifyToken: url.searchParams.get('hub.verify_token') ?? undefined,
     challenge: url.searchParams.get('hub.challenge') ?? undefined });
