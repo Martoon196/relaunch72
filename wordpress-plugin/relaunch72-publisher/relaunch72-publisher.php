@@ -3,7 +3,7 @@
  * Plugin Name:       Relaunch72 Publisher & SEO
  * Plugin URI:        https://app.relaunch72.com/
  * Description:       Site-configurable SEO (per-post SEO fields, title templates, robots, social previews, schema, sitemap control) that works alone or alongside Yoast SEO / Rank Math, plus a signed server-to-server connection that publishes owner-approved Relaunch72 articles as normal WordPress posts. Theme- and brand-independent.
- * Version:           1.1.0
+ * Version:           1.1.1
  * Requires at least: 6.4
  * Requires PHP:      7.4
  * Author:            Relaunch72
@@ -18,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'R72PUB_VERSION', '1.1.0' );
+define( 'R72PUB_VERSION', '1.1.1' );
 define( 'R72PUB_PROTOCOL', 'r72-wordpress-1' );
 define( 'R72PUB_URL_CONTRACT', 'wordpress-permalinks-1' );
 define( 'R72PUB_MIN_WP', '6.4' );
@@ -65,3 +65,4 @@ if ( is_admin() ) {
 	R72Pub_Admin::init();
 	R72Pub_Metabox::init();
 }
+

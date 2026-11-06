@@ -383,7 +383,7 @@ class R72Pub_Admin {
 		self::form_open( 'save', false );
 		echo '<table class="form-table" role="presentation"><tbody>';
 		echo '<tr><th scope="row"><label for="r72-author">' . esc_html__( 'Publish as', 'relaunch72-publisher' ) . '</label></th><td><select id="r72-author" name="author_id"><option value="0">' . esc_html__( '— Choose a user —', 'relaunch72-publisher' ) . '</option>';
-		foreach ( get_users( array( 'capability' => array( 'publish_posts', 'upload_files' ), 'fields' => array( 'ID', 'display_name', 'user_login' ), 'number' => 200 ) ) as $u ) {
+		foreach ( self::publishing_authors() as $u ) {
 			echo '<option value="' . esc_attr( $u->ID ) . '"' . selected( $settings['author_id'], (int) $u->ID, false ) . '>' . esc_html( $u->display_name . ' (' . $u->user_login . ')' ) . '</option>';
 		}
 		echo '</select><p class="description">' . esc_html__( 'A dedicated Author or Editor account is recommended. Posts appear under this user.', 'relaunch72-publisher' ) . '</p></td></tr>';
@@ -394,6 +394,16 @@ class R72Pub_Admin {
 		submit_button( __( 'Save settings', 'relaunch72-publisher' ) );
 		echo '</form>';
 		echo '<h2>' . esc_html__( 'Setup steps', 'relaunch72-publisher' ) . '</h2><ol><li>' . esc_html__( 'Choose the "Publish as" user and save.', 'relaunch72-publisher' ) . '</li><li>' . esc_html__( 'Create a connection key and copy it.', 'relaunch72-publisher' ) . '</li><li>' . esc_html__( 'In Relaunch72: Website connections → WordPress → enter this site address and paste the key into the secure key field → Check connection.', 'relaunch72-publisher' ) . '</li><li>' . esc_html__( 'Review the Diagnostics tab here; resolve any hold shown.', 'relaunch72-publisher' ) . '</li><li>' . esc_html__( 'Relaunch72 publishes only owner-approved article versions; the connection check publishes nothing.', 'relaunch72-publisher' ) . '</li></ol>';
+	}
+
+	/** Check both capabilities on the user: multi-capability role queries can omit valid authors. */
+	public static function publishing_authors() {
+		return array_values( array_filter(
+			get_users( array( 'capability' => 'publish_posts', 'fields' => array( 'ID', 'display_name', 'user_login' ), 'number' => 200 ) ),
+			static function ( $user ) {
+				return user_can( (int) $user->ID, 'publish_posts' ) && user_can( (int) $user->ID, 'upload_files' );
+			}
+		) );
 	}
 
 	private static function tab_seo() {
@@ -605,3 +615,4 @@ class R72Pub_Admin {
 		echo '</tbody></table>';
 	}
 }
+
