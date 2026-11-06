@@ -22,8 +22,11 @@ import { createCentralPromotionApproval } from './central-content-promotion-pg.j
 import { createPgSeoBlogSocialRegistry, resolveSeoBlogBrandForProfile, seoBlogSocialReservedProfileIds } from './seo-blog-social-pg.js';
 import type { PromotionNetwork } from '../seo-blog/types.js';
 import { createSeoBlogMediaRuntime } from './seo-blog-media-service.js';
+import { PgApolloStore } from '../integrations/apollo/pg-store.js';
+import type { Usage as ApolloUsage } from '../integrations/apollo/index.js';
 
 export interface PortalSeoBlogService {
+  apolloUsage?(identity: PortalSessionIdentity, requestId: string, brandId: string): Promise<ApolloUsage | null>;
   /** Engine bound to this signed-in principal; every call is re-authorised in PostgreSQL. */
   engineFor(identity: PortalSessionIdentity, requestId: string): SeoBlogEngine;
   readonly generation: 'live' | 'unavailable';
@@ -75,6 +78,11 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
     ? createPgSeoBlogSocialRegistry({ zernioPool: socialPools.zernioPool, contentCommandPool, contentAdapterPool, identity, requestId, zernioApiKey, reservedProfileIds })
     : undefined;
   const service: PortalSeoBlogService = {
+    async apolloUsage(identity, requestId, brandId) {
+      if (env.APOLLO_ENABLED !== 'true') return null;
+      try { return await new PgApolloStore(contentCommandPool, identity, brandId, requestId).usage(); }
+      catch (error) { if ((error as {code?: string}).code === '42501') return null; throw error; }
+    },
     generation: runtime.llm ? 'live' : 'unavailable',
     research: runtime.search.mode === 'live' ? 'live' : 'unconfigured',
     social: socialReady ? 'live' : 'unavailable',
