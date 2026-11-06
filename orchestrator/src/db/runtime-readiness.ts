@@ -235,6 +235,15 @@ export async function assertRuntimeSchemaCurrent(
       && applied.get(SEO_BLOG_MEDIA_MIGRATION) === SEO_BLOG_MEDIA_CHECKSUM) {
     applied.delete(SEO_BLOG_MEDIA_MIGRATION);
   }
+  // Exact141 recovery admits only this reviewed first-contact142 migration.
+  // Bundled142 remains strict; earlier gaps/checksums and future rows still fail.
+  if (migrations.length === 141
+      && migrations[140]?.filename === '0141_mhp_event_whatsapp_programme.sql'
+      && migrations[140]?.checksum === 'f2a7617a925f39d41ac3a606de9f9dd864b52a2725d8ed7c89d37737c4fe747c'
+      && applied.get('0141_mhp_event_whatsapp_programme.sql') === migrations[140]?.checksum
+      && applied.get('0142_mhp_whatsapp_first_contact.sql') === '455d12aa5070ca7aa6dea050fa2d43fcf5dff390bfb52228772b15f448be9250') {
+    applied.delete('0142_mhp_whatsapp_first_contact.sql');
+  }
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
   if(methodSchemaBridgeAllowed(migrations,applied,env))return;
