@@ -19,6 +19,7 @@ code mirrors them, never redefines them.
 | `/site`         | Next.js public site (M4)                                          |
 | `/admin`        | Admin QA queue (M3)                                               |
 | `/docs`         | Decision log and engineering docs                                 |
+| `/webinars`     | Growth HQ Webinars — Cloudflare Worker + Lit embed (live / on-demand / evergreen). See `webinars/README.md` |
 
 ## Quick start
 

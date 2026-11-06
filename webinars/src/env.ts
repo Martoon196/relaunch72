@@ -27,6 +27,8 @@ export interface Env {
   STREAM_WEBHOOK_SECRET?: string;
   TURNSTILE_SECRET?: string;
   BOOTSTRAP_TOKEN?: string;
+  /** Local `wrangler dev` only (see services.ts). */
+  DEV_MODE?: string;
 }
 
 export interface WebhookJob {

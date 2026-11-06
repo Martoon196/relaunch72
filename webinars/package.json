@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Growth HQ Webinars — white-label live / on-demand / evergreen webinars on Cloudflare (Workers, D1, Durable Objects, Stream, Queues).",
   "scripts": {
-    "dev": "npm run build:embed && wrangler dev",
+    "dev": "npm run build:embed && wrangler dev --local-upstream localhost:8787",
     "deploy": "npm run build:embed && wrangler deploy",
     "build:embed": "node embed/build.mjs",
     "db:migrate:local": "wrangler d1 migrations apply webinars --local",

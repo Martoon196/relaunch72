@@ -90,7 +90,7 @@ async function webinarDetail(c: Ctx, w: WebinarRow, cfg: ResolvedConfig) {
 publicRoutes.use('/v1/brand', rateLimit('RL_PUBLIC', ipBrand), publishable());
 publicRoutes.get('/v1/brand', (c) => {
   const { brand } = c.var.pk;
-  return c.json({ config: publicConfig(resolveConfig(brand)), turnstile_site_key: c.env.TURNSTILE_SITE_KEY ?? null });
+  return c.json({ data: { config: publicConfig(resolveConfig(brand)), turnstile_site_key: c.env.TURNSTILE_SITE_KEY || null } });
 });
 
 publicRoutes.use('/v1/webinars', rateLimit('RL_PUBLIC', ipBrand), publishable());
@@ -109,9 +109,10 @@ publicRoutes.get('/v1/webinars', async (c) => {
       continue;
     }
     if (w.type === 'on_demand') continue;
-    const next = w.type === 'live' ? (await upcomingSessions(c, w.id))[0]?.starts_at ?? null : (await nextSlots(c.env.DB, w.id, now, 1))[0] ?? null;
+    const first = w.type === 'live' ? (await upcomingSessions(c, w.id))[0] : null;
+    const next = w.type === 'live' ? first?.starts_at ?? null : (await nextSlots(c.env.DB, w.id, now, 1))[0] ?? null;
     if (!next) continue;
-    out.push({ ...webinarSummary(w, cfg, c.env), next_start: next });
+    out.push({ ...webinarSummary(w, cfg, c.env), next_start: next, live_now: first?.status === 'live' });
   }
   if (view !== 'on_demand') out.sort((a, b) => String(a.next_start).localeCompare(String(b.next_start)));
   return c.json({ data: out, config: publicConfig(resolveConfig(brand)) });
@@ -121,7 +122,7 @@ publicRoutes.use('/v1/webinars/:slug', rateLimit('RL_PUBLIC', ipBrand), publisha
 publicRoutes.get('/v1/webinars/:slug', async (c) => {
   const w = await webinarBySlug(c, c.req.param('slug'));
   const cfg = resolveConfig(c.var.pk.brand, w.overrides_json);
-  return c.json({ data: await webinarDetail(c, w, cfg), turnstile_site_key: c.env.TURNSTILE_SITE_KEY ?? null });
+  return c.json({ data: await webinarDetail(c, w, cfg), turnstile_site_key: c.env.TURNSTILE_SITE_KEY || null });
 });
 
 // ---------- registration ----------

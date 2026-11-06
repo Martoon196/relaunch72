@@ -1,0 +1,10 @@
+# Copy to .dev.vars for `npm run dev` (wrangler dev). Never commit .dev.vars.
+DEV_MODE=1
+TOKEN_SECRET=dev-token-secret-change-me
+# 32 random bytes, base64:  node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+DATA_KEY=BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=
+BOOTSTRAP_TOKEN=dev-bootstrap
+PUBLIC_ORIGIN=http://localhost:8787
+API_ORIGIN=http://localhost:8787
+CDN_ORIGIN=http://localhost:8787
+TURNSTILE_SITE_KEY=
