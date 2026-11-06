@@ -30,6 +30,8 @@ import { MHP_AUTH_ORIGIN, MHP_SESSION_COOKIE } from '../mhp/auth-service.js';
 import { MARTIN_HOWARD_PROPERTY_PROFILE } from '../portal/product-profile.js';
 import { authorizeMhpMemberRoute } from '../mhp/member-service.js';
 import { startMhpScheduleReconciler } from '../mhp/schedule-reconciler.js';
+import { startMhpWindowCloser } from '../mhp/window-closer.js';
+import { startMhpPurchaseWelcomes } from '../mhp/purchase-welcome.js';
 import { createMhpMarketingSender, startMhpMarketingDispatcher } from '../mhp/marketing-mail.js';
 import { makeStripe } from './stripe-client.js';
 import { createSubscriptionCheckout, createBillingPortalUrl, type StripeLike } from './stripe.js';
@@ -937,7 +939,7 @@ async function main(): Promise<void> {
           ownedSms: runtime.ownedSms,
           eventPhone: runtime.eventPhone,
           growth: { growth: runtime.growth, learning: runtime.learning, unsubscribeSecret: cfg.sessionSecret,
-            marketingMode: runtime.marketing?.mode ?? 'off' },
+            marketingMode: runtime.marketing?.mode ?? 'off', offers: runtime.commerce },
           authMount: createMhpAuthMount({
             auth: runtime.auth, mail: runtime.mail, sessionSecret: cfg.sessionSecret,
             abuse: postgresPortal.abuse, abuseHashSecret: portalAbuseRuntime.hashSecret,
@@ -1000,6 +1002,16 @@ async function main(): Promise<void> {
         },
       })
     : () => {};
+  const stopMhpWindow = postgresPortal?.mhp?.commerce.billingEnabled
+    ? startMhpWindowCloser(postgresPortal.mhp.commerce, {
+        onResult: result => {
+          if (result.expired > 0 || result.stillOpen > 0 || result.failed) console.info(JSON.stringify({ event: 'mhp.window.close', ...result }));
+        },
+      })
+    : () => {};
+  const stopMhpPurchaseWelcomes = postgresPortal?.mhp?.commerce.billingEnabled && process.env.MHP_ENABLED === 'true'
+    ? startMhpPurchaseWelcomes(postgresPortal.mhp.commerce, postgresPortal.mhp.mail,
+      () => console.warn(JSON.stringify({ event: 'mhp.purchase.welcome.attention' }))) : () => {};
   const mhpMarketing = postgresPortal?.mhp?.marketing;
   const mhpMarketingSender = mhpMarketing ? createMhpMarketingSender(mhpMarketing, cfg.sessionSecret) : undefined;
   const stopMhpMarketing = mhpMarketing && postgresPortal?.mhp && process.env.MHP_ENABLED === 'true'
@@ -1035,6 +1047,8 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     stopMhpSchedules();
+    stopMhpWindow();
+    stopMhpPurchaseWelcomes();
     stopMhpMarketing();
     console.log(`Received ${signal}; draining HTTP requests and closing database pools.`);
     try {
