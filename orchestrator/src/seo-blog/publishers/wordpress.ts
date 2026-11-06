@@ -44,7 +44,7 @@ export class WordPressPublisher implements WebsitePublisher {
   readonly type = 'wordpress' as const;
   readonly label = 'WordPress (Relaunch72 Publisher & SEO plugin)';
   readonly description = 'For WordPress sites with the Relaunch72 Publisher & SEO plugin installed. Articles become normal WordPress posts; SEO values go to Yoast SEO, Rank Math or the plugin’s standalone mode. Checking the connection publishes nothing.';
-  readonly credentialLabel = 'Connection key from WordPress → Settings → Relaunch72 Publisher (starts r72wp_)';
+  readonly credentialLabel = 'Connection key from WordPress → Relaunch72 → Connection (starts r72wp_)';
   readonly fields = [
     { key: 'siteUrl', label: 'WordPress site address', help: 'Exactly as shown on the plugin’s Connection tab, e.g. https://www.example.com', required: true, placeholder: 'https://www.example.com' },
     { key: 'endpoint', label: 'Publishing endpoint', help: 'Shown on the plugin’s Connection tab. Leave blank for {site}/wp-json/relaunch72/v1/publish.', required: false, placeholder: 'https://www.example.com/wp-json/relaunch72/v1/publish' },
@@ -100,7 +100,7 @@ export class WordPressPublisher implements WebsitePublisher {
   }
 
   async checkConnection(destination: Destination, credential: string): Promise<{ ok: boolean; detail: string; websiteCapability?: WebsiteCapabilityReceipt }> {
-    if (!/^r72wp_[a-f0-9]{64}$/.test(credential)) return { ok: false, detail: 'Paste the connection key created in WordPress → Settings → Relaunch72 Publisher (it starts with r72wp_).' };
+    if (!/^r72wp_[a-f0-9]{64}$/.test(credential)) return { ok: false, detail: 'Paste the connection key created in WordPress → Relaunch72 → Connection (it starts with r72wp_).' };
     const url = new URL(this.statusEndpoint(destination));
     url.searchParams.set('check', '1');
     url.searchParams.set('brand', destination.brandId);
@@ -198,7 +198,7 @@ export class WordPressPublisher implements WebsitePublisher {
       return { status: res.json.status === 'already_present' ? 'already_present' : 'accepted', providerRef: typeof res.json.ref === 'string' ? res.json.ref : input.operationId, publicUrl };
     }
     if (res.status === 409 && res.json.status === 'superseded') throw new PublisherRejectedError('WordPress already has a newer version of this article. Nothing was overwritten.');
-    if (res.status === 409 && res.json.status === 'paused') throw new PublisherRejectedError('Incoming writes are paused in WordPress. Nothing was changed; resume writes in Settings → Relaunch72 Publisher, then publish again.');
+    if (res.status === 409 && res.json.status === 'paused') throw new PublisherRejectedError('Incoming writes are paused in WordPress. Nothing was changed; resume writes in Relaunch72 → Connection, then publish again.');
     if (res.status === 403 && res.json.code === 'r72_other_brand') throw new PublisherRejectedError('This WordPress site is paired with a different Relaunch72 brand. Nothing was changed.');
     if (res.status === 401 || res.status === 403) throw new PublisherRejectedError('WordPress rejected the connection key. Reconnect the website.');
     if (res.status === 409 || res.status === 400 || res.status === 413) throw new PublisherRejectedError(text(res.json.error, 300) || `WordPress refused the article (HTTP ${res.status}).`);

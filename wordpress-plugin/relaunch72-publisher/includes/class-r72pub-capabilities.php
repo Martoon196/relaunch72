@@ -132,7 +132,7 @@ class R72Pub_Capabilities {
 		$settings = R72Pub_Settings::get();
 		$author   = $settings['author_id'] ? get_user_by( 'id', $settings['author_id'] ) : false;
 		if ( ! $author || ! user_can( $author, 'publish_posts' ) || ! user_can( $author, 'upload_files' ) ) {
-			$blocking[] = array( 'code' => 'author_required', 'message' => 'Choose the WordPress user Relaunch72 posts are published as (needs the publish_posts and upload_files capabilities) in Settings → Relaunch72 Publisher.' );
+			$blocking[] = array( 'code' => 'author_required', 'message' => 'Choose the WordPress user Relaunch72 posts are published as (needs the publish_posts and upload_files capabilities) in Relaunch72 → Connection.' );
 		}
 		if ( in_array( $seo['mode'], array( 'yoast', 'rank_math' ), true ) && 'core' !== $sitemap['owner'] && function_exists( 'wp_sitemaps_get_server' ) && wp_sitemaps_get_server() && wp_sitemaps_get_server()->sitemaps_enabled() ) {
 			$warnings[] = array( 'code' => 'sitemap_ambiguous', 'message' => $seo['provider'] . ' lists its sitemap as on, but WordPress core sitemaps are also still enabled. The SEO plugin may not be fully set up (for Rank Math, complete or skip its setup wizard). Relaunch72 verifies the sitemap that is actually served.' );

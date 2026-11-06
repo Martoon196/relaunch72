@@ -2,8 +2,8 @@
 /**
  * Plugin Name:       Relaunch72 Publisher & SEO
  * Plugin URI:        https://app.relaunch72.com/
- * Description:       Receives owner-approved, exact-version articles from Relaunch72 over a signed server-to-server connection, publishes them as normal WordPress posts, and manages per-article SEO through the active SEO plugin (Yoast SEO or Rank Math) or a standalone mode. Brand- and theme-independent.
- * Version:           1.0.0
+ * Description:       Site-configurable SEO (per-post SEO fields, title templates, robots, social previews, schema, sitemap control) that works alone or alongside Yoast SEO / Rank Math, plus a signed server-to-server connection that publishes owner-approved Relaunch72 articles as normal WordPress posts. Theme- and brand-independent.
+ * Version:           1.1.0
  * Requires at least: 6.4
  * Requires PHP:      7.4
  * Author:            Relaunch72
@@ -18,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'R72PUB_VERSION', '1.0.0' );
+define( 'R72PUB_VERSION', '1.1.0' );
 define( 'R72PUB_PROTOCOL', 'r72-wordpress-1' );
 define( 'R72PUB_URL_CONTRACT', 'wordpress-permalinks-1' );
 define( 'R72PUB_MIN_WP', '6.4' );
@@ -35,6 +35,7 @@ require_once R72PUB_DIR . 'includes/class-r72pub-media.php';
 require_once R72PUB_DIR . 'includes/class-r72pub-publisher.php';
 require_once R72PUB_DIR . 'includes/class-r72pub-rest.php';
 require_once R72PUB_DIR . 'includes/class-r72pub-admin.php';
+require_once R72PUB_DIR . 'includes/class-r72pub-metabox.php';
 
 /**
  * Activation never touches posts, permalinks, SEO plugins or theme settings.
@@ -54,8 +55,13 @@ function r72pub_deactivate() {
 }
 register_deactivation_hook( __FILE__, 'r72pub_deactivate' );
 
+add_action( 'init', 'r72pub_load_textdomain' );
+function r72pub_load_textdomain() {
+	load_plugin_textdomain( 'relaunch72-publisher', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
+}
 add_action( 'rest_api_init', array( 'R72Pub_Rest', 'register_routes' ) );
 add_action( 'init', array( 'R72Pub_Seo', 'register_frontend' ) );
 if ( is_admin() ) {
 	R72Pub_Admin::init();
+	R72Pub_Metabox::init();
 }

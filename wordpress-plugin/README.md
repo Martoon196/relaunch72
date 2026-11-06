@@ -1,6 +1,6 @@
 # Relaunch72 Publisher & SEO (WordPress plugin)
 
-- Source: `relaunch72-publisher/` (PHP 7.4+, WordPress 6.4+). Protocol, supported configurations, security, installation and rollback: [docs/seo-blog-wordpress.md](../docs/seo-blog-wordpress.md).
+- Source: `relaunch72-publisher/` (PHP 7.4+, WordPress 6.4+). A site-configurable SEO plugin (per-post SEO box; site-wide templates, robots, social, schema and sitemap controls) that works alone or defers to Yoast SEO / Rank Math, plus the signed Relaunch72 publishing connection. Protocol, supported configurations, security, installation and rollback: [docs/seo-blog-wordpress.md](../docs/seo-blog-wordpress.md).
 - Installable ZIP: `dist/relaunch72-publisher-<version>.zip` plus `.sha256`. Rebuild deterministically with `node wordpress-plugin/build-zip.mjs` (sorted entries, fixed timestamps: the same source gives the same digest).
 - `test-harness/` is a **disposable** WordPress Playground harness. Its mu-plugin exposes a token-protected test-control route and fakes image downloads; never install it on a real site.
 

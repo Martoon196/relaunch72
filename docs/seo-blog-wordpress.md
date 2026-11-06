@@ -1,6 +1,6 @@
 # WordPress publishing: Relaunch72 Publisher & SEO
 
-This package adds a third website destination type, `wordpress`, beside `github_static` and `content_api`. It ships a reusable WordPress plugin, **Relaunch72 Publisher & SEO** (`wordpress-plugin/relaunch72-publisher/`, installable ZIP in `wordpress-plugin/dist/`).
+This package adds a third website destination type, `wordpress`, beside `github_static` and `content_api`. It ships a reusable, site-configurable WordPress SEO plugin, **Relaunch72 Publisher & SEO** (`wordpress-plugin/relaunch72-publisher/`, installable ZIP in `wordpress-plugin/dist/`).
 
 It reuses the signed content-API v2 model (009B), exact-version approval, pause controls, the immutable publication snapshot, reconciliation and the independent public evidence system. It adds no SQL migration, job kind, payload stage or state enum. Existing `content_api` and `github_static` destinations keep their exact v2 rules.
 
@@ -40,9 +40,15 @@ It reuses the signed content-API v2 model (009B), exact-version approval, pause 
 
 **SEO ownership.** Exactly one component renders each output.
 
-- **Yoast SEO / Rank Math mode.** Relaunch72 writes only to that plugin's own per-post fields: title, description, social title, description and image, and robots *only* when an article asks for noindex or nofollow. That plugin renders canonical, robots, Open Graph and schema.
-- **Standalone mode.** The plugin renders the description, robots (through `wp_robots`), Open Graph/Twitter tags and factual Article JSON-LD (headline, dates, author, publisher, image, public citations). WordPress core renders the canonical and sitemap.
-- **Never.** The plugin never deactivates or reconfigures another plugin.
+- **Yoast SEO / Rank Math mode.** Relaunch72 writes only to that plugin's own per-post fields: title, description, social title, description and image, and robots *only* when an article asks for noindex or nofollow. That plugin renders canonical, robots, Open Graph, schema and the sitemap. The plugin's own SEO box shows provenance only.
+- **Standalone mode (no other SEO plugin).** The plugin is the site's SEO plugin, configured per site like Yoast or Rank Math:
+  - *SEO box on every post, page and public post type:* SEO title, meta description, canonical URL, noindex, nofollow, social title/description/image. Explicit per-post values always apply. Relaunch72 writes a managed article's values into these same fields (`_r72_seo_*`), so a person's later change is preserved by the same rule as for Yoast/Rank Math fields.
+  - *Site-wide settings* (Relaunch72 → SEO), behind an explicit **site-wide output** switch: separator and title templates (home, posts, pages, archives, search, 404), home/term descriptions, noindex defaults (category, tag, author, date, search, paginated), default social image, Twitter card and handle, Organisation/Person knowledge graph with logo and `sameAs`, Article schema on posts, core sitemap on/off. Until the switch is on, only managed posts and posts with explicit per-post values carry this plugin's tags.
+  - *One owner per tag:* core `rel_canonical` is kept for singular pages; a per-post canonical override removes it and emits one tag; archives and the home page get one canonical from this plugin; robots go through `wp_robots`; noindex posts are excluded from the core sitemap (`wp_sitemaps_posts_query_args`).
+  - *Preview then apply:* every site-wide change is shown with current value, proposed value, effect and sample output; only ticked rows are applied.
+  - *Hooks:* `r72pub_document_title`, `r72pub_meta_description`, `r72pub_canonical`, `r72pub_robots`, `r72pub_opengraph`, `r72pub_schema`, `r72pub_meta_box_post_types`.
+- **Content-only mode.** Opt-in: nothing written, nothing rendered.
+- **Never.** The plugin never deactivates or reconfigures another plugin. Site title/tagline changes go through the same preview-and-apply step.
 
 ## Managed posts and manual WordPress edits
 
@@ -72,7 +78,7 @@ It reuses the signed content-API v2 model (009B), exact-version approval, pause 
 
 ## Installation (per site)
 
-1. **Install.** WordPress → Plugins → Add New → Upload → `relaunch72-publisher-1.0.0.zip` → Activate. Check the ZIP against its `.sha256` file first. Activation changes nothing.
+1. **Install.** WordPress → Plugins → Add New → Upload → `relaunch72-publisher-1.1.0.zip` → Activate. Check the ZIP against its `.sha256` file first. Activation changes nothing.
 2. **Choose the author.** Settings → Relaunch72 Publisher → choose **Publish as** (a dedicated Author or Editor) → Save.
 3. **Create the key.** Click **Create connection key** and copy it. It is shown once.
 4. **Connect in RL72.** Brand → Setup → Website publishing connection → **Connect: WordPress**. Enter the site address, leave the endpoint blank unless the plugin shows a different one, paste the key into the key field, then Connect. The check publishes nothing.
@@ -94,3 +100,4 @@ It reuses the signed content-API v2 model (009B), exact-version approval, pause 
 
 - **Offline:** `test/seo-blog-wordpress.test.ts` (in `npm test`). It covers the extension, configuration, pagination, the full engine journey with automatic target, approval, schedule, publication and evidence, two-brand pairing, holds and pause, content-API strictness, and the portal form.
 - **Disposable WordPress:** `test/manual-wordpress-plugin.e2e.ts`. It runs the real plugin with the real `WordPressPublisher` and evidence code on WordPress Playground, in standalone, Rank Math, Yoast SEO, conflicting-plugin hold and lifecycle scenarios. See `wordpress-plugin/README.md` for the harness commands.
+  The standalone scenario also covers the SEO box (title, description, canonical override, noindex/nofollow, social fields, sitemap exclusion), the site-wide switch (off by default), templates, home/archive descriptions, archive canonicals, robots defaults, knowledge-graph schema and the core-sitemap control.

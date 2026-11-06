@@ -121,7 +121,7 @@ class R72Pub_Publisher {
 	public static function check_target( array $p ) {
 		$caps = R72Pub_Capabilities::capabilities();
 		if ( ! $caps ) {
-			return self::refuse( 'r72_unsupported_site', 'This site\'s configuration is not currently supported (see Settings → Relaunch72 Publisher → Capabilities). Nothing was changed.', 409 );
+			return self::refuse( 'r72_unsupported_site', 'This site\'s configuration is not currently supported (see Relaunch72 → Diagnostics). Nothing was changed.', 409 );
 		}
 		$t    = $p['target'];
 		$root = $caps['roots'][0];

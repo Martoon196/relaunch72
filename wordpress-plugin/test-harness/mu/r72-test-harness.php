@@ -30,6 +30,10 @@ add_action( 'rest_api_init', function () {
 			case 'human_post': wp_set_current_user( 1 ); return array( 'id' => wp_insert_post( array( 'post_title' => $a['title'], 'post_name' => $a['slug'], 'post_status' => 'publish', 'post_type' => 'post', 'post_content' => 'Human post' ) ) );
 			case 'post': $id = (int) $a['post']; $meta = array(); foreach ( get_post_meta( $id ) as $k => $v ) { $meta[ $k ] = maybe_unserialize( $v[0] ); } return array( 'post' => get_post( $id ), 'meta' => $meta, 'permalink' => get_permalink( $id ), 'cats' => wp_get_post_categories( $id, array( 'fields' => 'slugs' ) ), 'thumb' => (int) get_post_thumbnail_id( $id ) );
 			case 'count': global $wpdb; return array( 'posts' => (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type='post' AND post_status<>'auto-draft'" ), 'attachments' => (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_type='attachment'" ), 'mediaFetches' => (int) get_option( 'r72test_media_fetches', 0 ), 'managed' => (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->postmeta} WHERE meta_key='_r72_article_id'" ) );
+			case 'site_seo': update_option( 'r72pub_site_seo', R72Pub_Settings::sanitize_site_seo( array_merge( R72Pub_Settings::site_seo(), $a['value'] ) ), false ); return R72Pub_Settings::site_seo();
+			case 'metabox_save': wp_set_current_user( 1 ); $_POST = array( 'r72pub_meta_box' => wp_create_nonce( 'r72pub_meta_box' ), 'r72pub' => $a['fields'] ); R72Pub_Metabox::save( (int) $a['post'], get_post( (int) $a['post'] ) ); $out = array(); foreach ( R72Pub_Seo::fields() as $k ) { $out[ $k ] = get_post_meta( (int) $a['post'], $k, true ); } return $out;
+			case 'metabox_render': wp_set_current_user( 1 ); ob_start(); R72Pub_Metabox::render( get_post( (int) $a['post'] ) ); return array( 'html' => ob_get_clean() );
+			case 'term': $t = get_term_by( 'slug', $a['slug'], 'category' ); return array( 'link' => $t ? get_term_link( $t ) : null );
 			case 'caps': return array( 'eval' => R72Pub_Capabilities::evaluate(), 'caps' => R72Pub_Capabilities::capabilities() );
 			case 'uninstall': require_once ABSPATH . 'wp-admin/includes/plugin.php'; deactivate_plugins( 'relaunch72-publisher/relaunch72-publisher.php', true ); define( 'WP_UNINSTALL_PLUGIN', 'relaunch72-publisher/relaunch72-publisher.php' ); include WP_PLUGIN_DIR . '/relaunch72-publisher/uninstall.php'; global $wpdb; return array( 'options' => $wpdb->get_col( "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE 'r72pub%'" ), 'managedMeta' => (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->postmeta} WHERE meta_key='_r72_article_id'" ) );
 		}
@@ -53,9 +57,9 @@ add_action( 'rest_api_init', function () {
 		$a = $r->get_json_params();
 		wp_set_current_user( 1 );
 		require_once ABSPATH . 'wp-admin/includes/admin.php';
-		if ( ! empty( $a['proposal'] ) ) { set_transient( 'r72pub_site_proposal_1', $a['proposal'], 600 ); }
+		if ( ! empty( $a['proposal'] ) ) { set_transient( 'r72pub_seo_proposal_1', $a['proposal'], 600 ); }
 		if ( ! empty( $a['public_check'] ) ) { set_transient( 'r72pub_public_check', R72Pub_Admin::public_check(), 600 ); }
-		$_GET['tab'] = $a['tab']; $_GET['r72notice'] = $a['notice'] ?? '';
+		$_GET['page'] = 'connection' === $a['tab'] ? 'relaunch72-publisher' : 'relaunch72-publisher-' . $a['tab']; $_GET['r72notice'] = $a['notice'] ?? '';
 		ob_start(); R72Pub_Admin::page(); $html = ob_get_clean();
 		return array( 'html' => $html );
 	} ) );

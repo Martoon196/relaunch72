@@ -139,6 +139,7 @@ test(`Relaunch72 Publisher & SEO — disposable WordPress e2e (${SCENARIO})`, as
     assert.match(p.post.post_content, /example-source/); assert.doesNotMatch(p.post.post_content, /private\.example/);
     if (SCENARIO === 'rank_math') { assert.equal(p.meta.rank_math_title, b1.seoTitle); assert.equal(p.meta.rank_math_description, b1.metaDescription); }
     if (SCENARIO === 'yoast') { assert.equal(p.meta._yoast_wpseo_title, b1.seoTitle); assert.equal(p.meta._yoast_wpseo_metadesc, b1.metaDescription); }
+    if (SCENARIO === 'standalone') { assert.equal(p.meta._r72_seo_title, b1.seoTitle); assert.equal(p.meta._r72_seo_description, b1.metaDescription); }
     const thumb = await control('post', { post: p.thumb });
     assert.equal(thumb.meta._wp_attachment_image_alt, 'Disposable hero alt text');
   });
@@ -229,10 +230,11 @@ test(`Relaunch72 Publisher & SEO — disposable WordPress e2e (${SCENARIO})`, as
     assert.match((await control('post', { post: postId })).post.post_content, /Fourth intro/);
   });
 
-  if (SCENARIO !== 'standalone') {
-    await t.test('a person’s change to an SEO-plugin field is preserved on the next update', async () => {
-      const key = SCENARIO === 'rank_math' ? 'rank_math_description' : '_yoast_wpseo_metadesc';
-      await control('human_meta', { post: postId, key, value: 'Human-written description.' });
+  {
+    await t.test('a person’s change to an SEO field is preserved on the next update', async () => {
+      const key = SCENARIO === 'rank_math' ? 'rank_math_description' : SCENARIO === 'yoast' ? '_yoast_wpseo_metadesc' : '_r72_seo_description';
+      if (SCENARIO === 'standalone') await control('metabox_save', { post: postId, fields: { _r72_seo_description: 'Human-written description.', _r72_seo_title: '' } });
+      else await control('human_meta', { post: postId, key, value: 'Human-written description.' });
       const b5 = { ...b1, intro: 'Fifth intro.', metaDescription: 'RL72 new description.' }; const v5 = input(articleId, 5, b5, target(slug, b5));
       assert.equal((await publisher.publish(v5)).status, 'accepted');
       const p = await control('post', { post: postId });
@@ -242,6 +244,7 @@ test(`Relaunch72 Publisher & SEO — disposable WordPress e2e (${SCENARIO})`, as
       assert.equal(count(html, /<link[^>]+rel=["']canonical["']/gi), 1);
       assert.equal(count(html, /<meta[^>]+name=["']description["']/gi), 1);
       assert.equal(count(html, /<meta[^>]+name=["']robots["']/gi), 1);
+      if (SCENARIO === 'standalone') assert.match(html, /name=["']description["'] content=["']Human-written description\./);
     });
   }
 
@@ -286,6 +289,69 @@ test(`Relaunch72 Publisher & SEO — disposable WordPress e2e (${SCENARIO})`, as
   });
 
   if (SCENARIO === 'standalone') {
+    const humanSlug = `seo-box-${Date.now().toString(36)}`;
+    const human = await control('human_post', { title: 'Human SEO box post', slug: humanSlug });
+    await t.test('site-wide output is off by default: unmanaged posts get only WordPress core tags', async () => {
+      const html = await headOf(`${ORIGIN}/${humanSlug}/`);
+      assert.equal(count(html, /<link[^>]+rel=["']canonical["']/gi), 1, 'core canonical only');
+      assert.equal(count(html, /<meta[^>]+name=["']description["']/gi), 0);
+      assert.equal(count(html, /property=["']og:title["']/gi), 0);
+      assert.equal(count(html, /application\/ld\+json/gi), 0);
+      const box = (await control('metabox_render', { post: human.id })).html as string;
+      assert.match(box, /name="r72pub\[_r72_seo_title\]"/); assert.match(box, /name="r72pub\[_r72_seo_canonical\]"/);
+    });
+    await t.test('per-post SEO box: title, description, canonical override, noindex/nofollow and social fields are served exactly once', async () => {
+      const saved = await control('metabox_save', { post: human.id, fields: { _r72_seo_title: 'Custom SEO title', _r72_seo_description: 'Custom <b>description</b>', _r72_seo_canonical: 'https://example.org/original-article/', _r72_seo_noindex: '1', _r72_seo_nofollow: '1', _r72_seo_og_title: 'Social title', _r72_seo_og_description: 'Social description', _r72_seo_og_image_id: '0' } });
+      assert.equal(saved._r72_seo_description, 'Custom description', 'tags stripped on save');
+      const html = await headOf(`${ORIGIN}/${humanSlug}/`);
+      assert.match(html, /<title>Custom SEO title<\/title>/);
+      assert.equal(count(html, /<link[^>]+rel=["']canonical["']/gi), 1);
+      assert.match(html, /rel=["']canonical["'] href=["']https:\/\/example\.org\/original-article\//);
+      assert.equal(count(html, /<meta[^>]+name=["']description["']/gi), 1);
+      assert.equal(count(html, /<meta[^>]+name=["']robots["']/gi), 1);
+      assert.match(html, /name=["']robots["'] content=["'][^"']*noindex[^"']*nofollow/i);
+      assert.match(html, /property=["']og:title["'] content=["']Social title["']/);
+      assert.match(html, /property=["']og:url["'] content=["']https:\/\/example\.org\/original-article\//);
+      assert.equal(count(html, /application\/ld\+json/gi), 0, 'schema is a site-wide setting; nothing until the switch is on');
+      assert.equal(count(html, /property=["']og:image["']/gi), 0, 'no site default image until the switch is on');
+      const sitemap = (await transport.fetch(`${ORIGIN}/wp-sitemap-posts-post-1.xml`)).body.toString('utf8');
+      assert.doesNotMatch(sitemap, new RegExp(humanSlug), 'noindex post excluded from the core sitemap');
+      assert.match(sitemap, new RegExp(slug), 'indexable managed post still listed');
+    });
+    await t.test('site-wide templates, descriptions, robots defaults, knowledge graph and sitemap control apply only after the explicit switch', async () => {
+      await control('option', { name: 'blogdescription', value: 'Fixture tagline' });
+      const otherSlug = `templated-${Date.now().toString(36)}`; const other = await control('human_post', { title: 'Templated post', slug: otherSlug });
+      await control('site_seo', { value: { site_wide: true, separator: '–', title_post: '%title% %sep% %sitename%', title_home: '%sitename% %sep% %tagline%', title_archive: '%term% %sep% %page% %sep% %sitename%', desc_home: '%tagline%', desc_archive: '%term_description%', noindex_category: true, kg_type: 'organization', organization_name: 'Fixture Org', logo_url: 'https://wp.test/logo.png', social_profiles: ['https://www.linkedin.com/company/fixture/'], og_default_image: 'https://wp.test/default-social.png', twitter_site: 'fixture', core_sitemap: 'on' } });
+      try {
+        const post = await headOf(`${ORIGIN}/${otherSlug}/`);
+        assert.match(post, /<title>Templated post – Disposable Test Site<\/title>/);
+        assert.equal(count(post, /<link[^>]+rel=["']canonical["']/gi), 1, 'core canonical kept, none added');
+        assert.match(post, /property=["']og:image["'] content=["']https:\/\/wp\.test\/default-social\.png["']/);
+        assert.match(post, /name=["']twitter:site["'] content=["']@fixture["']/);
+        assert.equal(count(post, /<meta[^>]+name=["']description["']/gi), 0, 'no invented description for a post without one');
+        const home = await headOf(`${ORIGIN}/`);
+        assert.match(home, /<title>Disposable Test Site – Fixture tagline<\/title>/);
+        assert.match(home, /name=["']description["'] content=["']Fixture tagline["']/);
+        assert.equal(count(home, /<link[^>]+rel=["']canonical["']/gi), 1);
+        assert.match(home, /"@type":"Organization","name":"Fixture Org"/); assert.match(home, /"sameAs":\["https:\/\/www\.linkedin\.com\/company\/fixture\/"\]/);
+        const catUrl = (await control('term', { slug: 'investor-education' })).link as string;
+        const cat = await headOf(catUrl);
+        assert.match(cat, /<title>Investor Education – Disposable Test Site<\/title>/, 'empty %page% collapses');
+        assert.equal(count(cat, /<link[^>]+rel=["']canonical["']/gi), 1);
+        assert.ok(cat.includes(`rel="canonical" href="${catUrl}"`), 'archive canonical is its own URL');
+        assert.equal(count(cat, /<meta[^>]+name=["']robots["']/gi), 1);
+        assert.match(cat, /name=["']robots["'] content=["'][^"']*noindex/i);
+        assert.equal((await transport.fetch(`${ORIGIN}/wp-sitemap.xml`)).status, 200);
+        await control('site_seo', { value: { core_sitemap: 'off' } });
+        assert.equal((await transport.fetch(`${ORIGIN}/wp-sitemap.xml`)).status, 404, 'core sitemap switched off');
+        const check = await publisher.checkConnection(destination, secret);
+        assert.equal(check.ok, false); assert.match(check.detail, /No XML sitemap/, 'no sitemap owner is a hold, not a fabricated capability');
+      } finally {
+        await control('site_seo', { value: { site_wide: false, core_sitemap: 'default', noindex_category: false, kg_type: '', og_default_image: '', twitter_site: '' } });
+        await control('human_edit', { post: other.id, field: 'post_status', value: 'draft' });
+      }
+      const check = await publisher.checkConnection(destination, secret); assert.equal(check.ok, true, check.detail);
+    });
     await t.test('permalink variations: prefix without trailing slash works; unsupported structures hold; old targets refused', async () => {
       try {
         await control('option', { name: 'permalink_structure', value: '/blog/%postname%' });

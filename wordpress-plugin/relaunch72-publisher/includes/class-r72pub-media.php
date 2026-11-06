@@ -35,7 +35,7 @@ class R72Pub_Media {
 				return true;
 			}
 		}
-		return new WP_Error( 'r72_media_source', 'The featured image is not from an approved media source for this site. Add the source in Settings → Relaunch72 Publisher if it is trusted. Nothing was changed.', array( 'status' => 409 ) );
+		return new WP_Error( 'r72_media_source', 'The featured image is not from an approved media source for this site. Add the source in Relaunch72 → Connection if it is trusted. Nothing was changed.', array( 'status' => 409 ) );
 	}
 
 	/**

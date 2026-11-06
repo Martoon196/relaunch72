@@ -193,21 +193,122 @@ class R72Pub_Settings {
 
 	// ─── Standalone site SEO controls ───────────────────────────────────────
 
+	/** Standalone-mode site SEO settings. Templates use %title%, %sitename%, %tagline%, %sep%, %term%, %term_description%, %excerpt%, %page%, %search%. */
 	public static function site_seo_defaults() {
 		return array(
+			'site_wide'         => false,
+			'separator'         => '|',
+			'title_home'        => '%sitename% %sep% %tagline%',
+			'title_post'        => '%title% %sep% %sitename%',
+			'title_page'        => '%title% %sep% %sitename%',
+			'title_archive'     => '%title% %sep% %page% %sep% %sitename%',
+			'title_search'      => '',
+			'title_404'         => '',
+			'desc_home'         => '%tagline%',
+			'desc_archive'      => '%term_description%',
+			'noindex_category'  => false,
+			'noindex_tag'       => false,
+			'noindex_author'    => false,
+			'noindex_date'      => false,
+			'noindex_search'    => false,
+			'noindex_paged'     => false,
+			'kg_type'           => '',
 			'organization_name' => '',
 			'logo_url'          => '',
 			'social_profiles'   => array(),
-			'title_template'    => '',
-			'default_description' => '',
-			'apply_templates'   => false,
-			'organization_schema' => false,
+			'og_default_image'  => '',
+			'twitter_card'      => 'summary_large_image',
+			'twitter_site'      => '',
+			'article_schema'    => true,
+			'core_sitemap'      => 'default',
 		);
 	}
 
 	public static function site_seo() {
 		$s = get_option( self::OPT_SITE_SEO, array() );
-		return array_merge( self::site_seo_defaults(), is_array( $s ) ? $s : array() );
+		return self::sanitize_site_seo( array_merge( self::site_seo_defaults(), is_array( $s ) ? $s : array() ) );
+	}
+
+	/** Field types drive both sanitisation and the settings form. */
+	public static function site_seo_fields() {
+		return array(
+			'site_wide'         => 'bool',
+			'separator'         => 'separator',
+			'title_home'        => 'text',
+			'title_post'        => 'text',
+			'title_page'        => 'text',
+			'title_archive'     => 'text',
+			'title_search'      => 'text',
+			'title_404'         => 'text',
+			'desc_home'         => 'text',
+			'desc_archive'      => 'text',
+			'noindex_category'  => 'bool',
+			'noindex_tag'       => 'bool',
+			'noindex_author'    => 'bool',
+			'noindex_date'      => 'bool',
+			'noindex_search'    => 'bool',
+			'noindex_paged'     => 'bool',
+			'kg_type'           => 'kg_type',
+			'organization_name' => 'text',
+			'logo_url'          => 'url',
+			'social_profiles'   => 'urls',
+			'og_default_image'  => 'url',
+			'twitter_card'      => 'twitter_card',
+			'twitter_site'      => 'handle',
+			'article_schema'    => 'bool',
+			'core_sitemap'      => 'core_sitemap',
+		);
+	}
+
+	public static function sanitize_site_seo( array $raw ) {
+		$out = self::site_seo_defaults();
+		foreach ( self::site_seo_fields() as $key => $type ) {
+			if ( ! array_key_exists( $key, $raw ) ) {
+				continue;
+			}
+			$v = $raw[ $key ];
+			switch ( $type ) {
+				case 'bool':
+					$out[ $key ] = (bool) $v;
+					break;
+				case 'separator':
+					$v           = trim( sanitize_text_field( (string) $v ) );
+					$out[ $key ] = ( '' !== $v && mb_strlen( $v ) <= 3 ) ? $v : '|';
+					break;
+				case 'text':
+					$out[ $key ] = mb_substr( sanitize_text_field( (string) $v ), 0, 300 );
+					break;
+				case 'url':
+					$out[ $key ] = esc_url_raw( (string) $v, array( 'https', 'http' ) );
+					break;
+				case 'urls':
+					$list = array();
+					foreach ( is_array( $v ) ? $v : preg_split( '/
+||
+/', (string) $v ) as $line ) {
+						$line = esc_url_raw( trim( (string) $line ), array( 'https', 'http' ) );
+						if ( '' !== $line ) {
+							$list[] = $line;
+						}
+					}
+					$out[ $key ] = array_slice( array_values( array_unique( $list ) ), 0, 12 );
+					break;
+				case 'kg_type':
+					$out[ $key ] = in_array( $v, array( '', 'organization', 'person' ), true ) ? $v : '';
+					break;
+				case 'twitter_card':
+					$out[ $key ] = in_array( $v, array( 'summary', 'summary_large_image' ), true ) ? $v : 'summary_large_image';
+					break;
+				case 'handle':
+					$v           = preg_replace( '/[^A-Za-z0-9_]/', '', (string) $v );
+					$out[ $key ] = '' !== $v ? '@' . substr( $v, 0, 15 ) : '';
+					break;
+				case 'core_sitemap':
+					$out[ $key ] = in_array( $v, array( 'default', 'on', 'off' ), true ) ? $v : 'default';
+					break;
+			}
+		}
+		return $out;
 	}
 
 	// ─── Audit (no secrets, bounded) ────────────────────────────────────────
