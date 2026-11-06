@@ -2,11 +2,11 @@
 
 Target: course checkout live on the site before the replay email on Thursday 5 November, 08:00 GMT. Everything uses the MH196 Ltd Stripe account only. Secrets go straight into Render; never into chat, commands or files.
 
-Source: branch `codex/mhp-payments-live-20261104` (app, direct child of `codex/relaunch72-platform-foundation` 2bd3219) and branch `mhp-payments-live-20261104` in the `martinhowardproperty` site repo. Neither is pushed until the owner says so.
+Source: branch `codex/mhp-payments-live-20261106` (app, rebased on 6 November onto `codex/relaunch72-platform-foundation` 21cb550; its migration is re-slotted from 0138 to 0142 because Boosters 0138 to 0140 and MHP WhatsApp 0141 landed first) and branch `mhp-payments-live-20261104` in the `martinhowardproperty` site repo. The earlier `codex/mhp-payments-live-20261104` (on 2bd3219) is superseded: do not deploy it.
 
 ## 0. Before anything: confirm what is live
 
-The shared ledger (R72-010-VERIFIED-LIVE-CLOSURE-20261103) records production VERIFIED LIVE at 2026-11-03 23:00 UTC on 2bd32194 with migration 0137 applied, across all seven active services. This release is a direct child of 2bd3219, so it applies cleanly. If Render shows any other commit before you deploy, stop: the ledger is then out of date.
+This release is three commits on top of 21cb550, which Root published on 6 November 19:05 UTC and was deploying (web and SEO worker) at that time. 21cb550 is strict on schema 0141, so production must have 0141 applied. Before you deploy, check in Render that the active services run 21cb550 (or an ancestor that is ready on 0141) and that `/ready` is 200. If Render or the ledger shows anything else, stop and ask Root.
 
 ## 1. Stripe (MH196 Ltd account, sandbox first)
 
@@ -26,8 +26,8 @@ Add: `MHP_STRIPE_SECRET_KEY` (rk_test_…), `MHP_STRIPE_ACCOUNT_ID` (acct_… of
 ## 3. Deploy the release to every service, then migrate
 
 1. Publish the branch to the deployment branch (owner go-ahead needed).
-2. In Render, deploy the same commit to every active service on `codex/relaunch72-platform-foundation` (seven at the last release; growth-hq last, as in that release). Each stays ready on the 0137 database (exact allowance for pending 0138). Check `/ready` on app.martinhowardproperty.co.uk.
-3. From the growth-hq Shell, with the owner database URL: `npm run db:migrate`. It applies only 0138. Check `/ready` again on both hosts.
+2. In Render, deploy the same commit to every active service on `codex/relaunch72-platform-foundation` (growth-hq last). Each stays ready on the 0141 database (exact allowance for pending 0142). Check `/ready` on app.martinhowardproperty.co.uk.
+3. From the growth-hq Shell, with the owner database URL: `npm run db:migrate`. It applies only 0142. Check `/ready` again on both hosts.
 
 ## 4. Stripe setup command (growth-hq Shell)
 
