@@ -26,15 +26,31 @@ test('Apollo: actual roles, owned-brand/session gate, atomic global budgets, ded
     await assert.rejects(sa.seed({...company,company_type:'sole-trader'}),{code:'42501'});
     await sa.seed(company);await sb.seed(company);
     const request=(id:string)=>({id,operation:'org-search' as const,company_number:company.company_number,domain:company.domain});
+    await admin.query('UPDATE app_private.apollo_account_policy SET free_available=0');
+    await assert.rejects(sa.reserve(request(randomUUID())),{code:'54000'});
+    assert.equal((await sa.usage()).globalUsedOrReserved,0,'budget refusal does not create a paid reservation');
+    await admin.query('UPDATE app_private.apollo_account_policy SET free_available=50');
     const race=await Promise.allSettled([sa.reserve(request(randomUUID())),sb.reserve(request(randomUUID())),sa.reserve(request(randomUUID()))]);
     assert.equal(race.filter(x=>x.status==='fulfilled').length,2);assert.equal((await sa.usage()).remaining,0);
     assert.equal((await sb.usage()).globalUsedOrReserved,2);
     await admin.query('UPDATE app_private.apollo_account_policy SET monthly_limit=50');
+    await admin.query('UPDATE app_private.apollo_brand_policy SET monthly_limit=$2 WHERE workspace_id=$1',[a.brand,(await sa.usage()).brandUsedOrReserved]);
+    await assert.rejects(sa.reserve(request(randomUUID())),{code:'54000'});
+    await admin.query('UPDATE app_private.apollo_brand_policy SET monthly_limit=50 WHERE workspace_id=$1',[a.brand]);
     const preview=randomUUID();await sa.reserve({...request(preview),operation:'people-search'});await sa.settle(preview,0);
     const prospect:Prospect={...company,source_vendor:'apollo',vendor_record_id:'synthetic-person',retrieved_at:new Date().toISOString(),vendor_confidence:null,licence_ref:'apollo-free-internal',email:null,title:'Director',credits_spent:0,credits_reserved:0};
     await sa.save(preview,prospect);
     assert.equal((await admin.query('SELECT data->>\'source_vendor\' AS vendor FROM app_private.apollo_prospects WHERE workspace_id=$1',[a.brand])).rows[0].vendor,'apollo');
     await assert.rejects(sa.save(preview,{...prospect,licence_ref:'customer-export' as never}));
+    await assert.rejects(sa.save(preview,{...prospect,source_vendor:null as never}));
+    const previewB=randomUUID(),paidB=randomUUID();
+    const prospectB={...prospect,vendor_record_id:'synthetic-person-b'};
+    await sb.reserve({...request(previewB),operation:'people-search'});await sb.settle(previewB,0);await sb.save(previewB,prospectB);
+    await sb.reserve({...request(paidB),operation:'enrich',vendor_record_id:prospectB.vendor_record_id});await sb.settle(paidB,1);
+    await sb.save(paidB,{...prospectB,email:'Director@fixture.example',credits_spent:1,credits_reserved:1});
+    const enriched=(await admin.query('SELECT normalized_email,data FROM app_private.apollo_prospects WHERE workspace_id=$1',[b.brand])).rows[0];
+    assert.equal(enriched.normalized_email,'director@fixture.example');assert.equal(enriched.data.credits_spent,1);assert.ok(enriched.data.first_retrieved_at);
+    await assert.rejects(sb.reserve({...request(randomUUID()),operation:'enrich',vendor_record_id:prospectB.vendor_record_id}),{code:'23505'});
     const foreign=new PgApolloStore(content,{userId:b.user,sessionToken:b.token,workspaceId:b.home,userEmail:''},a.brand,randomUUID());
     await assert.rejects(foreign.usage(),{code:'42501'});
     const contact=randomUUID();await admin.query('INSERT INTO app.contacts(id,workspace_id,display_name,custom_fields) VALUES($1,$2,\'Suppressed fixture\',$3)',[contact,a.brand,JSON.stringify({company_number:company.company_number})]);
@@ -51,3 +67,4 @@ test('Apollo: actual roles, owned-brand/session gate, atomic global budgets, ded
     await assert.rejects(sa.usage());
   }finally{await web.end();await content.end();await admin.end();}
 });
+

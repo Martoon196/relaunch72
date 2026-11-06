@@ -110,7 +110,9 @@ BEGIN
     SELECT * INTO call FROM app_private.apollo_call_ledger WHERE id=(p->>'callId')::uuid AND workspace_id=p_workspace;
     IF call.id IS NULL OR call.operation NOT IN ('people-search','enrich') OR call.state='reserved' THEN RAISE EXCEPTION 'Missing settled pull'; END IF;
     v:=p->'record';
-    IF v->>'vendor_record_id' IS NULL OR v->>'source_vendor'<>'apollo' OR v->>'licence_ref'<>'apollo-free-internal'
+    IF v IS NULL OR jsonb_typeof(v) IS DISTINCT FROM 'object' OR octet_length(v::text)>131072
+      OR v->>'vendor_record_id' IS NULL OR length(v->>'vendor_record_id') NOT BETWEEN 1 AND 200
+      OR v->>'source_vendor' IS DISTINCT FROM 'apollo' OR v->>'licence_ref' IS DISTINCT FROM 'apollo-free-internal'
       OR v->>'company_number' IS DISTINCT FROM call.company_number OR v->>'domain' IS DISTINCT FROM call.domain
       OR v->>'subscriber_class' IS DISTINCT FROM 'corporate' OR v->>'retrieved_at' IS NULL THEN RAISE EXCEPTION 'Invalid Apollo provenance'; END IF;
     -- Immutable first retrieval: later responses never clear an existing suppression.
