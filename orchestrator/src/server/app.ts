@@ -80,6 +80,7 @@ export interface AppDeps {
   portal?: PortalDeps;
   /** PP-only, fixed-scope read bridge for the founder's Group HQ. */
   groupHqCrm?: { handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> };
+  groupHqInboxCrm?: { handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> };
   /** Per-process no-queue shield in front of the distributed portal guard. */
   portalMaxConcurrentRequests?: number;
   /** Safe operator-facing reasons the optional portal could not be mounted. */
@@ -316,6 +317,15 @@ export function createApp(deps: AppDeps) {
       return;
     }
 
+    if (url.pathname === '/api/group-hq/inbox/crm') {
+      if (!deps.groupHqInboxCrm) { send(res, 503, { error: 'inbox_crm_not_configured' }); return; }
+      if (activePortalRequests >= portalMaxConcurrentRequests) { sendPortalRuntimeStatus(res, 429); return; }
+      activePortalRequests += 1;
+      try { await deps.groupHqInboxCrm.handle(req,res,url); }
+      catch { if (!res.headersSent) send(res,503,{ error: 'temporarily_unavailable' }); }
+      finally { activePortalRequests -= 1; }
+      return;
+    }
     if (url.pathname === '/api/group-hq/crm/leads' || url.pathname === '/api/group-hq/channels/whatsapp') {
       if (!deps.groupHqCrm) { send(res, 404, { error: 'not found' }); return; }
       if (activePortalRequests >= portalMaxConcurrentRequests) {
