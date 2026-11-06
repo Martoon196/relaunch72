@@ -426,7 +426,7 @@ test('final136 capable runtime stays strict for new applications and every histo
   await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows,{filename:'0137_unknown.sql',checksum:'a'.repeat(64)}]),directory),/migration not present/);
 });
 
-test('WhatsApp141 runtime strictly requires141, defaults140, creators139, methods138 and every prior ledger row', async () => {
+test('WhatsApp141 runtime requires141, defaults140, creators139, methods138 and every prior ledger row', async () => {
   // Render also runs this suite while the temporary deployment bridge is set.
   // Strict-mode assertions must not inherit that service environment.
   const assertStrictSchemaCurrent = (pool: Pick<Pool, 'query'>) => assertRuntimeSchemaCurrent(pool, undefined, {});
@@ -450,4 +450,14 @@ test('WhatsApp141 runtime strictly requires141, defaults140, creators139, method
     await assert.rejects(assertStrictSchemaCurrent(runtimePool(changed)),/checksum changed/);
   }
   await assert.rejects(assertStrictSchemaCurrent(runtimePool([...rows,{filename:'0142_unknown.sql',checksum:'a'.repeat(64)}])),/migration not present/);
+});
+
+test('payments recovery admits only the exact reviewed 0142 while retaining every earlier checksum', async () => {
+  const rows=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  const next={filename:'0142_mhp_payments_live.sql',checksum:'2f5ee2ad95de6244a080d20120b106820536eca8f0df5ca6a8a124c8e78f910d'};
+  await assert.doesNotReject(assertRuntimeSchemaCurrent(runtimePool([...rows,next]),undefined,{}));
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows,{...next,checksum:'0'.repeat(64)}]),undefined,{}),/migration not present/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.slice(0,-1),next]),undefined,{}),/migration not present/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows.map((r,i)=>i===120?{...r,checksum:'0'.repeat(64)}:r),next]),undefined,{}),/checksum changed/);
+  await assert.rejects(assertRuntimeSchemaCurrent(runtimePool([...rows,next,{filename:'0143_unreviewed.sql',checksum:'0'.repeat(64)}]),undefined,{}),/migration not present/);
 });
