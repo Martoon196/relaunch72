@@ -508,7 +508,7 @@ async function handlePost(
     }
     case 'jobs': {
       if (parts[1] && parts[2] === 'cancel') { await engine.cancelJob(actor, brandId, parts[1]); return ok(back('activity'), 'Task cancelled.'); }
-      if (parts[1] && parts[2] === 'retry') { await engine.retryJob(actor, brandId, parts[1]); return ok(back('activity'), 'Task queued again.'); }
+      if (parts[1] && parts[2] === 'retry') { const task=await engine.retryJob(actor, brandId, parts[1]); return ok(back(task.kind==='plan'?'topics':'activity'), task.kind==='plan'?'Your plan is continuing from its saved progress.':'Task queued again.'); }
       if (parts[1] && parts[2] === 'image-retry') { await engine.retryImagePreparation(actor, brandId, parts[1]); return ok(back('activity'), 'Saved image queued for local preparation. No new image generation was requested.'); }
       break;
     }

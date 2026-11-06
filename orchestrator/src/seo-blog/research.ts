@@ -261,6 +261,7 @@ export async function researchQueries(input: {
   const sources: ResearchSource[] = [];
   const notes: string[] = [];
   const seen = new Set<string>();
+  const batches: {query:string;hits:SearchHit[]}[]=[];
   let searchCalls = 0;
   for (const query of input.queries.slice(0, 8)) {
     let hits: SearchHit[];
@@ -272,6 +273,11 @@ export async function researchQueries(input: {
       notes.push(`Search for “${query}” failed.`);
       continue;
     }
+    batches.push({query,hits});
+  }
+  // Queued searches can yield between claims. Read pages only once all search
+  // receipts are available, so earlier pages are not fetched on every poll.
+  for(const {query,hits} of batches) {
     let kept = 0;
     // Prefer primary sources first within each query.
     const ordered = [...hits].sort((a, b) => Number(isPrimarySource(b.url, input.brandWebsite)) - Number(isPrimarySource(a.url, input.brandWebsite)));
@@ -286,13 +292,15 @@ export async function researchQueries(input: {
         const page = await input.transport.fetch(key, { maxBytes: 1_500_000 });
         if (page.status !== 200 || !/html|text\/plain/i.test(page.contentType)) { notes.push(`${key} could not be read (HTTP ${page.status}).`); continue; }
         const parsed = /html/i.test(page.contentType) ? parseHtmlPage(page.body.toString('utf8'), page.finalUrl) : null;
-        const text = parsed ? parsed.text : page.body.toString('utf8');
+        // HTML can contain literal NUL padding. PostgreSQL JSONB cannot store
+        // it; use a space so adjacent words do not silently merge.
+        const text = (parsed ? parsed.text : page.body.toString('utf8')).replace(/\u0000/gu,' ');
         const passage = supportingPassage(text, query);
         if (passage.length < 60) { notes.push(`${key} had no usable text.`); continue; }
         sources.push({
           id: randomUUID(),
           url: key,
-          title: (parsed?.title ?? hit.title).slice(0, 300),
+          title: (parsed?.title ?? hit.title).replace(/\u0000/gu,' ').slice(0, 300),
           retrievedAt: input.now(),
           publishedAt: parsed?.publishedAt??null,
           observedPeriod: null,

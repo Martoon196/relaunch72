@@ -2445,7 +2445,7 @@ export class SeoBlogEngine {
   }
 
   async retryJob(actor: Actor, brandId: string, jobId: string): Promise<Job> {
-    await this.brandFor(actor, brandId);
+    const brand=await this.brandFor(actor, brandId);
     const job = await this.store.getJob(brandId, jobId);
     if (!job) throw new SeoBlogError(404, 'That task was not found.');
     if (!['blocked', 'failed'].includes(job.state)) return job;
@@ -2456,7 +2456,14 @@ export class SeoBlogEngine {
       retainsCopyEpoch=!!article?.campaignGeneration;
       if(article?.campaignGeneration?.startedAt&&!article.campaignGeneration.receipt)throw new SeoBlogError(409,'The social copy request has an uncertain outcome. Retry cannot repeat it. The saved article input and attempt are retained.','campaign_copy_unknown');
     }
-    if(job.kind==='plan'&&!programmeRun(job)?.modelReceipt) throw new SeoBlogError(409,'Research retries retain their history and budget. Review programme status in Topics and explicitly resume with a new intent.');
+    if(job.kind==='plan'&&!programmeRun(job)?.modelReceipt) {
+      const run=programmeRun(job);const profile=await this.store.latestProfile(brandId);
+      const hold=brand.settings.programme?.researchHold;
+      const seeds=profile?researchQuerySeeds({focus:typeof job.payload.focus==='string'?job.payload.focus:null,audiences:profile.audiences,positioning:profile.positioning,categories:run?.snapshot.categoryLabels??[],limit:USAGE_ESTIMATES.searchPerPlan}):[];
+      const complete=!!run&&!run.modelStart&&!run.attempts.some(a=>a.kind!=='metrics'&&!a.receivedAt)&&seeds.length>0&&seeds.every(query=>run.attempts.some(a=>a.receipt&&a.querySha===programmeSha({input:run.snapshot.sha,query,locale:brand.locale,limit:6,provider:this.deps.search.id,kind:'serp'})));
+      if(!complete||hold&&hold.jobId!==job.id)throw new SeoBlogError(409,'Research retries retain their history and budget. Review programme status in Topics and explicitly resume with a new intent.');
+      return this.store.updateJob({...job,payload:{...job.payload,resumeHoldId:run!.logicalRunId},state:'queued',runAfter:this.now(),error:null,progress:'Continuing with saved searches. No additional search calls.',updatedAt:this.now()});
+    }
     if (isProfileJob(job) && profilePayload(job).start && !profilePayload(job).receipt) throw new SeoBlogError(409, 'This model call has an uncertain outcome. Retry cannot repeat it. Review the current profile and explicitly confirm a new extraction in Brand setup.');
     return this.store.updateJob({ ...job, state: 'queued', attempts: isProfileJob(job)||job.kind==='plan'||retainsCopyEpoch ? job.attempts : 0, runAfter: this.now(), error: null, progress: 'Queued again by the owner.', updatedAt: this.now() });
   }

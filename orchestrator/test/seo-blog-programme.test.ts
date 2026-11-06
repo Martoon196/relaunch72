@@ -105,6 +105,24 @@ test('known invalid planning responses retain usage once and hold as rejected, w
     const usage=await f.h.engine.usage(OWNER,f.brand.id);await f.h.engine.tick('restart');assert.deepEqual(await f.h.engine.usage(OWNER,f.brand.id),usage);
   }
 });
+
+test('owner can continue complete saved research after a source-save failure with zero additional searches',async()=>{
+  const f=await ready();const boundary=f.h.store.programmeBoundary.bind(f.h.store);
+  f.h.store.programmeBoundary=async(input)=>boundary({...input,decide:s=>{const d=input.decide(s);if(d.job&&programmeRun(d.job)?.research)throw new Error('source persistence refused');return d;}});
+  const job=await f.request();await f.h.engine.tick('first');const held=(await f.h.store.getJob(f.brand.id,job.id))!;
+  assert.equal(held.state,'blocked');assert.equal(programmeRun(held)!.modelStart,undefined);assert.ok(programmeRun(held)!.attempts.every(a=>a.receipt));
+  const paid=(await f.h.engine.usage(OWNER,f.brand.id)).search_calls;const receipts=programmeRun(held)!.attempts;
+  f.h.store.programmeBoundary=boundary;await assert.rejects(f.h.engine.retryJob(STRANGER,f.brand.id,job.id));
+  await f.h.engine.retryJob(OWNER,f.brand.id,job.id);await f.h.engine.tick('continue');
+  const done=(await f.h.store.getJob(f.brand.id,job.id))!;assert.equal(done.state,'done',done.error??'');assert.equal((await f.h.engine.usage(OWNER,f.brand.id)).search_calls,paid);assert.deepEqual(programmeRun(done)!.attempts,receipts);assert.equal((await f.h.engine.listPlans(OWNER,f.brand.id)).length,1);
+});
+test('source retry refuses incomplete receipts and any model start rather than repurchasing unknown work',async()=>{
+  for(const state of ['incomplete','model']){
+    const f=await ready();const job=await f.request();await f.h.engine.tick('first');const current=(await f.h.store.getJob(f.brand.id,job.id))!;const run=programmeRun(current)!;
+    const held=await f.h.store.updateJob({...current,state:'blocked',payload:{...current.payload,programme:{...run,modelReceipt:undefined,modelStart:state==='model'?{nonce:randomUUID(),at:f.h.clock.now()}:undefined,attempts:state==='incomplete'?run.attempts.slice(0,1):run.attempts}}});
+    const paid=(await f.h.engine.usage(OWNER,f.brand.id)).search_calls;await assert.rejects(f.h.engine.retryJob(OWNER,f.brand.id,held.id),/new intent/);assert.equal((await f.h.engine.usage(OWNER,f.brand.id)).search_calls,paid);
+  }
+});
 test('only two additional40101 retries persist60/300s across claims; every attempt is counted before the call and exhaustion survives tomorrow',async()=>{
   const f=await ready();let calls=0;
   f.h.search.search=async()=>{calls++;assert.equal((await f.h.engine.usage(OWNER,f.brand.id)).search_calls,calls);throw new ResearchProviderError(researchDiagnostic(40101,200,'task-12345678'),0.001);};
