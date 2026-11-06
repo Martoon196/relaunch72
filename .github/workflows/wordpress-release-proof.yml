@@ -6,6 +6,14 @@ permissions:
   contents: read
 jobs:
   release-proof:
+    strategy:
+      fail-fast: false
+      matrix:
+        test-file:
+          - seo-blog-website.integration.test.ts
+          - seo-blog-pg.integration.test.ts
+          - seo-blog-media-storage.integration.test.ts
+          - seo-blog-media-engine.integration.test.ts
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -41,10 +49,13 @@ jobs:
         working-directory: orchestrator
         env:
           TEST_DATABASE_URL: postgresql://ci_migrator:ci-owner-test-only@127.0.0.1:5432/relaunch72_test
+          SEO_BLOG_PG_ADMIN_URL: postgresql://ci_migrator:ci-owner-test-only@127.0.0.1:5432/relaunch72_test
+          SEO_BLOG_PG_CONTENT_URL: postgresql://r72_content_command:local-methods-test-only@127.0.0.1:5432/relaunch72_test
           TEST_DATABASE_RESET_CONFIRM: reset-disposable-branch
           RELAUNCH72_DATABASE_INTEGRATION: explicit-disposable-run
-        run: node --import tsx --test test/db/seo-blog-website.integration.test.ts test/db/seo-blog-pg.integration.test.ts test/db/seo-blog-media-storage.integration.test.ts test/db/seo-blog-media-engine.integration.test.ts
+        run: node --import tsx --test test/db/${{ matrix.test-file }}
       - name: Exact-source offline full suite
+        if: matrix.test-file == 'seo-blog-website.integration.test.ts'
         env:
           RELAUNCH72_DATABASE_INTEGRATION: ''
           TEST_DATABASE_URL: ''
