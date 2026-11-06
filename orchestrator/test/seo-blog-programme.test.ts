@@ -6,6 +6,9 @@ import { ResearchProviderError } from '../src/seo-blog/research.js';
 import { editorialRecommendations, editorialRootIssue, legacyPlanningHold, programmeRun, researchDiagnostic } from '../src/seo-blog/programme.js';
 import { SeoBlogEngine } from '../src/seo-blog/engine.js';
 import type { SearchProvider } from '../src/seo-blog/research.js';
+import { MethodController } from '../src/seo-blog/method-packs.js';
+import { MemoryMethodStore } from '../src/seo-blog/method-store.js';
+import { fixtureSnapshot } from './rl72-method-fixtures.js';
 
 async function ready() {
   const h=harness();seedBrandSite(h.web,'https://harbour.example','deposits');
@@ -104,6 +107,17 @@ test('known invalid planning responses retain usage once and hold as rejected, w
     }else{assert.equal(calls,1);assert.equal(run.modelRejection,undefined);assert.match(final.error!,/uncertain/);assert.equal((await f.h.engine.usage(OWNER,f.brand.id)).model_tokens,before);}
     const usage=await f.h.engine.usage(OWNER,f.brand.id);await f.h.engine.tick('restart');assert.deepEqual(await f.h.engine.usage(OWNER,f.brand.id),usage);
   }
+});
+
+test('rejected private method usage already recorded by its receipt store is not charged again by planning',async()=>{
+  const f=await ready();const methods=new MemoryMethodStore();methods.snapshots.set(f.brand.id,fixtureSnapshot(f.brand.id));
+  const save=methods.saveReceipt.bind(methods);
+  methods.saveReceipt=async(receipt)=>{await save(receipt);if(receipt.outcome!=='accepted')await f.h.store.recordUsage({brandId:f.brand.id,kind:'model_tokens',amount:receipt.usage.tokensIn+receipt.usage.tokensOut,at:f.h.clock.now(),reference:`method-cost:${receipt.id}`});};
+  const original=f.h.llm.complete.bind(f.h.llm);f.h.llm.complete=async(req)=>req.meta?.stage==='SEO_BLOG_PLAN'?{text:'{}',tokensIn:101,tokensOut:7,model:req.model,stopReason:'end_turn'}:original(req);
+  const worker=new SeoBlogEngine({store:f.h.store,llm:f.h.llm,search:f.h.search,transport:f.h.web,publishers:new Map(),vault:f.h.vault,now:f.h.clock.now,methods:new MethodController(methods,true)});
+  const before=(await f.h.engine.usage(OWNER,f.brand.id)).model_tokens;const job=await f.request();await worker.tick('method-worker');
+  const held=(await f.h.store.getJob(f.brand.id,job.id))!;assert.equal(held.state,'blocked');assert.equal(programmeRun(held)!.hold,'generation_rejected');assert.ok(programmeRun(held)!.modelRejection!.record.methodReceiptId);
+  const receipt=[...methods.receipts.values()][0]!;assert.equal(methods.receipts.size,1);assert.equal((await f.h.engine.usage(OWNER,f.brand.id)).model_tokens-before,receipt.usage.tokensIn+receipt.usage.tokensOut);assert.equal((await f.h.engine.listPlans(OWNER,f.brand.id)).length,0);
 });
 
 test('owner can continue complete saved research after a source-save failure with zero additional searches',async()=>{

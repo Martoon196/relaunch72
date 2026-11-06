@@ -769,7 +769,9 @@ export class SeoBlogEngine {
           const now=this.now();const run={...latest,modelRejection:{record:error.record,reason:error.reason,at:now}};
           const next={...current,payload:{...current.payload,programme:run}};
           const held=this.programmeOwns(current,claim)?this.programmeHeld(s,next,run,'generation_rejected','The generated plan did not pass its format or evidence checks. Its known model usage was recorded. Review before another paid intent.'):{job:next,writeJob:true};
-          return {...held,usage:{brandId:claim.brandId,kind:'model_tokens',amount:error.record.tokensIn+error.record.tokensOut,at:now,reference:`plan:${latest.logicalRunId}:${latest.modelStart.nonce}`}};
+          // Rejected method receipts are already charged atomically by the
+          // method store. Only unwrapped generation needs a plan usage entry.
+          return {...held,...(error.record.methodReceiptId?{}:{usage:{brandId:claim.brandId,kind:'model_tokens' as const,amount:error.record.tokensIn+error.record.tokensOut,at:now,reference:`plan:${latest.logicalRunId}:${latest.modelStart.nonce}`}})};
         }
         if(!this.programmeOwns(current,claim)) return {job:current,writeJob:false};
         if(error instanceof BudgetExceededError) return this.programmeHeld(s,current,latest,'budget',error.message);
