@@ -162,9 +162,11 @@ export class MethodRun {
     const problems:string[]=[];
     if(!s||typeof s!=='object'||Array.isArray(s))return {value,problems:['Missing internal method sidecar.']};
     const c=s as MethodSidecar;
+    const allowedEvidence=new Set(this.context.sources);
+    if(this.packs.some(p=>p.version===PRIVATE_RELEASE_VERSION))for(const fact of methodEvidenceContext(this.context.profile,this.context.evidence).factReferences)allowedEvidence.add(fact.id);
     if(!['audience','selectedFormat','angle'].every(k=>typeof (s as Record<string,unknown>)[k]==='string'&&String((s as Record<string,unknown>)[k]).length>0)
       || !(c.primaryNextAction===null||typeof c.primaryNextAction==='string')
-      || !Array.isArray(c.evidenceReferences)||!c.evidenceReferences.every(r=>typeof r==='string'&&this.context.sources.includes(r))
+      || !Array.isArray(c.evidenceReferences)||!c.evidenceReferences.every(r=>typeof r==='string'&&allowedEvidence.has(r))
       || !Array.isArray(c.omittedUnsupportedClaims)||!c.omittedUnsupportedClaims.every(r=>typeof r==='string')
       || !c.decisions||typeof c.decisions!=='object'||Array.isArray(c.decisions)
       || !Array.isArray(c.qualityFindings))problems.push('Invalid method sidecar fields or unsupported evidence reference.');

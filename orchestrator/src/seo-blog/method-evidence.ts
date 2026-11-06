@@ -48,8 +48,8 @@ export const EVIDENCE_CONTRACT = `For 0.1.1, decisions MUST contain:
 claimLedger: [{text: exact short claim span from the asset, references: [supplied fact/source ID]}] (empty only when there are no specific factual claims);
 sourceAssessments: [{sourceId, publishedAt: supplied value or null, observedPeriod: supplied value or null, confidence: high|medium|low|unknown, freshness: evergreen|dated|insufficient, reason}] for each research source referenced by the claim ledger. Unknown metadata stays unknown. Omit a changing claim if freshness is insufficient.
 ownerDecisionsNeeded: [] or the actual unresolved decisions (nonempty holds the draft).
-Every qualityFindings item must have status pass and evidence: [JSON pointers into /asset/... or /decisions/...]. Pointers must identify concrete nonempty content, not the findings themselves. Generic pass text without evidence is rejected. Keep detail meaningful and concise.
-Exactness examples: claimLedger.text must be copied verbatim from a string in the asset you are returning, not paraphrased from a source or profile. Keep its supplied reference IDs. Copy sourceAssessments.publishedAt byte-for-byte, including any time and timezone (a supplied ISO timestamp must not be shortened to a date). Copy nulls, observedPeriod and confidence unchanged. An asset pointer looks like /asset/pillar/key_points/0 for planning, not /pillar/key_points. A decision pointer looks like /decisions/claimLedger/0/text. An empty ownerDecisionsNeeded array is not evidence for a pass; point at the substantive asset or decision that demonstrates the check. Keep claim spans short and exact so these checks can validate them.
+Every qualityFindings item must have status pass and evidence: [JSON pointers into /asset/... or /decisions/...]. Pointers must identify concrete content, not the findings themselves; empty content is invalid except for the specific owner-decision absence check below. Generic pass text without evidence is rejected. Keep detail meaningful and concise.
+Exactness examples: claimLedger.text must be copied verbatim from a string in the asset you are returning, not paraphrased from a source or profile. Keep its supplied reference IDs. Copy sourceAssessments.publishedAt byte-for-byte, including any time and timezone (a supplied ISO timestamp must not be shortened to a date). Copy nulls, observedPeriod and confidence unchanged. An asset pointer looks like /asset/pillar/key_points/0 for planning, not /pillar/key_points. A decision pointer looks like /decisions/claimLedger/0/text. Only core.check-owner-decision-surfaced may cite /decisions/ownerDecisionsNeeded as an existing empty array to show that no decisions remain; all other evidence pointers must identify substantive nonempty content. Keep claim spans short and exact so these checks can validate them.
 Planning additionally requires formatPerArticle: [{slug,formatId,rationale}] for EVERY article. Writing/revision requires formatDecision: {formatId,rationale} matching method_context.editorialFormat when supplied, and mechanismMap: [{recommendation: exact asset span,reason: explanation}]. Copy requires structureDecision: {structureId,rationale}, hookOptions: [three distinct short openings], proofSelection: {reason,references:[supplied fact/source IDs]}. Visual briefing requires visualDecision: {evidenceClass: illustrative|evidential,assetIds:[supplied visual asset IDs],styleReferences:[supplied guidance IDs],point: one point,placement: supplied placement}. Only actual supplied asset IDs authorise real-image descriptions; confirmed style guidance can supply exact colours/fonts but never a missing logo file. Email requires sequenceMap: [{position,purpose,reason}] for each email. Advocacy requires consentReview: {process: supplied consent process,delivery: owner-managed,proofUse: requires-separate-permission}, and incentiveReview: {terms: exact supplied terms or None,reason}. Do not put internal evidence in customer prose.`;
 
 const record=(v:unknown):v is Record<string,any>=>Boolean(v)&&typeof v==='object'&&!Array.isArray(v);
@@ -72,8 +72,11 @@ export function validateMethodEvidence(sidecar:Record<string,any>,asset:Record<s
   for(const s of context.research){references.set(s.id,s.passage);references.set(s.shortId,s.passage);}
   const prose=JSON.stringify(asset),ledger=array(d.claimLedger)?d.claimLedger:[];
   if(!array(d.claimLedger))problems.push('A concrete claim ledger is required.');
-  else for(const row of d.claimLedger){
-    if(!record(row)||!text(row.text)||!prose.includes(JSON.stringify(row.text).slice(1,-1))||!array(row.references)||!row.references.length||!row.references.every((r:unknown)=>typeof r==='string'&&references.has(r))){problems.push('A claim span or supplied reference is invalid.');continue;}
+  else for(const [index,row] of d.claimLedger.entries()){
+    if(!record(row)||!text(row.text)||!prose.includes(JSON.stringify(row.text).slice(1,-1))||!array(row.references)||!row.references.length||!row.references.every((r:unknown)=>typeof r==='string'&&references.has(r))){
+      const detail=!record(row)||!text(row.text)?'text must be a short nonempty string':!prose.includes(JSON.stringify(row.text).slice(1,-1))?`text must quote the returned asset exactly, not paraphrase a source; received ${JSON.stringify(row.text.slice(0,160))}`:'references must use the supplied fact or source IDs';
+      problems.push(`A claim span or supplied reference is invalid at claimLedger[${index}]: ${detail}.`);continue;
+    }
     const evidence=row.references.map((r:string)=>references.get(r)).join(' ');
     const numbers=row.text.match(/\b\d+(?:[.,]\d+)*(?:%|\b)/g)??[];
     if(numbers.some((n:string)=>!evidence.includes(n)))problems.push('A numerical claim is not present in its referenced evidence.');
@@ -96,7 +99,9 @@ export function validateMethodEvidence(sidecar:Record<string,any>,asset:Record<s
   if(!array(d.ownerDecisionsNeeded)||d.ownerDecisionsNeeded.length)problems.push('Resolve owner decisions before this draft can pass.');
   for(const finding of sidecar.qualityFindings??[]){
     if(finding.status!=='pass'||!text(finding.detail)||!array(finding.evidence)||!finding.evidence.length||!finding.evidence.every((p:unknown)=>{
-      const value=pointer({asset,decisions:d},p);return typeof value==='string'?text(value):Array.isArray(value)?value.length>0:record(value)?Object.keys(value).length>0:false;
+      const value=pointer({asset,decisions:d},p);
+      if(finding.ruleId==='core.check-owner-decision-surfaced'&&p==='/decisions/ownerDecisionsNeeded'&&Array.isArray(value)&&value.length===0)return true;
+      return typeof value==='string'?text(value):Array.isArray(value)?value.length>0:record(value)?Object.keys(value).length>0:false;
     }))problems.push('Every quality check must pass with concrete asset or decision evidence.');
   }
   const formats=catalogue?.formats??[];
