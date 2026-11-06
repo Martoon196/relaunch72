@@ -16,6 +16,52 @@ async function ready() {
   const provider:SearchProvider=h.search;
   return {h,brand,provider,request:()=>h.engine.requestPlan(OWNER,brand.id,{commandId:randomUUID()})};
 }
+
+test('durable Standard tasks survive restarts and lost DB acknowledgement without duplicate POST or paid polling',async()=>{
+  const f=await ready();const search=f.h.search.search.bind(f.h.search);const submitted:string[]=[];let polls=0;
+  const tasks=new Map<string,string>();
+  Object.assign(f.h.search,{
+    submitTask:async(query:string)=>{submitted.push(query);const taskId=`task-${submitted.length}-12345678`;tasks.set(taskId,query);return {taskId,providerReportedCost:0.0006};},
+    readTask:async(id:string)=>{polls++;if(polls===1)return null;return {taskId:id,hits:await search(tasks.get(id)!,{locale:'en-GB',limit:6}),providerReportedCost:0};},
+  });
+  const boundary=f.h.store.programmeBoundary.bind(f.h.store);let lost=false;
+  f.h.store.programmeBoundary=async(input)=>{const value=await boundary(input);if(!lost&&value&&programmeRun(value)?.attempts.some((a)=>a.supplierTask)){lost=true;throw new Error('lost acknowledgement');}return value;};
+  const job=await f.request();await f.h.engine.tick('first');assert.equal(submitted.length,1);assert.ok(lost);
+  f.h.clock.advance(30_000);await f.h.makeEngine().tick('restart');assert.equal(submitted.length,1);assert.equal(polls,1);
+  for(let i=0;i<6;i++){f.h.clock.advance(30_000);await f.h.makeEngine().tick(`worker-${i}`);if((await f.h.store.getJob(f.brand.id,job.id))!.state==='done')break;}
+  const final=(await f.h.store.getJob(f.brand.id,job.id))!;assert.equal(final.state,'done',final.error??'');
+  assert.equal(new Set(submitted).size,submitted.length);assert.equal((await f.h.engine.usage(OWNER,f.brand.id)).search_calls,submitted.length);
+  assert.ok(programmeRun(final)!.attempts.every((a)=>a.receipt?.providerReportedCost===0.0006&&a.supplierTask?.providerReportedCost===0.0006));
+  assert.equal(programmeRun(final)!.retries,0);assert.equal((await f.h.engine.getBrand(OWNER,f.brand.id)).settings.autoPublish,false);
+});
+test('unknown queued submission and poll transport errors hold rather than resubmit',async()=>{
+  for(const failAt of ['submit','read']){
+    const f=await ready();let posts=0;let reads=0;
+    Object.assign(f.h.search,{submitTask:async()=>{posts++;if(failAt==='submit')throw new ResearchProviderError(researchDiagnostic(null));return {taskId:'task-12345678',providerReportedCost:0.0006};},readTask:async()=>{reads++;throw new ResearchProviderError(researchDiagnostic(null));}});
+    const job=await f.request();await f.h.engine.tick('first');f.h.clock.advance(30_000);await f.h.makeEngine().tick('restart');
+    assert.equal((await f.h.store.getJob(f.brand.id,job.id))!.state,'blocked');assert.equal(posts,1);assert.equal(reads,failAt==='submit'?0:1);
+    assert.equal((await f.h.engine.usage(OWNER,f.brand.id)).search_calls,1);assert.equal((await f.h.engine.listPlans(OWNER,f.brand.id)).length,0);
+    if(failAt==='read')assert.equal(programmeRun((await f.h.store.getJob(f.brand.id,job.id))!)!.attempts[0]!.providerReportedCost,0.0006);
+  }
+});
+test('pending Standard task expires safely and changed sources or revoked authority stop free reads too',async()=>{
+  for(const reason of ['timeout','source','authority']){
+    const f=await ready();let posts=0;let reads=0;
+    Object.assign(f.h.search,{submitTask:async()=>{posts++;return {taskId:'task-12345678',providerReportedCost:0.0006};},readTask:async()=>{reads++;return null;}});
+    const job=await f.request();await f.h.engine.tick('first');
+    if(reason==='source')await f.h.engine.uploadKnowledge(OWNER,f.brand.id,{category:'product_facts',title:'Changed facts',pastedText:'Updated factual guidance for source freshness.'});
+    if(reason==='authority')f.h.store.revoke(OWNER.userId,f.brand.id);
+    f.h.clock.advance(reason==='timeout'?3600_001:30_000);await f.h.makeEngine().tick('restart');
+    assert.equal((await f.h.store.getJob(f.brand.id,job.id))!.state,'blocked');assert.equal(posts,1);assert.equal(reads,0);
+  }
+});
+test('terminal Standard40101 retains exactly two delayed paid retries; polls do not consume retries',async()=>{
+  const f=await ready();let posts=0;let reads=0;
+  Object.assign(f.h.search,{submitTask:async()=>{posts++;return {taskId:`task-${posts}-12345678`,providerReportedCost:0.0006};},readTask:async()=>{reads++;throw new ResearchProviderError(researchDiagnostic(40101));}});
+  const job=await f.request();await f.h.engine.tick('first');
+  for(let i=0;i<3;i++){f.h.clock.advance(30_000);await f.h.makeEngine().tick('read');if(i<2){f.h.clock.advance(i===0?60_000:300_000);await f.h.makeEngine().tick('resubmit');}}
+  const final=(await f.h.store.getJob(f.brand.id,job.id))!;assert.equal(final.state,'blocked');assert.equal(posts,3);assert.equal(reads,3);assert.equal(programmeRun(final)!.retries,2);assert.equal((await f.h.engine.usage(OWNER,f.brand.id)).search_calls,3);
+});
 test('live planning searches concise customer subjects, not Scout/Hunter/Apex or truncated positioning prose', async () => {
   const f = await ready();
   const p = (await f.h.engine.getProfile(OWNER, f.brand.id))!;

@@ -27,3 +27,31 @@ test('HTTP and network uncertainty do not become supplier-code retries; success 
   assert.equal(receipt.hits.length,1); assert.equal(receipt.providerReportedCost,0.001);
   assert.equal(researchDiagnostic(null,503,'invalid/task/secret').taskId,null);
 });
+
+test('Standard task POST uses normal priority; free reads preserve task identity and pending states', async () => {
+  const calls: {url:string;method:string;body:unknown}[]=[];
+  const statuses=[20100,40601,40602,20000];
+  const provider=new DataForSeoSerpProvider('l','p',async(url,init)=>{
+    calls.push({url:String(url),method:init!.method!,body:init!.body?JSON.parse(String(init!.body)):null});
+    const status_code=statuses.shift();
+    return new Response(JSON.stringify({status_code:20000,tasks:[{id:'task-12345678',status_code,cost:status_code===20100?0.0006:0,result:status_code===20000?[{items:[{type:'organic',url:'https://example.test/guide',title:'Guide'}]}]:null}]}));
+  });
+  const submitted=await provider.submitTask('refurbishment budget',{locale:'en-GB',limit:6});
+  assert.deepEqual(submitted,{taskId:'task-12345678',providerReportedCost:0.0006});
+  assert.deepEqual(calls[0]!.body,[{keyword:'refurbishment budget',location_code:2826,language_code:'en',depth:6,priority:1}]);
+  assert.equal(await provider.readTask(submitted.taskId,{limit:6}),null);
+  assert.equal(await provider.readTask(submitted.taskId,{limit:6}),null);
+  assert.equal((await provider.readTask(submitted.taskId,{limit:6}))!.hits.length,1);
+  assert.ok(calls.slice(1).every((c)=>c.method==='GET'&&c.body===null&&c.url.endsWith('/task_get/regular/task-12345678')));
+  assert.equal(calls[0]!.url,'https://api.dataforseo.com/v3/serp/google/organic/task_post');
+});
+test('queued task malformed acknowledgements and mismatched reads remain unknown; terminal supplier errors retain safe codes',async()=>{
+  for(const status_code of [40101,40100,40200]) {
+    const provider=new DataForSeoSerpProvider('l','p',async()=>new Response(JSON.stringify({status_code:20000,tasks:[{id:'task-12345678',status_code,cost:0}]})));
+    await assert.rejects(provider.readTask('task-12345678',{limit:4}),(error:unknown)=>{assert.ok(error instanceof ResearchProviderError);assert.equal(error.diagnostic.supplierCode,status_code);return true;});
+  }
+  const malformed=new DataForSeoSerpProvider('l','p',async()=>new Response(JSON.stringify({status_code:20000,tasks:[{status_code:20100,cost:0.0006}]})));
+  await assert.rejects(malformed.submitTask('query',{locale:'en-GB',limit:4}),ResearchProviderError);
+  const mismatch=new DataForSeoSerpProvider('l','p',async()=>new Response(JSON.stringify({status_code:20000,tasks:[{id:'another-12345678',status_code:40602}]})));
+  await assert.rejects(mismatch.readTask('task-12345678',{limit:4}),ResearchProviderError);
+});

@@ -607,6 +607,7 @@ export class SeoBlogEngine {
   }
   private async programmeSearch(claim: Job, authority: ProgrammeAuthority, query: string, options: {locale:string;limit:number}, kind:'serp'|'metrics'='serp', effect?:()=>Promise<ResearchSearchReceipt>): Promise<ResearchSearchReceipt> {
     let cached:ResearchSearchReceipt|null=null; let nonce:string|null=null; let metricsSkipped=false;
+    let supplierTask: {id:string;submittedAt:string;providerReportedCost:number|null}|undefined;
     const reserved=await this.programmeTransaction(claim,authority,(s)=>{
       const current=s.job; const run=current&&programmeRun(current);
       if(!current || !run) throw new SeoBlogError(409,'Planning run was not initialised.');
@@ -619,10 +620,16 @@ export class SeoBlogEngine {
         metricsSkipped=true; const warning=run.metricsWarning??researchDiagnostic(null);
         return {job:{...current,payload:{...current.payload,programme:{...run,metricsWarning:warning,attempts:run.attempts.map((a)=>a===pending?{...a,diagnostic:warning,uncertainAt:this.now()}:a)}}},writeJob:true};
       }
-      if(pending) return this.programmeHeld(s,current,run,'outcome_unknown','A research request started without a durable response. Its outcome and supplier charge may be uncertain. Review and explicitly resume; it will not be repeated automatically.');
       const issue=this.programmeIssue(s,run,authority);
       if(issue) return this.programmeHeld(s,current,run,'inputs_changed',issue);
       if(s.brand.settings.programme?.researchHold) return this.programmeHeld(s,current,run,'research_held','The programme has a research hold. Review it and explicitly resume with a new intent.');
+      if(pending) {
+        if(kind==='serp' && pending.supplierTask && this.deps.search.readTask) {
+          if(Date.parse(this.now())-Date.parse(pending.supplierTask.submittedAt)>3600_000) return this.programmeHeld(s,current,run,'supplier_wait_expired','The saved supplier task has not completed within one hour. Review its task ID; it will not be purchased again automatically.');
+          nonce=pending.nonce;supplierTask=pending.supplierTask;return {job:current,writeJob:false};
+        }
+        return this.programmeHeld(s,current,run,'outcome_unknown','A research request started without a durable response. Its outcome and supplier charge may be uncertain. Review and explicitly resume; it will not be repeated automatically.');
+      }
       const ceiling=s.brand.settings.budgets.searchCallsPerMonth;
       if(kind==='metrics' && (ceiling<=0||s.usage.search_calls+1>ceiling)) {
         metricsSkipped=true;return {job:{...current,payload:{...current.payload,programme:{...run,metricsWarning:{...researchDiagnostic(null),summary:'Optional keyword metrics were not requested because the remaining search-attempt allowance is insufficient.',remedy:'Source research remains valid; demand is labelled qualitative.'}}}},writeJob:true};
@@ -635,12 +642,20 @@ export class SeoBlogEngine {
     if(cached) return cached;
     if(metricsSkipped) return {hits:[],keywordMetrics:[],taskId:null,providerReportedCost:null};
     if(!nonce || reserved.state!=='running') throw new ResearchUnavailableError('Research is held. See the programme status for the next action.');
-    let receipt:ResearchSearchReceipt|null=null; let diagnostic:ResearchDiagnostic|null=null; let cost:number|null=null;
+    let receipt:ResearchSearchReceipt|null=null; let diagnostic:ResearchDiagnostic|null=null; let cost:number|null=supplierTask?.providerReportedCost??null; let waiting=false;
     try {
-      receipt=effect ? await effect() : this.deps.search.searchReceipt ? await this.deps.search.searchReceipt(query,options) : {hits:await this.deps.search.search(query,options),taskId:null,providerReportedCost:null};
+      if(kind==='serp' && !effect && this.deps.search.submitTask && this.deps.search.readTask) {
+        if(supplierTask) {
+          receipt=await this.deps.search.readTask(supplierTask.id,options);waiting=!receipt;
+          if(receipt) receipt={...receipt,providerReportedCost:supplierTask.providerReportedCost};
+        } else {
+          const submitted=await this.deps.search.submitTask(query,options);
+          supplierTask={id:submitted.taskId,submittedAt:this.now(),providerReportedCost:submitted.providerReportedCost};cost=submitted.providerReportedCost;waiting=true;
+        }
+      } else receipt=effect ? await effect() : this.deps.search.searchReceipt ? await this.deps.search.searchReceipt(query,options) : {hits:await this.deps.search.search(query,options),taskId:null,providerReportedCost:null};
     } catch(error) {
       diagnostic=error instanceof ResearchProviderError?error.diagnostic:researchDiagnostic(null);
-      cost=error instanceof ResearchProviderError?error.providerReportedCost:null;
+      cost=supplierTask?supplierTask.providerReportedCost:error instanceof ResearchProviderError?error.providerReportedCost:null;
     }
     const save=()=>this.programmeTransaction(claim,authority,(s)=>{
       const current=s.job; const run=current&&programmeRun(current);
@@ -648,11 +663,12 @@ export class SeoBlogEngine {
       const index=run.attempts.findIndex((a)=>a.nonce===nonce);
       if(index<0) throw new SeoBlogError(409,'Research receipt does not match its reserved attempt.');
       if(run.attempts[index]!.receivedAt) return {job:current,writeJob:false};
-      const now=this.now(); const attempts=run.attempts.map((a,i)=>i===index?{...a,...(receipt?{receipt}:{diagnostic:diagnostic!,providerReportedCost:cost}),receivedAt:now}:a);
+      const now=this.now(); const attempts=run.attempts.map((a,i)=>i===index?{...a,...(supplierTask?{supplierTask}:{}),...(waiting?{providerReportedCost:cost}:receipt?{receipt,receivedAt:now}:{diagnostic:diagnostic!,providerReportedCost:cost,receivedAt:now})}:a);
       const nextRun={...run,attempts,...(kind==='metrics'&&receipt?{metricsWarning:undefined}:{})}; const next={...current,payload:{...current.payload,programme:nextRun},updatedAt:now};
       if(!this.programmeOwns(current,claim)) return current.state==='running' ? this.programmeHeld(s,next,nextRun,'lease_lost','A late research receipt was retained, but its lease ended. No plan was applied. Review before resuming.') : {job:next,writeJob:true};
       const issue=this.programmeIssue(s,nextRun,authority);
       if(issue) return this.programmeHeld(s,next,nextRun,'inputs_changed',issue);
+      if(waiting) return {job:{...next,state:'queued',leaseOwner:null,leaseExpiresAt:null,runAfter:new Date(Date.parse(now)+30_000).toISOString(),progress:'Waiting for the saved research task. Checking its result does not buy another search.',error:null},writeJob:true};
       if(receipt) return {job:next,writeJob:true};
       if(kind==='metrics') return {job:{...next,payload:{...next.payload,programme:{...nextRun,metricsWarning:diagnostic!}},progress:'Source research is available. Optional demand metrics are unavailable; demand remains qualitative.'},writeJob:true};
       if(diagnostic?.retryable && run.retries<2 && s.usage.search_calls<s.brand.settings.budgets.searchCallsPerMonth) {
@@ -690,7 +706,7 @@ export class SeoBlogEngine {
         const held=this.programmeHeld(s,withRun,run,'research_held',legacy?'An older planning task needs review. No historical supplier code or charge was inferred. A managing owner can explicitly resume with a new intent.':'Research is held. A managing owner can review and explicitly resume with a new intent.');
         return {...held,settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:hold}}};
       }
-      if(run.attempts.some((a)=>a.kind!=='metrics'&&!a.receivedAt) || (run.modelStart&&!run.modelReceipt)) return this.programmeHeld(s,withRun,run,'outcome_unknown','An interrupted paid research or model call has no durable result. Review its outcome before explicitly resuming; it will not be repeated automatically.');
+      if(run.attempts.some((a)=>a.kind!=='metrics'&&!a.receivedAt&&!(a.supplierTask&&this.deps.search.readTask)) || (run.modelStart&&!run.modelReceipt)) return this.programmeHeld(s,withRun,run,'outcome_unknown','An interrupted paid research or model call has no durable result. Review its outcome before explicitly resuming; it will not be repeated automatically.');
       return {job:{...withRun,error:null,progress:run.modelReceipt?'Applying the saved planning result; no new model call.':'Researching and planning the next draft campaign.'},writeJob:true,
         ...(explicit?{settings:{...s.brand.settings,programme:{...s.brand.settings.programme,researchHold:null,researchAcknowledgements:[...(s.brand.settings.programme?.researchAcknowledgements??[]),{jobId:hold!.jobId,intentId:current.id,actorId:authority.sponsorUserId,at:this.now()}]}}}:{})};
     });
