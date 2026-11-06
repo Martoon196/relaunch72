@@ -109,6 +109,24 @@ test('one-use local setup rejects cross-site POST and downloads only the encrypt
 });
 
 
+test('local save handoff persists ciphertext once and shows success without relying on a browser download', async () => {
+  const saved: unknown[] = [];
+  const tool = await startMhpWhatsAppSealTool({ encryptionKey: key, keyVersion: 'mhp-worker-v1', bindingId, connectionId,
+    fetch: provider, now: () => clock, savePacket: async packet => { saved.push(packet); } });
+  try {
+    const page = await fetch(tool.url), html = await page.text();
+    assert.match(html, /Check and save connection file/u);
+    const csrf = /name="csrf" value="([^"]+)"/u.exec(html)![1]!;
+    const response = await fetch(tool.url, { method: 'POST', body: new URLSearchParams({ csrf, token }),
+      headers: { origin: new URL(tool.url).origin, 'sec-fetch-site': 'same-origin' } });
+    assert.equal(response.status, 200); assert.equal(response.headers.get('content-disposition'), null);
+    const success = await response.text();
+    assert.match(success, /MHP connection file ready/u); assert.doesNotMatch(success, new RegExp(token, 'u'));
+    assert.equal(saved.length, 1); assert.doesNotMatch(JSON.stringify(saved), /synthetic-MHP-token|accessToken|encryptionKey/u);
+    assert.equal(parseMhpWhatsAppConnectionPacket(JSON.stringify(saved[0]), bindingId, clock).bindingId, bindingId);
+  } finally { tool.server.closeAllConnections(); await new Promise<void>(resolve => tool.server.close(() => resolve())); }
+});
+
 test('MHP WhatsApp control is visible only in the selected brand workspace when the real service is mounted', () => {
   const selected = { marketingSelected: true };
   assert.match(marketingWorkspacePage(selected as never, 'c', 'id', { enabled: false, whatsappEnabled: true }), /href="\/hq\/marketing\/webinar-whatsapp"/u);
