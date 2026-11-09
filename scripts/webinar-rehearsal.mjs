@@ -6,6 +6,8 @@ import pg from 'pg';
 import { runMigrations, discoverMigrations } from '../orchestrator/src/db/migrate.ts';
 import { hashPassword } from '../orchestrator/src/portal/accounts.ts';
 import { WEBINARS_MIGRATION, WEBINARS_CHECKSUM } from '../orchestrator/src/db/webinar-schema.ts';
+import { spawn } from 'node:child_process';
+import { redactIngest } from '../orchestrator/src/webinars/studio.ts';
 
 const DB_NAME = 'rl72_webinar_rehearsal_db_20261109';
 const DB_HOST = 'dpg-dbp2tpon74is73eqn260-a';
@@ -52,6 +54,55 @@ export function unseal(value, secret) {
 }
 
 let stage = 'target guard';
+// One bounded synthetic provider probe, only on this guarded disposable DB.
+// Reuses an existing test input; never exposes its credentials or starts a webinar.
+async function probeExistingTestInput(client, env) {
+  const marker = 'synthetic-ingest-probe-20261109-v1';
+  if ((await client.query('SELECT 1 FROM rehearsal_private.state WHERE key=$1', [marker])).rowCount) return;
+  await client.query('BEGIN');
+  await client.query('SET LOCAL ROLE r72_owner');
+  const row = (await client.query('SELECT live_input_uid FROM app.webinar_events WHERE id=$1 AND workspace_id=$2', ['9ba971ab-25a6-4375-b866-9bdda6b23845', BRANDS[0].ws])).rows[0];
+  await client.query('COMMIT');
+  if (!/^[0-9a-f]{32}$/.test(row?.live_input_uid ?? '')) return;
+  await client.query('INSERT INTO rehearsal_private.state(key,value) VALUES($1,$2)', [marker, 'started']);
+  const report = { rehearsalSyntheticIngest: true, seconds: 18, observations: [] };
+  const api = async (suffix='') => {
+    const r = await fetch('https://api.cloudflare.com/client/v4/accounts/' + env.CLOUDFLARE_ACCOUNT_ID + '/stream/live_inputs/' + row.live_input_uid + suffix,
+      { headers: { authorization: 'Bearer ' + env.CLOUDFLARE_STREAM_API_TOKEN }, signal: AbortSignal.timeout(8000) });
+    assert(r.ok, 'Stream read status ' + r.status); return (await r.json()).result;
+  };
+  let child, timer, stderr='', target='', key='';
+  try {
+    const input = await api();
+    assert.equal(input.rtmps?.url, 'rtmps://live.cloudflare.com:443/live/');
+    key = input.rtmps.streamKey; assert(typeof key === 'string' && key.length > 10);
+    target = input.rtmps.url + key;
+    child = spawn('ffmpeg', ['-hide_banner','-loglevel','error','-re','-f','lavfi','-i','color=c=0x336699:size=320x240:rate=15',
+      '-f','lavfi','-i','sine=frequency=440:sample_rate=48000','-t','18','-c:v','libx264','-preset','ultrafast','-tune','zerolatency',
+      '-g','30','-pix_fmt','yuv420p','-c:a','aac','-b:a','32k','-ar','48000','-f','flv',target]);
+    child.stdin.end(); child.stderr.on('data', d=>{stderr=(stderr+d.toString()).slice(-1800);});
+    let ended=false;
+    const done=new Promise(resolve=>{child.once('close',code=>{ended=true;report.exitCode=code;resolve();});child.once('error',()=>{ended=true;report.spawnFailed=true;resolve();});});
+    timer=setTimeout(()=>child.kill('SIGKILL'),30000);
+    for(let i=0;i<4;i++) {
+      await new Promise(resolve=>setTimeout(resolve,4000));
+      const state=await api(); const raw=state.status;
+      const text=v=>typeof v==='string'?v.slice(0,64):null;
+      report.observations.push({atSeconds:(i+1)*4,statusType:typeof raw,status:text(raw),state:text(raw?.state),currentState:text(raw?.current?.state)});
+      if(ended)break;
+    }
+    await done;
+    const videos=await api('/videos');
+    report.videoCount=Array.isArray(videos)?videos.length:null;
+    report.videoStates=Array.isArray(videos)?videos.map(v=>String(v.status?.state??'unknown').slice(0,40)):[];
+  } catch(error) { report.failure=redactIngest(String(error?.message??'probe failed'),[key,target,env.CLOUDFLARE_STREAM_API_TOKEN]).slice(0,200); }
+  finally {
+    if(timer)clearTimeout(timer); if(child && child.exitCode===null)child.kill('SIGKILL');
+    report.stderr=redactIngest(stderr,[key,target,env.CLOUDFLARE_STREAM_API_TOKEN]).slice(-600);
+    await client.query('UPDATE rehearsal_private.state SET value=$2 WHERE key=$1',[marker,JSON.stringify(report)]);
+    console.log(JSON.stringify(report));
+  }
+}
 export async function bootstrap(env = process.env) {
   const url = guardedTarget(env);
   stage = 'isolated database connection';
@@ -123,6 +174,8 @@ export async function bootstrap(env = process.env) {
       env.CLOUDFLARE_STREAM_SIGNING_KEY_ID = key.id;
       env.CLOUDFLARE_STREAM_SIGNING_JWK = key.jwk;
     }
+    stage = 'one-time synthetic ingest probe';
+    await probeExistingTestInput(client, env);
     console.log('Private rehearsal bootstrap completed; provider credentials are not log fields.');
   } finally { client.release(); await pool.end(); }
   delete env.REHEARSAL_DATABASE_URL;
