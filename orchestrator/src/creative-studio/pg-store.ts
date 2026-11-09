@@ -10,15 +10,23 @@ import type { DistributionReadPort } from './service.js';
 import type { LearningStore, PatternDecision, PatternRow, RecordedFinding } from './learning.js';
 import type { BrandKit, ContextInputs, CreativeApproval, CreativeHandoff, CreativeSet, CreativeVersion } from './types.js';
 
+/** The claim of one durable render job; SQL lets a worker act only for that job's sponsor and command while it holds the lease. */
+export interface RenderJobClaim { readonly id: string; readonly leaseOwner: string; readonly attempt: number }
+
 export class PgCreativeLibraryStore implements CreativeLibraryStore {
   private readonly sessionHash: Buffer | null;
-  constructor(private readonly pool: Pick<Pool, 'connect'>, private readonly principal: PgSeoBlogPrincipal) {
+  constructor(private readonly pool: Pick<Pool, 'connect'>, private readonly principal: PgSeoBlogPrincipal, private readonly renderJob?: RenderJobClaim) {
     this.sessionHash = principal.kind === 'user' ? createHash('sha256').update(principal.sessionToken).digest() : null;
   }
   private async call<T>(brandId: string, action: string, input: Record<string, unknown> = {}): Promise<T> {
     const p = this.principal;
-    if (p.kind !== 'user') throw new SeoBlogError(403, 'Creative work requires a signed-in owner.');
+    if (p.kind !== 'user' && !this.renderJob) throw new SeoBlogError(403, 'Creative work requires a signed-in owner.');
     try {
+      if (p.kind !== 'user') {
+        const bound = { ...input, job: { id: this.renderJob!.id, leaseOwner: this.renderJob!.leaseOwner, attempt: String(this.renderJob!.attempt) } };
+        return await withTransaction(this.pool, { actorKind: 'worker', workspaceId: brandId, requestId: p.requestId }, async (t) =>
+          (await t.query<{ value: T }>('SELECT app_private.creative_studio_command($1,NULL,$2,$3) AS value', [brandId, action, JSON.stringify(bound)])).rows[0]!.value);
+      }
       return await withTransaction(this.pool, { actorKind: 'user', workspaceId: brandId, userId: p.userId, requestId: p.requestId }, async (t) => {
         const guard = await t.query<{ ok: boolean }>('SELECT app_private.lock_active_portal_session($1,$2,$3) AS ok', [this.sessionHash, p.userId, p.selectedWorkspaceId]);
         if (guard.rows[0]?.ok !== true) throw new SeoBlogError(401, 'Sign in again to continue.');
@@ -33,6 +41,8 @@ export class PgCreativeLibraryStore implements CreativeLibraryStore {
       throw e;
     }
   }
+  /** Worker only: the sponsor this render job may act for, confirmed by SQL against the live claim and membership. */
+  renderActor(brandId: string): Promise<string> { return this.call(brandId, 'render_actor'); }
   latestKit(brandId: string): Promise<BrandKit | null> { return this.call(brandId, 'kit_latest'); }
   saveKit(brandId: string, commandId: string, inputSha: string, kit: BrandKit): Promise<CommandReceipt> { return this.call(brandId, 'kit_save', { commandId, inputSha, kit }); }
   commandResult(brandId: string, commandId: string, inputSha: string): Promise<CommandReceipt | null> { return this.call(brandId, 'command_get', { commandId, inputSha }); }

@@ -106,6 +106,10 @@ CREATE POLICY seo_blog_media_assets_creative_read ON app.seo_blog_media_assets F
 CREATE POLICY seo_blog_blobs_creative_read ON app.seo_blog_blobs FOR SELECT TO r72_creative_studio_definer USING(workspace_id=app_private.current_workspace_id());
 CREATE POLICY seo_blog_articles_creative_read ON app.seo_blog_articles FOR SELECT TO r72_creative_studio_definer USING(workspace_id=app_private.current_workspace_id());
 CREATE POLICY seo_blog_creator_campaigns_creative_read ON app.seo_blog_creator_campaigns FOR SELECT TO r72_creative_studio_definer USING(workspace_id=app_private.current_workspace_id());
+-- Durable render jobs: the definer reads the claimed job row (never writes it) to bind a worker to one sponsor and command.
+GRANT SELECT ON app.seo_blog_jobs TO r72_creative_studio_definer;
+CREATE POLICY seo_blog_jobs_creative_read ON app.seo_blog_jobs FOR SELECT TO r72_creative_studio_definer USING(workspace_id=app_private.current_workspace_id());
+GRANT EXECUTE ON FUNCTION app_private.can_manage_workspace(uuid,uuid) TO r72_creative_studio_definer;
 GRANT CREATE ON SCHEMA app_private TO r72_creative_studio_definer;
 SET LOCAL ROLE r72_creative_studio_definer;
 
@@ -154,13 +158,34 @@ BEGIN
       EXISTS(SELECT 1 FROM jsonb_array_elements(p_v->'issues') i WHERE i->>'code'='unsupported_figure'),p_v,p_actor);
 END $f$;
 
--- The one owner command boundary. Reads and writes require a genuine current managing owner session.
+-- The one owner command boundary. Reads and writes require a genuine current managing owner session, with one narrow
+-- exception: a worker holding the current lease of a durable creative_render job acts for that job's sponsor (who must
+-- still manage the brand), may only read and append rendered versions, and may write only under the job's own command.
+-- Approval, hand-off and kit changes always need the owner's session.
 CREATE FUNCTION app_private.creative_studio_command(p_workspace uuid,p_session bytea,p_action text,p_input jsonb)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE actor uuid; prof jsonb; kit_v integer; cmd app.creative_studio_commands; rid text; v jsonb; keys text[]:='{}'; k text;
-  ver app.creative_studio_versions; appr app.creative_studio_approvals; v_set uuid; a jsonb;
+  ver app.creative_studio_versions; appr app.creative_studio_approvals; v_set uuid; a jsonb; job app.seo_blog_jobs;
 BEGIN
-  actor:=app_private.seo_media_owner(p_workspace,p_session);
+  IF p_session IS NULL AND app_private.current_actor_kind()='worker' AND app_private.current_user_id() IS NULL THEN
+    IF p_action NOT IN ('render_actor','kit_latest','set_get','version_get','command_get','set_create','versions_append')
+      OR coalesce(p_input#>>'{job,id}','') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' THEN
+      RAISE EXCEPTION 'Not allowed for a render task' USING ERRCODE='42501'; END IF;
+    SELECT * INTO job FROM app.seo_blog_jobs WHERE workspace_id=p_workspace AND id=(p_input#>>'{job,id}')::uuid;
+    IF job.id IS NULL OR job.state<>'running' OR job.lease_expires_at IS NULL OR job.lease_expires_at<=clock_timestamp()
+      OR job.kind<>'write' OR job.data#>>'{payload,stage}' IS DISTINCT FROM 'creative_render'
+      OR job.data#>>'{payload,render,schema}' IS DISTINCT FROM 'relaunch72.creative-render/v1'
+      OR job.data->>'leaseOwner' IS DISTINCT FROM p_input#>>'{job,leaseOwner}' OR job.data->>'attempts' IS DISTINCT FROM p_input#>>'{job,attempt}'
+      OR coalesce(job.data#>>'{payload,render,sponsorUserId}','') !~ '^[0-9a-f-]{36}$' THEN
+      RAISE EXCEPTION 'This render task is not running under this claim' USING ERRCODE='42501'; END IF;
+    actor:=(job.data#>>'{payload,render,sponsorUserId}')::uuid;
+    IF NOT app_private.can_manage_workspace(actor,p_workspace) THEN RAISE EXCEPTION 'The requesting owner no longer manages this brand' USING ERRCODE='42501'; END IF;
+    IF p_action IN ('command_get','set_create','versions_append') AND p_input->>'commandId' IS DISTINCT FROM job.data#>>'{payload,render,commandId}' THEN
+      RAISE EXCEPTION 'A render task may only write its own command' USING ERRCODE='42501'; END IF;
+    IF p_action='render_actor' THEN RETURN to_jsonb(actor::text); END IF;
+  ELSE
+    actor:=app_private.seo_media_owner(p_workspace,p_session);
+  END IF;
   IF app_private.seo_blog_brand(p_workspace) IS NULL THEN RAISE EXCEPTION 'Brand unavailable' USING ERRCODE='42501'; END IF;
   IF p_input IS NULL OR jsonb_typeof(p_input)<>'object' OR octet_length(p_input::text)>4194304 THEN RAISE EXCEPTION 'Invalid creative command' USING ERRCODE='22023'; END IF;
   IF p_action='kit_latest' THEN RETURN (SELECT data FROM app.creative_studio_kits WHERE workspace_id=p_workspace ORDER BY version DESC LIMIT 1); END IF;

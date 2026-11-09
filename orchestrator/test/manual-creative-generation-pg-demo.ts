@@ -116,12 +116,33 @@ try {
   await page.selectOption('#cs-dest', f.profile.conversionPages[0]!.url);
   summary.generatedBackgroundChecked = await page.isChecked('input[name=background][value=generated]').catch(() => null);
   await shot('05-artwork-form-with-generated-background');
-  await Promise.all([page.waitForURL(/\/creative\/s\//u, { timeout: 120_000 }), page.click('form.cs-form button[type=submit]')]);
+  // Durable render: the request returns at once with a task page; the worker renders; the page opens the result.
+  const t0 = Date.now();
+  await Promise.all([page.waitForURL(/\/creative\/task\//u), page.click('form.cs-form button[type=submit]')]);
+  summary.renderRequestMs = Date.now() - t0;
+  await shot('05b-render-task-waiting');
+  const settle = async () => { const r = await worker.tick('demo-worker'); await page.waitForURL(/\/creative\/s\//u, { timeout: 60_000 }); return r; };
+  summary.renderTick = await settle();
   await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>('img')].every((i) => i.complete));
   await shot('06-artwork-variants-from-generated-image');
+  // Storyboard and a recorded, playback-checked video, both as worker jobs.
+  await Promise.all([page.waitForURL(/\/creative\/task\//u), page.locator('button:text("Draft a storyboard")').first().click()]);
+  await settle();
+  await Promise.all([page.waitForURL(/\/creative\/task\//u), page.locator('button:text("Render video")').first().click()]);
+  await shot('07a-video-task-waiting');
+  const v0 = Date.now(); summary.videoTick = await settle(); summary.videoWorkerMs = Date.now() - v0;
+  const video = page.locator('video').first();
+  await video.scrollIntoViewIfNeeded();
+  summary.video = await video.evaluate(async (el: HTMLVideoElement) => {
+    if (el.readyState < 1) await new Promise((r) => el.addEventListener('loadedmetadata', r, { once: true }));
+    el.muted = true; await el.play().catch(() => undefined); await new Promise((r) => setTimeout(r, 1200));
+    return { duration: el.duration, width: el.videoWidth, height: el.videoHeight, played: el.currentTime > 0, src: el.currentSrc.split('/').slice(-1)[0] };
+  });
+  summary.notice = await page.locator('[role=status], .notice, .flash').first().textContent().catch(() => null);
+  await shot('07b-video-rendered-and-checked');
   await page.setViewportSize({ width: 390, height: 844 }); await page.goto(`${base}/generate`); await page.click('table a');
   for (const img of await page.locator('img').all()) await img.scrollIntoViewIfNeeded();
-  await page.waitForFunction(() => [...document.images].every((i) => i.complete)); await page.evaluate(() => window.scrollTo(0, 0)); await shot('07-brief-mobile');
+  await page.waitForFunction(() => [...document.images].every((i) => i.complete)); await page.evaluate(() => window.scrollTo(0, 0)); await shot('08-brief-mobile');
   summary.providerCalls = providerCalls; summary.consoleErrors = consoleErrors;
   summary.usage = (await admin.query("SELECT coalesce(sum(amount),0)::int n FROM app.seo_blog_usage WHERE workspace_id=$1 AND kind='images'", [f.brand.id])).rows[0].n;
   summary.generations = (await admin.query('SELECT width,height,candidate_sha256 FROM app.creative_studio_generations WHERE workspace_id=$1', [f.brand.id])).rows;

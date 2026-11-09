@@ -12,6 +12,7 @@ import { PLACEMENTS } from '../src/creative-studio/placements.js';
 import { artworkHtml, ChromiumArtworkRenderer, contrastRatio, findCreativeChromium, luminance, parseHex, type ArtworkInput, type ArtworkRenderer, type RenderedArtwork } from '../src/creative-studio/renderer.js';
 import { CreativeStudioService, setView, type SavedImagePort } from '../src/creative-studio/service.js';
 import { MemoryCreativeLibraryStore } from '../src/creative-studio/store.js';
+import { runCreativeRenderJob } from '../src/creative-studio/render-jobs.js';
 import type { CreativeRequest } from '../src/creative-studio/types.js';
 import { handleSeoBlog } from '../src/portal/seo-blog-router.js';
 import type { PortalSeoBlogService } from '../src/portal/seo-blog-service.js';
@@ -47,7 +48,7 @@ async function twoBrands() {
   const library = new MemoryCreativeLibraryStore();
   const renderer = new StubRenderer();
   const saved: SavedImagePort = { list: async () => [], load: async () => { throw new Error('unused'); } };
-  const studio = new CreativeStudioService({ library, brands: h.store, renderer, savedImages: saved });
+  const studio = new CreativeStudioService({ library, brands: h.store, renderer, savedImages: saved, renderJobs: h.store });
   return { h, hearth, queue, library, renderer, studio };
 }
 const offerForm = (offer: string, destination: string, extra: Record<string, string | string[]> = {}) => ({ purpose: 'advert', source_kind: 'offer', offer, audience: '', destination, placements: ['square', 'portrait', 'vertical'], concepts: '3', ...extra });
@@ -306,10 +307,33 @@ test('routes: the Creative tab is off unless enabled; owner journey works; CSRF,
     assert.ok(new URL(refused.headers.location!, 'https://x').searchParams.has('e'));
   }
   assert.equal(renderer.calls, 0);
+  // The request records one durable render job and renders nothing itself; the worker renders it.
   const created = await call(service, owner, 'POST', `${base}/draft`, { ...form, _csrf: csrf });
   assert.equal(created.status, 303);
-  const location = new URL(created.headers.location!, 'https://portal.example');
+  const taskPath = new URL(created.headers.location!, 'https://portal.example').pathname;
+  assert.match(taskPath, new RegExp(`${base}/task/${form.commandId}$`));
+  assert.equal(renderer.calls, 0, 'nothing renders inside the HTTP request');
+  assert.equal(new URL((await call(service, owner, 'POST', `${base}/draft`, { ...form, _csrf: csrf })).headers.location!, 'https://x').pathname, taskPath, 'a double submit returns the same job');
+  const waiting = await call(service, owner, 'GET', taskPath);
+  assert.equal(waiting.status, 200); assert.match(waiting.body, /Creating artwork/u); assert.match(waiting.body, /data-creative-job=/u);
+  assert.equal(JSON.parse((await call(service, owner, 'GET', `${base}/jobs/${form.commandId}`)).body).state, 'queued');
+  assert.notEqual((await call(service, identity(STRANGER.userId), 'GET', taskPath)).status, 200, 'another owner cannot follow this task');
+  const worker = async () => {
+    const claimed = await h.store.claimJobs({ brandId: hearth.brand.id, now: new Date().toISOString(), owner: 'test-worker', leaseMs: 60_000, limit: 5 });
+    return Promise.all(claimed.map((j) => runCreativeRenderJob(j, { store: h.store, service: () => studio, now: () => new Date().toISOString() })));
+  };
+  const [ran] = await worker();
+  assert.equal(ran!.state, 'done', ran!.error ?? ''); assert.ok(renderer.calls > 0);
+  const opened = await call(service, owner, 'GET', taskPath);
+  assert.equal(opened.status, 303, 'a finished task opens its result');
+  const location = new URL(opened.headers.location!, 'https://portal.example');
   assert.match(location.pathname, new RegExp(`${base}/s/[0-9a-f-]{36}$`));
+  // An owner-correctable problem stops the task with the service's own message (no silent retry).
+  const bad = await call(service, owner, 'POST', `${base}/draft`, { ...offerForm('Not an approved offer', HEARTH.pages[0]!.url), commandId: randomUUID(), background: 'neutral', _csrf: csrf });
+  const [stopped] = await worker();
+  assert.equal(stopped!.state, 'blocked');
+  const stoppedPage = await call(service, owner, 'GET', new URL(bad.headers.location!, 'https://x').pathname);
+  assert.equal(stoppedPage.status, 200); assert.match(stoppedPage.body, /Nothing was published or approved/u);
   const compare = await call(service, owner, 'GET', location.pathname);
   assert.equal(compare.status, 200);
   for (const text of ['Compare artwork', 'Approve this image', 'Download', 'does not approve a caption, campaign, schedule or paid advert', 'Vertical story']) assert.ok(compare.body.includes(text), text);

@@ -1,7 +1,7 @@
 /** Typed-brief image generation pages: briefs, honest cost review, explicit request, progress and results. */
 import { randomUUID } from 'node:crypto';
 import { SEO_IMAGE_SIZES } from '../seo-blog/image-generation.js';
-import type { Brand } from '../seo-blog/types.js';
+import type { Brand, Job } from '../seo-blog/types.js';
 import type { SeoImageOperatorPolicy } from '../seo-blog/media-types.js';
 import { SIZE_LABEL, type CreativeBrief } from '../creative-studio/generation.js';
 import type { GenerationEstimate } from '../creative-studio/generation-service.js';
@@ -87,6 +87,17 @@ ${lastIntent ? `<input type="hidden" name="replacesIntentId" value="${e(lastInte
 <section class="card"><h2>Generated images</h2>${results}</section>
 <section class="card"><h2>Edit the brief</h2><p class="small muted">Saving creates a new version. Earlier versions and their images are kept.</p>${briefForm(shell, data.briefId, data.references, brief)}</section>
 <script src="${SEO_BLOG_BASE}/creative-job-status.js" defer></script>`);
+}
+
+/** One durable render task: follows the job, explains a stop, and is replaced by the result page once it is done. */
+export function renderTaskPage(shell: Shell, data: { job: Job; label: string }): string {
+  const { job } = data, live = job.state === 'queued' || job.state === 'running';
+  const status = live
+    ? `<p role="status" data-creative-job="${e(job.id)}" data-endpoint="${base(shell)}/jobs/${e(job.id)}">${pill(job.state)} <span data-job-detail>${e(job.progress)}</span></p>
+<p class="small muted">The work runs on the server and survives restarts. You can leave this page and come back from the Creative studio or Tasks. Rendering is local: no provider is called and nothing is charged.</p><noscript><p><a href="">Refresh to check progress</a></p></noscript>`
+    : `<p>${pill(job.state)} ${e(job.error ?? job.progress)}</p><p class="small muted">Nothing was published or approved.</p>`;
+  return layout(shell, data.label, `${STYLE}${GEN_STYLE}<p><a href="${base(shell)}">← Creative studio</a></p><h1>${e(data.label)}</h1>
+<section class="card">${status}</section>${live ? `<script src="${SEO_BLOG_BASE}/creative-job-status.js" defer></script>` : ''}`);
 }
 
 /** Polls a creative job status endpoint and reloads once the job stops running. Endpoint shape is checked before use. */

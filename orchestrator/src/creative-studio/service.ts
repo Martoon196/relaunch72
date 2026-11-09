@@ -8,7 +8,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import type { SeoBlogStore } from '../seo-blog/store.js';
-import { SeoBlogError, type Article, type ArticleVersion } from '../seo-blog/types.js';
+import { SeoBlogError, type Article, type ArticleVersion, type Job } from '../seo-blog/types.js';
 import { essentialGaps, resolveCreativeContext, type ContextGap, type CreativeBrandContext } from './brand-context.js';
 import { clip, copyIssues, COPY_LIMITS, draftConcepts, factsCorpus, type ArticleSourceText } from './concepts.js';
 import { verifyCreativeImage, CreativeImageError, type VerifiedImage } from './image-input.js';
@@ -21,6 +21,7 @@ import type { ArticleCampaign } from '../seo-blog/campaign.js';
 import { ARTICLE_MEDIA_PROFILE, ATTRIBUTION_LIMITS, creativeTrackedLink, exportLadder, handoffRoute, postLadder, trackedLinkLadder,
   type DeliveryRecord, type OutcomeRead, type StageEvidence } from './distribution.js';
 import { isCreativeStudioJob } from './generation.js';
+import { isCreativeRenderJob, newRenderJob, RENDER_LABEL, type PreparedBackground, type RenderOperation, type RenderPayload, type RenderResult } from './render-jobs.js';
 import { generationJobStatus } from './generation-service.js';
 import { buildLearning, findingsText, generalPatternIssues, type LearningSnapshot, type LearningStore, type PatternRow, type RecordedFinding } from './learning.js';
 import { mediaOf, variantKey, approvalProblem, type CreativeLibraryStore, type CreativeSetRecord } from './store.js';
@@ -114,6 +115,8 @@ export type BackgroundChoice =
   | { readonly kind: 'saved'; readonly assetId: string; readonly sha256: string }
   /** A private image generated from one of this brand's typed briefs. */
   | { readonly kind: 'generated'; readonly generationId: string }
+  /** A background already resolved and stored by the owner's request (durable render jobs); its bytes are re-verified. */
+  | { readonly kind: 'prepared'; readonly component: BackgroundComponent }
   | { readonly kind: 'keep' };
 
 /** Images generated from typed briefs: located through the generation record, loaded as the exact stored pixels. */
@@ -159,6 +162,8 @@ export class CreativeStudioService {
     /** Typed-brief image generation (0144 section 5) and the generated images it produced. */
     readonly generation?: import('./generation-service.js').CreativeGeneration;
     readonly generatedImages?: GeneratedImagePort;
+    /** Durable render jobs (the existing SEO job table); absent means renders cannot be requested here. */
+    readonly renderJobs?: { enqueueJob(job: Job): Promise<{ job: Job; created: boolean }> };
     readonly now?: () => string;
     readonly newId?: () => string;
   }) {
@@ -300,6 +305,15 @@ export class CreativeStudioService {
   private async background(actorId: string, brandId: string, choice: BackgroundChoice, keep: BackgroundComponent | null): Promise<BackgroundComponent> {
     if (choice.kind === 'neutral') return { kind: 'neutral' };
     if (choice.kind === 'keep') { if (!keep) throw new SeoBlogError(400, 'Choose a background.'); return keep; }
+    if (choice.kind === 'prepared') {
+      const c = choice.component;
+      if (c?.kind === 'neutral') return { kind: 'neutral' };
+      if (c?.kind !== 'image' || !['owner_upload', 'generated_article_image', 'generated_studio_image'].includes(c.origin) || typeof c.label !== 'string'
+        || !c.image || typeof c.image.blobId !== 'string' || !UUID.test(c.image.blobId)) throw new SeoBlogError(409, 'The chosen background is not recognised. Nothing was rendered.');
+      const verified = await this.loadImage(brandId, c.image);
+      return { kind: 'image', origin: c.origin, label: clip(c.label, 120), provenance: Object.fromEntries(Object.entries(c.provenance ?? {}).map(([k, v]) => [k, String(v)])),
+        image: Object.freeze({ blobId: c.image.blobId, sha256: verified.sha256, mime: verified.mime, width: verified.width, height: verified.height }) };
+    }
     if (choice.kind === 'upload') return { kind: 'image', image: await this.storeImage(brandId, choice.bytes), origin: 'owner_upload', label: 'Owner-uploaded image', provenance: { source: 'owner_upload' } };
     if (choice.kind === 'generated') {
       const port = this.deps.generatedImages;
@@ -725,6 +739,39 @@ export class CreativeStudioService {
   get generationAvailable(): boolean { return Boolean(this.deps.generation); }
 
   /** Polling status for one of this brand's studio jobs only (generation or render); never another task's details. */
+  /**
+   * Durable render request: checks the owner, resolves and stores any chosen background now (cheap, no rendering),
+   * and records one job keyed by the form's command id. The worker renders it; the owner can leave the page.
+   */
+  async enqueueRender(actorId: string, brandId: string, commandId: string, operation: RenderOperation | (Omit<Extract<RenderOperation, { op: 'draft' | 'edit' }>, 'background'> & { background: BackgroundChoice })): Promise<Job> {
+    await this.context(actorId, brandId);
+    if (!UUID.test(commandId)) throw new SeoBlogError(400, 'Refresh the page and try again.');
+    if (!this.deps.renderJobs) throw new SeoBlogError(503, 'Background rendering is not available here. Nothing was rendered.');
+    const existing = await this.deps.brands.getJob(brandId, commandId.toLowerCase());
+    if (existing) {
+      if (!isCreativeRenderJob(existing) || (existing.payload.render as { sponsorUserId?: string } | undefined)?.sponsorUserId !== actorId) throw new SeoBlogError(409, 'Refresh the page and try again.');
+      return existing;
+    }
+    let op = operation as RenderOperation;
+    if (op.op === 'draft' || op.op === 'edit') {
+      const choice = (operation as { background: BackgroundChoice }).background;
+      const prepared: PreparedBackground = choice.kind === 'keep' || choice.kind === 'neutral' ? choice
+        : { kind: 'prepared', component: await this.background(actorId, brandId, choice, null) };
+      op = { ...op, background: prepared };
+    }
+    const { job } = await this.deps.renderJobs.enqueueJob(newRenderJob(brandId, actorId, commandId, op, this.now()));
+    return job;
+  }
+
+  /** Owner view of one render task of this brand (no inputs or bytes). */
+  async renderTask(actorId: string, brandId: string, jobId: string): Promise<{ job: Job; result: RenderResult | null; label: string }> {
+    await this.context(actorId, brandId);
+    const job = UUID.test(jobId) ? await this.deps.brands.getJob(brandId, jobId) : null;
+    if (!job || job.brandId !== brandId || !isCreativeRenderJob(job)) throw new SeoBlogError(404, 'That task was not found.');
+    const render = job.payload.render as Partial<RenderPayload> | undefined;
+    return { job, result: render?.result ?? null, label: RENDER_LABEL[render?.operation?.op ?? 'draft'] ?? 'Rendering' };
+  }
+
   /** Private preview of one recorded studio generation of this brand: digest-checked and decoded as a JPEG before it is served. */
   async generatedImage(actorId: string, brandId: string, generationId: string): Promise<{ bytes: Buffer; sha256: string }> {
     await this.context(actorId, brandId);

@@ -28,7 +28,7 @@ import { campaignPage, type CampaignActionResult } from './seo-blog-campaign-vie
 import { loadAuthorityProgrammePage } from '../seo-blog/authority-programme-controller.js';
 import { authorityProgrammeContent } from '../seo-blog/authority-programme-view.js';
 import { CAMPAIGN_IMAGE_STATUS_SCRIPT } from './campaign-image-status.js';
-import { briefPage, CREATIVE_JOB_STATUS_SCRIPT, generationPage, type ReferenceChoice } from './creative-generation-view.js';
+import { briefPage, CREATIVE_JOB_STATUS_SCRIPT, generationPage, renderTaskPage, type ReferenceChoice } from './creative-generation-view.js';
 import { holdMessage } from '../creative-studio/generation.js';
 import { campaignDeliveryCalendarPage } from './seo-blog-campaign-calendar-view.js';
 import { campaignCreatorsPage, campaignCreatorReviewPage, creatorContentFromForm, creatorTextExport, productionRulesPage } from './campaign-creator-view.js';
@@ -53,7 +53,6 @@ export interface SeoBlogRouteInput {
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const BRAND_PATH = new RegExp(`^${SEO_BLOG_BASE}/b/(${UUID})(?:/(.*))?$`, 'i');
 /** Bound for a creative render held inside one request: 30 s of real-time recording plus launches and the playback check. */
-const CREATIVE_RENDER_SOCKET_TIMEOUT_MS = 120_000;
 // connect-src 'self' lets the same-origin status scripts poll (default-src 'none' otherwise blocks their fetch).
 const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; img-src 'self' https: data:; media-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 const PREVIEW_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src https: data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
@@ -270,6 +269,12 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         return [...(state?.generations ?? []).slice(0, 12).map((g) => ({ assetId: g.assetId, sha256: g.sha256, label: `Generated ${g.createdAt.slice(0, 10)}`, previewUrl: generatedUrl(g.id) })),
           ...saved.slice(0, 12).map((x) => ({ assetId: x.assetId, sha256: x.sha256, label: x.articleTitle, previewUrl: x.previewAssetId ? media(x.previewAssetId, x.previewSha256!) : media(x.assetId, x.sha256) }))];
       };
+      const taskRoute = new RegExp(`^creative/task/(${UUID})$`, 'i').exec(rest);
+      if (taskRoute) {
+        const task = await studio.renderTask(actor.userId, brandId, taskRoute[1]!.toLowerCase());
+        if (task.job.state === 'done' && task.result) return ok(`${SEO_BLOG_BASE}/b/${brandId}/creative/s/${task.result.setId}`, task.result.message);
+        return send(res, 200, renderTaskPage(shell('creative'), { job: task.job, label: task.label }));
+      }
       const jobRoute = new RegExp(`^creative/jobs/(${UUID})$`, 'i').exec(rest);
       if (jobRoute) {
         const status = await studio.jobStatus(actor.userId, brandId, jobRoute[1]!.toLowerCase());
@@ -422,9 +427,12 @@ async function handlePost(
       if (!studio) throw new SeoBlogError(404, 'The creative studio is not enabled.');
       const home = `${SEO_BLOG_BASE}/b/${brandId}/creative`;
       const commandId = f('commandId') ?? '';
-      // Rendering happens inside this request (a video records in real time, up to 30 s, then plays back).
-      // The server's 30 s idle-socket limit would otherwise drop the connection while the work completes.
-      if (['draft', 's', 'v'].includes(parts[1] ?? '')) res.socket?.setTimeout(CREATIVE_RENDER_SOCKET_TIMEOUT_MS);
+      // Rendering runs in the background worker as a durable job; this request only records it (and stores any uploaded
+      // background), then sends the owner to the task page, which follows the job and opens the result when it is ready.
+      const queued = async (operation: Parameters<typeof studio.enqueueRender>[3]) => {
+        const job = await studio.enqueueRender(actor.userId, brandId, commandId, operation);
+        return ok(`${home}/task/${job.id}`, 'Saved. The artwork is being rendered on the server; you can leave this page.');
+      };
       const background = (): BackgroundChoice => {
         const kind = f('background') ?? 'neutral';
         if (kind === 'keep') return { kind: 'keep' };
@@ -463,40 +471,28 @@ async function handlePost(
       if (parts[1] === 'draft') {
         const raw: Record<string, string | string[]> = {};
         for (const key of new Set(form.fields.keys())) raw[key] = key === 'placements' ? form.fields.getAll(key) : form.fields.get(key) ?? '';
-        const result = await studio.draft(actor.userId, brandId, commandId, raw, background());
-        return ok(`${home}/s/${result.setId}`, result.replayed ? 'These images were already created.' : `Images created for review.${result.note ? ` ${result.note}` : ''}`);
+        return queued({ op: 'draft', raw, background: background() });
       }
       if (parts[1] === 's' && parts[2] && (parts[3] === 'concept' || parts[3] === 'refresh') && parts[4]) {
         const heads = (f('heads') ?? '').split(',').filter(Boolean);
-        if (parts[3] === 'refresh') {
-          await studio.refreshConcept(actor.userId, brandId, parts[2], parts[4], commandId, heads);
-          return ok(`${home}/s/${parts[2]}`, 'Concept re-rendered from the current brand context. Review the new versions.');
-        }
+        if (parts[3] === 'refresh') return queued({ op: 'refresh', setId: parts[2], conceptKey: parts[4], heads });
         const headlines = form.fields.getAll('card_headline'), bodies = form.fields.getAll('card_body');
-        const result = await studio.editConcept(actor.userId, brandId, parts[2], parts[4], commandId, heads, {
-          hook: f('hook') ?? undefined, headline: f('headline') ?? undefined, body: f('body') ?? undefined, cta: f('cta') ?? undefined,
-          ...(headlines.length ? { cards: headlines.map((h, i) => ({ headline: h, body: bodies[i] ?? '' })) } : {}),
-          illustrativeTag: f('illustrative') === '1',
-        }, background());
-        return ok(`${home}/s/${parts[2]}`, result.changed.length ? `Saved: ${result.changed.join(', ')} changed. New versions need review.` : 'No change to save.');
+        const patch = { ...(f('hook') !== null ? { hook: f('hook')! } : {}), ...(f('headline') !== null ? { headline: f('headline')! } : {}), ...(f('body') !== null ? { body: f('body')! } : {}),
+          ...(f('cta') !== null ? { cta: f('cta')! } : {}), ...(headlines.length ? { cards: headlines.map((h, i) => ({ headline: h, body: bodies[i] ?? '' })) } : {}), illustrativeTag: f('illustrative') === '1' };
+        return queued({ op: 'edit', setId: parts[2], conceptKey: parts[4], heads, patch, background: background() });
       }
       if (parts[1] === 's' && parts[2] && parts[3] === 'storyboard' && parts[4]) {
-        await studio.createStoryboard(actor.userId, brandId, parts[2], parts[4], (f('placement') ?? 'vertical') as never, commandId, f('likeness') === '1');
-        return ok(`${home}/s/${parts[2]}`, 'Storyboard drafted from this concept. It is a plan, not a video; review the scenes, then render.');
+        return queued({ op: 'storyboard', setId: parts[2], conceptKey: parts[4], placement: f('placement') ?? 'vertical', likeness: f('likeness') === '1' });
       }
       if (parts[1] === 'v' && parts[2] && parts[3] === 'scenes') {
-        const located = await studio.artworkSet(actor.userId, brandId, parts[2]);
         const count = Math.min(9, Math.max(0, Number(f('scene_count') ?? 0)));
         const scenes = Array.from({ length: count }, (_, i) => ({ headline: f(`scene.${i}.headline`) ?? '', body: f(`scene.${i}.body`) ?? '', durationMs: Number(f(`scene.${i}.duration`)),
           motion: (f(`scene.${i}.motion`) ?? 'none') as never, showCta: f(`scene.${i}.cta`) === '1', script: f(`scene.${i}.script`) ?? '', remove: f(`scene.${i}.remove`) === '1' }))
           .filter((x) => !x.remove && x.headline.trim()).map(({ remove: _r, ...x }) => x);
-        const result = await studio.editStoryboard(actor.userId, brandId, parts[2], commandId, scenes);
-        return ok(`${home}/s/${located}`, result.changed.length ? `Storyboard saved (${result.changed.slice(0, 4).join(', ')}${result.changed.length > 4 ? '…' : ''}). Render a new video to include the changes.` : 'No change to save.');
+        return queued({ op: 'storyboard_edit', versionId: parts[2], scenes });
       }
       if (parts[1] === 'v' && parts[2] && parts[3] === 'video') {
-        const located = await studio.artworkSet(actor.userId, brandId, parts[2]);
-        const result = await studio.renderVideo(actor.userId, brandId, parts[2], commandId);
-        return ok(`${home}/s/${located}`, result.playable ? 'Video rendered and verified as playable. Review it before approving.' : 'The video did not pass the playback check and cannot be approved. Render it again.');
+        return queued({ op: 'video', versionId: parts[2] });
       }
       if (parts[1] === 'v' && parts[2] && parts[3]) {
         const version = parts[2];
@@ -506,10 +502,7 @@ async function handlePost(
           await studio.approve(actor.userId, brandId, version, commandId, f('sha') ?? '', f('figures_confirmed') === '1');
           return ok(back, 'Approved this exact asset. Captions, campaigns, schedules and paid adverts are not approved by this.');
         }
-        if (parts[3] === 'focal') {
-          await studio.editFocal(actor.userId, brandId, version, commandId, { x: Number(f('x')), y: Number(f('y')) });
-          return ok(`${home}/s/${located}`, 'Focal point moved for this format only. The new version needs review.');
-        }
+        if (parts[3] === 'focal') return queued({ op: 'focal', versionId: version, focal: { x: Number(f('x')), y: Number(f('y')) } });
         if (parts[3] === 'handoff') {
           // `article:<id>` or `acq:<campaignId>:<conceptIndex>:<channel>`; legacy `article` field still accepted.
           const raw = (f('target') ?? (f('article') ? `article:${f('article')}` : '')).toLowerCase(), bits = raw.split(':');

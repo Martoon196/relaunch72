@@ -1,6 +1,6 @@
 /**
  * Composition of the Creative Studio for one signed-in principal. Mounted only
- * when CREATIVE_STUDIO_ENABLED=true (default off) and migration 0143 is applied.
+ * when CREATIVE_STUDIO_ENABLED=true (default off) and migration 0144 is applied.
  * Reuses the existing brand store, blob storage and the article-image pipeline's
  * receipted outputs; adds no provider credential and no paid-generation path.
  */
@@ -15,6 +15,7 @@ import { CreativeGeneration } from '../creative-studio/generation-service.js';
 import { PgCreativeGenerationStore } from '../creative-studio/generation-store.js';
 import { imageProviderKey } from './creative-studio-worker.js';
 import type { Job } from '../seo-blog/types.js';
+import { runCreativeRenderJob } from '../creative-studio/render-jobs.js';
 import type { SeoBlogEngine } from '../seo-blog/engine.js';
 import type { PortalSessionIdentity } from './auth-service.js';
 
@@ -68,6 +69,7 @@ export function createCreativeStudio(input: { readonly contentCommandPool: Pool;
       settings: { async configure(actorId, brandId, rowVersion, value) {
         await input.engine.updateSettings({ userId: actorId }, brandId, rowVersion, { studioImages: { ...value, authorizedBy: actorId, authorizedAt: new Date().toISOString() } });
       } } }),
+    renderJobs: brands,
     generatedImages: {
       async find(_actorId, brandId, generationId) { return (await generationStore.state(brandId)).generations.find((g) => g.id === generationId) ?? null; },
       // The brand's private media store (owner session, workspace RLS, digest-checked); independent of article image review.
@@ -76,7 +78,25 @@ export function createCreativeStudio(input: { readonly contentCommandPool: Pool;
   });
 }
 
-/** Durable local render runner for the worker (filled in by the render-job work; absent until then). */
-export function creativeRenderRunner(_pool: Pool, _requestId: string, _env: NodeJS.ProcessEnv): { render?: (job: Job) => Promise<Job> } {
-  return {};
+/**
+ * Durable local render runner for the SEO worker (CREATIVE_STUDIO_ENABLED=true). Each claimed render job gets a service
+ * whose library calls carry the job's claim; SQL lets the worker act only for that job's sponsor and command while the
+ * lease is held, and only to read and append rendered versions. Rendering is local Chromium: no provider, no charge.
+ */
+export function creativeRenderRunner(pool: Pool, requestId: string, env: NodeJS.ProcessEnv): { render?: (job: Job) => Promise<Job> } {
+  if (env.CREATIVE_STUDIO_ENABLED !== 'true') return {};
+  const principal = { kind: 'worker' as const, requestId };
+  const media = new PgSeoBlogMediaStore(pool, principal, { publicOrigin: 'https://app.relaunch72.com' });
+  const store = new PgSeoBlogStore(pool, principal, media);
+  return {
+    render: (claim) => runCreativeRenderJob(claim, { store, now: () => new Date().toISOString(),
+      service: (payload, job) => {
+        const library = new PgCreativeLibraryStore(pool, principal, { id: job.id, leaseOwner: job.leaseOwner!, attempt: job.attempts });
+        // Authority comes from SQL (live claim + current membership), never from this process.
+        const brands = Object.assign(Object.create(store) as PgSeoBlogStore, {
+          canManage: async (actorId: string, brandId: string) => brandId === job.brandId && actorId === payload.sponsorUserId && (await library.renderActor(brandId)) === actorId,
+        });
+        return new CreativeStudioService({ library, brands, renderer: creativeRenderer() });
+      } }),
+  };
 }

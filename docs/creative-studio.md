@@ -397,3 +397,40 @@ Configuration: `CREATIVE_STUDIO_ENABLED=true` on both the web service and the SE
 - No automatic reconciliation of an unknown outcome. It stays held and counted until an operator resolves it with the existing reconciliation process.
 - The per-version edit form in *Compare* cannot yet swap in a generated image. Use the new-artwork form (*Create artwork from this image*).
 - Only the brand's own current private images can be references (generated studio images and article candidates). Arbitrary uploads are not sent to the provider.
+
+# Durable render jobs (artwork, storyboards, video)
+
+Rendering no longer runs inside the HTTP request, and the earlier 120-second socket-timeout extension is removed. These actions now record one durable job in the existing `app.seo_blog_jobs` table (`kind=write`, `stage=creative_render`) and return at once with a task page:
+
+- Create images, Edit concept, Refresh, Move focal point
+- Draft a storyboard, Save storyboard, Render video
+
+The job is keyed by the form's command id, so a refresh or double click returns the same job. The task page polls and opens the result when the job is done. You can leave the page; the job survives restarts. The existing SEO worker runs the job through the same service method that used to run inline. No new queue, scheduler or worker process is added.
+
+- **Uploaded backgrounds** are verified and stored by the request; the job carries only the stored reference. The worker re-verifies the exact bytes and refuses a mismatch ("integrity check"). No image bytes are kept in job rows.
+- **Authority.** `creative_studio_command` (0144) accepts a worker call only when all of these hold:
+  - it carries the claim of a job that is `running` with an unexpired lease, the same lease owner and the same attempt;
+  - the job is a `creative_render` job of the same workspace;
+  - the job's sponsor still manages the brand;
+  - the call is one of: read, `command_get`, `set_create`, `versions_append` (and writes only under the job's own command).
+
+  Approval, hand-off and kit changes always need the owner's session. Revoking the sponsor stops the job without writing anything (proved on PostgreSQL).
+- **Retries.** Each service command is idempotent, so a re-run replays instead of duplicating. Owner-correctable problems stop the task with the service's message, for example changed brand facts, a newer version, or a missing offer. A renderer or server fault is retried once after a minute, then stops with "Nothing was published".
+- **Worker requirements (rollout).**
+  - Set `CREATIVE_STUDIO_ENABLED=true` on the SEO worker as well as Growth HQ.
+  - Install the Chromium headless shell on the SEO worker service with the same build suffix Growth HQ uses: `&& (PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npx --no-install playwright-core install --only-shell chromium || echo '…renderer stays off')`. That service (`relaunch72-seo-blog-worker`) is configured in the Render dashboard, not in this repository's manifests.
+  - On start, the worker logs `capability creative-studio-v1 … renderer found|NOT found`.
+  - Render latency is the worker interval (`SEO_BLOG_WORKER_INTERVAL_MS`, default 60 s, minimum 15 s) plus the render itself.
+- **Checks.**
+  - `test/db/creative-studio-render-jobs-pg.integration.test.ts` runs on real PostgreSQL with the production `creativeRenderRunner` and real headless Chromium. It proves:
+    - the request records the job and renders nothing;
+    - a double submit returns the same job;
+    - real 1080×1080 JPEGs are recorded as the sponsor;
+    - a restart replays without adding versions;
+    - focal and uploaded-background jobs work;
+    - a tampered reference is refused;
+    - forged, stale or wrong-attempt claims, other brands, approval, kit and foreign-command writes are all refused;
+    - a revoked sponsor stops the job.
+  - Unit tests cover the job shape and the runner's stop and retry rules.
+  - Route test: no render inside the request, task page, a double submit returns the same job, another owner cannot follow the task, and the result opens when done.
+  - Visual walkthrough (`test/manual-creative-generation-pg-demo.ts`): the artwork request returned in about 0.4 s. The worker recorded and playback-checked a 1080×1920, 10.5 s video in about 15 s, and it played in Chromium. No console errors.
