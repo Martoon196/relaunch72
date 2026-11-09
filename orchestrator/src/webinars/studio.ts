@@ -16,6 +16,9 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketConnection } from './websocket.js';
+import { CHROME_SHAPE_MKV, SAFARI_SHAPE_MP4 } from './studio-probe-media.js';
+import { accessSync, constants as fsConstants, existsSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
 
 export const STUDIO_WS_ROUTE = '/api/webinars/studio';
 
@@ -37,36 +40,122 @@ export interface StudioRelayConfig {
   readonly allowLocalIngest?: boolean;
 }
 
-export interface StudioProbe {
-  readonly available: boolean;
+export interface StudioCheck {
+  readonly id: string;
+  readonly label: string;
+  readonly ok: boolean;
+  /** Required for every browser; false means Safari-only. */
+  readonly required: boolean;
   readonly detail: string;
+}
+
+export interface StudioProbe {
+  /** True when every required check passed (Chrome and Edge can broadcast). */
+  readonly available: boolean;
+  /** True when the Safari (fragmented MP4) path also passed. */
+  readonly safari: boolean;
+  /** One-line summary for the setup panel. */
+  readonly detail: string;
+  /** The executable actually used (resolved from PATH when no path was configured). */
+  readonly path: string | null;
+  readonly version: string | null;
+  readonly checks: readonly StudioCheck[];
 }
 
 type SpawnFn = (cmd: string, args: readonly string[]) => ChildProcessWithoutNullStreams;
 
-function run(spawnFn: SpawnFn, cmd: string, args: readonly string[], timeoutMs = 5000): Promise<string | null> {
+interface RunResult { readonly code: number | null; readonly stdout: Buffer; readonly stderr: string }
+
+/** Runs a bounded child process (no shell), optionally feeding stdin; never throws. */
+function run(spawnFn: SpawnFn, cmd: string, args: readonly string[], input?: Buffer, timeoutMs = 8000): Promise<RunResult | null> {
   return new Promise((resolve) => {
-    let out = '';
+    const out: Buffer[] = [];
+    let size = 0;
+    let err = '';
     let child: ChildProcessWithoutNullStreams;
     try { child = spawnFn(cmd, args); } catch { resolve(null); return; }
     const timer = setTimeout(() => { child.kill('SIGKILL'); resolve(null); }, timeoutMs);
-    child.stdout.on('data', (d: Buffer) => { if (out.length < 200_000) out += d.toString('utf8'); });
-    child.stderr.on('data', (d: Buffer) => { if (out.length < 200_000) out += d.toString('utf8'); });
+    child.stdout.on('data', (d: Buffer) => { if (size < 4_000_000) { out.push(d); size += d.length; } });
+    child.stderr.on('data', (d: Buffer) => { if (err.length < 200_000) err += d.toString('utf8'); });
     child.on('error', () => { clearTimeout(timer); resolve(null); });
-    child.on('close', (code) => { clearTimeout(timer); resolve(code === 0 ? out : null); });
+    child.on('close', (code) => { clearTimeout(timer); resolve({ code, stdout: Buffer.concat(out), stderr: err }); });
+    child.stdin.on('error', () => undefined);
+    child.stdin.end(input ?? undefined);
   });
 }
 
-/** Checks that the configured ffmpeg exists and can push RTMPS with an AAC encoder. */
-export async function probeFfmpeg(ffmpegPath: string, spawnFn: SpawnFn = nodeSpawn as SpawnFn): Promise<StudioProbe> {
-  const version = await run(spawnFn, ffmpegPath, ['-hide_banner', '-version']);
-  if (version === null) return { available: false, detail: `ffmpeg was not found at "${ffmpegPath}" on this server.` };
-  const protocols = (await run(spawnFn, ffmpegPath, ['-hide_banner', '-protocols'])) ?? '';
-  const output = protocols.split(/Output:/i)[1] ?? '';
-  if (!/^\s*rtmps\s*$/m.test(output)) return { available: false, detail: 'The server\'s ffmpeg was built without RTMPS (TLS) output.' };
-  const encoders = (await run(spawnFn, ffmpegPath, ['-hide_banner', '-encoders'])) ?? '';
-  if (!/^\s*A\S*\s+aac\s/m.test(encoders)) return { available: false, detail: 'The server\'s ffmpeg has no AAC audio encoder.' };
-  return { available: true, detail: (version.split('\n')[0] ?? 'ffmpeg').slice(0, 120) };
+/** Resolves a bare command name against PATH, as the OS would. */
+export function resolveOnPath(cmd: string, pathEnv = process.env.PATH ?? ''): string | null {
+  if (cmd.includes('/')) return existsSync(cmd) ? cmd : null;
+  for (const dir of pathEnv.split(delimiter)) {
+    if (!dir) continue;
+    const candidate = join(dir, cmd);
+    try { accessSync(candidate, fsConstants.X_OK); return candidate; } catch { /* next */ }
+  }
+  return null;
+}
+
+function listed(text: string, section: RegExp | null, pattern: RegExp): boolean {
+  const body = section ? (text.split(section)[1] ?? '') : text;
+  return pattern.test(body);
+}
+
+/**
+ * Detects and verifies the ffmpeg the relay will use: the exact protocols,
+ * demuxers, muxer and codecs it needs, then a bounded local smoke test that
+ * pushes browser-shaped clips through the relay's own arguments to stdout and
+ * reads the result back. No network, no provider. It cannot prove the RTMPS
+ * connection to Cloudflare itself; that is the live test.
+ */
+export async function probeFfmpeg(ffmpegPath: string, spawnFn: SpawnFn = nodeSpawn as SpawnFn, pathEnv?: string): Promise<StudioProbe> {
+  const resolved = resolveOnPath(ffmpegPath, pathEnv);
+  const fail = (detail: string): StudioProbe => ({ available: false, safari: false, detail, path: resolved, version: null, checks: [] });
+  if (!resolved) return fail(ffmpegPath.includes('/') ? `ffmpeg was not found at ${ffmpegPath}.` : 'ffmpeg was not found on PATH.');
+  const version = await run(spawnFn, resolved, ['-hide_banner', '-version']);
+  if (!version || version.code !== 0) return fail(`${resolved} did not run (ffmpeg -version failed).`);
+  const first = (version.stdout.toString('utf8').split('\n')[0] ?? '').trim();
+  const versionLine = (/^ffmpeg version (\S+)/.exec(first)?.[1] ? `ffmpeg ${/^ffmpeg version (\S+)/.exec(first)![1]}` : first).slice(0, 80);
+  const text = async (flag: string) => { const r = await run(spawnFn, resolved, ['-hide_banner', flag]); return r && r.code === 0 ? r.stdout.toString('utf8') : ''; };
+  const [protocols, demuxers, muxers, decoders, encoders] = [await text('-protocols'), await text('-demuxers'), await text('-muxers'), await text('-decoders'), await text('-encoders')];
+
+  const checks: StudioCheck[] = [];
+  const add = (id: string, label: string, ok: boolean, required: boolean, detail: string) => checks.push({ id, label, ok, required, detail });
+  add('pipe-input', 'Reads media from the relay (pipe input)', listed(protocols, /Output:/i, /^\s*pipe\s*$/m) || listed(protocols.split(/Output:/i)[0] ?? '', null, /^\s*pipe\s*$/m), true, 'protocol "pipe" (input)');
+  add('rtmps-output', 'Sends to Cloudflare over RTMPS', listed(protocols, /Output:/i, /^\s*rtmps\s*$/m), true, 'protocol "rtmps" (output; needs TLS support)');
+  add('webm-demux', 'Reads Chrome/Edge recordings (WebM/Matroska)', /^\s*D\S*\s+matroska,webm\s/m.test(demuxers), true, 'demuxer "matroska,webm"');
+  add('mp4-demux', 'Reads Safari recordings (MP4)', /^\s*D\S*\s+mov,mp4[\w,]*\s/m.test(demuxers), false, 'demuxer "mov,mp4,…"');
+  add('flv-mux', 'Packages for RTMP (FLV)', /^\s*\S*E\S*\s+flv\s/m.test(muxers), true, 'muxer "flv"');
+  add('opus-decode', 'Decodes browser audio (Opus)', /^\s*A\S*\s+(opus|libopus)\s/m.test(decoders), true, 'decoder "opus"');
+  add('aac-decode', 'Decodes Safari audio (AAC)', /^\s*A\S*\s+aac\s/m.test(decoders), false, 'decoder "aac"');
+  add('aac-encode', 'Encodes Cloudflare audio (AAC)', /^\s*A\S*\s+aac\s/m.test(encoders), true, 'encoder "aac"');
+
+  const smoke = async (clip: Buffer): Promise<{ ok: boolean; detail: string }> => {
+    const remux = await run(spawnFn, resolved, ffmpegArgs('pipe:1'), clip);
+    if (!remux || remux.code !== 0 || remux.stdout.length < 100 || remux.stdout.subarray(0, 3).toString('latin1') !== 'FLV') {
+      return { ok: false, detail: `remux failed${remux?.stderr ? `: ${remux.stderr.trim().split('\n').slice(-1)[0]!.slice(0, 160)}` : ''}` };
+    }
+    const back = await run(spawnFn, resolved, ['-hide_banner', '-i', 'pipe:0', '-f', 'null', '-'], remux.stdout);
+    const info = back?.stderr ?? '';
+    const video = /Stream #0:\d+.*Video: h264/.test(info), audio = /Stream #0:\d+.*Audio: aac/.test(info);
+    return video && audio && back?.code === 0 ? { ok: true, detail: 'H.264 copied, audio converted to AAC, FLV read back' } : { ok: false, detail: `output read back as ${video ? 'H.264' : 'no H.264'} / ${audio ? 'AAC' : 'no AAC'}` };
+  };
+  const chrome = await smoke(CHROME_SHAPE_MKV);
+  add('smoke-chrome', 'Smoke test: Chrome/Edge-shaped clip through the relay pipeline', chrome.ok, true, chrome.detail);
+  const safari = await smoke(SAFARI_SHAPE_MP4);
+  add('smoke-safari', 'Smoke test: Safari-shaped clip through the relay pipeline', safari.ok, false, safari.detail);
+
+  const missing = checks.filter((c) => c.required && !c.ok);
+  const safariOk = checks.filter((c) => !c.required).every((c) => c.ok);
+  return {
+    available: missing.length === 0,
+    safari: missing.length === 0 && safariOk,
+    detail: missing.length === 0
+      ? `${versionLine} at ${resolved}${safariOk ? '' : ' (Safari recordings not supported by this build)'}`
+      : `${versionLine} at ${resolved} failed: ${missing.map((c) => `${c.label} (${c.detail})`).join('; ')}.`,
+    path: resolved,
+    version: versionLine,
+    checks,
+  };
 }
 
 /** Removes any ingest URL and stream key from text before it is logged or shown. */
@@ -128,7 +217,7 @@ const MAX_PENDING = 16 * 1024 * 1024;
 export class StudioRelay {
   private readonly tickets = new Map<string, Ticket>();
   private readonly sessions = new Map<string, Session>();
-  private probeResult: StudioProbe = { available: false, detail: 'Not checked yet.' };
+  private probeResult: StudioProbe = { available: false, safari: false, detail: 'Not checked yet.', path: null, version: null, checks: [] };
 
   constructor(
     private readonly config: StudioRelayConfig,
@@ -232,6 +321,7 @@ export class StudioRelay {
       try { msg = JSON.parse(data.toString('utf8')) as typeof msg; } catch { this.stop(s, 'Unreadable message.'); return; }
       if (msg.type === 'start' && !s.ffmpeg) {
         if (!acceptedStudioMime(msg.mimeType)) { this.stop(s, 'This browser does not record H.264 video. Use Chrome, Edge or Safari, or an encoder.'); return; }
+        if (/^video\/mp4/i.test(String(msg.mimeType)) && !this.probeResult.safari) { this.stop(s, "This server's ffmpeg cannot read Safari's recording format. Use Chrome or Edge, or an encoder."); return; }
         this.startFfmpeg(s, target);
         return;
       }

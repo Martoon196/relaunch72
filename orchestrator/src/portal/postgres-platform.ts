@@ -1317,7 +1317,8 @@ export async function buildPgPortalPlatform(
             log: (line) => console.warn(line) });
           // The studio relay needs ffmpeg with RTMPS; the probe result is shown honestly on the setup panel.
           webinarStudio = new StudioRelay({ ...webinarConfig.studio });
-          const studioProbe = webinarConfig.stream ? await webinarStudio.probe() : { available: false, detail: 'Cloudflare Stream is not configured.' };
+          // Probed even before Cloudflare is configured, so the panel reports ffmpeg from day one.
+          const studioProbe = await webinarStudio.probe();
           webinarSetup = { database: true, databaseDetail: '', config: webinarConfig, crmAvailable: true, studio: studioProbe };
         } else {
           webinarSetup = { ...webinarSetup, databaseDetail: 'Migration 0144 (native webinars) is not applied to this database yet.' };

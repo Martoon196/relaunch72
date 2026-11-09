@@ -225,3 +225,33 @@ test('studio channel refuses unmasked and oversized frames', { skip: ffmpegReady
     server.close();
   }
 });
+
+test('studio probe uses the ffmpeg on PATH and names each missing capability', { skip: ffmpegReady ? false : 'ffmpeg not installed' }, async () => {
+  const { probeFfmpeg, resolveOnPath } = await import('../src/webinars/studio.js');
+  const real = resolveOnPath('ffmpeg')!;
+  const ok = await probeFfmpeg('ffmpeg');
+  assert.equal(ok.available, true, ok.detail);
+  assert.equal(ok.path, real, 'resolved from PATH');
+  assert.match(ok.detail, /^ffmpeg \S+ at \//);
+  assert.ok(ok.checks.find((c) => c.id === 'smoke-chrome')?.ok);
+  // Wrapper executables that hide one capability each from the real ffmpeg.
+  const { writeFileSync, chmodSync } = await import('node:fs');
+  const wrapper = (name: string, body: string) => {
+    const dir = mkdtempSync(path.join(tmpdir(), `r72-ff-${name}-`));
+    writeFileSync(path.join(dir, 'ffmpeg'), `#!/bin/sh\n${body}\nexec ${real} "$@"\n`);
+    chmodSync(path.join(dir, 'ffmpeg'), 0o755);
+    return dir;
+  };
+  const noRtmps = await probeFfmpeg('ffmpeg', undefined, wrapper('nortmps', `if [ "$2" = "-protocols" ]; then ${real} "$@" | grep -v rtmps; exit 0; fi`));
+  assert.equal(noRtmps.available, false);
+  assert.match(noRtmps.detail, /failed: Sends to Cloudflare over RTMPS \(protocol "rtmps"/);
+  const noSafari = await probeFfmpeg('ffmpeg', undefined, wrapper('nomp4', `if [ "$2" = "-demuxers" ]; then ${real} "$@" | grep -v "mov,mp4"; exit 0; fi`));
+  assert.deepEqual([noSafari.available, noSafari.safari], [true, false], 'Chrome/Edge still work; Safari reported unsupported');
+  const brokenPipeline = await probeFfmpeg('ffmpeg', undefined, wrapper('broken', 'case "$*" in *pipe:1*) echo "simulated failure" >&2; exit 1;; esac'));
+  assert.equal(brokenPipeline.available, false, 'finding the executable is not enough');
+  assert.match(brokenPipeline.detail, /failed: Smoke test: Chrome\/Edge-shaped clip through the relay pipeline \(remux failed: simulated failure\)/);
+  assert.equal(brokenPipeline.checks.find((c) => c.id === 'smoke-chrome')?.ok, false);
+  const absent = await probeFfmpeg('ffmpeg', undefined, mkdtempSync(path.join(tmpdir(), 'r72-ff-empty-')));
+  assert.deepEqual([absent.available, absent.detail], [false, 'ffmpeg was not found on PATH.']);
+  assert.equal((await probeFfmpeg('/nonexistent/ffmpeg')).detail, 'ffmpeg was not found at /nonexistent/ffmpeg.');
+});

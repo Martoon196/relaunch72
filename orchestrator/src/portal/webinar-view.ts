@@ -26,7 +26,7 @@ export interface SetupStatus {
   readonly crmAvailable: boolean;
   readonly workspaceId: string | null;
   /** Browser-studio relay readiness (ffmpeg with RTMPS on this server); null when not composed. */
-  readonly studio?: { readonly available: boolean; readonly detail: string } | null;
+  readonly studio?: { readonly available: boolean; readonly safari?: boolean; readonly detail: string; readonly checks?: readonly { readonly label: string; readonly ok: boolean; readonly required: boolean; readonly detail: string }[] } | null;
 }
 
 const CSS = `<style>
@@ -81,9 +81,12 @@ export function setupChecklist(setup: SetupStatus): string {
       !c || c.emailMode === 'off' ? `Email is off. Set <code>${WEBINAR_ENV.emailMode}</code> to <code>test</code> (only <code>${WEBINAR_ENV.emailTestRecipients}</code>) or <code>live</code>. Messages wait in the queue until then; reminders whose time passes are skipped, never sent late.`
         : sender ? `Mode <strong>${e(c.emailMode)}</strong>, sending as <code>${e(sender.from)}</code> on Postmark stream <code>${e(sender.messageStream)}</code>.`
         : `No sender for this brand. Add this workspace to <code>${WEBINAR_ENV.senders}</code>; another brand's sender is never used.`),
-    item(Boolean(setup.studio?.available), 'Browser studio (no encoder needed)', setup.studio?.available
-      ? `Hosts can broadcast camera, microphone and screen share from the browser. The server relays it to the recorded live input with ${e(setup.studio.detail)}.`
-      : `Optional. Needs ffmpeg with RTMPS output on this server (set <code>${WEBINAR_ENV.studioFfmpeg}</code> to its path if it is not on PATH). ${e(setup.studio?.detail ?? '')} Encoders such as OBS work without it.`),
+    item(Boolean(setup.studio?.available), 'Browser studio (no encoder needed)', `${setup.studio?.available
+      ? `Hosts can broadcast camera, microphone and screen share from the browser${setup.studio.safari ? '' : ' (Chrome and Edge; this ffmpeg cannot read Safari recordings)'}. Using ${e(setup.studio.detail)}.`
+      : `Optional; encoders such as OBS work without it. ${e(setup.studio?.detail ?? 'Not checked on this deployment.')} The installed ffmpeg on PATH is used by default; <code>${WEBINAR_ENV.studioFfmpeg}</code> overrides it.`}
+${setup.studio?.checks?.length ? `<details style="margin-top:6px"><summary>Compatibility checks on this server</summary><ul style="margin:6px 0 0;padding-left:18px">${setup.studio.checks.map((c) =>
+  `<li>${c.ok ? '✓' : '✗'} ${e(c.label)}${c.required ? '' : ' <span class="wb-muted">(Safari only)</span>'} <span class="wb-muted">— ${e(c.detail)}</span></li>`).join('')}
+<li class="wb-muted">Not checked here: the RTMPS connection to Cloudflare itself. That is proven by the live broadcast test.</li></ul></details>` : ''}`),
     item(setup.crmAvailable, 'CRM handoff', setup.crmAvailable ? 'Registrants can be sent to the CRM through the existing lead command.' : 'The CRM command identity is not connected on this deployment.'),
   ];
   return `<ul class="wb-checklist">${items.join('')}</ul>`;
@@ -241,7 +244,7 @@ ${creds ? `<div class="wb-grid"><div><h3>RTMPS (OBS, StreamYard, Restream)</h3><
 <h3 style="margin-top:20px">Broadcasting from the browser</h3>
 ${input.setup.studio?.available
   ? `<p class="wb-help"><span class="wb-status ok">Available</span> No encoder needed: open the <a href="${WEBINARS_BASE}/${e(input.event.id)}/studio">Studio</a> to broadcast your camera, microphone and screen share from this browser. The server relays it into this same recorded live input, so the replay and signed playback work exactly as with an encoder.</p>`
-  : `<p class="wb-help"><span class="wb-status warn">Not available on this server</span> The browser studio needs ffmpeg with RTMPS output on the server (<code>${WEBINAR_ENV.studioFfmpeg}</code>). ${e(input.setup.studio?.detail ?? '')} Cloudflare's own browser (WebRTC/WHIP) ingest is not used because it does not record and cannot be played as signed HLS. Use an encoder above in the meantime.</p>`}
+  : `<p class="wb-help"><span class="wb-status warn">Not available on this server</span> The server's ffmpeg did not pass the browser-studio checks. ${e(input.setup.studio?.detail ?? '')} Cloudflare's own browser (WebRTC/WHIP) ingest is not used because it does not record and cannot be played as signed HLS. Use an encoder above in the meantime.</p>`}
 </div></section>`;
 }
 
@@ -283,7 +286,7 @@ export function studioTab(input: { event: WebinarEvent; csrf: string; setup: Set
   const ev = input.event;
   const id = e(ev.id);
   const blocked = !input.setup.config?.stream ? streamBlocked(input.setup)
-    : !input.setup.studio?.available ? `<div class="notice" role="note"><strong>The browser studio is not available on this server.</strong> ${e(input.setup.studio?.detail ?? '')} It needs ffmpeg with RTMPS output (<code>${WEBINAR_ENV.studioFfmpeg}</code>). Use an encoder from <a href="${WEBINARS_BASE}/${id}/video">Broadcast setup</a> meanwhile.</div>`
+    : !input.setup.studio?.available ? `<div class="notice" role="note"><strong>The browser studio is not available on this server.</strong> ${e(input.setup.studio?.detail ?? '')} The compatibility checks are listed under Setup status on the Webinars page. Use an encoder from <a href="${WEBINARS_BASE}/${id}/video">Broadcast setup</a> meanwhile.</div>`
     : !ev.liveInputUid ? `<div class="notice" role="note"><strong>Create a live input first.</strong> Open <a href="${WEBINARS_BASE}/${id}/video">Broadcast setup</a> and press Create live input; the studio sends to it.</div>`
     : ev.sessionState === 'ended' ? '<div class="notice" role="note">This session has ended. The studio is closed.</div>' : '';
   const sessionControls = ev.status !== 'published' ? '<p class="wb-help">Publish the webinar to go live.</p>'
