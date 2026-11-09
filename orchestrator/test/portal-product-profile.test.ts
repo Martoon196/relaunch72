@@ -70,7 +70,7 @@ test('product profiles fail closed and cannot carry authorization state', () => 
   assert.equal('capabilities' in PROPERTY_PREDATOR_GROWTH_PROFILE.contentWorkspace!, false);
   assert.deepEqual(
     PROPERTY_PREDATOR_GROWTH_PROFILE.visibleNavigation,
-    ['overview', 'crm', 'inbox', 'content', 'analytics'],
+    ['overview', 'crm', 'inbox', 'content', 'webinars', 'analytics'],
   );
 });
 

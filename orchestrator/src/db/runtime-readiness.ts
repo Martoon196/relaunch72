@@ -1,6 +1,7 @@
 import type { Pool, QueryResultRow } from 'pg';
 import { methodSchemaBridgeAllowed } from './method-schema-bridge.js';
 import { DIRECT_WA_MIGRATION, DIRECT_WA_CHECKSUM } from './mhp-wa-direct-schema.js';
+import { WEBINARS_MIGRATION, WEBINARS_CHECKSUM } from './webinar-schema.js';
 import {
   DEFAULT_MIGRATIONS_DIR,
   discoverMigrations,
@@ -244,11 +245,23 @@ export async function assertRuntimeSchemaCurrent(
   if (migrations.length===142 && migrations[141]?.checksum===MHP_PAYMENTS_LIVE_CHECKSUM
       && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM
       && applied.get(DIRECT_WA_MIGRATION)===DIRECT_WA_CHECKSUM) applied.delete(DIRECT_WA_MIGRATION);
+  // The exact 143 recovery application stays ready after the reviewed additive 0144
+  // (native webinars) is applied. 0144 only adds new webinar tables and functions that
+  // 143 code never reads. A release bundling 0144 takes the strict path.
+  if (migrations.length===143 && migrations[142]?.filename===DIRECT_WA_MIGRATION && migrations[142]?.checksum===DIRECT_WA_CHECKSUM
+      && applied.get(DIRECT_WA_MIGRATION)===DIRECT_WA_CHECKSUM
+      && applied.get(WEBINARS_MIGRATION)===WEBINARS_CHECKSUM) applied.delete(WEBINARS_MIGRATION);
   validateAppliedState(migrations, applied);
   const pending = migrations.filter((migration) => !applied.has(migration.filename));
   if(methodSchemaBridgeAllowed(migrations,applied,env))return;
   // Roll out the 143 binary before advancing shared PostgreSQL. During that interval the
   // reader retains the legacy signed projection and direct reply dispatch stays disabled.
+  // Roll out the 0144 binary to every consumer before applying 0144. Until it is applied
+  // the webinar service is not composed (its schema probe fails), so /portal/webinars
+  // shows the setup state and no webinar route touches the missing tables.
+  if (migrations.length===144 && migrations[143]?.filename===WEBINARS_MIGRATION && pending.length===1
+      && pending[0]?.filename===WEBINARS_MIGRATION && pending[0]?.checksum===WEBINARS_CHECKSUM
+      && applied.get(DIRECT_WA_MIGRATION)===DIRECT_WA_CHECKSUM) return;
   if (migrations.length===143 && pending.length===1 && pending[0]?.filename===DIRECT_WA_MIGRATION
       && pending[0]?.checksum===DIRECT_WA_CHECKSUM && applied.get(MHP_PAYMENTS_LIVE_MIGRATION)===MHP_PAYMENTS_LIVE_CHECKSUM) return;
   // 0123 only revokes an unintended PUBLIC execute grant on an internal SMS

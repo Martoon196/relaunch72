@@ -21,6 +21,8 @@ import type { Intake } from '../types.js';
 import { handleAdmin } from './admin/router.js';
 import { handlePortal, type PortalDeps } from '../portal/router.js';
 import { handleInvestorPublicSite,INVESTOR_SITES_ROUTE } from '../portal/investor-site.js';
+import { handleWebinarPublic, WEBINAR_PUBLIC_PREFIX } from '../webinars/public-router.js';
+import { handleStreamWebhook, STREAM_WEBHOOK_ROUTE, webinarClientKey } from '../webinars/http.js';
 import { entitlementForOrder, type BuildEntitlement } from './entitlements.js';
 import { oneOffCheckoutBlockers, subscriptionCheckoutBlockers } from './readiness.js';
 import { canonicalIntake } from '../intake/canonical.js';
@@ -367,6 +369,22 @@ export function createApp(deps: AppDeps) {
     if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
       try { await (deps.adminHandler ?? handleAdmin)(req, res, deps.cfg); }
       catch { if (!res.headersSent) send(res, 500, SAFE_ERROR.internal); }
+      return;
+    }
+
+    // Native webinar attendee pages and the Cloudflare Stream webhook.
+    if (url.pathname.startsWith(WEBINAR_PUBLIC_PREFIX) || url.pathname === STREAM_WEBHOOK_ROUTE) {
+      const webinars = deps.portal?.kind === 'postgres' ? deps.portal.webinars : undefined;
+      if (!webinars) { send(res, 404, { error: 'not found' }); return; }
+      if (activePortalRequests >= portalMaxConcurrentRequests) { sendPortalRuntimeStatus(res, 429); return; }
+      activePortalRequests += 1;
+      try {
+        const handled = url.pathname === STREAM_WEBHOOK_ROUTE
+          ? await handleStreamWebhook(req, res, webinars)
+          : await handleWebinarPublic(req, res, url, { service: webinars, secureCookies: !/^(localhost|127\.0\.0\.1)$/.test(requestHost), clientKey: webinarClientKey });
+        if (!handled) send(res, 404, { error: 'not found' });
+      } catch { if (!res.headersSent) sendPortalRuntimeStatus(res, 503); }
+      finally { activePortalRequests -= 1; }
       return;
     }
 

@@ -48,6 +48,7 @@
     "@anthropic-ai/sdk": "^0.110.0",
     "ajv": "^8.17.1",
     "dotenv": "^16.4.5",
+    "hls.js": "1.6.19",
     "https-proxy-agent": "^9.1.0",
     "imapflow": "2.9.1",
     "jpeg-js": "0.4.4",

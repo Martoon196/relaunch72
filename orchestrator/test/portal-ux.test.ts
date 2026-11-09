@@ -58,7 +58,8 @@ test('portal shell provides native keyboard navigation and responsive landmarks'
   assert.match(html, /@media\(forced-colors:active\)/);
   assert.match(html, /\.field input:focus-visible\{outline:3px solid Highlight\}/);
   assert.doesNotMatch(html, /\.field input:focus\{[^}]*outline:0/);
-  assert.match(html, /<nav class="mobile-nav" aria-label="Mobile navigation" style="--mobile-nav-count:3">/);
+  assert.match(html, /<nav class="mobile-nav" aria-label="Mobile navigation" style="--mobile-nav-count:4">/);
+  assert.match(html, /<a class="nav-item" href="\/portal\/webinars">.*Webinars<\/span><\/a>/s);
   assert.match(PORTAL_STYLE, /bottom:calc\(10px \+ env\(safe-area-inset-bottom\)\)/);
   assert.match(PORTAL_STYLE, /min-height:56px/);
   assert.match(html, /\.command-popover\{position:fixed;top:70px;left:18px;right:18px;width:auto/);
@@ -72,7 +73,7 @@ test('portal shell provides native keyboard navigation and responsive landmarks'
 test('portal shell advertises the real CRM route only when its service is connected', () => {
   const html = dashboardPage(dashboard(), undefined, { crmAvailable: true });
   assert.match(html, /href="\/portal\/crm\/contacts"[^>]*>.*CRM<\/a>/s);
-  assert.match(html, /<nav class="mobile-nav" aria-label="Mobile navigation" style="--mobile-nav-count:4">/);
+  assert.match(html, /<nav class="mobile-nav" aria-label="Mobile navigation" style="--mobile-nav-count:5">/);
 });
 
 test('small semantic text tokens retain WCAG AA contrast on their surfaces', () => {
@@ -93,13 +94,15 @@ test('small semantic text tokens retain WCAG AA contrast on their surfaces', () 
 test('remaining planned platform modules are discoverable but never rendered as working links', () => {
   const html = dashboardPage(dashboard());
   const planned = CORE_PLATFORM_MODULES.filter((module) => module.stage === 'planned');
-  assert.equal(planned.length, 4);
+  assert.equal(planned.length, 3);
   for (const module of planned) {
     assert.match(html, new RegExp(module.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.match(html, /aria-disabled="true"/);
   assert.match(html, /Designed into the platform boundary · not available in this sandbox/);
-  assert.doesNotMatch(html, /href="\/portal\/(social|listening|webinars|automations)"/);
+  assert.doesNotMatch(html, /href="\/portal\/(social|listening|automations)"/);
+  // Webinars is a working route: its page shows Cloudflare setup state honestly when unconfigured.
+  assert.match(html, /href="\/portal\/webinars"/);
 });
 
 test('empty CRM and content states explain what is absent without fake controls', () => {

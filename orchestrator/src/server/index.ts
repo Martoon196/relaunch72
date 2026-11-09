@@ -659,6 +659,8 @@ async function main(): Promise<void> {
         seoBlog: postgresPortal.seoBlog,
         releasedSeoMedia: postgresPortal.releasedSeoMedia,
         seoBlogVaultReady: postgresPortal.seoBlogVaultReady,
+        webinars: postgresPortal.webinars,
+        webinarSetup: postgresPortal.webinarSetup,
         companyAssets: postgresPortal.companyAssets,
         companyContentSync: postgresPortal.companyContentSync,
         companyContentReview: postgresPortal.companyContentReview,
@@ -1026,6 +1028,10 @@ async function main(): Promise<void> {
         onResult: result => { if (result.failed > 0) console.warn(`MHP sign-up emails: ${result.sent} sent, ${result.failed} need a retry.`); },
       })
     : () => {};
+  // Webinar messages and Cloudflare reconciliation. Job claims are lease-based, so
+  // several web instances can run this safely; WEBINAR_WORKER_ENABLED=false turns it off.
+  const webinarWorker = process.env.WEBINAR_WORKER_ENABLED?.trim() === 'false' ? undefined : postgresPortal?.webinarWorker;
+  webinarWorker?.start();
   server.headersTimeout = 10_000;
   server.requestTimeout = 30_000;
   server.timeout = 30_000;
@@ -1050,6 +1056,7 @@ async function main(): Promise<void> {
     stopMhpWindow();
     stopMhpPurchaseWelcomes();
     stopMhpMarketing();
+    webinarWorker?.stop();
     console.log(`Received ${signal}; draining HTTP requests and closing database pools.`);
     try {
       await new Promise<void>((resolve, reject) => {

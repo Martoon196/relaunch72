@@ -6,6 +6,7 @@ import test from 'node:test';
 import type { Pool, QueryResult } from 'pg';
 import { discoverMigrations } from '../../src/db/migrate.js';
 import { assertRuntimeSchemaCurrent } from '../../src/db/runtime-readiness.js';
+import { WEBINARS_CHECKSUM, WEBINARS_MIGRATION } from '../../src/db/webinar-schema.js';
 
 async function fixtureDirectory(): Promise<string> {
   const directory = await mkdtemp(path.join(tmpdir(), 'r72-runtime-ledger-'));
@@ -479,13 +480,46 @@ test('payments142 release is ready before and after its exact additive 0142, and
   await assert.rejects(assertStrictSchemaCurrent(runtimePool([...rows,{filename:'0143_unknown.sql',checksum:'a'.repeat(64)}])),/migration not present/);
 });
 
+async function prefixDirectory(count:number,label:string):Promise<string>{
+  const prefix=(await discoverMigrations()).slice(0,count);
+  const directory=await mkdtemp(path.join(tmpdir(),`r72-${label}-`));
+  await Promise.all(prefix.map(m=>writeFile(path.join(directory,m.filename),m.sql,'utf8')));
+  return directory;
+}
+
 test('MHP inbox 143 cutover and recovery accept only the exact adjacent ledgers', async()=>{
   const rows=(await discoverMigrations()).slice(0,142).map(({filename,checksum})=>({filename,checksum}));
   const successor={filename:'0143_mhp_whatsapp_direct_inbox.sql',checksum:'69eae7f9f1672973b6dcf72fd093922df7cf94580da9f535e063a1fa886bc42e'};
-  const check=(dbRows:typeof rows)=>assertRuntimeSchemaCurrent(runtimePool(dbRows),undefined,{});
+  const directory=await prefixDirectory(143,'inbox143');
+  const check=(dbRows:typeof rows)=>assertRuntimeSchemaCurrent(runtimePool(dbRows),directory,{});
   await check(rows);
   await check([...rows,successor]);
   await assert.rejects(check([...rows,{...successor,checksum:'a'.repeat(64)}]));
   await assert.rejects(check([...rows.slice(0,-1),successor]));
   await assert.rejects(check([...rows,successor,{filename:'0144_unreviewed.sql',checksum:'a'.repeat(64)}]));
+});
+
+test('webinars 144 cutover and 143 recovery accept only the exact reviewed 0144', async()=>{
+  const all=(await discoverMigrations()).map(({filename,checksum})=>({filename,checksum}));
+  assert.equal(all.length,144);
+  assert.deepEqual(all[143],{filename:WEBINARS_MIGRATION,checksum:WEBINARS_CHECKSUM});
+  const through143=all.slice(0,143);
+  const webinars=all[143]!;
+  const forged={...webinars,checksum:'a'.repeat(64)};
+  // The capable 144 release: ready on the exact 143 ledger (0144 pending) and after 0144.
+  const capable=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),undefined,{});
+  await assert.doesNotReject(capable(through143));
+  await assert.doesNotReject(capable(all));
+  await assert.rejects(capable(all.slice(0,142)),/schema is behind by 2 migration/);
+  await assert.rejects(capable([...through143,forged]),/checksum changed/);
+  await assert.rejects(capable([...through143.slice(0,-1),webinars]),/not a contiguous prefix|behind/);
+  await assert.rejects(capable([...through143.slice(0,-1),{...through143[142]!,checksum:'0'.repeat(64)}]),/checksum changed|behind/);
+  await assert.rejects(capable([...all,{filename:'0145_unreviewed.sql',checksum:'a'.repeat(64)}]),/migration not present/);
+  // The 143 recovery release stays ready after the exact additive 0144 only.
+  const directory=await prefixDirectory(143,'webinars143');
+  const recovery=(rows:typeof all)=>assertRuntimeSchemaCurrent(runtimePool(rows),directory,{});
+  await assert.doesNotReject(recovery(through143));
+  await assert.doesNotReject(recovery(all));
+  await assert.rejects(recovery([...through143,forged]),/migration not present/);
+  await assert.rejects(recovery([...all.slice(0,142),webinars]),/migration not present|not a contiguous prefix/);
 });

@@ -1,3 +1,5 @@
+import { handleWebinarPublic } from '../webinars/public-router.js';
+import { webinarClientKey } from '../webinars/http.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { handlePortal, type PostgresPortalDeps } from '../portal/router.js';
 import { portalCsrfToken, verifyPortalCsrf } from '../portal/session.js';
@@ -175,6 +177,10 @@ export function createMhpMount(deps: MhpMountDependencies) {
         return;
       }
       if (path === '/api/mhp/checkout/course') { await courseCheckout(req, res, deps); return; }
+      // Native webinar attendee pages for MHP-brand webinars, on the MHP app host.
+      if (path.startsWith('/w/') && portal.kind === 'postgres' && portal.webinars) {
+        if (await handleWebinarPublic(req, res, url, { service: portal.webinars, secureCookies: true, clientKey: webinarClientKey })) return;
+      }
       if (path.startsWith(`${INVESTOR_SITES_ROUTE}/`) && portal.investors) {
         await handleInvestorPublicSite(req, res, portal.investors, portal.sessionSecret); return;
       }
