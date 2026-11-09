@@ -6,7 +6,8 @@
  */
 import type { Pool } from 'pg';
 import { CreativeStudioService, type SavedGeneratedImage, type SavedImagePort } from '../creative-studio/service.js';
-import { PgCreativeLibraryStore } from '../creative-studio/pg-store.js';
+import { PgCreativeDistributionReader, PgCreativeLibraryStore } from '../creative-studio/pg-store.js';
+import type { CampaignCreatorStore } from '../seo-blog/campaign-creator.js';
 import { ChromiumArtworkRenderer } from '../creative-studio/renderer.js';
 import { PgSeoBlogStore } from '../seo-blog/pg-store.js';
 import type { SeoBlogEngine } from '../seo-blog/engine.js';
@@ -39,12 +40,17 @@ export function engineSavedImages(engine: SeoBlogEngine): { list(actorId: string
   };
 }
 
-export function createCreativeStudio(input: { readonly contentCommandPool: Pool; readonly identity: PortalSessionIdentity; readonly requestId: string; readonly engine: SeoBlogEngine }): CreativeStudioService {
+export function createCreativeStudio(input: { readonly contentCommandPool: Pool; readonly identity: PortalSessionIdentity; readonly requestId: string; readonly engine: SeoBlogEngine;
+  readonly creators?: Pick<CampaignCreatorStore, 'get' | 'list'> }): CreativeStudioService {
   const principal = { kind: 'user' as const, userId: input.identity.userId, requestId: input.requestId, sessionToken: input.identity.sessionToken, selectedWorkspaceId: input.identity.workspaceId };
   return new CreativeStudioService({
     library: new PgCreativeLibraryStore(input.contentCommandPool, principal),
     brands: new PgSeoBlogStore(input.contentCommandPool, principal),
     renderer: creativeRenderer(),
     savedImages: engineSavedImages(input.engine),
+    // Milestone 4: the existing article media path, existing acquisition proposals and read-only receipts/CRM outcomes.
+    articleMedia: { importApproved: (actorId, brandId, articleId, commandId, bytes, profile, origin) => input.engine.importCreativeImage({ userId: actorId }, brandId, articleId, commandId, bytes, profile, origin) },
+    ...(input.creators ? { creators: input.creators } : {}),
+    distribution: new PgCreativeDistributionReader(input.contentCommandPool, principal),
   });
 }

@@ -99,6 +99,8 @@ GRANT EXECUTE ON FUNCTION app_private.current_workspace_id(),app_private.current
   app_private.seo_blog_brand(uuid),app_private.seo_media_owner(uuid,bytea),app_private.seo_creator_profile(uuid)
   TO r72_creative_studio_definer;
 GRANT SELECT ON app.seo_blog_blobs,app.seo_blog_articles,app.seo_blog_creator_campaigns TO r72_creative_studio_definer;
+GRANT SELECT ON app.seo_blog_media_assets TO r72_creative_studio_definer;
+CREATE POLICY seo_blog_media_assets_creative_read ON app.seo_blog_media_assets FOR SELECT TO r72_creative_studio_definer USING(workspace_id=app_private.current_workspace_id());
 CREATE POLICY seo_blog_blobs_creative_read ON app.seo_blog_blobs FOR SELECT TO r72_creative_studio_definer USING(workspace_id=app_private.current_workspace_id());
 CREATE POLICY seo_blog_articles_creative_read ON app.seo_blog_articles FOR SELECT TO r72_creative_studio_definer USING(workspace_id=app_private.current_workspace_id());
 CREATE POLICY seo_blog_creator_campaigns_creative_read ON app.seo_blog_creator_campaigns FOR SELECT TO r72_creative_studio_definer USING(workspace_id=app_private.current_workspace_id());
@@ -255,6 +257,21 @@ BEGIN
     IF NOT ((a#>>'{target,kind}'='article_campaign' AND EXISTS(SELECT 1 FROM app.seo_blog_articles x WHERE x.workspace_id=p_workspace AND x.id::text=a#>>'{target,articleId}'))
       OR (a#>>'{target,kind}'='creator_campaign' AND EXISTS(SELECT 1 FROM app.seo_blog_creator_campaigns x WHERE x.workspace_id=p_workspace AND x.id::text=a#>>'{target,campaignId}'))) THEN
       RAISE EXCEPTION 'That campaign was not found for this brand.' USING ERRCODE='22023'; END IF;
+    -- Milestone 4: the route says which existing integration received the exact approved bytes, and is checked here.
+    IF a->>'route' IS NULL OR a->>'route' NOT IN ('article_media','tracked_link','export_only') THEN RAISE EXCEPTION 'Unknown hand-off route' USING ERRCODE='22023'; END IF;
+    IF a->>'route'='article_media' AND NOT (a#>>'{target,kind}'='article_campaign' AND coalesce(ver.data->>'media','image')='image' AND EXISTS(
+        SELECT 1 FROM app.seo_blog_media_assets variant JOIN app.seo_blog_media_assets cand ON cand.workspace_id=variant.workspace_id AND cand.id=variant.source_asset_id
+        WHERE variant.workspace_id=p_workspace AND variant.id::text=a#>>'{articleMedia,variantAssetId}' AND variant.asset_kind='variant'
+          AND encode(variant.byte_sha256,'hex')=a#>>'{articleMedia,variantSha256}' AND variant.recipe->>'profile'=a#>>'{articleMedia,profile}'
+          AND cand.id::text=a#>>'{articleMedia,candidateAssetId}' AND cand.asset_kind='candidate' AND encode(cand.byte_sha256,'hex')=ver.render_sha256
+          AND cand.provenance->>'sourceName'='creative-studio-'||ver.id::text||'.jpg')) THEN
+      RAISE EXCEPTION 'The article image does not match this approved artwork.' USING ERRCODE='55000'; END IF;
+    IF a->>'route'='tracked_link' AND NOT (a#>>'{target,kind}'='creator_campaign'
+        AND a#>>'{trackedLink,utmContent}' ~ ('^concept-[0-9]{1,2}-cs'||left(replace(ver.id::text,'-',''),8)||'$')
+        AND a#>>'{trackedLink,utmCampaign}' ~ ('^[a-z0-9-]{1,40}-'||left(replace(a#>>'{target,campaignId}','-',''),8)||'$')
+        AND position('utm_content='||(a#>>'{trackedLink,utmContent}') IN a#>>'{trackedLink,url}')>0
+        AND position('utm_campaign='||(a#>>'{trackedLink,utmCampaign}') IN a#>>'{trackedLink,url}')>0) THEN
+      RAISE EXCEPTION 'The tracked link does not carry this campaign and artwork.' USING ERRCODE='22023'; END IF;
     INSERT INTO app.creative_studio_handoffs(workspace_id,id,version_id,approval_id,target,data,created_by) VALUES(p_workspace,(a->>'id')::uuid,ver.id,appr.id,a->'target',a,actor);
     rid:=a->>'id';
   END IF;
@@ -409,3 +426,88 @@ END $f$;
 RESET ROLE;
 SET LOCAL ROLE r72_owner;
 REVOKE CREATE ON SCHEMA app_private FROM r72_seo_method_definer;
+
+-- ─── Milestone 4: distribution states and outcomes, read from the existing systems ───
+-- Read-only. No table is added: delivery states come from the existing SEO posting-plan receipts and the existing
+-- connected-calendar jobs; outcomes come from the existing CRM, journey and commerce records joined by the UTM
+-- values already stored in the existing contact attribution tables. Nothing is written, queued, sent or charged.
+GRANT SELECT ON app.seo_blog_media_commands,app.property_predator_owned_social_jobs,app.property_predator_owned_social_receipts,
+  app.contacts,app.contact_attribution_facts,app.contact_import_attribution_facts,app.opportunities,app.opportunity_stage_history,
+  app.pipeline_stages,app.conversion_milestone_facts,app.conversion_commerce_facts TO r72_creative_studio_definer;
+GRANT EXECUTE ON FUNCTION app_private.seo_media_campaign_queue_receipt_id(uuid) TO r72_creative_studio_definer;
+DO $read$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['seo_blog_media_commands','property_predator_owned_social_jobs','property_predator_owned_social_receipts',
+    'contacts','contact_attribution_facts','contact_import_attribution_facts','opportunities','opportunity_stage_history',
+    'pipeline_stages','conversion_milestone_facts','conversion_commerce_facts'] LOOP
+    EXECUTE format('CREATE POLICY %I ON app.%I FOR SELECT TO r72_creative_studio_definer USING(workspace_id=app_private.current_workspace_id())',t||'_creative_read',t);
+  END LOOP;
+END $read$;
+
+RESET ROLE;
+SET LOCAL ROLE r72_owner;
+GRANT CREATE ON SCHEMA app_private TO r72_creative_studio_definer;
+SET LOCAL ROLE r72_creative_studio_definer;
+
+CREATE FUNCTION app_private.creative_studio_distribution(p_workspace uuid,p_session bytea,p_action text,p_input jsonb)
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE actor uuid; campaign text; queues uuid[];
+BEGIN
+  actor:=app_private.seo_media_owner(p_workspace,p_session);
+  IF app_private.seo_blog_brand(p_workspace) IS NULL THEN RAISE EXCEPTION 'Brand unavailable' USING ERRCODE='42501'; END IF;
+  IF p_input IS NULL OR jsonb_typeof(p_input)<>'object' OR octet_length(p_input::text)>16384 THEN RAISE EXCEPTION 'Invalid distribution read' USING ERRCODE='22023'; END IF;
+  IF p_action='delivery' THEN
+    -- Only posting plans this brand's owner authorised; each state is what the calendar job and its receipts record.
+    IF jsonb_typeof(p_input->'queues') IS DISTINCT FROM 'array' OR jsonb_array_length(p_input->'queues')>64 THEN RAISE EXCEPTION 'Invalid distribution read' USING ERRCODE='22023'; END IF;
+    queues:=ARRAY(SELECT x::uuid FROM jsonb_array_elements_text(p_input->'queues') x);
+    RETURN coalesce((SELECT jsonb_agg(jsonb_build_object('queueIntentId',q.id,
+        'cancelled',EXISTS(SELECT 1 FROM app.seo_blog_media_commands c WHERE c.workspace_id=p_workspace AND c.action='cancel_campaign_queue' AND c.result->>'queueIntentId'=q.id::text),
+        'materialized',m.result IS NOT NULL AND m.result->>'kind'='materialized',
+        'scheduledFor',m.result->>'scheduledFor',
+        'jobState',j.state,
+        'providerPostRecorded',j.provider_external_id IS NOT NULL,
+        'events',coalesce((SELECT jsonb_agg(jsonb_build_object('kind',r.event_kind,'at',r.provider_occurred_at,'code',r.safe_code) ORDER BY r.provider_occurred_at,r.lease_version)
+          FROM app.property_predator_owned_social_receipts r WHERE r.workspace_id=p_workspace AND r.job_id=j.id),'[]'::jsonb)) ORDER BY q.created_at)
+      FROM app.seo_blog_media_commands q
+      LEFT JOIN app.seo_blog_media_commands m ON m.workspace_id=q.workspace_id AND m.id=app_private.seo_media_campaign_queue_receipt_id(q.id) AND m.action='materialize_campaign_queue'
+      LEFT JOIN app.property_predator_owned_social_jobs j ON j.workspace_id=q.workspace_id AND j.id::text=m.result->>'jobId'
+      WHERE q.workspace_id=p_workspace AND q.action='authorize_campaign_queue' AND q.actor_kind='user' AND q.id=ANY(queues)),'[]'::jsonb);
+  END IF;
+  IF p_action='outcomes' THEN
+    campaign:=p_input->>'utmCampaign';
+    IF campaign IS NULL OR campaign !~ '^[a-z0-9-]{1,40}-[0-9a-f]{8}$' THEN RAISE EXCEPTION 'Invalid distribution read' USING ERRCODE='22023'; END IF;
+    -- One bucket per contact (its latest matching touch), so no contact is counted twice. Exact UTM match only.
+    RETURN (WITH touches AS (
+        SELECT contact_id,utm_content,attributed_at FROM app.contact_attribution_facts WHERE workspace_id=p_workspace AND utm_campaign=campaign
+        UNION ALL
+        SELECT contact_id,utm_content,attributed_at FROM app.contact_import_attribution_facts WHERE workspace_id=p_workspace AND utm_campaign=campaign),
+      latest AS (SELECT DISTINCT ON (t.contact_id) t.contact_id,coalesce(t.utm_content,'') AS content,t.attributed_at
+        FROM touches t JOIN app.contacts c ON c.workspace_id=p_workspace AND c.id=t.contact_id AND c.deleted_at IS NULL
+        ORDER BY t.contact_id,t.attributed_at DESC),
+      facts AS (SELECT l.content,l.contact_id,l.attributed_at,
+        EXISTS(SELECT 1 FROM app.opportunities o WHERE o.workspace_id=p_workspace AND o.contact_id=l.contact_id AND (o.status='won' OR EXISTS(
+          SELECT 1 FROM app.opportunity_stage_history h JOIN app.pipeline_stages s ON s.workspace_id=h.workspace_id AND s.id=h.to_stage_id
+          WHERE h.workspace_id=p_workspace AND h.opportunity_id=o.id AND s.slug='qualified')
+          OR EXISTS(SELECT 1 FROM app.pipeline_stages s WHERE s.workspace_id=p_workspace AND s.id=o.stage_id AND s.slug='qualified'))) AS qualified,
+        EXISTS(SELECT 1 FROM app.conversion_milestone_facts f WHERE f.workspace_id=p_workspace AND f.contact_id=l.contact_id AND f.milestone_semantic='appointment') AS booked,
+        EXISTS(SELECT 1 FROM app.conversion_commerce_facts f WHERE f.workspace_id=p_workspace AND f.contact_id=l.contact_id AND f.fact_type='payment_collected')
+          OR EXISTS(SELECT 1 FROM app.conversion_milestone_facts f WHERE f.workspace_id=p_workspace AND f.contact_id=l.contact_id AND f.milestone_semantic='sale')
+          OR EXISTS(SELECT 1 FROM app.opportunities o WHERE o.workspace_id=p_workspace AND o.contact_id=l.contact_id AND o.status='won') AS sold,
+        EXISTS(SELECT 1 FROM app.conversion_commerce_facts f WHERE f.workspace_id=p_workspace AND f.contact_id=l.contact_id AND f.fact_type='subscription_cancelled') AS cancelled,
+        (SELECT c.lifecycle_status='customer' FROM app.contacts c WHERE c.workspace_id=p_workspace AND c.id=l.contact_id) AS customer
+        FROM latest l)
+      SELECT jsonb_build_object('utmCampaign',campaign,'readAt',clock_timestamp(),'buckets',coalesce(jsonb_agg(jsonb_build_object('utmContent',b.content,'leads',b.leads,
+        'qualified',b.qualified,'booked',b.booked,'sold',b.sold,'customers',b.customers,'subscriptionsCancelled',b.cancelled,'firstAt',b.first_at,'lastAt',b.last_at) ORDER BY b.content),'[]'::jsonb))
+      FROM (SELECT content,count(*) AS leads,count(*) FILTER (WHERE qualified) AS qualified,count(*) FILTER (WHERE booked) AS booked,count(*) FILTER (WHERE sold) AS sold,
+        count(*) FILTER (WHERE customer) AS customers,count(*) FILTER (WHERE cancelled) AS cancelled,min(attributed_at) AS first_at,max(attributed_at) AS last_at FROM facts GROUP BY content) b);
+  END IF;
+  RAISE EXCEPTION 'Unknown distribution read' USING ERRCODE='22023';
+END $f$;
+
+REVOKE ALL ON FUNCTION app_private.creative_studio_distribution(uuid,bytea,text,jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_private.creative_studio_distribution(uuid,bytea,text,jsonb) TO r72_content_command;
+
+RESET ROLE;
+SET LOCAL ROLE r72_owner;
+REVOKE CREATE ON SCHEMA app_private FROM r72_creative_studio_definer;

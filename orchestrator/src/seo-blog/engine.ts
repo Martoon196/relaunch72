@@ -1549,6 +1549,17 @@ export class SeoBlogEngine {
     await this.brandFor(actor, brandId);
     await this.mediaReview().upload(actor.userId, brandId, articleId, versionId, commandId, bytes, filename);
   }
+  /**
+   * Finished, owner-approved Creative Studio artwork enters this article's existing private media path as one
+   * exact-size format. Quality review, image use, post approval and the posting plan stay the existing separate steps.
+   */
+  async importCreativeImage(actor: Actor, brandId: string, articleId: string, commandId: string, bytes: Buffer,
+    profile: import('./jpeg-preparation.js').JpegVariantProfile, origin: import('./image-campaign.js').LocalImageOrigin): Promise<import('./image-campaign.js').ArticleLocalImageProposal> {
+    await this.brandFor(actor, brandId);
+    const article = await this.store.getArticle(brandId, articleId);
+    if (!article?.currentVersionId) throw new SeoBlogError(404, 'That article was not found.');
+    return this.mediaReview().upload(actor.userId, brandId, articleId, article.currentVersionId, commandId, bytes, `creative-studio-${origin.creativeVersionId}.jpg`, { profiles: [profile], origin });
+  }
   async withdrawCampaignImage(actor: Actor, brandId: string, articleId: string, input: import('./media-types.js').SeoMediaWithdrawalInput): Promise<void> {
     await this.brandFor(actor, brandId);
     await this.mediaReview().withdraw(actor.userId, brandId, articleId, input);

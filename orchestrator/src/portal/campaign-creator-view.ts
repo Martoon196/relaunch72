@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { parseCreativeUtmContent } from '../creative-studio/distribution.js';
 import type { BrandProfile } from '../seo-blog/types.js';
 import { ACQUISITION_CHANNELS, ACQUISITION_OBJECTIVES, type AcquisitionProposal, type AdvocacyKit, type CampaignContent, type CreatorRecord, type EmailCampaign } from '../seo-blog/campaign-creator.js';
 import { creativePrefill, trackedLinks } from '../seo-blog/acquisition-assembly.js';
@@ -63,7 +64,17 @@ function evidenceLabel(record:CreatorRecord,id:string):string {
   if(/^profile:\d+:offer:/.test(id))return 'Approved offer <span class="muted">(brand profile)</span>';
   return `${e(id)} <span class="pill bad">unknown</span>`;
 }
-function acquisitionEditor(shell:Shell,r:CreatorRecord,v:AcquisitionProposal):string {
+export interface CampaignOutcomesView { readonly utmCampaign:string; readonly read:import('../creative-studio/distribution.js').OutcomeRead|null; readonly limits:readonly string[] }
+function actualResults(o:CampaignOutcomesView|null|undefined):string {
+  if(!o)return `<section class="card"><h2>Actual results</h2><p><strong>No results recorded.</strong> This is a plan. Results appear only from real outcomes recorded after you run it through an existing channel; nothing here is evidence of performance.</p></section>`;
+  const rows=o.read?.buckets??[];
+  const label=(c:string)=>{const p=parseCreativeUtmContent(c);return p?`Concept ${p.concept+1}${p.creative?` · artwork ${p.creative}`:''}`:c?`Other tag “${e(c)}”`:'No utm_content';};
+  const table=o.read===null?'<p class="notice bad">CRM outcomes could not be read right now. Nothing was changed.</p>'
+    :rows.length?`<table><thead><tr><th>Concept / artwork</th><th>Leads</th><th>Qualified</th><th>Booked</th><th>Sold</th><th>Customers</th><th>Subscriptions cancelled</th><th>First / latest touch</th></tr></thead><tbody>${rows.map(b=>`<tr><td>${label(b.utmContent)}</td><td>${b.leads}</td><td>${b.qualified}</td><td>${b.booked}</td><td>${b.sold}</td><td>${b.customers}</td><td>${b.subscriptionsCancelled}</td><td>${b.firstAt?e(b.firstAt.slice(0,10)):'—'} / ${b.lastAt?e(b.lastAt.slice(0,10)):'—'}</td></tr>`).join('')}</tbody></table>`
+    :'<p><strong>No CRM contact carries this campaign’s tag yet.</strong> Zero here can also mean leads arrived through a form that does not record campaign tags (see limits).</p>';
+  return `<section class="card"><h2>Actual results</h2><p class="section-note">Read ${o.read?e(o.read.readAt.slice(0,16).replace('T',' '))+' UTC':'just now'} from the existing CRM, journey and payment records for <code>utm_campaign=${e(o.utmCampaign)}</code>. Nothing is estimated.</p>${table}<h3>Attribution limits</h3><ul>${o.limits.map(l=>`<li>${e(l)}</li>`).join('')}</ul></section>`;
+}
+function acquisitionEditor(shell:Shell,r:CreatorRecord,v:AcquisitionProposal,outcomes?:CampaignOutcomesView|null):string {
   const links=trackedLinks(r.brief,r.id,v),creative=shell.creativeAvailable?`${SEO_BLOG_BASE}/b/${shell.brand!.id}/creative`:null;
   const ev=r.brief.evidence;
   return `<section class="card"><h2>Evidence used</h2>${ev?.gaps.length?`<ul>${ev.gaps.map(g=>`<li><span class="pill warn">Gap</span> ${e(g)}</li>`).join('')}</ul>`:''}<p class="section-note">${ev?.research.length??0} saved research source(s) and ${ev?.facts.length??0} owner fact(s) were supplied, plus the confirmed profile's approved claims and offers. Nothing else was searched or fetched.</p></section>
@@ -75,9 +86,9 @@ function acquisitionEditor(shell:Shell,r:CreatorRecord,v:AcquisitionProposal):st
     ${creative?`<p><a class="button secondary" href="${creative}?${e(creativePrefill(r.brief,c))}">Create artwork for this concept</a></p>`:''}</fieldset>`).join('')}
   <section class="card"><h2>Measurement plan</h2><p>Primary: ${e(v.measurement.primaryMetric)}${v.measurement.secondaryMetrics.length?` · secondary: ${v.measurement.secondaryMetrics.map(e).join(', ')}`:''}</p><p>Review after ${v.measurement.reviewAfterDays} days. ${e(v.measurement.learningRule)}</p><h3>Attribution limits</h3><ul>${v.measurement.limitations.map(l=>`<li>${e(l)}</li>`).join('')}</ul></section>
   <section class="card"><h2>Predictions <span class="pill warn">Hypotheses — not results</span></h2><ul>${v.hypotheses.map(h=>`<li>${e(h.statement)} <span class="muted">${e(h.basis)}</span></li>`).join('')}</ul></section>
-  <section class="card"><h2>Actual results</h2><p><strong>No results recorded.</strong> This is a plan. Results appear only from real outcomes recorded after you run it through an existing channel; nothing here is evidence of performance.</p></section>`;
+  ${actualResults(outcomes)}`;
 }
-export function campaignCreatorReviewPage(shell:Shell,record:CreatorRecord,currentProfile:BrandProfile|null):string {
+export function campaignCreatorReviewPage(shell:Shell,record:CreatorRecord,currentProfile:BrandProfile|null,outcomes?:CampaignOutcomesView|null):string {
   const r=record,v=r.version;
   const current=Boolean(currentProfile?.confirmedAt&&currentProfile.version===r.profileVersion&&currentProfile.factsSha===r.factsSha&&!currentProfile.conflicts.length);
   const editAllowed=current&&['draft','approved'].includes(r.state)&&v;
@@ -85,7 +96,7 @@ export function campaignCreatorReviewPage(shell:Shell,record:CreatorRecord,curre
   return layout(shell,'Review campaign',`<p><a href="${base(shell)}">← Campaign creators</a></p><h1>${e(r.brief.name)}</h1><p><span class="pill">${e(r.state)}</span> · ${e(r.detail)}</p>
   ${!current?'<p class="notice">Brand context changed or needs confirmation. Review Brand setup and create a fresh campaign from the current facts.</p>':''}
   <section class="card"><h2>Campaign brief</h2><p>${e(r.brief.goal)}</p><p>Audience: ${e(r.brief.audience)}</p>${r.brief.kind==='acquisition'?'':`<p>Permission context: ${e(r.brief.permissionContext)}</p>`}${r.brief.kind==='advocacy'?`<p>Permission process: ${e(r.brief.consentProcess)}</p>`:''}<p class="section-note">${r.brief.kind==='acquisition'?'This is a campaign proposal. It does not publish, schedule, target anyone or start advertising spend.':'This is an authoring draft. It does not establish any recipient’s consent or schedule a send.'}</p></section>
-  ${v?`<form method="post" action="${base(shell)}/${r.id}/edit">${hidden}<fieldset${editAllowed?'':' disabled'}>${input('title','Draft title',v.content.title,160)}${area('summary','Campaign summary',v.content.summary,800,3)}${r.brief.kind==='email'?emailEditor(v.content as EmailCampaign):r.brief.kind==='advocacy'?advocacyEditor(v.content as AdvocacyKit):acquisitionEditor(shell,r,v.content as AcquisitionProposal)}<button type="submit">Save a new draft version</button></fieldset></form>
+  ${v?`<form method="post" action="${base(shell)}/${r.id}/edit">${hidden}<fieldset${editAllowed?'':' disabled'}>${input('title','Draft title',v.content.title,160)}${area('summary','Campaign summary',v.content.summary,800,3)}${r.brief.kind==='email'?emailEditor(v.content as EmailCampaign):r.brief.kind==='advocacy'?advocacyEditor(v.content as AdvocacyKit):acquisitionEditor(shell,r,v.content as AcquisitionProposal,outcomes)}<button type="submit">Save a new draft version</button></fieldset></form>
   ${editAllowed?`<section class="card"><h2>Review this version</h2><p>Editing clears approval. Check every subject, claim, link and permission note before approving.</p><form method="post" action="${base(shell)}/${r.id}/approve">${hidden}<label><input type="checkbox" name="reviewed" value="1" required> ${r.brief.kind==='acquisition'?'I reviewed the evidence, wording and commercial claims of this exact proposal.':'I reviewed the wording, facts and permission process for this exact draft.'}</label><button type="submit">Approve this campaign draft</button></form>${r.state==='approved'?`<p><a class="button" href="${base(shell)}/${r.id}/export">Export approved campaign</a> <a href="${base(shell)}/${r.id}/export?format=json">Export JSON</a></p>`:''}</section>`:''}`:
   `<section class="card"><h2>No usable draft yet</h2><p>A pending or uncertain request is never automatically repeated. Check its saved run to recover any completed draft. If it remains uncertain, its writing allowance stays reserved until the operation is reconciled.</p><form method="post" action="${base(shell)}/${r.id}/recover">${csrfField(shell.csrf)}<button type="submit">Check saved run</button></form></section>`}`);
 }

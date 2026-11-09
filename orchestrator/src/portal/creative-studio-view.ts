@@ -2,6 +2,7 @@
 import type { CreativeBrandContext } from '../creative-studio/brand-context.js';
 import { PLACEMENTS, PLACEMENT_IDS, type PlacementId } from '../creative-studio/placements.js';
 import { videoEstimate, type SavedGeneratedImage, type ApprovalState, type setView } from '../creative-studio/service.js';
+import { ARTICLE_MEDIA_PROFILE, PAID_CHANNELS, STAGE_LABEL, type StageEvidence } from '../creative-studio/distribution.js';
 import type { CreativeSetSummary, CreativeSetRecord } from '../creative-studio/store.js';
 import { CREATIVE_PURPOSES, PURPOSE_LABELS, type BrandKit, type CreativeVersion } from '../creative-studio/types.js';
 import { csrfField, layout, SEO_BLOG_BASE, type Shell } from './seo-blog-view.js';
@@ -27,7 +28,10 @@ figure.art figcaption{font-size:13px;margin-top:8px;display:grid;gap:6px}.art-ac
 .concept-head{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}.concept-head h3{margin:0 0 4px}.concept-head dl{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin:8px 0 0;font-size:13px}.concept-head dt{color:var(--muted)}
 .kit-logo{max-height:56px;max-width:220px;background:repeating-conic-gradient(#ddd 0 25%,#fff 0 50%) 0 0/14px 14px;padding:6px;border-radius:6px}
 .saved-grid{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}.saved-grid label{display:block;font-weight:400;border:1px solid var(--line);border-radius:8px;padding:6px;margin:0}.saved-grid img{width:100%;border-radius:4px;display:block;margin-top:4px}
-@media(max-width:700px){.cmp{grid-template-columns:1fr}}
+.ladder{width:100%;border-collapse:collapse;font-size:13px;margin:6px 0 12px}.ladder th,.ladder td{border-top:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}
+.ladder td:first-child{white-space:nowrap;font-weight:600}.st-reached{color:var(--ok,#1a7f37)}.st-failed{color:var(--bad)}.st-waiting,.st-unknown{color:var(--muted)}.st-not_applicable,.st-stopped{color:var(--muted);font-style:italic}
+.dist{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:0 0 14px}.dist h3{margin:0 0 4px;font-size:15px}.link-out{word-break:break-all;font-size:12px}
+@media(max-width:700px){.cmp{grid-template-columns:1fr}.ladder td:first-child{white-space:normal}}
 </style>`;
 
 const statePill = (s: ApprovalState, what = 'image') => s === 'approved' ? `<span class="pill ok">Approved ${what}</span>` : s === 'stale' ? '<span class="pill bad">Approval no longer current</span>' : '<span class="pill warn">Needs review</span>';
@@ -99,7 +103,19 @@ export function creativeSetPage(shell: Shell, data: {
   readonly context: CreativeBrandContext; readonly record: CreativeSetRecord; readonly view: SetViewData;
   readonly articles: readonly { id: string; title: string }[]; readonly savedImages: readonly SavedGeneratedImage[];
   readonly newCommand: () => string; readonly rendererReady: boolean;
+  readonly distribution?: Awaited<ReturnType<import('../creative-studio/service.js').CreativeStudioService['distribution']>> | null;
+  readonly acquisitions?: Awaited<ReturnType<import('../creative-studio/service.js').CreativeStudioService['acquisitionTargets']>>;
 }): string {
+  const handoffForm = (x: CreativeVersion) => {
+    const media = x.media ?? 'image', exact = media === 'image' && ARTICLE_MEDIA_PROFILE[x.placement];
+    const articleOpts = data.articles.map((a) => `<option value="article:${e(a.id)}">${e(a.title)}${exact ? '' : ' (download record only)'}</option>`).join('');
+    const acqOpts = (data.acquisitions ?? []).map((c) => `<optgroup label="${e(`Acquisition: ${c.name}`)}">${c.concepts.flatMap((k) => k.channels.map((ch) => `<option value="acq:${e(c.id)}:${k.index}:${e(ch)}">Concept ${k.index + 1} (${e(k.name)}) · ${e(ch)} · tracked link</option>`)).join('')}</optgroup>`).join('');
+    if (!articleOpts && !acqOpts) return '';
+    const hint = exact ? `Article campaigns: goes into the article's images as the ${exact === 'blog' ? 'main blog' : exact === 'instagram' ? 'Instagram portrait' : 'LinkedIn landscape'} size, unchanged.`
+      : media === 'video' ? 'Article campaigns take JPEG images only, so a video is recorded for download.' : 'This size matches no article image format, so it is never cropped; article hand-offs are recorded for download.';
+    return `<details class="small"><summary>Hand off</summary><form method="post" action="${base(shell)}/v/${e(x.id)}/handoff">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.newCommand())}"><select name="target" aria-label="Where to hand off" required>${articleOpts ? `<optgroup label="Article campaigns">${articleOpts}</optgroup>` : ''}${acqOpts}</select><button class="secondary" type="submit">Hand off</button><p class="muted">${hint} Acquisition campaigns get a link tagged with this campaign and this exact artwork. Nothing is published, scheduled or spent.</p></form></details>`;
+  };
+  const handoffNote = (n: number) => n ? `<a class="small" href="#distribution">Handed off ${n} time${n === 1 ? '' : 's'} — see distribution</a>` : '';
   const r = data.record.set.request; const concepts = data.view.concepts;
   const src = r.source.kind === 'offer' ? `Offer: ${r.source.name}` : r.source.kind === 'article' ? `Article: ${r.source.title}` : `Brief: ${r.source.text}`;
   const head = (c: SetViewData['concepts'][number]) => {
@@ -123,13 +139,13 @@ ${c.concept.background.kind === 'image' ? `<label style="font-weight:400"><input
     const blocking = x.issues.some((i) => i.blocking);
     const focal = x.concept.background.kind === 'image' ? `<details class="small"><summary>Move focal point (this format only)</summary><form method="post" action="${base(shell)}/v/${e(x.id)}/focal">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.newCommand())}"><div class="row"><label>Across<select name="x">${[0, 0.25, 0.5, 0.75, 1].map((n) => `<option value="${n}"${n === x.variant.focal.x ? ' selected' : ''}>${n === 0 ? 'Left' : n === 1 ? 'Right' : n === 0.5 ? 'Centre' : n}</option>`).join('')}</select></label><label>Down<select name="y">${[0, 0.25, 0.5, 0.75, 1].map((n) => `<option value="${n}"${n === x.variant.focal.y ? ' selected' : ''}>${n === 0 ? 'Top' : n === 1 ? 'Bottom' : n === 0.5 ? 'Middle' : n}</option>`).join('')}</select></label></div><button class="secondary" type="submit">Re-render</button></form></details>` : '';
     const approve = v.state === 'approved' ? '' : `<form method="post" action="${base(shell)}/v/${e(x.id)}/approve">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.newCommand())}"><input type="hidden" name="sha" value="${e(x.render.sha256)}">${figures ? '<label class="small" style="font-weight:400"><input type="checkbox" name="figures_confirmed" value="1" required> I confirm the flagged figures are accurate</label>' : ''}<button type="submit"${blocking || v.staleContext ? ' disabled' : ''}>Approve this image</button></form>`;
-    const handoff = v.state === 'approved' && data.articles.length ? `<form method="post" action="${base(shell)}/v/${e(x.id)}/handoff">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.newCommand())}"><select name="article" aria-label="Campaign">${data.articles.map((a) => `<option value="${e(a.id)}">${e(a.title)}</option>`).join('')}</select><button class="secondary" type="submit">Add to campaign</button></form>` : '';
+    const handoff = v.state === 'approved' ? handoffForm(x) : '';
     const contrast = Object.entries(x.render.contrast).map(([k, n]) => `${k} ${n}:1`).join(' · ');
     return `<figure class="art" id="v-${e(x.id)}"><a href="${artUrl(shell, x)}"><img src="${artUrl(shell, x)}" width="${x.render.width}" height="${x.render.height}" loading="lazy" alt="${e(`${pl.label} artwork: ${x.card ? x.concept.cards[x.card - 1]?.headline : x.concept.headline}`)}"></a>
 <figcaption><div>${statePill(v.state)} <span class="muted small">${pl.width}×${pl.height} · version ${x.number}${x.card ? ` · card ${x.card}/${x.concept.cards.length}` : ''}</span></div>
 ${x.issues.length ? `<ul class="issues">${x.issues.map((i) => `<li class="${i.blocking ? 'block' : ''}">${e(i.detail)}</li>`).join('')}</ul>` : '<span class="small muted">No layout, contrast or wording issues found.</span>'}
 <span class="small muted">Measured contrast: ${e(contrast)}</span>
-<div class="art-actions">${approve}<a class="button secondary" href="${artUrl(shell, x, true)}">Download</a>${handoff}</div>${v.handoffs.length ? `<span class="small">Added to campaign as a draft input (${v.handoffs.length}).</span>` : ''}${focal}
+<div class="art-actions">${approve}<a class="button secondary" href="${artUrl(shell, x, true)}">Download</a></div>${handoff}${handoffNote(v.handoffs.length)}${focal}
 ${v.history.length > 1 ? `<details class="small"><summary>${v.history.length - 1} earlier version${v.history.length === 2 ? '' : 's'}</summary><ul>${v.history.slice(1).map((h) => `<li><a href="${artUrl(shell, h)}">Version ${h.number}</a> · ${e(h.change)}${data.record.approvals.some((a) => a.versionId === h.id) ? ' · approved then superseded' : ''}</li>`).join('')}</ul></details>` : ''}</figcaption></figure>`;
   };
   const motion = (c: SetViewData['concepts'][number]) => {
@@ -154,7 +170,7 @@ ${c.concept.cta ? `<label style="font-weight:400"><input type="checkbox" name="s
         return `<figure class="art" id="v-${e(x.id)}"><video controls muted playsinline preload="metadata" width="${r.width}" height="${r.height}" src="${artUrl(shell, x)}" style="width:100%;height:auto;border-radius:6px;background:#000"></video>
 <figcaption><div>${statePill(video.state, 'video')} ${x.issues.some((i) => i.code === 'not_playable') ? '<span class="pill bad">Failed playback check</span>' : '<span class="pill ok">Playable video</span>'} <span class="muted small">${r.width}×${r.height} · ${e(r.mime)}${r.container === 'progressive' ? ' (fast start)' : ''} · ${((r.measuredDurationMs ?? 0) / 1000).toFixed(1)} s measured · version ${x.number}${fresh ? '' : ' · <strong>older than the current storyboard</strong>'}</span></div>
 ${x.issues.length ? `<ul class="issues">${x.issues.map((i) => `<li class="${i.blocking ? 'block' : ''}">${e(i.detail)}</li>`).join('')}</ul>` : ''}
-<div class="art-actions">${video.state === 'approved' ? '' : `<form method="post" action="${base(shell)}/v/${e(x.id)}/approve">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.newCommand())}"><input type="hidden" name="sha" value="${e(r.sha256)}">${x.issues.some((i) => i.code === 'unsupported_figure') ? '<label class="small" style="font-weight:400"><input type="checkbox" name="figures_confirmed" value="1" required> I confirm the flagged figures are accurate</label>' : ''}<button type="submit"${x.issues.some((i) => i.blocking) || video.staleContext ? ' disabled' : ''}>Approve this video</button></form>`}<a class="button secondary" href="${artUrl(shell, x, true)}">Download</a></div></figcaption></figure>`; })() : '';
+<div class="art-actions">${video.state === 'approved' ? '' : `<form method="post" action="${base(shell)}/v/${e(x.id)}/approve">${csrfField(shell.csrf)}<input type="hidden" name="commandId" value="${e(data.newCommand())}"><input type="hidden" name="sha" value="${e(r.sha256)}">${x.issues.some((i) => i.code === 'unsupported_figure') ? '<label class="small" style="font-weight:400"><input type="checkbox" name="figures_confirmed" value="1" required> I confirm the flagged figures are accurate</label>' : ''}<button type="submit"${x.issues.some((i) => i.blocking) || video.staleContext ? ' disabled' : ''}>Approve this video</button></form>`}<a class="button secondary" href="${artUrl(shell, x, true)}">Download</a></div>${video.state === 'approved' ? handoffForm(x) : ''}${handoffNote(video.handoffs.length)}</figcaption></figure>`; })() : '';
       return `<div class="cmp" style="--cols:2"><figure class="art"><a href="${artUrl(shell, v)}"><img src="${artUrl(shell, v)}" width="${v.render.width}" height="${v.render.height}" alt="Storyboard for concept ${e(c.key.slice(1))}"></a>
 <figcaption><div><span class="pill warn">Storyboard — not a video</span> <span class="muted small">${e(PLACEMENTS[v.placement].label)} · ${scenes.length} scenes · version ${v.number}</span></div>
 ${v.issues.length ? `<ul class="issues">${v.issues.map((i) => `<li class="${i.blocking ? 'block' : ''}">${e(i.detail)}</li>`).join('')}</ul>` : '<span class="small muted">No layout, contrast or wording issues found.</span>'}${sceneForm}${renderForm}</figcaption></figure>${player || '<p class="muted small">No video yet. A storyboard is a plan; a video exists only after it is rendered and passes the playback check.</p>'}</div>`;
@@ -169,5 +185,18 @@ ${v.issues.length ? `<ul class="issues">${v.issues.map((i) => `<li class="${i.bl
 <div class="cmp" style="--cols:${cols};margin-bottom:18px">${concepts.map(head).join('')}</div>
 ${rows.map((row) => `<section class="cmp-row"><h3>${e(row.label)} <span class="muted small">${PLACEMENTS[row.placement].use}</span></h3><div class="cmp" style="--cols:${cols}">${concepts.map((c) => figure(c.variants.find((v) => v.version.placement === row.placement && v.version.card === row.card))).join('')}</div></section>`).join('')}
 <h2>Video</h2><p class="muted small">Storyboards turn a concept's own copy into scenes. Videos are recorded on this server from an exact storyboard, silent with on-screen text, and checked for playback before they can be approved. No avatar, voice or video provider is used, and no customer endorsements may appear.</p>
-${concepts.map(motion).join('')}`);
+${concepts.map(motion).join('')}
+${distributionSection(data.distribution ?? null)}`);
+}
+
+const STATUS_LABEL: Readonly<Record<StageEvidence['status'], string>> = { reached: 'Reached', waiting: 'Not yet', not_applicable: 'Not applicable', unknown: 'Not recorded', failed: 'Failed', stopped: 'Stopped' };
+function ladderTable(ladder: readonly StageEvidence[]): string {
+  return `<table class="ladder"><thead><tr><th>State</th><th>Status</th><th>When</th><th>Evidence</th></tr></thead><tbody>${ladder.map((s) => `<tr><td>${STAGE_LABEL[s.stage]}</td><td class="st-${s.status}">${STATUS_LABEL[s.status]}${typeof s.count === 'number' ? ` (${s.count})` : ''}</td><td>${s.at ? e(new Date(s.at).toLocaleString('en-GB', { timeZone: 'UTC' })) + ' UTC' : '—'}</td><td>${e(s.evidence)}</td></tr>`).join('')}</tbody></table>`;
+}
+function distributionSection(dist: Awaited<ReturnType<import('../creative-studio/service.js').CreativeStudioService['distribution']>> | null): string {
+  const items = dist === null ? '<p class="notice bad small">Distribution states could not be read right now. Nothing was changed.</p>'
+    : dist.length ? dist.slice().reverse().map((d) => `<div class="dist"><h3>${e(d.label)}</h3><p class="small muted">Artwork version <a href="#v-${e(d.versionId)}">${e(d.versionId.slice(0, 8))}</a> · route: ${e(d.route.replace('_', ' '))}</p>${d.posts.map((p) => `<p class="small${d.route === 'tracked_link' ? ' link-out' : ''}"><strong>${e(p.label)}</strong></p>${ladderTable(p.ladder)}`).join('')}</div>`).join('')
+    : '<p class="muted small">Nothing handed off yet. Approve an exact image or video, then use <em>Hand off</em>.</p>';
+  return `<h2 id="distribution">Distribution and results</h2><p class="muted small">Each state is read from the existing article posting plans, the connected social calendar's provider receipts and the existing CRM. A state is shown as reached only when that record exists; later states are never assumed from earlier ones.</p>${items}
+<details class="dist"><summary><strong>Paid advertising channels</strong> — drafting is separate from activation; a suggested budget never authorises spend</summary><table class="ladder"><thead><tr><th>Platform</th><th>Connector</th><th>Drafting</th><th>Activation</th><th>Creative upload</th><th>Reporting</th></tr></thead><tbody>${PAID_CHANNELS.map((c) => `<tr><td>${e(c.label)}</td><td>${e(c.connector)}</td><td>${e(c.drafting)}</td><td>${e(c.activation)}</td><td>${e(c.creativeUpload)}</td><td>${e(c.reporting)}</td></tr>`).join('')}</tbody></table><p class="small muted">This studio does not call any advertising platform. Turning paid ads on needs a reviewed connector, your ad-account credentials and a separate owner decision per platform.</p></details>`;
 }

@@ -252,8 +252,10 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         return send(res, 200, creativeKitPage(shell('creative'), { context, kit, commandId: randomUUID() }));
       }
       if (parts[1] === 's' && parts[2] && parts.length === 3) {
-        const [found, articles, saved] = await Promise.all([studio.getSet(actor.userId, brandId, parts[2]), engine.listArticles(actor, brandId), savedWithPreview()]);
-        return send(res, 200, creativeSetPage(shell('creative'), { ...found, articles: articles.map((a) => ({ id: a.article.id, title: a.title })), savedImages: saved, newCommand: () => randomUUID(), rendererReady: studio.rendererReady }));
+        const [found, articles, saved, distribution, acquisitions] = await Promise.all([studio.getSet(actor.userId, brandId, parts[2]), engine.listArticles(actor, brandId), savedWithPreview(),
+          studio.distribution(actor.userId, brandId, parts[2]).catch(() => null), studio.acquisitionTargets(actor.userId, brandId).catch(() => [])]);
+        return send(res, 200, creativeSetPage(shell('creative'), { ...found, articles: articles.map((a) => ({ id: a.article.id, title: a.title })), savedImages: saved, newCommand: () => randomUUID(), rendererReady: studio.rendererReady,
+          distribution, acquisitions }));
       }
       throw new SeoBlogError(404, 'That page was not found.');
     }
@@ -272,7 +274,9 @@ export async function handleSeoBlog(req: IncomingMessage, res: ServerResponse, u
         const format=url.searchParams.get('format')==='json'?'json':'txt';
         return send(res,200,format==='json'?json:creatorTextExport(record,JSON.parse(json).content),format==='json'?'application/json; charset=utf-8':'text/plain; charset=utf-8',{'content-disposition':`attachment; filename="campaign.${format}"`});
       }
-      return send(res,200,campaignCreatorReviewPage(shell('campaigns'),record,await engine.getProfile(actor,brandId)));
+      const studio=record.brief.kind==='acquisition'?input.service.creativeFor?.(identity,input.requestId,engine)??null:null;
+      const outcomes=studio?await studio.campaignOutcomes(actor.userId,brandId,record.id).catch(()=>null):null;
+      return send(res,200,campaignCreatorReviewPage(shell('campaigns'),record,await engine.getProfile(actor,brandId),outcomes));
     }
     if (rest === 'authority') {
       if (input.applicationName !== 'Relaunch72 Content') throw new SeoBlogError(404, 'That page was not found.');
@@ -443,8 +447,17 @@ async function handlePost(
           return ok(`${home}/s/${located}`, 'Focal point moved for this format only. The new version needs review.');
         }
         if (parts[3] === 'handoff') {
-          await studio.handoff(actor.userId, brandId, version, commandId, { kind: 'article_campaign', articleId: (f('article') ?? '').toLowerCase() });
-          return ok(back, 'Added to the campaign as a draft input. Nothing was published, scheduled or spent.');
+          // `article:<id>` or `acq:<campaignId>:<conceptIndex>:<channel>`; legacy `article` field still accepted.
+          const raw = (f('target') ?? (f('article') ? `article:${f('article')}` : '')).toLowerCase(), bits = raw.split(':');
+          const target = bits[0] === 'article' && bits.length === 2 ? { kind: 'article_campaign' as const, articleId: bits[1]! }
+            : bits[0] === 'acq' && bits.length === 4 && /^\d{1,2}$/u.test(bits[2]!) ? { kind: 'creator_campaign' as const, campaignId: bits[1]!, concept: Number(bits[2]), channel: bits[3]! } : null;
+          if (!target) throw new SeoBlogError(400, 'Choose where to hand this artwork off.');
+          const result = await studio.handoff(actor.userId, brandId, version, commandId, target);
+          const route = result.handoff?.route;
+          return ok(`${home}/s/${located}#distribution`, result.replayed ? 'This hand-off was already recorded.' : route === 'article_media'
+            ? 'Added to the article’s private images. Review it there, choose it for a post and plan the post. Nothing was published, scheduled or spent.'
+            : route === 'tracked_link' ? 'Tracked link issued for this artwork. Post it yourself; nothing was published or spent.'
+            : 'Recorded for download only: no connected integration accepts this format. Nothing was published or spent.');
         }
       }
       throw new SeoBlogError(404, 'That page was not found.');

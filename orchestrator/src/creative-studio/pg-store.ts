@@ -5,6 +5,8 @@ import { withTransaction } from '../db/transaction.js';
 import type { PgSeoBlogPrincipal } from '../seo-blog/pg-store.js';
 import { SeoBlogError } from '../seo-blog/types.js';
 import type { CommandReceipt, CreativeLibraryStore, CreativeSetRecord, CreativeSetSummary } from './store.js';
+import type { DeliveryRecord, OutcomeRead } from './distribution.js';
+import type { DistributionReadPort } from './service.js';
 import type { BrandKit, ContextInputs, CreativeApproval, CreativeHandoff, CreativeSet, CreativeVersion } from './types.js';
 
 export class PgCreativeLibraryStore implements CreativeLibraryStore {
@@ -44,4 +46,30 @@ export class PgCreativeLibraryStore implements CreativeLibraryStore {
   getSet(brandId: string, setId: string): Promise<CreativeSetRecord | null> { return this.call(brandId, 'set_get', { setId }); }
   listSets(brandId: string): Promise<CreativeSetSummary[]> { return this.call(brandId, 'set_list'); }
   getVersion(brandId: string, versionId: string): Promise<{ version: CreativeVersion; head: boolean; approval: CreativeApproval | null } | null> { return this.call(brandId, 'version_get', { versionId }); }
+}
+
+/** Read-only distribution views through app_private.creative_studio_distribution (0143): existing receipts and CRM outcomes only. */
+export class PgCreativeDistributionReader implements DistributionReadPort {
+  private readonly sessionHash: Buffer | null;
+  constructor(private readonly pool: Pick<Pool, 'connect'>, private readonly principal: PgSeoBlogPrincipal) {
+    this.sessionHash = principal.kind === 'user' ? createHash('sha256').update(principal.sessionToken).digest() : null;
+  }
+  private async read<T>(brandId: string, action: 'delivery' | 'outcomes', input: Record<string, unknown>): Promise<T> {
+    const p = this.principal;
+    if (p.kind !== 'user') throw new SeoBlogError(403, 'Distribution views require a signed-in owner.');
+    return withTransaction(this.pool, { actorKind: 'user', workspaceId: brandId, userId: p.userId, requestId: p.requestId }, async (t) => {
+      const guard = await t.query<{ ok: boolean }>('SELECT app_private.lock_active_portal_session($1,$2,$3) AS ok', [this.sessionHash, p.userId, p.selectedWorkspaceId]);
+      if (guard.rows[0]?.ok !== true) throw new SeoBlogError(401, 'Sign in again to continue.');
+      return (await t.query<{ value: T }>('SELECT app_private.creative_studio_distribution($1,$2,$3,$4) AS value', [brandId, this.sessionHash, action, JSON.stringify(input)])).rows[0]!.value;
+    });
+  }
+  async delivery(brandId: string, queueIntentIds: readonly string[]): Promise<DeliveryRecord[]> {
+    const rows = await this.read<DeliveryRecord[]>(brandId, 'delivery', { queues: queueIntentIds.slice(0, 64) });
+    return rows.map((r) => ({ ...r, events: r.events.map((e) => ({ ...e, at: new Date(e.at).toISOString() })) }));
+  }
+  async outcomes(brandId: string, utmCampaign: string): Promise<OutcomeRead> {
+    const read = await this.read<OutcomeRead>(brandId, 'outcomes', { utmCampaign });
+    const iso = (v: string | null) => (v ? new Date(v).toISOString() : null);
+    return { ...read, readAt: iso(read.readAt)!, buckets: read.buckets.map((b) => ({ ...b, firstAt: iso(b.firstAt), lastAt: iso(b.lastAt) })) };
+  }
 }

@@ -1,4 +1,4 @@
-# Creative Studio — Milestones 1–3 (brand-aware creative; campaign intelligence; video and rich media)
+# Creative Studio — Milestones 1–4 (brand-aware creative; campaign intelligence; video and rich media; distribution and attribution)
 
 **Status, stated separately:**
 
@@ -21,7 +21,7 @@ The studio is a **Creative studio** tab in the existing multi-brand SEO area (`/
 | JPEG handling | `seo-blog/jpeg-preparation.ts` | Tested | No text/logo compositing | Additive `decodeVerifiedJpeg` export reuses its hardened header/orientation checks for every input image. |
 | Private storage | `app.seo_blog_blobs` (workspace RLS) | Live schema | — | Stores artwork and logo bytes; SQL verifies each digest. |
 | Approvals | company-content approvals, SEO media quality reviews, creator approvals | Existing | No exact approval for a creative image version | 0143 approvals bound to exact render SHA + profile version + facts digest + kit version. |
-| Distribution | Article campaigns, social uses (0137), Zernio calendar | Owner-gated | Hand-off of finished artwork | Draft hand-off record only (no delivery effect). Connecting to social media-use authorisation is Milestone 4. |
+| Distribution | Article campaigns, social uses (0137), Zernio calendar | Owner-gated | Hand-off of finished artwork | Milestone 4: exact-size approved images enter the article's existing private images; everything after that is the existing owner-gated path (see Milestone 4 below). |
 | Method packs | 0.1.1 packs incl. `visual-briefing` (0138–0140) | Private authoring approved | Not used for raster artwork | Unchanged. Milestone 2 feeds them into model-written hooks/copy. |
 | Ads connectors | `src/ads/meta.ts` | Interface only, unproven | — | Untouched. No ad activation exists here. |
 
@@ -191,3 +191,51 @@ An independent review of the whole diff (eight angles: line-by-line, removed beh
 | Altitude: long renders held in a request | Recorded; see Remaining. |
 
 Remaining from the audit: move storyboard/video rendering behind a durable job with status polling (the SEO article-image pattern) so a deploy or restart mid-render leaves an honest "unknown" record rather than a dropped request. Until then renders are bounded to 30 s of video and the request's own 120 s socket limit.
+
+# Milestone 4 — Distribution and attribution
+
+Approved creative now reaches the **existing** integrations, and the studio reports what actually happened from the
+**existing** records. Nothing new publishes, schedules, sends, spends or stores leads.
+
+## Reuse check
+
+| Need | Existing piece found | What it can do | Used how |
+| --- | --- | --- | --- |
+| Social and website hand-off | Article media path (`seo-blog/media-review.ts`, 0137): owner upload → exact JPEG preparation → quality review → hero/social use authorisation → post approval (company-content approvals) → posting plan (`campaign-queue.ts`) → connected Zernio calendar job | Owner-gated, capped, waits for the blog to be confirmed live | Approved **portrait / landscape / article** images enter it unchanged in size as the Instagram / LinkedIn / blog format. Every later step is the existing one, untouched. |
+| Campaign hand-off | Acquisition proposals (Milestone 2) with tracked links | Export only; there is no delivery integration for them | Hand-off issues a link tagged with the campaign **and** the exact artwork version. |
+| Delivery states | `seo_blog_media_commands` (authorise / materialise receipts), `property_predator_owned_social_jobs` and `_receipts` (`accepted`, `published`, `failed`, `outcome_unknown`) | Recorded by the existing calendar worker | Read-only SQL view per posting plan. |
+| CRM and lead linkage | `app.contacts`, `contact_attribution_facts` and `contact_import_attribution_facts` (both already have `utm_*` columns), opportunities and pipeline stages, `conversion_milestone_facts` (`appointment`, `sale`), `conversion_commerce_facts` (`payment_collected`, `subscription_cancelled`) | Workspace-scoped; the journey board already reads the same attribution tables | Read-only, per-brand counts by exact `utm_campaign` / `utm_content`. **No second lead store.** |
+| LeadRelay | `integrations/leadrelay` is a control proxy (no inbound outcomes). The unmerged `codex/leadrelay-campaign-stop-relay` maps `sales.appointment.booked` → `meeting.booked` and `commerce.purchase.completed` → `purchase.confirmed` | Default-off stop relay; no qualification event in the canonical catalogue | Outcome meanings match those contracts (booking = appointment milestone; sale = payment). No follow-up engine is added or triggered. |
+| Paid ads | `src/ads/meta.ts` (paused campaign shell only, legacy run pipeline) | Never un-pauses; no creative upload | Listed per platform; nothing is called. Google, LinkedIn and TikTok Ads have no connector. |
+
+## Behaviour
+
+- **Hand off** (on any approved image or video) offers this brand's articles and its acquisition proposals' concept × channel pairs. The route is chosen from the asset, not the owner's wording:
+  - `article_media` — exact-size image → the article's private images, labelled *From Creative Studio*, with no crop control (re-cropping would cut the text). The candidate is the approved bytes; SQL re-checks the candidate digest, the `creative-studio-<version>.jpg` provenance, the prepared profile and the variant digest before recording the hand-off.
+  - `tracked_link` — `utm_content=concept-<n>-cs<first 8 hex of the version id>` plus the proposal's `utm_campaign`; SQL checks both tags are in the URL and belong to this campaign and version.
+  - `export_only` — square, vertical and video for articles (no matching format; never cropped).
+- **Distribution and results** (bottom of each set) shows a ladder per hand-off and per post: *handed off → queued → provider accepted → published → delivered → lead → customer*. Each status is *reached* only when its own record exists; *failed*, *not recorded*, *not applicable* and *stopped* are shown as such and never upgraded. Delivered applies to messages only, so it is *not applicable* for social posts and *not recorded* for exported email.
+- Article posts link to the exact reviewed blog URL (enforced by the existing campaign), so leads cannot be attributed to that artwork — the ladder says so instead of guessing.
+- **Actual results** on an acquisition proposal replaces the placeholder with per concept / artwork counts (leads, qualified, booked, sold, customers, subscriptions cancelled, first/latest touch) and the attribution limits. Each contact counts once under its latest tagged touch; no revenue, ROAS, CAC or winner is computed.
+- **Paid advertising channels** lists Meta, Google, LinkedIn and TikTok individually: connector, drafting, activation, creative upload and reporting. Drafting is separate from activation and a suggested budget never authorises spend.
+
+## Database (still inside unreleased 0143)
+
+Section 3 adds no table. It adds `SELECT` grants and per-workspace read policies for the existing NOLOGIN `r72_creative_studio_definer` on the existing media, calendar-job, CRM, journey and commerce tables, and one `STABLE SECURITY DEFINER` function, `app_private.creative_studio_distribution(workspace, session, 'delivery'|'outcomes', input)`, executable only by `r72_content_command` with a genuine managing-owner session. The hand-off branch of `creative_studio_command` gained the route checks above. New checksum: `3dce5386ddb3b41896842557e1f59f7381c87adb1ec1620a3295a0421610a9ec`.
+
+## Checks
+
+- `test/creative-studio-distribution.test.ts` (4): the real article media path with real JPEG preparation (exact bytes, one 1080×1350 format, provenance, idempotent replay, square refused, stranger refused); tracked link tags and outcome reading; ladder rules (queued ≠ accepted ≠ published; failed/unknown/cancelled never upgraded); paid-channel table.
+- `test/db/creative-studio-distribution-pg.integration.test.ts` (4 subtests), real PostgreSQL 16 as `r72_content_command` with genuine owner sessions: forged or ordinary-upload article images refused; tracked links with another artwork, another campaign or tags missing from the URL refused; delivery states read only from this brand's receipts (another brand's plan invisible, cross-workspace session refused, no direct table access); outcomes count tagged contacts once, exclude other campaigns, other brands and deleted contacts, and write nothing. Upstream rows are seeded by the disposable superuser with replication-role FK bypass (test seeding only).
+- Manual visual proof: `test/manual-distribution-demo.ts` (real Chromium artwork, real router). Evidence: `creative-studio-evidence/m4-*.png`. **The CRM numbers in `m4-tracked-link-ladder-synthetic-crm.png` and `m4-actual-results-synthetic-crm.png` are synthetic fixture rows.**
+- Full suite: 4,284 tests, 0 failures, 63 skipped; creative and acquisition PG tests 17/17 plus the new 4.
+
+## Limits and owner decisions
+
+- **No live lead form records campaign tags today.** `contact_attribution_facts` only accepts affiliate rows (0016 CHECK), and the portal form, Growth HQ inbox and MHP capture do not read `utm_*`. Until one capture path stores them (a change to a live, shared workflow — owner and release-owner decision), live leads show as zero. Imported contacts with tags are counted now.
+- Subscription starts are not recorded in this database (only cancellations); the billing branch work is separate.
+- No LeadRelay qualification event exists in the canonical catalogue; "qualified" means the CRM `qualified` stage (or won).
+- Video has no connected social path for these brands; videos hand off as exports.
+- Long renders still run in-request (D-070 stop-gap); the durable render job is not part of this milestone.
+- Release: 0143 still waits for the 0142 payments cut-over and must be renumbered if the stopped Apollo branch's `0143_apollo_private_discovery` lands first.
+

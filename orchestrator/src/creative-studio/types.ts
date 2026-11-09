@@ -171,13 +171,25 @@ export interface CreativeApproval {
   readonly approvedAt: string;
 }
 
+export type HandoffTarget = Readonly<{ kind: 'article_campaign'; articleId: string } | { kind: 'creator_campaign'; campaignId: string; concept?: number; channel?: string }>;
+/**
+ * Which existing integration received the exact approved artwork:
+ * - article_media: the bytes entered the article's existing private media path (review, use, post approval and posting plan follow there);
+ * - tracked_link: an acquisition campaign channel link carrying the campaign and artwork identities (export only; no delivery integration);
+ * - export_only: recorded for download; no connected integration accepts this format.
+ */
+export type HandoffRoute = 'article_media' | 'tracked_link' | 'export_only';
 export interface CreativeHandoff {
   readonly id: string;
   readonly versionId: string;
   readonly approvalId: string;
-  readonly target: Readonly<{ kind: 'article_campaign'; articleId: string } | { kind: 'creator_campaign'; campaignId: string }>;
-  /** Draft hand-off only: nothing is published, scheduled or spent. */
+  readonly target: HandoffTarget;
+  /** Hand-off only: nothing is published, scheduled or spent by recording it. */
   readonly state: 'ready_for_review';
+  readonly route?: HandoffRoute;
+  readonly routeNote?: string;
+  readonly articleMedia?: Readonly<{ candidateAssetId: string; candidateSha256: string; variantAssetId: string; variantSha256: string; profile: 'blog' | 'instagram' | 'linkedin' }>;
+  readonly trackedLink?: Readonly<{ url: string; utmCampaign: string; utmContent: string; channel: string; concept: number }>;
   readonly createdBy: string;
   readonly createdAt: string;
 }

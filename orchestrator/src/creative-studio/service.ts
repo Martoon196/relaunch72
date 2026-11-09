@@ -14,10 +14,15 @@ import { clip, copyIssues, COPY_LIMITS, draftConcepts, factsCorpus, type Article
 import { verifyCreativeImage, CreativeImageError, type VerifiedImage } from './image-input.js';
 import { isPlacementId, PLACEMENTS, type PlacementId } from './placements.js';
 import { MOTIONS, parseHex, RendererUnavailableError, VIDEO_LIMITS, type ArtworkInput, type ArtworkRenderer, type MotionId } from './renderer.js';
+import { campaignUtm } from '../seo-blog/acquisition-assembly.js';
+import type { AcquisitionChannel, AcquisitionProposal, CampaignCreatorStore, CreatorRecord } from '../seo-blog/campaign-creator.js';
+import type { ArticleLocalImageProposal, LocalImageOrigin } from '../seo-blog/image-campaign.js';
+import { ARTICLE_MEDIA_PROFILE, ATTRIBUTION_LIMITS, creativeTrackedLink, exportLadder, handoffRoute, postLadder, trackedLinkLadder,
+  type DeliveryRecord, type OutcomeRead, type StageEvidence } from './distribution.js';
 import { mediaOf, variantKey, approvalProblem, type CreativeLibraryStore, type CreativeSetRecord } from './store.js';
 import {
   CREATIVE_PURPOSES, type BackgroundComponent, type BrandKit, type ConceptComponents, type ContextInputs, type CreativeApproval,
-  type CreativeHandoff, type CreativePurpose, type CreativeRequest, type CreativeSet, type CreativeVersion, type Palette, type StoredImageRef,
+  type CreativeHandoff, type HandoffTarget, type CreativePurpose, type CreativeRequest, type CreativeSet, type CreativeVersion, type Palette, type StoredImageRef,
   type ArtworkIssue, type Storyboard, type StoryboardScene,
 } from './types.js';
 
@@ -66,6 +71,16 @@ export function validateScenes(raw: readonly Partial<StoryboardScene>[], concept
 export function videoEstimate(storyboard: Pick<Storyboard, 'scenes'>) {
   const ms = storyboard.scenes.reduce((n, x) => n + x.durationMs, 0);
   return Object.freeze({ durationMs: ms, renderSecondsApprox: Math.ceil(ms / 1000 + storyboard.scenes.length * 1.5 + 4), providerAttempts: 0, providerCostMinor: 0 });
+}
+
+/** The existing article media path (owner upload → exact preparation → review → use → post → posting plan). */
+export interface ArticleMediaPort {
+  importApproved(actorId: string, brandId: string, articleId: string, commandId: string, bytes: Buffer, profile: 'blog' | 'instagram' | 'linkedin', origin: LocalImageOrigin): Promise<ArticleLocalImageProposal>;
+}
+/** Read-only views of existing delivery receipts and CRM outcomes (SQL boundary in 0143). */
+export interface DistributionReadPort {
+  delivery(brandId: string, queueIntentIds: readonly string[]): Promise<DeliveryRecord[]>;
+  outcomes(brandId: string, utmCampaign: string): Promise<OutcomeRead>;
 }
 
 export type CreativeBrandPort = Pick<SeoBlogStore, 'getBrand' | 'canManage' | 'latestProfile' | 'listKnowledge' | 'putBlob' | 'getBlob' | 'getArticle' | 'getVersion' | 'listArticles'>;
@@ -118,6 +133,10 @@ export class CreativeStudioService {
     readonly brands: CreativeBrandPort;
     readonly renderer: ArtworkRenderer;
     readonly savedImages?: SavedImagePort;
+    /** Milestone 4 ports onto existing integrations; each is optional and absent ports leave hand-offs record-only. */
+    readonly articleMedia?: ArticleMediaPort;
+    readonly creators?: Pick<CampaignCreatorStore, 'get' | 'list'>;
+    readonly distribution?: DistributionReadPort;
     readonly now?: () => string;
     readonly newId?: () => string;
   }) {
@@ -606,20 +625,110 @@ export class CreativeStudioService {
     return { bytes: Buffer.from(blob.bytes), version: found.version, approved };
   }
 
-  /** Hand an approved exact version to an existing campaign as a draft input. Nothing is published, scheduled or spent. */
-  async handoff(actorId: string, brandId: string, versionId: string, commandId: string, target: CreativeHandoff['target']): Promise<{ replayed: boolean }> {
+  /**
+   * Hand an approved exact version to an existing integration. Images in an exact article format enter that article's
+   * existing private media path; acquisition campaigns receive a tracked link carrying campaign and artwork identities;
+   * anything else is recorded for download. Nothing is published, scheduled, sent or spent here.
+   */
+  async handoff(actorId: string, brandId: string, versionId: string, commandId: string, target: HandoffTarget): Promise<{ replayed: boolean; handoff: CreativeHandoff | null }> {
     const { context } = await this.context(actorId, brandId);
-    if (!UUID.test(commandId)) throw new SeoBlogError(400, 'Refresh the page and try again.');
-    if (target.kind === 'article_campaign' && !(await this.deps.brands.getArticle(brandId, target.articleId))) throw new SeoBlogError(404, 'That campaign was not found.');
+    if (!UUID.test(commandId) || !UUID.test(versionId)) throw new SeoBlogError(400, 'Refresh the page and try again.');
     const inputSha = sha(canonical({ versionId, target }));
     const replay = await this.deps.library.commandResult(brandId, commandId, inputSha);
-    if (replay) return { replayed: true };
-    const found = UUID.test(versionId) ? await this.deps.library.getVersion(brandId, versionId) : null;
+    if (replay) return { replayed: true, handoff: null };
+    const found = await this.deps.library.getVersion(brandId, versionId);
     if (!found?.approval) throw new SeoBlogError(409, 'Approve this exact artwork version before adding it to a campaign.');
-    const handoff: CreativeHandoff = Object.freeze({ id: this.newId(), versionId, approvalId: found.approval.id, target, state: 'ready_for_review', createdBy: actorId, createdAt: this.now() });
+    const current = { profileVersion: context.profileVersion!, factsSha: context.factsSha!, kitVersion: context.kitVersion };
+    if (!context.confirmed || approvalProblem(found.version, found.head, found.approval, current)) throw new SeoBlogError(409, 'This approval is no longer current. Refresh and approve the current artwork.');
+    const { route, note } = handoffRoute(found.version, target.kind);
+    const base = { id: this.newId(), versionId, approvalId: found.approval.id, target, state: 'ready_for_review' as const, route, routeNote: note, createdBy: actorId, createdAt: this.now() };
+    let handoff: CreativeHandoff;
+    if (target.kind === 'article_campaign') {
+      if (!UUID.test(target.articleId) || !(await this.deps.brands.getArticle(brandId, target.articleId))) throw new SeoBlogError(404, 'That article was not found.');
+      if (route === 'article_media') {
+        if (!this.deps.articleMedia) throw new SeoBlogError(503, 'Article images are not configured here. Download the artwork instead.');
+        const blob = await this.deps.brands.getBlob(brandId, found.version.render.blobId);
+        if (!blob || sha(blob.bytes) !== found.version.render.sha256) throw new SeoBlogError(409, 'The stored artwork failed its integrity check.');
+        const profile = ARTICLE_MEDIA_PROFILE[found.version.placement]!;
+        // Deterministic per hand-off command: a retry replays the same media receipt instead of adding another image.
+        const proposal = await this.deps.articleMedia.importApproved(actorId, brandId, target.articleId, derivedId(`creative-handoff-media:${commandId}`), Buffer.from(blob.bytes), profile,
+          { kind: 'creative_studio', creativeVersionId: versionId, creativeSha256: found.version.render.sha256, placement: found.version.placement });
+        const variant = proposal.variants.find((v) => v.profile === profile);
+        if (!variant) throw new SeoBlogError(409, 'The article image was not prepared. Nothing was added.');
+        handoff = Object.freeze({ ...base, articleMedia: Object.freeze({ candidateAssetId: proposal.candidateAssetId, candidateSha256: proposal.candidateSha256, variantAssetId: variant.assetId, variantSha256: variant.sha256, profile }) });
+      } else handoff = Object.freeze(base);
+    } else {
+      const record = this.deps.creators && UUID.test(target.campaignId) ? await this.deps.creators.get(brandId, target.campaignId) : null;
+      const proposal = acquisitionProposal(record);
+      if (!record || !proposal) throw new SeoBlogError(404, 'That acquisition campaign proposal was not found.');
+      const link = Number.isInteger(target.concept) && typeof target.channel === 'string'
+        ? creativeTrackedLink(record.brief, record.id, proposal, target.concept!, target.channel as AcquisitionChannel, versionId) : null;
+      if (!link) throw new SeoBlogError(400, 'Choose one of this proposal’s concepts and one of its channels.');
+      handoff = Object.freeze({ ...base, trackedLink: link });
+    }
     const receipt = await this.deps.library.handoff(brandId, commandId, inputSha, handoff, this.inputs(context));
-    return { replayed: receipt.replayed };
+    return { replayed: receipt.replayed, handoff };
   }
+
+  /** Acquisition proposals this brand can attach artwork to, with their concepts and channels. */
+  async acquisitionTargets(actorId: string, brandId: string): Promise<{ id: string; name: string; concepts: { index: number; name: string; channels: AcquisitionChannel[] }[] }[]> {
+    await this.context(actorId, brandId);
+    if (!this.deps.creators) return [];
+    const rows = await this.deps.creators.list(brandId);
+    return rows.flatMap((r) => { const p = acquisitionProposal(r); return p ? [{ id: r.id, name: r.brief.name, concepts: p.concepts.map((c, index) => ({ index, name: c.name, channels: [...c.channels] })) }] : []; }).slice(0, 20);
+  }
+
+  /**
+   * Distribution ladder for every hand-off of one set, read from existing receipts and CRM records.
+   * States that cannot be observed are reported as such; nothing is inferred or estimated.
+   */
+  async distribution(actorId: string, brandId: string, setId: string): Promise<{ handoffId: string; versionId: string; route: string; label: string; posts: { label: string; ladder: StageEvidence[] }[] }[]> {
+    await this.context(actorId, brandId);
+    const record = UUID.test(setId) ? await this.deps.library.getSet(brandId, setId) : null;
+    if (!record) throw new SeoBlogError(404, 'That creative set was not found.');
+    const out: { handoffId: string; versionId: string; route: string; label: string; posts: { label: string; ladder: StageEvidence[] }[] }[] = [];
+    const outcomeCache = new Map<string, OutcomeRead | null>();
+    for (const h of record.handoffs.slice(-40)) {
+      if (h.route === 'article_media' && h.articleMedia && h.target.kind === 'article_campaign') {
+        const article = await this.deps.brands.getArticle(brandId, h.target.articleId);
+        const campaign = article?.campaign;
+        const uses = (campaign?.variants ?? []).flatMap((variant) => variant.revisions.filter((r) => r.media?.assetId === h.articleMedia!.variantAssetId)
+          .map((r) => ({ variant, revision: r, plan: campaign?.queueInstructions?.filter((q) => q.instruction.variantId === variant.id && q.instruction.variantRevisionId === r.id).at(-1) ?? null })));
+        const queues = uses.flatMap((u) => u.plan ? [u.plan.instruction.queueIntentId] : []);
+        const rows = queues.length && this.deps.distribution ? await this.deps.distribution.delivery(brandId, queues).catch(() => [] as DeliveryRecord[]) : [];
+        const posts = uses.length ? uses.map((u) => ({ label: `${u.variant.network === 'instagram' ? 'Instagram' : 'LinkedIn'} post · ${u.variant.angle.replace('_', ' ')}`,
+          ladder: postLadder(h, u.plan ? rows.find((x) => x.queueIntentId === u.plan!.instruction.queueIntentId) ?? null : null, Boolean(u.plan)) }))
+          : [{ label: 'Not yet chosen for a post', ladder: postLadder(h, null, false) }];
+        out.push({ handoffId: h.id, versionId: h.versionId, route: h.route, label: article ? `Article images · ${articleTitle(article)}` : 'Article images', posts });
+      } else if (h.route === 'tracked_link' && h.trackedLink) {
+        const key = h.trackedLink.utmCampaign;
+        if (!outcomeCache.has(key)) outcomeCache.set(key, this.deps.distribution ? await this.deps.distribution.outcomes(brandId, key).catch(() => null) : null);
+        out.push({ handoffId: h.id, versionId: h.versionId, route: h.route, label: `Acquisition campaign · concept ${h.trackedLink.concept + 1} · ${h.trackedLink.channel}`,
+          posts: [{ label: h.trackedLink.url, ladder: trackedLinkLadder(h, outcomeCache.get(key)!) }] });
+      } else {
+        out.push({ handoffId: h.id, versionId: h.versionId, route: h.route ?? 'export_only', label: h.target.kind === 'article_campaign' ? 'Recorded for download (earlier hand-off or unsupported format)' : 'Recorded', posts: [{ label: 'Download only', ladder: exportLadder(h) }] });
+      }
+    }
+    return out;
+  }
+
+  /** Real outcomes for one acquisition proposal, by concept and artwork, with the attribution limits stated. */
+  async campaignOutcomes(actorId: string, brandId: string, campaignId: string): Promise<{ utmCampaign: string; read: OutcomeRead | null; limits: readonly string[] } | null> {
+    await this.context(actorId, brandId);
+    const record = this.deps.creators && UUID.test(campaignId) ? await this.deps.creators.get(brandId, campaignId) : null;
+    if (!record || !acquisitionProposal(record)) return null;
+    const utmCampaign = campaignUtm(record.brief, record.id);
+    const read = this.deps.distribution ? await this.deps.distribution.outcomes(brandId, utmCampaign).catch(() => null) : null;
+    return { utmCampaign, read, limits: ATTRIBUTION_LIMITS };
+  }
+}
+
+function acquisitionProposal(record: CreatorRecord | null): AcquisitionProposal | null {
+  return record?.brief.kind === 'acquisition' && record.version && 'concepts' in record.version.content ? record.version.content as AcquisitionProposal : null;
+}
+function derivedId(seed: string): string {
+  const h = createHash('sha256').update(seed).digest('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
 function articleTitle(a: Article): string { const t = a.slug.replace(/-/gu, ' '); return t.charAt(0).toUpperCase() + t.slice(1); }

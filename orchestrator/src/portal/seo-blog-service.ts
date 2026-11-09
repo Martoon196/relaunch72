@@ -87,7 +87,10 @@ export function createPortalSeoBlogService(contentCommandPool: Pool, env: NodeJS
     social: socialReady ? 'live' : 'unavailable',
     creativeEnabled: env.CREATIVE_STUDIO_ENABLED === 'true',
     creativeFor(identity, requestId, engine) {
-      return env.CREATIVE_STUDIO_ENABLED === 'true' ? createCreativeStudio({ contentCommandPool, identity, requestId, engine }) : null;
+      if (env.CREATIVE_STUDIO_ENABLED !== 'true') return null;
+      const creators = env.SEO_BLOG_METHOD_PACKS === 'true' && env.SEO_BLOG_CAMPAIGN_CREATORS === 'true'
+        ? new PgCampaignCreatorStore(contentCommandPool, { kind: 'user', userId: identity.userId, requestId, sessionToken: identity.sessionToken, selectedWorkspaceId: identity.workspaceId }) : undefined;
+      return createCreativeStudio({ contentCommandPool, identity, requestId, engine, ...(creators ? { creators } : {}) });
     },
     async creativeSavedImages(identity, _requestId, engine, brandId) {
       return env.CREATIVE_STUDIO_ENABLED === 'true' ? engineSavedImages(engine).list(identity.userId, brandId).catch(() => []) : [];
