@@ -25,6 +25,7 @@ import { handleWebinarPublic } from '../../src/webinars/public-router.js';
 import { PgWebinarService } from '../../src/webinars/service.js';
 import { CloudflareStreamClient } from '../../src/webinars/stream.js';
 import { WebinarWorker } from '../../src/webinars/worker.js';
+import { StudioRelay, type StudioProbe } from '../../src/webinars/studio.js';
 
 export const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 
@@ -73,13 +74,15 @@ export interface FakeCloudflare {
   fetch: typeof fetch;
   readonly calls: { method: string; path: string; body: unknown }[];
   createFails: 'none' | 'timeout';
+  /** RTMPS base returned for new live inputs (the studio test points it at a local receiver). */
+  ingestUrl: string;
   videos: Map<string, Record<string, unknown>>;
   liveInputs: Map<string, Record<string, unknown>>;
 }
 
 /** A recording stand-in for the Cloudflare Stream REST API (shapes per the cloudflare SDK typings). */
 export function fakeCloudflare(): FakeCloudflare {
-  const state: FakeCloudflare = { calls: [], createFails: 'none', videos: new Map(), liveInputs: new Map(), fetch: undefined as unknown as typeof fetch };
+  const state: FakeCloudflare = { calls: [], createFails: 'none', ingestUrl: 'rtmps://live.cloudflare.com:443/live/', videos: new Map(), liveInputs: new Map(), fetch: undefined as unknown as typeof fetch };
   const ok = (result: unknown, init: ResponseInit = {}) => new Response(JSON.stringify({ success: true, result }), { status: 200, ...init });
   state.fetch = (async (input: string | URL, init?: RequestInit) => {
     const url = new URL(String(input));
@@ -95,7 +98,7 @@ export function fakeCloudflare(): FakeCloudflare {
         throw new Error('timeout');
       }
       const uid = randomUUID().replace(/-/g, '');
-      const li = { uid, meta: body.meta, status: null, rtmps: { url: 'rtmps://live.cloudflare.com:443/live/', streamKey: `key-${uid}` }, srt: { url: 'srt://live.cloudflare.com:778', streamId: uid, passphrase: 'pp' } };
+      const li = { uid, meta: body.meta, status: null, rtmps: { url: state.ingestUrl, streamKey: `key-${uid}` }, srt: { url: 'srt://live.cloudflare.com:778', streamId: uid, passphrase: 'pp' } };
       state.liveInputs.set(uid, li);
       return ok(li);
     }
@@ -175,13 +178,23 @@ export async function startWebinarHttpHarness(input: {
   readonly configFor: (origin: string) => WebinarConfig;
   readonly now?: () => number;
   readonly port?: number;
+  /** Enables the browser studio relay with this ffmpeg; live inputs then ingest at studioIngestUrl (local RTMP allowed). */
+  readonly studio?: { readonly ffmpegPath: string; readonly ingestUrl: string };
 }): Promise<WebinarHttpHarness> {
   const cf = fakeCloudflare();
+  let studio: StudioRelay | undefined;
+  let studioProbe: StudioProbe | null = null;
+  if (input.studio) {
+    cf.ingestUrl = input.studio.ingestUrl;
+    studio = new StudioRelay({ ffmpegPath: input.studio.ffmpegPath, maxSessions: 2, maxMinutes: 30, allowLocalIngest: true }, { log: () => undefined });
+    studioProbe = await studio.probe();
+  }
   const mailer = recordingMailer();
   const sessionSecret = 'preview-session-secret-'.padEnd(48, 'x');
   let service!: PgWebinarService;
   let worker!: WebinarWorker;
   const server: Server = createServer((req, res) => { void route(req, res); });
+  server.on('upgrade', (req, socket, head) => { if (!studio?.handleUpgrade(req, socket, head)) socket.destroy(); });
   await new Promise<void>((resolve) => server.listen(input.port ?? 0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const config = input.configFor(origin);
@@ -223,7 +236,7 @@ export async function startWebinarHttpHarness(input: {
           billingAvailable: false, crmAvailable: true, mode: 'crm',
         });
         if (await handleWebinars(req, res, url, {
-          service, setup: { database: true, databaseDetail: '', config, crmAvailable: true },
+          service, setup: { database: true, databaseDetail: '', config, crmAvailable: true, studio: studioProbe }, studio,
           identity: user?.identity ?? null, authenticated: user !== null, requestId: randomUUID(), sessionSecret, shell,
         })) return;
       }
@@ -237,7 +250,7 @@ export async function startWebinarHttpHarness(input: {
 
   return {
     origin, service, worker, cf, mailer, sessionSecret,
-    close: () => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()); }),
+    close: () => new Promise<void>((resolve) => { studio?.stopAll(); server.closeAllConnections(); server.close(() => resolve()); }),
   };
 }
 

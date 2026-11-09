@@ -36,6 +36,13 @@ export interface WebinarLimits {
   readonly recordingRetentionDays: number | null;
 }
 
+export interface StudioConfig {
+  /** ffmpeg used by the browser-studio relay (PATH name or absolute path). */
+  readonly ffmpegPath: string;
+  readonly maxSessions: number;
+  readonly maxMinutes: number;
+}
+
 export interface WebinarConfig {
   readonly stream: StreamConfig | null;
   /** Human-readable, name-only reasons video is unavailable. Empty when stream is set. */
@@ -52,6 +59,7 @@ export interface WebinarConfig {
   /** Brand app hosts, e.g. the MHP workspace's app.martinhowardproperty.co.uk. */
   readonly workspaceOrigins: ReadonlyMap<string, string>;
   readonly limits: WebinarLimits;
+  readonly studio: StudioConfig;
 }
 
 export const WEBINAR_ENV = Object.freeze({
@@ -70,6 +78,9 @@ export const WEBINAR_ENV = Object.freeze({
   maxLiveInputs: 'WEBINAR_MAX_LIVE_INPUTS_PER_WORKSPACE',
   maxUploadMinutes: 'WEBINAR_MAX_UPLOAD_MINUTES',
   recordingRetentionDays: 'WEBINAR_RECORDING_RETENTION_DAYS',
+  studioFfmpeg: 'WEBINAR_STUDIO_FFMPEG',
+  studioMaxSessions: 'WEBINAR_STUDIO_MAX_SESSIONS',
+  studioMaxMinutes: 'WEBINAR_STUDIO_MAX_MINUTES',
 });
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -187,6 +198,11 @@ export function loadWebinarConfig(env: NodeJS.ProcessEnv = process.env): Webinar
       maxLiveInputsPerWorkspace: boundedInt(value(env, WEBINAR_ENV.maxLiveInputs), 0, 20, 2),
       maxUploadMinutes: boundedInt(value(env, WEBINAR_ENV.maxUploadMinutes), 5, 600, 240),
       recordingRetentionDays: retention === null ? null : boundedInt(retention, 30, 3650, 365),
+    }),
+    studio: Object.freeze({
+      ffmpegPath: ((p) => (p && /^[\w./-]{1,200}$/.test(p) ? p : 'ffmpeg'))(value(env, WEBINAR_ENV.studioFfmpeg)),
+      maxSessions: boundedInt(value(env, WEBINAR_ENV.studioMaxSessions), 0, 10, 1),
+      maxMinutes: boundedInt(value(env, WEBINAR_ENV.studioMaxMinutes), 10, 480, 240),
     }),
   });
 }

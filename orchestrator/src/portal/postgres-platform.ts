@@ -185,6 +185,7 @@ import { createPostmarkMailer } from '../webinars/messages.js';
 import { PgWebinarService } from '../webinars/service.js';
 import { CloudflareStreamClient } from '../webinars/stream.js';
 import { WebinarWorker } from '../webinars/worker.js';
+import { StudioRelay } from '../webinars/studio.js';
 import type { WebinarSetupInput } from './router.js';
 import type { FinanceDraftsService } from './finance-drafts-service.js';
 
@@ -211,6 +212,8 @@ export interface PgPortalPlatform {
   webinars?: PgWebinarService;
   /** In-process worker for webinar messages and Cloudflare reconciliation (started by the server). */
   webinarWorker?: WebinarWorker;
+  /** Browser-studio relay (camera/mic/screen → recorded live input); present with the webinar service. */
+  webinarStudio?: StudioRelay;
   /** Always present: what the Webinars setup page reports. */
   webinarSetup: WebinarSetupInput;
   releasedSeoMedia?: import('./seo-blog-media.js').PortalReleasedSeoMediaReader;
@@ -1299,6 +1302,7 @@ export async function buildPgPortalPlatform(
     const webinarConfig = loadWebinarConfig(env);
     let webinars: PgWebinarService | undefined;
     let webinarWorker: WebinarWorker | undefined;
+    let webinarStudio: StudioRelay | undefined;
     let webinarSetup: WebinarSetupInput = { database: false, config: webinarConfig, crmAvailable: true,
       databaseDetail: 'Set DATABASE_CONTENT_COMMAND_URL (the r72_content_command identity) to enable webinars.' };
     if (contentCommandPool) {
@@ -1311,7 +1315,10 @@ export async function buildPgPortalPlatform(
             crm: { commands: new WebinarCrmCommands({ transactionRunner: webinarCrmRunner(commandPool) }), pool: commandPool } });
           webinarWorker = new WebinarWorker({ pool: contentCommandPool, config: webinarConfig, stream, mailer: createPostmarkMailer(),
             log: (line) => console.warn(line) });
-          webinarSetup = { database: true, databaseDetail: '', config: webinarConfig, crmAvailable: true };
+          // The studio relay needs ffmpeg with RTMPS; the probe result is shown honestly on the setup panel.
+          webinarStudio = new StudioRelay({ ...webinarConfig.studio });
+          const studioProbe = webinarConfig.stream ? await webinarStudio.probe() : { available: false, detail: 'Cloudflare Stream is not configured.' };
+          webinarSetup = { database: true, databaseDetail: '', config: webinarConfig, crmAvailable: true, studio: studioProbe };
         } else {
           webinarSetup = { ...webinarSetup, databaseDetail: 'Migration 0144 (native webinars) is not applied to this database yet.' };
         }
@@ -1375,6 +1382,7 @@ export async function buildPgPortalPlatform(
       seoBlogVaultReady: Boolean(SeoBlogCredentialVault.fromEnv(env)),
       webinars,
       webinarWorker,
+      webinarStudio,
       webinarSetup,
       companyAssets,
       companyContentSync,

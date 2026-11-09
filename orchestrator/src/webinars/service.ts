@@ -465,6 +465,20 @@ export class PgWebinarService {
     return (await stream.getLiveInput(event.liveInputUid)).credentials;
   }
 
+  /**
+   * Ingest details for the browser-studio relay (server-side only; never sent to
+   * the browser). Requires owner/admin rights through get().
+   */
+  async studioIngest(identity: PortalSessionIdentity, requestId: string, id: string): Promise<{ workspaceId: string; eventId: string; ingestUrl: string; streamKey: string }> {
+    const { event } = await this.get(identity, requestId, id);
+    if (event.kind !== 'live') throw new WebinarError(409, 'The studio is for live webinars.');
+    if (event.status === 'cancelled' || event.status === 'archived') throw new WebinarError(409, `This webinar is ${event.status}.`);
+    if (event.sessionState === 'ended') throw new WebinarError(409, 'This session has ended.');
+    const c = await this.liveCredentials(identity, requestId, id);
+    if (!c.rtmpsUrl || !c.rtmpsStreamKey) throw new WebinarError(409, 'Cloudflare returned no RTMPS ingest for this live input.');
+    return { workspaceId: event.workspaceId, eventId: event.id, ingestUrl: c.rtmpsUrl, streamKey: c.rtmpsStreamKey };
+  }
+
   /** Reads the provider's connection state now and stores it. */
   async refreshLive(identity: PortalSessionIdentity, requestId: string, id: string): Promise<WebinarEvent> {
     const stream = this.requireStream();

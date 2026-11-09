@@ -10,6 +10,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHmac, randomUUID } from 'node:crypto';
 import { openTestDatabase, testDatabaseSkipReason } from './database-helper.js';
 import { PROFILES, WEBHOOK_SECRET, loginRole, seedBrand, startWebinarHttpHarness, syntheticConfig } from './webinar-harness.js';
@@ -231,6 +232,86 @@ test('0144 native webinars over HTTP: menu, management, brand isolation, attende
     assert.equal((await other.go(`/portal/webinars/${id}/people.csv`)).status, 303, "another brand cannot export Alpha's registrants");
   } finally {
     await harness?.close();
+    await content.end();
+    await crmPool.end();
+    await admin.end();
+  }
+});
+
+const ffmpegWithRtmps = (() => {
+  const r = spawnSync('ffmpeg', ['-hide_banner', '-protocols'], { encoding: 'utf8' });
+  return r.status === 0 && /^\s*rtmps\s*$/m.test(r.stdout.split(/Output:/)[1] ?? '');
+})();
+
+test('0144 browser studio over HTTP: owner-only tickets, no stream key in the browser, honest when the relay is missing', { skip: skip || (ffmpegWithRtmps ? false : 'ffmpeg with RTMPS not installed'), timeout: 120_000 }, async () => {
+  const admin = await openTestDatabase();
+  const content = await loginRole(admin, 'r72_content_command');
+  const crmPool = await loginRole(admin, 'r72_crm_command');
+  const harnesses: Awaited<ReturnType<typeof startWebinarHttpHarness>>[] = [];
+  try {
+    const alpha = await seedBrand(admin, 'Alpha');
+    const bravo = await seedBrand(admin, 'Bravo');
+    const users = {
+      alpha: { identity: alpha.owner, profile: PROFILES.relaunch72 },
+      'alpha-viewer': { identity: alpha.viewer, profile: PROFILES.relaunch72 },
+      bravo: { identity: bravo.owner, profile: PROFILES.propertyPredator },
+    };
+    const h = await startWebinarHttpHarness({ contentPool: content, crmPool, users, configFor: (o) => syntheticConfig(alpha.ws, bravo.ws, o),
+      studio: { ffmpegPath: 'ffmpeg', ingestUrl: 'rtmp://127.0.0.1:1/live/' } });
+    harnesses.push(h);
+    const csrf = (token: string) => portalCsrfToken(h.sessionSecret, token);
+    const owner = new Browser(h.origin);
+    await owner.go('/preview/sign-in?as=alpha');
+    const created = await owner.go('/portal/webinars', { form: { kind: 'live', title: 'Studio test', timezone: 'Europe/London', startsLocal: '2026-11-25T19:00', durationMinutes: '60',
+      reminders: '60', serviceNotice: 'x', _csrf: csrf(alpha.owner.sessionToken) } });
+    const id = /\/portal\/webinars\/([0-9a-f-]{36})\?/.exec(created.location ?? '')![1]!;
+    const ticket = (b: Browser, token: string, eid = id) => b.go(`/portal/webinars/${eid}/studio/ticket`, { json: {}, headers: { 'x-csrf-token': csrf(token) } });
+
+    let page = await owner.go(`/portal/webinars/${id}/studio`);
+    assert.equal(page.status, 200);
+    assert.match(page.text, /Create a live input first/);
+    assert.match(page.headers.get('content-security-policy') ?? '', /connect-src 'self' wss:\/\/127\.0\.0\.1:\d+ ws:\/\/127\.0\.0\.1:\d+/);
+    assert.equal((await ticket(owner, alpha.owner.sessionToken)).status, 409, 'no live input yet');
+
+    await owner.go(`/portal/webinars/${id}/live-input`, { form: { _csrf: csrf(alpha.owner.sessionToken) } });
+    page = await owner.go(`/portal/webinars/${id}/studio`);
+    assert.doesNotMatch(page.text, /Create a live input first|not available on this server/);
+    assert.match(page.text, /data-studio /);
+    assert.doesNotMatch(page.text, /key-[0-9a-f]{32}|rtmps?:\/\//, 'the studio page carries no ingest address or key');
+    const video = await owner.go(`/portal/webinars/${id}/video`);
+    assert.match(video.text, /Broadcasting from the browser[\s\S]*Available/);
+
+    const issued = await ticket(owner, alpha.owner.sessionToken);
+    assert.equal(issued.status, 200, issued.text);
+    const body = JSON.parse(issued.text) as { path: string };
+    assert.match(body.path, /^\/api\/webinars\/studio\?ticket=[A-Za-z0-9_-]{43}$/);
+    assert.doesNotMatch(issued.text, /key-|rtmp/, 'only a one-time ticket reaches the browser');
+    assert.equal((await owner.go(`/portal/webinars/${id}/studio/ticket`, { json: {} })).status, 403, 'CSRF header required');
+
+    const viewer = new Browser(h.origin);
+    await viewer.go('/preview/sign-in?as=alpha-viewer');
+    assert.equal((await ticket(viewer, alpha.viewer.sessionToken)).status, 403, 'viewer cannot broadcast');
+    const other = new Browser(h.origin);
+    await other.go('/preview/sign-in?as=bravo');
+    assert.equal((await ticket(other, bravo.owner.sessionToken)).status, 404, "another brand cannot broadcast into Alpha's webinar");
+
+    // A deployment whose ffmpeg cannot be found says so, and offers no studio controls that could work.
+    const missing = await startWebinarHttpHarness({ contentPool: content, crmPool, users, configFor: (o) => syntheticConfig(alpha.ws, bravo.ws, o),
+      studio: { ffmpegPath: '/nonexistent/ffmpeg', ingestUrl: 'rtmp://127.0.0.1:1/live/' } });
+    harnesses.push(missing);
+    const owner2 = new Browser(missing.origin);
+    await owner2.go('/preview/sign-in?as=alpha');
+    const id2 = /\/portal\/webinars\/([0-9a-f-]{36})\?/.exec((await owner2.go('/portal/webinars', { form: { kind: 'live', title: 'No relay', timezone: 'Europe/London', startsLocal: '2026-11-25T19:00',
+      durationMinutes: '60', reminders: '60', serviceNotice: 'x', _csrf: portalCsrfToken(missing.sessionSecret, alpha.owner.sessionToken) } })).location ?? '')![1]!;
+    await owner2.go(`/portal/webinars/${id2}/live-input`, { form: { _csrf: portalCsrfToken(missing.sessionSecret, alpha.owner.sessionToken) } });
+    const page2 = await owner2.go(`/portal/webinars/${id2}/studio`);
+    assert.match(page2.text, /not available on this server[\s\S]*ffmpeg was not found/);
+    assert.match(page2.text, /data-blocked/);
+    const refused = await owner2.go(`/portal/webinars/${id2}/studio/ticket`, { json: {}, headers: { 'x-csrf-token': portalCsrfToken(missing.sessionSecret, alpha.owner.sessionToken) } });
+    assert.equal(refused.status, 409);
+    assert.match(JSON.parse(refused.text).error, /not available on this server/);
+  } finally {
+    for (const h of harnesses) await h.close();
     await content.end();
     await crmPool.end();
     await admin.end();

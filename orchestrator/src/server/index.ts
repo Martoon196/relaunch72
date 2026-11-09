@@ -661,6 +661,7 @@ async function main(): Promise<void> {
         seoBlogVaultReady: postgresPortal.seoBlogVaultReady,
         webinars: postgresPortal.webinars,
         webinarSetup: postgresPortal.webinarSetup,
+        webinarStudio: postgresPortal.webinarStudio,
         companyAssets: postgresPortal.companyAssets,
         companyContentSync: postgresPortal.companyContentSync,
         companyContentReview: postgresPortal.companyContentReview,
@@ -997,6 +998,10 @@ async function main(): Promise<void> {
     propertyPredatorApprovedSocialMediaGateway,
   });
   const server = http.createServer((req, res) => { void app(req, res); });
+  // The only upgrade this server accepts: the webinar browser-studio channel (ticket-authenticated).
+  server.on('upgrade', (req, socket, head) => {
+    if (!postgresPortal?.webinarStudio?.handleUpgrade(req, socket, head)) socket.destroy();
+  });
   const stopMhpSchedules = postgresPortal?.mhp?.commerce.billingEnabled
     ? startMhpScheduleReconciler(postgresPortal.mhp.commerce, {
         onResult: result => {
@@ -1057,6 +1062,7 @@ async function main(): Promise<void> {
     stopMhpPurchaseWelcomes();
     stopMhpMarketing();
     webinarWorker?.stop();
+    postgresPortal?.webinarStudio?.stopAll();
     console.log(`Received ${signal}; draining HTTP requests and closing database pools.`);
     try {
       await new Promise<void>((resolve, reject) => {

@@ -11,10 +11,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { PortalSessionIdentity } from './auth-service.js';
 import { portalCsrfToken, verifyPortalCsrf } from './session.js';
 import {
-  WEBINARS_ASSET, WEBINARS_BASE, detailsTab, eventFrame, hostTab, listPage, messagesTab, newPage, peopleTab, questionsTab, resultsTab,
-  unavailablePage, videoTab, type SetupStatus, type WebinarTab,
+  WEBINARS_ASSET, WEBINARS_BASE, WEBINARS_STUDIO_ASSET, WEBINARS_STUDIO_TICK_ASSET, detailsTab, eventFrame, hostTab, listPage, messagesTab, newPage, peopleTab, questionsTab, resultsTab,
+  studioTab, unavailablePage, videoTab, type SetupStatus, type WebinarTab,
 } from './webinar-view.js';
-import { PORTAL_WEBINAR_SCRIPT } from '../webinars/client-scripts.js';
+import { PORTAL_WEBINAR_SCRIPT, STUDIO_SCRIPT, STUDIO_TICK_SCRIPT } from '../webinars/client-scripts.js';
+import { STUDIO_WS_ROUTE, type StudioRelay } from '../webinars/studio.js';
 import { publicOriginFor } from '../webinars/config.js';
 import { PUBLIC_PREVIEW_CSP, registrationPage } from '../webinars/public-view.js';
 import { computeRoomState } from '../webinars/schedule.js';
@@ -30,6 +31,8 @@ export interface WebinarRouteInput {
   readonly authenticated: boolean;
   readonly requestId: string;
   readonly sessionSecret: string;
+  /** Browser-studio relay on this instance (absent when not composed). */
+  readonly studio?: StudioRelay;
   /** Wraps a body in the standard portal shell with the Webinars menu item current. */
   readonly shell: (title: string, workspaceName: string, body: string, csrf: string) => string;
 }
@@ -179,6 +182,10 @@ export async function handleWebinars(req: IncomingMessage, res: ServerResponse, 
     send(res, 200, PORTAL_WEBINAR_SCRIPT, 'text/javascript; charset=utf-8', { 'cache-control': 'private, max-age=300' });
     return true;
   }
+  if ((p === WEBINARS_STUDIO_ASSET || p === WEBINARS_STUDIO_TICK_ASSET) && method === 'GET') {
+    send(res, 200, p === WEBINARS_STUDIO_ASSET ? STUDIO_SCRIPT : STUDIO_TICK_SCRIPT, 'text/javascript; charset=utf-8', { 'cache-control': 'private, max-age=300' });
+    return true;
+  }
   if (p === `${WEBINARS_BASE}/_assets/hls.js` && method === 'GET') {
     const asset = await hlsAsset();
     if (!asset) { send(res, 404, 'Not found', 'text/plain; charset=utf-8'); return true; }
@@ -285,7 +292,7 @@ export async function handleWebinars(req: IncomingMessage, res: ServerResponse, 
           if (action === 'start') await service.startSession(identity, input.requestId, id);
           else if (action === 'end') await service.endSession(identity, input.requestId, id);
           else throw new WebinarError(400, 'Unknown action.');
-          back(`${base}/host`, 'n', action === 'start' ? 'You are live. Attendees now see the broadcast.' : 'Session ended. The replay appears once Cloudflare finishes processing the recording.');
+          back(`${base}/${form.get('return') === 'studio' ? 'studio' : 'host'}`, 'n', action === 'start' ? 'You are live. Attendees now see the broadcast.' : 'Session ended. The replay appears once Cloudflare finishes processing the recording.');
           return true;
         }
         if (sub === 'cta') {
@@ -316,6 +323,18 @@ export async function handleWebinars(req: IncomingMessage, res: ServerResponse, 
       }
     }
 
+    if (method === 'POST' && sub === 'studio/ticket') {
+      if (!input.studio) throw new WebinarError(409, 'The browser studio is not available on this deployment.');
+      const ingest = await service.studioIngest(identity, input.requestId, id);
+      let issued: { ticket: string; expiresAt: string };
+      try {
+        issued = input.studio.issueTicket({ ...ingest, userId: identity.userId });
+      } catch (err) {
+        throw new WebinarError(409, err instanceof Error ? err.message : 'The studio could not start.');
+      }
+      json(res, 200, { path: `${STUDIO_WS_ROUTE}?ticket=${issued.ticket}`, expiresAt: issued.expiresAt });
+      return true;
+    }
     if (method === 'POST' && sub === 'upload') {
       const body = JSON.parse(await readBody(req, 4096)) as { bytes?: unknown; name?: unknown };
       json(res, 200, await service.beginUpload(identity, input.requestId, id, Number(body.bytes), String(body.name ?? 'video')));
@@ -331,7 +350,8 @@ export async function handleWebinars(req: IncomingMessage, res: ServerResponse, 
       const ev = await service.refreshLive(identity, input.requestId, id).catch(() => null) ?? (await service.get(identity, input.requestId, id)).event;
       const room = computeRoomState({ event: ev, nowMs: service.clock(), providerConfigured: service.providerConfigured });
       const preview = await service.hostPreview(identity, input.requestId, id).catch(() => null);
-      json(res, 200, { roomLabel: room.label, roomState: room.state, liveState: ev.liveState, sessionState: ev.sessionState, recordingState: ev.recordingState, preview });
+      json(res, 200, { roomLabel: room.label, roomState: room.state, liveState: ev.liveState, sessionState: ev.sessionState, recordingState: ev.recordingState, preview,
+        studio: input.studio?.sessionFor(id) ?? null });
       return true;
     }
     if (sub === 'people.csv') {
@@ -353,26 +373,30 @@ export async function handleWebinars(req: IncomingMessage, res: ServerResponse, 
     }
 
     const tab = (sub || 'details') as WebinarTab;
-    if (!['details', 'video', 'host', 'people', 'questions', 'messages', 'results'].includes(tab)) return false;
+    if (!['details', 'video', 'studio', 'host', 'people', 'questions', 'messages', 'results'].includes(tab)) return false;
     const got = await service.get(identity, input.requestId, id);
     const ev = got.event;
     let body: string;
     switch (tab) {
       case 'details': body = detailsTab({ profile: got.profile, event: { ...ev, rowVersion: got.rowVersion }, csrf }); break;
       case 'video': body = videoTab({ event: ev, csrf, setup, credentials: null, provisionState: await service.provisionState(identity, input.requestId, id) }); break;
+      case 'studio': body = studioTab({ event: ev, csrf, setup, room: computeRoomState({ event: ev, nowMs: service.clock(), providerConfigured: service.providerConfigured }) }); break;
       case 'host': body = hostTab({ event: ev, csrf, setup, room: computeRoomState({ event: ev, nowMs: service.clock(), providerConfigured: service.providerConfigured }) }); break;
       case 'people': body = peopleTab({ event: ev, rows: await service.registrants(identity, input.requestId, id, 500), csrf, crmAvailable: service.crmAvailable }); break;
       case 'questions': body = questionsTab({ event: ev, rows: await service.questions(identity, input.requestId, id), csrf }); break;
       case 'messages': body = messagesTab({ event: ev, rows: await service.messageStatus(identity, input.requestId, id), setup }); break;
       default: body = resultsTab({ event: ev, results: await service.results(identity, input.requestId, id) });
     }
-    send(res, 200, input.shell(ev.title, got.profile.name, eventFrame({ profile: got.profile, event: ev, counts: got.counts, tab, csrf, publicUrl: publicUrl(service, ev), notice, error, body }), csrf));
+    const host = String(req.headers.host ?? '');
+    // The studio opens a same-origin WebSocket; name it explicitly for browsers whose 'self' omits ws(s).
+    const extra: Record<string, string> = tab === 'studio' && /^[a-z0-9.-]+(:\d{1,5})?$/i.test(host) ? { 'content-security-policy': PAGE_CSP.replace("connect-src 'self'", `connect-src 'self' wss://${host} ws://${host}`) } : {};
+    send(res, 200, input.shell(ev.title, got.profile.name, eventFrame({ profile: got.profile, event: ev, counts: got.counts, tab, csrf, publicUrl: publicUrl(service, ev), notice, error, body }), csrf), 'text/html; charset=utf-8', extra);
     return true;
   } catch (err) {
     const status = err instanceof WebinarError ? err.status : 503;
     const message = err instanceof WebinarError ? err.message : 'Webinars are temporarily unavailable. Please try again.';
     if (!(err instanceof WebinarError)) console.error(`webinars ${req.method} ${p} failed (${input.requestId}): ${err instanceof Error ? err.message : 'error'}`);
-    if (p.endsWith('/upload') || p.endsWith('/upload/done') || p.endsWith('/host/state')) {
+    if (p.endsWith('/upload') || p.endsWith('/upload/done') || p.endsWith('/host/state') || p.endsWith('/studio/ticket')) {
       json(res, status, { error: message });
       return true;
     }

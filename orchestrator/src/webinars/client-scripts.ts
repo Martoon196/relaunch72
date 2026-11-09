@@ -322,3 +322,282 @@ export const PORTAL_WEBINAR_SCRIPT = String.raw`(function () {
     }
   }
 })();`;
+
+/** Ticks the studio compositor from a worker so a backgrounded tab (host presenting slides) keeps drawing. */
+export const STUDIO_TICK_SCRIPT = String.raw`setInterval(function () { postMessage(0); }, 33);`;
+
+/**
+ * Browser studio: camera + microphone + screen share composited on a canvas,
+ * recorded as H.264/Opus and sent over a same-origin WebSocket to the server
+ * relay, which forwards it to the webinar's recorded Cloudflare live input. The
+ * page never sees the stream key; it holds only a one-time ticket.
+ */
+export const STUDIO_SCRIPT = String.raw`(function () {
+  'use strict';
+  var root = document.querySelector('[data-studio]');
+  if (!root) return;
+  function $(s) { return root.querySelector(s); }
+  var base = '/portal/webinars/' + root.getAttribute('data-event');
+  var csrf = root.getAttribute('data-csrf');
+  var canvas = $('[data-studio-canvas]'), g = canvas.getContext('2d');
+  var devStart = $('[data-devices-start]'), camToggle = $('[data-cam-toggle]'), micToggle = $('[data-mic-toggle]'), screenToggle = $('[data-screen-toggle]');
+  var camSelect = $('[data-cam-select]'), micSelect = $('[data-mic-select]'), quality = $('[data-quality]'), meter = $('[data-studio-meter]');
+  var sendStart = $('[data-send-start]'), sendStop = $('[data-send-stop]'), relayState = $('[data-relay-state]'), liveState = $('[data-live-state]'), roomLabel = $('[data-room-label]');
+  var status = $('[data-studio-status]'), devices = $('[data-studio-devices]');
+  var layouts = root.querySelectorAll('input[name="wb-layout"]');
+  var camVideo = document.createElement('video'), scrVideo = document.createElement('video');
+  [camVideo, scrVideo].forEach(function (v) { v.muted = true; v.playsInline = true; v.autoplay = true; });
+  var camStream = null, micStream = null, scrStream = null, camOn = true, micOn = true, layout = 'camera';
+  var actx = null, dest = null, micGain = null, analyser = null, micNode = null, scrNode = null, levels = null;
+  var recorder = null, ws = null, sending = false, stopping = false, outStream = null;
+  var blocked = root.hasAttribute('data-blocked');
+
+  var MIMES = ['video/webm;codecs=h264,opus', 'video/webm;codecs=avc1,opus', 'video/x-matroska;codecs=avc1,opus', 'video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4;codecs=avc1,opus'];
+  var mime = null;
+  if (window.MediaRecorder && MediaRecorder.isTypeSupported) for (var i = 0; i < MIMES.length; i++) if (MediaRecorder.isTypeSupported(MIMES[i])) { mime = MIMES[i]; break; }
+  var capable = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && canvas.captureStream && mime && window.WebSocket);
+  if (!capable) {
+    blocked = true;
+    say(devices, 'This browser cannot broadcast from the studio (it needs H.264 recording). Use Chrome, Edge or Safari on a computer, or an encoder from Broadcast setup.');
+    [devStart, screenToggle].forEach(function (b) { b.disabled = true; });
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) screenToggle.disabled = true;
+
+  function say(el, text) { if (el) el.textContent = text; }
+  function pill(el, text, cls) { if (!el) return; el.textContent = text; el.className = 'wb-status' + (cls ? ' ' + cls : ''); }
+
+  // ── drawing ──
+  function fit(v, x, y, w, h, cover) {
+    var vw = v.videoWidth, vh = v.videoHeight;
+    if (!vw || !vh) return;
+    var s = cover ? Math.max(w / vw, h / vh) : Math.min(w / vw, h / vh);
+    var dw = vw * s, dh = vh * s;
+    if (cover) {
+      var sw = w / s, sh = h / s;
+      g.drawImage(v, (vw - sw) / 2, (vh - sh) / 2, sw, sh, x, y, w, h);
+    } else {
+      g.drawImage(v, 0, 0, vw, vh, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+    }
+  }
+  function rounded(x, y, w, h, r) {
+    g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+  }
+  function placeholder(x, y, w, h, text) {
+    g.fillStyle = '#1b1f27'; g.fillRect(x, y, w, h);
+    g.fillStyle = '#9aa3b2'; g.font = '600 ' + Math.round(h / 14) + 'px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(text, x + w / 2, y + h / 2);
+  }
+  function draw() {
+    var W = canvas.width, H = canvas.height;
+    g.fillStyle = '#0f1115'; g.fillRect(0, 0, W, H);
+    var cam = camOn && camStream && camVideo.readyState >= 2;
+    var scr = scrStream && scrVideo.readyState >= 2;
+    var L = layout;
+    if (!scr && L !== 'camera') L = 'camera';
+    if (L === 'camera') {
+      if (cam) fit(camVideo, 0, 0, W, H, true); else placeholder(0, 0, W, H, camStream ? 'Camera off' : 'Turn on your camera to preview');
+    } else if (L === 'screen') {
+      fit(scrVideo, 0, 0, W, H, false);
+    } else if (L === 'pip') {
+      fit(scrVideo, 0, 0, W, H, false);
+      if (cam) {
+        var pw = Math.round(W * 0.24), ph = Math.round(pw * 9 / 16), px = W - pw - Math.round(W * 0.02), py = H - ph - Math.round(W * 0.02);
+        g.save(); rounded(px, py, pw, ph, Math.round(ph * 0.08)); g.clip(); fit(camVideo, px, py, pw, ph, true); g.restore();
+        g.strokeStyle = 'rgba(255,255,255,.85)'; g.lineWidth = 3; rounded(px, py, pw, ph, Math.round(ph * 0.08)); g.stroke();
+      }
+    } else if (L === 'side') {
+      var sw = Math.round(W * 0.68), gap = Math.round(W * 0.012);
+      fit(scrVideo, gap, gap, sw - gap, H - 2 * gap, false);
+      var cx = sw + gap, cw = W - cx - gap, ch = Math.round(cw * 3 / 4), cy = Math.round((H - ch) / 2);
+      g.save(); rounded(cx, cy, cw, ch, 14); g.clip();
+      if (cam) fit(camVideo, cx, cy, cw, ch, true); else placeholder(cx, cy, cw, ch, 'Camera off');
+      g.restore();
+    }
+    if (analyser && levels) {
+      analyser.getByteTimeDomainData(levels);
+      var peak = 0;
+      for (var k = 0; k < levels.length; k++) peak = Math.max(peak, Math.abs(levels[k] - 128));
+      meter.style.width = (micOn ? Math.min(100, peak / 128 * 180) : 0) + '%';
+    }
+  }
+  var ticker = null;
+  try { ticker = new Worker(root.getAttribute('data-tick')); ticker.onmessage = draw; } catch (e) { ticker = null; }
+  if (!ticker) setInterval(draw, 33);
+  draw();
+
+  // ── audio graph: always one outgoing audio track, even when muted ──
+  function ensureAudio() {
+    if (actx) return;
+    var AC = window.AudioContext || window.webkitAudioContext;
+    actx = new AC();
+    dest = actx.createMediaStreamDestination();
+    micGain = actx.createGain();
+    micGain.connect(dest);
+    analyser = actx.createAnalyser(); analyser.fftSize = 512; levels = new Uint8Array(analyser.fftSize);
+  }
+  function attachMic(stream) {
+    if (micNode) { try { micNode.disconnect(); } catch (e) {} }
+    micStream = stream;
+    if (!stream || !stream.getAudioTracks().length) return;
+    micNode = actx.createMediaStreamSource(stream);
+    micNode.connect(micGain); micNode.connect(analyser);
+  }
+  function stopTracks(s) { if (s) s.getTracks().forEach(function (t) { t.stop(); }); }
+
+  function listDevices() {
+    return navigator.mediaDevices.enumerateDevices().then(function (list) {
+      function fill(sel, kind, current) {
+        var opts = list.filter(function (d) { return d.kind === kind; });
+        sel.innerHTML = '';
+        opts.forEach(function (d, n) { var o = document.createElement('option'); o.value = d.deviceId; o.textContent = d.label || (kind === 'videoinput' ? 'Camera ' : 'Microphone ') + (n + 1); if (d.deviceId === current) o.selected = true; sel.appendChild(o); });
+        sel.disabled = opts.length === 0;
+      }
+      fill(camSelect, 'videoinput', camStream && camStream.getVideoTracks()[0] && camStream.getVideoTracks()[0].getSettings().deviceId);
+      fill(micSelect, 'audioinput', micStream && micStream.getAudioTracks()[0] && micStream.getAudioTracks()[0].getSettings().deviceId);
+    });
+  }
+
+  function openDevices(camId, micId) {
+    ensureAudio();
+    if (actx.state === 'suspended') actx.resume();
+    var q = quality.value === '1080' ? { width: { ideal: 1920 }, height: { ideal: 1080 } } : { width: { ideal: 1280 }, height: { ideal: 720 } };
+    var video = camId ? Object.assign({ deviceId: { exact: camId } }, q) : q;
+    var audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+    if (micId) audio.deviceId = { exact: micId };
+    say(devices, 'Asking for camera and microphone…');
+    return navigator.mediaDevices.getUserMedia({ video: video, audio: audio }).then(function (stream) {
+      stopTracks(camStream); stopTracks(micStream);
+      camStream = new MediaStream(stream.getVideoTracks());
+      camVideo.srcObject = camStream; camVideo.play().catch(function () {});
+      attachMic(new MediaStream(stream.getAudioTracks()));
+      camToggle.disabled = false; micToggle.disabled = false; sendStart.disabled = blocked;
+      devStart.textContent = 'Camera and microphone on'; devStart.disabled = true;
+      say(devices, 'Camera and microphone are on. Nothing is sent until you press Start sending.');
+      return listDevices();
+    }).catch(function (err) {
+      say(devices, err && err.name === 'NotAllowedError' ? 'Camera or microphone permission was refused. Allow it in the browser address bar and try again.'
+        : 'Could not open the camera or microphone (' + (err && err.name || 'error') + ').');
+    });
+  }
+
+  devStart.addEventListener('click', function () { openDevices(null, null); });
+  camSelect.addEventListener('change', function () { openDevices(camSelect.value, micSelect.value); });
+  micSelect.addEventListener('change', function () { openDevices(camSelect.value, micSelect.value); });
+  quality.addEventListener('change', function () {
+    canvas.width = quality.value === '1080' ? 1920 : 1280; canvas.height = quality.value === '1080' ? 1080 : 720;
+    if (sending) say(status, 'The new quality applies the next time you start sending.');
+  });
+  camToggle.addEventListener('click', function () {
+    camOn = !camOn;
+    if (camStream) camStream.getVideoTracks().forEach(function (t) { t.enabled = camOn; });
+    camToggle.textContent = camOn ? 'Camera off' : 'Camera on';
+  });
+  micToggle.addEventListener('click', function () {
+    micOn = !micOn;
+    if (micGain) micGain.gain.value = micOn ? 1 : 0;
+    micToggle.textContent = micOn ? 'Mute' : 'Unmute';
+    micToggle.className = 'button' + (micOn ? ' secondary' : '');
+  });
+  function setLayout(v) {
+    layout = v;
+    Array.prototype.forEach.call(layouts, function (r) { r.checked = r.value === v; });
+  }
+  Array.prototype.forEach.call(layouts, function (r) { r.addEventListener('change', function () { if (r.checked) layout = r.value; }); });
+  function stopScreen() {
+    if (scrNode) { try { scrNode.disconnect(); } catch (e) {} scrNode = null; }
+    stopTracks(scrStream); scrStream = null; scrVideo.srcObject = null;
+    screenToggle.textContent = 'Share screen';
+    Array.prototype.forEach.call(layouts, function (r) { if (r.value !== 'camera') r.disabled = true; });
+    setLayout('camera');
+  }
+  screenToggle.addEventListener('click', function () {
+    if (scrStream) { stopScreen(); return; }
+    ensureAudio();
+    navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: true }).then(function (stream) {
+      scrStream = stream;
+      scrVideo.srcObject = new MediaStream(stream.getVideoTracks()); scrVideo.play().catch(function () {});
+      if (stream.getAudioTracks().length) { scrNode = actx.createMediaStreamSource(new MediaStream(stream.getAudioTracks())); scrNode.connect(dest); }
+      stream.getVideoTracks()[0].addEventListener('ended', stopScreen);
+      screenToggle.textContent = 'Stop sharing';
+      Array.prototype.forEach.call(layouts, function (r) { r.disabled = false; });
+      if (layout === 'camera') setLayout(camStream ? 'pip' : 'screen');
+      if (!camStream) sendStart.disabled = blocked;
+    }).catch(function () { say(devices, 'Screen sharing was cancelled.'); });
+  });
+
+  // ── sending ──
+  function resetSending(message) {
+    sending = false; stopping = false;
+    if (recorder && recorder.state !== 'inactive') { try { recorder.stop(); } catch (e) {} }
+    recorder = null; ws = null;
+    sendStart.hidden = false; sendStart.disabled = blocked || !(camStream || scrStream); sendStop.hidden = true;
+    pill(relayState, 'Not sending', '');
+    if (message) say(status, message);
+  }
+  function startSending() {
+    if (sending) return;
+    sendStart.disabled = true;
+    say(status, 'Preparing a secure connection…');
+    fetch(base + '/studio/ticket', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', 'x-csrf-token': csrf }, body: '{}' })
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j && j.error || 'The studio could not start.'); return j; }); })
+      .then(function (j) {
+        var socket = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + j.path);
+        ws = socket; sending = true;
+        socket.binaryType = 'arraybuffer';
+        sendStart.hidden = true; sendStop.hidden = false;
+        pill(relayState, 'Connecting', 'warn');
+        socket.onopen = function () {
+          socket.send(JSON.stringify({ type: 'start', mimeType: mime }));
+          var bps = quality.value === '1080' ? 4500000 : 2500000;
+          outStream = new MediaStream([canvas.captureStream(30).getVideoTracks()[0], dest.stream.getAudioTracks()[0]]);
+          var opts = { mimeType: mime, videoBitsPerSecond: bps, audioBitsPerSecond: 128000, videoKeyFrameIntervalDuration: 2000 };
+          try { recorder = new MediaRecorder(outStream, opts); } catch (e) { delete opts.videoKeyFrameIntervalDuration; recorder = new MediaRecorder(outStream, opts); }
+          recorder.ondataavailable = function (ev) {
+            if (!ev.data || !ev.data.size || socket.readyState !== 1) return;
+            if (socket.bufferedAmount > 32 * 1024 * 1024) { stopSending('Your upload cannot keep up with this quality. Choose 720p or check your connection.'); return; }
+            socket.send(ev.data);
+            if (socket.bufferedAmount > 8 * 1024 * 1024) say(status, 'Your upload is falling behind. Attendees may see a delay.');
+          };
+          recorder.onstop = function () { if (socket.readyState === 1) socket.send(JSON.stringify({ type: 'stop' })); };
+          recorder.start(500);
+        };
+        socket.onmessage = function (ev) {
+          if (typeof ev.data !== 'string') return;
+          var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+          if (m.type !== 'status') return;
+          if (m.state === 'sending') pill(relayState, 'Sending', 'ok');
+          else if (m.state === 'starting' || m.state === 'idle') pill(relayState, 'Connecting', 'warn');
+          else if (m.state === 'stopping') pill(relayState, 'Stopping', 'warn');
+          else if (m.state === 'error') pill(relayState, 'Stopped', 'bad');
+          if (m.message) say(status, m.message);
+        };
+        socket.onclose = function (ev) {
+          var unexpected = sending && !stopping;
+          resetSending(unexpected ? 'The studio connection closed' + (ev.code === 1011 ? '' : ' unexpectedly') + '. If you are live, attendees see "reconnecting": press Start sending to resume.' : null);
+          if (unexpected) pill(relayState, 'Disconnected', 'bad');
+        };
+      })
+      .catch(function (err) { resetSending(err.message || 'The studio could not start.'); });
+  }
+  function stopSending(reason) {
+    if (!sending) return;
+    stopping = true;
+    pill(relayState, 'Stopping', 'warn');
+    if (reason) say(status, reason);
+    if (recorder && recorder.state !== 'inactive') recorder.stop(); else if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'stop' }));
+  }
+  sendStart.addEventListener('click', startSending);
+  sendStop.addEventListener('click', function () { stopSending(null); });
+  window.addEventListener('beforeunload', function (e) { if (sending) { e.preventDefault(); e.returnValue = ''; } });
+
+  // ── Cloudflare's view (the provider's truth, not the browser's) ──
+  var names = { idle: 'Encoder not connected', connected: 'Encoder connected', reconnecting: 'Encoder reconnecting', disconnected: 'Encoder disconnected', unknown: 'Status unknown', not_provisioned: 'No live input', provisioning: 'Creating live input' };
+  function poll() {
+    fetch(base + '/host/state', { credentials: 'same-origin', headers: { accept: 'application/json' } }).then(function (r) { return r.ok ? r.json() : null; }).then(function (s) {
+      if (!s) return;
+      pill(liveState, names[s.liveState] || s.liveState, s.liveState === 'connected' ? 'ok' : s.liveState === 'disconnected' ? 'bad' : 'warn');
+      pill(roomLabel, s.roomLabel, s.roomState === 'live' ? 'live' : '');
+    }).catch(function () {}).then(function () { setTimeout(poll, sending ? 5000 : 10000); });
+  }
+  poll();
+})();`;

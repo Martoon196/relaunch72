@@ -14,8 +14,10 @@ import { KIND_LABEL, type WebinarEvent, type WebinarSettings } from '../webinars
 
 export const WEBINARS_BASE = '/portal/webinars';
 export const WEBINARS_ASSET = '/portal/webinars/_assets/portal.js';
+export const WEBINARS_STUDIO_ASSET = '/portal/webinars/_assets/studio.js';
+export const WEBINARS_STUDIO_TICK_ASSET = '/portal/webinars/_assets/studio-tick.js';
 
-export type WebinarTab = 'details' | 'video' | 'host' | 'people' | 'questions' | 'messages' | 'results';
+export type WebinarTab = 'details' | 'video' | 'studio' | 'host' | 'people' | 'questions' | 'messages' | 'results';
 
 export interface SetupStatus {
   readonly database: boolean;
@@ -23,6 +25,8 @@ export interface SetupStatus {
   readonly config: WebinarConfig | null;
   readonly crmAvailable: boolean;
   readonly workspaceId: string | null;
+  /** Browser-studio relay readiness (ffmpeg with RTMPS on this server); null when not composed. */
+  readonly studio?: { readonly available: boolean; readonly detail: string } | null;
 }
 
 const CSS = `<style>
@@ -77,6 +81,9 @@ export function setupChecklist(setup: SetupStatus): string {
       !c || c.emailMode === 'off' ? `Email is off. Set <code>${WEBINAR_ENV.emailMode}</code> to <code>test</code> (only <code>${WEBINAR_ENV.emailTestRecipients}</code>) or <code>live</code>. Messages wait in the queue until then; reminders whose time passes are skipped, never sent late.`
         : sender ? `Mode <strong>${e(c.emailMode)}</strong>, sending as <code>${e(sender.from)}</code> on Postmark stream <code>${e(sender.messageStream)}</code>.`
         : `No sender for this brand. Add this workspace to <code>${WEBINAR_ENV.senders}</code>; another brand's sender is never used.`),
+    item(Boolean(setup.studio?.available), 'Browser studio (no encoder needed)', setup.studio?.available
+      ? `Hosts can broadcast camera, microphone and screen share from the browser. The server relays it to the recorded live input with ${e(setup.studio.detail)}.`
+      : `Optional. Needs ffmpeg with RTMPS output on this server (set <code>${WEBINAR_ENV.studioFfmpeg}</code> to its path if it is not on PATH). ${e(setup.studio?.detail ?? '')} Encoders such as OBS work without it.`),
     item(setup.crmAvailable, 'CRM handoff', setup.crmAvailable ? 'Registrants can be sent to the CRM through the existing lead command.' : 'The CRM command identity is not connected on this deployment.'),
   ];
   return `<ul class="wb-checklist">${items.join('')}</ul>`;
@@ -166,7 +173,8 @@ export function newPage(input: { profile: WorkspaceProfile; csrf: string; settin
 
 export function eventFrame(input: { profile: WorkspaceProfile; event: WebinarEvent; counts: WebinarCounts; tab: WebinarTab; csrf: string; publicUrl: string | null; notice: string | null; error: string | null; body: string }): string {
   const ev = input.event;
-  const tabs: [WebinarTab, string][] = [['details', 'Details'], ['video', ev.kind === 'live' ? 'Broadcast setup' : 'Video'], ['host', ev.kind === 'live' ? 'Host controls' : 'Preview & CTA'],
+  const tabs: [WebinarTab, string][] = [['details', 'Details'], ['video', ev.kind === 'live' ? 'Broadcast setup' : 'Video'], ...(ev.kind === 'live' ? [['studio', 'Studio']] as [WebinarTab, string][] : []),
+    ['host', ev.kind === 'live' ? 'Host controls' : 'Preview & CTA'],
     ['people', `People (${input.counts.registered})`], ['questions', `Questions${input.counts.pendingQuestions ? ` (${input.counts.pendingQuestions})` : ''}`], ['messages', 'Reminders'], ['results', 'Results']];
   const statusActions = ev.status === 'draft'
     ? `<form method="post" action="${WEBINARS_BASE}/${e(ev.id)}/status">${csrfField(input.csrf)}<input type="hidden" name="action" value="publish"><button class="button" type="submit">Publish</button></form>`
@@ -231,7 +239,9 @@ ${creds ? `<div class="wb-grid"><div><h3>RTMPS (OBS, StreamYard, Restream)</h3><
 <li>Start streaming. Host controls shows "Encoder connected" and a private preview — attendees still see the waiting room.</li>
 <li>When ready, press <strong>Go live</strong>. Press <strong>End session</strong> when you finish; the recording becomes the replay once Cloudflare has processed it.</li></ol>`}
 <h3 style="margin-top:20px">Broadcasting from the browser</h3>
-<p class="wb-help"><span class="wb-status warn">Not available</span> Cloudflare Stream's browser (WebRTC/WHIP) ingest does not record and cannot be played as signed HLS, so it would give no replay and no access control. Use an encoder above. Host controls includes a camera and microphone check.</p>
+${input.setup.studio?.available
+  ? `<p class="wb-help"><span class="wb-status ok">Available</span> No encoder needed: open the <a href="${WEBINARS_BASE}/${e(input.event.id)}/studio">Studio</a> to broadcast your camera, microphone and screen share from this browser. The server relays it into this same recorded live input, so the replay and signed playback work exactly as with an encoder.</p>`
+  : `<p class="wb-help"><span class="wb-status warn">Not available on this server</span> The browser studio needs ffmpeg with RTMPS output on the server (<code>${WEBINAR_ENV.studioFfmpeg}</code>). ${e(input.setup.studio?.detail ?? '')} Cloudflare's own browser (WebRTC/WHIP) ingest is not used because it does not record and cannot be played as signed HLS. Use an encoder above in the meantime.</p>`}
 </div></section>`;
 }
 
@@ -267,6 +277,53 @@ ${live ? `<section class="panel"><div class="panel-head"><div class="panel-title
 <video class="wb-video" data-camera playsinline muted style="transform:scaleX(-1)"></video><div class="wb-meter" style="margin:10px 0" aria-label="Microphone level"><span data-meter></span></div>
 <div class="wb-actions"><button class="button secondary" type="button" data-camera-start>Start check</button><button class="button secondary" type="button" data-camera-stop disabled>Stop</button></div><p class="wb-help" data-camera-status role="status"></p></div></section>` : ''}
 </div>`;
+}
+
+export function studioTab(input: { event: WebinarEvent; csrf: string; setup: SetupStatus; room: RoomState }): string {
+  const ev = input.event;
+  const id = e(ev.id);
+  const blocked = !input.setup.config?.stream ? streamBlocked(input.setup)
+    : !input.setup.studio?.available ? `<div class="notice" role="note"><strong>The browser studio is not available on this server.</strong> ${e(input.setup.studio?.detail ?? '')} It needs ffmpeg with RTMPS output (<code>${WEBINAR_ENV.studioFfmpeg}</code>). Use an encoder from <a href="${WEBINARS_BASE}/${id}/video">Broadcast setup</a> meanwhile.</div>`
+    : !ev.liveInputUid ? `<div class="notice" role="note"><strong>Create a live input first.</strong> Open <a href="${WEBINARS_BASE}/${id}/video">Broadcast setup</a> and press Create live input; the studio sends to it.</div>`
+    : ev.sessionState === 'ended' ? '<div class="notice" role="note">This session has ended. The studio is closed.</div>' : '';
+  const sessionControls = ev.status !== 'published' ? '<p class="wb-help">Publish the webinar to go live.</p>'
+    : ev.sessionState === 'scheduled' ? `<form method="post" action="${WEBINARS_BASE}/${id}/session" data-confirm="Open the broadcast to attendees now?">${csrfField(input.csrf)}<input type="hidden" name="action" value="start"><input type="hidden" name="return" value="studio"><button class="button" type="submit" data-go-live>Go live</button></form>`
+    : ev.sessionState === 'live' ? `<form method="post" action="${WEBINARS_BASE}/${id}/session" data-confirm="End the session for everyone? The recording becomes the replay.">${csrfField(input.csrf)}<input type="hidden" name="action" value="end"><input type="hidden" name="return" value="studio"><button class="button" type="submit" style="background:#dc2626;border-color:#dc2626">End session</button></form>`
+    : '';
+  const disabled = blocked ? ' disabled' : '';
+  return `<style>.wb-studio{display:grid;gap:14px;grid-template-columns:minmax(0,2.2fr) minmax(260px,1fr)}@media(max-width:1100px){.wb-studio{grid-template-columns:1fr}}
+.wb-studio canvas{width:100%;aspect-ratio:16/9;background:#0f1115;border-radius:12px;display:block}.wb-seg{display:inline-flex;border:1px solid var(--line,#dfe4eb);border-radius:10px;overflow:hidden}
+.wb-seg label{display:flex;align-items:center;gap:6px;padding:7px 11px;font-weight:600;font-size:.86rem;cursor:pointer;border-right:1px solid var(--line,#dfe4eb)}.wb-seg label:last-child{border-right:0}
+.wb-seg input{position:absolute;opacity:0;pointer-events:none}.wb-seg label:has(input:checked){background:var(--accent,#ed9c24);color:#1b2028}.wb-seg label:has(input:disabled){opacity:.45;cursor:not-allowed}
+.wb-studio select{padding:8px 10px;border:1px solid var(--line,#cbd3df);border-radius:8px;font:inherit;background:var(--panel,#fff);color:inherit;max-width:100%}
+.wb-studio .wb-devices{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-top:12px}.wb-studio .wb-devices label{font-weight:600;font-size:.86rem;display:grid;gap:4px}
+.wb-onair{display:inline-flex;align-items:center;gap:6px}.wb-onair::before{content:'';width:8px;height:8px;border-radius:50%;background:currentColor}</style>
+${blocked}
+<div class="wb-studio" data-studio data-event="${id}" data-csrf="${e(input.csrf)}" data-tick="${WEBINARS_STUDIO_TICK_ASSET}"${blocked ? ' data-blocked' : ''}>
+<section class="panel"><div class="panel-head"><div class="panel-title-wrap"><h2>Studio</h2><p class="panel-subtitle">This picture is exactly what attendees will see. Nothing leaves this browser until you press Start sending, and attendees see it only after Go live.</p></div></div>
+<div class="panel-body"><canvas data-studio-canvas width="1280" height="720" aria-label="Broadcast preview"></canvas>
+<div class="wb-actions" style="margin-top:12px">
+<button class="button" type="button" data-devices-start${disabled}>Turn on camera and microphone</button>
+<button class="button secondary" type="button" data-cam-toggle disabled>Camera off</button>
+<button class="button secondary" type="button" data-mic-toggle disabled>Mute</button>
+<button class="button secondary" type="button" data-screen-toggle${disabled}>Share screen</button>
+</div>
+<fieldset style="border:0;padding:0;margin:14px 0 0"><legend class="wb-help" style="margin-bottom:6px">Layout</legend><div class="wb-seg" role="radiogroup">
+<label><input type="radio" name="wb-layout" value="camera" checked>Camera</label><label><input type="radio" name="wb-layout" value="pip" disabled>Screen + camera</label><label><input type="radio" name="wb-layout" value="side" disabled>Side by side</label><label><input type="radio" name="wb-layout" value="screen" disabled>Screen only</label></div></fieldset>
+<div class="wb-devices"><label>Camera<select data-cam-select disabled><option>Turn on to choose</option></select></label><label>Microphone<select data-mic-select disabled><option>Turn on to choose</option></select></label>
+<label>Quality<select data-quality><option value="720" selected>720p · 2.5 Mbps (recommended)</option><option value="1080">1080p · 4.5 Mbps (fast upload only)</option></select></label></div>
+<div class="wb-meter" style="margin-top:12px" aria-label="Microphone level"><span data-studio-meter></span></div>
+<p class="wb-help" data-studio-devices role="status">Camera, microphone and screen stay on this device until you start sending.</p></div></section>
+<section class="panel"><div class="panel-head"><div class="panel-title-wrap"><h2>Broadcast</h2><p class="panel-subtitle">Cloudflare records everything you send; the replay comes from the live session.</p></div></div><div class="panel-body">
+<p><strong>This browser:</strong> <span class="wb-status" data-relay-state>Not sending</span></p>
+<p><strong>Cloudflare:</strong> <span class="wb-status" data-live-state>Checking…</span></p>
+<p><strong>Attendees see:</strong> <span class="wb-status ${input.room.state === 'live' ? 'live' : ''}" data-room-label>${e(input.room.label)}</span></p>
+<div class="wb-actions"><button class="button" type="button" data-send-start disabled>Start sending</button><button class="button secondary" type="button" data-send-stop hidden>Stop sending</button></div>
+<div class="wb-actions" style="margin-top:12px">${sessionControls}</div>
+<p class="wb-help" data-studio-status role="status" aria-live="polite"></p>
+<ol class="wb-help" style="padding-left:18px;margin-top:14px"><li>Turn on your camera and microphone; share a screen if you need one.</li><li><strong>Start sending</strong> to rehearse privately. Cloudflare shows "Encoder connected".</li><li><strong>Go live</strong> when ready. Attendees see the broadcast.</li><li><strong>End session</strong>, then Stop sending. The recording becomes the replay.</li></ol>
+<p class="wb-help">Keep this tab open while you broadcast. Closing it or losing your connection stops the broadcast; attendees see "reconnecting" until you start sending again. Works in Chrome, Edge and Safari.</p></div></section>
+</div><script src="${WEBINARS_STUDIO_ASSET}" defer></script>`;
 }
 
 export function peopleTab(input: { event: WebinarEvent; rows: readonly RegistrationRow[]; csrf: string; crmAvailable: boolean }): string {

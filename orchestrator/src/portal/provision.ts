@@ -169,6 +169,7 @@ export interface PostgresPortalConfig {
   seoBlogVaultReady?: boolean;
   webinars?: import('../webinars/service.js').PgWebinarService;
   webinarSetup?: import('./router.js').WebinarSetupInput;
+  webinarStudio?: import('../webinars/studio.js').StudioRelay;
   /** Omitted unless both company-asset least-privilege identities are ready. */
   companyAssets?: PortalCompanyAssetsService;
   /** Effects-off company-owned source sync. */
@@ -278,6 +279,7 @@ export function buildPostgresPortalDeps(cfg: PostgresPortalConfig): PostgresPort
     seoBlogVaultReady: cfg.seoBlogVaultReady,
     webinars: cfg.webinars,
     webinarSetup: cfg.webinarSetup,
+    webinarStudio: cfg.webinarStudio,
     companyAssets: cfg.companyAssets,
     companyContentSync: cfg.companyContentSync,
     companyContentReview: cfg.companyContentReview,

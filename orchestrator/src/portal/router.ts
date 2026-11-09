@@ -551,6 +551,8 @@ export interface PostgresPortalDeps extends PortalCommonDeps {
   webinars?: PgWebinarService;
   /** What the webinar setup page reports when the service, or parts of it, are unavailable. */
   webinarSetup?: WebinarSetupInput;
+  /** Browser-studio relay; absent when webinars are not composed. */
+  webinarStudio?: import('../webinars/studio.js').StudioRelay;
   /** Exact released public image snapshots; independent of current membership/SEO generation. */
   releasedSeoMedia?: import('./seo-blog-media.js').PortalReleasedSeoMediaReader;
   /** True when website credentials can be sealed (SEO_BLOG_CREDENTIAL_KEY configured). */
@@ -2014,6 +2016,7 @@ export async function handlePortal(req: IncomingMessage, res: ServerResponse, de
       authenticated: deps.kind === 'postgres' ? portalIdentity !== null : tenantId !== null,
       requestId: resolvedRequestContext?.requestId ?? 'portal-webinars',
       sessionSecret: deps.sessionSecret,
+      studio: deps.kind === 'postgres' ? deps.webinarStudio : undefined,
       shell: webinarShell,
     });
     if (handled) return;

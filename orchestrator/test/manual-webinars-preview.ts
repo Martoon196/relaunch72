@@ -31,6 +31,8 @@ if (skip) {
 const args = process.argv.slice(2);
 const port = Number(args[args.indexOf('--port') + 1] || 4310) || 4310;
 const withStream = !args.includes('--no-stream');
+// --studio-ingest rtmp://127.0.0.1:<port>/live/ turns on the browser studio, relaying to a local RTMP receiver (stand-in for Cloudflare).
+const studioIngest = args.includes('--studio-ingest') ? args[args.indexOf('--studio-ingest') + 1] ?? null : null;
 
 let offsetMs = 0;
 const now = () => Date.now() + offsetMs;
@@ -43,6 +45,7 @@ const alpha = await seedBrand(admin, 'Relaunch72 Demo', '#ed9c24');
 const bravo = await seedBrand(admin, 'PropertyPredator Demo', '#00e5cc');
 const h = await startWebinarHttpHarness({
   contentPool: content, crmPool, port, now,
+  ...(studioIngest ? { studio: { ffmpegPath: process.env.WEBINAR_STUDIO_FFMPEG ?? 'ffmpeg', ingestUrl: studioIngest } } : {}),
   users: {
     alpha: { identity: alpha.owner, profile: PROFILES.relaunch72 },
     'alpha-viewer': { identity: alpha.viewer, profile: PROFILES.relaunch72 },
